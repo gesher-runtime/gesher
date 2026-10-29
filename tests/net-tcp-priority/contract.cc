@@ -233,7 +233,7 @@ static void* window_getter(void* raw) {
   const bool entered = state.description->error_mutex.try_lock();
   if (entered) state.description->error_mutex.unlock();
   window.metadata_lock_busy = entered ? 0 : 1;
-  require(!entered, "post-native finalization remains serialized against actual caller");
+  require(entered, "owned connect leaves metadata available while caller is paused");
 #endif
   require(pthread_mutex_lock(&window.mutex) == 0, "window getter entry lock");
   window.getter_entered = true; require(pthread_cond_broadcast(&window.condition) == 0, "window getter entered");
@@ -327,6 +327,14 @@ static void connection_controls() {
   require(send(client, "x", 1, MSG_NOSIGNAL | MSG_DONTWAIT) == -1 && (errno == EPIPE || errno == ENOTCONN), "send after terminal refusal stays unconnected");
   error = -1; length = sizeof(error);
   require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0, "failed send does not resurrect consumed refusal");
+  require(send(client, "!", 1, MSG_NOSIGNAL | MSG_DONTWAIT | MSG_OOB) == -1 && (errno == EPIPE || errno == ENOTCONN), "failed urgent send remains unconnected");
+  require(sendto(client, "!", 1, MSG_NOSIGNAL | MSG_DONTWAIT, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == -1 && (errno == EPIPE || errno == ENOTCONN), "failed stream sendto cannot establish a transport");
+  const int shutdown_rc = shutdown(client, SHUT_RDWR);
+  require(shutdown_rc == -1 && errno == ENOTCONN, "failed stream shutdown remains unconnected");
+  error = -1; length = sizeof(error);
+  require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0, "unconnected operations do not create an independent asynchronous error");
+  consumed = {client, POLLPRI, 0};
+  require(poll(&consumed, 1, 0) == 1 && consumed.revents == POLLHUP, "post-refusal operations retain only terminal hangup");
   // TCP reconnect after failure is unspecified. Exercise the portable retry:
   // a fresh socket replaces the same fd, with a new shared error generation.
   int fresh = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); require(fresh >= 0, "fresh retry socket");
@@ -344,6 +352,63 @@ static void connection_controls() {
   pollfd closed{client, POLLPRI, 0};
   require(poll(&closed, 1, 0) == 1 && closed.revents == POLLNVAL, "closed fd is invalid not urgent");
   puts("PASS TCP priority: failed connection and closed descriptor distinguish errors and preserve SO_ERROR");
+}
+
+struct RequesterConnect { int fd; sockaddr_in address; int result = -99, error = -99; };
+static void* requester_connect(void* raw) {
+  auto& request = *static_cast<RequesterConnect*>(raw);
+  request.result = connect(request.fd, reinterpret_cast<sockaddr*>(&request.address), sizeof(request.address));
+  request.error = errno;
+  return nullptr;
+}
+static void requester_exit_and_reuse() {
+  int reserved = socket(AF_INET, SOCK_STREAM, 0); require(reserved >= 0, "requester reserve socket");
+  RequesterConnect request{}; request.address.sin_family = AF_INET; request.address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(reserved, reinterpret_cast<sockaddr*>(&request.address), sizeof(request.address)) == 0, "requester reserve bind");
+  socklen_t length = sizeof(request.address);
+  require(getsockname(reserved, reinterpret_cast<sockaddr*>(&request.address), &length) == 0, "requester reserve address");
+  request.fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); require(request.fd >= 0, "requester client");
+  int alias = dup(request.fd); require(alias >= 0, "requester alias");
+  pthread_t requester;
+  require(pthread_create(&requester, nullptr, requester_connect, &request) == 0 && pthread_join(requester, nullptr) == 0, "actual connect requester exits");
+  require(request.result == -1 && (request.error == EINPROGRESS || request.error == ECONNREFUSED), "requester result retained after exit");
+  require(close(request.fd) == 0, "requester original descriptor close");
+  pollfd p{alias, POLLPRI, 0};
+  require(poll(&p, 1, 5000) == 1 && (p.revents & POLLERR) && !(p.revents & POLLPRI), "requester exit does not cancel retained alias refusal");
+  int error = -1; length = sizeof(error);
+  require(getsockopt(alias, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "requester exit keeps exact refusal");
+  require(close(alias) == 0, "requester last alias close");
+
+  request.fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); require(request.fd >= 0, "pending close client");
+  request.result = connect(request.fd, reinterpret_cast<sockaddr*>(&request.address), sizeof(request.address));
+  require(request.result == -1 && (errno == EINPROGRESS || errno == ECONNREFUSED), "pending close actual connect");
+#ifdef GESHER
+  gesher::SocketFd old;
+  require(gesher::LookupSocket(request.fd, &old), "pending close original description");
+#endif
+  const int reused = request.fd;
+  require(close(reused) == 0, "last close while connection operation is retained");
+  int replacement = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); require(replacement >= 0, "replacement socket");
+  if (replacement != reused) require(dup2(replacement, reused) == reused && close(replacement) == 0, "force exact fd reuse");
+#ifdef GESHER
+  gesher::SocketFd current;
+  require(gesher::LookupSocket(reused, &current) && current.description != old.description, "fd reuse publishes a distinct description");
+  const long long deadline = millis() + 2000;
+  bool drained = false;
+  do {
+    { std::lock_guard<std::mutex> lock(old.description->error_mutex);
+      drained = old.description->native_closed && !old.description->connect_operation; }
+    if (!drained) usleep(1000);
+  } while (!drained && millis() < deadline);
+  require(drained, "last close observes actual old operation drain");
+  require(current.description->state.load() == gesher::ws::ConnectState::kInitial, "old completion cannot mutate replacement generation");
+#endif
+  error = -1; length = sizeof(error);
+  require(getsockopt(reused, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0, "replacement has no old connection error");
+  p = {reused, POLLPRI, 0};
+  require(poll(&p, 1, 0) == 1 && p.revents == POLLHUP, "replacement retains independent initial lifecycle");
+  require(close(reused) == 0 && close(reserved) == 0, "requester and reuse cleanup");
+  puts("PASS TCP priority: requester exit retains completion and last-close drains before fd generation reuse");
 }
 static void peer_eof(int fd) {
   pollfd p{fd, POLLIN, 0}; char byte{};
@@ -435,6 +500,7 @@ int main(int argc, char** argv) {
   endpoint_controls();
   connection_controls();
   connect_finalization_window();
+  requester_exit_and_reuse();
   alias_ownership();
   Pair a = pair(); pthread_t thread;
   require(pthread_create(&thread, nullptr, delayed, &a.sender) == 0, "sender thread");

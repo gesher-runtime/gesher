@@ -88,40 +88,42 @@ int ConnectWithObserver(int fd, const void* raw, uint32_t length, ConnectObserve
   SocketFd state;
   ws::Address address;
   if (!Lookup(fd, &state) || !ToAddress(static_cast<const sockaddr*>(raw), length, &address) || !MapUnixPath(&address, false)) return -1;
-  auto call = [&](const SocketFd& current, bool nonblocking) {
-    auto& description = *current.description;
-    std::unique_lock<std::mutex> lock(description.error_mutex);
-    if (description.connect_call_active) return errno = EALREADY, -1;
-    if (description.connect_generation == UINT64_MAX) return errno = EOVERFLOW, -1;
-    const uint64_t generation = ++description.connect_generation;
-    description.consumed_generation = 0; description.consumed_error = 0;
-    description.connect_call_active = true; description.nonblocking_connect = nonblocking;
-    description.state.store(ws::ConnectState::kConnecting);
-    // Blocking connect must remain cancellable and must not hold either
-    // process descriptor serialization or the caller error-query mutex.
-    if (!nonblocking) lock.unlock();
-    const int result = ws::Connect(current.socket, address);
-    const int saved = errno;
-    if (observer) observer(current.socket, result, saved, context);
-    if (!nonblocking) lock.lock();
-    if (description.connect_generation == generation) {
-      const bool pending = saved == EINPROGRESS || saved == EALREADY || saved == EINTR;
-      description.state.store(result == 0 ? ws::ConnectState::kConnected :
-                              pending ? ws::ConnectState::kConnecting : ws::ConnectState::kFailed);
-    }
-    description.connect_call_active = false;
-    errno = saved; return result;
-  };
-  if (state.description->nonblocking.load()) {
+  if (state.description->tcp && address.family != ws::Family::kUnspec) {
+    std::shared_ptr<ws::ConnectOperation> operation;
+    bool nonblocking;
+    {
     record_locks::DescriptorGuard descriptor_guard;
     SocketFd current;
     if (!LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
-    // Every native mode setter holds the same guard. The verified native call
-    // remains nonblocking through finalization, so this critical section does
-    // not turn a caller's SO_ERROR query into a network-duration wait.
-    if (current.description->nonblocking.load()) return call(current, true);
+      // This transaction fixes logical call behavior, never the native socket
+      // mode. ConnectEx itself cannot become blocking during F_SETFL/FIONBIO.
+      nonblocking = current.description->nonblocking.load();
+      operation = ws::StartConnect(current.socket, address, current.description);
+    }
+    if (!operation) return -1;
+    // The optional private observer sees real submission before a logical
+    // blocking caller waits. It owns no native context and holds no locks.
+    const int result = ws::AwaitConnect(operation, observer ? true : nonblocking);
+    const int saved = errno;
+    if (observer) observer(state.socket, result, saved, context);
+    if (!nonblocking && result < 0 && saved == EINPROGRESS) return ws::AwaitConnect(operation, false);
+    errno = saved;
+    return result;
   }
-  return call(state, false);
+  // Non-TCP and AF_UNSPEC retain their native behavior. They do not create
+  // an owned TCP completion token or qualify terminal-refusal filtering.
+  {
+    std::lock_guard<std::mutex> lock(state.description->error_mutex);
+    if (state.description->connect_operation) return errno = EALREADY, -1;
+    state.description->owned_refusal = false;
+    state.description->connect_error = 0;
+  }
+  const int result = ws::Connect(state.socket, address);
+  const int saved = errno;
+  state.description->state.store(result == 0 ? ws::ConnectState::kConnected : ws::ConnectState::kConnecting);
+  if (observer) observer(state.socket, result, saved, context);
+  errno = saved;
+  return result;
 }
 }  // namespace gesher
 
@@ -691,29 +693,16 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
   int v;
   if (ToIntOption(level, name, &option)) {
     if (option == ws::Option::kError) {
-      // Winsock's SO_ERROR is persistent and attached to its native handle.
-      // All POSIX aliases share that handle; only a caller getter consumes
-      // a failed-connect error logically. Readiness never reads SO_ERROR.
       gesher::record_locks::DescriptorGuard descriptor_guard;
       SocketFd current;
       if (!gesher::LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
+      ws::RefreshConnect(state.description);
       std::lock_guard<std::mutex> lock(state.description->error_mutex);
-      // Always inspect the native value: a different later error is visible.
+      // ConnectEx reports its failure on the owned completion channel. Always
+      // read native SO_ERROR as well, including identical later native codes.
       if (ws::GetOption(state.socket, option, &v) < 0) return -1;
-      const ws::ConnectState phase = state.description->state.load();
-      const uint64_t generation = state.description->connect_generation;
-      const bool refusal = state.description->tcp && state.description->nonblocking_connect && !state.description->connect_call_active && generation != 0 &&
-                           v == ECONNREFUSED && (phase == ws::ConnectState::kConnecting || phase == ws::ConnectState::kFailed);
-      const bool consumed = refusal && state.description->consumed_generation == generation && state.description->consumed_error == v;
-      if (!WriteInt(consumed ? 0 : v, value, len)) return -1;
-      if (refusal) {
-        state.description->state.store(ws::ConnectState::kFailed);
-        state.description->consumed_generation = generation;
-        state.description->consumed_error = v;
-      } else if (v != state.description->consumed_error) {
-        state.description->consumed_generation = 0;
-        state.description->consumed_error = 0;
-      }
+      if (!WriteInt(v != 0 ? v : state.description->connect_error, value, len)) return -1;
+      if (v == 0) state.description->connect_error = 0;
       return 0;
     }
     if (ws::GetOption(state.socket, option, &v) < 0) return -1;

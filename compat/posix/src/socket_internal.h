@@ -65,13 +65,15 @@ inline constexpr int kPollHup = 16;
 inline constexpr int kPollNval = 32;
 
 enum class ConnectState { kInitial, kConnecting, kConnected, kFailed };
+struct ConnectOperation;
 struct SocketDescription {
   std::atomic<ConnectState> state{ConnectState::kInitial};
   bool tcp = false;  // immutable provider protocol identity, set before publication
-  uint64_t connect_generation = 0, consumed_generation = 0; // error_mutex
-  int consumed_error = 0;  // exact caller-observed code, never a generic error mask
-  bool connect_call_active = false;  // error_mutex
-  bool nonblocking_connect = false;  // only this bounded attempt is virtualized
+  uint64_t connect_generation = 0;  // error_mutex; never a numeric fd identity
+  int connect_result = 0, connect_error = 0;  // completion / caller-unread token
+  bool owned_refusal = false;  // completed ConnectEx refusal, never a native error code
+  bool native_closed = false;  // error_mutex orders close against submit/query
+  std::shared_ptr<ConnectOperation> connect_operation;  // cleared after drain
   std::atomic<bool> nonblocking{false}, reuse_addr{false};
   std::mutex error_mutex;
   std::mutex status_mutex;
@@ -89,11 +91,17 @@ bool Startup();
 bool IsTcpSocket(Socket s);  // provider protocol identity; never reads SO_ERROR
 
 Socket Open(Family family, Type type, int protocol, bool process_binding = true);
-int Close(Socket s);
+int Close(Socket s, const std::shared_ptr<SocketDescription>& description = {});
 Socket Duplicate(Socket s);  // a second socket for the same endpoint
 int SetNonBlocking(Socket s, bool on);
 int Bind(Socket s, const Address& address);
 int Connect(Socket s, const Address& address);  // EINPROGRESS when non-blocking
+// Start under the descriptor transaction, then wait only after releasing it.
+// The native operation always uses ConnectEx, independent of FIONBIO mode.
+std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
+    const std::shared_ptr<SocketDescription>& description);
+int AwaitConnect(const std::shared_ptr<ConnectOperation>& operation, bool nonblocking);
+void RefreshConnect(const std::shared_ptr<SocketDescription>& description);
 int Listen(Socket s, int backlog);
 Socket Accept(Socket s, Address* peer);
 int GetSockName(Socket s, Address* address);

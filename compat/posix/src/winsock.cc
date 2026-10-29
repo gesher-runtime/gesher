@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 #include <mutex>
 #include <atomic>
@@ -20,6 +21,26 @@
 #include "socket_internal.h"
 
 namespace gesher::ws {
+
+// Neither a caller's stack nor its thread owns pending native I/O. The worker
+// retains this object, its address and both events until completion is observed.
+struct ConnectOperation {
+  Socket socket;
+  Address address;
+  std::shared_ptr<SocketDescription> description;
+  uint64_t generation;
+  OVERLAPPED overlap{};
+  HANDLE submitted = nullptr;
+  HMODULE module = nullptr;
+  bool pending = false, issued = false, finished = false, cancel_requested = false;  // error_mutex
+  int start_error = 0, result = 0;  // error_mutex, or after submitted/finished
+  ULONGLONG deadline = ~ULONGLONG{0};
+  ~ConnectOperation() {
+    if (submitted) CloseHandle(submitted);
+    if (overlap.hEvent) CloseHandle(overlap.hEvent);
+  }
+};
+
 namespace {
 
 std::atomic<uint32_t> g_process_interface{0};
@@ -394,7 +415,15 @@ int BindInterface(Socket s, uint32_t ifindex) {
   return 0;
 }
 
-int Close(Socket s) { return closesocket(static_cast<SOCKET>(s)) == 0 ? 0 : Fail(); }
+int Close(Socket s, const std::shared_ptr<SocketDescription>& description) {
+  if (!description) return closesocket(static_cast<SOCKET>(s)) == 0 ? 0 : Fail();
+  std::lock_guard<std::mutex> lock(description->error_mutex);
+  const int result = closesocket(static_cast<SOCKET>(s)) == 0 ? 0 : Fail();
+  // closesocket cancels pending operations. Its event/OVERLAPPED remain owned
+  // by the worker until actual completion, including when the number is reused.
+  if (result == 0) description->native_closed = true;
+  return result;
+}
 
 Socket Duplicate(Socket s) {
   WSAPROTOCOL_INFOW info;
@@ -427,6 +456,191 @@ int Connect(Socket s, const Address& address) {
   // A non-blocking connect reports WSAEWOULDBLOCK where Linux says EINPROGRESS.
   if (WSAGetLastError() == WSAEWOULDBLOCK) return errno = EINPROGRESS, -1;
   return Fail();
+}
+
+namespace {
+
+// Called with error_mutex held. Only a signaled native completion can retire
+// an issued OVERLAPPED; cancellation or closing its socket alone is not enough.
+void FinishConnect(const std::shared_ptr<ConnectOperation>& operation) {
+  auto& op = *operation;
+  auto& description = *op.description;
+  if (op.finished) return;
+  if (op.pending && WaitForSingleObject(op.overlap.hEvent, 0) != WAIT_OBJECT_0) return;
+  int result = op.start_error;
+  if (op.pending) {
+    if (description.native_closed) {
+      // Do not query a numeric SOCKET after last-close: it may name a new
+      // endpoint now. The signaled event is the operation's completion proof.
+      result = ECANCELED;
+    } else {
+      DWORD bytes = 0, flags = 0;
+      if (!WSAGetOverlappedResult(static_cast<SOCKET>(op.socket), &op.overlap, &bytes, FALSE, &flags)) {
+        const int error = WSAGetLastError();
+        if (error == WSA_IO_INCOMPLETE) return;
+        result = error == ERROR_OPERATION_ABORTED ? ECANCELED : ErrnoFromWsa(error);
+      } else result = 0;
+    }
+  }
+  if (result == 0 && !description.native_closed &&
+      Api().setsockopt(static_cast<SOCKET>(op.socket), SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, nullptr, 0) != 0) result = ErrnoFromWsa(WSAGetLastError());
+  op.result = result;
+  op.finished = true;
+  if (description.connect_generation == op.generation && description.connect_operation == operation) {
+    if (!description.native_closed) {
+      description.connect_result = result;
+      description.connect_error = result;
+      description.owned_refusal = op.issued && result == ECONNREFUSED;
+      description.state.store(result == 0 || result == EISCONN ? ConnectState::kConnected : ConnectState::kFailed);
+    }
+    description.connect_operation.reset();  // break the description/operation cycle
+  }
+}
+
+DWORD WINAPI ConnectOwner(void* raw) {
+  HMODULE module;
+  {
+    std::unique_ptr<std::shared_ptr<ConnectOperation>> transfer(static_cast<std::shared_ptr<ConnectOperation>*>(raw));
+    auto operation = *transfer;
+    transfer.reset();
+    auto& op = *operation;
+    module = op.module;
+    {
+      std::lock_guard<std::mutex> lock(op.description->error_mutex);
+      if (op.description->native_closed || op.description->connect_generation != op.generation || op.cancel_requested) {
+        op.start_error = op.cancel_requested ? ECANCELED : EBADF;
+      } else {
+        sockaddr_storage remote{}; int remote_length = 0;
+        WSAPROTOCOL_INFOW protocol{}; int length = sizeof(protocol);
+        GUID id = WSAID_CONNECTEX; LPFN_CONNECTEX connect_ex = nullptr; DWORD bytes = 0;
+        if (!ToWin(op.address, &remote, &remote_length)) op.start_error = errno;
+        else if (Api().getsockopt(static_cast<SOCKET>(op.socket), SOL_SOCKET, SO_PROTOCOL_INFOW, reinterpret_cast<char*>(&protocol), &length) != 0 ||
+                 WSAIoctl(static_cast<SOCKET>(op.socket), SIO_GET_EXTENSION_FUNCTION_POINTER, &id, sizeof(id), &connect_ex, sizeof(connect_ex), &bytes, nullptr, nullptr) != 0) op.start_error = ErrnoFromWsa(WSAGetLastError());
+        else {
+          sockaddr_storage local{}; length = sizeof(local);
+          if (Api().getsockname(static_cast<SOCKET>(op.socket), reinterpret_cast<sockaddr*>(&local), &length) != 0) {
+            if (WSAGetLastError() != WSAEINVAL) op.start_error = ErrnoFromWsa(WSAGetLastError());
+            else {
+              local.ss_family = static_cast<ADDRESS_FAMILY>(protocol.iAddressFamily);
+              const int bind_length = protocol.iAddressFamily == AF_INET6 ? sizeof(sockaddr_in6) : sizeof(sockaddr_in);
+              if (Api().bind(static_cast<SOCKET>(op.socket), reinterpret_cast<sockaddr*>(&local), bind_length) != 0) op.start_error = ErrnoFromWsa(WSAGetLastError());
+            }
+          }
+          if (op.start_error == 0) {
+            op.issued = true;
+            if (!connect_ex(static_cast<SOCKET>(op.socket), reinterpret_cast<sockaddr*>(&remote), remote_length, nullptr, 0, &bytes, &op.overlap)) {
+              const int error = WSAGetLastError();
+              op.pending = error == ERROR_IO_PENDING;
+              op.start_error = op.pending ? 0 : ErrnoFromWsa(error);
+            }
+          }
+        }
+      }
+      if (!op.pending) FinishConnect(operation);
+      SetEvent(op.submitted);
+    }
+    if (op.pending) {
+      // A failed wait is not permission to free live native context. Retain
+      // the owner/module and continue looking for actual kernel completion.
+      while (WaitForSingleObject(op.overlap.hEvent, INFINITE) != WAIT_OBJECT_0) Sleep(100);
+      std::lock_guard<std::mutex> lock(op.description->error_mutex);
+      FinishConnect(operation);
+    }
+  }  // destroy all operation/description references before releasing DLL code
+  if (module) FreeLibraryAndExitThread(module, 0);
+  return 0;
+}
+
+}  // namespace
+
+std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
+    const std::shared_ptr<SocketDescription>& description) {
+  std::lock_guard<std::mutex> lock(description->error_mutex);
+  if (description->native_closed) return errno = EBADF, nullptr;
+  if (description->connect_operation) return errno = EALREADY, nullptr;
+  if (description->state.load() == ConnectState::kConnected) return errno = EISCONN, nullptr;
+  if (description->connect_generation == UINT64_MAX) return errno = EOVERFLOW, nullptr;
+  auto operation = std::make_shared<ConnectOperation>();
+  auto& op = *operation;
+  op.socket = s; op.address = address; op.description = description;
+  op.generation = ++description->connect_generation;
+  int send_timeout = 0;
+  if (GetOption(s, Option::kSndTimeo, &send_timeout) < 0) return nullptr;
+  if (send_timeout > 0) op.deadline = DeadlineAfter(send_timeout);
+  op.overlap.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  op.submitted = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!op.overlap.hEvent || !op.submitted) return FailWithLastError(), nullptr;
+  HMODULE module = nullptr;
+  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCWSTR>(&ConnectOwner), &module)) return FailWithLastError(), nullptr;
+  // An EXE cannot be unmapped while its process runs. A DLL needs a worker
+  // reference, released atomically with thread exit after context destruction.
+  if (module != GetModuleHandleW(nullptr)) {
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCWSTR>(&ConnectOwner), &op.module)) return FailWithLastError(), nullptr;
+  }
+  description->connect_result = description->connect_error = 0;
+  description->owned_refusal = false;
+  description->connect_operation = operation;
+  description->state.store(ConnectState::kConnecting);
+  auto* transfer = new std::shared_ptr<ConnectOperation>(operation);
+  HANDLE thread = CreateThread(nullptr, 0, ConnectOwner, transfer, 0, nullptr);
+  if (!thread) {
+    const int saved = ErrnoFromWin32(GetLastError());
+    delete transfer; description->connect_operation.reset();
+    description->state.store(ConnectState::kInitial);
+    if (op.module) FreeLibrary(op.module);
+    return errno = saved, nullptr;
+  }
+  CloseHandle(thread);  // worker owns itself; no caller-thread cleanup callback
+  return operation;
+}
+
+void RefreshConnect(const std::shared_ptr<SocketDescription>& description) {
+  std::lock_guard<std::mutex> lock(description->error_mutex);
+  auto operation = description->connect_operation;
+  if (operation && WaitForSingleObject(operation->submitted, 0) == WAIT_OBJECT_0) FinishConnect(operation);
+}
+
+namespace {
+void CancelConnectWait(void* raw) {
+  auto& op = *static_cast<ConnectOperation*>(raw);
+  std::lock_guard<std::mutex> lock(op.description->error_mutex);
+  op.cancel_requested = true;
+  if (!op.description->native_closed && op.pending && !op.finished) {
+    // Target exactly this operation, not unrelated I/O from another thread.
+    // The owner still waits for completion even if cancellation loses a race.
+    CancelIoEx(reinterpret_cast<HANDLE>(op.socket), &op.overlap);
+  }
+}
+
+int WaitConnectEvent(const std::shared_ptr<ConnectOperation>& operation, HANDLE event, ULONGLONG deadline) {
+  int result = 0;
+  pthread_cleanup_push(CancelConnectWait, operation.get());
+  for (;;) {
+    pthread_testcancel();
+    int remaining = deadline == ~ULONGLONG{0} ? 10 : MillisUntil(deadline);
+    const DWORD wait = WaitForSingleObject(event, static_cast<DWORD>(remaining > 10 ? 10 : remaining));
+    if (wait == WAIT_OBJECT_0) break;
+    if (wait == WAIT_FAILED) { result = -1; break; }
+    if (deadline != ~ULONGLONG{0} && MonotonicMicros() >= deadline) { result = 1; break; }
+  }
+  pthread_cleanup_pop(0);
+  return result;
+}
+}  // namespace
+
+int AwaitConnect(const std::shared_ptr<ConnectOperation>& operation, bool nonblocking) {
+  if (WaitConnectEvent(operation, operation->submitted, ~ULONGLONG{0}) != 0) return errno = EIO, -1;
+  if (nonblocking && operation->pending) return errno = EINPROGRESS, -1;
+  if (operation->pending) {
+    const int wait = WaitConnectEvent(operation, operation->overlap.hEvent, operation->deadline);
+    // Linux's SO_SNDTIMEO returns EINPROGRESS and leaves the attempt alive.
+    if (wait != 0) return errno = wait > 0 ? EINPROGRESS : EIO, -1;
+  }
+  std::lock_guard<std::mutex> lock(operation->description->error_mutex);
+  FinishConnect(operation);
+  if (operation->description->connect_generation == operation->generation) operation->description->connect_error = 0;
+  return operation->result == 0 ? 0 : (errno = operation->result, -1);
 }
 
 int Listen(Socket s, int backlog) {
@@ -665,9 +879,17 @@ bool IsTcpSocket(Socket s) {
 int Poll(PollEntry* entries, size_t count, int timeout_ms) {
   std::vector<WSAPOLLFD> fds(count);
   std::vector<bool> lifecycle_hup(count, false);
-  std::vector<bool> failed_tcp_not_connected(count, false);
+  std::vector<bool> owned_pending(count, false), closed(count, false);
   bool has_lifecycle_hup = false;
+  bool has_owned_pending = false;
   for (size_t i = 0; i < count; ++i) {
+    if (entries[i].description) {
+      RefreshConnect(entries[i].description);
+      std::lock_guard<std::mutex> lock(entries[i].description->error_mutex);
+      owned_pending[i] = entries[i].description->connect_operation != nullptr;
+      closed[i] = entries[i].description->native_closed;
+      has_owned_pending |= owned_pending[i];
+    }
     fds[i].fd = static_cast<SOCKET>(entries[i].socket);
     // Winsock rejects its POLLPRI, but supports POLLRDBAND for TCP OOB.
     // Keep this distinct from normal-read readiness and from connect errors.
@@ -691,7 +913,6 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
           if (peer_result == 0) {
             if (entries[i].description) entries[i].description->state.store(ConnectState::kConnected);
           } else if (WSAGetLastError() == WSAENOTCONN) {
-            failed_tcp_not_connected[i] = state == ConnectState::kFailed && entries[i].description && entries[i].description->tcp;
             if (state != ConnectState::kConnecting) {
               // Linux's unconnected TCP_CLOSE socket has HUP. Native Winsock
               // reports neither that state nor a connecting socket as HUP.
@@ -708,24 +929,41 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
     }
     fds[i].revents = 0;
   }
-  int rc = WSAPoll(fds.data(), static_cast<ULONG>(count), has_lifecycle_hup ? 0 : timeout_ms);
-  if (rc == SOCKET_ERROR) return Fail();
+  // Band-only WSAPoll never wakes for failed ConnectEx. Sample its owned
+  // completion on the same bounded slices already used for mixed poll sources.
+  const int wait = has_lifecycle_hup ? 0 : has_owned_pending && (timeout_ms < 0 || timeout_ms > 10) ? 10 : timeout_ms;
+  // An owned pending connection has no usable connected context yet. Its
+  // completion is the readiness source; a native write wake could precede
+  // context publication and otherwise spin or expose a premature success.
+  std::vector<WSAPOLLFD> active;
+  std::vector<size_t> active_index;
+  for (size_t i = 0; i < count; ++i) {
+    if (!owned_pending[i] && !closed[i]) { active.push_back(fds[i]); active_index.push_back(i); }
+  }
+  if (!active.empty()) {
+    if (WSAPoll(active.data(), static_cast<ULONG>(active.size()), wait) == SOCKET_ERROR) return Fail();
+    for (size_t k = 0; k < active.size(); ++k) fds[active_index[k]].revents = active[k].revents;
+  } else if (wait > 0) Sleep(static_cast<DWORD>(wait));
   int ready = 0;
   for (size_t i = 0; i < count; ++i) {
     SHORT r = fds[i].revents;
-    if ((r & (POLLERR | POLLHUP)) && entries[i].description) {
-      ConnectState expected = ConnectState::kConnecting;
-      entries[i].description->state.compare_exchange_strong(expected, ConnectState::kFailed);
-    }
-    // Only a caller-consumed refusal of this exact terminal TCP attempt is
-    // virtualized. New connections reset the generation; generic errors,
-    // other protocols, new payload and nonterminal masks remain observable.
-    if (failed_tcp_not_connected[i] && r == (POLLERR | POLLHUP | POLLWRNORM)) {
+    if (entries[i].description) {
+      RefreshConnect(entries[i].description);
       auto& description = *entries[i].description;
       std::lock_guard<std::mutex> lock(description.error_mutex);
-      if (description.nonblocking_connect && !description.connect_call_active && description.state.load() == ConnectState::kFailed &&
-          description.connect_generation != 0 && description.consumed_generation == description.connect_generation &&
-          description.consumed_error == ECONNREFUSED) r &= ~POLLERR;
+      if (description.native_closed) r = POLLNVAL;
+      else if (description.owned_refusal && description.state.load() == ConnectState::kFailed) {
+        // This generation completed without ever establishing a transport.
+        // Its raw ERR|HUP|WRNORM residue is distinct from its caller token.
+        // A new connect invalidates this classification before native submit;
+        // successful transports and all other native masks remain untouched.
+        if (r == (POLLERR | POLLHUP | POLLWRNORM)) r &= ~POLLERR;
+        r |= POLLHUP;
+        if (description.connect_error != 0) r |= POLLERR;
+      } else if ((r & (POLLERR | POLLHUP)) && !description.connect_operation) {
+        ConnectState expected = ConnectState::kConnecting;
+        description.state.compare_exchange_strong(expected, ConnectState::kFailed);
+      }
     }
     if (lifecycle_hup[i]) r |= POLLHUP;
     int out = 0;

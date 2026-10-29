@@ -338,3 +338,53 @@ bind, context/options, refusal/error ownership, originating-thread exit and
 cancel/close completion lifetime before any production rewrite. No mode flip,
 unsupported TCP_INFO result, borrowed OVERLAPPED lifetime or global lock over
 a blocking native wait is an accepted substitute.
+
+### Owned-connect implementation checkpoint (unpublished, unqualified)
+
+Independent a3dce5b8/408870 and 2c655b0a/408966 actual logs establish a
+separate ConnectEx error channel: all eight mode/bind/options cases pass;
+refusal completion10061 coexists with caller native SO_ERROR0/0. BOOL getters
+write one byte for KEEPALIVE/NODELAY (timeout writes four); this remains a
+separate Linux-ABI copying gap. Initiating-thread exit cancels native I/O995;
+an owner which remains live completes refusal10061 and success0 after both
+requesters actually exit. The same owner drains both operations before stop.
+All13 latest submissions queued997 in0ms; both Windows have28 poll snapshots.
+Pending raw combined interest is0, completed refusal/cancel is19+exception1,
+success is16+exception0. Band-only is0 throughout. Reading the owned result or
+native caller SO_ERROR does not remove raw failed-connect readiness. Raw logs:
+`C:/work/gesher-ci-review/tcp-408966-{win2022,win2025,linux}.log`.
+
+The local production rewrite uses a worker per pending TCP connect, retained
+through actual native completion. It owns copied address/OVERLAPPED/events and
+a containing-DLL reference; it destroys context before FreeLibraryAndExitThread.
+Logical mode and generation publication occur under DescriptorGuard, while
+submission/completion waits run outside it. ConnectEx never changes FIONBIO.
+Shared error_mutex orders native submit/query/last-close; after close, completion
+never queries a possibly reused SOCKET number. Generation updates target the
+original shared description, never a looked-up numeric fd. Pending operations
+are excluded from native poll until context publication; finite10ms slices
+retain the caller deadline. Close/replacement still cancel the actual endpoint;
+the worker retains context until its event proves completion. Failed waits retain
+the owner rather than abandoning native context. Deferred cancellation requests
+target the exact operation and leave its owner to drain. SO_SNDTIMEO returns
+EINPROGRESS without freeing a live operation. These paths are source-only.
+
+Every caller SO_ERROR still reads the native channel, including an equal later
+code. A separate owned completion token is consumed only after successful guest
+copy. This removes generic native-code masking. The poll rule is narrower but
+still BLOCKED pending semantic peer and negative evidence: only a positively
+completed ConnectEx refusal which never established a transport can classify
+exact raw ERR|HUP|WRNORM residue; a new connect invalidates classification before
+submission. No claim that this alone excludes every later independent native
+error is accepted yet. Successful transports, other errors, non-TCP/AF_UNSPEC,
+generic select semantics and inline urgent remain outside this proposed rule.
+
+Direct source regressions retain all prior alias/UDP/last-close/fault guards and
+add requester-exit, cancellation drain across exact fd reuse, and post-refusal
+normal/OOB/sendto/shutdown controls. The old metadata-lock barrier now requires
+the actual getter to proceed while the requester is paused: finalization is owned
+independently. Still required before product publication: fresh independent full
+source peer, native terminal-error boundary controls, module/DLL unload and
+pending-cancellation/timeout actual controls, Linux reference and both actual
+Windows host/bionic ABI paths with current typed source/compiler/member receipts.
+No product CI has run for this rewrite and none of these source changes qualify it.

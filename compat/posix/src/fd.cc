@@ -174,7 +174,7 @@ int CloseFdBody(int fd, bool unpublished) {
   } else {
     // Only the last descriptor closes the native socket. Shared metadata
     // snapshots do not extend its lifetime or delay the existing close wake.
-    result = last ? gesher::ws::Close(state.socket) : 0;
+    result = last ? gesher::ws::Close(state.socket, state.description) : 0;
     int socket_errno = errno;
     if (result < 0 && unpublished) {
       // A failed virtual-resource close does not make the private CRT slot
@@ -276,7 +276,7 @@ int dup2(int fd, int fd2) {
   }
   const int saved = errno;
   SocketFd target; bool last = false;
-  if (gesher::ReplaceSocket(fd2, source_is_socket ? &source : nullptr, &target, &last) && last) gesher::ws::Close(target.socket);
+  if (gesher::ReplaceSocket(fd2, source_is_socket ? &source : nullptr, &target, &last) && last) gesher::ws::Close(target.socket, target.description);
   const int metadata_error = transaction.Finish(true);
   // fd2's old file is closed: forget what it was.
   gesher::ForgetDevice(fd2);
@@ -420,6 +420,11 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
       if (ws::Poll(sockets.data(), sockets.size(), wait_ms) < 0) return -1;
       for (size_t k = 0; k < sockets.size(); ++k) {
         pollfd* p = &fds[socket_index[k]];
+        SocketFd current;
+        if (!LookupSocket(p->fd, &current) || current.description != sockets[k].description) {
+          p->revents = POLLNVAL;
+          continue;
+        }
         int r = sockets[k].revents;
         short out = 0;
         if (r & ws::kPollIn) out |= p->events & kIn;
