@@ -78,6 +78,18 @@ public static class TrustedSgJob {
     static extern uint GetProcessId(IntPtr process);
     [DllImport("kernel32.dll", SetLastError=true)]
     static extern bool GetProcessTimes(IntPtr process, out long created, out long exited, out long kernel, out long user);
+    [StructLayout(LayoutKind.Sequential)]
+    struct FileTime { public uint Low, High; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct FileInfo {
+        public uint Attributes;
+        public FileTime Created, Accessed, Written;
+        public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+    }
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool GetFileInformationByHandle(IntPtr handle, out FileInfo info);
 
     public sealed class Owner {
         public IntPtr Job, Process;
@@ -90,6 +102,7 @@ public static class TrustedSgJob {
     static readonly Owner[] QuarantineOwners = new Owner[32];
     static int quarantineCount;
     static int quarantineOwnerCount;
+    public static bool LastStartupRollbackConfirmed;
     static void Retain(IntPtr handle) {
         if (handle == IntPtr.Zero) return;
         lock (Quarantine) {
@@ -115,14 +128,15 @@ public static class TrustedSgJob {
         limits.Basic.Flags = 0x2000;
         if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(typeof(ExtendedLimits)))) {
             int error = Marshal.GetLastWin32Error();
-            Require(CloseHandle(job));
+            if (!CloseHandle(job)) Retain(job);
             throw new Win32Exception(error);
         }
         return job;
     }
 
     // python and script are absolute host-controlled paths without quote characters.
-    public static Owner Start(string python, string script, string directory) {
+    public static Owner Start(string python, string script, string directory, int fixtureFault) {
+        LastStartupRollbackConfirmed = false;
         if (python.IndexOf('"') >= 0 || script.IndexOf('"') >= 0 || directory.IndexOf('"') >= 0 ||
             python.EndsWith("\\") || script.EndsWith("\\") || directory.EndsWith("\\"))
             throw new ArgumentException("invalid owner path");
@@ -131,6 +145,7 @@ public static class TrustedSgJob {
         IntPtr attrs = IntPtr.Zero, handles = IntPtr.Zero, jobs = IntPtr.Zero;
         bool initialized = false, success = false;
         ProcessInformation pi = new ProcessInformation();
+        Owner partial = null;
         try {
             job = CreateJob();
             Security security = new Security { Length = (uint)Marshal.SizeOf(typeof(Security)), Inherit = true };
@@ -175,15 +190,18 @@ public static class TrustedSgJob {
             CloseOwned(ref inputRead);
             CloseOwned(ref outputWrite);
             CloseOwned(ref errorWrite);
-            Owner owner = new Owner { Job = job, Process = pi.Process, Pid = pi.Pid };
-            owner.Input = new StreamWriter(new FileStream(new SafeFileHandle(inputWrite, true), FileAccess.Write), new UTF8Encoding(false));
+            partial = new Owner { Job = job, Process = pi.Process, Pid = pi.Pid };
+            partial.Input = new StreamWriter(new FileStream(new SafeFileHandle(inputWrite, true), FileAccess.Write), new UTF8Encoding(false));
             inputWrite = IntPtr.Zero;
-            owner.Output = new StreamReader(new FileStream(new SafeFileHandle(outputRead, true), FileAccess.Read), Encoding.UTF8);
+            if (fixtureFault == 1) throw new InvalidOperationException("fixture partial input");
+            partial.Output = new StreamReader(new FileStream(new SafeFileHandle(outputRead, true), FileAccess.Read), Encoding.UTF8);
             outputRead = IntPtr.Zero;
-            owner.Error = new StreamReader(new FileStream(new SafeFileHandle(errorRead, true), FileAccess.Read), Encoding.UTF8);
+            if (fixtureFault == 2) throw new InvalidOperationException("fixture partial output");
+            partial.Error = new StreamReader(new FileStream(new SafeFileHandle(errorRead, true), FileAccess.Read), Encoding.UTF8);
             errorRead = IntPtr.Zero;
+            if (fixtureFault == 3) throw new InvalidOperationException("fixture partial error");
             success = true;
-            return owner;
+            return partial;
         } finally {
             if (initialized) DeleteProcThreadAttributeList(attrs);
             if (attrs != IntPtr.Zero) Marshal.FreeHGlobal(attrs);
@@ -194,11 +212,30 @@ public static class TrustedSgJob {
             if (!success && job != IntPtr.Zero) {
                 TerminateJobObject(job, 137);
                 bool empty = false;
-                try { empty = Active(job) == 0; } catch { }
+                try {
+                    long deadline = Environment.TickCount64 + 5000;
+                    do {
+                        empty = Active(job) == 0;
+                        if (!empty) System.Threading.Thread.Sleep(10);
+                    } while (!empty && Environment.TickCount64 < deadline);
+                } catch { }
                 if (empty && (pi.Process == IntPtr.Zero || WaitForSingleObject(pi.Process, 5000) == 0)) {
-                    if (pi.Process != IntPtr.Zero && !CloseHandle(pi.Process)) Retain(pi.Process);
-                    if (!CloseHandle(job)) Retain(job);
-                } else { Retain(pi.Process); Retain(job); }
+                    bool streamsClosed = true;
+                    if (partial != null) {
+                        try { if (partial.Input != null) partial.Input.Dispose(); } catch { streamsClosed = false; }
+                        try { if (partial.Output != null) partial.Output.Dispose(); } catch { streamsClosed = false; }
+                        try { if (partial.Error != null) partial.Error.Dispose(); } catch { streamsClosed = false; }
+                    }
+                    bool processClosed = pi.Process == IntPtr.Zero || CloseHandle(pi.Process);
+                    bool jobClosed = CloseHandle(job);
+                    if (!processClosed) Retain(pi.Process);
+                    if (!jobClosed) Retain(job);
+                    if (!streamsClosed && partial != null) QuarantineOwner(partial);
+                    LastStartupRollbackConfirmed = streamsClosed && processClosed && jobClosed;
+                } else {
+                    Retain(pi.Process); Retain(job);
+                    if (partial != null) QuarantineOwner(partial);
+                }
             }
         }
     }
@@ -213,6 +250,19 @@ public static class TrustedSgJob {
             QuarantineOwners[quarantineOwnerCount++] = owner;
         }
     }
+    public static IntPtr PinDirectory(string path) {
+        IntPtr handle = CreateFileW(path, 0x80, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+        if (handle == new IntPtr(-1)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        FileInfo info;
+        if (!GetFileInformationByHandle(handle, out info) || (info.Attributes & 0x410) != 0x10) {
+            int error = Marshal.GetLastWin32Error();
+            if (!CloseHandle(handle)) Retain(handle);
+            throw new Win32Exception(error == 0 ? 4390 : error);
+        }
+        return handle;
+    }
+    public static void CloseDirectory(ref IntPtr handle) { CloseOwned(ref handle); }
+    public static void RetainHandle(IntPtr handle) { Retain(handle); }
 
     public static uint Active(IntPtr job) {
         Accounting info;

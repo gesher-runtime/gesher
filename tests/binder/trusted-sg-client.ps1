@@ -12,8 +12,10 @@ function Start-TrustedSgOwner {
     $security.AddAccessRule($rule)
     [void][IO.FileSystemAclExtensions]::CreateDirectory([IO.DirectoryInfo]::new($directory), $security)
     if (([IO.File]::GetAttributes($directory) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'SG owner directory is a reparse point' }
-    $native = [TrustedSgJob]::Start($python, (Join-Path $PSScriptRoot 'trusted_sg_owner.py'), $directory)
-    return [pscustomobject]@{ Native = $native; Directory = $directory; Error = $native.Error.ReadToEndAsync(); Closed = $false; Faulted = $false }
+    $pin = [TrustedSgJob]::PinDirectory($directory)
+    try { $native = [TrustedSgJob]::Start($python, (Join-Path $PSScriptRoot 'trusted_sg_owner.py'), $directory, 0) }
+    catch { [TrustedSgJob]::RetainHandle($pin); throw }
+    return [pscustomobject]@{ Native = $native; Directory = $directory; Pin = $pin; Error = $native.Error.ReadToEndAsync(); Closed = $false; Faulted = $false }
 
 }
 
@@ -70,11 +72,15 @@ function Close-TrustedSgOwner($Owner) {
                 $item.Name -notmatch '^[1-9][0-9]*\.log$') { throw 'unexpected SG owner log entry; preserved' }
             Remove-Item -LiteralPath $item.FullName -Force
         }
+        $pin = $Owner.Pin
+        [TrustedSgJob]::CloseDirectory([ref]$pin)
+        $Owner.Pin = $pin
         Remove-Item -LiteralPath $Owner.Directory -Force
         $Owner.Closed = $true
       }
       } catch {
         [TrustedSgJob]::QuarantineOwner($Owner.Native)
+        if ($Owner.Pin -ne [IntPtr]::Zero) { [TrustedSgJob]::RetainHandle($Owner.Pin); $Owner.Pin = [IntPtr]::Zero }
         throw
       }
     if ($problem) { throw $problem }
