@@ -382,6 +382,7 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
     bool retired = false;
     bool token_owned = false;
     bool overflow = false;
+    size_t event_leases = 0;
     size_t buffered_units = 0;
     std::deque<Event> buffered;
   };
@@ -549,6 +550,8 @@ struct SessionEntry {
   size_t pending = 0;  // admitted, including tasks not yet running on the STA
   size_t pending_units = 0;
   bool accepting = true;
+  size_t request_leases = 0;
+  size_t event_leases = 0;
   // Retained until JNI dispatch returns, including after generation retirement.
   std::map<int64_t, ULONGLONG> watchdog_deadlines;
 };
@@ -641,7 +644,9 @@ HRESULT FinishSession(const std::shared_ptr<Impl>& impl, int64_t id, HRESULT hr,
   {
     std::lock_guard<std::mutex> guard(g_session_mutex);
     auto entry = g_sessions.find(impl->session_handle);
-    if (entry == g_sessions.end() || entry->second.watchdog_deadlines.erase(id) != 1) abort();
+    if (entry == g_sessions.end() || entry->second.request_leases == 0 ||
+        entry->second.watchdog_deadlines.erase(id) != 1) abort();
+    --entry->second.request_leases;
     if (!entry->second.accepting && entry->second.watchdog_deadlines.empty()) g_sessions.erase(entry);
   }
   return hr;
@@ -1910,7 +1915,7 @@ Host* Host::Create(Listener* listener, const HostOptions& options) {
     std::lock_guard<std::mutex> guard(g_session_mutex);
     if (g_next_session < std::numeric_limits<int64_t>::max()) {
       impl->session_handle = g_next_session++;
-      g_sessions.emplace(impl->session_handle, SessionEntry{impl, {}, 0, 0, true, {}});
+      g_sessions.emplace(impl->session_handle, SessionEntry{impl, {}, 0, 0, true, 0, 0, {}});
     }
   }
   EnsureThread();
@@ -1944,10 +1949,11 @@ int32_t Host::SubmitSession(int64_t handle, int64_t id, const std::wstring& sess
   size_t units = session.size() + method.size() + params.size();
   constexpr size_t kMaxPendingUnits = 4 * 1024 * 1024;
   if (entry->second.pending_units > kMaxPendingUnits) abort();
-  if (entry->second.used.size() >= 65536 || entry->second.watchdog_deadlines.size() >= 128 ||
+  if (entry->second.used.size() >= 65536 || entry->second.request_leases >= 128 ||
       units > kMaxPendingUnits - entry->second.pending_units) return -5;
   entry->second.used.insert(id);
   ++entry->second.pending;
+  ++entry->second.request_leases;
   entry->second.pending_units += units;
   auto impl = entry->second.owner;
   ULONGLONG now = GetTickCount64();
@@ -2024,6 +2030,7 @@ int32_t Host::SubmitSession(int64_t handle, int64_t id, const std::wstring& sess
     entry->second.used.erase(id);
     entry->second.watchdog_deadlines.erase(id);
     --entry->second.pending;
+    --entry->second.request_leases;
     entry->second.pending_units -= units;
     return -4;
   }
@@ -2108,10 +2115,11 @@ int32_t QueueSessionOperation(int64_t handle, int64_t id, uint32_t timeout_ms, s
   if (entry->second.used.count(id)) return -3;
   constexpr size_t kMaxPendingUnits = 4 * 1024 * 1024;
   if (entry->second.pending_units > kMaxPendingUnits) abort();
-  if (entry->second.used.size() >= 65536 || entry->second.watchdog_deadlines.size() >= 128 ||
+  if (entry->second.used.size() >= 65536 || entry->second.request_leases >= 128 ||
       units > kMaxPendingUnits - entry->second.pending_units) return -5;
   entry->second.used.insert(id);
   ++entry->second.pending;
+  ++entry->second.request_leases;
   entry->second.pending_units += units;
   ULONGLONG now = GetTickCount64();
   ULONGLONG deadline = now > std::numeric_limits<ULONGLONG>::max() - timeout_ms
@@ -2141,6 +2149,7 @@ int32_t QueueSessionOperation(int64_t handle, int64_t id, uint32_t timeout_ms, s
     entry->second.used.erase(id);
     entry->second.watchdog_deadlines.erase(id);
     --entry->second.pending;
+    --entry->second.request_leases;
     entry->second.pending_units -= units;
     return -4;
   }
@@ -2158,15 +2167,27 @@ bool CopySessionString(const CoString& value, size_t max, std::wstring* out) {
 }
 
 void ReportSessionEvent(const std::shared_ptr<Impl>& impl, int64_t subscription,
-                        const Impl::SessionSubscription::Event& event) {
+                        const std::shared_ptr<Impl::SessionSubscription>& sub,
+                        Impl::SessionSubscription::Event event) {
   int64_t lease;
   {
     std::lock_guard<std::mutex> guard(g_session_mutex);
     auto entry = g_sessions.find(impl->session_handle);
     if (entry == g_sessions.end() || !entry->second.accepting || impl->session_closing) return;
-    if (entry->second.watchdog_deadlines.size() >= 128 ||
+    // Keep event capacity independent of accepted calls. Reserve up to one
+    // extra error lease per resident subscription to report overload.
+    if (entry->second.event_leases >= 128) {
+      if (sub->retired) return;
+      sub->retired = true;
+      event = {HRESULT_FROM_WIN32(ERROR_BUSY), {}, {}};
+    } else if (FAILED(event.status)) {
+      sub->retired = true;
+    }
+    if (entry->second.event_leases >= 192 ||
         impl->next_event_watch == std::numeric_limits<int64_t>::min()) abort();
     lease = impl->next_event_watch--;
+    ++entry->second.event_leases;
+    ++sub->event_leases;
     entry->second.watchdog_deadlines.emplace(lease, WatchdogDeadline(GetTickCount64()));
   }
   impl->Report(kSessionSubscription, subscription, static_cast<int32_t>(event.status),
@@ -2174,7 +2195,10 @@ void ReportSessionEvent(const std::shared_ptr<Impl>& impl, int64_t subscription,
   {
     std::lock_guard<std::mutex> guard(g_session_mutex);
     auto entry = g_sessions.find(impl->session_handle);
-    if (entry == g_sessions.end() || entry->second.watchdog_deadlines.erase(lease) != 1) abort();
+    if (entry == g_sessions.end() || entry->second.event_leases == 0 || sub->event_leases == 0 ||
+        entry->second.watchdog_deadlines.erase(lease) != 1) abort();
+    --entry->second.event_leases;
+    --sub->event_leases;
     if (!entry->second.accepting && entry->second.watchdog_deadlines.empty()) g_sessions.erase(entry);
   }
 }
@@ -2219,6 +2243,8 @@ int32_t Host::SubscribeSession(int64_t handle, int64_t id, const std::wstring& e
                   item.status = HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
               }
             }
+            if (owner->destroyed || owner->session_closing || owner->session_failed || sub->retired)
+              return S_OK;
             if (sub->adding || sub->draining) {
               size_t units = item.session.size() + item.json.size();
               if (owner->session_buffered_units > 1048576) abort();
@@ -2230,8 +2256,7 @@ int32_t Host::SubscribeSession(int64_t handle, int64_t id, const std::wstring& e
                 sub->buffered.push_back(std::move(item));
               }
             } else {
-              if (FAILED(item.status)) sub->retired = true;
-              ReportSessionEvent(owner, subscription, item);
+              ReportSessionEvent(owner, subscription, sub, item);
             }
             return S_OK;
           }).get(), &sub->token);
@@ -2279,8 +2304,7 @@ int32_t Host::SubscribeSession(int64_t handle, int64_t id, const std::wstring& e
         if (sub->buffered_units < units || impl->session_buffered_units < units) abort();
         sub->buffered_units -= units;
         impl->session_buffered_units -= units;
-        if (FAILED(item.status)) sub->retired = true;
-        ReportSessionEvent(impl, subscription, item);
+        ReportSessionEvent(impl, subscription, sub, item);
       }
       sub->draining = false;
       if (sub->retired || sub->overflow || impl->session_closing || impl->session_failed) {
@@ -2289,9 +2313,8 @@ int32_t Host::SubscribeSession(int64_t handle, int64_t id, const std::wstring& e
         sub->buffered.clear(); sub->buffered_units = 0;
       }
       if (sub->overflow && !impl->destroyed && !impl->session_closing && !sub->retired) {
-        sub->retired = true;
         Impl::SessionSubscription::Event overflow{HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW), {}, {}};
-        ReportSessionEvent(impl, subscription, overflow);
+        ReportSessionEvent(impl, subscription, sub, overflow);
       }
     }
     --impl->session_com_operations;
@@ -2315,6 +2338,11 @@ int32_t Host::RemoveSessionSubscription(int64_t handle, int64_t operation_id,
       return;
     }
     sub->retired = true;
+    if (sub->event_leases != 0) {
+      // The caller can retry after already-admitted callbacks unwind.
+      FinishSession(impl, operation, HRESULT_FROM_WIN32(ERROR_BUSY), L"");
+      return;
+    }
     HRESULT hr = S_OK;
     if (sub->token_owned) {
       sub->token_owned = false;

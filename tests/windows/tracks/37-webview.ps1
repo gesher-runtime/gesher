@@ -22,7 +22,7 @@
 . "$PSScriptRoot/../webview/Runtime.ps1"
 
 # The fault hook exists only in the separately named probe, never in dalvikvm.
-foreach ($fault in @('normal', 'session-normal', 'session-close', 'subscription', 'com', 'class', 'window', 'hook', 'ready', 'decision', 'late')) {
+foreach ($fault in @('normal', 'session-normal', 'session-close', 'subscription', 'subscription-busy', 'com', 'class', 'window', 'hook', 'ready', 'decision', 'late')) {
   $out = Join-Path $env:RUNNER_TEMP "web4-startup-$fault.log"
   $err = Join-Path $env:RUNNER_TEMP "web4-startup-$fault.err"
   $probe = Join-Path $Dir 'webview_startup_probe.exe'
@@ -32,7 +32,7 @@ foreach ($fault in @('normal', 'session-normal', 'session-close', 'subscription'
   $p = Start-Process -FilePath $probe -ArgumentList $fault -NoNewWindow -PassThru `
     -RedirectStandardOutput $out -RedirectStandardError $err
   try {
-    $timeoutMs = if ($fault -in @('normal', 'session-normal', 'session-close', 'subscription')) { 70000 } else { 20000 }
+    $timeoutMs = if ($fault -in @('normal', 'session-normal', 'session-close', 'subscription', 'subscription-busy')) { 70000 } else { 20000 }
     if (-not $p.WaitForExit($timeoutMs)) {
       Write-Host "FAIL web4 startup: $fault timed out"; $script:failed++
     } else {
