@@ -56,7 +56,66 @@ public class SessionActivity extends Activity {
             boolean queuedClose = (Boolean) close.invoke(host);
             boolean drained = completions.await(20, TimeUnit.SECONDS);
             Thread.sleep(1000); // bounded observation for duplicate events
+            Web3.log("session capacity rejected=" + rejected + " closed=" + queuedClose
+                    + " drained=" + drained + " unexpected=" + unexpected.get());
             return rejected == -5 && queuedClose && drained && unexpected.get() == 0;
+        } finally {
+            close.invoke(host);
+        }
+    }
+
+    private boolean exerciseBudget(Class<?> cls, Class<?> client) throws Exception {
+        CountDownLatch ready = new CountDownLatch(1), expired = new CountDownLatch(1);
+        CountDownLatch cancelled = new CountDownLatch(7);
+        AtomicInteger unexpected = new AtomicInteger();
+        Object callback = Proxy.newProxyInstance(client.getClassLoader(), new Class<?>[] {client},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("onEvent")) {
+                        int type = (Integer) args[0];
+                        long id = (Long) args[1];
+                        if (type == 1) ready.countDown();
+                        if (type == 30 && id == 2000) {
+                            if ((Integer) args[2] != 0x800705b4) unexpected.incrementAndGet();
+                            expired.countDown();
+                        } else if (type == 30 && id >= 2001 && id <= 2007) {
+                            if ((Integer) args[2] != 0x800704c7) unexpected.incrementAndGet();
+                            cancelled.countDown();
+                        }
+                    }
+                    if (method.getReturnType() == boolean.class) return false;
+                    if (method.getReturnType() == String.class) return "{}";
+                    return null;
+                });
+        Object host = cls.getMethod("create", client, double.class, int.class)
+                .invoke(null, callback, 1.0, -1);
+        if (host == null) return false;
+        Method close = cls.getMethod("tryDestroy");
+        try {
+            if (!ready.await(20, TimeUnit.SECONDS)) return false;
+            Method submit = cls.getMethod("submitSession", long.class, String.class,
+                    String.class, String.class, int.class);
+            String base = "{\"expression\":\"new Promise(()=>{})\",\"awaitPromise\":true}";
+            StringBuilder params = new StringBuilder(base);
+            while (params.length() < 524288) params.append(' ');
+            String padded = params.toString();
+            for (long id = 2000; id < 2007; ++id) {
+                int duration = id == 2000 ? 15000 : 60000;
+                if ((Integer) submit.invoke(host, id, "", "Runtime.evaluate", padded, duration) != 0)
+                    return false;
+            }
+            int full = (Integer) submit.invoke(host, 2007L, "", "Runtime.evaluate", padded, 60000);
+            boolean timedOut = expired.await(30, TimeUnit.SECONDS);
+            if (full != -5 || !timedOut) {
+                Web3.log("session budget full=" + full + " timedOut=" + timedOut);
+                return false;
+            }
+            int afterExpiry = (Integer) submit.invoke(host, 2007L, "", "Runtime.evaluate", padded, 60000);
+            boolean closed = (Boolean) close.invoke(host);
+            boolean drained = cancelled.await(20, TimeUnit.SECONDS);
+            Web3.log("session budget full=" + full + " timedOut=" + timedOut
+                    + " afterExpiry=" + afterExpiry + " closed=" + closed
+                    + " drained=" + drained + " unexpected=" + unexpected.get());
+            return afterExpiry == 0 && closed && drained && unexpected.get() == 0;
         } finally {
             close.invoke(host);
         }
@@ -152,8 +211,9 @@ public class SessionActivity extends Activity {
                     && timeoutCount.get() == 1 && marker == 0 && markerObserved
                     && third == 0 && closed && afterClose == -1;
             boolean capacity = exerciseCapacity(cls, client);
-            passed &= capacity;
-            Web3.log("session capacity " + capacity);
+            boolean budget = exerciseBudget(cls, client);
+            passed &= capacity && budget;
+            Web3.log("session capacity " + capacity + " budget " + budget);
             Web3.log("session request accepted=" + accepted + " completed=" + completed
                     + " hresult=" + status.get() + " count=" + count.get()
                     + " duplicate=" + duplicate + " invalid=" + invalid + " tooLong=" + tooLong
