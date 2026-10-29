@@ -131,8 +131,16 @@ int wmain(int argc, wchar_t** argv) {
     Label(asset_file, L"S:(ML;;NW;;;ME)");
     printf("POLICY_READONLY low_label_rejected=1 missing_writeup_rejected=1 rollback_owners=0\n");
 
+    // The installed runtime directory contains subdirectories. Exercise that
+    // real Gather path, not just a flat directory of files.
+    const std::wstring nested_assets = assets + L"\\framework";
+    Directory(nested_assets);
+    const std::wstring nested_file = nested_assets + L"\\boot.art";
+    HANDLE nested_asset = CreateFileW(nested_file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, 0, nullptr);
+    Check(nested_asset != INVALID_HANDLE_VALUE && CloseHandle(nested_asset), "fresh nested runtime asset");
     auto policy = create(assets);
     Check(bool(policy), "actual provision succeeds");
+    printf("POLICY_RUNTIME_NESTED actual_gather=1 nested_directory=1 nested_file=1\n");
     {
       SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
       std::wstring log_path = root + L"\\nested.log";
@@ -181,6 +189,7 @@ int wmain(int argc, wchar_t** argv) {
     Check(Security(outside) == outside_security, "exact cleanup does not traverse inserted target");
     Check(RemoveDirectoryW(link.c_str()), "remove retirement reparse");
     policy.reset(); Check(SlotsEmpty(), "all resource owners released");
+    Check(DeleteFileW(nested_file.c_str()) && RemoveDirectoryW(nested_assets.c_str()), "release nested runtime asset");
     Check(DeleteFileW(asset_file.c_str()), "release final asset file");
     Check(MoveFileExW(assets.c_str(), (assets + L".moved").c_str(), 0), "rename succeeds after confirmed retirement");
     Check(RemoveDirectoryW((assets + L".moved").c_str()) && RemoveDirectoryW(data.c_str()) &&
