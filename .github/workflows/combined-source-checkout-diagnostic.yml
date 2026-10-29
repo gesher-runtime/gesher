@@ -59,7 +59,7 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -132,3 +132,34 @@ jobs:
           python tools/web3/host_roles.py verify --dist dist
           if ($LASTEXITCODE -ne 0) { throw 'Prior role verification failed' }
           Observe 'after-role-verification'
+      - name: Checkout reviewed diagnostic runner separately
+        uses: actions/checkout@v4
+        with:
+          ref: 7fefa7ab
+          path: diagnostic-source
+          persist-credentials: false
+          sparse-checkout: tests/windows/run-tests.ps1
+          sparse-checkout-cone-mode: false
+      - name: Run historical normal suite with diagnostic-only observations
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actualRun = $env:GITHUB_RUN_ID
+          $source = 'fad0eff2f73215235769566b4c0304c844598195'
+          if ((git rev-parse HEAD).Trim() -cne $source) { throw 'Wrong historical checkout' }
+          $diagnostic = 'diagnostic-source/tests/windows/run-tests.ps1'
+          $expectedDiagnostic = '5cd7114fb3199259bbccbb1f71a75bd7546d6470'
+          if ((git hash-object -- $diagnostic).Trim() -cne $expectedDiagnostic) { throw 'Diagnostic runner blob mismatch' }
+          Copy-Item -LiteralPath $diagnostic -Destination tests/windows/diagnostic-run-tests.ps1
+          if ((git hash-object -- tests/windows/diagnostic-run-tests.ps1).Trim() -cne $expectedDiagnostic) { throw 'Diagnostic runner copy mismatch' }
+          if ((git hash-object -- tests/windows/run-tests.ps1).Trim() -cne (git rev-parse HEAD:tests/windows/run-tests.ps1).Trim()) { throw 'Original tracked runner changed' }
+          Write-Host "HISTORICAL_SUITE_DIAGNOSTIC current_run=$actualRun supplier_run=40865138716 attempt=1 source=$source runner_blob=$expectedDiagnostic; diagnostic only, not current qualification"
+          $env:GITHUB_RUN_ID = '40865138716'
+          $env:GITHUB_RUN_ATTEMPT = '1'
+          $env:GITHUB_SHA = $source
+          $env:GITHUB_WORKFLOW = 'ci'
+          $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+          pwsh -NoProfile -File tests/windows/diagnostic-run-tests.ps1 dist -Web3Observer dist/web3_process_waits.exe
+          exit $LASTEXITCODE
