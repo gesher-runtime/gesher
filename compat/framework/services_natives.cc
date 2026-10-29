@@ -28,6 +28,7 @@
 #include <log/log.h>
 #include <nativehelper/JNIHelp.h>
 #include <unistd.h>
+#include <cwchar>
 
 #include "core_jni_helpers.h"
 #include "services_zygote.h"
@@ -237,9 +238,12 @@ static jboolean Zygote_signalEvent(JNIEnv* env, jclass, jstring name) {
     return gesher::zygote::SignalEvent(ZygoteString(env, name)) ? JNI_TRUE : JNI_FALSE;
 }
 
-extern "C" int gesher_vm_entrypoint_index();
-static jint Zygote_entrypointIndex(JNIEnv*, jclass) {
-    return gesher_vm_entrypoint_index();
+extern "C" const wchar_t* gesher_vm_launch_prefix();
+static jstring Zygote_launchPrefix(JNIEnv* env, jclass) {
+    static_assert(sizeof(wchar_t) == sizeof(jchar));
+    const wchar_t* value = gesher_vm_launch_prefix();
+    if (!value) return nullptr;
+    return env->NewString(reinterpret_cast<const jchar*>(value), static_cast<jsize>(std::wcslen(value)));
 }
 
 static jstring Zygote_commandLine(JNIEnv* env, jclass) {
@@ -275,7 +279,7 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativeWaitEvent", "(JI)Z", GESHER_JNI(Zygote_waitEvent)},
     {"nativeSignalEvent", "(Ljava/lang/String;)Z", GESHER_JNI(Zygote_signalEvent)},
     {"nativeWaitForBinder", "(Ljava/lang/String;II)Z", GESHER_JNI(Zygote_waitForBinder)},
-    {"nativeEntrypointIndex", "()I", GESHER_JNI(Zygote_entrypointIndex)},
+    {"nativeLaunchPrefix", "()Ljava/lang/String;", GESHER_JNI(Zygote_launchPrefix)},
     {"nativeCommandLine", "()Ljava/lang/String;", GESHER_JNI(Zygote_commandLine)},
     {"nativeExePath", "()Ljava/lang/String;", GESHER_JNI(Zygote_exePath)},
 };

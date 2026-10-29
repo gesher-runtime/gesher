@@ -76,7 +76,7 @@ public final class Zygote {
     static native boolean nativeSignalEvent(String name);
     static native boolean nativeWaitForBinder(String device, int pid, int timeoutMs);
     static native String nativeCommandLine();
-    private static native int nativeEntrypointIndex();
+    private static native String nativeLaunchPrefix();
     static native String nativeExePath();
 
     public static final long EXIT_RUNNING = -2;
@@ -189,7 +189,9 @@ public final class Zygote {
 
     /** Options preceding the entrypoint selected by dalvikvm's own parser. */
     public static String vmCommandLineForEntrypoint() {
-        return com.gesher.app.VmCommandLine.beforeArgument(nativeCommandLine(), nativeEntrypointIndex());
+        String prefix = nativeLaunchPrefix();
+        if (prefix == null) throw new IllegalStateException("VM launch arguments unavailable");
+        return prefix;
     }
 
     /** The command line of a dalvikvm like this one running {@code mainClass args}. */

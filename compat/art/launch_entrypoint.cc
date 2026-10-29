@@ -5,11 +5,32 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace {
 // 0 means unset, -1 means the two argument domains did not match.
 std::atomic<int> entrypoint_index{0};
+std::wstring launch_prefix;
+
+void AppendQuoted(std::wstring& out, const wchar_t* argument) {
+  if (!out.empty()) out.push_back(L' ');
+  out.push_back(L'"');
+  unsigned slashes = 0;
+  for (const wchar_t* p = argument; *p; ++p) {
+    if (*p == L'\\') { ++slashes; continue; }
+    if (*p == L'"') {
+      out.append(slashes * 2 + 1, L'\\');
+      out.push_back(L'"');
+    } else {
+      out.append(slashes, L'\\');
+      out.push_back(*p);
+    }
+    slashes = 0;
+  }
+  out.append(slashes * 2, L'\\');
+  out.push_back(L'"');
+}
 }
 
 extern "C" void gesher_record_vm_entrypoint_index(int index, int argc, char** argv) {
@@ -25,13 +46,16 @@ extern "C" void gesher_record_vm_entrypoint_index(int index, int argc, char** ar
       equal = WideCharToMultiByte(CP_ACP, 0, wide[i], -1, value.data(), size, nullptr, nullptr) == size &&
           std::strcmp(value.data(), argv[i]) == 0;
     }
-    if (equal) result = index;
+    if (equal) {
+      for (int i = 0; i < index; ++i) AppendQuoted(launch_prefix, wide[i]);
+      result = index;
+    }
   }
   if (wide) LocalFree(wide);
   int expected = 0;
   if (!entrypoint_index.compare_exchange_strong(expected, result)) std::abort();
 }
 
-extern "C" int gesher_vm_entrypoint_index() {
-  return entrypoint_index.load();
+extern "C" const wchar_t* gesher_vm_launch_prefix() {
+  return entrypoint_index.load() > 0 ? launch_prefix.c_str() : nullptr;
 }

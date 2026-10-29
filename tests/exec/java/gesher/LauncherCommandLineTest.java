@@ -44,17 +44,6 @@ public final class LauncherCommandLineTest {
         absent("dalvikvm.exe prefix" + MAIN + " launch");
         absent("dalvikvm.exe \"\\\"" + MAIN + "\\\"\" launch");
         absent("\"" + MAIN + "\" launch"); // the executable is never the main class
-        String ambiguous = "dalvikvm.exe -cp gesher.fixture.Writer -Dk=gesher.fixture.Writer "
-                + "gesher.fixture.Writer gesher.fixture.Writer";
-        String indexed = VmCommandLine.beforeArgument(ambiguous, 4);
-        if (!indexed.equals("dalvikvm.exe -cp gesher.fixture.Writer -Dk=gesher.fixture.Writer")) {
-            throw new AssertionError("incorrect parser-selected prefix: " + indexed);
-        }
-        ++checks;
-        try {
-            VmCommandLine.beforeArgument(ambiguous, 99);
-            throw new AssertionError("out-of-range entrypoint accepted");
-        } catch (IllegalStateException expected) { ++checks; }
         System.out.println("LauncherCommandLineTest PASS " + checks
                 + " quoted/bare main tokens, tabs, Windows escapes and false-match rejection");
     }

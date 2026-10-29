@@ -97,6 +97,7 @@ Remove-Item -LiteralPath $entrypointLog -Force -ErrorAction SilentlyContinue
 CheckTimed 'services: actual VM entrypoint and delegated fresh child' "$Dir/dalvikvm.exe" @(
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', '-Dfixture.class=gesher.services.VmEntrypointFixture',
+  '-Dfixture.quoted=space "quoted" \ tail',
   '-cp', (NoDrive "$Dir/services-tests.dex"), 'gesher.services.VmEntrypointFixture',
   (NoDrive $entrypointLog), 'gesher.services.VmEntrypointFixture') @(
   'ENTRYPOINT_WRAPPER actual_child=1 exit=0 consumed=1') 120

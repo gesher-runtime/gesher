@@ -9,6 +9,10 @@ import java.util.List;
 public final class VmEntrypointFixture {
     public static void main(String[] args) throws Exception {
         if (args.length == 1 && args[0].equals("child")) {
+            if (!"gesher.services.VmEntrypointFixture".equals(System.getProperty("fixture.class")) ||
+                    !"space \"quoted\" \\ tail".equals(System.getProperty("fixture.quoted"))) {
+                throw new AssertionError("VM properties did not survive the actual child launch");
+            }
             System.out.println("ENTRYPOINT_CHILD actual=1");
             return;
         }
