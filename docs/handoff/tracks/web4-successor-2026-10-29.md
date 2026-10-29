@@ -29,3 +29,5 @@ A local saturation candidate submits 128 unresolved real CDP promise calls, expe
 A further unrun fixture uses seven maximum-length valid pending requests to reach the aggregate input budget, checks the next rejection, waits for one timeout and checks readmission and cancellation. This observes the logical budget through real JNI/CDP if it passes, and is not a bound on total memory or stalled-STA delivery.
 
 The next JNI candidate refuses admission if conversion leaves a pending JNI exception, preserving the exception for Java. JNI attach/allocation or callback exceptions after admission still need an explicit terminal contract and fault-injection evidence.
+
+The unrun successor additionally caps native result copies at 524288 UTF-16 units, reports ERROR_BUFFER_OVERFLOW for longer CDP results and skips scanning retired results. Its oversized-result fixture is a candidate only; COM/engine allocations and JNI callback failures remain outside this bound. Peer review also required per-ID cancellation accounting in the budget fixture; the local candidate now checks each ID and observes duplicates for one second.

@@ -68,6 +68,7 @@ public class SessionActivity extends Activity {
         CountDownLatch ready = new CountDownLatch(1), expired = new CountDownLatch(1);
         CountDownLatch cancelled = new CountDownLatch(7);
         AtomicInteger unexpected = new AtomicInteger();
+        AtomicIntegerArray counts = new AtomicIntegerArray(8);
         Object callback = Proxy.newProxyInstance(client.getClassLoader(), new Class<?>[] {client},
                 (proxy, method, args) -> {
                     if (method.getName().equals("onEvent")) {
@@ -75,10 +76,12 @@ public class SessionActivity extends Activity {
                         long id = (Long) args[1];
                         if (type == 1) ready.countDown();
                         if (type == 30 && id == 2000) {
-                            if ((Integer) args[2] != 0x800705b4) unexpected.incrementAndGet();
+                            if (counts.incrementAndGet(0) != 1 || (Integer) args[2] != 0x800705b4)
+                                unexpected.incrementAndGet();
                             expired.countDown();
                         } else if (type == 30 && id >= 2001 && id <= 2007) {
-                            if ((Integer) args[2] != 0x800704c7) unexpected.incrementAndGet();
+                            if (counts.incrementAndGet((int) id - 2000) != 1
+                                    || (Integer) args[2] != 0x800704c7) unexpected.incrementAndGet();
                             cancelled.countDown();
                         }
                     }
@@ -112,6 +115,10 @@ public class SessionActivity extends Activity {
             int afterExpiry = (Integer) submit.invoke(host, 2007L, "", "Runtime.evaluate", padded, 60000);
             boolean closed = (Boolean) close.invoke(host);
             boolean drained = cancelled.await(20, TimeUnit.SECONDS);
+            Thread.sleep(1000); // bounded duplicate observation
+            for (int i = 0; i < 8; ++i) {
+                if (counts.get(i) != 1) unexpected.incrementAndGet();
+            }
             Web3.log("session budget full=" + full + " timedOut=" + timedOut
                     + " afterExpiry=" + afterExpiry + " closed=" + closed
                     + " drained=" + drained + " unexpected=" + unexpected.get());
@@ -129,7 +136,8 @@ public class SessionActivity extends Activity {
             Class<?> client = Class.forName("com.gesher.app.webview.WebView2Host$Client");
             CountDownLatch ready = new CountDownLatch(1), result = new CountDownLatch(1);
             CountDownLatch reentrant = new CountDownLatch(1), timeout = new CountDownLatch(1),
-                    lateMarker = new CountDownLatch(1);
+                    lateMarker = new CountDownLatch(1), oversizedResult = new CountDownLatch(1);
+            AtomicInteger oversizedStatus = new AtomicInteger();
             AtomicReference<String> latePayload = new AtomicReference<>("");
             AtomicInteger lateStatus = new AtomicInteger(-1);
             AtomicInteger timeoutCount = new AtomicInteger(), timeoutStatus = new AtomicInteger();
@@ -152,6 +160,10 @@ public class SessionActivity extends Activity {
                                 timeoutCount.incrementAndGet();
                                 timeoutStatus.set((Integer) args[2]);
                                 timeout.countDown();
+                            }
+                            if (type == 30 && (Long) args[1] == 10L) {
+                                oversizedStatus.set((Integer) args[2]);
+                                oversizedResult.countDown();
                             }
                             if (type == 30 && (Long) args[1] == 6L) {
                                 lateStatus.set((Integer) args[2]);
@@ -201,6 +213,10 @@ public class SessionActivity extends Activity {
                     "{\"expression\":\"window.__sessionLate\",\"returnByValue\":true}", 5000);
             boolean markerObserved = lateMarker.await(5, TimeUnit.SECONDS)
                     && lateStatus.get() == 0 && latePayload.get().contains("\"value\":7");
+            int bigResult = (Integer) submit.invoke(host, 10L, "", "Runtime.evaluate",
+                    "{\"expression\":\"'x'.repeat(524288)\",\"returnByValue\":true}", 5000);
+            boolean overflow = oversizedResult.await(10, TimeUnit.SECONDS)
+                    && oversizedStatus.get() == 0x8007006f;
             int third = (Integer) submit.invoke(host, 3L, "", "Runtime.enable", "{}", 5000);
             boolean closed = reentrant.await(10, TimeUnit.SECONDS) && closeResult.get();
             int afterClose = (Integer) submit.invoke(host, 4L, "", "Runtime.enable", "{}", 5000);
@@ -209,7 +225,7 @@ public class SessionActivity extends Activity {
                     && tooLong == -2 && sessionTooLong == -2 && paramsTooLong == -2
                     && delayed == 0 && timedOut && timeoutStatus.get() == 0x800705b4
                     && timeoutCount.get() == 1 && marker == 0 && markerObserved
-                    && third == 0 && closed && afterClose == -1;
+                    && bigResult == 0 && overflow && third == 0 && closed && afterClose == -1;
             boolean capacity = exerciseCapacity(cls, client);
             boolean budget = exerciseBudget(cls, client);
             passed &= capacity && budget;
@@ -220,7 +236,7 @@ public class SessionActivity extends Activity {
                     + " sessionTooLong=" + sessionTooLong + " paramsTooLong=" + paramsTooLong
                     + " timeout=" + timedOut + " timeoutHresult=" + timeoutStatus.get()
                     + " timeoutCount=" + timeoutCount.get() + " marker=" + markerObserved
-                    + " reentrant=" + closed + " afterClose=" + afterClose);
+                    + " overflow=" + overflow + " reentrant=" + closed + " afterClose=" + afterClose);
         } catch (Throwable e) {
             Web3.log("session exception " + e);
         } finally {

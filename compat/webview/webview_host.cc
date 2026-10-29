@@ -1776,8 +1776,21 @@ int32_t Host::SubmitSession(int64_t handle, int64_t id, const std::wstring& sess
     }
     auto callback = GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
                         [weak, id](HRESULT error, LPCWSTR json) -> HRESULT {
-                          if (auto owner = weak.lock())
-                            FinishSession(owner, id, error, json ? json : L"null");
+                          if (auto owner = weak.lock()) {
+                            if (owner->session_requests.find(id) == owner->session_requests.end())
+                              return S_OK;
+                            constexpr size_t kMaxResultUnits = 524288;
+                            size_t length = 0;
+                            if (json != nullptr) {
+                              while (length <= kMaxResultUnits && json[length] != L'\0') ++length;
+                            }
+                            if (length > kMaxResultUnits) {
+                              FinishSession(owner, id, HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW), L"null");
+                            } else {
+                              FinishSession(owner, id, error,
+                                            json ? std::wstring(json, length) : L"null");
+                            }
+                          }
                           return S_OK;
                         });
     HRESULT hr = session.empty()
