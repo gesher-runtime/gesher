@@ -27,6 +27,15 @@ These changes require a fresh source-bound run; the initial green does not
 verify them. Resource-duplication/generation/clock-ID fault roles and the
 whole host/translator/guest/package/e2e requirements remain open.
 
+Run40803071353 at e10fbed7 compiled successfully but failed the original
+handle-reclamation bound on both Windows. Native stdout was buffered on
+abort, so preceding stages do not yet have admissible raw PASS evidence.
+The next diagnostic keeps that bound unchanged, makes stdout unbuffered,
+prints per-stage actual handle counts, and counts every fixture-owned oracle
+handle through checked CloseHandle calls. No leak cause or correction is
+claimed before those actual counts are available. The dynamic pairing
+client was not reached in that failed workflow step.
+
 Earlier failures remain part of the record. Run40800633035 at exact
 358bb280 failed during whole supplier DLL link: upstream's GCC-only
 `-Wc,-no-pthread` reached Clang as an unused argument under `-Werror`.

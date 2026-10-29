@@ -1,4 +1,4 @@
-# Prove the actual loaded supplier module against the verified DLL digest.
+# Preserve stage ownership/count diagnostics before the original handle bound.
 name: host pthread authority initial controls
 on:
   workflow_dispatch:

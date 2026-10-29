@@ -10,8 +10,19 @@
 #include <memory>
 
 namespace {
+std::atomic<int> fixture_owned_handles{0};
 void Require(bool ok, const char* what) {
   if (!ok) { std::fprintf(stderr, "FAIL %s error=%lu errno=%d\n", what, GetLastError(), errno); std::abort(); }
+}
+void CountHandles(const char* stage) {
+  DWORD count = 0;
+  Require(GetProcessHandleCount(GetCurrentProcess(), &count), "diagnostic process handles");
+  std::printf("HOST_HANDLE_STAGE stage=%s process=%lu fixture-owned=%d\n", stage, count,
+              fixture_owned_handles.load());
+}
+void CloseOwned(HANDLE handle) {
+  Require(CloseHandle(handle), "fixture owned close");
+  Require(--fixture_owned_handles >= 0, "fixture ownership accounting");
 }
 struct Target {
   std::atomic<bool> ready{false}, stop{false}, busy{true};
@@ -24,6 +35,7 @@ void* Worker(void* arg) {
   t.identity = pthread_self();
   Require(DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
                           &t.oracle, THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0), "oracle duplicate");
+  ++fixture_owned_handles;
   t.ready = true;
   while (!t.stop) {
     pthread_testcancel();
@@ -76,10 +88,11 @@ void Dead(Target& t, clockid_t id) {
   timespec unchanged_time{42, 43};
   Require(clock_gettime(id, &unchanged_time) == -1 && errno == EINVAL &&
           unchanged_time.tv_sec == 42 && unchanged_time.tv_nsec == 43, "dead clock unchanged");
-  CloseHandle(t.oracle);
+  CloseOwned(t.oracle);
 }
 
 void Stress() {
+  CountHandles("stress-entry");
   // Every exhausted slot holds a genuine, still-live distinct target.
   constexpr int count = 257;
   auto targets = std::make_unique<Target[]>(count);
@@ -97,8 +110,9 @@ void Stress() {
   for (int i = 0; i != count; ++i) {
     Require(pthread_join(threads[i], nullptr) == 0, "capacity join");
     if (i < 256) Dead(targets[i], clocks[i]);
-    else CloseHandle(targets[i].oracle);
+    else CloseOwned(targets[i].oracle);
   }
+  CountHandles("capacity-retired");
   { Target t; pthread_t th; t.busy = false;
     Require(pthread_create(&th, nullptr, Worker, &t) == 0, "replacement create"); Await(t);
     timespec untouched{42, 43};
@@ -108,6 +122,7 @@ void Stress() {
     Require(pthread_getcpuclockid(t.identity, &fresh) == 0 && fresh != clocks[0], "replacement distinct clock");
     t.stop = true; Require(pthread_join(th, nullptr) == 0, "replacement join"); Dead(t, fresh); }
   std::puts("PASS host-authority 256-live-slots exhaustion-output reclaim saved-clock-nonalias");
+  CountHandles("replacement-retired");
 
   for (int round = 0; round != 64; ++round) {
     Target t; pthread_t th; t.busy = false;
@@ -142,6 +157,8 @@ void Stress() {
     stop_readers = true;
     for (auto& reader : readers) reader.join();
     Dead(t, saved);
+    std::printf("HOST_RACE_ROUND row=%d\n", round);
+    CountHandles("race-retired");
   }
   std::puts("PASS host-authority 64-rounds four-readers concurrent-detach-join-exit");
 
@@ -152,6 +169,7 @@ void Stress() {
     Require(pthread_join(th, &result) == 0 && result == PTHREAD_CANCELED, "real cancellation join result");
     Dead(t, saved); }
   std::puts("PASS host-authority real-cancel target-clock-retired");
+  CountHandles("cancel-retired");
 
   auto rapid = std::make_unique<Target[]>(1024);
   pthread_attr_t attr;
@@ -163,19 +181,22 @@ void Stress() {
   for (int i = 0; i != 1024; ++i) {
     Await(rapid[i]);
     Require(WaitForSingleObject(rapid[i].oracle, 5000) == WAIT_OBJECT_0, "rapid real exit");
-    CloseHandle(rapid[i].oracle);
+    CloseOwned(rapid[i].oracle);
   }
   pthread_attr_destroy(&attr);
   std::puts("PASS host-authority 1024-rapid-detached real-exit-and-reclamation");
+  CountHandles("rapid-detached-retired");
 }
 }
 int main() {
+  setvbuf(stdout, nullptr, _IONBF, 0);
   clockid_t unchanged = 123;
   Require(pthread_getcpuclockid(static_cast<pthread_t>(-1), &unchanged) == ESRCH && unchanged == 123, "invalid identity");
   Require(pthread_getcpuclockid(pthread_self(), nullptr) == EINVAL, "null output");
   Require(Sample(CLOCK_THREAD_CPUTIME_ID) <= Sample(CLOCK_PROCESS_CPUTIME_ID), "original fixed clocks");
   DWORD baseline = 0, final_count = 0;
   Require(GetProcessHandleCount(GetCurrentProcess(), &baseline), "handle baseline");
+  CountHandles("baseline");
   for (int i = 0; i != 32; ++i) {
     Target t;
     pthread_t thread;
@@ -196,6 +217,7 @@ int main() {
     HANDLE native = nullptr;
     Require(DuplicateHandle(GetCurrentProcess(), th.native_handle(), GetCurrentProcess(),
                             &native, THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0), "std native oracle duplicate");
+    ++fixture_owned_handles;
     DWORD tid = GetThreadId(native);
     Require(tid != 0 && tid == GetThreadId(t.oracle), "std native live target identity");
     FILETIME native_created, oracle_created, exited, kernel, user;
@@ -205,7 +227,7 @@ int main() {
     auto id = Check(t, "std-thread");
     auto before = Ticks(native), sample = Sample(id), after = Ticks(native);
     Require(before <= sample && sample <= after, "std native owned oracle bracket");
-    CloseHandle(native); t.stop = true; th.join(); Dead(t, id); }
+    CloseOwned(native); t.stop = true; th.join(); Dead(t, id); }
   { Target t; pthread_attr_t attr; pthread_t th;
     Require(pthread_attr_init(&attr) == 0 && pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0, "detached attr");
     Require(pthread_create(&th, &attr, Worker, &t) == 0, "detached create");
@@ -219,6 +241,8 @@ int main() {
     t.stop = true; Dead(t, id); DWORD exit = 0;
     Require(GetExitCodeThread(th, &exit) && exit == 259, "real exit 259"); CloseHandle(th); }
   Stress();
+  CountHandles("final-before-original-bound");
+  Require(fixture_owned_handles == 0, "all fixture-owned handles closed");
   Require(GetProcessHandleCount(GetCurrentProcess(), &final_count) && final_count <= baseline + 8, "handle reclamation bound");
   std::printf("PASS host-authority dead reuse exit259 invalid fixed-clocks handle-count baseline=%lu final=%lu\n", baseline, final_count);
 }
