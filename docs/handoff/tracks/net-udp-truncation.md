@@ -23,8 +23,7 @@ between concurrent receivers or dup aliases. Allocation failure returns
 ENOMEM before touching the queue. Native WSARecvFrom failures remain errors;
 the new UDP path never fabricates a length from WSAEMSGSIZE. Windows ordinary
 UDP payload maxima (65507 IPv4, 65527 IPv6) fit the allocation. IPv6 jumbograms
-are outside this contract. MSG_WAITALL is ignored for UDP; MSG_OOB fails
-EOPNOTSUPP; the preexisting empty MSG_ERRQUEUE returns EAGAIN. Existing stream
+are outside this contract. MSG_WAITALL and MSG_OOB are ignored for UDP; the preexisting empty MSG_ERRQUEUE returns EAGAIN. Existing stream
 receive behavior and unrelated families are retained.
 
 Primary references: pinned [bionic socket header](https://android.googlesource.com/platform/bionic/+/android-16.0.0_r4/libc/include/sys/socket.h),
@@ -181,3 +180,17 @@ the unchanged default matrix assertions. Component Linux compiler command,
 version/digest, stdout/stderr and exact exit now print before failure.
 The saved immutable guard/caller remains unqualified and must be refreshed
 after any reviewed source corrections; no full is dispatched.
+
+Observer40795705106/0e2ab488 actual job123191553091 measures both families:
+`n=9 errno=0 prefix=61626364 queue=-1 qerrno=11`. Linux ignores MSG_OOB
+for this ordinary UDP receive and consumes the packet. The original assertion
+remains red, preserving the observed counterexample. Raw log is saved at
+`C:/work/gesher-ci-review/udp-observer-40795705106-linux.log`.
+
+The correction strips OOB together with WAITALL only on the ordinary IP UDP
+receive branch before Winsock. The strict portable assertion now requires
+9 copied bytes matching the packet plus an empty queue. A separate packet
+still must survive the empty MSG_ERRQUEUE call and be consumed by WAITALL.
+All192 matrix rows,176 fault comparisons, boundaries, alias and stream
+controls and negatives remain required. Fresh source peer and actual both-ABI
+component are pending; the saved full guard map is stale and not qualified.

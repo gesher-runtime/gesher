@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Actual independent Linux main and fault references on exact source and attempt
+      - name: Actual independent Linux matrix, measured OOB and fault references on exact source and attempt
         shell: bash
         run: |
           set -euo pipefail

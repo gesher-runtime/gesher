@@ -90,10 +90,13 @@ static void matrix(int family) {
   send_packet(p, payload, 9); msghdr no_iov = {};
   require(recvmsg(p.rx, &no_iov, MSG_TRUNC) == 9 && no_iov.msg_flags == MSG_TRUNC,
           "empty iovec MSG_TRUNC"); empty(p);
-  // Error-only/OOB calls must leave a queued datagram intact.
+  // Actual Linux ignores OOB on UDP, copies the payload and consumes the packet.
   send_packet(p, payload, 9); char data[16]; errno = 0;
-  require(recv(p.rx, data, sizeof(data), MSG_OOB) == -1 && errno == EOPNOTSUPP, "UDP OOB");
-  errno = 0;
+  require(recv(p.rx, data, sizeof(data), MSG_OOB) == 9 && memcmp(data, payload, 9) == 0,
+          "UDP OOB ignored and payload received");
+  empty(p);
+  // An empty error queue leaves the separate ordinary datagram intact.
+  send_packet(p, payload, 9); errno = 0;
   require(recv(p.rx, data, sizeof(data), MSG_ERRQUEUE | MSG_DONTWAIT) == -1 && errno == EAGAIN,
           "empty error queue");
   require(recv(p.rx, data, sizeof(data), MSG_WAITALL) == 9 && memcmp(data, payload, 9) == 0,

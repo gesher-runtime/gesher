@@ -544,7 +544,6 @@ ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from
     // another receiver (including a duplicated handle) can take the head packet
     // between those operations. No endpoint lock or cached packet is needed.
     // 65536 exceeds the maximum UDP payload on Windows for both IP families.
-    if (flags & kMsgOob) return errno = EOPNOTSUPP, -1;
     if (count > 1024) return errno = EMSGSIZE, -1;
     for (size_t i = 0; i < count; ++i) {
       if (buffers[i].len > PTRDIFF_MAX) return errno = EINVAL, -1;
@@ -556,8 +555,8 @@ ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from
     sockaddr_storage peer = {};
     int peer_len = sizeof(peer);
     DWORD received = 0;
-    // Linux ignores MSG_WAITALL for UDP; Winsock may reject it.
-    DWORD win_flags = ToWinMsgFlags(flags & ~kMsgWaitAll);
+    // Actual Linux UDP receives ignore OOB and WAITALL; Winsock may reject them.
+    DWORD win_flags = ToWinMsgFlags(flags & ~(kMsgWaitAll | kMsgOob));
     if (WSARecvFrom(static_cast<SOCKET>(s), &whole, 1, &received, &win_flags,
                     from != nullptr ? reinterpret_cast<sockaddr*>(&peer) : nullptr,
                     from != nullptr ? &peer_len : nullptr, nullptr, nullptr) != 0) return FailIo();
