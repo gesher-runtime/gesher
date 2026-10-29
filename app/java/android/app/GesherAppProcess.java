@@ -118,6 +118,9 @@ public final class GesherAppProcess {
             log("app process for " + packageName + ": pid " + android.os.Process.myPid()
                     + ", start seq " + startSeq);
             if ("1".equals(System.getenv("GESHER_INSTALLED_RESTRICTED"))) {
+                // The proof runs before framework bootstrap and app resources;
+                // register its native entry before invoking it.
+                System.loadLibrary("android_runtime");
                 if (!packageName.equals("com.gesher.lifecycle")
                         || !com.gesher.server.Zygote.verifyRestrictedGuest()) {
                     throw new SecurityException("installed restricted guest proof failed");
