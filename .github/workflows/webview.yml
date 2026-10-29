@@ -161,11 +161,11 @@ jobs:
       - name: Startup lifecycle fault probe
         shell: pwsh
         run: |
-          foreach ($fault in 'normal', 'session-normal', 'com', 'class', 'window', 'hook', 'ready', 'decision', 'late') {
+          foreach ($fault in 'normal', 'session-normal', 'session-close', 'com', 'class', 'window', 'hook', 'ready', 'decision', 'late') {
             $p = Start-Process 'dist/webview_startup_probe.exe' -ArgumentList $fault -NoNewWindow -PassThru `
               -RedirectStandardOutput "$fault.log" -RedirectStandardError "$fault.err"
             try {
-              $timeoutMs = if ($fault -in @('normal', 'session-normal')) { 50000 } else { 20000 }
+              $timeoutMs = if ($fault -in @('normal', 'session-normal', 'session-close')) { 50000 } else { 20000 }
               if (-not $p.WaitForExit($timeoutMs)) { throw "$fault timed out" }
               $out = (Get-Content -Raw "$fault.log" -ErrorAction SilentlyContinue) +
                 (Get-Content -Raw "$fault.err" -ErrorAction SilentlyContinue)
