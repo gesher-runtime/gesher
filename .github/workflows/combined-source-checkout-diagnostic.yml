@@ -161,5 +161,5 @@ jobs:
           $env:GITHUB_SHA = $source
           $env:GITHUB_WORKFLOW = 'ci'
           $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
-          pwsh -NoProfile -File tests/windows/diagnostic-run-tests.ps1 dist -Web3Observer dist/web3_process_waits.exe
+          pwsh -NoProfile -File tests/windows/diagnostic-run-tests.ps1 dist -Web3Observer dist/web3_process_waits.exe | Tee-Object -FilePath results.txt
           exit $LASTEXITCODE
