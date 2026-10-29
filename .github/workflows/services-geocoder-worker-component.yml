@@ -18,15 +18,15 @@ jobs:
         shell: pwsh
         run: |
           $expected = @{
-            'tools/windows4/TsfJobSupervisor.cs' = 'e9042cc7ed4855e45bee4aa30d0c2b8a180badb8'
-            'tools/windows4/TsfJobWorker.cs' = '493b96d412bfa0fad4bf4b4db2513427b1ba2006'
-            'tools/windows4/test-tsf-job-supervisor.ps1' = '6a2be59fef5ba84828e292eb8d99d6d2c546ade1'
+            'tools/windows4/TsfJobSupervisor.cs' = '6d63aea1166316dffb1d0722e754e700ad4e003a'
+            'tools/windows4/TsfJobWorker.cs' = '24bed68f93a99e225b0e2caad6a07bf26d7dcf87'
+            'tools/windows4/test-tsf-job-supervisor.ps1' = 'bcdb7744c65b6c8676acf1c9c961261d44ea7460'
             'tools/windows4/run-tsf-component.ps1' = '4474bae13d5fe73038e8569be454753cdb21df43'
           }
           foreach ($path in $expected.Keys) {
             $actual = git hash-object $path
             if ($LASTEXITCODE -ne 0 -or $actual -cne $expected[$path]) { throw "Shared source mismatch: $path" }
-            Write-Host "SHARED_SOURCE origin=8ad629ccb1edc86b9f701e83f01838ab9eaa1e94 path=$path blob=$actual"
+            Write-Host "SHARED_SOURCE source=$env:GITHUB_SHA historical_baseline=8ad629ccb1edc86b9f701e83f01838ab9eaa1e94 path=$path blob=$actual"
           }
       - name: Verify canonical TSF workflow identity
         shell: pwsh

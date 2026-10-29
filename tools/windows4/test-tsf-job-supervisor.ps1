@@ -41,14 +41,14 @@ try {
   & $compiler /nologo /target:exe "/out:$worker" $workerSource
   if ($LASTEXITCODE -ne 0) { throw 'Controlled worker compilation failed' }
   Write-Host "TSF_CONTROL_COMPILER path=$compiler sha256=$((Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash.ToLowerInvariant()) worker_sha256=$((Get-FileHash -LiteralPath $worker -Algorithm SHA256).Hash.ToLowerInvariant())"
-  foreach ($case in @('normal','exit23','hang','descendant','race','unknown','output','terminate-denied','query-denied')) {
+  foreach ($case in @('normal','exit23','hang','descendant','race','unknown','orphan','output','terminate-denied','query-denied')) {
     $mode = if ($case -in @('terminate-denied','query-denied')) { 'hang' } else { $case }
     $fault = if ($case -in @('terminate-denied','query-denied')) { $case } else { '' }
     $r = [TsfJobSupervisor]::Run($worker, $mode, 1500, $fault)
     Write-Host ('TSF_JOB_KERNEL_EVIDENCE ' + ($r | ConvertTo-Json -Depth 6 -Compress))
-    if ($case -eq 'unknown') {
+    if ($case -in @('unknown','orphan')) {
       if ($r.Success -or $r.Reason -cne 'controller-error' -or -not $r.TerminateSucceeded -or -not $r.RootSignaled -or -not $r.JobEmpty -or $r.OwnedHandles -ne $r.ClosedHandles -or $r.Errors.Count -lt 1 -or $r.Errors[0] -notmatch '^Unexpected job identity:') { throw 'Unknown actual child was not rejected and cleaned up' }
-      Write-Host 'TSF_UNKNOWN_CHILD actual=rejected cleanup=proved'
+      Write-Host "TSF_UNEXPECTED_CHILD case=$case actual=rejected cleanup=proved"
       continue
     }
     if ($r.RootHandleValue -eq 0 -or $r.JobHandleValue -eq 0 -or $r.RootWaitResult -ne 0 -or $r.SuspendedThreadCount -ne 1 -or $r.PreResumeActive -ne 1) { throw "Raw handle/wait/census evidence failed: $case" }

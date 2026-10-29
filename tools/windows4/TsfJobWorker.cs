@@ -14,6 +14,7 @@ class TsfJobWorker {
   [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int which);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr h);
   [DllImport("kernel32.dll",SetLastError=true)] static extern uint ResumeThread(IntPtr h);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern uint WaitForSingleObject(IntPtr h,uint timeout);
   static void Publish(string directory,string name,string value) {
     string temporary=Path.Combine(directory,name+".tmp"); File.WriteAllText(temporary,value);
     File.Move(temporary,Path.Combine(directory,name));
@@ -28,7 +29,7 @@ class TsfJobWorker {
     string protocol=args[1];
     Console.WriteLine("CONTROL "+args[0]); Console.Error.WriteLine("CONTROL stderr");
     Console.Out.Flush(); Console.Error.Flush();
-    if(args[0]!="writer" && args[0]!="race-writer") { Publish(protocol,"started","ready"); Gate(protocol,"start-go"); }
+    if(args[0]!="writer" && args[0]!="race-writer" && args[0]!="orphan-parent" && args[0]!="orphan-writer") { Publish(protocol,"started","ready"); Gate(protocol,"start-go"); }
     switch(args[0]) {
       case "normal": return 0;
       case "exit23": return 23;
@@ -37,6 +38,20 @@ class TsfJobWorker {
         Console.WriteLine("RETAINED_WRITER_READY"); Console.Out.Flush();
         Publish(protocol,"writer-ready","flushed"); Thread.Sleep(120000); return 93;
       case "race-writer": Gate(protocol,"race-go"); return 0;
+      case "orphan-writer": Thread.Sleep(120000); return 93;
+      case "orphan-parent":
+      case "orphan":
+        SI orphanStart=new SI(); orphanStart.size=Marshal.SizeOf(typeof(SI)); orphanStart.flags=0x100;
+        orphanStart.input=GetStdHandle(-10); orphanStart.output=GetStdHandle(-11); orphanStart.error=GetStdHandle(-12);
+        string orphanExe=typeof(TsfJobWorker).Assembly.Location; PI orphanChild;
+        string orphanMode=args[0]=="orphan"?"orphan-parent":"orphan-writer";
+        if(!CreateProcess(orphanExe,new StringBuilder("\""+orphanExe+"\" "+orphanMode+" \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,true,0x08000000,IntPtr.Zero,null,ref orphanStart,out orphanChild)) return 94;
+        if(args[0]=="orphan") {
+          if(WaitForSingleObject(orphanChild.process,5000)!=0) return 98;
+          Publish(protocol,"orphan-ready",orphanChild.pid.ToString()); Gate(protocol,"orphan-go");
+        } else { Publish(protocol,"orphan-child",orphanChild.pid.ToString()); }
+        bool orphanClosed=CloseHandle(orphanChild.thread); orphanClosed=CloseHandle(orphanChild.process)&&orphanClosed;
+        return orphanClosed?0:95;
       case "race":
         SI raceStart=new SI(); raceStart.size=Marshal.SizeOf(typeof(SI)); raceStart.flags=0x100;
         raceStart.input=GetStdHandle(-10); raceStart.output=GetStdHandle(-11); raceStart.error=GetStdHandle(-12);

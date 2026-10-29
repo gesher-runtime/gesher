@@ -205,7 +205,7 @@ public static class TsfJobSupervisor {
     IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero;
     bool attrsReady=false; string dir=null,stdout=null,stderr=null,protocol=null; bool created=false;
     bool race=arguments=="race";
-    bool controlled=arguments=="normal" || arguments=="exit23" || arguments=="hang" || arguments=="descendant" || arguments=="unknown" || arguments=="race" || arguments=="output";
+    bool controlled=arguments=="normal" || arguments=="exit23" || arguments=="hang" || arguments=="descendant" || arguments=="unknown" || arguments=="race" || arguments=="orphan" || arguments=="output";
     Stopwatch main=Stopwatch.StartNew(); Stopwatch cleanup=null;
     Func<IntPtr,IntPtr> own=h=> { if(!Valid(h)) throw Native("Create owned handle"); owned.Add(h); r.OwnedHandles++; return h; };
     try {
@@ -276,6 +276,12 @@ public static class TsfJobSupervisor {
           if(File.Exists(Path.Combine(protocol,"unknown"))) {
             Census(job,r,owned,own,executable,null);
             throw new IOException("Unknown child accepted by census");
+          }
+          if(File.Exists(Path.Combine(protocol,"orphan-ready"))) {
+            uint missingParent=UInt32.Parse(File.ReadAllText(Path.Combine(protocol,"orphan-ready")));
+            if(TestToolhelpContains(missingParent)) throw new IOException("Orphan parent still in Toolhelp");
+            Census(job,r,owned,own,executable,null);
+            throw new IOException("Orphan accepted by census");
           }
           if(File.Exists(Path.Combine(protocol,"writer-ready")) && !r.RetainedWriterReady) {
             Identity child=r.Processes.Find(p=>p.Pid==r.DescendantPid && p.Role=="descendant");
