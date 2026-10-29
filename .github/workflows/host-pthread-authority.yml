@@ -1,3 +1,4 @@
+# Initial compiler correction preserves -Werror; no unchanged red retry.
 name: host pthread authority initial controls
 on:
   workflow_dispatch:

@@ -56,6 +56,9 @@ def supplier(source, llvm):
     exports = command(str(llvm / 'bin/llvm-readobj'), '--coff-exports', str(target / 'bin/libwinpthread-1.dll'))
     assert symbol in exports
     result['dll_exports'] = exports
+    imports = command(str(llvm / 'bin/llvm-readobj'), '--coff-imports', str(target / 'bin/libwinpthread-1.dll'))
+    assert 'Name: libwinpthread-1.dll' not in imports, 'Supplier must not import its previous copy'
+    result['dll_imports'] = imports
     (llvm / 'gesher-winpthreads-authority.json').write_text(json.dumps(result, indent=2, sort_keys=True))
 
 
