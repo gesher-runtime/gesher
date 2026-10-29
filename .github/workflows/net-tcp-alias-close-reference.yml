@@ -1,0 +1,24 @@
+name: net-tcp-alias-close-reference
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/net-tcp-error-state]
+    paths: [.github/workflows/net-tcp-alias-close-reference.yml, tests/net-tcp-priority/alias_close_oracle.cc]
+permissions:
+  contents: read
+jobs:
+  linux-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retain original full Linux priority contract
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
+          timeout 20 /tmp/tcp-priority-reference
+      - name: Observe exact urgent consume and last-alias close ordering
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/alias_close_oracle.cc -o /tmp/alias-close-reference
+          timeout 15 /tmp/alias-close-reference
