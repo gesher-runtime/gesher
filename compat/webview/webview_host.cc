@@ -280,6 +280,7 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   bool failed = false;
   HRESULT failure_reason = E_FAIL;
   bool destroyed = false;
+  bool session_failed = false;  // STA: any renderer/process failure retires the generation
   int64_t session_handle = 0;
   unsigned listener_dispatches = 0;
   bool listener_destroy_deferred = false;
@@ -1395,6 +1396,14 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                         COREWEBVIEW2_PROCESS_FAILED_KIND kind =
                             COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED;
                         args->get_ProcessFailedKind(&kind);
+                        impl->session_failed = true;
+                        {
+                          std::lock_guard<std::mutex> guard(g_session_mutex);
+                          g_sessions.erase(impl->session_handle);
+                        }
+                        while (!impl->session_requests.empty()) {
+                          FinishSession(impl, impl->session_requests.begin()->first, E_ABORT, L"null");
+                        }
                         impl->Report(kProcessFailed, 0, static_cast<int32_t>(kind));
                         return S_OK;
                       })
@@ -1744,6 +1753,10 @@ int32_t Host::SubmitSession(int64_t handle, int64_t id, const std::wstring& sess
   auto* task = new std::function<void()>([impl, id, session, method, params, deadline, units] {
     if (impl->destroyed) return; // close is queued after all accepted submissions
     impl->session_requests.emplace(id, Impl::SessionRequest{deadline, 0, units});
+    if (impl->session_failed) {
+      FinishSession(impl, id, E_ABORT, L"null");
+      return;
+    }
     if (impl->failed) {
       FinishSession(impl, id, impl->failure_reason, L"null");
       return;

@@ -128,6 +128,49 @@ public class SessionActivity extends Activity {
         }
     }
 
+    private boolean exerciseCrash(Class<?> cls, Class<?> client) throws Exception {
+        CountDownLatch ready = new CountDownLatch(1), failed = new CountDownLatch(1),
+                cancelled = new CountDownLatch(1);
+        AtomicInteger status = new AtomicInteger();
+        Object callback = Proxy.newProxyInstance(client.getClassLoader(), new Class<?>[] {client},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("onEvent")) {
+                        int type = (Integer) args[0];
+                        if (type == 1) ready.countDown();
+                        if (type == 15) failed.countDown();
+                        if (type == 30 && (Long) args[1] == 3001L) {
+                            status.set((Integer) args[2]);
+                            cancelled.countDown();
+                        }
+                    }
+                    if (method.getReturnType() == boolean.class) return false;
+                    if (method.getReturnType() == String.class) return "{}";
+                    return null;
+                });
+        Object host = cls.getMethod("create", client, double.class, int.class)
+                .invoke(null, callback, 1.0, -1);
+        if (host == null) return false;
+        Method close = cls.getMethod("tryDestroy");
+        try {
+            if (!ready.await(20, TimeUnit.SECONDS)) return false;
+            Method submit = cls.getMethod("submitSession", long.class, String.class,
+                    String.class, String.class, int.class);
+            int pending = (Integer) submit.invoke(host, 3001L, "", "Runtime.evaluate",
+                    "{\"expression\":\"new Promise(()=>{})\",\"awaitPromise\":true}", 60000);
+            int crash = (Integer) submit.invoke(host, 3002L, "", "Page.crash", "{}", 60000);
+            boolean observed = failed.await(30, TimeUnit.SECONDS);
+            boolean completed = cancelled.await(10, TimeUnit.SECONDS);
+            int after = (Integer) submit.invoke(host, 3003L, "", "Runtime.enable", "{}", 5000);
+            Web3.log("session crash pending=" + pending + " crash=" + crash + " observed="
+                    + observed + " completed=" + completed + " status=" + status.get()
+                    + " after=" + after);
+            return pending == 0 && crash == 0 && observed && completed
+                    && status.get() == 0x80004004 && after == -1;
+        } finally {
+            close.invoke(host);
+        }
+    }
+
     private void exercise() {
         boolean passed = false;
         Object host = null;
@@ -228,8 +271,9 @@ public class SessionActivity extends Activity {
                     && bigResult == 0 && overflow && third == 0 && closed && afterClose == -1;
             boolean capacity = exerciseCapacity(cls, client);
             boolean budget = exerciseBudget(cls, client);
-            passed &= capacity && budget;
-            Web3.log("session capacity " + capacity + " budget " + budget);
+            boolean crash = exerciseCrash(cls, client);
+            passed &= capacity && budget && crash;
+            Web3.log("session capacity " + capacity + " budget " + budget + " crash " + crash);
             Web3.log("session request accepted=" + accepted + " completed=" + completed
                     + " hresult=" + status.get() + " count=" + count.get()
                     + " duplicate=" + duplicate + " invalid=" + invalid + " tooLong=" + tooLong
