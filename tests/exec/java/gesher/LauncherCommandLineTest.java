@@ -48,7 +48,7 @@ public final class LauncherCommandLineTest {
                 new StackTraceElement("com.gesher.server.SystemServer", "main", "SystemServer.java", 1),
                 new StackTraceElement("gesher.fixture.Writer", "main", "Writer.java", 1),
                 new StackTraceElement("unrelated.Native", "main", "Native.java", 1)};
-        String delegatedVm = VmCommandLine.beforeEntrypoint(vm + " gesher.fixture.Writer server", delegated);
+        String delegatedVm = VmCommandLine.beforeEntrypoint(vm + " gesher.fixture.Writer unrelated.Native com.gesher.server.SystemServer", delegated);
         if (!vm.equals(delegatedVm)) throw new AssertionError("delegated main prefix: " + delegatedVm);
         ++checks;
         try {
