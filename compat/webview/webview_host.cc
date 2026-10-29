@@ -33,6 +33,17 @@ HWND g_parking = nullptr;      // a hidden top-level window: parked containers
 std::map<UINT_PTR, std::function<void()>> g_timers;  // WebView STA only
 UINT_PTR g_next_timer = 1;
 
+struct ThreadStart {
+  ThreadStart(HANDLE r, HANDLE d) : ready(r), decision(d), deadline(GetTickCount64() + 10000) {}
+  ~ThreadStart() { CloseHandle(ready); CloseHandle(decision); }
+  HANDLE ready, decision;
+  ULONGLONG deadline;
+  std::mutex mutex;
+  bool published = false;
+  bool accepted = false;
+  bool abandoned = false;
+};
+
 void ReportGlobal(int32_t type, int64_t id, int32_t arg, const std::wstring& a);
 
 LRESULT CALLBACK TaskProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -72,50 +83,101 @@ LRESULT CALLBACK ContainerProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
 void CALLBACK OnLocationChange(HWINEVENTHOOK, DWORD, HWND hwnd, LONG object, LONG child, DWORD,
                                DWORD);
 
-DWORD WINAPI ThreadMain(void* ready) {
-  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+DWORD WINAPI ThreadMain(void* argument) {
+  std::unique_ptr<std::shared_ptr<ThreadStart>> passed(
+      static_cast<std::shared_ptr<ThreadStart>*>(argument));
+  std::shared_ptr<ThreadStart> startup = *passed;
+  passed.reset();
+  HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  if (FAILED(initialized)) { SetEvent(startup->ready); return 0; }
   HINSTANCE instance = GetModuleHandleW(nullptr);
   WNDCLASSEXW wc = {};
   wc.cbSize = sizeof(wc);
   wc.hInstance = instance;
   wc.lpfnWndProc = TaskProc;
   wc.lpszClassName = kTaskClass;
-  RegisterClassExW(&wc);
+  bool classes_ready = RegisterClassExW(&wc) != 0;
   wc.lpfnWndProc = ContainerProc;
   wc.lpszClassName = kContainerClass;
   wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));  // IDC_ARROW
-  RegisterClassExW(&wc);
+  classes_ready &= RegisterClassExW(&wc) != 0;
   wc.lpfnWndProc = DefWindowProcW;
   wc.lpszClassName = kParkingClass;
-  RegisterClassExW(&wc);
-  g_task_window = CreateWindowExW(0, kTaskClass, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
-                                  instance, nullptr);
-  g_parking = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kParkingClass,
-                              L"Gesher WebView (parked)", WS_POPUP | WS_CLIPCHILDREN, -32000,
-                              -32000, 64, 64, nullptr, nullptr, instance, nullptr);
-  // The app windows' moves (for NotifyParentWindowPositionChanged): out of
-  // context, so they come through this thread's message loop.
-  SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr,
-                  OnLocationChange, GetCurrentProcessId(), 0, WINEVENT_OUTOFCONTEXT);
-  SetEvent(static_cast<HANDLE>(ready));
+  classes_ready &= RegisterClassExW(&wc) != 0;
+  if (!classes_ready) { SetEvent(startup->ready); CoUninitialize(); return 0; }
+  HWND task_window = CreateWindowExW(0, kTaskClass, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
+                                    instance, nullptr);
+  HWND parking = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kParkingClass,
+                                  L"Gesher WebView (parked)", WS_POPUP | WS_CLIPCHILDREN, -32000,
+                                  -32000, 64, 64, nullptr, nullptr, instance, nullptr);
+  HWINEVENTHOOK location_hook = SetWinEventHook(
+      EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr,
+      OnLocationChange, GetCurrentProcessId(), 0, WINEVENT_OUTOFCONTEXT);
+  bool published = false;
+  {
+    std::lock_guard<std::mutex> guard(startup->mutex);
+    if (!startup->abandoned && GetTickCount64() < startup->deadline && task_window != nullptr &&
+        parking != nullptr && location_hook != nullptr && SetEvent(startup->ready)) {
+      g_task_window = task_window;
+      g_parking = parking;
+      startup->published = published = true;
+    } else {
+      SetEvent(startup->ready);
+    }
+  }
+  DWORD decision_result = published ? WaitForSingleObject(startup->decision, 10000) : WAIT_FAILED;
+  bool accepted;
+  {
+    std::lock_guard<std::mutex> guard(startup->mutex);
+    accepted = startup->accepted;
+  }
+  // Once the caller accepted the generation it may already have posted work;
+  // a broken decision wait is terminal rather than a silent lost queue.
+  if (accepted && decision_result != WAIT_OBJECT_0) abort();
+  if (!accepted) {
+    if (task_window != nullptr) DestroyWindow(task_window);
+    if (parking != nullptr) DestroyWindow(parking);
+    if (location_hook != nullptr) UnhookWinEvent(location_hook);
+    CoUninitialize();
+    return 0;
+  }
   MSG msg;
   while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }
-  return 0;
+  // There is no supported orderly exit of the shared STA while a process runs.
+  // Do not leave accepted hosts pointing at a dead queue.
+  abort();
 }
 
 void EnsureThread() {
   std::call_once(g_thread_once, [] {
     HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (ready == nullptr) return;
-    HANDLE thread = CreateThread(nullptr, 0, ThreadMain, ready, 0, nullptr);
-    if (thread != nullptr) {
-      WaitForSingleObject(ready, INFINITE);
-      CloseHandle(thread);
+    HANDLE decision = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (decision == nullptr) { CloseHandle(ready); return; }
+    auto startup = std::make_shared<ThreadStart>(ready, decision);
+    auto* argument = new std::shared_ptr<ThreadStart>(startup);
+    HANDLE thread = CreateThread(nullptr, 0, ThreadMain, argument, 0, nullptr);
+    if (thread == nullptr) { delete argument; return; }
+    ULONGLONG now = GetTickCount64();
+    DWORD remaining = now >= startup->deadline ? 0 : static_cast<DWORD>(startup->deadline - now);
+    DWORD result = WaitForSingleObject(ready, remaining);
+    {
+      std::lock_guard<std::mutex> guard(startup->mutex);
+      if (result == WAIT_OBJECT_0 && startup->published && GetTickCount64() < startup->deadline) {
+        startup->accepted = true;
+        if (!SetEvent(decision)) startup->accepted = false;
+      }
+      if (!startup->accepted) {
+        startup->abandoned = true;
+        g_task_window = nullptr;
+        g_parking = nullptr;
+        SetEvent(decision);
+      }
     }
-    CloseHandle(ready);
+    CloseHandle(thread);
   });
 }
 
