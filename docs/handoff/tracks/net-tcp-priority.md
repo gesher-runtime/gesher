@@ -866,3 +866,33 @@ directions and correlates each loaded member basename with a validated private
 archive. Observed alias spelling is retained for this correlation, while its
 resolved physical path is separately confined to the private prefix. No
 runtime assertion or source supplier patch changes with this correction.
+
+891d0edf/409675 producer+Linux reference succeeded. Actual compiler archive
+5f9c/84003044bytes and233 upstream source files verified; only thread.c changes
+c2fcaa54->df1696d9. All7 public headers and external/DLL export name inventories
+unchanged. Actual loader/probe verbose Loaded members bind private static
+libpthread.a458337e17755dbbd989463426db618ac26b687f3c6f7a3fd604e77397baa001c;
+translator is not-linked with empty inspected/loaded inputs. Both consumers
+passed complete source/compiler/archive/import/typed-role checks.
+
+BOTH isolated supplier processes now pass all4 joined and4 detached cycles at
+exactdelta0, and canceled-caller refs0/0 +original111 +native owner/reaper exit.
+Original separate HOST all4 owned-mode strict censuses PASS:121/121 (2022),
+130/130 (2025), threads4/4, including real canceled waiter and ~68ms send timeout.
+Both real poll close/reuse modes pass. The next all-invalid native poll sample
+then exits0xc0000008 inside WS2_32 on both, before strict NVAL rows/legacy/UDP
+and guest paths. Root/job retirement and9of9 controller closes are confirmed;
+this was not a deadline failure. Direct job logs recover the main2025 chunk
+omitted by gh run view: tcp-409675-win2025-direct.log. Other raw logs are
+C:/work/gesher-ci-review/tcp-409675-{compile,win2022,win2025}.log.
+
+Next is independent MSVC WinSDK characterization ONLY: six fresh oracle
+processes compare own-process handle tracing off/on across a physically closed
+fresh TCP socket, closed established TCP socket and closed+live UDP array.
+An MSVC-only SEH observation wrapper catches ONLY0xc0000008 and records it
+separately from actual rc/WSA-error/revents; it does not enter production.
+All remaining owned sockets/WSA context close normally with strict checks.
+There is no SO_ERROR read or payload consumption. Original urgent/native
+error controls, Linux contract and product strict NVAL/census remain unchanged.
+Whether tracing causes the exception is a hypothesis until actual comparison;
+no exception swallowing, trace-disable shortcut or product qualification.

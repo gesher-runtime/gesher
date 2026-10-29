@@ -3,6 +3,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <mstcpip.h>
+#include <excpt.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -111,7 +112,70 @@ static void error_ownership(int mode) {
   require(first_rc == 0 && second_rc == 0, "ownership explicit caller getsockopt");
   require(closesocket(original) == 0 && closesocket(reserved) == 0, "ownership cleanup");
 }
-int main() {
+// This SEH wrapper belongs ONLY to the independent MSVC oracle. Production
+// readiness does not catch exceptions or accept a raised invalid handle.
+static int observe_closed_poll(WSAPOLLFD* entries, ULONG count, int* error, DWORD* exception) {
+  int result = -999;
+  __try {
+    result = WSAPoll(entries, count, 0);
+    *error = result == SOCKET_ERROR ? WSAGetLastError() : 0;
+  } __except (GetExceptionCode() == 0xc0000008UL ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+    *exception = GetExceptionCode();
+  }
+  return result;
+}
+static int closed_poll_characterization(int tracing, int mode) {
+  require((tracing == 0 || tracing == 1) && mode >= 0 && mode <= 2, "explicit closed-poll observation cell");
+  require(!IsDebuggerPresent(), "closed-poll process has no attached debugger");
+  WSADATA data{}; require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "closed-poll startup");
+  LONG enabled = -1;
+  if (tracing) {
+    using Set = LONG (NTAPI*)(HANDLE, ULONG, PVOID, ULONG);
+    Set set = nullptr; FARPROC symbol = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationProcess");
+    static_assert(sizeof(set) == sizeof(symbol)); memcpy(&set, &symbol, sizeof(set));
+    require(set != nullptr, "actual own-process tracing API");
+    ULONG flags = 0; enabled = set(GetCurrentProcess(), 32, &flags, sizeof(flags));
+    require(enabled >= 0, "actual own-process handle tracing enabled");
+  }
+  SOCKET victim = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  require(victim != INVALID_SOCKET, "closed-poll victim");
+  SOCKET listener = INVALID_SOCKET, peer = INVALID_SOCKET, udp = INVALID_SOCKET;
+  if (mode != 0) {
+    listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); require(listener != INVALID_SOCKET, "closed-poll listener");
+    sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    require(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0 && listen(listener, 1) == 0, "closed-poll actual listener");
+    int length = sizeof(address); require(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length) == 0, "closed-poll listener address");
+    require(connect(victim, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "closed-poll actual established victim");
+    peer = accept(listener, nullptr, nullptr); require(peer != INVALID_SOCKET, "closed-poll actual peer");
+  }
+  if (mode == 2) { udp = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); require(udp != INVALID_SOCKET, "closed-poll independent live socket"); }
+  WSAPOLLFD entries[2]{};
+  entries[0].fd = victim; entries[0].events = POLLRDBAND;
+  entries[1].fd = udp; entries[1].events = POLLRDNORM;
+  printf("WINDOWS_CLOSED_POLL_BEGIN tracing=%d mode=%d enabled_status=%ld count=%d\n", tracing, mode, enabled, mode == 2 ? 2 : 1); fflush(stdout);
+  require(closesocket(victim) == 0, "real native victim physically closed before sample");
+  // The caller requests no new socket/handle or stdout allocation between
+  // close and observation. Every cell starts in a fresh oracle process.
+  int error = 0; DWORD exception = 0; const ULONGLONG start = GetTickCount64();
+  const int result = observe_closed_poll(entries, mode == 2 ? 2UL : 1UL, &error, &exception);
+  const ULONGLONG elapsed = GetTickCount64() - start;
+  printf("WINDOWS_CLOSED_POLL tracing=%d mode=%d rc=%d error=%d exception=%lu stale=%d live=%d elapsed_ms=%llu SO_ERROR=not-read\n",
+      tracing, mode, result, error, exception, entries[0].revents, entries[1].revents, elapsed); fflush(stdout);
+  require(elapsed < 1500, "closed-poll zero-time sample is finite");
+  bool listener_closed = listener == INVALID_SOCKET || closesocket(listener) == 0;
+  bool peer_closed = peer == INVALID_SOCKET || closesocket(peer) == 0;
+  bool udp_closed = udp == INVALID_SOCKET || closesocket(udp) == 0;
+  require(listener_closed && peer_closed && udp_closed, "all remaining native oracle sockets closed independently");
+  require(WSACleanup() == 0, "closed-poll cleanup");
+  puts("PASS Windows closed-poll characterization: exception and result are observations only");
+  return 0;
+}
+int main(int argc, char** argv) {
+  if (argc == 4 && strcmp(argv[1], "--closed-poll") == 0) {
+    require(strlen(argv[2]) == 1 && strlen(argv[3]) == 1 && argv[2][0] >= '0' && argv[2][0] <= '1' && argv[3][0] >= '0' && argv[3][0] <= '2', "closed-poll exact arguments");
+    return closed_poll_characterization(argv[2][0] - '0', argv[3][0] - '0');
+  }
+  require(argc == 1, "original urgent oracle arguments unchanged");
   WSADATA data{};
   require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "startup");
   SOCKET fresh = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);

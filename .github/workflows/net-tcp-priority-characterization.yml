@@ -35,3 +35,15 @@ jobs:
         run: |
           & ./urgent-oracle.exe
           if ($LASTEXITCODE -ne 0) { throw 'Urgent characterization failed' }
+      - name: Observe actual closed native poll with and without handle tracing
+        shell: pwsh
+        run: |
+          foreach ($tracing in 0..1) {
+            foreach ($mode in 0..2) {
+              $rows = & ./urgent-oracle.exe --closed-poll "$tracing" "$mode" 2>&1
+              $code = $LASTEXITCODE
+              Write-Host ($rows -join "`n")
+              if ($code -ne 0 -or ($rows -join "`n") -notmatch "(?m)^WINDOWS_CLOSED_POLL tracing=$tracing mode=$mode " -or
+                  ($rows -join "`n") -notmatch '(?m)^PASS Windows closed-poll characterization: exception and result are observations only') { throw 'Independent closed-poll observation failed' }
+            }
+          }
