@@ -283,6 +283,7 @@ public static class TsfJobSupervisor {
       if(fault=="diag-console-limited") detached=false;
       uint creation=detached?0x0008000cu:0x08080004u; // Detached when constrained; controlled descendants retain their original path.
       if(fault=="diag-inherit-limited" || fault=="diag-inherit-unlimited") creation=0x00080004u;
+      if((fault=="diag-inherit-limited" || fault=="diag-inherit-unlimited") && !TestParentConsole()) throw new IOException("Inherited console missing before creation");
       Check(CreateProcess(executable,new StringBuilder("\""+executable+"\" "+arguments),IntPtr.Zero,IntPtr.Zero,true,creation,IntPtr.Zero,Path.GetDirectoryName(executable),ref start,out pi),"Create suspended child");
       root=own(pi.process); thread=own(pi.thread); created=true; r.Pid=pi.pid; r.RootHandleValue=root.ToInt64();
       long exit,kernel,user; Check(GetProcessTimes(root,out r.Birth,out exit,out kernel,out user),"Capture root birth");
