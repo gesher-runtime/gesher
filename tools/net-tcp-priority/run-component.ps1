@@ -97,8 +97,22 @@ Write-Host ($m.compilers | ConvertTo-Json -Depth 8 -Compress)
 if (-not ('TsfJobSupervisor' -as [type])) { Add-Type -Path tools/windows4/TsfJobSupervisor.cs }
 $env:GESHER_INET = '1'
 $fixture = (Resolve-Path tcp-fixture).Path
+# The supplier observation is a SEPARATE fresh process using the authenticated
+# same binary/static supplier. It cannot warm the original product census.
+$supplier = [TsfJobSupervisor]::Run("$fixture/net_tcp_priority_probe.exe", '--supplier-retirement-control', 30000, '')
+Write-Host ('TCP_PRIORITY_SUPPLIER_KERNEL ' + ($supplier | ConvertTo-Json -Depth 6 -Compress))
+$supplierText = $supplier.Output + $supplier.Error
+Write-Host $supplierText
+if (-not $supplier.Success -or $supplier.ExitCode -ne 0 -or $supplierText -match '(?m)^FAIL') { throw 'Isolated supplier retirement observation failed' }
+foreach ($detached in 0..1) {
+  foreach ($cycle in 0..3) {
+    if ($supplierText -notmatch "(?m)^TCP_PRIORITY_SUPPLIER_RETIRE detached=$detached cycle=$cycle before=[0-9]+ after=[0-9]+ delta=-?[0-9]+ native_exit=1 fixture_closed=2 no_tcp=1\r?$") { throw "Missing actual supplier control $detached/$cycle" }
+  }
+}
+if ($supplierText -notmatch '(?m)^PASS TCP supplier characterization: isolated empty-thread observations only; product census unchanged\s*$') { throw 'Missing isolated supplier observation scope' }
 function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
   $result = [TsfJobSupervisor]::Run($Exe, $Arguments, 30000, '')
+  if ($Context -eq 'host-posix' -and $result.Pid -eq $supplier.Pid -and $result.Birth -eq $supplier.Birth) { throw 'Product census reused the supplier process instance' }
   Write-Host ('TCP_PRIORITY_KERNEL ' + ($result | ConvertTo-Json -Depth 6 -Compress))
   $text = $result.Output + $result.Error
   Write-Host $text

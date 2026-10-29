@@ -17,7 +17,7 @@
 #ifdef GESHER
 #include <sys/eventfd.h>
 #include "../../compat/posix/src/socket_internal.h"
-namespace gesher::test { int NativeUdpErrorControl(); void DumpOwnHandleTypes(int mode, uintptr_t caller = 0, uintptr_t observer = 0); }
+namespace gesher::test { int NativeUdpErrorControl(); void NativeSupplierRetirement(); void DumpOwnHandleTypes(int mode, uintptr_t caller = 0, uintptr_t observer = 0); }
 #endif
 
 static void require(bool ok, const char* what) {
@@ -848,6 +848,9 @@ static void alias_ownership() {
   puts("PASS TCP priority: shared aliases preserve dup2 targets last-close EOF concurrent urgent poll and UDP payload");
 }
 int main(int argc, char** argv) {
+#ifdef GESHER
+  if (argc == 2 && strcmp(argv[1], "--supplier-retirement-control") == 0) { gesher::test::NativeSupplierRetirement(); return 0; }
+#endif
   const bool noninline_only = argc == 2 && strcmp(argv[1], "--noninline") == 0;
   require(argc == 1 || noninline_only, "explicit supported scope");
   scenario(0);

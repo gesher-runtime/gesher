@@ -7,6 +7,7 @@ name: net-tcp-priority-component
 # Map retained-event frames to the actual same-binary owner/caller code ranges.
 # Bind exact-link static library symbol rows to that current binary in CI stdout.
 # Include cleanup/spin symbol rows for the observed pthread wrapper frames.
+# Isolate empty supplier thread controls in a separate fresh authenticated probe.
 on:
   workflow_dispatch:
   push:

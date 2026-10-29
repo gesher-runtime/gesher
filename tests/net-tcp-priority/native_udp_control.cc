@@ -23,6 +23,19 @@ template<class Fn> Fn native(const char* name) {
   Fn function = nullptr; static_assert(sizeof(function) == sizeof(symbol)); memcpy(&function, &symbol, sizeof(function));
   require(function != nullptr, "canonical native entry"); return function;
 }
+struct EmptyPthread {
+  HANDLE ready = nullptr;
+  std::atomic<HANDLE> self{nullptr};
+  std::atomic<DWORD> error{0};
+};
+void* empty_pthread(void* raw) {
+  auto& ticket = *static_cast<EmptyPthread*>(raw);
+  HANDLE self = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &self, SYNCHRONIZE, FALSE, 0)) ticket.error.store(GetLastError());
+  ticket.self.store(self);
+  SetEvent(ticket.ready);
+  return nullptr;  // normal provider wrapper/TLS retirement; no TCP/C++ ownership
+}
 }
 namespace gesher::test {
 void DumpOwnHandleTypes(int mode, uintptr_t caller, uintptr_t observer) {
@@ -52,7 +65,7 @@ void DumpOwnHandleTypes(int mode, uintptr_t caller, uintptr_t observer) {
         static_cast<unsigned long long>(pc - reinterpret_cast<uintptr_t>(image)), function ? function->BeginAddress : 0UL, function ? function->EndAddress : 0UL);
   };
   static std::vector<uintptr_t> previous_values;
-  if (mode == -1) {
+  if (mode == -1 || mode == -2) {
     using Set = NTSTATUS (NTAPI*)(HANDLE, ULONG, PVOID, ULONG);
     FARPROC symbol = GetProcAddress(module, "NtSetInformationProcess"); Set set = nullptr;
     static_assert(sizeof(set) == sizeof(symbol)); memcpy(&set, &symbol, sizeof(set));
@@ -63,7 +76,8 @@ void DumpOwnHandleTypes(int mode, uintptr_t caller, uintptr_t observer) {
     require(GetProcessHandleCount(GetCurrentProcess(), &after) != FALSE, "post-tracing handle count");
     printf("TCP_PRIORITY_HANDLE_TRACE_ENABLE status=%lu before=%lu after=%lu process_only=1\n", static_cast<unsigned long>(enabled), before, after); fflush(stdout);
     require(enabled >= 0 && before == after, "actual handle tracing enabled without new owned handles");
-    code("submission_connect", caller); code("submitted_barrier", observer);
+    code(mode == -2 ? "empty_pthread" : "submission_connect", caller);
+    code(mode == -2 ? "NativeSupplierRetirement" : "submitted_barrier", observer);
     code("pthread_self", reinterpret_cast<uintptr_t>(&pthread_self));
     code("pthread_create", reinterpret_cast<uintptr_t>(&pthread_create));
     code("pthread_exit", reinterpret_cast<uintptr_t>(&pthread_exit));
@@ -98,9 +112,11 @@ void DumpOwnHandleTypes(int mode, uintptr_t caller, uintptr_t observer) {
     const bool valid = queried >= 0 && type_returned >= sizeof(UNICODE_STRING) && type_returned <= sizeof(type_buffer) &&
         type->Length % sizeof(wchar_t) == 0 && type->Length <= type->MaximumLength && text >= begin &&
         text % alignof(wchar_t) == 0 && text - begin <= type_returned && type->MaximumLength <= type_returned - (text - begin);
-    printf("TCP_PRIORITY_HANDLE_TYPE mode=%d observed_value=%llu index=%lu access=%lu status=%lu type=%.*ls unretained=1\n", mode,
-        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(entries[i].handle)), entries[i].type, entries[i].access,
-        static_cast<unsigned long>(queried), valid ? static_cast<int>(type->Length / sizeof(wchar_t)) : 7, valid ? type->Buffer : L"unknown");
+    if (mode < 100) {
+      printf("TCP_PRIORITY_HANDLE_TYPE mode=%d observed_value=%llu index=%lu access=%lu status=%lu type=%.*ls unretained=1\n", mode,
+          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(entries[i].handle)), entries[i].type, entries[i].access,
+          static_cast<unsigned long>(queried), valid ? static_cast<int>(type->Length / sizeof(wchar_t)) : 7, valid ? type->Buffer : L"unknown");
+    }
     if (mode > 0 && valid && type->Length == 5 * sizeof(wchar_t) && memcmp(type->Buffer, L"Event", type->Length) == 0 &&
         std::find(previous_values.begin(), previous_values.end(), value) == previous_values.end()) {
       // A numeric difference selects a diagnostic query, never an ownership
@@ -137,6 +153,36 @@ void DumpOwnHandleTypes(int mode, uintptr_t caller, uintptr_t observer) {
   DWORD after = 0; require(GetProcessHandleCount(GetCurrentProcess(), &after) != FALSE, "post-query actual handle count");
   printf("TCP_PRIORITY_HANDLE_SNAPSHOT_END mode=%d entries=%llu after=%lu unchanged=%d\n", mode, static_cast<unsigned long long>(header->count), after, after == before ? 1 : 0); fflush(stdout);
   require(after == before, "diagnostic retains no additional handles");
+}
+void NativeSupplierRetirement() {
+  auto one = [](int cycle, bool detached) {
+    DWORD before = 0, after = 0; require(GetProcessHandleCount(GetCurrentProcess(), &before) != FALSE, "supplier control initial handle count");
+    EmptyPthread ticket; ticket.ready = CreateEventW(nullptr, TRUE, FALSE, nullptr); require(ticket.ready != nullptr, "supplier control owned publication event");
+    pthread_attr_t attributes;
+    require(pthread_attr_init(&attributes) == 0, "supplier control attributes");
+    require(pthread_attr_setdetachstate(&attributes, detached ? PTHREAD_CREATE_DETACHED : PTHREAD_CREATE_JOINABLE) == 0, "supplier control selected retirement mode");
+    pthread_t thread;
+    require(pthread_create(&thread, &attributes, empty_pthread, &ticket) == 0, "actual empty supplier thread");
+    require(pthread_attr_destroy(&attributes) == 0, "supplier control attributes retired");
+    require(WaitForSingleObject(ticket.ready, 2000) == WAIT_OBJECT_0, "supplier actual self-object publication");
+    HANDLE self = ticket.self.load(); require(self != nullptr && ticket.error.load() == 0, "supplier retains actual native self object, never a TID lookup");
+    require(WaitForSingleObject(self, 2000) == WAIT_OBJECT_0, "supplier whole native thread really exited");
+    if (!detached) require(pthread_join(thread, nullptr) == 0, "supplier real joinable record retired");
+    const bool self_closed = CloseHandle(self) != FALSE, ready_closed = CloseHandle(ticket.ready) != FALSE;
+    require(self_closed && ready_closed, "supplier both fixture-owned handles closed");
+    require(GetProcessHandleCount(GetCurrentProcess(), &after) != FALSE, "supplier control final handle count");
+    printf("TCP_PRIORITY_SUPPLIER_RETIRE detached=%d cycle=%d before=%lu after=%lu delta=%lld native_exit=1 fixture_closed=2 no_tcp=1\n", detached ? 1 : 0, cycle,
+        before, after, static_cast<long long>(after) - before); fflush(stdout);
+  };
+  // A fresh process isolates all provider pool/cache state from the ORIGINAL
+  // strict product census. Bootstrap uses a real joined empty thread and logs
+  // its own delta; subsequent counts are observations, never a +1 allowance.
+  one(-1, false);
+  DumpOwnHandleTypes(-2, reinterpret_cast<uintptr_t>(&empty_pthread), reinterpret_cast<uintptr_t>(&NativeSupplierRetirement));
+  for (int cycle = 0; cycle != 4; ++cycle) one(cycle, false);
+  DumpOwnHandleTypes(0, 0, 0);
+  for (int cycle = 0; cycle != 4; ++cycle) { one(cycle, true); if (cycle == 0 || cycle == 3) DumpOwnHandleTypes(100 + cycle, 0, 0); }
+  puts("PASS TCP supplier characterization: isolated empty-thread observations only; product census unchanged");
 }
 int NativeUdpErrorControl() {
   require(ws::Startup(), "Winsock startup");

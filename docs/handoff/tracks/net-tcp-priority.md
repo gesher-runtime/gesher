@@ -725,3 +725,26 @@ observed frames0x21ac0/0x465c0. No C++/link/runtime/census change accompanies it
 Logs: `C:/work/gesher-ci-review/tcp-409564-compile.log`,
 `C:/work/gesher-ci-review/tcp-409564-win2022.log`,
 `C:/work/gesher-ci-review/tcp-409564-win2025.log`.
+
+96d71150/409580 actual current binary SHA256
+488f8741c63b35ee2984847f66b7f0ad48c483863dd2856eaca861d1ece714b2
+and map59632a1a bind the three creator ranges exactly to pthread_spin_lock
+(0x465c0), _pthread_cleanup_dest(0x21ac0), pthread_create_wrapper(0x22810).
+Both Windows agree and retain the original strict mode1 census failure. No
+owned source worker/reaper or WS2 frame is established as creator. Mode2 and
+both guest ABIs remain unexecuted. Logs: tcp-409580-compile.log and
+win2022/win2025.log under C:/work/gesher-ci-review.
+
+The next bounded control runs the SAME authenticated probe/static supplier in
+an entirely separate fresh supervised process before the original HOST test.
+It creates no TCP sockets or owned connect operations: one logged joined
+bootstrap, four joined and four detached empty pthreads. Each worker duplicates
+its actual self-thread pseudo-handle to a noninheritable SYNCHRONIZE handle;
+the controller observes native thread exit, joins only joinable records, closes
+both fixture-owned handles and records actual handle deltas. Own-process
+handle tracing selects only observed new Event values without retaining
+aliases. Deltas are observations, not success allowances. The original product
+runs in another process instance with its original exact census unchanged;
+there is no shared warm pool or baseline adjustment. These observations may
+identify a default supplier prerequisite but cannot qualify a supplier patch,
+MinGW DLL unload, cancellation or the product's guest paths.
