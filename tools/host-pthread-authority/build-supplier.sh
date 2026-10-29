@@ -7,6 +7,7 @@ role=${2:-production}
 case "$role" in
   production) suffix= ;;
   fault) suffix=-fault ;;
+  probe) suffix=-probe ;;
   *) exit 2 ;;
 esac
 root=$(git rev-parse --show-toplevel)
@@ -26,12 +27,14 @@ if test "$role" = fault; then
   git -C "$supplier" apply "$root/tools/host-pthread-authority/fault-supplier.patch"
 fi
 export PATH="$llvm/bin:$PATH"
+supplier_cflags='-g -O2 -mguard=cf -Werror -Xclang -fdump-record-layouts'
+if test "$role" = probe; then supplier_cflags="$supplier_cflags -DGESHER_PTHREAD_ROUTING_PROBE=1"; fi
 mkdir "$supplier/build"
 cd "$supplier/build"
 ../mingw-w64-libraries/winpthreads/configure \
   --host=x86_64-w64-mingw32 --prefix="$llvm/x86_64-w64-mingw32" \
   --libdir="$llvm/x86_64-w64-mingw32/lib" --enable-shared --enable-static \
-  CFLAGS='-g -O2 -mguard=cf -Werror -Xclang -fdump-record-layouts' CXXFLAGS='-g -O2 -mguard=cf -Werror' \
+  CFLAGS="$supplier_cflags" CXXFLAGS='-g -O2 -mguard=cf -Werror' \
   CC="$llvm/bin/x86_64-w64-mingw32-clang" \
   AR="$llvm/bin/llvm-ar" RANLIB="$llvm/bin/llvm-ranlib" \
   RC="$llvm/bin/x86_64-w64-mingw32-windres" 2>&1 | tee configure-command.log
