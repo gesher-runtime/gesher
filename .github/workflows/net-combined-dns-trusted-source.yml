@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       # Maintainer-controlled repository variable, resolved only in this pinned job.
-      NET_COMBINED_TSF_CALLER_COMMIT: ${{ vars.NET_COMBINED_TSF_CALLER_COMMIT }}
+      NET_COMBINED_BLOCKING_CALLER_COMMIT: ${{ vars.NET_COMBINED_BLOCKING_CALLER_COMMIT }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -170,8 +170,8 @@ jobs:
            'tests/native2/dns-reference/ns_name.c': 'c2dc80f59cbc1fd37d7d08e5464310579a1c4a2f',
            'tests/native2/net_dns_wire.cpp': '4973793ed58dce9f753c24f76e18621e3663751b',
            'tests/windows/tracks/92-net-dns-wire.ps1': '7d6438e111524b4b1761b9c53f144c7bea5ca78f',
-           'tools/native3-locks/union_blocking_guard.py': 'f0282811fddf8c9a62536d3bf566c4b99e2b0fad',
-           'tools/native3-locks/union_payload.py': 'c7b7fc4f367b18ab6a1a7ae08a672cf32d720ef6',
+           'tools/native3-locks/union_blocking_guard.py': '30211ffaf7109f9367f743a8a0816c564c251311',
+           'tools/native3-locks/union_payload.py': '424be0420f064c57961a4fc9a8659eb1cc93f0f2',
            'tools/net-dns-component/aosp_reference.py': '7c968478f06cbedc7c2bef650eec4a7ed7e589c6',
            'tools/net-dns-component/payload.py': '8bf17e1a54fc903d635edb32ccb0763aba9eba67',
            'tools/net-dns-component/source.json': '51563a7370546df21b5e89c2b7263e1ac3bc44c2',
@@ -181,6 +181,8 @@ jobs:
           # Exact TSF/Services leaves qualified in 408805 and 408811.
           SOURCE_PINS.update({'.github/workflows/services-geocoder-worker-component.yml': 'a96e2b1aee0b45a809dfb25ca705eb13859d1c40', '.github/workflows/tsf-format-component.yml': 'a3b2021a2df42316a46d4849eb499fb5b1842a7e', 'tools/windows4/TsfJobSupervisor.cs': '625be4d5906bb48dd02d6103382fd2e85ac88738', 'tools/windows4/TsfJobWorker.cs': 'e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1', 'tools/windows4/diagnose-pwsh-job.ps1': '6956c0d1714f17761dc756c17f72cb8d119fe306', 'tools/windows4/test-tsf-job-supervisor.ps1': 'e290479e7b81fbd8f9d8705687c84fb084b789e9'})
           SOURCE_PINS['tests/windows/tracks/58-devices.ps1'] = 'b16da67c5a2286f73cda9a9162295a931cabd40e'
+          # Actual component409072 exact observer source; historical maps remain frozen.
+          SOURCE_PINS.update({'.github/workflows/native3-locks-blocking.yml': 'd898a5eb8f5820a5d66dfa9633c6164722cde065', 'tests/native3-locks/command_oracle.py': 'c0655cce6466619b35c3e68eb82bc20ca939fc03', 'tests/native3-locks/command_worker.cc': '6872f626e1c64671d9b0eda8f4dcc55f89dec69a', 'tests/native3-locks/stdio_sink_oracle.py': 'cc6ced799c5391c76eac312054cf242e3313bd50', 'tests/native3-locks/test_command_cleanup.py': 'fbd6815890d8dcee22136d0298e7684986b49845', 'tools/native3-locks/StdioSinkSupervisor.cs': '1b320bc00a64172733f2e87a9ee864975337a0b0'})
           ORIGINAL_BASE = 'f1550540186b4ae3f17a5e501a886ec1c4d5d613'
           UNION_BASE = '8b1e9b509ceef7e532a7ff5bc085ecdbc476d292'
 
@@ -209,8 +211,11 @@ jobs:
                   require(actual.get(name, ('', ''))[1] == blob,
                           'Original Native/AOT selected source assertion failed: ' + name)
 
-          def verify_selected(actual):
-              for name, blob in (UNION_PINS | NATIVE_PINS).items():
+          def verify_selected(actual, adapted=False):
+              pins = UNION_PINS | NATIVE_PINS
+              if adapted:
+                  pins = pins | {name: SOURCE_PINS[name] for name in ('tests/native3-locks/command_oracle.py', 'tests/native3-locks/command_worker.cc')}
+              for name, blob in pins.items():
                   require(actual.get(name, ('', ''))[1] == blob, 'Union/Native selected source assertion failed: ' + name)
 
 
@@ -338,7 +343,7 @@ jobs:
                   '.github/workflows/coherent-union-trusted-source.yml'}
               require(union_delta and union_delta <= union_allowed, 'Historical union preflight delta differs')
               verify_selected(baseline)
-              reviewed = os.environ.get('NET_COMBINED_TSF_CALLER_COMMIT', '')
+              reviewed = os.environ.get('NET_COMBINED_BLOCKING_CALLER_COMMIT', '')
               approved_caller = caller_identity(reviewed)
               references = re.findall(rb'(?m)^    uses: gesher-runtime/gesher/\.github/workflows/net-combined-dns-trusted-source\.yml@([0-9a-f]{40})$', approved_caller)
               require(len(references) == 1, 'Caller must use one immutable full guard commit')
@@ -371,7 +376,7 @@ jobs:
               require(inventory(guard_commit)[TRUST] == authority[TRUST], 'Guard authority differs')
               actual = inventory(sha)
               verify_tree(actual, expected)
-              verify_selected(actual)
+              verify_selected(actual, adapted=True)
               require(not git('status', '--porcelain', '--untracked-files=all').strip(), 'Dirty candidate checkout')
               verify_checkout(expected)
               isolated_import_controls()
@@ -390,7 +395,7 @@ jobs:
                       path.write_bytes(original)
               mutant = copy.deepcopy(actual)
               mutant[next(iter(HISTORICAL_PINS))] = ('100644', '0' * 40)
-              reject('original_native_aot_selected_blob', lambda: verify_selected(mutant))
+              reject('original_native_aot_selected_blob', lambda: verify_selected(mutant, adapted=True))
               # Both real files are also replaced together, then restored even on rejection.
               originals = {name: Path(name).read_bytes() for name in (GUARD, 'tools/native3-locks/union_blocking_guard.py', TRUST, CALLER)}
               try:
