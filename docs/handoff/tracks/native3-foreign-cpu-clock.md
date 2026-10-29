@@ -13,6 +13,39 @@ Actual Linux observation log: job 123173374206, retained at
 C:/work/gesher-ci-review/diagnostic-job-123173374206.log. Its exact source,
 run and attempt must be bound into the later qualification supplier.
 
+## Critical Linux oracle blocker, pending controlled diagnosis
+
+Component run 40792024272 / attempt 1 at exact source
+1869f3abffbefaf7c1ca40771388465d245d0997 failed its immediate-postjoin
+Linux assertion: gettime=0 errno0 and getres=0 errno0. No Windows job ran.
+The earlier 40790238879 observation of EINVAL is therefore not a universal
+join boundary. Do not retry the red source or claim Windows qualification.
+Raw failure log: C:/work/gesher-ci-review/pthread-40792024272-compile.log.
+
+Changed source now prepares a narrow Linux diagnostic only: 64 real worker
+TIDs, decoded clock target equality, /proc task starttime/state, exactly two
+live tasks, controlled release/return/join timestamps, immediate raw clock
+samples before /proc I/O and a second /proc-bracketed sample. No subsequent
+thread is created until that exact birth disappears, both clock operations
+return EINVAL within five seconds and only the main task remains. Repeated
+TIDs are reported and rejected, not silently interpreted as target death.
+A process alarm and immediate _Exit failure paths retain storage safety.
+The output is diagnostic, not acceptance of two interchangeable outcomes.
+The component verifier still requires the previous qualification record and
+will not accept diagnostic output as Windows supplier proof.
+
+Primary source investigation supports an exit-phase race hypothesis: glibc
+2.39 join waits on clear_child_tid, and Linux v6.8 clears/wakes that location
+in exit_mm before later exit_notify/release_task. CPU clock lookups resolve
+the task through the PID map. These are versioned design references; actual
+runner kernel/glibc identity and controlled observations remain required.
+
+https://github.com/bminor/glibc/blob/glibc-2.39/nptl/pthread_join_common.c
+https://github.com/bminor/glibc/blob/glibc-2.39/nptl/pthread_getcpuclockid.c
+https://github.com/torvalds/linux/blob/v6.8/kernel/fork.c
+https://github.com/torvalds/linux/blob/v6.8/kernel/exit.c
+https://github.com/torvalds/linux/blob/v6.8/kernel/time/posix-cpu-timers.c
+
 ## Bounded source change
 
 The bionic entry point resolves a real target through the pthread registry
