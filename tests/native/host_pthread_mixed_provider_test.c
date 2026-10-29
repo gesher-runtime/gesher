@@ -49,6 +49,14 @@ int main(void) {
   if (!ready || !release) return 7;
   HANDLE thread = CreateThread(NULL, 0, worker, NULL, 0, NULL);
   if (!thread || WaitForSingleObject(ready, 5000) != WAIT_OBJECT_0) return 8;
+  typedef BOOL (WINAPI *compare_fn)(HANDLE, HANDLE);
+  HMODULE kernel=GetModuleHandleW(L"kernelbase.dll");
+  compare_fn compare=kernel ? (compare_fn)GetProcAddress(kernel,"CompareObjectHandles") : NULL;
+  HANDLE duplicate=NULL;
+  if (!compare || !DuplicateHandle(GetCurrentProcess(),thread,GetCurrentProcess(),&duplicate,0,FALSE,DUPLICATE_SAME_ACCESS)) return 20;
+  if (!compare(thread,duplicate)) return 21;
+  SetLastError(ERROR_SUCCESS);
+  if (compare(thread,GetCurrentThread()) || GetLastError()!=ERROR_NOT_SAME_OBJECT || !CloseHandle(duplicate)) return 22;
   clockid_t local, cross_static, cross_dll;
   struct timespec a, b;
   pthread_t local_thread=pthread_self();
@@ -77,6 +85,8 @@ int main(void) {
       !CloseHandle(ready) || !CloseHandle(release)) return 10;
   a.tv_sec=123; a.tv_nsec=456; errno=0;
   if (clock_gettime(remote, &a)!=-1 || errno!=EINVAL || a.tv_sec!=123 || a.tv_nsec!=456) return 17;
+  b.tv_sec=123; b.tv_nsec=456; errno=0;
+  if (read_clock(remote, &b)!=-1 || errno!=EINVAL || b.tv_sec!=123 || b.tv_nsec!=456) return 19;
   if (!FreeLibrary(module)) return 6;
   if (GetModuleHandleW(L"libwinpthread-1.dll") != NULL || clock_gettime(local, &a)) return 16;
   a.tv_sec=123; a.tv_nsec=456; errno=0;

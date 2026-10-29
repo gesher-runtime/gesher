@@ -250,7 +250,7 @@
  /* internal header files */
  #include "misc.h"
  
-@@ -38,6 +40,110 @@
+@@ -38,6 +40,137 @@
          return -1;
      }
      return 0;
@@ -277,18 +277,25 @@
 +{
 +    unsigned i;
 +    int result;
-+    DWORD tid = GetThreadId(owned);
-+    if (!tid) { CloseHandle(owned); return EAGAIN; }
++    typedef BOOL (WINAPI *compare_fn)(HANDLE, HANDLE);
++    HMODULE kernel = GetModuleHandleW(L"kernelbase.dll");
++    compare_fn compare = kernel ? (compare_fn)GetProcAddress(kernel, "CompareObjectHandles") : NULL;
++    if (!compare) { CloseHandle(owned); return EAGAIN; }
 +    AcquireSRWLockExclusive(&cpu_clock_lock);
 +    if (WaitForSingleObject(owned, 0) != WAIT_TIMEOUT) {
 +        CloseHandle(owned); cpu_clock_reap(); result = ESRCH; goto done;
 +    }
 +    cpu_clock_reap();
-+    for (i = 0; i < 256; ++i)
-+        if (cpu_clock_slots[i].handle && WaitForSingleObject(cpu_clock_slots[i].handle, 0) == WAIT_TIMEOUT &&
-+            GetThreadId(cpu_clock_slots[i].handle) == tid) {
++    for (i = 0; i < 256; ++i) {
++        if (!cpu_clock_slots[i].handle) continue;
++        SetLastError(ERROR_SUCCESS);
++        if (compare(cpu_clock_slots[i].handle, owned)) {
 +            CloseHandle(owned); *out = cpu_clock_slots[i].id; result = 0; goto done;
 +        }
++        if (GetLastError() != ERROR_NOT_SAME_OBJECT) {
++            CloseHandle(owned); result = EAGAIN; goto done;
++        }
++    }
 +    if (WaitForSingleObject(owned, 0) != WAIT_TIMEOUT) {
 +        CloseHandle(owned); result = ESRCH; goto done;
 +    }
@@ -326,20 +333,40 @@
 +        result = 0; break;
 +    }
 +    ReleaseSRWLockExclusive(&cpu_clock_lock);
-+    return lc_set_errno(result);
++    return result;
 +}
 +
 +typedef int (__cdecl *clock_register_fn)(HANDLE, clockid_t *);
 +typedef int (__cdecl *clock_read_fn)(clockid_t, struct _timespec64 *, int);
-+static FARPROC clock_anchor(const char *name, FARPROC local)
++typedef struct { unsigned size, version; clock_register_fn register_clock; clock_read_fn read_clock; } clock_authority;
++__declspec(dllexport) const clock_authority * __cdecl gesher_clock_anchor_v1(void)
 +{
-+    HMODULE host = GetModuleHandleW(NULL), pinned = NULL;
-+    FARPROC function = host ? GetProcAddress(host, name) : NULL;
-+    if (function) return function;
-+    /* DLL-only hosts retain their authority for the life of the process. */
-+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-+                            (LPCWSTR)local, &pinned)) return NULL;
-+    return local;
++    static const clock_authority authority = { sizeof(clock_authority), 1, gesher_clock_register_v1, gesher_clock_read_v1 };
++    return &authority;
++}
++typedef const clock_authority * (__cdecl *clock_anchor_fn)(void);
++static const clock_authority *clock_anchor(void)
++{
++    HMODULE host = GetModuleHandleW(NULL), owner = NULL, pinned = NULL, anchor_owner = NULL, register_owner = NULL, read_owner = NULL;
++    clock_anchor_fn anchor = host ? (clock_anchor_fn)GetProcAddress(host, "gesher_clock_anchor_v1") : NULL;
++    const clock_authority *authority;
++    if (anchor) owner = host;
++    else {
++        /* DLL-only hosts retain their authority for the life of the process. */
++        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
++                                (LPCWSTR)gesher_clock_anchor_v1, &pinned)) return NULL;
++        owner = pinned; anchor = gesher_clock_anchor_v1;
++    }
++    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                            (LPCWSTR)anchor, &anchor_owner) || anchor_owner != owner) return NULL;
++    authority = anchor();
++    if (!authority || authority->size != sizeof(*authority) || authority->version != 1 ||
++        !authority->register_clock || !authority->read_clock ||
++        !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                            (LPCWSTR)authority->register_clock, &register_owner) || register_owner != owner ||
++        !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                            (LPCWSTR)authority->read_clock, &read_owner) || read_owner != owner) return NULL;
++    return authority;
 +}
 +int pthread_getcpuclockid(pthread_t thread, clockid_t *out)
 +{
@@ -350,14 +377,14 @@
 +    (void)pthread_self();
 +    result = gesher_winpthread_dup_cpu_handle_v1(thread, &owned, &generation);
 +    if (result) return result;
-+    clock_register_fn register_clock = (clock_register_fn)clock_anchor("gesher_clock_register_v1", (FARPROC)gesher_clock_register_v1);
-+    if (!register_clock) { CloseHandle(owned); return EAGAIN; }
-+    return register_clock((HANDLE)owned, out);
++    const clock_authority *authority = clock_anchor();
++    if (!authority) { CloseHandle(owned); return EAGAIN; }
++    return authority->register_clock((HANDLE)owned, out);
 +}
 +static int cpu_clock_read(clockid_t id, struct _timespec64 *out, int resolution)
 +{
-+    clock_read_fn read_clock = (clock_read_fn)clock_anchor("gesher_clock_read_v1", (FARPROC)gesher_clock_read_v1);
-+    return read_clock ? read_clock(id, out, resolution) : lc_set_errno(EINVAL);
++    const clock_authority *authority = clock_anchor();
++    return lc_set_errno(authority ? authority->read_clock(id, out, resolution) : EINVAL);
  }
  
  /**
