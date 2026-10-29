@@ -59,6 +59,32 @@ void Label(const std::wstring& path, const wchar_t* sddl) {
   Check(CloseHandle(handle), "label handle close"); LocalFree(descriptor);
   Check(result == ERROR_SUCCESS, "label exact file mutation");
 }
+void ObserveSectionRights(HANDLE section, const char* role) {
+  using NtQuery = NTSTATUS (NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+  using NtExtend = NTSTATUS (NTAPI*)(HANDLE, PLARGE_INTEGER);
+  HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  FARPROC query_symbol = ntdll ? GetProcAddress(ntdll, "NtQueryObject") : nullptr;
+  FARPROC extend_symbol = ntdll ? GetProcAddress(ntdll, "NtExtendSection") : nullptr;
+  NtQuery query = nullptr; NtExtend extend = nullptr;
+  static_assert(sizeof(query) == sizeof(query_symbol) && sizeof(extend) == sizeof(extend_symbol));
+  memcpy(&query, &query_symbol, sizeof(query)); memcpy(&extend, &extend_symbol, sizeof(extend));
+  Check(query && extend, "native section rights APIs");
+  HANDLE alias = nullptr;
+  BOOL duplicated = DuplicateHandle(GetCurrentProcess(), section, GetCurrentProcess(), &alias, FILE_MAP_ALL_ACCESS, FALSE, 0);
+  DWORD error = duplicated ? ERROR_SUCCESS : GetLastError();
+  struct Basic { ULONG attributes, granted, handles, pointers; ULONG reserved[10]; } basic{};
+  static_assert(sizeof(Basic) == 56);
+  ULONG returned = 0;
+  NTSTATUS query_status = duplicated ? query(alias, 0, &basic, sizeof(basic), &returned) : static_cast<NTSTATUS>(-1);
+  // Request the known existing 4 MiB length only: never grow the fixture file.
+  LARGE_INTEGER same_size{}; same_size.QuadPart = 4 * 1024 * 1024;
+  NTSTATUS extend_status = duplicated ? extend(alias, &same_size) : static_cast<NTSTATUS>(-1);
+  bool closed = !duplicated || CloseHandle(alias) != FALSE;
+  printf("POLICY_PROPERTY_SECTION_RIGHTS role=%s duplicate=%u error=%lu query=%ld returned=%lu granted=%lu same_size_extend=%ld returned_size=%lld cleanup=%u\n",
+      role, unsigned(duplicated), error, static_cast<long>(query_status), returned, basic.granted,
+      static_cast<long>(extend_status), static_cast<long long>(same_size.QuadPart), unsigned(closed));
+  Check(closed && (!duplicated || (query_status >= 0 && returned == sizeof(basic))), "native section rights query cleanup");
+}
 void ObserveNativeWriteMap(HANDLE section, const char* role, bool expect_positive) {
   using NtMap = NTSTATUS (NTAPI*)(HANDLE, HANDLE, PVOID*, ULONG_PTR, SIZE_T, PLARGE_INTEGER, PSIZE_T, ULONG, ULONG, ULONG);
   HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
@@ -183,6 +209,8 @@ int wmain(int argc, wchar_t** argv) {
       Check(all_view_closed && all_closed, "all-access section observation cleanup");
       ObserveNativeWriteMap(inherited_mapping, "writable-positive", true);
       ObserveNativeWriteMap(readonly_section, "readonly-observation", false);
+      ObserveSectionRights(inherited_mapping, "writable-positive");
+      ObserveSectionRights(readonly_section, "readonly-observation");
       HANDLE elevated_mutex = nullptr;
       BOOL elevated = DuplicateHandle(GetCurrentProcess(), inherited_mutex, GetCurrentProcess(),
           &elevated_mutex, MUTEX_ALL_ACCESS, FALSE, 0);
@@ -341,6 +369,9 @@ int wmain(int argc, wchar_t** argv) {
           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
       Check(readonly_file_raw != INVALID_HANDLE_VALUE, "host readonly area file");
       OwnedEvent readonly_file{readonly_file_raw};
+      LARGE_INTEGER before_length{};
+      Check(GetFileSizeEx(readonly_file.handle, &before_length) && before_length.QuadPart == 4 * 1024 * 1024,
+          "actual original property area length");
       OwnedEvent readonly_mapping{CreateFileMappingW(readonly_file.handle, &security, PAGE_READONLY, 0, 0, nullptr)};
       Check(readonly_mapping.handle != nullptr, "separate readonly area section");
       OwnedEvent shared_mapping;
@@ -391,9 +422,13 @@ int wmain(int argc, wchar_t** argv) {
       bool release_closed = CloseHandle(guest_release.handle) != FALSE; if (release_closed) guest_release.handle = nullptr;
       bool mapping_closed = CloseHandle(shared_mapping.handle) != FALSE; if (mapping_closed) shared_mapping.handle = nullptr;
       bool readonly_mapping_closed = CloseHandle(readonly_mapping.handle) != FALSE; if (readonly_mapping_closed) readonly_mapping.handle = nullptr;
+      LARGE_INTEGER after_length{};
+      bool unchanged_length = GetFileSizeEx(readonly_file.handle, &after_length) && after_length.QuadPart == before_length.QuadPart;
+      printf("POLICY_PROPERTY_AREA_LENGTH before=%lld after=%lld unchanged=%u\n",
+          static_cast<long long>(before_length.QuadPart), static_cast<long long>(after_length.QuadPart), unsigned(unchanged_length));
       bool readonly_file_closed = CloseHandle(readonly_file.handle) != FALSE; if (readonly_file_closed) readonly_file.handle = nullptr;
       Check(ready_closed && done_closed && mutex_closed && held_closed && release_closed && mapping_closed &&
-          readonly_mapping_closed && readonly_file_closed, "actual property observation handles closed");
+          readonly_mapping_closed && readonly_file_closed && unchanged_length, "actual property observation handles closed and length unchanged");
       DWORD code = 0; Check(GetExitCodeProcess(child.process(), &code) && code == 0 && child.Stop().confirmed, "actual nested child exit and retirement");
       Check(CloseHandle(private_server) && CloseHandle(private_client), "actual private bootstrap owner cleanup");
       HANDLE verified_log = CreateFileW(log_path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
