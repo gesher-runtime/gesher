@@ -133,6 +133,13 @@ int wmain(int argc, wchar_t** argv) {
           unsigned(property == "host-authoritative"), unsigned(property_write));
       Check(property_read && property == "host-authoritative" && live_read && live == "after" && !property_write,
           "actual readonly live property probe");
+      gesher::properties::DiagnosticSetWaitEvent(nullptr);
+      Check(_wputenv_s(L"GESHER_BINDER", L"fixture-private-guest-endpoint") == 0, "fixture changes guest endpoint");
+      std::string split_value;
+      bool split_read = gesher::properties::Get("ro.fixture.identity", &split_value);
+      Check(_wputenv_s(L"GESHER_BINDER", L"fixture-property-session") == 0, "fixture restores guest endpoint");
+      printf("POLICY_PROPERTY_SESSION_SPLIT host_value_visible=%u\n", unsigned(split_read && split_value == "host-authoritative"));
+      Check(!split_read, "distinct guest endpoint does not select host area");
       STARTUPINFOW actual{}; actual.cb = sizeof(actual); GetStartupInfoW(&actual);
       Check((actual.dwFlags & STARTF_USESTDHANDLES) != 0, "actual startup stdio");
       HANDLE verified = gesher::DuplicateVerifiedNull(actual.hStdInput);
