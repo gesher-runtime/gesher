@@ -98,6 +98,9 @@ MERGED_DNS_SOURCE = {'.github/workflows/native2.yml': '1d0876fdedf3d64ea006e9840
 PINNED_SOURCE.update(MERGED_DNS_SOURCE)
 PINNED_SOURCE['tests/windows/tracks/58-devices.ps1'] = 'b16da67c5a2286f73cda9a9162295a931cabd40e'
 
+# Exact observer repair qualified by component 409072; historical baseline remains frozen.
+PINNED_SOURCE.update({'tests/native3-locks/command_oracle.py': 'c0655cce6466619b35c3e68eb82bc20ca939fc03', 'tests/native3-locks/command_worker.cc': '6872f626e1c64671d9b0eda8f4dcc55f89dec69a', 'tests/native3-locks/stdio_sink_oracle.py': 'cc6ced799c5391c76eac312054cf242e3313bd50', 'tests/native3-locks/test_command_cleanup.py': 'fbd6815890d8dcee22136d0298e7684986b49845', 'tools/native3-locks/StdioSinkSupervisor.cs': '1b320bc00a64172733f2e87a9ee864975337a0b0'})
+
 # TSF/Services source qualified by 408805 and 408811; runner-console trust is bounded.
 PINNED_SOURCE.update({'.github/workflows/services-geocoder-worker-component.yml': 'a96e2b1aee0b45a809dfb25ca705eb13859d1c40', '.github/workflows/tsf-format-component.yml': 'a3b2021a2df42316a46d4849eb499fb5b1842a7e', 'tools/windows4/TsfJobSupervisor.cs': '625be4d5906bb48dd02d6103382fd2e85ac88738', 'tools/windows4/TsfJobWorker.cs': 'e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1', 'tools/windows4/diagnose-pwsh-job.ps1': '6956c0d1714f17761dc756c17f72cb8d119fe306', 'tools/windows4/test-tsf-job-supervisor.ps1': 'e290479e7b81fbd8f9d8705687c84fb084b789e9'})
 
@@ -161,6 +164,7 @@ def main():
         base = '8b1e9b509ceef7e532a7ff5bc085ecdbc476d292'
         subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], cwd=ROOT, check=True)
         allowed = {'.github/workflows/ci.yml', 'tools/native3-locks/union_payload.py', '.github/workflows/tsf-format-component.yml', '.github/workflows/services-geocoder-worker-component.yml', '.github/workflows/native3-locks-blocking.yml', 'tools/native3-locks/union_blocking_guard.py', 'tools/windows4/run-tsf-union.ps1', 'tools/windows4/TsfJobSupervisor.cs', 'tools/windows4/TsfJobWorker.cs', 'tools/windows4/diagnose-pwsh-job.ps1', 'tools/windows4/test-tsf-job-supervisor.ps1', '.github/workflows/coherent-union-trusted-source.yml', '.github/workflows/combined-full-trusted-source.yml', '.github/workflows/native2.yml', '.github/workflows/net-udp-component.yml', '.github/workflows/net-udp-fault-observer.yml', 'compat/posix/src/socket.cc', 'compat/posix/src/socket_internal.h', 'compat/posix/src/socket_user_copy.h', 'compat/posix/src/winsock.cc', 'tests/dex-services/gesher/services/BinderTest.java', 'tests/native2/net_udp_copy_observer.c', 'tests/native2/net_udp_fault_observer.c', 'tests/native2/net_udp_guarded_copy_probe.cpp', 'tests/native2/net_udp_trunc.cpp', 'tests/windows/tracks/50-services.ps1', 'tests/windows/tracks/58-devices.ps1', 'tests/windows/tracks/89-net-udp-trunc.ps1', 'tools/net-udp-component/payload.py', 'tools/net-udp-component/source.json', 'tools/net-udp/payload.py'}
+        allowed.update(['tests/native3-locks/command_oracle.py', 'tests/native3-locks/command_worker.cc', 'tests/native3-locks/stdio_sink_oracle.py', 'tests/native3-locks/test_command_cleanup.py', 'tools/native3-locks/StdioSinkSupervisor.cs'])
         allowed.update(MERGED_DNS_SOURCE)
         allowed.add('.github/workflows/net-combined-dns-trusted-source.yml')
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
