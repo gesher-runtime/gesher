@@ -129,7 +129,7 @@ class Bootstrap:
         self.transfer(status, False)
         return status.value == 0
 
-    def spawn(self, args, output, environment, context, inherited=(), role=None):
+    def spawn(self, args, output, environment, context, inherited=(), role=None, before_publish=None):
         import msvcrt
         nul = open(os.devnull, 'rb')
         handles = [msvcrt.get_osfhandle(nul.fileno()), msvcrt.get_osfhandle(output.fileno()), *inherited]
@@ -152,6 +152,8 @@ class Bootstrap:
             child = Child(self, info, output)
             self.children.append(child)
             self.job.own(child)  # exact retained suspended process, before any instruction
+            if before_publish:
+                before_publish(child)
             if role:
                 assert self.publish(child._handle, role), 'private fixture admission'
             assert self.api.ResumeThread(info.thread) == 1, 'exact suspended count before resume after ACK'
@@ -170,7 +172,7 @@ class Bootstrap:
             self.api.DeleteProcThreadAttributeList(storage)
             nul.close()
 
-    def begin(self, broker, endpoint, output, environment):
+    def begin(self, broker, endpoint, output, environment, before_resume=None):
         # Match production Channel: unpredictable private name, owner-only DACL,
         # first-instance, byte-mode/nonblocking, remote clients rejected.
         advapi = C.WinDLL('advapi32', use_last_error=True)
@@ -194,7 +196,8 @@ class Bootstrap:
             mode = W.DWORD(1)
             self.check(self.api.SetNamedPipeHandleState(self.control, C.byref(mode), None, None))
             context = Context(magic=0x474c4358, version=3, kind=1, control=server)
-            self.broker = self.spawn([broker, endpoint], output, environment, context, [server])
+            self.broker = self.spawn([broker, endpoint], output, environment, context, [server],
+                                     before_publish=before_resume)
             current = self.api.GetCurrentProcess()
             assert not self.publish(current, '@launcher', True), 'wrong creation-time rejected'
             assert self.publish(current, '@launcher'), 'actual controller admitted'

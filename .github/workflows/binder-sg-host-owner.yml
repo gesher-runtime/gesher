@@ -1,0 +1,78 @@
+name: binder-sg-host-owner
+on:
+  push:
+    branches: [wip/binder-sg-host-component]
+    paths: [.github/workflows/binder-sg-host-owner.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: binder-sg-host-owner-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_TAG: '20261006'
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Build current-source broker and separate SG actors
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          ninja -C out -v binderd binder_sg_actor binder_sg_wire_peer
+          mkdir sg-host-artifact
+          for target in binderd binder_sg_actor binder_sg_wire_peer; do
+            cp "out/$target.exe" sg-host-artifact/
+            ninja -C out -t commands "$target" > "sg-host-artifact/$target.commands.txt"
+          done
+          printf '%s\n' "$GITHUB_SHA" > sg-host-artifact/source.sha
+          printf '%s\n' "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/build" > sg-host-artifact/producer.txt
+          (cd sg-host-artifact && sha256sum *.exe > executables.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sg-host-${{ github.sha }}-${{ github.run_attempt }}
+          path: sg-host-artifact/
+          if-no-files-found: error
+  test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify current-run producer and executable hashes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/ci/artifact_receipt.py --name "sg-host-$env:GITHUB_SHA-$env:GITHUB_RUN_ATTEMPT" --producer build --destination sg-host-artifact
+          if ($LASTEXITCODE -ne 0) { throw 'current producer receipt failed' }
+          if ((Get-Content sg-host-artifact/source.sha -Raw).Trim() -cne $env:GITHUB_SHA -or
+              (Get-Content sg-host-artifact/producer.txt -Raw).Trim() -cne "$env:GITHUB_RUN_ID/$env:GITHUB_RUN_ATTEMPT/build") { throw 'producer identity mismatch' }
+          $rows = @(Get-Content sg-host-artifact/executables.sha256)
+          if ($rows.Count -ne 3) { throw 'unexpected executable count' }
+          foreach ($row in $rows) {
+            $hash, $name = $row -split '\s+', 2
+            if ($name -notmatch '^(binderd|binder_sg_actor|binder_sg_wire_peer)\.exe$' -or
+                (Get-FileHash -LiteralPath "sg-host-artifact/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $hash) { throw 'executable mismatch' }
+          }
+      - name: Exercise original host SG and owner failure controls
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & pwsh -NoProfile -File tests/binder/run-host.ps1 -Dir "$pwd/sg-host-artifact"
+          if ($LASTEXITCODE -ne 0) { throw 'actual host SG regression failed' }
+          & pwsh -NoProfile -File tests/binder/test-owner-failures.ps1 -Dir "$pwd/sg-host-artifact"
+          if ($LASTEXITCODE -ne 0) { throw 'owner fault controls failed' }
+          Write-Host 'Host SG component only; ART/ELF/APK/device and full Binder remain open.'

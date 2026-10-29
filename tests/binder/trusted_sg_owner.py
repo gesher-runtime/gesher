@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
-import tempfile
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'native3-locks'))
 from duplicate_oracle import OwnedJob
@@ -23,11 +23,23 @@ def main():
         raise RuntimeError('SG fixture owner requires CI Windows')
     children = {}
     outputs = []
-    directory = tempfile.TemporaryDirectory(prefix="gesher-sg-owner-")
+    if len(sys.argv) != 2:
+        raise ValueError('owner log directory required')
+    directory = Path(sys.argv[1])
     next_id = 1
     job = OwnedJob().__enter__()
     owner = Bootstrap(job)
     started = False
+    def fault_callback(fault):
+        if fault not in ('', 'before-publish-crash', 'before-publish-hang',
+                         'after-resume-crash', 'after-resume-hang'):
+            raise ValueError('unknown fixture fault')
+        def inject(child):
+            print(f'SG_OWNER_FAULT phase={fault} pid={child.pid}', file=sys.stderr, flush=True)
+            if fault.endswith('crash'):
+                os._exit(97)
+            time.sleep(30)
+        return inject
     try:
         while True:
             line = sys.stdin.buffer.readline(MAX_REQUEST + 1)
@@ -44,15 +56,20 @@ def main():
             if operation == 'begin':
                 if started:
                     raise ValueError('duplicate broker')
-                output = open(Path(directory.name) / (str(next_id) + '.log'), 'w+b')
+                output = open(directory / (str(next_id) + '.log'), 'x+b')
                 outputs.append(output)
                 env = dict(os.environ, **request['environment'])
-                child = owner.begin(request['broker'], request['endpoint'], output, env)
+                fault = request.get('fixture_fault', '')
+                inject = fault_callback(fault)
+                before = inject if fault.startswith('before-publish-') else None
+                child = owner.begin(request['broker'], request['endpoint'], output, env, before_resume=before)
+                if fault.startswith('after-resume-'):
+                    inject(child)
                 started = True
             elif operation == 'spawn':
                 if not started:
                     raise ValueError('broker not started')
-                output = open(Path(directory.name) / (str(next_id) + '.log'), 'w+b')
+                output = open(directory / (str(next_id) + '.log'), 'x+b')
                 outputs.append(output)
                 env = dict(os.environ, **request['environment'])
                 role = request['role']
@@ -60,7 +77,12 @@ def main():
                     raise ValueError('unrecognized fixture role')
                 env['GESHER_BINDER_UID'] = '1000'
                 context = Context(magic=0x474c4358, version=3, uid=1000, server=owner.broker.pid)
-                child = owner.spawn(request['args'], output, env, context, role=role)
+                fault = request.get('fixture_fault', '')
+                inject = fault_callback(fault)
+                before = inject if fault.startswith('before-publish-') else None
+                child = owner.spawn(request['args'], output, env, context, role=role, before_publish=before)
+                if fault.startswith('after-resume-'):
+                    inject(child)
             elif operation == 'read':
                 child = children[request['id']]
                 offset = request['offset']
@@ -98,7 +120,6 @@ def main():
                 job.__exit__(None, None, None)
             for output in outputs:
                 output.close()
-            directory.cleanup()
 
 
 if __name__ == '__main__':
