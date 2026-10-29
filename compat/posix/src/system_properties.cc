@@ -434,6 +434,11 @@ HANDLE DiagnosticAreaMutex() {
   Area* area = Current();
   return area ? area->mutex.value : nullptr;
 }
+HANDLE DiagnosticAreaMapping() {
+  std::lock_guard local(LocalMutex());
+  Area* area = Current();
+  return area ? area->mapping.value : nullptr;
+}
 HANDLE DiagnosticHoldAreaMutex() {
   std::lock_guard local(LocalMutex());
   Area* area = Current();

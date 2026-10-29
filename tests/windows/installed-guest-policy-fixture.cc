@@ -11,7 +11,7 @@
 #include <stdexcept>
 
 namespace g = gesher::guest;
-namespace gesher::properties { void DiagnosticSetWaitEvent(HANDLE); void DiagnosticSetInheritedMutex(HANDLE); HANDLE DiagnosticAreaMutex(); HANDLE DiagnosticHoldAreaMutex(); bool DiagnosticReleaseAreaMutex(HANDLE); }
+namespace gesher::properties { void DiagnosticSetWaitEvent(HANDLE); void DiagnosticSetInheritedMutex(HANDLE); HANDLE DiagnosticAreaMutex(); HANDLE DiagnosticAreaMapping(); HANDLE DiagnosticHoldAreaMutex(); bool DiagnosticReleaseAreaMutex(HANDLE); }
 struct OwnedEvent {
   HANDLE handle = nullptr;
   ~OwnedEvent() { if (handle && !CloseHandle(handle)) std::abort(); }
@@ -94,16 +94,33 @@ std::wstring PrivateName(HANDLE handle) {
 }
 int wmain(int argc, wchar_t** argv) {
   try {
-    if (argc == 9 && !wcscmp(argv[1], L"--nested")) {
+    if (argc == 10 && !wcscmp(argv[1], L"--nested")) {
       HANDLE ready = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[4], nullptr, 10)));
       HANDLE done = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[5], nullptr, 10)));
       HANDLE inherited_mutex = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[6], nullptr, 10)));
       HANDLE guest_held = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[7], nullptr, 10)));
       HANDLE guest_release = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[8], nullptr, 10)));
+      HANDLE inherited_mapping = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[9], nullptr, 10)));
       DWORD event_flags = 0;
       Check(GetHandleInformation(ready, &event_flags) && GetHandleInformation(done, &event_flags) &&
           GetHandleInformation(inherited_mutex, &event_flags) && GetHandleInformation(guest_held, &event_flags) &&
-          GetHandleInformation(guest_release, &event_flags), "inherited diagnostic handles");
+          GetHandleInformation(guest_release, &event_flags) && GetHandleInformation(inherited_mapping, &event_flags), "inherited diagnostic handles");
+      void* readonly_view = MapViewOfFile(inherited_mapping, FILE_MAP_READ, 0, 0, 16);
+      Check(readonly_view != nullptr, "actual inherited section readable");
+      uint32_t mapping_magic = 0; memcpy(&mapping_magic, readonly_view, sizeof(mapping_magic));
+      Check(UnmapViewOfFile(readonly_view), "inherited section read view retired");
+      HANDLE elevated_mapping = nullptr;
+      BOOL duplicate_write = DuplicateHandle(GetCurrentProcess(), inherited_mapping, GetCurrentProcess(),
+          &elevated_mapping, FILE_MAP_WRITE, FALSE, 0);
+      DWORD duplicate_error = duplicate_write ? ERROR_SUCCESS : GetLastError();
+      void* writable_view = duplicate_write ? MapViewOfFile(elevated_mapping, FILE_MAP_WRITE, 0, 0, 16) : nullptr;
+      DWORD view_error = writable_view ? ERROR_SUCCESS : (duplicate_write ? GetLastError() : 0);
+      bool view_closed = !writable_view || UnmapViewOfFile(writable_view) != FALSE;
+      bool section_closed = !duplicate_write || CloseHandle(elevated_mapping) != FALSE;
+      printf("POLICY_PROPERTY_SECTION read_magic=%u duplicate_write=%u duplicate_error=%lu writable_view=%u view_error=%lu cleanup=%u\n",
+          unsigned(mapping_magic == 0x47535052), unsigned(duplicate_write), duplicate_error, unsigned(writable_view != nullptr), view_error,
+          unsigned(view_closed && section_closed));
+      Check(mapping_magic == 0x47535052 && view_closed && section_closed, "actual inherited section observation cleanup");
       HANDLE elevated_mutex = nullptr;
       BOOL elevated = DuplicateHandle(GetCurrentProcess(), inherited_mutex, GetCurrentProcess(),
           &elevated_mutex, MUTEX_ALL_ACCESS, FALSE, 0);
@@ -258,6 +275,9 @@ int wmain(int argc, wchar_t** argv) {
       OwnedEvent guest_held{CreateEventW(&security, TRUE, FALSE, nullptr)};
       OwnedEvent guest_release{CreateEventW(&security, TRUE, FALSE, nullptr)};
       Check(guest_held.handle && guest_release.handle, "owned guest hold observation events");
+      OwnedEvent shared_mapping;
+      Check(DuplicateHandle(GetCurrentProcess(), gesher::properties::DiagnosticAreaMapping(), GetCurrentProcess(),
+          &shared_mapping.handle, FILE_MAP_READ, TRUE, 0), "limited inherited area section");
       OwnedEvent shared_mutex;
       Check(DuplicateHandle(GetCurrentProcess(), gesher::properties::DiagnosticAreaMutex(), GetCurrentProcess(),
           &shared_mutex.handle, SYNCHRONIZE | MUTEX_MODIFY_STATE, TRUE, 0), "limited inherited area mutex");
@@ -266,9 +286,10 @@ int wmain(int argc, wchar_t** argv) {
           std::to_wstring(reinterpret_cast<uintptr_t>(done.handle)) + L" " +
           std::to_wstring(reinterpret_cast<uintptr_t>(shared_mutex.handle)) + L" " +
           std::to_wstring(reinterpret_cast<uintptr_t>(guest_held.handle)) + L" " +
-          std::to_wstring(reinterpret_cast<uintptr_t>(guest_release.handle));
+          std::to_wstring(reinterpret_cast<uintptr_t>(guest_release.handle)) + L" " +
+          std::to_wstring(reinterpret_cast<uintptr_t>(shared_mapping.handle));
       gesher::guest::RestrictedLaunch child;
-      auto started = child.Start(executable, command.data(), nullptr, nullptr, startup, CREATE_NO_WINDOW, policy->sid, {log, nul, ready.handle, done.handle, shared_mutex.handle, guest_held.handle, guest_release.handle});
+      auto started = child.Start(executable, command.data(), nullptr, nullptr, startup, CREATE_NO_WINDOW, policy->sid, {log, nul, ready.handle, done.handle, shared_mutex.handle, guest_held.handle, guest_release.handle, shared_mapping.handle});
       Check(CloseHandle(log) && CloseHandle(nul), "close intentional parent stdio handles");
       Check(started.error == ERROR_SUCCESS, "actual lowbox nested child launch");
       HeldPropertyMutex held;
@@ -299,7 +320,8 @@ int wmain(int argc, wchar_t** argv) {
       bool mutex_closed = CloseHandle(shared_mutex.handle) != FALSE; if (mutex_closed) shared_mutex.handle = nullptr;
       bool held_closed = CloseHandle(guest_held.handle) != FALSE; if (held_closed) guest_held.handle = nullptr;
       bool release_closed = CloseHandle(guest_release.handle) != FALSE; if (release_closed) guest_release.handle = nullptr;
-      Check(ready_closed && done_closed && mutex_closed && held_closed && release_closed, "actual property observation handles closed");
+      bool mapping_closed = CloseHandle(shared_mapping.handle) != FALSE; if (mapping_closed) shared_mapping.handle = nullptr;
+      Check(ready_closed && done_closed && mutex_closed && held_closed && release_closed && mapping_closed, "actual property observation handles closed");
       DWORD code = 0; Check(GetExitCodeProcess(child.process(), &code) && code == 0 && child.Stop().confirmed, "actual nested child exit and retirement");
       Check(CloseHandle(private_server) && CloseHandle(private_client), "actual private bootstrap owner cleanup");
       HANDLE verified_log = CreateFileW(log_path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
