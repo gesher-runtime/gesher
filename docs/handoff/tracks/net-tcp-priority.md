@@ -307,3 +307,23 @@ retained until last close then released, post-refusal send, concurrent caller
 getters with exactly one error, and independent refusal after failed-fd
 replacement. system.cc joins exact compiler-role evidence. New Linux-first,
 all actual Windows paths and original supplier/full gates are still required.
+
+The next local revision addresses the getter-during-native-connect review
+finding by restricting virtualization to verified nonblocking attempts.
+DescriptorGuard and the error mutex remain held through that demonstrably
+nonblocking native call and metadata finalization; F_SETFL/FIONBIO use the
+same guard, so the mode cannot change mid-call. Blocking connect releases
+those locks before waiting and is explicitly ineligible for the new refusal
+token. Generic blocking-connect error ownership remains unqualified.
+
+An internal ConnectWithObserver operation dependency is shared by the POSIX
+entry (always a null observer) and the host-only regression. It has no mutable
+global callback or guest symbol registration. A real post-native barrier waits
+for native refusal without reading SO_ERROR, holds finalization, and starts a
+real caller; another thread probes the exact metadata mutex before releasing
+the gap. The final observation requires actual refusal111 then0. Linux and
+both NDK contexts run the corresponding public-call barrier and concurrent
+getter controls. Compiler evidence distinguishes the host GESHER compilation;
+the producer also rejects private observer exports in all three native output
+roles. These controls and the exact-code/generation terminal-refusal boundary
+remain source-only pending independent peer and actual CI.

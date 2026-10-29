@@ -5,6 +5,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
@@ -13,6 +14,9 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef GESHER
+#include "../../compat/posix/src/socket_internal.h"
+#endif
 
 static void require(bool ok, const char* what) {
   if (!ok) { fprintf(stderr, "FAIL TCP priority: %s errno=%d\n", what, errno); exit(1); }
@@ -186,6 +190,98 @@ static void concurrent_error_consumption(int first, int second) {
           ((readers[0].value == ECONNREFUSED && readers[1].value == 0) || (readers[1].value == ECONNREFUSED && readers[0].value == 0)), "exactly one alias consumes connection error");
   require(pthread_cond_destroy(&gate.condition) == 0 && pthread_mutex_destroy(&gate.mutex) == 0, "error gate cleanup");
 }
+struct ConnectWindow {
+  int client; sockaddr_in address;
+  pthread_mutex_t mutex; pthread_cond_t condition;
+  bool native_ready = false, release = false, getter_entered = false, getter_done = false;
+  int metadata_lock_busy = -1;
+  int connect_rc = -99, connect_error = -99, getter_rc = -99, getter_value = -99;
+};
+static void pause_after_native(uintptr_t native, int result, int error, void* raw) {
+  auto& window = *static_cast<ConnectWindow*>(raw);
+  require(result == -1 && (error == EINPROGRESS || error == ECONNREFUSED), "window real connect result");
+#ifdef GESHER
+  gesher::ws::PollEntry p{native, gesher::ws::kPollOut, 0, nullptr};
+  require(gesher::ws::Poll(&p, 1, 5000) == 1 && (p.revents & gesher::ws::kPollErr), "window actual native refusal");
+#else
+  (void)native;
+  pollfd p{window.client, POLLOUT, 0};
+  require(poll(&p, 1, 5000) == 1 && (p.revents & POLLERR), "window actual POSIX refusal");
+#endif
+  require(pthread_mutex_lock(&window.mutex) == 0, "window observer lock");
+  window.native_ready = true; require(pthread_cond_broadcast(&window.condition) == 0, "window native readiness publication");
+  while (!window.release) require(pthread_cond_wait(&window.condition, &window.mutex) == 0, "window post-native barrier");
+  require(pthread_mutex_unlock(&window.mutex) == 0, "window observer unlock");
+}
+static void* window_connect(void* raw) {
+  auto& window = *static_cast<ConnectWindow*>(raw);
+#ifdef GESHER
+  window.connect_rc = gesher::ConnectWithObserver(window.client, &window.address, sizeof(window.address), pause_after_native, &window);
+  window.connect_error = errno;
+#else
+  window.connect_rc = connect(window.client, reinterpret_cast<sockaddr*>(&window.address), sizeof(window.address));
+  window.connect_error = errno;
+  pause_after_native(static_cast<uintptr_t>(window.client), window.connect_rc, window.connect_error, &window);
+#endif
+  return nullptr;
+}
+static void* window_getter(void* raw) {
+  auto& window = *static_cast<ConnectWindow*>(raw); socklen_t length = sizeof(window.getter_value);
+#ifdef GESHER
+  gesher::SocketFd state;
+  require(gesher::LookupSocket(window.client, &state), "window exact descriptor snapshot");
+  const bool entered = state.description->error_mutex.try_lock();
+  if (entered) state.description->error_mutex.unlock();
+  window.metadata_lock_busy = entered ? 0 : 1;
+  require(!entered, "post-native finalization remains serialized against actual caller");
+#endif
+  require(pthread_mutex_lock(&window.mutex) == 0, "window getter entry lock");
+  window.getter_entered = true; require(pthread_cond_broadcast(&window.condition) == 0, "window getter entered");
+  require(pthread_mutex_unlock(&window.mutex) == 0, "window getter entry unlock");
+  window.getter_rc = getsockopt(window.client, SOL_SOCKET, SO_ERROR, &window.getter_value, &length);
+  require(pthread_mutex_lock(&window.mutex) == 0, "window getter lock");
+  window.getter_done = true;
+  require(pthread_mutex_unlock(&window.mutex) == 0, "window getter unlock");
+  return nullptr;
+}
+static void connect_finalization_window() {
+  int reserved = socket(AF_INET, SOCK_STREAM, 0); require(reserved >= 0, "window reserved port");
+  ConnectWindow window{}; window.address.sin_family = AF_INET; window.address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(reserved, reinterpret_cast<sockaddr*>(&window.address), sizeof(window.address)) == 0, "window reserve bind");
+  socklen_t length = sizeof(window.address);
+  require(getsockname(reserved, reinterpret_cast<sockaddr*>(&window.address), &length) == 0, "window reserved address");
+  window.client = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); require(window.client >= 0, "window nonblocking client");
+  require(pthread_mutex_init(&window.mutex, nullptr) == 0 && pthread_cond_init(&window.condition, nullptr) == 0, "window gate initialize");
+  pthread_t connecting, getter;
+  require(pthread_create(&connecting, nullptr, window_connect, &window) == 0, "window connect thread");
+  require(pthread_mutex_lock(&window.mutex) == 0, "window controller lock");
+  timespec deadline{}; require(clock_gettime(CLOCK_REALTIME, &deadline) == 0, "window clock"); deadline.tv_sec += 7;
+  while (!window.native_ready) require(pthread_cond_timedwait(&window.condition, &window.mutex, &deadline) == 0, "window bounded native readiness");
+  require(pthread_mutex_unlock(&window.mutex) == 0, "window controller unlock");
+  require(pthread_create(&getter, nullptr, window_getter, &window) == 0, "window getter thread");
+  require(pthread_mutex_lock(&window.mutex) == 0, "window getter observation lock");
+  require(clock_gettime(CLOCK_REALTIME, &deadline) == 0, "window getter clock"); deadline.tv_sec += 2;
+  while (!window.getter_entered) require(pthread_cond_timedwait(&window.condition, &window.mutex, &deadline) == 0, "window getter entered before finalization release");
+  require(pthread_mutex_unlock(&window.mutex) == 0, "window getter observation unlock");
+  usleep(40000);
+  require(pthread_mutex_lock(&window.mutex) == 0, "window release lock");
+  const bool before_release = window.getter_done;
+  window.release = true; require(pthread_cond_broadcast(&window.condition) == 0 && pthread_mutex_unlock(&window.mutex) == 0, "release real post-native window");
+  require(pthread_join(connecting, nullptr) == 0 && pthread_join(getter, nullptr) == 0, "window threads retired");
+  require(window.connect_rc == -1 && (window.connect_error == EINPROGRESS || window.connect_error == ECONNREFUSED), "window public connect result retained");
+  require(window.getter_rc == 0 && window.getter_value == ECONNREFUSED, "window caller gets actual refusal");
+  int second = -1; length = sizeof(second);
+  require(getsockopt(window.client, SOL_SOCKET, SO_ERROR, &second, &length) == 0 && second == 0, "window refusal consumed exactly once across connect finalization");
+#ifdef GESHER
+  const char* backend = "host-private";
+#else
+  const char* backend = "public-posix";
+#endif
+  printf("TCP_PRIORITY_CONNECT_WINDOW backend=%s native_ready=1 lock_busy=%d getter_before_release=%d first=%d second=%d\n", backend, window.metadata_lock_busy, before_release ? 1 : 0, window.getter_value, second);
+  require(close(window.client) == 0 && close(reserved) == 0, "window endpoints retired");
+  require(pthread_cond_destroy(&window.condition) == 0 && pthread_mutex_destroy(&window.mutex) == 0, "window gate retired");
+  puts("PASS TCP priority: actual connect finalization window consumes refusal once");
+}
 static void connection_controls() {
   int reserved = socket(AF_INET, SOCK_STREAM, 0); require(reserved >= 0, "reserve refused port");
   sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -338,6 +434,7 @@ int main(int argc, char** argv) {
   if (!noninline_only) scenario(1);
   endpoint_controls();
   connection_controls();
+  connect_finalization_window();
   alias_ownership();
   Pair a = pair(); pthread_t thread;
   require(pthread_create(&thread, nullptr, delayed, &a.sender) == 0, "sender thread");

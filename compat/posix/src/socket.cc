@@ -83,6 +83,48 @@ bool MapUnixPath(ws::Address* address, bool binding) {
 // Android's INTERNET permission (<gesher/inet.h>): -1 until first asked, then 0 or 1.
 static std::atomic<int> g_inet_allowed{-1};
 
+namespace gesher {
+int ConnectWithObserver(int fd, const void* raw, uint32_t length, ConnectObserver observer, void* context) {
+  SocketFd state;
+  ws::Address address;
+  if (!Lookup(fd, &state) || !ToAddress(static_cast<const sockaddr*>(raw), length, &address) || !MapUnixPath(&address, false)) return -1;
+  auto call = [&](const SocketFd& current, bool nonblocking) {
+    auto& description = *current.description;
+    std::unique_lock<std::mutex> lock(description.error_mutex);
+    if (description.connect_call_active) return errno = EALREADY, -1;
+    if (description.connect_generation == UINT64_MAX) return errno = EOVERFLOW, -1;
+    const uint64_t generation = ++description.connect_generation;
+    description.consumed_generation = 0; description.consumed_error = 0;
+    description.connect_call_active = true; description.nonblocking_connect = nonblocking;
+    description.state.store(ws::ConnectState::kConnecting);
+    // Blocking connect must remain cancellable and must not hold either
+    // process descriptor serialization or the caller error-query mutex.
+    if (!nonblocking) lock.unlock();
+    const int result = ws::Connect(current.socket, address);
+    const int saved = errno;
+    if (observer) observer(current.socket, result, saved, context);
+    if (!nonblocking) lock.lock();
+    if (description.connect_generation == generation) {
+      const bool pending = saved == EINPROGRESS || saved == EALREADY || saved == EINTR;
+      description.state.store(result == 0 ? ws::ConnectState::kConnected :
+                              pending ? ws::ConnectState::kConnecting : ws::ConnectState::kFailed);
+    }
+    description.connect_call_active = false;
+    errno = saved; return result;
+  };
+  if (state.description->nonblocking.load()) {
+    record_locks::DescriptorGuard descriptor_guard;
+    SocketFd current;
+    if (!LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
+    // Every native mode setter holds the same guard. The verified native call
+    // remains nonblocking through finalization, so this critical section does
+    // not turn a caller's SO_ERROR query into a network-duration wait.
+    if (current.description->nonblocking.load()) return call(current, true);
+  }
+  return call(state, false);
+}
+}  // namespace gesher
+
 extern "C" {
 
 void gesher_set_inet_allowed(int allowed) { g_inet_allowed = allowed ? 1 : 0; }
@@ -225,35 +267,7 @@ int bind(int fd, const struct sockaddr* addr, socklen_t len) {
 }
 
 int connect(int fd, const struct sockaddr* addr, socklen_t len) {
-  SocketFd state;
-  ws::Address address;
-  if (!Lookup(fd, &state) || !ToAddress(addr, len, &address) || !MapUnixPath(&address, false)) {
-    return -1;
-  }
-  uint64_t generation;
-  {
-    std::lock_guard<std::mutex> lock(state.description->error_mutex);
-    if (state.description->connect_call_active) return errno = EALREADY, -1;
-    if (state.description->connect_generation == UINT64_MAX) return errno = EOVERFLOW, -1;
-    generation = ++state.description->connect_generation;
-    state.description->consumed_generation = 0;
-    state.description->consumed_error = 0;
-    state.description->connect_call_active = true;
-    state.description->state.store(ws::ConnectState::kConnecting);
-  }
-  const int result = ws::Connect(state.socket, address);
-  const int saved = errno;
-  const bool pending = saved == EINPROGRESS || saved == EALREADY || saved == EINTR;
-  {
-    std::lock_guard<std::mutex> lock(state.description->error_mutex);
-    if (state.description->connect_generation == generation) {
-      state.description->state.store(result == 0 ? ws::ConnectState::kConnected :
-                                pending ? ws::ConnectState::kConnecting : ws::ConnectState::kFailed);
-    }
-    state.description->connect_call_active = false;
-  }
-  errno = saved;
-  return result;
+  return gesher::ConnectWithObserver(fd, addr, len, nullptr, nullptr);
 }
 
 int listen(int fd, int backlog) {
@@ -688,7 +702,7 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
       if (ws::GetOption(state.socket, option, &v) < 0) return -1;
       const ws::ConnectState phase = state.description->state.load();
       const uint64_t generation = state.description->connect_generation;
-      const bool refusal = state.description->tcp && !state.description->connect_call_active && generation != 0 &&
+      const bool refusal = state.description->tcp && state.description->nonblocking_connect && !state.description->connect_call_active && generation != 0 &&
                            v == ECONNREFUSED && (phase == ws::ConnectState::kConnecting || phase == ws::ConnectState::kFailed);
       const bool consumed = refusal && state.description->consumed_generation == generation && state.description->consumed_error == v;
       if (!WriteInt(consumed ? 0 : v, value, len)) return -1;

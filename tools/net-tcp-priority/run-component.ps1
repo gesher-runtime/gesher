@@ -64,6 +64,11 @@ foreach ($role in 'gesher_arm64.dll','net_tcp_priority_probe.exe') {
 }
 Write-Host 'PASS TCP priority consumer import policy: unknown/private/path/wrong-role controls'
 foreach ($name in $native) { AssertImportRole $name @($m.imports.$name) }
+if (@(Compare-Object $native @($m.private_connect_observer.PSObject.Properties.Name) -CaseSensitive).Count -ne 0) { throw 'Missing exact private observer export roles' }
+foreach ($name in $native) {
+  $proof = $m.private_connect_observer.$name
+  if ($proof.observer_exported -cne $false -or $proof.exports -lt 0 -or $proof.exports_sha256 -cnotmatch '^[0-9a-f]{64}$') { throw "Unproved private connect observer role $name" }
+}
 Write-Host ('TCP_PRIORITY_NDK_PUBLISHER ' + ($publisher | ConvertTo-Json -Compress))
 $commandSources = @{
   'out'=@('compat/posix/src/winsock.cc','compat/posix/src/socket.cc','compat/posix/src/fd.cc','compat/posix/src/system.cc','compat/posix/src/epoll.cc','compat/posix/src/select.cc','compat/bionic/socket_bionic.cc','tests/net-tcp-priority/contract.cc')
@@ -102,6 +107,8 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
   }
   if ($text -notmatch '(?m)^PASS TCP priority: listener datagram and successful connect preserve finite priority-only waits\s*$') { throw "Missing finite endpoint controls $Context" }
   if ($text -notmatch '(?m)^PASS TCP priority: shared aliases preserve dup2 targets last-close EOF concurrent urgent poll and UDP payload\s*$') { throw "Missing alias lifetime controls $Context" }
+  if ($text -notmatch '(?m)^PASS TCP priority: actual connect finalization window consumes refusal once\s*$') { throw "Missing actual finalization window $Context" }
+  if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^TCP_PRIORITY_CONNECT_WINDOW backend=host-private native_ready=1 lock_busy=1 ') { throw 'HOST did not exercise the real private post-native barrier' }
   Write-Host "PASS TCP priority component: $Context; actual noninline contract; inline remains OPEN"
 }
 RunPriority 'host-posix' "$fixture/net_tcp_priority_probe.exe" '--noninline'

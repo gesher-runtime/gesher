@@ -723,7 +723,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
     if (failed_tcp_not_connected[i] && r == (POLLERR | POLLHUP | POLLWRNORM)) {
       auto& description = *entries[i].description;
       std::lock_guard<std::mutex> lock(description.error_mutex);
-      if (!description.connect_call_active && description.state.load() == ConnectState::kFailed &&
+      if (description.nonblocking_connect && !description.connect_call_active && description.state.load() == ConnectState::kFailed &&
           description.connect_generation != 0 && description.consumed_generation == description.connect_generation &&
           description.consumed_error == ECONNREFUSED) r &= ~POLLERR;
     }

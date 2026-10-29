@@ -71,6 +71,7 @@ struct SocketDescription {
   uint64_t connect_generation = 0, consumed_generation = 0; // error_mutex
   int consumed_error = 0;  // exact caller-observed code, never a generic error mask
   bool connect_call_active = false;  // error_mutex
+  bool nonblocking_connect = false;  // only this bounded attempt is virtualized
   std::atomic<bool> nonblocking{false}, reuse_addr{false};
   std::mutex error_mutex;
   std::mutex status_mutex;
@@ -229,6 +230,11 @@ struct SocketFd {
   // Open-description lifetime: dup/dup2 retain the same connect lifecycle.
   std::shared_ptr<ws::SocketDescription> description;
 };
+
+// Internal operation dependency for a real post-native-call CI barrier. The
+// POSIX entry always passes nullptr; no mutable hook or guest symbol exists.
+using ConnectObserver = void (*)(ws::Socket, int, int, void*);
+int ConnectWithObserver(int fd, const void* address, uint32_t length, ConnectObserver observer, void* context);
 
 // Takes ownership of `state.socket`: returns its new fd, or -1 with errno set
 // (the socket is then closed).

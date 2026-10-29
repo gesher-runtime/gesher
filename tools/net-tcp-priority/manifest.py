@@ -34,21 +34,30 @@ for build, required in [('out', ['compat/posix/src/winsock.cc', 'compat/posix/sr
     compilers[build] = dict(configured=paths[0], resolved=str(compiler), sha256=sha(compiler), version=subprocess.check_output([paths[0], '--version'], text=True), metadata_sha256=sha(configs[0]), commands=selected)
 ndk_source = json.loads(Path('tcp-ndk-source.json').read_text())
 compilers['ndk'] = json.loads(Path('tcp-guests-compiler.json').read_text())
+assert '-DGESHER' in shlex.split(compilers['out']['commands']['tests/net-tcp-priority/contract.cc'])
+assert all(not any(arg.startswith('-DGESHER') for arg in compilers['ndk'][abi]['argv']) for abi in ('x86_64', 'arm64-v8a'))
 files = subprocess.check_output(['git', 'ls-files', '-z'], text=True).split('\0')
 sources = {p: sha(p) for p in files if p and Path(p).is_file()}
 readobj = Path(compilers['out']['configured']).parent / 'llvm-readobj'
 imports = {}
+private_observer = {}
 for name in ['gesher-exec.exe', 'net_tcp_priority_probe.exe', 'gesher_arm64.dll']:
     raw = subprocess.check_output([str(readobj), '--coff-imports', str(Path('tcp-fixture') / name)], text=True)
     names = re.findall(r'^\s*Name:\s*(\S+)', raw, re.M)
     imports[name] = names
     print('TCP_PRIORITY_NATIVE_IMPORTS', name, json.dumps(names), flush=True)
+    exports = subprocess.check_output([str(readobj), '--coff-exports', str(Path('tcp-fixture') / name)], text=True)
+    export_names = re.findall(r'^\s*Name:\s*(\S+)', exports, re.M)
+    forbidden = [symbol for symbol in export_names if 'ConnectWithObserver' in symbol]
+    assert not forbidden, ('Private connect observer exported', name, forbidden)
+    private_observer[name] = dict(exports=len(export_names), observer_exported=False, exports_sha256=hashlib.sha256(exports.encode()).hexdigest())
+    print('TCP_PRIORITY_PRIVATE_CONNECT_OBSERVER', name, json.dumps(private_observer[name]), flush=True)
 controls()
 for name, names in imports.items():
     assert allowed(name, names), ('Wrong native import role', name, names)
 outputs = {p.name: dict(role=roles[p.name], sha256=sha(p)) for p in Path('tcp-fixture').iterdir()}
 assert set(outputs) == set(roles)
-manifest = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'], source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], producer_job='compile', scope='noninline-only', ndk_archive=ndk_source, import_policy_sha256=sha('tools/net-tcp-priority/import-policy.json'), imports=imports, compilers=compilers, sources=sources, outputs=outputs)
+manifest = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'], source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], producer_job='compile', scope='noninline-only', ndk_archive=ndk_source, import_policy_sha256=sha('tools/net-tcp-priority/import-policy.json'), imports=imports, private_connect_observer=private_observer, compilers=compilers, sources=sources, outputs=outputs)
 Path('tcp-fixture/provenance.json').write_text(json.dumps(manifest, indent=2) + '\n')
 print('TCP_PRIORITY_PRODUCER', json.dumps({k: manifest[k] for k in ('source', 'run', 'attempt', 'scope')}))
 for role, details in compilers.items():
