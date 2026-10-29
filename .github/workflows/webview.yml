@@ -69,7 +69,8 @@ jobs:
         run: |
           cmake -S probes/webview -B out-webview -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" \
-            -DLLVM_MINGW="$HOME/toolchain/$LLVM_MINGW_NAME" -DCMAKE_BUILD_TYPE=Release
+            -DLLVM_MINGW="$HOME/toolchain/$LLVM_MINGW_NAME" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           set +e
           ninja -C out-webview -k 0 > probe-build.log 2>&1
           set -e
@@ -85,6 +86,8 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           test -f out-webview/webview2_probe_dll.exe
+          test -f out-webview/webview_startup_probe.exe
+          python3 -c 'import json; from pathlib import Path; rows=[r for r in json.load(open("out-webview/compile_commands.json")) if r["file"].endswith("webview_host.cc")]; hook=[r for r in rows if "webview_startup_probe.dir" in r["command"]]; normal=[r for r in rows if "webview2_probe" in r["command"]]; assert len(hook)==1 and "GESHER_WEB4_STARTUP_TESTS" in hook[0]["command"] and len(normal)==2 and all("GESHER_WEB4_STARTUP_TESTS" not in r["command"] for r in normal); assert b"GESHER_WEB4_STARTUP_FAULT" in Path("out-webview/webview_startup_probe.exe").read_bytes(); print("PASS web4 startup: compile roles separated and fault selector present")'
 
       - name: Collect the probes
         run: |
@@ -154,6 +157,26 @@ jobs:
       - name: WebView2 Runtime
         shell: pwsh
         run: pwsh -NoProfile -File tests/windows/webview/Runtime.ps1
+
+      - name: Startup lifecycle fault probe
+        shell: pwsh
+        run: |
+          foreach ($fault in 'normal', 'com', 'class', 'window', 'hook', 'ready', 'decision', 'late') {
+            $p = Start-Process 'dist/webview_startup_probe.exe' -ArgumentList $fault -NoNewWindow -PassThru `
+              -RedirectStandardOutput "$fault.log" -RedirectStandardError "$fault.err"
+            $timeoutMs = if ($fault -eq 'normal') { 45000 } else { 20000 }
+            if (-not $p.WaitForExit($timeoutMs)) {
+              $p.Kill($true)
+              if (-not $p.WaitForExit(5000)) { throw "$fault survived forced cleanup" }
+              throw "$fault timed out"
+            }
+            $out = (Get-Content -Raw "$fault.log" -ErrorAction SilentlyContinue) +
+              (Get-Content -Raw "$fault.err" -ErrorAction SilentlyContinue)
+            Write-Host $out
+            if ($p.ExitCode -ne 0 -or $out -notmatch "PASS startup fault=$fault ") {
+              throw "$fault failed exit $($p.ExitCode)"
+            }
+          }
 
       - name: WebView2 probes
         shell: pwsh

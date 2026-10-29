@@ -33,6 +33,17 @@ HWND g_parking = nullptr;      // a hidden top-level window: parked containers
 std::map<UINT_PTR, std::function<void()>> g_timers;  // WebView STA only
 UINT_PTR g_next_timer = 1;
 
+bool StartupFault(const char* name) {
+#ifdef GESHER_WEB4_STARTUP_TESTS
+  char selected[32];
+  DWORD length = GetEnvironmentVariableA("GESHER_WEB4_STARTUP_FAULT", selected, sizeof(selected));
+  return length != 0 && length < sizeof(selected) && strcmp(selected, name) == 0;
+#else
+  (void)name;
+  return false;
+#endif
+}
+
 struct ThreadStart {
   ThreadStart(HANDLE r, HANDLE d) : ready(r), decision(d), deadline(GetTickCount64() + 10000) {}
   ~ThreadStart() { CloseHandle(ready); CloseHandle(decision); }
@@ -88,7 +99,8 @@ DWORD WINAPI ThreadMain(void* argument) {
       static_cast<std::shared_ptr<ThreadStart>*>(argument));
   std::shared_ptr<ThreadStart> startup = *passed;
   passed.reset();
-  HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  HRESULT initialized = StartupFault("com") ? E_FAIL :
+      CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
   if (FAILED(initialized)) { SetEvent(startup->ready); return 0; }
   HINSTANCE instance = GetModuleHandleW(nullptr);
   WNDCLASSEXW wc = {};
@@ -104,7 +116,9 @@ DWORD WINAPI ThreadMain(void* argument) {
   wc.lpfnWndProc = DefWindowProcW;
   wc.lpszClassName = kParkingClass;
   classes_ready &= RegisterClassExW(&wc) != 0;
-  if (!classes_ready) { SetEvent(startup->ready); CoUninitialize(); return 0; }
+  if (!classes_ready || StartupFault("class")) {
+    SetEvent(startup->ready); CoUninitialize(); return 0;
+  }
   HWND task_window = CreateWindowExW(0, kTaskClass, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
                                     instance, nullptr);
   HWND parking = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kParkingClass,
@@ -113,15 +127,17 @@ DWORD WINAPI ThreadMain(void* argument) {
   HWINEVENTHOOK location_hook = SetWinEventHook(
       EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr,
       OnLocationChange, GetCurrentProcessId(), 0, WINEVENT_OUTOFCONTEXT);
+  if (StartupFault("late")) Sleep(12000);
   bool published = false;
   {
     std::lock_guard<std::mutex> guard(startup->mutex);
     if (!startup->abandoned && GetTickCount64() < startup->deadline && task_window != nullptr &&
-        parking != nullptr && location_hook != nullptr && SetEvent(startup->ready)) {
+        parking != nullptr && location_hook != nullptr && !StartupFault("window") &&
+        !StartupFault("hook") && !StartupFault("ready") && SetEvent(startup->ready)) {
       g_task_window = task_window;
       g_parking = parking;
       startup->published = published = true;
-    } else {
+    } else if (!StartupFault("ready")) {
       SetEvent(startup->ready);
     }
   }
@@ -168,7 +184,7 @@ void EnsureThread() {
       std::lock_guard<std::mutex> guard(startup->mutex);
       if (result == WAIT_OBJECT_0 && startup->published && GetTickCount64() < startup->deadline) {
         startup->accepted = true;
-        if (!SetEvent(decision)) startup->accepted = false;
+        if (StartupFault("decision") || !SetEvent(decision)) startup->accepted = false;
       }
       if (!startup->accepted) {
         startup->abandoned = true;

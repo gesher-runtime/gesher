@@ -21,6 +21,32 @@
 . "$PSScriptRoot/../graphics/WindowChecks.ps1"
 . "$PSScriptRoot/../webview/Runtime.ps1"
 
+# The fault hook exists only in the separately named probe, never in dalvikvm.
+foreach ($fault in @('normal', 'com', 'class', 'window', 'hook', 'ready', 'decision', 'late')) {
+  $out = Join-Path $env:RUNNER_TEMP "web4-startup-$fault.log"
+  $err = Join-Path $env:RUNNER_TEMP "web4-startup-$fault.err"
+  $probe = Join-Path $Dir 'webview_startup_probe.exe'
+  if (-not (Test-Path -LiteralPath $probe)) {
+    Write-Host "FAIL web4 startup: missing $probe"; $script:failed++; break
+  }
+  $p = Start-Process -FilePath $probe -ArgumentList $fault -NoNewWindow -PassThru `
+    -RedirectStandardOutput $out -RedirectStandardError $err
+  $timeoutMs = if ($fault -eq 'normal') { 45000 } else { 20000 }
+  if (-not $p.WaitForExit($timeoutMs)) {
+    $p.Kill($true)
+    if (-not $p.WaitForExit(5000)) { throw "Startup probe $fault survived forced cleanup" }
+    Write-Host "FAIL web4 startup: $fault timed out"; $script:failed++
+  } else {
+    $log = (Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue) +
+      (Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)
+    Write-Host $log
+    if ($p.ExitCode -ne 0 -or $log -notmatch "PASS startup fault=$fault ") {
+      Write-Host "FAIL web4 startup: $fault exit $($p.ExitCode)"; $script:failed++
+    }
+  }
+  $p.Dispose()
+}
+
 if (-not ('GesherWebViewWin32' -as [type])) {
   Add-Type -TypeDefinition @'
 using System;

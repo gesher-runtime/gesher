@@ -41,5 +41,14 @@ foreach(_variant static dll)
   endif()
 endforeach()
 
+# Separate test-only host variant: never included in the app runtime or installer.
+add_executable(webview_startup_probe ${CMAKE_CURRENT_LIST_DIR}/webview_startup_probe.cc
+  ${_wv}/webview_host.cc ${_wv}/webview2_loader.cc)
+target_include_directories(webview_startup_probe PRIVATE ${_wv})
+target_include_directories(webview_startup_probe SYSTEM PRIVATE ${WEBVIEW2_INCLUDE_DIRS})
+target_compile_definitions(webview_startup_probe PRIVATE GESHER_WEB4_STARTUP_TESTS=1)
+target_compile_options(webview_startup_probe PRIVATE -Wall -Werror -Wno-unused-parameter)
+target_link_libraries(webview_startup_probe PRIVATE ${_libs})
+
 # What the probe job ships next to the dll variant.
 configure_file(${WEBVIEW2_LOADER_DLL} ${CMAKE_BINARY_DIR}/WebView2Loader.dll COPYONLY)
