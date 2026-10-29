@@ -73,11 +73,6 @@ public static class TsfJobSupervisor {
   [DllImport("kernel32.dll")] static extern uint GetCurrentProcessId();
   [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
   [DllImport("kernel32.dll",SetLastError=true)] static extern uint GetConsoleProcessList([Out] uint[] processes,uint count);
-  [DllImport("kernel32.dll",SetLastError=true)] static extern bool AllocConsole();
-  [DllImport("kernel32.dll",SetLastError=true)] static extern bool FreeConsole();
-  [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int which);
-  [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetStdHandle(int which,IntPtr handle);
-  [DllImport("user32.dll",SetLastError=true)] static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool DuplicateHandle(IntPtr source,IntPtr handle,IntPtr target,out IntPtr copy,uint access,bool inherit,uint options);
 
   public sealed class Result {
@@ -179,62 +174,19 @@ public static class TsfJobSupervisor {
     for(int i=0;i<count;i++) if(processes[i]==GetCurrentProcessId()) return true;
     return false;
   }
+  static string ConsoleMembers(bool invalid,uint requiredPid) {
+    uint[] processes=new uint[256]; uint count=GetConsoleProcessList(processes,invalid?0u:(uint)processes.Length);
+    if(count==0 || count>processes.Length) throw new IOException("Console process list unavailable");
+    Array.Sort(processes,0,(int)count); bool found=false; var ids=new StringBuilder();
+    for(int i=0;i<count;i++) { if(processes[i]==requiredPid) found=true; ids.Append(processes[i]).Append(','); }
+    if(!found) throw new IOException("Console membership missing");
+    return ids.ToString();
+  }
   public static string TestConsoleDetails() {
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
     uint[] processes=new uint[256]; uint count=GetConsoleProcessList(processes,(uint)processes.Length); int error=count==0?Marshal.GetLastWin32Error():0;
     string ids=""; if(count<=processes.Length) for(int i=0;i<count;i++) ids+=(i==0?"":",")+processes[i];
     return "pid="+GetCurrentProcessId()+" hwnd="+GetConsoleWindow().ToInt64()+" count="+count+" error="+error+" members="+ids;
-  }
-  public sealed class ConsoleLease { internal IntPtr Host, Input, Output, Error; public uint Pid; public long Birth; public string Image; }
-  public static ConsoleLease TestCreateConsole() {
-    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || TestParentConsole()) throw new InvalidOperationException("CI only; console must be absent");
-    var lease=new ConsoleLease {Input=GetStdHandle(-10),Output=GetStdHandle(-11),Error=GetStdHandle(-12)};
-    Check(AllocConsole(),"Allocate isolated console");
-    var allocated=new HashSet<IntPtr> {GetStdHandle(-10),GetStdHandle(-11),GetStdHandle(-12)};
-    allocated.Remove(lease.Input); allocated.Remove(lease.Output); allocated.Remove(lease.Error); allocated.Remove(IntPtr.Zero); allocated.Remove(new IntPtr(-1));
-    try {
-      Check(SetStdHandle(-10,lease.Input),"Restore parent stdin"); Check(SetStdHandle(-11,lease.Output),"Restore parent stdout"); Check(SetStdHandle(-12,lease.Error),"Restore parent stderr");
-      foreach(IntPtr h in new List<IntPtr>(allocated)) {
-        if(!CloseHandle(h)) throw Native("Close allocated console handle");
-        allocated.Remove(h);
-      }
-      if(!TestParentConsole()) throw new IOException("Allocated console membership unproved");
-      uint pid; if(GetWindowThreadProcessId(GetConsoleWindow(),out pid)==0 || pid==0) throw Native("Console host window owner");
-      lease.Pid=pid; lease.Host=OpenProcess(0x100000|0x1000,false,pid); if(!Valid(lease.Host)) throw Native("Retain console host");
-      if(WaitForSingleObject(lease.Host,0)!=WAIT_TIMEOUT) throw new IOException("Console host not live");
-      long exit,kernel,user; Check(GetProcessTimes(lease.Host,out lease.Birth,out exit,out kernel,out user),"Console host birth");
-      var image=new StringBuilder(32768); uint size=(uint)image.Capacity; Check(QueryFullProcessImageName(lease.Host,0,image,ref size),"Console host image"); lease.Image=image.ToString();
-      if(lease.Birth<=0 || !String.Equals(lease.Image,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"conhost.exe"),StringComparison.OrdinalIgnoreCase)) throw new IOException("Unexpected console host identity");
-      return lease;
-    } catch {
-      bool input=SetStdHandle(-10,lease.Input), output=SetStdHandle(-11,lease.Output), error=SetStdHandle(-12,lease.Error);
-      bool restored=input && output && error && GetStdHandle(-10)==lease.Input && GetStdHandle(-11)==lease.Output && GetStdHandle(-12)==lease.Error;
-      bool closedAllocated=true; foreach(IntPtr h in allocated) if(!CloseHandle(h)) { closedAllocated=false; lock(QuarantinedTestProcesses) QuarantinedTestProcesses.Add(h); }
-      bool freed=FreeConsole();
-      input=SetStdHandle(-10,lease.Input); output=SetStdHandle(-11,lease.Output); error=SetStdHandle(-12,lease.Error);
-      restored=restored && input && output && error && GetStdHandle(-10)==lease.Input && GetStdHandle(-11)==lease.Output && GetStdHandle(-12)==lease.Error;
-      bool retired=Valid(lease.Host) && WaitForSingleObject(lease.Host,5000)==WAIT_OBJECT_0;
-      bool closed=retired && CloseHandle(lease.Host);
-      if(Valid(lease.Host) && !closed) lock(QuarantinedTestProcesses) QuarantinedTestProcesses.Add(lease.Host);
-      if(!restored || !closedAllocated || !freed || !retired || !closed) Environment.FailFast("Console setup failed with unproved cleanup");
-      throw;
-    }
-  }
-  public static void TestCloseConsole(ConsoleLease lease) {
-    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || lease==null || !Valid(lease.Host)) throw new InvalidOperationException("Invalid console lease");
-    bool freed=FreeConsole();
-    bool input=SetStdHandle(-10,lease.Input), output=SetStdHandle(-11,lease.Output), error=SetStdHandle(-12,lease.Error);
-    bool restored=input && output && error && GetStdHandle(-10)==lease.Input && GetStdHandle(-11)==lease.Output && GetStdHandle(-12)==lease.Error;
-    bool retired=WaitForSingleObject(lease.Host,5000)==WAIT_OBJECT_0;
-    bool closed=retired && CloseHandle(lease.Host);
-    if(!closed) lock(QuarantinedTestProcesses) QuarantinedTestProcesses.Add(lease.Host);
-    if(!freed || !restored || !retired || !closed) Environment.FailFast("Console retirement unproved freed="+freed+" restored="+restored+" retired="+retired+" closed="+closed);
-    lease.Host=IntPtr.Zero;
-  }
-  public static bool TestConsoleLease(ConsoleLease lease) {
-    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || lease==null || !Valid(lease.Host) || !TestParentConsole()) return false;
-    uint pid; long birth,exit,kernel,user;
-    return GetWindowThreadProcessId(GetConsoleWindow(),out pid)!=0 && pid==lease.Pid && WaitForSingleObject(lease.Host,0)==WAIT_TIMEOUT && GetProcessTimes(lease.Host,out birth,out exit,out kernel,out user) && birth==lease.Birth;
   }
   public static bool TestDeniedParent(IntPtr process,uint expectedPid) {
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
@@ -301,7 +253,7 @@ public static class TsfJobSupervisor {
   // mainMs is fixed at 45000 for the real probe; shorter only in controlled CI tests.
   public static Result Run(string executable,string arguments,int mainMs,string fault) {
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
-    if(mainMs<1 || mainMs>45000 || (fault!="" && fault!="terminate-denied" && fault!="query-denied" && fault!="diag-detached-unlimited" && fault!="diag-console-limited" && fault!="diag-console-unlimited" && fault!="diag-inherit-limited" && fault!="diag-inherit-unlimited")) throw new ArgumentException();
+    if(mainMs<1 || mainMs>45000 || (fault!="" && fault!="terminate-denied" && fault!="query-denied" && fault!="console-invalid" && fault!="console-missing" && fault!="console-changed" && fault!="diag-detached-unlimited" && fault!="diag-console-limited" && fault!="diag-console-unlimited" && fault!="diag-inherit-limited" && fault!="diag-inherit-unlimited")) throw new ArgumentException();
     Result r=new Result(); var owned=new List<IntPtr>();
     IntPtr job=IntPtr.Zero,query=IntPtr.Zero,denied=IntPtr.Zero,root=IntPtr.Zero,thread=IntPtr.Zero;
     IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero;
@@ -341,10 +293,14 @@ public static class TsfJobSupervisor {
       Check(UpdateProcThreadAttribute(attrs,0,new IntPtr(0x20002),handles,new UIntPtr((uint)(3*IntPtr.Size)),IntPtr.Zero,IntPtr.Zero),"Whitelist inherited handles");
       SIX start=new SIX(); start.si.size=Marshal.SizeOf(typeof(SIX)); start.si.flags=0x100; start.si.input=input; start.si.output=output; start.si.error=error; start.attributes=attrs;
       PI pi; executable=Path.GetFullPath(executable);
-      bool detached=limited || fault=="diag-detached-unlimited";
+      bool production=limited && fault!="diag-console-limited";
+      bool detached=(limited && !production) || fault=="diag-detached-unlimited";
       if(fault=="diag-console-limited") detached=false;
-      uint creation=detached?0x0008000cu:0x08080004u; // Detached when constrained; controlled descendants retain their original path.
+      uint creation=detached?0x0008000cu:0x08080004u;
       if(fault=="diag-inherit-limited" || fault=="diag-inherit-unlimited") creation=0x00080004u;
+      if(production) creation=0x00080004u;
+      string console=null;
+      if(production) console=ConsoleMembers(fault=="console-invalid",fault=="console-missing"?0u:GetCurrentProcessId());
       if((fault=="diag-inherit-limited" || fault=="diag-inherit-unlimited") && !TestParentConsole()) throw new IOException("Inherited console missing before creation");
       Check(CreateProcess(executable,new StringBuilder("\""+executable+"\" "+arguments),IntPtr.Zero,IntPtr.Zero,true,creation,IntPtr.Zero,Path.GetDirectoryName(executable),ref start,out pi),"Create suspended child");
       root=own(pi.process); thread=own(pi.thread); created=true; r.Pid=pi.pid; r.RootHandleValue=root.ToInt64();
@@ -364,6 +320,8 @@ public static class TsfJobSupervisor {
       rootIdentity.Member=member;
       Accounting before=Count(job); r.PreResumeActive=before.active; if(!member || before.active!=1 || before.total!=1) throw new InvalidOperationException("Pre-resume job census failed");
       if((fault=="diag-inherit-limited" || fault=="diag-inherit-unlimited") && !TestParentConsole()) throw new IOException("Inherited console precondition unproved");
+      if(fault=="console-changed") console+="0,"; // CI-only changed-snapshot fault.
+      if(production && console!=ConsoleMembers(false,GetCurrentProcessId())) throw new IOException("Console membership changed before resume");
       if(ResumeThread(thread)!=1) throw Native("Resume exactly one suspension");
       while(true) {
         long remaining=mainMs-main.ElapsedMilliseconds;
@@ -465,6 +423,7 @@ public static class TsfJobSupervisor {
         }
         if(!r.RootSignaled || !r.JobEmpty || !r.WritersRetired) r.Errors.Add("Cleanup unproved within shared 5000ms budget");
         if(r.JobEmpty && r.TotalProcesses!=r.Processes.Count) r.Errors.Add("Cumulative associations do not match captured unique identities: total="+r.TotalProcesses+" identities="+r.Processes.Count);
+        if(limited && r.JobEmpty && r.TotalProcesses!=1) r.Errors.Add("Single-process job accumulated unexpected associations: "+r.TotalProcesses);
       }
       if(Valid(output) && Valid(error)) {
         try { Check(GetFileSizeEx(output,out r.StdoutBytes),"Final stdout size"); Check(GetFileSizeEx(error,out r.StderrBytes),"Final stderr size");
