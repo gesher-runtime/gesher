@@ -36,8 +36,8 @@ try {
   $stdout = $process.StandardOutput.ReadToEndAsync(); $stderr = $process.StandardError.ReadToEndAsync()
   try {
     if (-not $process.WaitForExit(45000)) {
-      $process.Kill($true)
-      if (-not $process.WaitForExit(5000)) { throw 'Provider termination not proved' }
+      try { $process.Kill($true) } catch { }
+      if (-not $process.WaitForExit(5000)) { [Environment]::FailFast('Provider termination not proved') }
       throw 'Actual provider timed out'
     }
     if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout,$stderr),5000)) { throw 'Provider output drain failed' }
