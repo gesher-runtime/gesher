@@ -1,0 +1,37 @@
+name: net-tcp-priority-characterization
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/net-tcp-priority]
+    paths: [.github/workflows/net-tcp-priority-characterization.yml, tests/net-tcp-priority/winsock_oracle.cc, tests/net-tcp-priority/contract.cc]
+permissions:
+  contents: read
+jobs:
+  linux-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and execute independent Linux loopback reference
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
+          timeout 20 /tmp/tcp-priority-reference
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Compile independent WinSDK oracle in CI
+        shell: cmd
+        run: cl /nologo /std:c++20 /W4 /WX tests\net-tcp-priority\winsock_oracle.cc /Fe:urgent-oracle.exe /link ws2_32.lib
+      - name: Observe actual queued and consumed urgent marks
+        shell: pwsh
+        run: |
+          & ./urgent-oracle.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Urgent characterization failed' }

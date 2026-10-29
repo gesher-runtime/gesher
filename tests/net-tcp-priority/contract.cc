@@ -1,0 +1,110 @@
+// The identical contract is compiled against Linux, Gesher host POSIX, and both NDK ABIs.
+#include <arpa/inet.h>
+#include <errno.h>
+#include <poll.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/epoll.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <time.h>
+#include <unistd.h>
+
+static void require(bool ok, const char* what) {
+  if (!ok) { fprintf(stderr, "FAIL TCP priority: %s errno=%d\n", what, errno); exit(1); }
+}
+struct Pair { int sender, receiver; };
+static Pair pair() {
+  int listener = socket(AF_INET, SOCK_STREAM, 0);
+  require(listener >= 0, "listener");
+  sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "bind");
+  socklen_t length = sizeof(address);
+  require(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length) == 0, "address");
+  require(listen(listener, 1) == 0, "listen");
+  int sender = socket(AF_INET, SOCK_STREAM, 0);
+  require(sender >= 0 && connect(sender, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "connect");
+  int receiver = accept(listener, nullptr, nullptr);
+  require(receiver >= 0, "accept");
+  timeval timeout{2, 0};
+  require(setsockopt(receiver, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0, "receive deadline");
+  require(close(listener) == 0, "listener close");
+  return {sender, receiver};
+}
+static void ready(int fd, bool urgent, int timeout = 0) {
+  pollfd p{fd, POLLPRI, 0};
+  require(poll(&p, 1, timeout) == (urgent ? 1 : 0), urgent ? "poll urgent" : "poll no urgent");
+  require(p.revents == (urgent ? POLLPRI : 0), "priority mask");
+  fd_set exceptions; FD_ZERO(&exceptions); FD_SET(fd, &exceptions);
+  timeval zero{};
+  require(select(fd + 1, nullptr, nullptr, &exceptions, &zero) == (urgent ? 1 : 0), "select exception count");
+  require((FD_ISSET(fd, &exceptions) != 0) == urgent, "select exception membership");
+}
+static long long millis() {
+  timespec t{}; require(clock_gettime(CLOCK_MONOTONIC, &t) == 0, "clock");
+  return static_cast<long long>(t.tv_sec) * 1000 + t.tv_nsec / 1000000;
+}
+static void scenario(int inline_oob) {
+  Pair a = pair(), other = pair();
+  require(setsockopt(a.receiver, SOL_SOCKET, SO_OOBINLINE, &inline_oob, sizeof(inline_oob)) == 0, "inline option");
+  ready(a.receiver, false);
+  long long start = millis(); ready(a.receiver, false, 60);
+  require(millis() - start >= 40 && millis() - start < 1500, "bounded no-data wait");
+  int ep = epoll_create1(0); require(ep >= 0, "epoll create");
+  epoll_event interest{}; interest.events = EPOLLPRI; interest.data.u64 = 0x12345678;
+  require(epoll_ctl(ep, EPOLL_CTL_ADD, a.receiver, &interest) == 0, "epoll add");
+  require(send(a.sender, "abc", 3, 0) == 3, "normal send");
+  pollfd normal{a.receiver, POLLIN, 0}; require(poll(&normal, 1, 2000) == 1 && normal.revents == POLLIN, "normal data arrived");
+  ready(a.receiver, false, 30);
+  require(send(a.sender, "!", 1, MSG_OOB) == 1, "urgent send");
+  ready(a.receiver, true, 2000); ready(a.receiver, true);
+  int duplicate = dup(a.receiver); require(duplicate >= 0, "dup");
+  pollfd many[] = {{other.receiver, POLLPRI, 0}, {a.receiver, POLLIN | POLLPRI, 0}, {duplicate, POLLPRI, 0}, {-1, POLLPRI, 99}};
+  require(poll(many, 4, 0) == 2 && many[0].revents == 0 && many[1].revents == (POLLIN | POLLPRI) && many[2].revents == POLLPRI && many[3].revents == 0, "multi descriptor aliases and simultaneous normal data");
+  epoll_event out{}; require(epoll_wait(ep, &out, 1, 2000) == 1 && out.events == EPOLLPRI && out.data.u64 == interest.data.u64, "epoll urgent");
+  require(epoll_wait(ep, &out, 1, 0) == 1 && out.events == EPOLLPRI, "epoll level repoll");
+  char bytes[4]{};
+  if (!inline_oob) {
+    require(recv(duplicate, bytes, 1, MSG_OOB) == 1 && bytes[0] == '!', "consume only urgent byte through alias");
+    ready(a.receiver, false); ready(duplicate, false);
+    require(epoll_wait(ep, &out, 1, 0) == 0, "epoll urgent cleared before normal read");
+  }
+  int received = 0;
+  while (received < 3) {
+    int n = static_cast<int>(recv(a.receiver, bytes + received, 3 - received, 0));
+    require(n > 0, "normal prefix progress"); received += n;
+  }
+  require(memcmp(bytes, "abc", 3) == 0, "normal prefix preserved");
+  if (inline_oob) {
+    ready(a.receiver, true);
+    require(recv(a.receiver, bytes, 1, 0) == 1 && bytes[0] == '!', "inline urgent read");
+    ready(a.receiver, false);
+    require(epoll_wait(ep, &out, 1, 0) == 0, "inline urgent cleared");
+  }
+  require(close(duplicate) == 0 && close(ep) == 0, "alias epoll cleanup");
+  require(close(a.sender) == 0, "peer close");
+  normal = {a.receiver, POLLIN, 0}; require(poll(&normal, 1, 2000) == 1, "peer EOF arrived");
+  pollfd eof{a.receiver, POLLPRI, 0}; require(poll(&eof, 1, 0) >= 0 && !(eof.revents & POLLPRI), "EOF is not urgent");
+  require(close(a.receiver) == 0 && close(other.sender) == 0 && close(other.receiver) == 0, "cleanup");
+  printf("PASS TCP priority: inline=%d queue/repoll/consume/select/epoll/dup/multi/normal/timeout/EOF\n", inline_oob);
+}
+static void* delayed(void* raw) {
+  int fd = *static_cast<int*>(raw);
+  usleep(40000);
+  require(send(fd, "?", 1, MSG_OOB) == 1, "concurrent urgent send");
+  return nullptr;
+}
+int main() {
+  scenario(0); scenario(1);
+  Pair a = pair(); pthread_t thread;
+  require(pthread_create(&thread, nullptr, delayed, &a.sender) == 0, "sender thread");
+  ready(a.receiver, true, 2000);
+  require(pthread_join(thread, nullptr) == 0, "sender joined");
+  char byte{}; require(recv(a.receiver, &byte, 1, MSG_OOB) == 1 && byte == '?', "concurrent byte preserved");
+  ready(a.receiver, false, 30);
+  require(close(a.sender) == 0 && close(a.receiver) == 0, "concurrent cleanup");
+  puts("PASS TCP priority: delayed arrival bounded wake and cleanup");
+  puts("PASS TCP priority: all contract checks passed");
+}
