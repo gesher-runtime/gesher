@@ -3,6 +3,8 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/trusted-sg-client.ps1"
 $broker = (Resolve-Path -LiteralPath (Join-Path $Dir 'binderd.exe')).Path
 $actor = (Resolve-Path -LiteralPath (Join-Path $Dir 'binder_sg_actor.exe')).Path
+if (-not [TrustedSgJob]::FixtureProveCloseFailure()) { throw 'checked native close failure was not retained and retried' }
+Write-Host 'SG_CHECKED_CLOSE failure_retained=1 exact_retry_closed=1'
 foreach ($stage in 1,2,3,4,5,6) {
   $failed = $false
   try {

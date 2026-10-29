@@ -39,6 +39,8 @@ public static class TrustedSgJob {
     static extern bool TerminateJobObject(IntPtr job, uint code);
     [DllImport("kernel32.dll", SetLastError=true)]
     static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern IntPtr CreateEventW(IntPtr security, bool manual, bool initial, string name);
     [StructLayout(LayoutKind.Sequential)]
     struct Security { public uint Length; public IntPtr Descriptor; [MarshalAs(UnmanagedType.Bool)] public bool Inherit; }
     [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
@@ -92,6 +94,7 @@ public static class TrustedSgJob {
     static readonly Owner[] QuarantineOwners = new Owner[32];
     static int quarantineCount;
     static int quarantineOwnerCount;
+    static bool fixtureFailClose;
     public static bool LastStartupRollbackConfirmed;
     static void Retain(IntPtr handle) {
         if (handle == IntPtr.Zero) return;
@@ -103,10 +106,28 @@ public static class TrustedSgJob {
     static void CloseOwned(ref IntPtr handle) {
         IntPtr current = handle;
         handle = IntPtr.Zero;
-        if (current != IntPtr.Zero && !CloseHandle(current)) {
-            int error = Marshal.GetLastWin32Error();
+        if (current != IntPtr.Zero && (fixtureFailClose || !CloseHandle(current))) {
+            int error = fixtureFailClose ? 6 : Marshal.GetLastWin32Error();
+            fixtureFailClose = false;
             Retain(current);
             throw new Win32Exception(error);
+        }
+    }
+    public static bool FixtureProveCloseFailure() {
+        IntPtr handle = CreateEventW(IntPtr.Zero, false, false, null);
+        if (handle == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        IntPtr actual = handle;
+        int slot = quarantineCount;
+        fixtureFailClose = true;
+        try { CloseOwned(ref handle); return false; }
+        catch (Win32Exception) {
+            lock (Quarantine) {
+                if (handle != IntPtr.Zero || quarantineCount != slot + 1 || Quarantine[slot] != actual) return false;
+                if (!CloseHandle(actual)) return false;
+                Quarantine[slot] = IntPtr.Zero;
+                quarantineCount = slot;
+                return true;
+            }
         }
     }
     static void Require(bool ok) { if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error()); }
@@ -206,8 +227,9 @@ public static class TrustedSgJob {
             if (attrs != IntPtr.Zero) Marshal.FreeHGlobal(attrs);
             if (handles != IntPtr.Zero) Marshal.FreeHGlobal(handles);
             if (jobs != IntPtr.Zero) Marshal.FreeHGlobal(jobs);
+            bool rawHandlesClosed = true;
             foreach (IntPtr handle in new[] { inputRead, inputWrite, outputRead, outputWrite, errorRead, errorWrite, pi.Thread })
-                if (handle != IntPtr.Zero && !CloseHandle(handle)) Retain(handle);
+                if (handle != IntPtr.Zero && !CloseHandle(handle)) { Retain(handle); rawHandlesClosed = false; }
             if (!success && job != IntPtr.Zero) {
                 TerminateJobObject(job, 137);
                 bool empty = false;
@@ -228,7 +250,7 @@ public static class TrustedSgJob {
                     if (!processClosed) Retain(pi.Process);
                     if (!jobClosed) Retain(job);
                     if (!streamsClosed && partial != null) QuarantineOwner(partial);
-                    LastStartupRollbackConfirmed = streamsClosed && processClosed && jobClosed;
+                    LastStartupRollbackConfirmed = rawHandlesClosed && streamsClosed && processClosed && jobClosed;
                 } else {
                     Retain(pi.Process); Retain(job);
                     if (partial != null) QuarantineOwner(partial);
