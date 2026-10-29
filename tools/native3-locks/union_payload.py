@@ -106,6 +106,8 @@ PINNED_SOURCE.update({'.github/workflows/services-geocoder-worker-component.yml'
 
 MEDIA4_PINS = {'tests/media/ndk-muxer/muxer_test.cc': '66c58b32f1d51ffd70a0bbed99986063682ac095', 'tests/media/ndk-muxer/verify_output.cc': '5575a7573fc08bf9f9a98929bf4e7b0f6bcaf423', 'tests/media/ndk-muxer/verify-webm-cues.py': 'ad24652a7c34be72d4869775a52afb778afd16e1', 'tests/windows/tracks/79-media4-muxer.ps1': '9f82ca9f402a782bb62228de08c06a790be66cd2'}
 PINNED_SOURCE.update(MEDIA4_PINS)
+FONTS_PINS = {'.github/workflows/native2.yml': 'ed994230b37385578efcf051296da915b609d031', 'tests/native2/fonts_standalone.c': '69eb206a59c430fc4ca7813d5ae4f337b907d52a', 'tests/windows/tracks/46-native3.ps1': 'f1f8e3d8256237396e4cd71c0c222ce291ef3594'}
+PINNED_SOURCE.update(FONTS_PINS)
 
 TARGETS = ('native3_lock_command_worker', 'native3_lock_duplicate_test', 'binderd')
 HOST_FILES = {name + suffix for name in TARGETS for suffix in ('.exe', '.imports.txt')}
@@ -170,6 +172,7 @@ def main():
         allowed.update(['tests/native3-locks/command_oracle.py', 'tests/native3-locks/command_worker.cc', 'tests/native3-locks/stdio_sink_oracle.py', 'tests/native3-locks/test_command_cleanup.py', 'tools/native3-locks/StdioSinkSupervisor.cs'])
         allowed.update(MERGED_DNS_SOURCE)
         allowed.update(MEDIA4_PINS)
+        allowed.update(FONTS_PINS)
         allowed.add('.github/workflows/net-combined-dns-trusted-source.yml')
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
                       ':(exclude)docs/**'], cwd=ROOT, text=True).splitlines())
@@ -177,6 +180,11 @@ def main():
         for name, expected in PINNED_SOURCE.items():
             actual = subprocess.check_output(['git', 'hash-object', name], cwd=ROOT, text=True).strip()
             assert actual == expected, ('Selected source differs from reviewed leaf/adaptation', name, actual)
+        for name in FONTS_PINS:
+            actual = {key: subprocess.check_output(['git', 'hash-object', key], cwd=ROOT, text=True).strip() for key in FONTS_PINS}
+            actual[name] = '0' * 40
+            assert actual != FONTS_PINS
+            print('FONTS_PREFLIGHT_NEGATIVE blob=' + name + ' rejected', flush=True)
         # Exercise the same comparisons with a forged blob for each new leaf.
         actual_media = {name: subprocess.check_output(['git', 'hash-object', name], cwd=ROOT, text=True).strip()
                         for name in MEDIA4_PINS}
