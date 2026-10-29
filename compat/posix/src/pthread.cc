@@ -10,6 +10,16 @@
 #include <atomic>
 #include <mutex>
 #include <utility>
+#include <climits>
+#include <cstdint>
+
+#if GESHER_WINPTHREAD_CPU_AUTHORITY_API != 1
+#error Rebuild the pinned Gesher winpthreads authority supplier before building hosts
+#endif
+
+// Calls to the supplier's fixed clocks must bypass the public overlay.
+#undef clock_gettime
+#undef clock_getres
 
 #include "internal.h"
 
@@ -39,6 +49,50 @@ constexpr auto MakeTrampolines(std::integer_sequence<int, I...>) {
   return std::array<void (*)(void*), sizeof...(I)>{&Trampoline<I>...};
 }
 constexpr auto kTrampolines = MakeTrampolines(std::make_integer_sequence<int, kSlots>());
+
+struct TargetClock {
+  HANDLE handle = nullptr;
+  unsigned long long generation = 0;
+  clockid_t id = 0;
+};
+std::mutex cpu_clock_lock;
+std::array<TargetClock, 256> cpu_clocks;
+// Never reissue an ID, even when its slot is reclaimed.
+int64_t next_cpu_clock = -1073741824;
+
+void ReapTargetClocks() {
+  for (auto& clock : cpu_clocks) {
+    if (clock.handle && WaitForSingleObject(clock.handle, 0) == WAIT_OBJECT_0) {
+      CloseHandle(clock.handle);
+      clock = {};
+    }
+  }
+}
+
+int ReadTargetClock(clockid_t id, timespec* value, bool resolution) {
+  std::lock_guard<std::mutex> guard(cpu_clock_lock);
+  ReapTargetClocks();
+  for (const auto& clock : cpu_clocks) {
+    if (!clock.handle || clock.id != id) continue;
+    if (resolution) {
+      if (value) *value = {0, 100};
+      return 0;
+    }
+    if (!value) { errno = EFAULT; return -1; }
+    FILETIME created, exited, kernel, user;
+    if (!GetThreadTimes(clock.handle, &created, &exited, &kernel, &user)) break;
+    auto ticks = [](FILETIME t) {
+      return (static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime;
+    };
+    uint64_t total = ticks(kernel) + ticks(user);
+    timespec result{static_cast<time_t>(total / 10000000),
+                    static_cast<long>((total % 10000000) * 100)};
+    *value = result;
+    return 0;
+  }
+  errno = EINVAL;
+  return -1;
+}
 
 }  // namespace
 
@@ -82,9 +136,42 @@ int pthread_getattr_np(pthread_t thread, pthread_attr_t* attr) {
 }
 
 int pthread_getcpuclockid(pthread_t thread, clockid_t* clock_id) {
-  (void)thread;
-  *clock_id = CLOCK_THREAD_CPUTIME_ID;
-  return 0;
+  if (!clock_id) return EINVAL;
+  // Ensure a Win32-created calling thread has its genuine supplier identity.
+  (void)pthread_self();
+  void* owned = nullptr;
+  unsigned long long generation = 0;
+  int result = gesher_winpthread_dup_cpu_handle_v1(thread, &owned, &generation);
+  if (result) return gesher_errno_from_crt(result);
+  std::lock_guard<std::mutex> guard(cpu_clock_lock);
+  ReapTargetClocks();
+  for (const auto& clock : cpu_clocks) {
+    if (clock.handle && clock.generation == generation) {
+      CloseHandle(owned);
+      *clock_id = clock.id;
+      return 0;
+    }
+  }
+  if (next_cpu_clock >= INT_MIN) {
+    for (auto& clock : cpu_clocks) {
+      if (clock.handle) continue;
+      clock = {owned, generation, static_cast<clockid_t>(next_cpu_clock--)};
+      *clock_id = clock.id;
+      return 0;
+    }
+  }
+  CloseHandle(owned);
+  return EAGAIN;
+}
+
+int gesher_clock_gettime(clockid_t clock, timespec* value) {
+  if (clock <= -1073741824) return ReadTargetClock(clock, value, false);
+  return clock_gettime(clock, value);
+}
+
+int gesher_clock_getres(clockid_t clock, timespec* value) {
+  if (clock <= -1073741824) return ReadTargetClock(clock, value, true);
+  return clock_getres(clock, value);
 }
 
 // The bottom of the stack Windows keeps (gesher::StackBottomReserve): ART
