@@ -4,6 +4,7 @@ name: net-tcp-priority-component
 # Match the native UDP input's mswsock declarations to the production source.
 # Diagnose actual mode1 retained handle before the unchanged strict census.
 # Record actual own-process OPEN/CLOSE creator stacks and owned event closes.
+# Map retained-event frames to the actual same-binary owner/caller code ranges.
 on:
   workflow_dispatch:
   push:

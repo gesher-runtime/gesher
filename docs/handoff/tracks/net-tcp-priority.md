@@ -675,3 +675,19 @@ native socket ownership and the original exact census remain unchanged. No +1
 allowance or larger/warmed baseline is introduced. Whether caller-side native
 completion query creates a provider event is only a hypothesis until actual
 creator-stack evidence, not justification for a source or assertion change.
+
+a0d62ee7/409490 actual tracing succeeds on both Windows with unchanged counts.
+All three explicitly owned operation handles close successfully (result1/error0)
+and operation/description strong refs are0. The extra Event has one kernel OPEN
+record whose user frames are KERNELBASE then probe.exe RVAs0x46225,0x21768,0x2247f,
+then ucrtbase/Kernel32/ntdll, identical probe RVAs on both OS versions. No WS2_32
+frame establishes the earlier provider-query hypothesis. The unmodified strict
+mode1 census still fails and mode2/guest ABIs remain unexecuted. Raw logs:
+`C:/work/gesher-ci-review/tcp-409490-win2022.log`,
+`C:/work/gesher-ci-review/tcp-409490-win2025.log`.
+
+The next diagnostic prints RtlLookupFunctionEntry ranges for actual stack PCs
+and known same-binary requester/observer/pthread functions, plus the exact owning
+pthread/reaper code RVAs from private retirement evidence. It neither downloads
+an executable locally nor guesses function names from another binary's offsets.
+No completion, lifetime, callback, cleanup or strict-census behavior changes.

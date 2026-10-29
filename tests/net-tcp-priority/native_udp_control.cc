@@ -10,7 +10,9 @@
 #include <string.h>
 #include <wchar.h>
 #include <algorithm>
+#include <pthread.h>
 #include "../../compat/posix/src/socket_internal.h"
+#undef pthread_mutex_lock  // log the canonical Winpthreads function, not errno wrapper
 
 namespace {
 void require(bool value, const char* label) {
@@ -23,7 +25,7 @@ template<class Fn> Fn native(const char* name) {
 }
 }
 namespace gesher::test {
-void DumpOwnHandleTypes(int mode) {
+void DumpOwnHandleTypes(int mode, uintptr_t caller, uintptr_t observer) {
   // CI-only observation, not descriptor or object identity authority. Never
   // query another process, retain snapshot handles, or ask for file/pipe names.
   using Query = NTSTATUS (NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
@@ -33,6 +35,15 @@ void DumpOwnHandleTypes(int mode) {
   static_assert(sizeof(process_query) == sizeof(process_symbol));
   memcpy(&process_query, &process_symbol, sizeof(process_query)); memcpy(&object_query, &object_symbol, sizeof(object_query));
   require(process_query && object_query, "actual own-process handle query APIs");
+  using Lookup = decltype(&::RtlLookupFunctionEntry);
+  Lookup lookup = nullptr; FARPROC lookup_symbol = GetProcAddress(module, "RtlLookupFunctionEntry");
+  static_assert(sizeof(lookup) == sizeof(lookup_symbol)); memcpy(&lookup, &lookup_symbol, sizeof(lookup));
+  require(lookup != nullptr, "actual native unwind function lookup");
+  auto code = [&](const char* label, uintptr_t pc) {
+    DWORD64 base = 0; auto* function = lookup(static_cast<DWORD64>(pc), &base, nullptr);
+    printf("TCP_PRIORITY_KNOWN_CODE name=%s mapped=%d rva=%llu begin=%lu end=%lu\n", label, function ? 1 : 0,
+        static_cast<unsigned long long>(base && pc >= base ? pc - base : 0), function ? function->BeginAddress : 0UL, function ? function->EndAddress : 0UL);
+  };
   static std::vector<uintptr_t> previous_values;
   if (mode == -1) {
     using Set = NTSTATUS (NTAPI*)(HANDLE, ULONG, PVOID, ULONG);
@@ -45,6 +56,12 @@ void DumpOwnHandleTypes(int mode) {
     require(GetProcessHandleCount(GetCurrentProcess(), &after) != FALSE, "post-tracing handle count");
     printf("TCP_PRIORITY_HANDLE_TRACE_ENABLE status=%lu before=%lu after=%lu process_only=1\n", static_cast<unsigned long>(enabled), before, after); fflush(stdout);
     require(enabled >= 0 && before == after, "actual handle tracing enabled without new owned handles");
+    code("submission_connect", caller); code("submitted_barrier", observer);
+    code("pthread_self", reinterpret_cast<uintptr_t>(&pthread_self));
+    code("pthread_create", reinterpret_cast<uintptr_t>(&pthread_create));
+    code("pthread_exit", reinterpret_cast<uintptr_t>(&pthread_exit));
+    code("pthread_cond_wait", reinterpret_cast<uintptr_t>(&pthread_cond_wait));
+    code("pthread_mutex_lock", reinterpret_cast<uintptr_t>(&pthread_mutex_lock));
     previous_values.clear(); return;
   }
   // Native ProcessHandleInformation (51), as defined by phnt/ntpsapi.h.
@@ -101,7 +118,9 @@ void DumpOwnHandleTypes(int mode) {
           wchar_t path[1024]{}; const DWORD size = GetModuleFileNameW(image, path, 1024);
           if (!size || size >= 1024 || pc < reinterpret_cast<uintptr_t>(image)) continue;
           const wchar_t* base = wcsrchr(path, L'\\'); base = base ? base + 1 : path;
-          printf("TCP_PRIORITY_HANDLE_TRACE_FRAME mode=%d record=%lu frame=%d module=%ls rva=%llu\n", mode, j, frame, base, static_cast<unsigned long long>(pc - reinterpret_cast<uintptr_t>(image)));
+          DWORD64 function_image = 0; auto* function = lookup(static_cast<DWORD64>(pc), &function_image, nullptr);
+          printf("TCP_PRIORITY_HANDLE_TRACE_FRAME mode=%d record=%lu frame=%d module=%ls rva=%llu begin=%lu end=%lu\n", mode, j, frame, base,
+              static_cast<unsigned long long>(pc - reinterpret_cast<uintptr_t>(image)), function ? function->BeginAddress : 0UL, function ? function->EndAddress : 0UL);
         }
       }
     }

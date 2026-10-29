@@ -726,6 +726,13 @@ int AwaitConnectRetirement(const std::shared_ptr<ConnectOperation>& operation, i
   const DWORD wait = WaitForSingleObject(operation->reaper, timeout_ms < 0 ? INFINITE : static_cast<DWORD>(timeout_ms));
   if (wait == WAIT_OBJECT_0) {
     operation->audit_close.store(true);
+    HMODULE image = nullptr;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          reinterpret_cast<LPCWSTR>(&ConnectOwner), &image)) {
+      printf("TCP_PRIORITY_OWNER_CODE owner_rva=%llu reaper_rva=%llu\n",
+          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&ConnectOwner) - reinterpret_cast<uintptr_t>(image)),
+          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&ConnectReaper) - reinterpret_cast<uintptr_t>(image)));
+    }
     printf("TCP_PRIORITY_OPERATION_HANDLES submitted=%llu event=%llu reaper=%llu native_retired=1\n",
         static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(operation->submitted)),
         static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(operation->overlap.hEvent)),

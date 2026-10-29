@@ -17,7 +17,7 @@
 #ifdef GESHER
 #include <sys/eventfd.h>
 #include "../../compat/posix/src/socket_internal.h"
-namespace gesher::test { int NativeUdpErrorControl(); void DumpOwnHandleTypes(int mode); }
+namespace gesher::test { int NativeUdpErrorControl(); void DumpOwnHandleTypes(int mode, uintptr_t caller = 0, uintptr_t observer = 0); }
 #endif
 
 static void require(bool ok, const char* what) {
@@ -311,7 +311,7 @@ static void* submission_connect(void* raw) {
   window.connect_error = errno; window.elapsed = millis() - start; return nullptr;
 }
 static void owned_wait_controls() {
-  gesher::test::DumpOwnHandleTypes(-1);  // CI-only tracing of this process, no policy relaxation
+  gesher::test::DumpOwnHandleTypes(-1, reinterpret_cast<uintptr_t>(&submission_connect), reinterpret_cast<uintptr_t>(&submitted_barrier));
   gesher::ws::OwnerCensus baseline{};
   for (int mode = 0; mode != 4; ++mode) {
     SubmitWindow window{}; window.mode = mode;
