@@ -1,5 +1,10 @@
 # Combined Exec/UDP/DNS candidate (qualification pending)
 
+**Latest peer revision:** isolated immutable checker db8b484f7f0e5d8333f8e84444583f19509486ae;
+separate caller/source d6649188c63d75d4831e107ee21623849a8a773c.
+Earlier424/27f pins below are historical and must not be newly authorized.
+Independent peer approval and fresh actual full are still pending.
+
 The isolated branch starts at 2ac42ca1b05a452419d546e7c923e11c09b556aa,
 qualified by full40847922962 (45 success/six optional skips). Integration127b0f64
 has the same non-documentation source. DNS source is exact80aa1992f85f6bbc824f925fd39008ac6b81eb85,
@@ -80,3 +85,38 @@ exists. Binder trust, secondary AOT, public blocking, hardware and other
 inventory/roadmap gaps remain open. Native2's former version-only extracted-NDK
 cache gap is addressed in source for these canonical suppliers and remains
 unqualified until the new actual full proves the archived compiler path.
+
+## Python import isolation peer correction
+
+Independent integration peer found that the former embedded `python3 -` could
+import candidate-root shadow modules before the first source check. The new
+immutable checker db8b484f7f0e5d8333f8e84444583f19509486ae uses
+`python3 -I -` before any Python import. There are no other Python invocations
+before source verification in this trusted job. Candidate scripts in the full
+DAG still run only after the trusted exact-source gate succeeds.
+
+The checker creates real temporary candidate-root json.py and hashlib.py
+sentinels, runs only trusted isolated Python code, verifies both imports came
+from stdlib, rejects the unreviewed additions, and removes both files in a
+finally block. It verifies the checkout is restored. Neither hostile module is
+executed. These same bounded pure-data controls were run locally under isolated
+Python (no native/Java/C# fixtures):
+
+```
+COMBINED_TRUST_ISOLATED_IMPORTS json=stdlib hashlib=stdlib isolated=1
+COMBINED_TRUST_NEGATIVE actual_candidate_shadow_modules=rejected
+```
+
+AST/source analysis confirmed the complete1567-path expected source map agrees,
+all prior pin maps remain unchanged (44 historical,44 union,11 Native,
+17 previous-source,2 previous-policy,19 merged-source), and the caller changed
+only its immutable SHA. Source/compiler bodies, authenticated NDK extraction,
+DAG edges, historical ancestry, API identity, authority and all prior mutation
+controls remain intact. Whole-source maps need no relaxation: TRUST and CALLER
+are already separately bound to immutable/external authority exact bytes.
+
+Next peer must review exact source/caller
+d6649188c63d75d4831e107ee21623849a8a773c and immutable
+db8b484f7f0e5d8333f8e84444583f19509486ae. Only after independent peer PASS
+may integration publish NET_COMBINED_DNS_CALLER_COMMIT=d6649188c63d75d4831e107ee21623849a8a773c
+and dispatch full. No variable or workflow dispatch was performed by this worker.
