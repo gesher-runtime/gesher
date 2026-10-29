@@ -1,0 +1,48 @@
+name: Combined source checkout diagnostic
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checkout:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: d6649188c63d75d4831e107ee21623849a8a773c
+          path: measured
+          persist-credentials: false
+          sparse-checkout: |
+            tests
+            tools/ci
+            tools/surface
+            tools/symbolize.py
+            tools/boot-image
+            tools/web3
+            tools/package
+            tools/windows4
+            tools/net-udp
+            tools/net-udp-component
+            tools/net-dns
+            tools/net-dns-component
+            probes/native3/unicode
+      - name: Measure exact fresh checkout without modifying it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location measured
+          $source = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $source -cne 'd6649188c63d75d4831e107ee21623849a8a773c') { throw 'Wrong measured source' }
+          $expected = (git rev-parse HEAD:overrides.json).Trim()
+          $blob = (git hash-object -- overrides.json).Trim()
+          $raw = (Get-FileHash -LiteralPath overrides.json -Algorithm SHA256).Hash.ToLowerInvariant()
+          $size = (Get-Item -LiteralPath overrides.json).Length
+          $attrs = (git check-attr -a -- overrides.json | Out-String).Trim().Replace("`r", '').Replace("`n", ';')
+          $auto = (git config --show-origin --get core.autocrlf | Out-String).Trim()
+          $status = (git status --porcelain -- overrides.json | Out-String).Trim()
+          Write-Host "FRESH_CHECKOUT source=$source expected=$expected actual=$blob raw_sha256=$raw size=$size autocrlf=$auto attrs=$attrs status=$status"
+          if ($blob -cne $expected) { throw 'Fresh checkout tracked blob differs from HEAD' }
