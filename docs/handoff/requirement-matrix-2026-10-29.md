@@ -2,6 +2,8 @@
 
 This is a navigation and evidence matrix, not an exhaustive inventory. It covers the explicitly inspected roadmap entries, latest accepted handoff and current source branches. The prior conversation surveyed only 18 units; remaining roadmap, ADRs, status sections and historical handoffs have not all been independently resurveyed. Open or historical checkboxes are not evidence of aggregate completion. The authoritative detailed requirements remain in their referenced sources.
 
+Update: corrected union full40802752388/source c254 succeeded and integration-only merge afc2ec39 is non-doc identical; current bounded Services, TSF and internal Native component evidence is recorded in the [continuation](session-2026-10-29-continuation.md). Exec full407968 is independently green; UDP full407999 is pending. These replace older row-level pending status only within their measured scope and do not close the unsurveyed or remaining boundaries.
+
 | Area | Evidence and status | Remaining boundary / source |
 | --- | --- | --- |
 | Integration | full40731915058/source81fd, 38 jobs, 32 success/6 intentional skips; f155 merge non-doc equal; 1157 inventory unchanged | New code union requires fresh full; [acceptance](tracks/coherent-aot-native-40731915058-accepted.md) |
