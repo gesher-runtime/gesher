@@ -1,5 +1,5 @@
 # Separate fault supplier/host roles prove production hooks OFF by object/export.
-# Mixed-provider collision is diagnostic and is not an acceptance gate for production.
+# Mixed-provider clock and pthread identity collisions are diagnostic, not production acceptance.
 name: host pthread authority initial controls
 on:
   workflow_dispatch:
