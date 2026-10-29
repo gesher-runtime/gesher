@@ -81,11 +81,14 @@ void ProbeFdPrimitives(const char* role) {
     using Query = NTSTATUS (NTAPI*)(HANDLE, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG);
     auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryObject"));
     std::vector<BYTE> object_name(4096); ULONG returned = 0;
-    bool exact_null = false;
-    if (query && query(inherited, static_cast<OBJECT_INFORMATION_CLASS>(1), object_name.data(),
-        static_cast<ULONG>(object_name.size()), &returned) >= 0) {
+    bool exact_null = false; NTSTATUS query_status = query ? query(inherited, static_cast<OBJECT_INFORMATION_CLASS>(1), object_name.data(),
+        static_cast<ULONG>(object_name.size()), &returned) : static_cast<NTSTATUS>(0xC0000002L);
+    unsigned name_length = 0, name_maximum = 0; size_t name_offset = 0;
+    if (query_status >= 0) {
       auto* name = reinterpret_cast<UNICODE_STRING*>(object_name.data());
       auto begin = reinterpret_cast<uintptr_t>(object_name.data()), text = reinterpret_cast<uintptr_t>(name->Buffer);
+      name_length = name->Length; name_maximum = name->MaximumLength;
+      if (text >= begin) name_offset = text - begin;
       if (name->Length % sizeof(wchar_t) == 0 && text >= begin && text - begin <= object_name.size() &&
           name->Length <= object_name.size() - (text - begin)) {
         exact_null = std::wstring(name->Buffer, name->Length / sizeof(wchar_t)) == L"\\Device\\Null";
@@ -105,6 +108,8 @@ void ProbeFdPrimitives(const char* role) {
         type, copied, copy_error, adopted >= 0, adopted_error);
     printf("LOWBOX_FD_STARTUP role=lowbox uses_stdio=%d same_handle=%d exact_nt_null=%d\n",
         (startup.dwFlags & STARTF_USESTDHANDLES) != 0, startup.hStdInput == inherited, exact_null);
+    printf("LOWBOX_NULL_QUERY status=%lu returned=%lu length=%u maximum=%u offset=%zu\n",
+        static_cast<unsigned long>(query_status), returned, name_length, name_maximum, name_offset);
   }
   fflush(stdout);
   if (!std::strcmp(role, "host")) Check(event != nullptr && nul != INVALID_HANDLE_VALUE && fd >= 0, "host fd primitive positive controls");
@@ -242,7 +247,8 @@ int wmain(int argc, wchar_t** argv) {
       Check(std::strstr(diagnostic, "LOWBOX_FD_DIAGNOSTIC role=lowbox ") != nullptr &&
           std::strstr(diagnostic, "LOWBOX_FD_ZERO role=lowbox ") != nullptr &&
           std::strstr(diagnostic, "LOWBOX_FD_INHERITED role=lowbox ") != nullptr &&
-          std::strstr(diagnostic, "LOWBOX_FD_STARTUP role=lowbox ") != nullptr, "actual lowbox diagnostic markers");
+          std::strstr(diagnostic, "LOWBOX_FD_STARTUP role=lowbox ") != nullptr &&
+          std::strstr(diagnostic, "LOWBOX_NULL_QUERY ") != nullptr, "actual lowbox diagnostic markers");
       printf("%s", diagnostic); fflush(stdout);
       Check(DeleteFileW(log_path.c_str()), "nested child log cleanup");
       printf("POLICY_CHILD actual_lowbox=1 nested_create=1 file_reopen_read=1 nested_delete=1 exit=0 retired=1\n");
