@@ -36,6 +36,25 @@ static void Await(Target& t) {
 }
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0);
+  pthread_key_t key = static_cast<pthread_key_t>(123), next = static_cast<pthread_key_t>(456);
+  Check(_pthread_key_dest == nullptr, "initial key table null");
+  Check(gesher_winpthread_cpu_test_control_v1(3, 1) == 0, "inject reserve failure");
+  Check(pthread_key_create(&key, nullptr) == ENOMEM && key == 123 && _pthread_key_dest == nullptr,
+        "reserve failure unchanged");
+  Check(gesher_winpthread_cpu_test_control_v1(3, 2) == 0, "inject initial commit failure");
+  Check(pthread_key_create(&key, nullptr) == ENOMEM && key == 123 && _pthread_key_dest == nullptr,
+        "initial commit failure unchanged");
+  Check(gesher_winpthread_cpu_test_control_v1(3, 0) == 0, "clear key fault");
+  Check(pthread_key_create(&key, nullptr) == 0 && _pthread_key_dest != nullptr, "key initial growth");
+  auto table = _pthread_key_dest;
+  Check(pthread_setspecific(key, &key) == 0, "key value set");
+  Check(gesher_winpthread_cpu_test_control_v1(3, 2) == 0, "inject later commit failure");
+  Check(pthread_key_create(&next, nullptr) == ENOMEM && next == 456 && _pthread_key_dest == table &&
+        pthread_getspecific(key) == &key, "growth failure preserves table and value");
+  Check(gesher_winpthread_cpu_test_control_v1(3, 0) == 0, "clear growth fault");
+  Check(pthread_key_create(&next, nullptr) == 0 && _pthread_key_dest == table, "growth recovery");
+  Check(pthread_key_delete(key) == 0 && pthread_key_delete(next) == 0, "key cleanup");
+  std::puts("PASS host-key-fault reserve initial-commit growth-failure unchanged and recovery");
   (void)pthread_self();
   DWORD baseline = 0, final_count = 0;
   Check(GetProcessHandleCount(GetCurrentProcess(), &baseline), "handle baseline");
