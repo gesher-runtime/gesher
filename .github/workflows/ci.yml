@@ -953,6 +953,20 @@ jobs:
           '```' >> $env:GITHUB_STEP_SUMMARY
           exit $code
 
+      - name: Actual installed restricted APK and rapid relaunch under the production role
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tests/windows/run-installed-restricted-guest.ps1 -Dir "$PWD/dist" -RuntimeExe "$PWD/dist/dalvikvm.exe" -Role production | Tee-Object -FilePath binder-installed-production-results.txt
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: binder-installed-production-logs-${{ matrix.os }}
+          path: |
+            binder-installed-production-results.txt
+            ${{ runner.temp }}/binder-installed-production-${{ github.run_id }}-${{ github.run_attempt }}/**
+          if-no-files-found: warn
+
   # Extra isolated jobs execute the real regression in the SAME canonical
   # full. Only these jobs download the separately named hook artifact.
   web3-query-regression:
@@ -1070,13 +1084,20 @@ jobs:
         run: |
           pwsh -NoProfile -File tests/windows/run-web3-query-component.ps1 -Dir "$PWD/dist" -RuntimeExe "$PWD/dist/dalvikvm-web3-query-test.exe" | Tee-Object -FilePath web3-query-results.txt
           exit $LASTEXITCODE
+      - name: Actual installed restricted APK and Binder path under the same-source query role
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tests/windows/run-installed-restricted-guest.ps1 -Dir "$PWD/dist" -RuntimeExe "$PWD/dist/dalvikvm-web3-query-test.exe" -Role query-hook | Tee-Object -FilePath binder-installed-query-results.txt
+          exit $LASTEXITCODE
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: web3-query-full-logs-${{ matrix.os }}
           path: |
             web3-query-results.txt
+            binder-installed-query-results.txt
             ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/**
+            ${{ runner.temp }}/binder-installed-query-hook-${{ github.run_id }}-${{ github.run_attempt }}/**
           if-no-files-found: warn
 
   # Ordinary Binder scope is mandatory and separate from production installer

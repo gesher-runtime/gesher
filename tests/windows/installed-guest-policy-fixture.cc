@@ -143,6 +143,9 @@ int wmain(int argc, wchar_t** argv) {
       startup.hStdInput = nul; startup.hStdOutput = log; startup.hStdError = log;
       HANDLE private_server = INVALID_HANDLE_VALUE, private_client = INVALID_HANDLE_VALUE;
       Check(gesher::launch_control::Channel(&private_server, &private_client), "actual OW-only private bootstrap channel");
+      Check(gesher::launch_control::ServerMatches(private_client, GetCurrentProcessId()) &&
+          !gesher::launch_control::ServerMatches(private_client, GetCurrentProcessId() + 1) &&
+          !gesher::launch_control::ServerMatches(private_client, 0), "actual pipe server PID rejects wrong and zero expected identities");
       DWORD server_flags = 0, client_flags = 0;
       Check(GetHandleInformation(private_server, &server_flags) && GetHandleInformation(private_client, &client_flags) &&
           !(server_flags & HANDLE_FLAG_INHERIT) && !(client_flags & HANDLE_FLAG_INHERIT), "private endpoints not inheritable");
@@ -158,6 +161,7 @@ int wmain(int argc, wchar_t** argv) {
       Check(DeleteFileW(log_path.c_str()), "nested child log cleanup");
       printf("POLICY_CHILD actual_lowbox=1 nested_create=1 file_reopen_read=1 nested_delete=1 exit=0 retired=1\n");
       printf("POLICY_PRIVATE actual_bootstrap=1 guest_serve_error=5 private_endpoints_inheritable=0\n");
+      printf("POLICY_SERVER actual_parent_positive=1 wrong_pid_rejected=1 zero_pid_rejected=1\n");
     }
     bool root_denied = RenameDenied(root), assets_denied = RenameDenied(assets), data_denied = RenameDenied(data), file_denied = RenameDenied(asset_file);
     Check(root_denied && assets_denied && data_denied && file_denied, "ancestor and final replacement denied while pinned");

@@ -24,6 +24,31 @@ revoke: after confirmed exact child death, release its resource-policy reference
 but keep the retained process owner and terminal DWORD until ExitStatus consumes
 them. Never erase the record merely to permit profile/resource retirement.
 
+The full-source peer at f3a76191 conditionally permits advancing the narrow
+caller to CI, with the report retained at
+`C:/work/gesher-ci-review/binder-production-route-f3a761-independent-peer.md`.
+It identified a fail-closed same-install relaunch collision: an old listener
+can still exist while a new FIRST_PIPE_INSTANCE listener is requested. The
+corrected caller now generates a private-writer-owned 128-bit namespace nonce
+before creation and carries it on private Request ABI2; each public endpoint
+name is unique per launch and still granted only the exact install SID.
+An all-zero nonce is refused. No stable retired listener name is reused and no
+unrestricted retry is introduced. Ordinary startup Context remains ABI3.
+
+`run-installed-restricted-guest.ps1` adds real installed APK proofs to both
+production and query-hook Windows jobs, preserving every original suite/query
+assertion. It verifies the explicit role executable/current-source receipts,
+creates a fresh device, installs lifecycle.apk, performs three immediate
+same-install headless launches, and matches each actual child PID to native
+suspended birth/SID/job observations with distinct namespace nonces. Every
+launch requires actual Binder attach, Application, resources, activity result
+and exit zero. It retains all three bootstrap process handles before validating
+birth/module, signals only the owned root's shutdown event, and waits or fails
+cleanup through those handles; it does not invoke numeric-PID kill fallbacks.
+The policy component additionally tests the same ServerMatches function used
+by the actual Binder client against correct, wrong and zero server PIDs.
+These new caller/role/race controls remain source-only pending peer and full CI.
+
 Changed-source component40854555974/attempt1 at exact1d235057 also compiled and
 passed both Windows strict receipts, then failed the new fixture's label setter
 with Win32 error5 before the readonly counterexamples or rename diagnostics.

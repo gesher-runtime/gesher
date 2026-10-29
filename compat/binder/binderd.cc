@@ -1095,7 +1095,7 @@ void ControlWorker(HANDLE pipe) {
     {
       std::lock_guard<std::mutex> lock(g_lock);
       HANDLE process = control::Handle(req.process);
-      bool valid = req.magic == 0x474c4350 && req.version == 1 && req.restricted <= 1 &&
+      bool valid = req.magic == 0x474c4350 && req.version == 2 && req.restricted <= 1 &&
           memchr(req.package, 0, sizeof(req.package)) != nullptr;
       std::string package = valid ? req.package : "";
       gesher::binder_launch::Install install{package, {}, req.uid, !writer};
@@ -1110,6 +1110,7 @@ void ControlWorker(HANDLE pipe) {
         // Publish consumes the transferred actual process HANDLE even on refusal.
         HANDLE listener_process = nullptr;
         bool guest_ok = !req.restricted || (writer && package == "com.gesher.lifecycle" &&
+            std::any_of(std::begin(req.endpoint), std::end(req.endpoint), [](uint8_t byte) { return byte != 0; }) &&
             DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &listener_process,
                             0, FALSE, DUPLICATE_SAME_ACCESS));
         if (guest_ok && req.restricted) guest_ok = StartGuestListener(listener_process, req);
@@ -1907,7 +1908,7 @@ bool StartGuestListener(HANDLE process, const control::Request& request) {
   PSECURITY_DESCRIPTOR descriptor = nullptr;
   ok = ok && ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr);
   if (!ok) return false;
-  std::wstring name = wire::kPipePrefix + control::GuestDevice(g_public_device, request.generation);
+  std::wstring name = wire::kPipePrefix + control::GuestDevice(g_public_device, request.generation, request.endpoint);
   SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
   HANDLE first = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,

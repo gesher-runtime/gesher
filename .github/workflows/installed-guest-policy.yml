@@ -75,6 +75,7 @@ jobs:
               'POLICY_PIN ancestor_rename=32 asset_rename=32 data_rename=32 final_file_rename=32',
               'POLICY_CHILD actual_lowbox=1 nested_create=1 file_reopen_read=1 nested_delete=1 exit=0 retired=1',
               'POLICY_PRIVATE actual_bootstrap=1 guest_serve_error=5 private_endpoints_inheritable=0',
+              'POLICY_SERVER actual_parent_positive=1 wrong_pid_rejected=1 zero_pid_rejected=1',
               'POLICY_RETIRE insertion_target_unchanged=1 injected_error=5 retained=1 retry_confirmed=1 postcleanup_rename=1 owners=0')) {
             if (-not $output.Contains($row)) { throw "missing actual resource observation: $row" }
           }

@@ -9,19 +9,25 @@
 namespace gesher { namespace launch_control {
 enum : uint32_t { kPublish = 1, kRevoke = 2, kHandoff = 3, kCancel = 4 };
 struct Request {
-  uint32_t magic = 0x474c4350, version = 1, op = 0, uid = 0;
+  uint32_t magic = 0x474c4350, version = 2, op = 0, uid = 0;
   uint64_t process = 0, birth = 0;
   uint8_t generation[16]{};
   char package[256]{};
   uint32_t restricted = 0;
+  uint8_t endpoint[16]{}; // host-generated per-launch namespace, not a credential
 };
 inline std::wstring Profile(const uint8_t (&generation)[16]) {
   std::wstring name = L"Gesher.install.";
   for (auto byte : generation) { name += L"0123456789abcdef"[byte >> 4]; name += L"0123456789abcdef"[byte & 15]; }
   return name;
 }
-inline std::wstring GuestDevice(const std::wstring& device, const uint8_t (&generation)[16]) {
-  return device + L"-guest-" + Profile(generation).substr(15);
+inline std::wstring GuestDevice(const std::wstring& device, const uint8_t (&generation)[16],
+                                const uint8_t (&endpoint)[16]) {
+  return device + L"-guest-" + Profile(generation).substr(15) + L"-" + Profile(endpoint).substr(15);
+}
+inline bool ServerMatches(HANDLE pipe, uint32_t expected) {
+  ULONG actual = 0;
+  return expected && GetNamedPipeServerProcessId(pipe, &actual) && actual == expected;
 }
 inline HANDLE Handle(uint64_t value) { return reinterpret_cast<HANDLE>(uintptr_t(value)); }
 inline uint64_t Value(HANDLE value) { return uint64_t(reinterpret_cast<uintptr_t>(value)); }

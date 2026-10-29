@@ -132,9 +132,7 @@ HANDLE ConnectPipe(const std::wstring& name) {
     HANDLE h = CreateFileW(name.c_str(), FILE_GENERIC_READ | (FILE_GENERIC_WRITE & ~FILE_APPEND_DATA), 0, nullptr, OPEN_EXISTING,
                            0, nullptr);
     if (h != INVALID_HANDLE_VALUE) {
-      ULONG server = 0;
-      if (launch::kStartup.server_pid && (!GetNamedPipeServerProcessId(h, &server) ||
-          server != launch::kStartup.server_pid)) {
+      if (launch::kStartup.server_pid && !launch_control::ServerMatches(h, launch::kStartup.server_pid)) {
         CloseHandle(h); SetLastError(ERROR_ACCESS_DENIED); return INVALID_HANDLE_VALUE;
       }
       return h;

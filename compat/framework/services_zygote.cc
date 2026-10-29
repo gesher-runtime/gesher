@@ -222,15 +222,17 @@ static int SpawnOwned(const std::u16string& command_line, const std::vector<std:
     }
     si.lpAttributeList = attributes;
     auto child_set = set;
+    uint8_t endpoint[16]{};
     if (policy) {
       wchar_t device[256]{};
       DWORD count = GetEnvironmentVariableW(L"GESHER_BINDER", device, 256);
       control::Request identity;
-      if (!count || count >= 256 || !control::Generation(install, identity.generation)) {
+      if (!count || count >= 256 || !control::Generation(install, identity.generation) ||
+          !control::Random(endpoint, sizeof(endpoint))) {
         DeleteProcThreadAttributeList(attributes); CloseHandle(nul); CloseHandle(log);
         return -ERROR_INVALID_DATA;
       }
-      auto guest_device = control::GuestDevice(device, identity.generation);
+      auto guest_device = control::GuestDevice(device, identity.generation, endpoint);
       child_set.push_back(u"GESHER_BINDER=" + U(guest_device.c_str(), guest_device.size()));
       child_set.push_back(u"GESHER_INSTALLED_RESTRICTED=1");
     }
@@ -284,8 +286,8 @@ static int SpawnOwned(const std::u16string& command_line, const std::vector<std:
         if (policy) {
           LPWSTR sid = nullptr;
           if (ConvertSidToStringSidW(policy->sid, &sid)) {
-            std::fprintf(stderr, "INSTALLED_GUEST suspended pid=%lu birth=%llu uid=%d sid=%ls capabilities=0 ownedjob=1\n",
-                pi.dwProcessId, static_cast<unsigned long long>(birth), uid, sid);
+            std::fprintf(stderr, "INSTALLED_GUEST suspended pid=%lu birth=%llu uid=%d sid=%ls capabilities=0 ownedjob=1 endpoint=%ls\n",
+                pi.dwProcessId, static_cast<unsigned long long>(birth), uid, sid, control::Profile(endpoint).substr(15).c_str());
             LocalFree(sid);
           }
         }
@@ -294,6 +296,7 @@ static int SpawnOwned(const std::u16string& command_line, const std::vector<std:
           control::Request request;
           request.op = control::kPublish;
           request.restricted = policy ? 1 : 0;
+          std::copy(std::begin(endpoint), std::end(endpoint), std::begin(request.endpoint));
           authorized = Identity(&request, uid, package, install) && Request(request, pi.hProcess);
           if (authorized && bootstrap && bootstrap->kind == 2) {
             control::Request handoff;
