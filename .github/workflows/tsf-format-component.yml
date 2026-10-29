@@ -1,0 +1,87 @@
+name: tsf-format-component
+on:
+  workflow_call:
+  push:
+    branches: [wip/tsf-format-current]
+    paths: [.github/workflows/tsf-format-component.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: tsf-format-component-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify reviewed helpers and adversarial archive controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess
+          for name, expected in {'download-verified-artifact.py':'cd5cc415e53102c664edac22b1604df639c8804b','assemble-artifacts.py':'8d01e5084c8b0aac7f06bc7eae75cf14e431f5b2','test-verified-artifact.py':'af7324581ae011f39aacf87d81ae1f44ad4c85f6'}.items():
+              assert subprocess.check_output(['git','hash-object','tools/native3-locks/artifact/'+name], text=True).strip() == expected
+          PY
+          python3 tools/native3-locks/artifact/test-verified-artifact.py
+  controller:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Qualify owned job and file controller with kernel evidence
+        shell: pwsh
+        run: tools/windows4/test-tsf-job-supervisor.ps1
+  compile:
+    needs: [preflight, controller]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: tsf-format-component
+      - name: Build the existing TSF target and capture provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B out -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          ninja -C out windows4_text_store_probe
+          mkdir fixture
+          cp out/windows4_text_store_probe.exe out/windows4_tsf_service.dll fixture/
+          for f in windows4_text_store_probe.exe windows4_tsf_service.dll; do
+            "$HOME/toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj" --coff-imports "fixture/$f" > "fixture/$f.imports.txt"
+          done
+          python3 tools/windows4/tsf-component-manifest.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tsf-format-${{ github.sha }}-a${{ github.run_attempt }}
+          path: fixture/
+          if-no-files-found: error
+          retention-days: 14
+  windows:
+    needs: compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify producer and run the current controlled fixture
+        shell: pwsh
+        run: tools/windows4/run-tsf-union.ps1

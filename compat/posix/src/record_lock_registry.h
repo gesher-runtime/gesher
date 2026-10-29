@@ -44,7 +44,7 @@ class Registry {
   Registry(const Registry&) = delete;
   Registry& operator=(const Registry&) = delete;
   int Open();
-  int Begin(RegistryState** state);
+  int Begin(RegistryState** state, DWORD timeout = INFINITE, HANDLE cancel = nullptr);
   int Commit();
   void Unlock();
   uint64_t Generation() const { return generation_; }

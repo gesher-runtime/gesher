@@ -1,0 +1,66 @@
+name: Services geocoder worker component
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [wip/services3-cancel-current, wip/services-real-winrt]
+    paths: [.github/workflows/services-geocoder-worker-component.yml]
+jobs:
+  controlled-worker:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify shared controller source identities
+        shell: pwsh
+        run: |
+          $expected = @{
+            'tools/windows4/TsfJobSupervisor.cs' = 'd1cf9319268df1bccf03177e7f8dde52a7f55510'
+            'tools/windows4/TsfJobWorker.cs' = '08f29f78f56195825d96de2f2f6632bf91133e1e'
+            'tools/windows4/test-tsf-job-supervisor.ps1' = '91e6946c4ab05a42ffbf6917166193c3dad07872'
+            'tools/windows4/run-tsf-component.ps1' = '4474bae13d5fe73038e8569be454753cdb21df43'
+          }
+          foreach ($path in $expected.Keys) {
+            $actual = git hash-object $path
+            if ($LASTEXITCODE -ne 0 -or $actual -cne $expected[$path]) { throw "Shared source mismatch: $path" }
+            Write-Host "SHARED_SOURCE origin=8ad629ccb1edc86b9f701e83f01838ab9eaa1e94 path=$path blob=$actual"
+          }
+      - name: Verify canonical TSF workflow identity
+        shell: pwsh
+        run: |
+          $actual = git hash-object .github/workflows/tsf-format-component.yml
+          if ($LASTEXITCODE -ne 0 -or $actual -cne '6b025963d5134775fe3e6060fbae7ffc01cbd32b') { throw 'TSF routing adaptation mismatch' }
+          Write-Host "SERVICES_TSF_CANONICAL source=$env:GITHUB_SHA blob=$actual canonical_origin=8ad629ccb1edc86b9f701e83f01838ab9eaa1e94"
+      - name: Qualify shared job controller
+        shell: pwsh
+        run: ./tools/windows4/test-tsf-job-supervisor.ps1
+      - name: Exercise owned worker and child containment
+        shell: pwsh
+        run: ./tests/windows/tracks/geocoder-operation-fixture.ps1
+      - name: Verify actual WinRT probe source identities
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -cne $env:GITHUB_SHA -or $LASTEXITCODE -ne 0) { throw 'WinRT checkout identity mismatch' }
+          $expected = @{
+            'tests/windows/tracks/geocoder-operation.ps1' = '75eb4cf6f9537c61ff27ec49d2a3a938c81b1618'
+            'tests/windows/tracks/geocoder-probe-exit.cs' = '4927e87a71c41069bbed24be748cfd0b771583d5'
+            'tests/windows/tracks/geocoder-winrt-supplier.cs' = '11da9f04efdbb98de30006b0c26e169bec6d8b19'
+            'tests/windows/helpers/geocoder-provider-probe.ps1' = 'd02fc316ccaca1ac856eaeae64df6e4053da569c'
+            'tests/windows/helpers/geocoder-winrt-fixture.ps1' = 'cbde2ac48b603f3cc12e544a3e42d744d9b58864'
+            'tests/windows/helpers/geocoder-roslyn-worker.ps1' = '31491e2cb20bf72e78c49476c9ab874649fee6c9'
+            'tests/windows/helpers/geocoder-compiler-host.ps1' = '43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f'
+            'tests/windows/helpers/geocoder-compile.ps1' = '90fceedc449a2ec11dfa80809e05163c89bcf2fa'
+            'tests/windows/helpers/run-geocoder-winrt-component.ps1' = '1277bcc858c9c52eb8b24476831aadb286831418'
+            'tests/windows/tracks/58-devices.ps1' = '83b8a8455fb77ee8ca2bda7f10afbbd34c13cc78'
+          }
+          foreach ($path in $expected.Keys) {
+            $actual = git hash-object $path
+            if ($LASTEXITCODE -ne 0 -or $actual -cne $expected[$path]) { throw "WinRT source mismatch: $path" }
+            Write-Host "WINRT_SOURCE base=f0f52116 source=$env:GITHUB_SHA path=$path blob=$actual sha256=$((Get-FileHash $path -Algorithm SHA256).Hash)"
+          }
+      - name: Exercise actual WinRT adapter and real Maps provider in owned children
+        shell: pwsh
+        run: ./tests/windows/helpers/run-geocoder-winrt-component.ps1
