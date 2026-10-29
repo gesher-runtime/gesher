@@ -175,7 +175,7 @@ public static class TsfJobSupervisor {
   public static bool TestParentConsole() {
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
     uint[] processes=new uint[256]; uint count=GetConsoleProcessList(processes,(uint)processes.Length);
-    if(count==0 || count>processes.Length || GetConsoleWindow()==IntPtr.Zero) return false;
+    if(count==0 || count>processes.Length) return false;
     for(int i=0;i<count;i++) if(processes[i]==GetCurrentProcessId()) return true;
     return false;
   }
