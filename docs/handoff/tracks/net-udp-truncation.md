@@ -271,3 +271,20 @@ non-doc tree. The new local caller references that immutable commit. Independent
 security/source peer must approve exact caller bytes and external maintainer
 NET_UDP_FULL_CALLER_COMMIT before dispatch. Full normal suites/package/e2e
 remain mandatory; this component does not close inventory/aggregate Net4.
+
+## Active canonical full40799970496
+
+Exact caller/source4c2df9ecbc20ba6fe9e8ae41a4a9e33995a8a398 received independent
+security/source peer. API source reads verified remote guard6c099af6 bytes
+(blob e19eb4e349c0936591f7d1c28c53d5cce267d960) and exact caller bytes
+(blob1a59854552ac0f74192a45d4269a3c64a9899d02). The independent integration
+reviewer verified palmoni5 immediately before setting the initially absent
+NET_UDP_FULL_CALLER_COMMIT to4c and read it back exactly. No candidate input
+supplies that authority.
+
+After checking no active track run, exact clean HEAD and immediate palmoni5,
+one canonical full40799970496 was dispatched. Integration owns the sole
+120-second watch. Acceptance requires actual immutable guard identity and
+mutation/restoration evidence, all retained full jobs, both normal whole0
+suites/test89 actual rows/negatives, installed package and both e2e. No full
+result is accepted yet; no integration/main/PR/tag/release action was performed.
