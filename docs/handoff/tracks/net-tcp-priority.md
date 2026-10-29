@@ -214,3 +214,25 @@ four finite waits (60-61ms), refused ERR|HUP24 without PRI, alias/error
 ownership, and consumed-error HUP16. The final all-contract marker is present;
 raw Linux log is `tcp-408623-linux.log`. This validates the added reference
 expectations, not the pending Windows production lifecycle implementation.
+
+Actual lifecycle component40862743282/source538e22c4 is RED on both Windows.
+The host passes initial HUP16, listener/UDP/successful-connect/connected finite
+waits (61-63ms), the blocking MSG_DONTWAIT control, successful EOF/alias and
+non-inline urgent controls. Refused priority poll now returns1/ERR|HUP24 near
+two seconds. The strict subsequent SO_ERROR==ECONNREFUSED assertion fails;
+neither guest ABI executes. Raw logs: `tcp-408627-win{2022,2025}.log`.
+
+Changed diagnostics8d9526a4 preserve that exact assertion and print actual
+getter rc/value/errno/length. Native40864241596 and actual component40864241587
+are pending. Six independent refused endpoints isolate select-only, write
+poll-only, poll/getpeername, a pre-connect alias, a post-refusal alias and the
+full metadata/alias sequence. Only their explicit final caller reads SO_ERROR
+twice. Diagnostic labels now say `SO_ERROR=not-read`: absence of a direct
+getter call is not proof that another native operation preserved the error.
+No production workaround or weakened ownership expectation is accepted.
+
+Adjacent source-only gap: host select.cc and bionic's SelectMs each filter
+ERR/HUP from exceptfds-only results after one poll; an error-only wake may
+therefore return0 before the caller's select deadline. That broader finite
+select behavior is not qualified by the connected urgent fixture and remains
+open alongside inline readiness and the other documented network gaps.
