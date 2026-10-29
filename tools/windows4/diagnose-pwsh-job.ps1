@@ -12,7 +12,8 @@ param([string] $Marker)
 '@ | Set-Content -LiteralPath $script -Encoding utf8
 try {
   $exe = [Environment]::ProcessPath
-  foreach ($variant in @('production','diag-detached-unlimited','diag-console-limited','diag-console-unlimited')) {
+  Write-Host "PWSH_PARENT_CONSOLE actual=$([TsfJobSupervisor]::TestParentConsole())"
+  foreach ($variant in @('production','diag-detached-unlimited','diag-console-limited','diag-console-unlimited','diag-inherit-limited','diag-inherit-unlimited')) {
     $marker = Join-Path $root ($variant + '.marker')
     $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $script + '" "' + $marker + '"'
     $fault = if ($variant -eq 'production') { '' } else { $variant }

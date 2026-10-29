@@ -70,6 +70,9 @@ public static class TsfJobSupervisor {
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool CreateProcess(string app,StringBuilder command,IntPtr psa,IntPtr tsa,bool inherit,uint flags,IntPtr env,string cwd,ref SIX si,out PI pi);
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode,EntryPoint="CreateProcessW")] static extern bool CreateProcessSimple(string app,StringBuilder command,IntPtr psa,IntPtr tsa,bool inherit,uint flags,IntPtr env,string cwd,ref SI si,out PI pi);
   [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll")] static extern uint GetCurrentProcessId();
+  [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
+  [DllImport("kernel32.dll",SetLastError=true)] static extern uint GetConsoleProcessList([Out] uint[] processes,uint count);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool DuplicateHandle(IntPtr source,IntPtr handle,IntPtr target,out IntPtr copy,uint access,bool inherit,uint options);
 
   public sealed class Result {
@@ -164,6 +167,13 @@ public static class TsfJobSupervisor {
       return false;
     } finally { Check(CloseHandle(snapshot),"Close process snapshot"); }
   }
+  public static bool TestParentConsole() {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
+    uint[] processes=new uint[256]; uint count=GetConsoleProcessList(processes,(uint)processes.Length);
+    if(count==0 || count>processes.Length || GetConsoleWindow()==IntPtr.Zero) return false;
+    for(int i=0;i<count;i++) if(processes[i]==GetCurrentProcessId()) return true;
+    return false;
+  }
   public static bool TestDeniedParent(IntPtr process,uint expectedPid) {
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
     IntPtr restricted;
@@ -229,7 +239,7 @@ public static class TsfJobSupervisor {
   // mainMs is fixed at 45000 for the real probe; shorter only in controlled CI tests.
   public static Result Run(string executable,string arguments,int mainMs,string fault) {
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
-    if(mainMs<1 || mainMs>45000 || (fault!="" && fault!="terminate-denied" && fault!="query-denied" && fault!="diag-detached-unlimited" && fault!="diag-console-limited" && fault!="diag-console-unlimited")) throw new ArgumentException();
+    if(mainMs<1 || mainMs>45000 || (fault!="" && fault!="terminate-denied" && fault!="query-denied" && fault!="diag-detached-unlimited" && fault!="diag-console-limited" && fault!="diag-console-unlimited" && fault!="diag-inherit-limited" && fault!="diag-inherit-unlimited")) throw new ArgumentException();
     Result r=new Result(); var owned=new List<IntPtr>();
     IntPtr job=IntPtr.Zero,query=IntPtr.Zero,denied=IntPtr.Zero,root=IntPtr.Zero,thread=IntPtr.Zero;
     IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero;
@@ -238,7 +248,7 @@ public static class TsfJobSupervisor {
     bool limited=arguments=="limit";
     bool controlled=arguments=="normal" || arguments=="exit23" || arguments=="hang" || arguments=="descendant" || arguments=="unknown" || arguments=="race" || arguments=="orphan" || arguments=="output" || limited;
     limited=limited || !controlled;
-    if(fault=="diag-detached-unlimited" || fault=="diag-console-unlimited") limited=false;
+    if(fault=="diag-detached-unlimited" || fault=="diag-console-unlimited" || fault=="diag-inherit-unlimited") limited=false;
     Stopwatch main=Stopwatch.StartNew(); Stopwatch cleanup=null;
     Func<IntPtr,IntPtr> own=h=> { if(!Valid(h)) throw Native("Create owned handle"); owned.Add(h); r.OwnedHandles++; return h; };
     try {
@@ -272,6 +282,7 @@ public static class TsfJobSupervisor {
       bool detached=limited || fault=="diag-detached-unlimited";
       if(fault=="diag-console-limited") detached=false;
       uint creation=detached?0x0008000cu:0x08080004u; // Detached when constrained; controlled descendants retain their original path.
+      if(fault=="diag-inherit-limited" || fault=="diag-inherit-unlimited") creation=0x00080004u;
       Check(CreateProcess(executable,new StringBuilder("\""+executable+"\" "+arguments),IntPtr.Zero,IntPtr.Zero,true,creation,IntPtr.Zero,Path.GetDirectoryName(executable),ref start,out pi),"Create suspended child");
       root=own(pi.process); thread=own(pi.thread); created=true; r.Pid=pi.pid; r.RootHandleValue=root.ToInt64();
       long exit,kernel,user; Check(GetProcessTimes(root,out r.Birth,out exit,out kernel,out user),"Capture root birth");
@@ -289,6 +300,7 @@ public static class TsfJobSupervisor {
       bool member; Check(IsProcessInJob(root,job,out member),"Validate job membership"); r.MemberBeforeResume=member;
       rootIdentity.Member=member;
       Accounting before=Count(job); r.PreResumeActive=before.active; if(!member || before.active!=1 || before.total!=1) throw new InvalidOperationException("Pre-resume job census failed");
+      if((fault=="diag-inherit-limited" || fault=="diag-inherit-unlimited") && !TestParentConsole()) throw new IOException("Inherited console precondition unproved");
       if(ResumeThread(thread)!=1) throw Native("Resume exactly one suspension");
       while(true) {
         long remaining=mainMs-main.ElapsedMilliseconds;
