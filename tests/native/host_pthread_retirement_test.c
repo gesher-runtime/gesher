@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <wchar.h>
 /* ProcessHandleInformation: handle values and object type indices, not inferred ownership. */
 typedef struct { HANDLE value; ULONG_PTR handle_count, pointer_count; ULONG access, type, attributes, reserved; } handle_entry;
 typedef struct { ULONG_PTR count, reserved; handle_entry entries[1]; } handle_snapshot;
@@ -14,6 +15,10 @@ typedef LONG (WINAPI *query_object_fn)(HANDLE, ULONG, void *, ULONG, ULONG *);
 typedef struct { USHORT length, maximum; WCHAR *buffer; } object_name;
 static void check(int ok, const char *s);
 static handle_snapshot *previous;
+typedef struct { DWORD tid; FILETIME created; } thread_identity;
+static thread_identity targets[400];
+static size_t target_count;
+static int same_time(FILETIME a, FILETIME b) { return a.dwLowDateTime==b.dwLowDateTime && a.dwHighDateTime==b.dwHighDateTime; }
 static void inventory(const char *phase) {
   HMODULE ntdll=GetModuleHandleW(L"ntdll.dll");
   query_process_fn query=(query_process_fn)GetProcAddress(ntdll,"NtQueryInformationProcess");
@@ -38,6 +43,14 @@ static void inventory(const char *phase) {
       if (result>=0 && ptr>=start && ptr<=end && name->length<=end-ptr && name->length<=name->maximum)
         printf("HANDLE_INVENTORY phase=%s value=%p type_index=%lu access=%08lx type=%.*ls\n",phase,e->value,e->type,e->access,(int)(name->length/sizeof(WCHAR)),name->buffer);
       else printf("HANDLE_INVENTORY phase=%s value=%p type_index=%lu access=%08lx query_status=%08lx\n",phase,e->value,e->type,e->access,(unsigned long)result);
+      if (result>=0 && ptr>=start && ptr<=end && name->length<=end-ptr && name->length==12 && wcsncmp(name->buffer,L"Thread",6)==0) {
+        FILETIME created,exited,kernel,user; DWORD tid=GetThreadId(e->value); int match=0;
+        if (tid && GetThreadTimes(e->value,&created,&exited,&kernel,&user)) {
+          for (size_t j=0;j<target_count;++j) if (tid==targets[j].tid && same_time(created,targets[j].created)) ++match;
+          printf("HANDLE_THREAD phase=%s value=%p tid=%lu current_tid=%lu creation=%08lx%08lx signaled=%lu target_matches=%d\n",
+                 phase,e->value,tid,GetCurrentThreadId(),created.dwHighDateTime,created.dwLowDateTime,WaitForSingleObject(e->value,0),match);
+        } else printf("HANDLE_THREAD phase=%s value=%p query_failed=%lu\n",phase,e->value,GetLastError());
+      }
     }
   }
   free(previous); previous=snapshot;
@@ -63,6 +76,8 @@ static DWORD WINAPI target(void *p) {
 static void launch(struct target *t) {
   t->ready=event(); t->start=event(); t->thread=CreateThread(NULL,0,target,t,0,NULL);
   check(t->thread!=NULL,"thread"); ++owned; await(t->ready);
+  FILETIME c,e,k,u; check(target_count<400 && GetThreadTimes(t->thread,&c,&e,&k,&u),"target identity");
+  targets[target_count++]=(thread_identity){GetThreadId(t->thread),c};
   check(gesher_winpthread_dup_cpu_handle_v1(t->id,(void **)&t->cap,&t->gen)==0,"live capability"); ++owned;
   check(GetThreadId(t->cap)==GetThreadId(t->thread),"same original kernel thread");
 }
