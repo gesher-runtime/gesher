@@ -117,9 +117,15 @@ inline void WINAPI Consume(EVENT_RECORD* record) {
     if (!Property(record, L"OldThreadId", &row.old_tid) ||
         !Property(record, L"NewThreadId", &row.new_tid) ||
         !Property(record, L"OldThreadState", &row.state) ||
-        !Property(record, L"OldThreadWaitReason", &row.reason) ||
-        !Property(record, L"OldThreadWaitMode", &row.mode)) {
+        !Property(record, L"OldThreadWaitReason", &row.reason)) {
       evidence.supported = false; return;
+    }
+    if (!Property(record, L"OldThreadWaitMode", &row.mode)) {
+      // v4 exposes ThreadFlags in this slot. Record its raw byte ONLY as
+      // telemetry; unsupported stays false even when the byte is 0 or 1.
+      evidence.supported = false;
+      if (record->EventHeader.EventDescriptor.Version != 4 ||
+          !Property(record, L"ThreadFlags", &row.mode)) return;
     }
     if (evidence.switches.size() >= 1000000) { evidence.supported = false; return; }
     evidence.switches.push_back(row);
