@@ -175,6 +175,20 @@ def linux_reference(text):
     return actual
 
 
+def import_policy(role, names):
+    require(role in {'core', 'host', 'arm64'}, 'Unknown PE role')
+    allowed = {'kernel32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
+               'ws2_32.dll', 'iphlpapi.dll', 'psapi.dll', 'bcrypt.dll', 'user32.dll',
+               'api-ms-win-core-synch-l1-2-0.dll'}
+    # Actual run 407989: only the production host imports these dependencies.
+    # media.cmake links http_source to winhttp and window.cmake links gdi32.
+    if role == 'host':
+        allowed |= {'winhttp.dll', 'gdi32.dll'}
+    extras = [name for name in names if name.lower() not in allowed and not
+              re.fullmatch(r'api-ms-win-crt-[a-z]+-l1-1-0.dll', name.lower())]
+    return bool(names) and not extras, extras
+
+
 def selftest():
     sources = {'source': 'digest'}
     outputs = {name: name for name in MEMBERS}
@@ -202,6 +216,19 @@ def selftest():
             continue
         raise RuntimeError('Duplicate JSON accepted')
     print('CPU_CLOCK_RECEIPT_CONTROLS rejected=8')
+    require(import_policy('host', ['KERNEL32.dll', 'WINHTTP.dll', 'GDI32.dll'])[0], 'Valid host imports rejected')
+    require(import_policy('core', ['KERNEL32.dll'])[0] and import_policy('arm64', ['KERNEL32.dll'])[0], 'Valid fixture imports rejected')
+    for role, names in (('host', []), ('host', ['unreviewed.dll']), ('host', ['libc++.dll']),
+                        ('host', ['api-ms-win-crt-stdio-l2-1-0.dll']),
+                        ('core', ['WINHTTP.dll']), ('core', ['GDI32.dll']),
+                        ('arm64', ['WINHTTP.dll']), ('arm64', ['GDI32.dll']), ('forged', ['KERNEL32.dll'])):
+        try:
+            accepted, _ = import_policy(role, names)
+            require(accepted, 'Rejected import mutation')
+        except RuntimeError:
+            continue
+        raise RuntimeError('PE import mutation accepted')
+    print('CPU_CLOCK_IMPORT_CONTROLS rejected=9 host_extensions=2 fixture_extensions=0')
 
 
 def main():
@@ -266,23 +293,19 @@ def main():
         for role in ('host', 'arm64_dll'):
             require(read(folder / 'compiler.json')[role]['toolchain_sha256'] == TOOLCHAIN, 'Compiler supplier mismatch')
         require(read(folder / 'guest-commands.json')['context'] == context(), 'Guest compiler context differs')
-        allowed = {'kernel32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
-                   'ws2_32.dll', 'iphlpapi.dll', 'psapi.dll', 'bcrypt.dll', 'user32.dll',
-                   'api-ms-win-core-synch-l1-2-0.dll'}
         checks = []
         for role, member, binary in (('core', 'imports-core.txt', 'pthread_cpu_clock_target_test.exe'),
                                      ('host', 'imports-host.txt', 'gesher-exec.exe'),
                                      ('arm64', 'imports-arm64.txt', 'gesher_arm64.dll')):
             raw = (folder / member).read_text()
             names = re.findall(r'^\s*Name:\s*(\S+)', raw, re.M)
-            extras = [name for name in names if name.lower() not in allowed and not
-                      re.fullmatch(r'api-ms-win-crt-[a-z]+-l1-1-0.dll', name.lower())]
+            accepted, extras = import_policy(role, names)
             print('CPU_CLOCK_PE_IMPORT_DIAGNOSTIC', json.dumps({
                 'role': role, 'file': binary, 'sha256': actual[binary],
                 'imports_file': member, 'imports_sha256': actual[member],
                 'raw_coff_imports': raw, 'parsed_names': names,
                 'missing': not bool(names), 'extras': extras}, sort_keys=True), flush=True)
-            checks.append(bool(names) and not extras)
+            checks.append(accepted)
         require(all(checks), 'Unexpected or missing actual PE imports')
         print('CPU_CLOCK_LINUX_PHASE_RECEIPT', json.dumps(linux_reference(
             (folder / 'linux-reference.log').read_text()), sort_keys=True))

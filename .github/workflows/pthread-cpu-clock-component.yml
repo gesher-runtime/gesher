@@ -84,7 +84,7 @@ jobs:
           test "$(stat -c %s ndk.zip)" = 663987688
           unzip -q ndk.zip
           python3 tools/pthread-cpu-clock/payload.py guests
-      - name: Seal exact host, translator, guest and Linux roles
+      - name: Seal exact roles with source-justified host imports and strict controls
         run: |
           python3 tools/pthread-cpu-clock/payload.py record
           python3 tools/pthread-cpu-clock/payload.py verify
