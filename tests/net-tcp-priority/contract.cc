@@ -746,9 +746,13 @@ static void established_error_control() {
   require(close(alias) == 0 && close(listener) == 0, "reset control cleanup");
   puts("PASS TCP priority: independent established reset remains poll-visible and reaches the caller receive");
 }
-static void peer_eof(int fd) {
+static void peer_eof(int fd, const char* phase) {
   pollfd p{fd, POLLIN, 0}; char byte{};
-  require(poll(&p, 1, 2000) == 1 && recv(fd, &byte, 1, 0) == 0, "last alias close produces peer EOF");
+  const int polled = poll(&p, 1, 2000);
+  const int result = polled == 1 ? static_cast<int>(recv(fd, &byte, 1, 0)) : -99;
+  const int error = result < 0 ? errno : 0;
+  printf("TCP_PRIORITY_ALIAS_EOF phase=%s poll=%d revents=%d recv=%d error=%d\n", phase, polled, p.revents, result, error); fflush(stdout);
+  require(polled == 1 && result == 0, "last alias close produces peer EOF");
 }
 static int status_flags(int fd) {
   const int flags = fcntl(fd, F_GETFL); require(flags >= 0, "alias status read"); return flags;
@@ -794,8 +798,8 @@ static void alias_ownership() {
   char byte{};
   require(recv(b.receiver, &byte, 1, 0) == 1 && byte == 'a', "replacement retains source after source close");
   require(recv(old_target, &byte, 1, 0) == 1 && byte == 'b', "replacement retains old target alias");
-  require(close(old_target) == 0, "last target alias close"); peer_eof(b.sender);
-  require(close(b.receiver) == 0, "last source alias close"); peer_eof(a.sender);
+  require(close(old_target) == 0, "last target alias close"); peer_eof(b.sender, "old-target");
+  require(close(b.receiver) == 0, "last source alias close"); peer_eof(a.sender, "replacement-source");
   require(close(a.sender) == 0 && close(b.sender) == 0, "replacement peer cleanup");
 
   a = pair(); int sibling = dup(a.receiver); require(sibling >= 0, "polling sibling alias");
@@ -805,7 +809,16 @@ static void alias_ownership() {
   usleep(40000); require(send(a.sender, "!", 1, MSG_OOB) == 1, "urgent after sibling close");
   require(pthread_join(thread, nullptr) == 0 && wait.rc == 1 && wait.revents == POLLPRI && wait.elapsed < 2000, "sibling close preserves bounded alias urgent wait");
   require(recv(sibling, &byte, 1, MSG_OOB) == 1 && byte == '!', "alias urgent payload after sibling close");
-  require(close(sibling) == 0, "last polling alias close"); peer_eof(a.sender);
+  // Linux409371: OOB-only receive followed by close sends reset because the
+  // stream sequence has not advanced. Drain through actual FIN before asking
+  // this independent lifetime control for strict orderly last-alias EOF.
+  require(shutdown(a.sender, SHUT_WR) == 0, "urgent sender half-close for real stream drain");
+  pollfd stream{sibling, POLLIN, 0}; require(poll(&stream, 1, 2000) == 1, "urgent alias stream FIN arrived");
+  const int drained = static_cast<int>(recv(sibling, &byte, 1, MSG_DONTWAIT)); const int drain_error = drained < 0 ? errno : 0;
+  const int live = static_cast<int>(recv(a.sender, &byte, 1, MSG_DONTWAIT)); const int live_error = live < 0 ? errno : 0;
+  printf("TCP_PRIORITY_ALIAS_DRAIN stream_recv=%d stream_error=%d before_last_close_recv=%d before_last_close_error=%d\n", drained, drain_error, live, live_error); fflush(stdout);
+  require(drained == 0 && live == -1 && (live_error == EAGAIN || live_error == EWOULDBLOCK), "stream drained while last alias still withholds peer EOF");
+  require(close(sibling) == 0, "last polling alias close"); peer_eof(a.sender, "urgent-drained");
   require(close(a.sender) == 0, "polling peer cleanup");
 
   int sender = socket(AF_INET, SOCK_DGRAM, 0), receiver = socket(AF_INET, SOCK_DGRAM, 0);

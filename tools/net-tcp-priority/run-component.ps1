@@ -108,6 +108,10 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
   }
   if ($text -notmatch '(?m)^PASS TCP priority: listener datagram and successful connect preserve finite priority-only waits\s*$') { throw "Missing finite endpoint controls $Context" }
   if ($text -notmatch '(?m)^PASS TCP priority: shared aliases preserve dup2 targets last-close EOF concurrent urgent poll and UDP payload\s*$') { throw "Missing alias lifetime controls $Context" }
+  if ($text -notmatch '(?m)^TCP_PRIORITY_ALIAS_DRAIN stream_recv=0 stream_error=0 before_last_close_recv=-1 before_last_close_error=11\r?$') { throw "Missing actual urgent stream drain and live last-alias control $Context" }
+  foreach ($phase in 'old-target','replacement-source','urgent-drained') {
+    if ($text -notmatch "(?m)^TCP_PRIORITY_ALIAS_EOF phase=$phase poll=1 revents=[0-9]+ recv=0 error=0\r?$") { throw "Missing strict actual last-alias EOF $Context/$phase" }
+  }
   if ($text -notmatch '(?m)^PASS TCP priority: actual connect finalization window consumes refusal once\s*$') { throw "Missing actual finalization window $Context" }
   if ($text -notmatch '(?m)^PASS TCP priority: requester exit retains completion and last-close drains before fd generation reuse\s*$') { throw "Missing requester/last-close/generation controls $Context" }
   if ($text -notmatch '(?m)^PASS TCP priority: independent established reset remains poll-visible and reaches the caller receive\s*$') { throw "Missing independent established-error control $Context" }

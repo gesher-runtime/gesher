@@ -573,3 +573,22 @@ misspelled helper name (`finite_priority_wait` versus existing
 component triggered. Correcting that call preserves the existing strict 60ms
 helper and every assertion/bound. Raw compile log:
 `C:/work/gesher-ci-review/tcp-409352-linux.log`.
+
+Corrected-helper8f185c13/409358 compiles. Actual Linux passes both inline and
+noninline original scenarios, finite waits, strict refusal/error consumption,
+requester reuse, reset receive and the new listener transition, then fails the
+new urgent-alias last-close EOF control with ECONNRESET104. No Windows product
+component was triggered. Strict EOF remained unchanged while independent Linux
+92f73439/409371 isolated four fresh transports: ordinary consumed input closes
+with recv0; OOB-only consumption then close produces recv-1/104; adding sender
+SHUT_WR and real normal-stream receive0 leaves peer EAGAIN11 until receiver's
+last close, then recv0, including a surviving dup alias. Linger was actually0.
+
+The product fixture now establishes that proven orderly-close precondition,
+requires real stream0 plus peer EAGAIN BEFORE last close, and retains strict
+peer EOF0 afterward. All three last-alias checks print named actual poll/read
+results; every consumer context requires those EOF and stream-drain markers.
+This is a fixture ordering correction, not reset acceptance or production error
+normalization. Original strict reset/SO_ERROR gaps remain OPEN. Raw logs:
+`C:/work/gesher-ci-review/tcp-409358-linux.log`,
+`C:/work/gesher-ci-review/tcp-409371-linux-alias-close.log`.
