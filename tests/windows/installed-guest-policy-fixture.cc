@@ -74,6 +74,22 @@ void ProbeFdPrimitives(const char* role) {
       role, event != nullptr, event_error, nul != INVALID_HANDLE_VALUE, nul_error);
   printf("LOWBOX_FD_ZERO role=%s nul_zero_ok=%d nul_zero_error=%lu crt_fd_ok=%d crt_errno=%d\n",
       role, zero != INVALID_HANDLE_VALUE, zero_error, fd >= 0, crt_error);
+  if (!std::strcmp(role, "lowbox")) {
+    HANDLE inherited = GetStdHandle(STD_INPUT_HANDLE), duplicate = nullptr;
+    DWORD type = GetFileType(inherited);
+    bool copied = DuplicateHandle(GetCurrentProcess(), inherited, GetCurrentProcess(), &duplicate,
+        0, FALSE, DUPLICATE_SAME_ACCESS) != FALSE;
+    DWORD copy_error = copied ? ERROR_SUCCESS : GetLastError();
+    int adopted = -1, adopted_error = 0;
+    if (copied) {
+      adopted = _open_osfhandle(reinterpret_cast<intptr_t>(duplicate), _O_RDWR | _O_NOINHERIT);
+      if (adopted < 0) adopted_error = errno;
+      if (adopted >= 0) Check(_close(adopted) == 0, "fd diagnostic inherited CRT close");
+      else Check(CloseHandle(duplicate), "fd diagnostic inherited transfer failure close");
+    }
+    printf("LOWBOX_FD_INHERITED role=lowbox type=%lu duplicate_ok=%d duplicate_error=%lu crt_fd_ok=%d crt_errno=%d\n",
+        type, copied, copy_error, adopted >= 0, adopted_error);
+  }
   fflush(stdout);
   if (!std::strcmp(role, "host")) Check(event != nullptr && nul != INVALID_HANDLE_VALUE && fd >= 0, "host fd primitive positive controls");
 }
@@ -208,7 +224,8 @@ int wmain(int argc, wchar_t** argv) {
       bool closed = CloseHandle(child_log) != FALSE;
       Check(bounded && read_ok && closed, "read and close exact retired child diagnostic log");
       Check(std::strstr(diagnostic, "LOWBOX_FD_DIAGNOSTIC role=lowbox ") != nullptr &&
-          std::strstr(diagnostic, "LOWBOX_FD_ZERO role=lowbox ") != nullptr, "actual lowbox diagnostic markers");
+          std::strstr(diagnostic, "LOWBOX_FD_ZERO role=lowbox ") != nullptr &&
+          std::strstr(diagnostic, "LOWBOX_FD_INHERITED role=lowbox ") != nullptr, "actual lowbox diagnostic markers");
       printf("%s", diagnostic); fflush(stdout);
       Check(DeleteFileW(log_path.c_str()), "nested child log cleanup");
       printf("POLICY_CHILD actual_lowbox=1 nested_create=1 file_reopen_read=1 nested_delete=1 exit=0 retired=1\n");

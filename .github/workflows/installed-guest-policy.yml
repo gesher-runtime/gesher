@@ -75,6 +75,7 @@ jobs:
               'LOWBOX_FD_DIAGNOSTIC role=lowbox ',
               'LOWBOX_FD_ZERO role=host ',
               'LOWBOX_FD_ZERO role=lowbox ',
+              'LOWBOX_FD_INHERITED role=lowbox ',
               'POLICY_RUNTIME_NESTED actual_gather=1 nested_directory=1 nested_file=1',
               'POLICY_READONLY low_label_rejected=1 missing_writeup_rejected=1 rollback_owners=0',
               'POLICY_PIN ancestor_rename=32 asset_rename=32 data_rename=32 final_file_rename=32',
