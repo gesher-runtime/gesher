@@ -30,8 +30,14 @@ attempt. Strict source inventory, compiler identities, typed member digests,
 actual artifact ZIP receipts, PE/ELF roles and negative controls are required.
 Both Windows runners compare actual child output to executed oracle output.
 
-Status: source implementation and fixture preparation only. Peer review and
-component CI are pending. No full-suite or inventory verification is claimed.
+Status: production source bb101f6f4a056168fe5765ca054e54dde6862f43 passed
+independent integration-worker source peer after correcting the pinned bitstring
+headroom rule. Component40804487806 is active on that exact source; Root owns
+the sole watch. The fixture requires 96 common Linux/AOSP records, 138 extended
+AOSP records (including capacities0..12), 100 malformed-boundary/cursor records,
+and actual corrupted-expectation negatives for each ABI on both Windows runners.
+Only local Python/PowerShell AST, canonical source pins and diff checks ran.
+No runtime, full-suite or inventory verification is claimed yet.
 Packing/encoding, RR parsing, resolver queries/cache/transport, other remaining
 Net4 entries, hardware and aggregate release closure remain open. The allocation
 is test92 under existing ADR0070; a later full integration must register this
