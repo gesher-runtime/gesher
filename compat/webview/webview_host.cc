@@ -423,6 +423,7 @@ using Impl = Host::Impl;
 struct SessionEntry {
   std::shared_ptr<Impl> owner;
   std::set<int64_t> used;
+  size_t pending = 0;  // admitted, including tasks not yet running on the STA
 };
 std::mutex g_session_mutex;
 std::map<int64_t, SessionEntry> g_sessions;
@@ -435,6 +436,11 @@ void FinishSession(const std::shared_ptr<Impl>& impl, int64_t id, HRESULT hr,
   if (GetTickCount64() >= it->second.deadline) hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
   UINT_PTR timer = it->second.timer;
   impl->session_requests.erase(it);  // retire before dispatch; callbacks may reenter
+  {
+    std::lock_guard<std::mutex> guard(g_session_mutex);
+    auto entry = g_sessions.find(impl->session_handle);
+    if (entry != g_sessions.end() && entry->second.pending > 0) --entry->second.pending;
+  }
   if (timer) { KillTimer(g_task_window, timer); g_timers.erase(timer); }
   ++impl->session_dispatches;
   impl->Report(kSessionResult, id, static_cast<int32_t>(hr), json);
@@ -1685,7 +1691,7 @@ Host* Host::Create(Listener* listener, const HostOptions& options) {
     std::lock_guard<std::mutex> guard(g_session_mutex);
     if (g_next_session < std::numeric_limits<int64_t>::max()) {
       impl->session_handle = g_next_session++;
-      g_sessions.emplace(impl->session_handle, SessionEntry{impl, {}});
+      g_sessions.emplace(impl->session_handle, SessionEntry{impl, {}, 0});
     }
   }
   PostToWebViewThread([impl] { Start(impl); });
@@ -1702,8 +1708,9 @@ int32_t Host::SubmitSession(int64_t handle, int64_t id, const std::wstring& sess
   auto entry = g_sessions.find(handle);
   if (entry == g_sessions.end()) return -1;
   if (entry->second.used.count(id)) return -3;
-  if (entry->second.used.size() >= 65536) return -5;
+  if (entry->second.used.size() >= 65536 || entry->second.pending >= 128) return -5;
   entry->second.used.insert(id);
+  ++entry->second.pending;
   auto impl = entry->second.owner;
   ULONGLONG deadline = GetTickCount64() + timeout_ms;
   auto* task = new std::function<void()>([impl, id, session, method, params, deadline] {
@@ -1755,6 +1762,7 @@ int32_t Host::SubmitSession(int64_t handle, int64_t id, const std::wstring& sess
   if (!PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(task))) {
     delete task;
     entry->second.used.erase(id);
+    --entry->second.pending;
     return -4;
   }
   return 0;
