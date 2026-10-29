@@ -30,6 +30,7 @@ sealed class ProbeForm : Form
     readonly ConcurrentDictionary<(string, int), Context> contexts = new();
     readonly ConcurrentDictionary<string, Context> observations = new();
     readonly ConcurrentDictionary<string, long> observedAt = new();
+    readonly ConcurrentDictionary<string, bool> decisions = new();
     long initialStart;
     readonly ConcurrentDictionary<string, bool> destroyed = new();
     readonly ConcurrentDictionary<string, string> parents = new();
@@ -87,11 +88,11 @@ sealed class ProbeForm : Form
                 await Task.Delay(50, initialDeadline.Token);
             }
             string[] first = { "main", "a", "b", "nested", "cross", "nestedCross", "sandbox" };
-            while (!first.All(label => observations.ContainsKey((label == "cross" || label == "nestedCross" || label == "sandbox" ? "denied:" : "allowed:") + label))) {
+            while (!first.All(label => observations.ContainsKey((label == "cross" || label == "nestedCross" || label == "sandbox" ? "denied:" : "allowed:") + label)) || !new[] { "forged:cross", "forged:nestedCross", "forged:sandbox" }.All(observations.ContainsKey)) {
                 initialDeadline.Token.ThrowIfCancellationRequested(); await Task.Delay(50, initialDeadline.Token);
             }
             if (Stopwatch.GetElapsedTime(initialStart) >= TimeSpan.FromSeconds(3) ||
-                expected.Concat(first.Select(label => (label == "cross" || label == "nestedCross" || label == "sandbox" ? "denied:" : "allowed:") + label))
+                expected.Concat(first.Select(label => (label == "cross" || label == "nestedCross" || label == "sandbox" ? "denied:" : "allowed:") + label)).Concat(new[] { "forged:cross", "forged:nestedCross", "forged:sandbox" })
                     .Any(label => !observedAt.TryGetValue(label, out var at) || Stopwatch.GetElapsedTime(initialStart, at) >= TimeSpan.FromSeconds(3)))
                 throw new TimeoutException("initial observation exceeded absolute deadline");
             foreach (string label in first) {
@@ -101,6 +102,14 @@ sealed class ProbeForm : Form
                     (allowed ? c.Origin != $"http://127.0.0.1:{port}" : c.Origin == $"http://127.0.0.1:{port}"))
                     throw new Exception("early candidate binding identity/origin mismatch: " + label);
                 Console.WriteLine($"EARLY_CANDIDATE label={label} allowed={allowed} session={c.Session} unique={c.Unique} origin={c.Origin} frame={c.Frame} fixtureCorrelationOnly=true");
+            }
+            foreach (string label in first) {
+                bool allowed = label != "cross" && label != "nestedCross" && label != "sandbox";
+                string decisionLabel = (allowed ? "allowed:" : "denied:") + label;
+                if (!decisions.TryGetValue(decisionLabel, out var decision) || decision != allowed)
+                    throw new Exception("native binding decision mismatch: " + label);
+                if (!allowed && (!decisions.TryGetValue("forged:" + label, out var forged) || forged))
+                    throw new Exception("forged direct binding not rejected: " + label);
             }
             foreach (string label in expected)
             {
@@ -178,7 +187,7 @@ sealed class ProbeForm : Form
             await Task.Delay(500, timeout.Token);
             if (observations.ContainsKey("reply-comparison")) throw new Exception("rejected evaluation delivered a binding");
             if (eventFailure) throw new Exception("an event, binding or session setup failed");
-            Console.WriteLine("BOOTSTRAP_PROBE_PASS selected first-script observations and context controls only; authorization, hostile pages and production unproven");
+            Console.WriteLine("BOOTSTRAP_PROBE_PASS selected exact-origin native decisions and context controls only; adversarial lifecycle and production unproven");
             Result = 0;
         }
         catch (Exception e) { Console.WriteLine("PLATFORM_PROBE_FAILURE " + e); }
@@ -220,6 +229,11 @@ sealed class ProbeForm : Form
                 string label = root.GetProperty("payload").GetString() ?? "";
                 if (contexts.TryGetValue((session, id), out var c))
                 {
+                    if (label.StartsWith("allowed:", StringComparison.Ordinal) || label.StartsWith("denied:", StringComparison.Ordinal) || label.StartsWith("forged:", StringComparison.Ordinal)) {
+                        bool accept = c.Default && c.Unique.Length != 0 && c.Frame.Length != 0 && c.Origin == $"http://127.0.0.1:{port}";
+                        if (!decisions.TryAdd(label, accept)) eventFailure = true;
+                        Console.WriteLine($"BINDING_DECISION label={label} accepted={accept} origin={c.Origin} session={session} unique={c.Unique} frame={c.Frame} labelAuthority=false");
+                    }
                     observedAt.TryAdd(label, Stopwatch.GetTimestamp());
                     if (!observations.TryAdd(label, c)) { eventFailure = true; Console.WriteLine("DUPLICATE_BINDING " + label); }
                 }
@@ -308,7 +322,7 @@ sealed class ProbeForm : Form
             string? header;
             while (!string.IsNullOrEmpty(header = await reader.ReadLineAsync())) { }
             if (path.StartsWith("/held")) { holdEntered.TrySetResult(); await holdRelease.Task.WaitAsync(TimeSpan.FromSeconds(30)); }
-            string script = "<script>let label=new URLSearchParams(location.search).get('name')||'main';if(window.realmProbe){realmProbe(label);if(window.web4Listener)web4Listener.postMessage(label);else realmProbe('denied:'+label)}</script>";
+            string script = "<script>let label=new URLSearchParams(location.search).get('name')||'main';if(window.realmProbe){realmProbe(label);if(window.web4Listener)web4Listener.postMessage(label);else {realmProbe('denied:'+label);realmProbe('forged:'+label)}}</script>";
             string html = path.StartsWith("/main")
                 ? script + $"<iframe id='a' src='/child?name=a'></iframe><iframe src='/child?name=b'></iframe><iframe src='http://localhost:{port}/child?name=cross'></iframe><iframe sandbox='allow-scripts' src='/child?name=sandbox'></iframe>" +
                   "<iframe id='blank'></iframe><iframe srcdoc=\"<script>if(window.realmProbe)realmProbe('srcdoc')</script>\"></iframe>" +
