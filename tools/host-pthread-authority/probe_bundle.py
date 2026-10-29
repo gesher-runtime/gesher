@@ -61,7 +61,7 @@ def build(llvm):
     subprocess.check_call(embedded_argv)
     embedded_exports=subprocess.check_output([str(llvm / 'bin/llvm-readobj'),'--coff-exports',str(DIST / 'embedded-provider.dll')],text=True)
     embedded_imports=subprocess.check_output([str(llvm / 'bin/llvm-readobj'),'--coff-imports',str(DIST / 'embedded-provider.dll')],text=True)
-    assert all('Name: '+name in embedded_exports for name in ('embedded_self','gesher_pthread_identity_probe_v6','gesher_sync_probe_v1','_pthread_key_dest')) and 'libwinpthread-1.dll' not in embedded_imports.lower()
+    assert all('Name: '+name in embedded_exports for name in ('embedded_self','gesher_pthread_identity_probe_v6','gesher_sync_probe_v1','gesher_admission_probe_v1','_pthread_key_dest')) and 'libwinpthread-1.dll' not in embedded_imports.lower()
     assert sha(embedded_lib)==provider['files']['lib/libwinpthread.a']
     embedded={'argv':embedded_argv,'source_sha256':sha(embedded_source),'library_sha256':sha(embedded_lib),'output_sha256':sha(DIST / 'embedded-provider.dll'),'exports':embedded_exports,'imports':embedded_imports}
     standalone_source=ROOT / 'tests/native/host_pthread_embedded_standalone_test.c'
@@ -160,7 +160,7 @@ def verify():
     assert argv[9]=='-o' and argv[10].endswith('/routing-probe-fixture/embedded-provider.dll')
     assert embedded['source_sha256']==sha(ROOT / 'tests/native/pthread_embedded_provider_module.c')
     assert embedded['library_sha256']==provider['files']['lib/libwinpthread.a'] and embedded['output_sha256']==sha(DIST / 'embedded-provider.dll')
-    assert all('Name: '+name in embedded['exports'] for name in ('embedded_self','gesher_pthread_identity_probe_v6','gesher_sync_probe_v1','_pthread_key_dest')) and 'libwinpthread-1.dll' not in embedded['imports'].lower()
+    assert all('Name: '+name in embedded['exports'] for name in ('embedded_self','gesher_pthread_identity_probe_v6','gesher_sync_probe_v1','gesher_admission_probe_v1','_pthread_key_dest')) and 'libwinpthread-1.dll' not in embedded['imports'].lower()
     module=data['callback_module']; argv=module['argv']
     assert len(argv)==9 and argv[0]==data['driver']
     assert argv[1:6]==['-D_WIN32_WINNT=0x0A00', '-Wall', '-Wextra', '-Werror', '-shared']

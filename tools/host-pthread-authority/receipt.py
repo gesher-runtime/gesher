@@ -137,6 +137,7 @@ def supplier(source, llvm, role):
         assert ('gesher_pthread_identity_probe_v6' in output) == (role in {'probe', 'probe-fault', 'probe-legacy'}), 'Probe symbol role mismatch'
         assert ('gesher_sync_probe_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy'}), 'Sync probe symbol role mismatch'
         assert ('gesher_alias_gate_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy'}), 'Alias gate role mismatch'
+        assert ('gesher_admission_probe_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy'}), 'Admission probe role mismatch'
         for gate in ('gesher_rwlock_init_gate_v1',):
             assert (gate in output) == (role in {'probe', 'probe-fault', 'probe-legacy'}), 'Sync init gate role mismatch'
         assert ('gesher_wrapper_probe_gate_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy'}), 'Wrapper gate role mismatch'
@@ -152,6 +153,7 @@ def supplier(source, llvm, role):
     assert ('gesher_pthread_identity_probe_v6' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy'}), 'DLL probe export role mismatch'
     assert ('gesher_sync_probe_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy'}), 'DLL sync probe export role mismatch'
     assert ('gesher_alias_gate_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy'}), 'DLL alias gate role mismatch'
+    assert ('gesher_admission_probe_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy'}), 'DLL admission probe role mismatch'
     for gate in ('gesher_rwlock_init_gate_v1',):
         assert (gate in exports) == (role in {'probe', 'probe-fault', 'probe-legacy'}), 'DLL sync init gate role mismatch'
     assert ('gesher_wrapper_probe_gate_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy'}), 'DLL wrapper gate role mismatch'
