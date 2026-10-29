@@ -3,8 +3,9 @@
   "source_sha256": {
     "mingw-w64-libraries/winpthreads/src/thread.c": "c2fcaa54269f0e773069aeeec8212cac71f417483bf65d5e75f100311df4080b",
     "mingw-w64-libraries/winpthreads/src/thread.h": "3c105e10217cabae5a34d1e6e83352fb4eb8a9c2cf048de8053351eb6edf6a25",
-    "mingw-w64-libraries/winpthreads/include/pthread.h": "bf3fd920306acb4144873d1099490cf332700c268a8ede0e484c7c0e721c7995"
+    "mingw-w64-libraries/winpthreads/include/pthread.h": "bf3fd920306acb4144873d1099490cf332700c268a8ede0e484c7c0e721c7995",
+    "mingw-w64-libraries/winpthreads/src/clock.c": "5d5a7ba2ef59415b080cae0170da9b50763f4352cc1c080e231568dc264259c1"
   },
-  "patch_sha256": "bdbb467cc79970411db6ef0a972e93d1b8e2dab697996eb9f30941d742c314dd",
+  "patch_sha256": "871afb81bbee06a6ee8e0adfe09ed3729653868edee32faa50574411e0c77a3b",
   "fault_patch_sha256": "0e842c7e6ea01c49265a2e13932da3284fbf363882d6fdd60ec8810a47089ffd"
 }
