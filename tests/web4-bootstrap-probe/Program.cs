@@ -1,5 +1,6 @@
 // CI-only WebView2/CDP capability experiment. Not the Gesher bridge.
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -28,6 +29,8 @@ sealed class ProbeForm : Form
     readonly WebView2 web = new() { Dock = DockStyle.Fill };
     readonly ConcurrentDictionary<(string, int), Context> contexts = new();
     readonly ConcurrentDictionary<string, Context> observations = new();
+    readonly ConcurrentDictionary<string, long> observedAt = new();
+    long initialStart;
     readonly ConcurrentDictionary<string, bool> destroyed = new();
     readonly ConcurrentDictionary<string, string> parents = new();
     readonly ConcurrentDictionary<string, string> targetTypes = new();
@@ -75,6 +78,7 @@ sealed class ProbeForm : Form
             await core.AddScriptToExecuteOnDocumentCreatedAsync("(()=>{if(globalThis.origin===" + allow + "){Object.defineProperty(globalThis,'web4Listener',{value:Object.freeze({postMessage:(x)=>globalThis.realmProbe('allowed:'+x)}),configurable:false})}})()");
             using var initialDeadline = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
             initialDeadline.CancelAfter(TimeSpan.FromSeconds(3));
+            initialStart = Stopwatch.GetTimestamp();
             web.Source = new Uri($"http://127.0.0.1:{port}/main");
             string[] expected = { "main", "a", "b", "nested", "cross", "nestedCross", "sandbox", "blank", "srcdoc" };
             while (!expected.All(observations.ContainsKey))
@@ -86,6 +90,10 @@ sealed class ProbeForm : Form
             while (!first.All(label => observations.ContainsKey((label == "cross" || label == "nestedCross" || label == "sandbox" ? "denied:" : "allowed:") + label))) {
                 initialDeadline.Token.ThrowIfCancellationRequested(); await Task.Delay(50, initialDeadline.Token);
             }
+            if (Stopwatch.GetElapsedTime(initialStart) >= TimeSpan.FromSeconds(3) ||
+                expected.Concat(first.Select(label => (label == "cross" || label == "nestedCross" || label == "sandbox" ? "denied:" : "allowed:") + label))
+                    .Any(label => !observedAt.TryGetValue(label, out var at) || Stopwatch.GetElapsedTime(initialStart, at) >= TimeSpan.FromSeconds(3)))
+                throw new TimeoutException("initial observation exceeded absolute deadline");
             foreach (string label in first) {
                 bool allowed = label != "cross" && label != "nestedCross" && label != "sandbox";
                 Context c = observations[(allowed ? "allowed:" : "denied:") + label];
@@ -212,6 +220,7 @@ sealed class ProbeForm : Form
                 string label = root.GetProperty("payload").GetString() ?? "";
                 if (contexts.TryGetValue((session, id), out var c))
                 {
+                    observedAt.TryAdd(label, Stopwatch.GetTimestamp());
                     if (!observations.TryAdd(label, c)) { eventFailure = true; Console.WriteLine("DUPLICATE_BINDING " + label); }
                 }
                 else { eventFailure = true; Console.WriteLine("UNMATCHED_BINDING " + label); }
