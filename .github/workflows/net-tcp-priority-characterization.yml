@@ -39,7 +39,7 @@ jobs:
         shell: pwsh
         run: |
           foreach ($tracing in 0..1) {
-            foreach ($mode in 0..2) {
+            foreach ($mode in 0..3) {
               $rows = & ./urgent-oracle.exe --closed-poll "$tracing" "$mode" 2>&1
               $code = $LASTEXITCODE
               Write-Host ($rows -join "`n")

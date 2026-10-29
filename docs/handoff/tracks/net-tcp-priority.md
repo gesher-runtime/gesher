@@ -926,3 +926,16 @@ unowned INVALID_SOCKET EINVAL22 control. This guards against hiding unrelated
 native failures. Independent source peer and fresh current-source HOST/both
 NDK ABI contexts remain required; ordinary debugger/verifier and other-provider
 behavior is not generally qualified by this observer-effect characterization.
+
+1752eaea/409708 actual BOTH passes exact isolated supplier/cancel and all4
+original owner censuses, poll-reuse and all3 closed-native controls. Owned
+positive closed native10038 becomes strict POSIX NVAL/count1 or2; eventfd/UDP
+readiness/payload remain. Unowned positive closed socket returns-1/ENOTSOCK88.
+The NEXT older sentinel INVALID_SOCKET control also returns-1/ENOTSOCK88,
+failing its assumed EINVAL22. This is preserved failure, not false readiness.
+Before correcting that exact fixture expectation, the independent WinSDK
+comparison adds a fourth fresh-process cell whose array contains literal
+INVALID_SOCKET, distinct from a physically closed positive value. Original
+6cells, Linux/native oracle and all product assertions remain unchanged pending
+this actual native result. No product/component change or exception swallowing.
+Raw tcp-409708-win2022/win2025.log retained under gesher-ci-review.

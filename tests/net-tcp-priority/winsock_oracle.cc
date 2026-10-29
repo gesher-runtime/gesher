@@ -125,7 +125,7 @@ static int observe_closed_poll(WSAPOLLFD* entries, ULONG count, int* error, DWOR
   return result;
 }
 static int closed_poll_characterization(int tracing, int mode) {
-  require((tracing == 0 || tracing == 1) && mode >= 0 && mode <= 2, "explicit closed-poll observation cell");
+  require((tracing == 0 || tracing == 1) && mode >= 0 && mode <= 3, "explicit closed-poll observation cell");
   require(!IsDebuggerPresent(), "closed-poll process has no attached debugger");
   WSADATA data{}; require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "closed-poll startup");
   LONG enabled = -1;
@@ -140,7 +140,7 @@ static int closed_poll_characterization(int tracing, int mode) {
   SOCKET victim = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   require(victim != INVALID_SOCKET, "closed-poll victim");
   SOCKET listener = INVALID_SOCKET, peer = INVALID_SOCKET, udp = INVALID_SOCKET;
-  if (mode != 0) {
+  if (mode == 1 || mode == 2) {
     listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); require(listener != INVALID_SOCKET, "closed-poll listener");
     sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     require(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0 && listen(listener, 1) == 0, "closed-poll actual listener");
@@ -150,7 +150,7 @@ static int closed_poll_characterization(int tracing, int mode) {
   }
   if (mode == 2) { udp = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); require(udp != INVALID_SOCKET, "closed-poll independent live socket"); }
   WSAPOLLFD entries[2]{};
-  entries[0].fd = victim; entries[0].events = POLLRDBAND;
+  entries[0].fd = mode == 3 ? INVALID_SOCKET : victim; entries[0].events = POLLRDBAND;
   entries[1].fd = udp; entries[1].events = POLLRDNORM;
   printf("WINDOWS_CLOSED_POLL_BEGIN tracing=%d mode=%d enabled_status=%ld count=%d\n", tracing, mode, enabled, mode == 2 ? 2 : 1); fflush(stdout);
   require(closesocket(victim) == 0, "real native victim physically closed before sample");
@@ -172,7 +172,7 @@ static int closed_poll_characterization(int tracing, int mode) {
 }
 int main(int argc, char** argv) {
   if (argc == 4 && strcmp(argv[1], "--closed-poll") == 0) {
-    require(strlen(argv[2]) == 1 && strlen(argv[3]) == 1 && argv[2][0] >= '0' && argv[2][0] <= '1' && argv[3][0] >= '0' && argv[3][0] <= '2', "closed-poll exact arguments");
+    require(strlen(argv[2]) == 1 && strlen(argv[3]) == 1 && argv[2][0] >= '0' && argv[2][0] <= '1' && argv[3][0] >= '0' && argv[3][0] <= '3', "closed-poll exact arguments");
     return closed_poll_characterization(argv[2][0] - '0', argv[3][0] - '0');
   }
   require(argc == 1, "original urgent oracle arguments unchanged");
