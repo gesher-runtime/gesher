@@ -24,6 +24,19 @@ runs:
         curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
           | tar -xJ -C ~/toolchain
 
+    - name: Build the pinned authority supplier in a private compiler tree
+      shell: bash
+      run: |
+        private_root="$RUNNER_TEMP/gesher-authority-toolchain"
+        test ! -e "$private_root"
+        mkdir "$private_root"
+        curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" -o "$private_root/compiler.tar.xz"
+        printf '%s  %s\n' 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4 "$private_root/compiler.tar.xz" | sha256sum --check --strict
+        tar -xJf "$private_root/compiler.tar.xz" -C "$private_root"
+        private="$private_root/$LLVM_MINGW_NAME"
+        bash tools/host-pthread-authority/build-supplier.sh "$private"
+        printf 'GESHER_AUTHORITY_LLVM=%s\n' "$private" >> "$GITHUB_ENV"
+
     - name: Cache AOSP sources
       uses: actions/cache@v4
       with:
@@ -52,5 +65,5 @@ runs:
         ccache --set-config=max_size=2G
         cmake -S . -B out -G Ninja \
           -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
-          -DLLVM_MINGW="$HOME/toolchain/$LLVM_MINGW_NAME" \
+          -DLLVM_MINGW="$GESHER_AUTHORITY_LLVM" \
           -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache

@@ -135,6 +135,10 @@ add_executable(native3_cpu_clock_test tests/native/native3_cpu_clock_test.cc)
 target_compile_options(native3_cpu_clock_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(native3_cpu_clock_test PRIVATE artbase gesher_posix)
 
+add_executable(host_pthread_authority_test tests/native/host_pthread_authority_test.cc)
+target_link_libraries(host_pthread_authority_test PRIVATE gesher_posix)
+target_compile_options(host_pthread_authority_test PRIVATE -Wall -Wextra -Werror)
+
 add_executable(pthread_cpu_clock_target_test tests/native/pthread_cpu_clock_target_test.cc)
 target_compile_options(pthread_cpu_clock_target_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(pthread_cpu_clock_target_test PRIVATE gesher_bionic gesher_elf)

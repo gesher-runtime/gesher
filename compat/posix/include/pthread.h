@@ -22,8 +22,7 @@ extern "C" {
 // Describes a running thread's stack. Only the calling thread is supported.
 int pthread_getattr_np(pthread_t thread, pthread_attr_t* attr);
 
-// Windows has no per-thread CPU clock id; the returned clock reads the
-// calling thread's CPU time, so it is only exact for pthread_self().
+// A target clock retains the exact kernel object authenticated by the supplier.
 int pthread_getcpuclockid(pthread_t thread, clockid_t* clock_id);
 
 // The guard size of Windows thread stacks is one page; setting it is

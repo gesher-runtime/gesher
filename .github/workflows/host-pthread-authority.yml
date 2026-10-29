@@ -1,0 +1,97 @@
+name: host pthread authority initial controls
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/host-pthread-authority]
+    paths: ['.github/workflows/host-pthread-authority.yml']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: host-pthread-authority-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_TAG: '20261006'
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: host-pthread-authority
+      - name: Build actual POSIX library and both supplier linkage roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B out -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          ninja -C out host_pthread_authority_test
+          mkdir host-authority-fixture
+          cp out/host_pthread_authority_test.exe host-authority-fixture/
+          llvm="$GESHER_AUTHORITY_LLVM"
+          "$llvm/bin/x86_64-w64-mingw32-clang" -Wall -Wextra -Werror tests/native/host_pthread_supplier_test.c "$llvm/x86_64-w64-mingw32/lib/libwinpthread.dll.a" -o host-authority-fixture/host_pthread_supplier_test.exe
+          cp "$llvm/x86_64-w64-mingw32/bin/libwinpthread-1.dll" host-authority-fixture/
+          cp "$llvm/x86_64-w64-mingw32/share/mingw32/COPYING.winpthreads.txt" host-authority-fixture/
+          cp "$llvm/gesher-winpthreads-authority.json" host-authority-fixture/supplier.json
+          "$llvm/bin/llvm-readobj" --coff-imports out/host_pthread_authority_test.exe > host-authority-fixture/imports-host.txt
+          "$llvm/bin/llvm-readobj" --coff-imports host-authority-fixture/host_pthread_supplier_test.exe > host-authority-fixture/imports-dynamic.txt
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          p=Path(os.environ['GESHER_AUTHORITY_LLVM'])/'bin/x86_64-w64-mingw32-clang++'
+          Path('host-authority-fixture/compiler.json').write_text(json.dumps({'configured_driver':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}))
+          PY
+          python3 tools/host-pthread-authority/bundle.py record
+          python3 tools/host-pthread-authority/bundle.py verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: host-pthread-authority-initial
+          path: host-authority-fixture/
+          if-no-files-found: error
+  windows:
+    needs: compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Exact producer ZIP and same-source complete member verification
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/artifact_receipt.py --name host-pthread-authority-initial --producer compile --destination host-authority-fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Producer ZIP validation failed' }
+          python tools/host-pthread-authority/bundle.py verify
+          if ($LASTEXITCODE -ne 0) { throw 'Host supplier identity failed' }
+      - name: Real initial host target and dynamic export controls
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in @('host_pthread_authority_test', 'host_pthread_supplier_test')) {
+            $stdout = Join-Path $env:RUNNER_TEMP "$name.stdout"
+            $stderr = Join-Path $env:RUNNER_TEMP "$name.stderr"
+            $process = $null
+            try {
+              $process = Start-Process -FilePath (Join-Path $pwd "host-authority-fixture/$name.exe") -WorkingDirectory (Join-Path $pwd 'host-authority-fixture') -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+              if (-not $process.WaitForExit(180000)) { throw "Owned fixture timeout $name" }
+              $process.Refresh()
+              if ($process.ExitCode -ne 0) { throw "Actual fixture exit $name=$($process.ExitCode)" }
+            } finally {
+              if ($null -ne $process) {
+                if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Owned fixture cleanup failed' } }
+                $process.Dispose()
+              }
+              if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
+              if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+            }
+          }

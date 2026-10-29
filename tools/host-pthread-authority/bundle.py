@@ -1,0 +1,71 @@
+"""Source/run-bound narrow host supplier bundle, distinct from guest qualification."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+DIST = ROOT / 'host-authority-fixture'
+MEMBERS = {'host_pthread_authority_test.exe', 'host_pthread_supplier_test.exe',
+           'libwinpthread-1.dll', 'supplier.json', 'COPYING.winpthreads.txt',
+           'imports-host.txt', 'imports-dynamic.txt', 'compiler.json'}
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def context():
+    assert os.environ.get('GITHUB_ACTIONS') == 'true'
+    c = {k: os.environ[k] for k in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY')}
+    assert c['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
+    assert os.environ.get('GITHUB_REF') == 'refs/heads/wip/host-pthread-authority'
+    assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == c['GITHUB_SHA']
+    subprocess.check_call(['git', 'diff', '--exit-code', 'HEAD', '--'])
+    return c
+
+
+def source():
+    names = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+    return {p: sha(ROOT / p) for p in names if p}
+
+
+def record():
+    assert set(p.name for p in DIST.iterdir()) == MEMBERS
+    data = context()
+    data.update(role='host-authority-initial-controls-v1', sources=source(),
+                members={p: sha(DIST / p) for p in MEMBERS})
+    supplier = json.loads((DIST / 'supplier.json').read_text())
+    assert all(supplier[k] == data[k] for k in context())
+    compiler = json.loads((DIST / 'compiler.json').read_text())
+    commands = json.loads((ROOT / 'out/compile_commands.json').read_text())
+    expected = compiler['configured_driver']
+    for path in ('compat/posix/src/pthread.cc', 'tests/native/host_pthread_authority_test.cc'):
+        rows = [r for r in commands if Path(r['file']).resolve() == (ROOT / path).resolve()]
+        assert len(rows) == 1
+        import shlex
+        argv = shlex.split(rows[0]['command'])
+        assert argv[0] == expected or (argv[0].endswith('ccache') and argv[1] == expected)
+    assert sha(Path(expected)) == compiler['sha256'] == supplier['cxx_driver_sha256']
+    assert 'libwinpthread-1.dll' not in (DIST / 'imports-host.txt').read_text().lower()
+    assert 'libwinpthread-1.dll' in (DIST / 'imports-dynamic.txt').read_text().lower()
+    (DIST / 'bundle.json').write_text(json.dumps(data, sort_keys=True, indent=2))
+
+
+def verify():
+    data = json.loads((DIST / 'bundle.json').read_text())
+    assert all(data[k] == v for k, v in context().items())
+    assert data['role'] == 'host-authority-initial-controls-v1'
+    assert data['sources'] == source()
+    assert set(p.name for p in DIST.iterdir()) == MEMBERS | {'bundle.json'}
+    assert data['members'] == {p: sha(DIST / p) for p in MEMBERS}
+    supplier = json.loads((DIST / 'supplier.json').read_text())
+    assert supplier['files']['bin/libwinpthread-1.dll'] == sha(DIST / 'libwinpthread-1.dll')
+    assert supplier['files']['share/mingw32/COPYING.winpthreads.txt'] == sha(DIST / 'COPYING.winpthreads.txt')
+    print('Verified initial host authority bundle; no full/guest/stress qualification implied')
+
+
+if __name__ == '__main__':
+    {'record': record, 'verify': verify}[sys.argv[1]]()
