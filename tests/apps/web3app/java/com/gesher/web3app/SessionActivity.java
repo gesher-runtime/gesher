@@ -8,6 +8,7 @@ import java.lang.reflect.Proxy;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Exercises the real Java/JNI session request entry point. */
@@ -15,6 +16,50 @@ public class SessionActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         new Thread(this::exercise, "session-fixture").start();
+    }
+
+    private boolean exerciseCapacity(Class<?> cls, Class<?> client) throws Exception {
+        CountDownLatch ready = new CountDownLatch(1), completions = new CountDownLatch(128);
+        AtomicIntegerArray counts = new AtomicIntegerArray(128);
+        AtomicInteger unexpected = new AtomicInteger();
+        Object callback = Proxy.newProxyInstance(client.getClassLoader(), new Class<?>[] {client},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("onEvent")) {
+                        int type = (Integer) args[0];
+                        long id = (Long) args[1];
+                        if (type == 1) ready.countDown();
+                        if (type == 30 && id >= 1000 && id < 1128) {
+                            int slot = (int) id - 1000;
+                            if (counts.incrementAndGet(slot) != 1 || (Integer) args[2] != 0x800704c7)
+                                unexpected.incrementAndGet();
+                            completions.countDown();
+                        }
+                    }
+                    if (method.getReturnType() == boolean.class) return false;
+                    if (method.getReturnType() == String.class) return "{}";
+                    return null;
+                });
+        Object host = cls.getMethod("create", client, double.class, int.class)
+                .invoke(null, callback, 1.0, -1);
+        if (host == null) return false;
+        Method close = cls.getMethod("tryDestroy");
+        try {
+            if (!ready.await(20, TimeUnit.SECONDS)) return false;
+            Method submit = cls.getMethod("submitSession", long.class, String.class,
+                    String.class, String.class, int.class);
+            String pending = "{\"expression\":\"new Promise(()=>{})\",\"awaitPromise\":true}";
+            for (long id = 1000; id < 1128; ++id) {
+                if ((Integer) submit.invoke(host, id, "", "Runtime.evaluate", pending, 60000) != 0)
+                    return false;
+            }
+            int rejected = (Integer) submit.invoke(host, 1128L, "", "Runtime.enable", "{}", 60000);
+            boolean queuedClose = (Boolean) close.invoke(host);
+            boolean drained = completions.await(20, TimeUnit.SECONDS);
+            Thread.sleep(1000); // bounded observation for duplicate events
+            return rejected == -5 && queuedClose && drained && unexpected.get() == 0;
+        } finally {
+            close.invoke(host);
+        }
     }
 
     private void exercise() {
@@ -82,6 +127,12 @@ public class SessionActivity extends Activity {
             char[] oversized = new char[257];
             java.util.Arrays.fill(oversized, 'x');
             int tooLong = (Integer) submit.invoke(host, 7L, "", new String(oversized), "{}", 5000);
+            int sessionTooLong = (Integer) submit.invoke(host, 8L, new String(oversized),
+                    "Runtime.enable", "{}", 5000);
+            char[] huge = new char[524289];
+            java.util.Arrays.fill(huge, ' ');
+            int paramsTooLong = (Integer) submit.invoke(host, 9L, "", "Runtime.enable",
+                    new String(huge), 5000);
             int delayed = (Integer) submit.invoke(host, 2L, "", "Runtime.evaluate",
                     "{\"expression\":\"new Promise(r => setTimeout(() => {window.__sessionLate=7; r(7)}, 1000))\","
                             + "\"awaitPromise\":true,\"returnByValue\":true}", 100);
@@ -96,13 +147,17 @@ public class SessionActivity extends Activity {
             int afterClose = (Integer) submit.invoke(host, 4L, "", "Runtime.enable", "{}", 5000);
             passed = accepted == 0 && completed && status.get() == 0 && count.get() == 1
                     && payload.get().contains("\"value\":42") && duplicate == -3 && invalid == -2
-                    && tooLong == -2
+                    && tooLong == -2 && sessionTooLong == -2 && paramsTooLong == -2
                     && delayed == 0 && timedOut && timeoutStatus.get() == 0x800705b4
                     && timeoutCount.get() == 1 && marker == 0 && markerObserved
                     && third == 0 && closed && afterClose == -1;
+            boolean capacity = exerciseCapacity(cls, client);
+            passed &= capacity;
+            Web3.log("session capacity " + capacity);
             Web3.log("session request accepted=" + accepted + " completed=" + completed
                     + " hresult=" + status.get() + " count=" + count.get()
                     + " duplicate=" + duplicate + " invalid=" + invalid + " tooLong=" + tooLong
+                    + " sessionTooLong=" + sessionTooLong + " paramsTooLong=" + paramsTooLong
                     + " timeout=" + timedOut + " timeoutHresult=" + timeoutStatus.get()
                     + " timeoutCount=" + timeoutCount.get() + " marker=" + markerObserved
                     + " reentrant=" + closed + " afterClose=" + afterClose);
