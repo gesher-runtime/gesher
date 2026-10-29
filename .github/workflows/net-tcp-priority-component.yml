@@ -1,4 +1,5 @@
 name: net-tcp-priority-component
+# Refused-connect diagnostics keep the original error/readiness contract intact.
 on:
   workflow_dispatch:
   push:

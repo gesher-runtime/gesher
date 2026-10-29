@@ -106,9 +106,20 @@ static void connection_controls() {
   int client = socket(AF_INET, SOCK_STREAM, 0); require(client >= 0, "refused client");
   int flags = fcntl(client, F_GETFL); require(flags >= 0 && fcntl(client, F_SETFL, flags | O_NONBLOCK) == 0, "refused nonblock");
   int connected = connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+  const int connect_error = errno;
   require(connected == -1 && (errno == EINPROGRESS || errno == ECONNREFUSED), "refused connection pending");
   pollfd refused{client, POLLPRI, 0};
-  require(poll(&refused, 1, 5000) == 1 && (refused.revents & (POLLERR | POLLHUP)) && !(refused.revents & POLLPRI), "refused error never priority");
+  const long long start = millis();
+  const int polled = poll(&refused, 1, 5000);
+  const int poll_error = errno;
+  const long long elapsed = millis() - start;
+  sockaddr_storage peer{}; length = sizeof(peer);
+  const int peer_rc = getpeername(client, reinterpret_cast<sockaddr*>(&peer), &length);
+  const int peer_error = peer_rc < 0 ? errno : 0;
+  printf("TCP_PRIORITY_REFUSED connect_rc=%d connect_errno=%d poll_rc=%d revents=%d poll_errno=%d elapsed_ms=%lld peer_rc=%d peer_errno=%d SO_ERROR=untouched\n",
+         connected, connect_error, polled, refused.revents, poll_error, elapsed, peer_rc, peer_error);
+  fflush(stdout);
+  require(polled == 1 && (refused.revents & (POLLERR | POLLHUP)) && !(refused.revents & POLLPRI), "refused error never priority");
   int error = 0; length = sizeof(error);
   require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "readiness preserved SO_ERROR");
   error = -1; length = sizeof(error);

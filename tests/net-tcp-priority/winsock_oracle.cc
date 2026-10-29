@@ -149,6 +149,13 @@ int main() {
   u_long nonblocking = 1; require(ioctlsocket(failed, FIONBIO, &nonblocking) == 0, "refused nonblocking");
   int connection = connect(failed, reinterpret_cast<sockaddr*>(&refused), sizeof(refused));
   require(connection == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK, "refused connect pending");
+  const ULONGLONG poll_start = GetTickCount64();
+  WSAPOLLFD refused_band{}; refused_band.fd = failed; refused_band.events = POLLRDBAND;
+  int refused_rc = WSAPoll(&refused_band, 1, 5000);
+  int refused_error = refused_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
+  printf("WINDOWS_URG refused-band rc=%d revents=%d error=%d elapsed_ms=%llu SO_ERROR=untouched\n",
+         refused_rc, refused_band.revents, refused_error, GetTickCount64() - poll_start);
+  fflush(stdout);
   fd_set exceptions; FD_ZERO(&exceptions); FD_SET(failed, &exceptions); timeval wait{5, 0};
   require(select(0, nullptr, nullptr, &exceptions, &wait) == 1, "refused exception arrived");
   sockaddr_storage peer{}; length = sizeof(peer);
@@ -156,6 +163,13 @@ int main() {
   int peer_error = peer_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
   printf("WINDOWS_URG refused-connect except=1 peer_rc=%d peer_error=%d SO_ERROR=untouched\n", peer_rc, peer_error);
   require(peer_rc == SOCKET_ERROR && peer_error == WSAENOTCONN, "refused is not connected");
+  const SHORT refused_interests[] = {POLLRDBAND, POLLRDBAND | POLLRDNORM | POLLWRNORM};
+  for (SHORT events : refused_interests) {
+    WSAPOLLFD observed{}; observed.fd = failed; observed.events = events;
+    int rc = WSAPoll(&observed, 1, 0);
+    int error = rc == SOCKET_ERROR ? WSAGetLastError() : 0;
+    printf("WINDOWS_URG refused-complete events=%d rc=%d revents=%d error=%d SO_ERROR=untouched\n", events, rc, observed.revents, error);
+  }
   require(closesocket(failed) == 0 && closesocket(reserved) == 0, "refused cleanup");
   require(WSACleanup() == 0, "cleanup");
   puts("PASS Windows TCP urgent characterization");
