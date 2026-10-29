@@ -63,6 +63,20 @@ void Label(const std::wstring& path, const wchar_t* sddl) {
   Check(CloseHandle(handle), "label handle close"); LocalFree(descriptor);
   Check(result == ERROR_SUCCESS, "label exact file mutation");
 }
+void ObserveSectionSpecificRights(HANDLE section, const char* role, bool expect_positive) {
+  struct Right { const char* name; DWORD access; };
+  const Right rights[] = {{"map-write", FILE_MAP_WRITE}, {"extend", 0x0010},
+      {"write-dac", WRITE_DAC}, {"write-owner", WRITE_OWNER}, {"delete", DELETE}};
+  for (const auto& right : rights) {
+    HANDLE alias = nullptr;
+    BOOL duplicated = DuplicateHandle(GetCurrentProcess(), section, GetCurrentProcess(), &alias, right.access, FALSE, 0);
+    DWORD error = duplicated ? ERROR_SUCCESS : GetLastError();
+    bool closed = !duplicated || CloseHandle(alias) != FALSE;
+    printf("POLICY_PROPERTY_SECTION_SPECIFIC role=%s right=%s duplicate=%u error=%lu cleanup=%u\n",
+        role, right.name, unsigned(duplicated), error, unsigned(closed));
+    Check(closed && (!expect_positive || duplicated), "specific section rights observation");
+  }
+}
 void ObserveSectionRights(HANDLE section, const char* role) {
   using NtQuery = NTSTATUS (NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
   using NtExtend = NTSTATUS (NTAPI*)(HANDLE, PLARGE_INTEGER);
@@ -224,6 +238,8 @@ int wmain(int argc, wchar_t** argv) {
       Check(protected_magic == 0x47535052 && protected_unmapped, "protected section read cleanup");
       ObserveNativeWriteMap(protected_section, "protected-observation", false);
       ObserveSectionRights(protected_section, "protected-observation");
+      ObserveSectionSpecificRights(inherited_mapping, "writable-positive", true);
+      ObserveSectionSpecificRights(protected_section, "protected-observation", false);
       HANDLE elevated_mutex = nullptr;
       BOOL elevated = DuplicateHandle(GetCurrentProcess(), inherited_mutex, GetCurrentProcess(),
           &elevated_mutex, MUTEX_ALL_ACCESS, FALSE, 0);
