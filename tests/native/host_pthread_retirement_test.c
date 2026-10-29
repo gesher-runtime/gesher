@@ -159,7 +159,7 @@ int main(int argc,char **argv) {
   DWORD before,after; check(argc==1 || (argc==2 && strcmp(argv[1],"--tls-clear-failure")==0),"arguments");
   tls_failure=argc==2;
   if (tls_failure) { SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX); _set_abort_behavior(0,_WRITE_ABORT_MSG|_CALL_REPORTFAULT); }
-  check(GetProcessHandleCount(GetCurrentProcess(),&before),"original baseline"); inventory("original"); check(pthread_key_create(&key,destructor)==0,"key");
+  check(GetProcessHandleCount(GetCurrentProcess(),&before),"original baseline"); if (!tls_failure) inventory("original"); check(pthread_key_create(&key,destructor)==0,"key");
   if (tls_failure) {
     struct target t={0}; launch(&t); check(gesher_winpthread_cpu_test_control_v1(3,1)==0,"inject TLS clear failure");
     check(SetEvent(t.start),"failure start"); await(t.thread); puts("FAIL TLS-clear-failure survived"); return 9;

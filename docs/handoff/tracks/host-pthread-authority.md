@@ -23,6 +23,12 @@ values; the Thread also has the controller's actual TID. Net handle count did
 not change while reading those values. The source-only successor avoids
 registering a previously foreign join caller merely to check self-join, and
 adds self-join/tryjoin and foreign tryjoin controls; peer and CI are required.
+Run 40914415494/e9fb58ed is red overall: static and dynamic normal retirement
+passed the unchanged +8 bound with 338 destructors on both Windows, but the
+strict TLS-clear-failure output validator rejected diagnostic inventory text
+before its expected abort marker. The next source suppresses inventory only
+in the failure-mode process, preserving that validator and every normal check.
+TLS/init failure and concurrency boundaries still require actual proof.
 
 Initial component run40801790244/attempt1 at exact
 67e4f27486f6a63a8becb1c518c02b6b6afac02f passed its compile and both Windows
