@@ -16,7 +16,7 @@ env:
 
 jobs:
   union-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/coherent-union-trusted-source.yml@c9eb7842e8891307f339b2758f26aeb20ea53be1
+    uses: gesher-runtime/gesher/.github/workflows/combined-full-trusted-source.yml@21c81672d87b5d37607bfcab676d67f2a23d3114
   union-tsf:
     needs: [artifact-preflight]
     uses: ./.github/workflows/tsf-format-component.yml
@@ -835,6 +835,7 @@ jobs:
             tools/web3
             tools/package
             tools/windows4
+            tools/net-udp
             probes/native3/unicode
 
       - name: Verify and assemble windows-x64 artifact
