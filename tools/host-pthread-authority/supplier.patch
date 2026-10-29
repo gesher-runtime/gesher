@@ -5221,3 +5221,105 @@
 +  if (gesher_alias_gate_entered && (!SetEvent(gesher_alias_gate_entered) || WaitForSingleObject(gesher_alias_gate_release,5000)!=WAIT_OBJECT_0)) abort();
    _pthread_key_dest=table;
    for (node=gesher_alias_probe_nodes; node; node=node->next) *node->slot=table;
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -729,10 +729,29 @@
+ }
+ #if 1
++/* Single shared admission state for identity and sync wrappers. */
++static volatile LONG gesher_admission_state;
++static volatile LONG gesher_discovery_count;
++static const struct gesher_identity_probe_v6 *gesher_identity_cached;
++static const struct gesher_sync_probe_v1 *gesher_sync_cached;
++__declspec(dllexport) int __cdecl gesher_admission_probe_v1(LONG *mode, LONG *discoveries)
++{
++  if (!mode || !discoveries) return EINVAL;
++  *mode=InterlockedCompareExchange(&gesher_admission_state,0,0);
++  *discoveries=InterlockedCompareExchange(&gesher_discovery_count,0,0);
++  return 0;
++}
+ static const struct gesher_identity_probe_v6 *identity_probe_owner(void)
+ {
++  LONG state=InterlockedCompareExchange(&gesher_admission_state,0,0);
++  if (state!=1 && state!=2) abort();
++  return gesher_identity_cached;
++}
++static const struct gesher_identity_probe_v6 *identity_probe_discover(void)
++{
++  InterlockedIncrement(&gesher_discovery_count);
+   typedef const struct gesher_identity_probe_v6 *(__cdecl *get_fn)(void);
+   HMODULE host=GetModuleHandleW(NULL), actual=NULL, own=NULL;
+   if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+-                          (LPCWSTR)identity_probe_owner,&own)) abort();
++                          (LPCWSTR)identity_probe_discover,&own)) abort();
+   if (own==host) return NULL;
+   get_fn get=host ? (get_fn)GetProcAddress(host,"gesher_pthread_identity_probe_v6") : NULL;
+@@ -949,10 +968,11 @@
+ }
+ #if 1
+-const struct gesher_sync_probe_v1 *gesher_sync_probe_owner(void)
+-{
++static const struct gesher_sync_probe_v1 *gesher_sync_probe_discover(void)
++{
++  InterlockedIncrement(&gesher_discovery_count);
+   typedef const struct gesher_sync_probe_v1 *(__cdecl *getter_fn)(void);
+   HMODULE host=GetModuleHandleW(NULL), actual=NULL, own=NULL;
+   if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+-                          (LPCWSTR)gesher_sync_probe_owner,&own)) abort();
++                          (LPCWSTR)gesher_sync_probe_discover,&own)) abort();
+   if (own==host) return NULL;
+   getter_fn getter=host?(getter_fn)GetProcAddress(host,"gesher_sync_probe_v1"):NULL;
+@@ -1048,4 +1068,21 @@
+   return table;
+ }
++const struct gesher_sync_probe_v1 *gesher_sync_probe_owner(void)
++{
++  LONG state=InterlockedCompareExchange(&gesher_admission_state,0,0);
++  if (state!=1 && state!=2) abort();
++  return gesher_sync_cached;
++}
++/* No Win32 loader lookup after the alias publication lock is taken. */
++static int gesher_owner_admit(void)
++{
++  const struct gesher_identity_probe_v6 *identity=identity_probe_discover();
++  const struct gesher_sync_probe_v1 *sync=gesher_sync_probe_discover();
++  if (InterlockedCompareExchange(&gesher_admission_state,0,0)!=0 || (!!identity != !!sync)) abort();
++  if (identity && identity->register_alias(&gesher_dll_alias_node,&_pthread_key_dest)) return EINVAL;
++  gesher_identity_cached=identity; gesher_sync_cached=sync; gesher_participating_owner=identity;
++  InterlockedExchange(&gesher_admission_state,identity?2:1);
++  return 0;
++}
+ #endif
+ #endif
+@@ -1060,13 +1097,10 @@
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && !defined(DLL_EXPORT)
+   /* The archive may live in a DLL, not only in the process EXE. */
+-  if (dwReason == DLL_PROCESS_ATTACH) {
+-    const struct gesher_identity_probe_v6 *candidate=identity_probe_owner();
+-    if (candidate && candidate->register_alias(&gesher_dll_alias_node,&_pthread_key_dest)) abort();
+-    gesher_participating_owner=candidate;
+-  }
++  if (dwReason == DLL_PROCESS_ATTACH && gesher_owner_admit()) abort();
+   if (gesher_participating_owner) {
+     if (dwReason == DLL_PROCESS_DETACH) {
+       if (gesher_participating_owner->unregister_alias(&gesher_dll_alias_node)) abort();
+       gesher_participating_owner=NULL;
++      InterlockedExchange(&gesher_admission_state,-1);
+     }
+     return;
+@@ -1149,13 +1183,10 @@
+ {
+ #ifdef GESHER_PTHREAD_ROUTING_PROBE
+-  if (dwReason == DLL_PROCESS_ATTACH) {
+-    const struct gesher_identity_probe_v6 *candidate=identity_probe_owner();
+-    if (candidate && candidate->register_alias(&gesher_dll_alias_node, &_pthread_key_dest)) return FALSE;
+-    gesher_participating_owner=candidate;
+-  }
++  if (dwReason == DLL_PROCESS_ATTACH && gesher_owner_admit()) return FALSE;
+   if (gesher_participating_owner) {
+     if (dwReason == DLL_PROCESS_DETACH) {
+       if (gesher_participating_owner->unregister_alias(&gesher_dll_alias_node)) abort();
+       gesher_participating_owner=NULL;
++      InterlockedExchange(&gesher_admission_state,-1);
+     }
+     return TRUE;

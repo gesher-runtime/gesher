@@ -7,6 +7,7 @@ typedef pthread_t (__cdecl *self_fn)(void);
 typedef int (__cdecl *set_fn)(pthread_key_t,void *);
 typedef int (__cdecl *key_create_fn)(pthread_key_t *,void (*)(void *));
 typedef int (__cdecl *key_delete_fn)(pthread_key_t);
+typedef int (__cdecl *admit_fn)(LONG *,LONG *);
 static self_fn self; static set_fn set; static pthread_key_t key; static volatile LONG destroyed;
 static void destructor(void *p) { if (p) InterlockedIncrement(&destroyed); }
 static DWORD WINAPI worker(void *unused) { (void)unused; if (!self() || set(key,(void *)1)) return 2; ExitThread(43); return 0; }
@@ -21,9 +22,12 @@ int main(void) {
   wcscpy(leaf+1,L"embedded-provider.dll"); if (_wcsicmp(expected,actual)) return 2;
   self=(self_fn)GetProcAddress(dll,"embedded_self"); set=(set_fn)GetProcAddress(dll,"embedded_set");
   key_create_fn create=(key_create_fn)GetProcAddress(dll,"embedded_key_create"); key_delete_fn remove=(key_delete_fn)GetProcAddress(dll,"embedded_key_delete");
+  admit_fn admit=(admit_fn)GetProcAddress(dll,"gesher_admission_probe_v1"); LONG mode=0,count=0;
+  if (!admit || admit(&mode,&count) || mode!=1 || count!=2) return 3;
   if (!self || !set || !create || !remove || create(&key,destructor)) return 3;
   HANDLE thread=CreateThread(NULL,0,worker,NULL,0,NULL);
   if (!thread || WaitForSingleObject(thread,5000)!=WAIT_OBJECT_0 || !GetExitCodeThread(thread,&code) || code!=43 || destroyed!=1 || remove(key) || !CloseHandle(thread)) return 4;
+  LONG check_mode=0,check_count=0; if (admit(&check_mode,&check_count) || check_mode!=mode || check_count!=count) return 5;
   if (!FreeLibrary(dll) || GetModuleHandleW(L"embedded-provider.dll") || !GetProcessHandleCount(GetCurrentProcess(),&after) || after>before+8) return 5;
   printf("PASS probe standalone statically embedded DLL foreign exit and unload handles=%lu/%lu\n",before,after); return 0;
 }
