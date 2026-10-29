@@ -238,7 +238,13 @@ jint JNICALL WebView2Host_submitSession(JNIEnv* env, jclass, jlong handle, jlong
   if (timeout_ms <= 0 || method == nullptr || env->GetStringLength(method) > 256 ||
       (session != nullptr && env->GetStringLength(session) > 256) ||
       (params != nullptr && env->GetStringLength(params) > 524288)) return -2;
-  return Host::SubmitSession(handle, id, Str(env, session), Str(env, method), Str(env, params),
+  std::wstring session_value = Str(env, session);
+  if (env->ExceptionCheck()) return -2;
+  std::wstring method_value = Str(env, method);
+  if (env->ExceptionCheck()) return -2;
+  std::wstring params_value = Str(env, params);
+  if (env->ExceptionCheck()) return -2;
+  return Host::SubmitSession(handle, id, session_value, method_value, params_value,
                              static_cast<uint32_t>(timeout_ms));
 }
 

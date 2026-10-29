@@ -27,3 +27,5 @@ Further local source generalizes the deferred JNI-listener release to all four e
 A local saturation candidate submits 128 unresolved real CDP promise calls, expects admission 129 to fail, closes and expects one cancellation per accepted ID. Its bounded observation cannot prove absence of later callbacks or OnDestroyed completion. Oversized checks cover all three input fields; exact-boundary/aggregate byte-budget behavior and injected transport failures are still open. This candidate is not yet in CI.
 
 A further unrun fixture uses seven maximum-length valid pending requests to reach the aggregate input budget, checks the next rejection, waits for one timeout and checks readmission and cancellation. This observes the logical budget through real JNI/CDP if it passes, and is not a bound on total memory or stalled-STA delivery.
+
+The next JNI candidate refuses admission if conversion leaves a pending JNI exception, preserving the exception for Java. JNI attach/allocation or callback exceptions after admission still need an explicit terminal contract and fault-injection evidence.
