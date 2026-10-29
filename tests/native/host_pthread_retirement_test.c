@@ -5,6 +5,43 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+/* ProcessHandleInformation: handle values and object type indices, not inferred ownership. */
+typedef struct { HANDLE value; ULONG_PTR handle_count, pointer_count; ULONG access, type, attributes, reserved; } handle_entry;
+typedef struct { ULONG_PTR count, reserved; handle_entry entries[1]; } handle_snapshot;
+typedef LONG (WINAPI *query_process_fn)(HANDLE, ULONG, void *, ULONG, ULONG *);
+typedef LONG (WINAPI *query_object_fn)(HANDLE, ULONG, void *, ULONG, ULONG *);
+typedef struct { USHORT length, maximum; WCHAR *buffer; } object_name;
+static void check(int ok, const char *s);
+static handle_snapshot *previous;
+static void inventory(const char *phase) {
+  HMODULE ntdll=GetModuleHandleW(L"ntdll.dll");
+  query_process_fn query=(query_process_fn)GetProcAddress(ntdll,"NtQueryInformationProcess");
+  query_object_fn object=(query_object_fn)GetProcAddress(ntdll,"NtQueryObject");
+  check(query!=NULL && object!=NULL,"handle inventory query");
+  ULONG bytes=65536, required=0; handle_snapshot *snapshot=NULL; LONG status;
+  do {
+    free(snapshot); snapshot=malloc(bytes); check(snapshot!=NULL,"handle inventory allocation");
+    status=query(GetCurrentProcess(),51,snapshot,bytes,&required);
+    if (status<0) { check(required>bytes && required<16*1024*1024,"handle inventory size"); bytes=required+4096; }
+  } while (status<0);
+  check(snapshot->count <= (bytes - 2*sizeof(ULONG_PTR))/sizeof(handle_entry),"handle inventory bounds");
+  for (ULONG_PTR i=0;i<snapshot->count;++i) {
+    handle_entry *e=&snapshot->entries[i]; int found=0;
+    if (previous) for (ULONG_PTR j=0;j<previous->count;++j)
+      if (previous->entries[j].value==e->value && previous->entries[j].type==e->type) { found=1; break; }
+    if (!found) {
+      union { ULONG_PTR alignment; unsigned char bytes[4096]; } storage={0}; ULONG returned=0;
+      LONG result=object(e->value,2,storage.bytes,sizeof(storage.bytes),&returned);
+      object_name *name=(object_name *)storage.bytes;
+      uintptr_t start=(uintptr_t)storage.bytes, end=start+sizeof(storage.bytes), ptr=(uintptr_t)name->buffer;
+      if (result>=0 && ptr>=start && ptr<=end && name->length<=end-ptr && name->length<=name->maximum)
+        printf("HANDLE_INVENTORY phase=%s value=%p type_index=%lu access=%08lx type=%.*ls\n",phase,e->value,e->type,e->access,(int)(name->length/sizeof(WCHAR)),name->buffer);
+      else printf("HANDLE_INVENTORY phase=%s value=%p type_index=%lu access=%08lx query_status=%08lx\n",phase,e->value,e->type,e->access,(unsigned long)result);
+    }
+  }
+  free(previous); previous=snapshot;
+}
 struct target { HANDLE ready, start, thread, cap, de, dr; pthread_t id; unsigned long long gen; };
 static pthread_key_t key;
 static volatile LONG destructors;
@@ -37,7 +74,7 @@ static void retired(struct target *t) {
 }
 static void finish(struct target *t) { close_owned(t->thread); close_owned(t->cap); close_owned(t->ready); close_owned(t->start); }
 static DWORD WINAPI detacher(void *p) { struct target *t=p; check(pthread_detach(t->id)==0,"detach after publication"); return 0; }
-static void counts(const char *phase) { DWORD count=0; check(GetProcessHandleCount(GetCurrentProcess(),&count),"phase handle count"); printf("RETIREMENT_COUNTS phase=%s handles=%lu owned=%d destructors=%ld\n",phase,count,owned,destructors); fflush(stdout); }
+static void counts(const char *phase) { DWORD count=0; check(GetProcessHandleCount(GetCurrentProcess(),&count),"phase handle count"); printf("RETIREMENT_COUNTS phase=%s handles=%lu owned=%d destructors=%ld\n",phase,count,owned,destructors); inventory(phase); fflush(stdout); }
 static void contention(void) {
   for (int i=0;i<64;++i) {
     struct target t={0}; HANDLE entered=event(), release=event(), contended=event(); LONG before=destructors;
@@ -103,7 +140,7 @@ int main(int argc,char **argv) {
   DWORD before,after; check(argc==1 || (argc==2 && strcmp(argv[1],"--tls-clear-failure")==0),"arguments");
   tls_failure=argc==2;
   if (tls_failure) { SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX); _set_abort_behavior(0,_WRITE_ABORT_MSG|_CALL_REPORTFAULT); }
-  check(GetProcessHandleCount(GetCurrentProcess(),&before),"original baseline"); check(pthread_key_create(&key,destructor)==0,"key");
+  check(GetProcessHandleCount(GetCurrentProcess(),&before),"original baseline"); inventory("original"); check(pthread_key_create(&key,destructor)==0,"key");
   if (tls_failure) {
     struct target t={0}; launch(&t); check(gesher_winpthread_cpu_test_control_v1(3,1)==0,"inject TLS clear failure");
     check(SetEvent(t.start),"failure start"); await(t.thread); puts("FAIL TLS-clear-failure survived"); return 9;
@@ -111,6 +148,7 @@ int main(int argc,char **argv) {
   counts("baseline"); contention(); counts("contention"); unlocked_destructor(); counts("destructor"); live_join(); counts("join"); live_and_reuse(); counts("reuse");
   check(destructors==338,"all exact destructors"); check(pthread_key_delete(key)==0,"delete key"); check(owned==0,"all fixture handles closed");
   check(GetProcessHandleCount(GetCurrentProcess(),&after),"final handle count");
+  inventory("final");
   printf("RETIREMENT_COUNTS phase=final before=%lu after=%lu owned=%d destructors=%ld\n",before,after,owned,destructors);
   check(after<=before+8,"unchanged original handle bound");
   printf("PASS retirement all 338 destructors owned=0 handles=%lu/%lu\n",before,after); return 0;
