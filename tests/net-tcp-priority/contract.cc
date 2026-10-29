@@ -17,7 +17,7 @@
 #ifdef GESHER
 #include <sys/eventfd.h>
 #include "../../compat/posix/src/socket_internal.h"
-namespace gesher::test { int NativeUdpErrorControl(); }
+namespace gesher::test { int NativeUdpErrorControl(); void DumpOwnHandleTypes(int mode); }
 #endif
 
 static void require(bool ok, const char* what) {
@@ -343,14 +343,19 @@ static void owned_wait_controls() {
       pollfd p{alias, POLLPRI, 0}; require(poll(&p, 1, 5000) == 1 && (p.revents & POLLERR), "flipped-to-blocking alias retains nonblocking completion token");
       int error = 0; length = sizeof(error); require(getsockopt(alias, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "flipped alias receives exact completion");
     }
+    std::weak_ptr<gesher::ws::ConnectOperation> retired_operation = window.operation;
+    std::weak_ptr<gesher::ws::SocketDescription> retired_description;
+    { gesher::SocketFd state; require(gesher::LookupSocket(alias, &state), "owned description before actual last close"); retired_description = state.description; }
     require(close(window.client) == 0 && close(alias) == 0, "owned wait last close");
     require(gesher::ws::AwaitConnectRetirement(window.operation, 2000) == 0, "owned wait native owner and reaper really exit");
     printf("TCP_PRIORITY_OWNED_WAIT mode=%d connect_rc=%d connect_errno=%d canceled=%d elapsed_ms=%lld native_retired=1\n", mode, window.connect_rc, window.connect_error, returned == PTHREAD_CANCELED ? 1 : 0, window.elapsed); fflush(stdout);
     require(close(reserved) == 0 && pthread_cond_destroy(&window.condition) == 0 && pthread_mutex_destroy(&window.mutex) == 0, "owned wait gate cleanup");
     window.operation.reset();  // all caller context handles retire before census
+    printf("TCP_PRIORITY_OWNED_REFS mode=%d operation=%ld description=%ld\n", mode, retired_operation.use_count(), retired_description.use_count()); fflush(stdout);
     gesher::ws::OwnerCensus actual{}; require(gesher::ws::ReadConnectOwnerCensus(&actual), "actual production owner handle/thread census");
     if (mode == 0) baseline = actual;
     printf("TCP_PRIORITY_OWNER_CENSUS mode=%d handles=%u/%u threads=%u/%u\n", mode, actual.handles, baseline.handles, actual.threads, baseline.threads); fflush(stdout);
+    gesher::test::DumpOwnHandleTypes(mode);  // diagnostics precede the UNCHANGED strict bound
     require(actual.handles == baseline.handles && actual.threads == baseline.threads, "repeated real ownership returns to warm handle and thread baseline");
   }
   puts("PASS TCP priority: real owned mode flips cancellation send deadline and native owner retirement");

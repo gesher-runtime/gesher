@@ -619,3 +619,36 @@ winsock.cc, without numeric substitutes or behavior/assertion changes. A comment
 triggers one fresh changed-source component after independent peer. Raw log:
 `C:/work/gesher-ci-review/tcp-409385-compile.log`. No runtime inference follows
 from compiler success and no Windows product path is yet qualified.
+
+Corrected9bcfd57a/409406 producer and Linux reference PASS. Actual producer binds
+all nine selected HOST sources, translator source, both freshly compiled NDK
+ABIs, exact publisher archive and native import/private-export controls. Both
+Windows consumers authenticated archive12927936155/digest3cad6dd8231274e437784c43b9c06c68c97f0345e31f7ed8fe5632caec25255a
+from compile123682982568, source9bcfd57a/run40940693211/attempt1 and strict source/
+compiler/member/import roles before actual HOST execution. No guest ABI ran.
+
+Actual HOST on BOTH Windows passes noninline urgent, finite62ms endpoint waits,
+freshHUP16, refused24 then caller111/0 and HUP16, concurrent error getters,
+getter-before-requester-release, requester exit/fd reuse and established recv104.
+Owned mode0 retires with handles137/137 (2022),146/146 (2025), threads4/4; mode1
+retires with one extra handle138/137 and147/146, threads4/4, triggering the
+UNCHANGED strict census. Cancellation mode2 was not reached, so this failure
+cannot be attributed to cancellation or used as cancellation evidence.
+
+The next diagnostic changes only fixture telemetry: weak operation/description
+reference counts after caller release and a bounded read-only handle/type snapshot
+of THIS process before the unchanged census assertion. It creates no retained
+aliases, queries no file/pipe object names and validates returned native lengths.
+Raw observed handle values are telemetry, not reusable identity authority. The
+diagnostic itself must preserve process handle count, and its private helper is
+forbidden in every PE export role. Production source, all original assertions,
+timeouts and the strict process handle/thread bound remain unchanged. Logs:
+`C:/work/gesher-ci-review/tcp-409406-compile.log`,
+`C:/work/gesher-ci-review/tcp-409406-win2022.log`,
+`C:/work/gesher-ci-review/tcp-409406-win2025.log`.
+
+Actual compiler commands include global -fno-exceptions. Upstream winpthreads
+walks its explicit cleanup chain and exits via longjmp; automatic C++ shared_ptr
+unwind must not be assumed. This remains an independent source/actual-cancellation
+qualification condition, not the cause of the earlier mode1 failure. Reference:
+https://github.com/mingw-w64/mingw-w64/blob/master/mingw-w64-libraries/winpthreads/src/thread.c
