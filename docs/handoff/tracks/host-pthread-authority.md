@@ -7,7 +7,27 @@ The old `gesher-pthread-foreign-cpu-clock` worktree is preserved without edits.
 
 ## Status and next steps
 
-Initial implementation has no runtime qualification. Run40800633035 at exact
+Initial component run40801790244/attempt1 at exact
+67e4f27486f6a63a8becb1c518c02b6b6afac02f passed its compile and both Windows
+jobs. Actual pthread/std-thread/detached-create/live-detach/Win32-self-attach
+target brackets, busy/idle/dedup, retired-clock/invalid/fixed clocks,
+exit259 and dynamic-export checks passed. Handle counts were133→135 on2022
+and142→144 on2025. This is bounded initial evidence only.
+
+The next source adds actual loaded DLL path plus SHA256 verification against
+the sealed member (and a wrong-digest process rejection), a recorded actual C
+client compiler command,256 live target slots plus257th EAGAIN preservation,
+saved-clock non-aliasing,64 four-reader acquisition/query races against real
+detach/join/exit, actual pthread cancellation, and1024 rapid detached exits.
+Preparing those controls exposed a wrapper race: an owned supplier duplicate
+could wait for the clock lock while its target exited, then mint a fresh ID
+after reaping its old slot. The wrapper now checks owned-object liveness and
+deduplicates before reaping, then checks liveness again before new insertion.
+These changes require a fresh source-bound run; the initial green does not
+verify them. Resource-duplication/generation/clock-ID fault roles and the
+whole host/translator/guest/package/e2e requirements remain open.
+
+Earlier failures remain part of the record. Run40800633035 at exact
 358bb280 failed during whole supplier DLL link: upstream's GCC-only
 `-Wc,-no-pthread` reached Clang as an unused argument under `-Werror`.
 All supplier C objects, including the changed record, compiled; no DLL,

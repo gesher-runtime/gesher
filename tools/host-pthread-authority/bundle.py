@@ -13,6 +13,20 @@ MEMBERS = {'host_pthread_authority_test.exe', 'host_pthread_supplier_test.exe',
            'imports-host.txt', 'imports-dynamic.txt', 'compiler.json'}
 
 
+def compile_client(llvm):
+    context()
+    driver = llvm / 'bin/x86_64-w64-mingw32-clang'
+    cxx = llvm / 'bin/x86_64-w64-mingw32-clang++'
+    command = [str(driver), '-D_WIN32_WINNT=0x0A00', '-Wall', '-Wextra', '-Werror',
+               str(ROOT / 'tests/native/host_pthread_supplier_test.c'),
+               str(llvm / 'x86_64-w64-mingw32/lib/libwinpthread.dll.a'), '-lbcrypt',
+               '-o', str(DIST / 'host_pthread_supplier_test.exe')]
+    subprocess.run(command, check=True)
+    (DIST / 'compiler.json').write_text(json.dumps({
+        'configured_driver': str(cxx), 'sha256': sha(cxx), 'client_command': command,
+        'client_driver_sha256': sha(driver)}, sort_keys=True))
+
+
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -49,6 +63,7 @@ def record():
         argv = shlex.split(rows[0]['command'])
         assert argv[0] == expected or (argv[0].endswith('ccache') and argv[1] == expected)
     assert sha(Path(expected)) == compiler['sha256'] == supplier['cxx_driver_sha256']
+    assert compiler['client_driver_sha256'] == supplier['compiler_driver_sha256']
     assert 'libwinpthread-1.dll' not in (DIST / 'imports-host.txt').read_text().lower()
     assert 'libwinpthread-1.dll' in (DIST / 'imports-dynamic.txt').read_text().lower()
     (DIST / 'bundle.json').write_text(json.dumps(data, sort_keys=True, indent=2))
@@ -68,4 +83,7 @@ def verify():
 
 
 if __name__ == '__main__':
-    {'record': record, 'verify': verify}[sys.argv[1]]()
+    if sys.argv[1] == 'compile-client':
+        compile_client(Path(sys.argv[2]))
+    else:
+        {'record': record, 'verify': verify}[sys.argv[1]]()
