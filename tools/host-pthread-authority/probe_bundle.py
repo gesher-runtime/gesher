@@ -9,7 +9,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / 'routing-probe-fixture'
-CASES = {'operations.exe': ('host_pthread_routing_operations.c', 'libwinpthread.a'),
+CASES = {'key-delete-diagnostic.exe': ('host_pthread_key_delete_diagnostic.c', 'libwinpthread.a'),
+         'operations.exe': ('host_pthread_routing_operations.c', 'libwinpthread.a'),
          'strict.exe': ('host_pthread_process_identity_acceptance.c', 'libwinpthread.a'),
          'standalone.exe': ('host_pthread_routing_standalone.c', 'libwinpthread.dll.a'),
          'bad-anchor.exe': ('host_pthread_routing_bad_anchor.c', 'libwinpthread.a'),

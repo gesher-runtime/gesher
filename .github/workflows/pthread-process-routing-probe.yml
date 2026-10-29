@@ -24,6 +24,8 @@ jobs:
         run: |
           cc -std=c11 -Wall -Wextra -Werror -pthread tests/native/pthread_clock_linux_reference.c -ldl -o "$RUNNER_TEMP/reference"
           "$RUNNER_TEMP/reference"
+          cc -std=c11 -Wall -Wextra -Werror -pthread tests/native/pthread_key_self_delete_linux_reference.c -o "$RUNNER_TEMP/key-reference"
+          "$RUNNER_TEMP/key-reference"
       - uses: ./.github/actions/setup-build
         with:
           ccache-key: host-pthread-authority
@@ -70,7 +72,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($case in @(@{Name='strict';Exit=0;Marker='PASS strict process thread identity, clocks and authority after DLL unload'}, @{Name='operations';Exit=0;Marker='PASS probe cross-image create join tryjoin cancel detach TLS cleanup and unload'}, @{Name='standalone';Exit=0;Marker='PASS routing probe standalone DLL local provider'}, @{Name='bad-anchor';Exit=3;Marker='CONTROL invalid identity descriptor before pthread_self'}, @{Name='missing-anchor';Exit=3;Marker='CONTROL missing identity descriptor before pthread_self'})) {
+          foreach ($case in @(@{Name='key-delete-diagnostic';Exit=0;Marker='CONTROL destructor entered, same-key deletion did not return within 1500ms'}, @{Name='strict';Exit=0;Marker='PASS strict process thread identity, clocks and authority after DLL unload'}, @{Name='operations';Exit=0;Marker='PASS probe cross-image create join tryjoin cancel detach TLS cleanup and unload'}, @{Name='standalone';Exit=0;Marker='PASS routing probe standalone DLL local provider'}, @{Name='bad-anchor';Exit=3;Marker='CONTROL invalid identity descriptor before pthread_self'}, @{Name='missing-anchor';Exit=3;Marker='CONTROL missing identity descriptor before pthread_self'})) {
             $name=$case.Name
             $stdout=Join-Path $env:RUNNER_TEMP "$name.out"
             $stderr=Join-Path $env:RUNNER_TEMP "$name.err"
