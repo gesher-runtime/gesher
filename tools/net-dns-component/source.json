@@ -8,7 +8,7 @@
     "compat/bionic/shim_internal.h": "f5a3270c0093c759ee3cda28a31edf985ef0669663204372edfe4fd035ecba16",
     "tests/native2/dns-reference/ns_name.c": "ff0e3bf977cd2c7a4ced96b6577ace4b92d82739ba39eaf42cdb4051358eb4f6",
     "tests/native2/net_dns_wire.cpp": "caa9d4a3f9d02e52c17c619e83d911e0f4d8a64355cb27d606429a2875888974",
-    "tools/net-dns-component/aosp_reference.py": "ebd7ae0823996880950b45365a8ed5349c6560fea516932b839139736b877423",
+    "tools/net-dns-component/aosp_reference.py": "4c808bbe5e0d1c6b7f09a8ba81a58fb2d46c63291225fb6116b699f7175300f6",
     "tools/net-dns-component/payload.py": "895976a00c5b3725457453c34ca4068f96f0293c073ab23b2b234bd35bb9fd60"
   }
 }
