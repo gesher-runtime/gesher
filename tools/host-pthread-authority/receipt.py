@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import re
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
@@ -24,6 +25,34 @@ def inputs(source):
     assert sha(HERE / 'supplier.patch') == PIN['patch_sha256']
     for name, digest in PIN['source_sha256'].items():
         assert sha(source / name) == digest, name
+    makefile = (source / 'mingw-w64-libraries/winpthreads/Makefile.am').read_text()
+    flags = re.findall(r'^libwinpthread_la_LDFLAGS (?:\+?=) (.+)$', makefile, re.MULTILINE)
+    assert flags == ['-no-undefined -version-info 1:0:0',
+                     '-L$(builddir)/fakelib -Wc,-no-pthread'], 'Upstream link flags changed'
+
+
+def dll_imports(raw):
+    names = re.findall(r'^\s*Name:\s*(\S+\.dll)\s*$', raw, re.MULTILINE | re.IGNORECASE)
+    lower = [name.casefold() for name in names]
+    assert lower and len(set(lower)) == len(lower), 'Missing or duplicate DLL imports'
+    assert 'kernel32.dll' in lower, 'Supplier system imports missing'
+    unknown = [name for name in lower if name not in {'kernel32.dll', 'ucrtbase.dll'} and
+               not re.fullmatch(r'api-ms-win-crt-[a-z]+-l1-1-0\.dll', name)]
+    assert not unknown, 'Unapproved supplier imports: ' + str(unknown)
+    return names
+
+
+def selftest():
+    assert dll_imports('  Name: KERNEL32.DLL\n  Name: API-MS-WIN-CRT-HEAP-L1-1-0.DLL\n')
+    for raw in ('', '  Name: KERNEL32.dll\n  Name: LIBWINPTHREAD-1.DLL\n',
+                '  Name: kernel32.dll\n  Name: unexpected.dll\n',
+                '  Name: KERNEL32.dll\n  Name: kernel32.DLL\n'):
+        try:
+            dll_imports(raw)
+        except AssertionError:
+            continue
+        raise AssertionError('Invalid import inventory accepted')
+    print('Supplier import negative controls passed: empty, case-self, unknown, duplicate')
 
 
 def supplier(source, llvm):
@@ -57,13 +86,15 @@ def supplier(source, llvm):
     assert symbol in exports
     result['dll_exports'] = exports
     imports = command(str(llvm / 'bin/llvm-readobj'), '--coff-imports', str(target / 'bin/libwinpthread-1.dll'))
-    assert 'Name: libwinpthread-1.dll' not in imports, 'Supplier must not import its previous copy'
+    result['dll_import_names'] = dll_imports(imports)
     result['dll_imports'] = imports
     (llvm / 'gesher-winpthreads-authority.json').write_text(json.dumps(result, indent=2, sort_keys=True))
 
 
 if __name__ == '__main__':
-    if sys.argv[1] == 'inputs':
+    if sys.argv[1] == 'selftest':
+        selftest()
+    elif sys.argv[1] == 'inputs':
         inputs(Path(sys.argv[2]))
     elif sys.argv[1] == 'supplier':
         supplier(Path(sys.argv[2]), Path(sys.argv[3]))
