@@ -190,6 +190,8 @@ jobs:
                               'tests/windows/tracks/79-media4-muxer.ps1': '9f82ca9f402a782bb62228de08c06a790be66cd2',
                               'tools/native3-locks/union_payload.py': 'e42aaed932860896fed5a59054bac3b4ccbae059',
                               'tools/native3-locks/union_blocking_guard.py': '974799ccead72995044df3ef115a2a221962e7c0'})
+          FONTS_PINS = {'.github/workflows/native2.yml': 'ed994230b37385578efcf051296da915b609d031', 'tests/native2/fonts_standalone.c': '69eb206a59c430fc4ca7813d5ae4f337b907d52a', 'tests/windows/tracks/46-native3.ps1': 'f1f8e3d8256237396e4cd71c0c222ce291ef3594', 'tools/native3-locks/union_payload.py': '98eb5a72e7c8eb55daa2597336335b288e2d2408', 'tools/native3-locks/union_blocking_guard.py': 'b91aed61ebd06adf2d2a763deb07b2b117c22ad3'}
+          SOURCE_PINS.update(FONTS_PINS)
           ORIGINAL_BASE = 'f1550540186b4ae3f17a5e501a886ec1c4d5d613'
           UNION_BASE = '8b1e9b509ceef7e532a7ff5bc085ecdbc476d292'
 
@@ -409,6 +411,10 @@ jobs:
                   mutant = copy.deepcopy(actual)
                   mutant[name] = ('100644', '0' * 40)
                   reject('media4_mutated_' + name, lambda: verify_tree(mutant, expected))
+              for name in FONTS_PINS:
+                  mutant = copy.deepcopy(actual)
+                  mutant[name] = ('100644', '0' * 40)
+                  reject('fonts_mutated_' + name, lambda: verify_tree(mutant, expected))
               mutant = copy.deepcopy(actual)
               mutant['tests/media/ndk-muxer/unreviewed.py'] = ('100644', '3' * 40)
               reject('media4_unauthorized_path', lambda: verify_tree(mutant, expected))
