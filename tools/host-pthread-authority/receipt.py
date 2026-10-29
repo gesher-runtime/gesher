@@ -7,6 +7,7 @@ import subprocess
 import sys
 import re
 import shlex
+import shutil
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
@@ -62,13 +63,31 @@ def host_role(build, llvm, role, output):
     assert role in {'production', 'fault'}
     fault = role == 'fault'
     cache = (build / 'CMakeCache.txt').read_text()
-    assert ('GESHER_HOST_CPU_CLOCK_TEST_FAULTS:BOOL=' + ('ON' if fault else 'OFF')) in cache
+    assert re.findall(r'^GESHER_HOST_CPU_CLOCK_TEST_FAULTS:BOOL=(\S+)$', cache, re.MULTILINE) == [('ON' if fault else 'OFF')]
+    compiler_records = list((build / 'CMakeFiles').glob('*/CMakeCXXCompiler.cmake'))
+    assert len(compiler_records) == 1, 'Missing or ambiguous generated compiler record'
+    generated = compiler_records[0].read_text()
+    driver = str(llvm / 'bin/x86_64-w64-mingw32-clang++')
+    assert re.findall(r'^set\(CMAKE_CXX_COMPILER "([^"]+)"\)', generated, re.MULTILINE) == [driver]
+    assert re.findall(r'^set\(CMAKE_CXX_COMPILER_ID "([^"]+)"\)', generated, re.MULTILINE) == ['Clang']
     rows = json.loads((build / 'compile_commands.json').read_text())
     selected = [r for r in rows if Path(r['file']).resolve() == ROOT / 'compat/posix/src/pthread.cc']
     assert len(selected) == 1
     argv = selected[0].get('arguments') or shlex.split(selected[0]['command'])
+    assert Path(selected[0]['directory']).resolve() == build
+    launcher = None
+    if argv[0] != driver:
+        known_launcher = shutil.which('ccache')
+        assert known_launcher and Path(argv[0]).is_absolute()
+        assert Path(argv[0]).resolve() == Path(known_launcher).resolve() and argv[1] == driver
+        launcher = {'path': str(Path(known_launcher).resolve()), 'sha256': sha(Path(known_launcher).resolve())}
+    source = ROOT / 'compat/posix/src/pthread.cc'
+    assert argv.count('-c') == 1 and Path(argv[argv.index('-c') + 1]).resolve() == source
+    assert argv.count(str(source)) == 1
+    assert {'-Wall', '-Wextra', '-Werror'} <= set(argv)
+    assert not any(arg.startswith('-Wno-error') for arg in argv)
     assert ('-DGESHER_HOST_CPU_CLOCK_TEST_FAULTS=1' in argv) == fault
-    assert str(llvm / 'bin/x86_64-w64-mingw32-clang++') in argv
+    assert any('GESHER_HOST_CPU_CLOCK_TEST_FAULTS' in arg for arg in argv) == fault
     obj = build / 'CMakeFiles/gesher_posix.dir/compat/posix/src/pthread.cc.obj'
     symbols = command(str(llvm / 'bin/llvm-nm'), '--defined-only', str(obj))
     assert ('gesher_host_cpu_clock_test_exhaust_ids_v1' in symbols) == fault
@@ -76,10 +95,12 @@ def host_role(build, llvm, role, output):
     assert supplier['role'] == 'gesher-winpthreads-authority-' + ('fault-v1' if fault else 'v1')
     assert supplier['files']['lib/libwinpthread.a'] == sha(llvm / 'x86_64-w64-mingw32/lib/libwinpthread.a')
     result = {'role': role, 'test_hook_compiled': fault, 'command': argv,
+              'configured_compiler': driver, 'compiler_record_sha256': sha(compiler_records[0]),
+              'compiler_driver_sha256': sha(Path(driver)), 'launcher': launcher,
               'supplier_receipt_sha256': sha(llvm / 'gesher-winpthreads-authority.json'),
               'object_sha256': sha(obj), 'object_symbols': symbols,
               'gesher_posix_archive_sha256': sha(build / 'libgesher_posix.a'),
-              'context': {key: os.environ[key] for key in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')}}
+              'context': {key: os.environ[key] for key in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY')}}
     output.write_text(json.dumps(result, indent=2, sort_keys=True))
 
 

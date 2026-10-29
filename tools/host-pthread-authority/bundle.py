@@ -86,7 +86,8 @@ def verify():
         provider = json.loads((DIST / member).read_text())
         assert host['role'] == role and host['test_hook_compiled'] == (role == 'fault')
         assert host['supplier_receipt_sha256'] == sha(DIST / member)
-        assert all(host['context'][key] == value for key, value in context().items() if key in host['context'])
+        assert host['context'] == context()
+        assert provider['role'] == 'gesher-winpthreads-authority-' + ('fault-v1' if role == 'fault' else 'v1')
         assert all(provider[key] == value for key, value in context().items())
     print('Verified initial host authority bundle; no full/guest/stress qualification implied')
 
