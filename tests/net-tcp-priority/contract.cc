@@ -385,6 +385,9 @@ static void requester_exit_and_reuse() {
 #ifdef GESHER
   gesher::SocketFd old;
   require(gesher::LookupSocket(request.fd, &old), "pending close original description");
+  std::shared_ptr<gesher::ws::ConnectOperation> old_operation;
+  { std::lock_guard<std::mutex> lock(old.description->error_mutex); old_operation = old.description->connect_operation; }
+  require(old_operation != nullptr, "actual owner operation retained before last close");
 #endif
   const int reused = request.fd;
   require(close(reused) == 0, "last close while connection operation is retained");
@@ -401,6 +404,7 @@ static void requester_exit_and_reuse() {
     if (!drained) usleep(1000);
   } while (!drained && millis() < deadline);
   require(drained, "last close observes actual old operation drain");
+  require(gesher::ws::AwaitConnectRetirement(old_operation, 2000) == 0, "owning pthread and native reaper really exited after last close");
   require(current.description->state.load() == gesher::ws::ConnectState::kInitial, "old completion cannot mutate replacement generation");
 #endif
   error = -1; length = sizeof(error);

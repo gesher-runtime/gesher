@@ -101,6 +101,8 @@ int Connect(Socket s, const Address& address);  // EINPROGRESS when non-blocking
 std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
     const std::shared_ptr<SocketDescription>& description);
 int AwaitConnect(const std::shared_ptr<ConnectOperation>& operation, bool nonblocking);
+// Internal lifetime evidence: waits for the actual WinAPI reaper thread exit.
+int AwaitConnectRetirement(const std::shared_ptr<ConnectOperation>& operation, int timeout_ms);
 void RefreshConnect(const std::shared_ptr<SocketDescription>& description);
 int Listen(Socket s, int backlog);
 Socket Accept(Socket s, Address* peer);

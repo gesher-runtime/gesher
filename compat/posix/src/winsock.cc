@@ -22,6 +22,12 @@
 
 namespace gesher::ws {
 
+struct ConnectRetirement {
+  HANDLE started, owner;
+  HMODULE module;
+  bool no_owner, quarantine;
+};
+
 // Neither a caller's stack nor its thread owns pending native I/O. The worker
 // retains this object, its address and both events until completion is observed.
 struct ConnectOperation {
@@ -31,13 +37,15 @@ struct ConnectOperation {
   uint64_t generation;
   OVERLAPPED overlap{};
   HANDLE submitted = nullptr;
-  HMODULE module = nullptr;
+  HANDLE reaper = nullptr;
+  ConnectRetirement* retirement = nullptr;  // WinHeap, retained until owner exit
   bool pending = false, issued = false, finished = false, cancel_requested = false;  // error_mutex
   int start_error = 0, result = 0;  // error_mutex, or after submitted/finished
   ULONGLONG deadline = ~ULONGLONG{0};
   ~ConnectOperation() {
     if (submitted) CloseHandle(submitted);
     if (overlap.hEvent) CloseHandle(overlap.hEvent);
+    if (reaper) CloseHandle(reaper);
   }
 };
 
@@ -497,17 +505,46 @@ void FinishConnect(const std::shared_ptr<ConnectOperation>& operation) {
   }
 }
 
-DWORD WINAPI ConnectOwner(void* raw) {
-  HMODULE module;
+DWORD WINAPI ConnectReaper(void* raw) {
+  // Only WinAPI and trivial values. This thread never enters pthread/CRT/C++
+  // ownership. Its actual owner HANDLE, not a TID or early event, proves exit.
+  auto* retirement = static_cast<ConnectRetirement*>(raw);
+  if (WaitForSingleObject(retirement->started, INFINITE) != WAIT_OBJECT_0 ||
+      retirement->quarantine || (!retirement->owner && !retirement->no_owner) ||
+      (retirement->owner && WaitForSingleObject(retirement->owner, INFINITE) != WAIT_OBJECT_0)) {
+    OutputDebugStringW(L"gesher-base: connect owner retirement quarantined; module and native lifetime records retained\n");
+    for (;;) Sleep(INFINITE);
+  }
+  if ((retirement->owner && !CloseHandle(retirement->owner)) || !CloseHandle(retirement->started)) {
+    OutputDebugStringW(L"gesher-base: connect owner handle retirement quarantined; module retained\n");
+    for (;;) Sleep(INFINITE);
+  }
+  HMODULE module = retirement->module;
+  if (!HeapFree(GetProcessHeap(), 0, retirement)) {
+    OutputDebugStringW(L"gesher-base: connect owner ticket retirement quarantined; module retained\n");
+    for (;;) Sleep(INFINITE);
+  }
+  if (module) FreeLibraryAndExitThread(module, 0);
+  return 0;
+}
+
+void* ConnectOwner(void* raw) {
   {
     std::unique_ptr<std::shared_ptr<ConnectOperation>> transfer(static_cast<std::shared_ptr<ConnectOperation>*>(raw));
     auto operation = *transfer;
     transfer.reset();
     auto& op = *operation;
-    module = op.module;
+    // Capture the actual self thread object without numeric TID lookup. The
+    // detached pthread record may retire normally; the reaper retains this
+    // separate noninherited HANDLE until the entire owning wrapper has exited.
+    const bool captured = DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                                         &op.retirement->owner, SYNCHRONIZE, FALSE, 0) != FALSE;
+    if (!captured) op.retirement->quarantine = true;
+    if (!SetEvent(op.retirement->started)) op.retirement->quarantine = true;
     {
       std::lock_guard<std::mutex> lock(op.description->error_mutex);
-      if (op.description->native_closed || op.description->connect_generation != op.generation || op.cancel_requested) {
+      if (!captured) op.start_error = EIO;
+      else if (op.description->native_closed || op.description->connect_generation != op.generation || op.cancel_requested) {
         op.start_error = op.cancel_requested ? ECANCELED : EBADF;
       } else {
         sockaddr_storage remote{}; int remote_length = 0;
@@ -546,9 +583,8 @@ DWORD WINAPI ConnectOwner(void* raw) {
       std::lock_guard<std::mutex> lock(op.description->error_mutex);
       FinishConnect(operation);
     }
-  }  // destroy all operation/description references before releasing DLL code
-  if (module) FreeLibraryAndExitThread(module, 0);
-  return 0;
+  }  // destroy C++ context, then return through the normal pthread/TLS wrapper
+  return nullptr;
 }
 
 }  // namespace
@@ -573,26 +609,52 @@ std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
   HMODULE module = nullptr;
   if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                          reinterpret_cast<LPCWSTR>(&ConnectOwner), &module)) return FailWithLastError(), nullptr;
-  // An EXE cannot be unmapped while its process runs. A DLL needs a worker
-  // reference, released atomically with thread exit after context destruction.
+  auto* retirement = static_cast<ConnectRetirement*>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(ConnectRetirement)));
+  if (!retirement) return errno = ENOMEM, nullptr;
+  retirement->started = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!retirement->started) { const int saved = ErrnoFromWin32(GetLastError()); HeapFree(GetProcessHeap(), 0, retirement); return errno = saved, nullptr; }
+  // Pin before either thread can start. The WinAPI-only reaper releases it
+  // only after observing the actual owning pthread wrapper's native exit.
   if (module != GetModuleHandleW(nullptr)) {
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCWSTR>(&ConnectOwner), &op.module)) return FailWithLastError(), nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCWSTR>(&ConnectOwner), &retirement->module)) {
+      const int saved = ErrnoFromWin32(GetLastError()); CloseHandle(retirement->started); HeapFree(GetProcessHeap(), 0, retirement); return errno = saved, nullptr;
+    }
+  }
+  op.retirement = retirement;
+  op.reaper = CreateThread(nullptr, 0, ConnectReaper, retirement, 0, nullptr);
+  if (!op.reaper) {
+    const int saved = ErrnoFromWin32(GetLastError());
+    if (retirement->module) FreeLibrary(retirement->module);
+    CloseHandle(retirement->started); HeapFree(GetProcessHeap(), 0, retirement);
+    return errno = saved, nullptr;
   }
   description->connect_result = description->connect_error = 0;
   description->owned_refusal = false;
   description->connect_operation = operation;
   description->state.store(ConnectState::kConnecting);
   auto* transfer = new std::shared_ptr<ConnectOperation>(operation);
-  HANDLE thread = CreateThread(nullptr, 0, ConnectOwner, transfer, 0, nullptr);
-  if (!thread) {
-    const int saved = ErrnoFromWin32(GetLastError());
+  pthread_attr_t attributes;
+  int created = pthread_attr_init(&attributes);
+  const bool initialized = created == 0;
+  if (created == 0) created = pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+  pthread_t thread;
+  if (created == 0) created = pthread_create(&thread, &attributes, ConnectOwner, transfer);
+  if (initialized) pthread_attr_destroy(&attributes);
+  if (created != 0) {
     delete transfer; description->connect_operation.reset();
     description->state.store(ConnectState::kInitial);
-    if (op.module) FreeLibrary(op.module);
-    return errno = saved, nullptr;
+    retirement->no_owner = true;
+    // A failed creation has no running owner. The pre-reserved reaper still
+    // owns ticket/pin cleanup. A failed publication keeps that owner quarantined.
+    if (!SetEvent(retirement->started)) retirement->quarantine = true;
+    return errno = gesher_errno_from_crt(created), nullptr;
   }
-  CloseHandle(thread);  // worker owns itself; no caller-thread cleanup callback
   return operation;
+}
+
+int AwaitConnectRetirement(const std::shared_ptr<ConnectOperation>& operation, int timeout_ms) {
+  const DWORD wait = WaitForSingleObject(operation->reaper, timeout_ms < 0 ? INFINITE : static_cast<DWORD>(timeout_ms));
+  return wait == WAIT_OBJECT_0 ? 0 : (errno = wait == WAIT_TIMEOUT ? ETIMEDOUT : EIO, -1);
 }
 
 void RefreshConnect(const std::shared_ptr<SocketDescription>& description) {
