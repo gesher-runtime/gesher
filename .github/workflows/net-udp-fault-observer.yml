@@ -40,7 +40,7 @@ jobs:
             -DGESHER -DUSE_MINGW -DWIN32_LEAN_AND_MEAN -DNOMINMAX -DNOGDI -D_USE_MATH_DEFINES
             -D__STDC_FORMAT_MACROS -D__STDC_CONSTANT_MACROS -D__STDC_LIMIT_MACROS
             -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -D_FILE_OFFSET_BITS=64 -D_POSIX_THREAD_SAFE_FUNCTIONS
-            -Icompat/posix/include -Icompat/bionic/include)
+            -Icompat/posix/include -Icompat/bionic/include -Icompat/arm64/include)
           mkdir -p /tmp/net-udp-objects
           for source in compat/posix/src/socket.cc compat/posix/src/winsock.cc compat/bionic/socket_bionic.cc; do
             "$cxx" "${flags[@]}" -c "$source" -o "/tmp/net-udp-objects/$(basename "$source").obj"
