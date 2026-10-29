@@ -608,3 +608,14 @@ trigger peer. No production source or assertion changes accompany that trigger.
 The real owned-mode/cancel/SNDTIMEO/owner-retirement/census, finalized-native-poll
 race, legacy lease, UDP error and all compiler/archive/member/import/source-role
 gates remain mandatory. No Windows product path has yet qualified this source.
+
+First current component8142c127/409385 is RED at compilation, with Linux full
+reference PASS and Windows contexts skipped. The product's changed socket/fd/
+system/winsock objects and HOST contract compiled, but the separate WinSDK UDP
+input fixture omitted `<mswsock.h>` and its SIO_UDP_CONNRESET declaration was
+therefore missing in the actual pinned llvm-mingw compiler. The correction adds
+that canonical header, already included by the successfully compiled production
+winsock.cc, without numeric substitutes or behavior/assertion changes. A comment
+triggers one fresh changed-source component after independent peer. Raw log:
+`C:/work/gesher-ci-review/tcp-409385-compile.log`. No runtime inference follows
+from compiler success and no Windows product path is yet qualified.

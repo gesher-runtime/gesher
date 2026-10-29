@@ -1,6 +1,7 @@
 name: net-tcp-priority-component
 # Exercise reviewed owned completion/alias lifetime and actual native poll races.
 # Current full Linux reference passed; all Windows product contexts remain owed.
+# Match the native UDP input's mswsock declarations to the production source.
 on:
   workflow_dispatch:
   push:
