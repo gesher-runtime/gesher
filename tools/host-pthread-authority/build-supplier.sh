@@ -45,7 +45,15 @@ cd "$supplier/build"
 # link time. Override that one make variable; keep every warning fatal.
 # Clang adds winpthread only with -pthread, which this build never supplies.
 supplier_ldflags='-no-undefined -version-info 1:0:0 -L$(builddir)/fakelib'
-make -j2 V=1 "libwinpthread_la_LDFLAGS=$supplier_ldflags" 2>&1 | tee build-commands.log
+if ! make -j2 V=1 "libwinpthread_la_LDFLAGS=$supplier_ldflags" 2>&1 | tee build-commands.log; then
+  # Libtool suppresses output from its non-PIC compilation. Repeat only the
+  # failing-source diagnostic with the same private compiler and role flags;
+  # never turn the failed make into a successful build.
+  "$llvm/bin/x86_64-w64-mingw32-clang" -DHAVE_CONFIG_H -I. -I../mingw-w64-libraries/winpthreads \
+    -I../mingw-w64-libraries/winpthreads/include -DIN_WINPTHREAD -D__USE_MINGW_ANSI_STDIO=0 \
+    -Wall $supplier_cflags -c ../mingw-w64-libraries/winpthreads/src/thread.c -o thread-static-diagnostic.o 2>&1 || :
+  exit 1
+fi
 make install "libwinpthread_la_LDFLAGS=$supplier_ldflags" 2>&1 | tee install-commands.log
 mkdir -p "$llvm/x86_64-w64-mingw32/share/mingw32"
 cp ../mingw-w64-libraries/winpthreads/COPYING "$llvm/x86_64-w64-mingw32/share/mingw32/COPYING.winpthreads.txt"
