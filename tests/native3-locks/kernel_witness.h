@@ -72,6 +72,34 @@ template<class T> inline bool Property(EVENT_RECORD* record, const wchar_t* name
       static_cast<unsigned>(record->EventHeader.EventDescriptor.Opcode),
       static_cast<unsigned>(record->EventHeader.EventDescriptor.Version), name,
       static_cast<unsigned long>(size_status), static_cast<unsigned long>(size), sizeof(T), static_cast<unsigned long>(read_status));
+  if (!ok) {
+    static std::atomic<unsigned> schemas{0};
+    if (schemas.fetch_add(1) == 0) {
+      ULONG bytes = 0;
+      ULONG status = TdhGetEventInformation(record, 0, nullptr, nullptr, &bytes);
+      if (status == ERROR_INSUFFICIENT_BUFFER && bytes > 0 && bytes <= 1024 * 1024) {
+        std::vector<BYTE> info_bytes(bytes);
+        auto* info = reinterpret_cast<TRACE_EVENT_INFO*>(info_bytes.data());
+        status = TdhGetEventInformation(record, 0, nullptr, info, &bytes);
+        std::printf("KERNEL_DIAG_SCHEMA status=%lu opcode=%u version=%u properties=%lu top=%lu\n",
+          static_cast<unsigned long>(status), static_cast<unsigned>(record->EventHeader.EventDescriptor.Opcode),
+          static_cast<unsigned>(record->EventHeader.EventDescriptor.Version),
+          static_cast<unsigned long>(status == ERROR_SUCCESS ? info->PropertyCount : 0),
+          static_cast<unsigned long>(status == ERROR_SUCCESS ? info->TopLevelPropertyCount : 0));
+        if (status == ERROR_SUCCESS) for (ULONG i = 0; i < info->PropertyCount && i < 64; ++i) {
+          const auto& property_info = info->EventPropertyInfoArray[i];
+          if (property_info.NameOffset >= bytes) continue;
+          const wchar_t* property_name = reinterpret_cast<const wchar_t*>(info_bytes.data() + property_info.NameOffset);
+          const size_t available = (bytes - property_info.NameOffset) / sizeof(wchar_t);
+          size_t length = 0; while (length < available && property_name[length]) ++length;
+          if (length == available) continue;
+          std::printf("KERNEL_DIAG_SCHEMA_PROPERTY index=%lu name=%ls flags=%lu intype=%u outtype=%u\n",
+            static_cast<unsigned long>(i), property_name, static_cast<unsigned long>(property_info.Flags),
+            static_cast<unsigned>(property_info.nonStructType.InType), static_cast<unsigned>(property_info.nonStructType.OutType));
+        }
+      } else std::printf("KERNEL_DIAG_SCHEMA status=%lu bytes=%lu\n", static_cast<unsigned long>(status), static_cast<unsigned long>(bytes));
+    }
+  }
   return ok;
 }
 inline void WINAPI Consume(EVENT_RECORD* record) {

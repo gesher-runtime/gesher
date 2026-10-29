@@ -6,7 +6,7 @@
     "compat/posix/src/record_lock_wait.cc": "f344e63be858481bfee56a2c9e2c13e82680faa9",
     "compat/posix/src/record_lock_witness_hook.h": "bfd43a42765cb25ef9eea6677791db08226022c7",
     "tests/native3-locks/blocking_worker.cc": "6bf04682ffbf1d62c21adde75a80583d96ac9273",
-    "tests/native3-locks/kernel_witness.h": "9bd6af418d1e3372ea67abce42c303078990e193",
+    "tests/native3-locks/kernel_witness.h": "963d32558905b2db3861c560f252f10dcd0eb327",
     "tests/native3-locks/kernel_witness_controller.py": "a511e4ba331f32c8b8dc1b1153f747bf6dc00087",
     "tools/native3-locks/kernel_source_guard.py": "b3d1fb2ac6ef559ce4d1aa5ca85e96976e5072fc"
   }
