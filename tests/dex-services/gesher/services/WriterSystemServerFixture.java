@@ -38,6 +38,10 @@ public final class WriterSystemServerFixture {
                 List.of(broker + " " + device, manager, writer), paths,
                 List.of("GESHER_BINDER=" + device, "ANDROID_DATA=" + logs.resolve("data"),
                         "GESHER_LOGS=" + logs.resolve("device-logs")));
+        if (owned == null || owned.length != 3 || owned[0] <= 0 || owned[1] <= 0 || owned[2] <= 0 ||
+                owned[0] == owned[1] || owned[0] == owned[2] || owned[1] == owned[2]) {
+            throw new AssertionError("invalid owned bootstrap result");
+        }
         boolean ready = false;
         boolean[] consumed = new boolean[owned.length];
         try {

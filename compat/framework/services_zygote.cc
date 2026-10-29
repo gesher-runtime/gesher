@@ -87,6 +87,8 @@ struct Child {
   std::u16string install;
   std::shared_ptr<guest::InstalledPolicy> policy;
   std::unique_ptr<guest::RestrictedLaunch> restricted;
+  // 1: an exact-handle rollback wait is active; 2: unconfirmed quarantine.
+  int bootstrap_retirement = 0;
 };
 std::map<int, Child> g_children;  // exact retained instances, never reopened for owned queries
 std::map<std::u16string, std::shared_ptr<guest::InstalledPolicy>> g_installed;
@@ -488,13 +490,40 @@ std::vector<int> StartDevice(const std::vector<std::u16string>& commands,
                           logs[0], true, 0, {}, {}, &broker_start);
   CloseHandle(server);
   if (broker <= 0) { CloseHandle(client); return {}; }
+  bool broker_duplicated = false;
+  HANDLE rollback_broker = nullptr;
   {
     std::lock_guard<std::mutex> guard(g_lock);
     auto child = g_children.find(broker);
-    if (child == g_children.end() || !DuplicateHandle(GetCurrentProcess(), child->second.process,
-        GetCurrentProcess(), &g_broker, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
-      CloseHandle(client); return {};
+    broker_duplicated = child != g_children.end() && DuplicateHandle(GetCurrentProcess(), child->second.process,
+        GetCurrentProcess(), &g_broker, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    if (!broker_duplicated && child != g_children.end()) {
+      child->second.bootstrap_retirement = 1;
+      rollback_broker = child->second.process;
     }
+  }
+  if (!broker_duplicated) {
+    CloseHandle(client);
+    g_broker = nullptr;
+    if (rollback_broker) {
+      // The existing map entry reserves the exact handle during the wait; no
+      // allocation or PID reopen is needed even when DuplicateHandle failed.
+      TerminateProcess(rollback_broker, 137);
+      DWORD state = WaitForSingleObject(rollback_broker, 5000);
+      std::lock_guard<std::mutex> guard(g_lock);
+      auto child = g_children.find(broker);
+      if (child != g_children.end() && child->second.process == rollback_broker &&
+          child->second.bootstrap_retirement == 1) {
+        if (state == WAIT_OBJECT_0) {
+          CloseHandle(rollback_broker);
+          g_children.erase(child);
+        } else {
+          child->second.bootstrap_retirement = 2;
+          std::fprintf(stderr, "private device bootstrap: broker rollback unconfirmed\n");
+        }
+      }
+    }
+    return {};
   }
   g_control = client;
   control::Request host;
@@ -573,6 +602,13 @@ bool RevokeInstall(const std::u16string& package, const std::u16string& install)
       it = g_quarantined.erase(it);
     } else ++it;
   }
+  for (auto it = g_children.begin(); it != g_children.end();) {
+    if (it->second.bootstrap_retirement == 2 &&
+        WaitForSingleObject(it->second.process, 0) == WAIT_OBJECT_0) {
+      CloseHandle(it->second.process);
+      it = g_children.erase(it);
+    } else ++it;
+  }
   return ok;
 }
 
@@ -594,6 +630,7 @@ int64_t StartTime(int pid) {
     std::lock_guard<std::mutex> guard(g_lock);
     auto child = g_children.find(pid);
     if (child != g_children.end()) {
+      if (child->second.bootstrap_retirement) return 0;
       return WaitForSingleObject(child->second.process, 0) == WAIT_TIMEOUT
                  ? child->second.birth : 0;
     }
@@ -615,6 +652,7 @@ int64_t ExitStatus(int pid) {
   std::lock_guard<std::mutex> guard(g_lock);
   auto it = g_children.find(pid);
   if (it == g_children.end()) return kExitUnknown;
+  if (it->second.bootstrap_retirement) return kExitUnknown;
   DWORD state = WaitForSingleObject(it->second.process, 0);
   if (state == WAIT_TIMEOUT) return kExitRunning;
   // Unknown API failures are never evidence of either liveness or completion.
@@ -637,6 +675,7 @@ bool Kill(int pid) {
     std::lock_guard<std::mutex> guard(g_lock);
     auto child = g_children.find(pid);
     if (child != g_children.end()) {
+      if (child->second.bootstrap_retirement) return false;
       return child->second.restricted ? child->second.restricted->Stop().confirmed :
           TerminateProcess(child->second.process, 137) != FALSE;
     }
