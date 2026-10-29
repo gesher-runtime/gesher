@@ -13,60 +13,56 @@ function Assert-Sg([bool]$Condition, [string]$Label) {
     if (-not $Condition) { $script:failed++; Write-Host "FAIL SG parent: $Label" }
     else { Write-Host "PASS SG parent: $Label" }
 }
-function Start-Sg([string]$Exe, [string[]]$Arguments, [string]$Log) {
-    # Fixture prefixes have no embedded quote. Use ProcessStartInfo with a
-    # hidden window and real redirected streams; no shell interpretation.
-    $info = [Diagnostics.ProcessStartInfo]::new()
-    $info.FileName = $Exe
-    $info.Arguments = ($Arguments | ForEach-Object { '"' + $_ + '"' }) -join ' '
-    $info.UseShellExecute = $false
-    $info.CreateNoWindow = $true
-    $info.RedirectStandardOutput = $true
-    $info.RedirectStandardError = $true
-    $process = [Diagnostics.Process]::new()
-    $process.StartInfo = $info
-    try {
-        if (-not $process.Start()) { throw "Cannot start $Exe" }
-        return [pscustomobject]@{ Process = $process; Out = $process.StandardOutput.ReadToEndAsync(); Err = $process.StandardError.ReadToEndAsync(); Log = $Log }
-    } catch {
-        $setupFailure = $_
-        # Setup can fail after Start succeeds. Reap/dispose that actual owned
-        # child even when there is no completed Child record for the caller.
-        try {
-            if (-not $process.HasExited) { $process.Kill() }
-            if (-not $process.WaitForExit(5000)) { Write-Host 'FAIL SG parent: setup-failure child did not exit after kill' }
-        } catch { Write-Host "FAIL SG parent: setup cleanup: $_" }
-        finally { $process.Dispose() }
-        throw $setupFailure
+ . "$PSScriptRoot/trusted-sg-client.ps1"
+function Start-Sg([string]$Exe, [string[]]$Arguments, [string]$Log, [string]$Role) {
+    $environment = @{ GESHER_BINDER = $env:GESHER_BINDER }
+    if ($Role -eq 'broker') {
+        $answer = Invoke-TrustedSgOwner $owner @{ op='begin'; broker=$Exe; endpoint=$env:GESHER_BINDER; environment=$environment }
+    } else {
+        $fixtureRole = if ($Role -eq 'server') { '@servicemanager' } else { '@system_server' }
+        $answer = Invoke-TrustedSgOwner $owner @{ op='spawn'; args=@($Exe) + $Arguments; role=$fixtureRole; environment=$environment }
     }
+    return [pscustomobject]@{ Id=[int]$answer.id; Pid=[int]$answer.pid; Log=$Log; Stopped=$false; Exit=$null }
+}
+function Get-SgStatus($Child) {
+    return (Invoke-TrustedSgOwner $owner @{ op='status'; id=$Child.Id }).exit
 }
 function Stop-Sg($Child, [int]$Deadline = 45000) {
     if ($null -eq $Child) { return -1 }
-    $process = $Child.Process
-    $timedOut = -not $process.WaitForExit($Deadline)
+    if ($Child.Stopped) { return $Child.Exit }
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $code = Get-SgStatus $Child
+    while ($null -eq $code -and $timer.ElapsedMilliseconds -lt $Deadline) {
+        Start-Sleep -Milliseconds 20
+        $code = Get-SgStatus $Child
+    }
+    $timedOut = $null -eq $code
     if ($timedOut) {
-        try { $process.Kill() } catch { }
-        if (-not $process.WaitForExit(5000)) { throw 'SG child did not terminate within five seconds after kill' }
+        [void](Invoke-TrustedSgOwner $owner @{ op='terminate'; id=$Child.Id })
+        $timer.Restart()
+        do {
+            Start-Sleep -Milliseconds 20
+            $code = Get-SgStatus $Child
+        } while ($null -eq $code -and $timer.ElapsedMilliseconds -lt 5000)
+        if ($null -eq $code) { throw 'exact owned SG child did not terminate' }
     }
-    if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($Child.Out, $Child.Err), 5000)) {
-        throw 'SG child retained redirected pipes after finite drain deadline'
-    }
-    $text = $Child.Out.Result + $Child.Err.Result
+    $text = Read-TrustedSgOutput $owner $Child.Id
     [IO.File]::WriteAllText($Child.Log, $text)
     Write-Host $text
-    $code = if ($timedOut) { 124 } else { $process.ExitCode }
-    $process.Dispose()
-    return $code
+    $Child.Exit = if ($timedOut) { 124 } else { [long]$code }
+    $Child.Stopped = $true
+    return $Child.Exit
 }
 function Wait-SgFile([string]$Path, $Child) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     while ($timer.ElapsedMilliseconds -lt 30000) {
         if ([IO.File]::Exists($Path)) { return $true }
-        if ($null -ne $Child -and $Child.Process.HasExited) { return $false }
+        if ($null -ne $Child -and $null -ne (Get-SgStatus $Child)) { return $false }
         Start-Sleep -Milliseconds 20
     }
     return $false
 }
+
 try {
     foreach ($case in @('normal', 'malformed', 'oneway', 'smallmap', 'badread', 'prefixfault', 'adoptfail',
         'wire-beforeclaim', 'wire-claimloss', 'wire-installabort', 'wire-finishloss', 'wire-queue',
@@ -74,16 +70,17 @@ try {
         $env:GESHER_BINDER = 'sg88-' + [guid]::NewGuid().ToString('N')
         $prefix = Join-Path $root $case
         $broker = $null; $server = $null; $client = $null
+        $owner = Start-TrustedSgOwner
         try {
-            $broker = Start-Sg $brokerExe @($env:GESHER_BINDER) ($prefix + '.broker.log')
+            $broker = Start-Sg $brokerExe @($env:GESHER_BINDER) ($prefix + '.broker.log') 'broker'
             # Probe the real driver endpoint without opening a competing
             # context manager. Actors retry their actual open below.
             $serverExe = if ($case.StartsWith('wire-')) { $wireActor } else { $actor }
-            $server = Start-Sg $serverExe @('server', $case, $prefix) ($prefix + '.server.log')
+            $server = Start-Sg $serverExe @('server', $case, $prefix) ($prefix + '.server.log') 'server'
             if (-not (Wait-SgFile ($prefix + '.ready') $server)) { throw "Receiver not ready: $case" }
-            $client = Start-Sg $actor @('client', $case, $prefix) ($prefix + '.client.log')
-            Assert-Sg ($client.Process.Id -ne $server.Process.Id -and $server.Process.Id -ne $broker.Process.Id -and
-                $client.Process.Id -ne $broker.Process.Id) "$case broker/sender/receiver have three actual distinct PIDs"
+            $client = Start-Sg $actor @('client', $case, $prefix) ($prefix + '.client.log') 'client'
+            Assert-Sg ($client.Pid -ne $server.Pid -and $server.Pid -ne $broker.Pid -and
+                $client.Pid -ne $broker.Pid) "$case broker/sender/receiver have three actual distinct PIDs"
             if (-not (Wait-SgFile ($prefix + '.queued') $client)) { throw "Sender did not queue: $case" }
             if ($case -in @('oneway', 'wire-queue')) {
                 Assert-Sg ((Stop-Sg $client) -eq 0) "$case sender exits before receiver reads"
@@ -104,9 +101,10 @@ try {
             foreach ($child in @($client, $server, $broker)) {
                 if ($null -ne $child) {
                     try { [void](Stop-Sg $child 1000) }
-                    catch { $cleanupErrors += $_.Exception.Message; $child.Process.Dispose() }
+                    catch { $cleanupErrors += $_.Exception.Message }
                 }
             }
+            try { Close-TrustedSgOwner $owner } catch { $cleanupErrors += $_.Exception.Message }
             if ($cleanupErrors.Count) { throw ('SG cleanup failures after attempting all owned children: ' + ($cleanupErrors -join ' | ')) }
         }
     }
