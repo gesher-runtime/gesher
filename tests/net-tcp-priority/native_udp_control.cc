@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
+#include <algorithm>
 #include "../../compat/posix/src/socket_internal.h"
 
 namespace {
@@ -31,6 +33,20 @@ void DumpOwnHandleTypes(int mode) {
   static_assert(sizeof(process_query) == sizeof(process_symbol));
   memcpy(&process_query, &process_symbol, sizeof(process_query)); memcpy(&object_query, &object_symbol, sizeof(object_query));
   require(process_query && object_query, "actual own-process handle query APIs");
+  static std::vector<uintptr_t> previous_values;
+  if (mode == -1) {
+    using Set = NTSTATUS (NTAPI*)(HANDLE, ULONG, PVOID, ULONG);
+    FARPROC symbol = GetProcAddress(module, "NtSetInformationProcess"); Set set = nullptr;
+    static_assert(sizeof(set) == sizeof(symbol)); memcpy(&set, &symbol, sizeof(set));
+    require(set != nullptr, "own-process handle tracing API");
+    DWORD before = 0, after = 0; ULONG flags = 0;
+    require(GetProcessHandleCount(GetCurrentProcess(), &before) != FALSE, "pre-tracing handle count");
+    const NTSTATUS enabled = set(GetCurrentProcess(), 32, &flags, sizeof(flags));
+    require(GetProcessHandleCount(GetCurrentProcess(), &after) != FALSE, "post-tracing handle count");
+    printf("TCP_PRIORITY_HANDLE_TRACE_ENABLE status=%lu before=%lu after=%lu process_only=1\n", static_cast<unsigned long>(enabled), before, after); fflush(stdout);
+    require(enabled >= 0 && before == after, "actual handle tracing enabled without new owned handles");
+    previous_values.clear(); return;
+  }
   // Native ProcessHandleInformation (51), as defined by phnt/ntpsapi.h.
   // https://github.com/winsiderss/phnt/blob/master/ntpsapi.h
   struct Header { uintptr_t count, reserved; };
@@ -48,7 +64,9 @@ void DumpOwnHandleTypes(int mode) {
   const auto* header = reinterpret_cast<const Header*>(snapshot.data());
   require(header->count <= (returned - sizeof(Header)) / sizeof(Entry), "actual handle entries bounded by returned bytes");
   const auto* entries = reinterpret_cast<const Entry*>(snapshot.data() + sizeof(Header));
+  std::vector<uintptr_t> current_values;
   for (uintptr_t i = 0; i < header->count; ++i) {
+    const uintptr_t value = reinterpret_cast<uintptr_t>(entries[i].handle); current_values.push_back(value);
     alignas(UNICODE_STRING) unsigned char type_buffer[4096]{}; ULONG type_returned = 0;
     const NTSTATUS queried = object_query(entries[i].handle, 2, type_buffer, sizeof(type_buffer), &type_returned);
     const auto* type = reinterpret_cast<const UNICODE_STRING*>(type_buffer);
@@ -59,7 +77,36 @@ void DumpOwnHandleTypes(int mode) {
     printf("TCP_PRIORITY_HANDLE_TYPE mode=%d observed_value=%llu index=%lu access=%lu status=%lu type=%.*ls unretained=1\n", mode,
         static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(entries[i].handle)), entries[i].type, entries[i].access,
         static_cast<unsigned long>(queried), valid ? static_cast<int>(type->Length / sizeof(wchar_t)) : 7, valid ? type->Buffer : L"unknown");
+    if (mode > 0 && valid && type->Length == 5 * sizeof(wchar_t) && memcmp(type->Buffer, L"Event", type->Length) == 0 &&
+        std::find(previous_values.begin(), previous_values.end(), value) == previous_values.end()) {
+      // A numeric difference selects a diagnostic query, never an ownership
+      // claim. The kernel's OPEN/CLOSE history supplies the actual creator stack.
+      struct TraceHeader { HANDLE filter; ULONG count; };
+      struct TraceEntry { HANDLE handle, process, thread; ULONG kind; void* stack[16]; };
+      static_assert(sizeof(TraceHeader) == 16 && sizeof(TraceEntry) == 160 && offsetof(TraceEntry, stack) == 32);
+      std::vector<unsigned char> history(65536); auto* trace = reinterpret_cast<TraceHeader*>(history.data()); trace->filter = entries[i].handle;
+      ULONG traced_bytes = 0; const NTSTATUS traced = process_query(GetCurrentProcess(), 32, history.data(), static_cast<ULONG>(history.size()), &traced_bytes);
+      printf("TCP_PRIORITY_HANDLE_TRACE mode=%d observed_value=%llu status=%lu returned=%lu\n", mode, static_cast<unsigned long long>(value), static_cast<unsigned long>(traced), traced_bytes); fflush(stdout);
+      require(traced >= 0 && traced_bytes >= sizeof(TraceHeader) && traced_bytes <= history.size(), "bounded actual handle trace result");
+      require(trace->count > 0 && trace->count <= (traced_bytes - sizeof(TraceHeader)) / sizeof(TraceEntry), "actual trace entries bounded by native return");
+      const auto* records = reinterpret_cast<const TraceEntry*>(history.data() + sizeof(TraceHeader));
+      for (ULONG j = 0; j < trace->count; ++j) {
+        require(records[j].handle == entries[i].handle, "actual trace respects selected local handle filter");
+        printf("TCP_PRIORITY_HANDLE_TRACE_RECORD mode=%d observed_value=%llu record=%lu kind=%lu process=%llu thread=%llu\n", mode, static_cast<unsigned long long>(value), j, records[j].kind,
+            static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(records[j].process)), static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(records[j].thread)));
+        for (int frame = 0; frame != 16; ++frame) {
+          HMODULE image = nullptr; const uintptr_t pc = reinterpret_cast<uintptr_t>(records[j].stack[frame]);
+          if (!pc || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                        reinterpret_cast<LPCWSTR>(pc), &image)) continue;  // no raw kernel addresses
+          wchar_t path[1024]{}; const DWORD size = GetModuleFileNameW(image, path, 1024);
+          if (!size || size >= 1024 || pc < reinterpret_cast<uintptr_t>(image)) continue;
+          const wchar_t* base = wcsrchr(path, L'\\'); base = base ? base + 1 : path;
+          printf("TCP_PRIORITY_HANDLE_TRACE_FRAME mode=%d record=%lu frame=%d module=%ls rva=%llu\n", mode, j, frame, base, static_cast<unsigned long long>(pc - reinterpret_cast<uintptr_t>(image)));
+        }
+      }
+    }
   }
+  previous_values = std::move(current_values);
   DWORD after = 0; require(GetProcessHandleCount(GetCurrentProcess(), &after) != FALSE, "post-query actual handle count");
   printf("TCP_PRIORITY_HANDLE_SNAPSHOT_END mode=%d entries=%llu after=%lu unchanged=%d\n", mode, static_cast<unsigned long long>(header->count), after, after == before ? 1 : 0); fflush(stdout);
   require(after == before, "diagnostic retains no additional handles");

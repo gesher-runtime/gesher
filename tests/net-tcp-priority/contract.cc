@@ -311,6 +311,7 @@ static void* submission_connect(void* raw) {
   window.connect_error = errno; window.elapsed = millis() - start; return nullptr;
 }
 static void owned_wait_controls() {
+  gesher::test::DumpOwnHandleTypes(-1);  // CI-only tracing of this process, no policy relaxation
   gesher::ws::OwnerCensus baseline{};
   for (int mode = 0; mode != 4; ++mode) {
     SubmitWindow window{}; window.mode = mode;

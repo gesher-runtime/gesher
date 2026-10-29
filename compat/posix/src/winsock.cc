@@ -46,10 +46,21 @@ struct ConnectOperation {
   bool pending = false, issued = false, finished = false;  // error_mutex
   int start_error = 0, result = 0;  // error_mutex, or after submitted/finished
   ULONGLONG deadline = ~ULONGLONG{0};
+  std::atomic<bool> audit_close{false};  // set only by private retirement evidence
   ~ConnectOperation() {
-    if (submitted) CloseHandle(submitted);
-    if (overlap.hEvent) CloseHandle(overlap.hEvent);
-    if (reaper) CloseHandle(reaper);
+    struct Closed { HANDLE handle; BOOL result; DWORD error; };
+    auto close = [](HANDLE handle) {
+      Closed result{handle, handle ? CloseHandle(handle) : TRUE, 0};
+      if (!result.result) result.error = GetLastError();
+      return result;
+    };
+    const Closed a = close(submitted), b = close(overlap.hEvent), c = close(reaper);
+    if (audit_close.load()) {
+      printf("TCP_PRIORITY_OPERATION_CLOSE submitted=%llu closed=%d error=%lu event=%llu closed=%d error=%lu reaper=%llu closed=%d error=%lu\n",
+          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(a.handle)), a.result, a.error,
+          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(b.handle)), b.result, b.error,
+          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(c.handle)), c.result, c.error); fflush(stdout);
+    }
   }
 };
 
@@ -713,6 +724,13 @@ std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
 
 int AwaitConnectRetirement(const std::shared_ptr<ConnectOperation>& operation, int timeout_ms) {
   const DWORD wait = WaitForSingleObject(operation->reaper, timeout_ms < 0 ? INFINITE : static_cast<DWORD>(timeout_ms));
+  if (wait == WAIT_OBJECT_0) {
+    operation->audit_close.store(true);
+    printf("TCP_PRIORITY_OPERATION_HANDLES submitted=%llu event=%llu reaper=%llu native_retired=1\n",
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(operation->submitted)),
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(operation->overlap.hEvent)),
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(operation->reaper))); fflush(stdout);
+  }
   return wait == WAIT_OBJECT_0 ? 0 : (errno = wait == WAIT_TIMEOUT ? ETIMEDOUT : EIO, -1);
 }
 

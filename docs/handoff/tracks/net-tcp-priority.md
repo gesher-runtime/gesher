@@ -652,3 +652,26 @@ walks its explicit cleanup chain and exits via longjmp; automatic C++ shared_ptr
 unwind must not be assumed. This remains an independent source/actual-cancellation
 qualification condition, not the cause of the earlier mode1 failure. Reference:
 https://github.com/mingw-w64/mingw-w64/blob/master/mingw-w64-libraries/winpthreads/src/thread.c
+
+b59e6f82/409453 actual telemetry reaches the unchanged mode1 bound and fails it
+on both Windows. Mode0/1 weak operation and description strong counts are0.
+Own handle snapshots succeed and their before/after counts are identical:
+137/138 (2022),146/147 (2025). Type counts change only Event33 to34, with one
+new observed raw value576; all other observed entries match. This does NOT prove
+that value's object identity, creator, caching behavior or leak cause. Mode2 and
+both guest ABIs remain unexecuted. Raw logs:
+`C:/work/gesher-ci-review/tcp-409453-win2022.log`,
+`C:/work/gesher-ci-review/tcp-409453-win2025.log`.
+
+The next bounded diagnostic enables kernel handle tracing for THIS fixture
+process before mode0, requires successful enable without changing handle count,
+and queries OPEN/CLOSE history only for newly observed local Event values.
+Native returned lengths/counts are validated. Only mapped user module basenames
+and RVAs are printed, not raw kernel addresses; process/thread IDs are telemetry,
+never authorities for opening another process/thread. Private retirement evidence
+also logs the actual three owned operation handles and each CloseHandle result.
+The WinAPI-only reaper gains no CRT/logging calls. Production completion behavior,
+native socket ownership and the original exact census remain unchanged. No +1
+allowance or larger/warmed baseline is introduced. Whether caller-side native
+completion query creates a provider event is only a hypothesis until actual
+creator-stack evidence, not justification for a source or assertion change.
