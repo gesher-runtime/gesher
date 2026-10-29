@@ -63,6 +63,7 @@ sealed class ProbeForm : Form
     readonly TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
     int port, nextObject;
     bool failure;
+    readonly bool lifecycleDiagnostic = Environment.GetEnvironmentVariable("WEB4_LIFECYCLE_DIAGNOSTIC") == "1";
     public int Result { get; private set; } = 1;
     ProbeObject NewObject() => new(Interlocked.Increment(ref nextObject));
 
@@ -93,7 +94,8 @@ sealed class ProbeForm : Form
             core.FrameCreated += (_, e) => RegisterFrame(e.Frame);
             long initialStart = Stopwatch.GetTimestamp();
             core.Navigate($"http://127.0.0.1:{port}/main");
-            string[] selected = { "a", "b", "nested", "bad", "opaque" };
+            string[] selected = lifecycleDiagnostic ? new[] { "a", "b", "bad", "opaque" } : new[] { "a", "b", "nested", "bad", "opaque" };
+            if (lifecycleDiagnostic) Console.WriteLine("LIFECYCLE_DIAGNOSTIC_ONLY original assertions remain mandatory");
             await Wait(() => observations.ContainsKey("opaque") && pages.ContainsKey("opaque"), TimeSpan.FromSeconds(15), limit.Token);
             var opaqueContext = observations["opaque"];
             if (!opaqueContext.Default || opaqueContext.Unique.Length == 0 || opaqueContext.Frame.Length == 0 || opaqueContext.Origin != "://" || eventFailure)
@@ -111,7 +113,7 @@ sealed class ProbeForm : Form
             if (rootFirst.Length != 1 || rootFirst[0].ObjectId != topObject.Id || rootFirst[0].Retired)
                 throw new Exception("top-level first-script control mismatch");
             Console.WriteLine("TOP_FIRST object=" + topObject.Id);
-            foreach (string name in new[] { "a", "b", "nested" })
+            foreach (string name in lifecycleDiagnostic ? new[] { "a", "b" } : new[] { "a", "b", "nested" })
             {
                 var state = frames[name];
                 var matches = ProbeObject.Calls.Where(c => c.Attempt == "first:" + name).ToArray();
@@ -123,7 +125,10 @@ sealed class ProbeForm : Form
             {
                 var state = frames[name];
                 if (!pages[name].StartsWith("DENIED|", StringComparison.Ordinal) ||
-                    ProbeObject.Calls.Any(c => c.ObjectId == state.Current.Id)) throw new Exception("denied host access not proven: " + name);
+                    ProbeObject.Calls.Any(c => c.ObjectId == state.Current.Id)) {
+                    if (!lifecycleDiagnostic) throw new Exception("denied host access not proven: " + name);
+                    failure = true; Console.WriteLine("ORIGINAL_DENIAL_FAILURE " + name); continue;
+                }
                 Console.WriteLine($"DENIED_ATTEMPT frame={name} frameId={state.Frame.FrameId} object={state.Current.Id} page={pages[name]} nativeCalls=0");
             }
             FrameState a = frames["a"];
@@ -157,10 +162,12 @@ sealed class ProbeForm : Form
             if (rootCalls.Length != 1 || rootCalls[0].ObjectId != topObject.Id || rootCalls[0].Retired)
                 throw new Exception("top-level unscoped host-object control missing");
             Console.WriteLine($"TOP_CROSS_UNSCOPED object={topObject.Id} origin=http://localhost:{port}");
+            if (lifecycleDiagnostic && (!frames.ContainsKey("nested") || !pages.ContainsKey("nested"))) { failure = true; Console.WriteLine("ORIGINAL_NESTED_FAILURE missing frame or page"); }
             Task[] setup = sessionSetup.Values.ToArray();
             await Task.WhenAll(setup).WaitAsync(TimeSpan.FromSeconds(3), limit.Token);
             if (setup.Length != sessionSetup.Count || sessionSetup.Values.Any(task => !task.IsCompletedSuccessfully) || eventFailure || failure)
                 throw new Exception("frame registration, page observation, or CDP session failed or remained pending");
+            if (lifecycleDiagnostic) throw new Exception("diagnostic mode cannot qualify original probe");
             Console.WriteLine("HOST_OBJECT_PROBE_PASS selected exact-origin frame calls, denied attempts, held proxy retirement and unscoped top-level control; broader rules and production unproven");
             Result = 0;
         }

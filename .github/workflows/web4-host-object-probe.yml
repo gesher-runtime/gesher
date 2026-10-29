@@ -20,6 +20,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - name: Verify pinned SDK and build probe
+        id: build
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -65,3 +66,26 @@ jobs:
           if ($cleanupError) { throw $cleanupError }
           if ($exitCode -ne 0) { throw "platform probe exited $exitCode" }
           if (-not (Select-String -LiteralPath $stdout -SimpleMatch 'HOST_OBJECT_PROBE_PASS' -Quiet)) { throw 'missing early platform probe verdict' }
+      - name: Observe independent lifecycle diagnostic
+        if: always() && steps.build.outcome == 'success'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:WEB4_LIFECYCLE_DIAGNOSTIC = '1'
+          $exe = Join-Path $PWD 'tests/web4-host-object-probe/bin/Release/net8.0-windows/Web4HostObjectProbe.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'web4-lifecycle-stdout.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'web4-lifecycle-stderr.log'
+          $p = Start-Process -FilePath $exe -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -WindowStyle Hidden
+          $timedOut = $false
+          try {
+            $timedOut = -not $p.WaitForExit(100000)
+            if ($timedOut) { $p.Kill($true); if (-not $p.WaitForExit(5000)) { throw 'diagnostic cleanup timed out' } }
+            $exitCode = $p.ExitCode
+          } finally {
+            $p.Dispose()
+            if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
+            if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+          }
+          if ($timedOut) { throw 'lifecycle diagnostic exceeded deadline' }
+          if ($exitCode -ne 1) { throw "unexpected diagnostic exit $exitCode" }
+          if (-not (Select-String -LiteralPath $stdout -SimpleMatch 'LIFECYCLE_DIAGNOSTIC_ONLY' -Quiet)) { throw 'missing diagnostic identity' }
