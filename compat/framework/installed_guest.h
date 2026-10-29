@@ -171,7 +171,7 @@ struct InstalledPolicy {
           attributes.Length = sizeof(attributes); attributes.RootDirectory = parent.handle;
           attributes.ObjectName = &unicode; attributes.Attributes = 0x40; // OBJ_CASE_INSENSITIVE
           IO_STATUS_BLOCK io{}; HANDLE child = nullptr;
-          NTSTATUS status = open(&child, directory ? MAXIMUM_ALLOWED :
+          NTSTATUS status = open(&child, directory ? MAXIMUM_ALLOWED | SYNCHRONIZE :
               FILE_READ_DATA | FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC | WRITE_OWNER | SYNCHRONIZE,
               &attributes, &io, nullptr, 0,
               FILE_SHARE_READ | FILE_SHARE_WRITE | (parent.writable ? FILE_SHARE_DELETE : 0),
