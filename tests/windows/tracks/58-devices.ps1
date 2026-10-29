@@ -257,9 +257,6 @@ DevCheck 'devices: permissions (single process): without ACCESS_*_LOCATION Locat
 # processes inherit them).
 $launcherDev = $dvmDev + 'com.gesher.app.Launcher'
 $null = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'shutdown') 120
- else {
-  Write-Host "PASS  devices: source overrides unchanged canonical=$overridesAfter raw=$overridesRawAfter"
-}
 $out = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'launch', (NoDrive "$Dir/devices.apk"), '--keep-task') 500
 $code = $LASTEXITCODE
 $serverLog = Join-Path $root 'logs/system_server.log'
@@ -299,4 +296,6 @@ $overridesRawAfter = (Get-FileHash -LiteralPath $sourceOverrides -Algorithm SHA2
 if ($overridesAfter -cne $overridesBefore -or $overridesRawAfter -cne $overridesRawBefore) {
   Write-Host "FAIL  devices: source overrides changed during geocoder/devices canonical=$overridesBefore/$overridesAfter raw=$overridesRawBefore/$overridesRawAfter"
   $script:failed++
+} else {
+  Write-Host "PASS  devices: source overrides unchanged canonical=$overridesAfter raw=$overridesRawAfter"
 }
