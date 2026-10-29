@@ -45,6 +45,10 @@ sealed class ProbeForm : Form
     public int Result { get; private set; } = 1;
     record Context(string Session, int Id, string Unique, string Origin, string Frame, bool Default);
 
+    bool Eligible(Context c) => c.Default && c.Unique.Length != 0 && c.Frame.Length != 0 &&
+        c.Origin == $"http://127.0.0.1:{port}" && !destroyed.ContainsKey(c.Unique) &&
+        contexts.TryGetValue((c.Session, c.Id), out var live) && live.Unique == c.Unique;
+
     public ProbeForm()
     {
         Controls.Add(web);
@@ -147,11 +151,13 @@ sealed class ProbeForm : Form
             Context old = observations["a"];
             await Evaluate(observations["main"], "document.getElementById('a').src='/held?name=a2'");
             await holdEntered.Task.WaitAsync(timeout.Token);
-            await Evaluate(old, "realmProbe('during-held')");
-            while (!observations.ContainsKey("during-held"))
+            await Evaluate(old, "realmProbe('allowed:during-held')");
+            while (!observations.ContainsKey("allowed:during-held"))
             { timeout.Token.ThrowIfCancellationRequested(); await Task.Delay(50, timeout.Token); }
-            if (observations["during-held"].Unique != old.Unique) throw new Exception("held message attributed to another context");
+            if (observations["allowed:during-held"].Unique != old.Unique) throw new Exception("held message attributed to another context");
             Console.WriteLine($"OBS during-held session={old.Session} id={old.Id} unique={old.Unique} origin={old.Origin} frame={old.Frame}");
+            if (!decisions.TryGetValue("allowed:during-held", out var heldAccepted) || !heldAccepted || !Eligible(old))
+                throw new Exception("held context was not accepted before commit");
             holdRelease.TrySetResult();
             while (!observations.ContainsKey("a2") || !destroyed.ContainsKey(old.Unique))
             {
@@ -161,6 +167,10 @@ sealed class ProbeForm : Form
             if (!replacement.Default || replacement.Unique.Length == 0 || replacement.Frame.Length == 0 ||
                 replacement.Unique == old.Unique || replacement.Frame != old.Frame || replacement.Session != old.Session)
                 throw new Exception("replacement context identity does not establish same-frame new document");
+            if (Eligible(old) || !Eligible(replacement)) throw new Exception("retired context was eligible at deferred delivery");
+            Context reused = old with { Id = replacement.Id };
+            if (Eligible(reused)) throw new Exception("reused numeric context accepted old unique identity");
+            Console.WriteLine($"DEFERRED_RETIREMENT old={old.Unique} replacement={replacement.Unique} oldEligible=false replacementEligible=true numericReuseRejected=true");
             Console.WriteLine($"OBS a2 session={replacement.Session} id={replacement.Id} unique={replacement.Unique} origin={replacement.Origin} frame={replacement.Frame}");
             bool scriptExceptionObserved = false;
             try { await Evaluate(replacement, "throw new Error('context')"); }
@@ -187,7 +197,7 @@ sealed class ProbeForm : Form
             await Task.Delay(500, timeout.Token);
             if (observations.ContainsKey("reply-comparison")) throw new Exception("rejected evaluation delivered a binding");
             if (eventFailure) throw new Exception("an event, binding or session setup failed");
-            Console.WriteLine("BOOTSTRAP_PROBE_PASS selected exact-origin native decisions and context controls only; adversarial lifecycle and production unproven");
+            Console.WriteLine("BOOTSTRAP_PROBE_PASS selected origin decisions and deferred identity checks only; adversarial races and production unproven");
             Result = 0;
         }
         catch (Exception e) { Console.WriteLine("PLATFORM_PROBE_FAILURE " + e); }
@@ -230,7 +240,7 @@ sealed class ProbeForm : Form
                 if (contexts.TryGetValue((session, id), out var c))
                 {
                     if (label.StartsWith("allowed:", StringComparison.Ordinal) || label.StartsWith("denied:", StringComparison.Ordinal) || label.StartsWith("forged:", StringComparison.Ordinal)) {
-                        bool accept = c.Default && c.Unique.Length != 0 && c.Frame.Length != 0 && c.Origin == $"http://127.0.0.1:{port}";
+                        bool accept = Eligible(c);
                         if (!decisions.TryAdd(label, accept)) eventFailure = true;
                         Console.WriteLine($"BINDING_DECISION label={label} accepted={accept} origin={c.Origin} session={session} unique={c.Unique} frame={c.Frame} labelAuthority=false");
                     }
