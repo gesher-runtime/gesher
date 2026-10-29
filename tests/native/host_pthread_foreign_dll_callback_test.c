@@ -35,7 +35,8 @@ int main(void) {
       WaitForSingleObject(s.callback.entered,5000)!=WAIT_OBJECT_0) return 5;
   MEMORY_BASIC_INFORMATION region;
   if (!VirtualQuery((const void *)fn,&region,sizeof(region)) || region.State!=MEM_COMMIT || region.AllocationBase!=module ||
-      pthread_key_delete(old_key) || s.callback.calls!=1 || !SetEvent(s.callback.release) ||
+      pthread_key_delete(old_key) || pthread_key_create(&new_key,NULL) || new_key!=old_key ||
+      pthread_key_delete(new_key) || s.callback.calls!=1 || !SetEvent(s.callback.release) ||
       WaitForSingleObject(thread,5000)!=WAIT_OBJECT_0) return 6;
   DWORD code=0; if (!GetExitCodeThread(thread,&code) || code!=37 || s.callback.failed || s.callback.calls!=1 ||
       GetModuleHandleW(L"probe-callback.dll") || pthread_detach(s.id)!=ESRCH ||
@@ -46,5 +47,5 @@ int main(void) {
   if (!CloseHandle(next) || !CloseHandle(thread) || !CloseHandle(s.ready) || !CloseHandle(s.release) ||
       !CloseHandle(s.callback.entered) || !CloseHandle(s.callback.release) ||
       !GetProcessHandleCount(GetCurrentProcess(),&after) || after>before+8) return 9;
-  printf("PASS probe DLL destructor native exit delete/reuse physical unload handles=%lu/%lu\n",before,after); return 0;
+  printf("PASS probe DLL destructor native exit delete/concurrent-reuse physical unload handles=%lu/%lu\n",before,after); return 0;
 }
