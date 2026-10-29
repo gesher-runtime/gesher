@@ -3,6 +3,7 @@ on:
   workflow_call:
 permissions:
   contents: read
+  actions: read
 jobs:
   verify:
     runs-on: ubuntu-24.04
@@ -17,9 +18,10 @@ jobs:
         env:
           EXPECTED_CALLER: ${{ vars.GESHER_BINDER_RESTRICTED_CALLER }}
           EXPECTED_GUARD: ${{ vars.GESHER_BINDER_RESTRICTED_GUARD }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 -I - <<'PY'
-          import ast, hashlib, os, pathlib, re, subprocess
+          import ast, copy, hashlib, json, os, pathlib, re, subprocess, urllib.request
           historical = '7bbccfcddbac826f50b78175f4d23f8702fd7741'
           reviewed = '719ceccc3b26d5e3cc934bcfc0979696c4b07187'
           guard_path = '.github/workflows/binder-restricted-trusted-source.yml'
@@ -39,6 +41,41 @@ jobs:
           caller, guard = os.environ['EXPECTED_CALLER'], os.environ['EXPECTED_GUARD']
           live_context = (sha, caller, guard, os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_REF'], os.environ['GITHUB_EVENT_NAME'])
           context(*live_context)
+          run, attempt = os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']
+          assert re.fullmatch('[1-9][0-9]*', run) and re.fullmatch('[1-9][0-9]*', attempt)
+          assert os.environ['GITHUB_REPOSITORY_ID'] == '1426153186'
+          assert os.environ['GITHUB_ACTOR'] == 'palmoni5' and os.environ.get('GH_TOKEN')
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl): return None
+          request = urllib.request.Request(f'https://api.github.com/repos/gesher-runtime/gesher/actions/runs/{run}/attempts/{attempt}',
+              headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
+                       'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'gesher-binder-immutable-source-guard'})
+          with urllib.request.build_opener(NoRedirect()).open(request, timeout=30) as response:
+              assert response.status == 200
+              data = response.read(1048577)
+              assert len(data) <= 1048576
+              metadata = json.loads(data)
+          def verify_run(value):
+              assert value['id'] == int(run) and value['run_attempt'] == int(attempt)
+              assert value['repository']['id'] == 1426153186 and value['repository']['full_name'] == 'gesher-runtime/gesher'
+              assert value['head_repository']['full_name'] == 'gesher-runtime/gesher'
+              assert value['head_sha'] == sha and value['head_branch'] == 'wip/binder-isolated-spawn'
+              assert value['event'] == 'workflow_dispatch' and value['path'] == '.github/workflows/ci.yml'
+              assert value['workflow_id'] == 389851347 and value['actor']['login'] == 'palmoni5'
+          verify_run(metadata)
+          metadata_mutations = []
+          for path, bad in ((('id',), -1), (('run_attempt',), -1), (('repository','id'), -1),
+                            (('repository','full_name'), 'other/repository'), (('head_repository','full_name'), 'other/repository'),
+                            (('head_sha',), '0'*40), (('head_branch',), 'main'), (('event',), 'push'),
+                            (('path',), '.github/workflows/other.yml'), (('workflow_id',), -1), (('actor','login'), 'other')):
+              value = copy.deepcopy(metadata); cursor = value
+              for key in path[:-1]: cursor = cursor[key]
+              cursor[path[-1]] = bad; metadata_mutations.append(value)
+          metadata_mutations.extend(({}, {'id': int(run)}))
+          for value in metadata_mutations:
+              try: verify_run(value)
+              except (AssertionError, KeyError, TypeError): pass
+              else: raise RuntimeError('Actual run metadata mutation accepted')
           assert text('rev-parse', 'HEAD') == sha
           subprocess.run(['git', 'diff', '--exit-code', 'HEAD', '--'], check=True)
           assert not git('ls-files', '--others', '--exclude-standard').strip(), 'Unexpected untracked source'
@@ -112,5 +149,5 @@ jobs:
               except AssertionError: pass
               else: raise RuntimeError('External authority mutation accepted')
           digest = hashlib.sha256(repr(sorted(actual.items())).encode()).hexdigest()
-          print(f'BINDER_RESTRICTED_TRUSTED_SOURCE historical={historical} reviewed={reviewed} guard={guard} caller={caller} source={sha} whole_tree_paths={len(actual)} historical_pins={len(values[0])} explicit_adaptations={len(adaptations)} tree_sha256={digest} source_mutations_rejected={len(mutations)} authority_mutations_rejected={len(bad_contexts)}', flush=True)
+          print(f'BINDER_RESTRICTED_TRUSTED_SOURCE historical={historical} reviewed={reviewed} guard={guard} caller={caller} source={sha} run={run} attempt={attempt} workflow_id=389851347 workflow_path=.github/workflows/ci.yml authenticated_run_mutations_rejected={len(metadata_mutations)} whole_tree_paths={len(actual)} historical_pins={len(values[0])} explicit_adaptations={len(adaptations)} tree_sha256={digest} source_mutations_rejected={len(mutations)} authority_mutations_rejected={len(bad_contexts)}', flush=True)
           PY
