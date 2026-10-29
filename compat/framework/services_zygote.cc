@@ -91,6 +91,7 @@ struct Child {
 std::map<int, Child> g_children;  // exact retained instances, never reopened for owned queries
 std::map<std::u16string, std::shared_ptr<guest::InstalledPolicy>> g_installed;
 std::vector<Child> g_restricted_failed;
+bool g_retiring_installed = false;
 HANDLE g_job = nullptr;
 std::vector<HANDLE> g_quarantined;  // failed rollback: retain until death, never authorize
 
@@ -171,7 +172,7 @@ static int SpawnOwned(const std::u16string& command_line, const std::vector<std:
   std::shared_ptr<guest::InstalledPolicy> policy;
   if (installed_guest && package == guest::kSelectedPackage) {
     auto found = g_installed.find(package);
-    if (!g_writer || bootstrap || breakaway || found == g_installed.end() ||
+    if (g_retiring_installed || !g_writer || bootstrap || breakaway || found == g_installed.end() ||
         found->second->uid != uid || found->second->install != install)
       return -ERROR_ACCESS_DENIED;
     policy = found->second;
@@ -370,7 +371,7 @@ bool ProvisionInstalled(const std::u16string& package, const std::u16string& ins
     int uid, const std::vector<std::u16string>& read, const std::u16string& data) {
   std::lock_guard<std::recursive_mutex> spawning(g_spawn_lock);
   InitControl();
-  if (!g_writer || !g_control || !g_broker) return false;
+  if (g_retiring_installed || !g_writer || !g_control || !g_broker) return false;
   if (package != guest::kSelectedPackage) return true;
   auto found = g_installed.find(package);
   if (found != g_installed.end()) return found->second->install == install && found->second->uid == uid;
@@ -544,6 +545,19 @@ bool RevokeInstall(const std::u16string& package, const std::u16string& install)
       it = g_quarantined.erase(it);
     } else ++it;
   }
+  return ok;
+}
+
+bool RetireInstalled() {
+  std::lock_guard<std::recursive_mutex> spawning(g_spawn_lock);
+  InitControl();
+  if (!g_writer) return false;
+  g_retiring_installed = true;
+  // RevokeInstall can erase the policy map. Snapshot just the trusted keys.
+  std::vector<std::pair<std::u16string, std::u16string>> installs;
+  for (const auto& item : g_installed) installs.emplace_back(item.first, item.second->install);
+  bool ok = true;
+  for (const auto& item : installs) ok = RevokeInstall(item.first, item.second) && ok;
   return ok;
 }
 

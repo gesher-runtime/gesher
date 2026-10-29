@@ -355,6 +355,12 @@ public final class SystemServer {
                 SystemClock.sleep(200);
                 log("shutting down: " + reason);
                 mServices.atm.endAllProcesses(5000);
+                if (!Zygote.nativeRetireInstalled()) {
+                    log("restricted installed retirement unconfirmed; shutdown failed");
+                    System.out.flush();
+                    System.exit(1);
+                    return;
+                }
                 java.util.Properties state = Device.read(Device.stateFile());
                 if (state != null && Device.pid(state, Device.SYSTEM_SERVER) == Process.myPid()) {
                     Device.stateFile().delete();

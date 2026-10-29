@@ -30,6 +30,7 @@ bool IsAuthority();
 bool ProvisionInstalled(const std::u16string& package, const std::u16string& install,
     int uid, const std::vector<std::u16string>& read, const std::u16string& data);
 bool VerifyRestrictedGuest();
+bool RetireInstalled();
 bool OwnedInstall(int pid, const std::u16string& package, const std::u16string& install);
 std::vector<int> StartDevice(const std::vector<std::u16string>& commands,
                             const std::vector<std::u16string>& logs,

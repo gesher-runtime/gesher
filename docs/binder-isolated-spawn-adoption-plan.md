@@ -16,10 +16,15 @@ The shared header is byte-identical to qualified `558d69f9` (helper component
 pins the current executable, grants runtime DLL/JAR/DAT files and explicit
 runtime/APK asset trees read/execute, and grants only the app's data directory
 read/write at low integrity. It rejects relative/reparse path components and
-overlapping read/data trees. Existing profiles are refused. ACL/label/profile
+overlapping read/data trees. It pins each ancestor and final resource with
+OPEN_REPARSE_POINT and no DELETE sharing, checks handle attributes, and retains
+those handles until retirement; grant, revoke and label operations use the
+retained final handles. Existing profiles are refused. ACL/label/profile
 retirement is checked; failed cleanup retains its owner in a reserved fixed
 slot for retry. A stale profile after an abnormal server death currently causes
-fail-closed provisioning, not silent adoption.
+fail-closed provisioning, not silent adoption. Normal persistent-device shutdown
+now blocks new installed admissions, revokes and retires all installed policies,
+and fails explicitly if exact child/resource retirement is unconfirmed.
 
 Child retains the RestrictedLaunch owner, its policy and actual process/birth.
 Start checks actual SID, low integrity, zero capabilities and atomic private-job

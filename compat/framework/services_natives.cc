@@ -179,6 +179,9 @@ static jboolean Zygote_authority(JNIEnv*, jclass) {
 static jboolean Zygote_verifyRestrictedGuest(JNIEnv*, jclass) {
     return gesher::zygote::VerifyRestrictedGuest() ? JNI_TRUE : JNI_FALSE;
 }
+static jboolean Zygote_retireInstalled(JNIEnv*, jclass) {
+    return gesher::zygote::RetireInstalled() ? JNI_TRUE : JNI_FALSE;
+}
 static jboolean Zygote_ownedInstall(JNIEnv* env, jclass, jint pid, jstring package, jstring install) {
     return gesher::zygote::OwnedInstall(pid, ZygoteString(env, package), ZygoteString(env, install))
         ? JNI_TRUE : JNI_FALSE;
@@ -246,6 +249,7 @@ static jstring Zygote_exePath(JNIEnv* env, jclass) {
 }
 
 static const JNINativeMethod gZygoteMethods[] = {
+    {"nativeRetireInstalled", "()Z", GESHER_JNI(Zygote_retireInstalled)},
     {"verifyRestrictedGuest", "()Z", GESHER_JNI(Zygote_verifyRestrictedGuest)},
     {"nativeProvisionInstalled", "(Ljava/lang/String;Ljava/lang/String;I[Ljava/lang/String;Ljava/lang/String;)Z", GESHER_JNI(Zygote_provisionInstalled)},
     {"nativeStartDevice", "([Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)[I", GESHER_JNI(Zygote_startDevice)},

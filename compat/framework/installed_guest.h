@@ -23,6 +23,9 @@ struct InstalledPolicy {
   std::u16string package, install, executable;
   int uid = -1;
   std::vector<std::wstring> grants;
+  struct Pin { std::wstring path; HANDLE handle; };
+  std::vector<Pin> pins;
+  std::vector<HANDLE> ancestors;
   HMODULE userenv = nullptr;
   std::wstring writable_path;
   PSECURITY_DESCRIPTOR old_label = nullptr;
@@ -60,7 +63,7 @@ struct InstalledPolicy {
     if (old_label) {
       PACL label = nullptr; BOOL present = FALSE, defaulted = FALSE;
       if (GetSecurityDescriptorSacl(old_label, &present, &label, &defaulted) &&
-          SetNamedSecurityInfoW(writable_path.data(), SE_FILE_OBJECT,
+          SetSecurityInfo(Pinned(writable_path), SE_FILE_OBJECT,
             LABEL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, label) == ERROR_SUCCESS) {
         LocalFree(old_label); old_label = nullptr;
       } else ok = false;
@@ -72,13 +75,41 @@ struct InstalledPolicy {
     return ok;
   }
   ~InstalledPolicy() {
+    for (const auto& pin : pins) CloseHandle(pin.handle);
+    for (HANDLE handle : ancestors) CloseHandle(handle);
     if (sid) FreeSid(sid);
     if (userenv) FreeLibrary(userenv);
+  }
+  HANDLE Pinned(const std::wstring& path) const {
+    for (const auto& pin : pins) if (pin.path == path) return pin.handle;
+    return INVALID_HANDLE_VALUE;
+  }
+  bool PinResource(const std::wstring& path) {
+    if (Pinned(path) != INVALID_HANDLE_VALUE) return true;
+    for (size_t i = 3; i <= path.size(); ++i) {
+      if (i != 3 && i != path.size() && path[i] != L'\\') continue;
+      bool final = i == path.size();
+      HANDLE handle = CreateFileW(path.substr(0, i).c_str(),
+          FILE_READ_ATTRIBUTES | (final ? READ_CONTROL | WRITE_DAC | WRITE_OWNER : 0),
+          FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+          FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+      if (handle == INVALID_HANDLE_VALUE) return false;
+      FILE_ATTRIBUTE_TAG_INFO tag{};
+      if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag, sizeof(tag)) ||
+          (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) { CloseHandle(handle); return false; }
+      // No DELETE sharing: each already opened ancestor remains the same object
+      // while resolving its child, and no root can be replaced before cleanup.
+      if (final) pins.push_back({path, handle});
+      else ancestors.push_back(handle);
+    }
+    return Pinned(path) != INVALID_HANDLE_VALUE;
   }
   bool Grant(const std::wstring& path, DWORD rights, ACCESS_MODE mode = GRANT_ACCESS) {
     PACL old_acl = nullptr, acl = nullptr;
     PSECURITY_DESCRIPTOR sd = nullptr;
-    DWORD error = GetNamedSecurityInfoW(path.c_str(), SE_FILE_OBJECT,
+    HANDLE handle = Pinned(path);
+    if (handle == INVALID_HANDLE_VALUE) return false;
+    DWORD error = GetSecurityInfo(handle, SE_FILE_OBJECT,
         DACL_SECURITY_INFORMATION, nullptr, nullptr, &old_acl, nullptr, &sd);
     if (error != ERROR_SUCCESS) return false;
     EXPLICIT_ACCESSW entry{};
@@ -89,8 +120,8 @@ struct InstalledPolicy {
     entry.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
     entry.Trustee.ptstrName = static_cast<wchar_t*>(sid);
     error = SetEntriesInAclW(1, &entry, old_acl, &acl);
-    if (error == ERROR_SUCCESS) error = SetNamedSecurityInfoW(
-        const_cast<wchar_t*>(path.c_str()), SE_FILE_OBJECT,
+    if (error == ERROR_SUCCESS) error = SetSecurityInfo(
+        handle, SE_FILE_OBJECT,
         DACL_SECURITY_INFORMATION, nullptr, nullptr, acl, nullptr);
     if (acl) LocalFree(acl);
     if (sd) LocalFree(sd);
@@ -173,20 +204,22 @@ struct InstalledPolicy {
     if (FAILED(result)) { policy->profile.clear(); return {}; }
     resources.push_back(exe);
     for (const auto& path : resources) {
+      if (!policy->PinResource(path)) return {};
       policy->grants.push_back(path);
       if (!policy->Grant(path, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE)) return {};
     }
+    if (!policy->PinResource(writable)) return {};
     policy->grants.push_back(writable);
     if (!policy->Grant(writable, FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE)) return {};
     policy->writable_path = writable;
-    if (GetNamedSecurityInfoW(writable.c_str(), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
+    if (GetSecurityInfo(policy->Pinned(writable), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
         nullptr, nullptr, nullptr, nullptr, &policy->old_label) != ERROR_SUCCESS) return {};
     PSECURITY_DESCRIPTOR low = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"S:(ML;OICI;NW;;;LW)",
         SDDL_REVISION_1, &low, nullptr)) return {};
     PACL label = nullptr; BOOL present = FALSE, defaulted = FALSE;
     bool labeled = GetSecurityDescriptorSacl(low, &present, &label, &defaulted) &&
-        SetNamedSecurityInfoW(writable.data(), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
+        SetSecurityInfo(policy->Pinned(writable), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
             nullptr, nullptr, nullptr, label) == ERROR_SUCCESS;
     LocalFree(low);
     if (!labeled) return {};

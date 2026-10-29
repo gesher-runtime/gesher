@@ -28,6 +28,7 @@ public final class Zygote {
             String logPath, boolean breakaway, int uid, String packageName, String installInstance,
             boolean installed);
     static native boolean nativeRevokeInstall(String packageName, String installInstance);
+    static native boolean nativeRetireInstalled();
     private static native int[] nativeStartDevice(String[] commands, String[] logs, String[] env);
     static native boolean nativeIsAuthority();
     static native boolean nativeOwnedInstall(int pid, String packageName, String installInstance);
