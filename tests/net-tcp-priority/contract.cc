@@ -187,21 +187,81 @@ static void connection_controls() {
   int alias = dup(client); require(alias >= 0, "refused alias");
   pollfd alias_error{alias, POLLPRI, 0};
   require(poll(&alias_error, 1, 0) == 1 && (alias_error.revents & (POLLERR | POLLHUP)) && !(alias_error.revents & POLLPRI), "refused alias error never priority");
-  require(close(alias) == 0, "refused alias cleanup");
   int error = 0; length = sizeof(error);
   const int error_rc = getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length);
   printf("TCP_PRIORITY_SO_ERROR rc=%d value=%d errno=%d length=%u expected=%d\n", error_rc, error, errno, static_cast<unsigned>(length), ECONNREFUSED); fflush(stdout);
   require(error_rc == 0 && error == ECONNREFUSED, "readiness preserved SO_ERROR");
+  int alias_value = -1; length = sizeof(alias_value);
+  require(getsockopt(alias, SOL_SOCKET, SO_ERROR, &alias_value, &length) == 0 && alias_value == 0, "caller error consumption shared with alias");
+  require(close(alias) == 0, "refused alias cleanup");
   error = -1; length = sizeof(error);
   require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0, "only caller consumed SO_ERROR");
   pollfd consumed{client, POLLPRI, 0};
   int consumed_rc = poll(&consumed, 1, 0);
   printf("TCP_PRIORITY_ERROR_CONSUMED rc=%d revents=%d\n", consumed_rc, consumed.revents); fflush(stdout);
   require(consumed_rc == 1 && consumed.revents == POLLHUP, "consumed connection error leaves only hangup");
+  // TCP reconnect after failure is unspecified. Exercise the portable retry:
+  // a fresh socket replaces the same fd, with a new shared error generation.
+  int fresh = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); require(fresh >= 0, "fresh retry socket");
+  require(dup2(fresh, client) == client && close(fresh) == 0, "replace failed descriptor for fresh retry");
+  connected = connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+  require(connected == -1 && (errno == EINPROGRESS || errno == ECONNREFUSED), "fresh retry connection pending");
+  refused = {client, POLLPRI, 0};
+  require(poll(&refused, 1, 5000) == 1 && (refused.revents & (POLLERR | POLLHUP)) && !(refused.revents & POLLPRI), "fresh retry error never priority");
+  error = -1; length = sizeof(error);
+  require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "replacement has independent unconsumed error");
+  error = -1; length = sizeof(error);
+  require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0, "fresh retry error consumed once");
   require(close(client) == 0 && close(reserved) == 0, "refused cleanup");
   pollfd closed{client, POLLPRI, 0};
   require(poll(&closed, 1, 0) == 1 && closed.revents == POLLNVAL, "closed fd is invalid not urgent");
   puts("PASS TCP priority: failed connection and closed descriptor distinguish errors and preserve SO_ERROR");
+}
+static void peer_eof(int fd) {
+  pollfd p{fd, POLLIN, 0}; char byte{};
+  require(poll(&p, 1, 2000) == 1 && recv(fd, &byte, 1, 0) == 0, "last alias close produces peer EOF");
+}
+struct AliasWait { int fd; int rc; short revents; long long elapsed; };
+static void* alias_wait(void* raw) {
+  auto* wait = static_cast<AliasWait*>(raw);
+  pollfd p{wait->fd, POLLPRI, 0}; const long long start = millis();
+  wait->rc = poll(&p, 1, 2000); wait->revents = p.revents; wait->elapsed = millis() - start;
+  return nullptr;
+}
+static void alias_ownership() {
+  Pair a = pair(), b = pair();
+  int old_target = dup(b.receiver); require(old_target >= 0, "alias target copy");
+  require(dup2(a.receiver, b.receiver) == b.receiver && close(a.receiver) == 0, "alias target replacement");
+  require(send(a.sender, "a", 1, 0) == 1 && send(b.sender, "b", 1, 0) == 1, "alias replacement peer send");
+  char byte{};
+  require(recv(b.receiver, &byte, 1, 0) == 1 && byte == 'a', "replacement retains source after source close");
+  require(recv(old_target, &byte, 1, 0) == 1 && byte == 'b', "replacement retains old target alias");
+  require(close(old_target) == 0, "last target alias close"); peer_eof(b.sender);
+  require(close(b.receiver) == 0, "last source alias close"); peer_eof(a.sender);
+  require(close(a.sender) == 0 && close(b.sender) == 0, "replacement peer cleanup");
+
+  a = pair(); int sibling = dup(a.receiver); require(sibling >= 0, "polling sibling alias");
+  AliasWait wait{sibling, -99, 0, 0}; pthread_t thread;
+  require(pthread_create(&thread, nullptr, alias_wait, &wait) == 0, "alias waiter thread");
+  usleep(40000); require(close(a.receiver) == 0, "close sibling while alias polls");
+  usleep(40000); require(send(a.sender, "!", 1, MSG_OOB) == 1, "urgent after sibling close");
+  require(pthread_join(thread, nullptr) == 0 && wait.rc == 1 && wait.revents == POLLPRI && wait.elapsed < 2000, "sibling close preserves bounded alias urgent wait");
+  require(recv(sibling, &byte, 1, MSG_OOB) == 1 && byte == '!', "alias urgent payload after sibling close");
+  require(close(sibling) == 0, "last polling alias close"); peer_eof(a.sender);
+  require(close(a.sender) == 0, "polling peer cleanup");
+
+  int sender = socket(AF_INET, SOCK_DGRAM, 0), receiver = socket(AF_INET, SOCK_DGRAM, 0);
+  require(sender >= 0 && receiver >= 0, "datagram alias endpoints");
+  sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(receiver, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "datagram alias bind");
+  socklen_t length = sizeof(address);
+  require(getsockname(receiver, reinterpret_cast<sockaddr*>(&address), &length) == 0, "datagram alias address");
+  int alias = dup(receiver); require(alias >= 0 && close(receiver) == 0, "datagram alias retains endpoint");
+  require(sendto(sender, "u", 1, 0, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 1, "datagram alias send");
+  pollfd p{alias, POLLIN, 0};
+  require(poll(&p, 1, 2000) == 1 && recv(alias, &byte, 1, 0) == 1 && byte == 'u', "datagram alias receives unchanged payload");
+  require(close(alias) == 0 && close(sender) == 0, "datagram alias cleanup");
+  puts("PASS TCP priority: shared aliases preserve dup2 targets last-close EOF concurrent urgent poll and UDP payload");
 }
 int main(int argc, char** argv) {
   const bool noninline_only = argc == 2 && strcmp(argv[1], "--noninline") == 0;
@@ -210,6 +270,7 @@ int main(int argc, char** argv) {
   if (!noninline_only) scenario(1);
   endpoint_controls();
   connection_controls();
+  alias_ownership();
   Pair a = pair(); pthread_t thread;
   require(pthread_create(&thread, nullptr, delayed, &a.sender) == 0, "sender thread");
   ready(a.receiver, true, 2000);

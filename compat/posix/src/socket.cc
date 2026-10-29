@@ -227,11 +227,15 @@ int connect(int fd, const struct sockaddr* addr, socklen_t len) {
   if (!Lookup(fd, &state) || !ToAddress(addr, len, &address) || !MapUnixPath(&address, false)) {
     return -1;
   }
-  state.connect_state->store(ws::ConnectState::kConnecting);
+  {
+    std::lock_guard<std::mutex> lock(state.description->error_mutex);
+    state.description->connect_error_consumed.store(false);
+    state.description->state.store(ws::ConnectState::kConnecting);
+  }
   const int result = ws::Connect(state.socket, address);
   const int saved = errno;
   const bool pending = saved == EINPROGRESS || saved == EALREADY || saved == EINTR;
-  state.connect_state->store(result == 0 ? ws::ConnectState::kConnected :
+  state.description->state.store(result == 0 ? ws::ConnectState::kConnected :
                             pending ? ws::ConnectState::kConnecting : ws::ConnectState::kFailed);
   errno = saved;
   return result;
@@ -300,7 +304,7 @@ int ToMsgFlags(int flags) {
 // ready now. (Another thread may still take the data first.)
 bool WouldBlock(const SocketFd& state, int flags, int event) {
   if ((flags & MSG_DONTWAIT) == 0 || state.nonblocking) return false;
-  ws::PollEntry entry = {state.socket, event, 0, state.connect_state};
+  ws::PollEntry entry = {state.socket, event, 0, state.description};
   if (ws::Poll(&entry, 1, 0) > 0) return false;
   errno = EAGAIN;
   return true;
@@ -658,6 +662,22 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
   ws::Option option;
   int v;
   if (ToIntOption(level, name, &option)) {
+    if (option == ws::Option::kError) {
+      // Winsock's SO_ERROR is persistent and attached to its native handle.
+      // All POSIX aliases share that handle; only a caller getter consumes
+      // a failed-connect error logically. Readiness never reads SO_ERROR.
+      std::lock_guard<std::mutex> lock(state.description->error_mutex);
+      const bool consumed = state.description->connect_error_consumed.load();
+      if (consumed) v = 0;
+      else if (ws::GetOption(state.socket, option, &v) < 0) return -1;
+      if (!WriteInt(v, value, len)) return -1;
+      const ws::ConnectState phase = state.description->state.load();
+      if (v != 0 && (phase == ws::ConnectState::kConnecting || phase == ws::ConnectState::kFailed)) {
+        state.description->state.store(ws::ConnectState::kFailed);
+        state.description->connect_error_consumed.store(true);
+      }
+      return 0;
+    }
     if (ws::GetOption(state.socket, option, &v) < 0) return -1;
     return WriteInt(v, value, len) ? 0 : -1;
   }

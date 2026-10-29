@@ -36,12 +36,13 @@ std::unordered_map<int, SocketFd> table;
 std::atomic<size_t> socket_count{0};
 
 // Takes the socket out of the table; false if fd is not a socket.
-bool Remove(int fd, SocketFd* state) {
+bool Remove(int fd, SocketFd* state, bool* last) {
   if (socket_count.load(std::memory_order_acquire) == 0) return false;
   std::lock_guard<std::mutex> lock(table_mutex);
   auto it = table.find(fd);
   if (it == table.end()) return false;
   *state = it->second;
+  *last = --state->description->descriptor_refs == 0;
   table.erase(it);
   socket_count.fetch_sub(1, std::memory_order_release);
   return true;
@@ -50,6 +51,7 @@ bool Remove(int fd, SocketFd* state) {
 void Insert(int fd, const SocketFd& state) {
   std::lock_guard<std::mutex> lock(table_mutex);
   if (table.insert_or_assign(fd, state).second) {
+    ++state.description->descriptor_refs;
     socket_count.fetch_add(1, std::memory_order_release);
   }
 }
@@ -99,12 +101,13 @@ int RegisterSocket(const SocketFd& state) {
   int fd = ReserveFd();
   if (fd < 0) {
     int saved = errno;
-    ws::Close(state.socket);
+    // An alias registration failure must not close the shared native socket.
+    if (!state.description) ws::Close(state.socket);
     errno = saved;
     return -1;
   }
   SocketFd registered = state;
-  if (!registered.connect_state) registered.connect_state = std::make_shared<std::atomic<ws::ConnectState>>(ws::ConnectState::kInitial);
+  if (!registered.description) registered.description = std::make_shared<ws::SocketDescription>();
   Insert(fd, registered);
   return fd;
 }
@@ -141,14 +144,16 @@ int CloseFdBody(int fd, bool unpublished) {
   gesher::ForgetEpollEntries(fd);
   SocketFd state;
   int result;
-  if (!gesher::Remove(fd, &state)) {
+  bool last = false;
+  if (!gesher::Remove(fd, &state, &last)) {
     gesher::ForgetDevice(fd);
     gesher::ForgetEventObject(fd);
     gesher::ForgetBinder(fd);
     result = gesher::CrtResult(_close(fd));
   } else {
-    // Closing the socket first wakes threads blocked on it, as on Linux.
-    result = gesher::ws::Close(state.socket);
+    // Only the last descriptor closes the native socket. Shared metadata
+    // snapshots do not extend its lifetime or delay the existing close wake.
+    result = last ? gesher::ws::Close(state.socket) : 0;
     int socket_errno = errno;
     if (result < 0 && unpublished) {
       // A failed virtual-resource close does not make the private CRT slot
@@ -229,10 +234,8 @@ int dup(int fd) {
     if (fd2 >= 0) gesher::DupBinder(fd, fd2);
     return fd2;
   }
-  state.socket = gesher::ws::Duplicate(state.socket);
-  if (state.socket == gesher::ws::kInvalidSocket) return -1;
-  // Linux shares O_NONBLOCK between duplicates; here each starts as a copy.
-  if (state.nonblocking) gesher::ws::SetNonBlocking(state.socket, true);
+  // WSADuplicateSocket creates distinct native connect-error ownership.
+  // POSIX aliases instead share the same native socket and last-close count.
   return gesher::RegisterSocket(state);
 }
 
@@ -244,19 +247,14 @@ int dup2(int fd, int fd2) {
   if (transaction.Error()) return errno = transaction.Error(), -1;
   SocketFd source;
   bool source_is_socket = gesher::LookupSocket(fd, &source);
-  if (source_is_socket) {
-    source.socket = gesher::ws::Duplicate(source.socket);
-    if (source.socket == gesher::ws::kInvalidSocket) return -1;
-    if (source.nonblocking) gesher::ws::SetNonBlocking(source.socket, true);
-  }
-  // Replacing a socket closes it, which wakes threads blocked on it; this is
-  // how libcore's preClose0 interrupts them.
+  // Replacing the last descriptor closes the native socket and preserves its
+  // close wake. Other descriptors keep the shared endpoint alive.
   SocketFd target;
-  if (gesher::Remove(fd2, &target)) gesher::ws::Close(target.socket);
+  bool last = false;
+  if (gesher::Remove(fd2, &target, &last) && last) gesher::ws::Close(target.socket);
   if (gesher::CrtResult(_dup2(fd, fd2)) < 0) {
     int saved = errno;
     int error = transaction.Finish();
-    if (source_is_socket) gesher::ws::Close(source.socket);
     errno = error ? error : saved;
     return -1;
   }
@@ -369,7 +367,7 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
       int events = ((p->events & kIn) != 0 ? ws::kPollIn : 0) |
                    ((p->events & kOut) != 0 ? ws::kPollOut : 0) |
                    ((p->events & POLLPRI) != 0 ? ws::kPollPri : 0);
-      sockets.push_back({state.socket, events, 0, state.connect_state});
+      sockets.push_back({state.socket, events, 0, state.description});
       socket_index.push_back(i);
     } else if (!PollFile(p)) {
       waiting_files = true;

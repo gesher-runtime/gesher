@@ -231,8 +231,38 @@ twice. Diagnostic labels now say `SO_ERROR=not-read`: absence of a direct
 getter call is not proof that another native operation preserved the error.
 No production workaround or weakened ownership expectation is accepted.
 
-Adjacent source-only gap: host select.cc and bionic's SelectMs each filter
+Adjacent source-only gap: host SelectMs and bionic's SelectImpl each filter
 ERR/HUP from exceptfds-only results after one poll; an error-only wake may
 therefore return0 before the caller's select deadline. That broader finite
 select behavior is not qualified by the connected urgent fixture and remains
 open alongside inline readiness and the other documented network gaps.
+
+Ownership diagnostic40864241596 is GREEN on both Windows. Select-only,
+write-poll-only, poll/getpeername and post-refusal-alias cases each return
+native SO_ERROR10061 on both explicit reads. The pre-connect-alias/close case
+and full metadata/alias case return0 on both reads of the original handle.
+Actual component40864241587 is RED: both hosts' caller getter returns rc0,
+value0, length4, expected111; errno107 is stale from getpeername. No guest
+executes. Raw logs: `tcp-408642-{oracle,host}{2022,2025}.log`.
+
+Thus WSAPoll did not consume the error in the isolated native control.
+Winsock duplicates have separate connect-error ownership, and its SO_ERROR
+getter is persistent rather than caller-consumptive. Pending source makes
+POSIX aliases share the same native socket, with descriptor references counted
+under the existing fd-table mutex and actual close only on the last descriptor.
+Metadata snapshots do not extend the native handle lifetime. Existing
+DescriptorGuard/ClosingDescriptor transactions are retained. Caller SO_ERROR
+reads serialize and consume a failed-connect error once in shared metadata;
+poll reads only that metadata to suppress the already-consumed native ERR.
+It never calls the native error getter. A fresh connect resets ownership.
+
+New strict reference controls preserve a source after dup2/source-close, keep
+the old target alive through its remaining alias, require peer EOF at each
+last-close, preserve urgent waits across sibling-close, and preserve UDP
+alias payload. Replacing a failed fd with a fresh socket must report a new
+unconsumed refusal. These and the implementation remain source-only until
+Linux reference, actual both-ABI component and existing supplier/full gates.
+Shared O_NONBLOCK/reuse cache flags, general connected-socket asynchronous
+error consumption, failed-socket TCP reconnect, AF_UNSPEC and concurrent
+multiple-connect semantics remain unqualified; no complete open-description
+or close/poll concurrency parity is claimed.

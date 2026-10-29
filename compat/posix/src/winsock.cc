@@ -669,18 +669,18 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
     // those errors are unconditional in Linux poll. Arm write interest only
     // for connecting, non-listening streams. Connected writable sockets and
     // unconnected datagrams must not cause an unrequested-write busy loop.
-    if ((fds[i].events & POLLWRNORM) == 0 || entries[i].connect_state) {
+    if ((fds[i].events & POLLWRNORM) == 0 || entries[i].description) {
       int type = 0, accepting = 0, length = sizeof(type);
       if (Api().getsockopt(fds[i].fd, SOL_SOCKET, SO_TYPE,
                            reinterpret_cast<char*>(&type), &length) == 0 && type == SOCK_STREAM) {
         length = sizeof(accepting);
         if (Api().getsockopt(fds[i].fd, SOL_SOCKET, SO_ACCEPTCONN,
                              reinterpret_cast<char*>(&accepting), &length) == 0 && !accepting) {
-          const ConnectState state = entries[i].connect_state ? entries[i].connect_state->load() : ConnectState::kConnecting;
+          const ConnectState state = entries[i].description ? entries[i].description->state.load() : ConnectState::kConnecting;
           sockaddr_storage peer{}; length = sizeof(peer);
           const int peer_result = Api().getpeername(fds[i].fd, reinterpret_cast<sockaddr*>(&peer), &length);
           if (peer_result == 0) {
-            if (entries[i].connect_state) entries[i].connect_state->store(ConnectState::kConnected);
+            if (entries[i].description) entries[i].description->state.store(ConnectState::kConnected);
           } else if (WSAGetLastError() == WSAENOTCONN) {
             if (state != ConnectState::kConnecting) {
               // Linux's unconnected TCP_CLOSE socket has HUP. Native Winsock
@@ -703,10 +703,12 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
   int ready = 0;
   for (size_t i = 0; i < count; ++i) {
     SHORT r = fds[i].revents;
-    if ((r & (POLLERR | POLLHUP)) && entries[i].connect_state) {
+    if ((r & (POLLERR | POLLHUP)) && entries[i].description) {
       ConnectState expected = ConnectState::kConnecting;
-      entries[i].connect_state->compare_exchange_strong(expected, ConnectState::kFailed);
+      entries[i].description->state.compare_exchange_strong(expected, ConnectState::kFailed);
     }
+    if (entries[i].description && entries[i].description->state.load() == ConnectState::kFailed &&
+        entries[i].description->connect_error_consumed.load()) r &= ~POLLERR;
     if (lifecycle_hup[i]) r |= POLLHUP;
     int out = 0;
     if (r & POLLRDNORM) out |= kPollIn;

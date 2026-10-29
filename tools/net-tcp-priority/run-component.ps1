@@ -101,6 +101,7 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
     if ($text -notmatch ('(?m)^PASS TCP priority: ' + [regex]::Escape($label) + '\s*$')) { throw "Missing actual assertion $Context/$label" }
   }
   if ($text -notmatch '(?m)^PASS TCP priority: listener datagram and successful connect preserve finite priority-only waits\s*$') { throw "Missing finite endpoint controls $Context" }
+  if ($text -notmatch '(?m)^PASS TCP priority: shared aliases preserve dup2 targets last-close EOF concurrent urgent poll and UDP payload\s*$') { throw "Missing alias lifetime controls $Context" }
   Write-Host "PASS TCP priority component: $Context; actual noninline contract; inline remains OPEN"
 }
 RunPriority 'host-posix' "$fixture/net_tcp_priority_probe.exe" '--noninline'
