@@ -6,6 +6,7 @@ name: net-tcp-priority-component
 # Record actual own-process OPEN/CLOSE creator stacks and owned event closes.
 # Map retained-event frames to the actual same-binary owner/caller code ranges.
 # Bind exact-link static library symbol rows to that current binary in CI stdout.
+# Include cleanup/spin symbol rows for the observed pthread wrapper frames.
 on:
   workflow_dispatch:
   push:

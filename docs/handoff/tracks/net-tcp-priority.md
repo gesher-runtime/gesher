@@ -712,3 +712,16 @@ configured linker command, then emits only selected pthread/owner/CreateEvent
 symbol rows in CI stdout. It adds no artifact member or executable role, no
 local binary download/build/run, and no runtime/source/strict-census change.
 Only matching current binary/module/frame evidence may establish a creator.
+
+9b38dae9/409564 producer map binds probe SHA256
+92497e9f597cd7a0f3b535315a9be187d0da550713272fc04b9bfdeccc55d397,
+map SHA25659632a1a54a93b4bd302cd4abb823110e5888e5b3b52feef741538736e1cb5ad,
+image base0x140000000 and the exact configured current link command. Actual
+Windows trace still fails the original mode1 census. The map proves frame6 is
+pthread_create_wrapper at0x22810, outside the owned source worker/reaper; it
+places __pthread_self_lite at0x21170, so range adjacency did not establish the
+frame5 name. The next producer-only row selection adds cleanup/spin symbols for
+observed frames0x21ac0/0x465c0. No C++/link/runtime/census change accompanies it.
+Logs: `C:/work/gesher-ci-review/tcp-409564-compile.log`,
+`C:/work/gesher-ci-review/tcp-409564-win2022.log`,
+`C:/work/gesher-ci-review/tcp-409564-win2025.log`.

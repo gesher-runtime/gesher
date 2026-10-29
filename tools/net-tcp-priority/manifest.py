@@ -55,7 +55,7 @@ bases = re.findall(r'^\s*ImageBase:\s*(0x[0-9a-fA-F]+)\s*$', headers, re.M)
 assert len(bases) == 1
 selected = [row for row in map_text.splitlines() if any(token in row for token in (
     '__pthread_self_lite', 'pthread_create_wrapper', 'pthread_self', 'pthread_create', 'CreateEvent',
-    'pthread_mutex_unlock', 'ConnectOwner', 'ConnectReaper', 'submission_connect'))]
+    'pthread_mutex_unlock', 'cleanup', 'spin', 'ConnectOwner', 'ConnectReaper', 'submission_connect'))]
 assert all(any(token in row for row in selected) for token in ('pthread_self', 'pthread_create', 'ConnectOwner', 'ConnectReaper'))
 assert sha('out/net_tcp_priority_probe.exe') == sha('tcp-fixture/net_tcp_priority_probe.exe')
 print('TCP_PRIORITY_LINK_MAP', json.dumps(dict(source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'],
