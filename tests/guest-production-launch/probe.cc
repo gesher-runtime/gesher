@@ -57,6 +57,14 @@ struct RestrictedLaunchTestAccess {
   static BOOL WINAPI DenyTermination(HANDLE, UINT) { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
   static DWORD WINAPI FailWait(HANDLE, DWORD) { SetLastError(ERROR_INVALID_HANDLE); return WAIT_FAILED; }
   static DWORD WINAPI FailResume(HANDLE) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return static_cast<DWORD>(-1); }
+  static DWORD WINAPI TraceResume(HANDLE thread) {
+    const DWORD previous = ResumeThread(thread);
+    const DWORD error = previous == static_cast<DWORD>(-1) ? GetLastError() : ERROR_SUCCESS;
+    printf("DEBUG actual-ResumeThread handle=%p previous=%lu error=%lu\n", thread, previous, error);
+    SetLastError(error);
+    return previous;
+  }
+  static void Trace(RestrictedLaunch& owner) { owner.resume_ = TraceResume; }
   static void Inject(RestrictedLaunch& owner, bool failing) {
     owner.resume_ = failing ? FailResume : ResumeThread;
     owner.terminate_ = failing ? DenyTermination : TerminateJobObject;
@@ -86,13 +94,18 @@ struct ChildDebugger {
     printf("DEBUG attach pid=%lu success=%d error=%lu\n", self.pid, attached, attached ? 0UL : GetLastError());
     if (attached) DebugSetProcessKillOnExit(FALSE);
     self.attached.store(attached != FALSE);
-    SetEvent(self.ready);
-    if (!attached) return 1;
+    if (!attached) { SetEvent(self.ready); return 1; }
     const ULONGLONG deadline = GetTickCount64() + 25000;
     bool exited = false;
     while (!self.stop.load() && GetTickCount64() < deadline) {
       DEBUG_EVENT event{};
-      if (!WaitForDebugEvent(&event, 50)) continue;
+      if (!WaitForDebugEvent(&event, 50)) {
+        // DebugActiveProcess temporarily suspends threads while its initial
+        // create/load events are pending. Drain them before the caller's strict
+        // single-count Resume so attach cannot alter its observed suspend count.
+        SetEvent(self.ready);
+        continue;
+      }
       DWORD continuation = DBG_CONTINUE;
       if (event.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT || event.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT) {
         HANDLE file = event.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT ? event.u.LoadDll.hFile : event.u.CreateProcessInfo.hFile;
@@ -129,7 +142,9 @@ struct ChildDebugger {
         printf("DEBUG exit pid=%lu code=0x%08lx\n", event.dwProcessId, event.u.ExitProcess.dwExitCode);
         exited = true;
       }
-      if (!ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continuation)) break;
+      if (!ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continuation)) {
+        printf("DEBUG continue-error=%lu\n", GetLastError()); break;
+      }
       if (exited) break;
     }
     if (!exited) printf("DEBUG detach pid=%lu success=%d\n", self.pid, DebugActiveProcessStop(self.pid));
@@ -269,9 +284,12 @@ static bool read_observation(HANDLE input, HANDLE process, IpcObservation* value
           read_ok, read_error, read, sizeof(*value));
       break;
     }
+    const DWORD previous_state = state;
     state = WaitForSingleObject(process, 5);
-    if (state != WAIT_TIMEOUT) break;
-  } while (GetTickCount64() < deadline);
+    // Once death is observed, perform one final Peek/read before concluding
+    // observation is missing: the child may have written between Peek and Wait.
+    if (state == WAIT_FAILED || previous_state == WAIT_OBJECT_0) break;
+  } while (state == WAIT_OBJECT_0 || GetTickCount64() < deadline);
   const DWORD wait_error = state == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
   DWORD exit_code = 0;
   const BOOL queried = GetExitCodeProcess(process, &exit_code);
@@ -557,6 +575,7 @@ static int exercise(Fixture& f) {
   if (!token_evidence(process.h)) return 55;
   ChildDebugger debugger;
   if (g_debug_child && !debugger.Start(process.h, launch.pid())) return 88;
+  if (g_debug_child) gesher::guest::RestrictedLaunchTestAccess::Trace(launch);
   if (launch.Resume().error != ERROR_SUCCESS || launch.Resume().error != ERROR_INVALID_STATE) return 37;
   IpcObservation breadcrumb{};
   if (!read_observation(out_read.h, process.h, &breadcrumb)) return 76;
