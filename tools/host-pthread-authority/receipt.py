@@ -90,7 +90,7 @@ def host_role(build, llvm, role, output):
     assert any('GESHER_HOST_CPU_CLOCK_TEST_FAULTS' in arg for arg in argv) == fault
     obj = build / 'CMakeFiles/gesher_posix.dir/compat/posix/src/pthread.cc.obj'
     symbols = command(str(llvm / 'bin/llvm-nm'), '--defined-only', str(obj))
-    assert ('gesher_host_cpu_clock_test_exhaust_ids_v1' in symbols) == fault
+    assert 'gesher_host_cpu_clock_test_exhaust_ids_v1' not in symbols
     supplier = json.loads((llvm / 'gesher-winpthreads-authority.json').read_text())
     assert supplier['role'] == 'gesher-winpthreads-authority-' + ('fault-v1' if fault else 'v1')
     assert supplier['files']['lib/libwinpthread.a'] == sha(llvm / 'x86_64-w64-mingw32/lib/libwinpthread.a')
@@ -133,10 +133,12 @@ def supplier(source, llvm, role):
         output = command(str(llvm / 'bin/llvm-nm'), '--defined-only', str(target / name))
         assert symbol in output, name
         assert ('gesher_winpthread_cpu_test_control_v1' in output) == (role == 'fault'), 'Supplier test symbol role mismatch'
+        assert ('gesher_host_cpu_clock_test_exhaust_ids_v1' in output) == (role == 'fault'), 'Clock fault symbol role mismatch'
         result[name + ':symbols'] = output
     exports = command(str(llvm / 'bin/llvm-readobj'), '--coff-exports', str(target / 'bin/libwinpthread-1.dll'))
     assert symbol in exports
     assert ('gesher_winpthread_cpu_test_control_v1' in exports) == (role == 'fault'), 'DLL fault export role mismatch'
+    assert ('gesher_host_cpu_clock_test_exhaust_ids_v1' in exports) == (role == 'fault'), 'Clock fault export role mismatch'
     result['dll_exports'] = exports
     imports = command(str(llvm / 'bin/llvm-readobj'), '--coff-imports', str(target / 'bin/libwinpthread-1.dll'))
     result['dll_import_names'] = dll_imports(imports)

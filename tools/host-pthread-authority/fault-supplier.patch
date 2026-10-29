@@ -55,3 +55,22 @@
  WINPTHREAD_API int gesher_winpthread_dup_cpu_handle_v1
    (pthread_t thread, void **owned_handle, unsigned long long *generation);
  
+--- a/mingw-w64-libraries/winpthreads/src/clock.c
++++ b/mingw-w64-libraries/winpthreads/src/clock.c
+@@ -51,6 +51,16 @@
+ static cpu_clock_slot cpu_clock_slots[256];
+ static int64_t cpu_clock_next = -1073741824;
+ 
++/* Fault supplier only. This permanently exhausts IDs for this process. */
++WINPTHREAD_API int gesher_host_cpu_clock_test_exhaust_ids_v1(void);
++int gesher_host_cpu_clock_test_exhaust_ids_v1(void)
++{
++    AcquireSRWLockExclusive(&cpu_clock_lock);
++    cpu_clock_next = (int64_t)INT_MIN - 1;
++    ReleaseSRWLockExclusive(&cpu_clock_lock);
++    return 0;
++}
++
+ static void cpu_clock_reap(void)
+ {
+     unsigned i;
