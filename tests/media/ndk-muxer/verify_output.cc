@@ -207,7 +207,7 @@ std::vector<uint8_t> Blob(std::istream& in) {
   in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));
   return data;
 }
-struct ExpectedSample { int64_t time; std::vector<uint8_t> data; };
+struct ExpectedSample { int64_t time; uint32_t flags; std::vector<uint8_t> data; };
 bool PacketOracle(const std::string& fixture, const std::string& output, bool short_audio) {
   std::ifstream in(fixture, std::ios::binary);
   char magic[8] = {};
@@ -228,11 +228,11 @@ bool PacketOracle(const std::string& fixture, const std::string& output, bool sh
   const auto count = Little(in, 4);
   if (count > 5000) return false;
   for (size_t i = 0; i < count; ++i) {
-    const auto track = Little(in, 4); const auto time = Little(in, 8); Little(in, 4);
+    const auto track = Little(in, 4); const auto time = Little(in, 8); const auto flags = Little(in, 4);
     auto bytes = Blob(in);
     if (!in || track >= 2 || time > INT64_MAX) return false;
     if (!short_audio || !audio[track] || time < 1000000)
-      expected[track].push_back({static_cast<int64_t>(time), std::move(bytes)});
+      expected[track].push_back({static_cast<int64_t>(time), static_cast<uint32_t>(flags), std::move(bytes)});
   }
   std::string error;
   auto source = OpenFileSource(output, &error);
@@ -266,7 +266,12 @@ bool PacketOracle(const std::string& fixture, const std::string& output, bool sh
       Sample seek_sample;
       const int seek_status = seek_reader ? seek_reader->Read(&seek_sample, 1000000, SeekMode::kPreviousSync) : -1;
       std::vector<VideoFrame> frames;
-      const bool seek_ok = seek_status == 0 && seek_sample.sync && seek_sample.time_us <= 1000000 &&
+      const ExpectedSample* key = nullptr;
+      for (const auto& e : expected[track]) {
+        if ((e.flags & 1) && e.time - base <= 1000000) key = &e;
+      }
+      const bool seek_ok = key && key->time - base > 0 && seek_status == 0 && seek_sample.sync &&
+          std::llabs(seek_sample.time_us - (key->time - base)) <= 1000 && seek_sample.data == key->data &&
           decoder && decoder->Decode(seek_sample, &frames);
       if (decoder) decoder->Drain(&frames);
       ok = ok && seek_ok && !frames.empty();
