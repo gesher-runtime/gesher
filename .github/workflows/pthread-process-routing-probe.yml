@@ -1,3 +1,4 @@
+# Observe handle counts after each foreign exit.
 # Actual foreign Windows ExitThread and _endthreadex cases.
 # Exact pinned scheduler source and live cross-image scheduler controls.
 # Inventory exact pinned toolchain binaries for public data and cleanup consumers.

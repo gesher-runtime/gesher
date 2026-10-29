@@ -17,6 +17,7 @@ static clock_fn dll_clock;
 static pthread_key_t key;
 static volatile LONG destroyed;
 struct target { HANDLE ready, release; pthread_t host_id,dll_id; clockid_t clock; DWORD exit_code; int use_dll; };
+static void handles(const char *stage) { DWORD n=0; BOOL ok=GetProcessHandleCount(GetCurrentProcess(),&n); printf("CONTROL handle stage=%s ok=%d count=%lu\n",stage,(int)ok,n); }
 static void destructor(void *value) { if (value) InterlockedIncrement(&destroyed); }
 static void run(struct target *t) {
   if (t->use_dll) { t->dll_id=dll_self(); t->host_id=pthread_self(); }
@@ -30,14 +31,14 @@ static DWORD WINAPI win_worker(void *p) { struct target *t=p; run(t); ExitThread
 static unsigned __stdcall crt_worker(void *p) { struct target *t=p; run(t); _endthreadex(t->exit_code); return 0; }
 int main(void) {
   DWORD baseline,after; if (!GetProcessHandleCount(GetCurrentProcess(),&baseline)) return 1;
-  HMODULE module=LoadLibraryW(L"libwinpthread-1.dll"); if (!module) return 2;
+  HMODULE module=LoadLibraryW(L"libwinpthread-1.dll"); if (!module) return 2; handles("loaded");
   wchar_t expected[32768],actual[32768]; DWORD n=GetModuleFileNameW(NULL,expected,32768),m=GetModuleFileNameW(module,actual,32768);
   if (!n || n>=32768 || !m || m>=32768) return 2;
   wchar_t *leaf=wcsrchr(expected,L'\\'); if (!leaf || (size_t)(leaf-expected)+21>=32768) return 2;
   wcscpy(leaf+1,L"libwinpthread-1.dll"); if (_wcsicmp(expected,actual)) return 2;
   dll_self=(self_fn)GetProcAddress(module,"pthread_self"); dll_set=(set_fn)GetProcAddress(module,"pthread_setspecific");
   dll_clock=(clock_fn)GetProcAddress(module,"pthread_getcpuclockid");
-  if (!dll_self || !dll_set || !dll_clock || pthread_key_create(&key,destructor)) return 3;
+  if (!dll_self || !dll_set || !dll_clock || pthread_key_create(&key,destructor)) return 3; handles("key-created");
   pthread_t old[4]={0};
   for (int i=0;i<4;++i) {
     struct target t={0}; t.ready=CreateEventW(NULL,TRUE,FALSE,NULL); t.release=CreateEventW(NULL,TRUE,FALSE,NULL);
@@ -54,7 +55,7 @@ int main(void) {
     from_host=123; if (pthread_getcpuclockid(t.host_id,&from_host)!=ESRCH || from_host!=123) return 9;
     sample.tv_sec=123; sample.tv_nsec=456; errno=0;
     if (clock_gettime(t.clock,&sample)!=-1 || errno!=EINVAL || sample.tv_sec!=123 || sample.tv_nsec!=456) return 10;
-    if (!CloseHandle(thread) || !CloseHandle(t.ready) || !CloseHandle(t.release)) return 11;
+    if (!CloseHandle(thread) || !CloseHandle(t.ready) || !CloseHandle(t.release)) return 11; handles("iteration-complete");
     printf("PASS probe foreign native exit method=%s attach=%s code=%lu destructor=%ld stale-ESRCH\n",i<2?"ExitThread":"_endthreadex",t.use_dll?"dll":"host",actual,destroyed);
   }
   int delete_result=pthread_key_delete(key);
