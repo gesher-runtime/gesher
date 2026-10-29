@@ -13,13 +13,13 @@ def sha(path):
 
 assert os.environ.get('GITHUB_ACTIONS') == 'true', 'CI only'
 source = 'tests/windows/installed-guest-policy-fixture.cc'
-dependencies = [source, 'compat/framework/installed_guest.h', 'compat/framework/restricted_launch.h', 'compat/binder/launch_control.h', 'compat/posix/src/startup_null.h', 'compat/posix/src/fd.cc']
+dependencies = [source, 'compat/framework/installed_guest.h', 'compat/framework/restricted_launch.h', 'compat/binder/launch_control.h', 'compat/posix/src/startup_null.h', 'compat/posix/src/fd.cc', 'compat/posix/src/system_properties.cc', 'compat/posix/include/gesher/system_properties.h']
 root = Path('guest-policy-artifact')
 identity = {k: os.environ[k] for k in (
     'GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID')}
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == identity['GITHUB_SHA']
 flags = ['-std=c++20', '-O2', '-Wall', '-Wextra', '-Werror', '-fexceptions',
-         '-D_WIN32_WINNT=0x0A00', '-DWINVER=0x0A00', '-municode', '-static']
+         '-DGESHER_PROPERTY_DIAGNOSTIC', '-D_WIN32_WINNT=0x0A00', '-DWINVER=0x0A00', '-municode', '-static']
 suffix = ['-o', 'guest-policy-artifact/installed-guest-policy-fixture.exe', '-ladvapi32']
 toolchain = 'llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64'
 archive_sha = '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4'
@@ -35,7 +35,7 @@ def validate(receipt, members):
     assert receipt['toolchain'] == toolchain and receipt['archive_sha256'] == archive_sha
     command = receipt['compiler_command']
     assert command[0].endswith('/toolchain/' + toolchain + '/bin/x86_64-w64-mingw32-clang++')
-    assert command[1:] == [*flags, source, *suffix]
+    assert command[1:] == [*flags, source, 'compat/posix/src/system_properties.cc', *suffix]
     assert receipt['compiler_sha256'] == 'c9b86311ade81d53235c93fafabdf98328d094de344ea9a9038e0dab6695ee9f'
     assert 'clang version' in receipt['compiler_version']
 
@@ -44,7 +44,7 @@ if sys.argv[1:] == ['build']:
     assert os.environ['LLVM_MINGW_NAME'] == toolchain
     compiler = Path.home() / 'toolchain' / toolchain / 'bin/x86_64-w64-mingw32-clang++'
     root.mkdir()
-    command = [str(compiler), *flags, source, *suffix]
+    command = [str(compiler), *flags, source, 'compat/posix/src/system_properties.cc', *suffix]
     version = subprocess.check_output([str(compiler), '--version'], text=True)
     compiler_hash = sha(compiler)
     assert sha('toolchain.tar.xz') == archive_sha

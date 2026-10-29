@@ -3,7 +3,11 @@
 // The property area used by Java/libbase, ELF bionic and getprop/setprop.
 // Device boot names isolate volatile properties; persist.* survive a new boot.
 
+#ifdef GESHER_PROPERTY_DIAGNOSTIC
+#include "../include/gesher/system_properties.h"
+#else
 #include <gesher/system_properties.h>
+#endif
 
 #include <windows.h>
 
@@ -90,11 +94,21 @@ std::wstring FullPath(std::wstring path) {
   result.resize(count);
   return result;
 }
+void Diagnostic(const char* stage, DWORD error) {
+#ifdef GESHER_PROPERTY_DIAGNOSTIC
+  std::fprintf(stderr, "PROPERTY_DIAGNOSTIC stage=%s error=%lu\n", stage, error);
+#else
+  (void)stage; (void)error;
+#endif
+}
 bool Directories(const std::wstring& path) {
   for (size_t i = 3; i <= path.size(); ++i) {
     if (i != path.size() && path[i] != L'\\') continue;
     std::wstring part = path.substr(0, i);
-    if (!CreateDirectoryW(part.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return false;
+    if (!CreateDirectoryW(part.c_str(), nullptr)) {
+      DWORD error = GetLastError();
+      if (error != ERROR_ALREADY_EXISTS) { Diagnostic("directory", error); return false; }
+    }
   }
   return true;
 }
@@ -323,15 +337,15 @@ Area* Current() { // LocalMutex is held by every caller.
   area->persistent = data + L"\\property\\persistent_properties";
   area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
   MutexLock lock(area->mutex.value);
-  if (!lock.held) return nullptr;
+  if (!lock.held) { Diagnostic("mutex", GetLastError()); return nullptr; }
   area->file.value = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
                                  FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
                                  FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (area->file.value == INVALID_HANDLE_VALUE) return nullptr;
+  if (area->file.value == INVALID_HANDLE_VALUE) { Diagnostic("file", GetLastError()); return nullptr; }
   area->mapping.value = CreateFileMappingW(area->file.value, nullptr, PAGE_READWRITE, 0, kCapacity, nullptr);
-  if (!area->mapping.value) return nullptr;
+  if (!area->mapping.value) { Diagnostic("mapping", GetLastError()); return nullptr; }
   area->view = MapViewOfFile(area->mapping.value, FILE_MAP_ALL_ACCESS, 0, 0, kCapacity);
-  if (!area->view) return nullptr;
+  if (!area->view) { Diagnostic("view", GetLastError()); return nullptr; }
   auto* header = static_cast<Header*>(area->view);
   if (!header->magic) {
     Snapshot initial = Initial();

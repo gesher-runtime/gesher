@@ -1,7 +1,7 @@
 name: Installed guest resource policy component
 on:
   push:
-    branches: [wip/binder-isolated-spawn, wip/binder-gather-repair, wip/binder-lowbox-nul-fix]
+    branches: [wip/binder-isolated-spawn, wip/binder-gather-repair, wip/binder-lowbox-nul-fix, wip/binder-property-diagnosis]
     paths: ['tests/windows/installed-guest-policy-*', 'compat/framework/installed_guest.h', 'compat/posix/src/startup_null.h', '.github/workflows/installed-guest-policy.yml']
   workflow_dispatch:
 permissions:
@@ -72,6 +72,8 @@ jobs:
           if ($code -ne 0) { throw "resource policy fixture failed: $code" }
           foreach ($row in @('POLICY_REPARSE subtree_rejected=1 outside_unchanged=1 owners=0',
               'POLICY_RUNTIME_NESTED actual_gather=1 nested_directory=1 nested_file=1',
+              'POLICY_PROPERTY guest_read=',
+              'POLICY_PROPERTY_HOST observed_write=',
               'POLICY_VERIFIED_NULL actual_null=1 private_duplicate=1 crt_close=1 wrong_object_rejected=1 invalid_rejected=1',
               'POLICY_READONLY low_label_rejected=1 missing_writeup_rejected=1 rollback_owners=0',
               'POLICY_PIN ancestor_rename=32 asset_rename=32 data_rename=32 final_file_rename=32',
@@ -81,6 +83,29 @@ jobs:
               'POLICY_RETIRE insertion_target_unchanged=1 injected_error=5 retained=1 retry_confirmed=1 postcleanup_rename=1 owners=0')) {
             if (-not $output.Contains($row)) { throw "missing actual resource observation: $row" }
           }
+          # The actual property area deliberately retains its file and mapping until
+          # process exit. RunTimed has already proved that process retired.
+          $propertyRoot = Join-Path $directory 'property-host'
+          $propertySystem = Join-Path $propertyRoot 'system'
+          $propertyArea = Join-Path $propertySystem 'gesher-properties'
+          $propertyPersist = Join-Path $propertyRoot 'property'
+          foreach ($path in @($propertyRoot, $propertySystem, $propertyArea, $propertyPersist)) {
+            $item = Get-Item -LiteralPath $path -Force
+            if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+              throw "unexpected property fixture directory: $path"
+            }
+          }
+          $areas = @(Get-ChildItem -LiteralPath $propertyArea -Force)
+          if ($areas.Count -ne 1 -or $areas[0].PSIsContainer -or
+              ($areas[0].Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+              $areas[0].Name -cne '28ccc633bf3e2ba6.area') { throw 'unexpected property area contents' }
+          if (@(Get-ChildItem -LiteralPath $propertyPersist -Force).Count) { throw 'unexpected persistent properties' }
+          Remove-Item -LiteralPath $areas[0].FullName
+          foreach ($path in @($propertyArea, $propertySystem, $propertyPersist, $propertyRoot)) {
+            if (@(Get-ChildItem -LiteralPath $path -Force).Count) { throw "unexpected property fixture contents: $path" }
+            Remove-Item -LiteralPath $path
+          }
+          Write-Host 'POLICY_PROPERTY_CLEANUP exact_area_removed=1 directories_empty=1'
           if (@(Get-ChildItem -LiteralPath $directory -Force).Count) { throw 'owned resource directory not empty' }
           Remove-Item -LiteralPath $directory
           Write-Host 'Resource-policy component only; actual production APK/Binder route requires full CI.'

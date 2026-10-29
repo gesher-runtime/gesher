@@ -2,6 +2,7 @@
 #include "../../compat/framework/installed_guest.h"
 #include "../../compat/framework/restricted_launch.h"
 #include "../../compat/posix/src/startup_null.h"
+#include "../../compat/posix/include/gesher/system_properties.h"
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
@@ -84,6 +85,11 @@ std::wstring PrivateName(HANDLE handle) {
 int wmain(int argc, wchar_t** argv) {
   try {
     if (argc == 4 && !wcscmp(argv[1], L"--nested")) {
+      std::string property;
+      bool property_read = gesher::properties::Get("ro.fixture.identity", &property);
+      bool property_write = gesher::properties::Set("fixture.mutable", "guest");
+      printf("POLICY_PROPERTY guest_read=%u host_value=%u guest_write=%u\n", unsigned(property_read),
+          unsigned(property == "host-authoritative"), unsigned(property_write));
       STARTUPINFOW actual{}; actual.cb = sizeof(actual); GetStartupInfoW(&actual);
       Check((actual.dwFlags & STARTF_USESTDHANDLES) != 0, "actual startup stdio");
       HANDLE verified = gesher::DuplicateVerifiedNull(actual.hStdInput);
@@ -123,6 +129,13 @@ int wmain(int argc, wchar_t** argv) {
     Check(argc == 2 && SlotsEmpty(), "fixture arguments and initial owners");
     std::wstring root = argv[1], assets = root + L"\\assets", data = root + L"\\data", outside = root + L"\\outside";
     Directory(assets); Directory(data); Directory(outside);
+    std::wstring property_root = root + L"\\property-host";
+    Directory(property_root);
+    Check(_wputenv_s(L"ANDROID_DATA", property_root.c_str()) == 0 &&
+        _wputenv_s(L"GESHER_BINDER", L"fixture-property-session") == 0, "property session setup");
+    Check(gesher::properties::Set("ro.fixture.identity", "host-authoritative"), "host publishes real property");
+    std::string host_value;
+    Check(gesher::properties::Get("ro.fixture.identity", &host_value) && host_value == "host-authoritative", "host reads real property");
     std::wstring asset_file = assets + L"\\payload.dat";
     HANDLE asset = CreateFileW(asset_file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, 0, nullptr);
     Check(asset != INVALID_HANDLE_VALUE && CloseHandle(asset), "fresh readonly asset file");
@@ -195,6 +208,11 @@ int wmain(int argc, wchar_t** argv) {
       bool closed_log = CloseHandle(verified_log) != FALSE;
       Check(bounded_log && read_log && closed_log && std::strstr(verified_output,
           "POLICY_VERIFIED_NULL actual_null=1 private_duplicate=1 crt_close=1 wrong_object_rejected=1 invalid_rejected=1"), "actual verified null child evidence");
+      Check(std::strstr(verified_output, "POLICY_PROPERTY guest_read=") != nullptr, "actual property observation");
+      std::string after_guest;
+      bool host_saw_guest_write = gesher::properties::Get("fixture.mutable", &after_guest);
+      printf("POLICY_PROPERTY_HOST observed_write=%u value_matches=%u\n", unsigned(host_saw_guest_write),
+          unsigned(after_guest == "guest"));
       printf("%s", verified_output); fflush(stdout);
       Check(DeleteFileW(log_path.c_str()), "nested child log cleanup");
       printf("POLICY_CHILD actual_lowbox=1 nested_create=1 file_reopen_read=1 nested_delete=1 exit=0 retired=1\n");
