@@ -1,0 +1,986 @@
+diff --git a/app/java/com/gesher/app/webview/EngineListenerCoordinator.java b/app/java/com/gesher/app/webview/EngineListenerCoordinator.java
+new file mode 100644
+index 00000000..38914071
+--- /dev/null
++++ b/app/java/com/gesher/app/webview/EngineListenerCoordinator.java
+@@ -0,0 +1,538 @@
++package com.gesher.app.webview;
++
++import android.os.Handler;
++import android.os.SystemClock;
++import android.util.Log;
++import java.util.ArrayList;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++import java.util.UUID;
++import java.util.function.Consumer;
++import org.json.JSONArray;
++import org.json.JSONObject;
++
++/** Unqualified, opt-in CDP listener experiment. All engine events enter on the WebView STA. */
++final class EngineListenerCoordinator {
++    private static final String TAG = "GesherWeb4";
++    private static final String[] EVENTS = {"Runtime.executionContextCreated",
++            "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared",
++            "Runtime.bindingCalled", "Page.frameAttached", "Page.frameDetached",
++            "Page.frameStartedNavigating", "Page.frameStoppedLoading", "Page.frameNavigated", "Target.attachedToTarget", "Target.detachedFromTarget"};
++    private final WebView2Host host;
++    private final GesherWebViewProvider provider;
++    private final Handler ui;
++    final String binding = "__gesher_binding_" + UUID.randomUUID().toString().replace("-", "");
++    final String dispatch = "__gesher_reply_" + UUID.randomUUID().toString().replace("-", "");
++    private final Map<Long, String> subscriptions = new HashMap<>();
++    private final Map<Long, Consumer<String>> calls = new HashMap<>();
++    private final Map<String, Context> contexts = new HashMap<>();
++    private final Set<String> seenUnique = new HashSet<>(), seenNumeric = new HashSet<>(),
++            seenSessions = new HashSet<>();
++    private final Set<String> pausedSessions = new HashSet<>();
++    private final Set<String> activeSessions = new HashSet<>();
++    private final Set<String> navigatingFrames = new HashSet<>();
++    private final Map<String, String> parents = new HashMap<>();
++    private final Map<Long, Ticket> tickets = new HashMap<>();
++    private final Map<String, Ticket> ticketKeys = new HashMap<>();
++    private final List<Runnable> waiting = new ArrayList<>();
++    private final List<PendingBinding> pendingBindings = new ArrayList<>();
++    private int pendingBindingUnits;
++    private String rootFrame;
++    private long nextId = 1, nextTicket = 1, deadline;
++    private int registrations, pendingDeliveries, pendingUnits, activeCallbacks;
++    private Runnable closeCompletion;
++    private boolean started, ready, failed, closed;
++
++    private static final class Context {
++        final String session, unique, frame, origin;
++        final long numeric;
++        final Map<String, GesherWebViewProvider.MessageListener> listeners;
++        boolean live = true;
++        Context(String session, long numeric, String unique, String frame, String origin,
++                Map<String, GesherWebViewProvider.MessageListener> listeners) {
++            this.session = session; this.numeric = numeric; this.unique = unique;
++            this.frame = frame; this.origin = origin; this.listeners = listeners;
++        }
++    }
++    private static final class PendingBinding {
++        final Context context;
++        final JSONObject event;
++        final int units;
++        PendingBinding(Context context, JSONObject event, int units) {
++            this.context = context; this.event = event; this.units = units;
++        }
++    }
++    private static final class Ticket {
++        final long id;
++        final Context context;
++        final GesherWebViewProvider.MessageListener listener;
++        int inFlight, pending;
++        boolean live = true;
++        Ticket(long id, Context context, GesherWebViewProvider.MessageListener listener) {
++            this.id = id; this.context = context; this.listener = listener;
++        }
++    }
++
++    EngineListenerCoordinator(WebView2Host host, GesherWebViewProvider provider, Handler ui) {
++        this.host = host; this.provider = provider; this.ui = ui;
++        seenSessions.add("");
++    }
++
++    synchronized void start() {
++        if (started || closed || failed) return;
++        started = true;
++        deadline = SystemClock.uptimeMillis() + 3000;
++        if (!ui.postDelayed(() -> { synchronized (this) {
++            if (!ready && !failed && !closed) fail("setup timeout");
++        } }, 3000)) { fail("setup timeout could not be scheduled"); return; }
++        for (String event : EVENTS) {
++            long id = allocateId();
++            if (id == 0) { fail("id exhaustion"); return; }
++            subscriptions.put(id, event);
++            int accepted = host.subscribeSession(id, event, remaining(deadline));
++            if (accepted != 0) { fail("subscription admission " + accepted); return; }
++        }
++    }
++
++    synchronized void navigate(Runnable navigation) {
++        if (closed) return;
++        if (ready || failed) { if (!ui.post(navigation)) fail("navigation dispatch"); return; }
++        if (waiting.size() >= 32) { fail("navigation queue full");
++            if (!ui.post(navigation)) Log.e(TAG, "navigation dispatch failed"); return; }
++        boolean first = waiting.isEmpty();
++        waiting.add(navigation);
++        if (first && !started && !ui.postDelayed(() -> { synchronized (this) {
++            if (!started && !closed && !failed) fail("host readiness timeout");
++        } }, 3000)) fail("host readiness timer could not be scheduled");
++    }
++
++    private int remaining(long until) {
++        long left = until - SystemClock.uptimeMillis();
++        return (int) Math.max(1, Math.min(left, 3000));
++    }
++
++    private long allocateId() {
++        if (nextId <= 0 || nextId == Long.MAX_VALUE) return 0;
++        return nextId++;
++    }
++
++    private void request(String session, String method, JSONObject params, long until,
++            Consumer<String> done) {
++        if (closed || failed) return;
++        if (SystemClock.uptimeMillis() >= until) { fail("protocol deadline " + method); return; }
++        long id = allocateId();
++        if (id == 0 || calls.size() >= 128) { fail("request limit"); return; }
++        calls.put(id, done);
++        int accepted = host.submitSession(id, session, method, params.toString(), remaining(until));
++        if (accepted != 0) { calls.remove(id); fail("protocol admission " + method + ": " + accepted); }
++    }
++
++    private void rootSetup() {
++        request("", "Runtime.enable", new JSONObject(), deadline, a ->
++            request("", "Page.enable", new JSONObject(), deadline, b ->
++                request("", "Page.getFrameTree", new JSONObject(), deadline, tree -> {
++                    try {
++                        JSONObject frameTree = new JSONObject(tree).getJSONObject("frameTree");
++                        seedTree(frameTree, null);
++                        JSONObject bindingParam = new JSONObject().put("name", binding);
++                        request("", "Runtime.addBinding", bindingParam, deadline, c -> {
++                            try {
++                                JSONObject attach = new JSONObject().put("autoAttach", true)
++                                        .put("waitForDebuggerOnStart", true).put("flatten", true);
++                                request("", "Target.setAutoAttach", attach, deadline, d -> {
++                                    activeSessions.add("");
++                                    ready = true;
++                                    flushBindings();
++                                    GesherWebView.log("web4 CDP ready root=" + rootFrame);
++                                    ArrayList<Runnable> copy = new ArrayList<>(waiting);
++                                    waiting.clear();
++                                    for (Runnable task : copy) if (!ui.post(task)) fail("navigation dispatch");
++                                });
++                            } catch (Exception e) { fail("root attach setup " + e); }
++                        });
++                    } catch (Exception e) { fail("frame tree " + e); }
++                })));
++    }
++
++    private void seedTree(JSONObject tree, String parent) throws Exception {
++        JSONObject frame = tree.getJSONObject("frame");
++        String id = frame.getString("id");
++        if (parent == null) {
++            if (rootFrame != null && !rootFrame.equals(id)) throw new IllegalStateException("root changed");
++            rootFrame = id;
++            recordFrame(id, "");
++        } else recordFrame(id, parent);
++        JSONArray children = tree.optJSONArray("childFrames");
++        if (children != null) for (int i = 0; i < children.length(); i++) seedTree(children.getJSONObject(i), id);
++    }
++
++    private void recordFrame(String frame, String parent) {
++        if (frame.isEmpty() || parent == null || frame.equals(parent)) { fail("invalid frame ancestry"); return; }
++        String previous = parents.get(frame);
++        if (previous != null && !previous.equals(parent)) { fail("ambiguous frame ancestry"); return; }
++        if (!parents.containsKey(frame) && parents.size() >= 4096) { fail("frame limit"); return; }
++        parents.put(frame, parent);
++    }
++
++    private boolean mainOrDescendant(String frame) {
++        if (rootFrame == null) return false;
++        Set<String> seen = new HashSet<>();
++        while (!frame.equals(rootFrame)) {
++            if (!seen.add(frame)) return false;
++            frame = parents.get(frame);
++            if (frame == null || frame.isEmpty()) return false;
++        }
++        return true;
++    }
++
++    private static String key(String session, long id) { return session.length() + ":" + session + id; }
++    private static String frameKey(String session, String frame) {
++        return session.length() + ":" + session + frame;
++    }
++
++    synchronized boolean onEvent(int type, long id, int hr, String a, String b, String c) {
++        if (type == WebView2Host.EVENT_SESSION_RESULT) {
++            Consumer<String> done = calls.remove(id);
++            if (done == null) return true;
++            if (hr < 0 || closed || failed) { if (!closed && !failed) fail("CDP HRESULT " + hr); return true; }
++            try {
++                JSONObject result = new JSONObject(a);
++                if (result.has("error")) { fail("CDP error " + result.optString("error")); return true; }
++                done.accept(a);
++            } catch (Exception e) { fail("CDP result " + e); }
++            return true;
++        }
++        if (type != WebView2Host.EVENT_SESSION_SUBSCRIPTION) return false;
++        String name = subscriptions.get(id);
++        if (name == null || closed || failed) return true;
++        if ("registered".equals(a)) {
++            if (hr < 0) { fail("subscription HRESULT " + hr); return true; }
++            if (++registrations == EVENTS.length) rootSetup();
++        } else if ("error".equals(a) || hr < 0) {
++            fail("subscription error " + name + ": " + hr);
++        } else if ("event".equals(a)) {
++            try { process(name, b == null ? "" : b, new JSONObject(c)); }
++            catch (Exception e) { fail("event " + name + ": " + e); }
++        }
++        return true;
++    }
++
++    private void process(String event, String session, JSONObject p) throws Exception {
++        if (!seenSessions.contains(session)) { fail("event from unknown session"); return; }
++        if ("Target.attachedToTarget".equals(event)) {
++            String child = p.getString("sessionId");
++            if (child.isEmpty() || seenSessions.size() >= 4096 || pausedSessions.size() >= 64 ||
++                    !seenSessions.add(child)) { fail("duplicate or excess session"); return; }
++            pausedSessions.add(child);
++            long childDeadline = SystemClock.uptimeMillis() + 3000;
++            String type = p.getJSONObject("targetInfo").getString("type");
++            if (!type.equals("iframe") && !type.equals("page")) {
++                request(child, "Runtime.runIfWaitingForDebugger", new JSONObject(), childDeadline,
++                        ignored -> pausedSessions.remove(child));
++                return;
++            }
++            request(child, "Runtime.enable", new JSONObject(), childDeadline, a ->
++                request(child, "Page.enable", new JSONObject(), childDeadline, b -> {
++                    try {
++                        request(child, "Runtime.addBinding", new JSONObject().put("name", binding), childDeadline, c -> {
++                            try {
++                                JSONObject attach = new JSONObject().put("autoAttach", true)
++                                        .put("waitForDebuggerOnStart", true).put("flatten", true);
++                                request(child, "Target.setAutoAttach", attach, childDeadline, d -> {
++                                    activeSessions.add(child);
++                                    flushBindings();
++                                    request(child, "Runtime.runIfWaitingForDebugger", new JSONObject(), childDeadline,
++                                        e -> pausedSessions.remove(child));
++                                });
++                            } catch (Exception ex) { fail("attach setup " + ex); }
++                        });
++                    } catch (Exception ex) { fail("binding setup " + ex); }
++                }));
++        } else if ("Target.detachedFromTarget".equals(event)) {
++            String detached = p.getString("sessionId");
++            pausedSessions.remove(detached);
++            activeSessions.remove(detached);
++            retireSession(detached);
++        } else if ("Page.frameAttached".equals(event)) {
++            recordFrame(p.getString("frameId"), p.getString("parentFrameId"));
++        } else if ("Page.frameDetached".equals(event)) {
++            String frame = p.getString("frameId");
++            if (frame.equals(rootFrame)) { fail("root detached"); return; }
++            retireFrame(frame);
++            ArrayList<String> removed = new ArrayList<>();
++            for (String candidate : parents.keySet()) if (descendsFrom(candidate, frame)) removed.add(candidate);
++            for (String candidate : removed) parents.remove(candidate);
++            // Session/frame identities are independent; on detach, conservatively
++            // discard pending commit evidence rather than infer cross-session mapping.
++            navigatingFrames.clear();
++        } else if ("Page.frameStartedNavigating".equals(event)) {
++            String frame = p.getString("frameId");
++            if (navigatingFrames.size() >= 4096) { fail("navigation limit"); return; }
++            navigatingFrames.add(frameKey(session, frame));
++        } else if ("Page.frameStoppedLoading".equals(event)) {
++            navigatingFrames.remove(frameKey(session, p.getString("frameId")));
++        } else if ("Page.frameNavigated".equals(event)) {
++            JSONObject frame = p.getJSONObject("frame");
++            String frameId = frame.getString("id");
++            retireFrame(frameId);
++            navigatingFrames.remove(frameKey(session, frameId));
++            String parent = frame.optString("parentId", "");
++            if (parent.isEmpty()) {
++                if (session.isEmpty() && rootFrame != null && rootFrame.equals(frameId)) recordFrame(frameId, "");
++            } else recordFrame(frameId, parent);
++        } else if ("Runtime.executionContextCreated".equals(event)) {
++            JSONObject ctx = p.getJSONObject("context"), aux = ctx.optJSONObject("auxData");
++            if (aux == null || !aux.optBoolean("isDefault", false)) return;
++            long number = ctx.getLong("id");
++            String unique = ctx.optString("uniqueId", ""), frame = aux.optString("frameId", "");
++            if (!(ctx.opt("origin") instanceof String)) { fail("missing context origin"); return; }
++            String origin = ctx.getString("origin");
++            if (contexts.size() >= 4096 || seenUnique.size() >= 8192 || seenNumeric.size() >= 8192 ||
++                    number <= 0 || unique.isEmpty() || frame.isEmpty() ||
++                    !seenUnique.add(unique) || !seenNumeric.add(key(session, number))) {
++                fail("ambiguous execution context"); return;
++            }
++            Map<String, GesherWebViewProvider.MessageListener> snapshot = provider.cdpListenerSnapshot();
++            contexts.put(key(session, number), new Context(session, number, unique, frame, origin, snapshot));
++        } else if ("Runtime.executionContextDestroyed".equals(event)) {
++            long number = p.optLong("executionContextId", -1);
++            String unique = p.optString("executionContextUniqueId", "");
++            Context byNumber = number > 0 ? contexts.get(key(session, number)) : null;
++            Context byUnique = null;
++            if (!unique.isEmpty()) {
++                for (Context candidate : contexts.values()) {
++                    if (candidate.session.equals(session) && candidate.unique.equals(unique)) {
++                        byUnique = candidate; break;
++                    }
++                }
++            }
++            if (byNumber != null && !unique.isEmpty() && !byNumber.unique.equals(unique)) {
++                fail("ambiguous context destruction"); return;
++            }
++            Context old = byUnique != null ? byUnique : byNumber;
++            if (old != null) { contexts.remove(key(session, old.numeric)); retire(old); }
++            else if (number <= 0 && unique.isEmpty()) fail("unidentified context destruction");
++        } else if ("Runtime.executionContextsCleared".equals(event)) {
++            retireSession(session);
++        } else if ("Runtime.bindingCalled".equals(event) && binding.equals(p.optString("name"))) {
++            Context context = contexts.get(key(session, p.getLong("executionContextId")));
++            if (context == null || !context.live) {
++                GesherWebView.log("web4 CDP binding denied: unknown or retired context"); return;
++            }
++            if (!ready || !activeSessions.contains(session)) {
++                int units = p.toString().length();
++                if (pendingBindings.size() >= 128 || units > 4194304 - pendingBindingUnits) {
++                    fail("early binding queue limit"); return;
++                }
++                pendingBindings.add(new PendingBinding(context, p, units));
++                pendingBindingUnits += units;
++                return;
++            }
++            admitBinding(context, p);
++        }
++    }
++
++    private void flushBindings() {
++        for (int i = 0; i < pendingBindings.size();) {
++            PendingBinding item = pendingBindings.get(i);
++            if (!ready || !activeSessions.contains(item.context.session)) { ++i; continue; }
++            pendingBindings.remove(i);
++            pendingBindingUnits -= item.units;
++            if (item.context.live) {
++                try { admitBinding(item.context, item.event); }
++                catch (Exception e) { fail("early binding " + e); return; }
++            }
++        }
++    }
++
++    private void admitBinding(Context context, JSONObject p) throws Exception {
++            if (!context.live || !mainOrDescendant(context.frame)) {
++                GesherWebView.log("web4 CDP binding denied: retired context or unknown ancestry"); return;
++            }
++            String session = context.session;
++            String origin = context.origin;
++            if (!(origin.startsWith("http://") || origin.startsWith("https://")) ||
++                    origin.equalsIgnoreCase(FileUrls.ORIGIN) || FileUrls.isFile(origin)) {
++                GesherWebView.log("web4 CDP binding denied: engine origin " + origin); return;
++            }
++            JSONObject payload = new JSONObject(p.getString("payload"));
++            String name = payload.optString("name", "");
++            GesherWebViewProvider.MessageListener listener = context.listeners.get(name);
++            if (listener == null || listener != provider.cdpListener(name) ||
++                    !listener.capability.equals(payload.optString("capability", "")) ||
++                    !ListenerOrigins.allows(listener.rules, origin)) {
++                GesherWebView.log("web4 CDP binding denied: registration or origin"); return;
++            }
++            GesherWebView.log("web4 CDP binding admitted session=" + session + " context="
++                    + context.unique + " frame=" + context.frame + " origin=" + origin);
++            String ticketKey = context.unique.length() + ":" + context.unique + name;
++            Ticket ticket = ticketKeys.get(ticketKey);
++            if (ticket != null && (ticket.listener != listener || !ticket.live)) {
++                ticket.live = false;
++                cleanupTicket(ticket);
++                ticketKeys.remove(ticketKey);
++                ticket = null;
++            }
++            if (ticket == null) {
++                if (nextTicket <= 0 || nextTicket == Long.MAX_VALUE || tickets.size() >= 4096) {
++                    fail("ticket exhaustion"); return;
++                }
++                ticket = new Ticket(nextTicket++, context, listener);
++                tickets.put(ticket.id, ticket);
++                ticketKeys.put(ticketKey, ticket);
++            }
++            Ticket target = ticket;
++            boolean mainFrame = context.frame.equals(rootFrame);
++            JSONObject message = payload.getJSONObject("payload");
++            int units = p.optString("payload", "").length();
++            if (pendingDeliveries >= 128 || units > 4194304 - pendingUnits) {
++                fail("listener queue limit"); return;
++            }
++            ++pendingDeliveries;
++            ++target.pending;
++            pendingUnits += units;
++            if (!ui.post(() -> deliver(target, message, units, mainFrame))) {
++                --pendingDeliveries; --target.pending; pendingUnits -= units; fail("listener dispatch");
++            }
++    }
++
++    private void deliver(Ticket ticket, JSONObject payload, int units, boolean mainFrame) {
++        synchronized (this) {
++            --pendingDeliveries;
++            --ticket.pending;
++            pendingUnits -= units;
++            if (pendingDeliveries < 0 || ticket.pending < 0 || pendingUnits < 0)
++                throw new IllegalStateException("queue accounting");
++            // A message observed from the live original context may already be queued
++            // when it navigates; its reply ticket is separately revoked on retirement.
++            if (closed || failed || provider.cdpListener(ticket.listener.name) != ticket.listener) {
++                cleanupTicket(ticket);
++                return;
++            }
++            ++ticket.inFlight;
++            ++activeCallbacks;
++        }
++        try {
++            provider.cdpDeliver(ticket.listener, payload, ticket.context.origin, ticket.id, mainFrame);
++        } finally {
++            Runnable completion = null;
++            synchronized (this) {
++                --ticket.inFlight;
++                --activeCallbacks;
++                cleanupTicket(ticket);
++                if (closed && activeCallbacks == 0) { completion = closeCompletion; closeCompletion = null; }
++            }
++            if (completion != null) completion.run();
++        }
++    }
++
++    synchronized void reply(long ticketId, String name, String json) {
++        Ticket ticket = tickets.get(ticketId);
++        if (ticket == null || closed || failed || !ticket.live || !ticket.context.live ||
++                ticket.listener != provider.cdpListener(name)) return;
++        try {
++            String expression = "globalThis[" + JSONObject.quote(dispatch) + "](" +
++                    JSONObject.quote(name) + "," + JSONObject.quote(json) + ")";
++            JSONObject params = new JSONObject().put("expression", expression)
++                    .put("uniqueContextId", ticket.context.unique).put("returnByValue", true);
++            // Replies have their own bounded budget, never a URI/top-frame fallback.
++            long replyDeadline = SystemClock.uptimeMillis() + 3000;
++            GesherWebView.log("web4 CDP reply session=" + ticket.context.session + " context="
++                    + ticket.context.unique + " frame=" + ticket.context.frame);
++            request(ticket.context.session, "Runtime.evaluate", params, replyDeadline, ignored -> {});
++        } catch (Exception e) { fail("reply " + e); }
++    }
++
++    synchronized void changeListeners(Runnable mutation) {
++        // A navigation already in flight may use the previous document script.
++        // Do not attribute a later-created context to the new registration.
++        navigatingFrames.clear();
++        mutation.run();
++    }
++
++    synchronized void remove(String name, Runnable mutation) {
++        navigatingFrames.clear();
++        mutation.run();
++        for (Ticket ticket : tickets.values()) if (ticket.listener.name.equals(name)) ticket.live = false;
++        ticketKeys.entrySet().removeIf(e -> !e.getValue().live);
++        for (Ticket ticket : new ArrayList<>(tickets.values())) cleanupTicket(ticket);
++    }
++
++    synchronized void processFailed() { fail("WebView2 process failure"); }
++
++    void close(Runnable completion) {
++        Runnable readyToClose = null;
++        synchronized (this) {
++            if (closed) return;
++            resumePaused();
++            closed = true;
++            for (Context context : contexts.values()) context.live = false;
++            for (Ticket ticket : tickets.values()) ticket.live = false;
++            ticketKeys.clear();
++            for (Ticket ticket : new ArrayList<>(tickets.values())) cleanupTicket(ticket);
++            waiting.clear(); calls.clear(); pendingBindings.clear(); pendingBindingUnits = 0;
++            closeCompletion = completion;
++            if (activeCallbacks == 0) { readyToClose = closeCompletion; closeCompletion = null; }
++        }
++        // Never wait for or hold a monitor across an app callback or host destruction.
++        if (readyToClose != null) readyToClose.run();
++    }
++
++    private boolean descendsFrom(String frame, String ancestor) {
++        Set<String> seen = new HashSet<>();
++        while (frame != null && !frame.isEmpty() && seen.add(frame)) {
++            if (frame.equals(ancestor)) return true;
++            frame = parents.get(frame);
++        }
++        return false;
++    }
++    private void retireFrame(String frame) {
++        for (Context context : contexts.values()) {
++            // Unknown ancestry is denied, and revocation is conservative on uncertainty.
++            if (descendsFrom(context.frame, frame) || !mainOrDescendant(context.frame)) retire(context);
++        }
++    }
++    private void retireSession(String session) {
++        for (Context context : contexts.values()) if (context.session.equals(session)) retire(context);
++        contexts.entrySet().removeIf(e -> e.getValue().session.equals(session));
++    }
++    private void cleanupTicket(Ticket ticket) {
++        if (!ticket.live && ticket.inFlight == 0 && ticket.pending == 0) {
++            tickets.remove(ticket.id);
++            ticket.listener.replyProxies.remove(ticket.id);
++        }
++    }
++    private void retire(Context context) {
++        context.live = false;
++        for (Ticket ticket : tickets.values()) if (ticket.context == context) ticket.live = false;
++        ticketKeys.entrySet().removeIf(e -> !e.getValue().live);
++        for (Ticket ticket : new ArrayList<>(tickets.values())) cleanupTicket(ticket);
++    }
++    private void resumePaused() {
++        for (String session : pausedSessions) {
++            long id = allocateId();
++            if (id == 0 || host.submitSession(id, session, "Runtime.runIfWaitingForDebugger", "{}", 3000) != 0)
++                Log.e(TAG, "Unable to resume paused target " + session);
++        }
++        pausedSessions.clear();
++    }
++
++    private void fail(String reason) {
++        if (failed || closed) return;
++        failed = true;
++        Log.e(TAG, "CDP listener disabled: " + reason);
++        GesherWebView.log("web4 CDP listener disabled: " + reason);
++        resumePaused();
++        for (Context context : contexts.values()) context.live = false;
++        for (Ticket ticket : tickets.values()) ticket.live = false;
++        ticketKeys.clear();
++        for (Ticket ticket : new ArrayList<>(tickets.values())) cleanupTicket(ticket);
++        pendingBindings.clear(); pendingBindingUnits = 0;
++        ArrayList<Runnable> copy = new ArrayList<>(waiting);
++        waiting.clear();
++        for (Runnable task : copy) if (!ui.post(task)) Log.e(TAG, "Navigation dispatch failed");
++    }
++}
+diff --git a/app/java/com/gesher/app/webview/GesherWebViewProvider.java b/app/java/com/gesher/app/webview/GesherWebViewProvider.java
+index 241e0633..7412251e 100644
+--- a/app/java/com/gesher/app/webview/GesherWebViewProvider.java
++++ b/app/java/com/gesher/app/webview/GesherWebViewProvider.java
+@@ -162,6 +162,12 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+         volatile byte[] bytes;
+     }
+ 
++    // Explicitly opt-in diagnostic prototype; the original gates remain mandatory.
++    private static final boolean CDP_LISTENER_EXPERIMENT =
++            "1".equals(System.getenv("GESHER_WEB4_CDP_EXPERIMENT"));
++    private volatile EngineListenerCoordinator mEngineListener;
++    private final AtomicLong mExperimentalNavigationEpoch = new AtomicLong();
++
+     /** androidx.webkit's WebMessageListeners (ADR 0058), by JavaScript object name. */
+     private final Map<String, MessageListener> mMessageListeners =
+             Collections.synchronizedMap(new LinkedHashMap<>());
+@@ -174,6 +180,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+     static final class MessageListener {
+         final String name;
+         final String[] rules;
++        final String capability = java.util.UUID.randomUUID().toString();
+         final java.lang.reflect.InvocationHandler listener;
+         final Map<Long, Object> replyProxies = new ConcurrentHashMap<>();
+ 
+@@ -238,17 +245,40 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+             throw new IllegalArgumentException("not a JavaScript identifier: " + name);
+         }
+         String[] r = checkRules(rules);
+-        synchronized (mMessageListeners) {
+-            if (mMessageListeners.containsKey(name)) {
+-                throw new IllegalArgumentException(name + " is already added");
++        Runnable mutation = () -> {
++            synchronized (mMessageListeners) {
++                if (mMessageListeners.containsKey(name)) {
++                    throw new IllegalArgumentException(name + " is already added");
++                }
++                mMessageListeners.put(name, new MessageListener(name, r, listener));
+             }
+-            mMessageListeners.put(name, new MessageListener(name, r, listener));
+-        }
++        };
++        EngineListenerCoordinator coordinator = mEngineListener;
++        if (coordinator != null) coordinator.changeListeners(mutation); else mutation.run();
+         runOnUi(this::updateDocumentScript);
+     }
+ 
+     void removeMessageListener(String name) {
+-        if (mMessageListeners.remove(name) != null) runOnUi(this::updateDocumentScript);
++        boolean[] removed = {false};
++        Runnable mutation = () -> removed[0] = mMessageListeners.remove(name) != null;
++        EngineListenerCoordinator coordinator = mEngineListener;
++        if (coordinator != null) coordinator.remove(name, mutation); else mutation.run();
++        if (removed[0]) runOnUi(this::updateDocumentScript);
++    }
++
++    MessageListener cdpListener(String name) { return mMessageListeners.get(name); }
++
++    Map<String, MessageListener> cdpListenerSnapshot() {
++        synchronized (mMessageListeners) { return new LinkedHashMap<>(mMessageListeners); }
++    }
++
++    void cdpDeliver(MessageListener listener, JSONObject payload, String origin, long ticket,
++            boolean mainFrame) {
++        try {
++            SupportLib.deliver(this, listener, WebMessagePayload.read(payload), origin, ticket, mainFrame);
++        } catch (org.json.JSONException e) {
++            Log.e(TAG, "Invalid CDP listener payload", e);
++        }
+     }
+ 
+     StartScript addStartScript(String script, String[] rules) {
+@@ -276,7 +306,9 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+             m.put("gesher", "listener");
+             m.put("name", name);
+             WebMessagePayload.write(m, message);
+-            host.postFrameMessage(document, m.toString());
++            EngineListenerCoordinator coordinator = mEngineListener;
++            if (coordinator != null) coordinator.reply(document, name, m.toString());
++            else host.postFrameMessage(document, m.toString());
+         } catch (org.json.JSONException e) {
+             throw new IllegalStateException(e);
+         }
+@@ -350,6 +382,10 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+             GesherWebView.log("no WebView2 for this WebView: " + WebView2Host.runtimeError());
+             return;
+         }
++        if (CDP_LISTENER_EXPERIMENT) {
++            mEngineListener = new EngineListenerCoordinator(mHost, this, mUi);
++            GesherWebView.log("web4 CDP experiment active");
++        }
+         applySettings();
+         updateDocumentScript();
+         // <input type=file>: WebChromeClient.onShowFileChooser, else a Windows file dialog.
+@@ -403,8 +439,15 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+         // document-start scripts, in the order they were added.
+         script.append(PageScripts.ORIGINS);
+         script.append(GeolocationShim.SCRIPT);
+-        for (MessageListener l : mMessageListeners.values()) {
+-            script.append(PageScripts.messageListener(l.name, l.rules));
++        synchronized (mMessageListeners) {
++            if (mEngineListener != null) {
++                script.append(PageScripts.cdpListeners(mMessageListeners.values(),
++                        mEngineListener.binding, mEngineListener.dispatch));
++            } else {
++                for (MessageListener l : mMessageListeners.values()) {
++                    script.append(PageScripts.messageListener(l.name, l.rules));
++                }
++            }
+         }
+         for (StartScript s : mStartScripts) {
+             script.append(PageScripts.documentStartScript(s.script, s.rules));
+@@ -468,11 +511,15 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+     public void destroy() {
+         if (mDestroyed) return;
+         mDestroyed = true;
++        EngineListenerCoordinator coordinator = mEngineListener;
+         removeListeners();
+         mGeolocation.pageGone();
+         WebView2Host closing = mHost;
+         mHost = null;
+-        if (closing != null) retryHostClose(closing, android.os.SystemClock.uptimeMillis() + 3000);
++        if (closing != null) {
++            Runnable finish = () -> retryHostClose(closing, android.os.SystemClock.uptimeMillis() + 3000);
++            if (coordinator != null) coordinator.close(finish); else finish.run();
++        } else if (coordinator != null) coordinator.close(() -> {});
+     }
+ 
+     private void retryHostClose(WebView2Host closing, long deadline) {
+@@ -539,7 +586,18 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+             GesherWebView.log("loading " + webView2Url + ": WebView2 is unavailable");
+             return;
+         }
+-        mHost.navigate(webView2Url, headers);
++        WebView2Host host = mHost;
++        runDocumentNavigation(host, () -> host.navigate(webView2Url, headers));
++    }
++
++    private void runDocumentNavigation(WebView2Host host, Runnable action) {
++        EngineListenerCoordinator coordinator = mEngineListener;
++        if (coordinator != null && !mMessageListeners.isEmpty()) {
++            long epoch = mExperimentalNavigationEpoch.get();
++            coordinator.navigate(() -> {
++                if (!mDestroyed && mHost == host && epoch == mExperimentalNavigationEpoch.get()) action.run();
++            });
++        } else action.run();
+     }
+ 
+     @Override
+@@ -556,8 +614,10 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+             return;
+         }
+         // NavigateWithWebResourceRequest with the body, form-encoded as Android posts it.
+-        mHost.navigate(url, "Content-Type: application/x-www-form-urlencoded\r\n", "POST",
+-                postData != null ? postData : new byte[0]);
++        WebView2Host host = mHost;
++        byte[] data = postData != null ? postData : new byte[0];
++        runDocumentNavigation(host, () ->
++                host.navigate(url, "Content-Type: application/x-www-form-urlencoded\r\n", "POST", data));
+     }
+ 
+     @Override
+@@ -594,7 +654,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+                 || baseUrl.startsWith("about:")) {
+             if (mHost == null) return;
+             mOriginalUrl = historyUrl != null ? historyUrl : "about:blank";
+-            mHost.navigateToString(new String(bytes, StandardCharsets.UTF_8));
++            WebView2Host host = mHost;
++            runDocumentNavigation(host, () -> host.navigateToString(new String(bytes, StandardCharsets.UTF_8)));
+             return;
+         }
+         // The base URL is loaded, and its main document is answered with the data.
+@@ -694,12 +755,14 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+ 
+     @Override
+     public void stopLoading() {
++        if (mEngineListener != null) mExperimentalNavigationEpoch.incrementAndGet();
+         if (mHost != null) mHost.run(WebView2Host.STOP);
+     }
+ 
+     @Override
+     public void reload() {
+-        if (mHost != null) mHost.run(WebView2Host.RELOAD);
++        WebView2Host host = mHost;
++        if (host != null) runDocumentNavigation(host, () -> host.run(WebView2Host.RELOAD));
+     }
+ 
+     @Override
+@@ -709,7 +772,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+ 
+     @Override
+     public void goBack() {
+-        if (mHost != null) mHost.run(WebView2Host.GO_BACK);
++        WebView2Host host = mHost;
++        if (host != null) runDocumentNavigation(host, () -> host.run(WebView2Host.GO_BACK));
+     }
+ 
+     @Override
+@@ -719,7 +783,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+ 
+     @Override
+     public void goForward() {
+-        if (mHost != null) mHost.run(WebView2Host.GO_FORWARD);
++        WebView2Host host = mHost;
++        if (host != null) runDocumentNavigation(host, () -> host.run(WebView2Host.GO_FORWARD));
+     }
+ 
+     @Override
+@@ -739,7 +804,9 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+         } else if (steps != 0) {
+             // Page.navigateToHistoryEntry: several steps at once.
+             int entry = mHistory.entryId(steps);
+-            if (entry >= 0) devTools("Page.navigateToHistoryEntry", "{\"entryId\":" + entry + "}", null);
++            WebView2Host host = mHost;
++            if (entry >= 0 && host != null) runDocumentNavigation(host, () ->
++                    devTools("Page.navigateToHistoryEntry", "{\"entryId\":" + entry + "}", null));
+         }
+     }
+ 
+@@ -1730,6 +1797,12 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+ 
+     @Override
+     public void onEvent(int type, long id, int arg, String a, String b, String c, byte[] bytes) {
++        EngineListenerCoordinator coordinator = mEngineListener;
++        if (coordinator != null) {
++            if (type == WebView2Host.EVENT_PROCESS_FAILED || type == WebView2Host.EVENT_FAILED)
++                coordinator.processFailed();
++            if (coordinator.onEvent(type, id, arg, a, b, c)) return;
++        }
+         if (type == WebView2Host.EVENT_PARKED) {
+             CountDownLatch parked = mParked;
+             if (parked != null) parked.countDown();
+@@ -1884,6 +1957,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+         WebChromeClient chrome = mChrome;
+         switch (type) {
+             case WebView2Host.EVENT_READY:
++                if (mEngineListener != null) mEngineListener.start();
+                 if (GesherWebView.DEBUG) GesherWebView.log("WebView2 " + a + " ready");
+                 break;
+             case WebView2Host.EVENT_FAILED:
+@@ -1896,7 +1970,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+                 for (GesherWebMessagePort p : mPagePorts.values()) p.pageGone();
+                 mPagePorts.clear();
+                 mGeolocation.pageGone();
+-                for (MessageListener l : mMessageListeners.values()) l.replyProxies.clear();
++                if (mEngineListener == null)
++                    for (MessageListener l : mMessageListeners.values()) l.replyProxies.clear();
+                 setProgress(10);
+                 mClient.onPageStarted(mView, url, null);
+                 break;
+@@ -2010,6 +2085,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+                 webMessage(id, arg != 0, a, b);
+                 break;
+             case WebView2Host.EVENT_DOCUMENT_RETIRED:
++                if (mEngineListener != null) break; // CDP tickets use a different identity space.
+                 synchronized (mMessageListeners) {
+                     for (MessageListener listener : mMessageListeners.values()) {
+                         listener.replyProxies.remove(id);
+@@ -2129,6 +2205,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
+             }
+             String listener = m.optString("gesherListener", null);
+             if (listener != null) {
++                if (mEngineListener != null) return; // CDP experiment never trusts page envelopes.
+                 MessageListener l = mMessageListeners.get(listener);
+                 // The injection guard alone is not an authorization boundary:
+                 // a page can post its own envelope through chrome.webview.
+diff --git a/app/java/com/gesher/app/webview/PageScripts.java b/app/java/com/gesher/app/webview/PageScripts.java
+index b8b70c7a..7231a458 100644
+--- a/app/java/com/gesher/app/webview/PageScripts.java
++++ b/app/java/com/gesher/app/webview/PageScripts.java
+@@ -136,6 +136,52 @@ final class PageScripts {
+                         java.util.Arrays.asList(rules)) + ");\n";
+     }
+ 
++    /** Opt-in CDP transport experiment; visibility is provisional, native engine origin decides. */
++    static String cdpListeners(java.util.Collection<GesherWebViewProvider.MessageListener> listeners,
++            String binding, String dispatch) {
++        org.json.JSONArray specs = new org.json.JSONArray();
++        for (GesherWebViewProvider.MessageListener listener : listeners) {
++            try {
++                specs.put(new JSONObject().put("name", listener.name).put("capability", listener.capability)
++                        .put("rules", new org.json.JSONArray(java.util.Arrays.asList(listener.rules))));
++            } catch (org.json.JSONException e) { throw new IllegalStateException(e); }
++        }
++        return "(function(binding,dispatch,specs){\n"
++                + "var send=globalThis[binding]; if(typeof send!=='function') return;\n"
++                + "var byteLength=Object.getOwnPropertyDescriptor(ArrayBuffer.prototype,'byteLength').get;\n"
++                + "function isBuffer(data){try{byteLength.call(data);return true;}catch(e){return false;}}\n"
++                + "var create=Object.create; function encode(data){var out=create(null);"
++                + " if(!isBuffer(data)){out.data=data;return out;}"
++                + " var bytes=new Uint8Array(data),text='';for(var i=0;i<bytes.length;i+=8192)"
++                + " text+=String.fromCharCode.apply(null,bytes.subarray(i,i+8192));"
++                + " out.data=btoa(text);out.binary=true;return out;}\n"
++                + "function decode(message){if(!message.binary)return message.data;"
++                + " var text=atob(message.data),bytes=new Uint8Array(text.length);"
++                + " for(var i=0;i<text.length;i++)bytes[i]=text.charCodeAt(i);return bytes.buffer;}\n"
++                + "var stringify=JSON.stringify, parse=JSON.parse, Event=MessageEvent, entries=Object.create(null);\n"
++                + "if(Object.prototype.hasOwnProperty.call(globalThis,dispatch)) return;\n"
++                + "try { Object.defineProperty(globalThis,dispatch,{configurable:false,writable:false,"
++                + " value:function(name,json){var e=entries[name]; if(!e)return; var msg=parse(json);"
++                + " var ev=new Event('message',{data:decode(msg)});"
++                + " if(typeof e.obj.onmessage==='function') e.obj.onmessage(ev);"
++                + " for(var i=0;i<e.listeners.length;i++) e.listeners[i](ev); }}); } catch(e) { return; }\n"
++                + "for(var n=0;n<specs.length;n++){ (function(spec){\n"
++                + " if(globalThis.origin==='null'||!globalThis.__gesherOriginAllowed(spec.rules)) return;\n"
++                + " var listeners=[], obj={onmessage:null};\n"
++                + " obj.postMessage=function(data){ if(arguments.length<1)throw new TypeError('message required');"
++                + " if(typeof data!=='string'&&!isBuffer(data))throw new TypeError('Expected string or ArrayBuffer');"
++                + " var envelope=create(null);envelope.name=spec.name;envelope.capability=spec.capability;"
++                + " envelope.payload=encode(data);send(stringify(envelope)); };\n"
++                + " obj.addEventListener=function(type,f){if(type==='message'&&typeof f==='function'"
++                + " &&listeners.indexOf(f)<0)listeners.push(f);};\n"
++                + " obj.removeEventListener=function(type,f){var i=listeners.indexOf(f);"
++                + " if(type==='message'&&i>=0)listeners.splice(i,1);};\n"
++                + " try { Object.defineProperty(globalThis,spec.name,{value:obj,configurable:true});"
++                + " entries[spec.name]={obj:obj,listeners:listeners}; } catch(e) {}\n"
++                + "})(specs[n]);}\n"
++                + "})(" + JSONObject.quote(binding) + "," + JSONObject.quote(dispatch) + "," + specs + ");\n";
++    }
++
+     /**
+      * An app's document-start script (androidx.webkit's addDocumentStartJavaScript), run
+      * where a rule allows the origin. A block, not a function: its var and function
+diff --git a/tests/apps/web3app/java/com/gesher/web3app/FrameActivity.java b/tests/apps/web3app/java/com/gesher/web3app/FrameActivity.java
+index ae667636..45c63d81 100644
+--- a/tests/apps/web3app/java/com/gesher/web3app/FrameActivity.java
++++ b/tests/apps/web3app/java/com/gesher/web3app/FrameActivity.java
+@@ -24,6 +24,7 @@ public class FrameActivity extends Activity {
+ 
+     @Override protected void onCreate(Bundle state) {
+         super.onCreate(state);
++        Web3.log("frame insecure characterization APK");
+         origin = "http://127.0.0.1:" + Web3.port(1);
+         view = new WebView(this);
+         setContentView(view);
+@@ -58,7 +59,8 @@ public class FrameActivity extends Activity {
+                         navigating = true;
+                         Web3.poll(view, "JSON.stringify(window.web4Seen)", s -> s.contains("a-reply:reply-a")
+                                 && s.contains("b-reply:reply-b") && s.contains("nested-reply:reply-nested")
+-                                && s.contains("bad-forge-sent") && s.contains("opaque-forge-sent"), 20,
++                                && s.contains("bad-forge-sent") && s.contains("opaque-forge-sent")
++                                && s.contains("bad-cdp-forge-count:1") && s.contains("opaque-cdp-forge-count:1"), 20,
+                                 s -> view.evaluateJavascript("(async()=>{let f=document.getElementById('a');"
+                                         + "f.src='/web4-hold?name=a2';let held=false;for(let i=0;i<100;i++){"
+                                         + "if(await (await fetch('/web4-hold-status')).text()==='held'){held=true;break;}"
+@@ -89,6 +91,7 @@ public class FrameActivity extends Activity {
+                     && value.contains("a2-reply:reply-a2") && value.contains("bad-forge-attempt")
+                     && value.contains("opaque-forge-attempt") && value.contains("bad-forge-sent")
+                     && value.contains("opaque-forge-sent") && value.contains("during-sent")
++                    && value.contains("bad-cdp-forge-count:1") && value.contains("opaque-cdp-forge-count:1")
+                     && !value.contains("STALE") && !value.contains("RACE");
+             Web3.log("frame observed " + value);
+             Web3.log("frame controlled checks " + (observed && !invalid && replies.size() == 5));
+diff --git a/tests/windows/tracks/54-web3.ps1 b/tests/windows/tracks/54-web3.ps1
+index e47d41df..0d1e933a 100644
+--- a/tests/windows/tracks/54-web3.ps1
++++ b/tests/windows/tracks/54-web3.ps1
+@@ -60,7 +60,7 @@ function Web3ProcessState([int] $LauncherId, [string] $Text) {
+ 
+ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [string] $Done,
+                  [string] $Ready = '', [scriptblock] $During = $null, [int] $Seconds = 400,
+-                 [string] $NativeLibrary = 'web3_network.so') {
++                 [string] $NativeLibrary = 'web3_network.so', [bool] $CdpExperiment = $false) {
+   if (-not (Test-Path "$Dir/web3app.apk")) {
+     Write-Host "FAIL  web3: $Name (web3app.apk is missing)"
+     $script:failed++
+@@ -75,6 +75,8 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
+   $psi.Environment['GESHER_UIA_TRACE'] = '1'
+   $psi.Environment['GESHER_WEB3_PORTS'] = "$web3Proxy $web3Http"
+   $psi.Environment['GESHER_WEB3_NATIVE'] = NoDrive ([IO.Path]::GetFullPath((Join-Path $Dir $NativeLibrary)))
++  if ($CdpExperiment) { $psi.Environment['GESHER_WEB4_CDP_EXPERIMENT'] = '1' }
++  else { [void]$psi.Environment.Remove('GESHER_WEB4_CDP_EXPERIMENT') }
+   $psi.UseShellExecute = $false
+   $p = [Diagnostics.Process]::Start($psi)
+   $read = { if (Test-Path $log) { "$(Get-Content -Raw $log -ErrorAction SilentlyContinue)" } else { '' } }
+@@ -200,6 +202,10 @@ $null = Web3Run 'controlled document-start, frame identity, origin and stale rep
+   'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity',
+   'com.gesher.web3app.FrameActivity', (NoDrive "$Dir/web3app.apk")) ($frameExpect + 'gesher-app: done') 'Web3 frame done'
+ 
++$null = Web3Run 'experimental CDP listener frame identity and hostile origin (single process)' @(
++  'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity',
++  'com.gesher.web3app.FrameActivity', (NoDrive "$Dir/web3app.apk")) ($frameExpect + 'gesher-app: done' + 'gesher-webview: web4 CDP experiment active' + 'Web3 frame insecure characterization APK') 'Web3 frame done' -CdpExperiment $true
++
+ $sessionExpect = @('Web3 session checks true', 'Web3 session done')
+ $null = Web3Run 'owned session request through Java and JNI (single process)' @(
+   'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity',
+@@ -353,6 +359,41 @@ try {
+ 
+   $null = Web3Run 'owned session request through Java and JNI (device app process)' ($launch + '--activity', 'com.gesher.web3app.SessionActivity') $sessionExpect 'Web3 session done'
+   $null = Web3Run 'controlled document-start, frame identity, origin and stale reply (device app process)' ($launch + '--activity', 'com.gesher.web3app.FrameActivity') $frameExpect 'Web3 frame done'
++  # A distinct device ensures the experiment flag is inherited by its system server
++  # and app child; the app log must also prove the prototype was selected.
++  $normalDeviceData = $env:ANDROID_DATA
++  $normalDeviceLogs = $env:GESHER_LOGS
++  $env:ANDROID_DATA = NoDrive "$root/data-web4-cdp"
++  $env:GESHER_LOGS = NoDrive "$root/logs-web4-cdp"
++  New-Item -ItemType Directory -Force "$root/data-web4-cdp" | Out-Null
++  try {
++    $null = Web3Run 'experimental CDP listener frame identity and hostile origin (device app process)' `
++      ($launch + '--activity', 'com.gesher.web3app.FrameActivity') `
++      ($frameExpect + 'gesher-webview: web4 CDP experiment active' + 'Web3 frame insecure characterization APK') 'Web3 frame done' -CdpExperiment $true
++  } finally {
++    $expLog = Join-Path $env:RUNNER_TEMP 'web4-cdp-device-shutdown.log'
++    $expShutdown = $null
++    try {
++      $expShutdown = Start-Process "$Web3RuntimeExe" -ArgumentList (@($dvmWeb3) + 'com.gesher.app.Launcher', 'shutdown') `
++        -NoNewWindow -PassThru -RedirectStandardOutput $expLog -RedirectStandardError "$expLog.err"
++      if (-not $expShutdown.WaitForExit(60000) -or $expShutdown.ExitCode -ne 0) {
++        Write-Host 'FAIL web4 CDP: isolated device shutdown did not exit zero'; $script:failed++
++      }
++    } finally {
++      try {
++        if ($null -ne $expShutdown) {
++          if (-not $expShutdown.HasExited) {
++            try { $expShutdown.Kill($true) } catch { if (-not $expShutdown.HasExited) { throw } }
++            if (-not $expShutdown.WaitForExit(5000)) { throw 'CDP device shutdown process survived cleanup' }
++          }
++          $expShutdown.Dispose()
++        }
++      } finally {
++        $env:ANDROID_DATA = $normalDeviceData
++        $env:GESHER_LOGS = $normalDeviceLogs
++      }
++    }
++  }
+ 
+   $null = Web3Run 'the Gesher device: navigator.geolocation getCurrentPosition, watchPosition and disabled-setting errors from LocationManager test providers (app process)' ($launch + '--activity', 'com.gesher.web3app.GeoActivity') $geoExpect 'Web3 geo done'
+   $null = Web3Run 'the Gesher device: arm64 NDK selected Network socket/process source, getaddrinfo and raw DNS query/send/result/cancel/errors (app process)' ($launch + '--activity', 'com.gesher.web3app.BindingActivity', '--ez', 'arm64Native', 'true') ($bindingExpect + 'raw DNS poll/result/NXDOMAIN/cancel/errors abi=arm64' + 'Web3 net done') 'Web3 net done' -NativeLibrary 'web3_network_arm64.so'
+diff --git a/tests/windows/web3/Web3Servers.ps1 b/tests/windows/web3/Web3Servers.ps1
+index 659a699b..bc96258f 100644
+--- a/tests/windows/web3/Web3Servers.ps1
++++ b/tests/windows/web3/Web3Servers.ps1
+@@ -188,6 +188,9 @@ public static class GesherWeb3Servers {
+               + "web4.postMessage(name+'|'+window.__web4Early);}"
+               + "else top.postMessage(name+'-no-object','*');"
+               + "if(name==='bad'||name==='opaque'){top.postMessage(name+'-forge-attempt','*');"
++              + "let bindings=Object.getOwnPropertyNames(window).filter(k=>k.startsWith('__gesher_binding_'));"
++              + "for(let k of bindings)window[k](JSON.stringify({name:'web4',capability:'forged',payload:{type:'string',data:'forged-'+name+'|true'}}));"
++              + "top.postMessage(name+'-cdp-forge-count:'+bindings.length,'*');"
+               + "chrome.webview.postMessage({gesherListener:'web4',data:'forged-'+name});"
+               + "top.postMessage(name+'-forge-sent','*');}"
+               + "if(name==='a'){let f=document.createElement('iframe');f.src='/web4-child?name=nested';document.body.appendChild(f);}"

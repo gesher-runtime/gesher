@@ -32,6 +32,10 @@ on:
         description: javac's heap (-J-Xmx)
         default: 10g
   workflow_call:
+    inputs:
+      web4-characterization:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -423,10 +427,34 @@ jobs:
           cp out/app/graphics-tests.dex out/app/web3-query-tests.dex dist-framework/
           ls -la dist-framework
 
+      - name: Reject insecure Web4 classes in production framework artifact
+        run: python3 tools/web3/web4_characterization_role.py production-only --production dist-framework/gesher-app.jar
+
       - uses: actions/upload-artifact@v4
         with:
           name: framework
           path: dist-framework/
+
+      # Diagnostic only: the canonical artifact above is already sealed. This patch
+      # contains known-insecure code and is never used by package or normal tests.
+      - name: Build isolated insecure Web4 characterization jar
+        if: ${{ inputs.web4-characterization == true }}
+        run: |
+          git apply --check --ignore-space-change tests/windows/web4/insecure-cdp-characterization.patch
+          git apply --ignore-space-change tests/windows/web4/insecure-cdp-characterization.patch
+          app/build.sh out/web4-characterization --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/web3app/build.sh out/web4-characterization --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
+          mkdir -p dist-web4-characterization
+          cp out/web4-characterization/web3app.apk dist-web4-characterization/web3app-web4-insecure.apk
+          cp out/web4-characterization/gesher-app.jar dist-web4-characterization/gesher-app-web4-insecure.jar
+          python3 tools/web3/web4_characterization_role.py capture --production dist-framework/gesher-app.jar --experimental dist-web4-characterization/gesher-app-web4-insecure.jar --patch tests/windows/web4/insecure-cdp-characterization.patch --apk dist-web4-characterization/web3app-web4-insecure.apk --manifest dist-web4-characterization/role.json
+          git apply --reverse --ignore-space-change tests/windows/web4/insecure-cdp-characterization.patch
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.web4-characterization == true }}
+        with:
+          name: web4-insecure-characterization
+          path: dist-web4-characterization/
+          if-no-files-found: error
 
       # The framework's classes and the coremod, to compile gesher-app's Java
       # against off CI (app/build.sh --framework-classes/--core-classes).

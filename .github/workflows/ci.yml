@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      web4-characterization:
+        description: Run isolated insecure Web4 characterization (never production)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -108,6 +113,8 @@ jobs:
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
     uses: ./.github/workflows/framework.yml
+    with:
+      web4-characterization: ${{ inputs.web4-characterization == true }}
 
   # Phase 6 (native libraries): the Android NDK test .so files, built on the
   # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
@@ -251,6 +258,8 @@ jobs:
         shell: pwsh
         run: |
           python tools/web3/host_roles.py verify --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/web3/web4_characterization_role.py production-only --production dist/gesher-app.jar
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build installer
@@ -706,6 +715,8 @@ jobs:
         run: |
           python tools/web3/host_roles.py verify --dist dist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/web3/web4_characterization_role.py production-only --production dist/gesher-app.jar
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run tests
         shell: pwsh
@@ -842,4 +853,170 @@ jobs:
           path: |
             web3-query-results.txt
             ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/**
+          if-no-files-found: warn
+
+  web4-insecure-characterization:
+    if: ${{ inputs.web4-characterization == true }}
+    needs: [build, framework, native-libs, graphics, angle, boot-image, webview, exec, media, arm64]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin all current full producers and packages before any download
+        id: suppliers
+        shell: pwsh
+        run: tools/web3/verify_full_suppliers.ps1
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.windows_x64 }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.framework }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.native_libs }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.arm64 }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.graphics }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.angle }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.boot_image }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.webview }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.exec }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.media }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.web3_query_hook }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - name: Verify exact same-source compiler roles, source boundaries and coherent payload
+        shell: pwsh
+        run: |
+          python tools/web3/host_roles.py verify --dist dist --hook
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($name in 'core-oj.jar','core-libart.jar','core-icu4j.jar','framework.jar','gesher-app.jar',
+                             'web3-query-tests.dex','web3app.apk','gesher_arm64.dll','web3_network.so','web3_network_arm64.so') {
+            if (-not (Test-Path -LiteralPath (Join-Path dist $name))) { throw "Missing current full query payload $name" }
+            Write-Host "ACTUAL_WEB3_FULL_MEMBER name=$name sha256=$((Get-FileHash -LiteralPath (Join-Path dist $name) -Algorithm SHA256).Hash) source=${{ github.sha }}"
+          }
+          foreach ($image in 'boot','boot-core-libart','boot-core-icu4j','boot-framework','boot-gesher-app') {
+            foreach ($extension in 'art','oat','vdex') {
+              $file = "dist/framework/x86_64/$image.$extension"
+              if (-not (Test-Path -LiteralPath $file)) { throw "Missing current full image $file" }
+              Write-Host "ACTUAL_WEB3_FULL_IMAGE member=$image.$extension sha256=$((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash) source=${{ github.sha }}"
+            }
+          }
+      - name: Verify exact diagnostic artifact producer and receipt
+        id: web4-receipt
+        shell: pwsh
+        run: tools/web3/verify_web4_receipt.ps1
+      - name: Download and hash the exact diagnostic artifact archive
+        shell: pwsh
+        run: |
+          if ($PSVersionTable.PSVersion -lt [version]'7.4') { throw 'Binary native redirection requires PowerShell 7.4' }
+          gh api "repos/$env:GITHUB_REPOSITORY/actions/artifacts/${{ steps.web4-receipt.outputs.artifact }}/zip" > web4-artifact.zip
+          if ($LASTEXITCODE -ne 0) { throw 'Web4 artifact download failed' }
+          if ((Get-FileHash web4-artifact.zip -Algorithm SHA256).Hash.ToLowerInvariant() -cne '${{ steps.web4-receipt.outputs.digest }}') { throw 'Web4 artifact digest mismatch' }
+          python -c "import zipfile; z=zipfile.ZipFile('web4-artifact.zip'); a=z.infolist(); assert len(a)==3 and {x.filename for x in a}=={'gesher-app-web4-insecure.jar','web3app-web4-insecure.apk','role.json'} and all(not x.is_dir() and x.file_size < 104857600 for x in a) and sum(x.file_size for x in a) < 157286400"
+          if ($LASTEXITCODE -ne 0) { throw 'Unsafe Web4 artifact archive' }
+          Expand-Archive -LiteralPath web4-artifact.zip -DestinationPath web4-experiment
+      - name: Verify isolated roles and select experimental jar
+        shell: pwsh
+        run: |
+          git apply --ignore-space-change tests/windows/web4/insecure-cdp-characterization.patch
+          if ($LASTEXITCODE -ne 0) { throw 'Experiment patch failed' }
+          python tools/web3/web4_characterization_role.py verify --production dist/gesher-app.jar --experimental web4-experiment/gesher-app-web4-insecure.jar --patch tests/windows/web4/insecure-cdp-characterization.patch --apk web4-experiment/web3app-web4-insecure.apk --manifest web4-experiment/role.json
+          if ($LASTEXITCODE -ne 0) { throw 'Experiment role verification failed' }
+          python tools/web3/web4_characterization_role.py verify --production web4-experiment/gesher-app-web4-insecure.jar --experimental dist/gesher-app.jar --patch tests/windows/web4/insecure-cdp-characterization.patch --apk web4-experiment/web3app-web4-insecure.apk --manifest web4-experiment/role.json
+          if ($LASTEXITCODE -eq 0) { throw 'Role swap was incorrectly accepted' }
+          Write-Host 'PASS Web4 role swap rejected'
+          Copy-Item web4-experiment/web3app-web4-insecure.apk dist/web3app.apk -Force
+          if ((Get-FileHash dist/web3app.apk).Hash -cne (Get-FileHash web4-experiment/web3app-web4-insecure.apk).Hash) { throw 'Wrong selected experimental APK' }
+          Copy-Item web4-experiment/gesher-app-web4-insecure.jar dist/gesher-app.jar -Force
+          if ((Get-FileHash dist/gesher-app.jar).Hash -cne (Get-FileHash web4-experiment/gesher-app-web4-insecure.jar).Hash) { throw 'Wrong selected experimental jar' }
+      - name: Rebuild isolated boot image against experimental jar
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tools/boot-image/compile.ps1 -Dist dist -Out web4-image -Filter verify -ExtensionFilter verify -AppFilter verify -TimeoutMinutes 15
+          if ($LASTEXITCODE -ne 0) { throw 'Experimental boot image compilation failed' }
+          Copy-Item web4-image/framework/x86_64/* dist/framework/x86_64/ -Force
+          foreach ($image in 'boot','boot-core-libart','boot-core-icu4j','boot-framework','boot-gesher-app') {
+            foreach ($extension in 'art','oat','vdex') {
+              if (-not (Test-Path -LiteralPath "web4-image/framework/x86_64/$image.$extension")) { throw "Missing experimental image $image.$extension" }
+            }
+          }
+          foreach ($f in Get-ChildItem web4-image/framework/x86_64) {
+            if ((Get-FileHash $f.FullName).Hash -cne (Get-FileHash (Join-Path dist/framework/x86_64 $f.Name)).Hash) { throw "Experimental image selection failed: $($f.Name)" }
+            Write-Host "WEB4_EXPERIMENT_IMAGE name=$($f.Name) sha256=$((Get-FileHash $f.FullName).Hash)"
+          }
+      - name: Run explicitly insecure actual-app characterization
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tests/windows/run-web3-query-component.ps1 -Dir "$PWD/dist" -RuntimeExe "$PWD/dist/dalvikvm-web3-query-test.exe" | Tee-Object -FilePath web4-insecure-results.txt
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web4-insecure-logs-${{ matrix.os }}
+          path: web4-insecure-results.txt
           if-no-files-found: warn
