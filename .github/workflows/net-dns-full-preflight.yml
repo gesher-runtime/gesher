@@ -29,7 +29,7 @@ jobs:
           import re
           import subprocess
           import urllib.request
-          
+
           BASE = 'f1550540186b4ae3f17a5e501a886ec1c4d5d613'
           REPO = 'gesher-runtime/gesher'
           CALLER = '.github/workflows/ci.yml'
@@ -52,14 +52,14 @@ jobs:
               "tools/net-dns-component/source.json": "51563a7370546df21b5e89c2b7263e1ac3bc44c2",
               "tools/net-dns/payload.py": "c8694cb487c0bba9965f870603b22e3f8de2883c"
           }
-          
+
           def require(condition, message):
               if not condition:
                   raise RuntimeError(message)
-          
+
           def git(*args):
               return subprocess.check_output(['git', *args])
-          
+
           def inventory(commit):
               rows = git('ls-tree', '-r', '-z', commit).split(b'\0')
               result = {}
@@ -71,11 +71,11 @@ jobs:
                       require(kind == 'blob' and mode in ('100644', '100755'), 'Linked source: ' + name)
                       result[name] = (mode, blob)
               return result
-          
+
           def verify_tree(actual, expected):
               require(actual == expected, 'Unreviewed full source delta: ' + repr(sorted(
                   path for path in actual.keys() | expected.keys() if actual.get(path) != expected.get(path))))
-          
+
           def verify_checkout(expected):
               for name, (mode, blob) in expected.items():
                   path = Path(name)
@@ -83,12 +83,12 @@ jobs:
                   data = path.read_bytes()
                   actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
                   require(actual == blob, 'Dirty checkout: ' + name)
-          
+
           def caller_identity(value):
               require(bool(re.fullmatch('[0-9a-f]{40}', value)), 'Missing/malformed external caller authority')
               require(git('cat-file', '-t', value).strip() == b'commit', 'Caller authority is not a commit')
               return git('show', value + ':' + CALLER)
-          
+
           def reject(label, action):
               try:
                   action()
@@ -96,7 +96,7 @@ jobs:
                   print('DNS_TRUST_NEGATIVE ' + label + '=rejected', flush=True)
               else:
                   raise RuntimeError('Negative control accepted: ' + label)
-          
+
           def main():
               sha = os.environ['GITHUB_SHA']
               run_id = os.environ['GITHUB_RUN_ID']
@@ -179,6 +179,6 @@ jobs:
                   attempt=attempt, reviewed_caller_commit=reviewed, source_paths=len(expected),
                   reviewed_blobs=SOURCE_PINS, historical_guard_blob=expected[GUARD][1],
                   caller_blob=expected[CALLER][1], immutable_guard_commit=guard_commit, all_controls_restored=True), sort_keys=True), flush=True)
-          
+
           main()
           PY
