@@ -7,9 +7,45 @@ on:
       - '.github/workflows/net-udp-fault-observer.yml'
       - 'tests/native2/net_udp_fault_observer.c'
       - 'tests/native2/net_udp_copy_observer.c'
+      - 'tests/native2/net_udp_guarded_copy_probe.cpp'
+      - 'compat/posix/src/socket_user_copy.h'
 permissions:
   contents: read
 jobs:
+  production-compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      LLVM_MINGW_TAG: '20261006'
+      LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: toolchain
+        with:
+          path: ~/toolchain
+          key: ${{ env.LLVM_MINGW_NAME }}
+      - name: Fetch pinned production compiler
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" | tar -xJ -C ~/toolchain
+      - name: Compile actual production sockets and both-ABI entry bridge
+        run: |
+          set -euo pipefail
+          cxx="$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++"
+          "$cxx" --version
+          sha256sum "$cxx" compat/posix/src/socket_user_copy.h
+          flags=(-std=c++20 -mno-ms-bitfields -fno-exceptions -fsized-deallocation -Wall -Wextra -Werror
+            -DGESHER -DUSE_MINGW -DWIN32_LEAN_AND_MEAN -DNOMINMAX -DNOGDI -D_USE_MATH_DEFINES
+            -D__STDC_FORMAT_MACROS -D__STDC_CONSTANT_MACROS -D__STDC_LIMIT_MACROS
+            -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -D_FILE_OFFSET_BITS=64 -D_POSIX_THREAD_SAFE_FUNCTIONS
+            -Icompat/posix/include -Icompat/bionic/include)
+          mkdir -p /tmp/net-udp-objects
+          for source in compat/posix/src/socket.cc compat/posix/src/winsock.cc compat/bionic/socket_bionic.cc; do
+            "$cxx" "${flags[@]}" -c "$source" -o "/tmp/net-udp-objects/$(basename "$source").obj"
+            echo "PASS actual production UDP compile: $source; Werror; exceptions disabled"
+          done
   linux-observer:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -43,4 +79,9 @@ jobs:
           & cl.exe /nologo /W4 /WX tests/native2/net_udp_copy_observer.c /Fe:net_udp_copy_observer.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./net_udp_copy_observer.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash compat/posix/src/socket_user_copy.h -Algorithm SHA256
+          & cl.exe /nologo /std:c++20 /W4 /WX tests/native2/net_udp_guarded_copy_probe.cpp /Fe:net_udp_guarded_copy_probe.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./net_udp_guarded_copy_probe.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

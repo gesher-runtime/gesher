@@ -18,8 +18,15 @@
 
 #include "internal.h"
 #include "socket_internal.h"
+#include "socket_user_copy.h"
 
 namespace gesher::ws {
+bool CopyFromUser(void* destination, const void* source, size_t size) {
+  return usercopy::From(destination, source, size);
+}
+bool CopyToUser(void* destination, const void* source, size_t size) {
+  return usercopy::To(destination, source, size);
+}
 namespace {
 
 std::atomic<uint32_t> g_process_interface{0};
@@ -541,7 +548,6 @@ ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from
     if (count > 1024) return errno = EMSGSIZE, -1;
     for (size_t i = 0; i < count; ++i) {
       if (buffers[i].len > PTRDIFF_MAX) return errno = EINVAL, -1;
-      if (buffers[i].len != 0 && buffers[i].data == nullptr) return errno = EFAULT, -1;
     }
     std::unique_ptr<char, decltype(&std::free)> packet(
         static_cast<char*>(std::malloc(65536)), &std::free);
@@ -558,7 +564,7 @@ ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from
     size_t copied = 0;
     for (size_t i = 0; i < count; ++i) {
       size_t n = buffers[i].len < received - copied ? buffers[i].len : received - copied;
-      if (n != 0) memcpy(buffers[i].data, packet.get() + copied, n);
+      if (!CopyToUser(buffers[i].data, packet.get() + copied, n)) return errno = EFAULT, -1;
       copied += n;
     }
     if (from != nullptr) FromWin(reinterpret_cast<sockaddr*>(&peer), peer_len, from);

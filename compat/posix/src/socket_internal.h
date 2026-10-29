@@ -95,6 +95,8 @@ int DnsServers(uint32_t ifindex, std::vector<Address>* servers, uint32_t* select
 ptrdiff_t Send(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to);
 ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
                int* result_flags = nullptr);
+bool CopyFromUser(void* destination, const void* source, size_t size);
+bool CopyToUser(void* destination, const void* source, size_t size);
 
 int GetOption(Socket s, Option option, int* value);
 int SetOption(Socket s, Option option, int value);
