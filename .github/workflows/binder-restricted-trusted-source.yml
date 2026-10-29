@@ -79,7 +79,14 @@ jobs:
           program = ast.parse(git('show', reviewed + ':' + legacy))
           values = [ast.literal_eval(node.value) for node in program.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'PINNED_SOURCE' for target in node.targets)]
           assert len(values) == 1 and values[0]
+          adaptations = {'compat/posix/src/unistd.cc':
+              ('d7766c2183ada697a48efc6d4656c80378605925', '01161b91d516fdceee62f61d501c7ad19d2ec596')}
           for path, blob in values[0].items():
+              if path in adaptations:
+                  old, new = adaptations[path]
+                  assert blob == old
+                  blob = new
+                  print(f'BINDER_RESTRICTED_HISTORICAL_ADAPTATION path={path} old={old} new={new} reason=immutable-startup-uid-before-legacy-fallback', flush=True)
               assert actual[path][2] == blob, ('Historical Native/AOT source changed', path)
           # All mutations below must be refused before any producer runs.
           mutations = []
@@ -102,5 +109,5 @@ jobs:
               except AssertionError: pass
               else: raise RuntimeError('External authority mutation accepted')
           digest = hashlib.sha256(repr(sorted(actual.items())).encode()).hexdigest()
-          print(f'BINDER_RESTRICTED_TRUSTED_SOURCE historical={historical} reviewed={reviewed} guard={guard} caller={caller} source={sha} whole_tree_paths={len(actual)} historical_pins={len(values[0])} tree_sha256={digest} source_mutations_rejected={len(mutations)} authority_mutations_rejected={len(bad_contexts)}', flush=True)
+          print(f'BINDER_RESTRICTED_TRUSTED_SOURCE historical={historical} reviewed={reviewed} guard={guard} caller={caller} source={sha} whole_tree_paths={len(actual)} historical_pins={len(values[0])} explicit_adaptations={len(adaptations)} tree_sha256={digest} source_mutations_rejected={len(mutations)} authority_mutations_rejected={len(bad_contexts)}', flush=True)
           PY

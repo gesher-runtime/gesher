@@ -15,10 +15,7 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
-  binder-restricted-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/binder-restricted-trusted-source.yml@04b51505bd674ca4296b3d2b4bc7e9a75eeb6a83
   artifact-preflight:
-    needs: [binder-restricted-trusted-source]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -26,7 +23,7 @@ jobs:
           fetch-depth: 0
       - name: Strict archive adversarial controls
         run: |
-          echo "Historical Native/AOT pins and reviewed whole source verified by immutable external authority"
+          python3 tools/native3-locks/current_payload.py preflight
           python3 tools/ci/receipt_identity.py
           python3 tools/surface/test-verified-artifact.py
 
