@@ -16,7 +16,7 @@ env:
 
 jobs:
   binder-restricted-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/binder-policy-diagnostic-v2-trusted-source.yml@d6db78efe69e2a697291d58d7224aae1164e1736
+    uses: gesher-runtime/gesher/.github/workflows/binder-policy-gather-trusted-source.yml@8f55106b4daa0ea9aa3808cd20700c2873009996
   artifact-preflight:
     needs: [binder-restricted-trusted-source]
     runs-on: ubuntu-24.04
