@@ -9,7 +9,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / 'routing-probe-fixture'
-CASES = {'delay-probe.exe': ('host_pthread_delay_probe_test.c', 'libwinpthread.a'),
+CASES = {'sync-families.exe': ('host_pthread_sync_families_probe.c', 'libwinpthread.a'),
+         'delay-probe.exe': ('host_pthread_delay_probe_test.c', 'libwinpthread.a'),
          'foreign-dll-callback.exe': ('host_pthread_foreign_dll_callback_test.c', 'libwinpthread.a'),
          'key-lock-gate.exe': ('host_pthread_key_lock_gate_test.c', 'libwinpthread.a'),
          'foreign-native-exit.exe': ('host_pthread_foreign_native_exit_test.c', 'libwinpthread.a'),
