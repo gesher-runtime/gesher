@@ -24,15 +24,23 @@ try {
   $exe = Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
   $probe = Join-Path $root 'tests/windows/helpers/geocoder-provider-probe.ps1'
   $operation = Join-Path $root 'tests/windows/tracks/geocoder-operation.ps1'
+  $wrapper = Join-Path $work 'provider-wrapper.ps1'
+  @'
+param([string] $Probe, [string] $Helper)
+[Console]::Out.WriteLine('GEOCODER_CHILD_CWD pid=' + $PID + ' native=' + [Environment]::CurrentDirectory + ' shell=' + (Get-Location).Path)
+[Console]::Out.Flush()
+& $Probe $Helper
+'@ | Set-Content -LiteralPath $wrapper -Encoding utf8
   $info = [Diagnostics.ProcessStartInfo]::new($exe)
-  foreach ($arg in @('-NoProfile','-ExecutionPolicy','Bypass','-File',$probe,$operation)) { $info.ArgumentList.Add($arg) }
+  foreach ($arg in @('-NoProfile','-ExecutionPolicy','Bypass','-File',$wrapper,$probe,$operation)) { $info.ArgumentList.Add($arg) }
   $info.UseShellExecute = $false
   $info.RedirectStandardOutput = $true
   $info.RedirectStandardError = $true
-  if ($Mode -eq 'isolated') { $info.WorkingDirectory = $work }
+  $info.WorkingDirectory = if ($Mode -eq 'isolated') { $work } else { $root }
   $process = [Diagnostics.Process]::Start($info)
   if ($null -eq $process) { throw 'Provider process not created' }
   $pidValue = $process.Id
+  $birth = $process.StartTime.ToUniversalTime().ToString('o')
   $stdout = $process.StandardOutput.ReadToEndAsync(); $stderr = $process.StandardError.ReadToEndAsync()
   try {
     if (-not $process.WaitForExit(45000)) {
@@ -42,9 +50,9 @@ try {
     }
     if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout,$stderr),5000)) { throw 'Provider output drain failed' }
     $text = $stdout.Result + $stderr.Result
-    Write-Host "GEOCODER_PROVIDER mode=$Mode current_run=$actualRun source=$source pid=$pidValue exit=$($process.ExitCode) cwd=$(if ($Mode -eq 'isolated') { $work } else { $root })"
+    Write-Host "GEOCODER_PROVIDER mode=$Mode current_run=$actualRun source=$source pid=$pidValue birth=$birth exit=$($process.ExitCode) requested_cwd=$($info.WorkingDirectory) probe_sha256=$((Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash) exe_sha256=$((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)"
     Write-Host $text
-    if ($process.ExitCode -ne 0 -or $text -notmatch 'status: ([A-Za-z]+)' -or $text -notmatch 'WINRT_PROVIDER task_status=RanToCompletion') { throw 'Original provider result missing' }
+    if ($process.ExitCode -ne 0 -or $text -notmatch ('GEOCODER_CHILD_CWD pid=' + $pidValue + ' native=') -or $text -notmatch 'status: ([A-Za-z]+)' -or $text -notmatch 'WINRT_PROVIDER task_status=RanToCompletion') { throw 'Original provider result missing' }
   } finally { $process.Dispose() }
   Observe 'after-provider'
 } finally {
