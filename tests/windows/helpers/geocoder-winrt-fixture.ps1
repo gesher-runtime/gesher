@@ -20,7 +20,11 @@ foreach ($case in @('success', 'error', 'timeout', 'late')) {
     $adapter.Wait = { param($ms) if ($deadline.First) { $deadline.First = $false; return $false }; & $originalWait $ms }
     $originalCancel = $adapter.Cancel
     $adapter.Cancel = {
-      if ($case -eq 'late') { $supplier.Complete($false) }
+      if ($case -eq 'late') {
+        $supplier.Complete($false)
+        if (-not (& $originalWait 5000) -or $adapter.Task.Status -ne 'RanToCompletion') { throw 'Late bridge completion barrier failed' }
+        Write-Host 'WINRT_ORDER case=late bridge_completed_before_cancel=True'
+      }
       & $originalCancel
     }
   }
@@ -34,7 +38,7 @@ foreach ($case in @('success', 'error', 'timeout', 'late')) {
     if ($case -eq 'error' -and ($adapter.Task.Status -ne 'Faulted' -or $failure -notmatch 'controlled WinRT error')) { throw "WinRT error: $failure" }
     if ($case -in @('timeout', 'late') -and $failure -notmatch 'did not complete') { throw "WinRT deadline changed: $failure" }
     if ($case -eq 'timeout' -and ($supplier.CancelObserved -ne 1 -or $adapter.Task.Status -ne 'Canceled')) { throw 'AsTask token did not cancel underlying AsyncInfo supplier' }
-    if ($case -eq 'late' -and $adapter.Task.Status -ne 'RanToCompletion') { throw 'Late completion lost' }
+    if ($case -eq 'late' -and ($adapter.Task.Status -ne 'RanToCompletion' -or $supplier.CancelObserved -ne 0 -or $supplier.CompletionCalls -ne 1)) { throw 'Late completion lost' }
   }
   if (-not (& $originalWait 5000)) { throw 'WinRT bridge did not reach terminal state' }
   & $adapter.Close; & $adapter.Close

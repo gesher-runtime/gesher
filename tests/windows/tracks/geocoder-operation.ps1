@@ -31,7 +31,7 @@ function Invoke-GeocoderOperation($Adapter, [int] $WaitMs, [int] $GraceMs) {
   }
 }
 
-# Windows PowerShell hides IAsyncInfo members on the projected operation. Use the
+# The observed Windows PowerShell operation.Status was empty. Use the
 # documented AsTask cancellation overload: its token reaches IAsyncInfo.Cancel.
 # TaskStatus and MapLocationFinderResult.Status are separate contracts.
 function New-WinRTGeocoderAdapter($Operation, [Type] $ResultType) {
@@ -70,6 +70,7 @@ function New-WinRTGeocoderAdapter($Operation, [Type] $ResultType) {
 function Import-GeocoderProbeType([string] $Source) {
   $compiler = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
   if (-not (Test-Path -LiteralPath $compiler)) { throw 'Expected .NET Framework C# compiler' }
+  Add-Type -AssemblyName Microsoft.CSharp
   $provider = [Microsoft.CSharp.CSharpCodeProvider]::new()
   try {
     Write-Host "WINRT_COMPILER source_sha=$env:GITHUB_SHA source=$Source source_sha256=$((Get-FileHash $Source -Algorithm SHA256).Hash) compiler=$compiler compiler_sha256=$((Get-FileHash $compiler -Algorithm SHA256).Hash) compiler_version=$((Get-Item $compiler).VersionInfo.FileVersion) provider=$($provider.GetType().Assembly.FullName) ps=$($PSVersionTable.PSVersion) clr=$([Environment]::Version)"
