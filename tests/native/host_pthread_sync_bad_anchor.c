@@ -14,9 +14,9 @@ int main(void) {
   if (!table || (const void *)table!=gesher_sync_probe_v1() || table[1]!=1) return 2;
   DWORD previous; if (!VirtualProtect((void *)table,2*sizeof(unsigned),PAGE_READWRITE,&previous)) return 4;
   ((unsigned *)(uintptr_t)table)[1]=0;
+  puts("CONTROL malformed synchronization descriptor before DLL admission"); fflush(stdout);
   HMODULE dll=LoadLibraryW(L"libwinpthread-1.dll"); if (!dll) return 5;
   lock_fn lock=(lock_fn)GetProcAddress(dll,"pthread_mutex_lock"); if (!lock) return 6;
-  puts("CONTROL malformed synchronization descriptor before mutex use"); fflush(stdout);
   pthread_mutex_t mutex=PTHREAD_MUTEX_INITIALIZER; (void)lock(&mutex);
   puts("FAIL malformed synchronization descriptor accepted"); return 7;
 }
