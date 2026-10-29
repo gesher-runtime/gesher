@@ -60,10 +60,14 @@ for build, target, name, trace in (
     links = [row for row in commands if re.search(r'(?:^|\s)-o\s+' + re.escape(name) + r'(?:\s|$)', row)]
     assert len(links) == 1, (name, 'exact configured link command')
     argv = shlex.split(links[0])
-    assert compilers[build]['configured'] in argv and '-static' in argv and '-Wl,--trace' in argv
+    assert compilers[build]['configured'] in argv and '-static' in argv and '-Wl,--verbose' in argv
     text = Path(trace).read_text()
     inputs = {}
-    for archive in re.findall(r'(\S*(?:libpthread|libwinpthread)\.a)\([^\r\n)]*\)', text):
+    # COFF verbose mode logs the actual opened archive's full path, then
+    # separately identifies loaded members by basename and required symbol.
+    archives = re.findall(r'^.*?\bReading (\S*(?:libpthread|libwinpthread)\.a)\s*$', text, re.M)
+    loaded = re.findall(r'^.*?\bLoaded ((?:libpthread|libwinpthread)\.a\([^\r\n)]+\)) for (\S+)\s*$', text, re.M)
+    for archive in archives:
         path = Path(archive)
         if not path.is_absolute():
             path = Path(build) / path
@@ -73,8 +77,11 @@ for build, target, name, trace in (
         assert sha(path) == supplier['libraries_after'][relative]
         inputs[relative] = sha(path)
     assert inputs or name == 'gesher_arm64.dll', (name, 'native static supplier never entered link')
+    assert loaded or name == 'gesher_arm64.dll', (name, 'no static supplier member loaded')
+    assert all(member.split('(', 1)[0] in {Path(p).name for p in inputs} for member, _ in loaded)
     native_links[name] = dict(command=links[0], trace_sha256=sha(trace),
-                              supplier_role='static' if inputs else 'not-linked', inputs=inputs)
+                              supplier_role='static' if inputs else 'not-linked', inputs=inputs,
+                              loaded_members=[dict(member=member, symbol=symbol) for member, symbol in loaded])
 supplier['native_links'] = native_links
 print('TCP_PRIORITY_SUPPLIER_LINKS', json.dumps(native_links), flush=True)
 assert '-DGESHER' in shlex.split(compilers['out']['commands']['tests/net-tcp-priority/contract.cc'])

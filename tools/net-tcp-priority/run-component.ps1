@@ -113,15 +113,20 @@ foreach ($build in 'out','out-arm64') {
 if (@(Compare-Object $native @($s.native_links.PSObject.Properties.Name) -CaseSensitive).Count -ne 0) { throw 'Incomplete supplier native link roles' }
 foreach ($name in $native) {
   $link = $s.native_links.$name
-  if ($link.trace_sha256 -cnotmatch '^[0-9a-f]{64}$' -or -not $link.command.Contains('-Wl,--trace') -or -not $link.command.Contains('-static') -or
+  if ($link.trace_sha256 -cnotmatch '^[0-9a-f]{64}$' -or -not $link.command.Contains('-Wl,--verbose') -or -not $link.command.Contains('-static') -or
       -not $link.command.Contains($s.private_compiler + '/bin/x86_64-w64-mingw32-clang++')) { throw 'Missing actual private-supplier native link command/trace' }
   $inputs = @($link.inputs.PSObject.Properties)
   if ($link.supplier_role -ceq 'not-linked') {
     if ($name -cne 'gesher_arm64.dll' -or $inputs.Count -ne 0) { throw 'Invalid no-supplier native role' }
   } elseif ($link.supplier_role -ceq 'static' -and $inputs.Count -gt 0) {
+    if ($name -cne 'gesher_arm64.dll' -and @($link.loaded_members).Count -eq 0) { throw 'Static supplier loaded-member proof missing' }
     foreach ($supplierInput in $inputs) {
       if ($supplierInput.Name -cnotin @('lib/libpthread.a','lib/libwinpthread.a') -or $supplierInput.Value -cnotmatch '^[0-9a-f]{64}$' -or
           $supplierInput.Value -cne $s.libraries_after.($supplierInput.Name)) { throw 'Wrong static supplier link input' }
+    }
+    foreach ($member in $link.loaded_members) {
+      if ($member.member -cnotmatch '^(lib(?:win)?pthread\.a)\([a-zA-Z0-9_.-]+\)$' -or -not $member.symbol -or
+          ('lib/' + $Matches[1]) -cnotin @($inputs.Name)) { throw 'Static supplier member/archive binding mismatch' }
     }
   } else { throw 'Unproved native supplier link role' }
 }

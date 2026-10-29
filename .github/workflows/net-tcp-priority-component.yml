@@ -105,13 +105,13 @@ jobs:
           cmake --fresh -S . -B out -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" -DLLVM_MINGW="$llvm" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_EXE_LINKER_FLAGS=-Wl,--trace -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+            -DCMAKE_EXE_LINKER_FLAGS=-Wl,--verbose -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           ninja -C out gesher-exec 2>&1 | tee tcp-link-host-loader.log
           ninja -C out net_tcp_priority_probe 2>&1 | tee tcp-link-host-probe.log
           cmake -S compat/arm64/dll -B out-arm64 -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" \
             -DLLVM_MINGW="$llvm" -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--trace \
+            -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--verbose \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DDYNARMIC_DIR="$PWD/deps/dynarmic" -DBoost_INCLUDE_DIR="$PWD/deps/boost"
           ninja -C out-arm64 gesher_arm64 2>&1 | tee tcp-link-translator.log

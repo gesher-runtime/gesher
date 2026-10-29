@@ -839,3 +839,20 @@ exact census remains unchanged. This experiment does not qualify the unused
 supplier DLL, generic external exit, whole compiler/provider adoption, MinGW
 DLL lifetime/unload or unexecuted guest/full canonical routes. Independent
 source review and changed-source actual CI remain gates before any acceptance.
+
+070de91e/409658 stopped at CMake's compiler try-link, before any product or
+Windows execution: pinned MinGW LLD rejects GNU --trace. The private supplier
+preparation step completed, but its single full-receipt JSON stdout line was
+not present in the plain log, so no detailed actual library/header inventory
+is claimed from step status alone. Linux full reference passed. Raw log:
+C:/work/gesher-ci-review/tcp-409658-compile.log.
+
+The correction uses MinGW LLD's supported --verbose route (forwarded to COFF
+verbose in LLVM's primary driver source). Receipt parsing requires actual
+Reading full archive paths plus Loaded basename(member)/required-symbol rows,
+with resolved paths inside the private prefix and matching rebuilt hashes;
+loader/probe must load real members, translator retains its explicit scope.
+Supplier success stdout is split into bounded summary/source/library/header/
+command/log rows while the FULL original receipt remains in the manifest.
+No runtime/source retirement/assertion/deadline or typed role gate is weakened.
+Actual option/format and all native runtime results remain fresh CI conditions.

@@ -144,7 +144,27 @@ def main():
     destination = ROOT / 'tcp-supplier-receipt.json'
     assert not destination.exists()
     destination.write_text(json.dumps(receipt, sort_keys=True, indent=2))
-    print('TCP_PRIORITY_SUPPLIER_BUILD', json.dumps(receipt), flush=True)
+    # Avoid a single oversized stdout line: Actions can omit it entirely from
+    # plain job logs. Keep the FULL receipt for the existing strict manifest.
+    summary = {k: receipt[k] for k in ('context', 'role', 'upstream', 'patch_sha256', 'compiler_archive',
+               'private_compiler', 'producer_job', 'compiler_driver_sha256', 'cxx_driver_sha256',
+               'compiler_real_sha256', 'underlying_clang_sha256', 'compiler_version', 'notice_sha256')}
+    summary.update(receipt_sha256=sha(destination), source_count=len(original_sources),
+                   source_before_sha256=hashlib.sha256(json.dumps(original_sources, sort_keys=True).encode()).hexdigest(),
+                   source_after_sha256=hashlib.sha256(json.dumps(changed_sources, sort_keys=True).encode()).hexdigest(),
+                   public_headers_unchanged=True, symbols_unchanged=True, dll_exports_unchanged=True)
+    print('TCP_PRIORITY_SUPPLIER_BUILD', json.dumps(summary), flush=True)
+    for path in INPUTS:
+        key = 'mingw-w64-libraries/winpthreads/' + path
+        print('TCP_PRIORITY_SUPPLIER_SOURCE', json.dumps(dict(path=key, before=original_sources[key], after=changed_sources[key])), flush=True)
+    for path in libraries:
+        print('TCP_PRIORITY_SUPPLIER_LIBRARY', json.dumps(dict(path=path, before=before[path], after=after[path])), flush=True)
+    for path in header_names:
+        print('TCP_PRIORITY_SUPPLIER_HEADER', json.dumps(dict(path=path, sha256=headers_after[path])), flush=True)
+    for row in commands:
+        print('TCP_PRIORITY_SUPPLIER_COMMAND', json.dumps(row), flush=True)
+    for name, digest in receipt['logs'].items():
+        print('TCP_PRIORITY_SUPPLIER_LOG', name, digest, flush=True)
 
 
 if __name__ == '__main__':
