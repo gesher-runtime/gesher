@@ -102,6 +102,17 @@ CheckTimed 'services: actual VM entrypoint and delegated fresh child' "$Dir/dalv
   (NoDrive $entrypointLog), 'gesher.services.VmEntrypointFixture') @(
   'ENTRYPOINT_WRAPPER actual_child=1 exit=0 consumed=1') 120
 
+# The real SystemServer main runs on the admitted writer's main thread. Its
+# detached processes and private bootstrap are the production implementations.
+$writerFixtureLogs = Join-Path $root 'writer-system-server-fixture'
+New-Item -ItemType Directory -Force $writerFixtureLogs | Out-Null
+CheckTimed 'services: delegated real SystemServer uses private writer bootstrap' "$Dir/dalvikvm.exe" @(
+  "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+  '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"),
+  'gesher.services.WriterSystemServerFixture', "writer-fixture-$PID", (NoDrive $writerFixtureLogs),
+  (NoDrive "$Dir/lifecycle.apk"), (NoDrive "$Dir/components.apk")) @(
+  'WRITER_SYSTEM_SERVER real_main=1 ready=1 owned_cleanup=1') 240
+
 # The driver's ABI across processes: binderd, a context manager and a client
 # with nested calls, objects passed both ways, and a death notification.
 CheckTimed 'binder: /dev/binder across processes (binderd, raw ioctls)' "$Dir/binder_probe.exe" @() @(
