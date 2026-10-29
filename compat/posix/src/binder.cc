@@ -129,7 +129,7 @@ std::wstring PipeName() {
 
 HANDLE ConnectPipe(const std::wstring& name) {
   for (int attempt = 0; attempt < 50; ++attempt) {
-    HANDLE h = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+    HANDLE h = CreateFileW(name.c_str(), FILE_GENERIC_READ | (FILE_GENERIC_WRITE & ~FILE_APPEND_DATA), 0, nullptr, OPEN_EXISTING,
                            0, nullptr);
     if (h != INVALID_HANDLE_VALUE) return h;
     if (GetLastError() != ERROR_PIPE_BUSY) return INVALID_HANDLE_VALUE;

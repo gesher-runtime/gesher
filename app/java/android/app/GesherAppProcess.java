@@ -117,6 +117,13 @@ public final class GesherAppProcess {
             }
             log("app process for " + packageName + ": pid " + android.os.Process.myPid()
                     + ", start seq " + startSeq);
+            if ("1".equals(System.getenv("GESHER_INSTALLED_RESTRICTED"))) {
+                if (!packageName.equals("com.gesher.lifecycle")
+                        || !com.gesher.server.Zygote.verifyRestrictedGuest()) {
+                    throw new SecurityException("installed restricted guest proof failed");
+                }
+                log("installed restricted guest: actual token zero-capabilities, data read/write, code/config write and host endpoint denied");
+            }
             String trace = System.getenv("GESHER_APP_METHOD_TRACE");
             if (trace != null && !trace.isEmpty()) {
                 // Debugging: ART's method trace of the whole process, streamed (it survives an

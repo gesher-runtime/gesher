@@ -13,15 +13,19 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <cstdio>
 #include <map>
 #include <mutex>
 #include <string>
 #include <vector>
+#include <memory>
 
 #include "services_zygote.h"
 #include "../posix/src/binder_wire.h"
 #include "../posix/src/launch_context.h"
 #include "../binder/launch_control.h"
+#include "restricted_launch.h"
+#include "installed_guest.h"
 
 namespace gesher {
 namespace zygote {
@@ -81,8 +85,12 @@ struct Child {
   int64_t birth;
   std::u16string package;
   std::u16string install;
+  std::shared_ptr<guest::InstalledPolicy> policy;
+  std::unique_ptr<guest::RestrictedLaunch> restricted;
 };
 std::map<int, Child> g_children;  // exact retained instances, never reopened for owned queries
+std::map<std::u16string, std::shared_ptr<guest::InstalledPolicy>> g_installed;
+std::vector<Child> g_restricted_failed;
 HANDLE g_job = nullptr;
 std::vector<HANDLE> g_quarantined;  // failed rollback: retain until death, never authorize
 
@@ -153,12 +161,21 @@ HANDLE Job() {
 static int SpawnOwned(const std::u16string& command_line, const std::vector<std::u16string>& set,
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
           bool breakaway, int uid, const std::u16string& package,
-          const std::u16string& install, const launch::Context* bootstrap = nullptr) {
+          const std::u16string& install, const launch::Context* bootstrap = nullptr,
+          bool installed_guest = false) {
   std::lock_guard<std::recursive_mutex> spawning(g_spawn_lock);
   InitControl();
   if (uid < -1 || uid > 19999) return -ERROR_INVALID_PARAMETER;
   if (!package.empty() && (!g_control || (g_writer && package[0] == u'@')))
     return -ERROR_ACCESS_DENIED;
+  std::shared_ptr<guest::InstalledPolicy> policy;
+  if (installed_guest && package == guest::kSelectedPackage) {
+    auto found = g_installed.find(package);
+    if (!g_writer || bootstrap || breakaway || found == g_installed.end() ||
+        found->second->uid != uid || found->second->install != install)
+      return -ERROR_ACCESS_DENIED;
+    policy = found->second;
+  }
   SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, TRUE};
   // Appending only: stdout and stderr share the handle, and every write goes
   // to the end, also with another process appending to the same log.
@@ -202,20 +219,53 @@ static int SpawnOwned(const std::u16string& command_line, const std::vector<std:
       si.StartupInfo.lpReserved2 = reinterpret_cast<BYTE*>(&context);
     }
     si.lpAttributeList = attributes;
-    std::u16string env = EnvironmentBlock(set, unset);
+    auto child_set = set;
+    if (policy) {
+      wchar_t device[256]{};
+      DWORD count = GetEnvironmentVariableW(L"GESHER_BINDER", device, 256);
+      control::Request identity;
+      if (!count || count >= 256 || !control::Generation(install, identity.generation)) {
+        DeleteProcThreadAttributeList(attributes); CloseHandle(nul); CloseHandle(log);
+        return -ERROR_INVALID_DATA;
+      }
+      auto guest_device = control::GuestDevice(device, identity.generation);
+      child_set.push_back(u"GESHER_BINDER=" + U(guest_device.c_str(), guest_device.size()));
+      child_set.push_back(u"GESHER_INSTALLED_RESTRICTED=1");
+    }
+    std::u16string env = EnvironmentBlock(child_set, unset);
     std::u16string cmd = command_line;  // CreateProcessW may write to it
     DWORD flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT |
                   EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED;
     PROCESS_INFORMATION pi = {};
+    std::unique_ptr<guest::RestrictedLaunch> restricted;
     BOOL ok = FALSE;
-    if (breakaway) {
+    if (policy) {
+      restricted = std::make_unique<guest::RestrictedLaunch>();
+      auto launched = restricted->Start(W(policy->executable),
+          reinterpret_cast<wchar_t*>(cmd.data()), const_cast<char16_t*>(env.data()),
+          nullptr, si.StartupInfo,
+          CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT,
+          policy->sid, handles);
+      if (launched.error == ERROR_SUCCESS) {
+        pi.hProcess = restricted->process(); pi.dwProcessId = restricted->pid();
+        ok = TRUE;
+      } else {
+        result = -static_cast<int>(launched.error);
+        if (!launched.cleanup.confirmed) {
+          std::lock_guard<std::mutex> guard(g_lock);
+          g_restricted_failed.push_back(Child{restricted->process(),
+              static_cast<int64_t>(control::Birth(restricted->process())), package, install,
+              policy, std::move(restricted)});
+        }
+      }
+    } else if (breakaway) {
       ok = CreateProcessW(nullptr, reinterpret_cast<wchar_t*>(cmd.data()), nullptr, nullptr,
                           TRUE, flags | CREATE_BREAKAWAY_FROM_JOB,
                           const_cast<char16_t*>(env.data()), nullptr, &si.StartupInfo, &pi);
       cmd = command_line;
     }
     // A job that allows no breakaway: the process stays in it.
-    if (!ok) {
+    if (!ok && !policy) {
       ok = CreateProcessW(nullptr, reinterpret_cast<wchar_t*>(cmd.data()), nullptr, nullptr,
                           TRUE, flags, const_cast<char16_t*>(env.data()), nullptr,
                           &si.StartupInfo, &pi);
@@ -229,10 +279,19 @@ static int SpawnOwned(const std::u16string& command_line, const std::vector<std:
         int64_t birth = (static_cast<int64_t>(created.dwHighDateTime) << 32) |
                         created.dwLowDateTime;
         int pid = static_cast<int>(pi.dwProcessId);
+        if (policy) {
+          LPWSTR sid = nullptr;
+          if (ConvertSidToStringSidW(policy->sid, &sid)) {
+            std::fprintf(stderr, "INSTALLED_GUEST suspended pid=%lu birth=%llu uid=%d sid=%ls capabilities=0 ownedjob=1\n",
+                pi.dwProcessId, static_cast<unsigned long long>(birth), uid, sid);
+            LocalFree(sid);
+          }
+        }
         bool authorized = true;
         if (!package.empty()) {
           control::Request request;
           request.op = control::kPublish;
+          request.restricted = policy ? 1 : 0;
           authorized = Identity(&request, uid, package, install) && Request(request, pi.hProcess);
           if (authorized && bootstrap && bootstrap->kind == 2) {
             control::Request handoff;
@@ -243,15 +302,21 @@ static int SpawnOwned(const std::u16string& command_line, const std::vector<std:
         std::lock_guard<std::mutex> guard(g_lock);
         // Retain the actual CreateProcess instance before any child instruction.
         // Package/system publication already succeeded on the private channel.
-        auto inserted = g_children.emplace(pid, Child{pi.hProcess, birth, package, install});
+        auto inserted = g_children.emplace(pid, Child{pi.hProcess, birth, package, install, policy, nullptr});
         if (!authorized || !birth || !inserted.second) {
           if (inserted.second) g_children.erase(inserted.first);
           result = -static_cast<int>(ERROR_INVALID_DATA);
-        } else if (ResumeThread(pi.hThread) == static_cast<DWORD>(-1)) {
-          result = -static_cast<int>(GetLastError());
-          g_children.erase(inserted.first);
         } else {
-          result = pid;
+          DWORD resume_error = ERROR_SUCCESS;
+          if (restricted) resume_error = restricted->Resume().error;
+          else if (ResumeThread(pi.hThread) == static_cast<DWORD>(-1)) resume_error = GetLastError();
+          if (resume_error != ERROR_SUCCESS) {
+            result = -static_cast<int>(resume_error);
+            g_children.erase(inserted.first);
+          } else {
+            inserted.first->second.restricted = std::move(restricted);
+            result = pid;
+          }
         }
       }
       if (result <= 0) {
@@ -260,18 +325,28 @@ static int SpawnOwned(const std::u16string& command_line, const std::vector<std:
           cancel.op = control::kCancel;
           Request(cancel, pi.hProcess);
         }
-        TerminateProcess(pi.hProcess, 137);
-        if (WaitForSingleObject(pi.hProcess, 5000) == WAIT_OBJECT_0) {
-          CloseHandle(pi.hProcess);
+        if (restricted) {
+          auto retired = restricted->Stop();
+          if (!retired.confirmed) {
+            OutputDebugStringW(L"Gesher installed guest rollback unconfirmed\n");
+            std::lock_guard<std::mutex> guard(g_lock);
+            g_restricted_failed.push_back(Child{pi.hProcess, static_cast<int64_t>(control::Birth(pi.hProcess)),
+                package, install, policy, std::move(restricted)});
+          }
         } else {
+          TerminateProcess(pi.hProcess, 137);
+          if (WaitForSingleObject(pi.hProcess, 5000) == WAIT_OBJECT_0) {
+          CloseHandle(pi.hProcess);
+          } else {
           // No success publication. Keep the owned instance if termination is
           // unconfirmed; never turn a failed launch into an untracked child.
           std::lock_guard<std::mutex> guard(g_lock);
           g_quarantined.push_back(pi.hProcess);
+          }
         }
       }
-      CloseHandle(pi.hThread);
-    } else {
+      if (pi.hThread) CloseHandle(pi.hThread);
+    } else if (!policy) {
       result = -static_cast<int>(GetLastError());
     }
     DeleteProcThreadAttributeList(attributes);
@@ -285,9 +360,77 @@ static int SpawnOwned(const std::u16string& command_line, const std::vector<std:
 
 int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
-          bool breakaway, int uid, const std::u16string& package, const std::u16string& install) {
+          bool breakaway, int uid, const std::u16string& package, const std::u16string& install,
+          bool installed_guest) {
   // Public generic spawn never receives private channel/broker handles.
-  return SpawnOwned(command_line, set, unset, log_path, breakaway, uid, package, install);
+  return SpawnOwned(command_line, set, unset, log_path, breakaway, uid, package, install, nullptr, installed_guest);
+}
+
+bool ProvisionInstalled(const std::u16string& package, const std::u16string& install,
+    int uid, const std::vector<std::u16string>& read, const std::u16string& data) {
+  std::lock_guard<std::recursive_mutex> spawning(g_spawn_lock);
+  InitControl();
+  if (!g_writer || !g_control || !g_broker) return false;
+  if (package != guest::kSelectedPackage) return true;
+  auto found = g_installed.find(package);
+  if (found != g_installed.end()) return found->second->install == install && found->second->uid == uid;
+  auto policy = guest::InstalledPolicy::Create(package, install, uid, ExePath(), read, data);
+  if (!policy) return false;
+  g_installed.emplace(package, std::move(policy));
+  return true;
+}
+
+bool VerifyRestrictedGuest() {
+  const auto& startup = launch::kStartup;
+  if (!startup.present || startup.kind || startup.control || startup.broker ||
+      startup.uid < 10000 || startup.uid > 19999) return false;
+  HANDLE token = nullptr;
+  DWORD count = 0, isolated = 0;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+  bool ok = GetTokenInformation(token, TokenIsAppContainer, &isolated, sizeof(isolated), &count) && isolated == 1;
+  GetTokenInformation(token, TokenCapabilities, nullptr, 0, &count);
+  std::vector<BYTE> capabilities(count);
+  ok = ok && count && GetTokenInformation(token, TokenCapabilities, capabilities.data(), count, &count) &&
+      reinterpret_cast<TOKEN_GROUPS*>(capabilities.data())->GroupCount == 0;
+  CloseHandle(token);
+  auto denied = [](const std::wstring& path, DWORD access) {
+    HANDLE file = CreateFileW(path.c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, 0, nullptr);
+    DWORD error = GetLastError();
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    return file == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED;
+  };
+  ok = denied(W(ExePath()), GENERIC_WRITE) && ok;
+  wchar_t data[32768]{};
+  DWORD length = GetEnvironmentVariableW(L"ANDROID_DATA", data, 32768);
+  if (!length || length >= 32768) return false;
+  std::u16string raw = U(data, length);
+  if (!raw.empty() && (raw[0] == u'/' || raw[0] == u'\\')) {
+    auto exe = ExePath(); raw = exe.substr(0, 2) + raw;
+  }
+  std::wstring root(W(raw));
+  ok = denied(root + L"\\system\\packages.list", GENERIC_READ) && ok;
+  ok = denied(root + L"\\system\\packages.list", GENERIC_WRITE) && ok;
+  std::wstring probe = root + L"\\data\\com.gesher.lifecycle\\.restricted-proof-" + std::to_wstring(GetCurrentProcessId());
+  HANDLE file = CreateFileW(probe.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE,
+      0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return false;
+  const char expected[] = "installed-data";
+  char observed[sizeof(expected)]{}; DWORD written = 0, read = 0;
+  ok = WriteFile(file, expected, sizeof(expected), &written, nullptr) && written == sizeof(expected) && ok;
+  ok = SetFilePointer(file, 0, nullptr, FILE_BEGIN) != INVALID_SET_FILE_POINTER && ok;
+  ok = ReadFile(file, observed, sizeof(observed), &read, nullptr) && read == sizeof(expected) &&
+      std::memcmp(expected, observed, sizeof(expected)) == 0 && ok;
+  ok = (CloseHandle(file) != FALSE) && ok;
+  wchar_t device[512]{};
+  length = GetEnvironmentVariableW(L"GESHER_BINDER", device, 512);
+  if (!length || length >= 512) return false;
+  std::wstring guest_device(device);
+  auto suffix = guest_device.rfind(L"-guest-");
+  if (suffix == std::wstring::npos) return false;
+  ok = denied(std::wstring(binder_wire::kPipePrefix) + guest_device.substr(0, suffix),
+      FILE_GENERIC_READ | (FILE_GENERIC_WRITE & ~FILE_APPEND_DATA)) && ok;
+  return ok;
 }
 
 bool IsAuthority() {
@@ -366,11 +509,33 @@ bool RevokeInstall(const std::u16string& package, const std::u16string& install)
   } else return false;
   std::lock_guard<std::mutex> guard(g_lock);
   bool ok = true;
+  for (auto it = g_restricted_failed.begin(); it != g_restricted_failed.end();) {
+    if (it->package == package && it->install == install) {
+      if (!it->restricted->Stop().confirmed) { ok = false; ++it; }
+      else it = g_restricted_failed.erase(it);
+    } else ++it;
+  }
   for (const auto& entry : g_children) {
     const auto& child = entry.second;
     if (child.package == package && child.install == install &&
         WaitForSingleObject(child.process, 0) == WAIT_TIMEOUT) {
-      ok = (TerminateProcess(child.process, 137) != FALSE) && ok;
+      ok = (child.restricted ? child.restricted->Stop().confirmed :
+            TerminateProcess(child.process, 137) != FALSE) && ok;
+    }
+  }
+  if (ok && package == guest::kSelectedPackage) {
+    for (auto it = g_children.begin(); it != g_children.end();) {
+      if (it->second.package == package && it->second.install == install) {
+        if (WaitForSingleObject(it->second.process, 0) != WAIT_OBJECT_0) { ok = false; break; }
+        it = g_children.erase(it);
+      } else ++it;
+    }
+    if (ok) {
+      auto policy = g_installed.find(package);
+      if (policy != g_installed.end() && policy->second->install == install) {
+        if (!policy->second->Retire()) ok = false;
+        else g_installed.erase(policy);
+      }
     }
   }
   for (auto it = g_quarantined.begin(); it != g_quarantined.end();) {
@@ -415,7 +580,7 @@ int64_t ExitStatus(int pid) {
   if (state != WAIT_OBJECT_0) return kExitUnknown;
   DWORD code = 0;
   if (!GetExitCodeProcess(it->second.process, &code)) return kExitUnknown;
-  CloseHandle(it->second.process);
+  if (!it->second.restricted) CloseHandle(it->second.process);
   g_children.erase(it);
   return static_cast<int64_t>(code);
 }
@@ -430,7 +595,8 @@ bool Kill(int pid) {
     std::lock_guard<std::mutex> guard(g_lock);
     auto child = g_children.find(pid);
     if (child != g_children.end()) {
-      return TerminateProcess(child->second.process, 137) != FALSE;
+      return child->second.restricted ? child->second.restricted->Stop().confirmed :
+          TerminateProcess(child->second.process, 137) != FALSE;
     }
   }
   HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));

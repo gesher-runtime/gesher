@@ -155,7 +155,7 @@ public final class SystemServer {
         services.put("permission_checker", StandIn.of(
                 android.permission.IPermissionChecker.class,
                 new Services.PermissionChecker()).asBinder());
-        startAppProcessesOnDemand(created.atm);
+        startAppProcessesOnDemand(created.atm, created.pm, persistent);
         PersistentDevice device = null;
         if (persistent) {
             device = new PersistentDevice(created, Installer.create(created.pm, created.atm),
@@ -186,7 +186,8 @@ public final class SystemServer {
      * android.app.GesherAppProcess for the package, its output appended to the package's
      * log.
      */
-    private static void startAppProcessesOnDemand(ActivityTaskManagerService atm) {
+    private static void startAppProcessesOnDemand(ActivityTaskManagerService atm,
+            PackageManagerService pm, boolean persistent) {
         final String vm;
         try {
             // With the JIT and its profile saver, as Android's app processes (ADR 0054).
@@ -197,6 +198,11 @@ public final class SystemServer {
         final String binder = System.getenv("GESHER_BINDER");
         atm.setProcessStarter((identity, startSeq, targetSdk) -> {
             String packageName = identity.packageName;
+            ApkPackage installed = pm.get(packageName);
+            if (installed == null || installed.identity() != identity) {
+                throw new IllegalStateException("stale installed launch identity");
+            }
+            if (persistent) Zygote.provisionInstalled(installed);
             File logFile = Device.packageLog(packageName);
             logFile.getParentFile().mkdirs();
             List<String> env = new java.util.ArrayList<>(List.of("GESHER_BINDER=" + binder,
@@ -219,7 +225,7 @@ public final class SystemServer {
             if (inet != null) env.add(inet);
             return Zygote.spawnPackage(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
-                    String.valueOf(targetSdk))), env, logFile.getPath(), identity);
+                    String.valueOf(targetSdk))), env, logFile.getPath(), identity, persistent);
         });
     }
 

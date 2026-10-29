@@ -23,10 +23,13 @@ namespace zygote {
 int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
           bool breakaway, int uid = -1, const std::u16string& package = {},
-          const std::u16string& install = {});
+          const std::u16string& install = {}, bool installed_guest = false);
 // Revokes exact owned child instances; does not reopen numeric PIDs.
 bool RevokeInstall(const std::u16string& package, const std::u16string& install);
 bool IsAuthority();
+bool ProvisionInstalled(const std::u16string& package, const std::u16string& install,
+    int uid, const std::vector<std::u16string>& read, const std::u16string& data);
+bool VerifyRestrictedGuest();
 bool OwnedInstall(int pid, const std::u16string& package, const std::u16string& install);
 std::vector<int> StartDevice(const std::vector<std::u16string>& commands,
                             const std::vector<std::u16string>& logs,

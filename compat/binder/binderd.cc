@@ -1073,6 +1073,7 @@ void ReapRevokedLocked() {
 
 // The ONLY publication entry. Endpoint is inherited privately from the owner
 // that created binderd, then handed solely to the dedicated SystemServer child.
+bool StartGuestListener(HANDLE process, const control::Request& request);
 void ControlWorker(HANDLE pipe) {
   bool writer = false;
   std::set<std::string> roots;
@@ -1094,7 +1095,7 @@ void ControlWorker(HANDLE pipe) {
     {
       std::lock_guard<std::mutex> lock(g_lock);
       HANDLE process = control::Handle(req.process);
-      bool valid = req.magic == 0x474c4350 && req.version == 1 &&
+      bool valid = req.magic == 0x474c4350 && req.version == 1 && req.restricted <= 1 &&
           memchr(req.package, 0, sizeof(req.package)) != nullptr;
       std::string package = valid ? req.package : "";
       gesher::binder_launch::Install install{package, {}, req.uid, !writer};
@@ -1107,12 +1108,17 @@ void ControlWorker(HANDLE pipe) {
                       std::any_of(install.generation.begin(), install.generation.end(), [](uint8_t v) { return v != 0; })))) {
         DWORD pid = GetProcessId(process);
         // Publish consumes the transferred actual process HANDLE even on refusal.
-        if (g_registry.Publish(process, install)) {
+        HANDLE listener_process = nullptr;
+        bool guest_ok = !req.restricted || (writer && package == "com.gesher.lifecycle" &&
+            DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &listener_process,
+                            0, FALSE, DUPLICATE_SAME_ACCESS));
+        if (guest_ok && req.restricted) guest_ok = StartGuestListener(listener_process, req);
+        if (guest_ok && g_registry.Publish(process, install)) {
           status = 0;
           if (!writer) roots.insert(package);
           if (package == "@launcher") g_owner = g_registry.Find(pid, req.birth, req.uid);
         }
-        process = nullptr;
+        if (guest_ok) process = nullptr;
       } else if (valid && req.op == control::kHandoff && !writer && process &&
                  roots.size() == 3 && control::Birth(process) == req.birth) {
         auto owner = g_registry.Find(GetProcessId(process), req.birth, 1000);
@@ -1851,6 +1857,89 @@ void Serve(HANDLE pipe) {
   CloseHandle(pipe);
 }
 
+std::wstring g_public_device;
+// One per-install public namespace. Only the profile SID and the trusted owner
+// can open it; Serve retains the existing exact-process challenge and lease/FD
+// checks. It cannot be used to reach the inherited private writer endpoint.
+bool StartGuestListener(HANDLE process, const control::Request& request) {
+  struct OwnedHandle { HANDLE value; ~OwnedHandle() { if (value) CloseHandle(value); } } owner{process};
+  HMODULE library = LoadLibraryW(L"userenv.dll");
+  if (!library) return false;
+  using Derive = HRESULT (WINAPI*)(PCWSTR, PSID*);
+  auto derive = reinterpret_cast<Derive>(GetProcAddress(library, "DeriveAppContainerSidFromAppContainerName"));
+  PSID sid = nullptr;
+  bool ok = derive && SUCCEEDED(derive(control::Profile(request.generation).c_str(), &sid));
+  FreeLibrary(library);
+  HANDLE token = nullptr;
+  DWORD bytes = 0, isolated = 0;
+  ok = ok && OpenProcessToken(process, TOKEN_QUERY, &token) &&
+      GetTokenInformation(token, TokenIsAppContainer, &isolated, sizeof(isolated), &bytes) && isolated == 1;
+  if (ok) {
+    GetTokenInformation(token, TokenAppContainerSid, nullptr, 0, &bytes);
+    std::vector<BYTE> info(bytes);
+    ok = bytes && GetTokenInformation(token, TokenAppContainerSid, info.data(), bytes, &bytes) &&
+        EqualSid(sid, reinterpret_cast<TOKEN_APPCONTAINER_INFORMATION*>(info.data())->TokenAppContainer);
+  }
+  if (ok) {
+    for (auto kind : {TokenCapabilities, TokenIntegrityLevel}) {
+      bytes = 0;
+      GetTokenInformation(token, kind, nullptr, 0, &bytes);
+      std::vector<BYTE> info(bytes);
+      if (!bytes || !GetTokenInformation(token, kind, info.data(), bytes, &bytes)) { ok = false; break; }
+      if (kind == TokenCapabilities) ok = reinterpret_cast<TOKEN_GROUPS*>(info.data())->GroupCount == 0;
+      else {
+        PSID integrity = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(info.data())->Label.Sid;
+        ok = IsValidSid(integrity) && *GetSidSubAuthorityCount(integrity) > 0 &&
+            *GetSidSubAuthority(integrity, *GetSidSubAuthorityCount(integrity) - 1) == SECURITY_MANDATORY_LOW_RID;
+      }
+      if (!ok) break;
+    }
+  }
+  if (token) CloseHandle(token);
+  LPWSTR text = nullptr;
+  ok = ok && ConvertSidToStringSidW(sid, &text);
+  // FILE_APPEND_DATA aliases FILE_CREATE_PIPE_INSTANCE: never grant it to a
+  // guest. Clients request the matching explicit data rights, not GENERIC_WRITE.
+  std::wstring sddl = L"D:P(A;;GA;;;OW)(A;;0x0012019b;;;";
+  if (text) { sddl += text; LocalFree(text); }
+  if (sid) FreeSid(sid);
+  sddl += L")S:(ML;;NW;;;LW)";
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  ok = ok && ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr);
+  if (!ok) return false;
+  std::wstring name = wire::kPipePrefix + control::GuestDevice(g_public_device, request.generation);
+  SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
+  HANDLE first = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
+      PIPE_UNLIMITED_INSTANCES, 1 << 16, 1 << 16, 0, &security);
+  if (first == INVALID_HANDLE_VALUE) { LocalFree(descriptor); return false; }
+  owner.value = nullptr;
+  std::thread([process, first, descriptor, name, request]() {
+    HANDLE pipe = first;
+    bool admitted = false;
+    uint64_t deadline = GetTickCount64() + 5000;
+    while (WaitForSingleObject(process, 0) == WAIT_TIMEOUT) {
+      auto lease = g_registry.Find(GetProcessId(process), request.birth, request.uid);
+      if (lease) admitted = true;
+      if ((!lease && admitted) || (!admitted && GetTickCount64() >= deadline)) break;
+      if (!lease) { Sleep(1); continue; }
+      if (ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED) {
+        if (!control::Mode(pipe, false)) break;
+        std::thread(Serve, pipe).detach();
+        SECURITY_ATTRIBUTES attributes{sizeof(attributes), descriptor, FALSE};
+        pipe = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_UNLIMITED_INSTANCES, 1 << 16, 1 << 16, 0, &attributes);
+        if (pipe == INVALID_HANDLE_VALUE) break;
+      } else if (GetLastError() != ERROR_PIPE_LISTENING) break;
+      Sleep(10);
+    }
+    if (pipe != INVALID_HANDLE_VALUE) CloseHandle(pipe);
+    LocalFree(descriptor); CloseHandle(process);
+  }).detach();
+  return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1873,13 +1962,18 @@ int main(int argc, char** argv) {
   }
   std::wstring name = wire::kPipePrefix;
   for (char c : device) name += static_cast<wchar_t>(static_cast<unsigned char>(c));
+  g_public_device.assign(name.begin() + wcslen(wire::kPipePrefix), name.end());
+  PSECURITY_DESCRIPTOR host_descriptor = nullptr;
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;OW)S:(ML;;NW;;;ME)",
+      SDDL_REVISION_1, &host_descriptor, nullptr)) return 3;
+  SECURITY_ATTRIBUTES host_security{sizeof(host_security), host_descriptor, FALSE};
 
   bool first = true;
   for (;;) {
     HANDLE pipe = CreateNamedPipeW(
         name.c_str(), PIPE_ACCESS_DUPLEX | (first ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0),
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-        PIPE_UNLIMITED_INSTANCES, 1 << 16, 1 << 16, 0, nullptr);
+        PIPE_UNLIMITED_INSTANCES, 1 << 16, 1 << 16, 0, &host_security);
     if (pipe == INVALID_HANDLE_VALUE) {
       DWORD error = GetLastError();
       if (first && (error == ERROR_ACCESS_DENIED || error == ERROR_PIPE_BUSY)) {

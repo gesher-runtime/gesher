@@ -1,5 +1,58 @@
 # Production restricted SpawnOwned adoption checkpoint
 
+## Implemented candidate, 2026-10-29 (not compiled or qualified)
+
+The exclusive `wip/binder-isolated-spawn` tree now implements the first actual
+installed route: persistent SystemServer's installed `com.gesher.lifecycle`
+entry selects restricted creation in the existing SpawnOwned function. Other
+packages and nonpersistent legacy routes remain explicitly unqualified for guest
+isolation. The selection comes from the trusted server's installed process
+starter, not an environment switch. PM entry identity must be the exact current
+object; the native writer owns a UID/generation/profile/resource map and rejects
+missing/mismatched policy rather than falling back to CreateProcess.
+
+The shared header is byte-identical to qualified `558d69f9` (helper component
+40843729511). Host provisioning creates a fresh generation-specific profile,
+pins the current executable, grants runtime DLL/JAR/DAT files and explicit
+runtime/APK asset trees read/execute, and grants only the app's data directory
+read/write at low integrity. It rejects relative/reparse path components and
+overlapping read/data trees. Existing profiles are refused. ACL/label/profile
+retirement is checked; failed cleanup retains its owner in a reserved fixed
+slot for retry. A stale profile after an abnormal server death currently causes
+fail-closed provisioning, not silent adoption.
+
+Child retains the RestrictedLaunch owner, its policy and actual process/birth.
+Start checks actual SID, low integrity, zero capabilities and atomic private-job
+membership while suspended. Private publication checks the actual token again;
+only affirmative publication precedes Resume. Failed launch/resume cancels the
+exact lease and retains unconfirmed process/policy ownership. Kill/revoke/exit
+use retained instances; no restricted process handle is double-closed.
+
+The broker creates a separate per-install public endpoint with OW plus the exact
+profile SID, low mandatory label, no FILE_CREATE_PIPE_INSTANCE guest permission,
+and the unchanged actual-process challenge/lease/FD protocol. The private writer
+channel and default host public endpoint have explicit protected OW-only ACLs.
+Guest Binder clients request explicit data access without the pipe-instance bit
+aliased by GENERIC_WRITE. The guest cannot publish a launch on any public pipe.
+
+The actual installed guest startup now checks its real lowbox/zero-capability
+token, fresh own-data write/read/delete, exact access-denied errors opening the
+host executable for write, the actual package registry for read and write, and
+the host Binder endpoint. It logs observations only after all succeed. Existing
+services test requires this marker before real Binder attach, Application
+onCreate, resource lookup, onResume, teardown and exit zero. This is a required
+two-Windows full-CI contract, not evidence already obtained.
+
+Independent source peer must precede push/CI. No local native/JVM/C# build or
+fixture was performed. Original registry negative tests, strict current-run
+source/attempt/compiler/archive/member receipts, matched host/DLL runtime,
+both Windows whole-suite zero, package and both e2e remain required. Further
+forced-failure production coverage, abnormal-server profile recovery and all
+other guest/CLI/cohost/native harness migrations remain open. No integration,
+main/PR/tag/release operation is authorized to this worker.
+
+## Historical dependency analysis (superseded by candidate above)
+
 Source-only analysis against Binder `92a007578729b65a581a5495ebdca01fea3e82f4`
 in the exclusive `wip/binder-isolated-spawn` tree. No production change, CI,
 qualified import, or boundary closure is claimed.

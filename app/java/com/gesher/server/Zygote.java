@@ -25,11 +25,32 @@ public final class Zygote {
     }
 
     static native int nativeSpawn(String commandLine, String[] setEnv, String[] unsetEnv,
-            String logPath, boolean breakaway, int uid, String packageName, String installInstance);
+            String logPath, boolean breakaway, int uid, String packageName, String installInstance,
+            boolean installed);
     static native boolean nativeRevokeInstall(String packageName, String installInstance);
     private static native int[] nativeStartDevice(String[] commands, String[] logs, String[] env);
     static native boolean nativeIsAuthority();
     static native boolean nativeOwnedInstall(int pid, String packageName, String installInstance);
+    private static native boolean nativeProvisionInstalled(String packageName, String installInstance,
+            int uid, String[] read, String data);
+
+    static void provisionInstalled(ApkPackage installed) {
+        if (!installed.packageName.equals("com.gesher.lifecycle")) return;
+        PackageIdentity identity = installed.identity();
+        List<String> read = new java.util.ArrayList<>();
+        read.add(windowsPath(new File(installed.apkPath).getParent()));
+        for (String name : List.of("ANDROID_ROOT", "ANDROID_ART_ROOT", "ANDROID_I18N_ROOT",
+                "ANDROID_TZDATA_ROOT")) {
+            String value = System.getenv(name);
+            if (value != null && !value.isEmpty()) read.add(windowsPath(value));
+        }
+        File framework = new File(new File(exePath()).getParent(), "framework");
+        if (framework.isDirectory()) read.add(framework.getPath());
+        if (!nativeProvisionInstalled(identity.packageName, identity.installInstance, identity.uid,
+                read.toArray(new String[0]), windowsPath(installed.dataDir()))) {
+            throw new IllegalStateException("restricted installed policy provisioning failed");
+        }
+    }
 
     /** Creates one owned private bootstrap; no capability appears in these strings. */
     public static int[] startDevice(List<String> commands, List<String> logs, List<String> env) {
@@ -71,24 +92,29 @@ public final class Zygote {
      */
     public static int spawn(String commandLine, List<String> setEnv, String logPath,
             boolean breakaway) {
-        return spawnWithIdentity(commandLine, setEnv, logPath, breakaway, null);
+        return spawnWithIdentity(commandLine, setEnv, logPath, breakaway, null, false);
     }
 
     /** Explicit per-child self/Binder compatibility snapshot; never broker authority. */
     static int spawnPackage(String commandLine, List<String> setEnv, String logPath,
-            PackageIdentity identity) {
-        return spawnWithIdentity(commandLine, setEnv, logPath, false, identity);
+            PackageIdentity identity, boolean installed) {
+        return spawnWithIdentity(commandLine, setEnv, logPath, false, identity, installed);
     }
+    static int spawnPackage(String commandLine, List<String> setEnv, String logPath,
+            PackageIdentity identity) {
+        return spawnPackage(commandLine, setEnv, logPath, identity, false);
+    }
+    public static native boolean verifyRestrictedGuest();
 
     private static int spawnWithIdentity(String commandLine, List<String> setEnv, String logPath,
-            boolean breakaway, PackageIdentity identity) {
+            boolean breakaway, PackageIdentity identity, boolean installed) {
         new File(logPath).getParentFile().mkdirs();
         int pid = nativeSpawn(commandLine, setEnv.toArray(new String[0]),
                 identity == null ? new String[] {"GESHER_BINDER_UID"}
                         : new String[] {"GESHER_BINDER_UID", "GESHER_UID"}, windowsPath(logPath),
                 breakaway, identity == null ? -1 : identity.uid,
                 identity == null ? "" : identity.packageName,
-                identity == null ? "" : identity.installInstance);
+                identity == null ? "" : identity.installInstance, installed);
         if (pid <= 0) {
             throw new IllegalStateException("starting " + commandLine + " failed: Win32 error "
                     + (-pid));

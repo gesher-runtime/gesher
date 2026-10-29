@@ -1,6 +1,7 @@
 // Private inherited launcher/broker channel. Never reachable through Binder hello.
 #pragma once
 #include <windows.h>
+#include <sddl.h>
 #include <stdint.h>
 #include <cstring>
 #include <string>
@@ -12,7 +13,16 @@ struct Request {
   uint64_t process = 0, birth = 0;
   uint8_t generation[16]{};
   char package[256]{};
+  uint32_t restricted = 0;
 };
+inline std::wstring Profile(const uint8_t (&generation)[16]) {
+  std::wstring name = L"Gesher.install.";
+  for (auto byte : generation) { name += L"0123456789abcdef"[byte >> 4]; name += L"0123456789abcdef"[byte & 15]; }
+  return name;
+}
+inline std::wstring GuestDevice(const std::wstring& device, const uint8_t (&generation)[16]) {
+  return device + L"-guest-" + Profile(generation).substr(15);
+}
 inline HANDLE Handle(uint64_t value) { return reinterpret_cast<HANDLE>(uintptr_t(value)); }
 inline uint64_t Value(HANDLE value) { return uint64_t(reinterpret_cast<uintptr_t>(value)); }
 inline uint64_t Birth(HANDLE process) {
@@ -57,9 +67,14 @@ inline bool Channel(HANDLE* server, HANDLE* client) {
   for (uint8_t byte : nonce) {
     name += L"0123456789abcdef"[byte >> 4]; name += L"0123456789abcdef"[byte & 15];
   }
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+      L"D:P(A;;GA;;;OW)S:(ML;;NW;;;ME)", SDDL_REVISION_1, &descriptor, nullptr)) return false;
+  SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
   *server = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
-      1, 4096, 4096, 0, nullptr);
+      1, 4096, 4096, 0, &security);
+  LocalFree(descriptor);
   if (*server == INVALID_HANDLE_VALUE) return false;
   *client = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                         OPEN_EXISTING, 0, nullptr);

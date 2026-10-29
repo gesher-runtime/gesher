@@ -515,6 +515,7 @@ if (-not (CheckSequences 'services: gesher-app launch lifecycle.apk: the system 
     'gesher-app: the process of com.gesher.lifecycle ended (exit code 0)',
     'gesher-app: done'),
   @('gesher-app: app process for com.gesher.lifecycle: pid ',
+    'gesher-app: installed restricted guest: actual token zero-capabilities, data read/write, code/config write and host endpoint denied',
     'gesher-app: attached to the system server',
     'LifecycleApplication onCreate, package=com.gesher.lifecycle',
     'label=Lifecycle Activity, greeting=Hello from a resource, theme attr=from-theme, windowActionBar=false',

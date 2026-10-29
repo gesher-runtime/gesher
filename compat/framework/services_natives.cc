@@ -157,19 +157,27 @@ static jstring ZygoteJavaString(JNIEnv* env, const std::u16string& s) {
 
 static jint Zygote_spawn(JNIEnv* env, jclass, jstring commandLine, jobjectArray set,
                          jobjectArray unset, jstring logPath, jboolean breakaway, jint uid,
-                         jstring package, jstring install) {
+                         jstring package, jstring install, jboolean installed) {
     return gesher::zygote::Spawn(ZygoteString(env, commandLine), ZygoteStrings(env, set),
                                  ZygoteStrings(env, unset), ZygoteString(env, logPath),
                                  breakaway == JNI_TRUE, uid, ZygoteString(env, package),
-                                 ZygoteString(env, install));
+                                 ZygoteString(env, install), installed == JNI_TRUE);
 }
 
 static jboolean Zygote_revokeInstall(JNIEnv* env, jclass, jstring package, jstring install) {
     return gesher::zygote::RevokeInstall(ZygoteString(env, package), ZygoteString(env, install))
         ? JNI_TRUE : JNI_FALSE;
 }
+static jboolean Zygote_provisionInstalled(JNIEnv* env, jclass, jstring package, jstring install,
+    jint uid, jobjectArray read, jstring data) {
+    return gesher::zygote::ProvisionInstalled(ZygoteString(env, package), ZygoteString(env, install),
+        uid, ZygoteStrings(env, read), ZygoteString(env, data)) ? JNI_TRUE : JNI_FALSE;
+}
 static jboolean Zygote_authority(JNIEnv*, jclass) {
     return gesher::zygote::IsAuthority() ? JNI_TRUE : JNI_FALSE;
+}
+static jboolean Zygote_verifyRestrictedGuest(JNIEnv*, jclass) {
+    return gesher::zygote::VerifyRestrictedGuest() ? JNI_TRUE : JNI_FALSE;
 }
 static jboolean Zygote_ownedInstall(JNIEnv* env, jclass, jint pid, jstring package, jstring install) {
     return gesher::zygote::OwnedInstall(pid, ZygoteString(env, package), ZygoteString(env, install))
@@ -238,11 +246,13 @@ static jstring Zygote_exePath(JNIEnv* env, jclass) {
 }
 
 static const JNINativeMethod gZygoteMethods[] = {
+    {"verifyRestrictedGuest", "()Z", GESHER_JNI(Zygote_verifyRestrictedGuest)},
+    {"nativeProvisionInstalled", "(Ljava/lang/String;Ljava/lang/String;I[Ljava/lang/String;Ljava/lang/String;)Z", GESHER_JNI(Zygote_provisionInstalled)},
     {"nativeStartDevice", "([Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)[I", GESHER_JNI(Zygote_startDevice)},
     {"nativeIsAuthority", "()Z", GESHER_JNI(Zygote_authority)},
     {"nativeOwnedInstall", "(ILjava/lang/String;Ljava/lang/String;)Z", GESHER_JNI(Zygote_ownedInstall)},
     {"nativeSpawn",
-     "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;ZILjava/lang/String;Ljava/lang/String;)I",
+     "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;ZILjava/lang/String;Ljava/lang/String;Z)I",
      GESHER_JNI(Zygote_spawn)},
     {"nativeRevokeInstall", "(Ljava/lang/String;Ljava/lang/String;)Z", GESHER_JNI(Zygote_revokeInstall)},
     {"nativeStartTime", "(I)J", GESHER_JNI(Zygote_startTime)},
