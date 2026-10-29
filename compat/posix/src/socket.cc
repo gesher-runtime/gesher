@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <pthread.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -72,6 +73,19 @@ int EndControl(const SocketFd& state, int result) {
   return result;
 }
 
+struct ConnectCallerReferences {
+  SocketFd* state;
+  std::shared_ptr<ws::ConnectOperation>* operation;
+};
+void ReleaseCanceledConnectReferences(void* raw) {
+  auto& caller = *static_cast<ConnectCallerReferences*>(raw);
+  // Winpthreads deferred cancellation need not unwind C++ locals when this
+  // target uses -fno-exceptions. Release ONLY the waiting caller's ownership;
+  // the independent owner/description retain the issued native operation.
+  caller.operation->reset();
+  caller.state->description.reset();
+}
+
 constexpr int kTypeFlags = SOCK_NONBLOCK | SOCK_CLOEXEC;
 
 // An AF_UNIX name is a path (path.cc): the names under /dev and /proc are
@@ -123,14 +137,24 @@ int ConnectWithObserver(int fd, const void* raw, uint32_t length, ConnectObserve
       operation = ws::StartConnect(current.socket, address, current.description);
     }
     if (!operation) return -1;
+    int answer, final_error;
+    ConnectCallerReferences references{&state, &operation};
+    pthread_cleanup_push(ReleaseCanceledConnectReferences, &references);
     // The optional private observer sees real submission before a logical
     // blocking caller waits. It owns no native context and holds no locks.
     const int result = ws::AwaitConnect(operation, observer ? true : nonblocking);
     const int saved = errno;
     if (observer) observer(state.socket, result, saved, context);
-    if (!nonblocking && result < 0 && saved == EINPROGRESS) return ws::AwaitConnect(operation, false);
-    errno = saved;
-    return result;
+    if (!nonblocking && result < 0 && saved == EINPROGRESS) {
+      answer = ws::AwaitConnect(operation, false);
+      final_error = errno;
+    } else {
+      answer = result;
+      final_error = saved;
+    }
+    pthread_cleanup_pop(0);
+    errno = final_error;
+    return answer;
   }
   // Non-TCP and AF_UNSPEC retain their native behavior. They do not create
   // an owned TCP completion token or qualify terminal-refusal filtering.

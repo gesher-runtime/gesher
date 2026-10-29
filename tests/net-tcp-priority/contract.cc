@@ -401,7 +401,8 @@ static void owned_cancellation_observation() {
   require(gesher::ws::ReadConnectOwnerCensus(&after), "isolated cancel final census");
   printf("TCP_PRIORITY_CANCEL_OBSERVATION canceled=1 completion=%d native_retired=1 operation=%ld description=%ld handles=%u/%u threads=%u/%u\n",
       error, operation.use_count(), description.use_count(), after.handles, before.handles, after.threads, before.threads); fflush(stdout);
-  puts("PASS TCP cancellation characterization: isolated reference observations only; product census unchanged");
+  require(operation.expired() && description.expired(), "canceled caller releases its own operation and description references");
+  puts("PASS TCP cancellation control: caller references released and original attempt completed; product census unchanged");
 }
 struct PollWindow {
   pthread_mutex_t mutex; pthread_cond_t condition;

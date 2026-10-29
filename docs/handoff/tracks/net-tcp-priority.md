@@ -785,3 +785,27 @@ writers retired, exclusive snapshot and equal owned/closed handle counts.
 No sleep, unknown-identity reclassification or old product gate waiver is
 introduced. Actual two-Windows proof of the adapted diagnostic path remains
 required; this imports no runtime/provider implementation fix.
+
+73546a0e/409623 actual BOTH Windows isolated supplier and cancellation jobs
+use exact qualified controller625be/raw070a with cumulative1/root-only,
+all7/7 handles closed, exclusive stdout and retired writers. Four joined empty
+threads each delta0; four detached each delta+1 (119->123 on2022,
+128->132 on2025). Isolated actual canceled caller reaches original refusal111
+and native owner/reaper exit, but remaining operation strong count1 and
+description2 on both. Census125/109 and134/118 is observational (includes cold
+provider initialization), not an ownership qualification. Distinct original
+HOST then fails unchanged mode1 handle count132/131 and141/140; guest paths
+remain unexecuted. Raw tcp-409623-win2022/win2025.log retained.
+
+The narrow product correction registers an explicit pthread cleanup around
+only the supported owned TCP caller's wait/observer region. On deferred
+cancellation it resets that caller's local shared operation and SocketFd
+snapshot description. Normal return pops without executing, then ordinary
+local destruction applies. It never closes a descriptor, consumes an error,
+changes a generation, cancels native I/O or affects the independent owner.
+The exact -fno-exceptions target's observed reference leak motivates this,
+not a general assumption about C++ unwind. The separate actual canceled-caller
+control now strictly requires operation0/description0 after completion,
+last-close and native owner/reaper exit. Original four-mode census is unchanged
+and the independent supplier prerequisite remains unresolved. Source review
+and changed-source actual CI are required before this correction is qualified.
