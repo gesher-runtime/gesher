@@ -9,6 +9,8 @@ using System.Text;
 using System.Threading;
 
 public static class TsfJobSupervisor {
+  // Failed positive-control retirement remains owned for this CI process's lifetime.
+  static readonly List<IntPtr> QuarantinedTestProcesses=new List<IntPtr>();
   const uint WAIT_OBJECT_0=0, WAIT_TIMEOUT=258;
   const long OutputCap=1048576;
   [StructLayout(LayoutKind.Sequential)] struct SA { public int size; public IntPtr descriptor; public int inherit; }
@@ -27,6 +29,9 @@ public static class TsfJobSupervisor {
   [StructLayout(LayoutKind.Sequential)] struct Accounting {
     public long user,kernel,periodUser,periodKernel; public uint faults,total,active,terminated;
   }
+  [StructLayout(LayoutKind.Sequential)] struct ProcessBasicInfo {
+    public IntPtr reserved1, peb, reserved2a, reserved2b, processId, parentId;
+  }
   [StructLayout(LayoutKind.Sequential)] struct ThreadEntry {
     public uint size,usage,id,pid; public int priority,delta; public uint flags;
   }
@@ -38,6 +43,7 @@ public static class TsfJobSupervisor {
   [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr sa,string name);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job,int cls,ref Extended info,uint size);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job,int cls,out Accounting info,uint size,IntPtr length);
+  [DllImport("kernel32.dll",SetLastError=true,EntryPoint="QueryInformationJobObject")] static extern bool QueryExtended(IntPtr job,int cls,out Extended info,uint size,IntPtr length);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job,IntPtr process);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool IsProcessInJob(IntPtr process,IntPtr job,out bool member);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool TerminateJobObject(IntPtr job,uint exit);
@@ -53,6 +59,7 @@ public static class TsfJobSupervisor {
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool Thread32Next(IntPtr snapshot,ref ThreadEntry entry);
   [DllImport("kernel32.dll",SetLastError=true,EntryPoint="QueryInformationJobObject")] static extern bool QueryPidList(IntPtr job,int cls,IntPtr list,uint size,IntPtr length);
   [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,uint pid);
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr process,int infoClass,out ProcessBasicInfo info,uint length,out uint returned);
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool Process32First(IntPtr snapshot,ref ProcessEntry entry);
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool Process32Next(IntPtr snapshot,ref ProcessEntry entry);
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern IntPtr CreateFile(string path,uint access,uint share,ref SA sa,uint creation,uint flags,IntPtr template);
@@ -61,12 +68,17 @@ public static class TsfJobSupervisor {
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool UpdateProcThreadAttribute(IntPtr list,uint flags,IntPtr attr,IntPtr value,UIntPtr size,IntPtr previous,IntPtr returned);
   [DllImport("kernel32.dll")] static extern void DeleteProcThreadAttributeList(IntPtr list);
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool CreateProcess(string app,StringBuilder command,IntPtr psa,IntPtr tsa,bool inherit,uint flags,IntPtr env,string cwd,ref SIX si,out PI pi);
+  [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode,EntryPoint="CreateProcessW")] static extern bool CreateProcessSimple(string app,StringBuilder command,IntPtr psa,IntPtr tsa,bool inherit,uint flags,IntPtr env,string cwd,ref SI si,out PI pi);
   [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll")] static extern uint GetCurrentProcessId();
+  [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
+  [DllImport("kernel32.dll",SetLastError=true)] static extern uint GetConsoleProcessList([Out] uint[] processes,uint count);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool DuplicateHandle(IntPtr source,IntPtr handle,IntPtr target,out IntPtr copy,uint access,bool inherit,uint options);
 
   public sealed class Result {
     public uint Pid, ExitCode, TotalProcesses, TerminatedProcesses;
     public uint LastJobActive=UInt32.MaxValue, RootWaitResult=UInt32.MaxValue, PreResumeActive;
+    public uint ActiveProcessLimit;
     public long RootHandleValue, JobHandleValue;
     public int SuspendedThreadCount, DescendantThreadCount, SnapshotWin32Error;
     public long Birth, MainMilliseconds, CleanupMilliseconds;
@@ -76,9 +88,9 @@ public static class TsfJobSupervisor {
     public int OwnedHandles, ClosedHandles;
     public List<string> Errors=new List<string>();
     public List<Identity> Processes=new List<Identity>();
-    public uint DescendantPid;
+    public uint DescendantPid, ConsoleChangedPid;
     public long StdoutBytes, StderrBytes, CapturedBytes;
-    public bool ControlStarted, DescendantSuspended, RetainedWriterReady, WritersRetired, ExclusiveSnapshot;
+    public bool ControlStarted, DescendantSuspended, RetainedWriterReady, WritersRetired, ExclusiveSnapshot, LimitChildRan;
     public bool Success { get { return Reason=="exit" && ExitCode==0 && RootSignaled && JobEmpty && OutputRead && Errors.Count==0 && OwnedHandles==ClosedHandles; } }
   }
   public sealed class Identity {
@@ -123,16 +135,94 @@ public static class TsfJobSupervisor {
       return result;
     } finally { Marshal.FreeHGlobal(list); }
   }
-  static uint Parent(uint pid,Result r,List<IntPtr> owned,Func<IntPtr,IntPtr> own) {
-    IntPtr snapshot=own(CreateToolhelp32Snapshot(2,0));
-    try {
-      ProcessEntry e=new ProcessEntry(); e.size=(uint)Marshal.SizeOf(typeof(ProcessEntry));
-      Check(Process32First(snapshot,ref e),"Process32First");
-      do { if(e.pid==pid) return e.parent; e.size=(uint)Marshal.SizeOf(typeof(ProcessEntry)); } while(Process32Next(snapshot,ref e));
-      throw new IOException("Live job PID missing from parent census: "+pid);
-    } finally { if(!CloseOwned(owned,snapshot,r)) throw new IOException("Close process census failed"); }
+  // Query the kernel object bound by the retained handle, not a later PID
+  // snapshot: an exiting child can disappear from Toolhelp after capture.
+  static uint Parent(IntPtr process,uint expectedPid) {
+    ProcessBasicInfo info; uint returned;
+    int status=NtQueryInformationProcess(process,0,out info,(uint)Marshal.SizeOf(typeof(ProcessBasicInfo)),out returned);
+    if(status<0) throw new IOException("Retained process parent query NTSTATUS=0x"+unchecked((uint)status).ToString("X8"));
+    if(returned!=Marshal.SizeOf(typeof(ProcessBasicInfo)) || info.processId.ToInt64()!=expectedPid)
+      throw new IOException("Retained process parent identity mismatch");
+    long parent=info.parentId.ToInt64();
+    if(parent<=0 || parent>UInt32.MaxValue) throw new IOException("Invalid retained process parent");
+    return (uint)parent;
   }
-  static void Census(IntPtr job,Result r,List<IntPtr> owned,Func<IntPtr,IntPtr> own,string executable) {
+  // Called only by CI controlled fixture with an actual retained, already
+  // signaled child handle; production classification still checks image, job,
+  // parent identity and creation-time ordering.
+  public static uint TestRetainedParent(IntPtr process,uint expectedPid) {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
+    if(WaitForSingleObject(process,0)!=WAIT_OBJECT_0) throw new IOException("Test child is not signaled");
+    return Parent(process,expectedPid);
+  }
+  public static bool TestToolhelpContains(uint pid) {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
+    IntPtr snapshot=CreateToolhelp32Snapshot(2,0);
+    if(!Valid(snapshot)) throw Native("Process snapshot");
+    try {
+      ProcessEntry entry=new ProcessEntry(); entry.size=(uint)Marshal.SizeOf(typeof(ProcessEntry));
+      Check(Process32First(snapshot,ref entry),"Process32First");
+      do { if(entry.pid==pid) return true; entry.size=(uint)Marshal.SizeOf(typeof(ProcessEntry)); } while(Process32Next(snapshot,ref entry));
+      if(Marshal.GetLastWin32Error()!=18) throw Native("Process32Next");
+      return false;
+    } finally { Check(CloseHandle(snapshot),"Close process snapshot"); }
+  }
+  public static bool TestParentConsole() {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
+    uint[] processes=new uint[256]; uint count=GetConsoleProcessList(processes,(uint)processes.Length);
+    if(count==0 || count>processes.Length) return false;
+    for(int i=0;i<count;i++) if(processes[i]==GetCurrentProcessId()) return true;
+    return false;
+  }
+  static string ConsoleMembers(bool invalid,uint requiredPid,uint ignorePid) {
+    uint[] processes=new uint[256]; uint count=GetConsoleProcessList(processes,invalid?0u:(uint)processes.Length);
+    if(count==0 || count>processes.Length) throw new IOException("Console process list unavailable");
+    Array.Sort(processes,0,(int)count); bool found=false; var ids=new StringBuilder();
+    for(int i=0;i<count;i++) { if(processes[i]==requiredPid) found=true; if(processes[i]!=ignorePid) ids.Append(processes[i]).Append(','); }
+    if(!found) throw new IOException("Console membership missing");
+    return ids.ToString();
+  }
+  public static string TestConsoleDetails() {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
+    uint[] processes=new uint[256]; uint count=GetConsoleProcessList(processes,(uint)processes.Length); int error=count==0?Marshal.GetLastWin32Error():0;
+    string ids=""; if(count<=processes.Length) for(int i=0;i<count;i++) ids+=(i==0?"":",")+processes[i];
+    return "pid="+GetCurrentProcessId()+" hwnd="+GetConsoleWindow().ToInt64()+" count="+count+" error="+error+" members="+ids;
+  }
+  public static bool TestDeniedParent(IntPtr process,uint expectedPid) {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
+    IntPtr restricted;
+    Check(DuplicateHandle(GetCurrentProcess(),process,GetCurrentProcess(),out restricted,0x100000,false,0),"Duplicate parent-query denial handle");
+    try {
+      try { Parent(restricted,expectedPid); return false; }
+      catch(IOException e) { return e.Message.Contains("NTSTATUS=0xC0000022"); }
+    } finally { Check(CloseHandle(restricted),"Close parent-query denial handle"); }
+  }
+  public static void TestLimitPositive(string executable,string protocol) {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
+    SI si=new SI(); si.size=Marshal.SizeOf(typeof(SI)); PI child;
+    Check(CreateProcessSimple(executable,new StringBuilder("\""+executable+"\" limit-child \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,false,0x8,IntPtr.Zero,null,ref si,out child),"Positive child creation");
+    bool retired=false;
+    try {
+      retired=WaitForSingleObject(child.process,5000)==WAIT_OBJECT_0;
+      if(!retired) {
+        bool terminated=TerminateProcess(child.process,124);
+        retired=WaitForSingleObject(child.process,5000)==WAIT_OBJECT_0;
+        throw new IOException("Positive child wait failed; terminate="+terminated+" retired="+retired);
+      }
+      uint code; Check(GetExitCodeProcess(child.process,out code),"Positive child exit");
+      if(code!=96 || !File.Exists(Path.Combine(protocol,"limit-child-ran"))) throw new IOException("Positive child did not execute");
+    } finally {
+      bool threadClosed=CloseHandle(child.thread);
+      bool processClosed=false;
+      if(retired) processClosed=CloseHandle(child.process);
+      if(!threadClosed || !processClosed) lock(QuarantinedTestProcesses) {
+        if(!threadClosed) QuarantinedTestProcesses.Add(child.thread);
+        if(!processClosed) QuarantinedTestProcesses.Add(child.process);
+      }
+      if(!threadClosed || !processClosed) throw new IOException("Positive child closure unproved: retired="+retired+" thread="+threadClosed+" process="+processClosed);
+    }
+  }
+  static void Census(IntPtr job,Result r,List<IntPtr> owned,Func<IntPtr,IntPtr> own,string executable,string raceProtocol) {
     var ids=Pids(job);
     // The kernel list has no ordering contract. Capture the expected suspended
     // descendant before classifying any console host whose parent is that PID.
@@ -146,7 +236,13 @@ public static class TsfJobSupervisor {
       long exit,kernel,user; Check(GetProcessTimes(p.Handle,out p.Birth,out exit,out kernel,out user),"Job identity birth");
       var image=new StringBuilder(32768); uint length=(uint)image.Capacity;
       Check(QueryFullProcessImageName(p.Handle,0,image,ref length),"Live job identity image"); p.Image=image.ToString();
-      bool member; Check(IsProcessInJob(p.Handle,job,out member),"Job identity membership"); p.Member=member; p.Parent=Parent(pid,r,owned,own);
+      bool member; Check(IsProcessInJob(p.Handle,job,out member),"Job identity membership"); p.Member=member;
+      if(raceProtocol!=null && pid==r.DescendantPid) {
+        File.WriteAllText(Path.Combine(raceProtocol,"race-go"),"go");
+        if(WaitForSingleObject(p.Handle,5000)!=WAIT_OBJECT_0 || TestToolhelpContains(pid)) throw new IOException("Census exit race barrier failed");
+        Console.WriteLine("TSF_CENSUS_RACE pid="+pid+" live_capture=yes exited=yes toolhelp=absent");
+      }
+      p.Parent=Parent(p.Handle,pid);
       Identity parent=r.Processes.Find(q=>q.Pid==p.Parent && (q.Role=="root" || q.Role=="descendant"));
       if(pid==r.DescendantPid && parent!=null && parent.Role=="root" && p.Birth>=parent.Birth && String.Equals(p.Image,executable,StringComparison.OrdinalIgnoreCase)) p.Role="descendant";
       else if(parent!=null && p.Birth>=parent.Birth && !r.Processes.Exists(q=>q.Role=="console-host" && q.Parent==p.Parent) && String.Equals(p.Image,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"conhost.exe"),StringComparison.OrdinalIgnoreCase)) p.Role="console-host";
@@ -157,12 +253,16 @@ public static class TsfJobSupervisor {
   // mainMs is fixed at 45000 for the real probe; shorter only in controlled CI tests.
   public static Result Run(string executable,string arguments,int mainMs,string fault) {
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
-    if(mainMs<1 || mainMs>45000 || (fault!="" && fault!="terminate-denied" && fault!="query-denied")) throw new ArgumentException();
+    if(mainMs<1 || mainMs>45000 || (fault!="" && fault!="terminate-denied" && fault!="query-denied" && fault!="console-invalid" && fault!="console-missing" && fault!="console-changed" && fault!="diag-detached-unlimited" && fault!="diag-console-limited" && fault!="diag-console-unlimited" && fault!="diag-inherit-limited" && fault!="diag-inherit-unlimited")) throw new ArgumentException();
     Result r=new Result(); var owned=new List<IntPtr>();
     IntPtr job=IntPtr.Zero,query=IntPtr.Zero,denied=IntPtr.Zero,root=IntPtr.Zero,thread=IntPtr.Zero;
-    IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero;
+    IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero,changedProcess=IntPtr.Zero,changedThread=IntPtr.Zero;
     bool attrsReady=false; string dir=null,stdout=null,stderr=null,protocol=null; bool created=false;
-    bool controlled=arguments=="normal" || arguments=="exit23" || arguments=="hang" || arguments=="descendant" || arguments=="output";
+    bool race=arguments=="race";
+    bool limited=arguments=="limit";
+    bool controlled=arguments=="normal" || arguments=="exit23" || arguments=="hang" || arguments=="descendant" || arguments=="unknown" || arguments=="race" || arguments=="orphan" || arguments=="output" || limited;
+    limited=limited || !controlled;
+    if(fault=="diag-detached-unlimited" || fault=="diag-console-unlimited" || fault=="diag-inherit-unlimited") limited=false;
     Stopwatch main=Stopwatch.StartNew(); Stopwatch cleanup=null;
     Func<IntPtr,IntPtr> own=h=> { if(!Valid(h)) throw Native("Create owned handle"); owned.Add(h); r.OwnedHandles++; return h; };
     try {
@@ -175,8 +275,12 @@ public static class TsfJobSupervisor {
       IntPtr input=own(CreateFile("NUL",0x80000000,3,ref sa,3,0,IntPtr.Zero));
       job=own(CreateJobObject(IntPtr.Zero,null)); query=job; r.JobHandleValue=job.ToInt64();
       Extended limits=new Extended(); limits.basic.flags=0x2000; // KILL_ON_JOB_CLOSE; neither breakaway flag allowed.
+      if(limited) { limits.basic.flags|=0x8; limits.basic.active=1; }
       Check(SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(Extended))),"Set job limits");
-      if(fault!="") {
+      Extended actual; Check(QueryExtended(job,9,out actual,(uint)Marshal.SizeOf(typeof(Extended)),IntPtr.Zero),"Read job limits");
+      if(limited && ((actual.basic.flags&0x8)==0 || actual.basic.active!=1)) throw new IOException("Active process limit not enforced");
+      r.ActiveProcessLimit=actual.basic.active;
+      if(fault=="terminate-denied" || fault=="query-denied") {
         IntPtr copy; Check(DuplicateHandle(GetCurrentProcess(),job,GetCurrentProcess(),out copy,fault=="terminate-denied"?4u:1u,false,0),"Duplicate restricted job handle");
         denied=own(copy); if(fault=="query-denied") query=denied;
       }
@@ -189,7 +293,16 @@ public static class TsfJobSupervisor {
       Check(UpdateProcThreadAttribute(attrs,0,new IntPtr(0x20002),handles,new UIntPtr((uint)(3*IntPtr.Size)),IntPtr.Zero,IntPtr.Zero),"Whitelist inherited handles");
       SIX start=new SIX(); start.si.size=Marshal.SizeOf(typeof(SIX)); start.si.flags=0x100; start.si.input=input; start.si.output=output; start.si.error=error; start.attributes=attrs;
       PI pi; executable=Path.GetFullPath(executable);
-      Check(CreateProcess(executable,new StringBuilder("\""+executable+"\" "+arguments),IntPtr.Zero,IntPtr.Zero,true,0x08080004,IntPtr.Zero,Path.GetDirectoryName(executable),ref start,out pi),"Create suspended child");
+      bool production=limited && fault!="diag-console-limited";
+      bool detached=(limited && !production) || fault=="diag-detached-unlimited";
+      if(fault=="diag-console-limited") detached=false;
+      uint creation=detached?0x0008000cu:0x08080004u;
+      if(fault=="diag-inherit-limited" || fault=="diag-inherit-unlimited") creation=0x00080004u;
+      if(production) creation=0x00080004u;
+      string console=null;
+      if(production) console=ConsoleMembers(fault=="console-invalid",fault=="console-missing"?0u:GetCurrentProcessId(),0);
+      if((fault=="diag-inherit-limited" || fault=="diag-inherit-unlimited") && !TestParentConsole()) throw new IOException("Inherited console missing before creation");
+      Check(CreateProcess(executable,new StringBuilder("\""+executable+"\" "+arguments),IntPtr.Zero,IntPtr.Zero,true,creation,IntPtr.Zero,Path.GetDirectoryName(executable),ref start,out pi),"Create suspended child");
       root=own(pi.process); thread=own(pi.thread); created=true; r.Pid=pi.pid; r.RootHandleValue=root.ToInt64();
       long exit,kernel,user; Check(GetProcessTimes(root,out r.Birth,out exit,out kernel,out user),"Capture root birth");
       var image=new StringBuilder(32768); uint length=(uint)image.Capacity; Check(QueryFullProcessImageName(root,0,image,ref length),"Capture suspended root image"); r.Image=image.ToString();
@@ -206,19 +319,32 @@ public static class TsfJobSupervisor {
       bool member; Check(IsProcessInJob(root,job,out member),"Validate job membership"); r.MemberBeforeResume=member;
       rootIdentity.Member=member;
       Accounting before=Count(job); r.PreResumeActive=before.active; if(!member || before.active!=1 || before.total!=1) throw new InvalidOperationException("Pre-resume job census failed");
+      if((fault=="diag-inherit-limited" || fault=="diag-inherit-unlimited") && !TestParentConsole()) throw new IOException("Inherited console precondition unproved");
+      if(fault=="console-changed") {
+        SI changeStart=new SI(); changeStart.size=Marshal.SizeOf(typeof(SI)); PI change;
+        Check(CreateProcessSimple(executable,new StringBuilder("\""+executable+"\" race-writer \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,false,0,IntPtr.Zero,null,ref changeStart,out change),"Create console change control");
+        r.ConsoleChangedPid=change.pid;
+        changedProcess=own(change.process); changedThread=own(change.thread);
+        var barrier=Stopwatch.StartNew();
+        while(!( ","+ConsoleMembers(false,GetCurrentProcessId(),r.Pid)).Contains(","+change.pid+",")) {
+          if(barrier.ElapsedMilliseconds>=5000 || WaitForSingleObject(changedProcess,0)!=WAIT_TIMEOUT) throw new IOException("Console change control did not attach");
+          Thread.Sleep(10);
+        }
+      }
+      if(production && console!=ConsoleMembers(false,GetCurrentProcessId(),r.Pid)) throw new IOException("Console membership changed before resume");
       if(ResumeThread(thread)!=1) throw Native("Resume exactly one suspension");
       while(true) {
         long remaining=mainMs-main.ElapsedMilliseconds;
         if(remaining<=0) { r.Reason="timeout"; break; }
         if(controlled) {
           if(File.Exists(Path.Combine(protocol,"started")) && !r.ControlStarted) {
-            Census(job,r,owned,own,executable); r.ControlStarted=true;
+            Census(job,r,owned,own,executable,null); r.ControlStarted=true;
             File.WriteAllText(Path.Combine(protocol,"start-go"),"go");
           }
           if(File.Exists(Path.Combine(protocol,"child")) && !r.DescendantSuspended) {
             r.DescendantPid=UInt32.Parse(File.ReadAllText(Path.Combine(protocol,"child")));
             if(r.DescendantPid==0 || r.DescendantPid==r.Pid) throw new IOException("Invalid descendant PID");
-            Census(job,r,owned,own,executable);
+            Census(job,r,owned,own,executable,null);
             Identity child=r.Processes.Find(p=>p.Pid==r.DescendantPid && p.Role=="descendant");
             if(child==null) throw new IOException("Suspended descendant not in job");
             IntPtr childThreads=own(CreateToolhelp32Snapshot(4,0));
@@ -230,13 +356,28 @@ public static class TsfJobSupervisor {
             // Worker publishes only while its CREATE_SUSPENDED primary thread is held.
             r.DescendantSuspended=true; File.WriteAllText(Path.Combine(protocol,"child-go"),"go");
           }
+          if(File.Exists(Path.Combine(protocol,"unknown"))) {
+            Census(job,r,owned,own,executable,null);
+            throw new IOException("Unknown child accepted by census");
+          }
+          if(File.Exists(Path.Combine(protocol,"orphan-ready"))) {
+            uint missingParent=UInt32.Parse(File.ReadAllText(Path.Combine(protocol,"orphan-ready")));
+            if(TestToolhelpContains(missingParent)) throw new IOException("Orphan parent still in Toolhelp");
+            Census(job,r,owned,own,executable,null);
+            throw new IOException("Orphan accepted by census");
+          }
           if(File.Exists(Path.Combine(protocol,"writer-ready")) && !r.RetainedWriterReady) {
             Identity child=r.Processes.Find(p=>p.Pid==r.DescendantPid && p.Role=="descendant");
             if(child==null || WaitForSingleObject(child.Handle,0)!=WAIT_TIMEOUT) throw new IOException("Retainer startup not live");
-            Census(job,r,owned,own,executable); r.RetainedWriterReady=true;
+            Census(job,r,owned,own,executable,null); r.RetainedWriterReady=true;
             File.WriteAllText(Path.Combine(protocol,"writer-go"),"go");
           }
-        } else Census(job,r,owned,own,executable);
+          if(race && File.Exists(Path.Combine(protocol,"race-child")) && r.DescendantPid==0) {
+            r.DescendantPid=UInt32.Parse(File.ReadAllText(Path.Combine(protocol,"race-child")));
+            Census(job,r,owned,own,executable,protocol);
+            File.WriteAllText(Path.Combine(protocol,"race-done"),"go");
+          }
+        } else Census(job,r,owned,own,executable,null);
         remaining=mainMs-main.ElapsedMilliseconds;
         if(remaining<=0) { r.Reason="timeout"; break; }
         uint wait=WaitForSingleObject(root,(uint)Math.Min(25,remaining));
@@ -248,6 +389,15 @@ public static class TsfJobSupervisor {
     } catch(Exception ex) { r.Errors.Add(ex.Message); r.Reason="controller-error"; }
     finally {
       r.MainMilliseconds=main.ElapsedMilliseconds; cleanup=Stopwatch.StartNew();
+      if(Valid(changedProcess)) {
+        if(!TerminateProcess(changedProcess,124)) r.Errors.Add(Native("Terminate console change control").Message);
+        if(WaitForSingleObject(changedProcess,5000)!=WAIT_OBJECT_0) {
+          r.Errors.Add("Console change control retirement unproved");
+          lock(QuarantinedTestProcesses) { QuarantinedTestProcesses.Add(changedProcess); QuarantinedTestProcesses.Add(changedThread); }
+          owned[owned.IndexOf(changedProcess)]=IntPtr.Zero; owned[owned.IndexOf(changedThread)]=IntPtr.Zero;
+        }
+        else { CloseOwned(owned,changedThread,r); CloseOwned(owned,changedProcess,r); }
+      }
       // One absolute cleanup budget. No stage receives a reset or an unbounded wait.
       if(created) {
         try {
@@ -292,6 +442,7 @@ public static class TsfJobSupervisor {
         }
         if(!r.RootSignaled || !r.JobEmpty || !r.WritersRetired) r.Errors.Add("Cleanup unproved within shared 5000ms budget");
         if(r.JobEmpty && r.TotalProcesses!=r.Processes.Count) r.Errors.Add("Cumulative associations do not match captured unique identities: total="+r.TotalProcesses+" identities="+r.Processes.Count);
+        if(limited && r.JobEmpty && r.TotalProcesses!=1) r.Errors.Add("Single-process job accumulated unexpected associations: "+r.TotalProcesses);
       }
       if(Valid(output) && Valid(error)) {
         try { Check(GetFileSizeEx(output,out r.StdoutBytes),"Final stdout size"); Check(GetFileSizeEx(error,out r.StderrBytes),"Final stderr size");
@@ -310,6 +461,7 @@ public static class TsfJobSupervisor {
       try { r.Output=Snapshot(stdout,r); r.Error=Snapshot(stderr,r); r.OutputRead=true; r.ExclusiveSnapshot=true; }
       catch(Exception ex) { r.SnapshotWin32Error=ex.HResult & 65535; r.Errors.Add("Exclusive output retirement proof Win32="+r.SnapshotWin32Error+": "+ex.Message); }
     }
+    if(protocol!=null) r.LimitChildRan=File.Exists(Path.Combine(protocol,"limit-child-ran"));
     try { if(stdout!=null && File.Exists(stdout)) File.Delete(stdout); if(stderr!=null && File.Exists(stderr)) File.Delete(stderr);
       if(protocol!=null) { foreach(string file in Directory.GetFiles(protocol)) File.Delete(file); Directory.Delete(protocol); }
       if(dir!=null) Directory.Delete(dir); }

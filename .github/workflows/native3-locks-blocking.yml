@@ -35,6 +35,8 @@ jobs:
               print('NATIVE3_STRICT_HELPER name=' + name + ' canonical_blob=' + actual)
       - name: Require exact reviewed blocking source checkpoint
         run: python3 tools/native3-locks/union_blocking_guard.py
+      - name: Pure Python owned exit and cleanup error controls
+        run: python3 tests/native3-locks/test_command_cleanup.py
       - name: Actual strict archive adversarial controls before producer compilation
         run: python3 tools/native3-locks/artifact/test-verified-artifact.py
   compile:
@@ -247,6 +249,29 @@ jobs:
             catch { $cleanupProblems += "Actual stderr replay: $_" }
             if ($cleanupProblems.Count) { throw ($cleanupProblems -join '; ') }
           }
+      - name: Characterize stderr observer coupling without changing the original gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -Path tools/native3-locks/StdioSinkSupervisor.cs
+          $sinkPython = (Get-Command python -CommandType Application | Select-Object -First 1).Source
+          $sinkScript = (Resolve-Path tests/native3-locks/stdio_sink_oracle.py).Path
+          $sinkWorker = (Resolve-Path command-fixture/native3_lock_command_worker.exe).Path
+          $sinkDirectory = Join-Path $PWD command-fixture/sink-evidence
+          $sinkArgs = '"' + $sinkScript + '" --worker "' + $sinkWorker + '" --output "' + $sinkDirectory + '"'
+          $sinkResult = [StdioSinkSupervisor]::RunSink($sinkPython, $sinkArgs, $sinkWorker)
+          Write-Host ($sinkResult | ConvertTo-Json -Depth 8 -Compress)
+          Write-Host $sinkResult.Output
+          Write-Host $sinkResult.Error
+          if (-not $sinkResult.Success -or -not $sinkResult.MemberBeforeResume -or $sinkResult.PreResumeActive -ne 1 -or
+              -not $sinkResult.RootSignaled -or -not $sinkResult.JobEmpty -or -not $sinkResult.WritersRetired -or
+              -not $sinkResult.ExclusiveSnapshot -or $sinkResult.TotalProcesses -ne $sinkResult.Processes.Count) {
+            throw 'Exact retained diagnostic root/job/output retirement unproved'
+          }
+          foreach ($route in @('direct-file expected=strict-pass', 'drained-pipe expected=strict-pass', 'blocked-pipe expected=strict-reject')) {
+            if (-not $sinkResult.Output.Contains("STDIO_SINK_RESULT route=$route actual=true owned_reaped=true reader_eof=true historical_cause_proved=false")) { throw "Missing sink verdict: $route" }
+          }
+          Write-Host "STDIO_SINK_SUPERVISOR suspended_assigned=true root_signaled=true job_empty=true identities=$($sinkResult.TotalProcesses) owned_handles=$($sinkResult.OwnedHandles) closed_handles=$($sinkResult.ClosedHandles) exclusive_snapshot=true"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -260,6 +285,9 @@ jobs:
             command-fixture/windows-actual.json
             command-fixture/windows-duplicates.json
             command-fixture/stdio-evidence.json
+            command-fixture/sink-evidence
+            ${{ runner.temp }}/sink.stdout.txt
+            ${{ runner.temp }}/sink.stderr.txt
           if-no-files-found: warn
           retention-days: 14
 # Trigger exact public rejection evidence component.
