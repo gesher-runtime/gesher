@@ -16,6 +16,10 @@ struct OwnedEvent {
   HANDLE handle = nullptr;
   ~OwnedEvent() { if (handle && !CloseHandle(handle)) std::abort(); }
 };
+struct OwnedLocal {
+  HLOCAL handle = nullptr;
+  ~OwnedLocal() { if (handle && LocalFree(handle) != nullptr) std::abort(); }
+};
 struct HeldPropertyMutex {
   HANDLE handle = nullptr;  // borrowed from the process-lifetime property area
   ~HeldPropertyMutex() { if (handle && !gesher::properties::DiagnosticReleaseAreaMutex(handle)) std::abort(); }
@@ -144,7 +148,7 @@ std::wstring PrivateName(HANDLE handle) {
 }
 int wmain(int argc, wchar_t** argv) {
   try {
-    if (argc == 11 && !wcscmp(argv[1], L"--nested")) {
+    if (argc == 12 && !wcscmp(argv[1], L"--nested")) {
       HANDLE ready = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[4], nullptr, 10)));
       HANDLE done = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[5], nullptr, 10)));
       HANDLE inherited_mutex = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[6], nullptr, 10)));
@@ -152,11 +156,12 @@ int wmain(int argc, wchar_t** argv) {
       HANDLE guest_release = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[8], nullptr, 10)));
       HANDLE inherited_mapping = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[9], nullptr, 10)));
       HANDLE readonly_section = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[10], nullptr, 10)));
+      HANDLE protected_section = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[11], nullptr, 10)));
       DWORD event_flags = 0;
       Check(GetHandleInformation(ready, &event_flags) && GetHandleInformation(done, &event_flags) &&
           GetHandleInformation(inherited_mutex, &event_flags) && GetHandleInformation(guest_held, &event_flags) &&
           GetHandleInformation(guest_release, &event_flags) && GetHandleInformation(inherited_mapping, &event_flags) &&
-          GetHandleInformation(readonly_section, &event_flags), "inherited diagnostic handles");
+          GetHandleInformation(readonly_section, &event_flags) && GetHandleInformation(protected_section, &event_flags), "inherited diagnostic handles");
       void* readonly_view = MapViewOfFile(inherited_mapping, FILE_MAP_READ, 0, 0, 16);
       Check(readonly_view != nullptr, "actual inherited section readable");
       uint32_t mapping_magic = 0; memcpy(&mapping_magic, readonly_view, sizeof(mapping_magic));
@@ -211,6 +216,14 @@ int wmain(int argc, wchar_t** argv) {
       ObserveNativeWriteMap(readonly_section, "readonly-observation", false);
       ObserveSectionRights(inherited_mapping, "writable-positive");
       ObserveSectionRights(readonly_section, "readonly-observation");
+      void* protected_read = MapViewOfFile(protected_section, FILE_MAP_READ, 0, 0, 16);
+      Check(protected_read != nullptr, "protected section actual read view");
+      uint32_t protected_magic = 0; memcpy(&protected_magic, protected_read, sizeof(protected_magic));
+      bool protected_unmapped = UnmapViewOfFile(protected_read) != FALSE;
+      printf("POLICY_PROPERTY_PROTECTED_SECTION read_magic=%u unmapped=%u\n", unsigned(protected_magic == 0x47535052), unsigned(protected_unmapped));
+      Check(protected_magic == 0x47535052 && protected_unmapped, "protected section read cleanup");
+      ObserveNativeWriteMap(protected_section, "protected-observation", false);
+      ObserveSectionRights(protected_section, "protected-observation");
       HANDLE elevated_mutex = nullptr;
       BOOL elevated = DuplicateHandle(GetCurrentProcess(), inherited_mutex, GetCurrentProcess(),
           &elevated_mutex, MUTEX_ALL_ACCESS, FALSE, 0);
@@ -374,6 +387,25 @@ int wmain(int argc, wchar_t** argv) {
           "actual original property area length");
       OwnedEvent readonly_mapping{CreateFileMappingW(readonly_file.handle, &security, PAGE_READONLY, 0, 0, nullptr)};
       Check(readonly_mapping.handle != nullptr, "separate readonly area section");
+      LPWSTR sid_text = nullptr;
+      Check(ConvertSidToStringSidW(policy->sid, &sid_text) != FALSE, "actual restricted SID text");
+      OwnedLocal sid_owner{sid_text};
+      std::wstring protected_sddl = L"D:P(A;;GA;;;OW)(A;;0x0004;;;" + std::wstring(sid_text) + L")";
+      Check(LocalFree(sid_owner.handle) == nullptr, "restricted SID text retired");
+      sid_owner.handle = nullptr;
+      PSECURITY_DESCRIPTOR protected_sd = nullptr;
+      Check(ConvertStringSecurityDescriptorToSecurityDescriptorW(protected_sddl.c_str(), SDDL_REVISION_1, &protected_sd, nullptr) != FALSE,
+          "protected readonly section descriptor");
+      OwnedLocal descriptor_owner{protected_sd};
+      SECURITY_ATTRIBUTES protected_security{sizeof(protected_security), protected_sd, FALSE};
+      HANDLE protected_raw = CreateFileMappingW(readonly_file.handle, &protected_security, PAGE_READONLY, 0, 0, nullptr);
+      OwnedEvent protected_mapping{protected_raw};
+      bool descriptor_freed = LocalFree(descriptor_owner.handle) == nullptr;
+      if (descriptor_freed) descriptor_owner.handle = nullptr;
+      Check(descriptor_freed && protected_mapping.handle != nullptr, "protected readonly section created");
+      OwnedEvent protected_alias;
+      Check(DuplicateHandle(GetCurrentProcess(), protected_mapping.handle, GetCurrentProcess(), &protected_alias.handle,
+          FILE_MAP_READ, TRUE, 0), "limited protected section alias");
       OwnedEvent shared_mapping;
       Check(DuplicateHandle(GetCurrentProcess(), gesher::properties::DiagnosticAreaMapping(), GetCurrentProcess(),
           &shared_mapping.handle, FILE_MAP_READ, TRUE, 0), "limited inherited area section");
@@ -387,9 +419,10 @@ int wmain(int argc, wchar_t** argv) {
           std::to_wstring(reinterpret_cast<uintptr_t>(guest_held.handle)) + L" " +
           std::to_wstring(reinterpret_cast<uintptr_t>(guest_release.handle)) + L" " +
           std::to_wstring(reinterpret_cast<uintptr_t>(shared_mapping.handle)) + L" " +
-          std::to_wstring(reinterpret_cast<uintptr_t>(readonly_mapping.handle));
+          std::to_wstring(reinterpret_cast<uintptr_t>(readonly_mapping.handle)) + L" " +
+          std::to_wstring(reinterpret_cast<uintptr_t>(protected_alias.handle));
       gesher::guest::RestrictedLaunch child;
-      auto started = child.Start(executable, command.data(), nullptr, nullptr, startup, CREATE_NO_WINDOW, policy->sid, {log, nul, ready.handle, done.handle, shared_mutex.handle, guest_held.handle, guest_release.handle, shared_mapping.handle, readonly_mapping.handle});
+      auto started = child.Start(executable, command.data(), nullptr, nullptr, startup, CREATE_NO_WINDOW, policy->sid, {log, nul, ready.handle, done.handle, shared_mutex.handle, guest_held.handle, guest_release.handle, shared_mapping.handle, readonly_mapping.handle, protected_alias.handle});
       Check(CloseHandle(log) && CloseHandle(nul), "close intentional parent stdio handles");
       Check(started.error == ERROR_SUCCESS, "actual lowbox nested child launch");
       HeldPropertyMutex held;
@@ -422,13 +455,16 @@ int wmain(int argc, wchar_t** argv) {
       bool release_closed = CloseHandle(guest_release.handle) != FALSE; if (release_closed) guest_release.handle = nullptr;
       bool mapping_closed = CloseHandle(shared_mapping.handle) != FALSE; if (mapping_closed) shared_mapping.handle = nullptr;
       bool readonly_mapping_closed = CloseHandle(readonly_mapping.handle) != FALSE; if (readonly_mapping_closed) readonly_mapping.handle = nullptr;
+      bool protected_alias_closed = CloseHandle(protected_alias.handle) != FALSE; if (protected_alias_closed) protected_alias.handle = nullptr;
+      bool protected_mapping_closed = CloseHandle(protected_mapping.handle) != FALSE; if (protected_mapping_closed) protected_mapping.handle = nullptr;
       LARGE_INTEGER after_length{};
       bool unchanged_length = GetFileSizeEx(readonly_file.handle, &after_length) && after_length.QuadPart == before_length.QuadPart;
       printf("POLICY_PROPERTY_AREA_LENGTH before=%lld after=%lld unchanged=%u\n",
           static_cast<long long>(before_length.QuadPart), static_cast<long long>(after_length.QuadPart), unsigned(unchanged_length));
       bool readonly_file_closed = CloseHandle(readonly_file.handle) != FALSE; if (readonly_file_closed) readonly_file.handle = nullptr;
       Check(ready_closed && done_closed && mutex_closed && held_closed && release_closed && mapping_closed &&
-          readonly_mapping_closed && readonly_file_closed && unchanged_length, "actual property observation handles closed and length unchanged");
+          readonly_mapping_closed && protected_alias_closed && protected_mapping_closed && readonly_file_closed && unchanged_length,
+          "actual property observation handles closed and length unchanged");
       DWORD code = 0; Check(GetExitCodeProcess(child.process(), &code) && code == 0 && child.Stop().confirmed, "actual nested child exit and retirement");
       Check(CloseHandle(private_server) && CloseHandle(private_client), "actual private bootstrap owner cleanup");
       HANDLE verified_log = CreateFileW(log_path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
