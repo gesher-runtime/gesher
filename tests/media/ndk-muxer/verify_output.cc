@@ -245,7 +245,8 @@ bool PacketOracle(const std::string& fixture, const std::string& output, bool sh
     if (!reader) return false;
     Sample sample;
     size_t index = 0;
-    while (reader->Read(&sample) == 0) {
+    int status = 0;
+    while ((status = reader->Read(&sample)) == 0) {
       if (index >= expected[track].size()) { ok = false; break; }
       const auto& e = expected[track][index++];
       if (sample.data != e.data || std::llabs(sample.time_us - (e.time - base)) > 1000) {
@@ -255,7 +256,7 @@ bool PacketOracle(const std::string& fixture, const std::string& output, bool sh
         ok = false;
       }
     }
-    ok = ok && index == expected[track].size();
+    ok = ok && status == 1 && index == expected[track].size();
     std::printf("webm packet trace %s track %zu read %zu expected %zu\n", output.c_str(), track, index, expected[track].size());
     reader.reset();
     if (!audio[track]) {
