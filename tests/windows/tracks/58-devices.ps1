@@ -187,6 +187,15 @@ function LegacyCameraCheck([string] $Mode, [string] $Out, [int] $Code) {
 
 # Geocoder: Windows.Services.Maps (MapLocationFinder) without a map service key. The app's
 # Geocoder stays absent (isPresent false, IOException) while this is what Windows answers.
+$sourceRoot = (& git rev-parse --show-toplevel).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Cannot identify source root for geocoder source check' }
+$sourceOverrides = Join-Path $sourceRoot 'overrides.json'
+$overridesBefore = (& git hash-object -- $sourceOverrides).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Cannot hash source overrides before geocoder' }
+$overridesHead = (& git rev-parse 'HEAD:overrides.json').Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Cannot identify committed source overrides' }
+$overridesRawBefore = (Get-FileHash -LiteralPath $sourceOverrides -Algorithm SHA256).Hash
+if ($overridesBefore -cne $overridesHead) { throw 'Source overrides already changed before geocoder' }
 . (Join-Path $PSScriptRoot '../helpers/geocoder-compile.ps1')
 $geoWork = Join-Path $env:RUNNER_TEMP ('geocoder-work-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $geoWork -ErrorAction Stop | Out-Null
@@ -248,6 +257,9 @@ DevCheck 'devices: permissions (single process): without ACCESS_*_LOCATION Locat
 # processes inherit them).
 $launcherDev = $dvmDev + 'com.gesher.app.Launcher'
 $null = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'shutdown') 120
+ else {
+  Write-Host "PASS  devices: source overrides unchanged canonical=$overridesAfter raw=$overridesRawAfter"
+}
 $out = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'launch', (NoDrive "$Dir/devices.apk"), '--keep-task') 500
 $code = $LASTEXITCODE
 $serverLog = Join-Path $root 'logs/system_server.log'
@@ -281,3 +293,10 @@ if (-not $capOut.Contains('devices: capture: done')) {
 Remove-Item Env:GESHER_SENSOR_TEST
 Remove-Item Env:GESHER_CAMERA_TEST
 $null = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'shutdown') 120
+$overridesAfter = (& git hash-object -- $sourceOverrides).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Cannot hash source overrides after devices track' }
+$overridesRawAfter = (Get-FileHash -LiteralPath $sourceOverrides -Algorithm SHA256).Hash
+if ($overridesAfter -cne $overridesBefore -or $overridesRawAfter -cne $overridesRawBefore) {
+  Write-Host "FAIL  devices: source overrides changed during geocoder/devices canonical=$overridesBefore/$overridesAfter raw=$overridesRawBefore/$overridesRawAfter"
+  $script:failed++
+}
