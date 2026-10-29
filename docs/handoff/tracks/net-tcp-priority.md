@@ -327,3 +327,14 @@ getter controls. Compiler evidence distinguishes the host GESHER compilation;
 the producer also rejects private observer exports in all three native output
 roles. These controls and the exact-code/generation terminal-refusal boundary
 remain source-only pending independent peer and actual CI.
+
+Fresh peer rejected the b9cd4698 mode boundary: the unlocked blocking branch
+can race F_SETFL/FIONBIO before the native call and become nonblocking while
+its refusal token remains ineligible. b9cd4698 is not publishable or runnable
+as a product candidate. All local checkpoints remain preserved and unqualified.
+The next independent native hypothesis is ConnectEx overlapped submission,
+which must be characterized for both socket modes, mode changes, explicit
+bind, context/options, refusal/error ownership, originating-thread exit and
+cancel/close completion lifetime before any production rewrite. No mode flip,
+unsupported TCP_INFO result, borrowed OVERLAPPED lifetime or global lock over
+a blocking native wait is an accepted substitute.
