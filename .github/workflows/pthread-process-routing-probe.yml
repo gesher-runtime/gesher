@@ -1,3 +1,4 @@
+# Exact pinned scheduler source and live cross-image scheduler controls.
 # Inventory exact pinned toolchain binaries for public data and cleanup consumers.
 # Owned child job retirement is observed separately from callback deadlines.
 name: pthread process identity routing probe
@@ -90,7 +91,7 @@ jobs:
               $actual=Get-Content -Raw -LiteralPath $stdout
               if (-not $actual.Contains($case.Marker) -or $actual.Contains('FAIL ')) { throw "Probe $name missing control" }
               if ($name -eq 'callback-lifetime' -and -not $actual.Contains('PASS probe four destructor passes and self-delete recreate generation')) { throw 'Missing destructor iteration/reuse proof' }
-              if ($name -eq 'operations' -and (-not $actual.Contains('PASS probe DLL data alias admission reload and foreign-thread exit after unload') -or -not $actual.Contains('equal=1') -or -not $actual.Contains('PASS probe cross-image once cancel-state name kill and borrowed handle') -or -not $actual.Contains('PASS probe direct cross-image cleanup helper invokes destructor once'))) { throw 'Missing alias, state, cleanup and late thread exit proof' }
+              if ($name -eq 'operations' -and (-not $actual.Contains('PASS probe DLL data alias admission reload and foreign-thread exit after unload') -or -not $actual.Contains('equal=1') -or -not $actual.Contains('PASS probe cross-image once cancel-state name kill borrowed handle and scheduling') -or -not $actual.Contains('PASS probe direct cross-image cleanup helper invokes destructor once') -or -not $actual.Contains('PASS probe cross-image scheduler live-to-retired race and unchanged ESRCH outputs') -or -not $actual.Contains('PASS probe scheduler holds owner lock across validated live target during actual exit contention'))) { throw 'Missing alias, state, cleanup and late thread exit proof' }
               Write-Host "$name actual exit=$($process.ExitCode)"
               Write-Host $actual
             } finally {

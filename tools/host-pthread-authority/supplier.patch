@@ -2285,3 +2285,494 @@
    struct _pthread_v *tv;
    size_t thread_name_len;
  
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -597,7 +597,41 @@ static void gesher_alias_probe_publish(void (**table)(void *))
+   for (node=gesher_alias_probe_nodes; node; node=node->next) *node->slot=table;
+   ReleaseSRWLockExclusive(&gesher_alias_probe_lock);
+ }
+-struct gesher_identity_probe_v4 {
++static pthread_t gesher_sched_gate_target;
++static HANDLE gesher_sched_gate_entered, gesher_sched_gate_release, gesher_sched_gate_contended;
++__declspec(dllexport) int __cdecl gesher_sched_probe_gate_v1(pthread_t target, void *entered, void *release, void *contended)
++{
++  gesher_sched_gate_target=target; gesher_sched_gate_entered=(HANDLE)entered;
++  gesher_sched_gate_release=(HANDLE)release; gesher_sched_gate_contended=(HANDLE)contended;
++  return 0;
++}
++static int __cdecl gesher_probe_owner_getsched(pthread_t id, int *policy, struct sched_param *param)
++{
++  int result;
++  pthread_mutex_lock(&mtx_pthr_locked);
++  _pthread_v *record=__pthread_get_pointer(id);
++  if (!record || !record->h || record->h==INVALID_HANDLE_VALUE ||
++      WaitForSingleObject(record->h,0)!=WAIT_TIMEOUT) result=ESRCH;
++  else {
++    if (id==gesher_sched_gate_target && gesher_sched_gate_entered &&
++        (!SetEvent(gesher_sched_gate_entered) || WaitForSingleObject(gesher_sched_gate_release,5000)!=WAIT_OBJECT_0)) abort();
++    result=pthread_getschedparam(id,policy,param);
++  }
++  pthread_mutex_unlock(&mtx_pthr_locked);
++  return result;
++}
++static int __cdecl gesher_probe_owner_setsched(pthread_t id, int policy, const struct sched_param *param)
++{
++  int result;
++  pthread_mutex_lock(&mtx_pthr_locked);
++  _pthread_v *record=__pthread_get_pointer(id);
++  if (!record || !record->h || record->h==INVALID_HANDLE_VALUE ||
++      WaitForSingleObject(record->h,0)!=WAIT_TIMEOUT) result=ESRCH;
++  else result=pthread_setschedparam(id,policy,param);
++  pthread_mutex_unlock(&mtx_pthr_locked);
++  return result;
++}
++struct gesher_identity_probe_v5 {
+   unsigned size, version;
+   pthread_t (__cdecl *self)(void);
+   int (__cdecl *dup)(pthread_t, void **, unsigned long long *);
+@@ -636,26 +670,29 @@ struct gesher_identity_probe_v4 {
+   __typeof__(&pthread_create_wrapper) create_wrapper;
+   __typeof__(&pthread_setname_np) setname;
+   __typeof__(&pthread_getname_np) getname;
++  __typeof__(&pthread_getschedparam) getsched;
++  __typeof__(&pthread_setschedparam) setsched;
+ };
+-__declspec(dllexport) const struct gesher_identity_probe_v4 * __cdecl
+- gesher_pthread_identity_probe_v4(void)
++__declspec(dllexport) const struct gesher_identity_probe_v5 * __cdecl
++ gesher_pthread_identity_probe_v5(void)
+ {
+-  static const struct gesher_identity_probe_v4 table = {
+-    sizeof(table), 4, pthread_self, gesher_winpthread_dup_cpu_handle_v1,
++  static const struct gesher_identity_probe_v5 table = {
++    sizeof(table), 5, pthread_self, gesher_winpthread_dup_cpu_handle_v1,
+     pthread_create, pthread_join, _pthread_tryjoin, pthread_detach, pthread_cancel, pthread_key_create, pthread_key_delete, pthread_getspecific, pthread_setspecific, pthread_getclean, pthread_exit, pthread_testcancel,
+     gesher_alias_probe_register, gesher_alias_probe_unregister,
+-    pthread_equal, pthread_once, pthread_tls_init, _pthread_cleanup_dest, _pthread_invoke_cancel, __pthread_shallcancel, _pthread_setnobreak, pthread_getevent, pthread_gethandle, pthread_get_concurrency, pthread_set_concurrency, pthread_getconcurrency, pthread_setconcurrency, pthread_kill, _pthread_get_state, _pthread_set_state, pthread_setcancelstate, pthread_setcanceltype, pthread_create_wrapper, pthread_setname_np, pthread_getname_np
++    pthread_equal, pthread_once, pthread_tls_init, _pthread_cleanup_dest, _pthread_invoke_cancel, __pthread_shallcancel, _pthread_setnobreak, pthread_getevent, pthread_gethandle, pthread_get_concurrency, pthread_set_concurrency, pthread_getconcurrency, pthread_setconcurrency, pthread_kill, _pthread_get_state, _pthread_set_state, pthread_setcancelstate, pthread_setcanceltype, pthread_create_wrapper, pthread_setname_np, pthread_getname_np,
++    gesher_probe_owner_getsched, gesher_probe_owner_setsched
+   };
+   return &table;
+ }
+ #ifdef DLL_EXPORT
+-static const struct gesher_identity_probe_v4 *identity_probe_owner(void)
++static const struct gesher_identity_probe_v5 *identity_probe_owner(void)
+ {
+-  typedef const struct gesher_identity_probe_v4 *(__cdecl *get_fn)(void);
++  typedef const struct gesher_identity_probe_v5 *(__cdecl *get_fn)(void);
+   HMODULE host=GetModuleHandleW(NULL), actual=NULL;
+-  get_fn get=host ? (get_fn)GetProcAddress(host,"gesher_pthread_identity_probe_v4") : NULL;
++  get_fn get=host ? (get_fn)GetProcAddress(host,"gesher_pthread_identity_probe_v5") : NULL;
+   MEMORY_BASIC_INFORMATION mbi;
+-  const struct gesher_identity_probe_v4 *table;
++  const struct gesher_identity_probe_v5 *table;
+   if (!get) {
+     /* A host advertising a clock anchor is participating but incomplete. */
+     if (host && GetProcAddress(host,"gesher_clock_anchor_v1")) abort();
+@@ -670,7 +707,7 @@ static const struct gesher_identity_probe_v4 *identity_probe_owner(void)
+       (uintptr_t)table < (uintptr_t)mbi.BaseAddress ||
+       (uintptr_t)table - (uintptr_t)mbi.BaseAddress > mbi.RegionSize ||
+       sizeof(*table) > mbi.RegionSize - ((uintptr_t)table - (uintptr_t)mbi.BaseAddress)) abort();
+-  if (table->size!=sizeof(*table) || table->version!=4 || !table->self || !table->dup ||
++  if (table->size!=sizeof(*table) || table->version!=5 || !table->self || !table->dup ||
+       !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)table->self,&actual) || actual!=host ||
+@@ -748,9 +785,27 @@ static const struct gesher_identity_probe_v4 *identity_probe_owner(void)
+       (LPCWSTR)table->setname, &actual) || actual!=host) abort();
+   if (!table->getname || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+       (LPCWSTR)table->getname, &actual) || actual!=host) abort();
++  if (!table->getsched || !table->setsched ||
++      !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                          (LPCWSTR)table->getsched,&actual) || actual!=host ||
++      !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                          (LPCWSTR)table->setsched,&actual) || actual!=host) abort();
+   return table;
+ }
+-static const struct gesher_identity_probe_v4 *gesher_participating_owner;
++
++int __cdecl gesher_probe_route_getsched(pthread_t id, int *policy, struct sched_param *param, int *handled)
++{
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
++  *handled=owner!=NULL;
++  return owner ? owner->getsched(id,policy,param) : 0;
++}
++int __cdecl gesher_probe_route_setsched(pthread_t id, int policy, const struct sched_param *param, int *handled)
++{
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
++  *handled=owner!=NULL;
++  return owner ? owner->setsched(id,policy,param) : 0;
++}
++static const struct gesher_identity_probe_v5 *gesher_participating_owner;
+ static struct gesher_alias_probe_node gesher_dll_alias_node;
+ #endif
+ #endif
+@@ -841,7 +896,7 @@ DllMain (HANDLE hDllHandle, DWORD dwReason, LPVOID lpReserved)
+ {
+ #ifdef GESHER_PTHREAD_ROUTING_PROBE
+   if (dwReason == DLL_PROCESS_ATTACH) {
+-    const struct gesher_identity_probe_v4 *candidate=identity_probe_owner();
++    const struct gesher_identity_probe_v5 *candidate=identity_probe_owner();
+     if (candidate && candidate->register_alias(&gesher_dll_alias_node, &_pthread_key_dest)) return FALSE;
+     gesher_participating_owner=candidate;
+   }
+@@ -1114,7 +1169,7 @@ int
+ pthread_once (pthread_once_t *o, void (*func)(void))
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->once(o, func);
+ #endif
+   collect_once_t *co;
+@@ -1146,7 +1201,7 @@ int
+ pthread_key_create (pthread_key_t *key, void (* dest)(void *))
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->key_create(key, dest);
+ #endif
+ 	unsigned int i;
+@@ -1267,7 +1322,7 @@ int
+ pthread_key_delete (pthread_key_t key)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->key_delete(key);
+ #endif
+ #ifndef GESHER_PTHREAD_ROUTING_PROBE
+@@ -1302,7 +1357,7 @@ void *
+ pthread_getspecific (pthread_key_t key)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->getspecific(key);
+ #endif
+   DWORD lasterr = GetLastError ();
+@@ -1329,7 +1384,7 @@ int
+ pthread_setspecific (pthread_key_t key, const void *value)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->setspecific(key, value);
+ #endif
+   DWORD lasterr = GetLastError ();
+@@ -1408,7 +1463,7 @@ int
+ pthread_equal (pthread_t t1, pthread_t t2)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->equal(t1, t2);
+ #endif
+   return (t1 == t2);
+@@ -1418,7 +1473,7 @@ void
+ pthread_tls_init (void)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) { owner->tls_init(); return; }
+ #endif
+   _pthread_tls = TlsAlloc();
+@@ -1474,7 +1529,7 @@ void
+ _pthread_cleanup_dest (pthread_t t)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) { owner->cleanup_dest(t); return; }
+ #endif
+ 	_pthread_v *tv;
+@@ -1581,7 +1636,7 @@ pthread_t
+ pthread_self (void)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->self();
+ #endif
+   _pthread_v *t = __pthread_self_lite ();
+@@ -1610,7 +1665,7 @@ void *
+ pthread_getevent (void)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->getevent();
+ #endif
+   _pthread_v *t = __pthread_self_lite ();
+@@ -1625,7 +1680,7 @@ gesher_winpthread_dup_cpu_handle_v1 (pthread_t thread, void **owned_handle,
+                                      unsigned long long *generation)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->dup(thread, owned_handle, generation);
+ #endif
+   _pthread_v *record;
+@@ -1660,7 +1715,7 @@ void *
+ pthread_gethandle (pthread_t t)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->gethandle(t);
+ #endif
+   struct _pthread_v *tv = __pth_gpointer_locked (t);
+@@ -1672,7 +1727,7 @@ struct _pthread_cleanup **
+ pthread_getclean (void)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->getclean();
+ #endif
+   struct _pthread_v *t = __pthread_self_lite ();
+@@ -1684,7 +1739,7 @@ int
+ pthread_get_concurrency (int *val)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->get_concurrency(val);
+ #endif
+   *val = _pthread_concur;
+@@ -1695,7 +1750,7 @@ int
+ pthread_set_concurrency (int val)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->set_concurrency(val);
+ #endif
+   _pthread_concur = val;
+@@ -1706,7 +1761,7 @@ void
+ pthread_exit (void *res)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) { owner->exit(res); abort(); }
+ #endif
+   _pthread_v *t = NULL;
+@@ -1752,7 +1807,7 @@ void
+ _pthread_invoke_cancel (void)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) { owner->invoke_cancel(); return; }
+ #endif
+   _pthread_cleanup *pcup;
+@@ -1775,7 +1830,7 @@ int
+ __pthread_shallcancel (void)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->shallcancel();
+ #endif
+   struct _pthread_v *t;
+@@ -1793,7 +1848,7 @@ void
+ _pthread_setnobreak (int v)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) { owner->setnobreak(v); return; }
+ #endif
+   struct _pthread_v *t = __pthread_self_lite ();
+@@ -1809,7 +1864,7 @@ void
+ pthread_testcancel (void)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) { owner->testcancel(); return; }
+ #endif
+   struct _pthread_v *self = __pthread_self_lite ();
+@@ -1836,7 +1891,7 @@ int
+ pthread_cancel (pthread_t t)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->cancel(t);
+ #endif
+   struct _pthread_v *tv = __pth_gpointer_locked (t);
+@@ -1943,7 +1998,7 @@ int
+ pthread_kill (pthread_t t, int sig)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->kill(t, sig);
+ #endif
+   struct _pthread_v *tv;
+@@ -1968,7 +2023,7 @@ unsigned
+ _pthread_get_state (const pthread_attr_t *attr, unsigned flag)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->get_state(attr, flag);
+ #endif
+   return (attr->p_state & flag);
+@@ -1978,7 +2033,7 @@ int
+ _pthread_set_state (pthread_attr_t *attr, unsigned flag, unsigned val)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->set_state(attr, flag, val);
+ #endif
+   if (~flag & val)
+@@ -2111,7 +2166,7 @@ int
+ pthread_setcancelstate (int state, int *oldstate)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->setcancelstate(state, oldstate);
+ #endif
+   _pthread_v *t = __pthread_self_lite ();
+@@ -2134,7 +2189,7 @@ int
+ pthread_setcanceltype (int type, int *oldtype)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->setcanceltype(type, oldtype);
+ #endif
+   _pthread_v *t = __pthread_self_lite ();
+@@ -2163,7 +2218,7 @@ unsigned __stdcall
+ pthread_create_wrapper (void *args)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->create_wrapper(args);
+ #endif
+   unsigned rslt = 0;
+@@ -2192,6 +2247,14 @@ pthread_create_wrapper (void *args)
+       /* Call function and save return value */
+       if (tv->func)
+         trslt = (intptr_t) tv->func(tv->ret_arg);
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++      if (tv->x==gesher_sched_gate_target && gesher_sched_gate_contended) {
++        int attempt=pthread_mutex_trylock(&mtx_pthr_locked);
++        if (attempt==EBUSY) { if (!SetEvent(gesher_sched_gate_contended)) abort(); }
++        else if (!attempt) pthread_mutex_unlock(&mtx_pthr_locked);
++        else abort();
++      }
++#endif
+       pthread_mutex_lock (&mtx_pthr_locked);
+       tv->ret_arg = (void*) trslt;
+       /* Clean up destructors */
+@@ -2254,7 +2317,7 @@ int
+ pthread_create (pthread_t *th, const pthread_attr_t *attr, void *(* func)(void *), void *arg)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->create(th, attr, func, arg);
+ #endif
+   HANDLE thrd = NULL;
+@@ -2372,7 +2435,7 @@ int
+ pthread_join (pthread_t t, void **res)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->join(t, res);
+ #endif
+   struct _pthread_v *tv = __pth_gpointer_locked (t);
+@@ -2406,7 +2469,7 @@ int
+ _pthread_tryjoin (pthread_t t, void **res)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->tryjoin(t, res);
+ #endif
+   struct _pthread_v *tv;
+@@ -2462,7 +2525,7 @@ int
+ pthread_detach (pthread_t t)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->detach(t);
+ #endif
+   int r = 0;
+@@ -2511,7 +2574,7 @@ int
+ pthread_getconcurrency (void)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->getconcurrency();
+ #endif
+   return dummy_concurrency_level;
+@@ -2521,7 +2584,7 @@ int
+ pthread_setconcurrency (int new_level)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->setconcurrency(new_level);
+ #endif
+   dummy_concurrency_level = new_level;
+@@ -2532,7 +2595,7 @@ int
+ pthread_setname_np (pthread_t thread, const char *name)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->setname(thread, name);
+ #endif
+   struct _pthread_v *tv;
+@@ -2609,7 +2672,7 @@ int
+ pthread_getname_np (pthread_t thread, char *name, size_t len)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v4 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
+   if (owner) return owner->getname(thread, name, len);
+ #endif
+   struct _pthread_v *tv;
+--- a/mingw-w64-libraries/winpthreads/src/sched.c
++++ b/mingw-w64-libraries/winpthreads/src/sched.c
+@@ -107,8 +107,16 @@ static int pthread_check(pthread_t t)
+   return 0;
+ }
+ 
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++extern int __cdecl gesher_probe_route_getsched(pthread_t, int *, struct sched_param *, int *);
++extern int __cdecl gesher_probe_route_setsched(pthread_t, int, const struct sched_param *, int *);
++#endif
+ int pthread_getschedparam(pthread_t t, int *pol, struct sched_param *p)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++    int handled=0, routed=gesher_probe_route_getsched(t,pol,p,&handled);
++    if (handled) return routed;
++#endif
+     int r;
+     //if (!t)
+     //  t = pthread_self();
+@@ -130,6 +138,10 @@ int pthread_getschedparam(pthread_t t, int *pol, struct sched_param *p)
+ 
+ int pthread_setschedparam(pthread_t t, int pol,  const struct sched_param *p)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++    int handled=0, routed=gesher_probe_route_setsched(t,pol,p,&handled);
++    if (handled) return routed;
++#endif
+   struct _pthread_v *pv;
+     int r, pr = 0;
+     //if (!t.p) t = pthread_self();

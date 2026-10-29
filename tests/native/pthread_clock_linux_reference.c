@@ -21,7 +21,9 @@ int main(void) {
   if (!lib) return 1;
   int (*read_clock)(clockid_t, struct timespec *) = dlsym(lib, "clock_gettime");
   int (*get_id)(pthread_t, clockid_t *) = dlsym(lib, "pthread_getcpuclockid");
-  if (!read_clock || !get_id) return 2;
+  int (*get_sched)(pthread_t, int *, struct sched_param *) = dlsym(lib, "pthread_getschedparam");
+  int (*set_sched)(pthread_t, int, const struct sched_param *) = dlsym(lib, "pthread_setschedparam");
+  if (!read_clock || !get_id || !get_sched || !set_sched) return 2;
   pthread_t thread; clockid_t main_id, main_via_symbol, via_symbol; struct timespec value;
   if (pthread_create(&thread, NULL, worker, NULL)) return 3;
   pthread_mutex_lock(&lock); while (!ready) pthread_cond_wait(&changed, &lock);
@@ -29,6 +31,13 @@ int main(void) {
       get_id(pthread_self(), &main_via_symbol) || main_id != main_via_symbol || get_id(thread, &via_symbol) ||
       via_symbol != worker_id || main_id == worker_id || read_clock(worker_id, &value) ||
       clock_gettime(via_symbol, &value)) return 4;
+  int direct_policy=-1, dynamic_policy=-2;
+  struct sched_param direct_param={0}, dynamic_param={0};
+  if (pthread_getschedparam(thread,&direct_policy,&direct_param) ||
+      get_sched(thread,&dynamic_policy,&dynamic_param) || direct_policy!=dynamic_policy ||
+      direct_param.sched_priority!=dynamic_param.sched_priority ||
+      set_sched(thread,direct_policy,&direct_param)) return 6;
+  puts("PASS Linux same-process direct and dynamic-symbol live scheduling");
   stop = 1; pthread_cond_signal(&changed); pthread_mutex_unlock(&lock);
   void *result; if (pthread_join(thread, &result) || result || dlclose(lib)) return 5;
   puts("PASS Linux same-process direct and dynamic-symbol cross-thread clock identity");

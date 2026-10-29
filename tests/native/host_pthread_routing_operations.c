@@ -1,6 +1,7 @@
 /* CI-only cross-image operation experiment. No general pthread claim. */
 #include <pthread.h>
 #include <time.h>
+#include <sched.h>
 #include <windows.h>
 #include <errno.h>
 #include <stdio.h>
@@ -24,6 +25,30 @@ typedef int (__cdecl *kill_fn)(pthread_t, int);
 typedef void *(__cdecl *handle_fn)(pthread_t);
 typedef int (__cdecl *setname_fn)(pthread_t, const char *);
 typedef int (__cdecl *getname_fn)(pthread_t, char *, size_t);
+typedef int (__cdecl *getsched_fn)(pthread_t, int *, struct sched_param *);
+typedef int (__cdecl *setsched_fn)(pthread_t, int, const struct sched_param *);
+extern int __cdecl gesher_sched_probe_gate_v1(pthread_t, void *, void *, void *);
+static getsched_fn race_getsched;
+static pthread_t race_id;
+static HANDLE race_ready;
+static volatile LONG race_success, race_retired;
+static DWORD WINAPI sched_gate_reader(void *unused) {
+  (void)unused; int policy=-1; struct sched_param param={0};
+  return race_getsched(race_id,&policy,&param)==0 ? 0 : 1;
+}
+static DWORD WINAPI sched_reader(void *unused) {
+  (void)unused;
+  ULONGLONG deadline=GetTickCount64()+5000;
+  while (GetTickCount64()<deadline) {
+    int policy=123; struct sched_param param={0}; param.sched_priority=456; errno=EDOM;
+    int rc=race_getsched(race_id,&policy,&param);
+    if (rc==0) { InterlockedIncrement(&race_success); SetEvent(race_ready); }
+    else if (rc==ESRCH && policy==123 && param.sched_priority==456 && errno==EDOM) { InterlockedIncrement(&race_retired); return 0; }
+    else return 1;
+    Sleep(0);
+  }
+  return 2;
+}
 static volatile LONG once_calls;
 static void once_callback(void) { InterlockedIncrement(&once_calls); }
 static HANDLE ready, release_event, oracle;
@@ -92,8 +117,10 @@ int main(void) {
   handle_fn handle=(handle_fn)GetProcAddress(dll,"pthread_gethandle");
   setname_fn setname=(setname_fn)GetProcAddress(dll,"pthread_setname_np");
   getname_fn getname=(getname_fn)GetProcAddress(dll,"pthread_getname_np");
+  getsched_fn getsched=(getsched_fn)GetProcAddress(dll,"pthread_getschedparam");
+  setsched_fn setsched=(setsched_fn)GetProcAddress(dll,"pthread_setschedparam");
   if (!create || !join || !tryjoin || !detach || !cancel || !key_create || !key_delete || !set || !get || !clean ||
-      !once || !state || !type || !kill || !handle || !setname || !getname || !cleanup) return 2;
+      !once || !state || !type || !kill || !handle || !setname || !getname || !cleanup || !getsched || !setsched) return 2;
   pthread_once_t once_control=PTHREAD_ONCE_INIT;
   int previous=-1;
   if (pthread_once(&once_control,once_callback) || once(&once_control,once_callback) || once_calls!=1 ||
@@ -114,6 +141,16 @@ int main(void) {
   pthread_t id; void *result=NULL;
   if (!start_events() || create(&id,NULL,worker,NULL) || WaitForSingleObject(ready,5000)!=WAIT_OBJECT_0) return 4;
   char thread_name[64];
+  int host_policy=-1, dll_policy=-2;
+  struct sched_param host_param={0}, dll_param={0};
+  if (pthread_getschedparam(id,&host_policy,&host_param) || getsched(id,&dll_policy,&dll_param) ||
+      host_policy!=dll_policy || host_param.sched_priority!=dll_param.sched_priority ||
+      setsched(id,host_policy,&host_param)) return 4;
+  dll_policy=123; dll_param.sched_priority=456; errno=EDOM;
+  if (getsched((pthread_t)-1,&dll_policy,&dll_param)!=ESRCH || dll_policy!=123 ||
+      dll_param.sched_priority!=456 || errno!=EDOM) return 4;
+  errno=EDOM;
+  if (setsched((pthread_t)-1,SCHED_OTHER,&dll_param)!=ESRCH || dll_param.sched_priority!=456 || errno!=EDOM) return 4;
   if (kill(id,0) || !handle(id) || GetThreadId((HANDLE)handle(id))!=GetThreadId(oracle) ||
       pthread_setname_np(id,"host-name") || getname(id,thread_name,sizeof(thread_name)) || strcmp(thread_name,"host-name") ||
       setname(id,"dll-name") || pthread_getname_np(id,thread_name,sizeof(thread_name)) || strcmp(thread_name,"dll-name") ||
@@ -128,9 +165,30 @@ int main(void) {
       pthread_cancel(id) || !SetEvent(release_event) || join(id,&result) || result!=PTHREAD_CANCELED || !end_events() || destroyed!=5) return 9;
   if (!start_events() || create(&id,NULL,worker,NULL) || WaitForSingleObject(ready,5000)!=WAIT_OBJECT_0 ||
       pthread_detach(id) || !SetEvent(release_event) || !end_events() || destroyed!=6) return 10;
+  if (!start_events() || pthread_create(&id,NULL,worker,NULL) || WaitForSingleObject(ready,5000)!=WAIT_OBJECT_0) return 14;
+  HANDLE sched_entered=CreateEventW(NULL,TRUE,FALSE,NULL), sched_release=CreateEventW(NULL,TRUE,FALSE,NULL), sched_contended=CreateEventW(NULL,TRUE,FALSE,NULL);
+  if (!sched_entered || !sched_release || !sched_contended || gesher_sched_probe_gate_v1(id,sched_entered,sched_release,sched_contended)) return 14;
+  race_id=id; race_getsched=getsched;
+  HANDLE gated_reader=CreateThread(NULL,0,sched_gate_reader,NULL,0,NULL);
+  if (!gated_reader || WaitForSingleObject(sched_entered,5000)!=WAIT_OBJECT_0 || !SetEvent(release_event) ||
+      WaitForSingleObject(sched_contended,5000)!=WAIT_OBJECT_0 || !SetEvent(sched_release) ||
+      WaitForSingleObject(gated_reader,5000)!=WAIT_OBJECT_0 || pthread_join(id,&result) || result!=(void *)(uintptr_t)7 || !end_events()) return 14;
+  DWORD gated_status;
+  if (!GetExitCodeThread(gated_reader,&gated_status) || gated_status || gesher_sched_probe_gate_v1(0,NULL,NULL,NULL) ||
+      !CloseHandle(gated_reader) || !CloseHandle(sched_entered) || !CloseHandle(sched_release) || !CloseHandle(sched_contended) || destroyed!=7) return 14;
+  puts("PASS probe scheduler holds owner lock across validated live target during actual exit contention");
+  if (!start_events() || pthread_create(&id,NULL,worker,NULL) || WaitForSingleObject(ready,5000)!=WAIT_OBJECT_0) return 13;
+  race_id=id; race_getsched=getsched; race_ready=CreateEventW(NULL,TRUE,FALSE,NULL);
+  HANDLE reader=CreateThread(NULL,0,sched_reader,NULL,0,NULL);
+  if (!race_ready || !reader || WaitForSingleObject(race_ready,5000)!=WAIT_OBJECT_0 || !SetEvent(release_event) ||
+      pthread_join(id,&result) || result!=(void *)(uintptr_t)7 || !end_events() || WaitForSingleObject(reader,5000)!=WAIT_OBJECT_0) return 13;
+  DWORD reader_status;
+  if (!GetExitCodeThread(reader,&reader_status) || reader_status || !race_success || !race_retired ||
+      !CloseHandle(reader) || !CloseHandle(race_ready) || destroyed!=8) return 13;
+  puts("PASS probe cross-image scheduler live-to-retired race and unchanged ESRCH outputs");
   if (!start_events() || pthread_create(&id,NULL,worker,NULL) || WaitForSingleObject(ready,5000)!=WAIT_OBJECT_0) return 12;
   cleanup(id);
-  if (destroyed!=7 || !SetEvent(release_event) || pthread_join(id,&result) || result!=(void *)(uintptr_t)7 || !end_events() || destroyed!=7) return 12;
+  if (destroyed!=9 || !SetEvent(release_event) || pthread_join(id,&result) || result!=(void *)(uintptr_t)7 || !end_events() || destroyed!=9) return 12;
   puts("PASS probe direct cross-image cleanup helper invokes destructor once");
   if (!start_events()) return 8;
   foreign_self=(self_fn)GetProcAddress(dll,"pthread_self");
@@ -162,7 +220,7 @@ int main(void) {
   if (!overlap || WaitForSingleObject(grow,5000)!=WAIT_OBJECT_0 || !GetExitCodeThread(grow,&exit_code) || exit_code ||
       !CloseHandle(grow) || !CloseHandle(grow_ready) || !CloseHandle(grow_start) || pthread_key_delete(key)) return 11;
   printf("PASS probe DLL data alias admission reload and foreign-thread exit after unload; reloads with growth worker live=%u\n",overlap);
-  puts("PASS probe cross-image once cancel-state name kill and borrowed handle");
+  puts("PASS probe cross-image once cancel-state name kill borrowed handle and scheduling");
   puts("PASS probe cross-image create join tryjoin cancel detach TLS cleanup and unload");
   return 0;
 }
