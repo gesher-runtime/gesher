@@ -135,7 +135,7 @@ jobs:
       - name: Checkout reviewed diagnostic runner separately
         uses: actions/checkout@v4
         with:
-          ref: 7fefa7ab
+          ref: 7fefa7abddb22db0e028e969538c5e64fdc1321b
           path: diagnostic-source
           persist-credentials: false
           sparse-checkout: tests/windows/run-tests.ps1
