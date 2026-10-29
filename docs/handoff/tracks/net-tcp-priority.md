@@ -236,3 +236,43 @@ ERR/HUP from exceptfds-only results after one poll; an error-only wake may
 therefore return0 before the caller's select deadline. That broader finite
 select behavior is not qualified by the connected urgent fixture and remains
 open alongside inline readiness and the other documented network gaps.
+
+### ConnectEx ownership and unresolved established-error channel
+
+Separate approved-base diagnostics a3dce5b8/408870 and2c655b0a/408966 retain
+the original Linux full inline/noninline reference and eight lifecycle cases.
+Actual both Windows: owned ConnectEx refusal10061 with native SO_ERROR0/0;
+the original eight mode/bind/context/options/data cases pass. Native initiating
+thread exit cancels995. A live persistent owner completes refusal10061 then
+success0 after requester threads actually exit; every context is drained before
+owner stop. Native band-only remains0 while failed combined polling remains19.
+BOOL KEEPALIVE/NODELAY getters return one byte, timeout returns four bytes;
+Linux guest integer-width and user-copy normalization remain a separate open gap.
+No product change is published by this diagnostic branch.
+
+75b8bdf7/409031 is RED on both Windows. All previous controls pass. After an
+owned refusal, ordinary/OOB/sendto/shutdown all fail10057 and caller SO_ERROR
+is0. Reusing the SAME native socket for a next ConnectEx succeeds0 with actual
+context/options/data checks. A fresh established connection followed by real
+abortive peer close has native combined revents19, but SO_ERROR reads0/0 rather
+than the required10054. The strict assertion is preserved. This is a shared
+socket error-channel BLOCKER, not evidence that no independent error occurred.
+Raw logs: `C:/work/gesher-ci-review/tcp-409031-win{2022,2025}.log`. Module lifetime
+steps were skipped by this failure and provide no evidence in409031.
+
+c91a9f64 adds six independent ordinary-connect/ConnectEx reset cells with
+getter-only, select and WSAPoll ordering before the unchanged strict assertion.
+MSG_PEEK only proves the native diagnostic reset; it is not a production error
+ownership solution or permission to consume/peek guest data during readiness.
+Independent module jobs retain owned address/OVERLAPPED, actual pending proof,
+normal CRT/TLS owner exit, a WinAPI-only reaper waiting on the true owner HANDLE,
+caller FreeLibrary before completion, actual unload and repeated handle baseline.
+Those MSVC/CRT observations do not qualify MinGW/pthread product lifetime.
+
+The unpublished product checkpoints ba9d8eaf and3e6e1c48 are preserved only on
+local wip/net-tcp-priority. They contain a concrete owned-connect rewrite and
+normal pthread owner return plus a pre-reserved WinAPI-only module reaper.
+Production publication remains blocked on the established-error channel, the
+terminal raw19 classification boundary, module/repeated MinGW lifetime evidence,
+cancellation/timeout/FD-generation controls, independent source peer and actual
+host plus both guest ABI paths. No Native/NET full closure follows these probes.
