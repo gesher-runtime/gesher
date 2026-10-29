@@ -84,4 +84,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify producer and run the current controlled fixture
         shell: pwsh
-        run: tools/windows4/run-tsf-union.ps1
+        run: |
+          if ('${{ github.workflow }}' -eq 'tsf-format-component') { tools/windows4/run-tsf-component.ps1 }
+          else { tools/windows4/run-tsf-union.ps1 }

@@ -313,6 +313,17 @@ int main(int argc, char** argv) {
             std::chrono::steady_clock::now() < limit;
       };
       phase("start");
+      // Diagnostic clocks are separate from the strict witness phase protocol.
+      // They observe the unchanged absolute budget; no phase resets it.
+      auto diagnostic = [&](const char* name) {
+        FILETIME created{}, exited{}, kernel{}, user{};
+        const BOOL timed = GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user);
+        std::fprintf(stderr, "STDIO_DIAGNOSTIC cycle=%u phase=%s tick=%llu deadline=%llu owner-times=%d kernel100ns=%llu user100ns=%llu\n",
+            cycle, name, static_cast<unsigned long long>(GetTickCount64()),
+            static_cast<unsigned long long>(deadline_tick), timed,
+            static_cast<unsigned long long>(native3_stack_probe::Birth(kernel)),
+            static_cast<unsigned long long>(native3_stack_probe::Birth(user)));
+      };
       wait_trace = {};
       FILETIME owner_created{}, owner_exited{}, owner_kernel{}, owner_user{};
       if (!GetThreadTimes(GetCurrentThread(), &owner_created, &owner_exited, &owner_kernel, &owner_user))
@@ -353,6 +364,7 @@ int main(int argc, char** argv) {
       control_release.store(true, std::memory_order_release);
       if (!exited_before_limit(completed_thread) || !CloseHandle(completed_thread)) std::_Exit(97);
       completed_closer.join();
+      diagnostic("completed-control-joined");
       if (!control_completed.load(std::memory_order_acquire) || control_close != 0) std::_Exit(97);
       // The distinct live sibling has the SAME owner/recursion as the target,
       // isolating FILE/CS identity from a simple owner-only predicate.
@@ -393,16 +405,22 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "ACTUAL_STDIO_PHASE stream-held closer-entered tid=%u\n", entering.load(std::memory_order_acquire));
       bool contended = false;
       while (std::chrono::steady_clock::now() < limit) {
+#ifdef _WIN32
+        diagnostic("wct-begin");
+#endif
         contended |= StreamWaitObserved(entering.load(std::memory_order_acquire), ThreadId());
 #ifdef _WIN32
+        diagnostic("wct-end");
         if (wait_trace.contradictory) { DumpWaitTrace(entering.load(), stream_owner, stream, stream_fd, completed.load()); std::_Exit(98); }
         if (!stack_sampled && wait_trace.samples >= 3 && wait_trace.nodes[0].ObjectStatus == WctStatusBlocked) {
           stack_sampled = true;
+          diagnostic("stack-begin");
           if (!native3_stack_probe::Capture(entering.load(std::memory_order_acquire),
                   entering_birth.load(std::memory_order_acquire), stream, stream_fd, other_stream)) {
             Failure("actual owned closer stack capture");
             std::_Exit(95);
           }
+          diagnostic("stack-end");
           break;  // Both evidence routes still require every strong witness below.
         }
 #else
@@ -418,6 +436,7 @@ int main(int argc, char** argv) {
         Failure("actual live FILE lock owner during closer wait"); std::_Exit(96);
       }
       bool wrong_birth = true;
+      diagnostic("negative-controls-begin");
       if (entering_birth.load() == stream_owner_birth ||
           !native3_stack_probe::MatchesBirth(entering.load(), stream_owner_birth, &wrong_birth) || wrong_birth ||
           crt_layout.Matches(stream, other_held, stream_owner, false) ||
@@ -467,11 +486,19 @@ int main(int argc, char** argv) {
 #endif
       std::fprintf(stderr, "ACTUAL_STDIO_PHASE stream-unlocked\n");
       while (!completed.load(std::memory_order_acquire)) {
-        if (std::chrono::steady_clock::now() >= limit) std::_Exit(94);
+        if (std::chrono::steady_clock::now() >= limit) {
+#ifdef _WIN32
+          diagnostic("fatal94-completion-not-observed-before-deadline");
+#endif
+          std::_Exit(94);
+        }
         std::this_thread::yield();
       }
 #ifdef _WIN32
-      if (!exited_before_limit(closer_exit) || !CloseHandle(closer_exit)) std::_Exit(94);
+      if (!exited_before_limit(closer_exit) || !CloseHandle(closer_exit)) {
+        diagnostic("fatal94-signaled-exit-or-handle-close");
+        std::_Exit(94);
+      }
 #endif
       closer.join();  // Completion was observed; no unbounded callback remains.
 #ifdef _WIN32
