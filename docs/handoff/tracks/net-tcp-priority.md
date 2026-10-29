@@ -748,3 +748,16 @@ runs in another process instance with its original exact census unchanged;
 there is no shared warm pool or baseline adjustment. These observations may
 identify a default supplier prerequisite but cannot qualify a supplier patch,
 MinGW DLL unload, cancellation or the product's guest paths.
+
+Separate cancellation characterization is also prepared for its own fresh
+same-authenticated-probe process after supplier observation. It reaches the
+existing mode2 submission observer and the actual production deferred-cancel
+wait, requires real caller join/PTHREAD_CANCELED, original TCP attempt's later
+POLLERR and caller ECONNREFUSED111, then closes both aliases and proves native
+owner/reaper exit. Only after fixture gates/endpoints retire and its retained
+operation is reset does it record weak operation/description strong counts and
+actual census. Nonzero counts are observations, NOT in-process cleanup success;
+the supervisor must retire the diagnostic process and all retained process
+handles. This does not weaken or warm the unchanged original four-mode census.
+No pthread cleanup handler or cancellation ownership correction is applied
+before this actual evidence and independent source review.

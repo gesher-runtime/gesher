@@ -110,9 +110,18 @@ foreach ($detached in 0..1) {
   }
 }
 if ($supplierText -notmatch '(?m)^PASS TCP supplier characterization: isolated empty-thread observations only; product census unchanged\s*$') { throw 'Missing isolated supplier observation scope' }
+$cancellation = [TsfJobSupervisor]::Run("$fixture/net_tcp_priority_probe.exe", '--owned-cancellation-control', 30000, '')
+Write-Host ('TCP_PRIORITY_CANCEL_KERNEL ' + ($cancellation | ConvertTo-Json -Depth 6 -Compress))
+$cancelText = $cancellation.Output + $cancellation.Error
+Write-Host $cancelText
+if (-not $cancellation.Success -or $cancellation.ExitCode -ne 0 -or $cancelText -match '(?m)^FAIL') { throw 'Isolated cancellation observation failed' }
+if ($cancellation.Pid -eq $supplier.Pid -and $cancellation.Birth -eq $supplier.Birth) { throw 'Cancellation reused supplier process instance' }
+if ($cancelText -notmatch '(?m)^TCP_PRIORITY_CANCEL_OBSERVATION canceled=1 completion=111 native_retired=1 operation=[0-9]+ description=[0-9]+ handles=[0-9]+/[0-9]+ threads=[0-9]+/[0-9]+\r?$' -or
+    $cancelText -notmatch '(?m)^PASS TCP cancellation characterization: isolated reference observations only; product census unchanged\s*$') { throw 'Missing actual isolated cancellation observations' }
 function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
   $result = [TsfJobSupervisor]::Run($Exe, $Arguments, 30000, '')
   if ($Context -eq 'host-posix' -and $result.Pid -eq $supplier.Pid -and $result.Birth -eq $supplier.Birth) { throw 'Product census reused the supplier process instance' }
+  if ($Context -eq 'host-posix' -and $result.Pid -eq $cancellation.Pid -and $result.Birth -eq $cancellation.Birth) { throw 'Product census reused the cancellation process instance' }
   Write-Host ('TCP_PRIORITY_KERNEL ' + ($result | ConvertTo-Json -Depth 6 -Compress))
   $text = $result.Output + $result.Error
   Write-Host $text

@@ -8,6 +8,7 @@ name: net-tcp-priority-component
 # Bind exact-link static library symbol rows to that current binary in CI stdout.
 # Include cleanup/spin symbol rows for the observed pthread wrapper frames.
 # Isolate empty supplier thread controls in a separate fresh authenticated probe.
+# Observe real caller cancellation/reference retirement in another fresh probe.
 on:
   workflow_dispatch:
   push:

@@ -361,6 +361,48 @@ static void owned_wait_controls() {
   }
   puts("PASS TCP priority: real owned mode flips cancellation send deadline and native owner retirement");
 }
+static void owned_cancellation_observation() {
+  // A distinct fresh probe reaches the real cancellation path even while an
+  // earlier ORIGINAL census assertion blocks it in the complete product run.
+  // Reference counts/deltas are observations; the original four-mode strict
+  // census and its order remain unchanged.
+  gesher::ws::OwnerCensus before{};
+  require(gesher::ws::ReadConnectOwnerCensus(&before), "isolated cancel initial census");
+  SubmitWindow window{}; window.mode = 2;
+  int reserved = socket(AF_INET, SOCK_STREAM, 0); require(reserved >= 0, "isolated cancel reserve");
+  window.address.sin_family = AF_INET; window.address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(reserved, reinterpret_cast<sockaddr*>(&window.address), sizeof(window.address)) == 0, "isolated cancel reserve bind");
+  socklen_t length = sizeof(window.address);
+  require(getsockname(reserved, reinterpret_cast<sockaddr*>(&window.address), &length) == 0, "isolated cancel real address");
+  window.client = socket(AF_INET, SOCK_STREAM, 0); require(window.client >= 0, "isolated cancel blocking client");
+  int alias = dup(window.client); require(alias >= 0, "isolated cancel surviving alias");
+  require(pthread_mutex_init(&window.mutex, nullptr) == 0 && pthread_cond_init(&window.condition, nullptr) == 0, "isolated cancel gate");
+  pthread_t caller;
+  require(pthread_create(&caller, nullptr, submission_connect, &window) == 0, "isolated cancel actual caller");
+  require(pthread_mutex_lock(&window.mutex) == 0, "isolated cancel controller lock");
+  timespec deadline{}; require(clock_gettime(CLOCK_REALTIME, &deadline) == 0, "isolated cancel clock"); deadline.tv_sec += 2;
+  while (!window.native_ready) require(pthread_cond_timedwait(&window.condition, &window.mutex, &deadline) == 0, "isolated cancel actual submission deadline");
+  require(pthread_mutex_unlock(&window.mutex) == 0, "isolated cancel controller unlock");
+  require(pthread_cancel(caller) == 0, "isolated cancel real logical blocking waiter");
+  void* returned = nullptr;
+  require(pthread_join(caller, &returned) == 0 && returned == PTHREAD_CANCELED, "isolated canceled caller really retired");
+  pollfd p{alias, POLLPRI, 0};
+  require(poll(&p, 1, 5000) == 1 && (p.revents & POLLERR), "isolated cancel leaves original TCP attempt alive");
+  int error = 0; length = sizeof(error);
+  require(getsockopt(alias, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "isolated cancel original attempt completion");
+  std::weak_ptr<gesher::ws::ConnectOperation> operation = window.operation;
+  std::weak_ptr<gesher::ws::SocketDescription> description;
+  { gesher::SocketFd state; require(gesher::LookupSocket(alias, &state), "isolated cancel exact description"); description = state.description; }
+  require(close(window.client) == 0 && close(alias) == 0, "isolated cancel last close");
+  require(gesher::ws::AwaitConnectRetirement(window.operation, 2000) == 0, "isolated cancel actual native owner and reaper exit");
+  require(close(reserved) == 0 && pthread_cond_destroy(&window.condition) == 0 && pthread_mutex_destroy(&window.mutex) == 0, "isolated cancel fixture endpoints and gate retired");
+  window.operation.reset();
+  gesher::ws::OwnerCensus after{};
+  require(gesher::ws::ReadConnectOwnerCensus(&after), "isolated cancel final census");
+  printf("TCP_PRIORITY_CANCEL_OBSERVATION canceled=1 completion=%d native_retired=1 operation=%ld description=%ld handles=%u/%u threads=%u/%u\n",
+      error, operation.use_count(), description.use_count(), after.handles, before.handles, after.threads, before.threads); fflush(stdout);
+  puts("PASS TCP cancellation characterization: isolated reference observations only; product census unchanged");
+}
 struct PollWindow {
   pthread_mutex_t mutex; pthread_cond_t condition;
   bool captured = false, release = false;
@@ -850,6 +892,7 @@ static void alias_ownership() {
 int main(int argc, char** argv) {
 #ifdef GESHER
   if (argc == 2 && strcmp(argv[1], "--supplier-retirement-control") == 0) { gesher::test::NativeSupplierRetirement(); return 0; }
+  if (argc == 2 && strcmp(argv[1], "--owned-cancellation-control") == 0) { owned_cancellation_observation(); return 0; }
 #endif
   const bool noninline_only = argc == 2 && strcmp(argv[1], "--noninline") == 0;
   require(argc == 1 || noninline_only, "explicit supported scope");
