@@ -8,6 +8,7 @@ on:
       - 'tests/native2/net_udp_fault_observer.c'
       - 'tests/native2/net_udp_copy_observer.c'
       - 'tests/native2/net_udp_guarded_copy_probe.cpp'
+      - 'tests/native2/net_udp_trunc.cpp'
       - 'compat/posix/src/socket_user_copy.h'
 permissions:
   contents: read
@@ -59,6 +60,14 @@ jobs:
           sha256sum tests/native2/net_udp_fault_observer.c
           cc -std=c11 -O2 -Wall -Wextra -Werror tests/native2/net_udp_fault_observer.c -o /tmp/net-udp-fault-observer
           /tmp/net-udp-fault-observer
+          g++ --version
+          sha256sum tests/native2/net_udp_trunc.cpp
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pthread tests/native2/net_udp_trunc.cpp -o /tmp/net-udp-matrix
+          /tmp/net-udp-matrix
+          if /tmp/net-udp-matrix --negative > /tmp/net-udp-negative.txt 2>&1; then
+            echo 'FAIL missing MSG_TRUNC negative was accepted'; exit 1
+          fi
+          grep -F 'FAIL UDP: negative missing MSG_TRUNC rejected' /tmp/net-udp-negative.txt
   windows-copy-observer:
     strategy:
       fail-fast: false
