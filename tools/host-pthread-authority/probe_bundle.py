@@ -34,6 +34,7 @@ def context():
 def build(llvm):
     ctx = context()
     DIST.mkdir()
+    subprocess.check_call([sys.executable, str(ROOT / 'tools/host-pthread-authority/runtime_symbol_inventory.py'), str(llvm), str(DIST / 'runtime-symbol-inventory.json')])
     driver = llvm / 'bin/x86_64-w64-mingw32-clang'
     receipt = llvm / 'gesher-winpthreads-authority.json'
     provider = json.loads(receipt.read_text())
@@ -70,7 +71,7 @@ def verify():
     ctx = context()
     data = json.loads((DIST / 'bundle.json').read_text())
     assert data['context'] == ctx
-    expected = set(CASES) | {'libwinpthread-1.dll', 'supplier.json', 'probe-callback.dll'}
+    expected = set(CASES) | {'libwinpthread-1.dll', 'supplier.json', 'probe-callback.dll', 'runtime-symbol-inventory.json'}
     assert set(data['members']) == expected
     assert {p.name for p in DIST.iterdir()} == expected | {'bundle.json'}
     assert all(sha(DIST / name) == digest for name, digest in data['members'].items())
@@ -79,6 +80,22 @@ def verify():
     assert all(provider[k] == v for k, v in ctx.items())
     assert provider['compiler_driver_sha256'] == data['driver_sha256']
     assert provider['files']['bin/libwinpthread-1.dll'] == sha(DIST / 'libwinpthread-1.dll')
+    inventory=json.loads((DIST / 'runtime-symbol-inventory.json').read_text())
+    assert inventory['role']=='pinned-toolchain-runtime-symbol-inventory-v1'
+    assert all(inventory[k]==ctx[k] for k in ('GITHUB_SHA','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT'))
+    assert inventory['driver_sha256']==data['driver_sha256'] and inventory['symbols']==['_pthread_key_dest','pthread_getclean']
+    assert inventory['rows'] and inventory['roots'][:2]==['x86_64-w64-mingw32/lib','x86_64-w64-mingw32/bin']
+    assert len({row['path'] for row in inventory['rows']})==len(inventory['rows'])
+    assert inventory['nm_sha256'] and inventory['readobj_sha256']
+    for row in inventory['rows']:
+        argv=row['command']; path=row['path']
+        assert row['sha256'] and '..' not in Path(path).parts and argv[-1].endswith('/'+path)
+        assert any(path.startswith(root+'/') for root in inventory['roots'])
+        if path.lower().endswith('.dll'):
+            assert len(argv)==3 and argv[0].endswith('/bin/llvm-readobj') and argv[1]=='--coff-imports'
+        else:
+            assert len(argv)==4 and argv[0].endswith('/bin/llvm-nm') and argv[1:3]==['--undefined-only','--print-file-name']
+        assert all(any(symbol.casefold() in line.casefold() for symbol in inventory['symbols']) for line in row['hits'])
     module=data['callback_module']; argv=module['argv']
     assert len(argv)==9 and argv[0]==data['driver']
     assert argv[1:6]==['-D_WIN32_WINNT=0x0A00', '-Wall', '-Wextra', '-Werror', '-shared']
