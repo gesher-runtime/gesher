@@ -57,6 +57,26 @@ PINNED_SOURCE = {'.github/workflows/aot3-after-resource-component.yml': '27aa2b6
  'tools/native3-locks/artifact/download-verified-artifact.py': 'cd5cc415e53102c664edac22b1604df639c8804b',
  'tools/native3-locks/artifact/test-verified-artifact.py': 'af7324581ae011f39aacf87d81ae1f44ad4c85f6'}
 
+# Exact additional leaves: Exec full40796808833 / UDP full40839298355.
+SELECTED_COMBINED_SOURCE = {'.github/workflows/native2.yml': '847f1f8908a50e55392f9d62c12f15365fe680a0',
+ '.github/workflows/net-udp-component.yml': 'ad3021ac7986ffa1643a3bf54817f7ef6bb868c0',
+ '.github/workflows/net-udp-fault-observer.yml': '76fab381d903730d0f639034b75f52ec781a29ff',
+ 'compat/posix/src/socket.cc': '57b79cc74424af7cbbf8b0cf96cd255981d5618a',
+ 'compat/posix/src/socket_internal.h': 'faa128a88a340d0c71fc5d0ff3c84c5a7faef1a6',
+ 'compat/posix/src/socket_user_copy.h': '961aa5a41bb9e3576ab83cd4d305cf80d3637e08',
+ 'compat/posix/src/winsock.cc': '825e0b8e1274ccafed1b406e6b3545e2eebb5a6a',
+ 'tests/dex-services/gesher/services/BinderTest.java': '8bbf62583204c5d74ec7295506054885ce0d55ca',
+ 'tests/native2/net_udp_copy_observer.c': 'b7dbba2aa81db0ec435ae990447509b7f8aef18e',
+ 'tests/native2/net_udp_fault_observer.c': '2d63237ca4d2891e84c4c1a21c16448bbdfee2eb',
+ 'tests/native2/net_udp_guarded_copy_probe.cpp': '35b571e3f253950f5f0a96117d9458ee4f1b6e39',
+ 'tests/native2/net_udp_trunc.cpp': '4d2d46badfa7a0b90a1f134537ee4a90f72a2e17',
+ 'tests/windows/tracks/50-services.ps1': 'acaed0ca6823d1b88ebf8aabde0c8403ce57eb8b',
+ 'tests/windows/tracks/89-net-udp-trunc.ps1': '9823b72c58bb77918bbb57a40d50664d1001105b',
+ 'tools/net-udp-component/payload.py': 'db22caed0012086fa90b257b3ef74e963ab2df87',
+ 'tools/net-udp-component/source.json': '92b0538e27f9e39aba040e30bfb362400c18724a',
+ 'tools/net-udp/payload.py': 'dbfcf5ed59cc2cbbc726109c1ce8bb18f4e0f356'}
+PINNED_SOURCE.update(SELECTED_COMBINED_SOURCE)
+
 TARGETS = ('native3_lock_command_worker', 'native3_lock_duplicate_test', 'binderd')
 HOST_FILES = {name + suffix for name in TARGETS for suffix in ('.exe', '.imports.txt')}
 REFERENCE_FILES = {'linux-reference.json'}
@@ -116,7 +136,7 @@ def main():
     if args.mode == 'preflight':
         base = '8b1e9b509ceef7e532a7ff5bc085ecdbc476d292'
         subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], cwd=ROOT, check=True)
-        allowed = {'.github/workflows/ci.yml', 'tools/native3-locks/union_payload.py', '.github/workflows/tsf-format-component.yml', '.github/workflows/services-geocoder-worker-component.yml', '.github/workflows/native3-locks-blocking.yml', 'tools/native3-locks/union_blocking_guard.py', 'tools/windows4/run-tsf-union.ps1', '.github/workflows/coherent-union-trusted-source.yml'}
+        allowed = {'.github/workflows/ci.yml', 'tools/native3-locks/union_payload.py', '.github/workflows/tsf-format-component.yml', '.github/workflows/services-geocoder-worker-component.yml', '.github/workflows/native3-locks-blocking.yml', 'tools/native3-locks/union_blocking_guard.py', 'tools/windows4/run-tsf-union.ps1', '.github/workflows/coherent-union-trusted-source.yml', '.github/workflows/combined-full-trusted-source.yml', '.github/workflows/native2.yml', '.github/workflows/net-udp-component.yml', '.github/workflows/net-udp-fault-observer.yml', 'compat/posix/src/socket.cc', 'compat/posix/src/socket_internal.h', 'compat/posix/src/socket_user_copy.h', 'compat/posix/src/winsock.cc', 'tests/dex-services/gesher/services/BinderTest.java', 'tests/native2/net_udp_copy_observer.c', 'tests/native2/net_udp_fault_observer.c', 'tests/native2/net_udp_guarded_copy_probe.cpp', 'tests/native2/net_udp_trunc.cpp', 'tests/windows/tracks/50-services.ps1', 'tests/windows/tracks/89-net-udp-trunc.ps1', 'tools/net-udp-component/payload.py', 'tools/net-udp-component/source.json', 'tools/net-udp/payload.py'}
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
                       ':(exclude)docs/**'], cwd=ROOT, text=True).splitlines())
         assert changed <= allowed and changed, ('Unreviewed coherent production delta', changed - allowed)
