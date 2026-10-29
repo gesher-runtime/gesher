@@ -2,7 +2,7 @@ name: binder-sg-host-owner
 on:
   push:
     branches: [wip/binder-sg-host-component]
-    paths: [.github/workflows/binder-sg-host-owner.yml]
+    paths: [.github/workflows/binder-sg-host-owner.yml, 'tests/binder/**', tests/native3-locks/trusted_binder.py]
   workflow_dispatch:
 permissions:
   contents: read
