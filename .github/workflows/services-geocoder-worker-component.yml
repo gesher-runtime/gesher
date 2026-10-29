@@ -19,7 +19,7 @@ jobs:
         run: |
           $expected = @{
             'tools/windows4/TsfJobSupervisor.cs' = '6d63aea1166316dffb1d0722e754e700ad4e003a'
-            'tools/windows4/TsfJobWorker.cs' = '24bed68f93a99e225b0e2caad6a07bf26d7dcf87'
+            'tools/windows4/TsfJobWorker.cs' = '569c6164864b8d40e41d5d217885f5110313ae28'
             'tools/windows4/test-tsf-job-supervisor.ps1' = 'bcdb7744c65b6c8676acf1c9c961261d44ea7460'
             'tools/windows4/run-tsf-component.ps1' = '4474bae13d5fe73038e8569be454753cdb21df43'
           }

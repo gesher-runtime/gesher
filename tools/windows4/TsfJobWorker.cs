@@ -45,7 +45,9 @@ class TsfJobWorker {
         orphanStart.input=GetStdHandle(-10); orphanStart.output=GetStdHandle(-11); orphanStart.error=GetStdHandle(-12);
         string orphanExe=typeof(TsfJobWorker).Assembly.Location; PI orphanChild;
         string orphanMode=args[0]=="orphan"?"orphan-parent":"orphan-writer";
-        if(!CreateProcess(orphanExe,new StringBuilder("\""+orphanExe+"\" "+orphanMode+" \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,true,0x08000000,IntPtr.Zero,null,ref orphanStart,out orphanChild)) return 94;
+        // Detached fixture children do not create transient console hosts; the
+        // controller still rejects every unclassified job member.
+        if(!CreateProcess(orphanExe,new StringBuilder("\""+orphanExe+"\" "+orphanMode+" \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,true,0x8,IntPtr.Zero,null,ref orphanStart,out orphanChild)) return 94;
         if(args[0]=="orphan") {
           if(WaitForSingleObject(orphanChild.process,5000)!=0) return 98;
           Publish(protocol,"orphan-ready",orphanChild.pid.ToString()); Gate(protocol,"orphan-go");
@@ -56,7 +58,7 @@ class TsfJobWorker {
         SI raceStart=new SI(); raceStart.size=Marshal.SizeOf(typeof(SI)); raceStart.flags=0x100;
         raceStart.input=GetStdHandle(-10); raceStart.output=GetStdHandle(-11); raceStart.error=GetStdHandle(-12);
         string raceExe=typeof(TsfJobWorker).Assembly.Location; PI raceChild;
-        if(!CreateProcess(raceExe,new StringBuilder("\""+raceExe+"\" race-writer \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,true,0x08000000,IntPtr.Zero,null,ref raceStart,out raceChild)) return 94;
+        if(!CreateProcess(raceExe,new StringBuilder("\""+raceExe+"\" race-writer \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,true,0x8,IntPtr.Zero,null,ref raceStart,out raceChild)) return 94;
         Publish(protocol,"race-child",raceChild.pid.ToString()); Gate(protocol,"race-done");
         bool raceClosed=CloseHandle(raceChild.thread); raceClosed=CloseHandle(raceChild.process)&&raceClosed;
         return raceClosed?0:95;
