@@ -7,6 +7,19 @@ The old `gesher-pthread-foreign-cpu-clock` worktree is preserved without edits.
 
 ## Status and next steps
 
+Public-dispatch diagnostic 40910269651 at 1b3c34b9 passed its Linux
+single-provider direct/dlsym reference and both Windows characterization jobs.
+On each Windows the static executable and loaded DLL issued -1073741824 to
+distinct live threads. Cross-dispatch returned different CPU values, each
+bracketed by its actual kernel thread, proving numeric alias across providers.
+This is evidence of the defect, not a qualification of mixed-provider use.
+The earlier 40909289961 at e0a89122 failed supplier compilation because the
+public declaration preceded the pthread_t typedef; 1b3c moves it after the
+typedef without relaxing warnings. A single authority for clock IDs and a
+separate analysis of cross-provider pthread_t acquisition remain mandatory;
+preserve the static executable contract and test unload/retirement. No host
+product, integration, package or guest ABI acceptance follows from this run.
+
 Initial component run40801790244/attempt1 at exact
 67e4f27486f6a63a8becb1c518c02b6b6afac02f passed its compile and both Windows
 jobs. Actual pthread/std-thread/detached-create/live-detach/Win32-self-attach

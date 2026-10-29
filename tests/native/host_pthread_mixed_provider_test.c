@@ -12,6 +12,7 @@ typedef int (__cdecl *read_fn)(clockid_t, struct timespec *);
 static self_fn dll_self;
 static id_fn dll_id;
 static clockid_t remote;
+static pthread_t remote_thread;
 static HANDLE ready, release;
 static uint64_t ticks(FILETIME f) { return ((uint64_t)f.dwHighDateTime << 32) | f.dwLowDateTime; }
 static uint64_t cpu(HANDLE h) {
@@ -21,7 +22,8 @@ static uint64_t cpu(HANDLE h) {
 }
 static DWORD WINAPI worker(void *unused) {
   (void)unused;
-  if (dll_id(dll_self(), &remote)) return 1;
+  remote_thread = dll_self();
+  if (dll_id(remote_thread, &remote)) return 1;
   if (!SetEvent(ready) || WaitForSingleObject(release, 5000) != WAIT_OBJECT_0) return 2;
   return 0;
 }
@@ -46,9 +48,15 @@ int main(void) {
   if (!ready || !release) return 7;
   HANDLE thread = CreateThread(NULL, 0, worker, NULL, 0, NULL);
   if (!thread || WaitForSingleObject(ready, 5000) != WAIT_OBJECT_0) return 8;
-  clockid_t local;
+  clockid_t local, cross_static, cross_dll;
   struct timespec a, b;
-  if (pthread_getcpuclockid(pthread_self(), &local)) return 3;
+  pthread_t local_thread=pthread_self();
+  if (pthread_getcpuclockid(local_thread, &local) ||
+      pthread_getcpuclockid(remote_thread, &cross_static) || id(local_thread, &cross_dll)) return 3;
+  printf("MIXED_PTHREAD static=%llu dll=%llu cross_static=%ld cross_dll=%ld\n",
+         (unsigned long long)local_thread, (unsigned long long)remote_thread,
+         (long)cross_static, (long)cross_dll);
+  if (local_thread != remote_thread || cross_static != local || cross_dll != remote) return 15;
   ULONGLONG until=GetTickCount64()+100;
   while (GetTickCount64()<until) { }
   uint64_t main_before=cpu(GetCurrentThread()), worker_before=cpu(thread);
