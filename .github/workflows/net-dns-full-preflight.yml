@@ -98,7 +98,7 @@ jobs:
               "tools/net-dns-component/aosp_reference.py": "7c968478f06cbedc7c2bef650eec4a7ed7e589c6",
               "tools/net-dns-component/payload.py": "8bf17e1a54fc903d635edb32ccb0763aba9eba67",
               "tools/net-dns-component/source.json": "51563a7370546df21b5e89c2b7263e1ac3bc44c2",
-              "tools/net-dns/payload.py": "f99c4afbac95e0e0df6d1f7b89f12b7a2c2e6908"
+              "tools/net-dns/payload.py": "741c5b0ab312f9e91a2b2c56001a859a6aab293d"
           }
 
           def require(condition, message):

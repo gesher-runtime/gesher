@@ -14,7 +14,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools/net-dns-component'))
@@ -135,8 +134,7 @@ def build(folder):
     # Never trust the pre-existing extracted cache. Authenticate the archive
     # on every use, then compile only from a fresh extraction of those bytes.
     with tempfile.TemporaryDirectory(prefix='dns-full-authenticated-') as temporary:
-        with zipfile.ZipFile(archive) as package:
-            package.extractall(temporary)
+        subprocess.run(['unzip', '-q', str(archive), '-d', temporary], check=True, timeout=180)
         build_guests(folder, records, Path(temporary) / 'android-ndk-r27c')
     (out / 'compilers.json').write_text(json.dumps(records, sort_keys=True) + '\n')
     (out / 'manifest.json').write_text(json.dumps(expected(folder), sort_keys=True) + '\n')
