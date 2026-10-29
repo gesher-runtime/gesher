@@ -439,7 +439,11 @@ void FinishSession(const std::shared_ptr<Impl>& impl, int64_t id, HRESULT hr,
   {
     std::lock_guard<std::mutex> guard(g_session_mutex);
     auto entry = g_sessions.find(impl->session_handle);
-    if (entry != g_sessions.end() && entry->second.pending > 0) --entry->second.pending;
+    if (entry != g_sessions.end()) {
+      // An accounting failure must not silently reopen admission capacity.
+      if (entry->second.pending == 0) abort();
+      --entry->second.pending;
+    }
   }
   if (timer) { KillTimer(g_task_window, timer); g_timers.erase(timer); }
   ++impl->session_dispatches;
@@ -1703,7 +1707,8 @@ int64_t Host::SessionHandle() const { return impl_->session_handle; }
 int32_t Host::SubmitSession(int64_t handle, int64_t id, const std::wstring& session,
                             const std::wstring& method, const std::wstring& params,
                             uint32_t timeout_ms) {
-  if (id <= 0 || timeout_ms == 0 || timeout_ms > 60000 || method.empty()) return -2;
+  if (id <= 0 || timeout_ms == 0 || timeout_ms > 60000 || method.empty() ||
+      session.size() > 256 || method.size() > 256 || params.size() > 524288) return -2;
   std::lock_guard<std::mutex> guard(g_session_mutex);
   auto entry = g_sessions.find(handle);
   if (entry == g_sessions.end()) return -1;

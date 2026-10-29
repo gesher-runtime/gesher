@@ -79,6 +79,9 @@ public class SessionActivity extends Activity {
             boolean completed = result.await(10, TimeUnit.SECONDS);
             int duplicate = (Integer) submit.invoke(host, 1L, "", "Runtime.enable", "{}", 5000);
             int invalid = (Integer) submit.invoke(host, 5L, "", "Runtime.enable", "{}", 0);
+            char[] oversized = new char[257];
+            java.util.Arrays.fill(oversized, 'x');
+            int tooLong = (Integer) submit.invoke(host, 7L, "", new String(oversized), "{}", 5000);
             int delayed = (Integer) submit.invoke(host, 2L, "", "Runtime.evaluate",
                     "{\"expression\":\"new Promise(r => setTimeout(() => {window.__sessionLate=7; r(7)}, 1000))\","
                             + "\"awaitPromise\":true,\"returnByValue\":true}", 100);
@@ -93,12 +96,13 @@ public class SessionActivity extends Activity {
             int afterClose = (Integer) submit.invoke(host, 4L, "", "Runtime.enable", "{}", 5000);
             passed = accepted == 0 && completed && status.get() == 0 && count.get() == 1
                     && payload.get().contains("\"value\":42") && duplicate == -3 && invalid == -2
+                    && tooLong == -2
                     && delayed == 0 && timedOut && timeoutStatus.get() == 0x800705b4
                     && timeoutCount.get() == 1 && marker == 0 && markerObserved
                     && third == 0 && closed && afterClose == -1;
             Web3.log("session request accepted=" + accepted + " completed=" + completed
                     + " hresult=" + status.get() + " count=" + count.get()
-                    + " duplicate=" + duplicate + " invalid=" + invalid
+                    + " duplicate=" + duplicate + " invalid=" + invalid + " tooLong=" + tooLong
                     + " timeout=" + timedOut + " timeoutHresult=" + timeoutStatus.get()
                     + " timeoutCount=" + timeoutCount.get() + " marker=" + markerObserved
                     + " reentrant=" + closed + " afterClose=" + afterClose);

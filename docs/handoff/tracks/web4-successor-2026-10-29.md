@@ -19,3 +19,5 @@ Unqualified source work after 7f354b95 adds an experimental generation-owned ses
 Next local candidate extends SessionActivity with a delayed CDP evaluate, native timeout and page-side completion marker; its count check is conditional evidence only because the marker does not independently establish arrival of the late CDP completion. No CI has run this candidate. Subscription add/remove reentrancy, failed remove quarantine, close while add in flight and fault-injected transport/shutdown remain open.
 
 Local successor also bounds admitted session requests, including work queued ahead of the STA, to 128 per generation. Capacity is released on retirement before callback; failed posting rolls admission back. This is source-only and requires saturation and close-race tests.
+
+Before JNI copies strings, the next candidate rejects session and method names over 256 UTF-16 code units and parameters over 524288. Native callers are bounded too. The fixture checks an oversized method; exact parameter boundaries and backlog saturation remain untested. An impossible pending-count underflow terminates rather than silently reopening capacity.
