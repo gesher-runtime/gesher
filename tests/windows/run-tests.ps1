@@ -182,8 +182,12 @@ if ($code -eq 0 -and -not $missing) {
 # Each line of work keeps its checks in a file of its own (graphics, native
 # libraries, services, ...), run here in this script's scope: Check, RunDex,
 # NoDrive, $root, $bcp and $failed are theirs to use.
+$preTrackBlob = SourceConfigBlob
+$preTrackRaw = (Get-FileHash -LiteralPath $trackedConfig -Algorithm SHA256).Hash.ToLowerInvariant()
+Write-Host "SOURCE_CONFIG_OBSERVATION phase=before-tracks blob=$preTrackBlob raw_sha256=$preTrackRaw"
 foreach ($t in Get-ChildItem (Join-Path $PSScriptRoot 'tracks') -Filter *.ps1 -ErrorAction SilentlyContinue | Sort-Object Name) {
   $configBefore = SourceConfigBlob
+  $rawBefore = (Get-FileHash -LiteralPath $trackedConfig -Algorithm SHA256).Hash.ToLowerInvariant()
   try {
     . $t.FullName
   } catch {
@@ -193,8 +197,9 @@ foreach ($t in Get-ChildItem (Join-Path $PSScriptRoot 'tracks') -Filter *.ps1 -E
     throw
   } finally {
     $configAfter = SourceConfigBlob
-    if ($configBefore -cne $configAfter) {
-      Write-Host "SOURCE_CONFIG_CHANGED track=$($t.Name) before=$configBefore after=$configAfter"
+    $rawAfter = (Get-FileHash -LiteralPath $trackedConfig -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($configBefore -cne $configAfter -or $rawBefore -cne $rawAfter) {
+      Write-Host "SOURCE_CONFIG_CHANGED track=$($t.Name) before=$configBefore after=$configAfter raw_before=$rawBefore raw_after=$rawAfter"
     }
   }
 }
