@@ -115,3 +115,41 @@ inheritable event, every original disposable denial/resource/IPC/cleanup row and
 strict producer/source/header/compiler/executable receipts on both Windows. A
 successful component would qualify only this shared API prerequisite, not actual
 SpawnOwned adoption or the remaining production boundary.
+
+## Invalid-handle diagnosis checkpoint (2026-10-29)
+
+Qualification remains RED, with no guest boundary acceptance. Source
+`7e1b83377014450e618cfcdc4fbfdad6be314fc2`, component `40795805483`
+attempt 1, compiled with the pinned compiler and strict original receipts on
+both runners. Original uninstrumented child exited `0xC0000008`. The separate
+`--diagnose` invocation attached to the exact retained suspended owner, but
+failed the unchanged Resume gate (stage 37); owned Stop then exited child 137.
+Only executable/ntdll module events were captured, with no causal exception.
+Saved raw logs: `C:/work/gesher-ci-review/guest-debug-407958-2022.log` and
+`guest-debug-407958-2025.log`. This run proves neither a crash location nor a fix.
+
+Latest source `32d10f64b7916531307c20e134cef1f93480ce62` passed the sole
+integrator's bounded source peer and is running component `40796429482`,
+attempt 1. The integrator owns the sole prescribed watch. It adds a real
+ResumeThread previous-count/error trace and drains initial attach debug events
+before indicating readiness. A 50ms no-event interval is only a diagnostic
+heuristic; the actual traced previous count must establish whether attach still
+changes Resume behavior. Strict production Resume remains unchanged.
+
+It also fixes a separate observation race: Peek before child completion could
+report zero cached bytes even if the child wrote immediately before dying.
+A final bounded Peek/read now follows observed death. Earlier cached zero-byte
+reports therefore cannot distinguish pre-main, first pipe write, or omitted
+SetEvent failure. No permissions, handle lists, security flags, original denial,
+resource, cleanup, capacity or forced-failure assertions were relaxed.
+
+The debugger is fixture-only and its invocation can never qualify a failed
+original run. It records owned-PID module identities, exception PC/parameters,
+registers, stack words and entry/pipe/SetEvent debug messages. Attach, context,
+continue, detach or worker-retirement failures limit diagnosis; breakpoint
+handling changes diagnostic behavior only. The shared header and strict
+compiler/source/executable receipt/member roles remain unchanged. No local
+native/JVM/C# compilation or execution was performed. Next worker must read
+actual terminal logs for 40796429482, determine causal location, correct the
+cause with source peer, and obtain fresh strict original two-Windows proof.
+Production adoption, integration/full/main/release remain blocked/open.
