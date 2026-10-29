@@ -1395,16 +1395,19 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                         if (!impl) return S_OK;
                         COREWEBVIEW2_PROCESS_FAILED_KIND kind =
                             COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED;
-                        args->get_ProcessFailedKind(&kind);
+                        HRESULT kind_hr = args->get_ProcessFailedKind(&kind);
                         impl->session_failed = true;
                         {
                           std::lock_guard<std::mutex> guard(g_session_mutex);
                           g_sessions.erase(impl->session_handle);
                         }
+                        // Publish failure before cancellation: a completion may reenter
+                        // close and destroy the listener. Failure still wins admission.
+                        impl->Report(kProcessFailed, 0,
+                                     FAILED(kind_hr) ? -1 : static_cast<int32_t>(kind));
                         while (!impl->session_requests.empty()) {
                           FinishSession(impl, impl->session_requests.begin()->first, E_ABORT, L"null");
                         }
-                        impl->Report(kProcessFailed, 0, static_cast<int32_t>(kind));
                         return S_OK;
                       })
           .get(),
