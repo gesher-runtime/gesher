@@ -24,8 +24,7 @@ jobs:
         with:
           path: driver
           persist-credentials: false
-          sparse-checkout: tools/overrides-diagnostic/probe.ps1
-          sparse-checkout-cone-mode: false
+          sparse-checkout: tools/overrides-diagnostic
       - name: Execute actual provider with controlled working directory
         shell: pwsh
         run: ./driver/tools/overrides-diagnostic/probe.ps1 -MeasuredRoot "$pwd/measured" -Mode '${{ matrix.mode }}'

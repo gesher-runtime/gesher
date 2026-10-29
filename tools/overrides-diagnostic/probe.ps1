@@ -31,30 +31,18 @@ param([string] $Probe, [string] $Helper)
 [Console]::Out.Flush()
 & $Probe $Helper
 '@ | Set-Content -LiteralPath $wrapper -Encoding utf8
-  $info = [Diagnostics.ProcessStartInfo]::new($exe)
-  foreach ($arg in @('-NoProfile','-ExecutionPolicy','Bypass','-File',$wrapper,$probe,$operation)) { $info.ArgumentList.Add($arg) }
-  $info.UseShellExecute = $false
-  $info.RedirectStandardOutput = $true
-  $info.RedirectStandardError = $true
-  $info.WorkingDirectory = if ($Mode -eq 'isolated') { $work } else { $root }
-  $process = [Diagnostics.Process]::Start($info)
-  if ($null -eq $process) { throw 'Provider process not created' }
-  $pidValue = $process.Id
-  $birth = $process.StartTime.ToUniversalTime().ToString('o')
-  $stdout = $process.StandardOutput.ReadToEndAsync(); $stderr = $process.StandardError.ReadToEndAsync()
-  try {
-    if (-not $process.WaitForExit(45000)) {
-      try { $process.Kill($true) } catch { }
-      if (-not $process.WaitForExit(5000)) { [Environment]::FailFast('Provider termination not proved') }
-      throw 'Actual provider timed out'
-    }
-    if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout,$stderr),5000)) { throw 'Provider output drain failed' }
-    $text = $stdout.Result + $stderr.Result
-    Write-Host "GEOCODER_PROVIDER mode=$Mode current_run=$actualRun source=$source pid=$pidValue birth=$birth exit=$($process.ExitCode) requested_cwd=$($info.WorkingDirectory) probe_sha256=$((Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash) exe_sha256=$((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)"
-    Write-Host $text
-    $cwdMarker = 'GEOCODER_CHILD_CWD pid=' + $pidValue + ' native=' + $info.WorkingDirectory + ' shell='
-    if ($process.ExitCode -ne 0 -or $text.IndexOf($cwdMarker, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or $text -notmatch 'status: ([A-Za-z]+)' -or $text -notmatch 'WINRT_PROVIDER task_status=RanToCompletion') { throw 'Original provider result or actual native working directory missing' }
-  } finally { $process.Dispose() }
+  $requestedCwd = if ($Mode -eq 'isolated') { $work } else { $root }
+  foreach ($path in @($wrapper, $probe, $operation)) { if ($path.Contains('"')) { throw 'Unsupported diagnostic argument path' } }
+  Add-Type -Path (Join-Path $PSScriptRoot 'GeocoderCwdSupervisor.cs')
+  [GeocoderCwdSupervisor]::DiagnosticWorkingDirectory = $requestedCwd
+  $args = '-NoProfile -ExecutionPolicy Bypass -File "' + $wrapper + '" "' + $probe + '" "' + $operation + '"'
+  $result = [GeocoderCwdSupervisor]::Run($exe, $args, 45000, '')
+  Assert-GeocoderOwnedJob $result $exe 'cwd-diagnostic-provider'
+  $text = $result.Output + $result.Error
+  Write-Host "GEOCODER_PROVIDER mode=$Mode current_run=$actualRun source=$source pid=$($result.Pid) birth=$($result.Birth) exit=$($result.ExitCode) requested_cwd=$requestedCwd probe_sha256=$((Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash) exe_sha256=$((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)"
+  Write-Host $text
+  $cwdMarker = 'GEOCODER_CHILD_CWD pid=' + $result.Pid + ' native=' + $requestedCwd + ' shell='
+  if ($text.IndexOf($cwdMarker, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or $text -notmatch 'status: ([A-Za-z]+)' -or $text -notmatch 'WINRT_PROVIDER task_status=RanToCompletion') { throw 'Original provider result or actual native working directory missing' }
   Observe 'after-provider'
 } finally {
   Remove-GeocoderProbeAssembly
