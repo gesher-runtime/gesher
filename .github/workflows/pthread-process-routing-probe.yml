@@ -1,3 +1,4 @@
+# Owned child job retirement is observed separately from callback deadlines.
 name: pthread process identity routing probe
 on:
   push:

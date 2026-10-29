@@ -68,14 +68,25 @@ cleanup:
   }
   if (assigned) {
     JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting={0};
-    if (!QueryInformationJobObject(job,JobObjectBasicAccountingInformation,&accounting,sizeof(accounting),NULL) || accounting.ActiveProcesses!=0) status=8;
+    ULONGLONG deadline=GetTickCount64()+5000;
+    do {
+      if (!QueryInformationJobObject(job,JobObjectBasicAccountingInformation,&accounting,sizeof(accounting),NULL)) {
+        fprintf(stderr,"FAIL supervisor query-job error=%lu\n",GetLastError()); status=8; break;
+      }
+      if (!accounting.ActiveProcesses) break;
+      Sleep(5);
+    } while (GetTickCount64()<deadline);
+    if (accounting.ActiveProcesses) { fprintf(stderr,"FAIL supervisor job active=%lu\n",accounting.ActiveProcesses); status=8; }
   }
   if (attrs_ready) DeleteProcThreadAttributeList(attrs);
-  if (attrs && !HeapFree(GetProcessHeap(),0,attrs)) status=8;
-  if (created) { if (!CloseHandle(pi.hThread)) status=8; if (!CloseHandle(pi.hProcess)) status=8; }
-  if (job && !CloseHandle(job)) status=8;
-  if (entered && !CloseHandle(entered)) status=8;
-  if (returned && !CloseHandle(returned)) status=8;
+  if (attrs && !HeapFree(GetProcessHeap(),0,attrs)) { fprintf(stderr,"FAIL supervisor heapfree error=%lu\n",GetLastError()); status=8; }
+  if (created) {
+    if (!CloseHandle(pi.hThread)) { fprintf(stderr,"FAIL supervisor thread-handle error=%lu\n",GetLastError()); status=8; }
+    if (!CloseHandle(pi.hProcess)) { fprintf(stderr,"FAIL supervisor process-handle error=%lu\n",GetLastError()); status=8; }
+  }
+  if (job && !CloseHandle(job)) { fprintf(stderr,"FAIL supervisor job-handle error=%lu\n",GetLastError()); status=8; }
+  if (entered && !CloseHandle(entered)) { fprintf(stderr,"FAIL supervisor entered-handle error=%lu\n",GetLastError()); status=8; }
+  if (returned && !CloseHandle(returned)) { fprintf(stderr,"FAIL supervisor returned-handle error=%lu\n",GetLastError()); status=8; }
   if (!status && observed) printf("PASS destructor deletes its own key and returns; child pid=%lu exit=0 job-empty\n",pi.dwProcessId);
   return status;
 }
