@@ -38,6 +38,7 @@ inline constexpr int kMsgOob = 1;
 inline constexpr int kMsgPeek = 2;
 inline constexpr int kMsgDontRoute = 4;
 inline constexpr int kMsgWaitAll = 8;
+inline constexpr int kMsgTrunc = 16;
 
 // Options with an int value. Timeouts are in milliseconds.
 enum class Option {
@@ -92,7 +93,10 @@ int DnsServers(uint32_t ifindex, std::vector<Address>* servers, uint32_t* select
 
 // Gather/scatter I/O; `to`/`from` may be null.
 ptrdiff_t Send(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to);
-ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from);
+ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
+               int* result_flags = nullptr);
+bool CopyFromUser(void* destination, const void* source, size_t size);
+bool CopyToUser(void* destination, const void* source, size_t size);
 
 int GetOption(Socket s, Option option, int* value);
 int SetOption(Socket s, Option option, int value);

@@ -286,6 +286,7 @@ int ToMsgFlags(int flags) {
   if (flags & MSG_PEEK) result |= ws::kMsgPeek;
   if (flags & MSG_DONTROUTE) result |= ws::kMsgDontRoute;
   if (flags & MSG_WAITALL) result |= ws::kMsgWaitAll;
+  if (flags & MSG_TRUNC) result |= ws::kMsgTrunc;
   return result;
 }
 
@@ -310,7 +311,7 @@ ssize_t SendBuffers(int fd, ws::Buffer* buffers, size_t count, int flags,
 }
 
 ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockaddr* addr,
-                    socklen_t* addrlen) {
+                    socklen_t* addrlen, int* result_flags = nullptr) {
   SocketFd state;
   if (!Lookup(fd, &state)) return -1;
   // There is no error queue: Linux reports EAGAIN when it is empty.
@@ -318,15 +319,28 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
   if (WouldBlock(state, flags, ws::kPollIn)) return -1;
   ws::Address from;
   ssize_t n = ws::Recv(state.socket, buffers, count, ToMsgFlags(flags),
-                       addr != nullptr ? &from : nullptr);
-  if (n >= 0 && addr != nullptr) FromAddress(from, addr, addrlen);
+                       addr != nullptr ? &from : nullptr, result_flags);
+  if (n >= 0 && addr != nullptr) {
+    sockaddr_storage local = {};
+    socklen_t actual = sizeof(local), capacity = 0;
+    FromAddress(from, reinterpret_cast<sockaddr*>(&local), &actual);
+    if (!ws::CopyFromUser(&capacity, addrlen, sizeof(capacity))) return errno = EFAULT, -1;
+    size_t copied = capacity < actual ? capacity : actual;
+    if (!ws::CopyToUser(addr, &local, copied) ||
+        !ws::CopyToUser(addrlen, &actual, sizeof(actual))) return errno = EFAULT, -1;
+  }
   return n;
 }
 
 bool ToBuffers(const struct msghdr* msg, std::vector<ws::Buffer>* buffers) {
   if (msg->msg_iovlen > 1024) return errno = EMSGSIZE, false;
   for (size_t i = 0; i < msg->msg_iovlen; ++i) {
-    buffers->push_back({msg->msg_iov[i].iov_base, msg->msg_iov[i].iov_len});
+    iovec io;
+    uintptr_t base = reinterpret_cast<uintptr_t>(msg->msg_iov);
+    if (base > UINTPTR_MAX - i * sizeof(io) ||
+        !ws::CopyFromUser(&io, reinterpret_cast<const void*>(base + i * sizeof(io)), sizeof(io)))
+      return errno = EFAULT, false;
+    buffers->push_back({io.iov_base, io.iov_len});
   }
   return true;
 }
@@ -348,10 +362,12 @@ ssize_t sendto(int fd, const void* buf, size_t len, int flags, const struct sock
 
 // Ancillary data (msg_control) is not supported and is ignored.
 ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
+  msghdr local;
+  if (!ws::CopyFromUser(&local, msg, sizeof(local))) return errno = EFAULT, -1;
   std::vector<ws::Buffer> buffers;
-  if (!ToBuffers(msg, &buffers)) return -1;
+  if (!ToBuffers(&local, &buffers)) return -1;
   return SendBuffers(fd, buffers.data(), buffers.size(), flags,
-                     static_cast<const sockaddr*>(msg->msg_name), msg->msg_namelen);
+                     static_cast<const sockaddr*>(local.msg_name), local.msg_namelen);
 }
 
 ssize_t recv(int fd, void* buf, size_t len, int flags) {
@@ -366,14 +382,24 @@ ssize_t recvfrom(int fd, void* buf, size_t len, int flags, struct sockaddr* addr
 }
 
 ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
+  msghdr local;
+  if (!ws::CopyFromUser(&local, msg, sizeof(local))) return errno = EFAULT, -1;
   std::vector<ws::Buffer> buffers;
-  if (!ToBuffers(msg, &buffers)) return -1;
+  if (!ToBuffers(&local, &buffers)) return -1;
+  int result_flags = 0;
   ssize_t n = RecvBuffers(fd, buffers.data(), buffers.size(), flags,
-                          static_cast<sockaddr*>(msg->msg_name),
-                          msg->msg_name != nullptr ? &msg->msg_namelen : nullptr);
+                          static_cast<sockaddr*>(local.msg_name),
+                          local.msg_name != nullptr ? &local.msg_namelen : nullptr, &result_flags);
   if (n >= 0) {
-    msg->msg_controllen = 0;  // no ancillary data
-    msg->msg_flags = 0;
+    local.msg_controllen = 0;  // no ancillary data
+    local.msg_flags = (result_flags & ws::kMsgTrunc) ? MSG_TRUNC : 0;
+    uintptr_t base = reinterpret_cast<uintptr_t>(msg);
+    if (!ws::CopyToUser(reinterpret_cast<void*>(base + offsetof(msghdr, msg_namelen)),
+                        &local.msg_namelen, sizeof(local.msg_namelen)) ||
+        !ws::CopyToUser(reinterpret_cast<void*>(base + offsetof(msghdr, msg_controllen)),
+                        &local.msg_controllen, sizeof(local.msg_controllen)) ||
+        !ws::CopyToUser(reinterpret_cast<void*>(base + offsetof(msghdr, msg_flags)),
+                        &local.msg_flags, sizeof(local.msg_flags))) return errno = EFAULT, -1;
   }
   return n;
 }

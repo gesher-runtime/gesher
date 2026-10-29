@@ -18,8 +18,15 @@
 
 #include "internal.h"
 #include "socket_internal.h"
+#include "socket_user_copy.h"
 
 namespace gesher::ws {
+bool CopyFromUser(void* destination, const void* source, size_t size) {
+  return usercopy::From(destination, source, size);
+}
+bool CopyToUser(void* destination, const void* source, size_t size) {
+  return usercopy::To(destination, source, size);
+}
 namespace {
 
 std::atomic<uint32_t> g_process_interface{0};
@@ -519,7 +526,50 @@ ptrdiff_t Send(Socket s, const Buffer* buffers, size_t count, int flags, const A
   return static_cast<ptrdiff_t>(sent);
 }
 
-ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from) {
+ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
+               int* result_flags) {
+  int type = 0;
+  int type_len = sizeof(type);
+  if (Api().getsockopt(static_cast<SOCKET>(s), SOL_SOCKET, SO_TYPE,
+                       reinterpret_cast<char*>(&type), &type_len) != 0) return FailIo();
+  WSAPROTOCOL_INFOW protocol = {};
+  int protocol_len = sizeof(protocol);
+  if (type == SOCK_DGRAM &&
+      Api().getsockopt(static_cast<SOCKET>(s), SOL_SOCKET, SO_PROTOCOL_INFOW,
+                       reinterpret_cast<char*>(&protocol), &protocol_len) != 0) return FailIo();
+  if (type == SOCK_DGRAM && protocol.iProtocol == IPPROTO_UDP &&
+      (protocol.iAddressFamily == AF_INET || protocol.iAddressFamily == AF_INET6)) {
+    // Windows discards the tail on WSAEMSGSIZE. Receive an entire ordinary IP
+    // datagram in ONE operation instead of FIONREAD/peek followed by consume:
+    // another receiver (including a duplicated handle) can take the head packet
+    // between those operations. No endpoint lock or cached packet is needed.
+    // 65536 exceeds the maximum UDP payload on Windows for both IP families.
+    if (count > 1024) return errno = EMSGSIZE, -1;
+    for (size_t i = 0; i < count; ++i) {
+      if (buffers[i].len > PTRDIFF_MAX) return errno = EINVAL, -1;
+    }
+    std::unique_ptr<char, decltype(&std::free)> packet(
+        static_cast<char*>(std::malloc(65536)), &std::free);
+    if (!packet) return errno = ENOMEM, -1;
+    WSABUF whole = {65536, packet.get()};
+    sockaddr_storage peer = {};
+    int peer_len = sizeof(peer);
+    DWORD received = 0;
+    // Actual Linux UDP receives ignore OOB and WAITALL; Winsock may reject them.
+    DWORD win_flags = ToWinMsgFlags(flags & ~(kMsgWaitAll | kMsgOob));
+    if (WSARecvFrom(static_cast<SOCKET>(s), &whole, 1, &received, &win_flags,
+                    from != nullptr ? reinterpret_cast<sockaddr*>(&peer) : nullptr,
+                    from != nullptr ? &peer_len : nullptr, nullptr, nullptr) != 0) return FailIo();
+    size_t copied = 0;
+    for (size_t i = 0; i < count; ++i) {
+      size_t n = buffers[i].len < received - copied ? buffers[i].len : received - copied;
+      if (!CopyToUser(buffers[i].data, packet.get() + copied, n)) return errno = EFAULT, -1;
+      copied += n;
+    }
+    if (from != nullptr) FromWin(reinterpret_cast<sockaddr*>(&peer), peer_len, from);
+    if (result_flags != nullptr) *result_flags = copied < received ? kMsgTrunc : 0;
+    return static_cast<ptrdiff_t>((flags & kMsgTrunc) ? received : copied);
+  }
   WSABUF bufs[kMaxBuffers];
   if (!ToWsaBufs(buffers, count, bufs)) return -1;
   sockaddr_storage ss;
@@ -535,6 +585,7 @@ ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from
     for (size_t i = 0; i < count; ++i) received += bufs[i].len;
   }
   if (from != nullptr) FromWin(reinterpret_cast<sockaddr*>(&ss), len, from);
+  if (result_flags != nullptr) *result_flags = 0;
   return static_cast<ptrdiff_t>(received);
 }
 
