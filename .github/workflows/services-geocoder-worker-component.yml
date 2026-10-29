@@ -3,7 +3,7 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
-    branches: [wip/services3-cancel-current]
+    branches: [wip/services3-cancel-current, wip/services-real-winrt]
     paths: [.github/workflows/services-geocoder-worker-component.yml]
 jobs:
   controlled-worker:
@@ -40,3 +40,24 @@ jobs:
       - name: Exercise owned worker and child containment
         shell: pwsh
         run: ./tests/windows/tracks/geocoder-operation-fixture.ps1
+      - name: Verify actual WinRT probe source identities
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -cne $env:GITHUB_SHA -or $LASTEXITCODE -ne 0) { throw 'WinRT checkout identity mismatch' }
+          $expected = @{
+            'tests/windows/tracks/geocoder-operation.ps1' = '574a761bf6a04893bf5f3746f184935bd5fa4195'
+            'tests/windows/tracks/geocoder-probe-exit.cs' = '4927e87a71c41069bbed24be748cfd0b771583d5'
+            'tests/windows/tracks/geocoder-winrt-supplier.cs' = '11da9f04efdbb98de30006b0c26e169bec6d8b19'
+            'tests/windows/helpers/geocoder-provider-probe.ps1' = 'd02fc316ccaca1ac856eaeae64df6e4053da569c'
+            'tests/windows/helpers/geocoder-winrt-fixture.ps1' = 'e0ba645637279590eee5ae595f52c253d5f47b6c'
+            'tests/windows/helpers/run-geocoder-winrt-component.ps1' = '3af59a437b4668a7b6110ff285bd8b495cc35761'
+            'tests/windows/tracks/58-devices.ps1' = '51c7f783356dab357325e408fd497afe5b5e405b'
+          }
+          foreach ($path in $expected.Keys) {
+            $actual = git hash-object $path
+            if ($LASTEXITCODE -ne 0 -or $actual -cne $expected[$path]) { throw "WinRT source mismatch: $path" }
+            Write-Host "WINRT_SOURCE base=f0f52116 source=$env:GITHUB_SHA path=$path blob=$actual sha256=$((Get-FileHash $path -Algorithm SHA256).Hash)"
+          }
+      - name: Exercise actual WinRT adapter and real Maps provider in owned children
+        shell: pwsh
+        run: ./tests/windows/helpers/run-geocoder-winrt-component.ps1
