@@ -1,0 +1,24 @@
+name: net-tcp-owned-linux-reference
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/net-tcp-error-state]
+    paths: [.github/workflows/net-tcp-owned-linux-reference.yml, tests/net-tcp-priority/connect_wait_oracle.cc]
+permissions:
+  contents: read
+jobs:
+  linux-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retain original full Linux priority contract
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
+          timeout 20 /tmp/tcp-priority-reference
+      - name: Observe real pending kernel connect wait and later completion
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/connect_wait_oracle.cc -o /tmp/connect-wait-reference
+          timeout 20 /tmp/connect-wait-reference
