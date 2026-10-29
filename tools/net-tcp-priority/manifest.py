@@ -50,4 +50,3 @@ Path('tcp-fixture/provenance.json').write_text(json.dumps(manifest, indent=2) + 
 print('TCP_PRIORITY_PRODUCER', json.dumps({k: manifest[k] for k in ('source', 'run', 'attempt', 'scope')}))
 for role, details in compilers.items():
     print('TCP_PRIORITY_COMPILER', role, json.dumps(details))
-
