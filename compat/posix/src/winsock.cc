@@ -17,6 +17,7 @@
 
 #include <mutex>
 #include <atomic>
+#include <new>
 
 #include "internal.h"
 #include "socket_internal.h"
@@ -424,21 +425,32 @@ int BindInterface(Socket s, uint32_t ifindex) {
   return 0;
 }
 
-int Close(Socket s, const std::shared_ptr<SocketDescription>& description) {
+int Close(Socket s, const std::shared_ptr<SocketDescription>& description, bool retain_failure) {
   if (!description) return closesocket(static_cast<SOCKET>(s)) == 0 ? 0 : Fail();
   {
     std::lock_guard<std::mutex> lock(description->error_mutex);
     description->native_closing = true;
   }
+  std::unique_lock<std::mutex> native_call(description->native_call_mutex);
   // SO_LINGER may wait. Never make a finite poll wait for this native call
   // while trying to refresh its completion metadata.
   const int result = closesocket(static_cast<SOCKET>(s)) == 0 ? 0 : Fail();
   const int saved = errno;
-  std::lock_guard<std::mutex> lock(description->error_mutex);
-  // closesocket cancels pending operations. Its event/OVERLAPPED remain owned
-  // by the worker until actual completion, including when the number is reused.
-  if (result == 0) description->native_closed = true;
-  description->native_closing = false;
+  {
+    std::lock_guard<std::mutex> lock(description->error_mutex);
+    // closesocket cancels pending operations. Its event/OVERLAPPED remain owned
+    // by the worker until actual completion, including when the number is reused.
+    if (result == 0) description->native_closed = true;
+    else if (retain_failure) {
+      // No allocation after ownership was removed from the fd table. A failed
+      // physical close retains both actual handle and description explicitly.
+      description->quarantined_socket = s;
+      description->failed_close_owner = description;
+    }
+    description->native_closing = false;
+  }
+  native_call.unlock();
+  if (result < 0 && retain_failure) fprintf(stderr, "gesher-base: native socket close failed errno=%d; SOCKET=%llu retained in description quarantine\n", saved, static_cast<unsigned long long>(s));
   errno = saved;
   return result;
 }
@@ -459,7 +471,13 @@ int SetNonBlocking(Socket s, bool on) {
   return ioctlsocket(static_cast<SOCKET>(s), FIONBIO, &mode) == 0 ? 0 : Fail();
 }
 
-int Bind(Socket s, const Address& address) {
+int Bind(Socket s, const Address& address, const std::shared_ptr<SocketDescription>& description) {
+  std::unique_lock<std::mutex> native_call;
+  if (description) {
+    native_call = std::unique_lock<std::mutex>(description->native_call_mutex);
+    std::lock_guard<std::mutex> lock(description->error_mutex);
+    if (description->native_closed || description->native_closing) return errno = EBADF, -1;
+  }
   sockaddr_storage ss;
   int len;
   if (!ToWin(address, &ss, &len)) return -1;
@@ -474,6 +492,25 @@ int Connect(Socket s, const Address& address) {
   // A non-blocking connect reports WSAEWOULDBLOCK where Linux says EINPROGRESS.
   if (WSAGetLastError() == WSAEWOULDBLOCK) return errno = EINPROGRESS, -1;
   return Fail();
+}
+
+int ConnectLegacy(Socket s, const Address& address, const std::shared_ptr<SocketDescription>& description,
+                  void (*before_native)(void*), void* context) {
+  // These exact provider paths do not initiate a TCP handshake. Coordination
+  // is separate from completion metadata, so poll/getters never wait on it.
+  const bool coordinated = description->provider == Provider::kNativeIpv4Udp ||
+      (description->provider == Provider::kNativeIpv4Tcp && address.family == Family::kUnspec);
+  if (!coordinated) {
+    if (before_native) return errno = EOPNOTSUPP, -1;
+    return Connect(s, address);  // unchanged, unqualified provider/legacy path
+  }
+  std::lock_guard<std::mutex> native_call(description->native_call_mutex);
+  if (before_native) before_native(context);
+  {
+    std::lock_guard<std::mutex> lock(description->error_mutex);
+    if (description->native_closed || description->native_closing) return errno = EBADF, -1;
+  }
+  return Connect(s, address);
 }
 
 namespace {
@@ -607,6 +644,7 @@ void* ConnectOwner(void* raw) {
 std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
     const std::shared_ptr<SocketDescription>& description) {
   std::lock_guard<std::mutex> lock(description->error_mutex);
+  if (description->provider != Provider::kNativeIpv4Tcp || address.family != Family::kInet) return errno = EOPNOTSUPP, nullptr;
   if (description->native_closed || description->native_closing) return errno = EBADF, nullptr;
   if (description->connect_operation || description->legacy_connect_active) return errno = EALREADY, nullptr;
   if (description->state.load() == ConnectState::kConnected) return errno = EISCONN, nullptr;
@@ -622,6 +660,10 @@ std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
   op.overlap.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   op.submitted = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (!op.overlap.hEvent || !op.submitted) return FailWithLastError(), nullptr;
+  // No C++ allocation may throw after the reaper has started waiting for its
+  // owner publication. Reserve the exact transfer before pin/thread creation.
+  std::unique_ptr<std::shared_ptr<ConnectOperation>> transfer(new (std::nothrow) std::shared_ptr<ConnectOperation>(operation));
+  if (!transfer) return errno = ENOMEM, nullptr;
   HMODULE module = nullptr;
   if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                          reinterpret_cast<LPCWSTR>(&ConnectOwner), &module)) return FailWithLastError(), nullptr;
@@ -648,16 +690,15 @@ std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
   description->refusal_generation = 0;
   description->connect_operation = operation;
   description->state.store(ConnectState::kConnecting);
-  auto* transfer = new std::shared_ptr<ConnectOperation>(operation);
   pthread_attr_t attributes;
   int created = pthread_attr_init(&attributes);
   const bool initialized = created == 0;
   if (created == 0) created = pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
   pthread_t thread;
-  if (created == 0) created = pthread_create(&thread, &attributes, ConnectOwner, transfer);
+  if (created == 0) created = pthread_create(&thread, &attributes, ConnectOwner, transfer.get());
   if (initialized) pthread_attr_destroy(&attributes);
   if (created != 0) {
-    delete transfer; description->connect_operation.reset();
+    description->connect_operation.reset();
     description->state.store(previous_state);
     retirement->no_owner = true;
     // A failed creation has no running owner. The pre-reserved reaper still
@@ -665,6 +706,7 @@ std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
     if (!SetEvent(retirement->started)) retirement->quarantine = true;
     return errno = gesher_errno_from_crt(created), nullptr;
   }
+  transfer.release();  // ownership transferred even if the worker already began
   return operation;
 }
 
@@ -737,7 +779,13 @@ int AwaitConnect(const std::shared_ptr<ConnectOperation>& operation, bool nonblo
   }
 }
 
-int Listen(Socket s, int backlog) {
+int Listen(Socket s, int backlog, const std::shared_ptr<SocketDescription>& description) {
+  std::unique_lock<std::mutex> native_call;
+  if (description) {
+    native_call = std::unique_lock<std::mutex>(description->native_call_mutex);
+    std::lock_guard<std::mutex> lock(description->error_mutex);
+    if (description->native_closed || description->native_closing) return errno = EBADF, -1;
+  }
   return Api().listen(static_cast<SOCKET>(s), backlog) == 0 ? 0 : Fail();
 }
 
@@ -962,12 +1010,15 @@ int Membership(Socket s, bool join, Family family, const uint8_t* group, uint32_
   return rc == 0 ? 0 : Fail();
 }
 
-bool IsTcpSocket(Socket s) {
+Provider ClassifyProvider(Socket s) {
   WSAPROTOCOL_INFOW info{}; int length = sizeof(info);
-  return Api().getsockopt(static_cast<SOCKET>(s), SOL_SOCKET, SO_PROTOCOL_INFOW,
-                          reinterpret_cast<char*>(&info), &length) == 0 &&
-         info.iSocketType == SOCK_STREAM && info.iProtocol == IPPROTO_TCP &&
-         (info.iAddressFamily == AF_INET || info.iAddressFamily == AF_INET6);
+  static constexpr GUID native = {0xe70f1aa0, 0xab8b, 0x11cf, {0x8c, 0xa3, 0x00, 0x80, 0x5f, 0x48, 0xa1, 0x92}};
+  if (Api().getsockopt(static_cast<SOCKET>(s), SOL_SOCKET, SO_PROTOCOL_INFOW,
+                      reinterpret_cast<char*>(&info), &length) != 0 || length != static_cast<int>(sizeof(info)) || info.iAddressFamily != AF_INET ||
+      info.ProtocolChain.ChainLen != BASE_PROTOCOL || !IsEqualGUID(info.ProviderId, native)) return Provider::kOther;
+  if (info.iSocketType == SOCK_STREAM && info.iProtocol == IPPROTO_TCP) return Provider::kNativeIpv4Tcp;
+  if (info.iSocketType == SOCK_DGRAM && info.iProtocol == IPPROTO_UDP) return Provider::kNativeIpv4Udp;
+  return Provider::kOther;
 }
 
 int Poll(PollEntry* entries, size_t count, int timeout_ms) {
@@ -1047,7 +1098,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
       auto& description = *entries[i].description;
       std::lock_guard<std::mutex> lock(description.error_mutex);
       if (description.native_closed || description.native_closing) r = POLLNVAL;
-      else if (description.tcp && description.refusal_generation != 0 &&
+      else if (description.provider == Provider::kNativeIpv4Tcp && description.refusal_generation != 0 &&
                description.refusal_generation == description.connect_generation &&
                description.connect_result == ECONNREFUSED &&
                !description.connect_operation && !description.legacy_connect_active &&

@@ -24,6 +24,7 @@ python tools/native3-locks/artifact/download-verified-artifact.py --id "$($a.id)
 if ($LASTEXITCODE -ne 0) { throw 'Raw archive digest or extraction failed' }
 $m = Get-Content -LiteralPath tcp-fixture/provenance.json -Raw | ConvertFrom-Json
 if ($m.repository -cne $env:GITHUB_REPOSITORY -or "$($m.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or $m.source -cne $env:GITHUB_SHA -or "$($m.run)" -cne $env:GITHUB_RUN_ID -or "$($m.attempt)" -cne $env:GITHUB_RUN_ATTEMPT -or $m.producer_job -cne 'compile' -or $m.scope -cne 'noninline-only') { throw 'Manifest identity mismatch' }
+if ($m.owned_connect_scope -cne 'AF_INET-base-chain1-e70f1aa0-ab8b-11cf-8ca3-00805f48a192-TCP') { throw 'Owned connection provider scope mismatch' }
 $roles = @{'gesher-exec.exe'='host-bionic-loader'; 'net_tcp_priority_probe.exe'='host-posix-contract'; 'gesher_arm64.dll'='matching-arm64-translator'; 'tcp-priority-x86_64'='ndk-x86_64-contract'; 'tcp-priority-arm64-v8a'='ndk-arm64-contract'}
 if (@(Compare-Object @($roles.Keys) @($m.outputs.PSObject.Properties.Name) -CaseSensitive).Count -ne 0 -or @(Compare-Object @(@($roles.Keys) + 'provenance.json') @(Get-ChildItem tcp-fixture -Force | ForEach-Object { if ($_.PSIsContainer) { throw 'Unexpected artifact directory' }; $_.Name }) -CaseSensitive).Count -ne 0) { throw 'Unexpected artifact members or roles' }
 $tracked = @(git ls-files)
@@ -71,7 +72,7 @@ foreach ($name in $native) {
 }
 Write-Host ('TCP_PRIORITY_NDK_PUBLISHER ' + ($publisher | ConvertTo-Json -Compress))
 $commandSources = @{
-  'out'=@('compat/posix/src/winsock.cc','compat/posix/src/socket.cc','compat/posix/src/fd.cc','compat/posix/src/system.cc','compat/posix/src/epoll.cc','compat/posix/src/select.cc','compat/bionic/socket_bionic.cc','tests/net-tcp-priority/contract.cc')
+  'out'=@('compat/posix/src/winsock.cc','compat/posix/src/socket.cc','compat/posix/src/fd.cc','compat/posix/src/system.cc','compat/posix/src/epoll.cc','compat/posix/src/select.cc','compat/bionic/socket_bionic.cc','tests/net-tcp-priority/contract.cc','tests/net-tcp-priority/native_udp_control.cc')
   'out-arm64'=@('compat/arm64/dll/translator.cc')
 }
 foreach ($build in 'out','out-arm64') {
@@ -110,13 +111,17 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
   if ($text -notmatch '(?m)^PASS TCP priority: actual connect finalization window consumes refusal once\s*$') { throw "Missing actual finalization window $Context" }
   if ($text -notmatch '(?m)^PASS TCP priority: requester exit retains completion and last-close drains before fd generation reuse\s*$') { throw "Missing requester/last-close/generation controls $Context" }
   if ($text -notmatch '(?m)^PASS TCP priority: independent established reset remains poll-visible and reaches the caller receive\s*$') { throw "Missing independent established-error control $Context" }
+  if ($text -notmatch '(?m)^PASS TCP priority: bind and listen transitions invalidate old refusal classification before new transport\s*$') { throw "Missing bind/listen lifecycle controls $Context" }
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^TCP_PRIORITY_CONNECT_WINDOW backend=host-private native_ready=1 lock_busy=[01] getter_before_release=1 first=111 second=0\r?$') { throw 'HOST did not complete its real getter while the requester remained paused' }
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: real owned mode flips cancellation send deadline and native owner retirement\s*$') { throw 'Missing HOST actual owned wait controls' }
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: real poll snapshots reject closed reused and dup2 identities while aliases and other entries remain ready\s*$') { throw 'Missing HOST actual poll snapshot identity controls' }
+  if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: real legacy leases reject stale native calls after CRT reuse while global operations and getters progress\s*$') { throw 'Missing HOST actual legacy lifetime controls' }
+  if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: positive native UDP error remains visible outside owned TCP refusal scope\s*$') { throw 'Missing HOST positive actual UDP error control' }
   if ($Context -eq 'host-posix') {
     foreach ($mode in 0..3) {
       if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_WAIT mode=$mode .*native_retired=1\r?$") { throw "Missing HOST actual mode/cancel/deadline context $mode" }
       if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_CENSUS mode=$mode handles=([0-9]+)/\1 threads=([0-9]+)/\2\r?$") { throw "Missing HOST repeated physical owner census $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_LEGACY_LEASE mode=$mode fd_reused=1 old_call_rc=-1 old_call_errno=9 close_rc=[0-9]+ global_progress=1 replacement_error=0\r?$") { throw "Missing HOST exact legacy lease context $mode" }
     }
   }
   Write-Host "PASS TCP priority component: $Context; actual noninline contract; inline remains OPEN"

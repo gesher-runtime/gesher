@@ -17,7 +17,7 @@ roles = {'gesher-exec.exe': 'host-bionic-loader', 'net_tcp_priority_probe.exe': 
 for source, name in [('out/gesher-exec.exe', 'gesher-exec.exe'), ('out/net_tcp_priority_probe.exe', 'net_tcp_priority_probe.exe'), ('out-arm64/gesher_arm64.dll', 'gesher_arm64.dll')]:
     shutil.copyfile(source, Path('tcp-fixture') / name)
 compilers = {}
-for build, required in [('out', ['compat/posix/src/winsock.cc', 'compat/posix/src/socket.cc', 'compat/posix/src/fd.cc', 'compat/posix/src/system.cc', 'compat/posix/src/epoll.cc', 'compat/posix/src/select.cc', 'compat/bionic/socket_bionic.cc', 'tests/net-tcp-priority/contract.cc']), ('out-arm64', ['compat/arm64/dll/translator.cc'])]:
+for build, required in [('out', ['compat/posix/src/winsock.cc', 'compat/posix/src/socket.cc', 'compat/posix/src/fd.cc', 'compat/posix/src/system.cc', 'compat/posix/src/epoll.cc', 'compat/posix/src/select.cc', 'compat/bionic/socket_bionic.cc', 'tests/net-tcp-priority/contract.cc', 'tests/net-tcp-priority/native_udp_control.cc']), ('out-arm64', ['compat/arm64/dll/translator.cc'])]:
     configs = list(Path(build + '/CMakeFiles').glob('*/CMakeCXXCompiler.cmake'))
     assert len(configs) == 1
     paths = re.findall(r'^\s*set\(CMAKE_CXX_COMPILER\s+"([^"]+)"\)\s*$', configs[0].read_text(), re.M)
@@ -48,7 +48,7 @@ for name in ['gesher-exec.exe', 'net_tcp_priority_probe.exe', 'gesher_arm64.dll'
     print('TCP_PRIORITY_NATIVE_IMPORTS', name, json.dumps(names), flush=True)
     exports = subprocess.check_output([str(readobj), '--coff-exports', str(Path('tcp-fixture') / name)], text=True)
     export_names = re.findall(r'^\s*Name:\s*(\S+)', exports, re.M)
-    forbidden = [symbol for symbol in export_names if any(private in symbol for private in ('ConnectWithObserver', 'PollWithObserver', 'AwaitConnectRetirement', 'ReadConnectOwnerCensus'))]
+    forbidden = [symbol for symbol in export_names if any(private in symbol for private in ('ConnectWithObserver', 'ConnectLegacy', 'PollWithObserver', 'AwaitConnectRetirement', 'ReadConnectOwnerCensus', 'NativeUdpErrorControl'))]
     assert not forbidden, ('Private connect observer exported', name, forbidden)
     private_observer[name] = dict(exports=len(export_names), observer_exported=False, exports_sha256=hashlib.sha256(exports.encode()).hexdigest())
     print('TCP_PRIORITY_PRIVATE_CONNECT_OBSERVER', name, json.dumps(private_observer[name]), flush=True)
@@ -57,7 +57,7 @@ for name, names in imports.items():
     assert allowed(name, names), ('Wrong native import role', name, names)
 outputs = {p.name: dict(role=roles[p.name], sha256=sha(p)) for p in Path('tcp-fixture').iterdir()}
 assert set(outputs) == set(roles)
-manifest = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'], source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], producer_job='compile', scope='noninline-only', ndk_archive=ndk_source, import_policy_sha256=sha('tools/net-tcp-priority/import-policy.json'), imports=imports, private_connect_observer=private_observer, compilers=compilers, sources=sources, outputs=outputs)
+manifest = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'], source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], producer_job='compile', scope='noninline-only', owned_connect_scope='AF_INET-base-chain1-e70f1aa0-ab8b-11cf-8ca3-00805f48a192-TCP', ndk_archive=ndk_source, import_policy_sha256=sha('tools/net-tcp-priority/import-policy.json'), imports=imports, private_connect_observer=private_observer, compilers=compilers, sources=sources, outputs=outputs)
 Path('tcp-fixture/provenance.json').write_text(json.dumps(manifest, indent=2) + '\n')
 print('TCP_PRIORITY_PRODUCER', json.dumps({k: manifest[k] for k in ('source', 'run', 'attempt', 'scope')}))
 for role, details in compilers.items():

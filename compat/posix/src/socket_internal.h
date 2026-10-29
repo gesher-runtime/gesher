@@ -65,10 +65,11 @@ inline constexpr int kPollHup = 16;
 inline constexpr int kPollNval = 32;
 
 enum class ConnectState { kInitial, kConnecting, kConnected, kFailed };
+enum class Provider { kOther, kNativeIpv4Tcp, kNativeIpv4Udp };
 struct ConnectOperation;
 struct SocketDescription {
   std::atomic<ConnectState> state{ConnectState::kInitial};
-  bool tcp = false;  // immutable provider protocol identity, set before publication
+  Provider provider = Provider::kOther;  // exact base-provider identity before publication
   uint64_t connect_generation = 0;  // error_mutex; never a numeric fd identity
   int connect_result = 0, connect_error = 0;  // completion / caller-unread token
   uint64_t refusal_generation = 0;  // positively completed ConnectEx refusal only
@@ -78,6 +79,9 @@ struct SocketDescription {
   std::atomic<bool> nonblocking{false}, reuse_addr{false};
   std::mutex error_mutex;
   std::mutex status_mutex;
+  std::mutex native_call_mutex;  // legacy control call vs physical close, never poll
+  Socket quarantined_socket = kInvalidSocket;
+  std::shared_ptr<SocketDescription> failed_close_owner;  // explicit failure quarantine
   size_t descriptor_refs = 0;  // fd.cc's table mutex; snapshots are not fd refs
 };
 struct PollEntry {
@@ -89,14 +93,16 @@ struct PollEntry {
 
 // Starts Winsock once; false (errno set) if it cannot.
 bool Startup();
-bool IsTcpSocket(Socket s);  // provider protocol identity; never reads SO_ERROR
+Provider ClassifyProvider(Socket s);  // exact provider identity, never SO_ERROR
 
 Socket Open(Family family, Type type, int protocol, bool process_binding = true);
-int Close(Socket s, const std::shared_ptr<SocketDescription>& description = {});
+int Close(Socket s, const std::shared_ptr<SocketDescription>& description = {}, bool retain_failure = false);
 Socket Duplicate(Socket s);  // a second socket for the same endpoint
 int SetNonBlocking(Socket s, bool on);
-int Bind(Socket s, const Address& address);
+int Bind(Socket s, const Address& address, const std::shared_ptr<SocketDescription>& description = {});
 int Connect(Socket s, const Address& address);  // EINPROGRESS when non-blocking
+int ConnectLegacy(Socket s, const Address& address, const std::shared_ptr<SocketDescription>& description,
+                  void (*before_native)(void*) = nullptr, void* context = nullptr);
 // Start under the descriptor transaction, then wait only after releasing it.
 // The native operation always uses ConnectEx, independent of FIONBIO mode.
 std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
@@ -107,7 +113,7 @@ int AwaitConnectRetirement(const std::shared_ptr<ConnectOperation>& operation, i
 struct OwnerCensus { uint32_t handles = 0, threads = 0; };
 bool ReadConnectOwnerCensus(OwnerCensus* result);  // read-only HOST lifetime evidence
 void RefreshConnect(const std::shared_ptr<SocketDescription>& description);
-int Listen(Socket s, int backlog);
+int Listen(Socket s, int backlog, const std::shared_ptr<SocketDescription>& description = {});
 Socket Accept(Socket s, Address* peer);
 int GetSockName(Socket s, Address* address);
 int GetPeerName(Socket s, Address* address);
@@ -244,8 +250,10 @@ struct SocketFd {
   std::shared_ptr<ws::SocketDescription> description;
 };
 
-// Internal operation dependency for a real post-native-call CI barrier. The
-// POSIX entry always passes nullptr; no mutable hook or guest symbol exists.
+// Immutable operation dependencies for real CI barriers. The POSIX entries
+// pass nullptr; no global mutable hook or guest symbol exists. Connect result
+// -2 identifies a held legacy lease before its native call; other observations
+// follow actual submission. Poll observes the held production snapshots.
 using ConnectObserver = void (*)(ws::Socket, int, int, void*);
 int ConnectWithObserver(int fd, const void* address, uint32_t length, ConnectObserver observer, void* context);
 using PollObserver = void (*)(void*);

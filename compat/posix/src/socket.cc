@@ -50,6 +50,28 @@ int RegisterNew(ws::Socket s, bool nonblocking) {
   return gesher::RegisterSocket(state);
 }
 
+// Lifecycle controls invalidate a completed-refusal readiness classification
+// before native mutation. Their lease is separate from finite poll metadata.
+bool BeginControl(int fd, const SocketFd& state) {
+  gesher::record_locks::DescriptorGuard descriptor_guard;
+  SocketFd current;
+  if (!gesher::LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, false;
+  std::lock_guard<std::mutex> lock(state.description->error_mutex);
+  if (state.description->connect_operation || state.description->legacy_connect_active) return errno = EALREADY, false;
+  state.description->legacy_connect_active = true;
+  state.description->refusal_generation = 0;
+  return true;
+}
+
+int EndControl(const SocketFd& state, int result) {
+  const int saved = errno;
+  std::lock_guard<std::mutex> lock(state.description->error_mutex);
+  state.description->legacy_connect_active = false;
+  if (result == 0) state.description->state.store(ws::ConnectState::kInitial);
+  errno = saved;
+  return result;
+}
+
 constexpr int kTypeFlags = SOCK_NONBLOCK | SOCK_CLOEXEC;
 
 // An AF_UNIX name is a path (path.cc): the names under /dev and /proc are
@@ -88,7 +110,7 @@ int ConnectWithObserver(int fd, const void* raw, uint32_t length, ConnectObserve
   SocketFd state;
   ws::Address address;
   if (!Lookup(fd, &state) || !ToAddress(static_cast<const sockaddr*>(raw), length, &address) || !MapUnixPath(&address, false)) return -1;
-  if (state.description->tcp && address.family != ws::Family::kUnspec) {
+  if (state.description->provider == ws::Provider::kNativeIpv4Tcp && address.family == ws::Family::kInet) {
     std::shared_ptr<ws::ConnectOperation> operation;
     bool nonblocking;
     {
@@ -127,7 +149,12 @@ int ConnectWithObserver(int fd, const void* raw, uint32_t length, ConnectObserve
     state.description->refusal_generation = 0;
     state.description->connect_error = 0;
   }
-  const int result = ws::Connect(state.socket, address);
+  struct Observation { ws::Socket socket; ConnectObserver observer; void* context; } observation{state.socket, observer, context};
+  void (*before)(void*) = [](void* raw) {
+    auto& o = *static_cast<Observation*>(raw);
+    o.observer(o.socket, -2, 0, o.context);  // immutable private pre-native dependency
+  };
+  const int result = ws::ConnectLegacy(state.socket, address, state.description, observer ? before : nullptr, &observation);
   const int saved = errno;
   {
     std::lock_guard<std::mutex> lock(state.description->error_mutex);
@@ -282,7 +309,9 @@ int bind(int fd, const struct sockaddr* addr, socklen_t len) {
   if (!Lookup(fd, &state) || !ToAddress(addr, len, &address) || !MapUnixPath(&address, true)) {
     return -1;
   }
-  return ws::Bind(state.socket, address);
+  if (state.description->provider == ws::Provider::kOther) return ws::Bind(state.socket, address);
+  if (!BeginControl(fd, state)) return -1;
+  return EndControl(state, ws::Bind(state.socket, address, state.description));
 }
 
 int connect(int fd, const struct sockaddr* addr, socklen_t len) {
@@ -292,7 +321,9 @@ int connect(int fd, const struct sockaddr* addr, socklen_t len) {
 int listen(int fd, int backlog) {
   SocketFd state;
   if (!Lookup(fd, &state)) return -1;
-  return ws::Listen(state.socket, backlog);
+  if (state.description->provider == ws::Provider::kOther) return ws::Listen(state.socket, backlog);
+  if (!BeginControl(fd, state)) return -1;
+  return EndControl(state, ws::Listen(state.socket, backlog, state.description));
 }
 
 int accept4(int fd, struct sockaddr* addr, socklen_t* len, int flags) {

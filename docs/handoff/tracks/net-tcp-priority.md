@@ -474,3 +474,59 @@ remains owned while close is active; no query can use a recycled SOCKET. The
 owner/caller waits without spinning until actual completion and close publication.
 Legacy/AF_UNSPEC raw-call close/reuse ordering is still a source-review BLOCKER;
 no source pass or product publication is implied by these corrections.
+
+Independent faadc255/409147 is actual GREEN on Linux and both Windows. The
+observed Windows IPv4 base provider has chain1 and GUID
+`e70f1aa0-ab8b-11cf-8ca3-00805f48a192` (TCP flags00020066, UDP00020609).
+All ten measured Windows AF_UNSPEC calls take0ms, but this is not a universal
+fast-call guarantee. Idle/ordinary-refused/owned-refused TCP return10047;
+established TCP returns10056 and remains connected; UDP returns0 and becomes
+disconnected while retaining its local port. Linux all five calls return0;
+established TCP disconnect reports104 then0, UDP releases its local port.
+Disconnect equivalence remains OPEN. Raw log:
+`C:/work/gesher-ci-review/tcp-409147-legacy-all.log`.
+
+The next proposed source bounds owned-connect behavior to that exact base
+MSAFD IPv4 TCP provider, full protocol-info result, chain1 and AF_INET request.
+IPv6 and other providers retain the unqualified legacy behavior. Producer and
+consumer receipts now carry the exact owned-connect provider scope. The same
+qualified base UDP and TCP AF_UNSPEC controls use native_call_mutex to coordinate
+their actual handle against physical close. Poll/Refresh/SO_ERROR never acquire
+that lease. No completion-metadata or descriptor-global lock covers the raw
+legacy control call; there is no assumption that every provider call is instant.
+
+Normal last-close and replaced dup2-target CRT/table transactions finish and
+release the global descriptor guard BEFORE physical closesocket or waiting for
+the native lease. Native-closing intent is published before fd reuse; both old
+description and actual handle remain owned through physical close. Close returns
+its native outcome. dup2 retains POSIX's successful replacement despite an old
+close error, but first records failed native ownership in a self-retaining
+description quarantine without allocating after table removal. Unpublished
+rollback retains its original private CRT-slot preservation policy.
+
+The new HOST barrier holds the REAL legacy lease before native entry, then
+performs last-close/forced fd reuse (idle TCP, UDP and prior-owned-refusal TCP)
+or actual dup2-target replacement. New descriptor operations and the replacement
+getter must progress while the old physical closer remains blocked; resuming the
+old call must return EBADF and cannot touch the replacement. Physical close and
+both caller threads must then retire. Bind/listen invalidate old refusal
+classification before mutation; a portable behavioral control turns a refused
+socket into an empty listener, requires its full finite PRI timeout, then accepts
+a NEW transport and urgent byte. No metadata label substitutes for native success.
+
+A separate HOST WinSDK fixture creates a real UDP ICMP error with reset reporting
+explicitly enabled, proves native POLLERR before mapping, then passes that actual
+socket through production RegisterSocket/poll/recv. It requires error visibility
+and caller receive104 outside the TCP-only filter. This does not change or qualify
+the product's pre-existing UDP reset-reporting policy. The fixture is a separate
+required host compiler source (nine total selected host sources); its helper,
+legacy callback, poll callback, census and retirement helpers are forbidden PE
+exports in all three native roles. Existing wrong-role/import/archive/source,
+configured compiler and both-ABI evidence requirements remain strict.
+
+All changes above remain UNPUBLISHED pending independent whole-source review and
+fresh actual compiler/host/both-ABI contexts. The general established SO_ERROR104
+getter failure stays strict OPEN; arbitrary providers/IPv6, TCP disconnect
+equivalence, generic select, inline OOB and MinGW DLL-unload equivalence are not
+closed by this bounded candidate. Local checks are source-only AST/format review;
+no native build or fixture has executed locally.

@@ -131,7 +131,7 @@ int RegisterSocket(const SocketFd& state) {
   SocketFd registered = state;
   if (!registered.description) {
     registered.description = std::make_shared<ws::SocketDescription>();
-    registered.description->tcp = ws::IsTcpSocket(state.socket);
+    registered.description->provider = ws::ClassifyProvider(state.socket);
     registered.description->nonblocking.store(state.initial_nonblocking);
   }
   Insert(fd, registered);
@@ -161,7 +161,7 @@ using gesher::Device;
 using gesher::SocketFd;
 
 namespace {
-int CloseFdBody(int fd, bool unpublished) {
+int CloseFdBody(int fd, bool unpublished, SocketFd* deferred = nullptr) {
   gesher::ForgetEpollEntries(fd);
   SocketFd state;
   int result;
@@ -174,7 +174,13 @@ int CloseFdBody(int fd, bool unpublished) {
   } else {
     // Only the last descriptor closes the native socket. Shared metadata
     // snapshots do not extend its lifetime or delay the existing close wake.
-    result = last ? gesher::ws::Close(state.socket, state.description) : 0;
+    if (last && deferred) {
+      // Commit only CRT/table ownership under the descriptor transaction.
+      // Physical close (including linger or a legacy call lease) runs after it.
+      { std::lock_guard<std::mutex> lock(state.description->error_mutex); state.description->native_closing = true; }
+      *deferred = state;
+      result = 0;
+    } else result = last ? gesher::ws::Close(state.socket, state.description) : 0;
     int socket_errno = errno;
     if (result < 0 && unpublished) {
       // A failed virtual-resource close does not make the private CRT slot
@@ -191,11 +197,19 @@ int CloseFdBody(int fd, bool unpublished) {
 }
 
 int CloseDescriptor(int fd) {
-  gesher::record_locks::ClosingDescriptor transaction(fd);
-  if (transaction.Error()) return errno = transaction.Error(), -1;
-  int result = CloseFdBody(fd, false);
-  const int saved = errno;
-  const int error = transaction.Finish(result == 0);
+  SocketFd deferred;
+  int result, saved, error;
+  {
+    gesher::record_locks::ClosingDescriptor transaction(fd);
+    if (transaction.Error()) return errno = transaction.Error(), -1;
+    result = CloseFdBody(fd, false, &deferred);
+    saved = errno;
+    error = transaction.Finish(result == 0);
+  }
+  if (deferred.description) {
+    const int native_result = gesher::ws::Close(deferred.socket, deferred.description, true);
+    if (native_result < 0) { result = native_result; saved = errno; }
+  }
   if (error) return errno = error, -1;
   errno = saved;
   return result;
@@ -261,35 +275,44 @@ int dup(int fd) {
 }
 
 int dup2(int fd, int fd2) {
-  gesher::record_locks::DescriptorGuard descriptor_guard;
-  if (fd == fd2) return _get_osfhandle(fd) != -1 ? fd : (errno = EBADF, -1);
-  if (gesher::HandleFromFd(fd) == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
-  gesher::record_locks::ClosingDescriptor transaction(fd2);
-  if (transaction.Error()) return errno = transaction.Error(), -1;
-  SocketFd source;
-  bool source_is_socket = gesher::LookupSocket(fd, &source);
-  if (gesher::CrtResult(_dup2(fd, fd2)) < 0) {
-    int saved = errno;
-    int error = transaction.Finish();
-    errno = error ? error : saved;
-    return -1;
+  SocketFd target;
+  bool close_target = false;
+  int saved, metadata_error;
+  {
+    gesher::record_locks::DescriptorGuard descriptor_guard;
+    if (fd == fd2) return _get_osfhandle(fd) != -1 ? fd : (errno = EBADF, -1);
+    if (gesher::HandleFromFd(fd) == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+    gesher::record_locks::ClosingDescriptor transaction(fd2);
+    if (transaction.Error()) return errno = transaction.Error(), -1;
+    SocketFd source;
+    bool source_is_socket = gesher::LookupSocket(fd, &source);
+    if (gesher::CrtResult(_dup2(fd, fd2)) < 0) {
+      int saved = errno;
+      int error = transaction.Finish();
+      errno = error ? error : saved;
+      return -1;
+    }
+    saved = errno;
+    bool last = false;
+    close_target = gesher::ReplaceSocket(fd2, source_is_socket ? &source : nullptr, &target, &last) && last;
+    if (close_target) { std::lock_guard<std::mutex> lock(target.description->error_mutex); target.description->native_closing = true; }
+    metadata_error = transaction.Finish(true);
+    // fd2's old file is closed: forget what it was.
+    gesher::ForgetDevice(fd2);
+    gesher::ForgetEventObject(fd2);
+    gesher::ForgetEpollEntries(fd2);
+    gesher::ForgetBinder(fd2);
+    Device device;
+    if (!source_is_socket && gesher::LookupDevice(fd, &device)) {
+      gesher::RegisterDevice(fd2, device);
+    } else if (!source_is_socket) {
+      gesher::DupEventObject(fd, fd2);
+      gesher::DupBinder(fd, fd2);
+    }
   }
-  const int saved = errno;
-  SocketFd target; bool last = false;
-  if (gesher::ReplaceSocket(fd2, source_is_socket ? &source : nullptr, &target, &last) && last) gesher::ws::Close(target.socket, target.description);
-  const int metadata_error = transaction.Finish(true);
-  // fd2's old file is closed: forget what it was.
-  gesher::ForgetDevice(fd2);
-  gesher::ForgetEventObject(fd2);
-  gesher::ForgetEpollEntries(fd2);
-  gesher::ForgetBinder(fd2);
-  Device device;
-  if (!source_is_socket && gesher::LookupDevice(fd, &device)) {
-    gesher::RegisterDevice(fd2, device);
-  } else if (!source_is_socket) {
-    gesher::DupEventObject(fd, fd2);
-    gesher::DupBinder(fd, fd2);
-  }
+  // POSIX dup2 does not report the replaced endpoint's close error. A failed
+  // native close still retains explicit ownership before success is published.
+  if (close_target) gesher::ws::Close(target.socket, target.description, true);
   if (metadata_error) return errno = metadata_error, -1;
   errno = saved;
   return fd2;

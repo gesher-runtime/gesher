@@ -16,6 +16,7 @@
 #include <unistd.h>
 #ifdef GESHER
 #include "../../compat/posix/src/socket_internal.h"
+namespace gesher::test { int NativeUdpErrorControl(); }
 #endif
 
 static void require(bool ok, const char* what) {
@@ -420,7 +421,115 @@ static void poll_close_reuse_controls() {
   }
   puts("PASS TCP priority: real poll snapshots reject closed reused and dup2 identities while aliases and other entries remain ready");
 }
+struct LegacyWindow : ConnectWindow {
+  int mode = 0, close_result = -99, replacement = -1;
+  std::atomic<bool> close_done{false};
+};
+static void hold_legacy_native(uintptr_t, int result, int, void* raw) {
+  if (result != -2) return;  // distinct immutable before-native dependency
+  auto& window = *static_cast<LegacyWindow*>(raw);
+  gesher::SocketFd state; require(gesher::LookupSocket(window.client, &state), "legacy exact descriptor before close");
+  { std::lock_guard<std::mutex> lock(state.description->error_mutex);
+    require(state.description->legacy_connect_active && state.description->refusal_generation == 0, "legacy attempt invalidates classification before native call"); }
+  require(pthread_mutex_lock(&window.mutex) == 0, "legacy lease gate lock");
+  window.native_ready = true; require(pthread_cond_broadcast(&window.condition) == 0, "legacy call lease really captured");
+  timespec deadline{}; require(clock_gettime(CLOCK_REALTIME, &deadline) == 0, "legacy lease clock"); deadline.tv_sec += 2;
+  while (!window.release) require(pthread_cond_timedwait(&window.condition, &window.mutex, &deadline) == 0, "bounded actual legacy lease");
+  require(pthread_mutex_unlock(&window.mutex) == 0, "legacy lease gate unlock");
+}
+static void* legacy_connect(void* raw) {
+  auto& window = *static_cast<LegacyWindow*>(raw);
+  window.connect_rc = gesher::ConnectWithObserver(window.client, &window.address, sizeof(window.address), hold_legacy_native, &window);
+  window.connect_error = errno; return nullptr;
+}
+static void* legacy_close(void* raw) {
+  auto& window = *static_cast<LegacyWindow*>(raw);
+  window.close_result = window.mode == 3 ? dup2(window.replacement, window.client) : close(window.client);
+  window.close_done.store(true, std::memory_order_release); return nullptr;
+}
+static void legacy_lifetime_controls() {
+  for (int mode = 0; mode != 4; ++mode) {
+    LegacyWindow window{}; window.mode = mode;
+    const bool datagram = mode == 1 || mode == 3;
+    const int type = datagram ? SOCK_DGRAM : SOCK_STREAM;
+    int target = socket(AF_INET, type, 0); require(target >= 0, "legacy reserve target");
+    sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    require(bind(target, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "legacy reserve bind");
+    socklen_t length = sizeof(address); require(getsockname(target, reinterpret_cast<sockaddr*>(&address), &length) == 0, "legacy target address");
+    window.client = socket(AF_INET, type | (mode == 2 ? SOCK_NONBLOCK : 0), 0); require(window.client >= 0, "legacy client");
+    if (mode == 2) {
+      require(connect(window.client, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == -1 && errno == EINPROGRESS, "legacy actual prior owned pending refusal");
+      pollfd p{window.client, POLLPRI, 0}; require(poll(&p, 1, 5000) == 1 && (p.revents & POLLERR), "legacy actual prior owned refusal");
+      int error = 0; length = sizeof(error); require(getsockopt(window.client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "legacy prior caller consumed refusal");
+    }
+    window.address = datagram ? address : sockaddr_in{};
+    if (!datagram) window.address.sin_family = AF_UNSPEC;
+    if (mode == 3) { window.replacement = socket(AF_INET, type, 0); require(window.replacement >= 0, "legacy dup2 source replacement"); }
+    gesher::SocketFd before; require(gesher::LookupSocket(window.client, &before), "legacy original open description");
+    require(before.description->provider == (datagram ? gesher::ws::Provider::kNativeIpv4Udp : gesher::ws::Provider::kNativeIpv4Tcp), "actual qualified legacy base provider");
+    require(pthread_mutex_init(&window.mutex, nullptr) == 0 && pthread_cond_init(&window.condition, nullptr) == 0, "legacy barrier gate");
+    pthread_t caller, closer; require(pthread_create(&caller, nullptr, legacy_connect, &window) == 0, "real legacy caller");
+    require(pthread_mutex_lock(&window.mutex) == 0, "legacy controller lock");
+    timespec deadline{}; require(clock_gettime(CLOCK_REALTIME, &deadline) == 0, "legacy controller clock"); deadline.tv_sec += 2;
+    while (!window.native_ready) require(pthread_cond_timedwait(&window.condition, &window.mutex, &deadline) == 0, "legacy real pre-native lease");
+    require(pthread_mutex_unlock(&window.mutex) == 0, "legacy controller unlock");
+    require(pthread_create(&closer, nullptr, legacy_close, &window) == 0, "actual concurrent last close");
+    gesher::SocketFd probe; const long long committed_deadline = millis() + 1500; bool committed = false;
+    do {
+      const bool mapped = gesher::LookupSocket(window.client, &probe);
+      committed = mode == 3 ? mapped && probe.description != before.description : !mapped;
+      if (!committed) usleep(1000);
+    } while (!committed && millis() < committed_deadline);
+    require(committed && !window.close_done.load(std::memory_order_acquire), "CRT/table close or replacement commits while physical close retains exact native lease");
+    int fresh = socket(AF_INET, type, 0); require(fresh >= 0, "global descriptor operations progress while legacy lease is held");
+    if (mode == 3) require(close(fresh) == 0, "independent descriptor close progresses while old native lease is held");
+    else if (fresh != window.client) require(dup2(fresh, window.client) == window.client && close(fresh) == 0, "force exact legacy fd reuse");
+    gesher::SocketFd after; require(gesher::LookupSocket(window.client, &after) && after.description != before.description && after.socket != before.socket, "leased old native handle cannot become the replacement endpoint");
+    int error = -1; length = sizeof(error); require(getsockopt(window.client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0, "replacement getter progresses without waiting for old native lease");
+    require(pthread_mutex_lock(&window.mutex) == 0, "legacy release lock"); window.release = true;
+    require(pthread_cond_broadcast(&window.condition) == 0 && pthread_mutex_unlock(&window.mutex) == 0, "legacy lease release");
+    require(pthread_join(caller, nullptr) == 0 && pthread_join(closer, nullptr) == 0, "legacy caller and physical closer actually retire");
+    require(window.connect_rc == -1 && window.connect_error == EBADF && window.close_result == (mode == 3 ? window.client : 0), "old native call fails closed before touching replacement");
+    sockaddr_in peer{}; length = sizeof(peer);
+    require(getpeername(window.client, reinterpret_cast<sockaddr*>(&peer), &length) == -1 && errno == ENOTCONN, "replacement was never connected or disconnected by stale caller");
+    printf("TCP_PRIORITY_LEGACY_LEASE mode=%d fd_reused=1 old_call_rc=%d old_call_errno=%d close_rc=%d global_progress=1 replacement_error=%d\n", mode, window.connect_rc, window.connect_error, window.close_result, error); fflush(stdout);
+    if (mode == 3) require(close(window.replacement) == 0, "legacy original dup2 source cleanup");
+    require(close(window.client) == 0 && close(target) == 0 && pthread_cond_destroy(&window.condition) == 0 && pthread_mutex_destroy(&window.mutex) == 0, "legacy barrier owned cleanup");
+  }
+  puts("PASS TCP priority: real legacy leases reject stale native calls after CRT reuse while global operations and getters progress");
+}
+static void native_udp_error_control() {
+  const int fd = gesher::test::NativeUdpErrorControl();
+  pollfd p{fd, POLLIN | POLLPRI, 0};
+  require(poll(&p, 1, 0) == 1 && (p.revents & POLLERR) && !(p.revents & POLLPRI), "positive UDP error is never filtered as a consumed TCP refusal");
+  char byte{}; require(recv(fd, &byte, 1, MSG_DONTWAIT) == -1 && errno == ECONNRESET, "actual caller receives native UDP error");
+  require(close(fd) == 0, "native UDP positive input cleanup");
+  puts("PASS TCP priority: positive native UDP error remains visible outside owned TCP refusal scope");
+}
 #endif
+static void failed_to_listener_control() {
+  int reserved = socket(AF_INET, SOCK_STREAM, 0); require(reserved >= 0, "listener transition reserve");
+  sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(reserved, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "listener transition target bind");
+  socklen_t length = sizeof(address); require(getsockname(reserved, reinterpret_cast<sockaddr*>(&address), &length) == 0, "listener transition target address");
+  int client = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); require(client >= 0, "listener transition client");
+  require(connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == -1 && errno == EINPROGRESS, "listener transition actual pending refusal");
+  pollfd p{client, POLLPRI, 0}; require(poll(&p, 1, 5000) == 1 && (p.revents & POLLERR), "listener transition actual completed refusal");
+  int error = -1; length = sizeof(error); require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "listener transition caller consumes old error");
+  const int rebound = bind(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)); const int bind_error = errno;
+  printf("TCP_PRIORITY_LISTENER_TRANSITION bind_rc=%d bind_errno=%d\n", rebound, bind_error); fflush(stdout);
+  require(rebound == -1, "an already bound failed socket does not change its local address");
+  require(listen(client, 1) == 0, "actual failed socket becomes a listener");
+  finite_priority_wait(client, "failed-socket-now-listening");
+  length = sizeof(address); require(getsockname(client, reinterpret_cast<sockaddr*>(&address), &length) == 0 && address.sin_port != 0, "actual transitioned listener address"); address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  int incoming = socket(AF_INET, SOCK_STREAM, 0); require(incoming >= 0 && connect(incoming, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "new transport reaches transitioned listener");
+  p = {client, POLLIN, 0}; require(poll(&p, 1, 2000) == 1, "transitioned listener accepts new connection");
+  int accepted = accept(client, nullptr, nullptr); require(accepted >= 0, "transitioned accepted endpoint");
+  require(send(incoming, "!", 1, MSG_OOB) == 1, "transitioned transport urgent payload"); ready(accepted, true, 2000);
+  char byte{}; require(recv(accepted, &byte, 1, MSG_OOB) == 1 && byte == '!', "transitioned transport urgent payload preserved");
+  require(close(accepted) == 0 && close(incoming) == 0 && close(client) == 0 && close(reserved) == 0, "listener transition cleanup");
+  puts("PASS TCP priority: bind and listen transitions invalidate old refusal classification before new transport");
+}
 static void connection_controls() {
   int reserved = socket(AF_INET, SOCK_STREAM, 0); require(reserved >= 0, "reserve refused port");
   sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -670,7 +779,10 @@ int main(int argc, char** argv) {
 #ifdef GESHER
   owned_wait_controls();
   poll_close_reuse_controls();
+  legacy_lifetime_controls();
+  native_udp_error_control();
 #endif
+  failed_to_listener_control();
   alias_ownership();
   Pair a = pair(); pthread_t thread;
   require(pthread_create(&thread, nullptr, delayed, &a.sender) == 0, "sender thread");
