@@ -37,7 +37,7 @@ jobs:
           GUARD = 'tools/native3-locks/current_payload.py'
           SOURCE_PINS = {
               ".github/workflows/native2.yml": "847f1f8908a50e55392f9d62c12f15365fe680a0",
-              ".github/workflows/net-udp-component.yml": "f7eff23945be7c983de07d143d1d1df44d63416c",
+              ".github/workflows/net-udp-component.yml": "ad3021ac7986ffa1643a3bf54817f7ef6bb868c0",
               ".github/workflows/net-udp-fault-observer.yml": "76fab381d903730d0f639034b75f52ec781a29ff",
               "compat/posix/src/socket.cc": "57b79cc74424af7cbbf8b0cf96cd255981d5618a",
               "compat/posix/src/socket_internal.h": "faa128a88a340d0c71fc5d0ff3c84c5a7faef1a6",
@@ -48,8 +48,8 @@ jobs:
               "tests/native2/net_udp_guarded_copy_probe.cpp": "35b571e3f253950f5f0a96117d9458ee4f1b6e39",
               "tests/native2/net_udp_trunc.cpp": "4d2d46badfa7a0b90a1f134537ee4a90f72a2e17",
               "tests/windows/tracks/89-net-udp-trunc.ps1": "9823b72c58bb77918bbb57a40d50664d1001105b",
-              "tools/net-udp-component/payload.py": "382f7c49850ad29ceda6fc264771c091e8f0966e",
-              "tools/net-udp-component/source.json": "7ac9c5cb8c977df1bc987a82ed5fbecc6e4ae547",
+              "tools/net-udp-component/payload.py": "db22caed0012086fa90b257b3ef74e963ab2df87",
+              "tools/net-udp-component/source.json": "92b0538e27f9e39aba040e30bfb362400c18724a",
               "tools/net-udp/payload.py": "dbfcf5ed59cc2cbbc726109c1ce8bb18f4e0f356"
           }
           
