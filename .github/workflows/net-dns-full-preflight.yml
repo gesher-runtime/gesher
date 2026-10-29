@@ -35,6 +35,54 @@ jobs:
           CALLER = '.github/workflows/ci.yml'
           TRUST = '.github/workflows/net-dns-full-preflight.yml'
           GUARD = 'tools/native3-locks/current_payload.py'
+          HISTORICAL_BASE = '7bbccfcddbac826f50b78175f4d23f8702fd7741'
+          # Independently frozen original preflight assertions; never import candidate policy.
+          HISTORICAL_PINS = {
+              ".github/workflows/aot3-after-resource-component.yml": "27aa2b609cb52e934796075548690a42d338e344",
+              ".github/workflows/framework.yml": "db9dc36524cd27a9a67c85460d2e98b1cbb1d44b",
+              ".github/workflows/native3-locks-commands.yml": "87095a77445bd19f39bed8fc8586dbcbc0e86172",
+              "CMakeLists.txt": "7ae30a87e608f6c99f82a3fbb0c8d8e79436c098",
+              "compat/bionic/posix_bionic.cc": "1c3d40509c6f1a2adf560aa0ce077bd563e29b03",
+              "compat/posix/include/fcntl.h": "ab3425b5226fcb4346aae9b62ff9347da9113c4f",
+              "compat/posix/posix.cmake": "908b399cfde60af4ed531c225a74f442619ee773",
+              "compat/posix/src/fd.cc": "1ea26b0d2ae99938f3acca41f4d1e2f8df2b1b37",
+              "compat/posix/src/fsops.cc": "47d68e9ff2dba40e65ed3c72b41aace41687189b",
+              "compat/posix/src/internal.h": "f3f3079b5d50f30098950108a96367b798388d66",
+              "compat/posix/src/path.cc": "84b2bad0a97cd4bbb6dd5ae420b9a1a118fb88c6",
+              "compat/posix/src/record_lock_descriptors.cc": "e94030db83d9e49ff48a1696926b93f35b5063b9",
+              "compat/posix/src/record_lock_descriptors.h": "22a04c5c769fa1bceef93aa1ae0f9977ad22d3de",
+              "compat/posix/src/record_lock_duplicate.cc": "7925d9b852d3ebccd067287a44bd9ff70171e462",
+              "compat/posix/src/record_lock_duplicate.h": "7bad2c8e0be45ede34e10cc21259d673797c60a7",
+              "compat/posix/src/record_lock_liveness.cc": "f4f978f0f36eb049073003c21846442cc0074f7a",
+              "compat/posix/src/record_lock_liveness.h": "33dffb3fb0236e3bb72d072f0547e76f80de9782",
+              "compat/posix/src/record_lock_operation.cc": "bf7cdb703f394ae04295b7321cc5aefe8c629e64",
+              "compat/posix/src/record_lock_operation.h": "2b7556da0cca6f3a6eb57dbd87674401b6ae26d8",
+              "compat/posix/src/record_lock_ranges.h": "77df2e020e6778e1f602f49a16f5d37fbddac499",
+              "compat/posix/src/record_lock_registry.cc": "888e67247dea806e71912a82665bb6fa2c6362fc",
+              "compat/posix/src/record_lock_registry.h": "a64ee405454d43972600b826b040f6a23f1cd2a7",
+              "compat/posix/src/system.cc": "b02024fc823b1c8db4469a4ba877edb3a47499d7",
+              "compat/posix/src/unistd.cc": "d7766c2183ada697a48efc6d4656c80378605925",
+              "patches/art/0730-aot3-validate-after-shared-library-context.patch": "9a44a9d0e25edcb84c21f61ec7a12f8ad5d9670b",
+              "patches/libcore/0730-aot3-complete-after-library-hierarchy-before-dex-open.patch": "a5020001ad8b525bee34a3bc3bd373f4cb329179",
+              "tests/apps/sharedlibraryapp/build.sh": "d3f0640f5825ccab74759fb6a633b3466ade3bc2",
+              "tests/dex-graphics/gesher/Aot3SharedLibraryTest.java": "ba534155d23864c791e0ca2f264cded734e39f2a",
+              "tests/native3-locks/command_oracle.py": "e24cb4853975fd15f23eb4ebe613ec11688ab837",
+              "tests/native3-locks/command_worker.cc": "cd06726ee15548292786f15636f06b8b2732cc5e",
+              "tests/native3-locks/crt_lock_probe.h": "dd6260081e62b24fd376a5fa055c104621e5bce7",
+              "tests/native3-locks/duplicate_oracle.py": "accd7a325f3e27e62522ec9fe94113420ab93fc3",
+              "tests/native3-locks/duplicate_windows_test.cc": "3bbce47e182d274abe9417a0066aaad26ac90af3",
+              "tests/native3-locks/stack_probe.h": "b950dbdcc8e0df636904b6be526e35c3173fe143",
+              "tests/native3-locks/validate_stdio_evidence.py": "c0381b740ed2e2c291959a52b28dff5155db4c45",
+              "tests/shared-libraries/after-res/values/config.xml": "8063ec46cfddf8644ab5f16d68f584a611cfff26",
+              "tests/windows/run-aot3-resource-component.ps1": "65531b9d848c35e98308c60429e68be303d345d4",
+              "tests/windows/tracks/73-aot3-shared-libraries.ps1": "c5c3a03b083d0ff3e63cfca4f70ea47303166ecc",
+              "tools/aot3/host_payload.py": "7a8cda9d658cfec5e06e0a53cb16a5b47b8d774c",
+              "tools/aot3/preflight.py": "3a434b353a6d3b347ee65c58662b529c24891ad9",
+              "tools/build-framework-res.sh": "38dbf329a0340c23cd26b2cfcb13fd1c90afc162",
+              "tools/native3-locks/artifact/assemble-artifacts.py": "8d01e5084c8b0aac7f06bc7eae75cf14e431f5b2",
+              "tools/native3-locks/artifact/download-verified-artifact.py": "cd5cc415e53102c664edac22b1604df639c8804b",
+              "tools/native3-locks/artifact/test-verified-artifact.py": "af7324581ae011f39aacf87d81ae1f44ad4c85f6"
+          }
           SOURCE_PINS = {
               ".github/workflows/native2.yml": "fc017408bc7a30f18a633f56faea2b27f5fd6e38",
               ".github/workflows/net-dns-component.yml": "2342778354242fe2c187cc66de331e5c1ce10377",
@@ -71,6 +119,11 @@ jobs:
                       require(kind == 'blob' and mode in ('100644', '100755'), 'Linked source: ' + name)
                       result[name] = (mode, blob)
               return result
+
+          def verify_historical(actual):
+              for name, blob in HISTORICAL_PINS.items():
+                  require(actual.get(name, ('', ''))[1] == blob,
+                          'Original Native/AOT selected source assertion failed: ' + name)
 
           def verify_tree(actual, expected):
               require(actual == expected, 'Unreviewed full source delta: ' + repr(sorted(
@@ -119,6 +172,18 @@ jobs:
               require(run['event'] == 'workflow_dispatch' and run['path'] == CALLER,
                       'Wrong actual workflow/event')
               subprocess.run(['git', 'merge-base', '--is-ancestor', BASE, sha], check=True)
+              subprocess.run(['git', 'merge-base', '--is-ancestor', HISTORICAL_BASE, sha], check=True)
+              # Preserve the original preflight on the accepted baseline, then
+              # extend it ONLY by the immutable exact DNS tree checked below.
+              historical = inventory(HISTORICAL_BASE)
+              baseline = inventory(BASE)
+              original_delta = {name for name in historical.keys() | baseline.keys()
+                                if historical.get(name) != baseline.get(name)}
+              original_allowed = set(HISTORICAL_PINS) | {CALLER, GUARD,
+                  'tests/windows/run-native3-locks-current.ps1'}
+              require(original_delta and original_delta <= original_allowed,
+                      'Original Native/AOT baseline preflight delta differs')
+              verify_historical(baseline)
               reviewed = os.environ.get('REVIEWED_CALLER_COMMIT', '')
               approved_caller = caller_identity(reviewed)
               references = re.findall(rb'(?m)^    uses: gesher-runtime/gesher/\.github/workflows/net-dns-full-preflight\.yml@([0-9a-f]{40})$', approved_caller)
@@ -138,6 +203,7 @@ jobs:
                   expected[name] = authority[name]
               actual = inventory(sha)
               verify_tree(actual, expected)
+              verify_historical(actual)
               require(not git('status', '--porcelain', '--untracked-files=all').strip(), 'Dirty candidate checkout')
               verify_checkout(expected)
               for value in ('', 'x' * 40, sha + ':policy'):
@@ -153,6 +219,9 @@ jobs:
                       reject('noop_guard' if name == GUARD else 'caller_policy', lambda: verify_checkout(expected))
                   finally:
                       path.write_bytes(original)
+              mutant = copy.deepcopy(actual)
+              mutant[next(iter(HISTORICAL_PINS))] = ('100644', '0' * 40)
+              reject('original_native_aot_selected_blob', lambda: verify_historical(mutant))
               # Both real files are also replaced together, then restored even on rejection.
               originals = {name: Path(name).read_bytes() for name in (GUARD, CALLER)}
               try:
@@ -177,7 +246,7 @@ jobs:
               require(not git('status', '--porcelain', '--untracked-files=all').strip(), 'Controls did not restore source')
               print('DNS_TRUSTED_SOURCE ' + json.dumps(dict(base=BASE, source=sha, run=run_id,
                   attempt=attempt, reviewed_caller_commit=reviewed, source_paths=len(expected),
-                  reviewed_blobs=SOURCE_PINS, historical_guard_blob=expected[GUARD][1],
+                  reviewed_blobs=SOURCE_PINS, original_preflight_pins=HISTORICAL_PINS, historical_guard_blob=expected[GUARD][1],
                   caller_blob=expected[CALLER][1], immutable_guard_commit=guard_commit, all_controls_restored=True), sort_keys=True), flush=True)
 
           main()
