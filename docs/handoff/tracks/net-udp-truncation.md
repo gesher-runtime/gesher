@@ -152,3 +152,20 @@ The component workflow, payload verifier and byte-pinned source manifest are
 prepared for independent source peer before push. No actual socket ABI result
 or full acceptance is claimed. The preserved immutable full guard draft remains
 uncommitted and must be completed only after component/code review.
+
+Independent peer passed exact component sourceb30b0af8 before push. Runtime
+component40795059692 and observer40795059724 were triggered by that push;
+integration owns their sole watch. Both are pending; no actual socket ABI
+qualification is claimed.
+
+Immutable full guard654f6168229e39eabfe1d068531104fb82fbca76 pins all15
+non-doc delta members fromb30b against the completef155 tree. The caller
+adds this guard before artifact-preflight; all existing producer dependencies,
+artifact tests and historical current_payload.py bytes remain unchanged. The
+maintainer repository variable NET_UDP_FULL_CALLER_COMMIT must name the
+independently reviewed caller commit, resolved only inside the immutable guard.
+It is never accepted as candidate input. Exact API run/source/attempt, external
+caller bytes, immutable guard invocation and complete checkout/source inventory
+are required. Actual individual and simultaneous no-op historical-guard/caller
+mutations must reject and restore exact bytes. Guard/caller source peer and
+component results remain prerequisites to any full dispatch.

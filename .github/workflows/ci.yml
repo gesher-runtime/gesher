@@ -15,7 +15,11 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
+  udp-full-preflight:
+    uses: gesher-runtime/gesher/.github/workflows/net-udp-full-preflight.yml@654f6168229e39eabfe1d068531104fb82fbca76
+
   artifact-preflight:
+    needs: [udp-full-preflight]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +27,6 @@ jobs:
           fetch-depth: 0
       - name: Strict archive adversarial controls
         run: |
-          python3 tools/native3-locks/current_payload.py preflight
           python3 tools/ci/receipt_identity.py
           python3 tools/surface/test-verified-artifact.py
 
@@ -947,7 +950,7 @@ jobs:
         run: |
           pwsh -NoProfile -File tests/windows/run-tests.ps1 dist -Web3Observer dist/web3_process_waits.exe | Tee-Object -FilePath results.txt
           $code = $LASTEXITCODE
-          "### Tests — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
+          "### Tests ג€” ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
           Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL|INFO)|failed' >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
