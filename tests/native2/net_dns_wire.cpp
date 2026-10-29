@@ -5,6 +5,14 @@
 #include <cstdio>
 #include <cstring>
 
+#if defined(__ANDROID__) && defined(__aarch64__)
+static_assert(static_cast<char>(-1) > 0, "Android ARM64 default char model");
+#elif defined(__ANDROID__) && defined(__x86_64__)
+static_assert(static_cast<char>(-1) < 0, "Android x86-64 default char model");
+#endif
+// Exact pinned decode_bitstring uses plain char for the final partial byte.
+static constexpr const char* bit_text = static_cast<char>(-1) < 0 ? "\\[x7a8/5]" : "\\[xa8/5]";
+
 static int failures;
 static int rows;
 static void bitdiag(const char* label, int api, size_t capacity, int rc, int error, const unsigned char* p) {
@@ -111,7 +119,21 @@ int main(int argc, char** argv) {
   check(ns_name_ntop(pointer,presentation,sizeof(presentation))==-1 && errno==EMSGSIZE,"ntop compressed rejection");
   if (extended) {
     const unsigned char bits[]={0x41,5,0xaf,0};
-    decode("bitstring-5",bits,sizeof(bits),0,"\\[xa8/5]",4);
+    decode("bitstring-5",bits,sizeof(bits),0,bit_text,4);
+    const unsigned char lengths[] = {1, 4, 6, 7, 8};
+    const char* signed_text[] = {"\\[x8/1]", "\\[xa/4]", "\\[x3ac/6]", "\\[x1ae/7]", "\\[xaf/8]"};
+    const char* unsigned_text[] = {"\\[x8/1]", "\\[xa/4]", "\\[xac/6]", "\\[xae/7]", "\\[xaf/8]"};
+    for (size_t i = 0; i < sizeof(lengths); ++i) {
+      const unsigned char wire[] = {0x41, lengths[i], 0xaf, 0};
+      char id[32]; std::snprintf(id, sizeof(id), "bitstring-%u", lengths[i]);
+      decode(id, wire, sizeof(wire), 0, static_cast<char>(-1) < 0 ? signed_text[i] : unsigned_text[i], 4);
+    }
+    unsigned char full_bits[35] = {0x41, 0};
+    std::memset(full_bits + 2, 0xaf, 32);
+    char full_text[80] = "\\[x";
+    for (size_t i = 0; i < 32; ++i) std::strcat(full_text, "af");
+    std::strcat(full_text, "/256]");
+    decode("bitstring-256", full_bits, sizeof(full_bits), 0, full_text, 35);
     for (size_t capacity=0;capacity<=12;++capacity) {
       for (int api=0;api<3;++api) {
         unsigned char out[24]; std::memset(out,0xa5,sizeof(out)); errno=0;
@@ -126,7 +148,7 @@ int main(int argc, char** argv) {
         for (size_t i=4+capacity;i<sizeof(out);++i)guard &= out[i]==0xa5;
         check(guard,"bitstring capacity guard");
         check(capacity<10 ? rc==-1 && error==EMSGSIZE :
-              rc==(api==0 ? 9 : 4) && error==0 && std::strcmp(dst,"\\[xa8/5]")==0,
+              rc==(api==0 ? static_cast<int>(std::strlen(bit_text)+1) : 4) && error==0 && std::strcmp(dst,bit_text)==0,
               "pinned bitstring conservative headroom");
         std::printf("DNS bit-cap capacity=%zu api=%d rc=%d errno=%d guard=%d\n",capacity,api,rc,error,guard);
         ++rows;

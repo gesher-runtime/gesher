@@ -66,7 +66,7 @@ int NameUnpack(const unsigned char* msg, const unsigned char* eom,
   }
 }
 
-int NameNtop(const unsigned char* src, char* dst, size_t size) {
+int NameNtop(const unsigned char* src, char* dst, size_t size, bool unsigned_char = false) {
   size_t out = 0;
   auto emit = [&](char c) { if (out >= size) return false; dst[out++] = c; return true; };
   const unsigned char* p = src;
@@ -87,9 +87,23 @@ int NameNtop(const unsigned char* src, char* dst, size_t size) {
       size_t used = 0;
       text[used++] = '\\'; text[used++] = '['; text[used++] = 'x';
       constexpr char hex[] = "0123456789abcdef";
-      for (unsigned b = 0; b < bits; b += 4) {
+      unsigned full = bits / 8 * 8;
+      for (unsigned b = 0; b < full; b += 4) {
         unsigned nibble = (p[b / 8] >> (4 - (b % 8))) & 15;
-        if (bits - b < 4) nibble &= 15 << (4 - (bits - b));
+        text[used++] = hex[nibble];
+      }
+      unsigned remaining = bits - full;
+      if (remaining > 4) {
+        // Upstream's plain char tc promotes differently on Android x86-64
+        // (signed) and arm64 (unsigned). Retain even the historical extra
+        // hex digit produced by a negative partial byte on x86-64.
+        int tc = unsigned_char ? p[full / 8] : static_cast<int8_t>(p[full / 8]);
+        unsigned value = static_cast<unsigned>(tc & (0xff << (8 - remaining)));
+        int digits = std::snprintf(text + used, sizeof(text) - used, "%02x", value);
+        if (digits < 0) return BadName();
+        used += static_cast<size_t>(digits);
+      } else if (remaining) {
+        unsigned nibble = (p[full / 8] >> 4) & (15 << (4 - remaining));
         text[used++] = hex[nibble];
       }
       int written = std::snprintf(text + used, sizeof(text) - used, "/%u]", bits);
@@ -115,10 +129,10 @@ int NameNtop(const unsigned char* src, char* dst, size_t size) {
 }
 
 int NameUncompress(const unsigned char* msg, const unsigned char* eom,
-                   const unsigned char* src, char* dst, size_t size) {
+                   const unsigned char* src, char* dst, size_t size, bool unsigned_char = false) {
   unsigned char wire[kMaxName];
   int consumed = NameUnpack(msg, eom, src, wire, sizeof(wire));
-  if (consumed < 0 || NameNtop(wire, dst, size) < 0) return -1;
+  if (consumed < 0 || NameNtop(wire, dst, size, unsigned_char) < 0) return -1;
   return consumed;
 }
 int NameSkip(const unsigned char** cursor, const unsigned char* eom) {
@@ -145,12 +159,21 @@ int BIONIC_SYSV Ntop(const unsigned char* s, char* d, size_t z) { return NameNto
 int BIONIC_SYSV Uncompress(const unsigned char* m, const unsigned char* e, const unsigned char* s,
                         char* d, size_t z) { return NameUncompress(m,e,s,d,z); }
 int BIONIC_SYSV Expand(const unsigned char* m, const unsigned char* e, const unsigned char* s,
-                    char* d, int z) {
+                    char* d, int z, bool unsigned_char = false) {
   if (z < 0) return BadName();
-  int result = NameUncompress(m,e,s,d,static_cast<size_t>(z));
+  int result = NameUncompress(m,e,s,d,static_cast<size_t>(z),unsigned_char);
   if (result >= 0 && d[0] == '.') d[0] = '\0'; // historical dn_expand root convention
   return result;
 }
+// Private host entries selected by the ARM64 guest-symbol overrides. Their
+// public wrappers keep the exact five/three-argument System V signatures.
+int BIONIC_SYSV ExpandX86(const unsigned char* m, const unsigned char* e, const unsigned char* s,
+                        char* d, int z) { return Expand(m,e,s,d,z); }
+int BIONIC_SYSV NtopArm64(const unsigned char* s, char* d, size_t z) { return NameNtop(s,d,z,true); }
+int BIONIC_SYSV UncompressArm64(const unsigned char* m, const unsigned char* e, const unsigned char* s,
+                              char* d, size_t z) { return NameUncompress(m,e,s,d,z,true); }
+int BIONIC_SYSV ExpandArm64(const unsigned char* m, const unsigned char* e, const unsigned char* s,
+                          char* d, int z) { return Expand(m,e,s,d,z,true); }
 int BIONIC_SYSV Skip(const unsigned char** p, const unsigned char* e) { return NameSkip(p,e); }
 int BIONIC_SYSV DnSkip(const unsigned char* p, const unsigned char* e) {
   const unsigned char* next = p;
@@ -163,8 +186,11 @@ void RegisterDnsWire(SymbolTable& table) {
   table["ns_name_unpack"] = reinterpret_cast<void*>(&Unpack);
   table["ns_name_ntop"] = reinterpret_cast<void*>(&Ntop);
   table["ns_name_uncompress"] = reinterpret_cast<void*>(&Uncompress);
-  table["dn_expand"] = reinterpret_cast<void*>(&Expand);
+  table["dn_expand"] = reinterpret_cast<void*>(&ExpandX86);
   table["ns_name_skip"] = reinterpret_cast<void*>(&Skip);
   table["__dn_skipname"] = reinterpret_cast<void*>(&DnSkip);
+  table["__gesher_arm64_ns_name_ntop"] = reinterpret_cast<void*>(&NtopArm64);
+  table["__gesher_arm64_ns_name_uncompress"] = reinterpret_cast<void*>(&UncompressArm64);
+  table["__gesher_arm64_dn_expand"] = reinterpret_cast<void*>(&ExpandArm64);
 }
 } // namespace gesher::bionic

@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 BASE = 'f1550540186b4ae3f17a5e501a886ec1c4d5d613'
 ROLE = 'bionic-dns-wire-component-v1'
 MEMBERS = {'gesher-exec.exe', 'gesher_arm64.dll', 'arm64_smoke_test.exe',
-           'net-dns-x86_64', 'net-dns-arm64', 'aosp-extended.log',
+           'net-dns-x86_64', 'net-dns-arm64', 'aosp-extended-x86_64.log', 'aosp-extended-arm64.log',
            'imports-host.txt', 'imports-arm64.txt', 'linux-reference.log',
-           'aosp-reference.log', 'linux-commands.json', 'compiler.json', 'guest-commands.json'}
+           'aosp-reference-x86_64.log', 'aosp-reference-arm64.log', 'linux-commands.json', 'compiler.json', 'guest-commands.json'}
 CPP = {'compat/bionic/dns_wire.cc', 'compat/bionic/shim.cc'}
 DLL_CPP = {'compat/arm64/dll/translator.cc', 'compat/arm64/dll/guest_libc.cc'}
 TOOLCHAIN = '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4'
@@ -214,7 +214,7 @@ def main():
                             negative.stdout + negative.stderr, 'Actual Linux negative not rejected')
                     print(negative.stdout + negative.stderr, flush=True)
         from aosp_reference import run_reference
-        compilers.append(run_reference(ROOT, args.directory))
+        compilers.extend(run_reference(ROOT, args.directory))
         (args.directory / 'linux-commands.json').write_text(json.dumps(
             {'context': context(), 'compilers': compilers}, sort_keys=True) + '\n')
         return
@@ -291,11 +291,11 @@ def main():
         main_rows = (folder / 'linux-reference.log').read_text().splitlines()
         require(len(main_rows) == 97 and main_rows[-1] == 'DNS all done rows=96 failures=0',
                 'Missing actual independent Linux rows')
-        require((folder / 'aosp-reference.log').read_text() == (folder / 'linux-reference.log').read_text(),
-                'Exact pinned AOSP and Linux common contracts differ')
-        require((folder / 'aosp-extended.log').read_text().splitlines()[-1] == 'DNS all done rows=138 failures=0',
-                'Missing actual pinned AOSP bitstring controls')
         for abi, machine in (('x86_64', 62), ('arm64', 183)):
+            require((folder / ('aosp-reference-' + abi + '.log')).read_text() == (folder / 'linux-reference.log').read_text(),
+                    'Exact pinned AOSP and Linux common contracts differ: ' + abi)
+            require((folder / ('aosp-extended-' + abi + '.log')).read_text().splitlines()[-1] == 'DNS all done rows=156 failures=0',
+                    'Missing actual pinned AOSP bitstring controls: ' + abi)
             elf = (folder / ('net-dns-' + abi)).read_bytes()
             require(elf[:6] == b'\x7fELF\x02\x01' and int.from_bytes(elf[18:20], 'little') == machine,
                     'Wrong actual guest ELF ABI: ' + abi)

@@ -57,25 +57,32 @@ int dns_aosp_skip(const unsigned char* s,const unsigned char* e) {
         executable = path / 'reference'
         renames = ['-D' + name + '=dns_aosp_' + name for name in functions if name.startswith('ns_')]
         defines = [*renames, '-Ddn_expand=dns_aosp_expand', '-Ddn_skipname=dns_aosp_skip']
-        c_command = [str(c_driver), '-std=c11', '-D_DEFAULT_SOURCE', '-O2', '-Wall', '-Wextra',
-                     '-Werror', *defines, '-c', str(adapted), '-o', str(path / 'aosp.o')]
-        subprocess.run(c_command, check=True, timeout=120)
-        command = [str(driver), '-std=c++20', '-O2', '-Wall', '-Wextra', '-Werror',
-                   '-Wno-deprecated-declarations', *defines, str(path / 'aosp.o'),
-                   str(root / 'tests/native2/net_dns_wire.cpp'), '-lresolv', '-o', str(executable)]
-        subprocess.run(command, check=True, timeout=120)
-        actual = subprocess.run([str(executable)], capture_output=True, text=True, timeout=60)
-        print(actual.stdout, end='', flush=True)
-        print(actual.stderr, end='', flush=True)
-        assert actual.returncode == 0, 'Actual exact pinned AOSP oracle failed'
-        (output / 'aosp-reference.log').write_text(actual.stdout)
-        extended = subprocess.run([str(executable), '--extended'], capture_output=True, text=True, timeout=60)
-        print(extended.stdout, end='', flush=True)
-        print(extended.stderr, end='', flush=True)
-        assert extended.returncode == 0, 'Actual pinned AOSP extended-label oracle failed'
-        (output / 'aosp-extended.log').write_text(extended.stdout)
-        return {'role': 'exact-pinned-aosp-name-decoder', 'upstream_sha256': PIN,
-                'adapted_sha256': hashlib.sha256(adapted.read_bytes()).hexdigest(),
-                'command': command, 'driver_sha256': hashlib.sha256(driver.read_bytes()).hexdigest(),
-                'c_command': c_command, 'c_driver_sha256': hashlib.sha256(c_driver.read_bytes()).hexdigest(),
-                'executed_binary_sha256': hashlib.sha256(executable.read_bytes()).hexdigest()}
+        records = []
+        for abi, char_flag in (('x86_64', '-fsigned-char'), ('arm64', '-funsigned-char')):
+            records.append(run_model(root, output, path, adapted, executable, c_driver, driver, defines, abi, char_flag))
+        return records
+
+
+def run_model(root, output, path, adapted, executable, c_driver, driver, defines, abi, char_flag):
+    c_command = [str(c_driver), char_flag, '-std=c11', '-D_DEFAULT_SOURCE', '-O2', '-Wall', '-Wextra',
+                 '-Werror', *defines, '-c', str(adapted), '-o', str(path / 'aosp.o')]
+    subprocess.run(c_command, check=True, timeout=120)
+    command = [str(driver), char_flag, '-std=c++20', '-O2', '-Wall', '-Wextra', '-Werror',
+               '-Wno-deprecated-declarations', *defines, str(path / 'aosp.o'),
+               str(root / 'tests/native2/net_dns_wire.cpp'), '-lresolv', '-o', str(executable)]
+    subprocess.run(command, check=True, timeout=120)
+    actual = subprocess.run([str(executable)], capture_output=True, text=True, timeout=60)
+    print(actual.stdout, end='', flush=True)
+    print(actual.stderr, end='', flush=True)
+    assert actual.returncode == 0, 'Actual exact pinned AOSP oracle failed'
+    (output / ('aosp-reference-' + abi + '.log')).write_text(actual.stdout)
+    extended = subprocess.run([str(executable), '--extended'], capture_output=True, text=True, timeout=60)
+    print(extended.stdout, end='', flush=True)
+    print(extended.stderr, end='', flush=True)
+    assert extended.returncode == 0, 'Actual pinned AOSP extended-label oracle failed'
+    (output / ('aosp-extended-' + abi + '.log')).write_text(extended.stdout)
+    return {'role': 'exact-pinned-aosp-name-decoder', 'abi_char_model': abi, 'char_flag': char_flag, 'upstream_sha256': PIN,
+            'adapted_sha256': hashlib.sha256(adapted.read_bytes()).hexdigest(),
+            'command': command, 'driver_sha256': hashlib.sha256(driver.read_bytes()).hexdigest(),
+            'c_command': c_command, 'c_driver_sha256': hashlib.sha256(c_driver.read_bytes()).hexdigest(),
+            'executed_binary_sha256': hashlib.sha256(executable.read_bytes()).hexdigest()}

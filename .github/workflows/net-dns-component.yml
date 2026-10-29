@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Actual Linux and pinned AOSP references with canonical diagnostic source pins
+      - name: Actual Linux and pinned AOSP references with explicit ABI char models
         shell: bash
         run: |
           set -euo pipefail
@@ -166,7 +166,7 @@ jobs:
           InvokeDnsProbe 'smoke' @() ''
           foreach ($abi in 'x86_64', 'arm64') {
             InvokeDnsProbe "main-$abi" @('--elf', "net-dns-$abi", "net-dns-$abi") 'linux-reference.log'
-            InvokeDnsProbe "extended-$abi" @('--elf', "net-dns-$abi", "net-dns-$abi", '--extended') 'aosp-extended.log'
+            InvokeDnsProbe "extended-$abi" @('--elf', "net-dns-$abi", "net-dns-$abi", '--extended') "aosp-extended-$abi.log"
             InvokeDnsProbe "safety-$abi" @('--elf', "net-dns-$abi", "net-dns-$abi", '--safety') ''
             InvokeDnsProbe "negative-$abi" @('--elf', "net-dns-$abi", "net-dns-$abi", '--negative') '' $true
           }
