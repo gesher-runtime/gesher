@@ -164,7 +164,21 @@ static void stream() {
           "stream tail retained");
   close(rx); close(p.rx); close(p.tx); puts("UDP stream-control PASS");
 }
+static void observe_oob() {
+  for (int family : {AF_INET, AF_INET6}) {
+    Pair p = pair(family); send_packet(p, "abcdefghi", 9);
+    unsigned char data[16] = {}, next[16] = {}; errno = 0;
+    ssize_t n = recv(p.rx, data, sizeof(data), MSG_OOB); int error = errno;
+    errno = 0; ssize_t queued = recv(p.rx, next, sizeof(next), MSG_PEEK | MSG_DONTWAIT);
+    int queue_error = errno;
+    printf("UDP_OBSERVE_OOB family=%d n=%zd errno=%d prefix=%02x%02x%02x%02x queue=%zd qerrno=%d qprefix=%02x%02x\n",
+           family, n, error, data[0], data[1], data[2], data[3], queued, queue_error, next[0], next[1]);
+    close(p.tx); close(p.rx);
+  }
+}
 int main(int argc, char** argv) {
+  // Diagnostic-only: report real OOB results without changing default assertions.
+  if (argc > 1 && strcmp(argv[1], "--observe-oob") == 0) { observe_oob(); return 0; }
   // Negative fixture: suppress the requested semantics in the actual calls;
   // oversized MSG_TRUNC assertions must fail on Linux and on Gesher.
   if (argc > 1 && strcmp(argv[1], "--negative") == 0) {

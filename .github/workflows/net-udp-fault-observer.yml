@@ -63,6 +63,7 @@ jobs:
           g++ --version
           sha256sum tests/native2/net_udp_trunc.cpp
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -pthread tests/native2/net_udp_trunc.cpp -o /tmp/net-udp-matrix
+          /tmp/net-udp-matrix --observe-oob
           /tmp/net-udp-matrix
           if /tmp/net-udp-matrix --negative > /tmp/net-udp-negative.txt 2>&1; then
             echo 'FAIL missing MSG_TRUNC negative was accepted'; exit 1

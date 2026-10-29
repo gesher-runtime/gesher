@@ -166,12 +166,18 @@ def main():
                 executable = Path(temporary) / name.replace('+', 'p')
                 command = [str(driver), '-std=' + language, '-O2', '-Wall', '-Wextra', '-Werror',
                            '-pthread', source, '-o', str(executable)]
+                version = subprocess.check_output([str(driver), '--version'], text=True)
+                print('UDP_LINUX_COMPILER', json.dumps(dict(command=command, driver_sha256=sha(driver),
+                                                           version=version), sort_keys=True), flush=True)
                 subprocess.run(command, cwd=ROOT, check=True, timeout=120)
-                actual = subprocess.run([str(executable)], check=True, capture_output=True, text=True, timeout=120)
+                actual = subprocess.run([str(executable)], capture_output=True, text=True, timeout=120)
                 print(actual.stdout, end='', flush=True)
+                print(actual.stderr, end='', flush=True)
+                print('UDP_LINUX_ACTUAL_EXIT', actual.returncode, 'command=' + str(executable), flush=True)
+                require(actual.returncode == 0, 'Actual Linux reference failed: ' + source)
                 (args.directory / output).write_text(actual.stdout)
                 compilers.append({'command': command, 'driver_sha256': sha(driver),
-                                  'version': subprocess.check_output([str(driver), '--version'], text=True),
+                                  'version': version,
                                   'executed_binary_sha256': sha(executable)})
                 if name == 'g++':
                     negative = subprocess.run([str(executable), '--negative'], capture_output=True, text=True, timeout=30)

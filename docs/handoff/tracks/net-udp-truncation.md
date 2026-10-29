@@ -169,3 +169,15 @@ caller bytes, immutable guard invocation and complete checkout/source inventory
 are required. Actual individual and simultaneous no-op historical-guard/caller
 mutations must reject and restore exact bytes. Guard/caller source peer and
 component results remain prerequisites to any full dispatch.
+
+Component40795059692/b30b failed its actual Linux main reference before
+Windows execution. Observer40795059724 has three successful helper/production
+jobs but its Linux main exits1 with `FAIL UDP: UDP OOB errno=0`, after96
+IPv4 main rows; all176 fault rows precede it. Saved raw job123189404590 is
+`C:/work/gesher-ci-review/udp-observer-40795059724-linux.log`. This lacks the
+OOB return value/queue state, so no corrected OOB semantics is claimed yet.
+The next observer adds an assertion-free both-family OOB diagnostic before
+the unchanged default matrix assertions. Component Linux compiler command,
+version/digest, stdout/stderr and exact exit now print before failure.
+The saved immutable guard/caller remains unqualified and must be refreshed
+after any reviewed source corrections; no full is dispatched.
