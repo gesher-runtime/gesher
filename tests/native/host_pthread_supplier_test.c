@@ -41,8 +41,58 @@ static int LoadedSupplier(const char *expected_sha) {
   return 0;
 }
 
+typedef int (__cdecl *clock_id_fn)(pthread_t, clockid_t *);
+typedef int (__cdecl *clock_time_fn)(clockid_t, struct timespec *);
+static clock_id_fn public_clock_id;
+static volatile LONG ready, stop;
+static clockid_t worker_clock;
+static DWORD WINAPI BusyWorker(void *unused) {
+  (void)unused;
+  if (public_clock_id(pthread_self(), &worker_clock) != 0) return 1;
+  InterlockedExchange(&ready, 1);
+  while (!InterlockedCompareExchange(&stop, 0, 0)) { }
+  return 0;
+}
+static uint64_t ticks(FILETIME t) { return ((uint64_t)t.dwHighDateTime << 32) | t.dwLowDateTime; }
+static uint64_t cpu(HANDLE h) {
+  FILETIME c, e, k, u;
+  if (!GetThreadTimes(h, &c, &e, &k, &u)) return UINT64_MAX;
+  return ticks(k) + ticks(u);
+}
+static int PublicClockControl(void) {
+  HMODULE dll = GetModuleHandleW(L"libwinpthread-1.dll");
+  public_clock_id = (clock_id_fn)GetProcAddress(dll, "pthread_getcpuclockid");
+  clock_time_fn gettime = (clock_time_fn)GetProcAddress(dll, "clock_gettime");
+  clock_time_fn getres = (clock_time_fn)GetProcAddress(dll, "clock_getres");
+  if (!public_clock_id || !gettime || !getres ||
+      !GetProcAddress(dll, "clock_gettime32") || !GetProcAddress(dll, "clock_gettime64") ||
+      !GetProcAddress(dll, "clock_getres32") || !GetProcAddress(dll, "clock_getres64")) return 10;
+  HANDLE worker = CreateThread(NULL, 0, BusyWorker, NULL, 0, NULL);
+  if (!worker) return 11;
+  while (!InterlockedCompareExchange(&ready, 0, 0)) {
+    if (WaitForSingleObject(worker, 1) == WAIT_OBJECT_0) return 12;
+  }
+  uint64_t before = cpu(worker);
+  struct timespec sample, resolution;
+  if (before == UINT64_MAX || gettime(worker_clock, &sample) || getres(worker_clock, &resolution)) return 13;
+  uint64_t after = cpu(worker);
+  uint64_t measured = (uint64_t)sample.tv_sec * 10000000 + (uint64_t)sample.tv_nsec / 100;
+  if (after == UINT64_MAX || measured < before || measured > after ||
+      resolution.tv_sec != 0 || resolution.tv_nsec != 100) return 14;
+  InterlockedExchange(&stop, 1);
+  if (WaitForSingleObject(worker, 5000) != WAIT_OBJECT_0) return 15;
+  DWORD exit_code;
+  if (!GetExitCodeThread(worker, &exit_code) || exit_code != 0 || !CloseHandle(worker)) return 16;
+  sample.tv_sec = 123; sample.tv_nsec = 456;
+  if (gettime(worker_clock, &sample) != -1 || errno != EINVAL || sample.tv_sec != 123 || sample.tv_nsec != 456) return 17;
+  puts("PASS public-clock DLL self-ID cross-thread GetThreadTimes bracket and retired ID");
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc != 2 || LoadedSupplier(argv[1])) return 3;
+  int public_result = PublicClockControl();
+  if (public_result) return public_result;
   void *handle = NULL;
   unsigned long long generation = 0;
   FILETIME created, exited, kernel, user;

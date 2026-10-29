@@ -359,3 +359,14 @@
  #define pthread_attr_getguardsize(A, S) ENOTSUP
  #define pthread_attr_setguardsize(A, S) ENOTSUP
  
+--- a/mingw-w64-libraries/winpthreads/src/clock.c
++++ b/mingw-w64-libraries/winpthreads/src/clock.c
+@@ -297,6 +297,8 @@
+ {
+     struct _timespec64 tp64 = {0};
+ 
++    if (!tp && clock_id <= -1073741824)
++        return __clock_getres (clock_id, NULL);
+     if (__clock_getres (clock_id, &tp64) == -1)
+         return -1;
+ 
