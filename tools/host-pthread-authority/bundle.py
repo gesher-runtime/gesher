@@ -90,7 +90,10 @@ def context():
     assert os.environ.get('GITHUB_ACTIONS') == 'true'
     c = {k: os.environ[k] for k in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY')}
     assert c['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
-    assert os.environ.get('GITHUB_REF') == 'refs/heads/wip/pthread-provider-completion'
+    allowed = {'host pthread authority initial controls': 'refs/heads/wip/pthread-provider-completion',
+               'pthread process identity routing probe': 'refs/heads/wip/pthread-process-routing'}
+    workflow = os.environ.get('GITHUB_WORKFLOW')
+    assert workflow in allowed and allowed[workflow] == os.environ.get('GITHUB_REF')
     assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == c['GITHUB_SHA']
     subprocess.check_call(['git', 'diff', '--exit-code', 'HEAD', '--'])
     return c

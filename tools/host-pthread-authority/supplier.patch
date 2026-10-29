@@ -1397,3 +1397,398 @@
    if (owner) return owner->detach(t);
  #endif
    int r = 0;
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -199,6 +199,50 @@ __pthread_get_pointer (pthread_t id)
+   return NULL;
+ }
+ 
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++/* Diagnostic-only generations retain callback identity through deletion and
++   reuse. Module references are held until the last captured invocation. */
++struct gesher_key_generation {
++  unsigned long long id;
++  void (*destructor)(void *);
++  HMODULE module;
++  volatile LONG references;
++};
++static struct gesher_key_generation *gesher_key_generations[PTHREAD_KEYS_MAX];
++static unsigned long long gesher_key_next_generation=1;
++static HANDLE gesher_wrapper_gate_entered, gesher_wrapper_gate_release;
++__declspec(dllexport) int __cdecl gesher_wrapper_probe_gate_v1(void *entered, void *release)
++{
++  gesher_wrapper_gate_entered=(HANDLE)entered;
++  gesher_wrapper_gate_release=(HANDLE)release;
++  return 0;
++}
++static struct gesher_key_generation *gesher_key_new(void (*destructor)(void *))
++{
++  struct gesher_key_generation *record=calloc(1,sizeof(*record));
++  if (!record) return NULL;
++  record->destructor=destructor; record->references=1;
++#if !defined(DLL_EXPORT)
++  if (destructor) {
++    MEMORY_BASIC_INFORMATION region;
++    /* The executable is process-lived. For a module, acquire a reference in
++       one loader operation; non-image callbacks keep caller-owned lifetime. */
++    if (!(VirtualQuery((const void *)destructor,&region,sizeof(region)) && region.AllocationBase==GetModuleHandleW(NULL)))
++      (void)GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,(LPCWSTR)destructor,&record->module);
++  }
++#endif
++  return record;
++}
++static void gesher_key_release(struct gesher_key_generation *record)
++{
++  if (record && InterlockedDecrement(&record->references)==0) {
++    HMODULE module=record->module;
++    free(record);
++    if (module && !FreeLibrary(module)) abort();
++  }
++}
++#endif
++
+ static void
+ __pth_remove_use_for_key (pthread_key_t key)
+ {
+@@ -211,8 +255,15 @@ __pth_remove_use_for_key (pthread_key_t key)
+           && idList[i].ptr->keyval != NULL
+           && key < idList[i].ptr->keymax)
+         {
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++          pthread_spin_lock (&idList[i].ptr->spin_keys);
++#endif
+ 	  idList[i].ptr->keyval[key] = NULL;
+ 	  idList[i].ptr->keyval_set[key] = 0;
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++          idList[i].ptr->keyval_generation[key] = 0;
++          pthread_spin_unlock (&idList[i].ptr->spin_keys);
++#endif
+ 	}
+     }
+   pthread_mutex_unlock (&mtx_pthr_locked);
+@@ -352,6 +403,14 @@ push_pthread_mem (_pthread_v *sv)
+   if (!sv || sv->next != NULL)
+     return;
+   pthread_mutex_lock (&mtx_pthr_locked);
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++  if (sv->cleanup_refs) {
++    if (sv->x) { __pthread_deregister_pointer(sv->x); sv->x=0; }
++    sv->pending_retire=1;
++    pthread_mutex_unlock (&mtx_pthr_locked);
++    return;
++  }
++#endif
+   if (sv->x != 0)
+     __pthread_deregister_pointer (sv->x);
+   /* This retirement lock is also held by the atomic duplicate API. */
+@@ -363,6 +422,10 @@ push_pthread_mem (_pthread_v *sv)
+     free (sv->keyval);
+   if (sv->keyval_set)
+     free (sv->keyval_set);
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++  if (sv->keyval_generation)
++    free (sv->keyval_generation);
++#endif
+   if (sv->thread_name)
+     free (sv->thread_name);
+   memset (sv, 0, sizeof(struct _pthread_v));
+@@ -1024,14 +1087,28 @@ pthread_key_create (pthread_key_t *key, void (* dest)(void *))
+ 
+ 	if (!key)
+ 		return EINVAL;
+-
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++        struct gesher_key_generation *record=gesher_key_new(dest);
++        if (!record) return ENOMEM;
++#endif
+ 	pthread_rwlock_wrlock (&_pthread_key_lock);
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++        if (!gesher_key_next_generation) {
++          pthread_rwlock_unlock (&_pthread_key_lock);
++          gesher_key_release(record);
++          return EAGAIN;
++        }
++#endif
+ 
+ 	for (i = _pthread_key_sch; i < _pthread_key_max; i++)
+ 	{
+ 		if (!_pthread_key_dest[i])
+ 		{
+ 			*key = i;
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++                        record->id=gesher_key_next_generation++;
++                        gesher_key_generations[i]=record;
++#endif
+ 			if (dest)
+ 				_pthread_key_dest[i] = dest;
+ 			else
+@@ -1046,6 +1123,10 @@ pthread_key_create (pthread_key_t *key, void (* dest)(void *))
+ 		if (!_pthread_key_dest[i])
+ 		{
+ 			*key = i;
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++                        record->id=gesher_key_next_generation++;
++                        gesher_key_generations[i]=record;
++#endif
+ 			if (dest)
+ 				_pthread_key_dest[i] = dest;
+ 			else
+@@ -1059,6 +1140,9 @@ pthread_key_create (pthread_key_t *key, void (* dest)(void *))
+ 	if (_pthread_key_max == PTHREAD_KEYS_MAX)
+ 	{
+ 		pthread_rwlock_unlock(&_pthread_key_lock);
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++                gesher_key_release(record);
++#endif
+ 		return ENOMEM;
+ 	}
+ 
+@@ -1079,6 +1163,9 @@ pthread_key_create (pthread_key_t *key, void (* dest)(void *))
+ 		if (d && !_pthread_key_dest)
+ 			if (!VirtualFree (d, 0, MEM_RELEASE)) abort ();
+ 		pthread_rwlock_unlock (&_pthread_key_lock);
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++                gesher_key_release(record);
++#endif
+ 		return ENOMEM;
+ 	}
+ 
+@@ -1093,6 +1180,10 @@ pthread_key_create (pthread_key_t *key, void (* dest)(void *))
+ #endif
+ 	_pthread_key_sch = _pthread_key_max + 1;
+ 	*key = _pthread_key_max;
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++        record->id=gesher_key_next_generation++;
++        gesher_key_generations[*key]=record;
++#endif
+ 	_pthread_key_max = nmax;
+ 
+ 	if (dest)
+@@ -1111,11 +1202,18 @@ pthread_key_delete (pthread_key_t key)
+   const struct gesher_identity_probe_v3 *owner=identity_probe_owner();
+   if (owner) return owner->key_delete(key);
+ #endif
++#ifndef GESHER_PTHREAD_ROUTING_PROBE
+   if (key >= _pthread_key_max || !_pthread_key_dest)
+     return EINVAL;
+-
++#endif
+   pthread_rwlock_wrlock (&_pthread_key_lock);
+ 
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++  if (key >= _pthread_key_max || !_pthread_key_dest) { pthread_rwlock_unlock (&_pthread_key_lock); return EINVAL; }
++  struct gesher_key_generation *record=gesher_key_generations[key];
++  if (!record) { pthread_rwlock_unlock (&_pthread_key_lock); return EINVAL; }
++  gesher_key_generations[key]=NULL;
++#endif
+   _pthread_key_dest[key] = NULL;
+ 
+   /* Start next search from our location */
+@@ -1126,6 +1224,9 @@ pthread_key_delete (pthread_key_t key)
+   __pth_remove_use_for_key (key);
+ 
+   pthread_rwlock_unlock (&_pthread_key_lock);
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++  gesher_key_release(record);
++#endif
+   return 0;
+ }
+ 
+@@ -1139,9 +1240,19 @@ pthread_getspecific (pthread_key_t key)
+   DWORD lasterr = GetLastError ();
+   void *r;
+   _pthread_v *t = __pthread_self_lite ();
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++  if (!t) { SetLastError(lasterr); return NULL; }
++  pthread_rwlock_rdlock (&_pthread_key_lock);
++  pthread_spin_lock (&t->spin_keys);
++  r = (key >= _pthread_key_max || !gesher_key_generations[key] || key >= t->keymax ||
++       !t->keyval_set[key] || t->keyval_generation[key]!=gesher_key_generations[key]->id) ? NULL : t->keyval[key];
++  pthread_spin_unlock (&t->spin_keys);
++  pthread_rwlock_unlock (&_pthread_key_lock);
++#else
+   pthread_spin_lock (&t->spin_keys);
+   r = (key >= t->keymax || t->keyval_set[key] == 0 ? NULL : t->keyval[key]);
+   pthread_spin_unlock (&t->spin_keys);
++#endif
+   SetLastError (lasterr);
+   return r;
+ }
+@@ -1156,6 +1267,35 @@ pthread_setspecific (pthread_key_t key, const void *value)
+   DWORD lasterr = GetLastError ();
+   _pthread_v *t = __pthread_self_lite ();
+ 
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++  if (!t) { SetLastError(lasterr); return ENOMEM; }
++  pthread_rwlock_rdlock (&_pthread_key_lock);
++  if (key >= _pthread_key_max || !gesher_key_generations[key]) {
++    pthread_rwlock_unlock (&_pthread_key_lock); SetLastError(lasterr); return EINVAL;
++  }
++  pthread_spin_lock (&t->spin_keys);
++  if (key >= t->keymax) {
++    size_t n=(size_t)key+1;
++    void **values=calloc(n,sizeof(*values));
++    unsigned char *set=calloc(n,sizeof(*set));
++    unsigned long long *generations=calloc(n,sizeof(*generations));
++    if (!values || !set || !generations) {
++      free(values); free(set); free(generations); pthread_spin_unlock(&t->spin_keys);
++      pthread_rwlock_unlock(&_pthread_key_lock); SetLastError(lasterr); return ENOMEM;
++    }
++    if (t->keymax) {
++      memcpy(values,t->keyval,t->keymax*sizeof(*values));
++      memcpy(set,t->keyval_set,t->keymax*sizeof(*set));
++      memcpy(generations,t->keyval_generation,t->keymax*sizeof(*generations));
++    }
++    free(t->keyval); free(t->keyval_set); free(t->keyval_generation);
++    t->keyval=values; t->keyval_set=set; t->keyval_generation=generations; t->keymax=(unsigned)n;
++  }
++  t->keyval[key]=(void *)value; t->keyval_set[key]=1;
++  t->keyval_generation[key]=gesher_key_generations[key]->id;
++  pthread_spin_unlock (&t->spin_keys); pthread_rwlock_unlock (&_pthread_key_lock);
++  SetLastError(lasterr); return 0;
++#else
+   pthread_spin_lock (&t->spin_keys);
+ 
+   if (key >= t->keymax)
+@@ -1193,6 +1333,7 @@ pthread_setspecific (pthread_key_t key, const void *value)
+   SetLastError (lasterr);
+ 
+   return 0;
++#endif
+ }
+ 
+ int
+@@ -1211,13 +1352,67 @@ pthread_tls_init (void)
+     abort();
+ }
+ 
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++/* Caller has already retained tv under mtx_pthr_locked. */
++static void gesher_cleanup_held(_pthread_v *tv)
++{
++        unsigned int j;
++        int i;
++        for (j=0;j<PTHREAD_DESTRUCTOR_ITERATIONS;++j) {
++          int invoked=0, limit;
++          pthread_rwlock_rdlock(&_pthread_key_lock);
++          pthread_spin_lock(&tv->spin_keys); limit=(int)tv->keymax; pthread_spin_unlock(&tv->spin_keys);
++          pthread_rwlock_unlock(&_pthread_key_lock);
++          for (i=limit-1;i>=0;--i) {
++            struct gesher_key_generation *record=NULL;
++            void *value=NULL;
++            pthread_rwlock_rdlock(&_pthread_key_lock);
++            pthread_spin_lock(&tv->spin_keys);
++            if ((unsigned)i<tv->keymax && tv->keyval_set[i]) {
++              if (tv->keyval[i] && (unsigned)i<_pthread_key_max && gesher_key_generations[i] &&
++                  tv->keyval_generation[i]==gesher_key_generations[i]->id &&
++                  gesher_key_generations[i]->destructor) {
++                record=gesher_key_generations[i];
++                if (InterlockedIncrement(&record->references)<=1) abort();
++                value=tv->keyval[i];
++              }
++              tv->keyval[i]=NULL; tv->keyval_set[i]=0; tv->keyval_generation[i]=0;
++            }
++            pthread_spin_unlock(&tv->spin_keys);
++            pthread_rwlock_unlock(&_pthread_key_lock);
++            if (record) { record->destructor(value); gesher_key_release(record); invoked=1; }
++          }
++          if (!invoked) break;
++        }
++        pthread_mutex_lock (&mtx_pthr_locked);
++        if (!tv->cleanup_refs) abort();
++        if (--tv->cleanup_refs==0 && tv->pending_retire) {
++          tv->pending_retire=0;
++          push_pthread_mem(tv);
++        }
++        pthread_mutex_unlock (&mtx_pthr_locked);
++}
++#endif
++
+ void
+ _pthread_cleanup_dest (pthread_t t)
+ {
+ 	_pthread_v *tv;
++#ifndef GESHER_PTHREAD_ROUTING_PROBE
+ 	unsigned int j;
+ 	int i;
++#endif
++
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++        if (!t) return;
++        pthread_mutex_lock (&mtx_pthr_locked);
++        tv=__pthread_get_pointer(t);
++        if (tv) { if (tv->cleanup_refs==UINT_MAX) abort(); ++tv->cleanup_refs; }
++        pthread_mutex_unlock (&mtx_pthr_locked);
++        if (!tv) return;
++        gesher_cleanup_held(tv);
+ 
++#else
+ 	if (!t)
+ 		return;
+ 	tv = __pth_gpointer_locked (t);
+@@ -1259,6 +1454,7 @@ _pthread_cleanup_dest (pthread_t t)
+ 		if (!flag)
+ 			return;
+ 	}
++#endif
+ }
+ 
+ static _pthread_v *
+@@ -1845,6 +2041,11 @@ pthread_create_wrapper (void *args)
+   _fpreset();
+ 
+   pthread_mutex_lock (&mtx_pthr_locked);
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++  struct _pthread_v *held_cleanup_thread=tv;
++  if (tv->cleanup_refs==UINT_MAX) abort();
++  ++tv->cleanup_refs;
++#endif
+   pthread_mutex_lock (&tv->p_clock);
+   _pthread_once_raw(&_pthread_tls_once, pthread_tls_init);
+   TlsSetValue(_pthread_tls, tv);
+@@ -1862,7 +2063,17 @@ pthread_create_wrapper (void *args)
+       pthread_mutex_lock (&mtx_pthr_locked);
+       tv->ret_arg = (void*) trslt;
+       /* Clean up destructors */
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++      if (tv->cleanup_refs==UINT_MAX) abort();
++      ++tv->cleanup_refs;
++      pthread_mutex_unlock (&mtx_pthr_locked);
++      if (gesher_wrapper_gate_entered &&
++          (!SetEvent(gesher_wrapper_gate_entered) || WaitForSingleObject(gesher_wrapper_gate_release,5000)!=WAIT_OBJECT_0)) abort();
++      gesher_cleanup_held(tv);
++      pthread_mutex_lock (&mtx_pthr_locked);
++#else
+       _pthread_cleanup_dest(tv->x);
++#endif
+     }
+   else
+     pthread_mutex_lock (&mtx_pthr_locked);
+@@ -1894,6 +2105,13 @@ pthread_create_wrapper (void *args)
+       tv->p_clock = PTHREAD_MUTEX_INITIALIZER;
+       tv->ended = 1;
+     }
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++  if (!held_cleanup_thread->cleanup_refs) abort();
++  if (--held_cleanup_thread->cleanup_refs==0 && held_cleanup_thread->pending_retire) {
++    held_cleanup_thread->pending_retire=0;
++    push_pthread_mem(held_cleanup_thread);
++  }
++#endif
+   while (pthread_mutex_unlock (&mtx_pthr_locked) == 0)
+    Sleep (0);
+   _endthreadex (rslt);
+--- a/mingw-w64-libraries/winpthreads/src/thread.h
++++ b/mingw-w64-libraries/winpthreads/src/thread.h
+@@ -51,6 +51,11 @@ struct _pthread_v
+     unsigned int keymax;
+     void **keyval;
+     unsigned char *keyval_set;
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++    unsigned long long *keyval_generation;
++    unsigned cleanup_refs;
++    int pending_retire;
++#endif
+     char *thread_name;
+     pthread_spinlock_t spin_keys;
+     DWORD tid;
