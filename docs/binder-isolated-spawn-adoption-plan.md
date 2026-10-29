@@ -2,6 +2,17 @@
 
 ## Implemented candidate, 2026-10-29 (not compiled or qualified)
 
+Changed-source component40854555974/attempt1 at exact1d235057 also compiled and
+passed both Windows strict receipts, then failed the new fixture's label setter
+with Win32 error5 before the readonly counterexamples or rename diagnostics.
+Only the initial reparse row completed. Raw log:
+`C:/work/gesher-ci-review/binder-policy-40854555974.log`.
+The fixture label handle omitted READ_CONTROL present on production's actual
+resource handles. The corrected fixture uses READ_CONTROL|WRITE_OWNER and logs
+the exact descriptor string and SetSecurityInfo result before asserting. This is
+a test setup correction, not relaxation of the readonly or rename requirements;
+its cause and later controls still require changed-source actual CI.
+
 Component40853406582 attempt1 at exact2f65e7fe compiled successfully with the
 pinned compiler; both Windows strict archive/source/compiler receipts passed.
 Both actual lowbox nested create/reopen/read/delete/exit/retirement rows and

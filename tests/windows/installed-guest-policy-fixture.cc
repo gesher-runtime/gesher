@@ -36,10 +36,11 @@ void Label(const std::wstring& path, const wchar_t* sddl) {
   Check(ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &descriptor, nullptr), "label descriptor");
   PACL acl = nullptr; BOOL present = FALSE, defaulted = FALSE;
   Check(GetSecurityDescriptorSacl(descriptor, &present, &acl, &defaulted), "label ACL");
-  HANDLE handle = CreateFileW(path.c_str(), WRITE_OWNER, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+  HANDLE handle = CreateFileW(path.c_str(), READ_CONTROL | WRITE_OWNER, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
       nullptr, OPEN_EXISTING, 0, nullptr);
   Check(handle != INVALID_HANDLE_VALUE, "label exact file");
   DWORD result = SetSecurityInfo(handle, SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, acl);
+  printf("POLICY_LABEL sddl=%ls result=%lu\n", sddl, result);
   Check(CloseHandle(handle), "label handle close"); LocalFree(descriptor);
   Check(result == ERROR_SUCCESS, "label exact file mutation");
 }
