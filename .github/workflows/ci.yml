@@ -377,7 +377,6 @@ jobs:
         with:
           sparse-checkout: |
             tools/package
-            tools/net-udp
             tools/ci
             tools/surface
             tools/web3
