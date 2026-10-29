@@ -2,8 +2,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../tracks/geocoder-operation.ps1')
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $source = Join-Path $PSScriptRoot '../tracks/geocoder-winrt-supplier.cs'
-Write-Host "WINRT_COMPILER source_sha=$env:GITHUB_SHA source=$source sha256=$((Get-FileHash $source -Algorithm SHA256).Hash) ps=$($PSVersionTable.PSVersion) clr=$([Environment]::Version) runtime=$([System.WindowsRuntimeSystemExtensions].Assembly.FullName) add_type=$((Get-Command Add-Type).ImplementingType.Assembly.FullName)"
-Add-Type -Path $source
+Import-GeocoderProbeType $source
 $run = @([System.Runtime.InteropServices.WindowsRuntime.AsyncInfo].GetMethods() | Where-Object {
   $_.Name -eq 'Run' -and $_.IsGenericMethodDefinition -and $_.GetGenericArguments().Count -eq 1 -and
   $_.GetParameters().Count -eq 1 -and $_.ReturnType.Name -eq 'IAsyncOperation`1'

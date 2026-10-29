@@ -65,3 +65,14 @@ function New-WinRTGeocoderAdapter($Operation, [Type] $ResultType) {
     Lifetime = $lifetime
   }
 }
+
+# CI receipt for Windows PowerShell's .NET Framework CodeDOM compilation.
+function Import-GeocoderProbeType([string] $Source) {
+  $compiler = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
+  if (-not (Test-Path -LiteralPath $compiler)) { throw 'Expected .NET Framework C# compiler' }
+  $provider = [Microsoft.CSharp.CSharpCodeProvider]::new()
+  try {
+    Write-Host "WINRT_COMPILER source_sha=$env:GITHUB_SHA source=$Source source_sha256=$((Get-FileHash $Source -Algorithm SHA256).Hash) compiler=$compiler compiler_sha256=$((Get-FileHash $compiler -Algorithm SHA256).Hash) compiler_version=$((Get-Item $compiler).VersionInfo.FileVersion) provider=$($provider.GetType().Assembly.FullName) ps=$($PSVersionTable.PSVersion) clr=$([Environment]::Version)"
+  } finally { $provider.Dispose() }
+  Add-Type -Path $Source
+}

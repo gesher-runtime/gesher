@@ -3,20 +3,7 @@ $ErrorActionPreference = 'Stop'
 . $HelperPath
 # Environment.Exit still runs CLR/WinRT shutdown and can deadlock after the
 # completed answer. This isolated probe owns only its current process.
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public static class GesherGeocoderProbeExit {
-  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
-  [DllImport("kernel32.dll", SetLastError = true)]
-  [return: MarshalAs(UnmanagedType.Bool)]
-  static extern bool TerminateProcess(IntPtr process, uint code);
-  public static void Exit(uint code) {
-    if (!TerminateProcess(GetCurrentProcess(), code))
-      throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-  }
-}
-"@
+Import-GeocoderProbeType (Join-Path $PSScriptRoot '../tracks/geocoder-probe-exit.cs')
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 [Windows.Services.Maps.MapLocationFinder, Windows.Services.Maps, ContentType = WindowsRuntime] | Out-Null
 try {
