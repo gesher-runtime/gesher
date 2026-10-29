@@ -1,0 +1,34 @@
+name: net-tcp-legacy-disconnect-characterization
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/net-tcp-error-state]
+    paths: [.github/workflows/net-tcp-legacy-disconnect-characterization.yml, tests/net-tcp-priority/legacy_disconnect_oracle.cc]
+permissions:
+  contents: read
+jobs:
+  linux-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror tests/net-tcp-priority/legacy_disconnect_oracle.cc -o /tmp/legacy-disconnect-oracle
+          timeout 20 /tmp/legacy-disconnect-oracle
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - shell: cmd
+        run: cl /nologo /std:c++20 /W4 /WX tests\net-tcp-priority\legacy_disconnect_oracle.cc /Fe:legacy-disconnect-oracle.exe /link ws2_32.lib
+      - shell: pwsh
+        run: |
+          & ./legacy-disconnect-oracle.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Actual legacy disconnect characterization failed' }
