@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import re
+import shlex
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
@@ -23,6 +24,7 @@ def command(*argv):
 def inputs(source):
     assert command('git', '-C', str(source), 'rev-parse', 'HEAD').strip() == PIN['upstream_commit']
     assert sha(HERE / 'supplier.patch') == PIN['patch_sha256']
+    assert sha(HERE / 'fault-supplier.patch') == PIN['fault_patch_sha256']
     for name, digest in PIN['source_sha256'].items():
         assert sha(source / name) == digest, name
     makefile = (source / 'mingw-w64-libraries/winpthreads/Makefile.am').read_text()
@@ -55,7 +57,34 @@ def selftest():
     print('Supplier import negative controls passed: empty, case-self, unknown, duplicate')
 
 
-def supplier(source, llvm):
+def host_role(build, llvm, role, output):
+    assert os.environ.get('GITHUB_ACTIONS') == 'true'
+    assert role in {'production', 'fault'}
+    fault = role == 'fault'
+    cache = (build / 'CMakeCache.txt').read_text()
+    assert ('GESHER_HOST_CPU_CLOCK_TEST_FAULTS:BOOL=' + ('ON' if fault else 'OFF')) in cache
+    rows = json.loads((build / 'compile_commands.json').read_text())
+    selected = [r for r in rows if Path(r['file']).resolve() == ROOT / 'compat/posix/src/pthread.cc']
+    assert len(selected) == 1
+    argv = selected[0].get('arguments') or shlex.split(selected[0]['command'])
+    assert ('-DGESHER_HOST_CPU_CLOCK_TEST_FAULTS=1' in argv) == fault
+    assert str(llvm / 'bin/x86_64-w64-mingw32-clang++') in argv
+    obj = build / 'CMakeFiles/gesher_posix.dir/compat/posix/src/pthread.cc.obj'
+    symbols = command(str(llvm / 'bin/llvm-nm'), '--defined-only', str(obj))
+    assert ('gesher_host_cpu_clock_test_exhaust_ids_v1' in symbols) == fault
+    supplier = json.loads((llvm / 'gesher-winpthreads-authority.json').read_text())
+    assert supplier['role'] == 'gesher-winpthreads-authority-' + ('fault-v1' if fault else 'v1')
+    assert supplier['files']['lib/libwinpthread.a'] == sha(llvm / 'x86_64-w64-mingw32/lib/libwinpthread.a')
+    result = {'role': role, 'test_hook_compiled': fault, 'command': argv,
+              'supplier_receipt_sha256': sha(llvm / 'gesher-winpthreads-authority.json'),
+              'object_sha256': sha(obj), 'object_symbols': symbols,
+              'gesher_posix_archive_sha256': sha(build / 'libgesher_posix.a'),
+              'context': {key: os.environ[key] for key in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')}}
+    output.write_text(json.dumps(result, indent=2, sort_keys=True))
+
+
+def supplier(source, llvm, role):
+    assert role in {'production', 'fault'}
     assert os.environ.get('GITHUB_ACTIONS') == 'true'
     result = {key: os.environ[key] for key in (
         'GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY')}
@@ -66,7 +95,7 @@ def supplier(source, llvm):
              'lib/libpthread.dll.a', 'bin/libwinpthread-1.dll',
              'share/mingw32/COPYING.winpthreads.txt']
     files += ['include/' + p.name for p in (source / 'mingw-w64-libraries/winpthreads/include').glob('*.h')]
-    result.update(role='gesher-winpthreads-authority-v1', pin=PIN,
+    result.update(role='gesher-winpthreads-authority-' + ('fault-v1' if role == 'fault' else 'v1'), pin=PIN,
                   files={name: sha(target / name) for name in files},
                   source_files={str(p.relative_to(source)): sha(p) for p in
                       (source / 'mingw-w64-libraries/winpthreads').rglob('*') if p.is_file()},
@@ -75,15 +104,18 @@ def supplier(source, llvm):
                   cxx_driver_sha256=sha(llvm / 'bin/x86_64-w64-mingw32-clang++'),
                   compiler_driver_sha256=sha(llvm / 'bin/x86_64-w64-mingw32-clang'),
                   compiler_real_sha256=sha((llvm / 'bin/x86_64-w64-mingw32-clang').resolve()),
+                  underlying_clang_sha256=sha((llvm / 'bin/clang').resolve()),
                   build_logs={name: sha(source / 'build' / name) for name in
                       ('configure-command.log', 'build-commands.log', 'install-commands.log', 'config.log')})
     symbol = 'gesher_winpthread_dup_cpu_handle_v1'
     for name in ('lib/libwinpthread.a', 'lib/libwinpthread.dll.a'):
         output = command(str(llvm / 'bin/llvm-nm'), '--defined-only', str(target / name))
         assert symbol in output, name
+        assert ('gesher_winpthread_cpu_test_control_v1' in output) == (role == 'fault'), 'Supplier test symbol role mismatch'
         result[name + ':symbols'] = output
     exports = command(str(llvm / 'bin/llvm-readobj'), '--coff-exports', str(target / 'bin/libwinpthread-1.dll'))
     assert symbol in exports
+    assert ('gesher_winpthread_cpu_test_control_v1' in exports) == (role == 'fault'), 'DLL fault export role mismatch'
     result['dll_exports'] = exports
     imports = command(str(llvm / 'bin/llvm-readobj'), '--coff-imports', str(target / 'bin/libwinpthread-1.dll'))
     result['dll_import_names'] = dll_imports(imports)
@@ -112,6 +144,8 @@ if __name__ == '__main__':
     elif sys.argv[1] == 'inputs':
         inputs(Path(sys.argv[2]))
     elif sys.argv[1] == 'supplier':
-        supplier(Path(sys.argv[2]), Path(sys.argv[3]))
+        supplier(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+    elif sys.argv[1] == 'host-role':
+        host_role(Path(sys.argv[2]).resolve(), Path(sys.argv[3]).resolve(), sys.argv[4], Path(sys.argv[5]))
     else:
         raise RuntimeError('Unknown receipt operation')
