@@ -83,6 +83,8 @@ public static class TrustedSgJob {
         public IntPtr Job, Process;
         public StreamWriter Input;
         public StreamReader Output, Error;
+        public SafeFileHandle InputHandle, OutputHandle, ErrorHandle;
+        public IntPtr InputRaw, OutputRaw, ErrorRaw;
         public uint Pid;
     }
     // On an unconfirmed startup rollback keep every raw handle for process lifetime.
@@ -179,15 +181,24 @@ public static class TrustedSgJob {
             CloseOwned(ref outputWrite);
             CloseOwned(ref errorWrite);
             partial = new Owner { Job = job, Process = pi.Process, Pid = pi.Pid };
-            partial.Input = new StreamWriter(new FileStream(new SafeFileHandle(inputWrite, true), FileAccess.Write), new UTF8Encoding(false));
+            partial.InputRaw = inputWrite;
             inputWrite = IntPtr.Zero;
-            if (fixtureFault == 1) throw new InvalidOperationException("fixture partial input");
-            partial.Output = new StreamReader(new FileStream(new SafeFileHandle(outputRead, true), FileAccess.Read), Encoding.UTF8);
+            partial.InputHandle = new SafeFileHandle(partial.InputRaw, false);
+            if (fixtureFault == 1) throw new InvalidOperationException("fixture input handle");
+            partial.Input = new StreamWriter(new FileStream(partial.InputHandle, FileAccess.Write), new UTF8Encoding(false));
+            if (fixtureFault == 2) throw new InvalidOperationException("fixture input stream");
+            partial.OutputRaw = outputRead;
             outputRead = IntPtr.Zero;
-            if (fixtureFault == 2) throw new InvalidOperationException("fixture partial output");
-            partial.Error = new StreamReader(new FileStream(new SafeFileHandle(errorRead, true), FileAccess.Read), Encoding.UTF8);
+            partial.OutputHandle = new SafeFileHandle(partial.OutputRaw, false);
+            if (fixtureFault == 3) throw new InvalidOperationException("fixture output handle");
+            partial.Output = new StreamReader(new FileStream(partial.OutputHandle, FileAccess.Read), Encoding.UTF8);
+            if (fixtureFault == 4) throw new InvalidOperationException("fixture output stream");
+            partial.ErrorRaw = errorRead;
             errorRead = IntPtr.Zero;
-            if (fixtureFault == 3) throw new InvalidOperationException("fixture partial error");
+            partial.ErrorHandle = new SafeFileHandle(partial.ErrorRaw, false);
+            if (fixtureFault == 5) throw new InvalidOperationException("fixture error handle");
+            partial.Error = new StreamReader(new FileStream(partial.ErrorHandle, FileAccess.Read), Encoding.UTF8);
+            if (fixtureFault == 6) throw new InvalidOperationException("fixture error stream");
             success = true;
             return partial;
         } finally {
@@ -210,9 +221,7 @@ public static class TrustedSgJob {
                 if (empty && (pi.Process == IntPtr.Zero || WaitForSingleObject(pi.Process, 5000) == 0)) {
                     bool streamsClosed = true;
                     if (partial != null) {
-                        try { if (partial.Input != null) partial.Input.Dispose(); } catch { streamsClosed = false; }
-                        try { if (partial.Output != null) partial.Output.Dispose(); } catch { streamsClosed = false; }
-                        try { if (partial.Error != null) partial.Error.Dispose(); } catch { streamsClosed = false; }
+                        try { CloseStreams(partial); } catch { streamsClosed = false; }
                     }
                     bool processClosed = pi.Process == IntPtr.Zero || CloseHandle(pi.Process);
                     bool jobClosed = CloseHandle(job);
@@ -232,6 +241,19 @@ public static class TrustedSgJob {
     public static uint ExitCode(Owner owner) { uint code; Require(GetExitCodeProcess(owner.Process, out code)); return code; }
     public static void CloseProcess(Owner owner) { CloseOwned(ref owner.Process); }
     public static void CloseJob(Owner owner) { CloseOwned(ref owner.Job); }
+    public static void CloseStreams(Owner owner) {
+        // SafeFileHandles are non-owning: retirement of every managed reader
+        // precedes a single explicit, checked close of each raw pipe handle.
+        if (owner.Input != null) owner.Input.Dispose();
+        if (owner.Output != null) owner.Output.Dispose();
+        if (owner.Error != null) owner.Error.Dispose();
+        if (owner.InputHandle != null) owner.InputHandle.Dispose();
+        if (owner.OutputHandle != null) owner.OutputHandle.Dispose();
+        if (owner.ErrorHandle != null) owner.ErrorHandle.Dispose();
+        CloseOwned(ref owner.InputRaw);
+        CloseOwned(ref owner.OutputRaw);
+        CloseOwned(ref owner.ErrorRaw);
+    }
     public static void QuarantineOwner(Owner owner) {
         lock (Quarantine) {
             if (quarantineOwnerCount == QuarantineOwners.Length) Environment.FailFast("SG owner quarantine exhausted");

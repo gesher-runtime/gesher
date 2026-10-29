@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/trusted-sg-client.ps1"
 $broker = (Resolve-Path -LiteralPath (Join-Path $Dir 'binderd.exe')).Path
 $actor = (Resolve-Path -LiteralPath (Join-Path $Dir 'binder_sg_actor.exe')).Path
-foreach ($stage in 1,2,3) {
+foreach ($stage in 1,2,3,4,5,6) {
   $failed = $false
   try {
     [void][TrustedSgJob]::Start((Get-Command python -CommandType Application).Source,
@@ -14,6 +14,20 @@ foreach ($stage in 1,2,3) {
   }
   Write-Host "SG_OWNER_PARTIAL stage=$stage job_empty=1 owner_signaled=1 streams_closed=1"
 }
+$captureOwner = Start-TrustedSgOwner
+try {
+  $failed = $false
+  try {
+    [void](Invoke-TrustedSgOwner $captureOwner @{ op='begin'; broker=$broker; endpoint='sg-capture-fault';
+        environment=@{ GESHER_BINDER='sg-capture-fault' }; capture_fault='after-start' })
+  } catch { $failed = $true }
+  if (-not $failed) { throw 'capture setup injection did not fail' }
+} finally { try { Close-TrustedSgOwner $captureOwner } catch { } }
+if (-not $captureOwner.Closed -or -not $captureOwner.Error.Result.Contains('SG_CAPTURE_FAULT after-start=1') -or
+    -not $captureOwner.Error.Result.Contains('SG_CAPTURE_CLEANUP drains=1 joined=1')) {
+  throw 'capture startup failure did not join its registered drain and retire owner'
+}
+Write-Host 'SG_CAPTURE_FAILURE after-start=1 drain_joined=1 job_empty=1 owner_signaled=1'
 foreach ($target in 'begin','spawn') {
   foreach ($phase in 'before-publish-crash','before-publish-hang','after-resume-crash','after-resume-hang') {
     $caseDir = Join-Path $env:RUNNER_TEMP ('sg-fault-' + [guid]::NewGuid().ToString('N'))

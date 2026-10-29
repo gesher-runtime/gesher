@@ -23,13 +23,28 @@ MAX_OUTPUT = 16 * 1024 * 1024
 class Capture:
     def __init__(self):
         read_fd, write_fd = os.pipe()
-        self.reader = os.fdopen(read_fd, 'rb', buffering=0)
-        self.writer = os.fdopen(write_fd, 'wb', buffering=0)
+        try:
+            self.reader = os.fdopen(read_fd, 'rb', buffering=0)
+        except BaseException:
+            os.close(read_fd)
+            os.close(write_fd)
+            raise
+        try:
+            self.writer = os.fdopen(write_fd, 'wb', buffering=0)
+        except BaseException:
+            self.reader.close()
+            os.close(write_fd)
+            raise
         self.data = bytearray()
         self.lock = threading.Lock()
         self.error = None
         self.thread = threading.Thread(target=self.drain, daemon=True)
-        self.thread.start()
+        try:
+            self.thread.start()
+        except BaseException:
+            self.reader.close()
+            self.writer.close()
+            raise
 
     def drain(self):
         try:
@@ -62,6 +77,18 @@ def main():
         raise RuntimeError('SG fixture owner requires CI Windows')
     children = {}
     captures = {}
+    all_captures = []
+    def make_capture():
+        capture = Capture()
+        try:
+            all_captures.append(capture)
+        except BaseException:
+            capture.writer.close()
+            capture.thread.join(5)
+            if capture.thread.is_alive():
+                raise RuntimeError('unregistered capture did not terminate')
+            raise
+        return capture
     if len(sys.argv) != 1:
         raise ValueError('owner takes no arguments')
     next_id = 1
@@ -94,11 +121,15 @@ def main():
             if operation == 'begin':
                 if started:
                     raise ValueError('duplicate broker')
-                capture = Capture()
                 env = dict(os.environ, **request['environment'])
                 fault = request.get('fixture_fault', '')
                 inject = fault_callback(fault)
                 before = inject if fault.startswith('before-publish-') else None
+                capture = make_capture()
+                if request.get('capture_fault') == 'after-start':
+                    capture.writer.close()
+                    print('SG_CAPTURE_FAULT after-start=1', file=sys.stderr, flush=True)
+                    raise RuntimeError('injected capture setup failure')
                 try:
                     child = owner.begin(request['broker'], request['endpoint'], capture.writer, env, before_resume=before)
                 finally:
@@ -111,7 +142,6 @@ def main():
                     raise ValueError('broker not started')
                 if next_id > 3:
                     raise ValueError('fixture permits exactly two actors')
-                capture = Capture()
                 env = dict(os.environ, **request['environment'])
                 role = request['role']
                 if role not in ('@servicemanager', '@system_server'):
@@ -121,6 +151,7 @@ def main():
                 fault = request.get('fixture_fault', '')
                 inject = fault_callback(fault)
                 before = inject if fault.startswith('before-publish-') else None
+                capture = make_capture()
                 try:
                     child = owner.spawn(request['args'], capture.writer, env, context, role=role, before_publish=before)
                 finally:
@@ -159,10 +190,12 @@ def main():
         finally:
             with contextlib.redirect_stdout(sys.stderr):
                 job.__exit__(None, None, None)
-            for capture in captures.values():
+            for capture in all_captures:
                 capture.thread.join(5)
                 if capture.thread.is_alive() or capture.error:
                     raise RuntimeError('SG output cleanup incomplete')
+            if all_captures:
+                print(f'SG_CAPTURE_CLEANUP drains={len(all_captures)} joined=1', file=sys.stderr, flush=True)
 
 
 if __name__ == '__main__':

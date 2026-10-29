@@ -4,7 +4,7 @@ if (-not ('TrustedSgJob' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 
 function Start-TrustedSgOwner {
     $python = (Get-Command python -CommandType Application).Source
     $native = [TrustedSgJob]::Start($python, (Join-Path $PSScriptRoot 'trusted_sg_owner.py'), 0)
-    return [pscustomobject]@{ Native = $native; Error = $native.Error.ReadToEndAsync(); Closed = $false; Faulted = $false }
+    return [pscustomobject]@{ Native = $native; Error = $native.Error.ReadToEndAsync(); Pending = $null; Closed = $false; Faulted = $false }
 
 }
 
@@ -15,7 +15,9 @@ function Invoke-TrustedSgOwner($Owner, [hashtable]$Request) {
     $Owner.Native.Input.WriteLine($json)
     $Owner.Native.Input.Flush()
     $reply = $Owner.Native.Output.ReadLineAsync()
+    $Owner.Pending = $reply
     if (-not $reply.Wait(15000)) { throw 'SG owner response deadline expired' }
+    $Owner.Pending = $null
     if ($null -eq $reply.Result -or $reply.Result.Length -gt 50000) { throw 'invalid SG owner response' }
     $value = $reply.Result | ConvertFrom-Json
     if (-not $value.ok) { throw 'SG owner refused request' }
@@ -49,12 +51,12 @@ function Close-TrustedSgOwner($Owner) {
         if ([TrustedSgJob]::Active($Owner.Native.Job) -ne 0) { throw 'SG job cleanup unconfirmed; job handle retained' }
         if (-not [TrustedSgJob]::Wait($Owner.Native, 5000)) { throw 'SG owner exact process not signaled; handles retained' }
         if (-not $Owner.Error.Wait(5000)) { throw 'SG owner stderr drain unconfirmed; handles retained' }
+        if ($null -ne $Owner.Pending -and -not $Owner.Pending.Wait(5000)) { throw 'SG owner response drain unconfirmed; handles retained' }
+        $Owner.Pending = $null
         Write-Host $Owner.Error.Result
         [TrustedSgJob]::CloseProcess($Owner.Native)
         [TrustedSgJob]::CloseJob($Owner.Native)
-        $Owner.Native.Input.Dispose()
-        $Owner.Native.Output.Dispose()
-        $Owner.Native.Error.Dispose()
+        [TrustedSgJob]::CloseStreams($Owner.Native)
         $Owner.Closed = $true
       }
       } catch {
