@@ -6,6 +6,7 @@
 #include <memory>
 #include <algorithm>
 #include <cwctype>
+#include <cwchar>
 #include <array>
 #include <atomic>
 #include <string>
@@ -22,6 +23,7 @@ struct InstalledPolicy {
   std::wstring profile;
   std::u16string package, install, executable;
   int uid = -1;
+  bool retiring = false;
   std::vector<std::wstring> grants;
   struct Pin { std::wstring path; HANDLE handle; };
   std::vector<Pin> pins;
@@ -55,14 +57,16 @@ struct InstalledPolicy {
     }
   }
   bool Retire() {
+    retiring = true;
     bool ok = true;
     for (auto it = grants.begin(); it != grants.end();) {
       if (Grant(*it, 0, REVOKE_ACCESS)) it = grants.erase(it);
       else { ok = false; ++it; }
     }
     if (old_label) {
+      TreeGuard tree;
       PACL label = nullptr; BOOL present = FALSE, defaulted = FALSE;
-      if (GetSecurityDescriptorSacl(old_label, &present, &label, &defaulted) &&
+      if (tree.Walk(writable_path) && GetSecurityDescriptorSacl(old_label, &present, &label, &defaulted) &&
           SetSecurityInfo(Pinned(writable_path), SE_FILE_OBJECT,
             LABEL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, label) == ERROR_SUCCESS) {
         LocalFree(old_label); old_label = nullptr;
@@ -104,11 +108,41 @@ struct InstalledPolicy {
     }
     return Pinned(path) != INVALID_HANDLE_VALUE;
   }
+  struct TreeGuard {
+    std::vector<HANDLE> handles;
+    ~TreeGuard() { for (HANDLE handle : handles) CloseHandle(handle); }
+    bool Walk(const std::wstring& path, unsigned depth = 0) {
+      if (depth > 128 || handles.size() >= 65536) return false;
+      HANDLE handle = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
+          nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+      if (handle == INVALID_HANDLE_VALUE) return false;
+      handles.push_back(handle);
+      FILE_ATTRIBUTE_TAG_INFO tag{};
+      if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag, sizeof(tag)) ||
+          (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+      if (!(tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return true;
+      WIN32_FIND_DATAW item{};
+      HANDLE search = FindFirstFileW((path + L"\\*").c_str(), &item);
+      if (search == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_NOT_FOUND;
+      bool ok = true;
+      do {
+        if (!wcscmp(item.cFileName, L".") || !wcscmp(item.cFileName, L"..")) continue;
+        if (!Walk(path + L"\\" + item.cFileName, depth + 1)) { ok = false; break; }
+      } while (FindNextFileW(search, &item));
+      DWORD error = GetLastError(); FindClose(search);
+      return ok && error == ERROR_NO_MORE_FILES;
+    }
+  };
   bool Grant(const std::wstring& path, DWORD rights, ACCESS_MODE mode = GRANT_ACCESS) {
     PACL old_acl = nullptr, acl = nullptr;
     PSECURITY_DESCRIPTOR sd = nullptr;
     HANDLE handle = Pinned(path);
     if (handle == INVALID_HANDLE_VALUE) return false;
+    // No inherited ACL operation traverses an unchecked reparse subtree. The
+    // caller retires all guest children before revoke, so guests cannot create
+    // fresh entries during this bounded tree snapshot and ACL operation.
+    TreeGuard tree;
+    if (!tree.Walk(path)) return false;
     DWORD error = GetSecurityInfo(handle, SE_FILE_OBJECT,
         DACL_SECURITY_INFORMATION, nullptr, nullptr, &old_acl, nullptr, &sd);
     if (error != ERROR_SUCCESS) return false;
@@ -218,7 +252,8 @@ struct InstalledPolicy {
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"S:(ML;OICI;NW;;;LW)",
         SDDL_REVISION_1, &low, nullptr)) return {};
     PACL label = nullptr; BOOL present = FALSE, defaulted = FALSE;
-    bool labeled = GetSecurityDescriptorSacl(low, &present, &label, &defaulted) &&
+    TreeGuard tree;
+    bool labeled = tree.Walk(writable) && GetSecurityDescriptorSacl(low, &present, &label, &defaulted) &&
         SetSecurityInfo(policy->Pinned(writable), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
             nullptr, nullptr, nullptr, label) == ERROR_SUCCESS;
     LocalFree(low);

@@ -25,6 +25,18 @@ slot for retry. A stale profile after an abnormal server death currently causes
 fail-closed provisioning, not silent adoption. Normal persistent-device shutdown
 now blocks new installed admissions, revokes and retires all installed policies,
 and fails explicitly if exact child/resource retirement is unconfirmed.
+Inherited directory ACL/label mutations also require a bounded recursive
+snapshot with every descendant pinned during the operation; any reparse entry
+rejects the operation. A reparse introduced into app data causes unconfirmed
+retirement with policy ownership retained and future admissions blocked.
+
+The separate `installed-guest-policy.yml` component prepares actual Windows
+profile tests for subtree reparse rejection, unchanged outside target ACL/label,
+ancestor/directory/final-file rename error32 while pinned, failed cleanup
+retention, removal of the hostile entry, confirmed retry, and successful rename
+after all owned handles are released. Its actual compiler, archive, member,
+source/header and current-run/attempt receipt derives from the qualified helper
+fixture contract. It is not a replacement for actual APK/Binder full-CI proof.
 
 Child retains the RestrictedLaunch owner, its policy and actual process/birth.
 Start checks actual SID, low integrity, zero capabilities and atomic private-job

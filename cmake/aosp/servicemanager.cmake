@@ -18,6 +18,12 @@ add_executable(binder_private_admission_fixture EXCLUDE_FROM_ALL
 target_compile_options(binder_private_admission_fixture PRIVATE -Wall -Wextra -Werror -fexceptions)
 target_link_options(binder_private_admission_fixture PRIVATE -municode)
 
+add_executable(installed_guest_policy_fixture EXCLUDE_FROM_ALL
+  ${CMAKE_SOURCE_DIR}/tests/windows/installed-guest-policy-fixture.cc)
+target_compile_options(installed_guest_policy_fixture PRIVATE -Wall -Wextra -Werror -fexceptions)
+target_link_options(installed_guest_policy_fixture PRIVATE -municode)
+target_link_libraries(installed_guest_policy_fixture PRIVATE advapi32)
+
 add_executable(binder_launch_registry_fixture EXCLUDE_FROM_ALL
   ${CMAKE_SOURCE_DIR}/tests/windows/binder-launch-registry-fixture.cc)
 target_compile_options(binder_launch_registry_fixture PRIVATE -Wall -Wextra -Werror -fexceptions)

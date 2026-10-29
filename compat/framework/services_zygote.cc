@@ -173,7 +173,7 @@ static int SpawnOwned(const std::u16string& command_line, const std::vector<std:
   if (installed_guest && package == guest::kSelectedPackage) {
     auto found = g_installed.find(package);
     if (g_retiring_installed || !g_writer || bootstrap || breakaway || found == g_installed.end() ||
-        found->second->uid != uid || found->second->install != install)
+        found->second->retiring || found->second->uid != uid || found->second->install != install)
       return -ERROR_ACCESS_DENIED;
     policy = found->second;
   }
@@ -374,7 +374,8 @@ bool ProvisionInstalled(const std::u16string& package, const std::u16string& ins
   if (g_retiring_installed || !g_writer || !g_control || !g_broker) return false;
   if (package != guest::kSelectedPackage) return true;
   auto found = g_installed.find(package);
-  if (found != g_installed.end()) return found->second->install == install && found->second->uid == uid;
+  if (found != g_installed.end()) return !found->second->retiring &&
+      found->second->install == install && found->second->uid == uid;
   auto policy = guest::InstalledPolicy::Create(package, install, uid, ExePath(), read, data);
   if (!policy) return false;
   g_installed.emplace(package, std::move(policy));
@@ -502,6 +503,8 @@ bool RevokeInstall(const std::u16string& package, const std::u16string& install)
   std::lock_guard<std::recursive_mutex> spawning(g_spawn_lock);
   InitControl();
   if (package.empty() || install.empty()) return false;
+  auto policy = g_installed.find(package);
+  if (policy != g_installed.end() && policy->second->install == install) policy->second->retiring = true;
   if (g_writer) {
     control::Request request;
     request.op = control::kRevoke;

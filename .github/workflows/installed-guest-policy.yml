@@ -1,0 +1,80 @@
+name: Installed guest resource policy component
+on:
+  push:
+    branches: [wip/binder-isolated-spawn]
+    paths: ['tests/windows/installed-guest-policy-*', 'compat/framework/installed_guest.h', '.github/workflows/installed-guest-policy.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: installed-guest-policy-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch and verify pinned llvm-mingw archive
+        run: |
+          set -euo pipefail
+          mkdir -p ~/toolchain
+          curl --fail --location --retry 3 --connect-timeout 20 --max-time 180 https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz -o toolchain.tar.xz
+          echo '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4  toolchain.tar.xz' | sha256sum -c -
+          tar -xJf toolchain.tar.xz -C ~/toolchain
+      - name: Compile actual fixture and bind compiler receipt
+        run: python3 tests/windows/installed-guest-policy-receipt.py build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guest-policy-${{ github.sha }}-${{ github.run_attempt }}
+          path: guest-policy-artifact/
+          if-no-files-found: error
+  probe:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact current-run producer archive
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/artifact_receipt.py --name "guest-policy-$env:GITHUB_SHA-$env:GITHUB_RUN_ATTEMPT" --producer build --destination guest-policy-artifact
+          if ($LASTEXITCODE -ne 0) { throw 'strict archive receipt failed' }
+          python tests/windows/installed-guest-policy-receipt.py verify
+          if ($LASTEXITCODE -ne 0) { throw 'source/compiler/executable receipt failed' }
+      - name: Exercise real pinned resource, reparse and retirement controls
+        shell: pwsh
+        env:
+          GESHER_CI_PROCESS_TRACE: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . "$pwd/tests/windows/helpers/CloseProcessReaders.ps1"
+          $tokens = $null; $errors = $null
+          $ast = [Management.Automation.Language.Parser]::ParseFile("$pwd/tests/windows/tracks/50-services.ps1", [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { throw $errors[0] }
+          $definitions = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] }, $false) | Where-Object Name -eq 'RunTimed')
+          if ($definitions.Count -ne 1) { throw 'qualified supervisor missing or ambiguous' }
+          . ([scriptblock]::Create($definitions[0].Extent.Text))
+          $directory = Join-Path $pwd 'policy-owned-fixture'
+          New-Item -ItemType Directory $directory | Out-Null
+          $output = RunTimed (Resolve-Path guest-policy-artifact/installed-guest-policy-fixture.exe).Path @($directory) 90
+          $code = $LASTEXITCODE
+          Write-Host $output
+          if ($code -ne 0) { throw "resource policy fixture failed: $code" }
+          foreach ($row in @('POLICY_REPARSE subtree_rejected=1 retained_cleanup_retry=1 owners=0',
+              'POLICY_PIN ancestor_rename=32 asset_rename=32 data_rename=32 final_file_rename=32',
+              'POLICY_RETIRE reparse_refused=1 retained=1 retry_confirmed=1 postcleanup_rename=1 owners=0')) {
+            if (-not $output.Contains($row)) { throw "missing actual resource observation: $row" }
+          }
+          if (@(Get-ChildItem -LiteralPath $directory -Force).Count) { throw 'owned resource directory not empty' }
+          Remove-Item -LiteralPath $directory
+          Write-Host 'Resource-policy component only; actual production APK/Binder route requires full CI.'
