@@ -43,9 +43,12 @@ jobs:
           $expected = (git rev-parse HEAD:overrides.json).Trim()
           $blob = (git hash-object -- overrides.json).Trim()
           $raw = (Get-FileHash -LiteralPath overrides.json -Algorithm SHA256).Hash.ToLowerInvariant()
+          $rawBlob = (git hash-object --no-filters -- overrides.json).Trim()
+          $headRawSha = (python -c "import hashlib,subprocess;print(hashlib.sha256(subprocess.check_output(['git','cat-file','blob','HEAD:overrides.json'])).hexdigest())").Trim()
+          if ($LASTEXITCODE -ne 0 -or $headRawSha -notmatch '^[0-9a-f]{64}$') { throw 'Cannot hash raw HEAD blob bytes' }
           $size = (Get-Item -LiteralPath overrides.json).Length
           $attrs = (git check-attr -a -- overrides.json | Out-String).Trim().Replace("`r", '').Replace("`n", ';')
           $auto = (git config --show-origin --get core.autocrlf | Out-String).Trim()
           $status = (git status --porcelain -- overrides.json | Out-String).Trim()
-          Write-Host "FRESH_CHECKOUT source=$source expected=$expected actual=$blob raw_sha256=$raw size=$size autocrlf=$auto attrs=$attrs status=$status"
+          Write-Host "FRESH_CHECKOUT source=$source expected=$expected actual=$blob raw_sha256=$raw head_raw_sha256=$headRawSha no_filters_blob=$rawBlob size=$size autocrlf=$auto attrs=$attrs status=$status"
           if ($blob -cne $expected) { throw 'Fresh checkout tracked blob differs from HEAD' }
