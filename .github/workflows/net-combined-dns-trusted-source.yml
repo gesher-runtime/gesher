@@ -188,8 +188,8 @@ jobs:
                               'tests/media/ndk-muxer/verify_output.cc': '5575a7573fc08bf9f9a98929bf4e7b0f6bcaf423',
                               'tests/media/ndk-muxer/verify-webm-cues.py': 'ad24652a7c34be72d4869775a52afb778afd16e1',
                               'tests/windows/tracks/79-media4-muxer.ps1': '9f82ca9f402a782bb62228de08c06a790be66cd2',
-                              'tools/native3-locks/union_payload.py': '3188ef88939f3f02bd087b0f92fd2cd50a721a26',
-                              'tools/native3-locks/union_blocking_guard.py': '28c88380840c96808f08b655496c1f685f768110'})
+                              'tools/native3-locks/union_payload.py': 'e42aaed932860896fed5a59054bac3b4ccbae059',
+                              'tools/native3-locks/union_blocking_guard.py': '974799ccead72995044df3ef115a2a221962e7c0'})
           ORIGINAL_BASE = 'f1550540186b4ae3f17a5e501a886ec1c4d5d613'
           UNION_BASE = '8b1e9b509ceef7e532a7ff5bc085ecdbc476d292'
 
@@ -403,6 +403,15 @@ jobs:
               mutant = copy.deepcopy(actual)
               mutant[next(iter(HISTORICAL_PINS))] = ('100644', '0' * 40)
               reject('original_native_aot_selected_blob', lambda: verify_selected(mutant, adapted=True))
+              for name in ('tests/media/ndk-muxer/muxer_test.cc', 'tests/media/ndk-muxer/verify_output.cc',
+                           'tests/media/ndk-muxer/verify-webm-cues.py', 'tests/windows/tracks/79-media4-muxer.ps1',
+                           'tools/native3-locks/union_payload.py', 'tools/native3-locks/union_blocking_guard.py'):
+                  mutant = copy.deepcopy(actual)
+                  mutant[name] = ('100644', '0' * 40)
+                  reject('media4_mutated_' + name, lambda: verify_tree(mutant, expected))
+              mutant = copy.deepcopy(actual)
+              mutant['tests/media/ndk-muxer/unreviewed.py'] = ('100644', '3' * 40)
+              reject('media4_unauthorized_path', lambda: verify_tree(mutant, expected))
               # Both real files are also replaced together, then restored even on rejection.
               originals = {name: Path(name).read_bytes() for name in (GUARD, 'tools/native3-locks/union_blocking_guard.py', TRUST, CALLER)}
               try:
