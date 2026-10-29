@@ -565,3 +565,11 @@ all other readiness and payload preservation, and a genuine unowned invalid
 native input still failing EINVAL. The first two cases require actual native
 WSAEINVAL10022, not a fabricated wrapper result. These new source controls remain
 UNQUALIFIED until Linux-first and fresh HOST/both-ABI CI after independent peer.
+
+Whole-source peer conditionally passed 423f123b; its first current-source
+characterization409352 failed Linux compilation at the new listener control's
+misspelled helper name (`finite_priority_wait` versus existing
+`finite_priority_control`). Both independent WinSDK jobs passed, with no product
+component triggered. Correcting that call preserves the existing strict 60ms
+helper and every assertion/bound. Raw compile log:
+`C:/work/gesher-ci-review/tcp-409352-linux.log`.

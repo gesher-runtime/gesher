@@ -582,7 +582,7 @@ static void failed_to_listener_control() {
   printf("TCP_PRIORITY_LISTENER_TRANSITION bind_rc=%d bind_errno=%d\n", rebound, bind_error); fflush(stdout);
   require(rebound == -1, "an already bound failed socket does not change its local address");
   require(listen(client, 1) == 0, "actual failed socket becomes a listener");
-  finite_priority_wait(client, "failed-socket-now-listening");
+  finite_priority_control(client, "failed-socket-now-listening");
   length = sizeof(address); require(getsockname(client, reinterpret_cast<sockaddr*>(&address), &length) == 0 && address.sin_port != 0, "actual transitioned listener address"); address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   int incoming = socket(AF_INET, SOCK_STREAM, 0); require(incoming >= 0 && connect(incoming, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "new transport reaches transitioned listener");
   p = {client, POLLIN, 0}; require(poll(&p, 1, 2000) == 1, "transitioned listener accepts new connection");
