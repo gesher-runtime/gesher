@@ -19,6 +19,11 @@ class StartupListener final : public gesher::webview::Listener {
                const std::wstring&, const std::wstring&, const std::vector<uint8_t>*) override {
     ++events;
     if (type == gesher::webview::kReady) ready = true;
+    if (type == gesher::webview::kFailed) {
+      fwprintf(stderr, L"STARTUP_FAILED hr=0x%08x detail=%ls\n", static_cast<unsigned>(arg),
+               result.c_str());
+      fflush(stderr);
+    }
     if (type == gesher::webview::kSessionResult && id == 1 && arg == 0 &&
         result.find(L"\"value\":42") != std::wstring::npos) session_ok = true;
     wchar_t fault[32] = {};
@@ -104,7 +109,15 @@ int wmain(int argc, wchar_t** argv) {
     if (host == nullptr) return 7;
     ULONGLONG deadline = GetTickCount64() + 20000;
     while (!listener.ready && GetTickCount64() < deadline) Sleep(20);
-    if (!listener.ready || !host->Destroy()) return 8;
+    if (!listener.ready) {
+      fwprintf(stderr, L"STARTUP_READY_TIMEOUT events=%d destroyed=%d\n",
+               listener.events.load(), listener.destroyed.load());
+      fflush(stderr);
+      return 8;
+    }
+    if (!host->Destroy()) {
+      fwprintf(stderr, L"STARTUP_DESTROY_ENQUEUE_FAILED\n"); fflush(stderr); return 8;
+    }
     deadline = GetTickCount64() + 10000;
     while (listener.destroyed != 1 && GetTickCount64() < deadline) Sleep(20);
     if (listener.destroyed != 1) return 9;
