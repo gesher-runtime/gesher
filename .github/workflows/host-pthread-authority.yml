@@ -3,7 +3,7 @@ name: host pthread authority initial controls
 on:
   workflow_dispatch:
   push:
-    branches: [wip/host-pthread-authority]
+    branches: [wip/host-public-clock-dispatch]
     paths: ['.github/workflows/host-pthread-authority.yml']
 permissions:
   contents: read
@@ -42,6 +42,7 @@ jobs:
           cp "$llvm/gesher-winpthreads-authority.json" host-authority-fixture/supplier.json
           "$llvm/bin/llvm-readobj" --coff-imports out/host_pthread_authority_test.exe > host-authority-fixture/imports-host.txt
           "$llvm/bin/llvm-readobj" --coff-imports host-authority-fixture/host_pthread_supplier_test.exe > host-authority-fixture/imports-dynamic.txt
+          "$llvm/bin/llvm-readobj" --coff-imports host-authority-fixture/host_pthread_public_static_test.exe > host-authority-fixture/imports-static.txt
           python3 tools/host-pthread-authority/receipt.py host-role out "$llvm" production host-authority-fixture/host-production-role.json
       - name: Build separately patched supplier and host fault fixture
         shell: bash
@@ -94,7 +95,7 @@ jobs:
           $bundle = Get-Content -Raw -LiteralPath host-authority-fixture/bundle.json | ConvertFrom-Json
           $expectedSha = $bundle.members.'libwinpthread-1.dll'
           $problems = [System.Collections.Generic.List[string]]::new()
-          foreach ($case in @(@{Name='host_pthread_authority_test';Sha=$null;Exit=0}, @{Name='host_pthread_supplier_test';Sha=$expectedSha;Exit=0}, @{Name='host_pthread_supplier_test';Sha=('0' * 64);Exit=3}, @{Name='host_pthread_authority_fault_test';Sha=$null;Exit=0})) {
+          foreach ($case in @(@{Name='host_pthread_authority_test';Sha=$null;Exit=0}, @{Name='host_pthread_public_static_test';Sha=$null;Exit=0}, @{Name='host_pthread_supplier_test';Sha=$expectedSha;Exit=0}, @{Name='host_pthread_supplier_test';Sha=('0' * 64);Exit=3}, @{Name='host_pthread_authority_fault_test';Sha=$null;Exit=0})) {
             $name = $case.Name
             $stdout = Join-Path $env:RUNNER_TEMP "$name.stdout"
             $stderr = Join-Path $env:RUNNER_TEMP "$name.stderr"

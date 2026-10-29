@@ -11,7 +11,8 @@ DIST = ROOT / 'host-authority-fixture'
 MEMBERS = {'host_pthread_authority_test.exe', 'host_pthread_supplier_test.exe',
            'libwinpthread-1.dll', 'supplier.json', 'COPYING.winpthreads.txt',
            'imports-host.txt', 'imports-dynamic.txt', 'compiler.json',
-           'host_pthread_authority_fault_test.exe', 'fault-supplier.json',
+           'host_pthread_authority_fault_test.exe', 'host_pthread_public_static_test.exe',
+           'host_pthread_public_static_test.o', 'imports-static.txt', 'fault-supplier.json',
            'host-production-role.json', 'host-fault-role.json'}
 
 
@@ -24,9 +25,18 @@ def compile_client(llvm):
                str(llvm / 'x86_64-w64-mingw32/lib/libwinpthread.dll.a'), '-lbcrypt',
                '-o', str(DIST / 'host_pthread_supplier_test.exe')]
     subprocess.run(command, check=True)
+    static_compile = [str(driver), '-D_WIN32_WINNT=0x0A00', '-Wall', '-Wextra', '-Werror', '-c',
+                      str(ROOT / 'tests/native/host_pthread_public_static_test.c'),
+                      '-o', str(DIST / 'host_pthread_public_static_test.o')]
+    static_link = [str(driver), str(DIST / 'host_pthread_public_static_test.o'),
+                   str(llvm / 'x86_64-w64-mingw32/lib/libwinpthread.a'),
+                   '-o', str(DIST / 'host_pthread_public_static_test.exe')]
+    subprocess.run(static_compile, check=True)
+    subprocess.run(static_link, check=True)
     (DIST / 'compiler.json').write_text(json.dumps({
         'configured_driver': str(cxx), 'sha256': sha(cxx), 'client_command': command,
-        'client_driver_sha256': sha(driver)}, sort_keys=True))
+        'client_driver_sha256': sha(driver), 'static_compile': static_compile,
+        'static_link': static_link}, sort_keys=True))
 
 
 def sha(path):
@@ -37,7 +47,7 @@ def context():
     assert os.environ.get('GITHUB_ACTIONS') == 'true'
     c = {k: os.environ[k] for k in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY')}
     assert c['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
-    assert os.environ.get('GITHUB_REF') == 'refs/heads/wip/host-pthread-authority'
+    assert os.environ.get('GITHUB_REF') == 'refs/heads/wip/host-public-clock-dispatch'
     assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == c['GITHUB_SHA']
     subprocess.check_call(['git', 'diff', '--exit-code', 'HEAD', '--'])
     return c
@@ -68,6 +78,7 @@ def record():
     assert compiler['client_driver_sha256'] == supplier['compiler_driver_sha256']
     assert 'libwinpthread-1.dll' not in (DIST / 'imports-host.txt').read_text().lower()
     assert 'libwinpthread-1.dll' in (DIST / 'imports-dynamic.txt').read_text().lower()
+    assert 'libwinpthread-1.dll' not in (DIST / 'imports-static.txt').read_text().lower()
     (DIST / 'bundle.json').write_text(json.dumps(data, sort_keys=True, indent=2))
 
 
