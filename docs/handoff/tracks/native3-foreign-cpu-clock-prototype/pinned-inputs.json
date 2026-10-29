@@ -1,0 +1,9 @@
+{
+  "upstream_commit": "a3d93999ef0521681d45e445c39964a7af0f593f",
+  "source_sha256": {
+    "mingw-w64-libraries/winpthreads/src/thread.c": "c2fcaa54269f0e773069aeeec8212cac71f417483bf65d5e75f100311df4080b",
+    "mingw-w64-libraries/winpthreads/src/thread.h": "3c105e10217cabae5a34d1e6e83352fb4eb8a9c2cf048de8053351eb6edf6a25",
+    "mingw-w64-libraries/winpthreads/include/pthread.h": "bf3fd920306acb4144873d1099490cf332700c268a8ede0e484c7c0e721c7995"
+  },
+  "patch_sha256": "7d210cbd1ec7c9450f0547067f05560774b6e19fae7243082b6c45f01aa185c0"
+}

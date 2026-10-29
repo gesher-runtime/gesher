@@ -1,0 +1,222 @@
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -73,6 +73,8 @@
+ static size_t idListCnt = 0;
+ static size_t idListMax = 0;
+ static pthread_t idListNextId = 0;
++/* Zero is the permanently exhausted state, never a reusable generation. */
++static unsigned long long cpu_generation_next = 1;
+ 
+ #if defined(__SEH__) && (!defined(__clang__) || __clang_major__ >= 7)
+ #define SEH_INLINE_ASM
+@@ -333,6 +335,16 @@
+   return NULL;
+ }
+ 
++/* The authority owns the original kernel handle until registry retirement.
++   Legacy join/detach/TLS bookkeeping must not close that same handle early.
++   An unrelated temporary handle still follows its original close path. */
++static void
++ReleaseThreadHandleAlias (_pthread_v *thread, HANDLE handle)
++{
++  if (handle != thread->cpu_handle)
++    CloseHandle (handle);
++}
++
+ /* Save a _pthread_v element for reuse in pool.  */
+ static void
+ push_pthread_mem (_pthread_v *sv)
+@@ -342,6 +354,11 @@
+   pthread_mutex_lock (&mtx_pthr_locked);
+   if (sv->x != 0)
+     __pthread_deregister_pointer (sv->x);
++  /* This retirement lock is also held by the atomic duplicate API. */
++  if (sv->cpu_handle != NULL)
++    CloseHandle (sv->cpu_handle);
++  sv->cpu_handle = NULL;
++
+   if (sv->keyval)
+     free (sv->keyval);
+   if (sv->keyval_set)
+@@ -367,6 +384,12 @@
+   _pthread_v *r = NULL;
+ 
+   pthread_mutex_lock (&mtx_pthr_locked);
++  if (cpu_generation_next == 0)
++    {
++      pthread_mutex_unlock (&mtx_pthr_locked);
++      return NULL;
++    }
++
+   if ((r = pthr_root) == NULL)
+     {
+       if ((r = (_pthread_v *)calloc (1,sizeof(struct _pthread_v))) != NULL)
+@@ -378,6 +401,8 @@
+ 	      r = NULL;
+ 	    }
+ 	}
++      if (r != NULL)
++        r->cpu_generation = cpu_generation_next++;
+       pthread_mutex_unlock (&mtx_pthr_locked);
+       return r;
+     }
+@@ -391,6 +416,8 @@
+ 
+       r->next = NULL;
+     }
++  if (r != NULL)
++    r->cpu_generation = cpu_generation_next++;
+   pthread_mutex_unlock (&mtx_pthr_locked);
+   return r;
+ }
+@@ -477,7 +504,7 @@
+ 	  _pthread_cleanup_dest (t->x);
+ 	  if (t->h != NULL)
+ 	    {
+-	      CloseHandle (t->h);
++	      ReleaseThreadHandleAlias (t, t->h);
+ 	      if (t->evStart)
+ 		CloseHandle (t->evStart);
+ 	      t->evStart = NULL;
+@@ -500,7 +527,7 @@
+ 	    {
+ 	      t->valid = DEAD_THREAD;
+ 	      if (t->h != NULL)
+-		CloseHandle (t->h);
++		ReleaseThreadHandleAlias (t, t->h);
+ 	      t->h = NULL;
+ 	      pthread_mutex_destroy(&t->p_clock);
+ 	      replace_spin_keys (&t->spin_keys, new_spin_keys);
+@@ -1072,6 +1099,9 @@
+   t->h = NULL; //GetCurrentThread();
+   if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &t->h, 0, FALSE, DUPLICATE_SAME_ACCESS))
+     abort ();
++  pthread_mutex_lock (&mtx_pthr_locked);
++  t->cpu_handle = t->h;
++  pthread_mutex_unlock (&mtx_pthr_locked);
+   t->sched.sched_priority = GetThreadPriority(t->h);
+   t->ended = 0;
+   t->thread_noposix = 1;
+@@ -1098,6 +1128,40 @@
+ {
+   _pthread_v *t = __pthread_self_lite ();
+   return (!t ? NULL : t->evStart);
++}
++
++/* Versioned atomic capability acquisition. Invalid pthread_t values are
++   map keys only: never dereference a caller-supplied integer as a pointer.
++   cpu_handle cannot be closed/reused until push_pthread_mem takes this lock. */
++int
++gesher_winpthread_dup_cpu_handle_v1 (pthread_t thread, void **owned_handle,
++                                     unsigned long long *generation)
++{
++  _pthread_v *record;
++  HANDLE duplicate = NULL;
++  int result = ESRCH;
++  if (owned_handle == NULL || generation == NULL)
++    return EINVAL;
++  pthread_mutex_lock (&mtx_pthr_locked);
++  record = __pthread_get_pointer (thread);
++  if (record != NULL && record->cpu_handle != NULL
++      && record->cpu_generation != 0
++      && WaitForSingleObject (record->cpu_handle, 0) == WAIT_TIMEOUT)
++    {
++      if (DuplicateHandle (GetCurrentProcess (), record->cpu_handle,
++                           GetCurrentProcess (), &duplicate,
++                           THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
++                           FALSE, 0))
++        {
++          *owned_handle = duplicate;
++          *generation = record->cpu_generation;
++          result = 0;
++        }
++      else
++        result = EAGAIN;
++    }
++  pthread_mutex_unlock (&mtx_pthr_locked);
++  return result;
+ }
+ 
+ /* Internal helper for getting thread handle of thread T.  */
+@@ -1168,7 +1232,7 @@
+ 	  if ((t->p_state & PTHREAD_CREATE_DETACHED) == PTHREAD_CREATE_DETACHED)
+ 	    {
+ 	      t->valid = DEAD_THREAD;
+-	      CloseHandle (t->h);
++	      ReleaseThreadHandleAlias (t, t->h);
+ 	      t->h = NULL;
+ 	      push_pthread_mem(t);
+ 	      t = NULL;
+@@ -1707,12 +1771,15 @@
+     }
+     SetThreadPriority (thrd, pr);
+   }
++  pthread_mutex_lock (&mtx_pthr_locked);
++  tv->cpu_handle = thrd;
++  pthread_mutex_unlock (&mtx_pthr_locked);
+   ResetEvent (tv->evStart);
+   if ((tv->p_state & PTHREAD_CREATE_DETACHED) != 0)
+     {
+       tv->h = 0;
+       ResumeThread (thrd);
+-      CloseHandle (thrd);
++      ReleaseThreadHandleAlias (tv, thrd);
+     }
+   else
+     {
+@@ -1739,7 +1806,7 @@
+   /* pthread_testcancel (); */
+   if (tv->ended == 0 || (tv->h != NULL && tv->h != INVALID_HANDLE_VALUE))
+     WaitForSingleObject (tv->h, INFINITE);
+-  CloseHandle (tv->h);
++  ReleaseThreadHandleAlias (tv, tv->h);
+   if (tv->evStart)
+     CloseHandle (tv->evStart);
+   tv->evStart = NULL;
+@@ -1787,7 +1854,7 @@
+ 	      return EBUSY;
+ 	    }
+     }
+-  CloseHandle (tv->h);
++  ReleaseThreadHandleAlias (tv, tv->h);
+   if (tv->evStart)
+     CloseHandle (tv->evStart);
+   tv->evStart = NULL;
+@@ -1831,7 +1898,7 @@
+   _ReadWriteBarrier();
+   if (dw)
+     {
+-      CloseHandle (dw);
++      ReleaseThreadHandleAlias (tv, dw);
+       if (tv->ended)
+ 	{
+ 	  if (tv->evStart)
+--- a/mingw-w64-libraries/winpthreads/src/thread.h
++++ b/mingw-w64-libraries/winpthreads/src/thread.h
+@@ -39,7 +39,9 @@
+     void *(* func)(void *);
+     _pthread_cleanup *clean;
+     int nobreak;
+-    HANDLE h;
++    HANDLE h; /* bookkeeping alias; cpu_handle owns the kernel handle */
++    HANDLE cpu_handle;
++    unsigned long long cpu_generation;
+     HANDLE evStart;
+     pthread_mutex_t p_clock;
+     int cancelled : 2;
+--- a/mingw-w64-libraries/winpthreads/include/pthread.h
++++ b/mingw-w64-libraries/winpthreads/include/pthread.h
+@@ -312,6 +312,13 @@
+ WINPTHREAD_API int         pthread_setspecific(pthread_key_t key, const void *value);
+ 
+ WINPTHREAD_API pthread_t pthread_self(void);
++/* Gesher private supplier ABI. MS/Windows calling convention, not bionic.
++   On success the caller owns *owned_handle and must CloseHandle it.
++   Outputs are unchanged on error. The generation never recycles. */
++#define GESHER_WINPTHREAD_CPU_AUTHORITY_API 1
++WINPTHREAD_API int gesher_winpthread_dup_cpu_handle_v1
++  (pthread_t thread, void **owned_handle, unsigned long long *generation);
++
+ WINPTHREAD_API int       pthread_once(pthread_once_t *o, void (*func)(void));
+ WINPTHREAD_API void      pthread_testcancel(void);
+ WINPTHREAD_API int       pthread_equal(pthread_t t1, pthread_t t2);
