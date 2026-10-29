@@ -1,0 +1,34 @@
+name: pthread product binary inventory
+on:
+  push:
+    branches: [wip/pthread-product-binary-map]
+    paths: ['.github/workflows/pthread-product-binary-map.yml']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: pthread-product-binary-map-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_TAG: '20261006'
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  inventory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: host-pthread-authority
+      - name: Scan exact prior qualified product bytes without execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/host-pthread-authority/product_binary_inventory.py "$GESHER_AUTHORITY_LLVM"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pthread-product-binary-inventory
+          path: product-binary-inventory/
+          if-no-files-found: error
