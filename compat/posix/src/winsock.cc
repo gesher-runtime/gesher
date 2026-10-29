@@ -35,6 +35,8 @@ struct ConnectRetirement {
 struct ConnectOperation {
   Socket socket;
   Address address;
+  sockaddr_storage native_address{};  // the actual kernel argument lives to drain
+  int native_address_length = 0;
   std::shared_ptr<SocketDescription> description;
   uint64_t generation;
   OVERLAPPED overlap{};
@@ -595,10 +597,9 @@ void* ConnectOwner(void* raw) {
       else if (op.description->native_closed || op.description->native_closing || op.description->connect_generation != op.generation) {
         op.start_error = EBADF;
       } else {
-        sockaddr_storage remote{}; int remote_length = 0;
         WSAPROTOCOL_INFOW protocol{}; int length = sizeof(protocol);
         GUID id = WSAID_CONNECTEX; LPFN_CONNECTEX connect_ex = nullptr; DWORD bytes = 0;
-        if (!ToWin(op.address, &remote, &remote_length)) op.start_error = errno;
+        if (!ToWin(op.address, &op.native_address, &op.native_address_length)) op.start_error = errno;
         else if (Api().getsockopt(static_cast<SOCKET>(op.socket), SOL_SOCKET, SO_PROTOCOL_INFOW, reinterpret_cast<char*>(&protocol), &length) != 0 ||
                  WSAIoctl(static_cast<SOCKET>(op.socket), SIO_GET_EXTENSION_FUNCTION_POINTER, &id, sizeof(id), &connect_ex, sizeof(connect_ex), &bytes, nullptr, nullptr) != 0) op.start_error = ErrnoFromWsa(WSAGetLastError());
         else {
@@ -613,7 +614,7 @@ void* ConnectOwner(void* raw) {
           }
           if (op.start_error == 0) {
             op.issued = true;
-            if (!connect_ex(static_cast<SOCKET>(op.socket), reinterpret_cast<sockaddr*>(&remote), remote_length, nullptr, 0, &bytes, &op.overlap)) {
+            if (!connect_ex(static_cast<SOCKET>(op.socket), reinterpret_cast<sockaddr*>(&op.native_address), op.native_address_length, nullptr, 0, &bytes, &op.overlap)) {
               const int error = WSAGetLastError();
               op.pending = error == ERROR_IO_PENDING;
               op.start_error = op.pending ? 0 : ErrnoFromWsa(error);
