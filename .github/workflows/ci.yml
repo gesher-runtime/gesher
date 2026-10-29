@@ -16,7 +16,7 @@ env:
 
 jobs:
   udp-full-preflight:
-    uses: gesher-runtime/gesher/.github/workflows/net-udp-full-preflight.yml@654f6168229e39eabfe1d068531104fb82fbca76
+    uses: gesher-runtime/gesher/.github/workflows/net-udp-full-preflight.yml@d450ef4032c7efb56e1168af29887aab46b6fc0c
 
   artifact-preflight:
     needs: [udp-full-preflight]

@@ -194,3 +194,11 @@ still must survive the empty MSG_ERRQUEUE call and be consumed by WAITALL.
 All192 matrix rows,176 fault comparisons, boundaries, alias and stream
 controls and negatives remain required. Fresh source peer and actual both-ABI
 component are pending; the saved full guard map is stale and not qualified.
+
+Exactdd8aad1d received independent source peer and started fresh actual
+component40796197786 plus observer40796197872. Integration is sole watcher.
+No source was retried unchanged. Full guardd450ef4032c7efb56e1168af29887aab46b6fc0c
+now binds the exact15 reviewed production/component delta blobs atdd8; its
+caller pin is updated locally. The complete non-doc tree and unchanged full
+DAG remain externally reviewed gates. Both component and full acceptance
+remain pending, and NET_UDP_FULL_CALLER_COMMIT has not been set here.
