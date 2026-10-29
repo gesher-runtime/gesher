@@ -204,6 +204,17 @@ jobs:
           done
           ls -laR dist | head -80
 
+      - name: Cache publisher-authenticated DNS NDK archive
+        id: dns-ndk
+        uses: actions/cache@v4
+        with:
+          path: dns-ndk.zip
+          key: dns-ndk-r27c-090e8083a715fdb1a3e402d0763c388abb03fb4e
+
+      - name: Fetch DNS NDK archive
+        if: steps.dns-ndk.outputs.cache-hit != 'true'
+        run: curl -fsSL https://dl.google.com/android/repository/android-ndk-r27c-linux.zip -o dns-ndk.zip
+
       - name: Build and seal actual DNS ABI programs and independent references
         run: python3 tools/net-dns/payload.py build dist
 

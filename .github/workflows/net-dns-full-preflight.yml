@@ -84,7 +84,7 @@ jobs:
               "tools/native3-locks/artifact/test-verified-artifact.py": "af7324581ae011f39aacf87d81ae1f44ad4c85f6"
           }
           SOURCE_PINS = {
-              ".github/workflows/native2.yml": "fc017408bc7a30f18a633f56faea2b27f5fd6e38",
+              ".github/workflows/native2.yml": "f3b4fe293f74211c28c5b170676032604602ee17",
               ".github/workflows/net-dns-component.yml": "2342778354242fe2c187cc66de331e5c1ce10377",
               "compat/arm64/dll/arm64_smoke_test.cc": "46e2a606e4be23d1b444f9961fcd03aa6a144074",
               "compat/arm64/dll/guest_libc.cc": "c3ef2087a0fefe691831ef2bd902e14b929a06f4",
@@ -98,7 +98,7 @@ jobs:
               "tools/net-dns-component/aosp_reference.py": "7c968478f06cbedc7c2bef650eec4a7ed7e589c6",
               "tools/net-dns-component/payload.py": "8bf17e1a54fc903d635edb32ccb0763aba9eba67",
               "tools/net-dns-component/source.json": "51563a7370546df21b5e89c2b7263e1ac3bc44c2",
-              "tools/net-dns/payload.py": "c8694cb487c0bba9965f870603b22e3f8de2883c"
+              "tools/net-dns/payload.py": "f99c4afbac95e0e0df6d1f7b89f12b7a2c2e6908"
           }
 
           def require(condition, message):

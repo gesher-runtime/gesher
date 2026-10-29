@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools/net-dns-component'))
@@ -122,7 +123,26 @@ def build(folder):
                 negative.stdout + negative.stderr, 'Linux corruption negative accepted')
         records['linux'].append(record)
     records['aosp'] = run_reference(ROOT, out)
-    ndk = ROOT / 'android-ndk-r27c'
+    archive = ROOT / 'dns-ndk.zip'
+    require(archive.stat().st_size == 663987688, 'Wrong publisher NDK archive size')
+    with archive.open('rb') as stream:
+        archive_sha1 = hashlib.file_digest(stream, 'sha1').hexdigest()
+    require(archive_sha1 == '090e8083a715fdb1a3e402d0763c388abb03fb4e', 'Wrong publisher NDK archive digest')
+    with archive.open('rb') as stream:
+        archive_sha256 = hashlib.file_digest(stream, 'sha256').hexdigest()
+    records['archive'] = {'publisher_sha1': archive_sha1, 'size': archive.stat().st_size,
+                          'sha256': archive_sha256}
+    # Never trust the pre-existing extracted cache. Authenticate the archive
+    # on every use, then compile only from a fresh extraction of those bytes.
+    with tempfile.TemporaryDirectory(prefix='dns-full-authenticated-') as temporary:
+        with zipfile.ZipFile(archive) as package:
+            package.extractall(temporary)
+        build_guests(folder, records, Path(temporary) / 'android-ndk-r27c')
+    (out / 'compilers.json').write_text(json.dumps(records, sort_keys=True) + '\n')
+    (out / 'manifest.json').write_text(json.dumps(expected(folder), sort_keys=True) + '\n')
+
+
+def build_guests(folder, records, ndk):
     props = (ndk / 'source.properties').read_text()
     require('27.2.12479018' in props, 'Wrong actual NDK revision')
     records['ndk_properties'] = props
@@ -144,8 +164,6 @@ def build(folder):
             record['private_abi'][role] = {'sha256': digest(binary), 'symbol': matches[0]}
             print('DNS_FULL_PRIVATE_ABI', abi, role, matches[0], flush=True)
         records['guests'][abi] = record
-    (out / 'compilers.json').write_text(json.dumps(records, sort_keys=True) + '\n')
-    (out / 'manifest.json').write_text(json.dumps(expected(folder), sort_keys=True) + '\n')
 
 
 def verify(folder):
@@ -158,6 +176,9 @@ def verify(folder):
     validate(read(out / 'manifest.json'), wanted)
     records = read(out / 'compilers.json')
     require(records['context'] == context(), 'Compiler context differs')
+    require(records['archive']['publisher_sha1'] == '090e8083a715fdb1a3e402d0763c388abb03fb4e' and
+            records['archive']['size'] == 663987688 and len(records['archive']['sha256']) == 64,
+            'Compiler publisher archive identity differs')
     require(set(records['guests']) == {'x86_64', 'arm64-v8a'} and len(records['linux']) == 1 and
             len(records['aosp']) == 2, 'Missing compiler roles')
     for abi, machine, model in (('x86_64', 62, 'x86_64'), ('arm64-v8a', 183, 'arm64')):
