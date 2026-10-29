@@ -96,7 +96,7 @@ sealed class ProbeForm : Form
             core.Navigate($"http://127.0.0.1:{port}/main");
             string[] selected = lifecycleDiagnostic ? new[] { "a", "b", "bad", "opaque" } : new[] { "a", "b", "nested", "bad", "opaque" };
             if (lifecycleDiagnostic) Console.WriteLine("LIFECYCLE_DIAGNOSTIC_ONLY original assertions remain mandatory");
-            await Wait(() => observations.ContainsKey("opaque") && pages.ContainsKey("opaque"), TimeSpan.FromSeconds(15), limit.Token);
+            await Wait(() => observations.ContainsKey("opaque") && pages.ContainsKey("opaque") && (!lifecycleDiagnostic || frames.ContainsKey("opaque")), TimeSpan.FromSeconds(15), limit.Token);
             var opaqueContext = observations["opaque"];
             if (!opaqueContext.Default || opaqueContext.Unique.Length == 0 || opaqueContext.Frame.Length == 0 || opaqueContext.Origin != "://" || eventFailure)
                 throw new Exception("selected opaque CDP context identity/origin missing");
@@ -162,7 +162,16 @@ sealed class ProbeForm : Form
             if (rootCalls.Length != 1 || rootCalls[0].ObjectId != topObject.Id || rootCalls[0].Retired)
                 throw new Exception("top-level unscoped host-object control missing");
             Console.WriteLine($"TOP_CROSS_UNSCOPED object={topObject.Id} origin=http://localhost:{port}");
-            if (lifecycleDiagnostic && (!frames.ContainsKey("nested") || !pages.ContainsKey("nested"))) { failure = true; Console.WriteLine("ORIGINAL_NESTED_FAILURE missing frame or page"); }
+            if (lifecycleDiagnostic) {
+                if (!frames.TryGetValue("nested", out var nested) || !pages.TryGetValue("nested", out var nestedPage)) {
+                    failure = true; Console.WriteLine("ORIGINAL_NESTED_FAILURE missing frame or page");
+                } else {
+                    var nestedCalls = ProbeObject.Calls.Where(c => c.Attempt == "first:nested").ToArray();
+                    if (nested.Frame.FrameId == 0 || nestedCalls.Length != 1 || nestedCalls[0].ObjectId != nested.Current.Id || nestedCalls[0].Retired || nestedPage != "OK|ok:" + nested.Current.Id) {
+                        failure = true; Console.WriteLine("ORIGINAL_NESTED_FAILURE incorrect identity or first call");
+                    } else Console.WriteLine("ORIGINAL_NESTED_OBSERVED frameId=" + nested.Frame.FrameId);
+                }
+            }
             Task[] setup = sessionSetup.Values.ToArray();
             await Task.WhenAll(setup).WaitAsync(TimeSpan.FromSeconds(3), limit.Token);
             if (setup.Length != sessionSetup.Count || sessionSetup.Values.Any(task => !task.IsCompletedSuccessfully) || eventFailure || failure)
