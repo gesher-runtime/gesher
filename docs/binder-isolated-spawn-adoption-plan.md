@@ -2,6 +2,25 @@
 
 ## Implemented candidate, 2026-10-29 (not compiled or qualified)
 
+Component40853406582 attempt1 at exact2f65e7fe compiled successfully with the
+pinned compiler; both Windows strict archive/source/compiler receipts passed.
+Both actual lowbox nested create/reopen/read/delete/exit/retirement rows and
+actual OW-private-name serve-denial/noninherit rows passed before both runners
+failed the ancestor/final rename assertion (`win32=0`). The short-circuit check
+did not identify which rename succeeded, so no individual pin control or full
+component is accepted. Raw log:
+`C:/work/gesher-ci-review/binder-policy-40853406582.log`.
+
+The corrected source requests actual read/list access on ancestor/file pins,
+rather than metadata-only access, and records every rename result separately.
+It preserves exact error32 requirements and restores any unexpected successful
+rename before rejecting the test. The metadata-sharing explanation is a source
+hypothesis pending changed-source CI. No unchanged retry is permitted.
+Readonly resource preflight now also rejects an explicit low integrity label or
+a mandatory label lacking NO_WRITE_UP on every exact readonly object. Actual
+low-label and missing-writeup asset counterexamples require confirmed rollback
+and all policy slots empty; medium/NW then supplies the positive launch control.
+
 The exclusive `wip/binder-isolated-spawn` tree now implements the first actual
 installed route: persistent SystemServer's installed `com.gesher.lifecycle`
 entry selects restricted creation in the existing SpawnOwned function. Other

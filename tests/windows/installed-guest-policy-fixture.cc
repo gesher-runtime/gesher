@@ -24,9 +24,24 @@ void Link(const std::wstring& path, const std::wstring& target) {
       SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE), "create reparse control");
 }
 bool RenameDenied(const std::wstring& path) {
+  SetLastError(ERROR_SUCCESS);
   bool moved = MoveFileExW(path.c_str(), (path + L".moved").c_str(), 0) != FALSE;
   DWORD error = GetLastError();
+  printf("POLICY_RENAME path=%ls moved=%u error=%lu\n", path.c_str(), unsigned(moved), error);
+  if (moved) Check(MoveFileExW((path + L".moved").c_str(), path.c_str(), 0), "restore unexpected successful rename");
   return !moved && error == ERROR_SHARING_VIOLATION;
+}
+void Label(const std::wstring& path, const wchar_t* sddl) {
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  Check(ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &descriptor, nullptr), "label descriptor");
+  PACL acl = nullptr; BOOL present = FALSE, defaulted = FALSE;
+  Check(GetSecurityDescriptorSacl(descriptor, &present, &acl, &defaulted), "label ACL");
+  HANDLE handle = CreateFileW(path.c_str(), WRITE_OWNER, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      nullptr, OPEN_EXISTING, 0, nullptr);
+  Check(handle != INVALID_HANDLE_VALUE, "label exact file");
+  DWORD result = SetSecurityInfo(handle, SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, acl);
+  Check(CloseHandle(handle), "label handle close"); LocalFree(descriptor);
+  Check(result == ERROR_SUCCESS, "label exact file mutation");
 }
 bool SlotsEmpty() {
   for (auto& slot : g::InstalledPolicy::Slots()) if (slot.load()) return false;
@@ -108,6 +123,13 @@ int wmain(int argc, wchar_t** argv) {
     Check(SlotsEmpty(), "failed provision resource ownership retired after retry");
     printf("POLICY_REPARSE subtree_rejected=1 outside_unchanged=1 owners=0\n");
 
+    Label(asset_file, L"S:(ML;;NW;;;LW)");
+    Check(!create(assets) && SlotsEmpty(), "low label readonly asset rejected with confirmed rollback");
+    Label(asset_file, L"S:(ML;;NR;;;ME)");
+    Check(!create(assets) && SlotsEmpty(), "readonly asset without write-up protection rejected");
+    Label(asset_file, L"S:(ML;;NW;;;ME)");
+    printf("POLICY_READONLY low_label_rejected=1 missing_writeup_rejected=1 rollback_owners=0\n");
+
     auto policy = create(assets);
     Check(bool(policy), "actual provision succeeds");
     {
@@ -136,7 +158,8 @@ int wmain(int argc, wchar_t** argv) {
       printf("POLICY_CHILD actual_lowbox=1 nested_create=1 file_reopen_read=1 nested_delete=1 exit=0 retired=1\n");
       printf("POLICY_PRIVATE actual_bootstrap=1 guest_serve_error=5 private_endpoints_inheritable=0\n");
     }
-    Check(RenameDenied(root) && RenameDenied(assets) && RenameDenied(data) && RenameDenied(asset_file), "ancestor and final replacement denied while pinned");
+    bool root_denied = RenameDenied(root), assets_denied = RenameDenied(assets), data_denied = RenameDenied(data), file_denied = RenameDenied(asset_file);
+    Check(root_denied && assets_denied && data_denied && file_denied, "ancestor and final replacement denied while pinned");
     printf("POLICY_PIN ancestor_rename=32 asset_rename=32 data_rename=32 final_file_rename=32\n");
     // Insertion AFTER enumeration must not redirect exact-handle grants or
     // cleanup. MAXIMUM_ALLOWED directories prohibit existing-child propagation.

@@ -71,6 +71,7 @@ jobs:
           Write-Host $output
           if ($code -ne 0) { throw "resource policy fixture failed: $code" }
           foreach ($row in @('POLICY_REPARSE subtree_rejected=1 outside_unchanged=1 owners=0',
+              'POLICY_READONLY low_label_rejected=1 missing_writeup_rejected=1 rollback_owners=0',
               'POLICY_PIN ancestor_rename=32 asset_rename=32 data_rename=32 final_file_rename=32',
               'POLICY_CHILD actual_lowbox=1 nested_create=1 file_reopen_read=1 nested_delete=1 exit=0 retired=1',
               'POLICY_PRIVATE actual_bootstrap=1 guest_serve_error=5 private_endpoints_inheritable=0',

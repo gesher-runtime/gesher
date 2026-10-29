@@ -100,7 +100,7 @@ struct InstalledPolicy {
       if (attributes == INVALID_FILE_ATTRIBUTES) return false;
       bool directory = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
       HANDLE handle = CreateFileW(path.substr(0, i).c_str(),
-          final && directory ? MAXIMUM_ALLOWED : FILE_READ_ATTRIBUTES | (final ? READ_CONTROL | WRITE_DAC | WRITE_OWNER : 0),
+          final && directory ? MAXIMUM_ALLOWED : FILE_READ_DATA | FILE_READ_ATTRIBUTES | (final ? READ_CONTROL | WRITE_DAC | WRITE_OWNER : 0),
           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
           FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
       if (handle == INVALID_HANDLE_VALUE) return false;
@@ -161,7 +161,7 @@ struct InstalledPolicy {
           attributes.ObjectName = &unicode; attributes.Attributes = 0x40; // OBJ_CASE_INSENSITIVE
           IO_STATUS_BLOCK io{}; HANDLE child = nullptr;
           NTSTATUS status = open(&child, directory ? MAXIMUM_ALLOWED :
-              FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC | WRITE_OWNER | SYNCHRONIZE,
+              FILE_READ_DATA | FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC | WRITE_OWNER | SYNCHRONIZE,
               &attributes, &io, nullptr, 0,
               FILE_SHARE_READ | FILE_SHARE_WRITE | (parent.writable ? FILE_SHARE_DELETE : 0),
               1, 0x00200000 | 0x00004000 | 0x00000020, nullptr, 0);
@@ -208,6 +208,27 @@ struct InstalledPolicy {
     if (acl) LocalFree(acl);
     if (sd) LocalFree(sd);
     return error == ERROR_SUCCESS;
+  }
+  static bool ReadOnlyIntegrity(HANDLE handle) {
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    PACL label = nullptr;
+    if (GetSecurityInfo(handle, SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
+        nullptr, nullptr, nullptr, &label, &descriptor) != ERROR_SUCCESS) return false;
+    bool ok = true;
+    unsigned mandatory = 0;
+    if (label) for (DWORD i = 0; i < label->AceCount; ++i) {
+      void* bytes = nullptr;
+      if (!GetAce(label, i, &bytes)) { ok = false; break; }
+      auto* ace = static_cast<SYSTEM_MANDATORY_LABEL_ACE*>(bytes);
+      if (ace->Header.AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE) continue;
+      PSID sid = &ace->SidStart;
+      if (++mandatory != 1 || !IsValidSid(sid) || !*GetSidSubAuthorityCount(sid) ||
+          *GetSidSubAuthority(sid, *GetSidSubAuthorityCount(sid) - 1) < SECURITY_MANDATORY_MEDIUM_RID ||
+          !(ace->Mask & SYSTEM_MANDATORY_LABEL_NO_WRITE_UP)) { ok = false; break; }
+    }
+    // An object without an explicit mandatory label has medium integrity/NW.
+    LocalFree(descriptor);
+    return ok;
   }
   // Reject relative paths and reparse components, including a junction parent.
   static std::wstring Path(const std::u16string& input) {
@@ -293,6 +314,8 @@ struct InstalledPolicy {
     }
     size_t data_root = policy->pins.size();
     if (!policy->PinResource(writable, true) || !policy->Gather(data_root)) return {};
+    for (const auto& pin : policy->pins)
+      if (!pin.writable && !ReadOnlyIntegrity(pin.handle)) return {};
     PSECURITY_DESCRIPTOR low = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"S:(ML;OICI;NW;;;LW)",
         SDDL_REVISION_1, &low, nullptr)) return {};
