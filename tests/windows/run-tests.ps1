@@ -14,7 +14,12 @@ function SourceConfigBlob {
   return $blob
 }
 $sourceConfigBlob = SourceConfigBlob
-Write-Host "SOURCE_CONFIG_OBSERVATION phase=before-suite blob=$sourceConfigBlob"
+$sourceConfigExpected = (& git -C (Join-Path $PSScriptRoot '../..') rev-parse HEAD:overrides.json).Trim()
+if ($LASTEXITCODE -ne 0 -or $sourceConfigExpected -notmatch '^[0-9a-f]{40}$') { throw 'Tracked configuration expected blob failed' }
+$sourceConfigRaw = (Get-FileHash -LiteralPath $trackedConfig -Algorithm SHA256).Hash.ToLowerInvariant()
+$sourceConfigAttrs = (& git -C (Join-Path $PSScriptRoot '../..') check-attr -a -- overrides.json | Out-String).Trim().Replace("`n", ';').Replace("`r", '')
+$sourceConfigAutoCrlf = (& git -C (Join-Path $PSScriptRoot '../..') config --get core.autocrlf | Out-String).Trim()
+Write-Host "SOURCE_CONFIG_OBSERVATION phase=before-suite blob=$sourceConfigBlob expected=$sourceConfigExpected raw_sha256=$sourceConfigRaw autocrlf=$sourceConfigAutoCrlf attrs=$sourceConfigAttrs"
 
 if ($Web3Observer) {
   $script:web3Observer = (Resolve-Path -LiteralPath $Web3Observer).Path
