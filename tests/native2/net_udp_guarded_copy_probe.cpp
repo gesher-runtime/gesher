@@ -3,6 +3,25 @@
 #include "../../compat/posix/src/socket_user_copy.h"
 #include <stdio.h>
 #include <string.h>
+#include <atomic>
+
+struct Race {
+  void* page;
+  SIZE_T size;
+  std::atomic<bool> stop{false};
+  std::atomic<bool> failed{false};
+};
+static DWORD WINAPI ChangeProtection(void* raw) {
+  auto& race = *static_cast<Race*>(raw);
+  const DWORD modes[] = {PAGE_READONLY, PAGE_READWRITE | PAGE_GUARD, PAGE_READWRITE};
+  ULONGLONG deadline = GetTickCount64() + 2000;
+  unsigned i = 0;
+  while (!race.stop.load() && GetTickCount64() < deadline) {
+    DWORD old = 0;
+    if (!VirtualProtect(race.page, race.size, modes[i++ % 3], &old)) { race.failed.store(true); break; }
+  }
+  return 0;
+}
 
 int main() {
   SYSTEM_INFO info; GetSystemInfo(&info);
@@ -41,6 +60,20 @@ int main() {
   char copy[8] = {};
   if (gesher::ws::usercopy::From(copy, reinterpret_cast<void*>(uintptr_t{1}), sizeof(copy)) ||
       !gesher::ws::usercopy::From(copy, source, sizeof(copy)) || memcmp(copy, source, 8) != 0) return 12;
+  Race race{memory, page};
+  HANDLE changer = CreateThread(nullptr, 0, ChangeProtection, &race, 0, nullptr);
+  if (changer == nullptr) return 13;
+  for (unsigned i = 0; i < 20000; ++i) (void)gesher::ws::usercopy::To(memory, source, 8);
+  race.stop.store(true);
+  if (WaitForSingleObject(changer, 5000) != WAIT_OBJECT_0) {
+    // Never free/unwind storage while the owned target might access it.
+    TerminateProcess(GetCurrentProcess(), 14); return 14;
+  }
+  CloseHandle(changer);
+  DWORD old = 0;
+  if (race.failed.load() || !VirtualProtect(memory, page * 2, PAGE_READWRITE, &old)) return 15;
+  puts("UDPGUARDED protection-race calls=20000 target-joined=1 no-process-fault=1");
+  // Guard state during concurrent changes has no stable snapshot guarantee.
   if (!VirtualFree(memory, 0, MEM_RELEASE)) return 8;
   puts("UDPGUARDED all actual shared-helper controls passed");
   return 0;

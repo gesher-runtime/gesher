@@ -55,6 +55,6 @@ if len(reference) != 200 or sum(' api=' in row for row in reference) != 192 or r
 if 'clang version' not in (root / 'net-udp/ndk-compiler.txt').read_text(encoding='utf-8'):
     raise RuntimeError('Missing compiler identity')
 fault_rows = (root / 'net-udp/linux-fault-reference.txt').read_text(encoding='utf-8').splitlines()
-if len(fault_rows) != 120 or not all(row.startswith('UDPFAULT ') for row in fault_rows):
+if len(fault_rows) != 176 or not all(row.startswith('UDPFAULT ') for row in fault_rows):
     raise RuntimeError('Missing actual Linux fault/metadata rows')
 print('PASS UDP supplier exact source/run/attempt/compiler/roles/digests; actual ELF ABIs; Linux rows=192')
