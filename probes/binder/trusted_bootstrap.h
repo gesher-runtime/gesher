@@ -110,7 +110,8 @@ class Bootstrap {
     HANDLE retained = nullptr;
     if (!DuplicateHandle(GetCurrentProcess(), pi.hProcess, GetCurrentProcess(), &retained,
                          0, FALSE, DUPLICATE_SAME_ACCESS)) {
-      TerminateProcess(pi.hProcess, 211); WaitForSingleObject(pi.hProcess, 5000);
+      TerminateProcess(pi.hProcess, 211);
+      if (WaitForSingleObject(pi.hProcess, 5000) != WAIT_OBJECT_0) std::abort();
       CloseHandle(pi.hThread); CloseHandle(pi.hProcess); return nullptr;
     }
     children_.push_back(retained);
