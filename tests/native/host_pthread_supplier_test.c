@@ -2,6 +2,7 @@
 #include <pthread.h>
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <wchar.h>
@@ -41,6 +42,42 @@ static int LoadedSupplier(const char *expected_sha) {
   return 0;
 }
 
+static pthread_key_t exit_key;
+static volatile LONG destructor_count;
+struct exit_target { HANDLE ready, proceed; pthread_t id; };
+static void ExitDestructor(void *value) {
+  if (value) InterlockedIncrement(&destructor_count);
+}
+static DWORD WINAPI ExternalExit(void *arg) {
+  struct exit_target *t = arg;
+  t->id = pthread_self();
+  if (pthread_setspecific(exit_key, t)) abort();
+  SetEvent(t->ready);
+  if (WaitForSingleObject(t->proceed, 5000) != WAIT_OBJECT_0) abort();
+  pthread_exit(NULL);
+  return 0;
+}
+static int DynamicExitControls(void) {
+  DWORD baseline, final;
+  if (!GetProcessHandleCount(GetCurrentProcess(), &baseline) ||
+      pthread_key_create(&exit_key, ExitDestructor)) return 1;
+  for (int i = 0; i < 256; ++i) {
+    struct exit_target t = { CreateEventW(NULL, TRUE, FALSE, NULL),
+                             CreateEventW(NULL, TRUE, FALSE, NULL), 0 };
+    HANDLE thread = CreateThread(NULL, 0, ExternalExit, &t, 0, NULL);
+    if (!t.ready || !t.proceed || !thread || WaitForSingleObject(t.ready, 5000) != WAIT_OBJECT_0) return 1;
+    if ((i & 1) == 0 && pthread_detach(t.id)) return 1;
+    SetEvent(t.proceed);
+    if (WaitForSingleObject(thread, 5000) != WAIT_OBJECT_0) return 1;
+    if ((i & 1) && pthread_join(t.id, NULL)) return 1;
+    if (destructor_count != i + 1) return 1;
+    CloseHandle(thread); CloseHandle(t.ready); CloseHandle(t.proceed);
+  }
+  if (pthread_key_delete(exit_key) || !GetProcessHandleCount(GetCurrentProcess(), &final) || final > baseline + 8) return 1;
+  puts("PASS host-authority dynamic external-exit detach join destructor reuse handle-bound");
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc != 2 || LoadedSupplier(argv[1])) return 3;
   void *handle = NULL;
@@ -54,6 +91,7 @@ int main(int argc, char **argv) {
   generation = 456;
   result = gesher_winpthread_dup_cpu_handle_v1((pthread_t)-1, &handle, &generation);
   if (result != ESRCH || handle != (void *)(uintptr_t)123 || generation != 456) return 2;
+  if (DynamicExitControls()) return 4;
   puts("PASS host-authority dynamic-export identity ownership invalid-output");
   return 0;
 }
