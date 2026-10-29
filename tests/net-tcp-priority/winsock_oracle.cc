@@ -47,7 +47,7 @@ static void snapshot(SOCKET s, const char* phase, int inline_oob) {
 int main() {
   WSADATA data{};
   require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "startup");
-  for (int inline_oob = 0; inline_oob <= 1; ++inline_oob) {
+  for (int inline_oob = 0; inline_oob <= 2; ++inline_oob) {
     SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     require(listener != INVALID_SOCKET, "listener");
     sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -59,7 +59,8 @@ int main() {
     require(connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "connect");
     SOCKET server = accept(listener, nullptr, nullptr);
     require(server != INVALID_SOCKET, "accept");
-    require(setsockopt(server, SOL_SOCKET, SO_OOBINLINE, reinterpret_cast<const char*>(&inline_oob), sizeof(inline_oob)) == 0, "inline");
+    int host_inline = inline_oob == 1 ? 1 : 0;
+    require(setsockopt(server, SOL_SOCKET, SO_OOBINLINE, reinterpret_cast<const char*>(&host_inline), sizeof(host_inline)) == 0, "inline");
     DWORD timeout = 2000;
     require(setsockopt(server, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout)) == 0, "timeout");
     snapshot(server, "empty", inline_oob);
@@ -69,6 +70,21 @@ int main() {
     require(send(client, "!", 1, MSG_OOB) == 1, "urgent send");
     wait_bytes(server, 7);
     snapshot(server, "prefix-and-urgent", inline_oob);
+    if (inline_oob == 2) {
+      require(send(client, "tail", 4, 0) == 4, "tail send");
+      wait_bytes(server, 11);
+      snapshot(server, "prefix-urgent-tail", inline_oob);
+      receive_prefix(server);
+      snapshot(server, "prefix-consumed-urgent-tail-remain", inline_oob);
+      char urgent{};
+      require(recv(server, &urgent, 1, MSG_OOB) == 1 && urgent == '!', "post-prefix urgent consume");
+      snapshot(server, "urgent-consumed-tail-remains", inline_oob);
+      char tail[4]{}; int got = 0;
+      while (got < 4) { int n = recv(server, tail + got, 4 - got, 0); require(n > 0, "tail progress"); got += n; }
+      require(memcmp(tail, "tail", 4) == 0, "tail preserved");
+      require(closesocket(server) == 0 && closesocket(client) == 0 && closesocket(listener) == 0, "boundary cleanup");
+      continue;
+    }
     char bytes[16]{};
     if (!inline_oob) {
       require(recv(server, bytes, 1, MSG_OOB) == 1 && bytes[0] == '!', "urgent consume");
@@ -89,20 +105,19 @@ int main() {
   require(bind(reserved, reinterpret_cast<sockaddr*>(&refused), sizeof(refused)) == 0, "refused bind");
   int length = sizeof(refused);
   require(getsockname(reserved, reinterpret_cast<sockaddr*>(&refused), &length) == 0, "refused address");
-  require(closesocket(reserved) == 0, "refused reserve close");
   SOCKET failed = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   require(failed != INVALID_SOCKET, "refused socket");
   u_long nonblocking = 1; require(ioctlsocket(failed, FIONBIO, &nonblocking) == 0, "refused nonblocking");
   int connection = connect(failed, reinterpret_cast<sockaddr*>(&refused), sizeof(refused));
   require(connection == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK, "refused connect pending");
-  fd_set exceptions; FD_ZERO(&exceptions); FD_SET(failed, &exceptions); timeval wait{2, 0};
+  fd_set exceptions; FD_ZERO(&exceptions); FD_SET(failed, &exceptions); timeval wait{5, 0};
   require(select(0, nullptr, nullptr, &exceptions, &wait) == 1, "refused exception arrived");
   sockaddr_storage peer{}; length = sizeof(peer);
   int peer_rc = getpeername(failed, reinterpret_cast<sockaddr*>(&peer), &length);
   int peer_error = peer_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
   printf("WINDOWS_URG refused-connect except=1 peer_rc=%d peer_error=%d SO_ERROR=untouched\n", peer_rc, peer_error);
   require(peer_rc == SOCKET_ERROR && peer_error == WSAENOTCONN, "refused is not connected");
-  require(closesocket(failed) == 0, "refused cleanup");
+  require(closesocket(failed) == 0 && closesocket(reserved) == 0, "refused cleanup");
   require(WSACleanup() == 0, "cleanup");
   puts("PASS Windows TCP urgent characterization");
 }
