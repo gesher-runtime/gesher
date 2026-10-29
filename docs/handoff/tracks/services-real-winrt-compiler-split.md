@@ -1,6 +1,31 @@
 # Services actual WinRT compiler/runtime split
 
-## Private compiler host correction (pending CI)
+## Private compiler host correction (component accepted)
+
+Component [40801812064](https://github.com/gesher-runtime/gesher/actions/runs/40801812064),
+attempt 1, source `1b3ee904d586fd2a2f06841b04a46d6c07fce28d`, is terminal
+green on Windows-2022 and Windows-2025. Integration source-peer approved this
+exact commit before its account-gated push. Independent raw-log reread found
+seven TSF supervisor records and five controlled-worker cases per runner, all
+four actual AsyncInfo/AsTask success/error/timeout/late records with disposal,
+and `WINRT_ORDER case=late bridge_completed_before_cancel=True`.
+
+Both runners report `WINRT_ROSLYN_EMIT success=True external_compilers=False`,
+`PASS WinRT fixture with actual bridge and owned child retirement`,
+`PASS WinRT provider with actual bridge and owned child retirement`, and the
+typed `Windows.Services.Maps.MapLocationFinderResult`, one result read,
+resources disposed, `status: InvalidCredentials`. Compiler, fixture and provider
+each retain two processes (root + console host), 9/9 closed handles and 0-2ms
+cleanup; no compiler descendants were admitted. Both producer-file cleanup and
+`WINRT_PRIVATE_COMPILER_CLEANUP directory_removed=True` are present.
+
+The actual orchestrators differ: 2022 is 7.6.9; 2025 is 7.6.7. Both private
+compiler roots are exactly 7.6.9 / CLR 10.0.14, with identical package SHA,
+109620855 downloaded bytes, 661 entries and 256666658 expanded bytes. Both emit
+DLL SHA256 `deec6ef8ebf0c6b8e8e405d1b65690ee290a54941290c06765bc960382544a14`.
+Raw logs: `C:\work\gesher-ci-review\services-winrt-408018-{2022,2025}.log`.
+This accepts only the component prerequisite. Fresh integrated full remains
+mandatory; main, release and aggregate Services completion are not claimed.
 
 The 408009 Windows-2025 host-pin failure is corrected by acquiring the same
 official PowerShell 7.6.9 portable x64 ZIP on both runners, without consulting
@@ -16,8 +41,38 @@ supervisor root; runtime remains Windows PowerShell 5 with unchanged WinRT,
 typed result, source/controller identities, descendant rules and all controls.
 Exact original Roslyn DLL hashes and compiler APIs/options remain mandatory.
 Both orchestrator and actual private host versions are printed, and the receipt
-adds package provenance. Local verification is source/parser/diff only. Fresh
-both-Windows component proof and integration union/full remain pending.
+adds package provenance. Local verification is source/parser/diff only.
+
+## Full port readiness (read-only audit)
+
+Against integration `0baa011a47caf31598ad779771aaad213e92d4ec`, the normal
+Windows test sparse checkout includes `tests`, covering every helper and helper
+C# source, but MUST also receive `tools/windows4` for the producer supervisor.
+The Services branch's ci.yml has that additive sparse entry; do not copy its
+whole ci.yml because other union adaptations belong to integration.
+
+Selected Services sources relative to its f0f52116 base are the component
+workflow; helpers geocoder-compile, geocoder-compiler-host,
+geocoder-provider-probe, geocoder-roslyn-worker, geocoder-winrt-fixture and
+run-geocoder-winrt-component (all .ps1); tracks 58-devices.ps1,
+geocoder-operation.ps1, geocoder-probe-exit.cs and geocoder-winrt-supplier.cs.
+Canonical supervisor/control blobs remain d1cf9319, 08f29f78, 91e6946c and
+4474bae1; canonical TSF workflow blob remains 6b025963. Preserve integration's
+actual qualified TSF source and all component source-identity assertions.
+
+Normal 58-devices creates the compiler in its owned supervisor role, keeps the
+private compiler files until the PS5 child validates its receipt and DLL bytes,
+and cleans both directories in finally. Receipt checks use the actual union
+repository, run, attempt, source revision and producer role, not fixed component
+identities. The normal provider still uses existing DevRun's 45-second process
+bound. Keep the mandatory union-services reusable component job for the strict
+owned fixture/provider child evidence, seven/five controls and four real cases.
+
+Acquisition network reads have an overall 120-second cancellation deadline and
+exact byte bound; extraction has 5000-entry / 600MB-total / 150MB-file bounds,
+but no independent extraction wall-clock deadline. The normal Windows test job
+has its existing 60-minute outer timeout. Compiler cancellation remains 40s
+inside a 45s supervisor bound; runtime fixture/provider each have 45s bounds.
 
 ## Current correction: owned in-process Roslyn
 
