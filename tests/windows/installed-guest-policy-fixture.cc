@@ -59,6 +59,30 @@ void Label(const std::wstring& path, const wchar_t* sddl) {
   Check(CloseHandle(handle), "label handle close"); LocalFree(descriptor);
   Check(result == ERROR_SUCCESS, "label exact file mutation");
 }
+void ObserveNativeWriteMap(HANDLE section, const char* role, bool expect_positive) {
+  using NtMap = NTSTATUS (NTAPI*)(HANDLE, HANDLE, PVOID*, ULONG_PTR, SIZE_T, PLARGE_INTEGER, PSIZE_T, ULONG, ULONG, ULONG);
+  HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  using NtUnmap = NTSTATUS (NTAPI*)(HANDLE, PVOID);
+  FARPROC symbol = ntdll ? GetProcAddress(ntdll, "NtMapViewOfSection") : nullptr;
+  FARPROC unmap_symbol = ntdll ? GetProcAddress(ntdll, "NtUnmapViewOfSection") : nullptr;
+  NtMap map = nullptr; NtUnmap unmap = nullptr;
+  static_assert(sizeof(map) == sizeof(symbol) && sizeof(unmap) == sizeof(unmap_symbol));
+  memcpy(&map, &symbol, sizeof(map)); memcpy(&unmap, &unmap_symbol, sizeof(unmap));
+  Check(map != nullptr && unmap != nullptr, "native section mapping APIs");
+  HANDLE alias = nullptr;
+  BOOL duplicated = DuplicateHandle(GetCurrentProcess(), section, GetCurrentProcess(), &alias, FILE_MAP_ALL_ACCESS, FALSE, 0);
+  DWORD duplicate_error = duplicated ? ERROR_SUCCESS : GetLastError();
+  void* view = nullptr; SIZE_T size = 16;
+  NTSTATUS status = duplicated ? map(alias, GetCurrentProcess(), &view, 0, 0, nullptr, &size, 2, 0, PAGE_READWRITE) : static_cast<NTSTATUS>(-1);
+  bool unmap_ok = !view || unmap(GetCurrentProcess(), view) >= 0;
+  bool close_ok = !duplicated || CloseHandle(alias) != FALSE;
+  printf("POLICY_PROPERTY_NT_SECTION role=%s duplicate=%u duplicate_error=%lu status=%ld mapped=%u returned_size=%llu cleanup=%u\n",
+      role, unsigned(duplicated), duplicate_error, static_cast<long>(status), unsigned(view != nullptr),
+      static_cast<unsigned long long>(size), unsigned(unmap_ok && close_ok));
+  Check(unmap_ok && close_ok && (!duplicated || ((status >= 0) == (view != nullptr))) &&
+      (!view || size >= 16), "native section observation status and cleanup");
+  if (expect_positive) Check(duplicated && status >= 0 && view != nullptr, "actual writable native section positive control");
+}
 bool SlotsEmpty() {
   for (auto& slot : g::InstalledPolicy::Slots()) if (slot.load()) return false;
   return true;
@@ -157,6 +181,8 @@ int wmain(int argc, wchar_t** argv) {
       printf("POLICY_PROPERTY_READONLY_ALL duplicate=%u error=%lu writable_view=%u view_error=%lu cleanup=%u\n",
           unsigned(duplicate_all), all_error, unsigned(all_write_view != nullptr), all_view_error, unsigned(all_view_closed && all_closed));
       Check(all_view_closed && all_closed, "all-access section observation cleanup");
+      ObserveNativeWriteMap(inherited_mapping, "writable-positive", true);
+      ObserveNativeWriteMap(readonly_section, "readonly-observation", false);
       HANDLE elevated_mutex = nullptr;
       BOOL elevated = DuplicateHandle(GetCurrentProcess(), inherited_mutex, GetCurrentProcess(),
           &elevated_mutex, MUTEX_ALL_ACCESS, FALSE, 0);
