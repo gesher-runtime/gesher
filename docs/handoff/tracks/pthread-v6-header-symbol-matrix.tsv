@@ -1,0 +1,291 @@
+file	line	kind	symbol	type_hint	declaration_pattern
+include/pthread.h	60	macro	WIN_PTHREADS_H		/^#define WIN_PTHREADS_H$/
+include/pthread.h	82	macro	__WINPTHREADS_VERSION_MAJOR		/^#define __WINPTHREADS_VERSION_MAJOR /
+include/pthread.h	83	macro	__WINPTHREADS_VERSION_MINOR		/^#define __WINPTHREADS_VERSION_MINOR /
+include/pthread.h	84	macro	__WINPTHREADS_VERSION_PATCHLEVEL		/^#define __WINPTHREADS_VERSION_PATCHLEVEL /
+include/pthread.h	87	macro	__WINPTHREADS_VERSION		/^#define __WINPTHREADS_VERSION /
+include/pthread.h	94	macro	PTHREAD_CANCEL_DISABLE		/^#define PTHREAD_CANCEL_DISABLE /
+include/pthread.h	95	macro	PTHREAD_CANCEL_ENABLE		/^#define PTHREAD_CANCEL_ENABLE /
+include/pthread.h	97	macro	PTHREAD_CANCEL_DEFERRED		/^#define PTHREAD_CANCEL_DEFERRED /
+include/pthread.h	98	macro	PTHREAD_CANCEL_ASYNCHRONOUS		/^#define PTHREAD_CANCEL_ASYNCHRONOUS /
+include/pthread.h	100	macro	PTHREAD_CREATE_JOINABLE		/^#define PTHREAD_CREATE_JOINABLE /
+include/pthread.h	101	macro	PTHREAD_CREATE_DETACHED		/^#define PTHREAD_CREATE_DETACHED /
+include/pthread.h	103	macro	PTHREAD_EXPLICIT_SCHED		/^#define PTHREAD_EXPLICIT_SCHED /
+include/pthread.h	104	macro	PTHREAD_INHERIT_SCHED		/^#define PTHREAD_INHERIT_SCHED /
+include/pthread.h	106	macro	PTHREAD_SCOPE_PROCESS		/^#define PTHREAD_SCOPE_PROCESS /
+include/pthread.h	107	macro	PTHREAD_SCOPE_SYSTEM		/^#define PTHREAD_SCOPE_SYSTEM /
+include/pthread.h	109	macro	PTHREAD_DEFAULT_ATTR		/^#define PTHREAD_DEFAULT_ATTR /
+include/pthread.h	111	macro	PTHREAD_CANCELED		/^#define PTHREAD_CANCELED /
+include/pthread.h	113	macro	_PTHREAD_NULL_THREAD		/^#define _PTHREAD_NULL_THREAD /
+include/pthread.h	115	macro	PTHREAD_ONCE_INIT		/^#define PTHREAD_ONCE_INIT /
+include/pthread.h	117	macro	PTHREAD_DESTRUCTOR_ITERATIONS		/^#define PTHREAD_DESTRUCTOR_ITERATIONS /
+include/pthread.h	118	macro	PTHREAD_KEYS_MAX		/^#define PTHREAD_KEYS_MAX /
+include/pthread.h	120	macro	PTHREAD_PRIO_NONE		/^#define PTHREAD_PRIO_NONE /
+include/pthread.h	121	macro	PTHREAD_PRIO_INHERIT		/^#define PTHREAD_PRIO_INHERIT /
+include/pthread.h	122	macro	PTHREAD_PRIO_PROTECT		/^#define PTHREAD_PRIO_PROTECT /
+include/pthread.h	123	macro	PTHREAD_PROCESS_SHARED		/^#define PTHREAD_PROCESS_SHARED /
+include/pthread.h	124	macro	PTHREAD_PROCESS_PRIVATE		/^#define PTHREAD_PROCESS_PRIVATE /
+include/pthread.h	126	prototype	pthread_timechange_handler_np	typename:WINPTHREAD_API void *	/^WINPTHREAD_API void * pthread_timechange_handler_np(void * dummy);$/
+include/pthread.h	127	prototype	pthread_delay32_np	typename:WINPTHREAD_API int	/^WINPTHREAD_API int    pthread_delay32_np (const struct _timespec32 *interval);$/
+include/pthread.h	128	prototype	pthread_delay64_np	typename:WINPTHREAD_API int	/^WINPTHREAD_API int    pthread_delay64_np (const struct _timespec64 *interval);$/
+include/pthread.h	129	function	pthread_delay_np	typename:WINPTHREAD_THREAD_DECL int	/^WINPTHREAD_THREAD_DECL int    pthread_delay_np (const struct timespec *interval)$/
+include/pthread.h	137	prototype	pthread_num_processors_np	typename:WINPTHREAD_API int	/^WINPTHREAD_API int    pthread_num_processors_np(void);$/
+include/pthread.h	138	prototype	pthread_set_num_processors_np	typename:WINPTHREAD_API int	/^WINPTHREAD_API int    pthread_set_num_processors_np(int n);$/
+include/pthread.h	140	macro	PTHREAD_BARRIER_SERIAL_THREAD		/^#define PTHREAD_BARRIER_SERIAL_THREAD /
+include/pthread.h	146	macro	pthread_atfork		/^#define pthread_atfork(/
+include/pthread.h	149	macro	pthread_attr_getguardsize		/^#define pthread_attr_getguardsize(/
+include/pthread.h	150	macro	pthread_attr_setguardsize		/^#define pthread_attr_setguardsize(/
+include/pthread.h	171	macro	__pthread_MemoryBarrier		/^#define __pthread_MemoryBarrier(/
+include/pthread.h	173	macro	__pthread_MemoryBarrier		/^#define __pthread_MemoryBarrier(/
+include/pthread.h	176	macro	pthread_cleanup_push		/^#define pthread_cleanup_push(/
+include/pthread.h	187	macro	pthread_cleanup_pop		/^#define pthread_cleanup_pop(/
+include/pthread.h	202	prototype	pthread_attr_setschedparam	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_setschedparam(pthread_attr_t *attr, const struct sched_param *pa/
+include/pthread.h	203	prototype	pthread_attr_getschedparam	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_getschedparam(const pthread_attr_t *attr, struct sched_param *pa/
+include/pthread.h	204	prototype	pthread_getschedparam	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_getschedparam(pthread_t thread, int *pol, struct sched_param *param);$/
+include/pthread.h	205	prototype	pthread_setschedparam	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_setschedparam(pthread_t thread, int pol, const struct sched_param *pa/
+include/pthread.h	206	prototype	pthread_attr_setschedpolicy	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_setschedpolicy (pthread_attr_t *attr, int pol);$/
+include/pthread.h	207	prototype	pthread_attr_getschedpolicy	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_getschedpolicy (const pthread_attr_t *attr, int *pol);$/
+include/pthread.h	213	macro	PTHREAD_MUTEX_DEFAULT		/^#define PTHREAD_MUTEX_DEFAULT /
+include/pthread.h	214	macro	PTHREAD_MUTEX_NORMAL		/^#define PTHREAD_MUTEX_NORMAL /
+include/pthread.h	215	macro	PTHREAD_MUTEX_ERRORCHECK		/^#define PTHREAD_MUTEX_ERRORCHECK /
+include/pthread.h	216	macro	PTHREAD_MUTEX_RECURSIVE		/^#define PTHREAD_MUTEX_RECURSIVE /
+include/pthread.h	221	macro	PTHREAD_MUTEX_ADAPTIVE_NP		/^#define PTHREAD_MUTEX_ADAPTIVE_NP /
+include/pthread.h	222	macro	PTHREAD_MUTEX_FAST_NP		/^#define PTHREAD_MUTEX_FAST_NP /
+include/pthread.h	223	macro	PTHREAD_MUTEX_TIMED_NP		/^#define PTHREAD_MUTEX_TIMED_NP /
+include/pthread.h	224	macro	PTHREAD_MUTEX_ERRORCHECK_NP		/^#define PTHREAD_MUTEX_ERRORCHECK_NP /
+include/pthread.h	225	macro	PTHREAD_MUTEX_RECURSIVE_NP		/^#define PTHREAD_MUTEX_RECURSIVE_NP /
+include/pthread.h	230	macro	PTHREAD_MUTEX_PRIVATE		/^#define PTHREAD_MUTEX_PRIVATE /
+include/pthread.h	231	macro	PTHREAD_MUTEX_SHARED		/^#define PTHREAD_MUTEX_SHARED /
+include/pthread.h	233	macro	PTHREAD_MUTEX_STALLED		/^#define PTHREAD_MUTEX_STALLED /
+include/pthread.h	234	macro	PTHREAD_MUTEX_ROBUST		/^#define PTHREAD_MUTEX_ROBUST /
+include/pthread.h	238	prototype	pthread_mutexattr_init	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutexattr_init(pthread_mutexattr_t *);$/
+include/pthread.h	239	prototype	pthread_mutexattr_destroy	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutexattr_destroy(pthread_mutexattr_t *);$/
+include/pthread.h	240	prototype	pthread_mutexattr_settype	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutexattr_settype(pthread_mutexattr_t *, int);$/
+include/pthread.h	241	prototype	pthread_mutexattr_gettype	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutexattr_gettype(const pthread_mutexattr_t *, int *);$/
+include/pthread.h	242	prototype	pthread_mutexattr_setpshared	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutexattr_setpshared(pthread_mutexattr_t *, int);$/
+include/pthread.h	243	prototype	pthread_mutexattr_getpshared	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutexattr_getpshared(const pthread_mutexattr_t *, int *);$/
+include/pthread.h	244	prototype	pthread_mutexattr_setprotocol	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutexattr_setprotocol(pthread_mutexattr_t *, int);$/
+include/pthread.h	245	prototype	pthread_mutexattr_getprotocol	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *, int *);$/
+include/pthread.h	246	prototype	pthread_mutexattr_setprioceiling	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutexattr_setprioceiling(pthread_mutexattr_t *, int);$/
+include/pthread.h	247	prototype	pthread_mutexattr_getprioceiling	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutexattr_getprioceiling(const pthread_mutexattr_t *, int *);$/
+include/pthread.h	248	prototype	pthread_mutexattr_setrobust	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutexattr_setrobust(pthread_mutexattr_t *, int);$/
+include/pthread.h	249	prototype	pthread_mutexattr_getrobust	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutexattr_getrobust(const pthread_mutexattr_t *, int *);$/
+include/pthread.h	253	macro	PTHREAD_MUTEX_INITIALIZER		/^#define PTHREAD_MUTEX_INITIALIZER /
+include/pthread.h	254	macro	PTHREAD_DEFAULT_MUTEX_INITIALIZER		/^#define PTHREAD_DEFAULT_MUTEX_INITIALIZER /
+include/pthread.h	255	macro	PTHREAD_NORMAL_MUTEX_INITIALIZER		/^#define PTHREAD_NORMAL_MUTEX_INITIALIZER /
+include/pthread.h	256	macro	PTHREAD_ERRORCHECK_MUTEX_INITIALIZER		/^#define PTHREAD_ERRORCHECK_MUTEX_INITIALIZER /
+include/pthread.h	257	macro	PTHREAD_RECURSIVE_MUTEX_INITIALIZER		/^#define PTHREAD_RECURSIVE_MUTEX_INITIALIZER /
+include/pthread.h	259	prototype	pthread_mutex_init	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutex_init(pthread_mutex_t *, const pthread_mutexattr_t *);$/
+include/pthread.h	260	prototype	pthread_mutex_destroy	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutex_destroy(pthread_mutex_t *);$/
+include/pthread.h	261	prototype	pthread_mutex_lock	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutex_lock(pthread_mutex_t *);$/
+include/pthread.h	262	prototype	pthread_mutex_trylock	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutex_trylock(pthread_mutex_t *);$/
+include/pthread.h	263	prototype	pthread_mutex_unlock	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutex_unlock(pthread_mutex_t *);$/
+include/pthread.h	264	prototype	pthread_mutex_consistent	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutex_consistent(pthread_mutex_t *);$/
+include/pthread.h	265	prototype	pthread_mutex_timedlock32	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutex_timedlock32(pthread_mutex_t *, const struct _timespec32 *);$/
+include/pthread.h	266	prototype	pthread_mutex_timedlock64	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_mutex_timedlock64(pthread_mutex_t *, const struct _timespec64 *);$/
+include/pthread.h	267	function	pthread_mutex_timedlock	typename:WINPTHREAD_MUTEX_DECL int	/^WINPTHREAD_MUTEX_DECL int pthread_mutex_timedlock(pthread_mutex_t *_M, const struct timespec *_T/
+include/pthread.h	279	macro	pthread_mutex_setprioceiling		/^#define pthread_mutex_setprioceiling(/
+include/pthread.h	280	macro	pthread_mutex_getprioceiling		/^#define pthread_mutex_getprioceiling(/
+include/pthread.h	291	macro	PTHREAD_SPINLOCK_INITIALIZER		/^#define PTHREAD_SPINLOCK_INITIALIZER /
+include/pthread.h	293	prototype	pthread_spin_init	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_spin_init(pthread_spinlock_t *, int);$/
+include/pthread.h	294	prototype	pthread_spin_destroy	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_spin_destroy(pthread_spinlock_t *);$/
+include/pthread.h	295	prototype	pthread_spin_lock	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_spin_lock(pthread_spinlock_t *);$/
+include/pthread.h	296	prototype	pthread_spin_trylock	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_spin_trylock(pthread_spinlock_t *);$/
+include/pthread.h	297	prototype	pthread_spin_unlock	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_spin_unlock(pthread_spinlock_t *);$/
+include/pthread.h	304	macro	PTHREAD_COND_INITIALIZER		/^#define PTHREAD_COND_INITIALIZER /
+include/pthread.h	305	macro	PTHREAD_RWLOCK_INITIALIZER		/^#define PTHREAD_RWLOCK_INITIALIZER /
+include/pthread.h	308	prototype	pthread_key_create	typename:WINPTHREAD_API int	/^WINPTHREAD_API int         pthread_key_create(pthread_key_t *key, void (* dest)(void *));$/
+include/pthread.h	309	prototype	pthread_key_delete	typename:WINPTHREAD_API int	/^WINPTHREAD_API int         pthread_key_delete(pthread_key_t key);$/
+include/pthread.h	310	prototype	pthread_getspecific	typename:WINPTHREAD_API void *	/^WINPTHREAD_API void *      pthread_getspecific(pthread_key_t key);$/
+include/pthread.h	311	prototype	pthread_setspecific	typename:WINPTHREAD_API int	/^WINPTHREAD_API int         pthread_setspecific(pthread_key_t key, const void *value);$/
+include/pthread.h	313	prototype	pthread_self	typename:WINPTHREAD_API pthread_t	/^WINPTHREAD_API pthread_t pthread_self(void);$/
+include/pthread.h	314	prototype	pthread_getcpuclockid	typename:WINPTHREAD_API int __cdecl	/^WINPTHREAD_API int __cdecl pthread_getcpuclockid(pthread_t, clockid_t *);$/
+include/pthread.h	318	macro	GESHER_WINPTHREAD_CPU_AUTHORITY_API		/^#define GESHER_WINPTHREAD_CPU_AUTHORITY_API /
+include/pthread.h	319	prototype	gesher_winpthread_dup_cpu_handle_v1	typename:WINPTHREAD_API int	/^WINPTHREAD_API int gesher_winpthread_dup_cpu_handle_v1$/
+include/pthread.h	322	prototype	pthread_once	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       pthread_once(pthread_once_t *o, void (*func)(void));$/
+include/pthread.h	323	prototype	pthread_testcancel	typename:WINPTHREAD_API void	/^WINPTHREAD_API void      pthread_testcancel(void);$/
+include/pthread.h	324	prototype	pthread_equal	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       pthread_equal(pthread_t t1, pthread_t t2);$/
+include/pthread.h	325	prototype	pthread_tls_init	typename:WINPTHREAD_API void	/^WINPTHREAD_API void      pthread_tls_init(void);$/
+include/pthread.h	326	prototype	_pthread_cleanup_dest	typename:WINPTHREAD_API void	/^WINPTHREAD_API void      _pthread_cleanup_dest(pthread_t t);$/
+include/pthread.h	327	prototype	pthread_get_concurrency	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       pthread_get_concurrency(int *val);$/
+include/pthread.h	328	prototype	pthread_set_concurrency	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       pthread_set_concurrency(int val);$/
+include/pthread.h	329	prototype	pthread_exit	typename:WINPTHREAD_API void	/^WINPTHREAD_API void      pthread_exit(void *res);$/
+include/pthread.h	330	prototype	_pthread_invoke_cancel	typename:WINPTHREAD_API void	/^WINPTHREAD_API void      _pthread_invoke_cancel(void);$/
+include/pthread.h	331	prototype	pthread_cancel	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       pthread_cancel(pthread_t t);$/
+include/pthread.h	332	prototype	pthread_kill	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       pthread_kill(pthread_t t, int sig);$/
+include/pthread.h	333	prototype	_pthread_get_state	typename:WINPTHREAD_API unsigned	/^WINPTHREAD_API unsigned  _pthread_get_state(const pthread_attr_t *attr, unsigned flag);$/
+include/pthread.h	334	prototype	_pthread_set_state	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       _pthread_set_state(pthread_attr_t *attr, unsigned flag, unsigned val);$/
+include/pthread.h	335	prototype	pthread_setcancelstate	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       pthread_setcancelstate(int state, int *oldstate);$/
+include/pthread.h	336	prototype	pthread_setcanceltype	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       pthread_setcanceltype(int type, int *oldtype);$/
+include/pthread.h	337	prototype	pthread_create_wrapper	typename:WINPTHREAD_API unsigned __stdcall	/^WINPTHREAD_API unsigned  __stdcall pthread_create_wrapper(void *args);$/
+include/pthread.h	338	prototype	pthread_create	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       pthread_create(pthread_t *th, const pthread_attr_t *attr, void *(* func/
+include/pthread.h	339	prototype	pthread_join	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       pthread_join(pthread_t t, void **res);$/
+include/pthread.h	340	prototype	pthread_detach	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       pthread_detach(pthread_t t);$/
+include/pthread.h	341	prototype	pthread_setname_np	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       pthread_setname_np(pthread_t thread, const char *name);$/
+include/pthread.h	342	prototype	pthread_getname_np	typename:WINPTHREAD_API int	/^WINPTHREAD_API int       pthread_getname_np(pthread_t thread, char *name, size_t len);$/
+include/pthread.h	344	prototype	pthread_rwlock_init	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlock_init(pthread_rwlock_t *rwlock_, const pthread_rwlockattr_t *at/
+include/pthread.h	345	prototype	pthread_rwlock_wrlock	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlock_wrlock(pthread_rwlock_t *l);$/
+include/pthread.h	346	prototype	pthread_rwlock_timedwrlock32	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlock_timedwrlock32(pthread_rwlock_t *rwlock, const struct _timespec/
+include/pthread.h	347	prototype	pthread_rwlock_timedwrlock64	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlock_timedwrlock64(pthread_rwlock_t *rwlock, const struct _timespec/
+include/pthread.h	348	function	pthread_rwlock_timedwrlock	typename:WINPTHREAD_RWLOCK_DECL int	/^WINPTHREAD_RWLOCK_DECL int pthread_rwlock_timedwrlock(pthread_rwlock_t *rwlock, const struct tim/
+include/pthread.h	356	prototype	pthread_rwlock_rdlock	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlock_rdlock(pthread_rwlock_t *l);$/
+include/pthread.h	357	prototype	pthread_rwlock_timedrdlock32	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlock_timedrdlock32(pthread_rwlock_t *l, const struct _timespec32 *t/
+include/pthread.h	358	prototype	pthread_rwlock_timedrdlock64	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlock_timedrdlock64(pthread_rwlock_t *l, const struct _timespec64 *t/
+include/pthread.h	359	function	pthread_rwlock_timedrdlock	typename:WINPTHREAD_RWLOCK_DECL int	/^WINPTHREAD_RWLOCK_DECL int pthread_rwlock_timedrdlock(pthread_rwlock_t *l, const struct timespec/
+include/pthread.h	367	prototype	pthread_rwlock_unlock	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlock_unlock(pthread_rwlock_t *l);$/
+include/pthread.h	368	prototype	pthread_rwlock_tryrdlock	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlock_tryrdlock(pthread_rwlock_t *l);$/
+include/pthread.h	369	prototype	pthread_rwlock_trywrlock	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlock_trywrlock(pthread_rwlock_t *l);$/
+include/pthread.h	370	prototype	pthread_rwlock_destroy	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlock_destroy (pthread_rwlock_t *l);$/
+include/pthread.h	372	prototype	pthread_cond_init	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_cond_init(pthread_cond_t *cv, const pthread_condattr_t *a);$/
+include/pthread.h	373	prototype	pthread_cond_destroy	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_cond_destroy(pthread_cond_t *cv);$/
+include/pthread.h	374	prototype	pthread_cond_signal	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_cond_signal (pthread_cond_t *cv);$/
+include/pthread.h	375	prototype	pthread_cond_broadcast	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_cond_broadcast (pthread_cond_t *cv);$/
+include/pthread.h	376	prototype	pthread_cond_wait	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_cond_wait (pthread_cond_t *cv, pthread_mutex_t *external_mutex);$/
+include/pthread.h	377	prototype	pthread_cond_timedwait32	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_cond_timedwait32(pthread_cond_t *cv, pthread_mutex_t *external_mutex,/
+include/pthread.h	378	prototype	pthread_cond_timedwait64	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_cond_timedwait64(pthread_cond_t *cv, pthread_mutex_t *external_mutex,/
+include/pthread.h	379	function	pthread_cond_timedwait	typename:WINPTHREAD_COND_DECL int	/^WINPTHREAD_COND_DECL int pthread_cond_timedwait(pthread_cond_t *cv, pthread_mutex_t *external_mu/
+include/pthread.h	387	prototype	pthread_cond_timedwait32_relative_np	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_cond_timedwait32_relative_np(pthread_cond_t *cv, pthread_mutex_t *ext/
+include/pthread.h	388	prototype	pthread_cond_timedwait64_relative_np	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_cond_timedwait64_relative_np(pthread_cond_t *cv, pthread_mutex_t *ext/
+include/pthread.h	389	function	pthread_cond_timedwait_relative_np	typename:WINPTHREAD_COND_DECL int	/^WINPTHREAD_COND_DECL int pthread_cond_timedwait_relative_np(pthread_cond_t *cv, pthread_mutex_t /
+include/pthread.h	398	prototype	pthread_barrier_destroy	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_barrier_destroy(pthread_barrier_t *b);$/
+include/pthread.h	399	prototype	pthread_barrier_init	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_barrier_init(pthread_barrier_t *b, const void *attr, unsigned int cou/
+include/pthread.h	400	prototype	pthread_barrier_wait	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_barrier_wait(pthread_barrier_t *b);$/
+include/pthread.h	402	prototype	pthread_attr_init	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_init(pthread_attr_t *attr);$/
+include/pthread.h	403	prototype	pthread_attr_destroy	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_destroy(pthread_attr_t *attr);$/
+include/pthread.h	404	prototype	pthread_attr_setdetachstate	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_setdetachstate(pthread_attr_t *a, int flag);$/
+include/pthread.h	405	prototype	pthread_attr_getdetachstate	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_getdetachstate(const pthread_attr_t *a, int *flag);$/
+include/pthread.h	406	prototype	pthread_attr_setinheritsched	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_setinheritsched(pthread_attr_t *a, int flag);$/
+include/pthread.h	407	prototype	pthread_attr_getinheritsched	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_getinheritsched(const pthread_attr_t *a, int *flag);$/
+include/pthread.h	408	prototype	pthread_attr_setscope	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_setscope(pthread_attr_t *a, int flag);$/
+include/pthread.h	409	prototype	pthread_attr_getscope	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_getscope(const pthread_attr_t *a, int *flag);$/
+include/pthread.h	410	prototype	pthread_attr_getstack	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_getstack(const pthread_attr_t *attr, void **stack, size_t *size)/
+include/pthread.h	411	prototype	pthread_attr_setstack	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_setstack(pthread_attr_t *attr, void *stack, size_t size);$/
+include/pthread.h	412	prototype	pthread_attr_getstackaddr	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_getstackaddr(const pthread_attr_t *attr, void **stack);$/
+include/pthread.h	413	prototype	pthread_attr_setstackaddr	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_setstackaddr(pthread_attr_t *attr, void *stack);$/
+include/pthread.h	414	prototype	pthread_attr_getstacksize	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_getstacksize(const pthread_attr_t *attr, size_t *size);$/
+include/pthread.h	415	prototype	pthread_attr_setstacksize	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_attr_setstacksize(pthread_attr_t *attr, size_t size);$/
+include/pthread.h	417	prototype	pthread_getconcurrency	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_getconcurrency(void);$/
+include/pthread.h	418	prototype	pthread_setconcurrency	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_setconcurrency(int new_level);$/
+include/pthread.h	420	prototype	pthread_condattr_destroy	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_condattr_destroy(pthread_condattr_t *a);$/
+include/pthread.h	421	prototype	pthread_condattr_init	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_condattr_init(pthread_condattr_t *a);$/
+include/pthread.h	422	prototype	pthread_condattr_getpshared	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_condattr_getpshared(const pthread_condattr_t *a, int *s);$/
+include/pthread.h	423	prototype	pthread_condattr_setpshared	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_condattr_setpshared(pthread_condattr_t *a, int s);$/
+include/pthread.h	425	prototype	pthread_condattr_getclock	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_condattr_getclock (const pthread_condattr_t *attr,$/
+include/pthread.h	427	prototype	pthread_condattr_setclock	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_condattr_setclock(pthread_condattr_t *attr,$/
+include/pthread.h	430	prototype	pthread_barrierattr_init	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_barrierattr_init(void **attr);$/
+include/pthread.h	431	prototype	pthread_barrierattr_destroy	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_barrierattr_destroy(void **attr);$/
+include/pthread.h	432	prototype	pthread_barrierattr_setpshared	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_barrierattr_setpshared(void **attr, int s);$/
+include/pthread.h	433	prototype	pthread_barrierattr_getpshared	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_barrierattr_getpshared(void **attr, int *s);$/
+include/pthread.h	436	prototype	pthread_getclean	typename:WINPTHREAD_API struct _pthread_cleanup **	/^WINPTHREAD_API struct _pthread_cleanup ** pthread_getclean (void);$/
+include/pthread.h	437	prototype	pthread_gethandle	typename:WINPTHREAD_API void *	/^WINPTHREAD_API void * pthread_gethandle (pthread_t t);$/
+include/pthread.h	438	prototype	pthread_getevent	typename:WINPTHREAD_API void *	/^WINPTHREAD_API void * pthread_getevent (void);$/
+include/pthread.h	440	prototype	_pthread_tryjoin	typename:WINPTHREAD_API int	/^WINPTHREAD_API int _pthread_tryjoin (pthread_t t, void **res);$/
+include/pthread.h	441	prototype	pthread_rwlockattr_destroy	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlockattr_destroy(pthread_rwlockattr_t *a);$/
+include/pthread.h	442	prototype	pthread_rwlockattr_getpshared	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlockattr_getpshared(pthread_rwlockattr_t *a, int *s);$/
+include/pthread.h	443	prototype	pthread_rwlockattr_init	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlockattr_init(pthread_rwlockattr_t *a);$/
+include/pthread.h	444	prototype	pthread_rwlockattr_setpshared	typename:WINPTHREAD_API int	/^WINPTHREAD_API int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *a, int s);$/
+include/pthread.h	465	macro	PTHREAD_THREADS_MAX		/^#define PTHREAD_THREADS_MAX /
+include/pthread.h	471	macro	SEM_NSEMS_MAX		/^#define SEM_NSEMS_MAX /
+include/pthread.h	478	macro	clock_nanosleep		/^#define clock_nanosleep(...) (pthread_testcancel(), clock_nanosleep(/
+include/pthread.h	495	macro	nanosleep		/^#define nanosleep(...) (pthread_testcancel(), nanosleep(/
+include/pthread.h	510	macro	sem_timedwait		/^#define sem_timedwait(...) (pthread_testcancel(), sem_timedwait(/
+include/pthread.h	511	macro	sem_wait		/^#define sem_wait(...) (pthread_testcancel(), sem_wait(/
+include/pthread_compat.h	61	macro	WIN_PTHREADS_PTHREAD_COMPAT_H		/^#define WIN_PTHREADS_PTHREAD_COMPAT_H$/
+include/pthread_compat.h	64	macro	WINPTHREADS_STATIC_ASSERT		/^#define WINPTHREADS_STATIC_ASSERT(/
+include/pthread_compat.h	66	macro	WINPTHREADS_STATIC_ASSERT		/^#define WINPTHREADS_STATIC_ASSERT(/
+include/pthread_compat.h	68	macro	WINPTHREADS_STATIC_ASSERT		/^#define WINPTHREADS_STATIC_ASSERT(/
+include/pthread_compat.h	70	macro	WINPTHREADS_STATIC_ASSERT		/^#define WINPTHREADS_STATIC_ASSERT(/
+include/pthread_compat.h	74	macro	WINPTHREADS_TIME_BITS		/^#define WINPTHREADS_TIME_BITS /
+include/pthread_compat.h	76	macro	WINPTHREADS_TIME_BITS		/^#define WINPTHREADS_TIME_BITS /
+include/pthread_compat.h	84	macro	WINPTHREAD_API		/^#  define WINPTHREAD_API /
+include/pthread_compat.h	86	macro	WINPTHREAD_API		/^#  define WINPTHREAD_API$/
+include/pthread_compat.h	113	macro	WINPTHREADS_INLINE		/^#define WINPTHREADS_INLINE /
+include/pthread_compat.h	114	macro	WINPTHREADS_ALWAYS_INLINE		/^#define WINPTHREADS_ALWAYS_INLINE /
+include/pthread_compat.h	115	macro	WINPTHREADS_ATTRIBUTE		/^#define WINPTHREADS_ATTRIBUTE(/
+include/pthread_compat.h	116	macro	WINPTHREADS_SECTION		/^#define WINPTHREADS_SECTION(/
+include/pthread_compat.h	141	macro	WINPTHREADS_INLINE		/^#define WINPTHREADS_INLINE /
+include/pthread_compat.h	142	macro	WINPTHREADS_ALWAYS_INLINE		/^#define WINPTHREADS_ALWAYS_INLINE /
+include/pthread_compat.h	143	macro	WINPTHREADS_ATTRIBUTE		/^#define WINPTHREADS_ATTRIBUTE(/
+include/pthread_compat.h	144	macro	WINPTHREADS_SECTION		/^#define WINPTHREADS_SECTION(/
+include/pthread_compat.h	150	macro	WINPTHREAD_CLOCK_DECL		/^#  define WINPTHREAD_CLOCK_DECL /
+include/pthread_compat.h	152	macro	WINPTHREAD_CLOCK_DECL		/^#  define WINPTHREAD_CLOCK_DECL /
+include/pthread_compat.h	158	macro	WINPTHREAD_COND_DECL		/^#  define WINPTHREAD_COND_DECL /
+include/pthread_compat.h	160	macro	WINPTHREAD_COND_DECL		/^#  define WINPTHREAD_COND_DECL /
+include/pthread_compat.h	166	macro	WINPTHREAD_MUTEX_DECL		/^#  define WINPTHREAD_MUTEX_DECL /
+include/pthread_compat.h	168	macro	WINPTHREAD_MUTEX_DECL		/^#  define WINPTHREAD_MUTEX_DECL /
+include/pthread_compat.h	174	macro	WINPTHREAD_NANOSLEEP_DECL		/^#  define WINPTHREAD_NANOSLEEP_DECL /
+include/pthread_compat.h	176	macro	WINPTHREAD_NANOSLEEP_DECL		/^#  define WINPTHREAD_NANOSLEEP_DECL /
+include/pthread_compat.h	182	macro	WINPTHREAD_RWLOCK_DECL		/^#  define WINPTHREAD_RWLOCK_DECL /
+include/pthread_compat.h	184	macro	WINPTHREAD_RWLOCK_DECL		/^#  define WINPTHREAD_RWLOCK_DECL /
+include/pthread_compat.h	190	macro	WINPTHREAD_SEM_DECL		/^#  define WINPTHREAD_SEM_DECL /
+include/pthread_compat.h	192	macro	WINPTHREAD_SEM_DECL		/^#  define WINPTHREAD_SEM_DECL /
+include/pthread_compat.h	198	macro	WINPTHREAD_THREAD_DECL		/^#  define WINPTHREAD_THREAD_DECL /
+include/pthread_compat.h	200	macro	WINPTHREAD_THREAD_DECL		/^#  define WINPTHREAD_THREAD_DECL /
+include/pthread_signal.h	24	macro	WIN_PTHREADS_SIGNAL_H		/^#define WIN_PTHREADS_SIGNAL_H$/
+include/pthread_signal.h	27	macro	pthread_sigmask		/^#define pthread_sigmask(/
+include/pthread_time.h	24	macro	WIN_PTHREADS_TIME_H		/^#define WIN_PTHREADS_TIME_H$/
+include/pthread_time.h	54	macro	CLOCK_REALTIME		/^#define CLOCK_REALTIME /
+include/pthread_time.h	58	macro	CLOCK_MONOTONIC		/^#define CLOCK_MONOTONIC /
+include/pthread_time.h	62	macro	CLOCK_PROCESS_CPUTIME_ID		/^#define CLOCK_PROCESS_CPUTIME_ID /
+include/pthread_time.h	66	macro	CLOCK_THREAD_CPUTIME_ID		/^#define CLOCK_THREAD_CPUTIME_ID /
+include/pthread_time.h	70	macro	CLOCK_REALTIME_COARSE		/^#define CLOCK_REALTIME_COARSE /
+include/pthread_time.h	77	prototype	nanosleep32	typename:WINPTHREAD_API int __cdecl	/^WINPTHREAD_API int __cdecl nanosleep32(const struct _timespec32 *request, struct _timespec32 *re/
+include/pthread_time.h	78	prototype	nanosleep64	typename:WINPTHREAD_API int __cdecl	/^WINPTHREAD_API int __cdecl nanosleep64(const struct _timespec64 *request, struct _timespec64 *re/
+include/pthread_time.h	79	function	nanosleep	typename:WINPTHREAD_NANOSLEEP_DECL int __cdecl	/^WINPTHREAD_NANOSLEEP_DECL int __cdecl nanosleep(const struct timespec *request, struct timespec /
+include/pthread_time.h	88	prototype	clock_nanosleep32	typename:WINPTHREAD_API int __cdecl	/^WINPTHREAD_API int __cdecl clock_nanosleep32(clockid_t clock_id, int flags, const struct _timesp/
+include/pthread_time.h	89	prototype	clock_nanosleep64	typename:WINPTHREAD_API int __cdecl	/^WINPTHREAD_API int __cdecl clock_nanosleep64(clockid_t clock_id, int flags, const struct _timesp/
+include/pthread_time.h	90	function	clock_nanosleep	typename:WINPTHREAD_CLOCK_DECL int __cdecl	/^WINPTHREAD_CLOCK_DECL int __cdecl clock_nanosleep(clockid_t clock_id, int flags, const struct ti/
+include/pthread_time.h	99	prototype	clock_getres32	typename:WINPTHREAD_API int __cdecl	/^WINPTHREAD_API int __cdecl clock_getres32(clockid_t clock_id, struct _timespec32 *res);$/
+include/pthread_time.h	100	prototype	clock_getres64	typename:WINPTHREAD_API int __cdecl	/^WINPTHREAD_API int __cdecl clock_getres64(clockid_t clock_id, struct _timespec64 *res);$/
+include/pthread_time.h	101	function	clock_getres	typename:WINPTHREAD_CLOCK_DECL int __cdecl	/^WINPTHREAD_CLOCK_DECL int __cdecl clock_getres(clockid_t clock_id, struct timespec *res)$/
+include/pthread_time.h	110	prototype	clock_gettime32	typename:WINPTHREAD_API int __cdecl	/^WINPTHREAD_API int __cdecl clock_gettime32(clockid_t clock_id, struct _timespec32 *tp);$/
+include/pthread_time.h	111	prototype	clock_gettime64	typename:WINPTHREAD_API int __cdecl	/^WINPTHREAD_API int __cdecl clock_gettime64(clockid_t clock_id, struct _timespec64 *tp);$/
+include/pthread_time.h	112	function	clock_gettime	typename:WINPTHREAD_CLOCK_DECL int __cdecl	/^WINPTHREAD_CLOCK_DECL int __cdecl clock_gettime(clockid_t clock_id, struct timespec *tp)$/
+include/pthread_time.h	121	prototype	clock_settime32	typename:WINPTHREAD_API int __cdecl	/^WINPTHREAD_API int __cdecl clock_settime32(clockid_t clock_id, const struct _timespec32 *tp);$/
+include/pthread_time.h	122	prototype	clock_settime64	typename:WINPTHREAD_API int __cdecl	/^WINPTHREAD_API int __cdecl clock_settime64(clockid_t clock_id, const struct _timespec64 *tp);$/
+include/pthread_time.h	123	function	clock_settime	typename:WINPTHREAD_CLOCK_DECL int __cdecl	/^WINPTHREAD_CLOCK_DECL int __cdecl clock_settime(clockid_t clock_id, const struct timespec *tp)$/
+include/pthread_unistd.h	24	macro	WIN_PTHREADS_UNISTD_H		/^#define WIN_PTHREADS_UNISTD_H$/
+include/sched.h	23	macro	WIN_PTHREADS_SCHED_H		/^#define WIN_PTHREADS_SCHED_H$/
+include/sched.h	36	macro	SCHED_OTHER		/^#define SCHED_OTHER /
+include/sched.h	37	macro	SCHED_FIFO		/^#define SCHED_FIFO /
+include/sched.h	38	macro	SCHED_RR		/^#define SCHED_RR /
+include/sched.h	39	macro	SCHED_MIN		/^#define SCHED_MIN /
+include/sched.h	40	macro	SCHED_MAX		/^#define SCHED_MAX /
+include/sched.h	50	prototype	sched_yield	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sched_yield(void);$/
+include/sched.h	51	prototype	sched_get_priority_min	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sched_get_priority_min(int pol);$/
+include/sched.h	52	prototype	sched_get_priority_max	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sched_get_priority_max(int pol);$/
+include/sched.h	53	prototype	sched_getscheduler	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sched_getscheduler(pid_t pid);$/
+include/sched.h	54	prototype	sched_setscheduler	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sched_setscheduler(pid_t pid, int pol, const struct sched_param *param);$/
+include/sched.h	61	macro	sched_rr_get_interval		/^#define sched_rr_get_interval(/
+include/semaphore.h	24	macro	WIN_PTHREADS_SEMAPHORE_H		/^#define WIN_PTHREADS_SEMAPHORE_H$/
+include/semaphore.h	33	macro	SEM_VALUE_MAX		/^#define SEM_VALUE_MAX /
+include/semaphore.h	37	macro	SEM_FAILED		/^#define SEM_FAILED /
+include/semaphore.h	39	prototype	sem_init	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sem_init(sem_t * sem, int pshared, unsigned int value);$/
+include/semaphore.h	41	prototype	sem_destroy	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sem_destroy(sem_t *sem);$/
+include/semaphore.h	43	prototype	sem_trywait	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sem_trywait(sem_t *sem);$/
+include/semaphore.h	45	prototype	sem_wait	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sem_wait(sem_t *sem);$/
+include/semaphore.h	47	prototype	sem_timedwait32	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sem_timedwait32(sem_t * sem, const struct _timespec32 *t);$/
+include/semaphore.h	48	prototype	sem_timedwait64	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sem_timedwait64(sem_t * sem, const struct _timespec64 *t);$/
+include/semaphore.h	49	function	sem_timedwait	typename:WINPTHREAD_SEM_DECL int	/^WINPTHREAD_SEM_DECL int sem_timedwait(sem_t * sem, const struct timespec *t)$/
+include/semaphore.h	58	prototype	sem_post	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sem_post(sem_t *sem);$/
+include/semaphore.h	60	prototype	sem_post_multiple	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sem_post_multiple(sem_t *sem, int count);$/
+include/semaphore.h	63	prototype	sem_open	typename:WINPTHREAD_API sem_t *	/^WINPTHREAD_API sem_t * sem_open(const char * name, int oflag, mode_t mode, unsigned int value);$/
+include/semaphore.h	65	prototype	sem_close	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sem_close(sem_t * sem);$/
+include/semaphore.h	67	prototype	sem_unlink	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sem_unlink(const char * name);$/
+include/semaphore.h	69	prototype	sem_getvalue	typename:WINPTHREAD_API int	/^WINPTHREAD_API int sem_getvalue(sem_t * sem, int * sval);$/
+src/barrier.h	24	macro	WIN_PTHREADS_BARRIER_H		/^#define WIN_PTHREADS_BARRIER_H$/
+src/barrier.h	29	macro	_PTHREAD_BARRIER_FLAG		/^#define _PTHREAD_BARRIER_FLAG /
+src/cond.h	24	macro	WIN_PTHREADS_COND_H		/^#define WIN_PTHREADS_COND_H$/
+src/misc.h	24	macro	WIN_PTHREADS_MISC_H		/^#define WIN_PTHREADS_MISC_H$/
+src/misc.h	89	prototype	_pthread_time_in_ms	typename:unsigned long long	/^unsigned long long _pthread_time_in_ms(void);$/
+src/misc.h	90	prototype	_pthread_time_in_ms_from_timespec	typename:unsigned long long	/^unsigned long long _pthread_time_in_ms_from_timespec(const struct _timespec64 *ts);$/
+src/misc.h	91	prototype	_pthread_rel_time_in_ms	typename:unsigned long long	/^unsigned long long _pthread_rel_time_in_ms(const struct _timespec64 *ts);$/
+src/misc.h	92	prototype	_pthread_wait_for_single_object	typename:unsigned long	/^unsigned long _pthread_wait_for_single_object (void *handle, unsigned long timeout);$/
+src/misc.h	93	prototype	_pthread_wait_for_multiple_objects	typename:unsigned long	/^unsigned long _pthread_wait_for_multiple_objects (unsigned long count, void **handles, unsigned /
+src/rwlock.h	24	macro	WIN_PTHREADS_RWLOCK_H		/^#define WIN_PTHREADS_RWLOCK_H$/
+src/thread.h	24	macro	WIN_PTHREAD_H		/^#define WIN_PTHREAD_H$/
+src/thread.h	77	prototype	_pthread_tryjoin	typename:int	/^int _pthread_tryjoin(pthread_t t, void **res);$/
+src/thread.h	78	prototype	_pthread_setnobreak	typename:void	/^void _pthread_setnobreak(int);$/
+src/thread.h	79	prototype	__pthread_shallcancel	typename:int	/^int  __pthread_shallcancel(void);$/
+src/thread.h	81	prototype	_pthread_delay_np_ms	typename:int	/^int _pthread_delay_np_ms (DWORD to);$/
+src/wpth_ver.h	24	macro	__WPTHREADS_VERSION__		/^#define __WPTHREADS_VERSION__$/
