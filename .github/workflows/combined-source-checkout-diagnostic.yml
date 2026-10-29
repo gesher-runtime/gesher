@@ -52,3 +52,82 @@ jobs:
           $status = (git status --porcelain -- overrides.json | Out-String).Trim()
           Write-Host "FRESH_CHECKOUT source=$source expected=$expected actual=$blob raw_sha256=$raw head_raw_sha256=$headRawSha no_filters_blob=$rawBlob size=$size autocrlf=$auto attrs=$attrs status=$status"
           if ($blob -cne $expected) { throw 'Fresh checkout tracked blob differs from HEAD' }
+  prior-run-staging:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fad0eff2f73215235769566b4c0304c844598195
+          persist-credentials: false
+          sparse-checkout: |
+            tests
+            tools/ci
+            tools/surface
+            tools/symbolize.py
+            tools/boot-image
+            tools/web3
+            tools/package
+            tools/windows4
+            tools/net-udp
+            tools/net-udp-component
+            tools/net-dns
+            tools/net-dns-component
+            probes/native3/unicode
+      - name: Reproduce prior run staging with exact prior producer receipts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actualRun = $env:GITHUB_RUN_ID
+          $measuredSource = 'fad0eff2f73215235769566b4c0304c844598195'
+          if ((git rev-parse HEAD).Trim() -cne $measuredSource) { throw 'Wrong staging checkout' }
+          Write-Host "PRIOR_RUN_DIAGNOSTIC current_run=$actualRun measured_run=40865138716 attempt=1 source=$measuredSource; historical artifacts only, not current-run qualification"
+          $env:GITHUB_RUN_ID = '40865138716'
+          $env:GITHUB_RUN_ATTEMPT = '1'
+          $env:GITHUB_SHA = $measuredSource
+          $env:GITHUB_WORKFLOW = 'ci'
+          $env:GITHUB_EVENT_NAME = 'workflow_dispatch'
+          function Observe([string] $phase) {
+            $blob = (git hash-object -- overrides.json).Trim()
+            $expected = (git rev-parse HEAD:overrides.json).Trim()
+            $raw = (Get-FileHash -LiteralPath overrides.json -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($LASTEXITCODE -ne 0) { throw 'Source measurement failed' }
+            Write-Host "STAGING_SOURCE phase=$phase blob=$blob expected=$expected raw_sha256=$raw"
+          }
+          Observe 'fresh-checkout'
+          $roles = @(
+            @('windows-x64','build','windows_x64','windows_x64',''),
+            @('framework','framework / framework','framework','framework',''),
+            @('native-libs','native-libs / native-libs','native_libs','native_libs',''),
+            @('arm64','arm64 / build','arm64','arm64',''),
+            @('libs-tests','libs / build','libs_tests','libs_tests','libs-tests'),
+            @('art-gtests','posix / build','art_gtests','art_gtests','art-gtests'),
+            @('graphics','graphics / build','graphics','graphics',''),
+            @('angle','angle / probe-build','angle','angle',''),
+            @('boot-image','boot-image / compile','boot_image','boot_image',''),
+            @('webview','webview / build','webview','webview',''),
+            @('exec','exec / exec','exec','exec',''),
+            @('media','media / media','media','media',''),
+            @('surfaces','surfaces / apps','surfaces','surfaces',''),
+            @('native2','native2 / native2','native2','native2','native2')
+          )
+          foreach ($role in $roles) {
+            $destination = "ci-suppliers/$($role[2])"
+            python tools/ci/artifact_receipt.py --name $role[0] --producer $role[1] --destination $destination
+            if ($LASTEXITCODE -ne 0) { throw "Prior receipt failed: $($role[0])" }
+            Observe "receipt-$($role[0])"
+            $params = @('tools/surface/assemble-artifacts.py','--source',$destination,'--destination','dist','--ledger','ci-owners.json','--owner',$role[3])
+            if ($role[4]) { $params += @('--prefix',$role[4]) }
+            python @params
+            if ($LASTEXITCODE -ne 0) { throw "Prior assembly failed: $($role[0])" }
+            Observe "assembly-$($role[0])"
+          }
+          python tools/web3/host_roles.py verify --dist dist
+          if ($LASTEXITCODE -ne 0) { throw 'Prior role verification failed' }
+          Observe 'after-role-verification'
