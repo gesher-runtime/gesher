@@ -186,55 +186,7 @@ function LegacyCameraCheck([string] $Mode, [string] $Out, [int] $Code) {
 
 # Geocoder: Windows.Services.Maps (MapLocationFinder) without a map service key. The app's
 # Geocoder stays absent (isPresent false, IOException) while this is what Windows answers.
-$geoScript = Join-Path $root 'devices-geocode.ps1'
-Set-Content -Path $geoScript -Encoding UTF8 -Value @'
-param([string] $HelperPath)
-$ErrorActionPreference = 'Stop'
-. $HelperPath
-# Environment.Exit still runs CLR/WinRT shutdown and can deadlock after the
-# completed answer. This isolated probe owns only its current process.
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public static class GesherGeocoderProbeExit {
-  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
-  [DllImport("kernel32.dll", SetLastError = true)]
-  [return: MarshalAs(UnmanagedType.Bool)]
-  static extern bool TerminateProcess(IntPtr process, uint code);
-  public static void Exit(uint code) {
-    if (!TerminateProcess(GetCurrentProcess(), code))
-      throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-  }
-}
-"@
-Add-Type -AssemblyName System.Runtime.WindowsRuntime
-$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
-[Windows.Services.Maps.MapLocationFinder, Windows.Services.Maps, ContentType = WindowsRuntime] | Out-Null
-try {
-  $operation = [Windows.Services.Maps.MapLocationFinder]::FindLocationsAsync('Jerusalem', $null)
-  $t = $asTask.MakeGenericMethod([Windows.Services.Maps.MapLocationFinderResult]).Invoke($null, @($operation))
-  $adapter = @{
-    Wait = { param($ms) ([System.IAsyncResult]$t).AsyncWaitHandle.WaitOne($ms) }
-    Cancel = { $operation.Cancel() }
-    Status = { $operation.Status }
-    Error = { if ($t.Exception) { $t.Exception.ToString() } }
-    # AsTask completion does not document that its bridge callback has returned.
-    # Do not race Close against that callback; the isolated process owns the
-    # projection until termination. This is not proof of provider shutdown.
-    Close = { }
-    Result = { $t.GetAwaiter().GetResult() }
-  }
-  $result = Invoke-GeocoderOperation $adapter 30000 5000
-  [Console]::Out.WriteLine('status: ' + $result.Status)
-  [Console]::Out.Flush()
-  # WinRT/COM teardown can keep PowerShell alive after the genuine answer.
-  [GesherGeocoderProbeExit]::Exit(0)
-} catch {
-  [Console]::Out.WriteLine('error: ' + $_.Exception.Message)
-  [Console]::Out.Flush()
-  [GesherGeocoderProbeExit]::Exit(1)
-}
-'@
+$geoScript = Join-Path $PSScriptRoot 'geocoder-provider-probe.ps1'
 # Bound activation/COM startup as well as the asynchronous wait. Reading Result
 # after a false Wait used to block until the entire test job timed out.
 $geo = (DevRun 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $geoScript, (Join-Path $PSScriptRoot 'geocoder-operation.ps1')) 45).Trim()
@@ -307,3 +259,4 @@ if (-not $capOut.Contains('devices: capture: done')) {
 Remove-Item Env:GESHER_SENSOR_TEST
 Remove-Item Env:GESHER_CAMERA_TEST
 $null = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'shutdown') 120
+
