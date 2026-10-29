@@ -9,6 +9,7 @@ name: net-tcp-priority-component
 # Include cleanup/spin symbol rows for the observed pthread wrapper frames.
 # Isolate empty supplier thread controls in a separate fresh authenticated probe.
 # Observe real caller cancellation/reference retirement in another fresh probe.
+# Pin qualified single-process supervision for isolated diagnostic processes.
 on:
   workflow_dispatch:
   push:

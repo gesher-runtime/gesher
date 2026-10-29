@@ -761,3 +761,27 @@ the supervisor must retire the diagnostic process and all retained process
 handles. This does not weaken or warm the unchanged original four-mode census.
 No pthread cleanup handler or cancellation ownership correction is applied
 before this actual evidence and independent source review.
+
+409606/cd651dc0 actual 2025 isolated supplier bootstrap124->128 then four
+joined cycles delta0; all four detached empty cycles delta+1 (128->132), each
+actual native thread signaled and both fixture-owned handles closed. Exact
+current probe d6fe5e7b/mapf698c9ee associates Event OPEN ranges with
+pthread_spin_lock0x46ab0, _pthread_cleanup_dest0x21fb0 and wrapper0x22d00.
+Original separate HOST still fails mode1 census141/140 with threads4/4.
+2022 cannot supply admissible stdout: the 44ms process exited0, but the old
+controller saw cumulative2/root identity1 and correctly rejected/withheld
+output. Its7/7 controller handles closed; no 2022 supplier or product inference.
+Logs: C:/work/gesher-ci-review/tcp-409606-{compile,win2022,win2025}.log.
+
+The follow-up imports EXACT c228 qualified controller blob
+625be4d5906bb48dd02d6103382fd2e85ac88738 into a diagnostic-only path. A fixed
+C# namespace wrapper permits coexistence with the ORIGINAL unchanged product
+controller. The two isolated probes use its normal empty-fault production
+policy: actual parent console membership before creation/before resume,
+read-back active-process limit1 before root assignment/resume, exact root
+retained identity, cumulative1 and bounded output/retirement. The driver also
+requires limit1, cumulative1, root-only identity, both root handles closed,
+writers retired, exclusive snapshot and equal owned/closed handle counts.
+No sleep, unknown-identity reclassification or old product gate waiver is
+introduced. Actual two-Windows proof of the adapted diagnostic path remains
+required; this imports no runtime/provider implementation fix.

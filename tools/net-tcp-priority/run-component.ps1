@@ -4,6 +4,7 @@ $trusted = @{
   'tools/windows4/TsfJobSupervisor.cs'='d1cf9319268df1bccf03177e7f8dde52a7f55510'
   'tools/windows4/TsfJobWorker.cs'='08f29f78f56195825d96de2f2f6632bf91133e1e'
   'tools/windows4/test-tsf-job-supervisor.ps1'='91e6946c4ab05a42ffbf6917166193c3dad07872'
+  'tools/net-tcp-priority/qualified/TsfJobSupervisor.cs'='625be4d5906bb48dd02d6103382fd2e85ac88738'
   'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
 }
 foreach ($entry in $trusted.GetEnumerator()) {
@@ -95,14 +96,28 @@ Write-Host "TCP_PRIORITY_RECEIPT source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID a
 Write-Host ($m.compilers | ConvertTo-Json -Depth 8 -Compress)
 & ./tools/windows4/test-tsf-job-supervisor.ps1
 if (-not ('TsfJobSupervisor' -as [type])) { Add-Type -Path tools/windows4/TsfJobSupervisor.cs }
+# Exact c228 controller bytes, wrapped only in a fixed namespace to coexist
+# with the unchanged original product controller. No diagnostic fault mode.
+if (-not ('TcpPriorityDiagnostics.TsfJobSupervisor' -as [type])) {
+  $qualifiedController = [IO.File]::ReadAllText((Join-Path $pwd 'tools/net-tcp-priority/qualified/TsfJobSupervisor.cs'))
+  Add-Type -TypeDefinition ('namespace TcpPriorityDiagnostics {' + [Environment]::NewLine + $qualifiedController + [Environment]::NewLine + '}')
+}
+Write-Host ('TCP_PRIORITY_DIAGNOSTIC_CONTROLLER blob=625be4d5906bb48dd02d6103382fd2e85ac88738 sha256=' + (Get-FileHash -LiteralPath tools/net-tcp-priority/qualified/TsfJobSupervisor.cs -Algorithm SHA256).Hash.ToLowerInvariant() + ' namespace=TcpPriorityDiagnostics original_product_controller=unchanged')
+function RequireDiagnosticRetirement($Result) {
+  if (-not $Result.Success -or $Result.ActiveProcessLimit -ne 1 -or $Result.TotalProcesses -ne 1 -or
+      $Result.PreResumeActive -ne 1 -or $Result.Processes.Count -ne 1 -or $Result.Processes[0].Role -cne 'root' -or
+      -not $Result.WritersRetired -or -not $Result.ExclusiveSnapshot -or -not $Result.RootHandleClosed -or
+      -not $Result.ThreadHandleClosed -or $Result.OwnedHandles -ne $Result.ClosedHandles) { throw 'Isolated diagnostic job/identity/retirement unproved' }
+}
 $env:GESHER_INET = '1'
 $fixture = (Resolve-Path tcp-fixture).Path
 # The supplier observation is a SEPARATE fresh process using the authenticated
 # same binary/static supplier. It cannot warm the original product census.
-$supplier = [TsfJobSupervisor]::Run("$fixture/net_tcp_priority_probe.exe", '--supplier-retirement-control', 30000, '')
+$supplier = [TcpPriorityDiagnostics.TsfJobSupervisor]::Run("$fixture/net_tcp_priority_probe.exe", '--supplier-retirement-control', 30000, '')
 Write-Host ('TCP_PRIORITY_SUPPLIER_KERNEL ' + ($supplier | ConvertTo-Json -Depth 6 -Compress))
 $supplierText = $supplier.Output + $supplier.Error
 Write-Host $supplierText
+RequireDiagnosticRetirement $supplier
 if (-not $supplier.Success -or $supplier.ExitCode -ne 0 -or $supplierText -match '(?m)^FAIL') { throw 'Isolated supplier retirement observation failed' }
 foreach ($detached in 0..1) {
   foreach ($cycle in 0..3) {
@@ -110,10 +125,11 @@ foreach ($detached in 0..1) {
   }
 }
 if ($supplierText -notmatch '(?m)^PASS TCP supplier characterization: isolated empty-thread observations only; product census unchanged\s*$') { throw 'Missing isolated supplier observation scope' }
-$cancellation = [TsfJobSupervisor]::Run("$fixture/net_tcp_priority_probe.exe", '--owned-cancellation-control', 30000, '')
+$cancellation = [TcpPriorityDiagnostics.TsfJobSupervisor]::Run("$fixture/net_tcp_priority_probe.exe", '--owned-cancellation-control', 30000, '')
 Write-Host ('TCP_PRIORITY_CANCEL_KERNEL ' + ($cancellation | ConvertTo-Json -Depth 6 -Compress))
 $cancelText = $cancellation.Output + $cancellation.Error
 Write-Host $cancelText
+RequireDiagnosticRetirement $cancellation
 if (-not $cancellation.Success -or $cancellation.ExitCode -ne 0 -or $cancelText -match '(?m)^FAIL') { throw 'Isolated cancellation observation failed' }
 if ($cancellation.Pid -eq $supplier.Pid -and $cancellation.Birth -eq $supplier.Birth) { throw 'Cancellation reused supplier process instance' }
 if ($cancelText -notmatch '(?m)^TCP_PRIORITY_CANCEL_OBSERVATION canceled=1 completion=111 native_retired=1 operation=[0-9]+ description=[0-9]+ handles=[0-9]+/[0-9]+ threads=[0-9]+/[0-9]+\r?$' -or
