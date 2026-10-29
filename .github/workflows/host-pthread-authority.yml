@@ -3,7 +3,7 @@ name: host pthread authority initial controls
 on:
   workflow_dispatch:
   push:
-    branches: [wip/host-pthread-authority]
+    branches: [wip/pthread-external-exit]
     paths: ['.github/workflows/host-pthread-authority.yml']
 permissions:
   contents: read
