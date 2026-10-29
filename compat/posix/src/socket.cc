@@ -227,7 +227,14 @@ int connect(int fd, const struct sockaddr* addr, socklen_t len) {
   if (!Lookup(fd, &state) || !ToAddress(addr, len, &address) || !MapUnixPath(&address, false)) {
     return -1;
   }
-  return ws::Connect(state.socket, address);
+  state.connect_state->store(ws::ConnectState::kConnecting);
+  const int result = ws::Connect(state.socket, address);
+  const int saved = errno;
+  const bool pending = saved == EINPROGRESS || saved == EALREADY || saved == EINTR;
+  state.connect_state->store(result == 0 ? ws::ConnectState::kConnected :
+                            pending ? ws::ConnectState::kConnecting : ws::ConnectState::kFailed);
+  errno = saved;
+  return result;
 }
 
 int listen(int fd, int backlog) {
@@ -293,7 +300,7 @@ int ToMsgFlags(int flags) {
 // ready now. (Another thread may still take the data first.)
 bool WouldBlock(const SocketFd& state, int flags, int event) {
   if ((flags & MSG_DONTWAIT) == 0 || state.nonblocking) return false;
-  ws::PollEntry entry = {state.socket, event, 0};
+  ws::PollEntry entry = {state.socket, event, 0, state.connect_state};
   if (ws::Poll(&entry, 1, 0) > 0) return false;
   errno = EAGAIN;
   return true;

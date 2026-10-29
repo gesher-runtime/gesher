@@ -109,7 +109,17 @@ static void finite_priority_control(int fd, const char* phase) {
 static void endpoint_controls() {
   int unconnected = socket(AF_INET, SOCK_STREAM, 0); require(unconnected >= 0, "control fresh stream");
   pollfd initial{unconnected, POLLPRI, 0};
-  require(poll(&initial, 1, 60) == 1 && (initial.revents & POLLHUP) && !(initial.revents & POLLPRI), "fresh stream hangup is not priority");
+  const int initial_rc = poll(&initial, 1, 60);
+  printf("TCP_PRIORITY_INITIAL rc=%d revents=%d\n", initial_rc, initial.revents); fflush(stdout);
+  require(initial_rc == 1 && (initial.revents & POLLHUP) && !(initial.revents & POLLPRI), "fresh stream hangup is not priority");
+  int initial_alias = dup(unconnected); require(initial_alias >= 0, "control fresh alias");
+  pollfd alias_hup{initial_alias, POLLPRI, 0};
+  require(poll(&alias_hup, 1, 0) == 1 && (alias_hup.revents & POLLHUP) && !(alias_hup.revents & POLLPRI), "fresh alias hangup is not priority");
+  require(close(initial_alias) == 0, "control fresh alias cleanup");
+  sockaddr_in bound{}; bound.sin_family = AF_INET; bound.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(unconnected, reinterpret_cast<sockaddr*>(&bound), sizeof(bound)) == 0, "control bound stream");
+  initial.revents = 0;
+  require(poll(&initial, 1, 0) == 1 && (initial.revents & POLLHUP) && !(initial.revents & POLLPRI), "bound unconnected stream hangup is not priority");
   require(close(unconnected) == 0, "control fresh stream cleanup");
   int listener = socket(AF_INET, SOCK_STREAM, 0); require(listener >= 0, "control listener");
   sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -139,7 +149,13 @@ static void endpoint_controls() {
   const int read_error = errno;
   const long long read_elapsed = millis() - read_start;
   require(received == -1 && (read_error == EAGAIN || read_error == EWOULDBLOCK) && read_elapsed < 200, "writable socket is not readable for MSG_DONTWAIT");
-  require(close(receiver) == 0 && close(client) == 0 && close(datagram) == 0 && close(listener) == 0, "control endpoint cleanup");
+  int connected_alias = dup(client); require(connected_alias >= 0, "control connected alias");
+  require(close(receiver) == 0, "control connected peer close");
+  pollfd eof{client, POLLIN, 0};
+  require(poll(&eof, 1, 2000) == 1 && recv(client, &byte, 1, 0) == 0, "control successful connect then EOF");
+  pollfd eof_alias{connected_alias, POLLPRI, 0};
+  require(poll(&eof_alias, 1, 0) >= 0 && !(eof_alias.revents & POLLPRI), "control completed connect alias EOF not priority");
+  require(close(connected_alias) == 0 && close(client) == 0 && close(datagram) == 0 && close(listener) == 0, "control endpoint cleanup");
   puts("PASS TCP priority: listener datagram and successful connect preserve finite priority-only waits");
 }
 static void connection_controls() {
@@ -150,9 +166,11 @@ static void connection_controls() {
   require(getsockname(reserved, reinterpret_cast<sockaddr*>(&address), &length) == 0, "reserve name");
   int client = socket(AF_INET, SOCK_STREAM, 0); require(client >= 0, "refused client");
   int flags = fcntl(client, F_GETFL); require(flags >= 0 && fcntl(client, F_SETFL, flags | O_NONBLOCK) == 0, "refused nonblock");
-  int connected = connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+  int connecting_alias = dup(client); require(connecting_alias >= 0, "connect through alias");
+  int connected = connect(connecting_alias, reinterpret_cast<sockaddr*>(&address), sizeof(address));
   const int connect_error = errno;
   require(connected == -1 && (errno == EINPROGRESS || errno == ECONNREFUSED), "refused connection pending");
+  require(close(connecting_alias) == 0, "connecting alias cleanup");
   pollfd refused{client, POLLPRI, 0};
   const long long start = millis();
   const int polled = poll(&refused, 1, 5000);
@@ -174,6 +192,10 @@ static void connection_controls() {
   require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "readiness preserved SO_ERROR");
   error = -1; length = sizeof(error);
   require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0, "only caller consumed SO_ERROR");
+  pollfd consumed{client, POLLPRI, 0};
+  int consumed_rc = poll(&consumed, 1, 0);
+  printf("TCP_PRIORITY_ERROR_CONSUMED rc=%d revents=%d\n", consumed_rc, consumed.revents); fflush(stdout);
+  require(consumed_rc == 1 && consumed.revents == POLLHUP, "consumed connection error leaves only hangup");
   require(close(client) == 0 && close(reserved) == 0, "refused cleanup");
   pollfd closed{client, POLLPRI, 0};
   require(poll(&closed, 1, 0) == 1 && closed.revents == POLLNVAL, "closed fd is invalid not urgent");

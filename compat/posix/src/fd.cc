@@ -103,7 +103,9 @@ int RegisterSocket(const SocketFd& state) {
     errno = saved;
     return -1;
   }
-  Insert(fd, state);
+  SocketFd registered = state;
+  if (!registered.connect_state) registered.connect_state = std::make_shared<std::atomic<ws::ConnectState>>(ws::ConnectState::kInitial);
+  Insert(fd, registered);
   return fd;
 }
 
@@ -367,7 +369,7 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
       int events = ((p->events & kIn) != 0 ? ws::kPollIn : 0) |
                    ((p->events & kOut) != 0 ? ws::kPollOut : 0) |
                    ((p->events & POLLPRI) != 0 ? ws::kPollPri : 0);
-      sockets.push_back({state.socket, events, 0});
+      sockets.push_back({state.socket, events, 0, state.connect_state});
       socket_index.push_back(i);
     } else if (!PollFile(p)) {
       waiting_files = true;

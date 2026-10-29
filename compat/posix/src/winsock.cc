@@ -656,6 +656,8 @@ int Membership(Socket s, bool join, Family family, const uint8_t* group, uint32_
 
 int Poll(PollEntry* entries, size_t count, int timeout_ms) {
   std::vector<WSAPOLLFD> fds(count);
+  std::vector<bool> lifecycle_hup(count, false);
+  bool has_lifecycle_hup = false;
   for (size_t i = 0; i < count; ++i) {
     fds[i].fd = static_cast<SOCKET>(entries[i].socket);
     // Winsock rejects its POLLPRI, but supports POLLRDBAND for TCP OOB.
@@ -665,28 +667,47 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
                                        ((entries[i].events & kPollPri) != 0 ? POLLRDBAND : 0));
     // Windows gates failed-connect ERR/HUP on normal interest, even though
     // those errors are unconditional in Linux poll. Arm write interest only
-    // for unconnected, non-listening streams. Connected writable sockets and
+    // for connecting, non-listening streams. Connected writable sockets and
     // unconnected datagrams must not cause an unrequested-write busy loop.
-    if ((fds[i].events & POLLWRNORM) == 0) {
+    if ((fds[i].events & POLLWRNORM) == 0 || entries[i].connect_state) {
       int type = 0, accepting = 0, length = sizeof(type);
       if (Api().getsockopt(fds[i].fd, SOL_SOCKET, SO_TYPE,
                            reinterpret_cast<char*>(&type), &length) == 0 && type == SOCK_STREAM) {
         length = sizeof(accepting);
         if (Api().getsockopt(fds[i].fd, SOL_SOCKET, SO_ACCEPTCONN,
                              reinterpret_cast<char*>(&accepting), &length) == 0 && !accepting) {
+          const ConnectState state = entries[i].connect_state ? entries[i].connect_state->load() : ConnectState::kConnecting;
           sockaddr_storage peer{}; length = sizeof(peer);
-          if (Api().getpeername(fds[i].fd, reinterpret_cast<sockaddr*>(&peer), &length) == SOCKET_ERROR &&
-              WSAGetLastError() == WSAENOTCONN) fds[i].events |= POLLWRNORM;
+          const int peer_result = Api().getpeername(fds[i].fd, reinterpret_cast<sockaddr*>(&peer), &length);
+          if (peer_result == 0) {
+            if (entries[i].connect_state) entries[i].connect_state->store(ConnectState::kConnected);
+          } else if (WSAGetLastError() == WSAENOTCONN) {
+            if (state != ConnectState::kConnecting) {
+              // Linux's unconnected TCP_CLOSE socket has HUP. Native Winsock
+              // reports neither that state nor a connecting socket as HUP.
+              // The shared lifecycle distinguishes them without SO_ERROR.
+              lifecycle_hup[i] = true;
+              has_lifecycle_hup = true;
+            }
+            // Completed failures retain write interest so unread native ERR
+            // survives until the caller consumes SO_ERROR, alongside HUP.
+            if (state != ConnectState::kInitial) fds[i].events |= POLLWRNORM;
+          }
         }
       }
     }
     fds[i].revents = 0;
   }
-  int rc = WSAPoll(fds.data(), static_cast<ULONG>(count), timeout_ms);
+  int rc = WSAPoll(fds.data(), static_cast<ULONG>(count), has_lifecycle_hup ? 0 : timeout_ms);
   if (rc == SOCKET_ERROR) return Fail();
   int ready = 0;
   for (size_t i = 0; i < count; ++i) {
     SHORT r = fds[i].revents;
+    if ((r & (POLLERR | POLLHUP)) && entries[i].connect_state) {
+      ConnectState expected = ConnectState::kConnecting;
+      entries[i].connect_state->compare_exchange_strong(expected, ConnectState::kFailed);
+    }
+    if (lifecycle_hup[i]) r |= POLLHUP;
     int out = 0;
     if (r & POLLRDNORM) out |= kPollIn;
     if ((r & POLLRDBAND) && (entries[i].events & kPollPri)) out |= kPollPri;

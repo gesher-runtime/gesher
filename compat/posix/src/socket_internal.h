@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <cstdlib>
 #include <memory>
+#include <atomic>
 
 #include <string>
 #include <vector>
@@ -62,10 +63,12 @@ inline constexpr int kPollErr = 8;
 inline constexpr int kPollHup = 16;
 inline constexpr int kPollNval = 32;
 
+enum class ConnectState { kInitial, kConnecting, kConnected, kFailed };
 struct PollEntry {
   Socket socket;
   int events;
   int revents;
+  std::shared_ptr<std::atomic<ConnectState>> connect_state;
 };
 
 // Starts Winsock once; false (errno set) if it cannot.
@@ -211,6 +214,8 @@ struct SocketFd {
   ws::Socket socket = ws::kInvalidSocket;
   bool nonblocking = false;
   bool reuse_addr = false;  // recorded only; see socket.cc
+  // Open-description lifetime: dup/dup2 retain the same connect lifecycle.
+  std::shared_ptr<std::atomic<ws::ConnectState>> connect_state;
 };
 
 // Takes ownership of `state.socket`: returns its new fd, or -1 with errno set

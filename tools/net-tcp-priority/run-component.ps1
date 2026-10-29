@@ -66,7 +66,7 @@ Write-Host 'PASS TCP priority consumer import policy: unknown/private/path/wrong
 foreach ($name in $native) { AssertImportRole $name @($m.imports.$name) }
 Write-Host ('TCP_PRIORITY_NDK_PUBLISHER ' + ($publisher | ConvertTo-Json -Compress))
 $commandSources = @{
-  'out'=@('compat/posix/src/winsock.cc','compat/posix/src/fd.cc','compat/posix/src/epoll.cc','compat/posix/src/select.cc','compat/bionic/socket_bionic.cc','tests/net-tcp-priority/contract.cc')
+  'out'=@('compat/posix/src/winsock.cc','compat/posix/src/socket.cc','compat/posix/src/fd.cc','compat/posix/src/epoll.cc','compat/posix/src/select.cc','compat/bionic/socket_bionic.cc','tests/net-tcp-priority/contract.cc')
   'out-arm64'=@('compat/arm64/dll/translator.cc')
 }
 foreach ($build in 'out','out-arm64') {

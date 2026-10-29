@@ -177,3 +177,33 @@ SO_ERROR are changed. Fresh stream HUP, idle listener, unconnected UDP,
 successful nonblocking connect and connected finite waits are strict added
 controls. Actual fresh CI on the corrected host and both NDK ABIs remains
 required; no source-only implementation is accepted by this entry.
+
+Correction3301dd66/component40859184041 is RED: both actual hosts still pass
+the non-inline urgent scenario, then the added fresh-stream HUP control fails
+before refused/alias controls or either ABI can execute. The independent
+expanded native40859184013 is GREEN and records fresh TCP band+write rc0;
+completed refusal returns ERR|HUP|WRNORM only when write interest is included
+(band-only and band+read both remain0). Raw logs are
+`tcp-408591-{oracle,component}{2022,2025}.log`. No unchanged retry occurred.
+
+The changed pending source retains the strict initial HUP assertion. A shared
+atomic Initial/Connecting/Connected/Failed record is allocated at socket registration, including
+the internal DNS registration path, and follows dup/dup2 through SocketFd's
+shared ownership. Connect marks Connecting before entering Winsock; success
+records Connected, EINPROGRESS/EALREADY/EINTR preserve Connecting, and other
+real-call failures record Failed. Actual native peer success records Connected;
+native ERR/HUP changes only an active Connecting record to Failed. The backend
+distinguishes an initial unconnected stream from a pending connection using
+that record plus actual SO_TYPE, SO_ACCEPTCONN and getpeername. Initial HUP is
+reported without waiting; pending connect errors retain conditional write
+interest. Both PollFds and MSG_DONTWAIT pass the same lifetime record. Existing
+finite timeout/cancellation behavior and error ownership remain unchanged.
+Failed endpoints retain HUP after caller error consumption and continue to
+request native write status so unread ERR remains visible before consumption.
+Fresh alias/bound-stream controls and a connect begun through an existing
+alias are added; socket.cc's actual compile command joins the strict producer
+and consumer roles. This is not shared O_NONBLOCK or inline-OOB parity.
+Strict post-SO_ERROR HUP and successful-connect/alias/EOF controls join the
+Linux reference before actual Windows acceptance. Failed TCP reconnect state
+is unspecified by connect(2); TCP AF_UNSPEC disconnect/reconnect and concurrent
+multiple connect attempts are not qualified by this bounded fixture.
