@@ -2,6 +2,7 @@
 #include "../../compat/framework/installed_guest.h"
 #include "../../compat/framework/restricted_launch.h"
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 
 namespace g = gesher::guest;
@@ -48,6 +49,19 @@ bool SlotsEmpty() {
   for (auto& slot : g::InstalledPolicy::Slots()) if (slot.load()) return false;
   return true;
 }
+void ProbeFdPrimitives(const char* role) {
+  HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  DWORD event_error = event ? ERROR_SUCCESS : GetLastError();
+  if (event) Check(CloseHandle(event), "fd diagnostic event close");
+  HANDLE nul = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+  DWORD nul_error = nul == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+  if (nul != INVALID_HANDLE_VALUE) Check(CloseHandle(nul), "fd diagnostic NUL close");
+  printf("LOWBOX_FD_DIAGNOSTIC role=%s event_ok=%d event_error=%lu nul_rw_ok=%d nul_rw_error=%lu\n",
+      role, event != nullptr, event_error, nul != INVALID_HANDLE_VALUE, nul_error);
+  fflush(stdout);
+  if (!std::strcmp(role, "host")) Check(event != nullptr && nul != INVALID_HANDLE_VALUE, "host fd primitive positive controls");
+}
 unsigned denied_operations = 0;
 DWORD WINAPI DenySecurity(HANDLE, SE_OBJECT_TYPE, SECURITY_INFORMATION, PSID, PSID, PACL, PACL) {
   ++denied_operations; return ERROR_ACCESS_DENIED;
@@ -80,6 +94,7 @@ std::wstring PrivateName(HANDLE handle) {
 int wmain(int argc, wchar_t** argv) {
   try {
     if (argc == 4 && !wcscmp(argv[1], L"--nested")) {
+      ProbeFdPrimitives("lowbox");
       HANDLE malicious = CreateNamedPipeW(argv[3], PIPE_ACCESS_DUPLEX,
           PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
           PIPE_UNLIMITED_INSTANCES, 1024, 1024, 0, nullptr);
@@ -141,6 +156,7 @@ int wmain(int argc, wchar_t** argv) {
     auto policy = create(assets);
     Check(bool(policy), "actual provision succeeds");
     printf("POLICY_RUNTIME_NESTED actual_gather=1 nested_directory=1 nested_file=1\n");
+    ProbeFdPrimitives("host");
     {
       SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
       std::wstring log_path = root + L"\\nested.log";
@@ -166,6 +182,18 @@ int wmain(int argc, wchar_t** argv) {
       Check(WaitForSingleObject(child.process(), 15000) == WAIT_OBJECT_0, "actual lowbox nested child completion");
       DWORD code = 0; Check(GetExitCodeProcess(child.process(), &code) && code == 0 && child.Stop().confirmed, "actual nested child exit and retirement");
       Check(CloseHandle(private_server) && CloseHandle(private_client), "actual private bootstrap owner cleanup");
+      HANDLE child_log = CreateFileW(log_path.c_str(), GENERIC_READ, 0,
+          nullptr, OPEN_EXISTING, 0, nullptr);
+      Check(child_log != INVALID_HANDLE_VALUE, "open exact retired child diagnostic log");
+      char diagnostic[4096]{}; DWORD diagnostic_size = 0; LARGE_INTEGER length{};
+      bool bounded = GetFileSizeEx(child_log, &length) && length.QuadPart >= 0 &&
+          length.QuadPart < static_cast<LONGLONG>(sizeof(diagnostic));
+      bool read_ok = bounded && ReadFile(child_log, diagnostic, static_cast<DWORD>(length.QuadPart), &diagnostic_size, nullptr) &&
+          diagnostic_size == static_cast<DWORD>(length.QuadPart);
+      bool closed = CloseHandle(child_log) != FALSE;
+      Check(bounded && read_ok && closed, "read and close exact retired child diagnostic log");
+      Check(std::strstr(diagnostic, "LOWBOX_FD_DIAGNOSTIC role=lowbox ") != nullptr, "actual lowbox diagnostic marker");
+      printf("%s", diagnostic); fflush(stdout);
       Check(DeleteFileW(log_path.c_str()), "nested child log cleanup");
       printf("POLICY_CHILD actual_lowbox=1 nested_create=1 file_reopen_read=1 nested_delete=1 exit=0 retired=1\n");
       printf("POLICY_PRIVATE actual_bootstrap=1 guest_serve_error=5 private_endpoints_inheritable=0\n");

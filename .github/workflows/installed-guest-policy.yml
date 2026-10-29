@@ -1,7 +1,7 @@
 name: Installed guest resource policy component
 on:
   push:
-    branches: [wip/binder-isolated-spawn, wip/binder-gather-repair]
+    branches: [wip/binder-isolated-spawn, wip/binder-gather-repair, wip/binder-lowbox-fd-diagnostic]
     paths: ['tests/windows/installed-guest-policy-*', 'compat/framework/installed_guest.h', '.github/workflows/installed-guest-policy.yml']
   workflow_dispatch:
 permissions:
@@ -71,6 +71,8 @@ jobs:
           Write-Host $output
           if ($code -ne 0) { throw "resource policy fixture failed: $code" }
           foreach ($row in @('POLICY_REPARSE subtree_rejected=1 outside_unchanged=1 owners=0',
+              'LOWBOX_FD_DIAGNOSTIC role=host ',
+              'LOWBOX_FD_DIAGNOSTIC role=lowbox ',
               'POLICY_RUNTIME_NESTED actual_gather=1 nested_directory=1 nested_file=1',
               'POLICY_READONLY low_label_rejected=1 missing_writeup_rejected=1 rollback_owners=0',
               'POLICY_PIN ancestor_rename=32 asset_rename=32 data_rename=32 final_file_rename=32',
