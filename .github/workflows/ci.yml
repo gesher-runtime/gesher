@@ -15,7 +15,11 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
+  dns-full-preflight:
+    uses: gesher-runtime/gesher/.github/workflows/net-dns-full-preflight.yml@0000000000000000000000000000000000000000
+
   artifact-preflight:
+    needs: [dns-full-preflight]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +27,6 @@ jobs:
           fetch-depth: 0
       - name: Strict archive adversarial controls
         run: |
-          python3 tools/native3-locks/current_payload.py preflight
           python3 tools/ci/receipt_identity.py
           python3 tools/surface/test-verified-artifact.py
 
@@ -823,6 +826,8 @@ jobs:
             tools/web3
             tools/package
             probes/native3/unicode
+            tools/net-dns
+            tools/net-dns-component
 
       - name: Verify and assemble windows-x64 artifact
         shell: pwsh

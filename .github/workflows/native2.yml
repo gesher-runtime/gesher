@@ -48,6 +48,8 @@ jobs:
             tests/apps/native2app
             tests/apps/net4resolverapp
             tests/e2e
+            tools/net-dns
+            tools/net-dns-component
 
       - name: Cache the Android NDK
         id: ndk
@@ -201,6 +203,9 @@ jobs:
             python3 tests/native2/symbols.py "$llvm/bin/llvm-readelf" "dist/symbols-$abi.txt" "${sets[@]}" --api "${api[@]}"
           done
           ls -laR dist | head -80
+
+      - name: Build and seal actual DNS ABI programs and independent references
+        run: python3 tools/net-dns/payload.py build dist
 
       - uses: actions/upload-artifact@v4
         with:
