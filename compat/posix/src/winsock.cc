@@ -1022,7 +1022,7 @@ Provider ClassifyProvider(Socket s) {
   return Provider::kOther;
 }
 
-int Poll(PollEntry* entries, size_t count, int timeout_ms) {
+int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver observer, void* context) {
   std::vector<WSAPOLLFD> fds(count);
   std::vector<bool> lifecycle_hup(count, false);
   std::vector<bool> owned_pending(count, false), closed(count, false);
@@ -1088,7 +1088,36 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
     if (!owned_pending[i] && !closed[i]) { active.push_back(fds[i]); active_index.push_back(i); }
   }
   if (!active.empty()) {
-    if (WSAPoll(active.data(), static_cast<ULONG>(active.size()), wait) == SOCKET_ERROR) return Fail();
+    if (observer) observer(true, 0, 0, context);  // finalized real native inputs; no locks
+    int sample_wait = wait;
+    for (;;) {
+      const int result = WSAPoll(active.data(), static_cast<ULONG>(active.size()), sample_wait);
+      const int native_error = result == SOCKET_ERROR ? WSAGetLastError() : 0;
+      if (observer) { observer(false, result, native_error, context); observer = nullptr; }
+      if (result != SOCKET_ERROR) break;
+      if (native_error != WSAEINVAL) return errno = ErrnoFromWsa(native_error), -1;
+      // With every native entry closed during this sample, WSAPoll returns a
+      // global WSAEINVAL instead of per-entry POLLNVAL. Recover only endpoints
+      // positively retired by their original description; arbitrary native
+      // errors retain their original failure. Every retry removes an entry,
+      // takes no further wait and never extends the caller's finite deadline.
+      std::vector<WSAPOLLFD> remaining;
+      std::vector<size_t> remaining_index;
+      for (size_t k = 0; k < active.size(); ++k) {
+        const size_t i = active_index[k];
+        bool retired = false;
+        if (entries[i].description) {
+          std::lock_guard<std::mutex> lock(entries[i].description->error_mutex);
+          retired = entries[i].description->native_closed || entries[i].description->native_closing;
+        }
+        if (retired) { fds[i].revents = POLLNVAL; closed[i] = true; }
+        else { remaining.push_back(active[k]); remaining_index.push_back(i); }
+      }
+      if (remaining.size() == active.size()) return errno = ErrnoFromWsa(native_error), -1;
+      active = std::move(remaining); active_index = std::move(remaining_index);
+      if (active.empty()) break;
+      sample_wait = 0;
+    }
     for (size_t k = 0; k < active.size(); ++k) fds[active_index[k]].revents = active[k].revents;
   } else if (wait > 0) Sleep(static_cast<DWORD>(wait));
   int ready = 0;

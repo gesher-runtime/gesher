@@ -141,7 +141,9 @@ int Membership(Socket s, bool join, Family family, const uint8_t* group, uint32_
 
 // Returns how many entries have revents set, 0 on timeout (timeout_ms < 0
 // waits forever).
-int Poll(PollEntry* entries, size_t count, int timeout_ms);
+using NativePollObserver = void (*)(bool before, int result, int native_error, void*);
+int Poll(PollEntry* entries, size_t count, int timeout_ms,
+         NativePollObserver observer = nullptr, void* context = nullptr);
 
 // --- names --------------------------------------------------------------------
 
@@ -257,7 +259,8 @@ struct SocketFd {
 using ConnectObserver = void (*)(ws::Socket, int, int, void*);
 int ConnectWithObserver(int fd, const void* address, uint32_t length, ConnectObserver observer, void* context);
 using PollObserver = void (*)(void*);
-int PollWithObserver(void* records, size_t count, int timeout_ms, PollObserver observer, void* context);
+int PollWithObserver(void* records, size_t count, int timeout_ms, PollObserver observer, void* context,
+                     ws::NativePollObserver native_observer = nullptr, void* native_context = nullptr);
 
 // Takes ownership of `state.socket`: returns its new fd, or -1 with errno set
 // (the socket is then closed).

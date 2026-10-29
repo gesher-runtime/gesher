@@ -15,6 +15,7 @@
 #include <time.h>
 #include <unistd.h>
 #ifdef GESHER
+#include <sys/eventfd.h>
 #include "../../compat/posix/src/socket_internal.h"
 namespace gesher::test { int NativeUdpErrorControl(); }
 #endif
@@ -357,7 +358,9 @@ static void owned_wait_controls() {
 struct PollWindow {
   pthread_mutex_t mutex; pthread_cond_t condition;
   bool captured = false, release = false;
+  bool native_window = false;
   pollfd records[3]{}; size_t count = 0;
+  int native_result = -99, native_error = -99;
   int result = -99; long long elapsed = -1;
 };
 static void pause_poll_snapshot(void* raw) {
@@ -368,9 +371,16 @@ static void pause_poll_snapshot(void* raw) {
   while (!window.release) require(pthread_cond_timedwait(&window.condition, &window.mutex, &deadline) == 0, "bounded held poll snapshot");
   require(pthread_mutex_unlock(&window.mutex) == 0, "poll snapshot unlock");
 }
+static void observe_native_poll(bool before, int result, int error, void* raw) {
+  auto& window = *static_cast<PollWindow*>(raw);
+  if (before) pause_poll_snapshot(raw);
+  else { window.native_result = result; window.native_error = error; }
+}
 static void* snapshot_poll(void* raw) {
   auto& window = *static_cast<PollWindow*>(raw); const long long start = millis();
-  window.result = gesher::PollWithObserver(window.records, window.count, 1500, pause_poll_snapshot, &window);
+  window.result = gesher::PollWithObserver(window.records, window.count, 1500,
+      window.native_window ? nullptr : pause_poll_snapshot, &window,
+      window.native_window ? observe_native_poll : nullptr, &window);
   window.elapsed = millis() - start; return nullptr;
 }
 static void poll_close_reuse_controls() {
@@ -420,6 +430,54 @@ static void poll_close_reuse_controls() {
     require(pthread_cond_destroy(&window.condition) == 0 && pthread_mutex_destroy(&window.mutex) == 0, "poll snapshot gate cleanup");
   }
   puts("PASS TCP priority: real poll snapshots reject closed reused and dup2 identities while aliases and other entries remain ready");
+}
+static void poll_native_error_controls() {
+  for (int mode = 0; mode != 3; ++mode) {
+    Pair old = pair(); const int victim = old.receiver;
+    int other = -1, sender = -1;
+    sockaddr_in address{};
+    if (mode == 1) { other = eventfd(1, EFD_NONBLOCK); require(other >= 0, "simultaneously ready actual non-socket eventfd"); }
+    if (mode == 2) {
+      other = socket(AF_INET, SOCK_DGRAM, 0); sender = socket(AF_INET, SOCK_DGRAM, 0);
+      require(other >= 0 && sender >= 0, "native error independent UDP endpoints");
+      address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      require(bind(other, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "native error UDP bind");
+      socklen_t length = sizeof(address); require(getsockname(other, reinterpret_cast<sockaddr*>(&address), &length) == 0, "native error UDP address");
+    }
+    PollWindow window{}; window.native_window = true; window.records[0] = {victim, POLLPRI, 0};
+    window.count = mode ? 2 : 1;
+    if (mode) window.records[1] = {other, POLLIN, 0};
+    require(pthread_mutex_init(&window.mutex, nullptr) == 0 && pthread_cond_init(&window.condition, nullptr) == 0, "native poll gate");
+    pthread_t waiter; require(pthread_create(&waiter, nullptr, snapshot_poll, &window) == 0, "native poll race caller");
+    require(pthread_mutex_lock(&window.mutex) == 0, "native poll race controller");
+    timespec deadline{}; require(clock_gettime(CLOCK_REALTIME, &deadline) == 0, "native poll race clock"); deadline.tv_sec += 2;
+    while (!window.captured) require(pthread_cond_timedwait(&window.condition, &window.mutex, &deadline) == 0, "real finalized native poll inputs captured");
+    require(pthread_mutex_unlock(&window.mutex) == 0, "native poll race controller unlock");
+    require(close(victim) == 0, "sole captured native socket physically closed before native call");
+    if (mode == 1) require(dup2(other, victim) == victim, "exact fd reused by non-socket while native array has no valid sockets");
+    if (mode == 2) require(sendto(sender, "n", 1, 0, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 1, "live native entry ready beside stale socket");
+    require(pthread_mutex_lock(&window.mutex) == 0, "native poll release lock"); window.release = true;
+    require(pthread_cond_broadcast(&window.condition) == 0 && pthread_mutex_unlock(&window.mutex) == 0, "release real native poll entry");
+    require(pthread_join(waiter, nullptr) == 0, "native poll caller retired");
+    printf("TCP_PRIORITY_NATIVE_POLL_CLOSE mode=%d native_rc=%d native_error=%d rc=%d victim=%d other=%d elapsed_ms=%lld\n",
+        mode, window.native_result, window.native_error, window.result, window.records[0].revents, window.records[1].revents, window.elapsed); fflush(stdout);
+    require(window.result == (mode ? 2 : 1) && window.records[0].revents == POLLNVAL && window.elapsed < 1500, "native sample error preserves closed identity and original deadline");
+    if (mode < 2) require(window.native_result == -1 && window.native_error == 10022, "real all-invalid native array returns documented WSAEINVAL");
+    if (mode) require(window.records[1].revents == POLLIN, "native sample error preserves simultaneous non-socket or socket readiness");
+    if (mode == 1) {
+      uint64_t value = 0; require(read(other, &value, sizeof(value)) == static_cast<int>(sizeof(value)) && value == 1, "native error recovery does not consume eventfd payload");
+      require(close(victim) == 0, "reused non-socket target cleanup");
+    }
+    if (mode == 2) { char byte{}; require(recv(other, &byte, 1, 0) == 1 && byte == 'n', "native error recovery preserves UDP payload"); require(close(sender) == 0, "native error UDP sender cleanup"); }
+    if (mode) require(close(other) == 0, "native error simultaneous endpoint cleanup");
+    require(close(old.sender) == 0, "native error peer cleanup");
+    require(pthread_cond_destroy(&window.condition) == 0 && pthread_mutex_destroy(&window.mutex) == 0, "native poll gate cleanup");
+  }
+  gesher::ws::PollEntry invalid{gesher::ws::kInvalidSocket, gesher::ws::kPollPri, 0, {}};
+  const int result = gesher::ws::Poll(&invalid, 1, 0); const int error = errno;
+  printf("TCP_PRIORITY_NATIVE_POLL_ERROR rc=%d errno=%d retired_description=0\n", result, error); fflush(stdout);
+  require(result == -1 && error == EINVAL, "genuine unowned native array failure is not rewritten as readiness");
+  puts("PASS TCP priority: real all-invalid native poll errors preserve closed identity simultaneous readiness and genuine failures");
 }
 struct LegacyWindow : ConnectWindow {
   int mode = 0, close_result = -99, replacement = -1;
@@ -783,6 +841,7 @@ int main(int argc, char** argv) {
 #ifdef GESHER
   owned_wait_controls();
   poll_close_reuse_controls();
+  poll_native_error_controls();
   legacy_lifetime_controls();
   native_udp_error_control();
 #endif

@@ -115,6 +115,13 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^TCP_PRIORITY_CONNECT_WINDOW backend=host-private native_ready=1 lock_busy=[01] getter_before_release=1 first=111 second=0\r?$') { throw 'HOST did not complete its real getter while the requester remained paused' }
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: real owned mode flips cancellation send deadline and native owner retirement\s*$') { throw 'Missing HOST actual owned wait controls' }
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: real poll snapshots reject closed reused and dup2 identities while aliases and other entries remain ready\s*$') { throw 'Missing HOST actual poll snapshot identity controls' }
+  if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: real all-invalid native poll errors preserve closed identity simultaneous readiness and genuine failures\s*$') { throw 'Missing HOST actual native poll error controls' }
+  if ($Context -eq 'host-posix') {
+    foreach ($mode in 0..2) {
+      if ($text -notmatch "(?m)^TCP_PRIORITY_NATIVE_POLL_CLOSE mode=$mode native_rc=-?[0-9]+ native_error=[0-9]+ rc=[12] victim=32 other=[01] elapsed_ms=[0-9]+\r?$") { throw "Missing HOST real native poll close window $mode" }
+    }
+    if ($text -notmatch '(?m)^TCP_PRIORITY_NATIVE_POLL_ERROR rc=-1 errno=22 retired_description=0\r?$') { throw 'Missing HOST genuine native error control' }
+  }
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: real legacy leases reject stale native calls after CRT reuse while global operations and getters progress\s*$') { throw 'Missing HOST actual legacy lifetime controls' }
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: positive native UDP error remains visible outside owned TCP refusal scope\s*$') { throw 'Missing HOST positive actual UDP error control' }
   if ($Context -eq 'host-posix') {

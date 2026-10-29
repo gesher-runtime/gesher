@@ -547,3 +547,21 @@ fixture now uses the PROVEN blocking-refused state; every pre-existing strict
 nonblocking refusal/alias/error/deadline control remains unchanged. Raw log:
 `C:/work/gesher-ci-review/tcp-409301-linux-listen.log`. Nonblocking-failed listen,
 like TCP AF_UNSPEC disconnect, is not claimed equivalent by this candidate.
+
+Independent whole-source review found a real all-invalid WSAPoll race before
+publication. Closing the sole sampled native endpoint after lifecycle capture
+but before the native call can yield global WSAEINVAL, bypassing fd identity
+revalidation and discarding simultaneous eventfd readiness. The candidate now
+recovers ONLY that native error and ONLY positively closing/closed original
+descriptions. Each zero-time retry removes at least one retired endpoint; other
+native errors and WSAEINVAL with no retired description remain failures. The
+single caller deadline is never restarted.
+
+An immutable private dependency pauses the REAL finalized WSAPoll inputs and
+records its actual result. Required HOST controls force a sole closed socket,
+that same all-invalid native array beside a ready eventfd with exact fd reuse,
+and an independent ready UDP entry. They require NVAL on the original identity,
+all other readiness and payload preservation, and a genuine unowned invalid
+native input still failing EINVAL. The first two cases require actual native
+WSAEINVAL10022, not a fabricated wrapper result. These new source controls remain
+UNQUALIFIED until Linux-first and fresh HOST/both-ABI CI after independent peer.

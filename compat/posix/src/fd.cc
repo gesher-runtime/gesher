@@ -385,7 +385,8 @@ bool PollFile(pollfd* p) {
 
 namespace gesher {
 
-static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted, PollObserver observer, void* context) {
+static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted, PollObserver observer, void* context,
+                       ws::NativePollObserver native_observer, void* native_context) {
   ULONGLONG deadline = gesher::DeadlineAfter(timeout);
   std::vector<ws::PollEntry> sockets;
   std::vector<nfds_t> socket_index;
@@ -442,7 +443,9 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
     }
 
     if (!sockets.empty()) {
-      if (ws::Poll(sockets.data(), sockets.size(), wait_ms) < 0) return -1;
+      const int sampled = ws::Poll(sockets.data(), sockets.size(), wait_ms, native_observer, native_context);
+      native_observer = nullptr;  // one real native sample, never a mutable global hook
+      if (sampled < 0) return -1;
       for (size_t k = 0; k < sockets.size(); ++k) {
         pollfd* p = &fds[socket_index[k]];
         SocketFd current;
@@ -514,12 +517,13 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
 }
 
 int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted) {
-  return PollFdsImpl(fds, nfds, timeout, interrupt, interrupted, nullptr, nullptr);
+  return PollFdsImpl(fds, nfds, timeout, interrupt, interrupted, nullptr, nullptr, nullptr, nullptr);
 }
 
-int PollWithObserver(void* records, size_t count, int timeout_ms, PollObserver observer, void* context) {
+int PollWithObserver(void* records, size_t count, int timeout_ms, PollObserver observer, void* context,
+                     ws::NativePollObserver native_observer, void* native_context) {
   if (static_cast<size_t>(static_cast<nfds_t>(count)) != count) return errno = EINVAL, -1;
-  return PollFdsImpl(static_cast<pollfd*>(records), static_cast<nfds_t>(count), timeout_ms, nullptr, nullptr, observer, context);
+  return PollFdsImpl(static_cast<pollfd*>(records), static_cast<nfds_t>(count), timeout_ms, nullptr, nullptr, observer, context, native_observer, native_context);
 }
 
 }  // namespace gesher
