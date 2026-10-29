@@ -73,6 +73,11 @@ public static class TsfJobSupervisor {
   [DllImport("kernel32.dll")] static extern uint GetCurrentProcessId();
   [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
   [DllImport("kernel32.dll",SetLastError=true)] static extern uint GetConsoleProcessList([Out] uint[] processes,uint count);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool AllocConsole();
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool FreeConsole();
+  [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int which);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetStdHandle(int which,IntPtr handle);
+  [DllImport("user32.dll",SetLastError=true)] static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool DuplicateHandle(IntPtr source,IntPtr handle,IntPtr target,out IntPtr copy,uint access,bool inherit,uint options);
 
   public sealed class Result {
@@ -173,6 +178,46 @@ public static class TsfJobSupervisor {
     if(count==0 || count>processes.Length || GetConsoleWindow()==IntPtr.Zero) return false;
     for(int i=0;i<count;i++) if(processes[i]==GetCurrentProcessId()) return true;
     return false;
+  }
+  public sealed class ConsoleLease { internal IntPtr Host, Input, Output, Error; public uint Pid; public long Birth; public string Image; }
+  public static ConsoleLease TestCreateConsole() {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || TestParentConsole()) throw new InvalidOperationException("CI only; console must be absent");
+    var lease=new ConsoleLease {Input=GetStdHandle(-10),Output=GetStdHandle(-11),Error=GetStdHandle(-12)};
+    Check(AllocConsole(),"Allocate isolated console");
+    try {
+      var allocated=new HashSet<IntPtr> {GetStdHandle(-10),GetStdHandle(-11),GetStdHandle(-12)};
+      Check(SetStdHandle(-10,lease.Input),"Restore parent stdin"); Check(SetStdHandle(-11,lease.Output),"Restore parent stdout"); Check(SetStdHandle(-12,lease.Error),"Restore parent stderr");
+      foreach(IntPtr h in allocated) if(Valid(h) && h!=lease.Input && h!=lease.Output && h!=lease.Error) {
+        if(!CloseHandle(h)) { lock(QuarantinedTestProcesses) QuarantinedTestProcesses.Add(h); throw Native("Close allocated console handle"); }
+      }
+      if(!TestParentConsole()) throw new IOException("Allocated console membership unproved");
+      uint pid; if(GetWindowThreadProcessId(GetConsoleWindow(),out pid)==0 || pid==0) throw Native("Console host window owner");
+      lease.Pid=pid; lease.Host=OpenProcess(0x100000|0x1000,false,pid); if(!Valid(lease.Host)) throw Native("Retain console host");
+      if(WaitForSingleObject(lease.Host,0)!=WAIT_TIMEOUT) throw new IOException("Console host not live");
+      long exit,kernel,user; Check(GetProcessTimes(lease.Host,out lease.Birth,out exit,out kernel,out user),"Console host birth");
+      var image=new StringBuilder(32768); uint size=(uint)image.Capacity; Check(QueryFullProcessImageName(lease.Host,0,image,ref size),"Console host image"); lease.Image=image.ToString();
+      if(lease.Birth<=0 || !String.Equals(lease.Image,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"conhost.exe"),StringComparison.OrdinalIgnoreCase)) throw new IOException("Unexpected console host identity");
+      return lease;
+    } catch {
+      FreeConsole(); SetStdHandle(-10,lease.Input); SetStdHandle(-11,lease.Output); SetStdHandle(-12,lease.Error);
+      if(Valid(lease.Host)) lock(QuarantinedTestProcesses) QuarantinedTestProcesses.Add(lease.Host); throw;
+    }
+  }
+  public static void TestCloseConsole(ConsoleLease lease) {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || lease==null || !Valid(lease.Host)) throw new InvalidOperationException("Invalid console lease");
+    bool freed=FreeConsole();
+    bool input=SetStdHandle(-10,lease.Input), output=SetStdHandle(-11,lease.Output), error=SetStdHandle(-12,lease.Error);
+    bool restored=input && output && error && GetStdHandle(-10)==lease.Input && GetStdHandle(-11)==lease.Output && GetStdHandle(-12)==lease.Error;
+    bool retired=WaitForSingleObject(lease.Host,5000)==WAIT_OBJECT_0;
+    bool closed=retired && CloseHandle(lease.Host);
+    if(!closed) lock(QuarantinedTestProcesses) QuarantinedTestProcesses.Add(lease.Host);
+    if(!freed || !restored || !retired || !closed) throw new IOException("Console retirement unproved freed="+freed+" restored="+restored+" retired="+retired+" closed="+closed);
+    lease.Host=IntPtr.Zero;
+  }
+  public static bool TestConsoleLease(ConsoleLease lease) {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || lease==null || !Valid(lease.Host) || !TestParentConsole()) return false;
+    uint pid; long birth,exit,kernel,user;
+    return GetWindowThreadProcessId(GetConsoleWindow(),out pid)!=0 && pid==lease.Pid && WaitForSingleObject(lease.Host,0)==WAIT_TIMEOUT && GetProcessTimes(lease.Host,out birth,out exit,out kernel,out user) && birth==lease.Birth;
   }
   public static bool TestDeniedParent(IntPtr process,uint expectedPid) {
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");

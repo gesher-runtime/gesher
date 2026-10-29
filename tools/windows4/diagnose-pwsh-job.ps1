@@ -1,3 +1,4 @@
+param([switch] $OwnedConsole)
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -cne 'true') { throw 'CI only' }
 Add-Type -Path tools/windows4/TsfJobSupervisor.cs
@@ -11,9 +12,17 @@ param([string] $Marker)
 [Console]::Error.WriteLine('DIAG_STDERR')
 '@ | Set-Content -LiteralPath $script -Encoding utf8
 try {
+  $lease = $null
+  if ($OwnedConsole) {
+    $lease = [TsfJobSupervisor]::TestCreateConsole()
+    $signature = Get-AuthenticodeSignature -LiteralPath $lease.Image
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'CN=Microsoft Windows') { throw 'Console host publisher not verified' }
+    Write-Host "PWSH_CONSOLE_LEASE pid=$($lease.Pid) birth=$($lease.Birth) image=$($lease.Image)"
+  }
   $exe = [Environment]::ProcessPath
   Write-Host "PWSH_PARENT_CONSOLE actual=$([TsfJobSupervisor]::TestParentConsole())"
   foreach ($variant in @('production','diag-detached-unlimited','diag-console-limited','diag-console-unlimited','diag-inherit-limited','diag-inherit-unlimited')) {
+    if ($lease -and -not [TsfJobSupervisor]::TestConsoleLease($lease)) { throw 'Console association changed' }
     $marker = Join-Path $root ($variant + '.marker')
     $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $script + '" "' + $marker + '"'
     $fault = if ($variant -eq 'production') { '' } else { $variant }
@@ -24,6 +33,7 @@ try {
     Write-Host ('PWSH_DIAGNOSTIC_JOB ' + ($r | ConvertTo-Json -Depth 6 -Compress))
   }
 } finally {
+  if ($lease) { [TsfJobSupervisor]::TestCloseConsole($lease); Write-Host 'PWSH_CONSOLE_LEASE retired=true' }
   Get-ChildItem -LiteralPath $root -File | Remove-Item
   Remove-Item -LiteralPath $root
 }

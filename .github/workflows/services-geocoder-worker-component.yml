@@ -18,10 +18,10 @@ jobs:
         shell: pwsh
         run: |
           $expected = @{
-            'tools/windows4/TsfJobSupervisor.cs' = 'f7633c35f55a0730ee760203d2b6c32ce5e1e768'
+            'tools/windows4/TsfJobSupervisor.cs' = '7a179c95f81bb68907371cec7a56ca84478d0405'
             'tools/windows4/TsfJobWorker.cs' = 'e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1'
             'tools/windows4/test-tsf-job-supervisor.ps1' = '11229b16ded45970e6b9102fdb44ba8ae8e076f4'
-            'tools/windows4/diagnose-pwsh-job.ps1' = '212e4d6e886be85404639bb6bd335aa1397803ec'
+            'tools/windows4/diagnose-pwsh-job.ps1' = 'ac95f66a8db3ae44fdb63e947338f5becfb75c7d'
             'tools/windows4/run-tsf-component.ps1' = '4474bae13d5fe73038e8569be454753cdb21df43'
           }
           foreach ($path in $expected.Keys) {
@@ -41,6 +41,9 @@ jobs:
       - name: Characterize PowerShell process startup
         shell: pwsh
         run: ./tools/windows4/diagnose-pwsh-job.ps1
+      - name: Characterize an owned PowerShell console
+        shell: pwsh
+        run: ./tools/windows4/diagnose-pwsh-job.ps1 -OwnedConsole
       - name: Exercise owned worker and child containment
         shell: pwsh
         run: ./tests/windows/tracks/geocoder-operation-fixture.ps1
