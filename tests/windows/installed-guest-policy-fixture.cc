@@ -126,7 +126,14 @@ int wmain(int argc, wchar_t** argv) {
       void* separate_view = MapViewOfFile(readonly_section, FILE_MAP_READ, 0, 0, 16);
       Check(separate_view != nullptr, "separate readonly section readable");
       uint32_t separate_magic = 0; memcpy(&separate_magic, separate_view, sizeof(separate_magic));
-      Check(UnmapViewOfFile(separate_view), "separate readonly view retired");
+      DWORD old_protection = 0;
+      BOOL protect_write = VirtualProtect(separate_view, 16, PAGE_READWRITE, &old_protection);
+      DWORD protect_error = protect_write ? ERROR_SUCCESS : GetLastError();
+      DWORD ignored_protection = 0;
+      bool protect_restored = !protect_write || VirtualProtect(separate_view, 16, old_protection, &ignored_protection) != FALSE;
+      printf("POLICY_PROPERTY_READONLY_PROTECT writable=%u error=%lu restored=%u\n", unsigned(protect_write), protect_error, unsigned(protect_restored));
+      bool readonly_unmapped = UnmapViewOfFile(separate_view) != FALSE;
+      Check(protect_restored && readonly_unmapped, "restore and retire separate readonly view");
       HANDLE separate_elevated = nullptr;
       BOOL separate_duplicate = DuplicateHandle(GetCurrentProcess(), readonly_section, GetCurrentProcess(),
           &separate_elevated, FILE_MAP_WRITE, FALSE, 0);
@@ -139,6 +146,17 @@ int wmain(int argc, wchar_t** argv) {
           unsigned(separate_magic == 0x47535052), unsigned(separate_duplicate), separate_error, unsigned(separate_writable != nullptr),
           separate_view_error, unsigned(separate_view_closed && separate_handle_closed));
       Check(separate_magic == 0x47535052 && separate_view_closed && separate_handle_closed, "separate readonly section observation cleanup");
+      HANDLE all_access = nullptr;
+      BOOL duplicate_all = DuplicateHandle(GetCurrentProcess(), readonly_section, GetCurrentProcess(), &all_access,
+          FILE_MAP_ALL_ACCESS, FALSE, 0);
+      DWORD all_error = duplicate_all ? ERROR_SUCCESS : GetLastError();
+      void* all_write_view = duplicate_all ? MapViewOfFile(all_access, FILE_MAP_WRITE, 0, 0, 16) : nullptr;
+      DWORD all_view_error = all_write_view ? ERROR_SUCCESS : (duplicate_all ? GetLastError() : 0);
+      bool all_view_closed = !all_write_view || UnmapViewOfFile(all_write_view) != FALSE;
+      bool all_closed = !duplicate_all || CloseHandle(all_access) != FALSE;
+      printf("POLICY_PROPERTY_READONLY_ALL duplicate=%u error=%lu writable_view=%u view_error=%lu cleanup=%u\n",
+          unsigned(duplicate_all), all_error, unsigned(all_write_view != nullptr), all_view_error, unsigned(all_view_closed && all_closed));
+      Check(all_view_closed && all_closed, "all-access section observation cleanup");
       HANDLE elevated_mutex = nullptr;
       BOOL elevated = DuplicateHandle(GetCurrentProcess(), inherited_mutex, GetCurrentProcess(),
           &elevated_mutex, MUTEX_ALL_ACCESS, FALSE, 0);
