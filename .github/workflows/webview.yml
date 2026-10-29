@@ -175,7 +175,7 @@ jobs:
               }
             } finally {
               if (-not $p.HasExited) {
-                $p.Kill($true)
+                try { $p.Kill($true) } catch { if (-not $p.HasExited) { throw } }
                 if (-not $p.WaitForExit(5000)) { throw "$fault survived forced cleanup" }
               }
               $p.Dispose()

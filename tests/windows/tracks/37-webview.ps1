@@ -45,7 +45,7 @@ foreach ($fault in @('normal', 'com', 'class', 'window', 'hook', 'ready', 'decis
     }
   } finally {
     if (-not $p.HasExited) {
-      $p.Kill($true)
+      try { $p.Kill($true) } catch { if (-not $p.HasExited) { throw } }
       if (-not $p.WaitForExit(5000)) { throw "Startup probe $fault survived forced cleanup" }
     }
     $p.Dispose()
