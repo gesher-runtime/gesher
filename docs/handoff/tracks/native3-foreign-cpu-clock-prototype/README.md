@@ -36,6 +36,13 @@ temporary handles keep their existing close behavior. No extra duplicate
 is required during creation, so this prototype avoids a new suspended-
 thread rollback path when DuplicateHandle is exhausted.
 
+A bounded read-only audit of every top-level C/header source in that exact
+winpthreads src directory found the record thread-handle closes only in
+thread.c. The other CloseHandle sites in sched.c close OpenProcess handles;
+cond/mutex/sem/spinlock sites close their synchronization objects. This audit
+does not cover arbitrary external consumers misusing the old borrowed
+pthread_gethandle API; such callers cannot take ownership of library handles.
+
 Generation allocation shares the registry lock, starts at one and never
 recycles: unsigned wrap to zero permanently prevents further registration.
 The future Gesher clock registry must key cached target clocks by this
