@@ -44,6 +44,12 @@ def build(llvm):
     provider = json.loads(receipt.read_text())
     assert provider['role'] == 'gesher-winpthreads-authority-routing-probe-v1'
     assert all(provider[k] == v for k, v in ctx.items())
+    production = Path(os.environ['GESHER_AUTHORITY_LLVM']).resolve()
+    production_receipt = production / 'gesher-winpthreads-authority.json'
+    shutil.copyfile(production_receipt, DIST / 'production-supplier.json')
+    for role, root in (('production',production),('probe',llvm)):
+        subprocess.check_call([sys.executable,str(ROOT / 'tools/host-pthread-authority/supplier_link_inventory.py'),
+                               str(root),str(DIST / ('supplier-link-'+role+'.json')),role])
     module_source=ROOT / 'tests/native/pthread_probe_callback_module.c'
     module_argv=[str(driver), '-D_WIN32_WINNT=0x0A00', '-Wall', '-Wextra', '-Werror', '-shared',
                  str(module_source), '-o', str(DIST / 'probe-callback.dll')]
@@ -75,7 +81,7 @@ def verify():
     ctx = context()
     data = json.loads((DIST / 'bundle.json').read_text())
     assert data['context'] == ctx
-    expected = set(CASES) | {'libwinpthread-1.dll', 'supplier.json', 'probe-callback.dll', 'runtime-symbol-inventory.json'}
+    expected = set(CASES) | {'libwinpthread-1.dll', 'supplier.json', 'production-supplier.json', 'supplier-link-production.json', 'supplier-link-probe.json', 'probe-callback.dll', 'runtime-symbol-inventory.json'}
     assert set(data['members']) == expected
     assert {p.name for p in DIST.iterdir()} == expected | {'bundle.json'}
     assert all(sha(DIST / name) == digest for name, digest in data['members'].items())
@@ -84,6 +90,27 @@ def verify():
     assert all(provider[k] == v for k, v in ctx.items())
     assert provider['compiler_driver_sha256'] == data['driver_sha256']
     assert provider['files']['bin/libwinpthread-1.dll'] == sha(DIST / 'libwinpthread-1.dll')
+    production_provider=json.loads((DIST / 'production-supplier.json').read_text())
+    assert production_provider['role']=='gesher-winpthreads-authority-v1'
+    assert all(production_provider[k]==v for k,v in ctx.items())
+    link_maps={}
+    for role,owner,receipt_name in (('production',production_provider,'production-supplier.json'),('probe',provider,'supplier.json')):
+        link=json.loads((DIST / ('supplier-link-'+role+'.json')).read_text()); link_maps[role]=link
+        assert link['role']==role and link['context']==ctx
+        assert link['supplier_receipt_sha256']==sha(DIST / receipt_name)
+        assert link['archive_sha256']==owner['files']['lib/libwinpthread.a']
+        assert link['dll_sha256']==owner['files']['bin/libwinpthread-1.dll']
+        assert link['nm_sha256'] and link['readobj_sha256']
+        assert set(link['maps'])=={'undefined','defined','exports','imports'}
+        for name,entry in link['maps'].items():
+            argv=entry['argv']; output=entry['text']
+            assert output and entry['sha256']==hashlib.sha256(output.encode()).hexdigest()
+            if name in ('undefined','defined'):
+                assert len(argv)==4 and argv[0].endswith('/bin/llvm-nm') and argv[1:3]==['--'+name+'-only','--print-file-name']
+                assert argv[-1].endswith('/x86_64-w64-mingw32/lib/libwinpthread.a')
+            else:
+                assert len(argv)==3 and argv[0].endswith('/bin/llvm-readobj') and argv[1]=='--coff-'+name
+                assert argv[-1].endswith('/x86_64-w64-mingw32/bin/libwinpthread-1.dll')
     inventory=json.loads((DIST / 'runtime-symbol-inventory.json').read_text())
     assert inventory['role']=='pinned-toolchain-runtime-symbol-inventory-v1'
     assert all(inventory[k]==ctx[k] for k in ('GITHUB_SHA','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT'))
@@ -91,6 +118,7 @@ def verify():
     assert inventory['rows'] and inventory['roots'][:2]==['x86_64-w64-mingw32/lib','x86_64-w64-mingw32/bin']
     assert len({row['path'] for row in inventory['rows']})==len(inventory['rows'])
     assert inventory['nm_sha256'] and inventory['readobj_sha256']
+    assert all(link['nm_sha256']==inventory['nm_sha256'] and link['readobj_sha256']==inventory['readobj_sha256'] for link in link_maps.values())
     for row in inventory['rows']:
         argv=row['command']; path=row['path']
         assert row['sha256'] and '..' not in Path(path).parts and argv[-1].endswith('/'+path)
