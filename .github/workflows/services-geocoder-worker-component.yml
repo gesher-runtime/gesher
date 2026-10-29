@@ -45,7 +45,7 @@ jobs:
         run: |
           if ((git rev-parse HEAD) -cne $env:GITHUB_SHA -or $LASTEXITCODE -ne 0) { throw 'WinRT checkout identity mismatch' }
           $expected = @{
-            'tests/windows/tracks/geocoder-operation.ps1' = '574a761bf6a04893bf5f3746f184935bd5fa4195'
+            'tests/windows/tracks/geocoder-operation.ps1' = 'f9389b8e5a95a2e4b56356e5c4bfdb71188c9ca8'
             'tests/windows/tracks/geocoder-probe-exit.cs' = '4927e87a71c41069bbed24be748cfd0b771583d5'
             'tests/windows/tracks/geocoder-winrt-supplier.cs' = '11da9f04efdbb98de30006b0c26e169bec6d8b19'
             'tests/windows/helpers/geocoder-provider-probe.ps1' = 'd02fc316ccaca1ac856eaeae64df6e4053da569c'

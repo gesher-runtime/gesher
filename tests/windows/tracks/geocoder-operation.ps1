@@ -66,14 +66,29 @@ function New-WinRTGeocoderAdapter($Operation, [Type] $ResultType) {
   }
 }
 
+# Hash directly through .NET: an owned Windows PowerShell child cannot assume
+# that the parent's PSModulePath provides the Get-FileHash script module.
+function Get-GeocoderSourceSha256([string] $Path) {
+  $stream = $null
+  $hasher = $null
+  try {
+    $stream = [IO.File]::OpenRead($Path)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    return [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+  } finally {
+    if ($hasher) { $hasher.Dispose() }
+    if ($stream) { $stream.Dispose() }
+  }
+}
+
 # CI receipt for Windows PowerShell's .NET Framework CodeDOM compilation.
 function Import-GeocoderProbeType([string] $Source) {
   $compiler = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
-  if (-not (Test-Path -LiteralPath $compiler)) { throw 'Expected .NET Framework C# compiler' }
+  if (-not [IO.File]::Exists($compiler)) { throw 'Expected .NET Framework C# compiler' }
   Add-Type -AssemblyName Microsoft.CSharp
   $provider = [Microsoft.CSharp.CSharpCodeProvider]::new()
   try {
-    Write-Host "WINRT_COMPILER source_sha=$env:GITHUB_SHA source=$Source source_sha256=$((Get-FileHash $Source -Algorithm SHA256).Hash) compiler=$compiler compiler_sha256=$((Get-FileHash $compiler -Algorithm SHA256).Hash) compiler_version=$((Get-Item $compiler).VersionInfo.FileVersion) provider=$($provider.GetType().Assembly.FullName) ps=$($PSVersionTable.PSVersion) clr=$([Environment]::Version)"
+    Write-Host "WINRT_COMPILER source_sha=$env:GITHUB_SHA source=$Source source_sha256=$(Get-GeocoderSourceSha256 $Source) compiler=$compiler compiler_sha256=$(Get-GeocoderSourceSha256 $compiler) compiler_version=$([Diagnostics.FileVersionInfo]::GetVersionInfo($compiler).FileVersion) provider=$($provider.GetType().Assembly.FullName) ps=$($PSVersionTable.PSVersion) clr=$([Environment]::Version)"
   } finally { $provider.Dispose() }
   Add-Type -Path $Source
 }
