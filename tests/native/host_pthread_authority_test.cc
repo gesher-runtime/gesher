@@ -91,6 +91,60 @@ void Dead(Target& t, clockid_t id) {
   CloseOwned(t.oracle);
 }
 
+pthread_key_t exit_key;
+std::atomic<int> exit_destructors{0};
+std::atomic<bool> hold_destructor{false}, destructor_entered{false}, release_destructor{false};
+void ExitDestructor(void*) {
+  ++exit_destructors;
+  if (hold_destructor) {
+    destructor_entered = true;
+    while (!release_destructor) Sleep(0);
+  }
+}
+DWORD WINAPI ExplicitExitWorker(void* arg) {
+  auto& t = *static_cast<Target*>(arg);
+  t.identity = pthread_self();
+  Require(pthread_setspecific(exit_key, &t) == 0, "external set key");
+  Require(DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                          &t.oracle, THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0), "external oracle");
+  ++fixture_owned_handles;
+  t.ready = true;
+  while (!t.stop) Sleep(0);
+  pthread_exit(nullptr);
+  return 0;
+}
+void ExternalExitStress() {
+  Require(pthread_key_create(&exit_key, ExitDestructor) == 0, "external key create");
+  for (int i = 0; i != 256; ++i) {
+    Target t;
+    HANDLE thread = CreateThread(nullptr, 0, ExplicitExitWorker, &t, 0, nullptr);
+    Require(thread != nullptr, "external explicit create"); ++fixture_owned_handles;
+    Await(t);
+    clockid_t saved = 0;
+    Require(pthread_getcpuclockid(t.identity, &saved) == 0, "external clock acquire");
+    if (i % 4 == 0) Require(pthread_detach(t.identity) == 0, "external live detach");
+    hold_destructor = i % 4 == 1;
+    destructor_entered = false;
+    release_destructor = false;
+    t.stop = true;
+    if (i % 4 == 1) {
+      ULONGLONG deadline = GetTickCount64() + 5000;
+      while (!destructor_entered && GetTickCount64() < deadline) Sleep(1);
+      Require(destructor_entered, "external destructor barrier");
+      Require(pthread_detach(t.identity) == 0, "external detach during destructor");
+      release_destructor = true;
+    }
+    Require(WaitForSingleObject(thread, 5000) == WAIT_OBJECT_0, "external real exit");
+    if (i % 4 == 2) Require(pthread_join(t.identity, nullptr) == 0, "external join");
+    if (i % 4 == 3) Require(pthread_detach(t.identity) == 0, "external ended detach");
+    Require(exit_destructors == i + 1, "external destructor exactly once");
+    Dead(t, saved);
+    CloseOwned(thread);
+  }
+  Require(pthread_key_delete(exit_key) == 0, "external key delete");
+  std::puts("PASS host-authority external-explicit-exit live-detach destructor-barrier join ended-detach key-destructor reuse stale-clock");
+  CountHandles("external-exit-retired");
+}
 void Stress() {
   CountHandles("stress-entry");
   // Every exhausted slot holds a genuine, still-live distinct target.
@@ -241,6 +295,7 @@ int main() {
     auto id = Check(t, "Win32-self-attach");
     t.stop = true; Dead(t, id); DWORD exit = 0;
     Require(GetExitCodeThread(th, &exit) && exit == 259, "real exit 259"); CloseOwned(th); }
+  ExternalExitStress();
   Stress();
   CountHandles("final-before-original-bound");
   Require(fixture_owned_handles == 0, "all fixture-owned handles closed");

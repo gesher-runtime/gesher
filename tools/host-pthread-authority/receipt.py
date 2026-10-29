@@ -132,13 +132,13 @@ def supplier(source, llvm, role):
     for name in ('lib/libwinpthread.a', 'lib/libwinpthread.dll.a'):
         output = command(str(llvm / 'bin/llvm-nm'), '--defined-only', str(target / name))
         assert symbol in output, name
-        assert ('gesher_winpthread_cpu_test_control_v1' in output) == (role == 'fault'), 'Supplier test symbol role mismatch'
-        assert ('gesher_host_cpu_clock_test_exhaust_ids_v1' in output) == (role == 'fault'), 'Clock fault symbol role mismatch'
+        for hook in ('gesher_winpthread_cpu_test_control_v1', 'gesher_winpthread_exit_test_v1', 'gesher_host_cpu_clock_test_exhaust_ids_v1'):
+            assert (hook in output) == (role == 'fault'), 'Supplier test symbol role mismatch'
         result[name + ':symbols'] = output
     exports = command(str(llvm / 'bin/llvm-readobj'), '--coff-exports', str(target / 'bin/libwinpthread-1.dll'))
     assert symbol in exports
-    assert ('gesher_winpthread_cpu_test_control_v1' in exports) == (role == 'fault'), 'DLL fault export role mismatch'
-    assert ('gesher_host_cpu_clock_test_exhaust_ids_v1' in exports) == (role == 'fault'), 'Clock fault export role mismatch'
+    for hook in ('gesher_winpthread_cpu_test_control_v1', 'gesher_winpthread_exit_test_v1', 'gesher_host_cpu_clock_test_exhaust_ids_v1'):
+        assert (hook in exports) == (role == 'fault'), 'DLL fault export role mismatch'
     result['dll_exports'] = exports
     imports = command(str(llvm / 'bin/llvm-readobj'), '--coff-imports', str(target / 'bin/libwinpthread-1.dll'))
     result['dll_import_names'] = dll_imports(imports)

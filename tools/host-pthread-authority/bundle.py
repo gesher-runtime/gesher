@@ -17,7 +17,31 @@ MEMBERS = {'host_pthread_authority_test.exe', 'host_pthread_supplier_test.exe',
            'host_pthread_mixed_provider_test.exe', 'imports-mixed.txt',
            'host_pthread_bad_anchor_test.exe', 'imports-bad-anchor.txt',
            'host_pthread_descriptor_test.exe', 'imports-descriptor.txt',
-           'exports-descriptor-host.txt', 'exports-descriptor-dll.txt'}
+           'exports-descriptor-host.txt', 'exports-descriptor-dll.txt',
+           'retirement-static.exe', 'retirement-dynamic.exe', 'fault-libwinpthread-1.dll',
+           'retirement-compiler.json', 'retirement-production-compiler.json',
+           'retirement-production-static.exe', 'retirement-production-dynamic.exe'}
+
+
+def compile_retirement(llvm, provider):
+    assert provider in ('production', 'fault')
+    prefix = 'retirement-production' if provider == 'production' else 'retirement'
+    context()
+    driver = llvm / 'bin/x86_64-w64-mingw32-clang'
+    src = ROOT / 'tests/native/host_pthread_retirement_test.c'
+    rows = {}
+    for role, archive in (('static', 'libwinpthread.a'), ('dynamic', 'libwinpthread.dll.a')):
+        library = llvm / 'x86_64-w64-mingw32/lib' / archive
+        output = DIST / (prefix + '-' + role + '.exe')
+        argv = [str(driver), '-D_WIN32_WINNT=0x0A00', '-Wall', '-Wextra', '-Werror',
+                str(src), str(library), '-o', str(output)]
+        subprocess.run(argv, check=True)
+        imports = subprocess.check_output([str(llvm / 'bin/llvm-readobj'), '--coff-imports', str(output)], text=True)
+        assert ('libwinpthread-1.dll' in imports.lower()) == (role == 'dynamic')
+        rows[role] = dict(command=argv, library_sha256=sha(library), output_sha256=sha(output), imports=imports)
+    data = dict(context=context(), source_sha256=sha(src), compiler_driver_sha256=sha(driver),
+                configured_driver=str(driver), supplier_receipt_sha256=sha(llvm / 'gesher-winpthreads-authority.json'), roles=rows)
+    (DIST / (prefix + '-compiler.json')).write_text(json.dumps(data, sort_keys=True, indent=2))
 
 
 def compile_client(llvm):
@@ -116,10 +140,14 @@ def verify():
     supplier = json.loads((DIST / 'supplier.json').read_text())
     assert supplier['files']['bin/libwinpthread-1.dll'] == sha(DIST / 'libwinpthread-1.dll')
     assert supplier['files']['share/mingw32/COPYING.winpthreads.txt'] == sha(DIST / 'COPYING.winpthreads.txt')
+    verify_retirement('retirement', 'fault-supplier.json')
+    verify_retirement('retirement-production', 'supplier.json')
     for role, member in (('production', 'supplier.json'), ('fault', 'fault-supplier.json')):
         host = json.loads((DIST / ('host-' + role + '-role.json')).read_text())
         provider = json.loads((DIST / member).read_text())
         assert host['role'] == role and host['test_hook_compiled'] == (role == 'fault')
+        if role == 'fault':
+            assert provider['files']['bin/libwinpthread-1.dll'] == sha(DIST / 'fault-libwinpthread-1.dll')
         assert host['supplier_receipt_sha256'] == sha(DIST / member)
         assert host['context'] == context()
         assert provider['role'] == 'gesher-winpthreads-authority-' + ('fault-v1' if role == 'fault' else 'v1')
@@ -127,8 +155,31 @@ def verify():
     print('Verified initial host authority bundle; no full/guest/stress qualification implied')
 
 
+def verify_retirement(prefix, supplier_member):
+    retirement = json.loads((DIST / (prefix + '-compiler.json')).read_text())
+    supplier = json.loads((DIST / supplier_member).read_text())
+    assert retirement['context'] == context()
+    assert retirement['source_sha256'] == sha(ROOT / 'tests/native/host_pthread_retirement_test.c')
+    assert retirement['compiler_driver_sha256'] == supplier['compiler_driver_sha256']
+    assert retirement['supplier_receipt_sha256'] == sha(DIST / supplier_member)
+    assert set(retirement['roles']) == {'static', 'dynamic'}
+    for role, archive in (('static', 'libwinpthread.a'), ('dynamic', 'libwinpthread.dll.a')):
+        row = retirement['roles'][role]
+        argv = row['command']
+        assert len(argv) == 9 and argv[0] == retirement['configured_driver']
+        assert argv[1:5] == ['-D_WIN32_WINNT=0x0A00', '-Wall', '-Wextra', '-Werror']
+        assert argv[5].endswith('/tests/native/host_pthread_retirement_test.c')
+        assert argv[6].endswith('/x86_64-w64-mingw32/lib/' + archive)
+        assert argv[7] == '-o' and argv[8].endswith('/host-authority-fixture/' + prefix + '-' + role + '.exe')
+        assert row['library_sha256'] == supplier['files']['lib/' + archive]
+        assert row['output_sha256'] == sha(DIST / (prefix + '-' + role + '.exe'))
+        assert ('libwinpthread-1.dll' in row['imports'].lower()) == (role == 'dynamic')
+
+
 if __name__ == '__main__':
     if sys.argv[1] == 'compile-client':
         compile_client(Path(sys.argv[2]))
+    elif sys.argv[1] == 'compile-retirement':
+        compile_retirement(Path(sys.argv[2]), sys.argv[3])
     else:
         {'record': record, 'verify': verify}[sys.argv[1]]()
