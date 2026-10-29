@@ -21,6 +21,7 @@ jobs:
             'tools/windows4/TsfJobSupervisor.cs' = '042c47d32688923f06c0032bd36a828b141958c4'
             'tools/windows4/TsfJobWorker.cs' = 'e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1'
             'tools/windows4/test-tsf-job-supervisor.ps1' = '11229b16ded45970e6b9102fdb44ba8ae8e076f4'
+            'tools/windows4/diagnose-pwsh-job.ps1' = 'de18eab0e7207b15bc6d25f5369ee1ed11027557'
             'tools/windows4/run-tsf-component.ps1' = '4474bae13d5fe73038e8569be454753cdb21df43'
           }
           foreach ($path in $expected.Keys) {
