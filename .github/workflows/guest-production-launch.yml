@@ -67,7 +67,14 @@ jobs:
           $output = RunTimed (Resolve-Path guest-artifact/guest-isolation-probe.exe).Path @() 45
           $code = $LASTEXITCODE
           Write-Host $output
-          if ($code -ne 0) { throw "fixture/supervisor failed: $code" }
+          if ($code -ne 0) {
+            # A distinct diagnostic invocation cannot qualify the original run.
+            $diagnostic = RunTimed (Resolve-Path guest-artifact/guest-isolation-probe.exe).Path @('--diagnose') 45
+            $diagnosticCode = $LASTEXITCODE
+            Write-Host $diagnostic
+            Write-Host "GUEST_DEBUG_VERDICT source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT exit=$diagnosticCode qualification=false"
+            throw "fixture/supervisor failed: $code"
+          }
           $expected = @(
             'PASS shared-api bounded-admission-allocation-free-handoff-busy-retry-unknown',
             'PASS shared-api unconfirmed-retirement-evidence-owned-retry-quarantine',

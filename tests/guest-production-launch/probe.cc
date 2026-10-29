@@ -14,6 +14,7 @@
 
 // A failed cleanup destructor must not allocate even when allocation is fatal.
 static bool g_forbid_allocations = false;
+static bool g_debug_child = false;
 void* operator new(size_t size) {
   if (g_forbid_allocations) abort();
   void* result = malloc(size ? size : 1);
@@ -72,6 +73,87 @@ struct Handle {
     h = next;
   }
   bool valid() const { return h && h != INVALID_HANDLE_VALUE; }
+};
+// CI diagnosis only: attach to the exact suspended owner, never enumerate or
+// attach unrelated processes. Original qualification always runs without this.
+struct ChildDebugger {
+  HANDLE process = nullptr, thread = nullptr, ready = nullptr;
+  DWORD pid = 0;
+  std::atomic<bool> stop{false}, attached{false};
+  static DWORD WINAPI Run(void* parameter) {
+    auto& self = *static_cast<ChildDebugger*>(parameter);
+    const BOOL attached = DebugActiveProcess(self.pid);
+    printf("DEBUG attach pid=%lu success=%d error=%lu\n", self.pid, attached, attached ? 0UL : GetLastError());
+    if (attached) DebugSetProcessKillOnExit(FALSE);
+    self.attached.store(attached != FALSE);
+    SetEvent(self.ready);
+    if (!attached) return 1;
+    const ULONGLONG deadline = GetTickCount64() + 25000;
+    bool exited = false;
+    while (!self.stop.load() && GetTickCount64() < deadline) {
+      DEBUG_EVENT event{};
+      if (!WaitForDebugEvent(&event, 50)) continue;
+      DWORD continuation = DBG_CONTINUE;
+      if (event.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT || event.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT) {
+        HANDLE file = event.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT ? event.u.LoadDll.hFile : event.u.CreateProcessInfo.hFile;
+        void* base = event.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT ? event.u.LoadDll.lpBaseOfDll : event.u.CreateProcessInfo.lpBaseOfImage;
+        wchar_t path[32768]{};
+        DWORD length = file ? GetFinalPathNameByHandleW(file, path, 32768, 0) : 0;
+        printf("DEBUG module pid=%lu base=%p path=%ls path-length=%lu\n", event.dwProcessId, base, path, length);
+        if (file) CloseHandle(file);
+      } else if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
+        const auto& exception = event.u.Exception;
+        printf("DEBUG exception pid=%lu tid=%lu code=0x%08lx first=%lu address=%p parameters=%lu\n",
+            event.dwProcessId, event.dwThreadId, exception.ExceptionRecord.ExceptionCode,
+            exception.dwFirstChance, exception.ExceptionRecord.ExceptionAddress, exception.ExceptionRecord.NumberParameters);
+        for (DWORD i = 0; i < exception.ExceptionRecord.NumberParameters && i < EXCEPTION_MAXIMUM_PARAMETERS; ++i)
+          printf("DEBUG exception-parameter index=%lu value=0x%llx\n", i,
+              static_cast<unsigned long long>(exception.ExceptionRecord.ExceptionInformation[i]));
+        Handle thread;
+        thread.h = OpenThread(THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, event.dwThreadId);
+        CONTEXT context{}; context.ContextFlags = CONTEXT_FULL;
+        if (thread.valid() && GetThreadContext(thread.h, &context)) {
+          printf("DEBUG context rip=0x%llx rsp=0x%llx rcx=0x%llx rdx=0x%llx r8=0x%llx r9=0x%llx\n",
+              context.Rip, context.Rsp, context.Rcx, context.Rdx, context.R8, context.R9);
+          unsigned long long stack[32]{}; SIZE_T bytes = 0;
+          if (ReadProcessMemory(self.process, reinterpret_cast<void*>(context.Rsp), stack, sizeof(stack), &bytes))
+            for (SIZE_T i = 0; i < bytes / sizeof(stack[0]); ++i) printf("DEBUG stack index=%zu address=0x%llx\n", i, stack[i]);
+        } else printf("DEBUG context-error=%lu\n", GetLastError());
+        if (exception.ExceptionRecord.ExceptionCode != EXCEPTION_BREAKPOINT) continuation = DBG_EXCEPTION_NOT_HANDLED;
+      } else if (event.dwDebugEventCode == OUTPUT_DEBUG_STRING_EVENT) {
+        char message[256]{}; SIZE_T bytes = 0;
+        if (!event.u.DebugString.fUnicode && ReadProcessMemory(self.process, event.u.DebugString.lpDebugStringData,
+            message, event.u.DebugString.nDebugStringLength < sizeof(message) ? event.u.DebugString.nDebugStringLength : sizeof(message)-1, &bytes))
+          printf("DEBUG child-message pid=%lu text=%s\n", event.dwProcessId, message);
+      } else if (event.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT) {
+        printf("DEBUG exit pid=%lu code=0x%08lx\n", event.dwProcessId, event.u.ExitProcess.dwExitCode);
+        exited = true;
+      }
+      if (!ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continuation)) break;
+      if (exited) break;
+    }
+    if (!exited) printf("DEBUG detach pid=%lu success=%d\n", self.pid, DebugActiveProcessStop(self.pid));
+    return 0;
+  }
+  bool Start(HANDLE exact_process, DWORD exact_pid) {
+    process = exact_process; pid = exact_pid;
+    ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!ready) return false;
+    thread = CreateThread(nullptr, 0, Run, this, 0, nullptr);
+    return thread && WaitForSingleObject(ready, 5000) == WAIT_OBJECT_0 && attached.load();
+  }
+  ~ChildDebugger() {
+    stop.store(true);
+    if (thread) {
+      // No thread termination: our event loop has a bounded 50ms wait.
+      if (WaitForSingleObject(thread, 5000) != WAIT_OBJECT_0) {
+        fprintf(stderr, "DEBUG debugger-thread failed bounded retirement\n");
+        ExitProcess(89);
+      }
+      CloseHandle(thread);
+    }
+    if (ready) CloseHandle(ready);
+  }
 };
 static bool denied(HANDLE h) {
   const DWORD error = GetLastError();
@@ -227,12 +309,15 @@ static constexpr char kRows[] =
     "PASS child explicit-resource-pipe challenge=Gesher-resource-v1\n";
 
 static int child(int argc, wchar_t** argv) {
+  OutputDebugStringA("guest child entered before argument parsing");
   if (argc != 11) return 10;
   HANDLE omitted = reinterpret_cast<HANDLE>(_wcstoui64(argv[10], nullptr, 10));
   HANDLE diagnostic = reinterpret_cast<HANDLE>(_wcstoui64(argv[9], nullptr, 10));
+  OutputDebugStringA("guest child before first inherited pipe write");
   const IpcObservation before_omitted{reinterpret_cast<ULONG_PTR>(omitted), 0, 0x47444941, 0};
   if (!write_bytes(diagnostic, reinterpret_cast<const char*>(&before_omitted), sizeof(before_omitted))) return 75;
   SetLastError(ERROR_SUCCESS);
+  OutputDebugStringA("guest child before omitted SetEvent");
   if (SetEvent(omitted) || GetLastError() != ERROR_INVALID_HANDLE) return 72;
   PSID expected = nullptr;
   if (!ConvertStringSidToSidW(argv[2], &expected)) return 11;
@@ -470,6 +555,8 @@ static int exercise(Fixture& f) {
   printf("PASS parent suspended-token-sid pid=%lu tid=%lu owned-job=1\n", launch.pid(), launch.tid());
   printf("DIAG host-ipc path=%ls requested=0x%08lx share=0 creation=OPEN_EXISTING flags=0\n", pipe_name.c_str(), static_cast<DWORD>(GENERIC_READ | GENERIC_WRITE));
   if (!token_evidence(process.h)) return 55;
+  ChildDebugger debugger;
+  if (g_debug_child && !debugger.Start(process.h, launch.pid())) return 88;
   if (launch.Resume().error != ERROR_SUCCESS || launch.Resume().error != ERROR_INVALID_STATE) return 37;
   IpcObservation breadcrumb{};
   if (!read_observation(out_read.h, process.h, &breadcrumb)) return 76;
@@ -529,7 +616,9 @@ static int exercise(Fixture& f) {
   return 0;
 }
 int wmain(int argc, wchar_t** argv) {
+  OutputDebugStringA("guest wmain entered");
   if (argc > 1 && wcscmp(argv[1], L"child") == 0) return child(argc, argv);
+  g_debug_child = argc == 2 && wcscmp(argv[1], L"--diagnose") == 0;
   Fixture fixture;
   const int result = exercise(fixture);
   if (!fixture.cleanup()) { fprintf(stderr, "owned cleanup failed\n"); return 50; }
