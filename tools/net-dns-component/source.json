@@ -1,0 +1,14 @@
+{
+  "base": "f1550540186b4ae3f17a5e501a886ec1c4d5d613",
+  "files": {
+    ".github/workflows/net-dns-component.yml": "f5a0685a06e9f666fdbea3d42168a147ca7d5ef5bcc866f41314d61aa81ba568",
+    "compat/bionic/bionic.cmake": "95d70bf5afb0d35ce69bd155cee3e064a459a430b3160f62a469679125f5a640",
+    "compat/bionic/dns_wire.cc": "07292a2a5f8675bc879f84c597d9d57b84e4f280bfad905d918d56cf9239e7b8",
+    "compat/bionic/shim.cc": "22ced95473843179a3a4fff90418aafbd9095d5edcd2b71a20b5d47238d4463d",
+    "compat/bionic/shim_internal.h": "f5a3270c0093c759ee3cda28a31edf985ef0669663204372edfe4fd035ecba16",
+    "tests/native2/dns-reference/ns_name.c": "ff0e3bf977cd2c7a4ced96b6577ace4b92d82739ba39eaf42cdb4051358eb4f6",
+    "tests/native2/net_dns_wire.cpp": "caa9d4a3f9d02e52c17c619e83d911e0f4d8a64355cb27d606429a2875888974",
+    "tools/net-dns-component/aosp_reference.py": "ebd7ae0823996880950b45365a8ed5349c6560fea516932b839139736b877423",
+    "tools/net-dns-component/payload.py": "c4c577f9e275ba78280d209260b6009e1869cbf1c5ec17a0d9779f799f630670"
+  }
+}

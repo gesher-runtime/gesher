@@ -1,0 +1,172 @@
+name: DNS name wire runtime component
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/net-dns-wire]
+    paths:
+      - '.github/workflows/net-dns-component.yml'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: net-dns-component-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  LLVM_MINGW_SHA256: 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4
+  DYNARMIC_COMMIT: 9d4582339990d4eae53f1dc7160686920fc2075c
+  FMT_VERSION: '11.0.2'
+  BOOST_VERSION: '1.83.0'
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          python3 tools/net-dns-component/payload.py preflight
+          python3 tools/net-dns-component/payload.py selftest
+          python3 tools/surface/test-verified-artifact.py
+  compile:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Actual Linux libresolv and exact pinned AOSP DNS references on exact source and attempt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/net-dns-component/payload.py reference
+      - name: Fetch verified compiler and exact source prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz" -o compiler.tar.xz
+          printf '%s  compiler.tar.xz\n' "$LLVM_MINGW_SHA256" | sha256sum --check --strict
+          mkdir toolchain
+          tar -xJf compiler.tar.xz -C toolchain
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ninja-build
+          tools/fetch-aosp.sh
+          python3 tools/net-dns-component/payload.py deps
+          bash cpu-clock-arm64-deps.sh
+          test "$(git -C deps/dynarmic rev-parse HEAD)" = "$DYNARMIC_COMMIT"
+          python3 compat/arm64/dll/patch-dynarmic-fpsr.py deps/dynarmic
+      - name: Build production native host, actual bionic core and matching translator
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm="$PWD/toolchain/$LLVM_MINGW_NAME"
+          cmake -S . -B out -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake -DLLVM_MINGW="$llvm" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_CXX_COMPILER_LAUNCHER=
+          ninja -C out gesher-exec
+          cmake -S compat/arm64/dll -B out-arm64 -G Ninja -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" -DLLVM_MINGW="$llvm" -DCMAKE_BUILD_TYPE=Release -DDYNARMIC_DIR="$PWD/deps/dynarmic" -DBoost_INCLUDE_DIR="$PWD/deps/boost" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          ninja -C out-arm64 gesher_arm64 arm64_smoke_test
+          cp out/gesher-exec.exe out-arm64/gesher_arm64.dll out-arm64/arm64_smoke_test.exe dns-fixture/
+          "$llvm/bin/llvm-readobj" --version
+          sha256sum "$llvm/bin/llvm-readobj"
+          "$llvm/bin/llvm-readobj" --coff-imports out/gesher-exec.exe > dns-fixture/imports-host.txt
+          "$llvm/bin/llvm-readobj" --coff-imports out-arm64/gesher_arm64.dll > dns-fixture/imports-arm64.txt
+      - name: Compile actual NDK callers for both ABIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://dl.google.com/android/repository/android-ndk-r27c-linux.zip -o ndk.zip
+          # Publisher's r27c Linux identity from android/ndk release metadata.
+          printf '%s  ndk.zip\n' 090e8083a715fdb1a3e402d0763c388abb03fb4e | sha1sum --check --strict
+          test "$(stat -c %s ndk.zip)" = 663987688
+          unzip -q ndk.zip
+          python3 tools/net-dns-component/payload.py guests
+      - name: Seal exact roles with source-justified host-only Windows imports and strict diagnostics
+        run: |
+          python3 tools/net-dns-component/payload.py record
+          python3 tools/net-dns-component/payload.py verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: net-dns-runtime-component
+          path: dns-fixture/
+          if-no-files-found: error
+          retention-days: 14
+  windows:
+    needs: compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Strict actual ZIP producer and complete typed member verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/ci/artifact_receipt.py --name net-dns-runtime-component --producer compile --destination dns-fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Actual ZIP source/attempt/digest receipt failed' }
+          python tools/net-dns-component/payload.py verify
+          if ($LASTEXITCODE -ne 0) { throw 'Whole source/role/compiler/member verification failed' }
+      - name: Actual both ABI DNS name decoding against independent Linux and AOSP
+        env:
+          GESHER_INET: '1'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function InvokeDnsProbe([string] $Name, [string[]] $Arguments, [string] $Reference, [bool] $Negative = $false) {
+            $stdout = Join-Path $env:RUNNER_TEMP "$Name.dns.stdout"
+            $stderr = Join-Path $env:RUNNER_TEMP "$Name.dns.stderr"
+            $exe = if ($Name -eq 'smoke') { 'arm64_smoke_test.exe' } else { 'gesher-exec.exe' }
+            $process = $null
+            try {
+              $start = @{ FilePath = (Join-Path $pwd "dns-fixture/$exe"); WorkingDirectory = (Join-Path $pwd 'dns-fixture'); WindowStyle = 'Hidden'; PassThru = $true; RedirectStandardOutput = $stdout; RedirectStandardError = $stderr }
+              if ($Arguments.Count -gt 0) { $start.ArgumentList = $Arguments }
+              $process = Start-Process @start
+              if (-not $process.WaitForExit(180000)) { throw "Owned DNS fixture timeout: $Name" }
+              $process.Refresh()
+              $text = [IO.File]::ReadAllText($stdout).Replace("`r`n", "`n")
+              $errors = [IO.File]::ReadAllText($stderr)
+              if ($Negative) {
+                if ($process.ExitCode -ne 1 -or -not ($text + $errors).Contains('FAIL DNS: negative corruption rejected')) { throw "DNS negative not rejected: $Name exit=$($process.ExitCode)" }
+              } else {
+                if ($process.ExitCode -ne 0 -or ($text + $errors).Contains('FAIL DNS:')) { throw "Actual DNS fixture $Name exit=$($process.ExitCode)" }
+                if ($Name -eq 'smoke') {
+                  if (-not $text.Contains('arm64_smoke_test all passed')) { throw 'Matching ARM64 API smoke missing' }
+                } elseif ($Name.StartsWith('safety-')) {
+                  if (-not $text.Contains('DNS safety skip cases=4 preserved=4') -or -not $text.Contains('DNS all done rows=100 failures=0')) { throw 'Actual malformed boundary/cursor controls missing' }
+                } else {
+                  $prefix = 'DNS '
+                  $rows = (@($text.Split("`n") | Where-Object { $_.StartsWith($prefix) }) -join "`n").Trim()
+                  $expected = [IO.File]::ReadAllText((Join-Path $pwd "dns-fixture/$Reference")).Replace("`r`n", "`n").Trim()
+                  if ($rows -cne $expected) { throw "Actual DNS ABI rows differ from executed Linux: $Name" }
+                }
+              }
+              Write-Host "PASS actual DNS component $Name"
+            } finally {
+              $cleanup = @()
+              if ($null -ne $process) {
+                try {
+                  if (-not $process.HasExited) {
+                    $process.Kill($true)
+                    if (-not $process.WaitForExit(5000)) { $cleanup += "Owned DNS cleanup failed: $Name" }
+                  }
+                } catch { $cleanup += "Owned DNS cleanup exception: $_" }
+                try { $process.Dispose() } catch { $cleanup += "Owned DNS dispose exception: $_" }
+              }
+              if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
+              if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+              if ($cleanup.Count -gt 0) { throw ($cleanup -join '; ') }
+            }
+          }
+          InvokeDnsProbe 'smoke' @() ''
+          foreach ($abi in 'x86_64', 'arm64') {
+            InvokeDnsProbe "main-$abi" @('--elf', "net-dns-$abi", "net-dns-$abi") 'linux-reference.log'
+            InvokeDnsProbe "extended-$abi" @('--elf', "net-dns-$abi", "net-dns-$abi", '--extended') 'aosp-extended.log'
+            InvokeDnsProbe "safety-$abi" @('--elf', "net-dns-$abi", "net-dns-$abi", '--safety') ''
+            InvokeDnsProbe "negative-$abi" @('--elf', "net-dns-$abi", "net-dns-$abi", '--negative') '' $true
+          }

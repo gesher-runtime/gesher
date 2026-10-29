@@ -1039,6 +1039,7 @@ SymbolTable& Table() {
     RegisterLocale(*table);
     RegisterPosix(*table);
     RegisterSocket(*table);
+    RegisterDnsWire(*table);
     RegisterSignal(*table);
     RegisterTime(*table);
     RegisterProcess(*table);  // last: it wraps entries already there
