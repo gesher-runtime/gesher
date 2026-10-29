@@ -19,7 +19,7 @@ jobs:
       - name: Verify complete combined Exec/UDP/DNS source and external caller identity before producers
         shell: bash
         run: |
-          python3 - <<'PY'
+          python3 -I - <<'PY'
           """Embedded in the immutable reusable workflow; never execute candidate policy."""
           import copy
           import hashlib
@@ -28,6 +28,7 @@ jobs:
           from pathlib import Path
           import re
           import subprocess
+          import sys
           import urllib.request
 
           BASE = 'c254c6c19fb3c8553208a096116eab7350d4de49'
@@ -235,6 +236,31 @@ jobs:
               else:
                   raise RuntimeError('Negative control accepted: ' + label)
 
+          def isolated_import_controls():
+              # Deliberately hostile candidate-root modules must never be imported.
+              # Run only isolated trusted code; the sentinel modules are never executed.
+              paths = [Path('json.py'), Path('hashlib.py')]
+              require(all(not p.exists() for p in paths), 'Shadow control path already exists')
+              try:
+                  for path in paths:
+                      path.write_text("raise RuntimeError('candidate shadow module executed')\n")
+                  code = ("import sys, json, hashlib; from pathlib import Path; "
+                          "assert sys.flags.isolated == 1; "
+                          "assert all(Path(m.__file__).resolve().parent != Path.cwd() for m in (json, hashlib)); "
+                          "print('COMBINED_TRUST_ISOLATED_IMPORTS json=stdlib hashlib=stdlib isolated=1')")
+                  output = subprocess.check_output([sys.executable, '-I', '-c', code], text=True).strip()
+                  require(output == 'COMBINED_TRUST_ISOLATED_IMPORTS json=stdlib hashlib=stdlib isolated=1',
+                          'Actual isolated stdlib import control differs')
+                  print(output, flush=True)
+                  reject('actual_candidate_shadow_modules', lambda: require(
+                      not git('status', '--porcelain', '--untracked-files=all').strip(),
+                      'Candidate shadow modules are unreviewed source'))
+              finally:
+                  for path in paths:
+                      path.unlink(missing_ok=True)
+              require(not git('status', '--porcelain', '--untracked-files=all').strip(),
+                      'Isolated import controls did not restore checkout')
+
           def verify_run_identity(run, event, source_head, head_repository_id, run_id, attempt, repository_id):
               require(event in ('workflow_dispatch', 'push', 'pull_request'), 'Unsupported CI event')
               require(str(run['id']) == run_id and str(run['run_attempt']) == attempt,
@@ -345,6 +371,7 @@ jobs:
               verify_selected(actual)
               require(not git('status', '--porcelain', '--untracked-files=all').strip(), 'Dirty candidate checkout')
               verify_checkout(expected)
+              isolated_import_controls()
               for value in ('', 'x' * 40, sha + ':policy'):
                   reject('malformed_external_identity', lambda: caller_identity(value))
               # A valid but wrong historical authority cannot authorize this caller.
@@ -390,7 +417,7 @@ jobs:
                   full_qualification=(event == 'workflow_dispatch'),
                   reviewed_caller_commit=reviewed, source_paths=len(expected),
                   reviewed_blobs=SOURCE_PINS, original_preflight_pins=HISTORICAL_PINS, union_pins=UNION_PINS, native_pins=NATIVE_PINS, policy_pins=POLICY_PINS, historical_guard_blob=expected[GUARD][1],
-                  caller_blob=expected[CALLER][1], immutable_guard_commit=guard_commit, all_controls_restored=True), sort_keys=True), flush=True)
+                  caller_blob=expected[CALLER][1], immutable_guard_commit=guard_commit, all_controls_restored=True, isolated_import_controls=2), sort_keys=True), flush=True)
 
           main()
           PY
