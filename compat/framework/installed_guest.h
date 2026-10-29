@@ -144,6 +144,13 @@ struct InstalledPolicy {
     DWORD scan_error = GetLastError();
     FindClose(scan);
     if (scan_error != ERROR_NO_MORE_FILES) return {};
+    std::wstring framework = runtime + L"\\framework";
+    DWORD framework_attributes = GetFileAttributesW(framework.c_str());
+    if (framework_attributes != INVALID_FILE_ATTRIBUTES) {
+      auto checked = Path(std::u16string(reinterpret_cast<const char16_t*>(framework.c_str())));
+      if (checked.empty() || !(framework_attributes & FILE_ATTRIBUTE_DIRECTORY)) return {};
+      resources.push_back(std::move(checked));
+    }
     for (const auto& item : read) {
       auto path = Path(item);
       if (path.empty()) return {};

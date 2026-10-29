@@ -44,8 +44,6 @@ public final class Zygote {
             String value = System.getenv(name);
             if (value != null && !value.isEmpty()) read.add(windowsPath(value));
         }
-        File framework = new File(new File(exePath()).getParent(), "framework");
-        if (framework.isDirectory()) read.add(framework.getPath());
         if (!nativeProvisionInstalled(identity.packageName, identity.installInstance, identity.uid,
                 read.toArray(new String[0]), windowsPath(installed.dataDir()))) {
             throw new IllegalStateException("restricted installed policy provisioning failed");
