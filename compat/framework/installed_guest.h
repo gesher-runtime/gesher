@@ -125,16 +125,23 @@ struct InstalledPolicy {
   // with a single-component name and OPEN_REPARSE_POINT. Host mutations below
   // always address these exact handles and never recurse through a pathname.
   bool Gather(size_t index, unsigned depth = 0) {
-    if (depth > 128 || pins.size() > 65536) return false;
+    auto failed = [depth](const char* stage, unsigned long code = 0) {
+      std::fprintf(stderr, "installed guest gather: stage=%s code=%lu depth=%u\n", stage, code, depth);
+      return false;
+    };
+    if (depth > 128 || pins.size() > 65536) return failed("bounds");
     Pin parent = pins[index];
     if (!parent.directory) {
       FILE_STANDARD_INFO info{};
-      return GetFileInformationByHandleEx(parent.handle, FileStandardInfo, &info, sizeof(info)) && info.NumberOfLinks == 1;
+      if (!GetFileInformationByHandleEx(parent.handle, FileStandardInfo, &info, sizeof(info)))
+        return failed("file-information", GetLastError());
+      if (info.NumberOfLinks != 1) return failed("file-link-count", info.NumberOfLinks);
+      return true;
     }
     HMODULE library = GetModuleHandleW(L"ntdll.dll");
-    if (!library) return false;
+    if (!library) return failed("ntdll", GetLastError());
     auto open = reinterpret_cast<decltype(&NtCreateFile)>(GetProcAddress(library, "NtCreateFile"));
-    if (!open) return false;
+    if (!open) return failed("nt-create-export", GetLastError());
     std::vector<BYTE> buffer(65536);
     bool first = true;
     for (;;) {
@@ -142,17 +149,20 @@ struct InstalledPolicy {
           first ? FileIdBothDirectoryRestartInfo : FileIdBothDirectoryInfo,
           buffer.data(), static_cast<DWORD>(buffer.size()));
       first = false;
-      if (!result) return GetLastError() == ERROR_NO_MORE_FILES;
+      if (!result) {
+        DWORD error = GetLastError();
+        return error == ERROR_NO_MORE_FILES ? true : failed("enumerate", error);
+      }
       size_t offset = 0;
       for (;;) {
-        if (offset + offsetof(FILE_ID_BOTH_DIR_INFO, FileName) > buffer.size()) return false;
+        if (offset + offsetof(FILE_ID_BOTH_DIR_INFO, FileName) > buffer.size()) return failed("entry-offset");
         auto* item = reinterpret_cast<FILE_ID_BOTH_DIR_INFO*>(buffer.data() + offset);
         if (item->FileNameLength % sizeof(wchar_t) ||
-            item->FileNameLength > buffer.size() - offset - offsetof(FILE_ID_BOTH_DIR_INFO, FileName)) return false;
+            item->FileNameLength > buffer.size() - offset - offsetof(FILE_ID_BOTH_DIR_INFO, FileName)) return failed("entry-name-length");
         std::wstring name(item->FileName, item->FileNameLength / sizeof(wchar_t));
         if (name != L"." && name != L"..") {
           if (name.empty() || name.find_first_of(L"\\/:") != std::wstring::npos ||
-              (item->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) || pins.size() >= 65536) return false;
+              (item->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) || pins.size() >= 65536) return failed("entry-name-or-attributes", item->FileAttributes);
           bool directory = (item->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
           UNICODE_STRING unicode{};
           unicode.Buffer = name.data(); unicode.Length = static_cast<USHORT>(name.size() * sizeof(wchar_t));
@@ -166,18 +176,18 @@ struct InstalledPolicy {
               &attributes, &io, nullptr, 0,
               FILE_SHARE_READ | FILE_SHARE_WRITE | (parent.writable ? FILE_SHARE_DELETE : 0),
               1, 0x00200000 | 0x00004000 | 0x00000020, nullptr, 0);
-          if (status < 0 || !child) return false;
+          if (status < 0 || !child) return failed("child-open-ntstatus", static_cast<unsigned long>(status));
           FILE_ATTRIBUTE_TAG_INFO tag{};
           if (!GetFileInformationByHandleEx(child, FileAttributeTagInfo, &tag, sizeof(tag)) ||
               (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
-              directory != bool(tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) { CloseHandle(child); return false; }
+              directory != bool(tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) { CloseHandle(child); return failed("child-attribute-validation"); }
           size_t child_index = pins.size();
           pins.push_back({parent.path + L"\\" + name, child, directory, parent.writable});
           if (!Gather(child_index, depth + 1)) return false;
         }
         if (!item->NextEntryOffset) break;
         if (item->NextEntryOffset < offsetof(FILE_ID_BOTH_DIR_INFO, FileName) ||
-            item->NextEntryOffset > buffer.size() - offset) return false;
+            item->NextEntryOffset > buffer.size() - offset) return failed("next-entry-offset");
         offset += item->NextEntryOffset;
       }
     }
@@ -292,6 +302,7 @@ struct InstalledPolicy {
       if (checked.empty() || !(framework_attributes & FILE_ATTRIBUTE_DIRECTORY)) return failed("framework-path");
       resources.push_back(std::move(checked));
     }
+    size_t read_begin = resources.size();
     for (const auto& item : read) {
       auto path = Path(item);
       if (path.empty()) return failed("read-path");
@@ -312,12 +323,21 @@ struct InstalledPolicy {
     HRESULT result = create(policy->profile.c_str(), policy->profile.c_str(), L"Gesher installed guest", nullptr, 0, &policy->sid);
     // Existing profiles are not adopted: their ownership/lifetime is unknown.
     if (FAILED(result)) { policy->profile.clear(); return failed("profile-create-hresult", static_cast<unsigned long>(result)); }
+    size_t read_end = resources.size();
     resources.push_back(exe);
-    for (const auto& path : resources) {
+    for (size_t resource_index = 0; resource_index < resources.size(); ++resource_index) {
+      const auto& path = resources[resource_index];
       if (policy->Pinned(path) != INVALID_HANDLE_VALUE) continue;
       size_t root = policy->pins.size();
       if (!policy->PinResource(path)) return failed("resource-pin");
-      if (!policy->Gather(root)) return failed("resource-gather");
+      if (!policy->Gather(root)) {
+        if (resource_index >= read_begin && resource_index < read_end)
+          std::fprintf(stderr, "installed guest policy: resource=read ordinal=%zu\n", resource_index - read_begin);
+        else
+          std::fprintf(stderr, "installed guest policy: resource=%s\n",
+              resource_index == read_end ? "executable" : "runtime");
+        return failed("resource-gather");
+      }
     }
     size_t data_root = policy->pins.size();
     if (!policy->PinResource(writable, true)) return failed("data-pin");
