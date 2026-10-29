@@ -57,7 +57,7 @@ int main(void) {
   if (!compare(thread,duplicate)) return 21;
   SetLastError(ERROR_SUCCESS);
   if (compare(thread,GetCurrentThread()) || GetLastError()!=ERROR_NOT_SAME_OBJECT || !CloseHandle(duplicate)) return 22;
-  clockid_t local, cross_static, cross_dll;
+  clockid_t local, cross_static, cross_dll, same_target;
   struct timespec a, b;
   pthread_t local_thread=pthread_self();
   if (pthread_getcpuclockid(local_thread, &local) ||
@@ -66,6 +66,10 @@ int main(void) {
          (unsigned long long)local_thread, (unsigned long long)remote_thread,
          (long)cross_static, (long)cross_dll);
   if (local_thread != remote_thread || cross_static != local || cross_dll != remote) return 15;
+  pthread_t dll_main=self();
+  if (id(dll_main,&same_target) || same_target!=local) return 23;
+  printf("MIXED_SAME_THREAD static=%llu dll=%llu same_clock=%ld\n",
+         (unsigned long long)local_thread, (unsigned long long)dll_main, (long)same_target);
   ULONGLONG until=GetTickCount64()+100;
   while (GetTickCount64()<until) { }
   uint64_t main_before=cpu(GetCurrentThread()), worker_before=cpu(thread);
