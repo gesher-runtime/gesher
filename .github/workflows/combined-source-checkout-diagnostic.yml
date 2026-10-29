@@ -1,6 +1,9 @@
 name: Combined source checkout diagnostic
 on:
   workflow_dispatch:
+  push:
+    branches: [wip/combined-source-cleanliness]
+    paths: [.github/workflows/combined-source-checkout-diagnostic.yml]
 permissions:
   contents: read
 jobs:
