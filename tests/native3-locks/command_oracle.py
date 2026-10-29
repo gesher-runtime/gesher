@@ -17,9 +17,9 @@ import traceback
 
 
 class Client:
-    def __init__(self, executable, paths):
+    def __init__(self, executable, paths, stderr=None):
         self.process = subprocess.Popen([str(executable), *paths], stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE, text=True, bufsize=1)
+                                        stdout=subprocess.PIPE, stderr=stderr, text=True, bufsize=1)
         self.expected_exit = 0
         self.lines = queue.Queue()
         self.reader = threading.Thread(target=self._read, daemon=True)
@@ -99,7 +99,7 @@ class Client:
             raise AssertionError('; '.join(failures))
 
 
-def run(executable, contention_failures):
+def run(executable, contention_failures, client_factory=Client):
     rows, clients = [], []
     with tempfile.TemporaryDirectory(prefix='gesher-lock-command-') as directory:
         root = Path(directory)
@@ -111,7 +111,7 @@ def run(executable, contention_failures):
                  '/dev/gesher-record-lock-absent', str(root / 'missing-directory' / 'child')]
         try:
             for unused in range(2):
-                clients.append(Client(executable, paths))
+                clients.append(client_factory(executable, paths))
             assert clients[0].process.pid != clients[1].process.pid
 
             def command(actor, text, expected=0, error=None):
