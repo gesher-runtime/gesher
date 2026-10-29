@@ -15,16 +15,34 @@ import tempfile
 import threading
 import traceback
 
+_OWNED_STDERR = object()
+_QUARANTINED_CLIENTS = []  # Exact live process/streams remain owned if retirement is unproved.
+
 
 class Client:
-    def __init__(self, executable, paths, stderr=None):
-        self.process = subprocess.Popen([str(executable), *paths], stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE, stderr=stderr, text=True, bufsize=1)
+    def __init__(self, executable, paths, stderr=_OWNED_STDERR):
         self.expected_exit = 0
-        self.lines = queue.Queue()
-        self.reader = threading.Thread(target=self._read, daemon=True)
-        self.reader.start()
+        self.lines = None
+        self.reader = None
+        self.stderr_capture = None
+        self.stderr_evidence = b''
+        if stderr is _OWNED_STDERR:
+            # The diagnostic observer must not backpressure a native worker
+            # while it holds the studied FILE lock under its original deadline.
+            if os.name == 'nt':
+                self.stderr_capture = tempfile.TemporaryFile(mode='w+b', buffering=0)
+            stderr = self.stderr_capture
         try:
+            self.process = subprocess.Popen([str(executable), *paths], stdin=subprocess.PIPE,
+                                            stdout=subprocess.PIPE, stderr=stderr, text=True, bufsize=1)
+        except BaseException:
+            if self.stderr_capture is not None:
+                self.stderr_capture.close()
+            raise
+        try:
+            self.lines = queue.Queue()
+            self.reader = threading.Thread(target=self._read, daemon=True)
+            self.reader.start()
             ready = self.receive()
             assert ready.get('ready') and ready.get('pointer_high'), ready
             assert ready['pid'] == self.process.pid, ready
@@ -62,7 +80,9 @@ class Client:
 
     def cleanup(self):
         failures = []
-        if self.process.poll() is None:
+        reader = getattr(self, 'reader', None)
+        reader_started = reader is not None and reader.ident is not None
+        if self.process.poll() is None and reader_started:
             try:
                 self.process.stdin.write('exit\n')
                 self.process.stdin.flush()
@@ -72,13 +92,24 @@ class Client:
             except BaseException as error:
                 failures.append(str(error))
         if self.process.poll() is None:
-            self.process.kill()
+            try:
+                self.process.kill()
+            except BaseException as error:
+                failures.append('owned worker kill: ' + repr(error))
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 failures.append('owned worker did not terminate after kill')
-        self.reader.join(timeout=2)
-        if self.reader.is_alive():
+            except BaseException as error:
+                failures.append('owned worker wait: ' + repr(error))
+        if self.process.poll() is None:
+            if self not in _QUARANTINED_CLIENTS:
+                _QUARANTINED_CLIENTS.append(self)
+            failures.append('unconfirmed worker and all capture/pipe ownership retained')
+            raise AssertionError('; '.join(failures))
+        if reader_started:
+            reader.join(timeout=2)
+        if reader_started and reader.is_alive():
             failures.append('owned stdout reader did not reach EOF')
         else:
             try:
@@ -90,11 +121,27 @@ class Client:
         except OSError as error:
             # Preserve this failure, while still reporting the owned exit code.
             failures.append('owned stdin close: ' + repr(error))
-        print('ACTUAL_COMMAND_WORKER_CLEANUP pid=' + str(self.process.pid) +
-              ' exit=' + str(self.process.returncode) + ' reader_alive=' + str(self.reader.is_alive()) +
-              ' failures=' + repr(failures), flush=True)
         if self.process.returncode not in (self.expected_exit, None):
             failures.append('worker exit ' + str(self.process.returncode))
+        capture = getattr(self, 'stderr_capture', None)
+        if capture is not None:
+            try:
+                assert self.process.returncode is not None, 'stderr writer retirement unproved'
+                capture.seek(0)
+                self.stderr_evidence = capture.read(1048577)
+                assert len(self.stderr_evidence) <= 1048576, 'owned stderr evidence exceeded 1MiB'
+                sys.stderr.write(self.stderr_evidence.decode('utf-8', errors='strict'))
+                sys.stderr.flush()
+            except BaseException as error:
+                failures.append('owned stderr evidence replay: ' + repr(error))
+            finally:
+                try:
+                    capture.close()
+                except OSError as error:
+                    failures.append('owned stderr file close: ' + repr(error))
+        print('ACTUAL_COMMAND_WORKER_CLEANUP pid=' + str(self.process.pid) +
+              ' exit=' + str(self.process.returncode) + ' reader_alive=' + str(reader_started and reader.is_alive()) +
+              ' failures=' + repr(failures), flush=True)
         if failures:
             raise AssertionError('; '.join(failures))
 

@@ -1,12 +1,12 @@
 {
   "base": "71c952cce6e15018615c132b180f5be48efa92b7",
-  "status": "Diagnostic only: unchanged strict four-cycle five-second gate; no repair or qualification claimed",
+  "status": "Observer robustness repair: strict native budget and witness semantics unchanged; historical original overrun cause remains unproved; independent peer and actual repair CI required",
   "blobs": {
     "tests/native3-locks/command_worker.cc": "6872f626e1c64671d9b0eda8f4dcc55f89dec69a",
-    "tests/native3-locks/test_command_cleanup.py": "f2ac57489a4d049f892e54accc0edaf4fce284c6",
-    ".github/workflows/native3-locks-blocking.yml": "ec2156883b982c812122484177f221f369368504",
-    "tests/native3-locks/command_oracle.py": "8e7232500cd7ceec32f43e0e3a0e2a30b94616cc",
-    "tests/native3-locks/stdio_sink_oracle.py": "565ed1515aefaac89e4c2f9d689f4dd10077149b",
+    "tests/native3-locks/test_command_cleanup.py": "fbd6815890d8dcee22136d0298e7684986b49845",
+    ".github/workflows/native3-locks-blocking.yml": "de5dc88359597f4df7e413f4b2486d6e24ebcac8",
+    "tests/native3-locks/command_oracle.py": "c0655cce6466619b35c3e68eb82bc20ca939fc03",
+    "tests/native3-locks/stdio_sink_oracle.py": "cc6ced799c5391c76eac312054cf242e3313bd50",
     "tools/native3-locks/StdioSinkSupervisor.cs": "1b320bc00a64172733f2e87a9ee864975337a0b0"
   }
 }

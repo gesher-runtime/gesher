@@ -270,7 +270,7 @@ jobs:
               -not $sinkResult.ExclusiveSnapshot -or $sinkResult.TotalProcesses -ne $sinkResult.Processes.Count) {
             throw 'Exact retained diagnostic root/job/output retirement unproved'
           }
-          foreach ($route in @('direct-file expected=strict-pass', 'blocked-pipe expected=strict-reject')) {
+          foreach ($route in @('direct-file expected=strict-pass', 'drained-pipe expected=strict-pass', 'blocked-pipe expected=strict-reject')) {
             if (-not $sinkResult.Output.Contains("STDIO_SINK_RESULT route=$route actual=true owned_reaped=true reader_eof=true historical_cause_proved=false")) { throw "Missing sink verdict: $route" }
           }
           Write-Host "STDIO_SINK_SUPERVISOR suspended_assigned=true root_signaled=true job_empty=true identities=$($sinkResult.TotalProcesses) owned_handles=$($sinkResult.OwnedHandles) closed_handles=$($sinkResult.ClosedHandles) exclusive_snapshot=true"

@@ -14,8 +14,10 @@ from validate_stdio_evidence import main as validate_evidence
 from command_oracle import Client, run
 
 
-def experiment(worker, directory, blocked, protocol):
+def experiment(worker, directory, route, protocol):
     clients = []
+    blocked = route == 'blocked-pipe'
+    pipe = route != 'direct-file'
 
     class SinkClient(Client):
         def __init__(self, executable, paths):
@@ -45,7 +47,7 @@ def experiment(worker, directory, blocked, protocol):
                 raise
 
         def start(self, executable, paths):
-            if blocked:
+            if pipe:
                 import msvcrt
                 self.raw_read, self.raw_write = os.pipe()
                 read_fd, write_fd = self.raw_read, self.raw_write
@@ -73,7 +75,7 @@ def experiment(worker, directory, blocked, protocol):
                             if not line:
                                 break
                             self.evidence.extend(line)
-                            if b'ACTUAL_STDIO_CLOCK cycle=1 phase=start ' in line:
+                            if blocked and b'ACTUAL_STDIO_CLOCK cycle=1 phase=start ' in line:
                                 self.withheld = True
                                 # This adverse sink deliberately outlasts the SAME
                                 # native5s deadline. Client.receive remains10s.
@@ -89,8 +91,9 @@ def experiment(worker, directory, blocked, protocol):
                     sink.close()  # Only the child owns the remaining writer.
                     self.pipe_writer = None
             else:
-                self.sink = tempfile.TemporaryFile(mode='w+b')
-                super().__init__(executable, paths, stderr=self.sink)
+                # Exercise the repaired original Client default, not a second
+                # implementation of file capture.
+                super().__init__(executable, paths)
 
         def cleanup(self):
             if self.cleaned:
@@ -100,6 +103,8 @@ def experiment(worker, directory, blocked, protocol):
             try:
                 if self.process is not None:
                     super().cleanup()
+                    if not pipe:
+                        self.evidence.extend(self.stderr_evidence)
             except BaseException as error:
                 failures.append(repr(error))
             try:
@@ -141,11 +146,11 @@ def experiment(worker, directory, blocked, protocol):
             if client.process is not None:
                 assert client.process.returncode is not None and not client.reader.is_alive()
     evidence = b''.join(client.evidence for client in clients)
-    route = 'blocked-pipe' if blocked else 'direct-file'
     path = directory / (route + '.stderr.txt')
     path.write_bytes(evidence)
     # Preserve every actual native line for direct completed-log audit.
-    sys.stderr.write(evidence.decode('utf-8', errors='strict'))
+    if pipe:
+        sys.stderr.write(evidence.decode('utf-8', errors='strict'))
     saved_args = sys.argv
     accepted = True
     try:
@@ -165,7 +170,7 @@ def experiment(worker, directory, blocked, protocol):
     else:
         assert failure is None, repr(failure)
         assert [client.process.returncode for client in clients] == [23, 0]
-        assert accepted, 'direct-file witness failed unchanged strict validator'
+        assert accepted, route + ' witness failed unchanged strict validator'
     print('STDIO_SINK_RESULT route=' + route + ' expected=' + ('strict-reject' if blocked else 'strict-pass') +
           ' actual=true owned_reaped=true reader_eof=true historical_cause_proved=false', flush=True)
 
@@ -178,8 +183,8 @@ def main():
     parser.add_argument('--job-protocol', type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(exist_ok=True)
-    experiment(args.worker.resolve(strict=True), args.output, blocked=False, protocol=args.job_protocol)
-    experiment(args.worker.resolve(strict=True), args.output, blocked=True, protocol=args.job_protocol)
+    for route in ('direct-file', 'drained-pipe', 'blocked-pipe'):
+        experiment(args.worker.resolve(strict=True), args.output, route=route, protocol=args.job_protocol)
 
 
 if __name__ == '__main__':
