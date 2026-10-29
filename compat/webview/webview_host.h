@@ -135,8 +135,9 @@ class Host {
   // created yet); false when it exists already: they apply to the next one.
   static bool SetProxyArguments(const std::wstring& args);
 
-  // A new WebView. The listener is called on the WebView thread until
-  // OnDestroyed.
+  // A new WebView. On successful creation the listener is called on the
+  // WebView thread until OnDestroyed. If startup cannot be queued, returns
+  // null and calls OnDestroyed synchronously on the creating thread.
   static Host* Create(Listener* listener, const HostOptions& options);
 
   bool Destroy();  // false if close could not be queued; the caller retains the Host

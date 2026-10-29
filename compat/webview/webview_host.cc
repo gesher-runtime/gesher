@@ -109,10 +109,13 @@ DWORD WINAPI ThreadMain(void* ready) {
 void EnsureThread() {
   std::call_once(g_thread_once, [] {
     HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (ready == nullptr) return;
     HANDLE thread = CreateThread(nullptr, 0, ThreadMain, ready, 0, nullptr);
-    WaitForSingleObject(ready, INFINITE);
+    if (thread != nullptr) {
+      WaitForSingleObject(ready, INFINITE);
+      CloseHandle(thread);
+    }
     CloseHandle(ready);
-    if (thread != nullptr) CloseHandle(thread);
   });
 }
 
@@ -1677,7 +1680,8 @@ void WithCookieManager(int64_t callback_id,
 void PostToWebViewThread(std::function<void()> fn) {
   EnsureThread();
   auto* task = new std::function<void()>(std::move(fn));
-  if (!PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(task))) delete task;
+  if (g_task_window == nullptr ||
+      !PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(task))) delete task;
 }
 
 void Host::Configure(const std::wstring& user_data_folder, const std::wstring& browser_args) {
@@ -1728,7 +1732,19 @@ Host* Host::Create(Listener* listener, const HostOptions& options) {
       g_sessions.emplace(impl->session_handle, SessionEntry{impl, {}, 0, 0});
     }
   }
-  PostToWebViewThread([impl] { Start(impl); });
+  EnsureThread();
+  auto* start = new std::function<void()>([impl] { Start(impl); });
+  if (g_task_window == nullptr ||
+      !PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(start))) {
+    delete start;
+    {
+      std::lock_guard<std::mutex> guard(g_session_mutex);
+      g_sessions.erase(impl->session_handle);
+    }
+    // No task was admitted and no WebView callback can have started.
+    if (listener != nullptr) listener->OnDestroyed();
+    return nullptr;
+  }
   return new Host(impl);
 }
 
@@ -1816,7 +1832,8 @@ int32_t Host::SubmitSession(int64_t handle, int64_t id, const std::wstring& sess
               params.empty() ? L"{}" : params.c_str(), callback.get());
     if (FAILED(hr)) FinishSession(impl, id, hr, L"null");
   });
-  if (!PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(task))) {
+  if (g_task_window == nullptr ||
+      !PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(task))) {
     delete task;
     entry->second.used.erase(id);
     --entry->second.pending;
@@ -1882,7 +1899,8 @@ bool Host::Destroy() {
       if (listener != nullptr) listener->OnDestroyed();
     }
   });
-  if (!PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(close))) {
+  if (g_task_window == nullptr ||
+      !PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(close))) {
     delete close;
     return false;
   }
