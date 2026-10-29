@@ -237,9 +237,10 @@ int main() {
     Await(t); Require(pthread_detach(th) == 0, "live detach");
     auto id = Check(t, "detached-live"); t.stop = true; Dead(t, id); }
   { Target t; HANDLE th = CreateThread(nullptr, 0, NativeWorker, &t, 0, nullptr);
-    Require(th != nullptr, "Win32 create"); auto id = Check(t, "Win32-self-attach");
+    Require(th != nullptr, "Win32 create"); ++fixture_owned_handles;
+    auto id = Check(t, "Win32-self-attach");
     t.stop = true; Dead(t, id); DWORD exit = 0;
-    Require(GetExitCodeThread(th, &exit) && exit == 259, "real exit 259"); CloseHandle(th); }
+    Require(GetExitCodeThread(th, &exit) && exit == 259, "real exit 259"); CloseOwned(th); }
   Stress();
   CountHandles("final-before-original-bound");
   Require(fixture_owned_handles == 0, "all fixture-owned handles closed");
