@@ -96,7 +96,8 @@ jobs:
             -DDYNARMIC_DIR="$PWD/deps/dynarmic" -DBoost_INCLUDE_DIR="$PWD/deps/boost"
           ninja -C out-arm64 gesher_arm64
           python3 tools/net-tcp-priority/build-guests.py
-          python3 tools/net-tcp-priority/manifest.py
+      - name: Bind executed compiler and exact Windows-system-only output roles
+        run: python3 tools/net-tcp-priority/manifest.py
       - uses: actions/upload-artifact@v4
         with:
           name: tcp-priority-${{ github.sha }}-a${{ github.run_attempt }}

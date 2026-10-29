@@ -1,0 +1,14 @@
+{
+  "gesher-exec.exe": {
+    "system": ["bcrypt.dll", "shell32.dll", "winhttp.dll", "api-ms-win-core-synch-l1-2-0.dll", "ole32.dll", "kernel32.dll", "ws2_32.dll", "iphlpapi.dll", "user32.dll", "gdi32.dll", "advapi32.dll"],
+    "source": ["compat/elf/exec/exec.cmake", "compat/posix/posix.cmake", "cmake/aosp/media.cmake", "compat/media/player/http_source.cc"]
+  },
+  "net_tcp_priority_probe.exe": {
+    "system": ["bcrypt.dll", "shell32.dll", "api-ms-win-core-synch-l1-2-0.dll", "ole32.dll", "kernel32.dll", "ws2_32.dll", "iphlpapi.dll", "user32.dll", "gdi32.dll", "advapi32.dll"],
+    "source": ["CMakeLists.txt", "compat/posix/posix.cmake"]
+  },
+  "gesher_arm64.dll": {
+    "system": ["kernel32.dll", "ntdll.dll", "api-ms-win-core-synch-l1-2-0.dll"],
+    "source": ["compat/arm64/dll/CMakeLists.txt", "compat/arm64/dll/translator.cc", "compat/arm64/dll/guest_libc.cc"]
+  }
+}

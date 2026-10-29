@@ -39,14 +39,31 @@ $publisher = $m.ndk_archive
 if ($publisher.url -cne 'https://dl.google.com/android/repository/android-ndk-r27c-linux.zip' -or $publisher.publisher_sha1 -cne '090e8083a715fdb1a3e402d0763c388abb03fb4e' -or $publisher.bytes -ne 663987688 -or $publisher.revision -cne '27.2.12479018' -or $publisher.archive_sha256 -cnotmatch '^[0-9a-f]{64}$' -or $publisher.properties_sha256 -cnotmatch '^[0-9a-f]{64}$' -or -not $publisher.extraction) { throw 'NDK publisher receipt mismatch' }
 $native = @('gesher-exec.exe','net_tcp_priority_probe.exe','gesher_arm64.dll')
 if (@(Compare-Object $native @($m.imports.PSObject.Properties.Name) -CaseSensitive).Count -ne 0) { throw 'Incomplete native import role proof' }
-$system = @('kernel32.dll','ntdll.dll','ws2_32.dll','iphlpapi.dll','dnsapi.dll','advapi32.dll','ole32.dll','uuid.dll','psapi.dll','shell32.dll','shlwapi.dll','user32.dll','gdi32.dll','ucrtbase.dll','msvcrt.dll','dbghelp.dll','bcrypt.dll','bcryptprimitives.dll','kernelbase.dll','sechost.dll','crypt32.dll','secur32.dll','version.dll','winmm.dll','rpcrt4.dll')
-foreach ($name in $native) {
-  $imports = @($m.imports.$name)
-  if ($imports.Count -eq 0) { throw "No import proof for $name" }
-  foreach ($dll in $imports) {
-    if ($dll.ToLowerInvariant() -cnotin $system -and $dll.ToLowerInvariant() -cnotmatch '^api-ms-win-crt-[a-z0-9-]+-l1-1-0\.dll$') { throw "Unexpected native role dependency $name/$dll" }
+$policyPath = 'tools/net-tcp-priority/import-policy.json'
+if ((Get-FileHash -LiteralPath $policyPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $m.import_policy_sha256) { throw 'Import policy source mismatch' }
+$policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
+function AssertImportRole([string] $Role, [string[]] $Names) {
+  if ($Role -cnotin $policy.PSObject.Properties.Name -or $Names.Count -eq 0 -or @($Names | ForEach-Object ToLowerInvariant | Select-Object -Unique).Count -ne $Names.Count) { throw 'Invalid native role or empty/duplicate imports' }
+  foreach ($dll in $Names) {
+    $name = $dll.ToLowerInvariant()
+    if ($name -cnotmatch '^[a-z0-9_-]+\.dll$' -or ($name -cnotin $policy.$Role.system -and $name -cnotin @('msvcrt.dll','ucrtbase.dll') -and $name -cnotmatch '^api-ms-win-crt-[a-z0-9-]+-l1-1-0\.dll$')) { throw "Unexpected native role dependency $Role/$dll" }
   }
 }
+foreach ($role in $native) {
+  AssertImportRole $role @('kernel32.dll','api-ms-win-crt-runtime-l1-1-0.dll')
+  foreach ($bad in 'unknown.dll','gesher_private.dll','../kernel32.dll','userenv.dll') {
+    $rejected = $false
+    try { AssertImportRole $role @('kernel32.dll', $bad) } catch { $rejected = $true }
+    if (-not $rejected) { throw "Import policy negative control accepted $role/$bad" }
+  }
+}
+foreach ($role in 'gesher_arm64.dll','net_tcp_priority_probe.exe') {
+  $rejected = $false
+  try { AssertImportRole $role @('WINHTTP.dll') } catch { $rejected = $true }
+  if (-not $rejected) { throw "Wrong-role negative control accepted $role" }
+}
+Write-Host 'PASS TCP priority consumer import policy: unknown/private/path/wrong-role controls'
+foreach ($name in $native) { AssertImportRole $name @($m.imports.$name) }
 Write-Host ('TCP_PRIORITY_NDK_PUBLISHER ' + ($publisher | ConvertTo-Json -Compress))
 $commandSources = @{
   'out'=@('compat/posix/src/winsock.cc','compat/posix/src/fd.cc','compat/posix/src/epoll.cc','compat/posix/src/select.cc','compat/bionic/socket_bionic.cc','tests/net-tcp-priority/contract.cc')
