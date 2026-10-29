@@ -1,0 +1,184 @@
+name: net-udp-full-preflight
+on:
+  workflow_call:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    env:
+      # Maintainer-controlled repository variable, resolved only in this pinned job.
+      REVIEWED_CALLER_COMMIT: ${{ vars.NET_UDP_FULL_CALLER_COMMIT }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify complete UDP source and external caller identity before producers
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          """Embedded in the immutable reusable workflow; never execute candidate policy."""
+          import copy
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import urllib.request
+          
+          BASE = 'f1550540186b4ae3f17a5e501a886ec1c4d5d613'
+          REPO = 'gesher-runtime/gesher'
+          CALLER = '.github/workflows/ci.yml'
+          TRUST = '.github/workflows/net-udp-full-preflight.yml'
+          GUARD = 'tools/native3-locks/current_payload.py'
+          SOURCE_PINS = {
+              ".github/workflows/native2.yml": "847f1f8908a50e55392f9d62c12f15365fe680a0",
+              ".github/workflows/net-udp-component.yml": "4f2b67384203e2a042303c548b09474f1497437d",
+              ".github/workflows/net-udp-fault-observer.yml": "e6875b866abb4949915772d8c42d8dfcd6cc4962",
+              "compat/posix/src/socket.cc": "57b79cc74424af7cbbf8b0cf96cd255981d5618a",
+              "compat/posix/src/socket_internal.h": "faa128a88a340d0c71fc5d0ff3c84c5a7faef1a6",
+              "compat/posix/src/socket_user_copy.h": "961aa5a41bb9e3576ab83cd4d305cf80d3637e08",
+              "compat/posix/src/winsock.cc": "f7c047f2557932cc7d8b0be77ee1181c6dc0da68",
+              "tests/native2/net_udp_copy_observer.c": "b7dbba2aa81db0ec435ae990447509b7f8aef18e",
+              "tests/native2/net_udp_fault_observer.c": "2d63237ca4d2891e84c4c1a21c16448bbdfee2eb",
+              "tests/native2/net_udp_guarded_copy_probe.cpp": "35b571e3f253950f5f0a96117d9458ee4f1b6e39",
+              "tests/native2/net_udp_trunc.cpp": "68b375e9ea654930b9335d4ac51c321a434dc7a0",
+              "tests/windows/tracks/89-net-udp-trunc.ps1": "9823b72c58bb77918bbb57a40d50664d1001105b",
+              "tools/net-udp-component/payload.py": "69938c55da4ca44b3d31fbac177073fc0d2a22f0",
+              "tools/net-udp-component/source.json": "a739733517589733353eadeda226b007fbfa4434",
+              "tools/net-udp/payload.py": "dbfcf5ed59cc2cbbc726109c1ce8bb18f4e0f356"
+          }
+          
+          def require(condition, message):
+              if not condition:
+                  raise RuntimeError(message)
+          
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          
+          def inventory(commit):
+              rows = git('ls-tree', '-r', '-z', commit).split(b'\0')
+              result = {}
+              for row in filter(None, rows):
+                  metadata, name = row.split(b'\t', 1)
+                  mode, kind, blob = metadata.decode().split()
+                  name = name.decode()
+                  if not name.startswith('docs/'):
+                      require(kind == 'blob' and mode in ('100644', '100755'), 'Linked source: ' + name)
+                      result[name] = (mode, blob)
+              return result
+          
+          def verify_tree(actual, expected):
+              require(actual == expected, 'Unreviewed full source delta: ' + repr(sorted(
+                  path for path in actual.keys() | expected.keys() if actual.get(path) != expected.get(path))))
+          
+          def verify_checkout(expected):
+              for name, (mode, blob) in expected.items():
+                  path = Path(name)
+                  require(path.is_file() and not path.is_symlink(), 'Missing/linked checkout: ' + name)
+                  data = path.read_bytes()
+                  actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+                  require(actual == blob, 'Dirty checkout: ' + name)
+          
+          def caller_identity(value):
+              require(bool(re.fullmatch('[0-9a-f]{40}', value)), 'Missing/malformed external caller authority')
+              require(git('cat-file', '-t', value).strip() == b'commit', 'Caller authority is not a commit')
+              return git('show', value + ':' + CALLER)
+          
+          def reject(label, action):
+              try:
+                  action()
+              except RuntimeError:
+                  print('UDP_TRUST_NEGATIVE ' + label + '=rejected', flush=True)
+              else:
+                  raise RuntimeError('Negative control accepted: ' + label)
+          
+          def main():
+              sha = os.environ['GITHUB_SHA']
+              run_id = os.environ['GITHUB_RUN_ID']
+              attempt = os.environ['GITHUB_RUN_ATTEMPT']
+              require(os.environ['GITHUB_REPOSITORY'] == REPO, 'Wrong repository')
+              require(bool(re.fullmatch('[0-9a-f]{40}', sha)), 'Invalid source SHA')
+              require(git('rev-parse', 'HEAD').decode().strip() == sha, 'Checkout/source mismatch')
+              # Exact-source full is dispatched; PR merge-ref qualification needs its own reviewed policy.
+              require(os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch', 'Only exact-source dispatch qualifies')
+              request = urllib.request.Request(
+                  'https://api.github.com/repos/' + REPO + '/actions/runs/' + run_id,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json'})
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  run = json.load(response)
+              require(str(run['id']) == run_id and str(run['run_attempt']) == attempt,
+                      'Wrong actual run/attempt')
+              require(run['repository']['full_name'] == REPO and run['head_sha'] == sha,
+                      'Wrong actual run repository/source')
+              require(run['event'] == 'workflow_dispatch' and run['path'] == CALLER,
+                      'Wrong actual workflow/event')
+              subprocess.run(['git', 'merge-base', '--is-ancestor', BASE, sha], check=True)
+              reviewed = os.environ.get('REVIEWED_CALLER_COMMIT', '')
+              approved_caller = caller_identity(reviewed)
+              references = re.findall(rb'(?m)^    uses: gesher-runtime/gesher/\.github/workflows/net-udp-full-preflight\.yml@([0-9a-f]{40})$', approved_caller)
+              require(len(references) == 1, 'Caller must use one immutable full guard commit')
+              guard_commit = references[0].decode()
+              require(git('cat-file', '-t', guard_commit).strip() == b'commit', 'Guard pin is not a commit')
+              require(git('show', guard_commit + ':' + TRUST) == git('show', reviewed + ':' + TRUST),
+                      'Reviewed guard differs from immutable invocation')
+              require(git('show', sha + ':' + CALLER) == approved_caller, 'Caller policy differs from external approval')
+              # Caller authority is a repo variable resolved INSIDE this trusted job, never a workflow input.
+              expected = inventory(BASE)
+              authority = inventory(reviewed)
+              for name, blob in SOURCE_PINS.items():
+                  expected[name] = (expected.get(name, ('100644', ''))[0], blob)
+              for name in (CALLER, TRUST):
+                  require(name in authority, 'External authority lacks ' + name)
+                  expected[name] = authority[name]
+              actual = inventory(sha)
+              verify_tree(actual, expected)
+              require(not git('status', '--porcelain', '--untracked-files=all').strip(), 'Dirty candidate checkout')
+              verify_checkout(expected)
+              for value in ('', 'x' * 40, sha + ':policy'):
+                  reject('malformed_external_identity', lambda: caller_identity(value))
+              # A valid but wrong historical authority cannot authorize this caller.
+              reject('wrong_external_identity', lambda: require(caller_identity(BASE) == approved_caller,
+                                                                'Historical caller differs'))
+              for name in (GUARD, CALLER):
+                  path = Path(name)
+                  original = path.read_bytes()
+                  try:
+                      path.write_bytes(b'pass\n' if name == GUARD else b'name: forged\njobs: {}\n')
+                      reject('noop_guard' if name == GUARD else 'caller_policy', lambda: verify_checkout(expected))
+                  finally:
+                      path.write_bytes(original)
+              # Both real files are also replaced together, then restored even on rejection.
+              originals = {name: Path(name).read_bytes() for name in (GUARD, CALLER)}
+              try:
+                  Path(GUARD).write_bytes(b'pass\n')
+                  Path(CALLER).write_bytes(b'name: forged\njobs: {}\n')
+                  reject('actual_noop_guard_plus_caller_policy', lambda: verify_checkout(expected))
+              finally:
+                  for name, data in originals.items():
+                      Path(name).write_bytes(data)
+              # Simultaneously replacing guard and caller never lets caller bless its own pin list.
+              mutant = copy.deepcopy(actual)
+              mutant[GUARD] = ('100644', '0' * 40)
+              mutant[CALLER] = ('100644', '1' * 40)
+              reject('noop_guard_plus_caller_policy', lambda: verify_tree(mutant, expected))
+              mutant = copy.deepcopy(actual)
+              mutant[next(iter(SOURCE_PINS))] = ('100644', '2' * 40)
+              reject('changed_reviewed_blob', lambda: verify_tree(mutant, expected))
+              mutant = copy.deepcopy(actual)
+              mutant['tools/net-udp/forged_payload.py'] = ('100644', '3' * 40)
+              reject('candidate_supplied_guard', lambda: verify_tree(mutant, expected))
+              verify_checkout(expected)
+              require(not git('status', '--porcelain', '--untracked-files=all').strip(), 'Controls did not restore source')
+              print('UDP_TRUSTED_SOURCE ' + json.dumps(dict(base=BASE, source=sha, run=run_id,
+                  attempt=attempt, reviewed_caller_commit=reviewed, source_paths=len(expected),
+                  reviewed_blobs=SOURCE_PINS, historical_guard_blob=expected[GUARD][1],
+                  caller_blob=expected[CALLER][1], immutable_guard_commit=guard_commit, all_controls_restored=True), sort_keys=True), flush=True)
+          
+          main()
+          PY
