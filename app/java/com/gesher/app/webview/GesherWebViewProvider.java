@@ -478,11 +478,10 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private void retryHostClose(WebView2Host closing, long deadline) {
         if (closing.tryDestroy()) return;
         if (android.os.SystemClock.uptimeMillis() >= deadline) {
-            Log.e(TAG, "WebView close could not be queued; native host remains retained");
-            return;
+            throw new IllegalStateException("WebView close could not be queued; native host remains retained");
         }
         if (!mUi.postDelayed(() -> retryHostClose(closing, deadline), 100)) {
-            Log.e(TAG, "WebView close retry could not be scheduled; native host remains retained");
+            throw new IllegalStateException("WebView close retry could not be scheduled; native host remains retained");
         }
     }
 
