@@ -3,6 +3,9 @@
 #include "../../compat/framework/restricted_launch.h"
 #include <cstdio>
 #include <cstring>
+#include <cerrno>
+#include <fcntl.h>
+#include <io.h>
 #include <stdexcept>
 
 namespace g = gesher::guest;
@@ -57,10 +60,22 @@ void ProbeFdPrimitives(const char* role) {
       FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
   DWORD nul_error = nul == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
   if (nul != INVALID_HANDLE_VALUE) Check(CloseHandle(nul), "fd diagnostic NUL close");
+  HANDLE zero = CreateFileW(L"NUL", 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+      nullptr, OPEN_EXISTING, 0, nullptr);
+  DWORD zero_error = zero == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+  int fd = -1, crt_error = 0;
+  if (zero != INVALID_HANDLE_VALUE) {
+    fd = _open_osfhandle(reinterpret_cast<intptr_t>(zero), _O_RDWR | _O_NOINHERIT);
+    if (fd < 0) crt_error = errno;
+    if (fd >= 0) Check(_close(fd) == 0, "fd diagnostic CRT descriptor close");
+    else Check(CloseHandle(zero), "fd diagnostic failed CRT transfer close");
+  }
   printf("LOWBOX_FD_DIAGNOSTIC role=%s event_ok=%d event_error=%lu nul_rw_ok=%d nul_rw_error=%lu\n",
       role, event != nullptr, event_error, nul != INVALID_HANDLE_VALUE, nul_error);
+  printf("LOWBOX_FD_ZERO role=%s nul_zero_ok=%d nul_zero_error=%lu crt_fd_ok=%d crt_errno=%d\n",
+      role, zero != INVALID_HANDLE_VALUE, zero_error, fd >= 0, crt_error);
   fflush(stdout);
-  if (!std::strcmp(role, "host")) Check(event != nullptr && nul != INVALID_HANDLE_VALUE, "host fd primitive positive controls");
+  if (!std::strcmp(role, "host")) Check(event != nullptr && nul != INVALID_HANDLE_VALUE && fd >= 0, "host fd primitive positive controls");
 }
 unsigned denied_operations = 0;
 DWORD WINAPI DenySecurity(HANDLE, SE_OBJECT_TYPE, SECURITY_INFORMATION, PSID, PSID, PACL, PACL) {
@@ -192,7 +207,8 @@ int wmain(int argc, wchar_t** argv) {
           diagnostic_size == static_cast<DWORD>(length.QuadPart);
       bool closed = CloseHandle(child_log) != FALSE;
       Check(bounded && read_ok && closed, "read and close exact retired child diagnostic log");
-      Check(std::strstr(diagnostic, "LOWBOX_FD_DIAGNOSTIC role=lowbox ") != nullptr, "actual lowbox diagnostic marker");
+      Check(std::strstr(diagnostic, "LOWBOX_FD_DIAGNOSTIC role=lowbox ") != nullptr &&
+          std::strstr(diagnostic, "LOWBOX_FD_ZERO role=lowbox ") != nullptr, "actual lowbox diagnostic markers");
       printf("%s", diagnostic); fflush(stdout);
       Check(DeleteFileW(log_path.c_str()), "nested child log cleanup");
       printf("POLICY_CHILD actual_lowbox=1 nested_create=1 file_reopen_read=1 nested_delete=1 exit=0 retired=1\n");
