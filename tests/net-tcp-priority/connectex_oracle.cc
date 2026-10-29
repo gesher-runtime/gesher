@@ -85,14 +85,23 @@ static void retire(Operation* op) {
   require(WSACloseEvent(op->event), "operation event close"); delete op;
 }
 static void data_and_options(Operation* op, Target& endpoint) {
-  int keep = -1, nodelay = -1, length = sizeof(keep); DWORD timeout = 0;
+  // Respect returned lengths: Winsock may write a one-byte Boolean rather
+  // than overwriting an entire poisoned int. Zero initialization mirrors a
+  // well-formed caller buffer without changing the required option values.
+  int keep = 0, nodelay = 0, length = sizeof(keep); DWORD timeout = 0;
   require(getsockopt(op->socket, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<char*>(&keep), &length) == 0, "post-context keepalive");
+  const int keep_length = length;
   length = sizeof(nodelay); require(getsockopt(op->socket, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char*>(&nodelay), &length) == 0, "post-context nodelay");
+  const int nodelay_length = length;
   length = sizeof(timeout); require(getsockopt(op->socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char*>(&timeout), &length) == 0, "post-context receive timeout");
+  const int timeout_length = length;
   sockaddr_in peer{}, local{}; length = sizeof(peer);
   require(getpeername(op->socket, reinterpret_cast<sockaddr*>(&peer), &length) == 0, "post-context peer");
   length = sizeof(local); require(getsockname(op->socket, reinterpret_cast<sockaddr*>(&local), &length) == 0 && local.sin_port != 0, "post-context local bind");
-  printf("CONNECTEX_CONTEXT keepalive=%d nodelay=%d timeout=%lu peer_port=%u expected_port=%u local_port=%u\n", keep, nodelay, timeout, ntohs(peer.sin_port), ntohs(endpoint.address.sin_port), ntohs(local.sin_port)); fflush(stdout);
+  printf("CONNECTEX_CONTEXT keepalive=%d keep_length=%d nodelay=%d nodelay_length=%d timeout=%lu timeout_length=%d peer_port=%u expected_port=%u local_port=%u\n", keep, keep_length, nodelay, nodelay_length, timeout, timeout_length, ntohs(peer.sin_port), ntohs(endpoint.address.sin_port), ntohs(local.sin_port)); fflush(stdout);
+  require((keep_length == 1 || keep_length == static_cast<int>(sizeof(keep))) &&
+          (nodelay_length == 1 || nodelay_length == static_cast<int>(sizeof(nodelay))) &&
+          timeout_length == static_cast<int>(sizeof(timeout)), "actual returned option widths");
   require(keep == 1 && nodelay == 1 && timeout == 300 && peer.sin_port == endpoint.address.sin_port, "context preserves explicit properties");
   SOCKET accepted = accept(endpoint.socket, nullptr, nullptr); require(accepted != INVALID_SOCKET, "accept actual connected socket");
   require(send(accepted, "N", 1, 0) == 1, "normal payload send");
