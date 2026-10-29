@@ -1,6 +1,7 @@
 // Shared restricted launch API boundary fixture. Production adoption remains open.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <processsnapshot.h>
 #include <userenv.h>
 #include <sddl.h>
 #include <aclapi.h>
@@ -314,6 +315,30 @@ static bool protect_pipe(HANDLE pipe) {
   LocalFree(sd);
   return ok;
 }
+static bool snapshot_handles(HANDLE process, HANDLE omitted, HANDLE included, HANDLE input, HANDLE output) {
+  HPSS snapshot = nullptr;
+  DWORD status = PssCaptureSnapshot(process, PSS_CAPTURE_HANDLES, 0, &snapshot);
+  if (status != ERROR_SUCCESS) { printf("DIAG snapshot capture error=%lu\n", status); return false; }
+  HPSSWALK marker = nullptr;
+  status = PssWalkMarkerCreate(nullptr, &marker);
+  bool absent = true, have_included = false, have_input = false, have_output = false;
+  if (status == ERROR_SUCCESS) {
+    PSS_HANDLE_ENTRY entry{};
+    while ((status = PssWalkSnapshot(snapshot, PSS_WALK_HANDLES, marker, &entry, sizeof(entry))) == ERROR_SUCCESS) {
+      absent &= entry.Handle != omitted;
+      have_included |= entry.Handle == included;
+      have_input |= entry.Handle == input;
+      have_output |= entry.Handle == output;
+    }
+  }
+  DWORD marker_status = marker ? PssWalkMarkerFree(marker) : ERROR_SUCCESS;
+  DWORD free_status = PssFreeSnapshot(GetCurrentProcess(), snapshot);
+  printf("DIAG snapshot walk=%lu marker-free=%lu snapshot-free=%lu absent=%d included=%d input=%d output=%d\n",
+      status, marker_status, free_status, absent, have_included, have_input, have_output);
+  return status == ERROR_NO_MORE_ITEMS && marker_status == ERROR_SUCCESS && free_status == ERROR_SUCCESS &&
+      absent && have_included && have_input && have_output;
+}
+
 static constexpr char kRows[] =
     "PASS child actual-token-sid\n"
     "PASS child host-process-dup-denied error=5\n"
@@ -334,10 +359,6 @@ static int child(int argc, wchar_t** argv) {
   OutputDebugStringA("guest child before first inherited pipe write");
   const IpcObservation before_omitted{reinterpret_cast<ULONG_PTR>(omitted), 0, 0x47444941, 0};
   if (!write_bytes(diagnostic, reinterpret_cast<const char*>(&before_omitted), sizeof(before_omitted))) return 75;
-  SetLastError(ERROR_SUCCESS);
-  OutputDebugStringA("guest child before omitted GetHandleInformation");
-  DWORD omitted_flags = 0;
-  if (GetHandleInformation(omitted, &omitted_flags) || GetLastError() != ERROR_INVALID_HANDLE) return 72;
   HANDLE included = reinterpret_cast<HANDLE>(_wcstoui64(argv[11], nullptr, 10));
   DWORD included_flags = 0;
   if (!GetHandleInformation(included, &included_flags) || !SetEvent(included)) return 72;
@@ -572,6 +593,7 @@ static int exercise(Fixture& f) {
     }
   } owned{launch, f.child_stopped};
   f.child_stopped = false;
+  if (!snapshot_handles(process.h, omitted.h, included.h, in_read.h, out_write.h)) return 82;
   in_read.reset(); out_write.reset();
   BOOL in_job = FALSE;
   if (!IsProcessInJob(process.h, job.h, &in_job) || !in_job || !token_is(process.h, f.sid)) return 36;
