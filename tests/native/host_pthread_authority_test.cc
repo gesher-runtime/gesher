@@ -97,8 +97,23 @@ int main() {
     Dead(t, id);
   }
   { Target t; std::thread th([&] { Worker(&t); }); Await(t);
-    Require(th.native_handle() == t.identity, "std native identity");
-    auto id = Check(t, "std-thread"); t.stop = true; th.join(); Dead(t, id); }
+    // This compiler's libc++ uses the Win32 thread backend: native_handle
+    // is a HANDLE, whereas Worker obtained a genuine pthread_self identity.
+    // Authenticate the native oracle while both objects are retained/live;
+    // never reinterpret a kernel handle as a public pthread identity.
+    HANDLE native = nullptr;
+    Require(DuplicateHandle(GetCurrentProcess(), th.native_handle(), GetCurrentProcess(),
+                            &native, THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0), "std native oracle duplicate");
+    DWORD tid = GetThreadId(native);
+    Require(tid != 0 && tid == GetThreadId(t.oracle), "std native live target identity");
+    FILETIME native_created, oracle_created, exited, kernel, user;
+    Require(GetThreadTimes(native, &native_created, &exited, &kernel, &user) &&
+            GetThreadTimes(t.oracle, &oracle_created, &exited, &kernel, &user) &&
+            CompareFileTime(&native_created, &oracle_created) == 0, "std native target incarnation");
+    auto id = Check(t, "std-thread");
+    auto before = Ticks(native), sample = Sample(id), after = Ticks(native);
+    Require(before <= sample && sample <= after, "std native owned oracle bracket");
+    CloseHandle(native); t.stop = true; th.join(); Dead(t, id); }
   { Target t; pthread_attr_t attr; pthread_t th;
     Require(pthread_attr_init(&attr) == 0 && pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0, "detached attr");
     Require(pthread_create(&th, &attr, Worker, &t) == 0, "detached create");

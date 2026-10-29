@@ -19,6 +19,14 @@ retains negative controls. The pinned Makefile link variables are checked
 exactly before the single GCC-only argument is omitted; all other original
 upstream link flags are retained.
 There is no canonical full, package or e2e qualification yet.
+Run40801261120 at f4da8fb6 compiled/linked/installed the complete supplier,
+passed symbol/export/import/layout receipt creation, and compiled actual
+`compat/posix/src/pthread.cc` with `-Werror`. Its host fixture failed to compile
+because this compiler's libc++ Win32 backend returns a native HANDLE, not a
+pthread_t. The fixture correction keeps the worker's real `pthread_self()`
+identity for the API, duplicates the live std::thread native HANDLE as an
+independent oracle, and compares live TID plus creation timestamp and CPU
+brackets. There is no handle-to-pthread cast and no Windows result yet.
 Do not mark the host foreign-thread contract closed. Existing diagnostic
 407989 (a0c47c29) fails import sealing before Windows and is not host evidence.
 No local C/C++/Java/C# compilation or native execution occurred.
