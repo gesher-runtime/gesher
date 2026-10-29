@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       # Maintainer-controlled repository variable, resolved only in this pinned job.
-      NET_COMBINED_BLOCKING_CALLER_COMMIT: ${{ vars.NET_COMBINED_BLOCKING_CALLER_COMMIT }}
+      NET_NEW_MANAGER_BLOCKING_CALLER_COMMIT: ${{ vars.NET_NEW_MANAGER_BLOCKING_CALLER_COMMIT }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -343,7 +343,7 @@ jobs:
                   '.github/workflows/coherent-union-trusted-source.yml'}
               require(union_delta and union_delta <= union_allowed, 'Historical union preflight delta differs')
               verify_selected(baseline)
-              reviewed = os.environ.get('NET_COMBINED_BLOCKING_CALLER_COMMIT', '')
+              reviewed = os.environ.get('NET_NEW_MANAGER_BLOCKING_CALLER_COMMIT', '')
               approved_caller = caller_identity(reviewed)
               references = re.findall(rb'(?m)^    uses: gesher-runtime/gesher/\.github/workflows/net-combined-dns-trusted-source\.yml@([0-9a-f]{40})$', approved_caller)
               require(len(references) == 1, 'Caller must use one immutable full guard commit')
