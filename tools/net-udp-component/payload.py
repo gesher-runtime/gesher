@@ -248,11 +248,21 @@ def main():
         allowed = {'kernel32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
                    'ws2_32.dll', 'iphlpapi.dll', 'psapi.dll', 'bcrypt.dll', 'user32.dll',
                    'api-ms-win-core-synch-l1-2-0.dll'}
-        for member in ('imports-host.txt', 'imports-arm64.txt'):
-            names = re.findall(r'^\s*Name:\s*(\S+)', (folder / member).read_text(), re.M)
-            require(bool(names) and all(name.lower() in allowed or
-                    re.fullmatch(r'api-ms-win-crt-[a-z]+-l1-1-0.dll', name.lower()) for name in names),
-                    'Unexpected or missing actual PE imports')
+        import_rows = []
+        for member, image, role in (('imports-host.txt', 'gesher-exec.exe', 'production-host'),
+                                     ('imports-arm64.txt', 'gesher_arm64.dll', 'matching-arm64-translator')):
+            raw = (folder / member).read_text(encoding='utf-8')
+            names = re.findall(r'^\s*Name:\s*(\S+)', raw, re.M)
+            extra = [name for name in names if not (name.lower() in allowed or
+                     re.fullmatch(r'api-ms-win-crt-[a-z]+-l1-1-0.dll', name.lower()))]
+            missing = [] if names else ['at least one actual DLL import']
+            print('UDP_COMPONENT_ACTUAL_PE_IMPORTS', json.dumps(dict(role=role, file=image,
+                  file_sha256=sha(folder / image), tool_output_member=member,
+                  tool_output_sha256=sha(folder / member), actual_imports=names,
+                  missing=missing, extra=extra, raw_tool_output=raw), sort_keys=True), flush=True)
+            import_rows.append((member, missing, extra))
+        for member, missing, extra in import_rows:
+            require(not missing and not extra, 'Unexpected or missing actual PE imports: ' + member)
         main_rows = (folder / 'linux-reference.log').read_text().splitlines()
         require(len(main_rows) == 200 and sum(' api=' in row for row in main_rows) == 192 and
                 main_rows[-1] == 'UDP all passed; rows=192; alias=128; stream=1', 'Missing actual Linux main rows')

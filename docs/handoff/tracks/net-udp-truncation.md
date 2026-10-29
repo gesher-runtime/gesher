@@ -202,3 +202,13 @@ now binds the exact15 reviewed production/component delta blobs atdd8; its
 caller pin is updated locally. The complete non-doc tree and unchanged full
 DAG remain externally reviewed gates. Both component and full acceptance
 remain pending, and NET_UDP_FULL_CALLER_COMMIT has not been set here.
+
+Observer40796197872/dd8 is all-four-jobs green. Independently audited raw
+`udp-observer-40796197872-all.log` has actual192 main+176fault rows, negative
+rejection, both20k helper races and3 Werror production compiles. Component
+40796197786 builds host, matching DLL and four NDK ELFs but rejects its seal
+with `Unexpected or missing actual PE imports`; Windows is skipped. No ABI
+proof is claimed. The diagnostic-only successor prints exact PE role/file/hash,
+raw llvm-readobj output, complete parsed imports and missing/extra before
+retaining the same rejection policy. No allowlist entry is added. Saved full
+guard/caller requires another final source refresh; no full is dispatched.
