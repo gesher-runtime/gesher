@@ -1125,9 +1125,9 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
       const int native_error = result == SOCKET_ERROR ? WSAGetLastError() : 0;
       if (observer) { observer(false, result, native_error, context); observer = nullptr; }
       if (result != SOCKET_ERROR) break;
-      if (native_error != WSAEINVAL) return errno = ErrnoFromWsa(native_error), -1;
-      // With every native entry closed during this sample, WSAPoll returns a
-      // global WSAEINVAL instead of per-entry POLLNVAL. Recover only endpoints
+      if (native_error != WSAEINVAL && native_error != WSAENOTSOCK) return errno = ErrnoFromWsa(native_error), -1;
+      // An invalid sentinel or a positively closed SOCKET can produce global
+      // WSAEINVAL/WSAENOTSOCK rather than counted POLLNVAL. Recover only endpoints
       // positively retired by their original description; arbitrary native
       // errors retain their original failure. Every retry removes an entry,
       // takes no further wait and never extends the caller's finite deadline.

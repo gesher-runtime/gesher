@@ -311,7 +311,6 @@ static void* submission_connect(void* raw) {
   window.connect_error = errno; window.elapsed = millis() - start; return nullptr;
 }
 static void owned_wait_controls() {
-  gesher::test::DumpOwnHandleTypes(-1, reinterpret_cast<uintptr_t>(&submission_connect), reinterpret_cast<uintptr_t>(&submitted_barrier));
   gesher::ws::OwnerCensus baseline{};
   for (int mode = 0; mode != 4; ++mode) {
     SubmitWindow window{}; window.mode = mode;
@@ -356,7 +355,6 @@ static void owned_wait_controls() {
     gesher::ws::OwnerCensus actual{}; require(gesher::ws::ReadConnectOwnerCensus(&actual), "actual production owner handle/thread census");
     if (mode == 0) baseline = actual;
     printf("TCP_PRIORITY_OWNER_CENSUS mode=%d handles=%u/%u threads=%u/%u\n", mode, actual.handles, baseline.handles, actual.threads, baseline.threads); fflush(stdout);
-    gesher::test::DumpOwnHandleTypes(mode);  // diagnostics precede the UNCHANGED strict bound
     require(actual.handles == baseline.handles && actual.threads == baseline.threads, "repeated real ownership returns to warm handle and thread baseline");
   }
   puts("PASS TCP priority: real owned mode flips cancellation send deadline and native owner retirement");
@@ -483,6 +481,7 @@ static void poll_close_reuse_controls() {
 static void poll_native_error_controls() {
   for (int mode = 0; mode != 3; ++mode) {
     Pair old = pair(); const int victim = old.receiver;
+    gesher::SocketFd retired; require(gesher::LookupSocket(victim, &retired), "native error original description snapshot");
     int other = -1, sender = -1;
     sockaddr_in address{};
     if (mode == 1) { other = eventfd(1, EFD_NONBLOCK); require(other >= 0, "simultaneously ready actual non-socket eventfd"); }
@@ -511,7 +510,13 @@ static void poll_native_error_controls() {
     printf("TCP_PRIORITY_NATIVE_POLL_CLOSE mode=%d native_rc=%d native_error=%d rc=%d victim=%d other=%d elapsed_ms=%lld\n",
         mode, window.native_result, window.native_error, window.result, window.records[0].revents, window.records[1].revents, window.elapsed); fflush(stdout);
     require(window.result == (mode ? 2 : 1) && window.records[0].revents == POLLNVAL && window.elapsed < 1500, "native sample error preserves closed identity and original deadline");
-    if (mode < 2) require(window.native_result == -1 && window.native_error == 10022, "real all-invalid native array returns documented WSAEINVAL");
+    if (mode < 2) require(window.native_result == -1 && window.native_error == 10038, "real closed positive native socket returns independently observed WSAENOTSOCK");
+    if (mode == 0) {
+      gesher::ws::PollEntry unowned{retired.socket, gesher::ws::kPollPri, 0, {}};
+      const int unowned_result = gesher::ws::Poll(&unowned, 1, 0); const int unowned_error = errno;
+      printf("TCP_PRIORITY_NATIVE_POLL_UNOWNED rc=%d errno=%d retired_description=0\n", unowned_result, unowned_error); fflush(stdout);
+      require(unowned_result == -1 && unowned_error == ENOTSOCK, "unowned closed positive socket failure is never rewritten as readiness");
+    }
     if (mode) require(window.records[1].revents == POLLIN, "native sample error preserves simultaneous non-socket or socket readiness");
     if (mode == 1) {
       uint64_t value = 0; require(read(other, &value, sizeof(value)) == static_cast<int>(sizeof(value)) && value == 1, "native error recovery does not consume eventfd payload");

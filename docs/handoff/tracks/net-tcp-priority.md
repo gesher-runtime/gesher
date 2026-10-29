@@ -896,3 +896,33 @@ There is no SO_ERROR read or payload consumption. Original urgent/native
 error controls, Linux contract and product strict NVAL/census remain unchanged.
 Whether tracing causes the exception is a hypothesis until actual comparison;
 no exception swallowing, trace-disable shortcut or product qualification.
+
+5eaafc52/409694 independent MSVC actual BOTH Windows:
+
+| Trace | Native array | rc/WSA error | Native stale revents | Exception |
+|---|---|---|---|---|
+| off | closed fresh or established positive SOCKET only | -1/10038 | 4 (NVAL) | 0 |
+| off | closed established plus live idle UDP | 0/0 | 4 (NVAL) | 0 |
+| on (enable status0) | all three cells | sentinel-999/no returned WSA result | 0 | 0xc0000008 |
+
+All zero-time samples measured0ms and all remaining native sockets/WSA cleanup
+passed. Original urgent/error ownership oracle and full Linux reference also
+passed. This proves the diagnostic's handle tracing changes the closed-handle
+native behavior, and independently corrects the assumed10022 for a closed
+positive SOCKET: the actual error is10038. Sentinel INVALID_SOCKET is distinct.
+Raw tcp-409694-oracle2022/oracle2025.log retained under gesher-ci-review.
+
+The follow-up restores only the ORIGINAL full product process's pre-b59
+untraced state, removing diagnostic enable/type-dump calls. The isolated
+supplier process still traces. All four exact owner censuses, all-invalid
+native/POSIX NVAL/count/deadline assertions and later lifecycle controls remain.
+Production recovery now permits10038 as well as10022 ONLY when an original
+description is positively closed/closing; every retry must still remove an
+entry and uses zero wait. No exception handler/filter enters production.
+The native observer now demands exact10038 for closed positive sockets per
+independent actual evidence; no POSIX assertion is weakened. A new genuine
+unowned positive closed input must return ENOTSOCK88, alongside the existing
+unowned INVALID_SOCKET EINVAL22 control. This guards against hiding unrelated
+native failures. Independent source peer and fresh current-source HOST/both
+NDK ABI contexts remain required; ordinary debugger/verifier and other-provider
+behavior is not generally qualified by this observer-effect characterization.

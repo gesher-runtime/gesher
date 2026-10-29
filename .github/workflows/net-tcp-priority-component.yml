@@ -12,6 +12,7 @@ name: net-tcp-priority-component
 # Pin qualified single-process supervision for isolated diagnostic processes.
 # Require canceled caller ownership release without canceling its native attempt.
 # Test only a privately rebuilt minimal detached-supplier retirement correction.
+# Keep tracing isolated; real retired positive sockets report WSAENOTSOCK.
 on:
   workflow_dispatch:
   push:
