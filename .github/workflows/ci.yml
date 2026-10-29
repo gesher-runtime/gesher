@@ -825,6 +825,7 @@ jobs:
             tools/boot-image
             tools/web3
             tools/package
+            tools/net-udp
             probes/native3/unicode
 
       - name: Verify and assemble windows-x64 artifact
