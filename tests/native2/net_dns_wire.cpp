@@ -5,6 +5,12 @@
 #include <cstdio>
 #include <cstring>
 
+#ifdef __ANDROID__
+// Bionic resolver private ABI; not declared by the public NDK headers.
+extern "C" int __dn_skipname(const unsigned char*, const unsigned char*);
+#define dn_skipname __dn_skipname
+#endif
+
 #if defined(__ANDROID__) && defined(__aarch64__)
 static_assert(static_cast<char>(-1) > 0, "Android ARM64 default char model");
 #elif defined(__ANDROID__) && defined(__x86_64__)

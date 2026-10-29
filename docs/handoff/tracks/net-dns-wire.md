@@ -42,3 +42,12 @@ Packing/encoding, RR parsing, resolver queries/cache/transport, other remaining
 Net4 entries, hardware and aggregate release closure remain open. The allocation
 is test92 under existing ADR0070; a later full integration must register this
 bounded contract without relaxing historical whole-suite/package/e2e guards.
+
+2026-10-29 checkpoint: component 40808944570 on b51784f8 passed actual
+Linux and pinned signed/unsigned AOSP oracles, and built host and translator;
+the x86 NDK guest failed to compile because the public r27c headers do not
+declare dn_skipname. Windows did not run. A pending fix declares the Android
+private ABI __dn_skipname explicitly and adds CI checks of the API 29 libc stub
+and both linked guests' LIBC symbol version. The exact stub and guest checks
+remain unexecuted until changed-source CI. Source peer review is required before
+push. No runtime or inventory closure is claimed.

@@ -249,6 +249,18 @@ def main():
                 rows.append({'command': command, 'driver_sha256': sha(driver),
                              'clang_sha256': sha((bindir / ('clang' + language)).resolve()),
                              'version': subprocess.check_output([str(driver), '--version'], text=True)})
+            # Confirm the exact r27c API 29 stub and the linked guest use the
+            # private Bionic ABI, including its symbol version, on each ABI.
+            stub = ndk / 'toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib' / triple / '29/libc.so'
+            guest = args.directory / ('net-dns-' + abi)
+            readelf = bindir / 'llvm-readelf'
+            for role, binary, expected in (('stub', stub, r'\b__dn_skipname@@LIBC\b'),
+                                           ('guest', guest, r'\b__dn_skipname@LIBC\b')):
+                symbols = subprocess.check_output([str(readelf), '--dyn-syms', '--wide', str(binary)], text=True)
+                matches = [line for line in symbols.splitlines() if re.search(expected, line)]
+                require(len(matches) == 1 and (' UND ' in matches[0]) == (role == 'guest'),
+                        'Unexpected private DNS ABI identity: ' + abi + ' ' + role)
+                print('DNS_PRIVATE_ABI', abi, role, matches[0], flush=True)
             receipts[abi] = rows
         (args.directory / 'guest-commands.json').write_text(json.dumps(
             {'context': context(), 'ndk_properties': props, 'archive_sha256': sha(ROOT / 'ndk.zip'),
