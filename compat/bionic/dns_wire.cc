@@ -78,6 +78,11 @@ int NameNtop(const unsigned char* src, char* dst, size_t size) {
     if (n == 0x41) {
       unsigned bits = *p ? *p : 256;
       ++p;
+      // Preserve the pinned decode_bitstring headroom rule, including its
+      // conservative extra byte beyond the rendered name and terminator.
+      size_t required = (bits + 3) / 4 + sizeof("\\[x/]") +
+                        (bits > 99 ? 3 : bits > 9 ? 2 : 1);
+      if (out >= size || required >= size - out) return BadName();
       char text[80];
       size_t used = 0;
       text[used++] = '\\'; text[used++] = '['; text[used++] = 'x';

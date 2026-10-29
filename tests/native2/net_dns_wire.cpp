@@ -104,6 +104,25 @@ int main(int argc, char** argv) {
   if (extended) {
     const unsigned char bits[]={0x41,5,0xaf,0};
     decode("bitstring-5",bits,sizeof(bits),0,"\\[xa8/5]",4);
+    for (size_t capacity=0;capacity<=12;++capacity) {
+      for (int api=0;api<3;++api) {
+        unsigned char out[24]; std::memset(out,0xa5,sizeof(out)); errno=0;
+        char* dst=reinterpret_cast<char*>(out+4);
+        int rc=api==0 ? ns_name_ntop(bits,dst,capacity) :
+               api==1 ? ns_name_uncompress(bits,bits+sizeof(bits),bits,dst,capacity) :
+                        dn_expand(bits,bits+sizeof(bits),bits,dst,static_cast<int>(capacity));
+        int error=errno;
+        bool guard=true;
+        for (size_t i=0;i<4;++i)guard &= out[i]==0xa5;
+        for (size_t i=4+capacity;i<sizeof(out);++i)guard &= out[i]==0xa5;
+        check(guard,"bitstring capacity guard");
+        check(capacity<10 ? rc==-1 && error==EMSGSIZE :
+              rc==(api==0 ? 9 : 4) && error==0 && std::strcmp(dst,"\\[xa8/5]")==0,
+              "pinned bitstring conservative headroom");
+        std::printf("DNS bit-cap capacity=%zu api=%d rc=%d errno=%d guard=%d\n",capacity,api,rc,error,guard);
+        ++rows;
+      }
+    }
   }
   if (safety) {
     const unsigned char missing_header[]={0x41};

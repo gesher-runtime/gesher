@@ -293,7 +293,7 @@ def main():
                 'Missing actual independent Linux rows')
         require((folder / 'aosp-reference.log').read_text() == (folder / 'linux-reference.log').read_text(),
                 'Exact pinned AOSP and Linux common contracts differ')
-        require((folder / 'aosp-extended.log').read_text().splitlines()[-1] == 'DNS all done rows=99 failures=0',
+        require((folder / 'aosp-extended.log').read_text().splitlines()[-1] == 'DNS all done rows=138 failures=0',
                 'Missing actual pinned AOSP bitstring controls')
         for abi, machine in (('x86_64', 62), ('arm64', 183)):
             elf = (folder / ('net-dns-' + abi)).read_bytes()
