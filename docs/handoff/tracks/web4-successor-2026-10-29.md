@@ -21,3 +21,5 @@ Next local candidate extends SessionActivity with a delayed CDP evaluate, native
 Local successor also bounds admitted session requests, including work queued ahead of the STA, to 128 per generation. Capacity is released on retirement before callback; failed posting rolls admission back. This is source-only and requires saturation and close-race tests.
 
 Before JNI copies strings, the next candidate rejects session and method names over 256 UTF-16 code units and parameters over 524288. Native callers are bounded too. The fixture checks an oversized method; exact parameter boundaries and backlog saturation remain untested. An impossible pending-count underflow terminates rather than silently reopening capacity.
+
+Further local source generalizes the deferred JNI-listener release to all four existing listener entry points, not only session results. Independent source review found no immediate blocker, but actual nested destroy/deferral behavior for each entry remains untested. The logical session input budget is 4,194,304 UTF-16 units across queued and in-flight calls, excluding allocator, duplicate-copy, output and event memory; no saturation proof yet.
