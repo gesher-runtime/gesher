@@ -88,6 +88,21 @@ def supplier(source, llvm):
     imports = command(str(llvm / 'bin/llvm-readobj'), '--coff-imports', str(target / 'bin/libwinpthread-1.dll'))
     result['dll_import_names'] = dll_imports(imports)
     result['dll_imports'] = imports
+    build_log = (source / 'build/build-commands.log').read_text()
+    layouts = re.findall(r'^\s*0 \| struct _pthread_v\n(.*?\[sizeof=\d+, align=\d+\])',
+                         build_log, re.MULTILINE | re.DOTALL)
+    assert layouts, 'No actual private ABI layout from this supplier compilation'
+    layout = layouts[-1]
+    for field in ('valid', 'ret_arg', 'func', 'clean', 'nobreak', 'h', 'cpu_handle',
+                  'cpu_generation', 'evStart', 'p_clock', 'cancelled', 'in_cancel',
+                  'thread_noposix', 'p_state', 'keymax', 'keyval', 'keyval_set',
+                  'thread_name', 'spin_keys', 'tid', 'rwlc', 'rwlq', 'sched_pol',
+                  'ended', 'sched', 'jb', 'next', 'x'):
+        assert re.search(r'\b' + field + r'\s*$', layout, re.MULTILINE), 'Missing ABI field: ' + field
+    assert re.search(r'^\s*48 \|\s+HANDLE cpu_handle$', layout, re.MULTILINE)
+    assert re.search(r'^\s*56 \|\s+unsigned long long cpu_generation$', layout, re.MULTILINE)
+    assert '[sizeof=496, align=16]' in layout
+    result['private_record_layout'] = '0 | struct _pthread_v\n' + layout
     (llvm / 'gesher-winpthreads-authority.json').write_text(json.dumps(result, indent=2, sort_keys=True))
 
 
