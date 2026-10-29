@@ -251,6 +251,45 @@ static void persistent_owner() {
   DeleteCriticalSection(&owner.mutex);
   puts("PASS independent persistent IO owner: requester exit, two native outcomes, completion drain and bounded shutdown");
 }
+static void reset_sequence_matrix() {
+  // Characterize before changing the original strict positive below. Each
+  // cell uses fresh endpoints; getter-only must not inherit poll side effects.
+  for (int overlapped = 0; overlapped != 2; ++overlapped) for (int observation = 0; observation != 3; ++observation) {
+    Target endpoint = target(true); Operation* op = operation(1);
+    if (overlapped) {
+      submit(op, endpoint.address); require(finish(op, "reset-matrix-connectex") == 0, "matrix real ConnectEx success");
+      require(setsockopt(op->socket, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, nullptr, 0) == 0, "matrix ConnectEx context");
+    } else {
+      const int result = connect(op->socket, reinterpret_cast<sockaddr*>(&endpoint.address), sizeof(endpoint.address));
+      require(result == 0 || (result == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK), "matrix ordinary connect starts");
+      fd_set writes, exceptions; FD_ZERO(&writes); FD_ZERO(&exceptions); FD_SET(op->socket, &writes); FD_SET(op->socket, &exceptions); timeval timeout{2, 0};
+      require(select(0, nullptr, &writes, &exceptions, &timeout) == 1 && FD_ISSET(op->socket, &writes) && !FD_ISSET(op->socket, &exceptions), "matrix ordinary connect actually succeeds");
+      int initial = -1, length = sizeof(initial);
+      require(getsockopt(op->socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&initial), &length) == 0 && initial == 0, "ordinary successful error state");
+      op->completed = true;
+    }
+    SOCKET peer = accept(endpoint.socket, nullptr, nullptr); require(peer != INVALID_SOCKET, "matrix accept");
+    linger abortive{1, 0}; require(setsockopt(peer, SOL_SOCKET, SO_LINGER, reinterpret_cast<char*>(&abortive), sizeof(abortive)) == 0 && closesocket(peer) == 0, "matrix actual abortive peer close");
+    Sleep(100);  // fixed observation delay; no claim of an error-arrival deadline
+    int ready = -99, mask = 0;
+    if (observation == 1) {
+      fd_set reads, writes, exceptions; FD_ZERO(&reads); FD_ZERO(&writes); FD_ZERO(&exceptions); FD_SET(op->socket, &reads); FD_SET(op->socket, &writes); FD_SET(op->socket, &exceptions); timeval zero{};
+      ready = select(0, &reads, &writes, &exceptions, &zero);
+      mask = (FD_ISSET(op->socket, &reads) ? 1 : 0) | (FD_ISSET(op->socket, &writes) ? 2 : 0) | (FD_ISSET(op->socket, &exceptions) ? 4 : 0);
+    } else if (observation == 2) {
+      WSAPOLLFD p{}; p.fd = op->socket; p.events = POLLRDBAND | POLLRDNORM | POLLWRNORM;
+      ready = WSAPoll(&p, 1, 0); mask = p.revents;
+    }
+    int first = -1, second = -1, length = sizeof(first);
+    require(getsockopt(op->socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&first), &length) == 0, "matrix first native getter");
+    length = sizeof(second); require(getsockopt(op->socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&second), &length) == 0, "matrix second native getter");
+    char byte = 0; const int received = recv(op->socket, &byte, 1, MSG_PEEK);
+    const int receive_error = received == SOCKET_ERROR ? WSAGetLastError() : 0;
+    printf("CONNECTEX_RESET_SEQUENCE overlapped=%d observation=%d ready=%d mask=%d first=%d second=%d peek_rc=%d peek_error=%d\n", overlapped, observation, ready, mask, first, second, received, receive_error); fflush(stdout);
+    require(received == SOCKET_ERROR && receive_error == WSAECONNRESET, "matrix independent transport reset is real");
+    retire(op); require(closesocket(endpoint.socket) == 0, "matrix endpoint cleanup");
+  }
+}
 static void terminal_boundary() {
   Target refused = target(false); Operation* op = operation(1); submit(op, refused.address);
   require(finish(op, "terminal-refusal") == WSAECONNREFUSED, "terminal actual refusal");
@@ -314,6 +353,7 @@ int main() {
   for (int success = 0; success != 2; ++success) for (int mode = 0; mode != 2; ++mode) for (int flip = 0; flip != 2; ++flip) scenario(success != 0, mode, flip != 0);
   cancellation(false); cancellation(true); thread_exit();
   persistent_owner();
+  reset_sequence_matrix();
   terminal_boundary();
   require(WSACleanup() == 0, "cleanup");
   puts("PASS independent ConnectEx mode/context/error/cancel/thread-owner characterization; no production qualification");

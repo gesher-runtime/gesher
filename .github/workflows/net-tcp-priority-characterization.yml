@@ -45,6 +45,16 @@ jobs:
         run: |
           & ./connectex-oracle.exe
           if ($LASTEXITCODE -ne 0) { throw 'ConnectEx characterization failed' }
+  windows-module:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
       - name: Compile independent module ownership and unload oracle
         shell: cmd
         run: |
