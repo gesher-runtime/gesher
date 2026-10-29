@@ -97,12 +97,10 @@
    t->sched.sched_priority = GetThreadPriority(t->h);
    t->ended = 0;
    t->thread_noposix = 1;
-@@ -1098,6 +1128,40 @@
- {
-   _pthread_v *t = __pthread_self_lite ();
+@@ -1100,6 +1130,40 @@
    return (!t ? NULL : t->evStart);
-+}
-+
+ }
+ 
 +/* Versioned atomic capability acquisition. Invalid pthread_t values are
 +   map keys only: never dereference a caller-supplied integer as a pointer.
 +   cpu_handle cannot be closed/reused until push_pthread_mem takes this lock. */
@@ -135,10 +133,12 @@
 +    }
 +  pthread_mutex_unlock (&mtx_pthr_locked);
 +  return result;
- }
- 
++}
++
  /* Internal helper for getting thread handle of thread T.  */
-@@ -1144,37 +1144,30 @@
+ void *
+ pthread_gethandle (pthread_t t)
+@@ -1144,37 +1208,30 @@
    if (id->thread_noposix == 0)
      longjmp(id->jb, 1);
  
@@ -200,7 +200,7 @@
      }
    /* Time to die */
    _endthreadex(rslt);
-@@ -1556,6 +1620,7 @@
+@@ -1556,6 +1613,7 @@
  {
    unsigned rslt = 0;
    struct _pthread_v *tv = (struct _pthread_v *)args;
@@ -208,7 +208,7 @@
  
    _fpreset();
  
-@@ -1593,6 +1658,9 @@
+@@ -1593,6 +1651,9 @@
        tv->valid = DEAD_THREAD;
        pthread_mutex_unlock (&tv->p_clock);
        pthread_mutex_destroy (&tv->p_clock);
@@ -218,7 +218,7 @@
        push_pthread_mem (tv);
        tv = NULL;
        TlsSetValue (_pthread_tls, tv);
-@@ -1707,12 +1775,15 @@
+@@ -1707,12 +1768,15 @@
      }
      SetThreadPriority (thrd, pr);
    }
@@ -235,7 +235,7 @@
      }
    else
      {
-@@ -1739,7 +1810,7 @@
+@@ -1739,7 +1803,7 @@
    /* pthread_testcancel (); */
    if (tv->ended == 0 || (tv->h != NULL && tv->h != INVALID_HANDLE_VALUE))
      WaitForSingleObject (tv->h, INFINITE);
@@ -244,7 +244,7 @@
    if (tv->evStart)
      CloseHandle (tv->evStart);
    tv->evStart = NULL;
-@@ -1787,7 +1858,7 @@
+@@ -1787,7 +1851,7 @@
  	      return EBUSY;
  	    }
      }
@@ -253,7 +253,21 @@
    if (tv->evStart)
      CloseHandle (tv->evStart);
    tv->evStart = NULL;
-@@ -1831,7 +1902,7 @@
+@@ -1809,11 +1873,12 @@
+ pthread_detach (pthread_t t)
+ {
+   int r = 0;
+-  struct _pthread_v *tv = __pth_gpointer_locked (t);
++  struct _pthread_v *tv;
+   HANDLE dw;
+   pthread_spinlock_t new_spin_keys = PTHREAD_SPINLOCK_INITIALIZER;
+ 
+   pthread_mutex_lock (&mtx_pthr_locked);
++  tv = __pthread_get_pointer (t);
+   if (!tv || !TEST_HANDLE(tv->h))
+     {
+       pthread_mutex_unlock (&mtx_pthr_locked);
+@@ -1831,7 +1896,7 @@
    _ReadWriteBarrier();
    if (dw)
      {
