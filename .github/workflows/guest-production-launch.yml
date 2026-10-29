@@ -79,7 +79,7 @@ jobs:
             'PASS shared-api bounded-admission-allocation-free-handoff-busy-retry-unknown',
             'PASS shared-api unconfirmed-retirement-evidence-owned-retry-quarantine',
             'PASS shared-api forbidden-flags-fail-closed suspended-owned-rollback',
-            'PASS shared-api unlisted-inheritable-event-denied',
+            'PASS shared-api unlisted-inheritable-event-denied included-event-signaled',
             'PASS parent suspended-token-sid pid=',
             'PASS parent same-endpoint-isolated-positive-challenge fresh-host-positive protected-dacl',
             'PASS child actual-token-sid',

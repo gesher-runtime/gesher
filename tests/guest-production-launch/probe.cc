@@ -328,15 +328,19 @@ static constexpr char kRows[] =
 
 static int child(int argc, wchar_t** argv) {
   OutputDebugStringA("guest child entered before argument parsing");
-  if (argc != 11) return 10;
+  if (argc != 12) return 10;
   HANDLE omitted = reinterpret_cast<HANDLE>(_wcstoui64(argv[10], nullptr, 10));
   HANDLE diagnostic = reinterpret_cast<HANDLE>(_wcstoui64(argv[9], nullptr, 10));
   OutputDebugStringA("guest child before first inherited pipe write");
   const IpcObservation before_omitted{reinterpret_cast<ULONG_PTR>(omitted), 0, 0x47444941, 0};
   if (!write_bytes(diagnostic, reinterpret_cast<const char*>(&before_omitted), sizeof(before_omitted))) return 75;
   SetLastError(ERROR_SUCCESS);
-  OutputDebugStringA("guest child before omitted SetEvent");
-  if (SetEvent(omitted) || GetLastError() != ERROR_INVALID_HANDLE) return 72;
+  OutputDebugStringA("guest child before omitted GetHandleInformation");
+  DWORD omitted_flags = 0;
+  if (GetHandleInformation(omitted, &omitted_flags) || GetLastError() != ERROR_INVALID_HANDLE) return 72;
+  HANDLE included = reinterpret_cast<HANDLE>(_wcstoui64(argv[11], nullptr, 10));
+  DWORD included_flags = 0;
+  if (!GetHandleInformation(included, &included_flags) || !SetEvent(included)) return 72;
   PSID expected = nullptr;
   if (!ConvertStringSidToSidW(argv[2], &expected)) return 11;
   const bool actual = token_is(GetCurrentProcess(), expected);
@@ -487,15 +491,16 @@ static int exercise(Fixture& f) {
   if (!CreatePipe(&in_read.h, &in_write.h, &inherited, 0) || !CreatePipe(&out_read.h, &out_write.h, &inherited, 0) ||
       !SetHandleInformation(in_write.h, HANDLE_FLAG_INHERIT, 0) || !SetHandleInformation(out_read.h, HANDLE_FLAG_INHERIT, 0) ||
       !write_bytes(in_write.h, "Gesher-resource-v1\n", 19)) return 32;
-  Handle omitted;
+  Handle omitted, included;
   omitted.h = CreateEventW(&inherited, TRUE, FALSE, nullptr);
-  if (!omitted.valid()) return 73;
-  HANDLE handles[]{in_read.h, out_write.h};
+  included.h = CreateEventW(&inherited, TRUE, FALSE, nullptr);
+  if (!omitted.valid() || !included.valid()) return 73;
+  HANDLE handles[]{in_read.h, out_write.h, included.h};
   std::wstring cmd = L"\"" + f.executable + L"\" child " + sid_text + L" " + std::to_wstring(GetCurrentProcessId()) +
       L" " + std::to_wstring(GetCurrentThreadId()) + L" \"" + f.code + L"\" \"" + f.config + L"\" \"" + pipe_name + L"\" " +
-      std::to_wstring(reinterpret_cast<ULONG_PTR>(in_read.h)) + L" " + std::to_wstring(reinterpret_cast<ULONG_PTR>(out_write.h)) + L" " + std::to_wstring(reinterpret_cast<ULONG_PTR>(omitted.h));
+      std::to_wstring(reinterpret_cast<ULONG_PTR>(in_read.h)) + L" " + std::to_wstring(reinterpret_cast<ULONG_PTR>(out_write.h)) + L" " + std::to_wstring(reinterpret_cast<ULONG_PTR>(omitted.h)) + L" " + std::to_wstring(reinterpret_cast<ULONG_PTR>(included.h));
   STARTUPINFOW startup{}; startup.cb = sizeof(startup);
-  const std::vector<HANDLE> allowlist{handles[0], handles[1]};
+  const std::vector<HANDLE> allowlist{handles[0], handles[1], handles[2]};
   {
     std::wstring rejected_cmd = cmd;
     if (!gesher::guest::RestrictedLaunchTestAccess::ExhaustionRejects(f.executable.c_str(),
@@ -628,8 +633,9 @@ static int exercise(Fixture& f) {
   char rows[sizeof(kRows)]{}; DWORD read = 0;
   if (!ReadFile(out_read.h, rows, available, &read, nullptr) || read != available || memcmp(rows, kRows, available) != 0) return 41;
   printf("%s", rows);
-  if (WaitForSingleObject(omitted.h, 0) != WAIT_TIMEOUT) return 74;
-  puts("PASS shared-api unlisted-inheritable-event-denied");
+  if (WaitForSingleObject(omitted.h, 0) != WAIT_TIMEOUT ||
+      WaitForSingleObject(included.h, 0) != WAIT_OBJECT_0) return 74;
+  puts("PASS shared-api unlisted-inheritable-event-denied included-event-signaled");
   if (!unchanged(f.code) || !unchanged(f.config)) return 42;
   printf("PASS parent trusted-files-unchanged host-ipc-positive=1 child-exit=0\n");
   return 0;
