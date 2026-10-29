@@ -101,6 +101,20 @@ std::atomic<int> g_fixture_rollback_faults{0};
 std::atomic<int> g_fixture_rollback_pid{0};
 #endif
 
+// Caller holds g_lock. An unconfirmed record blocks another bootstrap and is
+// retained without allocation until its exact handle signals and closes.
+bool ReapBootstrapQuarantineLocked() {
+  bool clean = true;
+  for (auto it = g_children.begin(); it != g_children.end();) {
+    if (it->second.bootstrap_retirement == 2) {
+      if (WaitForSingleObject(it->second.process, 0) == WAIT_OBJECT_0 &&
+          CloseHandle(it->second.process)) it = g_children.erase(it);
+      else { clean = false; ++it; }
+    } else ++it;
+  }
+  return clean;
+}
+
 const wchar_t* W(const std::u16string& s) { return reinterpret_cast<const wchar_t*>(s.c_str()); }
 
 std::u16string U(const wchar_t* s, size_t n) {
@@ -484,6 +498,10 @@ std::vector<int> StartDevice(const std::vector<std::u16string>& commands,
                             const std::vector<std::u16string>& env) {
   std::lock_guard<std::recursive_mutex> spawning(g_spawn_lock);
   InitControl();
+  {
+    std::lock_guard<std::mutex> guard(g_lock);
+    if (!ReapBootstrapQuarantineLocked()) return {};
+  }
   if (commands.size() != 3 || logs.size() != 3 || g_control || g_broker ||
       launch::kStartup.present || g_host_uid) return {};
   HANDLE server = INVALID_HANDLE_VALUE, client = INVALID_HANDLE_VALUE;
@@ -593,11 +611,8 @@ intptr_t FixtureObserveRollback(int pid) {
 bool FixtureReapRollback(int pid) {
   std::lock_guard<std::mutex> guard(g_lock);
   auto it = g_children.find(pid);
-  if (it == g_children.end() || it->second.bootstrap_retirement != 2 ||
-      WaitForSingleObject(it->second.process, 0) != WAIT_OBJECT_0 || !CloseHandle(it->second.process))
-    return false;
-  g_children.erase(it);
-  return true;
+  if (it == g_children.end() || it->second.bootstrap_retirement != 2) return false;
+  return ReapBootstrapQuarantineLocked();
 }
 #endif
 
@@ -653,13 +668,7 @@ bool RevokeInstall(const std::u16string& package, const std::u16string& install)
       it = g_quarantined.erase(it);
     } else ++it;
   }
-  for (auto it = g_children.begin(); it != g_children.end();) {
-    if (it->second.bootstrap_retirement == 2) {
-      if (WaitForSingleObject(it->second.process, 0) == WAIT_OBJECT_0 &&
-          CloseHandle(it->second.process)) it = g_children.erase(it);
-      else { ok = false; ++it; }
-    } else ++it;
-  }
+  ok = ReapBootstrapQuarantineLocked() && ok;
   return ok;
 }
 
