@@ -10,6 +10,7 @@
 
 #include <jni.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <string>
@@ -65,12 +66,31 @@ void CheckException(JNIEnv* env) {
 class JavaListener final : public Listener {
  public:
   JavaListener(JNIEnv* env, jobject peer) : peer_(env->NewGlobalRef(peer)) {}
+  bool valid() const { return peer_ != nullptr; }
 
   void OnEvent(int32_t type, int64_t id, int32_t arg, const std::wstring& a, const std::wstring& b,
                const std::wstring& c, const std::vector<uint8_t>* bytes) override {
     JNIEnv* env = Env();
-    if (env == nullptr) return;
-    jstring ja = JStr(env, a), jb = JStr(env, b), jc = JStr(env, c);
+    if (env == nullptr) {
+      // An admitted session result cannot be silently lost when JNI attachment fails.
+      if (type == gesher::webview::kSessionResult) abort();
+      return;
+    }
+    auto session_failure = [env, type] {
+      if (type == gesher::webview::kSessionResult && env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        abort();
+      }
+    };
+    jstring ja = JStr(env, a);
+    session_failure();
+    if (type == gesher::webview::kSessionResult && ja == nullptr) abort();
+    jstring jb = JStr(env, b);
+    session_failure();
+    if (type == gesher::webview::kSessionResult && jb == nullptr) abort();
+    jstring jc = JStr(env, c);
+    session_failure();
+    if (type == gesher::webview::kSessionResult && jc == nullptr) abort();
     jbyteArray data = nullptr;
     if (bytes != nullptr) {
       data = env->NewByteArray(static_cast<jsize>(bytes->size()));
@@ -80,6 +100,7 @@ class JavaListener final : public Listener {
       }
     }
     env->CallVoidMethod(peer_, g_on_event, type, static_cast<jlong>(id), arg, ja, jb, jc, data);
+    session_failure();
     CheckException(env);
     env->DeleteLocalRef(ja);
     env->DeleteLocalRef(jb);
@@ -181,7 +202,12 @@ jlong JNICALL WebView2Host_create(JNIEnv* env, jclass, jobject peer, jlong paren
   options.parent = Hwnd(parent);
   options.scale = scale > 0 ? scale : 1.0;
   options.background = static_cast<uint32_t>(background);
-  return reinterpret_cast<jlong>(Host::Create(new JavaListener(env, peer), options));
+  auto* listener = new JavaListener(env, peer);
+  if (!listener->valid()) {
+    delete listener;
+    return 0;
+  }
+  return reinterpret_cast<jlong>(Host::Create(listener, options));
 }
 
 jboolean JNICALL WebView2Host_destroy(JNIEnv*, jclass, jlong h) {
