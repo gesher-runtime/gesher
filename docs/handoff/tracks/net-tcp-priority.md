@@ -102,3 +102,48 @@ approximate userspace byte queue would corrupt ordering and is not implemented.
 Strict coherent component and canonical whole-suite caller/guard plumbing
 remain pending. No all-Net4, all-poll, ancillary, hardware, main or release
 closure is implied. Inventory and historical proofs are unchanged.
+
+## Subsequent source and actual observations
+
+`7b825fcab705b41b9405aa86a9f40af3fb782e8a` introduced the real non-inline
+POLLPRI mapping and the one-producer component. Component `40852406540` is
+RED: Linux full reference passed; the actual host/probe, translator DLL and
+both NDK ELFs compiled, but the producer's import-role assertion rejected
+WINHTTP.dll and api-ms-win-core-synch-l1-2-0.dll before artifact upload.
+Both Windows runtime jobs were skipped. This supplies no production runtime
+verdict. Raw failed-job log: `tcp-priority-40852406540-failed.log`.
+
+Changed source `2152fb7af20f871a36c515b641837ac1baccb11b` replaces the shared
+import allowlist with role-specific policy and unknown/private/path/empty/
+wrong-role controls. WINHTTP belongs only to gesher-exec's existing
+MediaPlayer backend (`cmake/aosp/media.cmake`, player/http_source.cc), not to
+the POSIX probe or translator DLL. Synchronization's API-set dependency is
+individually justified by the existing POSIX and translator CMake links.
+The producer prints all three actual import sets before enforcing policy;
+probe and DLL role acceptance remains unproved until actual CI.
+
+Independent boundary diagnostic `40852850367` / `a873ca8b` is RED on both
+Windows because the hypothesis that a large normal recv stops before urgent
+was disproved. Actual MSG_PEEK with32-byte capacity returned the six-byte
+prefix; subsequent normal recv with32-byte capacity returned ten bytes
+`normaltail`, crossing the urgent byte's stream position. This failed source
+was not retried. Raw log: `tcp-priority-40852850367-all.log`.
+
+Changed diagnostic `40853977336` / `633b04cb` is GREEN (Linux and both
+Windows). It preserves that native counterexample as an explicit observation
+and tests a separate receive capped to the peeked prefix length. Both
+Windows returned six prefix bytes for the capped receive, then a normal
+MSG_PEEK at the mark returned the four-byte suffix while SIOCATMARK remained0,
+POLLRDBAND remained512 and OOB|PEEK returned the unchanged urgent byte33.
+The uncapped crossing receive likewise left the urgent byte independently
+available. Raw log: `tcp-priority-40853977336-all.log`.
+
+Consequently, the characterized native APIs do not yet expose a safe Linux
+position-at-urgent predicate for logical-inline delivery. In particular,
+neither SIOCATMARK==0 nor a positive normal MSG_PEEK distinguishes unread
+normal prefix from suffix after the urgent position. A receive capped to an
+observed peek length prevents that particular crossing but does not establish
+which side of the urgent byte the data occupies. No logical-inline code is
+implemented from these observations. Repeated urgent indications, option
+changes and exact mark/peek/WAITALL/dup/close races require further independent
+packet-ordering evidence before any broader implementation or claim.
