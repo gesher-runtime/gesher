@@ -57,6 +57,17 @@ static SOCKET duplicate(SOCKET s) {
   u_long nonblocking = 1; require(ioctlsocket(copy, FIONBIO, &nonblocking) == 0, "ownership duplicate nonblocking");
   return copy;
 }
+static void tcp_state(SOCKET s, int mode, const char* phase) {
+  TCP_INFO_v0 info{}; ULONG version = 0; DWORD returned = 0;
+  int rc = WSAIoctl(s, SIO_TCP_INFO, &version, sizeof(version), &info, sizeof(info), &returned, nullptr, nullptr);
+  int error = rc == SOCKET_ERROR ? WSAGetLastError() : 0;
+  WSAPROTOCOL_INFOW protocol{}; int length = sizeof(protocol);
+  int protocol_rc = getsockopt(s, SOL_SOCKET, SO_PROTOCOL_INFOW, reinterpret_cast<char*>(&protocol), &length);
+  printf("WINDOWS_ERROR_STATE mode=%d phase=%s tcp_rc=%d tcp_error=%d returned=%lu state=%d closed=%d protocol_rc=%d family=%d type=%d protocol=%d\n",
+         mode, phase, rc, error, returned, static_cast<int>(info.State), static_cast<int>(TCPSTATE_CLOSED),
+         protocol_rc, protocol.iAddressFamily, protocol.iSocketType, protocol.iProtocol);
+  fflush(stdout);
+}
 static void error_ownership(int mode) {
   SOCKET reserved = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   require(reserved != INVALID_SOCKET, "ownership reserved");
@@ -102,6 +113,7 @@ static void error_ownership(int mode) {
     require(closesocket(alias) == 0, "ownership late alias close");
   }
   int first = -1; length = sizeof(first);
+  tcp_state(original, mode, "before-caller");
   int first_rc = getsockopt(original, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&first), &length);
   int first_error = first_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
   int second = -1; length = sizeof(second);
@@ -109,6 +121,24 @@ static void error_ownership(int mode) {
   printf("WINDOWS_ERROR mode=%d phase=caller-consumes first_rc=%d value=%d error=%d second_rc=%d second=%d elapsed_ms=%llu\n", mode, first_rc, first, first_error, second_rc, second, GetTickCount64() - start);
   fflush(stdout);
   require(first_rc == 0 && second_rc == 0, "ownership explicit caller getsockopt");
+  tcp_state(original, mode, "after-caller");
+  int sent = send(original, "x", 1, 0);
+  int send_error = sent == SOCKET_ERROR ? WSAGetLastError() : 0;
+  int after_send = -1; length = sizeof(after_send);
+  int after_send_rc = getsockopt(original, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&after_send), &length);
+  printf("WINDOWS_ERROR_STATE mode=%d phase=after-send send_rc=%d send_error=%d getter_rc=%d value=%d\n", mode, sent, send_error, after_send_rc, after_send);
+  tcp_state(original, mode, "after-send");
+  // Reconnect after failed TCP is unspecified. Observe the actual provider;
+  // no cross-platform reconnect success is asserted or claimed.
+  int retry = connect(original, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+  int retry_error = retry == SOCKET_ERROR ? WSAGetLastError() : 0;
+  tcp_state(original, mode, "after-retry");
+  WSAPOLLFD retry_poll{}; retry_poll.fd = original; retry_poll.events = POLLRDBAND | POLLWRNORM;
+  int retry_poll_rc = WSAPoll(&retry_poll, 1, 5000);
+  int retry_value = -1; length = sizeof(retry_value);
+  int retry_getter = getsockopt(original, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&retry_value), &length);
+  printf("WINDOWS_ERROR_STATE mode=%d phase=retry-result connect_rc=%d connect_error=%d poll_rc=%d revents=%d getter_rc=%d value=%d\n", mode, retry, retry_error, retry_poll_rc, retry_poll.revents, retry_getter, retry_value);
+  tcp_state(original, mode, "retry-complete");
   require(closesocket(original) == 0 && closesocket(reserved) == 0, "ownership cleanup");
 }
 int main() {
