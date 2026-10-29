@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       # Maintainer-controlled repository variable, resolved only in this pinned job.
-      NET_NEW_MANAGER_BLOCKING_CALLER_COMMIT: ${{ vars.NET_NEW_MANAGER_BLOCKING_CALLER_COMMIT }}
+      NET_MEDIA4_WEBM_CALLER_COMMIT: ${{ vars.NET_MEDIA4_WEBM_CALLER_COMMIT }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -183,6 +183,10 @@ jobs:
           SOURCE_PINS['tests/windows/tracks/58-devices.ps1'] = 'b16da67c5a2286f73cda9a9162295a931cabd40e'
           # Actual component409072 exact observer source; historical maps remain frozen.
           SOURCE_PINS.update({'.github/workflows/native3-locks-blocking.yml': 'd898a5eb8f5820a5d66dfa9633c6164722cde065', 'tests/native3-locks/command_oracle.py': 'c0655cce6466619b35c3e68eb82bc20ca939fc03', 'tests/native3-locks/command_worker.cc': '6872f626e1c64671d9b0eda8f4dcc55f89dec69a', 'tests/native3-locks/stdio_sink_oracle.py': 'cc6ced799c5391c76eac312054cf242e3313bd50', 'tests/native3-locks/test_command_cleanup.py': 'fbd6815890d8dcee22136d0298e7684986b49845', 'tools/native3-locks/StdioSinkSupervisor.cs': '1b320bc00a64172733f2e87a9ee864975337a0b0'})
+          # Exact peer-reviewed Media4 diagnostic candidate, frozen separately.
+          SOURCE_PINS.update({'tests/media/ndk-muxer/muxer_test.cc': '66c58b32f1d51ffd70a0bbed99986063682ac095',
+                              'tests/media/ndk-muxer/verify_output.cc': '91c952317018b32b62b7009d92380afdd8282e9e',
+                              'tests/windows/tracks/79-media4-muxer.ps1': '8bd8fd1cb43755dc6860509717c87b98f19ce505'})
           ORIGINAL_BASE = 'f1550540186b4ae3f17a5e501a886ec1c4d5d613'
           UNION_BASE = '8b1e9b509ceef7e532a7ff5bc085ecdbc476d292'
 
@@ -343,7 +347,7 @@ jobs:
                   '.github/workflows/coherent-union-trusted-source.yml'}
               require(union_delta and union_delta <= union_allowed, 'Historical union preflight delta differs')
               verify_selected(baseline)
-              reviewed = os.environ.get('NET_NEW_MANAGER_BLOCKING_CALLER_COMMIT', '')
+              reviewed = os.environ.get('NET_MEDIA4_WEBM_CALLER_COMMIT', '')
               approved_caller = caller_identity(reviewed)
               references = re.findall(rb'(?m)^    uses: gesher-runtime/gesher/\.github/workflows/net-combined-dns-trusted-source\.yml@([0-9a-f]{40})$', approved_caller)
               require(len(references) == 1, 'Caller must use one immutable full guard commit')
