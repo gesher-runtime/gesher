@@ -440,3 +440,40 @@
      if (__clock_gettime (clock_id, &tp64) == -1)
          return -1;
  
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -1978,3 +1978,34 @@
++/* Discovery-only ABI.  This descriptor does not enable cross-image routing;
++   all entries still use the provider that owns this immutable table. */
++typedef struct gesher_pthread_owner_v1 {
++  unsigned size, version;
++  pthread_t (__cdecl *self)(void);
++  int (__cdecl *equal)(pthread_t, pthread_t);
++  int (__cdecl *create)(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *);
++  int (__cdecl *join)(pthread_t, void **);
++  int (__cdecl *tryjoin)(pthread_t, void **);
++  int (__cdecl *detach)(pthread_t);
++  int (__cdecl *cancel)(pthread_t);
++  int (__cdecl *key_create)(pthread_key_t *, void (*)(void *));
++  int (__cdecl *key_delete)(pthread_key_t);
++  void *(__cdecl *getspecific)(pthread_key_t);
++  int (__cdecl *setspecific)(pthread_key_t, const void *);
++  struct _pthread_cleanup **(__cdecl *getclean)(void);
++} gesher_pthread_owner_v1;
++
++__declspec(dllexport) const gesher_pthread_owner_v1 * __cdecl
++gesher_pthread_owner_descriptor_v1(void)
++{
++  static const gesher_pthread_owner_v1 descriptor = {
++    sizeof(gesher_pthread_owner_v1), 1, pthread_self, pthread_equal,
++    pthread_create, pthread_join, _pthread_tryjoin, pthread_detach,
++    pthread_cancel, pthread_key_create, pthread_key_delete,
++    pthread_getspecific, pthread_setspecific, pthread_getclean
++  };
++  return &descriptor;
++}
++
++
+ int
+ pthread_getname_np (pthread_t thread, char *name, size_t len)
+ {
