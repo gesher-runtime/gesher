@@ -32,11 +32,12 @@ static int socket_error(int socket) {
   int value = -1; socklen_t length = sizeof(value);
   require(getsockopt(socket, SOL_SOCKET, SO_ERROR, &value, &length) == 0 && length == sizeof(value), "actual caller error read"); return value;
 }
-static bool pending(int socket) {
+static bool pending(int socket, bool diagnostic = false) {
   sockaddr_in local{}; socklen_t length = sizeof(local);
   require(getsockname(socket, reinterpret_cast<sockaddr*>(&local), &length) == 0, "actual local address");
   pollfd p{socket, POLLOUT, 0}; const int ready = poll(&p, 1, 0);
   require(ready >= 0, "actual pending readiness");
+  if (diagnostic) { printf("LINUX_CONNECT_WAIT_STATE local_port=%u poll=%d revents=%d\n", ntohs(local.sin_port), ready, p.revents); fflush(stdout); }
   return local.sin_port != 0 && ready == 0 && p.revents == 0;
 }
 static void scenario(int mode) {
@@ -50,17 +51,21 @@ static void scenario(int mode) {
   if (mode == 0) {
     timeval timeout{0, 60000}; require(setsockopt(attempt.socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) == 0, "send deadline");
     connecting(&attempt);
+    printf("LINUX_CONNECT_WAIT_TIMEOUT connect_rc=%d connect_errno=%d elapsed_ms=%lld\n", attempt.result.load(), attempt.error.load(), millis() - start); fflush(stdout);
     require(attempt.result == -1 && attempt.error == EINPROGRESS && millis() - start >= 40 && millis() - start < 1500, "send timeout returns pending without abort");
   } else if (threaded) require(pthread_create(&caller, nullptr, connecting, &attempt) == 0, "real blocking connector");
   else { connecting(&attempt); require(attempt.result == -1 && attempt.error == EINPROGRESS, "initial nonblocking connect result"); }
   const long long pending_deadline = millis() + 2000;
   while (!pending(attempt.socket) && millis() < pending_deadline) usleep(1000);
-  require(pending(attempt.socket) && (!threaded || !attempt.returned.load(std::memory_order_acquire)), "actual kernel pending connection precondition");
+  require(pending(attempt.socket, true) && (!threaded || !attempt.returned.load(std::memory_order_acquire)), "actual kernel pending connection precondition");
   int canceled = 0;
   if (mode == 1) {
     require(pthread_cancel(caller) == 0, "cancel actual blocked caller"); void* value = nullptr;
     require(pthread_join(caller, &value) == 0 && value == PTHREAD_CANCELED, "actual canceled caller exit"); canceled = 1;
-    require(pending(attempt.socket), "canceling caller preserves kernel connection attempt");
+    const bool still_pending = pending(attempt.socket, true);
+    const int after_cancel_error = socket_error(attempt.socket);
+    printf("LINUX_CONNECT_WAIT_CANCEL pending=%d error=%d\n", still_pending ? 1 : 0, after_cancel_error); fflush(stdout);
+    require(still_pending && after_cancel_error == 0, "canceling caller preserves kernel connection attempt");
   } else if (mode == 2 || mode == 3) {
     const int flags = fcntl(attempt.socket, F_GETFL); require(flags >= 0, "actual status flags");
     require(fcntl(attempt.socket, F_SETFL, mode == 2 ? flags | O_NONBLOCK : flags & ~O_NONBLOCK) == 0, "mode changes during actual pending operation");
