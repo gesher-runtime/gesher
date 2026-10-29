@@ -3,7 +3,7 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
-    branches: [wip/native3-blocking-current]
+    branches: [wip/native3-blocking-current, wip/native-blocking-diagnosis]
     paths: [.github/workflows/native3-locks-blocking.yml]
 permissions:
   contents: read
@@ -34,7 +34,9 @@ jobs:
               assert actual == digest, (name, actual, digest)
               print('NATIVE3_STRICT_HELPER name=' + name + ' canonical_blob=' + actual)
       - name: Require exact reviewed blocking source checkpoint
-        run: python3 tools/native3-locks/union_blocking_guard.py
+        run: python3 tools/native3-locks/blocking_source_guard.py
+      - name: Pure Python owned exit and cleanup error controls
+        run: python3 tests/native3-locks/test_command_cleanup.py
       - name: Actual strict archive adversarial controls before producer compilation
         run: python3 tools/native3-locks/artifact/test-verified-artifact.py
   compile:

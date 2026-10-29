@@ -1,18 +1,10 @@
 {
-  "base": "f1550540186b4ae3f17a5e501a886ec1c4d5d613",
-  "status": "SOURCE ONLY: cleanup failure controls implemented; independent peer and CI required",
+  "base": "71c952cce6e15018615c132b180f5be48efa92b7",
+  "status": "Diagnostic only: unchanged strict four-cycle five-second gate; no repair or qualification claimed",
   "blobs": {
-    ".github/workflows/native3-locks-blocking.yml": "fd7f55947778c173317ebd0eb69d8fc19d78aff0",
-    "CMakeLists.txt": "8ba137e29a5840600fe7d77fee4e833e6d0bfd73",
-    "compat/posix/posix.cmake": "bd7a73bd589c30617b9a4ee29b4d15bba3f20221",
-    "compat/posix/src/record_lock_registry.cc": "aaa91c010c276cc74a58eca96f44dc5f08ab1925",
-    "compat/posix/src/record_lock_registry.h": "86e81b23b6573073cc95e037f32380826763961b",
-    "compat/posix/src/record_lock_test_hooks.h": "cb56a00a33f9711bfb7332163ed854049a3a2c4b",
-    "compat/posix/src/record_lock_wait.cc": "931caa6d4eeb1cc755db22c3ef16f20a3e1e2764",
-    "compat/posix/src/record_lock_wait.h": "49332f98a69f2d8d3f94c35f1a561bbced65429e",
-    "tests/native3-locks/blocking_oracle.py": "bfd5eb55aec4bbdaf3634d173e0aeae4b908efd9",
-    "tests/native3-locks/blocking_worker.cc": "5356ae4a174ebca86d160a49e4dac0256f4586e5",
-    "tests/native3-locks/cleanup_controls.h": "7c638b3dad4090b1a05b611e001db24f2c2d52eb",
-    "tools/native3-locks/blocking_source_guard.py": "a255b8105d9a3f58e904e9a7797f492676a6481d"
+    ".github/workflows/native3-locks-blocking.yml": "c18b06746ece58a8a9a7d9c859f9d852c1a10046",
+    "tests/native3-locks/command_worker.cc": "6872f626e1c64671d9b0eda8f4dcc55f89dec69a",
+    "tests/native3-locks/command_oracle.py": "ae4ae42dd3717a4925ebb75ce964942ace9f5bd1",
+    "tests/native3-locks/test_command_cleanup.py": "f2ac57489a4d049f892e54accc0edaf4fce284c6"
   }
 }

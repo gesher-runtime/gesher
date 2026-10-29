@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import queue
 import subprocess
+import sys
 import tempfile
 import threading
 import traceback
@@ -43,7 +44,14 @@ class Client:
             line = self.lines.get(timeout=10)
         except queue.Empty as error:
             raise AssertionError('actual worker command exceeded 10 seconds') from error
-        assert line is not None, ('worker EOF', self.process.poll())
+        if line is None:
+            # Windows pipe EOF can precede the process handle becoming signaled.
+            # Collect the owned process result under a bound before reporting it.
+            try:
+                code = self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired as error:
+                raise AssertionError('worker EOF but owned process remained live for 5 seconds') from error
+            raise AssertionError(('worker EOF', code))
         return json.loads(line)
 
     def command(self, text):
@@ -73,8 +81,18 @@ class Client:
         if self.reader.is_alive():
             failures.append('owned stdout reader did not reach EOF')
         else:
-            self.process.stdout.close()
-        self.process.stdin.close()
+            try:
+                self.process.stdout.close()
+            except OSError as error:
+                failures.append('owned stdout close: ' + repr(error))
+        try:
+            self.process.stdin.close()
+        except OSError as error:
+            # Preserve this failure, while still reporting the owned exit code.
+            failures.append('owned stdin close: ' + repr(error))
+        print('ACTUAL_COMMAND_WORKER_CLEANUP pid=' + str(self.process.pid) +
+              ' exit=' + str(self.process.returncode) + ' reader_alive=' + str(self.reader.is_alive()) +
+              ' failures=' + repr(failures), flush=True)
         if self.process.returncode not in (self.expected_exit, None):
             failures.append('worker exit ' + str(self.process.returncode))
         if failures:
@@ -283,6 +301,10 @@ def run(executable, contention_failures):
             assert lock(1, cmd=36, start=100)['type'] == 2
             command(1, 'close 0')
         finally:
+            # Print the command failure before cleanup can add its own failure.
+            # The final verdict still rejects either failure independently.
+            if sys.exc_info()[0] is not None:
+                traceback.print_exc()
             failures = []
             for client in clients:
                 try:
