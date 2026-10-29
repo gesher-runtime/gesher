@@ -22,7 +22,7 @@
 . "$PSScriptRoot/../webview/Runtime.ps1"
 
 # The fault hook exists only in the separately named probe, never in dalvikvm.
-foreach ($fault in @('normal', 'com', 'class', 'window', 'hook', 'ready', 'decision', 'late')) {
+foreach ($fault in @('normal', 'session-normal', 'com', 'class', 'window', 'hook', 'ready', 'decision', 'late')) {
   $out = Join-Path $env:RUNNER_TEMP "web4-startup-$fault.log"
   $err = Join-Path $env:RUNNER_TEMP "web4-startup-$fault.err"
   $probe = Join-Path $Dir 'webview_startup_probe.exe'
@@ -32,7 +32,7 @@ foreach ($fault in @('normal', 'com', 'class', 'window', 'hook', 'ready', 'decis
   $p = Start-Process -FilePath $probe -ArgumentList $fault -NoNewWindow -PassThru `
     -RedirectStandardOutput $out -RedirectStandardError $err
   try {
-    $timeoutMs = if ($fault -eq 'normal') { 45000 } else { 20000 }
+    $timeoutMs = if ($fault -in @('normal', 'session-normal')) { 50000 } else { 20000 }
     if (-not $p.WaitForExit($timeoutMs)) {
       Write-Host "FAIL web4 startup: $fault timed out"; $script:failed++
     } else {
@@ -47,6 +47,36 @@ foreach ($fault in @('normal', 'com', 'class', 'window', 'hook', 'ready', 'decis
     if (-not $p.HasExited) {
       try { $p.Kill($true) } catch { if (-not $p.HasExited) { throw } }
       if (-not $p.WaitForExit(5000)) { throw "Startup probe $fault survived forced cleanup" }
+    }
+    $p.Dispose()
+  }
+}
+
+# Terminal controls prove the watchdog won; nonzero alone is not evidence.
+foreach ($fault in @('watchdog', 'callback-stall')) {
+  $out = Join-Path $env:RUNNER_TEMP "web4-watchdog-$fault.log"
+  $err = Join-Path $env:RUNNER_TEMP "web4-watchdog-$fault.err"
+  $probe = Join-Path $Dir 'webview_startup_probe.exe'
+  if (-not (Test-Path -LiteralPath $probe)) { break } # missing probe already failed above
+  $p = Start-Process -FilePath $probe -ArgumentList $fault -NoNewWindow -PassThru `
+    -RedirectStandardOutput $out -RedirectStandardError $err
+  try {
+    if (-not $p.WaitForExit(45000)) {
+      Write-Host "FAIL web4 watchdog: $fault timed out"; $script:failed++
+    } else {
+      $log = (Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue) +
+        (Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)
+      Write-Host $log
+      if ($p.ExitCode -eq 0 -or $log -notmatch 'WEB4_WATCHDOG_ARMED' -or
+          $log -notmatch 'WEB4_WATCHDOG_FATAL' -or
+          ($fault -eq 'callback-stall' -and $log -notmatch 'WEB4_CALLBACK_BLOCKED')) {
+        Write-Host "FAIL web4 watchdog: $fault exit $($p.ExitCode)"; $script:failed++
+      } else { Write-Host "PASS web4 watchdog: $fault terminal" }
+    }
+  } finally {
+    if (-not $p.HasExited) {
+      try { $p.Kill($true) } catch { if (-not $p.HasExited) { throw } }
+      if (-not $p.WaitForExit(5000)) { throw "Watchdog probe $fault survived forced cleanup" }
     }
     $p.Dispose()
   }

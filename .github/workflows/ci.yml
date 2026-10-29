@@ -85,7 +85,7 @@ jobs:
       - name: Freeze default-OFF production role and unchanged shared-code boundary
         run: |
           python3 tools/web3/host_roles.py capture-production --build out --dist dist --state out/web3-production-state.json
-          python3 -c 'import json; from pathlib import Path; rows=[r for r in json.load(open("out/compile_commands.json")) if r["file"].endswith("webview_host.cc")]; assert rows and all("GESHER_WEB4_STARTUP_TESTS" not in r["command"] for r in rows); assert b"GESHER_WEB4_STARTUP_FAULT" not in Path("out/dalvikvm.exe").read_bytes(); print("PASS web4 startup: production host has no test macro or fault selector")'
+          python3 -c 'import json; from pathlib import Path; rows=[r for r in json.load(open("out/compile_commands.json")) if r["file"].endswith("webview_host.cc")]; assert rows and all("GESHER_WEB4_STARTUP_TESTS" not in r["command"] for r in rows); data=Path("out/dalvikvm.exe").read_bytes(); assert b"GESHER_WEB4_STARTUP_FAULT" not in data and b"WEB4_WATCHDOG_FATAL" not in data; print("PASS web4 startup: production host has no test macro or fault markers")'
 
       - uses: actions/upload-artifact@v4
         with:

@@ -161,11 +161,11 @@ jobs:
       - name: Startup lifecycle fault probe
         shell: pwsh
         run: |
-          foreach ($fault in 'normal', 'com', 'class', 'window', 'hook', 'ready', 'decision', 'late') {
+          foreach ($fault in 'normal', 'session-normal', 'com', 'class', 'window', 'hook', 'ready', 'decision', 'late') {
             $p = Start-Process 'dist/webview_startup_probe.exe' -ArgumentList $fault -NoNewWindow -PassThru `
               -RedirectStandardOutput "$fault.log" -RedirectStandardError "$fault.err"
             try {
-              $timeoutMs = if ($fault -eq 'normal') { 45000 } else { 20000 }
+              $timeoutMs = if ($fault -in @('normal', 'session-normal')) { 50000 } else { 20000 }
               if (-not $p.WaitForExit($timeoutMs)) { throw "$fault timed out" }
               $out = (Get-Content -Raw "$fault.log" -ErrorAction SilentlyContinue) +
                 (Get-Content -Raw "$fault.err" -ErrorAction SilentlyContinue)
@@ -173,6 +173,32 @@ jobs:
               if ($p.ExitCode -ne 0 -or $out -notmatch "PASS startup fault=$fault ") {
                 throw "$fault failed exit $($p.ExitCode)"
               }
+            } finally {
+              if (-not $p.HasExited) {
+                try { $p.Kill($true) } catch { if (-not $p.HasExited) { throw } }
+                if (-not $p.WaitForExit(5000)) { throw "$fault survived forced cleanup" }
+              }
+              $p.Dispose()
+            }
+          }
+
+      - name: Session watchdog terminal controls
+        shell: pwsh
+        run: |
+          foreach ($fault in 'watchdog', 'callback-stall') {
+            $p = Start-Process 'dist/webview_startup_probe.exe' -ArgumentList $fault -NoNewWindow -PassThru `
+              -RedirectStandardOutput "$fault.log" -RedirectStandardError "$fault.err"
+            try {
+              if (-not $p.WaitForExit(45000)) { throw "$fault timed out" }
+              $out = (Get-Content -Raw "$fault.log" -ErrorAction SilentlyContinue) +
+                (Get-Content -Raw "$fault.err" -ErrorAction SilentlyContinue)
+              Write-Host $out
+              if ($p.ExitCode -eq 0 -or $out -notmatch 'WEB4_WATCHDOG_ARMED' -or
+                  $out -notmatch 'WEB4_WATCHDOG_FATAL' -or
+                  ($fault -eq 'callback-stall' -and $out -notmatch 'WEB4_CALLBACK_BLOCKED')) {
+                throw "$fault lacked terminal watchdog evidence, exit $($p.ExitCode)"
+              }
+              Write-Host "PASS web4 watchdog: $fault terminal"
             } finally {
               if (-not $p.HasExited) {
                 try { $p.Kill($true) } catch { if (-not $p.HasExited) { throw } }

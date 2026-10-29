@@ -523,10 +523,68 @@ struct SessionEntry {
   std::set<int64_t> used;
   size_t pending = 0;  // admitted, including tasks not yet running on the STA
   size_t pending_units = 0;
+  bool accepting = true;
+  // Retained until JNI dispatch returns, including after generation retirement.
+  std::map<int64_t, ULONGLONG> watchdog_deadlines;
 };
-std::mutex g_session_mutex;
-std::map<int64_t, SessionEntry> g_sessions;
+// Deliberately process-lifetime: the watchdog never races static destruction.
+struct SessionRegistry {
+  std::mutex mutex;
+  std::map<int64_t, SessionEntry> sessions;
+};
+SessionRegistry* const g_session_registry = new SessionRegistry;
+std::mutex& g_session_mutex = g_session_registry->mutex;
+std::map<int64_t, SessionEntry>& g_sessions = g_session_registry->sessions;
 int64_t g_next_session = 1;
+std::once_flag g_watchdog_once;
+bool g_watchdog_started = false;
+
+ULONGLONG WatchdogDeadline(ULONGLONG start) {
+  constexpr ULONGLONG kGrace = 5000;
+  return start > std::numeric_limits<ULONGLONG>::max() - kGrace
+      ? std::numeric_limits<ULONGLONG>::max() : start + kGrace;
+}
+
+DWORD WINAPI SessionWatchdog(void*) {
+  for (;;) {
+    Sleep(100);
+    bool fatal = false;
+    {
+      std::lock_guard<std::mutex> guard(g_session_mutex);
+      ULONGLONG now = GetTickCount64();
+      for (auto& session : g_sessions) {
+        for (const auto& request : session.second.watchdog_deadlines) {
+          if (now >= request.second) { fatal = true; break; }
+        }
+        if (fatal) break;
+      }
+      // Terminate under the lock: a delayed actor cannot report success after
+      // the watchdog's terminal decision. No COM or JNI is called here.
+      if (fatal) {
+#ifdef GESHER_WEB4_STARTUP_TESTS
+        fputs("WEB4_WATCHDOG_FATAL\n", stderr);
+        fflush(stderr);
+#endif
+        abort();
+      }
+    }
+  }
+}
+
+bool EnsureSessionWatchdog() {
+  std::call_once(g_watchdog_once, [] {
+    HANDLE thread = CreateThread(nullptr, 0, SessionWatchdog, nullptr, 0, nullptr);
+    if (thread != nullptr) { g_watchdog_started = true; CloseHandle(thread); }
+  });
+  return g_watchdog_started;
+}
+
+void RetireSessionLocked(int64_t handle) {
+  auto entry = g_sessions.find(handle);
+  if (entry == g_sessions.end()) return;
+  entry->second.accepting = false;
+  if (entry->second.watchdog_deadlines.empty()) g_sessions.erase(entry);
+}
 
 void FinishSession(const std::shared_ptr<Impl>& impl, int64_t id, HRESULT hr,
                    const std::wstring& json) {
@@ -534,20 +592,31 @@ void FinishSession(const std::shared_ptr<Impl>& impl, int64_t id, HRESULT hr,
   if (it == impl->session_requests.end()) return;
   if (GetTickCount64() >= it->second.deadline) hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
   UINT_PTR timer = it->second.timer;
+  ULONGLONG it_deadline = it->second.deadline;
   size_t units = it->second.units;
   impl->session_requests.erase(it);  // retire before dispatch; callbacks may reenter
   {
     std::lock_guard<std::mutex> guard(g_session_mutex);
     auto entry = g_sessions.find(impl->session_handle);
-    if (entry != g_sessions.end()) {
-      // An accounting failure must not silently reopen admission capacity.
-      if (entry->second.pending == 0 || entry->second.pending_units < units) abort();
-      --entry->second.pending;
-      entry->second.pending_units -= units;
-    }
+    if (entry == g_sessions.end() || entry->second.pending == 0 ||
+        entry->second.pending_units < units) abort();
+    auto watched = entry->second.watchdog_deadlines.find(id);
+    if (watched == entry->second.watchdog_deadlines.end()) abort();
+    // Dispatch owns its own bounded drain lease, even after a reentrant close.
+    watched->second = WatchdogDeadline(GetTickCount64());
+    --entry->second.pending;
+    entry->second.pending_units -= units;
   }
   if (timer) { KillTimer(g_task_window, timer); g_timers.erase(timer); }
+  if (GetTickCount64() >= it_deadline) hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+  if (impl->destroyed || impl->listener == nullptr) abort();
   impl->Report(kSessionResult, id, static_cast<int32_t>(hr), json);
+  {
+    std::lock_guard<std::mutex> guard(g_session_mutex);
+    auto entry = g_sessions.find(impl->session_handle);
+    if (entry == g_sessions.end() || entry->second.watchdog_deadlines.erase(id) != 1) abort();
+    if (!entry->second.accepting && entry->second.watchdog_deadlines.empty()) g_sessions.erase(entry);
+  }
 }
 
 std::set<Impl*> g_live;  // the WebView thread's: hosts with a controller
@@ -1480,7 +1549,7 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                         impl->session_failed = true;
                         {
                           std::lock_guard<std::mutex> guard(g_session_mutex);
-                          g_sessions.erase(impl->session_handle);
+                          RetireSessionLocked(impl->session_handle);
                         }
                         // Publish failure before cancellation: a completion may reenter
                         // close and destroy the listener. Failure still wins admission.
@@ -1807,7 +1876,7 @@ Host* Host::Create(Listener* listener, const HostOptions& options) {
     std::lock_guard<std::mutex> guard(g_session_mutex);
     if (g_next_session < std::numeric_limits<int64_t>::max()) {
       impl->session_handle = g_next_session++;
-      g_sessions.emplace(impl->session_handle, SessionEntry{impl, {}, 0, 0});
+      g_sessions.emplace(impl->session_handle, SessionEntry{impl, {}, 0, 0, true, {}});
     }
   }
   EnsureThread();
@@ -1835,20 +1904,25 @@ int32_t Host::SubmitSession(int64_t handle, int64_t id, const std::wstring& sess
       session.size() > 256 || method.size() > 256 || params.size() > 524288) return -2;
   std::lock_guard<std::mutex> guard(g_session_mutex);
   auto entry = g_sessions.find(handle);
-  if (entry == g_sessions.end()) return -1;
+  if (entry == g_sessions.end() || !entry->second.accepting) return -1;
+  if (!EnsureSessionWatchdog()) return -6;
   if (entry->second.used.count(id)) return -3;
   size_t units = session.size() + method.size() + params.size();
   constexpr size_t kMaxPendingUnits = 4 * 1024 * 1024;
   if (entry->second.pending_units > kMaxPendingUnits) abort();
-  if (entry->second.used.size() >= 65536 || entry->second.pending >= 128 ||
+  if (entry->second.used.size() >= 65536 || entry->second.watchdog_deadlines.size() >= 128 ||
       units > kMaxPendingUnits - entry->second.pending_units) return -5;
   entry->second.used.insert(id);
   ++entry->second.pending;
   entry->second.pending_units += units;
   auto impl = entry->second.owner;
-  ULONGLONG deadline = GetTickCount64() + timeout_ms;
+  ULONGLONG now = GetTickCount64();
+  ULONGLONG deadline = now > std::numeric_limits<ULONGLONG>::max() - timeout_ms
+      ? std::numeric_limits<ULONGLONG>::max() : now + timeout_ms;
+  entry->second.watchdog_deadlines.emplace(id, WatchdogDeadline(deadline));
   auto* task = new std::function<void()>([impl, id, session, method, params, deadline, units] {
-    if (impl->destroyed) return; // close is queued after all accepted submissions
+    if (StartupFault("stall")) Sleep(12000);
+    if (impl->destroyed) abort(); // an accepted completion cannot be silently lost
     impl->session_requests.emplace(id, Impl::SessionRequest{deadline, 0, units});
     if (impl->session_failed) {
       FinishSession(impl, id, E_ABORT, L"null");
@@ -1914,6 +1988,7 @@ int32_t Host::SubmitSession(int64_t handle, int64_t id, const std::wstring& sess
       !PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(task))) {
     delete task;
     entry->second.used.erase(id);
+    entry->second.watchdog_deadlines.erase(id);
     --entry->second.pending;
     entry->second.pending_units -= units;
     return -4;
@@ -1982,7 +2057,7 @@ bool Host::Destroy() {
     delete close;
     return false;
   }
-  g_sessions.erase(impl->session_handle);
+  RetireSessionLocked(impl->session_handle);
   delete this;
   return true;
 }

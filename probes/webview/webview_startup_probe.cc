@@ -10,10 +10,20 @@ class StartupListener final : public gesher::webview::Listener {
   std::atomic<int> events{0};
   std::atomic<int> destroyed{0};
   std::atomic<bool> ready{false};
-  void OnEvent(int32_t type, int64_t, int32_t, const std::wstring&, const std::wstring&,
-               const std::wstring&, const std::vector<uint8_t>*) override {
+  std::atomic<bool> session_ok{false};
+  void OnEvent(int32_t type, int64_t id, int32_t arg, const std::wstring& result,
+               const std::wstring&, const std::wstring&, const std::vector<uint8_t>*) override {
     ++events;
     if (type == gesher::webview::kReady) ready = true;
+    if (type == gesher::webview::kSessionResult && id == 1 && arg == 0 &&
+        result.find(L"\"value\":42") != std::wstring::npos) session_ok = true;
+    wchar_t fault[32] = {};
+    if (type == gesher::webview::kSessionResult &&
+        GetEnvironmentVariableW(L"GESHER_WEB4_STARTUP_FAULT", fault, 32) != 0 &&
+        wcscmp(fault, L"callback-stall") == 0) {
+      fputs("WEB4_CALLBACK_BLOCKED\n", stdout); fflush(stdout);
+      Sleep(12000);
+    }
   }
   bool OnNavigationStarting(const std::wstring&, bool, bool) override { return false; }
   void OnResourceRequest(int64_t, const std::wstring&, const std::wstring&, const std::wstring&,
@@ -34,11 +44,45 @@ bool OwnWindow(HWND parent, const wchar_t* window_class) {
 }
 
 int wmain(int argc, wchar_t** argv) {
-  if (argc != 2 || !SetEnvironmentVariableW(L"GESHER_WEB4_STARTUP_FAULT", argv[1])) return 2;
+  if (argc != 2) return 2;
+  bool watchdog = wcscmp(argv[1], L"watchdog") == 0 || wcscmp(argv[1], L"callback-stall") == 0;
+  const wchar_t* fault = wcscmp(argv[1], L"watchdog") == 0 ? L"stall" : argv[1];
+  if (!SetEnvironmentVariableW(L"GESHER_WEB4_STARTUP_FAULT", fault)) return 2;
   StartupListener listener;
   ULONGLONG begin = GetTickCount64();
   auto* host = gesher::webview::Host::Create(&listener, {});
   ULONGLONG elapsed = GetTickCount64() - begin;
+  if (watchdog) {
+    if (host == nullptr) return 10;
+    ULONGLONG deadline = GetTickCount64() + 20000;
+    while (!listener.ready && GetTickCount64() < deadline) Sleep(20);
+    if (!listener.ready) return 11;
+    int status = gesher::webview::Host::SubmitSession(host->SessionHandle(), 1, L"",
+        L"Runtime.evaluate", L"{\"expression\":\"6*7\",\"returnByValue\":true}",
+        wcscmp(argv[1], L"watchdog") == 0 ? 100 : 5000);
+    if (status != 0) return 12;
+    fputs("WEB4_WATCHDOG_ARMED\n", stdout); fflush(stdout);
+    Sleep(15000);
+    return 13;  // watchdog failed to terminate the stalled generation
+  }
+  if (wcscmp(argv[1], L"session-normal") == 0) {
+    if (host == nullptr) return 14;
+    ULONGLONG deadline = GetTickCount64() + 20000;
+    while (!listener.ready && GetTickCount64() < deadline) Sleep(20);
+    if (!listener.ready || gesher::webview::Host::SubmitSession(host->SessionHandle(), 1, L"",
+        L"Runtime.evaluate", L"{\"expression\":\"6*7\",\"returnByValue\":true}", 5000) != 0)
+      return 15;
+    deadline = GetTickCount64() + 10000;
+    while (!listener.session_ok && GetTickCount64() < deadline) Sleep(20);
+    if (!listener.session_ok) return 16;
+    Sleep(6000); // longer than dispatch watchdog grace; completion must remain nonfatal
+    if (!host->Destroy()) return 17;
+    deadline = GetTickCount64() + 10000;
+    while (listener.destroyed != 1 && GetTickCount64() < deadline) Sleep(20);
+    if (listener.destroyed != 1) return 18;
+    wprintf(L"PASS startup fault=session-normal result=42 destroyed=1\n");
+    return 0;
+  }
   if (wcscmp(argv[1], L"normal") == 0) {
     if (host == nullptr) return 7;
     ULONGLONG deadline = GetTickCount64() + 20000;
