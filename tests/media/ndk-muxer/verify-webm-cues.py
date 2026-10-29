@@ -44,7 +44,39 @@ def audit(path):
         raise ValueError('expected one Segment')
     _, base, end, _ = segments[0]
     children = list(elements(data, base, end))
-    clusters = {start - base for ident, _, _, start in children if ident == 0x1f43b675}
+    tracks = [e for e in children if e[0] == 0x1654ae6b]
+    if len(tracks) != 1:
+        raise ValueError('missing unique Tracks')
+    video_tracks = []
+    for ident, a, b, _ in elements(data, tracks[0][1], tracks[0][2]):
+        if ident != 0xae:
+            continue
+        fields = {field: integer(data, x, y) for field, x, y, _ in elements(data, a, b)
+                  if field in (0xd7, 0x83)}
+        if fields.get(0x83) == 1:
+            video_tracks.append(fields.get(0xd7))
+    if len(video_tracks) != 1 or video_tracks[0] is None:
+        raise ValueError('expected one numbered video track')
+    video = video_tracks[0]
+    clusters = {}
+    for ident, a, b, start in children:
+        if ident != 0x1f43b675:
+            continue
+        parts = list(elements(data, a, b))
+        cluster_times = [integer(data, x, y) for field, x, y, _ in parts if field == 0xe7]
+        if len(cluster_times) != 1:
+            raise ValueError('missing cluster timecode')
+        sync_times = set()
+        for field, x, y, _ in parts:
+            if field != 0xa3:
+                continue
+            track, pos = vint(data, x)
+            if pos + 3 > y:
+                raise ValueError('truncated SimpleBlock')
+            relative = int.from_bytes(data[pos:pos + 2], 'big', signed=True)
+            if track == video and data[pos + 2] & 0x80:
+                sync_times.add(cluster_times[0] + relative)
+        clusters[start - base] = sync_times
     cue_elements = [e for e in children if e[0] == 0x1c53bb6b]
     if not clusters or len(cue_elements) != 1:
         raise ValueError('missing clusters or unique Cues')
@@ -63,8 +95,8 @@ def audit(path):
         if time is None or not positions:
             raise ValueError('incomplete CuePoint')
         for fields in positions:
-            if fields.get(0xf7) != 1 or fields.get(0xf1) not in clusters:
-                raise ValueError('cue does not address video track and real cluster')
+            if fields.get(0xf7) != video or time not in clusters.get(fields.get(0xf1), set()):
+                raise ValueError('cue does not address matching video sync block and time')
         points.append(time)
     if not points or points != sorted(points):
         raise ValueError('missing or unordered cue times')
