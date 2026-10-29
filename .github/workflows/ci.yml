@@ -16,7 +16,7 @@ env:
 
 jobs:
   binder-restricted-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/binder-policy-nested-trusted-source.yml@231c8abdc30f361aebd4c71eef50f390fcf26f96
+    uses: gesher-runtime/gesher/.github/workflows/binder-early-native-trusted-source.yml@97c5c4ac2e17fee9c3bd5a1c237e6046933be23f
   artifact-preflight:
     needs: [binder-restricted-trusted-source]
     runs-on: ubuntu-24.04
@@ -524,7 +524,10 @@ jobs:
           Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
           if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
               $out -notmatch 'installed com\.gesher\.lifecycle' -or $out -notmatch 'LifecycleActivity onResume') {
-            Get-Content "$env:LOCALAPPDATA\Gesher\logs\*.log" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
+            Write-Host "APK_DIAGNOSTIC_COMPLETE_OUTPUT_BEGIN"
+            Write-Host $out
+            Write-Host "APK_DIAGNOSTIC_COMPLETE_OUTPUT_END"
+            Get-Content "$env:LOCALAPPDATA\Gesher\logs\*.log" -ErrorAction SilentlyContinue | Out-Host
             throw "The installed gesher-app did not run lifecycle.apk on the Gesher device (exit $code)"
           }
           if ((DevicePids).Count -ne 3) { throw "The Gesher device is not running after the launch: $(DevicePids)" }
