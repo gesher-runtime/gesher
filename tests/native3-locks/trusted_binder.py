@@ -150,8 +150,14 @@ class Bootstrap:
             self.job.own(child)  # exact retained suspended process, before any instruction
             if role:
                 assert self.publish(child._handle, role), 'private fixture admission'
-            assert self.api.ResumeThread(info.thread) != 0xffffffff, 'resume after ACK'
+            assert self.api.ResumeThread(info.thread) == 1, 'exact suspended count before resume after ACK'
             return child
+        except BaseException:
+            if info.process:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(5)  # retained owner survives any uncertain rollback
+            raise
         finally:
             if info.thread:
                 self.check(self.api.CloseHandle(info.thread))

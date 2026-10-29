@@ -47,9 +47,13 @@ class Bootstrap {
     if (!child) return nullptr;
     // Create() retained the exact suspended instance and thread. Publication
     // consumes a broker-relative duplicate, never an OpenProcess(PID) result.
-    bool ok = Publish(child, role, 1000) && ResumeThread(thread_) != DWORD(-1);
+    bool ok = Publish(child, role, 1000) && ResumeThread(thread_) == 1;
     CloseHandle(thread_); thread_ = nullptr;
-    if (!ok) { TerminateProcess(child, 211); WaitForSingleObject(child, 5000); CloseHandle(child); return nullptr; }
+    if (!ok) {
+      TerminateProcess(child, 211);
+      if (WaitForSingleObject(child, 5000) != WAIT_OBJECT_0) std::abort();
+      CloseHandle(child); return nullptr;
+    }
     return child;
   }
  private:
@@ -112,9 +116,13 @@ class Bootstrap {
     children_.push_back(retained);
     if (suspended) thread_ = pi.hThread;
     else {
-      ok = ResumeThread(pi.hThread) != DWORD(-1);
+      ok = ResumeThread(pi.hThread) == 1;
       CloseHandle(pi.hThread);
-      if (!ok) { CloseHandle(pi.hProcess); return nullptr; }
+      if (!ok) {
+        TerminateProcess(pi.hProcess, 211);
+        if (WaitForSingleObject(pi.hProcess, 5000) != WAIT_OBJECT_0) std::abort();
+        CloseHandle(pi.hProcess); return nullptr;
+      }
     }
     return pi.hProcess;
   }
