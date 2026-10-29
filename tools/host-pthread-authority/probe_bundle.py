@@ -9,7 +9,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / 'routing-probe-fixture'
-CASES = {'sync-init-gate.exe': ('host_pthread_sync_init_gate.c', 'libwinpthread.a'),
+CASES = {'embedded-provider.exe': ('host_pthread_embedded_provider_test.c', 'libwinpthread.a'),
+         'sync-init-gate.exe': ('host_pthread_sync_init_gate.c', 'libwinpthread.a'),
          'sync-bad-anchor.exe': ('host_pthread_sync_bad_anchor.c', 'libwinpthread.a'),
          'sync-families.exe': ('host_pthread_sync_families_probe.c', 'libwinpthread.a'),
          'delay-probe.exe': ('host_pthread_delay_probe_test.c', 'libwinpthread.a'),
@@ -53,6 +54,22 @@ def build(llvm):
     for role, root in (('production',production),('probe',llvm)):
         subprocess.check_call([sys.executable,str(ROOT / 'tools/host-pthread-authority/supplier_link_inventory.py'),
                                str(root),str(DIST / ('supplier-link-'+role+'.json')),role])
+    embedded_source=ROOT / 'tests/native/pthread_embedded_provider_module.c'
+    embedded_lib=llvm / 'x86_64-w64-mingw32/lib/libwinpthread.a'
+    embedded_argv=[str(driver),'-D_WIN32_WINNT=0x0A00','-Wall','-Wextra','-Werror','-shared','-static',str(embedded_source),str(embedded_lib),'-o',str(DIST / 'embedded-provider.dll')]
+    subprocess.check_call(embedded_argv)
+    embedded_exports=subprocess.check_output([str(llvm / 'bin/llvm-readobj'),'--coff-exports',str(DIST / 'embedded-provider.dll')],text=True)
+    embedded_imports=subprocess.check_output([str(llvm / 'bin/llvm-readobj'),'--coff-imports',str(DIST / 'embedded-provider.dll')],text=True)
+    assert all('Name: '+name in embedded_exports for name in ('embedded_self','gesher_pthread_identity_probe_v6','gesher_sync_probe_v1','_pthread_key_dest')) and 'libwinpthread-1.dll' not in embedded_imports.lower()
+    assert sha(embedded_lib)==provider['files']['lib/libwinpthread.a']
+    embedded={'argv':embedded_argv,'source_sha256':sha(embedded_source),'library_sha256':sha(embedded_lib),'output_sha256':sha(DIST / 'embedded-provider.dll'),'exports':embedded_exports,'imports':embedded_imports}
+    standalone_source=ROOT / 'tests/native/host_pthread_embedded_standalone_test.c'
+    standalone_argv=[str(driver),'-D_WIN32_WINNT=0x0A00','-Wall','-Wextra','-Werror','-static',str(standalone_source),'-o',str(DIST / 'embedded-standalone.exe')]
+    subprocess.check_call(standalone_argv)
+    standalone_imports=subprocess.check_output([str(llvm / 'bin/llvm-readobj'),'--coff-imports',str(DIST / 'embedded-standalone.exe')],text=True)
+    standalone_exports=subprocess.check_output([str(llvm / 'bin/llvm-readobj'),'--coff-exports',str(DIST / 'embedded-standalone.exe')],text=True)
+    assert 'libwinpthread-1.dll' not in standalone_imports.lower() and 'gesher_pthread_identity_probe_v6' not in standalone_exports and 'gesher_sync_probe_v1' not in standalone_exports
+    standalone={'argv':standalone_argv,'source_sha256':sha(standalone_source),'output_sha256':sha(DIST / 'embedded-standalone.exe'),'imports':standalone_imports,'exports':standalone_exports}
     module_source=ROOT / 'tests/native/pthread_probe_callback_module.c'
     module_argv=[str(driver), '-D_WIN32_WINNT=0x0A00', '-Wall', '-Wextra', '-Werror', '-shared',
                  str(module_source), '-o', str(DIST / 'probe-callback.dll')]
@@ -78,13 +95,13 @@ def build(llvm):
     assert sha(DIST / 'libwinpthread-1.dll') == provider['files']['bin/libwinpthread-1.dll']
     members = {p.name: sha(p) for p in DIST.iterdir()}
     (DIST / 'bundle.json').write_text(json.dumps({'context': ctx, 'members': members, 'commands': commands,
-                                                  'driver': str(driver), 'driver_sha256': sha(driver), 'callback_module': module}, sort_keys=True, indent=2))
+                                                  'driver': str(driver), 'driver_sha256': sha(driver), 'callback_module': module, 'embedded_module':embedded, 'embedded_standalone':standalone}, sort_keys=True, indent=2))
 
 def verify():
     ctx = context()
     data = json.loads((DIST / 'bundle.json').read_text())
     assert data['context'] == ctx
-    expected = set(CASES) | {'libwinpthread-1.dll', 'supplier.json', 'production-supplier.json', 'supplier-link-production.json', 'supplier-link-probe.json', 'probe-callback.dll', 'runtime-symbol-inventory.json'}
+    expected = set(CASES) | {'libwinpthread-1.dll', 'embedded-provider.dll', 'embedded-standalone.exe', 'supplier.json', 'production-supplier.json', 'supplier-link-production.json', 'supplier-link-probe.json', 'probe-callback.dll', 'runtime-symbol-inventory.json'}
     assert set(data['members']) == expected
     assert {p.name for p in DIST.iterdir()} == expected | {'bundle.json'}
     assert all(sha(DIST / name) == digest for name, digest in data['members'].items())
@@ -131,6 +148,18 @@ def verify():
         else:
             assert len(argv)==4 and argv[0].endswith('/bin/llvm-nm') and argv[1:3]==['--undefined-only','--print-file-name']
         assert all(any(symbol.casefold() in line.casefold() for symbol in inventory['symbols']) for line in row['hits'])
+    standalone=data['embedded_standalone']; argv=standalone['argv']
+    assert len(argv)==9 and argv[0]==data['driver'] and argv[1:6]==['-D_WIN32_WINNT=0x0A00','-Wall','-Wextra','-Werror','-static']
+    assert argv[6].endswith('/tests/native/host_pthread_embedded_standalone_test.c') and argv[7]=='-o' and argv[8].endswith('/routing-probe-fixture/embedded-standalone.exe')
+    assert standalone['source_sha256']==sha(ROOT / 'tests/native/host_pthread_embedded_standalone_test.c') and standalone['output_sha256']==sha(DIST / 'embedded-standalone.exe')
+    assert 'libwinpthread-1.dll' not in standalone['imports'].lower() and 'gesher_pthread_identity_probe_v6' not in standalone['exports'] and 'gesher_sync_probe_v1' not in standalone['exports']
+    embedded=data['embedded_module']; argv=embedded['argv']
+    assert len(argv)==11 and argv[0]==data['driver'] and argv[1:7]==['-D_WIN32_WINNT=0x0A00','-Wall','-Wextra','-Werror','-shared','-static']
+    assert argv[7].endswith('/tests/native/pthread_embedded_provider_module.c') and argv[8].endswith('/x86_64-w64-mingw32/lib/libwinpthread.a')
+    assert argv[9]=='-o' and argv[10].endswith('/routing-probe-fixture/embedded-provider.dll')
+    assert embedded['source_sha256']==sha(ROOT / 'tests/native/pthread_embedded_provider_module.c')
+    assert embedded['library_sha256']==provider['files']['lib/libwinpthread.a'] and embedded['output_sha256']==sha(DIST / 'embedded-provider.dll')
+    assert all('Name: '+name in embedded['exports'] for name in ('embedded_self','gesher_pthread_identity_probe_v6','gesher_sync_probe_v1','_pthread_key_dest')) and 'libwinpthread-1.dll' not in embedded['imports'].lower()
     module=data['callback_module']; argv=module['argv']
     assert len(argv)==9 and argv[0]==data['driver']
     assert argv[1:6]==['-D_WIN32_WINNT=0x0A00', '-Wall', '-Wextra', '-Werror', '-shared']
