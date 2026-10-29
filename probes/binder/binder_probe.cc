@@ -1,3 +1,4 @@
+#include "trusted_bootstrap.h"
 // /dev/binder across processes (gesher-base's binder.cc over binderd), at
 // the driver's ABI, as libbinder's IPCThreadState speaks it. Run in CI on
 // Windows.
@@ -397,18 +398,9 @@ int Client() {
 
 // --- the parent ------------------------------------------------------------------
 
-HANDLE Spawn(const std::wstring& exe, const std::wstring& args) {
-  std::wstring cmdline = L"\"" + exe + L"\" " + args;
-  STARTUPINFOW si = {};
-  si.cb = sizeof(si);
-  PROCESS_INFORMATION pi = {};
-  if (!CreateProcessW(exe.c_str(), cmdline.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr,
-                      &si, &pi)) {
-    fprintf(stderr, "probe: cannot start %ls (%lu)\n", exe.c_str(), GetLastError());
-    return nullptr;
-  }
-  CloseHandle(pi.hThread);
-  return pi.hProcess;
+binder_fixture::Bootstrap bootstrap;
+HANDLE Spawn(const std::wstring& exe, const std::wstring& args, const char* role) {
+  return bootstrap.Spawn(exe, args, role);
 }
 
 DWORD Wait(HANDLE process, DWORD ms) {
@@ -435,7 +427,7 @@ int Parent() {
   // No device until a binderd serves it.
   EXPECT(open("/dev/binder", O_RDWR) == -1 && errno == ENOENT);
 
-  HANDLE binderd = Spawn(dir + L"binderd.exe", std::wstring(device, device + strlen(device)));
+  HANDLE binderd = bootstrap.Begin(dir + L"binderd.exe", std::wstring(device, device + strlen(device)));
   REQUIRE(binderd != nullptr);
   int fd = -1;
   for (int i = 0; i < 100 && fd < 0; ++i) {
@@ -446,11 +438,11 @@ int Parent() {
   close(fd);
 
   HANDLE ready = ReadyEvent();
-  HANDLE server = Spawn(self, L"server");
+  HANDLE server = Spawn(self, L"server", "@servicemanager");
   REQUIRE(server != nullptr);
   // The client starts once the server is the context manager.
   REQUIRE(WaitForSingleObject(ready, 30000) == WAIT_OBJECT_0);
-  HANDLE client = Spawn(self, L"client");
+  HANDLE client = Spawn(self, L"client", "@system_server");
   REQUIRE(client != nullptr);
   DWORD client_code = Wait(client, 60000);
   DWORD server_code = Wait(server, 10000);

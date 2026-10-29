@@ -47,6 +47,7 @@ target_compile_options(servicemanager PRIVATE -Wall -Wextra -Werror -Wno-unused-
 # The driver's ABI across processes (raw ioctls), and libbinder with
 # servicemanager across processes.
 add_executable(binder_probe ${CMAKE_SOURCE_DIR}/probes/binder/binder_probe.cc)
+target_link_libraries(binder_probe PRIVATE advapi32)
 target_compile_options(binder_probe PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
 
 # ADR0068/test88: independent real driver actors, also compiled for Android.
@@ -56,6 +57,6 @@ add_executable(binder_sg_wire_peer EXCLUDE_FROM_ALL ${CMAKE_SOURCE_DIR}/tests/bi
 target_compile_options(binder_sg_wire_peer PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
 
 add_executable(libbinder_probe ${CMAKE_SOURCE_DIR}/probes/binder/libbinder_probe.cc)
-target_link_libraries(libbinder_probe PRIVATE binder)
+target_link_libraries(libbinder_probe PRIVATE binder advapi32)
 set_target_properties(libbinder_probe PROPERTIES CXX_STANDARD 23)
 target_compile_options(libbinder_probe PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)

@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from trusted_binder import Bootstrap, Context
 
 
 class OwnedJob:
@@ -149,13 +150,12 @@ def run(worker, broker):
         broker_log = root / 'broker.log'
         broker_output = broker_log.open('wb')
         service = None
+        bootstrap = Bootstrap(job)
         children = []
         binder_pids = []
         qualified = False
         try:
-            service = subprocess.Popen([str(broker), endpoint], stdin=subprocess.DEVNULL,
-                                       stdout=broker_output, stderr=subprocess.STDOUT, env=environment)
-            job.own(service)
+            service = bootstrap.begin(broker, endpoint, broker_output, environment)
             deadline = time.monotonic() + 5
             while True:
                 assert service.poll() is None, ('owned broker exited before readiness', service.returncode)
@@ -164,7 +164,7 @@ def run(worker, broker):
                 assert time.monotonic() < deadline, 'owned broker readiness exceeded five seconds'
                 time.sleep(0.01)
             print(f'ACTUAL_DUPLICATE_BROKER pid={service.pid} endpoint={endpoint} ready=actual-pipe-created', flush=True)
-            results = run_modes(worker, root, environment, children, binder_pids, job)
+            results = run_modes(worker, root, environment, children, binder_pids, job, bootstrap)
             assert len(results) == 13 and all(child.poll() == 0 for child in children), 'actual client normal exit/PID closure audit'
             text = broker_log.read_text(errors='replace')
             observed = [int(pid) for pid in re.findall(r'proc \d+: pid (\d+) opened the device', text)]
@@ -187,6 +187,7 @@ def run(worker, broker):
                     if killed and service.returncode != 211:
                         raise AssertionError(('Owned broker stop exit differs', service.returncode))
             finally:
+                bootstrap.close()
                 broker_output.close()
                 print(broker_log.read_text(errors='replace'), end='', flush=True)
             if service is not None:
@@ -195,7 +196,7 @@ def run(worker, broker):
     return results
 
 
-def run_modes(worker, root, environment, children, binder_pids, job):
+def run_modes(worker, root, environment, children, binder_pids, job, bootstrap):
     kinds = ('regular', 'device', 'event', 'socket', 'binder')
     modes = (*kinds, 'retained-nul', *('quarantine-' + kind for kind in kinds), 'raw-race', 'capacity')
     results = []
@@ -203,14 +204,22 @@ def run_modes(worker, root, environment, children, binder_pids, job):
     source.write_bytes(b'x' * 1024)
     sentinel.write_bytes(b'S')
     for mode in modes:
-        process = subprocess.Popen([str(worker), mode, str(source), str(sentinel)],
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, text=True, env=environment)
+        authenticated = mode in ('binder', 'quarantine-binder')
+        if authenticated:
+            output_file = (root / (mode + '.out')).open('w+b')
+            context = Context(magic=0x474c4358, version=3, uid=1000, server=bootstrap.broker.pid)
+            role = '@servicemanager' if mode == 'binder' else '@system_server'
+            process = bootstrap.spawn([worker, mode, source, sentinel], output_file, environment, context, role=role)
+        else:
+            process = subprocess.Popen([str(worker), mode, str(source), str(sentinel)],
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, text=True, env=environment)
         children.append(process)
         if mode in ('binder', 'quarantine-binder'):
             binder_pids.append(process.pid)
         try:
-            job.own(process)
+            if not authenticated:
+                job.own(process)
             output, unused = process.communicate(timeout=60)
             print(output, end='', flush=True)
             assert process.returncode == 0, (mode, process.returncode)

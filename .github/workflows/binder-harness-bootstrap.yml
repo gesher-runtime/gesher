@@ -1,0 +1,82 @@
+name: binder-harness-bootstrap
+on:
+  push:
+    branches: [wip/binder-isolated-spawn]
+    paths: [.github/workflows/binder-harness-bootstrap.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: binder-harness-bootstrap-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_TAG: '20261006'
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Build exact current-source ordinary Binder fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          ninja -C out -v binderd binder_probe libbinder_probe servicemanager native3_lock_duplicate_test
+          mkdir harness-artifact
+          for target in binderd binder_probe libbinder_probe servicemanager native3_lock_duplicate_test; do
+            cp "out/$target.exe" harness-artifact/
+            ninja -C out -t commands "$target" > "harness-artifact/$target.commands.txt"
+          done
+          printf '%s\n' "$GITHUB_SHA" > harness-artifact/source.sha
+          printf '%s\n' "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/build" > harness-artifact/producer.txt
+          "$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++" --version > harness-artifact/compiler.txt
+          (cd harness-artifact && sha256sum *.exe > executables.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binder-harness-${{ github.sha }}
+          path: harness-artifact/
+          if-no-files-found: error
+  test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify current-run typed build receipt
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/artifact_receipt.py --name "binder-harness-${{ github.sha }}" --producer build --destination harness-artifact
+          if ($LASTEXITCODE -ne 0) { throw 'current-run producer receipt failed' }
+          if ((Get-Content harness-artifact/source.sha -Raw).Trim() -cne $env:GITHUB_SHA) { throw 'source mismatch' }
+          if ((Get-Content harness-artifact/producer.txt -Raw).Trim() -cne "$env:GITHUB_RUN_ID/$env:GITHUB_RUN_ATTEMPT/build") { throw 'producer role mismatch' }
+          $rows = @(Get-Content harness-artifact/executables.sha256)
+          if ($rows.Count -ne 5) { throw 'wrong executable count' }
+          foreach ($row in $rows) {
+            $hash, $name = $row -split '\s+', 2
+            if ($name -notmatch '^(binderd|binder_probe|libbinder_probe|servicemanager|native3_lock_duplicate_test)\.exe$') { throw 'unexpected executable' }
+            if ((Get-FileHash "harness-artifact/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $hash) { throw 'executable hash mismatch' }
+          }
+          Write-Host "HARNESS_CURRENT_SOURCE $env:GITHUB_SHA producer=$env:GITHUB_RUN_ID/$env:GITHUB_RUN_ATTEMPT/build"
+      - name: Actual original raw, libbinder and duplicate resource assertions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./harness-artifact/binder_probe.exe
+          if ($LASTEXITCODE -ne 0) { throw 'original raw Binder probe failed' }
+          & ./harness-artifact/libbinder_probe.exe
+          if ($LASTEXITCODE -ne 0) { throw 'original libbinder probe failed' }
+          python tests/native3-locks/duplicate_oracle.py --worker harness-artifact/native3_lock_duplicate_test.exe --broker harness-artifact/binderd.exe --output duplicate-results.json
+          if ($LASTEXITCODE -ne 0) { throw 'original duplicate resource oracle failed' }
+          Write-Host 'Narrow trusted host fixtures only; production host/DLL, Java, APK and full services/net gates remain required.'

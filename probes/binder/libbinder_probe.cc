@@ -1,3 +1,4 @@
+#include "trusted_bootstrap.h"
 // libbinder across processes on Windows: servicemanager (compat/binder) and
 // two processes over binderd, through libbinder's own ProcessState,
 // IPCThreadState, BpBinder and Parcel. Run in CI on Windows.
@@ -149,18 +150,9 @@ struct Recipient : IBinder::DeathRecipient {
   }
 };
 
-HANDLE Spawn(const std::wstring& exe, const std::wstring& args) {
-  std::wstring cmdline = L"\"" + exe + L"\" " + args;
-  STARTUPINFOW si = {};
-  si.cb = sizeof(si);
-  PROCESS_INFORMATION pi = {};
-  if (!CreateProcessW(exe.c_str(), cmdline.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr,
-                      &si, &pi)) {
-    fprintf(stderr, "cannot start %ls (%lu)\n", exe.c_str(), GetLastError());
-    return nullptr;
-  }
-  CloseHandle(pi.hThread);
-  return pi.hProcess;
+binder_fixture::Bootstrap bootstrap;
+HANDLE Spawn(const std::wstring& exe, const std::wstring& args, const char* role) {
+  return bootstrap.Spawn(exe, args, role);
 }
 
 int Client() {
@@ -174,7 +166,7 @@ int Client() {
   _putenv(env.c_str());
   std::wstring wdevice(device, device + strlen(device));
 
-  HANDLE binderd = Spawn(dir + L"binderd.exe", wdevice);
+  HANDLE binderd = bootstrap.Begin(dir + L"binderd.exe", wdevice);
   // The device appears once binderd serves it.
   for (int i = 0; i < 100; ++i) {
     int fd = open("/dev/binder", O_RDWR);
@@ -184,7 +176,7 @@ int Client() {
     }
     Sleep(50);
   }
-  HANDLE servicemanager = Spawn(dir + L"servicemanager.exe", L"");
+  HANDLE servicemanager = Spawn(dir + L"servicemanager.exe", L"", "@servicemanager");
   HANDLE service = nullptr;
   auto cleanup = [&] {
     for (HANDLE h : {service, servicemanager, binderd}) {
@@ -217,7 +209,7 @@ int Client() {
   // Incoming calls (binderDied) need a binder thread.
   ProcessState::self()->startThreadPool();
 
-  service = Spawn(self, L"service");
+  service = Spawn(self, L"service", "@system_server");
   sp<android::os::IServiceManager> sm = interface_cast<android::os::IServiceManager>(context);
   sp<IBinder> remote;
   for (int i = 0; i < 200 && remote == nullptr; ++i) {
