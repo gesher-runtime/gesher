@@ -184,11 +184,13 @@ public static class TsfJobSupervisor {
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || TestParentConsole()) throw new InvalidOperationException("CI only; console must be absent");
     var lease=new ConsoleLease {Input=GetStdHandle(-10),Output=GetStdHandle(-11),Error=GetStdHandle(-12)};
     Check(AllocConsole(),"Allocate isolated console");
+    var allocated=new HashSet<IntPtr> {GetStdHandle(-10),GetStdHandle(-11),GetStdHandle(-12)};
+    allocated.Remove(lease.Input); allocated.Remove(lease.Output); allocated.Remove(lease.Error); allocated.Remove(IntPtr.Zero); allocated.Remove(new IntPtr(-1));
     try {
-      var allocated=new HashSet<IntPtr> {GetStdHandle(-10),GetStdHandle(-11),GetStdHandle(-12)};
       Check(SetStdHandle(-10,lease.Input),"Restore parent stdin"); Check(SetStdHandle(-11,lease.Output),"Restore parent stdout"); Check(SetStdHandle(-12,lease.Error),"Restore parent stderr");
-      foreach(IntPtr h in allocated) if(Valid(h) && h!=lease.Input && h!=lease.Output && h!=lease.Error) {
-        if(!CloseHandle(h)) { lock(QuarantinedTestProcesses) QuarantinedTestProcesses.Add(h); throw Native("Close allocated console handle"); }
+      foreach(IntPtr h in new List<IntPtr>(allocated)) {
+        if(!CloseHandle(h)) throw Native("Close allocated console handle");
+        allocated.Remove(h);
       }
       if(!TestParentConsole()) throw new IOException("Allocated console membership unproved");
       uint pid; if(GetWindowThreadProcessId(GetConsoleWindow(),out pid)==0 || pid==0) throw Native("Console host window owner");
@@ -199,8 +201,17 @@ public static class TsfJobSupervisor {
       if(lease.Birth<=0 || !String.Equals(lease.Image,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"conhost.exe"),StringComparison.OrdinalIgnoreCase)) throw new IOException("Unexpected console host identity");
       return lease;
     } catch {
-      FreeConsole(); SetStdHandle(-10,lease.Input); SetStdHandle(-11,lease.Output); SetStdHandle(-12,lease.Error);
-      if(Valid(lease.Host)) lock(QuarantinedTestProcesses) QuarantinedTestProcesses.Add(lease.Host); throw;
+      bool input=SetStdHandle(-10,lease.Input), output=SetStdHandle(-11,lease.Output), error=SetStdHandle(-12,lease.Error);
+      bool restored=input && output && error && GetStdHandle(-10)==lease.Input && GetStdHandle(-11)==lease.Output && GetStdHandle(-12)==lease.Error;
+      bool closedAllocated=true; foreach(IntPtr h in allocated) if(!CloseHandle(h)) { closedAllocated=false; lock(QuarantinedTestProcesses) QuarantinedTestProcesses.Add(h); }
+      bool freed=FreeConsole();
+      input=SetStdHandle(-10,lease.Input); output=SetStdHandle(-11,lease.Output); error=SetStdHandle(-12,lease.Error);
+      restored=restored && input && output && error && GetStdHandle(-10)==lease.Input && GetStdHandle(-11)==lease.Output && GetStdHandle(-12)==lease.Error;
+      bool retired=Valid(lease.Host) && WaitForSingleObject(lease.Host,5000)==WAIT_OBJECT_0;
+      bool closed=retired && CloseHandle(lease.Host);
+      if(Valid(lease.Host) && !closed) lock(QuarantinedTestProcesses) QuarantinedTestProcesses.Add(lease.Host);
+      if(!restored || !closedAllocated || !freed || !retired || !closed) Environment.FailFast("Console setup failed with unproved cleanup");
+      throw;
     }
   }
   public static void TestCloseConsole(ConsoleLease lease) {
@@ -211,7 +222,7 @@ public static class TsfJobSupervisor {
     bool retired=WaitForSingleObject(lease.Host,5000)==WAIT_OBJECT_0;
     bool closed=retired && CloseHandle(lease.Host);
     if(!closed) lock(QuarantinedTestProcesses) QuarantinedTestProcesses.Add(lease.Host);
-    if(!freed || !restored || !retired || !closed) throw new IOException("Console retirement unproved freed="+freed+" restored="+restored+" retired="+retired+" closed="+closed);
+    if(!freed || !restored || !retired || !closed) Environment.FailFast("Console retirement unproved freed="+freed+" restored="+restored+" retired="+retired+" closed="+closed);
     lease.Host=IntPtr.Zero;
   }
   public static bool TestConsoleLease(ConsoleLease lease) {

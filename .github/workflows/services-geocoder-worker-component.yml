@@ -18,7 +18,7 @@ jobs:
         shell: pwsh
         run: |
           $expected = @{
-            'tools/windows4/TsfJobSupervisor.cs' = '7a179c95f81bb68907371cec7a56ca84478d0405'
+            'tools/windows4/TsfJobSupervisor.cs' = '2714b93c9a8a0a2b11ad101b179fbc2aa4507a0f'
             'tools/windows4/TsfJobWorker.cs' = 'e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1'
             'tools/windows4/test-tsf-job-supervisor.ps1' = '11229b16ded45970e6b9102fdb44ba8ae8e076f4'
             'tools/windows4/diagnose-pwsh-job.ps1' = 'ac95f66a8db3ae44fdb63e947338f5becfb75c7d'
