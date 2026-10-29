@@ -8,8 +8,9 @@ Write-Host 'SG_CHECKED_CLOSE failure_retained=1 exact_retry_closed=1'
 foreach ($stage in 1,2,3,4,5,6) {
   $failed = $false
   try {
-    [void][TrustedSgJob]::Start((Get-Command python -CommandType Application).Source,
-        (Join-Path $PSScriptRoot 'trusted_sg_owner.py'), $stage)
+    $python = (Get-Command python -CommandType Application | Select-Object -First 1).Source
+    [void][TrustedSgJob]::Start($python,
+        (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'trusted_sg_owner.py')).Path, $stage)
   } catch { $failed = $true }
   if (-not $failed -or -not [TrustedSgJob]::LastStartupRollbackConfirmed) {
     throw "partial owner setup $stage did not confirm exact process/job/pipe cleanup"

@@ -5,6 +5,8 @@
 #include <windows.h>
 #include "sg-actor.h"
 #include "../../compat/posix/src/binder_wire.h"
+#include "../../compat/posix/src/launch_context.h"
+#include "../../compat/binder/launch_control.h"
 
 namespace {
 namespace wire = gesher::binder_wire;
@@ -38,6 +40,22 @@ bool Receive(HANDLE pipe, Bytes* reply) {
   if (!Exact(pipe, &length, sizeof(length), false) || length > (64u << 20)) return false;
   reply->data.resize(length); reply->at = 0;
   return Exact(pipe, reply->data.data(), length, false);
+}
+// Raw protocol fixture participates in the real admitted-process challenge.
+// The startup UID is only a self snapshot; the broker still checks its owned
+// process, creation time and private event challenge independently.
+bool ReceiveAuthenticated(HANDLE pipe, Bytes* reply) {
+  Bytes challenge;
+  uint32_t tag = 0;
+  uint64_t value = 0;
+  if (!Receive(pipe, &challenge) || !challenge.Get(&tag) || tag != wire::kPeerChallenge ||
+      !challenge.Get(&value) || challenge.at != challenge.data.size()) return false;
+  HANDLE event = gesher::launch_control::Handle(value);
+  bool signalled = SetEvent(event) != FALSE;
+  bool closed = CloseHandle(event) != FALSE;
+  Bytes ack;
+  ack.Put<uint32_t>(wire::kPeerAck);
+  return signalled && closed && Send(pipe, ack) && Receive(pipe, reply);
 }
 bool Status(HANDLE pipe) {
   Bytes reply;
@@ -79,15 +97,22 @@ struct Peer {
     Bytes hello;
     hello.Put<uint32_t>(wire::kHelloThread); hello.Put(wire::kMagic); hello.Put(wire::kVersion);
     hello.Put(id); hello.Put(key); hello.Put<uint32_t>(GetCurrentThreadId());
-    return thread != INVALID_HANDLE_VALUE && Send(thread, hello) && Status(thread);
+    Bytes reply;
+    int32_t status;
+    return thread != INVALID_HANDLE_VALUE && Send(thread, hello) &&
+        ReceiveAuthenticated(thread, &reply) && reply.Get(&status) && status == 0 &&
+        reply.at == reply.data.size();
   }
   bool Open() {
     process = Connect();
     Bytes hello, reply;
     hello.Put<uint32_t>(wire::kHelloProc); hello.Put(wire::kMagic); hello.Put(wire::kVersion);
-    hello.Put<uint32_t>(GetCurrentProcessId()); hello.Put<uint32_t>(10000);
+    const auto& startup = gesher::launch::kStartup;
+    if (!startup.present || startup.kind != 0 || startup.control || startup.broker || !startup.server_pid) return false;
+    hello.Put<uint32_t>(GetCurrentProcessId()); hello.Put<uint32_t>(startup.uid);
+    hello.Put<uint64_t>(gesher::launch_control::Birth(GetCurrentProcess()));
     int32_t status;
-    return process != INVALID_HANDLE_VALUE && Send(process, hello) && Receive(process, &reply) &&
+    return process != INVALID_HANDLE_VALUE && Send(process, hello) && ReceiveAuthenticated(process, &reply) &&
         reply.Get(&status) && status == 0 && reply.Get(&id) && reply.Get(&key) && OpenThread();
   }
   bool Ioctl(uint32_t request) {

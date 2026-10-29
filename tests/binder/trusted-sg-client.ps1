@@ -2,8 +2,13 @@
 # Guest processes receive neither this pipe nor the broker's private endpoint.
 if (-not ('TrustedSgJob' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'TrustedSgJob.cs') }
 function Start-TrustedSgOwner {
-    $python = (Get-Command python -CommandType Application).Source
-    $native = [TrustedSgJob]::Start($python, (Join-Path $PSScriptRoot 'trusted_sg_owner.py'), 0)
+    $command = Get-Command python -CommandType Application | Select-Object -First 1
+    if ($null -eq $command -or -not [IO.Path]::IsPathFullyQualified($command.Source) -or
+        -not [IO.File]::Exists($command.Source)) { throw 'Python executable path missing or ambiguous' }
+    $python = $command.Source
+    $script = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'trusted_sg_owner.py')).Path
+    Write-Host "SG_OWNER_EXECUTABLE path=$python sha256=$((Get-FileHash -LiteralPath $python -Algorithm SHA256).Hash.ToLowerInvariant()) script=$script"
+    $native = [TrustedSgJob]::Start($python, $script, 0)
     return [pscustomobject]@{ Native = $native; Error = $native.Error.ReadToEndAsync(); Pending = $null; Closed = $false; Faulted = $false }
 
 }
