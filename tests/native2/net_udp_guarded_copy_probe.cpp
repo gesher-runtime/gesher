@@ -10,6 +10,7 @@ struct Race {
   SIZE_T size;
   std::atomic<bool> stop{false};
   std::atomic<bool> failed{false};
+  std::atomic<unsigned> changes{0};
 };
 static DWORD WINAPI ChangeProtection(void* raw) {
   auto& race = *static_cast<Race*>(raw);
@@ -19,6 +20,7 @@ static DWORD WINAPI ChangeProtection(void* raw) {
   while (!race.stop.load() && GetTickCount64() < deadline) {
     DWORD old = 0;
     if (!VirtualProtect(race.page, race.size, modes[i++ % 3], &old)) { race.failed.store(true); break; }
+    race.changes.fetch_add(1);
   }
   return 0;
 }
@@ -63,7 +65,11 @@ int main() {
   Race race{memory, page};
   HANDLE changer = CreateThread(nullptr, 0, ChangeProtection, &race, 0, nullptr);
   if (changer == nullptr) return 13;
+  ULONGLONG ready_deadline = GetTickCount64() + 5000;
+  while (race.changes.load() == 0 && GetTickCount64() < ready_deadline) Sleep(1);
+  unsigned before = race.changes.load();
   for (unsigned i = 0; i < 20000; ++i) (void)gesher::ws::usercopy::To(memory, source, 8);
+  unsigned after = race.changes.load();
   race.stop.store(true);
   if (WaitForSingleObject(changer, 5000) != WAIT_OBJECT_0) {
     // Never free/unwind storage while the owned target might access it.
@@ -71,8 +77,9 @@ int main() {
   }
   CloseHandle(changer);
   DWORD old = 0;
-  if (race.failed.load() || !VirtualProtect(memory, page * 2, PAGE_READWRITE, &old)) return 15;
-  puts("UDPGUARDED protection-race calls=20000 target-joined=1 no-process-fault=1");
+  if (race.failed.load() || before == 0 || after <= before ||
+      !VirtualProtect(memory, page * 2, PAGE_READWRITE, &old)) return 15;
+  printf("UDPGUARDED protection-race calls=20000 changes=%u target-joined=1 no-process-fault=1\n", after - before);
   // Guard state during concurrent changes has no stable snapshot guarantee.
   if (!VirtualFree(memory, 0, MEM_RELEASE)) return 8;
   puts("UDPGUARDED all actual shared-helper controls passed");
