@@ -177,6 +177,17 @@ def main():
         for name, expected in PINNED_SOURCE.items():
             actual = subprocess.check_output(['git', 'hash-object', name], cwd=ROOT, text=True).strip()
             assert actual == expected, ('Selected source differs from reviewed leaf/adaptation', name, actual)
+        # Exercise the same comparisons with a forged blob for each new leaf.
+        actual_media = {name: subprocess.check_output(['git', 'hash-object', name], cwd=ROOT, text=True).strip()
+                        for name in MEDIA4_PINS}
+        assert actual_media == MEDIA4_PINS
+        for name in MEDIA4_PINS:
+            mutant = dict(actual_media)
+            mutant[name] = '0' * 40
+            assert mutant != MEDIA4_PINS, ('Mutation was not rejected', name)
+            print('MEDIA4_PREFLIGHT_NEGATIVE blob=' + name + ' rejected', flush=True)
+        assert not (changed | {'tests/media/ndk-muxer/unreviewed.py'}) <= allowed
+        print('MEDIA4_PREFLIGHT_NEGATIVE unauthorized_path rejected', flush=True)
         print(f'COHERENT_NATIVE_AOT_SOURCE base={base} source={context["source"]} pinned_blobs={len(PINNED_SOURCE)} non_doc_paths={len(changed)} unexpected_delta=0', flush=True)
     elif args.mode == 'reference':
         assert not args.reference.exists(), 'Reference destination must be absent'
