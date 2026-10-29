@@ -91,6 +91,16 @@ function CheckTimed([string] $Name, [string] $Exe, [string[]] $Arguments, [strin
   }
 }
 
+# Real dalvikvm parser metadata, delegated call and a fresh retained child.
+$entrypointLog = Join-Path $root 'entrypoint-fixture-child.log'
+Remove-Item -LiteralPath $entrypointLog -Force -ErrorAction SilentlyContinue
+CheckTimed 'services: actual VM entrypoint and delegated fresh child' "$Dir/dalvikvm.exe" @(
+  "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+  '-Xint', '-Xusejit:false', '-Dfixture.class=gesher.services.VmEntrypointFixture',
+  '-cp', (NoDrive "$Dir/services-tests.dex"), 'gesher.services.VmEntrypointFixture',
+  (NoDrive $entrypointLog), 'gesher.services.VmEntrypointFixture') @(
+  'ENTRYPOINT_WRAPPER actual_child=1 exit=0 consumed=1') 120
+
 # The driver's ABI across processes: binderd, a context manager and a client
 # with nested calls, objects passed both ways, and a death notification.
 CheckTimed 'binder: /dev/binder across processes (binderd, raw ioctls)' "$Dir/binder_probe.exe" @() @(
