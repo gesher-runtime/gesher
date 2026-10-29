@@ -2,7 +2,7 @@
   "base": "71c952cce6e15018615c132b180f5be48efa92b7",
   "status": "Diagnostic only: unchanged strict four-cycle five-second gate; no repair or qualification claimed",
   "blobs": {
-    ".github/workflows/native3-locks-blocking.yml": "c18b06746ece58a8a9a7d9c859f9d852c1a10046",
+    ".github/workflows/native3-locks-blocking.yml": "1d7ffdfde19144e0991c0f565946e6eb262003cf",
     "tests/native3-locks/command_worker.cc": "6872f626e1c64671d9b0eda8f4dcc55f89dec69a",
     "tests/native3-locks/command_oracle.py": "ae4ae42dd3717a4925ebb75ce964942ace9f5bd1",
     "tests/native3-locks/test_command_cleanup.py": "f2ac57489a4d049f892e54accc0edaf4fce284c6"
