@@ -2,6 +2,8 @@
 
 **Current continuation:** [2026-10-29 manager checkpoint](session-2026-10-29-continuation.md) supersedes older live status below.
 
+**Newest accepted integration, 2026-10-29:** corrected coherent full 40802752388 at c254c6c1 passed 45 jobs with six optional skips; integration-only merge afc2ec39 has an empty non-doc diff to that source. Services real WinRT, TSF and internal Native controls are bounded evidence; Binder trust, secondary AOT, public blocking, real hardware and other known requirements remain open. See the current continuation and `C:/work/gesher-ci-review/union-40802752388-integrator-actual-audit.md`.
+
 [Bounded requirement matrix and unsurveyed scope](requirement-matrix-2026-10-29.md).
 
 **Latest continuation, 2026-10-29:** TSF8ad component actual audit is complete and bounded; Binder authenticated private admission remains source-only and is a security prerequisite for secondary AOT. Services corrected fixture needs fresh proof. Interactive hardware Windows CI does not exist; hardware remains an external blocker. Read [the continuation checkpoint](session-2026-10-28-aot-native-full.md#continued-audit-and-security-dependency-2026-10-29).
