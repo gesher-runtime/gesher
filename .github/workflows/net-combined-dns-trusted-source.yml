@@ -170,8 +170,8 @@ jobs:
            'tests/native2/dns-reference/ns_name.c': 'c2dc80f59cbc1fd37d7d08e5464310579a1c4a2f',
            'tests/native2/net_dns_wire.cpp': '4973793ed58dce9f753c24f76e18621e3663751b',
            'tests/windows/tracks/92-net-dns-wire.ps1': '7d6438e111524b4b1761b9c53f144c7bea5ca78f',
-           'tools/native3-locks/union_blocking_guard.py': 'eefd6d15fbb1dad2ae274961a4d895a1fde0a93c',
-           'tools/native3-locks/union_payload.py': 'dcec16e5692159dc55b7ac38e20f460d0dafc42b',
+           'tools/native3-locks/union_blocking_guard.py': 'f0282811fddf8c9a62536d3bf566c4b99e2b0fad',
+           'tools/native3-locks/union_payload.py': 'f14d6fe676a9f81984df853da0a1b6242f81a964',
            'tools/net-dns-component/aosp_reference.py': '7c968478f06cbedc7c2bef650eec4a7ed7e589c6',
            'tools/net-dns-component/payload.py': '8bf17e1a54fc903d635edb32ccb0763aba9eba67',
            'tools/net-dns-component/source.json': '51563a7370546df21b5e89c2b7263e1ac3bc44c2',
@@ -179,7 +179,8 @@ jobs:
            'tools/net-dns/payload_shared.py': 'd8241f906b4ec288f2059780b9db68a58f99f6b3',
            'tools/net-udp/payload.py': '64491dc7109d00859a47abd164bf661f24f5bdbf'}
           # Exact TSF/Services leaves qualified in 408805 and 408811.
-          SOURCE_PINS.update({'.github/workflows/services-geocoder-worker-component.yml': 'd6f047990f42f4720b581d06495bf8f76745ca70', '.github/workflows/tsf-format-component.yml': 'a3b2021a2df42316a46d4849eb499fb5b1842a7e', 'tools/windows4/TsfJobSupervisor.cs': '625be4d5906bb48dd02d6103382fd2e85ac88738', 'tools/windows4/TsfJobWorker.cs': 'e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1', 'tools/windows4/diagnose-pwsh-job.ps1': '6956c0d1714f17761dc756c17f72cb8d119fe306', 'tools/windows4/test-tsf-job-supervisor.ps1': 'e290479e7b81fbd8f9d8705687c84fb084b789e9'})
+          SOURCE_PINS.update({'.github/workflows/services-geocoder-worker-component.yml': 'f21b8de7be6825db1c3f17acab10e28c154bd5b9', '.github/workflows/tsf-format-component.yml': 'a3b2021a2df42316a46d4849eb499fb5b1842a7e', 'tools/windows4/TsfJobSupervisor.cs': '625be4d5906bb48dd02d6103382fd2e85ac88738', 'tools/windows4/TsfJobWorker.cs': 'e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1', 'tools/windows4/diagnose-pwsh-job.ps1': '6956c0d1714f17761dc756c17f72cb8d119fe306', 'tools/windows4/test-tsf-job-supervisor.ps1': 'e290479e7b81fbd8f9d8705687c84fb084b789e9'})
+          SOURCE_PINS['tests/windows/tracks/58-devices.ps1'] = 'aa5d19d92ff0e099b322354b282be79ebb9065d9'
           ORIGINAL_BASE = 'f1550540186b4ae3f17a5e501a886ec1c4d5d613'
           UNION_BASE = '8b1e9b509ceef7e532a7ff5bc085ecdbc476d292'
 
