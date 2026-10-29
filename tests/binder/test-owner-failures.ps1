@@ -4,18 +4,14 @@ $ErrorActionPreference = 'Stop'
 $broker = (Resolve-Path -LiteralPath (Join-Path $Dir 'binderd.exe')).Path
 $actor = (Resolve-Path -LiteralPath (Join-Path $Dir 'binder_sg_actor.exe')).Path
 foreach ($stage in 1,2,3) {
-  $partialDir = Join-Path $env:RUNNER_TEMP ('sg-partial-' + [guid]::NewGuid().ToString('N'))
-  New-Item -ItemType Directory -Path $partialDir | Out-Null
   $failed = $false
   try {
     [void][TrustedSgJob]::Start((Get-Command python -CommandType Application).Source,
-        (Join-Path $PSScriptRoot 'trusted_sg_owner.py'), $partialDir, $stage)
+        (Join-Path $PSScriptRoot 'trusted_sg_owner.py'), $stage)
   } catch { $failed = $true }
   if (-not $failed -or -not [TrustedSgJob]::LastStartupRollbackConfirmed) {
     throw "partial owner setup $stage did not confirm exact process/job/pipe cleanup"
   }
-  if (@(Get-ChildItem -LiteralPath $partialDir -Force).Count -ne 0) { throw 'partial owner wrote before a host request' }
-  Remove-Item -LiteralPath $partialDir
   Write-Host "SG_OWNER_PARTIAL stage=$stage job_empty=1 owner_signaled=1 streams_closed=1"
 }
 foreach ($target in 'begin','spawn') {

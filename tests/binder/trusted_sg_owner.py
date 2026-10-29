@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import threading
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'native3-locks'))
@@ -16,16 +17,53 @@ from duplicate_oracle import OwnedJob
 from trusted_binder import Bootstrap, Context
 
 MAX_REQUEST = 65536
+MAX_OUTPUT = 16 * 1024 * 1024
+
+
+class Capture:
+    def __init__(self):
+        read_fd, write_fd = os.pipe()
+        self.reader = os.fdopen(read_fd, 'rb', buffering=0)
+        self.writer = os.fdopen(write_fd, 'wb', buffering=0)
+        self.data = bytearray()
+        self.lock = threading.Lock()
+        self.error = None
+        self.thread = threading.Thread(target=self.drain, daemon=True)
+        self.thread.start()
+
+    def drain(self):
+        try:
+            while True:
+                chunk = self.reader.read(32768)
+                if not chunk:
+                    break
+                with self.lock:
+                    if len(self.data) + len(chunk) > MAX_OUTPUT:
+                        raise ValueError('SG output exceeds bound')
+                    self.data.extend(chunk)
+        except Exception as error:
+            self.error = error
+        finally:
+            self.reader.close()
+
+    def read(self, offset, complete):
+        if complete:
+            self.thread.join(5)
+            if self.thread.is_alive():
+                raise RuntimeError('SG output pipe retained after child exit')
+        if self.error:
+            raise RuntimeError('SG output drain failed') from self.error
+        with self.lock:
+            return bytes(self.data[offset:offset + 32768])
 
 
 def main():
     if os.name != 'nt' or os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('SG fixture owner requires CI Windows')
     children = {}
-    outputs = []
-    if len(sys.argv) != 2:
-        raise ValueError('owner log directory required')
-    directory = Path(sys.argv[1])
+    captures = {}
+    if len(sys.argv) != 1:
+        raise ValueError('owner takes no arguments')
     next_id = 1
     job = OwnedJob().__enter__()
     owner = Bootstrap(job)
@@ -56,21 +94,24 @@ def main():
             if operation == 'begin':
                 if started:
                     raise ValueError('duplicate broker')
-                output = open(directory / (str(next_id) + '.log'), 'x+b')
-                outputs.append(output)
+                capture = Capture()
                 env = dict(os.environ, **request['environment'])
                 fault = request.get('fixture_fault', '')
                 inject = fault_callback(fault)
                 before = inject if fault.startswith('before-publish-') else None
-                child = owner.begin(request['broker'], request['endpoint'], output, env, before_resume=before)
+                try:
+                    child = owner.begin(request['broker'], request['endpoint'], capture.writer, env, before_resume=before)
+                finally:
+                    capture.writer.close()
                 if fault.startswith('after-resume-'):
                     inject(child)
                 started = True
             elif operation == 'spawn':
                 if not started:
                     raise ValueError('broker not started')
-                output = open(directory / (str(next_id) + '.log'), 'x+b')
-                outputs.append(output)
+                if next_id > 3:
+                    raise ValueError('fixture permits exactly two actors')
+                capture = Capture()
                 env = dict(os.environ, **request['environment'])
                 role = request['role']
                 if role not in ('@servicemanager', '@system_server'):
@@ -80,7 +121,10 @@ def main():
                 fault = request.get('fixture_fault', '')
                 inject = fault_callback(fault)
                 before = inject if fault.startswith('before-publish-') else None
-                child = owner.spawn(request['args'], output, env, context, role=role, before_publish=before)
+                try:
+                    child = owner.spawn(request['args'], capture.writer, env, context, role=role, before_publish=before)
+                finally:
+                    capture.writer.close()
                 if fault.startswith('after-resume-'):
                     inject(child)
             elif operation == 'read':
@@ -88,11 +132,7 @@ def main():
                 offset = request['offset']
                 if not isinstance(offset, int) or offset < 0:
                     raise ValueError('invalid offset')
-                child.stdout.flush()
-                # A distinct file handle avoids moving the writer's file position.
-                with open(child.stdout.name, 'rb') as reader:
-                    reader.seek(offset)
-                    data = reader.read(32768)
+                data = captures[request['id']].read(offset, child.poll() is not None)
                 print(json.dumps({'ok': True, 'data': base64.b64encode(data).decode('ascii'),
                                   'next': offset + len(data)}), flush=True)
                 continue
@@ -109,6 +149,7 @@ def main():
             child_id = next_id
             next_id += 1
             children[child_id] = child
+            captures[child_id] = capture
             print(json.dumps({'ok': True, 'id': child_id, 'pid': child.pid}), flush=True)
     finally:
         # Existing owner performs exact-handle termination, waits and closure.
@@ -118,8 +159,10 @@ def main():
         finally:
             with contextlib.redirect_stdout(sys.stderr):
                 job.__exit__(None, None, None)
-            for output in outputs:
-                output.close()
+            for capture in captures.values():
+                capture.thread.join(5)
+                if capture.thread.is_alive() or capture.error:
+                    raise RuntimeError('SG output cleanup incomplete')
 
 
 if __name__ == '__main__':

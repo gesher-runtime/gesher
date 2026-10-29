@@ -78,18 +78,6 @@ public static class TrustedSgJob {
     static extern uint GetProcessId(IntPtr process);
     [DllImport("kernel32.dll", SetLastError=true)]
     static extern bool GetProcessTimes(IntPtr process, out long created, out long exited, out long kernel, out long user);
-    [StructLayout(LayoutKind.Sequential)]
-    struct FileTime { public uint Low, High; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct FileInfo {
-        public uint Attributes;
-        public FileTime Created, Accessed, Written;
-        public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
-    }
-    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-    static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
-    [DllImport("kernel32.dll", SetLastError=true)]
-    static extern bool GetFileInformationByHandle(IntPtr handle, out FileInfo info);
 
     public sealed class Owner {
         public IntPtr Job, Process;
@@ -135,10 +123,10 @@ public static class TrustedSgJob {
     }
 
     // python and script are absolute host-controlled paths without quote characters.
-    public static Owner Start(string python, string script, string directory, int fixtureFault) {
+    public static Owner Start(string python, string script, int fixtureFault) {
         LastStartupRollbackConfirmed = false;
-        if (python.IndexOf('"') >= 0 || script.IndexOf('"') >= 0 || directory.IndexOf('"') >= 0 ||
-            python.EndsWith("\\") || script.EndsWith("\\") || directory.EndsWith("\\"))
+        if (python.IndexOf('"') >= 0 || script.IndexOf('"') >= 0 ||
+            python.EndsWith("\\") || script.EndsWith("\\"))
             throw new ArgumentException("invalid owner path");
         IntPtr job = IntPtr.Zero, inputRead = IntPtr.Zero, inputWrite = IntPtr.Zero;
         IntPtr outputRead = IntPtr.Zero, outputWrite = IntPtr.Zero, errorRead = IntPtr.Zero, errorWrite = IntPtr.Zero;
@@ -176,7 +164,7 @@ public static class TrustedSgJob {
             startup.Startup.Flags = 0x100;
             startup.Startup.In = inputRead; startup.Startup.Out = outputWrite; startup.Startup.Error = errorWrite;
             startup.Attributes = attrs;
-            StringBuilder command = new StringBuilder('"' + python + "\" \"" + script + "\" \"" + directory + '"');
+            StringBuilder command = new StringBuilder('"' + python + "\" \"" + script + '"');
             Require(CreateProcessW(python, command, IntPtr.Zero, IntPtr.Zero, true,
                 0x08080004, IntPtr.Zero, null, ref startup, out pi));
             // JOB_LIST assignment and explicit HANDLE_LIST are atomic at creation.
@@ -250,20 +238,6 @@ public static class TrustedSgJob {
             QuarantineOwners[quarantineOwnerCount++] = owner;
         }
     }
-    public static IntPtr PinDirectory(string path) {
-        IntPtr handle = CreateFileW(path, 0x80, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
-        if (handle == new IntPtr(-1)) throw new Win32Exception(Marshal.GetLastWin32Error());
-        FileInfo info;
-        if (!GetFileInformationByHandle(handle, out info) || (info.Attributes & 0x410) != 0x10) {
-            int error = Marshal.GetLastWin32Error();
-            if (!CloseHandle(handle)) Retain(handle);
-            throw new Win32Exception(error == 0 ? 4390 : error);
-        }
-        return handle;
-    }
-    public static void CloseDirectory(ref IntPtr handle) { CloseOwned(ref handle); }
-    public static void RetainHandle(IntPtr handle) { Retain(handle); }
-
     public static uint Active(IntPtr job) {
         Accounting info;
         Require(QueryInformationJobObject(job, 1, out info, (uint)Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero));

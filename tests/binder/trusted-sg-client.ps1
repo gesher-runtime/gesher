@@ -3,19 +3,8 @@
 if (-not ('TrustedSgJob' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'TrustedSgJob.cs') }
 function Start-TrustedSgOwner {
     $python = (Get-Command python -CommandType Application).Source
-    $directory = Join-Path $env:RUNNER_TEMP ('sg-owner-' + [guid]::NewGuid().ToString('N'))
-    $security = [Security.AccessControl.DirectorySecurity]::new()
-    $security.SetAccessRuleProtection($true, $false)
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent().User
-    $rule = [Security.AccessControl.FileSystemAccessRule]::new($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-    $security.SetOwner($identity)
-    $security.AddAccessRule($rule)
-    [void][IO.FileSystemAclExtensions]::CreateDirectory([IO.DirectoryInfo]::new($directory), $security)
-    if (([IO.File]::GetAttributes($directory) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'SG owner directory is a reparse point' }
-    $pin = [TrustedSgJob]::PinDirectory($directory)
-    try { $native = [TrustedSgJob]::Start($python, (Join-Path $PSScriptRoot 'trusted_sg_owner.py'), $directory, 0) }
-    catch { [TrustedSgJob]::RetainHandle($pin); throw }
-    return [pscustomobject]@{ Native = $native; Directory = $directory; Pin = $pin; Error = $native.Error.ReadToEndAsync(); Closed = $false; Faulted = $false }
+    $native = [TrustedSgJob]::Start($python, (Join-Path $PSScriptRoot 'trusted_sg_owner.py'), 0)
+    return [pscustomobject]@{ Native = $native; Error = $native.Error.ReadToEndAsync(); Closed = $false; Faulted = $false }
 
 }
 
@@ -66,21 +55,10 @@ function Close-TrustedSgOwner($Owner) {
         $Owner.Native.Input.Dispose()
         $Owner.Native.Output.Dispose()
         $Owner.Native.Error.Dispose()
-        $items = @(Get-ChildItem -LiteralPath $Owner.Directory -Force)
-        foreach ($item in $items) {
-            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
-                $item.Name -notmatch '^[1-9][0-9]*\.log$') { throw 'unexpected SG owner log entry; preserved' }
-            Remove-Item -LiteralPath $item.FullName -Force
-        }
-        $pin = $Owner.Pin
-        [TrustedSgJob]::CloseDirectory([ref]$pin)
-        $Owner.Pin = $pin
-        Remove-Item -LiteralPath $Owner.Directory -Force
         $Owner.Closed = $true
       }
       } catch {
         [TrustedSgJob]::QuarantineOwner($Owner.Native)
-        if ($Owner.Pin -ne [IntPtr]::Zero) { [TrustedSgJob]::RetainHandle($Owner.Pin); $Owner.Pin = [IntPtr]::Zero }
         throw
       }
     if ($problem) { throw $problem }
