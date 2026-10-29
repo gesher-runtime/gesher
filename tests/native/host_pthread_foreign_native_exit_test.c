@@ -76,18 +76,20 @@ static void run(struct target *t) {
       dll_clock(t->dll_id,&t->clock) || !SetEvent(t->ready) ||
       WaitForSingleObject(t->release,5000)!=WAIT_OBJECT_0) abort();
 }
-struct lookup { pthread_t id; clockid_t expected; int retired; };
+struct lookup { pthread_t id; clockid_t expected; int retired, dll_first; };
 /* A fresh native caller never invokes a pthread API before these lookups. */
 static DWORD WINAPI foreign_lookup(void *p) {
   struct lookup *l=p; clockid_t a=123,b=456; int expected=l->retired?ESRCH:0;
+  clock_fn first=l->dll_first?dll_clock:pthread_getcpuclockid;
+  clock_fn second=l->dll_first?pthread_getcpuclockid:dll_clock;
   errno=EDOM;
-  if (pthread_getcpuclockid(l->id,&a)!=expected || errno!=EDOM ||
+  if (first(l->id,&a)!=expected || errno!=EDOM ||
       a!=(l->retired?123:l->expected)) return 1;
   errno=EDOM;
-  if (dll_clock(l->id,&b)!=expected || errno!=EDOM || b!=(l->retired?456:l->expected)) return 2;
+  if (second(l->id,&b)!=expected || errno!=EDOM || b!=(l->retired?456:l->expected)) return 2;
   a=123; b=456; errno=EDOM;
-  if (pthread_getcpuclockid((pthread_t)0,&a)!=ESRCH || a!=123 || errno!=EDOM ||
-      dll_clock((pthread_t)0,&b)!=ESRCH || b!=456 || errno!=EDOM) return 3;
+  if (first((pthread_t)0,&a)!=ESRCH || a!=123 || errno!=EDOM ||
+      second((pthread_t)0,&b)!=ESRCH || b!=456 || errno!=EDOM) return 3;
   return 0;
 }
 static int call_foreign(struct lookup *l) {
@@ -131,13 +133,15 @@ int main(void) {
     from_host=123; from_dll=456; errno=EDOM;
     if (pthread_getcpuclockid((pthread_t)0,&from_host)!=ESRCH || from_host!=123 || errno!=EDOM ||
         dll_clock((pthread_t)0,&from_dll)!=ESRCH || from_dll!=456 || errno!=EDOM) return 6;
-    struct lookup lookup={t.host_id,t.clock,0}; if (!call_foreign(&lookup)) return 6;
+    struct lookup lookup={t.host_id,t.clock,0,0}; if (!call_foreign(&lookup)) return 6;
+    lookup.dll_first=1; if (!call_foreign(&lookup)) return 6;
     if (!SetEvent(t.release) || WaitForSingleObject(thread,5000)!=WAIT_OBJECT_0) return 7;
     DWORD actual; if (!GetExitCodeThread(thread,&actual) || actual!=t.exit_code || destroyed!=i+1) return 8;
     from_host=123; from_dll=456; errno=EDOM;
     if (pthread_getcpuclockid(t.host_id,&from_host)!=ESRCH || from_host!=123 || errno!=EDOM ||
         dll_clock(t.host_id,&from_dll)!=ESRCH || from_dll!=456 || errno!=EDOM) return 9;
-    lookup.retired=1; if (!call_foreign(&lookup)) return 9;
+    lookup.retired=1; lookup.dll_first=0; if (!call_foreign(&lookup)) return 9;
+    lookup.dll_first=1; if (!call_foreign(&lookup)) return 9;
     sample.tv_sec=123; sample.tv_nsec=456; errno=0;
     if (clock_gettime(t.clock,&sample)!=-1 || errno!=EINVAL || sample.tv_sec!=123 || sample.tv_nsec!=456) return 10;
     if (!CloseHandle(thread) || !CloseHandle(t.ready) || !CloseHandle(t.release)) return 11; handles("iteration-complete"); inventory("iteration-complete");
@@ -151,7 +155,7 @@ int main(void) {
   printf("CONTROL final delete=%d unload=%d remaining=%p count=%d handles=%lu/%lu\n",
          delete_result,(int)unload_result,(void *)remaining,(int)count_result,baseline,count_result?after:0UL);
   if (delete_result || !unload_result || remaining || !count_result || after>baseline+8) return 12;
-  puts("PASS probe unattached native caller host/DLL live invalid retired clock queries");
+  puts("PASS probe fresh native callers host-first DLL-first live invalid retired clock queries");
   printf("PASS probe foreign native exit handles=%lu/%lu\n",baseline,after);
   return 0;
 }

@@ -93,7 +93,7 @@ jobs:
               $actual=Get-Content -Raw -LiteralPath $stdout
               if (-not $actual.Contains($case.Marker) -or $actual.Contains('FAIL ')) { throw "Probe $name missing control" }
               if ($name -eq 'foreign-native-exit') {
-                if (-not $actual.Contains('PASS probe unattached native caller host/DLL live invalid retired clock queries')) { throw 'Missing unattached native caller proof' }
+                if (-not $actual.Contains('PASS probe fresh native callers host-first DLL-first live invalid retired clock queries')) { throw 'Missing unattached native caller proof' }
                 foreach ($proof in @('method=ExitThread attach=host code=23','method=ExitThread attach=dll code=24','method=_endthreadex attach=host code=25','method=_endthreadex attach=dll code=26')) { if (-not $actual.Contains($proof)) { throw "Missing foreign exit $proof" } }
               }
               if ($name -eq 'callback-lifetime' -and -not $actual.Contains('PASS probe four destructor passes and self-delete recreate generation')) { throw 'Missing destructor iteration/reuse proof' }
