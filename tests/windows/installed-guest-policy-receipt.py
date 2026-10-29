@@ -19,7 +19,7 @@ identity = {k: os.environ[k] for k in (
     'GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID')}
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == identity['GITHUB_SHA']
 flags = ['-std=c++20', '-O2', '-Wall', '-Wextra', '-Werror', '-fexceptions',
-         '-DGESHER_PROPERTY_DIAGNOSTIC', '-D_WIN32_WINNT=0x0A00', '-DWINVER=0x0A00', '-municode', '-static']
+         '-DGESHER_PROPERTY_DIAGNOSTIC', '-DGESHER_PROPERTY_READONLY_DIAGNOSTIC', '-D_WIN32_WINNT=0x0A00', '-DWINVER=0x0A00', '-municode', '-static']
 suffix = ['-o', 'guest-policy-artifact/installed-guest-policy-fixture.exe', '-ladvapi32']
 toolchain = 'llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64'
 archive_sha = '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4'

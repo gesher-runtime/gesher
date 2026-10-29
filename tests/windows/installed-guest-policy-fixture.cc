@@ -85,11 +85,23 @@ std::wstring PrivateName(HANDLE handle) {
 int wmain(int argc, wchar_t** argv) {
   try {
     if (argc == 4 && !wcscmp(argv[1], L"--nested")) {
+      wchar_t property_root_env[32768]{};
+      DWORD root_length = GetEnvironmentVariableW(L"ANDROID_DATA", property_root_env, 32768);
+      Check(root_length && root_length < 32768, "fixture property root environment");
+      std::wstring readonly_path = std::wstring(property_root_env) + L"\\system\\gesher-properties\\28ccc633bf3e2ba6.area";
+      HANDLE direct_write = CreateFileW(readonly_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+      DWORD write_error = direct_write == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+      if (direct_write != INVALID_HANDLE_VALUE) Check(CloseHandle(direct_write), "close unexpected property write handle");
+      printf("POLICY_PROPERTY_ACCESS direct_write_denied=%u error=%lu\n",
+          unsigned(direct_write == INVALID_HANDLE_VALUE), write_error);
+      Check(direct_write == INVALID_HANDLE_VALUE && write_error == ERROR_ACCESS_DENIED, "actual area write denied");
       std::string property;
       bool property_read = gesher::properties::Get("ro.fixture.identity", &property);
       bool property_write = gesher::properties::Set("fixture.mutable", "guest");
       printf("POLICY_PROPERTY guest_read=%u host_value=%u guest_write=%u\n", unsigned(property_read),
           unsigned(property == "host-authoritative"), unsigned(property_write));
+      Check(property_read && property == "host-authoritative" && !property_write, "actual readonly property probe");
       STARTUPINFOW actual{}; actual.cb = sizeof(actual); GetStartupInfoW(&actual);
       Check((actual.dwFlags & STARTF_USESTDHANDLES) != 0, "actual startup stdio");
       HANDLE verified = gesher::DuplicateVerifiedNull(actual.hStdInput);
@@ -142,9 +154,10 @@ int wmain(int argc, wchar_t** argv) {
     auto outside_security = Security(outside);
     wchar_t executable[32768]; DWORD size = GetModuleFileNameW(nullptr, executable, 32768);
     Check(size && size < 32768, "actual executable");
+    std::wstring property_area = property_root + L"\\system\\gesher-properties\\28ccc633bf3e2ba6.area";
     auto create = [&](const std::wstring& resource) {
       return g::InstalledPolicy::Create(g::kSelectedPackage, Generation(), 10000,
-          U(std::wstring(executable, size)), {U(resource), U(asset_file)}, U(data));
+          U(std::wstring(executable, size)), {U(resource), U(asset_file), U(property_area)}, U(data));
     };
     std::wstring link = assets + L"\\redirect";
     Link(link, outside);
@@ -213,6 +226,7 @@ int wmain(int argc, wchar_t** argv) {
       bool host_saw_guest_write = gesher::properties::Get("fixture.mutable", &after_guest);
       printf("POLICY_PROPERTY_HOST observed_write=%u value_matches=%u\n", unsigned(host_saw_guest_write),
           unsigned(after_guest == "guest"));
+      Check(!host_saw_guest_write, "guest cannot publish into host property area");
       printf("%s", verified_output); fflush(stdout);
       Check(DeleteFileW(log_path.c_str()), "nested child log cleanup");
       printf("POLICY_CHILD actual_lowbox=1 nested_create=1 file_reopen_read=1 nested_delete=1 exit=0 retired=1\n");

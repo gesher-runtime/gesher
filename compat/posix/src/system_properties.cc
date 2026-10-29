@@ -61,6 +61,9 @@ struct MutexLock {
 struct Area {
   Handle mutex, file, mapping;
   void* view = nullptr;
+#ifdef GESHER_PROPERTY_READONLY_DIAGNOSTIC
+  bool readonly = false;
+#endif
   uint32_t cached_generation = 0;
   Snapshot values;
   std::wstring root, persistent;
@@ -341,13 +344,31 @@ Area* Current() { // LocalMutex is held by every caller.
   area->file.value = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
                                  FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+#ifdef GESHER_PROPERTY_READONLY_DIAGNOSTIC
+  if (area->file.value == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED) {
+    area->file.value = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                   nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    area->readonly = area->file.value != INVALID_HANDLE_VALUE;
+  }
+#endif
   if (area->file.value == INVALID_HANDLE_VALUE) { Diagnostic("file", GetLastError()); return nullptr; }
+#ifdef GESHER_PROPERTY_READONLY_DIAGNOSTIC
+  area->mapping.value = CreateFileMappingW(area->file.value, nullptr, area->readonly ? PAGE_READONLY : PAGE_READWRITE, 0, kCapacity, nullptr);
+#else
   area->mapping.value = CreateFileMappingW(area->file.value, nullptr, PAGE_READWRITE, 0, kCapacity, nullptr);
+#endif
   if (!area->mapping.value) { Diagnostic("mapping", GetLastError()); return nullptr; }
+#ifdef GESHER_PROPERTY_READONLY_DIAGNOSTIC
+  area->view = MapViewOfFile(area->mapping.value, area->readonly ? FILE_MAP_READ : FILE_MAP_ALL_ACCESS, 0, 0, kCapacity);
+#else
   area->view = MapViewOfFile(area->mapping.value, FILE_MAP_ALL_ACCESS, 0, 0, kCapacity);
+#endif
   if (!area->view) { Diagnostic("view", GetLastError()); return nullptr; }
   auto* header = static_cast<Header*>(area->view);
   if (!header->magic) {
+#ifdef GESHER_PROPERTY_READONLY_DIAGNOSTIC
+    if (area->readonly) return nullptr;
+#endif
     Snapshot initial = Initial();
     if (!Persist(area->persistent, nullptr, nullptr, &initial)) return nullptr;
     for (auto& [name, value] : initial) value.serial = Serial(name, value.text);
@@ -412,6 +433,9 @@ bool Set(const std::string& name, const std::string& value) {
   std::lock_guard local(LocalMutex());
   Area* area = Current();
   if (!area) return false;
+#ifdef GESHER_PROPERTY_READONLY_DIAGNOSTIC
+  if (area->readonly) return false;
+#endif
   MutexLock lock(area->mutex.value);
   if (!lock.held || !Refresh(area)) return false;
   auto found = area->values.find(name);
