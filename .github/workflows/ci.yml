@@ -834,6 +834,7 @@ jobs:
             tools/boot-image
             tools/web3
             tools/package
+            tools/windows4
             probes/native3/unicode
 
       - name: Verify and assemble windows-x64 artifact
