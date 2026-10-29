@@ -7,6 +7,12 @@
 
 static int failures;
 static int rows;
+static void bitdiag(const char* label, int api, size_t capacity, int rc, int error, const unsigned char* p) {
+  std::fprintf(stderr, "DNS_BIT_DIAG label=%s api=%d capacity=%zu rc=%d errno=%d bytes=", label, api, capacity, rc, error);
+  size_t limit = capacity < 16 ? capacity : 16;
+  for (size_t i = 0; i < limit; ++i) { std::fprintf(stderr, "%02x", p[i]); if (p[i] == 0) break; }
+  std::fputc('\n', stderr);
+}
 static void check(bool ok, const char* label) {
   if (!ok) { std::printf("FAIL DNS: %s\n", label); ++failures; }
 }
@@ -22,6 +28,7 @@ static void decode(const char* id, const unsigned char* packet, size_t length,
                                    reinterpret_cast<char*>(out.data), static_cast<int>(capacity)) :
                         ns_name_unpack(packet, packet + length, packet + offset, out.data, capacity);
     int error = errno;
+    if (std::strcmp(id, "bitstring-5") == 0 && api < 2) bitdiag(id, api, capacity, rc, error, out.data);
     bool guard = true;
     for (unsigned char b : out.pre) guard &= b == 0xa5;
     for (unsigned char b : out.post) guard &= b == 0xa5;
@@ -33,8 +40,9 @@ static void decode(const char* id, const unsigned char* packet, size_t length,
       if (api < 2) check(std::strcmp(reinterpret_cast<char*>(out.data),
                                     api == 1 && std::strcmp(text,".") == 0 ? "" : text) == 0, id);
       else {
-        char rendered[1024];
+        char rendered[1024] = {};
         int n = ns_name_ntop(out.data, rendered, sizeof(rendered));
+        if (std::strcmp(id, "bitstring-5") == 0) bitdiag("bitstring-ntop", api, sizeof(rendered), n, errno, reinterpret_cast<unsigned char*>(rendered));
         check(n == static_cast<int>(std::strlen(text) + 1) && std::strcmp(rendered,text) == 0, id);
       }
     }
@@ -112,6 +120,7 @@ int main(int argc, char** argv) {
                api==1 ? ns_name_uncompress(bits,bits+sizeof(bits),bits,dst,capacity) :
                         dn_expand(bits,bits+sizeof(bits),bits,dst,static_cast<int>(capacity));
         int error=errno;
+        bitdiag("bit-cap",api,capacity,rc,error,out+4);
         bool guard=true;
         for (size_t i=0;i<4;++i)guard &= out[i]==0xa5;
         for (size_t i=4+capacity;i<sizeof(out);++i)guard &= out[i]==0xa5;
