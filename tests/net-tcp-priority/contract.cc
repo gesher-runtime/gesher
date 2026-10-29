@@ -512,10 +512,14 @@ static void failed_to_listener_control() {
   sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   require(bind(reserved, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "listener transition target bind");
   socklen_t length = sizeof(address); require(getsockname(reserved, reinterpret_cast<sockaddr*>(&address), &length) == 0, "listener transition target address");
-  int client = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); require(client >= 0, "listener transition client");
-  require(connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == -1 && errno == EINPROGRESS, "listener transition actual pending refusal");
-  pollfd p{client, POLLPRI, 0}; require(poll(&p, 1, 5000) == 1 && (p.revents & POLLERR), "listener transition actual completed refusal");
-  int error = -1; length = sizeof(error); require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "listener transition caller consumes old error");
+  // Actual Linux409301 permits listen after blocking connect consumed the
+  // refusal. A failed nonblocking socket remains SS_CONNECTING and rejects it.
+  int client = socket(AF_INET, SOCK_STREAM, 0); require(client >= 0, "listener transition client");
+  const int connected = connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)); const int connect_error = errno;
+  printf("TCP_PRIORITY_LISTENER_FAILURE connect_rc=%d connect_errno=%d\n", connected, connect_error); fflush(stdout);
+  require(connected == -1 && connect_error == ECONNREFUSED, "listener transition blocking caller consumed actual refusal");
+  pollfd p{client, POLLPRI, 0};
+  int error = -1; length = sizeof(error); require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0, "blocking caller already consumed old connection error");
   const int rebound = bind(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)); const int bind_error = errno;
   printf("TCP_PRIORITY_LISTENER_TRANSITION bind_rc=%d bind_errno=%d\n", rebound, bind_error); fflush(stdout);
   require(rebound == -1, "an already bound failed socket does not change its local address");

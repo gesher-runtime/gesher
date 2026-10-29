@@ -530,3 +530,20 @@ getter failure stays strict OPEN; arbitrary providers/IPv6, TCP disconnect
 equivalence, generic select, inline OOB and MinGW DLL-unload equivalence are not
 closed by this bounded candidate. Local checks are source-only AST/format review;
 no native build or fixture has executed locally.
+
+Source ownership audit caught a native-argument lifetime gap before publication:
+the owned neutral address had been converted into a temporary worker-block
+sockaddr. b407f179/16223bcc move the ACTUAL native sockaddr_storage and length
+into ConnectOperation and pass nullptr for the unused optional ConnectEx byte
+output. No pending native argument now borrows a caller or worker local; this
+matches the independently qualified native operation shape.
+
+Linux-only a21c5c3a/409301 confirms the exact listener precondition. Fresh and
+blocking-refused sockets reject a conflicting bind98, then listen succeeds with
+finite PRI60ms and actual new accepted payload. Nonblocking-refused returns
+listen EINVAL22 even after caller SO_ERROR111 consumption, retaining HUP16.
+That matches Linux's distinct user socket state. The new positive transition
+fixture now uses the PROVEN blocking-refused state; every pre-existing strict
+nonblocking refusal/alias/error/deadline control remains unchanged. Raw log:
+`C:/work/gesher-ci-review/tcp-409301-linux-listen.log`. Nonblocking-failed listen,
+like TCP AF_UNSPEC disconnect, is not claimed equivalent by this candidate.
