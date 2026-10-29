@@ -28,7 +28,7 @@ try {
     if ($fault.Exit -ne 0 -or $faultRows -cne $faultReference) {
       throw "UDP $abi fault/metadata output differs from actual Linux (exit $($fault.Exit))"
     }
-    Write-Host "PASS  UDP ${abi}: 96 actual Linux-identical EFAULT/partial-scatter/queue/metadata rows"
+    Write-Host "PASS  UDP ${abi}: 120 actual Linux-identical EFAULT/partial-scatter/queue/metadata/cross-page rows"
   }
 } catch {
   Write-Host "FAIL  UDP truncation contract: $_"
