@@ -1,0 +1,31 @@
+name: Geocoder working directory diagnostic
+on:
+  push:
+    branches: [wip/overrides-geocoder-diagnostic]
+    paths: [.github/workflows/overrides-geocoder-diagnostic.yml, tools/overrides-diagnostic/probe.ps1]
+permissions:
+  contents: read
+jobs:
+  geocoder:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        mode: [original, isolated]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fad0eff2f73215235769566b4c0304c844598195
+          path: measured
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          path: driver
+          persist-credentials: false
+          sparse-checkout: tools/overrides-diagnostic/probe.ps1
+          sparse-checkout-cone-mode: false
+      - name: Execute actual provider with controlled working directory
+        shell: pwsh
+        run: ./driver/tools/overrides-diagnostic/probe.ps1 -MeasuredRoot "$pwd/measured" -Mode '${{ matrix.mode }}'
