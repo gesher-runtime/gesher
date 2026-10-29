@@ -5185,3 +5185,13 @@
  #endif
  #endif
 -#endif
+--- a/mingw-w64-libraries/winpthreads/include/pthread.h
++++ b/mingw-w64-libraries/winpthreads/include/pthread.h
+@@ -305,4 +305,7 @@
+ #define PTHREAD_RWLOCK_INITIALIZER ((pthread_rwlock_t)-1)
+
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++__declspec(dllexport)
++#endif
+ WINPTHREAD_API extern void (**_pthread_key_dest)(void *);
+ WINPTHREAD_API int         pthread_key_create(pthread_key_t *key, void (* dest)(void *));
