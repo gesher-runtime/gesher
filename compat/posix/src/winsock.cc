@@ -654,9 +654,18 @@ int Membership(Socket s, bool join, Family family, const uint8_t* group, uint32_
   return rc == 0 ? 0 : Fail();
 }
 
+bool IsTcpSocket(Socket s) {
+  WSAPROTOCOL_INFOW info{}; int length = sizeof(info);
+  return Api().getsockopt(static_cast<SOCKET>(s), SOL_SOCKET, SO_PROTOCOL_INFOW,
+                          reinterpret_cast<char*>(&info), &length) == 0 &&
+         info.iSocketType == SOCK_STREAM && info.iProtocol == IPPROTO_TCP &&
+         (info.iAddressFamily == AF_INET || info.iAddressFamily == AF_INET6);
+}
+
 int Poll(PollEntry* entries, size_t count, int timeout_ms) {
   std::vector<WSAPOLLFD> fds(count);
   std::vector<bool> lifecycle_hup(count, false);
+  std::vector<bool> failed_tcp_not_connected(count, false);
   bool has_lifecycle_hup = false;
   for (size_t i = 0; i < count; ++i) {
     fds[i].fd = static_cast<SOCKET>(entries[i].socket);
@@ -682,6 +691,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
           if (peer_result == 0) {
             if (entries[i].description) entries[i].description->state.store(ConnectState::kConnected);
           } else if (WSAGetLastError() == WSAENOTCONN) {
+            failed_tcp_not_connected[i] = state == ConnectState::kFailed && entries[i].description && entries[i].description->tcp;
             if (state != ConnectState::kConnecting) {
               // Linux's unconnected TCP_CLOSE socket has HUP. Native Winsock
               // reports neither that state nor a connecting socket as HUP.
@@ -707,8 +717,16 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
       ConnectState expected = ConnectState::kConnecting;
       entries[i].description->state.compare_exchange_strong(expected, ConnectState::kFailed);
     }
-    if (entries[i].description && entries[i].description->state.load() == ConnectState::kFailed &&
-        entries[i].description->connect_error_consumed.load()) r &= ~POLLERR;
+    // Only a caller-consumed refusal of this exact terminal TCP attempt is
+    // virtualized. New connections reset the generation; generic errors,
+    // other protocols, new payload and nonterminal masks remain observable.
+    if (failed_tcp_not_connected[i] && r == (POLLERR | POLLHUP | POLLWRNORM)) {
+      auto& description = *entries[i].description;
+      std::lock_guard<std::mutex> lock(description.error_mutex);
+      if (!description.connect_call_active && description.state.load() == ConnectState::kFailed &&
+          description.connect_generation != 0 && description.consumed_generation == description.connect_generation &&
+          description.consumed_error == ECONNREFUSED) r &= ~POLLERR;
+    }
     if (lifecycle_hup[i]) r |= POLLHUP;
     int out = 0;
     if (r & POLLRDNORM) out |= kPollIn;

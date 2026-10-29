@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -158,6 +159,33 @@ static void endpoint_controls() {
   require(close(connected_alias) == 0 && close(client) == 0 && close(datagram) == 0 && close(listener) == 0, "control endpoint cleanup");
   puts("PASS TCP priority: listener datagram and successful connect preserve finite priority-only waits");
 }
+struct ErrorGate { pthread_mutex_t mutex; pthread_cond_t condition; int waiting = 0; bool go = false; };
+struct ErrorReader { int fd; ErrorGate* gate; int rc = -99, value = -99; };
+static void* consume_error(void* raw) {
+  auto* reader = static_cast<ErrorReader*>(raw); auto& gate = *reader->gate;
+  require(pthread_mutex_lock(&gate.mutex) == 0, "error reader gate lock");
+  ++gate.waiting; require(pthread_cond_broadcast(&gate.condition) == 0, "error reader arrived");
+  while (!gate.go) require(pthread_cond_wait(&gate.condition, &gate.mutex) == 0, "error reader start wait");
+  require(pthread_mutex_unlock(&gate.mutex) == 0, "error reader gate unlock");
+  socklen_t length = sizeof(reader->value);
+  reader->rc = getsockopt(reader->fd, SOL_SOCKET, SO_ERROR, &reader->value, &length);
+  return nullptr;
+}
+static void concurrent_error_consumption(int first, int second) {
+  ErrorGate gate;
+  require(pthread_mutex_init(&gate.mutex, nullptr) == 0 && pthread_cond_init(&gate.condition, nullptr) == 0, "error gate create");
+  ErrorReader readers[] = {{first, &gate}, {second, &gate}}; pthread_t threads[2];
+  for (int i = 0; i < 2; ++i) require(pthread_create(&threads[i], nullptr, consume_error, &readers[i]) == 0, "error reader thread");
+  require(pthread_mutex_lock(&gate.mutex) == 0, "error gate controller lock");
+  timespec deadline{}; require(clock_gettime(CLOCK_REALTIME, &deadline) == 0, "error gate clock"); deadline.tv_sec += 2;
+  while (gate.waiting != 2) require(pthread_cond_timedwait(&gate.condition, &gate.mutex, &deadline) == 0, "error readers bounded rendezvous");
+  gate.go = true; require(pthread_cond_broadcast(&gate.condition) == 0 && pthread_mutex_unlock(&gate.mutex) == 0, "release concurrent error readers");
+  for (int i = 0; i < 2; ++i) require(pthread_join(threads[i], nullptr) == 0, "join error reader");
+  printf("TCP_PRIORITY_CONCURRENT_ERROR first_rc=%d first=%d second_rc=%d second=%d\n", readers[0].rc, readers[0].value, readers[1].rc, readers[1].value); fflush(stdout);
+  require(readers[0].rc == 0 && readers[1].rc == 0 &&
+          ((readers[0].value == ECONNREFUSED && readers[1].value == 0) || (readers[1].value == ECONNREFUSED && readers[0].value == 0)), "exactly one alias consumes connection error");
+  require(pthread_cond_destroy(&gate.condition) == 0 && pthread_mutex_destroy(&gate.mutex) == 0, "error gate cleanup");
+}
 static void connection_controls() {
   int reserved = socket(AF_INET, SOCK_STREAM, 0); require(reserved >= 0, "reserve refused port");
   sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -200,6 +228,9 @@ static void connection_controls() {
   int consumed_rc = poll(&consumed, 1, 0);
   printf("TCP_PRIORITY_ERROR_CONSUMED rc=%d revents=%d\n", consumed_rc, consumed.revents); fflush(stdout);
   require(consumed_rc == 1 && consumed.revents == POLLHUP, "consumed connection error leaves only hangup");
+  require(send(client, "x", 1, MSG_NOSIGNAL | MSG_DONTWAIT) == -1 && (errno == EPIPE || errno == ENOTCONN), "send after terminal refusal stays unconnected");
+  error = -1; length = sizeof(error);
+  require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0, "failed send does not resurrect consumed refusal");
   // TCP reconnect after failure is unspecified. Exercise the portable retry:
   // a fresh socket replaces the same fd, with a new shared error generation.
   int fresh = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); require(fresh >= 0, "fresh retry socket");
@@ -208,8 +239,9 @@ static void connection_controls() {
   require(connected == -1 && (errno == EINPROGRESS || errno == ECONNREFUSED), "fresh retry connection pending");
   refused = {client, POLLPRI, 0};
   require(poll(&refused, 1, 5000) == 1 && (refused.revents & (POLLERR | POLLHUP)) && !(refused.revents & POLLPRI), "fresh retry error never priority");
-  error = -1; length = sizeof(error);
-  require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "replacement has independent unconsumed error");
+  int retry_alias = dup(client); require(retry_alias >= 0, "fresh retry error alias");
+  concurrent_error_consumption(client, retry_alias);
+  require(close(retry_alias) == 0, "fresh retry alias cleanup");
   error = -1; length = sizeof(error);
   require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0, "fresh retry error consumed once");
   require(close(client) == 0 && close(reserved) == 0, "refused cleanup");
@@ -221,6 +253,30 @@ static void peer_eof(int fd) {
   pollfd p{fd, POLLIN, 0}; char byte{};
   require(poll(&p, 1, 2000) == 1 && recv(fd, &byte, 1, 0) == 0, "last alias close produces peer EOF");
 }
+static int status_flags(int fd) {
+  const int flags = fcntl(fd, F_GETFL); require(flags >= 0, "alias status read"); return flags;
+}
+static void nonblocking_aliases(int first, int second) {
+  int flags = status_flags(first);
+  require(fcntl(first, F_SETFL, flags | O_NONBLOCK) == 0 && (status_flags(second) & O_NONBLOCK), "F_SETFL status shared toward replacement");
+  char byte{};
+  require(recv(second, &byte, 1, MSG_DONTWAIT) == -1 && (errno == EAGAIN || errno == EWOULDBLOCK), "nonblocking empty alias recv");
+  require(fcntl(second, F_SETFL, flags & ~O_NONBLOCK) == 0 && !(status_flags(first) & O_NONBLOCK), "F_SETFL status shared toward source");
+  timeval timeout{0, 300000};
+  require(setsockopt(first, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0, "alias receive safety deadline");
+  const long long start = millis();
+  require(recv(first, &byte, 1, MSG_DONTWAIT) == -1 && (errno == EAGAIN || errno == EWOULDBLOCK) && millis() - start < 200, "shared blocking status preserves MSG_DONTWAIT");
+  int on = 1;
+  require(ioctl(second, FIONBIO, &on) == 0 && (status_flags(first) & O_NONBLOCK), "FIONBIO status shared toward source");
+  on = 0;
+  require(ioctl(first, FIONBIO, &on) == 0 && !(status_flags(second) & O_NONBLOCK), "FIONBIO status shared toward replacement");
+  on = 1; require(setsockopt(first, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == 0, "alias reuse set");
+  on = 0; socklen_t length = sizeof(on);
+  require(getsockopt(second, SOL_SOCKET, SO_REUSEADDR, &on, &length) == 0 && on == 1, "reuse option shared toward replacement");
+  on = 0; require(setsockopt(second, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == 0, "alias reuse clear");
+  on = -1; length = sizeof(on);
+  require(getsockopt(first, SOL_SOCKET, SO_REUSEADDR, &on, &length) == 0 && on == 0, "reuse option shared toward source");
+}
 struct AliasWait { int fd; int rc; short revents; long long elapsed; };
 static void* alias_wait(void* raw) {
   auto* wait = static_cast<AliasWait*>(raw);
@@ -231,7 +287,12 @@ static void* alias_wait(void* raw) {
 static void alias_ownership() {
   Pair a = pair(), b = pair();
   int old_target = dup(b.receiver); require(old_target >= 0, "alias target copy");
-  require(dup2(a.receiver, b.receiver) == b.receiver && close(a.receiver) == 0, "alias target replacement");
+  require(dup2(-1, b.receiver) == -1 && errno == EBADF, "invalid-source dup2 leaves target intact");
+  require(send(b.sender, "v", 1, 0) == 1, "failed replacement target peer send");
+  char retained{}; require(recv(b.receiver, &retained, 1, 0) == 1 && retained == 'v', "failed replacement retained target");
+  require(dup2(a.receiver, b.receiver) == b.receiver, "alias target replacement");
+  nonblocking_aliases(a.receiver, b.receiver);
+  require(close(a.receiver) == 0, "replacement source close");
   require(send(a.sender, "a", 1, 0) == 1 && send(b.sender, "b", 1, 0) == 1, "alias replacement peer send");
   char byte{};
   require(recv(b.receiver, &byte, 1, 0) == 1 && byte == 'a', "replacement retains source after source close");
@@ -256,11 +317,18 @@ static void alias_ownership() {
   require(bind(receiver, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "datagram alias bind");
   socklen_t length = sizeof(address);
   require(getsockname(receiver, reinterpret_cast<sockaddr*>(&address), &length) == 0, "datagram alias address");
-  int alias = dup(receiver); require(alias >= 0 && close(receiver) == 0, "datagram alias retains endpoint");
+  int alias = dup(receiver); require(alias >= 0, "datagram alias");
+  nonblocking_aliases(receiver, alias);
+  require(close(receiver) == 0, "datagram alias retains endpoint");
   require(sendto(sender, "u", 1, 0, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 1, "datagram alias send");
   pollfd p{alias, POLLIN, 0};
   require(poll(&p, 1, 2000) == 1 && recv(alias, &byte, 1, 0) == 1 && byte == 'u', "datagram alias receives unchanged payload");
-  require(close(alias) == 0 && close(sender) == 0, "datagram alias cleanup");
+  int challenger = socket(AF_INET, SOCK_DGRAM, 0); require(challenger >= 0, "datagram binding challenger");
+  require(bind(challenger, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == -1 && errno == EADDRINUSE, "UDP port retained until last alias close");
+  require(close(alias) == 0, "datagram last alias close");
+  require(bind(challenger, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "UDP port released by last alias close");
+  require(close(alias) == -1 && errno == EBADF, "closed UDP alias remains invalid");
+  require(close(challenger) == 0 && close(sender) == 0, "datagram alias cleanup");
   puts("PASS TCP priority: shared aliases preserve dup2 targets last-close EOF concurrent urgent poll and UDP payload");
 }
 int main(int argc, char** argv) {

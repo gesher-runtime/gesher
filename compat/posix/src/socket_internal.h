@@ -67,8 +67,13 @@ inline constexpr int kPollNval = 32;
 enum class ConnectState { kInitial, kConnecting, kConnected, kFailed };
 struct SocketDescription {
   std::atomic<ConnectState> state{ConnectState::kInitial};
-  std::atomic<bool> connect_error_consumed{false};
+  bool tcp = false;  // immutable provider protocol identity, set before publication
+  uint64_t connect_generation = 0, consumed_generation = 0; // error_mutex
+  int consumed_error = 0;  // exact caller-observed code, never a generic error mask
+  bool connect_call_active = false;  // error_mutex
+  std::atomic<bool> nonblocking{false}, reuse_addr{false};
   std::mutex error_mutex;
+  std::mutex status_mutex;
   size_t descriptor_refs = 0;  // fd.cc's table mutex; snapshots are not fd refs
 };
 struct PollEntry {
@@ -80,6 +85,7 @@ struct PollEntry {
 
 // Starts Winsock once; false (errno set) if it cannot.
 bool Startup();
+bool IsTcpSocket(Socket s);  // provider protocol identity; never reads SO_ERROR
 
 Socket Open(Family family, Type type, int protocol, bool process_binding = true);
 int Close(Socket s);
@@ -219,8 +225,7 @@ namespace gesher {
 
 struct SocketFd {
   ws::Socket socket = ws::kInvalidSocket;
-  bool nonblocking = false;
-  bool reuse_addr = false;  // recorded only; see socket.cc
+  bool initial_nonblocking = false;  // registration hint; live flags are shared
   // Open-description lifetime: dup/dup2 retain the same connect lifecycle.
   std::shared_ptr<ws::SocketDescription> description;
 };
@@ -230,6 +235,5 @@ struct SocketFd {
 int RegisterSocket(const SocketFd& state);
 // False if fd is not a socket.
 bool LookupSocket(int fd, SocketFd* state);
-void UpdateSocket(int fd, const SocketFd& state);
 
 }  // namespace gesher

@@ -20,6 +20,7 @@
 #include "internal.h"
 #include "linux_socket.h"
 #include "socket_internal.h"
+#include "record_lock_descriptors.h"
 
 namespace ws = gesher::ws;
 using gesher::SocketFd;
@@ -35,7 +36,9 @@ bool Lookup(int fd, SocketFd* state) {
 }
 
 int RegisterNew(ws::Socket s, bool nonblocking) {
-  if (nonblocking && ws::SetNonBlocking(s, true) < 0) {
+  // accept does not inherit O_NONBLOCK on Linux. Normalize both directions
+  // before publishing the new open description and its shared status flag.
+  if (ws::SetNonBlocking(s, nonblocking) < 0) {
     int saved = errno;
     ws::Close(s);
     errno = saved;
@@ -43,7 +46,7 @@ int RegisterNew(ws::Socket s, bool nonblocking) {
   }
   SocketFd state;
   state.socket = s;
-  state.nonblocking = nonblocking;
+  state.initial_nonblocking = nonblocking;
   return gesher::RegisterSocket(state);
 }
 
@@ -227,16 +230,28 @@ int connect(int fd, const struct sockaddr* addr, socklen_t len) {
   if (!Lookup(fd, &state) || !ToAddress(addr, len, &address) || !MapUnixPath(&address, false)) {
     return -1;
   }
+  uint64_t generation;
   {
     std::lock_guard<std::mutex> lock(state.description->error_mutex);
-    state.description->connect_error_consumed.store(false);
+    if (state.description->connect_call_active) return errno = EALREADY, -1;
+    if (state.description->connect_generation == UINT64_MAX) return errno = EOVERFLOW, -1;
+    generation = ++state.description->connect_generation;
+    state.description->consumed_generation = 0;
+    state.description->consumed_error = 0;
+    state.description->connect_call_active = true;
     state.description->state.store(ws::ConnectState::kConnecting);
   }
   const int result = ws::Connect(state.socket, address);
   const int saved = errno;
   const bool pending = saved == EINPROGRESS || saved == EALREADY || saved == EINTR;
-  state.description->state.store(result == 0 ? ws::ConnectState::kConnected :
-                            pending ? ws::ConnectState::kConnecting : ws::ConnectState::kFailed);
+  {
+    std::lock_guard<std::mutex> lock(state.description->error_mutex);
+    if (state.description->connect_generation == generation) {
+      state.description->state.store(result == 0 ? ws::ConnectState::kConnected :
+                                pending ? ws::ConnectState::kConnecting : ws::ConnectState::kFailed);
+    }
+    state.description->connect_call_active = false;
+  }
   errno = saved;
   return result;
 }
@@ -303,7 +318,7 @@ int ToMsgFlags(int flags) {
 // MSG_DONTWAIT on a blocking socket: fail with EAGAIN unless the socket is
 // ready now. (Another thread may still take the data first.)
 bool WouldBlock(const SocketFd& state, int flags, int event) {
-  if ((flags & MSG_DONTWAIT) == 0 || state.nonblocking) return false;
+  if ((flags & MSG_DONTWAIT) == 0 || state.description->nonblocking.load()) return false;
   ws::PollEntry entry = {state.socket, event, 0, state.description};
   if (ws::Poll(&entry, 1, 0) > 0) return false;
   errno = EAGAIN;
@@ -602,8 +617,7 @@ int setsockopt(int fd, int level, int name, const void* value, socklen_t len) {
     // use. On Linux it only allows ports in TIME_WAIT, which Windows allows
     // without it. So the value is only recorded, for getsockopt.
     if (!ReadInt(value, len, &v)) return -1;
-    state.reuse_addr = v != 0;
-    gesher::UpdateSocket(fd, state);
+    state.description->reuse_addr.store(v != 0);
     return 0;
   }
   if (level == SOL_SOCKET && (name == SO_RCVTIMEO || name == SO_SNDTIMEO)) {
@@ -666,15 +680,25 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
       // Winsock's SO_ERROR is persistent and attached to its native handle.
       // All POSIX aliases share that handle; only a caller getter consumes
       // a failed-connect error logically. Readiness never reads SO_ERROR.
+      gesher::record_locks::DescriptorGuard descriptor_guard;
+      SocketFd current;
+      if (!gesher::LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
       std::lock_guard<std::mutex> lock(state.description->error_mutex);
-      const bool consumed = state.description->connect_error_consumed.load();
-      if (consumed) v = 0;
-      else if (ws::GetOption(state.socket, option, &v) < 0) return -1;
-      if (!WriteInt(v, value, len)) return -1;
+      // Always inspect the native value: a different later error is visible.
+      if (ws::GetOption(state.socket, option, &v) < 0) return -1;
       const ws::ConnectState phase = state.description->state.load();
-      if (v != 0 && (phase == ws::ConnectState::kConnecting || phase == ws::ConnectState::kFailed)) {
+      const uint64_t generation = state.description->connect_generation;
+      const bool refusal = state.description->tcp && !state.description->connect_call_active && generation != 0 &&
+                           v == ECONNREFUSED && (phase == ws::ConnectState::kConnecting || phase == ws::ConnectState::kFailed);
+      const bool consumed = refusal && state.description->consumed_generation == generation && state.description->consumed_error == v;
+      if (!WriteInt(consumed ? 0 : v, value, len)) return -1;
+      if (refusal) {
         state.description->state.store(ws::ConnectState::kFailed);
-        state.description->connect_error_consumed.store(true);
+        state.description->consumed_generation = generation;
+        state.description->consumed_error = v;
+      } else if (v != state.description->consumed_error) {
+        state.description->consumed_generation = 0;
+        state.description->consumed_error = 0;
       }
       return 0;
     }
@@ -682,7 +706,7 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
     return WriteInt(v, value, len) ? 0 : -1;
   }
   if (level == SOL_SOCKET && name == SO_REUSEADDR) {
-    return WriteInt(state.reuse_addr ? 1 : 0, value, len) ? 0 : -1;
+    return WriteInt(state.description->reuse_addr.load() ? 1 : 0, value, len) ? 0 : -1;
   }
   if (level == SOL_SOCKET && name == SO_TYPE) {
     if (ws::GetOption(state.socket, ws::Option::kType, &v) < 0) return -1;

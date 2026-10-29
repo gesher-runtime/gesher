@@ -266,3 +266,44 @@ Shared O_NONBLOCK/reuse cache flags, general connected-socket asynchronous
 error consumption, failed-socket TCP reconnect, AF_UNSPEC and concurrent
 multiple-connect semantics remain unqualified; no complete open-description
 or close/poll concurrency parity is claimed.
+
+## Unpublished OFD review checkpoint
+
+Local WIP e4982cf0 was not published or compiled: independent peers rejected
+the generic consumed-error boolean, registration reservation/publication gap,
+stale UpdateSocket replacement, copied alias status flags and pre-success
+dup2 target closure. Do not promote that checkpoint or infer acceptance.
+
+Separate approved-base diagnostic17007c81 on `wip/net-tcp-error-state` passed
+characterization40868155575. Both actual Windows verify INET/STREAM/TCP but
+SIO_TCP_INFO after refusal fails with10045 and returned0; its zeroed State is
+not a positive CLOSED observation. Send fails10057 and leaves SO_ERROR10061
+(or0 after the original connecting alias closed). Original-handle retries
+produce a new pending refusal; the closed-connecting-alias case returns10022.
+Raw logs: `tcp-408681-win{2022,2025}.log`. No unsupported output is used as
+a connection-state predicate.
+
+The revised local source holds DescriptorGuard across RegisterSocket's full
+reserve/publish path. It removes UpdateSocket, shares nonblocking/reuse flags,
+and serializes native mode updates with descriptor identity checks. dup2
+keeps the old native target until CRT success and swaps old/new descriptions
+under one table lock. Initialization normalizes both blocking directions,
+including accept's non-inherited O_NONBLOCK behavior.
+
+The error-token hypothesis now verifies the native TCP provider, tracks each
+connect generation, and always calls the native getter when the caller asks.
+Only the same caller-observed ECONNREFUSED of the same failed generation may
+be reported as consumed; different native codes remain visible. Proposed poll
+filtering additionally requires the observed native ERR|HUP|WRNORM signature
+and actual peer-not-connected state. New connect calls reset the token before
+Winsock; overlapping native connect invocations are rejected as EALREADY.
+The terminal-refusal API boundary still needs independent peer approval and
+actual regression evidence; neither native HUP nor unsupported TCP_INFO alone
+is accepted as generic CLOSED proof.
+
+Source-only regressions add both alias directions of F_SETFL/FIONBIO/reuse,
+bounded MSG_DONTWAIT, invalid-source dup2 preserving its target, UDP binding
+retained until last close then released, post-refusal send, concurrent caller
+getters with exactly one error, and independent refusal after failed-fd
+replacement. system.cc joins exact compiler-role evidence. New Linux-first,
+all actual Windows paths and original supplier/full gates are still required.

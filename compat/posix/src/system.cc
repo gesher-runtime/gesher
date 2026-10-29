@@ -215,9 +215,13 @@ int ioctl(int fd, unsigned long request, ...) {
     int result;
     if (gesher::sock::InterfaceIoctl(request, argp, &result)) return result;
     if (request == FIONBIO) {
-      state.nonblocking = *argp != 0;
-      if (gesher::ws::SetNonBlocking(state.socket, state.nonblocking) < 0) return -1;
-      gesher::UpdateSocket(fd, state);
+      gesher::record_locks::DescriptorGuard descriptor_guard;
+      gesher::SocketFd current;
+      if (!gesher::LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
+      std::lock_guard<std::mutex> lock(state.description->status_mutex);
+      const bool on = *argp != 0;
+      if (gesher::ws::SetNonBlocking(state.socket, on) < 0) return -1;
+      state.description->nonblocking.store(on);
       return 0;
     }
     return errno = ENOTTY, -1;
@@ -276,12 +280,18 @@ int fcntl(int fd, int cmd, ...) {
   if (gesher::LookupSocket(fd, &state)) {
     switch (cmd) {
       case F_GETFL:
-        return O_RDWR | (state.nonblocking ? O_NONBLOCK : 0);
+        return O_RDWR | (state.description->nonblocking.load() ? O_NONBLOCK : 0);
       case F_SETFL:
-        if (((arg & O_NONBLOCK) != 0) != state.nonblocking) {
-          state.nonblocking = (arg & O_NONBLOCK) != 0;
-          if (gesher::ws::SetNonBlocking(state.socket, state.nonblocking) < 0) return -1;
-          gesher::UpdateSocket(fd, state);
+        {
+          gesher::record_locks::DescriptorGuard descriptor_guard;
+          gesher::SocketFd current;
+          if (!gesher::LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
+          std::lock_guard<std::mutex> lock(state.description->status_mutex);
+          const bool on = (arg & O_NONBLOCK) != 0;
+          if (on != state.description->nonblocking.load()) {
+            if (gesher::ws::SetNonBlocking(state.socket, on) < 0) return -1;
+            state.description->nonblocking.store(on);
+          }
         }
         return 0;
       case F_GETFD:

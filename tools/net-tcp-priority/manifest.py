@@ -17,7 +17,7 @@ roles = {'gesher-exec.exe': 'host-bionic-loader', 'net_tcp_priority_probe.exe': 
 for source, name in [('out/gesher-exec.exe', 'gesher-exec.exe'), ('out/net_tcp_priority_probe.exe', 'net_tcp_priority_probe.exe'), ('out-arm64/gesher_arm64.dll', 'gesher_arm64.dll')]:
     shutil.copyfile(source, Path('tcp-fixture') / name)
 compilers = {}
-for build, required in [('out', ['compat/posix/src/winsock.cc', 'compat/posix/src/socket.cc', 'compat/posix/src/fd.cc', 'compat/posix/src/epoll.cc', 'compat/posix/src/select.cc', 'compat/bionic/socket_bionic.cc', 'tests/net-tcp-priority/contract.cc']), ('out-arm64', ['compat/arm64/dll/translator.cc'])]:
+for build, required in [('out', ['compat/posix/src/winsock.cc', 'compat/posix/src/socket.cc', 'compat/posix/src/fd.cc', 'compat/posix/src/system.cc', 'compat/posix/src/epoll.cc', 'compat/posix/src/select.cc', 'compat/bionic/socket_bionic.cc', 'tests/net-tcp-priority/contract.cc']), ('out-arm64', ['compat/arm64/dll/translator.cc'])]:
     configs = list(Path(build + '/CMakeFiles').glob('*/CMakeCXXCompiler.cmake'))
     assert len(configs) == 1
     paths = re.findall(r'^\s*set\(CMAKE_CXX_COMPILER\s+"([^"]+)"\)\s*$', configs[0].read_text(), re.M)

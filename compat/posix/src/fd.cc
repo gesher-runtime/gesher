@@ -56,6 +56,27 @@ void Insert(int fd, const SocketFd& state) {
   }
 }
 
+// Publish a successful CRT replacement in one table transaction. The old
+// native endpoint remains live until _dup2 has succeeded; a failed CRT call
+// leaves its socket metadata and descriptor references untouched.
+bool ReplaceSocket(int fd, const SocketFd* source, SocketFd* previous, bool* last) {
+  std::lock_guard<std::mutex> lock(table_mutex);
+  auto it = table.find(fd);
+  const bool existed = it != table.end();
+  if (existed) {
+    *previous = it->second;
+    *last = --previous->description->descriptor_refs == 0;
+  }
+  if (source) {
+    if (existed) it->second = *source;
+    else { table.emplace(fd, *source); socket_count.fetch_add(1, std::memory_order_release); }
+    ++source->description->descriptor_refs;
+  } else if (existed) {
+    table.erase(it); socket_count.fetch_sub(1, std::memory_order_release);
+  }
+  return existed;
+}
+
 // /dev/zero and /dev/random fds (path.cc), also guarded by table_mutex.
 std::unordered_map<int, Device> devices;
 std::atomic<size_t> device_count{0};
@@ -98,6 +119,7 @@ int ReserveFd() {
 }
 
 int RegisterSocket(const SocketFd& state) {
+  record_locks::DescriptorGuard descriptor_guard;
   int fd = ReserveFd();
   if (fd < 0) {
     int saved = errno;
@@ -107,7 +129,11 @@ int RegisterSocket(const SocketFd& state) {
     return -1;
   }
   SocketFd registered = state;
-  if (!registered.description) registered.description = std::make_shared<ws::SocketDescription>();
+  if (!registered.description) {
+    registered.description = std::make_shared<ws::SocketDescription>();
+    registered.description->tcp = ws::IsTcpSocket(state.socket);
+    registered.description->nonblocking.store(state.initial_nonblocking);
+  }
   Insert(fd, registered);
   return fd;
 }
@@ -121,11 +147,6 @@ bool LookupSocket(int fd, SocketFd* state) {
   return true;
 }
 
-void UpdateSocket(int fd, const SocketFd& state) {
-  std::lock_guard<std::mutex> lock(table_mutex);
-  auto it = table.find(fd);
-  if (it != table.end()) it->second = state;
-}
 
 void RegisterDevice(int fd, Device device) {
   std::lock_guard<std::mutex> lock(table_mutex);
@@ -247,11 +268,6 @@ int dup2(int fd, int fd2) {
   if (transaction.Error()) return errno = transaction.Error(), -1;
   SocketFd source;
   bool source_is_socket = gesher::LookupSocket(fd, &source);
-  // Replacing the last descriptor closes the native socket and preserves its
-  // close wake. Other descriptors keep the shared endpoint alive.
-  SocketFd target;
-  bool last = false;
-  if (gesher::Remove(fd2, &target, &last) && last) gesher::ws::Close(target.socket);
   if (gesher::CrtResult(_dup2(fd, fd2)) < 0) {
     int saved = errno;
     int error = transaction.Finish();
@@ -259,6 +275,8 @@ int dup2(int fd, int fd2) {
     return -1;
   }
   const int saved = errno;
+  SocketFd target; bool last = false;
+  if (gesher::ReplaceSocket(fd2, source_is_socket ? &source : nullptr, &target, &last) && last) gesher::ws::Close(target.socket);
   const int metadata_error = transaction.Finish(true);
   // fd2's old file is closed: forget what it was.
   gesher::ForgetDevice(fd2);
@@ -266,11 +284,9 @@ int dup2(int fd, int fd2) {
   gesher::ForgetEpollEntries(fd2);
   gesher::ForgetBinder(fd2);
   Device device;
-  if (source_is_socket) {
-    gesher::Insert(fd2, source);
-  } else if (gesher::LookupDevice(fd, &device)) {
+  if (!source_is_socket && gesher::LookupDevice(fd, &device)) {
     gesher::RegisterDevice(fd2, device);
-  } else {
+  } else if (!source_is_socket) {
     gesher::DupEventObject(fd, fd2);
     gesher::DupBinder(fd, fd2);
   }
