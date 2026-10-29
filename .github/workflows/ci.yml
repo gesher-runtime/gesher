@@ -16,7 +16,7 @@ env:
 
 jobs:
   dns-full-preflight:
-    uses: gesher-runtime/gesher/.github/workflows/net-dns-full-preflight.yml@8305d773b803c0026b22319ad693bd4335136035
+    uses: gesher-runtime/gesher/.github/workflows/net-dns-full-preflight.yml@3faa66a2baa3a003edb0a475e204ee5360226ed9
 
   artifact-preflight:
     needs: [dns-full-preflight]
