@@ -7,7 +7,13 @@ function Start-TrustedSgOwner {
         -not [IO.File]::Exists($command.Source)) { throw 'Python executable path missing or ambiguous' }
     $python = $command.Source
     $script = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'trusted_sg_owner.py')).Path
-    Write-Host "SG_OWNER_EXECUTABLE path=$python sha256=$((Get-FileHash -LiteralPath $python -Algorithm SHA256).Hash.ToLowerInvariant()) script=$script"
+    $cwd = [Environment]::CurrentDirectory
+    foreach ($entry in @(@{ label='python'; value=$python }, @{ label='script'; value=$script }, @{ label='cwd'; value=$cwd })) {
+        $value = $entry.value
+        $safe = $value -replace '[\x00-\x1f\x7f]', '?'
+        Write-Host "SG_OWNER_PATH kind=$($entry.label) value=$safe length=$($value.Length) control=$($value -match '[\x00-\x1f\x7f]') canonical=$([IO.Path]::GetFullPath($value) -ceq $value)"
+    }
+    Write-Host "SG_OWNER_EXECUTABLE sha256=$((Get-FileHash -LiteralPath $python -Algorithm SHA256).Hash.ToLowerInvariant())"
     $native = [TrustedSgJob]::Start($python, $script, 0)
     return [pscustomobject]@{ Native = $native; Error = $native.Error.ReadToEndAsync(); Pending = $null; Closed = $false; Faulted = $false }
 

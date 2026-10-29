@@ -75,13 +75,20 @@ bool PeekSuccessfulAck(HANDLE pipe) {
   return false;
 }
 HANDLE Connect() {
+  const auto& startup = gesher::launch::kStartup;
+  if (!startup.present || startup.kind != 0 || startup.control || startup.broker || !startup.server_pid)
+    return INVALID_HANDLE_VALUE;
   const char* device = getenv("GESHER_BINDER");
   if (!device) return INVALID_HANDLE_VALUE;
   std::wstring name = wire::kPipePrefix;
   for (const char* p = device; *p; ++p) name += static_cast<unsigned char>(*p);
   for (unsigned i = 0; i < 1500; ++i) {
     HANDLE pipe = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
-    if (pipe != INVALID_HANDLE_VALUE) return pipe;
+    if (pipe != INVALID_HANDLE_VALUE) {
+      if (gesher::launch_control::ServerMatches(pipe, startup.server_pid)) return pipe;
+      CloseHandle(pipe);
+      return INVALID_HANDLE_VALUE;
+    }
     Sleep(20);
   }
   return INVALID_HANDLE_VALUE;

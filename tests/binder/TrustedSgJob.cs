@@ -131,16 +131,25 @@ public static class TrustedSgJob {
         }
     }
     static void Require(bool ok) { if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error()); }
+    static void RequireStage(bool ok, string stage) {
+        if (!ok) {
+            int error = Marshal.GetLastWin32Error();
+            throw new Win32Exception(error, stage + " win32=" + error);
+        }
+    }
 
     static IntPtr CreateJob() {
         IntPtr job = CreateJobObjectW(IntPtr.Zero, null);
-        if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        if (job == IntPtr.Zero) {
+            int error = Marshal.GetLastWin32Error();
+            throw new Win32Exception(error, "CreateJobObjectW win32=" + error);
+        }
         ExtendedLimits limits = new ExtendedLimits();
         limits.Basic.Flags = 0x2000;
         if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(typeof(ExtendedLimits)))) {
             int error = Marshal.GetLastWin32Error();
             if (!CloseHandle(job)) Retain(job);
-            throw new Win32Exception(error);
+            throw new Win32Exception(error, "SetInformationJobObject win32=" + error);
         }
         return job;
     }
@@ -160,17 +169,20 @@ public static class TrustedSgJob {
         try {
             job = CreateJob();
             Security security = new Security { Length = (uint)Marshal.SizeOf(typeof(Security)), Inherit = true };
-            Require(CreatePipe(out inputRead, out inputWrite, ref security, 0));
-            Require(CreatePipe(out outputRead, out outputWrite, ref security, 0));
-            Require(CreatePipe(out errorRead, out errorWrite, ref security, 0));
-            Require(SetHandleInformation(inputWrite, 1, 0));
-            Require(SetHandleInformation(outputRead, 1, 0));
-            Require(SetHandleInformation(errorRead, 1, 0));
+            RequireStage(CreatePipe(out inputRead, out inputWrite, ref security, 0), "CreatePipe stdin");
+            RequireStage(CreatePipe(out outputRead, out outputWrite, ref security, 0), "CreatePipe stdout");
+            RequireStage(CreatePipe(out errorRead, out errorWrite, ref security, 0), "CreatePipe stderr");
+            RequireStage(SetHandleInformation(inputWrite, 1, 0), "SetHandleInformation stdin");
+            RequireStage(SetHandleInformation(outputRead, 1, 0), "SetHandleInformation stdout");
+            RequireStage(SetHandleInformation(errorRead, 1, 0), "SetHandleInformation stderr");
             UIntPtr size = UIntPtr.Zero;
             InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref size);
-            if (size == UIntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+            if (size == UIntPtr.Zero) {
+                int error = Marshal.GetLastWin32Error();
+                throw new Win32Exception(error, "InitializeProcThreadAttributeList size win32=" + error);
+            }
             attrs = Marshal.AllocHGlobal(checked((int)size.ToUInt64()));
-            Require(InitializeProcThreadAttributeList(attrs, 2, 0, ref size));
+            RequireStage(InitializeProcThreadAttributeList(attrs, 2, 0, ref size), "InitializeProcThreadAttributeList");
             initialized = true;
             handles = Marshal.AllocHGlobal(IntPtr.Size * 3);
             Marshal.WriteIntPtr(handles, 0, inputRead);
@@ -178,22 +190,22 @@ public static class TrustedSgJob {
             Marshal.WriteIntPtr(handles, IntPtr.Size * 2, errorWrite);
             jobs = Marshal.AllocHGlobal(IntPtr.Size);
             Marshal.WriteIntPtr(jobs, job);
-            Require(UpdateProcThreadAttribute(attrs, 0, new IntPtr(0x20002), handles,
-                (UIntPtr)(uint)(IntPtr.Size * 3), IntPtr.Zero, IntPtr.Zero));
-            Require(UpdateProcThreadAttribute(attrs, 0, new IntPtr(0x2000d), jobs,
-                (UIntPtr)(uint)IntPtr.Size, IntPtr.Zero, IntPtr.Zero));
+            RequireStage(UpdateProcThreadAttribute(attrs, 0, new IntPtr(0x20002), handles,
+                (UIntPtr)(uint)(IntPtr.Size * 3), IntPtr.Zero, IntPtr.Zero), "UpdateProcThreadAttribute handle-list");
+            RequireStage(UpdateProcThreadAttribute(attrs, 0, new IntPtr(0x2000d), jobs,
+                (UIntPtr)(uint)IntPtr.Size, IntPtr.Zero, IntPtr.Zero), "UpdateProcThreadAttribute job-list");
             StartupEx startup = new StartupEx();
             startup.Startup.Size = (uint)Marshal.SizeOf(typeof(StartupEx));
             startup.Startup.Flags = 0x100;
             startup.Startup.In = inputRead; startup.Startup.Out = outputWrite; startup.Startup.Error = errorWrite;
             startup.Attributes = attrs;
             StringBuilder command = new StringBuilder('"' + python + "\" \"" + script + '"');
-            Require(CreateProcessW(python, command, IntPtr.Zero, IntPtr.Zero, true,
-                0x08080004, IntPtr.Zero, null, ref startup, out pi));
+            RequireStage(CreateProcessW(python, command, IntPtr.Zero, IntPtr.Zero, true,
+                0x08080004, IntPtr.Zero, null, ref startup, out pi), "CreateProcessW");
             // JOB_LIST assignment and explicit HANDLE_LIST are atomic at creation.
             bool inJob; long created, exited, kernel, user;
-            Require(IsProcessInJob(pi.Process, job, out inJob));
-            Require(GetProcessTimes(pi.Process, out created, out exited, out kernel, out user));
+            RequireStage(IsProcessInJob(pi.Process, job, out inJob), "IsProcessInJob");
+            RequireStage(GetProcessTimes(pi.Process, out created, out exited, out kernel, out user), "GetProcessTimes");
             if (!inJob || pi.Pid == 0 || GetProcessId(pi.Process) != pi.Pid || created == 0)
                 throw new InvalidOperationException("owner identity or job membership mismatch");
             if (ResumeThread(pi.Thread) != 1) throw new InvalidOperationException("unexpected owner suspend count");
