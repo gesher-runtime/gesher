@@ -80,7 +80,7 @@ jobs:
           test "$(stat -c %s ndk.zip)" = 663987688
           unzip -q ndk.zip
           python3 tools/net-udp-component/payload.py guests
-      - name: Seal exact roles and expose actual PE import identities before rejection
+      - name: Seal exact roles with source-justified host-only Windows imports and strict diagnostics
         run: |
           python3 tools/net-udp-component/payload.py record
           python3 tools/net-udp-component/payload.py verify

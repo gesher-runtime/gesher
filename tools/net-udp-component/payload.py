@@ -115,6 +115,21 @@ def validate(data, expected_context, sources, actual):
     require(set(actual) == MEMBERS and data['outputs'] == actual, 'Whole members or digests differ')
 
 
+def import_policy(role, names):
+    require(role in {'production-host', 'matching-arm64-translator'}, 'Unknown PE role')
+    allowed = {'kernel32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
+               'ws2_32.dll', 'iphlpapi.dll', 'psapi.dll', 'bcrypt.dll', 'user32.dll',
+               'api-ms-win-core-synch-l1-2-0.dll'}
+    # Actual llvm-readobj evidence407973 + production CMake dependencies:
+    # media.cmake player_core/http_source -> winhttp, window_surface -> gdi32.
+    # These dependencies belong only to gesher-exec, never the translator role.
+    if role == 'production-host':
+        allowed |= {'winhttp.dll', 'gdi32.dll'}
+    extra = [name for name in names if not (name.lower() in allowed or
+             re.fullmatch(r'api-ms-win-crt-[a-z]+-l1-1-0.dll', name.lower()))]
+    return ([] if names else ['at least one actual DLL import']), extra
+
+
 def selftest():
     sources = {'source': 'digest'}
     outputs = {name: name for name in MEMBERS}
@@ -142,6 +157,23 @@ def selftest():
             continue
         raise RuntimeError('Duplicate JSON accepted')
     print('UDP_COMPONENT_RECEIPT_CONTROLS rejected=8')
+    for role, names in (('production-host', ['KERNEL32.dll', 'WINHTTP.dll', 'GDI32.dll']),
+                        ('matching-arm64-translator', ['KERNEL32.dll', 'api-ms-win-crt-stdio-l1-1-0.dll'])):
+        missing, extra = import_policy(role, names)
+        require(not missing and not extra, 'Known role imports rejected')
+    for role, names in (('production-host', ['unreviewed.dll']), ('production-host', []),
+                        ('matching-arm64-translator', ['WINHTTP.dll']),
+                        ('matching-arm64-translator', ['GDI32.dll']),
+                        ('matching-arm64-translator', []), ('production-host', ['libc++.dll']),
+                        ('production-host', ['api-ms-win-crt-stdio-l2-1-0.dll']),
+                        ('forged-role', ['KERNEL32.dll'])):
+        try:
+            missing, extra = import_policy(role, names)
+            require(not missing and not extra, 'Unexpected or missing actual PE imports')
+        except RuntimeError:
+            continue
+        raise RuntimeError('PE import mutation accepted')
+    print('UDP_COMPONENT_IMPORT_CONTROLS rejected=8 host_extensions=2 translator_extensions=0')
 
 
 def main():
@@ -245,17 +277,12 @@ def main():
             require(read(folder / 'compiler.json')[role]['toolchain_sha256'] == TOOLCHAIN, 'Compiler supplier mismatch')
         require(read(folder / 'guest-commands.json')['context'] == context(), 'Guest compiler context differs')
         require(read(folder / 'linux-commands.json')['context'] == context(), 'Linux reference compiler context differs')
-        allowed = {'kernel32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
-                   'ws2_32.dll', 'iphlpapi.dll', 'psapi.dll', 'bcrypt.dll', 'user32.dll',
-                   'api-ms-win-core-synch-l1-2-0.dll'}
         import_rows = []
         for member, image, role in (('imports-host.txt', 'gesher-exec.exe', 'production-host'),
                                      ('imports-arm64.txt', 'gesher_arm64.dll', 'matching-arm64-translator')):
             raw = (folder / member).read_text(encoding='utf-8')
             names = re.findall(r'^\s*Name:\s*(\S+)', raw, re.M)
-            extra = [name for name in names if not (name.lower() in allowed or
-                     re.fullmatch(r'api-ms-win-crt-[a-z]+-l1-1-0.dll', name.lower()))]
-            missing = [] if names else ['at least one actual DLL import']
+            missing, extra = import_policy(role, names)
             print('UDP_COMPONENT_ACTUAL_PE_IMPORTS', json.dumps(dict(role=role, file=image,
                   file_sha256=sha(folder / image), tool_output_member=member,
                   tool_output_sha256=sha(folder / member), actual_imports=names,

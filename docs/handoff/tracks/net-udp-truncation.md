@@ -225,3 +225,23 @@ correction, obtain fresh complete component with192/176 rows and negatives
 on both actual ABIs and Windows versions, then refresh the immutable fixed
 map/caller and independent source peer/external authority before full. No
 inventory entry, aggregate Net4 status, main, PR, tag or release was changed.
+
+Diagnostic40797303398/0e8583b7 actual role identities show missing=[] for
+both images; only the production-host rejects WINHTTP.dll and GDI32.dll. Host
+SHA256 iseb33a6b3e730950a81415e43f070bce4d4370d87b7b6619467d41331db899313;
+matching translator SHA256 is62b41bd0e40d06f733ab2a9b3a3bdb9146c69d4433891094fa62e938d615dbac
+and has no unexpected imports. Raw evidence is retained in
+`C:/work/gesher-ci-review/udp-component-407973-compile.log`.
+
+The exact source/build chain establishes these production host dependencies:
+media.cmake53-80 includes player/http_source.cc and publicly links winhttp
+and gesher_window_surface, then links player_core into gesher-exec.
+window.cmake9-20 publicly links window to gdi32 and surface to window. Actual
+WinHttpOpen/Connect/ReadData imports match http_source.cc; actual
+CreateCompatibleDC/CreateDIBSection/SetDIBitsToDevice match gesher_window.cc.
+The corrected policy admits these two exact names only for production-host;
+the translator policy is unchanged. Eight controls reject empty/unknown/
+private runtime/wrong CRT/forged role and both host-only imports on translator.
+Actual same-producer image/member hashes and current-run/attempt ZIP receipts
+remain mandatory, as do all source/compiler/ABI/row/negative gates. No DLL
+from a prior run is reused; a fresh component and source peer are required.
