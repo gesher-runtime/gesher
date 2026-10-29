@@ -36,3 +36,47 @@ DNS Linux96/AOSP174 comparisons, tests89+92, both ABIs and all original full
 checks remain mandatory. Source peer review and a new actual full are pending;
 no integration/main/PR/tag/release operation is authorized for this worker.
 All other known gaps and inventory history remain open and unchanged.
+
+## Frozen handoff, 2026-10-29
+
+Actual implementation/immutable-checker commit:
+424ee30d1ab6e4be9828b907bc187c73f3d94103.
+Caller commit/current reviewed candidate:
+27fdd2c2c954bbee6c39ae08d4af24f49e31a4bc.
+Both are pushed to wip/coherent-exec-udp-dns-next. The caller references the
+immutable424 workflow. No new repository variable has been set and no CI has
+been dispatched. The branch push cannot trigger ci.yml (push is main-only),
+net-dns-component.yml (push is wip/net-dns-wire-only), or native2.yml
+(push is wip/net4-resolver-only). Existing unrelated runs remain untouched.
+
+Lightweight source-only verification: Python and embedded checker AST parse;
+three edited workflow YAML parses; all28 original top-level jobs and every
+original dependency edge agree with2ac. The expected immutable full source map
+agrees with all1567 non-doc candidate paths, former2ac source/policy pins and
+current selected historical checks. All44 historical/44 union/11 Native literal
+assertion maps remain identical to2ac. Exact intended caller transformation
+matches (guard pin plus three sparse paths). git diff --check passed.
+No native/Java/C# compilation, fixture execution or artifact download occurred.
+
+Fresh independent peer review is mandatory before publishing
+NET_COMBINED_DNS_CALLER_COMMIT=27fdd2c2c954bbee6c39ae08d4af24f49e31a4bc
+and dispatching canonical full. The source author does not certify that review.
+After peer PASS, the authorized maintainer must verify gh account palmoni5
+immediately before each remote write, inspect existing runs before dispatch,
+and run gh workflow run ci.yml --ref wip/coherent-exec-udp-dns-next.
+The resulting run must genuinely pass all original gates and both89+92 on
+both normal Windows runners, both ABIs, all compiler/ZIP provenance, installed
+package23 and both ten-app e2e0; successful historical fulls do not qualify this
+merged tree. Follow gh run watch with --exit-status --interval120, read plain
+actual job logs, and never download artifacts locally. This branch must not be
+merged into integration/main or produce PR/tag/release by its source worker.
+
+Remaining limitation: standalone UDP/DNS component workflows retain their own
+historical exact-source preflights. They are preserved historical recipes, are
+not called by the canonical full DAG, and their former leaf qualification is
+not claimed for this merged tree. The new canonical full is the qualification
+path. Push/PR event handling is source-only; no corresponding runtime evidence
+exists. Binder trust, secondary AOT, public blocking, hardware and other
+inventory/roadmap gaps remain open. Native2's former version-only extracted-NDK
+cache gap is addressed in source for these canonical suppliers and remains
+unqualified until the new actual full proves the archived compiler path.
