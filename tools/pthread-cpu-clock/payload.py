@@ -113,6 +113,68 @@ def validate(data, expected_context, sources, actual):
     require(set(actual) == MEMBERS and data['outputs'] == actual, 'Whole members or digests differ')
 
 
+def linux_phase_records(text):
+    records = {}
+    for kind in ('BIRTH', 'JOIN', 'FAST', 'RELEASE'):
+        rows = [line.split()[1:] for line in text.splitlines() if line.startswith('LINUX_' + kind + ' ')]
+        require(len(rows) == 64, 'Incomplete actual Linux ' + kind + ' records')
+        values = [dict(item.split('=', 1) for item in row) for row in rows]
+        require([int(row['row']) for row in values] == list(range(64)), 'Linux rows missing or duplicated')
+        records[kind] = values
+    require(len([line for line in text.splitlines() if line.startswith('LINUX_PLATFORM ')]) == 1,
+            'Missing actual kernel/libc identity')
+    seen = set()
+    live = 0
+    dead = 0
+    for index in range(64):
+        birth, joined, fast, released = (records[kind][index] for kind in ('BIRTH', 'JOIN', 'FAST', 'RELEASE'))
+        tid = int(birth['tid'])
+        require(tid > 0 and tid == int(birth['decoded']) and tid not in seen, 'Wrong or reused Linux clock target')
+        seen.add(tid)
+        require(int(birth['birth']) > 0 and birth['tasks'] == '2' and
+                birth['time'] == '0/0' and birth['res'] == '0/0', 'Linux live birth is not established')
+        for phase in (joined, fast, released):
+            require(phase['tid'] == birth['tid'] and phase['birth'] == birth['birth'], 'Linux birth changed across phases')
+        require(int(joined['release_ns']) <= int(joined['joined_ns']) <= int(joined['sampled_ns']), 'Linux phase ordering differs')
+        for key in ('before', 'after'):
+            present, state, stamp = joined[key].split('/')
+            require((present == '0' and stamp == '0') or
+                    (present == '1' and stamp == birth['birth'] and state != '-'), 'Linux proc identity changed')
+        for key in ('time', 'res'):
+            result, error, nanos = fast[key].split('/')
+            require((result, error) in {('0', '0'), ('-1', '22')} and int(nanos) >= 0,
+                    'Unexpected actual immediate Linux result')
+        live += fast['time'].startswith('0/0/')
+        dead += fast['time'].startswith('-1/22/')
+        require(released['present'] == '0/-' and released['time'] == '-1/22' and
+                released['res'] == '-1/22' and released['tasks'] == '1' and
+                0 <= int(released['elapsed_ns']) <= 5100000000 and int(released['observations']) > 0,
+                'Actual identity-bound final Linux task release not established')
+    summary = f'LINUX_IDENTITY_DIAGNOSTIC rows=64 join_live={live} join_dead={dead} controlled_final_release=64 reused_tids=0'
+    require(summary in text.splitlines(), 'Actual Linux phase counts differ')
+    return {'rows': 64, 'join_live': live, 'join_dead': dead, 'controlled_final_release': 64, 'reused_tids': 0}
+
+
+def linux_reference(text):
+    actual = linux_phase_records(text)
+    require('PASS Linux retained pthread CPU clock: 64 identity-bound final releases reject gettime/getres with EINVAL' in text.splitlines(),
+            'Asserted final-release Linux oracle absent')
+    changed_birth = re.sub(r'(LINUX_FAST row=0 tid=\d+ birth=)(\d+)',
+                           lambda match: match[1] + str(int(match[2]) + 1), text, count=1)
+    mutations = (text.replace('LINUX_BIRTH row=0 ', 'MISSING_BIRTH row=0 ', 1),
+                 text.replace('time=-1/22 res=-1/22 tasks=1', 'time=0/0 res=-1/22 tasks=1', 1),
+                 changed_birth)
+    for changed in mutations:
+        require(changed != text, 'Actual Linux negative control did not mutate a record')
+        try:
+            linux_phase_records(changed)
+        except RuntimeError:
+            continue
+        raise RuntimeError('Actual Linux missing-row/final-error/birth mutation accepted')
+    print('CPU_CLOCK_LINUX_ADVERSARIAL rejected=3')
+    return actual
+
+
 def selftest():
     sources = {'source': 'digest'}
     outputs = {name: name for name in MEMBERS}
@@ -212,8 +274,8 @@ def main():
             require(bool(names) and all(name.lower() in allowed or
                     re.fullmatch(r'api-ms-win-crt-[a-z]+-l1-1-0.dll', name.lower()) for name in names),
                     'Unexpected or missing actual PE imports')
-        require('PASS Linux retained pthread CPU clock: dead gettime/getres both EINVAL' in
-                (folder / 'linux-reference.log').read_text(), 'Actual asserted Linux reference absent')
+        print('CPU_CLOCK_LINUX_PHASE_RECEIPT', json.dumps(linux_reference(
+            (folder / 'linux-reference.log').read_text()), sort_keys=True))
         print('CPU_CLOCK_VERIFIED_MEMBERS', json.dumps(data['outputs'], sort_keys=True), json.dumps(context(), sort_keys=True))
 
 

@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Assert Linux clock lifetime on this exact source and attempt
+      - name: Assert identity-bound final Linux task release on this source and attempt
         shell: bash
         run: |
           set -euo pipefail

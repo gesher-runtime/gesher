@@ -155,6 +155,8 @@ int main(void) {
   }
   printf("LINUX_IDENTITY_DIAGNOSTIC rows=64 join_live=%u join_dead=%u controlled_final_release=64 reused_tids=0\n",
          immediate_live, immediate_dead);
-  // Evidence only: no universal immediate-postjoin or Windows qualification.
+  puts("PASS Linux retained pthread CPU clock: 64 identity-bound final releases reject gettime/getres with EINVAL");
+  // Scope is the identity-bound final release, never immediate postjoin or
+  // Windows qualification. Preserve all FAST and proc phase records above.
   return 0;
 }
