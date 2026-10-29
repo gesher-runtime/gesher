@@ -5,6 +5,7 @@ name: net-tcp-priority-component
 # Diagnose actual mode1 retained handle before the unchanged strict census.
 # Record actual own-process OPEN/CLOSE creator stacks and owned event closes.
 # Map retained-event frames to the actual same-binary owner/caller code ranges.
+# Bind exact-link static library symbol rows to that current binary in CI stdout.
 on:
   workflow_dispatch:
   push:

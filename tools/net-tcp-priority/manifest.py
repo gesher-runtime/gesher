@@ -39,6 +39,28 @@ assert all(not any(arg.startswith('-DGESHER') for arg in compilers['ndk'][abi]['
 files = subprocess.check_output(['git', 'ls-files', '-z'], text=True).split('\0')
 sources = {p: sha(p) for p in files if p and Path(p).is_file()}
 readobj = Path(compilers['out']['configured']).parent / 'llvm-readobj'
+# Linker diagnostics remain CI stdout, not an extra runnable artifact role.
+# Bind their exact current binary and configured link command before interpreting
+# static library frame names; never symbolize a different executable locally.
+map_path = Path('out/tcp-priority-link.map')
+map_text = map_path.read_text()
+assert map_text.strip()
+commands = subprocess.check_output(['ninja', '-C', 'out', '-t', 'commands', 'net_tcp_priority_probe'], text=True).splitlines()
+links = [row for row in commands if re.search(r'(?:^|\s)-o\s+net_tcp_priority_probe\.exe(?:\s|$)', row)]
+assert len(links) == 1
+link_argv = shlex.split(links[0])
+assert compilers['out']['configured'] in link_argv and '-Wl,-Map,tcp-priority-link.map' in link_argv
+headers = subprocess.check_output([str(readobj), '--file-headers', 'out/net_tcp_priority_probe.exe'], text=True)
+bases = re.findall(r'^\s*ImageBase:\s*(0x[0-9a-fA-F]+)\s*$', headers, re.M)
+assert len(bases) == 1
+selected = [row for row in map_text.splitlines() if any(token in row for token in (
+    '__pthread_self_lite', 'pthread_create_wrapper', 'pthread_self', 'pthread_create', 'CreateEvent',
+    'pthread_mutex_unlock', 'ConnectOwner', 'ConnectReaper', 'submission_connect'))]
+assert all(any(token in row for row in selected) for token in ('pthread_self', 'pthread_create', 'ConnectOwner', 'ConnectReaper'))
+assert sha('out/net_tcp_priority_probe.exe') == sha('tcp-fixture/net_tcp_priority_probe.exe')
+print('TCP_PRIORITY_LINK_MAP', json.dumps(dict(source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'],
+    attempt=os.environ['GITHUB_RUN_ATTEMPT'], binary_sha256=sha('out/net_tcp_priority_probe.exe'),
+    map_sha256=sha(map_path), image_base=bases[0], link_command=links[0], rows=selected)), flush=True)
 imports = {}
 private_observer = {}
 for name in ['gesher-exec.exe', 'net_tcp_priority_probe.exe', 'gesher_arm64.dll']:

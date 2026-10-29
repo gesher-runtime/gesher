@@ -95,6 +95,7 @@ target_compile_options(socket_probe PRIVATE -Wall -Wextra -Werror)
 # ADR0070/test93: the same TCP urgent contract as Linux and both bionic ABIs.
 add_executable(net_tcp_priority_probe tests/net-tcp-priority/contract.cc tests/net-tcp-priority/native_udp_control.cc)
 target_compile_options(net_tcp_priority_probe PRIVATE -Wall -Wextra -Werror)
+target_link_options(net_tcp_priority_probe PRIVATE "-Wl,-Map,tcp-priority-link.map")
 
 # gesher-base's mmap layer: placeholder mappings, executable file views
 # (stack track, docs/decisions/0036); run in CI on Windows.

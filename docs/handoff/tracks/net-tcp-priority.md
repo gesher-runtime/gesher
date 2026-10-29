@@ -696,3 +696,19 @@ Range telemetry also requires the unwind API's function image to equal the
 independently mapped PC module before printing ranges. Every known/trace/owner
 code row includes its module identity; an unmapped leaf is explicitly labeled
 range_valid0. Cross-module equal RVA numbers cannot establish a function match.
+
+f7bf1adb/409522 actual same-module range checks PASS and the exact census still
+fails. The creator's probe frames map to137920..138368 and141328..141706; owner
+is87328, reaper88672, requester39904 and observer40176. Public pthread_self starts
+at138368 and pthread_create at142016. Adjacency narrows the static-library area
+but does not prove an internal function name. Both OS results agree; no WS2 or
+owned source-body match has been established. Logs:
+`C:/work/gesher-ci-review/tcp-409522-win2022.log`,
+`C:/work/gesher-ci-review/tcp-409522-win2025.log`.
+
+The next diagnostic asks the actual current probe link for an LLD map, binds its
+SHA256 to the exact probe binary hash, PE image base, source/run/attempt and
+configured linker command, then emits only selected pthread/owner/CreateEvent
+symbol rows in CI stdout. It adds no artifact member or executable role, no
+local binary download/build/run, and no runtime/source/strict-census change.
+Only matching current binary/module/frame evidence may establish a creator.
