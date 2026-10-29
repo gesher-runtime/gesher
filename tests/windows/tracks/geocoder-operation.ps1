@@ -65,4 +65,3 @@ function New-WinRTGeocoderAdapter($Operation, [Type] $ResultType) {
     Lifetime = $lifetime
   }
 }
-

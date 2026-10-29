@@ -1,4 +1,4 @@
-param([string] $HelperPath = (Join-Path $PSScriptRoot 'geocoder-operation.ps1'))
+param([string] $HelperPath = (Join-Path $PSScriptRoot '../tracks/geocoder-operation.ps1'))
 $ErrorActionPreference = 'Stop'
 . $HelperPath
 # Environment.Exit still runs CLR/WinRT shutdown and can deadlock after the

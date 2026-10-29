@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'geocoder-operation.ps1')
+. (Join-Path $PSScriptRoot '../tracks/geocoder-operation.ps1')
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
-$source = Join-Path $PSScriptRoot 'geocoder-winrt-supplier.cs'
+$source = Join-Path $PSScriptRoot '../tracks/geocoder-winrt-supplier.cs'
 Write-Host "WINRT_COMPILER source_sha=$env:GITHUB_SHA source=$source sha256=$((Get-FileHash $source -Algorithm SHA256).Hash) ps=$($PSVersionTable.PSVersion) clr=$([Environment]::Version) runtime=$([System.WindowsRuntimeSystemExtensions].Assembly.FullName) add_type=$((Get-Command Add-Type).ImplementingType.Assembly.FullName)"
 Add-Type -Path $source
 $run = @([System.Runtime.InteropServices.WindowsRuntime.AsyncInfo].GetMethods() | Where-Object {
@@ -43,4 +43,3 @@ foreach ($case in @('success', 'error', 'timeout', 'late')) {
   if (-not $adapter.Lifetime.Disposed -or -not $supplier.Disposed) { throw 'WinRT cleanup missing' }
   Write-Host "WINRT_ADAPTER case=$case operation_type=$($operation.GetType().FullName) task_status=$($adapter.Task.Status) cancel_observed=$($supplier.CancelObserved) result_reads=$($adapter.Lifetime.ResultReads) disposed=$($adapter.Lifetime.Disposed) supplier_disposed=$($supplier.Disposed)"
 }
-

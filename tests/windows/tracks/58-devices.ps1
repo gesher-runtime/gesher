@@ -186,7 +186,7 @@ function LegacyCameraCheck([string] $Mode, [string] $Out, [int] $Code) {
 
 # Geocoder: Windows.Services.Maps (MapLocationFinder) without a map service key. The app's
 # Geocoder stays absent (isPresent false, IOException) while this is what Windows answers.
-$geoScript = Join-Path $PSScriptRoot 'geocoder-provider-probe.ps1'
+$geoScript = Join-Path $PSScriptRoot '../helpers/geocoder-provider-probe.ps1'
 # Bound activation/COM startup as well as the asynchronous wait. Reading Result
 # after a false Wait used to block until the entire test job timed out.
 $geo = (DevRun 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $geoScript, (Join-Path $PSScriptRoot 'geocoder-operation.ps1')) 45).Trim()
@@ -259,4 +259,3 @@ if (-not $capOut.Contains('devices: capture: done')) {
 Remove-Item Env:GESHER_SENSOR_TEST
 Remove-Item Env:GESHER_CAMERA_TEST
 $null = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'shutdown') 120
-
