@@ -147,3 +147,33 @@ which side of the urgent byte the data occupies. No logical-inline code is
 implemented from these observations. Repeated urgent indications, option
 changes and exact mark/peek/WAITALL/dup/close races require further independent
 packet-ordering evidence before any broader implementation or claim.
+
+## Refused-connect interest diagnosis
+
+Actual component40854839124/source2152 is RED on both Windows: the host's
+real non-inline urgent scenario passed, then the strict refused-connect
+control failed; neither NDK ABI ran. Diagnostics9c1b8852 were independently
+reviewed before push. Component40857235358 retains that failure and proves
+the host PRI-only poll returns0/revents0 after5004/5015ms, despite a completed
+refusal (getpeername returns ENOTCONN107). The printed errno115 is stale
+EINPROGRESS from connect, not a poll error. No SO_ERROR was consumed.
+
+Independent WinSDK40857235335 on the same diagnostic source is GREEN on
+both Windows. RDBAND-only returns0/revents0 after5015/5000ms; subsequent
+select reports exception readiness and getpeername returns10057. Even after
+completed refusal, band-only remains0, while band+normal+write interest
+returns1/revents19 (native ERR|HUP|WRNORM). Raw logs are
+`tcp-408572-{oracle,host}{2022,2025}.log` in the preserved CI-review folder.
+This distinguishes native interest gating from the old two-second race and
+from an erroneous priority bit. Increasing the bound or accepting timeout
+would preserve the defect.
+
+The pending correction requests internal write interest only on unconnected,
+non-listening stream sockets, using non-consuming SO_TYPE/SO_ACCEPTCONN and
+getpeername observations. Unrequested write results are filtered. The existing
+PollFds loop retains its deadline and re-evaluates sockets after a successful
+connect's internal write wake. No socket modes, event subscriptions, OOB or
+SO_ERROR are changed. Fresh stream HUP, idle listener, unconnected UDP,
+successful nonblocking connect and connected finite waits are strict added
+controls. Actual fresh CI on the corrected host and both NDK ABIs remains
+required; no source-only implementation is accepted by this entry.

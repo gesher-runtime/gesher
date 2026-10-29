@@ -1,5 +1,5 @@
 name: net-tcp-priority-component
-# Refused-connect diagnostics keep the original error/readiness contract intact.
+# Verify conditional failed-connect error interest and finite successful-connect waits.
 on:
   workflow_dispatch:
   push:

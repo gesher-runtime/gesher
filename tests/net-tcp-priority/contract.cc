@@ -97,6 +97,51 @@ static void* delayed(void* raw) {
   require(send(fd, "?", 1, MSG_OOB) == 1, "concurrent urgent send");
   return nullptr;
 }
+static void finite_priority_control(int fd, const char* phase) {
+  pollfd p{fd, POLLPRI, 0};
+  const long long start = millis();
+  const int rc = poll(&p, 1, 60);
+  const long long elapsed = millis() - start;
+  printf("TCP_PRIORITY_FINITE phase=%s rc=%d revents=%d elapsed_ms=%lld\n", phase, rc, p.revents, elapsed);
+  fflush(stdout);
+  require(rc == 0 && p.revents == 0 && elapsed >= 40 && elapsed < 1500, "finite priority-only endpoint wait");
+}
+static void endpoint_controls() {
+  int unconnected = socket(AF_INET, SOCK_STREAM, 0); require(unconnected >= 0, "control fresh stream");
+  pollfd initial{unconnected, POLLPRI, 0};
+  require(poll(&initial, 1, 60) == 1 && (initial.revents & POLLHUP) && !(initial.revents & POLLPRI), "fresh stream hangup is not priority");
+  require(close(unconnected) == 0, "control fresh stream cleanup");
+  int listener = socket(AF_INET, SOCK_STREAM, 0); require(listener >= 0, "control listener");
+  sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0 && listen(listener, 1) == 0, "control listen");
+  socklen_t length = sizeof(address);
+  require(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length) == 0, "control listener name");
+  finite_priority_control(listener, "listener");
+  int datagram = socket(AF_INET, SOCK_DGRAM, 0); require(datagram >= 0, "control datagram");
+  finite_priority_control(datagram, "unconnected-datagram");
+  int client = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); require(client >= 0, "control nonblocking client");
+  int rc = connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+  require(rc == 0 || (rc == -1 && errno == EINPROGRESS), "control successful connect pending");
+  // Completion may wake the backend internally, but no requested event exists.
+  finite_priority_control(client, "successful-connect");
+  int receiver = accept(listener, nullptr, nullptr); require(receiver >= 0, "control accept");
+  sockaddr_storage peer{}; length = sizeof(peer);
+  require(getpeername(client, reinterpret_cast<sockaddr*>(&peer), &length) == 0, "control connected peer");
+  finite_priority_control(client, "connected-client");
+  int flags = fcntl(client, F_GETFL);
+  require(flags >= 0 && fcntl(client, F_SETFL, flags & ~O_NONBLOCK) == 0, "control blocking client");
+  timeval receive_timeout{0, 300000};
+  require(setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout, sizeof(receive_timeout)) == 0, "control read deadline");
+  // This connected endpoint is writable but has no incoming payload. A raw
+  // unrequested write wake must never make MSG_DONTWAIT enter blocking recv.
+  char byte{}; const long long read_start = millis();
+  const int received = static_cast<int>(recv(client, &byte, 1, MSG_DONTWAIT));
+  const int read_error = errno;
+  const long long read_elapsed = millis() - read_start;
+  require(received == -1 && (read_error == EAGAIN || read_error == EWOULDBLOCK) && read_elapsed < 200, "writable socket is not readable for MSG_DONTWAIT");
+  require(close(receiver) == 0 && close(client) == 0 && close(datagram) == 0 && close(listener) == 0, "control endpoint cleanup");
+  puts("PASS TCP priority: listener datagram and successful connect preserve finite priority-only waits");
+}
 static void connection_controls() {
   int reserved = socket(AF_INET, SOCK_STREAM, 0); require(reserved >= 0, "reserve refused port");
   sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -120,6 +165,11 @@ static void connection_controls() {
          connected, connect_error, polled, refused.revents, poll_error, elapsed, peer_rc, peer_error);
   fflush(stdout);
   require(polled == 1 && (refused.revents & (POLLERR | POLLHUP)) && !(refused.revents & POLLPRI), "refused error never priority");
+  require(elapsed < 6500, "refused finite deadline preserved");
+  int alias = dup(client); require(alias >= 0, "refused alias");
+  pollfd alias_error{alias, POLLPRI, 0};
+  require(poll(&alias_error, 1, 0) == 1 && (alias_error.revents & (POLLERR | POLLHUP)) && !(alias_error.revents & POLLPRI), "refused alias error never priority");
+  require(close(alias) == 0, "refused alias cleanup");
   int error = 0; length = sizeof(error);
   require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "readiness preserved SO_ERROR");
   error = -1; length = sizeof(error);
@@ -134,6 +184,7 @@ int main(int argc, char** argv) {
   require(argc == 1 || noninline_only, "explicit supported scope");
   scenario(0);
   if (!noninline_only) scenario(1);
+  endpoint_controls();
   connection_controls();
   Pair a = pair(); pthread_t thread;
   require(pthread_create(&thread, nullptr, delayed, &a.sender) == 0, "sender thread");

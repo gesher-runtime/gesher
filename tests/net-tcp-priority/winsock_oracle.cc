@@ -50,6 +50,12 @@ static void snapshot(SOCKET s, const char* phase, int inline_oob) {
 int main() {
   WSADATA data{};
   require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "startup");
+  SOCKET fresh = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  require(fresh != INVALID_SOCKET, "fresh stream");
+  WSAPOLLFD initial{}; initial.fd = fresh; initial.events = POLLRDBAND | POLLWRNORM;
+  int initial_rc = WSAPoll(&initial, 1, 0);
+  printf("WINDOWS_URG fresh-stream events=%d rc=%d revents=%d SO_ERROR=untouched\n", initial.events, initial_rc, initial.revents);
+  require(closesocket(fresh) == 0, "fresh stream cleanup");
   for (int inline_oob = 0; inline_oob <= 4; ++inline_oob) {
     SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     require(listener != INVALID_SOCKET, "listener");
@@ -163,7 +169,7 @@ int main() {
   int peer_error = peer_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
   printf("WINDOWS_URG refused-connect except=1 peer_rc=%d peer_error=%d SO_ERROR=untouched\n", peer_rc, peer_error);
   require(peer_rc == SOCKET_ERROR && peer_error == WSAENOTCONN, "refused is not connected");
-  const SHORT refused_interests[] = {POLLRDBAND, POLLRDBAND | POLLRDNORM | POLLWRNORM};
+  const SHORT refused_interests[] = {POLLRDBAND, POLLRDBAND | POLLRDNORM, POLLRDBAND | POLLWRNORM, POLLRDBAND | POLLRDNORM | POLLWRNORM};
   for (SHORT events : refused_interests) {
     WSAPOLLFD observed{}; observed.fd = failed; observed.events = events;
     int rc = WSAPoll(&observed, 1, 0);

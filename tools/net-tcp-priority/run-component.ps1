@@ -100,6 +100,7 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
   foreach ($label in @('inline=0 queue/repoll/consume/select/epoll/dup/multi/normal/timeout/EOF', 'failed connection and closed descriptor distinguish errors and preserve SO_ERROR', 'delayed arrival bounded wake and cleanup', 'noninline contract checks passed; inline remains OPEN')) {
     if ($text -notmatch ('(?m)^PASS TCP priority: ' + [regex]::Escape($label) + '\s*$')) { throw "Missing actual assertion $Context/$label" }
   }
+  if ($text -notmatch '(?m)^PASS TCP priority: listener datagram and successful connect preserve finite priority-only waits\s*$') { throw "Missing finite endpoint controls $Context" }
   Write-Host "PASS TCP priority component: $Context; actual noninline contract; inline remains OPEN"
 }
 RunPriority 'host-posix' "$fixture/net_tcp_priority_probe.exe" '--noninline'

@@ -663,6 +663,23 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
     fds[i].events = static_cast<SHORT>(((entries[i].events & kPollIn) != 0 ? POLLRDNORM : 0) |
                                        ((entries[i].events & kPollOut) != 0 ? POLLWRNORM : 0) |
                                        ((entries[i].events & kPollPri) != 0 ? POLLRDBAND : 0));
+    // Windows gates failed-connect ERR/HUP on normal interest, even though
+    // those errors are unconditional in Linux poll. Arm write interest only
+    // for unconnected, non-listening streams. Connected writable sockets and
+    // unconnected datagrams must not cause an unrequested-write busy loop.
+    if ((fds[i].events & POLLWRNORM) == 0) {
+      int type = 0, accepting = 0, length = sizeof(type);
+      if (Api().getsockopt(fds[i].fd, SOL_SOCKET, SO_TYPE,
+                           reinterpret_cast<char*>(&type), &length) == 0 && type == SOCK_STREAM) {
+        length = sizeof(accepting);
+        if (Api().getsockopt(fds[i].fd, SOL_SOCKET, SO_ACCEPTCONN,
+                             reinterpret_cast<char*>(&accepting), &length) == 0 && !accepting) {
+          sockaddr_storage peer{}; length = sizeof(peer);
+          if (Api().getpeername(fds[i].fd, reinterpret_cast<sockaddr*>(&peer), &length) == SOCKET_ERROR &&
+              WSAGetLastError() == WSAENOTCONN) fds[i].events |= POLLWRNORM;
+        }
+      }
+    }
     fds[i].revents = 0;
   }
   int rc = WSAPoll(fds.data(), static_cast<ULONG>(count), timeout_ms);
@@ -673,7 +690,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
     int out = 0;
     if (r & POLLRDNORM) out |= kPollIn;
     if ((r & POLLRDBAND) && (entries[i].events & kPollPri)) out |= kPollPri;
-    if (r & POLLWRNORM) out |= kPollOut;
+    if ((r & POLLWRNORM) && (entries[i].events & kPollOut)) out |= kPollOut;
     if (r & POLLERR) out |= kPollErr;
     if (r & POLLHUP) out |= kPollHup;
     if (r & POLLNVAL) out |= kPollNval;
