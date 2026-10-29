@@ -13,7 +13,11 @@ Initial implementation has no runtime qualification. Run40800633035 at exact
 All supplier C objects, including the changed record, compiled; no DLL,
 host or Windows result was qualified. The correction overrides only the
 upstream link variable to omit that GCC argument, preserving `-Werror`.
-Its DLL import audit additionally rejects importing a previous supplier copy.
+Its DLL import audit parses a nonempty case-insensitive DLL inventory, rejects
+unknown/duplicate imports (including the supplier itself in mixed case), and
+retains negative controls. The pinned Makefile link variables are checked
+exactly before the single GCC-only argument is omitted; all other original
+upstream link flags are retained.
 There is no canonical full, package or e2e qualification yet.
 Do not mark the host foreign-thread contract closed. Existing diagnostic
 407989 (a0c47c29) fails import sealing before Windows and is not host evidence.
