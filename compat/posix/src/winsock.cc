@@ -614,7 +614,7 @@ void* ConnectOwner(void* raw) {
           }
           if (op.start_error == 0) {
             op.issued = true;
-            if (!connect_ex(static_cast<SOCKET>(op.socket), reinterpret_cast<sockaddr*>(&op.native_address), op.native_address_length, nullptr, 0, &bytes, &op.overlap)) {
+            if (!connect_ex(static_cast<SOCKET>(op.socket), reinterpret_cast<sockaddr*>(&op.native_address), op.native_address_length, nullptr, 0, nullptr, &op.overlap)) {
               const int error = WSAGetLastError();
               op.pending = error == ERROR_IO_PENDING;
               op.start_error = op.pending ? 0 : ErrnoFromWsa(error);
