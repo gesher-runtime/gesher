@@ -81,6 +81,7 @@ jobs:
               if ($process.ExitCode -ne $case.Exit) { throw "Probe $name exit=$($process.ExitCode) expected=$($case.Exit)" }
               $actual=Get-Content -Raw -LiteralPath $stdout
               if (-not $actual.Contains($case.Marker) -or $actual.Contains('FAIL ')) { throw "Probe $name missing control" }
+              if ($name -eq 'operations' -and (-not $actual.Contains('PASS probe DLL data alias admission reload and foreign-thread exit after unload') -or -not $actual.Contains('equal=1'))) { throw 'Missing alias and late thread exit proof' }
               Write-Host "$name actual exit=$($process.ExitCode)"
               Write-Host $actual
             } finally {

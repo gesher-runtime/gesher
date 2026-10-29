@@ -134,15 +134,15 @@ def supplier(source, llvm, role):
         assert symbol in output, name
         for hook in ('gesher_winpthread_cpu_test_control_v1', 'gesher_winpthread_exit_test_v1', 'gesher_host_cpu_clock_test_exhaust_ids_v1'):
             assert (hook in output) == (role == 'fault'), 'Supplier test symbol role mismatch'
-        assert ('gesher_pthread_identity_probe_v2' in output) == (role == 'probe'), 'Probe symbol role mismatch'
-        assert 'gesher_pthread_identity_probe_v1' not in output, 'Stale probe descriptor' 
+        assert ('gesher_pthread_identity_probe_v3' in output) == (role == 'probe'), 'Probe symbol role mismatch'
+        assert 'gesher_pthread_identity_probe_v1' not in output and 'gesher_pthread_identity_probe_v2' not in output, 'Stale probe descriptor'
         result[name + ':symbols'] = output
     exports = command(str(llvm / 'bin/llvm-readobj'), '--coff-exports', str(target / 'bin/libwinpthread-1.dll'))
     assert symbol in exports
     for hook in ('gesher_winpthread_cpu_test_control_v1', 'gesher_winpthread_exit_test_v1', 'gesher_host_cpu_clock_test_exhaust_ids_v1'):
         assert (hook in exports) == (role == 'fault'), 'DLL fault export role mismatch'
-    assert ('gesher_pthread_identity_probe_v2' in exports) == (role == 'probe'), 'DLL probe export role mismatch'
-    assert 'gesher_pthread_identity_probe_v1' not in exports, 'Stale probe descriptor'
+    assert ('gesher_pthread_identity_probe_v3' in exports) == (role == 'probe'), 'DLL probe export role mismatch'
+    assert 'gesher_pthread_identity_probe_v1' not in exports and 'gesher_pthread_identity_probe_v2' not in exports, 'Stale probe descriptor'
     result['dll_exports'] = exports
     imports = command(str(llvm / 'bin/llvm-readobj'), '--coff-imports', str(target / 'bin/libwinpthread-1.dll'))
     result['dll_import_names'] = dll_imports(imports)

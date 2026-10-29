@@ -8,6 +8,10 @@ int main(void) {
   SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
   _set_abort_behavior(0,_WRITE_ABORT_MSG|_CALL_REPORTFAULT);
   puts("CONTROL missing identity descriptor before pthread_self"); fflush(stdout);
-  (void)pthread_self();
+  HMODULE module=LoadLibraryW(L"libwinpthread-1.dll");
+  if (module) {
+    pthread_t (__cdecl *self)(void)=(pthread_t (__cdecl *)(void))GetProcAddress(module,"pthread_self");
+    if (self) (void)self();
+  }
   puts("FAIL missing identity descriptor survived"); return 9;
 }
