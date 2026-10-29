@@ -122,13 +122,13 @@ void Stress() {
       while (!stop_readers) {
         clockid_t id = 123;
         int rc = pthread_getcpuclockid(t.identity, &id);
-        Require(rc == 0 || (rc == ESRCH && id == 123), "racing acquire result");
-        if (!announced) { ++started; announced = true; }
+        Require(rc == 0 || (rc == ESRCH && id == 123 && t.stop), "racing acquire result");
+        if (!announced) { Require(rc == 0, "real live reader acquisition"); ++started; announced = true; }
         if (rc == 0) {
           Require(id == saved, "race generation dedup");
           timespec ts{};
           int qr = clock_gettime(id, &ts);
-          Require(qr == 0 || (qr == -1 && errno == EINVAL), "racing query result");
+          Require(qr == 0 || (qr == -1 && errno == EINVAL && t.stop), "racing query result");
         }
       }
     });
