@@ -1,7 +1,7 @@
 name: binder-bootstrap-rollback
 on:
   push:
-    branches: [wip/binder-isolated-spawn]
+    branches: [wip/binder-rollback-component]
     paths: [.github/workflows/binder-bootstrap-rollback.yml]
   workflow_dispatch:
 permissions:
