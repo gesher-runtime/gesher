@@ -13,6 +13,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <windows.h>
+#include <winternl.h>
 #include <bcrypt.h>
 
 #include <atomic>
@@ -24,6 +25,8 @@
 #include "binder_internal.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "launch_context.h"
+#include "startup_null.h"
 #include "record_lock_descriptors.h"
 #include "socket_internal.h"
 
@@ -34,6 +37,35 @@ std::mutex table_mutex;
 std::unordered_map<int, SocketFd> table;
 // Lets the common case, a process without sockets, skip the lock.
 std::atomic<size_t> socket_count{0};
+
+// Restricted installed children cannot open the NUL device by name. Their
+// host supplies a NUL stdin handle in the immutable startup record. Keep one
+// non-inheritable duplicate only after verifying both the lowbox and the exact
+// NT object name; mutable process standard-handle state is never authority.
+struct StartupNull {
+  HANDLE handle = nullptr;
+  StartupNull() {
+    const auto& context = launch::kStartup;
+    if (!context.present || context.kind || context.control || context.broker || !context.server_pid) return;
+    HANDLE token = nullptr; DWORD isolated = 0, bytes = 0;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return;
+    bool lowbox = GetTokenInformation(token, TokenIsAppContainer, &isolated, sizeof(isolated), &bytes) && isolated == 1;
+    if (!CloseHandle(token) || !lowbox) return;
+    STARTUPINFOW startup{}; startup.cb = sizeof(startup); GetStartupInfoW(&startup);
+    if (!(startup.dwFlags & STARTF_USESTDHANDLES) || !startup.hStdInput || startup.hStdInput == INVALID_HANDLE_VALUE) return;
+    handle = DuplicateVerifiedNull(startup.hStdInput);
+
+  }
+  ~StartupNull() { if (handle) CloseHandle(handle); }
+};
+
+HANDLE DuplicateStartupNull() {
+  static StartupNull source;
+  HANDLE duplicate = nullptr;
+  if (!source.handle || !DuplicateHandle(GetCurrentProcess(), source.handle, GetCurrentProcess(),
+                                         &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS)) return INVALID_HANDLE_VALUE;
+  return duplicate;
+}
 
 // Takes the socket out of the table; false if fd is not a socket.
 bool Remove(int fd, SocketFd* state) {
@@ -88,7 +120,11 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
 int ReserveFd() {
   HANDLE h = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                          nullptr, OPEN_EXISTING, 0, nullptr);
-  if (h == INVALID_HANDLE_VALUE) return FailWithLastError();
+  if (h == INVALID_HANDLE_VALUE) {
+    DWORD error = GetLastError();
+    if (error == ERROR_ACCESS_DENIED) h = DuplicateStartupNull();
+    if (h == INVALID_HANDLE_VALUE) { SetLastError(error); return FailWithLastError(); }
+  }
   record_locks::DescriptorGuard descriptor_guard;
   int fd = CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h), _O_RDWR | _O_NOINHERIT));
   if (fd < 0) CloseHandle(h);

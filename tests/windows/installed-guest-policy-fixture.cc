@@ -1,7 +1,11 @@
 // CI-only real profile/resource object ownership controls. No JVM substitute.
 #include "../../compat/framework/installed_guest.h"
 #include "../../compat/framework/restricted_launch.h"
+#include "../../compat/posix/src/startup_null.h"
 #include <cstdio>
+#include <cstring>
+#include <fcntl.h>
+#include <io.h>
 #include <stdexcept>
 
 namespace g = gesher::guest;
@@ -80,6 +84,21 @@ std::wstring PrivateName(HANDLE handle) {
 int wmain(int argc, wchar_t** argv) {
   try {
     if (argc == 4 && !wcscmp(argv[1], L"--nested")) {
+      STARTUPINFOW actual{}; actual.cb = sizeof(actual); GetStartupInfoW(&actual);
+      Check((actual.dwFlags & STARTF_USESTDHANDLES) != 0, "actual startup stdio");
+      HANDLE verified = gesher::DuplicateVerifiedNull(actual.hStdInput);
+      Check(verified != nullptr, "actual startup null verified");
+      DWORD verified_flags = 0;
+      Check(GetHandleInformation(verified, &verified_flags) && !(verified_flags & HANDLE_FLAG_INHERIT), "verified duplicate is private");
+      int placeholder = _open_osfhandle(reinterpret_cast<intptr_t>(verified), _O_RDWR | _O_NOINHERIT);
+      if (placeholder < 0) Check(CloseHandle(verified), "failed verified descriptor transfer close");
+      Check(placeholder >= 0 && _close(placeholder) == 0, "verified descriptor transfer and close");
+      HANDLE wrong = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+      Check(wrong != nullptr, "wrong startup object control");
+      HANDLE rejected = gesher::DuplicateVerifiedNull(wrong);
+      Check(rejected == nullptr && CloseHandle(wrong), "non-null startup object rejected");
+      Check(gesher::DuplicateVerifiedNull(INVALID_HANDLE_VALUE) == nullptr, "invalid startup object rejected");
+      printf("POLICY_VERIFIED_NULL actual_null=1 private_duplicate=1 crt_close=1 wrong_object_rejected=1 invalid_rejected=1\n");
       HANDLE malicious = CreateNamedPipeW(argv[3], PIPE_ACCESS_DUPLEX,
           PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
           PIPE_UNLIMITED_INSTANCES, 1024, 1024, 0, nullptr);
@@ -166,6 +185,17 @@ int wmain(int argc, wchar_t** argv) {
       Check(WaitForSingleObject(child.process(), 15000) == WAIT_OBJECT_0, "actual lowbox nested child completion");
       DWORD code = 0; Check(GetExitCodeProcess(child.process(), &code) && code == 0 && child.Stop().confirmed, "actual nested child exit and retirement");
       Check(CloseHandle(private_server) && CloseHandle(private_client), "actual private bootstrap owner cleanup");
+      HANDLE verified_log = CreateFileW(log_path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+      Check(verified_log != INVALID_HANDLE_VALUE, "open actual verified null child log");
+      char verified_output[4096]{}; DWORD verified_size = 0; LARGE_INTEGER verified_length{};
+      bool bounded_log = GetFileSizeEx(verified_log, &verified_length) && verified_length.QuadPart >= 0 &&
+          verified_length.QuadPart < static_cast<LONGLONG>(sizeof(verified_output));
+      bool read_log = bounded_log && ReadFile(verified_log, verified_output, static_cast<DWORD>(verified_length.QuadPart), &verified_size, nullptr) &&
+          verified_size == static_cast<DWORD>(verified_length.QuadPart);
+      bool closed_log = CloseHandle(verified_log) != FALSE;
+      Check(bounded_log && read_log && closed_log && std::strstr(verified_output,
+          "POLICY_VERIFIED_NULL actual_null=1 private_duplicate=1 crt_close=1 wrong_object_rejected=1 invalid_rejected=1"), "actual verified null child evidence");
+      printf("%s", verified_output); fflush(stdout);
       Check(DeleteFileW(log_path.c_str()), "nested child log cleanup");
       printf("POLICY_CHILD actual_lowbox=1 nested_create=1 file_reopen_read=1 nested_delete=1 exit=0 retired=1\n");
       printf("POLICY_PRIVATE actual_bootstrap=1 guest_serve_error=5 private_endpoints_inheritable=0\n");

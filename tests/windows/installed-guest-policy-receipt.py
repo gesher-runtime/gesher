@@ -13,7 +13,7 @@ def sha(path):
 
 assert os.environ.get('GITHUB_ACTIONS') == 'true', 'CI only'
 source = 'tests/windows/installed-guest-policy-fixture.cc'
-dependencies = [source, 'compat/framework/installed_guest.h', 'compat/framework/restricted_launch.h', 'compat/binder/launch_control.h']
+dependencies = [source, 'compat/framework/installed_guest.h', 'compat/framework/restricted_launch.h', 'compat/binder/launch_control.h', 'compat/posix/src/startup_null.h', 'compat/posix/src/fd.cc']
 root = Path('guest-policy-artifact')
 identity = {k: os.environ[k] for k in (
     'GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID')}
