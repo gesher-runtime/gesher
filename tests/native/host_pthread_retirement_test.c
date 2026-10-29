@@ -70,6 +70,8 @@ static void destructor(void *p) {
 }
 static DWORD WINAPI target(void *p) {
   struct target *t=p; t->id=pthread_self();
+  check(pthread_join(t->id,NULL)==EDEADLK,"self join");
+  check(_pthread_tryjoin(t->id,NULL)==EDEADLK,"self tryjoin");
   check(pthread_setspecific(key,t)==0,"setspecific"); check(SetEvent(t->ready),"ready");
   await(t->start); pthread_exit(NULL); return 0;
 }
@@ -116,6 +118,7 @@ static void unlocked_destructor(void) {
 static DWORD WINAPI joiner(void *p) { struct target *t=p; check(pthread_join(t->id,NULL)==0,"live join result"); return 0; }
 static void live_join(void) {
   struct target t={0}; HANDLE entered=event(); launch(&t);
+  check(_pthread_tryjoin(t.id,NULL)==EBUSY,"foreign live tryjoin");
   check(gesher_winpthread_exit_test_v1(t.id,NULL,NULL,entered)==0,"arm live join");
   HANDLE th=CreateThread(NULL,0,joiner,&t,0,NULL); check(th!=NULL,"joiner"); ++owned;
   await(entered); /* Provider verified target kernel handle is still nonsignaled. */
@@ -162,16 +165,6 @@ int main(int argc,char **argv) {
     check(SetEvent(t.start),"failure start"); await(t.thread); puts("FAIL TLS-clear-failure survived"); return 9;
   }
   counts("baseline"); contention(); counts("contention"); unlocked_destructor(); counts("destructor"); live_join(); counts("join"); live_and_reuse(); counts("reuse");
-  /* Observe the already attached controller's public supplier bookkeeping. */
-  DWORD before_observation, after_observation;
-  check(GetProcessHandleCount(GetCurrentProcess(),&before_observation),"before controller observation");
-  pthread_t controller=pthread_self();
-  HANDLE controller_thread=(HANDLE)pthread_gethandle(controller);
-  HANDLE controller_event=(HANDLE)pthread_getevent();
-  check(controller && controller_thread && controller_event,"controller bookkeeping");
-  check(GetThreadId(controller_thread)==GetCurrentThreadId(),"controller handle identity");
-  check(GetProcessHandleCount(GetCurrentProcess(),&after_observation) && before_observation==after_observation,"controller observation net count unchanged");
-  printf("CONTROLLER_HANDLES thread=%p event=%p tid=%lu\n",controller_thread,controller_event,GetCurrentThreadId());
   check(destructors==338,"all exact destructors"); check(pthread_key_delete(key)==0,"delete key"); check(owned==0,"all fixture handles closed");
   check(GetProcessHandleCount(GetCurrentProcess(),&after),"final handle count");
   inventory("final");

@@ -5,6 +5,6 @@
     "mingw-w64-libraries/winpthreads/src/thread.h": "3c105e10217cabae5a34d1e6e83352fb4eb8a9c2cf048de8053351eb6edf6a25",
     "mingw-w64-libraries/winpthreads/include/pthread.h": "bf3fd920306acb4144873d1099490cf332700c268a8ede0e484c7c0e721c7995"
   },
-  "patch_sha256": "b89f16c661be34a9d1175d91af54425ec859ab3a3c069e332457782b973fdbfd",
-  "fault_patch_sha256": "6cd146e9760df05745c4135e27c8150d94b049e25a9c9ca353dedb23b7c5802b"
+  "patch_sha256": "f567125c6f55ff220d66162fa37c7dd02f98d6d5602191814f758a74ea7b0829",
+  "fault_patch_sha256": "8c973adc3cebee7ba103babb0566dcc10ad10a86bb8ec583589e18b4d2007804"
 }

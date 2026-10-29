@@ -7,6 +7,23 @@ The old `gesher-pthread-foreign-cpu-clock` worktree is preserved without edits.
 
 ## Status and next steps
 
+Retirement diagnostics 40909237252/027d736d and 40911094059/2f2dd0b6
+remain red on both Windows under the original +8 process handle bound.
+The first observed two new Events after contention, then one Thread and one
+Event after reuse; observed handle values and types do not establish ownership.
+The second compared the surviving Thread's TID and creation time with all
+338 target identities: it is the still-running controller thread on both
+Windows, with no target match. Its supplier origin and the Event ownership
+remain unproven pending further correlation. The intervening 40910469594
+failed at -Werror before Windows and is retained as a compile failure.
+There is no retirement fix or product qualification from these diagnostics.
+Run 40912359945/06a525f6 remained red +10 on both Windows. The retained
+Thread and Event handle values match the controller's supplier bookkeeping
+values; the Thread also has the controller's actual TID. Net handle count did
+not change while reading those values. The source-only successor avoids
+registering a previously foreign join caller merely to check self-join, and
+adds self-join/tryjoin and foreign tryjoin controls; peer and CI are required.
+
 Initial component run40801790244/attempt1 at exact
 67e4f27486f6a63a8becb1c518c02b6b6afac02f passed its compile and both Windows
 jobs. Actual pthread/std-thread/detached-create/live-detach/Win32-self-attach

@@ -50,7 +50,7 @@
        if (t->evStart)
          CloseHandle (t->evStart);
 @@ -1800,6 +1822,15 @@
-   if (pthread_equal(pthread_self(), t))
+   if (is_attached_self(tv))
      return EDEADLK;
  
 +  /* Prove a legal join reached an actually live, controller-held target. */

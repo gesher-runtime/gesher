@@ -305,3 +305,41 @@
  WINPTHREAD_API int       pthread_once(pthread_once_t *o, void (*func)(void));
  WINPTHREAD_API void      pthread_testcancel(void);
  WINPTHREAD_API int       pthread_equal(pthread_t t1, pthread_t t2);
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -1091,6 +1091,20 @@
+   return t->x;
+ }
+ 
++/* Self-join detection must not register an otherwise foreign caller. */
++static int
++is_attached_self (struct _pthread_v *target)
++{
++  struct _pthread_v *self;
++  if (_pthread_once_raw (&_pthread_tls_once, pthread_tls_init) != 0)
++    abort ();
++  SetLastError (ERROR_SUCCESS);
++  self = (_pthread_v *) TlsGetValue (_pthread_tls);
++  if (self == NULL && GetLastError () != ERROR_SUCCESS)
++    abort ();
++  return self == target;
++}
++
+ /* Internal helper for getting event handle of thread T.  */
+ void *
+ pthread_getevent (void)
+@@ -1731,4 +1745,4 @@
+   if ((tv->p_state & PTHREAD_CREATE_DETACHED) != 0)
+     return EINVAL;
+-  if (pthread_equal(pthread_self(), t))
++  if (is_attached_self(tv))
+     return EDEADLK;
+@@ -1771,7 +1785,7 @@
+       pthread_mutex_unlock (&mtx_pthr_locked);
+       return EINVAL;
+     }
+-  if (pthread_equal(pthread_self(), t))
++  if (is_attached_self(tv))
+     {
+       pthread_mutex_unlock (&mtx_pthr_locked);
+       return EDEADLK;
