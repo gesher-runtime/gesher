@@ -150,11 +150,12 @@ target_link_libraries(art_runtime PUBLIC ${ART_RUNTIME_DEPS})
 
 # --- dalvikvm (art/dalvikvm/Android.bp) -------------------------------------
 add_executable(dalvikvm ${_art}/dalvikvm/dalvikvm.cc
+  ${CMAKE_SOURCE_DIR}/compat/art/launch_entrypoint.cc
   # Gesher: in place of libnativehelper's dlopen-based JniInvocation.
   ${CMAKE_SOURCE_DIR}/compat/art/jni_invocation_static.cc)
 target_include_directories(dalvikvm PRIVATE ${AOSP_DIR}/libnativehelper/include_platform
   ${AOSP_DIR}/libnativehelper/include)
-target_link_libraries(dalvikvm PRIVATE art_runtime)
+target_link_libraries(dalvikvm PRIVATE art_runtime shell32)
 # dalvikvm links libart-compiler for the JIT (cmake/aosp/dex2oat.cmake,
 # docs/compiled-code.md).
 # A linker map, for tools/symbolize.py (the executable is stripped).

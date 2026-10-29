@@ -1,0 +1,23 @@
+diff --git a/dalvikvm/dalvikvm.cc b/dalvikvm/dalvikvm.cc
+--- a/dalvikvm/dalvikvm.cc
++++ b/dalvikvm/dalvikvm.cc
+@@ -28,6 +28,9 @@
+ #include "nativehelper/ScopedLocalRef.h"
+ #include "nativehelper/toStringArray.h"
+ 
++// Gesher records the parser's actual entrypoint position for its process spawner.
++extern "C" void gesher_record_vm_entrypoint_index(int index, int argc, char** argv);
++
+ #ifdef ART_TARGET_ANDROID
+ #include <bionic/dlext_namespaces.h>
+ #endif
+@@ -236,6 +239,9 @@ static int dalvikvm(int argc, char** argv) {
+     return EXIT_FAILURE;
+   }
+ 
++  // argv was advanced past the executable. Preserve the original argv index.
++  gesher_record_vm_entrypoint_index(arg_idx + 1, argc + 1, argv - 1);
++
+   int rc = InvokeMain(env, &argv[arg_idx]);
+ 
+ #if defined(NDEBUG)

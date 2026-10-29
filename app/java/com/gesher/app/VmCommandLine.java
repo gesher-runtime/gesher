@@ -9,8 +9,18 @@ public final class VmCommandLine {
     private VmCommandLine() {}
 
     public static String beforeMainClass(String command, String mainClass) {
+        return before(command, mainClass, -1);
+    }
+
+    /** Uses the argv index already selected by dalvikvm, including argv[0]. */
+    public static String beforeArgument(String command, int index) {
+        if (index <= 0) throw new IllegalStateException("missing VM entrypoint index");
+        return before(command, null, index);
+    }
+
+    private static String before(String command, String mainClass, int index) {
         int at = 0;
-        boolean executable = true;
+        int argumentIndex = 0;
         while (at < command.length()) {
             while (at < command.length() && space(command.charAt(at))) ++at;
             if (at == command.length()) break;
@@ -42,12 +52,13 @@ public final class VmCommandLine {
                     }
                 }
             }
-            if (!executable && mainClass.contentEquals(argument)) {
+            if (argumentIndex > 0 && (argumentIndex == index ||
+                    (index < 0 && mainClass.contentEquals(argument)))) {
                 return command.substring(0, start).stripTrailing();
             }
-            executable = false;
+            ++argumentIndex;
         }
-        throw new IllegalStateException("no " + mainClass + " in this command line: " + command);
+        throw new IllegalStateException("no requested entrypoint in this command line: " + command);
     }
 
     private static boolean space(char c) { return c == ' ' || c == '\t'; }

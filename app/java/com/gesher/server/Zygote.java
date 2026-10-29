@@ -76,6 +76,7 @@ public final class Zygote {
     static native boolean nativeSignalEvent(String name);
     static native boolean nativeWaitForBinder(String device, int pid, int timeoutMs);
     static native String nativeCommandLine();
+    private static native int nativeEntrypointIndex();
     static native String nativeExePath();
 
     public static final long EXIT_RUNNING = -2;
@@ -184,6 +185,11 @@ public final class Zygote {
      */
     public static String vmCommandLine(String mainClass) {
         return com.gesher.app.VmCommandLine.beforeMainClass(nativeCommandLine(), mainClass);
+    }
+
+    /** Options preceding the entrypoint selected by dalvikvm's own parser. */
+    public static String vmCommandLineForEntrypoint() {
+        return com.gesher.app.VmCommandLine.beforeArgument(nativeCommandLine(), nativeEntrypointIndex());
     }
 
     /** The command line of a dalvikvm like this one running {@code mainClass args}. */
