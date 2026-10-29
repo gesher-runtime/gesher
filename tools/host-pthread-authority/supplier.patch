@@ -4282,9 +4282,9 @@
    if (*rw != PTHREAD_RWLOCK_INITIALIZER)
    {
      pthread_spin_unlock(&cond_locked);
-+#ifdef GESHER_PTHREAD_ROUTING_PROBE
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && !defined(GESHER_RWLOCK_ORIGINAL_RECHECK)
 +    /* Another caller completed initialization after our sentinel check. */
-+    return EBUSY;
++    return 0;
 +#else
      return EINVAL;
 +#endif

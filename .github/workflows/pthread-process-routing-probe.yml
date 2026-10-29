@@ -81,7 +81,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($case in @(@{Name='sync-init-gate';Exit=0;Marker='PASS probe mixed rwlock forced lazy-init contention handles='}, @{Name='sync-bad-anchor';Exit=3;Marker='CONTROL malformed synchronization descriptor before mutex use'}, @{Name='sync-families';Exit=0;Marker='PASS probe mixed mutex cond-cancel sem rwlock live DLL-init mutex after unload handles='}, @{Name='delay-probe';Exit=0;Marker='PASS probe routed delay32 delay64 cancellation and DLL unload'}, @{Name='foreign-dll-callback';Exit=0;Marker='PASS probe DLL destructor native exit delete/concurrent-reuse physical unload handles='}, @{Name='key-lock-gate';Exit=0;Marker='PASS probe key registry actual lock contention and create/delete'}, @{Name='foreign-native-exit';Exit=0;Marker='PASS probe foreign native exit handles='}, @{Name='wrapper-gate';Exit=0;Marker='PASS probe wrapper unlocked before cleanup; live detach exact destructor retired ESRCH'}, @{Name='retirement-static';Exit=0;Marker='PASS retirement all 338 destructors owned=0 handles='}, @{Name='retirement-dynamic';Exit=0;Marker='PASS retirement all 338 destructors owned=0 handles='}, @{Name='callback-lifetime';Exit=0;Marker='PASS probe deleted key generation retains DLL callback through return and rejects reuse alias'}, @{Name='callback-lifetime';Arg='--dll';Exit=0;Marker='PASS probe deleted key generation retains DLL callback through return and rejects reuse alias'}, @{Name='key-delete-diagnostic';Exit=0;Marker='PASS destructor deletes its own key and returns'}, @{Name='strict';Exit=0;Marker='PASS strict process thread identity, clocks and authority after DLL unload'}, @{Name='operations';Exit=0;Marker='PASS probe cross-image create join tryjoin cancel detach TLS cleanup and unload'}, @{Name='standalone';Exit=0;Marker='PASS routing probe standalone DLL local provider'}, @{Name='bad-anchor';Exit=3;Marker='CONTROL invalid identity descriptor before pthread_self'}, @{Name='missing-anchor';Exit=3;Marker='CONTROL missing identity descriptor before pthread_self'})) {
+          foreach ($case in @(@{Name='sync-init-gate';Exit=0;Marker='PASS probe mixed rwlock forced lazy-init contention corrected-success handles='}, @{Name='sync-bad-anchor';Exit=3;Marker='CONTROL malformed synchronization descriptor before mutex use'}, @{Name='sync-families';Exit=0;Marker='PASS probe mixed mutex cond-cancel sem rwlock live DLL-init mutex after unload handles='}, @{Name='delay-probe';Exit=0;Marker='PASS probe routed delay32 delay64 cancellation and DLL unload'}, @{Name='foreign-dll-callback';Exit=0;Marker='PASS probe DLL destructor native exit delete/concurrent-reuse physical unload handles='}, @{Name='key-lock-gate';Exit=0;Marker='PASS probe key registry actual lock contention and create/delete'}, @{Name='foreign-native-exit';Exit=0;Marker='PASS probe foreign native exit handles='}, @{Name='wrapper-gate';Exit=0;Marker='PASS probe wrapper unlocked before cleanup; live detach exact destructor retired ESRCH'}, @{Name='retirement-static';Exit=0;Marker='PASS retirement all 338 destructors owned=0 handles='}, @{Name='retirement-dynamic';Exit=0;Marker='PASS retirement all 338 destructors owned=0 handles='}, @{Name='callback-lifetime';Exit=0;Marker='PASS probe deleted key generation retains DLL callback through return and rejects reuse alias'}, @{Name='callback-lifetime';Arg='--dll';Exit=0;Marker='PASS probe deleted key generation retains DLL callback through return and rejects reuse alias'}, @{Name='key-delete-diagnostic';Exit=0;Marker='PASS destructor deletes its own key and returns'}, @{Name='strict';Exit=0;Marker='PASS strict process thread identity, clocks and authority after DLL unload'}, @{Name='operations';Exit=0;Marker='PASS probe cross-image create join tryjoin cancel detach TLS cleanup and unload'}, @{Name='standalone';Exit=0;Marker='PASS routing probe standalone DLL local provider'}, @{Name='bad-anchor';Exit=3;Marker='CONTROL invalid identity descriptor before pthread_self'}, @{Name='missing-anchor';Exit=3;Marker='CONTROL missing identity descriptor before pthread_self'})) {
             $name=$case.Name
             $stdout=Join-Path $env:RUNNER_TEMP "$name.out"
             $stderr=Join-Path $env:RUNNER_TEMP "$name.err"
@@ -338,4 +338,72 @@ jobs:
               $process.Dispose()
               if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
             }
+          }
+  probe_legacy_compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: host-pthread-authority
+      - name: Build isolated original-recheck probe role
+        shell: bash
+        run: |
+          set -euo pipefail
+          legacy_root="$RUNNER_TEMP/gesher-routing-probe-legacy-toolchain"
+          test ! -e "$legacy_root"
+          mkdir "$legacy_root"
+          cp -a --reflink=auto "$GESHER_AUTHORITY_LLVM" "$legacy_root/$LLVM_MINGW_NAME"
+          cp --reflink=auto "$(dirname "$GESHER_AUTHORITY_LLVM")/compiler.tar.xz" "$legacy_root/compiler.tar.xz"
+          llvm="$legacy_root/$LLVM_MINGW_NAME"
+          bash tools/host-pthread-authority/build-supplier.sh "$llvm" probe-legacy
+          python3 tools/host-pthread-authority/probe_legacy_bundle.py build "$llvm"
+          python3 tools/host-pthread-authority/probe_legacy_bundle.py verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pthread-routing-probe-legacy
+          path: routing-probe-legacy/
+          if-no-files-found: error
+  probe_legacy_windows:
+    needs: probe_legacy_compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact original-recheck producer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/artifact_receipt.py --name pthread-routing-probe-legacy --producer probe_legacy_compile --destination routing-probe-legacy
+          if ($LASTEXITCODE -ne 0) { throw 'Original-recheck producer ZIP verification failed' }
+          python tools/host-pthread-authority/probe_legacy_bundle.py verify
+          if ($LASTEXITCODE -ne 0) { throw 'Original-recheck role verification failed' }
+      - name: Forced original recheck control
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $stdout=Join-Path $env:RUNNER_TEMP 'legacy-rw.out'; $stderr=Join-Path $env:RUNNER_TEMP 'legacy-rw.err'
+          $start=@{FilePath=(Join-Path $pwd 'routing-probe-legacy/sync-init-gate.exe'); WorkingDirectory=(Join-Path $pwd 'routing-probe-legacy'); WindowStyle='Hidden'; PassThru=$true; RedirectStandardOutput=$stdout; RedirectStandardError=$stderr; ArgumentList=@('--original-recheck')}
+          $process=Start-Process @start
+          try {
+            if (-not $process.WaitForExit(120000)) { throw 'Original-recheck timeout' }
+            $process.Refresh(); if ($process.ExitCode -ne 0) { throw "Original-recheck exit=$($process.ExitCode)" }
+            $actual=Get-Content -Raw -LiteralPath $stdout
+            if (-not $actual.Contains('PASS probe mixed rwlock forced lazy-init contention original-EINVAL handles=') -or $actual.Contains('FAIL ')) { throw 'Original-recheck control missing' }
+            Write-Host $actual
+          } finally {
+            if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Original-recheck cleanup failed' } }
+            $process.Dispose()
+            if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
+            if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
           }

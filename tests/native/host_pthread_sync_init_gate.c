@@ -2,6 +2,8 @@
 #include <pthread.h>
 #include <windows.h>
 #include <stdio.h>
+#include <errno.h>
+#include <string.h>
 #include <wchar.h>
 extern void __cdecl gesher_rwlock_init_gate_v1(void *,void *,void *);
 typedef int (__cdecl *rw_fn)(pthread_rwlock_t *);
@@ -13,7 +15,8 @@ static DWORD WINAPI run(void *p) {
   if (!t->result) t->result=t->dll?dll_unlock(&rw):pthread_rwlock_unlock(&rw);
   return 0;
 }
-int main(void) {
+int main(int argc,char **argv) {
+  int legacy=argc==2 && !strcmp(argv[1],"--original-recheck"); if (argc!=1 && !legacy) return 4;
   DWORD before,after; if (!GetProcessHandleCount(GetCurrentProcess(),&before)) return 1;
   HMODULE dll=LoadLibraryW(L"libwinpthread-1.dll"); if (!dll) return 1;
   wchar_t expected[32768],actual[32768]; DWORD n=GetModuleFileNameW(NULL,expected,32768),m=GetModuleFileNameW(dll,actual,32768);
@@ -29,7 +32,7 @@ int main(void) {
   if (!first || WaitForSingleObject(entered,5000)!=WAIT_OBJECT_0) goto done;
   second=CreateThread(NULL,0,run,&b,0,NULL);
   if (!second || WaitForSingleObject(contended,5000)!=WAIT_OBJECT_0 || !SetEvent(release) ||
-      WaitForSingleObject(first,5000)!=WAIT_OBJECT_0 || WaitForSingleObject(second,5000)!=WAIT_OBJECT_0 || a.result || b.result || pthread_rwlock_destroy(&rw)) goto done;
+      WaitForSingleObject(first,5000)!=WAIT_OBJECT_0 || WaitForSingleObject(second,5000)!=WAIT_OBJECT_0 || a.result || b.result!=(legacy?EINVAL:0) || pthread_rwlock_destroy(&rw)) goto done;
   ok=1;
 done:
   if (release) SetEvent(release);
@@ -40,5 +43,5 @@ done:
   if (entered) CloseHandle(entered); if (release) CloseHandle(release); if (contended) CloseHandle(contended);
   if (!FreeLibrary(dll) || GetModuleHandleW(L"libwinpthread-1.dll") || !GetProcessHandleCount(GetCurrentProcess(),&after) || after>before+8) return 3;
   if (!ok) return 2;
-  printf("PASS probe mixed rwlock forced lazy-init contention handles=%lu/%lu\n",before,after); return 0;
+  printf("PASS probe mixed rwlock forced lazy-init contention %s handles=%lu/%lu\n",legacy?"original-EINVAL":"corrected-success",before,after); return 0;
 }
