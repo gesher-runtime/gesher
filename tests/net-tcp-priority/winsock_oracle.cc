@@ -50,7 +50,7 @@ static void snapshot(SOCKET s, const char* phase, int inline_oob) {
 int main() {
   WSADATA data{};
   require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "startup");
-  for (int inline_oob = 0; inline_oob <= 2; ++inline_oob) {
+  for (int inline_oob = 0; inline_oob <= 3; ++inline_oob) {
     SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     require(listener != INVALID_SOCKET, "listener");
     sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -73,12 +73,34 @@ int main() {
     require(send(client, "!", 1, MSG_OOB) == 1, "urgent send");
     wait_bytes(server, 7);
     snapshot(server, "prefix-and-urgent", inline_oob);
-    if (inline_oob == 2) {
+    if (inline_oob >= 2) {
       require(send(client, "tail", 4, 0) == 4, "tail send");
       wait_bytes(server, 11);
       snapshot(server, "prefix-urgent-tail", inline_oob);
-      receive_prefix(server);
+      if (inline_oob == 3) {
+        char big[32]{};
+        int peeked = recv(server, big, sizeof(big), MSG_PEEK);
+        printf("WINDOWS_BOUNDARY phase=big-normal-peek rc=%d error=%d\n", peeked, peeked < 0 ? WSAGetLastError() : 0);
+        require(peeked == 6 && memcmp(big, "normal", 6) == 0, "BIG peek stops before urgent and preserves prefix");
+        snapshot(server, "after-big-prefix-peek", inline_oob);
+        int received = recv(server, big, sizeof(big), 0);
+        printf("WINDOWS_BOUNDARY phase=big-normal-read rc=%d error=%d\n", received, received < 0 ? WSAGetLastError() : 0);
+        require(received == 6 && memcmp(big, "normal", 6) == 0, "BIG read stops before urgent");
+      } else {
+        receive_prefix(server);
+      }
       snapshot(server, "prefix-consumed-urgent-tail-remain", inline_oob);
+      if (inline_oob == 3) {
+        char byte{};
+        int urgent_peek = recv(server, &byte, 1, MSG_OOB | MSG_PEEK);
+        printf("WINDOWS_BOUNDARY phase=atmark-oob-peek rc=%d error=%d byte=%d\n", urgent_peek, urgent_peek < 0 ? WSAGetLastError() : 0, static_cast<int>(byte));
+        require(urgent_peek == 1 && byte == '!', "OOB peek at boundary preserves byte");
+        char tail_peek[32]{};
+        int normal_peek = recv(server, tail_peek, sizeof(tail_peek), MSG_PEEK);
+        printf("WINDOWS_BOUNDARY phase=atmark-normal-peek rc=%d error=%d\n", normal_peek, normal_peek < 0 ? WSAGetLastError() : 0);
+        require(normal_peek == 4 && memcmp(tail_peek, "tail", 4) == 0, "normal PEEK at mark observes suffix without consuming urgent");
+        snapshot(server, "after-atmark-normal-peek", inline_oob);
+      }
       char urgent{};
       require(recv(server, &urgent, 1, MSG_OOB) == 1 && urgent == '!', "post-prefix urgent consume");
       snapshot(server, "urgent-consumed-tail-remains", inline_oob);
