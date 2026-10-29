@@ -41,6 +41,22 @@ The original Windows/package/e2e assertions remain in force.
 
 ## Open work and proof limits
 
+An owned component workflow is now prepared, not dispatched. Its preflight
+pins the complete allowed non-doc delta from f155 without editing historical
+full guards. It rebuilds the production standalone native host, bionic core
+fixture and matching ARM64 translator with the same verified llvm-mingw archive.
+Generated compiler records, actual C++ commands/flags and binary driver hashes
+bind both native roles; two real NDK caller binaries reuse the same CPU
+contracts and record their actual wrapper/clang identities. The publisher's
+r27c archive SHA1/size are checked and its SHA256 is recorded. A typed manifest
+binds all current source and exact payload members to source/run/attempt, with
+strict actual ZIP API receipts before Windows execution. Historical supplier
+guards are unchanged. This is a standalone component prerequisite; it does
+not replace ART/APK contexts, original whole suites, package or e2e proof.
+
+NDK publisher identity reference:
+https://github.com/android/ndk/wiki/Home/24fe2d7ee3591346e0e8ae615977a15c0a4fba40
+
 Linux reference CI recorded actual post-join gettime/getres EINVAL. Its
 observation is not a Windows proof.
 Dedicated test90 now has source-only independent brackets against owned Win32
