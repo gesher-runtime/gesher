@@ -77,3 +77,19 @@ unsupported socket families, IPv6-only default DNS, connectivity/hardware
 details and accelerated crypto remain the separate contracts in the Net4
 brief. This slice establishes no AF_PACKET socket implementation or physical
 network hardware coverage beyond the actual hosted interfaces inspected.
+
+## Ordinary UDP receive truncation component (full acceptance pending)
+
+Component40798611488/source8f224ecd actually passes both ELF ABIs on Windows
+2022 and2025 against independently executed Linux192 normal/176 fault rows.
+One complete Winsock datagram receive precedes fault-safe page-wise scatter,
+so consuming reads retain no tail and MSG_PEEK retains the original packet.
+Input MSG_TRUNC returns original length; recvmsg output flags report truncation
+independently of that input. Linux-measured payload/metadata EFAULT and partial
+prefix/queue ordering are required. OOB and WAITALL are ignored on ordinary
+IP UDP receives; ancillary data and unrelated socket families remain outside
+this contract. [Exact evidence and full gates](../handoff/tracks/net-udp-truncation.md).
+
+No inventory/history metadata or aggregate82-entry closure follows from this
+component. Full normal Windows suites, installed package and both e2e remain
+required before integration acceptance.

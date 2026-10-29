@@ -1,7 +1,7 @@
 # Net4 UDP truncation — source checkpoint
 
-Status: implementation and fixtures prepared; **bounded source/helper checks
-only; no real bionic socket ABI qualification or full CI acceptance**.
+Status: **actual both-ABI socket component40798611488 passes on both Windows;
+full CI acceptance remains pending**.
 Base f1550540186b4ae3f17a5e501a886ec1c4d5d613, exclusive branch
 `wip/net-udp-trunc`, test89, existing ADR0070. Source peer is required before
 production dispatch. This work does not modify native-api-coverage.json or any of
@@ -245,3 +245,29 @@ private runtime/wrong CRT/forged role and both host-only imports on translator.
 Actual same-producer image/member hashes and current-run/attempt ZIP receipts
 remain mandatory, as do all source/compiler/ABI/row/negative gates. No DLL
 from a prior run is reused; a fresh component and source peer are required.
+
+## Fresh actual socket ABI component40798611488
+
+Exact source8f224ecd2a0ce5e7123e1071a4b96618e7094e54, attempt1, all4 jobs
+success. One fresh compile producer123201072172 built production host, matching
+ARM64 DLL/smoke and four typed NDK ELFs, and executed independent Linux192/176
+plus the negative. Both Windows verify current source/run/attempt and identical
+complete source/member/compiler receipts before actual socket execution.
+Artifact12864912950 has ZIP SHA256
+`ecb4f2f2cd8959b31312ae183b640dfa7b5774c0733753a283beb8f98b91104b`.
+
+Independently read saved `udp-407986-{compile,2022,2025}.log`. Each Windows
+actually executes smoke plus main/fault/negative for x86_64 and arm64:192
+Linux-identical normal rows and176 fault rows per ABI,128 alias packets and
+stream control per main fixture, and real missing-MSG_TRUNC rejection. Raw
+rows were independently counted (384 main/352 fault per runner), both image
+sets and all16 member digests are identical between runners. Host SHA256 is
+`22296700b8f9f4db71a3da1cc27dd551070a9a5253b82a84cb02b7c9802f894b`; matching
+translator is `a01cd9e44a2429f8d84dfcaa44a1a58d4c6d4a1db162c1f7db814fd83b8c4424`.
+
+Final immutable guard6c099af6fd4a0f53335851e87d7afef0fd557644 freezes the15
+exact reviewed component/production delta blobs at8f against the completef155
+non-doc tree. The new local caller references that immutable commit. Independent
+security/source peer must approve exact caller bytes and external maintainer
+NET_UDP_FULL_CALLER_COMMIT before dispatch. Full normal suites/package/e2e
+remain mandatory; this component does not close inventory/aggregate Net4.
