@@ -85,7 +85,38 @@ static void scenario(int mode) {
   char byte{}; require(recv(attempt.socket, &byte, 1, 0) == 1 && byte == 'v', "late actual payload");
   require(close(peer) == 0 && close(accepted_filler) == 0 && close(filler) == 0 && close(attempt.socket) == 0 && close(listener) == 0, "all kernel resources closed");
 }
+static void listener_transition_reference(int mode) {
+  int reserved = socket(AF_INET, SOCK_STREAM, 0); require(reserved >= 0, "listen reference reserve");
+  sockaddr_in target{}; target.sin_family = AF_INET; target.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(reserved, reinterpret_cast<sockaddr*>(&target), sizeof(target)) == 0, "listen reference reserved bind");
+  socklen_t length = sizeof(target); require(getsockname(reserved, reinterpret_cast<sockaddr*>(&target), &length) == 0, "listen reference target");
+  int client = socket(AF_INET, SOCK_STREAM | (mode == 2 ? SOCK_NONBLOCK : 0), 0); require(client >= 0, "listen reference client");
+  int connected = -99, connect_error = -99, initial_error = 0;
+  if (mode) {
+    connected = connect(client, reinterpret_cast<sockaddr*>(&target), sizeof(target)); connect_error = errno;
+    if (mode == 2) { pollfd p{client, POLLOUT, 0}; require(poll(&p, 1, 2000) == 1, "listen reference nonblocking refusal completion"); }
+    initial_error = socket_error(client);
+    require(connected == -1 && (mode == 2 ? connect_error == EINPROGRESS && initial_error == ECONNREFUSED : connect_error == ECONNREFUSED && initial_error == 0), "listen reference actual failed state");
+  }
+  const int rebound = bind(client, reinterpret_cast<sockaddr*>(&target), sizeof(target)), bind_error = rebound < 0 ? errno : 0;
+  const int listened = listen(client, 1), listen_error = listened < 0 ? errno : 0;
+  pollfd p{client, POLLPRI, 0}; const long long start = millis(); const int ready = poll(&p, 1, listened == 0 ? 60 : 0);
+  sockaddr_in local{}; length = sizeof(local); const int local_result = getsockname(client, reinterpret_cast<sockaddr*>(&local), &length);
+  printf("LINUX_LISTEN_TRANSITION mode=%d connect_rc=%d connect_error=%d first_error=%d bind_rc=%d bind_error=%d listen_rc=%d listen_error=%d poll=%d revents=%d elapsed_ms=%lld local_rc=%d local_port=%u\n", mode, connected, connect_error, initial_error, rebound, bind_error, listened, listen_error, ready, p.revents, millis() - start, local_result, ntohs(local.sin_port)); fflush(stdout);
+  if (listened == 0) {
+    require(ready == 0 && p.revents == 0 && millis() - start >= 40, "actual empty listener preserves finite priority wait");
+    local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    int incoming = socket(AF_INET, SOCK_STREAM, 0); require(incoming >= 0 && connect(incoming, reinterpret_cast<sockaddr*>(&local), sizeof(local)) == 0, "actual transitioned listener accepts new transport");
+    p = {client, POLLIN, 0}; require(poll(&p, 1, 2000) == 1, "new accepted transport available");
+    int peer = accept(client, nullptr, nullptr); require(peer >= 0 && send(incoming, "p", 1, MSG_NOSIGNAL) == 1, "actual new transition payload");
+    p = {peer, POLLIN, 0}; require(poll(&p, 1, 2000) == 1, "transition payload available");
+    char byte{}; require(recv(peer, &byte, 1, 0) == 1 && byte == 'p', "transition payload intact");
+    require(close(peer) == 0 && close(incoming) == 0, "transition transport cleanup");
+  }
+  require(close(client) == 0 && close(reserved) == 0, "listen reference cleanup");
+}
 int main() {
   for (int mode = 0; mode != 4; ++mode) scenario(mode);
+  for (int mode = 0; mode != 3; ++mode) listener_transition_reference(mode);
   puts("PASS independent Linux actual connect send timeout caller cancellation both mode directions and late transport completion");
 }
