@@ -137,3 +137,18 @@ state during mutation. Exact logs are retained under
 The complete192-row Linux main matrix is added to the narrow workflow at
 f942da28, pending peer/CI. Both bionic ELF ABIs still require actual execution,
 followed by the immutable full caller policy and every original full gate.
+
+## Actual ABI component preparation (successor checkpoint)
+
+HEAD859d5193 was preserved without resetting any work. The standalone
+net-udp-component workflow rebuilds the production gesher-exec host and
+matching ARM64 translator with the pinned LLVM-Mingw, plus four fresh NDK
+ELFs, before either Windows runner executes sockets. It independently executes
+Linux192 main/176 fault rows and the missing-MSG_TRUNC negative. Exact-source
+source/member/compiler roles and actual current-run/attempt producer ZIP
+receipts are mandatory. No previous component archive is reused.
+
+The component workflow, payload verifier and byte-pinned source manifest are
+prepared for independent source peer before push. No actual socket ABI result
+or full acceptance is claimed. The preserved immutable full guard draft remains
+uncommitted and must be completed only after component/code review.
