@@ -539,11 +539,14 @@ bool RevokeInstall(const std::u16string& package, const std::u16string& install)
     }
   }
   if (ok && package == guest::kSelectedPackage) {
-    for (auto it = g_children.begin(); it != g_children.end();) {
-      if (it->second.package == package && it->second.install == install) {
-        if (WaitForSingleObject(it->second.process, 0) != WAIT_OBJECT_0) { ok = false; break; }
-        it = g_children.erase(it);
-      } else ++it;
+    for (auto& entry : g_children) {
+      auto& child = entry.second;
+      if (child.package == package && child.install == install) {
+        if (WaitForSingleObject(child.process, 0) != WAIT_OBJECT_0) { ok = false; break; }
+        // Release resource ownership after exact death, but retain the process
+        // and its terminal DWORD for the original ExitStatus observer.
+        child.policy.reset();
+      }
     }
     if (ok) {
       auto policy = g_installed.find(package);

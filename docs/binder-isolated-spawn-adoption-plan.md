@@ -1,6 +1,28 @@
 # Production restricted SpawnOwned adoption checkpoint
 
-## Implemented candidate, 2026-10-29 (not compiled or qualified)
+## Implemented candidate, 2026-10-29 (production caller remains unqualified)
+
+Bounded resource component40855105060/attempt1 is GREEN at exactac596f49,
+three jobs including original non-debug Windows2022/2025. Worker reread actual
+records in `C:/work/gesher-ci-review/binder-policy-40855105060.log`: four distinct
+root/asset/data/final-file rename attempts each moved0/error32; exact low and
+missing-NW label counterexamples rejected with owners0; real nested lowbox
+create/reopen/read/delete/exit0/Stop; actual bootstrap-name malicious serving
+denied5 and both private endpoints non-inheritable; post-enumeration inserted
+reparse target unchanged through actual grant/revoke/label restoration;
+injected5 retained, real retry confirmed, postcleanup rename and allowners0.
+Both Windows verified 16 strict receipt mutations and complete process/reader
+cleanup. Producer123383986216; archive12888254079 digest498bd206d716cf2dfd5b5bf6ab1494951f46f3a1de3cd355b946264803148b8c;
+compiler c9b86311ade81d53235c93fafabdf98328d094de344ea9a9038e0dab6695ee9f;
+executable ed353725e02ebaf626a366d145a746841631ed3571610a703e5d328f2f68626f.
+This qualifies the bounded policy component only. Full SystemServer/JNI/
+SpawnOwned/Binder listener/ABI3 path is not yet compiled or accepted. Its final
+source peer and both-role actual APK/Binder full CI remain mandatory.
+
+Caller source review also preserves original terminal observation on install
+revoke: after confirmed exact child death, release its resource-policy reference
+but keep the retained process owner and terminal DWORD until ExitStatus consumes
+them. Never erase the record merely to permit profile/resource retirement.
 
 Changed-source component40854555974/attempt1 at exact1d235057 also compiled and
 passed both Windows strict receipts, then failed the new fixture's label setter
