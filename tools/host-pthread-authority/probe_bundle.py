@@ -12,8 +12,8 @@ DIST = ROOT / 'routing-probe-fixture'
 CASES = {'operations.exe': ('host_pthread_routing_operations.c', 'libwinpthread.a'),
          'strict.exe': ('host_pthread_process_identity_acceptance.c', 'libwinpthread.a'),
          'standalone.exe': ('host_pthread_routing_standalone.c', 'libwinpthread.dll.a'),
-         'bad-anchor.exe': ('host_pthread_routing_bad_anchor.c', 'libwinpthread.dll.a'),
-         'missing-anchor.exe': ('host_pthread_routing_missing_anchor.c', 'libwinpthread.dll.a')}
+         'bad-anchor.exe': ('host_pthread_routing_bad_anchor.c', 'libwinpthread.a'),
+         'missing-anchor.exe': ('host_pthread_routing_missing_anchor.c', 'libwinpthread.a')}
 
 def sha(p):
     return hashlib.sha256(Path(p).read_bytes()).hexdigest()
