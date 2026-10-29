@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [wip/net-tcp-priority, wip/net-tcp-error-state]
-    paths: [.github/workflows/net-tcp-priority-characterization.yml, tests/net-tcp-priority/winsock_oracle.cc, tests/net-tcp-priority/connectex_oracle.cc, tests/net-tcp-priority/connect_lifecycle_oracle.cc, tests/net-tcp-priority/contract.cc]
+    paths: [.github/workflows/net-tcp-priority-characterization.yml, tests/net-tcp-priority/winsock_oracle.cc, tests/net-tcp-priority/connectex_oracle.cc, tests/net-tcp-priority/connect_lifecycle_oracle.cc, tests/net-tcp-priority/connect_owner_module.h, tests/net-tcp-priority/connect_owner_module.cc, tests/net-tcp-priority/connect_owner_driver.cc, tests/net-tcp-priority/contract.cc]
 permissions:
   contents: read
 jobs:
@@ -45,3 +45,14 @@ jobs:
         run: |
           & ./connectex-oracle.exe
           if ($LASTEXITCODE -ne 0) { throw 'ConnectEx characterization failed' }
+      - name: Compile independent module ownership and unload oracle
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /MD /W4 /WX /LD tests\net-tcp-priority\connect_owner_module.cc /Fe:connect-owner-module.dll /link ws2_32.lib
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++20 /MD /W4 /WX tests\net-tcp-priority\connect_owner_driver.cc /Fe:connect-owner-driver.exe /link ws2_32.lib
+      - name: Observe repeated actual module pin, TLS exit, close and handle retirement
+        shell: pwsh
+        run: |
+          & ./connect-owner-driver.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Native module ownership characterization failed' }

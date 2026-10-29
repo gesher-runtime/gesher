@@ -66,10 +66,44 @@ static void scenario(bool success, bool nonblocking, bool flip) {
     require(recv(client, &byte, 1, MSG_OOB) == 1 && byte == '!', "urgent payload");
     p.revents = 0; require(poll(&p, 1, 0) == 0 && p.revents == 0, "urgent cleared");
     require(close(accepted) == 0, "accepted close");
+  } else {
+    for (int action = 0; action != 4; ++action) {
+      ssize_t result;
+      if (action == 0) result = send(client, "x", 1, MSG_NOSIGNAL | MSG_DONTWAIT);
+      else if (action == 1) result = send(client, "!", 1, MSG_NOSIGNAL | MSG_DONTWAIT | MSG_OOB);
+      else if (action == 2) result = sendto(client, "x", 1, MSG_NOSIGNAL | MSG_DONTWAIT, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+      else result = shutdown(client, SHUT_RDWR);
+      const int error = result < 0 ? errno : 0;
+      const int caller_error = option(client, SOL_SOCKET, SO_ERROR);
+      pollfd p{client, POLLPRI, 0}; const int ready = poll(&p, 1, 0);
+      printf("LINUX_TERMINAL action=%d rc=%lld error=%d caller_error=%d poll=%d revents=%d\n", action, static_cast<long long>(result), error, caller_error, ready, p.revents); fflush(stdout);
+      require(result == -1 && (error == EPIPE || error == ENOTCONN) && caller_error == 0 && ready == 1 && p.revents == POLLHUP, "terminal operations preserve consumed error and hangup");
+    }
   }
   require(close(client) == 0 && close(target) == 0, "endpoint cleanup");
 }
+static void reset_positive() {
+  int listener = socket(AF_INET, SOCK_STREAM, 0); require(listener >= 0, "reset listener");
+  sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0 && listen(listener, 1) == 0, "reset listener bind/listen");
+  socklen_t length = sizeof(address); require(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length) == 0, "reset address");
+  int client = socket(AF_INET, SOCK_STREAM, 0); require(client >= 0 && connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "reset connected client");
+  int peer = accept(listener, nullptr, nullptr); require(peer >= 0, "reset accepted peer");
+  linger abortive{1, 0}; require(setsockopt(peer, SOL_SOCKET, SO_LINGER, &abortive, sizeof(abortive)) == 0 && close(peer) == 0, "reset actual abortive close");
+  pollfd p{client, POLLIN | POLLOUT | POLLPRI, 0};
+  // Writability alone may precede the arriving reset. Bound retries with sleep.
+  for (int i = 0; i != 200; ++i) {
+    require(poll(&p, 1, 0) >= 0, "reset poll");
+    if (p.revents & POLLERR) break;
+    usleep(10000);
+  }
+  const int first = option(client, SOL_SOCKET, SO_ERROR), second = option(client, SOL_SOCKET, SO_ERROR);
+  printf("LINUX_RESET positive=1 revents=%d first=%d second=%d\n", p.revents, first, second); fflush(stdout);
+  require((p.revents & POLLERR) && first == ECONNRESET && second == 0, "new established error remains visible exactly once");
+  require(close(client) == 0 && close(listener) == 0, "reset cleanup");
+}
 int main() {
   for (int success = 0; success != 2; ++success) for (int mode = 0; mode != 2; ++mode) for (int flip = 0; flip != 2; ++flip) scenario(success != 0, mode != 0, flip != 0);
+  reset_positive();
   puts("PASS independent Linux connect mode/bind/options/error/urgent lifecycle reference");
 }

@@ -48,14 +48,14 @@ static Operation* operation(int nonblocking) {
   require(setsockopt(op->socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout)) == 0, "receive option");
   return op;
 }
-static void submit(Operation* op, const sockaddr_in& address) {
+static void submit(Operation* op, const sockaddr_in& address, bool original_contract = true) {
   op->address = address;
   const ULONGLONG start = GetTickCount64();
   BOOL rc = op->function(op->socket, reinterpret_cast<const sockaddr*>(&op->address), sizeof(op->address), nullptr, 0, nullptr, &op->overlap);
   op->start_error = rc ? 0 : WSAGetLastError(); op->call_ms = GetTickCount64() - start;
   op->queued = rc || op->start_error == ERROR_IO_PENDING;
   printf("CONNECTEX_SUBMIT rc=%d error=%d elapsed_ms=%llu queued=%d\n", rc != 0, op->start_error, op->call_ms, op->queued ? 1 : 0); fflush(stdout);
-  require((op->queued || op->start_error == WSAECONNREFUSED) && op->call_ms < 1500, "actual overlapped submission is bounded");
+  require((!original_contract || op->queued || op->start_error == WSAECONNREFUSED) && op->call_ms < 1500, "actual overlapped submission is bounded");
   if (!op->queued) op->completed = true;
 }
 static void poll_state(Operation* op, const char* phase) {
@@ -251,11 +251,70 @@ static void persistent_owner() {
   DeleteCriticalSection(&owner.mutex);
   puts("PASS independent persistent IO owner: requester exit, two native outcomes, completion drain and bounded shutdown");
 }
+static void terminal_boundary() {
+  Target refused = target(false); Operation* op = operation(1); submit(op, refused.address);
+  require(finish(op, "terminal-refusal") == WSAECONNREFUSED, "terminal actual refusal");
+  errors(op->socket, "terminal-refusal-caller");
+  for (int action = 0; action != 4; ++action) {
+    int result;
+    if (action == 0) result = send(op->socket, "x", 1, 0);
+    else if (action == 1) result = send(op->socket, "!", 1, MSG_OOB);
+    else if (action == 2) result = sendto(op->socket, "x", 1, 0, reinterpret_cast<sockaddr*>(&refused.address), sizeof(refused.address));
+    else result = shutdown(op->socket, SD_BOTH);
+    const int error = result == SOCKET_ERROR ? WSAGetLastError() : 0;
+    int native_error = -1, length = sizeof(native_error);
+    require(getsockopt(op->socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&native_error), &length) == 0, "post-terminal native error observation");
+    printf("CONNECTEX_TERMINAL action=%d rc=%d error=%d caller_error=%d\n", action, result, error, native_error); fflush(stdout);
+    require(result == SOCKET_ERROR && error == WSAENOTCONN, "terminal operation cannot use an established transport");
+    // This is an observation of reachable APIs, not proof that every possible
+    // future provider/network error has the same readiness signature.
+    poll_state(op, "terminal-after-operation");
+  }
+  // A real next native attempt is observed on the SAME socket. Its result is
+  // not assumed portable: a product generation must change before this call.
+  Target next = target(true);
+  require(WSAResetEvent(op->event), "retired operation event reset");
+  op->overlap = {}; op->overlap.hEvent = op->event;
+  op->completed = false; op->queued = false; op->start_error = -1;
+  submit(op, next.address, false);
+  const int retry = finish(op, "same-socket-retry");
+  printf("CONNECTEX_RETRY same_socket=1 completion=%d\n", retry); fflush(stdout);
+  errors(op->socket, "same-socket-retry-caller");
+  if (retry == 0) {
+    require(setsockopt(op->socket, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, nullptr, 0) == 0, "retry success context");
+    data_and_options(op, next);
+  }
+  retire(op); require(closesocket(refused.socket) == 0 && closesocket(next.socket) == 0, "terminal boundary cleanup");
+
+  // Positive native-error control on a separately established transport. An
+  // implementation must never apply failed-attempt masking to this phase.
+  Target connected = target(true); op = operation(1); submit(op, connected.address);
+  require(finish(op, "reset-positive-connect") == 0, "reset control established transport");
+  require(setsockopt(op->socket, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, nullptr, 0) == 0, "reset control context");
+  SOCKET peer = accept(connected.socket, nullptr, nullptr); require(peer != INVALID_SOCKET, "reset control accept");
+  linger abortive{1, 0}; require(setsockopt(peer, SOL_SOCKET, SO_LINGER, reinterpret_cast<char*>(&abortive), sizeof(abortive)) == 0 && closesocket(peer) == 0, "actual abortive peer close");
+  WSAPOLLFD p{}; p.fd = op->socket; p.events = POLLRDBAND | POLLRDNORM | POLLWRNORM;
+  const ULONGLONG deadline = GetTickCount64() + 2000;
+  do {
+    require(WSAPoll(&p, 1, 0) >= 0, "native reset readiness observation");
+    if (p.revents & POLLERR) break;
+    Sleep(10);
+  } while (GetTickCount64() < deadline);
+  int first = -1, second = -1, length = sizeof(first);
+  require(getsockopt(op->socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&first), &length) == 0, "actual reset first native caller");
+  length = sizeof(second); require(getsockopt(op->socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&second), &length) == 0, "actual reset second native caller");
+  printf("CONNECTEX_RESET positive=1 revents=%d first=%d second=%d\n", p.revents, first, second); fflush(stdout);
+  require((p.revents & POLLERR) && first == WSAECONNRESET, "independent established native error remains observable");
+  poll_state(op, "established-reset-after-caller");
+  retire(op); require(closesocket(connected.socket) == 0, "reset positive cleanup");
+  puts("PASS independent reachable terminal operations and established-error positive control; terminal masking remains a separate product review");
+}
 int main() {
   WSADATA data{}; require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "startup");
   for (int success = 0; success != 2; ++success) for (int mode = 0; mode != 2; ++mode) for (int flip = 0; flip != 2; ++flip) scenario(success != 0, mode, flip != 0);
   cancellation(false); cancellation(true); thread_exit();
   persistent_owner();
+  terminal_boundary();
   require(WSACleanup() == 0, "cleanup");
   puts("PASS independent ConnectEx mode/context/error/cancel/thread-owner characterization; no production qualification");
 }
