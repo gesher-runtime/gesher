@@ -49,6 +49,7 @@ struct Handle {
 };
 #ifdef GESHER_PROPERTY_READONLY_DIAGNOSTIC
 thread_local HANDLE diagnostic_wait_event = nullptr;
+HANDLE diagnostic_inherited_mutex = nullptr;
 #endif
 struct MutexLock {
   HANDLE mutex;
@@ -344,6 +345,12 @@ Area* Current() { // LocalMutex is held by every caller.
   auto area = std::make_unique<Area>();
   area->root = data;
   area->persistent = data + L"\\property\\persistent_properties";
+#ifdef GESHER_PROPERTY_READONLY_DIAGNOSTIC
+  if (diagnostic_inherited_mutex) {
+    if (!DuplicateHandle(GetCurrentProcess(), diagnostic_inherited_mutex, GetCurrentProcess(), &area->mutex.value,
+                         SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, 0)) return nullptr;
+  } else
+#endif
   area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
   MutexLock lock(area->mutex.value);
   if (!lock.held) { Diagnostic("mutex", GetLastError()); return nullptr; }
@@ -421,6 +428,12 @@ bool Valid(const std::string& name, const std::string& value) {
 #ifdef GESHER_PROPERTY_READONLY_DIAGNOSTIC
 // CI-only synchronization observation. The caller must release on its same thread.
 void DiagnosticSetWaitEvent(HANDLE event) { diagnostic_wait_event = event; }
+void DiagnosticSetInheritedMutex(HANDLE mutex) { diagnostic_inherited_mutex = mutex; }
+HANDLE DiagnosticAreaMutex() {
+  std::lock_guard local(LocalMutex());
+  Area* area = Current();
+  return area ? area->mutex.value : nullptr;
+}
 HANDLE DiagnosticHoldAreaMutex() {
   std::lock_guard local(LocalMutex());
   Area* area = Current();
