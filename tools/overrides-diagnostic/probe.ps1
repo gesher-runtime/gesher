@@ -52,7 +52,8 @@ param([string] $Probe, [string] $Helper)
     $text = $stdout.Result + $stderr.Result
     Write-Host "GEOCODER_PROVIDER mode=$Mode current_run=$actualRun source=$source pid=$pidValue birth=$birth exit=$($process.ExitCode) requested_cwd=$($info.WorkingDirectory) probe_sha256=$((Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash) exe_sha256=$((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)"
     Write-Host $text
-    if ($process.ExitCode -ne 0 -or $text -notmatch ('GEOCODER_CHILD_CWD pid=' + $pidValue + ' native=') -or $text -notmatch 'status: ([A-Za-z]+)' -or $text -notmatch 'WINRT_PROVIDER task_status=RanToCompletion') { throw 'Original provider result missing' }
+    $cwdMarker = 'GEOCODER_CHILD_CWD pid=' + $pidValue + ' native=' + $info.WorkingDirectory + ' shell='
+    if ($process.ExitCode -ne 0 -or $text.IndexOf($cwdMarker, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or $text -notmatch 'status: ([A-Za-z]+)' -or $text -notmatch 'WINRT_PROVIDER task_status=RanToCompletion') { throw 'Original provider result or actual native working directory missing' }
   } finally { $process.Dispose() }
   Observe 'after-provider'
 } finally {
