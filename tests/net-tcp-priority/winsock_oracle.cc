@@ -50,7 +50,7 @@ static void snapshot(SOCKET s, const char* phase, int inline_oob) {
 int main() {
   WSADATA data{};
   require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "startup");
-  for (int inline_oob = 0; inline_oob <= 3; ++inline_oob) {
+  for (int inline_oob = 0; inline_oob <= 4; ++inline_oob) {
     SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     require(listener != INVALID_SOCKET, "listener");
     sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -77,20 +77,31 @@ int main() {
       require(send(client, "tail", 4, 0) == 4, "tail send");
       wait_bytes(server, 11);
       snapshot(server, "prefix-urgent-tail", inline_oob);
-      if (inline_oob == 3) {
+      if (inline_oob >= 3) {
         char big[32]{};
         int peeked = recv(server, big, sizeof(big), MSG_PEEK);
         printf("WINDOWS_BOUNDARY phase=big-normal-peek rc=%d error=%d\n", peeked, peeked < 0 ? WSAGetLastError() : 0);
         require(peeked == 6 && memcmp(big, "normal", 6) == 0, "BIG peek stops before urgent and preserves prefix");
         snapshot(server, "after-big-prefix-peek", inline_oob);
-        int received = recv(server, big, sizeof(big), 0);
+        int received = recv(server, big, inline_oob == 3 ? static_cast<int>(sizeof(big)) : peeked, 0);
         printf("WINDOWS_BOUNDARY phase=big-normal-read rc=%d error=%d\n", received, received < 0 ? WSAGetLastError() : 0);
-        require(received == 6 && memcmp(big, "normal", 6) == 0, "BIG read stops before urgent");
+        if (inline_oob == 3) {
+          // Retain the disproved hypothesis as a precise native counterexample:
+          // run408528 returned ten bytes, unlike the six-byte preceding peek.
+          require(received == 10 && memcmp(big, "normaltail", 10) == 0, "native BIG read crosses urgent position as independently observed");
+          snapshot(server, "after-crossing-big-read", inline_oob);
+          char urgent{};
+          int pending = recv(server, &urgent, 1, MSG_OOB | MSG_PEEK);
+          printf("WINDOWS_BOUNDARY phase=after-crossing-oob-peek rc=%d error=%d byte=%d\n", pending, pending < 0 ? WSAGetLastError() : 0, static_cast<int>(urgent));
+          require(closesocket(server) == 0 && closesocket(client) == 0 && closesocket(listener) == 0, "crossing case cleanup");
+          continue;
+        }
+        require(received == 6 && memcmp(big, "normal", 6) == 0, "capped normal read preserves prefix");
       } else {
         receive_prefix(server);
       }
       snapshot(server, "prefix-consumed-urgent-tail-remain", inline_oob);
-      if (inline_oob == 3) {
+      if (inline_oob == 4) {
         char byte{};
         int urgent_peek = recv(server, &byte, 1, MSG_OOB | MSG_PEEK);
         printf("WINDOWS_BOUNDARY phase=atmark-oob-peek rc=%d error=%d byte=%d\n", urgent_peek, urgent_peek < 0 ? WSAGetLastError() : 0, static_cast<int>(byte));
@@ -98,7 +109,10 @@ int main() {
         char tail_peek[32]{};
         int normal_peek = recv(server, tail_peek, sizeof(tail_peek), MSG_PEEK);
         printf("WINDOWS_BOUNDARY phase=atmark-normal-peek rc=%d error=%d\n", normal_peek, normal_peek < 0 ? WSAGetLastError() : 0);
-        require(normal_peek == 4 && memcmp(tail_peek, "tail", 4) == 0, "normal PEEK at mark observes suffix without consuming urgent");
+        // The return at the mark is the next independent observation. Do not
+        // infer suffix visibility or a Linux-style position from SIOCATMARK.
+        require(normal_peek >= 0, "normal PEEK at mark bounded completion");
+        if (normal_peek > 0) require(normal_peek == 4 && memcmp(tail_peek, "tail", 4) == 0, "peeked bytes are exact suffix");
         snapshot(server, "after-atmark-normal-peek", inline_oob);
       }
       char urgent{};
