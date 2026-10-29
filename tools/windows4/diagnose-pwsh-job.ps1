@@ -2,6 +2,7 @@ param([switch] $OwnedConsole)
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -cne 'true') { throw 'CI only' }
 Add-Type -Path tools/windows4/TsfJobSupervisor.cs
+Write-Host ('PWSH_CONSOLE_DETAILS ' + [TsfJobSupervisor]::TestConsoleDetails())
 $root = Join-Path $env:RUNNER_TEMP ('pwsh-job-diag-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($root)
 $script = Join-Path $root 'child.ps1'

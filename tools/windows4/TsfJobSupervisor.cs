@@ -179,6 +179,12 @@ public static class TsfJobSupervisor {
     for(int i=0;i<count;i++) if(processes[i]==GetCurrentProcessId()) return true;
     return false;
   }
+  public static string TestConsoleDetails() {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
+    uint[] processes=new uint[256]; uint count=GetConsoleProcessList(processes,(uint)processes.Length); int error=count==0?Marshal.GetLastWin32Error():0;
+    string ids=""; if(count<=processes.Length) for(int i=0;i<count;i++) ids+=(i==0?"":",")+processes[i];
+    return "pid="+GetCurrentProcessId()+" hwnd="+GetConsoleWindow().ToInt64()+" count="+count+" error="+error+" members="+ids;
+  }
   public sealed class ConsoleLease { internal IntPtr Host, Input, Output, Error; public uint Pid; public long Birth; public string Image; }
   public static ConsoleLease TestCreateConsole() {
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || TestParentConsole()) throw new InvalidOperationException("CI only; console must be absent");
