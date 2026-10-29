@@ -31,20 +31,25 @@ foreach ($fault in @('normal', 'com', 'class', 'window', 'hook', 'ready', 'decis
   }
   $p = Start-Process -FilePath $probe -ArgumentList $fault -NoNewWindow -PassThru `
     -RedirectStandardOutput $out -RedirectStandardError $err
-  $timeoutMs = if ($fault -eq 'normal') { 45000 } else { 20000 }
-  if (-not $p.WaitForExit($timeoutMs)) {
-    $p.Kill($true)
-    if (-not $p.WaitForExit(5000)) { throw "Startup probe $fault survived forced cleanup" }
-    Write-Host "FAIL web4 startup: $fault timed out"; $script:failed++
-  } else {
-    $log = (Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue) +
-      (Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)
-    Write-Host $log
-    if ($p.ExitCode -ne 0 -or $log -notmatch "PASS startup fault=$fault ") {
-      Write-Host "FAIL web4 startup: $fault exit $($p.ExitCode)"; $script:failed++
+  try {
+    $timeoutMs = if ($fault -eq 'normal') { 45000 } else { 20000 }
+    if (-not $p.WaitForExit($timeoutMs)) {
+      Write-Host "FAIL web4 startup: $fault timed out"; $script:failed++
+    } else {
+      $log = (Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue) +
+        (Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)
+      Write-Host $log
+      if ($p.ExitCode -ne 0 -or $log -notmatch "PASS startup fault=$fault ") {
+        Write-Host "FAIL web4 startup: $fault exit $($p.ExitCode)"; $script:failed++
+      }
     }
+  } finally {
+    if (-not $p.HasExited) {
+      $p.Kill($true)
+      if (-not $p.WaitForExit(5000)) { throw "Startup probe $fault survived forced cleanup" }
+    }
+    $p.Dispose()
   }
-  $p.Dispose()
 }
 
 if (-not ('GesherWebViewWin32' -as [type])) {

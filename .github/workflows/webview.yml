@@ -164,17 +164,21 @@ jobs:
           foreach ($fault in 'normal', 'com', 'class', 'window', 'hook', 'ready', 'decision', 'late') {
             $p = Start-Process 'dist/webview_startup_probe.exe' -ArgumentList $fault -NoNewWindow -PassThru `
               -RedirectStandardOutput "$fault.log" -RedirectStandardError "$fault.err"
-            $timeoutMs = if ($fault -eq 'normal') { 45000 } else { 20000 }
-            if (-not $p.WaitForExit($timeoutMs)) {
-              $p.Kill($true)
-              if (-not $p.WaitForExit(5000)) { throw "$fault survived forced cleanup" }
-              throw "$fault timed out"
-            }
-            $out = (Get-Content -Raw "$fault.log" -ErrorAction SilentlyContinue) +
-              (Get-Content -Raw "$fault.err" -ErrorAction SilentlyContinue)
-            Write-Host $out
-            if ($p.ExitCode -ne 0 -or $out -notmatch "PASS startup fault=$fault ") {
-              throw "$fault failed exit $($p.ExitCode)"
+            try {
+              $timeoutMs = if ($fault -eq 'normal') { 45000 } else { 20000 }
+              if (-not $p.WaitForExit($timeoutMs)) { throw "$fault timed out" }
+              $out = (Get-Content -Raw "$fault.log" -ErrorAction SilentlyContinue) +
+                (Get-Content -Raw "$fault.err" -ErrorAction SilentlyContinue)
+              Write-Host $out
+              if ($p.ExitCode -ne 0 -or $out -notmatch "PASS startup fault=$fault ") {
+                throw "$fault failed exit $($p.ExitCode)"
+              }
+            } finally {
+              if (-not $p.HasExited) {
+                $p.Kill($true)
+                if (-not $p.WaitForExit(5000)) { throw "$fault survived forced cleanup" }
+              }
+              $p.Dispose()
             }
           }
 
