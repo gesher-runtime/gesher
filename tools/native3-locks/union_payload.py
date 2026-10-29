@@ -185,6 +185,8 @@ def main():
             actual[name] = '0' * 40
             assert actual != FONTS_PINS
             print('FONTS_PREFLIGHT_NEGATIVE blob=' + name + ' rejected', flush=True)
+        assert not (changed | {'tests/native2/fonts_unreviewed.c'}) <= allowed
+        print('FONTS_PREFLIGHT_NEGATIVE unauthorized_path rejected', flush=True)
         # Exercise the same comparisons with a forged blob for each new leaf.
         actual_media = {name: subprocess.check_output(['git', 'hash-object', name], cwd=ROOT, text=True).strip()
                         for name in MEDIA4_PINS}
