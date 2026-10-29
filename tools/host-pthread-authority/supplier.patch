@@ -3086,3 +3086,1165 @@
 -  const struct gesher_identity_probe_v5 *owner=identity_probe_owner();
 +  const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
    if (owner) return owner->getname(thread, name, len);
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -51,4 +51,5 @@
+ #include "misc.h"
+ #include "thread.h"
++#include "gesher_sync_probe.h"
+
+ static _pthread_v *__pthread_self_lite (void);
+@@ -851,4 +852,187 @@
+
+
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++static int * __cdecl gesher_sync_errno(void) { return &errno; }
++__declspec(dllexport) const struct gesher_sync_probe_v1 * __cdecl gesher_sync_probe_v1(void)
++{
++  static const struct gesher_sync_probe_v1 table={sizeof(table),1,gesher_sync_errno,
++    pthread_barrier_destroy,
++    pthread_barrier_init,
++    pthread_barrier_wait,
++    pthread_barrierattr_init,
++    pthread_barrierattr_destroy,
++    pthread_barrierattr_setpshared,
++    pthread_barrierattr_getpshared,
++    pthread_condattr_destroy,
++    pthread_condattr_init,
++    pthread_condattr_getpshared,
++    pthread_condattr_getclock,
++    pthread_condattr_setclock,
++    pthread_condattr_setpshared,
++    pthread_cond_init,
++    pthread_cond_destroy,
++    pthread_cond_signal,
++    pthread_cond_broadcast,
++    pthread_cond_wait,
++    pthread_cond_timedwait64,
++    pthread_cond_timedwait32,
++    pthread_cond_timedwait64_relative_np,
++    pthread_cond_timedwait32_relative_np,
++    do_sema_b_wait_intern,
++    pthread_mutexattr_init,
++    pthread_mutexattr_destroy,
++    pthread_mutexattr_settype,
++    pthread_mutexattr_gettype,
++    pthread_mutexattr_setpshared,
++    pthread_mutexattr_getpshared,
++    pthread_mutexattr_setprotocol,
++    pthread_mutexattr_getprotocol,
++    pthread_mutexattr_setprioceiling,
++    pthread_mutexattr_getprioceiling,
++    pthread_mutexattr_setrobust,
++    pthread_mutexattr_getrobust,
++    pthread_mutex_init,
++    pthread_mutex_destroy,
++    pthread_mutex_lock,
++    pthread_mutex_trylock,
++    pthread_mutex_timedlock64,
++    pthread_mutex_timedlock32,
++    pthread_mutex_unlock,
++    pthread_mutex_consistent,
++    pthread_rwlock_init,
++    pthread_rwlock_destroy,
++    pthread_rwlock_rdlock,
++    pthread_rwlock_timedrdlock64,
++    pthread_rwlock_timedrdlock32,
++    pthread_rwlock_tryrdlock,
++    pthread_rwlock_trywrlock,
++    pthread_rwlock_unlock,
++    pthread_rwlock_wrlock,
++    pthread_rwlock_timedwrlock64,
++    pthread_rwlock_timedwrlock32,
++    pthread_rwlockattr_destroy,
++    pthread_rwlockattr_init,
++    pthread_rwlockattr_getpshared,
++    pthread_rwlockattr_setpshared,
++    sem_init,
++    sem_destroy,
++    sem_trywait,
++    sem_wait,
++    sem_timedwait64,
++    sem_timedwait32,
++    sem_post,
++    sem_post_multiple,
++    sem_open,
++    sem_close,
++    sem_unlink,
++    sem_getvalue,
++    pthread_spin_init,
++    pthread_spin_destroy,
++    pthread_spin_lock,
++    pthread_spin_trylock,
++    pthread_spin_unlock,
++  };
++  return &table;
++}
++#ifdef DLL_EXPORT
++const struct gesher_sync_probe_v1 *gesher_sync_probe_owner(void)
++{
++  typedef const struct gesher_sync_probe_v1 *(__cdecl *getter_fn)(void);
++  HMODULE host=GetModuleHandleW(NULL), actual=NULL;
++  getter_fn getter=host?(getter_fn)GetProcAddress(host,"gesher_sync_probe_v1"):NULL;
++  const struct gesher_sync_probe_v1 *table; MEMORY_BASIC_INFORMATION info;
++  if (!getter) {
++    if (host && (GetProcAddress(host,"gesher_pthread_identity_probe_v6") || GetProcAddress(host,"gesher_clock_anchor_v1"))) abort();
++    return NULL;
++  }
++  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                          (LPCWSTR)getter,&actual) || actual!=host) abort();
++  table=getter();
++  if (!table || !VirtualQuery(table,&info,sizeof(info)) || info.AllocationBase!=host || info.State!=MEM_COMMIT ||
++      (info.Protect&(PAGE_GUARD|PAGE_NOACCESS)) || (uintptr_t)table<(uintptr_t)info.BaseAddress ||
++      (uintptr_t)table-(uintptr_t)info.BaseAddress>info.RegionSize ||
++      sizeof(*table)>info.RegionSize-((uintptr_t)table-(uintptr_t)info.BaseAddress) ||
++      table->size!=sizeof(*table) || table->version!=1) abort();
++  if (!table->errno_ptr || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->errno_ptr,&actual) || actual!=host) abort();
++  if (!table->pthread_barrier_destroy || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_barrier_destroy,&actual) || actual!=host) abort();
++  if (!table->pthread_barrier_init || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_barrier_init,&actual) || actual!=host) abort();
++  if (!table->pthread_barrier_wait || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_barrier_wait,&actual) || actual!=host) abort();
++  if (!table->pthread_barrierattr_init || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_barrierattr_init,&actual) || actual!=host) abort();
++  if (!table->pthread_barrierattr_destroy || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_barrierattr_destroy,&actual) || actual!=host) abort();
++  if (!table->pthread_barrierattr_setpshared || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_barrierattr_setpshared,&actual) || actual!=host) abort();
++  if (!table->pthread_barrierattr_getpshared || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_barrierattr_getpshared,&actual) || actual!=host) abort();
++  if (!table->pthread_condattr_destroy || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_condattr_destroy,&actual) || actual!=host) abort();
++  if (!table->pthread_condattr_init || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_condattr_init,&actual) || actual!=host) abort();
++  if (!table->pthread_condattr_getpshared || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_condattr_getpshared,&actual) || actual!=host) abort();
++  if (!table->pthread_condattr_getclock || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_condattr_getclock,&actual) || actual!=host) abort();
++  if (!table->pthread_condattr_setclock || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_condattr_setclock,&actual) || actual!=host) abort();
++  if (!table->pthread_condattr_setpshared || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_condattr_setpshared,&actual) || actual!=host) abort();
++  if (!table->pthread_cond_init || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_cond_init,&actual) || actual!=host) abort();
++  if (!table->pthread_cond_destroy || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_cond_destroy,&actual) || actual!=host) abort();
++  if (!table->pthread_cond_signal || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_cond_signal,&actual) || actual!=host) abort();
++  if (!table->pthread_cond_broadcast || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_cond_broadcast,&actual) || actual!=host) abort();
++  if (!table->pthread_cond_wait || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_cond_wait,&actual) || actual!=host) abort();
++  if (!table->pthread_cond_timedwait64 || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_cond_timedwait64,&actual) || actual!=host) abort();
++  if (!table->pthread_cond_timedwait32 || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_cond_timedwait32,&actual) || actual!=host) abort();
++  if (!table->pthread_cond_timedwait64_relative_np || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_cond_timedwait64_relative_np,&actual) || actual!=host) abort();
++  if (!table->pthread_cond_timedwait32_relative_np || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_cond_timedwait32_relative_np,&actual) || actual!=host) abort();
++  if (!table->do_sema_b_wait_intern || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->do_sema_b_wait_intern,&actual) || actual!=host) abort();
++  if (!table->pthread_mutexattr_init || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutexattr_init,&actual) || actual!=host) abort();
++  if (!table->pthread_mutexattr_destroy || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutexattr_destroy,&actual) || actual!=host) abort();
++  if (!table->pthread_mutexattr_settype || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutexattr_settype,&actual) || actual!=host) abort();
++  if (!table->pthread_mutexattr_gettype || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutexattr_gettype,&actual) || actual!=host) abort();
++  if (!table->pthread_mutexattr_setpshared || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutexattr_setpshared,&actual) || actual!=host) abort();
++  if (!table->pthread_mutexattr_getpshared || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutexattr_getpshared,&actual) || actual!=host) abort();
++  if (!table->pthread_mutexattr_setprotocol || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutexattr_setprotocol,&actual) || actual!=host) abort();
++  if (!table->pthread_mutexattr_getprotocol || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutexattr_getprotocol,&actual) || actual!=host) abort();
++  if (!table->pthread_mutexattr_setprioceiling || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutexattr_setprioceiling,&actual) || actual!=host) abort();
++  if (!table->pthread_mutexattr_getprioceiling || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutexattr_getprioceiling,&actual) || actual!=host) abort();
++  if (!table->pthread_mutexattr_setrobust || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutexattr_setrobust,&actual) || actual!=host) abort();
++  if (!table->pthread_mutexattr_getrobust || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutexattr_getrobust,&actual) || actual!=host) abort();
++  if (!table->pthread_mutex_init || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutex_init,&actual) || actual!=host) abort();
++  if (!table->pthread_mutex_destroy || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutex_destroy,&actual) || actual!=host) abort();
++  if (!table->pthread_mutex_lock || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutex_lock,&actual) || actual!=host) abort();
++  if (!table->pthread_mutex_trylock || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutex_trylock,&actual) || actual!=host) abort();
++  if (!table->pthread_mutex_timedlock64 || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutex_timedlock64,&actual) || actual!=host) abort();
++  if (!table->pthread_mutex_timedlock32 || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutex_timedlock32,&actual) || actual!=host) abort();
++  if (!table->pthread_mutex_unlock || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutex_unlock,&actual) || actual!=host) abort();
++  if (!table->pthread_mutex_consistent || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_mutex_consistent,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlock_init || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlock_init,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlock_destroy || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlock_destroy,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlock_rdlock || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlock_rdlock,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlock_timedrdlock64 || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlock_timedrdlock64,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlock_timedrdlock32 || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlock_timedrdlock32,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlock_tryrdlock || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlock_tryrdlock,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlock_trywrlock || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlock_trywrlock,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlock_unlock || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlock_unlock,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlock_wrlock || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlock_wrlock,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlock_timedwrlock64 || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlock_timedwrlock64,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlock_timedwrlock32 || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlock_timedwrlock32,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlockattr_destroy || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlockattr_destroy,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlockattr_init || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlockattr_init,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlockattr_getpshared || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlockattr_getpshared,&actual) || actual!=host) abort();
++  if (!table->pthread_rwlockattr_setpshared || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_rwlockattr_setpshared,&actual) || actual!=host) abort();
++  if (!table->sem_init || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->sem_init,&actual) || actual!=host) abort();
++  if (!table->sem_destroy || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->sem_destroy,&actual) || actual!=host) abort();
++  if (!table->sem_trywait || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->sem_trywait,&actual) || actual!=host) abort();
++  if (!table->sem_wait || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->sem_wait,&actual) || actual!=host) abort();
++  if (!table->sem_timedwait64 || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->sem_timedwait64,&actual) || actual!=host) abort();
++  if (!table->sem_timedwait32 || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->sem_timedwait32,&actual) || actual!=host) abort();
++  if (!table->sem_post || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->sem_post,&actual) || actual!=host) abort();
++  if (!table->sem_post_multiple || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->sem_post_multiple,&actual) || actual!=host) abort();
++  if (!table->sem_open || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->sem_open,&actual) || actual!=host) abort();
++  if (!table->sem_close || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->sem_close,&actual) || actual!=host) abort();
++  if (!table->sem_unlink || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->sem_unlink,&actual) || actual!=host) abort();
++  if (!table->sem_getvalue || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->sem_getvalue,&actual) || actual!=host) abort();
++  if (!table->pthread_spin_init || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_spin_init,&actual) || actual!=host) abort();
++  if (!table->pthread_spin_destroy || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_spin_destroy,&actual) || actual!=host) abort();
++  if (!table->pthread_spin_lock || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_spin_lock,&actual) || actual!=host) abort();
++  if (!table->pthread_spin_trylock || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_spin_trylock,&actual) || actual!=host) abort();
++  if (!table->pthread_spin_unlock || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)table->pthread_spin_unlock,&actual) || actual!=host) abort();
++  return table;
++}
++#endif
++#endif
++
+ /* Hook for TLS-based deregistration/registration of thread.  */
+ static void WINAPI
+--- a/mingw-w64-libraries/winpthreads/src/mutex.c
++++ b/mingw-w64-libraries/winpthreads/src/mutex.c
+@@ -38,4 +38,5 @@
+ /* internal header files */
+ #include "misc.h"
++#include "gesher_sync_probe.h"
+
+ /**
+@@ -1688,4 +1689,9 @@
+ int pthread_mutexattr_init(pthread_mutexattr_t *a)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutexattr_init(a);
++#endif
++
+   *a = WINPTHREADS_MUTEX_ATTRIBUTES_DEFAULT.Value;
+   return 0;
+@@ -1694,4 +1700,9 @@
+ int pthread_mutexattr_destroy(pthread_mutexattr_t *a)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutexattr_destroy(a);
++#endif
++
+   if (a == NULL) {
+     return EINVAL;
+@@ -1704,4 +1715,9 @@
+ int pthread_mutexattr_settype(pthread_mutexattr_t *a, int value)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutexattr_settype(a, value);
++#endif
++
+   if (a == NULL) {
+     return EINVAL;
+@@ -1727,4 +1743,9 @@
+ int pthread_mutexattr_gettype(const pthread_mutexattr_t *a, int *value)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutexattr_gettype(a, value);
++#endif
++
+   if (a == NULL || value == NULL) {
+     return EINVAL;
+@@ -1750,4 +1771,9 @@
+ int pthread_mutexattr_setpshared(pthread_mutexattr_t *a, int value)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutexattr_setpshared(a, value);
++#endif
++
+   if (a == NULL) {
+     return EINVAL;
+@@ -1772,4 +1798,9 @@
+ int pthread_mutexattr_getpshared(const pthread_mutexattr_t *a, int *value)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutexattr_getpshared(a, value);
++#endif
++
+   if (a == NULL || value == NULL) {
+     return EINVAL;
+@@ -1788,4 +1819,9 @@
+ int pthread_mutexattr_setprotocol(pthread_mutexattr_t *a, int value)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutexattr_setprotocol(a, value);
++#endif
++
+   if (a == NULL) {
+     return EINVAL;
+@@ -1820,4 +1856,9 @@
+ int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *a, int *value)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutexattr_getprotocol(a, value);
++#endif
++
+   if (a == NULL || value == NULL) {
+     return EINVAL;
+@@ -1843,4 +1884,9 @@
+ int pthread_mutexattr_setprioceiling(pthread_mutexattr_t *a, int value)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutexattr_setprioceiling(a, value);
++#endif
++
+   if (a == NULL) {
+     return EINVAL;
+@@ -1863,4 +1909,9 @@
+ int pthread_mutexattr_getprioceiling(const pthread_mutexattr_t *a, int *value)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutexattr_getprioceiling(a, value);
++#endif
++
+   if (a == NULL || value == NULL) {
+     return EINVAL;
+@@ -1885,4 +1936,9 @@
+ int pthread_mutexattr_setrobust(pthread_mutexattr_t *a, int value)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutexattr_setrobust(a, value);
++#endif
++
+   if (a == NULL) {
+     return EINVAL;
+@@ -1907,4 +1963,9 @@
+ int pthread_mutexattr_getrobust(const pthread_mutexattr_t *a, int *value)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutexattr_getrobust(a, value);
++#endif
++
+   if (a == NULL || value == NULL) {
+     return EINVAL;
+@@ -2003,4 +2064,9 @@
+ int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *a)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutex_init(m, a);
++#endif
++
+   WinpthreadsMutexAttributes wMutexAttr = WINPTHREADS_MUTEX_ATTRIBUTES_DEFAULT;
+
+@@ -2088,4 +2154,9 @@
+ int pthread_mutex_destroy(pthread_mutex_t *m)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutex_destroy(m);
++#endif
++
+   /**
+    * POSIX:
+@@ -2138,4 +2209,9 @@
+ int pthread_mutex_lock(pthread_mutex_t *m)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutex_lock(m);
++#endif
++
+   WinpthreadsMutex *wMutex = NULL;
+
+@@ -2151,4 +2227,9 @@
+ int pthread_mutex_trylock(pthread_mutex_t *m)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutex_trylock(m);
++#endif
++
+   WinpthreadsMutex *wMutex = NULL;
+
+@@ -2164,4 +2245,9 @@
+ int pthread_mutex_timedlock64(pthread_mutex_t *m, const struct _timespec64 *ts)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutex_timedlock64(m, ts);
++#endif
++
+   WinpthreadsMutex *wMutex = NULL;
+
+@@ -2230,4 +2316,9 @@
+ int pthread_mutex_timedlock32(pthread_mutex_t *m, const struct _timespec32 *ts)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutex_timedlock32(m, ts);
++#endif
++
+   struct _timespec64 ts64 = {.tv_sec = ts->tv_sec, .tv_nsec = ts->tv_nsec};
+   return pthread_mutex_timedlock64 (m, &ts64);
+@@ -2236,4 +2327,9 @@
+ int pthread_mutex_unlock(pthread_mutex_t *m)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutex_unlock(m);
++#endif
++
+   WinpthreadsMutex *wMutex = NULL;
+
+@@ -2249,4 +2345,9 @@
+ int pthread_mutex_consistent(pthread_mutex_t *m)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_mutex_consistent(m);
++#endif
++
+   WinpthreadsMutex *wMutex = NULL;
+
+--- a/mingw-w64-libraries/winpthreads/src/cond.c
++++ b/mingw-w64-libraries/winpthreads/src/cond.c
+@@ -48,4 +48,5 @@
+
+ #include "pthread_compat.h"
++#include "gesher_sync_probe.h"
+
+ int __pthread_shallcancel (void);
+@@ -85,4 +86,9 @@
+ pthread_condattr_destroy (pthread_condattr_t *a)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_condattr_destroy(a);
++#endif
++
+   if (!a)
+     return EINVAL;
+@@ -94,4 +100,9 @@
+ pthread_condattr_init (pthread_condattr_t *a)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_condattr_init(a);
++#endif
++
+   if (!a)
+     return EINVAL;
+@@ -103,4 +114,9 @@
+ pthread_condattr_getpshared (const pthread_condattr_t *a, int *s)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_condattr_getpshared(a, s);
++#endif
++
+   if (!a || !s)
+     return EINVAL;
+@@ -112,4 +128,9 @@
+ pthread_condattr_getclock (const pthread_condattr_t *a, clockid_t *clock_id)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_condattr_getclock(a, clock_id);
++#endif
++
+   if (!a || !clock_id)
+     return EINVAL;
+@@ -121,4 +142,9 @@
+ pthread_condattr_setclock(pthread_condattr_t *a, clockid_t clock_id)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_condattr_setclock(a, clock_id);
++#endif
++
+   if (!a || clock_id != 0)
+     return EINVAL;
+@@ -129,4 +155,9 @@
+ pthread_condattr_setpshared (pthread_condattr_t *a, int s)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_condattr_setpshared(a, s);
++#endif
++
+   if (!a || (s != PTHREAD_PROCESS_SHARED && s != PTHREAD_PROCESS_PRIVATE))
+     return EINVAL;
+@@ -143,4 +174,9 @@
+ pthread_cond_init (pthread_cond_t *c, const pthread_condattr_t *a)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_cond_init(c, a);
++#endif
++
+   cond_t *_c;
+   int r = 0;
+@@ -195,4 +231,9 @@
+ pthread_cond_destroy (pthread_cond_t *c)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_cond_destroy(c);
++#endif
++
+   cond_t *_c;
+   int r;
+@@ -247,4 +288,9 @@
+ pthread_cond_signal (pthread_cond_t *c)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_cond_signal(c);
++#endif
++
+   cond_t *_c;
+   int r;
+@@ -303,4 +349,9 @@
+ pthread_cond_broadcast (pthread_cond_t *c)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_cond_broadcast(c);
++#endif
++
+   cond_t *_c;
+   int r;
+@@ -362,4 +413,9 @@
+ pthread_cond_wait (pthread_cond_t *c, pthread_mutex_t *external_mutex)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_cond_wait(c, external_mutex);
++#endif
++
+   sCondWaitHelper ch;
+   cond_t *_c;
+@@ -482,4 +538,9 @@
+ pthread_cond_timedwait64(pthread_cond_t *c, pthread_mutex_t *m, const struct _timespec64 *t)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_cond_timedwait64(c, m, t);
++#endif
++
+   return pthread_cond_timedwait_impl(c, m, t, 0);
+ }
+@@ -488,4 +549,9 @@
+ pthread_cond_timedwait32(pthread_cond_t *c, pthread_mutex_t *m, const struct _timespec32 *t)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_cond_timedwait32(c, m, t);
++#endif
++
+   struct _timespec64 t64 = {.tv_sec = t->tv_sec, .tv_nsec = t->tv_nsec};
+   return pthread_cond_timedwait_impl(c, m, &t64, 0);
+@@ -495,4 +561,9 @@
+ pthread_cond_timedwait64_relative_np(pthread_cond_t *c, pthread_mutex_t *m, const struct _timespec64 *t)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_cond_timedwait64_relative_np(c, m, t);
++#endif
++
+   return pthread_cond_timedwait_impl(c, m, t, 1);
+ }
+@@ -501,4 +572,9 @@
+ pthread_cond_timedwait32_relative_np(pthread_cond_t *c, pthread_mutex_t *m, const struct _timespec32 *t)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_cond_timedwait32_relative_np(c, m, t);
++#endif
++
+   struct _timespec64 t64 = {.tv_sec = t->tv_sec, .tv_nsec = t->tv_nsec};
+   return pthread_cond_timedwait_impl(c, m, &t64, 1);
+@@ -577,4 +653,9 @@
+ do_sema_b_wait_intern (HANDLE sema, int nointerrupt, DWORD timeout)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->do_sema_b_wait_intern(sema, nointerrupt, timeout);
++#endif
++
+   HANDLE arr[2];
+   DWORD maxH = 1;
+--- a/mingw-w64-libraries/winpthreads/src/rwlock.c
++++ b/mingw-w64-libraries/winpthreads/src/rwlock.c
+@@ -40,4 +40,5 @@
+ #include "rwlock.h"
+ #include "thread.h"
++#include "gesher_sync_probe.h"
+
+ static pthread_spinlock_t rwl_global = PTHREAD_SPINLOCK_INITIALIZER;
+@@ -157,4 +158,9 @@
+ int pthread_rwlock_init (pthread_rwlock_t *rwlock_, const pthread_rwlockattr_t *attr)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlock_init(rwlock_, attr);
++#endif
++
+     rwlock_t *rwlock;
+     int r;
+@@ -193,4 +199,9 @@
+ int pthread_rwlock_destroy (pthread_rwlock_t *rwlock_)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlock_destroy(rwlock_);
++#endif
++
+     rwlock_t *rwlock;
+     pthread_rwlock_t rDestroy;
+@@ -235,4 +246,9 @@
+ int pthread_rwlock_rdlock (pthread_rwlock_t *rwlock_)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlock_rdlock(rwlock_);
++#endif
++
+   rwlock_t *rwlock;
+   int ret;
+@@ -301,4 +317,9 @@
+ int pthread_rwlock_timedrdlock64(pthread_rwlock_t *l, const struct _timespec64 *ts)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlock_timedrdlock64(l, ts);
++#endif
++
+   return __pthread_rwlock_timedrdlock (l, ts);
+ }
+@@ -306,4 +327,9 @@
+ int pthread_rwlock_timedrdlock32(pthread_rwlock_t *l, const struct _timespec32 *ts)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlock_timedrdlock32(l, ts);
++#endif
++
+   struct _timespec64 ts64 = {.tv_sec = ts->tv_sec, .tv_nsec = ts->tv_nsec};
+   return __pthread_rwlock_timedrdlock (l, &ts64);
+@@ -312,4 +338,9 @@
+ int pthread_rwlock_tryrdlock (pthread_rwlock_t *rwlock_)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlock_tryrdlock(rwlock_);
++#endif
++
+   rwlock_t *rwlock;
+   int ret;
+@@ -342,4 +373,9 @@
+ int pthread_rwlock_trywrlock (pthread_rwlock_t *rwlock_)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlock_trywrlock(rwlock_);
++#endif
++
+   rwlock_t *rwlock;
+   int ret;
+@@ -380,4 +416,9 @@
+ int pthread_rwlock_unlock (pthread_rwlock_t *rwlock_)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlock_unlock(rwlock_);
++#endif
++
+   rwlock_t *rwlock;
+   int ret;
+@@ -420,4 +461,9 @@
+ int pthread_rwlock_wrlock (pthread_rwlock_t *rwlock_)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlock_wrlock(rwlock_);
++#endif
++
+   rwlock_t *rwlock;
+   int ret;
+@@ -506,4 +552,9 @@
+ int pthread_rwlock_timedwrlock64(pthread_rwlock_t *rwlock, const struct _timespec64 *ts)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlock_timedwrlock64(rwlock, ts);
++#endif
++
+   return __pthread_rwlock_timedwrlock (rwlock, ts);
+ }
+@@ -511,4 +562,9 @@
+ int pthread_rwlock_timedwrlock32(pthread_rwlock_t *rwlock, const struct _timespec32 *ts)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlock_timedwrlock32(rwlock, ts);
++#endif
++
+   struct _timespec64 ts64 = {.tv_sec = ts->tv_sec, .tv_nsec = ts->tv_nsec};
+   return __pthread_rwlock_timedwrlock (rwlock, &ts64);
+@@ -517,4 +573,9 @@
+ int pthread_rwlockattr_destroy(pthread_rwlockattr_t *a)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlockattr_destroy(a);
++#endif
++
+   if (!a)
+     return EINVAL;
+@@ -524,4 +585,9 @@
+ int pthread_rwlockattr_init(pthread_rwlockattr_t *a)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlockattr_init(a);
++#endif
++
+   if (!a)
+     return EINVAL;
+@@ -532,4 +598,9 @@
+ int pthread_rwlockattr_getpshared(pthread_rwlockattr_t *a, int *s)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlockattr_getpshared(a, s);
++#endif
++
+   if (!a || !s)
+     return EINVAL;
+@@ -540,4 +611,9 @@
+ int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *a, int s)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_rwlockattr_setpshared(a, s);
++#endif
++
+   if (!a || (s != PTHREAD_PROCESS_SHARED && s != PTHREAD_PROCESS_PRIVATE))
+     return EINVAL;
+--- a/mingw-w64-libraries/winpthreads/src/barrier.c
++++ b/mingw-w64-libraries/winpthreads/src/barrier.c
+@@ -38,4 +38,5 @@
+ #include "barrier.h"
+ #include "misc.h"
++#include "gesher_sync_probe.h"
+
+ static pthread_spinlock_t barrier_global = PTHREAD_SPINLOCK_INITIALIZER;
+@@ -98,4 +99,9 @@
+ int pthread_barrier_destroy(pthread_barrier_t *b_)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_barrier_destroy(b_);
++#endif
++
+     pthread_barrier_t bDestroy;
+     barrier_t *b;
+@@ -144,3 +150,8 @@
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_barrier_init(b_, attr, count);
++#endif
++
+     barrier_t *b;
+
+@@ -185,4 +196,9 @@
+ int pthread_barrier_wait(pthread_barrier_t *b_)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_barrier_wait(b_);
++#endif
++
+   long sel;
+   int r, e, rslt;
+@@ -216,4 +232,9 @@
+ int pthread_barrierattr_init(void **attr)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_barrierattr_init(attr);
++#endif
++
+   int *p;
+
+@@ -229,4 +250,9 @@
+ int pthread_barrierattr_destroy(void **attr)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_barrierattr_destroy(attr);
++#endif
++
+   void *p;
+   if (!attr || (p = *attr) == NULL)
+@@ -239,4 +265,9 @@
+ int pthread_barrierattr_setpshared(void **attr, int s)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_barrierattr_setpshared(attr, s);
++#endif
++
+   if (!attr || *attr == NULL
+       || (s != PTHREAD_PROCESS_SHARED && s != PTHREAD_PROCESS_PRIVATE))
+@@ -248,4 +279,9 @@
+ int pthread_barrierattr_getpshared(void **attr, int *s)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_barrierattr_getpshared(attr, s);
++#endif
++
+   if (!attr || !s || *attr == NULL)
+     return EINVAL;
+--- a/mingw-w64-libraries/winpthreads/src/spinlock.c
++++ b/mingw-w64-libraries/winpthreads/src/spinlock.c
+@@ -34,4 +34,5 @@
+ /* internal header files */
+ #include "misc.h"
++#include "gesher_sync_probe.h"
+
+ /**
+@@ -169,4 +170,9 @@
+ int pthread_spin_init (pthread_spinlock_t *lock, int pshared)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_spin_init(lock, pshared);
++#endif
++
+   WinpthreadsSpinlock **pSpinlock = (WinpthreadsSpinlock **) lock;
+
+@@ -217,4 +223,9 @@
+ int pthread_spin_destroy (pthread_spinlock_t *lock)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_spin_destroy(lock);
++#endif
++
+   WinpthreadsSpinlock **pSpinlock = (WinpthreadsSpinlock **) lock;
+
+@@ -273,4 +284,9 @@
+ int pthread_spin_lock (pthread_spinlock_t *lock)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_spin_lock(lock);
++#endif
++
+   WinpthreadsSpinlock *wSpinlock = NULL;
+
+@@ -331,4 +347,9 @@
+ int pthread_spin_trylock (pthread_spinlock_t *lock)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_spin_trylock(lock);
++#endif
++
+   WinpthreadsSpinlock *wSpinlock = NULL;
+
+@@ -356,4 +377,9 @@
+ int pthread_spin_unlock (pthread_spinlock_t *lock)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) return owner->pthread_spin_unlock(lock);
++#endif
++
+   WinpthreadsSpinlock *wSpinlock = NULL;
+
+--- a/mingw-w64-libraries/winpthreads/src/sem.c
++++ b/mingw-w64-libraries/winpthreads/src/sem.c
+@@ -38,4 +38,5 @@
+ #include "sem.h"
+ #include "thread.h"
++#include "gesher_sync_probe.h"
+
+ int do_sema_b_wait_intern (HANDLE sema, int nointerrupt, DWORD timeout);
+@@ -54,4 +55,15 @@
+ sem_init (sem_t *sem, int pshared, unsigned int value)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) {
++    int *remote=owner->errno_ptr(), *local=&errno, saved=*remote;
++    if (remote!=local) *remote=*local;
++    __typeof__(owner->sem_init(sem, pshared, value)) result=owner->sem_init(sem, pshared, value);
++    if (remote!=local) { int value=*remote; *remote=saved; *local=value; }
++    return result;
++  }
++#endif
++
+   _sem_t *sv;
+
+@@ -85,4 +97,15 @@
+ sem_destroy (sem_t *sem)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) {
++    int *remote=owner->errno_ptr(), *local=&errno, saved=*remote;
++    if (remote!=local) *remote=*local;
++    __typeof__(owner->sem_destroy(sem)) result=owner->sem_destroy(sem);
++    if (remote!=local) { int value=*remote; *remote=saved; *local=value; }
++    return result;
++  }
++#endif
++
+   int r;
+   _sem_t *sv = NULL;
+@@ -148,4 +171,15 @@
+ sem_trywait (sem_t *sem)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) {
++    int *remote=owner->errno_ptr(), *local=&errno, saved=*remote;
++    if (remote!=local) *remote=*local;
++    __typeof__(owner->sem_trywait(sem)) result=owner->sem_trywait(sem);
++    if (remote!=local) { int value=*remote; *remote=saved; *local=value; }
++    return result;
++  }
++#endif
++
+   _sem_t *sv;
+
+@@ -188,4 +222,15 @@
+ sem_wait (sem_t *sem)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) {
++    int *remote=owner->errno_ptr(), *local=&errno, saved=*remote;
++    if (remote!=local) *remote=*local;
++    __typeof__(owner->sem_wait(sem)) result=owner->sem_wait(sem);
++    if (remote!=local) { int value=*remote; *remote=saved; *local=value; }
++    return result;
++  }
++#endif
++
+   long cur_v;
+   int ret = 0;
+@@ -263,4 +308,15 @@
+ int sem_timedwait64(sem_t *sem, const struct _timespec64 *t)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) {
++    int *remote=owner->errno_ptr(), *local=&errno, saved=*remote;
++    if (remote!=local) *remote=*local;
++    __typeof__(owner->sem_timedwait64(sem, t)) result=owner->sem_timedwait64(sem, t);
++    if (remote!=local) { int value=*remote; *remote=saved; *local=value; }
++    return result;
++  }
++#endif
++
+   return __sem_timedwait (sem, t);
+ }
+@@ -268,4 +324,15 @@
+ int sem_timedwait32(sem_t *sem, const struct _timespec32 *t)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) {
++    int *remote=owner->errno_ptr(), *local=&errno, saved=*remote;
++    if (remote!=local) *remote=*local;
++    __typeof__(owner->sem_timedwait32(sem, t)) result=owner->sem_timedwait32(sem, t);
++    if (remote!=local) { int value=*remote; *remote=saved; *local=value; }
++    return result;
++  }
++#endif
++
+   struct _timespec64 t64 = {0};
+
+@@ -282,4 +349,15 @@
+ sem_post (sem_t *sem)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) {
++    int *remote=owner->errno_ptr(), *local=&errno, saved=*remote;
++    if (remote!=local) *remote=*local;
++    __typeof__(owner->sem_post(sem)) result=owner->sem_post(sem);
++    if (remote!=local) { int value=*remote; *remote=saved; *local=value; }
++    return result;
++  }
++#endif
++
+   _sem_t *sv;
+
+@@ -307,4 +385,15 @@
+ sem_post_multiple (sem_t *sem, int count)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) {
++    int *remote=owner->errno_ptr(), *local=&errno, saved=*remote;
++    if (remote!=local) *remote=*local;
++    __typeof__(owner->sem_post_multiple(sem, count)) result=owner->sem_post_multiple(sem, count);
++    if (remote!=local) { int value=*remote; *remote=saved; *local=value; }
++    return result;
++  }
++#endif
++
+   int waiters_count;
+   _sem_t *sv;
+@@ -340,4 +429,15 @@
+ sem_open (const char *name, int oflag, mode_t mode, unsigned int value)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) {
++    int *remote=owner->errno_ptr(), *local=&errno, saved=*remote;
++    if (remote!=local) *remote=*local;
++    __typeof__(owner->sem_open(name, oflag, mode, value)) result=owner->sem_open(name, oflag, mode, value);
++    if (remote!=local) { int value=*remote; *remote=saved; *local=value; }
++    return result;
++  }
++#endif
++
+   sem_result (ENOSYS);
+   return NULL;
+@@ -347,4 +447,15 @@
+ sem_close (sem_t *sem)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) {
++    int *remote=owner->errno_ptr(), *local=&errno, saved=*remote;
++    if (remote!=local) *remote=*local;
++    __typeof__(owner->sem_close(sem)) result=owner->sem_close(sem);
++    if (remote!=local) { int value=*remote; *remote=saved; *local=value; }
++    return result;
++  }
++#endif
++
+   return sem_result (ENOSYS);
+ }
+@@ -353,4 +464,15 @@
+ sem_unlink (const char *name)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) {
++    int *remote=owner->errno_ptr(), *local=&errno, saved=*remote;
++    if (remote!=local) *remote=*local;
++    __typeof__(owner->sem_unlink(name)) result=owner->sem_unlink(name);
++    if (remote!=local) { int value=*remote; *remote=saved; *local=value; }
++    return result;
++  }
++#endif
++
+   return sem_result (ENOSYS);
+ }
+@@ -359,4 +481,15 @@
+ sem_getvalue (sem_t *sem, int *sval)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
++  if (owner) {
++    int *remote=owner->errno_ptr(), *local=&errno, saved=*remote;
++    if (remote!=local) *remote=*local;
++    __typeof__(owner->sem_getvalue(sem, sval)) result=owner->sem_getvalue(sem, sval);
++    if (remote!=local) { int value=*remote; *remote=saved; *local=value; }
++    return result;
++  }
++#endif
++
+   _sem_t *sv;
+   int r;
+--- /dev/null
++++ b/mingw-w64-libraries/winpthreads/src/gesher_sync_probe.h
+@@ -0,0 +1,94 @@
++/* CI-only generated sync dispatch; no production enablement. */
++#ifndef GESHER_SYNC_PROBE_H
++#define GESHER_SYNC_PROBE_H
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++#include <errno.h>
++#include <pthread.h>
++#include <semaphore.h>
++#include <windows.h>
++int do_sema_b_wait_intern(HANDLE, int, DWORD);
++struct gesher_sync_probe_v1 {
++  unsigned size, version;
++  int *(__cdecl *errno_ptr)(void);
++  __typeof__(&pthread_barrier_destroy) pthread_barrier_destroy;
++  __typeof__(&pthread_barrier_init) pthread_barrier_init;
++  __typeof__(&pthread_barrier_wait) pthread_barrier_wait;
++  __typeof__(&pthread_barrierattr_init) pthread_barrierattr_init;
++  __typeof__(&pthread_barrierattr_destroy) pthread_barrierattr_destroy;
++  __typeof__(&pthread_barrierattr_setpshared) pthread_barrierattr_setpshared;
++  __typeof__(&pthread_barrierattr_getpshared) pthread_barrierattr_getpshared;
++  __typeof__(&pthread_condattr_destroy) pthread_condattr_destroy;
++  __typeof__(&pthread_condattr_init) pthread_condattr_init;
++  __typeof__(&pthread_condattr_getpshared) pthread_condattr_getpshared;
++  __typeof__(&pthread_condattr_getclock) pthread_condattr_getclock;
++  __typeof__(&pthread_condattr_setclock) pthread_condattr_setclock;
++  __typeof__(&pthread_condattr_setpshared) pthread_condattr_setpshared;
++  __typeof__(&pthread_cond_init) pthread_cond_init;
++  __typeof__(&pthread_cond_destroy) pthread_cond_destroy;
++  __typeof__(&pthread_cond_signal) pthread_cond_signal;
++  __typeof__(&pthread_cond_broadcast) pthread_cond_broadcast;
++  __typeof__(&pthread_cond_wait) pthread_cond_wait;
++  __typeof__(&pthread_cond_timedwait64) pthread_cond_timedwait64;
++  __typeof__(&pthread_cond_timedwait32) pthread_cond_timedwait32;
++  __typeof__(&pthread_cond_timedwait64_relative_np) pthread_cond_timedwait64_relative_np;
++  __typeof__(&pthread_cond_timedwait32_relative_np) pthread_cond_timedwait32_relative_np;
++  __typeof__(&do_sema_b_wait_intern) do_sema_b_wait_intern;
++  __typeof__(&pthread_mutexattr_init) pthread_mutexattr_init;
++  __typeof__(&pthread_mutexattr_destroy) pthread_mutexattr_destroy;
++  __typeof__(&pthread_mutexattr_settype) pthread_mutexattr_settype;
++  __typeof__(&pthread_mutexattr_gettype) pthread_mutexattr_gettype;
++  __typeof__(&pthread_mutexattr_setpshared) pthread_mutexattr_setpshared;
++  __typeof__(&pthread_mutexattr_getpshared) pthread_mutexattr_getpshared;
++  __typeof__(&pthread_mutexattr_setprotocol) pthread_mutexattr_setprotocol;
++  __typeof__(&pthread_mutexattr_getprotocol) pthread_mutexattr_getprotocol;
++  __typeof__(&pthread_mutexattr_setprioceiling) pthread_mutexattr_setprioceiling;
++  __typeof__(&pthread_mutexattr_getprioceiling) pthread_mutexattr_getprioceiling;
++  __typeof__(&pthread_mutexattr_setrobust) pthread_mutexattr_setrobust;
++  __typeof__(&pthread_mutexattr_getrobust) pthread_mutexattr_getrobust;
++  __typeof__(&pthread_mutex_init) pthread_mutex_init;
++  __typeof__(&pthread_mutex_destroy) pthread_mutex_destroy;
++  __typeof__(&pthread_mutex_lock) pthread_mutex_lock;
++  __typeof__(&pthread_mutex_trylock) pthread_mutex_trylock;
++  __typeof__(&pthread_mutex_timedlock64) pthread_mutex_timedlock64;
++  __typeof__(&pthread_mutex_timedlock32) pthread_mutex_timedlock32;
++  __typeof__(&pthread_mutex_unlock) pthread_mutex_unlock;
++  __typeof__(&pthread_mutex_consistent) pthread_mutex_consistent;
++  __typeof__(&pthread_rwlock_init) pthread_rwlock_init;
++  __typeof__(&pthread_rwlock_destroy) pthread_rwlock_destroy;
++  __typeof__(&pthread_rwlock_rdlock) pthread_rwlock_rdlock;
++  __typeof__(&pthread_rwlock_timedrdlock64) pthread_rwlock_timedrdlock64;
++  __typeof__(&pthread_rwlock_timedrdlock32) pthread_rwlock_timedrdlock32;
++  __typeof__(&pthread_rwlock_tryrdlock) pthread_rwlock_tryrdlock;
++  __typeof__(&pthread_rwlock_trywrlock) pthread_rwlock_trywrlock;
++  __typeof__(&pthread_rwlock_unlock) pthread_rwlock_unlock;
++  __typeof__(&pthread_rwlock_wrlock) pthread_rwlock_wrlock;
++  __typeof__(&pthread_rwlock_timedwrlock64) pthread_rwlock_timedwrlock64;
++  __typeof__(&pthread_rwlock_timedwrlock32) pthread_rwlock_timedwrlock32;
++  __typeof__(&pthread_rwlockattr_destroy) pthread_rwlockattr_destroy;
++  __typeof__(&pthread_rwlockattr_init) pthread_rwlockattr_init;
++  __typeof__(&pthread_rwlockattr_getpshared) pthread_rwlockattr_getpshared;
++  __typeof__(&pthread_rwlockattr_setpshared) pthread_rwlockattr_setpshared;
++  __typeof__(&sem_init) sem_init;
++  __typeof__(&sem_destroy) sem_destroy;
++  __typeof__(&sem_trywait) sem_trywait;
++  __typeof__(&sem_wait) sem_wait;
++  __typeof__(&sem_timedwait64) sem_timedwait64;
++  __typeof__(&sem_timedwait32) sem_timedwait32;
++  __typeof__(&sem_post) sem_post;
++  __typeof__(&sem_post_multiple) sem_post_multiple;
++  __typeof__(&sem_open) sem_open;
++  __typeof__(&sem_close) sem_close;
++  __typeof__(&sem_unlink) sem_unlink;
++  __typeof__(&sem_getvalue) sem_getvalue;
++  __typeof__(&pthread_spin_init) pthread_spin_init;
++  __typeof__(&pthread_spin_destroy) pthread_spin_destroy;
++  __typeof__(&pthread_spin_lock) pthread_spin_lock;
++  __typeof__(&pthread_spin_trylock) pthread_spin_trylock;
++  __typeof__(&pthread_spin_unlock) pthread_spin_unlock;
++ };
++__declspec(dllexport) const struct gesher_sync_probe_v1 * __cdecl gesher_sync_probe_v1(void);
++#ifdef DLL_EXPORT
++const struct gesher_sync_probe_v1 *gesher_sync_probe_owner(void);
++#endif
++#endif
++#endif
