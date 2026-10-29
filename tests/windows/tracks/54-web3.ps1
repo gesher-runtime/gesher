@@ -205,6 +205,11 @@ $null = Web3Run 'owned session request through Java and JNI (single process)' @(
   'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity',
   'com.gesher.web3app.SessionActivity', (NoDrive "$Dir/web3app.apk")) ($sessionExpect + 'gesher-app: done') 'Web3 session done'
 
+$wildcardExpect = @('Web3 wildcard first-script checks true', 'Web3 wildcard done')
+$null = Web3Run 'wildcard origin first script in inherited and opaque frames (single process)' @(
+  'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity',
+  'com.gesher.web3app.WildcardActivity', (NoDrive "$Dir/web3app.apk")) ($wildcardExpect + 'gesher-app: done') 'Web3 wildcard done'
+
 # --- navigator.geolocation ---------------------------------------------------------
 $geoExpect = @(
   'Web3 geo test location set: 31.7683 35.2137',
@@ -356,6 +361,7 @@ try {
 
   $null = Web3Run 'the Gesher device: navigator.geolocation getCurrentPosition, watchPosition and disabled-setting errors from LocationManager test providers (app process)' ($launch + '--activity', 'com.gesher.web3app.GeoActivity') $geoExpect 'Web3 geo done'
   $null = Web3Run 'the Gesher device: arm64 NDK selected Network socket/process source, getaddrinfo and raw DNS query/send/result/cancel/errors (app process)' ($launch + '--activity', 'com.gesher.web3app.BindingActivity', '--ez', 'arm64Native', 'true') ($bindingExpect + 'raw DNS poll/result/NXDOMAIN/cancel/errors abi=arm64' + 'Web3 net done') 'Web3 net done' -NativeLibrary 'web3_network_arm64.so'
+  $null = Web3Run 'wildcard origin first script in inherited and opaque frames (device app process)' ($launch + '--activity', 'com.gesher.web3app.WildcardActivity') $wildcardExpect 'Web3 wildcard done'
 
   Web3ScreenReader $true
   try {

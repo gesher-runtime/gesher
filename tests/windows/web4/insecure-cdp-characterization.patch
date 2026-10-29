@@ -1,9 +1,9 @@
 diff --git a/app/java/com/gesher/app/webview/EngineListenerCoordinator.java b/app/java/com/gesher/app/webview/EngineListenerCoordinator.java
 new file mode 100644
-index 00000000..38914071
+index 00000000..a0f3ab5c
 --- /dev/null
 +++ b/app/java/com/gesher/app/webview/EngineListenerCoordinator.java
-@@ -0,0 +1,538 @@
+@@ -0,0 +1,563 @@
 +package com.gesher.app.webview;
 +
 +import android.os.Handler;
@@ -31,6 +31,7 @@ index 00000000..38914071
 +    private final GesherWebViewProvider provider;
 +    private final Handler ui;
 +    final String binding = "__gesher_binding_" + UUID.randomUUID().toString().replace("-", "");
++    final String world = "gesher_isolated_" + UUID.randomUUID().toString().replace("-", "");
 +    final String dispatch = "__gesher_reply_" + UUID.randomUUID().toString().replace("-", "");
 +    private final Map<Long, String> subscriptions = new HashMap<>();
 +    private final Map<Long, Consumer<String>> calls = new HashMap<>();
@@ -56,7 +57,7 @@ index 00000000..38914071
 +        final String session, unique, frame, origin;
 +        final long numeric;
 +        final Map<String, GesherWebViewProvider.MessageListener> listeners;
-+        boolean live = true;
++        boolean live = true, installed;
 +        Context(String session, long numeric, String unique, String frame, String origin,
 +                Map<String, GesherWebViewProvider.MessageListener> listeners) {
 +            this.session = session; this.numeric = numeric; this.unique = unique;
@@ -143,9 +144,14 @@ index 00000000..38914071
 +                    try {
 +                        JSONObject frameTree = new JSONObject(tree).getJSONObject("frameTree");
 +                        seedTree(frameTree, null);
-+                        JSONObject bindingParam = new JSONObject().put("name", binding);
++                        JSONObject bindingParam = new JSONObject().put("name", binding)
++                                .put("executionContextName", world);
 +                        request("", "Runtime.addBinding", bindingParam, deadline, c -> {
 +                            try {
++                                JSONObject script = new JSONObject().put("worldName", world)
++                                        .put("source", PageScripts.isolatedBridge(binding, dispatch));
++                                request("", "Page.addScriptToEvaluateOnNewDocument", script, deadline, scriptAck -> {
++                                try {
 +                                JSONObject attach = new JSONObject().put("autoAttach", true)
 +                                        .put("waitForDebuggerOnStart", true).put("flatten", true);
 +                                request("", "Target.setAutoAttach", attach, deadline, d -> {
@@ -156,6 +162,8 @@ index 00000000..38914071
 +                                    ArrayList<Runnable> copy = new ArrayList<>(waiting);
 +                                    waiting.clear();
 +                                    for (Runnable task : copy) if (!ui.post(task)) fail("navigation dispatch");
++                                });
++                                } catch (Exception e) { fail("root isolated script " + e); }
 +                                });
 +                            } catch (Exception e) { fail("root attach setup " + e); }
 +                        });
@@ -243,8 +251,13 @@ index 00000000..38914071
 +            request(child, "Runtime.enable", new JSONObject(), childDeadline, a ->
 +                request(child, "Page.enable", new JSONObject(), childDeadline, b -> {
 +                    try {
-+                        request(child, "Runtime.addBinding", new JSONObject().put("name", binding), childDeadline, c -> {
++                        request(child, "Runtime.addBinding", new JSONObject().put("name", binding)
++                                .put("executionContextName", world), childDeadline, c -> {
 +                            try {
++                                JSONObject script = new JSONObject().put("worldName", world)
++                                        .put("source", PageScripts.isolatedBridge(binding, dispatch));
++                                request(child, "Page.addScriptToEvaluateOnNewDocument", script, childDeadline, scriptAck -> {
++                                try {
 +                                JSONObject attach = new JSONObject().put("autoAttach", true)
 +                                        .put("waitForDebuggerOnStart", true).put("flatten", true);
 +                                request(child, "Target.setAutoAttach", attach, childDeadline, d -> {
@@ -252,6 +265,8 @@ index 00000000..38914071
 +                                    flushBindings();
 +                                    request(child, "Runtime.runIfWaitingForDebugger", new JSONObject(), childDeadline,
 +                                        e -> pausedSessions.remove(child));
++                                });
++                                } catch (Exception ex) { fail("child isolated script " + ex); }
 +                                });
 +                            } catch (Exception ex) { fail("attach setup " + ex); }
 +                        });
@@ -291,7 +306,7 @@ index 00000000..38914071
 +            } else recordFrame(frameId, parent);
 +        } else if ("Runtime.executionContextCreated".equals(event)) {
 +            JSONObject ctx = p.getJSONObject("context"), aux = ctx.optJSONObject("auxData");
-+            if (aux == null || !aux.optBoolean("isDefault", false)) return;
++            if (aux == null || aux.optBoolean("isDefault", true) || !world.equals(ctx.optString("name"))) return;
 +            long number = ctx.getLong("id");
 +            String unique = ctx.optString("uniqueId", ""), frame = aux.optString("frameId", "");
 +            if (!(ctx.opt("origin") instanceof String)) { fail("missing context origin"); return; }
@@ -328,6 +343,16 @@ index 00000000..38914071
 +            if (context == null || !context.live) {
 +                GesherWebView.log("web4 CDP binding denied: unknown or retired context"); return;
 +            }
++            JSONObject isolatedMessage = new JSONObject(p.getString("payload"));
++            if ("installed".equals(isolatedMessage.optString("kind"))) {
++                if (context.installed) { fail("duplicate isolated installation"); return; }
++                context.installed = true;
++                GesherWebView.log("web4 isolated installed context=" + context.unique + " frame=" + context.frame + " origin=" + context.origin);
++                return;
++            }
++            if (!context.installed || !"event".equals(isolatedMessage.optString("kind")) ||
++                    !(isolatedMessage.opt("data") instanceof String)) return;
++            p.put("payload", isolatedMessage.getString("data"));
 +            if (!ready || !activeSessions.contains(session)) {
 +                int units = p.toString().length();
 +                if (pendingBindings.size() >= 128 || units > 4194304 - pendingBindingUnits) {
@@ -809,13 +834,26 @@ index 241e0633..7412251e 100644
                  // The injection guard alone is not an authorization boundary:
                  // a page can post its own envelope through chrome.webview.
 diff --git a/app/java/com/gesher/app/webview/PageScripts.java b/app/java/com/gesher/app/webview/PageScripts.java
-index b8b70c7a..7231a458 100644
+index b8b70c7a..76f2f8cf 100644
 --- a/app/java/com/gesher/app/webview/PageScripts.java
 +++ b/app/java/com/gesher/app/webview/PageScripts.java
-@@ -136,6 +136,52 @@ final class PageScripts {
+@@ -136,6 +136,64 @@ final class PageScripts {
                          java.util.Arrays.asList(rules)) + ");\n";
      }
  
++    /** Diagnostic isolated-world receiver. Shared DOM traffic remains untrusted page input. */
++    static String isolatedBridge(String binding, String dispatch) {
++        return "(function(sendName,eventName){"
++                + "var send=globalThis[sendName];if(typeof send!=='function')return;"
++                + "document.addEventListener(eventName+':request',function(e){"
++                + "if(typeof e.detail==='string')send(JSON.stringify({kind:'event',data:e.detail}));});"
++                + "send(JSON.stringify({kind:'installed'}));"
++                + "Object.defineProperty(globalThis,eventName,{value:function(name,json){"
++                + "document.dispatchEvent(new CustomEvent(eventName+':reply',{detail:JSON.stringify([name,json])}));"
++                + "}});"
++                + "})(" + JSONObject.quote(binding) + "," + JSONObject.quote(dispatch) + ");";
++    }
++
 +    /** Opt-in CDP transport experiment; visibility is provisional, native engine origin decides. */
 +    static String cdpListeners(java.util.Collection<GesherWebViewProvider.MessageListener> listeners,
 +            String binding, String dispatch) {
@@ -827,7 +865,7 @@ index b8b70c7a..7231a458 100644
 +            } catch (org.json.JSONException e) { throw new IllegalStateException(e); }
 +        }
 +        return "(function(binding,dispatch,specs){\n"
-+                + "var send=globalThis[binding]; if(typeof send!=='function') return;\n"
++                + "function send(data){document.dispatchEvent(new CustomEvent(dispatch+':request',{detail:data}));}\n"
 +                + "var byteLength=Object.getOwnPropertyDescriptor(ArrayBuffer.prototype,'byteLength').get;\n"
 +                + "function isBuffer(data){try{byteLength.call(data);return true;}catch(e){return false;}}\n"
 +                + "var create=Object.create; function encode(data){var out=create(null);"
@@ -839,12 +877,11 @@ index b8b70c7a..7231a458 100644
 +                + " var text=atob(message.data),bytes=new Uint8Array(text.length);"
 +                + " for(var i=0;i<text.length;i++)bytes[i]=text.charCodeAt(i);return bytes.buffer;}\n"
 +                + "var stringify=JSON.stringify, parse=JSON.parse, Event=MessageEvent, entries=Object.create(null);\n"
-+                + "if(Object.prototype.hasOwnProperty.call(globalThis,dispatch)) return;\n"
-+                + "try { Object.defineProperty(globalThis,dispatch,{configurable:false,writable:false,"
-+                + " value:function(name,json){var e=entries[name]; if(!e)return; var msg=parse(json);"
++                + "document.addEventListener(dispatch+':reply',function(event){var pair=parse(event.detail);"
++                + " var name=pair[0],json=pair[1],e=entries[name]; if(!e)return; var msg=parse(json);"
 +                + " var ev=new Event('message',{data:decode(msg)});"
 +                + " if(typeof e.obj.onmessage==='function') e.obj.onmessage(ev);"
-+                + " for(var i=0;i<e.listeners.length;i++) e.listeners[i](ev); }}); } catch(e) { return; }\n"
++                + " for(var i=0;i<e.listeners.length;i++) e.listeners[i](ev); });\n"
 +                + "for(var n=0;n<specs.length;n++){ (function(spec){\n"
 +                + " if(globalThis.origin==='null'||!globalThis.__gesherOriginAllowed(spec.rules)) return;\n"
 +                + " var listeners=[], obj={onmessage:null};\n"
@@ -866,7 +903,7 @@ index b8b70c7a..7231a458 100644
       * An app's document-start script (androidx.webkit's addDocumentStartJavaScript), run
       * where a rule allows the origin. A block, not a function: its var and function
 diff --git a/tests/apps/web3app/java/com/gesher/web3app/FrameActivity.java b/tests/apps/web3app/java/com/gesher/web3app/FrameActivity.java
-index ae667636..45c63d81 100644
+index ae667636..22ec5177 100644
 --- a/tests/apps/web3app/java/com/gesher/web3app/FrameActivity.java
 +++ b/tests/apps/web3app/java/com/gesher/web3app/FrameActivity.java
 @@ -24,6 +24,7 @@ public class FrameActivity extends Activity {
@@ -877,26 +914,28 @@ index ae667636..45c63d81 100644
          origin = "http://127.0.0.1:" + Web3.port(1);
          view = new WebView(this);
          setContentView(view);
-@@ -58,7 +59,8 @@ public class FrameActivity extends Activity {
+@@ -58,7 +59,9 @@ public class FrameActivity extends Activity {
                          navigating = true;
                          Web3.poll(view, "JSON.stringify(window.web4Seen)", s -> s.contains("a-reply:reply-a")
                                  && s.contains("b-reply:reply-b") && s.contains("nested-reply:reply-nested")
 -                                && s.contains("bad-forge-sent") && s.contains("opaque-forge-sent"), 20,
 +                                && s.contains("bad-forge-sent") && s.contains("opaque-forge-sent")
-+                                && s.contains("bad-cdp-forge-count:1") && s.contains("opaque-cdp-forge-count:1"), 20,
++                                && s.contains("bad-cdp-forge-count:0") && s.contains("opaque-cdp-forge-count:0")
++                                && s.contains("bad-window-forge-sent") && s.contains("opaque-window-forge-sent"), 20,
                                  s -> view.evaluateJavascript("(async()=>{let f=document.getElementById('a');"
                                          + "f.src='/web4-hold?name=a2';let held=false;for(let i=0;i<100;i++){"
                                          + "if(await (await fetch('/web4-hold-status')).text()==='held'){held=true;break;}"
-@@ -89,6 +91,7 @@ public class FrameActivity extends Activity {
+@@ -89,6 +92,8 @@ public class FrameActivity extends Activity {
                      && value.contains("a2-reply:reply-a2") && value.contains("bad-forge-attempt")
                      && value.contains("opaque-forge-attempt") && value.contains("bad-forge-sent")
                      && value.contains("opaque-forge-sent") && value.contains("during-sent")
-+                    && value.contains("bad-cdp-forge-count:1") && value.contains("opaque-cdp-forge-count:1")
++                    && value.contains("bad-cdp-forge-count:0") && value.contains("opaque-cdp-forge-count:0")
++                    && value.contains("bad-window-forge-sent") && value.contains("opaque-window-forge-sent")
                      && !value.contains("STALE") && !value.contains("RACE");
              Web3.log("frame observed " + value);
              Web3.log("frame controlled checks " + (observed && !invalid && replies.size() == 5));
 diff --git a/tests/windows/tracks/54-web3.ps1 b/tests/windows/tracks/54-web3.ps1
-index e47d41df..0d1e933a 100644
+index d10fed97..5ddc3322 100644
 --- a/tests/windows/tracks/54-web3.ps1
 +++ b/tests/windows/tracks/54-web3.ps1
 @@ -60,7 +60,7 @@ function Web3ProcessState([int] $LauncherId, [string] $Text) {
@@ -928,7 +967,7 @@ index e47d41df..0d1e933a 100644
  $sessionExpect = @('Web3 session checks true', 'Web3 session done')
  $null = Web3Run 'owned session request through Java and JNI (single process)' @(
    'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity',
-@@ -353,6 +359,41 @@ try {
+@@ -358,6 +364,41 @@ try {
  
    $null = Web3Run 'owned session request through Java and JNI (device app process)' ($launch + '--activity', 'com.gesher.web3app.SessionActivity') $sessionExpect 'Web3 session done'
    $null = Web3Run 'controlled document-start, frame identity, origin and stale reply (device app process)' ($launch + '--activity', 'com.gesher.web3app.FrameActivity') $frameExpect 'Web3 frame done'
@@ -971,16 +1010,18 @@ index e47d41df..0d1e933a 100644
    $null = Web3Run 'the Gesher device: navigator.geolocation getCurrentPosition, watchPosition and disabled-setting errors from LocationManager test providers (app process)' ($launch + '--activity', 'com.gesher.web3app.GeoActivity') $geoExpect 'Web3 geo done'
    $null = Web3Run 'the Gesher device: arm64 NDK selected Network socket/process source, getaddrinfo and raw DNS query/send/result/cancel/errors (app process)' ($launch + '--activity', 'com.gesher.web3app.BindingActivity', '--ez', 'arm64Native', 'true') ($bindingExpect + 'raw DNS poll/result/NXDOMAIN/cancel/errors abi=arm64' + 'Web3 net done') 'Web3 net done' -NativeLibrary 'web3_network_arm64.so'
 diff --git a/tests/windows/web3/Web3Servers.ps1 b/tests/windows/web3/Web3Servers.ps1
-index 659a699b..bc96258f 100644
+index d1a5ca02..03634957 100644
 --- a/tests/windows/web3/Web3Servers.ps1
 +++ b/tests/windows/web3/Web3Servers.ps1
-@@ -188,6 +188,9 @@ public static class GesherWeb3Servers {
+@@ -197,6 +197,11 @@ public static class GesherWeb3Servers {
                + "web4.postMessage(name+'|'+window.__web4Early);}"
                + "else top.postMessage(name+'-no-object','*');"
                + "if(name==='bad'||name==='opaque'){top.postMessage(name+'-forge-attempt','*');"
 +              + "let bindings=Object.getOwnPropertyNames(window).filter(k=>k.startsWith('__gesher_binding_'));"
 +              + "for(let k of bindings)window[k](JSON.stringify({name:'web4',capability:'forged',payload:{type:'string',data:'forged-'+name+'|true'}}));"
 +              + "top.postMessage(name+'-cdp-forge-count:'+bindings.length,'*');"
++              + "top.postMessage({name:'web4',capability:'forged',payload:{data:'laundered-'+name+'|true'}},'*');"
++              + "top.postMessage(name+'-window-forge-sent','*');"
                + "chrome.webview.postMessage({gesherListener:'web4',data:'forged-'+name});"
                + "top.postMessage(name+'-forge-sent','*');}"
                + "if(name==='a'){let f=document.createElement('iframe');f.src='/web4-child?name=nested';document.body.appendChild(f);}"

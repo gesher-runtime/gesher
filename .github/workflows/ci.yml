@@ -990,6 +990,7 @@ jobs:
           python tools/web3/web4_characterization_role.py verify --production web4-experiment/gesher-app-web4-insecure.jar --experimental dist/gesher-app.jar --patch tests/windows/web4/insecure-cdp-characterization.patch --apk web4-experiment/web3app-web4-insecure.apk --manifest web4-experiment/role.json
           if ($LASTEXITCODE -eq 0) { throw 'Role swap was incorrectly accepted' }
           Write-Host 'PASS Web4 role swap rejected'
+          $global:LASTEXITCODE = 0 # The expected negative probe must not fail the step.
           Copy-Item web4-experiment/web3app-web4-insecure.apk dist/web3app.apk -Force
           if ((Get-FileHash dist/web3app.apk).Hash -cne (Get-FileHash web4-experiment/web3app-web4-insecure.apk).Hash) { throw 'Wrong selected experimental APK' }
           Copy-Item web4-experiment/gesher-app-web4-insecure.jar dist/gesher-app.jar -Force

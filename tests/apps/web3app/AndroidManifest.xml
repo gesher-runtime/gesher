@@ -22,6 +22,7 @@
         <activity android:name=".GeoActivity" android:exported="true" />
         <activity android:name=".QueryBoundaryActivity" android:exported="true" />
         <activity android:name=".FrameActivity" android:exported="true" />
+        <activity android:name=".WildcardActivity" android:exported="true" />
         <activity android:name=".SessionActivity" android:exported="true" />
         <activity android:name=".A11yActivity" android:exported="true" />
         <activity android:name=".NetActivity" android:exported="true" />

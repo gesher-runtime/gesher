@@ -171,7 +171,16 @@ public static class GesherWeb3Servers {
           if (!frameRelease) { Reply(s, 404, "text/plain", "hold timed out"); return; }
           path = "/web4-child?name=a2";
         }
-        if (path.StartsWith("/web4-main")) {
+        if (path.StartsWith("/web4-wildcard")) {
+          Reply(s, 200, "text/html; charset=utf-8", "<!doctype html><script>"
+              + "if(window.wild)wild.postMessage('main');"
+              + "function child(name,sandbox){let f=document.createElement('iframe');"
+              + "if(sandbox)f.setAttribute('sandbox','allow-scripts');"
+              + "f.srcdoc='<script>if(window.wild)wild.postMessage(\"'+name+'\")<\\/script>';"
+              + "document.body.appendChild(f);}"
+              + "window.addEventListener('DOMContentLoaded',()=>{child('inherited',false);child('opaque',true);});"
+              + "</script><body></body>");
+        } else if (path.StartsWith("/web4-main")) {
           Reply(s, 200, "text/html; charset=utf-8", "<!doctype html><html><body>frame test<script>"
               + "window.web4Seen=[];window.addEventListener('message',e=>web4Seen.push(String(e.data)));"
               + "if(window.web4)web4.postMessage('main|'+window.__web4Early);"
