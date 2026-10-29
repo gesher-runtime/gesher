@@ -14,6 +14,7 @@ class TsfJobWorker {
   [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int which);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr h);
   [DllImport("kernel32.dll",SetLastError=true)] static extern uint ResumeThread(IntPtr h);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern uint WaitForSingleObject(IntPtr h,uint timeout);
   static void Publish(string directory,string name,string value) {
     string temporary=Path.Combine(directory,name+".tmp"); File.WriteAllText(temporary,value);
     File.Move(temporary,Path.Combine(directory,name));
@@ -28,7 +29,7 @@ class TsfJobWorker {
     string protocol=args[1];
     Console.WriteLine("CONTROL "+args[0]); Console.Error.WriteLine("CONTROL stderr");
     Console.Out.Flush(); Console.Error.Flush();
-    if(args[0]!="writer") { Publish(protocol,"started","ready"); Gate(protocol,"start-go"); }
+    if(args[0]!="writer" && args[0]!="race-writer" && args[0]!="orphan-parent" && args[0]!="orphan-writer" && args[0]!="limit-child") { Publish(protocol,"started","ready"); Gate(protocol,"start-go"); }
     switch(args[0]) {
       case "normal": return 0;
       case "exit23": return 23;
@@ -36,11 +37,50 @@ class TsfJobWorker {
       case "writer":
         Console.WriteLine("RETAINED_WRITER_READY"); Console.Out.Flush();
         Publish(protocol,"writer-ready","flushed"); Thread.Sleep(120000); return 93;
+      case "race-writer": Gate(protocol,"race-go"); return 0;
+      case "orphan-writer": Thread.Sleep(120000); return 93;
+      case "limit-child": Publish(protocol,"limit-child-ran","unexpected"); return 96;
+      case "limit":
+        SI limitStart=new SI(); limitStart.size=Marshal.SizeOf(typeof(SI));
+        string limitExe=typeof(TsfJobWorker).Assembly.Location; PI limitChild;
+        bool admitted=CreateProcess(limitExe,new StringBuilder("\""+limitExe+"\" limit-child \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,false,0x8u,IntPtr.Zero,null,ref limitStart,out limitChild);
+        int limitError=Marshal.GetLastWin32Error();
+        if(admitted) { CloseHandle(limitChild.thread); CloseHandle(limitChild.process); return 96; }
+        if(limitError==0) return 97;
+        Console.WriteLine("LIMIT_CHILD_DENIED win32="+limitError); Console.Out.Flush(); return 0;
+      case "orphan-parent":
+      case "orphan":
+        SI orphanStart=new SI(); orphanStart.size=Marshal.SizeOf(typeof(SI)); orphanStart.flags=0x100;
+        orphanStart.input=GetStdHandle(-10); orphanStart.output=GetStdHandle(-11); orphanStart.error=GetStdHandle(-12);
+        string orphanExe=typeof(TsfJobWorker).Assembly.Location; PI orphanChild;
+        string orphanMode=args[0]=="orphan"?"orphan-parent":"orphan-writer";
+        // Detached fixture children do not create transient console hosts; the
+        // controller still rejects every unclassified job member.
+        if(!CreateProcess(orphanExe,new StringBuilder("\""+orphanExe+"\" "+orphanMode+" \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,true,0x8,IntPtr.Zero,null,ref orphanStart,out orphanChild)) return 94;
+        if(args[0]=="orphan") {
+          if(WaitForSingleObject(orphanChild.process,5000)!=0) return 98;
+          Publish(protocol,"orphan-ready",orphanChild.pid.ToString()); Gate(protocol,"orphan-go");
+        } else { Publish(protocol,"orphan-child",orphanChild.pid.ToString()); }
+        bool orphanClosed=CloseHandle(orphanChild.thread); orphanClosed=CloseHandle(orphanChild.process)&&orphanClosed;
+        return orphanClosed?0:95;
+      case "race":
+        SI raceStart=new SI(); raceStart.size=Marshal.SizeOf(typeof(SI)); raceStart.flags=0x100;
+        raceStart.input=GetStdHandle(-10); raceStart.output=GetStdHandle(-11); raceStart.error=GetStdHandle(-12);
+        string raceExe=typeof(TsfJobWorker).Assembly.Location; PI raceChild;
+        if(!CreateProcess(raceExe,new StringBuilder("\""+raceExe+"\" race-writer \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,true,0x8,IntPtr.Zero,null,ref raceStart,out raceChild)) return 94;
+        Publish(protocol,"race-child",raceChild.pid.ToString()); Gate(protocol,"race-done");
+        bool raceClosed=CloseHandle(raceChild.thread); raceClosed=CloseHandle(raceChild.process)&&raceClosed;
+        return raceClosed?0:95;
       case "descendant":
+      case "unknown":
         SI si=new SI(); si.size=Marshal.SizeOf(typeof(SI)); si.flags=0x100;
         si.input=GetStdHandle(-10); si.output=GetStdHandle(-11); si.error=GetStdHandle(-12);
         string exe=typeof(TsfJobWorker).Assembly.Location; PI child;
         if(!CreateProcess(exe,new StringBuilder("\""+exe+"\" writer \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,true,0x08000004,IntPtr.Zero,null,ref si,out child)) return 94;
+        if(args[0]=="unknown") {
+          Publish(protocol,"unknown",child.pid.ToString()); Gate(protocol,"unknown-go");
+          CloseHandle(child.thread); CloseHandle(child.process); return 99;
+        }
         Publish(protocol,"child",child.pid.ToString()); Gate(protocol,"child-go");
         if(ResumeThread(child.thread)!=1) return 98;
         Gate(protocol,"writer-ready"); Gate(protocol,"writer-go");
