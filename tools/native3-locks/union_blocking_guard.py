@@ -16,7 +16,7 @@ def main():
     base = manifest['base']
     subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], cwd=ROOT, check=True)
     assert git('status', '--porcelain') == '', 'Source checkpoint must be clean'
-    changed = set(git('diff', '--name-only', 'dab3196a', 'HEAD').splitlines())
+    changed = set(git('diff', '--name-only', '8b1e9b509ceef7e532a7ff5bc085ecdbc476d292', 'HEAD').splitlines())
     code = {path for path in changed if not path.startswith('docs/')}
     assert code <= {'.github/workflows/ci.yml', 'tools/native3-locks/union_payload.py', '.github/workflows/tsf-format-component.yml', '.github/workflows/services-geocoder-worker-component.yml', '.github/workflows/native3-locks-blocking.yml', 'tools/native3-locks/union_blocking_guard.py', 'tools/windows4/run-tsf-union.ps1', '.github/workflows/coherent-union-trusted-source.yml'}, ('Unexpected union automation delta', code)
     for path, expected in manifest['blobs'].items():

@@ -114,7 +114,7 @@ def main():
     context = host_roles.context()
     sources = source_inventory()
     if args.mode == 'preflight':
-        base = 'dab3196a'
+        base = '8b1e9b509ceef7e532a7ff5bc085ecdbc476d292'
         subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], cwd=ROOT, check=True)
         allowed = {'.github/workflows/ci.yml', 'tools/native3-locks/union_payload.py', '.github/workflows/tsf-format-component.yml', '.github/workflows/services-geocoder-worker-component.yml', '.github/workflows/native3-locks-blocking.yml', 'tools/native3-locks/union_blocking_guard.py', 'tools/windows4/run-tsf-union.ps1', '.github/workflows/coherent-union-trusted-source.yml'}
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
