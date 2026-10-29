@@ -147,6 +147,18 @@ public static class TsfJobSupervisor {
     if(WaitForSingleObject(process,0)!=WAIT_OBJECT_0) throw new IOException("Test child is not signaled");
     return Parent(process,expectedPid);
   }
+  public static bool TestToolhelpContains(uint pid) {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
+    IntPtr snapshot=CreateToolhelp32Snapshot(2,0);
+    if(!Valid(snapshot)) throw Native("Process snapshot");
+    try {
+      ProcessEntry entry=new ProcessEntry(); entry.size=(uint)Marshal.SizeOf(typeof(ProcessEntry));
+      Check(Process32First(snapshot,ref entry),"Process32First");
+      do { if(entry.pid==pid) return true; entry.size=(uint)Marshal.SizeOf(typeof(ProcessEntry)); } while(Process32Next(snapshot,ref entry));
+      if(Marshal.GetLastWin32Error()!=18) throw Native("Process32Next");
+      return false;
+    } finally { Check(CloseHandle(snapshot),"Close process snapshot"); }
+  }
   public static bool TestDeniedParent(IntPtr process,uint expectedPid) {
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
     IntPtr restricted;
@@ -186,7 +198,7 @@ public static class TsfJobSupervisor {
     IntPtr job=IntPtr.Zero,query=IntPtr.Zero,denied=IntPtr.Zero,root=IntPtr.Zero,thread=IntPtr.Zero;
     IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero;
     bool attrsReady=false; string dir=null,stdout=null,stderr=null,protocol=null; bool created=false;
-    bool controlled=arguments=="normal" || arguments=="exit23" || arguments=="hang" || arguments=="descendant" || arguments=="output";
+    bool controlled=arguments=="normal" || arguments=="exit23" || arguments=="hang" || arguments=="descendant" || arguments=="unknown" || arguments=="output";
     Stopwatch main=Stopwatch.StartNew(); Stopwatch cleanup=null;
     Func<IntPtr,IntPtr> own=h=> { if(!Valid(h)) throw Native("Create owned handle"); owned.Add(h); r.OwnedHandles++; return h; };
     try {
@@ -253,6 +265,10 @@ public static class TsfJobSupervisor {
             if(!CloseOwned(owned,childThreads,r)) throw new IOException("Descendant thread census close failed");
             // Worker publishes only while its CREATE_SUSPENDED primary thread is held.
             r.DescendantSuspended=true; File.WriteAllText(Path.Combine(protocol,"child-go"),"go");
+          }
+          if(File.Exists(Path.Combine(protocol,"unknown"))) {
+            Census(job,r,owned,own,executable);
+            throw new IOException("Unknown child accepted by census");
           }
           if(File.Exists(Path.Combine(protocol,"writer-ready")) && !r.RetainedWriterReady) {
             Identity child=r.Processes.Find(p=>p.Pid==r.DescendantPid && p.Role=="descendant");

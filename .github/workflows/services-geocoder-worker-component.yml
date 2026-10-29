@@ -18,9 +18,9 @@ jobs:
         shell: pwsh
         run: |
           $expected = @{
-            'tools/windows4/TsfJobSupervisor.cs' = 'd1cf9319268df1bccf03177e7f8dde52a7f55510'
-            'tools/windows4/TsfJobWorker.cs' = '08f29f78f56195825d96de2f2f6632bf91133e1e'
-            'tools/windows4/test-tsf-job-supervisor.ps1' = '91e6946c4ab05a42ffbf6917166193c3dad07872'
+            'tools/windows4/TsfJobSupervisor.cs' = '17485a6c6d47eaf5779c028ccac86b62913893b7'
+            'tools/windows4/TsfJobWorker.cs' = '3243a36efa0c5866213e66e6d93345acb5aebe94'
+            'tools/windows4/test-tsf-job-supervisor.ps1' = 'aa72bd534ed391e7fde6c270ce88e1f1826f34a3'
             'tools/windows4/run-tsf-component.ps1' = '4474bae13d5fe73038e8569be454753cdb21df43'
           }
           foreach ($path in $expected.Keys) {

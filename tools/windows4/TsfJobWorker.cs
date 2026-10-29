@@ -37,10 +37,15 @@ class TsfJobWorker {
         Console.WriteLine("RETAINED_WRITER_READY"); Console.Out.Flush();
         Publish(protocol,"writer-ready","flushed"); Thread.Sleep(120000); return 93;
       case "descendant":
+      case "unknown":
         SI si=new SI(); si.size=Marshal.SizeOf(typeof(SI)); si.flags=0x100;
         si.input=GetStdHandle(-10); si.output=GetStdHandle(-11); si.error=GetStdHandle(-12);
         string exe=typeof(TsfJobWorker).Assembly.Location; PI child;
         if(!CreateProcess(exe,new StringBuilder("\""+exe+"\" writer \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,true,0x08000004,IntPtr.Zero,null,ref si,out child)) return 94;
+        if(args[0]=="unknown") {
+          Publish(protocol,"unknown",child.pid.ToString()); Gate(protocol,"unknown-go");
+          CloseHandle(child.thread); CloseHandle(child.process); return 99;
+        }
         Publish(protocol,"child",child.pid.ToString()); Gate(protocol,"child-go");
         if(ResumeThread(child.thread)!=1) return 98;
         Gate(protocol,"writer-ready"); Gate(protocol,"writer-go");

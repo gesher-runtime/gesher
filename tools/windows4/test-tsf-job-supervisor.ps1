@@ -9,19 +9,24 @@ foreach ($source in @('tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfJo
 Add-Type -Path tools/windows4/TsfJobSupervisor.cs
 # The PID is absent from a subsequent process census, but the retained
 # handle still refers to the exact exited child and must expose its parent.
-$start = [Diagnostics.ProcessStartInfo]::new($env:ComSpec, '/d /c exit 0')
+$start = [Diagnostics.ProcessStartInfo]::new($env:ComSpec, '/d /c pause >nul')
 $start.UseShellExecute = $false
+$start.RedirectStandardInput = $true
 $raceChild = [Diagnostics.Process]::Start($start)
 try {
   $raceHandle = $raceChild.Handle
   $racePid = [uint32]$raceChild.Id
+  if ($raceChild.HasExited) { throw 'Parent-query control exited before live handle capture' }
+  $raceChild.StandardInput.WriteLine()
+  $raceChild.StandardInput.Close()
   if (-not $raceChild.WaitForExit(5000) -or $raceChild.ExitCode -ne 0) { throw 'Parent-query control child did not exit normally' }
+  if ([TsfJobSupervisor]::TestToolhelpContains($racePid)) { throw 'Exited retained child still present in Toolhelp snapshot' }
   if ([TsfJobSupervisor]::TestRetainedParent($raceHandle, $racePid) -ne [uint32]$PID) { throw 'Retained exited child parent mismatch' }
   if (-not [TsfJobSupervisor]::TestDeniedParent($raceHandle, $racePid)) { throw 'Parent query accepted a denied handle' }
   $rejected = $false
   try { [void][TsfJobSupervisor]::TestRetainedParent($raceHandle, ($racePid + 1)) } catch { $rejected = $true }
   if (-not $rejected) { throw 'Wrong retained PID accepted' }
-  Write-Host "TSF_RETAINED_PARENT exited=$racePid expected_parent=$PID denied=actual wrong_pid=rejected"
+  Write-Host "TSF_RETAINED_PARENT exited=$racePid toolhelp=absent expected_parent=$PID denied=actual wrong_pid=rejected"
 } finally {
   if (-not $raceChild.HasExited) { $raceChild.Kill(); if (-not $raceChild.WaitForExit(5000)) { throw 'Control child cleanup unproved' } }
   $raceChild.Dispose()
@@ -36,11 +41,16 @@ try {
   & $compiler /nologo /target:exe "/out:$worker" $workerSource
   if ($LASTEXITCODE -ne 0) { throw 'Controlled worker compilation failed' }
   Write-Host "TSF_CONTROL_COMPILER path=$compiler sha256=$((Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash.ToLowerInvariant()) worker_sha256=$((Get-FileHash -LiteralPath $worker -Algorithm SHA256).Hash.ToLowerInvariant())"
-  foreach ($case in @('normal','exit23','hang','descendant','output','terminate-denied','query-denied')) {
+  foreach ($case in @('normal','exit23','hang','descendant','unknown','output','terminate-denied','query-denied')) {
     $mode = if ($case -in @('terminate-denied','query-denied')) { 'hang' } else { $case }
     $fault = if ($case -in @('terminate-denied','query-denied')) { $case } else { '' }
     $r = [TsfJobSupervisor]::Run($worker, $mode, 1500, $fault)
     Write-Host ('TSF_JOB_KERNEL_EVIDENCE ' + ($r | ConvertTo-Json -Depth 6 -Compress))
+    if ($case -eq 'unknown') {
+      if ($r.Success -or $r.Reason -cne 'controller-error' -or -not $r.TerminateSucceeded -or -not $r.RootSignaled -or -not $r.JobEmpty -or $r.OwnedHandles -ne $r.ClosedHandles -or $r.Errors.Count -lt 1 -or $r.Errors[0] -notmatch '^Unexpected job identity:') { throw 'Unknown actual child was not rejected and cleaned up' }
+      Write-Host 'TSF_UNKNOWN_CHILD actual=rejected cleanup=proved'
+      continue
+    }
     if ($r.RootHandleValue -eq 0 -or $r.JobHandleValue -eq 0 -or $r.RootWaitResult -ne 0 -or $r.SuspendedThreadCount -ne 1 -or $r.PreResumeActive -ne 1) { throw "Raw handle/wait/census evidence failed: $case" }
     if (-not $r.Assigned -or -not $r.MemberBeforeResume -or -not $r.SuspendedSingleThread -or $r.Pid -eq 0 -or $r.Birth -le 0 -or -not [string]::Equals($r.Image, $worker, [StringComparison]::OrdinalIgnoreCase) -or -not $r.RootSignaled -or -not $r.RootHandleClosed -or -not $r.ThreadHandleClosed -or $r.OwnedHandles -ne $r.ClosedHandles -or $r.OwnedHandles -lt 7 -or $r.CleanupMilliseconds -ge 5000 -or $r.MainMilliseconds -gt 5000) { throw "Kernel ownership/lifetime evidence failed: $case" }
     if ($case -eq 'query-denied') {
