@@ -64,7 +64,11 @@ void* GuestPageNX(const uint32_t* code, size_t n) {
   return p;
 }
 
-void* g_resolve(const char*) { return nullptr; }
+int g_test_errno = 0;
+extern "C" __attribute__((sysv_abi)) int* test_errno() { return &g_test_errno; }
+void* g_resolve(const char* name) {
+  return std::strcmp(name, "__errno") == 0 ? reinterpret_cast<void*>(&test_errno) : nullptr;
+}
 int g_describe(const void*, const char**, const void**, const char**, const void**) { return 0; }
 
 }  // namespace
@@ -99,6 +103,24 @@ int main(int argc, char** argv) {
   if (!api) {
     std::printf("\n%d check(s) failed\n", failures);
     return 1;
+  }
+
+  // No private DNS bridges are supplied by this host. Exercise the actual
+  // guest bindings and ensure they fail before touching caller-owned memory.
+  for (const char* name : {"ns_name_ntop", "ns_name_uncompress", "dn_expand"}) {
+    void* fn = api->guest_symbol(name);
+    unsigned char guard[16];
+    std::memset(guard, 0xa5, sizeof(guard));
+    uint64_t args[] = {reinterpret_cast<uint64_t>(guard),
+                       reinterpret_cast<uint64_t>(guard),
+                       reinterpret_cast<uint64_t>(guard),
+                       reinterpret_cast<uint64_t>(guard), sizeof(guard), 0};
+    g_test_errno = 0;
+    uint64_t result = fn ? api->call(fn, args, 6) : 0;
+    bool intact = true;
+    for (unsigned char byte : guard) intact &= byte == 0xa5;
+    Check(name, fn && result == UINT64_MAX && g_test_errno == 38 && intact,
+          "missing ARM64 DNS bridge must fail with ENOSYS");
   }
 
   // `arm64_smoke_test crash-segv|crash-ill|crash-jump`: a faulting guest, which

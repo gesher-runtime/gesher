@@ -2,6 +2,7 @@
   "base": "f1550540186b4ae3f17a5e501a886ec1c4d5d613",
   "files": {
     ".github/workflows/net-dns-component.yml": "8b5121d614e517cbcaa9f01355719f3f56cd693478471ba6a182400b67b0bee5",
+    "compat/arm64/dll/arm64_smoke_test.cc": "cabecb8f70553e3dd88a757f343c609949cce0cca26b65017f601dcbd53bdbba",
     "compat/bionic/bionic.cmake": "95d70bf5afb0d35ce69bd155cee3e064a459a430b3160f62a469679125f5a640",
     "compat/bionic/dns_wire.cc": "09acd6d51a1832912a7efd6e7e0accafbcf6110341c38b5f5dbcdaab0d30a59c",
     "compat/bionic/shim.cc": "22ced95473843179a3a4fff90418aafbd9095d5edcd2b71a20b5d47238d4463d",
