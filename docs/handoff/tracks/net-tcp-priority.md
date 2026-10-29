@@ -388,3 +388,54 @@ source peer, native terminal-error boundary controls, module/DLL unload and
 pending-cancellation/timeout actual controls, Linux reference and both actual
 Windows host/bionic ABI paths with current typed source/compiler/member receipts.
 No product CI has run for this rewrite and none of these source changes qualify it.
+
+The next local revision returns the real owner through pthread's normal wrapper,
+including its TLS/CRT retirement. A pre-reserved WinAPI-only reaper holds a
+noninherited DuplicateHandle of the actual self thread object, observes native
+exit, closes lifetime records, then releases a DLL reference with
+FreeLibraryAndExitThread. No numeric TID grants authority. The reaper/ticket/pin
+exist before owner creation; creation failure publishes no-owner cleanup, while
+failed actual-lifetime evidence parks the reaper and retains its owners. A new
+private read-only retirement wait lets HOST verify the actual reaper exit; both
+private helpers are forbidden PE exports in every producer role. This remains
+unqualified for MinGW until actual code executes in its compiler/provider roles.
+
+Native c91a9f64/409044 establishes a PRE-EXISTING general reset getter gap:
+both ordinary connect and ConnectEx, each with getter-only/select/WSAPoll on
+fresh endpoints, return SO_ERROR0/0 while a subsequent native caller MSG_PEEK
+reports10054. Select has read+write mask3, combined poll19. There is no evidence
+that WSAPoll consumed that error or that ConnectEx alone introduced the gap.
+The original strict native10054 getter assertion remains RED and OPEN; no
+production readiness peek or accepted-zero substitute is introduced. Independent
+MSVC module jobs pass warmup+eight cycles each on both Windows, with exactly one
+TLS/context retirement, true owner/reaper exit0, real module unload, invariant
+handle baseline72/77, and exact numeric SOCKET reuse in all four cancellation
+cases per Windows. Those contexts produce995; normal refusal produces10061.
+This proves the independent MSVC pattern, not MinGW product DLL equivalence.
+
+The proposed bounded refusal rule now requires verified immutable INET/TCP
+provider identity, exact completed refusal generation equal to current generation,
+connect_result111, Failed phase, no live owned operation, no legacy native
+connect/disconnect call and the observed exact native19 residue. The caller's
+native SO_ERROR is never suppressed. Every owned or legacy connect entry
+serializes attempt publication and invalidates the prior generation before
+native submission; AF_UNSPEC remains a native, unqualified path, never a source
+of the refusal token. Native failure preserves prior phase rather than inventing
+a successful disconnection. An actual successful AF_UNSPEC transition would
+return to Initial. New connection attempts cannot overlap a legacy native call.
+Closed/reused descriptors use a different shared description; late completion
+cannot target it. Terminal send/OOB/sendto/shutdown have no established transport
+and no data I/O in flight; their actual native calls all fail10057/SO_ERROR0.
+The bounded rule still requires independent whole-source semantic disposition.
+
+The new HOST-only controls invoke the same actual production operation dependency,
+then change native mode in BOTH directions after proven pending submission,
+cancel the real logical blocking wait, and exercise SO_SNDTIMEO60ms without
+abandoning I/O. All wait for actual owner/reaper exit. The requester-finalization
+test requires a real getter to complete BEFORE the paused requester resumes;
+a transient try-lock result is only an observation. Portable negative controls
+require established reset POLLERR to remain visible and an explicit caller recv
+to receive104, then consume it. They do not weaken the separate pre-receive
+SO_ERROR104 assertion. All previous Linux/UDP/alias/last-close controls remain.
+Source, cancellation, timeout, module and all three actual product contexts are
+still pending; no product CI or qualification has occurred for this checkpoint.

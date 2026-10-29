@@ -92,9 +92,9 @@ int ConnectWithObserver(int fd, const void* raw, uint32_t length, ConnectObserve
     std::shared_ptr<ws::ConnectOperation> operation;
     bool nonblocking;
     {
-    record_locks::DescriptorGuard descriptor_guard;
-    SocketFd current;
-    if (!LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
+      record_locks::DescriptorGuard descriptor_guard;
+      SocketFd current;
+      if (!LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
       // This transaction fixes logical call behavior, never the native socket
       // mode. ConnectEx itself cannot become blocking during F_SETFL/FIONBIO.
       nonblocking = current.description->nonblocking.load();
@@ -112,15 +112,32 @@ int ConnectWithObserver(int fd, const void* raw, uint32_t length, ConnectObserve
   }
   // Non-TCP and AF_UNSPEC retain their native behavior. They do not create
   // an owned TCP completion token or qualify terminal-refusal filtering.
+  uint64_t generation;
+  ws::ConnectState previous_state;
   {
+    record_locks::DescriptorGuard descriptor_guard;
+    SocketFd current;
+    if (!LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
     std::lock_guard<std::mutex> lock(state.description->error_mutex);
-    if (state.description->connect_operation) return errno = EALREADY, -1;
-    state.description->owned_refusal = false;
+    if (state.description->connect_operation || state.description->legacy_connect_active) return errno = EALREADY, -1;
+    if (state.description->connect_generation == UINT64_MAX) return errno = EOVERFLOW, -1;
+    generation = ++state.description->connect_generation;
+    previous_state = state.description->state.load();
+    state.description->legacy_connect_active = true;
+    state.description->refusal_generation = 0;
     state.description->connect_error = 0;
   }
   const int result = ws::Connect(state.socket, address);
   const int saved = errno;
-  state.description->state.store(result == 0 ? ws::ConnectState::kConnected : ws::ConnectState::kConnecting);
+  {
+    std::lock_guard<std::mutex> lock(state.description->error_mutex);
+    state.description->legacy_connect_active = false;
+    if (state.description->connect_generation == generation) {
+      const bool pending = saved == EINPROGRESS || saved == EALREADY || saved == EINTR;
+      const ws::ConnectState completed = address.family == ws::Family::kUnspec ? ws::ConnectState::kInitial : ws::ConnectState::kConnected;
+      state.description->state.store(result == 0 ? completed : pending ? ws::ConnectState::kConnecting : previous_state);
+    }
+  }
   if (observer) observer(state.socket, result, saved, context);
   errno = saved;
   return result;

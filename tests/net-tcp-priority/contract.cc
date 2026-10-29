@@ -233,7 +233,6 @@ static void* window_getter(void* raw) {
   const bool entered = state.description->error_mutex.try_lock();
   if (entered) state.description->error_mutex.unlock();
   window.metadata_lock_busy = entered ? 0 : 1;
-  require(entered, "owned connect leaves metadata available while caller is paused");
 #endif
   require(pthread_mutex_lock(&window.mutex) == 0, "window getter entry lock");
   window.getter_entered = true; require(pthread_cond_broadcast(&window.condition) == 0, "window getter entered");
@@ -241,6 +240,7 @@ static void* window_getter(void* raw) {
   window.getter_rc = getsockopt(window.client, SOL_SOCKET, SO_ERROR, &window.getter_value, &length);
   require(pthread_mutex_lock(&window.mutex) == 0, "window getter lock");
   window.getter_done = true;
+  require(pthread_cond_broadcast(&window.condition) == 0, "window getter completed publication");
   require(pthread_mutex_unlock(&window.mutex) == 0, "window getter unlock");
   return nullptr;
 }
@@ -261,11 +261,9 @@ static void connect_finalization_window() {
   require(pthread_create(&getter, nullptr, window_getter, &window) == 0, "window getter thread");
   require(pthread_mutex_lock(&window.mutex) == 0, "window getter observation lock");
   require(clock_gettime(CLOCK_REALTIME, &deadline) == 0, "window getter clock"); deadline.tv_sec += 2;
-  while (!window.getter_entered) require(pthread_cond_timedwait(&window.condition, &window.mutex, &deadline) == 0, "window getter entered before finalization release");
-  require(pthread_mutex_unlock(&window.mutex) == 0, "window getter observation unlock");
-  usleep(40000);
-  require(pthread_mutex_lock(&window.mutex) == 0, "window release lock");
+  while (!window.getter_done) require(pthread_cond_timedwait(&window.condition, &window.mutex, &deadline) == 0, "actual caller getter completes while requester remains paused");
   const bool before_release = window.getter_done;
+  require(before_release && window.getter_entered, "getter progress independent of paused requester");
   window.release = true; require(pthread_cond_broadcast(&window.condition) == 0 && pthread_mutex_unlock(&window.mutex) == 0, "release real post-native window");
   require(pthread_join(connecting, nullptr) == 0 && pthread_join(getter, nullptr) == 0, "window threads retired");
   require(window.connect_rc == -1 && (window.connect_error == EINPROGRESS || window.connect_error == ECONNREFUSED), "window public connect result retained");
@@ -282,6 +280,72 @@ static void connect_finalization_window() {
   require(pthread_cond_destroy(&window.condition) == 0 && pthread_mutex_destroy(&window.mutex) == 0, "window gate retired");
   puts("PASS TCP priority: actual connect finalization window consumes refusal once");
 }
+#ifdef GESHER
+struct SubmitWindow : ConnectWindow {
+  int mode = 0;
+  long long elapsed = -1;
+  std::shared_ptr<gesher::ws::ConnectOperation> operation;
+};
+static void submitted_barrier(uintptr_t native, int result, int error, void* raw) {
+  auto& window = *static_cast<SubmitWindow*>(raw);
+  require(result == -1 && error == EINPROGRESS, "private barrier observes real queued submission");
+  gesher::ws::PollEntry p{native, gesher::ws::kPollOut, 0, nullptr};
+  require(gesher::ws::Poll(&p, 1, 0) == 0, "private barrier native operation actually remains pending");
+  gesher::SocketFd state; require(gesher::LookupSocket(window.client, &state), "private barrier exact socket");
+  { std::lock_guard<std::mutex> lock(state.description->error_mutex); window.operation = state.description->connect_operation; }
+  require(window.operation != nullptr, "private barrier retains actual operation lifetime");
+  require(pthread_mutex_lock(&window.mutex) == 0, "submission barrier lock");
+  window.native_ready = true; require(pthread_cond_broadcast(&window.condition) == 0, "submission barrier publication");
+  // Cancellation/timeout cases return directly into the real production wait,
+  // rather than cancelling a fixture condvar in place of that wait.
+  if (window.mode < 2) while (!window.release) require(pthread_cond_wait(&window.condition, &window.mutex) == 0, "submission paused before logical wait/return");
+  require(pthread_mutex_unlock(&window.mutex) == 0, "submission barrier unlock");
+}
+static void* submission_connect(void* raw) {
+  auto& window = *static_cast<SubmitWindow*>(raw); const long long start = millis();
+  window.connect_rc = gesher::ConnectWithObserver(window.client, &window.address, sizeof(window.address), submitted_barrier, &window);
+  window.connect_error = errno; window.elapsed = millis() - start; return nullptr;
+}
+static void owned_wait_controls() {
+  for (int mode = 0; mode != 4; ++mode) {
+    SubmitWindow window{}; window.mode = mode;
+    int reserved = socket(AF_INET, SOCK_STREAM, 0); require(reserved >= 0, "owned wait reserve");
+    window.address.sin_family = AF_INET; window.address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    require(bind(reserved, reinterpret_cast<sockaddr*>(&window.address), sizeof(window.address)) == 0, "owned wait reserve bind");
+    socklen_t length = sizeof(window.address); require(getsockname(reserved, reinterpret_cast<sockaddr*>(&window.address), &length) == 0, "owned wait reserve address");
+    window.client = socket(AF_INET, SOCK_STREAM | (mode == 1 ? SOCK_NONBLOCK : 0), 0); require(window.client >= 0, "owned wait client");
+    int alias = dup(window.client); require(alias >= 0, "owned wait alias");
+    if (mode == 3) { timeval timeout{0, 60000}; require(setsockopt(alias, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) == 0, "owned wait send deadline"); }
+    require(pthread_mutex_init(&window.mutex, nullptr) == 0 && pthread_cond_init(&window.condition, nullptr) == 0, "owned wait gate");
+    pthread_t caller; require(pthread_create(&caller, nullptr, submission_connect, &window) == 0, "owned wait actual caller");
+    require(pthread_mutex_lock(&window.mutex) == 0, "owned wait controller lock");
+    timespec deadline{}; require(clock_gettime(CLOCK_REALTIME, &deadline) == 0, "owned wait clock"); deadline.tv_sec += 2;
+    while (!window.native_ready) require(pthread_cond_timedwait(&window.condition, &window.mutex, &deadline) == 0, "owned wait actual native submission deadline");
+    require(pthread_mutex_unlock(&window.mutex) == 0, "owned wait controller unlock");
+    if (mode < 2) {
+      int flags = fcntl(alias, F_GETFL); require(flags >= 0, "owned wait current flags");
+      const bool now_nonblocking = mode == 0;
+      require(fcntl(alias, F_SETFL, now_nonblocking ? flags | O_NONBLOCK : flags & ~O_NONBLOCK) == 0, "actual mode flip while owned native call is pending");
+      require(((fcntl(window.client, F_GETFL) & O_NONBLOCK) != 0) == now_nonblocking, "mode flip shared with initiating alias");
+      require(pthread_mutex_lock(&window.mutex) == 0, "owned wait release lock"); window.release = true;
+      require(pthread_cond_broadcast(&window.condition) == 0 && pthread_mutex_unlock(&window.mutex) == 0, "owned wait release");
+    } else if (mode == 2) require(pthread_cancel(caller) == 0, "cancel real logical blocking connect waiter");
+    void* returned = nullptr; require(pthread_join(caller, &returned) == 0, "owned wait caller really retired");
+    if (mode == 2) require(returned == PTHREAD_CANCELED, "real connect wait is a deferred cancellation point");
+    else require(window.connect_rc == -1 && window.connect_error == (mode == 0 ? ECONNREFUSED : EINPROGRESS), "logical call mode remains fixed across native mode change");
+    if (mode == 3) require(window.elapsed >= 40 && window.elapsed < 1500, "logical send timeout leaves a live pending operation");
+    if (mode == 1) {
+      pollfd p{alias, POLLPRI, 0}; require(poll(&p, 1, 5000) == 1 && (p.revents & POLLERR), "flipped-to-blocking alias retains nonblocking completion token");
+      int error = 0; length = sizeof(error); require(getsockopt(alias, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "flipped alias receives exact completion");
+    }
+    require(close(window.client) == 0 && close(alias) == 0, "owned wait last close");
+    require(gesher::ws::AwaitConnectRetirement(window.operation, 2000) == 0, "owned wait native owner and reaper really exit");
+    printf("TCP_PRIORITY_OWNED_WAIT mode=%d connect_rc=%d connect_errno=%d canceled=%d elapsed_ms=%lld native_retired=1\n", mode, window.connect_rc, window.connect_error, returned == PTHREAD_CANCELED ? 1 : 0, window.elapsed); fflush(stdout);
+    require(close(reserved) == 0 && pthread_cond_destroy(&window.condition) == 0 && pthread_mutex_destroy(&window.mutex) == 0, "owned wait gate cleanup");
+  }
+  puts("PASS TCP priority: real owned mode flips cancellation send deadline and native owner retirement");
+}
+#endif
 static void connection_controls() {
   int reserved = socket(AF_INET, SOCK_STREAM, 0); require(reserved >= 0, "reserve refused port");
   sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -414,6 +478,28 @@ static void requester_exit_and_reuse() {
   require(close(reused) == 0 && close(reserved) == 0, "requester and reuse cleanup");
   puts("PASS TCP priority: requester exit retains completion and last-close drains before fd generation reuse");
 }
+
+static void established_error_control() {
+  int listener = socket(AF_INET, SOCK_STREAM, 0); require(listener >= 0, "reset listener");
+  sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0 && listen(listener, 1) == 0, "reset bind/listen");
+  socklen_t length = sizeof(address);
+  require(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length) == 0, "reset address");
+  int client = socket(AF_INET, SOCK_STREAM, 0); require(client >= 0 && connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "actual reset connection");
+  int peer = accept(listener, nullptr, nullptr); require(peer >= 0, "reset peer");
+  int alias = dup(client); require(alias >= 0 && close(client) == 0, "reset surviving alias");
+  linger abortive{1, 0}; require(setsockopt(peer, SOL_SOCKET, SO_LINGER, &abortive, sizeof(abortive)) == 0 && close(peer) == 0, "actual peer reset");
+  pollfd p{alias, POLLIN | POLLPRI, 0};
+  require(poll(&p, 1, 2000) == 1 && (p.revents & POLLERR) && !(p.revents & POLLPRI), "established reset error never masked as a consumed refusal");
+  char byte{};
+  // This is the actual caller consuming its receive error, never a readiness
+  // implementation peeking/reading guest data or probing SO_ERROR.
+  require(recv(alias, &byte, 1, MSG_DONTWAIT) == -1 && errno == ECONNRESET, "actual caller receives independent reset");
+  int error = -1; length = sizeof(error);
+  require(getsockopt(alias, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0, "caller reset receive consumed pending error");
+  require(close(alias) == 0 && close(listener) == 0, "reset control cleanup");
+  puts("PASS TCP priority: independent established reset remains poll-visible and reaches the caller receive");
+}
 static void peer_eof(int fd) {
   pollfd p{fd, POLLIN, 0}; char byte{};
   require(poll(&p, 1, 2000) == 1 && recv(fd, &byte, 1, 0) == 0, "last alias close produces peer EOF");
@@ -505,6 +591,10 @@ int main(int argc, char** argv) {
   connection_controls();
   connect_finalization_window();
   requester_exit_and_reuse();
+  established_error_control();
+#ifdef GESHER
+  owned_wait_controls();
+#endif
   alias_ownership();
   Pair a = pair(); pthread_t thread;
   require(pthread_create(&thread, nullptr, delayed, &a.sender) == 0, "sender thread");

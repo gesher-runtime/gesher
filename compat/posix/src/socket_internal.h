@@ -71,8 +71,9 @@ struct SocketDescription {
   bool tcp = false;  // immutable provider protocol identity, set before publication
   uint64_t connect_generation = 0;  // error_mutex; never a numeric fd identity
   int connect_result = 0, connect_error = 0;  // completion / caller-unread token
-  bool owned_refusal = false;  // completed ConnectEx refusal, never a native error code
+  uint64_t refusal_generation = 0;  // positively completed ConnectEx refusal only
   bool native_closed = false;  // error_mutex orders close against submit/query
+  bool legacy_connect_active = false;  // non-owned connect/disconnect serialization
   std::shared_ptr<ConnectOperation> connect_operation;  // cleared after drain
   std::atomic<bool> nonblocking{false}, reuse_addr{false};
   std::mutex error_mutex;

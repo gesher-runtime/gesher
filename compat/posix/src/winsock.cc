@@ -498,7 +498,7 @@ void FinishConnect(const std::shared_ptr<ConnectOperation>& operation) {
     if (!description.native_closed) {
       description.connect_result = result;
       description.connect_error = result;
-      description.owned_refusal = op.issued && result == ECONNREFUSED;
+      description.refusal_generation = op.issued && result == ECONNREFUSED ? op.generation : 0;
       description.state.store(result == 0 || result == EISCONN ? ConnectState::kConnected : ConnectState::kFailed);
     }
     description.connect_operation.reset();  // break the description/operation cycle
@@ -593,8 +593,9 @@ std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
     const std::shared_ptr<SocketDescription>& description) {
   std::lock_guard<std::mutex> lock(description->error_mutex);
   if (description->native_closed) return errno = EBADF, nullptr;
-  if (description->connect_operation) return errno = EALREADY, nullptr;
+  if (description->connect_operation || description->legacy_connect_active) return errno = EALREADY, nullptr;
   if (description->state.load() == ConnectState::kConnected) return errno = EISCONN, nullptr;
+  const ConnectState previous_state = description->state.load();
   if (description->connect_generation == UINT64_MAX) return errno = EOVERFLOW, nullptr;
   auto operation = std::make_shared<ConnectOperation>();
   auto& op = *operation;
@@ -629,7 +630,7 @@ std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
     return errno = saved, nullptr;
   }
   description->connect_result = description->connect_error = 0;
-  description->owned_refusal = false;
+  description->refusal_generation = 0;
   description->connect_operation = operation;
   description->state.store(ConnectState::kConnecting);
   auto* transfer = new std::shared_ptr<ConnectOperation>(operation);
@@ -642,7 +643,7 @@ std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
   if (initialized) pthread_attr_destroy(&attributes);
   if (created != 0) {
     delete transfer; description->connect_operation.reset();
-    description->state.store(ConnectState::kInitial);
+    description->state.store(previous_state);
     retirement->no_owner = true;
     // A failed creation has no running owner. The pre-reserved reaper still
     // owns ticket/pin cleanup. A failed publication keeps that owner quarantined.
@@ -1014,7 +1015,11 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
       auto& description = *entries[i].description;
       std::lock_guard<std::mutex> lock(description.error_mutex);
       if (description.native_closed) r = POLLNVAL;
-      else if (description.owned_refusal && description.state.load() == ConnectState::kFailed) {
+      else if (description.tcp && description.refusal_generation != 0 &&
+               description.refusal_generation == description.connect_generation &&
+               description.connect_result == ECONNREFUSED &&
+               !description.connect_operation && !description.legacy_connect_active &&
+               description.state.load() == ConnectState::kFailed) {
         // This generation completed without ever establishing a transport.
         // Its raw ERR|HUP|WRNORM residue is distinct from its caller token.
         // A new connect invalidates this classification before native submit;

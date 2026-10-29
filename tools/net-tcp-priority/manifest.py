@@ -48,7 +48,7 @@ for name in ['gesher-exec.exe', 'net_tcp_priority_probe.exe', 'gesher_arm64.dll'
     print('TCP_PRIORITY_NATIVE_IMPORTS', name, json.dumps(names), flush=True)
     exports = subprocess.check_output([str(readobj), '--coff-exports', str(Path('tcp-fixture') / name)], text=True)
     export_names = re.findall(r'^\s*Name:\s*(\S+)', exports, re.M)
-    forbidden = [symbol for symbol in export_names if 'ConnectWithObserver' in symbol]
+    forbidden = [symbol for symbol in export_names if any(private in symbol for private in ('ConnectWithObserver', 'AwaitConnectRetirement'))]
     assert not forbidden, ('Private connect observer exported', name, forbidden)
     private_observer[name] = dict(exports=len(export_names), observer_exported=False, exports_sha256=hashlib.sha256(exports.encode()).hexdigest())
     print('TCP_PRIORITY_PRIVATE_CONNECT_OBSERVER', name, json.dumps(private_observer[name]), flush=True)

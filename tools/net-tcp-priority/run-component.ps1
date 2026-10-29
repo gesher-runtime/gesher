@@ -108,7 +108,13 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
   if ($text -notmatch '(?m)^PASS TCP priority: listener datagram and successful connect preserve finite priority-only waits\s*$') { throw "Missing finite endpoint controls $Context" }
   if ($text -notmatch '(?m)^PASS TCP priority: shared aliases preserve dup2 targets last-close EOF concurrent urgent poll and UDP payload\s*$') { throw "Missing alias lifetime controls $Context" }
   if ($text -notmatch '(?m)^PASS TCP priority: actual connect finalization window consumes refusal once\s*$') { throw "Missing actual finalization window $Context" }
-  if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^TCP_PRIORITY_CONNECT_WINDOW backend=host-private native_ready=1 lock_busy=1 ') { throw 'HOST did not exercise the real private post-native barrier' }
+  if ($text -notmatch '(?m)^PASS TCP priority: requester exit retains completion and last-close drains before fd generation reuse\s*$') { throw "Missing requester/last-close/generation controls $Context" }
+  if ($text -notmatch '(?m)^PASS TCP priority: independent established reset remains poll-visible and reaches the caller receive\s*$') { throw "Missing independent established-error control $Context" }
+  if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^TCP_PRIORITY_CONNECT_WINDOW backend=host-private native_ready=1 lock_busy=[01] getter_before_release=1 first=111 second=0\r?$') { throw 'HOST did not complete its real getter while the requester remained paused' }
+  if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: real owned mode flips cancellation send deadline and native owner retirement\s*$') { throw 'Missing HOST actual owned wait controls' }
+  if ($Context -eq 'host-posix') {
+    foreach ($mode in 0..3) { if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_WAIT mode=$mode .*native_retired=1\r?$") { throw "Missing HOST actual mode/cancel/deadline context $mode" } }
+  }
   Write-Host "PASS TCP priority component: $Context; actual noninline contract; inline remains OPEN"
 }
 RunPriority 'host-posix' "$fixture/net_tcp_priority_probe.exe" '--noninline'
