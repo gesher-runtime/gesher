@@ -58,4 +58,7 @@ for name in files:
 #endif
   if (dwReason == DLL_PROCESS_DETACH)'''; assert new.count(anchor)==1; new=new.replace(anchor,repl)
  if old!=new: patch+=delta(old,new,'mingw-w64-libraries/winpthreads/src/'+name)
+header=Path(sys.argv[1])/'mingw-w64-libraries/winpthreads/include/pthread.h'; old=header.read_text(); needle='WINPTHREAD_API extern void (**_pthread_key_dest)(void *);'; assert old.count(needle)==1
+new=old.replace(needle,'#ifdef GESHER_PTHREAD_ROUTING_PROBE\n__declspec(dllexport)\n#endif\n'+needle)
+patch+=delta(old,new,'mingw-w64-libraries/winpthreads/include/pthread.h')
 patchfile.write_bytes(base+patch.encode()); pin=repo/'tools/host-pthread-authority/pinned-inputs.json'; j=json.loads(pin.read_text()); j['patch_sha256']=hashlib.sha256(patchfile.read_bytes()).hexdigest(); pin.write_bytes((json.dumps(j,indent=2)+'\n').encode()); print('generated embedded-archive routing delta')
