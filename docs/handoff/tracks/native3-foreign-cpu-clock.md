@@ -13,7 +13,7 @@ Actual Linux observation log: job 123173374206, retained at
 C:/work/gesher-ci-review/diagnostic-job-123173374206.log. Its exact source,
 run and attempt must be bound into the later qualification supplier.
 
-## Critical Linux oracle blocker, pending controlled diagnosis
+## Linux oracle correction: controlled final task release
 
 Component run 40792024272 / attempt 1 at exact source
 1869f3abffbefaf7c1ca40771388465d245d0997 failed its immediate-postjoin
@@ -22,7 +22,15 @@ The earlier 40790238879 observation of EINVAL is therefore not a universal
 join boundary. Do not retry the red source or claim Windows qualification.
 Raw failure log: C:/work/gesher-ci-review/pthread-40792024272-compile.log.
 
-Changed source now prepares a narrow Linux diagnostic only: 64 real worker
+Changed source at 68f17329 produced narrow diagnostic run 40793239778 /
+attempt 1, with actual kernel 7.0.0-1017-azure and glibc 2.39. All 64 target
+births and encoded clock TIDs matched, with no reused TIDs. Immediate FAST
+gettime succeeded 24 times and returned EINVAL 40 times; row0 changed from
+gettime success to getres EINVAL. Every confirmed final task release rejected
+both calls with EINVAL (64/64). Exact log retained at
+C:/work/gesher-ci-review/pthread-diagnostic-40793239778-linux.log.
+
+That diagnostic retained 64 real worker
 TIDs, decoded clock target equality, /proc task starttime/state, exactly two
 live tasks, controlled release/return/join timestamps, immediate raw clock
 samples before /proc I/O and a second /proc-bracketed sample. No subsequent
@@ -30,21 +38,28 @@ thread is created until that exact birth disappears, both clock operations
 return EINVAL within five seconds and only the main task remains. Repeated
 TIDs are reported and rejected, not silently interpreted as target death.
 A process alarm and immediate _Exit failure paths retain storage safety.
-The output is diagnostic, not acceptance of two interchangeable outcomes.
-The component verifier still requires the previous qualification record and
-will not accept diagnostic output as Windows supplier proof.
+The output establishes separate join and final-release phases, not two
+interchangeable error outcomes. New source retains every FAST/proc record and
+asserts the identity-bound final-release invariant. The component supplier
+parses all 64 birth/join/FAST/release records, requires exact phase identity,
+timestamps, no reuse, final disappearance, EINVAL for both calls and taskcount1;
+the old blanket immediate-postjoin rule is removed. New source still needs
+peer and fresh qualifying component CI. Windows assertions remain strict:
+bionic join waits on the actual kernel handle signaled state; there is no
+exit-code259 heuristic. No Windows, host API or ART/APK proof is claimed.
 
-Primary source investigation supports an exit-phase race hypothesis: glibc
-2.39 join waits on clear_child_tid, and Linux v6.8 clears/wakes that location
+Primary source investigation supports the observed exit-phase race: glibc
+2.39 join waits on clear_child_tid, and Linux v7.0 clears/wakes that location
 in exit_mm before later exit_notify/release_task. CPU clock lookups resolve
-the task through the PID map. These are versioned design references; actual
-runner kernel/glibc identity and controlled observations remain required.
+the task through the PID map. The upstream v7.0 source ordering matches the
+observed platform family; the Ubuntu Azure downstream build is identified by
+the actual diagnostic log, not asserted byte-identical to upstream sources.
 
 https://github.com/bminor/glibc/blob/glibc-2.39/nptl/pthread_join_common.c
 https://github.com/bminor/glibc/blob/glibc-2.39/nptl/pthread_getcpuclockid.c
-https://github.com/torvalds/linux/blob/v6.8/kernel/fork.c
-https://github.com/torvalds/linux/blob/v6.8/kernel/exit.c
-https://github.com/torvalds/linux/blob/v6.8/kernel/time/posix-cpu-timers.c
+https://github.com/torvalds/linux/blob/v7.0/kernel/fork.c
+https://github.com/torvalds/linux/blob/v7.0/kernel/exit.c
+https://github.com/torvalds/linux/blob/v7.0/kernel/time/posix-cpu-timers.c
 
 ## Bounded source change
 
@@ -74,7 +89,9 @@ The original Windows/package/e2e assertions remain in force.
 
 ## Open work and proof limits
 
-An owned component workflow is now prepared, not dispatched. Its preflight
+An owned component workflow was dispatched at 1869 and stopped on the red
+Linux precondition before Windows; the corrected oracle is prepared for fresh
+peer/CI. Its preflight
 pins the complete allowed non-doc delta from f155 without editing historical
 full guards. It rebuilds the production standalone native host, bionic core
 fixture and matching ARM64 translator with the same verified llvm-mingw archive.
