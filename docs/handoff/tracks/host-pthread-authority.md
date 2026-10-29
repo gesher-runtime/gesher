@@ -29,6 +29,16 @@ strict TLS-clear-failure output validator rejected diagnostic inventory text
 before its expected abort marker. The next source suppresses inventory only
 in the failure-mode process, preserving that validator and every normal check.
 TLS/init failure and concurrency boundaries still require actual proof.
+Changed-source component 40915541993 at
+986b23949b26cadd0dbcea072b7c621b84cb13b1 passed all three jobs. On both
+Windows, static and dynamic normal cases each retained the original +8 bound,
+reported 338 destructors and zero fixture-owned handles, and passed contention,
+unlocked destructor, live join, and 256/reuse controls. The observed final
+counts were 60/68 and 61/69 on 2022, 64/72 and 65/73 on 2025. Both static
+and DLL TLS-clear-failure cases returned the expected exit 3 and exact abort
+marker. The controls include self join/tryjoin and foreign live tryjoin.
+This is bounded component evidence only; init-failure injection, independent
+actual audit, combined clock/provider behavior, product and full CI remain open.
 
 Initial component run40801790244/attempt1 at exact
 67e4f27486f6a63a8becb1c518c02b6b6afac02f passed its compile and both Windows
