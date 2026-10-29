@@ -9,6 +9,8 @@ using System.Text;
 using System.Threading;
 
 public static class TsfJobSupervisor {
+  // Failed positive-control retirement remains owned for this CI process's lifetime.
+  static readonly List<IntPtr> QuarantinedTestProcesses=new List<IntPtr>();
   const uint WAIT_OBJECT_0=0, WAIT_TIMEOUT=258;
   const long OutputCap=1048576;
   [StructLayout(LayoutKind.Sequential)] struct SA { public int size; public IntPtr descriptor; public int inherit; }
@@ -175,15 +177,26 @@ public static class TsfJobSupervisor {
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
     SI si=new SI(); si.size=Marshal.SizeOf(typeof(SI)); PI child;
     Check(CreateProcessSimple(executable,new StringBuilder("\""+executable+"\" limit-child \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,false,0x8,IntPtr.Zero,null,ref si,out child),"Positive child creation");
+    bool retired=false;
     try {
-      if(WaitForSingleObject(child.process,5000)!=WAIT_OBJECT_0) {
-        Check(TerminateProcess(child.process,124),"Terminate positive child");
-        if(WaitForSingleObject(child.process,5000)!=WAIT_OBJECT_0) throw new IOException("Positive child cleanup unproved");
-        throw new IOException("Positive child wait failed");
+      retired=WaitForSingleObject(child.process,5000)==WAIT_OBJECT_0;
+      if(!retired) {
+        bool terminated=TerminateProcess(child.process,124);
+        retired=WaitForSingleObject(child.process,5000)==WAIT_OBJECT_0;
+        throw new IOException("Positive child wait failed; terminate="+terminated+" retired="+retired);
       }
       uint code; Check(GetExitCodeProcess(child.process,out code),"Positive child exit");
       if(code!=96 || !File.Exists(Path.Combine(protocol,"limit-child-ran"))) throw new IOException("Positive child did not execute");
-    } finally { Check(CloseHandle(child.thread),"Close positive thread"); Check(CloseHandle(child.process),"Close positive process"); }
+    } finally {
+      bool threadClosed=CloseHandle(child.thread);
+      bool processClosed=false;
+      if(retired) processClosed=CloseHandle(child.process);
+      if(!threadClosed || !processClosed) lock(QuarantinedTestProcesses) {
+        if(!threadClosed) QuarantinedTestProcesses.Add(child.thread);
+        if(!processClosed) QuarantinedTestProcesses.Add(child.process);
+      }
+      if(!threadClosed || !processClosed) throw new IOException("Positive child closure unproved: retired="+retired+" thread="+threadClosed+" process="+processClosed);
+    }
   }
   static void Census(IntPtr job,Result r,List<IntPtr> owned,Func<IntPtr,IntPtr> own,string executable,string raceProtocol) {
     var ids=Pids(job);
