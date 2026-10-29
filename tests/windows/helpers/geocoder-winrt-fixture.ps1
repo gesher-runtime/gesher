@@ -40,7 +40,7 @@ foreach ($case in @('success', 'error', 'timeout', 'late')) {
     if ($case -eq 'timeout' -and ($supplier.CancelObserved -ne 1 -or $adapter.Task.Status -ne 'Canceled')) { throw 'AsTask token did not cancel underlying AsyncInfo supplier' }
     if ($case -eq 'late' -and ($adapter.Task.Status -ne 'RanToCompletion' -or $supplier.CancelObserved -ne 0 -or $supplier.CompletionCalls -ne 1)) { throw 'Late completion lost' }
   }
-  if (-not (& $originalWait 5000)) { throw 'WinRT bridge did not reach terminal state' }
+  if (-not $adapter.Task.IsCompleted) { throw 'WinRT bridge did not reach terminal state' }
   & $adapter.Close; & $adapter.Close
   $supplier.Dispose()
   if (-not $adapter.Lifetime.Disposed -or -not $supplier.Disposed) { throw 'WinRT cleanup missing' }
