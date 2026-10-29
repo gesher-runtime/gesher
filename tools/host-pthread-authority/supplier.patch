@@ -4290,3 +4290,898 @@
 +#endif
    }
    r = pthread_rwlock_init (rw, NULL);
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -55,4 +55,7 @@
+ static _pthread_v *__pthread_self_lite (void);
+
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++__declspec(dllexport)
++#endif
+ void (**_pthread_key_dest)(void *) = NULL;
+
+@@ -718,9 +721,12 @@
+   return &table;
+ }
+-#ifdef DLL_EXPORT
++#if 1
+ static const struct gesher_identity_probe_v6 *identity_probe_owner(void)
+ {
+   typedef const struct gesher_identity_probe_v6 *(__cdecl *get_fn)(void);
+-  HMODULE host=GetModuleHandleW(NULL), actual=NULL;
++  HMODULE host=GetModuleHandleW(NULL), actual=NULL, own=NULL;
++  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                          (LPCWSTR)identity_probe_owner,&own)) abort();
++  if (own==host) return NULL;
+   get_fn get=host ? (get_fn)GetProcAddress(host,"gesher_pthread_identity_probe_v6") : NULL;
+   MEMORY_BASIC_INFORMATION mbi;
+@@ -935,9 +941,12 @@
+   return &table;
+ }
+-#ifdef DLL_EXPORT
++#if 1
+ const struct gesher_sync_probe_v1 *gesher_sync_probe_owner(void)
+ {
+   typedef const struct gesher_sync_probe_v1 *(__cdecl *getter_fn)(void);
+-  HMODULE host=GetModuleHandleW(NULL), actual=NULL;
++  HMODULE host=GetModuleHandleW(NULL), actual=NULL, own=NULL;
++  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                          (LPCWSTR)gesher_sync_probe_owner,&own)) abort();
++  if (own==host) return NULL;
+   getter_fn getter=host?(getter_fn)GetProcAddress(host,"gesher_sync_probe_v1"):NULL;
+   const struct gesher_sync_probe_v1 *table; MEMORY_BASIC_INFORMATION info;
+@@ -1042,4 +1051,19 @@
+   pthread_spinlock_t new_spin_keys = PTHREAD_SPINLOCK_INITIALIZER;
+
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && !defined(DLL_EXPORT)
++  /* The archive may live in a DLL, not only in the process EXE. */
++  if (dwReason == DLL_PROCESS_ATTACH) {
++    const struct gesher_identity_probe_v6 *candidate=identity_probe_owner();
++    if (candidate && candidate->register_alias(&gesher_dll_alias_node,&_pthread_key_dest)) abort();
++    gesher_participating_owner=candidate;
++  }
++  if (gesher_participating_owner) {
++    if (dwReason == DLL_PROCESS_DETACH) {
++      if (gesher_participating_owner->unregister_alias(&gesher_dll_alias_node)) abort();
++      gesher_participating_owner=NULL;
++    }
++    return;
++  }
++#endif
+   if (dwReason == DLL_PROCESS_DETACH)
+     {
+@@ -1315,5 +1339,5 @@
+ pthread_delay64_np (const struct _timespec64 *interval)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->delay64(interval);
+@@ -1325,5 +1349,5 @@
+ pthread_delay32_np (const struct _timespec32 *interval)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->delay32(interval);
+@@ -1336,5 +1360,5 @@
+ _pthread_delay_np_ms (DWORD to)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->delay_ms(to);
+@@ -1403,5 +1427,5 @@
+ pthread_once (pthread_once_t *o, void (*func)(void))
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->once(o, func);
+@@ -1435,5 +1459,5 @@
+ pthread_key_create (pthread_key_t *key, void (* dest)(void *))
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->key_create(key, dest);
+@@ -1556,5 +1580,5 @@
+ pthread_key_delete (pthread_key_t key)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->key_delete(key);
+@@ -1591,5 +1615,5 @@
+ pthread_getspecific (pthread_key_t key)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->getspecific(key);
+@@ -1618,5 +1642,5 @@
+ pthread_setspecific (pthread_key_t key, const void *value)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->setspecific(key, value);
+@@ -1697,5 +1721,5 @@
+ pthread_equal (pthread_t t1, pthread_t t2)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->equal(t1, t2);
+@@ -1707,5 +1731,5 @@
+ pthread_tls_init (void)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) { owner->tls_init(); return; }
+@@ -1763,5 +1787,5 @@
+ _pthread_cleanup_dest (pthread_t t)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) { owner->cleanup_dest(t); return; }
+@@ -1870,5 +1894,5 @@
+ pthread_self (void)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->self();
+@@ -1899,5 +1923,5 @@
+ pthread_getevent (void)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->getevent();
+@@ -1914,5 +1938,5 @@
+                                      unsigned long long *generation)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->dup(thread, owned_handle, generation);
+@@ -1949,5 +1973,5 @@
+ pthread_gethandle (pthread_t t)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->gethandle(t);
+@@ -1961,5 +1985,5 @@
+ pthread_getclean (void)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->getclean();
+@@ -1973,5 +1997,5 @@
+ pthread_get_concurrency (int *val)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->get_concurrency(val);
+@@ -1984,5 +2008,5 @@
+ pthread_set_concurrency (int val)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->set_concurrency(val);
+@@ -1995,5 +2019,5 @@
+ pthread_exit (void *res)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) { owner->exit(res); abort(); }
+@@ -2041,5 +2065,5 @@
+ _pthread_invoke_cancel (void)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) { owner->invoke_cancel(); return; }
+@@ -2064,5 +2088,5 @@
+ __pthread_shallcancel (void)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->shallcancel();
+@@ -2082,5 +2106,5 @@
+ _pthread_setnobreak (int v)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) { owner->setnobreak(v); return; }
+@@ -2098,5 +2122,5 @@
+ pthread_testcancel (void)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) { owner->testcancel(); return; }
+@@ -2125,5 +2149,5 @@
+ pthread_cancel (pthread_t t)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->cancel(t);
+@@ -2232,5 +2256,5 @@
+ pthread_kill (pthread_t t, int sig)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->kill(t, sig);
+@@ -2257,5 +2281,5 @@
+ _pthread_get_state (const pthread_attr_t *attr, unsigned flag)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->get_state(attr, flag);
+@@ -2267,5 +2291,5 @@
+ _pthread_set_state (pthread_attr_t *attr, unsigned flag, unsigned val)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->set_state(attr, flag, val);
+@@ -2400,5 +2424,5 @@
+ pthread_setcancelstate (int state, int *oldstate)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->setcancelstate(state, oldstate);
+@@ -2423,5 +2447,5 @@
+ pthread_setcanceltype (int type, int *oldtype)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->setcanceltype(type, oldtype);
+@@ -2452,5 +2476,5 @@
+ pthread_create_wrapper (void *args)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->create_wrapper(args);
+@@ -2551,5 +2575,5 @@
+ pthread_create (pthread_t *th, const pthread_attr_t *attr, void *(* func)(void *), void *arg)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->create(th, attr, func, arg);
+@@ -2669,5 +2693,5 @@
+ pthread_join (pthread_t t, void **res)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->join(t, res);
+@@ -2703,5 +2727,5 @@
+ _pthread_tryjoin (pthread_t t, void **res)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->tryjoin(t, res);
+@@ -2759,5 +2783,5 @@
+ pthread_detach (pthread_t t)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->detach(t);
+@@ -2808,5 +2832,5 @@
+ pthread_getconcurrency (void)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->getconcurrency();
+@@ -2818,5 +2842,5 @@
+ pthread_setconcurrency (int new_level)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->setconcurrency(new_level);
+@@ -2829,5 +2853,5 @@
+ pthread_setname_np (pthread_t thread, const char *name)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->setname(thread, name);
+@@ -2906,5 +2930,5 @@
+ pthread_getname_np (pthread_t thread, char *name, size_t len)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->getname(thread, name, len);
+--- a/mingw-w64-libraries/winpthreads/src/sched.c
++++ b/mingw-w64-libraries/winpthreads/src/sched.c
+@@ -108,5 +108,5 @@
+ }
+
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+ extern int __cdecl gesher_probe_route_getsched(pthread_t, int *, struct sched_param *, int *);
+ extern int __cdecl gesher_probe_route_setsched(pthread_t, int, const struct sched_param *, int *);
+@@ -114,5 +114,5 @@
+ int pthread_getschedparam(pthread_t t, int *pol, struct sched_param *p)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+     int handled=0, routed=gesher_probe_route_getsched(t,pol,p,&handled);
+     if (handled) return routed;
+@@ -139,5 +139,5 @@
+ int pthread_setschedparam(pthread_t t, int pol,  const struct sched_param *p)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+     int handled=0, routed=gesher_probe_route_setsched(t,pol,p,&handled);
+     if (handled) return routed;
+--- a/mingw-w64-libraries/winpthreads/src/mutex.c
++++ b/mingw-w64-libraries/winpthreads/src/mutex.c
+@@ -1689,5 +1689,5 @@
+ int pthread_mutexattr_init(pthread_mutexattr_t *a)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutexattr_init(a);
+@@ -1700,5 +1700,5 @@
+ int pthread_mutexattr_destroy(pthread_mutexattr_t *a)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutexattr_destroy(a);
+@@ -1715,5 +1715,5 @@
+ int pthread_mutexattr_settype(pthread_mutexattr_t *a, int value)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutexattr_settype(a, value);
+@@ -1743,5 +1743,5 @@
+ int pthread_mutexattr_gettype(const pthread_mutexattr_t *a, int *value)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutexattr_gettype(a, value);
+@@ -1771,5 +1771,5 @@
+ int pthread_mutexattr_setpshared(pthread_mutexattr_t *a, int value)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutexattr_setpshared(a, value);
+@@ -1798,5 +1798,5 @@
+ int pthread_mutexattr_getpshared(const pthread_mutexattr_t *a, int *value)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutexattr_getpshared(a, value);
+@@ -1819,5 +1819,5 @@
+ int pthread_mutexattr_setprotocol(pthread_mutexattr_t *a, int value)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutexattr_setprotocol(a, value);
+@@ -1856,5 +1856,5 @@
+ int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *a, int *value)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutexattr_getprotocol(a, value);
+@@ -1884,5 +1884,5 @@
+ int pthread_mutexattr_setprioceiling(pthread_mutexattr_t *a, int value)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutexattr_setprioceiling(a, value);
+@@ -1909,5 +1909,5 @@
+ int pthread_mutexattr_getprioceiling(const pthread_mutexattr_t *a, int *value)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutexattr_getprioceiling(a, value);
+@@ -1936,5 +1936,5 @@
+ int pthread_mutexattr_setrobust(pthread_mutexattr_t *a, int value)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutexattr_setrobust(a, value);
+@@ -1963,5 +1963,5 @@
+ int pthread_mutexattr_getrobust(const pthread_mutexattr_t *a, int *value)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutexattr_getrobust(a, value);
+@@ -2064,5 +2064,5 @@
+ int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *a)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutex_init(m, a);
+@@ -2154,5 +2154,5 @@
+ int pthread_mutex_destroy(pthread_mutex_t *m)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutex_destroy(m);
+@@ -2209,5 +2209,5 @@
+ int pthread_mutex_lock(pthread_mutex_t *m)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutex_lock(m);
+@@ -2227,5 +2227,5 @@
+ int pthread_mutex_trylock(pthread_mutex_t *m)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutex_trylock(m);
+@@ -2245,5 +2245,5 @@
+ int pthread_mutex_timedlock64(pthread_mutex_t *m, const struct _timespec64 *ts)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutex_timedlock64(m, ts);
+@@ -2316,5 +2316,5 @@
+ int pthread_mutex_timedlock32(pthread_mutex_t *m, const struct _timespec32 *ts)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutex_timedlock32(m, ts);
+@@ -2327,5 +2327,5 @@
+ int pthread_mutex_unlock(pthread_mutex_t *m)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutex_unlock(m);
+@@ -2345,5 +2345,5 @@
+ int pthread_mutex_consistent(pthread_mutex_t *m)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_mutex_consistent(m);
+--- a/mingw-w64-libraries/winpthreads/src/cond.c
++++ b/mingw-w64-libraries/winpthreads/src/cond.c
+@@ -86,5 +86,5 @@
+ pthread_condattr_destroy (pthread_condattr_t *a)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_condattr_destroy(a);
+@@ -100,5 +100,5 @@
+ pthread_condattr_init (pthread_condattr_t *a)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_condattr_init(a);
+@@ -114,5 +114,5 @@
+ pthread_condattr_getpshared (const pthread_condattr_t *a, int *s)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_condattr_getpshared(a, s);
+@@ -128,5 +128,5 @@
+ pthread_condattr_getclock (const pthread_condattr_t *a, clockid_t *clock_id)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_condattr_getclock(a, clock_id);
+@@ -142,5 +142,5 @@
+ pthread_condattr_setclock(pthread_condattr_t *a, clockid_t clock_id)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_condattr_setclock(a, clock_id);
+@@ -155,5 +155,5 @@
+ pthread_condattr_setpshared (pthread_condattr_t *a, int s)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_condattr_setpshared(a, s);
+@@ -174,5 +174,5 @@
+ pthread_cond_init (pthread_cond_t *c, const pthread_condattr_t *a)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_cond_init(c, a);
+@@ -231,5 +231,5 @@
+ pthread_cond_destroy (pthread_cond_t *c)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_cond_destroy(c);
+@@ -288,5 +288,5 @@
+ pthread_cond_signal (pthread_cond_t *c)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_cond_signal(c);
+@@ -349,5 +349,5 @@
+ pthread_cond_broadcast (pthread_cond_t *c)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_cond_broadcast(c);
+@@ -413,5 +413,5 @@
+ pthread_cond_wait (pthread_cond_t *c, pthread_mutex_t *external_mutex)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_cond_wait(c, external_mutex);
+@@ -538,5 +538,5 @@
+ pthread_cond_timedwait64(pthread_cond_t *c, pthread_mutex_t *m, const struct _timespec64 *t)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_cond_timedwait64(c, m, t);
+@@ -549,5 +549,5 @@
+ pthread_cond_timedwait32(pthread_cond_t *c, pthread_mutex_t *m, const struct _timespec32 *t)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_cond_timedwait32(c, m, t);
+@@ -561,5 +561,5 @@
+ pthread_cond_timedwait64_relative_np(pthread_cond_t *c, pthread_mutex_t *m, const struct _timespec64 *t)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_cond_timedwait64_relative_np(c, m, t);
+@@ -572,5 +572,5 @@
+ pthread_cond_timedwait32_relative_np(pthread_cond_t *c, pthread_mutex_t *m, const struct _timespec32 *t)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_cond_timedwait32_relative_np(c, m, t);
+@@ -653,5 +653,5 @@
+ do_sema_b_wait_intern (HANDLE sema, int nointerrupt, DWORD timeout)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->do_sema_b_wait_intern(sema, nointerrupt, timeout);
+--- a/mingw-w64-libraries/winpthreads/src/rwlock.c
++++ b/mingw-w64-libraries/winpthreads/src/rwlock.c
+@@ -184,5 +184,5 @@
+ int pthread_rwlock_init (pthread_rwlock_t *rwlock_, const pthread_rwlockattr_t *attr)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlock_init(rwlock_, attr);
+@@ -225,5 +225,5 @@
+ int pthread_rwlock_destroy (pthread_rwlock_t *rwlock_)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlock_destroy(rwlock_);
+@@ -272,5 +272,5 @@
+ int pthread_rwlock_rdlock (pthread_rwlock_t *rwlock_)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlock_rdlock(rwlock_);
+@@ -343,5 +343,5 @@
+ int pthread_rwlock_timedrdlock64(pthread_rwlock_t *l, const struct _timespec64 *ts)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlock_timedrdlock64(l, ts);
+@@ -353,5 +353,5 @@
+ int pthread_rwlock_timedrdlock32(pthread_rwlock_t *l, const struct _timespec32 *ts)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlock_timedrdlock32(l, ts);
+@@ -364,5 +364,5 @@
+ int pthread_rwlock_tryrdlock (pthread_rwlock_t *rwlock_)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlock_tryrdlock(rwlock_);
+@@ -399,5 +399,5 @@
+ int pthread_rwlock_trywrlock (pthread_rwlock_t *rwlock_)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlock_trywrlock(rwlock_);
+@@ -442,5 +442,5 @@
+ int pthread_rwlock_unlock (pthread_rwlock_t *rwlock_)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlock_unlock(rwlock_);
+@@ -487,5 +487,5 @@
+ int pthread_rwlock_wrlock (pthread_rwlock_t *rwlock_)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlock_wrlock(rwlock_);
+@@ -578,5 +578,5 @@
+ int pthread_rwlock_timedwrlock64(pthread_rwlock_t *rwlock, const struct _timespec64 *ts)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlock_timedwrlock64(rwlock, ts);
+@@ -588,5 +588,5 @@
+ int pthread_rwlock_timedwrlock32(pthread_rwlock_t *rwlock, const struct _timespec32 *ts)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlock_timedwrlock32(rwlock, ts);
+@@ -599,5 +599,5 @@
+ int pthread_rwlockattr_destroy(pthread_rwlockattr_t *a)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlockattr_destroy(a);
+@@ -611,5 +611,5 @@
+ int pthread_rwlockattr_init(pthread_rwlockattr_t *a)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlockattr_init(a);
+@@ -624,5 +624,5 @@
+ int pthread_rwlockattr_getpshared(pthread_rwlockattr_t *a, int *s)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlockattr_getpshared(a, s);
+@@ -637,5 +637,5 @@
+ int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *a, int s)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_rwlockattr_setpshared(a, s);
+--- a/mingw-w64-libraries/winpthreads/src/barrier.c
++++ b/mingw-w64-libraries/winpthreads/src/barrier.c
+@@ -99,5 +99,5 @@
+ int pthread_barrier_destroy(pthread_barrier_t *b_)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_barrier_destroy(b_);
+@@ -150,4 +150,4 @@
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_barrier_init(b_, attr, count);
+@@ -196,5 +196,5 @@
+ int pthread_barrier_wait(pthread_barrier_t *b_)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_barrier_wait(b_);
+@@ -232,5 +232,5 @@
+ int pthread_barrierattr_init(void **attr)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_barrierattr_init(attr);
+@@ -250,5 +250,5 @@
+ int pthread_barrierattr_destroy(void **attr)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_barrierattr_destroy(attr);
+@@ -265,5 +265,5 @@
+ int pthread_barrierattr_setpshared(void **attr, int s)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_barrierattr_setpshared(attr, s);
+@@ -279,5 +279,5 @@
+ int pthread_barrierattr_getpshared(void **attr, int *s)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_barrierattr_getpshared(attr, s);
+--- a/mingw-w64-libraries/winpthreads/src/spinlock.c
++++ b/mingw-w64-libraries/winpthreads/src/spinlock.c
+@@ -170,5 +170,5 @@
+ int pthread_spin_init (pthread_spinlock_t *lock, int pshared)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_spin_init(lock, pshared);
+@@ -223,5 +223,5 @@
+ int pthread_spin_destroy (pthread_spinlock_t *lock)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_spin_destroy(lock);
+@@ -284,5 +284,5 @@
+ int pthread_spin_lock (pthread_spinlock_t *lock)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_spin_lock(lock);
+@@ -347,5 +347,5 @@
+ int pthread_spin_trylock (pthread_spinlock_t *lock)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_spin_trylock(lock);
+@@ -377,5 +377,5 @@
+ int pthread_spin_unlock (pthread_spinlock_t *lock)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) return owner->pthread_spin_unlock(lock);
+--- a/mingw-w64-libraries/winpthreads/src/sem.c
++++ b/mingw-w64-libraries/winpthreads/src/sem.c
+@@ -55,5 +55,5 @@
+ sem_init (sem_t *sem, int pshared, unsigned int value)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) {
+@@ -97,5 +97,5 @@
+ sem_destroy (sem_t *sem)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) {
+@@ -171,5 +171,5 @@
+ sem_trywait (sem_t *sem)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) {
+@@ -222,5 +222,5 @@
+ sem_wait (sem_t *sem)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) {
+@@ -308,5 +308,5 @@
+ int sem_timedwait64(sem_t *sem, const struct _timespec64 *t)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) {
+@@ -324,5 +324,5 @@
+ int sem_timedwait32(sem_t *sem, const struct _timespec32 *t)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) {
+@@ -349,5 +349,5 @@
+ sem_post (sem_t *sem)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) {
+@@ -385,5 +385,5 @@
+ sem_post_multiple (sem_t *sem, int count)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) {
+@@ -429,5 +429,5 @@
+ sem_open (const char *name, int oflag, mode_t mode, unsigned int value)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) {
+@@ -447,5 +447,5 @@
+ sem_close (sem_t *sem)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) {
+@@ -464,5 +464,5 @@
+ sem_unlink (const char *name)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) {
+@@ -481,5 +481,5 @@
+ sem_getvalue (sem_t *sem, int *sval)
+ {
+-#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_sync_probe_v1 *owner=gesher_sync_probe_owner();
+   if (owner) {
+--- a/mingw-w64-libraries/winpthreads/src/gesher_sync_probe.h
++++ b/mingw-w64-libraries/winpthreads/src/gesher_sync_probe.h
+@@ -88,7 +88,5 @@
+  };
+ __declspec(dllexport) const struct gesher_sync_probe_v1 * __cdecl gesher_sync_probe_v1(void);
+-#ifdef DLL_EXPORT
+ const struct gesher_sync_probe_v1 *gesher_sync_probe_owner(void);
+ #endif
+ #endif
+-#endif
