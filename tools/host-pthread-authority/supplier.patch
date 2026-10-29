@@ -5195,3 +5195,29 @@
 +#endif
  WINPTHREAD_API extern void (**_pthread_key_dest)(void *);
  WINPTHREAD_API int         pthread_key_create(pthread_key_t *key, void (* dest)(void *));
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -583,4 +583,7 @@
+ static SRWLOCK gesher_alias_probe_lock = SRWLOCK_INIT;
+ static struct gesher_alias_probe_node *gesher_alias_probe_nodes;
++static HANDLE gesher_alias_gate_entered, gesher_alias_gate_release, gesher_alias_gate_contended;
++__declspec(dllexport) void __cdecl gesher_alias_gate_v1(void *entered, void *release, void *contended)
++{ gesher_alias_gate_entered=entered; gesher_alias_gate_release=release; gesher_alias_gate_contended=contended; }
+ static int __cdecl gesher_alias_probe_register(struct gesher_alias_probe_node *node, void (***slot)(void *))
+ {
+@@ -600,5 +603,8 @@
+       sizeof(*node)>x.RegionSize-((uintptr_t)node-(uintptr_t)x.BaseAddress) ||
+       sizeof(*slot)>y.RegionSize-((uintptr_t)slot-(uintptr_t)y.BaseAddress)) return EINVAL;
+-  AcquireSRWLockExclusive(&gesher_alias_probe_lock);
++  if (gesher_alias_gate_contended && !TryAcquireSRWLockExclusive(&gesher_alias_probe_lock)) {
++    if (!SetEvent(gesher_alias_gate_contended)) abort();
++    AcquireSRWLockExclusive(&gesher_alias_probe_lock);
++  } else if (!gesher_alias_gate_contended) AcquireSRWLockExclusive(&gesher_alias_probe_lock);
+   struct gesher_alias_probe_node *it;
+   for (it=gesher_alias_probe_nodes; it; it=it->next)
+@@ -622,4 +628,5 @@
+   struct gesher_alias_probe_node *node;
+   AcquireSRWLockExclusive(&gesher_alias_probe_lock);
++  if (gesher_alias_gate_entered && (!SetEvent(gesher_alias_gate_entered) || WaitForSingleObject(gesher_alias_gate_release,5000)!=WAIT_OBJECT_0)) abort();
+   _pthread_key_dest=table;
+   for (node=gesher_alias_probe_nodes; node; node=node->next) *node->slot=table;

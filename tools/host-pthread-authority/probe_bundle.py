@@ -9,7 +9,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / 'routing-probe-fixture'
-CASES = {'embedded-provider.exe': ('host_pthread_embedded_provider_test.c', 'libwinpthread.a'),
+CASES = {'embedded-alias-gate.exe': ('host_pthread_embedded_alias_gate.c', 'libwinpthread.a'),
+         'embedded-provider.exe': ('host_pthread_embedded_provider_test.c', 'libwinpthread.a'),
          'sync-init-gate.exe': ('host_pthread_sync_init_gate.c', 'libwinpthread.a'),
          'sync-bad-anchor.exe': ('host_pthread_sync_bad_anchor.c', 'libwinpthread.a'),
          'sync-families.exe': ('host_pthread_sync_families_probe.c', 'libwinpthread.a'),
