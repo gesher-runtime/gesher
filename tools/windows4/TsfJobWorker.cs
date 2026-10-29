@@ -28,7 +28,7 @@ class TsfJobWorker {
     string protocol=args[1];
     Console.WriteLine("CONTROL "+args[0]); Console.Error.WriteLine("CONTROL stderr");
     Console.Out.Flush(); Console.Error.Flush();
-    if(args[0]!="writer") { Publish(protocol,"started","ready"); Gate(protocol,"start-go"); }
+    if(args[0]!="writer" && args[0]!="race-writer") { Publish(protocol,"started","ready"); Gate(protocol,"start-go"); }
     switch(args[0]) {
       case "normal": return 0;
       case "exit23": return 23;
@@ -36,6 +36,15 @@ class TsfJobWorker {
       case "writer":
         Console.WriteLine("RETAINED_WRITER_READY"); Console.Out.Flush();
         Publish(protocol,"writer-ready","flushed"); Thread.Sleep(120000); return 93;
+      case "race-writer": Gate(protocol,"race-go"); return 0;
+      case "race":
+        SI raceStart=new SI(); raceStart.size=Marshal.SizeOf(typeof(SI)); raceStart.flags=0x100;
+        raceStart.input=GetStdHandle(-10); raceStart.output=GetStdHandle(-11); raceStart.error=GetStdHandle(-12);
+        string raceExe=typeof(TsfJobWorker).Assembly.Location; PI raceChild;
+        if(!CreateProcess(raceExe,new StringBuilder("\""+raceExe+"\" race-writer \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,true,0x08000000,IntPtr.Zero,null,ref raceStart,out raceChild)) return 94;
+        Publish(protocol,"race-child",raceChild.pid.ToString()); Gate(protocol,"race-done");
+        bool raceClosed=CloseHandle(raceChild.thread); raceClosed=CloseHandle(raceChild.process)&&raceClosed;
+        return raceClosed?0:95;
       case "descendant":
       case "unknown":
         SI si=new SI(); si.size=Marshal.SizeOf(typeof(SI)); si.flags=0x100;

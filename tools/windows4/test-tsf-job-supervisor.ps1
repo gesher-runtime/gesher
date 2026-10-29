@@ -41,7 +41,7 @@ try {
   & $compiler /nologo /target:exe "/out:$worker" $workerSource
   if ($LASTEXITCODE -ne 0) { throw 'Controlled worker compilation failed' }
   Write-Host "TSF_CONTROL_COMPILER path=$compiler sha256=$((Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash.ToLowerInvariant()) worker_sha256=$((Get-FileHash -LiteralPath $worker -Algorithm SHA256).Hash.ToLowerInvariant())"
-  foreach ($case in @('normal','exit23','hang','descendant','unknown','output','terminate-denied','query-denied')) {
+  foreach ($case in @('normal','exit23','hang','descendant','race','unknown','output','terminate-denied','query-denied')) {
     $mode = if ($case -in @('terminate-denied','query-denied')) { 'hang' } else { $case }
     $fault = if ($case -in @('terminate-denied','query-denied')) { $case } else { '' }
     $r = [TsfJobSupervisor]::Run($worker, $mode, 1500, $fault)
@@ -59,6 +59,7 @@ try {
     }
     if (-not $r.JobEmpty -or $r.LastJobActive -ne 0 -or -not $r.WritersRetired -or -not $r.ControlStarted -or $r.TotalProcesses -ne $r.Processes.Count -or @($r.Processes | Where-Object { -not $_.Member -or -not $_.Signaled -or -not $_.Closed -or $_.WaitResult -ne 0 -or $_.Birth -le 0 -or $_.HandleValue -eq 0 -or -not $_.Role }).Count -ne 0 -or @($r.Processes.Pid | Sort-Object -Unique).Count -ne $r.Processes.Count) { throw "Job identities not reaped: $case" }
     if ($case -eq 'normal' -and (-not $r.Success -or $r.ExitCode -ne 0 -or $r.Output -notmatch 'CONTROL normal' -or $r.Error -notmatch 'CONTROL stderr')) { throw 'Normal control failed' }
+    if ($case -eq 'race' -and (-not $r.Success -or @($r.Processes | Where-Object Role -eq 'descendant').Count -ne 1)) { throw 'Exited retained child census failed' }
     if ($case -eq 'exit23' -and ($r.Success -or $r.ExitCode -ne 23 -or $r.Reason -cne 'exit' -or $r.Errors.Count -ne 0)) { throw 'Nonzero exit accepted or hidden' }
     if ($case -eq 'descendant' -and (-not $r.Success -or -not $r.DescendantSuspended -or $r.DescendantThreadCount -ne 1 -or -not $r.RetainedWriterReady -or @($r.Processes | Where-Object Role -eq 'descendant').Count -ne 1 -or -not $r.TerminateRequested -or -not $r.TerminateSucceeded -or $r.Output -notmatch "DESCENDANT_PID=$($r.DescendantPid)\r?\n" -or $r.Output -notmatch 'RETAINED_WRITER_READY' -or -not $r.ExclusiveSnapshot)) { throw 'Retained descendant not proved reaped' }
     if ($case -eq 'hang' -and ($r.Success -or $r.Reason -cne 'timeout' -or $r.ExitCode -ne 124 -or $r.Errors.Count -ne 0 -or -not $r.TerminateSucceeded -or $r.Output -notmatch 'CONTROL hang')) { throw 'Timeout control failed' }

@@ -168,7 +168,7 @@ public static class TsfJobSupervisor {
       catch(IOException e) { return e.Message.Contains("NTSTATUS=0xC0000022"); }
     } finally { Check(CloseHandle(restricted),"Close parent-query denial handle"); }
   }
-  static void Census(IntPtr job,Result r,List<IntPtr> owned,Func<IntPtr,IntPtr> own,string executable) {
+  static void Census(IntPtr job,Result r,List<IntPtr> owned,Func<IntPtr,IntPtr> own,string executable,string raceProtocol) {
     var ids=Pids(job);
     // The kernel list has no ordering contract. Capture the expected suspended
     // descendant before classifying any console host whose parent is that PID.
@@ -182,7 +182,13 @@ public static class TsfJobSupervisor {
       long exit,kernel,user; Check(GetProcessTimes(p.Handle,out p.Birth,out exit,out kernel,out user),"Job identity birth");
       var image=new StringBuilder(32768); uint length=(uint)image.Capacity;
       Check(QueryFullProcessImageName(p.Handle,0,image,ref length),"Live job identity image"); p.Image=image.ToString();
-      bool member; Check(IsProcessInJob(p.Handle,job,out member),"Job identity membership"); p.Member=member; p.Parent=Parent(p.Handle,pid);
+      bool member; Check(IsProcessInJob(p.Handle,job,out member),"Job identity membership"); p.Member=member;
+      if(raceProtocol!=null && pid==r.DescendantPid) {
+        File.WriteAllText(Path.Combine(raceProtocol,"race-go"),"go");
+        if(WaitForSingleObject(p.Handle,5000)!=WAIT_OBJECT_0 || TestToolhelpContains(pid)) throw new IOException("Census exit race barrier failed");
+        Console.WriteLine("TSF_CENSUS_RACE pid="+pid+" live_capture=yes exited=yes toolhelp=absent");
+      }
+      p.Parent=Parent(p.Handle,pid);
       Identity parent=r.Processes.Find(q=>q.Pid==p.Parent && (q.Role=="root" || q.Role=="descendant"));
       if(pid==r.DescendantPid && parent!=null && parent.Role=="root" && p.Birth>=parent.Birth && String.Equals(p.Image,executable,StringComparison.OrdinalIgnoreCase)) p.Role="descendant";
       else if(parent!=null && p.Birth>=parent.Birth && !r.Processes.Exists(q=>q.Role=="console-host" && q.Parent==p.Parent) && String.Equals(p.Image,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"conhost.exe"),StringComparison.OrdinalIgnoreCase)) p.Role="console-host";
@@ -198,7 +204,8 @@ public static class TsfJobSupervisor {
     IntPtr job=IntPtr.Zero,query=IntPtr.Zero,denied=IntPtr.Zero,root=IntPtr.Zero,thread=IntPtr.Zero;
     IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero;
     bool attrsReady=false; string dir=null,stdout=null,stderr=null,protocol=null; bool created=false;
-    bool controlled=arguments=="normal" || arguments=="exit23" || arguments=="hang" || arguments=="descendant" || arguments=="unknown" || arguments=="output";
+    bool race=arguments=="race";
+    bool controlled=arguments=="normal" || arguments=="exit23" || arguments=="hang" || arguments=="descendant" || arguments=="unknown" || arguments=="race" || arguments=="output";
     Stopwatch main=Stopwatch.StartNew(); Stopwatch cleanup=null;
     Func<IntPtr,IntPtr> own=h=> { if(!Valid(h)) throw Native("Create owned handle"); owned.Add(h); r.OwnedHandles++; return h; };
     try {
@@ -248,13 +255,13 @@ public static class TsfJobSupervisor {
         if(remaining<=0) { r.Reason="timeout"; break; }
         if(controlled) {
           if(File.Exists(Path.Combine(protocol,"started")) && !r.ControlStarted) {
-            Census(job,r,owned,own,executable); r.ControlStarted=true;
+            Census(job,r,owned,own,executable,null); r.ControlStarted=true;
             File.WriteAllText(Path.Combine(protocol,"start-go"),"go");
           }
           if(File.Exists(Path.Combine(protocol,"child")) && !r.DescendantSuspended) {
             r.DescendantPid=UInt32.Parse(File.ReadAllText(Path.Combine(protocol,"child")));
             if(r.DescendantPid==0 || r.DescendantPid==r.Pid) throw new IOException("Invalid descendant PID");
-            Census(job,r,owned,own,executable);
+            Census(job,r,owned,own,executable,null);
             Identity child=r.Processes.Find(p=>p.Pid==r.DescendantPid && p.Role=="descendant");
             if(child==null) throw new IOException("Suspended descendant not in job");
             IntPtr childThreads=own(CreateToolhelp32Snapshot(4,0));
@@ -267,16 +274,21 @@ public static class TsfJobSupervisor {
             r.DescendantSuspended=true; File.WriteAllText(Path.Combine(protocol,"child-go"),"go");
           }
           if(File.Exists(Path.Combine(protocol,"unknown"))) {
-            Census(job,r,owned,own,executable);
+            Census(job,r,owned,own,executable,null);
             throw new IOException("Unknown child accepted by census");
           }
           if(File.Exists(Path.Combine(protocol,"writer-ready")) && !r.RetainedWriterReady) {
             Identity child=r.Processes.Find(p=>p.Pid==r.DescendantPid && p.Role=="descendant");
             if(child==null || WaitForSingleObject(child.Handle,0)!=WAIT_TIMEOUT) throw new IOException("Retainer startup not live");
-            Census(job,r,owned,own,executable); r.RetainedWriterReady=true;
+            Census(job,r,owned,own,executable,null); r.RetainedWriterReady=true;
             File.WriteAllText(Path.Combine(protocol,"writer-go"),"go");
           }
-        } else Census(job,r,owned,own,executable);
+          if(race && File.Exists(Path.Combine(protocol,"race-child")) && r.DescendantPid==0) {
+            r.DescendantPid=UInt32.Parse(File.ReadAllText(Path.Combine(protocol,"race-child")));
+            Census(job,r,owned,own,executable,protocol);
+            File.WriteAllText(Path.Combine(protocol,"race-done"),"go");
+          }
+        } else Census(job,r,owned,own,executable,null);
         remaining=mainMs-main.ElapsedMilliseconds;
         if(remaining<=0) { r.Reason="timeout"; break; }
         uint wait=WaitForSingleObject(root,(uint)Math.Min(25,remaining));
