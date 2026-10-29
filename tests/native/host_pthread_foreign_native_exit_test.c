@@ -100,11 +100,20 @@ int main(void) {
     for (int j=0;j<i;++j) if (old[j]==t.host_id) return 5;
     old[i]=t.host_id;
     clockid_t from_host=123; struct timespec sample;
-    if (pthread_getcpuclockid(t.host_id,&from_host) || from_host!=t.clock || clock_gettime(t.clock,&sample) ||
-        WaitForSingleObject(thread,0)!=WAIT_TIMEOUT) return 6;
+    errno=EDOM;
+    if (pthread_getcpuclockid(t.host_id,&from_host) || from_host!=t.clock || errno!=EDOM ||
+        clock_gettime(t.clock,&sample) || WaitForSingleObject(thread,0)!=WAIT_TIMEOUT) return 6;
+    clockid_t from_dll=123;
+    errno=EDOM;
+    if (dll_clock(t.host_id,&from_dll) || from_dll!=t.clock || errno!=EDOM) return 6;
+    from_host=123; from_dll=456; errno=EDOM;
+    if (pthread_getcpuclockid((pthread_t)0,&from_host)!=ESRCH || from_host!=123 || errno!=EDOM ||
+        dll_clock((pthread_t)0,&from_dll)!=ESRCH || from_dll!=456 || errno!=EDOM) return 6;
     if (!SetEvent(t.release) || WaitForSingleObject(thread,5000)!=WAIT_OBJECT_0) return 7;
     DWORD actual; if (!GetExitCodeThread(thread,&actual) || actual!=t.exit_code || destroyed!=i+1) return 8;
-    from_host=123; if (pthread_getcpuclockid(t.host_id,&from_host)!=ESRCH || from_host!=123) return 9;
+    from_host=123; from_dll=456; errno=EDOM;
+    if (pthread_getcpuclockid(t.host_id,&from_host)!=ESRCH || from_host!=123 || errno!=EDOM ||
+        dll_clock(t.host_id,&from_dll)!=ESRCH || from_dll!=456 || errno!=EDOM) return 9;
     sample.tv_sec=123; sample.tv_nsec=456; errno=0;
     if (clock_gettime(t.clock,&sample)!=-1 || errno!=EINVAL || sample.tv_sec!=123 || sample.tv_nsec!=456) return 10;
     if (!CloseHandle(thread) || !CloseHandle(t.ready) || !CloseHandle(t.release)) return 11; handles("iteration-complete"); inventory("iteration-complete");

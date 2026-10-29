@@ -317,7 +317,7 @@
  /* internal header files */
  #include "misc.h"
  
-@@ -38,6 +40,141 @@
+@@ -38,6 +40,143 @@
          return -1;
      }
      return 0;
@@ -445,7 +445,9 @@
 +    unsigned long long generation = 0;
 +    int result;
 +    if (!out) return EINVAL;
++#ifndef GESHER_PTHREAD_ROUTING_PROBE
 +    (void)pthread_self();
++#endif
 +    result = gesher_winpthread_dup_cpu_handle_v1(thread, &owned, &generation);
 +    if (result) return result;
 +    const clock_authority *authority = clock_anchor();
