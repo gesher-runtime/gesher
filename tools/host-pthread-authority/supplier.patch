@@ -685,3 +685,305 @@
    _pthread_v *record;
    HANDLE duplicate = NULL;
    int result = ESRCH;
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -848,9 +848,102 @@ pthread_once (pthread_once_t *o, void (*func)(void))
+   return 0;
+ }
+ 
++/* CI-only identity routing experiment.  It deliberately does not establish
++   process ownership for the rest of the pthread API and must never be enabled
++   in a production supplier. */
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++struct gesher_identity_probe_v2 {
++  unsigned size, version;
++  pthread_t (__cdecl *self)(void);
++  int (__cdecl *dup)(pthread_t, void **, unsigned long long *);
++  __typeof__(&pthread_create) create;
++  __typeof__(&pthread_join) join;
++  __typeof__(&_pthread_tryjoin) tryjoin;
++  __typeof__(&pthread_detach) detach;
++  __typeof__(&pthread_cancel) cancel;
++  __typeof__(&pthread_key_create) key_create;
++  __typeof__(&pthread_key_delete) key_delete;
++  __typeof__(&pthread_getspecific) getspecific;
++  __typeof__(&pthread_setspecific) setspecific;
++  __typeof__(&pthread_getclean) getclean;
++  __typeof__(&pthread_exit) exit;
++  __typeof__(&pthread_testcancel) testcancel;
++};
++__declspec(dllexport) const struct gesher_identity_probe_v2 * __cdecl
++ gesher_pthread_identity_probe_v2(void)
++{
++  static const struct gesher_identity_probe_v2 table = {
++    sizeof(table), 2, pthread_self, gesher_winpthread_dup_cpu_handle_v1,
++    pthread_create, pthread_join, _pthread_tryjoin, pthread_detach, pthread_cancel, pthread_key_create, pthread_key_delete, pthread_getspecific, pthread_setspecific, pthread_getclean, pthread_exit, pthread_testcancel
++  };
++  return &table;
++}
++#ifdef DLL_EXPORT
++static const struct gesher_identity_probe_v2 *identity_probe_owner(void)
++{
++  typedef const struct gesher_identity_probe_v2 *(__cdecl *get_fn)(void);
++  HMODULE host=GetModuleHandleW(NULL), actual=NULL;
++  get_fn get=host ? (get_fn)GetProcAddress(host,"gesher_pthread_identity_probe_v2") : NULL;
++  MEMORY_BASIC_INFORMATION mbi;
++  const struct gesher_identity_probe_v2 *table;
++  if (!get) {
++    /* A host advertising a clock anchor is participating but incomplete. */
++    if (host && GetProcAddress(host,"gesher_clock_anchor_v1")) abort();
++    return NULL;
++  }
++  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                          (LPCWSTR)get,&actual) || actual!=host) abort();
++  table=get();
++  if (!table || !VirtualQuery(table,&mbi,sizeof(mbi)) || mbi.AllocationBase!=host ||
++      mbi.State!=MEM_COMMIT || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) ||
++      (uintptr_t)table < (uintptr_t)mbi.BaseAddress ||
++      (uintptr_t)table - (uintptr_t)mbi.BaseAddress > mbi.RegionSize ||
++      sizeof(*table) > mbi.RegionSize - ((uintptr_t)table - (uintptr_t)mbi.BaseAddress)) abort();
++  if (table->size!=sizeof(*table) || table->version!=2 || !table->self || !table->dup ||
++      !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                          (LPCWSTR)table->self,&actual) || actual!=host ||
++      !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                          (LPCWSTR)table->dup,&actual) || actual!=host) abort();
++  if (!table->create || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++      (LPCWSTR)table->create, &actual) || actual!=host) abort();
++  if (!table->join || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++      (LPCWSTR)table->join, &actual) || actual!=host) abort();
++  if (!table->tryjoin || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++      (LPCWSTR)table->tryjoin, &actual) || actual!=host) abort();
++  if (!table->detach || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++      (LPCWSTR)table->detach, &actual) || actual!=host) abort();
++  if (!table->cancel || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++      (LPCWSTR)table->cancel, &actual) || actual!=host) abort();
++  if (!table->key_create || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++      (LPCWSTR)table->key_create, &actual) || actual!=host) abort();
++  if (!table->key_delete || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++      (LPCWSTR)table->key_delete, &actual) || actual!=host) abort();
++  if (!table->getspecific || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++      (LPCWSTR)table->getspecific, &actual) || actual!=host) abort();
++  if (!table->setspecific || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++      (LPCWSTR)table->setspecific, &actual) || actual!=host) abort();
++  if (!table->getclean || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++      (LPCWSTR)table->getclean, &actual) || actual!=host) abort();
++  if (!table->exit || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++      (LPCWSTR)table->exit, &actual) || actual!=host) abort();
++  if (!table->testcancel || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++      (LPCWSTR)table->testcancel, &actual) || actual!=host) abort();
++  return table;
++}
++#endif
++#endif
++
++
+ int
+ pthread_key_create (pthread_key_t *key, void (* dest)(void *))
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
++  if (owner) return owner->key_create(key, dest);
++#endif
+ 	unsigned int i;
+ 	long nmax;
+ 	void (**d)(void *);
+@@ -936,6 +1029,10 @@ pthread_key_create (pthread_key_t *key, void (* dest)(void *))
+ int
+ pthread_key_delete (pthread_key_t key)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
++  if (owner) return owner->key_delete(key);
++#endif
+   if (key >= _pthread_key_max || !_pthread_key_dest)
+     return EINVAL;
+ 
+@@ -957,6 +1054,10 @@ pthread_key_delete (pthread_key_t key)
+ void *
+ pthread_getspecific (pthread_key_t key)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
++  if (owner) return owner->getspecific(key);
++#endif
+   DWORD lasterr = GetLastError ();
+   void *r;
+   _pthread_v *t = __pthread_self_lite ();
+@@ -970,6 +1071,10 @@ pthread_getspecific (pthread_key_t key)
+ int
+ pthread_setspecific (pthread_key_t key, const void *value)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
++  if (owner) return owner->setspecific(key, value);
++#endif
+   DWORD lasterr = GetLastError ();
+   _pthread_v *t = __pthread_self_lite ();
+ 
+@@ -1012,57 +1117,6 @@ pthread_setspecific (pthread_key_t key, const void *value)
+   return 0;
+ }
+ 
+-/* CI-only identity routing experiment.  It deliberately does not establish
+-   process ownership for the rest of the pthread API and must never be enabled
+-   in a production supplier. */
+-#ifdef GESHER_PTHREAD_ROUTING_PROBE
+-struct gesher_identity_probe_v1 {
+-  unsigned size, version;
+-  pthread_t (__cdecl *self)(void);
+-  int (__cdecl *dup)(pthread_t, void **, unsigned long long *);
+-};
+-__declspec(dllexport) const struct gesher_identity_probe_v1 * __cdecl
+- gesher_pthread_identity_probe_v1(void)
+-{
+-  static const struct gesher_identity_probe_v1 table = {
+-    sizeof(table), 1, pthread_self, gesher_winpthread_dup_cpu_handle_v1
+-  };
+-  return &table;
+-}
+-#ifdef DLL_EXPORT
+-static const struct gesher_identity_probe_v1 *identity_probe_owner(void)
+-{
+-  typedef const struct gesher_identity_probe_v1 *(__cdecl *get_fn)(void);
+-  HMODULE host=GetModuleHandleW(NULL), actual=NULL;
+-  get_fn get=host ? (get_fn)GetProcAddress(host,"gesher_pthread_identity_probe_v1") : NULL;
+-  MEMORY_BASIC_INFORMATION mbi;
+-  const struct gesher_identity_probe_v1 *table;
+-  if (!get) {
+-    /* A host advertising a clock anchor is participating but incomplete. */
+-    if (host && GetProcAddress(host,"gesher_clock_anchor_v1")) abort();
+-    return NULL;
+-  }
+-  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+-                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+-                          (LPCWSTR)get,&actual) || actual!=host) abort();
+-  table=get();
+-  if (!table || !VirtualQuery(table,&mbi,sizeof(mbi)) || mbi.AllocationBase!=host ||
+-      mbi.State!=MEM_COMMIT || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) ||
+-      (uintptr_t)table < (uintptr_t)mbi.BaseAddress ||
+-      (uintptr_t)table - (uintptr_t)mbi.BaseAddress > mbi.RegionSize ||
+-      sizeof(*table) > mbi.RegionSize - ((uintptr_t)table - (uintptr_t)mbi.BaseAddress)) abort();
+-  if (table->size!=sizeof(*table) || table->version!=1 || !table->self || !table->dup ||
+-      !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+-                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+-                          (LPCWSTR)table->self,&actual) || actual!=host ||
+-      !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+-                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+-                          (LPCWSTR)table->dup,&actual) || actual!=host) abort();
+-  return table;
+-}
+-#endif
+-#endif
+-
+ int
+ pthread_equal (pthread_t t1, pthread_t t2)
+ {
+@@ -1173,7 +1227,7 @@ pthread_t
+ pthread_self (void)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v1 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
+   if (owner) return owner->self();
+ #endif
+   _pthread_v *t = __pthread_self_lite ();
+@@ -1213,7 +1267,7 @@ gesher_winpthread_dup_cpu_handle_v1 (pthread_t thread, void **owned_handle,
+                                      unsigned long long *generation)
+ {
+ #if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
+-  const struct gesher_identity_probe_v1 *owner=identity_probe_owner();
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
+   if (owner) return owner->dup(thread, owned_handle, generation);
+ #endif
+   _pthread_v *record;
+@@ -1255,6 +1309,10 @@ pthread_gethandle (pthread_t t)
+ struct _pthread_cleanup **
+ pthread_getclean (void)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
++  if (owner) return owner->getclean();
++#endif
+   struct _pthread_v *t = __pthread_self_lite ();
+   if (!t) return NULL;
+   return &t->clean;
+@@ -1277,6 +1335,10 @@ pthread_set_concurrency (int val)
+ void
+ pthread_exit (void *res)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
++  if (owner) { owner->exit(res); abort(); }
++#endif
+   _pthread_v *t = NULL;
+   unsigned rslt = (unsigned) ((intptr_t) res);
+   struct _pthread_v *id = __pthread_self_lite ();
+@@ -1364,6 +1426,10 @@ _pthread_setnobreak (int v)
+ void
+ pthread_testcancel (void)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
++  if (owner) { owner->testcancel(); return; }
++#endif
+   struct _pthread_v *self = __pthread_self_lite ();
+ 
+   if (!self || self->in_cancel)
+@@ -1387,6 +1453,10 @@ pthread_testcancel (void)
+ int
+ pthread_cancel (pthread_t t)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
++  if (owner) return owner->cancel(t);
++#endif
+   struct _pthread_v *tv = __pth_gpointer_locked (t);
+ 
+   if (tv == NULL)
+@@ -1755,6 +1825,10 @@ pthread_create_wrapper (void *args)
+ int
+ pthread_create (pthread_t *th, const pthread_attr_t *attr, void *(* func)(void *), void *arg)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
++  if (owner) return owner->create(th, attr, func, arg);
++#endif
+   HANDLE thrd = NULL;
+   int redo = 0;
+   struct _pthread_v *tv;
+@@ -1869,6 +1943,10 @@ pthread_create (pthread_t *th, const pthread_attr_t *attr, void *(* func)(void *
+ int
+ pthread_join (pthread_t t, void **res)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
++  if (owner) return owner->join(t, res);
++#endif
+   struct _pthread_v *tv = __pth_gpointer_locked (t);
+   pthread_spinlock_t new_spin_keys = PTHREAD_SPINLOCK_INITIALIZER;
+ 
+@@ -1899,6 +1977,10 @@ pthread_join (pthread_t t, void **res)
+ int
+ _pthread_tryjoin (pthread_t t, void **res)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
++  if (owner) return owner->tryjoin(t, res);
++#endif
+   struct _pthread_v *tv;
+   pthread_spinlock_t new_spin_keys = PTHREAD_SPINLOCK_INITIALIZER;
+ 
+@@ -1951,6 +2033,10 @@ _pthread_tryjoin (pthread_t t, void **res)
+ int
+ pthread_detach (pthread_t t)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v2 *owner=identity_probe_owner();
++  if (owner) return owner->detach(t);
++#endif
+   int r = 0;
+   struct _pthread_v *tv;
+   HANDLE dw;

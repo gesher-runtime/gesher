@@ -70,7 +70,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($case in @(@{Name='strict';Exit=0;Marker='PASS strict process thread identity, clocks and authority after DLL unload'}, @{Name='standalone';Exit=0;Marker='PASS routing probe standalone DLL local provider'}, @{Name='bad-anchor';Exit=3;Marker='CONTROL invalid identity descriptor before pthread_self'}, @{Name='missing-anchor';Exit=3;Marker='CONTROL missing identity descriptor before pthread_self'})) {
+          foreach ($case in @(@{Name='strict';Exit=0;Marker='PASS strict process thread identity, clocks and authority after DLL unload'}, @{Name='operations';Exit=0;Marker='PASS probe cross-image create join tryjoin cancel detach TLS cleanup and unload'}, @{Name='standalone';Exit=0;Marker='PASS routing probe standalone DLL local provider'}, @{Name='bad-anchor';Exit=3;Marker='CONTROL invalid identity descriptor before pthread_self'}, @{Name='missing-anchor';Exit=3;Marker='CONTROL missing identity descriptor before pthread_self'})) {
             $name=$case.Name
             $stdout=Join-Path $env:RUNNER_TEMP "$name.out"
             $stderr=Join-Path $env:RUNNER_TEMP "$name.err"
