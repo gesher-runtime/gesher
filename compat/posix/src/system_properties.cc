@@ -47,11 +47,17 @@ struct Handle {
   HANDLE value = nullptr;
   ~Handle() { if (value && value != INVALID_HANDLE_VALUE) CloseHandle(value); }
 };
+#ifdef GESHER_PROPERTY_READONLY_DIAGNOSTIC
+thread_local HANDLE diagnostic_wait_event = nullptr;
+#endif
 struct MutexLock {
   HANDLE mutex;
   bool held = false;
   explicit MutexLock(HANDLE handle) : mutex(handle) {
     if (mutex) {
+#ifdef GESHER_PROPERTY_READONLY_DIAGNOSTIC
+      if (diagnostic_wait_event) SetEvent(diagnostic_wait_event);
+#endif
       DWORD result = WaitForSingleObject(mutex, INFINITE);
       held = result == WAIT_OBJECT_0 || result == WAIT_ABANDONED;
     }
@@ -412,6 +418,20 @@ bool Valid(const std::string& name, const std::string& value) {
 
 } // namespace
 
+#ifdef GESHER_PROPERTY_READONLY_DIAGNOSTIC
+// CI-only synchronization observation. The caller must release on its same thread.
+void DiagnosticSetWaitEvent(HANDLE event) { diagnostic_wait_event = event; }
+HANDLE DiagnosticHoldAreaMutex() {
+  std::lock_guard local(LocalMutex());
+  Area* area = Current();
+  if (!area) return nullptr;
+  const DWORD result = WaitForSingleObject(area->mutex.value, 5000);
+  return result == WAIT_OBJECT_0 || result == WAIT_ABANDONED ? area->mutex.value : nullptr;
+}
+bool DiagnosticReleaseAreaMutex(HANDLE mutex) {
+  return mutex && ReleaseMutex(mutex) != FALSE;
+}
+#endif
 bool Initialize() {
   std::lock_guard lock(LocalMutex());
   return Current() != nullptr;

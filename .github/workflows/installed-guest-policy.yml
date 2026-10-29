@@ -72,6 +72,8 @@ jobs:
           if ($code -ne 0) { throw "resource policy fixture failed: $code" }
           foreach ($row in @('POLICY_REPARSE subtree_rejected=1 outside_unchanged=1 owners=0',
               'POLICY_RUNTIME_NESTED actual_gather=1 nested_directory=1 nested_file=1',
+              'POLICY_PROPERTY_MUTEX guest_blocked_while_host_held=',
+              'POLICY_PROPERTY_LIVE read=',
               'POLICY_PROPERTY_ACCESS direct_write_denied=1 error=5',
               'POLICY_PROPERTY guest_read=1 host_value=1 guest_write=0',
               'POLICY_PROPERTY_HOST observed_write=0 value_matches=0',

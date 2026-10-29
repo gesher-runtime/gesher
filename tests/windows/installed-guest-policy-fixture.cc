@@ -4,12 +4,22 @@
 #include "../../compat/posix/src/startup_null.h"
 #include "../../compat/posix/include/gesher/system_properties.h"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <io.h>
 #include <stdexcept>
 
 namespace g = gesher::guest;
+namespace gesher::properties { void DiagnosticSetWaitEvent(HANDLE); HANDLE DiagnosticHoldAreaMutex(); bool DiagnosticReleaseAreaMutex(HANDLE); }
+struct OwnedEvent {
+  HANDLE handle = nullptr;
+  ~OwnedEvent() { if (handle && !CloseHandle(handle)) std::abort(); }
+};
+struct HeldPropertyMutex {
+  HANDLE handle = nullptr;  // borrowed from the process-lifetime property area
+  ~HeldPropertyMutex() { if (handle && !gesher::properties::DiagnosticReleaseAreaMutex(handle)) std::abort(); }
+};
 void Check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 std::u16string U(const std::wstring& value) { return {value.begin(), value.end()}; }
 std::u16string Generation() {
@@ -84,7 +94,11 @@ std::wstring PrivateName(HANDLE handle) {
 }
 int wmain(int argc, wchar_t** argv) {
   try {
-    if (argc == 4 && !wcscmp(argv[1], L"--nested")) {
+    if (argc == 6 && !wcscmp(argv[1], L"--nested")) {
+      HANDLE ready = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[4], nullptr, 10)));
+      HANDLE done = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[5], nullptr, 10)));
+      DWORD event_flags = 0;
+      Check(GetHandleInformation(ready, &event_flags) && GetHandleInformation(done, &event_flags), "inherited diagnostic events");
       wchar_t property_root_env[32768]{};
       DWORD root_length = GetEnvironmentVariableW(L"ANDROID_DATA", property_root_env, 32768);
       Check(root_length && root_length < 32768, "fixture property root environment");
@@ -96,9 +110,14 @@ int wmain(int argc, wchar_t** argv) {
       printf("POLICY_PROPERTY_ACCESS direct_write_denied=%u error=%lu\n",
           unsigned(direct_write == INVALID_HANDLE_VALUE), write_error);
       Check(direct_write == INVALID_HANDLE_VALUE && write_error == ERROR_ACCESS_DENIED, "actual area write denied");
+      gesher::properties::DiagnosticSetWaitEvent(ready);
       std::string property;
       bool property_read = gesher::properties::Get("ro.fixture.identity", &property);
+      std::string live;
+      bool live_read = gesher::properties::Get("fixture.live", &live);
       bool property_write = gesher::properties::Set("fixture.mutable", "guest");
+      printf("POLICY_PROPERTY_LIVE read=%u updated_value=%u\n", unsigned(live_read), unsigned(live == "after"));
+      Check(SetEvent(done), "property read observation completed");
       printf("POLICY_PROPERTY guest_read=%u host_value=%u guest_write=%u\n", unsigned(property_read),
           unsigned(property == "host-authoritative"), unsigned(property_write));
       Check(property_read && property == "host-authoritative" && !property_write, "actual readonly property probe");
@@ -146,6 +165,7 @@ int wmain(int argc, wchar_t** argv) {
     Check(_wputenv_s(L"ANDROID_DATA", property_root.c_str()) == 0 &&
         _wputenv_s(L"GESHER_BINDER", L"fixture-property-session") == 0, "property session setup");
     Check(gesher::properties::Set("ro.fixture.identity", "host-authoritative"), "host publishes real property");
+    Check(gesher::properties::Set("fixture.live", "before"), "host publishes mutable property");
     std::string host_value;
     Check(gesher::properties::Get("ro.fixture.identity", &host_value) && host_value == "host-authoritative", "host reads real property");
     std::wstring asset_file = assets + L"\\payload.dat";
@@ -203,12 +223,31 @@ int wmain(int argc, wchar_t** argv) {
       Check(GetHandleInformation(private_server, &server_flags) && GetHandleInformation(private_client, &client_flags) &&
           !(server_flags & HANDLE_FLAG_INHERIT) && !(client_flags & HANDLE_FLAG_INHERIT), "private endpoints not inheritable");
       std::wstring private_name = PrivateName(private_server);
-      std::wstring command = L"\"" + std::wstring(executable, size) + L"\" --nested \"" + data + L"\" \"" + private_name + L"\"";
+      OwnedEvent ready{CreateEventW(&security, TRUE, FALSE, nullptr)};
+      OwnedEvent done{CreateEventW(&security, TRUE, FALSE, nullptr)};
+      Check(ready.handle && done.handle, "owned property observation events");
+      std::wstring command = L"\"" + std::wstring(executable, size) + L"\" --nested \"" + data + L"\" \"" + private_name + L"\" " +
+          std::to_wstring(reinterpret_cast<uintptr_t>(ready.handle)) + L" " +
+          std::to_wstring(reinterpret_cast<uintptr_t>(done.handle));
       gesher::guest::RestrictedLaunch child;
-      auto started = child.Start(executable, command.data(), nullptr, nullptr, startup, CREATE_NO_WINDOW, policy->sid, {log, nul});
+      auto started = child.Start(executable, command.data(), nullptr, nullptr, startup, CREATE_NO_WINDOW, policy->sid, {log, nul, ready.handle, done.handle});
       Check(CloseHandle(log) && CloseHandle(nul), "close intentional parent stdio handles");
-      Check(started.error == ERROR_SUCCESS && child.Resume().error == ERROR_SUCCESS, "actual lowbox nested child launch");
+      Check(started.error == ERROR_SUCCESS, "actual lowbox nested child launch");
+      HeldPropertyMutex held;
+      held.handle = gesher::properties::DiagnosticHoldAreaMutex();
+      Check(held.handle != nullptr, "host holds actual property mutex");
+      Check(child.Resume().error == ERROR_SUCCESS, "actual lowbox nested child resume");
+      Check(WaitForSingleObject(ready.handle, 5000) == WAIT_OBJECT_0, "actual guest reaches property read");
+      DWORD while_held = WaitForSingleObject(done.handle, 300);
+      Check(while_held == WAIT_TIMEOUT || while_held == WAIT_OBJECT_0, "bounded guest property wait");
+      Check(gesher::properties::Set("fixture.live", "after"), "host updates while holding area mutex");
+      Check(gesher::properties::DiagnosticReleaseAreaMutex(held.handle), "host releases actual property mutex");
+      held.handle = nullptr;
+      printf("POLICY_PROPERTY_MUTEX guest_blocked_while_host_held=%u\n", unsigned(while_held == WAIT_TIMEOUT));
       Check(WaitForSingleObject(child.process(), 15000) == WAIT_OBJECT_0, "actual lowbox nested child completion");
+      bool ready_closed = CloseHandle(ready.handle) != FALSE; if (ready_closed) ready.handle = nullptr;
+      bool done_closed = CloseHandle(done.handle) != FALSE; if (done_closed) done.handle = nullptr;
+      Check(ready_closed && done_closed, "actual property observation events closed");
       DWORD code = 0; Check(GetExitCodeProcess(child.process(), &code) && code == 0 && child.Stop().confirmed, "actual nested child exit and retirement");
       Check(CloseHandle(private_server) && CloseHandle(private_client), "actual private bootstrap owner cleanup");
       HANDLE verified_log = CreateFileW(log_path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
