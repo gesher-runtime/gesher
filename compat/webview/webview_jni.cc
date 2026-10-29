@@ -184,7 +184,9 @@ jlong JNICALL WebView2Host_create(JNIEnv* env, jclass, jobject peer, jlong paren
   return reinterpret_cast<jlong>(Host::Create(new JavaListener(env, peer), options));
 }
 
-void JNICALL WebView2Host_destroy(JNIEnv*, jclass, jlong h) { Get(h)->Destroy(); }
+jboolean JNICALL WebView2Host_destroy(JNIEnv*, jclass, jlong h) {
+  return Get(h)->Destroy() ? JNI_TRUE : JNI_FALSE;
+}
 
 jlong JNICALL WebView2Host_container(JNIEnv*, jclass, jlong h) {
   return static_cast<jlong>(reinterpret_cast<intptr_t>(Get(h)->Container()));
@@ -224,6 +226,18 @@ void JNICALL WebView2Host_postFrameMessage(JNIEnv* env, jclass, jlong h, jlong d
 void JNICALL WebView2Host_callDevTools(JNIEnv* env, jclass, jlong h, jstring method,
                                        jstring params, jlong cb) {
   Get(h)->CallDevTools(Str(env, method), Str(env, params), cb);
+}
+
+jlong JNICALL WebView2Host_sessionHandle(JNIEnv*, jclass, jlong h) {
+  return Get(h)->SessionHandle();
+}
+
+jint JNICALL WebView2Host_submitSession(JNIEnv* env, jclass, jlong handle, jlong id,
+                                        jstring session, jstring method, jstring params,
+                                        jint timeout_ms) {
+  if (timeout_ms <= 0) return -2;
+  return Host::SubmitSession(handle, id, Str(env, session), Str(env, method), Str(env, params),
+                             static_cast<uint32_t>(timeout_ms));
 }
 
 void JNICALL WebView2Host_listenDevTools(JNIEnv* env, jclass, jlong h, jstring event) {
@@ -400,7 +414,7 @@ const JNINativeMethod kMethods[] = {
      reinterpret_cast<void*>(&WebView2Host_setProxyArguments)},
     {"nCreate", "(Lcom/gesher/app/webview/WebView2Host;JDI)J",
      reinterpret_cast<void*>(&WebView2Host_create)},
-    {"nDestroy", "(J)V", reinterpret_cast<void*>(&WebView2Host_destroy)},
+    {"nDestroy", "(J)Z", reinterpret_cast<void*>(&WebView2Host_destroy)},
     {"nContainer", "(J)J", reinterpret_cast<void*>(&WebView2Host_container)},
     {"nNavigate", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V",
      reinterpret_cast<void*>(&WebView2Host_navigate)},
@@ -410,6 +424,9 @@ const JNINativeMethod kMethods[] = {
     {"nPostFrameMessage", "(JJLjava/lang/String;)V", reinterpret_cast<void*>(&WebView2Host_postFrameMessage)},
     {"nCallDevTools", "(JLjava/lang/String;Ljava/lang/String;J)V",
      reinterpret_cast<void*>(&WebView2Host_callDevTools)},
+    {"nSessionHandle", "(J)J", reinterpret_cast<void*>(&WebView2Host_sessionHandle)},
+    {"nSubmitSession", "(JJLjava/lang/String;Ljava/lang/String;Ljava/lang/String;I)I",
+     reinterpret_cast<void*>(&WebView2Host_submitSession)},
     {"nListenDevTools", "(JLjava/lang/String;)V",
      reinterpret_cast<void*>(&WebView2Host_listenDevTools)},
     {"nCompletePermission", "(JJIZ)V", reinterpret_cast<void*>(&WebView2Host_completePermission)},

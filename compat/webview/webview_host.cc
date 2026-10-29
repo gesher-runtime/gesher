@@ -278,7 +278,13 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   Com<ICoreWebView2> webview;
   bool ready = false;
   bool failed = false;
+  HRESULT failure_reason = E_FAIL;
   bool destroyed = false;
+  int64_t session_handle = 0;
+  unsigned session_dispatches = 0;
+  bool session_destroy_deferred = false;
+  struct SessionRequest { ULONGLONG deadline; UINT_PTR timer; };
+  std::map<int64_t, SessionRequest> session_requests;  // STA only
   std::vector<std::function<void(Impl*)>> pending;  // until ready
 
   Settings settings;
@@ -413,6 +419,33 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
 namespace {
 
 using Impl = Host::Impl;
+
+struct SessionEntry {
+  std::shared_ptr<Impl> owner;
+  std::set<int64_t> used;
+};
+std::mutex g_session_mutex;
+std::map<int64_t, SessionEntry> g_sessions;
+int64_t g_next_session = 1;
+
+void FinishSession(const std::shared_ptr<Impl>& impl, int64_t id, HRESULT hr,
+                   const std::wstring& json) {
+  auto it = impl->session_requests.find(id);
+  if (it == impl->session_requests.end()) return;
+  if (GetTickCount64() >= it->second.deadline) hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+  UINT_PTR timer = it->second.timer;
+  impl->session_requests.erase(it);  // retire before dispatch; callbacks may reenter
+  if (timer) { KillTimer(g_task_window, timer); g_timers.erase(timer); }
+  ++impl->session_dispatches;
+  impl->Report(kSessionResult, id, static_cast<int32_t>(hr), json);
+  --impl->session_dispatches;
+  if (impl->session_dispatches == 0 && impl->session_destroy_deferred) {
+    impl->session_destroy_deferred = false;
+    Listener* listener = impl->listener;
+    impl->listener = nullptr;
+    if (listener) listener->OnDestroyed();
+  }
+}
 
 std::set<Impl*> g_live;  // the WebView thread's: hosts with a controller
 std::shared_ptr<Impl> g_service;  // a hidden host for cookies and data, when no WebView exists
@@ -589,6 +622,7 @@ std::wstring JsonString(const std::wstring& s) {
 
 void Fail(Impl* impl, HRESULT hr, const std::wstring& what) {
   impl->failed = true;
+  impl->failure_reason = hr;
   impl->pending.clear();
   impl->Report(kFailed, 0, static_cast<int32_t>(hr), what + L": " + Hex(hr));
   auto waiting = std::move(impl->service_waiting);
@@ -1647,19 +1681,99 @@ Host* Host::Create(Listener* listener, const HostOptions& options) {
   auto impl = std::make_shared<Impl>();
   impl->listener = listener;
   impl->options = options;
+  {
+    std::lock_guard<std::mutex> guard(g_session_mutex);
+    if (g_next_session < std::numeric_limits<int64_t>::max()) {
+      impl->session_handle = g_next_session++;
+      g_sessions.emplace(impl->session_handle, SessionEntry{impl, {}});
+    }
+  }
   PostToWebViewThread([impl] { Start(impl); });
   return new Host(impl);
 }
 
-void Host::Destroy() {
-  std::shared_ptr<Impl> impl = std::move(impl_);
+int64_t Host::SessionHandle() const { return impl_->session_handle; }
+
+int32_t Host::SubmitSession(int64_t handle, int64_t id, const std::wstring& session,
+                            const std::wstring& method, const std::wstring& params,
+                            uint32_t timeout_ms) {
+  if (id <= 0 || timeout_ms == 0 || timeout_ms > 60000 || method.empty()) return -2;
+  std::lock_guard<std::mutex> guard(g_session_mutex);
+  auto entry = g_sessions.find(handle);
+  if (entry == g_sessions.end()) return -1;
+  if (entry->second.used.count(id)) return -3;
+  if (entry->second.used.size() >= 65536) return -5;
+  entry->second.used.insert(id);
+  auto impl = entry->second.owner;
+  ULONGLONG deadline = GetTickCount64() + timeout_ms;
+  auto* task = new std::function<void()>([impl, id, session, method, params, deadline] {
+    if (impl->destroyed) return; // close is queued after all accepted submissions
+    impl->session_requests.emplace(id, Impl::SessionRequest{deadline, 0});
+    if (impl->failed) {
+      FinishSession(impl, id, impl->failure_reason, L"null");
+      return;
+    }
+    if (!impl->ready || !impl->webview) {
+      FinishSession(impl, id, HRESULT_FROM_WIN32(ERROR_NOT_READY), L"null");
+      return;
+    }
+    if (GetTickCount64() >= deadline) {
+      FinishSession(impl, id, HRESULT_FROM_WIN32(ERROR_TIMEOUT), L"null");
+      return;
+    }
+    if (g_next_timer == 0 || g_next_timer == std::numeric_limits<UINT_PTR>::max()) {
+      FinishSession(impl, id, E_FAIL, L"null"); return;
+    }
+    UINT_PTR timer = g_next_timer++;
+    ULONGLONG now = GetTickCount64();
+    UINT remaining = now >= deadline ? 1 : static_cast<UINT>(deadline - now);
+    if (!SetTimer(g_task_window, timer, remaining, nullptr)) {
+      FinishSession(impl, id, E_FAIL, L"null"); return;
+    }
+    impl->session_requests[id].timer = timer;
+    std::weak_ptr<Impl> weak = impl;
+    g_timers.emplace(timer, [weak, id] {
+      if (auto owner = weak.lock()) FinishSession(owner, id, HRESULT_FROM_WIN32(ERROR_TIMEOUT), L"null");
+    });
+    Com<ICoreWebView2_11> wv;
+    if (!impl->webview.As(IID_ICoreWebView2_11, &wv)) {
+      FinishSession(impl, id, E_NOINTERFACE, L"null"); return;
+    }
+    auto callback = GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
+                        [weak, id](HRESULT error, LPCWSTR json) -> HRESULT {
+                          if (auto owner = weak.lock())
+                            FinishSession(owner, id, error, json ? json : L"null");
+                          return S_OK;
+                        });
+    HRESULT hr = session.empty()
+        ? impl->webview->CallDevToolsProtocolMethod(method.c_str(),
+              params.empty() ? L"{}" : params.c_str(), callback.get())
+        : wv->CallDevToolsProtocolMethodForSession(session.c_str(), method.c_str(),
+              params.empty() ? L"{}" : params.c_str(), callback.get());
+    if (FAILED(hr)) FinishSession(impl, id, hr, L"null");
+  });
+  if (!PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(task))) {
+    delete task;
+    entry->second.used.erase(id);
+    return -4;
+  }
+  return 0;
+}
+
+bool Host::Destroy() {
+  std::shared_ptr<Impl> impl = impl_;
+  std::lock_guard<std::mutex> session_guard(g_session_mutex);
   {
     std::lock_guard<std::mutex> guard(impl->document_mutex);
     impl->documents_closed = true;
     impl->current_documents.clear();
   }
-  PostToWebViewThread([impl] {
+  auto* close = new std::function<void()>([impl] {
     if (impl->destroyed) return;
+    while (!impl->session_requests.empty()) {
+      FinishSession(impl, impl->session_requests.begin()->first,
+                    HRESULT_FROM_WIN32(ERROR_CANCELLED), L"null");
+    }
     ClearDocumentTimer(impl.get());
     impl->document_waiting.clear();
     // Pending requests and dialogs go on unanswered.
@@ -1694,10 +1808,21 @@ void Host::Destroy() {
     if (impl->container != nullptr) DestroyWindow(impl->container);
     impl->container = nullptr;
     impl->pending.clear();
-    Listener* listener = impl->listener;
-    if (listener != nullptr) listener->OnDestroyed();
+    if (impl->session_dispatches != 0) {
+      impl->session_destroy_deferred = true;
+    } else {
+      Listener* listener = impl->listener;
+      impl->listener = nullptr;
+      if (listener != nullptr) listener->OnDestroyed();
+    }
   });
+  if (!PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(close))) {
+    delete close;
+    return false;
+  }
+  g_sessions.erase(impl->session_handle);
   delete this;
+  return true;
 }
 
 void Host::Navigate(const std::wstring& url, const std::wstring& headers,

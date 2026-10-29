@@ -200,6 +200,11 @@ $null = Web3Run 'controlled document-start, frame identity, origin and stale rep
   'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity',
   'com.gesher.web3app.FrameActivity', (NoDrive "$Dir/web3app.apk")) ($frameExpect + 'gesher-app: done') 'Web3 frame done'
 
+$sessionExpect = @('Web3 session checks true', 'Web3 session done')
+$null = Web3Run 'owned session request through Java and JNI (single process)' @(
+  'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity',
+  'com.gesher.web3app.SessionActivity', (NoDrive "$Dir/web3app.apk")) ($sessionExpect + 'gesher-app: done') 'Web3 session done'
+
 # --- navigator.geolocation ---------------------------------------------------------
 $geoExpect = @(
   'Web3 geo test location set: 31.7683 35.2137',
@@ -346,6 +351,7 @@ try {
   $null = Web3Run "the Gesher device: $compatName (web3app.apk's app process)" ($launch + '--activity', 'com.gesher.web3app.CompatActivity') ($compatExpect + 'gesher-app: app process for com.gesher.web3app: pid ') 'Web3 compat done'
   CompatProxied 'the app process''s WebView' $before
 
+  $null = Web3Run 'owned session request through Java and JNI (device app process)' ($launch + '--activity', 'com.gesher.web3app.SessionActivity') $sessionExpect 'Web3 session done'
   $null = Web3Run 'controlled document-start, frame identity, origin and stale reply (device app process)' ($launch + '--activity', 'com.gesher.web3app.FrameActivity') $frameExpect 'Web3 frame done'
 
   $null = Web3Run 'the Gesher device: navigator.geolocation getCurrentPosition, watchPosition and disabled-setting errors from LocationManager test providers (app process)' ($launch + '--activity', 'com.gesher.web3app.GeoActivity') $geoExpect 'Web3 geo done'

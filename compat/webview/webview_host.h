@@ -56,6 +56,7 @@ enum Event : int32_t {
   kCapture = 17,       // id: callback id; arg: HRESULT; bytes: PNG
   kParked = 18,        // id: request id (the container is parked)
   kWebMessage = 19,    // a: the message as JSON (chrome.webview.postMessage); b: source
+  kSessionResult = 30,  // id: request; arg: HRESULT; a: JSON
   kDocumentRetired = 29,  // id: native document token, no longer accepting listener replies
   kDevToolsResult = 20,  // id: callback id; arg: HRESULT; a: the result (JSON)
   kDevToolsEvent = 21,   // a: event name; b: its parameters (JSON); ListenDevTools
@@ -138,7 +139,14 @@ class Host {
   // OnDestroyed.
   static Host* Create(Listener* listener, const HostOptions& options);
 
-  void Destroy();  // the Host goes; OnDestroyed follows on the WebView thread
+  bool Destroy();  // false if close could not be queued; the caller retains the Host
+
+  // Experimental owned session calls. Zero means no session; submit returns
+  // 0 on admission, negative on synchronous rejection. IDs cannot be reused.
+  int64_t SessionHandle() const;
+  static int32_t SubmitSession(int64_t handle, int64_t id, const std::wstring& session,
+                               const std::wstring& method, const std::wstring& params,
+                               uint32_t timeout_ms);
 
   // The container window WebView2 draws into (null until the WebView thread
   // made it): accessibility shows WebView2's UI Automation tree there (ADR 0058).

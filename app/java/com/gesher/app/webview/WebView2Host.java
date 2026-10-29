@@ -40,6 +40,7 @@ public final class WebView2Host {
     public static final int EVENT_FIND = 27;
     public static final int EVENT_FILE_DIALOG = 28;
     public static final int EVENT_DOCUMENT_RETIRED = 29;
+    public static final int EVENT_SESSION_RESULT = 30;
 
     /** {@link #find} operations, as {@code Host::FindOp}. */
     public static final int FIND_START = 1;
@@ -167,10 +168,15 @@ public final class WebView2Host {
         return mHandle == 0;
     }
 
-    public synchronized void destroy() {
+    public void destroy() { tryDestroy(); }
+
+    /** False retains the native handle so its owner can retry closing it. */
+    public synchronized boolean tryDestroy() {
         long h = mHandle;
+        if (h == 0) return true;
+        if (!nDestroy(h)) return false;
         mHandle = 0;
-        if (h != 0) nDestroy(h);
+        return true;
     }
 
     public void navigate(String url, String headers) {
@@ -202,6 +208,15 @@ public final class WebView2Host {
     public void callDevTools(String method, String paramsJson, long callbackId) {
         long h = mHandle;
         if (h != 0) nCallDevTools(h, method, paramsJson, callbackId);
+    }
+
+    /** Experimental session API: 0 admitted; negative means synchronously rejected.
+     * Admitted ids normally receive EVENT_SESSION_RESULT on the WebView thread.
+     * IDs are never reusable within a host generation. */
+    public synchronized int submitSession(long id, String session, String method,
+            String params, int timeoutMs) {
+        if (mHandle == 0) return -1;
+        return nSubmitSession(nSessionHandle(mHandle), id, session, method, params, timeoutMs);
     }
 
     /** The DevTools protocol event comes as EVENT_DEVTOOLS_EVENT from now on. */
@@ -419,7 +434,7 @@ public final class WebView2Host {
     private static native boolean nSetProxyArguments(String args);
     private static native long nCreate(WebView2Host peer, long parent, double scale,
             int background);
-    private static native void nDestroy(long h);
+    private static native boolean nDestroy(long h);
     private static native long nContainer(long h);
     private static native void nNavigate(long h, String url, String headers, String method,
             byte[] body);
@@ -428,6 +443,9 @@ public final class WebView2Host {
     private static native void nPostFrameMessage(long h, long document, String json);
     private static native void nCallDevTools(long h, String method, String params,
             long callbackId);
+    private static native long nSessionHandle(long h);
+    private static native int nSubmitSession(long handle, long id, String session,
+            String method, String params, int timeoutMs);
     private static native void nListenDevTools(long h, String event);
     private static native void nCompletePermission(long h, long id, int state,
             boolean remember);
