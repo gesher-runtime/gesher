@@ -34,6 +34,49 @@ for build, required in [('out', ['compat/posix/src/winsock.cc', 'compat/posix/sr
     compilers[build] = dict(configured=paths[0], resolved=str(compiler), sha256=sha(compiler), version=subprocess.check_output([paths[0], '--version'], text=True), metadata_sha256=sha(configs[0]), commands=selected)
 ndk_source = json.loads(Path('tcp-ndk-source.json').read_text())
 compilers['ndk'] = json.loads(Path('tcp-guests-compiler.json').read_text())
+supplier = json.loads(Path('tcp-supplier-receipt.json').read_text())
+assert supplier['role'] == 'static-detached-retirement-experiment-v1' and supplier['producer_job'] == 'compile'
+assert all(supplier['context'][k] == os.environ[k] for k in supplier['context'])
+assert supplier['upstream'] == 'a3d93999ef0521681d45e445c39964a7af0f593f'
+assert supplier['patch_sha256'] == sha('tools/net-tcp-priority/supplier-retirement.patch')
+private_compiler = Path(supplier['private_compiler']).resolve(strict=True)
+assert private_compiler.parent == Path('tcp-private-supplier').resolve(strict=True)
+assert supplier['public_headers_before'] == supplier['public_headers_after']
+assert supplier['compiler_archive']['sha256'] == '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4'
+for build in ('out', 'out-arm64'):
+    assert Path(compilers[build]['configured']).parent == private_compiler / 'bin'
+    assert compilers[build]['sha256'] == supplier['cxx_driver_sha256']
+for relative, digest in supplier['libraries_after'].items():
+    assert sha(private_compiler / 'x86_64-w64-mingw32' / relative) == digest
+
+# Each native target has an independent actual linker trace. Compiler search
+# output alone is not evidence that the selected archive entered that link.
+native_links = {}
+for build, target, name, trace in (
+        ('out', 'gesher-exec', 'gesher-exec.exe', 'tcp-link-host-loader.log'),
+        ('out', 'net_tcp_priority_probe', 'net_tcp_priority_probe.exe', 'tcp-link-host-probe.log'),
+        ('out-arm64', 'gesher_arm64', 'gesher_arm64.dll', 'tcp-link-translator.log')):
+    commands = subprocess.check_output(['ninja', '-C', build, '-t', 'commands', target], text=True).splitlines()
+    links = [row for row in commands if re.search(r'(?:^|\s)-o\s+' + re.escape(name) + r'(?:\s|$)', row)]
+    assert len(links) == 1, (name, 'exact configured link command')
+    argv = shlex.split(links[0])
+    assert compilers[build]['configured'] in argv and '-static' in argv and '-Wl,--trace' in argv
+    text = Path(trace).read_text()
+    inputs = {}
+    for archive in re.findall(r'(\S*(?:libpthread|libwinpthread)\.a)\([^\r\n)]*\)', text):
+        path = Path(archive)
+        if not path.is_absolute():
+            path = Path(build) / path
+        path = path.resolve(strict=True)
+        relative = path.relative_to(private_compiler / 'x86_64-w64-mingw32').as_posix()
+        assert relative in ('lib/libpthread.a', 'lib/libwinpthread.a'), (name, relative)
+        assert sha(path) == supplier['libraries_after'][relative]
+        inputs[relative] = sha(path)
+    assert inputs or name == 'gesher_arm64.dll', (name, 'native static supplier never entered link')
+    native_links[name] = dict(command=links[0], trace_sha256=sha(trace),
+                              supplier_role='static' if inputs else 'not-linked', inputs=inputs)
+supplier['native_links'] = native_links
+print('TCP_PRIORITY_SUPPLIER_LINKS', json.dumps(native_links), flush=True)
 assert '-DGESHER' in shlex.split(compilers['out']['commands']['tests/net-tcp-priority/contract.cc'])
 assert all(not any(arg.startswith('-DGESHER') for arg in compilers['ndk'][abi]['argv']) for abi in ('x86_64', 'arm64-v8a'))
 files = subprocess.check_output(['git', 'ls-files', '-z'], text=True).split('\0')
@@ -79,7 +122,7 @@ for name, names in imports.items():
     assert allowed(name, names), ('Wrong native import role', name, names)
 outputs = {p.name: dict(role=roles[p.name], sha256=sha(p)) for p in Path('tcp-fixture').iterdir()}
 assert set(outputs) == set(roles)
-manifest = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'], source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], producer_job='compile', scope='noninline-only', owned_connect_scope='AF_INET-base-chain1-e70f1aa0-ab8b-11cf-8ca3-00805f48a192-TCP', ndk_archive=ndk_source, import_policy_sha256=sha('tools/net-tcp-priority/import-policy.json'), imports=imports, private_connect_observer=private_observer, compilers=compilers, sources=sources, outputs=outputs)
+manifest = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'], source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], producer_job='compile', scope='noninline-only', owned_connect_scope='AF_INET-base-chain1-e70f1aa0-ab8b-11cf-8ca3-00805f48a192-TCP', ndk_archive=ndk_source, supplier=supplier, import_policy_sha256=sha('tools/net-tcp-priority/import-policy.json'), imports=imports, private_connect_observer=private_observer, compilers=compilers, sources=sources, outputs=outputs)
 Path('tcp-fixture/provenance.json').write_text(json.dumps(manifest, indent=2) + '\n')
 print('TCP_PRIORITY_PRODUCER', json.dumps({k: manifest[k] for k in ('source', 'run', 'attempt', 'scope')}))
 for role, details in compilers.items():

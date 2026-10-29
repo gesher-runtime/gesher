@@ -173,16 +173,17 @@ void NativeSupplierRetirement() {
     require(GetProcessHandleCount(GetCurrentProcess(), &after) != FALSE, "supplier control final handle count");
     printf("TCP_PRIORITY_SUPPLIER_RETIRE detached=%d cycle=%d before=%lu after=%lu delta=%lld native_exit=1 fixture_closed=2 no_tcp=1\n", detached ? 1 : 0, cycle,
         before, after, static_cast<long long>(after) - before); fflush(stdout);
+    if (cycle >= 0) require(after == before, "private supplier joined and detached retirement returns to exact warm count");
   };
   // A fresh process isolates all provider pool/cache state from the ORIGINAL
   // strict product census. Bootstrap uses a real joined empty thread and logs
-  // its own delta; subsequent counts are observations, never a +1 allowance.
+  // its own delta; subsequent cycles require exact counts, never a +1 allowance.
   one(-1, false);
   DumpOwnHandleTypes(-2, reinterpret_cast<uintptr_t>(&empty_pthread), reinterpret_cast<uintptr_t>(&NativeSupplierRetirement));
   for (int cycle = 0; cycle != 4; ++cycle) one(cycle, false);
   DumpOwnHandleTypes(0, 0, 0);
   for (int cycle = 0; cycle != 4; ++cycle) { one(cycle, true); if (cycle == 0 || cycle == 3) DumpOwnHandleTypes(100 + cycle, 0, 0); }
-  puts("PASS TCP supplier characterization: isolated empty-thread observations only; product census unchanged");
+  puts("PASS TCP supplier control: exact joined and detached retirement; product census unchanged");
 }
 int NativeUdpErrorControl() {
   require(ws::Startup(), "Winsock startup");

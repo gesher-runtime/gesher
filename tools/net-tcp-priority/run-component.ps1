@@ -83,6 +83,49 @@ foreach ($build in 'out','out-arm64') {
   if (-not $c.configured -or -not $c.resolved -or $c.sha256 -cnotmatch '^[0-9a-f]{64}$' -or $c.metadata_sha256 -cnotmatch '^[0-9a-f]{64}$' -or -not $c.version -or @($c.commands.PSObject.Properties).Count -ne $expectedCount) { throw "Missing configured compiler evidence $build" }
   foreach ($command in $c.commands.PSObject.Properties) { if (-not $command.Value.Contains($c.configured) -or -not $command.Value.Contains('-Werror')) { throw "Missing actual source/compiler invocation $($command.Name)" } }
 }
+$s = $m.supplier
+if ($s.role -cne 'static-detached-retirement-experiment-v1' -or $s.producer_job -cne 'compile' -or
+    $s.context.GITHUB_SHA -cne $env:GITHUB_SHA -or $s.context.GITHUB_RUN_ID -cne $env:GITHUB_RUN_ID -or
+    $s.context.GITHUB_RUN_ATTEMPT -cne $env:GITHUB_RUN_ATTEMPT -or $s.context.GITHUB_REPOSITORY -cne $env:GITHUB_REPOSITORY -or
+    $s.context.GITHUB_REPOSITORY_ID -cne $env:GITHUB_REPOSITORY_ID -or $s.upstream -cne 'a3d93999ef0521681d45e445c39964a7af0f593f' -or
+    $s.patch_sha256 -cne (Get-FileHash -LiteralPath tools/net-tcp-priority/supplier-retirement.patch -Algorithm SHA256).Hash.ToLowerInvariant()) { throw 'Private supplier source/context mismatch' }
+if ($s.compiler_archive.sha256 -cne '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4' -or $s.compiler_archive.bytes -le 0 -or
+    $s.compiler_archive.url -cne 'https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64.tar.xz' -or
+    $s.private_compiler -cnotmatch '/tcp-private-supplier/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64$') { throw 'Private supplier compiler archive mismatch' }
+$sourcePins = @{
+  'mingw-w64-libraries/winpthreads/src/thread.c'='c2fcaa54269f0e773069aeeec8212cac71f417483bf65d5e75f100311df4080b'
+  'mingw-w64-libraries/winpthreads/src/thread.h'='3c105e10217cabae5a34d1e6e83352fb4eb8a9c2cf048de8053351eb6edf6a25'
+  'mingw-w64-libraries/winpthreads/include/pthread.h'='bf3fd920306acb4144873d1099490cf332700c268a8ede0e484c7c0e721c7995'
+}
+foreach ($pin in $sourcePins.GetEnumerator()) { if ($s.source_before.($pin.Key) -cne $pin.Value) { throw 'Supplier upstream input mismatch' } }
+if (@(Compare-Object @($s.source_before.PSObject.Properties.Name) @($s.source_after.PSObject.Properties.Name) -CaseSensitive).Count -ne 0) { throw 'Supplier source inventory changed' }
+$changes = @($s.source_before.PSObject.Properties | Where-Object { $_.Value -cne $s.source_after.($_.Name) } | ForEach-Object Name)
+if ($changes.Count -ne 1 -or $changes[0] -cne 'mingw-w64-libraries/winpthreads/src/thread.c') { throw 'Supplier patch changed unexpected sources' }
+if (@(Compare-Object @($s.public_headers_before.PSObject.Properties.Name) @($s.public_headers_after.PSObject.Properties.Name) -CaseSensitive).Count -ne 0 -or
+    $s.public_headers_before.'pthread.h' -cnotmatch '^[0-9a-f]{64}$') { throw 'Invalid supplier header inventory' }
+foreach ($header in $s.public_headers_before.PSObject.Properties) {
+  if ($header.Value -cnotmatch '^[0-9a-f]{64}$' -or $header.Value -cne $s.public_headers_after.($header.Name)) { throw 'Supplier public header changed' }
+}
+foreach ($build in 'out','out-arm64') {
+  if ($m.compilers.$build.configured -cne ($s.private_compiler + '/bin/x86_64-w64-mingw32-clang++') -or
+      $m.compilers.$build.sha256 -cne $s.cxx_driver_sha256) { throw 'Native compiler not bound to private supplier' }
+}
+if (@(Compare-Object $native @($s.native_links.PSObject.Properties.Name) -CaseSensitive).Count -ne 0) { throw 'Incomplete supplier native link roles' }
+foreach ($name in $native) {
+  $link = $s.native_links.$name
+  if ($link.trace_sha256 -cnotmatch '^[0-9a-f]{64}$' -or -not $link.command.Contains('-Wl,--trace') -or -not $link.command.Contains('-static') -or
+      -not $link.command.Contains($s.private_compiler + '/bin/x86_64-w64-mingw32-clang++')) { throw 'Missing actual private-supplier native link command/trace' }
+  $inputs = @($link.inputs.PSObject.Properties)
+  if ($link.supplier_role -ceq 'not-linked') {
+    if ($name -cne 'gesher_arm64.dll' -or $inputs.Count -ne 0) { throw 'Invalid no-supplier native role' }
+  } elseif ($link.supplier_role -ceq 'static' -and $inputs.Count -gt 0) {
+    foreach ($supplierInput in $inputs) {
+      if ($supplierInput.Name -cnotin @('lib/libpthread.a','lib/libwinpthread.a') -or $supplierInput.Value -cnotmatch '^[0-9a-f]{64}$' -or
+          $supplierInput.Value -cne $s.libraries_after.($supplierInput.Name)) { throw 'Wrong static supplier link input' }
+    }
+  } else { throw 'Unproved native supplier link role' }
+}
+Write-Host ('TCP_PRIORITY_SUPPLIER_RECEIPT ' + ($s.native_links | ConvertTo-Json -Depth 6 -Compress))
 foreach ($abi in 'x86_64','arm64-v8a') {
   $c = $m.compilers.ndk.$abi
   if (-not $c.configured -or -not $c.resolved -or $c.sha256 -cnotmatch '^[0-9a-f]{64}$' -or $c.backend_sha256 -cnotmatch '^[0-9a-f]{64}$' -or -not $c.backend_resolved -or -not $c.version -or '-Werror' -cnotin $c.argv -or 'tests/net-tcp-priority/contract.cc' -cnotin $c.argv) { throw "Missing NDK compiler evidence $abi" }
@@ -121,10 +164,10 @@ RequireDiagnosticRetirement $supplier
 if (-not $supplier.Success -or $supplier.ExitCode -ne 0 -or $supplierText -match '(?m)^FAIL') { throw 'Isolated supplier retirement observation failed' }
 foreach ($detached in 0..1) {
   foreach ($cycle in 0..3) {
-    if ($supplierText -notmatch "(?m)^TCP_PRIORITY_SUPPLIER_RETIRE detached=$detached cycle=$cycle before=[0-9]+ after=[0-9]+ delta=-?[0-9]+ native_exit=1 fixture_closed=2 no_tcp=1\r?$") { throw "Missing actual supplier control $detached/$cycle" }
+    if ($supplierText -notmatch "(?m)^TCP_PRIORITY_SUPPLIER_RETIRE detached=$detached cycle=$cycle before=[0-9]+ after=[0-9]+ delta=0 native_exit=1 fixture_closed=2 no_tcp=1\r?$") { throw "Missing exact supplier retirement control $detached/$cycle" }
   }
 }
-if ($supplierText -notmatch '(?m)^PASS TCP supplier characterization: isolated empty-thread observations only; product census unchanged\s*$') { throw 'Missing isolated supplier observation scope' }
+if ($supplierText -notmatch '(?m)^PASS TCP supplier control: exact joined and detached retirement; product census unchanged\s*$') { throw 'Missing exact supplier retirement control' }
 $cancellation = [TcpPriorityDiagnostics.TsfJobSupervisor]::Run("$fixture/net_tcp_priority_probe.exe", '--owned-cancellation-control', 30000, '')
 Write-Host ('TCP_PRIORITY_CANCEL_KERNEL ' + ($cancellation | ConvertTo-Json -Depth 6 -Compress))
 $cancelText = $cancellation.Output + $cancellation.Error

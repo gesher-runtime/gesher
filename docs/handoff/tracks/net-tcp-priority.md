@@ -809,3 +809,33 @@ control now strictly requires operation0/description0 after completion,
 last-close and native owner/reaper exit. Original four-mode census is unchanged
 and the independent supplier prerequisite remains unresolved. Source review
 and changed-source actual CI are required before this correction is qualified.
+
+dc6a6462/409639 actual BOTH Windows isolated canceled waiter passes strict
+operation0/description0, original later refusal111 and actual native owner/reaper
+exit. All three operation CloseHandle results1/error0; isolated controller
+cumulative1/all7of7 handles closed. Cold-init census122/109 and131/118 is not
+an exact-baseline claim. Distinct original HOST still fails unmodified mode1
+132/131 and141/140 (threads4/4), before mode2 and guest contexts. Logs retained:
+C:/work/gesher-ci-review/tcp-409639-win2022.log and win2025.log.
+
+Next source freezes a STATIC supplier experiment confined to this component.
+It downloads the SHA256-verified20261006 compiler into a fresh private prefix,
+fetches pinned upstreama3d93999 with original thread.c/thread.h/pthread.h
+hashes, and applies ONLY a two-hunk detached-wrapper spin_keys retirement.
+No CPU clock, external-thread exit, header/private-layout/API or fault-provider
+patch is adopted from the preserved host-pthread lane. Fresh build/install uses
+fatal warnings and checked original Makefile flags; public header bytes and
+external symbol/export inventories must stay identical. The shared compiler
+cache is not modified. Source before/after maps may differ only in thread.c.
+
+Exact compiler/archive, original/rebuilt static/import/DLL hashes, public
+headers, patch, notice, commands/config/log hashes and current producer context
+enter the existing five-output source/run/attempt receipt. Independent ACTUAL
+native linker traces bind selected static archives for loader and probe;
+translator must either bind the same private archive or prove no archive enters
+its trace. Existing typed output/import/NDK/source controls remain intact.
+Joined/detached empty-thread warm cycles now require delta0 and original HOST
+exact census remains unchanged. This experiment does not qualify the unused
+supplier DLL, generic external exit, whole compiler/provider adoption, MinGW
+DLL lifetime/unload or unexecuted guest/full canonical routes. Independent
+source review and changed-source actual CI remain gates before any acceptance.

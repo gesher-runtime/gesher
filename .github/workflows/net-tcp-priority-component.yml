@@ -11,6 +11,7 @@ name: net-tcp-priority-component
 # Observe real caller cancellation/reference retirement in another fresh probe.
 # Pin qualified single-process supervision for isolated diagnostic processes.
 # Require canceled caller ownership release without canceling its native attempt.
+# Test only a privately rebuilt minimal detached-supplier retirement correction.
 on:
   workflow_dispatch:
   push:
@@ -95,18 +96,25 @@ jobs:
           key: tcp-ndk-r27c-090e8083a715fdb1a3e402d0763c388abb03fb4e
       - name: Authenticate publisher NDK archive and freshly extract on every use
         run: python3 tools/net-tcp-priority/prepare-ndk.py
+      - name: Rebuild pinned minimal supplier in a fresh verified private compiler
+        run: python3 tools/net-tcp-priority/prepare-supplier.py
       - name: Build one fresh coherent host, translator, and both bionic ABI fixtures
         run: |
           set -euo pipefail
-          llvm="$HOME/toolchain/$LLVM_MINGW_NAME"
-          cmake -S . -B out -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-          ninja -C out gesher-exec net_tcp_priority_probe
+          llvm="$PWD/tcp-private-supplier/$LLVM_MINGW_NAME"
+          cmake --fresh -S . -B out -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" -DLLVM_MINGW="$llvm" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_EXE_LINKER_FLAGS=-Wl,--trace -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          ninja -C out gesher-exec 2>&1 | tee tcp-link-host-loader.log
+          ninja -C out net_tcp_priority_probe 2>&1 | tee tcp-link-host-probe.log
           cmake -S compat/arm64/dll -B out-arm64 -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" \
             -DLLVM_MINGW="$llvm" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--trace \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DDYNARMIC_DIR="$PWD/deps/dynarmic" -DBoost_INCLUDE_DIR="$PWD/deps/boost"
-          ninja -C out-arm64 gesher_arm64
+          ninja -C out-arm64 gesher_arm64 2>&1 | tee tcp-link-translator.log
           python3 tools/net-tcp-priority/build-guests.py
       - name: Bind executed compiler and exact Windows-system-only output roles
         run: python3 tools/net-tcp-priority/manifest.py
