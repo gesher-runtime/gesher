@@ -68,6 +68,9 @@ jobs:
           cmake -S compat/arm64/dll -B out-arm64 -G Ninja -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" -DLLVM_MINGW="$llvm" -DCMAKE_BUILD_TYPE=Release -DDYNARMIC_DIR="$PWD/deps/dynarmic" -DBoost_INCLUDE_DIR="$PWD/deps/boost" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           ninja -C out-arm64 gesher_arm64 arm64_smoke_test
           cp out/gesher-exec.exe out/pthread_cpu_clock_target_test.exe out-arm64/gesher_arm64.dll out-arm64/arm64_smoke_test.exe cpu-clock-fixture/
+          readlink -f "$llvm/bin/llvm-readobj"
+          sha256sum "$llvm/bin/llvm-readobj"
+          "$llvm/bin/llvm-readobj" --version
           "$llvm/bin/llvm-readobj" --coff-imports out/gesher-exec.exe > cpu-clock-fixture/imports-host.txt
           "$llvm/bin/llvm-readobj" --coff-imports out/pthread_cpu_clock_target_test.exe > cpu-clock-fixture/imports-core.txt
           "$llvm/bin/llvm-readobj" --coff-imports out-arm64/gesher_arm64.dll > cpu-clock-fixture/imports-arm64.txt

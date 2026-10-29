@@ -269,11 +269,21 @@ def main():
         allowed = {'kernel32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
                    'ws2_32.dll', 'iphlpapi.dll', 'psapi.dll', 'bcrypt.dll', 'user32.dll',
                    'api-ms-win-core-synch-l1-2-0.dll'}
-        for member in ('imports-core.txt', 'imports-host.txt', 'imports-arm64.txt'):
-            names = re.findall(r'^\s*Name:\s*(\S+)', (folder / member).read_text(), re.M)
-            require(bool(names) and all(name.lower() in allowed or
-                    re.fullmatch(r'api-ms-win-crt-[a-z]+-l1-1-0.dll', name.lower()) for name in names),
-                    'Unexpected or missing actual PE imports')
+        checks = []
+        for role, member, binary in (('core', 'imports-core.txt', 'pthread_cpu_clock_target_test.exe'),
+                                     ('host', 'imports-host.txt', 'gesher-exec.exe'),
+                                     ('arm64', 'imports-arm64.txt', 'gesher_arm64.dll')):
+            raw = (folder / member).read_text()
+            names = re.findall(r'^\s*Name:\s*(\S+)', raw, re.M)
+            extras = [name for name in names if name.lower() not in allowed and not
+                      re.fullmatch(r'api-ms-win-crt-[a-z]+-l1-1-0.dll', name.lower())]
+            print('CPU_CLOCK_PE_IMPORT_DIAGNOSTIC', json.dumps({
+                'role': role, 'file': binary, 'sha256': actual[binary],
+                'imports_file': member, 'imports_sha256': actual[member],
+                'raw_coff_imports': raw, 'parsed_names': names,
+                'missing': not bool(names), 'extras': extras}, sort_keys=True), flush=True)
+            checks.append(bool(names) and not extras)
+        require(all(checks), 'Unexpected or missing actual PE imports')
         print('CPU_CLOCK_LINUX_PHASE_RECEIPT', json.dumps(linux_reference(
             (folder / 'linux-reference.log').read_text()), sort_keys=True))
         print('CPU_CLOCK_VERIFIED_MEMBERS', json.dumps(data['outputs'], sort_keys=True), json.dumps(context(), sort_keys=True))
