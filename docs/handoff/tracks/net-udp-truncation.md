@@ -1,7 +1,7 @@
 # Net4 UDP truncation — source checkpoint
 
-Status: implementation and fixtures prepared; **production source blocked by
-peer review; no full CI or acceptance**. Linux observation only is active below.
+Status: implementation and fixtures prepared; **bounded source/helper checks
+only; no real bionic socket ABI qualification or full CI acceptance**.
 Base f1550540186b4ae3f17a5e501a886ec1c4d5d613, exclusive branch
 `wip/net-udp-trunc`, test89, existing ADR0070. Source peer is required before
 production dispatch. This work does not modify native-api-coverage.json or any of
@@ -102,3 +102,38 @@ commit in the caller, with external NET_UDP_FULL_CALLER_COMMIT authority
 resolved only inside that trusted guard, actual run identity, exact f155 plus
 reviewed blob inventory, caller bytes, full producer DAG and mutation controls.
 A mutable candidate script that approves its own pin list is insufficient.
+
+## Guarded-copy implementation and current proof boundary
+
+Production22fd8e06 removes the unchecked UDP scatter memcpy. The shared
+socket_user_copy.h helper prefilters page protection/guard state and performs
+each page through ReadProcessMemory with the caller destination as the local
+output buffer. It uses no WriteProcessMemory override of read-only pages.
+The kernel operation remains necessary after the protection query to avoid
+process faults on a later unmap/protection change. Stable guarded pages are
+rejected before that API; guard state under concurrent mutations has no
+snapshot guarantee. Message headers/iovec descriptors are safely imported
+before receive; packet payload/address/output metadata copies fail with
+EFAULT, preserving the measured consume/peek and partial-prefix behavior.
+
+Scoped407924/22fd passed both Windows exact shared-helper checks and Linux120;
+socket.cc/winsock.cc compiled with the pinned LLVM-Mingw and Werror. The
+bionic bridge compile failed because the probe omitted the existing ARM64
+header include directory. Changed-sourcea8af4a14 fixes that probe configuration.
+Scoped40792815067/a8af4a14 has all four jobs successful: all three actual
+production sources compile with Werror/exceptions disabled, Linux120 and
+seven exact shared-helper Windows controls pass. This is not socket ABI proof.
+
+Scoped40793392653/72c93c55 has all four jobs successful. Linux176 now covers
+invalid/read-only peer addresses, addrlen pointers and read-only msghdr
+outputs. All56 added cases return EFAULT after copying payload prefixabcd;
+nonpeek consumes and peek retains the packet, output flags remain0x5a5a.
+Both actual Windows helper probes pass20,000 calls while an owned target
+changes RW/RO/GUARD protection, record172138/91863 concurrent changes and
+confirm target join/no process fault. This does not establish stable guard
+state during mutation. Exact logs are retained under
+`C:/work/gesher-ci-review/udp-helper-40793392653-job-*.log`.
+
+The complete192-row Linux main matrix is added to the narrow workflow at
+f942da28, pending peer/CI. Both bionic ELF ABIs still require actual execution,
+followed by the immutable full caller policy and every original full gate.
