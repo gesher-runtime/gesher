@@ -1,5 +1,6 @@
 # Separate fault supplier/host roles prove production hooks OFF by object/export.
 # Mixed-provider controls and stable key-table allocation fault checks.
+# Retirement fixture retains the original handle bound and strict TLS-failure output.
 name: host pthread authority initial controls
 on:
   workflow_dispatch:
@@ -42,6 +43,7 @@ jobs:
           cp out/host_pthread_authority_test.exe host-authority-fixture/
           llvm="$GESHER_AUTHORITY_LLVM"
           python3 tools/host-pthread-authority/bundle.py compile-client "$llvm"
+          python3 tools/host-pthread-authority/bundle.py compile-retirement "$llvm" production
           cp "$llvm/x86_64-w64-mingw32/bin/libwinpthread-1.dll" host-authority-fixture/
           cp "$llvm/x86_64-w64-mingw32/share/mingw32/COPYING.winpthreads.txt" host-authority-fixture/
           cp "$llvm/gesher-winpthreads-authority.json" host-authority-fixture/supplier.json
@@ -70,6 +72,8 @@ jobs:
           cp out-host-fault/host_pthread_authority_fault_test.exe host-authority-fixture/
           cp "$llvm/gesher-winpthreads-authority.json" host-authority-fixture/fault-supplier.json
           python3 tools/host-pthread-authority/receipt.py host-role out-host-fault "$llvm" fault host-authority-fixture/host-fault-role.json
+          python3 tools/host-pthread-authority/bundle.py compile-retirement "$llvm" fault
+          cp "$llvm/x86_64-w64-mingw32/bin/libwinpthread-1.dll" host-authority-fixture/fault-libwinpthread-1.dll
           python3 tools/host-pthread-authority/bundle.py record
           python3 tools/host-pthread-authority/bundle.py verify
       - uses: actions/upload-artifact@v4
@@ -105,7 +109,7 @@ jobs:
           $bundle = Get-Content -Raw -LiteralPath host-authority-fixture/bundle.json | ConvertFrom-Json
           $expectedSha = $bundle.members.'libwinpthread-1.dll'
           $problems = [System.Collections.Generic.List[string]]::new()
-          foreach ($case in @(@{Name='host_pthread_authority_test';Sha=$null;Exit=0}, @{Name='host_pthread_public_static_test';Sha=$null;Exit=0}, @{Name='host_pthread_mixed_provider_test';Sha=$null;Exit=0}, @{Name='host_pthread_bad_anchor_test';Sha=$null;Exit=0}, @{Name='host_pthread_descriptor_test';Sha=$null;Exit=0}, @{Name='host_pthread_supplier_test';Sha=$expectedSha;Exit=0}, @{Name='host_pthread_supplier_test';Sha=('0' * 64);Exit=3}, @{Name='host_pthread_authority_fault_test';Sha=$null;Exit=0})) {
+          foreach ($case in @(@{Name='host_pthread_authority_test';Sha=$null;Exit=0}, @{Name='host_pthread_public_static_test';Sha=$null;Exit=0}, @{Name='host_pthread_mixed_provider_test';Sha=$null;Exit=0}, @{Name='host_pthread_bad_anchor_test';Sha=$null;Exit=0}, @{Name='host_pthread_descriptor_test';Sha=$null;Exit=0}, @{Name='host_pthread_supplier_test';Sha=$expectedSha;Exit=0}, @{Name='host_pthread_supplier_test';Sha=('0' * 64);Exit=3}, @{Name='host_pthread_authority_fault_test';Sha=$null;Exit=0}, @{Name='retirement-production-static';Sha=$null;Exit=0}, @{Name='retirement-production-dynamic';Sha=$null;Exit=0})) {
             $name = $case.Name
             $stdout = Join-Path $env:RUNNER_TEMP "$name.stdout"
             $stderr = Join-Path $env:RUNNER_TEMP "$name.stderr"
@@ -117,6 +121,10 @@ jobs:
               if (-not $process.WaitForExit(180000)) { throw "Owned fixture timeout $name" }
               $process.Refresh()
               if ($process.ExitCode -ne $case.Exit) { throw "Actual fixture exit $name=$($process.ExitCode) expected=$($case.Exit)" }
+              if ($name -like 'retirement-production-*') {
+                $actual = Get-Content -Raw -LiteralPath $stdout
+                foreach ($proof in @('PASS retirement production 64 live detach and exact destructors', 'PASS retirement user-destructor outside registry lock', 'PASS retirement production joiner-start-before-release and foreign tryjoin', 'PASS retirement 256 concurrent-live detach join ended-detach reuse original-capability', 'PASS retirement all 338 destructors owned=0 handles=')) { if (-not $actual.Contains($proof)) { throw "Missing production proof $name $proof" } }
+              }
               if ($case.Exit -eq 3) { Write-Host "Loaded supplier wrong-digest control rejected with actual exit=$($process.ExitCode)" }
             } catch {
               $problems.Add("$name expected=$($case.Exit): $_")
@@ -127,6 +135,37 @@ jobs:
               }
               if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
               if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+            }
+          }
+          $retirementDir = Join-Path $env:RUNNER_TEMP 'retirement-fixture'
+          New-Item -ItemType Directory -Path $retirementDir | Out-Null
+          Copy-Item host-authority-fixture/retirement-static.exe,host-authority-fixture/retirement-dynamic.exe $retirementDir
+          Copy-Item host-authority-fixture/fault-libwinpthread-1.dll (Join-Path $retirementDir 'libwinpthread-1.dll')
+          foreach ($case in @(@{Name='retirement-static';Arg=$null;Exit=0}, @{Name='retirement-dynamic';Arg=$null;Exit=0}, @{Name='retirement-static';Arg='--tls-clear-failure';Exit=3}, @{Name='retirement-dynamic';Arg='--tls-clear-failure';Exit=3})) {
+            $name = $case.Name
+            $tag = $name + $(if ($case.Arg) { '-failure' } else { '-normal' })
+            $start = @{ FilePath = (Join-Path $retirementDir "$name.exe"); WorkingDirectory = $retirementDir; WindowStyle = 'Hidden'; PassThru = $true; RedirectStandardOutput = (Join-Path $retirementDir "$tag.out"); RedirectStandardError = (Join-Path $retirementDir "$tag.err") }
+            if ($case.Arg) { $start.ArgumentList = @($case.Arg) }
+            $process = Start-Process @start
+            try {
+              if (-not $process.WaitForExit(180000)) { throw "Owned retirement fixture timeout $name" }
+              $process.Refresh()
+              if ($process.ExitCode -ne $case.Exit) { throw "Retirement fixture $tag exited $($process.ExitCode) expected=$($case.Exit)" }
+              $output = Get-Content -Raw (Join-Path $retirementDir "$tag.out")
+              if ($case.Exit -eq 0) {
+                foreach ($proof in @('PASS retirement 64 actual registry mutex contentions destructor-before-publication retired-ESRCH', 'PASS retirement user-destructor outside registry lock', 'PASS retirement valid join reached live controller-held target', 'PASS retirement 256 concurrent-live detach join ended-detach reuse original-capability', 'PASS retirement all 338 destructors owned=0 handles=')) {
+                  if (-not $output.Contains($proof)) { throw "Missing actual retirement result $tag $proof" }
+                }
+              } else {
+                if (($output.Trim() -ne 'CONTROL TLS-clear-failure destructor exactly once before abort') -or $output.Contains('survived')) { throw "Missing fail-safe TLS clear proof $tag" }
+                Write-Host "Actual TLS-clear-failure fail-safe $tag exit=$($process.ExitCode)"
+              }
+              Write-Host "$name $output"
+            } finally {
+              if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Retirement cleanup failed' } }
+              $process.Dispose()
+              if (Test-Path -LiteralPath (Join-Path $retirementDir "$tag.out")) { Get-Content -LiteralPath (Join-Path $retirementDir "$tag.out") }
+              if (Test-Path -LiteralPath (Join-Path $retirementDir "$tag.err")) { Get-Content -LiteralPath (Join-Path $retirementDir "$tag.err") }
             }
           }
           if ($problems.Count -gt 0) { throw ($problems -join '; ') }
