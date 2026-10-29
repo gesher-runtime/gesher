@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdint.h>
 
+_Static_assert(sizeof(pthread_t) == 8, "Pinned public pthread identity width changed");
+
 int main(void) {
   void *handle = NULL;
   unsigned long long generation = 0;
