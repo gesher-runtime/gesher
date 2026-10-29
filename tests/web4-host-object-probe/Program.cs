@@ -89,6 +89,10 @@ sealed class ProbeForm : Form
             await core.CallDevToolsProtocolMethodAsync("Page.enable", "{}");
             await core.CallDevToolsProtocolMethodAsync("Runtime.addBinding", "{\"name\":\"realmProbe\"}");
             await core.CallDevToolsProtocolMethodAsync("Target.setAutoAttach", "{\"autoAttach\":true,\"waitForDebuggerOnStart\":true,\"flatten\":true}");
+            if (lifecycleDiagnostic) {
+                string allowed = JsonSerializer.Serialize($"http://127.0.0.1:{port}");
+                await core.AddScriptToExecuteOnDocumentCreatedAsync("(()=>{const actual=globalThis.origin;const url=location.origin;Object.defineProperty(globalThis,'__web4EarlyProbe',{value:Object.freeze({actual,url,exposed:actual===" + allowed + "}),configurable:false})})()");
+            }
             var topObject = NewObject();
             core.AddHostObjectToScript("rootProbe", topObject);
             core.FrameCreated += (_, e) => RegisterFrame(e.Frame);
@@ -263,6 +267,9 @@ sealed class ProbeForm : Form
                 try {
                     string text = e.TryGetWebMessageAsString();
                     string[] parts = text.Split('|', 3);
+                    if (lifecycleDiagnostic && parts.Length == 3 && parts[0] == "BOOT") {
+                        Console.WriteLine($"EARLY_ORIGIN_OBSERVATION frame={state.Name} frameId={frame.FrameId} label={parts[1]} value={parts[2]} authority=none"); return;
+                    }
                     string expected = state.Name == "a" && state.LastNavigation.Contains("/held?name=a2", StringComparison.Ordinal) ? "a2" : state.Name;
                     if (parts.Length != 3 || parts[1] != expected || !pages.TryAdd(parts[1], parts[0] + "|" + parts[2])) failure = true;
                     Console.WriteLine($"FRAME_OBSERVATION frame={state.Name} frameId={frame.FrameId} payload={text}");
@@ -320,6 +327,7 @@ sealed class ProbeForm : Form
             while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
             if (path.StartsWith("/held")) { held.TrySetResult(); await release.Task.WaitAsync(TimeSpan.FromSeconds(15)); }
             string child = "<script>let n=new URLSearchParams(location.search).get('name');realmProbe(n);if(!window.chrome||!chrome.webview||!chrome.webview.hostObjects||!chrome.webview.hostObjects.sync){chrome.webview.postMessage('INFRA|'+n+'|missing host namespace')}else{try{let p=chrome.webview.hostObjects.sync.probe;if(!p){chrome.webview.postMessage('INFRA|'+n+'|missing proxy')}else{try{let v=p.Ping('first:'+n);chrome.webview.postMessage('OK|'+n+'|'+v)}catch(e){chrome.webview.postMessage('DENIED|'+n+'|CALL:'+String(e))}}}catch(e){chrome.webview.postMessage('DENIED|'+n+'|GET:'+String(e))}}</script>";
+            if (lifecycleDiagnostic) child = child.Replace("realmProbe(n);", "chrome.webview.postMessage('BOOT|'+n+'|'+JSON.stringify(globalThis.__web4EarlyProbe));realmProbe(n);");
             string html = path.StartsWith("/main")
                 ? $"<script>chrome.webview.hostObjects.sync.rootProbe.Ping('root:first')</script><iframe name='a' src='/child?name=a'></iframe><iframe name='b' src='/child?name=b'></iframe><iframe name='bad' src='http://localhost:{port}/child?name=bad'></iframe><iframe name='opaque' sandbox='allow-scripts' src='/child?name=opaque'></iframe>"
                 : path.StartsWith("/other") ? "<script>chrome.webview.hostObjects.sync.rootProbe.Ping('root:cross')</script>"
