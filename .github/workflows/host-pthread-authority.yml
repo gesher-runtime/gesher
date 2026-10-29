@@ -1,5 +1,5 @@
 # Separate fault supplier/host roles prove production hooks OFF by object/export.
-# Retirement inventory requires valid thread IDs and initialized creation-time output.
+# Retirement inventory correlates controller bookkeeping with kernel identities.
 name: host pthread authority initial controls
 on:
   workflow_dispatch:

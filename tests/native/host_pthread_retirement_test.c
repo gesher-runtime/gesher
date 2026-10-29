@@ -162,6 +162,16 @@ int main(int argc,char **argv) {
     check(SetEvent(t.start),"failure start"); await(t.thread); puts("FAIL TLS-clear-failure survived"); return 9;
   }
   counts("baseline"); contention(); counts("contention"); unlocked_destructor(); counts("destructor"); live_join(); counts("join"); live_and_reuse(); counts("reuse");
+  /* Observe the already attached controller's public supplier bookkeeping. */
+  DWORD before_observation, after_observation;
+  check(GetProcessHandleCount(GetCurrentProcess(),&before_observation),"before controller observation");
+  pthread_t controller=pthread_self();
+  HANDLE controller_thread=(HANDLE)pthread_gethandle(controller);
+  HANDLE controller_event=(HANDLE)pthread_getevent();
+  check(controller && controller_thread && controller_event,"controller bookkeeping");
+  check(GetThreadId(controller_thread)==GetCurrentThreadId(),"controller handle identity");
+  check(GetProcessHandleCount(GetCurrentProcess(),&after_observation) && before_observation==after_observation,"controller observation did not attach");
+  printf("CONTROLLER_HANDLES thread=%p event=%p tid=%lu\n",controller_thread,controller_event,GetCurrentThreadId());
   check(destructors==338,"all exact destructors"); check(pthread_key_delete(key)==0,"delete key"); check(owned==0,"all fixture handles closed");
   check(GetProcessHandleCount(GetCurrentProcess(),&after),"final handle count");
   inventory("final");
