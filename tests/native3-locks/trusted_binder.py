@@ -57,7 +57,11 @@ class Child:
         self.wait(timeout)
         self.stdout.flush()
         self.stdout.seek(0)
-        return self.stdout.read().decode(errors='replace'), None
+        # Preserve Popen(text=True)'s universal-newline contract. The inherited
+        # native CRT stream writes CRLF even though the host capture is binary;
+        # returning raw CR would change the original exact-line assertions.
+        text = self.stdout.read().decode(errors='replace')
+        return text.replace('\r\n', '\n').replace('\r', '\n'), None
 
     def kill(self):
         self.owner.check(self.owner.api.TerminateProcess(self._handle, 211))

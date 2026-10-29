@@ -31,3 +31,15 @@ ongoing writer wiring, and an immutable approved whole-source policy update
 before a new full. That full must rebuild matched production host/API3 DLL,
 current Java jars/images/APKs and pass all existing ordinary services, net,
 Web3, process completion, package and e2e gates. No acceptance is claimed here.
+
+## Narrow component 40866670764
+
+Exact source c2bd1687 built successfully and its current-run receipts passed on
+both Windows runners. Both actual raw ioctl and libbinder probes reported all
+passed. The duplicate controller reached a real admitted Binder child, whose
+17 assertions and original broker roundtrip passed and whose terminal status
+was zero; the controller then correctly failed its exact-line completion gate.
+The binary capture adapter had omitted Popen(text=True)'s CRLF normalization,
+leaving a carriage return before the anchored regex end. The follow-up restores
+that text I/O contract without changing any assertion. This source requires a
+new two-runner component; the original failed run is retained as red.
