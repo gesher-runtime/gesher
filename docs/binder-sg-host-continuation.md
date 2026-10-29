@@ -1,10 +1,21 @@
 # Binder host SG and production continuation
 
-Current checkpoint is provisional. The independent host SG component is
-40894173244, exact source `c7452595a51e50aefc38e8166872fb342418f386`, on
-`wip/binder-sg-host-component`. Its actual result and log audit are pending;
-do not infer qualification from this source. The full ordinary Binder suite
-and production trust remain open.
+Host SG component 40894173244, exact source
+`c7452595a51e50aefc38e8166872fb342418f386`, is red. Both exact current-run
+producer receipts passed. Windows2022 executed seven real original scenarios
+then the raw wire peer failed before its first readiness marker; source audit
+found its old hello omitted birth/challenge and supplied UID 10000 instead of
+the admitted startup UID. Windows2025 failed earlier launching the Python
+owner with Win32 invalid-name; the executable path was not logged and the cause
+is not yet established. Plain logs are retained under
+`C:/work/gesher-ci-review/binder-sg-host-408941-win{2022,2025}.log`. Fault
+controls did not run. The full ordinary Binder suite and production trust
+remain open.
+
+Local source 6a736dd0 adds the real authenticated raw process/thread
+challenge and a deterministic single Python executable selection with path and
+hash logging. It requires independent source review and changed-source CI;
+do not infer that it fixes either runtime failure before actual evidence.
 
 The original full 40860584124/source c7bd failed both SG mode jobs, original
 web3-query, package and e2e jobs, and duplicate regression; cancelled Windows
