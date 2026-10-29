@@ -6,6 +6,6 @@
     "mingw-w64-libraries/winpthreads/include/pthread.h": "bf3fd920306acb4144873d1099490cf332700c268a8ede0e484c7c0e721c7995",
     "mingw-w64-libraries/winpthreads/src/clock.c": "5d5a7ba2ef59415b080cae0170da9b50763f4352cc1c080e231568dc264259c1"
   },
-  "patch_sha256": "9fc9a99a76f7649f6c06fb6498ad22160796196e22f2eeefa196db54e7d8157f",
+  "patch_sha256": "98b70b73126d78894e878d639520bc71206247a5d2ff9e056b74d1ef987b8408",
   "fault_patch_sha256": "91cd50b62842c6893ddf1fb59f2ccb5be79eb3aa98d0490e03e3418732a2d271"
 }

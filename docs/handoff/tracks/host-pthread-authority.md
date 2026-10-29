@@ -26,6 +26,14 @@ and reads to an executable export, preserving a self-contained host; a DLL-only
 fallback pins its provider. It does not address the independent pthread_t alias
 or every missing-anchor topology, and has no peer or actual build/CI evidence.
 It must not be treated as a completed public-provider fix.
+Diagnostic 40917856459/2f7d8c51 passed Linux and both Windows jobs. Its two
+Windows actual mixed-provider controls issued different clock IDs, read them
+through the opposite provider against independent thread CPU brackets, checked
+retired-ID EINVAL and untouched output, unloaded the DLL and read the surviving
+host clock. The same run still demonstrated aliased pthread_t values and
+misdirected cross-provider acquisition. This is clock-only bounded evidence;
+faults, repeated reuse, hostile or malformed authority and full product remain
+open. The next source adds an invalid-descriptor ownership/output control.
 
 Initial component run40801790244/attempt1 at exact
 67e4f27486f6a63a8becb1c518c02b6b6afac02f passed its compile and both Windows
