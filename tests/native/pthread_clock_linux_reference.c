@@ -6,12 +6,13 @@
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t changed = PTHREAD_COND_INITIALIZER;
-static int ready, stop;
+static int ready, stop, worker_error;
 static clockid_t worker_id;
 static void *worker(void *unused) {
   (void)unused;
-  if (pthread_getcpuclockid(pthread_self(), &worker_id)) return (void *)1;
-  pthread_mutex_lock(&lock); ready = 1; pthread_cond_signal(&changed);
+  int error = pthread_getcpuclockid(pthread_self(), &worker_id);
+  pthread_mutex_lock(&lock); worker_error = error; ready = 1; pthread_cond_signal(&changed);
+  if (error) { pthread_mutex_unlock(&lock); return (void *)1; }
   while (!stop) pthread_cond_wait(&changed, &lock);
   pthread_mutex_unlock(&lock); return NULL;
 }
@@ -24,7 +25,7 @@ int main(void) {
   pthread_t thread; clockid_t main_id, via_symbol; struct timespec value;
   if (pthread_create(&thread, NULL, worker, NULL)) return 3;
   pthread_mutex_lock(&lock); while (!ready) pthread_cond_wait(&changed, &lock);
-  if (pthread_getcpuclockid(pthread_self(), &main_id) || get_id(thread, &via_symbol) ||
+  if (worker_error || pthread_getcpuclockid(pthread_self(), &main_id) || get_id(thread, &via_symbol) ||
       via_symbol != worker_id || main_id == worker_id || read_clock(worker_id, &value) ||
       clock_gettime(via_symbol, &value)) return 4;
   stop = 1; pthread_cond_signal(&changed); pthread_mutex_unlock(&lock);
