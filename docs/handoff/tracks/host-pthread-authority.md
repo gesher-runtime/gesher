@@ -7,8 +7,14 @@ The old `gesher-pthread-foreign-cpu-clock` worktree is preserved without edits.
 
 ## Status and next steps
 
-Initial implementation is source-only. No new CI run, supplier compilation,
-Windows execution, canonical full, package or e2e qualification exists yet.
+Initial implementation has no runtime qualification. Run40800633035 at exact
+358bb280 failed during whole supplier DLL link: upstream's GCC-only
+`-Wc,-no-pthread` reached Clang as an unused argument under `-Werror`.
+All supplier C objects, including the changed record, compiled; no DLL,
+host or Windows result was qualified. The correction overrides only the
+upstream link variable to omit that GCC argument, preserving `-Werror`.
+Its DLL import audit additionally rejects importing a previous supplier copy.
+There is no canonical full, package or e2e qualification yet.
 Do not mark the host foreign-thread contract closed. Existing diagnostic
 407989 (a0c47c29) fails import sealing before Windows and is not host evidence.
 No local C/C++/Java/C# compilation or native execution occurred.

@@ -25,8 +25,12 @@ cd "$supplier/build"
   CC="$llvm/bin/x86_64-w64-mingw32-clang" \
   AR="$llvm/bin/llvm-ar" RANLIB="$llvm/bin/llvm-ranlib" \
   RC="$llvm/bin/x86_64-w64-mingw32-windres" 2>&1 | tee configure-command.log
-make -j2 V=1 2>&1 | tee build-commands.log
-make install 2>&1 | tee install-commands.log
+# Upstream's GCC-only -Wc,-no-pthread becomes an unused Clang argument at
+# link time. Override that one make variable; keep every warning fatal.
+# Clang adds winpthread only with -pthread, which this build never supplies.
+supplier_ldflags='-no-undefined -version-info 1:0:0 -L$(builddir)/fakelib'
+make -j2 V=1 "libwinpthread_la_LDFLAGS=$supplier_ldflags" 2>&1 | tee build-commands.log
+make install "libwinpthread_la_LDFLAGS=$supplier_ldflags" 2>&1 | tee install-commands.log
 mkdir -p "$llvm/x86_64-w64-mingw32/share/mingw32"
 cp ../mingw-w64-libraries/winpthreads/COPYING "$llvm/x86_64-w64-mingw32/share/mingw32/COPYING.winpthreads.txt"
 cd "$root"
