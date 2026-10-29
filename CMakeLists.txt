@@ -92,6 +92,10 @@ target_link_libraries(platform_probe PRIVATE synchronization)
 add_executable(socket_probe probes/posix/socket_probe.cc)
 target_compile_options(socket_probe PRIVATE -Wall -Wextra -Werror)
 
+# ADR0070/test93: the same TCP urgent contract as Linux and both bionic ABIs.
+add_executable(net_tcp_priority_probe tests/net-tcp-priority/contract.cc)
+target_compile_options(net_tcp_priority_probe PRIVATE -Wall -Wextra -Werror)
+
 # gesher-base's mmap layer: placeholder mappings, executable file views
 # (stack track, docs/decisions/0036); run in CI on Windows.
 add_executable(mman_probe probes/posix/mman_probe.cc)

@@ -1,0 +1,130 @@
+name: net-tcp-priority-component
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/net-tcp-priority]
+    paths: [.github/workflows/net-tcp-priority-component.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: net-tcp-priority-component-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  DYNARMIC_COMMIT: 9d4582339990d4eae53f1dc7160686920fc2075c
+  FMT_VERSION: "11.0.2"
+  BOOST_VERSION: "1.83.0"
+  NDK_VERSION: "27.2.12479018"
+  NDK_DIR: tcp-ndk-publisher/android-ndk-r27c
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Cache dynarmic, fmt and Boost headers
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: arm64-deps-${{ env.DYNARMIC_COMMIT }}-fmt${{ env.FMT_VERSION }}-boost${{ env.BOOST_VERSION }}-p3-fpsr-${{ hashFiles('compat/arm64/dll/patch-dynarmic-fpsr.py') }}
+
+      - name: Fetch and patch dynarmic, fmt and Boost
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p deps && cd deps
+
+          # dynarmic at the pinned commit, with its vendored externals.
+          git init -q dynarmic
+          git -C dynarmic fetch -q --depth 1 https://github.com/yuzu-mirror/dynarmic "$DYNARMIC_COMMIT"
+          git -C dynarmic checkout -q FETCH_HEAD
+
+          # Replace the vendored fmt (10.1.0) with a newer one that builds on
+          # the pinned llvm-mingw clang (docs/arm64.md).
+          curl -fsSL -o fmt.tar.gz "https://github.com/fmtlib/fmt/archive/refs/tags/$FMT_VERSION.tar.gz"
+          tar -xzf fmt.tar.gz
+          rm -rf dynarmic/externals/fmt
+          mv "fmt-$FMT_VERSION" dynarmic/externals/fmt
+          rm fmt.tar.gz
+
+          # Patch for the 2026 clang (docs/arm64.md, ADR 0047):
+          #  - fmt: force FMT_USE_CONSTEVAL 0 (FMT_STRING trips a consteval
+          #    evaluation error in fmt's own sources on this clang).
+          sed -i 's/^#  define FMT_USE_CONSTEVAL 1$/#  define FMT_USE_CONSTEVAL 0/' \
+            dynarmic/externals/fmt/include/fmt/base.h
+          #  - mcl: the template-template parameter no longer matches
+          #    std::integer_sequence on this clang.
+          sed -i 's@template<class T, template<class, T\.\.\.> class VLT, T\.\.\. values>@template<class T, template<class VT, VT...> class VLT, T... values>@' \
+            dynarmic/externals/mcl/include/mcl/mp/typelist/lift_sequence.hpp
+          #  - dynarmic: ir_emitter.h uses std::vector without including <vector>
+          #    (this clang's libc++ no longer provides it transitively).
+          sed -i 's@#include <mcl/stdint.hpp>@#include <vector>\n\n#include <mcl/stdint.hpp>@' \
+            dynarmic/src/dynarmic/ir/ir_emitter.h
+          grep -q 'FMT_USE_CONSTEVAL 1' dynarmic/externals/fmt/include/fmt/base.h && { echo 'fmt patch failed'; exit 1; } || true
+
+          # Boost headers (interval containers): header-only, extract just boost/.
+          curl -fsSL -o boost.tar.bz2 "https://archives.boost.io/release/$BOOST_VERSION/source/boost_${BOOST_VERSION//./_}.tar.bz2"
+          tar -xjf boost.tar.bz2 "boost_${BOOST_VERSION//./_}/boost"
+          mv "boost_${BOOST_VERSION//./_}" boost
+          rm boost.tar.bz2
+
+      - name: Verify and patch the pinned compiler FPSR boundary
+        run: python3 compat/arm64/dll/patch-dynarmic-fpsr.py deps/dynarmic
+
+      - uses: actions/cache@v4
+        with:
+          path: tcp-ndk-archive
+          key: tcp-ndk-r27c-090e8083a715fdb1a3e402d0763c388abb03fb4e
+      - name: Authenticate publisher NDK archive and freshly extract on every use
+        run: python3 tools/net-tcp-priority/prepare-ndk.py
+      - name: Build one fresh coherent host, translator, and both bionic ABI fixtures
+        run: |
+          set -euo pipefail
+          llvm="$HOME/toolchain/$LLVM_MINGW_NAME"
+          cmake -S . -B out -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          ninja -C out gesher-exec net_tcp_priority_probe
+          cmake -S compat/arm64/dll -B out-arm64 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" \
+            -DLLVM_MINGW="$llvm" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DDYNARMIC_DIR="$PWD/deps/dynarmic" -DBoost_INCLUDE_DIR="$PWD/deps/boost"
+          ninja -C out-arm64 gesher_arm64
+          python3 tools/net-tcp-priority/build-guests.py
+          python3 tools/net-tcp-priority/manifest.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tcp-priority-${{ github.sha }}-a${{ github.run_attempt }}
+          path: tcp-fixture/
+          if-no-files-found: error
+          retention-days: 14
+  linux-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retain full independent Linux contract including inline mode
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
+          timeout 20 /tmp/tcp-priority-reference
+  windows:
+    needs: [compile, linux-reference]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify raw archive and exact producer, then run actual host and both ABI paths
+        shell: pwsh
+        run: tools/net-tcp-priority/run-component.ps1

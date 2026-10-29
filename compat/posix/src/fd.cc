@@ -365,7 +365,8 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
       eventfd_index.push_back(i);
     } else if (LookupSocket(p->fd, &state)) {
       int events = ((p->events & kIn) != 0 ? ws::kPollIn : 0) |
-                   ((p->events & kOut) != 0 ? ws::kPollOut : 0);
+                   ((p->events & kOut) != 0 ? ws::kPollOut : 0) |
+                   ((p->events & POLLPRI) != 0 ? ws::kPollPri : 0);
       sockets.push_back({state.socket, events, 0});
       socket_index.push_back(i);
     } else if (!PollFile(p)) {
@@ -407,6 +408,7 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
         short out = 0;
         if (r & ws::kPollIn) out |= p->events & kIn;
         if (r & ws::kPollOut) out |= p->events & kOut;
+        if (r & ws::kPollPri) out |= p->events & POLLPRI;
         if (r & ws::kPollErr) out |= POLLERR;
         if (r & ws::kPollHup) out |= POLLHUP;
         if (r & ws::kPollNval) out |= POLLNVAL;

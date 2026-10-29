@@ -658,9 +658,11 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
   std::vector<WSAPOLLFD> fds(count);
   for (size_t i = 0; i < count; ++i) {
     fds[i].fd = static_cast<SOCKET>(entries[i].socket);
-    // WSAPoll rejects POLLPRI, so out-of-band data is not reported.
+    // Winsock rejects its POLLPRI, but supports POLLRDBAND for TCP OOB.
+    // Keep this distinct from normal-read readiness and from connect errors.
     fds[i].events = static_cast<SHORT>(((entries[i].events & kPollIn) != 0 ? POLLRDNORM : 0) |
-                                       ((entries[i].events & kPollOut) != 0 ? POLLWRNORM : 0));
+                                       ((entries[i].events & kPollOut) != 0 ? POLLWRNORM : 0) |
+                                       ((entries[i].events & kPollPri) != 0 ? POLLRDBAND : 0));
     fds[i].revents = 0;
   }
   int rc = WSAPoll(fds.data(), static_cast<ULONG>(count), timeout_ms);
@@ -669,7 +671,8 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
   for (size_t i = 0; i < count; ++i) {
     SHORT r = fds[i].revents;
     int out = 0;
-    if (r & (POLLRDNORM | POLLRDBAND)) out |= kPollIn;
+    if (r & POLLRDNORM) out |= kPollIn;
+    if ((r & POLLRDBAND) && (entries[i].events & kPollPri)) out |= kPollPri;
     if (r & POLLWRNORM) out |= kPollOut;
     if (r & POLLERR) out |= kPollErr;
     if (r & POLLHUP) out |= kPollHup;

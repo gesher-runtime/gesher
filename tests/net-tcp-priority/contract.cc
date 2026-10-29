@@ -1,6 +1,7 @@
 // The identical contract is compiled against Linux, Gesher host POSIX, and both NDK ABIs.
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -96,8 +97,33 @@ static void* delayed(void* raw) {
   require(send(fd, "?", 1, MSG_OOB) == 1, "concurrent urgent send");
   return nullptr;
 }
-int main() {
-  scenario(0); scenario(1);
+static void connection_controls() {
+  int reserved = socket(AF_INET, SOCK_STREAM, 0); require(reserved >= 0, "reserve refused port");
+  sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(reserved, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "reserve bind");
+  socklen_t length = sizeof(address);
+  require(getsockname(reserved, reinterpret_cast<sockaddr*>(&address), &length) == 0, "reserve name");
+  int client = socket(AF_INET, SOCK_STREAM, 0); require(client >= 0, "refused client");
+  int flags = fcntl(client, F_GETFL); require(flags >= 0 && fcntl(client, F_SETFL, flags | O_NONBLOCK) == 0, "refused nonblock");
+  int connected = connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+  require(connected == -1 && (errno == EINPROGRESS || errno == ECONNREFUSED), "refused connection pending");
+  pollfd refused{client, POLLPRI, 0};
+  require(poll(&refused, 1, 5000) == 1 && (refused.revents & (POLLERR | POLLHUP)) && !(refused.revents & POLLPRI), "refused error never priority");
+  int error = 0; length = sizeof(error);
+  require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "readiness preserved SO_ERROR");
+  error = -1; length = sizeof(error);
+  require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0, "only caller consumed SO_ERROR");
+  require(close(client) == 0 && close(reserved) == 0, "refused cleanup");
+  pollfd closed{client, POLLPRI, 0};
+  require(poll(&closed, 1, 0) == 1 && closed.revents == POLLNVAL, "closed fd is invalid not urgent");
+  puts("PASS TCP priority: failed connection and closed descriptor distinguish errors and preserve SO_ERROR");
+}
+int main(int argc, char** argv) {
+  const bool noninline_only = argc == 2 && strcmp(argv[1], "--noninline") == 0;
+  require(argc == 1 || noninline_only, "explicit supported scope");
+  scenario(0);
+  if (!noninline_only) scenario(1);
+  connection_controls();
   Pair a = pair(); pthread_t thread;
   require(pthread_create(&thread, nullptr, delayed, &a.sender) == 0, "sender thread");
   ready(a.receiver, true, 2000);
@@ -106,5 +132,6 @@ int main() {
   ready(a.receiver, false, 30);
   require(close(a.sender) == 0 && close(a.receiver) == 0, "concurrent cleanup");
   puts("PASS TCP priority: delayed arrival bounded wake and cleanup");
-  puts("PASS TCP priority: all contract checks passed");
+  if (noninline_only) puts("PASS TCP priority: noninline contract checks passed; inline remains OPEN");
+  else puts("PASS TCP priority: all contract checks passed");
 }
