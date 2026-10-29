@@ -4248,3 +4248,45 @@
 +#endif
 +#endif
 +#endif
+--- a/mingw-w64-libraries/winpthreads/src/rwlock.c
++++ b/mingw-w64-libraries/winpthreads/src/rwlock.c
+@@ -140,13 +140,39 @@
+
+ static pthread_spinlock_t cond_locked = PTHREAD_SPINLOCK_INITIALIZER;
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++static HANDLE gesher_rwlock_entered, gesher_rwlock_release, gesher_rwlock_contended;
++__declspec(dllexport) void __cdecl gesher_rwlock_init_gate_v1(void *entered, void *release, void *contended)
++{ gesher_rwlock_entered=entered; gesher_rwlock_release=release; gesher_rwlock_contended=contended; }
++static void gesher_rwlock_init_lock(void)
++{
++  if (!gesher_rwlock_entered) { pthread_spin_lock(&cond_locked); return; }
++  int r=pthread_spin_trylock(&cond_locked);
++  if (r==EBUSY) {
++    if (!SetEvent(gesher_rwlock_contended)) abort();
++    pthread_spin_lock(&cond_locked);
++  } else if (!r) {
++    if (!SetEvent(gesher_rwlock_entered) || WaitForSingleObject(gesher_rwlock_release,5000)!=WAIT_OBJECT_0) abort();
++  } else abort();
++}
++#endif
++
+
+ static WINPTHREADS_ATTRIBUTE((noinline)) int rwlock_static_init(pthread_rwlock_t *rw)
+ {
+   int r;
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++  gesher_rwlock_init_lock();
++#else
+   pthread_spin_lock(&cond_locked);
++#endif
+   if (*rw != PTHREAD_RWLOCK_INITIALIZER)
+   {
+     pthread_spin_unlock(&cond_locked);
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++    /* Another caller completed initialization after our sentinel check. */
++    return EBUSY;
++#else
+     return EINVAL;
++#endif
+   }
+   r = pthread_rwlock_init (rw, NULL);
