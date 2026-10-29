@@ -516,6 +516,7 @@ std::vector<int> StartDevice(const std::vector<std::u16string>& commands,
   if (!broker_duplicated) {
     CloseHandle(client);
     g_broker = nullptr;
+    if (!rollback_broker) std::fprintf(stderr, "private device bootstrap: retained broker missing\n");
     if (rollback_broker) {
       // The existing map entry reserves the exact handle during the wait; no
       // allocation or PID reopen is needed even when DuplicateHandle failed.
@@ -579,6 +580,15 @@ int FixtureRollbackState(int pid) {
   std::lock_guard<std::mutex> guard(g_lock);
   auto it = g_children.find(pid);
   return it == g_children.end() ? 0 : it->second.bootstrap_retirement;
+}
+intptr_t FixtureObserveRollback(int pid) {
+  std::lock_guard<std::mutex> guard(g_lock);
+  auto it = g_children.find(pid);
+  HANDLE copy = nullptr;
+  if (it == g_children.end() || it->second.bootstrap_retirement != 1 ||
+      !DuplicateHandle(GetCurrentProcess(), it->second.process, GetCurrentProcess(), &copy,
+          SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, 0)) return 0;
+  return reinterpret_cast<intptr_t>(copy);
 }
 bool FixtureReapRollback(int pid) {
   std::lock_guard<std::mutex> guard(g_lock);
@@ -644,9 +654,9 @@ bool RevokeInstall(const std::u16string& package, const std::u16string& install)
     } else ++it;
   }
   for (auto it = g_children.begin(); it != g_children.end();) {
-    if (it->second.bootstrap_retirement == 2 &&
-        WaitForSingleObject(it->second.process, 0) == WAIT_OBJECT_0) {
-      if (CloseHandle(it->second.process)) it = g_children.erase(it);
+    if (it->second.bootstrap_retirement == 2) {
+      if (WaitForSingleObject(it->second.process, 0) == WAIT_OBJECT_0 &&
+          CloseHandle(it->second.process)) it = g_children.erase(it);
       else { ok = false; ++it; }
     } else ++it;
   }

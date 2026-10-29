@@ -39,6 +39,7 @@ std::vector<int> StartDevice(const std::vector<std::u16string>& commands,
 void FixtureRollbackFaults(int flags);
 int FixtureRollbackPid();
 int FixtureRollbackState(int pid);
+intptr_t FixtureObserveRollback(int pid);
 bool FixtureReapRollback(int pid);
 #endif
 

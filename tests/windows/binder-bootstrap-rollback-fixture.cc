@@ -36,11 +36,17 @@ int wmain(int argc, wchar_t** argv) {
     uint64_t deadline = GetTickCount64() + 4000;
     int pid;
     while (!(pid = z::FixtureRollbackPid()) && GetTickCount64() < deadline) Sleep(1);
+    HANDLE observer = reinterpret_cast<HANDLE>(z::FixtureObserveRollback(pid));
     bool observed = pid > 0 && z::FixtureRollbackState(pid) == 1 &&
-        z::ExitStatus(pid) == z::kExitUnknown && !z::Kill(pid);
+        observer && z::ExitStatus(pid) == z::kExitUnknown && !z::Kill(pid);
     z::FixtureRollbackFaults(1 | extra);
     owner.join();
     Check(observed, "concurrent observers must not consume or kill reserved rollback");
+    Check(WaitForSingleObject(observer, 5000) == WAIT_OBJECT_0, "observed exact broker must terminate");
+    DWORD code = 0;
+    Check(GetExitCodeProcess(observer, &code) && (code == 137 || code == 1),
+          "exact broker terminated by rollback or private-channel loss");
+    Check(CloseHandle(observer), "close independent observer");
     Check(children.empty(), "injected duplication must fail bootstrap");
     if (!extra) {
       Check(z::FixtureRollbackState(pid) == 0, "signaled broker must be closed and retired");
