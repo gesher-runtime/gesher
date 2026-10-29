@@ -4,6 +4,17 @@ param([Parameter(Mandatory)] [string] $Dir, [string] $Web3Observer = '')
 
 $ErrorActionPreference = 'Stop'
 $failed = 0
+# Record the exact tracked blob around each existing track so a changed runtime
+# configuration cannot be mistaken for a clean producer source. Do not restore
+# or waive any source identity assertion; these are diagnostics only.
+$trackedConfig = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../../overrides.json')).Path
+function SourceConfigBlob {
+  $blob = & git -C (Join-Path $PSScriptRoot '../..') hash-object -- $trackedConfig
+  if ($LASTEXITCODE -ne 0 -or $blob -notmatch '^[0-9a-f]{40}$') { throw 'Tracked configuration hash failed' }
+  return $blob
+}
+$sourceConfigBlob = SourceConfigBlob
+Write-Host "SOURCE_CONFIG_OBSERVATION phase=before-suite blob=$sourceConfigBlob"
 
 if ($Web3Observer) {
   $script:web3Observer = (Resolve-Path -LiteralPath $Web3Observer).Path
@@ -167,6 +178,7 @@ if ($code -eq 0 -and -not $missing) {
 # libraries, services, ...), run here in this script's scope: Check, RunDex,
 # NoDrive, $root, $bcp and $failed are theirs to use.
 foreach ($t in Get-ChildItem (Join-Path $PSScriptRoot 'tracks') -Filter *.ps1 -ErrorAction SilentlyContinue | Sort-Object Name) {
+  $configBefore = SourceConfigBlob
   try {
     . $t.FullName
   } catch {
@@ -174,8 +186,14 @@ foreach ($t in Get-ChildItem (Join-Path $PSScriptRoot 'tracks') -Filter *.ps1 -E
     Write-Host $_.InvocationInfo.PositionMessage
     Write-Host $_.ScriptStackTrace
     throw
+  } finally {
+    $configAfter = SourceConfigBlob
+    if ($configBefore -cne $configAfter) {
+      Write-Host "SOURCE_CONFIG_CHANGED track=$($t.Name) before=$configBefore after=$configAfter"
+    }
   }
 }
+Write-Host "SOURCE_CONFIG_OBSERVATION phase=after-suite blob=$(SourceConfigBlob)"
 
 Write-Host "`n$failed test(s) failed"
 exit $failed
