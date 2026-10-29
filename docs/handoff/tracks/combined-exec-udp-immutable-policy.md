@@ -49,7 +49,7 @@ and head repository. This implements future main/PR handling; neither event
 has yet been exercised on this combined policy. A dispatch is still required
 for the pending combined qualification.
 
-CI negative controls replace and restore actual tracked role guard, immutable
+CI negative controls replace and restore actual tracked role guard, blocking guard, immutable
 workflow and caller separately and together. Whole-tree controls reject an
 altered selected blob or candidate-supplied policy. Actual run metadata controls
 reject wrong source, repository, attempt, workflow and event. Restoration and

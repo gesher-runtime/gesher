@@ -326,7 +326,7 @@ jobs:
               # A valid but wrong historical authority cannot authorize this caller.
               reject('wrong_external_identity', lambda: require(caller_identity(BASE) == approved_caller,
                                                                 'Historical caller differs'))
-              for name in (GUARD, TRUST, CALLER):
+              for name in (GUARD, 'tools/native3-locks/union_blocking_guard.py', TRUST, CALLER):
                   path = Path(name)
                   original = path.read_bytes()
                   try:
@@ -338,9 +338,10 @@ jobs:
               mutant[next(iter(HISTORICAL_PINS))] = ('100644', '0' * 40)
               reject('original_native_aot_selected_blob', lambda: verify_selected(mutant))
               # Both real files are also replaced together, then restored even on rejection.
-              originals = {name: Path(name).read_bytes() for name in (GUARD, TRUST, CALLER)}
+              originals = {name: Path(name).read_bytes() for name in (GUARD, 'tools/native3-locks/union_blocking_guard.py', TRUST, CALLER)}
               try:
                   Path(GUARD).write_bytes(b'pass\n')
+                  Path('tools/native3-locks/union_blocking_guard.py').write_bytes(b'pass\n')
                   Path(TRUST).write_bytes(b'pass\n')
                   Path(CALLER).write_bytes(b'name: forged\njobs: {}\n')
                   reject('actual_noop_guard_plus_caller_policy', lambda: verify_checkout(expected))
