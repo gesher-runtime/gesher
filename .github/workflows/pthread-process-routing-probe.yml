@@ -26,6 +26,8 @@ jobs:
           "$RUNNER_TEMP/reference"
           cc -std=c11 -Wall -Wextra -Werror -pthread tests/native/pthread_key_self_delete_linux_reference.c -o "$RUNNER_TEMP/key-reference"
           "$RUNNER_TEMP/key-reference"
+          cc -std=c11 -Wall -Wextra -Werror -pthread tests/native/pthread_key_generation_linux_reference.c -o "$RUNNER_TEMP/generation-reference"
+          "$RUNNER_TEMP/generation-reference"
       - uses: ./.github/actions/setup-build
         with:
           ccache-key: host-pthread-authority
@@ -72,22 +74,255 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($case in @(@{Name='key-delete-diagnostic';Exit=0;Marker='CONTROL destructor entered, same-key deletion did not return within 1500ms'}, @{Name='strict';Exit=0;Marker='PASS strict process thread identity, clocks and authority after DLL unload'}, @{Name='operations';Exit=0;Marker='PASS probe cross-image create join tryjoin cancel detach TLS cleanup and unload'}, @{Name='standalone';Exit=0;Marker='PASS routing probe standalone DLL local provider'}, @{Name='bad-anchor';Exit=3;Marker='CONTROL invalid identity descriptor before pthread_self'}, @{Name='missing-anchor';Exit=3;Marker='CONTROL missing identity descriptor before pthread_self'})) {
+          foreach ($case in @(@{Name='wrapper-gate';Exit=0;Marker='PASS probe wrapper unlocked before cleanup; live detach exact destructor retired ESRCH'}, @{Name='retirement-static';Exit=0;Marker='PASS retirement all 338 destructors owned=0 handles='}, @{Name='retirement-dynamic';Exit=0;Marker='PASS retirement all 338 destructors owned=0 handles='}, @{Name='callback-lifetime';Exit=0;Marker='PASS probe deleted key generation retains DLL callback through return and rejects reuse alias'}, @{Name='callback-lifetime';Arg='--dll';Exit=0;Marker='PASS probe deleted key generation retains DLL callback through return and rejects reuse alias'}, @{Name='key-delete-diagnostic';Exit=0;Marker='PASS destructor deletes its own key and returns'}, @{Name='strict';Exit=0;Marker='PASS strict process thread identity, clocks and authority after DLL unload'}, @{Name='operations';Exit=0;Marker='PASS probe cross-image create join tryjoin cancel detach TLS cleanup and unload'}, @{Name='standalone';Exit=0;Marker='PASS routing probe standalone DLL local provider'}, @{Name='bad-anchor';Exit=3;Marker='CONTROL invalid identity descriptor before pthread_self'}, @{Name='missing-anchor';Exit=3;Marker='CONTROL missing identity descriptor before pthread_self'})) {
             $name=$case.Name
             $stdout=Join-Path $env:RUNNER_TEMP "$name.out"
             $stderr=Join-Path $env:RUNNER_TEMP "$name.err"
-            $process=Start-Process -FilePath (Join-Path $pwd "routing-probe-fixture/$name.exe") -WorkingDirectory (Join-Path $pwd 'routing-probe-fixture') -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $start=@{FilePath=(Join-Path $pwd "routing-probe-fixture/$name.exe"); WorkingDirectory=(Join-Path $pwd 'routing-probe-fixture'); WindowStyle='Hidden'; PassThru=$true; RedirectStandardOutput=$stdout; RedirectStandardError=$stderr}
+            if ($case.Arg) { $start.ArgumentList=@($case.Arg) }
+            $process=Start-Process @start
             try {
               if (-not $process.WaitForExit(120000)) { throw "Probe timeout $name" }
               $process.Refresh()
               if ($process.ExitCode -ne $case.Exit) { throw "Probe $name exit=$($process.ExitCode) expected=$($case.Exit)" }
               $actual=Get-Content -Raw -LiteralPath $stdout
               if (-not $actual.Contains($case.Marker) -or $actual.Contains('FAIL ')) { throw "Probe $name missing control" }
+              if ($name -eq 'callback-lifetime' -and -not $actual.Contains('PASS probe four destructor passes and self-delete recreate generation')) { throw 'Missing destructor iteration/reuse proof' }
               if ($name -eq 'operations' -and (-not $actual.Contains('PASS probe DLL data alias admission reload and foreign-thread exit after unload') -or -not $actual.Contains('equal=1'))) { throw 'Missing alias and late thread exit proof' }
               Write-Host "$name actual exit=$($process.ExitCode)"
               Write-Host $actual
             } finally {
               if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Probe cleanup failed' } }
+              $process.Dispose()
+              if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+            }
+          }
+
+  baseline_compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Supplier import inventory rejection controls
+        run: python3 tools/host-pthread-authority/receipt.py selftest
+      - name: Linux public clock reference
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -pthread tests/native/pthread_clock_linux_reference.c -ldl -o "$RUNNER_TEMP/pthread-clock-reference"
+          "$RUNNER_TEMP/pthread-clock-reference"
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: host-pthread-authority
+      - name: Build actual POSIX library and both supplier linkage roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B out -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          ninja -C out host_pthread_authority_test
+          mkdir host-authority-fixture
+          cp out/host_pthread_authority_test.exe host-authority-fixture/
+          llvm="$GESHER_AUTHORITY_LLVM"
+          python3 tools/host-pthread-authority/bundle.py compile-client "$llvm"
+          python3 tools/host-pthread-authority/bundle.py compile-retirement "$llvm" production
+          cp "$llvm/x86_64-w64-mingw32/bin/libwinpthread-1.dll" host-authority-fixture/
+          cp "$llvm/x86_64-w64-mingw32/share/mingw32/COPYING.winpthreads.txt" host-authority-fixture/
+          cp "$llvm/gesher-winpthreads-authority.json" host-authority-fixture/supplier.json
+          "$llvm/bin/llvm-readobj" --coff-imports out/host_pthread_authority_test.exe > host-authority-fixture/imports-host.txt
+          "$llvm/bin/llvm-readobj" --coff-imports host-authority-fixture/host_pthread_supplier_test.exe > host-authority-fixture/imports-dynamic.txt
+          "$llvm/bin/llvm-readobj" --coff-imports host-authority-fixture/host_pthread_public_static_test.exe > host-authority-fixture/imports-static.txt
+          "$llvm/bin/llvm-readobj" --coff-imports host-authority-fixture/host_pthread_mixed_provider_test.exe > host-authority-fixture/imports-mixed.txt
+          "$llvm/bin/llvm-readobj" --coff-imports host-authority-fixture/host_pthread_descriptor_test.exe > host-authority-fixture/imports-descriptor.txt
+          "$llvm/bin/llvm-readobj" --coff-imports host-authority-fixture/host_pthread_bad_anchor_test.exe > host-authority-fixture/imports-bad-anchor.txt
+          "$llvm/bin/llvm-readobj" --coff-exports host-authority-fixture/host_pthread_descriptor_test.exe > host-authority-fixture/exports-descriptor-host.txt
+          "$llvm/bin/llvm-readobj" --coff-exports host-authority-fixture/libwinpthread-1.dll > host-authority-fixture/exports-descriptor-dll.txt
+          python3 tools/host-pthread-authority/receipt.py host-role out "$llvm" production host-authority-fixture/host-production-role.json
+      - name: Build separately patched supplier and host fault fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          fault_root="$RUNNER_TEMP/gesher-authority-fault-toolchain"
+          test ! -e "$fault_root"
+          mkdir "$fault_root"
+          cp -a --reflink=auto "$GESHER_AUTHORITY_LLVM" "$fault_root/$LLVM_MINGW_NAME"
+          cp --reflink=auto "$(dirname "$GESHER_AUTHORITY_LLVM")/compiler.tar.xz" "$fault_root/compiler.tar.xz"
+          llvm="$fault_root/$LLVM_MINGW_NAME"
+          bash tools/host-pthread-authority/build-supplier.sh "$llvm" fault
+          cmake -S . -B out-host-fault -G Ninja -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" -DLLVM_MINGW="$llvm" -DGESHER_HOST_CPU_CLOCK_TEST_FAULTS=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          ninja -C out-host-fault host_pthread_authority_fault_test
+          cp out-host-fault/host_pthread_authority_fault_test.exe host-authority-fixture/
+          cp "$llvm/gesher-winpthreads-authority.json" host-authority-fixture/fault-supplier.json
+          python3 tools/host-pthread-authority/receipt.py host-role out-host-fault "$llvm" fault host-authority-fixture/host-fault-role.json
+          python3 tools/host-pthread-authority/bundle.py compile-retirement "$llvm" fault
+          cp "$llvm/x86_64-w64-mingw32/bin/libwinpthread-1.dll" host-authority-fixture/fault-libwinpthread-1.dll
+          python3 tools/host-pthread-authority/bundle.py record
+          python3 tools/host-pthread-authority/bundle.py verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pthread-routing-baseline
+          path: host-authority-fixture/
+          if-no-files-found: error
+  baseline_windows:
+    needs: baseline_compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Exact producer ZIP and same-source complete member verification
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/artifact_receipt.py --name pthread-routing-baseline --producer baseline_compile --destination host-authority-fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Producer ZIP validation failed' }
+          python tools/host-pthread-authority/bundle.py verify
+          if ($LASTEXITCODE -ne 0) { throw 'Host supplier identity failed' }
+      - name: Real initial host target and dynamic export controls
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = Get-Content -Raw -LiteralPath host-authority-fixture/bundle.json | ConvertFrom-Json
+          $expectedSha = $bundle.members.'libwinpthread-1.dll'
+          $problems = [System.Collections.Generic.List[string]]::new()
+          foreach ($case in @(@{Name='host_pthread_authority_test';Sha=$null;Exit=0}, @{Name='host_pthread_public_static_test';Sha=$null;Exit=0}, @{Name='host_pthread_mixed_provider_test';Sha=$null;Exit=0}, @{Name='host_pthread_bad_anchor_test';Sha=$null;Exit=0}, @{Name='host_pthread_descriptor_test';Sha=$null;Exit=0}, @{Name='host_pthread_supplier_test';Sha=$expectedSha;Exit=0}, @{Name='host_pthread_supplier_test';Sha=('0' * 64);Exit=3}, @{Name='host_pthread_authority_fault_test';Sha=$null;Exit=0}, @{Name='retirement-production-static';Sha=$null;Exit=0}, @{Name='retirement-production-dynamic';Sha=$null;Exit=0})) {
+            $name = $case.Name
+            $stdout = Join-Path $env:RUNNER_TEMP "$name.stdout"
+            $stderr = Join-Path $env:RUNNER_TEMP "$name.stderr"
+            $process = $null
+            try {
+              $start = @{ FilePath = (Join-Path $pwd "host-authority-fixture/$name.exe"); WorkingDirectory = (Join-Path $pwd 'host-authority-fixture'); WindowStyle = 'Hidden'; PassThru = $true; RedirectStandardOutput = $stdout; RedirectStandardError = $stderr }
+              if ($name -eq 'host_pthread_supplier_test') { $start.ArgumentList = @($case.Sha) }
+              $process = Start-Process @start
+              if (-not $process.WaitForExit(180000)) { throw "Owned fixture timeout $name" }
+              $process.Refresh()
+              if ($process.ExitCode -ne $case.Exit) { throw "Actual fixture exit $name=$($process.ExitCode) expected=$($case.Exit)" }
+              if ($name -like 'retirement-production-*') {
+                $actual = Get-Content -Raw -LiteralPath $stdout
+                foreach ($proof in @('PASS retirement production 64 live detach and exact destructors', 'PASS retirement user-destructor outside registry lock', 'PASS retirement production joiner-start-before-release and foreign tryjoin', 'PASS retirement 256 concurrent-live detach join ended-detach reuse original-capability', 'PASS retirement all 338 destructors owned=0 handles=')) { if (-not $actual.Contains($proof)) { throw "Missing production proof $name $proof" } }
+              }
+              if ($case.Exit -eq 3) { Write-Host "Loaded supplier wrong-digest control rejected with actual exit=$($process.ExitCode)" }
+            } catch {
+              $problems.Add("$name expected=$($case.Exit): $_")
+            } finally {
+              if ($null -ne $process) {
+                if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Owned fixture cleanup failed' } }
+                $process.Dispose()
+              }
+              if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
+              if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+            }
+          }
+          $retirementDir = Join-Path $env:RUNNER_TEMP 'retirement-fixture'
+          New-Item -ItemType Directory -Path $retirementDir | Out-Null
+          Copy-Item host-authority-fixture/retirement-static.exe,host-authority-fixture/retirement-dynamic.exe $retirementDir
+          Copy-Item host-authority-fixture/fault-libwinpthread-1.dll (Join-Path $retirementDir 'libwinpthread-1.dll')
+          foreach ($case in @(@{Name='retirement-static';Arg=$null;Exit=0}, @{Name='retirement-dynamic';Arg=$null;Exit=0}, @{Name='retirement-static';Arg='--tls-clear-failure';Exit=3}, @{Name='retirement-dynamic';Arg='--tls-clear-failure';Exit=3})) {
+            $name = $case.Name
+            $tag = $name + $(if ($case.Arg) { '-failure' } else { '-normal' })
+            $start = @{ FilePath = (Join-Path $retirementDir "$name.exe"); WorkingDirectory = $retirementDir; WindowStyle = 'Hidden'; PassThru = $true; RedirectStandardOutput = (Join-Path $retirementDir "$tag.out"); RedirectStandardError = (Join-Path $retirementDir "$tag.err") }
+            if ($case.Arg) { $start.ArgumentList = @($case.Arg) }
+            $process = Start-Process @start
+            try {
+              if (-not $process.WaitForExit(180000)) { throw "Owned retirement fixture timeout $name" }
+              $process.Refresh()
+              if ($process.ExitCode -ne $case.Exit) { throw "Retirement fixture $tag exited $($process.ExitCode) expected=$($case.Exit)" }
+              $output = Get-Content -Raw (Join-Path $retirementDir "$tag.out")
+              if ($case.Exit -eq 0) {
+                foreach ($proof in @('PASS retirement 64 actual registry mutex contentions destructor-before-publication retired-ESRCH', 'PASS retirement user-destructor outside registry lock', 'PASS retirement valid join reached live controller-held target', 'PASS retirement 256 concurrent-live detach join ended-detach reuse original-capability', 'PASS retirement all 338 destructors owned=0 handles=')) {
+                  if (-not $output.Contains($proof)) { throw "Missing actual retirement result $tag $proof" }
+                }
+              } else {
+                if (($output.Trim() -ne 'CONTROL TLS-clear-failure destructor exactly once before abort') -or $output.Contains('survived')) { throw "Missing fail-safe TLS clear proof $tag" }
+                Write-Host "Actual TLS-clear-failure fail-safe $tag exit=$($process.ExitCode)"
+              }
+              Write-Host "$name $output"
+            } finally {
+              if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Retirement cleanup failed' } }
+              $process.Dispose()
+              if (Test-Path -LiteralPath (Join-Path $retirementDir "$tag.out")) { Get-Content -LiteralPath (Join-Path $retirementDir "$tag.out") }
+              if (Test-Path -LiteralPath (Join-Path $retirementDir "$tag.err")) { Get-Content -LiteralPath (Join-Path $retirementDir "$tag.err") }
+            }
+          }
+          if ($problems.Count -gt 0) { throw ($problems -join '; ') }
+  probe_fault_compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: host-pthread-authority
+      - name: Build isolated probe-fault supplier and retirement roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          fault_root="$RUNNER_TEMP/gesher-routing-probe-fault-toolchain"
+          test ! -e "$fault_root"
+          mkdir "$fault_root"
+          cp -a --reflink=auto "$GESHER_AUTHORITY_LLVM" "$fault_root/$LLVM_MINGW_NAME"
+          cp --reflink=auto "$(dirname "$GESHER_AUTHORITY_LLVM")/compiler.tar.xz" "$fault_root/compiler.tar.xz"
+          llvm="$fault_root/$LLVM_MINGW_NAME"
+          bash tools/host-pthread-authority/build-supplier.sh "$llvm" probe-fault
+          python3 tools/host-pthread-authority/probe_fault_bundle.py build "$llvm"
+          python3 tools/host-pthread-authority/probe_fault_bundle.py verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pthread-routing-probe-fault
+          path: routing-probe-fault/
+          if-no-files-found: error
+  probe_fault_windows:
+    needs: probe_fault_compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact probe-fault producer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/artifact_receipt.py --name pthread-routing-probe-fault --producer probe_fault_compile --destination routing-probe-fault
+          if ($LASTEXITCODE -ne 0) { throw 'Probe-fault producer ZIP verification failed' }
+          python tools/host-pthread-authority/probe_fault_bundle.py verify
+          if ($LASTEXITCODE -ne 0) { throw 'Probe-fault role verification failed' }
+      - name: Retirement, exact destructor counts and TLS-clear failure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach ($case in @(@{Name='retirement-static';Arg=$null;Exit=0}, @{Name='retirement-dynamic';Arg=$null;Exit=0}, @{Name='retirement-static';Arg='--tls-clear-failure';Exit=3}, @{Name='retirement-dynamic';Arg='--tls-clear-failure';Exit=3})) {
+            $name=$case.Name; $tag=$name+$(if ($case.Arg) {'-failure'} else {'-normal'})
+            $stdout=Join-Path $env:RUNNER_TEMP "$tag.out"; $stderr=Join-Path $env:RUNNER_TEMP "$tag.err"
+            $start=@{FilePath=(Join-Path $pwd "routing-probe-fault/$name.exe"); WorkingDirectory=(Join-Path $pwd 'routing-probe-fault'); WindowStyle='Hidden'; PassThru=$true; RedirectStandardOutput=$stdout; RedirectStandardError=$stderr}
+            if ($case.Arg) { $start.ArgumentList=@($case.Arg) }
+            $process=Start-Process @start
+            try {
+              if (-not $process.WaitForExit(180000)) { throw "Probe-fault timeout $tag" }
+              $process.Refresh()
+              if ($process.ExitCode -ne $case.Exit) { throw "Probe-fault $tag exit=$($process.ExitCode) expected=$($case.Exit)" }
+              $actual=Get-Content -Raw -LiteralPath $stdout
+              if ($case.Exit -eq 0) {
+                foreach ($proof in @('PASS retirement 64 actual registry mutex contentions destructor-before-publication retired-ESRCH', 'PASS retirement user-destructor outside registry lock', 'PASS retirement valid join reached live controller-held target', 'PASS retirement 256 concurrent-live detach join ended-detach reuse original-capability', 'PASS retirement all 338 destructors owned=0 handles=')) {
+                  if (-not $actual.Contains($proof)) { throw "Missing $tag proof $proof" }
+                }
+              } elseif ($actual.Trim() -ne 'CONTROL TLS-clear-failure destructor exactly once before abort' -or $actual.Contains('survived')) { throw "Missing TLS-clear failure proof $tag" }
+              Write-Host "$tag actual exit=$($process.ExitCode)"
+              Write-Host $actual
+            } finally {
+              if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Probe-fault cleanup failed' } }
               $process.Dispose()
               if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
             }

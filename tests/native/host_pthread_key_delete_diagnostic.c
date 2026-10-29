@@ -54,11 +54,11 @@ int main(int argc,char **argv) {
   assigned=1;
   if (ResumeThread(pi.hThread)==(DWORD)-1) goto cleanup;
   if (WaitForSingleObject(entered,5000)!=WAIT_OBJECT_0) { status=3; goto cleanup; }
-  if (WaitForSingleObject(returned,1500)!=WAIT_TIMEOUT || WaitForSingleObject(pi.hProcess,0)!=WAIT_TIMEOUT) { status=4; goto cleanup; }
+  if (WaitForSingleObject(returned,5000)!=WAIT_OBJECT_0) { status=4; goto cleanup; }
   observed=1;
-  if (!TerminateJobObject(job,47) || WaitForSingleObject(pi.hProcess,5000)!=WAIT_OBJECT_0) { status=5; goto cleanup; }
+  if (WaitForSingleObject(pi.hProcess,5000)!=WAIT_OBJECT_0) { status=5; goto cleanup; }
   DWORD code=0;
-  if (!GetExitCodeProcess(pi.hProcess,&code) || code!=47) { status=6; goto cleanup; }
+  if (!GetExitCodeProcess(pi.hProcess,&code) || code!=0) { status=6; goto cleanup; }
   status=0;
 cleanup:
   if (created && WaitForSingleObject(pi.hProcess,0)!=WAIT_OBJECT_0) {
@@ -76,6 +76,6 @@ cleanup:
   if (job && !CloseHandle(job)) status=8;
   if (entered && !CloseHandle(entered)) status=8;
   if (returned && !CloseHandle(returned)) status=8;
-  if (!status && observed) printf("CONTROL destructor entered, same-key deletion did not return within 1500ms, owned child pid=%lu exit=47 job-empty\n",pi.dwProcessId);
+  if (!status && observed) printf("PASS destructor deletes its own key and returns; child pid=%lu exit=0 job-empty\n",pi.dwProcessId);
   return status;
 }

@@ -9,7 +9,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / 'routing-probe-fixture'
-CASES = {'key-delete-diagnostic.exe': ('host_pthread_key_delete_diagnostic.c', 'libwinpthread.a'),
+CASES = {'wrapper-gate.exe': ('host_pthread_wrapper_gate_test.c', 'libwinpthread.a'),
+         'retirement-static.exe': ('host_pthread_retirement_test.c', 'libwinpthread.a'),
+         'retirement-dynamic.exe': ('host_pthread_retirement_test.c', 'libwinpthread.dll.a'),
+         'callback-lifetime.exe': ('host_pthread_callback_lifetime_test.c', 'libwinpthread.a'),
+         'key-delete-diagnostic.exe': ('host_pthread_key_delete_diagnostic.c', 'libwinpthread.a'),
          'operations.exe': ('host_pthread_routing_operations.c', 'libwinpthread.a'),
          'strict.exe': ('host_pthread_process_identity_acceptance.c', 'libwinpthread.a'),
          'standalone.exe': ('host_pthread_routing_standalone.c', 'libwinpthread.dll.a'),
@@ -35,6 +39,15 @@ def build(llvm):
     provider = json.loads(receipt.read_text())
     assert provider['role'] == 'gesher-winpthreads-authority-routing-probe-v1'
     assert all(provider[k] == v for k, v in ctx.items())
+    module_source=ROOT / 'tests/native/pthread_probe_callback_module.c'
+    module_argv=[str(driver), '-D_WIN32_WINNT=0x0A00', '-Wall', '-Wextra', '-Werror', '-shared',
+                 str(module_source), '-o', str(DIST / 'probe-callback.dll')]
+    subprocess.check_call(module_argv)
+    module_exports=subprocess.check_output([str(llvm / 'bin/llvm-readobj'), '--coff-exports', str(DIST / 'probe-callback.dll')], text=True)
+    assert 'Name: probe_destructor' in module_exports
+    module_imports=subprocess.check_output([str(llvm / 'bin/llvm-readobj'), '--coff-imports', str(DIST / 'probe-callback.dll')], text=True)
+    assert 'libwinpthread-1.dll' not in module_imports.lower()
+    module={'argv': module_argv, 'source_sha256': sha(module_source), 'output_sha256': sha(DIST / 'probe-callback.dll'), 'exports': module_exports, 'imports': module_imports}
     commands = {}
     for name, (source, archive) in CASES.items():
         lib = llvm / 'x86_64-w64-mingw32/lib' / archive
@@ -51,13 +64,13 @@ def build(llvm):
     assert sha(DIST / 'libwinpthread-1.dll') == provider['files']['bin/libwinpthread-1.dll']
     members = {p.name: sha(p) for p in DIST.iterdir()}
     (DIST / 'bundle.json').write_text(json.dumps({'context': ctx, 'members': members, 'commands': commands,
-                                                  'driver': str(driver), 'driver_sha256': sha(driver)}, sort_keys=True, indent=2))
+                                                  'driver': str(driver), 'driver_sha256': sha(driver), 'callback_module': module}, sort_keys=True, indent=2))
 
 def verify():
     ctx = context()
     data = json.loads((DIST / 'bundle.json').read_text())
     assert data['context'] == ctx
-    expected = set(CASES) | {'libwinpthread-1.dll', 'supplier.json'}
+    expected = set(CASES) | {'libwinpthread-1.dll', 'supplier.json', 'probe-callback.dll'}
     assert set(data['members']) == expected
     assert {p.name for p in DIST.iterdir()} == expected | {'bundle.json'}
     assert all(sha(DIST / name) == digest for name, digest in data['members'].items())
@@ -66,6 +79,14 @@ def verify():
     assert all(provider[k] == v for k, v in ctx.items())
     assert provider['compiler_driver_sha256'] == data['driver_sha256']
     assert provider['files']['bin/libwinpthread-1.dll'] == sha(DIST / 'libwinpthread-1.dll')
+    module=data['callback_module']; argv=module['argv']
+    assert len(argv)==9 and argv[0]==data['driver']
+    assert argv[1:6]==['-D_WIN32_WINNT=0x0A00', '-Wall', '-Wextra', '-Werror', '-shared']
+    assert argv[6].endswith('/tests/native/pthread_probe_callback_module.c')
+    assert argv[7]=='-o' and argv[8].endswith('/routing-probe-fixture/probe-callback.dll')
+    assert module['source_sha256']==sha(ROOT / 'tests/native/pthread_probe_callback_module.c')
+    assert module['output_sha256']==sha(DIST / 'probe-callback.dll') and 'Name: probe_destructor' in module['exports']
+    assert 'libwinpthread-1.dll' not in module['imports'].lower()
     for name, (source, archive) in CASES.items():
         row = data['commands'][name]
         argv = row['argv']

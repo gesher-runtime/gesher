@@ -8,6 +8,7 @@ case "$role" in
   production) suffix= ;;
   fault) suffix=-fault ;;
   probe) suffix=-probe ;;
+  probe-fault) suffix=-probe-fault ;;
   *) exit 2 ;;
 esac
 root=$(git rev-parse --show-toplevel)
@@ -22,13 +23,13 @@ git -C "$supplier" checkout --detach FETCH_HEAD
 python3 "$root/tools/host-pthread-authority/receipt.py" inputs "$supplier"
 git -C "$supplier" apply --check "$root/tools/host-pthread-authority/supplier.patch"
 git -C "$supplier" apply "$root/tools/host-pthread-authority/supplier.patch"
-if test "$role" = fault; then
+if test "$role" = fault || test "$role" = probe-fault; then
   git -C "$supplier" apply --check "$root/tools/host-pthread-authority/fault-supplier.patch"
   git -C "$supplier" apply "$root/tools/host-pthread-authority/fault-supplier.patch"
 fi
 export PATH="$llvm/bin:$PATH"
 supplier_cflags='-g -O2 -mguard=cf -Werror -Xclang -fdump-record-layouts'
-if test "$role" = probe; then supplier_cflags="$supplier_cflags -DGESHER_PTHREAD_ROUTING_PROBE=1"; fi
+if test "$role" = probe || test "$role" = probe-fault; then supplier_cflags="$supplier_cflags -DGESHER_PTHREAD_ROUTING_PROBE=1"; fi
 mkdir "$supplier/build"
 cd "$supplier/build"
 ../mingw-w64-libraries/winpthreads/configure \
