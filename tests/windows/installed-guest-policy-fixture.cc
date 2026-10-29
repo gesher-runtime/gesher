@@ -101,6 +101,14 @@ int wmain(int argc, wchar_t** argv) {
       DWORD event_flags = 0;
       Check(GetHandleInformation(ready, &event_flags) && GetHandleInformation(done, &event_flags) &&
           GetHandleInformation(inherited_mutex, &event_flags), "inherited diagnostic handles");
+      HANDLE elevated_mutex = nullptr;
+      BOOL elevated = DuplicateHandle(GetCurrentProcess(), inherited_mutex, GetCurrentProcess(),
+          &elevated_mutex, MUTEX_ALL_ACCESS, FALSE, 0);
+      DWORD elevated_error = elevated ? ERROR_SUCCESS : GetLastError();
+      bool elevated_closed = !elevated || CloseHandle(elevated_mutex) != FALSE;
+      printf("POLICY_PROPERTY_MUTEX_DUP requested_all_access=1 success=%u error=%lu closed=%u\n",
+          unsigned(elevated), elevated_error, unsigned(elevated_closed));
+      Check(elevated_closed, "close mutex escalation observation handle");
       gesher::properties::DiagnosticSetInheritedMutex(inherited_mutex);
       wchar_t property_root_env[32768]{};
       DWORD root_length = GetEnvironmentVariableW(L"ANDROID_DATA", property_root_env, 32768);
