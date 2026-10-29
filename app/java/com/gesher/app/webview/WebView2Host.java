@@ -41,6 +41,7 @@ public final class WebView2Host {
     public static final int EVENT_FILE_DIALOG = 28;
     public static final int EVENT_DOCUMENT_RETIRED = 29;
     public static final int EVENT_SESSION_RESULT = 30;
+    public static final int EVENT_SESSION_SUBSCRIPTION = 31;
 
     /** {@link #find} operations, as {@code Host::FindOp}. */
     public static final int FIND_START = 1;
@@ -217,6 +218,17 @@ public final class WebView2Host {
             String params, int timeoutMs) {
         if (mHandle == 0) return -1;
         return nSubmitSession(nSessionHandle(mHandle), id, session, method, params, timeoutMs);
+    }
+
+    /** Experimental subscription. Event kind is a: registered, event, error, or removed. */
+    public synchronized int subscribeSession(long id, String event, int timeoutMs) {
+        return mHandle == 0 ? -1 : nSubscribeSession(nSessionHandle(mHandle), id, event, timeoutMs);
+    }
+
+    public synchronized int removeSessionSubscription(long operationId, long subscriptionId,
+            int timeoutMs) {
+        return mHandle == 0 ? -1 : nRemoveSessionSubscription(nSessionHandle(mHandle), operationId,
+                subscriptionId, timeoutMs);
     }
 
     /** The DevTools protocol event comes as EVENT_DEVTOOLS_EVENT from now on. */
@@ -446,6 +458,9 @@ public final class WebView2Host {
     private static native long nSessionHandle(long h);
     private static native int nSubmitSession(long handle, long id, String session,
             String method, String params, int timeoutMs);
+    private static native int nSubscribeSession(long handle, long id, String event, int timeoutMs);
+    private static native int nRemoveSessionSubscription(long handle, long operationId,
+            long subscriptionId, int timeoutMs);
     private static native void nListenDevTools(long h, String event);
     private static native void nCompletePermission(long h, long id, int state,
             boolean remember);

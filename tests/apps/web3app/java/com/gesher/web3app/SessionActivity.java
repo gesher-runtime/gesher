@@ -171,6 +171,68 @@ public class SessionActivity extends Activity {
         }
     }
 
+    private boolean exerciseSubscription(Class<?> cls, Class<?> client) throws Exception {
+        CountDownLatch ready = new CountDownLatch(1), registered = new CountDownLatch(1),
+                received = new CountDownLatch(1), removed = new CountDownLatch(1),
+                evaluated = new CountDownLatch(1);
+        AtomicInteger count = new AtomicInteger(), bad = new AtomicInteger();
+        Object callback = Proxy.newProxyInstance(client.getClassLoader(), new Class<?>[] {client},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("onEvent")) {
+                        int type = (Integer) args[0];
+                        long id = (Long) args[1];
+                        int status = (Integer) args[2];
+                        String kind = (String) args[3];
+                        if (type == 1) ready.countDown();
+                        if (type == 30 && id == 103 && status == 0) evaluated.countDown();
+                        if (type == 31) {
+                            if (id == 100 && kind.equals("registered") && status == 0) {
+                                registered.countDown();
+                            } else if (id == 102 && kind.equals("removed") && status == 0) {
+                                removed.countDown();
+                            } else if (id == 100 && kind.equals("event") && status == 0) {
+                                if (registered.getCount() != 0 || !((String) args[4]).isEmpty()
+                                        || !((String) args[5]).contains("WEB4_EVENT_TEST"))
+                                    bad.incrementAndGet();
+                                count.incrementAndGet();
+                                received.countDown();
+                            } else { bad.incrementAndGet(); }
+                        }
+                    }
+                    if (method.getReturnType() == boolean.class) return false;
+                    if (method.getReturnType() == String.class) return "{}";
+                    return null;
+                });
+        Object host = cls.getMethod("create", client, double.class, int.class)
+                .invoke(null, callback, 1.0, -1);
+        if (host == null) return false;
+        Method close = cls.getMethod("tryDestroy");
+        try {
+            if (!ready.await(20, TimeUnit.SECONDS)) return false;
+            Method subscribe = cls.getMethod("subscribeSession", long.class, String.class, int.class);
+            Method submit = cls.getMethod("submitSession", long.class, String.class,
+                    String.class, String.class, int.class);
+            Method remove = cls.getMethod("removeSessionSubscription", long.class, long.class, int.class);
+            int admitted = (Integer) subscribe.invoke(host, 100L, "Runtime.consoleAPICalled", 5000);
+            int duplicate = (Integer) subscribe.invoke(host, 100L, "Runtime.consoleAPICalled", 5000);
+            if (admitted != 0 || duplicate != -3 || !registered.await(10, TimeUnit.SECONDS)) return false;
+            int posted = (Integer) submit.invoke(host, 101L, "", "Runtime.evaluate",
+                    "{\"expression\":\"console.log('WEB4_EVENT_TEST')\"}", 5000);
+            if (posted != 0 || !received.await(10, TimeUnit.SECONDS)) return false;
+            int retiring = (Integer) remove.invoke(host, 102L, 100L, 5000);
+            if (retiring != 0 || !removed.await(10, TimeUnit.SECONDS)) return false;
+            int after = (Integer) submit.invoke(host, 103L, "", "Runtime.evaluate",
+                    "{\"expression\":\"console.log('WEB4_AFTER_REMOVE')\"}", 5000);
+            boolean done = after == 0 && evaluated.await(10, TimeUnit.SECONDS);
+            Thread.sleep(1000);
+            Web3.log("session subscription count=" + count.get() + " bad=" + bad.get()
+                    + " after=" + after + " evaluated=" + done);
+            return done && count.get() == 1 && bad.get() == 0;
+        } finally {
+            close.invoke(host);
+        }
+    }
+
     private void exercise() {
         boolean passed = false;
         Object host = null;
@@ -271,9 +333,11 @@ public class SessionActivity extends Activity {
                     && bigResult == 0 && overflow && third == 0 && closed && afterClose == -1;
             boolean capacity = exerciseCapacity(cls, client);
             boolean budget = exerciseBudget(cls, client);
+            boolean subscription = exerciseSubscription(cls, client);
             boolean crash = exerciseCrash(cls, client);
-            passed &= capacity && budget && crash;
-            Web3.log("session capacity " + capacity + " budget " + budget + " crash " + crash);
+            passed &= capacity && budget && crash && subscription;
+            Web3.log("session capacity " + capacity + " budget " + budget + " crash " + crash
+                    + " subscription " + subscription);
             Web3.log("session request accepted=" + accepted + " completed=" + completed
                     + " hresult=" + status.get() + " count=" + count.get()
                     + " duplicate=" + duplicate + " invalid=" + invalid + " tooLong=" + tooLong

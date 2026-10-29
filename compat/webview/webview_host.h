@@ -57,6 +57,7 @@ enum Event : int32_t {
   kParked = 18,        // id: request id (the container is parked)
   kWebMessage = 19,    // a: the message as JSON (chrome.webview.postMessage); b: source
   kSessionResult = 30,  // id: request; arg: HRESULT; a: JSON
+  kSessionSubscription = 31, // id: subscription; arg: HRESULT; a: kind; b: session; c: JSON
   kDocumentRetired = 29,  // id: native document token, no longer accepting listener replies
   kDevToolsResult = 20,  // id: callback id; arg: HRESULT; a: the result (JSON)
   kDevToolsEvent = 21,   // a: event name; b: its parameters (JSON); ListenDevTools
@@ -148,6 +149,10 @@ class Host {
   static int32_t SubmitSession(int64_t handle, int64_t id, const std::wstring& session,
                                const std::wstring& method, const std::wstring& params,
                                uint32_t timeout_ms);
+  static int32_t SubscribeSession(int64_t handle, int64_t id, const std::wstring& event,
+                                  uint32_t timeout_ms);
+  static int32_t RemoveSessionSubscription(int64_t handle, int64_t operation_id,
+                                           int64_t subscription_id, uint32_t timeout_ms);
 
   // The container window WebView2 draws into (null until the WebView thread
   // made it): accessibility shows WebView2's UI Automation tree there (ADR 0058).

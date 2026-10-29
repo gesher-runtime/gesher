@@ -81,6 +81,7 @@ class CoString {
     s_ = nullptr;
     return &s_;
   }
+  const wchar_t* get() const { return s_; }
   std::wstring str() const { return s_ != nullptr ? std::wstring(s_) : std::wstring(); }
 
  private:

@@ -365,8 +365,33 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   int64_t session_handle = 0;
   unsigned listener_dispatches = 0;
   bool listener_destroy_deferred = false;
-  struct SessionRequest { ULONGLONG deadline; UINT_PTR timer; size_t units; };
+  struct SessionRequest {
+    ULONGLONG deadline;
+    UINT_PTR timer;
+    size_t units;
+    int32_t event_type;
+    std::wstring kind;
+  };
   std::map<int64_t, SessionRequest> session_requests;  // STA only
+  struct SessionSubscription {
+    struct Event { HRESULT status; std::wstring session, json; };
+    Com<ICoreWebView2DevToolsProtocolEventReceiver> receiver;
+    EventRegistrationToken token{};
+    bool adding = true;
+    bool draining = false;
+    bool retired = false;
+    bool token_owned = false;
+    bool overflow = false;
+    size_t buffered_units = 0;
+    std::deque<Event> buffered;
+  };
+  std::map<int64_t, std::shared_ptr<SessionSubscription>> session_subscriptions;
+  size_t session_buffered_units = 0;
+  unsigned session_com_operations = 0;
+  bool session_closing = false;
+  bool session_close_deferred = false;
+  bool session_close_running = false;
+  int64_t next_event_watch = -1;
   std::vector<std::function<void(Impl*)>> pending;  // until ready
 
   Settings settings;
@@ -586,14 +611,16 @@ void RetireSessionLocked(int64_t handle) {
   if (entry->second.watchdog_deadlines.empty()) g_sessions.erase(entry);
 }
 
-void FinishSession(const std::shared_ptr<Impl>& impl, int64_t id, HRESULT hr,
-                   const std::wstring& json) {
+HRESULT FinishSession(const std::shared_ptr<Impl>& impl, int64_t id, HRESULT hr,
+                      const std::wstring& json) {
   auto it = impl->session_requests.find(id);
-  if (it == impl->session_requests.end()) return;
+  if (it == impl->session_requests.end()) return E_ABORT;
   if (GetTickCount64() >= it->second.deadline) hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
   UINT_PTR timer = it->second.timer;
   ULONGLONG it_deadline = it->second.deadline;
   size_t units = it->second.units;
+  int32_t event_type = it->second.event_type;
+  std::wstring data = event_type == kSessionSubscription ? it->second.kind : json;
   impl->session_requests.erase(it);  // retire before dispatch; callbacks may reenter
   {
     std::lock_guard<std::mutex> guard(g_session_mutex);
@@ -610,13 +637,14 @@ void FinishSession(const std::shared_ptr<Impl>& impl, int64_t id, HRESULT hr,
   if (timer) { KillTimer(g_task_window, timer); g_timers.erase(timer); }
   if (GetTickCount64() >= it_deadline) hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
   if (impl->destroyed || impl->listener == nullptr) abort();
-  impl->Report(kSessionResult, id, static_cast<int32_t>(hr), json);
+  impl->Report(event_type, id, static_cast<int32_t>(hr), data);
   {
     std::lock_guard<std::mutex> guard(g_session_mutex);
     auto entry = g_sessions.find(impl->session_handle);
     if (entry == g_sessions.end() || entry->second.watchdog_deadlines.erase(id) != 1) abort();
     if (!entry->second.accepting && entry->second.watchdog_deadlines.empty()) g_sessions.erase(entry);
   }
+  return hr;
 }
 
 std::set<Impl*> g_live;  // the WebView thread's: hosts with a controller
@@ -1547,6 +1575,12 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                             COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED;
                         HRESULT kind_hr = args->get_ProcessFailedKind(&kind);
                         impl->session_failed = true;
+                        for (auto& pair : impl->session_subscriptions) {
+                          pair.second->retired = true;
+                          pair.second->buffered.clear();
+                          pair.second->buffered_units = 0;
+                        }
+                        impl->session_buffered_units = 0;
                         {
                           std::lock_guard<std::mutex> guard(g_session_mutex);
                           RetireSessionLocked(impl->session_handle);
@@ -1923,7 +1957,7 @@ int32_t Host::SubmitSession(int64_t handle, int64_t id, const std::wstring& sess
   auto* task = new std::function<void()>([impl, id, session, method, params, deadline, units] {
     if (StartupFault("stall")) Sleep(12000);
     if (impl->destroyed) abort(); // an accepted completion cannot be silently lost
-    impl->session_requests.emplace(id, Impl::SessionRequest{deadline, 0, units});
+    impl->session_requests.emplace(id, Impl::SessionRequest{deadline, 0, units, kSessionResult, {}});
     if (impl->session_failed) {
       FinishSession(impl, id, E_ABORT, L"null");
       return;
@@ -1996,6 +2030,308 @@ int32_t Host::SubmitSession(int64_t handle, int64_t id, const std::wstring& sess
   return 0;
 }
 
+void CloseOwnedHost(const std::shared_ptr<Impl>& impl) {
+  if (impl->destroyed || impl->session_close_running) return;
+  impl->session_closing = true;
+  for (auto& pair : impl->session_subscriptions) pair.second->retired = true;
+  if (impl->session_com_operations != 0) {
+    impl->session_close_deferred = true;
+    return;
+  }
+  impl->session_close_deferred = false;
+  impl->session_close_running = true;
+  for (auto& pair : impl->session_subscriptions) {
+    auto& sub = pair.second;
+    if (sub->token_owned) {
+      sub->token_owned = false;
+      if (FAILED(sub->receiver->remove_DevToolsProtocolEventReceived(sub->token))) abort();
+    }
+  }
+  impl->session_subscriptions.clear();
+  impl->session_buffered_units = 0;
+  while (!impl->session_requests.empty()) {
+    FinishSession(impl, impl->session_requests.begin()->first,
+                  HRESULT_FROM_WIN32(ERROR_CANCELLED), L"null");
+  }
+  ClearDocumentTimer(impl.get());
+  impl->document_waiting.clear();
+  // Pending requests and dialogs go on unanswered.
+  for (auto& r : impl->requests) r.second.deferral->Complete();
+  impl->requests.clear();
+  for (auto& d : impl->dialogs) d.second.deferral->Complete();
+  impl->dialogs.clear();
+  for (auto& d : impl->deferred) {
+    Com<ICoreWebView2PermissionRequestedEventArgs> permission;
+    Com<ICoreWebView2BasicAuthenticationRequestedEventArgs> auth;
+    Com<ICoreWebView2ClientCertificateRequestedEventArgs> cert;
+    if (d.second.args.As(IID_ICoreWebView2PermissionRequestedEventArgs, &permission)) {
+      permission->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
+    } else if (d.second.args.As(IID_ICoreWebView2BasicAuthenticationRequestedEventArgs, &auth)) {
+      auth->put_Cancel(TRUE);
+    } else if (d.second.args.As(IID_ICoreWebView2ClientCertificateRequestedEventArgs, &cert)) {
+      cert->put_Cancel(TRUE);
+    }
+    d.second.deferral->Complete();
+  }
+  impl->deferred.clear();
+  impl->find.Reset();
+  // Reentrant frame-destroy callbacks must not mutate the map being released.
+  impl->destroyed = true;
+  impl->frames.clear();
+  g_live.erase(impl.get());
+  if (impl->controller) impl->controller->Close();
+  impl->receivers.clear();
+  impl->controller.Reset();
+  impl->webview.Reset();
+  impl->published_container.store(nullptr);
+  if (impl->container != nullptr) DestroyWindow(impl->container);
+  impl->container = nullptr;
+  impl->pending.clear();
+  if (impl->listener_dispatches != 0) {
+    impl->listener_destroy_deferred = true;
+  } else {
+    Listener* listener = impl->listener;
+    impl->listener = nullptr;
+    if (listener != nullptr) listener->OnDestroyed();
+  }
+}
+
+// Subscriptions use the same generation registry and deadline accounting as calls.
+int32_t QueueSessionOperation(int64_t handle, int64_t id, uint32_t timeout_ms, size_t units,
+                              const std::wstring& kind,
+                              std::function<void(const std::shared_ptr<Impl>&, int64_t)> operation) {
+  if (id <= 0 || timeout_ms == 0 || timeout_ms > 60000) return -2;
+  std::lock_guard<std::mutex> guard(g_session_mutex);
+  auto entry = g_sessions.find(handle);
+  if (entry == g_sessions.end() || !entry->second.accepting) return -1;
+  if (!EnsureSessionWatchdog()) return -6;
+  if (entry->second.used.count(id)) return -3;
+  constexpr size_t kMaxPendingUnits = 4 * 1024 * 1024;
+  if (entry->second.pending_units > kMaxPendingUnits) abort();
+  if (entry->second.used.size() >= 65536 || entry->second.watchdog_deadlines.size() >= 128 ||
+      units > kMaxPendingUnits - entry->second.pending_units) return -5;
+  entry->second.used.insert(id);
+  ++entry->second.pending;
+  entry->second.pending_units += units;
+  ULONGLONG now = GetTickCount64();
+  ULONGLONG deadline = now > std::numeric_limits<ULONGLONG>::max() - timeout_ms
+      ? std::numeric_limits<ULONGLONG>::max() : now + timeout_ms;
+  entry->second.watchdog_deadlines.emplace(id, WatchdogDeadline(deadline));
+  auto impl = entry->second.owner;
+  auto* task = new std::function<void()>([impl, id, deadline, units, kind,
+                                           operation = std::move(operation)] {
+    if (impl->destroyed) abort();
+    impl->session_requests.emplace(id, Impl::SessionRequest{deadline, 0, units,
+                                                             kSessionSubscription, kind});
+    if (impl->session_failed || impl->session_closing) {
+      FinishSession(impl, id, E_ABORT, L"");
+    } else if (impl->failed) {
+      FinishSession(impl, id, impl->failure_reason, L"");
+    } else if (!impl->ready || !impl->webview) {
+      FinishSession(impl, id, HRESULT_FROM_WIN32(ERROR_NOT_READY), L"");
+    } else if (GetTickCount64() >= deadline) {
+      FinishSession(impl, id, HRESULT_FROM_WIN32(ERROR_TIMEOUT), L"");
+    } else {
+      operation(impl, id);
+    }
+  });
+  if (g_task_window == nullptr ||
+      !PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(task))) {
+    delete task;
+    entry->second.used.erase(id);
+    entry->second.watchdog_deadlines.erase(id);
+    --entry->second.pending;
+    entry->second.pending_units -= units;
+    return -4;
+  }
+  return 0;
+}
+
+bool CopySessionString(const CoString& value, size_t max, std::wstring* out) {
+  const wchar_t* input = value.get();
+  if (input == nullptr) { out->clear(); return true; }
+  size_t length = 0;
+  while (length <= max && input[length] != L'\0') ++length;
+  if (length > max) return false;
+  out->assign(input, length);
+  return true;
+}
+
+void ReportSessionEvent(const std::shared_ptr<Impl>& impl, int64_t subscription,
+                        const Impl::SessionSubscription::Event& event) {
+  int64_t lease;
+  {
+    std::lock_guard<std::mutex> guard(g_session_mutex);
+    auto entry = g_sessions.find(impl->session_handle);
+    if (entry == g_sessions.end() || !entry->second.accepting || impl->session_closing) return;
+    if (entry->second.watchdog_deadlines.size() >= 128 ||
+        impl->next_event_watch == std::numeric_limits<int64_t>::min()) abort();
+    lease = impl->next_event_watch--;
+    entry->second.watchdog_deadlines.emplace(lease, WatchdogDeadline(GetTickCount64()));
+  }
+  impl->Report(kSessionSubscription, subscription, static_cast<int32_t>(event.status),
+               FAILED(event.status) ? L"error" : L"event", event.session, event.json);
+  {
+    std::lock_guard<std::mutex> guard(g_session_mutex);
+    auto entry = g_sessions.find(impl->session_handle);
+    if (entry == g_sessions.end() || entry->second.watchdog_deadlines.erase(lease) != 1) abort();
+    if (!entry->second.accepting && entry->second.watchdog_deadlines.empty()) g_sessions.erase(entry);
+  }
+}
+
+int32_t Host::SubscribeSession(int64_t handle, int64_t id, const std::wstring& event,
+                               uint32_t timeout_ms) {
+  if (event.empty() || event.size() > 256) return -2;
+  return QueueSessionOperation(handle, id, timeout_ms, event.size(), L"registered",
+      [event](const std::shared_ptr<Impl>& impl, int64_t subscription) {
+    if (impl->session_subscriptions.size() >= 64) {
+      FinishSession(impl, subscription, E_OUTOFMEMORY, L"");
+      return;
+    }
+    auto sub = std::make_shared<Impl::SessionSubscription>();
+    impl->session_subscriptions.emplace(subscription, sub);
+    ++impl->session_com_operations;
+    HRESULT hr = impl->webview->GetDevToolsProtocolEventReceiver(event.c_str(), sub->receiver.Put());
+    if (SUCCEEDED(hr) && !sub->receiver) hr = E_NOINTERFACE;
+    if (SUCCEEDED(hr) && (impl->session_closing || impl->session_failed)) hr = E_ABORT;
+    if (SUCCEEDED(hr)) {
+      std::weak_ptr<Impl> weak = impl;
+      hr = sub->receiver->add_DevToolsProtocolEventReceived(
+          GESHER_CALLBACK(ICoreWebView2DevToolsProtocolEventReceivedEventHandler,
+              [weak, sub, subscription](ICoreWebView2*,
+                  ICoreWebView2DevToolsProtocolEventReceivedEventArgs* args) -> HRESULT {
+            auto owner = weak.lock();
+            if (!owner || owner->destroyed || owner->session_closing || owner->session_failed ||
+                sub->retired) return S_OK;
+            Impl::SessionSubscription::Event item{E_POINTER, {}, {}};
+            if (args != nullptr) {
+              Com<ICoreWebView2DevToolsProtocolEventReceivedEventArgs> original(args);
+              Com<ICoreWebView2DevToolsProtocolEventReceivedEventArgs2> extended;
+              CoString session, json;
+              item.status = E_NOINTERFACE;
+              if (original.As(IID_ICoreWebView2DevToolsProtocolEventReceivedEventArgs2, &extended)
+                  && extended) {
+                item.status = extended->get_SessionId(session.Put());
+                if (SUCCEEDED(item.status)) item.status = args->get_ParameterObjectAsJson(json.Put());
+                if (SUCCEEDED(item.status) &&
+                    (!CopySessionString(session, 256, &item.session) ||
+                     !CopySessionString(json, 524288, &item.json)))
+                  item.status = HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
+              }
+            }
+            if (sub->adding || sub->draining) {
+              size_t units = item.session.size() + item.json.size();
+              if (owner->session_buffered_units > 1048576) abort();
+              if (sub->buffered.size() >= 64 || units > 1048576 - owner->session_buffered_units) {
+                sub->overflow = true;
+              } else {
+                sub->buffered_units += units;
+                owner->session_buffered_units += units;
+                sub->buffered.push_back(std::move(item));
+              }
+            } else {
+              if (FAILED(item.status)) sub->retired = true;
+              ReportSessionEvent(owner, subscription, item);
+            }
+            return S_OK;
+          }).get(), &sub->token);
+      if (SUCCEEDED(hr)) sub->token_owned = true;
+    }
+    if (sub->overflow && SUCCEEDED(hr)) hr = HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
+    if (FAILED(hr) || impl->session_closing || impl->session_failed || sub->retired) {
+      sub->retired = true;
+      if (sub->token_owned) {
+        sub->token_owned = false;
+        ++impl->session_com_operations;
+        HRESULT removed = sub->receiver->remove_DevToolsProtocolEventReceived(sub->token);
+        --impl->session_com_operations;
+        if (FAILED(removed)) abort();
+      }
+      if (impl->session_buffered_units < sub->buffered_units) abort();
+      impl->session_buffered_units -= sub->buffered_units;
+      sub->buffered.clear(); sub->buffered_units = 0;
+      impl->session_subscriptions.erase(subscription);
+      FinishSession(impl, subscription, FAILED(hr) ? hr : E_ABORT, L"");
+    } else {
+      // Keep reentrant events buffered until the registration callback returns.
+      HRESULT delivered = FinishSession(impl, subscription, hr, L"");
+      if (FAILED(delivered)) {
+        sub->retired = true;
+        if (sub->token_owned) {
+          sub->token_owned = false;
+          ++impl->session_com_operations;
+          HRESULT removed = sub->receiver->remove_DevToolsProtocolEventReceived(sub->token);
+          --impl->session_com_operations;
+          if (FAILED(removed)) abort();
+        }
+        if (impl->session_buffered_units < sub->buffered_units) abort();
+        impl->session_buffered_units -= sub->buffered_units;
+        sub->buffered.clear(); sub->buffered_units = 0;
+        impl->session_subscriptions.erase(subscription);
+      }
+      sub->adding = false;
+      sub->draining = true;
+      while (!sub->buffered.empty() && !impl->destroyed && !impl->session_closing &&
+             !sub->retired && !sub->overflow) {
+        auto item = std::move(sub->buffered.front());
+        sub->buffered.pop_front();
+        size_t units = item.session.size() + item.json.size();
+        if (sub->buffered_units < units || impl->session_buffered_units < units) abort();
+        sub->buffered_units -= units;
+        impl->session_buffered_units -= units;
+        if (FAILED(item.status)) sub->retired = true;
+        ReportSessionEvent(impl, subscription, item);
+      }
+      sub->draining = false;
+      if (sub->retired || sub->overflow || impl->session_closing || impl->session_failed) {
+        if (impl->session_buffered_units < sub->buffered_units) abort();
+        impl->session_buffered_units -= sub->buffered_units;
+        sub->buffered.clear(); sub->buffered_units = 0;
+      }
+      if (sub->overflow && !impl->destroyed && !impl->session_closing && !sub->retired) {
+        sub->retired = true;
+        Impl::SessionSubscription::Event overflow{HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW), {}, {}};
+        ReportSessionEvent(impl, subscription, overflow);
+      }
+    }
+    --impl->session_com_operations;
+    if (impl->session_close_deferred && impl->session_com_operations == 0) CloseOwnedHost(impl);
+  });
+}
+
+int32_t Host::RemoveSessionSubscription(int64_t handle, int64_t operation_id,
+                                        int64_t subscription_id, uint32_t timeout_ms) {
+  if (subscription_id <= 0) return -2;
+  return QueueSessionOperation(handle, operation_id, timeout_ms, 0, L"removed",
+      [subscription_id](const std::shared_ptr<Impl>& impl, int64_t operation) {
+    auto found = impl->session_subscriptions.find(subscription_id);
+    if (found == impl->session_subscriptions.end()) {
+      FinishSession(impl, operation, HRESULT_FROM_WIN32(ERROR_NOT_FOUND), L"");
+      return;
+    }
+    auto sub = found->second;
+    if (sub->adding) {
+      FinishSession(impl, operation, HRESULT_FROM_WIN32(ERROR_BUSY), L"");
+      return;
+    }
+    sub->retired = true;
+    HRESULT hr = S_OK;
+    if (sub->token_owned) {
+      sub->token_owned = false;
+      ++impl->session_com_operations;
+      hr = sub->receiver->remove_DevToolsProtocolEventReceived(sub->token);
+      --impl->session_com_operations;
+      if (FAILED(hr)) abort();
+    }
+    if (impl->session_buffered_units < sub->buffered_units) abort();
+    impl->session_buffered_units -= sub->buffered_units;
+    sub->buffered.clear(); sub->buffered_units = 0;
+    impl->session_subscriptions.erase(subscription_id);
+    FinishSession(impl, operation, hr, L"");
+    if (impl->session_close_deferred && impl->session_com_operations == 0) CloseOwnedHost(impl);
+  });
+}
+
 bool Host::Destroy() {
   std::shared_ptr<Impl> impl = impl_;
   std::lock_guard<std::mutex> session_guard(g_session_mutex);
@@ -2004,54 +2340,7 @@ bool Host::Destroy() {
     impl->documents_closed = true;
     impl->current_documents.clear();
   }
-  auto* close = new std::function<void()>([impl] {
-    if (impl->destroyed) return;
-    while (!impl->session_requests.empty()) {
-      FinishSession(impl, impl->session_requests.begin()->first,
-                    HRESULT_FROM_WIN32(ERROR_CANCELLED), L"null");
-    }
-    ClearDocumentTimer(impl.get());
-    impl->document_waiting.clear();
-    // Pending requests and dialogs go on unanswered.
-    for (auto& r : impl->requests) r.second.deferral->Complete();
-    impl->requests.clear();
-    for (auto& d : impl->dialogs) d.second.deferral->Complete();
-    impl->dialogs.clear();
-    for (auto& d : impl->deferred) {
-      Com<ICoreWebView2PermissionRequestedEventArgs> permission;
-      Com<ICoreWebView2BasicAuthenticationRequestedEventArgs> auth;
-      Com<ICoreWebView2ClientCertificateRequestedEventArgs> cert;
-      if (d.second.args.As(IID_ICoreWebView2PermissionRequestedEventArgs, &permission)) {
-        permission->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
-      } else if (d.second.args.As(IID_ICoreWebView2BasicAuthenticationRequestedEventArgs, &auth)) {
-        auth->put_Cancel(TRUE);
-      } else if (d.second.args.As(IID_ICoreWebView2ClientCertificateRequestedEventArgs, &cert)) {
-        cert->put_Cancel(TRUE);
-      }
-      d.second.deferral->Complete();
-    }
-    impl->deferred.clear();
-    impl->find.Reset();
-    // Reentrant frame-destroy callbacks must not mutate the map being released.
-    impl->destroyed = true;
-    impl->frames.clear();
-    g_live.erase(impl.get());
-    if (impl->controller) impl->controller->Close();
-    impl->receivers.clear();
-    impl->controller.Reset();
-    impl->webview.Reset();
-    impl->published_container.store(nullptr);
-    if (impl->container != nullptr) DestroyWindow(impl->container);
-    impl->container = nullptr;
-    impl->pending.clear();
-    if (impl->listener_dispatches != 0) {
-      impl->listener_destroy_deferred = true;
-    } else {
-      Listener* listener = impl->listener;
-      impl->listener = nullptr;
-      if (listener != nullptr) listener->OnDestroyed();
-    }
-  });
+  auto* close = new std::function<void()>([impl] { CloseOwnedHost(impl); });
   if (g_task_window == nullptr ||
       !PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(close))) {
     delete close;

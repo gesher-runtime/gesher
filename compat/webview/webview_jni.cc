@@ -73,24 +73,24 @@ class JavaListener final : public Listener {
     JNIEnv* env = Env();
     if (env == nullptr) {
       // An admitted session result cannot be silently lost when JNI attachment fails.
-      if (type == gesher::webview::kSessionResult) abort();
+      if ((type == gesher::webview::kSessionResult || type == gesher::webview::kSessionSubscription)) abort();
       return;
     }
     auto session_failure = [env, type] {
-      if (type == gesher::webview::kSessionResult && env->ExceptionCheck()) {
+      if ((type == gesher::webview::kSessionResult || type == gesher::webview::kSessionSubscription) && env->ExceptionCheck()) {
         env->ExceptionDescribe();
         abort();
       }
     };
     jstring ja = JStr(env, a);
     session_failure();
-    if (type == gesher::webview::kSessionResult && ja == nullptr) abort();
+    if ((type == gesher::webview::kSessionResult || type == gesher::webview::kSessionSubscription) && ja == nullptr) abort();
     jstring jb = JStr(env, b);
     session_failure();
-    if (type == gesher::webview::kSessionResult && jb == nullptr) abort();
+    if ((type == gesher::webview::kSessionResult || type == gesher::webview::kSessionSubscription) && jb == nullptr) abort();
     jstring jc = JStr(env, c);
     session_failure();
-    if (type == gesher::webview::kSessionResult && jc == nullptr) abort();
+    if ((type == gesher::webview::kSessionResult || type == gesher::webview::kSessionSubscription) && jc == nullptr) abort();
     jbyteArray data = nullptr;
     if (bytes != nullptr) {
       data = env->NewByteArray(static_cast<jsize>(bytes->size()));
@@ -272,6 +272,21 @@ jint JNICALL WebView2Host_submitSession(JNIEnv* env, jclass, jlong handle, jlong
   if (env->ExceptionCheck()) return -2;
   return Host::SubmitSession(handle, id, session_value, method_value, params_value,
                              static_cast<uint32_t>(timeout_ms));
+}
+
+jint JNICALL WebView2Host_subscribeSession(JNIEnv* env, jclass, jlong handle, jlong id,
+                                           jstring event, jint timeout_ms) {
+  if (timeout_ms <= 0 || event == nullptr || env->GetStringLength(event) > 256) return -2;
+  std::wstring event_value = Str(env, event);
+  if (env->ExceptionCheck()) return -2;
+  return Host::SubscribeSession(handle, id, event_value, static_cast<uint32_t>(timeout_ms));
+}
+
+jint JNICALL WebView2Host_removeSessionSubscription(JNIEnv*, jclass, jlong handle, jlong operation,
+                                                     jlong subscription, jint timeout_ms) {
+  if (timeout_ms <= 0) return -2;
+  return Host::RemoveSessionSubscription(handle, operation, subscription,
+                                         static_cast<uint32_t>(timeout_ms));
 }
 
 void JNICALL WebView2Host_listenDevTools(JNIEnv* env, jclass, jlong h, jstring event) {
@@ -461,6 +476,10 @@ const JNINativeMethod kMethods[] = {
     {"nSessionHandle", "(J)J", reinterpret_cast<void*>(&WebView2Host_sessionHandle)},
     {"nSubmitSession", "(JJLjava/lang/String;Ljava/lang/String;Ljava/lang/String;I)I",
      reinterpret_cast<void*>(&WebView2Host_submitSession)},
+    {"nSubscribeSession", "(JJLjava/lang/String;I)I",
+     reinterpret_cast<void*>(&WebView2Host_subscribeSession)},
+    {"nRemoveSessionSubscription", "(JJJI)I",
+     reinterpret_cast<void*>(&WebView2Host_removeSessionSubscription)},
     {"nListenDevTools", "(JLjava/lang/String;)V",
      reinterpret_cast<void*>(&WebView2Host_listenDevTools)},
     {"nCompletePermission", "(JJIZ)V", reinterpret_cast<void*>(&WebView2Host_completePermission)},

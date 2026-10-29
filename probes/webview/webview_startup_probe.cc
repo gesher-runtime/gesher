@@ -15,10 +15,23 @@ class StartupListener final : public gesher::webview::Listener {
   std::atomic<bool> close_ok{false};
   std::atomic<bool> in_callback{false};
   std::atomic<bool> destroyed_in_callback{false};
+  std::atomic<bool> registered{false}, removed{false}, evaluation{false}, bad_event{false};
+  std::atomic<int> session_events{0};
   void OnEvent(int32_t type, int64_t id, int32_t arg, const std::wstring& result,
-               const std::wstring&, const std::wstring&, const std::vector<uint8_t>*) override {
+               const std::wstring& session, const std::wstring& detail,
+               const std::vector<uint8_t>*) override {
     ++events;
     if (type == gesher::webview::kReady) ready = true;
+    if (type == gesher::webview::kSessionResult && id == 103 && arg == 0) evaluation = true;
+    if (type == gesher::webview::kSessionSubscription) {
+      if (id == 100 && result == L"registered" && arg == 0) registered = true;
+      else if (id == 102 && result == L"removed" && arg == 0) removed = true;
+      else if (id == 100 && result == L"event" && arg == 0) {
+        if (!registered || !session.empty() || detail.find(L"WEB4_EVENT_TEST") == std::wstring::npos)
+          bad_event = true;
+        ++session_events;
+      } else { bad_event = true; }
+    }
     if (type == gesher::webview::kFailed) {
       fwprintf(stderr, L"STARTUP_FAILED hr=0x%08x detail=%ls\n", static_cast<unsigned>(arg),
                result.c_str());
@@ -82,6 +95,40 @@ int wmain(int argc, wchar_t** argv) {
     fputs("WEB4_WATCHDOG_ARMED\n", stdout); fflush(stdout);
     Sleep(15000);
     return 13;  // watchdog failed to terminate the stalled generation
+  }
+  if (wcscmp(argv[1], L"subscription") == 0) {
+    if (host == nullptr) return 20;
+    ULONGLONG deadline = GetTickCount64() + 20000;
+    while (!listener.ready && GetTickCount64() < deadline) Sleep(20);
+    if (!listener.ready || gesher::webview::Host::SubscribeSession(host->SessionHandle(), 100,
+        L"Runtime.consoleAPICalled", 5000) != 0) return 21;
+    if (gesher::webview::Host::SubscribeSession(host->SessionHandle(), 100,
+        L"Runtime.consoleAPICalled", 5000) != -3) return 27;
+    deadline = GetTickCount64() + 10000;
+    while (!listener.registered && GetTickCount64() < deadline) Sleep(20);
+    if (!listener.registered || gesher::webview::Host::SubmitSession(host->SessionHandle(), 101,
+        L"", L"Runtime.evaluate", L"{\"expression\":\"console.log('WEB4_EVENT_TEST')\"}",
+        5000) != 0) return 22;
+    deadline = GetTickCount64() + 10000;
+    while (listener.session_events == 0 && GetTickCount64() < deadline) Sleep(20);
+    if (listener.session_events != 1 || listener.bad_event ||
+        gesher::webview::Host::RemoveSessionSubscription(host->SessionHandle(), 102, 100, 5000) != 0)
+      return 23;
+    deadline = GetTickCount64() + 10000;
+    while (!listener.removed && GetTickCount64() < deadline) Sleep(20);
+    if (!listener.removed || gesher::webview::Host::SubmitSession(host->SessionHandle(), 103,
+        L"", L"Runtime.evaluate", L"{\"expression\":\"console.log('WEB4_AFTER_REMOVE')\"}",
+        5000) != 0) return 24;
+    deadline = GetTickCount64() + 10000;
+    while (!listener.evaluation && GetTickCount64() < deadline) Sleep(20);
+    Sleep(1000); // bounded observation after removal
+    if (!listener.evaluation || listener.session_events != 1 || listener.bad_event || !host->Destroy())
+      return 25;
+    deadline = GetTickCount64() + 10000;
+    while (listener.destroyed != 1 && GetTickCount64() < deadline) Sleep(20);
+    if (listener.destroyed != 1) return 26;
+    wprintf(L"PASS startup fault=subscription registered=1 event=1 removed=1 destroyed=1\n");
+    return 0;
   }
   if (wcscmp(argv[1], L"session-normal") == 0 || wcscmp(argv[1], L"session-close") == 0) {
     if (host == nullptr) return 14;
