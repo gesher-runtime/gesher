@@ -1,0 +1,91 @@
+name: pthread process identity routing probe
+on:
+  push:
+    branches: [wip/pthread-process-routing]
+    paths: ['.github/workflows/pthread-process-routing-probe.yml']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: pthread-process-routing-probe-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_TAG: '20261006'
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Linux reference
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -pthread tests/native/pthread_clock_linux_reference.c -ldl -o "$RUNNER_TEMP/reference"
+          "$RUNNER_TEMP/reference"
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: host-pthread-authority
+      - name: Build isolated experimental supplier and clients
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_root="$RUNNER_TEMP/gesher-routing-probe-toolchain"
+          test ! -e "$probe_root"
+          mkdir "$probe_root"
+          cp -a --reflink=auto "$GESHER_AUTHORITY_LLVM" "$probe_root/$LLVM_MINGW_NAME"
+          cp --reflink=auto "$(dirname "$GESHER_AUTHORITY_LLVM")/compiler.tar.xz" "$probe_root/compiler.tar.xz"
+          llvm="$probe_root/$LLVM_MINGW_NAME"
+          bash tools/host-pthread-authority/build-supplier.sh "$llvm" probe
+          python3 tools/host-pthread-authority/probe_bundle.py build "$llvm"
+          python3 tools/host-pthread-authority/probe_bundle.py verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pthread-routing-probe
+          path: routing-probe-fixture/
+          if-no-files-found: error
+  windows:
+    needs: compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact producer and role
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/artifact_receipt.py --name pthread-routing-probe --producer compile --destination routing-probe-fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Probe producer ZIP verification failed' }
+          python tools/host-pthread-authority/probe_bundle.py verify
+          if ($LASTEXITCODE -ne 0) { throw 'Probe role verification failed' }
+      - name: Strict identity, standalone and malformed-anchor controls
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($case in @(@{Name='strict';Exit=0;Marker='PASS strict process thread identity, clocks and authority after DLL unload'}, @{Name='standalone';Exit=0;Marker='PASS routing probe standalone DLL local provider'}, @{Name='bad-anchor';Exit=3;Marker='CONTROL invalid identity descriptor before pthread_self'}, @{Name='missing-anchor';Exit=3;Marker='CONTROL missing identity descriptor before pthread_self'})) {
+            $name=$case.Name
+            $stdout=Join-Path $env:RUNNER_TEMP "$name.out"
+            $stderr=Join-Path $env:RUNNER_TEMP "$name.err"
+            $process=Start-Process -FilePath (Join-Path $pwd "routing-probe-fixture/$name.exe") -WorkingDirectory (Join-Path $pwd 'routing-probe-fixture') -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            try {
+              if (-not $process.WaitForExit(120000)) { throw "Probe timeout $name" }
+              $process.Refresh()
+              if ($process.ExitCode -ne $case.Exit) { throw "Probe $name exit=$($process.ExitCode) expected=$($case.Exit)" }
+              $actual=Get-Content -Raw -LiteralPath $stdout
+              if (-not $actual.Contains($case.Marker) -or $actual.Contains('FAIL ')) { throw "Probe $name missing control" }
+              Write-Host "$name actual exit=$($process.ExitCode)"
+              Write-Host $actual
+            } finally {
+              if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Probe cleanup failed' } }
+              $process.Dispose()
+              if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+            }
+          }

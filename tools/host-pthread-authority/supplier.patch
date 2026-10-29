@@ -603,3 +603,85 @@
      {
        pthread_mutex_unlock (&mtx_pthr_locked);
        return EDEADLK;
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -1012,6 +1012,57 @@ pthread_setspecific (pthread_key_t key, const void *value)
+   return 0;
+ }
+ 
++/* CI-only identity routing experiment.  It deliberately does not establish
++   process ownership for the rest of the pthread API and must never be enabled
++   in a production supplier. */
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++struct gesher_identity_probe_v1 {
++  unsigned size, version;
++  pthread_t (__cdecl *self)(void);
++  int (__cdecl *dup)(pthread_t, void **, unsigned long long *);
++};
++__declspec(dllexport) const struct gesher_identity_probe_v1 * __cdecl
++ gesher_pthread_identity_probe_v1(void)
++{
++  static const struct gesher_identity_probe_v1 table = {
++    sizeof(table), 1, pthread_self, gesher_winpthread_dup_cpu_handle_v1
++  };
++  return &table;
++}
++#ifdef DLL_EXPORT
++static const struct gesher_identity_probe_v1 *identity_probe_owner(void)
++{
++  typedef const struct gesher_identity_probe_v1 *(__cdecl *get_fn)(void);
++  HMODULE host=GetModuleHandleW(NULL), actual=NULL;
++  get_fn get=host ? (get_fn)GetProcAddress(host,"gesher_pthread_identity_probe_v1") : NULL;
++  MEMORY_BASIC_INFORMATION mbi;
++  const struct gesher_identity_probe_v1 *table;
++  if (!get) {
++    /* A host advertising a clock anchor is participating but incomplete. */
++    if (host && GetProcAddress(host,"gesher_clock_anchor_v1")) abort();
++    return NULL;
++  }
++  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                          (LPCWSTR)get,&actual) || actual!=host) abort();
++  table=get();
++  if (!table || !VirtualQuery(table,&mbi,sizeof(mbi)) || mbi.AllocationBase!=host ||
++      mbi.State!=MEM_COMMIT || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) ||
++      (uintptr_t)table < (uintptr_t)mbi.BaseAddress ||
++      (uintptr_t)table - (uintptr_t)mbi.BaseAddress > mbi.RegionSize ||
++      sizeof(*table) > mbi.RegionSize - ((uintptr_t)table - (uintptr_t)mbi.BaseAddress)) abort();
++  if (table->size!=sizeof(*table) || table->version!=1 || !table->self || !table->dup ||
++      !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                          (LPCWSTR)table->self,&actual) || actual!=host ||
++      !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                          (LPCWSTR)table->dup,&actual) || actual!=host) abort();
++  return table;
++}
++#endif
++#endif
++
+ int
+ pthread_equal (pthread_t t1, pthread_t t2)
+ {
+@@ -1121,6 +1172,10 @@ __pthread_self_lite (void)
+ pthread_t
+ pthread_self (void)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v1 *owner=identity_probe_owner();
++  if (owner) return owner->self();
++#endif
+   _pthread_v *t = __pthread_self_lite ();
+ 
+   if (!t)
+@@ -1157,6 +1212,10 @@ int
+ gesher_winpthread_dup_cpu_handle_v1 (pthread_t thread, void **owned_handle,
+                                      unsigned long long *generation)
+ {
++#if defined(GESHER_PTHREAD_ROUTING_PROBE) && defined(DLL_EXPORT)
++  const struct gesher_identity_probe_v1 *owner=identity_probe_owner();
++  if (owner) return owner->dup(thread, owned_handle, generation);
++#endif
+   _pthread_v *record;
+   HANDLE duplicate = NULL;
+   int result = ESRCH;
