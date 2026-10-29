@@ -9,7 +9,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / 'routing-probe-fixture'
-CASES = {'wrapper-gate.exe': ('host_pthread_wrapper_gate_test.c', 'libwinpthread.a'),
+CASES = {'foreign-native-exit.exe': ('host_pthread_foreign_native_exit_test.c', 'libwinpthread.a'),
+         'wrapper-gate.exe': ('host_pthread_wrapper_gate_test.c', 'libwinpthread.a'),
          'retirement-static.exe': ('host_pthread_retirement_test.c', 'libwinpthread.a'),
          'retirement-dynamic.exe': ('host_pthread_retirement_test.c', 'libwinpthread.dll.a'),
          'callback-lifetime.exe': ('host_pthread_callback_lifetime_test.c', 'libwinpthread.a'),
