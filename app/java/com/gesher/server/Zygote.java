@@ -186,6 +186,12 @@ public final class Zygote {
         return com.gesher.app.VmCommandLine.beforeMainClass(nativeCommandLine(), mainClass);
     }
 
+    /** VM options for the actual main, including when it delegates to another main. */
+    public static String vmCommandLineForCurrentEntrypoint() {
+        return com.gesher.app.VmCommandLine.beforeEntrypoint(nativeCommandLine(),
+                Thread.currentThread().getStackTrace());
+    }
+
     /** The command line of a dalvikvm like this one running {@code mainClass args}. */
     public static String commandLine(String vmCommandLine, String mainClass, List<String> args) {
         StringBuilder sb = new StringBuilder(vmCommandLine).append(' ').append(mainClass);

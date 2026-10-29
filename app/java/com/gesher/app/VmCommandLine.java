@@ -50,5 +50,19 @@ public final class VmCommandLine {
         throw new IllegalStateException("no " + mainClass + " in this command line: " + command);
     }
 
+    /** Finds the actual launching main in the current call stack, including a
+     * caller that delegates to another main. Only an exact command token counts. */
+    public static String beforeEntrypoint(String command, StackTraceElement[] stack) {
+        for (int i = stack.length - 1; i >= 0; --i) {
+            if (!stack[i].getMethodName().equals("main")) continue;
+            try {
+                return beforeMainClass(command, stack[i].getClassName());
+            } catch (IllegalStateException absent) {
+                // A nested main need not be the VM entrypoint.
+            }
+        }
+        throw new IllegalStateException("no launching main in this command line: " + command);
+    }
+
     private static boolean space(char c) { return c == ' ' || c == '\t'; }
 }
