@@ -128,6 +128,17 @@ int main(int argc, char** argv) {
       char id[32]; std::snprintf(id, sizeof(id), "bitstring-%u", lengths[i]);
       decode(id, wire, sizeof(wire), 0, static_cast<char>(-1) < 0 ? signed_text[i] : unsigned_text[i], 4);
     }
+    // Discarded low bits must not influence a partial-byte rendering.
+    for (unsigned length : {5u, 6u, 7u}) {
+      for (unsigned byte : {0u, 1u}) {
+        const unsigned char wire[] = {0x41, static_cast<unsigned char>(length),
+                                      static_cast<unsigned char>(byte), 0};
+        char id[40], expected[40];
+        std::snprintf(id, sizeof(id), "bitstring-%u-low-%u", length, byte);
+        std::snprintf(expected, sizeof(expected), "\\[x00/%u]", length);
+        decode(id, wire, sizeof(wire), 0, expected, 4);
+      }
+    }
     unsigned char full_bits[35] = {0x41, 0};
     std::memset(full_bits + 2, 0xaf, 32);
     char full_text[80] = "\\[x";

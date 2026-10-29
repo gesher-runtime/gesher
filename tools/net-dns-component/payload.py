@@ -294,7 +294,7 @@ def main():
         for abi, machine in (('x86_64', 62), ('arm64', 183)):
             require((folder / ('aosp-reference-' + abi + '.log')).read_text() == (folder / 'linux-reference.log').read_text(),
                     'Exact pinned AOSP and Linux common contracts differ: ' + abi)
-            require((folder / ('aosp-extended-' + abi + '.log')).read_text().splitlines()[-1] == 'DNS all done rows=156 failures=0',
+            require((folder / ('aosp-extended-' + abi + '.log')).read_text().splitlines()[-1] == 'DNS all done rows=174 failures=0',
                     'Missing actual pinned AOSP bitstring controls: ' + abi)
             elf = (folder / ('net-dns-' + abi)).read_bytes()
             require(elf[:6] == b'\x7fELF\x02\x01' and int.from_bytes(elf[18:20], 'little') == machine,

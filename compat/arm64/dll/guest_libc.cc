@@ -545,6 +545,13 @@ void Override(const char* name, void* host_wrapper) {
   if (host_wrapper != nullptr) g_overrides[name] = BindHost(host_wrapper, -1);
 }
 
+// A mismatched host must not silently route an ARM64 call to the x86 model.
+int64_t GESHER_SYSV MissingArm64DnsBridge(int64_t, int64_t, int64_t,
+                                           int64_t, int64_t, int64_t) {
+  SetErrno(38);  // Android ENOSYS
+  return -1;
+}
+
 }  // namespace
 
 void* GuestSymbol(const char* name) {
@@ -568,7 +575,8 @@ void InitGuestLibc() {
 
   for (const char* name : {"ns_name_ntop", "ns_name_uncompress", "dn_expand"}) {
     std::string entry = std::string("__gesher_arm64_") + name;
-    Override(name, Host(entry.c_str()));
+    void* bridge = Host(entry.c_str());
+    Override(name, bridge ? bridge : reinterpret_cast<void*>(&MissingArm64DnsBridge));
   }
 
   g_pthread_create = reinterpret_cast<ThreadCreate>(Host("pthread_create"));
