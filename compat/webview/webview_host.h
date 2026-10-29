@@ -56,6 +56,7 @@ enum Event : int32_t {
   kCapture = 17,       // id: callback id; arg: HRESULT; bytes: PNG
   kParked = 18,        // id: request id (the container is parked)
   kWebMessage = 19,    // a: the message as JSON (chrome.webview.postMessage); b: source
+  kDevToolsSessionEvent = 30,  // id: subscription; arg: 1 registered, 0 event, HRESULT failure; a: event; b: session; c: JSON
   kDocumentRetired = 29,  // id: native document token, no longer accepting listener replies
   kDevToolsResult = 20,  // id: callback id; arg: HRESULT; a: the result (JSON)
   kDevToolsEvent = 21,   // a: event name; b: its parameters (JSON); ListenDevTools
@@ -222,6 +223,9 @@ class Host {
   // A DevTools protocol method: kDevToolsResult(id) with its result.
   void CallDevTools(const std::wstring& method, const std::wstring& params_json,
                     int64_t callback_id);
+  void CallDevToolsForSession(const std::wstring& session, const std::wstring& method,
+                              const std::wstring& params_json, int64_t callback_id);
+  void ListenDevToolsSession(const std::wstring& event, int64_t subscription_id);
   // A DevTools protocol event comes as kDevToolsEvent from now on.
   void ListenDevTools(const std::wstring& event);
 

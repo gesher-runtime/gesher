@@ -2062,6 +2062,64 @@ void Host::CallDevTools(const std::wstring& method, const std::wstring& params_j
   });
 }
 
+void Host::CallDevToolsForSession(const std::wstring& session, const std::wstring& method,
+                                  const std::wstring& params_json, int64_t callback_id) {
+  std::weak_ptr<Impl> weak = impl_;
+  Do(impl_, [session, method, params_json, callback_id, weak](Impl* impl) {
+    Com<ICoreWebView2_11> wv11;
+    if (!impl->webview.As(IID_ICoreWebView2_11, &wv11)) {
+      impl->Report(kDevToolsResult, callback_id, static_cast<int32_t>(E_NOINTERFACE), L"null");
+      return;
+    }
+    HRESULT hr = wv11->CallDevToolsProtocolMethodForSession(
+        session.c_str(), method.c_str(), params_json.empty() ? L"{}" : params_json.c_str(),
+        GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
+                        [weak, callback_id](HRESULT error, LPCWSTR json) -> HRESULT {
+                          if (auto impl = weak.lock())
+                            impl->Report(kDevToolsResult, callback_id, static_cast<int32_t>(error),
+                                         json != nullptr ? json : L"null");
+                          return S_OK;
+                        }).get());
+    if (FAILED(hr)) impl->Report(kDevToolsResult, callback_id, static_cast<int32_t>(hr), L"null");
+  });
+}
+
+void Host::ListenDevToolsSession(const std::wstring& event, int64_t subscription_id) {
+  std::weak_ptr<Impl> weak = impl_;
+  Do(impl_, [event, subscription_id, weak](Impl* impl) {
+    Com<ICoreWebView2DevToolsProtocolEventReceiver> receiver;
+    HRESULT hr = impl->webview->GetDevToolsProtocolEventReceiver(event.c_str(), receiver.Put());
+    if (SUCCEEDED(hr) && receiver) {
+      EventRegistrationToken token;
+      hr = receiver->add_DevToolsProtocolEventReceived(
+          GESHER_CALLBACK(ICoreWebView2DevToolsProtocolEventReceivedEventHandler,
+                          [weak, event, subscription_id](ICoreWebView2*,
+                              ICoreWebView2DevToolsProtocolEventReceivedEventArgs* args) -> HRESULT {
+                            auto impl = weak.lock();
+                            if (!impl) return S_OK;
+                            Com<ICoreWebView2DevToolsProtocolEventReceivedEventArgs> original(args);
+                            Com<ICoreWebView2DevToolsProtocolEventReceivedEventArgs2> extended;
+                            CoString session, json;
+                            HRESULT status = E_NOINTERFACE;
+                            if (original.As(IID_ICoreWebView2DevToolsProtocolEventReceivedEventArgs2, &extended)) {
+                              status = extended->get_SessionId(session.Put());
+                              if (SUCCEEDED(status)) status = args->get_ParameterObjectAsJson(json.Put());
+                            }
+                            impl->Report(kDevToolsSessionEvent, subscription_id, static_cast<int32_t>(status),
+                                         event, session.str(), json.str());
+                            return S_OK;
+                          }).get(), &token);
+      if (SUCCEEDED(hr)) {
+        impl->receivers.push_back(std::move(receiver));
+        impl->Report(kDevToolsSessionEvent, subscription_id, 1, event);
+      }
+    } else if (SUCCEEDED(hr)) {
+      hr = E_NOINTERFACE;
+    }
+    if (FAILED(hr)) impl->Report(kDevToolsSessionEvent, subscription_id, static_cast<int32_t>(hr), event);
+  });
+}
+
 void Host::ListenDevTools(const std::wstring& event) {
   std::weak_ptr<Impl> weak = impl_;
   Do(impl_, [event, weak](Impl* impl) {

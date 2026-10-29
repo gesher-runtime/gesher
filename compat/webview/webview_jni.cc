@@ -226,6 +226,16 @@ void JNICALL WebView2Host_callDevTools(JNIEnv* env, jclass, jlong h, jstring met
   Get(h)->CallDevTools(Str(env, method), Str(env, params), cb);
 }
 
+void JNICALL WebView2Host_callDevToolsForSession(JNIEnv* env, jclass, jlong h, jstring session,
+                                                   jstring method, jstring params, jlong cb) {
+  Get(h)->CallDevToolsForSession(Str(env, session), Str(env, method), Str(env, params), cb);
+}
+
+void JNICALL WebView2Host_listenDevToolsSession(JNIEnv* env, jclass, jlong h, jstring event,
+                                                jlong subscription) {
+  Get(h)->ListenDevToolsSession(Str(env, event), subscription);
+}
+
 void JNICALL WebView2Host_listenDevTools(JNIEnv* env, jclass, jlong h, jstring event) {
   Get(h)->ListenDevTools(Str(env, event));
 }
@@ -410,6 +420,10 @@ const JNINativeMethod kMethods[] = {
     {"nPostFrameMessage", "(JJLjava/lang/String;)V", reinterpret_cast<void*>(&WebView2Host_postFrameMessage)},
     {"nCallDevTools", "(JLjava/lang/String;Ljava/lang/String;J)V",
      reinterpret_cast<void*>(&WebView2Host_callDevTools)},
+    {"nCallDevToolsForSession", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V",
+     reinterpret_cast<void*>(&WebView2Host_callDevToolsForSession)},
+    {"nListenDevToolsSession", "(JLjava/lang/String;J)V",
+     reinterpret_cast<void*>(&WebView2Host_listenDevToolsSession)},
     {"nListenDevTools", "(JLjava/lang/String;)V",
      reinterpret_cast<void*>(&WebView2Host_listenDevTools)},
     {"nCompletePermission", "(JJIZ)V", reinterpret_cast<void*>(&WebView2Host_completePermission)},

@@ -40,6 +40,7 @@ public final class WebView2Host {
     public static final int EVENT_FIND = 27;
     public static final int EVENT_FILE_DIALOG = 28;
     public static final int EVENT_DOCUMENT_RETIRED = 29;
+    public static final int EVENT_DEVTOOLS_SESSION_EVENT = 30;
 
     /** {@link #find} operations, as {@code Host::FindOp}. */
     public static final int FIND_START = 1;
@@ -202,6 +203,18 @@ public final class WebView2Host {
     public void callDevTools(String method, String paramsJson, long callbackId) {
         long h = mHandle;
         if (h != 0) nCallDevTools(h, method, paramsJson, callbackId);
+    }
+
+    /** Session-aware DevTools call; completion uses EVENT_DEVTOOLS_RESULT. */
+    public void callDevToolsForSession(String session, String method, String paramsJson, long callbackId) {
+        long h = mHandle;
+        if (h != 0) nCallDevToolsForSession(h, session, method, paramsJson, callbackId);
+    }
+
+    /** Session event: id=subscription, arg=1 registered/0 event/HRESULT failure, a=event, b=session, c=JSON. */
+    public void listenDevToolsSession(String event, long subscriptionId) {
+        long h = mHandle;
+        if (h != 0) nListenDevToolsSession(h, event, subscriptionId);
     }
 
     /** The DevTools protocol event comes as EVENT_DEVTOOLS_EVENT from now on. */
@@ -428,6 +441,9 @@ public final class WebView2Host {
     private static native void nPostFrameMessage(long h, long document, String json);
     private static native void nCallDevTools(long h, String method, String params,
             long callbackId);
+    private static native void nCallDevToolsForSession(long h, String session, String method,
+            String params, long callbackId);
+    private static native void nListenDevToolsSession(long h, String event, long subscriptionId);
     private static native void nListenDevTools(long h, String event);
     private static native void nCompletePermission(long h, long id, int state,
             boolean remember);
