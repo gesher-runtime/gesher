@@ -29,7 +29,7 @@ class TsfJobWorker {
     string protocol=args[1];
     Console.WriteLine("CONTROL "+args[0]); Console.Error.WriteLine("CONTROL stderr");
     Console.Out.Flush(); Console.Error.Flush();
-    if(args[0]!="writer" && args[0]!="race-writer" && args[0]!="orphan-parent" && args[0]!="orphan-writer") { Publish(protocol,"started","ready"); Gate(protocol,"start-go"); }
+    if(args[0]!="writer" && args[0]!="race-writer" && args[0]!="orphan-parent" && args[0]!="orphan-writer" && args[0]!="limit-child") { Publish(protocol,"started","ready"); Gate(protocol,"start-go"); }
     switch(args[0]) {
       case "normal": return 0;
       case "exit23": return 23;
@@ -39,6 +39,15 @@ class TsfJobWorker {
         Publish(protocol,"writer-ready","flushed"); Thread.Sleep(120000); return 93;
       case "race-writer": Gate(protocol,"race-go"); return 0;
       case "orphan-writer": Thread.Sleep(120000); return 93;
+      case "limit-child": Publish(protocol,"limit-child-ran","unexpected"); return 96;
+      case "limit":
+        SI limitStart=new SI(); limitStart.size=Marshal.SizeOf(typeof(SI));
+        string limitExe=typeof(TsfJobWorker).Assembly.Location; PI limitChild;
+        bool admitted=CreateProcess(limitExe,new StringBuilder("\""+limitExe+"\" limit-child \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,false,0x8u,IntPtr.Zero,null,ref limitStart,out limitChild);
+        int limitError=Marshal.GetLastWin32Error();
+        if(admitted) { CloseHandle(limitChild.thread); CloseHandle(limitChild.process); return 96; }
+        if(limitError==0) return 97;
+        Console.WriteLine("LIMIT_CHILD_DENIED win32="+limitError); Console.Out.Flush(); return 0;
       case "orphan-parent":
       case "orphan":
         SI orphanStart=new SI(); orphanStart.size=Marshal.SizeOf(typeof(SI)); orphanStart.flags=0x100;

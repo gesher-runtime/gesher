@@ -41,6 +41,7 @@ public static class TsfJobSupervisor {
   [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr sa,string name);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job,int cls,ref Extended info,uint size);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job,int cls,out Accounting info,uint size,IntPtr length);
+  [DllImport("kernel32.dll",SetLastError=true,EntryPoint="QueryInformationJobObject")] static extern bool QueryExtended(IntPtr job,int cls,out Extended info,uint size,IntPtr length);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job,IntPtr process);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool IsProcessInJob(IntPtr process,IntPtr job,out bool member);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool TerminateJobObject(IntPtr job,uint exit);
@@ -71,6 +72,7 @@ public static class TsfJobSupervisor {
   public sealed class Result {
     public uint Pid, ExitCode, TotalProcesses, TerminatedProcesses;
     public uint LastJobActive=UInt32.MaxValue, RootWaitResult=UInt32.MaxValue, PreResumeActive;
+    public uint ActiveProcessLimit;
     public long RootHandleValue, JobHandleValue;
     public int SuspendedThreadCount, DescendantThreadCount, SnapshotWin32Error;
     public long Birth, MainMilliseconds, CleanupMilliseconds;
@@ -82,7 +84,7 @@ public static class TsfJobSupervisor {
     public List<Identity> Processes=new List<Identity>();
     public uint DescendantPid;
     public long StdoutBytes, StderrBytes, CapturedBytes;
-    public bool ControlStarted, DescendantSuspended, RetainedWriterReady, WritersRetired, ExclusiveSnapshot;
+    public bool ControlStarted, DescendantSuspended, RetainedWriterReady, WritersRetired, ExclusiveSnapshot, LimitChildRan;
     public bool Success { get { return Reason=="exit" && ExitCode==0 && RootSignaled && JobEmpty && OutputRead && Errors.Count==0 && OwnedHandles==ClosedHandles; } }
   }
   public sealed class Identity {
@@ -205,7 +207,9 @@ public static class TsfJobSupervisor {
     IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero;
     bool attrsReady=false; string dir=null,stdout=null,stderr=null,protocol=null; bool created=false;
     bool race=arguments=="race";
-    bool controlled=arguments=="normal" || arguments=="exit23" || arguments=="hang" || arguments=="descendant" || arguments=="unknown" || arguments=="race" || arguments=="orphan" || arguments=="output";
+    bool limited=arguments=="limit";
+    bool controlled=arguments=="normal" || arguments=="exit23" || arguments=="hang" || arguments=="descendant" || arguments=="unknown" || arguments=="race" || arguments=="orphan" || arguments=="output" || limited;
+    limited=limited || !controlled;
     Stopwatch main=Stopwatch.StartNew(); Stopwatch cleanup=null;
     Func<IntPtr,IntPtr> own=h=> { if(!Valid(h)) throw Native("Create owned handle"); owned.Add(h); r.OwnedHandles++; return h; };
     try {
@@ -218,7 +222,11 @@ public static class TsfJobSupervisor {
       IntPtr input=own(CreateFile("NUL",0x80000000,3,ref sa,3,0,IntPtr.Zero));
       job=own(CreateJobObject(IntPtr.Zero,null)); query=job; r.JobHandleValue=job.ToInt64();
       Extended limits=new Extended(); limits.basic.flags=0x2000; // KILL_ON_JOB_CLOSE; neither breakaway flag allowed.
+      if(limited) { limits.basic.flags|=0x8; limits.basic.active=1; }
       Check(SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(Extended))),"Set job limits");
+      Extended actual; Check(QueryExtended(job,9,out actual,(uint)Marshal.SizeOf(typeof(Extended)),IntPtr.Zero),"Read job limits");
+      if(limited && ((actual.basic.flags&0x8)==0 || actual.basic.active!=1)) throw new IOException("Active process limit not enforced");
+      r.ActiveProcessLimit=actual.basic.active;
       if(fault!="") {
         IntPtr copy; Check(DuplicateHandle(GetCurrentProcess(),job,GetCurrentProcess(),out copy,fault=="terminate-denied"?4u:1u,false,0),"Duplicate restricted job handle");
         denied=own(copy); if(fault=="query-denied") query=denied;
@@ -232,7 +240,8 @@ public static class TsfJobSupervisor {
       Check(UpdateProcThreadAttribute(attrs,0,new IntPtr(0x20002),handles,new UIntPtr((uint)(3*IntPtr.Size)),IntPtr.Zero,IntPtr.Zero),"Whitelist inherited handles");
       SIX start=new SIX(); start.si.size=Marshal.SizeOf(typeof(SIX)); start.si.flags=0x100; start.si.input=input; start.si.output=output; start.si.error=error; start.attributes=attrs;
       PI pi; executable=Path.GetFullPath(executable);
-      Check(CreateProcess(executable,new StringBuilder("\""+executable+"\" "+arguments),IntPtr.Zero,IntPtr.Zero,true,0x08080004,IntPtr.Zero,Path.GetDirectoryName(executable),ref start,out pi),"Create suspended child");
+      uint creation=limited?0x0008000cu:0x08080004u; // Detached when constrained; controlled descendants retain their original path.
+      Check(CreateProcess(executable,new StringBuilder("\""+executable+"\" "+arguments),IntPtr.Zero,IntPtr.Zero,true,creation,IntPtr.Zero,Path.GetDirectoryName(executable),ref start,out pi),"Create suspended child");
       root=own(pi.process); thread=own(pi.thread); created=true; r.Pid=pi.pid; r.RootHandleValue=root.ToInt64();
       long exit,kernel,user; Check(GetProcessTimes(root,out r.Birth,out exit,out kernel,out user),"Capture root birth");
       var image=new StringBuilder(32768); uint length=(uint)image.Capacity; Check(QueryFullProcessImageName(root,0,image,ref length),"Capture suspended root image"); r.Image=image.ToString();
@@ -368,6 +377,7 @@ public static class TsfJobSupervisor {
       try { r.Output=Snapshot(stdout,r); r.Error=Snapshot(stderr,r); r.OutputRead=true; r.ExclusiveSnapshot=true; }
       catch(Exception ex) { r.SnapshotWin32Error=ex.HResult & 65535; r.Errors.Add("Exclusive output retirement proof Win32="+r.SnapshotWin32Error+": "+ex.Message); }
     }
+    if(protocol!=null) r.LimitChildRan=File.Exists(Path.Combine(protocol,"limit-child-ran"));
     try { if(stdout!=null && File.Exists(stdout)) File.Delete(stdout); if(stderr!=null && File.Exists(stderr)) File.Delete(stderr);
       if(protocol!=null) { foreach(string file in Directory.GetFiles(protocol)) File.Delete(file); Directory.Delete(protocol); }
       if(dir!=null) Directory.Delete(dir); }
