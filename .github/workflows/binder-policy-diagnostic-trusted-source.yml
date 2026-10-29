@@ -1,0 +1,151 @@
+name: Immutable Binder policy diagnostic source authority
+on:
+  workflow_call:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: gesher-runtime/gesher
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Verify external caller authority and exact reviewed whole source
+        env:
+          EXPECTED_CALLER: ${{ vars.GESHER_BINDER_RESTRICTED_CALLER }}
+          EXPECTED_GUARD: ${{ vars.GESHER_BINDER_RESTRICTED_GUARD }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I - <<'PY'
+          import ast, copy, hashlib, json, os, pathlib, re, subprocess, urllib.request
+          historical = '7bbccfcddbac826f50b78175f4d23f8702fd7741'
+          reviewed = '9a45771ed1d888271879197e856d5fa4b2e4f8cf'
+          guard_path = '.github/workflows/binder-policy-diagnostic-trusted-source.yml'
+          ci_path = '.github/workflows/ci.yml'
+          def git(*args, data=None):
+              return subprocess.check_output(['git', *args], input=data)
+          def text(*args): return git(*args).decode().strip()
+          def context(sha, caller, guard, repository, ref, event):
+              assert re.fullmatch('[0-9a-f]{40}', caller or ''), 'Missing external caller authority'
+              assert re.fullmatch('[0-9a-f]{40}', guard or ''), 'Missing external guard authority'
+              assert sha == caller, 'Caller is not independently approved'
+              assert repository == 'gesher-runtime/gesher'
+              assert ref == 'refs/heads/wip/binder-isolated-spawn'
+              assert event == 'workflow_dispatch'
+              assert ('\n    uses: gesher-runtime/gesher/' + guard_path + '@' + guard + '\n') in git('show', sha + ':' + ci_path).decode(), 'Caller does not pin externally approved guard'
+          sha = os.environ['GITHUB_SHA']
+          caller, guard = os.environ['EXPECTED_CALLER'], os.environ['EXPECTED_GUARD']
+          live_context = (sha, caller, guard, os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_REF'], os.environ['GITHUB_EVENT_NAME'])
+          context(*live_context)
+          run, attempt = os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']
+          assert re.fullmatch('[1-9][0-9]*', run) and re.fullmatch('[1-9][0-9]*', attempt)
+          assert os.environ['GITHUB_REPOSITORY_ID'] == '1426153186'
+          assert os.environ['GITHUB_ACTOR'] == 'palmoni5' and os.environ.get('GH_TOKEN')
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl): return None
+          request = urllib.request.Request(f'https://api.github.com/repos/gesher-runtime/gesher/actions/runs/{run}/attempts/{attempt}',
+              headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
+                       'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'gesher-binder-immutable-source-guard'})
+          with urllib.request.build_opener(NoRedirect()).open(request, timeout=30) as response:
+              assert response.status == 200
+              data = response.read(1048577)
+              assert len(data) <= 1048576
+              metadata = json.loads(data)
+          def verify_run(value):
+              assert value['id'] == int(run) and value['run_attempt'] == int(attempt)
+              assert value['repository']['id'] == 1426153186 and value['repository']['full_name'] == 'gesher-runtime/gesher'
+              assert value['head_repository']['full_name'] == 'gesher-runtime/gesher'
+              assert value['head_sha'] == sha and value['head_branch'] == 'wip/binder-isolated-spawn'
+              assert value['event'] == 'workflow_dispatch' and value['path'] == '.github/workflows/ci.yml'
+              assert value['workflow_id'] == 389851347 and value['actor']['login'] == 'palmoni5'
+          verify_run(metadata)
+          metadata_mutations = []
+          for path, bad in ((('id',), -1), (('run_attempt',), -1), (('repository','id'), -1),
+                            (('repository','full_name'), 'other/repository'), (('head_repository','full_name'), 'other/repository'),
+                            (('head_sha',), '0'*40), (('head_branch',), 'main'), (('event',), 'push'),
+                            (('path',), '.github/workflows/other.yml'), (('workflow_id',), -1), (('actor','login'), 'other')):
+              value = copy.deepcopy(metadata); cursor = value
+              for key in path[:-1]: cursor = cursor[key]
+              cursor[path[-1]] = bad; metadata_mutations.append(value)
+          metadata_mutations.extend(({}, {'id': int(run)}))
+          for value in metadata_mutations:
+              try: verify_run(value)
+              except (AssertionError, KeyError, TypeError): pass
+              else: raise RuntimeError('Actual run metadata mutation accepted')
+          assert text('rev-parse', 'HEAD') == sha
+          subprocess.run(['git', 'diff', '--exit-code', 'HEAD', '--'], check=True)
+          assert not git('ls-files', '--others', '--exclude-standard').strip(), 'Unexpected untracked source'
+          for ancestor, descendant in ((historical, reviewed), (reviewed, guard), (guard, sha)):
+              subprocess.run(['git', 'merge-base', '--is-ancestor', ancestor, descendant], check=True)
+          def tree(revision):
+              result = {}
+              for record in git('ls-tree', '-rz', revision).split(b'\0'):
+                  if not record: continue
+                  metadata, path = record.split(b'\t', 1)
+                  name = path.decode()
+                  if name.startswith('docs/'): continue
+                  mode, kind, blob = metadata.decode().split()
+                  result[name] = (mode, kind, blob)
+              return result
+          base, guarded, actual = tree(reviewed), tree(guard), tree(sha)
+          assert guard_path not in base and guard_path in guarded
+          assert {p for p in base.keys() | guarded.keys() if base.get(p) != guarded.get(p)} == {guard_path}, 'Guard commit changes reviewed production source'
+          # The only caller change is the exact immutable job and historical
+          # preflight delegation below. All original build/test/role gates remain.
+          original_ci = git('show', reviewed + ':' + ci_path).decode()
+          old_guard = 'gesher-runtime/gesher/.github/workflows/binder-restricted-trusted-source.yml@d17cfa51fe69fff71dde6a7a3b9daffabe02768f'
+          new_guard = 'gesher-runtime/gesher/' + guard_path + '@' + guard
+          assert original_ci.count(old_guard) == 1
+          expected_ci = original_ci.replace(old_guard, new_guard, 1)
+          expected = dict(base)
+          expected[guard_path] = guarded[guard_path]
+          expected[ci_path] = ('100644', 'blob', git('hash-object', '--stdin', data=expected_ci.encode()).decode().strip())
+          def verify(mapping):
+              assert mapping == expected, ('Unreviewed source/automation delta', sorted(p for p in mapping.keys() | expected.keys() if mapping.get(p) != expected.get(p)))
+          verify(actual)
+          assert git('show', sha + ':' + ci_path) == expected_ci.encode()
+          # Preserve the original historical checker bytes and every selected
+          # Native/AOT blob; it is never widened or candidate-parameterized.
+          legacy = 'tools/native3-locks/current_payload.py'
+          assert actual[legacy] == base[legacy]
+          program = ast.parse(git('show', reviewed + ':' + legacy))
+          values = [ast.literal_eval(node.value) for node in program.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'PINNED_SOURCE' for target in node.targets)]
+          assert len(values) == 1 and values[0]
+          adaptations = {'compat/posix/src/unistd.cc':
+              ('d7766c2183ada697a48efc6d4656c80378605925', '01161b91d516fdceee62f61d501c7ad19d2ec596')}
+          for path, blob in values[0].items():
+              if path in adaptations:
+                  old, new = adaptations[path]
+                  assert blob == old
+                  blob = new
+                  print(f'BINDER_RESTRICTED_HISTORICAL_ADAPTATION path={path} old={old} new={new} reason=immutable-startup-uid-before-legacy-fallback', flush=True)
+              assert actual[path][2] == blob, ('Historical Native/AOT source changed', path)
+          # All mutations below must be refused before any producer runs.
+          mutations = []
+          noop_blob = git('hash-object', '--stdin', data=b'pass\n').decode().strip()
+          for path in (legacy, guard_path, 'compat/framework/services_zygote.cc', 'compat/posix/src/launch_context.h', ci_path):
+              altered = dict(actual); altered[path] = ('100644', 'blob', noop_blob); mutations.append(altered)
+              missing = dict(actual); missing.pop(path); mutations.append(missing)
+          extra = dict(actual); extra['compat/unreviewed-production.cc'] = ('100644', 'blob', '0' * 40); mutations.append(extra)
+          for mapping in mutations:
+              try: verify(mapping)
+              except AssertionError: pass
+              else: raise RuntimeError('Source mutation accepted')
+          bad_contexts = [(sha, '', guard, live_context[3], live_context[4], live_context[5]),
+                          (sha, '0'*40, guard, live_context[3], live_context[4], live_context[5]),
+                          (sha, caller, '', live_context[3], live_context[4], live_context[5]),
+                          (sha, caller, '0'*40, live_context[3], live_context[4], live_context[5]),
+                          (sha, caller, guard, 'other/repository', live_context[4], live_context[5]),
+                          (sha, caller, guard, live_context[3], 'refs/heads/main', live_context[5]),
+                          (sha, caller, guard, live_context[3], live_context[4], 'push')]
+          for args in bad_contexts:
+              try: context(*args)
+              except AssertionError: pass
+              else: raise RuntimeError('External authority mutation accepted')
+          digest = hashlib.sha256(repr(sorted(actual.items())).encode()).hexdigest()
+          print(f'BINDER_RESTRICTED_TRUSTED_SOURCE historical={historical} reviewed={reviewed} guard={guard} caller={caller} source={sha} run={run} attempt={attempt} workflow_id=389851347 workflow_path=.github/workflows/ci.yml authenticated_run_mutations_rejected={len(metadata_mutations)} whole_tree_paths={len(actual)} historical_pins={len(values[0])} explicit_adaptations={len(adaptations)} tree_sha256={digest} source_mutations_rejected={len(mutations)} authority_mutations_rejected={len(bad_contexts)}', flush=True)
+          PY
