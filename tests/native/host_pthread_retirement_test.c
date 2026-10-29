@@ -77,7 +77,8 @@ static void launch(struct target *t) {
   t->ready=event(); t->start=event(); t->thread=CreateThread(NULL,0,target,t,0,NULL);
   check(t->thread!=NULL,"thread"); ++owned; await(t->ready);
   FILETIME c,e,k,u; check(target_count<400 && GetThreadTimes(t->thread,&c,&e,&k,&u),"target identity");
-  targets[target_count++]=(thread_identity){GetThreadId(t->thread),c};
+  DWORD tid=GetThreadId(t->thread); check(tid!=0,"target thread ID");
+  targets[target_count++]=(thread_identity){tid,c};
   check(gesher_winpthread_dup_cpu_handle_v1(t->id,(void **)&t->cap,&t->gen)==0,"live capability"); ++owned;
   check(GetThreadId(t->cap)==GetThreadId(t->thread),"same original kernel thread");
 }

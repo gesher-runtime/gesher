@@ -1,5 +1,5 @@
 # Separate fault supplier/host roles prove production hooks OFF by object/export.
-# Retirement inventory records thread IDs and creation times for diagnostic attribution.
+# Retirement inventory requires valid thread IDs and creation times for diagnostic attribution.
 name: host pthread authority initial controls
 on:
   workflow_dispatch:
