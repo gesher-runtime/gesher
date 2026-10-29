@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <thread>
 #include <vector>
+#include <memory>
 
 namespace {
 void Require(bool ok, const char* what) {
@@ -25,6 +26,7 @@ void* Worker(void* arg) {
                           &t.oracle, THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0), "oracle duplicate");
   t.ready = true;
   while (!t.stop) {
+    pthread_testcancel();
     if (t.busy) t.work.fetch_add(1, std::memory_order_relaxed);
     else Sleep(1);
   }
@@ -76,6 +78,96 @@ void Dead(Target& t, clockid_t id) {
           unchanged_time.tv_sec == 42 && unchanged_time.tv_nsec == 43, "dead clock unchanged");
   CloseHandle(t.oracle);
 }
+
+void Stress() {
+  // Every exhausted slot holds a genuine, still-live distinct target.
+  constexpr int count = 257;
+  auto targets = std::make_unique<Target[]>(count);
+  std::vector<pthread_t> threads(count);
+  std::vector<clockid_t> clocks(count, 123);
+  for (int i = 0; i != count; ++i) {
+    targets[i].busy = false;
+    Require(pthread_create(&threads[i], nullptr, Worker, &targets[i]) == 0, "capacity real create");
+    Await(targets[i]);
+    int rc = pthread_getcpuclockid(targets[i].identity, &clocks[i]);
+    Require(i < 256 ? rc == 0 : rc == EAGAIN && clocks[i] == 123, "real target slot capacity");
+    if (i < 256) Require(Sample(clocks[i]) <= Ticks(targets[i].oracle), "capacity retained oracle");
+  }
+  for (int i = 0; i != count; ++i) targets[i].stop = true;
+  for (int i = 0; i != count; ++i) {
+    Require(pthread_join(threads[i], nullptr) == 0, "capacity join");
+    if (i < 256) Dead(targets[i], clocks[i]);
+    else CloseHandle(targets[i].oracle);
+  }
+  { Target t; pthread_t th; t.busy = false;
+    Require(pthread_create(&th, nullptr, Worker, &t) == 0, "replacement create"); Await(t);
+    timespec untouched{42, 43};
+    Require(clock_gettime(clocks[0], &untouched) == -1 && errno == EINVAL &&
+            untouched.tv_sec == 42 && untouched.tv_nsec == 43, "saved clock cannot alias replacement");
+    clockid_t fresh;
+    Require(pthread_getcpuclockid(t.identity, &fresh) == 0 && fresh != clocks[0], "replacement distinct clock");
+    t.stop = true; Require(pthread_join(th, nullptr) == 0, "replacement join"); Dead(t, fresh); }
+  std::puts("PASS host-authority 256-live-slots exhaustion-output reclaim saved-clock-nonalias");
+
+  for (int round = 0; round != 64; ++round) {
+    Target t; pthread_t th; t.busy = false;
+    Require(pthread_create(&th, nullptr, Worker, &t) == 0, "race target create"); Await(t);
+    clockid_t saved;
+    Require(pthread_getcpuclockid(t.identity, &saved) == 0, "race initial clock");
+    std::atomic<int> started{0};
+    std::atomic<bool> stop_readers{false};
+    std::vector<std::thread> readers;
+    for (int i = 0; i != 4; ++i) readers.emplace_back([&] {
+      bool announced = false;
+      while (!stop_readers) {
+        clockid_t id = 123;
+        int rc = pthread_getcpuclockid(t.identity, &id);
+        Require(rc == 0 || (rc == ESRCH && id == 123), "racing acquire result");
+        if (!announced) { ++started; announced = true; }
+        if (rc == 0) {
+          Require(id == saved, "race generation dedup");
+          timespec ts{};
+          int qr = clock_gettime(id, &ts);
+          Require(qr == 0 || (qr == -1 && errno == EINVAL), "racing query result");
+        }
+      }
+    });
+    ULONGLONG deadline = GetTickCount64() + 5000;
+    while (started != 4 && GetTickCount64() < deadline) Sleep(1);
+    Require(started == 4, "real racing acquisitions started");
+    if (round % 2 == 0) Require(pthread_detach(th) == 0, "race live detach");
+    t.stop = true;
+    if (round % 2 != 0) Require(pthread_join(th, nullptr) == 0, "race join");
+    Require(WaitForSingleObject(t.oracle, 5000) == WAIT_OBJECT_0, "race actual exit");
+    stop_readers = true;
+    for (auto& reader : readers) reader.join();
+    Dead(t, saved);
+  }
+  std::puts("PASS host-authority 64-rounds four-readers concurrent-detach-join-exit");
+
+  { Target t; pthread_t th; t.busy = false;
+    Require(pthread_create(&th, nullptr, Worker, &t) == 0, "cancel target create"); Await(t);
+    clockid_t saved; Require(pthread_getcpuclockid(t.identity, &saved) == 0, "cancel acquire");
+    Require(pthread_cancel(th) == 0, "real cancel request"); void* result = nullptr;
+    Require(pthread_join(th, &result) == 0 && result == PTHREAD_CANCELED, "real cancellation join result");
+    Dead(t, saved); }
+  std::puts("PASS host-authority real-cancel target-clock-retired");
+
+  auto rapid = std::make_unique<Target[]>(1024);
+  pthread_attr_t attr;
+  Require(pthread_attr_init(&attr) == 0 && pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0, "rapid detached attr");
+  for (int i = 0; i != 1024; ++i) {
+    rapid[i].stop = true; pthread_t th;
+    Require(pthread_create(&th, &attr, Worker, &rapid[i]) == 0, "rapid detached create");
+  }
+  for (int i = 0; i != 1024; ++i) {
+    Await(rapid[i]);
+    Require(WaitForSingleObject(rapid[i].oracle, 5000) == WAIT_OBJECT_0, "rapid real exit");
+    CloseHandle(rapid[i].oracle);
+  }
+  pthread_attr_destroy(&attr);
+  std::puts("PASS host-authority 1024-rapid-detached real-exit-and-reclamation");
+}
 }
 int main() {
   clockid_t unchanged = 123;
@@ -126,6 +218,7 @@ int main() {
     Require(th != nullptr, "Win32 create"); auto id = Check(t, "Win32-self-attach");
     t.stop = true; Dead(t, id); DWORD exit = 0;
     Require(GetExitCodeThread(th, &exit) && exit == 259, "real exit 259"); CloseHandle(th); }
+  Stress();
   Require(GetProcessHandleCount(GetCurrentProcess(), &final_count) && final_count <= baseline + 8, "handle reclamation bound");
   std::printf("PASS host-authority dead reuse exit259 invalid fixed-clocks handle-count baseline=%lu final=%lu\n", baseline, final_count);
 }

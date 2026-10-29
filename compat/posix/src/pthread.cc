@@ -144,13 +144,24 @@ int pthread_getcpuclockid(pthread_t thread, clockid_t* clock_id) {
   int result = gesher_winpthread_dup_cpu_handle_v1(thread, &owned, &generation);
   if (result) return gesher_errno_from_crt(result);
   std::lock_guard<std::mutex> guard(cpu_clock_lock);
-  ReapTargetClocks();
+  // A supplier duplicate may have waited behind a query while its target
+  // exited. Reject it before a reaped saved clock can be minted a new ID.
+  if (WaitForSingleObject(owned, 0) != WAIT_TIMEOUT) {
+    CloseHandle(owned);
+    ReapTargetClocks();
+    return ESRCH;
+  }
   for (const auto& clock : cpu_clocks) {
     if (clock.handle && clock.generation == generation) {
       CloseHandle(owned);
       *clock_id = clock.id;
       return 0;
     }
+  }
+  ReapTargetClocks();
+  if (WaitForSingleObject(owned, 0) != WAIT_TIMEOUT) {
+    CloseHandle(owned);
+    return ESRCH;
   }
   if (next_cpu_clock >= INT_MIN) {
     for (auto& clock : cpu_clocks) {

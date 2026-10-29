@@ -1,4 +1,4 @@
-# Correct the real libc++ Win32 native_handle oracle without handle/ID casts.
+# Prove the actual loaded supplier module against the verified DLL digest.
 name: host pthread authority initial controls
 on:
   workflow_dispatch:
@@ -36,18 +36,12 @@ jobs:
           mkdir host-authority-fixture
           cp out/host_pthread_authority_test.exe host-authority-fixture/
           llvm="$GESHER_AUTHORITY_LLVM"
-          "$llvm/bin/x86_64-w64-mingw32-clang" -Wall -Wextra -Werror tests/native/host_pthread_supplier_test.c "$llvm/x86_64-w64-mingw32/lib/libwinpthread.dll.a" -o host-authority-fixture/host_pthread_supplier_test.exe
+          python3 tools/host-pthread-authority/bundle.py compile-client "$llvm"
           cp "$llvm/x86_64-w64-mingw32/bin/libwinpthread-1.dll" host-authority-fixture/
           cp "$llvm/x86_64-w64-mingw32/share/mingw32/COPYING.winpthreads.txt" host-authority-fixture/
           cp "$llvm/gesher-winpthreads-authority.json" host-authority-fixture/supplier.json
           "$llvm/bin/llvm-readobj" --coff-imports out/host_pthread_authority_test.exe > host-authority-fixture/imports-host.txt
           "$llvm/bin/llvm-readobj" --coff-imports host-authority-fixture/host_pthread_supplier_test.exe > host-authority-fixture/imports-dynamic.txt
-          python3 - <<'PY'
-          import hashlib,json,os
-          from pathlib import Path
-          p=Path(os.environ['GESHER_AUTHORITY_LLVM'])/'bin/x86_64-w64-mingw32-clang++'
-          Path('host-authority-fixture/compiler.json').write_text(json.dumps({'configured_driver':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}))
-          PY
           python3 tools/host-pthread-authority/bundle.py record
           python3 tools/host-pthread-authority/bundle.py verify
       - uses: actions/upload-artifact@v4
@@ -80,15 +74,21 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($name in @('host_pthread_authority_test', 'host_pthread_supplier_test')) {
+          $bundle = Get-Content -Raw -LiteralPath host-authority-fixture/bundle.json | ConvertFrom-Json
+          $expectedSha = $bundle.members.'libwinpthread-1.dll'
+          foreach ($case in @(@{Name='host_pthread_authority_test';Sha=$null;Exit=0}, @{Name='host_pthread_supplier_test';Sha=$expectedSha;Exit=0}, @{Name='host_pthread_supplier_test';Sha=('0' * 64);Exit=3})) {
+            $name = $case.Name
             $stdout = Join-Path $env:RUNNER_TEMP "$name.stdout"
             $stderr = Join-Path $env:RUNNER_TEMP "$name.stderr"
             $process = $null
             try {
-              $process = Start-Process -FilePath (Join-Path $pwd "host-authority-fixture/$name.exe") -WorkingDirectory (Join-Path $pwd 'host-authority-fixture') -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+              $start = @{ FilePath = (Join-Path $pwd "host-authority-fixture/$name.exe"); WorkingDirectory = (Join-Path $pwd 'host-authority-fixture'); WindowStyle = 'Hidden'; PassThru = $true; RedirectStandardOutput = $stdout; RedirectStandardError = $stderr }
+              if ($name -eq 'host_pthread_supplier_test') { $start.ArgumentList = @($case.Sha) }
+              $process = Start-Process @start
               if (-not $process.WaitForExit(180000)) { throw "Owned fixture timeout $name" }
               $process.Refresh()
-              if ($process.ExitCode -ne 0) { throw "Actual fixture exit $name=$($process.ExitCode)" }
+              if ($process.ExitCode -ne $case.Exit) { throw "Actual fixture exit $name=$($process.ExitCode) expected=$($case.Exit)" }
+              if ($case.Exit -eq 3) { Write-Host "Loaded supplier wrong-digest control rejected with actual exit=$($process.ExitCode)" }
             } finally {
               if ($null -ne $process) {
                 if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Owned fixture cleanup failed' } }
