@@ -22,10 +22,11 @@ int main(void) {
   int (*read_clock)(clockid_t, struct timespec *) = dlsym(lib, "clock_gettime");
   int (*get_id)(pthread_t, clockid_t *) = dlsym(lib, "pthread_getcpuclockid");
   if (!read_clock || !get_id) return 2;
-  pthread_t thread; clockid_t main_id, via_symbol; struct timespec value;
+  pthread_t thread; clockid_t main_id, main_via_symbol, via_symbol; struct timespec value;
   if (pthread_create(&thread, NULL, worker, NULL)) return 3;
   pthread_mutex_lock(&lock); while (!ready) pthread_cond_wait(&changed, &lock);
-  if (worker_error || pthread_getcpuclockid(pthread_self(), &main_id) || get_id(thread, &via_symbol) ||
+  if (worker_error || pthread_getcpuclockid(pthread_self(), &main_id) ||
+      get_id(pthread_self(), &main_via_symbol) || main_id != main_via_symbol || get_id(thread, &via_symbol) ||
       via_symbol != worker_id || main_id == worker_id || read_clock(worker_id, &value) ||
       clock_gettime(via_symbol, &value)) return 4;
   stop = 1; pthread_cond_signal(&changed); pthread_mutex_unlock(&lock);
