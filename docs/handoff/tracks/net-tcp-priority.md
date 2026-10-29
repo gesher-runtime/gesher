@@ -207,3 +207,10 @@ Strict post-SO_ERROR HUP and successful-connect/alias/EOF controls join the
 Linux reference before actual Windows acceptance. Failed TCP reconnect state
 is unspecified by connect(2); TCP AF_UNSPEC disconnect/reconnect and concurrent
 multiple connect attempts are not qualified by this bounded fixture.
+
+Linux-first characterization40862384927 at74180cde is GREEN on all three
+jobs. The actual Linux full fixture passes both inline modes, initial HUP16,
+four finite waits (60-61ms), refused ERR|HUP24 without PRI, alias/error
+ownership, and consumed-error HUP16. The final all-contract marker is present;
+raw Linux log is `tcp-408623-linux.log`. This validates the added reference
+expectations, not the pending Windows production lifecycle implementation.

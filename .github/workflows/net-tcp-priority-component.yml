@@ -1,5 +1,5 @@
 name: net-tcp-priority-component
-# Verify conditional failed-connect error interest and finite successful-connect waits.
+# Verify shared connect lifecycle after Linux reference40862384927 passed.
 on:
   workflow_dispatch:
   push:
