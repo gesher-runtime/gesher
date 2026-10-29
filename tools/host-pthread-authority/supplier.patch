@@ -250,7 +250,7 @@
  /* internal header files */
  #include "misc.h"
  
-@@ -38,6 +40,137 @@
+@@ -38,6 +40,141 @@
          return -1;
      }
      return 0;
@@ -273,10 +273,14 @@
 +        }
 +}
 +
-+__declspec(dllexport) int __cdecl gesher_clock_register_v1(HANDLE owned, clockid_t *out)
++static int __cdecl gesher_clock_register_v1(HANDLE owned, clockid_t *out)
 +{
 +    unsigned i;
 +    int result;
++    if (!owned || owned == INVALID_HANDLE_VALUE || !out || !GetThreadId(owned)) {
++        if (owned && owned != INVALID_HANDLE_VALUE) CloseHandle(owned);
++        return EINVAL;
++    }
 +    typedef BOOL (WINAPI *compare_fn)(HANDLE, HANDLE);
 +    HMODULE kernel = GetModuleHandleW(L"kernelbase.dll");
 +    compare_fn compare = kernel ? (compare_fn)GetProcAddress(kernel, "CompareObjectHandles") : NULL;
@@ -311,7 +315,7 @@
 +    return result;
 +}
 +
-+__declspec(dllexport) int __cdecl gesher_clock_read_v1(clockid_t id, struct _timespec64 *out, int resolution)
++static int __cdecl gesher_clock_read_v1(clockid_t id, struct _timespec64 *out, int resolution)
 +{
 +    unsigned i;
 +    int result = EINVAL;

@@ -14,7 +14,8 @@ MEMBERS = {'host_pthread_authority_test.exe', 'host_pthread_supplier_test.exe',
            'host_pthread_authority_fault_test.exe', 'host_pthread_public_static_test.exe',
            'host_pthread_public_static_test.o', 'imports-static.txt', 'fault-supplier.json',
            'host-production-role.json', 'host-fault-role.json',
-           'host_pthread_mixed_provider_test.exe', 'imports-mixed.txt'}
+           'host_pthread_mixed_provider_test.exe', 'imports-mixed.txt',
+           'host_pthread_bad_anchor_test.exe', 'imports-bad-anchor.txt'}
 
 
 def compile_client(llvm):
@@ -39,9 +40,14 @@ def compile_client(llvm):
                   str(llvm / 'x86_64-w64-mingw32/lib/libwinpthread.a'),
                   '-o', str(DIST / 'host_pthread_mixed_provider_test.exe')]
     subprocess.run(mixed_link, check=True)
+    bad_anchor_link = [str(driver), '-D_WIN32_WINNT=0x0A00', '-Wall', '-Wextra', '-Werror',
+                       str(ROOT / 'tests/native/host_pthread_bad_anchor_test.c'),
+                       str(llvm / 'x86_64-w64-mingw32/lib/libwinpthread.dll.a'),
+                       '-o', str(DIST / 'host_pthread_bad_anchor_test.exe')]
+    subprocess.run(bad_anchor_link, check=True)
     (DIST / 'compiler.json').write_text(json.dumps({
         'configured_driver': str(cxx), 'sha256': sha(cxx), 'client_command': command,
-        'client_driver_sha256': sha(driver), 'mixed_link': mixed_link, 'static_compile': static_compile,
+        'client_driver_sha256': sha(driver), 'mixed_link': mixed_link, 'bad_anchor_link': bad_anchor_link, 'static_compile': static_compile,
         'static_link': static_link}, sort_keys=True))
 
 
@@ -86,6 +92,7 @@ def record():
     assert 'libwinpthread-1.dll' in (DIST / 'imports-dynamic.txt').read_text().lower()
     assert 'libwinpthread-1.dll' not in (DIST / 'imports-static.txt').read_text().lower()
     assert 'libwinpthread-1.dll' not in (DIST / 'imports-mixed.txt').read_text().lower()
+    assert 'libwinpthread-1.dll' in (DIST / 'imports-bad-anchor.txt').read_text().lower()
     (DIST / 'bundle.json').write_text(json.dumps(data, sort_keys=True, indent=2))
 
 
