@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [wip/net-tcp-priority, wip/net-tcp-error-state]
-    paths: [.github/workflows/net-tcp-priority-characterization.yml, tests/net-tcp-priority/winsock_oracle.cc, tests/net-tcp-priority/contract.cc]
+    paths: [.github/workflows/net-tcp-priority-characterization.yml, tests/net-tcp-priority/winsock_oracle.cc, tests/net-tcp-priority/connectex_oracle.cc, tests/net-tcp-priority/connect_lifecycle_oracle.cc, tests/net-tcp-priority/contract.cc]
 permissions:
   contents: read
 jobs:
@@ -17,6 +17,8 @@ jobs:
           set -euo pipefail
           g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
           timeout 20 /tmp/tcp-priority-reference
+          g++ -std=c++20 -Wall -Wextra -Werror tests/net-tcp-priority/connect_lifecycle_oracle.cc -o /tmp/connect-lifecycle-reference
+          timeout 20 /tmp/connect-lifecycle-reference
   windows:
     strategy:
       fail-fast: false
@@ -35,3 +37,11 @@ jobs:
         run: |
           & ./urgent-oracle.exe
           if ($LASTEXITCODE -ne 0) { throw 'Urgent characterization failed' }
+      - name: Compile independent overlapped-connect owner oracle
+        shell: cmd
+        run: cl /nologo /std:c++20 /W4 /WX tests\net-tcp-priority\connectex_oracle.cc /Fe:connectex-oracle.exe /link ws2_32.lib
+      - name: Observe actual modes, context, owned completion and cancellation
+        shell: pwsh
+        run: |
+          & ./connectex-oracle.exe
+          if ($LASTEXITCODE -ne 0) { throw 'ConnectEx characterization failed' }
