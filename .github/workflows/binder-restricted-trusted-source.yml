@@ -18,7 +18,7 @@ jobs:
           EXPECTED_CALLER: ${{ vars.GESHER_BINDER_RESTRICTED_CALLER }}
           EXPECTED_GUARD: ${{ vars.GESHER_BINDER_RESTRICTED_GUARD }}
         run: |
-          python3 - <<'PY'
+          python3 -I - <<'PY'
           import ast, hashlib, os, pathlib, re, subprocess
           historical = '7bbccfcddbac826f50b78175f4d23f8702fd7741'
           reviewed = '719ceccc3b26d5e3cc934bcfc0979696c4b07187'
@@ -34,6 +34,7 @@ jobs:
               assert repository == 'gesher-runtime/gesher'
               assert ref == 'refs/heads/wip/binder-isolated-spawn'
               assert event == 'workflow_dispatch'
+              assert ('\n    uses: gesher-runtime/gesher/' + guard_path + '@' + guard + '\n') in git('show', sha + ':' + ci_path).decode(), 'Caller does not pin externally approved guard'
           sha = os.environ['GITHUB_SHA']
           caller, guard = os.environ['EXPECTED_CALLER'], os.environ['EXPECTED_GUARD']
           live_context = (sha, caller, guard, os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_REF'], os.environ['GITHUB_EVENT_NAME'])
@@ -90,8 +91,9 @@ jobs:
               assert actual[path][2] == blob, ('Historical Native/AOT source changed', path)
           # All mutations below must be refused before any producer runs.
           mutations = []
+          noop_blob = git('hash-object', '--stdin', data=b'pass\n').decode().strip()
           for path in (legacy, guard_path, 'compat/framework/services_zygote.cc', 'compat/posix/src/launch_context.h', ci_path):
-              altered = dict(actual); altered[path] = ('100644', 'blob', '0' * 40); mutations.append(altered)
+              altered = dict(actual); altered[path] = ('100644', 'blob', noop_blob); mutations.append(altered)
               missing = dict(actual); missing.pop(path); mutations.append(missing)
           extra = dict(actual); extra['compat/unreviewed-production.cc'] = ('100644', 'blob', '0' * 40); mutations.append(extra)
           for mapping in mutations:
@@ -101,6 +103,7 @@ jobs:
           bad_contexts = [(sha, '', guard, live_context[3], live_context[4], live_context[5]),
                           (sha, '0'*40, guard, live_context[3], live_context[4], live_context[5]),
                           (sha, caller, '', live_context[3], live_context[4], live_context[5]),
+                          (sha, caller, '0'*40, live_context[3], live_context[4], live_context[5]),
                           (sha, caller, guard, 'other/repository', live_context[4], live_context[5]),
                           (sha, caller, guard, live_context[3], 'refs/heads/main', live_context[5]),
                           (sha, caller, guard, live_context[3], live_context[4], 'push')]
