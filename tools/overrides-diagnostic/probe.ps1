@@ -59,5 +59,9 @@ param([string] $Probe, [string] $Helper)
 } finally {
   Remove-GeocoderProbeAssembly
   Pop-Location
-  Remove-Item -LiteralPath $work -Recurse -Force
+  $resolvedWork = [IO.Path]::GetFullPath($work)
+  $tempPrefix = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+  if (-not $resolvedWork.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+      [IO.Path]::GetFileName($resolvedWork) -notmatch '^geocoder-cwd-[0-9a-f]{32}$') { throw 'Invalid diagnostic cleanup target' }
+  Remove-Item -LiteralPath $resolvedWork -Recurse -Force
 }
