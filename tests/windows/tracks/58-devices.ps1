@@ -4,9 +4,10 @@
 # the single-process mode and on the Gesher device.
 
 # Runs a program with a time limit, killing it and what it started on time-out.
-function DevRun([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 300) {
+function DevRun([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 300, [string] $WorkingDirectory = '') {
   $psi = [Diagnostics.ProcessStartInfo]::new($Exe)
   foreach ($a in $Arguments) { $psi.ArgumentList.Add($a) }
+  if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
   $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
@@ -187,12 +188,14 @@ function LegacyCameraCheck([string] $Mode, [string] $Out, [int] $Code) {
 # Geocoder: Windows.Services.Maps (MapLocationFinder) without a map service key. The app's
 # Geocoder stays absent (isPresent false, IOException) while this is what Windows answers.
 . (Join-Path $PSScriptRoot '../helpers/geocoder-compile.ps1')
+$geoWork = Join-Path $env:RUNNER_TEMP ('geocoder-work-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $geoWork -ErrorAction Stop | Out-Null
 try {
 New-GeocoderProbeAssembly
 $geoScript = Join-Path $PSScriptRoot '../helpers/geocoder-provider-probe.ps1'
 # Bound activation/COM startup as well as the asynchronous wait. Reading Result
 # after a false Wait used to block until the entire test job timed out.
-$geo = (DevRun 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $geoScript, (Join-Path $PSScriptRoot 'geocoder-operation.ps1')) 45).Trim()
+$geo = (DevRun 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $geoScript, (Join-Path $PSScriptRoot 'geocoder-operation.ps1')) 45 $geoWork).Trim()
 if ($LASTEXITCODE -eq 0 -and $geo -match 'status: ([A-Za-z]+)') {
   Write-Host "PASS  devices: geocoder: Windows.Services.Maps without a map service key answers $($Matches[1]) (Geocoder stays absent: isPresent false, IOException)"
 } else {
@@ -200,7 +203,21 @@ if ($LASTEXITCODE -eq 0 -and $geo -match 'status: ([A-Za-z]+)') {
   $script:failed++
 }
 
-} finally { Remove-GeocoderProbeAssembly }
+} finally {
+  try { Remove-GeocoderProbeAssembly } finally {
+    $resolvedGeoWork = [IO.Path]::GetFullPath($geoWork)
+    $tempPrefix = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+    if (-not $resolvedGeoWork.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetFileName($resolvedGeoWork) -notmatch '^geocoder-work-[0-9a-f]{32}$') { throw 'Invalid geocoder work directory' }
+    if (((Get-Item -LiteralPath $resolvedGeoWork -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Geocoder work directory became a reparse point; preserved' }
+    $entries = @(Get-ChildItem -LiteralPath $resolvedGeoWork -Force)
+    foreach ($entry in $entries) {
+      if ($entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $entry.Name -cne 'overrides.json') { throw 'Unexpected geocoder work entry; preserved' }
+      Remove-Item -LiteralPath $entry.FullName -Force
+    }
+    Remove-Item -LiteralPath $resolvedGeoWork
+  }
+}
 
 # Single process: the services in the app's own process (gesher-app --single-process).
 $out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400
