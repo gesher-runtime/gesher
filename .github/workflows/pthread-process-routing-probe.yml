@@ -101,6 +101,7 @@ jobs:
             } finally {
               if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Probe cleanup failed' } }
               $process.Dispose()
+              if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
               if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
             }
           }

@@ -57,8 +57,13 @@ int main(void) {
     if (!CloseHandle(thread) || !CloseHandle(t.ready) || !CloseHandle(t.release)) return 11;
     printf("PASS probe foreign native exit method=%s attach=%s code=%lu destructor=%ld stale-ESRCH\n",i<2?"ExitThread":"_endthreadex",t.use_dll?"dll":"host",actual,destroyed);
   }
-  if (pthread_key_delete(key) || !FreeLibrary(module) || GetModuleHandleW(L"libwinpthread-1.dll") ||
-      !GetProcessHandleCount(GetCurrentProcess(),&after) || after>baseline+8) return 12;
+  int delete_result=pthread_key_delete(key);
+  BOOL unload_result=FreeLibrary(module);
+  HMODULE remaining=GetModuleHandleW(L"libwinpthread-1.dll");
+  BOOL count_result=GetProcessHandleCount(GetCurrentProcess(),&after);
+  printf("CONTROL final delete=%d unload=%d remaining=%p count=%d handles=%lu/%lu\n",
+         delete_result,(int)unload_result,(void *)remaining,(int)count_result,baseline,count_result?after:0UL);
+  if (delete_result || !unload_result || remaining || !count_result || after>baseline+8) return 12;
   printf("PASS probe foreign native exit handles=%lu/%lu\n",baseline,after);
   return 0;
 }
