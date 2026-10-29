@@ -112,6 +112,8 @@ static void finite_priority_control(int fd, const char* phase) {
   require(rc == 0 && p.revents == 0 && elapsed >= 40 && elapsed < 1500, "finite priority-only endpoint wait");
 }
 static void endpoint_controls() {
+  const long long empty_start = millis();
+  require(poll(nullptr, 0, 60) == 0 && millis() - empty_start >= 40 && millis() - empty_start < 1500, "count-zero poll retains its finite deadline");
   int unconnected = socket(AF_INET, SOCK_STREAM, 0); require(unconnected >= 0, "control fresh stream");
   pollfd initial{unconnected, POLLPRI, 0};
   const int initial_rc = poll(&initial, 1, 60);
@@ -307,6 +309,7 @@ static void* submission_connect(void* raw) {
   window.connect_error = errno; window.elapsed = millis() - start; return nullptr;
 }
 static void owned_wait_controls() {
+  gesher::ws::OwnerCensus baseline{};
   for (int mode = 0; mode != 4; ++mode) {
     SubmitWindow window{}; window.mode = mode;
     int reserved = socket(AF_INET, SOCK_STREAM, 0); require(reserved >= 0, "owned wait reserve");
@@ -334,7 +337,7 @@ static void owned_wait_controls() {
     if (mode == 2) require(returned == PTHREAD_CANCELED, "real connect wait is a deferred cancellation point");
     else require(window.connect_rc == -1 && window.connect_error == (mode == 0 ? ECONNREFUSED : EINPROGRESS), "logical call mode remains fixed across native mode change");
     if (mode == 3) require(window.elapsed >= 40 && window.elapsed < 1500, "logical send timeout leaves a live pending operation");
-    if (mode == 1) {
+    if (mode == 1 || mode == 2 || mode == 3) {
       pollfd p{alias, POLLPRI, 0}; require(poll(&p, 1, 5000) == 1 && (p.revents & POLLERR), "flipped-to-blocking alias retains nonblocking completion token");
       int error = 0; length = sizeof(error); require(getsockopt(alias, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "flipped alias receives exact completion");
     }
@@ -342,8 +345,80 @@ static void owned_wait_controls() {
     require(gesher::ws::AwaitConnectRetirement(window.operation, 2000) == 0, "owned wait native owner and reaper really exit");
     printf("TCP_PRIORITY_OWNED_WAIT mode=%d connect_rc=%d connect_errno=%d canceled=%d elapsed_ms=%lld native_retired=1\n", mode, window.connect_rc, window.connect_error, returned == PTHREAD_CANCELED ? 1 : 0, window.elapsed); fflush(stdout);
     require(close(reserved) == 0 && pthread_cond_destroy(&window.condition) == 0 && pthread_mutex_destroy(&window.mutex) == 0, "owned wait gate cleanup");
+    window.operation.reset();  // all caller context handles retire before census
+    gesher::ws::OwnerCensus actual{}; require(gesher::ws::ReadConnectOwnerCensus(&actual), "actual production owner handle/thread census");
+    if (mode == 0) baseline = actual;
+    printf("TCP_PRIORITY_OWNER_CENSUS mode=%d handles=%u/%u threads=%u/%u\n", mode, actual.handles, baseline.handles, actual.threads, baseline.threads); fflush(stdout);
+    require(actual.handles == baseline.handles && actual.threads == baseline.threads, "repeated real ownership returns to warm handle and thread baseline");
   }
   puts("PASS TCP priority: real owned mode flips cancellation send deadline and native owner retirement");
+}
+struct PollWindow {
+  pthread_mutex_t mutex; pthread_cond_t condition;
+  bool captured = false, release = false;
+  pollfd records[3]{}; size_t count = 0;
+  int result = -99; long long elapsed = -1;
+};
+static void pause_poll_snapshot(void* raw) {
+  auto& window = *static_cast<PollWindow*>(raw);
+  require(pthread_mutex_lock(&window.mutex) == 0, "poll snapshot lock");
+  window.captured = true; require(pthread_cond_broadcast(&window.condition) == 0, "actual poll snapshots published");
+  timespec deadline{}; require(clock_gettime(CLOCK_REALTIME, &deadline) == 0, "poll snapshot clock"); deadline.tv_sec += 2;
+  while (!window.release) require(pthread_cond_timedwait(&window.condition, &window.mutex, &deadline) == 0, "bounded held poll snapshot");
+  require(pthread_mutex_unlock(&window.mutex) == 0, "poll snapshot unlock");
+}
+static void* snapshot_poll(void* raw) {
+  auto& window = *static_cast<PollWindow*>(raw); const long long start = millis();
+  window.result = gesher::PollWithObserver(window.records, window.count, 1500, pause_poll_snapshot, &window);
+  window.elapsed = millis() - start; return nullptr;
+}
+static void poll_close_reuse_controls() {
+  for (int mode = 0; mode != 2; ++mode) {
+    Pair old = pair(); const int victim = old.receiver;
+    int sibling = mode ? dup(victim) : -1;
+    if (mode) require(sibling >= 0, "poll snapshot retained sibling");
+    int udp = socket(AF_INET, SOCK_DGRAM, 0), sender = socket(AF_INET, SOCK_DGRAM, 0);
+    require(udp >= 0 && sender >= 0, "poll snapshot UDP control");
+    sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    require(bind(udp, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "poll snapshot UDP bind");
+    socklen_t length = sizeof(address); require(getsockname(udp, reinterpret_cast<sockaddr*>(&address), &length) == 0, "poll snapshot UDP address");
+    gesher::SocketFd before; require(gesher::LookupSocket(victim, &before), "poll snapshot original native identity");
+    PollWindow window{}; window.records[0] = {victim, POLLPRI, 0}; window.records[1] = {udp, POLLIN, 0};
+    if (mode) window.records[2] = {sibling, POLLPRI, 0};
+    window.count = mode ? 3 : 2;
+    require(pthread_mutex_init(&window.mutex, nullptr) == 0 && pthread_cond_init(&window.condition, nullptr) == 0, "poll snapshot gate");
+    pthread_t waiter; require(pthread_create(&waiter, nullptr, snapshot_poll, &window) == 0, "real poll caller");
+    require(pthread_mutex_lock(&window.mutex) == 0, "poll snapshot controller lock");
+    timespec deadline{}; require(clock_gettime(CLOCK_REALTIME, &deadline) == 0, "poll snapshot controller clock"); deadline.tv_sec += 2;
+    while (!window.captured) require(pthread_cond_timedwait(&window.condition, &window.mutex, &deadline) == 0, "real snapshots captured before replacement");
+    require(pthread_mutex_unlock(&window.mutex) == 0, "poll snapshot controller unlock");
+    Pair replacement{-1, -1};
+    if (mode) {
+      replacement = pair();
+      require(dup2(replacement.receiver, victim) == victim, "actual dup2 replaces captured identity while old alias survives");
+      require(send(old.sender, "!", 1, MSG_OOB) == 1 && send(replacement.sender, "x", 1, MSG_OOB) == 1, "independent urgent bytes on old and replacement transports");
+    } else {
+      require(close(victim) == 0, "actual last close after poll captured native handle");
+      int fresh = socket(AF_INET, SOCK_STREAM, 0); require(fresh >= 0, "new native endpoint after last close");
+      if (fresh != victim) require(dup2(fresh, victim) == victim && close(fresh) == 0, "force exact captured fd reuse");
+    }
+    gesher::SocketFd after; require(gesher::LookupSocket(victim, &after) && after.description != before.description, "replacement has distinct actual description");
+    require(sendto(sender, "u", 1, 0, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 1, "simultaneously ready independent UDP entry");
+    require(pthread_mutex_lock(&window.mutex) == 0, "poll snapshot release lock"); window.release = true;
+    require(pthread_cond_broadcast(&window.condition) == 0 && pthread_mutex_unlock(&window.mutex) == 0, "release actual stale snapshot");
+    require(pthread_join(waiter, nullptr) == 0, "actual poll caller retired");
+    printf("TCP_PRIORITY_POLL_REUSE mode=%d same_fd=1 same_native=%d rc=%d victim=%d udp=%d alias=%d elapsed_ms=%lld\n", mode, after.socket == before.socket ? 1 : 0, window.result, window.records[0].revents, window.records[1].revents, window.records[2].revents, window.elapsed); fflush(stdout);
+    require(window.result == (mode ? 3 : 2) && window.records[0].revents == POLLNVAL && window.records[1].revents == POLLIN && window.elapsed < 1500, "stale identity fails closed while all other ready entries and original deadline survive");
+    char byte{}; require(recv(udp, &byte, 1, 0) == 1 && byte == 'u', "poll observation preserves independent UDP payload");
+    if (mode) {
+      require(window.records[2].revents == POLLPRI && recv(sibling, &byte, 1, MSG_OOB) == 1 && byte == '!', "old alias urgent payload remains independent");
+      require(recv(victim, &byte, 1, MSG_OOB) == 1 && byte == 'x', "replacement urgent payload was never consumed by stale poll");
+      require(close(sibling) == 0 && close(replacement.receiver) == 0 && close(replacement.sender) == 0, "poll replacement aliases cleanup");
+    }
+    require(close(victim) == 0 && close(old.sender) == 0 && close(udp) == 0 && close(sender) == 0, "poll snapshot endpoints cleanup");
+    require(pthread_cond_destroy(&window.condition) == 0 && pthread_mutex_destroy(&window.mutex) == 0, "poll snapshot gate cleanup");
+  }
+  puts("PASS TCP priority: real poll snapshots reject closed reused and dup2 identities while aliases and other entries remain ready");
 }
 #endif
 static void connection_controls() {
@@ -594,6 +669,7 @@ int main(int argc, char** argv) {
   established_error_control();
 #ifdef GESHER
   owned_wait_controls();
+  poll_close_reuse_controls();
 #endif
   alias_ownership();
   Pair a = pair(); pthread_t thread;

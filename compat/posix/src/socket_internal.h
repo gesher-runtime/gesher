@@ -72,7 +72,7 @@ struct SocketDescription {
   uint64_t connect_generation = 0;  // error_mutex; never a numeric fd identity
   int connect_result = 0, connect_error = 0;  // completion / caller-unread token
   uint64_t refusal_generation = 0;  // positively completed ConnectEx refusal only
-  bool native_closed = false;  // error_mutex orders close against submit/query
+  bool native_closed = false, native_closing = false;  // short native lifetime transaction
   bool legacy_connect_active = false;  // non-owned connect/disconnect serialization
   std::shared_ptr<ConnectOperation> connect_operation;  // cleared after drain
   std::atomic<bool> nonblocking{false}, reuse_addr{false};
@@ -104,6 +104,8 @@ std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
 int AwaitConnect(const std::shared_ptr<ConnectOperation>& operation, bool nonblocking);
 // Internal lifetime evidence: waits for the actual WinAPI reaper thread exit.
 int AwaitConnectRetirement(const std::shared_ptr<ConnectOperation>& operation, int timeout_ms);
+struct OwnerCensus { uint32_t handles = 0, threads = 0; };
+bool ReadConnectOwnerCensus(OwnerCensus* result);  // read-only HOST lifetime evidence
 void RefreshConnect(const std::shared_ptr<SocketDescription>& description);
 int Listen(Socket s, int backlog);
 Socket Accept(Socket s, Address* peer);
@@ -246,6 +248,8 @@ struct SocketFd {
 // POSIX entry always passes nullptr; no mutable hook or guest symbol exists.
 using ConnectObserver = void (*)(ws::Socket, int, int, void*);
 int ConnectWithObserver(int fd, const void* address, uint32_t length, ConnectObserver observer, void* context);
+using PollObserver = void (*)(void*);
+int PollWithObserver(void* records, size_t count, int timeout_ms, PollObserver observer, void* context);
 
 // Takes ownership of `state.socket`: returns its new fd, or -1 with errno set
 // (the socket is then closed).

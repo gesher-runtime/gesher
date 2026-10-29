@@ -112,8 +112,12 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
   if ($text -notmatch '(?m)^PASS TCP priority: independent established reset remains poll-visible and reaches the caller receive\s*$') { throw "Missing independent established-error control $Context" }
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^TCP_PRIORITY_CONNECT_WINDOW backend=host-private native_ready=1 lock_busy=[01] getter_before_release=1 first=111 second=0\r?$') { throw 'HOST did not complete its real getter while the requester remained paused' }
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: real owned mode flips cancellation send deadline and native owner retirement\s*$') { throw 'Missing HOST actual owned wait controls' }
+  if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: real poll snapshots reject closed reused and dup2 identities while aliases and other entries remain ready\s*$') { throw 'Missing HOST actual poll snapshot identity controls' }
   if ($Context -eq 'host-posix') {
-    foreach ($mode in 0..3) { if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_WAIT mode=$mode .*native_retired=1\r?$") { throw "Missing HOST actual mode/cancel/deadline context $mode" } }
+    foreach ($mode in 0..3) {
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_WAIT mode=$mode .*native_retired=1\r?$") { throw "Missing HOST actual mode/cancel/deadline context $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_CENSUS mode=$mode handles=([0-9]+)/\1 threads=([0-9]+)/\2\r?$") { throw "Missing HOST repeated physical owner census $mode" }
+    }
   }
   Write-Host "PASS TCP priority component: $Context; actual noninline contract; inline remains OPEN"
 }

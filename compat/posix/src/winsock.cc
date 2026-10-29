@@ -7,6 +7,7 @@
 #include <mswsock.h>
 #include <netioapi.h>
 #include <windns.h>
+#include <tlhelp32.h>
 
 #include <errno.h>
 #include <stdio.h>
@@ -39,7 +40,7 @@ struct ConnectOperation {
   HANDLE submitted = nullptr;
   HANDLE reaper = nullptr;
   ConnectRetirement* retirement = nullptr;  // WinHeap, retained until owner exit
-  bool pending = false, issued = false, finished = false, cancel_requested = false;  // error_mutex
+  bool pending = false, issued = false, finished = false;  // error_mutex
   int start_error = 0, result = 0;  // error_mutex, or after submitted/finished
   ULONGLONG deadline = ~ULONGLONG{0};
   ~ConnectOperation() {
@@ -425,11 +426,20 @@ int BindInterface(Socket s, uint32_t ifindex) {
 
 int Close(Socket s, const std::shared_ptr<SocketDescription>& description) {
   if (!description) return closesocket(static_cast<SOCKET>(s)) == 0 ? 0 : Fail();
-  std::lock_guard<std::mutex> lock(description->error_mutex);
+  {
+    std::lock_guard<std::mutex> lock(description->error_mutex);
+    description->native_closing = true;
+  }
+  // SO_LINGER may wait. Never make a finite poll wait for this native call
+  // while trying to refresh its completion metadata.
   const int result = closesocket(static_cast<SOCKET>(s)) == 0 ? 0 : Fail();
+  const int saved = errno;
+  std::lock_guard<std::mutex> lock(description->error_mutex);
   // closesocket cancels pending operations. Its event/OVERLAPPED remain owned
   // by the worker until actual completion, including when the number is reused.
   if (result == 0) description->native_closed = true;
+  description->native_closing = false;
+  errno = saved;
   return result;
 }
 
@@ -474,6 +484,7 @@ void FinishConnect(const std::shared_ptr<ConnectOperation>& operation) {
   auto& op = *operation;
   auto& description = *op.description;
   if (op.finished) return;
+  if (description.native_closing) return;
   if (op.pending && WaitForSingleObject(op.overlap.hEvent, 0) != WAIT_OBJECT_0) return;
   int result = op.start_error;
   if (op.pending) {
@@ -544,8 +555,8 @@ void* ConnectOwner(void* raw) {
     {
       std::lock_guard<std::mutex> lock(op.description->error_mutex);
       if (!captured) op.start_error = EIO;
-      else if (op.description->native_closed || op.description->connect_generation != op.generation || op.cancel_requested) {
-        op.start_error = op.cancel_requested ? ECANCELED : EBADF;
+      else if (op.description->native_closed || op.description->native_closing || op.description->connect_generation != op.generation) {
+        op.start_error = EBADF;
       } else {
         sockaddr_storage remote{}; int remote_length = 0;
         WSAPROTOCOL_INFOW protocol{}; int length = sizeof(protocol);
@@ -580,8 +591,12 @@ void* ConnectOwner(void* raw) {
       // A failed wait is not permission to free live native context. Retain
       // the owner/module and continue looking for actual kernel completion.
       while (WaitForSingleObject(op.overlap.hEvent, INFINITE) != WAIT_OBJECT_0) Sleep(100);
-      std::lock_guard<std::mutex> lock(op.description->error_mutex);
-      FinishConnect(operation);
+    }
+    for (;;) {
+      bool finished;
+      { std::lock_guard<std::mutex> lock(op.description->error_mutex); FinishConnect(operation); finished = op.finished; }
+      if (finished) break;
+      Sleep(10);  // native close publication may still be in progress
     }
   }  // destroy C++ context, then return through the normal pthread/TLS wrapper
   return nullptr;
@@ -592,7 +607,7 @@ void* ConnectOwner(void* raw) {
 std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
     const std::shared_ptr<SocketDescription>& description) {
   std::lock_guard<std::mutex> lock(description->error_mutex);
-  if (description->native_closed) return errno = EBADF, nullptr;
+  if (description->native_closed || description->native_closing) return errno = EBADF, nullptr;
   if (description->connect_operation || description->legacy_connect_active) return errno = EALREADY, nullptr;
   if (description->state.load() == ConnectState::kConnected) return errno = EISCONN, nullptr;
   const ConnectState previous_state = description->state.load();
@@ -658,6 +673,24 @@ int AwaitConnectRetirement(const std::shared_ptr<ConnectOperation>& operation, i
   return wait == WAIT_OBJECT_0 ? 0 : (errno = wait == WAIT_TIMEOUT ? ETIMEDOUT : EIO, -1);
 }
 
+bool ReadConnectOwnerCensus(OwnerCensus* result) {
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+  if (snapshot == INVALID_HANDLE_VALUE) return FailWithLastError(), false;
+  THREADENTRY32 entry{}; entry.dwSize = sizeof(entry); uint32_t count = 0;
+  if (!Thread32First(snapshot, &entry)) { const DWORD saved = GetLastError(); CloseHandle(snapshot); return errno = ErrnoFromWin32(saved), false; }
+  do {
+    if (entry.th32OwnerProcessID == GetCurrentProcessId()) ++count;
+    entry.dwSize = sizeof(entry);
+  } while (Thread32Next(snapshot, &entry));
+  const DWORD enumeration = GetLastError();
+  if (!CloseHandle(snapshot)) return FailWithLastError(), false;
+  if (enumeration != ERROR_NO_MORE_FILES) return errno = ErrnoFromWin32(enumeration), false;
+  DWORD handles = 0;
+  if (!GetProcessHandleCount(GetCurrentProcess(), &handles)) return FailWithLastError(), false;
+  result->handles = handles; result->threads = count;
+  return true;
+}
+
 void RefreshConnect(const std::shared_ptr<SocketDescription>& description) {
   std::lock_guard<std::mutex> lock(description->error_mutex);
   auto operation = description->connect_operation;
@@ -665,21 +698,11 @@ void RefreshConnect(const std::shared_ptr<SocketDescription>& description) {
 }
 
 namespace {
-void CancelConnectWait(void* raw) {
-  auto& op = *static_cast<ConnectOperation*>(raw);
-  std::lock_guard<std::mutex> lock(op.description->error_mutex);
-  op.cancel_requested = true;
-  if (!op.description->native_closed && op.pending && !op.finished) {
-    // Target exactly this operation, not unrelated I/O from another thread.
-    // The owner still waits for completion even if cancellation loses a race.
-    CancelIoEx(reinterpret_cast<HANDLE>(op.socket), &op.overlap);
-  }
-}
-
-int WaitConnectEvent(const std::shared_ptr<ConnectOperation>& operation, HANDLE event, ULONGLONG deadline) {
+int WaitConnectEvent(HANDLE event, ULONGLONG deadline) {
   int result = 0;
-  pthread_cleanup_push(CancelConnectWait, operation.get());
   for (;;) {
+    // Linux cancels the waiting caller, not the socket's TCP attempt. The
+    // independent owner retains all context until completion or last-close.
     pthread_testcancel();
     int remaining = deadline == ~ULONGLONG{0} ? 10 : MillisUntil(deadline);
     const DWORD wait = WaitForSingleObject(event, static_cast<DWORD>(remaining > 10 ? 10 : remaining));
@@ -687,23 +710,31 @@ int WaitConnectEvent(const std::shared_ptr<ConnectOperation>& operation, HANDLE 
     if (wait == WAIT_FAILED) { result = -1; break; }
     if (deadline != ~ULONGLONG{0} && MonotonicMicros() >= deadline) { result = 1; break; }
   }
-  pthread_cleanup_pop(0);
   return result;
 }
 }  // namespace
 
 int AwaitConnect(const std::shared_ptr<ConnectOperation>& operation, bool nonblocking) {
-  if (WaitConnectEvent(operation, operation->submitted, ~ULONGLONG{0}) != 0) return errno = EIO, -1;
+  if (WaitConnectEvent(operation->submitted, ~ULONGLONG{0}) != 0) return errno = EIO, -1;
   if (nonblocking && operation->pending) return errno = EINPROGRESS, -1;
   if (operation->pending) {
-    const int wait = WaitConnectEvent(operation, operation->overlap.hEvent, operation->deadline);
+    const int wait = WaitConnectEvent(operation->overlap.hEvent, operation->deadline);
     // Linux's SO_SNDTIMEO returns EINPROGRESS and leaves the attempt alive.
     if (wait != 0) return errno = wait > 0 ? EINPROGRESS : EIO, -1;
   }
-  std::lock_guard<std::mutex> lock(operation->description->error_mutex);
-  FinishConnect(operation);
-  if (operation->description->connect_generation == operation->generation) operation->description->connect_error = 0;
-  return operation->result == 0 ? 0 : (errno = operation->result, -1);
+  for (;;) {
+    {
+      std::lock_guard<std::mutex> lock(operation->description->error_mutex);
+      FinishConnect(operation);
+      if (operation->finished) {
+        if (operation->description->connect_generation == operation->generation) operation->description->connect_error = 0;
+        return operation->result == 0 ? 0 : (errno = operation->result, -1);
+      }
+    }
+    pthread_testcancel();
+    if (operation->deadline != ~ULONGLONG{0} && MonotonicMicros() >= operation->deadline) return errno = EINPROGRESS, -1;
+    Sleep(1);  // wait for close publication without spinning on its signaled I/O event
+  }
 }
 
 int Listen(Socket s, int backlog) {
@@ -950,7 +981,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
       RefreshConnect(entries[i].description);
       std::lock_guard<std::mutex> lock(entries[i].description->error_mutex);
       owned_pending[i] = entries[i].description->connect_operation != nullptr;
-      closed[i] = entries[i].description->native_closed;
+      closed[i] = entries[i].description->native_closed || entries[i].description->native_closing;
       has_owned_pending |= owned_pending[i];
     }
     fds[i].fd = static_cast<SOCKET>(entries[i].socket);
@@ -959,6 +990,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
     fds[i].events = static_cast<SHORT>(((entries[i].events & kPollIn) != 0 ? POLLRDNORM : 0) |
                                        ((entries[i].events & kPollOut) != 0 ? POLLWRNORM : 0) |
                                        ((entries[i].events & kPollPri) != 0 ? POLLRDBAND : 0));
+    if (closed[i]) { fds[i].revents = POLLNVAL; continue; }
     // Windows gates failed-connect ERR/HUP on normal interest, even though
     // those errors are unconditional in Linux poll. Arm write interest only
     // for connecting, non-listening streams. Connected writable sockets and
@@ -1014,7 +1046,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
       RefreshConnect(entries[i].description);
       auto& description = *entries[i].description;
       std::lock_guard<std::mutex> lock(description.error_mutex);
-      if (description.native_closed) r = POLLNVAL;
+      if (description.native_closed || description.native_closing) r = POLLNVAL;
       else if (description.tcp && description.refusal_generation != 0 &&
                description.refusal_generation == description.connect_generation &&
                description.connect_result == ECONNREFUSED &&

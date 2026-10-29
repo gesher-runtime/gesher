@@ -439,3 +439,38 @@ to receive104, then consume it. They do not weaken the separate pre-receive
 SO_ERROR104 assertion. All previous Linux/UDP/alias/last-close controls remain.
 Source, cancellation, timeout, module and all three actual product contexts are
 still pending; no product CI or qualification has occurred for this checkpoint.
+
+Linux-only18df54eb/409094 is actual GREEN. A real zero-backlog listener and
+accepted-queue filler prove a pending kernel attempt. SO_SNDTIMEO60ms returns
+EINPROGRESS at62ms with poll0/error0; the SAME socket completes with writable4,
+error0 and payload at1045ms. Deferred pthread cancellation really exits the
+blocked caller with PTHREAD_CANCELED, but leaves its socket pending/error0;
+the SAME attempt later completes and carries payload at1024ms. Both mode
+transitions preserve the original call behavior and later transport. Full
+original Linux inline/noninline reference remains GREEN. Raw actual log:
+`C:/work/gesher-ci-review/tcp-409094-linux.log`.
+
+This disproves9bed's targeted CancelIoEx on caller cancellation. The new local
+revision removes that cancellation; only last descriptor close cancels native
+I/O. HOST now requires the later actual refusal111 after canceled waiter or
+send timeout, then real owning pthread and reaper exit. A read-only WinSDK
+handle/thread census compares repeated operations after every retained object
+is released; private census/retirement/observer helpers are forbidden exports.
+The census and cancellation paths still need actual MinGW execution.
+
+All socket poll samples now use the original deadline in10ms slices, with exact
+fd-to-description validation after each. A new private immutable dependency
+pauses the REAL production poll after its snapshots, allowing controlled last
+close/reuse and dup2 replacement with a surviving alias plus simultaneous UDP
+readiness. The required result rejects the stale identity as NVAL while counting
+every other ready entry, preserves urgent bytes on old/replacement transports,
+and retains the original timeout. Count-zero finite poll is separately retained.
+The public poll path uses the same implementation with a null observer.
+
+Finite polling also must not wait for SO_LINGER while refreshing metadata.
+Native close now publishes a short closing state, performs closesocket without
+holding the description mutex, then publishes its result. Pending native context
+remains owned while close is active; no query can use a recycled SOCKET. The
+owner/caller waits without spinning until actual completion and close publication.
+Legacy/AF_UNSPEC raw-call close/reuse ordering is still a source-review BLOCKER;
+no source pass or product publication is implied by these corrections.

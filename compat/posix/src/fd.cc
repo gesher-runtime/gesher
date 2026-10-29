@@ -362,7 +362,7 @@ bool PollFile(pollfd* p) {
 
 namespace gesher {
 
-int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted) {
+static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted, PollObserver observer, void* context) {
   ULONGLONG deadline = gesher::DeadlineAfter(timeout);
   std::vector<ws::PollEntry> sockets;
   std::vector<nfds_t> socket_index;
@@ -389,6 +389,7 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
       waiting_files = true;
     }
   }
+  if (observer) observer(context);  // real snapshots held; no descriptor/table lock
   auto count_ready = [&] {
     int n = 0;
     for (nfds_t i = 0; i < nfds; ++i) n += fds[i].fd >= 0 && fds[i].revents != 0;
@@ -399,11 +400,12 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
   if (interrupted == nullptr) interrupted = &unused;
   *interrupted = false;
 
-  // Eventfds and `interrupt` are Win32 events, waited for together with the
-  // real timeout. Pipes have no wait handle and WSAPoll takes only sockets,
-  // so with pipes, or with sockets and events, every source is checked in
-  // 10 ms slices.
-  bool sliced = waiting_files || (!sockets.empty() && (!eventfds.empty() || interrupt != nullptr));
+  // Eventfds and `interrupt` are Win32 events, waited for together. Pipes have
+  // no wait handle; sockets need bounded identity revalidation. All slices
+  // retain the one caller deadline rather than restarting its timeout.
+  // Socket numbers may be closed/reused while waiting. Bound every native
+  // sample, then revalidate the exact description before delivering readiness.
+  bool sliced = waiting_files || !sockets.empty();
   std::vector<HANDLE> handles;
   for (;;) {
     int wait_ms = 0;  // with something ready, only collect what the rest has
@@ -486,6 +488,15 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
       return ready;
     }
   }
+}
+
+int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted) {
+  return PollFdsImpl(fds, nfds, timeout, interrupt, interrupted, nullptr, nullptr);
+}
+
+int PollWithObserver(void* records, size_t count, int timeout_ms, PollObserver observer, void* context) {
+  if (static_cast<size_t>(static_cast<nfds_t>(count)) != count) return errno = EINVAL, -1;
+  return PollFdsImpl(static_cast<pollfd*>(records), static_cast<nfds_t>(count), timeout_ms, nullptr, nullptr, observer, context);
 }
 
 }  // namespace gesher
