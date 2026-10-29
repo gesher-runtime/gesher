@@ -88,7 +88,7 @@ public static class TsfJobSupervisor {
     public int OwnedHandles, ClosedHandles;
     public List<string> Errors=new List<string>();
     public List<Identity> Processes=new List<Identity>();
-    public uint DescendantPid;
+    public uint DescendantPid, ConsoleChangedPid;
     public long StdoutBytes, StderrBytes, CapturedBytes;
     public bool ControlStarted, DescendantSuspended, RetainedWriterReady, WritersRetired, ExclusiveSnapshot, LimitChildRan;
     public bool Success { get { return Reason=="exit" && ExitCode==0 && RootSignaled && JobEmpty && OutputRead && Errors.Count==0 && OwnedHandles==ClosedHandles; } }
@@ -174,11 +174,11 @@ public static class TsfJobSupervisor {
     for(int i=0;i<count;i++) if(processes[i]==GetCurrentProcessId()) return true;
     return false;
   }
-  static string ConsoleMembers(bool invalid,uint requiredPid) {
+  static string ConsoleMembers(bool invalid,uint requiredPid,uint ignorePid) {
     uint[] processes=new uint[256]; uint count=GetConsoleProcessList(processes,invalid?0u:(uint)processes.Length);
     if(count==0 || count>processes.Length) throw new IOException("Console process list unavailable");
     Array.Sort(processes,0,(int)count); bool found=false; var ids=new StringBuilder();
-    for(int i=0;i<count;i++) { if(processes[i]==requiredPid) found=true; ids.Append(processes[i]).Append(','); }
+    for(int i=0;i<count;i++) { if(processes[i]==requiredPid) found=true; if(processes[i]!=ignorePid) ids.Append(processes[i]).Append(','); }
     if(!found) throw new IOException("Console membership missing");
     return ids.ToString();
   }
@@ -256,7 +256,7 @@ public static class TsfJobSupervisor {
     if(mainMs<1 || mainMs>45000 || (fault!="" && fault!="terminate-denied" && fault!="query-denied" && fault!="console-invalid" && fault!="console-missing" && fault!="console-changed" && fault!="diag-detached-unlimited" && fault!="diag-console-limited" && fault!="diag-console-unlimited" && fault!="diag-inherit-limited" && fault!="diag-inherit-unlimited")) throw new ArgumentException();
     Result r=new Result(); var owned=new List<IntPtr>();
     IntPtr job=IntPtr.Zero,query=IntPtr.Zero,denied=IntPtr.Zero,root=IntPtr.Zero,thread=IntPtr.Zero;
-    IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero;
+    IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero,changedProcess=IntPtr.Zero,changedThread=IntPtr.Zero;
     bool attrsReady=false; string dir=null,stdout=null,stderr=null,protocol=null; bool created=false;
     bool race=arguments=="race";
     bool limited=arguments=="limit";
@@ -300,7 +300,7 @@ public static class TsfJobSupervisor {
       if(fault=="diag-inherit-limited" || fault=="diag-inherit-unlimited") creation=0x00080004u;
       if(production) creation=0x00080004u;
       string console=null;
-      if(production) console=ConsoleMembers(fault=="console-invalid",fault=="console-missing"?0u:GetCurrentProcessId());
+      if(production) console=ConsoleMembers(fault=="console-invalid",fault=="console-missing"?0u:GetCurrentProcessId(),0);
       if((fault=="diag-inherit-limited" || fault=="diag-inherit-unlimited") && !TestParentConsole()) throw new IOException("Inherited console missing before creation");
       Check(CreateProcess(executable,new StringBuilder("\""+executable+"\" "+arguments),IntPtr.Zero,IntPtr.Zero,true,creation,IntPtr.Zero,Path.GetDirectoryName(executable),ref start,out pi),"Create suspended child");
       root=own(pi.process); thread=own(pi.thread); created=true; r.Pid=pi.pid; r.RootHandleValue=root.ToInt64();
@@ -320,8 +320,18 @@ public static class TsfJobSupervisor {
       rootIdentity.Member=member;
       Accounting before=Count(job); r.PreResumeActive=before.active; if(!member || before.active!=1 || before.total!=1) throw new InvalidOperationException("Pre-resume job census failed");
       if((fault=="diag-inherit-limited" || fault=="diag-inherit-unlimited") && !TestParentConsole()) throw new IOException("Inherited console precondition unproved");
-      if(fault=="console-changed") console+="0,"; // CI-only changed-snapshot fault.
-      if(production && console!=ConsoleMembers(false,GetCurrentProcessId())) throw new IOException("Console membership changed before resume");
+      if(fault=="console-changed") {
+        SI changeStart=new SI(); changeStart.size=Marshal.SizeOf(typeof(SI)); PI change;
+        Check(CreateProcessSimple(executable,new StringBuilder("\""+executable+"\" race-writer \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,false,0,IntPtr.Zero,null,ref changeStart,out change),"Create console change control");
+        r.ConsoleChangedPid=change.pid;
+        changedProcess=own(change.process); changedThread=own(change.thread);
+        var barrier=Stopwatch.StartNew();
+        while(!( ","+ConsoleMembers(false,GetCurrentProcessId(),r.Pid)).Contains(","+change.pid+",")) {
+          if(barrier.ElapsedMilliseconds>=5000 || WaitForSingleObject(changedProcess,0)!=WAIT_TIMEOUT) throw new IOException("Console change control did not attach");
+          Thread.Sleep(10);
+        }
+      }
+      if(production && console!=ConsoleMembers(false,GetCurrentProcessId(),r.Pid)) throw new IOException("Console membership changed before resume");
       if(ResumeThread(thread)!=1) throw Native("Resume exactly one suspension");
       while(true) {
         long remaining=mainMs-main.ElapsedMilliseconds;
@@ -379,6 +389,15 @@ public static class TsfJobSupervisor {
     } catch(Exception ex) { r.Errors.Add(ex.Message); r.Reason="controller-error"; }
     finally {
       r.MainMilliseconds=main.ElapsedMilliseconds; cleanup=Stopwatch.StartNew();
+      if(Valid(changedProcess)) {
+        if(!TerminateProcess(changedProcess,124)) r.Errors.Add(Native("Terminate console change control").Message);
+        if(WaitForSingleObject(changedProcess,5000)!=WAIT_OBJECT_0) {
+          r.Errors.Add("Console change control retirement unproved");
+          lock(QuarantinedTestProcesses) { QuarantinedTestProcesses.Add(changedProcess); QuarantinedTestProcesses.Add(changedThread); }
+          owned[owned.IndexOf(changedProcess)]=IntPtr.Zero; owned[owned.IndexOf(changedThread)]=IntPtr.Zero;
+        }
+        else { CloseOwned(owned,changedThread,r); CloseOwned(owned,changedProcess,r); }
+      }
       // One absolute cleanup budget. No stage receives a reset or an unbounded wait.
       if(created) {
         try {

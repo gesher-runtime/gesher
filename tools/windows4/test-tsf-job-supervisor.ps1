@@ -55,8 +55,8 @@ try {
   foreach ($fault in @('console-invalid','console-missing','console-changed')) {
     $r = [TsfJobSupervisor]::Run($worker, 'limit', 1500, $fault)
     $expected = switch ($fault) { 'console-invalid' { 'Console process list unavailable' }; 'console-missing' { 'Console membership missing' }; default { 'Console membership changed before resume' } }
-    if ($r.Success -or $r.Reason -cne 'controller-error' -or $r.Errors.Count -lt 1 -or $r.Errors[0] -cne $expected -or $r.ControlStarted -or $r.OutputRead -or $r.OwnedHandles -ne $r.ClosedHandles) { throw "Console negative control failed: $fault" }
-    if ($fault -eq 'console-changed' -and (-not $r.Assigned -or -not $r.RootSignaled -or -not $r.JobEmpty -or $r.TotalProcesses -ne 1)) { throw 'Suspended root was not reaped after changed membership' }
+    if ($r.Success -or $r.Reason -cne 'controller-error' -or $r.Errors.Count -ne 1 -or $r.Errors[0] -cne $expected -or $r.ControlStarted -or $r.OutputRead -or $r.OwnedHandles -ne $r.ClosedHandles -or $r.CleanupMilliseconds -ge 5000) { throw "Console negative control failed: $fault" }
+    if ($fault -eq 'console-changed' -and ($r.ConsoleChangedPid -eq 0 -or -not $r.Assigned -or -not $r.RootSignaled -or -not $r.JobEmpty -or $r.TotalProcesses -ne 1)) { throw 'Real console change or suspended root retirement unproved' }
     Write-Host "TSF_CONSOLE_NEGATIVE case=$fault rejected=true handles_closed=true"
   }
   foreach ($case in @('normal','exit23','hang','descendant','race','unknown','orphan','limit','output','terminate-denied','query-denied')) {
