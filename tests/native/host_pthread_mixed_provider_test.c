@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <wchar.h>
+#include <errno.h>
 #include <windows.h>
 
 typedef pthread_t (__cdecl *self_fn)(void);
@@ -65,17 +66,21 @@ int main(void) {
   uint64_t a_ticks=(uint64_t)a.tv_sec*10000000+(uint64_t)a.tv_nsec/100;
   uint64_t b_ticks=(uint64_t)b.tv_sec*10000000+(uint64_t)b.tv_nsec/100;
   if (main_before==UINT64_MAX || worker_before==UINT64_MAX || main_after==UINT64_MAX || worker_after==UINT64_MAX ||
-      a_ticks<main_before || a_ticks>main_after || b_ticks<worker_before || b_ticks>worker_after) return 14;
+      a_ticks<worker_before || a_ticks>worker_after || b_ticks<main_before || b_ticks>main_after) return 14;
   printf("MIXED_PROVIDER static=%ld dll=%ld same=%d main_tid=%lu worker_tid=%lu static_ticks=%llu dll_ticks=%llu\n",
          (long)local, (long)remote, local == remote, GetCurrentThreadId(), GetThreadId(thread),
          (unsigned long long)a_ticks, (unsigned long long)b_ticks);
-  /* This characterizes the known collision; it does not qualify the provider. */
-  if (local != remote) return 5;
+  if (local == remote) return 5;
   if (!SetEvent(release) || WaitForSingleObject(thread, 5000) != WAIT_OBJECT_0) return 9;
   DWORD status;
   if (!GetExitCodeThread(thread, &status) || status || !CloseHandle(thread) ||
       !CloseHandle(ready) || !CloseHandle(release)) return 10;
+  a.tv_sec=123; a.tv_nsec=456; errno=0;
+  if (clock_gettime(remote, &a)!=-1 || errno!=EINVAL || a.tv_sec!=123 || a.tv_nsec!=456) return 17;
   if (!FreeLibrary(module)) return 6;
-  puts("OBSERVED independent static and DLL namespaces issue the same ID");
+  if (GetModuleHandleW(L"libwinpthread-1.dll") != NULL || clock_gettime(local, &a)) return 16;
+  a.tv_sec=123; a.tv_nsec=456; errno=0;
+  if (clock_gettime(remote, &a)!=-1 || errno!=EINVAL || a.tv_sec!=123 || a.tv_nsec!=456) return 18;
+  puts("PASS shared process clock registry cross-module identity and owner survives DLL unload");
   return 0;
 }

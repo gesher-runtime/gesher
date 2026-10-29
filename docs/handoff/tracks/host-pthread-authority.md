@@ -19,6 +19,13 @@ typedef without relaxing warnings. A single authority for clock IDs and a
 separate analysis of cross-provider pthread_t acquisition remain mandatory;
 preserve the static executable contract and test unload/retirement. No host
 product, integration, package or guest ABI acceptance follows from this run.
+Diagnostic 40911784373 at ace7a6ce additionally observed both providers issue
+pthread_t 1 to different live targets and cross-provider acquisition picks
+the wrong local target. The next source-only prototype routes clock registration
+and reads to an executable export, preserving a self-contained host; a DLL-only
+fallback pins its provider. It does not address the independent pthread_t alias
+or every missing-anchor topology, and has no peer or actual build/CI evidence.
+It must not be treated as a completed public-provider fix.
 
 Initial component run40801790244/attempt1 at exact
 67e4f27486f6a63a8becb1c518c02b6b6afac02f passed its compile and both Windows

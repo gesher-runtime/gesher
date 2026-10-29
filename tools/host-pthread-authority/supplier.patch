@@ -250,7 +250,7 @@
  /* internal header files */
  #include "misc.h"
  
-@@ -38,6 +40,82 @@
+@@ -38,6 +40,110 @@
          return -1;
      }
      return 0;
@@ -273,32 +273,29 @@
 +        }
 +}
 +
-+int pthread_getcpuclockid(pthread_t thread, clockid_t *out)
++__declspec(dllexport) int __cdecl gesher_clock_register_v1(HANDLE owned, clockid_t *out)
 +{
-+    void *owned = NULL;
-+    unsigned long long generation = 0;
 +    unsigned i;
 +    int result;
-+    if (!out) return EINVAL;
-+    (void)pthread_self();
-+    result = gesher_winpthread_dup_cpu_handle_v1(thread, &owned, &generation);
-+    if (result) return result;
++    DWORD tid = GetThreadId(owned);
++    if (!tid) { CloseHandle(owned); return EAGAIN; }
 +    AcquireSRWLockExclusive(&cpu_clock_lock);
 +    if (WaitForSingleObject(owned, 0) != WAIT_TIMEOUT) {
 +        CloseHandle(owned); cpu_clock_reap(); result = ESRCH; goto done;
 +    }
++    cpu_clock_reap();
 +    for (i = 0; i < 256; ++i)
-+        if (cpu_clock_slots[i].handle && cpu_clock_slots[i].generation == generation) {
++        if (cpu_clock_slots[i].handle && WaitForSingleObject(cpu_clock_slots[i].handle, 0) == WAIT_TIMEOUT &&
++            GetThreadId(cpu_clock_slots[i].handle) == tid) {
 +            CloseHandle(owned); *out = cpu_clock_slots[i].id; result = 0; goto done;
 +        }
-+    cpu_clock_reap();
 +    if (WaitForSingleObject(owned, 0) != WAIT_TIMEOUT) {
 +        CloseHandle(owned); result = ESRCH; goto done;
 +    }
 +    if (cpu_clock_next >= INT_MIN)
 +        for (i = 0; i < 256; ++i)
 +            if (!cpu_clock_slots[i].handle) {
-+                cpu_clock_slots[i] = (cpu_clock_slot){owned, generation, (clockid_t)cpu_clock_next--};
++                cpu_clock_slots[i] = (cpu_clock_slot){owned, 0, (clockid_t)cpu_clock_next--};
 +                *out = cpu_clock_slots[i].id; result = 0; goto done;
 +            }
 +    CloseHandle(owned); result = EAGAIN;
@@ -307,7 +304,7 @@
 +    return result;
 +}
 +
-+static int cpu_clock_read(clockid_t id, struct _timespec64 *out, int resolution)
++__declspec(dllexport) int __cdecl gesher_clock_read_v1(clockid_t id, struct _timespec64 *out, int resolution)
 +{
 +    unsigned i;
 +    int result = EINVAL;
@@ -330,6 +327,37 @@
 +    }
 +    ReleaseSRWLockExclusive(&cpu_clock_lock);
 +    return lc_set_errno(result);
++}
++
++typedef int (__cdecl *clock_register_fn)(HANDLE, clockid_t *);
++typedef int (__cdecl *clock_read_fn)(clockid_t, struct _timespec64 *, int);
++static FARPROC clock_anchor(const char *name, FARPROC local)
++{
++    HMODULE host = GetModuleHandleW(NULL), pinned = NULL;
++    FARPROC function = host ? GetProcAddress(host, name) : NULL;
++    if (function) return function;
++    /* DLL-only hosts retain their authority for the life of the process. */
++    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
++                            (LPCWSTR)local, &pinned)) return NULL;
++    return local;
++}
++int pthread_getcpuclockid(pthread_t thread, clockid_t *out)
++{
++    void *owned = NULL;
++    unsigned long long generation = 0;
++    int result;
++    if (!out) return EINVAL;
++    (void)pthread_self();
++    result = gesher_winpthread_dup_cpu_handle_v1(thread, &owned, &generation);
++    if (result) return result;
++    clock_register_fn register_clock = (clock_register_fn)clock_anchor("gesher_clock_register_v1", (FARPROC)gesher_clock_register_v1);
++    if (!register_clock) { CloseHandle(owned); return EAGAIN; }
++    return register_clock((HANDLE)owned, out);
++}
++static int cpu_clock_read(clockid_t id, struct _timespec64 *out, int resolution)
++{
++    clock_read_fn read_clock = (clock_read_fn)clock_anchor("gesher_clock_read_v1", (FARPROC)gesher_clock_read_v1);
++    return read_clock ? read_clock(id, out, resolution) : lc_set_errno(EINVAL);
  }
  
  /**
