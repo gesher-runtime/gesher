@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -132,7 +133,7 @@ bool Video(Extractor* extractor, size_t track, const Format& format, const std::
   return ok;
 }
 
-bool Audio(Extractor* extractor, size_t track, const Format& format, double frequency, const std::string& path) {
+bool Audio(Extractor* extractor, size_t track, const Format& format, double frequency, const std::string& path, bool short_audio) {
   std::string error;
   auto decoder = AudioDecoder::Create(format, &error);
   auto reader = extractor->OpenTrack(track);
@@ -156,7 +157,7 @@ bool Audio(Extractor* extractor, size_t track, const Format& format, double freq
   const size_t bytes = BytesPerSample(info.format);
   const size_t stride = bytes * info.channels;
   const size_t frames = pcm.size() / stride;
-  if (pcm.size() % stride != 0 || frames < info.rate * 19 / 10 || frames > info.rate * 21 / 10) {
+  if (pcm.size() % stride != 0 || frames < info.rate * (short_audio ? 8 : 19) / 10 || frames > info.rate * (short_audio ? 12 : 21) / 10) {
     std::printf("audio duration failure: %s; rate %u channels %u frames %zu bytes %zu stride %zu\n",
         path.c_str(), info.rate, info.channels, frames, pcm.size(), stride);
     return false;
@@ -188,8 +189,95 @@ bool Audio(Extractor* extractor, size_t track, const Format& format, double freq
   return std::fabs(measured - frequency) <= frequency * 0.02 && rms > 0.1;
 }
 
+// The independently generated input contains the exact source packet bytes and
+// timestamps. Compare actual extractor samples, including the tail emitted by Stop.
+uint64_t Little(std::istream& in, size_t n) {
+  uint64_t result = 0;
+  for (size_t i = 0; i < n; ++i) {
+    const int c = in.get();
+    if (c == EOF) { in.setstate(std::ios::failbit); return 0; }
+    result |= static_cast<uint64_t>(c) << (8 * i);
+  }
+  return result;
+}
+std::vector<uint8_t> Blob(std::istream& in) {
+  const auto size = Little(in, 4);
+  if (size > 16 * 1024 * 1024) { in.setstate(std::ios::failbit); return {}; }
+  std::vector<uint8_t> data(static_cast<size_t>(size));
+  in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));
+  return data;
+}
+struct ExpectedSample { int64_t time; std::vector<uint8_t> data; };
+bool PacketOracle(const std::string& fixture, const std::string& output, bool short_audio) {
+  std::ifstream in(fixture, std::ios::binary);
+  char magic[8] = {};
+  in.read(magic, 8);
+  if (!in || std::memcmp(magic, "GSMUX001", 8) != 0 || Little(in, 4) != 2) return false;
+  std::array<bool, 2> audio = {};
+  for (size_t track = 0; track < 2; ++track) {
+    const auto fields = Little(in, 4);
+    if (fields > 32) return false;
+    for (size_t j = 0; j < fields; ++j) {
+      const auto key = Blob(in); Little(in, 4); const auto value = Blob(in);
+      if (std::string(key.begin(), key.end()) == "mime")
+        audio[track] = std::string(value.begin(), value.end()).find("audio/") == 0;
+    }
+  }
+  if (audio[0] == audio[1]) return false;
+  std::array<std::vector<ExpectedSample>, 2> expected;
+  const auto count = Little(in, 4);
+  if (count > 5000) return false;
+  for (size_t i = 0; i < count; ++i) {
+    const auto track = Little(in, 4); const auto time = Little(in, 8); Little(in, 4);
+    auto bytes = Blob(in);
+    if (!in || track >= 2 || time > INT64_MAX) return false;
+    if (!short_audio || !audio[track] || time < 1000000)
+      expected[track].push_back({static_cast<int64_t>(time), std::move(bytes)});
+  }
+  std::string error;
+  auto source = OpenFileSource(output, &error);
+  auto extractor = source ? Extractor::Open(std::move(source), &error) : nullptr;
+  if (!extractor || extractor->TrackCount() != 2 || expected[0].empty() || expected[1].empty()) return false;
+  const int64_t base = std::min(expected[0][0].time, expected[1][0].time);
+  bool ok = true;
+  for (size_t track = 0; track < 2; ++track) {
+    auto reader = extractor->OpenTrack(track);
+    if (!reader) return false;
+    Sample sample;
+    size_t index = 0;
+    while (reader->Read(&sample) == 0) {
+      if (index >= expected[track].size()) { ok = false; break; }
+      const auto& e = expected[track][index++];
+      if (sample.data != e.data || std::llabs(sample.time_us - (e.time - base)) > 1000) {
+        std::printf("webm packet mismatch %s track %zu sample %zu actual %lld expected %lld bytes %zu/%zu\n",
+            output.c_str(), track, index, static_cast<long long>(sample.time_us),
+            static_cast<long long>(e.time - base), sample.data.size(), e.data.size());
+        ok = false;
+      }
+    }
+    ok = ok && index == expected[track].size();
+    std::printf("webm packet trace %s track %zu read %zu expected %zu\n", output.c_str(), track, index, expected[track].size());
+    reader.reset();
+    if (!audio[track]) {
+      auto seek_reader = extractor->OpenTrack(track);
+      Format format = extractor->TrackFormat(track);
+      auto decoder = CreateSoftVideoDecoder(format, &error);
+      Sample seek_sample;
+      const int seek_status = seek_reader ? seek_reader->Read(&seek_sample, 1000000, SeekMode::kPreviousSync) : -1;
+      std::vector<VideoFrame> frames;
+      const bool seek_ok = seek_status == 0 && seek_sample.sync && seek_sample.time_us <= 1000000 &&
+          decoder && decoder->Decode(seek_sample, &frames);
+      if (decoder) decoder->Drain(&frames);
+      ok = ok && seek_ok && !frames.empty();
+      std::printf("webm seek trace %s status %d sync %d time %lld decoded %zu\n", output.c_str(),
+          seek_status, seek_sample.sync, static_cast<long long>(seek_sample.time_us), frames.size());
+    }
+  }
+  return ok;
+}
+
 void Verify(const std::string& path, const std::string& video_mime, const std::string& audio_mime,
-            double frequency, bool mp4) {
+            double frequency, bool mp4, bool short_audio = false) {
   std::string error;
   auto source = OpenFileSource(path, &error);
   auto extractor = source ? Extractor::Open(std::move(source), &error) : nullptr;
@@ -205,7 +293,7 @@ void Verify(const std::string& path, const std::string& video_mime, const std::s
       ok = Video(extractor.get(), i, format, path) && ok;
     } else if (mime == audio_mime) {
       ++audio;
-      ok = Audio(extractor.get(), i, format, frequency, path) && ok;
+      ok = Audio(extractor.get(), i, format, frequency, path, short_audio) && ok;
     } else { ok = false; }
   }
   if (mp4) ok = Mp4Metadata(path) && ok;
@@ -218,7 +306,7 @@ void Verify(const std::string& path, const std::string& video_mime, const std::s
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 2) return 2;
+  if (argc != 3) return 2;
   const std::string root = argv[1];
   struct Case { const char* stem; const char* extension; const char* video; const char* audio; double hz; bool mp4; };
   const Case cases[] = {{"h264-aac", "mp4", "video/avc", "audio/mp4a-latm", 1661, true},
@@ -231,6 +319,16 @@ int main(int argc, char** argv) {
       if (std::strcmp(test.extension, "ogg") == 0 && std::strcmp(order, "blocked") == 0) continue;
       Verify(root + "/" + test.stem + "-" + order + "." + test.extension,
           test.video, test.audio, test.hz, test.mp4);
+    }
+  }
+  for (const auto& test : cases) {
+    if (std::strcmp(test.extension, "webm") != 0) continue;
+    for (const char* order : {"interleaved", "blocked", "short-interleaved", "short-blocked"}) {
+      const bool short_audio = std::strncmp(order, "short-", 6) == 0;
+      const std::string path = root + "/" + test.stem + "-" + order + ".webm";
+      if (short_audio) Verify(path, test.video, test.audio, test.hz, false, true);
+      Check(PacketOracle(std::string(argv[2]) + "/" + test.stem + ".bin", path, short_audio),
+          "webm-input-packets-pts " + path);
     }
   }
   Verify(root + "/h264-aac-delete-active.mp4", "video/avc", "audio/mp4a-latm", 1661, true);
