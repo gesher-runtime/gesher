@@ -3,6 +3,14 @@
 # compression, errors and a PNG round trip through Java BitmapFactory.
 # 44-native2.ps1 supplies N2Run, the ABI list and APK checks in both modes.
 
+foreach ($fontAbi in $abis) {
+  $fontBin = Join-Path $n2 $fontAbi.Abi
+  $fontOutput = N2Run "$n2Dir/gesher-exec.exe" @('--elf', "$fontBin/fonts_standalone", 'fonts_standalone', (NoDrive "$root/system")) (Get-Location).Path @{ LD_LIBRARY_PATH = (NoDrive $fontBin) } 120 | Out-String
+  $fontExit = $LASTEXITCODE
+  Write-Host "INFO  standalone fonts ($($fontAbi.Tag)): exit=$fontExit $fontOutput"
+  if ($fontExit -ne 0) { Write-Host "FAIL  standalone fonts ($($fontAbi.Tag)): unavailable or failed"; $failed++ }
+}
+
 if (-not (Test-Path "$n2/native2-test.dex")) {
   Write-Host 'FAIL  native3: the native test artifact is missing'
   $failed++

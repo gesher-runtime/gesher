@@ -132,6 +132,7 @@ jobs:
               -Wl,-soname,libnet4resolver.so -o "$o/libnet4resolver.so" tests/native2/net4_resolver_jni.cpp
             "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Werror \
               -o "$o/net4_resolver_test" tests/native2/net4_resolver_main.cpp
+            "$llvm/bin/${triple}29-clang" -O2 -Wall -Werror -o "$o/fonts_standalone" tests/native2/fonts_standalone.c -ldl
             echo "--- $abi libnative2.so: needed"
             "$llvm/bin/llvm-readelf" -d "$o/libnative2.so" | grep NEEDED
           done
