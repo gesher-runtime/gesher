@@ -5,6 +5,7 @@ on:
     branches: [wip/net-dns-wire]
     paths:
       - '.github/workflows/net-dns-component.yml'
+      - 'tools/net-dns-component/source.json'
 permissions:
   contents: read
   actions: read
