@@ -98,10 +98,11 @@ function Import-GeocoderProbeType([string] $Source) {
   $sourcePath = [IO.Path]::GetFullPath($Source)
   $entry = @($receipt.Sources | Where-Object { $_.Path -ceq $sourcePath })
   if ($entry.Count -ne 1 -or $entry[0].Sha256 -cne (Get-GeocoderSourceSha256 $sourcePath)) { throw 'Compiled helper source mismatch' }
-  foreach ($dependency in @($receipt.Sources) + @($receipt.References)) {
+  foreach ($dependency in @($receipt.Sources) + @($receipt.References) + @($receipt.Compilers)) {
     if ((Get-GeocoderSourceSha256 $dependency.Path) -cne $dependency.Sha256) { throw 'Compiled helper input mismatch' }
   }
   if ((Get-GeocoderSourceSha256 $receipt.Compiler) -cne $receipt.CompilerSha256 -or [Diagnostics.FileVersionInfo]::GetVersionInfo($receipt.Compiler).FileVersion -cne $receipt.CompilerVersion) { throw 'Compiled helper compiler mismatch' }
+  if ((Get-GeocoderSourceSha256 $receipt.Worker) -cne $receipt.WorkerSha256 -or $receipt.Compilers.Count -ne 2) { throw 'Compiled helper Roslyn worker mismatch' }
   # Hash and load the SAME byte array, avoiding a check/load file race.
   $bytes = [IO.File]::ReadAllBytes($receipt.Output)
   $hasher = [Security.Cryptography.SHA256]::Create()

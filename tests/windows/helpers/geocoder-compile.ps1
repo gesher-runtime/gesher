@@ -1,5 +1,5 @@
 # CI producer: compile tracked helpers before any real-runtime child starts.
-# The compiler is the owned job ROOT; runtime allowlists remain unchanged.
+# In-process pinned Roslyn runs in an owned pwsh ROOT; runtime rules are unchanged.
 function Assert-GeocoderOwnedJob($r, [string] $Executable, [string] $Role) {
   Write-Host ('WINRT_JOB_KERNEL_EVIDENCE role=' + $Role + ' ' + ($r | ConvertTo-Json -Depth 6 -Compress))
   if (-not $r.Success -or $r.Reason -cne 'exit' -or $r.ExitCode -ne 0 -or $r.Errors.Count -ne 0) { throw "WinRT $Role did not succeed" }
@@ -14,7 +14,18 @@ function New-GeocoderProbeAssembly {
   . (Join-Path $PSScriptRoot '../tracks/geocoder-operation.ps1')
   if (-not ('TsfJobSupervisor' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot '../../../tools/windows4/TsfJobSupervisor.cs') }
   $framework = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319'
-  $compiler = [IO.Path]::GetFullPath((Join-Path $framework 'csc.exe'))
+  if ($PSVersionTable.PSVersion.ToString() -cne '7.6.9') { throw 'Unpinned compiler host' }
+  $compiler = [IO.Path]::GetFullPath((Join-Path $PSHOME 'pwsh.exe'))
+  $pins = @{
+    'Microsoft.CodeAnalysis.dll' = 'e7a25cbdec95390e9672659872189da368032625d784c25569617617932c145f'
+    'Microsoft.CodeAnalysis.CSharp.dll' = '5e9323e98d99f669acd10705c40d985dbabeaf0984285ed32922f91df223124b'
+  }
+  $compilers = @($pins.Keys | Sort-Object | ForEach-Object {
+    $path = [IO.Path]::GetFullPath((Join-Path $PSHOME $_))
+    if ((Get-GeocoderSourceSha256 $path) -cne $pins[$_]) { throw "Unpinned Roslyn assembly: $_" }
+    @{ Path = $path; Sha256 = $pins[$_]; AssemblyName = [Reflection.AssemblyName]::GetAssemblyName($path).FullName }
+  })
+  $worker = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'geocoder-roslyn-worker.ps1'))
   $sources = @('geocoder-probe-exit.cs', 'geocoder-winrt-supplier.cs') | ForEach-Object {
     $path = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../tracks/$_"))
     @{ Path = $path; Sha256 = (Get-GeocoderSourceSha256 $path) }
@@ -27,27 +38,37 @@ function New-GeocoderProbeAssembly {
   $null = [IO.Directory]::CreateDirectory($directory)
   $script:geocoderCompiledDirectory = $directory
   $dll = Join-Path $directory 'GesherGeocoderProbes.dll'
-  $argv = @('/nologo', '/noconfig', '/nostdlib+', '/target:library', '/optimize+', ('/out:"' + $dll + '"'))
-  $argv += @($references | ForEach-Object { '/reference:"' + $_.Path + '"' })
-  $argv += @($sources | ForEach-Object { '"' + $_.Path + '"' })
+  $argv = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $worker + '"'))
   $receipt = @{
     Repository = $env:GITHUB_REPOSITORY; RunId = $env:GITHUB_RUN_ID; RunAttempt = $env:GITHUB_RUN_ATTEMPT; Role = 'geocoder-helper-compiler'
-    Producer = 'Direct compiler owned by TsfJobSupervisor'; PowerShell = $PSVersionTable.PSVersion.ToString(); Clr = [Environment]::Version.ToString()
-    SourceRevision = $env:GITHUB_SHA; Sources = @($sources); References = @($references)
+    Producer = 'Pinned in-process Roslyn in pwsh owned by TsfJobSupervisor'; PowerShell = $PSVersionTable.PSVersion.ToString(); Clr = [Environment]::Version.ToString()
+    SourceRevision = $env:GITHUB_SHA; Sources = @($sources); References = @($references); Compilers = $compilers
+    Worker = $worker; WorkerSha256 = (Get-GeocoderSourceSha256 $worker)
+    Options = 'CSharp5; NetFramework4; library; Release; AnyCpu; deterministic; no concurrent build; no native resources; 40000ms cancellation'
     Compiler = $compiler; CompilerSha256 = (Get-GeocoderSourceSha256 $compiler)
     CompilerVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($compiler).FileVersion
     Arguments = ($argv -join ' '); ArgumentVector = $argv; Output = $dll
     ReferenceContract = 'Explicit .NET Framework 4 references; helpers use no WinRT metadata. Runtime projects Windows.Services.Maps and System.Runtime.WindowsRuntime in Windows PowerShell 5.'
   }
   Write-Host ('WINRT_COMPILER_START ' + ($receipt | ConvertTo-Json -Depth 6 -Compress))
-  $compiled = [TsfJobSupervisor]::Run($compiler, $receipt.Arguments, 45000, '')
+  $inputPath = Join-Path $directory 'compile-input.json'
+  [IO.File]::WriteAllText($inputPath, ($receipt | ConvertTo-Json -Depth 6 -Compress))
+  $env:GESHER_GEOCODER_COMPILER_INPUT = $inputPath
+  $env:GESHER_GEOCODER_COMPILER_INPUT_SHA256 = Get-GeocoderSourceSha256 $inputPath
+  try { $compiled = [TsfJobSupervisor]::Run($compiler, $receipt.Arguments, 45000, '') }
+  finally {
+    $env:GESHER_GEOCODER_COMPILER_INPUT = $null
+    $env:GESHER_GEOCODER_COMPILER_INPUT_SHA256 = $null
+  }
   Assert-GeocoderOwnedJob $compiled $compiler 'compiler'
   Write-Host $compiled.Output
+  if ($compiled.Output -notmatch 'WINRT_ROSLYN_EMIT success=True external_compilers=False') { throw 'In-process compiler proof absent' }
   if (-not [IO.File]::Exists($dll)) { throw 'Compiler produced no DLL' }
-  foreach ($dependency in @($sources) + @($references)) {
+  foreach ($dependency in @($sources) + @($references) + @($compilers)) {
     if ((Get-GeocoderSourceSha256 $dependency.Path) -cne $dependency.Sha256) { throw 'Compiler input changed' }
   }
   if ((Get-GeocoderSourceSha256 $compiler) -cne $receipt.CompilerSha256) { throw 'Compiler changed' }
+  if ((Get-GeocoderSourceSha256 $worker) -cne $receipt.WorkerSha256) { throw 'Compiler worker changed' }
   $receipt.OutputSha256 = Get-GeocoderSourceSha256 $dll
   $json = $receipt | ConvertTo-Json -Depth 6 -Compress
   $manifest = Join-Path $directory 'receipt.json'
@@ -58,13 +79,14 @@ function New-GeocoderProbeAssembly {
 }
 
 function Remove-GeocoderProbeAssembly {
-  # Delete only the two files in the unique directory created by this producer.
+  # Delete only the three files in the unique directory created by this producer.
   # No recursive deletion and no process cleanup by PID.
   try {
   if ($script:geocoderCompiledDirectory) {
     $directory = [IO.Path]::GetFullPath($script:geocoderCompiledDirectory)
     $tempPrefix = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
     if (-not $directory.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($directory) -notmatch '^geocoder-compiled-[0-9a-f]{32}$') { throw 'Invalid producer cleanup path' }
+    [IO.File]::Delete((Join-Path $directory 'compile-input.json'))
     [IO.File]::Delete((Join-Path $directory 'receipt.json'))
     [IO.File]::Delete((Join-Path $directory 'GesherGeocoderProbes.dll'))
     [IO.Directory]::Delete($directory, $false)
