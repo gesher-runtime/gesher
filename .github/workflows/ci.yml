@@ -16,7 +16,7 @@ env:
 
 jobs:
   union-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/coherent-union-trusted-source.yml@fd664dab1e7aabfc4cc7bdddc3d92d3a01c257f4
+    uses: gesher-runtime/gesher/.github/workflows/coherent-union-trusted-source.yml@c9eb7842e8891307f339b2758f26aeb20ea53be1
   union-tsf:
     needs: [artifact-preflight]
     uses: ./.github/workflows/tsf-format-component.yml
