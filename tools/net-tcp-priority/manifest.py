@@ -62,7 +62,7 @@ for build, target, name, trace in (
     argv = shlex.split(links[0])
     assert compilers[build]['configured'] in argv and '-static' in argv and '-Wl,--verbose' in argv
     text = Path(trace).read_text()
-    inputs = {}
+    inspected = {}
     # COFF verbose mode logs the actual opened archive's full path, then
     # separately identifies loaded members by basename and required symbol.
     archives = re.findall(r'^.*?\bReading (\S*(?:libpthread|libwinpthread)\.a)\s*$', text, re.M)
@@ -71,16 +71,22 @@ for build, target, name, trace in (
         path = Path(archive)
         if not path.is_absolute():
             path = Path(build) / path
-        path = path.resolve(strict=True)
+        # Preserve the observed alias basename for Loaded-member correlation,
+        # while independently checking its final object stays in this prefix.
+        path = Path(os.path.abspath(path))
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(private_compiler / 'x86_64-w64-mingw32')
         relative = path.relative_to(private_compiler / 'x86_64-w64-mingw32').as_posix()
         assert relative in ('lib/libpthread.a', 'lib/libwinpthread.a'), (name, relative)
         assert sha(path) == supplier['libraries_after'][relative]
-        inputs[relative] = sha(path)
-    assert inputs or name == 'gesher_arm64.dll', (name, 'native static supplier never entered link')
-    assert loaded or name == 'gesher_arm64.dll', (name, 'no static supplier member loaded')
-    assert all(member.split('(', 1)[0] in {Path(p).name for p in inputs} for member, _ in loaded)
+        inspected[relative] = sha(path)
+    loaded_names = {member.split('(', 1)[0] for member, _ in loaded}
+    assert loaded_names <= {Path(p).name for p in inspected}
+    inputs = {relative: digest for relative, digest in inspected.items() if Path(relative).name in loaded_names}
+    assert inputs or name == 'gesher_arm64.dll', (name, 'no static supplier member loaded')
     native_links[name] = dict(command=links[0], trace_sha256=sha(trace),
                               supplier_role='static' if inputs else 'not-linked', inputs=inputs,
+                              inspected_archives=inspected,
                               loaded_members=[dict(member=member, symbol=symbol) for member, symbol in loaded])
 supplier['native_links'] = native_links
 print('TCP_PRIORITY_SUPPLIER_LINKS', json.dumps(native_links), flush=True)

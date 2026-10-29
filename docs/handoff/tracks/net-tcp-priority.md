@@ -856,3 +856,13 @@ Supplier success stdout is split into bounded summary/source/library/header/
 command/log rows while the FULL original receipt remains in the manifest.
 No runtime/source retirement/assertion/deadline or typed role gate is weakened.
 Actual option/format and all native runtime results remain fresh CI conditions.
+
+Independent peer refined the verbose-link classification: Reading an archive
+only proves inspection. Final roles now keep inspected_archives separately;
+static inputs are the inspected archives that have actual Loaded members.
+Loader/probe require loaded members; translator with none is not-linked even
+if its archive was inspected. Consumer checks this distinction in both
+directions and correlates each loaded member basename with a validated private
+archive. Observed alias spelling is retained for this correlation, while its
+resolved physical path is separately confined to the private prefix. No
+runtime assertion or source supplier patch changes with this correction.

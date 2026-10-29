@@ -116,13 +116,20 @@ foreach ($name in $native) {
   if ($link.trace_sha256 -cnotmatch '^[0-9a-f]{64}$' -or -not $link.command.Contains('-Wl,--verbose') -or -not $link.command.Contains('-static') -or
       -not $link.command.Contains($s.private_compiler + '/bin/x86_64-w64-mingw32-clang++')) { throw 'Missing actual private-supplier native link command/trace' }
   $inputs = @($link.inputs.PSObject.Properties)
+  foreach ($inspectedArchive in $link.inspected_archives.PSObject.Properties) {
+    if ($inspectedArchive.Name -cnotin @('lib/libpthread.a','lib/libwinpthread.a') -or $inspectedArchive.Value -cnotmatch '^[0-9a-f]{64}$' -or
+        $inspectedArchive.Value -cne $s.libraries_after.($inspectedArchive.Name)) { throw 'Wrong inspected supplier archive' }
+  }
   if ($link.supplier_role -ceq 'not-linked') {
-    if ($name -cne 'gesher_arm64.dll' -or $inputs.Count -ne 0) { throw 'Invalid no-supplier native role' }
+    if ($name -cne 'gesher_arm64.dll' -or $inputs.Count -ne 0 -or @($link.loaded_members).Count -ne 0) { throw 'Invalid no-supplier native role' }
   } elseif ($link.supplier_role -ceq 'static' -and $inputs.Count -gt 0) {
-    if ($name -cne 'gesher_arm64.dll' -and @($link.loaded_members).Count -eq 0) { throw 'Static supplier loaded-member proof missing' }
+    if (@($link.loaded_members).Count -eq 0) { throw 'Static supplier loaded-member proof missing' }
     foreach ($supplierInput in $inputs) {
       if ($supplierInput.Name -cnotin @('lib/libpthread.a','lib/libwinpthread.a') -or $supplierInput.Value -cnotmatch '^[0-9a-f]{64}$' -or
-          $supplierInput.Value -cne $s.libraries_after.($supplierInput.Name)) { throw 'Wrong static supplier link input' }
+          $supplierInput.Value -cne $s.libraries_after.($supplierInput.Name) -or
+          $supplierInput.Value -cne $link.inspected_archives.($supplierInput.Name)) { throw 'Wrong static supplier link input' }
+      $archiveName = $supplierInput.Name.Substring(4)
+      if (@($link.loaded_members | Where-Object { $_.member.StartsWith($archiveName + '(', [StringComparison]::Ordinal) }).Count -eq 0) { throw 'Static archive has no actual loaded member' }
     }
     foreach ($member in $link.loaded_members) {
       if ($member.member -cnotmatch '^(lib(?:win)?pthread\.a)\([a-zA-Z0-9_.-]+\)$' -or -not $member.symbol -or
