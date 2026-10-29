@@ -836,6 +836,9 @@ jobs:
             tools/package
             tools/windows4
             tools/net-udp
+            tools/net-udp-component
+            tools/net-dns
+            tools/net-dns-component
             probes/native3/unicode
 
       - name: Verify and assemble windows-x64 artifact

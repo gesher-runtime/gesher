@@ -123,6 +123,7 @@ void RegisterStdio(SymbolTable& table);    // stdio_bionic.cc
 void RegisterPthread(SymbolTable& table);  // pthread_bionic.cc
 void RegisterLocale(SymbolTable& table);   // locale_bionic.cc
 void RegisterPosix(SymbolTable& table);    // posix_bionic.cc
+void RegisterDnsWire(SymbolTable& table); // dns_wire.cc
 void RegisterSocket(SymbolTable& table);   // socket_bionic.cc
 void RegisterSignal(SymbolTable& table);   // signal_bionic.cc
 void RegisterTime(SymbolTable& table);     // time_bionic.cc

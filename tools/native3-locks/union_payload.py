@@ -77,6 +77,26 @@ SELECTED_COMBINED_SOURCE = {'.github/workflows/native2.yml': '847f1f8908a50e5539
  'tools/net-udp/payload.py': 'dbfcf5ed59cc2cbbc726109c1ce8bb18f4e0f356'}
 PINNED_SOURCE.update(SELECTED_COMBINED_SOURCE)
 
+# Reviewed DNS merge adaptations; prior leaf assertions remain above.
+MERGED_DNS_SOURCE = {'.github/workflows/native2.yml': '1d0876fdedf3d64ea006e9840d03c03bea8ab25d',
+ '.github/workflows/net-dns-component.yml': '2342778354242fe2c187cc66de331e5c1ce10377',
+ 'compat/arm64/dll/arm64_smoke_test.cc': '46e2a606e4be23d1b444f9961fcd03aa6a144074',
+ 'compat/arm64/dll/guest_libc.cc': 'c3ef2087a0fefe691831ef2bd902e14b929a06f4',
+ 'compat/bionic/bionic.cmake': '7d5c64c1c3b19ed9eb727d49959840c9611be6d4',
+ 'compat/bionic/dns_wire.cc': '5a4ff2f750d378049bbbb4c1b8b57f03bc79a4e8',
+ 'compat/bionic/shim.cc': 'd2423662fa0256fc50b58ec2201083f2c849a0d6',
+ 'compat/bionic/shim_internal.h': 'f93d7008fbc55c202c59027e385072b38838a15b',
+ 'tests/native2/dns-reference/ns_name.c': 'c2dc80f59cbc1fd37d7d08e5464310579a1c4a2f',
+ 'tests/native2/net_dns_wire.cpp': '4973793ed58dce9f753c24f76e18621e3663751b',
+ 'tests/windows/tracks/92-net-dns-wire.ps1': '7d6438e111524b4b1761b9c53f144c7bea5ca78f',
+ 'tools/net-dns-component/aosp_reference.py': '7c968478f06cbedc7c2bef650eec4a7ed7e589c6',
+ 'tools/net-dns-component/payload.py': '8bf17e1a54fc903d635edb32ccb0763aba9eba67',
+ 'tools/net-dns-component/source.json': '51563a7370546df21b5e89c2b7263e1ac3bc44c2',
+ 'tools/net-dns/payload.py': 'a49f0de4e33fb51470bdc0c85b3e2624e4208172',
+ 'tools/net-dns/payload_shared.py': 'd8241f906b4ec288f2059780b9db68a58f99f6b3',
+ 'tools/net-udp/payload.py': '64491dc7109d00859a47abd164bf661f24f5bdbf'}
+PINNED_SOURCE.update(MERGED_DNS_SOURCE)
+
 TARGETS = ('native3_lock_command_worker', 'native3_lock_duplicate_test', 'binderd')
 HOST_FILES = {name + suffix for name in TARGETS for suffix in ('.exe', '.imports.txt')}
 REFERENCE_FILES = {'linux-reference.json'}
@@ -137,6 +157,8 @@ def main():
         base = '8b1e9b509ceef7e532a7ff5bc085ecdbc476d292'
         subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], cwd=ROOT, check=True)
         allowed = {'.github/workflows/ci.yml', 'tools/native3-locks/union_payload.py', '.github/workflows/tsf-format-component.yml', '.github/workflows/services-geocoder-worker-component.yml', '.github/workflows/native3-locks-blocking.yml', 'tools/native3-locks/union_blocking_guard.py', 'tools/windows4/run-tsf-union.ps1', '.github/workflows/coherent-union-trusted-source.yml', '.github/workflows/combined-full-trusted-source.yml', '.github/workflows/native2.yml', '.github/workflows/net-udp-component.yml', '.github/workflows/net-udp-fault-observer.yml', 'compat/posix/src/socket.cc', 'compat/posix/src/socket_internal.h', 'compat/posix/src/socket_user_copy.h', 'compat/posix/src/winsock.cc', 'tests/dex-services/gesher/services/BinderTest.java', 'tests/native2/net_udp_copy_observer.c', 'tests/native2/net_udp_fault_observer.c', 'tests/native2/net_udp_guarded_copy_probe.cpp', 'tests/native2/net_udp_trunc.cpp', 'tests/windows/tracks/50-services.ps1', 'tests/windows/tracks/89-net-udp-trunc.ps1', 'tools/net-udp-component/payload.py', 'tools/net-udp-component/source.json', 'tools/net-udp/payload.py'}
+        allowed.update(MERGED_DNS_SOURCE)
+        allowed.add('.github/workflows/net-combined-dns-trusted-source.yml')
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
                       ':(exclude)docs/**'], cwd=ROOT, text=True).splitlines())
         assert changed <= allowed and changed, ('Unreviewed coherent production delta', changed - allowed)

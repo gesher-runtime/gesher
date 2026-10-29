@@ -16,6 +16,7 @@
 //  - the floating-point environment (FPCR/FPSR, fenv_t, FE_* values);
 //  - four O_* open flags (O_DIRECTORY, O_NOFOLLOW, O_DIRECT, O_LARGEFILE);
 //  - localeconv's CHAR_MAX sentinels (unsigned char on Android arm64);
+//  - DNS bitstring rendering's plain-char promotion (unsigned on arm64);
 //  - dlsym: returns these definitions for those names;
 //  - the shim's va_list functions (vsnprintf...): registered so the guest's
 //    AAPCS64 va_list is converted to System V when the guest calls them.
@@ -544,6 +545,13 @@ void Override(const char* name, void* host_wrapper) {
   if (host_wrapper != nullptr) g_overrides[name] = BindHost(host_wrapper, -1);
 }
 
+// A mismatched host must not silently route an ARM64 call to the x86 model.
+int64_t GESHER_SYSV MissingArm64DnsBridge(int64_t, int64_t, int64_t,
+                                           int64_t, int64_t, int64_t) {
+  SetErrno(38);  // Android ENOSYS
+  return -1;
+}
+
 }  // namespace
 
 void* GuestSymbol(const char* name) {
@@ -564,6 +572,12 @@ int64_t GuestRawSyscall(uint64_t nr, const uint64_t args[6]) {
 
 void InitGuestLibc() {
   for (const VaFn& v : kVaFunctions) AddVaListFunction(Host(v.name), v.index);
+
+  for (const char* name : {"ns_name_ntop", "ns_name_uncompress", "dn_expand"}) {
+    std::string entry = std::string("__gesher_arm64_") + name;
+    void* bridge = Host(entry.c_str());
+    Override(name, bridge ? bridge : reinterpret_cast<void*>(&MissingArm64DnsBridge));
+  }
 
   g_pthread_create = reinterpret_cast<ThreadCreate>(Host("pthread_create"));
   if (g_pthread_create) Override("pthread_create", reinterpret_cast<void*>(&GuestPthreadCreate));

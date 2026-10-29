@@ -49,19 +49,28 @@ jobs:
             tests/apps/net4resolverapp
             tests/e2e
             tools/net-udp
+            tools/net-udp-component
+            tools/net-dns
+            tools/net-dns-component
 
-      - name: Cache the Android NDK
+      - name: Cache publisher-authenticated NDK archive
         id: ndk
         uses: actions/cache@v4
         with:
-          path: ${{ env.NDK_DIR }}
-          key: ndk-${{ env.NDK_VERSION }}
+          path: dns-ndk.zip
+          key: combined-ndk-r27c-090e8083a715fdb1a3e402d0763c388abb03fb4e
 
-      - name: Fetch the Android NDK
+      - name: Fetch publisher NDK archive
         if: steps.ndk.outputs.cache-hit != 'true'
+        run: curl -fsSL "https://dl.google.com/android/repository/$NDK_ZIP" -o dns-ndk.zip
+
+      - name: Authenticate and freshly extract the shared NDK on every use
         run: |
-          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/$NDK_ZIP"
-          unzip -q ndk.zip
+          set -euo pipefail
+          printf '%s  dns-ndk.zip\n' 090e8083a715fdb1a3e402d0763c388abb03fb4e | sha1sum --check --strict
+          test "$(stat -c %s dns-ndk.zip)" = 663987688
+          test ! -e "$NDK_DIR"
+          unzip -q dns-ndk.zip
           test -d "$NDK_DIR"
 
       - name: Cache d8
@@ -123,10 +132,6 @@ jobs:
               -Wl,-soname,libnet4resolver.so -o "$o/libnet4resolver.so" tests/native2/net4_resolver_jni.cpp
             "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Werror \
               -o "$o/net4_resolver_test" tests/native2/net4_resolver_main.cpp
-            "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Wextra -Werror \
-              -o "$o/net_udp_trunc" tests/native2/net_udp_trunc.cpp
-            "$llvm/bin/${triple}29-clang" -std=c11 -O2 -fstack-protector-strong -Wall -Wextra -Werror \
-              -o "$o/net_udp_fault" tests/native2/net_udp_fault_observer.c
             echo "--- $abi libnative2.so: needed"
             "$llvm/bin/llvm-readelf" -d "$o/libnative2.so" | grep NEEDED
           done
@@ -158,6 +163,12 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq nasm >/dev/null
           tests/native2/build-third-party.sh "$PWD/$NDK_DIR" x86_64 third-party/x86_64
           tests/native2/build-third-party.sh "$PWD/$NDK_DIR" arm64-v8a third-party/arm64-v8a
+
+      - name: Compile UDP from freshly extracted authenticated publisher bytes
+        run: python3 tools/net-udp/payload.py compile dist
+
+      - name: Build and verify DNS ABI callers and independent references
+        run: python3 tools/net-dns/payload.py build dist
 
       - name: Symbol lists
         run: |
@@ -193,6 +204,7 @@ jobs:
             sets+=("libcxx2=$o/libcxx2_test,$o/libc++_shared.so")
             sets+=("native2=$o/libnative2.so,$o/libnative2_helper.so,$o/libc++_shared.so")
             sets+=("net4resolver=$o/net4_resolver_test,$o/libnet4resolver.so")
+            sets+=("net-dns=$o/net_dns_wire")
             sets+=("net-udp=$o/net_udp_trunc,$o/net_udp_fault")
             sets+=("libc++_shared=$o/libc++_shared.so")
             for app in apks/*; do
