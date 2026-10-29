@@ -35,13 +35,16 @@ static void snapshot(SOCKET s, const char* phase, int inline_oob) {
   timeval zero{};
   int n = select(0, &reads, nullptr, &exceptions, &zero);
   require(n >= 0, "select");
+  WSAPOLLFD band{}; band.fd = s; band.events = POLLRDBAND;
+  int band_rc = WSAPoll(&band, 1, 0);
+  int band_error = band_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
   u_long mark = 99, available = 99;
   int m = ioctlsocket(s, SIOCATMARK, &mark);
   int mark_error = m == SOCKET_ERROR ? WSAGetLastError() : 0;
   require(ioctlsocket(s, FIONREAD, &available) == 0, "available");
-  printf("WINDOWS_URG inline=%d phase=%s read=%d except=%d mark_rc=%d mark_error=%d mark=%lu bytes=%lu\n",
+  printf("WINDOWS_URG inline=%d phase=%s read=%d except=%d mark_rc=%d mark_error=%d mark=%lu bytes=%lu band_rc=%d band_error=%d band_revents=%d\n",
          inline_oob, phase, FD_ISSET(s, &reads) != 0, FD_ISSET(s, &exceptions) != 0,
-         m, mark_error, mark, available);
+         m, mark_error, mark, available, band_rc, band_error, band.revents);
   fflush(stdout);
 }
 int main() {
