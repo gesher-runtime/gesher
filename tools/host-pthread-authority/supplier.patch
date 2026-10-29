@@ -370,3 +370,14 @@
      if (__clock_getres (clock_id, &tp64) == -1)
          return -1;
  
+--- a/mingw-w64-libraries/winpthreads/src/clock.c
++++ b/mingw-w64-libraries/winpthreads/src/clock.c
+@@ -310,6 +310,8 @@
+ {
+     struct _timespec64 tp64 = {0};
+ 
++    if (!tp && clock_id <= -1073741824)
++        return __clock_gettime (clock_id, NULL);
+     if (__clock_gettime (clock_id, &tp64) == -1)
+         return -1;
+ 
