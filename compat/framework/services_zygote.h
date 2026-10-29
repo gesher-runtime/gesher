@@ -35,6 +35,12 @@ bool OwnedInstall(int pid, const std::u16string& package, const std::u16string& 
 std::vector<int> StartDevice(const std::vector<std::u16string>& commands,
                             const std::vector<std::u16string>& logs,
                             const std::vector<std::u16string>& env);
+#ifdef GESHER_BOOTSTRAP_ROLLBACK_FIXTURE
+void FixtureRollbackFaults(int flags);
+int FixtureRollbackPid();
+int FixtureRollbackState(int pid);
+bool FixtureReapRollback(int pid);
+#endif
 
 // The process's creation time (a FILETIME), or 0 when no such process runs.
 // Owned children use the retained CreateProcess instance. Unknown/adopted PIDs

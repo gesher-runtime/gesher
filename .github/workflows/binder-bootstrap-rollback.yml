@@ -1,0 +1,89 @@
+name: binder-bootstrap-rollback
+on:
+  push:
+    branches: [wip/binder-isolated-spawn]
+    paths: [.github/workflows/binder-bootstrap-rollback.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: binder-bootstrap-rollback-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_TAG: '20261006'
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Build current-source broker and fault-only fixture
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          ninja -C out -v binderd binder_bootstrap_rollback_fixture
+          mkdir rollback-artifact
+          for target in binderd binder_bootstrap_rollback_fixture; do
+            cp "out/$target.exe" rollback-artifact/
+            ninja -C out -t commands "$target" > "rollback-artifact/$target.commands.txt"
+          done
+          printf '%s\n' "$GITHUB_SHA" > rollback-artifact/source.sha
+          printf '%s\n' "$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/build" > rollback-artifact/producer.txt
+          (cd rollback-artifact && sha256sum *.exe > executables.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binder-rollback-${{ github.sha }}-${{ github.run_attempt }}
+          path: rollback-artifact/
+          if-no-files-found: error
+  test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify current-run producer and executable hashes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/ci/artifact_receipt.py --name "binder-rollback-$env:GITHUB_SHA-$env:GITHUB_RUN_ATTEMPT" --producer build --destination rollback-artifact
+          if ($LASTEXITCODE -ne 0) { throw 'current producer receipt failed' }
+          if ((Get-Content rollback-artifact/source.sha -Raw).Trim() -cne $env:GITHUB_SHA -or
+              (Get-Content rollback-artifact/producer.txt -Raw).Trim() -cne "$env:GITHUB_RUN_ID/$env:GITHUB_RUN_ATTEMPT/build") { throw 'producer identity mismatch' }
+          $rows = @(Get-Content rollback-artifact/executables.sha256)
+          if ($rows.Count -ne 2) { throw 'unexpected executable count' }
+          foreach ($row in $rows) {
+            $hash, $name = $row -split '\s+', 2
+            if ($name -notmatch '^(binderd|binder_bootstrap_rollback_fixture)\.exe$' -or
+                (Get-FileHash -LiteralPath "rollback-artifact/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $hash) { throw 'executable mismatch' }
+          }
+      - name: Exercise actual retained broker and injected failures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . "$pwd/tests/windows/helpers/CloseProcessReaders.ps1"
+          $tokens = $null; $errors = $null
+          $ast = [Management.Automation.Language.Parser]::ParseFile("$pwd/tests/windows/tracks/50-services.ps1", [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { throw $errors[0] }
+          $definitions = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] }, $false) | Where-Object Name -eq 'RunTimed')
+          if ($definitions.Count -ne 1) { throw 'supervisor missing or ambiguous' }
+          . ([scriptblock]::Create($definitions[0].Extent.Text))
+          foreach ($mode in 'duplicate','wait','close') {
+            $dir = Join-Path $env:RUNNER_TEMP ("binder-rollback-$mode-" + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $dir | Out-Null
+            $out = RunTimed (Resolve-Path rollback-artifact/binder_bootstrap_rollback_fixture.exe).Path @((Resolve-Path rollback-artifact/binderd.exe).Path, $dir, $mode) 45
+            $code = $LASTEXITCODE
+            Write-Host $out
+            if ($code -ne 0 -or -not $out.Contains("ROLLBACK_FIXTURE mode=$mode duplicate_failed=1 observer_rejected=1 exact_retired=1")) { throw "rollback $mode failed: $code" }
+          }
+          Write-Host 'Fault-seam component only; no production APK or complete Binder qualification.'

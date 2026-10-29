@@ -18,6 +18,14 @@ add_executable(binder_private_admission_fixture EXCLUDE_FROM_ALL
 target_compile_options(binder_private_admission_fixture PRIVATE -Wall -Wextra -Werror -fexceptions)
 target_link_options(binder_private_admission_fixture PRIVATE -municode)
 
+add_executable(binder_bootstrap_rollback_fixture EXCLUDE_FROM_ALL
+  ${CMAKE_SOURCE_DIR}/tests/windows/binder-bootstrap-rollback-fixture.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc)
+target_compile_definitions(binder_bootstrap_rollback_fixture PRIVATE GESHER_BOOTSTRAP_ROLLBACK_FIXTURE=1)
+target_compile_options(binder_bootstrap_rollback_fixture PRIVATE -Wall -Wextra -Werror -fexceptions)
+target_link_options(binder_bootstrap_rollback_fixture PRIVATE -municode)
+target_link_libraries(binder_bootstrap_rollback_fixture PRIVATE advapi32)
+
 add_executable(installed_guest_policy_fixture EXCLUDE_FROM_ALL
   ${CMAKE_SOURCE_DIR}/tests/windows/installed-guest-policy-fixture.cc)
 target_compile_options(installed_guest_policy_fixture PRIVATE -Wall -Wextra -Werror -fexceptions)

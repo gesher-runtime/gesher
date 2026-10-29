@@ -96,6 +96,10 @@ std::vector<Child> g_restricted_failed;
 bool g_retiring_installed = false;
 HANDLE g_job = nullptr;
 std::vector<HANDLE> g_quarantined;  // failed rollback: retain until death, never authorize
+#ifdef GESHER_BOOTSTRAP_ROLLBACK_FIXTURE
+std::atomic<int> g_fixture_rollback_faults{0};
+std::atomic<int> g_fixture_rollback_pid{0};
+#endif
 
 const wchar_t* W(const std::u16string& s) { return reinterpret_cast<const wchar_t*>(s.c_str()); }
 
@@ -495,11 +499,18 @@ std::vector<int> StartDevice(const std::vector<std::u16string>& commands,
   {
     std::lock_guard<std::mutex> guard(g_lock);
     auto child = g_children.find(broker);
-    broker_duplicated = child != g_children.end() && DuplicateHandle(GetCurrentProcess(), child->second.process,
+    broker_duplicated = child != g_children.end() &&
+#ifdef GESHER_BOOTSTRAP_ROLLBACK_FIXTURE
+        !(g_fixture_rollback_faults.load() & 1) &&
+#endif
+        DuplicateHandle(GetCurrentProcess(), child->second.process,
         GetCurrentProcess(), &g_broker, 0, FALSE, DUPLICATE_SAME_ACCESS);
     if (!broker_duplicated && child != g_children.end()) {
       child->second.bootstrap_retirement = 1;
       rollback_broker = child->second.process;
+#ifdef GESHER_BOOTSTRAP_ROLLBACK_FIXTURE
+      g_fixture_rollback_pid.store(broker);
+#endif
     }
   }
   if (!broker_duplicated) {
@@ -508,14 +519,25 @@ std::vector<int> StartDevice(const std::vector<std::u16string>& commands,
     if (rollback_broker) {
       // The existing map entry reserves the exact handle during the wait; no
       // allocation or PID reopen is needed even when DuplicateHandle failed.
+#ifdef GESHER_BOOTSTRAP_ROLLBACK_FIXTURE
+      uint64_t fixture_deadline = GetTickCount64() + 5000;
+      while ((g_fixture_rollback_faults.load() & 8) && GetTickCount64() < fixture_deadline) Sleep(1);
+#endif
       TerminateProcess(rollback_broker, 137);
-      DWORD state = WaitForSingleObject(rollback_broker, 5000);
+      DWORD state =
+#ifdef GESHER_BOOTSTRAP_ROLLBACK_FIXTURE
+          (g_fixture_rollback_faults.load() & 2) ? WAIT_FAILED :
+#endif
+          WaitForSingleObject(rollback_broker, 5000);
       std::lock_guard<std::mutex> guard(g_lock);
       auto child = g_children.find(broker);
       if (child != g_children.end() && child->second.process == rollback_broker &&
           child->second.bootstrap_retirement == 1) {
-        if (state == WAIT_OBJECT_0) {
-          CloseHandle(rollback_broker);
+        if (state == WAIT_OBJECT_0 &&
+#ifdef GESHER_BOOTSTRAP_ROLLBACK_FIXTURE
+            !(g_fixture_rollback_faults.load() & 4) &&
+#endif
+            CloseHandle(rollback_broker)) {
           g_children.erase(child);
         } else {
           child->second.bootstrap_retirement = 2;
@@ -549,6 +571,25 @@ std::vector<int> StartDevice(const std::vector<std::u16string>& commands,
   g_host_uid = true;
   return {broker, manager, system};
 }
+
+#ifdef GESHER_BOOTSTRAP_ROLLBACK_FIXTURE
+void FixtureRollbackFaults(int flags) { g_fixture_rollback_faults.store(flags); }
+int FixtureRollbackPid() { return g_fixture_rollback_pid.load(); }
+int FixtureRollbackState(int pid) {
+  std::lock_guard<std::mutex> guard(g_lock);
+  auto it = g_children.find(pid);
+  return it == g_children.end() ? 0 : it->second.bootstrap_retirement;
+}
+bool FixtureReapRollback(int pid) {
+  std::lock_guard<std::mutex> guard(g_lock);
+  auto it = g_children.find(pid);
+  if (it == g_children.end() || it->second.bootstrap_retirement != 2 ||
+      WaitForSingleObject(it->second.process, 0) != WAIT_OBJECT_0 || !CloseHandle(it->second.process))
+    return false;
+  g_children.erase(it);
+  return true;
+}
+#endif
 
 bool RevokeInstall(const std::u16string& package, const std::u16string& install) {
   std::lock_guard<std::recursive_mutex> spawning(g_spawn_lock);
@@ -605,8 +646,8 @@ bool RevokeInstall(const std::u16string& package, const std::u16string& install)
   for (auto it = g_children.begin(); it != g_children.end();) {
     if (it->second.bootstrap_retirement == 2 &&
         WaitForSingleObject(it->second.process, 0) == WAIT_OBJECT_0) {
-      CloseHandle(it->second.process);
-      it = g_children.erase(it);
+      if (CloseHandle(it->second.process)) it = g_children.erase(it);
+      else { ok = false; ++it; }
     } else ++it;
   }
   return ok;
