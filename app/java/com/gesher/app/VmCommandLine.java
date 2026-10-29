@@ -50,22 +50,5 @@ public final class VmCommandLine {
         throw new IllegalStateException("no " + mainClass + " in this command line: " + command);
     }
 
-    /** Finds the earliest matching main in the current call stack, including a
-     * caller that delegates to another main. Only an exact command token counts. */
-    public static String beforeEntrypoint(String command, StackTraceElement[] stack) {
-        String earliest = null;
-        for (StackTraceElement frame : stack) {
-            if (!frame.getMethodName().equals("main")) continue;
-            try {
-                String prefix = beforeMainClass(command, frame.getClassName());
-                if (earliest == null || prefix.length() < earliest.length()) earliest = prefix;
-            } catch (IllegalStateException absent) {
-                // A nested main need not be present in the VM command line.
-            }
-        }
-        if (earliest != null) return earliest;
-        throw new IllegalStateException("no launching main in this command line: " + command);
-    }
-
     private static boolean space(char c) { return c == ' ' || c == '\t'; }
 }

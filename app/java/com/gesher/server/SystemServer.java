@@ -191,7 +191,7 @@ public final class SystemServer {
         final String vm;
         try {
             // With the JIT and its profile saver, as Android's app processes (ADR 0054).
-            vm = Dexopt.appVmOptions(Zygote.vmCommandLineForCurrentEntrypoint());
+            vm = Dexopt.appVmOptions(Zygote.vmCommandLine(SystemServer.class.getName()));
         } catch (Throwable t) {
             throw new IllegalStateException("dedicated server cannot enable owned app starts", t);
         }
