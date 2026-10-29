@@ -77,6 +77,20 @@ void ProbeFdPrimitives(const char* role) {
   if (!std::strcmp(role, "lowbox")) {
     HANDLE inherited = GetStdHandle(STD_INPUT_HANDLE), duplicate = nullptr;
     DWORD type = GetFileType(inherited);
+    STARTUPINFOW startup{}; startup.cb = sizeof(startup); GetStartupInfoW(&startup);
+    using Query = NTSTATUS (NTAPI*)(HANDLE, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+    auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryObject"));
+    std::vector<BYTE> object_name(4096); ULONG returned = 0;
+    bool exact_null = false;
+    if (query && query(inherited, static_cast<OBJECT_INFORMATION_CLASS>(1), object_name.data(),
+        static_cast<ULONG>(object_name.size()), &returned) >= 0) {
+      auto* name = reinterpret_cast<UNICODE_STRING*>(object_name.data());
+      auto begin = reinterpret_cast<uintptr_t>(object_name.data()), text = reinterpret_cast<uintptr_t>(name->Buffer);
+      if (name->Length % sizeof(wchar_t) == 0 && text >= begin && text - begin <= object_name.size() &&
+          name->Length <= object_name.size() - (text - begin)) {
+        exact_null = std::wstring(name->Buffer, name->Length / sizeof(wchar_t)) == L"\\Device\\Null";
+      }
+    }
     bool copied = DuplicateHandle(GetCurrentProcess(), inherited, GetCurrentProcess(), &duplicate,
         0, FALSE, DUPLICATE_SAME_ACCESS) != FALSE;
     DWORD copy_error = copied ? ERROR_SUCCESS : GetLastError();
@@ -89,6 +103,8 @@ void ProbeFdPrimitives(const char* role) {
     }
     printf("LOWBOX_FD_INHERITED role=lowbox type=%lu duplicate_ok=%d duplicate_error=%lu crt_fd_ok=%d crt_errno=%d\n",
         type, copied, copy_error, adopted >= 0, adopted_error);
+    printf("LOWBOX_FD_STARTUP role=lowbox uses_stdio=%d same_handle=%d exact_nt_null=%d\n",
+        (startup.dwFlags & STARTF_USESTDHANDLES) != 0, startup.hStdInput == inherited, exact_null);
   }
   fflush(stdout);
   if (!std::strcmp(role, "host")) Check(event != nullptr && nul != INVALID_HANDLE_VALUE && fd >= 0, "host fd primitive positive controls");
@@ -225,7 +241,8 @@ int wmain(int argc, wchar_t** argv) {
       Check(bounded && read_ok && closed, "read and close exact retired child diagnostic log");
       Check(std::strstr(diagnostic, "LOWBOX_FD_DIAGNOSTIC role=lowbox ") != nullptr &&
           std::strstr(diagnostic, "LOWBOX_FD_ZERO role=lowbox ") != nullptr &&
-          std::strstr(diagnostic, "LOWBOX_FD_INHERITED role=lowbox ") != nullptr, "actual lowbox diagnostic markers");
+          std::strstr(diagnostic, "LOWBOX_FD_INHERITED role=lowbox ") != nullptr &&
+          std::strstr(diagnostic, "LOWBOX_FD_STARTUP role=lowbox ") != nullptr, "actual lowbox diagnostic markers");
       printf("%s", diagnostic); fflush(stdout);
       Check(DeleteFileW(log_path.c_str()), "nested child log cleanup");
       printf("POLICY_CHILD actual_lowbox=1 nested_create=1 file_reopen_read=1 nested_delete=1 exit=0 retired=1\n");
