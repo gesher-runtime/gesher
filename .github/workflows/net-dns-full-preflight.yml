@@ -150,6 +150,17 @@ jobs:
               else:
                   raise RuntimeError('Negative control accepted: ' + label)
 
+          def verify_run_identity(run, event, source_head, head_repository_id, run_id, attempt, repository_id):
+              require(event in ('workflow_dispatch', 'push', 'pull_request'), 'Unsupported CI event')
+              require(str(run['id']) == run_id and str(run['run_attempt']) == attempt,
+                      'Wrong actual run/attempt')
+              require(run['repository']['full_name'] == REPO and
+                      str(run['repository']['id']) == repository_id and
+                      str(run['head_repository']['id']) == head_repository_id and
+                      run['head_sha'] == source_head, 'Wrong actual run repository/head/source')
+              require(run['event'] == event and run['path'] == CALLER and run['name'] == 'ci',
+                      'Wrong actual workflow/event')
+
           def main():
               sha = os.environ['GITHUB_SHA']
               run_id = os.environ['GITHUB_RUN_ID']
@@ -157,20 +168,41 @@ jobs:
               require(os.environ['GITHUB_REPOSITORY'] == REPO, 'Wrong repository')
               require(bool(re.fullmatch('[0-9a-f]{40}', sha)), 'Invalid source SHA')
               require(git('rev-parse', 'HEAD').decode().strip() == sha, 'Checkout/source mismatch')
-              # Exact-source full is dispatched; PR merge-ref qualification needs its own reviewed policy.
-              require(os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch', 'Only exact-source dispatch qualifies')
+              event = os.environ['GITHUB_EVENT_NAME']
+              require(event in ('workflow_dispatch', 'push', 'pull_request'), 'Unsupported CI event')
+              repository_id = os.environ['GITHUB_REPOSITORY_ID']
+              supplier_head, head_repository_id = sha, repository_id
+              if event == 'pull_request':
+                  payload = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+                  pr = payload['pull_request']
+                  require(str(pr['base']['repo']['id']) == repository_id and
+                          pr['base']['repo']['full_name'] == REPO, 'Wrong PR base repository')
+                  require(os.environ['GITHUB_REF'] == 'refs/pull/' + str(payload['number']) + '/merge',
+                          'PR must check the actual merge ref')
+                  supplier_head = pr['head']['sha']
+                  head_repository_id = str(pr['head']['repo']['id'])
+                  require(bool(re.fullmatch('[0-9a-f]{40}', supplier_head)), 'Invalid PR head SHA')
+                  subprocess.run(['git', 'merge-base', '--is-ancestor', supplier_head, sha], check=True)
               request = urllib.request.Request(
                   'https://api.github.com/repos/' + REPO + '/actions/runs/' + run_id,
                   headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
                            'Accept': 'application/vnd.github+json'})
               with urllib.request.urlopen(request, timeout=60) as response:
                   run = json.load(response)
-              require(str(run['id']) == run_id and str(run['run_attempt']) == attempt,
-                      'Wrong actual run/attempt')
-              require(run['repository']['full_name'] == REPO and run['head_sha'] == sha,
-                      'Wrong actual run repository/source')
-              require(run['event'] == 'workflow_dispatch' and run['path'] == CALLER,
-                      'Wrong actual workflow/event')
+              verify_run_identity(run, event, supplier_head, head_repository_id, run_id, attempt, repository_id)
+              for field, value in (('id', -1), ('run_attempt', -1), ('head_sha', '0' * 40),
+                                   ('event', 'unsupported'), ('path', 'forged.yml'), ('name', 'forged')):
+                  mutant_run = copy.deepcopy(run)
+                  mutant_run[field] = value
+                  reject('actual_run_' + field, lambda: verify_run_identity(mutant_run, event,
+                      supplier_head, head_repository_id, run_id, attempt, repository_id))
+              for field in ('repository', 'head_repository'):
+                  mutant_run = copy.deepcopy(run)
+                  mutant_run[field]['id'] = -1
+                  reject('actual_run_' + field, lambda: verify_run_identity(mutant_run, event,
+                      supplier_head, head_repository_id, run_id, attempt, repository_id))
+              reject('unsupported_event', lambda: verify_run_identity(run, 'schedule',
+                  supplier_head, head_repository_id, run_id, attempt, repository_id))
               subprocess.run(['git', 'merge-base', '--is-ancestor', BASE, sha], check=True)
               subprocess.run(['git', 'merge-base', '--is-ancestor', HISTORICAL_BASE, sha], check=True)
               # Preserve the original preflight on the accepted baseline, then
@@ -245,7 +277,9 @@ jobs:
               verify_checkout(expected)
               require(not git('status', '--porcelain', '--untracked-files=all').strip(), 'Controls did not restore source')
               print('DNS_TRUSTED_SOURCE ' + json.dumps(dict(base=BASE, source=sha, run=run_id,
-                  attempt=attempt, reviewed_caller_commit=reviewed, source_paths=len(expected),
+                  attempt=attempt, event=event, supplier_head=supplier_head,
+                  full_qualification=(event == 'workflow_dispatch'),
+                  reviewed_caller_commit=reviewed, source_paths=len(expected),
                   reviewed_blobs=SOURCE_PINS, original_preflight_pins=HISTORICAL_PINS, historical_guard_blob=expected[GUARD][1],
                   caller_blob=expected[CALLER][1], immutable_guard_commit=guard_commit, all_controls_restored=True), sort_keys=True), flush=True)
 
