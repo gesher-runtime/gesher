@@ -477,3 +477,24 @@
  int
  pthread_getname_np (pthread_t thread, char *name, size_t len)
  {
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -901,10 +901,16 @@ pthread_key_create (pthread_key_t *key, void (* dest)(void *))
+ 	if (nmax > PTHREAD_KEYS_MAX)
+ 		nmax = PTHREAD_KEYS_MAX;
+ 
+-	/* No spare room anywhere */
+-	d = (void (__cdecl **)(void *))realloc(_pthread_key_dest, nmax * sizeof(*d));
++	/* Reserve the complete original key space once, committing only the
++	   growing prefix.  Published table addresses then remain stable. */
++	d = _pthread_key_dest;
+ 	if (!d)
++		d = (void (__cdecl **)(void *))VirtualAlloc (NULL,
++			PTHREAD_KEYS_MAX * sizeof(*d), MEM_RESERVE, PAGE_READWRITE);
++	if (!d || !VirtualAlloc (d, nmax * sizeof(*d), MEM_COMMIT, PAGE_READWRITE))
+ 	{
++		if (d && !_pthread_key_dest)
++			if (!VirtualFree (d, 0, MEM_RELEASE)) abort ();
+ 		pthread_rwlock_unlock (&_pthread_key_lock);
+ 		return ENOMEM;
+ 	}

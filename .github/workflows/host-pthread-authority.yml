@@ -1,5 +1,5 @@
 # Separate fault supplier/host roles prove production hooks OFF by object/export.
-# Mixed-provider authority controls include same-thread cross-provider acquisition.
+# Mixed-provider controls and stable key-table allocation fault checks.
 name: host pthread authority initial controls
 on:
   workflow_dispatch:
