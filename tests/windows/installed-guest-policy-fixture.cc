@@ -94,13 +94,16 @@ std::wstring PrivateName(HANDLE handle) {
 }
 int wmain(int argc, wchar_t** argv) {
   try {
-    if (argc == 7 && !wcscmp(argv[1], L"--nested")) {
+    if (argc == 9 && !wcscmp(argv[1], L"--nested")) {
       HANDLE ready = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[4], nullptr, 10)));
       HANDLE done = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[5], nullptr, 10)));
       HANDLE inherited_mutex = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[6], nullptr, 10)));
+      HANDLE guest_held = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[7], nullptr, 10)));
+      HANDLE guest_release = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(wcstoull(argv[8], nullptr, 10)));
       DWORD event_flags = 0;
       Check(GetHandleInformation(ready, &event_flags) && GetHandleInformation(done, &event_flags) &&
-          GetHandleInformation(inherited_mutex, &event_flags), "inherited diagnostic handles");
+          GetHandleInformation(inherited_mutex, &event_flags) && GetHandleInformation(guest_held, &event_flags) &&
+          GetHandleInformation(guest_release, &event_flags), "inherited diagnostic handles");
       HANDLE elevated_mutex = nullptr;
       BOOL elevated = DuplicateHandle(GetCurrentProcess(), inherited_mutex, GetCurrentProcess(),
           &elevated_mutex, MUTEX_ALL_ACCESS, FALSE, 0);
@@ -140,6 +143,13 @@ int wmain(int argc, wchar_t** argv) {
       Check(_wputenv_s(L"GESHER_BINDER", L"fixture-property-session") == 0, "fixture restores guest endpoint");
       printf("POLICY_PROPERTY_SESSION_SPLIT host_value_visible=%u\n", unsigned(split_read && split_value == "host-authoritative"));
       Check(!split_read, "distinct guest endpoint does not select host area");
+      DWORD acquired = WaitForSingleObject(inherited_mutex, 5000);
+      Check(acquired == WAIT_OBJECT_0 || acquired == WAIT_ABANDONED, "guest acquires actual inherited mutex");
+      HeldPropertyMutex guest_lock{inherited_mutex};
+      Check(SetEvent(guest_held), "guest mutex hold acknowledged");
+      Check(WaitForSingleObject(guest_release, 5000) == WAIT_OBJECT_0, "bounded guest mutex release signal");
+      Check(gesher::properties::DiagnosticReleaseAreaMutex(guest_lock.handle), "guest releases actual inherited mutex");
+      guest_lock.handle = nullptr;
       STARTUPINFOW actual{}; actual.cb = sizeof(actual); GetStartupInfoW(&actual);
       Check((actual.dwFlags & STARTF_USESTDHANDLES) != 0, "actual startup stdio");
       HANDLE verified = gesher::DuplicateVerifiedNull(actual.hStdInput);
@@ -245,15 +255,20 @@ int wmain(int argc, wchar_t** argv) {
       OwnedEvent ready{CreateEventW(&security, TRUE, FALSE, nullptr)};
       OwnedEvent done{CreateEventW(&security, TRUE, FALSE, nullptr)};
       Check(ready.handle && done.handle, "owned property observation events");
+      OwnedEvent guest_held{CreateEventW(&security, TRUE, FALSE, nullptr)};
+      OwnedEvent guest_release{CreateEventW(&security, TRUE, FALSE, nullptr)};
+      Check(guest_held.handle && guest_release.handle, "owned guest hold observation events");
       OwnedEvent shared_mutex;
       Check(DuplicateHandle(GetCurrentProcess(), gesher::properties::DiagnosticAreaMutex(), GetCurrentProcess(),
           &shared_mutex.handle, SYNCHRONIZE | MUTEX_MODIFY_STATE, TRUE, 0), "limited inherited area mutex");
       std::wstring command = L"\"" + std::wstring(executable, size) + L"\" --nested \"" + data + L"\" \"" + private_name + L"\" " +
           std::to_wstring(reinterpret_cast<uintptr_t>(ready.handle)) + L" " +
           std::to_wstring(reinterpret_cast<uintptr_t>(done.handle)) + L" " +
-          std::to_wstring(reinterpret_cast<uintptr_t>(shared_mutex.handle));
+          std::to_wstring(reinterpret_cast<uintptr_t>(shared_mutex.handle)) + L" " +
+          std::to_wstring(reinterpret_cast<uintptr_t>(guest_held.handle)) + L" " +
+          std::to_wstring(reinterpret_cast<uintptr_t>(guest_release.handle));
       gesher::guest::RestrictedLaunch child;
-      auto started = child.Start(executable, command.data(), nullptr, nullptr, startup, CREATE_NO_WINDOW, policy->sid, {log, nul, ready.handle, done.handle, shared_mutex.handle});
+      auto started = child.Start(executable, command.data(), nullptr, nullptr, startup, CREATE_NO_WINDOW, policy->sid, {log, nul, ready.handle, done.handle, shared_mutex.handle, guest_held.handle, guest_release.handle});
       Check(CloseHandle(log) && CloseHandle(nul), "close intentional parent stdio handles");
       Check(started.error == ERROR_SUCCESS, "actual lowbox nested child launch");
       HeldPropertyMutex held;
@@ -268,11 +283,23 @@ int wmain(int argc, wchar_t** argv) {
       held.handle = nullptr;
       printf("POLICY_PROPERTY_MUTEX guest_blocked_while_host_held=%u inherited_limited=1\n", unsigned(while_held == WAIT_TIMEOUT));
       Check(while_held == WAIT_TIMEOUT, "actual guest waits on inherited host mutex");
+      Check(WaitForSingleObject(guest_held.handle, 5000) == WAIT_OBJECT_0, "actual guest holds inherited mutex");
+      HANDLE actual_host_mutex = gesher::properties::DiagnosticAreaMutex();
+      Check(actual_host_mutex != nullptr, "retained host mutex available");
+      DWORD host_wait = WaitForSingleObject(actual_host_mutex, 300);
+      if (host_wait == WAIT_OBJECT_0 || host_wait == WAIT_ABANDONED)
+        Check(gesher::properties::DiagnosticReleaseAreaMutex(actual_host_mutex), "release unexpected host acquisition");
+      Check(host_wait == WAIT_TIMEOUT || host_wait == WAIT_OBJECT_0 || host_wait == WAIT_ABANDONED, "bounded host wait");
+      Check(SetEvent(guest_release.handle), "release controlled guest hold");
+      printf("POLICY_PROPERTY_GUEST_HOLD host_blocked=%u\n", unsigned(host_wait == WAIT_TIMEOUT));
+      Check(host_wait == WAIT_TIMEOUT, "guest hold blocks host property mutex");
       Check(WaitForSingleObject(child.process(), 15000) == WAIT_OBJECT_0, "actual lowbox nested child completion");
       bool ready_closed = CloseHandle(ready.handle) != FALSE; if (ready_closed) ready.handle = nullptr;
       bool done_closed = CloseHandle(done.handle) != FALSE; if (done_closed) done.handle = nullptr;
       bool mutex_closed = CloseHandle(shared_mutex.handle) != FALSE; if (mutex_closed) shared_mutex.handle = nullptr;
-      Check(ready_closed && done_closed && mutex_closed, "actual property observation handles closed");
+      bool held_closed = CloseHandle(guest_held.handle) != FALSE; if (held_closed) guest_held.handle = nullptr;
+      bool release_closed = CloseHandle(guest_release.handle) != FALSE; if (release_closed) guest_release.handle = nullptr;
+      Check(ready_closed && done_closed && mutex_closed && held_closed && release_closed, "actual property observation handles closed");
       DWORD code = 0; Check(GetExitCodeProcess(child.process(), &code) && code == 0 && child.Stop().confirmed, "actual nested child exit and retirement");
       Check(CloseHandle(private_server) && CloseHandle(private_client), "actual private bootstrap owner cleanup");
       HANDLE verified_log = CreateFileW(log_path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
