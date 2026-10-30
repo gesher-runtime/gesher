@@ -44,7 +44,8 @@ jobs:
           assert os.environ['GITHUB_REF']=='refs/heads/wip/fonts-map-diagnostic'
           subprocess.run(['git','merge-base','--is-ancestor',source,run['head_sha']],check=True)
           changed=git('diff','--name-only',source,run['head_sha'],'--','.',':(exclude)docs/**').splitlines()
-          assert changed==['.github/workflows/fonts-map-diagnostic.yml'], changed
+          assert set(changed)=={'.github/workflows/fonts-map-diagnostic.yml',
+            'tools/fonts/verify-standalone-link.py','tools/fonts/test-standalone-link.py'}, changed
           print('FONT_MAP_DIAGNOSTIC_CONTEXT '+json.dumps({'role':'unchanged-strict-proof-diagnostic',
             'compiled_source':source,'workflow_source':run['head_sha'],'run':run['id'],
             'workflow_blob':git('rev-parse',run['head_sha']+':.github/workflows/fonts-map-diagnostic.yml'),
@@ -87,13 +88,18 @@ jobs:
             assert hits, ('No actual raw map input',needle)
             for i in hits[:8]: selected.update(range(max(0,i-1),min(len(lines),i+10)))
           for i in sorted(selected): print(f'FONT_MAP_RAW_LINE {i+1} {lines[i]}',flush=True)
-          cache=(root/'CMakeCache.txt').read_text()
-          compiler=pathlib.Path(re.search(r'^CMAKE_CXX_COMPILER:FILEPATH=(.+)$',cache,re.M).group(1))
+          configs=list((root/'CMakeFiles').glob('*/CMakeCXXCompiler.cmake'))
+          assert len(configs)==1, configs
+          paths=re.findall(r'^\s*set\(CMAKE_CXX_COMPILER\s+"([^"]+)"\)\s*$',configs[0].read_text(),re.M)
+          assert len(paths)==1, paths
+          compiler=pathlib.Path(paths[0])
+          assert compiler.resolve(strict=True).is_file()
           tools=compiler.parent
           command=subprocess.check_output(['ninja','-C',str(root),'-t','commands','-s',executable.name],text=True)
           print('FONT_MAP_RAW_LINK_COMMAND '+command.strip(),flush=True)
           print('FONT_MAP_INPUT_HASHES '+json.dumps({'map_sha256':sha(mapping),'executable_sha256':sha(executable),
             'compiler_sha256':sha(compiler),'linker_sha256':sha(tools/'ld.lld'),
+            'compiler_metadata_sha256':sha(configs[0]),'configured_compiler':paths[0],
             'link_command_sha256':hashlib.sha256(command.encode()).hexdigest()}),flush=True)
           for tool in (compiler,tools/'ld.lld'):
             print('FONT_MAP_TOOL_VERSION '+subprocess.check_output([str(tool),'--version'],text=True).strip(),flush=True)
@@ -109,7 +115,7 @@ jobs:
               obj=pathlib.Path(temporary)/member; obj.write_bytes(raw)
               for flags in ([],['--demangle']):
                 output=subprocess.check_output([str(tools/'llvm-nm'),'--defined-only',*flags,str(obj)],text=True)
-                name=member.split('.')[0]
+                name='FontCollection' if member=='FontCollection.cpp.obj' else 'MinikinFontSkia'
                 relevant=[line for line in output.splitlines() if name in line]
                 assert relevant, ('Missing class symbols',member,flags)
                 for line in relevant[:12]: print('FONT_MAP_NM '+json.dumps({'member':member,'flags':flags,'raw':line}),flush=True)
@@ -120,11 +126,41 @@ jobs:
           assert 'FONT_LINK_MAP_DIAGNOSTIC' in build and 'Missing precise font origins' in build
           print('FONT_MAP_DIAGNOSTIC_COMPLETE strict_proof=FAILED_UNCHANGED runtime_qualification=false',flush=True)
           PY
+      - name: Require corrected reviewed proof against the unchanged actual binary
+        id: corrected
+        if: always()
+        run: |
+          python3 -I - <<'PY'
+          import hashlib,json,os,pathlib,re,subprocess,sys
+          source=os.environ['GITHUB_SHA']
+          destination=pathlib.Path(os.environ['RUNNER_TEMP'])/'reviewed-font-map-proof'
+          destination.mkdir()
+          for name in ('verify-standalone-link.py','test-standalone-link.py'):
+            path='tools/fonts/'+name
+            raw=subprocess.check_output(['git','show',source+':'+path])
+            blob=subprocess.check_output(['git','rev-parse',source+':'+path],text=True).strip()
+            assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==blob
+            (destination/name).write_bytes(raw)
+            print('FONT_REVIEWED_PROOF_SOURCE '+json.dumps({'workflow_source':source,
+              'path':path,'git_blob':blob,'sha256':hashlib.sha256(raw).hexdigest()}),flush=True)
+          subprocess.run([sys.executable,str(destination/'test-standalone-link.py')],cwd=destination,check=True)
+          root=pathlib.Path('out').resolve()
+          configs=list((root/'CMakeFiles').glob('*/CMakeCXXCompiler.cmake'))
+          assert len(configs)==1
+          paths=re.findall(r'^\s*set\(CMAKE_CXX_COMPILER\s+"([^"]+)"\)\s*$',configs[0].read_text(),re.M)
+          assert len(paths)==1
+          subprocess.run([sys.executable,str(destination/'verify-standalone-link.py'),
+            str(root/'gesher-exec.exe'),str(root/'gesher-exec.fonts.map'),paths[0]],cwd=root,check=True)
+          assert not subprocess.check_output(['git','status','--porcelain','--untracked-files=all'],text=True).strip()
+          print('FONT_CORRECTED_PROOF_PASS compiled_source=cd20c1f43e569bf0b8c020abd2b00fcddfae2f3b runtime_qualification=false',flush=True)
+          PY
       - name: Require the unchanged strict gate to remain failed
         if: always()
         env:
           STRICT_OUTCOME: ${{ steps.strict.outcome }}
           STRICT_EXIT: ${{ steps.strict.outputs.exit }}
+          CORRECTED_OUTCOME: ${{ steps.corrected.outcome }}
         run: |
           test "$STRICT_OUTCOME" = failure
           test "$STRICT_EXIT" = 1
+          test "$CORRECTED_OUTCOME" = success
