@@ -36,6 +36,13 @@ static void *Body(void *arg) {
   auto *state=static_cast<LateCppCase *>(arg);
   state->expected=pthread_self(); state->native=NativeId();
   Require(state->expected!=pthread_t{} && state->native!=0,"initial worker identities");
+#ifdef _WIN32
+  HANDLE completion=nullptr;
+  Require(DuplicateHandle(GetCurrentProcess(),GetCurrentThread(),GetCurrentProcess(),
+      &completion,SYNCHRONIZE|THREAD_QUERY_LIMITED_INFORMATION,FALSE,0)!=0,
+      "owned actual native completion handle before TLS construction");
+  state->native_handle=reinterpret_cast<std::uintptr_t>(completion);
+#endif
   LateCppTouchA(state); LateCppTouchB(state);
   std::printf("CPP_TLS_BODY mode=%s native=%llu pthread=%llu constructed=%d\n",state->mode,
       static_cast<unsigned long long>(state->native),static_cast<unsigned long long>(state->expected),state->constructed.load());
@@ -77,6 +84,16 @@ int main() {
       Require(!pthread_create(&thread,nullptr,Body,&state) && !pthread_join(thread,&value) &&
           value==reinterpret_cast<void *>(0x1234),"pthread create/join result");
     }
+#ifdef _WIN32
+    // The supplier's join ordering is under test. Keep state alive until actual
+    // kernel termination even if a supplier publishes pthread completion early.
+    HANDLE completion=reinterpret_cast<HANDLE>(state.native_handle.load());
+    DWORD native_exit=0;
+    Require(completion && WaitForSingleObject(completion,10000)==WAIT_OBJECT_0 &&
+        GetExitCodeThread(completion,&native_exit) && CloseHandle(completion),
+        "every callback state retained through actual kernel termination");
+    std::printf("CPP_TLS_KERNEL mode=%s signaled=1 exit=%lu owned_handle_closed=1\n",mode,native_exit);
+#endif
     Require(state.constructed==2 && state.body_left==1,"both genuine TLS objects constructed before exit");
     const bool conformant=state.a==1 && state.b==1 && state.mismatch==0;
     std::printf("CPP_TLS_CASE mode=%s constructed=%d a=%d b=%d mismatch=%d conformant=%d\n",

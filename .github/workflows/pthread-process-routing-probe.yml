@@ -691,6 +691,7 @@ jobs:
             if (-not $actual.Contains('CPP_TLS_RESULT cases=4 failures=0 conformant=1')) { throw 'Incomplete genuine TLS callback identity evidence' }
             foreach ($mode in @('pthread_return','pthread_exit','std_thread_return','native_ExitThread')) {
               if (-not $actual.Contains("CPP_TLS_CASE mode=$mode constructed=2 a=1 b=1 mismatch=0 conformant=1")) { throw "Missing actual C++ case $mode" }
+              if ($actual -notmatch "(?m)^CPP_TLS_KERNEL mode=$mode signaled=1 exit=[0-9]+ owned_handle_closed=1\r?$") { throw "Missing actual C++ worker kernel termination $mode" }
             }
           } finally {
             if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Late C++ owned process cleanup failed' } }
