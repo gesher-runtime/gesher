@@ -23,7 +23,9 @@ def verify(root):
  for key,role in (('data_supplier','qualified-data'),('translator_supplier','qualified-translator')):
   receipt=record[key];spec=suppliers.SUPPLIERS[role]
   assert receipt['role']==role and receipt['source']==spec['source'] and receipt['run']==spec['run'] and receipt['attempt']==1
-  assert receipt['artifact']['id']==spec['id'] and receipt['artifact']['digest']==spec['digest'] and receipt['producer']['id']==spec['job'] and receipt['producer']['conclusion']=='success'
+  assert receipt['repository']==suppliers.REPO and receipt['repository_id']==suppliers.REPO_ID
+  assert receipt['artifact']['id']==spec['id'] and receipt['artifact']['digest']==spec['digest'] and not receipt['artifact']['expired']
+  assert receipt['producer']['id']==spec['job'] and receipt['producer']['name']==spec['producer'] and receipt['producer']['conclusion']=='success'
  for name in assembly.data_files(root):assert record['owners'][name]=={'role':'QUALIFIED_1BF8_DATA_ONLY','source':record['data_supplier']['source'],'sha256':record['data_supplier']['members'][name]}
  assert record['owners']['gesher_arm64.dll']=={'role':'QUALIFIED_1BF8_TRANSLATOR','source':record['translator_supplier']['source'],'sha256':record['translator_supplier']['members']['gesher_arm64.dll']}
  emit('FONT_ENV_ASSEMBLY_VERIFIED',{'verifier_context':record['verifier_context'],'runtime_role':record['runtime_role'],'runtime_source':record['runtime_source'],'manifest_sha256':sha(root/'font-env-assembly.json'),'files':len(expected_files),'current_source_fresh_runtime':False,'fallback_qualified':False})
