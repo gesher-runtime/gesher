@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/fonts-core-trusted-source.yml@aabb12aafbca9940e4a4112dbe6f44355ce3213d
+    uses: gesher-runtime/gesher/.github/workflows/fonts-core-trusted-source.yml@8f57b39ce3ae229c0a797dd753e04e40ff75e50c
   fixture-producer:
     needs: trusted-source
     uses: ./.github/workflows/native2.yml
