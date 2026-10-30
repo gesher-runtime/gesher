@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <windows.h>
+#include <gesher/font_environment.h>
 
 #include <atomic>
 #include <string>
@@ -433,11 +434,15 @@ char* realpath(const char* path, char* resolved_path) {
 }
 
 int setenv(const char* name, const char* value, int overwrite) {
+  if (auto result = gesher::WriteFontEnvironment(name, value, overwrite))
+    return *result == 0 ? 0 : (errno = EINVAL, -1);
   if (!overwrite && getenv(name) != nullptr) return 0;
   return _putenv_s(name, value) == 0 ? 0 : (errno = EINVAL, -1);
 }
 
 int unsetenv(const char* name) {
+  if (auto result = gesher::WriteFontEnvironment(name, "", 1))
+    return *result == 0 ? 0 : (errno = EINVAL, -1);
   return _putenv_s(name, "") == 0 ? 0 : (errno = EINVAL, -1);
 }
 
