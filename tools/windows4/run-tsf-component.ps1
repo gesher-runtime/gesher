@@ -1,12 +1,15 @@
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '../ci/receipt-diagnostics.ps1')
 $jobsRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"
 if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect producer' }
 $jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -eq 'compile')
+Write-CiProducerIdentity -Producer 'compile' -Rows $jobs
 if ($jobs.Count -ne 1 -or $jobs[0].conclusion -cne 'success' -or "$($jobs[0].run_id)" -cne $env:GITHUB_RUN_ID -or "$($jobs[0].run_attempt)" -cne $env:GITHUB_RUN_ATTEMPT -or $jobs[0].head_sha -cne $env:GITHUB_SHA) { throw 'Producer identity mismatch' }
 $raw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts?per_page=100"
 if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect artifacts' }
 $expected = "tsf-format-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT"
 $rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -ceq $expected)
+Write-CiArtifactInventory -Name $expected -Inventory ($raw | ConvertFrom-Json) -Rows $rows -Producer $jobs[0]
 if ($rows.Count -ne 1) { throw 'Artifact is not unique' }
 $a = $rows[0]
 if ($a.id -le 0 -or $a.size_in_bytes -le 0 -or $a.expired -or $a.digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or "$($a.workflow_run.id)" -cne $env:GITHUB_RUN_ID -or "$($a.workflow_run.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or "$($a.workflow_run.head_repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or $a.workflow_run.head_sha -cne $env:GITHUB_SHA -or [datetime]$a.created_at -lt [datetime]$jobs[0].started_at -or [datetime]$a.created_at -gt [datetime]$jobs[0].completed_at) { throw 'Artifact provenance mismatch' }
