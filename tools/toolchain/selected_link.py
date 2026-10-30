@@ -166,9 +166,11 @@ def symbol_inventory(raw):
             member = header[1]
             members.add(member)
             continue
-        match = re.fullmatch(r'[0-9a-fA-F]+\s+[TDBRWV]\s+(\S+)', line)
+        match = re.fullmatch(r'[0-9a-fA-F]+\s+([TDBRWVtdbrwv])\s+(\S+)', line)
         if match:
-            name = match[1]
+            name = match[2]
+            if not match[1].isupper() and name not in set(factory.minimum.CORE) | {'__xl_f', '__dyn_tls_pthread'}:
+                continue
             assert member is not None
             names.setdefault(name, set()).add(member)
     assert {'pthread_self', 'pthread_join', 'pthread_create', 'pthread_exit'} <= set(names)
@@ -201,16 +203,17 @@ def prove(trace, mapping, imports, data, cwd):
         # Archive member Reading records are not archive origins.
         if p.endswith('.a'):
             reading.add(normalize_origin(p))
-    loaded = set()
+    loaded, all_loaded = set(), set()
     for archive, member in re.findall(r'\bLoaded (.+?\.a)\(([^()]+)\) for [^\r\n]+', trace):
+        origins = {p for p in reading if PurePosixPath(p).name == PurePosixPath(archive).name}
+        assert len(origins) == 1, 'Missing/ambiguous actual archive Reading origin'
+        origin = origins.pop()
+        if '/' in archive:
+            assert normalize_origin(archive) == origin, 'Loaded fullpath contradicts Reading origin'
+        all_loaded.add((origin, member))
         if 'pthread' in PurePosixPath(archive).name.lower() or member.startswith('libwinpthread_'):
-            origins = {p for p in reading if PurePosixPath(p).name == PurePosixPath(archive).name}
-            assert len(origins) == 1, 'Missing/ambiguous actual pthread archive Reading origin'
-            origin = origins.pop()
             assert origin in aliases and not origin.endswith('.dll.a'), 'Unexpected provider archive'
             assert member in members, 'Loaded member absent from current supplier inventory'
-            if '/' in archive:
-                assert normalize_origin(archive) == origin, 'Loaded fullpath contradicts Reading origin'
             loaded.add((PurePosixPath(origin).name, member, origin))
     definitions = {}
     owner = None
@@ -226,10 +229,10 @@ def prove(trace, mapping, imports, data, cwd):
             input_sections += 1
         elif tail.startswith('                '):
             symbol = tail.strip()
-            selected_owner = owner is not None and any(owner.endswith(alias + '(' + member + ')') for alias, member, _ in loaded)
+            selected_owner = owner is not None and any(owner == member for _, member, _ in loaded)
             if symbol in names or (symbol in inventory and selected_owner):
                 value = (owner, row[1].lower())
-                assert symbol not in definitions or definitions[symbol] == value, 'Conflicting provider definition'
+                assert symbol not in definitions or definitions[symbol] == value, 'Conflicting provider definition: ' + symbol
                 definitions[symbol] = value
         else:
             owner = None
@@ -237,14 +240,14 @@ def prove(trace, mapping, imports, data, cwd):
     bindings = {}
     for symbol, (owner, address) in definitions.items():
         assert owner is not None
-        match = re.fullmatch(r'(.+\.a)\(([^()]+)\)', owner)
-        assert match, 'Provider symbol came from an unreceipted object: ' + symbol
-        candidates = [(p, m) for alias, m, p in loaded if alias == PurePosixPath(match[1]).name and m == match[2]]
-        assert len(candidates) == 1, 'Map provider has no unique actual loaded member'
+        # Actual pinned LLD GNU maps use bare member names. Match against ALL
+        # loaded archives, not only the selected one, before trusting ownership.
+        assert PurePosixPath(owner).name == owner and '(' not in owner, 'Unsupported/unreceipted map owner: ' + symbol
+        candidates = [(p, m) for p, m in all_loaded if PurePosixPath(m).name == owner]
+        assert len(candidates) == 1, 'Map provider has no globally unique actual loaded member'
         origin, member = candidates[0]
+        assert origin in aliases and not origin.endswith('.dll.a'), 'Live provider came from another archive'
         assert member in inventory[symbol], 'Live symbol is absent from the actual selected member inventory'
-        if '/' in match[1]:
-            assert normalize_origin(match[1]) == origin, 'Map fullpath contradicts loaded origin'
         bindings[symbol] = dict(archive=origin, archive_sha256=aliases[origin], member=member, address=address)
     assert not re.search(r'Name:\s*lib(?:win)?pthread[^\s]*\.dll\b', imports, re.IGNORECASE), 'Unexpected dynamic pthread dependency'
     assert not re.search(r'Symbol:\s*(?:__imp_)?(?:pthread_|_pthread_|__pthread_|__pth_)', imports), 'Imported pthread provider symbol'
@@ -282,8 +285,18 @@ def capture(argv):
     import_path.write_bytes(imported)
     trace = log.read_bytes()
     mapping = map_path.read_bytes()
-    proof = prove(trace.decode('utf-8', errors='strict'), mapping.decode('utf-8', errors='strict'),
-                  imported.decode('utf-8', errors='strict'), data, cwd)
+    try:
+        proof = prove(trace.decode('utf-8', errors='strict'), mapping.decode('utf-8', errors='strict'),
+                      imported.decode('utf-8', errors='strict'), data, cwd)
+    except (AssertionError, KeyError, UnicodeError):
+        # Actual writer diagnostics precede the failed gate; a failed link
+        # receipt must not hide the map/owner rows needed to correct its parser.
+        for kind, content in (('MAP', mapping), ('IMPORTS', imported)):
+            print('SELECTED_LINK_RAW_' + kind + '_BEGIN', flush=True)
+            sys.stdout.buffer.write(content)
+            sys.stdout.buffer.flush()
+            print('\nSELECTED_LINK_RAW_' + kind + '_END', flush=True)
+        raise
     after, after_raw = authority()
     assert identity(data, raw) == identity(after, after_raw), 'Authority changed during link'
     record = dict(schema=SCHEMA, selected_toolchain=identity(data, raw), cwd=str(cwd),
