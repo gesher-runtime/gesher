@@ -224,6 +224,12 @@ jobs:
               pins = UNION_PINS | NATIVE_PINS
               if adapted:
                   pins = pins | {name: SOURCE_PINS[name] for name in ('tests/native3-locks/command_oracle.py', 'tests/native3-locks/command_worker.cc')}
+                  # Only this reviewed font-path adaptation supersedes a Native
+                  # selected leaf. The historical baseline above stays exact.
+                  name = 'compat/posix/src/path.cc'
+                  require(name in NATIVE_PINS and SOURCE_PINS[name] == FONTS_PINS[name],
+                          'Font path adaptation lacks exact independent pins')
+                  pins[name] = FONTS_PINS[name]
               for name, blob in pins.items():
                   require(actual.get(name, ('', ''))[1] == blob, 'Union/Native selected source assertion failed: ' + name)
 
@@ -386,6 +392,11 @@ jobs:
               actual = inventory(sha)
               verify_tree(actual, expected)
               verify_selected(actual, adapted=True)
+              for name in ('compat/posix/src/path.cc', 'compat/posix/src/fd.cc'):
+                  mutant = copy.deepcopy(actual)
+                  mutant[name] = ('100644', '0' * 40)
+                  reject('font_selected_adaptation_' + name,
+                         lambda: verify_selected(mutant, adapted=True))
               require(not git('status', '--porcelain', '--untracked-files=all').strip(), 'Dirty candidate checkout')
               verify_checkout(expected)
               isolated_import_controls()
