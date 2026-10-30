@@ -1,0 +1,118 @@
+name: fonts-map-diagnostic
+on:
+  workflow_dispatch:
+  push:
+    branches: ['wip/fonts-map-diagnostic']
+    paths: ['.github/workflows/fonts-map-diagnostic.yml']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: fonts-map-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cd20c1f43e569bf0b8c020abd2b00fcddfae2f3b
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind immutable diagnostic source and actual workflow run
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess
+          def git(*a): return subprocess.check_output(['git',*a],text=True).strip()
+          source='cd20c1f43e569bf0b8c020abd2b00fcddfae2f3b'
+          assert git('rev-parse','HEAD')==source
+          assert not git('status','--porcelain','--untracked-files=all')
+          assert git('hash-object','tools/fonts/verify-standalone-link.py')=='675e154ce89cebed8a053ed5c424ec2fdc16348f'
+          run=json.loads(subprocess.check_output(['gh','api',f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"]))
+          assert run['repository']['full_name']=='gesher-runtime/gesher'
+          assert str(run['repository']['id'])==os.environ['GITHUB_REPOSITORY_ID']=='1426153186'
+          assert str(run['head_repository']['id'])=='1426153186'
+          assert run['head_sha']==os.environ['GITHUB_SHA']
+          assert str(run['run_attempt'])==os.environ['GITHUB_RUN_ATTEMPT']
+          assert run['name']=='fonts-map-diagnostic' and run['path']=='.github/workflows/fonts-map-diagnostic.yml'
+          assert os.environ['GITHUB_REF']=='refs/heads/wip/fonts-map-diagnostic'
+          print('FONT_MAP_DIAGNOSTIC_CONTEXT '+json.dumps({'role':'unchanged-strict-proof-diagnostic',
+            'compiled_source':source,'workflow_source':run['head_sha'],'run':run['id'],
+            'attempt':run['run_attempt'],'repository_id':run['repository']['id']}),flush=True)
+          PY
+      - uses: ./.github/actions/setup-build
+      - name: Build immutable executable with the unchanged strict proof
+        id: strict
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = cd20c1f43e569bf0b8c020abd2b00fcddfae2f3b
+          test "$(git hash-object tools/fonts/verify-standalone-link.py)" = 675e154ce89cebed8a053ed5c424ec2fdc16348f
+          cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          set +e
+          ninja -C out exec4_no_console_probe gesher-exec 2>&1 | tee "$RUNNER_TEMP/font-map-build.log"
+          status=${PIPESTATUS[0]}
+          echo "exit=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+      - name: Always preserve raw map, actual members and link provenance in plain logs
+        if: always()
+        run: |
+          python3 -I - <<'PY'
+          import hashlib,json,os,pathlib,re,subprocess,tempfile
+          root=pathlib.Path('out')
+          mapping=root/'gesher-exec.fonts.map'
+          executable=root/'gesher-exec.exe'
+          assert mapping.is_file() and executable.is_file(), 'Compilation/link did not produce diagnostic inputs'
+          def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+          lines=mapping.read_text().splitlines()
+          selected=set(range(min(12,len(lines))))
+          for needle in ('native_fonts.cc.obj','FontCollection.cpp.obj','MinikinSkia.cpp.obj'):
+            hits=[i for i,line in enumerate(lines) if needle in line]
+            print('FONT_MAP_RAW_MATCHES '+json.dumps({'needle':needle,'count':len(hits)}),flush=True)
+            assert hits, ('No actual raw map input',needle)
+            for i in hits[:8]: selected.update(range(max(0,i-1),min(len(lines),i+10)))
+          for i in sorted(selected): print(f'FONT_MAP_RAW_LINE {i+1} {lines[i]}',flush=True)
+          cache=(root/'CMakeCache.txt').read_text()
+          compiler=pathlib.Path(re.search(r'^CMAKE_CXX_COMPILER:FILEPATH=(.+)$',cache,re.M).group(1))
+          tools=compiler.parent
+          command=subprocess.check_output(['ninja','-C',str(root),'-t','commands','-s',executable.name],text=True)
+          print('FONT_MAP_RAW_LINK_COMMAND '+command.strip(),flush=True)
+          print('FONT_MAP_INPUT_HASHES '+json.dumps({'map_sha256':sha(mapping),'executable_sha256':sha(executable),
+            'compiler_sha256':sha(compiler),'linker_sha256':sha(tools/'ld.lld'),
+            'link_command_sha256':hashlib.sha256(command.encode()).hexdigest()}),flush=True)
+          for tool in (compiler,tools/'ld.lld'):
+            print('FONT_MAP_TOOL_VERSION '+subprocess.check_output([str(tool),'--version'],text=True).strip(),flush=True)
+          for archive_name,member in (('libminikin.a','FontCollection.cpp.obj'),('libhwui.a','MinikinSkia.cpp.obj')):
+            archive=root/archive_name
+            members=subprocess.check_output([str(tools/'llvm-ar'),'t',str(archive)],text=True).splitlines()
+            matches=[name for name in members if pathlib.Path(name).name==member]
+            assert len(matches)==1, ('Ambiguous diagnostic member',archive_name,matches)
+            raw=subprocess.check_output([str(tools/'llvm-ar'),'p',str(archive),matches[0]])
+            print('FONT_MAP_MEMBER_HASH '+json.dumps({'archive':archive_name,'archive_sha256':sha(archive),
+              'member':matches[0],'member_sha256':hashlib.sha256(raw).hexdigest()}),flush=True)
+            with tempfile.TemporaryDirectory(prefix='font-map-symbols-') as temporary:
+              obj=pathlib.Path(temporary)/member; obj.write_bytes(raw)
+              for flags in ([],['--demangle']):
+                output=subprocess.check_output([str(tools/'llvm-nm'),'--defined-only',*flags,str(obj)],text=True)
+                name=member.split('.')[0]
+                relevant=[line for line in output.splitlines() if name in line]
+                assert relevant, ('Missing class symbols',member,flags)
+                for line in relevant[:12]: print('FONT_MAP_NM '+json.dumps({'member':member,'flags':flags,'raw':line}),flush=True)
+          print('FONT_MAP_PE_IMPORTS_BEGIN',flush=True)
+          print(subprocess.check_output([str(tools/'llvm-readobj'),'--coff-imports',str(executable)],text=True),flush=True)
+          print('FONT_MAP_PE_IMPORTS_END',flush=True)
+          build=(pathlib.Path(os.environ['RUNNER_TEMP'])/'font-map-build.log').read_text()
+          assert 'FONT_LINK_MAP_DIAGNOSTIC' in build and 'Missing precise font origins' in build
+          print('FONT_MAP_DIAGNOSTIC_COMPLETE strict_proof=FAILED_UNCHANGED runtime_qualification=false',flush=True)
+          PY
+      - name: Require the unchanged strict gate to remain failed
+        if: always()
+        env:
+          STRICT_OUTCOME: ${{ steps.strict.outcome }}
+          STRICT_EXIT: ${{ steps.strict.outputs.exit }}
+        run: |
+          test "$STRICT_OUTCOME" = failure
+          test "$STRICT_EXIT" = 1
