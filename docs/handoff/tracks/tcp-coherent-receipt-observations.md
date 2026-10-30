@@ -26,3 +26,11 @@ native program, C# compilation, network or archive operation occurs in this test
 
 New source requires independent peer and exact current-attempt CI. Neither this
 instrumentation nor matching later metadata qualifies coherent HOST/both guests.
+
+Run41108610204/attempt1/a963bb55 retained3successful producers/Linux and four
+Windows metadata failures before live receipt diagnostics or runtime. The new
+metadata test requires immutable ancestor f6, but default checkout fetch-depth1
+did not fetch it. This source dependency was missed in local full-history tests
+and peer. The correction requests full Git history for Windows checkout while
+retaining original-predicate equality checks. Producer/lifetime/runtime and
+acceptance conditions are unchanged. Historical411015 cause remains UNKNOWN.
