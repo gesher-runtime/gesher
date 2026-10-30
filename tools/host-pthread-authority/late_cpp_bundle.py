@@ -6,7 +6,8 @@ ARCHIVE='5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4'
 SOURCES=['pthread_late_cpp_main.cc','pthread_late_cpp_a.cc','pthread_late_cpp_b.cc','pthread_late_cpp_shared.h']
 ROLES={'published':('baseline_compile','publisher-archive-unmodified'),
        'production':('baseline_compile','gesher-winpthreads-authority-v1'),
-       'deferred':('probe_deferred_compile','gesher-winpthreads-authority-routing-probe-deferred-v1')}
+       'deferred':('probe_deferred_compile','gesher-winpthreads-authority-routing-probe-deferred-v1'),
+       'minimum-candidate':('minimum_compile','gesher-winpthreads-minimum-candidate-v1')}
 FLAGS=['-std=gnu++20','-O2','-g','-Wall','-Wextra','-Werror','-mno-ms-bitfields','-fno-exceptions','-fsized-deallocation','-D_WIN32_WINNT=0x0A00','-DWINVER=0x0A00','-D_FILE_OFFSET_BITS=64','-DWIN32_LEAN_AND_MEAN','-DNOMINMAX','-DNOGDI','-D_USE_MATH_DEFINES','-D__STDC_FORMAT_MACROS','-D__STDC_CONSTANT_MACROS','-D__STDC_LIMIT_MACROS','-D_POSIX_THREAD_SAFE_FUNCTIONS']
 TLS_OWNER_SYMBOLS=('gesher_tls_reaper_start_v1','gesher_tls_retirement_watch_v1','gesher_tls_retirement_counts_v1','gesher_tls_retirement_snapshot_v1')
 PTHREAD_SYMBOLS=('pthread_self','pthread_create','pthread_join','pthread_exit','pthread_key_create','pthread_key_delete','pthread_getspecific','pthread_setspecific','_pthread_cleanup_dest','__dyn_tls_pthread','__xl_f')
@@ -169,7 +170,7 @@ def selftest_trace():
             try:check_owner_symbols(role,bad)
             except AssertionError:rejected+=1
             else:raise AssertionError('Wrong supplier export isolation accepted')
-    print('PASS C++ source-only metadata: three roles, observational late TSD count remains unrestricted, ablation/conflict/role negatives='+str(rejected)+'; no native execution')
+    print('PASS C++ source-only metadata: roles='+str(len(ROLES))+', observational late TSD count remains unrestricted, ablation/conflict/role negatives='+str(rejected)+'; no native execution')
 
 def check_phase_observations(role,text):
     assert role in ROLES
