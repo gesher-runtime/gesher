@@ -7,6 +7,9 @@ on:
 permissions:
   contents: read
   actions: read
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 concurrency:
   group: fonts-map-diagnostic-${{ github.ref }}
   cancel-in-progress: false
@@ -39,17 +42,24 @@ jobs:
           assert str(run['run_attempt'])==os.environ['GITHUB_RUN_ATTEMPT']
           assert run['name']=='fonts-map-diagnostic' and run['path']=='.github/workflows/fonts-map-diagnostic.yml'
           assert os.environ['GITHUB_REF']=='refs/heads/wip/fonts-map-diagnostic'
+          subprocess.run(['git','merge-base','--is-ancestor',source,run['head_sha']],check=True)
+          changed=git('diff','--name-only',source,run['head_sha'],'--','.',':(exclude)docs/**').splitlines()
+          assert changed==['.github/workflows/fonts-map-diagnostic.yml'], changed
           print('FONT_MAP_DIAGNOSTIC_CONTEXT '+json.dumps({'role':'unchanged-strict-proof-diagnostic',
             'compiled_source':source,'workflow_source':run['head_sha'],'run':run['id'],
+            'workflow_blob':git('rev-parse',run['head_sha']+':.github/workflows/fonts-map-diagnostic.yml'),
             'attempt':run['run_attempt'],'repository_id':run['repository']['id']}),flush=True)
           PY
       - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
       - name: Build immutable executable with the unchanged strict proof
         id: strict
         continue-on-error: true
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = cd20c1f43e569bf0b8c020abd2b00fcddfae2f3b
+          test -z "$(git status --porcelain --untracked-files=all)"
           test "$(git hash-object tools/fonts/verify-standalone-link.py)" = 675e154ce89cebed8a053ed5c424ec2fdc16348f
           cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           set +e
@@ -62,6 +72,8 @@ jobs:
         run: |
           python3 -I - <<'PY'
           import hashlib,json,os,pathlib,re,subprocess,tempfile
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()=='cd20c1f43e569bf0b8c020abd2b00fcddfae2f3b'
+          assert not subprocess.check_output(['git','status','--porcelain','--untracked-files=all'],text=True).strip()
           root=pathlib.Path('out')
           mapping=root/'gesher-exec.fonts.map'
           executable=root/'gesher-exec.exe'
