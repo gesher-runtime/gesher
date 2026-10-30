@@ -14,7 +14,12 @@ report their actual sequence, native thread identity, expected/observed pthread
 identity, body-exit phase and exact callback counts. Each case requires one
 destructor per object and unchanged identity. All cases are logged before the
 final conformance result; a conformance failure exits2 and is not accepted as a
-green observation. Windows retains the original +8 handle bound.
+green observation. Every Windows worker duplicates its native thread handle
+before constructing the TLS objects. Main retains callback state through an
+actual kernel-completion wait on that owned handle for every exit mode, even if
+the supplier's pthread join publishes completion before later CRT callbacks.
+The native ExitThread61 case also retains its original external kernel witness.
+Every duplicated handle is closed and Windows retains the original +8 bound.
 
 Compiler flags follow the production GNU C++20/no-exceptions/sized-deallocation
 and static-link configuration. Debug symbols are retained for actual compiler
