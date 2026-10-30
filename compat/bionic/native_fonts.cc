@@ -167,6 +167,7 @@ struct StandaloneFonts {
   std::map<std::string, std::shared_ptr<minikin::FontCollection>> collections;
   StandaloneFonts() {
     const auto paths = gesher::SystemFontFiles();
+    if (paths.xml.empty() || paths.directory.empty()) return;
     Iterator parsed;
     ReadFontFamilies(paths.xml, paths.directory, &parsed);
     struct Family {
@@ -248,6 +249,8 @@ Iterator* BIONIC_SYSV OpenIterator() {
     return iterator.release();
   }
   const auto paths = gesher::SystemFontFiles();
+  // Read/conversion errors are authoritative; OEM metadata cannot rescue one.
+  if (paths.xml.empty() || paths.directory.empty()) return iterator.release();
   ReadFontFamilies(paths.xml, paths.directory, iterator.get());
   const char* product_root = std::getenv("ANDROID_PRODUCT_ROOT");
   std::string product = product_root != nullptr ? product_root : "/product";

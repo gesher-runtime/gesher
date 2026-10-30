@@ -28,6 +28,8 @@ FontEnvironmentValue ReadFontEnvironment(FontEnvironmentKey key) noexcept;
 // nullopt retains the caller's original branch (unrelated/invalid input).
 // Otherwise returns the raw CRT code; callers preserve their existing errno
 // mapping. A skipped overwrite=0 or failed primitive never changes ownership.
+// Arbitrary CRT-handler reentrant writes remain an open contract; this does
+// not promise general callback/environment synchronization.
 std::optional<int> WriteFontEnvironment(const char* name, const char* value,
                                       int overwrite) noexcept;
 }  // namespace gesher

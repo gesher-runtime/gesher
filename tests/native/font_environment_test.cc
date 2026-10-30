@@ -108,6 +108,6 @@ int main(int argc,char** argv){
   DWORD codes[2]{};
   Require(GetExitCodeThread(threads[0],&codes[0])&&GetExitCodeThread(threads[1],&codes[1])&&codes[0]==0&&codes[1]==0&&failures.load()==0,"concurrent snapshots");
   Require(CloseHandle(threads[0])&&CloseHandle(threads[1])&&CloseHandle(start),"worker handle cleanup");
-  std::printf("FONT_ENV_HOST_PASS mode=%s two_keys=1 initial_wide=1 copy_move_lifetime=1 native_POSIX=1 overwrite0=1 callback_failure=PRE_MUTATION raw_partial_rollback_claim=0 invalid_owned_fail_closed=1 concurrency=1000 handles_closed=1 global_getenv_repair=0 font_fallback_qualified=0\n",argv[1]);
+  std::printf("FONT_ENV_HOST_PASS mode=%s two_keys=1 initial_wide=1 copy_move_lifetime=1 native_POSIX=1 overwrite0=1 callback_failure=PRE_MUTATION_READ_ONLY concurrent_raw_callback_interleaving_qualification=0 writer_callback_reentrancy_qualification=0 preparation_oom_qualification=0 raw_partial_rollback_claim=0 invalid_owned_fail_closed=1 concurrency=1000 handles_closed=1 global_getenv_repair=0 font_fallback_qualified=0\n",argv[1]);
   return 0;
 }
