@@ -8,6 +8,7 @@ struct LateCppCase {
   std::uint64_t native{};
   std::atomic<std::uintptr_t> native_handle{0};
   std::atomic<int> constructed{0},a{0},b{0},mismatch{0},body_left{0},sequence{0};
+  std::atomic<int> a_done{0},b_done{0};
 };
 void LateCppRecord(LateCppCase *,const char *);
 void LateCppTouchA(LateCppCase *);

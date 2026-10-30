@@ -690,11 +690,12 @@ jobs:
             if ($process.ExitCode -ne 0) { throw "Late C++ actual role=$role exit=$($process.ExitCode)" }
             if (-not $actual.Contains('CPP_TLS_RESULT cases=4 failures=0 conformant=1')) { throw 'Incomplete genuine TLS callback identity evidence' }
             foreach ($mode in @('pthread_return','pthread_exit','std_thread_return','native_ExitThread')) {
-              if (-not $actual.Contains("CPP_TLS_CASE mode=$mode constructed=2 a=1 b=1 mismatch=0 conformant=1")) { throw "Missing actual C++ case $mode" }
+              if (-not $actual.Contains("CPP_TLS_CASE mode=$mode constructed=2 a=1 b=1 mismatch=0 a_done=1 b_done=1 conformant=1")) { throw "Missing actual C++ case $mode" }
               if ($actual -notmatch "(?m)^CPP_TLS_KERNEL mode=$mode signaled=1 exit=[0-9]+ owned_handle_closed=1\r?$") { throw "Missing actual C++ worker kernel termination $mode" }
             }
             foreach ($mode in @('pthread_return','pthread_exit','std_thread_return')) {
-              if (-not $actual.Contains("CPP_TLS_JOIN mode=$mode phase=join-return a=1 b=1 mismatch=0 sequence=2 conformant=1")) { throw "Callbacks incomplete at actual join return $mode" }
+              if (-not $actual.Contains("CPP_TLS_JOIN mode=$mode phase=join-return a=1 b=1 mismatch=0 sequence=2 a_done=1 b_done=1 conformant=1")) { throw "Callbacks incomplete at actual join return $mode" }
+              if ($actual -notmatch "(?m)^CPP_TLS_JOIN_KERNEL mode=$mode phase=join-return wait=(0|258) observation_only=1\r?$") { throw "Missing join-return kernel observation $mode" }
             }
           } finally {
             if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Late C++ owned process cleanup failed' } }

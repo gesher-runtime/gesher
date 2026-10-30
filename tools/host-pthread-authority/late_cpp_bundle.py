@@ -22,6 +22,7 @@ def build(llvm,role):
     archive=llvm.parent/'compiler.tar.xz';assert sha(archive)==ARCHIVE
     driver=llvm/'bin/x86_64-w64-mingw32-clang++';lib=llvm/'x86_64-w64-mingw32/lib/libwinpthread.a'
     dll=llvm/'x86_64-w64-mingw32/bin/libwinpthread-1.dll';provider=llvm/'gesher-winpthreads-authority.json'
+    pthread_inputs={name:dict(path=str(llvm/'x86_64-w64-mingw32/lib'/name),sha256=sha(llvm/'x86_64-w64-mingw32/lib'/name)) for name in ('libwinpthread.a','libpthread.a')}
     if role=='published':
         assert not provider.exists()
         (dist/'provider.json').write_text(json.dumps(dict(variant=variant,archive=ARCHIVE,cxx=sha(driver),library=sha(lib),dll=sha(dll)),indent=2))
@@ -29,13 +30,16 @@ def build(llvm,role):
         data=json.loads(provider.read_text());assert data['role']==variant and all(data[k]==v for k,v in ctx.items())
         assert data['compiler_archive_sha256']==ARCHIVE and data['cxx_driver_sha256']==sha(driver)
         assert data['files']['lib/libwinpthread.a']==sha(lib) and data['files']['bin/libwinpthread-1.dll']==sha(dll)
+        assert data['files']['lib/libpthread.a']==pthread_inputs['libpthread.a']['sha256']
         shutil.copyfile(provider,dist/'provider.json')
     commands=[];objects=[]
     for name in SOURCES[:3]:
         obj=dist/(Path(name).stem+'.obj');argv=[str(driver)]+FLAGS+['-c',str(ROOT/'tests/native'/name),'-o',str(obj)]
         subprocess.check_call(argv);commands.append(argv);objects.append(obj)
     exe=dist/'late-cpp.exe';argv=[str(driver),'-static','-pthread']+[str(x) for x in objects]+[str(lib),'-Wl,--verbose','-o',str(exe)]
-    subprocess.check_call(argv);commands.append(argv)
+    link=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+    print(link.stdout,end='',flush=True);(dist/'link.txt').write_text(link.stdout);link.check_returncode();commands.append(argv)
+    for name,record in pthread_inputs.items():print('CPP_TLS_PTHREAD_INPUT role='+role+' archive='+name+' path='+record['path']+' sha256='+record['sha256'],flush=True)
     imports=subprocess.check_output([str(llvm/'bin/llvm-readobj'),'--coff-imports',str(exe)],text=True)
     assert 'libwinpthread-1.dll' not in imports.lower() and 'libc++' not in imports.lower()
     (dist/'imports.txt').write_text(imports)
@@ -44,18 +48,19 @@ def build(llvm,role):
     matches=[x for x in symbols.splitlines() if re.search(r'emutls|thread_atexit|tlregdtor|dyn_tls|Probe[AB]|LateCppRecord',x)]
     print('CPP_TLS_MODEL role='+role+' matches='+str(len(matches)),flush=True)
     for line in matches[:200]:print('CPP_TLS_MODEL_SYMBOL '+line,flush=True)
-    data=dict(context=ctx,role=role,variant=variant,producer=producer,archive=ARCHIVE,compiler_root=str(llvm),workspace=str(ROOT),driver=str(driver),driver_sha256=sha(driver),library_sha256=sha(lib),dll_sha256=sha(dll),version=subprocess.check_output([str(driver),'--version'],text=True),commands=commands,sources={n:sha(ROOT/'tests/native'/n) for n in SOURCES},archives={p.name:sha(p) for p in (llvm/'x86_64-w64-mingw32/lib').glob('*.a')},members={p.name:sha(p) for p in dist.iterdir()})
+    data=dict(context=ctx,role=role,variant=variant,producer=producer,archive=ARCHIVE,compiler_root=str(llvm),workspace=str(ROOT),driver=str(driver),driver_sha256=sha(driver),library_sha256=sha(lib),dll_sha256=sha(dll),pthread_archive_inputs=pthread_inputs,version=subprocess.check_output([str(driver),'--version'],text=True),commands=commands,sources={n:sha(ROOT/'tests/native'/n) for n in SOURCES},archives={p.name:sha(p) for p in (llvm/'x86_64-w64-mingw32/lib').glob('*.a')},members={p.name:sha(p) for p in dist.iterdir()})
     (dist/'bundle.json').write_text(json.dumps(data,sort_keys=True,indent=2))
     print('CPP_TLS_BUILD role='+role+' variant='+variant+' archive='+ARCHIVE+' cxx='+sha(driver)+' pthread='+sha(lib),flush=True)
 def verify(role):
     ctx=context();producer,variant=ROLES[role];dist=ROOT/('late-cpp-'+role);data=json.loads((dist/'bundle.json').read_text())
     assert data['context']==ctx and data['role']==role and data['variant']==variant and data['producer']==producer and data['archive']==ARCHIVE
-    expected={'provider.json','late-cpp.exe','imports.txt','tls-symbols.txt'}|{Path(n).stem+'.obj' for n in SOURCES[:3]}
+    expected={'provider.json','late-cpp.exe','imports.txt','tls-symbols.txt','link.txt'}|{Path(n).stem+'.obj' for n in SOURCES[:3]}
     assert set(data['members'])==expected and {p.name for p in dist.iterdir()}==expected|{'bundle.json'}
     assert all(sha(dist/n)==v for n,v in data['members'].items())
     assert data['sources']=={n:sha(ROOT/'tests/native'/n) for n in SOURCES}
     assert data['driver']==data['compiler_root']+'/bin/x86_64-w64-mingw32-clang++'
     assert data['driver_sha256'] and data['archives']['libwinpthread.a']==data['library_sha256']
+    assert data['pthread_archive_inputs']=={name:dict(path=data['compiler_root']+'/x86_64-w64-mingw32/lib/'+name,sha256=data['archives'][name]) for name in ('libwinpthread.a','libpthread.a')}
     assert all(re.fullmatch('[0-9a-f]{64}',v) for v in data['archives'].values())
     expected_commands=[]
     for name in SOURCES[:3]:expected_commands.append([data['driver']]+FLAGS+['-c',data['workspace']+'/tests/native/'+name,'-o',data['workspace']+'/late-cpp-'+role+'/'+Path(name).stem+'.obj'])
@@ -67,6 +72,7 @@ def verify(role):
         assert provider['role']==variant and all(provider[k]==v for k,v in ctx.items())
         assert provider['compiler_archive_sha256']==ARCHIVE and provider['cxx_driver_sha256']==data['driver_sha256']
         assert provider['files']['lib/libwinpthread.a']==data['library_sha256'] and provider['files']['bin/libwinpthread-1.dll']==data['dll_sha256']
+        assert provider['files']['lib/libpthread.a']==data['pthread_archive_inputs']['libpthread.a']['sha256']
     imports=(dist/'imports.txt').read_text().lower();assert 'libwinpthread-1.dll' not in imports and 'libc++' not in imports
     print('Verified distinct C++ TLS variant '+role+' producer='+producer+' same source/run/attempt and complete members',flush=True)
 if __name__=='__main__':
