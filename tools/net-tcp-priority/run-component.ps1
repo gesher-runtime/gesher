@@ -204,8 +204,12 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
   if ($text -notmatch '(?m)^PASS TCP priority: shared aliases preserve dup2 targets last-close EOF concurrent urgent poll and UDP payload\s*$') { throw "Missing alias lifetime controls $Context" }
   foreach ($family in 4,6) {
     if ($text -notmatch "(?m)^PASS owned UDP family=$family logical-blocking timeout alias zero/one/8192 peek conservation and concurrent reader\r?$") { throw "Missing actual UDP data/timeout/reader controls $Context/$family" }
-    foreach ($mode in 0..2) {
-      if ($text -notmatch "(?m)^UDP_ENTRY_CANCEL family=$family mode=$mode cleanup=1 canceled=1\r?$") { throw "Missing actual UDP entry nonlocal cleanup $Context/$family/$mode" }
+    if ($Context -eq 'host-posix') {
+      foreach ($mode in 0..2) {
+        if ($text -notmatch "(?m)^UDP_ENTRY_CANCEL family=$family mode=$mode cleanup=1 canceled=1\r?$") { throw "Missing actual UDP entry nonlocal cleanup $Context/$family/$mode" }
+      }
+    } elseif ($text -notmatch "(?m)^UDP_ENTRY_CANCEL family=$family scope=bionic-api-absent\r?$") {
+      throw "Missing explicit Android cancellation API boundary $Context/$family"
     }
   }
   if ($text -notmatch '(?m)^TCP_PRIORITY_ALIAS_DRAIN stream_recv=0 stream_error=0 before_last_close_recv=-1 before_last_close_error=11\r?$') { throw "Missing actual urgent stream drain and live last-alias control $Context" }
@@ -230,6 +234,7 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: real legacy leases reject stale native calls after CRT reuse while global operations and getters progress\s*$') { throw 'Missing HOST actual legacy lifetime controls' }
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: positive native UDP error remains visible outside owned TCP refusal scope\s*$') { throw 'Missing HOST positive actual UDP error control' }
   if ($Context -eq 'host-posix') {
+    if ($text -notmatch '(?m)^UDP_MIXED_RESAMPLE observed=1 positive_before_throttle=1 rc=1 first=0 second=1 after_positive_ms=[0-9]+ budget_ms=300\r?$') { throw 'Missing actual mixed UDP requested readiness after first native sample' }
     foreach ($blocking in 0..1) {
       if ($text -notmatch "(?m)^TCP_PRIORITY_NATIVE_UDP_PUBLIC blocking=$blocking stage=consumed-twice final_revents=0 new_error_after_clear=1\r?$") { throw "Missing HOST imported UDP ownership and real error consumption $blocking" }
     }

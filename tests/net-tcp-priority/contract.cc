@@ -615,6 +615,54 @@ static void legacy_lifetime_controls() {
   }
   puts("PASS TCP priority: real legacy leases reject stale native calls after CRT reuse while global operations and getters progress");
 }
+struct UdpMixedPoll {
+  int sender;
+  sockaddr_in address;
+  gesher::ws::PollEntry requested;
+  int observations = 0;
+  long long positive_at = -1;
+};
+static void udp_mixed_after_sample(bool before, int result, int error, void* raw) {
+  auto& state = *static_cast<UdpMixedPoll*>(raw);
+  if (before) return;
+  require(state.observations++ == 0 && result == 1 && error == 0, "mixed UDP observer follows actual first native sample");
+  require(sendto(state.sender, "b", 1, 0, reinterpret_cast<sockaddr*>(&state.address), sizeof(state.address)) == 1,
+      "mixed UDP second requested endpoint becomes ready after initial sample");
+  require(gesher::ws::Poll(&state.requested, 1, 100) == 1 && state.requested.revents == gesher::ws::kPollIn,
+      "mixed UDP second endpoint positively ready before outer throttle");
+  state.positive_at = millis();
+}
+static void udp_mixed_poll_resample_control() {
+  int senders[2], receivers[2]; sockaddr_in addresses[2]{};
+  gesher::SocketFd snapshots[2];
+  for (int i = 0; i < 2; ++i) {
+    senders[i] = socket(AF_INET, SOCK_DGRAM, 0); receivers[i] = socket(AF_INET, SOCK_DGRAM, 0);
+    addresses[i].sin_family = AF_INET; addresses[i].sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    socklen_t length = sizeof(addresses[i]);
+    require(senders[i] >= 0 && receivers[i] >= 0 &&
+        bind(receivers[i], reinterpret_cast<sockaddr*>(&addresses[i]), length) == 0 &&
+        getsockname(receivers[i], reinterpret_cast<sockaddr*>(&addresses[i]), &length) == 0 &&
+        gesher::LookupSocket(receivers[i], &snapshots[i]), "mixed UDP exact owned endpoints");
+  }
+  require(sendto(senders[0], "a", 1, 0, reinterpret_cast<sockaddr*>(&addresses[0]), sizeof(addresses[0])) == 1,
+      "mixed UDP first unrequested datagram queued");
+  gesher::ws::PollEntry entries[2]{
+      {snapshots[0].socket, gesher::ws::kPollPri, 0, snapshots[0].description},
+      {snapshots[1].socket, gesher::ws::kPollIn, 0, snapshots[1].description}};
+  UdpMixedPoll observation{senders[1], addresses[1], entries[1]};
+  const int result = gesher::ws::Poll(entries, 2, 300, udp_mixed_after_sample, &observation);
+  const long long after_positive = millis() - observation.positive_at;
+  printf("UDP_MIXED_RESAMPLE observed=%d positive_before_throttle=1 rc=%d first=%d second=%d after_positive_ms=%lld budget_ms=300\n",
+      observation.observations, result, entries[0].revents, entries[1].revents, after_positive);
+  require(observation.observations == 1 && observation.positive_at >= 0 && result == 1 &&
+      entries[0].revents == 0 && entries[1].revents == gesher::ws::kPollIn && after_positive < 150,
+      "mixed UDP throttle re-samples requested readiness without spending the whole budget");
+  for (int i = 0; i < 2; ++i) {
+    char byte = 0;
+    require(recv(receivers[i], &byte, 1, MSG_DONTWAIT) == 1 && byte == 'a' + i &&
+        close(receivers[i]) == 0 && close(senders[i]) == 0, "mixed UDP both datagrams conserved and all endpoints close");
+  }
+}
 static void native_udp_error_control(bool blocking = false) {
   const int fd = gesher::test::NativeUdpErrorControl(blocking);
   require(((fcntl(fd, F_GETFL) & O_NONBLOCK) == 0) == blocking, "imported UDP preserves its logical blocking hint");
@@ -936,6 +984,9 @@ static void* udp_concurrent_reader(void* raw) {
   reader.error = reader.received < 0 ? errno : 0;
   return nullptr;
 }
+#if !defined(__BIONIC__)
+// Android Bionic deliberately has no pthread_cancel/PTHREAD_CANCELED API.
+// These are Linux/HOST POSIX cancellation controls, not guest ABI extensions.
 struct UdpEntryCancellation {
   int fd, mode;
   std::atomic<int> phase{0};
@@ -959,6 +1010,7 @@ static void* udp_entry_cancellation(void* raw) {
   pthread_cleanup_pop(0);
   return reinterpret_cast<void*>(uintptr_t{1});
 }
+#endif
 static void udp_owned_payload_controls() {
   for (int version : {4, 6}) {
     const int family = version == 4 ? AF_INET : AF_INET6;
@@ -1035,6 +1087,7 @@ static void udp_owned_payload_controls() {
     }
     require(winners == 1 && timed_out == 1 && pthread_barrier_destroy(&barrier) == 0,
         "owned UDP concurrent consumption never blocks after stale readiness");
+#if !defined(__BIONIC__)
     for (int mode = 0; mode < 3; ++mode) {
       UdpEntryCancellation call{alias, mode};
       pthread_t canceled;
@@ -1055,6 +1108,9 @@ static void udp_owned_payload_controls() {
       require(ownership.use_count() == references, "UDP cancellation releases caller snapshots without removing live OFD");
 #endif
     }
+#else
+    printf("UDP_ENTRY_CANCEL family=%d scope=bionic-api-absent\n", version);
+#endif
     require(!(fcntl(alias, F_GETFL) & O_NONBLOCK) && close(receiver) == 0 && close(alias) == 0 && close(sender) == 0,
         "owned UDP shared flags and all endpoint cleanup");
     printf("PASS owned UDP family=%d logical-blocking timeout alias zero/one/8192 peek conservation and concurrent reader\n", version);
@@ -1081,6 +1137,7 @@ int main(int argc, char** argv) {
   legacy_lifetime_controls();
   native_udp_error_control();
   native_udp_error_control(true);
+  udp_mixed_poll_resample_control();
 #endif
   udp_owned_payload_controls();
   failed_to_listener_control();

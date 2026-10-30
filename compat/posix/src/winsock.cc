@@ -1292,11 +1292,22 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
     if (out != 0) ++ready;
   }
   if (ready == 0 && suppressed_datagram_read && timeout_ms != 0) {
-    // Queued user data with no requested read interest must not turn the outer
-    // finite poll loop into a busy loop. Retain this sample's original budget.
-    const ULONGLONG budget = wait < 0 ? 10 : static_cast<ULONGLONG>(wait);
-    const ULONGLONG elapsed = GetTickCount64() - sample_started;
-    if (elapsed < budget) Sleep(static_cast<DWORD>(budget - elapsed));
+    // Queued unrequested data must not spin, delay a different requested fd
+    // for the whole timeout, or return an old zero after sleeping past a new
+    // event. Re-sample every bounded slice, including at the final deadline.
+    for (;;) {
+      const ULONGLONG elapsed = GetTickCount64() - sample_started;
+      DWORD pause = 10;
+      if (timeout_ms >= 0) {
+        const ULONGLONG budget = static_cast<ULONGLONG>(timeout_ms);
+        if (elapsed >= budget) return Poll(entries, count, 0, nullptr, nullptr);
+        if (budget - elapsed < pause) pause = static_cast<DWORD>(budget - elapsed);
+      }
+      Sleep(pause);
+      const int sampled = Poll(entries, count, 0, nullptr, nullptr);
+      if (sampled != 0) return sampled;
+      if (timeout_ms >= 0 && GetTickCount64() - sample_started >= static_cast<ULONGLONG>(timeout_ms)) return 0;
+    }
   }
   return ready;
 }
