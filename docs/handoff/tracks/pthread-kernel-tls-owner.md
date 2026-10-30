@@ -177,18 +177,26 @@ module callback lease startup or general async entry safety. No worker stop or
 process shutdown wait is added. Real FastExit/process termination remains a
 separate entrypoint contract.
 
-Late callbacks in this qualification call self/get/setspecific only. Recursive
-pthread_exit or cancellation-control re-entry after owned _endthreadex begins
-is not qualified: the retained owned record still contains its wrapper jump
-context. The POSIX pthread_exit destructor-recursion rule must not be silently
-extended to arbitrary C++ callback interoperability. This is an explicit open
-semantic audit, not a new production error-return policy. Likewise the observed
+The owned phase3 held callback additionally enables cancellation, requires
+self-cancel to return ESRCH without pending work, calls testcancel successfully,
+and restores the original disabled state. Self/external cancel share lifecycle1
+admission; testcancel/shallcancel/state/type delivery also require lifecycle1.
+Direct invoke aborts before any counter mutation if no longer LIVE. Recursive
+pthread_exit checks state BEFORE ret_arg/TSD cleanup/longjmp and aborts at an
+explicit diagnostic-only unqualified boundary; it never recursively terminates
+the CRT. These are not new product error-return policies. Full late-control
+semantics remain open. In particular foreign std/native C++ callbacks may run
+BEFORE the provider hook, so their lifecycle1 does not establish body context.
+The owned phase3 guard cannot be generalized to those callbacks. An earlier
+marker needs actual callback-order evidence and preserves the original owned
+versus foreign cleanup location/budget. The POSIX pthread_exit destructor
+recursion rule is not silently extended to arbitrary C++ interoperability. Likewise the observed
 late-created TSD callback count is not a conformance result. The candidate does
 not promote DEFERRED_ONLY or change the original async/product contract.
 
 Source-only checks reconstruct all8 ordered patch stacks from the exact11 pinned
 upstream files, with git core.autocrlf=false to match Linux CI. Seven old source
 expansions and original21 YAML job definitions remain unchanged. The trace gate
-has177 metadata ablation/conflict/isolation negatives; old11 provenance parser
+has183 metadata ablation/conflict/isolation negatives; old11 provenance parser
 negatives and both actual410871 archive/member replays remain passing. None of
 these source checks is a substitute for actual560 layout or Windows execution.

@@ -94,6 +94,7 @@ def check_trace(role,text):
     held=('owned_held_join','owned_held_detach')
     if role=='deferred':
         for mode in held:
+            one('CPP_TLS_HELD_CONTROL mode='+mode+' phase=owned-EXITING explicit_enable=1 self_cancel_esrch=1 pending=0 testcancel_returned=1 restored_disabled=1 diagnostic_only=1')
             tu,early=one('CPP_TLS_HELD_ENTER mode='+mode+' tu=([AB]) early_budget=256 actual_early=([0-9]+)')
             assert int(early)==256
             scans=one('CPP_TLS_HELD_BEFORE mode='+mode+' original_identity=1 tls_owner=1 lifecycle=3 ended=0 kernel=258 clock_live=1 event_live=1 spin_live=1 scans=([0-9]+) finalized=0 released=0 pool=0 early_budget=256 external_delete=1')
@@ -119,7 +120,8 @@ def selftest_trace():
             f'CPP_TLS_HANDLES before={baseline} after={after} original_bound=8 bounded=1']
         if deferred:
             for mode in ('owned_held_join','owned_held_detach'):
-                lines += ['CPP_TLS_HELD_ENTER mode='+mode+' tu=B early_budget=256 actual_early=256',
+                lines += ['CPP_TLS_HELD_CONTROL mode='+mode+' phase=owned-EXITING explicit_enable=1 self_cancel_esrch=1 pending=0 testcancel_returned=1 restored_disabled=1 diagnostic_only=1',
+                    'CPP_TLS_HELD_ENTER mode='+mode+' tu=B early_budget=256 actual_early=256',
                     'CPP_TLS_HELD_BEFORE mode='+mode+' original_identity=1 tls_owner=1 lifecycle=3 ended=0 kernel=258 clock_live=1 event_live=1 spin_live=1 scans=2 finalized=0 released=0 pool=0 early_budget=256 external_delete=1',
                     'CPP_TLS_HELD_AFTER mode='+mode+' kernel_signaled=1 finalized=1 released=1 clock_destroy=1 event_close=1 spin_destroy=1 pool_retire=1 original_identity=1 a_done=1 b_done=1 late_key_explicit_clear=1']
         return lines
@@ -140,7 +142,7 @@ def selftest_trace():
         reject(role,text.replace('after=64','after=69'))
         reject(role,text.replace('original_total_bound=8','original_total_bound=9'))
         if role=='deferred':
-            for old,new in [('scans=2','scans=0'),('actual_early=256','actual_early=257'),('kernel=258','kernel=0'),('clock_destroy=1','clock_destroy=2'),('spin_destroy=1','spin_destroy=0'),('pool_retire=1','pool_retire=0'),('late_key_explicit_clear=1','late_key_explicit_clear=0')]:reject(role,text.replace(old,new,1))
+            for old,new in [('pending=0','pending=1'),('self_cancel_esrch=1','self_cancel_esrch=0'),('scans=2','scans=0'),('actual_early=256','actual_early=257'),('kernel=258','kernel=0'),('clock_destroy=1','clock_destroy=2'),('spin_destroy=1','spin_destroy=0'),('pool_retire=1','pool_retire=0'),('late_key_explicit_clear=1','late_key_explicit_clear=0')]:reject(role,text.replace(old,new,1))
         else:reject(role,text+'CPP_TLS_HELD_AFTER unexpected=1\n')
         symbols='\n'.join('0000 T '+n for n in TLS_OWNER_SYMBOLS) if role=='deferred' else ''
         check_owner_symbols(role,symbols)

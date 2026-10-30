@@ -60,6 +60,17 @@ void LateCppRecord(LateCppCase *state,const char *tu) {
 #ifdef _WIN32
   if (state->held) {
     if (state->hold_claimed.exchange(1)==0) {
+      using PendingCount=LONG (__cdecl *)();
+      const auto pending=reinterpret_cast<PendingCount>(GetProcAddress(GetModuleHandleW(nullptr),"gesher_deferred_pending_v1"));
+      int prior=-1,enabled=-1;
+      Require(pending && pending()==0 && !pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,&prior) &&
+          prior==PTHREAD_CANCEL_DISABLE,"owned EXITING late control starts from disabled state");
+      Require(pthread_cancel(pthread_self())==ESRCH && pending()==0,
+          "EXITING self cancellation cannot enqueue pending work after explicit enable");
+      pthread_testcancel();
+      Require(pending()==0 && !pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,&enabled) &&
+          enabled==PTHREAD_CANCEL_ENABLE,"EXITING testcancel returns and original disabled state is restored");
+      std::printf("CPP_TLS_HELD_CONTROL mode=%s phase=owned-EXITING explicit_enable=1 self_cancel_esrch=1 pending=0 testcancel_returned=1 restored_disabled=1 diagnostic_only=1\n",state->mode);
       Require(state->early_key_dtors==PTHREAD_DESTRUCTOR_ITERATIONS,"unchanged early owned TSD pass budget");
       std::printf("CPP_TLS_HELD_ENTER mode=%s tu=%s early_budget=%d actual_early=%d\n",
           state->mode,tu,PTHREAD_DESTRUCTOR_ITERATIONS,state->early_key_dtors.load());
