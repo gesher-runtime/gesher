@@ -12,6 +12,7 @@ case "$role" in
   probe-legacy) suffix=-probe-legacy ;;
   probe-reaper) suffix=-probe-reaper ;;
   probe-resource) suffix=-probe-resource ;;
+  probe-deferred) suffix=-probe-deferred ;;
   *) exit 2 ;;
 esac
 root=$(git rev-parse --show-toplevel)
@@ -30,10 +31,15 @@ if test "$role" = fault || test "$role" = probe-fault; then
   git -C "$supplier" apply --check "$root/tools/host-pthread-authority/fault-supplier.patch"
   git -C "$supplier" apply "$root/tools/host-pthread-authority/fault-supplier.patch"
 fi
+if test "$role" = probe-deferred; then
+  git -C "$supplier" apply --check "$root/tools/host-pthread-authority/deferred-supplier.patch"
+  git -C "$supplier" apply "$root/tools/host-pthread-authority/deferred-supplier.patch"
+fi
 export PATH="$llvm/bin:$PATH"
 supplier_cflags='-g -O2 -mguard=cf -Werror -Xclang -fdump-record-layouts'
-if test "$role" = probe || test "$role" = probe-fault || test "$role" = probe-legacy || test "$role" = probe-reaper || test "$role" = probe-resource; then supplier_cflags="$supplier_cflags -DGESHER_PTHREAD_ROUTING_PROBE=1"; fi
-if test "$role" = probe-resource; then supplier_cflags="$supplier_cflags -DGESHER_RESOURCE_LEASE_PROBE=1"; fi
+if test "$role" = probe || test "$role" = probe-fault || test "$role" = probe-legacy || test "$role" = probe-reaper || test "$role" = probe-resource || test "$role" = probe-deferred; then supplier_cflags="$supplier_cflags -DGESHER_PTHREAD_ROUTING_PROBE=1"; fi
+if test "$role" = probe-resource || test "$role" = probe-deferred; then supplier_cflags="$supplier_cflags -DGESHER_RESOURCE_LEASE_PROBE=1"; fi
+if test "$role" = probe-deferred; then supplier_cflags="$supplier_cflags -DGESHER_CANCEL_STATE_PROBE=1 -DGESHER_DEFERRED_ONLY_PROBE=1"; fi
 if test "$role" = probe-reaper; then supplier_cflags="$supplier_cflags -DGESHER_REAPER_PROBE=1"; fi
 if test "$role" = probe-legacy; then supplier_cflags="$supplier_cflags -DGESHER_RWLOCK_ORIGINAL_RECHECK=1"; fi
 mkdir "$supplier/build"

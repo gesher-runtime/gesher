@@ -1,0 +1,115 @@
+/* Diagnostic capability only: actual deferred APIs, native exit and join unwind. */
+#include <pthread.h>
+#include <windows.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <wchar.h>
+extern void __cdecl gesher_deferred_gate_v1(pthread_t,void *,void *,pthread_t,void *);
+typedef int (__cdecl *cancel_fn)(pthread_t);
+typedef int (__cdecl *join_fn)(pthread_t,void **);
+typedef int (__cdecl *type_fn)(int,int *);
+static cancel_fn dll_cancel;
+static join_fn dll_join;
+static type_fn dll_type;
+static pthread_key_t key;
+static volatile LONG self_cleanup,self_dtor,join_cleanup,join_dtor,native_dtor;
+static void require(int ok,const char *what) { if (!ok) { fprintf(stderr,"FAIL deferred %s\n",what); exit(1); } }
+static void count(void *arg) { InterlockedIncrement((volatile LONG *)arg); }
+static void *self_cancel(void *arg) {
+  (void)arg;
+  require(!pthread_setspecific(key,(void *)&self_dtor),"self key");
+  pthread_cleanup_push(count,(void *)&self_cleanup);
+  require(!dll_cancel(pthread_self()),"self deferred request");
+  pthread_testcancel();
+  require(0,"self testcancel returned");
+  pthread_cleanup_pop(0);
+  return NULL;
+}
+struct native_state { HANDLE ready,release; pthread_t id; };
+static DWORD WINAPI native_target(void *arg) {
+  struct native_state *s=arg; int previous=-1; s->id=pthread_self();
+  require(s->id && !pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,&previous) &&
+      !pthread_setspecific(key,(void *)&native_dtor),"native attach/state/key");
+  require(SetEvent(s->ready) && WaitForSingleObject(s->release,20000)==WAIT_OBJECT_0,"native release");
+  ExitThread(61); return 0;
+}
+static DWORD WINAPI cancel_actor(void *arg) { return (DWORD)dll_cancel(((struct native_state *)arg)->id); }
+struct joined_state { HANDLE release; pthread_t id; };
+static void *joined_target(void *arg) {
+  struct joined_state *s=arg;
+  require(WaitForSingleObject(s->release,20000)==WAIT_OBJECT_0,"joined target release");
+  return (void *)(uintptr_t)0x1234;
+}
+static void *joining_actor(void *arg) {
+  struct joined_state *s=arg; void *value=NULL;
+  require(!pthread_setspecific(key,(void *)&join_dtor),"joiner key");
+  pthread_cleanup_push(count,(void *)&join_cleanup);
+  require(!dll_join(s->id,&value),"join unexpectedly returned error");
+  pthread_cleanup_pop(0);
+  return value;
+}
+int main(void) {
+  setvbuf(stdout,NULL,_IONBF,0); DWORD before=0,after=0,code=0;
+  require(GetProcessHandleCount(GetCurrentProcess(),&before),"initial census");
+  wchar_t path[32768],actual[32768]; DWORD n=GetModuleFileNameW(NULL,path,32768);
+  require(n && n<32768,"executable path"); wchar_t *leaf=wcsrchr(path,L'\\');
+  require(leaf && (size_t)(leaf-path)+22<32768,"DLL path capacity"); wcscpy(leaf+1,L"libwinpthread-1.dll");
+  HMODULE dll=LoadLibraryW(path);
+  require(dll && GetModuleFileNameW(dll,actual,32768) && !_wcsicmp(path,actual),"exact DLL path");
+  dll_cancel=(cancel_fn)GetProcAddress(dll,"pthread_cancel"); dll_join=(join_fn)GetProcAddress(dll,"pthread_join");
+  dll_type=(type_fn)GetProcAddress(dll,"pthread_setcanceltype");
+  require(dll_cancel && dll_join && dll_type,"actual routed API exports");
+  int previous=19;
+  require(dll_type(PTHREAD_CANCEL_ASYNCHRONOUS,&previous)==ENOTSUP && previous==19,"probe-only async failclosed unchanged output");
+  previous=21; require(dll_type(-123,&previous)==EINVAL && previous==21,"invalid type unchanged output");
+  require(!dll_type(PTHREAD_CANCEL_DEFERRED,&previous) && previous==PTHREAD_CANCEL_DEFERRED,"default deferred type");
+  require(!pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,&previous) && previous==PTHREAD_CANCEL_ENABLE,"default enabled state");
+  require(!pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,&previous) && previous==PTHREAD_CANCEL_DISABLE,"state restore");
+  pthread_attr_t attr; require(!pthread_attr_init(&attr),"attributes"); attr.p_state|=PTHREAD_CANCEL_ASYNCHRONOUS;
+  pthread_t unchanged=(pthread_t)0x5555;
+  require(pthread_create(&unchanged,&attr,self_cancel,NULL)==ENOTSUP && unchanged==(pthread_t)0x5555,"async creation rejected without output publication");
+  require(!pthread_attr_destroy(&attr) && !pthread_key_create(&key,count),"key setup");
+  pthread_t self; void *value=NULL;
+  require(!pthread_create(&self,NULL,self_cancel,NULL) && !dll_join(self,&value) && value==PTHREAD_CANCELED &&
+      self_cleanup==1 && self_dtor==1,"self deferred cancellation and exact cleanup/TSD");
+  puts("PASS deferred finite state/type outputs and self cancellation cleanup=1 destructor=1");
+  struct native_state ns={CreateEventW(NULL,TRUE,FALSE,NULL),CreateEventW(NULL,TRUE,FALSE,NULL),0};
+  HANDLE captured=CreateEventW(NULL,TRUE,FALSE,NULL),resume=CreateEventW(NULL,TRUE,FALSE,NULL);
+  require(ns.ready && ns.release && captured && resume,"native gates");
+  HANDLE native=CreateThread(NULL,0,native_target,&ns,0,NULL);
+  require(native && WaitForSingleObject(ns.ready,5000)==WAIT_OBJECT_0,"native ready");
+  gesher_deferred_gate_v1(ns.id,captured,resume,0,NULL);
+  HANDLE actor=CreateThread(NULL,0,cancel_actor,&ns,0,NULL);
+  require(actor && WaitForSingleObject(captured,5000)==WAIT_OBJECT_0 && SetEvent(ns.release) &&
+      WaitForSingleObject(native,5000)==WAIT_OBJECT_0 && GetExitCodeThread(native,&code) && code==61 && native_dtor==1 &&
+      SetEvent(resume) && WaitForSingleObject(actor,5000)==WAIT_OBJECT_0 && GetExitCodeThread(actor,&code) && code==ESRCH,
+      "captured public cancellation resumes after actual native kernel exit");
+  gesher_deferred_gate_v1(0,NULL,NULL,0,NULL);
+  require(CloseHandle(actor) && CloseHandle(native) && CloseHandle(ns.ready) && CloseHandle(ns.release) &&
+      CloseHandle(captured) && CloseHandle(resume),"native owned cleanup");
+  puts("PASS deferred public cancel capture crosses native ExitThread61 and returns ESRCH destructor=1");
+  struct joined_state js={CreateEventW(NULL,TRUE,FALSE,NULL),0}; HANDLE joining=CreateEventW(NULL,TRUE,FALSE,NULL);
+  require(js.release && joining && !pthread_create(&js.id,NULL,joined_target,&js),"join target");
+  gesher_deferred_gate_v1(0,NULL,NULL,js.id,joining);
+  pthread_t joiner; require(!pthread_create(&joiner,NULL,joining_actor,&js),"joiner create");
+  require(WaitForSingleObject(joining,5000)==WAIT_OBJECT_0,"nonblocking immediate prewait hook");
+  HANDLE owned_joiner=NULL;
+  require(DuplicateHandle(GetCurrentProcess(),pthread_gethandle(joiner),GetCurrentProcess(),&owned_joiner,0,FALSE,DUPLICATE_SAME_ACCESS),"owned joiner handle");
+  DWORD tid=GetThreadId(owned_joiner); require(tid!=0,"joiner native identity");
+  printf("JOIN_WAIT_WITNESS tid=%lu\n",tid);
+  char response[32]; require(fgets(response,sizeof(response),stdin) && !strcmp(response,"observed\n"),"external actual OS wait witness");
+  require(!dll_cancel(joiner) && !pthread_join(joiner,&value) && value==PTHREAD_CANCELED &&
+      join_cleanup==1 && join_dtor==1,"joiner canceled with exact outer cleanup/TSD");
+  require(_pthread_tryjoin(js.id,&value)==EBUSY && SetEvent(js.release) && !dll_join(js.id,&value) &&
+      value==(void *)(uintptr_t)0x1234,"canceled join leaves original target joinable and unconsumed");
+  gesher_deferred_gate_v1(0,NULL,NULL,0,NULL);
+  require(CloseHandle(owned_joiner) && CloseHandle(js.release) && CloseHandle(joining) && !pthread_key_delete(key),"join owned cleanup");
+  puts("PASS deferred genuine join wait cancellation unwinds claim/leases cleanup=1 destructor=1 target remains joinable");
+  require(FreeLibrary(dll) && !GetModuleHandleW(L"libwinpthread-1.dll"),"actual DLL unload");
+  require(GetProcessHandleCount(GetCurrentProcess(),&after) && after<=before+8,"original final handle bound");
+  printf("PASS deferred-only public APIs and actual DLL unload handles=%lu/%lu\n",before,after);
+  return 0;
+}

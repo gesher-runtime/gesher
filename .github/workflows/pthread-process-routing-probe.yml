@@ -1,3 +1,4 @@
+# Explicit isolated deferred-only API capability; old suppliers unchanged.
 # Verify actual resource field offsets and updated fault patch stack.
 # Separate target-resource lifetime primitive role.
 # Separate opt-in callback-release reaper role.
@@ -550,3 +551,55 @@ jobs:
             if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
             if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
           }
+  probe_deferred_compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: host-pthread-authority
+      - name: Build isolated deferred-only probe role
+        shell: bash
+        run: |
+          set -euo pipefail
+          deferred_root="$RUNNER_TEMP/gesher-routing-probe-deferred-toolchain"
+          test ! -e "$deferred_root"
+          mkdir "$deferred_root"
+          cp -a --reflink=auto "$GESHER_AUTHORITY_LLVM" "$deferred_root/$LLVM_MINGW_NAME"
+          cp --reflink=auto "$(dirname "$GESHER_AUTHORITY_LLVM")/compiler.tar.xz" "$deferred_root/compiler.tar.xz"
+          llvm="$deferred_root/$LLVM_MINGW_NAME"
+          bash tools/host-pthread-authority/build-supplier.sh "$llvm" probe-deferred
+          python3 tools/host-pthread-authority/probe_deferred_bundle.py build "$llvm"
+          python3 tools/host-pthread-authority/probe_deferred_bundle.py verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pthread-routing-probe-deferred
+          path: routing-probe-deferred/
+          if-no-files-found: error
+  probe_deferred_windows:
+    needs: probe_deferred_compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact deferred-only producer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/artifact_receipt.py --name pthread-routing-probe-deferred --producer probe_deferred_compile --destination routing-probe-deferred
+          if ($LASTEXITCODE -ne 0) { throw 'Deferred producer ZIP verification failed' }
+          python tools/host-pthread-authority/probe_deferred_bundle.py verify
+          if ($LASTEXITCODE -ne 0) { throw 'Deferred role verification failed' }
+      - name: Actual deferred APIs and externally witnessed join wait
+        shell: pwsh
+        run: tools/host-pthread-authority/run-deferred-probe.ps1

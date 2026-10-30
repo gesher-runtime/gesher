@@ -1,0 +1,810 @@
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -494,6 +494,19 @@
+ #ifdef GESHER_RESOURCE_LEASE_PROBE
+ static unsigned long gesher_resource_clock_destroys, gesher_resource_record_retires;
+ #endif
++#ifdef GESHER_CANCEL_STATE_PROBE
++#ifndef GESHER_DEFERRED_ONLY_PROBE
++#error GESHER_CANCEL_STATE_PROBE requires explicit deferred-only diagnostic capability
++#endif
++#ifndef GESHER_RESOURCE_LEASE_PROBE
++#error GESHER_CANCEL_STATE_PROBE requires retained target resources
++#endif
++/* The sole nesting direction is registry -> state; no callback under state. */
++static void gesher_cancel_state_acquire(_pthread_v *target)
++{ AcquireSRWLockExclusive(&target->cancel_state_lock); }
++static void gesher_cancel_state_release(_pthread_v *target)
++{ ReleaseSRWLockExclusive(&target->cancel_state_lock); }
++#endif
+ static void gesher_close_start_event(_pthread_v *target)
+ {
+ #ifdef GESHER_RESOURCE_LEASE_PROBE
+@@ -756,6 +769,24 @@
+ }
+ static int __cdecl gesher_probe_owner_getsched(pthread_t id, int *policy, struct sched_param *param)
+ {
++#ifdef GESHER_CANCEL_STATE_PROBE
++  int result=0, value_policy=0, value_priority=0;
++  pthread_mutex_lock(&mtx_pthr_locked);
++  _pthread_v *record=__pthread_get_pointer(id);
++  if (!record || !record->h || record->h==INVALID_HANDLE_VALUE ||
++      WaitForSingleObject(record->h,0)!=WAIT_TIMEOUT) result=ESRCH;
++  else if (!policy || !param) result=EINVAL;
++  else {
++    if (id==gesher_sched_gate_target && gesher_sched_gate_entered &&
++        (!SetEvent(gesher_sched_gate_entered) || WaitForSingleObject(gesher_sched_gate_release,5000)!=WAIT_OBJECT_0)) abort();
++    gesher_cancel_state_acquire(record);
++    value_policy=record->sched_pol; value_priority=record->sched.sched_priority;
++    gesher_cancel_state_release(record);
++  }
++  pthread_mutex_unlock(&mtx_pthr_locked);
++  if (!result) { *policy=value_policy; param->sched_priority=value_priority; }
++  return result;
++#else
+   int result;
+   pthread_mutex_lock(&mtx_pthr_locked);
+   _pthread_v *record=__pthread_get_pointer(id);
+@@ -768,9 +799,36 @@
+   }
+   pthread_mutex_unlock(&mtx_pthr_locked);
+   return result;
++#endif
+ }
+ static int __cdecl gesher_probe_owner_setsched(pthread_t id, int policy, const struct sched_param *param)
+ {
++#ifdef GESHER_CANCEL_STATE_PROBE
++  int result=0;
++  pthread_mutex_lock(&mtx_pthr_locked);
++  _pthread_v *record=__pthread_get_pointer(id);
++  if (!record || !record->h || record->h==INVALID_HANDLE_VALUE ||
++      WaitForSingleObject(record->h,0)!=WAIT_TIMEOUT) result=ESRCH;
++  else if (policy<SCHED_MIN || policy>SCHED_MAX || !param) result=EINVAL;
++  else if (policy!=SCHED_OTHER) result=ENOTSUP;
++  else if (param->sched_priority<sched_get_priority_min(policy) ||
++      param->sched_priority>sched_get_priority_max(policy)) result=EINVAL;
++  else {
++    int priority=param->sched_priority;
++    if (priority<=THREAD_PRIORITY_IDLE) priority=THREAD_PRIORITY_IDLE;
++    else if (priority<=THREAD_PRIORITY_LOWEST) priority=THREAD_PRIORITY_LOWEST;
++    else if (priority>=THREAD_PRIORITY_TIME_CRITICAL) priority=THREAD_PRIORITY_TIME_CRITICAL;
++    else if (priority>=THREAD_PRIORITY_HIGHEST) priority=THREAD_PRIORITY_HIGHEST;
++    if (!SetThreadPriority(record->h,priority)) result=EINVAL;
++    else {
++      gesher_cancel_state_acquire(record);
++      record->sched_pol=policy; record->sched.sched_priority=param->sched_priority;
++      gesher_cancel_state_release(record);
++    }
++  }
++  pthread_mutex_unlock(&mtx_pthr_locked);
++  return result;
++#else
+   int result;
+   pthread_mutex_lock(&mtx_pthr_locked);
+   _pthread_v *record=__pthread_get_pointer(id);
+@@ -779,6 +837,7 @@
+   else result=pthread_setschedparam(id,policy,param);
+   pthread_mutex_unlock(&mtx_pthr_locked);
+   return result;
++#endif
+ }
+ struct gesher_identity_probe_v6 {
+   unsigned size, version;
+@@ -979,13 +1038,21 @@
+ {
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   *handled=owner!=NULL;
++#ifdef GESHER_CANCEL_STATE_PROBE
++  *handled=1; return owner ? owner->getsched(id,policy,param) : gesher_probe_owner_getsched(id,policy,param);
++#else
+   return owner ? owner->getsched(id,policy,param) : 0;
++#endif
+ }
+ int __cdecl gesher_probe_route_setsched(pthread_t id, int policy, const struct sched_param *param, int *handled)
+ {
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   *handled=owner!=NULL;
++#ifdef GESHER_CANCEL_STATE_PROBE
++  *handled=1; return owner ? owner->setsched(id,policy,param) : gesher_probe_owner_setsched(id,policy,param);
++#else
+   return owner ? owner->setsched(id,policy,param) : 0;
++#endif
+ }
+ static const struct gesher_identity_probe_v6 *gesher_participating_owner;
+ static struct gesher_alias_probe_node gesher_dll_alias_node;
+@@ -1224,6 +1291,34 @@
+   else if (dwReason == DLL_PROCESS_ATTACH)
+     {
+     }
++#ifdef GESHER_CANCEL_STATE_PROBE
++  else if (dwReason == DLL_THREAD_DETACH)
++    {
++      if (_pthread_tls != 0xffffffff) t=(_pthread_v *)TlsGetValue(_pthread_tls);
++      if (!t) return;
++      /* User destructors execute with no registry or state lock held. */
++      gesher_cancel_state_acquire(t);
++      int cleanup=t->thread_noposix || !t->ended;
++      gesher_cancel_state_release(t);
++      if (cleanup) _pthread_cleanup_dest(t->x);
++      if (!TlsSetValue(_pthread_tls,NULL)) abort();
++      pthread_mutex_lock(&mtx_pthr_locked);
++      gesher_cancel_state_acquire(t);
++      int retire=t->thread_noposix || !t->h || (t->p_state & PTHREAD_CREATE_DETACHED);
++      t->lifecycle=2; t->ended=1;
++      gesher_cancel_state_release(t);
++      /* Helpers may reenter the recursive registry, never under state. */
++      gesher_close_start_event(t);
++      gesher_destroy_target_clock(t);
++      replace_spin_keys(&t->spin_keys,new_spin_keys);
++      if (retire) {
++        if (t->h) ReleaseThreadHandleAlias(t,t->h);
++        t->h=NULL; t->valid=DEAD_THREAD;
++        push_pthread_mem(t);
++      }
++      pthread_mutex_unlock(&mtx_pthr_locked);
++    }
++#else
+   else if (dwReason == DLL_THREAD_DETACH)
+     {
+       if (_pthread_tls != 0xffffffff)
+@@ -1271,6 +1366,7 @@
+ 	  replace_spin_keys (&t->spin_keys, new_spin_keys);
+ 	}
+     }
++#endif
+ }
+ 
+ #ifdef DLL_EXPORT
+@@ -2029,6 +2125,9 @@
+   t->sched.sched_priority = GetThreadPriority(t->h);
+   t->ended = 0;
+   t->thread_noposix = 1;
++#ifdef GESHER_CANCEL_STATE_PROBE
++  InitializeSRWLock(&t->cancel_state_lock); t->lifecycle=1;
++#endif
+ 
+   /* Save for later */
+   if (!TlsSetValue(_pthread_tls, t))
+@@ -2186,10 +2285,20 @@
+       if (!TlsSetValue (_pthread_tls, NULL))
+         abort ();
+       pthread_mutex_lock (&mtx_pthr_locked);
++#ifdef GESHER_CANCEL_STATE_PROBE
++      gesher_cancel_state_acquire(t);
++      rslt=(unsigned)(size_t)t->ret_arg;
++      t->lifecycle=2; t->ended=1;
++      int retire=!t->h || (t->p_state & PTHREAD_CREATE_DETACHED);
++      gesher_cancel_state_release(t);
++      gesher_close_start_event(t);
++      if (retire)
++#else
+       rslt = (unsigned) (size_t) t->ret_arg;
+       gesher_close_start_event(t);
+       t->ended = 1;
+       if (!t->h || (t->p_state & PTHREAD_CREATE_DETACHED))
++#endif
+         {
+           t->valid = DEAD_THREAD;
+           if (t->h)
+@@ -2214,7 +2323,14 @@
+ #endif
+   _pthread_cleanup *pcup;
+   struct _pthread_v *se = __pthread_self_lite ();
++#ifdef GESHER_CANCEL_STATE_PROBE
++  gesher_cancel_state_acquire(se);
++  se->in_cancel=1;
++  se->p_state &= ~PTHREAD_CANCEL_ENABLE;
++  gesher_cancel_state_release(se);
++#else
+   se->in_cancel = 1;
++#endif
+   _pthread_setnobreak (1);
+   InterlockedDecrement(&_pthread_cancelling);
+ 
+@@ -2235,6 +2351,15 @@
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->shallcancel();
+ #endif
++#ifdef GESHER_CANCEL_STATE_PROBE
++  if (!InterlockedCompareExchange(&_pthread_cancelling,0,0)) return 0;
++  _pthread_v *t=__pthread_self_lite();
++  if (!t) return 0;
++  gesher_cancel_state_acquire(t);
++  int result=InterlockedCompareExchange((LONG *)&t->nobreak,0,0)<=0 && t->cancelled && (t->p_state & PTHREAD_CANCEL_ENABLE);
++  gesher_cancel_state_release(t);
++  return result;
++#else
+   struct _pthread_v *t;
+   if (!_pthread_cancelling)
+     return 0;
+@@ -2244,6 +2369,7 @@
+   if (t->nobreak <= 0 && t->cancelled && (t->p_state & PTHREAD_CANCEL_ENABLE))
+     return 1;
+   return 0;
++#endif
+ }
+ 
+ void
+@@ -2269,6 +2395,20 @@
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) { owner->testcancel(); return; }
+ #endif
++#ifdef GESHER_CANCEL_STATE_PROBE
++  _pthread_v *self=__pthread_self_lite();
++  if (!self) return;
++  gesher_cancel_state_acquire(self);
++  int invoke=!self->in_cancel && self->cancelled &&
++      (self->p_state & PTHREAD_CANCEL_ENABLE) && InterlockedCompareExchange((LONG *)&self->nobreak,0,0)<=0;
++  if (invoke) {
++    self->in_cancel=1; self->p_state &= ~PTHREAD_CANCEL_ENABLE;
++    if (self->evStart) ResetEvent(self->evStart);
++  }
++  gesher_cancel_state_release(self);
++  if (invoke) _pthread_invoke_cancel();
++  return;
++#else
+   struct _pthread_v *self = __pthread_self_lite ();
+ 
+   if (!self || self->in_cancel)
+@@ -2287,17 +2427,30 @@
+       _pthread_invoke_cancel ();
+     }
+   pthread_mutex_unlock (&self->p_clock);
++#endif
+ }
+ 
+ #ifdef GESHER_RESOURCE_LEASE_PROBE
++#ifdef GESHER_DEFERRED_ONLY_PROBE
++static pthread_t gesher_deferred_capture_target,gesher_deferred_join_target;
++static HANDLE gesher_deferred_capture_entered,gesher_deferred_capture_resume,gesher_deferred_join_entered;
++__declspec(dllexport) void __cdecl gesher_deferred_gate_v1(pthread_t capture,
++    void *entered,void *resume,pthread_t join,void *joining)
++{
++  /* Fixture controller configures only while no affected call is in flight. */
++  gesher_deferred_capture_target=capture;
++  gesher_deferred_capture_entered=(HANDLE)entered; gesher_deferred_capture_resume=(HANDLE)resume;
++  gesher_deferred_join_target=join; gesher_deferred_join_entered=(HANDLE)joining;
++}
++#endif
+ struct gesher_target_lease { _pthread_v *target; HANDLE thread,event; };
+ static int gesher_resource_fault_stage;
+-static int gesher_target_acquire(pthread_t id,struct gesher_target_lease *lease)
++static int gesher_target_acquire_impl(pthread_t id,struct gesher_target_lease *lease,int allow_ended)
+ {
+   memset(lease,0,sizeof(*lease));
+   pthread_mutex_lock(&mtx_pthr_locked);
+   _pthread_v *target=__pthread_get_pointer(id);
+-  if (!target || target->ended || target->pending_retire) {
++  if (!target || (!allow_ended && target->ended) || target->pending_retire) {
+     pthread_mutex_unlock(&mtx_pthr_locked); return ESRCH;
+   }
+   if (target->operation_refs==UINT_MAX) abort();
+@@ -2314,6 +2467,8 @@
+   ++target->operation_refs; lease->target=target;
+   pthread_mutex_unlock(&mtx_pthr_locked); return 0;
+ }
++static int gesher_target_acquire(pthread_t id,struct gesher_target_lease *lease)
++{ return gesher_target_acquire_impl(id,lease,0); }
+ static void gesher_target_release(struct gesher_target_lease *lease)
+ {
+   if (lease->event && !CloseHandle(lease->event)) abort();
+@@ -2389,6 +2544,42 @@
+ }
+ #endif
+ 
++#ifdef GESHER_CANCEL_STATE_PROBE
++static int gesher_operation_begin(pthread_t id,struct gesher_target_lease *lease,int *previous)
++{
++  int result=pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,previous);
++  if (result) return result;
++  result=gesher_target_acquire(id,lease);
++  if (result && pthread_setcancelstate(*previous,NULL)) abort();
++  return result;
++}
++static void gesher_operation_end(struct gesher_target_lease *lease,int previous)
++{
++  gesher_target_release(lease);
++  if (pthread_setcancelstate(previous,NULL)) abort();
++}
++struct gesher_join_cleanup {
++  struct gesher_target_lease target,actor;
++  pthread_t actor_id;
++  int claimed;
++};
++static void gesher_join_unwind(void *arg)
++{
++  struct gesher_join_cleanup *ctx=arg;
++  if (ctx->claimed) {
++    pthread_mutex_lock(&mtx_pthr_locked);
++    gesher_cancel_state_acquire(ctx->target.target);
++    if (ctx->target.target->join_claimed_by!=ctx->actor_id) abort();
++    ctx->target.target->join_claimed_by=0; ctx->claimed=0;
++    gesher_cancel_state_release(ctx->target.target);
++    pthread_mutex_unlock(&mtx_pthr_locked);
++  }
++  if (ctx->target.target) gesher_target_release(&ctx->target);
++  if (ctx->actor.target) gesher_target_release(&ctx->actor);
++}
++
++#endif
++
+ int
+ pthread_cancel (pthread_t t)
+ {
+@@ -2396,6 +2587,57 @@
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->cancel(t);
+ #endif
++#ifdef GESHER_CANCEL_STATE_PROBE
++  _pthread_v *actor=__pthread_self_lite();
++  if (!actor) return EAGAIN;
++  if (actor->x==t) {
++    gesher_cancel_state_acquire(actor);
++    int result=actor->in_cancel?ESRCH:0, invoke=0;
++    if (!result && !actor->cancelled) {
++      actor->cancelled=1; InterlockedIncrement(&_pthread_cancelling);
++      if (actor->evStart && !SetEvent(actor->evStart)) {
++        actor->cancelled=0; InterlockedDecrement(&_pthread_cancelling); result=EAGAIN;
++      }
++    }
++    if (!result && (actor->p_state & PTHREAD_CANCEL_ENABLE) &&
++        (actor->p_state & PTHREAD_CANCEL_ASYNCHRONOUS) && InterlockedCompareExchange((LONG *)&actor->nobreak,0,0)<=0) {
++      actor->in_cancel=1; actor->p_state &= ~PTHREAD_CANCEL_ENABLE; invoke=1;
++    }
++    gesher_cancel_state_release(actor);
++    if (invoke) _pthread_invoke_cancel();
++    return result;
++  }
++  int previous=0;
++  int result=pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,&previous);
++  if (result) return result;
++  struct gesher_target_lease lease;
++  result=gesher_target_acquire(t,&lease);
++  if (!result) {
++#ifdef GESHER_DEFERRED_ONLY_PROBE
++    if (t==gesher_deferred_capture_target && gesher_deferred_capture_entered &&
++        (!SetEvent(gesher_deferred_capture_entered) ||
++         WaitForSingleObject(gesher_deferred_capture_resume,5000)!=WAIT_OBJECT_0)) abort();
++#endif
++    _pthread_v *target=lease.target;
++    gesher_cancel_state_acquire(target);
++    if (target->lifecycle!=1 || target->ended || target->in_cancel) result=ESRCH;
++    else if ((target->p_state & PTHREAD_CANCEL_ENABLE) &&
++        (target->p_state & PTHREAD_CANCEL_ASYNCHRONOUS)) {
++      /* Explicit deferred-only diagnostic capability: never a product policy. */
++      result=ENOTSUP;
++    } else if (!target->cancelled) {
++      target->cancelled=1; InterlockedIncrement(&_pthread_cancelling);
++      if (lease.event && !SetEvent(lease.event)) {
++        target->cancelled=0; InterlockedDecrement(&_pthread_cancelling); result=EAGAIN;
++      }
++    }
++    gesher_cancel_state_release(target);
++    gesher_target_release(&lease);
++  }
++  /* Restoration may nonlocally exit; every target resource is already gone. */
++  if (pthread_setcancelstate(previous,NULL)) abort();
++  return result;
++#else
+   struct _pthread_v *tv = __pth_gpointer_locked (t);
+ 
+   if (tv == NULL)
+@@ -2493,6 +2735,7 @@
+     }
+   pthread_mutex_unlock (&tv->p_clock);
+   return 0;
++#endif
+ }
+ 
+ /* half-stubbed version as we don't really well support signals */
+@@ -2503,6 +2746,19 @@
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->kill(t, sig);
+ #endif
++#ifdef GESHER_CANCEL_STATE_PROBE
++  struct gesher_target_lease lease; int previous=0;
++  int result=gesher_operation_begin(t,&lease,&previous);
++  if (result) return result;
++  _pthread_v *target=lease.target;
++  gesher_cancel_state_acquire(target);
++  result=target->in_cancel || target->ended || !target->h || target->h==INVALID_HANDLE_VALUE ? ESRCH : 0;
++  gesher_cancel_state_release(target);
++  gesher_operation_end(&lease,previous);
++  if (result || !sig) return result;
++  if (sig<SIGINT || sig>NSIG) return EINVAL;
++  return pthread_cancel(t);
++#else
+   struct _pthread_v *tv;
+ 
+   pthread_mutex_lock (&mtx_pthr_locked);
+@@ -2519,6 +2775,7 @@
+   if (sig < SIGINT || sig > NSIG)
+     return EINVAL;
+   return pthread_cancel(t);
++#endif
+ }
+ 
+ unsigned
+@@ -2649,6 +2906,7 @@
+   return 0;
+ }
+ 
++#ifndef GESHER_CANCEL_STATE_PROBE
+ static void
+ test_cancel_locked (pthread_t t)
+ {
+@@ -2664,6 +2922,8 @@
+   _pthread_invoke_cancel();
+ }
+ 
++#endif
++
+ int
+ pthread_setcancelstate (int state, int *oldstate)
+ {
+@@ -2671,6 +2931,19 @@
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->setcancelstate(state, oldstate);
+ #endif
++#ifdef GESHER_CANCEL_STATE_PROBE
++  _pthread_v *t=__pthread_self_lite();
++  if (!t || (state & PTHREAD_CANCEL_ENABLE)!=state) return EINVAL;
++  gesher_cancel_state_acquire(t);
++  if (oldstate) *oldstate=t->p_state & PTHREAD_CANCEL_ENABLE;
++  t->p_state=(t->p_state & ~PTHREAD_CANCEL_ENABLE) | state;
++  int invoke=!t->in_cancel && t->cancelled && (t->p_state & PTHREAD_CANCEL_ENABLE) &&
++      (t->p_state & PTHREAD_CANCEL_ASYNCHRONOUS) && InterlockedCompareExchange((LONG *)&t->nobreak,0,0)<=0;
++  if (invoke) { t->in_cancel=1; t->p_state &= ~PTHREAD_CANCEL_ENABLE; }
++  gesher_cancel_state_release(t);
++  if (invoke) _pthread_invoke_cancel();
++  return 0;
++#else
+   _pthread_v *t = __pthread_self_lite ();
+ 
+   if (!t || (state & PTHREAD_CANCEL_ENABLE) != state)
+@@ -2685,6 +2958,7 @@
+   pthread_mutex_unlock (&t->p_clock);
+ 
+   return 0;
++#endif
+ }
+ 
+ int
+@@ -2694,6 +2968,22 @@
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->setcanceltype(type, oldtype);
+ #endif
++#ifdef GESHER_CANCEL_STATE_PROBE
++#ifdef GESHER_DEFERRED_ONLY_PROBE
++  if (type==PTHREAD_CANCEL_ASYNCHRONOUS) return ENOTSUP;
++#endif
++  _pthread_v *t=__pthread_self_lite();
++  if (!t || (type & PTHREAD_CANCEL_ASYNCHRONOUS)!=type) return EINVAL;
++  gesher_cancel_state_acquire(t);
++  if (oldtype) *oldtype=t->p_state & PTHREAD_CANCEL_ASYNCHRONOUS;
++  t->p_state=(t->p_state & ~PTHREAD_CANCEL_ASYNCHRONOUS) | type;
++  int invoke=!t->in_cancel && t->cancelled && (t->p_state & PTHREAD_CANCEL_ENABLE) &&
++      (t->p_state & PTHREAD_CANCEL_ASYNCHRONOUS) && InterlockedCompareExchange((LONG *)&t->nobreak,0,0)<=0;
++  if (invoke) { t->in_cancel=1; t->p_state &= ~PTHREAD_CANCEL_ENABLE; }
++  gesher_cancel_state_release(t);
++  if (invoke) _pthread_invoke_cancel();
++  return 0;
++#else
+   _pthread_v *t = __pthread_self_lite ();
+ 
+   if (!t || (type & PTHREAD_CANCEL_ASYNCHRONOUS) != type)
+@@ -2708,6 +2998,7 @@
+   pthread_mutex_unlock (&t->p_clock);
+ 
+   return 0;
++#endif
+ }
+ 
+ void _fpreset (void);
+@@ -2775,6 +3066,20 @@
+   else
+     pthread_mutex_lock (&mtx_pthr_locked);
+ 
++#ifdef GESHER_CANCEL_STATE_PROBE
++  if (!TlsSetValue(_pthread_tls,NULL)) abort();
++  gesher_cancel_state_acquire(tv);
++  rslt=(unsigned)(size_t)tv->ret_arg;
++  tv->lifecycle=2; tv->ended=1;
++  gesher_cancel_state_release(tv);
++  gesher_close_start_event(tv);
++  if (!gesher_destroy_target_clock(tv)) tv->p_clock=PTHREAD_MUTEX_INITIALIZER;
++  if (!tv->h) {
++    tv->valid=DEAD_THREAD;
++    replace_spin_keys(&tv->spin_keys,new_spin_keys);
++    push_pthread_mem(tv); tv=NULL;
++  }
++#else
+   pthread_mutex_lock (&tv->p_clock);
+   rslt = (unsigned) (size_t) tv->ret_arg;
+   /* Make sure we free ourselves if we are detached */
+@@ -2798,6 +3103,7 @@
+         tv->p_clock = PTHREAD_MUTEX_INITIALIZER;
+       tv->ended = 1;
+     }
++#endif
+ #ifdef GESHER_PTHREAD_ROUTING_PROBE
+   if (!held_cleanup_thread->cleanup_refs) abort();
+   if (--held_cleanup_thread->cleanup_refs==0 && held_cleanup_thread->pending_retire) {
+@@ -2817,6 +3123,9 @@
+ #ifdef GESHER_PTHREAD_ROUTING_PROBE
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->create(th, attr, func, arg);
++#endif
++#ifdef GESHER_DEFERRED_ONLY_PROBE
++  if (attr && (attr->p_state & PTHREAD_CANCEL_ASYNCHRONOUS)) return ENOTSUP;
+ #endif
+   HANDLE thrd = NULL;
+   int redo = 0;
+@@ -2871,7 +3180,14 @@
+       pthread_attr_getinheritsched (attr, &inh);
+       if (inh)
+ 	{
+-	  tv->sched.sched_priority = __pthread_self_lite ()->sched.sched_priority;
++	  #ifdef GESHER_CANCEL_STATE_PROBE
++          _pthread_v *parent=__pthread_self_lite();
++          gesher_cancel_state_acquire(parent);
++          tv->sched.sched_priority=parent->sched.sched_priority;
++          gesher_cancel_state_release(parent);
++#else
++          tv->sched.sched_priority = __pthread_self_lite ()->sched.sched_priority;
++#endif
+ 	}
+       else
+ 	tv->sched.sched_priority = attr->param.sched_priority;
+@@ -2911,6 +3227,9 @@
+   }
+   pthread_mutex_lock (&mtx_pthr_locked);
+   tv->cpu_handle = thrd;
++#ifdef GESHER_CANCEL_STATE_PROBE
++  InitializeSRWLock(&tv->cancel_state_lock); tv->lifecycle=1; tv->tid=thrAddr;
++#endif
+   pthread_mutex_unlock (&mtx_pthr_locked);
+   ResetEvent (tv->evStart);
+   if ((tv->p_state & PTHREAD_CREATE_DETACHED) != 0)
+@@ -2935,6 +3254,65 @@
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->join(t, res);
+ #endif
++#ifdef GESHER_CANCEL_STATE_PROBE
++  _pthread_v *actor=__pthread_self_lite();
++  if (!actor) return EAGAIN;
++  if (actor->x==t) return EDEADLK;
++  int previous=0,result=pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,&previous);
++  if (result) return result;
++  struct gesher_join_cleanup ctx={0}; ctx.actor_id=actor->x;
++  result=gesher_target_acquire_impl(t,&ctx.target,1);
++  if (!result) result=gesher_target_acquire(ctx.actor_id,&ctx.actor);
++  if (!result && previous!=PTHREAD_CANCEL_DISABLE && !ctx.actor.event) result=EAGAIN;
++  if (!result) {
++    pthread_mutex_lock(&mtx_pthr_locked);
++    gesher_cancel_state_acquire(ctx.target.target);
++    if (ctx.target.target->pending_retire || ctx.target.target->x!=t) result=ESRCH;
++    else if ((ctx.target.target->p_state & PTHREAD_CREATE_DETACHED) || ctx.target.target->join_claimed_by) result=EINVAL;
++    else { ctx.target.target->join_claimed_by=ctx.actor_id; ctx.claimed=1; }
++    gesher_cancel_state_release(ctx.target.target);
++    pthread_mutex_unlock(&mtx_pthr_locked);
++  }
++  if (result) {
++    gesher_join_unwind(&ctx);
++    if (pthread_setcancelstate(previous,NULL)) abort();
++    return result;
++  }
++  void *value=NULL;
++  pthread_cleanup_push(gesher_join_unwind,&ctx);
++  if (pthread_setcancelstate(previous,NULL)) abort();
++  pthread_testcancel();
++  HANDLE waits[2]={ctx.target.thread,ctx.actor.event};
++#ifdef GESHER_DEFERRED_ONLY_PROBE
++  if (t==gesher_deferred_join_target && gesher_deferred_join_entered &&
++      !SetEvent(gesher_deferred_join_entered)) abort();
++#endif
++  DWORD wait=WaitForMultipleObjects(previous==PTHREAD_CANCEL_DISABLE?1:2,waits,FALSE,INFINITE);
++  /* Cancellation wins before target consumption, even if both are signaled. */
++  pthread_testcancel();
++  if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,NULL)) abort();
++  if (wait!=WAIT_OBJECT_0) result=EAGAIN;
++  if (!result) {
++    pthread_mutex_lock(&mtx_pthr_locked);
++    _pthread_v *target=ctx.target.target;
++    gesher_cancel_state_acquire(target);
++    if (target->join_claimed_by!=ctx.actor_id) abort();
++    target->join_claimed_by=0; ctx.claimed=0; value=target->ret_arg;
++    gesher_cancel_state_release(target);
++    gesher_close_start_event(target);
++    gesher_destroy_target_clock(target);
++    pthread_spinlock_t empty=PTHREAD_SPINLOCK_INITIALIZER;
++    replace_spin_keys(&target->spin_keys,empty);
++    push_pthread_mem(target);
++    pthread_mutex_unlock(&mtx_pthr_locked);
++  }
++  pthread_cleanup_pop(0);
++  gesher_join_unwind(&ctx);
++  if (!result && res) *res=value;
++  /* A pending asynchronous cancellation can exit here, after all owned state. */
++  if (pthread_setcancelstate(previous,NULL)) abort();
++  return result;
++#else
+   struct _pthread_v *tv = __pth_gpointer_locked (t);
+   pthread_spinlock_t new_spin_keys = PTHREAD_SPINLOCK_INITIALIZER;
+ 
+@@ -2958,6 +3336,7 @@
+   push_pthread_mem (tv);
+ 
+   return 0;
++#endif
+ }
+ 
+ int
+@@ -2979,16 +3358,28 @@
+       return ESRCH;
+     }
+ 
++#ifdef GESHER_CANCEL_STATE_PROBE
++  gesher_cancel_state_acquire(tv);
++  int unavailable=(tv->p_state & PTHREAD_CREATE_DETACHED) || tv->join_claimed_by;
++  gesher_cancel_state_release(tv);
++  if (unavailable) { pthread_mutex_unlock(&mtx_pthr_locked); return EINVAL; }
++#else
+   if ((tv->p_state & PTHREAD_CREATE_DETACHED) != 0)
+     {
+       pthread_mutex_unlock (&mtx_pthr_locked);
+       return EINVAL;
+     }
++#endif
+   if (is_attached_self(tv))
+     {
+       pthread_mutex_unlock (&mtx_pthr_locked);
+       return EDEADLK;
+     }
++#ifdef GESHER_CANCEL_STATE_PROBE
++  if (WaitForSingleObject(tv->h,0)!=WAIT_OBJECT_0) {
++    pthread_mutex_unlock(&mtx_pthr_locked); return EBUSY;
++  }
++#else
+   if(tv->ended == 0 && WaitForSingleObject(tv->h, 0))
+     {
+       if (tv->ended == 0)
+@@ -2998,6 +3389,7 @@
+ 	      return EBUSY;
+ 	    }
+     }
++#endif
+   ReleaseThreadHandleAlias (tv, tv->h);
+   gesher_close_start_event(tv);
+ 
+@@ -3033,6 +3425,17 @@
+       pthread_mutex_unlock (&mtx_pthr_locked);
+       return ESRCH;
+     }
++#ifdef GESHER_CANCEL_STATE_PROBE
++  gesher_cancel_state_acquire(tv);
++  if ((tv->p_state & PTHREAD_CREATE_DETACHED) || tv->join_claimed_by) {
++    gesher_cancel_state_release(tv);
++    pthread_mutex_unlock(&mtx_pthr_locked); return EINVAL;
++  }
++  dw=tv->h; tv->h=NULL;
++  tv->p_state |= PTHREAD_CREATE_DETACHED;
++  int ended=tv->ended;
++  gesher_cancel_state_release(tv);
++#else
+   if ((tv->p_state & PTHREAD_CREATE_DETACHED) != 0)
+     {
+       pthread_mutex_unlock (&mtx_pthr_locked);
+@@ -3043,10 +3446,15 @@
+   tv->h = 0;
+   tv->p_state |= PTHREAD_CREATE_DETACHED;
+   _ReadWriteBarrier();
++#endif
+   if (dw)
+     {
+       ReleaseThreadHandleAlias (tv, dw);
++#ifdef GESHER_CANCEL_STATE_PROBE
++      if (ended)
++#else
+       if (tv->ended)
++#endif
+ 	{
+ 	  gesher_close_start_event(tv);
+ 	  gesher_destroy_target_clock(tv);
+@@ -3089,6 +3497,39 @@
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->setname(thread, name);
+ #endif
++#ifdef GESHER_CANCEL_STATE_PROBE
++  if (!name) return EINVAL;
++  struct gesher_target_lease lease; int previous=0;
++  int result=gesher_operation_begin(thread,&lease,&previous);
++  if (result) return result;
++  _pthread_v *target=lease.target;
++  gesher_cancel_state_acquire(target);
++  int valid=!target->in_cancel && !target->ended && target->h && target->h!=INVALID_HANDLE_VALUE;
++  DWORD tid=target->tid;
++  gesher_cancel_state_release(target);
++  if (!valid || !tid || GetThreadId(lease.thread)!=tid) result=ESRCH;
++  else {
++    char *stored=strdup(name);
++    if (!stored) result=ENOMEM;
++    else {
++      pthread_mutex_lock(&mtx_pthr_locked);
++      char *old=target->thread_name; target->thread_name=stored;
++      pthread_mutex_unlock(&mtx_pthr_locked);
++      free(old);
++      /* The owned kernel handle remains open throughout legacy TID naming. */
++      SetThreadName(tid,name);
++      if (_pthread_set_thread_description) {
++        const char *input=name; mbstate_t state={0};
++        size_t size=mbsrtowcs(NULL,&input,0,&state);
++        if (size!=(size_t)-1) {
++          wchar_t *wide=malloc((size+1)*sizeof(wchar_t));
++          if (wide) { mbsrtowcs(wide,&input,size+1,&state); _pthread_set_thread_description(lease.thread,wide); free(wide); }
++        }
++      }
++    }
++  }
++  gesher_operation_end(&lease,previous); return result;
++#else
+   struct _pthread_v *tv;
+   char *stored_name;
+ 
+@@ -3126,6 +3567,7 @@
+         }
+     }
+   return 0;
++#endif
+ }
+ 
+ /* Discovery-only ABI.  This descriptor does not enable cross-image routing;
+@@ -3166,6 +3608,27 @@
+   const struct gesher_identity_probe_v6 *owner=identity_probe_owner();
+   if (owner) return owner->getname(thread, name, len);
+ #endif
++#ifdef GESHER_CANCEL_STATE_PROBE
++  if (!name) return EINVAL;
++  struct gesher_target_lease lease; int previous=0;
++  int result=gesher_operation_begin(thread,&lease,&previous);
++  if (result) return result;
++  _pthread_v *target=lease.target;
++  gesher_cancel_state_acquire(target);
++  int valid=!target->in_cancel && !target->ended && target->h && target->h!=INVALID_HANDLE_VALUE;
++  gesher_cancel_state_release(target);
++  if (!valid) result=ESRCH;
++  else if (!len) result=ERANGE;
++  else {
++    pthread_mutex_lock(&mtx_pthr_locked);
++    size_t size=target->thread_name?strlen(target->thread_name):0;
++    if (size>=len) result=ERANGE;
++    else if (size) memcpy(name,target->thread_name,size+1);
++    else name[0]=0;
++    pthread_mutex_unlock(&mtx_pthr_locked);
++  }
++  gesher_operation_end(&lease,previous); return result;
++#else
+   struct _pthread_v *tv;
+   size_t thread_name_len;
+ 
+@@ -3192,4 +3655,5 @@
+ 
+   memcpy (name, tv->thread_name, thread_name_len + 1);
+   return 0;
+-}
++#endif
++}
+--- a/mingw-w64-libraries/winpthreads/src/thread.h
++++ b/mingw-w64-libraries/winpthreads/src/thread.h
+@@ -56,6 +56,11 @@
+ #ifdef GESHER_RESOURCE_LEASE_PROBE
+     unsigned operation_refs;
+     int clock_destroy_pending;
++#ifdef GESHER_CANCEL_STATE_PROBE
++    SRWLOCK cancel_state_lock;
++    int lifecycle;
++    pthread_t join_claimed_by;
++#endif
+ #endif
+     unsigned cleanup_refs;
+     int pending_retire;
