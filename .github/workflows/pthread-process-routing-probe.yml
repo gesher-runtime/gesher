@@ -1,3 +1,4 @@
+# Verify actual resource field offsets and updated fault patch stack.
 # Separate target-resource lifetime primitive role.
 # Separate opt-in callback-release reaper role.
 # Observe malformed descriptor before DLL admission.

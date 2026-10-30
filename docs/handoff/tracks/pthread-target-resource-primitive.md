@@ -2,7 +2,9 @@
 
 The separate `probe-resource` supplier role enables `GESHER_RESOURCE_LEASE_PROBE`
 with the routing macro. Existing roles keep the resource macro off and preserve
-their private record layouts. The resource role has additional operation refs
+their private record layouts. Actual CI410504 compiler output shows the resource
+record remains 512 bytes: operation_refs120 and clock_destroy_pending124 use
+existing alignment padding; the earlier guessed528 receipt correctly failed. The resource role has additional operation refs
 and deferred clock retirement state; the supplier's actual layout receipt must
 verify its size and fields independently. No public cancel or join implementation
 uses the new lease yet, and this is not product activation.
