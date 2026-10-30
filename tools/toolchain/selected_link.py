@@ -157,16 +157,26 @@ def link_paths(argv, cwd, portable=False):
     return output, maps[0]
 
 
-def provider_names(raw):
-    names = set()
+def symbol_inventory(raw):
+    names, members = {}, set()
+    member = None
     for line in raw.splitlines():
+        header = re.fullmatch(r'([^:\r\n]+\.o):', line)
+        if header:
+            member = header[1]
+            members.add(member)
+            continue
         match = re.fullmatch(r'[0-9a-fA-F]+\s+[TDBRWV]\s+(\S+)', line)
         if match:
             name = match[1]
-            if name.startswith(('pthread_', '_pthread_', '__pthread_', '__pth_')) or name in ('__dyn_tls_pthread', '__xl_f'):
-                names.add(name)
-    assert {'pthread_self', 'pthread_join', 'pthread_create', 'pthread_exit'} <= names
-    return names
+            assert member is not None
+            names.setdefault(name, set()).add(member)
+    assert {'pthread_self', 'pthread_join', 'pthread_create', 'pthread_exit'} <= set(names)
+    return names, members
+
+
+def provider_name(name):
+    return name.startswith(('pthread_', '_pthread', '__pthread', '__pth_')) or name in ('__dyn_tls_pthread', '__xl_f')
 
 
 def prove(trace, mapping, imports, data, cwd):
@@ -175,7 +185,8 @@ def prove(trace, mapping, imports, data, cwd):
     assert re.search(r'^\s*Address\s+Size\s+Align\s+Out\s+In\s+Symbol\s*$', mapping, re.MULTILINE), 'Missing actual LLD map header'
     assert re.search(r'\bReading [^\r\n]+\r?$', trace, re.MULTILINE), 'Missing actual linker Reading observations'
     assert 'Format: COFF-x86-64' in imports, 'Missing actual target PE import capture'
-    names = provider_names(data['authority']['library_symbols']['lib/libwinpthread.a'])
+    inventory, members = symbol_inventory(data['authority']['library_symbols']['lib/libwinpthread.a'])
+    names = {n for n in inventory if provider_name(n)}
     # Pure POSIX producer paths: consumers may validate on Windows without
     # resolving Linux paths through the local drive or touching a compiler.
     cwd = PurePosixPath(str(cwd))
@@ -197,6 +208,7 @@ def prove(trace, mapping, imports, data, cwd):
             assert len(origins) == 1, 'Missing/ambiguous actual pthread archive Reading origin'
             origin = origins.pop()
             assert origin in aliases and not origin.endswith('.dll.a'), 'Unexpected provider archive'
+            assert member in members, 'Loaded member absent from current supplier inventory'
             if '/' in archive:
                 assert normalize_origin(archive) == origin, 'Loaded fullpath contradicts Reading origin'
             loaded.add((PurePosixPath(origin).name, member, origin))
@@ -214,7 +226,8 @@ def prove(trace, mapping, imports, data, cwd):
             input_sections += 1
         elif tail.startswith('                '):
             symbol = tail.strip()
-            if symbol in names:
+            selected_owner = owner is not None and any(owner.endswith(alias + '(' + member + ')') for alias, member, _ in loaded)
+            if symbol in names or (symbol in inventory and selected_owner):
                 value = (owner, row[1].lower())
                 assert symbol not in definitions or definitions[symbol] == value, 'Conflicting provider definition'
                 definitions[symbol] = value
@@ -229,6 +242,7 @@ def prove(trace, mapping, imports, data, cwd):
         candidates = [(p, m) for alias, m, p in loaded if alias == PurePosixPath(match[1]).name and m == match[2]]
         assert len(candidates) == 1, 'Map provider has no unique actual loaded member'
         origin, member = candidates[0]
+        assert member in inventory[symbol], 'Live symbol is absent from the actual selected member inventory'
         if '/' in match[1]:
             assert normalize_origin(match[1]) == origin, 'Map fullpath contradicts loaded origin'
         bindings[symbol] = dict(archive=origin, archive_sha256=aliases[origin], member=member, address=address)
