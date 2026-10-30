@@ -114,13 +114,18 @@ def controls(authority):
     cwd = Path('/SYNTHETIC/out').resolve()
     proof_cwd = PurePosixPath('/SYNTHETIC/out')
     target = PurePosixPath(data['compiler_root'], 'x86_64-w64-mingw32/lib/libpthread.a')
-    trace = f'ld.lld: Reading {target}\nld.lld: Loaded libpthread.a(thread.o) for pthread_self\n'
+    member = 'libwinpthread_la-thread.o'
+    assert ledger.symbol_inventory(authority['library_symbols']['lib/libwinpthread.a'])[0]['pthread_self'] == {member}
+    trace = f'ld.lld: Reading {target}\nld.lld: Loaded libpthread.a(thread.o) for pthread_self\n'.replace('thread.o', member)
     header = 'Address  Size     Align Out     In      Symbol\n'
-    mapping = header + '00001000 00000020 16 libpthread.a(thread.o):(.text)\n00001000 00000000 0                 pthread_self\n'
+    mapping = header + '00001000 00000020 16 libpthread.a(thread.o):(.text)\n00001000 00000000 0                 pthread_self\n'.replace('thread.o', member)
     imported = 'File: SYNTHETIC.exe\nFormat: COFF-x86-64\nImport {\n  Name: KERNEL32.dll\n}\n'
     linked = ledger.prove(trace, mapping, imported, data, proof_cwd)
     assert linked['status'] == 'LINKED' and set(linked['definitions']) == {'pthread_self'}
     assert ledger.prove(trace, mapping + mapping, imported, data, proof_cwd) == linked
+    clock_trace = trace.replace(member, 'libwinpthread_la-clock.o').replace('pthread_self', 'clock_gettime64')
+    clock_map = mapping.replace(member, 'libwinpthread_la-clock.o').replace('pthread_self', 'clock_gettime64')
+    assert ledger.prove(clock_trace, clock_map, imported, data, proof_cwd)['status'] == 'LINKED'
     unused = ledger.prove('ld.lld: Reading /SYNTHETIC/out/ordinary.obj\n',
                           header + '00001000 00000020 16 ordinary.obj:(.text)\n00001000 00000000 0                 main\n', imported, data, proof_cwd)
     assert unused == dict(status='NOT-LINKED', definitions={}, loaded_members=[])
@@ -135,19 +140,21 @@ def controls(authority):
         (trace.replace(f'ld.lld: Reading {target}\n', ''), mapping, imported),
         (trace + 'ld.lld: Reading /SYNTHETIC/other/libpthread.a\n', mapping, imported),
         (trace.replace(str(target), '/SYNTHETIC/old/libpthread.a'), mapping, imported),
-        (trace.replace('Loaded libpthread.a(thread.o)', 'Loaded libpthread.a(other.o)'), mapping, imported),
-        (trace, mapping.replace('libpthread.a(thread.o)', 'ordinary.obj'), imported),
-        (trace, mapping.replace('libpthread.a(thread.o)', 'other.a(thread.o)'), imported),
-        (trace, mapping.replace('libpthread.a(thread.o)', 'libpthread.a(other.o)'), imported),
+        (trace.replace(member, 'other.o'), mapping, imported),
+        (trace, mapping.replace(f'libpthread.a({member})', 'ordinary.obj'), imported),
+        (trace, mapping.replace('libpthread.a(', 'other.a('), imported),
+        (trace, mapping.replace(member, 'other.o'), imported),
         (trace.replace('Loaded libpthread.a(', 'Loaded /SYNTHETIC/other/libpthread.a('), mapping, imported),
-        (trace, mapping.replace('libpthread.a(thread.o)', '/SYNTHETIC/other/libpthread.a(thread.o)'), imported),
+        (trace, mapping.replace('libpthread.a(', '/SYNTHETIC/other/libpthread.a('), imported),
         (trace, mapping + mapping.replace('00001000', '00002000'), imported),
-        (trace, mapping + mapping.replace('libpthread.a(thread.o)', 'other.a(thread.o)'), imported),
+        (trace, mapping + mapping.replace('libpthread.a(', 'other.a('), imported),
         (trace, mapping, imported.replace('KERNEL32.dll', 'libwinpthread-1.dll')),
         (trace, mapping, imported + 'Symbol: pthread_self (0)\n'),
         (trace, mapping, imported + 'Symbol: __imp_pthread_join (0)\n'),
         (trace, '00001000 00000020 16 ordinary.obj:(.text)\n', imported),
         ('ld.lld: Reading /SYNTHETIC/out/ordinary.obj\n', mapping, imported),
+        (trace.replace(member, 'libwinpthread_la-clock.o'), mapping.replace(member, 'libwinpthread_la-clock.o'), imported),
+        (trace.replace(member, 'nonexistent.o'), mapping.replace(member, 'nonexistent.o'), imported),
     ]
     for t, m, i in negatives:
         reject(lambda: ledger.prove(t, m, i, data, proof_cwd))

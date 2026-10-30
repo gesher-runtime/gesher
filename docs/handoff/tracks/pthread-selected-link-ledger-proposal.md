@@ -52,8 +52,11 @@ archive(member)` records and live provider-symbol map owners/addresses.
 Full-path contradictions, ambiguous aliases, another provider object,
 dynamic pthread imports, different owners or addresses fail. Exact duplicate
 symbol/owner/address rows coalesce, matching the already reviewed LLD behavior.
-Provider names come from the current supplier's actual nm inventory, not a
-guessed list or the compiler search path. The role remains the exact selected
+Provider names and each symbol's defining member come from the current
+supplier's actual nm inventory. A matching archive hash and invented or wrong
+member cannot establish a definition. Other live global symbols actually
+owned by a selected member (for example clock-only use) are bound too, while
+an ordinary product clock definition does not count as provider use. The role remains the exact selected
 static product supplier; dynamic product adoption is not introduced here.
 
 `NOT-LINKED` requires an actual successful captured target link, nonempty map
@@ -103,7 +106,7 @@ async or independent-root adoption gates recorded in the canonical map.
 C:/work/gesher-ci-review/tcp-selected-411396-current-authority.json` pins the
 actual old authority hash/source/run, then uses visibly SYNTHETIC map/command
 metadata only. It checks linked/unlinked positives, identical duplicates,
-23 origin/member/import/owner/address/map proof negatives, two mode failures,
+25 origin/member/import/owner/address/map proof negatives, two mode failures,
 six command failures, eight response failures and 13 portable sealed-record
 negatives. No compiler/native process
 or network operation is started by this test. Actual new CMake/Ninja links
