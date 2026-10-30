@@ -2,7 +2,7 @@ name: net-tcp-priority-characterization
 on:
   workflow_dispatch:
   push:
-    branches: [wip/tcp-priority-reboot]
+    branches: [wip/udp-token-oracle]
     paths: [.github/workflows/net-tcp-priority-characterization.yml, tests/net-tcp-priority/winsock_oracle.cc, tests/net-tcp-priority/winsock_udp_oracle.cc, tests/net-tcp-priority/linux_udp_error_reference.cc, tests/net-tcp-priority/contract.cc]
 permissions:
   contents: read

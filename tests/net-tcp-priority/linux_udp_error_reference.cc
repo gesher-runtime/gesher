@@ -56,6 +56,19 @@ int main(int argc, char** argv) {
       version, mode, query, repeated, before.revents, peeked, peek_error, after_rc, after.revents, received, receive_error, mode ? payload_length : -1, conserved ? 1 : 0);
   if (mode) require(conserved && peeked == (payload_length ? 1 : 0) && after_rc == 1 && after.revents == POLLIN, "entire datagram conserved after peek/error query");
   else require(peeked == -1 && peek_error == (query ? EAGAIN : ECONNREFUSED) && after_rc == 0 && received == -1 && receive_error == EAGAIN, "Linux pending error consumption remains explicit");
+  if (!mode) {
+    require(send(client, "v", 1, 0) == 1, "new ICMP-producing send after consumed token");
+    pollfd next{client, POLLIN | POLLPRI, 0};
+    const int next_rc = poll(&next, 1, 2000);
+    const int next_recv = static_cast<int>(recv(client, actual, sizeof(actual), 0));
+    const int next_error = next_recv < 0 ? errno : 0;
+    pollfd final{client, POLLIN | POLLPRI, 0};
+    const int final_rc = poll(&final, 1, 0);
+    printf("LINUX_UDP_TOKEN family=%d query=%d stage=new-send poll=%d revents=%d recv=%d recv_error=%d final_poll=%d final_revents=%d\n",
+        version, query, next_rc, next.revents, next_recv, next_error, final_rc, final.revents);
+    require(next_rc == 1 && next.revents == POLLERR && next_recv == -1 && next_error == ECONNREFUSED &&
+        final_rc == 0 && final.revents == 0, "new error generation remains observable and consumed once");
+  }
   bool target_closed = target == -1 || close(target) == 0, client_closed = close(client) == 0;
   require(target_closed && client_closed, "all owned endpoints closed");
   puts("PASS Linux UDP reference connected error token and exact payload conservation");

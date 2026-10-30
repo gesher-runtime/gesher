@@ -74,6 +74,31 @@ int main(int argc, char** argv) {
   if (payload) require(polled == 1 && first.revents == POLLRDNORM && after_rc == 1 && after.revents == POLLRDNORM && conserved &&
       (payload_length > 1 || (peeked == payload_length && (payload_length == 0 || peek_byte == 'p'))),
       "entire real zero, one or large payload survives one-byte peek and explicit error query");
+  WSAPOLLFD drained{}; drained.fd = client; drained.events = first.events;
+  const int drained_rc = WSAPoll(&drained, 1, 0);
+  const int drained_error = drained_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
+  const int again = recv(client, actual, sizeof(actual), 0);
+  const int again_error = again == SOCKET_ERROR ? WSAGetLastError() : 0;
+  printf("WINDOWS_UDP_TOKEN report=%d payload=%d query=%d stage=after-ordinary-receive poll=%d poll_error=%d revents=%d recv=%d recv_error=%d\n",
+      report_reset, payload, query_error, drained_rc, drained_error, drained.revents, again, again_error);
+  if (payload) require(drained_rc == 0 && drained.revents == 0 && again == SOCKET_ERROR && again_error == WSAEWOULDBLOCK,
+      "ordinary receive consumed exactly one datagram with no fabricated follow-up readiness");
+  if (!payload) {
+    require(send(client, "v", 1, 0) == 1, "new independent ICMP-producing send after ordinary consumption");
+    WSAPOLLFD next{}; next.fd = client; next.events = first.events;
+    const int next_rc = WSAPoll(&next, 1, 2000);
+    const int next_error = next_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
+    const int next_peek = recv(client, actual, sizeof(actual), MSG_PEEK);
+    const int next_peek_error = next_peek == SOCKET_ERROR ? WSAGetLastError() : 0;
+    const int next_recv = recv(client, actual, sizeof(actual), 0);
+    const int next_recv_error = next_recv == SOCKET_ERROR ? WSAGetLastError() : 0;
+    WSAPOLLFD final{}; final.fd = client; final.events = first.events;
+    const int final_rc = WSAPoll(&final, 1, 0);
+    const int final_error = final_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
+    printf("WINDOWS_UDP_TOKEN report=%d payload=0 query=%d stage=new-send poll=%d poll_error=%d revents=%d peek=%d peek_error=%d recv=%d recv_error=%d final_poll=%d final_poll_error=%d final_revents=%d\n",
+        report_reset, query_error, next_rc, next_error, next.revents, next_peek, next_peek_error,
+        next_recv, next_recv_error, final_rc, final_error, final.revents);
+  }
   bool target_closed = target == INVALID_SOCKET || closesocket(target) == 0;
   bool client_closed = closesocket(client) == 0;
   require(target_closed && client_closed, "both owned endpoints closed");
