@@ -2,6 +2,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <mstcpip.h>
+#include <mswsock.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
