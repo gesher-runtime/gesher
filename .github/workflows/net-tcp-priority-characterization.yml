@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [wip/tcp-priority-reboot]
-    paths: [.github/workflows/net-tcp-priority-characterization.yml, tests/net-tcp-priority/winsock_oracle.cc, tests/net-tcp-priority/contract.cc]
+    paths: [.github/workflows/net-tcp-priority-characterization.yml, tests/net-tcp-priority/winsock_oracle.cc, tests/net-tcp-priority/winsock_udp_oracle.cc, tests/net-tcp-priority/contract.cc]
 permissions:
   contents: read
 jobs:
