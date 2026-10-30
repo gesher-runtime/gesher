@@ -5,6 +5,9 @@ from pathlib import Path
 import posixpath
 import re
 import shutil
+import hashlib
+import struct
+import base64
 import subprocess
 import sys
 
@@ -79,31 +82,168 @@ def requested_symbols(nm_text):
     return sorted({n for n in names if re.fullmatch(r'(?:__imp_)?(?:_?pthread_\w+|__pth_gpointer_locked)', n)})
 
 
-def dynamic_bindings(map_text, link_text, inputs, imports_text, requested):
-    definitions = receipt.map_symbols(map_text, requested)
+def short_import_record(body, name, offset):
+    assert len(body)>=20
+    sig1,sig2,version,machine,timestamp,size,hint,flags=struct.unpack('<HHHHIIHH',body[:20])
+    assert sig1==0 and sig2==65535 and version==0 and machine==0x8664
+    assert flags>>5==0 and (flags&3) in (0,1,2) and ((flags>>2)&7)==1, 'Unsupported import name encoding'
+    assert len(body)==20+size
+    strings=body[20:].split(b'\0');assert len(strings)==3 and strings[-1]==b''
+    symbol,dll=(s.decode('ascii') for s in strings[:2]);assert symbol and dll and name==dll
+    return symbol,dict(member=name,offset=offset,bytes=len(body),sha256=hashlib.sha256(body).hexdigest(),
+                        machine=machine,type=flags&3,name_type=(flags>>2)&7,dll=dll,
+                        payload_base64=base64.b64encode(body).decode('ascii'))
+
+
+def short_import_members(payload):
+    """Read real COFF archive short imports; never manufacture LLD map rows."""
+    assert payload.startswith(b'!<arch>\n'), 'Expected ordinary COFF archive'
+    entries=[];offset=8;longnames=None
+    while offset<len(payload):
+        assert offset+60<=len(payload)
+        header=payload[offset:offset+60];assert header[58:]==b'`\n'
+        size=int(header[48:58].decode('ascii').strip());assert size>=0
+        end=offset+60+size;assert end<=len(payload)
+        name=header[:16].decode('ascii').strip();body=payload[offset+60:end]
+        entries.append((offset,name,body))
+        if name=='//':assert longnames is None;longnames=body
+        if size%2:assert payload[end:end+1]==b'\n';end+=1
+        offset=end
+    assert offset==len(payload)
+    result={}
+    for offset,name,body in entries:
+        if name in ('/','//','/SYM64/'):continue
+        if re.fullmatch(r'/[0-9]+',name):
+            index=int(name[1:]);assert longnames is not None and index<len(longnames)
+            tail=longnames[index:];ends=[n for n in (tail.find(b'\0'),tail.find(b'/\n')) if n>=0]
+            assert ends;name=tail[:min(ends)].decode('ascii')
+        else:
+            assert not name.startswith('#1/');name=name.removesuffix('/')
+        if not body.startswith(b'\x00\x00\xff\xff'):continue
+        symbol,record=short_import_record(body,name,offset)
+        assert symbol not in result,'Ambiguous short-import API'
+        result[symbol]=record
+    assert result,'No actual short-import members'
+    return result
+
+
+def pe_import_thunks(payload, symbols, requested):
+    """Bind final x64 function JMPs to the exact named DLL IAT entries."""
+    assert payload[:2]==b'MZ'
+    pe=struct.unpack_from('<I',payload,0x3c)[0]
+    assert payload[pe:pe+4]==b'PE\0\0' and struct.unpack_from('<H',payload,pe+4)[0]==0x8664
+    count=struct.unpack_from('<H',payload,pe+6)[0];optional_size=struct.unpack_from('<H',payload,pe+20)[0]
+    optional=pe+24;assert struct.unpack_from('<H',payload,optional)[0]==0x20b
+    base=struct.unpack_from('<Q',payload,optional+24)[0]
+    assert struct.unpack_from('<I',payload,optional+108)[0]>1
+    import_rva,import_size=struct.unpack_from('<II',payload,optional+120)
+    sections=[]
+    for i in range(count):
+        at=optional+optional_size+i*40
+        virtual_size,rva,size,offset=struct.unpack_from('<IIII',payload,at+8)
+        assert offset+size<=len(payload);sections.append((rva,size,offset))
+    def location(rva,size=1):
+        matches=[off+rva-start for start,rawsize,off in sections if start<=rva and rva+size<=start+rawsize]
+        assert len(matches)==1,'Unmapped/ambiguous PE RVA'
+        return matches[0]
+    def cstring(rva):
+        start=location(rva);end=payload.find(b'\0',start);assert end>=start
+        location(rva,end-start+1);return payload[start:end].decode('ascii')
+    imports={};finished=False
+    for i in range(import_size//20):
+        desc=struct.unpack_from('<IIIII',payload,location(import_rva+i*20,20))
+        if not any(desc):finished=True;break
+        lookup,stamp,chain,name,iat=desc;dll=cstring(name).casefold()
+        assert lookup and iat
+        for j in range(len(payload)//8):
+            item=struct.unpack_from('<Q',payload,location(lookup+j*8,8))[0]
+            if item==0:break
+            if item>>63:continue
+            api=cstring(item+2);key=(dll,api);assert key not in imports
+            imports[key]=base+iat+j*8
+        else:raise AssertionError('Unterminated PE import lookup')
+    assert finished
+    definitions={};needed={s.removeprefix('__imp_') for s in requested}
+    needed|={'__imp_'+s for s in needed}
+    for address,kind,name in re.findall(r'(?m)^([0-9a-fA-F]+) ([A-Za-z?]) (\S+)\r?$',symbols):
+        if name not in needed:continue
+        value=int(address,16);assert name not in definitions or definitions[name]==value
+        definitions[name]=value
+    result={}
+    for symbol in requested:
+        api=symbol.removeprefix('__imp_');iat=imports[('libwinpthread-1.dll',api)]
+        assert not any(name==api and dll!='libwinpthread-1.dll' for dll,name in imports)
+        assert definitions['__imp_'+api]==iat
+        record=dict(iat_va=iat,dll='libwinpthread-1.dll',api=api)
+        if not symbol.startswith('__imp_'):
+            address=definitions[api];offset=location(address-base,6);code=payload[offset:offset+6]
+            assert code[:2]==b'\xff\x25','Requested API resolved to static code instead of import thunk'
+            assert address+6+struct.unpack('<i',code[2:])[0]==iat,'Import thunk targets another IAT slot'
+            record.update(thunk_va=address,thunk_bytes=code.hex())
+        result[symbol]=record
+    return result
+
+
+def short_import_input(link_text, inputs, count):
+    allowed = {normal(value['path']): value['sha256'] for value in inputs.values()}
+    origins={}
+    for path in re.findall(r'\bReading ([^\r\n]+\.a)\r?$',link_text,re.MULTILINE):
+        path=normal(path)
+        if posixpath.isabs(path):origins.setdefault(posixpath.basename(path),set()).add(path)
+    observed=[]
+    for archive,member in re.findall(r'\bReading ([^\r\n]+?\.a)\(([^()\r\n]+)\)\r?$',link_text,re.MULTILINE):
+        if member.casefold()!='libwinpthread-1.dll':continue
+        archive=normal(archive)
+        if not posixpath.isabs(archive):
+            matches=origins.get(archive,set());assert len(matches)==1,'Unresolved actual short-import archive'
+            archive=next(iter(matches))
+        assert archive in allowed,'Another archive supplied pthread short imports'
+        observed.append((archive,member))
+    assert len(observed)==count and len(set(observed))==1,'Missing/ambiguous actual short-import input census'
+    archive,member=observed[0]
+    return archive,member,len(observed)
+
+
+def dynamic_bindings(link_text, inputs, imports_text, requested, members, nm_text, thunks):
     blocks = import_symbols(imports_text)
     assert 'libwinpthread-1.dll' in blocks
     allowed = {normal(value['path']): value['sha256'] for value in inputs.values()}
-    loaded = loaded_inputs(link_text)
+    apis={s.removeprefix('__imp_') for s in requested}
+    archive,member,observed_count=short_import_input(link_text,inputs,len(apis))
+    assert len({r['offset'] for r in members.values()})==len(members)
+    for api,record in members.items():
+        name,reconstructed=short_import_record(base64.b64decode(record['payload_base64'],validate=True),record['member'],record['offset'])
+        assert name==api and reconstructed==record,'Short-import payload/record mismatch'
+    nm_records=short_import_nm(nm_text,apis)
     result = {}
     for symbol in requested:
         api = symbol.removeprefix('__imp_')
         assert api in blocks['libwinpthread-1.dll'], 'Requested API not imported from selected DLL: ' + api
         assert not any(api in names for dll, names in blocks.items() if dll != 'libwinpthread-1.dll')
-        # COFF short-import members may legitimately have the SAME DLL basename.
-        # Exact requested symbol/reason + IAT provider resolves each member; no
-        # global same-basename exemption is applied to ordinary static objects.
-        matches = [(archive, member, reason) for archive, member, reason in loaded
-                   if reason in (symbol, api, '__imp_' + api)]
-        assert len(matches) == 1, 'Ambiguous actual import extraction: ' + symbol
-        archive, member, reason = matches[0]
-        owner, rva = definitions[symbol]
-        assert archive in allowed and owner
-        assert posixpath.basename(normal(owner)) == posixpath.basename(normal(member)), 'Import map input differs from actual loaded member'
+        record=members[api]
+        assert record['member']==record['dll']==member and record['machine']==0x8664 and record['type']==0 and record['name_type']==1
+        assert record['offset']>=8 and record['bytes']>20 and re.fullmatch('[0-9a-f]{64}',record['sha256'])
+        thunk=thunks[symbol];assert thunk['api']==api and thunk['dll']=='libwinpthread-1.dll'
         result[symbol] = dict(api=api, dll='libwinpthread-1.dll', archive=archive,
                               archive_sha256=allowed[archive], member=member,
-                              extracted_for=reason, map_input=owner, map_rva=rva)
+                              short_import=record,iat_api=api,actual_member_read_count=observed_count,
+                              final_pe_thunk=thunk,
+                              evidence='actual-short-import-input-and-final-IAT; no regular-map row exists')
     return result
+
+
+def short_import_nm(nm_text, apis):
+    nm_records={}
+    for member,block in re.findall(r'(?ms)^([^\r\n]+):\r?\n(.*?)(?=^[^\r\n]+:\r?\n|\Z)',nm_text):
+        names=re.findall(r'(?m)^00000000 T (\S+)\r?$',block)
+        for api in apis:
+            if api in names:
+                assert member=='libwinpthread-1.dll','Import nm member differs from short payload DLL'
+                assert api not in nm_records
+                nm_records[api]=set(names)
+    for api in apis:
+        assert nm_records[api]=={api,'__imp_'+api},'Missing/ambiguous actual import nm pair'
+    return nm_records
 
 
 def check_supplier(data, ctx):
@@ -288,9 +428,18 @@ def build(reference_llvm, minimum_llvm, source):
         (DIST / (tag + '-machine.txt')).write_text(machine)
         map_text = (DIST / (tag + '.map')).read_text()
         print('MINIMUM_CONTROL_RAW_MAP_BEGIN tag=' + tag + '\n' + map_text + 'MINIMUM_CONTROL_RAW_MAP_END', flush=True)
+        print('MINIMUM_CONTROL_RAW_IMPORTS_BEGIN tag='+tag+'\n'+import_text+'MINIMUM_CONTROL_RAW_IMPORTS_END',flush=True)
+        print('MINIMUM_CONTROL_RAW_SYMBOLS_BEGIN tag='+tag+'\n'+symbols+'MINIMUM_CONTROL_RAW_SYMBOLS_END',flush=True)
         if dynamic:
             assert not re.search(r'\b(?:__dyn_tls_pthread|__xl_f)\s*$', symbols, re.MULTILINE), 'Static pthread provider leaked into import consumer'
-            bindings = dynamic_bindings(map_text, link.stdout, inputs, import_text, requested)
+            import_members=short_import_members(library.read_bytes())
+            (DIST/'dynamic-short-import-members.json').write_text(json.dumps(import_members,sort_keys=True,indent=2))
+            for api in sorted({n.removeprefix('__imp_') for n in requested}):
+                print('MINIMUM_ACTUAL_SHORT_IMPORT api='+api+' '+json.dumps(import_members[api],sort_keys=True),flush=True)
+            thunks=pe_import_thunks(output.read_bytes(),symbols,requested)
+            for name,record in thunks.items():print('MINIMUM_FINAL_PE_IMPORT symbol='+name+' '+json.dumps(record,sort_keys=True),flush=True)
+            bindings = dynamic_bindings(link.stdout, inputs, import_text, requested, import_members,
+                                        supplier['library_symbols']['lib/libwinpthread.dll.a'],thunks)
         else:
             bindings = static_bindings(map_text, link.stdout, inputs, sorted(set(cpp.PTHREAD_SYMBOLS) | set(requested)))
         for name, binding in bindings.items():
@@ -310,7 +459,7 @@ def verify():
     ctx = receipt.context()
     data = json.loads((DIST / 'bundle.json').read_text())
     assert data['context'] == ctx and data['role'] == 'minimum-candidate-controls-v1' and data['producer'] == 'minimum_compile'
-    expected = {'minimum-supplier.json', 'reference-supplier.json', 'libwinpthread-1.dll'}
+    expected = {'minimum-supplier.json', 'reference-supplier.json', 'libwinpthread-1.dll','dynamic-short-import-members.json'}
     expected |= {tag + suffix for tag in VARIANTS for suffix in ('.exe', '.obj', '.map', '-link.txt', '-undefined.txt', '-imports.txt', '-symbols.txt', '-machine.txt', '-errno-macros.txt')}
     assert set(data['members']) == expected and {p.name for p in DIST.iterdir()} == expected | {'bundle.json'}
     assert all(sha(DIST / name) == digest for name, digest in data['members'].items())
@@ -349,7 +498,10 @@ def verify():
         assert 'gesher_' not in raw_symbols.lower()
         if dynamic:
             assert not re.search(r'\b(?:__dyn_tls_pthread|__xl_f)\s*$', raw_symbols, re.MULTILINE)
-            bindings = dynamic_bindings(map_text, link_text, row['pthread_archive_inputs'], raw_imports, requested)
+            import_members=json.loads((DIST/'dynamic-short-import-members.json').read_text())
+            thunks=pe_import_thunks((DIST/(tag+'.exe')).read_bytes(),raw_symbols,requested)
+            bindings = dynamic_bindings(link_text,row['pthread_archive_inputs'],raw_imports,requested,
+                            import_members,supplier['library_symbols']['lib/libwinpthread.dll.a'],thunks)
         else:
             bindings = static_bindings(map_text, link_text, row['pthread_archive_inputs'], sorted(set(cpp.PTHREAD_SYMBOLS) | set(requested)))
         assert row['symbol_bindings'] == bindings
@@ -359,28 +511,50 @@ def verify():
 def selftest():
     names=['pthread_self','__pth_gpointer_locked']
     inputs={n:dict(path='/minimum/lib/'+n,sha256='1'*64) for n in ('libwinpthread.dll.a','libpthread.dll.a')}
-    header='00001000 00000020     4         libwinpthread-1.dll:(.text)\n'
-    rows={n:'00001000 00000000     0                 '+n+'\n' for n in names}
-    map_text=header+''.join(rows.values())
-    link='ld.lld: Reading /minimum/lib/libwinpthread.dll.a\n'+''.join('ld.lld: Loaded libwinpthread.dll.a(libwinpthread-1.dll) for '+n+'\n' for n in names)
+    # Real LLD short imports have Reading rows and no regular symbol map rows.
+    link='ld.lld: Reading /minimum/lib/libwinpthread.dll.a\n'+'ld.lld: Reading libwinpthread.dll.a(libwinpthread-1.dll)\n'*len(names)
     imported='Import {\n  Name: libwinpthread-1.dll\n'+''.join('  Symbol: '+n+' (1)\n' for n in names)+'}\n'
-    good=dynamic_bindings(map_text,link,inputs,imported,names);assert set(good)==set(names)
-    assert dynamic_bindings(map_text+rows['pthread_self'],link,inputs,imported,names)==good
+    nm=''.join('\nlibwinpthread-1.dll:\n00000000 T '+n+'\n00000000 T __imp_'+n+'\n' for n in names)
+    def member(name):
+        data=(name+'\0libwinpthread-1.dll\0').encode()
+        return struct.pack('<HHHHIIHH',0,65535,0,0x8664,0,len(data),0,4)+data
+    def archive(entries):
+        payload=b'!<arch>\n'
+        for name,body in entries:
+            header=(name.ljust(16)+'0'.ljust(12)+'0'.ljust(6)+'0'.ljust(6)+'0'.ljust(8)+str(len(body)).ljust(10)+'`\n').encode()
+            assert len(header)==60;payload+=header+body+(b'\n' if len(body)%2 else b'')
+        return payload
+    binary=archive([('//',b'libwinpthread-1.dll\0')]+[('/0',member(n)) for n in names])
+    members=short_import_members(binary)
+    thunks={n:dict(iat_va=0x140002100+i*8,dll='libwinpthread-1.dll',api=n,thunk_va=0x140001000+i*16,thunk_bytes='ff2500000000') for i,n in enumerate(names)}
+    good=dynamic_bindings(link,inputs,imported,names,members,nm,thunks);assert set(good)==set(names)
     rejected=0
-    controls=[(map_text,link,'',names),(map_text,link,imported.replace('libwinpthread-1.dll','other.dll'),names),
-        (map_text,link.replace('/minimum/','/other/'),imported,names),
-        (map_text,link.replace('ld.lld: Reading /minimum/lib/libwinpthread.dll.a\n',''),imported,names),
-        (map_text,link+'ld.lld: Reading /other/lib/libwinpthread.dll.a\n',imported,names),
-        (map_text,link+'ld.lld: Loaded /other/lib/other.a(wrong.dll) for pthread_self\n',imported,names),
-        (map_text.replace('libwinpthread-1.dll','other.o'),link,imported,names),
-        (map_text.replace(rows['pthread_self'],''),link,imported,names),
-        (map_text+rows['pthread_self'].replace('00001000','00002000',1),link,imported,names)]
-    for args in controls:
-        try:dynamic_bindings(*args[:2],inputs,*args[2:])
-        except AssertionError:rejected+=1
-        else:raise AssertionError('Unbound minimum import/member metadata accepted')
+    controls=[(link,'',members,nm),(link,imported.replace('libwinpthread-1.dll','other.dll'),members,nm),
+        (link.replace('/minimum/','/other/'),imported,members,nm),
+        (link.replace('ld.lld: Reading /minimum/lib/libwinpthread.dll.a\n',''),imported,members,nm),
+        (link+'ld.lld: Reading /other/lib/libwinpthread.dll.a\n',imported,members,nm),
+        (link+'ld.lld: Reading /other/lib/other.a(libwinpthread-1.dll)\n',imported,members,nm),
+        (link.replace('ld.lld: Reading libwinpthread.dll.a(libwinpthread-1.dll)\n','',1),imported,members,nm),
+        (link,imported,{n:v for n,v in members.items() if n!=names[0]},nm),
+        (link,imported,members,nm.replace('00000000 T __imp_pthread_self\n','')),
+        (link,imported,members,nm+nm),
+        (link,imported,members,nm.replace('libwinpthread-1.dll:','other.dll:',1))]
+    # Mutated record claims cannot substitute for the actual short payload.
+    for key,value in [('machine',0x14c),('type',1),('name_type',2),('dll','other.dll'),('member','other.dll'),('bytes',1),('sha256','0'*64),('offset',0),('payload_base64','AAAA')]:
+        changed=json.loads(json.dumps(members));changed[names[0]][key]=value
+        controls.append((link,imported,changed,nm))
+    for altered in controls:
+        try:dynamic_bindings(altered[0],inputs,altered[1],names,*altered[2:],thunks)
+        except (AssertionError,KeyError,struct.error):rejected+=1
+        else:raise AssertionError('Unbound short-import/actual-IAT metadata accepted')
+    for corrupt in (binary[:-1],binary.replace(b'!<arch>',b'!<thin>'),binary.replace(b'pthread_self\0',b'pthread_else\0',1)+b'x',archive([('/0',member(names[0]))]),archive([('//',b'libwinpthread-1.dll\0'),('/0',member(names[0])),('/0',member(names[0]))])):
+        try:short_import_members(corrupt)
+        except (AssertionError,ValueError,struct.error):rejected+=1
+        else:raise AssertionError('Malformed/ambiguous short-import archive accepted')
+    header='00001000 00000020     4         thread.o:(.text)\n'
+    rows={n:'00001000 00000000     0                 '+n+'\n' for n in names}
+    static_map=header+''.join(rows.values())
     static_inputs={n:dict(path='/minimum/lib/'+n,sha256='2'*64) for n in ('libwinpthread.a','libpthread.a')}
-    static_map=map_text.replace('libwinpthread-1.dll','thread.o')
     static_link='ld.lld: Reading /minimum/lib/libwinpthread.a\nld.lld: Loaded libwinpthread.a(thread.o) for pthread_self\n'
     assert set(static_bindings(static_map,static_link,static_inputs,names))==set(names)
     for extra in ('ld.lld: Loaded /other/lib/other.a(thread.o) for another_symbol\n',):
@@ -388,8 +562,37 @@ def selftest():
         except AssertionError:rejected+=1
         else:raise AssertionError('Ambiguous static supplier accepted')
     assert requested_symbols('                 U pthread_self\n                 U __pth_gpointer_locked\n                 U __imp__pthread_tryjoin\n                 U unrelated\n')==['__imp__pthread_tryjoin','__pth_gpointer_locked','pthread_self']
-    print('PASS minimum static/import map/IAT/requested-source negatives='+str(rejected)+'; no compiler/native/network operation')
+    print('PASS minimum actual-short-import/archive/IAT/nm/static negatives='+str(rejected)+'; no compiler/native/network operation')
+    selftest_pe()
     selftest_trace()
+
+
+def selftest_pe():
+    # In-memory format metadata only. Never written as an executable or run.
+    data=bytearray(0x600);data[:2]=b'MZ';struct.pack_into('<I',data,0x3c,0x80);data[0x80:0x84]=b'PE\0\0'
+    struct.pack_into('<HH',data,0x84,0x8664,1);struct.pack_into('<H',data,0x94,240)
+    optional=0x98;struct.pack_into('<H',data,optional,0x20b);base=0x140000000
+    struct.pack_into('<Q',data,optional+24,base);struct.pack_into('<I',data,optional+108,16)
+    struct.pack_into('<II',data,optional+120,0x1100,40)
+    struct.pack_into('<IIII',data,optional+240+8,0x400,0x1000,0x400,0x200)
+    struct.pack_into('<IIIII',data,0x300,0x1180,0,0,0x1140,0x11a0)
+    dll=b'libwinpthread-1.dll\0';data[0x340:0x340+len(dll)]=dll
+    api=b'pthread_self\0';data[0x3c2:0x3c2+len(api)]=api
+    struct.pack_into('<Q',data,0x380,0x11c0);struct.pack_into('<Q',data,0x3a0,0x11c0)
+    data[0x200:0x206]=b'\xff\x25'+struct.pack('<i',0x11a0-0x1000-6)
+    symbols='0000000140001000 T pthread_self\n00000001400011a0 I __imp_pthread_self\n'
+    result=pe_import_thunks(bytes(data),symbols,['pthread_self','__imp_pthread_self'])
+    assert result['pthread_self']['iat_va']==base+0x11a0 and result['pthread_self']['thunk_bytes'].startswith('ff25')
+    controls=[]
+    for offset,value in ((0,0),(0x200,0x90),(0x202,0),(0x84,0),(0x380,0),(0x340,ord('x'))):
+        bad=bytearray(data);bad[offset]=value;controls.append((bytes(bad),symbols))
+    controls += [(bytes(data),symbols.replace('1400011a0','1400011b0')),(bytes(data),symbols+'0000000140001010 T pthread_self\n')]
+    rejected=0
+    for payload,nm in controls:
+        try:pe_import_thunks(payload,nm,['pthread_self'])
+        except (AssertionError,KeyError,struct.error):rejected+=1
+        else:raise AssertionError('Static/wrong-slot/missing/ambiguous final PE import accepted')
+    print('PASS final PE x64 thunk/named-IAT metadata negatives='+str(rejected)+'; zero native or disk-executable operations')
 
 
 def selftest_trace():

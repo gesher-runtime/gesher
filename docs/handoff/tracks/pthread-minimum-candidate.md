@@ -73,3 +73,52 @@ remain open. Any intentional future canonical recipe needs explicit source/ABI/
 compiler/consumer adoption and all consumer/full-product qualification. No whole
 private compiler merge, main/tag/release change or product activation is authorized
 by this diagnostic slice. Full exact-source independent peer precedes one CI run.
+
+## Preserved first actual run and import evidence correction
+
+Exact477889 /41131420551 attempt1 produced30 actual jobs (the planned31 includes
+two Windows matrix cells, collapsed to one skipped row when its producer failed):
+26success, three failures and one skip. All old28 roles retain26positive and two
+original published hard census failures. All29 completed raw logs,20old receipts
+and10old artifacts are preserved; no minimum artifact or Windows execution exists.
+
+The new producer actually compiled/linked the supplier and all three control
+binaries. Its reconstructed77,157-byte receipt strictly proves original480/all
+fields, both actual601 typed profiles, public headers/exports/import modules,
+eleven DLL core source-object bindings, aliases and18selected static control
+bindings for each original-reference/minimum-static variant. Minimum static
+archive SHA256 is2db4d8fa5b850f41b4f3094ea79abfbe1c35c59c70be67d7c28ad082366ab7cf.
+Dynamic compile/link succeeded, but its proof parser failed before upload:
+the actual LLD map omits imported API regular rows, and verbose short imports
+emit repeated Reading archive(member) rather than Loaded-for-API records.
+The original synthetic format assumption was incorrect; it is not runtime proof.
+
+The changed proof reads actual selected archive bytes as COFF short members,
+records each unique symbol/DLL/header/machine/type/name mode/member offset,
+length, payload bytes and SHA, and binds these to the exact archive hash. Indexed
+payloads are reconstructible from bounded per-API records. Actual full-path
+Reading must resolve uniquely to the selected archive; every short-member
+Reading for this DLL must come from it, with the exact requested-API census.
+Actual archive nm pairs, final named DLL imports and DLL export/source gates
+remain strict. No regular-map row or Loaded-for-API witness is invented.
+
+The final executable is additionally read directly as AMD64 PE data. Each
+requested function must be a real FF25 RIP-relative import thunk targeting its
+exact named libwinpthread-1.dll IAT slot; __imp_ symbol addresses must equal the
+actual PE import slot. A static implementation cannot satisfy this gate by
+merely leaving a DLL name elsewhere in the import table. Producer and Windows
+verification replay this from the same hashed executable and symbol output.
+Raw imports/symbols/map and short-member metadata print before provenance checks
+so any unsupported actual shape remains a visible hard failure. There is no
+fallback to a guessed origin, ordinal, machine, map row or function address.
+
+This follows the primary
+[Microsoft archive/import/PE format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format)
+and the pinned LLVM23.1.3
+[import thunk writer](https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/lld/COFF/Chunks.cpp)
+and [symbol table writer](https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/lld/COFF/Writer.cpp).
+Source-only tests use in-memory format bytes, never an executed/generated local
+native fixture. Actual Reading/nm replay is labeled separately from synthetic
+PE/import-payload tests; the latter cannot establish the unseen final IAT or
+runtime result. Supplier source, fixture, ABI and all31 job definitions remain
+unchanged. A new exact-source peer and one changed-source whole run are required.
