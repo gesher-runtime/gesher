@@ -1,0 +1,81 @@
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -1727,18 +1727,43 @@
+   return 0;
+ }
+ 
++/* Caller holds the recursive thread registry. This checks the validated
++   record's existing native object, never attaches the calling thread and never
++   creates a duplicate handle. A numeric TID match alone is insufficient: an old
++   signaled thread object can retain a TID which Windows later reuses. */
++static int
++is_current_native_thread_locked (_pthread_v *target, pthread_t id)
++{
++  DWORD current=GetCurrentThreadId ();
++  if (!target || __pthread_get_pointer(id)!=target || target->x!=id ||
++      target->tid!=current || !TEST_HANDLE(target->h))
++    return 0;
++  HANDLE native=target->h;
++  DWORD actual=GetThreadId (native);
++  return actual!=0 && actual==current &&
++      WaitForSingleObject(native,0)==WAIT_TIMEOUT;
++}
++
+ int
+ pthread_join (pthread_t t, void **res)
+ {
+-  struct _pthread_v *tv = __pth_gpointer_locked (t);
++  struct _pthread_v *tv;
+   pthread_spinlock_t new_spin_keys = PTHREAD_SPINLOCK_INITIALIZER;
+ 
+-  CHECK_OBJECT(tv, ESRCH);
+-
+-  if ((tv->p_state & PTHREAD_CREATE_DETACHED) != 0)
+-    return EINVAL;
+-  if (pthread_equal(pthread_self(), t))
+-    return EDEADLK;
++  pthread_mutex_lock (&mtx_pthr_locked);
++  tv=__pthread_get_pointer(t);
++  /* Same CHECK_OBJECT handle test, with registry released on every error. */
++  if (!tv || !TEST_HANDLE(tv->h)) {
++    pthread_mutex_unlock (&mtx_pthr_locked); return ESRCH;
++  }
++  if ((tv->p_state & PTHREAD_CREATE_DETACHED) != 0) {
++    pthread_mutex_unlock (&mtx_pthr_locked); return EINVAL;
++  }
++  if (is_current_native_thread_locked(tv,t)) {
++    pthread_mutex_unlock (&mtx_pthr_locked); return EDEADLK;
++  }
++  /* Never hold registry across the existing blocking native join wait. */
++  pthread_mutex_unlock (&mtx_pthr_locked);
+ 
+   /* pthread_testcancel (); */
+   if (tv->ended == 0 || (tv->h != NULL && tv->h != INVALID_HANDLE_VALUE))
+@@ -1777,19 +1802,18 @@
+       pthread_mutex_unlock (&mtx_pthr_locked);
+       return EINVAL;
+     }
+-  if (pthread_equal(pthread_self(), t))
++  if (is_current_native_thread_locked(tv,t))
+     {
+       pthread_mutex_unlock (&mtx_pthr_locked);
+       return EDEADLK;
+     }
+-  if(tv->ended == 0 && WaitForSingleObject(tv->h, 0))
+-    {
+-      if (tv->ended == 0)
+-        {
+-	      pthread_mutex_unlock (&mtx_pthr_locked);
+-	      /* pthread_testcancel (); */
+-	      return EBUSY;
+-	    }
++  /* ended is published before CRT callbacks can finish. Only actual kernel
++     completion permits consuming/recycling this existing native object. */
++  if (WaitForSingleObject(tv->h,0)!=WAIT_OBJECT_0)
++    {
++      pthread_mutex_unlock (&mtx_pthr_locked);
++      /* pthread_testcancel (); */
++      return EBUSY;
+     }
+   CloseHandle (tv->h);
+   if (tv->evStart)
