@@ -135,7 +135,8 @@ def supplier(source, llvm, role):
         assert symbol in output, name
         for hook in ('gesher_winpthread_cpu_test_control_v1', 'gesher_winpthread_exit_test_v1', 'gesher_host_cpu_clock_test_exhaust_ids_v1'):
             assert (hook in output) == (role in {'fault', 'probe-fault'}), 'Supplier test symbol role mismatch'
-        assert ('gesher_deferred_gate_v1' in output) == (role=='probe-deferred'), 'Deferred gate symbol role mismatch'
+        for deferred in ('gesher_deferred_gate_v1','gesher_deferred_pending_v1'):
+            assert (deferred in output) == (role=='probe-deferred'), 'Deferred gate symbol role mismatch'
         for resource in ('gesher_resource_lease_probe_v1','gesher_resource_fault_probe_v1'):
             assert (resource in output) == (role in {'probe-resource','probe-deferred'}), 'Resource symbol role mismatch'
         for reaper in ('gesher_reaper_start_v1','gesher_reaper_stop_v1','gesher_reaper_observe_v1','gesher_reaper_fault_v1'):
@@ -154,7 +155,8 @@ def supplier(source, llvm, role):
         result[name + ':symbols'] = output
     exports = command(str(llvm / 'bin/llvm-readobj'), '--coff-exports', str(target / 'bin/libwinpthread-1.dll'))
     assert symbol in exports
-    assert ('gesher_deferred_gate_v1' in exports) == (role=='probe-deferred'), 'Deferred gate export role mismatch'
+    for deferred in ('gesher_deferred_gate_v1','gesher_deferred_pending_v1'):
+        assert (deferred in exports) == (role=='probe-deferred'), 'Deferred gate export role mismatch'
     for resource in ('gesher_resource_lease_probe_v1','gesher_resource_fault_probe_v1'):
         assert (resource in exports) == (role in {'probe-resource','probe-deferred'}), 'Resource export role mismatch'
     for hook in ('gesher_winpthread_cpu_test_control_v1', 'gesher_winpthread_exit_test_v1', 'gesher_host_cpu_clock_test_exhaust_ids_v1'):

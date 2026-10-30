@@ -64,6 +64,8 @@ try {
   foreach ($proof in @(
     'PASS deferred finite state/type outputs and self cancellation cleanup=1 destructor=1',
     'PASS deferred public cancel capture crosses native ExitThread61 and returns ESRCH destructor=1',
+    'PASS deferred disabled native ExitThread pending counter=0/1/0 destructor_delta=1',
+    'PASS deferred disabled normal return pending counter=0/1/0 destructor=1',
     'PASS deferred genuine join wait cancellation unwinds claim/leases cleanup=1 destructor=1 target remains joinable',
     'PASS deferred-only public APIs and actual DLL unload handles='
   )) { if (-not $text.Contains($proof)) { throw "Missing deferred API witness: $proof" } }

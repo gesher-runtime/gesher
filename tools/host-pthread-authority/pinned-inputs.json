@@ -15,9 +15,9 @@
   },
   "patch_sha256": "b6311362c3d6ab4a17619ca740296d1548c82c8991b82361b4dd668575d2351b",
   "fault_patch_sha256": "8129435b76f8647df16c5419f262078ecf40c3a48a167dded2f327e995fa9108",
-  "deferred_patch_sha256": "556ab3faf72ac09047584598a6ae7f5731cf542161efb6b993c9c2e9ca9a37d4",
+  "deferred_patch_sha256": "58ac7a54ae22c94a94f14d2b3e9752b165cb55b21b97805dae790962775d1909",
   "deferred_source_sha256": {
-    "mingw-w64-libraries/winpthreads/src/thread.c": "17978b67dbf5c5e9c98fb4079739fb992b2d1801d7de39399fb43e0aef603b0b",
+    "mingw-w64-libraries/winpthreads/src/thread.c": "0e180af42afa6ad32d59087dd86d97d17b604b9d9a005412bc70db864928d0d4",
     "mingw-w64-libraries/winpthreads/src/thread.h": "42296d6001e8e39d99601416b9ffc8989f0f4cb64efa20e43ea275cadc697fd9"
   }
 }

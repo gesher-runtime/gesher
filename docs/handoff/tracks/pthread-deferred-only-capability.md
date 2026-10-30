@@ -37,6 +37,12 @@ with no provider lock while the target really completes native ExitThread61 and
 TLS teardown. The resumed call checks the retained state and returns ESRCH;
 all owned resources release before restoring the actor's old state. Restoration
 can nonlocally exit. Self cancellation similarly releases state before delivery.
+Pending accounting has one owner: invocation clears the pending flag and consumes
+its counter under state, or normal/native exit does so before publishing ended.
+Repeated cancel requests do not increment twice. The fixture separately leaves
+cancellation disabled through real native ExitThread61 and normal return; each
+requires the actual global counter 0/1/0 and exactly one destructor. Delivered
+self cancellation and join cancellation must also leave the counter at zero.
 
 Foreign exit and native TLS publish ended/lifecycle under registry -> state,
 after user destructors execute outside locks. The normal pthread wrapper clears
@@ -55,6 +61,12 @@ target generations and state snapshots; name publication/copy holds registry
 outside state. Scheduler snapshots use the validated owner path for host and DLL
 calls, avoiding the raw host lookup path. Legacy naming keeps the owned kernel
 handle open and verifies its native ID; no fallback is removed.
+Target capture and join-claim publication share one outer registry hold, so an
+adopted native thread cannot retire between those two decisions. No additional
+detached/native-thread restriction is imposed. The pre-existing automatic expiry
+of adopted native identities on native exit remains; this does not grant new
+joinability after an expired native identity. Self rejection uses the actor's
+process-unique identity, while tryjoin retains the unattached-caller self check.
 
 ## Actual fixture and wait observation
 
