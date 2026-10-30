@@ -29,4 +29,22 @@ foreach($stale in @(@{P='tools/windows4/TsfJobSupervisor.cs';H='d1cf9319268df1bc
  $bad=$actual.Clone();$bad[$stale.P]=$stale.H;if(ExactMap $bad){throw 'Historical stale helper hash accepted'}
 }
 $bad=$actual.Clone();$bad['tools/unreviewed.cs']='0'*40;if(ExactMap $bad){throw 'Additional helper accepted'}
+$limits=@{}
+foreach($class in @('TsfJobSupervisor','TcpPriorityDiagnostics.TsfJobSupervisor')){
+ $source=if($class -ceq 'TsfJobSupervisor'){'tools/windows4/TsfJobSupervisor.cs'}else{'tools/net-tcp-priority/qualified/TsfJobSupervisor.cs'}
+ $text=[IO.File]::ReadAllText((Join-Path $pwd $source))
+ $limit=[regex]::Matches($text,'if\s*\(\s*mainMs\s*<\s*(\d+)\s*\|\|\s*mainMs\s*>\s*(\d+)')
+ if($limit.Count -ne 1 -or $limit[0].Groups[1].Value -cne '1' -or $limit[0].Groups[2].Value -cne '45000'){throw 'Qualified controller budget predicate changed'}
+ $limits[$class]=45000
+}
+$calls=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $n.Static -and $n.Member.Extent.Text -ceq 'Run'},$true))
+if($calls.Count -ne 4){throw 'Unexpected supervisor call inventory'}
+foreach($call in $calls){
+ $class=$call.Expression.TypeName.FullName
+ if(-not $limits.ContainsKey($class) -or $call.Arguments.Count -ne 4){throw 'Unreviewed supervisor call shape'}
+ $budget=$call.Arguments[2].SafeGetValue()
+ if($budget -isnot [int] -or $budget -lt 1 -or $budget -gt $limits[$class]){throw 'Caller exceeds actual qualified controller budget'}
+}
+foreach($bad in @(-1,0,45001,90000)){if($bad -ge 1 -and $bad -le 45000){throw 'Invalid budget accepted'}}
+Write-Host 'TCP_CALLER_BUDGET_METADATA_PASS actual_controller_max=45000 actual_Run_calls=4 old90000=REJECTED boundary_mutants=4 native_processes_started=0'
 Write-Host 'TCP_HELPER_METADATA_PASS pins=5 actual_sources=EXACT changed_missing_stale_additional=REJECTED negative_cases=14 native_processes_started=0 CSharp_compiles=0'
