@@ -46,14 +46,16 @@ The actual GNU-style live linker map and loaded archive(member) trace jointly
 bind pthread self/create/join/exit/key create/delete/get/set, key cleanup, the
 pthread TLS callback and its registration slot to their selected variant's exact
 archive hash and member. Ambiguous member basenames across any loaded archives,
-missing symbols, duplicate symbols and other-variant archives are rejected.
+missing symbols, conflicting symbol address/owner and other-variant archives are
+rejected. LLD repeats resolved global definitions while walking input symbol
+tables; only identical symbol/address/owner repeats are deduplicated.
 Unresolved actual evidence prints the explicit missing/ambiguous names and full
 raw map before failing; optimized or renamed symbols are never silently replaced.
 Both raw map and verbose trace remain complete hashed artifact members.
 
 The map format and option are grounded in LLVM's
-[MinGW driver](https://github.com/llvm/llvm-project/blob/main/lld/MinGW/Driver.cpp)
-and [COFF live map writer](https://github.com/llvm/llvm-project/blob/main/lld/COFF/LLDMapFile.cpp),
+[MinGW driver](https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/lld/MinGW/Driver.cpp)
+and [COFF live map writer](https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/lld/COFF/LLDMapFile.cpp),
 with actual CI required to confirm this compiler's emitted format.
 The exact upstream
 [install hook](https://github.com/mingw-w64/mingw-w64/blob/a3d93999ef0521681d45e445c39964a7af0f593f/mingw-w64-libraries/winpthreads/Makefile.am)

@@ -24,26 +24,30 @@ def member_bindings(map_text,link_text,inputs):
     assert any(x[0] in allowed for x in loaded),'No actual pthread archive-member extraction witness'
     owners={};owner=None
     for line in map_text.splitlines():
-        match=re.fullmatch(r'[0-9a-fA-F]+\s+[0-9a-fA-F]+\s+[0-9]+ (.*)',line)
+        match=re.fullmatch(r'([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+[0-9]+ (.*)',line)
         if not match:continue
-        tail=match.group(1)
+        tail=match.group(2)
         if ':(' in tail:
             owner=tail.strip().rsplit(':(',1)[0]
         elif tail.startswith('                '):
             symbol=tail.strip()
             if symbol in PTHREAD_SYMBOLS:
-                assert symbol not in owners,'Duplicate actual symbol ownership: '+symbol
-                owners[symbol]=owner
+                definition=(owner,match.group(1).lower())
+                # LLD iterates every input symbol table, including references
+                # resolved to the same DefinedRegular. Identical repeats carry
+                # the same provenance; conflicting address or owner cannot.
+                assert symbol not in owners or owners[symbol]==definition,'Conflicting actual symbol ownership/address: '+symbol
+                owners[symbol]=definition
         else:owner=None
     assert set(owners)==set(PTHREAD_SYMBOLS),'Missing actual pthread/TLS symbol ownership: '+str(set(PTHREAD_SYMBOLS)-set(owners))
     result={}
-    for symbol,owner in owners.items():
+    for symbol,(owner,address) in owners.items():
         assert owner,'No input section owns symbol: '+symbol
         matches=[x for x in loaded if Path(x[1]).name==Path(owner).name]
         assert len(matches)==1,'Ambiguous or non-variant symbol member: '+symbol+' '+str(owner)
         archive,member,reason=matches[0]
         assert archive in allowed,'Symbol supplied by another variant/archive: '+symbol+' '+archive
-        result[symbol]=dict(archive=archive,archive_sha256=allowed[archive],member=member,extracted_for=reason,map_input=owner)
+        result[symbol]=dict(archive=archive,archive_sha256=allowed[archive],member=member,extracted_for=reason,map_input=owner,map_rva=address)
     return result
 def context():
     assert os.environ['GITHUB_ACTIONS']=='true' and os.environ['GITHUB_REPOSITORY']=='gesher-runtime/gesher'
