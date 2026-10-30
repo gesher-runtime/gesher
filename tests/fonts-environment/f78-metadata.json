@@ -1,0 +1,155 @@
+{
+  "artifacts": {
+    "artifacts": [
+      {
+        "archive_download_url": "https://api.github.com/repos/gesher-runtime/gesher/actions/artifacts/13005515313/zip",
+        "created_at": "2026-10-30T19:13:36Z",
+        "digest": "sha256:b86178bd50a3d6dae7b4c5221c3544995e7ceea0486fe59b0f6c497333bac312",
+        "expired": false,
+        "expires_at": "2027-01-28T18:35:32Z",
+        "id": 13005515313,
+        "name": "fonts-core-runtime",
+        "node_id": "MDg6QXJ0aWZhY3QxMzAwNTUxNTMxMw==",
+        "size_in_bytes": 27923971,
+        "updated_at": "2026-10-30T19:13:36Z",
+        "url": "https://api.github.com/repos/gesher-runtime/gesher/actions/artifacts/13005515313",
+        "workflow_run": {
+          "head_branch": "wip/fonts-cli-utf8",
+          "head_repository_id": 1426153186,
+          "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
+          "id": 41108241255,
+          "repository_id": 1426153186
+        }
+      },
+      {
+        "archive_download_url": "https://api.github.com/repos/gesher-runtime/gesher/actions/artifacts/13001608360/zip",
+        "created_at": "2026-10-30T18:39:43Z",
+        "digest": "sha256:d828625c93aa72d84ed2512c489e18115e6789a58eca8049e62a797c9f1ed06b",
+        "expired": false,
+        "expires_at": "2027-01-28T18:35:32Z",
+        "id": 13001608360,
+        "name": "native2",
+        "node_id": "MDg6QXJ0aWZhY3QxMzAwMTYwODM2MA==",
+        "size_in_bytes": 13537220,
+        "updated_at": "2026-10-30T18:39:43Z",
+        "url": "https://api.github.com/repos/gesher-runtime/gesher/actions/artifacts/13001608360",
+        "workflow_run": {
+          "head_branch": "wip/fonts-cli-utf8",
+          "head_repository_id": 1426153186,
+          "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
+          "id": 41108241255,
+          "repository_id": 1426153186
+        }
+      }
+    ],
+    "total_count": 2
+  },
+  "jobs": {
+    "jobs": [
+      {
+        "completed_at": "2026-10-30T18:35:46Z",
+        "conclusion": "success",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
+        "id": 124243600680,
+        "name": "trusted-source / verify",
+        "run_attempt": 1,
+        "run_id": 41108241255,
+        "started_at": "2026-10-30T18:35:34Z",
+        "status": "completed",
+        "workflow_name": "fonts-core-component"
+      },
+      {
+        "completed_at": "2026-10-30T19:14:16Z",
+        "conclusion": "success",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
+        "id": 124243711875,
+        "name": "runtime-producer",
+        "run_attempt": 1,
+        "run_id": 41108241255,
+        "started_at": "2026-10-30T18:35:48Z",
+        "status": "completed",
+        "workflow_name": "fonts-core-component"
+      },
+      {
+        "completed_at": "2026-10-30T18:39:53Z",
+        "conclusion": "success",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
+        "id": 124243712498,
+        "name": "fixture-producer / native2",
+        "run_attempt": 1,
+        "run_id": 41108241255,
+        "started_at": "2026-10-30T18:35:48Z",
+        "status": "completed",
+        "workflow_name": "fonts-core-component"
+      },
+      {
+        "completed_at": "2026-10-30T19:15:25Z",
+        "conclusion": "success",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
+        "id": 124261932573,
+        "name": "compare (windows-2022, current-utf8)",
+        "run_attempt": 1,
+        "run_id": 41108241255,
+        "started_at": "2026-10-30T19:14:18Z",
+        "status": "completed",
+        "workflow_name": "fonts-core-component"
+      },
+      {
+        "completed_at": "2026-10-30T19:15:14Z",
+        "conclusion": "success",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
+        "id": 124261932591,
+        "name": "compare (windows-2025, old42076)",
+        "run_attempt": 1,
+        "run_id": 41108241255,
+        "started_at": "2026-10-30T19:14:18Z",
+        "status": "completed",
+        "workflow_name": "fonts-core-component"
+      },
+      {
+        "completed_at": "2026-10-30T19:15:17Z",
+        "conclusion": "success",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
+        "id": 124261932679,
+        "name": "compare (windows-2025, current-utf8)",
+        "run_attempt": 1,
+        "run_id": 41108241255,
+        "started_at": "2026-10-30T19:14:18Z",
+        "status": "completed",
+        "workflow_name": "fonts-core-component"
+      },
+      {
+        "completed_at": "2026-10-30T19:14:59Z",
+        "conclusion": "failure",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
+        "id": 124261932732,
+        "name": "compare (windows-2022, old42076)",
+        "run_attempt": 1,
+        "run_id": 41108241255,
+        "started_at": "2026-10-30T19:14:18Z",
+        "status": "completed",
+        "workflow_name": "fonts-core-component"
+      }
+    ],
+    "total_count": 7
+  },
+  "provenance": "Trimmed actual terminal API metadata for 41108241255/a1; metadata only, no artifact payload. Whole run remains six success / one OLD failure.",
+  "run": {
+    "conclusion": "failure",
+    "head_branch": "wip/fonts-cli-utf8",
+    "head_repository": {
+      "full_name": "gesher-runtime/gesher",
+      "id": 1426153186
+    },
+    "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
+    "id": 41108241255,
+    "name": "fonts-core-component",
+    "path": ".github/workflows/fonts-core-component.yml",
+    "repository": {
+      "full_name": "gesher-runtime/gesher",
+      "id": 1426153186
+    },
+    "run_attempt": 1,
+    "status": "completed"
+  }
+}

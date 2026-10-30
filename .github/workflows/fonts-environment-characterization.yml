@@ -1,0 +1,114 @@
+name: fonts-environment-characterization
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/fonts-environment-characterization]
+    paths: [.github/workflows/fonts-environment-characterization.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: fonts-environment-characterization-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  NDK_VERSION: "27.2.12479018"
+  NDK_ZIP: android-ndk-r27c-linux.zip
+  NDK_DIR: android-ndk-r27c
+  R8_VERSION: "9.5.26"
+jobs:
+  trusted-source:
+    uses: gesher-runtime/gesher/.github/workflows/fonts-environment-trusted-source.yml@0000000000000000000000000000000000000000
+  fixture-producer:
+    needs: trusted-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Cache publisher-authenticated NDK archive
+        id: ndk
+        uses: actions/cache@v4
+        with:
+          path: dns-ndk.zip
+          key: combined-ndk-r27c-090e8083a715fdb1a3e402d0763c388abb03fb4e
+      - name: Fetch publisher NDK archive
+        if: steps.ndk.outputs.cache-hit != 'true'
+        run: curl -fsSL "https://dl.google.com/android/repository/$NDK_ZIP" -o dns-ndk.zip
+      - name: Authenticate and freshly extract NDK
+        run: |
+          set -euo pipefail
+          printf '%s  dns-ndk.zip\n' 090e8083a715fdb1a3e402d0763c388abb03fb4e | sha1sum --check --strict
+          printf '%s  dns-ndk.zip\n' 59c2f6dc96743b5daf5d1626684640b20a6bd2b1d85b13156b90333741bad5cc | sha256sum --check --strict
+          test "$(stat -c %s dns-ndk.zip)" = 663987688
+          test ! -e "$NDK_DIR"
+          unzip -q dns-ndk.zip
+      - name: Cache d8
+        id: r8
+        uses: actions/cache@v4
+        with:
+          path: r8.jar
+          key: r8-${{ env.R8_VERSION }}
+      - name: Fetch d8
+        if: steps.r8.outputs.cache-hit != 'true'
+        run: curl -fsSL -o r8.jar "https://dl.google.com/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar"
+      - name: Authenticate d8 and build only fresh tiny diagnostic fixtures
+        run: |
+          set -euo pipefail
+          set -x
+          printf '%s  r8.jar\n' 3502f087388ce95bbf5254555927f09385dc2636873964d0bd53f3eaf4fb49ad | sha256sum --check --strict
+          llvm="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64"
+          for abi in x86_64 arm64-v8a; do
+            case $abi in x86_64) triple=x86_64-linux-android ;; *) triple=aarch64-linux-android ;; esac
+            mkdir -p "dist/$abi"
+            "$llvm/bin/${triple}29-clang" -O2 -Wall -Werror -o "dist/$abi/font_env" tests/fonts-environment/probe.c -ldl
+            "$llvm/bin/${triple}29-clang" -O2 -Wall -Werror -shared -fPIC -DFONT_ENV_SHARED -o "dist/$abi/libfont_env.so" tests/fonts-environment/probe.c tests/fonts-environment/probe_jni.c -ldl
+          done
+          mkdir -p work/classes work/dex
+          javac --release 11 -encoding UTF-8 -d work/classes tests/fonts-environment/Native3FontEnvironmentTest.java
+          java -cp r8.jar com.android.tools.r8.D8 --release --min-api 26 --output work/dex work/classes/gesher/Native3FontEnvironmentTest.class
+          cp work/dex/classes.dex dist/font-env.dex
+          python3 tools/fonts/environment-fixtures.py capture --root dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: font-environment-fixtures
+          path: dist/
+          if-no-files-found: error
+  observe:
+    needs: [trusted-source, fixture-producer]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        context: [elf, dex]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact current-attempt tiny fixture producer and manifest
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name font-environment-fixtures --producer fixture-producer --destination current-fixtures
+          if ($LASTEXITCODE -ne 0) { throw 'Current diagnostic fixture receipt failed' }
+          python tools/fonts/environment-fixtures.py verify --root current-fixtures
+          if ($LASTEXITCODE -ne 0) { throw 'Current diagnostic fixture source/compiler/ABI bytes failed' }
+      - name: Verify explicitly bounded f78 runtime and separate qualified data and translator
+        shell: pwsh
+        run: |
+          python tools/fonts/environment-supplier.py --destination reused-f78
+          if ($LASTEXITCODE -ne 0) { throw 'Bounded f78 diagnostic runtime role failed' }
+          python tools/fonts/baseline-supplier.py qualified-data --destination qualified-data
+          if ($LASTEXITCODE -ne 0) { throw 'Explicit qualified data role failed' }
+          python tools/fonts/baseline-supplier.py qualified-translator --destination qualified-translator
+          if ($LASTEXITCODE -ne 0) { throw 'Explicit qualified translator role failed' }
+          python tools/fonts/environment-assemble.py --runtime reused-f78 --data qualified-data --translator qualified-translator --destination diagnostic-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic runtime file ownership failed' }
+      - name: Observe initial UTF16 environment separately from UTF8 post-setenv controls
+        shell: pwsh
+        run: ./tools/fonts/run-environment.ps1 -RuntimeDirectory diagnostic-runtime -FixturesDirectory current-fixtures -Context '${{ matrix.context }}'
