@@ -43,12 +43,28 @@ $missingImage = Join-Path $base 'intentionally-absent-image/boot.art'
 if (Test-Path -LiteralPath $missingImage) { throw 'Diagnostic image path exists' }
 Write-Host "FONT_IMAGE_POLICY role=$RuntimeRole intentional_imageless=true supplied_images=0 nonexistent_image=$missingImage production_policy=UNCHANGED"
 
+# Keep every VM option as an individual value; a concatenation inside a
+# comma-expression can otherwise turn the remaining array into one BCP string.
+function New-FontChildArguments([string[]] $Bcp, [string[]] $Tail) {
+  $values = [Collections.Generic.List[string]]::new()
+  $values.Add('-Xbootclasspath:' + (($Bcp | ForEach-Object { NoDrive $_ }) -join ':'))
+  $values.Add('-Ximage:' + (NoDrive $missingImage))
+  foreach ($option in @('-Xint','-Xusejit:false','-verbose:image','-cp')) { $values.Add($option) }
+  $values.Add((NoDrive "$fixtures/native2-test.dex"))
+  foreach ($argument in $Tail) { $values.Add($argument) }
+  $values.ToArray()
+}
+
 function Invoke-FontChild([string] $Role, [string[]] $Bcp, [string[]] $Tail) {
   $psi = [Diagnostics.ProcessStartInfo]::new("$installed/dalvikvm.exe")
-  $childArguments = @('-Xbootclasspath:'+(($Bcp | ForEach-Object { NoDrive $_ }) -join ':'),
-    '-Ximage:'+(NoDrive $missingImage),'-Xint','-Xusejit:false','-verbose:image',
-    '-cp',(NoDrive "$fixtures/native2-test.dex")) + $Tail
+  [string[]] $childArguments = @(New-FontChildArguments $Bcp $Tail)
+  if ($childArguments.Count -ne 7 + $Tail.Count -or $childArguments[2] -cne '-Xint' -or
+      $childArguments[5] -cne '-cp') { throw 'Diagnostic VM argument shape mismatch' }
   foreach ($arg in $childArguments) { $psi.ArgumentList.Add($arg) }
+  if ($psi.ArgumentList.Count -ne $childArguments.Count) { throw 'Actual argument count changed' }
+  for ($i=0; $i -lt $childArguments.Count; $i++) {
+    if ($psi.ArgumentList[$i] -cne $childArguments[$i]) { throw 'Actual ArgumentList value changed' }
+  }
   $psi.WorkingDirectory = $work; $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
   # Override only this child's explicitly diagnostic image context.
@@ -58,7 +74,7 @@ function Invoke-FontChild([string] $Role, [string[]] $Bcp, [string[]] $Tail) {
     $psi.Environment[$entry.Key] = NoDrive $entry.Value
   }
   $psi.Environment['GESHER_CI_PROCESS_TRACE'] = '1'
-  $receipt = @{runtime_role=$RuntimeRole; child_role=$Role; argv=$childArguments; cwd=$work;
+  $receipt = @{runtime_role=$RuntimeRole; child_role=$Role; argv=$childArguments; argv_count=$childArguments.Count; actual_argument_list=@($psi.ArgumentList); cwd=$work;
     android_root=$psi.Environment['ANDROID_ROOT']; require_boot_image=$psi.Environment['GESHER_REQUIRE_BOOT_IMAGE'];
     supplied_images=0; old_framework_source='42076a8f28c0d23eee5b10ee0acf0844be0dc277'}
   Write-Host ('FONT_DIAGNOSTIC_CHILD '+($receipt | ConvertTo-Json -Depth 8 -Compress))
