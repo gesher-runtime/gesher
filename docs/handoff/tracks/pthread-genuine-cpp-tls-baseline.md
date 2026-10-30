@@ -52,6 +52,13 @@ tables; only identical symbol/address/owner repeats are deduplicated.
 Unresolved actual evidence prints the explicit missing/ambiguous names and full
 raw map before failing; optimized or renamed symbols are never silently replaced.
 Both raw map and verbose trace remain complete hashed artifact members.
+Run410871 compiled and linked the published and deferred consumers, but failed
+the original strict parser before Windows execution: this LLD logs full paths
+in archive Reading rows and basenames in Loaded archive(member) rows. The parser
+now resolves a pthread basename only through exactly one actual full-path Reading
+origin; missing, canonical-other-root or ambiguous origins fail. No expected path
+is silently prefixed. The original red run and its raw maps/logs are preserved;
+Linux's three genuine cases passed, Windows callback outcomes remain unknown.
 
 The map format and option are grounded in LLVM's
 [MinGW driver](https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/lld/MinGW/Driver.cpp)
