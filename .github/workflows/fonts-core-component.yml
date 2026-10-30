@@ -15,7 +15,7 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 jobs:
   trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/fonts-core-trusted-source.yml@0000000000000000000000000000000000000000
+    uses: gesher-runtime/gesher/.github/workflows/fonts-core-trusted-source.yml@e7ef94f878725e7a2f7899e7e4652335ec969607
   fixture-producer:
     needs: trusted-source
     uses: ./.github/workflows/native2.yml
