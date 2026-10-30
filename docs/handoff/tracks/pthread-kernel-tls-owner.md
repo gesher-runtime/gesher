@@ -235,3 +235,29 @@ This change affects consumer/trace metadata only. The61ec runtime patches,
 A changed-consumer whole28job run is required after peer. Published's unchanged
 hard census red must be retained independently of deferred qualification; no
 unchanged-source luck retry or canonical promotion is authorized by this result.
+
+## Independently audited212579 result
+
+Fresh changed-consumer run41110125533/attempt1 executed28 actual jobs:
+26success/2published strict-census failures. Independent all28 complete raw logs,
+20 current-attempt producer receipts,10 artifact identities/times/digests and
+actual selected11 archive-member bindings per variant were verified. Both
+private deferred C++ consumers passed all6 cases. The held joiner was running
+before target creation, then actual claim matched its created ID; worker scans
+observed target CPU258 with original x/TLS owner/resources, external key deletion
+and original256 budget intact. After actual kernel signal, all six watched
+finalization/release/clock/event/Spin/pool counters were1, queued0. Owned phase3
+explicit-enable/self-cancel-ESRCH/pending0/testcancel/restore controls passed.
+Actual total handles are60 to62startup to66 and64 to66 to70, original total+6,
+so no persistent-owner allowance or original+8 relaxation was needed.
+
+All original21 jobs, Linux reference and both private macroOFF contrasts passed.
+Published original identity/join cases also passed, but its new late-key exercise
+still produced60 to70/64 to74, violating original+8. Cause remains unproved.
+Thus the deferred identity/resource slice is independently qualified; aggregate
+run and canonical adoption are RED. Complete late TSD/foreign late controls,
+standalone DLL/canonical entry bootstrap, general async and selected supplier
+adoption remain open. Next work is the separate observation-only
+[publisher characterization](pthread-publisher-handle-characterization.md),
+without mutating this qualified supplier source or treating the two red jobs as
+expected successful conformance.

@@ -108,3 +108,12 @@ or FLS interoperability is not added to the supported contract by this fixture.
 General asynchronous entry safety, actual process-owned retirement/bootstrap
 across supported program entrypoints, supplier/guest consumer adoption and full
 product qualification remain open.
+
+Run411101/source212579 independently qualified the changed private deferred
+identity/resource slice on both hosts, including both genuine held cases and
+original total+8. Actual560 layout, all offsets and selected-member provenance
+were verified. Aggregate26/2 still fails because the unchanged original publisher
+exceeds the strict census during the newly exercised common late-key access;
+its identities/completions remain positive. Full result and remaining limits
+are recorded in the kernel TLS owner protocol. The subsequent characterization
+changes observation/metadata only and retains this supplier source exactly.

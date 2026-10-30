@@ -3,6 +3,7 @@
 # Explicit isolated deferred-only API capability; old suppliers unchanged.
 # Kernel-completion TLS owner correction follows actual 410884 owned C++ identity regression.
 # Prestart the genuine held-callback joiner after411079; retain original publisher census red.
+# Characterize authenticated package metadata and actual handle phases after bounded411101.
 # Verify actual resource field offsets and updated fault patch stack.
 # Separate target-resource lifetime primitive role.
 # Separate opt-in callback-release reaper role.
@@ -691,6 +692,8 @@ jobs:
             $process.Refresh()
             $actual=Get-Content -Raw -LiteralPath $stdout
             Write-Host $actual
+            python tools/host-pthread-authority/late_cpp_bundle.py observations $role $stdout
+            if ($LASTEXITCODE -ne 0) { throw 'Missing actual phase characterization; conformance not inferred' }
             if ($process.ExitCode -ne 0) { throw "Late C++ actual role=$role exit=$($process.ExitCode)" }
             $expectedCases=if ($role -eq 'deferred') { 6 } else { 4 }
             if (-not $actual.Contains("CPP_TLS_RESULT cases=$expectedCases failures=0 conformant=1")) { throw 'Incomplete genuine TLS callback identity evidence' }
