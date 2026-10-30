@@ -46,4 +46,9 @@ $managed=@($core)+@('D:\metadata\framework-אב space\framework.jar','D:\metadat
 $managedTail=@('gesher.Native3DefaultFontTest','--expect-uninitialized')
 [string[]]$managedActual=@(New-FontChildArguments $managed $managedTail)
 if($managedActual.Count -ne 9 -or $managedActual[0] -cne '-Xbootclasspath:/metadata/core-אב space/core-oj.jar:/metadata/core-אב space/core-libart.jar:/metadata/core-אב space/core-icu4j.jar:/metadata/framework-אב space/framework.jar:/metadata/framework-אב space/gesher-app.jar' -or $managedActual[7] -cne $managedTail[0] -or $managedActual[8] -cne $managedTail[1]){throw 'Managed before-comparison option shape changed'}
-Write-Host 'FONT_DEX_ARGUMENTS_PASS old036a_count=7 intended_core_count=13 managed_count=9 actual_ArgumentList=EXACT spaces_unicode=RETAINED merged_options_split_bcp=REJECTED native_processes_started=0'
+$echoTail=@('gesher.Native3CliArgumentsTest','אב','word with space','quote"inside','tail\\',([char]::ConvertFromUtf32(0x1f600)),'')
+[string[]]$echoActual=@(New-FontChildArguments $core $echoTail)
+$echoPsi=[Diagnostics.ProcessStartInfo]::new('metadata-only-never-started.exe')
+foreach($value in $echoActual){$echoPsi.ArgumentList.Add($value)}
+if($echoActual.Count -ne 14 -or $echoActual[7] -cne 'gesher.Native3CliArgumentsTest' -or $echoActual[8] -cne 'אב' -or $echoActual[9] -cne 'word with space' -or $echoActual[10] -cne 'quote"inside' -or $echoActual[11] -cne 'tail\\' -or $echoActual[12].Length -ne 2 -or [char]::ConvertToUtf32($echoActual[12],0) -ne 0x1f600 -or $echoActual[13] -cne '' -or -not(Exact-Arguments @($echoPsi.ArgumentList) $echoActual)){throw 'CLI numeric witness argv lost Unicode, quote, backslashes, supplementary scalar or empty argument'}
+Write-Host 'FONT_DEX_ARGUMENTS_PASS old036a_count=7 intended_core_count=13 managed_count=9 echo_count=14 supplementary_empty_quote_backslashes=RETAINED actual_ArgumentList=EXACT spaces_unicode=RETAINED merged_options_split_bcp=REJECTED native_processes_started=0'
