@@ -69,6 +69,7 @@ int main() {
   int failures=0,cases=0;
   for (const char *mode:modes) {
     LateCppCase state{mode};
+    bool join_conformant=true;
     if (!std::strcmp(mode,"std_thread_return")) {
       std::thread thread([&state] { Body(&state); }); thread.join();
     }
@@ -84,6 +85,13 @@ int main() {
       Require(!pthread_create(&thread,nullptr,Body,&state) && !pthread_join(thread,&value) &&
           value==reinterpret_cast<void *>(0x1234),"pthread create/join result");
     }
+    if (std::strcmp(mode,"native_ExitThread")) {
+      const int at_join_a=state.a.load(),at_join_b=state.b.load(),at_join_mismatch=state.mismatch.load();
+      const int at_join_sequence=state.sequence.load();
+      join_conformant=at_join_a==1 && at_join_b==1 && at_join_mismatch==0 && at_join_sequence==2;
+      std::printf("CPP_TLS_JOIN mode=%s phase=join-return a=%d b=%d mismatch=%d sequence=%d conformant=%d\n",
+          mode,at_join_a,at_join_b,at_join_mismatch,at_join_sequence,join_conformant?1:0);
+    }
 #ifdef _WIN32
     // The supplier's join ordering is under test. Keep state alive until actual
     // kernel termination even if a supplier publishes pthread completion early.
@@ -95,7 +103,7 @@ int main() {
     std::printf("CPP_TLS_KERNEL mode=%s signaled=1 exit=%lu owned_handle_closed=1\n",mode,native_exit);
 #endif
     Require(state.constructed==2 && state.body_left==1,"both genuine TLS objects constructed before exit");
-    const bool conformant=state.a==1 && state.b==1 && state.mismatch==0;
+    const bool conformant=state.a==1 && state.b==1 && state.mismatch==0 && join_conformant;
     std::printf("CPP_TLS_CASE mode=%s constructed=%d a=%d b=%d mismatch=%d conformant=%d\n",
         mode,state.constructed.load(),state.a.load(),state.b.load(),state.mismatch.load(),conformant?1:0);
     ++cases; if (!conformant) ++failures;

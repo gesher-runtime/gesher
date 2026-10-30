@@ -20,6 +20,11 @@ actual kernel-completion wait on that owned handle for every exit mode, even if
 the supplier's pthread join publishes completion before later CRT callbacks.
 The native ExitThread61 case also retains its original external kernel witness.
 Every duplicated handle is closed and Windows retains the original +8 bound.
+Immediately after each pthread_join/std::thread::join returns, before any extra
+kernel wait, the fixture separately snapshots callback counts and identity
+mismatches. Incomplete callbacks at that point remain a strict failure even if
+they finish during the later storage-protection wait. The native ExitThread
+case has no pthread join; its observations follow actual native termination.
 
 Compiler flags follow the production GNU C++20/no-exceptions/sized-deallocation
 and static-link configuration. Debug symbols are retained for actual compiler
