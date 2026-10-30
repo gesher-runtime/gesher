@@ -77,6 +77,7 @@ def powershell_cases(ps_rows, expected):
         if synthetic: job['name']=producer='compile'
         cases.append({'path':path,'before':before,'after':after,'job':job,
                       'expected':{**expected,'producer':producer,'synthetic_role_projection':synthetic},
+                      'artifact':selected['artifact'],
                       'synthetic_role_projection':synthetic})
     return cases
 
@@ -117,7 +118,7 @@ def main():
     old=original_python(before); new=original_python(after)
     assert all(ast.dump(a)==ast.dump(b) for a,b in zip(old,new))
     expected={'run_id':descriptor['run'],'attempt':'1','source':BASE,'repository':repo,
-              'repository_id':descriptor['repository_id']}
+              'repository_id':descriptor['repository_id'],'workflow':descriptor['workflow']}
     ps_rows=[]
     for spec in descriptor['suppliers']:
         rows=[row for row in jobs['jobs'] if row['id']==spec['producer_id']]
@@ -143,7 +144,7 @@ def main():
             assert reject_python([job,job],spec,{**expected,'diagnostic_case':'counterfactual:duplicate'},*new)
             print('RECEIPT_ORIGINAL_PREDICATE_PASS '+spec['role']+' wrong/missing source/run/attempt/role/conclusion/nonterminal/duplicate rejected',flush=True)
         else:
-            ps_rows.append({'spec':spec,'job':job})
+            ps_rows.append({'spec':spec,'job':job,'artifact':item})
     cases=powershell_cases(ps_rows,expected)
     with tempfile.TemporaryDirectory(prefix='receipt-replay-') as temp:
         fixture=Path(temp)/'cases.json'; fixture.write_text(json.dumps(cases),encoding='utf-8')

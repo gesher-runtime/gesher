@@ -161,9 +161,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect artifact' }
           $expected = "native3-locks-blocking-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT"
           $rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -eq $expected)
+          Write-CiArtifactInventory -Name $expected -Inventory ($raw | ConvertFrom-Json) -Rows $rows -Producer $jobs[0]
           if ($rows.Count -ne 1) { throw 'Artifact is not unique' }
           $artifact = $rows[0]
-          Write-CiArtifactIdentity -Name $expected -Artifact $artifact -Producer $jobs[0]
           if ($artifact.id -le 0 -or $artifact.size_in_bytes -le 0 -or $artifact.expired -or
               $artifact.digest -notmatch '^sha256:[0-9a-f]{64}$' -or "$($artifact.workflow_run.id)" -ne $env:GITHUB_RUN_ID -or
               "$($artifact.workflow_run.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or

@@ -9,9 +9,9 @@ $raw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/arti
 if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect artifacts' }
 $expected = "tsf-format-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT"
 $rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -ceq $expected)
+Write-CiArtifactInventory -Name $expected -Inventory ($raw | ConvertFrom-Json) -Rows $rows -Producer $jobs[0]
 if ($rows.Count -ne 1) { throw 'Artifact is not unique' }
 $a = $rows[0]
-Write-CiArtifactIdentity -Name $expected -Artifact $a -Producer $jobs[0]
 if ($a.id -le 0 -or $a.size_in_bytes -le 0 -or $a.expired -or $a.digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or "$($a.workflow_run.id)" -cne $env:GITHUB_RUN_ID -or "$($a.workflow_run.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or "$($a.workflow_run.head_repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or $a.workflow_run.head_sha -cne $env:GITHUB_SHA -or [datetime]$a.created_at -lt [datetime]$jobs[0].started_at -or [datetime]$a.created_at -gt [datetime]$jobs[0].completed_at) { throw 'Artifact provenance mismatch' }
 python tools/native3-locks/artifact/download-verified-artifact.py --id "$($a.id)" --digest $a.digest --destination tsf-fixture
 if ($LASTEXITCODE -ne 0) { throw 'Raw archive verification failed' }

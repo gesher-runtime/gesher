@@ -47,6 +47,7 @@ rows = [x for x in jobs['jobs'] if x['name'] == a.producer or (a.producer_suffix
 allowed = {'success', 'failure'} if a.allow_failed_producer else {'success'}
 identity_record('producer', {'run_id': run_id, 'attempt': attempt, 'source': head,
                 'checkout': checkout, 'producer': a.producer, 'suffix': a.producer_suffix,
+                'workflow': os.environ['GITHUB_WORKFLOW'],
                 'allowed_conclusions': sorted(allowed), 'required_count': 1,
                 'status_policy': 'observed only; original predicate unchanged'},
                 {'total_count': jobs.get('total_count'), 'received_count': len(jobs['jobs']),

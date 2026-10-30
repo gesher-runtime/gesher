@@ -14,6 +14,7 @@ function Test-OriginalPredicate([string] $Expression, [object[]] $Rows, [object]
   Write-CiProducerIdentity -Producer $Expected.producer -Rows $jobs -Expected ([ordered]@{
     source = $Expected.source; run_id = $Expected.run_id; attempt = $Expected.attempt
     producer = $Expected.producer; allowed_conclusions = @('success'); required_count = 1
+    workflow = $Expected.workflow
     scope = 'explicit prior-run context; global GITHUB values are unchanged'
     diagnostic_case = $CaseKind; synthetic_role_projection = $Expected.synthetic_role_projection
   })
@@ -60,6 +61,20 @@ foreach ($case in $cases) {
     if (-not (Test-OriginalPredicate $expression @($missing) $case.expected "counterfactual:missing-$field")) {
       throw "Missing $field accepted by original predicate"
     }
+  }
+  $unique = @($after | Where-Object { $_.Extent.Text.Contains("throw 'Artifact is not unique'") })
+  if ($unique.Count -ne 1) { throw 'Missing original artifact uniqueness predicate' }
+  $uniqueExpression = $unique[0].Clauses[0].Item1.Extent.Text
+  foreach ($count in @(0,1,2)) {
+    $rows = @(); for ($i=0; $i -lt $count; $i++) { $rows += $case.artifact }
+    $inventory = [pscustomobject]@{ total_count=$count; artifacts=$rows }
+    $artifactExpected = [ordered]@{ name=$case.artifact.name; id=$case.artifact.id; digest=$case.artifact.digest
+      run_id=$case.expected.run_id; attempt=$case.expected.attempt; source=$case.expected.source
+      repository_id=$case.expected.repository_id; required_count=1
+      diagnostic_case="counterfactual:artifact-count-$count"; synthetic_role_projection=$case.synthetic_role_projection }
+    Write-CiArtifactInventory -Name $case.artifact.name -Inventory $inventory -Rows $rows -Producer $case.job -Expected $artifactExpected
+    $rejected = [bool](Invoke-Expression $uniqueExpression)
+    if ($rejected -ne ($count -ne 1)) { throw 'Original artifact uniqueness predicate changed' }
   }
   Write-Host "RECEIPT_POWERSHELL_PREDICATE_PASS path=$($case.path) synthetic_role_projection=$($case.synthetic_role_projection) predicates=UNCHANGED retry=NONE"
 }

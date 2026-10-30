@@ -2,7 +2,7 @@
 import json
 
 
-JOB_FIELDS = ('id', 'name', 'run_id', 'run_attempt', 'head_sha', 'status', 'conclusion',
+JOB_FIELDS = ('id', 'name', 'workflow_name', 'run_id', 'run_attempt', 'head_sha', 'status', 'conclusion',
               'started_at', 'completed_at')
 
 

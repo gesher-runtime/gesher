@@ -31,6 +31,7 @@ jobs:
           assert head==os.environ['GITHUB_SHA'] and not git('status','--porcelain','--untracked-files=all')
           run=json.loads(subprocess.check_output(['gh','api',f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"]))
           assert run['head_sha']==head and str(run['run_attempt'])==os.environ['GITHUB_RUN_ATTEMPT']
+          assert str(run['id'])==os.environ['GITHUB_RUN_ID']
           assert run['repository']['full_name']=='gesher-runtime/gesher' and str(run['repository']['id'])==os.environ['GITHUB_REPOSITORY_ID']=='1426153186'
           assert str(run['head_repository']['id'])=='1426153186'
           assert run['name']=='artifact-identity-component' and run['path']=='.github/workflows/artifact-identity-component.yml'
@@ -54,5 +55,5 @@ jobs:
             'verifier_attempt':run['run_attempt'],'supplier_source':base,'supplier_run':'41064959428',
             'supplier_attempt':'1','scope':'diagnostic-only; no archive/runtime qualification'}),flush=True)
           PY
-      - name: Replay all original receipt predicates and explicit negative identities
+      - name: Replay original producer predicates and observe frozen artifact identities
         run: python3 tools/ci/artifact_identity_focus.py
