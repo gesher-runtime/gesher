@@ -190,8 +190,11 @@ jobs:
                               'tests/windows/tracks/79-media4-muxer.ps1': '9f82ca9f402a782bb62228de08c06a790be66cd2',
                               'tools/native3-locks/union_payload.py': 'e42aaed932860896fed5a59054bac3b4ccbae059',
                               'tools/native3-locks/union_blocking_guard.py': '974799ccead72995044df3ef115a2a221962e7c0'})
-          FONTS_PINS = {'.github/workflows/native2.yml': 'ed994230b37385578efcf051296da915b609d031', 'tests/native2/fonts_standalone.c': '784fb1abb5a06839784cc48bee3fb2d317e2b2dc', 'tests/windows/tracks/46-native3.ps1': '5227ae87be03aa93c79c25a7d7ffbb1b8ca5a877', 'compat/bionic/extra_bionic.cc': '25a6824aaa1f83a3f50943637e1b39de9f54231a', 'compat/bionic/jni.cmake': '0068b5f75ceb3f508cf2c749c67384fc15a4fda8', 'compat/bionic/native_fonts.cc': '3a191e07371cdf05b31c86985228f6152e9e86df', 'compat/posix/src/path.cc': '8857487491fb45ff21bb467a3b2ffc32f28f63c0', 'compat/posix/include/gesher/font_paths.h': '2f200999a4c11d7b624195478c58770638402537', 'tools/fonts/verify-standalone-link.py': '01e1c680a7fe1217482e1f77840d68c92ec57fb1', 'tools/fonts/test-standalone-link.py': '2efb1cd300c08173078235be9700d82d2ee196b3', 'tools/native3-locks/union_payload.py': '1046c552c157c352997c113ea4a81a08f6bd79e5', 'tools/native3-locks/union_blocking_guard.py': 'aac323542329ea2a8020cf998da80fd4b0bc39fc'}
+          FONTS_PINS = {'.github/workflows/native2.yml': 'ed994230b37385578efcf051296da915b609d031', 'tests/native2/fonts_standalone.c': '784fb1abb5a06839784cc48bee3fb2d317e2b2dc', 'tests/windows/tracks/46-native3.ps1': '5227ae87be03aa93c79c25a7d7ffbb1b8ca5a877', 'compat/bionic/extra_bionic.cc': '25a6824aaa1f83a3f50943637e1b39de9f54231a', 'compat/bionic/jni.cmake': '0068b5f75ceb3f508cf2c749c67384fc15a4fda8', 'compat/bionic/native_fonts.cc': '3a191e07371cdf05b31c86985228f6152e9e86df', 'compat/posix/src/path.cc': '8857487491fb45ff21bb467a3b2ffc32f28f63c0', 'compat/posix/include/gesher/font_paths.h': '2f200999a4c11d7b624195478c58770638402537', 'tools/fonts/verify-standalone-link.py': '01e1c680a7fe1217482e1f77840d68c92ec57fb1', 'tools/fonts/test-standalone-link.py': '2efb1cd300c08173078235be9700d82d2ee196b3', 'tools/native3-locks/union_payload.py': '13b9c2f67e427f788230dc14fa202f3d0bfc79b6', 'tools/native3-locks/union_blocking_guard.py': 'de1f1112bc76bf00fae0c64b0c5234d25fcc5c69'}
           SOURCE_PINS.update(FONTS_PINS)
+          # Exact diagnostic-only logger adoption; no acceptance or retry changes.
+          RECEIPT_PINS = {'.github/workflows/native3-locks-blocking.yml': '6f4d06d0433c04beace93e9c92b05eaf9a5d9614', '.github/workflows/native3-locks-commands.yml': '961e4aa8513fdb782a44173eb46f8e44c64deb01', 'tools/ci/artifact_receipt.py': 'd2e1ad78e09a4871f2ca53c572292366279de573', 'tools/ci/receipt_identity.py': '0d35de488578c6d6eb2a1d0bdf5c61ac99a40c52', 'tools/ci/receipt-diagnostics.ps1': '80f33415a4c57c42c99f74ae61fc5da1316195ef', 'tools/windows4/run-tsf-component.ps1': 'ccc4d13fa150140ad5f6087f0139bf9e8958b30b', 'tools/windows4/run-tsf-union.ps1': '4f2cdef15aa94214a82513a54c29a1eae05481d2', '.github/workflows/services-geocoder-worker-component.yml': 'c2e61ec34bcc30312ad1fa00fc09bdc18a15ce17', 'tools/windows4/test-tsf-job-supervisor.ps1': '3ba0622be975f70d8dcd1e4ed529f0746a749981'}
+          SOURCE_PINS.update(RECEIPT_PINS)
           ORIGINAL_BASE = 'f1550540186b4ae3f17a5e501a886ec1c4d5d613'
           UNION_BASE = '8b1e9b509ceef7e532a7ff5bc085ecdbc476d292'
 
@@ -230,6 +233,11 @@ jobs:
                   require(name in (UNION_PINS | NATIVE_PINS) and SOURCE_PINS[name] == FONTS_PINS[name],
                           'Font path adaptation lacks exact independent pins')
                   pins[name] = FONTS_PINS[name]
+                  # Preserve historical selected proof; adapt this one exact current logger overlap.
+                  name = '.github/workflows/native3-locks-commands.yml'
+                  require(name in (UNION_PINS | NATIVE_PINS) and SOURCE_PINS[name] == RECEIPT_PINS[name],
+                          'Receipt selected adaptation lacks exact independent pins')
+                  pins[name] = RECEIPT_PINS[name]
               for name, blob in pins.items():
                   require(actual.get(name, ('', ''))[1] == blob, 'Union/Native selected source assertion failed: ' + name)
 
@@ -392,6 +400,10 @@ jobs:
               actual = inventory(sha)
               verify_tree(actual, expected)
               verify_selected(actual, adapted=True)
+              for name in ('.github/workflows/native3-locks-commands.yml', 'compat/posix/src/record_lock_registry.cc'):
+                  mutant = copy.deepcopy(actual)
+                  mutant[name] = ('100644', '0' * 40)
+                  reject('receipt_selected_adaptation_' + name, lambda: verify_selected(mutant, adapted=True))
               for name in ('compat/posix/src/path.cc', 'compat/posix/src/record_lock_registry.cc'):
                   mutant = copy.deepcopy(actual)
                   mutant[name] = ('100644', '0' * 40)
@@ -422,6 +434,13 @@ jobs:
                   mutant = copy.deepcopy(actual)
                   mutant[name] = ('100644', '0' * 40)
                   reject('media4_mutated_' + name, lambda: verify_tree(mutant, expected))
+              for name in RECEIPT_PINS:
+                  mutant = copy.deepcopy(actual)
+                  mutant[name] = ('100644', '0' * 40)
+                  reject('receipt_mutated_' + name, lambda: verify_tree(mutant, expected))
+              mutant = copy.deepcopy(actual)
+              mutant['tools/ci/receipt-unreviewed.py'] = ('100644', '3' * 40)
+              reject('receipt_unauthorized_path', lambda: verify_tree(mutant, expected))
               for name in FONTS_PINS:
                   mutant = copy.deepcopy(actual)
                   mutant[name] = ('100644', '0' * 40)
