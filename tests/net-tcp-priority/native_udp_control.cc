@@ -208,7 +208,22 @@ int NativeUdpErrorControl() {
   const int result = WSAPoll(&p, 1, 2000);
   const int native_error = result == SOCKET_ERROR ? WSAGetLastError() : 0;
   printf("TCP_PRIORITY_NATIVE_UDP_INPUT poll=%d revents=%d native_error=%d reset_reporting=1 payload_or_SO_ERROR_consumed=0\n", result, p.revents, native_error); fflush(stdout);
-  require(result == 1 && (p.revents & POLLERR), "positive native UDP error really exists before mapping");
+  // Independent WinSDK410543 observed this exact ICMP input as native normal
+  // read readiness, SO_ERROR0, and a persistent WSAECONNRESET on MSG_PEEK.
+  // This raw prerequisite is distinct from the unchanged public POLLERR gate.
+  require(result == 1 && p.revents == POLLRDNORM, "exact independently observed native UDP reset readiness");
+  auto recv_native = native<decltype(&::recv)>("recv");
+  for (int observation = 0; observation != 2; ++observation) {
+    char byte{};
+    int received = recv_native(client, &byte, 1, MSG_PEEK);
+    int error = received == SOCKET_ERROR ? WSAGetLastError() : 0;
+    require(received == SOCKET_ERROR && error == WSAECONNRESET, "actual native UDP error persists through bounded nonblocking peek");
+    WSAPOLLFD repeat{}; repeat.fd = client; repeat.events = p.events;
+    int repeated = WSAPoll(&repeat, 1, 0);
+    require(repeated == 1 && repeat.revents == POLLRDNORM, "native reset readiness remains after observation");
+    printf("TCP_PRIORITY_NATIVE_UDP_RESET observation=%d peek=%d error=%d repoll=%d revents=%d SO_ERROR=not-read\n",
+        observation, received, error, repeated, repeat.revents); fflush(stdout);
+  }
   SocketFd state; state.socket = static_cast<ws::Socket>(client); state.initial_nonblocking = true;
   const int fd = RegisterSocket(state); require(fd >= 0, "production fd owns native error endpoint");
   return fd;
