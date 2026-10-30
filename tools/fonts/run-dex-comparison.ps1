@@ -45,10 +45,10 @@ Write-Host "FONT_IMAGE_POLICY role=$RuntimeRole intentional_imageless=true suppl
 
 function Invoke-FontChild([string] $Role, [string[]] $Bcp, [string[]] $Tail) {
   $psi = [Diagnostics.ProcessStartInfo]::new("$installed/dalvikvm.exe")
-  $args = @('-Xbootclasspath:'+(($Bcp | ForEach-Object { NoDrive $_ }) -join ':'),
+  $childArguments = @('-Xbootclasspath:'+(($Bcp | ForEach-Object { NoDrive $_ }) -join ':'),
     '-Ximage:'+(NoDrive $missingImage),'-Xint','-Xusejit:false','-verbose:image',
     '-cp',(NoDrive "$fixtures/native2-test.dex")) + $Tail
-  foreach ($arg in $args) { $psi.ArgumentList.Add($arg) }
+  foreach ($arg in $childArguments) { $psi.ArgumentList.Add($arg) }
   $psi.WorkingDirectory = $work; $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
   # Override only this child's explicitly diagnostic image context.
@@ -58,7 +58,7 @@ function Invoke-FontChild([string] $Role, [string[]] $Bcp, [string[]] $Tail) {
     $psi.Environment[$entry.Key] = NoDrive $entry.Value
   }
   $psi.Environment['GESHER_CI_PROCESS_TRACE'] = '1'
-  $receipt = @{runtime_role=$RuntimeRole; child_role=$Role; argv=$args; cwd=$work;
+  $receipt = @{runtime_role=$RuntimeRole; child_role=$Role; argv=$childArguments; cwd=$work;
     android_root=$psi.Environment['ANDROID_ROOT']; require_boot_image=$psi.Environment['GESHER_REQUIRE_BOOT_IMAGE'];
     supplied_images=0; old_framework_source='42076a8f28c0d23eee5b10ee0acf0844be0dc277'}
   Write-Host ('FONT_DIAGNOSTIC_CHILD '+($receipt | ConvertTo-Json -Depth 8 -Compress))
@@ -89,7 +89,12 @@ foreach ($abi in @('x86_64','arm64-v8a')) {
     $xml = if ($case -eq 'unset') {"$fontDir/fonts.xml"} else {"$fontRoot/etc/fonts.xml"}
     $result = Invoke-FontChild "CORE_DEX/$abi/$case" $core @('gesher.Native3StandaloneFontTest',
       (NoDrive "$fixtures/$abi/libfonts_standalone.so"),$mode,(NoDrive $fontRoot),(NoDrive $fontDir),(NoDrive $xml))
-    $prerequisites = $result.text.Contains('FONT_CORE_CLASSES_ABSENT Typeface FontFamily SystemFontMap') -and
+    $expectedBcp = ($core | ForEach-Object { NoDrive $_ }) -join ':'
+    $observedBcp = [regex]::Matches($result.text, '(?m)^FONT_CORE_BCP ([^\r\n]*)\r?$')
+    $receivedBcp = if ($observedBcp.Count -eq 1) { $observedBcp[0].Groups[1].Value } else { $null }
+    $exactBcp = $observedBcp.Count -eq 1 -and $receivedBcp -ceq $expectedBcp
+    Write-Host ('FONT_CORE_BCP_IDENTITY '+(@{runtime_role=$RuntimeRole;abi=$abi;case=$case;expected=$expectedBcp;received=$receivedBcp;observed_count=$observedBcp.Count;exact_match=$exactBcp} | ConvertTo-Json -Compress))
+    $prerequisites = $exactBcp -and $result.text.Contains('FONT_CORE_CLASSES_ABSENT Typeface FontFamily SystemFontMap') -and
       $result.text.Contains('FONT_PROVIDER context=dex exports=18 logical_alias=1 asset_provider=1')
     $passes = $result.exit -eq 0 -and $result.text.Contains("FONT_PASS case=$mode ") -and
       $result.text.Contains("FONT_CORE_DEX_PASS case=$mode")
