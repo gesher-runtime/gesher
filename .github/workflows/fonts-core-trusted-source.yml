@@ -1,0 +1,145 @@
+name: fonts-core-trusted-source
+on:
+  workflow_call:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      FONTS_CORE_COMPONENT_CALLER_COMMIT: ${{ vars.FONTS_CORE_COMPONENT_CALLER_COMMIT }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify explicit core component source authority and preserved full policy
+        shell: bash
+        run: |
+          python3 -I - <<'PY'
+          """Immutable Fonts component source authority; compiled runtime suppliers remain explicit."""
+          import ast,copy,hashlib,json,os,re,subprocess,sys,textwrap,urllib.request
+          from pathlib import Path
+          
+          BASE='00f96217616c5892dd8364067d007f92d541585b'
+          FULL_GUARD='3a45b2db5fddeb4afb7b6c7e2d20d978f8286549'
+          FULL_TRUST='.github/workflows/net-combined-dns-trusted-source.yml'
+          FULL_GUARD_BLOB='429419da45459e3fd5852e90f7f1600afc5a674b'
+          TEMPLATE='1cf59f21a169ed3727a1889bfe16ab8423e4b5bc'
+          CALLER='.github/workflows/fonts-core-component.yml'
+          TRUST='.github/workflows/fonts-core-trusted-source.yml'
+          REPO='gesher-runtime/gesher'
+          EXTRA_PINS={'.github/workflows/native2.yml': '7958a0939a6971180f41a71f5254c52fdee257a9', 'tests/native2/fonts_standalone.c': '59f71f0d1e0cb3e1a92a68306785b6b447c3a494', 'tests/native2/fonts_standalone_jni.c': 'db5598a2553036493616abd768e57a2c7fbef695', 'tests/native2/java/gesher/Native3DefaultFontTest.java': '01c6ea195a7b90a72ffd8c3333d46cb3bbe69bcd', 'tests/native2/java/gesher/Native3StandaloneFontTest.java': '36701cad56718753bf22f8b1cc6013863ca28488', 'tools/fonts/baseline-supplier.py': '9f0d9af4f213cb9c132983e0ae31b56e582d83b0', 'tools/fonts/dex-fixture-manifest.py': '7c39d686935c486ce0f5644dfdbe3ef8079946b0', 'tools/fonts/run-dex-comparison.ps1': 'e23ee16fca4f5ed4795c065d24ad364bb33b89f3'}
+          
+          def require(value,message):
+           if not value:raise RuntimeError(message)
+          def git(*args):return subprocess.check_output(['git',*args])
+          def reject(label,fn):
+           try:fn()
+           except (RuntimeError,KeyError):print('FONTS_CORE_NEGATIVE '+label+'=rejected',flush=True)
+           else:raise RuntimeError('Negative accepted: '+label)
+          def run_identity(run,source,run_id,attempt,event):
+           require(run['repository']['full_name']==REPO and run['repository']['id']==1426153186 and run['head_repository']['id']==1426153186,'Wrong component repositories')
+           require(str(run['id'])==run_id and str(run['run_attempt'])==attempt and run['head_sha']==source,'Wrong component source/run/attempt')
+           require(run['name']=='fonts-core-component' and run['path']==CALLER and run['event']==event and event in ('push','workflow_dispatch'),'Wrong component workflow/event')
+          
+          def caller_authority(value):
+           require(bool(re.fullmatch('[0-9a-f]{40}',value)), 'Missing component caller authority')
+           require(git('cat-file','-t',value).strip()==b'commit', 'Component authority is not a commit')
+           return git('show',value+':'+CALLER)
+
+          def frozen_full():
+           raw=git('show',FULL_GUARD+':'+FULL_TRUST)
+           require(hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==FULL_GUARD_BLOB,'Frozen full guard differs')
+           source=textwrap.dedent(raw.decode().split("          python3 -I - <<'PY'\n",1)[1].rsplit('\n          PY',1)[0])
+           tree=ast.parse(source);main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+           defs=[n for n in tree.body if not(isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name) and n.value.func.id=='main')]
+           trusted={};exec(compile(ast.Module(body=defs,type_ignores=[]),'frozen-full-guard','exec'),trusted)
+           # Re-enact the historical source assertions from the exact immutable code,
+           # using its original full source rather than mislabeling this component run.
+           start=next(i for i,n in enumerate(main.body) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and 'subprocess.run' in ast.unparse(n) and "'--is-ancestor', BASE, sha" in ast.unparse(n))
+           end=next(i for i,n in enumerate(main.body) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='reviewed' for t in n.targets))
+           trusted['sha']=BASE;exec(compile(ast.Module(body=main.body[start:end],type_ignores=[]),'frozen-historical-assertions','exec'),trusted)
+           actual=trusted['inventory'](BASE);expected=trusted['inventory'](trusted['COMBINED_BASE'])
+           for p,b in trusted['SOURCE_PINS'].items():expected[p]=(expected.get(p,('100644',''))[0],b)
+           for p in (trusted['CALLER'],trusted['TRUST']):expected[p]=actual[p]
+           trusted['verify_tree'](actual,expected);trusted['verify_selected'](actual,adapted=True)
+           require(git('show',BASE+':'+FULL_TRUST)==raw,'Frozen full caller guard differs')
+           old=git('show',trusted['COMBINED_BASE']+':'+trusted['CALLER'])
+           intended=old.replace(b'gesher-runtime/gesher/.github/workflows/combined-full-trusted-source.yml@21c81672d87b5d37607bfcab676d67f2a23d3114',b'gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@'+FULL_GUARD.encode())
+           intended=intended.replace(b'            tools/net-udp\n',b'            tools/net-udp\n            tools/net-udp-component\n            tools/net-dns\n            tools/net-dns-component\n')
+           require(intended==git('show',BASE+':'+trusted['CALLER']),'Frozen full DAG differs')
+           # Prove all original inner selected pins and allowed-path predicates on
+           # that same full baseline; candidate component policy cannot replace them.
+           path='tools/native3-locks/union_payload.py';inner=ast.parse(git('show',BASE+':'+path).decode())
+           nodes=[]
+           for node in inner.body:
+            if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='TARGETS' for t in node.targets):break
+            if isinstance(node,ast.Assign) or (isinstance(node,ast.Expr) and isinstance(node.value,ast.Call) and isinstance(node.value.func,ast.Attribute) and isinstance(node.value.func.value,ast.Name) and node.value.func.value.id=='PINNED_SOURCE'):nodes.append(node)
+           scope={'Path':Path,'__file__':str(Path(path).resolve())};exec(compile(ast.Module(body=nodes,type_ignores=[]),'frozen-inner-pins','exec'),scope)
+           require(all(actual[p][1]==b for p,b in scope['PINNED_SOURCE'].items()),'Frozen inner selected source differs')
+           inner_main=next(n for n in inner.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+           branch=next(n for n in inner_main.body if isinstance(n,ast.If) and ast.unparse(n.test)=="args.mode == 'preflight'")
+           allow_nodes=[n for n in branch.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='allowed' for t in n.targets) or isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and isinstance(n.value.func.value,ast.Name) and n.value.func.value.id=='allowed']
+           exec(compile(ast.Module(body=allow_nodes,type_ignores=[]),'frozen-inner-allowlist','exec'),scope)
+           historical=trusted['inventory']('8b1e9b509ceef7e532a7ff5bc085ecdbc476d292')
+           changed={p for p in actual.keys()|historical.keys() if actual.get(p)!=historical.get(p)}
+           require(changed and changed<=scope['allowed'],'Frozen union preflight delta differs')
+           require(not (changed|{'tools/fonts/forged.py'})<=scope['allowed'],'Frozen union negative accepted')
+           block=ast.parse(git('show',BASE+':tools/native3-locks/union_blocking_guard.py').decode())
+           block_main=next(n for n in block.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+           block_nodes=[n for n in block_main.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='allowed' for t in n.targets) or isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and isinstance(n.value.func.value,ast.Name) and n.value.func.value.id=='allowed']
+           block_scope={};exec(compile(ast.Module(body=block_nodes,type_ignores=[]),'frozen-blocking-allowlist','exec'),block_scope)
+           require(changed<=block_scope['allowed'] and not (changed|{'tools/fonts/forged.py'})<=block_scope['allowed'],'Frozen blocking preflight delta/negative differs')
+           manifest=json.loads(git('show',BASE+':tools/native3-locks/blocking-source.json'))
+           require(all(actual[p][1]==b for p,b in manifest['blobs'].items() if p!='.github/workflows/native3-locks-blocking.yml'),'Frozen blocking selected source differs')
+           print('FONTS_CORE_FROZEN_FULL_SOURCE base='+BASE+' inner_pins='+str(len(scope['PINNED_SOURCE']))+' originalDAG=UNCHANGED historical_selected=PASS full_runtime_qualification=false',flush=True)
+           return trusted
+          
+          def main():
+           require(os.environ.get('GITHUB_ACTIONS')=='true' and os.environ['GITHUB_REPOSITORY']==REPO,'CI/repository only')
+           sha=os.environ['GITHUB_SHA'];run_id=os.environ['GITHUB_RUN_ID'];attempt=os.environ['GITHUB_RUN_ATTEMPT'];event=os.environ['GITHUB_EVENT_NAME']
+           require(os.environ['GITHUB_REF']=='refs/heads/wip/fonts-dex-core-baseline' and git('rev-parse','HEAD').decode().strip()==sha,'Wrong source/ref')
+           req=urllib.request.Request('https://api.github.com/repos/'+REPO+'/actions/runs/'+run_id,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+           with urllib.request.urlopen(req,timeout=60) as response:run=json.load(response)
+           run_identity(run,sha,run_id,attempt,event)
+           for field,value in (('id',-1),('run_attempt',-1),('head_sha','0'*40),('name','ci'),('path','forged.yml'),('event','schedule')):
+            mutant=copy.deepcopy(run);mutant[field]=value;reject('actual_run_'+field,lambda:run_identity(mutant,sha,run_id,attempt,event))
+           for field in ('repository','head_repository'):
+            mutant=copy.deepcopy(run);mutant[field]['id']=-1;reject('actual_run_'+field,lambda:run_identity(mutant,sha,run_id,attempt,event))
+           reviewed=os.environ.get('FONTS_CORE_COMPONENT_CALLER_COMMIT','')
+           approved=caller_authority(reviewed);require(git('show',sha+':'+CALLER)==approved,'Caller differs from independent authority')
+           for value in ('','x'*40,sha+':policy'):reject('malformed_component_authority',lambda:caller_authority(value))
+           reject('wrong_component_authority',lambda:require(caller_authority(TEMPLATE)==approved,'Unpinned template is not approved caller'))
+           refs=re.findall(rb'(?m)^    uses: gesher-runtime/gesher/\.github/workflows/fonts-core-trusted-source\.yml@([0-9a-f]{40})$',approved)
+           require(len(refs)==1,'One immutable CORE guard required');guard=refs[0].decode()
+           require(git('show',guard+':'+TRUST)==git('show',reviewed+':'+TRUST),'Immutable CORE guard differs')
+           template=git('show',TEMPLATE+':'+CALLER);needle=b'fonts-core-trusted-source.yml@'+b'0'*40
+           require(template.count(needle)==1 and approved==template.replace(needle,b'fonts-core-trusted-source.yml@'+guard.encode()),'Intended component producer/role DAG changed')
+           trusted=frozen_full();inventory=trusted['inventory'];expected=inventory(BASE)
+           subprocess.run(['git','merge-base','--is-ancestor',BASE,sha],check=True)
+           for p,b in EXTRA_PINS.items():expected[p]=(expected.get(p,('100644',''))[0],b)
+           for p in (CALLER,TRUST):expected[p]=inventory(reviewed)[p]
+           actual=inventory(sha);trusted['verify_tree'](actual,expected);trusted['verify_checkout'](expected)
+           for p in EXTRA_PINS:
+            mutant=copy.deepcopy(actual);mutant[p]=('100644','0'*40);reject('component_blob_'+p,lambda:trusted['verify_tree'](mutant,expected))
+           mutant=copy.deepcopy(actual);mutant['tools/fonts/forged.py']=('100644','0'*40);reject('unreviewed_component_path',lambda:trusted['verify_tree'](mutant,expected))
+           for p in ('.github/workflows/ci.yml',FULL_TRUST,'tools/native3-locks/union_payload.py','tools/native3-locks/union_blocking_guard.py','compat/bionic/native_fonts.cc'):
+            mutant=copy.deepcopy(actual);mutant[p]=('100644','0'*40);reject('retained_full_policy_'+p,lambda:trusted['verify_tree'](mutant,expected))
+           require(sys.flags.isolated==1 and all(Path(m.__file__).resolve().parent!=Path.cwd() for m in (json,hashlib)),'Candidate shadow module imported')
+           originals={p:Path(p).read_bytes() for p in (CALLER,TRUST,'tools/native3-locks/union_payload.py','tools/native3-locks/union_blocking_guard.py')}
+           try:
+            for p in originals:Path(p).write_bytes(b'pass\n')
+            reject('actual_noop_guard_plus_caller',lambda:trusted['verify_checkout'](expected))
+           finally:
+            for p,raw in originals.items():Path(p).write_bytes(raw)
+           trusted['verify_checkout'](expected)
+           trusted['isolated_import_controls']()
+           require(not git('status','--porcelain','--untracked-files=all').strip(),'Dirty component checkout')
+           print('FONTS_CORE_TRUSTED_SOURCE '+json.dumps({'source':sha,'run':run_id,'attempt':attempt,'immutable_guard':guard,'caller_authority':reviewed,'frozen_full_source':BASE,'extra_pins':EXTRA_PINS,'roles':{'current_runtime':'00f/run41064959428/a1','old_runtime_and_framework':'42076/run40953048849/a1','fixtures':'CURRENT_SOURCE_CURRENT_ATTEMPT'},'full_qualification':False},sort_keys=True),flush=True)
+          
+          main()
+          PY
