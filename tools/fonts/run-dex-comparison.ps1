@@ -2,13 +2,15 @@
 param([Parameter(Mandatory)][string] $RuntimeDirectory,
       [Parameter(Mandatory)][string] $OldFrameworkDirectory,
       [Parameter(Mandatory)][string] $FixturesDirectory,
-      [Parameter(Mandatory)][ValidateSet('current00f','old42076')][string] $RuntimeRole)
+      [Parameter(Mandatory)][ValidateSet('current-utf8','old42076')][string] $RuntimeRole)
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -cne 'true') { throw 'Font DEX execution is CI only' }
 function NoDrive([string] $Path) { ($Path -replace '\\','/') -replace '^[A-Za-z]:','' }
 $runtime = (Resolve-Path -LiteralPath $RuntimeDirectory).Path
 $framework = (Resolve-Path -LiteralPath $OldFrameworkDirectory).Path
 $fixtures = (Resolve-Path -LiteralPath $FixturesDirectory).Path
+python tools/fonts/assemble-core-runtime.py --verify --destination $runtime --role $RuntimeRole
+if ($LASTEXITCODE -ne 0) { throw 'Comparison assembly ownership/source/hash verification failed' }
 foreach ($tree in @($runtime,$framework,$fixtures)) {
   $images = @(Get-ChildItem -LiteralPath $tree -Recurse -File | Where-Object Extension -in '.art','.oat','.vdex')
   if ($images.Count) { throw "Image file present in intentional imageless supplier: $($images.FullName)" }
@@ -23,6 +25,8 @@ foreach ($dir in @($installed,$work,"$root/system/etc","$root/system/fonts","$ro
   New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
 Copy-Item -Path "$runtime/*" -Destination $installed -Recurse
+python tools/fonts/assemble-core-runtime.py --verify --destination $installed --role $RuntimeRole
+if ($LASTEXITCODE -ne 0) { throw 'Installed copy changed comparison input ownership/hashes' }
 Copy-Item -Path "$installed/fonts/*.ttf" -Destination "$root/system/fonts"
 Copy-Item -LiteralPath "$installed/fonts/fonts.xml" -Destination "$root/system/etc/fonts.xml"
 Copy-Item -Path "$installed/fonts/*.ttf" -Destination "$unicodeRoot/fonts"
@@ -97,6 +101,24 @@ function Invoke-FontChild([string] $Role, [string[]] $Bcp, [string[]] $Tail) {
   }
 }
 $failures = 0
+# ASCII numeric witnesses measure Java string contents independently of console rendering.
+$echo = Invoke-FontChild 'CLI_UNICODE_ARGUMENTS' $core @('gesher.Native3CliArgumentsTest','אב','word with space','quote"inside','tail\\',([char]::ConvertFromUtf32(0x1f600)),'')
+$echoPass = $echo.exit -eq 0 -and $echo.text.Contains('FONT_CLI_UNICODE_PASS hebrew spaces quote backslashes supplementary empty')
+$numeric = @([regex]::Matches($echo.text,'(?m)^FONT_CLI_ARG index=([0-9]+) utf16_units=([0-9]+) codepoints=([^ \r\n]*) expected=([^\r\n]*)\r?$'))
+$asciiExpected = @{'1'='77,6f,72,64,20,77,69,74,68,20,73,70,61,63,65';'2'='71,75,6f,74,65,22,69,6e,73,69,64,65';'3'='74,61,69,6c,5c,5c';'5'=''}
+$validEcho = $echo.text.Contains('FONT_CLI_ARG_COUNT 6') -and $numeric.Count -eq 6
+for ($i=0; $i -lt $numeric.Count; $i++) {
+  if ($numeric[$i].Groups[1].Value -cne [string]$i) { $validEcho=$false }
+  if ($asciiExpected.ContainsKey([string]$i) -and $numeric[$i].Groups[3].Value -cne $asciiExpected[[string]$i]) { $validEcho=$false }
+}
+if ($RuntimeRole -ceq 'current-utf8') {
+  if (-not $validEcho -or -not $echoPass) { $failures++; Write-Host 'FONT_CURRENT_CLI_UNICODE_FAIL' }
+  else { Write-Host 'FONT_CURRENT_CLI_UNICODE_PASS native_font_nonbmp_path_qualification=false' }
+} else {
+  $knownOldGap = $echo.exit -eq 1 -and $echo.text.Contains('java.lang.IllegalStateException: CLI Unicode/quoting arguments changed') -and $echo.text.Contains('gesher.Native3CliArgumentsTest.main') -and $numeric.Count -eq 6 -and $numeric[0].Groups[3].Value -ceq '3f,3f'
+  if (-not $validEcho -or (-not $echoPass -and -not $knownOldGap)) { $failures++; Write-Host 'FONT_OLD_CLI_INVALID_OBSERVATION' }
+  else { Write-Host "FONT_OLD_CLI_OBSERVATION unicode_pass=$echoPass conformance=false" }
+}
 foreach ($abi in @('x86_64','arm64-v8a')) {
   foreach ($case in @('unset','set','unicode','wrong')) {
     $mode = if ($case -eq 'unicode') {'set'} else {$case}
@@ -114,7 +136,7 @@ foreach ($abi in @('x86_64','arm64-v8a')) {
       $result.text.Contains('FONT_PROVIDER context=dex exports=18 logical_alias=1 asset_provider=1')
     $passes = $result.exit -eq 0 -and $result.text.Contains("FONT_PASS case=$mode ") -and
       $result.text.Contains("FONT_CORE_DEX_PASS case=$mode")
-    if ($RuntimeRole -ceq 'current00f') {
+    if ($RuntimeRole -ceq 'current-utf8') {
       if (-not $prerequisites -or -not $passes) { $failures++; Write-Host "FONT_CURRENT_CORE_FAIL abi=$abi case=$case exit=$($result.exit)" }
       else { Write-Host "FONT_CURRENT_CORE_PASS abi=$abi case=$case" }
     } else {

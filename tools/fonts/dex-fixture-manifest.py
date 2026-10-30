@@ -4,7 +4,8 @@ from pathlib import Path
 
 INPUTS=('tests/native2/fonts_standalone.c','tests/native2/fonts_standalone_jni.c',
         'tests/native2/java/gesher/Native3StandaloneFontTest.java',
-        'tests/native2/java/gesher/Native3DefaultFontTest.java','.github/workflows/native2.yml')
+        'tests/native2/java/gesher/Native3DefaultFontTest.java',
+        'tests/native2/java/gesher/Native3CliArgumentsTest.java','.github/workflows/native2.yml')
 OUTPUTS=('native2-test.dex','x86_64/fonts_standalone','arm64-v8a/fonts_standalone',
          'x86_64/libfonts_standalone.so','arm64-v8a/libfonts_standalone.so')
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
