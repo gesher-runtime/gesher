@@ -152,6 +152,8 @@ def controls(authority):
         (trace, mapping, imported.replace('KERNEL32.dll', 'libwinpthread-1.dll')),
         (trace, mapping, imported + 'Symbol: pthread_self (0)\n'),
         (trace, mapping, imported + 'Symbol: __imp_pthread_join (0)\n'),
+        (trace, mapping, imported + 'Symbol: _pthread (0)\n'),
+        (trace, mapping, imported + 'Symbol: __imp__pthread (0)\n'),
         (trace, '00001000 00000020 16 ordinary.obj:(.text)\n', imported),
         ('ld.lld: Reading /SYNTHETIC/out/ordinary.obj\n', mapping, imported),
         (trace.replace(member, 'libwinpthread_la-clock.o'), mapping.replace(member, 'libwinpthread_la-clock.o'), imported),

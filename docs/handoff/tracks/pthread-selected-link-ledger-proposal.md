@@ -112,7 +112,7 @@ async or independent-root adoption gates recorded in the canonical map.
 C:/work/gesher-ci-review/tcp-selected-411396-current-authority.json` pins the
 actual old authority hash/source/run, then uses visibly SYNTHETIC map/command
 metadata only. It checks linked/unlinked positives, identical duplicates,
-26 origin/member/import/owner/address/map proof negatives, two mode failures,
+28 origin/member/import/owner/address/map proof negatives, two mode failures,
 six command failures, eight response failures and 13 portable sealed-record
 negatives. No compiler/native process
 or network operation is started by this test. Actual new CMake/Ninja links
