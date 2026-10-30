@@ -28,11 +28,11 @@ jobs:
           FULL_GUARD='3a45b2db5fddeb4afb7b6c7e2d20d978f8286549'
           FULL_TRUST='.github/workflows/net-combined-dns-trusted-source.yml'
           FULL_GUARD_BLOB='429419da45459e3fd5852e90f7f1600afc5a674b'
-          TEMPLATE='1cf59f21a169ed3727a1889bfe16ab8423e4b5bc'
+          TEMPLATE='d5d5cda3384caf60456a4c27a63914f58a18be3f'
           CALLER='.github/workflows/fonts-core-component.yml'
           TRUST='.github/workflows/fonts-core-trusted-source.yml'
           REPO='gesher-runtime/gesher'
-          EXTRA_PINS={'.github/workflows/native2.yml': '7958a0939a6971180f41a71f5254c52fdee257a9', 'tests/native2/fonts_standalone.c': '59f71f0d1e0cb3e1a92a68306785b6b447c3a494', 'tests/native2/fonts_standalone_jni.c': 'db5598a2553036493616abd768e57a2c7fbef695', 'tests/native2/java/gesher/Native3DefaultFontTest.java': '01c6ea195a7b90a72ffd8c3333d46cb3bbe69bcd', 'tests/native2/java/gesher/Native3StandaloneFontTest.java': '36701cad56718753bf22f8b1cc6013863ca28488', 'tools/ci/artifact_receipt.py': 'd2e1ad78e09a4871f2ca53c572292366279de573', 'tools/ci/receipt_identity.py': '0d35de488578c6d6eb2a1d0bdf5c61ac99a40c52', 'tools/fonts/baseline-supplier.py': '9f0d9af4f213cb9c132983e0ae31b56e582d83b0', 'tools/fonts/dex-fixture-manifest.py': '7c39d686935c486ce0f5644dfdbe3ef8079946b0', 'tools/fonts/run-dex-comparison.ps1': '8cfe4b71b8f91205ad92c976c7630932a3d49e55', 'tools/fonts/test-dex-arguments.ps1': '805aa76f492f6b689ff52efd5df6ab3178eb744a'}
+          EXTRA_PINS={'.github/workflows/native2.yml': '7958a0939a6971180f41a71f5254c52fdee257a9', 'cmake/aosp/art_runtime.cmake': 'f7acee1fdd7a86740cc5d64356d0698128b6391c', 'compat/art/dalvikvm_main.cc': '5b43c565b4de85840064ccb4955d48758ebb8d1b', 'tests/native2/fonts_standalone.c': '59f71f0d1e0cb3e1a92a68306785b6b447c3a494', 'tests/native2/fonts_standalone_jni.c': 'db5598a2553036493616abd768e57a2c7fbef695', 'tests/native2/java/gesher/Native3CliArgumentsTest.java': 'ef4956d0c9993475a8ad1c81fb2d10f241b559cc', 'tests/native2/java/gesher/Native3DefaultFontTest.java': '01c6ea195a7b90a72ffd8c3333d46cb3bbe69bcd', 'tests/native2/java/gesher/Native3StandaloneFontTest.java': '36701cad56718753bf22f8b1cc6013863ca28488', 'tools/ci/artifact_receipt.py': 'd2e1ad78e09a4871f2ca53c572292366279de573', 'tools/ci/receipt_identity.py': '0d35de488578c6d6eb2a1d0bdf5c61ac99a40c52', 'tools/fonts/assemble-core-runtime.py': 'b3629252184167d1c79a23fdc88975884698da64', 'tools/fonts/baseline-supplier.py': '040993e33d709e9404e956cd3b2606bf58290a66', 'tools/fonts/core-runtime-manifest.py': '0358e8288f2eb73563455a7b0fb79e32f46c4fe6', 'tools/fonts/dex-fixture-manifest.py': '5dfcce628f2c46a462226f5960504510d1750d12', 'tools/fonts/run-dex-comparison.ps1': '1d3f2b70f04de49bd0c14db5b3aa60514e6e31a2', 'tools/fonts/test-core-assembly.py': 'b8d3c4fc43065bdefbd9537ab759f7944efa12f3', 'tools/fonts/test-dex-arguments.ps1': 'e5656d16725ba0eab71f438f3d12a27266d3c747'}
           
           def require(value,message):
            if not value:raise RuntimeError(message)
@@ -106,7 +106,7 @@ jobs:
           def main():
            require(os.environ.get('GITHUB_ACTIONS')=='true' and os.environ['GITHUB_REPOSITORY']==REPO,'CI/repository only')
            sha=os.environ['GITHUB_SHA'];run_id=os.environ['GITHUB_RUN_ID'];attempt=os.environ['GITHUB_RUN_ATTEMPT'];event=os.environ['GITHUB_EVENT_NAME']
-           require(os.environ['GITHUB_REF']=='refs/heads/wip/fonts-dex-core-baseline' and git('rev-parse','HEAD').decode().strip()==sha,'Wrong source/ref')
+           require(os.environ['GITHUB_REF']=='refs/heads/wip/fonts-cli-utf8' and git('rev-parse','HEAD').decode().strip()==sha,'Wrong source/ref')
            req=urllib.request.Request('https://api.github.com/repos/'+REPO+'/actions/runs/'+run_id,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
            with urllib.request.urlopen(req,timeout=60) as response:run=json.load(response)
            run_identity(run,sha,run_id,attempt,event)
@@ -143,10 +143,13 @@ jobs:
            trusted['verify_checkout'](expected)
            trusted['isolated_import_controls']()
            require(not git('status','--porcelain','--untracked-files=all').strip(),'Dirty component checkout')
-           print('FONTS_CORE_TRUSTED_SOURCE '+json.dumps({'source':sha,'run':run_id,'attempt':attempt,'immutable_guard':guard,'caller_authority':reviewed,'frozen_full_source':BASE,'extra_pins':EXTRA_PINS,'roles':{'current_runtime':'00f/run41064959428/a1','old_runtime_and_framework':'42076/run40953048849/a1','fixtures':'CURRENT_SOURCE_CURRENT_ATTEMPT'},'full_qualification':False},sort_keys=True),flush=True)
+           print('FONTS_CORE_TRUSTED_SOURCE '+json.dumps({'source':sha,'run':run_id,'attempt':attempt,'immutable_guard':guard,'caller_authority':reviewed,'frozen_full_source':BASE,'extra_pins':EXTRA_PINS,'roles':{'current_runtime':'FRESH_CURRENT_SOURCE_CURRENT_ATTEMPT_EXES_ONLY','qualified_data':'1bf8/run41078972594/a1_DATA_ONLY_NO_EXE_DLL_IMAGE','qualified_translator':'1bf8/run41078972594/a1_EXPLICIT_TRANSLATOR','old_runtime_and_framework':'42076/run40953048849/a1_EXPLICIT_CONTRAST','fixtures':'CURRENT_SOURCE_CURRENT_ATTEMPT'},'full_qualification':False},sort_keys=True),flush=True)
           
           main()
           PY
       - name: Reproduce and reject collapsed VM argv using source-only metadata
         shell: pwsh
         run: tools/fonts/test-dex-arguments.ps1
+      - name: Reject stale role, unowned binary, changed data and private archive using pure metadata
+        shell: bash
+        run: python3 tools/fonts/test-core-assembly.py
