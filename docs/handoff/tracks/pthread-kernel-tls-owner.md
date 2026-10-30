@@ -197,6 +197,41 @@ not promote DEFERRED_ONLY or change the original async/product contract.
 Source-only checks reconstruct all8 ordered patch stacks from the exact11 pinned
 upstream files, with git core.autocrlf=false to match Linux CI. Seven old source
 expansions and original21 YAML job definitions remain unchanged. The trace gate
-has183 metadata ablation/conflict/isolation negatives; old11 provenance parser
+has193 metadata ablation/conflict/isolation negatives; old11 provenance parser
 negatives and both actual410871 archive/member replays remain passing. None of
 these source checks is a substitute for actual560 layout or Windows execution.
+
+## Actual first kernel-owner run and changed-consumer correction
+
+Run41107987978/source61ec96d1/attempt1 executed all28 jobs:24success/4failure.
+All original21 jobs, genuine Linux reference and both private macroOFF C++
+consumers passed. Actual supplier compile verified560/align16 and every field,
+new source hashes and four-hook isolation. Both deferred C consumers passed the
+original state/pending/native-exit/join-cancel/unload/handle controls. Deferred
+C++ all4 original modes now preserve identity and last-action completion before
+join on both hosts; these are bounded observations, not full protocol closure.
+
+Published C++ still preserves all4 identities/join completions, but the newly
+exercised late set/get observation produces total60 to70 (2022),64 to74 (2025),
+exceeding the unchanged original+8 bound. Late TSD observations are0/0/1/1.
+This is a real hard adoption gate, with exact cause still under source audit.
+No canonical identity regression or particular leak cause is inferred just from
+new numeric IDs. The census is not moved and its allowance is not raised.
+
+Both deferred held callbacks reached real owned phase3 CONTROL and original256
+ENTER, then the fixture timed out awaiting worker scans plus actual join claim.
+It had created the joiner only after holding the genuine C++ callback. The new
+consumer starts that joiner FIRST, positively witnesses its actual body entry
+and duplicates its exact native handle, then creates the target. Only after the
+genuine target callback is held does it atomically publish target ID and release
+the already-running joiner. The snapshot must claim the exact created pthread
+joiner ID, not any nonzero owner. Ready/body/held/release order and native IDs are
+checked separately; markers do not substitute for the real target resource and
+kernel/claim witnesses. If a deadline still fails, stderr logs all12 snapshot
+fields, all8 counters, expected owner and actual owned joiner kernel state.
+
+This change affects consumer/trace metadata only. The61ec runtime patches,
+560-layout/source pins, seven producers and original21 definitions remain exact.
+A changed-consumer whole28job run is required after peer. Published's unchanged
+hard census red must be retained independently of deferred qualification; no
+unchanged-source luck retry or canonical promotion is authorized by this result.
