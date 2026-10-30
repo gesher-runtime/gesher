@@ -6,14 +6,17 @@ $expectedPrefix = if ($selection -ceq 'canonical') { 'tcp-canonical-supplier' } 
 $expectedProducer = "compile-$selection"
 if ($env:GITHUB_ACTIONS -cne 'true') { throw 'Native fixture is CI-only' }
 $trusted = @{
-  'tools/windows4/TsfJobSupervisor.cs'='d1cf9319268df1bccf03177e7f8dde52a7f55510'
-  'tools/windows4/TsfJobWorker.cs'='08f29f78f56195825d96de2f2f6632bf91133e1e'
-  'tools/windows4/test-tsf-job-supervisor.ps1'='91e6946c4ab05a42ffbf6917166193c3dad07872'
+  'tools/windows4/TsfJobSupervisor.cs'='625be4d5906bb48dd02d6103382fd2e85ac88738'
+  'tools/windows4/TsfJobWorker.cs'='e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1'
+  'tools/windows4/test-tsf-job-supervisor.ps1'='3ba0622be975f70d8dcd1e4ed529f0746a749981'
   'tools/net-tcp-priority/qualified/TsfJobSupervisor.cs'='625be4d5906bb48dd02d6103382fd2e85ac88738'
   'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
 }
 foreach ($entry in $trusted.GetEnumerator()) {
-  if ((git hash-object $entry.Key) -cne $entry.Value -or $LASTEXITCODE -ne 0) { throw "Unreviewed helper $($entry.Key)" }
+  $actualHelperBlob = git hash-object $entry.Key
+  $helperHashExit = $LASTEXITCODE
+  Write-Host "TCP_COHERENT_HELPER_IDENTITY path=$($entry.Key) expected=$($entry.Value) received=$actualHelperBlob hash_exit=$helperHashExit"
+  if ($actualHelperBlob -cne $entry.Value -or $helperHashExit -ne 0) { throw "Unreviewed helper $($entry.Key)" }
 }
 if ((git rev-parse HEAD) -cne $env:GITHUB_SHA -or $LASTEXITCODE -ne 0) { throw 'Checkout mismatch' }
 $jobsRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"

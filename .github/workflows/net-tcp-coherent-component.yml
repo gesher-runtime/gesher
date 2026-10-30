@@ -1,4 +1,5 @@
 name: net-tcp-coherent-component
+# Bind all three shared controller helpers to the qualified1bf8 source.
 # Current-source coherent guarded-copy port. Keep the unmodified pinned
 # canonical supplier separate from the minimal-retirement diagnostic supplier.
 # Every original TCP lifetime census remains mandatory for each supplier.
@@ -160,6 +161,9 @@ jobs:
       TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
     steps:
       - uses: actions/checkout@v4
+      - name: Check exact qualified controller helper hashes and source-only pin negatives
+        shell: pwsh
+        run: tools/net-tcp-priority/test-helper-metadata.ps1
       - name: Reject incomplete expected-exit retirement metadata without native execution
         shell: pwsh
         run: tools/net-tcp-priority/test-retirement-metadata.ps1
