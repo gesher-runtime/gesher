@@ -23,6 +23,14 @@ static std::uint64_t NativeId() {
   return static_cast<std::uint64_t>(id);
 #endif
 }
+#ifdef _WIN32
+// Observation only: no pthread call, attachment or owned native handle here.
+static void HandlePhase(const char *mode,const char *phase) {
+  DWORD count=0;
+  Require(GetProcessHandleCount(GetCurrentProcess(),&count)!=0,"perphase actual process handle observation");
+  std::printf("CPP_TLS_HANDLE_PHASE mode=%s phase=%s count=%lu observation_only=1\n",mode,phase,count);
+}
+#endif
 static pthread_key_t late_key;
 #ifdef _WIN32
 static pthread_key_t early_key;
@@ -57,6 +65,9 @@ void LateCppRecord(LateCppCase *state,const char *tu) {
   Require(!pthread_setspecific(late_key,state) && pthread_getspecific(late_key)==state,
       "late genuine C++ callback key get/set on original TLS record");
   ++state->late_sets;
+#ifdef _WIN32
+  HandlePhase(state->mode,tu[0]=='A'?"late_setget_A":"late_setget_B");
+#endif
 #ifdef _WIN32
   if (state->held) {
     if (state->hold_claimed.exchange(1)==0) {
@@ -94,6 +105,7 @@ static void *Body(void *arg) {
       &completion,SYNCHRONIZE|THREAD_QUERY_LIMITED_INFORMATION,FALSE,0)!=0,
       "owned actual native completion handle before TLS construction");
   state->native_handle=reinterpret_cast<std::uintptr_t>(completion);
+  HandlePhase(state->mode,"body_after_native_duplicate");
 #endif
   LateCppTouchA(state); LateCppTouchB(state);
 #ifdef _WIN32
@@ -268,8 +280,15 @@ int main() {
       before==origin_before+(reaper.start?2u:0u),"exact process-lived owner event/thread handle accounting");
   std::printf("CPP_TLS_OWNER_BOOTSTRAP present=%d original=%lu baseline=%lu persistent_handles=%lu\n",
       reaper.start?1:0,origin_before,before,before-origin_before);
+  // Emit already captured initial/baseline samples only after the existing
+  // bootstrap check; never initialize output between those two measurements.
+  std::printf("CPP_TLS_HANDLE_PHASE mode=main phase=initial count=%lu observation_only=1\n",origin_before);
+  std::printf("CPP_TLS_HANDLE_PHASE mode=main phase=after_owner count=%lu observation_only=1\n",before);
 #endif
   Require(!pthread_key_create(&late_key,LateKeyDestructor),"common late-key observation registration");
+#ifdef _WIN32
+  HandlePhase("main","after_late_key_create");
+#endif
   const char *modes[]={"pthread_return","pthread_exit","std_thread_return"
 #ifdef _WIN32
     ,"native_ExitThread"
@@ -278,6 +297,9 @@ int main() {
   int failures=0,cases=0;
   for (const char *mode:modes) {
     LateCppCase state{mode};
+#ifdef _WIN32
+    HandlePhase(mode,"before_start");
+#endif
     bool join_conformant=true;
     if (!std::strcmp(mode,"std_thread_return")) {
       std::thread thread([&state] { Body(&state); }); thread.join();
@@ -311,6 +333,8 @@ int main() {
 #endif
     }
 #ifdef _WIN32
+    // Immediate join counts/completions/kernel samples above remain FIRST.
+    HandlePhase(mode,std::strcmp(mode,"native_ExitThread")?"after_join_snapshot":"after_native_thread_wait");
     // The supplier's join ordering is under test. Keep state alive until actual
     // kernel termination even if a supplier publishes pthread completion early.
     HANDLE completion=reinterpret_cast<HANDLE>(state.native_handle.load());
@@ -319,6 +343,7 @@ int main() {
         GetExitCodeThread(completion,&native_exit) && CloseHandle(completion),
         "every callback state retained through actual kernel termination");
     std::printf("CPP_TLS_KERNEL mode=%s signaled=1 exit=%lu owned_handle_closed=1\n",mode,native_exit);
+    HandlePhase(mode,"after_owned_kernel_handle_close");
 #endif
     Require(state.constructed==2 && state.body_left==1,"both genuine TLS objects constructed before exit");
     const bool conformant=state.a==1 && state.b==1 && state.mismatch==0 &&
@@ -337,10 +362,15 @@ int main() {
     cases+=2;
   }
 #endif
+#ifdef _WIN32
+  HandlePhase("main","before_late_key_delete");
+#endif
   Require(!pthread_key_delete(late_key),"late observation key deletion");
 #ifdef _WIN32
+  HandlePhase("main","after_late_key_delete");
   DrainRetirer(reaper);
   Require(GetProcessHandleCount(GetCurrentProcess(),&after)!=0,"final handles");
+  std::printf("CPP_TLS_HANDLE_PHASE mode=main phase=final_after_drain count=%lu observation_only=1\n",after);
   const bool bounded=after<=before+8 && after<=origin_before+8;
   std::printf("CPP_TLS_OWNER_HANDLES original=%lu baseline=%lu after=%lu persistent_handles=%lu original_total_bound=8 bounded=%d\n",
       origin_before,before,after,before-origin_before,bounded?1:0);

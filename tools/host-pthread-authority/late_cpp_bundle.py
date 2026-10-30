@@ -171,6 +171,113 @@ def selftest_trace():
             else:raise AssertionError('Wrong supplier export isolation accepted')
     print('PASS C++ source-only metadata: three roles, observational late TSD count remains unrestricted, ablation/conflict/role negatives='+str(rejected)+'; no native execution')
 
+def check_phase_observations(role,text):
+    assert role in ROLES
+    def one(pattern):
+        matches=re.findall('(?m)^'+pattern+r'\r?$',text)
+        assert len(matches)==1,'Missing/ambiguous phase observation identity: '+pattern
+        return matches[0]
+    matches=re.findall(r'(?m)^CPP_TLS_HANDLE_PHASE mode=([A-Za-z_]+) phase=([A-Za-z_]+) count=([0-9]+) observation_only=1\r?$',text)
+    assert len(matches)==len(re.findall(r'(?m)^CPP_TLS_HANDLE_PHASE[^\r\n]*\r?$',text)),'Malformed actual phase row'
+    phases={}
+    for mode,phase,count in matches:
+        assert (mode,phase) not in phases,'Repeated actual handle observation phase'
+        phases[mode,phase]=int(count)
+    expected={('main',phase) for phase in ('initial','after_owner','after_late_key_create','before_late_key_delete','after_late_key_delete','final_after_drain')}
+    modes=('pthread_return','pthread_exit','std_thread_return','native_ExitThread')
+    for mode in modes:
+        expected|={(mode,phase) for phase in ('before_start','body_after_native_duplicate','late_setget_A','late_setget_B','after_owned_kernel_handle_close')}
+        expected.add((mode,'after_native_thread_wait' if mode=='native_ExitThread' else 'after_join_snapshot'))
+    if role=='deferred':
+        expected|={(mode,phase) for mode in ('owned_held_join','owned_held_detach') for phase in ('body_after_native_duplicate','late_setget_A','late_setget_B')}
+    assert set(phases)==expected,'Missing/unexpected actual phase observations: '+str(expected-set(phases))+' / '+str(set(phases)-expected)
+    present,original,baseline,persistent=map(int,one(r'CPP_TLS_OWNER_BOOTSTRAP present=([01]) original=([0-9]+) baseline=([0-9]+) persistent_handles=([0-9]+)'))
+    assert present==int(role=='deferred') and persistent==2*present and baseline==original+persistent
+    origin2,base2,after,persist2,bounded=map(int,one(r'CPP_TLS_OWNER_HANDLES original=([0-9]+) baseline=([0-9]+) after=([0-9]+) persistent_handles=([0-9]+) original_total_bound=8 bounded=([01])'))
+    assert (origin2,base2,persist2)==(original,baseline,persistent)
+    assert bounded==int(after<=original+8 and after<=baseline+8),'Original strict bound output was changed'
+    assert phases['main','initial']==original and phases['main','after_owner']==baseline and phases['main','final_after_drain']==after
+    # Counts may rise or fall and the strict bound may be RED. No cleanup cause,
+    # monotonicity, callback ordering or conformance is inferred from this data.
+    return dict(role=role,phases=len(phases),original_bound=8,actual_bounded=bounded,conformance='NOT_ASSERTED')
+
+def selftest_phase_observations():
+    negative=0
+    for role in ROLES:
+        deferred=role=='deferred';original=60;baseline=60+(2 if deferred else 0)
+        after=70 if role=='published' else 66;bounded=int(after<=68)
+        lines=[f'CPP_TLS_OWNER_BOOTSTRAP present={int(deferred)} original={original} baseline={baseline} persistent_handles={baseline-original}',
+            f'CPP_TLS_OWNER_HANDLES original={original} baseline={baseline} after={after} persistent_handles={baseline-original} original_total_bound=8 bounded={bounded}']
+        required=[('main',phase) for phase in ('initial','after_owner','after_late_key_create','before_late_key_delete','after_late_key_delete','final_after_drain')]
+        for mode in ('pthread_return','pthread_exit','std_thread_return','native_ExitThread'):
+            required += [(mode,phase) for phase in ('before_start','body_after_native_duplicate','late_setget_A','late_setget_B','after_owned_kernel_handle_close')]
+            required += [(mode,'after_native_thread_wait' if mode=='native_ExitThread' else 'after_join_snapshot')]
+        if deferred:required += [(mode,phase) for mode in ('owned_held_join','owned_held_detach') for phase in ('body_after_native_duplicate','late_setget_A','late_setget_B')]
+        for mode,phase in required:
+            count=original if (mode,phase)==('main','initial') else baseline if (mode,phase)==('main','after_owner') else after if (mode,phase)==('main','final_after_drain') else 81
+            lines += [f'CPP_TLS_HANDLE_PHASE mode={mode} phase={phase} count={count} observation_only=1']
+        text='\n'.join(lines)+'\n';result=check_phase_observations(role,text)
+        assert result['actual_bounded']==bounded and result['conformance']=='NOT_ASSERTED'
+        controls=['\n'.join(lines[:i]+lines[i+1:])+'\n' for i in range(len(lines))]
+        controls += [text+line+'\n' for line in lines]
+        controls += [text.replace('original_total_bound=8','original_total_bound=10'),text.replace('phase=initial count=60','phase=initial count=61')]
+        controls += [text+'CPP_TLS_HANDLE_PHASE mode=main phase=unknown count=1 observation_only=1\n',text+'CPP_TLS_HANDLE_PHASE mode=main phase=initial count=bad observation_only=1\n']
+        for bad in controls:
+            try:check_phase_observations(role,bad)
+            except AssertionError:negative+=1
+            else:raise AssertionError('Incomplete/changed initial bound phase metadata accepted')
+    print('PASS source-only phase metadata missing/duplicate/initial/bound negatives='+str(negative)+'; actual boundRED staysRED, no conformance inferred')
+
+def package_build_metadata(llvm,role,ctx,library):
+    versions=llvm/'versions.txt'
+    record={'present':False}
+    if versions.exists() or versions.is_symlink():
+        assert versions.is_file() and versions.resolve().is_relative_to(llvm.resolve()),'Package versions file escapes authenticated extracted compiler'
+        raw=versions.read_bytes();assert len(raw)<=1024*1024,'Unexpectedly large package versions metadata'
+        text=raw.decode('utf-8')
+        record=dict(present=True,sha256=hashlib.sha256(raw).hexdigest(),size=len(raw),text=text,
+            observed_assignments=re.findall(r'(?m)^([A-Z_]+)=([^\r\n]*)\r?$',text))
+    return dict(context=ctx,role=role,variant=ROLES[role][1],compiler_archive_sha256=ARCHIVE,
+        compiler_root=str(llvm),selected_pthread_sha256=library,
+        source_attestation='UNRESOLVED-package-observations-only',
+        root_entries=sorted(p.name for p in llvm.iterdir()),versions=record)
+
+def check_package_metadata(data,role,ctx,compiler_root,library):
+    assert set(data)=={'context','role','variant','compiler_archive_sha256','compiler_root','selected_pthread_sha256','source_attestation','root_entries','versions'}
+    assert data['context']==ctx and data['role']==role and data['variant']==ROLES[role][1]
+    assert data['compiler_archive_sha256']==ARCHIVE and data['compiler_root']==compiler_root and data['selected_pthread_sha256']==library
+    assert data['source_attestation']=='UNRESOLVED-package-observations-only'
+    entries=data['root_entries'];assert isinstance(entries,list) and entries==sorted(set(entries)) and all(isinstance(n,str) and n not in ('.','..') and '/' not in n and '\\' not in n for n in entries)
+    record=data['versions'];assert isinstance(record,dict) and isinstance(record.get('present'),bool)
+    if not record['present']:assert record=={'present':False} and 'versions.txt' not in entries
+    else:
+        assert set(record)=={'present','sha256','size','text','observed_assignments'} and 'versions.txt' in entries
+        raw=record['text'].encode('utf-8');assert len(raw)==record['size'] and len(raw)<=1024*1024 and hashlib.sha256(raw).hexdigest()==record['sha256']
+        assert [list(x) for x in re.findall(r'(?m)^([A-Z_]+)=([^\r\n]*)\r?$',record['text'])]==[list(x) for x in record['observed_assignments']]
+
+def selftest_package_metadata():
+    import tempfile,copy
+    ctx=dict(GITHUB_SHA='1'*40,GITHUB_RUN_ID='synthetic-only',GITHUB_RUN_ATTEMPT='1',GITHUB_REPOSITORY='gesher-runtime/gesher')
+    negative=0
+    with tempfile.TemporaryDirectory(prefix='gesher-package-metadata-') as folder:
+        llvm=Path(folder);library='2'*64
+        for content in (None,b'',b'MINGW_W64_VERSION=actual-observation\r\nLLVM_VERSION=other-observation\r\n'):
+            file=llvm/'versions.txt'
+            if content is not None:file.write_bytes(content)
+            for role in ROLES:
+                data=package_build_metadata(llvm,role,ctx,library);check_package_metadata(data,role,ctx,str(llvm),library)
+                for field,value in [('compiler_archive_sha256','WRONG'),('role','WRONG'),('selected_pthread_sha256','WRONG'),('source_attestation','verified-source')]:
+                    bad=copy.deepcopy(data);bad[field]=value
+                    try:check_package_metadata(bad,role,ctx,str(llvm),library)
+                    except AssertionError:negative+=1
+                    else:raise AssertionError('Wrong package context/attestation accepted')
+                if content is not None:
+                    bad=copy.deepcopy(data);bad['versions']['text']+='tamper'
+                    try:check_package_metadata(bad,role,ctx,str(llvm),library)
+                    except AssertionError:negative+=1
+                    else:raise AssertionError('Tampered package metadata accepted')
+    print('PASS package metadata source-only missing/empty/present observations; context/hash/attestation negatives='+str(negative)+'; no native/network execution')
+
 def context():
     assert os.environ['GITHUB_ACTIONS']=='true' and os.environ['GITHUB_REPOSITORY']=='gesher-runtime/gesher'
     assert os.environ['GITHUB_REF']=='refs/heads/wip/pthread-process-routing'
@@ -196,6 +303,10 @@ def build(llvm,role):
         assert data['files']['lib/libwinpthread.a']==sha(lib) and data['files']['bin/libwinpthread-1.dll']==sha(dll)
         assert data['files']['lib/libpthread.a']==pthread_inputs['libpthread.a']['sha256']
         shutil.copyfile(provider,dist/'provider.json')
+    package=package_build_metadata(llvm,role,ctx,sha(lib))
+    check_package_metadata(package,role,ctx,str(llvm),sha(lib))
+    (dist/'package-metadata.json').write_text(json.dumps(package,sort_keys=True,indent=2))
+    print('CPP_PACKAGE_METADATA role='+role+' '+json.dumps(package,sort_keys=True),flush=True)
     commands=[];objects=[]
     for name in SOURCES[:3]:
         obj=dist/(Path(name).stem+'.obj');argv=[str(driver)]+FLAGS+['-c',str(ROOT/'tests/native'/name),'-o',str(obj)]
@@ -227,7 +338,7 @@ def build(llvm,role):
 def verify(role):
     ctx=context();producer,variant=ROLES[role];dist=ROOT/('late-cpp-'+role);data=json.loads((dist/'bundle.json').read_text())
     assert data['context']==ctx and data['role']==role and data['variant']==variant and data['producer']==producer and data['archive']==ARCHIVE
-    expected={'provider.json','late-cpp.exe','imports.txt','tls-symbols.txt','link.txt','late-cpp.map'}|{Path(n).stem+'.obj' for n in SOURCES[:3]}
+    expected={'provider.json','package-metadata.json','late-cpp.exe','imports.txt','tls-symbols.txt','link.txt','late-cpp.map'}|{Path(n).stem+'.obj' for n in SOURCES[:3]}
     assert set(data['members'])==expected and {p.name for p in dist.iterdir()}==expected|{'bundle.json'}
     assert all(sha(dist/n)==v for n,v in data['members'].items())
     assert data['sources']=={n:sha(ROOT/'tests/native'/n) for n in SOURCES}
@@ -241,6 +352,7 @@ def verify(role):
     for name in SOURCES[:3]:expected_commands.append([data['driver']]+FLAGS+['-c',data['workspace']+'/tests/native/'+name,'-o',data['workspace']+'/late-cpp-'+role+'/'+Path(name).stem+'.obj'])
     expected_commands.append([data['driver'],'-static','-pthread']+[data['workspace']+'/late-cpp-'+role+'/'+Path(n).stem+'.obj' for n in SOURCES[:3]]+[data['compiler_root']+'/x86_64-w64-mingw32/lib/libwinpthread.a','-Wl,--verbose','-Wl,-Map,'+data['workspace']+'/late-cpp-'+role+'/late-cpp.map','-o',data['workspace']+'/late-cpp-'+role+'/late-cpp.exe'])
     assert data['commands']==expected_commands
+    check_package_metadata(json.loads((dist/'package-metadata.json').read_text()),role,ctx,data['compiler_root'],data['library_sha256'])
     provider=json.loads((dist/'provider.json').read_text())
     if role=='published':assert provider==dict(variant=variant,archive=ARCHIVE,cxx=data['driver_sha256'],library=data['library_sha256'],dll=data['dll_sha256'])
     else:
@@ -252,9 +364,14 @@ def verify(role):
     imports=(dist/'imports.txt').read_text().lower();assert 'libwinpthread-1.dll' not in imports and 'libc++' not in imports
     print('Verified distinct C++ TLS variant '+role+' producer='+producer+' same source/run/attempt and complete members',flush=True)
 if __name__=='__main__':
-    if sys.argv[1]=='selftest':selftest_trace()
+    if sys.argv[1]=='selftest':
+        selftest_trace()
+        selftest_package_metadata()
+        selftest_phase_observations()
     elif sys.argv[1]=='build':build(Path(sys.argv[2]),sys.argv[3])
     elif sys.argv[1]=='verify':verify(sys.argv[2])
+    elif sys.argv[1]=='observations':
+        print('CPP_PHASE_OBSERVATIONS '+json.dumps(check_phase_observations(sys.argv[2],Path(sys.argv[3]).read_text(encoding='utf-8-sig')),sort_keys=True))
     elif sys.argv[1]=='trace':
         check_trace(sys.argv[2],Path(sys.argv[3]).read_text(encoding='utf-8-sig'))
         print('Verified actual C++ identity/join/owned-resource trace role='+sys.argv[2])
