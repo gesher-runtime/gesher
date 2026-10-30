@@ -167,6 +167,9 @@ jobs:
       - name: Reject incomplete expected-exit retirement metadata without native execution
         shell: pwsh
         run: tools/net-tcp-priority/test-retirement-metadata.ps1
+      - name: Prove unchanged receipt predicates and complete diagnostic observations without native execution
+        shell: pwsh
+        run: tools/net-tcp-priority/test-receipt-metadata.ps1
       - name: Verify raw archive and exact producer, then run actual host and both ABI paths
         shell: pwsh
         run: tools/net-tcp-priority/run-component.ps1
