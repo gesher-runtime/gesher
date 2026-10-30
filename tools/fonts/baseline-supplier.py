@@ -9,6 +9,7 @@ import subprocess
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ci'))
 from receipt_identity import identity_record, job_snapshot, run_snapshot
+from font_records import emit
 
 REPO = 'gesher-runtime/gesher'
 REPO_ID = '1426153186'
@@ -106,7 +107,9 @@ def main():
     target=args.destination.parent/(args.destination.name+'.receipt.json')
     require(not target.exists(), 'Supplier receipt path already exists')
     target.write_text(json.dumps(receipt,sort_keys=True)+'\n',encoding='utf-8')
-    print('FONT_COMPARISON_SUPPLIER_RECEIPT ' + json.dumps(receipt,sort_keys=True), flush=True)
+    emit('FONT_COMPARISON_SUPPLIER_METADATA',{key:value for key,value in receipt.items() if key!='members'})
+    for name,digest in members.items():emit('FONT_COMPARISON_SUPPLIER_MEMBER',{'role':args.role,'path':name,'sha256':digest})
+    emit('FONT_COMPARISON_SUPPLIER_RECEIPT',{'role':args.role,'path':str(target),'sha256':hashlib.sha256(target.read_bytes()).hexdigest(),'members':len(members)})
 
 
 if __name__ == '__main__':

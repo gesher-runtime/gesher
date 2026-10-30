@@ -1,6 +1,7 @@
 """CI-only comparison assembly with explicit fresh EXE, old-data and translator owners."""
 import argparse,hashlib,importlib.util,json,os,shutil,subprocess,xml.etree.ElementTree as ET
 from pathlib import Path
+from font_records import emit
 
 QUALIFIED='1bf8fad9ec3b423ddef8c97c1d72b25790974364'
 OLD='42076a8f28c0d23eee5b10ee0acf0844be0dc277'
@@ -83,7 +84,9 @@ def assemble(base,translator,fresh,destination,role):
   'translator_supplier':translator_receipt,
   'fresh_runtime_proof':fresh_record,'full_qualification':False}
  (destination/'font-runtime-assembly.json').write_text(json.dumps(record,sort_keys=True)+'\n',encoding='utf-8')
- print('FONT_RUNTIME_COMPARISON_ASSEMBLY '+json.dumps(record,sort_keys=True),flush=True)
+ for name,owner in owners.items():emit('FONT_RUNTIME_ASSEMBLY_OWNER',{'path':name,**owner})
+ for path,blob in compatible['interface_and_translator_input_blobs'].items():emit('FONT_RUNTIME_TRANSLATOR_ABI_INPUT',{'path':path,'blob':blob})
+ emit('FONT_RUNTIME_COMPARISON_ASSEMBLY',{'role':role,'context':record['verifier_context'],'manifest_sha256':sha(destination/'font-runtime-assembly.json'),'owned_files':len(owners),'base_source':base_receipt['source'],'translator_source':translator_receipt['source'],'full_qualification':False})
 def verify_assembly(root,role):
  record=json.loads((root/'font-runtime-assembly.json').read_text(encoding='utf-8'))
  runtime=load_module('fresh_core_runtime','core-runtime-manifest.py')
@@ -107,7 +110,7 @@ def verify_assembly(root,role):
    'sha256':proof['outputs'][name] if role=='current-utf8' else base['members'][name]}
  expected['gesher_arm64.dll']={'owner':'qualified-translator','source':QUALIFIED,'sha256':translator['members']['gesher_arm64.dll']}
  assert record['owners']==expected and inventory(root)=={**{p:r['sha256'] for p,r in expected.items()},'font-runtime-assembly.json':sha(root/'font-runtime-assembly.json')}
- print('FONT_RUNTIME_ASSEMBLY_VERIFIED '+json.dumps({'role':role,'context':record['verifier_context'],'owned_files':len(expected),'old_executables_in_current':False if role=='current-utf8' else None,'images':0},sort_keys=True),flush=True)
+ emit('FONT_RUNTIME_ASSEMBLY_VERIFIED',{'role':role,'context':record['verifier_context'],'manifest_sha256':sha(root/'font-runtime-assembly.json'),'owned_files':len(expected),'old_executables_in_current':False if role=='current-utf8' else None,'images':0})
  return record
 
 def main():
