@@ -15,9 +15,20 @@ def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 def member_bindings(map_text,link_text,inputs):
     normal=lambda p:posixpath.normpath(p.replace('\\','/'))
     allowed={normal(v['path']):v['sha256'] for v in inputs.values()}
+    origins={}
+    for path in re.findall(r'\bReading ([^\r\n]+\.a)\r?$',link_text,re.MULTILINE):
+        path=normal(path)
+        if posixpath.isabs(path):origins.setdefault(Path(path).name,set()).add(path)
     loaded=[]
     for archive,member,reason in re.findall(r'Loaded ([^\r\n]+?\.a)\(([^()\r\n]+)\) for ([^\r\n]+)',link_text):
         archive=normal(archive)
+        # This LLD prints full paths for archive Reading, but only basenames
+        # for member Loaded. Resolve that abbreviation only from one actual
+        # full-path Reading witness, never by prefixing an expected directory.
+        if archive in inputs:
+            candidates=origins.get(archive,set())
+            assert len(candidates)==1,'Missing/ambiguous actual archive Reading origin: '+archive
+            archive=next(iter(candidates))
         if Path(archive).name in inputs:
             assert archive in allowed,'Pthread member loaded outside the exact variant: '+archive
         loaded.append((archive,member,reason))
