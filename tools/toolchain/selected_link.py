@@ -198,11 +198,13 @@ def prove(trace, mapping, imports, data, cwd):
     target = PurePosixPath(data['compiler_root']) / 'x86_64-w64-mingw32'
     assert target.is_absolute()
     aliases = {str(target / n): h for n, h in data['authority']['files'].items() if n.endswith('.a')}
-    reading = set()
+    reading, direct_inputs = set(), set()
     for p in re.findall(r'\bReading ([^\r\n]+)\r?$', trace, re.MULTILINE):
         # Archive member Reading records are not archive origins.
         if p.endswith('.a'):
             reading.add(normalize_origin(p))
+        elif p.endswith(('.o', '.obj')):
+            direct_inputs.add(normalize_origin(p))
     loaded, all_loaded = set(), set()
     for archive, member in re.findall(r'\bLoaded (.+?\.a)\(([^()]+)\) for [^\r\n]+', trace):
         origins = {p for p in reading if PurePosixPath(p).name == PurePosixPath(archive).name}
@@ -243,6 +245,7 @@ def prove(trace, mapping, imports, data, cwd):
         # Actual pinned LLD GNU maps use bare member names. Match against ALL
         # loaded archives, not only the selected one, before trusting ownership.
         assert PurePosixPath(owner).name == owner and '(' not in owner, 'Unsupported/unreceipted map owner: ' + symbol
+        assert not any(PurePosixPath(p).name == owner for p in direct_inputs), 'Bare map owner collides with an actual direct object input'
         candidates = [(p, m) for p, m in all_loaded if PurePosixPath(m).name == owner]
         assert len(candidates) == 1, 'Map provider has no globally unique actual loaded member'
         origin, member = candidates[0]
