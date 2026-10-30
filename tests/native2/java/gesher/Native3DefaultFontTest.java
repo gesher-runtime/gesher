@@ -7,6 +7,8 @@ import android.graphics.Typeface;
 public final class Native3DefaultFontTest {
     public static void main(String[] args) {
         boolean baseline = args.length == 1 && args[0].equals("--expect-uninitialized");
+        System.out.println("FONT_MANAGED_BCP " + System.getProperty("java.boot.class.path"));
+        System.out.println("FONT_MANAGED_ARGV " + java.util.Arrays.toString(args));
         System.loadLibrary("android_runtime");
         try {
             Paint paint = new Paint();
