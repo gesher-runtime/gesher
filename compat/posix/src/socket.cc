@@ -406,6 +406,7 @@ int ToMsgFlags(int flags) {
 // MSG_DONTWAIT on a blocking socket: fail with EAGAIN unless the socket is
 // ready now. (Another thread may still take the data first.)
 bool WouldBlock(const SocketFd& state, int flags, int event) {
+  if (state.description->native_nonblocking_datagram) return false;
   if ((flags & MSG_DONTWAIT) == 0 || state.description->nonblocking.load()) return false;
   ws::PollEntry entry = {state.socket, event, 0, state.description};
   if (ws::Poll(&entry, 1, 0) > 0) return false;
@@ -420,7 +421,8 @@ ssize_t SendBuffers(int fd, ws::Buffer* buffers, size_t count, int flags,
   ws::Address to;
   if (addr != nullptr && (!ToAddress(addr, addrlen, &to) || !MapUnixPath(&to, false))) return -1;
   if (WouldBlock(state, flags, ws::kPollOut)) return -1;
-  return ws::Send(state.socket, buffers, count, ToMsgFlags(flags), addr != nullptr ? &to : nullptr);
+  return ws::SendOwned(state.socket, buffers, count, ToMsgFlags(flags), addr != nullptr ? &to : nullptr,
+                       state.description, (flags & MSG_DONTWAIT) != 0);
 }
 
 ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockaddr* addr,
@@ -431,8 +433,9 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
   if (flags & MSG_ERRQUEUE) return errno = EAGAIN, -1;
   if (WouldBlock(state, flags, ws::kPollIn)) return -1;
   ws::Address from;
-  ssize_t n = ws::Recv(state.socket, buffers, count, ToMsgFlags(flags),
-                       addr != nullptr ? &from : nullptr);
+  ssize_t n = ws::RecvOwned(state.socket, buffers, count, ToMsgFlags(flags),
+                            addr != nullptr ? &from : nullptr, state.description,
+                            (flags & MSG_DONTWAIT) != 0);
   if (n >= 0 && addr != nullptr) FromAddress(from, addr, addrlen);
   return n;
 }
@@ -443,6 +446,11 @@ bool ToBuffers(const struct msghdr* msg, std::vector<ws::Buffer>* buffers) {
     buffers->push_back({msg->msg_iov[i].iov_base, msg->msg_iov[i].iov_len});
   }
   return true;
+}
+
+void ReleaseCanceledBuffers(void* raw) {
+  std::vector<ws::Buffer> empty;
+  empty.swap(*static_cast<std::vector<ws::Buffer>*>(raw));
 }
 
 }  // namespace
@@ -464,8 +472,12 @@ ssize_t sendto(int fd, const void* buf, size_t len, int flags, const struct sock
 ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
   std::vector<ws::Buffer> buffers;
   if (!ToBuffers(msg, &buffers)) return -1;
-  return SendBuffers(fd, buffers.data(), buffers.size(), flags,
-                     static_cast<const sockaddr*>(msg->msg_name), msg->msg_namelen);
+  ssize_t result;
+  pthread_cleanup_push(ReleaseCanceledBuffers, &buffers);
+  result = SendBuffers(fd, buffers.data(), buffers.size(), flags,
+                       static_cast<const sockaddr*>(msg->msg_name), msg->msg_namelen);
+  pthread_cleanup_pop(0);
+  return result;
 }
 
 ssize_t recv(int fd, void* buf, size_t len, int flags) {
@@ -482,9 +494,12 @@ ssize_t recvfrom(int fd, void* buf, size_t len, int flags, struct sockaddr* addr
 ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
   std::vector<ws::Buffer> buffers;
   if (!ToBuffers(msg, &buffers)) return -1;
-  ssize_t n = RecvBuffers(fd, buffers.data(), buffers.size(), flags,
-                          static_cast<sockaddr*>(msg->msg_name),
-                          msg->msg_name != nullptr ? &msg->msg_namelen : nullptr);
+  ssize_t n;
+  pthread_cleanup_push(ReleaseCanceledBuffers, &buffers);
+  n = RecvBuffers(fd, buffers.data(), buffers.size(), flags,
+                 static_cast<sockaddr*>(msg->msg_name),
+                 msg->msg_name != nullptr ? &msg->msg_namelen : nullptr);
+  pthread_cleanup_pop(0);
   if (n >= 0) {
     msg->msg_controllen = 0;  // no ancillary data
     msg->msg_flags = 0;

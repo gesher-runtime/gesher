@@ -12,12 +12,15 @@
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
+#include <initializer_list>
+#include <atomic>
 #ifdef GESHER
 #include <sys/eventfd.h>
 #include "../../compat/posix/src/socket_internal.h"
-namespace gesher::test { int NativeUdpErrorControl(); void NativeSupplierRetirement(); void DumpOwnHandleTypes(int mode, uintptr_t caller = 0, uintptr_t observer = 0); }
+namespace gesher::test { int NativeUdpErrorControl(bool blocking); void NativeSupplierRetirement(); void DumpOwnHandleTypes(int mode, uintptr_t caller = 0, uintptr_t observer = 0); }
 #endif
 
 static void require(bool ok, const char* what) {
@@ -612,11 +615,35 @@ static void legacy_lifetime_controls() {
   }
   puts("PASS TCP priority: real legacy leases reject stale native calls after CRT reuse while global operations and getters progress");
 }
-static void native_udp_error_control() {
-  const int fd = gesher::test::NativeUdpErrorControl();
+static void native_udp_error_control(bool blocking = false) {
+  const int fd = gesher::test::NativeUdpErrorControl(blocking);
+  require(((fcntl(fd, F_GETFL) & O_NONBLOCK) == 0) == blocking, "imported UDP preserves its logical blocking hint");
   pollfd p{fd, POLLIN | POLLPRI, 0};
-  require(poll(&p, 1, 0) == 1 && (p.revents & POLLERR) && !(p.revents & POLLPRI), "positive UDP error is never filtered as a consumed TCP refusal");
+  const int initial = poll(&p, 1, 0);
+  printf("TCP_PRIORITY_NATIVE_UDP_PUBLIC blocking=%d stage=initial poll=%d revents=%d\n", blocking, initial, p.revents);
+  require(initial == 1 && (p.revents & POLLERR) && !(p.revents & POLLPRI), "positive UDP error is never filtered as a consumed TCP refusal");
+  const int alias = dup(fd);
+  require(alias >= 0, "imported UDP error alias");
+  for (int observation = 0; observation < 2; ++observation) {
+    pollfd error{alias, POLLPRI, 0};
+    require(poll(&error, 1, 0) == 1 && error.revents == POLLERR, "UDP error remains unconditional without read interest");
+    char byte{};
+    require(recv(alias, &byte, 1, MSG_PEEK | MSG_DONTWAIT) == -1 && errno == ECONNRESET,
+        "public UDP peek retains native error for the real caller");
+  }
   char byte{}; require(recv(fd, &byte, 1, MSG_DONTWAIT) == -1 && errno == ECONNRESET, "actual caller receives native UDP error");
+  p = {alias, POLLIN | POLLPRI, 0};
+  require(poll(&p, 1, 0) == 0 && p.revents == 0 &&
+      recv(alias, &byte, 1, MSG_DONTWAIT) == -1 && errno == EAGAIN,
+      "ordinary UDP error consumption is shared and does not resurrect old readiness");
+  require(send(alias, "v", 1, MSG_DONTWAIT) == 1, "new UDP ICMP-producing send after positively consumed error");
+  require(poll(&p, 1, 2000) == 1 && (p.revents & POLLERR) && !(p.revents & POLLPRI) &&
+      recv(fd, &byte, 1, MSG_DONTWAIT) == -1 && errno == ECONNRESET,
+      "new actual UDP error remains visible after prior token consumed");
+  p.revents = -1;
+  require(poll(&p, 1, 0) == 0 && p.revents == 0 && close(alias) == 0,
+      "second UDP error consumed once and alias closes");
+  printf("TCP_PRIORITY_NATIVE_UDP_PUBLIC blocking=%d stage=consumed-twice final_revents=%d new_error_after_clear=1\n", blocking, p.revents);
   require(close(fd) == 0, "native UDP positive input cleanup");
   puts("PASS TCP priority: positive native UDP error remains visible outside owned TCP refusal scope");
 }
@@ -897,6 +924,142 @@ static void alias_ownership() {
   require(close(challenger) == 0 && close(sender) == 0, "datagram alias cleanup");
   puts("PASS TCP priority: shared aliases preserve dup2 targets last-close EOF concurrent urgent poll and UDP payload");
 }
+// Identical public UDP checks run on Linux, the HOST and both guest ABIs.
+struct UdpConcurrentReader {
+  int fd; pthread_barrier_t* barrier;
+  int received = -99, error = -99; char byte = 0;
+};
+static void* udp_concurrent_reader(void* raw) {
+  auto& reader = *static_cast<UdpConcurrentReader*>(raw);
+  pthread_barrier_wait(reader.barrier);
+  reader.received = static_cast<int>(recv(reader.fd, &reader.byte, 1, 0));
+  reader.error = reader.received < 0 ? errno : 0;
+  return nullptr;
+}
+struct UdpEntryCancellation {
+  int fd, mode;
+  std::atomic<int> phase{0};
+  int cleanup = 0;
+};
+static void udp_entry_cleanup(void* raw) { ++static_cast<UdpEntryCancellation*>(raw)->cleanup; }
+static void* udp_entry_cancellation(void* raw) {
+  auto& call = *static_cast<UdpEntryCancellation*>(raw);
+  char bytes[8]{};
+  iovec parts[2]{{bytes, 3}, {bytes + 3, 5}};
+  msghdr message{}; message.msg_iov = parts; message.msg_iovlen = 2;
+  pthread_cleanup_push(udp_entry_cleanup, &call);
+  call.phase.store(1);
+  // No cancellation point before the real public I/O entry. The controller
+  // publishes a pending deferred request BEFORE allowing its vectors/snapshot
+  // to be constructed, so delivery exercises nonlocal resource cleanup.
+  while (call.phase.load() != 2) {}
+  if (call.mode == 0) recv(call.fd, bytes, sizeof(bytes), 0);
+  else if (call.mode == 1) recvmsg(call.fd, &message, 0);
+  else readv(call.fd, parts, 2);
+  pthread_cleanup_pop(0);
+  return reinterpret_cast<void*>(uintptr_t{1});
+}
+static void udp_owned_payload_controls() {
+  for (int version : {4, 6}) {
+    const int family = version == 4 ? AF_INET : AF_INET6;
+    int sender = socket(family, SOCK_DGRAM, 0), receiver = socket(family, SOCK_DGRAM, 0);
+    require(sender >= 0 && receiver >= 0, "owned UDP endpoints");
+    sockaddr_storage address{};
+    socklen_t size;
+    if (version == 4) {
+      auto* a = reinterpret_cast<sockaddr_in*>(&address);
+      a->sin_family = AF_INET; a->sin_addr.s_addr = htonl(INADDR_LOOPBACK); size = sizeof(*a);
+    } else {
+      auto* a = reinterpret_cast<sockaddr_in6*>(&address);
+      a->sin6_family = AF_INET6; a->sin6_addr = in6addr_loopback; size = sizeof(*a);
+    }
+    require(bind(receiver, reinterpret_cast<sockaddr*>(&address), size) == 0 &&
+        getsockname(receiver, reinterpret_cast<sockaddr*>(&address), &size) == 0, "owned UDP loopback address");
+    require(connect(sender, reinterpret_cast<sockaddr*>(&address), size) == 0, "owned UDP connected sender");
+    const int alias = dup(receiver);
+    require(alias >= 0 && !(fcntl(receiver, F_GETFL) & O_NONBLOCK), "owned UDP begins logically blocking");
+    int on = 1, off = 0;
+    require(ioctl(alias, FIONBIO, &on) == 0 && (fcntl(receiver, F_GETFL) & O_NONBLOCK) &&
+        ioctl(receiver, FIONBIO, &off) == 0 && !(fcntl(alias, F_GETFL) & O_NONBLOCK), "owned UDP alias logical mode shared");
+    timeval timeout{0, 75000};
+    require(setsockopt(alias, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0, "owned UDP receive timeout");
+    char actual[8192]{};
+    long long start = millis();
+    require(recv(receiver, actual, sizeof(actual), MSG_DONTWAIT) == -1 && errno == EAGAIN &&
+        millis() - start < 500, "owned UDP per-call nonblocking without alias mode mutation");
+    start = millis();
+    require(recv(alias, actual, sizeof(actual), 0) == -1 && errno == EAGAIN &&
+        millis() - start >= 30 && millis() - start < 1500, "owned UDP logical blocking retains finite timeout");
+    char expected[8192];
+    for (int i = 0; i < 8192; ++i) expected[i] = static_cast<char>((i * 37) % 251 + 1);
+    for (int length : {0, 1, 8192}) {
+      require(sendto(sender, expected, length, 0, reinterpret_cast<sockaddr*>(&address), size) == length,
+          "owned UDP sends exact zero or large datagram");
+      pollfd unrequested{alias, POLLPRI, 0}; start = millis();
+      require(poll(&unrequested, 1, 35) == 0 && unrequested.revents == 0 &&
+          millis() - start >= 15 && millis() - start < 1500, "owned UDP queued payload does not become unrequested readiness");
+      pollfd readable{receiver, POLLIN, 0};
+      require(poll(&readable, 1, 0) == 1 && readable.revents == POLLIN, "owned UDP immediate requested readability");
+      for (int peek = 0; peek < 2; ++peek) {
+        require(recv(alias, actual, sizeof(actual), MSG_PEEK | MSG_DONTWAIT) == length &&
+            !memcmp(actual, expected, static_cast<size_t>(length)), "owned UDP repeated full peek conserves exact bytes");
+      }
+      require(recv(receiver, actual, sizeof(actual), 0) == length &&
+          !memcmp(actual, expected, static_cast<size_t>(length)), "owned UDP ordinary read conserves exact message");
+      readable.revents = -1;
+      require(poll(&readable, 1, 0) == 0 && readable.revents == 0, "owned UDP payload consumed exactly once");
+    }
+    iovec sent[2]{{expected, 17}, {expected + 17, 31}};
+    iovec received[2]{{actual, 11}, {actual + 11, 37}};
+    require(writev(sender, sent, 2) == 48 && readv(alias, received, 2) == 48 &&
+        !memcmp(actual, expected, 48), "owned UDP vectored write/read preserves one datagram");
+    msghdr outgoing{}; outgoing.msg_iov = sent; outgoing.msg_iovlen = 2;
+    msghdr incoming{}; incoming.msg_iov = received; incoming.msg_iovlen = 2;
+    require(sendmsg(sender, &outgoing, 0) == 48 && recvmsg(receiver, &incoming, 0) == 48 &&
+        !memcmp(actual, expected, 48), "owned UDP message vector preserves one datagram");
+    require(write(sender, expected, 19) == 19 && read(alias, actual, sizeof(actual)) == 19 &&
+        !memcmp(actual, expected, 19), "owned UDP descriptor write/read preserves one datagram");
+    pthread_barrier_t barrier;
+    require(pthread_barrier_init(&barrier, nullptr, 3) == 0, "owned UDP reader barrier");
+    UdpConcurrentReader readers[2]{{receiver, &barrier}, {alias, &barrier}};
+    pthread_t threads[2];
+    require(sendto(sender, "r", 1, 0, reinterpret_cast<sockaddr*>(&address), size) == 1 &&
+        pthread_create(&threads[0], nullptr, udp_concurrent_reader, &readers[0]) == 0 &&
+        pthread_create(&threads[1], nullptr, udp_concurrent_reader, &readers[1]) == 0, "owned UDP two actual readers compete for one datagram");
+    pthread_barrier_wait(&barrier);
+    require(pthread_join(threads[0], nullptr) == 0 && pthread_join(threads[1], nullptr) == 0, "owned UDP both readers terminate");
+    int winners = 0, timed_out = 0;
+    for (const auto& reader : readers) {
+      winners += reader.received == 1 && reader.byte == 'r';
+      timed_out += reader.received == -1 && reader.error == EAGAIN;
+    }
+    require(winners == 1 && timed_out == 1 && pthread_barrier_destroy(&barrier) == 0,
+        "owned UDP concurrent consumption never blocks after stale readiness");
+    for (int mode = 0; mode < 3; ++mode) {
+      UdpEntryCancellation call{alias, mode};
+      pthread_t canceled;
+#ifdef GESHER
+      std::weak_ptr<gesher::ws::SocketDescription> ownership;
+      { gesher::SocketFd snapshot; require(gesher::LookupSocket(alias, &snapshot), "UDP cancellation exact description"); ownership = snapshot.description; }
+      const long references = ownership.use_count();
+#endif
+      require(pthread_create(&canceled, nullptr, udp_entry_cancellation, &call) == 0, "owned UDP pending-entry cancellation worker");
+      while (call.phase.load() != 1) {}
+      require(pthread_cancel(canceled) == 0, "queue deferred UDP cancellation before public I/O entry");
+      call.phase.store(2);
+      void* answer = nullptr;
+      require(pthread_join(canceled, &answer) == 0 && answer == PTHREAD_CANCELED && call.cleanup == 1,
+          "owned UDP public scalar/message/vector entry cancellation cleanup exactly once");
+      printf("UDP_ENTRY_CANCEL family=%d mode=%d cleanup=%d canceled=1\n", version, mode, call.cleanup);
+#ifdef GESHER
+      require(ownership.use_count() == references, "UDP cancellation releases caller snapshots without removing live OFD");
+#endif
+    }
+    require(!(fcntl(alias, F_GETFL) & O_NONBLOCK) && close(receiver) == 0 && close(alias) == 0 && close(sender) == 0,
+        "owned UDP shared flags and all endpoint cleanup");
+    printf("PASS owned UDP family=%d logical-blocking timeout alias zero/one/8192 peek conservation and concurrent reader\n", version);
+  }
+}
 int main(int argc, char** argv) {
 #ifdef GESHER
   if (argc == 2 && strcmp(argv[1], "--supplier-retirement-control") == 0) { gesher::test::NativeSupplierRetirement(); return 0; }
@@ -917,7 +1080,9 @@ int main(int argc, char** argv) {
   poll_native_error_controls();
   legacy_lifetime_controls();
   native_udp_error_control();
+  native_udp_error_control(true);
 #endif
+  udp_owned_payload_controls();
   failed_to_listener_control();
   alias_ownership();
   Pair a = pair(); pthread_t thread;

@@ -70,6 +70,7 @@ struct ConnectOperation;
 struct SocketDescription {
   std::atomic<ConnectState> state{ConnectState::kInitial};
   Provider provider = Provider::kOther;  // exact base-provider identity before publication
+  bool native_nonblocking_datagram = false;  // immutable after ownership registration
   uint64_t connect_generation = 0;  // error_mutex; never a numeric fd identity
   int connect_result = 0, connect_error = 0;  // completion / caller-unread token
   uint64_t refusal_generation = 0;  // positively completed ConnectEx refusal only
@@ -94,6 +95,7 @@ struct PollEntry {
 // Starts Winsock once; false (errno set) if it cannot.
 bool Startup();
 Provider ClassifyProvider(Socket s);  // exact provider identity, never SO_ERROR
+int ConfigureOwnedDatagram(Socket s);  // -1 failure, 0 other socket, 1 permanent native NB UDP
 
 Socket Open(Family family, Type type, int protocol, bool process_binding = true);
 int Close(Socket s, const std::shared_ptr<SocketDescription>& description = {}, bool retain_failure = false);
@@ -129,6 +131,12 @@ int DnsServers(uint32_t ifindex, std::vector<Address>* servers, uint32_t* select
 // Gather/scatter I/O; `to`/`from` may be null.
 ptrdiff_t Send(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to);
 ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from);
+// Owned UDP keeps native I/O nonblocking; logical blocking, timeout and caller
+// cancellation are implemented without changing the shared native socket mode.
+ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
+                    std::shared_ptr<SocketDescription>& description, bool dont_wait = false);
+ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
+                    std::shared_ptr<SocketDescription>& description, bool dont_wait = false);
 
 int GetOption(Socket s, Option option, int* value);
 int SetOption(Socket s, Option option, int value);

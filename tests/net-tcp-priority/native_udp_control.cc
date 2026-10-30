@@ -185,7 +185,7 @@ void NativeSupplierRetirement() {
   for (int cycle = 0; cycle != 4; ++cycle) { one(cycle, true); if (cycle == 0 || cycle == 3) DumpOwnHandleTypes(100 + cycle, 0, 0); }
   puts("PASS TCP supplier control: exact joined and detached retirement; product census unchanged");
 }
-int NativeUdpErrorControl() {
+int NativeUdpErrorControl(bool blocking) {
   require(ws::Startup(), "Winsock startup");
   auto bind_native = native<decltype(&::bind)>("bind");
   auto name_native = native<decltype(&::getsockname)>("getsockname");
@@ -201,7 +201,14 @@ int NativeUdpErrorControl() {
   require(bind_native(client, reinterpret_cast<sockaddr*>(&local), sizeof(local)) == 0, "client bind");
   BOOL report = TRUE; DWORD bytes = 0;
   require(WSAIoctl(client, SIO_UDP_CONNRESET, &report, sizeof(report), nullptr, 0, &bytes, nullptr, nullptr) == 0, "positive native error reporting input");
-  u_long mode = 1; require(ioctlsocket(client, FIONBIO, &mode) == 0, "actual native nonblocking input");
+  u_long mode = blocking ? 0 : 1;
+  require(ioctlsocket(client, FIONBIO, &mode) == 0, "exact actual native blocking-mode input");
+  if (blocking) {
+    auto option_native = native<decltype(&::setsockopt)>("setsockopt");
+    const DWORD timeout = 1000;
+    require(option_native(client, SOL_SOCKET, SO_RCVTIMEO,
+        reinterpret_cast<const char*>(&timeout), sizeof(timeout)) == 0, "bounded imported blocking native input");
+  }
   require(connect_native(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0 && closesocket(target) == 0, "real closed peer port");
   require(send_native(client, "u", 1, 0) == 1, "real loopback ICMP-producing datagram");
   WSAPOLLFD p{}; p.fd = client; p.events = POLLRDNORM | POLLRDBAND;
@@ -217,14 +224,14 @@ int NativeUdpErrorControl() {
     char byte{};
     int received = recv_native(client, &byte, 1, MSG_PEEK);
     int error = received == SOCKET_ERROR ? WSAGetLastError() : 0;
-    require(received == SOCKET_ERROR && error == WSAECONNRESET, "actual native UDP error persists through bounded nonblocking peek");
+    require(received == SOCKET_ERROR && error == WSAECONNRESET, "actual native UDP error persists through bounded peek");
     WSAPOLLFD repeat{}; repeat.fd = client; repeat.events = p.events;
     int repeated = WSAPoll(&repeat, 1, 0);
     require(repeated == 1 && repeat.revents == POLLRDNORM, "native reset readiness remains after observation");
     printf("TCP_PRIORITY_NATIVE_UDP_RESET observation=%d peek=%d error=%d repoll=%d revents=%d SO_ERROR=not-read\n",
         observation, received, error, repeated, repeat.revents); fflush(stdout);
   }
-  SocketFd state; state.socket = static_cast<ws::Socket>(client); state.initial_nonblocking = true;
+  SocketFd state; state.socket = static_cast<ws::Socket>(client); state.initial_nonblocking = !blocking;
   const int fd = RegisterSocket(state); require(fd >= 0, "production fd owns native error endpoint");
   return fd;
 }

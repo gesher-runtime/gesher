@@ -202,6 +202,12 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
   }
   if ($text -notmatch '(?m)^PASS TCP priority: listener datagram and successful connect preserve finite priority-only waits\s*$') { throw "Missing finite endpoint controls $Context" }
   if ($text -notmatch '(?m)^PASS TCP priority: shared aliases preserve dup2 targets last-close EOF concurrent urgent poll and UDP payload\s*$') { throw "Missing alias lifetime controls $Context" }
+  foreach ($family in 4,6) {
+    if ($text -notmatch "(?m)^PASS owned UDP family=$family logical-blocking timeout alias zero/one/8192 peek conservation and concurrent reader\r?$") { throw "Missing actual UDP data/timeout/reader controls $Context/$family" }
+    foreach ($mode in 0..2) {
+      if ($text -notmatch "(?m)^UDP_ENTRY_CANCEL family=$family mode=$mode cleanup=1 canceled=1\r?$") { throw "Missing actual UDP entry nonlocal cleanup $Context/$family/$mode" }
+    }
+  }
   if ($text -notmatch '(?m)^TCP_PRIORITY_ALIAS_DRAIN stream_recv=0 stream_error=0 before_last_close_recv=-1 before_last_close_error=11\r?$') { throw "Missing actual urgent stream drain and live last-alias control $Context" }
   foreach ($phase in 'old-target','replacement-source','urgent-drained') {
     if ($text -notmatch "(?m)^TCP_PRIORITY_ALIAS_EOF phase=$phase poll=1 revents=[0-9]+ recv=0 error=0\r?$") { throw "Missing strict actual last-alias EOF $Context/$phase" }
@@ -223,6 +229,11 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
   }
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: real legacy leases reject stale native calls after CRT reuse while global operations and getters progress\s*$') { throw 'Missing HOST actual legacy lifetime controls' }
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: positive native UDP error remains visible outside owned TCP refusal scope\s*$') { throw 'Missing HOST positive actual UDP error control' }
+  if ($Context -eq 'host-posix') {
+    foreach ($blocking in 0..1) {
+      if ($text -notmatch "(?m)^TCP_PRIORITY_NATIVE_UDP_PUBLIC blocking=$blocking stage=consumed-twice final_revents=0 new_error_after_clear=1\r?$") { throw "Missing HOST imported UDP ownership and real error consumption $blocking" }
+    }
+  }
   if ($Context -eq 'host-posix') {
     foreach ($mode in 0..3) {
       if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_WAIT mode=$mode .*native_retired=1\r?$") { throw "Missing HOST actual mode/cancel/deadline context $mode" }

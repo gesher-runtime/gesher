@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
+#include <pthread.h>
 #include <link.h>
 #include <sched.h>
 #include <signal.h>
@@ -220,7 +221,8 @@ int ioctl(int fd, unsigned long request, ...) {
       if (!gesher::LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
       std::lock_guard<std::mutex> lock(state.description->status_mutex);
       const bool on = *argp != 0;
-      if (gesher::ws::SetNonBlocking(state.socket, on) < 0) return -1;
+      if (!state.description->native_nonblocking_datagram &&
+          gesher::ws::SetNonBlocking(state.socket, on) < 0) return -1;
       state.description->nonblocking.store(on);
       return 0;
     }
@@ -289,7 +291,8 @@ int fcntl(int fd, int cmd, ...) {
           std::lock_guard<std::mutex> lock(state.description->status_mutex);
           const bool on = (arg & O_NONBLOCK) != 0;
           if (on != state.description->nonblocking.load()) {
-            if (gesher::ws::SetNonBlocking(state.socket, on) < 0) return -1;
+            if (!state.description->native_nonblocking_datagram &&
+                gesher::ws::SetNonBlocking(state.socket, on) < 0) return -1;
             state.description->nonblocking.store(on);
           }
         }
@@ -397,6 +400,11 @@ int fallocate(int fd, int mode, off_t offset, off_t len) {
 namespace {
 
 // readv/writev on a socket fd: one gather/scatter call.
+void ReleaseCanceledIoVector(void* raw) {
+  std::vector<gesher::ws::Buffer> empty;
+  empty.swap(*static_cast<std::vector<gesher::ws::Buffer>*>(raw));
+}
+
 bool SocketIo(int fd, const struct iovec* iov, int iovcnt, bool write, ssize_t* result) {
   gesher::SocketFd state;
   if (!gesher::LookupSocket(fd, &state)) return false;
@@ -407,8 +415,10 @@ bool SocketIo(int fd, const struct iovec* iov, int iovcnt, bool write, ssize_t* 
   }
   std::vector<gesher::ws::Buffer> buffers;
   for (int i = 0; i < iovcnt; ++i) buffers.push_back({iov[i].iov_base, iov[i].iov_len});
-  *result = write ? gesher::ws::Send(state.socket, buffers.data(), buffers.size(), 0, nullptr)
-                  : gesher::ws::Recv(state.socket, buffers.data(), buffers.size(), 0, nullptr);
+  pthread_cleanup_push(ReleaseCanceledIoVector, &buffers);
+  *result = write ? gesher::ws::SendOwned(state.socket, buffers.data(), buffers.size(), 0, nullptr, state.description)
+                  : gesher::ws::RecvOwned(state.socket, buffers.data(), buffers.size(), 0, nullptr, state.description);
+  pthread_cleanup_pop(0);
   return true;
 }
 

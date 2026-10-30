@@ -485,6 +485,19 @@ int SetNonBlocking(Socket s, bool on) {
   return ioctlsocket(static_cast<SOCKET>(s), FIONBIO, &mode) == 0 ? 0 : Fail();
 }
 
+int ConfigureOwnedDatagram(Socket s) {
+  WSAPROTOCOL_INFOW info{};
+  int length = sizeof(info);
+  if (Api().getsockopt(static_cast<SOCKET>(s), SOL_SOCKET, SO_PROTOCOL_INFOW,
+                      reinterpret_cast<char*>(&info), &length) != 0) return Fail();
+  if (length != static_cast<int>(sizeof(info))) return errno = EIO, -1;
+  if ((info.iAddressFamily != AF_INET && info.iAddressFamily != AF_INET6) ||
+      info.iSocketType != SOCK_DGRAM || info.iProtocol != IPPROTO_UDP) return 0;
+  // RegisterSocket transfers ownership, including a previously blocking native
+  // endpoint. Normalize once BEFORE publication; dup aliases retain this basis.
+  return SetNonBlocking(s, true) < 0 ? -1 : 1;
+}
+
 int Bind(Socket s, const Address& address, const std::shared_ptr<SocketDescription>& description) {
   std::unique_lock<std::mutex> native_call;
   if (description) {
@@ -512,7 +525,7 @@ int ConnectLegacy(Socket s, const Address& address, const std::shared_ptr<Socket
                   void (*before_native)(void*), void* context) {
   // These exact provider paths do not initiate a TCP handshake. Coordination
   // is separate from completion metadata, so poll/getters never wait on it.
-  const bool coordinated = description->provider == Provider::kNativeIpv4Udp ||
+  const bool coordinated = description->native_nonblocking_datagram ||
       (description->provider == Provider::kNativeIpv4Tcp && address.family == Family::kUnspec);
   if (!coordinated) {
     if (before_native) return errno = EOPNOTSUPP, -1;
@@ -927,6 +940,74 @@ ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from
 
 namespace {
 
+void ReleaseDatagramCaller(void* raw) {
+  // The normal caller owns this SocketFd reference. Deferred cancellation in
+  // the pinned -fno-exceptions build need not run its C++ destructor.
+  static_cast<std::shared_ptr<SocketDescription>*>(raw)->reset();
+}
+
+ptrdiff_t DatagramIo(Socket s, Buffer* buffers, size_t count, int flags,
+                     Address* from, const Address* to, bool writing,
+                     std::shared_ptr<SocketDescription>& description, bool dont_wait) {
+  const bool nonblocking = dont_wait || description->nonblocking.load();
+  int timeout = 0;
+  {
+    std::lock_guard<std::mutex> lock(description->error_mutex);
+    if (description->native_closed || description->native_closing) return errno = EBADF, -1;
+    if (GetOption(s, writing ? Option::kSndTimeo : Option::kRcvTimeo, &timeout) < 0) return -1;
+  }
+  const ULONGLONG deadline = timeout > 0 ? DeadlineAfter(timeout) : ~ULONGLONG{0};
+  ptrdiff_t result = -1;
+  int saved = 0;
+  pthread_cleanup_push(ReleaseDatagramCaller, &description);
+  for (;;) {
+    pthread_testcancel();  // no lock or temporary owning poll snapshot survives
+    {
+      std::lock_guard<std::mutex> lock(description->error_mutex);
+      if (description->native_closed || description->native_closing) {
+        result = -1; saved = EBADF;
+      } else {
+        // Permanent native nonblocking mode bounds this call even if another
+        // reader consumed readiness or an alias changed logical O_NONBLOCK.
+        result = writing ? Send(s, buffers, count, flags, to)
+                         : Recv(s, buffers, count, flags, from);
+        saved = errno;
+      }
+    }
+    if (result >= 0 || saved != EAGAIN || nonblocking) break;
+    int wait = 10;
+    if (deadline != ~ULONGLONG{0}) {
+      const int remaining = MillisUntil(deadline);
+      if (remaining == 0) { saved = EAGAIN; break; }
+      if (remaining < wait) wait = remaining;
+    }
+    {
+      PollEntry entry{s, writing ? kPollOut : kPollIn, 0, description};
+      if (Poll(&entry, 1, wait) < 0) { saved = errno; break; }
+    }  // release the snapshot before the next cancellation point
+  }
+  pthread_cleanup_pop(0);
+  errno = saved;
+  return result;
+}
+
+}  // namespace
+
+ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
+                    std::shared_ptr<SocketDescription>& description, bool dont_wait) {
+  if (!description->native_nonblocking_datagram) return Send(s, buffers, count, flags, to);
+  return DatagramIo(s, const_cast<Buffer*>(buffers), count, flags, nullptr, to, true,
+                    description, dont_wait);
+}
+
+ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
+                    std::shared_ptr<SocketDescription>& description, bool dont_wait) {
+  if (!description->native_nonblocking_datagram) return Recv(s, buffers, count, flags, from);
+  return DatagramIo(s, buffers, count, flags, from, nullptr, false, description, dont_wait);
+}
+
+namespace {
+
 bool ToWinOption(Option option, int* level, int* name) {
   switch (option) {
     case Option::kReuseAddr: *level = SOL_SOCKET; *name = SO_REUSEADDR; return true;
@@ -1053,6 +1134,7 @@ Provider ClassifyProvider(Socket s) {
 }
 
 int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver observer, void* context) {
+  const ULONGLONG sample_started = GetTickCount64();
   std::vector<WSAPOLLFD> fds(count);
   std::vector<bool> lifecycle_hup(count, false);
   std::vector<bool> owned_pending(count, false), closed(count, false);
@@ -1072,6 +1154,10 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
     fds[i].events = static_cast<SHORT>(((entries[i].events & kPollIn) != 0 ? POLLRDNORM : 0) |
                                        ((entries[i].events & kPollOut) != 0 ? POLLWRNORM : 0) |
                                        ((entries[i].events & kPollPri) != 0 ? POLLRDBAND : 0));
+    // Native UDP reports an unread reset as ordinary readability. Observe that
+    // channel even with no read interest: POSIX errors are unconditional.
+    if (entries[i].description && entries[i].description->native_nonblocking_datagram)
+      fds[i].events |= POLLRDNORM;
     if (closed[i]) { fds[i].revents = POLLNVAL; continue; }
     // Windows gates failed-connect ERR/HUP on normal interest, even though
     // those errors are unconditional in Linux poll. Arm write interest only
@@ -1151,6 +1237,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
     for (size_t k = 0; k < active.size(); ++k) fds[active_index[k]].revents = active[k].revents;
   } else if (wait > 0) Sleep(static_cast<DWORD>(wait));
   int ready = 0;
+  bool suppressed_datagram_read = false;
   for (size_t i = 0; i < count; ++i) {
     SHORT r = fds[i].revents;
     if (entries[i].description) {
@@ -1158,6 +1245,21 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
       auto& description = *entries[i].description;
       std::lock_guard<std::mutex> lock(description.error_mutex);
       if (description.native_closed || description.native_closing) r = POLLNVAL;
+      else if (description.native_nonblocking_datagram && (r & POLLRDNORM)) {
+        // A non-overlapped MSG_PEEK is supported here because registration
+        // fixed native UDP mode permanently nonblocking. The short closure
+        // transaction prevents a recycled numeric SOCKET from being queried.
+        // It never changes alias mode, reads SO_ERROR, or consumes a datagram.
+        char byte = 0;
+        Buffer buffer{&byte, 1};
+        const int saved = errno;
+        const ptrdiff_t peeked = Recv(entries[i].socket, &buffer, 1, kMsgPeek, nullptr);
+        const int error = errno;
+        errno = saved;
+        if (peeked < 0 && error == ECONNRESET) r = static_cast<SHORT>((r & ~POLLRDNORM) | POLLERR);
+        else if (peeked < 0 && error == EAGAIN) r = static_cast<SHORT>(r & ~POLLRDNORM);
+        if ((r & POLLRDNORM) && !(entries[i].events & kPollIn)) suppressed_datagram_read = true;
+      }
       else if (description.provider == Provider::kNativeIpv4Tcp && description.refusal_generation != 0 &&
                description.refusal_generation == description.connect_generation &&
                description.connect_result == ECONNREFUSED &&
@@ -1177,7 +1279,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
     }
     if (lifecycle_hup[i]) r |= POLLHUP;
     int out = 0;
-    if (r & POLLRDNORM) out |= kPollIn;
+    if ((r & POLLRDNORM) && (entries[i].events & kPollIn)) out |= kPollIn;
     if ((r & POLLRDBAND) && (entries[i].events & kPollPri)) out |= kPollPri;
     if ((r & POLLWRNORM) && (entries[i].events & kPollOut)) out |= kPollOut;
     if (r & POLLERR) out |= kPollErr;
@@ -1188,6 +1290,13 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
     if ((out & kPollHup) != 0 && (entries[i].events & kPollIn) != 0) out |= kPollIn;
     entries[i].revents = out;
     if (out != 0) ++ready;
+  }
+  if (ready == 0 && suppressed_datagram_read && timeout_ms != 0) {
+    // Queued user data with no requested read interest must not turn the outer
+    // finite poll loop into a busy loop. Retain this sample's original budget.
+    const ULONGLONG budget = wait < 0 ? 10 : static_cast<ULONGLONG>(wait);
+    const ULONGLONG elapsed = GetTickCount64() - sample_started;
+    if (elapsed < budget) Sleep(static_cast<DWORD>(budget - elapsed));
   }
   return ready;
 }

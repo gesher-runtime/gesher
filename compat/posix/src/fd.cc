@@ -133,6 +133,14 @@ int RegisterSocket(const SocketFd& state) {
     registered.description = std::make_shared<ws::SocketDescription>();
     registered.description->provider = ws::ClassifyProvider(state.socket);
     registered.description->nonblocking.store(state.initial_nonblocking);
+    const int datagram = ws::ConfigureOwnedDatagram(state.socket);
+    if (datagram < 0) {
+      const int saved = errno;
+      _close(fd);
+      ws::Close(state.socket);
+      return errno = saved, -1;
+    }
+    registered.description->native_nonblocking_datagram = datagram != 0;
   }
   Insert(fd, registered);
   return fd;
@@ -242,7 +250,7 @@ int read(int fd, void* buf, unsigned int count) {
     return gesher::CrtResult(_read(fd, buf, count));
   }
   gesher::ws::Buffer buffer = {buf, count};
-  return static_cast<int>(gesher::ws::Recv(state.socket, &buffer, 1, 0, nullptr));
+  return static_cast<int>(gesher::ws::RecvOwned(state.socket, &buffer, 1, 0, nullptr, state.description));
 }
 
 int write(int fd, const void* buf, unsigned int count) {
@@ -255,7 +263,7 @@ int write(int fd, const void* buf, unsigned int count) {
     return result;
   }
   gesher::ws::Buffer buffer = {const_cast<void*>(buf), count};
-  return static_cast<int>(gesher::ws::Send(state.socket, &buffer, 1, 0, nullptr));
+  return static_cast<int>(gesher::ws::SendOwned(state.socket, &buffer, 1, 0, nullptr, state.description));
 }
 
 int dup(int fd) {
