@@ -10,6 +10,7 @@
 #include <minikin/LocaleList.h>
 #include <minikin/SystemFonts.h>
 #include <tinyxml2.h>
+#include <windows.h>
 #include <include/core/SkData.h>
 #include <include/core/SkFontArguments.h>
 #include <include/core/SkStream.h>
