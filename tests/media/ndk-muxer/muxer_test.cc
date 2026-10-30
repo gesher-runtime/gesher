@@ -412,6 +412,26 @@ std::string Run() {
             (blocked ? "-blocked." : "-interleaved.") + test.suffix;
         Write(api, data, path, test.format, blocked, false, &report);
       }
+      if (test.format == AMEDIAMUXER_OUTPUT_FORMAT_WEBM) {
+        // Retain all video but end audio at one second. The writer must flush
+        // the remaining video after the shorter track has ended.
+        size_t audio = data.tracks.size();
+        for (size_t i = 0; i < data.tracks.size(); ++i) {
+          const char* mime = nullptr;
+          if (AMediaFormat_getString(data.tracks[i].get(), "mime", &mime) &&
+              mime != nullptr && std::strncmp(mime, "audio/", 6) == 0) audio = i;
+        }
+        report.Check(audio < data.tracks.size(), "webm-short-audio-track");
+        if (audio < data.tracks.size()) {
+          data.packets.erase(std::remove_if(data.packets.begin(), data.packets.end(),
+              [audio](const Packet& p) { return p.track == audio && p.time >= 1000000; }), data.packets.end());
+          for (bool blocked : {false, true}) {
+            Write(api, data, std::string(output) + "/" + test.input +
+                (blocked ? "-short-blocked.webm" : "-short-interleaved.webm"),
+                test.format, blocked, false, &report);
+          }
+        }
+      }
       if (test.format == AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4) {
         Write(api, data, std::string(output) + "/h264-aac-delete-active.mp4", test.format, false, true, &report);
       }

@@ -51,28 +51,37 @@ function CheckMuxer([string] $Abi, [string] $Mode, [string] $Caller, $Result, [s
   $parts = @([regex]::Matches($text, '(?m)^(?:MediaMuxerActivity: )?media4 muxer [^\r\n]+: ok\r?$'))
   $fds = @([regex]::Matches($text, '(?m)^(?:MediaMuxerActivity: )?media4 muxer fd trace: [^\r\n]+$'))
   $outputs = @([regex]::Matches($text, '(?m)^(?:MediaMuxerActivity: )?media4 muxer output: [^\r\n]+$'))
-  if ($Result.Code -eq 0 -and $missing.Count -eq 0 -and $parts.Count -eq 18 -and
-      $fds.Count -eq 12 -and $outputs.Count -eq 10 -and -not $text.Contains('FAILED')) {
-    Write-Host "PASS  media4 muxer ($Abi; $Mode): ten typed APIs, actual FD modes, retained track ownership, sample offsets, state errors and ten encoded containers including delete-active finalization"
+  if ($Result.Code -eq 0 -and $missing.Count -eq 0 -and $parts.Count -eq 24 -and
+      $fds.Count -eq 12 -and $outputs.Count -eq 14 -and -not $text.Contains('FAILED')) {
+    Write-Host "PASS  media4 muxer ($Abi; $Mode): ten typed APIs, actual FD modes, retained track ownership, sample offsets, state errors and fourteen encoded containers including delete-active and shorter audio"
   } else {
-    Write-Host "FAIL  media4 muxer ($Abi; $Mode): exit $($Result.Code), parts $($parts.Count)/18, FD controls $($fds.Count)/12, outputs $($outputs.Count)/10, missing $($missing -join ' | ')"
+    Write-Host "FAIL  media4 muxer ($Abi; $Mode): exit $($Result.Code), parts $($parts.Count)/24, FD controls $($fds.Count)/12, outputs $($outputs.Count)/14, missing $($missing -join ' | ')"
     Write-Host $text
     $script:failed++
   }
   foreach ($line in @($text -split "`r?`n" | Where-Object { $_ -match 'media4 muxer (ABI:|caller:|Ogg boundary:|fd trace:|invalid-fd trace:|unsupported trace:|empty trace:|output:|write failure:|[^\r\n]+: ok)' })) {
     Write-Host "INFO  media4 muxer ($Abi; $Mode): $line"
   }
-  $verification = InvokeMuxer "$Dir/media_muxer_verify.exe" @((NoDrive $Output)) @{} 180
+  $verification = InvokeMuxer "$Dir/media_muxer_verify.exe" @((NoDrive $Output), (NoDrive "$mxDir/fixtures")) @{} 180
   $containers = @([regex]::Matches($verification.Text, '(?m)^media4 muxer verify actual-container-decode [^\r\n]+: ok\r?$'))
-  if ($verification.Code -eq 0 -and $containers.Count -eq 10 -and
+  if ($verification.Code -eq 0 -and $containers.Count -eq 14 -and
       $verification.Text.Contains('media4 muxer independent verification: 0 failure(s)')) {
-    Write-Host "PASS  media4 muxer ($Abi; $Mode): independent AOSP extractors decode all ten containers, exact 60-frame colors, actual tones, rotation and ISO-6709 location"
+    Write-Host "PASS  media4 muxer ($Abi; $Mode): independent AOSP extractors decode fourteen containers, compare WebM packets and PTS, seek and decode, rotation and ISO-6709 location"
   } else {
-    Write-Host "FAIL  media4 muxer ($Abi; $Mode): independent output verification exit $($verification.Code), containers $($containers.Count)/10"
+    Write-Host "FAIL  media4 muxer ($Abi; $Mode): independent output verification exit $($verification.Code), containers $($containers.Count)/14"
     $script:failed++
   }
   foreach ($line in @($verification.Text -split "`r?`n" | Where-Object { $_ })) {
     Write-Host "INFO  media4 muxer ($Abi; $Mode): $line"
+  }
+  $cueAudit = InvokeMuxer (Get-Command python).Source @(
+    "$PSScriptRoot/../../media/ndk-muxer/verify-webm-cues.py", (NoDrive $Output)) @{} 30
+  Write-Host $cueAudit.Text
+  if ($cueAudit.Code -eq 0 -and $cueAudit.Text.Contains('webm cue verification: 0 failures')) {
+    Write-Host "PASS  media4 muxer ($Abi; $Mode): WebM cue points address video clusters"
+  } else {
+    Write-Host "FAIL  media4 muxer ($Abi; $Mode): WebM cue structure exit $($cueAudit.Code)"
+    $script:failed++
   }
   $decodedOgg = [regex]::Match($verification.Text, 'audio trace: [^\r\n]*opus-interleaved\.ogg; [^\r\n]*frames (\d+)')
   $decodedFrames = if ($decodedOgg.Success) { $decodedOgg.Groups[1].Value } else { '-1' }

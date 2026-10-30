@@ -104,6 +104,9 @@ PINNED_SOURCE.update({'tests/native3-locks/command_oracle.py': 'c0655cce6466619b
 # TSF/Services source qualified by 408805 and 408811; runner-console trust is bounded.
 PINNED_SOURCE.update({'.github/workflows/services-geocoder-worker-component.yml': 'a96e2b1aee0b45a809dfb25ca705eb13859d1c40', '.github/workflows/tsf-format-component.yml': 'a3b2021a2df42316a46d4849eb499fb5b1842a7e', 'tools/windows4/TsfJobSupervisor.cs': '625be4d5906bb48dd02d6103382fd2e85ac88738', 'tools/windows4/TsfJobWorker.cs': 'e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1', 'tools/windows4/diagnose-pwsh-job.ps1': '6956c0d1714f17761dc756c17f72cb8d119fe306', 'tools/windows4/test-tsf-job-supervisor.ps1': 'e290479e7b81fbd8f9d8705687c84fb084b789e9'})
 
+MEDIA4_PINS = {'tests/media/ndk-muxer/muxer_test.cc': '66c58b32f1d51ffd70a0bbed99986063682ac095', 'tests/media/ndk-muxer/verify_output.cc': '5575a7573fc08bf9f9a98929bf4e7b0f6bcaf423', 'tests/media/ndk-muxer/verify-webm-cues.py': 'ad24652a7c34be72d4869775a52afb778afd16e1', 'tests/windows/tracks/79-media4-muxer.ps1': '9f82ca9f402a782bb62228de08c06a790be66cd2'}
+PINNED_SOURCE.update(MEDIA4_PINS)
+
 TARGETS = ('native3_lock_command_worker', 'native3_lock_duplicate_test', 'binderd')
 HOST_FILES = {name + suffix for name in TARGETS for suffix in ('.exe', '.imports.txt')}
 REFERENCE_FILES = {'linux-reference.json'}
@@ -166,6 +169,7 @@ def main():
         allowed = {'.github/workflows/ci.yml', 'tools/native3-locks/union_payload.py', '.github/workflows/tsf-format-component.yml', '.github/workflows/services-geocoder-worker-component.yml', '.github/workflows/native3-locks-blocking.yml', 'tools/native3-locks/union_blocking_guard.py', 'tools/windows4/run-tsf-union.ps1', 'tools/windows4/TsfJobSupervisor.cs', 'tools/windows4/TsfJobWorker.cs', 'tools/windows4/diagnose-pwsh-job.ps1', 'tools/windows4/test-tsf-job-supervisor.ps1', '.github/workflows/coherent-union-trusted-source.yml', '.github/workflows/combined-full-trusted-source.yml', '.github/workflows/native2.yml', '.github/workflows/net-udp-component.yml', '.github/workflows/net-udp-fault-observer.yml', 'compat/posix/src/socket.cc', 'compat/posix/src/socket_internal.h', 'compat/posix/src/socket_user_copy.h', 'compat/posix/src/winsock.cc', 'tests/dex-services/gesher/services/BinderTest.java', 'tests/native2/net_udp_copy_observer.c', 'tests/native2/net_udp_fault_observer.c', 'tests/native2/net_udp_guarded_copy_probe.cpp', 'tests/native2/net_udp_trunc.cpp', 'tests/windows/tracks/50-services.ps1', 'tests/windows/tracks/58-devices.ps1', 'tests/windows/tracks/89-net-udp-trunc.ps1', 'tools/net-udp-component/payload.py', 'tools/net-udp-component/source.json', 'tools/net-udp/payload.py'}
         allowed.update(['tests/native3-locks/command_oracle.py', 'tests/native3-locks/command_worker.cc', 'tests/native3-locks/stdio_sink_oracle.py', 'tests/native3-locks/test_command_cleanup.py', 'tools/native3-locks/StdioSinkSupervisor.cs'])
         allowed.update(MERGED_DNS_SOURCE)
+        allowed.update(MEDIA4_PINS)
         allowed.add('.github/workflows/net-combined-dns-trusted-source.yml')
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
                       ':(exclude)docs/**'], cwd=ROOT, text=True).splitlines())
@@ -173,6 +177,17 @@ def main():
         for name, expected in PINNED_SOURCE.items():
             actual = subprocess.check_output(['git', 'hash-object', name], cwd=ROOT, text=True).strip()
             assert actual == expected, ('Selected source differs from reviewed leaf/adaptation', name, actual)
+        # Exercise the same comparisons with a forged blob for each new leaf.
+        actual_media = {name: subprocess.check_output(['git', 'hash-object', name], cwd=ROOT, text=True).strip()
+                        for name in MEDIA4_PINS}
+        assert actual_media == MEDIA4_PINS
+        for name in MEDIA4_PINS:
+            mutant = dict(actual_media)
+            mutant[name] = '0' * 40
+            assert mutant != MEDIA4_PINS, ('Mutation was not rejected', name)
+            print('MEDIA4_PREFLIGHT_NEGATIVE blob=' + name + ' rejected', flush=True)
+        assert not (changed | {'tests/media/ndk-muxer/unreviewed.py'}) <= allowed
+        print('MEDIA4_PREFLIGHT_NEGATIVE unauthorized_path rejected', flush=True)
         print(f'COHERENT_NATIVE_AOT_SOURCE base={base} source={context["source"]} pinned_blobs={len(PINNED_SOURCE)} non_doc_paths={len(changed)} unexpected_delta=0', flush=True)
     elif args.mode == 'reference':
         assert not args.reference.exists(), 'Reference destination must be absent'
