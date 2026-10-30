@@ -105,7 +105,7 @@ def host_role(build, llvm, role, output):
 
 
 def supplier(source, llvm, role):
-    assert role in {'production', 'fault', 'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}
+    assert role in {'production', 'fault', 'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}
     assert os.environ.get('GITHUB_ACTIONS') == 'true'
     result = {key: os.environ[key] for key in (
         'GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY')}
@@ -116,7 +116,7 @@ def supplier(source, llvm, role):
              'lib/libpthread.dll.a', 'bin/libwinpthread-1.dll',
              'share/mingw32/COPYING.winpthreads.txt']
     files += ['include/' + p.name for p in (source / 'mingw-w64-libraries/winpthreads/include').glob('*.h')]
-    result.update(role={'production': 'gesher-winpthreads-authority-v1', 'fault': 'gesher-winpthreads-authority-fault-v1', 'probe': 'gesher-winpthreads-authority-routing-probe-v1', 'probe-fault': 'gesher-winpthreads-authority-routing-probe-fault-v1', 'probe-legacy': 'gesher-winpthreads-authority-routing-probe-legacy-v1', 'probe-reaper': 'gesher-winpthreads-authority-routing-probe-reaper-v1'}[role], pin=PIN,
+    result.update(role={'production': 'gesher-winpthreads-authority-v1', 'fault': 'gesher-winpthreads-authority-fault-v1', 'probe': 'gesher-winpthreads-authority-routing-probe-v1', 'probe-fault': 'gesher-winpthreads-authority-routing-probe-fault-v1', 'probe-legacy': 'gesher-winpthreads-authority-routing-probe-legacy-v1', 'probe-reaper': 'gesher-winpthreads-authority-routing-probe-reaper-v1', 'probe-resource': 'gesher-winpthreads-authority-routing-probe-resource-v1'}[role], pin=PIN,
                   files={name: sha(target / name) for name in files},
                   source_files={str(p.relative_to(source)): sha(p) for p in
                       (source / 'mingw-w64-libraries/winpthreads').rglob('*') if p.is_file()},
@@ -134,43 +134,48 @@ def supplier(source, llvm, role):
         assert symbol in output, name
         for hook in ('gesher_winpthread_cpu_test_control_v1', 'gesher_winpthread_exit_test_v1', 'gesher_host_cpu_clock_test_exhaust_ids_v1'):
             assert (hook in output) == (role in {'fault', 'probe-fault'}), 'Supplier test symbol role mismatch'
+        for resource in ('gesher_resource_lease_probe_v1','gesher_resource_fault_probe_v1'):
+            assert (resource in output) == (role == 'probe-resource'), 'Resource symbol role mismatch'
         for reaper in ('gesher_reaper_start_v1','gesher_reaper_stop_v1','gesher_reaper_observe_v1','gesher_reaper_fault_v1'):
             assert (reaper in output) == (role == 'probe-reaper'), 'Reaper symbol role mismatch'
-        assert ('gesher_pthread_identity_probe_v6' in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'Probe symbol role mismatch'
-        assert ('gesher_sync_probe_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'Sync probe symbol role mismatch'
-        assert ('gesher_alias_gate_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'Alias gate role mismatch'
-        assert ('gesher_admission_probe_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'Admission probe role mismatch'
+        assert ('gesher_pthread_identity_probe_v6' in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'Probe symbol role mismatch'
+        assert ('gesher_sync_probe_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'Sync probe symbol role mismatch'
+        assert ('gesher_alias_gate_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'Alias gate role mismatch'
+        assert ('gesher_admission_probe_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'Admission probe role mismatch'
         for gate in ('gesher_rwlock_init_gate_v1',):
-            assert (gate in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'Sync init gate role mismatch'
-        assert ('gesher_wrapper_probe_gate_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'Wrapper gate role mismatch'
-        assert ('gesher_sched_probe_gate_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'Scheduler gate role mismatch'
+            assert (gate in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'Sync init gate role mismatch'
+        assert ('gesher_wrapper_probe_gate_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'Wrapper gate role mismatch'
+        assert ('gesher_sched_probe_gate_v1' in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'Scheduler gate role mismatch'
         for gate in ('gesher_key_probe_arm_v1', 'gesher_key_probe_hold_v1'):
-            assert (gate in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'Key gate role mismatch'
+            assert (gate in output) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'Key gate role mismatch'
         assert 'gesher_pthread_identity_probe_v1' not in output and 'gesher_pthread_identity_probe_v2' not in output and 'gesher_pthread_identity_probe_v3' not in output and 'gesher_pthread_identity_probe_v4' not in output and 'gesher_pthread_identity_probe_v5' not in output, 'Stale probe descriptor'
         result[name + ':symbols'] = output
     exports = command(str(llvm / 'bin/llvm-readobj'), '--coff-exports', str(target / 'bin/libwinpthread-1.dll'))
     assert symbol in exports
+    for resource in ('gesher_resource_lease_probe_v1','gesher_resource_fault_probe_v1'):
+        assert (resource in exports) == (role == 'probe-resource'), 'Resource export role mismatch'
     for hook in ('gesher_winpthread_cpu_test_control_v1', 'gesher_winpthread_exit_test_v1', 'gesher_host_cpu_clock_test_exhaust_ids_v1'):
         assert (hook in exports) == (role in {'fault', 'probe-fault'}), 'DLL fault export role mismatch'
     for reaper in ('gesher_reaper_start_v1','gesher_reaper_stop_v1','gesher_reaper_observe_v1','gesher_reaper_fault_v1'):
         assert (reaper in exports) == (role == 'probe-reaper'), 'Reaper export role mismatch'
-    assert ('gesher_pthread_identity_probe_v6' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'DLL probe export role mismatch'
-    assert ('gesher_sync_probe_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'DLL sync probe export role mismatch'
-    assert ('gesher_alias_gate_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'DLL alias gate role mismatch'
-    assert ('gesher_admission_probe_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'DLL admission probe role mismatch'
+    assert ('gesher_pthread_identity_probe_v6' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'DLL probe export role mismatch'
+    assert ('gesher_sync_probe_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'DLL sync probe export role mismatch'
+    assert ('gesher_alias_gate_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'DLL alias gate role mismatch'
+    assert ('gesher_admission_probe_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'DLL admission probe role mismatch'
     for gate in ('gesher_rwlock_init_gate_v1',):
-        assert (gate in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'DLL sync init gate role mismatch'
-    assert ('gesher_wrapper_probe_gate_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'DLL wrapper gate role mismatch'
-    assert ('gesher_sched_probe_gate_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'DLL scheduler gate role mismatch'
+        assert (gate in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'DLL sync init gate role mismatch'
+    assert ('gesher_wrapper_probe_gate_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'DLL wrapper gate role mismatch'
+    assert ('gesher_sched_probe_gate_v1' in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'DLL scheduler gate role mismatch'
     for gate in ('gesher_key_probe_arm_v1', 'gesher_key_probe_hold_v1'):
-        assert (gate in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'DLL key gate role mismatch'
+        assert (gate in exports) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'DLL key gate role mismatch'
     assert 'gesher_pthread_identity_probe_v1' not in exports and 'gesher_pthread_identity_probe_v2' not in exports and 'gesher_pthread_identity_probe_v3' not in exports and 'gesher_pthread_identity_probe_v4' not in exports and 'gesher_pthread_identity_probe_v5' not in exports, 'Stale probe descriptor'
     result['dll_exports'] = exports
     imports = command(str(llvm / 'bin/llvm-readobj'), '--coff-imports', str(target / 'bin/libwinpthread-1.dll'))
     result['dll_import_names'] = dll_imports(imports)
     result['dll_imports'] = imports
     build_log = (source / 'build/build-commands.log').read_text()
-    assert ('-DGESHER_PTHREAD_ROUTING_PROBE=1' in build_log) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'Probe compile role mismatch'
+    assert ('-DGESHER_PTHREAD_ROUTING_PROBE=1' in build_log) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'Probe compile role mismatch'
+    assert ('-DGESHER_RESOURCE_LEASE_PROBE=1' in build_log) == (role == 'probe-resource'), 'Resource flag mismatch'
     assert ('-DGESHER_REAPER_PROBE=1' in build_log) == (role == 'probe-reaper'), 'Reaper flag mismatch'
     assert ('-DGESHER_RWLOCK_ORIGINAL_RECHECK=1' in build_log) == (role == 'probe-legacy'), 'Original recheck role mismatch'
     rwlock_compile=[line for line in build_log.splitlines() if 'src/rwlock.c' in line and (' -c ' in line or ' -c	' in line)]
@@ -178,7 +183,7 @@ def supplier(source, llvm, role):
     assert all(('-DGESHER_RWLOCK_ORIGINAL_RECHECK=1' in line)==(role=='probe-legacy') for line in rwlock_compile), 'Rwlock compile role mismatch'
     dll_thread = [line for line in build_log.splitlines() if 'src/thread.c' in line and '-DDLL_EXPORT' in line]
     assert dll_thread, 'Missing actual DLL thread compile'
-    assert all(('-DGESHER_PTHREAD_ROUTING_PROBE=1' in line) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}) for line in dll_thread), 'DLL probe flag mismatch'
+    assert all(('-DGESHER_PTHREAD_ROUTING_PROBE=1' in line) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}) for line in dll_thread), 'DLL probe flag mismatch'
     layouts = re.findall(r'^\s*0 \| struct _pthread_v\n(.*?\[sizeof=\d+, align=\d+\])',
                          build_log, re.MULTILINE | re.DOTALL)
     assert layouts, 'No actual private ABI layout from this supplier compilation'
@@ -191,8 +196,8 @@ def supplier(source, llvm, role):
         assert re.search(r'\b' + field + r'\s*$', layout, re.MULTILINE), 'Missing ABI field: ' + field
     assert re.search(r'^\s*48 \|\s+HANDLE cpu_handle$', layout, re.MULTILINE)
     assert re.search(r'^\s*56 \|\s+unsigned long long cpu_generation$', layout, re.MULTILINE)
-    assert ('[sizeof=512, align=16]' if role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'} else '[sizeof=496, align=16]') in layout
-    assert ('keyval_generation' in layout) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper'}), 'Probe generation layout mismatch'
+    assert ('[sizeof=528, align=16]' if role == 'probe-resource' else '[sizeof=512, align=16]' if role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'} else '[sizeof=496, align=16]') in layout
+    assert ('keyval_generation' in layout) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'Probe generation layout mismatch'
     result['private_record_layout'] = '0 | struct _pthread_v\n' + layout
     (llvm / 'gesher-winpthreads-authority.json').write_text(json.dumps(result, indent=2, sort_keys=True))
 

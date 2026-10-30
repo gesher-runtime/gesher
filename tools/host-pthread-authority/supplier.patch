@@ -5418,3 +5418,323 @@
 +#endif
  #ifdef GESHER_PTHREAD_ROUTING_PROBE
          struct gesher_key_generation *record=gesher_key_new(dest);
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -492,4 +492,44 @@
+ }
+
++#ifdef GESHER_RESOURCE_LEASE_PROBE
++static unsigned long gesher_resource_clock_destroys, gesher_resource_record_retires;
++#endif
++static void gesher_close_start_event(_pthread_v *target)
++{
++#ifdef GESHER_RESOURCE_LEASE_PROBE
++  pthread_mutex_lock(&mtx_pthr_locked);
++#endif
++  if (target->evStart) CloseHandle(target->evStart);
++  target->evStart=NULL;
++#ifdef GESHER_RESOURCE_LEASE_PROBE
++  pthread_mutex_unlock(&mtx_pthr_locked);
++#endif
++}
++
++/* All target clock retirement paths pass through this helper. It never waits
++   for a target operation, including when invoked from native TLS teardown. */
++static int gesher_destroy_target_clock(_pthread_v *target)
++{
++#ifdef GESHER_RESOURCE_LEASE_PROBE
++  pthread_mutex_lock(&mtx_pthr_locked);
++  if (target->operation_refs) {
++    target->clock_destroy_pending=1;
++    pthread_mutex_unlock(&mtx_pthr_locked);
++    return 1;
++  }
++#endif
++#ifdef GESHER_RESOURCE_LEASE_PROBE
++  if (pthread_mutex_destroy(&target->p_clock)) abort();
++  ++gesher_resource_clock_destroys;
++#else
++  pthread_mutex_destroy(&target->p_clock);
++#endif
++#ifdef GESHER_RESOURCE_LEASE_PROBE
++  target->clock_destroy_pending=0;
++  pthread_mutex_unlock(&mtx_pthr_locked);
++#endif
++  return 0;
++}
++
+ /* Save a _pthread_v element for reuse in pool.  */
+ static void
+@@ -500,5 +540,9 @@
+   pthread_mutex_lock (&mtx_pthr_locked);
+ #ifdef GESHER_PTHREAD_ROUTING_PROBE
+-  if (sv->cleanup_refs) {
++  if (sv->cleanup_refs
++#ifdef GESHER_RESOURCE_LEASE_PROBE
++      || sv->operation_refs
++#endif
++  ) {
+     if (sv->x) { __pthread_deregister_pointer(sv->x); sv->x=0; }
+     sv->pending_retire=1;
+@@ -525,4 +569,7 @@
+     free (sv->thread_name);
+   memset (sv, 0, sizeof(struct _pthread_v));
++#ifdef GESHER_RESOURCE_LEASE_PROBE
++  ++gesher_resource_record_retires;
++#endif
+   if (pthr_last == NULL)
+     pthr_root = pthr_last = sv;
+@@ -1188,10 +1235,8 @@
+ 	    {
+ 	      ReleaseThreadHandleAlias (t, t->h);
+-	      if (t->evStart)
+-		CloseHandle (t->evStart);
+-	      t->evStart = NULL;
++	      gesher_close_start_event(t);
+ 	      t->h = NULL;
+ 	    }
+-	  pthread_mutex_destroy (&t->p_clock);
++	  gesher_destroy_target_clock(t);
+ 	  replace_spin_keys (&t->spin_keys, new_spin_keys);
+ 	  push_pthread_mem (t);
+@@ -1201,7 +1246,5 @@
+       else if (t && t->ended == 0)
+ 	{
+-	  if (t->evStart)
+-	    CloseHandle(t->evStart);
+-	  t->evStart = NULL;
++	  gesher_close_start_event(t);
+ 	  t->ended = 1;
+ 	  _pthread_cleanup_dest (t->x);
+@@ -1212,5 +1255,5 @@
+ 		ReleaseThreadHandleAlias (t, t->h);
+ 	      t->h = NULL;
+-	      pthread_mutex_destroy(&t->p_clock);
++	      gesher_destroy_target_clock(t);
+ 	      replace_spin_keys (&t->spin_keys, new_spin_keys);
+ 	      push_pthread_mem (t);
+@@ -1219,13 +1262,11 @@
+ 	      return;
+ 	    }
+-	  pthread_mutex_destroy(&t->p_clock);
++	  gesher_destroy_target_clock(t);
+ 	  replace_spin_keys (&t->spin_keys, new_spin_keys);
+ 	}
+       else if (t)
+ 	{
+-	  if (t->evStart)
+-	    CloseHandle (t->evStart);
+-	  t->evStart = NULL;
+-	  pthread_mutex_destroy (&t->p_clock);
++	  gesher_close_start_event(t);
++	  gesher_destroy_target_clock(t);
+ 	  replace_spin_keys (&t->spin_keys, new_spin_keys);
+ 	}
+@@ -2147,7 +2188,5 @@
+       pthread_mutex_lock (&mtx_pthr_locked);
+       rslt = (unsigned) (size_t) t->ret_arg;
+-      if (t->evStart)
+-        CloseHandle (t->evStart);
+-      t->evStart = NULL;
++      gesher_close_start_event(t);
+       t->ended = 1;
+       if (!t->h || (t->p_state & PTHREAD_CREATE_DETACHED))
+@@ -2157,5 +2196,5 @@
+             ReleaseThreadHandleAlias (t, t->h);
+           t->h = NULL;
+-          pthread_mutex_destroy (&t->p_clock);
++          gesher_destroy_target_clock(t);
+           replace_spin_keys (&t->spin_keys, new_spin_keys);
+           push_pthread_mem (t);
+@@ -2250,4 +2289,104 @@
+   pthread_mutex_unlock (&self->p_clock);
+ }
++
++#ifdef GESHER_RESOURCE_LEASE_PROBE
++struct gesher_target_lease { _pthread_v *target; HANDLE thread,event; };
++static int gesher_resource_fault_stage;
++static int gesher_target_acquire(pthread_t id,struct gesher_target_lease *lease)
++{
++  memset(lease,0,sizeof(*lease));
++  pthread_mutex_lock(&mtx_pthr_locked);
++  _pthread_v *target=__pthread_get_pointer(id);
++  if (!target || target->ended || target->pending_retire) {
++    pthread_mutex_unlock(&mtx_pthr_locked); return ESRCH;
++  }
++  if (target->operation_refs==UINT_MAX) abort();
++  if (!target->cpu_handle || !DuplicateHandle(GetCurrentProcess(),gesher_resource_fault_stage==1?NULL:target->cpu_handle,
++      GetCurrentProcess(),&lease->thread,0,FALSE,DUPLICATE_SAME_ACCESS)) {
++    lease->thread=NULL;
++    pthread_mutex_unlock(&mtx_pthr_locked); return EAGAIN;
++  }
++  if (target->evStart && !DuplicateHandle(GetCurrentProcess(),gesher_resource_fault_stage==2?NULL:target->evStart,
++      GetCurrentProcess(),&lease->event,0,FALSE,DUPLICATE_SAME_ACCESS)) {
++    if (!CloseHandle(lease->thread)) abort(); lease->thread=NULL; lease->event=NULL;
++    pthread_mutex_unlock(&mtx_pthr_locked); return EAGAIN;
++  }
++  ++target->operation_refs; lease->target=target;
++  pthread_mutex_unlock(&mtx_pthr_locked); return 0;
++}
++static void gesher_target_release(struct gesher_target_lease *lease)
++{
++  if (lease->event && !CloseHandle(lease->event)) abort();
++  if (lease->thread && !CloseHandle(lease->thread)) abort();
++  pthread_mutex_lock(&mtx_pthr_locked);
++  _pthread_v *target=lease->target;
++  if (!target || !target->operation_refs) abort();
++  if (--target->operation_refs==0) {
++    if (target->clock_destroy_pending) {
++      if (gesher_destroy_target_clock(target)) abort();
++      target->p_clock=PTHREAD_MUTEX_INITIALIZER;
++    }
++    if (target->pending_retire && !target->cleanup_refs) {
++      target->pending_retire=0; push_pthread_mem(target);
++    }
++  }
++  pthread_mutex_unlock(&mtx_pthr_locked);
++  memset(lease,0,sizeof(*lease));
++}
++/* Single-controller fault control, used only before the real held lease. */
++__declspec(dllexport) int __cdecl gesher_resource_fault_probe_v1(pthread_t id,int stage)
++{
++  if (stage!=1 && stage!=2) return EINVAL;
++  DWORD before=0,after=0;
++  if (!GetProcessHandleCount(GetCurrentProcess(),&before)) return 1;
++  gesher_resource_fault_stage=stage;
++  struct gesher_target_lease lease;
++  int result=gesher_target_acquire(id,&lease);
++  gesher_resource_fault_stage=0;
++  if (result!=EAGAIN || lease.target || lease.thread || lease.event) return 2;
++  pthread_mutex_lock(&mtx_pthr_locked);
++  _pthread_v *target=__pthread_get_pointer(id);
++  int valid=target && !target->operation_refs && target->evStart && target->cpu_handle;
++  pthread_mutex_unlock(&mtx_pthr_locked);
++  if (!valid || !GetProcessHandleCount(GetCurrentProcess(),&after) || before!=after) return 3;
++  return 0;
++}
++/* Test control: no public cancellation semantics are changed by this stage. */
++__declspec(dllexport) int __cdecl gesher_resource_lease_probe_v1(pthread_t id,
++    void *captured,void *resume,DWORD expected_exit)
++{
++  pthread_mutex_lock(&mtx_pthr_locked);
++  unsigned long before_clock=gesher_resource_clock_destroys, before_retire=gesher_resource_record_retires;
++  pthread_mutex_unlock(&mtx_pthr_locked);
++  struct gesher_target_lease lease;
++  int result=gesher_target_acquire(id,&lease);
++  if (result) return result;
++  if (!SetEvent((HANDLE)captured) || WaitForSingleObject((HANDLE)resume,5000)!=WAIT_OBJECT_0) {
++    gesher_target_release(&lease); return 1;
++  }
++  DWORD code=0;
++  if (WaitForSingleObject(lease.thread,0)!=WAIT_OBJECT_0 ||
++      !GetExitCodeThread(lease.thread,&code) || code!=expected_exit ||
++      !lease.event || WaitForSingleObject(lease.event,0)==WAIT_FAILED) {
++    gesher_target_release(&lease); return 2;
++  }
++  pthread_mutex_lock(&mtx_pthr_locked);
++  _pthread_v *target=lease.target;
++  int valid=target->pending_retire && target->clock_destroy_pending &&
++      target->operation_refs==1 && target->x==0 &&
++      target->p_clock!=PTHREAD_MUTEX_INITIALIZER;
++  pthread_mutex_unlock(&mtx_pthr_locked);
++  if (!valid || pthread_mutex_lock(&target->p_clock) || pthread_mutex_unlock(&target->p_clock)) {
++    gesher_target_release(&lease); return 3;
++  }
++  gesher_target_release(&lease);
++  pthread_mutex_lock(&mtx_pthr_locked);
++  unsigned long clocks=gesher_resource_clock_destroys-before_clock, retires=gesher_resource_record_retires-before_retire;
++  pthread_mutex_unlock(&mtx_pthr_locked);
++  if (clocks!=1 || retires!=1) return 4;
++  printf("RESOURCE_LAST_RELEASE clock_destroy_success=%lu record_retire_complete=%lu\n",clocks,retires);
++  return 0;
++}
++#endif
+
+ int
+@@ -2640,12 +2779,10 @@
+   rslt = (unsigned) (size_t) tv->ret_arg;
+   /* Make sure we free ourselves if we are detached */
+-  if (tv->evStart)
+-    CloseHandle (tv->evStart);
+-  tv->evStart = NULL;
++  gesher_close_start_event(tv);
+   if (!tv->h)
+     {
+       tv->valid = DEAD_THREAD;
+       pthread_mutex_unlock (&tv->p_clock);
+-      pthread_mutex_destroy (&tv->p_clock);
++      gesher_destroy_target_clock(tv);
+       /* Cleanup lazily creates spin_keys even without user keys. Retire it
+          under the registry lock before the pool zeroes its owning pointer. */
+@@ -2658,8 +2795,6 @@
+     {
+       pthread_mutex_unlock (&tv->p_clock);
+-      pthread_mutex_destroy (&tv->p_clock);
+-      /* Reinitialise p_clock, since there may be attempts at
+-         destroying it again in __dyn_tls_thread later on. */
+-      tv->p_clock = PTHREAD_MUTEX_INITIALIZER;
++      if (!gesher_destroy_target_clock(tv))
++        tv->p_clock = PTHREAD_MUTEX_INITIALIZER;
+       tv->ended = 1;
+     }
+@@ -2752,7 +2887,6 @@
+   if (!thrd)
+     {
+-      if (tv->evStart)
+-	CloseHandle (tv->evStart);
+-      pthread_mutex_destroy (&tv->p_clock);
++      gesher_close_start_event(tv);
++      gesher_destroy_target_clock(tv);
+       replace_spin_keys (&tv->spin_keys, new_spin_keys);
+       tv->evStart = NULL;
+@@ -2816,11 +2950,9 @@
+     WaitForSingleObject (tv->h, INFINITE);
+   ReleaseThreadHandleAlias (tv, tv->h);
+-  if (tv->evStart)
+-    CloseHandle (tv->evStart);
+-  tv->evStart = NULL;
++  gesher_close_start_event(tv);
+   /* Obtain return value */
+   if (res)
+     *res = tv->ret_arg;
+-  pthread_mutex_destroy (&tv->p_clock);
++  gesher_destroy_target_clock(tv);
+   replace_spin_keys (&tv->spin_keys, new_spin_keys);
+   push_pthread_mem (tv);
+@@ -2868,12 +3000,10 @@
+     }
+   ReleaseThreadHandleAlias (tv, tv->h);
+-  if (tv->evStart)
+-    CloseHandle (tv->evStart);
+-  tv->evStart = NULL;
++  gesher_close_start_event(tv);
+
+   /* Obtain return value */
+   if (res)
+     *res = tv->ret_arg;
+-  pthread_mutex_destroy (&tv->p_clock);
++  gesher_destroy_target_clock(tv);
+   replace_spin_keys (&tv->spin_keys, new_spin_keys);
+
+@@ -2919,8 +3049,6 @@
+       if (tv->ended)
+ 	{
+-	  if (tv->evStart)
+-	    CloseHandle (tv->evStart);
+-	  tv->evStart = NULL;
+-	  pthread_mutex_destroy (&tv->p_clock);
++	  gesher_close_start_event(tv);
++	  gesher_destroy_target_clock(tv);
+ 	  replace_spin_keys (&tv->spin_keys, new_spin_keys);
+ 	  push_pthread_mem (tv);
+--- a/mingw-w64-libraries/winpthreads/src/thread.h
++++ b/mingw-w64-libraries/winpthreads/src/thread.h
+@@ -54,4 +54,8 @@
+ #ifdef GESHER_PTHREAD_ROUTING_PROBE
+     unsigned long long *keyval_generation;
++#ifdef GESHER_RESOURCE_LEASE_PROBE
++    unsigned operation_refs;
++    int clock_destroy_pending;
++#endif
+     unsigned cleanup_refs;
+     int pending_retire;

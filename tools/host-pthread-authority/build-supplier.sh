@@ -11,6 +11,7 @@ case "$role" in
   probe-fault) suffix=-probe-fault ;;
   probe-legacy) suffix=-probe-legacy ;;
   probe-reaper) suffix=-probe-reaper ;;
+  probe-resource) suffix=-probe-resource ;;
   *) exit 2 ;;
 esac
 root=$(git rev-parse --show-toplevel)
@@ -31,7 +32,8 @@ if test "$role" = fault || test "$role" = probe-fault; then
 fi
 export PATH="$llvm/bin:$PATH"
 supplier_cflags='-g -O2 -mguard=cf -Werror -Xclang -fdump-record-layouts'
-if test "$role" = probe || test "$role" = probe-fault || test "$role" = probe-legacy || test "$role" = probe-reaper; then supplier_cflags="$supplier_cflags -DGESHER_PTHREAD_ROUTING_PROBE=1"; fi
+if test "$role" = probe || test "$role" = probe-fault || test "$role" = probe-legacy || test "$role" = probe-reaper || test "$role" = probe-resource; then supplier_cflags="$supplier_cflags -DGESHER_PTHREAD_ROUTING_PROBE=1"; fi
+if test "$role" = probe-resource; then supplier_cflags="$supplier_cflags -DGESHER_RESOURCE_LEASE_PROBE=1"; fi
 if test "$role" = probe-reaper; then supplier_cflags="$supplier_cflags -DGESHER_REAPER_PROBE=1"; fi
 if test "$role" = probe-legacy; then supplier_cflags="$supplier_cflags -DGESHER_RWLOCK_ORIGINAL_RECHECK=1"; fi
 mkdir "$supplier/build"
