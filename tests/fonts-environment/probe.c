@@ -27,7 +27,9 @@ static void bytes(const char *view,const char *phase,const char *key,const char 
 static void snapshot(const char *phase,char **initial,const char *root,const char *override) {
   bytes("getenv",phase,"ANDROID_ROOT",getenv("ANDROID_ROOT"),root);
   bytes("getenv",phase,"GESHER_WINDOWS_FONTS",getenv("GESHER_WINDOWS_FONTS"),override);
-  // Read live environ afresh; never retain/traverse an earlier CRT array across mutation.
+  // Reload the guest environ pointer: JNI uses the live CRT slot; the ELF
+  // executable overrides it with its separate initial UTF8 array (ADR0074).
+  // Never retain/traverse an earlier CRT array across mutation.
   bytes("environ",phase,"ANDROID_ROOT",lookup(environ,"ANDROID_ROOT"),root);
   bytes("environ",phase,"GESHER_WINDOWS_FONTS",lookup(environ,"GESHER_WINDOWS_FONTS"),override);
   if(initial){bytes("initial_envp",phase,"ANDROID_ROOT",lookup(initial,"ANDROID_ROOT"),root);bytes("initial_envp",phase,"GESHER_WINDOWS_FONTS",lookup(initial,"GESHER_WINDOWS_FONTS"),override);}
