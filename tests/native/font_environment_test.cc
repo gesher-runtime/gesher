@@ -33,6 +33,21 @@ bool HeldCallback() noexcept;
 }
 void Require(bool value,const char* message){if(!value)Die(message);}
 FontEnvironmentKey Key(int key){return static_cast<FontEnvironmentKey>(key);}
+void InitialWide(int key,std::string_view mode){
+  wchar_t wide[512]{};SetLastError(ERROR_SUCCESS);
+  DWORD size=GetEnvironmentVariableW(kWideNames[key],wide,512),error=GetLastError();
+  Require(size<512,"bounded initial wide receipt");
+  std::printf("FONT_ENV_HOST_INITIAL_WIDE key=%s present=%d units=%lu error=%lu utf16=",kNames[key],!(size==0&&error==ERROR_ENVVAR_NOT_FOUND),size,error);
+  for(DWORD i=0;i<size;++i)std::printf("%s%04x",i?",":"",static_cast<unsigned>(wide[i]));
+  std::puts("");
+  if(mode=="missing"){Require(size==0&&error==ERROR_ENVVAR_NOT_FOUND,"actual missing OS value");return;}
+  if(mode=="empty"){Require(size==0&&error==ERROR_SUCCESS,"actual present empty OS value");return;}
+  const wchar_t invalid[]={static_cast<wchar_t>(0xd800),0};
+  std::wstring_view expected=mode=="wide"?std::wstring_view(L"initial-\u05d0\u05d1 space"):
+    mode=="supplementary"?std::wstring_view(L"initial-\U0001f600 space"):std::wstring_view(invalid,1);
+  Require(size==expected.size(),"actual initial UTF16 length");
+  for(DWORD i=0;i<size;++i)Require(wide[i]==expected[i],"actual initial UTF16 unit");
+}
 FontEnvironmentValue Check(int key,State state,std::string_view wanted){
   auto actual=gesher::ReadFontEnvironment(Key(key));
   Require(actual.state==state&&actual.value()==wanted,"snapshot state/bytes");return actual;
@@ -170,6 +185,7 @@ int main(int argc,char** argv){
   Require(mode=="wide"||mode=="missing"||mode=="empty"||mode=="invalid-wide"||mode=="supplementary","initial mode");
   State state=mode=="missing"?State::kAbsent:mode=="invalid-wide"?State::kError:State::kValue;
   std::string_view initial=mode=="wide"?kInitial:mode=="supplementary"?kSupplementary:"";
+  InitialWide(0,mode);InitialWide(1,mode);
   auto retained=Check(0,state,initial);Check(1,state,initial);
   if(mode=="invalid-wide"){
     auto files=gesher::SystemFontFiles();
