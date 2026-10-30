@@ -64,6 +64,10 @@ jobs:
            end=next(i for i,n in enumerate(main.body) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='reviewed' for t in n.targets))
            trusted['sha']=BASE;exec(compile(ast.Module(body=main.body[start:end],type_ignores=[]),'frozen-historical-assertions','exec'),trusted)
            actual=trusted['inventory'](BASE);expected=trusted['inventory'](trusted['COMBINED_BASE'])
+           old_framework=trusted['inventory']('42076a8f28c0d23eee5b10ee0acf0844be0dc277')
+           framework_input=lambda p:p.startswith(('patches/','config/','tools/framework/')) or p in ('.github/workflows/framework.yml','tools/fetch-aosp.sh')
+           require({p:b for p,b in old_framework.items() if framework_input(p)}=={p:b for p,b in actual.items() if framework_input(p)},'Old framework source/tool/patch inputs differ from current native baseline')
+           print('FONTS_CORE_FRAMEWORK_PAIRING old_framework_source=42076 current_native_source=00f framework_build_inputs=UNCHANGED full_current_framework_qualification=false',flush=True)
            for p,b in trusted['SOURCE_PINS'].items():expected[p]=(expected.get(p,('100644',''))[0],b)
            for p in (trusted['CALLER'],trusted['TRUST']):expected[p]=actual[p]
            trusted['verify_tree'](actual,expected);trusted['verify_selected'](actual,adapted=True)
