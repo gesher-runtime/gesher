@@ -21,6 +21,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <gesher/font_paths.h>
+#include <gesher/font_environment.h>
 
 #include <string>
 #include <cstdlib>
@@ -254,9 +255,10 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
 }
 
 NativeFontFiles SystemFontFiles() {
-  const char* root = std::getenv("ANDROID_ROOT");
-  if (root != nullptr && *root != '\0')
-    return {std::string(root) + "/etc/fonts.xml", std::string(root) + "/fonts"};
+  auto root = ReadFontEnvironment(FontEnvironmentKey::kAndroidRoot);
+  if (root.state == FontEnvironmentValue::State::kError) return {};
+  if (root.state == FontEnvironmentValue::State::kValue && !root.value().empty())
+    return {std::string(root.value()) + "/etc/fonts.xml", std::string(root.value()) + "/fonts"};
   std::wstring image(512, L'\0');
   for (;;) {
     DWORD size = GetModuleFileNameW(nullptr, image.data(), static_cast<DWORD>(image.size()));

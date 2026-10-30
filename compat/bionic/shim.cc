@@ -16,6 +16,7 @@
 
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
+#include <gesher/font_environment.h>
 
 #include <windows.h>
 // bcrypt.h needs windows.h first.
@@ -345,10 +346,16 @@ void BIONIC_SYSV SetAbortMessage(const char* msg) {
 
 char* BIONIC_SYSV Getenv(const char* name) { return std::getenv(name); }
 int BIONIC_SYSV Setenv(const char* name, const char* value, int overwrite) {
+  if (auto result = gesher::WriteFontEnvironment(name, value, overwrite))
+    return *result == 0 ? 0 : -1;
   if (!overwrite && std::getenv(name) != nullptr) return 0;
   return _putenv_s(name, value) == 0 ? 0 : -1;
 }
-int BIONIC_SYSV Unsetenv(const char* name) { return _putenv_s(name, "") == 0 ? 0 : -1; }
+int BIONIC_SYSV Unsetenv(const char* name) {
+  if (auto result = gesher::WriteFontEnvironment(name, "", 1))
+    return *result == 0 ? 0 : -1;
+  return _putenv_s(name, "") == 0 ? 0 : -1;
+}
 
 int BIONIC_SYSV Getpid() { return static_cast<int>(GetCurrentProcessId()); }
 int BIONIC_SYSV Gettid() { return static_cast<int>(GetCurrentThreadId()); }
