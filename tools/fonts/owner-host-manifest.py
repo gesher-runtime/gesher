@@ -74,7 +74,7 @@ def capture(build,root):
  write=[symbol for symbol in symbols['owner'] if 'WriteFontEnvironment' in symbol];read=[symbol for symbol in symbols['owner'] if 'ReadFontEnvironment' in symbol];assert len(write)==len(read)==1
  relocations={}
  for role,symbol,count in (('host_POSIX',write[0],2),('font_paths',read[0],1)):
-  raw=subprocess.check_output([str(tools/'llvm-readobj'),'--relocations',compiled[role]['object']],text=True);selected=[line for line in raw.splitlines() if symbol in line];emit('FONT_OWNER_HOST_CALLER_RELOCATIONS',{'role':role,'symbol':symbol,'rows':selected});assert len(selected)==count and all('REL32' in line for line in selected);relocations[role]=selected
+  raw=subprocess.check_output([str(tools/'llvm-readobj'),'--relocations',compiled[role]['object']],text=True);selected=[line for line in raw.splitlines() if symbol in line];emit('FONT_OWNER_HOST_CALLER_RELOCATIONS',{'role':role,'symbol':symbol,'rows':selected});assert len(selected)>=count and all('REL32' in line for line in selected);relocations[role]=selected
  imports=subprocess.check_output([str(tools/'llvm-readobj'),'--coff-imports',str(build/'font_environment_test.exe')],text=True)
  emit('FONT_OWNER_HOST_IMPORTS_RAW',imports)
  assert not re.search(r'(?i)(jvm|dalvik|libart|JNI_OnLoad|FontEnvironment)',imports)

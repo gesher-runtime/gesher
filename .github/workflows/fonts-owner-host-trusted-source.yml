@@ -1,0 +1,123 @@
+name: fonts-owner-host-trusted-source
+on:
+  workflow_call:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      FONTS_ENV_OWNER_HOST_CALLER_COMMIT: ${{ vars.FONTS_ENV_OWNER_HOST_CALLER_COMMIT }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify separate host authority and preserved complete ENV CORE full policy
+        shell: bash
+        run: |
+          python3 -I - <<'PY'
+          """Immutable cheap host-owner source scope; runtime/provider remain unqualified."""
+          import ast,copy,hashlib,json,os,re,subprocess,sys,textwrap,urllib.request
+          from pathlib import Path
+          BASE='a51e29776185da5c9da5d24c7f4a0b8b5aa24b4a'
+          ENV_GUARD='5d7f0bce3fac42123c6bce314580f46344b62d4b'
+          ENV_TRUST='.github/workflows/fonts-environment-trusted-source.yml'
+          ENV_GUARD_BLOB='70fee2d0f2bdfabddf611966f3ced7d647c5065f'
+          TEMPLATE='32629ee67b7e2345c3b8034ddb0baffeb838d4c6'
+          CALLER='.github/workflows/fonts-owner-host-component.yml'
+          TRUST='.github/workflows/fonts-owner-host-trusted-source.yml'
+          REPO='gesher-runtime/gesher'
+          EXTRA_PINS={'CMakeLists.txt': '71975d9729e34e21d2a797b536e329be1c60350c', 'compat/bionic/native_fonts.cc': 'fb682f51a95bfe48d8aa96128b21883b083361fd', 'compat/bionic/shim.cc': '3c12edac06d82f22730a9108b56893834d3cdc2d', 'compat/posix/include/gesher/font_environment.h': 'f05052cffa947a2e2acab6f904bf7c85691001cd', 'compat/posix/posix.cmake': 'cf8212d944289cb63dcc7bf3da36bd20c48b295c', 'compat/posix/src/font_environment.cc': '79c8a554702015991581b76d32ef50defbb90498', 'compat/posix/src/path.cc': '64da7ea2800ead4dab7bc739ca6d4864d9cf576d', 'compat/posix/src/unistd.cc': '9ae697b5d043ae1545feca256acdfa1d1996a03d', 'tests/native/font_environment_test.cc': '19e7d4e064b58a82eb18d84674ac2b99549e0a16', 'tools/fonts/owner-host-manifest.py': 'edcc9cb4d87652d673fa78c0d0add93cbca35ece', 'tools/fonts/run-owner-host.ps1': '4754c826e95f006b3809b5c7ae70e66d5cedfc8b', 'tools/fonts/test-owner-host-arguments.ps1': '0ecd5c1d0e9f58d468c0788d4e05567acd4c2707'}
+          def require(value,message):
+           if not value:raise RuntimeError(message)
+          def git(*args):return subprocess.check_output(['git',*args])
+          def reject(label,fn):
+           try:fn()
+           except (RuntimeError,KeyError):print('FONT_OWNER_HOST_NEGATIVE '+label+'=rejected',flush=True)
+           else:raise RuntimeError('Negative accepted: '+label)
+          def frozen_environment():
+           raw=git('show',ENV_GUARD+':'+ENV_TRUST)
+           require(hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==ENV_GUARD_BLOB and raw==git('show',BASE+':'+ENV_TRUST),'Immutable environment guard differs')
+           code=textwrap.dedent(raw.decode().split("          python3 -I - <<'PY'\n",1)[1].rsplit('\n          PY',1)[0]);tree=ast.parse(code)
+           defs=[n for n in tree.body if not(isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name) and n.value.func.id=='main')]
+           env={};exec(compile(ast.Module(body=defs,type_ignores=[]),'immutable-environment-guard','exec'),env)
+           full=env['frozen_core']();inventory=full['inventory'];expected=inventory(env['BASE']);actual=inventory(BASE)
+           for p,b in env['EXTRA_PINS'].items():expected[p]=(expected.get(p,('100644',''))[0],b)
+           for p in (env['CALLER'],env['TRUST']):expected[p]=actual[p]
+           full['verify_tree'](actual,expected)
+           for p in env['EXTRA_PINS']:
+            bad=copy.deepcopy(actual);bad[p]=('100644','0'*40);reject('frozen_environment_blob_'+p,lambda:full['verify_tree'](bad,expected))
+           bad=copy.deepcopy(actual);bad['tools/fonts/forged.py']=('100644','0'*40);reject('frozen_environment_unknown',lambda:full['verify_tree'](bad,expected))
+           template=git('show',env['TEMPLATE']+':'+env['CALLER']);needle=b'fonts-environment-trusted-source.yml@'+b'0'*40
+           require(template.count(needle)==1 and git('show',BASE+':'+env['CALLER'])==template.replace(needle,b'fonts-environment-trusted-source.yml@'+ENV_GUARD.encode()),'Frozen ENV DAG/selfpin differs')
+           print('FONT_OWNER_HOST_FROZEN_SOURCE full_CORE_ENV=UNCHANGED base='+BASE+' environment_pins='+str(len(env['EXTRA_PINS']))+' runtime_provider_qualification=false',flush=True)
+           return full
+
+          def run_identity(run,source,run_id,attempt,event):
+           require(run['repository']['full_name']==run['head_repository']['full_name']==REPO and run['repository']['id']==run['head_repository']['id']==1426153186,'Wrong host component repositories')
+           require(str(run['id'])==run_id and str(run['run_attempt'])==attempt and run['head_sha']==source,'Wrong host component source/run/attempt')
+           require(run['name']=='fonts-owner-host-component' and run['path']==CALLER and run['event']==event and event in ('push','workflow_dispatch') and run['head_branch']=='wip/fonts-environment-owned','Wrong host component workflow/event/ref')
+          def caller_authority(value):
+           require(bool(re.fullmatch('[0-9a-f]{40}',value)),'Missing dedicated host caller authority')
+           require(git('cat-file','-t',value).strip()==b'commit','Host authority is not a commit')
+           return git('show',value+':'+CALLER)
+          def main():
+           require(os.environ.get('GITHUB_ACTIONS')=='true' and os.environ['GITHUB_REPOSITORY']==REPO,'CI repository only')
+           source=os.environ['GITHUB_SHA'];run_id=os.environ['GITHUB_RUN_ID'];attempt=os.environ['GITHUB_RUN_ATTEMPT'];event=os.environ['GITHUB_EVENT_NAME']
+           require(os.environ['GITHUB_REF']=='refs/heads/wip/fonts-environment-owned' and git('rev-parse','HEAD').decode().strip()==source,'Wrong host source/ref')
+           request=urllib.request.Request('https://api.github.com/repos/'+REPO+'/actions/runs/'+run_id,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+           with urllib.request.urlopen(request,timeout=60) as response:run=json.load(response)
+           print('FONT_OWNER_HOST_RUN_IDENTITY '+json.dumps({'expected':{'source':source,'run':run_id,'attempt':attempt,'workflow':'fonts-owner-host-component','path':CALLER,'repository':REPO},'received':{key:run.get(key) for key in ('id','run_attempt','head_sha','name','path','head_branch','event')}},sort_keys=True),flush=True)
+           run_identity(run,source,run_id,attempt,event)
+           for field,value in (('id',-1),('run_attempt',-1),('head_sha','0'*40),('name','ci'),('path','forged.yml'),('event','schedule'),('head_branch','main')):
+            bad=copy.deepcopy(run);bad[field]=value;reject('actual_run_'+field,lambda:run_identity(bad,source,run_id,attempt,event))
+           for field in ('repository','head_repository'):
+            bad=copy.deepcopy(run);bad[field]['id']=-1;reject('actual_run_'+field,lambda:run_identity(bad,source,run_id,attempt,event))
+           reviewed=os.environ.get('FONTS_ENV_OWNER_HOST_CALLER_COMMIT','');approved=caller_authority(reviewed)
+           require(git('show',source+':'+CALLER)==approved,'Host caller differs from independent authority')
+           for value in ('','x'*40,source+':policy'):reject('malformed_host_authority',lambda:caller_authority(value))
+           reject('unapproved_template',lambda:require(caller_authority(TEMPLATE)==approved,'Unpinned host template not approved'))
+           refs=re.findall(rb'(?m)^    uses: gesher-runtime/gesher/\.github/workflows/fonts-owner-host-trusted-source\.yml@([0-9a-f]{40})$',approved)
+           require(len(refs)==1,'One immutable host guard required');guard=refs[0].decode()
+           require(git('show',guard+':'+TRUST)==git('show',reviewed+':'+TRUST),'Host immutable guard differs')
+           template=git('show',TEMPLATE+':'+CALLER);needle=b'fonts-owner-host-trusted-source.yml@'+b'0'*40
+           require(template.count(needle)==1 and approved==template.replace(needle,b'fonts-owner-host-trusted-source.yml@'+guard.encode()),'Host producer/strict role DAG differs')
+           full=frozen_environment();inventory=full['inventory'];expected=inventory(BASE)
+           subprocess.run(['git','merge-base','--is-ancestor',BASE,source],check=True)
+           for p,b in EXTRA_PINS.items():expected[p]=(expected.get(p,('100644',''))[0],b)
+           for p in (CALLER,TRUST):expected[p]=inventory(reviewed)[p]
+           actual=inventory(source);full['verify_tree'](actual,expected);full['verify_checkout'](expected)
+           for p in EXTRA_PINS:
+            bad=copy.deepcopy(actual);bad[p]=('100644','0'*40);reject('host_blob_'+p,lambda:full['verify_tree'](bad,expected))
+           bad=copy.deepcopy(actual);bad['tools/fonts/forged.py']=('100644','0'*40);reject('unknown_host_path',lambda:full['verify_tree'](bad,expected))
+           retained=('.github/workflows/ci.yml',ENV_TRUST,'.github/workflows/fonts-environment-characterization.yml','.github/workflows/fonts-core-trusted-source.yml','.github/workflows/fonts-core-component.yml','tools/native3-locks/union_payload.py','tools/native3-locks/union_blocking_guard.py')
+           for p in retained:
+            bad=copy.deepcopy(actual);bad[p]=('100644','0'*40);reject('retained_policy_'+p,lambda:full['verify_tree'](bad,expected))
+           require(sys.flags.isolated==1 and all(Path(m.__file__).resolve().parent!=Path.cwd() for m in (json,hashlib)),'Candidate shadow module imported')
+           originals={p:Path(p).read_bytes() for p in (CALLER,TRUST,*retained)}
+           try:
+            for p in originals:Path(p).write_bytes(b'pass\n')
+            reject('actual_noop_host_all_prior_callers_guards',lambda:full['verify_checkout'](expected))
+           finally:
+            for p,raw in originals.items():Path(p).write_bytes(raw)
+           full['verify_checkout'](expected);full['isolated_import_controls']()
+           require(not git('status','--porcelain','--untracked-files=all').strip(),'Dirty host component checkout')
+           print('FONT_OWNER_HOST_TRUSTED_SOURCE '+json.dumps({'source':source,'run':run_id,'attempt':attempt,'immutable_guard':guard,'caller_authority':reviewed,'frozen_environment_source':BASE,'extra_pins':EXTRA_PINS,'roles':{'fixture':'CURRENT_SOURCE_CURRENT_ATTEMPT_ACTUAL_GESHER_POSIX_HOST_OWNER_ONLY','Windows':'STRICT_FIVE_MODE_WCT_HOST_CONTRACTS_ONLY'},'runtime_shim_libcore_owner_qualified':False,'font_provider_OEM_qualified':False,'font_fallback_qualified':False,'generic_getenv_qualified':False},sort_keys=True),flush=True)
+          main()
+          PY
+      - name: Preserve original CORE and environment ownership and linker metadata controls
+        shell: bash
+        run: |
+          python3 tools/fonts/test-core-assembly.py
+          python3 tools/fonts/test-cli-link-evidence.py
+          python3 tools/fonts/test-environment-metadata.py
+      - name: Preserve original argv controls and verify actual host launch metadata without starting processes
+        shell: pwsh
+        run: |
+          tools/fonts/test-dex-arguments.ps1
+          tools/fonts/test-environment-arguments.ps1
+          tools/fonts/test-owner-host-arguments.ps1
