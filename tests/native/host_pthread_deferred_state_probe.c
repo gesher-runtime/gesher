@@ -9,6 +9,8 @@
 #include <wchar.h>
 extern void __cdecl gesher_deferred_gate_v1(pthread_t,void *,void *,pthread_t,void *);
 extern LONG __cdecl gesher_deferred_pending_v1(void);
+extern int __cdecl gesher_tls_reaper_start_v1(void);
+extern int __cdecl gesher_tls_retirement_counts_v1(LONG *,unsigned);
 typedef int (__cdecl *cancel_fn)(pthread_t);
 typedef int (__cdecl *join_fn)(pthread_t,void **);
 typedef int (__cdecl *type_fn)(int,int *);
@@ -60,8 +62,11 @@ static void *joining_actor(void *arg) {
   return value;
 }
 int main(void) {
-  setvbuf(stdout,NULL,_IONBF,0); DWORD before=0,after=0,code=0;
-  require(GetProcessHandleCount(GetCurrentProcess(),&before),"initial census");
+  setvbuf(stdout,NULL,_IONBF,0); DWORD original=0,before=0,after=0,code=0;
+  require(GetProcessHandleCount(GetCurrentProcess(),&original) && !gesher_tls_reaper_start_v1() &&
+      GetProcessHandleCount(GetCurrentProcess(),&before) && before==original+2,
+      "explicit normal bootstrap owns exactly event and thread handles");
+  printf("DEFERRED_TLS_OWNER original=%lu baseline=%lu persistent_handles=2\n",original,before);
   wchar_t path[32768],actual[32768]; DWORD n=GetModuleFileNameW(NULL,path,32768);
   require(n && n<32768,"executable path"); wchar_t *leaf=wcsrchr(path,L'\\');
   require(leaf && (size_t)(leaf-path)+22<32768,"DLL path capacity"); wcscpy(leaf+1,L"libwinpthread-1.dll");
@@ -135,8 +140,17 @@ int main(void) {
   require(CloseHandle(owned_joiner) && CloseHandle(js.release) && CloseHandle(joining) && !pthread_key_delete(key),"join owned cleanup");
   require(gesher_deferred_pending_v1()==0,"no pending cancellation accounting after join unwind");
   puts("PASS deferred genuine join wait cancellation unwinds claim/leases cleanup=1 destructor=1 target remains joinable");
+  ULONGLONG drain_deadline=GetTickCount64()+10000;
+  LONG retirement[8];
+  for (;;) {
+    require(!gesher_tls_retirement_counts_v1(retirement,8),"retirement owner counts");
+    if (!retirement[0]) break;
+    require(GetTickCount64()<drain_deadline,"actual kernel retirement owner drain"); Sleep(1);
+  }
   require(FreeLibrary(dll) && !GetModuleHandleW(L"libwinpthread-1.dll"),"actual DLL unload");
-  require(GetProcessHandleCount(GetCurrentProcess(),&after) && after<=before+8,"original final handle bound");
+  require(GetProcessHandleCount(GetCurrentProcess(),&after) && after<=before+8 &&
+      after<=original+8,"original total final handle bound includes persistent reaper");
+  printf("DEFERRED_TLS_OWNER_FINAL original=%lu baseline=%lu after=%lu queued=0 original_total_bound=8\n",original,before,after);
   printf("PASS deferred-only public APIs and actual DLL unload handles=%lu/%lu\n",before,after);
   return 0;
 }

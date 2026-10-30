@@ -62,6 +62,8 @@ try {
   if (-not $witnessed) { throw 'Missing actual OS wait witness' }
   $text = $lines -join "`n"
   foreach ($proof in @(
+    'DEFERRED_TLS_OWNER original=',
+    'DEFERRED_TLS_OWNER_FINAL original=',
     'PASS deferred finite state/type outputs and self cancellation cleanup=1 destructor=1',
     'PASS deferred public cancel capture crosses native ExitThread61 and returns ESRCH destructor=1',
     'PASS deferred disabled native ExitThread pending counter=0/1/0 destructor_delta=1',

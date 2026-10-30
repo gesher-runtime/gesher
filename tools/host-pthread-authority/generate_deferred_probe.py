@@ -1,9 +1,11 @@
 """Generate only the isolated diagnostic capability delta, never the old patches."""
 from pathlib import Path
-import difflib,hashlib,json
+import argparse,difflib,hashlib,json
 ROOT=Path(__file__).resolve().parents[2]
 OLD=Path('C:/work/gesher-pthread-reboot-role-stack-check/probe-resource')
-NEW=Path('C:/work/gesher-pthread-cancel-state-expanded')
+parser=argparse.ArgumentParser()
+parser.add_argument('--new-source',type=Path,required=True)
+NEW=parser.parse_args().new_source
 here=ROOT/'tools/host-pthread-authority'
 pin=json.loads((here/'pinned-inputs.json').read_text())
 assert hashlib.sha256((here/'supplier.patch').read_bytes()).hexdigest()==pin['patch_sha256']

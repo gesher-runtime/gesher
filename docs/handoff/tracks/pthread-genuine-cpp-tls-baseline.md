@@ -1,7 +1,10 @@
 # Genuine compiler C++ TLS baseline
 
-This consumer-only change keeps every cafe2129 supplier patch, private compiler
-flag, original artifact and all twenty-one existing gates unchanged. It adds
+The initial consumer-only baseline kept every cafe2129 supplier patch and all
+existing gates unchanged. Run410884 then exposed an actual deferred-only owned
+finish regression. The current candidate corrects that diagnostic supplier's
+TLS lifetime; the seven older supplier roles and original21 job definitions
+remain unchanged. The baseline adds
 three C++ translation units plus a shared header using real `thread_local`
 objects with nontrivial destructors. No hook chooses destructor order, no FLS
 callback is injected, and no compiler TLS-model option is selected.
@@ -58,7 +61,14 @@ in archive Reading rows and basenames in Loaded archive(member) rows. The parser
 now resolves a pthread basename only through exactly one actual full-path Reading
 origin; missing, canonical-other-root or ambiguous origins fail. No expected path
 is silently prefixed. The original red run and its raw maps/logs are preserved;
-Linux's three genuine cases passed, Windows callback outcomes remain unknown.
+Linux's three genuine cases passed; Windows callback outcomes were unexecuted
+in that first run. The fresh changed-parser run410884 executed all28 jobs:
+26 succeeded, and only the deferred C++ consumers failed on both hosts. Published
+and private macroOFF passed all four modes. Deferred owned return changed
+pthread identity1 to3 and pthread_exit4 to5 in both genuine TU callbacks, on the
+original native thread. Its std::thread/nativeExit61 cases passed. Completion
+markers were1/1 and immediate join kernel samples0; this was an identity
+regression, not an observed premature join. All original21 jobs passed.
 
 The map format and option are grounded in LLVM's
 [MinGW driver](https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/lld/MinGW/Driver.cpp)
@@ -75,8 +85,10 @@ Three supplier variants remain distinct, including their artifact names:
   artifact contrast, not an attestation of the existing canonical mutable cache.
 * `production`: the existing private production role, with its rebuilt authority
   supplier and all probe macros off. This is not the unmodified shipped library.
-* `deferred`: the exact existing private deferred-only diagnostic supplier and
-  ABI, without rebuilding or modifying it for this consumer test.
+* `deferred`: the separately receipted private deferred-only diagnostic supplier.
+  The current changed-source candidate retains its TLS owner through actual
+  kernel completion; its calculated private ABI is560/align16, with every field
+  offset required from the actual CI compile. It is not the original archive.
 
 The first two reuse baseline_compile; deferred reuses probe_deferred_compile.
 Each new C++ artifact has its own complete member/role/source/run/attempt manifest
@@ -84,9 +96,14 @@ and exact original producer receipt. The original artifact directories and
 member contracts are untouched. A separate Linux reference and six Windows
 variant/host consumers bring the total to28 jobs while retaining the original21.
 
-Actual results are required before deciding whether there is a supported late
-cleanup identity gap. A source hypothesis about callbacks after TLS clearing is
-not evidence that this production compiler uses such an order. Arbitrary MSVC
+Actual410884 establishes the deferred owned-finish gap and the two positive
+archive contrasts. The changed source and held-callback witnesses require a new
+whole28-job run before qualification. See the exact
+[kernel TLS owner protocol](pthread-kernel-tls-owner.md). Common cases additionally
+set/get a late TSD value and report its destructor count as observation only;
+this does not qualify late-created TSD cleanup ordering. The two deferred-only
+held cases explicitly clear their late value and preserve the original owned
+TSD pass budget and outside-loader cleanup location. Arbitrary MSVC
 or FLS interoperability is not added to the supported contract by this fixture.
 General asynchronous entry safety, actual process-owned retirement/bootstrap
 across supported program entrypoints, supplier/guest consumer adoption and full
