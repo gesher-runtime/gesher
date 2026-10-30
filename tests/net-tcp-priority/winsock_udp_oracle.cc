@@ -1,0 +1,74 @@
+// Independent WinSDK observation only: no Gesher descriptor or errno mapping.
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <mstcpip.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static void require(bool ok, const char* what) {
+  if (!ok) { fprintf(stderr, "FAIL UDP oracle %s wsa=%d\n", what, WSAGetLastError()); exit(1); }
+}
+int main(int argc, char** argv) {
+  require(argc == 4, "three exact binary arguments");
+  for (int i = 1; i < 4; ++i)
+    require(strlen(argv[i]) == 1 && (argv[i][0] == '0' || argv[i][0] == '1'), "exact binary argument");
+  int report_reset = argv[1][0] - '0', payload = argv[2][0] - '0', query_error = argv[3][0] - '0';
+  WSADATA data{};
+  require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "startup");
+  SOCKET target = WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0,
+      WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+  SOCKET client = WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0,
+      WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+  require(target != INVALID_SOCKET && client != INVALID_SOCKET, "owned endpoints");
+  sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(target, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "target bind");
+  int length = sizeof(address);
+  require(getsockname(target, reinterpret_cast<sockaddr*>(&address), &length) == 0, "target address");
+  sockaddr_in local{}; local.sin_family = AF_INET; local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(client, reinterpret_cast<sockaddr*>(&local), sizeof(local)) == 0, "client bind");
+  length = sizeof(local);
+  require(getsockname(client, reinterpret_cast<sockaddr*>(&local), &length) == 0, "client address");
+  BOOL report = report_reset ? TRUE : FALSE; DWORD returned = 0;
+  require(WSAIoctl(client, SIO_UDP_CONNRESET, &report, sizeof(report), nullptr, 0, &returned, nullptr, nullptr) == 0,
+      "exact reset policy");
+  u_long nonblocking = 1;
+  require(ioctlsocket(client, FIONBIO, &nonblocking) == 0 &&
+      connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "connected nonblocking client");
+  if (payload) {
+    require(sendto(target, "p", 1, 0, reinterpret_cast<sockaddr*>(&local), sizeof(local)) == 1, "real queued payload");
+  } else {
+    require(closesocket(target) == 0, "target physically closed"); target = INVALID_SOCKET;
+    require(send(client, "u", 1, 0) == 1, "real ICMP-producing send");
+  }
+  WSAPOLLFD first{}; first.fd = client; first.events = POLLRDNORM | POLLRDBAND;
+  int polled = WSAPoll(&first, 1, 2000), poll_error = polled == SOCKET_ERROR ? WSAGetLastError() : 0;
+  printf("WINDOWS_UDP_RESET report=%d payload=%d query=%d stage=initial-poll rc=%d error=%d revents=%d payload_or_SO_ERROR_consumed=0\n",
+      report_reset, payload, query_error, polled, poll_error, first.revents);
+  if (query_error) {
+    int value = -999, size = sizeof(value);
+    int rc = getsockopt(client, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&value), &size);
+    int failure = rc == SOCKET_ERROR ? WSAGetLastError() : 0;
+    printf("WINDOWS_UDP_RESET report=%d payload=%d query=%d stage=explicit-SO_ERROR rc=%d error=%d value=%d may_consume_error=1\n",
+        report_reset, payload, query_error, rc, failure, value);
+  }
+  WSAPOLLFD before{}; before.fd = client; before.events = first.events;
+  int repeated = WSAPoll(&before, 1, 0), repeat_error = repeated == SOCKET_ERROR ? WSAGetLastError() : 0;
+  char byte = '?'; int peeked = recv(client, &byte, 1, MSG_PEEK), peek_error = peeked == SOCKET_ERROR ? WSAGetLastError() : 0;
+  int peek_byte = static_cast<unsigned char>(byte);
+  printf("WINDOWS_UDP_RESET report=%d payload=%d query=%d stage=before-and-peek poll=%d poll_error=%d revents=%d recv=%d recv_error=%d byte=%d may_consume_error=1\n",
+      report_reset, payload, query_error, repeated, repeat_error, before.revents, peeked, peek_error, peek_byte);
+  WSAPOLLFD after{}; after.fd = client; after.events = first.events;
+  int after_rc = WSAPoll(&after, 1, 0), after_error = after_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
+  byte = '?'; int consumed = recv(client, &byte, 1, 0), receive_error = consumed == SOCKET_ERROR ? WSAGetLastError() : 0;
+  printf("WINDOWS_UDP_RESET report=%d payload=%d query=%d stage=after-peek-and-consume poll=%d poll_error=%d revents=%d recv=%d recv_error=%d byte=%u\n",
+      report_reset, payload, query_error, after_rc, after_error, after.revents, consumed, receive_error, static_cast<unsigned int>(static_cast<unsigned char>(byte)));
+  if (payload) require(polled == 1 && (first.revents & POLLRDNORM) && peeked == 1 && peek_byte == 'p' && consumed == 1 && byte == 'p',
+      "real payload survives peek and explicit error query");
+  bool target_closed = target == INVALID_SOCKET || closesocket(target) == 0;
+  bool client_closed = closesocket(client) == 0;
+  require(target_closed && client_closed, "both owned endpoints closed");
+  require(WSACleanup() == 0, "context cleanup");
+  puts("PASS Windows UDP reset characterization: raw errors and flags are observations only");
+  return 0;
+}

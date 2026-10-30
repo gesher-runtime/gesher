@@ -2,7 +2,7 @@ name: net-tcp-priority-characterization
 on:
   workflow_dispatch:
   push:
-    branches: [wip/net-tcp-priority]
+    branches: [wip/tcp-priority-reboot]
     paths: [.github/workflows/net-tcp-priority-characterization.yml, tests/net-tcp-priority/winsock_oracle.cc, tests/net-tcp-priority/contract.cc]
 permissions:
   contents: read
@@ -29,7 +29,10 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Compile independent WinSDK oracle in CI
         shell: cmd
-        run: cl /nologo /std:c++20 /W4 /WX tests\net-tcp-priority\winsock_oracle.cc /Fe:urgent-oracle.exe /link ws2_32.lib
+        run: |
+          cl /nologo /std:c++20 /W4 /WX tests\net-tcp-priority\winsock_oracle.cc /Fe:urgent-oracle.exe /link ws2_32.lib
+          if errorlevel 1 exit /b %errorlevel%
+          cl /nologo /std:c++20 /W4 /WX tests\net-tcp-priority\winsock_udp_oracle.cc /Fe:udp-oracle.exe /link ws2_32.lib
       - name: Observe actual queued and consumed urgent marks
         shell: pwsh
         run: |
@@ -45,5 +48,19 @@ jobs:
               Write-Host ($rows -join "`n")
               if ($code -ne 0 -or ($rows -join "`n") -notmatch "(?m)^WINDOWS_CLOSED_POLL tracing=$tracing mode=$mode " -or
                   ($rows -join "`n") -notmatch '(?m)^PASS Windows closed-poll characterization: exception and result are observations only') { throw 'Independent closed-poll observation failed' }
+            }
+          }
+      - name: Observe exact connected UDP reset and real payload controls
+        shell: pwsh
+        run: |
+          foreach ($report in 0..1) {
+            foreach ($payload in 0..1) {
+              foreach ($query in 0..1) {
+                $rows = & ./udp-oracle.exe "$report" "$payload" "$query" 2>&1
+                $code = $LASTEXITCODE
+                Write-Host ($rows -join "`n")
+                if ($code -ne 0 -or ($rows -join "`n") -notmatch "(?m)^WINDOWS_UDP_RESET report=$report payload=$payload query=$query stage=initial-poll " -or
+                    ($rows -join "`n") -notmatch '(?m)^PASS Windows UDP reset characterization: raw errors and flags are observations only') { throw 'Independent UDP observation failed' }
+              }
             }
           }
