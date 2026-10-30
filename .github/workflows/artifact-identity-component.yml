@@ -1,0 +1,58 @@
+name: artifact-identity-component
+on:
+  workflow_dispatch:
+  push:
+    branches: ['wip/artifact-identity']
+    paths: ['.github/workflows/artifact-identity-component.yml']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: artifact-identity-component-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind new verifier source separately from frozen prior-run suppliers
+        run: |
+          python3 -I - <<'PY'
+          import hashlib,json,os,pathlib,subprocess
+          def git(*a): return subprocess.check_output(['git',*a],text=True).strip()
+          base='00f96217616c5892dd8364067d007f92d541585b'
+          head=git('rev-parse','HEAD')
+          assert head==os.environ['GITHUB_SHA'] and not git('status','--porcelain','--untracked-files=all')
+          run=json.loads(subprocess.check_output(['gh','api',f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"]))
+          assert run['head_sha']==head and str(run['run_attempt'])==os.environ['GITHUB_RUN_ATTEMPT']
+          assert run['repository']['full_name']=='gesher-runtime/gesher' and str(run['repository']['id'])==os.environ['GITHUB_REPOSITORY_ID']=='1426153186'
+          assert str(run['head_repository']['id'])=='1426153186'
+          assert run['name']=='artifact-identity-component' and run['path']=='.github/workflows/artifact-identity-component.yml'
+          assert os.environ['GITHUB_REF']=='refs/heads/wip/artifact-identity'
+          subprocess.run(['git','merge-base','--is-ancestor',base,head],check=True)
+          allowed={'.github/workflows/artifact-identity-component.yml','.github/workflows/native3-locks-blocking.yml',
+            '.github/workflows/native3-locks-commands.yml','tools/ci/artifact_receipt.py','tools/ci/receipt_identity.py',
+            'tools/windows4/run-tsf-component.ps1','tools/windows4/run-tsf-union.ps1',
+            'tools/ci/artifact-identity-suppliers.json','tools/ci/artifact_identity_focus.py',
+            'tools/ci/receipt-diagnostics.ps1','tools/ci/test-receipt-diagnostics.ps1'}
+          changed=set(git('diff','--name-only',base,head,'--','.',':(exclude)docs/**').splitlines())
+          assert changed==allowed, changed
+          assert subprocess.check_output(['git','show',head+':.github/workflows/ci.yml'])==subprocess.check_output(['git','show',base+':.github/workflows/ci.yml'])
+          assert not git('diff','--name-only',base,head,'--','compat')
+          for path in sorted(allowed):
+            p=pathlib.Path(path); assert p.is_file() and not p.is_symlink()
+            raw=p.read_bytes(); blob=git('rev-parse',head+':'+path)
+            assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==blob
+            print('RECEIPT_VERIFIER_SOURCE '+json.dumps({'source':head,'path':path,'git_blob':blob,'sha256':hashlib.sha256(raw).hexdigest()}),flush=True)
+          print('RECEIPT_COMPONENT_CONTEXT '+json.dumps({'verifier_source':head,'verifier_run':run['id'],
+            'verifier_attempt':run['run_attempt'],'supplier_source':base,'supplier_run':'41064959428',
+            'supplier_attempt':'1','scope':'diagnostic-only; no archive/runtime qualification'}),flush=True)
+          PY
+      - name: Replay all original receipt predicates and explicit negative identities
+        run: python3 tools/ci/artifact_identity_focus.py

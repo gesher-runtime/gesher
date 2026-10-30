@@ -1,0 +1,63 @@
+{
+  "scope": "metadata-only; historical failure cause remains unknown; no archive or runtime qualification",
+  "repository": "gesher-runtime/gesher",
+  "repository_id": "1426153186",
+  "run": "41064959428",
+  "attempt": "1",
+  "source": "00f96217616c5892dd8364067d007f92d541585b",
+  "workflow": "ci",
+  "suppliers": [
+    {
+      "role": "framework-host-tools",
+      "producer_id": 124093863244,
+      "producer": "framework / host-tools",
+      "requested_producer": "host-tools",
+      "suffix": true,
+      "client": "python",
+      "artifact": {
+        "id": 12981887746,
+        "name": "host-tools-v1-a92695500e627d14-32c88f702f937d60ea99eb87431d29351df400a01e50b4adbf59a6264d6c7056-run-41064959428-attempt-1",
+        "digest": "sha256:770a741f4ed078e77f5e8d3bdafc1b9d154b62f638aa0b3f08b91709d1d4ee7e"
+      }
+    },
+    {
+      "role": "arm64-fpsr",
+      "producer_id": 124093863639,
+      "producer": "arm64 / fpsr-reference / reference",
+      "requested_producer": "fpsr-reference / reference",
+      "suffix": true,
+      "client": "python",
+      "artifact": {
+        "id": 12982027698,
+        "name": "arm64-fpsr-reference",
+        "digest": "sha256:56fd999e529c4c420f5d9cbdad048de523de2c5eec5efe6597f7cd23f140293f"
+      }
+    },
+    {
+      "role": "tsf",
+      "producer_id": 124094056748,
+      "producer": "union-tsf / compile",
+      "requested_producer": "union-tsf / compile",
+      "suffix": false,
+      "client": "tsf",
+      "artifact": {
+        "id": 12981468068,
+        "name": "tsf-format-00f96217616c5892dd8364067d007f92d541585b-a1",
+        "digest": "sha256:8ec8389e823dd749bc40485bd942e8f2ef670ad8281368e5001d1ab338ff8710"
+      }
+    },
+    {
+      "role": "native-blocking",
+      "producer_id": 124093916739,
+      "producer": "union-native-blocking / compile",
+      "requested_producer": "union-native-blocking / compile",
+      "suffix": false,
+      "client": "native",
+      "artifact": {
+        "id": 12981433398,
+        "name": "native3-locks-blocking-00f96217616c5892dd8364067d007f92d541585b-a1",
+        "digest": "sha256:8882cfbc04ff5d580fa4de8d4a8a4ba3c9fb2457e617268ed28234bcab178ea6"
+      }
+    }
+  ]
+}

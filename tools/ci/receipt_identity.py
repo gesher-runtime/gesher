@@ -1,4 +1,27 @@
 """Exact workflow-run identity predicate and adversarial CI checks."""
+import json
+
+
+JOB_FIELDS = ('id', 'name', 'run_id', 'run_attempt', 'head_sha', 'status', 'conclusion',
+              'started_at', 'completed_at')
+
+
+def identity_record(stage, expected, received, reason='observed'):
+    """Record only identity fields, with no acceptance or retry behavior."""
+    print('CI_RECEIPT_IDENTITY ' + json.dumps({'stage': stage, 'expected': expected,
+          'received': received, 'reason': reason}, sort_keys=True), flush=True)
+
+
+def job_snapshot(job):
+    return {**{key: job.get(key) for key in JOB_FIELDS},
+            'present_identity_fields': [key for key in JOB_FIELDS if key in job]}
+
+
+def run_snapshot(run):
+    return {**{key: run.get(key) for key in ('id', 'run_attempt', 'head_sha', 'name', 'path', 'status', 'conclusion')},
+            'repository': {key: (run.get('repository') or {}).get(key) for key in ('id', 'full_name')},
+            'head_repository_id': (run.get('head_repository') or {}).get('id')}
+
 def exact_run(run, wanted_id, wanted_attempt, wanted_head, wanted_repo, wanted_head_repo, wanted_name, wanted_workflow='ci'):
     return (str(run['id']) == wanted_id and str(run['run_attempt']) == wanted_attempt and run['head_sha'] == wanted_head
             and str(run['repository']['id']) == wanted_repo and str(run['head_repository']['id']) == wanted_head_repo

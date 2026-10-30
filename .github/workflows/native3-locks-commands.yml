@@ -127,9 +127,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
+          . ./tools/ci/receipt-diagnostics.ps1
           $jobsRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"
           if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect actual producer' }
           $jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -eq 'compile')
+          Write-CiProducerIdentity -Producer 'compile' -Rows $jobs
           if ($jobs.Count -ne 1 -or $jobs[0].conclusion -ne 'success' -or
               "$($jobs[0].run_id)" -ne $env:GITHUB_RUN_ID -or "$($jobs[0].run_attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
               $jobs[0].head_sha -ne $env:GITHUB_SHA) { throw 'Producer source/run/attempt mismatch' }
@@ -139,6 +141,7 @@ jobs:
           $rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -eq $expected)
           if ($rows.Count -ne 1) { throw 'Artifact is not unique' }
           $artifact = $rows[0]
+          Write-CiArtifactIdentity -Name $expected -Artifact $artifact -Producer $jobs[0]
           if ($artifact.id -le 0 -or $artifact.size_in_bytes -le 0 -or $artifact.expired -or
               $artifact.digest -notmatch '^sha256:[0-9a-f]{64}$' -or "$($artifact.workflow_run.id)" -ne $env:GITHUB_RUN_ID -or
               "$($artifact.workflow_run.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
