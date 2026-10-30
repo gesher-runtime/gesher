@@ -1,11 +1,12 @@
 """CI-only provenance for the isolated font binaries emitted by native2."""
 import argparse,hashlib,json,os,subprocess
 from pathlib import Path
+from font_records import emit
 
 INPUTS=('tests/native2/fonts_standalone.c','tests/native2/fonts_standalone_jni.c',
         'tests/native2/java/gesher/Native3StandaloneFontTest.java',
         'tests/native2/java/gesher/Native3DefaultFontTest.java',
-        'tests/native2/java/gesher/Native3CliArgumentsTest.java','.github/workflows/native2.yml')
+        'tests/native2/java/gesher/Native3CliArgumentsTest.java','.github/workflows/native2.yml','tools/fonts/font_records.py','tools/fonts/dex-fixture-manifest.py')
 OUTPUTS=('native2-test.dex','x86_64/fonts_standalone','arm64-v8a/fonts_standalone',
          'x86_64/libfonts_standalone.so','arm64-v8a/libfonts_standalone.so')
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -36,5 +37,8 @@ def main():
   record=json.loads(manifest.read_text(encoding='utf-8'))
   assert record['role']=='current-font-dex-fixtures' and record['context']==context
   assert record['inputs']==inputs and record['outputs']==outputs
- print('FONT_CURRENT_FIXTURE_MANIFEST '+json.dumps(record,sort_keys=True),flush=True)
+ for name,blob in record['inputs'].items():emit('FONT_CURRENT_FIXTURE_INPUT',{'path':name,'blob':blob})
+ for name,digest in record['outputs'].items():emit('FONT_CURRENT_FIXTURE_OUTPUT',{'path':name,'sha256':digest})
+ for name in ('compiler','java','r8_sha256','authenticated_ndk_archive_sha256','elf_headers'):emit('FONT_CURRENT_FIXTURE_'+name.upper(),record[name])
+ emit('FONT_CURRENT_FIXTURE_MANIFEST',{'context':record['context'],'role':record['role'],'manifest_sha256':sha(manifest)})
 if __name__=='__main__':main()

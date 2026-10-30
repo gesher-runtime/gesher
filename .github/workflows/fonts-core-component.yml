@@ -15,7 +15,7 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 jobs:
   trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/fonts-core-trusted-source.yml@e7352920fa484734cd8c2de694d9152b25b37e25
+    uses: gesher-runtime/gesher/.github/workflows/fonts-core-trusted-source.yml@0000000000000000000000000000000000000000
   fixture-producer:
     needs: trusted-source
     uses: ./.github/workflows/native2.yml
@@ -32,9 +32,12 @@ jobs:
         with:
           ccache-key: runtime
       - name: Configure ordinary default-OFF runtime with actual compile-command receipts
-        run: cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+        run: cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_EXE_LINKER_FLAGS=-Wl,--verbose
       - name: Build fresh current-source CLI and independent no-JVM executable
-        run: ninja -C out dalvikvm gesher-exec
+        run: |
+          set -euo pipefail
+          ninja -C out -v gesher-exec 2>&1 | tee fonts-gesher-exec-build.log
+          ninja -C out -v dalvikvm 2>&1 | tee fonts-dalvikvm-build.log
       - name: Bind real CRT entry, adapter relocation, imports, compiler and output bytes
         run: python3 tools/fonts/core-runtime-manifest.py capture --build out --root fresh-runtime
       - uses: actions/upload-artifact@v4
