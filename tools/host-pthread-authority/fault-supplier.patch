@@ -33,7 +33,7 @@
                             GetCurrentProcess (), &duplicate,
                             THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
                             FALSE, 0))
-@@ -1213,9 +1229,15 @@
+@@ -1213,8 +1229,14 @@
    if ((t = (_pthread_v *)TlsGetValue (_pthread_tls)) != NULL)
      {
        pthread_spinlock_t new_spin_keys = PTHREAD_SPINLOCK_INITIALIZER;
@@ -48,8 +48,7 @@
 +            abort ();
 +        }
        rslt = (unsigned) (size_t) t->ret_arg;
-       if (t->evStart)
-         CloseHandle (t->evStart);
+       gesher_close_start_event(t);
 @@ -1800,6 +1822,15 @@
    if (is_attached_self(tv))
      return EDEADLK;

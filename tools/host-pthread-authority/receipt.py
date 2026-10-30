@@ -196,7 +196,10 @@ def supplier(source, llvm, role):
         assert re.search(r'\b' + field + r'\s*$', layout, re.MULTILINE), 'Missing ABI field: ' + field
     assert re.search(r'^\s*48 \|\s+HANDLE cpu_handle$', layout, re.MULTILINE)
     assert re.search(r'^\s*56 \|\s+unsigned long long cpu_generation$', layout, re.MULTILINE)
-    assert ('[sizeof=528, align=16]' if role == 'probe-resource' else '[sizeof=512, align=16]' if role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'} else '[sizeof=496, align=16]') in layout
+    assert ('[sizeof=512, align=16]' if role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'} else '[sizeof=496, align=16]') in layout
+    for field,offset in (('operation_refs',120),('clock_destroy_pending',124)):
+        assert bool(re.search(r'\b'+field+r'$',layout,re.MULTILINE)) == (role=='probe-resource'), 'Resource field role mismatch'
+        assert bool(re.search(r'^\s*'+str(offset)+r' \|\s+[^\n]*\b'+field+r'$',layout,re.MULTILINE)) == (role=='probe-resource'), 'Resource field layout mismatch'
     assert ('keyval_generation' in layout) == (role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource'}), 'Probe generation layout mismatch'
     result['private_record_layout'] = '0 | struct _pthread_v\n' + layout
     (llvm / 'gesher-winpthreads-authority.json').write_text(json.dumps(result, indent=2, sort_keys=True))
