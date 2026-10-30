@@ -238,7 +238,7 @@ $fixture = (Resolve-Path tcp-fixture).Path
 # Exercise the accepted guarded-copy/truncation matrix on BOTH actual supplier
 # roles before the strict supplier census can stop this role's TCP controls.
 function InvokeGuardedUdp([string] $Name, [string] $Exe, [string] $Arguments, [string] $Reference, [bool] $Negative = $false) {
-  $result = [TcpPriorityDiagnostics.TsfJobSupervisor]::Run($Exe, $Arguments, 90000, '')
+  $result = [TcpPriorityDiagnostics.TsfJobSupervisor]::Run($Exe, $Arguments, 45000, '')
   Write-Host ('TCP_COHERENT_GUARDED_KERNEL '+(@{supplier=$selection;name=$Name;result=$result} | ConvertTo-Json -Depth 8 -Compress))
   $text = $result.Output + $result.Error
   Write-Host $text
