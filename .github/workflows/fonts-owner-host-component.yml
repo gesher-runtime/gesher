@@ -1,0 +1,68 @@
+name: fonts-owner-host-component
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/fonts-environment-owned]
+    paths: [.github/workflows/fonts-owner-host-component.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: fonts-owner-host-component-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  trusted-source:
+    uses: gesher-runtime/gesher/.github/workflows/fonts-owner-host-trusted-source.yml@0000000000000000000000000000000000000000
+  fixture-producer:
+    needs: trusted-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Configure ordinary default-OFF source and actual compiler command receipts
+        run: cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_EXE_LINKER_FLAGS=-Wl,--verbose
+      - name: Build only actual gesher_posix host-owner fixture without ART or font provider
+        run: |
+          set -euo pipefail
+          ninja -C out -v font_environment_test 2>&1 | tee font-owner-host-build.log
+      - name: Bind actual host owner and POSIX/path archive members and caller relocations
+        run: python3 tools/fonts/owner-host-manifest.py capture --build out --root host-owner-fixtures
+      - uses: actions/upload-artifact@v4
+        with:
+          name: font-owner-host-fixtures
+          path: host-owner-fixtures/
+          if-no-files-found: error
+  host-contracts:
+    needs: [trusted-source, fixture-producer]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify current-source current-attempt producer archive and host object proof
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name font-owner-host-fixtures --producer fixture-producer --destination current-owner-fixtures
+          if ($LASTEXITCODE -ne 0) { throw 'Current host-owner producer receipt failed' }
+          python tools/fonts/owner-host-manifest.py verify --root current-owner-fixtures
+          if ($LASTEXITCODE -ne 0) { throw 'Current host-owner source/object/output proof failed' }
+      - name: Run strict host-owner five-mode and real held-CRT WCT contracts only
+        shell: pwsh
+        run: ./tools/fonts/run-owner-host.ps1 -FixturesDirectory current-owner-fixtures
