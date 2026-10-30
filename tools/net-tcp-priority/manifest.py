@@ -14,7 +14,7 @@ assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() 
 def sha(p):
     return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 selection = os.environ['TCP_SUPPLIER_ROLE']
-assert selection in ('canonical', 'retirement')
+assert selection in ('canonical', 'selected-minimum')
 roles = {'gesher-exec.exe': 'host-bionic-loader', 'net_tcp_priority_probe.exe': 'host-posix-contract', 'gesher_arm64.dll': 'matching-arm64-translator', 'tcp-priority-x86_64': 'ndk-x86_64-contract', 'tcp-priority-arm64-v8a': 'ndk-arm64-contract'}
 roles.update({'net_udp_guarded_probe.exe':'host-posix-guarded-udp', 'net_udp_guarded_fault_probe.exe':'host-posix-guarded-udp-faults',
     'udp-guarded-x86_64':'ndk-x86_64-guarded-udp', 'udp-guarded-arm64-v8a':'ndk-arm64-guarded-udp',
@@ -53,16 +53,19 @@ compilers['out']['c_guarded']=dict(configured=c_paths[0],resolved=str(Path(c_pat
 ndk_source = json.loads(Path('tcp-ndk-source.json').read_text())
 compilers['ndk'] = json.loads(Path('tcp-guests-compiler.json').read_text())
 supplier = json.loads(Path('tcp-supplier-receipt.json').read_text())
-expected_supplier = 'canonical-publisher-unmodified-v1' if selection == 'canonical' else 'static-detached-retirement-experiment-v1'
+expected_supplier = 'canonical-publisher-unmodified-v1' if selection == 'canonical' else 'gesher-winpthreads-selected-minimum-v1'
 assert supplier['role'] == expected_supplier and supplier['supplier_selection'] == selection and supplier['producer_job'] == 'compile'
-assert supplier['rebuilt_from_reference_source'] == (selection == 'retirement')
+assert supplier['rebuilt_from_reference_source'] == (selection == 'selected-minimum')
 assert all(supplier['context'][k] == os.environ[k] for k in supplier['context'])
 assert supplier['upstream'] == 'a3d93999ef0521681d45e445c39964a7af0f593f'
-assert supplier['patch_sha256'] == (sha('tools/net-tcp-priority/supplier-retirement.patch') if selection == 'retirement' else None)
+assert supplier['patch_sha256'] is None
+if selection == 'selected-minimum':
+    from selected_supplier import check_selected
+    check_selected(supplier, {k:os.environ[k] for k in supplier['context']})
 if selection == 'canonical':
     assert supplier['libraries_before'] == supplier['libraries_after'] and supplier['source_before'] == supplier['source_after']
 selected_compiler = Path(supplier['compiler_root']).resolve(strict=True)
-assert selected_compiler.parent == Path('tcp-canonical-supplier' if selection == 'canonical' else 'tcp-private-supplier').resolve(strict=True)
+assert selected_compiler.parent == Path('tcp-canonical-supplier' if selection == 'canonical' else 'tcp-selected-supplier').resolve(strict=True)
 assert supplier['public_headers_before'] == supplier['public_headers_after']
 assert supplier['compiler_archive']['sha256'] == '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4'
 for build in ('out', 'out-arm64'):
