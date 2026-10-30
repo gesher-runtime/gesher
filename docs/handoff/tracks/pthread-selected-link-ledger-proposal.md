@@ -51,7 +51,9 @@ The static proof correlates actual full-path `Reading` records, `Loaded
 archive(member)` records and live provider-symbol map owners/addresses. The
 pinned LLD GNU writer uses **bare member names** in its map. Every such owner
 must resolve uniquely across **all** actually loaded archive members before
-the selected archive is accepted. Archive-prefixed map owners are unsupported
+the selected archive is accepted. A real direct `.o`/`.obj` Reading path with
+the same basename is an ambiguity too, and rejects the claim without changing
+the captured command or response paths. Archive-prefixed map owners are unsupported
 here; a synthetic `archive(member)` positive in the first unpublished helper
 was rejected by independent peer and replaced by full actual-map replay.
 Full-path contradictions, ambiguous aliases, another provider object,
@@ -112,7 +114,7 @@ async or independent-root adoption gates recorded in the canonical map.
 C:/work/gesher-ci-review/tcp-selected-411396-current-authority.json` pins the
 actual old authority hash/source/run, then uses visibly SYNTHETIC map/command
 metadata only. It checks linked/unlinked positives, identical duplicates,
-28 origin/member/import/owner/address/map proof negatives, two mode failures,
+29 origin/member/import/owner/address/map proof negatives, two mode failures,
 six command failures, eight response failures and 13 portable sealed-record
 negatives. No compiler/native process
 or network operation is started by this test. Actual new CMake/Ninja links
@@ -125,9 +127,9 @@ mode pins both complete saved inputs and reconstructs the entire actual
 static control trace/map/import blocks. The corrected helper accepts their
 16,013/67,513/4,273 bytes and binds 142 live definitions through seven selected
 members. All 18 prior actual member/address/archive bindings compare equal.
-Six actual-derived missing-origin, ambiguous-origin, other-supplier,
+Seven actual-derived missing-origin, ambiguous-origin, other-supplier,
 globally-ambiguous-member, unsupported-map-owner and conflicting-address
-controls reject. This is historical diagnostic archive `5c53...` only; it
+and direct-object collision controls reject. This is historical diagnostic archive `5c53...` only; it
 does not relabel those bytes as the fresh selected `b415...` archive, perform
 a new link or qualify the new launcher/CMake integration. On a future actual
 proof failure the launcher prints the full raw map/import rows before raising.

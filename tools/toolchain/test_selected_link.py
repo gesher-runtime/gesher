@@ -159,6 +159,7 @@ def controls(authority):
         (trace.replace(member, 'libwinpthread_la-clock.o'), mapping.replace(member, 'libwinpthread_la-clock.o'), imported),
         (trace.replace(member, 'nonexistent.o'), mapping.replace(member, 'nonexistent.o'), imported),
         (trace+'ld.lld: Reading /SYNTHETIC/other/ordinary.a\nld.lld: Loaded ordinary.a('+member+') for unrelated\n', mapping, imported),
+        (trace+'ld.lld: Reading /SYNTHETIC/direct/'+member+'\n', mapping, imported),
     ]
     for t, m, i in negatives:
         reject(lambda: ledger.prove(t, m, i, data, proof_cwd))
@@ -239,10 +240,11 @@ def actual_replay(log, authority):
         (trace + 'ld.lld: Reading /other/ordinary.a\nld.lld: Loaded ordinary.a('+member+') for unrelated\n', mapping),
         (trace, mapping.replace(member+':(', 'libwinpthread.a('+member+'):( ')),
         (trace, mapping+'00001000 00000020 16 '+member+':(.text)\n00000001 00000000 0                 pthread_self\n'),
+        (trace+'ld.lld: Reading /home/runner/work/gesher/gesher/direct/'+member+'\n', mapping),
     ]
     for t, m in negatives:
         reject(lambda: ledger.prove(t, m, imported, data, cwd))
-    print('PASS actual411350/a1 full static map/trace/import replay: 142 live definitions/7 members; all18 prior bindings equal; 6 actual-derived ablations rejected; historical5c53 only, no new runtime claim')
+    print('PASS actual411350/a1 full static map/trace/import replay: 142 live definitions/7 members; all18 prior bindings equal; 7 actual-derived ablations rejected; historical5c53 only, no new runtime claim')
 
 
 def main():
