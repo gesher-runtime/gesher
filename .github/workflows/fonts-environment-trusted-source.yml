@@ -1,0 +1,122 @@
+name: fonts-environment-trusted-source
+on:
+  workflow_call:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      FONTS_ENV_COMPONENT_CALLER_COMMIT: ${{ vars.FONTS_ENV_COMPONENT_CALLER_COMMIT }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify separate diagnostic authority and retain complete frozen full and CORE policy
+        shell: bash
+        run: |
+          python3 -I - <<'PY'
+          """Dedicated metadata-only environment diagnostic source authority."""
+          import ast,copy,hashlib,json,os,re,subprocess,sys,textwrap,urllib.request
+          from pathlib import Path
+          BASE='f78bcbbb10050267374fa5b94318174f384a0b7e'
+          CORE_GUARD='e7ef94f878725e7a2f7899e7e4652335ec969607'
+          CORE_TRUST='.github/workflows/fonts-core-trusted-source.yml'
+          CORE_GUARD_BLOB='1e03bec758c52198828037edd0302be2e0a447ff'
+          TEMPLATE='a4d1fc5775ca751c51794ce2a3676588931403a9'
+          CALLER='.github/workflows/fonts-environment-characterization.yml'
+          TRUST='.github/workflows/fonts-environment-trusted-source.yml'
+          REPO='gesher-runtime/gesher'
+          EXTRA_PINS={'tests/fonts-environment/Native3FontEnvironmentTest.java': '631b20d42a4cc5736f9fcac9c7a12ef8158352da', 'tests/fonts-environment/f78-metadata.json': '60c468127d6a24497e1dd1bab370a4df841be177', 'tests/fonts-environment/probe.c': '7781a11869e1f1499afee3082aba63061c7f4959', 'tests/fonts-environment/probe_jni.c': '8e2d65fde838fe28912b96b7b5a378a32700ae16', 'tools/fonts/environment-assemble.py': 'ee80267c611247ab5e92de48284359f8a4856e95', 'tools/fonts/environment-fixtures.py': 'd237cdc7cc8520f03293a85bce0d5fccfa5e8587', 'tools/fonts/environment-supplier.py': '4031cc6a25fa59c33cf13b0b3dd0311713470024', 'tools/fonts/run-environment.ps1': 'c653d89e56f668de87e66a37b8634ba33d5d3d69', 'tools/fonts/test-environment-arguments.ps1': '1e5ae8012b32690df70525db3631c7714ac60c1b', 'tools/fonts/test-environment-metadata.py': 'f20fde3be0080bc9f1dbb867cb9d7d12f107e39c'}
+          def require(value,message):
+           if not value:raise RuntimeError(message)
+          def git(*args):return subprocess.check_output(['git',*args])
+          def reject(label,fn):
+           try:fn()
+           except (RuntimeError,KeyError):print('FONT_ENV_NEGATIVE '+label+'=rejected',flush=True)
+           else:raise RuntimeError('Negative accepted: '+label)
+          def frozen_core():
+           raw=git('show',CORE_GUARD+':'+CORE_TRUST)
+           require(hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==CORE_GUARD_BLOB,'Immutable core guard differs')
+           require(raw==git('show',BASE+':'+CORE_TRUST),'Frozen core source guard differs')
+           code=textwrap.dedent(raw.decode().split("          python3 -I - <<'PY'\n",1)[1].rsplit('\n          PY',1)[0])
+           tree=ast.parse(code);defs=[n for n in tree.body if not(isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name) and n.value.func.id=='main')]
+           core={};exec(compile(ast.Module(body=defs,type_ignores=[]),'immutable-core-guard','exec'),core)
+           full=core['frozen_full']();inventory=full['inventory'];expected=inventory(core['BASE'])
+           for p,b in core['EXTRA_PINS'].items():expected[p]=(expected.get(p,('100644',''))[0],b)
+           actual=inventory(BASE)
+           for p in (core['CALLER'],core['TRUST']):expected[p]=actual[p]
+           full['verify_tree'](actual,expected)
+           original=git('show',core['TEMPLATE']+':'+core['CALLER']);needle=b'fonts-core-trusted-source.yml@'+b'0'*40
+           require(original.count(needle)==1 and git('show',BASE+':'+core['CALLER'])==original.replace(needle,b'fonts-core-trusted-source.yml@'+CORE_GUARD.encode()),'Frozen core producer/role DAG or guard selfpin differs')
+           print('FONT_ENV_FROZEN_SOURCE full_base='+core['BASE']+' core_base='+BASE+' core_pins='+str(len(core['EXTRA_PINS']))+' original_full_core_DAG=UNCHANGED runtime_reuse_only=true',flush=True)
+           return full
+
+          def run_identity(run,source,run_id,attempt,event):
+           require(run['repository']['full_name']==run['head_repository']['full_name']==REPO and run['repository']['id']==run['head_repository']['id']==1426153186,'Wrong diagnostic repository')
+           require(str(run['id'])==run_id and str(run['run_attempt'])==attempt and run['head_sha']==source,'Wrong diagnostic run/source/attempt')
+           require(run['name']=='fonts-environment-characterization' and run['path']==CALLER and run['event']==event and event in ('push','workflow_dispatch') and run['head_branch']=='wip/fonts-environment-characterization','Wrong diagnostic workflow/event/ref')
+          def caller_authority(value):
+           require(bool(re.fullmatch('[0-9a-f]{40}',value)),'Missing diagnostic caller authority')
+           require(git('cat-file','-t',value).strip()==b'commit','Diagnostic authority not a commit')
+           return git('show',value+':'+CALLER)
+          def main():
+           require(os.environ.get('GITHUB_ACTIONS')=='true' and os.environ['GITHUB_REPOSITORY']==REPO,'CI repository only')
+           source=os.environ['GITHUB_SHA'];run_id=os.environ['GITHUB_RUN_ID'];attempt=os.environ['GITHUB_RUN_ATTEMPT'];event=os.environ['GITHUB_EVENT_NAME']
+           require(os.environ['GITHUB_REF']=='refs/heads/wip/fonts-environment-characterization' and git('rev-parse','HEAD').decode().strip()==source,'Wrong diagnostic source/ref')
+           req=urllib.request.Request('https://api.github.com/repos/'+REPO+'/actions/runs/'+run_id,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+           with urllib.request.urlopen(req,timeout=60) as response:run=json.load(response)
+           print('FONT_ENV_RUN_IDENTITY '+json.dumps({'expected':{'source':source,'run':run_id,'attempt':attempt,'workflow':'fonts-environment-characterization','path':CALLER,'repository':REPO},'received':{k:run.get(k) for k in ('id','run_attempt','head_sha','name','path','head_branch','event')}},sort_keys=True),flush=True)
+           run_identity(run,source,run_id,attempt,event)
+           for field,value in (('id',-1),('run_attempt',-1),('head_sha','0'*40),('name','ci'),('path','forged.yml'),('event','schedule'),('head_branch','main')):
+            bad=copy.deepcopy(run);bad[field]=value;reject('actual_run_'+field,lambda:run_identity(bad,source,run_id,attempt,event))
+           for field in ('repository','head_repository'):
+            bad=copy.deepcopy(run);bad[field]['id']=-1;reject('actual_run_'+field,lambda:run_identity(bad,source,run_id,attempt,event))
+           reviewed=os.environ.get('FONTS_ENV_COMPONENT_CALLER_COMMIT','');approved=caller_authority(reviewed)
+           require(git('show',source+':'+CALLER)==approved,'Diagnostic caller differs from separate independent authority')
+           for value in ('','x'*40,source+':policy'):reject('malformed_authority',lambda:caller_authority(value))
+           reject('unapproved_template',lambda:require(caller_authority(TEMPLATE)==approved,'Unpinned template not approved'))
+           refs=re.findall(rb'(?m)^    uses: gesher-runtime/gesher/\.github/workflows/fonts-environment-trusted-source\.yml@([0-9a-f]{40})$',approved)
+           require(len(refs)==1,'One immutable diagnostic guard required');guard=refs[0].decode()
+           require(git('show',guard+':'+TRUST)==git('show',reviewed+':'+TRUST),'Diagnostic immutable guard differs')
+           template=git('show',TEMPLATE+':'+CALLER);needle=b'fonts-environment-trusted-source.yml@'+b'0'*40
+           require(template.count(needle)==1 and approved==template.replace(needle,b'fonts-environment-trusted-source.yml@'+guard.encode()),'Diagnostic fixture/supplier/observation DAG changed')
+           full=frozen_core();inventory=full['inventory'];expected=inventory(BASE)
+           subprocess.run(['git','merge-base','--is-ancestor',BASE,source],check=True)
+           for p,b in EXTRA_PINS.items():expected[p]=(expected.get(p,('100644',''))[0],b)
+           for p in (CALLER,TRUST):expected[p]=inventory(reviewed)[p]
+           actual=inventory(source);full['verify_tree'](actual,expected);full['verify_checkout'](expected)
+           for p in EXTRA_PINS:
+            bad=copy.deepcopy(actual);bad[p]=('100644','0'*40);reject('diagnostic_blob_'+p,lambda:full['verify_tree'](bad,expected))
+           bad=copy.deepcopy(actual);bad['tools/fonts/forged.py']=('100644','0'*40);reject('unknown_diagnostic_path',lambda:full['verify_tree'](bad,expected))
+           for p in ('.github/workflows/ci.yml',CORE_TRUST,'.github/workflows/fonts-core-component.yml','tools/native3-locks/union_payload.py','tools/native3-locks/union_blocking_guard.py','compat/bionic/native_fonts.cc','compat/posix/src/path.cc','compat/bionic/shim.cc','compat/elf/exec/gesher_exec.cc'):
+            bad=copy.deepcopy(actual);bad[p]=('100644','0'*40);reject('retained_runtime_policy_'+p,lambda:full['verify_tree'](bad,expected))
+           require(sys.flags.isolated==1 and all(Path(m.__file__).resolve().parent!=Path.cwd() for m in (json,hashlib)),'Candidate shadow module imported')
+           originals={p:Path(p).read_bytes() for p in (CALLER,TRUST,CORE_TRUST,'tools/native3-locks/union_payload.py','tools/native3-locks/union_blocking_guard.py')}
+           try:
+            for p in originals:Path(p).write_bytes(b'pass\n')
+            reject('actual_noop_guard_caller_core',lambda:full['verify_checkout'](expected))
+           finally:
+            for p,raw in originals.items():Path(p).write_bytes(raw)
+           full['verify_checkout'](expected);full['isolated_import_controls']()
+           require(not git('status','--porcelain','--untracked-files=all').strip(),'Dirty diagnostic checkout')
+           print('FONT_ENV_TRUSTED_SOURCE '+json.dumps({'source':source,'run':run_id,'attempt':attempt,'immutable_guard':guard,'caller_authority':reviewed,'frozen_core_source':BASE,'extra_pins':EXTRA_PINS,'roles':{'runtime':'BOUNDED_QUALIFIED_F78_DIAGNOSTIC/run41108241255/a1/producer124243711875/artifact13005515313_WHOLE_RUN_6_SUCCESS_1_OLD_TRANSPORT_FAILURE','fixtures':'CURRENT_SOURCE_CURRENT_ATTEMPT','data':'QUALIFIED_1BF8_DATA_ONLY','translator':'QUALIFIED_1BF8_EXPLICIT_TRANSLATOR'},'full_qualification':False,'unicode_environment_qualified':False,'font_fallback_qualified':False},sort_keys=True),flush=True)
+          main()
+          PY
+      - name: Preserve original CORE argument and assembly and linker negative controls
+        shell: bash
+        run: |
+          python3 tools/fonts/test-core-assembly.py
+          python3 tools/fonts/test-cli-link-evidence.py
+      - name: Preserve CORE argv controls and verify distinct diagnostic launch shapes
+        shell: pwsh
+        run: |
+          tools/fonts/test-dex-arguments.ps1
+          tools/fonts/test-environment-arguments.ps1
+      - name: Reject incorrect bounded supplier identities and synthetic file owners
+        shell: bash
+        run: python3 tools/fonts/test-environment-metadata.py

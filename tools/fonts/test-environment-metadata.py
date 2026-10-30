@@ -32,7 +32,7 @@ def main():
    p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(Path('config/'+name).read_bytes() if name in ('fonts/fonts.xml','fonts/windows-fonts.xml') else ('NONEXECUTABLE_METADATA_ONLY '+name).encode())
   members=original.inventory(root);fake.EXE_SHA={name:members[name] for name in reuse.EXE_SHA}
   def receipt(role):
-   spec=suppliers.SUPPLIERS[role];return {'role':role,'source':spec['source'],'run':spec['run'],'attempt':1,'artifact':{'id':spec['id'],'digest':spec['digest']},'producer':{'id':spec['job'],'conclusion':'success'},'members':members}
+   spec=suppliers.SUPPLIERS[role];return {'role':role,'source':spec['source'],'run':spec['run'],'attempt':1,'repository':suppliers.REPO,'repository_id':suppliers.REPO_ID,'artifact':{'id':spec['id'],'digest':spec['digest'],'expired':False},'producer':{'id':spec['job'],'name':spec['producer'],'conclusion':'success'},'members':members}
   data=receipt('qualified-data');translator=receipt('qualified-translator')
   owners={p:{'role':'QUALIFIED_1BF8_DATA_ONLY','source':data['source'],'sha256':members[p]} for p in original.data_files(root)}
   owners.update({p:{'role':reuse.ROLE,'source':reuse.SOURCE,'sha256':members[p]} for p in reuse.EXE_SHA})
