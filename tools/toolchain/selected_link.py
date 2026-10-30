@@ -250,7 +250,8 @@ def prove(trace, mapping, imports, data, cwd):
         assert member in inventory[symbol], 'Live symbol is absent from the actual selected member inventory'
         bindings[symbol] = dict(archive=origin, archive_sha256=aliases[origin], member=member, address=address)
     assert not re.search(r'Name:\s*lib(?:win)?pthread[^\s]*\.dll\b', imports, re.IGNORECASE), 'Unexpected dynamic pthread dependency'
-    assert not re.search(r'Symbol:\s*(?:__imp_)?(?:pthread_|_pthread_|__pthread_|__pth_)', imports), 'Imported pthread provider symbol'
+    imported_names = re.findall(r'^\s*Symbol:\s*(\S+)', imports, re.MULTILINE)
+    assert not any(provider_name(n.removeprefix('__imp_')) for n in imported_names), 'Imported pthread provider symbol'
     assert bool(loaded) == bool(bindings), 'Loaded provider without live definition, or missing loaded proof'
     return dict(status='LINKED' if bindings else 'NOT-LINKED', definitions=bindings,
                 loaded_members=[dict(archive=p, sha256=aliases[p], member=m) for _, m, p in sorted(loaded)])
