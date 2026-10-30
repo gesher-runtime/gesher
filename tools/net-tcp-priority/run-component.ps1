@@ -213,8 +213,17 @@ if (-not ('TcpPriorityDiagnostics.TsfJobSupervisor' -as [type])) {
   Add-Type -TypeDefinition ('namespace TcpPriorityDiagnostics {' + [Environment]::NewLine + $qualifiedController + [Environment]::NewLine + '}')
 }
 Write-Host ('TCP_PRIORITY_DIAGNOSTIC_CONTROLLER blob=625be4d5906bb48dd02d6103382fd2e85ac88738 sha256=' + (Get-FileHash -LiteralPath tools/net-tcp-priority/qualified/TsfJobSupervisor.cs -Algorithm SHA256).Hash.ToLowerInvariant() + ' namespace=TcpPriorityDiagnostics original_product_controller=unchanged')
-function RequireDiagnosticRetirement($Result) {
-  if (-not $Result.Success -or $Result.ActiveProcessLimit -ne 1 -or $Result.TotalProcesses -ne 1 -or
+function RequireDiagnosticRetirement($Result, [int] $ExpectedExit = 0) {
+  # Success is the unchanged controller's exit-zero predicate. The separately
+  # required negative fixture must instead satisfy that SAME predicate with
+  # only its explicitly expected exit code changed from zero to one.
+  $exitProved = $ExpectedExit -eq 0 -and $Result.Success
+  if ($ExpectedExit -eq 1) {
+    $exitProved = -not $Result.Success -and $Result.Reason -ceq 'exit' -and $Result.ExitCode -eq 1 -and
+      $Result.RootSignaled -and $Result.JobEmpty -and $Result.OutputRead -and $Result.Errors.Count -eq 0 -and
+      $Result.OwnedHandles -eq $Result.ClosedHandles
+  }
+  if (-not $exitProved -or $Result.ActiveProcessLimit -ne 1 -or $Result.TotalProcesses -ne 1 -or
       $Result.PreResumeActive -ne 1 -or $Result.Processes.Count -ne 1 -or $Result.Processes[0].Role -cne 'root' -or
       -not $Result.WritersRetired -or -not $Result.ExclusiveSnapshot -or -not $Result.RootHandleClosed -or
       -not $Result.ThreadHandleClosed -or $Result.OwnedHandles -ne $Result.ClosedHandles) { throw 'Isolated diagnostic job/identity/retirement unproved' }
@@ -230,7 +239,7 @@ function InvokeGuardedUdp([string] $Name, [string] $Exe, [string] $Arguments, [s
   Write-Host ('TCP_COHERENT_GUARDED_KERNEL '+(@{supplier=$selection;name=$Name;result=$result} | ConvertTo-Json -Depth 8 -Compress))
   $text = $result.Output + $result.Error
   Write-Host $text
-  RequireDiagnosticRetirement $result
+  RequireDiagnosticRetirement $result $(if ($Negative) {1} else {0})
   if ($Negative) {
     if ($result.ExitCode -ne 1 -or $text -notmatch 'FAIL UDP: negative missing MSG_TRUNC rejected') { throw "Guarded negative not rejected: $Name" }
   } else {

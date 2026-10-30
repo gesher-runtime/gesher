@@ -160,6 +160,9 @@ jobs:
       TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
     steps:
       - uses: actions/checkout@v4
+      - name: Reject incomplete expected-exit retirement metadata without native execution
+        shell: pwsh
+        run: tools/net-tcp-priority/test-retirement-metadata.ps1
       - name: Verify raw archive and exact producer, then run actual host and both ABI paths
         shell: pwsh
         run: tools/net-tcp-priority/run-component.ps1
