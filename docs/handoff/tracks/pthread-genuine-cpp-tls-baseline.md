@@ -39,8 +39,25 @@ are printed without assuming in advance which mechanism the compiler chooses.
 The complete verbose linker transcript is printed and retained as a hashed
 artifact member. The explicit libwinpthread.a and the -pthread static alias
 libpthread.a have distinct path/hash bindings; private variants validate both
-against their exact supplier receipt. Actual link selection is audited from
-that transcript, without inferring it from command arguments alone.
+against their exact supplier receipt and both static aliases must be byte equal.
+The pinned upstream install-exec-hook copies the built static library to this
+alias; an original canonical alias cannot silently fill a private variant.
+The actual GNU-style live linker map and loaded archive(member) trace jointly
+bind pthread self/create/join/exit/key create/delete/get/set, key cleanup, the
+pthread TLS callback and its registration slot to their selected variant's exact
+archive hash and member. Ambiguous member basenames across any loaded archives,
+missing symbols, duplicate symbols and other-variant archives are rejected.
+Unresolved actual evidence prints the explicit missing/ambiguous names and full
+raw map before failing; optimized or renamed symbols are never silently replaced.
+Both raw map and verbose trace remain complete hashed artifact members.
+
+The map format and option are grounded in LLVM's
+[MinGW driver](https://github.com/llvm/llvm-project/blob/main/lld/MinGW/Driver.cpp)
+and [COFF live map writer](https://github.com/llvm/llvm-project/blob/main/lld/COFF/LLDMapFile.cpp),
+with actual CI required to confirm this compiler's emitted format.
+The exact upstream
+[install hook](https://github.com/mingw-w64/mingw-w64/blob/a3d93999ef0521681d45e445c39964a7af0f593f/mingw-w64-libraries/winpthreads/Makefile.am)
+defines the static alias copy.
 
 Three supplier variants remain distinct, including their artifact names:
 
