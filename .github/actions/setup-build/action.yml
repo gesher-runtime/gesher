@@ -5,6 +5,26 @@ inputs:
   ccache-key:
     description: Name of the ccache cache (one per job)
     required: true
+  pthread-supplier:
+    description: Explicit first-caller proposal; publisher default is unchanged
+    default: publisher
+  pthread-caller:
+    description: Explicit reviewed caller for selected mode; empty for publisher
+    default: ''
+
+outputs:
+  selected_compiler_root:
+    description: Explicit selected root only; empty for the unchanged publisher default
+    value: ${{ steps.host_pthread.outputs.compiler_root }}
+  selected_receipt:
+    description: Current selected toolchain receipt
+    value: ${{ steps.host_pthread.outputs.receipt }}
+  selected_receipt_sha256:
+    description: Whole selected receipt hash
+    value: ${{ steps.host_pthread.outputs.receipt_sha256 }}
+  selected_recipe_fingerprint:
+    description: Exact selected source recipe fingerprint
+    value: ${{ steps.host_pthread.outputs.recipe_fingerprint }}
 
 runs:
   using: composite
@@ -46,11 +66,39 @@ runs:
         key: ccache-${{ inputs.ccache-key }}-${{ github.sha }}
         restore-keys: ccache-${{ inputs.ccache-key }}-
 
+    - name: Prepare explicitly selected original-profile pthread toolchain
+      if: inputs.pthread-supplier == 'selected-minimum'
+      id: host_pthread
+      shell: bash
+      env:
+        GESHER_HOST_PTHREAD_SELECTION: selected-minimum
+        GESHER_HOST_PTHREAD_CALLER: ${{ inputs.pthread-caller }}
+      run: python3 tools/toolchain/prepare_host_pthread.py --selection selected-minimum
+
     - name: Configure
       shell: bash
+      env:
+        GESHER_HOST_PTHREAD_SELECTION: ${{ inputs.pthread-supplier }}
+        GESHER_HOST_PTHREAD_CALLER: ${{ inputs.pthread-caller }}
+        GESHER_SELECTED_PTHREAD_LLVM: ${{ steps.host_pthread.outputs.compiler_root }}
+        GESHER_SELECTED_PTHREAD_RECEIPT: ${{ steps.host_pthread.outputs.receipt }}
+        GESHER_SELECTED_PTHREAD_RECEIPT_SHA256: ${{ steps.host_pthread.outputs.receipt_sha256 }}
       run: |
         ccache --set-config=max_size=2G
-        cmake -S . -B out -G Ninja \
-          -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
-          -DLLVM_MINGW="$HOME/toolchain/$LLVM_MINGW_NAME" \
-          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
+          llvm="$GESHER_SELECTED_PTHREAD_LLVM"
+          receipt="$GESHER_SELECTED_PTHREAD_RECEIPT"
+          test -n "$llvm" && test -n "$receipt"
+          printf '%s  %s\n' "$GESHER_SELECTED_PTHREAD_RECEIPT_SHA256" "$receipt" | sha256sum --check --strict
+          python3 tools/toolchain/prepare_host_pthread.py --verify "$receipt"
+          cmake --fresh -S . -B out -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
+            -DLLVM_MINGW="$llvm" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        else
+          test "$GESHER_HOST_PTHREAD_SELECTION" = publisher
+          cmake -S . -B out -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
+            -DLLVM_MINGW="$HOME/toolchain/$LLVM_MINGW_NAME" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        fi

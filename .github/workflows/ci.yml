@@ -51,6 +51,9 @@ jobs:
         with:
           # The former runtime-port job's cache already holds the runtime.
           ccache-key: runtime
+          # Source-only proposal: no main/default change and no dispatch approval.
+          pthread-supplier: ${{ github.ref == 'refs/heads/wip/pthread-production-factory' && 'selected-minimum' || 'publisher' }}
+          pthread-caller: ci/build
 
       - name: Build the separate bounded native teardown observer
         run: bash tools/web3/build-teardown-probe.sh "$HOME/toolchain/$LLVM_MINGW_NAME"
