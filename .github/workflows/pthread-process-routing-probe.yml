@@ -1,3 +1,4 @@
+# Separate target-resource lifetime primitive role.
 # Separate opt-in callback-release reaper role.
 # Observe malformed descriptor before DLL admission.
 # Actual foreign Windows ExitThread and _endthreadex cases.
@@ -478,4 +479,73 @@ jobs:
             if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
             if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
           }
+          }
+  probe_resource_compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: host-pthread-authority
+      - name: Build isolated resource probe role
+        shell: bash
+        run: |
+          set -euo pipefail
+          resource_root="$RUNNER_TEMP/gesher-routing-probe-resource-toolchain"
+          test ! -e "$resource_root"
+          mkdir "$resource_root"
+          cp -a --reflink=auto "$GESHER_AUTHORITY_LLVM" "$resource_root/$LLVM_MINGW_NAME"
+          cp --reflink=auto "$(dirname "$GESHER_AUTHORITY_LLVM")/compiler.tar.xz" "$resource_root/compiler.tar.xz"
+          llvm="$resource_root/$LLVM_MINGW_NAME"
+          bash tools/host-pthread-authority/build-supplier.sh "$llvm" probe-resource
+          python3 tools/host-pthread-authority/probe_resource_bundle.py build "$llvm"
+          python3 tools/host-pthread-authority/probe_resource_bundle.py verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pthread-routing-probe-resource
+          path: routing-probe-resource/
+          if-no-files-found: error
+  probe_resource_windows:
+    needs: probe_resource_compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact resource producer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/artifact_receipt.py --name pthread-routing-probe-resource --producer probe_resource_compile --destination routing-probe-resource
+          if ($LASTEXITCODE -ne 0) { throw 'Resource producer ZIP verification failed' }
+          python tools/host-pthread-authority/probe_resource_bundle.py verify
+          if ($LASTEXITCODE -ne 0) { throw 'Resource role verification failed' }
+      - name: Forced target resource control
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $stdout=Join-Path $env:RUNNER_TEMP 'resource.out'; $stderr=Join-Path $env:RUNNER_TEMP 'resource.err'
+          $start=@{FilePath=(Join-Path $pwd 'routing-probe-resource/resource-lease.exe'); WorkingDirectory=(Join-Path $pwd 'routing-probe-resource'); WindowStyle='Hidden'; PassThru=$true; RedirectStandardOutput=$stdout; RedirectStandardError=$stderr}
+          $process=Start-Process @start
+          try {
+            if (-not $process.WaitForExit(120000)) { throw 'Resource timeout' }
+            $process.Refresh(); if ($process.ExitCode -ne 0) { throw "Resource exit=$($process.ExitCode)" }
+            $actual=Get-Content -Raw -LiteralPath $stdout
+            if (-not $actual.Contains('PASS target resource lease survives actual native TLS retirement handles=') -or $actual.Contains('FAIL ')) { throw 'Resource control missing' }
+            foreach ($proof in @('RESOURCE_LAST_RELEASE clock_destroy_success=1 record_retire_complete=1', 'PASS target resource lease duplicate thread/event failures atomic with exact handle rollback')) { if (-not $actual.Contains($proof)) { throw "Missing resource proof $proof" } }
+            Write-Host $actual
+          } finally {
+            if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Resource cleanup failed' } }
+            $process.Dispose()
+            if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
+            if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
           }
