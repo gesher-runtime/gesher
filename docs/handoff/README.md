@@ -1,5 +1,9 @@
 # Handoff: closing the known gaps (wave after PR #3)
 
+**Current continuation:** [2026-10-29 manager checkpoint](session-2026-10-29-continuation.md) supersedes older live status below.
+
+**Newest accepted integration, 2026-10-29:** coherent full 40913529657 at 0a1a3224 passed 45 jobs with six optional skips; local integration merge 813df03ba61c0b9546e109992a348af0f4a47440 has an empty entire non-doc diff to that exact source. Both Windows normal suites, UDP and DNS on both ABIs, source-clean device checks, TSF/Services, native blocking, package and e2e passed within their documented scopes. Binder production trust, AppContainer, secondary AOT, public blocking and TCP gaps, pthread lifecycle, hardware and other known requirements remain open. See the current continuation and `C:/work/gesher-ci-review/combined-409135-terminal-audit.md`.
+
 [Bounded requirement matrix and unsurveyed scope](requirement-matrix-2026-10-29.md).
 
 **Latest continuation, 2026-10-29:** TSF8ad component actual audit is complete and bounded; Binder authenticated private admission remains source-only and is a security prerequisite for secondary AOT. Services corrected fixture needs fresh proof. Interactive hardware Windows CI does not exist; hardware remains an external blocker. Read [the continuation checkpoint](session-2026-10-28-aot-native-full.md#continued-audit-and-security-dependency-2026-10-29).
