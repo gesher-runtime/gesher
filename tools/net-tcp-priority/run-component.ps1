@@ -1,8 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $selection = $env:TCP_SUPPLIER_ROLE
-if ($selection -cnotin @('canonical','retirement')) { throw 'Missing exact supplier selection' }
-$expectedSupplierRole = if ($selection -ceq 'canonical') { 'canonical-publisher-unmodified-v1' } else { 'static-detached-retirement-experiment-v1' }
-$expectedPrefix = if ($selection -ceq 'canonical') { 'tcp-canonical-supplier' } else { 'tcp-private-supplier' }
+if ($selection -cnotin @('canonical','selected-minimum')) { throw 'Missing exact supplier selection' }
+$expectedSupplierRole = if ($selection -ceq 'canonical') { 'canonical-publisher-unmodified-v1' } else { 'gesher-winpthreads-selected-minimum-v1' }
+$expectedPrefix = if ($selection -ceq 'canonical') { 'tcp-canonical-supplier' } else { 'tcp-selected-supplier' }
 $expectedProducer = "compile-$selection"
 if ($env:GITHUB_ACTIONS -cne 'true') { throw 'Native fixture is CI-only' }
 $trusted = @{
@@ -105,11 +105,15 @@ foreach ($build in 'out','out-arm64') {
   foreach ($command in $c.commands.PSObject.Properties) { if (-not $command.Value.Contains($c.configured) -or -not $command.Value.Contains('-Werror')) { throw "Missing actual source/compiler invocation $($command.Name)" } }
 }
 $s = $m.supplier
-if ($s.role -cne $expectedSupplierRole -or $s.supplier_selection -cne $selection -or $s.rebuilt_from_reference_source -cne ($selection -ceq 'retirement') -or $s.producer_job -cne 'compile' -or
+if ($selection -ceq 'selected-minimum') {
+  python tools/net-tcp-priority/selected_supplier.py --manifest tcp-fixture/provenance.json
+  if ($LASTEXITCODE -ne 0) { throw 'Selected original-profile minimum supplier authority failed' }
+}
+if ($s.role -cne $expectedSupplierRole -or $s.supplier_selection -cne $selection -or $s.rebuilt_from_reference_source -cne ($selection -ceq 'selected-minimum') -or $s.producer_job -cne 'compile' -or
     $s.context.GITHUB_SHA -cne $env:GITHUB_SHA -or $s.context.GITHUB_RUN_ID -cne $env:GITHUB_RUN_ID -or
     $s.context.GITHUB_RUN_ATTEMPT -cne $env:GITHUB_RUN_ATTEMPT -or $s.context.GITHUB_REPOSITORY -cne $env:GITHUB_REPOSITORY -or
     $s.context.GITHUB_REPOSITORY_ID -cne $env:GITHUB_REPOSITORY_ID -or $s.upstream -cne 'a3d93999ef0521681d45e445c39964a7af0f593f' -or
-    $s.patch_sha256 -cne $(if ($selection -ceq 'retirement') { (Get-FileHash -LiteralPath tools/net-tcp-priority/supplier-retirement.patch -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null })) { throw 'Private supplier source/context mismatch' }
+    $null -ne $s.patch_sha256) { throw 'Private supplier source/context mismatch' }
 if ($s.compiler_archive.sha256 -cne '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4' -or $s.compiler_archive.bytes -le 0 -or
     $s.compiler_archive.url -cne 'https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64.tar.xz' -or
     $s.compiler_root -cnotmatch ('/' + $expectedPrefix + '/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64$')) { throw 'Private supplier compiler archive mismatch' }
@@ -121,7 +125,7 @@ $sourcePins = @{
 foreach ($pin in $sourcePins.GetEnumerator()) { if ($s.source_before.($pin.Key) -cne $pin.Value) { throw 'Supplier upstream input mismatch' } }
 if (@(Compare-Object @($s.source_before.PSObject.Properties.Name) @($s.source_after.PSObject.Properties.Name) -CaseSensitive).Count -ne 0) { throw 'Supplier source inventory changed' }
 $changes = @($s.source_before.PSObject.Properties | Where-Object { $_.Value -cne $s.source_after.($_.Name) } | ForEach-Object Name)
-if ($selection -ceq 'retirement') {
+if ($selection -ceq 'selected-minimum') {
   if ($changes.Count -ne 1 -or $changes[0] -cne 'mingw-w64-libraries/winpthreads/src/thread.c') { throw 'Supplier patch changed unexpected sources' }
 } else {
   if ($changes.Count -ne 0) { throw 'Canonical reference source audit changed' }

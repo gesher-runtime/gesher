@@ -1,8 +1,10 @@
-"""CI-only explicit canonical publisher and separately patched diagnostic suppliers.
+"""CI-only original publisher control and explicitly named source selections.
 
 The canonical selection freshly extracts the current pinned publisher archive
-without changes. The retirement selection alone rebuilds the minimal detached
-spin-lock correction. A diagnostic result cannot replace canonical qualification.
+without changes. The historical retirement branch rebuilds only the detached
+Spin correction. The distinct selected-minimum branch uses the reviewed
+two-patch original-profile factory for actual product-consumer qualification.
+Neither role is silently relabeled as globally adopted canonical production.
 """
 import hashlib
 import json
@@ -37,12 +39,17 @@ def main():
     assert os.environ.get('GITHUB_ACTIONS') == 'true'
     context = {k: os.environ[k] for k in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID')}
     assert context['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
-    assert os.environ['GITHUB_REF'] == 'refs/heads/wip/tcp-coherent-port'
     role = os.environ['TCP_SUPPLIER_ROLE']
-    assert role in ('canonical', 'retirement')
+    if os.environ['GITHUB_REF'] == 'refs/heads/wip/tcp-coherent-port':
+        assert os.environ['GITHUB_WORKFLOW']=='net-tcp-coherent-component'
+        assert role in ('canonical','retirement')
+    else:
+        assert os.environ['GITHUB_REF']=='refs/heads/wip/tcp-minimum-selection'
+        assert os.environ['GITHUB_WORKFLOW']=='net-tcp-selected-component'
+        assert role in ('canonical','selected-minimum')
     assert os.environ['GITHUB_JOB'] == 'compile'
     assert output('git', 'rev-parse', 'HEAD').strip() == context['GITHUB_SHA']
-    workspace = ROOT / ('tcp-canonical-supplier' if role == 'canonical' else 'tcp-private-supplier')
+    workspace = ROOT / {'canonical':'tcp-canonical-supplier','retirement':'tcp-private-supplier','selected-minimum':'tcp-selected-supplier'}[role]
     assert not workspace.exists(), 'Private supplier workspace must be fresh'
     workspace.mkdir()
     commands = []
@@ -56,7 +63,10 @@ def main():
             except (subprocess.SubprocessError, OSError):
                 log.flush()
                 print('TCP_PRIORITY_SUPPLIER_BUILD_FAILURE', name, flush=True)
-                print('\n'.join((workspace / name).read_text(errors='replace').splitlines()[-100:]), flush=True)
+                if name=='selected-minimum-factory.log':
+                    print((workspace/name).read_text(errors='replace'),end='',flush=True)
+                else:
+                    print('\n'.join((workspace / name).read_text(errors='replace').splitlines()[-100:]), flush=True)
                 raise
 
     archive = workspace / 'compiler.tar.xz'
@@ -106,6 +116,13 @@ def main():
     original_symbols, original_exports = symbols(), exports()
     assert not any('gesher_winpthread' in name for name in original_symbols + original_exports)
     patch = HERE / 'supplier-retirement.patch'
+    minimum_authority=None
+    if role=='selected-minimum':
+        factory=ROOT/'tools/host-pthread-authority/build-minimum-supplier.sh'
+        run(['bash',factory,llvm,source],ROOT,'selected-minimum-factory.log',900)
+        # Full bounded indexed authority transport and actual SDK/map output.
+        print((workspace/'selected-minimum-factory.log').read_text(),end='',flush=True)
+        minimum_authority=json.loads((llvm/'gesher-winpthreads-authority.json').read_text())
     if role == 'retirement':
         run(['git', 'apply', '--check', patch], source, 'patch-check.log')
         run(['git', 'apply', patch], source, 'patch-apply.log')
@@ -131,13 +148,13 @@ def main():
     assert headers_before == headers_after, 'Public supplier headers changed'
     assert symbols() == original_symbols and exports() == original_exports, 'Supplier symbol inventory changed'
     after = {p: sha(target / p) for p in libraries}
-    assert (before['lib/libwinpthread.a'] != after['lib/libwinpthread.a']) == (role == 'retirement')
+    assert (before['lib/libwinpthread.a'] != after['lib/libwinpthread.a']) == (role != 'canonical')
     if role == 'canonical':
         assert before == after, 'Canonical archive libraries changed'
     changed_sources = {p: sha(source / p) for p in tracked if p}
-    expected_changes = {'mingw-w64-libraries/winpthreads/src/thread.c'} if role == 'retirement' else set()
+    expected_changes = {'mingw-w64-libraries/winpthreads/src/thread.c'} if role != 'canonical' else set()
     assert {p for p in original_sources if original_sources[p] != changed_sources[p]} == expected_changes
-    receipt = dict(context=context, role=('canonical-publisher-unmodified-v1' if role == 'canonical' else 'static-detached-retirement-experiment-v1'), supplier_selection=role, rebuilt_from_reference_source=(role == 'retirement'), upstream=UPSTREAM,
+    receipt = dict(context=context, role={'canonical':'canonical-publisher-unmodified-v1','retirement':'static-detached-retirement-experiment-v1','selected-minimum':'gesher-winpthreads-selected-minimum-v1'}[role], supplier_selection=role, rebuilt_from_reference_source=(role != 'canonical'), upstream=UPSTREAM,
                    source_before=original_sources, source_after=changed_sources, patch_sha256=(sha(patch) if role == 'retirement' else None),
                    compiler_archive=dict(url=URL, sha256=sha(archive), bytes=archive.stat().st_size),
                    compiler_root=str(llvm), producer_job='compile', compiler_driver_sha256=sha(compiler),
@@ -148,6 +165,11 @@ def main():
                    symbols=original_symbols, dll_exports=original_exports,
                    notice=(pthreads / 'COPYING').read_text(), notice_sha256=sha(pthreads / 'COPYING'), commands=commands,
                    logs={**{p.name: sha(p) for p in workspace.glob('*.log')}, **({'config.log': sha(build / 'config.log')} if role == 'retirement' else {})})
+    if role=='selected-minimum':
+        from selected_supplier import check_selected,authority_digest
+        receipt.update(ordered_patch_sha256=minimum_authority['pin']['ordered_patch_sha256'],
+                       minimum_authority=minimum_authority,minimum_authority_sha256=authority_digest(minimum_authority))
+        check_selected(receipt,context)
     destination = ROOT / 'tcp-supplier-receipt.json'
     assert not destination.exists()
     destination.write_text(json.dumps(receipt, sort_keys=True, indent=2))
@@ -160,6 +182,8 @@ def main():
                    source_before_sha256=hashlib.sha256(json.dumps(original_sources, sort_keys=True).encode()).hexdigest(),
                    source_after_sha256=hashlib.sha256(json.dumps(changed_sources, sort_keys=True).encode()).hexdigest(),
                    public_headers_unchanged=True, symbols_unchanged=True, dll_exports_unchanged=True)
+    if role=='selected-minimum':
+        summary.update(ordered_patch_sha256=receipt['ordered_patch_sha256'],minimum_authority_sha256=receipt['minimum_authority_sha256'])
     print('TCP_PRIORITY_SUPPLIER_BUILD', json.dumps(summary), flush=True)
     for path in INPUTS:
         key = 'mingw-w64-libraries/winpthreads/' + path
