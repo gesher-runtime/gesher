@@ -108,6 +108,9 @@ MEDIA4_PINS = {'tests/media/ndk-muxer/muxer_test.cc': '66c58b32f1d51ffd70a0bbed9
 PINNED_SOURCE.update(MEDIA4_PINS)
 FONTS_PINS = {'.github/workflows/native2.yml': 'ed994230b37385578efcf051296da915b609d031', 'tests/native2/fonts_standalone.c': '784fb1abb5a06839784cc48bee3fb2d317e2b2dc', 'tests/windows/tracks/46-native3.ps1': '5227ae87be03aa93c79c25a7d7ffbb1b8ca5a877', 'compat/bionic/extra_bionic.cc': '25a6824aaa1f83a3f50943637e1b39de9f54231a', 'compat/bionic/jni.cmake': '0068b5f75ceb3f508cf2c749c67384fc15a4fda8', 'compat/bionic/native_fonts.cc': '3a191e07371cdf05b31c86985228f6152e9e86df', 'compat/posix/src/path.cc': '8857487491fb45ff21bb467a3b2ffc32f28f63c0', 'compat/posix/include/gesher/font_paths.h': '2f200999a4c11d7b624195478c58770638402537', 'tools/fonts/verify-standalone-link.py': '01e1c680a7fe1217482e1f77840d68c92ec57fb1', 'tools/fonts/test-standalone-link.py': '2efb1cd300c08173078235be9700d82d2ee196b3'}
 PINNED_SOURCE.update(FONTS_PINS)
+# Diagnostic-only exact logger adoption proved by metadata component410764.
+RECEIPT_PINS = {'.github/workflows/native3-locks-blocking.yml': '6f4d06d0433c04beace93e9c92b05eaf9a5d9614', '.github/workflows/native3-locks-commands.yml': '961e4aa8513fdb782a44173eb46f8e44c64deb01', 'tools/ci/artifact_receipt.py': 'd2e1ad78e09a4871f2ca53c572292366279de573', 'tools/ci/receipt_identity.py': '0d35de488578c6d6eb2a1d0bdf5c61ac99a40c52', 'tools/ci/receipt-diagnostics.ps1': '80f33415a4c57c42c99f74ae61fc5da1316195ef', 'tools/windows4/run-tsf-component.ps1': 'ccc4d13fa150140ad5f6087f0139bf9e8958b30b', 'tools/windows4/run-tsf-union.ps1': '4f2cdef15aa94214a82513a54c29a1eae05481d2', '.github/workflows/services-geocoder-worker-component.yml': 'c2e61ec34bcc30312ad1fa00fc09bdc18a15ce17', 'tools/windows4/test-tsf-job-supervisor.ps1': '3ba0622be975f70d8dcd1e4ed529f0746a749981'}
+PINNED_SOURCE.update(RECEIPT_PINS)
 
 TARGETS = ('native3_lock_command_worker', 'native3_lock_duplicate_test', 'binderd')
 HOST_FILES = {name + suffix for name in TARGETS for suffix in ('.exe', '.imports.txt')}
@@ -173,6 +176,7 @@ def main():
         allowed.update(MERGED_DNS_SOURCE)
         allowed.update(MEDIA4_PINS)
         allowed.update(FONTS_PINS)
+        allowed.update(RECEIPT_PINS)
         allowed.add('.github/workflows/net-combined-dns-trusted-source.yml')
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
                       ':(exclude)docs/**'], cwd=ROOT, text=True).splitlines())
@@ -180,6 +184,14 @@ def main():
         for name, expected in PINNED_SOURCE.items():
             actual = subprocess.check_output(['git', 'hash-object', name], cwd=ROOT, text=True).strip()
             assert actual == expected, ('Selected source differs from reviewed leaf/adaptation', name, actual)
+        actual_receipts = {name: subprocess.check_output(['git', 'hash-object', name], cwd=ROOT, text=True).strip() for name in RECEIPT_PINS}
+        assert actual_receipts == RECEIPT_PINS
+        for name in RECEIPT_PINS:
+            mutant = dict(actual_receipts); mutant[name] = '0' * 40
+            assert mutant != RECEIPT_PINS
+            print('RECEIPT_PREFLIGHT_NEGATIVE blob=' + name + ' rejected', flush=True)
+        assert not (changed | {'tools/ci/receipt-unreviewed.py'}) <= allowed
+        print('RECEIPT_PREFLIGHT_NEGATIVE unauthorized_path rejected', flush=True)
         for name in FONTS_PINS:
             actual = {key: subprocess.check_output(['git', 'hash-object', key], cwd=ROOT, text=True).strip() for key in FONTS_PINS}
             actual[name] = '0' * 40
