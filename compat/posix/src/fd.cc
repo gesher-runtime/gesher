@@ -36,12 +36,13 @@ std::unordered_map<int, SocketFd> table;
 std::atomic<size_t> socket_count{0};
 
 // Takes the socket out of the table; false if fd is not a socket.
-bool Remove(int fd, SocketFd* state) {
+bool Remove(int fd, SocketFd* state, bool* last) {
   if (socket_count.load(std::memory_order_acquire) == 0) return false;
   std::lock_guard<std::mutex> lock(table_mutex);
   auto it = table.find(fd);
   if (it == table.end()) return false;
   *state = it->second;
+  *last = --state->description->descriptor_refs == 0;
   table.erase(it);
   socket_count.fetch_sub(1, std::memory_order_release);
   return true;
@@ -50,8 +51,30 @@ bool Remove(int fd, SocketFd* state) {
 void Insert(int fd, const SocketFd& state) {
   std::lock_guard<std::mutex> lock(table_mutex);
   if (table.insert_or_assign(fd, state).second) {
+    ++state.description->descriptor_refs;
     socket_count.fetch_add(1, std::memory_order_release);
   }
+}
+
+// Publish a successful CRT replacement in one table transaction. The old
+// native endpoint remains live until _dup2 has succeeded; a failed CRT call
+// leaves its socket metadata and descriptor references untouched.
+bool ReplaceSocket(int fd, const SocketFd* source, SocketFd* previous, bool* last) {
+  std::lock_guard<std::mutex> lock(table_mutex);
+  auto it = table.find(fd);
+  const bool existed = it != table.end();
+  if (existed) {
+    *previous = it->second;
+    *last = --previous->description->descriptor_refs == 0;
+  }
+  if (source) {
+    if (existed) it->second = *source;
+    else { table.emplace(fd, *source); socket_count.fetch_add(1, std::memory_order_release); }
+    ++source->description->descriptor_refs;
+  } else if (existed) {
+    table.erase(it); socket_count.fetch_sub(1, std::memory_order_release);
+  }
+  return existed;
 }
 
 // /dev/zero and /dev/random fds (path.cc), also guarded by table_mutex.
@@ -96,14 +119,30 @@ int ReserveFd() {
 }
 
 int RegisterSocket(const SocketFd& state) {
+  record_locks::DescriptorGuard descriptor_guard;
   int fd = ReserveFd();
   if (fd < 0) {
     int saved = errno;
-    ws::Close(state.socket);
+    // An alias registration failure must not close the shared native socket.
+    if (!state.description) ws::Close(state.socket);
     errno = saved;
     return -1;
   }
-  Insert(fd, state);
+  SocketFd registered = state;
+  if (!registered.description) {
+    registered.description = std::make_shared<ws::SocketDescription>();
+    registered.description->provider = ws::ClassifyProvider(state.socket);
+    registered.description->nonblocking.store(state.initial_nonblocking);
+    const int datagram = ws::ConfigureOwnedDatagram(state.socket);
+    if (datagram < 0) {
+      const int saved = errno;
+      _close(fd);
+      ws::Close(state.socket);
+      return errno = saved, -1;
+    }
+    registered.description->native_nonblocking_datagram = datagram != 0;
+  }
+  Insert(fd, registered);
   return fd;
 }
 
@@ -116,11 +155,6 @@ bool LookupSocket(int fd, SocketFd* state) {
   return true;
 }
 
-void UpdateSocket(int fd, const SocketFd& state) {
-  std::lock_guard<std::mutex> lock(table_mutex);
-  auto it = table.find(fd);
-  if (it != table.end()) it->second = state;
-}
 
 void RegisterDevice(int fd, Device device) {
   std::lock_guard<std::mutex> lock(table_mutex);
@@ -135,18 +169,26 @@ using gesher::Device;
 using gesher::SocketFd;
 
 namespace {
-int CloseFdBody(int fd, bool unpublished) {
+int CloseFdBody(int fd, bool unpublished, SocketFd* deferred = nullptr) {
   gesher::ForgetEpollEntries(fd);
   SocketFd state;
   int result;
-  if (!gesher::Remove(fd, &state)) {
+  bool last = false;
+  if (!gesher::Remove(fd, &state, &last)) {
     gesher::ForgetDevice(fd);
     gesher::ForgetEventObject(fd);
     gesher::ForgetBinder(fd);
     result = gesher::CrtResult(_close(fd));
   } else {
-    // Closing the socket first wakes threads blocked on it, as on Linux.
-    result = gesher::ws::Close(state.socket);
+    // Only the last descriptor closes the native socket. Shared metadata
+    // snapshots do not extend its lifetime or delay the existing close wake.
+    if (last && deferred) {
+      // Commit only CRT/table ownership under the descriptor transaction.
+      // Physical close (including linger or a legacy call lease) runs after it.
+      { std::lock_guard<std::mutex> lock(state.description->error_mutex); state.description->native_closing = true; }
+      *deferred = state;
+      result = 0;
+    } else result = last ? gesher::ws::Close(state.socket, state.description) : 0;
     int socket_errno = errno;
     if (result < 0 && unpublished) {
       // A failed virtual-resource close does not make the private CRT slot
@@ -163,11 +205,19 @@ int CloseFdBody(int fd, bool unpublished) {
 }
 
 int CloseDescriptor(int fd) {
-  gesher::record_locks::ClosingDescriptor transaction(fd);
-  if (transaction.Error()) return errno = transaction.Error(), -1;
-  int result = CloseFdBody(fd, false);
-  const int saved = errno;
-  const int error = transaction.Finish(result == 0);
+  SocketFd deferred;
+  int result, saved, error;
+  {
+    gesher::record_locks::ClosingDescriptor transaction(fd);
+    if (transaction.Error()) return errno = transaction.Error(), -1;
+    result = CloseFdBody(fd, false, &deferred);
+    saved = errno;
+    error = transaction.Finish(result == 0);
+  }
+  if (deferred.description) {
+    const int native_result = gesher::ws::Close(deferred.socket, deferred.description, true);
+    if (native_result < 0) { result = native_result; saved = errno; }
+  }
   if (error) return errno = error, -1;
   errno = saved;
   return result;
@@ -200,7 +250,7 @@ int read(int fd, void* buf, unsigned int count) {
     return gesher::CrtResult(_read(fd, buf, count));
   }
   gesher::ws::Buffer buffer = {buf, count};
-  return static_cast<int>(gesher::ws::Recv(state.socket, &buffer, 1, 0, nullptr));
+  return static_cast<int>(gesher::ws::RecvOwned(state.socket, &buffer, 1, 0, nullptr, state.description));
 }
 
 int write(int fd, const void* buf, unsigned int count) {
@@ -213,7 +263,7 @@ int write(int fd, const void* buf, unsigned int count) {
     return result;
   }
   gesher::ws::Buffer buffer = {const_cast<void*>(buf), count};
-  return static_cast<int>(gesher::ws::Send(state.socket, &buffer, 1, 0, nullptr));
+  return static_cast<int>(gesher::ws::SendOwned(state.socket, &buffer, 1, 0, nullptr, state.description));
 }
 
 int dup(int fd) {
@@ -227,53 +277,50 @@ int dup(int fd) {
     if (fd2 >= 0) gesher::DupBinder(fd, fd2);
     return fd2;
   }
-  state.socket = gesher::ws::Duplicate(state.socket);
-  if (state.socket == gesher::ws::kInvalidSocket) return -1;
-  // Linux shares O_NONBLOCK between duplicates; here each starts as a copy.
-  if (state.nonblocking) gesher::ws::SetNonBlocking(state.socket, true);
+  // WSADuplicateSocket creates distinct native connect-error ownership.
+  // POSIX aliases instead share the same native socket and last-close count.
   return gesher::RegisterSocket(state);
 }
 
 int dup2(int fd, int fd2) {
-  gesher::record_locks::DescriptorGuard descriptor_guard;
-  if (fd == fd2) return _get_osfhandle(fd) != -1 ? fd : (errno = EBADF, -1);
-  if (gesher::HandleFromFd(fd) == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
-  gesher::record_locks::ClosingDescriptor transaction(fd2);
-  if (transaction.Error()) return errno = transaction.Error(), -1;
-  SocketFd source;
-  bool source_is_socket = gesher::LookupSocket(fd, &source);
-  if (source_is_socket) {
-    source.socket = gesher::ws::Duplicate(source.socket);
-    if (source.socket == gesher::ws::kInvalidSocket) return -1;
-    if (source.nonblocking) gesher::ws::SetNonBlocking(source.socket, true);
-  }
-  // Replacing a socket closes it, which wakes threads blocked on it; this is
-  // how libcore's preClose0 interrupts them.
   SocketFd target;
-  if (gesher::Remove(fd2, &target)) gesher::ws::Close(target.socket);
-  if (gesher::CrtResult(_dup2(fd, fd2)) < 0) {
-    int saved = errno;
-    int error = transaction.Finish();
-    if (source_is_socket) gesher::ws::Close(source.socket);
-    errno = error ? error : saved;
-    return -1;
+  bool close_target = false;
+  int saved, metadata_error;
+  {
+    gesher::record_locks::DescriptorGuard descriptor_guard;
+    if (fd == fd2) return _get_osfhandle(fd) != -1 ? fd : (errno = EBADF, -1);
+    if (gesher::HandleFromFd(fd) == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+    gesher::record_locks::ClosingDescriptor transaction(fd2);
+    if (transaction.Error()) return errno = transaction.Error(), -1;
+    SocketFd source;
+    bool source_is_socket = gesher::LookupSocket(fd, &source);
+    if (gesher::CrtResult(_dup2(fd, fd2)) < 0) {
+      int saved = errno;
+      int error = transaction.Finish();
+      errno = error ? error : saved;
+      return -1;
+    }
+    saved = errno;
+    bool last = false;
+    close_target = gesher::ReplaceSocket(fd2, source_is_socket ? &source : nullptr, &target, &last) && last;
+    if (close_target) { std::lock_guard<std::mutex> lock(target.description->error_mutex); target.description->native_closing = true; }
+    metadata_error = transaction.Finish(true);
+    // fd2's old file is closed: forget what it was.
+    gesher::ForgetDevice(fd2);
+    gesher::ForgetEventObject(fd2);
+    gesher::ForgetEpollEntries(fd2);
+    gesher::ForgetBinder(fd2);
+    Device device;
+    if (!source_is_socket && gesher::LookupDevice(fd, &device)) {
+      gesher::RegisterDevice(fd2, device);
+    } else if (!source_is_socket) {
+      gesher::DupEventObject(fd, fd2);
+      gesher::DupBinder(fd, fd2);
+    }
   }
-  const int saved = errno;
-  const int metadata_error = transaction.Finish(true);
-  // fd2's old file is closed: forget what it was.
-  gesher::ForgetDevice(fd2);
-  gesher::ForgetEventObject(fd2);
-  gesher::ForgetEpollEntries(fd2);
-  gesher::ForgetBinder(fd2);
-  Device device;
-  if (source_is_socket) {
-    gesher::Insert(fd2, source);
-  } else if (gesher::LookupDevice(fd, &device)) {
-    gesher::RegisterDevice(fd2, device);
-  } else {
-    gesher::DupEventObject(fd, fd2);
-    gesher::DupBinder(fd, fd2);
-  }
+  // POSIX dup2 does not report the replaced endpoint's close error. A failed
+  // native close still retains explicit ownership before success is published.
+  if (close_target) gesher::ws::Close(target.socket, target.description, true);
   if (metadata_error) return errno = metadata_error, -1;
   errno = saved;
   return fd2;
@@ -346,7 +393,8 @@ bool PollFile(pollfd* p) {
 
 namespace gesher {
 
-int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted) {
+static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted, PollObserver observer, void* context,
+                       ws::NativePollObserver native_observer, void* native_context) {
   ULONGLONG deadline = gesher::DeadlineAfter(timeout);
   std::vector<ws::PollEntry> sockets;
   std::vector<nfds_t> socket_index;
@@ -365,13 +413,15 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
       eventfd_index.push_back(i);
     } else if (LookupSocket(p->fd, &state)) {
       int events = ((p->events & kIn) != 0 ? ws::kPollIn : 0) |
-                   ((p->events & kOut) != 0 ? ws::kPollOut : 0);
-      sockets.push_back({state.socket, events, 0});
+                   ((p->events & kOut) != 0 ? ws::kPollOut : 0) |
+                   ((p->events & POLLPRI) != 0 ? ws::kPollPri : 0);
+      sockets.push_back({state.socket, events, 0, state.description});
       socket_index.push_back(i);
     } else if (!PollFile(p)) {
       waiting_files = true;
     }
   }
+  if (observer) observer(context);  // real snapshots held; no descriptor/table lock
   auto count_ready = [&] {
     int n = 0;
     for (nfds_t i = 0; i < nfds; ++i) n += fds[i].fd >= 0 && fds[i].revents != 0;
@@ -382,11 +432,12 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
   if (interrupted == nullptr) interrupted = &unused;
   *interrupted = false;
 
-  // Eventfds and `interrupt` are Win32 events, waited for together with the
-  // real timeout. Pipes have no wait handle and WSAPoll takes only sockets,
-  // so with pipes, or with sockets and events, every source is checked in
-  // 10 ms slices.
-  bool sliced = waiting_files || (!sockets.empty() && (!eventfds.empty() || interrupt != nullptr));
+  // Eventfds and `interrupt` are Win32 events, waited for together. Pipes have
+  // no wait handle; sockets need bounded identity revalidation. All slices
+  // retain the one caller deadline rather than restarting its timeout.
+  // Socket numbers may be closed/reused while waiting. Bound every native
+  // sample, then revalidate the exact description before delivering readiness.
+  bool sliced = waiting_files || !sockets.empty();
   std::vector<HANDLE> handles;
   for (;;) {
     int wait_ms = 0;  // with something ready, only collect what the rest has
@@ -400,13 +451,21 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
     }
 
     if (!sockets.empty()) {
-      if (ws::Poll(sockets.data(), sockets.size(), wait_ms) < 0) return -1;
+      const int sampled = ws::Poll(sockets.data(), sockets.size(), wait_ms, native_observer, native_context);
+      native_observer = nullptr;  // one real native sample, never a mutable global hook
+      if (sampled < 0) return -1;
       for (size_t k = 0; k < sockets.size(); ++k) {
         pollfd* p = &fds[socket_index[k]];
+        SocketFd current;
+        if (!LookupSocket(p->fd, &current) || current.description != sockets[k].description) {
+          p->revents = POLLNVAL;
+          continue;
+        }
         int r = sockets[k].revents;
         short out = 0;
         if (r & ws::kPollIn) out |= p->events & kIn;
         if (r & ws::kPollOut) out |= p->events & kOut;
+        if (r & ws::kPollPri) out |= p->events & POLLPRI;
         if (r & ws::kPollErr) out |= POLLERR;
         if (r & ws::kPollHup) out |= POLLHUP;
         if (r & ws::kPollNval) out |= POLLNVAL;
@@ -463,6 +522,16 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
       return ready;
     }
   }
+}
+
+int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted) {
+  return PollFdsImpl(fds, nfds, timeout, interrupt, interrupted, nullptr, nullptr, nullptr, nullptr);
+}
+
+int PollWithObserver(void* records, size_t count, int timeout_ms, PollObserver observer, void* context,
+                     ws::NativePollObserver native_observer, void* native_context) {
+  if (static_cast<size_t>(static_cast<nfds_t>(count)) != count) return errno = EINVAL, -1;
+  return PollFdsImpl(static_cast<pollfd*>(records), static_cast<nfds_t>(count), timeout_ms, nullptr, nullptr, observer, context, native_observer, native_context);
 }
 
 }  // namespace gesher

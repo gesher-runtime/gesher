@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <pthread.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -20,6 +21,7 @@
 #include "internal.h"
 #include "linux_socket.h"
 #include "socket_internal.h"
+#include "record_lock_descriptors.h"
 
 namespace ws = gesher::ws;
 using gesher::SocketFd;
@@ -35,7 +37,9 @@ bool Lookup(int fd, SocketFd* state) {
 }
 
 int RegisterNew(ws::Socket s, bool nonblocking) {
-  if (nonblocking && ws::SetNonBlocking(s, true) < 0) {
+  // accept does not inherit O_NONBLOCK on Linux. Normalize both directions
+  // before publishing the new open description and its shared status flag.
+  if (ws::SetNonBlocking(s, nonblocking) < 0) {
     int saved = errno;
     ws::Close(s);
     errno = saved;
@@ -43,8 +47,43 @@ int RegisterNew(ws::Socket s, bool nonblocking) {
   }
   SocketFd state;
   state.socket = s;
-  state.nonblocking = nonblocking;
+  state.initial_nonblocking = nonblocking;
   return gesher::RegisterSocket(state);
+}
+
+// Lifecycle controls invalidate a completed-refusal readiness classification
+// before native mutation. Their lease is separate from finite poll metadata.
+bool BeginControl(int fd, const SocketFd& state) {
+  gesher::record_locks::DescriptorGuard descriptor_guard;
+  SocketFd current;
+  if (!gesher::LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, false;
+  std::lock_guard<std::mutex> lock(state.description->error_mutex);
+  if (state.description->connect_operation || state.description->legacy_connect_active) return errno = EALREADY, false;
+  state.description->legacy_connect_active = true;
+  state.description->refusal_generation = 0;
+  return true;
+}
+
+int EndControl(const SocketFd& state, int result) {
+  const int saved = errno;
+  std::lock_guard<std::mutex> lock(state.description->error_mutex);
+  state.description->legacy_connect_active = false;
+  if (result == 0) state.description->state.store(ws::ConnectState::kInitial);
+  errno = saved;
+  return result;
+}
+
+struct ConnectCallerReferences {
+  SocketFd* state;
+  std::shared_ptr<ws::ConnectOperation>* operation;
+};
+void ReleaseCanceledConnectReferences(void* raw) {
+  auto& caller = *static_cast<ConnectCallerReferences*>(raw);
+  // Winpthreads deferred cancellation need not unwind C++ locals when this
+  // target uses -fno-exceptions. Release ONLY the waiting caller's ownership;
+  // the independent owner/description retain the issued native operation.
+  caller.operation->reset();
+  caller.state->description.reset();
 }
 
 constexpr int kTypeFlags = SOCK_NONBLOCK | SOCK_CLOEXEC;
@@ -79,6 +118,82 @@ bool MapUnixPath(ws::Address* address, bool binding) {
 
 // Android's INTERNET permission (<gesher/inet.h>): -1 until first asked, then 0 or 1.
 static std::atomic<int> g_inet_allowed{-1};
+
+namespace gesher {
+int ConnectWithObserver(int fd, const void* raw, uint32_t length, ConnectObserver observer, void* context) {
+  SocketFd state;
+  ws::Address address;
+  if (!Lookup(fd, &state) || !ToAddress(static_cast<const sockaddr*>(raw), length, &address) || !MapUnixPath(&address, false)) return -1;
+  if (state.description->provider == ws::Provider::kNativeIpv4Tcp && address.family == ws::Family::kInet) {
+    std::shared_ptr<ws::ConnectOperation> operation;
+    bool nonblocking;
+    {
+      record_locks::DescriptorGuard descriptor_guard;
+      SocketFd current;
+      if (!LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
+      // This transaction fixes logical call behavior, never the native socket
+      // mode. ConnectEx itself cannot become blocking during F_SETFL/FIONBIO.
+      nonblocking = current.description->nonblocking.load();
+      operation = ws::StartConnect(current.socket, address, current.description);
+    }
+    if (!operation) return -1;
+    int answer, final_error;
+    ConnectCallerReferences references{&state, &operation};
+    pthread_cleanup_push(ReleaseCanceledConnectReferences, &references);
+    // The optional private observer sees real submission before a logical
+    // blocking caller waits. It owns no native context and holds no locks.
+    const int result = ws::AwaitConnect(operation, observer ? true : nonblocking);
+    const int saved = errno;
+    if (observer) observer(state.socket, result, saved, context);
+    if (!nonblocking && result < 0 && saved == EINPROGRESS) {
+      answer = ws::AwaitConnect(operation, false);
+      final_error = errno;
+    } else {
+      answer = result;
+      final_error = saved;
+    }
+    pthread_cleanup_pop(0);
+    errno = final_error;
+    return answer;
+  }
+  // Non-TCP and AF_UNSPEC retain their native behavior. They do not create
+  // an owned TCP completion token or qualify terminal-refusal filtering.
+  uint64_t generation;
+  ws::ConnectState previous_state;
+  {
+    record_locks::DescriptorGuard descriptor_guard;
+    SocketFd current;
+    if (!LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
+    std::lock_guard<std::mutex> lock(state.description->error_mutex);
+    if (state.description->connect_operation || state.description->legacy_connect_active) return errno = EALREADY, -1;
+    if (state.description->connect_generation == UINT64_MAX) return errno = EOVERFLOW, -1;
+    generation = ++state.description->connect_generation;
+    previous_state = state.description->state.load();
+    state.description->legacy_connect_active = true;
+    state.description->refusal_generation = 0;
+    state.description->connect_error = 0;
+  }
+  struct Observation { ws::Socket socket; ConnectObserver observer; void* context; } observation{state.socket, observer, context};
+  void (*before)(void*) = [](void* raw) {
+    auto& o = *static_cast<Observation*>(raw);
+    o.observer(o.socket, -2, 0, o.context);  // immutable private pre-native dependency
+  };
+  const int result = ws::ConnectLegacy(state.socket, address, state.description, observer ? before : nullptr, &observation);
+  const int saved = errno;
+  {
+    std::lock_guard<std::mutex> lock(state.description->error_mutex);
+    state.description->legacy_connect_active = false;
+    if (state.description->connect_generation == generation) {
+      const bool pending = saved == EINPROGRESS || saved == EALREADY || saved == EINTR;
+      const ws::ConnectState completed = address.family == ws::Family::kUnspec ? ws::ConnectState::kInitial : ws::ConnectState::kConnected;
+      state.description->state.store(result == 0 ? completed : pending ? ws::ConnectState::kConnecting : previous_state);
+    }
+  }
+  if (observer) observer(state.socket, result, saved, context);
+  errno = saved;
+  return result;
+}
+}  // namespace gesher
 
 extern "C" {
 
@@ -218,22 +333,21 @@ int bind(int fd, const struct sockaddr* addr, socklen_t len) {
   if (!Lookup(fd, &state) || !ToAddress(addr, len, &address) || !MapUnixPath(&address, true)) {
     return -1;
   }
-  return ws::Bind(state.socket, address);
+  if (state.description->provider == ws::Provider::kOther) return ws::Bind(state.socket, address);
+  if (!BeginControl(fd, state)) return -1;
+  return EndControl(state, ws::Bind(state.socket, address, state.description));
 }
 
 int connect(int fd, const struct sockaddr* addr, socklen_t len) {
-  SocketFd state;
-  ws::Address address;
-  if (!Lookup(fd, &state) || !ToAddress(addr, len, &address) || !MapUnixPath(&address, false)) {
-    return -1;
-  }
-  return ws::Connect(state.socket, address);
+  return gesher::ConnectWithObserver(fd, addr, len, nullptr, nullptr);
 }
 
 int listen(int fd, int backlog) {
   SocketFd state;
   if (!Lookup(fd, &state)) return -1;
-  return ws::Listen(state.socket, backlog);
+  if (state.description->provider == ws::Provider::kOther) return ws::Listen(state.socket, backlog);
+  if (!BeginControl(fd, state)) return -1;
+  return EndControl(state, ws::Listen(state.socket, backlog, state.description));
 }
 
 int accept4(int fd, struct sockaddr* addr, socklen_t* len, int flags) {
@@ -293,8 +407,9 @@ int ToMsgFlags(int flags) {
 // MSG_DONTWAIT on a blocking socket: fail with EAGAIN unless the socket is
 // ready now. (Another thread may still take the data first.)
 bool WouldBlock(const SocketFd& state, int flags, int event) {
-  if ((flags & MSG_DONTWAIT) == 0 || state.nonblocking) return false;
-  ws::PollEntry entry = {state.socket, event, 0};
+  if (state.description->native_nonblocking_datagram) return false;
+  if ((flags & MSG_DONTWAIT) == 0 || state.description->nonblocking.load()) return false;
+  ws::PollEntry entry = {state.socket, event, 0, state.description};
   if (ws::Poll(&entry, 1, 0) > 0) return false;
   errno = EAGAIN;
   return true;
@@ -307,7 +422,8 @@ ssize_t SendBuffers(int fd, ws::Buffer* buffers, size_t count, int flags,
   ws::Address to;
   if (addr != nullptr && (!ToAddress(addr, addrlen, &to) || !MapUnixPath(&to, false))) return -1;
   if (WouldBlock(state, flags, ws::kPollOut)) return -1;
-  return ws::Send(state.socket, buffers, count, ToMsgFlags(flags), addr != nullptr ? &to : nullptr);
+  return ws::SendOwned(state.socket, buffers, count, ToMsgFlags(flags), addr != nullptr ? &to : nullptr,
+                       state.description, (flags & MSG_DONTWAIT) != 0);
 }
 
 ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockaddr* addr,
@@ -318,8 +434,9 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
   if (flags & MSG_ERRQUEUE) return errno = EAGAIN, -1;
   if (WouldBlock(state, flags, ws::kPollIn)) return -1;
   ws::Address from;
-  ssize_t n = ws::Recv(state.socket, buffers, count, ToMsgFlags(flags),
-                       addr != nullptr ? &from : nullptr, result_flags);
+  ssize_t n = ws::RecvOwned(state.socket, buffers, count, ToMsgFlags(flags),
+                       addr != nullptr ? &from : nullptr, state.description,
+                            (flags & MSG_DONTWAIT) != 0, result_flags);
   if (n >= 0 && addr != nullptr) {
     sockaddr_storage local = {};
     socklen_t actual = sizeof(local), capacity = 0;
@@ -345,6 +462,11 @@ bool ToBuffers(const struct msghdr* msg, std::vector<ws::Buffer>* buffers) {
   return true;
 }
 
+void ReleaseCanceledBuffers(void* raw) {
+  std::vector<ws::Buffer> empty;
+  empty.swap(*static_cast<std::vector<ws::Buffer>*>(raw));
+}
+
 }  // namespace
 
 extern "C" {
@@ -366,8 +488,12 @@ ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
   if (!ws::CopyFromUser(&local, msg, sizeof(local))) return errno = EFAULT, -1;
   std::vector<ws::Buffer> buffers;
   if (!ToBuffers(&local, &buffers)) return -1;
-  return SendBuffers(fd, buffers.data(), buffers.size(), flags,
-                     static_cast<const sockaddr*>(local.msg_name), local.msg_namelen);
+  ssize_t result;
+  pthread_cleanup_push(ReleaseCanceledBuffers, &buffers);
+  result = SendBuffers(fd, buffers.data(), buffers.size(), flags,
+                       static_cast<const sockaddr*>(local.msg_name), local.msg_namelen);
+  pthread_cleanup_pop(0);
+  return result;
 }
 
 ssize_t recv(int fd, void* buf, size_t len, int flags) {
@@ -387,9 +513,12 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
   std::vector<ws::Buffer> buffers;
   if (!ToBuffers(&local, &buffers)) return -1;
   int result_flags = 0;
-  ssize_t n = RecvBuffers(fd, buffers.data(), buffers.size(), flags,
-                          static_cast<sockaddr*>(local.msg_name),
-                          local.msg_name != nullptr ? &local.msg_namelen : nullptr, &result_flags);
+  ssize_t n;
+  pthread_cleanup_push(ReleaseCanceledBuffers, &buffers);
+  n = RecvBuffers(fd, buffers.data(), buffers.size(), flags,
+                 static_cast<sockaddr*>(local.msg_name),
+                 local.msg_name != nullptr ? &local.msg_namelen : nullptr, &result_flags);
+  pthread_cleanup_pop(0);
   if (n >= 0) {
     local.msg_controllen = 0;  // no ancillary data
     local.msg_flags = (result_flags & ws::kMsgTrunc) ? MSG_TRUNC : 0;
@@ -617,8 +746,7 @@ int setsockopt(int fd, int level, int name, const void* value, socklen_t len) {
     // use. On Linux it only allows ports in TIME_WAIT, which Windows allows
     // without it. So the value is only recorded, for getsockopt.
     if (!ReadInt(value, len, &v)) return -1;
-    state.reuse_addr = v != 0;
-    gesher::UpdateSocket(fd, state);
+    state.description->reuse_addr.store(v != 0);
     return 0;
   }
   if (level == SOL_SOCKET && (name == SO_RCVTIMEO || name == SO_SNDTIMEO)) {
@@ -677,11 +805,24 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
   ws::Option option;
   int v;
   if (ToIntOption(level, name, &option)) {
+    if (option == ws::Option::kError) {
+      gesher::record_locks::DescriptorGuard descriptor_guard;
+      SocketFd current;
+      if (!gesher::LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
+      ws::RefreshConnect(state.description);
+      std::lock_guard<std::mutex> lock(state.description->error_mutex);
+      // ConnectEx reports its failure on the owned completion channel. Always
+      // read native SO_ERROR as well, including identical later native codes.
+      if (ws::GetOption(state.socket, option, &v) < 0) return -1;
+      if (!WriteInt(v != 0 ? v : state.description->connect_error, value, len)) return -1;
+      if (v == 0) state.description->connect_error = 0;
+      return 0;
+    }
     if (ws::GetOption(state.socket, option, &v) < 0) return -1;
     return WriteInt(v, value, len) ? 0 : -1;
   }
   if (level == SOL_SOCKET && name == SO_REUSEADDR) {
-    return WriteInt(state.reuse_addr ? 1 : 0, value, len) ? 0 : -1;
+    return WriteInt(state.description->reuse_addr.load() ? 1 : 0, value, len) ? 0 : -1;
   }
   if (level == SOL_SOCKET && name == SO_TYPE) {
     if (ws::GetOption(state.socket, ws::Option::kType, &v) < 0) return -1;
