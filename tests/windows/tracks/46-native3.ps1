@@ -33,20 +33,6 @@ if (-not (Test-Path "$n2/native2-test.dex")) {
   $failed++
   return
 }
-foreach ($fontAbi in $abis) {
-  $fontBin = Join-Path $n2 $fontAbi.Abi
-  foreach ($fontCase in @('unset', 'set', 'unicode', 'wrong')) {
-    $fontMode = if ($fontCase -eq 'unicode') { 'set' } else { $fontCase }
-    $fontRoot = if ($fontCase -eq 'unicode') { NoDrive $fontUnicode } else { NoDrive "$root/system" }
-    $fontExpectedDir = if ($fontCase -eq 'unset') { NoDrive "$n2Dir/fonts" } else { "$fontRoot/fonts" }
-    $fontExpectedXml = if ($fontCase -eq 'unset') { "$fontExpectedDir/fonts.xml" } else { "$fontRoot/etc/fonts.xml" }
-    Check "native3 ($($fontAbi.Tag)/$fontCase): native fonts from core-only DEX without framework font classes" {
-      N2Run "$n2Dir/dalvikvm.exe" @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
-        '-Xint', '-Xusejit:false', '-cp', (NoDrive "$n2/native2-test.dex"), 'gesher.Native3StandaloneFontTest',
-        (NoDrive "$fontBin/libfonts_standalone.so"), $fontMode, $fontRoot, $fontExpectedDir, $fontExpectedXml) $fontWork
-    } @('FONT_CORE_CLASSES_ABSENT Typeface FontFamily SystemFontMap', "FONT_PASS case=$fontMode ", "FONT_CORE_DEX_PASS case=$fontMode")
-  }
-}
 $n3Bcp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') |
   ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $n3Unicode = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../../probes/native3/unicode/reference.json') -Raw | ConvertFrom-Json

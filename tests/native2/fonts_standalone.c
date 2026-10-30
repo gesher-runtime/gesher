@@ -89,6 +89,7 @@ int main(int argc, char **argv) {
   void *absolute=dlopen("/system/lib64/libandroid.so",RTLD_NOW);
   bool has_assets=dlsym(lib,"AAssetManager_open")!=NULL;
   if(!absolute || dlsym(absolute,"AFontMatcher_match")!=(void*)match || has_assets!=dex) { puts("FONT_FAIL logical-provider-identity"); return 1; }
+  printf("FONT_PROVIDER context=%s exports=18 logical_alias=1 asset_provider=%d\n",dex?"dex":"elf",has_assets);
   dlclose(absolute);
   FILE *direct=fopen("/system/etc/fonts.xml","rb"); bool direct_readable=direct!=NULL; if(direct) fclose(direct);
   bool root_identity=!direct_readable||same_bytes("/system/etc/fonts.xml",argv[4]);
