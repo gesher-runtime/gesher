@@ -1,6 +1,7 @@
 # Genuine default C++ TLS model and exact distinct compiler variants.
 # Resolve actual LLD member basenames only through unique full-path Reading evidence.
 # Explicit isolated deferred-only API capability; old suppliers unchanged.
+# Kernel-completion TLS owner correction follows actual 410884 owned C++ identity regression.
 # Verify actual resource field offsets and updated fault patch stack.
 # Separate target-resource lifetime primitive role.
 # Separate opt-in callback-release reaper role.
@@ -649,6 +650,7 @@ jobs:
       - name: Actual independent Linux cross-TU compiler TLS reference
         run: |
           set -euo pipefail
+          python3 tools/host-pthread-authority/late_cpp_bundle.py selftest
           g++ --version
           g++ -std=gnu++20 -O2 -g -Wall -Wextra -Werror -fno-exceptions -fsized-deallocation -pthread tests/native/pthread_late_cpp_main.cc tests/native/pthread_late_cpp_a.cc tests/native/pthread_late_cpp_b.cc -o "$RUNNER_TEMP/late-cpp-linux"
           timeout 20s "$RUNNER_TEMP/late-cpp-linux"
@@ -689,7 +691,10 @@ jobs:
             $actual=Get-Content -Raw -LiteralPath $stdout
             Write-Host $actual
             if ($process.ExitCode -ne 0) { throw "Late C++ actual role=$role exit=$($process.ExitCode)" }
-            if (-not $actual.Contains('CPP_TLS_RESULT cases=4 failures=0 conformant=1')) { throw 'Incomplete genuine TLS callback identity evidence' }
+            $expectedCases=if ($role -eq 'deferred') { 6 } else { 4 }
+            if (-not $actual.Contains("CPP_TLS_RESULT cases=$expectedCases failures=0 conformant=1")) { throw 'Incomplete genuine TLS callback identity evidence' }
+            python tools/host-pthread-authority/late_cpp_bundle.py trace $role $stdout
+            if ($LASTEXITCODE -ne 0) { throw 'Actual TLS owner/lifecycle/late-key trace failed' }
             foreach ($mode in @('pthread_return','pthread_exit','std_thread_return','native_ExitThread')) {
               if (-not $actual.Contains("CPP_TLS_CASE mode=$mode constructed=2 a=1 b=1 mismatch=0 a_done=1 b_done=1 conformant=1")) { throw "Missing actual C++ case $mode" }
               if ($actual -notmatch "(?m)^CPP_TLS_KERNEL mode=$mode signaled=1 exit=[0-9]+ owned_handle_closed=1\r?$") { throw "Missing actual C++ worker kernel termination $mode" }

@@ -8,6 +8,7 @@ ROLES={'published':('baseline_compile','publisher-archive-unmodified'),
        'production':('baseline_compile','gesher-winpthreads-authority-v1'),
        'deferred':('probe_deferred_compile','gesher-winpthreads-authority-routing-probe-deferred-v1')}
 FLAGS=['-std=gnu++20','-O2','-g','-Wall','-Wextra','-Werror','-mno-ms-bitfields','-fno-exceptions','-fsized-deallocation','-D_WIN32_WINNT=0x0A00','-DWINVER=0x0A00','-D_FILE_OFFSET_BITS=64','-DWIN32_LEAN_AND_MEAN','-DNOMINMAX','-DNOGDI','-D_USE_MATH_DEFINES','-D__STDC_FORMAT_MACROS','-D__STDC_CONSTANT_MACROS','-D__STDC_LIMIT_MACROS','-D_POSIX_THREAD_SAFE_FUNCTIONS']
+TLS_OWNER_SYMBOLS=('gesher_tls_reaper_start_v1','gesher_tls_retirement_watch_v1','gesher_tls_retirement_counts_v1','gesher_tls_retirement_snapshot_v1')
 PTHREAD_SYMBOLS=('pthread_self','pthread_create','pthread_join','pthread_exit','pthread_key_create','pthread_key_delete','pthread_getspecific','pthread_setspecific','_pthread_cleanup_dest','__dyn_tls_pthread','__xl_f')
 
 def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
@@ -60,6 +61,96 @@ def member_bindings(map_text,link_text,inputs):
         assert archive in allowed,'Symbol supplied by another variant/archive: '+symbol+' '+archive
         result[symbol]=dict(archive=archive,archive_sha256=allowed[archive],member=member,extracted_for=reason,map_input=owner,map_rva=address)
     return result
+def check_owner_symbols(role,symbols):
+    found={name for name in TLS_OWNER_SYMBOLS if re.search(r'\b'+name+r'$',symbols,re.MULTILINE)}
+    assert found==(set(TLS_OWNER_SYMBOLS) if role=='deferred' else set()),'Kernel TLS owner consumer symbol isolation mismatch: '+str(found)
+
+def check_trace(role,text):
+    assert role in ROLES
+    def one(pattern):
+        matches=re.findall('(?m)^'+pattern+r'\r?$',text)
+        assert len(matches)==1,'Missing/ambiguous actual C++ trace: '+pattern
+        return matches[0]
+    expected_cases=6 if role=='deferred' else 4
+    one('CPP_TLS_RESULT cases='+str(expected_cases)+' failures=0 conformant=1')
+    modes=('pthread_return','pthread_exit','std_thread_return','native_ExitThread')
+    for mode in modes:
+        one('CPP_TLS_CASE mode='+mode+' constructed=2 a=1 b=1 mismatch=0 a_done=1 b_done=1 conformant=1')
+        one('CPP_TLS_KERNEL mode='+mode+' signaled=1 exit=[0-9]+ owned_handle_closed=1')
+        # The callback count is explicitly observational. Only successful live
+        # access is required; this gate never relabels late TSD ordering green.
+        one('CPP_TLS_LATE_KEY mode='+mode+' successful_set_get=2 destructor_calls=[0-9]+ observation_only=1')
+    for mode in modes[:3]:
+        one('CPP_TLS_JOIN mode='+mode+' phase=join-return a=1 b=1 mismatch=0 sequence=2 a_done=1 b_done=1 conformant=1')
+        one('CPP_TLS_JOIN_KERNEL mode='+mode+' phase=join-return wait=(0|258) observation_only=1')
+    present=1 if role=='deferred' else 0
+    persistent=2*present
+    original,baseline,actual_persistent=map(int,one('CPP_TLS_OWNER_BOOTSTRAP present='+str(present)+' original=([0-9]+) baseline=([0-9]+) persistent_handles=([0-9]+)'))
+    assert baseline==original+persistent and actual_persistent==persistent,'Bootstrap persistent handle accounting mismatch'
+    origin2,base2,after,persist2=map(int,one('CPP_TLS_OWNER_HANDLES original=([0-9]+) baseline=([0-9]+) after=([0-9]+) persistent_handles=([0-9]+) original_total_bound=8 bounded=1'))
+    assert (origin2,base2,persist2)==(original,baseline,persistent) and after<=baseline+8 and after<=original+8,'Original total handle bound or identities changed'
+    before2,after2=map(int,one('CPP_TLS_HANDLES before=([0-9]+) after=([0-9]+) original_bound=8 bounded=1'))
+    assert (before2,after2)==(baseline,after),'Existing handle gate disagrees'
+    held=('owned_held_join','owned_held_detach')
+    if role=='deferred':
+        for mode in held:
+            tu,early=one('CPP_TLS_HELD_ENTER mode='+mode+' tu=([AB]) early_budget=256 actual_early=([0-9]+)')
+            assert int(early)==256
+            scans=one('CPP_TLS_HELD_BEFORE mode='+mode+' original_identity=1 tls_owner=1 lifecycle=3 ended=0 kernel=258 clock_live=1 event_live=1 spin_live=1 scans=([0-9]+) finalized=0 released=0 pool=0 early_budget=256 external_delete=1')
+            assert int(scans)>0,'No actual unsignaled worker scan while genuine callback held'
+            one('CPP_TLS_HELD_AFTER mode='+mode+' kernel_signaled=1 finalized=1 released=1 clock_destroy=1 event_close=1 spin_destroy=1 pool_retire=1 original_identity=1 a_done=1 b_done=1 late_key_explicit_clear=1')
+    else:
+        assert 'CPP_TLS_HELD_' not in text,'Diagnostic held case leaked into another supplier role'
+    assert 'FAIL ' not in text,'C++ fixture failure trace'
+
+def selftest_trace():
+    def fixture(role):
+        deferred=role=='deferred'; original=60; baseline=original+(2 if deferred else 0); after=64
+        lines=['CPP_TLS_RESULT cases='+str(6 if deferred else 4)+' failures=0 conformant=1']
+        for mode in ('pthread_return','pthread_exit','std_thread_return','native_ExitThread'):
+            lines += ['CPP_TLS_CASE mode='+mode+' constructed=2 a=1 b=1 mismatch=0 a_done=1 b_done=1 conformant=1',
+                'CPP_TLS_KERNEL mode='+mode+' signaled=1 exit=61 owned_handle_closed=1',
+                'CPP_TLS_LATE_KEY mode='+mode+' successful_set_get=2 destructor_calls=42 observation_only=1']
+        for mode in ('pthread_return','pthread_exit','std_thread_return'):
+            lines += ['CPP_TLS_JOIN mode='+mode+' phase=join-return a=1 b=1 mismatch=0 sequence=2 a_done=1 b_done=1 conformant=1',
+                'CPP_TLS_JOIN_KERNEL mode='+mode+' phase=join-return wait=258 observation_only=1']
+        lines += [f'CPP_TLS_OWNER_BOOTSTRAP present={int(deferred)} original={original} baseline={baseline} persistent_handles={baseline-original}',
+            f'CPP_TLS_OWNER_HANDLES original={original} baseline={baseline} after={after} persistent_handles={baseline-original} original_total_bound=8 bounded=1',
+            f'CPP_TLS_HANDLES before={baseline} after={after} original_bound=8 bounded=1']
+        if deferred:
+            for mode in ('owned_held_join','owned_held_detach'):
+                lines += ['CPP_TLS_HELD_ENTER mode='+mode+' tu=B early_budget=256 actual_early=256',
+                    'CPP_TLS_HELD_BEFORE mode='+mode+' original_identity=1 tls_owner=1 lifecycle=3 ended=0 kernel=258 clock_live=1 event_live=1 spin_live=1 scans=2 finalized=0 released=0 pool=0 early_budget=256 external_delete=1',
+                    'CPP_TLS_HELD_AFTER mode='+mode+' kernel_signaled=1 finalized=1 released=1 clock_destroy=1 event_close=1 spin_destroy=1 pool_retire=1 original_identity=1 a_done=1 b_done=1 late_key_explicit_clear=1']
+        return lines
+    rejected=0
+    def reject(role,text):
+        nonlocal rejected
+        try:check_trace(role,text)
+        except AssertionError:rejected+=1
+        else:raise AssertionError('Source-only metadata negative was accepted')
+    for role in ROLES:
+        lines=fixture(role); text='\n'.join(lines)+'\n'; check_trace(role,text)
+        # Every actual required row is mandatory, exactly once.
+        for i in range(len(lines)):
+            reject(role,'\n'.join(lines[:i]+lines[i+1:])+'\n')
+            reject(role,text+lines[i]+'\n')
+        reject(role,text.replace('successful_set_get=2','successful_set_get=1',1))
+        reject(role,text.replace('a_done=1','a_done=0',1))
+        reject(role,text.replace('after=64','after=69'))
+        reject(role,text.replace('original_total_bound=8','original_total_bound=9'))
+        if role=='deferred':
+            for old,new in [('scans=2','scans=0'),('actual_early=256','actual_early=257'),('kernel=258','kernel=0'),('clock_destroy=1','clock_destroy=2'),('spin_destroy=1','spin_destroy=0'),('pool_retire=1','pool_retire=0'),('late_key_explicit_clear=1','late_key_explicit_clear=0')]:reject(role,text.replace(old,new,1))
+        else:reject(role,text+'CPP_TLS_HELD_AFTER unexpected=1\n')
+        symbols='\n'.join('0000 T '+n for n in TLS_OWNER_SYMBOLS) if role=='deferred' else ''
+        check_owner_symbols(role,symbols)
+        for name in TLS_OWNER_SYMBOLS:
+            bad=symbols.replace('0000 T '+name,'') if role=='deferred' else '0000 T '+name
+            try:check_owner_symbols(role,bad)
+            except AssertionError:rejected+=1
+            else:raise AssertionError('Wrong supplier export isolation accepted')
+    print('PASS C++ source-only metadata: three roles, observational late TSD count remains unrestricted, ablation/conflict/role negatives='+str(rejected)+'; no native execution')
+
 def context():
     assert os.environ['GITHUB_ACTIONS']=='true' and os.environ['GITHUB_REPOSITORY']=='gesher-runtime/gesher'
     assert os.environ['GITHUB_REF']=='refs/heads/wip/pthread-process-routing'
@@ -104,6 +195,8 @@ def build(llvm,role):
     (dist/'imports.txt').write_text(imports)
     symbols=subprocess.check_output([str(llvm/'bin/llvm-nm'),'-a','-C']+[str(x) for x in objects]+[str(exe)],text=True)
     (dist/'tls-symbols.txt').write_text(symbols)
+    check_owner_symbols(role,symbols)
+    print('CPP_TLS_OWNER_SYMBOLS role='+role+' present='+str(4 if role=='deferred' else 0),flush=True)
     matches=[x for x in symbols.splitlines() if re.search(r'emutls|thread_atexit|tlregdtor|dyn_tls|Probe[AB]|LateCppRecord',x)]
     print('CPP_TLS_MODEL role='+role+' matches='+str(len(matches)),flush=True)
     for line in matches[:200]:print('CPP_TLS_MODEL_SYMBOL '+line,flush=True)
@@ -135,9 +228,14 @@ def verify(role):
         assert provider['compiler_archive_sha256']==ARCHIVE and provider['cxx_driver_sha256']==data['driver_sha256']
         assert provider['files']['lib/libwinpthread.a']==data['library_sha256'] and provider['files']['bin/libwinpthread-1.dll']==data['dll_sha256']
         assert provider['files']['lib/libpthread.a']==data['pthread_archive_inputs']['libpthread.a']['sha256']
+    check_owner_symbols(role,(dist/'tls-symbols.txt').read_text())
     imports=(dist/'imports.txt').read_text().lower();assert 'libwinpthread-1.dll' not in imports and 'libc++' not in imports
     print('Verified distinct C++ TLS variant '+role+' producer='+producer+' same source/run/attempt and complete members',flush=True)
 if __name__=='__main__':
-    if sys.argv[1]=='build':build(Path(sys.argv[2]),sys.argv[3])
+    if sys.argv[1]=='selftest':selftest_trace()
+    elif sys.argv[1]=='build':build(Path(sys.argv[2]),sys.argv[3])
     elif sys.argv[1]=='verify':verify(sys.argv[2])
+    elif sys.argv[1]=='trace':
+        check_trace(sys.argv[2],Path(sys.argv[3]).read_text(encoding='utf-8-sig'))
+        print('Verified actual C++ identity/join/owned-resource trace role='+sys.argv[2])
     else:raise SystemExit(2)

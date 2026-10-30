@@ -135,6 +135,8 @@ def supplier(source, llvm, role):
         assert symbol in output, name
         for hook in ('gesher_winpthread_cpu_test_control_v1', 'gesher_winpthread_exit_test_v1', 'gesher_host_cpu_clock_test_exhaust_ids_v1'):
             assert (hook in output) == (role in {'fault', 'probe-fault'}), 'Supplier test symbol role mismatch'
+        for tls_owner in ('gesher_tls_reaper_start_v1','gesher_tls_retirement_watch_v1','gesher_tls_retirement_counts_v1','gesher_tls_retirement_snapshot_v1'):
+            assert (tls_owner in output) == (role=='probe-deferred'), 'Kernel TLS owner symbol role mismatch'
         for deferred in ('gesher_deferred_gate_v1','gesher_deferred_pending_v1'):
             assert (deferred in output) == (role=='probe-deferred'), 'Deferred gate symbol role mismatch'
         for resource in ('gesher_resource_lease_probe_v1','gesher_resource_fault_probe_v1'):
@@ -155,6 +157,8 @@ def supplier(source, llvm, role):
         result[name + ':symbols'] = output
     exports = command(str(llvm / 'bin/llvm-readobj'), '--coff-exports', str(target / 'bin/libwinpthread-1.dll'))
     assert symbol in exports
+    for tls_owner in ('gesher_tls_reaper_start_v1','gesher_tls_retirement_watch_v1','gesher_tls_retirement_counts_v1','gesher_tls_retirement_snapshot_v1'):
+        assert (tls_owner in exports) == (role=='probe-deferred'), 'Kernel TLS owner export role mismatch'
     for deferred in ('gesher_deferred_gate_v1','gesher_deferred_pending_v1'):
         assert (deferred in exports) == (role=='probe-deferred'), 'Deferred gate export role mismatch'
     for resource in ('gesher_resource_lease_probe_v1','gesher_resource_fault_probe_v1'):
@@ -204,17 +208,17 @@ def supplier(source, llvm, role):
         assert re.search(r'\b' + field + r'\s*$', layout, re.MULTILINE), 'Missing ABI field: ' + field
     assert re.search(r'^\s*48 \|\s+HANDLE cpu_handle$', layout, re.MULTILINE)
     assert re.search(r'^\s*56 \|\s+unsigned long long cpu_generation$', layout, re.MULTILINE)
-    assert ('[sizeof=544, align=16]' if role=='probe-deferred' else '[sizeof=512, align=16]' if role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource', 'probe-deferred'} else '[sizeof=496, align=16]') in layout
+    assert ('[sizeof=560, align=16]' if role=='probe-deferred' else '[sizeof=512, align=16]' if role in {'probe', 'probe-fault', 'probe-legacy', 'probe-reaper', 'probe-resource', 'probe-deferred'} else '[sizeof=496, align=16]') in layout
     for field,offset in (('operation_refs',120),('clock_destroy_pending',124)):
         assert bool(re.search(r'\b'+field+r'$',layout,re.MULTILINE)) == (role in {'probe-resource','probe-deferred'}), 'Resource field role mismatch'
         assert bool(re.search(r'^\s*'+str(offset)+r' \|\s+[^\n]*\b'+field+r'$',layout,re.MULTILINE)) == (role in {'probe-resource','probe-deferred'}), 'Resource field layout mismatch'
     if role=='probe-deferred':
-        offsets={'valid':0,'ret_arg':8,'func':16,'clean':24,'nobreak':32,'h':40,'cpu_handle':48,'cpu_generation':56,'evStart':64,'p_clock':72,'p_state':84,'keymax':88,'keyval':96,'keyval_set':104,'keyval_generation':112,'operation_refs':120,'clock_destroy_pending':124,'cancel_state_lock':128,'lifecycle':136,'join_claimed_by':144,'cleanup_refs':152,'pending_retire':156,'thread_name':160,'spin_keys':168,'tid':176,'rwlc':180,'rwlq':184,'sched_pol':248,'ended':252,'sched':256,'jb':272,'next':528,'x':536}
+        offsets={'valid':0,'ret_arg':8,'func':16,'clean':24,'nobreak':32,'h':40,'cpu_handle':48,'cpu_generation':56,'evStart':64,'p_clock':72,'p_state':84,'keymax':88,'keyval':96,'keyval_set':104,'keyval_generation':112,'operation_refs':120,'clock_destroy_pending':124,'cancel_state_lock':128,'lifecycle':136,'join_claimed_by':144,'cleanup_refs':152,'pending_retire':156,'thread_name':160,'spin_keys':168,'tid':176,'rwlc':180,'rwlq':184,'sched_pol':248,'ended':252,'sched':256,'jb':272,'next':528,'x':536,'tls_owner_refs':544,'kernel_finalized':548,'retire_next':552}
         for field,offset in offsets.items():
             assert re.search(r'^\s*'+str(offset)+r' \|\s+[^\n]*\b'+field+r'$',layout,re.MULTILINE), 'Deferred full field offset mismatch: '+field
         for field,bits in (('cancelled','80:0-1'),('in_cancel','80:2-3'),('thread_noposix','80:4-5')):
             assert re.search(r'^\s*'+re.escape(bits)+r' \|\s+int '+field+r'$',layout,re.MULTILINE), 'Deferred bitfield layout mismatch: '+field
-    for field,offset in (('cancel_state_lock',128),('lifecycle',136),('join_claimed_by',144)):
+    for field,offset in (('cancel_state_lock',128),('lifecycle',136),('join_claimed_by',144),('tls_owner_refs',544),('kernel_finalized',548),('retire_next',552)):
         assert bool(re.search(r'\b'+field+r'$',layout,re.MULTILINE)) == (role=='probe-deferred'), 'Deferred field role mismatch'
         if role=='probe-deferred': assert re.search(r'^\s*'+str(offset)+r' \|\s+[^\n]*\b'+field+r'$',layout,re.MULTILINE), 'Deferred field offset mismatch'
     if role=='probe-deferred':
