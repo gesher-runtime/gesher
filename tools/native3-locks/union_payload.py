@@ -106,7 +106,7 @@ PINNED_SOURCE.update({'.github/workflows/services-geocoder-worker-component.yml'
 
 MEDIA4_PINS = {'tests/media/ndk-muxer/muxer_test.cc': '66c58b32f1d51ffd70a0bbed99986063682ac095', 'tests/media/ndk-muxer/verify_output.cc': '5575a7573fc08bf9f9a98929bf4e7b0f6bcaf423', 'tests/media/ndk-muxer/verify-webm-cues.py': 'ad24652a7c34be72d4869775a52afb778afd16e1', 'tests/windows/tracks/79-media4-muxer.ps1': '9f82ca9f402a782bb62228de08c06a790be66cd2'}
 PINNED_SOURCE.update(MEDIA4_PINS)
-FONTS_PINS = {'.github/workflows/native2.yml': 'ed994230b37385578efcf051296da915b609d031', 'tests/native2/fonts_standalone.c': '69eb206a59c430fc4ca7813d5ae4f337b907d52a', 'tests/windows/tracks/46-native3.ps1': 'f1f8e3d8256237396e4cd71c0c222ce291ef3594'}
+FONTS_PINS = {'.github/workflows/native2.yml': 'ed994230b37385578efcf051296da915b609d031', 'tests/native2/fonts_standalone.c': '784fb1abb5a06839784cc48bee3fb2d317e2b2dc', 'tests/windows/tracks/46-native3.ps1': '5227ae87be03aa93c79c25a7d7ffbb1b8ca5a877', 'compat/bionic/extra_bionic.cc': '25a6824aaa1f83a3f50943637e1b39de9f54231a', 'compat/bionic/jni.cmake': '0068b5f75ceb3f508cf2c749c67384fc15a4fda8', 'compat/bionic/native_fonts.cc': '9c5d6dde9afc1a3b6b37c176b546ba1c8d15c811', 'compat/posix/src/path.cc': '8857487491fb45ff21bb467a3b2ffc32f28f63c0', 'compat/posix/include/gesher/font_paths.h': '2f200999a4c11d7b624195478c58770638402537', 'tools/fonts/verify-standalone-link.py': '3a0424ca5d3bdf89a8cdc48b8d014628b4f40b16'}
 PINNED_SOURCE.update(FONTS_PINS)
 
 TARGETS = ('native3_lock_command_worker', 'native3_lock_duplicate_test', 'binderd')
