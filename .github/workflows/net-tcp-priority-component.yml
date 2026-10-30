@@ -1,5 +1,6 @@
 name: net-tcp-priority-component
 # Qualify one-time owned UDP native mode, logical I/O and nonconsuming error observation.
+# Match the literal INVALID_SOCKET transcript to independently qualified ENOTSOCK88.
 # Separate exact raw Winsock reset input from the unchanged public POLLERR gate.
 # Exercise reviewed owned completion/alias lifetime and actual native poll races.
 # Current full Linux reference passed; all Windows product contexts remain owed.
