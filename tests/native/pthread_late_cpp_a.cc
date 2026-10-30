@@ -2,7 +2,7 @@
 namespace {
 struct ProbeA {
   LateCppCase *state=nullptr;
-  ~ProbeA() { if (state) LateCppRecord(state,"A"); }
+  ~ProbeA() { if (state) { LateCppRecord(state,"A"); ++state->a_done; } }
 };
 thread_local ProbeA object;
 }

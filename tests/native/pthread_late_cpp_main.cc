@@ -86,11 +86,20 @@ int main() {
           value==reinterpret_cast<void *>(0x1234),"pthread create/join result");
     }
     if (std::strcmp(mode,"native_ExitThread")) {
+      const int at_join_a_done=state.a_done.load(),at_join_b_done=state.b_done.load();
       const int at_join_a=state.a.load(),at_join_b=state.b.load(),at_join_mismatch=state.mismatch.load();
       const int at_join_sequence=state.sequence.load();
-      join_conformant=at_join_a==1 && at_join_b==1 && at_join_mismatch==0 && at_join_sequence==2;
-      std::printf("CPP_TLS_JOIN mode=%s phase=join-return a=%d b=%d mismatch=%d sequence=%d conformant=%d\n",
-          mode,at_join_a,at_join_b,at_join_mismatch,at_join_sequence,join_conformant?1:0);
+#ifdef _WIN32
+      const DWORD at_join_kernel=WaitForSingleObject(reinterpret_cast<HANDLE>(state.native_handle.load()),0);
+      Require(at_join_kernel==WAIT_OBJECT_0 || at_join_kernel==WAIT_TIMEOUT,"owned join-return kernel sample");
+#endif
+      join_conformant=at_join_a==1 && at_join_b==1 && at_join_mismatch==0 && at_join_sequence==2 &&
+          at_join_a_done==1 && at_join_b_done==1;
+      std::printf("CPP_TLS_JOIN mode=%s phase=join-return a=%d b=%d mismatch=%d sequence=%d a_done=%d b_done=%d conformant=%d\n",
+          mode,at_join_a,at_join_b,at_join_mismatch,at_join_sequence,at_join_a_done,at_join_b_done,join_conformant?1:0);
+#ifdef _WIN32
+      std::printf("CPP_TLS_JOIN_KERNEL mode=%s phase=join-return wait=%lu observation_only=1\n",mode,at_join_kernel);
+#endif
     }
 #ifdef _WIN32
     // The supplier's join ordering is under test. Keep state alive until actual
@@ -103,9 +112,11 @@ int main() {
     std::printf("CPP_TLS_KERNEL mode=%s signaled=1 exit=%lu owned_handle_closed=1\n",mode,native_exit);
 #endif
     Require(state.constructed==2 && state.body_left==1,"both genuine TLS objects constructed before exit");
-    const bool conformant=state.a==1 && state.b==1 && state.mismatch==0 && join_conformant;
-    std::printf("CPP_TLS_CASE mode=%s constructed=%d a=%d b=%d mismatch=%d conformant=%d\n",
-        mode,state.constructed.load(),state.a.load(),state.b.load(),state.mismatch.load(),conformant?1:0);
+    const bool conformant=state.a==1 && state.b==1 && state.mismatch==0 &&
+        state.a_done==1 && state.b_done==1 && join_conformant;
+    std::printf("CPP_TLS_CASE mode=%s constructed=%d a=%d b=%d mismatch=%d a_done=%d b_done=%d conformant=%d\n",
+        mode,state.constructed.load(),state.a.load(),state.b.load(),state.mismatch.load(),
+        state.a_done.load(),state.b_done.load(),conformant?1:0);
     ++cases; if (!conformant) ++failures;
   }
 #ifdef _WIN32

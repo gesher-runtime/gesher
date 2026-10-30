@@ -22,8 +22,12 @@ The native ExitThread61 case also retains its original external kernel witness.
 Every duplicated handle is closed and Windows retains the original +8 bound.
 Immediately after each pthread_join/std::thread::join returns, before any extra
 kernel wait, the fixture separately snapshots callback counts and identity
-mismatches. Incomplete callbacks at that point remain a strict failure even if
-they finish during the later storage-protection wait. The native ExitThread
+mismatches. Each TU publishes its own completion as the destructor's final action
+after the record/log call returns; both completions must be visible at join.
+Windows also samples its owned kernel handle with timeout0 immediately at join,
+logging signaled/timeout as a separate observation without requiring native
+bookkeeping to have finished at that instant. Incomplete callbacks at join remain
+a strict failure even if they finish during the later storage-protection wait. The native ExitThread
 case has no pthread join; its observations follow actual native termination.
 
 Compiler flags follow the production GNU C++20/no-exceptions/sized-deallocation
@@ -32,6 +36,11 @@ TLS registration evidence. The producer stores complete commands, object hashes,
 all four source hashes, imports, demangled object/executable symbols, driver
 hash/version and target archive hashes. Actual emutls/thread-atexit/TLS symbols
 are printed without assuming in advance which mechanism the compiler chooses.
+The complete verbose linker transcript is printed and retained as a hashed
+artifact member. The explicit libwinpthread.a and the -pthread static alias
+libpthread.a have distinct path/hash bindings; private variants validate both
+against their exact supplier receipt. Actual link selection is audited from
+that transcript, without inferring it from command arguments alone.
 
 Three supplier variants remain distinct, including their artifact names:
 
