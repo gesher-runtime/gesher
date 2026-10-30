@@ -1,0 +1,31 @@
+# Explicit ci/build selected-only injection, not a toolchain/default change.
+include_guard(GLOBAL)
+if(NOT "$ENV{GESHER_HOST_PTHREAD_SELECTION}" STREQUAL "selected-minimum"
+   OR NOT "$ENV{GESHER_HOST_PTHREAD_CALLER}" STREQUAL "ci/build")
+  message(FATAL_ERROR "Selected link capture requires the explicit first caller")
+endif()
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(_gesher_selected_linker "${Python3_EXECUTABLE};${CMAKE_CURRENT_LIST_DIR}/selected_link.py;launch")
+set(CMAKE_C_LINKER_LAUNCHER "${_gesher_selected_linker}")
+set(CMAKE_CXX_LINKER_LAUNCHER "${_gesher_selected_linker}")
+
+function(_gesher_selected_targets directory)
+  get_property(targets DIRECTORY "${directory}" PROPERTY BUILDSYSTEM_TARGETS)
+  foreach(target IN LISTS targets)
+    get_target_property(kind "${target}" TYPE)
+    if(kind STREQUAL "EXECUTABLE" OR kind STREQUAL "SHARED_LIBRARY" OR kind STREQUAL "MODULE_LIBRARY")
+      get_target_property(options "${target}" LINK_OPTIONS)
+      # Preserve the existing product maps and original option order. The
+      # launcher rejects a hidden/second map or conflicting verbose flag.
+      if(NOT "${options}" MATCHES "-Map[,=]")
+        target_link_options("${target}" PRIVATE "-Wl,-Map,$<TARGET_FILE:${target}>.selected-pthread.map")
+      endif()
+      target_link_options("${target}" PRIVATE "-Wl,--verbose")
+    endif()
+  endforeach()
+  get_property(children DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
+  foreach(child IN LISTS children)
+    _gesher_selected_targets("${child}")
+  endforeach()
+endfunction()
+cmake_language(DEFER CALL _gesher_selected_targets "${CMAKE_SOURCE_DIR}")
