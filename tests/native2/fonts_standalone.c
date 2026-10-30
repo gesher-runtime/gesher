@@ -67,7 +67,9 @@ static bool glyph(const char *path, uint32_t cp) {
 done: free(b); fclose(f); return ok;
 }
 int main(int argc, char **argv) {
-  if(argc!=5) return 2;
+  if(argc!=5 && argc!=6) return 2;
+  bool dex=argc==6&&!strcmp(argv[5],"dex");
+  if(argc==6&&!dex) return 2;
   bool positive=!strcmp(argv[1],"set");
   if(!strcmp(argv[1],"unset")) unsetenv("ANDROID_ROOT");
   else if(positive) setenv("ANDROID_ROOT",argv[2],1);
@@ -85,13 +87,16 @@ int main(int argc, char **argv) {
 #undef LOAD
   if(!open_iter||!next||!close_iter||!close_font||!path||!create||!destroy||!match||!weight||!italic||!locale||!index||!axes||!tag||!axis||!style||!locales||!variant) { puts("FONT_FAIL exports"); return 1; }
   void *absolute=dlopen("/system/lib64/libandroid.so",RTLD_NOW);
-  if(!absolute || dlsym(absolute,"AFontMatcher_match")!=(void*)match || dlsym(lib,"AAssetManager_open")!=NULL) { puts("FONT_FAIL logical-provider-identity"); return 1; }
+  bool has_assets=dlsym(lib,"AAssetManager_open")!=NULL;
+  if(!absolute || dlsym(absolute,"AFontMatcher_match")!=(void*)match || has_assets!=dex) { puts("FONT_FAIL logical-provider-identity"); return 1; }
   dlclose(absolute);
   FILE *direct=fopen("/system/etc/fonts.xml","rb"); bool direct_readable=direct!=NULL; if(direct) fclose(direct);
   bool root_identity=!direct_readable||same_bytes("/system/etc/fonts.xml",argv[4]);
   FILE *canary=fopen("font-unrelated-canary.txt","rb"); char canary_bytes[32]={0};
   bool unrelated=canary&&fread(canary_bytes,1,16,canary)==16&&!memcmp(canary_bytes,"unrelated-canary",16); if(canary) fclose(canary);
   unsigned count=0,axis_count=0,locales_count=0; bool valid=true;
+  void *retained=NULL; char *retained_path=NULL; uint16_t retained_weight=0;
+  size_t retained_index=0,retained_axes=0;
   void *it=open_iter(),*font; if(!it) return 1;
   while(count<4096 && (font=next(it))) {
     const char *p=path(font); FILE *f=p?fopen(p,"rb"):NULL; unsigned char h[12]={0};
@@ -100,9 +105,19 @@ int main(int argc, char **argv) {
     const char *l=locale(font); if(l&&*l) locales_count++;
     size_t a=axes(font); if(a>128) valid=false;
     for(size_t j=0;j<a&&j<128;j++) { if(!tag(font,j)||!isfinite(axis(font,j))) valid=false; axis_count++; }
-    close_font(font); count++;
+    if(!retained&&p&&glyph(p,'A')) {
+      retained=font; retained_path=strdup(p); retained_weight=weight(font);
+      retained_index=index(font); retained_axes=axes(font);
+    } else close_font(font);
+    count++;
   }
   close_iter(it);
+  bool retained_found=retained!=NULL;
+  bool retained_valid=!retained || (retained_path&&!strcmp(path(retained),retained_path)&&
+      rooted(path(retained),argv[3])&&weight(retained)==retained_weight&&
+      index(retained)==retained_index&&axes(retained)==retained_axes&&glyph(path(retained),'A'));
+  if(retained) { FILE *file=fopen(path(retained),"rb"); if(!file) retained_valid=false; if(file) fclose(file); }
+  close_font(retained); free(retained_path);
   void *m=create(); if(!m) return 1; locales(m,"en,he"); variant(m,2);
   uint16_t text[]={'A',0x05d0,0x05d1}; uint32_t offset=0,runs=0;
   while(offset<3) {
@@ -123,7 +138,7 @@ int main(int argc, char **argv) {
   const char *invalid[]={"/system/fonts/../fontscanary.txt","/system/fonts/.. /fontscanary.txt","/system/fonts/.../fontscanary.txt","/system/fonts/..\\fonts.xml","/system/fonts/C:fonts.xml","/system/fonts/NUL.ttf","/system/etc/fonts.xml:stream"};
   bool boundaries=true;
   for(unsigned i=0;i<sizeof(invalid)/sizeof(invalid[0]);i++) { FILE *bad=fopen(invalid[i],"rb"); if(bad) { boundaries=false; fclose(bad); } }
-  bool good=valid&&unrelated&&root_identity&&boundaries&&direct_readable==expected&&count<4096&&(expected?(count>10&&axis_count>0&&locales_count>0&&offset==3&&runs>0&&styled):(count==0&&offset==0&&!styled));
-  printf("FONT_%s case=%s exports=18 direct=%d iterator=%u axes=%u locales=%u covered=%u runs=%u styled=%d\n",good?"PASS":"FAIL",argv[1],direct_readable,count,axis_count,locales_count,offset,runs,styled);
+  bool good=valid&&retained_valid&&unrelated&&root_identity&&boundaries&&direct_readable==expected&&count<4096&&(expected?(count>10&&retained_found&&axis_count>0&&locales_count>0&&offset==3&&runs>0&&styled):(count==0&&offset==0&&!styled));
+  printf("FONT_%s case=%s exports=18 direct=%d iterator=%u retained=%d axes=%u locales=%u covered=%u runs=%u styled=%d\n",good?"PASS":"FAIL",argv[1],direct_readable,count,retained_found&&retained_valid,axis_count,locales_count,offset,runs,styled);
   dlclose(lib); return good?0:1;
 }
