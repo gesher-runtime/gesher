@@ -644,6 +644,7 @@ jobs:
         shell: pwsh
         run: tools/host-pthread-authority/run-deferred-probe.ps1
 
+  # Minimum candidate appends independent jobs; all original variants remain hard gates.
   late_cpp_linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -713,3 +714,72 @@ jobs:
             if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
             if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
           }
+  minimum_compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Source-only minimum receipt and trace controls
+        run: |
+          python3 tools/host-pthread-authority/minimum_receipt.py selftest
+          python3 tools/host-pthread-authority/minimum_bundle.py selftest
+          python3 tools/host-pthread-authority/late_cpp_bundle.py selftest
+      - name: Distinct pristine publisher and minimum candidate supplier
+        shell: bash
+        run: |
+          set -euo pipefail
+          for variant in reference candidate; do
+            supplier_root="$RUNNER_TEMP/gesher-minimum-$variant"
+            test ! -e "$supplier_root"
+            mkdir "$supplier_root"
+            curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" -o "$supplier_root/compiler.tar.xz"
+            printf '%s  %s\n' 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4 "$supplier_root/compiler.tar.xz" | sha256sum --check --strict
+            tar -xJf "$supplier_root/compiler.tar.xz" -C "$supplier_root"
+          done
+          reference="$RUNNER_TEMP/gesher-minimum-reference/$LLVM_MINGW_NAME"
+          candidate="$RUNNER_TEMP/gesher-minimum-candidate/$LLVM_MINGW_NAME"
+          bash tools/host-pthread-authority/build-minimum-supplier.sh "$candidate"
+          python3 tools/host-pthread-authority/minimum_bundle.py build "$reference" "$candidate" "$PWD/host-minimum-candidate-source"
+          python3 tools/host-pthread-authority/minimum_bundle.py verify
+          python3 tools/host-pthread-authority/late_cpp_bundle.py build "$candidate" minimum-candidate
+          python3 tools/host-pthread-authority/late_cpp_bundle.py verify minimum-candidate
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pthread-minimum-controls
+          path: minimum-controls/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pthread-late-cpp-minimum-candidate
+          path: late-cpp-minimum-candidate/
+          if-no-files-found: error
+  minimum_windows:
+    needs: minimum_compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify two exact current-attempt minimum producer artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/artifact_receipt.py --name pthread-minimum-controls --producer minimum_compile --destination minimum-controls
+          if ($LASTEXITCODE -ne 0) { throw 'Minimum controls producer receipt failed' }
+          python tools/host-pthread-authority/minimum_bundle.py verify
+          if ($LASTEXITCODE -ne 0) { throw 'Minimum source/ABI/import/static roles failed' }
+          python tools/ci/artifact_receipt.py --name pthread-late-cpp-minimum-candidate --producer minimum_compile --destination late-cpp-minimum-candidate
+          if ($LASTEXITCODE -ne 0) { throw 'Minimum C++ producer receipt failed' }
+          python tools/host-pthread-authority/late_cpp_bundle.py verify minimum-candidate
+          if ($LASTEXITCODE -ne 0) { throw 'Minimum C++ selected archive/member role failed' }
+      - name: Actual minimum static and import contracts plus genuine compiler TLS
+        shell: pwsh
+        run: tools/host-pthread-authority/run-minimum-candidate.ps1
