@@ -1,0 +1,18 @@
+diff --git a/mingw-w64-libraries/winpthreads/src/thread.c b/mingw-w64-libraries/winpthreads/src/thread.c
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -1556,3 +1556,4 @@
+ {
+   unsigned rslt = 0;
++  pthread_spinlock_t new_spin_keys = PTHREAD_SPINLOCK_INITIALIZER;
+   struct _pthread_v *tv = (struct _pthread_v *)args;
+@@ -1593,6 +1594,9 @@
+       tv->valid = DEAD_THREAD;
+       pthread_mutex_unlock (&tv->p_clock);
+       pthread_mutex_destroy (&tv->p_clock);
++      /* Cleanup lazily creates spin_keys even without user keys. Retire it
++         under the registry lock before the pool zeroes its owning pointer. */
++      replace_spin_keys (&tv->spin_keys, new_spin_keys);
+       push_pthread_mem (tv);
+       tv = NULL;
+       TlsSetValue (_pthread_tls, tv);
