@@ -2,12 +2,14 @@
 #include <gesher/font_environment.h>
 #include <gesher/font_paths.h>
 #include <windows.h>
+#include <wct.h>
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -21,8 +23,12 @@ constexpr const char* kSupplementary = "initial-\xf0\x9f\x98\x80 space";
 constexpr const char* kA = "owned-A-\xd7\x90\xd7\x91 space";
 constexpr const char* kB = "owned-B-\xd7\x92\xd7\x93 space";
 constexpr const char* kLater = "wide-later-\xd7\x92 space";
+void (*g_failure_cleanup)() = nullptr;
+bool HeldCallback() noexcept;
 [[noreturn]] void Die(const char* message) {
-  std::fprintf(stderr,"FONT_ENV_HOST_FAIL %s errno=%d winerror=%lu\n",message,errno,GetLastError());
+  DWORD last = GetLastError(); int saved_errno = errno;
+  if (g_failure_cleanup) g_failure_cleanup();
+  std::fprintf(stderr,"FONT_ENV_HOST_FAIL %s errno=%d winerror=%lu\n",message,saved_errno,last);
   ExitProcess(1); // Never return stack-backed state while a worker may live.
 }
 void Require(bool value,const char* message){if(!value)Die(message);}
@@ -34,9 +40,116 @@ FontEnvironmentValue Check(int key,State state,std::string_view wanted){
 std::atomic<int> g_invalid{0};
 std::atomic<bool> g_reentered{false};
 void __cdecl Invalid(const wchar_t*,const wchar_t*,const wchar_t*,unsigned int,uintptr_t){
-  g_invalid.fetch_add(1);auto value=gesher::ReadFontEnvironment(Key(0));
+  g_invalid.fetch_add(1);if(HeldCallback())return;
+  auto value=gesher::ReadFontEnvironment(Key(0));
   g_reentered.store(value.state==State::kValue&&value.value()==kA);
 }
+// WCT is used only by this CI fixture and only for its own process threads.
+// All setup/lazy WCT work and the writer body precede the held CRT callback.
+struct Cycle {
+  HANDLE token=nullptr,writer_ready=nullptr,writer_go=nullptr,entered=nullptr,proceed=nullptr;
+  HANDLE writer=nullptr,handler=nullptr;
+  HWCT session=nullptr;
+  TOKEN_PRIVILEGES previous_privilege{};
+  bool privilege_saved=false,handler_installed=false,cleaned=false,cleanup_ok=true;
+  _invalid_parameter_handler previous_handler=nullptr;
+  DWORD writer_tid=0,handler_tid=0;
+  std::string invalid_value=std::string(32767,'x');
+  std::atomic<bool> read_ok{false},handler_wait_ok{false};
+  std::atomic<int> writer_result{-99},handler_result{-99},handler_errno{0};
+  bool Cleanup() noexcept;
+};
+std::atomic<Cycle*> g_cycle{nullptr};
+void FailureCycleCleanup(){if(auto* cycle=g_cycle.load())cycle->Cleanup();}
+bool Cycle::Cleanup() noexcept {
+  if(cleaned)return cleanup_ok;
+  cleaned=true;
+  if(writer_go)SetEvent(writer_go);
+  if(proceed)SetEvent(proceed);
+  for(HANDLE thread:{handler,writer})if(thread&&WaitForSingleObject(thread,10000)!=WAIT_OBJECT_0)cleanup_ok=false;
+  if(handler_installed){_set_invalid_parameter_handler(previous_handler);handler_installed=false;}
+  if(session){CloseThreadWaitChainSession(session);session=nullptr;}
+  if(privilege_saved){
+    SetLastError(ERROR_SUCCESS);
+    BOOL restored=AdjustTokenPrivileges(token,FALSE,&previous_privilege,0,nullptr,nullptr);
+    DWORD error=GetLastError();
+    std::printf("FONT_ENV_WCT_PRIVILEGE_RESTORE success=%d error=%lu\n",restored&&error==ERROR_SUCCESS,error);
+    if(!restored||error!=ERROR_SUCCESS)cleanup_ok=false;
+    privilege_saved=false;
+  }
+  for(HANDLE handle:{handler,writer,writer_ready,writer_go,entered,proceed,token})
+    if(handle&&!CloseHandle(handle))cleanup_ok=false;
+  g_cycle.store(nullptr);g_failure_cleanup=nullptr;
+  return cleanup_ok;
+}
+bool HeldCallback() noexcept {
+  auto* cycle=g_cycle.load();if(!cycle)return false;
+  if(!SetEvent(cycle->entered)||WaitForSingleObject(cycle->proceed,15000)!=WAIT_OBJECT_0)return true;
+  cycle->handler_wait_ok.store(true);
+  auto value=gesher::ReadFontEnvironment(Key(0));
+  cycle->read_ok.store(value.state==State::kValue&&value.value()==kA);
+  return true;
+}
+DWORD WINAPI HeldWriter(void* argument){
+  auto& cycle=*static_cast<Cycle*>(argument);
+  if(!SetEvent(cycle.writer_ready)||WaitForSingleObject(cycle.writer_go,15000)!=WAIT_OBJECT_0)return 1;
+  // Existing owned key + unset has zero owner-buffer preparatory allocation.
+  cycle.writer_result.store(unsetenv("ANDROID_ROOT"));return 0;
+}
+DWORD WINAPI HeldInvalid(void* argument){
+  auto& cycle=*static_cast<Cycle*>(argument);errno=0;
+  cycle.handler_result.store(setenv("ANDROID_ROOT",cycle.invalid_value.c_str(),1));
+  cycle.handler_errno.store(errno);return 0;
+}
+void ConcurrentReadCallback(){
+  Require(setenv("ANDROID_ROOT",kA,1)==0,"prepare held CRT owner");
+  auto retained=Check(0,State::kValue,kA);
+  Cycle cycle;g_cycle.store(&cycle);g_failure_cleanup=FailureCycleCleanup;
+  Require(OpenProcessToken(GetCurrentProcess(),TOKEN_ADJUST_PRIVILEGES|TOKEN_QUERY,&cycle.token),"WCT own-token prerequisite");
+  TOKEN_PRIVILEGES requested{};requested.PrivilegeCount=1;
+  Require(LookupPrivilegeValueW(nullptr,L"SeDebugPrivilege",&requested.Privileges[0].Luid),"WCT privilege lookup");
+  requested.Privileges[0].Attributes=SE_PRIVILEGE_ENABLED;DWORD previous_size=sizeof(cycle.previous_privilege);
+  SetLastError(ERROR_SUCCESS);
+  BOOL adjusted=AdjustTokenPrivileges(cycle.token,FALSE,&requested,sizeof(cycle.previous_privilege),&cycle.previous_privilege,&previous_size);
+  DWORD privilege_error=GetLastError();cycle.privilege_saved=adjusted!=FALSE;
+  std::printf("FONT_ENV_WCT_PRIVILEGE prerequisite_adjusted=%d error=%lu previous_count=%lu scope=OWN_PROCESS_ONLY\n",adjusted,privilege_error,cycle.previous_privilege.PrivilegeCount);
+  Require(adjusted&&privilege_error==ERROR_SUCCESS,"WCT missing privilege prerequisite");
+  cycle.session=OpenThreadWaitChainSession(0,nullptr);Require(cycle.session!=nullptr,"synchronous WCT prerequisite");
+  WAITCHAIN_NODE_INFO nodes[WCT_MAX_NODE_COUNT]{};DWORD count=WCT_MAX_NODE_COUNT;BOOL is_cycle=FALSE;
+  Require(GetThreadWaitChain(cycle.session,0,0,GetCurrentThreadId(),&count,nodes,&is_cycle),"WCT prewarm own observer");
+  cycle.writer_ready=CreateEventW(nullptr,TRUE,FALSE,nullptr);cycle.writer_go=CreateEventW(nullptr,TRUE,FALSE,nullptr);
+  cycle.entered=CreateEventW(nullptr,TRUE,FALSE,nullptr);cycle.proceed=CreateEventW(nullptr,TRUE,FALSE,nullptr);
+  Require(cycle.writer_ready&&cycle.writer_go&&cycle.entered&&cycle.proceed,"held choreography events");
+  cycle.writer=CreateThread(nullptr,0,HeldWriter,&cycle,0,&cycle.writer_tid);
+  Require(cycle.writer&&WaitForSingleObject(cycle.writer_ready,10000)==WAIT_OBJECT_0,"prestarted native writer body");
+  std::printf("FONT_ENV_WCT_PRESTART observer_tid=%lu writer_tid=%lu session_warmed=1 writer_body_ready=1\n",GetCurrentThreadId(),cycle.writer_tid);
+  int invalid_before=g_invalid.load();
+  cycle.previous_handler=_set_invalid_parameter_handler(Invalid);cycle.handler_installed=true;
+  cycle.handler=CreateThread(nullptr,0,HeldInvalid,&cycle,0,&cycle.handler_tid);
+  Require(cycle.handler&&WaitForSingleObject(cycle.entered,10000)==WAIT_OBJECT_0,"actual held CRT handler");
+  Require(SetEvent(cycle.writer_go),"release prestarted tracked unset");
+  bool observed=false;ULONGLONG deadline=GetTickCount64()+10000;
+  do{
+    count=WCT_MAX_NODE_COUNT;is_cycle=FALSE;
+    Require(GetThreadWaitChain(cycle.session,0,0,cycle.writer_tid,&count,nodes,&is_cycle),"own writer WCT retrieval prerequisite");
+    observed=count>=3&&!is_cycle&&nodes[0].ObjectType==WctThreadType&&nodes[0].ObjectStatus==WctStatusBlocked&&
+      nodes[0].ThreadObject.ProcessId==GetCurrentProcessId()&&nodes[0].ThreadObject.ThreadId==cycle.writer_tid&&
+      nodes[1].ObjectType==WctCriticalSectionType&&nodes[1].ObjectStatus==WctStatusOwned&&
+      nodes[2].ObjectType==WctThreadType&&nodes[2].ThreadObject.ProcessId==GetCurrentProcessId()&&nodes[2].ThreadObject.ThreadId==cycle.handler_tid;
+    if(!observed)Sleep(10);
+  }while(!observed&&GetTickCount64()<deadline);
+  for(DWORD i=0;i<count&&i<WCT_MAX_NODE_COUNT;++i)
+    std::printf("FONT_ENV_WCT_NODE index=%lu type=%u status=%u pid=%lu tid=%lu\n",i,static_cast<unsigned>(nodes[i].ObjectType),static_cast<unsigned>(nodes[i].ObjectStatus),nodes[i].ObjectType==WctThreadType?nodes[i].ThreadObject.ProcessId:0,nodes[i].ObjectType==WctThreadType?nodes[i].ThreadObject.ThreadId:0);
+  Require(observed&&WaitForSingleObject(cycle.writer,0)==WAIT_TIMEOUT&&!cycle.handler_wait_ok.load(),"positive writer to CRT critical-section to held handler ownership");
+  Require(SetEvent(cycle.proceed),"allow held handler snapshot read");
+  HANDLE threads[]={cycle.handler,cycle.writer};
+  Require(WaitForMultipleObjects(2,threads,TRUE,15000)==WAIT_OBJECT_0,"true held reader/writer completion");
+  Require(cycle.handler_wait_ok.load()&&cycle.read_ok.load()&&cycle.writer_result.load()==0&&cycle.handler_result.load()==-1&&cycle.handler_errno.load()==EINVAL&&g_invalid.load()==invalid_before+1,"held read callback outcome");
+  Require(retained.value()==kA,"retained owner after held unset");Check(0,State::kAbsent,"");
+  Require(cycle.Cleanup(),"restore exact privilege/handler and close WCT/token/native handles");
+  std::puts("FONT_ENV_WCT_PASS own_process=1 specific_writer_wait=CRITICAL_SECTION held_owner=INVALID_HANDLER concurrent_read_callback=1 unset_writer=1 true_kernel_completion=1 privilege_restored=1 session_token_handles_closed=1 arbitrary_writer_reentry_qualified=0");
+}
+
 struct Work{HANDLE start;bool writer;std::atomic<int>* failures;};
 DWORD WINAPI Worker(void* argument){
   auto& work=*static_cast<Work*>(argument);
@@ -52,6 +165,7 @@ DWORD WINAPI Worker(void* argument){
   }return 0;
 }
 int main(int argc,char** argv){
+  Require(std::getenv("GITHUB_ACTIONS")&&std::strcmp(std::getenv("GITHUB_ACTIONS"),"true")==0,"CI execution only");
   Require(argc==2,"one explicit initial-state mode");std::string_view mode(argv[1]);
   Require(mode=="wide"||mode=="missing"||mode=="empty"||mode=="invalid-wide"||mode=="supplementary","initial mode");
   State state=mode=="missing"?State::kAbsent:mode=="invalid-wide"?State::kError:State::kValue;
@@ -99,6 +213,7 @@ int main(int argc,char** argv){
   Require(std::getenv("ANDROID_ROOT")&&std::strcmp(std::getenv("ANDROID_ROOT"),kA)==0,"pre-mutation CRT change");
   Require(setenv("ANDROID_ROOT","\xff",1)==0,"owned raw-byte control");Check(0,State::kError,"");
   auto files=gesher::SystemFontFiles();Require(files.xml.empty()&&files.directory.empty(),"invalid bytes used defaults");
+  ConcurrentReadCallback();
   Require(setenv("ANDROID_ROOT",kA,1)==0,"restore before concurrency");
   HANDLE start=CreateEventW(nullptr,TRUE,FALSE,nullptr);Require(start!=nullptr,"start event");
   std::atomic<int> failures{0};Work work[]={{start,true,&failures},{start,false,&failures}};
@@ -108,6 +223,6 @@ int main(int argc,char** argv){
   DWORD codes[2]{};
   Require(GetExitCodeThread(threads[0],&codes[0])&&GetExitCodeThread(threads[1],&codes[1])&&codes[0]==0&&codes[1]==0&&failures.load()==0,"concurrent snapshots");
   Require(CloseHandle(threads[0])&&CloseHandle(threads[1])&&CloseHandle(start),"worker handle cleanup");
-  std::printf("FONT_ENV_HOST_PASS mode=%s two_keys=1 initial_wide=1 copy_move_lifetime=1 native_POSIX=1 overwrite0=1 callback_failure=PRE_MUTATION_READ_ONLY concurrent_raw_callback_interleaving_qualification=0 writer_callback_reentrancy_qualification=0 preparation_oom_qualification=0 raw_partial_rollback_claim=0 invalid_owned_fail_closed=1 concurrency=1000 handles_closed=1 global_getenv_repair=0 font_fallback_qualified=0\n",argv[1]);
+  std::printf("FONT_ENV_HOST_PASS mode=%s two_keys=1 initial_wide=1 copy_move_lifetime=1 native_POSIX=1 overwrite0=1 callback_failure=PRE_MUTATION_READ_ONLY concurrent_read_callback_WCT=1 writer_callback_reentrancy_qualification=0 preparation_oom_qualification=0 raw_partial_rollback_claim=0 invalid_owned_fail_closed=1 concurrency=1000 handles_closed=1 global_getenv_repair=0 font_fallback_qualified=0\n",argv[1]);
   return 0;
 }
