@@ -161,6 +161,8 @@ jobs:
       TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Check exact qualified controller helper hashes and source-only pin negatives
         shell: pwsh
         run: tools/net-tcp-priority/test-helper-metadata.ps1
