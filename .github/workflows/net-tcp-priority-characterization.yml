@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [wip/tcp-priority-reboot]
-    paths: [.github/workflows/net-tcp-priority-characterization.yml, tests/net-tcp-priority/winsock_oracle.cc, tests/net-tcp-priority/winsock_udp_oracle.cc, tests/net-tcp-priority/contract.cc]
+    paths: [.github/workflows/net-tcp-priority-characterization.yml, tests/net-tcp-priority/winsock_oracle.cc, tests/net-tcp-priority/winsock_udp_oracle.cc, tests/net-tcp-priority/linux_udp_error_reference.cc, tests/net-tcp-priority/contract.cc]
 permissions:
   contents: read
 jobs:
@@ -17,6 +17,17 @@ jobs:
           set -euo pipefail
           g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
           timeout 20 /tmp/tcp-priority-reference
+      - name: Independent Linux connected UDP errors and zero or large payloads
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror tests/net-tcp-priority/linux_udp_error_reference.cc -o /tmp/udp-error-reference
+          for family in 4 6; do
+            for mode in 0 1 2 3; do
+              for query in 0 1; do
+                timeout 5 /tmp/udp-error-reference "$family" "$mode" "$query"
+              done
+            done
+          done
   windows:
     strategy:
       fail-fast: false
@@ -54,7 +65,7 @@ jobs:
         shell: pwsh
         run: |
           foreach ($report in 0..1) {
-            foreach ($payload in 0..1) {
+            foreach ($payload in 0..3) {
               foreach ($query in 0..1) {
                 $rows = & ./udp-oracle.exe "$report" "$payload" "$query" 2>&1
                 $code = $LASTEXITCODE

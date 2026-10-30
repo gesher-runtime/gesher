@@ -13,8 +13,12 @@ static void require(bool ok, const char* what) {
 int main(int argc, char** argv) {
   require(argc == 4, "three exact binary arguments");
   for (int i = 1; i < 4; ++i)
-    require(strlen(argv[i]) == 1 && (argv[i][0] == '0' || argv[i][0] == '1'), "exact binary argument");
+    require(strlen(argv[i]) == 1 && argv[i][0] >= '0' && argv[i][0] <= (i == 2 ? '3' : '1'), "exact observation argument");
   int report_reset = argv[1][0] - '0', payload = argv[2][0] - '0', query_error = argv[3][0] - '0';
+  const int payload_length = payload == 1 ? 1 : payload == 2 ? 0 : 8192;
+  char expected[8192];
+  for (int i = 0; i < 8192; ++i) expected[i] = static_cast<char>((i * 37) % 251 + 1);
+  expected[0] = 'p';
   WSADATA data{};
   require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "startup");
   SOCKET target = WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0,
@@ -37,7 +41,7 @@ int main(int argc, char** argv) {
   require(ioctlsocket(client, FIONBIO, &nonblocking) == 0 &&
       connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "connected nonblocking client");
   if (payload) {
-    require(sendto(target, "p", 1, 0, reinterpret_cast<sockaddr*>(&local), sizeof(local)) == 1, "real queued payload");
+    require(sendto(target, expected, payload_length, 0, reinterpret_cast<sockaddr*>(&local), sizeof(local)) == payload_length, "real queued payload");
   } else {
     require(closesocket(target) == 0, "target physically closed"); target = INVALID_SOCKET;
     require(send(client, "u", 1, 0) == 1, "real ICMP-producing send");
@@ -61,11 +65,15 @@ int main(int argc, char** argv) {
       report_reset, payload, query_error, repeated, repeat_error, before.revents, peeked, peek_error, peek_byte);
   WSAPOLLFD after{}; after.fd = client; after.events = first.events;
   int after_rc = WSAPoll(&after, 1, 0), after_error = after_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
-  byte = '?'; int consumed = recv(client, &byte, 1, 0), receive_error = consumed == SOCKET_ERROR ? WSAGetLastError() : 0;
-  printf("WINDOWS_UDP_RESET report=%d payload=%d query=%d stage=after-peek-and-consume poll=%d poll_error=%d revents=%d recv=%d recv_error=%d byte=%u\n",
-      report_reset, payload, query_error, after_rc, after_error, after.revents, consumed, receive_error, static_cast<unsigned int>(static_cast<unsigned char>(byte)));
-  if (payload) require(polled == 1 && (first.revents & POLLRDNORM) && peeked == 1 && peek_byte == 'p' && consumed == 1 && byte == 'p',
-      "real payload survives peek and explicit error query");
+  char actual[8192]{};
+  const int receive_capacity = payload <= 1 ? 1 : 8192;
+  int consumed = recv(client, actual, receive_capacity, 0), receive_error = consumed == SOCKET_ERROR ? WSAGetLastError() : 0;
+  bool conserved = payload && consumed == payload_length && !memcmp(expected, actual, static_cast<size_t>(payload_length));
+  printf("WINDOWS_UDP_RESET report=%d payload=%d query=%d stage=after-peek-and-consume poll=%d poll_error=%d revents=%d recv=%d recv_error=%d expected_length=%d conserved=%d\n",
+      report_reset, payload, query_error, after_rc, after_error, after.revents, consumed, receive_error, payload ? payload_length : -1, conserved ? 1 : 0);
+  if (payload) require(polled == 1 && first.revents == POLLRDNORM && after_rc == 1 && after.revents == POLLRDNORM && conserved &&
+      (payload_length > 1 || (peeked == payload_length && (payload_length == 0 || peek_byte == 'p'))),
+      "entire real zero, one or large payload survives one-byte peek and explicit error query");
   bool target_closed = target == INVALID_SOCKET || closesocket(target) == 0;
   bool client_closed = closesocket(client) == 0;
   require(target_closed && client_closed, "both owned endpoints closed");
