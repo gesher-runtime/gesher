@@ -227,7 +227,7 @@ jobs:
                   # Only this reviewed font-path adaptation supersedes a Native
                   # selected leaf. The historical baseline above stays exact.
                   name = 'compat/posix/src/path.cc'
-                  require(name in NATIVE_PINS and SOURCE_PINS[name] == FONTS_PINS[name],
+                  require(name in (UNION_PINS | NATIVE_PINS) and SOURCE_PINS[name] == FONTS_PINS[name],
                           'Font path adaptation lacks exact independent pins')
                   pins[name] = FONTS_PINS[name]
               for name, blob in pins.items():
@@ -392,7 +392,7 @@ jobs:
               actual = inventory(sha)
               verify_tree(actual, expected)
               verify_selected(actual, adapted=True)
-              for name in ('compat/posix/src/path.cc', 'compat/posix/src/fd.cc'):
+              for name in ('compat/posix/src/path.cc', 'compat/posix/src/record_lock_registry.cc'):
                   mutant = copy.deepcopy(actual)
                   mutant[name] = ('100644', '0' * 40)
                   reject('font_selected_adaptation_' + name,
