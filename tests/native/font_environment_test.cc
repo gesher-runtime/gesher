@@ -59,6 +59,8 @@ void __cdecl Invalid(const wchar_t*,const wchar_t*,const wchar_t*,unsigned int,u
   auto value=gesher::ReadFontEnvironment(Key(0));
   g_reentered.store(value.state==State::kValue&&value.value()==kA);
 }
+// Public WCT accepts a caller buffer of up to16 nodes; MinGW omits the SDK macro.
+constexpr DWORD kWaitChainCapacity = 16;
 // WCT is used only by this CI fixture and only for its own process threads.
 // All setup/lazy WCT work and the writer body precede the held CRT callback.
 struct Cycle {
@@ -130,7 +132,7 @@ void ConcurrentReadCallback(){
   std::printf("FONT_ENV_WCT_PRIVILEGE prerequisite_adjusted=%d error=%lu previous_count=%lu scope=OWN_PROCESS_ONLY\n",adjusted,privilege_error,cycle.previous_privilege.PrivilegeCount);
   Require(adjusted&&privilege_error==ERROR_SUCCESS,"WCT missing privilege prerequisite");
   cycle.session=OpenThreadWaitChainSession(0,nullptr);Require(cycle.session!=nullptr,"synchronous WCT prerequisite");
-  WAITCHAIN_NODE_INFO nodes[WCT_MAX_NODE_COUNT]{};DWORD count=WCT_MAX_NODE_COUNT;BOOL is_cycle=FALSE;
+  WAITCHAIN_NODE_INFO nodes[kWaitChainCapacity]{};DWORD count=kWaitChainCapacity;BOOL is_cycle=FALSE;
   Require(GetThreadWaitChain(cycle.session,0,0,GetCurrentThreadId(),&count,nodes,&is_cycle),"WCT prewarm own observer");
   cycle.writer_ready=CreateEventW(nullptr,TRUE,FALSE,nullptr);cycle.writer_go=CreateEventW(nullptr,TRUE,FALSE,nullptr);
   cycle.entered=CreateEventW(nullptr,TRUE,FALSE,nullptr);cycle.proceed=CreateEventW(nullptr,TRUE,FALSE,nullptr);
@@ -145,7 +147,7 @@ void ConcurrentReadCallback(){
   Require(SetEvent(cycle.writer_go),"release prestarted tracked unset");
   bool observed=false;ULONGLONG deadline=GetTickCount64()+10000;
   do{
-    count=WCT_MAX_NODE_COUNT;is_cycle=FALSE;
+    count=kWaitChainCapacity;is_cycle=FALSE;
     Require(GetThreadWaitChain(cycle.session,0,0,cycle.writer_tid,&count,nodes,&is_cycle),"own writer WCT retrieval prerequisite");
     observed=count>=3&&!is_cycle&&nodes[0].ObjectType==WctThreadType&&nodes[0].ObjectStatus==WctStatusBlocked&&
       nodes[0].ThreadObject.ProcessId==GetCurrentProcessId()&&nodes[0].ThreadObject.ThreadId==cycle.writer_tid&&
@@ -153,7 +155,7 @@ void ConcurrentReadCallback(){
       nodes[2].ObjectType==WctThreadType&&nodes[2].ThreadObject.ProcessId==GetCurrentProcessId()&&nodes[2].ThreadObject.ThreadId==cycle.handler_tid;
     if(!observed)Sleep(10);
   }while(!observed&&GetTickCount64()<deadline);
-  for(DWORD i=0;i<count&&i<WCT_MAX_NODE_COUNT;++i)
+  for(DWORD i=0;i<count&&i<kWaitChainCapacity;++i)
     std::printf("FONT_ENV_WCT_NODE index=%lu type=%u status=%u pid=%lu tid=%lu\n",i,static_cast<unsigned>(nodes[i].ObjectType),static_cast<unsigned>(nodes[i].ObjectStatus),nodes[i].ObjectType==WctThreadType?nodes[i].ThreadObject.ProcessId:0,nodes[i].ObjectType==WctThreadType?nodes[i].ThreadObject.ThreadId:0);
   Require(observed&&WaitForSingleObject(cycle.writer,0)==WAIT_TIMEOUT&&!cycle.handler_wait_ok.load(),"positive writer to CRT critical-section to held handler ownership");
   Require(SetEvent(cycle.proceed),"allow held handler snapshot read");
