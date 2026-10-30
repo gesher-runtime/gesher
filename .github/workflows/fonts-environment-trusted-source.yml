@@ -51,6 +51,9 @@ jobs:
            actual=inventory(BASE)
            for p in (core['CALLER'],core['TRUST']):expected[p]=actual[p]
            full['verify_tree'](actual,expected)
+           for p in core['EXTRA_PINS']:
+            bad=copy.deepcopy(actual);bad[p]=('100644','0'*40);reject('frozen_core_blob_'+p,lambda:full['verify_tree'](bad,expected))
+           bad=copy.deepcopy(actual);bad['tools/fonts/forged.py']=('100644','0'*40);reject('frozen_core_unknown_path',lambda:full['verify_tree'](bad,expected))
            original=git('show',core['TEMPLATE']+':'+core['CALLER']);needle=b'fonts-core-trusted-source.yml@'+b'0'*40
            require(original.count(needle)==1 and git('show',BASE+':'+core['CALLER'])==original.replace(needle,b'fonts-core-trusted-source.yml@'+CORE_GUARD.encode()),'Frozen core producer/role DAG or guard selfpin differs')
            print('FONT_ENV_FROZEN_SOURCE full_base='+core['BASE']+' core_base='+BASE+' core_pins='+str(len(core['EXTRA_PINS']))+' original_full_core_DAG=UNCHANGED runtime_reuse_only=true',flush=True)
@@ -96,7 +99,7 @@ jobs:
            for p in ('.github/workflows/ci.yml',CORE_TRUST,'.github/workflows/fonts-core-component.yml','tools/native3-locks/union_payload.py','tools/native3-locks/union_blocking_guard.py','compat/bionic/native_fonts.cc','compat/posix/src/path.cc','compat/bionic/shim.cc','compat/elf/exec/gesher_exec.cc'):
             bad=copy.deepcopy(actual);bad[p]=('100644','0'*40);reject('retained_runtime_policy_'+p,lambda:full['verify_tree'](bad,expected))
            require(sys.flags.isolated==1 and all(Path(m.__file__).resolve().parent!=Path.cwd() for m in (json,hashlib)),'Candidate shadow module imported')
-           originals={p:Path(p).read_bytes() for p in (CALLER,TRUST,CORE_TRUST,'tools/native3-locks/union_payload.py','tools/native3-locks/union_blocking_guard.py')}
+           originals={p:Path(p).read_bytes() for p in (CALLER,TRUST,CORE_TRUST,'.github/workflows/fonts-core-component.yml','tools/native3-locks/union_payload.py','tools/native3-locks/union_blocking_guard.py')}
            try:
             for p in originals:Path(p).write_bytes(b'pass\n')
             reject('actual_noop_guard_caller_core',lambda:full['verify_checkout'](expected))
