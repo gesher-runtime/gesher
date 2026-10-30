@@ -140,15 +140,22 @@ static void DrainRetirer(const RetirerFunctions& reaper) {
   }
 }
 struct HeldJoin {
-  pthread_t target;
-  LateCppCase *state;
+  std::atomic<pthread_t> target{0};
+  std::atomic<DWORD> native{0};
+  LateCppCase *state=nullptr;
+  HANDLE ready=nullptr,go=nullptr;
   int result=-1;
   void *value=nullptr;
   std::atomic<int> complete_at_join{0};
 };
 static void *JoinHeldTarget(void *raw) {
   auto& join=*static_cast<HeldJoin *>(raw);
-  join.result=pthread_join(join.target,&join.value);
+  join.native=GetCurrentThreadId();
+  Require(SetEvent(join.ready) && WaitForSingleObject(join.go,10000)==WAIT_OBJECT_0,
+      "prestarted joiner waits for actual held target identity");
+  const pthread_t target=join.target.load(std::memory_order_acquire);
+  Require(target!=pthread_t{},"held target published to already-running joiner");
+  join.result=pthread_join(target,&join.value);
   join.complete_at_join=join.state->a_done==1 && join.state->b_done==1;
   return nullptr;
 }
@@ -160,6 +167,19 @@ static bool RunHeldCase(const char *mode,bool detach,const RetirerFunctions& rea
   state.hold_entered=reinterpret_cast<std::uintptr_t>(entered);
   state.hold_release=reinterpret_cast<std::uintptr_t>(release);
   Require(entered && release && !pthread_key_create(&early_key,EarlyKeyDestructor),"held case events and distinct early key");
+  HeldJoin joining{}; joining.state=&state; pthread_t joiner{};
+  HANDLE owned_joiner=nullptr;
+  if (!detach) {
+    joining.ready=CreateEventW(nullptr,TRUE,FALSE,nullptr);
+    joining.go=CreateEventW(nullptr,TRUE,FALSE,nullptr);
+    Require(joining.ready && joining.go && !pthread_create(&joiner,nullptr,JoinHeldTarget,&joining) &&
+        WaitForSingleObject(joining.ready,10000)==WAIT_OBJECT_0 && joining.native!=0,
+        "actual joiner body entry before target creation and callback hold");
+    Require(DuplicateHandle(GetCurrentProcess(),pthread_gethandle(joiner),GetCurrentProcess(),
+        &owned_joiner,SYNCHRONIZE|THREAD_QUERY_LIMITED_INFORMATION,FALSE,0) &&
+        GetThreadId(owned_joiner)==joining.native.load(),"owned prestarted joiner native identity");
+    std::printf("CPP_TLS_JOINER_READY mode=%s native=%lu before_target=1 body_entered=1 owned_native_handle=1\n",mode,joining.native.load());
+  }
   pthread_t target{};
   Require(!pthread_create(&target,nullptr,Body,&state) &&
       WaitForSingleObject(entered,10000)==WAIT_OBJECT_0,"actual genuine C++ callback entered");
@@ -167,15 +187,27 @@ static bool RunHeldCase(const char *mode,bool detach,const RetirerFunctions& rea
       "original identity and original owned TSD budget precede held C++ callback");
   Require(!reaper.watch(target),"watch exact retained target generation");
   Require(!pthread_kill(target,0),"live validated lookup before detach ownership transition");
-  HeldJoin joining{target,&state}; pthread_t joiner{};
   if (detach) Require(!pthread_detach(target),"actual detach while genuine callback held");
-  else Require(!pthread_create(&joiner,nullptr,JoinHeldTarget,&joining),"actual concurrent join caller");
+  else {
+    joining.target.store(target,std::memory_order_release);
+    Require(SetEvent(joining.go)!=0,"release prestarted joiner only after genuine callback is held");
+    std::printf("CPP_TLS_JOINER_RELEASE mode=%s native=%lu target=%llu after_callback_held=1\n",mode,
+        joining.native.load(),static_cast<unsigned long long>(target));
+  }
   unsigned long long snapshot[12]={}; LONG values[8]={};
   const auto deadline=GetTickCount64()+10000;
   for (;;) {
     Require(!reaper.snapshot(target,snapshot,12) && !reaper.counts(values,8),"validated actual retained resources");
-    if (values[1]>0 && (detach || snapshot[6]!=0)) break;
-    Require(GetTickCount64()<deadline,"actual reaper scan and join claim deadline"); Sleep(1);
+    if (values[1]>0 && (detach || snapshot[6]==static_cast<unsigned long long>(joiner))) break;
+    if (GetTickCount64()>=deadline) {
+      std::fprintf(stderr,"CPP_TLS_HELD_TIMEOUT mode=%s joiner_native=%lu joiner_kernel_wait=%lu x=%llu generation=%llu tls_refs=%llu finalized=%llu lifecycle=%llu ended=%llu join_claim=%llu expected_joiner=%llu clock=%llu target_kernel_wait=%llu event_valid=%llu clock_result=%llu spin_live=%llu queued=%ld scans=%ld finalizations=%ld released=%ld clock_destroy=%ld event_close=%ld pool_retire=%ld spin_destroy=%ld\n",
+          mode,joining.native.load(),owned_joiner?WaitForSingleObject(owned_joiner,0):WAIT_FAILED,
+          snapshot[0],snapshot[1],snapshot[2],snapshot[3],snapshot[4],snapshot[5],snapshot[6],
+          static_cast<unsigned long long>(joiner),snapshot[7],snapshot[8],snapshot[9],snapshot[10],snapshot[11],
+          values[0],values[1],values[2],values[3],values[4],values[5],values[6],values[7]);
+      Require(false,"actual reaper scan and exact prestarted joiner claim deadline");
+    }
+    Sleep(1);
   }
   Require(snapshot[0]==static_cast<unsigned long long>(target) && snapshot[2]==1 &&
       snapshot[3]==0 && snapshot[4]==3 && snapshot[5]==0 && snapshot[7]!=0 &&
@@ -204,6 +236,8 @@ static bool RunHeldCase(const char *mode,bool detach,const RetirerFunctions& rea
     Require(!pthread_join(joiner,&value) && joining.result==0 &&
         joining.value==reinterpret_cast<void *>(0x1234) && joining.complete_at_join==1,
         "actual target join observes completed genuine callbacks");
+    Require(CloseHandle(owned_joiner) && CloseHandle(joining.ready) && CloseHandle(joining.go),
+        "prestarted joiner owned native and gate handles closed");
   }
   HANDLE completion=reinterpret_cast<HANDLE>(state.native_handle.load()); DWORD exit=0;
   Require(completion && WaitForSingleObject(completion,10000)==WAIT_OBJECT_0 &&

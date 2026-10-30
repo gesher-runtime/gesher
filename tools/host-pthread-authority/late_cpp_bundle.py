@@ -93,6 +93,14 @@ def check_trace(role,text):
     assert (before2,after2)==(baseline,after),'Existing handle gate disagrees'
     held=('owned_held_join','owned_held_detach')
     if role=='deferred':
+        body_native,body_id=one('CPP_TLS_BODY mode=owned_held_join native=([0-9]+) pthread=([0-9]+) constructed=2')
+        joiner_native=one('CPP_TLS_JOINER_READY mode=owned_held_join native=([0-9]+) before_target=1 body_entered=1 owned_native_handle=1')
+        released_native,target_id=one('CPP_TLS_JOINER_RELEASE mode=owned_held_join native=([0-9]+) target=([0-9]+) after_callback_held=1')
+        assert int(joiner_native)>0 and joiner_native==released_native and int(target_id)>0 and body_id==target_id and int(body_native)>0 and body_native!=joiner_native,'Prestarted native joiner or target publication mismatch'
+        def position(label):
+            assert label in text,'Missing prestarted joiner order witness: '+label
+            return text.index(label)
+        assert position('CPP_TLS_JOINER_READY')<position('CPP_TLS_BODY mode=owned_held_join')<position('CPP_TLS_HELD_ENTER mode=owned_held_join')<position('CPP_TLS_JOINER_RELEASE')<position('CPP_TLS_HELD_BEFORE mode=owned_held_join'),'Joiner was not actually started before target/callback hold'
         for mode in held:
             one('CPP_TLS_HELD_CONTROL mode='+mode+' phase=owned-EXITING explicit_enable=1 self_cancel_esrch=1 pending=0 testcancel_returned=1 restored_disabled=1 diagnostic_only=1')
             tu,early=one('CPP_TLS_HELD_ENTER mode='+mode+' tu=([AB]) early_budget=256 actual_early=([0-9]+)')
@@ -119,11 +127,15 @@ def selftest_trace():
             f'CPP_TLS_OWNER_HANDLES original={original} baseline={baseline} after={after} persistent_handles={baseline-original} original_total_bound=8 bounded=1',
             f'CPP_TLS_HANDLES before={baseline} after={after} original_bound=8 bounded=1']
         if deferred:
+            lines += ['CPP_TLS_JOINER_READY mode=owned_held_join native=111 before_target=1 body_entered=1 owned_native_handle=1',
+                'CPP_TLS_BODY mode=owned_held_join native=222 pthread=6 constructed=2']
             for mode in ('owned_held_join','owned_held_detach'):
                 lines += ['CPP_TLS_HELD_CONTROL mode='+mode+' phase=owned-EXITING explicit_enable=1 self_cancel_esrch=1 pending=0 testcancel_returned=1 restored_disabled=1 diagnostic_only=1',
                     'CPP_TLS_HELD_ENTER mode='+mode+' tu=B early_budget=256 actual_early=256',
                     'CPP_TLS_HELD_BEFORE mode='+mode+' original_identity=1 tls_owner=1 lifecycle=3 ended=0 kernel=258 clock_live=1 event_live=1 spin_live=1 scans=2 finalized=0 released=0 pool=0 early_budget=256 external_delete=1',
                     'CPP_TLS_HELD_AFTER mode='+mode+' kernel_signaled=1 finalized=1 released=1 clock_destroy=1 event_close=1 spin_destroy=1 pool_retire=1 original_identity=1 a_done=1 b_done=1 late_key_explicit_clear=1']
+            enter=lines.index('CPP_TLS_HELD_ENTER mode=owned_held_join tu=B early_budget=256 actual_early=256')
+            lines.insert(enter+1,'CPP_TLS_JOINER_RELEASE mode=owned_held_join native=111 target=6 after_callback_held=1')
         return lines
     rejected=0
     def reject(role,text):
@@ -142,7 +154,13 @@ def selftest_trace():
         reject(role,text.replace('after=64','after=69'))
         reject(role,text.replace('original_total_bound=8','original_total_bound=9'))
         if role=='deferred':
-            for old,new in [('pending=0','pending=1'),('self_cancel_esrch=1','self_cancel_esrch=0'),('scans=2','scans=0'),('actual_early=256','actual_early=257'),('kernel=258','kernel=0'),('clock_destroy=1','clock_destroy=2'),('spin_destroy=1','spin_destroy=0'),('pool_retire=1','pool_retire=0'),('late_key_explicit_clear=1','late_key_explicit_clear=0')]:reject(role,text.replace(old,new,1))
+            for old,new in [('native=111','native=0'),('target=6','target=0'),('pending=0','pending=1'),('self_cancel_esrch=1','self_cancel_esrch=0'),('scans=2','scans=0'),('actual_early=256','actual_early=257'),('kernel=258','kernel=0'),('clock_destroy=1','clock_destroy=2'),('spin_destroy=1','spin_destroy=0'),('pool_retire=1','pool_retire=0'),('late_key_explicit_clear=1','late_key_explicit_clear=0')]:reject(role,text.replace(old,new,1))
+            for first,second in [('CPP_TLS_JOINER_READY','CPP_TLS_BODY mode=owned_held_join'),('CPP_TLS_JOINER_RELEASE','CPP_TLS_HELD_BEFORE mode=owned_held_join')]:
+                reordered=list(lines)
+                a=next(i for i,line in enumerate(reordered) if line.startswith(first))
+                b=next(i for i,line in enumerate(reordered) if line.startswith(second))
+                reordered[a],reordered[b]=reordered[b],reordered[a]
+                reject(role,'\n'.join(reordered)+'\n')
         else:reject(role,text+'CPP_TLS_HELD_AFTER unexpected=1\n')
         symbols='\n'.join('0000 T '+n for n in TLS_OWNER_SYMBOLS) if role=='deferred' else ''
         check_owner_symbols(role,symbols)
