@@ -5323,3 +5323,98 @@
 +      InterlockedExchange(&gesher_admission_state,-1);
      }
      return TRUE;
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -235,4 +235,7 @@
+    reuse. Module references are held until the last captured invocation. */
+ struct gesher_key_generation {
++#ifdef GESHER_REAPER_PROBE
++  SLIST_ENTRY reaper_entry;
++#endif
+   unsigned long long id;
+   void (*destructor)(void *);
+@@ -240,4 +243,53 @@
+   volatile LONG references;
+ };
++#ifdef GESHER_REAPER_PROBE
++/* Diagnostic only: bootstrap from normal host code before callback-key use. */
++static SLIST_HEADER gesher_reaper_queue;
++static HANDLE gesher_reaper_wake, gesher_reaper_thread, gesher_reaper_done;
++static volatile LONG gesher_reaper_state, gesher_reaper_records, gesher_reaper_fail;
++static DWORD WINAPI gesher_reaper_main(void *unused)
++{
++  (void)unused;
++  for (;;) {
++    if (WaitForSingleObject(gesher_reaper_wake,INFINITE)!=WAIT_OBJECT_0) abort();
++    PSLIST_ENTRY entry;
++    while ((entry=InterlockedPopEntrySList(&gesher_reaper_queue))!=NULL) {
++      struct gesher_key_generation *record=CONTAINING_RECORD(entry,struct gesher_key_generation,reaper_entry);
++      if (!record->module || !FreeLibrary(record->module)) abort();
++      _aligned_free(record); InterlockedDecrement(&gesher_reaper_records);
++      if (gesher_reaper_done && !SetEvent(gesher_reaper_done)) abort();
++    }
++    if (InterlockedCompareExchange(&gesher_reaper_state,0,0)==3) return 0;
++  }
++}
++__declspec(dllexport) int __cdecl gesher_reaper_fault_v1(int stage)
++{ if (stage<0 || stage>2 || InterlockedCompareExchange(&gesher_reaper_state,0,0)!=0) return EINVAL; gesher_reaper_fail=stage; return 0; }
++__declspec(dllexport) int __cdecl gesher_reaper_start_v1(void)
++{
++  if (InterlockedCompareExchange(&gesher_reaper_state,1,0)!=0) return EBUSY;
++  InitializeSListHead(&gesher_reaper_queue);
++  gesher_reaper_wake=gesher_reaper_fail==1?NULL:CreateEventW(NULL,FALSE,FALSE,NULL);
++  if (!gesher_reaper_wake) { InterlockedExchange(&gesher_reaper_state,0); return EAGAIN; }
++  gesher_reaper_thread=gesher_reaper_fail==2?NULL:CreateThread(NULL,0,gesher_reaper_main,NULL,0,NULL);
++  if (!gesher_reaper_thread) { if (!CloseHandle(gesher_reaper_wake)) abort(); gesher_reaper_wake=NULL; InterlockedExchange(&gesher_reaper_state,0); return EAGAIN; }
++  InterlockedExchange(&gesher_reaper_state,2); return 0;
++}
++__declspec(dllexport) int __cdecl gesher_reaper_observe_v1(void *done, DWORD *tid, LONG *records)
++{
++  if (!tid || !records || InterlockedCompareExchange(&gesher_reaper_state,0,0)!=2) return EINVAL;
++  gesher_reaper_done=(HANDLE)done; *tid=GetThreadId(gesher_reaper_thread);
++  *records=InterlockedCompareExchange(&gesher_reaper_records,0,0); return *tid?0:EAGAIN;
++}
++__declspec(dllexport) int __cdecl gesher_reaper_stop_v1(void)
++{
++  /* Test contract: no concurrent producers or outstanding records. */
++  if (InterlockedCompareExchange(&gesher_reaper_records,0,0)!=0) return EBUSY;
++  if (InterlockedCompareExchange(&gesher_reaper_state,3,2)!=2) return EINVAL;
++  if (!SetEvent(gesher_reaper_wake) || WaitForSingleObject(gesher_reaper_thread,5000)!=WAIT_OBJECT_0) abort();
++  if (!CloseHandle(gesher_reaper_thread) || !CloseHandle(gesher_reaper_wake)) abort();
++  gesher_reaper_thread=NULL; gesher_reaper_wake=NULL; gesher_reaper_done=NULL;
++  InterlockedExchange(&gesher_reaper_state,4); return 0;
++}
++#endif
+ static struct gesher_key_generation *gesher_key_generations[PTHREAD_KEYS_MAX];
+ static unsigned long long gesher_key_next_generation=1;
+@@ -251,5 +303,10 @@
+ static struct gesher_key_generation *gesher_key_new(void (*destructor)(void *))
+ {
++#ifdef GESHER_REAPER_PROBE
++  struct gesher_key_generation *record=_aligned_malloc(sizeof(*record),MEMORY_ALLOCATION_ALIGNMENT);
++  if (record) { memset(record,0,sizeof(*record)); InterlockedIncrement(&gesher_reaper_records); }
++#else
+   struct gesher_key_generation *record=calloc(1,sizeof(*record));
++#endif
+   if (!record) return NULL;
+   record->destructor=destructor; record->references=1;
+@@ -269,6 +326,13 @@
+   if (record && InterlockedDecrement(&record->references)==0) {
+     HMODULE module=record->module;
++#ifdef GESHER_REAPER_PROBE
++    if (module) {
++      InterlockedPushEntrySList(&gesher_reaper_queue,&record->reaper_entry);
++      if (!SetEvent(gesher_reaper_wake)) abort();
++    } else { _aligned_free(record); InterlockedDecrement(&gesher_reaper_records); }
++#else
+     free(record);
+     if (module && !FreeLibrary(module)) abort();
++#endif
+   }
+ }
+@@ -1509,2 +1573,5 @@
++#ifdef GESHER_REAPER_PROBE
++        if (InterlockedCompareExchange(&gesher_reaper_state,0,0)!=2) return EAGAIN;
++#endif
+ #ifdef GESHER_PTHREAD_ROUTING_PROBE
+         struct gesher_key_generation *record=gesher_key_new(dest);
