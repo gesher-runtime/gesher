@@ -8,6 +8,7 @@
 #include <string.h>
 #include <wchar.h>
 extern void __cdecl gesher_deferred_gate_v1(pthread_t,void *,void *,pthread_t,void *);
+extern LONG __cdecl gesher_deferred_pending_v1(void);
 typedef int (__cdecl *cancel_fn)(pthread_t);
 typedef int (__cdecl *join_fn)(pthread_t,void **);
 typedef int (__cdecl *type_fn)(int,int *);
@@ -15,7 +16,7 @@ static cancel_fn dll_cancel;
 static join_fn dll_join;
 static type_fn dll_type;
 static pthread_key_t key;
-static volatile LONG self_cleanup,self_dtor,join_cleanup,join_dtor,native_dtor;
+static volatile LONG self_cleanup,self_dtor,join_cleanup,join_dtor,native_dtor,normal_dtor;
 static void require(int ok,const char *what) { if (!ok) { fprintf(stderr,"FAIL deferred %s\n",what); exit(1); } }
 static void count(void *arg) { InterlockedIncrement((volatile LONG *)arg); }
 static void *self_cancel(void *arg) {
@@ -37,6 +38,13 @@ static DWORD WINAPI native_target(void *arg) {
   ExitThread(61); return 0;
 }
 static DWORD WINAPI cancel_actor(void *arg) { return (DWORD)dll_cancel(((struct native_state *)arg)->id); }
+static void *disabled_normal(void *arg) {
+  struct native_state *s=arg;
+  require(!pthread_setcancelstate(PTHREAD_CANCEL_DISABLE,NULL) &&
+      !pthread_setspecific(key,(void *)&normal_dtor) && SetEvent(s->ready) &&
+      WaitForSingleObject(s->release,20000)==WAIT_OBJECT_0,"disabled normal release");
+  return (void *)(uintptr_t)0x5678;
+}
 struct joined_state { HANDLE release; pthread_t id; };
 static void *joined_target(void *arg) {
   struct joined_state *s=arg;
@@ -91,6 +99,24 @@ int main(void) {
   require(CloseHandle(actor) && CloseHandle(native) && CloseHandle(ns.ready) && CloseHandle(ns.release) &&
       CloseHandle(captured) && CloseHandle(resume),"native owned cleanup");
   puts("PASS deferred public cancel capture crosses native ExitThread61 and returns ESRCH destructor=1");
+  require(gesher_deferred_pending_v1()==0,"pending baseline after delivered self cancellation");
+  struct native_state pending={CreateEventW(NULL,TRUE,FALSE,NULL),CreateEventW(NULL,TRUE,FALSE,NULL),0};
+  require(pending.ready && pending.release,"disabled pending native gates");
+  native=CreateThread(NULL,0,native_target,&pending,0,NULL);
+  require(native && WaitForSingleObject(pending.ready,5000)==WAIT_OBJECT_0 && !dll_cancel(pending.id) &&
+      !dll_cancel(pending.id) && gesher_deferred_pending_v1()==1,"one pending request despite repeated native cancel");
+  require(SetEvent(pending.release) && WaitForSingleObject(native,5000)==WAIT_OBJECT_0 &&
+      GetExitCodeThread(native,&code) && code==61 && native_dtor==2 && gesher_deferred_pending_v1()==0 &&
+      CloseHandle(native) && CloseHandle(pending.ready) && CloseHandle(pending.release),"native exit consumes disabled pending exactly once");
+  puts("PASS deferred disabled native ExitThread pending counter=0/1/0 destructor_delta=1");
+  pending.ready=CreateEventW(NULL,TRUE,FALSE,NULL); pending.release=CreateEventW(NULL,TRUE,FALSE,NULL);
+  require(pending.ready && pending.release && !pthread_create(&pending.id,NULL,disabled_normal,&pending) &&
+      WaitForSingleObject(pending.ready,5000)==WAIT_OBJECT_0 && !dll_cancel(pending.id) &&
+      !dll_cancel(pending.id) && gesher_deferred_pending_v1()==1,"one pending request despite repeated normal cancel");
+  require(SetEvent(pending.release) && !dll_join(pending.id,&value) && value==(void *)(uintptr_t)0x5678 &&
+      normal_dtor==1 && gesher_deferred_pending_v1()==0 &&
+      CloseHandle(pending.ready) && CloseHandle(pending.release),"normal return consumes disabled pending exactly once");
+  puts("PASS deferred disabled normal return pending counter=0/1/0 destructor=1");
   struct joined_state js={CreateEventW(NULL,TRUE,FALSE,NULL),0}; HANDLE joining=CreateEventW(NULL,TRUE,FALSE,NULL);
   require(js.release && joining && !pthread_create(&js.id,NULL,joined_target,&js),"join target");
   gesher_deferred_gate_v1(0,NULL,NULL,js.id,joining);
@@ -107,6 +133,7 @@ int main(void) {
       value==(void *)(uintptr_t)0x1234,"canceled join leaves original target joinable and unconsumed");
   gesher_deferred_gate_v1(0,NULL,NULL,0,NULL);
   require(CloseHandle(owned_joiner) && CloseHandle(js.release) && CloseHandle(joining) && !pthread_key_delete(key),"join owned cleanup");
+  require(gesher_deferred_pending_v1()==0,"no pending cancellation accounting after join unwind");
   puts("PASS deferred genuine join wait cancellation unwinds claim/leases cleanup=1 destructor=1 target remains joinable");
   require(FreeLibrary(dll) && !GetModuleHandleW(L"libwinpthread-1.dll"),"actual DLL unload");
   require(GetProcessHandleCount(GetCurrentProcess(),&after) && after<=before+8,"original final handle bound");
