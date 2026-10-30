@@ -3,12 +3,29 @@
 # compression, errors and a PNG round trip through Java BitmapFactory.
 # 44-native2.ps1 supplies N2Run, the ABI list and APK checks in both modes.
 
+$fontWork = Join-Path $env:RUNNER_TEMP 'native-fonts-working-אב space'
+$fontUnicode = Join-Path $env:RUNNER_TEMP 'native-fonts-root-אב space'
+New-Item -ItemType Directory -Force $fontWork, "$fontUnicode/etc", "$fontUnicode/fonts" | Out-Null
+Set-Content -LiteralPath "$fontWork/font-unrelated-canary.txt" -Value 'unrelated-canary' -Encoding ascii -NoNewline
+Copy-Item -LiteralPath "$root/system/etc/fonts.xml" -Destination "$fontUnicode/etc/fonts.xml" -Force
+Get-ChildItem -LiteralPath "$root/system/fonts" -File | Copy-Item -Destination "$fontUnicode/fonts" -Force
+# Real canaries outside each mapped font directory make traversal controls
+# reject an existing file, rather than passing because an escaped file is absent.
+foreach ($fontParent in @($n2Dir, "$root/system", $fontUnicode)) {
+  Set-Content -LiteralPath "$fontParent/fontscanary.txt" -Value 'font namespace boundary canary' -Encoding utf8
+}
 foreach ($fontAbi in $abis) {
   $fontBin = Join-Path $n2 $fontAbi.Abi
-  $fontOutput = N2Run "$n2Dir/gesher-exec.exe" @('--elf', "$fontBin/fonts_standalone", 'fonts_standalone', (NoDrive "$root/system")) (Get-Location).Path @{ LD_LIBRARY_PATH = (NoDrive $fontBin) } 120 | Out-String
-  $fontExit = $LASTEXITCODE
-  Write-Host "INFO  standalone fonts ($($fontAbi.Tag)): exit=$fontExit $fontOutput"
-  if ($fontExit -ne 0) { Write-Host "FAIL  standalone fonts ($($fontAbi.Tag)): unavailable or failed"; $failed++ }
+  foreach ($fontCase in @('unset', 'set', 'unicode', 'wrong')) {
+    $fontMode = if ($fontCase -eq 'unicode') { 'set' } else { $fontCase }
+    $fontRoot = if ($fontCase -eq 'unicode') { NoDrive $fontUnicode } else { NoDrive "$root/system" }
+    $fontExpectedDir = if ($fontCase -eq 'unset') { NoDrive "$n2Dir/fonts" } else { "$fontRoot/fonts" }
+    $fontExpectedXml = if ($fontCase -eq 'unset') { "$fontExpectedDir/fonts.xml" } else { "$fontRoot/etc/fonts.xml" }
+    $fontOutput = N2Run "$n2Dir/gesher-exec.exe" @('--elf', "$fontBin/fonts_standalone", 'fonts_standalone', $fontMode, $fontRoot, $fontExpectedDir, $fontExpectedXml) $fontWork @{ LD_LIBRARY_PATH = (NoDrive $fontBin) } 120 | Out-String
+    $fontExit = $LASTEXITCODE
+    Write-Host "INFO  standalone fonts ($($fontAbi.Tag)/$fontCase): exit=$fontExit $fontOutput"
+    if ($fontExit -ne 0 -or $fontOutput -notmatch "FONT_PASS case=$fontMode ") { Write-Host "FAIL  standalone fonts ($($fontAbi.Tag)/$fontCase): unavailable or failed"; $failed++ }
+  }
 }
 
 if (-not (Test-Path "$n2/native2-test.dex")) {

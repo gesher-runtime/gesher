@@ -1517,7 +1517,14 @@ void* PlatformLibraryHandle(const char* path) {
   }
   for (size_t i = 0; i < kPlatformLibCount; ++i) {
     if (std::strcmp(base, kPlatformLibs[i].soname) == 0) {
-      return LookupBionicSymbol(kPlatformLibs[i].probe) != nullptr ? &g_platform_handles[i] : nullptr;
+      bool available = LookupBionicSymbol(kPlatformLibs[i].probe) != nullptr;
+      // The standalone native provider implements the font portion of
+      // libandroid without the framework AssetManager/JNI provider. As for
+      // every platform handle, unavailable individual symbols still fail
+      // through the ordinary dlsym lookup.
+      if (std::strcmp(base, "libandroid.so") == 0)
+        available |= LookupBionicSymbol("ASystemFontIterator_open") != nullptr;
+      return available ? &g_platform_handles[i] : nullptr;
     }
   }
   return nullptr;
