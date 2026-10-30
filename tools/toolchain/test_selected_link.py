@@ -3,6 +3,7 @@ import argparse
 import copy
 import json
 from pathlib import Path, PurePosixPath
+import re
 import tempfile
 import selected_link as ledger
 
@@ -118,7 +119,7 @@ def controls(authority):
     assert ledger.symbol_inventory(authority['library_symbols']['lib/libwinpthread.a'])[0]['pthread_self'] == {member}
     trace = f'ld.lld: Reading {target}\nld.lld: Loaded libpthread.a(thread.o) for pthread_self\n'.replace('thread.o', member)
     header = 'Address  Size     Align Out     In      Symbol\n'
-    mapping = header + '00001000 00000020 16 libpthread.a(thread.o):(.text)\n00001000 00000000 0                 pthread_self\n'.replace('thread.o', member)
+    mapping = header + '00001000 00000020 16 thread.o:(.text)\n00001000 00000000 0                 pthread_self\n'.replace('thread.o', member)
     imported = 'File: SYNTHETIC.exe\nFormat: COFF-x86-64\nImport {\n  Name: KERNEL32.dll\n}\n'
     linked = ledger.prove(trace, mapping, imported, data, proof_cwd)
     assert linked['status'] == 'LINKED' and set(linked['definitions']) == {'pthread_self'}
@@ -141,13 +142,13 @@ def controls(authority):
         (trace + 'ld.lld: Reading /SYNTHETIC/other/libpthread.a\n', mapping, imported),
         (trace.replace(str(target), '/SYNTHETIC/old/libpthread.a'), mapping, imported),
         (trace.replace(member, 'other.o'), mapping, imported),
-        (trace, mapping.replace(f'libpthread.a({member})', 'ordinary.obj'), imported),
-        (trace, mapping.replace('libpthread.a(', 'other.a('), imported),
+        (trace, mapping.replace(member, 'ordinary.obj'), imported),
+        (trace, mapping.replace(member, 'other.a('+member+')'), imported),
         (trace, mapping.replace(member, 'other.o'), imported),
         (trace.replace('Loaded libpthread.a(', 'Loaded /SYNTHETIC/other/libpthread.a('), mapping, imported),
-        (trace, mapping.replace('libpthread.a(', '/SYNTHETIC/other/libpthread.a('), imported),
+        (trace, mapping.replace(member, '/SYNTHETIC/other/'+member), imported),
         (trace, mapping + mapping.replace('00001000', '00002000'), imported),
-        (trace, mapping + mapping.replace('libpthread.a(', 'other.a('), imported),
+        (trace, mapping + mapping.replace(member, 'other.a('+member+')'), imported),
         (trace, mapping, imported.replace('KERNEL32.dll', 'libwinpthread-1.dll')),
         (trace, mapping, imported + 'Symbol: pthread_self (0)\n'),
         (trace, mapping, imported + 'Symbol: __imp_pthread_join (0)\n'),
@@ -155,6 +156,7 @@ def controls(authority):
         ('ld.lld: Reading /SYNTHETIC/out/ordinary.obj\n', mapping, imported),
         (trace.replace(member, 'libwinpthread_la-clock.o'), mapping.replace(member, 'libwinpthread_la-clock.o'), imported),
         (trace.replace(member, 'nonexistent.o'), mapping.replace(member, 'nonexistent.o'), imported),
+        (trace+'ld.lld: Reading /SYNTHETIC/other/ordinary.a\nld.lld: Loaded ordinary.a('+member+') for unrelated\n', mapping, imported),
     ]
     for t, m, i in negatives:
         reject(lambda: ledger.prove(t, m, i, data, proof_cwd))
@@ -188,9 +190,64 @@ def controls(authority):
     print('PASS selected-link pure: linked/not-linked + identical duplicates; '+str(len(negatives))+' proof, 2 mode, 6 command, 8 response negatives; no compiler/process/network')
 
 
+def actual_replay(log, authority):
+    raw = log.read_bytes()
+    assert ledger.digest(raw) == 'f99bd657b3d8f6b6033d4e262492873654c5f0f74eabd707f8e0c6655ecec864'
+    a_raw = authority.read_bytes()
+    assert ledger.digest(a_raw) == 'aba3e32beef66ec5ca6919e65f5e49f8b40f587599a8d2f43205e60bab873701'
+    a = json.loads(a_raw)
+    assert a['GITHUB_RUN_ID'] == '41135044960' and a['GITHUB_RUN_ATTEMPT'] == '1'
+    assert a['GITHUB_SHA'] == 'f0a8364afd3380eb0e25b8d82824dd1752f91e16'
+    lines = [re.sub(r'^\d{4}-\d\d-\d\dT\S+Z ', '', l) for l in raw.decode('utf-8').splitlines()]
+    first = lines.index('MINIMUM_CONTROL_RAW_MAP_BEGIN tag=static')
+    last = lines.index('MINIMUM_CONTROL_RAW_MAP_END', first)
+    mapping = '\n'.join(lines[first+1:last]) + '\n'
+    before = max(i for i in range(first) if lines[i] == 'MINIMUM_CONTROL_RAW_SYMBOLS_END')
+    trace = '\n'.join(l for l in lines[before+1:first] if l.startswith('ld.lld:')) + '\n'
+    start = lines.index('MINIMUM_CONTROL_RAW_IMPORTS_BEGIN tag=static', last)
+    end = lines.index('MINIMUM_CONTROL_RAW_IMPORTS_END', start)
+    imported = '\n'.join(lines[start+1:end]) + '\n'
+    assert ledger.digest(mapping.encode()) == '55b0b2f1cf48dc3fc82c9dbba0688248fa11387273ad7c5b2abe2775b3954b15'
+    assert ledger.digest(trace.encode()) == '67c4315a459db9005c2877bd2e651cee7a321f8dd85a31fb6734fc0e57342805'
+    assert ledger.digest(imported.encode()) == '21285f78bf2ac9f65e4d3a12e8684d283970a8a9a22ac1e63afd53a255daa3a8'
+    root = a['compiler'].split('InstalledDir: ', 1)[1].split('/bin', 1)[0]
+    data = dict(compiler_root=root, authority=a)
+    cwd = PurePosixPath('/home/runner/work/gesher/gesher')
+    result = ledger.prove(trace, mapping, imported, data, cwd)
+    assert result['status'] == 'LINKED' and len(result['definitions']) == 142 and len(result['loaded_members']) == 7
+    rows = {}
+    for line in lines:
+        match = re.fullmatch(r'MINIMUM_CONTROL_MEMBER tag=static symbol=(\S+) (.*)', line)
+        if match:
+            assert match[1] not in rows
+            rows[match[1]] = json.loads(match[2])
+    assert len(rows) == 18
+    for symbol, old in rows.items():
+        new = result['definitions'][symbol]
+        assert all(new[k] == old[k] for k in ('archive', 'archive_sha256', 'member'))
+        assert new['address'] == old['map_rva']
+    member = 'libwinpthread_la-thread.o'
+    archive = root + '/x86_64-w64-mingw32/lib/libwinpthread.a'
+    reading = 'ld.lld: Reading ' + archive + '\n'
+    assert trace.count(reading) == 1
+    negatives = [
+        (trace.replace(reading, ''), mapping),
+        (trace + 'ld.lld: Reading /other/libwinpthread.a\n', mapping),
+        (trace.replace(archive, '/other/libwinpthread.a'), mapping),
+        (trace + 'ld.lld: Reading /other/ordinary.a\nld.lld: Loaded ordinary.a('+member+') for unrelated\n', mapping),
+        (trace, mapping.replace(member+':(', 'libwinpthread.a('+member+'):( ')),
+        (trace, mapping+'00001000 00000020 16 '+member+':(.text)\n00000001 00000000 0                 pthread_self\n'),
+    ]
+    for t, m in negatives:
+        reject(lambda: ledger.prove(t, m, imported, data, cwd))
+    print('PASS actual411350/a1 full static map/trace/import replay: 142 live definitions/7 members; all18 prior bindings equal; 6 actual-derived ablations rejected; historical5c53 only, no new runtime claim')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--historical-authority', type=Path, required=True)
+    parser.add_argument('--actual-producer-log', type=Path)
+    parser.add_argument('--actual-authority', type=Path)
     args = parser.parse_args()
     raw = args.historical_authority.read_bytes()
     assert ledger.digest(raw) == '9fa310b69e9bc4a0c7081b8667c8dcb019481b07e644cb7875334d880a6886f8'
@@ -199,6 +256,9 @@ def main():
     assert data['GITHUB_SHA'] == '695229f0c31939ef4a95dc0cb4eef7ba5172786a'
     controls(data)
     sealed_controls(data)
+    assert bool(args.actual_producer_log) == bool(args.actual_authority)
+    if args.actual_producer_log:
+        actual_replay(args.actual_producer_log, args.actual_authority)
 
 
 if __name__ == '__main__':
