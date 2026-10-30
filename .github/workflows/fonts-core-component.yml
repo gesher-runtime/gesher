@@ -1,0 +1,53 @@
+name: fonts-core-component
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/fonts-dex-core-baseline]
+    paths: [.github/workflows/fonts-core-component.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: fonts-core-component-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  trusted-source:
+    uses: gesher-runtime/gesher/.github/workflows/fonts-core-trusted-source.yml@0000000000000000000000000000000000000000
+  fixture-producer:
+    needs: trusted-source
+    uses: ./.github/workflows/native2.yml
+  compare:
+    needs: [trusted-source, fixture-producer]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        runtime_role: [current00f, old42076]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact current-attempt fixture archive and source-bound outputs
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name native2 --producer 'fixture-producer / native2' --destination current-fixtures
+          if ($LASTEXITCODE -ne 0) { throw 'Current fixture producer receipt failed' }
+          python tools/fonts/dex-fixture-manifest.py verify --root current-fixtures
+          if ($LASTEXITCODE -ne 0) { throw 'Current fixture compiler/source/output receipt failed' }
+      - name: Verify separately declared comparison suppliers inside CI
+        shell: pwsh
+        run: |
+          $role = if ('${{ matrix.runtime_role }}' -ceq 'current00f') { 'current-runtime' } else { 'old-runtime' }
+          python tools/fonts/baseline-supplier.py $role --destination comparison-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Explicit comparison runtime supplier failed' }
+          python tools/fonts/baseline-supplier.py old-framework --destination comparison-old-framework
+          if ($LASTEXITCODE -ne 0) { throw 'Explicit OLD framework supplier failed' }
+      - name: Execute core-only native contract and separately labeled managed before-comparison
+        shell: pwsh
+        run: |
+          ./tools/fonts/run-dex-comparison.ps1 -RuntimeDirectory comparison-runtime -OldFrameworkDirectory comparison-old-framework -FixturesDirectory current-fixtures -RuntimeRole '${{ matrix.runtime_role }}'
