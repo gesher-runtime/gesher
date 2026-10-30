@@ -20,8 +20,10 @@
 #include <unistd.h>
 #include <windows.h>
 #include <shellapi.h>
+#include <gesher/font_paths.h>
 
 #include <string>
+#include <cstdlib>
 #include <string_view>
 #include <vector>
 
@@ -251,12 +253,73 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
   return true;
 }
 
+NativeFontFiles SystemFontFiles() {
+  const char* root = std::getenv("ANDROID_ROOT");
+  if (root != nullptr && *root != '\0')
+    return {std::string(root) + "/etc/fonts.xml", std::string(root) + "/fonts"};
+  std::wstring image(512, L'\0');
+  for (;;) {
+    DWORD size = GetModuleFileNameW(nullptr, image.data(), static_cast<DWORD>(image.size()));
+    if (size == 0) return {};
+    if (size < image.size()) { image.resize(size); break; }
+    if (image.size() >= 32768) return {};
+    image.resize(image.size() * 2);
+  }
+  size_t slash = image.find_last_of(L"\\/");
+  if (slash == std::wstring::npos) return {};
+  std::string directory = LinuxPath((image.substr(0, slash + 1) + L"fonts").c_str());
+  return {directory + "/fonts.xml", directory};
+}
+
+// Returns unrelated/file/invalid. Never let a malformed virtual font suffix
+// escape through Win32 separators, drive/ADS syntax or parent components.
+static int SystemFontPath(const char* path, std::wstring* windows) {
+  std::string_view p(path), suffix;
+  constexpr std::string_view config = "/system/etc/fonts.xml";
+  bool xml = p == config;
+  if (!xml) {
+    if (p.starts_with(config) && p.size() > config.size() &&
+        (p[config.size()] == '/' || p[config.size()] == '\\' || p[config.size()] == ':')) return -1;
+    constexpr std::string_view prefix = "/system/fonts";
+    if (!p.starts_with(prefix) || (p.size() > prefix.size() &&
+        p[prefix.size()] != '/' && p[prefix.size()] != '\\')) return 0;
+    suffix = p.substr(prefix.size());
+    if (suffix.find_first_of("\\:") != std::string_view::npos) return -1;
+    for (auto part : Parts(suffix)) {
+      if (part.back() == '.' || part.back() == ' ') return -1;
+      // Win32 treats these basenames as devices, even with an extension.
+      std::string stem(part.substr(0, part.find('.')));
+      for (char& c : stem) if (c >= 'a' && c <= 'z') c -= 'a' - 'A';
+      if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" ||
+          stem == "CONIN$" || stem == "CONOUT$" ||
+          (stem.size() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) &&
+           stem[3] >= '1' && stem[3] <= '9') ||
+          (stem.size() == 5 && (stem.starts_with("COM") || stem.starts_with("LPT")) &&
+           static_cast<unsigned char>(stem[3]) == 0xc2 &&
+           (static_cast<unsigned char>(stem[4]) == 0xb9 ||
+            static_cast<unsigned char>(stem[4]) == 0xb2 ||
+            static_cast<unsigned char>(stem[4]) == 0xb3))) return -1;
+    }
+  }
+  auto files = SystemFontFiles();
+  if (files.xml.empty() || files.directory.empty()) return -1;
+  std::string target = xml ? files.xml : files.directory + std::string(suffix);
+  if (target.empty()) return -1;
+  // Resolve the configured/install path directly, without re-entering this
+  // namespace mapping when an explicit root happens to be literal /system.
+  if (!DrivePath(target.c_str(), windows)) *windows = Widen(target.c_str());
+  Lengthen(windows);
+  return 1;
+}
+
 PathKind MapPath(const char* path, std::wstring* windows) {
   // "//name" is left to Windows as a UNC path; POSIX lets an implementation
   // give a leading "//" its own meaning.
   if (path[0] == '/' && path[1] != '/') {
     PathKind kind = VirtualKind(path, windows);
     if (kind != PathKind::kFile) return kind;
+    int font = SystemFontPath(path, windows);
+    if (font != 0) return font > 0 ? PathKind::kFile : PathKind::kMissing;
     if (DrivePath(path, windows)) {
       Lengthen(windows);
       return PathKind::kFile;
@@ -265,6 +328,11 @@ PathKind MapPath(const char* path, std::wstring* windows) {
   *windows = Widen(path);
   Lengthen(windows);
   return PathKind::kFile;
+}
+
+std::wstring NativeFontWindowsPath(const std::string& path) {
+  std::wstring windows;
+  return MapPath(path.c_str(), &windows) == PathKind::kFile ? windows : std::wstring();
 }
 
 bool DiskPath(const char* path, std::wstring* windows, int special) {

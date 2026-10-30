@@ -3,15 +3,23 @@
 // frameworks/base/native/android/system_fonts.cpp (Apache-2.0, AOSP 2018).
 
 #include <gesher/bionic_shim.h>
+#include <gesher/font_paths.h>
 #include <hwui/MinikinSkia.h>
 #include <minikin/FontCollection.h>
+#include <minikin/FontFamily.h>
 #include <minikin/LocaleList.h>
 #include <minikin/SystemFonts.h>
 #include <tinyxml2.h>
+#include <include/core/SkData.h>
+#include <include/core/SkFontArguments.h>
+#include <include/core/SkStream.h>
+#include <include/core/SkTypeface.h>
+#include <include/ports/SkTypeface_fontations.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -20,7 +28,6 @@
 #include <vector>
 
 #include "abi_types.h"
-#include "exec_spawn.h"
 
 namespace gesher::bionic {
 namespace {
@@ -32,6 +39,11 @@ struct Font {
   bool italic = false;
   uint32_t index = 0;
   std::vector<std::pair<uint32_t, float>> axes;
+  // XML family identity is only used by the standalone collection builder.
+  size_t family_id = 0;
+  std::string family_name;
+  std::string fallback_for;
+  minikin::FamilyVariant variant = minikin::FamilyVariant::DEFAULT;
   bool operator<(const Font& other) const {
     return std::tie(path, locale, weight, italic, index, axes) <
            std::tie(other.path, other.locale, other.weight, other.italic,
@@ -58,7 +70,7 @@ std::string TrimFont(const char* value) {
 }
 
 bool ReadFontXml(const std::string& path, tinyxml2::XMLDocument* document) {
-  FILE* file = _wfopen(gesher::exec::WindowsPath(path).c_str(), L"rb");
+  FILE* file = _wfopen(gesher::NativeFontWindowsPath(path).c_str(), L"rb");
   if (file == nullptr) return false;
   std::string text;
   char buffer[8192];
@@ -79,11 +91,19 @@ void ReadFontFamilies(const std::string& xml, const std::string& directory,
   if (root == nullptr) return;
   for (const auto* family = root->FirstChildElement("family");
        family != nullptr; family = family->NextSiblingElement("family")) {
+    size_t family_id = iterator->fonts.size();
     for (const auto* item = family->FirstChildElement("font"); item != nullptr;
          item = item->NextSiblingElement("font")) {
       std::string name = TrimFont(item->GetText());
       if (name.empty()) continue;
       Font font;
+      font.family_id = family_id;
+      if (const char* name = family->Attribute("name")) font.family_name = name;
+      if (const char* target = item->Attribute("fallbackFor")) font.fallback_for = target;
+      if (const char* variant = family->Attribute("variant")) {
+        if (std::string(variant) == "compact") font.variant = minikin::FamilyVariant::COMPACT;
+        if (std::string(variant) == "elegant") font.variant = minikin::FamilyVariant::ELEGANT;
+      }
       font.path = directory + "/" + name;
       if (const char* locale = family->Attribute("lang")) font.locale = locale;
       font.weight =
@@ -102,6 +122,105 @@ void ReadFontFamilies(const std::string& xml, const std::string& directory,
       iterator->fonts.push_back(std::move(font));
     }
   }
+}
+
+// Keep byte storage alive for Minikin's HarfBuzz face. This map is private to
+// native matching and never publishes into SystemFonts: later framework/Java
+// registration remains authoritative and is checked before this fallback.
+class StandaloneTypeface : public android::MinikinFontSkia {
+ public:
+  StandaloneTypeface(sk_sp<SkTypeface> typeface, sk_sp<SkData> data,
+                     const Font& font, const minikin::VariationSettings& axes)
+      : MinikinFontSkia(std::move(typeface), 0, data->data(), data->size(),
+                        font.path, font.index, axes), data_(std::move(data)) {}
+ private:
+  sk_sp<SkData> data_;
+};
+
+std::shared_ptr<minikin::Font> LoadStandaloneFont(const Font& font) {
+  FILE* file = _wfopen(gesher::NativeFontWindowsPath(font.path).c_str(), L"rb");
+  if (file == nullptr) return nullptr;
+  auto data = SkData::MakeFromFILE(file);
+  fclose(file);
+  if (!data) return nullptr;
+  std::vector<SkFontArguments::VariationPosition::Coordinate> coordinates;
+  std::vector<minikin::FontVariation> axes;
+  for (const auto& [tag, value] : font.axes) {
+    coordinates.push_back({tag, value});
+    axes.push_back({tag, value});
+  }
+  SkFontArguments args;
+  args.setCollectionIndex(font.index);
+  args.setVariationDesignPosition({coordinates.data(), static_cast<int>(coordinates.size())});
+  auto typeface = SkTypeface_Make_Fontations(data, args);
+  if (!typeface) return nullptr;
+  auto native = std::make_shared<StandaloneTypeface>(std::move(typeface), data, font,
+                                                    minikin::VariationSettings(axes));
+  return minikin::Font::Builder(native)
+      .setStyle(minikin::FontStyle(font.weight, static_cast<minikin::FontStyle::Slant>(font.italic)))
+      .setLocaleListId(font.locale ? minikin::registerLocaleList(font.locale->c_str()) : 0)
+      .build();
+}
+
+struct StandaloneFonts {
+  std::map<std::string, std::shared_ptr<minikin::FontCollection>> collections;
+  StandaloneFonts() {
+    const auto paths = gesher::SystemFontFiles();
+    Iterator parsed;
+    ReadFontFamilies(paths.xml, paths.directory, &parsed);
+    struct Family {
+      std::string name, fallback_for;
+      std::shared_ptr<minikin::FontFamily> native;
+    };
+    std::vector<Family> families;
+    for (size_t i = 0; i < parsed.fonts.size();) {
+      const Font& first = parsed.fonts[i];
+      size_t next = i;
+      std::map<std::string, std::vector<std::shared_ptr<minikin::Font>>> groups;
+      while (next < parsed.fonts.size() && parsed.fonts[next].family_id == first.family_id) {
+        const auto& source = parsed.fonts[next++];
+        auto font = LoadStandaloneFont(source);
+        if (font) groups[source.fallback_for].push_back(std::move(font));
+      }
+      for (auto& [target, fonts] : groups) {
+        uint32_t locale = first.locale ? minikin::registerLocaleList(first.locale->c_str()) : 0;
+        auto family = minikin::FontFamily::create(locale, first.variant, std::move(fonts),
+            false, first.family_name.empty(), minikin::VariationFamilyType::None);
+        families.push_back({first.family_name, target, std::move(family)});
+      }
+      i = next;
+    }
+    for (const auto& primary : families) {
+      if (primary.name.empty()) continue;
+      std::vector<std::shared_ptr<minikin::FontFamily>> chain{primary.native};
+      for (const auto& fallback : families)
+        if (fallback.name.empty() &&
+            (fallback.fallback_for.empty() || fallback.fallback_for == primary.name))
+          chain.push_back(fallback.native);
+      collections.emplace(primary.name, minikin::FontCollection::create(chain));
+    }
+    tinyxml2::XMLDocument document;
+    if (ReadFontXml(paths.xml, &document) && document.RootElement()) {
+      for (const auto* alias = document.RootElement()->FirstChildElement("alias");
+           alias; alias = alias->NextSiblingElement("alias")) {
+        const char* name = alias->Attribute("name");
+        const char* target = alias->Attribute("to");
+        if (!name || !target) continue;
+        auto found = collections.find(target);
+        if (found == collections.end()) continue;
+        // NDK matcher style comes from AFontMatcher_setStyle. Typeface's
+        // alias base weight belongs to the Java Typeface, not the collection.
+        collections.emplace(name, found->second);
+      }
+    }
+  }
+};
+
+std::shared_ptr<minikin::FontCollection> StandaloneCollection(const char* family) {
+  static const StandaloneFonts fonts;
+  auto found = fonts.collections.find(family != nullptr ? family : "sans-serif");
+  if (found == fonts.collections.end()) found = fonts.collections.find("sans-serif");
+  return found != fonts.collections.end() ? found->second : nullptr;
 }
 
 Iterator* BIONIC_SYSV OpenIterator() {
@@ -127,10 +246,8 @@ Iterator* BIONIC_SYSV OpenIterator() {
     iterator->fonts.assign(registered.begin(), registered.end());
     return iterator.release();
   }
-  const char* root = std::getenv("ANDROID_ROOT");
-  std::string system = root != nullptr ? root : "/system";
-  ReadFontFamilies(system + "/etc/fonts.xml", system + "/fonts",
-                   iterator.get());
+  const auto paths = gesher::SystemFontFiles();
+  ReadFontFamilies(paths.xml, paths.directory, iterator.get());
   const char* product_root = std::getenv("ANDROID_PRODUCT_ROOT");
   std::string product = product_root != nullptr ? product_root : "/product";
   ReadFontFamilies(product + "/etc/fonts_customization.xml", product + "/fonts",
@@ -143,7 +260,7 @@ Font* BIONIC_SYSV NextFont(Iterator* iterator) {
   while (iterator->next < iterator->fonts.size()) {
     const Font& font = iterator->fonts[iterator->next++];
     DWORD attributes =
-        GetFileAttributesW(gesher::exec::WindowsPath(font.path).c_str());
+        GetFileAttributesW(gesher::NativeFontWindowsPath(font.path).c_str());
     if (attributes != INVALID_FILE_ATTRIBUTES &&
         !(attributes & FILE_ATTRIBUTE_DIRECTORY))
       return new Font(font);
@@ -169,6 +286,7 @@ Font* BIONIC_SYSV Match(const Matcher* matcher, const char* family,
                         const uint16_t* text, uint32_t length,
                         uint32_t* run_length) {
   auto collection = minikin::SystemFonts::findFontCollection(family);
+  if (collection == nullptr) collection = StandaloneCollection(family);
   if (collection == nullptr || length == 0) return nullptr;
   minikin::U16StringPiece input(text, length);
   auto runs = collection->itemize(

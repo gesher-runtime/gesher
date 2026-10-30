@@ -46,6 +46,14 @@ target_link_libraries(gesher_native_fonts PRIVATE gesher_bionic hwui tinyxml2)
 set_target_properties(gesher_native_fonts PROPERTIES CXX_STANDARD 23)
 target_compile_options(gesher_native_fonts PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 target_link_libraries(dalvikvm PRIVATE gesher_native_fonts)
+# Standalone NDK programs have the same native font provider, without
+# initializing ART or registering a Java Typeface map.
+target_link_libraries(gesher-exec PRIVATE gesher_native_fonts)
+target_link_options(gesher-exec PRIVATE "-Wl,-Map=${CMAKE_BINARY_DIR}/gesher-exec.fonts.map")
+add_custom_command(TARGET gesher-exec POST_BUILD
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/fonts/verify-standalone-link.py
+    $<TARGET_FILE:gesher-exec> ${CMAKE_BINARY_DIR}/gesher-exec.fonts.map ${CMAKE_CXX_COMPILER}
+  VERBATIM)
 
 # gesher: libandroid's ANativeWindow functions and EGL/GLES (ANGLE) for the
 # app's .so files, and their Windows test (compat/bionic/ndk_graphics.cmake).
