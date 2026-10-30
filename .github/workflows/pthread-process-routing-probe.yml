@@ -1,3 +1,4 @@
+# Genuine default C++ TLS model and exact distinct compiler variants.
 # Explicit isolated deferred-only API capability; old suppliers unchanged.
 # Verify actual resource field offsets and updated fault patch stack.
 # Separate target-resource lifetime primitive role.
@@ -177,6 +178,29 @@ jobs:
         with:
           name: pthread-routing-baseline
           path: host-authority-fixture/
+          if-no-files-found: error
+      - name: Build genuine C++ TLS consumers from two distinct existing compiler variants
+        shell: bash
+        run: |
+          set -euo pipefail
+          original_root="$RUNNER_TEMP/gesher-late-cpp-publisher"
+          test ! -e "$original_root"
+          mkdir "$original_root"
+          cp "$RUNNER_TEMP/gesher-authority-toolchain/compiler.tar.xz" "$original_root/compiler.tar.xz"
+          tar -xJf "$original_root/compiler.tar.xz" -C "$original_root"
+          python3 tools/host-pthread-authority/late_cpp_bundle.py build "$original_root/$LLVM_MINGW_NAME" published
+          python3 tools/host-pthread-authority/late_cpp_bundle.py verify published
+          python3 tools/host-pthread-authority/late_cpp_bundle.py build "$GESHER_AUTHORITY_LLVM" production
+          python3 tools/host-pthread-authority/late_cpp_bundle.py verify production
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pthread-late-cpp-published
+          path: late-cpp-published/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pthread-late-cpp-production
+          path: late-cpp-production/
           if-no-files-found: error
   baseline_windows:
     needs: baseline_compile
@@ -579,6 +603,18 @@ jobs:
           name: pthread-routing-probe-deferred
           path: routing-probe-deferred/
           if-no-files-found: error
+      - name: Build genuine C++ TLS consumer from the exact deferred-only supplier
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm="$RUNNER_TEMP/gesher-routing-probe-deferred-toolchain/$LLVM_MINGW_NAME"
+          python3 tools/host-pthread-authority/late_cpp_bundle.py build "$llvm" deferred
+          python3 tools/host-pthread-authority/late_cpp_bundle.py verify deferred
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pthread-late-cpp-deferred
+          path: late-cpp-deferred/
+          if-no-files-found: error
   probe_deferred_windows:
     needs: probe_deferred_compile
     strategy:
@@ -603,3 +639,62 @@ jobs:
       - name: Actual deferred APIs and externally witnessed join wait
         shell: pwsh
         run: tools/host-pthread-authority/run-deferred-probe.ps1
+
+  late_cpp_linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Actual independent Linux cross-TU compiler TLS reference
+        run: |
+          set -euo pipefail
+          g++ --version
+          g++ -std=gnu++20 -O2 -g -Wall -Wextra -Werror -fno-exceptions -fsized-deallocation -pthread tests/native/pthread_late_cpp_main.cc tests/native/pthread_late_cpp_a.cc tests/native/pthread_late_cpp_b.cc -o "$RUNNER_TEMP/late-cpp-linux"
+          timeout 20s "$RUNNER_TEMP/late-cpp-linux"
+  late_cpp_windows:
+    needs: [baseline_compile, probe_deferred_compile]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        role: [published, production, deferred]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact compiler variant and complete same-attempt C++ producer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $role='${{ matrix.role }}'
+          $producer=if ($role -eq 'deferred') { 'probe_deferred_compile' } else { 'baseline_compile' }
+          python tools/ci/artifact_receipt.py --name "pthread-late-cpp-$role" --producer $producer --destination "late-cpp-$role"
+          if ($LASTEXITCODE -ne 0) { throw 'Late C++ producer identity failed' }
+          python tools/host-pthread-authority/late_cpp_bundle.py verify $role
+          if ($LASTEXITCODE -ne 0) { throw 'Late C++ distinct supplier/command/source identity failed' }
+      - name: Genuine compiler TLS identities through all supported exits
+        shell: pwsh
+        run: |
+          $role='${{ matrix.role }}'
+          $stdout=Join-Path $env:RUNNER_TEMP "late-$role.out"
+          $stderr=Join-Path $env:RUNNER_TEMP "late-$role.err"
+          $process=Start-Process -FilePath (Join-Path $pwd "late-cpp-$role/late-cpp.exe") -WorkingDirectory (Join-Path $pwd "late-cpp-$role") -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          try {
+            if (-not $process.WaitForExit(30000)) { throw 'Late C++ fixture deadline' }
+            $process.Refresh()
+            $actual=Get-Content -Raw -LiteralPath $stdout
+            Write-Host $actual
+            if ($process.ExitCode -ne 0) { throw "Late C++ actual role=$role exit=$($process.ExitCode)" }
+            if (-not $actual.Contains('CPP_TLS_RESULT cases=4 failures=0 conformant=1')) { throw 'Incomplete genuine TLS callback identity evidence' }
+            foreach ($mode in @('pthread_return','pthread_exit','std_thread_return','native_ExitThread')) {
+              if (-not $actual.Contains("CPP_TLS_CASE mode=$mode constructed=2 a=1 b=1 mismatch=0 conformant=1")) { throw "Missing actual C++ case $mode" }
+            }
+          } finally {
+            if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Late C++ owned process cleanup failed' } }
+            $process.Dispose()
+            if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
+            if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+          }

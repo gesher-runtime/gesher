@@ -1,0 +1,75 @@
+"""CI-only genuine compiler TLS consumers; keep supplier variants distinct."""
+import hashlib,json,os,re,shutil,subprocess,sys
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[2]
+ARCHIVE='5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4'
+SOURCES=['pthread_late_cpp_main.cc','pthread_late_cpp_a.cc','pthread_late_cpp_b.cc','pthread_late_cpp_shared.h']
+ROLES={'published':('baseline_compile','publisher-archive-unmodified'),
+       'production':('baseline_compile','gesher-winpthreads-authority-v1'),
+       'deferred':('probe_deferred_compile','gesher-winpthreads-authority-routing-probe-deferred-v1')}
+FLAGS=['-std=gnu++20','-O2','-g','-Wall','-Wextra','-Werror','-mno-ms-bitfields','-fno-exceptions','-fsized-deallocation','-D_WIN32_WINNT=0x0A00','-DWINVER=0x0A00','-D_FILE_OFFSET_BITS=64','-DWIN32_LEAN_AND_MEAN','-DNOMINMAX','-DNOGDI','-D_USE_MATH_DEFINES','-D__STDC_FORMAT_MACROS','-D__STDC_CONSTANT_MACROS','-D__STDC_LIMIT_MACROS','-D_POSIX_THREAD_SAFE_FUNCTIONS']
+def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def context():
+    assert os.environ['GITHUB_ACTIONS']=='true' and os.environ['GITHUB_REPOSITORY']=='gesher-runtime/gesher'
+    assert os.environ['GITHUB_REF']=='refs/heads/wip/pthread-process-routing'
+    assert os.environ['GITHUB_WORKFLOW']=='pthread process identity routing probe'
+    assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==os.environ['GITHUB_SHA']
+    subprocess.check_call(['git','diff','--exit-code','HEAD','--'])
+    return {k:os.environ[k] for k in ('GITHUB_SHA','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_REPOSITORY')}
+def build(llvm,role):
+    ctx=context();producer,variant=ROLES[role];assert os.environ['GITHUB_JOB']==producer
+    dist=ROOT/('late-cpp-'+role);dist.mkdir()
+    archive=llvm.parent/'compiler.tar.xz';assert sha(archive)==ARCHIVE
+    driver=llvm/'bin/x86_64-w64-mingw32-clang++';lib=llvm/'x86_64-w64-mingw32/lib/libwinpthread.a'
+    dll=llvm/'x86_64-w64-mingw32/bin/libwinpthread-1.dll';provider=llvm/'gesher-winpthreads-authority.json'
+    if role=='published':
+        assert not provider.exists()
+        (dist/'provider.json').write_text(json.dumps(dict(variant=variant,archive=ARCHIVE,cxx=sha(driver),library=sha(lib),dll=sha(dll)),indent=2))
+    else:
+        data=json.loads(provider.read_text());assert data['role']==variant and all(data[k]==v for k,v in ctx.items())
+        assert data['compiler_archive_sha256']==ARCHIVE and data['cxx_driver_sha256']==sha(driver)
+        assert data['files']['lib/libwinpthread.a']==sha(lib) and data['files']['bin/libwinpthread-1.dll']==sha(dll)
+        shutil.copyfile(provider,dist/'provider.json')
+    commands=[];objects=[]
+    for name in SOURCES[:3]:
+        obj=dist/(Path(name).stem+'.obj');argv=[str(driver)]+FLAGS+['-c',str(ROOT/'tests/native'/name),'-o',str(obj)]
+        subprocess.check_call(argv);commands.append(argv);objects.append(obj)
+    exe=dist/'late-cpp.exe';argv=[str(driver),'-static','-pthread']+[str(x) for x in objects]+[str(lib),'-Wl,--verbose','-o',str(exe)]
+    subprocess.check_call(argv);commands.append(argv)
+    imports=subprocess.check_output([str(llvm/'bin/llvm-readobj'),'--coff-imports',str(exe)],text=True)
+    assert 'libwinpthread-1.dll' not in imports.lower() and 'libc++' not in imports.lower()
+    (dist/'imports.txt').write_text(imports)
+    symbols=subprocess.check_output([str(llvm/'bin/llvm-nm'),'-a','-C']+[str(x) for x in objects]+[str(exe)],text=True)
+    (dist/'tls-symbols.txt').write_text(symbols)
+    matches=[x for x in symbols.splitlines() if re.search(r'emutls|thread_atexit|tlregdtor|dyn_tls|Probe[AB]|LateCppRecord',x)]
+    print('CPP_TLS_MODEL role='+role+' matches='+str(len(matches)),flush=True)
+    for line in matches[:200]:print('CPP_TLS_MODEL_SYMBOL '+line,flush=True)
+    data=dict(context=ctx,role=role,variant=variant,producer=producer,archive=ARCHIVE,compiler_root=str(llvm),workspace=str(ROOT),driver=str(driver),driver_sha256=sha(driver),library_sha256=sha(lib),dll_sha256=sha(dll),version=subprocess.check_output([str(driver),'--version'],text=True),commands=commands,sources={n:sha(ROOT/'tests/native'/n) for n in SOURCES},archives={p.name:sha(p) for p in (llvm/'x86_64-w64-mingw32/lib').glob('*.a')},members={p.name:sha(p) for p in dist.iterdir()})
+    (dist/'bundle.json').write_text(json.dumps(data,sort_keys=True,indent=2))
+    print('CPP_TLS_BUILD role='+role+' variant='+variant+' archive='+ARCHIVE+' cxx='+sha(driver)+' pthread='+sha(lib),flush=True)
+def verify(role):
+    ctx=context();producer,variant=ROLES[role];dist=ROOT/('late-cpp-'+role);data=json.loads((dist/'bundle.json').read_text())
+    assert data['context']==ctx and data['role']==role and data['variant']==variant and data['producer']==producer and data['archive']==ARCHIVE
+    expected={'provider.json','late-cpp.exe','imports.txt','tls-symbols.txt'}|{Path(n).stem+'.obj' for n in SOURCES[:3]}
+    assert set(data['members'])==expected and {p.name for p in dist.iterdir()}==expected|{'bundle.json'}
+    assert all(sha(dist/n)==v for n,v in data['members'].items())
+    assert data['sources']=={n:sha(ROOT/'tests/native'/n) for n in SOURCES}
+    assert data['driver']==data['compiler_root']+'/bin/x86_64-w64-mingw32-clang++'
+    assert data['driver_sha256'] and data['archives']['libwinpthread.a']==data['library_sha256']
+    assert all(re.fullmatch('[0-9a-f]{64}',v) for v in data['archives'].values())
+    expected_commands=[]
+    for name in SOURCES[:3]:expected_commands.append([data['driver']]+FLAGS+['-c',data['workspace']+'/tests/native/'+name,'-o',data['workspace']+'/late-cpp-'+role+'/'+Path(name).stem+'.obj'])
+    expected_commands.append([data['driver'],'-static','-pthread']+[data['workspace']+'/late-cpp-'+role+'/'+Path(n).stem+'.obj' for n in SOURCES[:3]]+[data['compiler_root']+'/x86_64-w64-mingw32/lib/libwinpthread.a','-Wl,--verbose','-o',data['workspace']+'/late-cpp-'+role+'/late-cpp.exe'])
+    assert data['commands']==expected_commands
+    provider=json.loads((dist/'provider.json').read_text())
+    if role=='published':assert provider==dict(variant=variant,archive=ARCHIVE,cxx=data['driver_sha256'],library=data['library_sha256'],dll=data['dll_sha256'])
+    else:
+        assert provider['role']==variant and all(provider[k]==v for k,v in ctx.items())
+        assert provider['compiler_archive_sha256']==ARCHIVE and provider['cxx_driver_sha256']==data['driver_sha256']
+        assert provider['files']['lib/libwinpthread.a']==data['library_sha256'] and provider['files']['bin/libwinpthread-1.dll']==data['dll_sha256']
+    imports=(dist/'imports.txt').read_text().lower();assert 'libwinpthread-1.dll' not in imports and 'libc++' not in imports
+    print('Verified distinct C++ TLS variant '+role+' producer='+producer+' same source/run/attempt and complete members',flush=True)
+if __name__=='__main__':
+    if sys.argv[1]=='build':build(Path(sys.argv[2]),sys.argv[3])
+    elif sys.argv[1]=='verify':verify(sys.argv[2])
+    else:raise SystemExit(2)
