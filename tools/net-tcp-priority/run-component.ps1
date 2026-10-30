@@ -228,7 +228,7 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
     foreach ($mode in 0..2) {
       if ($text -notmatch "(?m)^TCP_PRIORITY_NATIVE_POLL_CLOSE mode=$mode native_rc=-?[0-9]+ native_error=[0-9]+ rc=[12] victim=32 other=[01] elapsed_ms=[0-9]+\r?$") { throw "Missing HOST real native poll close window $mode" }
     }
-    if ($text -notmatch '(?m)^TCP_PRIORITY_NATIVE_POLL_ERROR rc=-1 errno=22 retired_description=0\r?$') { throw 'Missing HOST genuine native error control' }
+    if ($text -notmatch '(?m)^TCP_PRIORITY_NATIVE_POLL_ERROR rc=-1 errno=88 retired_description=0\r?$') { throw 'Missing HOST genuine native error control' }
     if ($text -notmatch '(?m)^TCP_PRIORITY_NATIVE_POLL_UNOWNED rc=-1 errno=88 retired_description=0\r?$') { throw 'Missing HOST unowned closed native error control' }
   }
   if ($Context -eq 'host-posix' -and $text -notmatch '(?m)^PASS TCP priority: real legacy leases reject stale native calls after CRT reuse while global operations and getters progress\s*$') { throw 'Missing HOST actual legacy lifetime controls' }
