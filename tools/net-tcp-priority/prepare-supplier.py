@@ -36,7 +36,7 @@ def main():
     assert os.environ.get('GITHUB_ACTIONS') == 'true'
     context = {k: os.environ[k] for k in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID')}
     assert context['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
-    assert os.environ['GITHUB_REF'] == 'refs/heads/wip/net-tcp-priority'
+    assert os.environ['GITHUB_REF'] == 'refs/heads/wip/tcp-priority-reboot'
     assert os.environ['GITHUB_JOB'] == 'compile'
     assert output('git', 'rev-parse', 'HEAD').strip() == context['GITHUB_SHA']
     workspace = ROOT / 'tcp-private-supplier'

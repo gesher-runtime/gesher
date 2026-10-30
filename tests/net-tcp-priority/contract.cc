@@ -530,7 +530,9 @@ static void poll_native_error_controls() {
   gesher::ws::PollEntry invalid{gesher::ws::kInvalidSocket, gesher::ws::kPollPri, 0, {}};
   const int result = gesher::ws::Poll(&invalid, 1, 0); const int error = errno;
   printf("TCP_PRIORITY_NATIVE_POLL_ERROR rc=%d errno=%d retired_description=0\n", result, error); fflush(stdout);
-  require(result == -1 && error == EINVAL, "genuine unowned native array failure is not rewritten as readiness");
+  // Independent WinSDK run409721: the literal INVALID_SOCKET sentinel returns
+  // WSAENOTSOCK10038 on both hosts, separately from closed positive sockets.
+  require(result == -1 && error == ENOTSOCK, "genuine unowned native array failure is not rewritten as readiness");
   puts("PASS TCP priority: real all-invalid native poll errors preserve closed identity simultaneous readiness and genuine failures");
 }
 struct LegacyWindow : ConnectWindow {

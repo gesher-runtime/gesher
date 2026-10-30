@@ -16,7 +16,7 @@ name: net-tcp-priority-component
 on:
   workflow_dispatch:
   push:
-    branches: [wip/net-tcp-priority]
+    branches: [wip/tcp-priority-reboot]
     paths: [.github/workflows/net-tcp-priority-component.yml]
 permissions:
   contents: read
