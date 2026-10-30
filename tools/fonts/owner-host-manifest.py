@@ -41,7 +41,9 @@ def capture(build,root):
  emit('FONT_OWNER_HOST_ACTUAL_LINK',{'command':command,'argv':link})
  assert '-static' in link and '-Wl,--verbose' in link and not any(v.startswith('@') for v in link) and Path(link[link.index('-o')+1]).name=='font_environment_test.exe'
  direct={(build/Path(v)).resolve() for v in link if not v.startswith('-') and v.endswith(('.obj','.o'))}
+ fixture_object=Path(compiled['fixture']['object']).resolve();assert fixture_object in direct,'Compiled fixture object is not an actual final direct link input'
  trace=Path('font-owner-host-build.log').read_text();mapping=(build/'font_environment_test.map').read_text();emit('FONT_OWNER_HOST_MAP_RAW',{'first_lines':mapping.splitlines()[:8],'sha256':sha(build/'font_environment_test.map')});rows=evidence.map_records(mapping)
+ fixture_entry=evidence.entry(rows,'main',fixture_object,build.resolve())
  canonical={}
  for alias in ('libpthread.a','libwinpthread.a'):
   path=Path(os.path.abspath(subprocess.check_output([str(compiler),'-print-file-name='+alias],text=True).strip()));emit('FONT_OWNER_HOST_PTHREAD_BYTES_RAW',{'path':str(path),'sha256':sha(path),'expected_sha256':PTHREAD_SHA});assert sha(path)==PTHREAD_SHA
@@ -80,7 +82,7 @@ def capture(build,root):
  assert not re.search(r'(?i)(jvm|dalvik|libart|JNI_OnLoad|FontEnvironment)',imports)
  assert all(name in imports for name in ('GetThreadWaitChain','OpenThreadWaitChainSession','CloseThreadWaitChainSession','AdjustTokenPrivileges'))
  shutil.copy2(build/'font_environment_test.exe',root/FILES[0]);shutil.copy2(build/'font_environment_test.map',root/FILES[1]);(root/FILES[2]).write_text(imports,encoding='utf-8');shutil.copy2('font-owner-host-build.log',root/FILES[3])
- record={'role':ROLE,'context':context(),'inputs':inputs(),'outputs':{p:sha(root/p) for p in FILES},'compiler':{'path':str(compiler),'sha256':sha(compiler),'version':subprocess.check_output([str(compiler),'--version'],text=True)},'linker':{'sha256':sha(tools/'ld.lld'),'version':subprocess.check_output([str(tools/'ld.lld'),'--version'],text=True)},'compiled_objects':compiled,'selected_owner_members':members,'actual_link_command':command,'caller_relocations':relocations,'canonical_pthread':canonical,'pthread_link_proof':pthread,'web3_query_tests':'OFF','exceptions':'OFF','runtime_shim_libcore_owner_qualified':False,'font_provider_OEM_caller_qualified':False,'font_fallback_qualified':False,'generic_getenv_qualified':False}
+ record={'role':ROLE,'context':context(),'inputs':inputs(),'outputs':{p:sha(root/p) for p in FILES},'compiler':{'path':str(compiler),'sha256':sha(compiler),'version':subprocess.check_output([str(compiler),'--version'],text=True)},'linker':{'sha256':sha(tools/'ld.lld'),'version':subprocess.check_output([str(tools/'ld.lld'),'--version'],text=True)},'compiled_objects':compiled,'fixture_entry':fixture_entry,'selected_owner_members':members,'actual_link_command':command,'caller_relocations':relocations,'canonical_pthread':canonical,'pthread_link_proof':pthread,'web3_query_tests':'OFF','exceptions':'OFF','runtime_shim_libcore_owner_qualified':False,'font_provider_OEM_caller_qualified':False,'font_fallback_qualified':False,'generic_getenv_qualified':False}
  (root/'font-owner-host-provenance.json').write_text(json.dumps(record,sort_keys=True)+'\n',encoding='utf-8');log(record,root)
 
 def log(record,root):
@@ -90,6 +92,7 @@ def verify(root):
  assert all(not p.is_symlink() for p in root.rglob('*'))
  actual={p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()};assert actual==set(FILES)|{'font-owner-host-provenance.json'}
  record=json.loads((root/'font-owner-host-provenance.json').read_text(encoding='utf-8'));assert record['role']==ROLE and record['context']==context() and record['inputs']==inputs() and record['outputs']=={p:sha(root/p) for p in FILES} and record['compiler']['sha256']==COMPILER_SHA
+ assert record['fixture_entry']['symbol']=='main' and record['fixture_entry']['object']==record['compiled_objects']['fixture']['object'] and record['fixture_entry']['rva']>0
  assert record['exceptions']=='OFF' and record['web3_query_tests']=='OFF' and all(record[key] is False for key in ('runtime_shim_libcore_owner_qualified','font_provider_OEM_caller_qualified','font_fallback_qualified','generic_getenv_qualified'))
  assert (root/FILES[0]).read_bytes()[:2]==b'MZ' and {x['sha256'] for x in record['canonical_pthread'].values()}=={PTHREAD_SHA}
  log(record,root);return record
