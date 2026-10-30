@@ -127,7 +127,7 @@ def short_import_members(payload):
     return result
 
 
-def pe_import_thunks(payload, symbols, requested):
+def pe_import_thunks(payload, symbols, requested, diagnostic=False):
     """Bind final x64 function JMPs to the exact named DLL IAT entries."""
     assert payload[:2]==b'MZ'
     pe=struct.unpack_from('<I',payload,0x3c)[0]
@@ -177,6 +177,8 @@ def pe_import_thunks(payload, symbols, requested):
         record=dict(iat_va=iat,dll='libwinpthread-1.dll',api=api)
         if not symbol.startswith('__imp_'):
             address=definitions[api];offset=location(address-base,6);code=payload[offset:offset+6]
+            if diagnostic:
+                print('MINIMUM_RAW_PE_THUNK symbol='+symbol+' '+json.dumps(dict(image_base=base,thunk_va=address,iat_va=iat,bytes=code.hex()),sort_keys=True),flush=True)
             assert code[:2]==b'\xff\x25','Requested API resolved to static code instead of import thunk'
             assert address+6+struct.unpack('<i',code[2:])[0]==iat,'Import thunk targets another IAT slot'
             record.update(thunk_va=address,thunk_bytes=code.hex())
@@ -436,7 +438,7 @@ def build(reference_llvm, minimum_llvm, source):
             (DIST/'dynamic-short-import-members.json').write_text(json.dumps(import_members,sort_keys=True,indent=2))
             for api in sorted({n.removeprefix('__imp_') for n in requested}):
                 print('MINIMUM_ACTUAL_SHORT_IMPORT api='+api+' '+json.dumps(import_members[api],sort_keys=True),flush=True)
-            thunks=pe_import_thunks(output.read_bytes(),symbols,requested)
+            thunks=pe_import_thunks(output.read_bytes(),symbols,requested,diagnostic=True)
             for name,record in thunks.items():print('MINIMUM_FINAL_PE_IMPORT symbol='+name+' '+json.dumps(record,sort_keys=True),flush=True)
             bindings = dynamic_bindings(link.stdout, inputs, import_text, requested, import_members,
                                         supplier['library_symbols']['lib/libwinpthread.dll.a'],thunks)
@@ -499,7 +501,7 @@ def verify():
         if dynamic:
             assert not re.search(r'\b(?:__dyn_tls_pthread|__xl_f)\s*$', raw_symbols, re.MULTILINE)
             import_members=json.loads((DIST/'dynamic-short-import-members.json').read_text())
-            thunks=pe_import_thunks((DIST/(tag+'.exe')).read_bytes(),raw_symbols,requested)
+            thunks=pe_import_thunks((DIST/(tag+'.exe')).read_bytes(),raw_symbols,requested,diagnostic=True)
             bindings = dynamic_bindings(link_text,row['pthread_archive_inputs'],raw_imports,requested,
                             import_members,supplier['library_symbols']['lib/libwinpthread.dll.a'],thunks)
         else:
