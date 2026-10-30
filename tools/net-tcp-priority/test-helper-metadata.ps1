@@ -12,6 +12,7 @@ $reviewed=@{
  'tools/windows4/test-tsf-job-supervisor.ps1'='3ba0622be975f70d8dcd1e4ed529f0746a749981'
  'tools/net-tcp-priority/qualified/TsfJobSupervisor.cs'='625be4d5906bb48dd02d6103382fd2e85ac88738'
  'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
+ 'tools/ci/receipt-diagnostics.ps1'='80f33415a4c57c42c99f74ae61fc5da1316195ef'
 }
 function ExactMap($Value){
  if($Value.Count -ne $reviewed.Count){return $false}
@@ -47,4 +48,4 @@ foreach($call in $calls){
 }
 foreach($bad in @(-1,0,45001,90000)){if($bad -ge 1 -and $bad -le 45000){throw 'Invalid budget accepted'}}
 Write-Host 'TCP_CALLER_BUDGET_METADATA_PASS actual_controller_max=45000 actual_Run_calls=4 old90000=REJECTED boundary_mutants=4 native_processes_started=0'
-Write-Host 'TCP_HELPER_METADATA_PASS pins=5 actual_sources=EXACT changed_missing_stale_additional=REJECTED negative_cases=14 native_processes_started=0 CSharp_compiles=0'
+Write-Host 'TCP_HELPER_METADATA_PASS pins=6 actual_sources=EXACT changed_missing_stale_additional=REJECTED negative_cases=16 native_processes_started=0 CSharp_compiles=0'
