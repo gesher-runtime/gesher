@@ -41,9 +41,15 @@ normal main, public header, product source, linker mode or consumer Win10 define
 is changed. Source-only caller/fingerprint/authority rejection tests use old
 411350 log metadata labeled synthetic; no local compiler or native process runs.
 
+The first ci/build caller itself now binds one GESHER_BUILD_LLVM from the action's
+selected-root output, with the exact original HOME path only in publisher mode.
+Missing selected output and unknown selections fail. Its native teardown observer,
+native-lock readobj metadata and both later CMake reconfigurations use that same
+root. Eight source-only routing/fallback negatives plus exact publisher command
+projection check this complete first-job boundary; every other job stays exact.
+
 This is intentionally a FIRST-entrypoint proposal, not a complete full-CI
-adoption. ci/build auxiliary HOME/toolchain invocations (including its separate
-teardown observer), independent arm64/ANGLE/WebView/native/net compiler roots,
+adoption. Independent arm64/ANGLE/WebView/native/net compiler roots,
 compiler/member artifact ledgers, trusted full-source guards and all-consumer
 packaging must still be routed and independently reviewed. Existing product
 ledgers that require original archive bytes are not relaxed by this patch.

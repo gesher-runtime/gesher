@@ -3,10 +3,35 @@ import argparse
 import copy
 import hashlib
 import json
+import re
 from pathlib import Path
 import subprocess
 import textwrap
 import prepare_host_pthread as factory
+
+
+def first_job_policy(current,prior):
+    current=copy.deepcopy(current);build=current['jobs']['build'];base=prior['jobs']['build']
+    assert build.pop('env')=={'GESHER_HOST_PTHREAD_SELECTION':"${{ github.ref == 'refs/heads/wip/pthread-production-factory' && 'selected-minimum' || 'publisher' }}"}
+    step=next(s for s in build['steps'] if s.get('uses')=='./.github/actions/setup-build')
+    assert step.pop('id')=='host_toolchain'
+    assert step['with'].pop('pthread-supplier')=='${{ env.GESHER_HOST_PTHREAD_SELECTION }}'
+    assert step['with'].pop('pthread-caller')=='ci/build'
+    selectors=[s for s in build['steps'] if s.get('name')=='Bind the verified compiler root for this product build'];assert len(selectors)==1
+    select=selectors[0];assert select['env']=={'SELECTED_LLVM':'${{ steps.host_toolchain.outputs.selected_compiler_root }}'}
+    assert 'selected-minimum) test -n "$SELECTED_LLVM"; llvm="$SELECTED_LLVM" ;;' in select['run']
+    assert 'publisher) llvm="$HOME/toolchain/$LLVM_MINGW_NAME" ;;' in select['run']
+    assert '*) exit 1 ;;' in select['run'] and "printf 'GESHER_BUILD_LLVM=%s\\n'" in select['run']
+    build['steps'].remove(select)
+    for step in build['steps']:
+        run=step.get('run','');assert 'HOME/toolchain' not in run,'First product job uses a stale independent SDK root'
+        if step.get('name') in ('Build','Build separately named same-source query-hook runtime after production package is sealed'):
+            original=next(s['run'] for s in base['steps'] if s.get('name')==step['name'])
+            command=next(s.strip() for s in original.splitlines() if s.strip().startswith('cmake '))
+            block='if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then\n  '+command+' -DLLVM_MINGW="$GESHER_BUILD_LLVM"\nelif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then\n  '+command+'\nelse\n  exit 1\nfi'
+            assert block in run;run=run.replace(block,command)
+        if run:step['run']=run.replace('$GESHER_BUILD_LLVM','$HOME/toolchain/$LLVM_MINGW_NAME')
+    assert current==prior,'Changes outside first-job compiler-root projection'
 
 
 def source_policy():
@@ -14,9 +39,19 @@ def source_policy():
     root=Path(__file__).resolve().parents[2];base='1bf8fad9ec3b423ddef8c97c1d72b25790974364'
     def old(path):return yaml.safe_load(subprocess.check_output(['git','-C',str(root),'show',base+':'+path],text=True))
     prior=old('.github/workflows/ci.yml');current=yaml.safe_load((root/'.github/workflows/ci.yml').read_text())
-    step=next(s for s in current['jobs']['build']['steps'] if s.get('uses')=='./.github/actions/setup-build')
-    assert step['with'].pop('pthread-supplier')=="${{ github.ref == 'refs/heads/wip/pthread-production-factory' && 'selected-minimum' || 'publisher' }}"
-    assert step['with'].pop('pthread-caller')=='ci/build';assert current==prior
+    first_job_policy(current,prior)
+    negatives=[]
+    for name in ('Build the separate bounded native teardown observer','Build and isolate bounded Native lock fixtures under production OFF'):
+        bad=copy.deepcopy(current);s=next(s for s in bad['jobs']['build']['steps'] if s.get('name')==name);s['run']=s['run'].replace('$GESHER_BUILD_LLVM','$HOME/toolchain/$LLVM_MINGW_NAME');negatives.append(bad)
+    for previous,replacement in [('test -n "$SELECTED_LLVM"; ','') ,('llvm="$SELECTED_LLVM"','llvm="$HOME/toolchain/$LLVM_MINGW_NAME"'),('publisher) llvm="$HOME/toolchain/$LLVM_MINGW_NAME"','publisher) llvm="$SELECTED_LLVM"'),('*) exit 1 ;;','*) llvm="$HOME/toolchain/$LLVM_MINGW_NAME" ;;')]:
+        bad=copy.deepcopy(current);s=next(s for s in bad['jobs']['build']['steps'] if s.get('name')=='Bind the verified compiler root for this product build');s['run']=s['run'].replace(previous,replacement);negatives.append(bad)
+    bad=copy.deepcopy(current);s=next(s for s in bad['jobs']['build']['steps'] if s.get('name')=='Build');s['run']=s['run'].replace(' -DLLVM_MINGW="$GESHER_BUILD_LLVM"','');negatives.append(bad)
+    bad=copy.deepcopy(current);bad['jobs']['build']['env']['GESHER_HOST_PTHREAD_SELECTION']='selected-minimum';negatives.append(bad)
+    rejected=0
+    for bad in negatives:
+        try:first_job_policy(bad,prior)
+        except AssertionError:rejected+=1
+        else:raise AssertionError('Mixed first-job roots or changed publisher fallback accepted')
     prior=old('.github/actions/setup-build/action.yml');current=yaml.safe_load((root/'.github/actions/setup-build/action.yml').read_text())
     assert current['inputs'].pop('pthread-supplier')['default']=='publisher'
     assert current['inputs'].pop('pthread-caller')['default']==''
@@ -30,7 +65,7 @@ def source_policy():
     assert configure.splitlines()[0]==original.splitlines()[0]
     assert configure.index('sha256sum --check --strict')<configure.index('--verify "$receipt"')<configure.index('cmake --fresh')
     steps[-1]=prior['runs']['steps'][-1];assert current==prior
-    print('PASS source-only first-ci/build opt-in; main/default publisher/cache steps and configure command exact; independent callers untouched')
+    print('PASS first-ci/build compiler-root source negatives='+str(rejected)+'; publisher default commands exact, otherjobs/independent callers untouched')
 
 
 def tests(old):
