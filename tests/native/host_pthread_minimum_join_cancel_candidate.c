@@ -22,7 +22,12 @@ static void *target_main(void *ignored) {
 }
 static void *joiner_main(void *ignored) {
   void *result = NULL;
+  int previous_state = -1, previous_type = -1;
   (void)ignored;
+  check(pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, &previous_state) == 0 &&
+        previous_state == PTHREAD_CANCEL_ENABLE, "joiner cancellation enabled");
+  check(pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, &previous_type) == 0 &&
+        previous_type == PTHREAD_CANCEL_DEFERRED, "joiner deferred type");
   pthread_cleanup_push(cleanup, NULL);
   check(SetEvent(joiner_ready), "joiner ready");
   check(pthread_join(target, &result) == 0, "joiner join");
