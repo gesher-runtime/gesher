@@ -189,6 +189,22 @@ class Helper(unittest.TestCase):
         files['compiler-profile.json']=original;deps=A.decode(files['dependency-manifest.json']);deps['helper.obj'][0]['relative']='../escape';files['dependency-manifest.json']=A.canonical(deps);seal();self.reject(lambda:A.verify_bundle(files,auth))
         files,auth,seal=synthetic_bundle();files['helper.obj']+=b'foreign';seal();self.reject(lambda:A.verify_bundle(files,auth))
 
+    def test_exact_per_object_dependencies_in_consumer(self):
+        files,auth,seal=synthetic_bundle();original=A.decode(files['dependency-manifest.json'])
+        caller=copy.deepcopy(original)
+        caller['caller.obj']=[x for x in caller['caller.obj'] if PurePosixPath(x['path']).name not in ('new','utility')]
+        files['dependency-manifest.json']=A.canonical(caller);seal();A.verify_bundle(files,auth)
+        for obj,required in A.SDK_STL_REQUIRED.items():
+            for name in required:
+                changed=copy.deepcopy(original)
+                changed[obj]=[x for x in changed[obj] if PurePosixPath(x['path']).name!=name]
+                files['dependency-manifest.json']=A.canonical(changed);seal()
+                self.reject(lambda:A.verify_bundle(files,auth))
+        union=copy.deepcopy(original)
+        for obj in union:union[obj]=[x for x in union[obj] if PurePosixPath(x['path']).name!='utility']
+        self.reject(lambda:A.require_dependency_union(union))
+        del union['caller.obj'];self.reject(lambda:A.require_dependency_union(union))
+
     def test_current_four_budget_grammars_and_negatives(self):
         raw=synthetic_output();value=A.parse_budgets(raw,b'',0);self.assertEqual(set(value['families']),{'alias','surgery','ledger','request'});self.assertFalse(value['production_registry_qualified'])
         mutations=[raw+b'extra\n',raw.replace(b'combined_pages=129',b'combined_pages=128'),raw.replace(b'injected=1',b'injected=0',1),raw.replace(b'point=0 calls=1',b'point=1 calls=1',1),raw.replace(b'unchanged_owner_refs":true',b'unchanged_owner_refs":false',1),raw.replace(b'outstanding":0',b'outstanding":1',1),raw.replace(b'failed=0',b'failed=1'),raw.replace(b'live=0',b'live=1'),raw.replace(b'capacity=128',b'capacity=127',1),raw.replace(b'PUNCH_REQUEST_ALLOCATION',b'UNKNOWN',1),raw[:-10],b'\n'.join(raw.splitlines()[1:])+b'\n']
@@ -243,6 +259,14 @@ class Helper(unittest.TestCase):
                 self.assertEqual(emitted.call_count,1)
             def broken(*args):raise RuntimeError('synthetic diagnostic failure')
             self.reject(lambda:P.dependency_paths(missing,source,tool,build,broken))
+            byname={p.name:p for p in paths}
+            for obj,required in A.SDK_STL_REQUIRED.items():
+                def make_dep(names):return ('x.obj: '+' '.join(shlex_quote(byname[n]) for n in sorted(names))+'\n').encode()
+                self.assertEqual(len(P.dependency_paths(make_dep(required),source,tool,build,obj=obj)),len(required))
+                for name in required:
+                    self.reject(lambda:P.dependency_paths(make_dep(required-{name}),source,tool,build,obj=obj))
+            self.assertEqual(sum(map(len,A.SDK_STL_REQUIRED.values())),19)
+            self.reject(lambda:P.dependency_paths(dep,source,tool,build,obj='unknown.obj'))
             self.reject(lambda:P.dependency_paths(b'x.obj: /foreign/header.h\n',source,tool,build))
             self.reject(lambda:P.dependency_paths(b'x.obj: \n',source,tool,build))
 
@@ -673,7 +697,7 @@ class Helper(unittest.TestCase):
                 if kw.get('receipt')is not None:
                     kw['receipt'].append({'argv':argv,'launch_state':'RETURNED_OWNED','pid':123,'started':True,'elapsed_seconds':0.0,'exit':0,'kernel_completed':True,'io_completed':True,'handles_closed':True,'overflow':False,'timed_out':False,'root_retained':False,'errors':[],'executable_sha256':P.DRIVER_SHA,'executable_realpath':'/publisher/bin/clang-target-wrapper.sh','stdout_sha256':A.digest(streams[0]),'stderr_sha256':A.digest(streams[1])})
                 return streams
-            dep=[{'relative':A.HEADER,'origin':'source'}]
+            dep=[{'relative':A.HEADER,'origin':'source','path':'/source/'+A.HEADER}]+[{'path':'/publisher/'+name}for name in A.SDK_STL_ALL]
             def emit(label,value):events.append(label);real_emit(label,value)
             def copyfile(a,b):FS(b).write_bytes(FS(a).read_bytes())
             with mock.patch.object(P.os,'name','posix'),mock.patch.object(P,'Path',FS),mock.patch.dict(os.environ,{'GITHUB_ACTIONS':'true','RUNNER_TEMP':'/runner'}),mock.patch.object(P.A,'authorize',return_value=auth),mock.patch.object(P,'current_job',return_value=job),mock.patch.object(P,'download',return_value=b'SYNTHETIC'),mock.patch.object(P,'extract_toolchain',return_value=tc),mock.patch.object(P,'sha',side_effect=lambda p:A.digest(p.read_bytes())if p.suffix=='.cfg'else P.LINKER_SHA if p.name=='ld.lld'else P.DRIVER_SHA),mock.patch.object(P,'tool',side_effect=fake_tool),mock.patch.object(P,'dependency_paths',return_value=dep),mock.patch.object(P.shutil,'copyfile',side_effect=copyfile),mock.patch.object(P,'emit',side_effect=emit),contextlib.redirect_stdout(io.StringIO()):
