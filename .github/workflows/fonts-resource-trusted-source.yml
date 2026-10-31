@@ -1,0 +1,150 @@
+name: fonts-resource-trusted-source
+on:
+  workflow_call:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      FONTS_RESOURCE_CALLER_COMMIT: ${{ vars.FONTS_RESOURCE_CALLER_COMMIT }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Preserve full CORE ENV HOST and verify exact bounded preflight source authority
+        shell: bash
+        run: |
+          python3 -I - <<'PY'
+          """Immutable supported-tool prerequisite; never host/font/runtime acceptance."""
+          import ast,copy,hashlib,json,os,re,subprocess,sys,textwrap,urllib.request
+          from pathlib import Path
+          BASE='4d54ade1b53483f6d604bd989a7674ea6c376a1f'
+          HOST_GUARD='267bb2f7868dd85405e9336d3ec29a131535d7eb'
+          HOST_TRUST='.github/workflows/fonts-owner-host-trusted-source.yml'
+          HOST_GUARD_BLOB='399d2ffdf430dce00634021ddd4d21553ee7d262'
+          TEMPLATE='0000000000000000000000000000000000000000'
+          CALLER='.github/workflows/fonts-resource-component.yml'
+          TRUST='.github/workflows/fonts-resource-trusted-source.yml'
+          REPO='gesher-runtime/gesher'
+          EXTRA_PINS={'CMakeLists.txt': '49ccfba62fcb74a26c49824f34f489cf0fda1202', 'docs/handoff/tracks/fonts-resource-component-source.md': '6b272a4fb78f66f06054a25cdc79cbf6878624ad', 'docs/handoff/tracks/fonts-resource-parser-source.md': '1fb56b6b7922d597ac15b5018bb4f519bb3e2649', 'tests/native/font_environment_resource_characterization.cc': 'fe67952f0ff7c3001bc1f74eb2f377ae6bfa02d0', 'tools/fonts/resource-characterization.ps1': '58600104874351271d4c2a0383bb9acdf70928db', 'tools/fonts/resource-import-inventory.py': '030c438bcce5ba53f722a0c2c1de05444f9fd84a', 'tools/fonts/resource-manifest.py': '820986ef2f6e30b463544e82bc841a6372cb4f84', 'tools/fonts/resource-pe-imports.py': '49a7800e6eb95d49f7d592dd76066831bb00fa66', 'tools/fonts/resource-protocol.py': 'a1c3c6da00c05a16fc183b59e0a0c7d28be53679', 'tools/fonts/test-resource-characterization.ps1': '453bf11d3ce5c24cb8fafa16e9b77c993ff7eca6', 'tools/fonts/test-resource-pe-imports.py': 'a91215208b774e5c9e3d8641af73e7ad1242512b', 'tools/fonts/test-resource-protocol.py': '08147ab01640caf2c55803d6fb7f2d0642eaed34', 'tools/fonts/test-resource-source.py': 'f089a2c10cc0725c205f879e2da5ba70e878ff73'}
+          CMAKE_ADDITION='\n# BEGIN FONT_RESOURCE_CHARACTERIZATION_ADDITIVE\nadd_executable(font_environment_resource_characterization EXCLUDE_FROM_ALL\n  tests/native/font_environment_resource_characterization.cc)\ntarget_link_libraries(font_environment_resource_characterization PRIVATE gesher_posix)\ntarget_compile_options(font_environment_resource_characterization PRIVATE -Wall -Wextra -Werror)\ntarget_link_options(font_environment_resource_characterization PRIVATE\n  "-Wl,-Map,${CMAKE_BINARY_DIR}/font_environment_resource_characterization.map")\n# END FONT_RESOURCE_CHARACTERIZATION_ADDITIVE\n'
+          def require(value,message):
+           if not value:raise RuntimeError(message)
+          def git(*args):return subprocess.check_output(['git',*args])
+          def reject(label,fn):
+           try:fn()
+           except (RuntimeError,KeyError):print('FONT_DEBUGGER_NEGATIVE '+label+'=rejected',flush=True)
+           else:raise RuntimeError('Negative accepted: '+label)
+          def frozen_host():
+           prior_guard='e85b200113fd6ab99c404b288cbd9334842cb2e1';prior_path='.github/workflows/fonts-debugger-preflight-trusted-source.yml'
+           raw=git('show',prior_guard+':'+prior_path)
+           require(hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()=='348e0edf4394c18b34d8e6fdc1e175128386f821' and raw==git('show',BASE+':'+prior_path),'Frozen CDB policy changed')
+           code=textwrap.dedent(raw.decode().split("          python3 -I - <<'PY'\n",1)[1].rsplit('\n          PY',1)[0]);tree=ast.parse(code)
+           defs=[n for n in tree.body if not(isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name) and n.value.func.id=='main')]
+           prior={};exec(compile(ast.Module(body=defs,type_ignores=[]),'frozen-CDB','exec'),prior)
+           full=prior['frozen_host']();full['verify_historical'](full['inventory'](full['ORIGINAL_BASE']));full['verify_selected'](full['inventory'](full['BASE']));expected=full['inventory'](prior['BASE']);actual=full['inventory'](BASE)
+           for p,b in prior['EXTRA_PINS'].items():expected[p]=('100644',b)
+           for p in (prior['CALLER'],prior['TRUST']):expected[p]=actual[p]
+           full['verify_tree'](actual,expected)
+           template=git('show',prior['TEMPLATE']+':'+prior['CALLER']);needle=b'fonts-debugger-preflight-trusted-source.yml@'+b'0'*40
+           require(template.count(needle)==1 and git('show',BASE+':'+prior['CALLER'])==template.replace(needle,b'fonts-debugger-preflight-trusted-source.yml@'+prior_guard.encode()),'Old staged CDB DAG changed')
+           for p in (*prior['EXTRA_PINS'],prior['CALLER'],prior['TRUST']):
+            bad=copy.deepcopy(actual);bad[p]=('100644','0'*40);reject('frozen_CDB_'+p,lambda:full['verify_tree'](bad,expected))
+           return full
+
+          SELECTED_APPROVED_BASE={'CMakeLists.txt': '71975d9729e34e21d2a797b536e329be1c60350c', 'compat/posix/posix.cmake': 'cf8212d944289cb63dcc7bf3da36bd20c48b295c', 'compat/posix/src/path.cc': '64da7ea2800ead4dab7bc739ca6d4864d9cf576d', 'compat/posix/src/unistd.cc': '9ae697b5d043ae1545feca256acdfa1d1996a03d'}
+          def verify_current_selected(full,actual):
+           # Historical selected rules are unchanged. Only byte-exact already
+           # approved CDB/owner overlaps, plus this exact additive CMake leaf,
+           # are projected to historical identities AFTER strict current pins.
+           pins=full['UNION_PINS']|full['NATIVE_PINS']
+           pins=pins|{p:full['SOURCE_PINS'][p] for p in ('tests/native3-locks/command_oracle.py','tests/native3-locks/command_worker.cc')}
+           pins['compat/posix/src/path.cc']=full['FONTS_PINS']['compat/posix/src/path.cc']
+           projected=copy.deepcopy(actual)
+           for p,b in SELECTED_APPROVED_BASE.items():
+            require(full['inventory'](BASE)[p][1]==b,'Historical approved selected overlap differs')
+            require(actual[p][1]==EXTRA_PINS.get(p,b),'Unapproved current selected overlap: '+p)
+            projected[p]=(actual[p][0],pins[p])
+           full['verify_selected'](projected,adapted=True)
+
+          def run_identity(run,source,run_id,attempt,event):
+           require(run['repository']['full_name']==run['head_repository']['full_name']==REPO and run['repository']['id']==run['head_repository']['id']==1426153186,'Wrong preflight repositories')
+           require(str(run['id'])==run_id and str(run['run_attempt'])==attempt and run['head_sha']==source,'Wrong preflight source/run/attempt')
+           require(run['name']=='fonts-resource-component' and run['path']==CALLER and run['event']==event and event in ('push','workflow_dispatch') and run['head_branch']=='wip/fonts-resource-parser','Wrong preflight workflow/event/ref')
+           require(run['actor']['login']==run['triggering_actor']['login']=='palmoni5','Wrong preflight actor')
+          def caller_authority(value):
+           require(bool(re.fullmatch('[0-9a-f]{40}',value)),'Missing dedicated preflight caller authority')
+           require(git('cat-file','-t',value).strip()==b'commit','Preflight authority is not a commit')
+           return git('show',value+':'+CALLER)
+          def main():
+           require(os.environ.get('GITHUB_ACTIONS')=='true' and os.environ['GITHUB_REPOSITORY']==REPO,'CI repository only')
+           source=os.environ['GITHUB_SHA'];run_id=os.environ['GITHUB_RUN_ID'];attempt=os.environ['GITHUB_RUN_ATTEMPT'];event=os.environ['GITHUB_EVENT_NAME']
+           require(os.environ['GITHUB_REF']=='refs/heads/wip/fonts-resource-parser' and git('rev-parse','HEAD').decode().strip()==source,'Wrong preflight source/ref')
+           request=urllib.request.Request('https://api.github.com/repos/'+REPO+'/actions/runs/'+run_id,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+           with urllib.request.urlopen(request,timeout=60) as response:run=json.load(response)
+           print('FONT_DEBUGGER_RUN_IDENTITY '+json.dumps({'expected':{'source':source,'run':run_id,'attempt':attempt,'workflow':'fonts-resource-component','path':CALLER,'repository':REPO,'actor':'palmoni5'},'received':{key:run.get(key) for key in ('id','run_attempt','head_sha','name','path','head_branch','event','actor','triggering_actor')}},sort_keys=True),flush=True)
+           run_identity(run,source,run_id,attempt,event)
+           for field,value in (('id',-1),('run_attempt',-1),('head_sha','0'*40),('name','ci'),('path','forged.yml'),('event','schedule'),('head_branch','main')):
+            bad=copy.deepcopy(run);bad[field]=value;reject('actual_run_'+field,lambda:run_identity(bad,source,run_id,attempt,event))
+           for field in ('repository','head_repository'):
+            bad=copy.deepcopy(run);bad[field]['id']=-1;reject('actual_run_'+field,lambda:run_identity(bad,source,run_id,attempt,event))
+           for field in ('actor','triggering_actor'):
+            bad=copy.deepcopy(run);bad[field]['login']='wrong';reject('actual_run_'+field,lambda:run_identity(bad,source,run_id,attempt,event))
+           reviewed=os.environ.get('FONTS_RESOURCE_CALLER_COMMIT','');approved=caller_authority(reviewed)
+           require(git('show',source+':'+CALLER)==approved,'Preflight caller differs from independent authority')
+           for value in ('','x'*40,source+':policy'):reject('malformed_preflight_authority',lambda:caller_authority(value))
+           reject('unapproved_template',lambda:require(caller_authority(TEMPLATE)==approved,'Unpinned preflight template not approved'))
+           refs=re.findall(rb'(?m)^    uses: gesher-runtime/gesher/\.github/workflows/fonts-resource-trusted-source\.yml@([0-9a-f]{40})$',approved)
+           require(len(refs)==1,'One immutable preflight guard required');guard=refs[0].decode()
+           require(git('show',guard+':'+TRUST)==git('show',reviewed+':'+TRUST),'Preflight immutable guard differs')
+           template=git('show',TEMPLATE+':'+CALLER);needle=b'fonts-resource-trusted-source.yml@'+b'0'*40
+           require(template.count(needle)==1 and approved==template.replace(needle,b'fonts-resource-trusted-source.yml@'+guard.encode()),'Preflight exact role/producer/tool-only DAG differs')
+           full=frozen_host();inventory=full['inventory'];expected=inventory(BASE)
+           cmake=git('show',source+':CMakeLists.txt');old_cmake=git('show',BASE+':CMakeLists.txt')
+           require(cmake.startswith(old_cmake) and cmake[len(old_cmake):]==CMAKE_ADDITION.encode(),'Only exact removable CMake target addition allowed')
+           subprocess.run(['git','merge-base','--is-ancestor',BASE,source],check=True)
+           for p,b in EXTRA_PINS.items():expected[p]=(expected.get(p,('100644',''))[0],b)
+           for p in (CALLER,TRUST):expected[p]=inventory(reviewed)[p]
+           actual=inventory(source);full['verify_tree'](actual,expected);verify_current_selected(full,actual);full['verify_checkout'](expected)
+           for p in EXTRA_PINS:
+            bad=copy.deepcopy(actual);bad[p]=('100644','0'*40);reject('preflight_blob_'+p,lambda:full['verify_tree'](bad,expected))
+           bad=copy.deepcopy(actual);bad['tools/fonts/forged.py']=('100644','0'*40);reject('unknown_preflight_path',lambda:full['verify_tree'](bad,expected))
+           retained=('.github/workflows/fonts-debugger-preflight-component.yml','.github/workflows/fonts-debugger-preflight-trusted-source.yml','.github/workflows/ci.yml',HOST_TRUST,'.github/workflows/fonts-owner-host-component.yml','.github/workflows/fonts-environment-trusted-source.yml','.github/workflows/fonts-environment-characterization.yml','.github/workflows/fonts-core-trusted-source.yml','.github/workflows/fonts-core-component.yml','tools/native3-locks/union_payload.py','tools/native3-locks/union_blocking_guard.py')
+           for p in retained:
+            bad=copy.deepcopy(actual);bad[p]=('100644','0'*40);reject('retained_policy_'+p,lambda:full['verify_tree'](bad,expected))
+           require(sys.flags.isolated==1 and all(Path(m.__file__).resolve().parent!=Path.cwd() for m in (json,hashlib)),'Candidate shadow module imported')
+           originals={p:Path(p).read_bytes() for p in (CALLER,TRUST,*retained)}
+           try:
+            for p in originals:Path(p).write_bytes(b'pass\n')
+            reject('actual_noop_preflight_all_prior_callers_guards',lambda:full['verify_checkout'](expected))
+           finally:
+            for p,raw in originals.items():Path(p).write_bytes(raw)
+           full['verify_checkout'](expected);full['isolated_import_controls']()
+           require(not git('status','--porcelain','--untracked-files=all').strip(),'Dirty preflight checkout')
+           print('FONT_DEBUGGER_TRUSTED_SOURCE '+json.dumps({'source':source,'run':run_id,'attempt':attempt,'immutable_guard':guard,'caller_authority':reviewed,'frozen_host_source':BASE,'extra_pins':EXTRA_PINS,'roles':{'probe':'CURRENT_SOURCE_HOST_FONT_OWNER_RESOURCE_CHARACTERIZATION','Windows':'STAGED_SIGNED_BOUNDED_PREPARED_CHILD_FRAME_CHARACTERIZATION_ALL_QUALIFICATION_FALSE'},'font_owner_qualified':False,'host_WCT_Windows2025_qualified':False,'private_CRT_owner_symbols_qualified':False,'full_qualification':False},sort_keys=True),flush=True)
+          main()
+          PY
+      - name: Retain all existing compiler and artifact ownership metadata controls
+        shell: bash
+        run: |
+          python3 tools/fonts/test-core-assembly.py
+          python3 tools/fonts/test-cli-link-evidence.py
+          python3 tools/fonts/test-environment-metadata.py
+          python3 tools/fonts/test-owner-host-evidence.py
+          python3 tools/fonts/test-debugger-probe.py
+          python3 tools/fonts/test-resource-pe-imports.py
+          python3 tools/fonts/test-resource-protocol.py
+          python3 tools/fonts/test-resource-source.py
+      - name: Retain old argument contracts and verify preflight metadata without processes
+        shell: pwsh
+        run: |
+          tools/fonts/test-dex-arguments.ps1
+          tools/fonts/test-environment-arguments.ps1
+          tools/fonts/test-owner-host-arguments.ps1
+          tools/fonts/test-debugger-preflight.ps1
+          tools/fonts/test-resource-characterization.ps1

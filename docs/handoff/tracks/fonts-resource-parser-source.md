@@ -60,7 +60,9 @@ are design constants, not executed timeout coverage or a modification of the old
 15-second tests. Cleanup completion can be recorded after expiry, but cannot
 change failure into success or extend the capture deadline.
 
-Exactly four separately named roles exist: `child`, optional `help`, optionally
+The complete component adds a fifth, cold passive `imports` role to the original
+four-role parser-slice design. Five separately named roles exist: `child`,
+`imports`, optional `help`, optionally
 omitted `prewarm`, and `capture`. Omitted optional roles are explicit OMITTED;
 enabled roles start NOT_STARTED. Required child/capture are never invented as
 omitted successes. Starting records a nonzero DWORD PID once; reuse/overwriting,
@@ -72,7 +74,7 @@ run. Help completion does not replace target preparation or target prewarming.
 | Phase | Required receipts and next admission |
 |---|---|
 | PREPARED | Reserve entire-session Normal-root graph BEFORE any actual resource. Stage/copy/identity/signature/module work and all native storage/event/invalid-input allocation occur here. Start child in normal nonheld prepared state; optional help has distinct ownership. Prewarm, if configured, attaches to this same prepared child only after help terminates. |
-| PREWARM_COMPLETE | Exact child remains running; configured help/prewarm each disposed with exit 0, others explicitly omitted. Actual target-ready, final-stage-check and symbols-prepared receipts required. Omitting prewarm is declared and cannot be described as an actual attach/prewarm. No preparation is deferred into held callback. |
+| PREWARM_COMPLETE | Exact child remains running; configured help/prewarm each disposed with exit 0, others explicitly omitted. Actual target-ready, final-stage-check and symbols-prepared receipts required; imports must finish successfully before this phase. Omitting prewarm is declared and cannot be described as an actual attach/prewarm. No preparation is deferred into held callback. |
 | HOLD_READY | Explicit START may now be admitted by a later runner. Exact child PID plus distinct nonzero DWORD writer/handler OS TIDs, both real native handles still pending, fixed readiness record; one immutable hold deadline. These are capture preconditions ONLY, never resource or owner proof. |
 | CAPTURE_COMPLETE | One separately owned capture role has truly exited, drained and disposed with exit 0 before deadline, and raw evidence is recorded. Missing symbols/unsupported output cannot manufacture ownership. No capture command is admitted by this source slice. |
 | RELEASED | Release is delivered to the same child before the original hold deadline; next require actual child completion and all pipe/file cleanup. This does not prove the native wait resource. |

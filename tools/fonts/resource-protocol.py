@@ -87,7 +87,7 @@ class Session:
     def __init__(self, *, optional_help=False, prewarm=True):
         require(type(optional_help) is bool and type(prewarm) is bool, "role configuration")
         self.phase = Phase.PREPARED
-        self.roles = {name: Role() for name in ("child", "help", "prewarm", "capture")}
+        self.roles = {name: Role() for name in ("child", "imports", "help", "prewarm", "capture")}
         for name, enabled in (("help", optional_help), ("prewarm", prewarm)):
             if not enabled:
                 self.roles[name] = Role(ProcessState.OMITTED)
@@ -159,7 +159,7 @@ class Session:
         require(self.phase == Phase.PREPARED and now <= SETUP_MS, "preparation phase/budget")
         require(target_ready is True and stage_rechecked is True and symbols_prepared is True,
                 "actual preparation receipts required")
-        require(self.roles["child"].state == ProcessState.RUNNING and self.done("help") and self.done("prewarm"),
+        require(self.roles["child"].state == ProcessState.RUNNING and self.done("imports") and self.done("help") and self.done("prewarm"),
                 "preparation role completion")
         self.phase = Phase.PREWARM_COMPLETE
 

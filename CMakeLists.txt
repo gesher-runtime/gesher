@@ -168,3 +168,12 @@ target_link_libraries(native3_lock_blocking_worker PRIVATE gesher_posix)
 add_executable(arm64_elf_test tests/native/arm64_elf_test.cc)
 target_compile_options(arm64_elf_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(arm64_elf_test PRIVATE gesher_bionic gesher_elf)
+
+# BEGIN FONT_RESOURCE_CHARACTERIZATION_ADDITIVE
+add_executable(font_environment_resource_characterization EXCLUDE_FROM_ALL
+  tests/native/font_environment_resource_characterization.cc)
+target_link_libraries(font_environment_resource_characterization PRIVATE gesher_posix)
+target_compile_options(font_environment_resource_characterization PRIVATE -Wall -Wextra -Werror)
+target_link_options(font_environment_resource_characterization PRIVATE
+  "-Wl,-Map,${CMAKE_BINARY_DIR}/font_environment_resource_characterization.map")
+# END FONT_RESOURCE_CHARACTERIZATION_ADDITIVE
