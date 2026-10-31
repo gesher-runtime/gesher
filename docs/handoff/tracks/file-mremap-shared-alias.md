@@ -1,3 +1,75 @@
+# Common-Punch request-wide correction candidate SOURCE freeze
+
+The 7f3 independent common-Punch blockers are corrected in SOURCE and submitted
+for DIFFERENT complete21-input/12-path-delta review. Native C/C++ compilation,
+exception runtime, Win32 behavior and all host/guest/reference qualification are
+UNEXECUTED; this is neither positive independent acceptance nor CI authority.
+
+Common Punch stages ALL affected pieces in the caught helper: complete combined
+and rollback ledgers, detached intermediate holes, separate kept-view metadata,
+source/live/protection snapshots, private preread buffers, exact existing-owner
+published-view census and aggregate transient pin bounds, explicit legacy-handle
+failure records. Only after all storage exists does it acquire retained duplicates,
+query source pages, and perform checked temporary READONLY/private snapshot/restore.
+Failed restoration retains its TRUE current protection and failed containment.
+Executor publishes actual placeholder splits/kept views by detached-node or noexcept
+moves, never growing a bitmap after retirement. Complete created view liveness and
+initial protection are accounted before per-page restoration. Failed remaps/protects
+preserve truthful partial outcomes. Coalesce BOOL is checked before merged publication;
+FALSE keeps distinct real partitions/error and nonzero FAILED_CONTAINMENT.
+
+GroupFile now prepares BEFORE section/reopen acquisition for both fixed existing
+and fresh groups, including reservation region/group nodes, constructor first/tail
+storage and failure records. Reserve retries reuse staged nodes after unsuccessful
+OS hints, and stop on preparation/owner failure. Constructor tail and failed cleanup
+never call allocating SplitEntry/Punch after effects. New section ownership transfer,
+reopen close, temporary CopyFromFile unmap+section close and final legacy prepared
+view close are checked; failed resources remain explicitly recorded, never reported
+closed. GroupAnonymous Fill and full retirement use existing storage. Grouped-anon
+munmap preallocates ALL partial split nodes before its first OS effect; all prepared
+views keep liveness/protection coherent and preallocate final-close failure records.
+The legacy allocating PunchView is retained as unused source, not a reachable fallback
+from these prepared paths. Plain pre-placeholder baseline allocation/copy paths and
+full general compatibility are not newly qualified by this correction.
+
+Five new target-only owned-child SOURCE cases supplement old18fault/11failed-route/
+4mprotect controls: anonymous and file preparation failure, coalesce failure, actual
+capacity growth success (also cleanup-preparation failure), and retained private COW
+byte+PROT_NONE restoration. Each first performs real split/source setup, reads actual
+REGISTRY first.live.capacity(), derives combined=max(capacity+1,33), requires span>
+capacity and bounded span<=128, and logs both values. No five-page assumption or
+capacity inference. Preparation failure injects a REAL operator-new bad_alloc inside
+caught helper, requires actual allocation/injection reached, ZERO wrapped mutation/
+acquisition counters, unchanged whole source query/registry/handle census, and full
+backing bytes/size. Coalesce failure records reached/injected count and actual
+VirtualQuery base/size/allocation-base plus surviving registry partitions. Cleanup
+remains an actual process/kernel/IO/resource obligation; failed containment never
+becomes a passed negative. Capacity beyond the fixture bound is UNAVAILABLE/failed,
+not truncated or padding. No case has executed here.
+
+The separately linked failure adapter TU alone newly uses source-local-fexceptions;
+reused mman.cc/global options remain-fno-exceptions. Production has fixed Win32
+macros and no backend allocator or runtime/env switch. Test-only new budgets are
+thread-local to the owned calling thread and disabled before reporting/cleanup.
+Dedicated helper budgets use the same owning-thread restriction and exercise extra
+request/constructor storage through the noexceptions caller, without a direct
+NO_MEMORY stub. Actual same pinned compiler/header/allocator/STL/unwind/source-object
+and effective flags/link proof are mandatory CI gates, not inferred from pure checks.
+
+Full source controller/pure mutations retain actual stdout/stderr/exit/cleanup; new
+capacity/private/cleanup mutations are SYNTHETIC controls only. Ordinary Linux
+reference remains same current-source four semantic cases, no fake Windows faults
+or guest qualification. Existing full-A16producer roles and source/history/current
+attempt/byte download/policy obligations remain closed and NOT implemented by these
+source changes. The helper-only5file pipeline and held full-A5files remain UNEDITED;
+new helper bytes/header must be re-frozen for any eventual direct3object prerequisite.
+
+Native161, fresh runtime/translator/bothguestABIs/Linux/bothWindows, full regular-file
+grow/private-mremap/inplace/EOF/FIXEDmremap/DONTUNMAP, default/full/installer/hardware/
+release remain OPEN. Original anonymous mremap suffix/native2 and removable root block
+stay exact. Historical WIP statements below are superseded only by this candidate
+source description; independent peer and all actual qualification remain required.
+
 # Current routed request executor / fixed GroupFile continuation WIP
 
 Common Punch now consumes request-wide caught preparation before any of its OS
