@@ -276,6 +276,12 @@ class DiskMetadata(unittest.TestCase):
         self.assertFalse(result['identity_predicate_repaired']);self.assertFalse(result['loaded_memory_identity_attested'])
         self.assertEqual(result['headers']['coff_timestamp_raw'],0)
         self.assertFalse(result['headers']['coff_timestamp_is_wall_clock_attested'])
+        padded_payload=payload+b'\0'*4
+        padded_result=w.disk_version_metadata(disk_image(records=[(0x409,padded_payload),(0x40d,padded_payload)]))
+        self.assertEqual(padded_result['records'][0]['version']['file_version_components'],[10,0,20348,5756])
+        self.assertEqual(padded_result['records'][0]['version']['raw_bytes'],len(padded_payload))
+        self.reject(lambda:w.disk_version_metadata(disk_image(records=[(0x409,payload+b'\x01')])))
+        self.reject(lambda:w.disk_version_metadata(disk_image(records=[(0x409,payload+b'\0'*9)])))
     def test_disk_pe_header_spans_and_overlaps(self):
         for at,fmt,val in [(0,'H',0),(60,'I',2**32-1),(0x84,'H',0x14c),(0x86,'H',97),
              (0x94,'H',111),(0x98,'H',0x10b),(0x98+108,'I',17),(0x98+60,'I',1),
@@ -312,7 +318,13 @@ class DiskMetadata(unittest.TestCase):
                                (38,'B',1),(40,'I',0),(44,'I',0x20000)]:
             bad=bytearray(good);struct.pack_into('<'+fmt,bad,offset,val)
             self.reject(lambda:w.version_payload(bytes(bad)))
-        self.reject(lambda:w.version_payload(good+b'\0'))
+        for pad in range(1,9):
+            padded=w.version_payload(good+b'\0'*pad)
+            self.assertEqual(padded['fixed_fields'],w.version_payload(good)['fixed_fields'])
+            self.assertEqual(padded['raw_bytes'],len(good)+pad)
+            self.assertEqual(padded['raw_sha256'],hashlib.sha256(good+b'\0'*pad).hexdigest())
+        for trailing in (b'\x01',b'\0\x01',b'\0'*3+b'\x80',b'\0'*7+b'\xff',b'\0'*8+b'\x01',b'\0'*9,b'\0'*16):
+            self.reject(lambda t=trailing:w.version_payload(good+t))
         self.reject(lambda:w.version_payload(b'\0'*65536))
         for child in [version_block('Unknown',kind=1),version_block('StringFileInfo',kind=0),
                       version_block('VarFileInfo',kind=1,children=[]),version_block('VarFileInfo',kind=1,children=[version_block('Translation',b'abc')])]:
