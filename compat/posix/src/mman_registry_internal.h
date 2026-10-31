@@ -15,6 +15,7 @@ struct SectionOwner {
   SectionState state = SectionState::Borrowed;
   DWORD error = 0;
   void* rollback_view = nullptr;
+  bool rollback_placeholder = false;
   SectionOwner* backing = nullptr;
   SectionOwner* next_failed = nullptr;
 };
@@ -83,6 +84,13 @@ PrepareStatus PrepareSurgeryFromNoExceptions(const Region&, uintptr_t, uintptr_t
 // Request-wide PREPARATION DATA. Raw source handles are borrowed while the
 // registry lock is held; executor must explicitly acquire/pin/retire them.
 // No destructor closes a borrowed source handle or claims OS rollback.
+using GroupMap=std::map<uintptr_t,size_t>;
+struct PreparedReservation {
+  RegionMap::node_type region;
+  GroupMap::node_type group;
+  std::unique_ptr<SectionOwner> failure;
+};
+PrepareStatus PrepareReservation(size_t,size_t,PreparedReservation&) noexcept;
 struct PreparedPunchPiece {
   uintptr_t start=0,begin=0,end=0;
   Region original;

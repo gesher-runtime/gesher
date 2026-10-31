@@ -129,6 +129,19 @@ PrepareStatus PrepareSurgery(const Region& source, uintptr_t start, uintptr_t x,
   } catch (const std::bad_alloc&) { return PrepareStatus::NoMemory; }
     catch (...) { return PrepareStatus::InternalFailure; }
 }
+PrepareStatus PrepareReservation(size_t length,size_t page,PreparedReservation& out) noexcept {
+  if(!page || !length || length%page || !out.region.empty() || !out.group.empty() || out.failure)
+    return PrepareStatus::InvalidSize;
+  try {
+    PreparedReservation work;Region hole;hole.kind=Kind::kHole;hole.size=length;
+    hole.live.assign(length/page,false);hole.actual_protection.assign(length/page,0);
+    RegionMap region;region.emplace(0,std::move(hole));work.region=region.extract(region.begin());
+    GroupMap group;group.emplace(0,length);work.group=group.extract(group.begin());
+    work.failure=std::make_unique<SectionOwner>();out=std::move(work);return PrepareStatus::Ok;
+  } catch(const std::bad_alloc&){return PrepareStatus::NoMemory;}
+    catch(...){return PrepareStatus::InternalFailure;}
+}
+
 PrepareStatus PreparePunchRequest(const RegionMap& source,uintptr_t begin,uintptr_t end,
                                       size_t page,PreparedPunchRequest& out,size_t final_view) noexcept {
   if(!page || begin>=end || begin%page || end%page || !out.pieces.empty() ||
