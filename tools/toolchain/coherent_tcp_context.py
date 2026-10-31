@@ -8,7 +8,7 @@ PATH='.github/workflows/ci.yml'
 TRUST='.github/workflows/net-combined-dns-trusted-source.yml'
 
 def context(env,job):
-    assert job in ('compile','linux-reference','windows','selected-supplier-correlation') and env.get('GITHUB_JOB')==job
+    assert job in ('compile','linux-reference','windows','supplier-correlation') and env.get('GITHUB_JOB')==job
     expected={'GITHUB_ACTIONS':'true','GITHUB_REPOSITORY':REPOSITORY,'GITHUB_REPOSITORY_ID':REPOSITORY_ID,
               'GITHUB_REF':'refs/heads/'+BRANCH,'GITHUB_WORKFLOW':WORKFLOW,
               'GITHUB_WORKFLOW_REF':REPOSITORY+'/'+PATH+'@refs/heads/'+BRANCH,
@@ -22,7 +22,7 @@ def context(env,job):
     refs=re.findall(r'(?m)^    uses: '+re.escape(REPOSITORY+'/'+TRUST+'@')+r'([0-9a-f]{40})$',caller)
     assert len(refs)==1 and policy==REPOSITORY+'/'+TRUST+'@'+refs[0]
     assert all(re.fullmatch('[1-9][0-9]*',env[k]) for k in ('GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT'))
-    if job in ('compile','windows','selected-supplier-correlation'):assert env.get('TCP_SUPPLIER_ROLE')=='selected-minimum'
+    if job in ('compile','windows','supplier-correlation'):assert env.get('TCP_SUPPLIER_ROLE')=='selected-minimum'
     return {k:env[k] for k in ('GITHUB_SHA','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_REPOSITORY','GITHUB_REPOSITORY_ID')}
 
 if __name__=='__main__':

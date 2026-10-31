@@ -30,7 +30,7 @@ def compare(full,tcp):
             'underlying_clang_equality':'UNKNOWN_NOT_IN_FULL_RECEIPT'}
 
 def main():
-    context=coherent_tcp_context.context(os.environ,'selected-supplier-correlation')
+    context=coherent_tcp_context.context(os.environ,'supplier-correlation')
     info=host_roles.context()
     host=Path('ci-suppliers/native3_host');tcpdir=Path('ci-suppliers/tcp_selected')
     actual=union_payload.check_manifest(host,'native3-common-host-fixture',union_payload.HOST_FILES,info,union_payload.source_inventory())
