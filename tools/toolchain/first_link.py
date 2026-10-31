@@ -58,6 +58,16 @@ def current(consumer=False):
     assert run['actor']['login']==run['triggering_actor']['login']=='palmoni5'
     refs=[r for r in run['referenced_workflows'] if r['path']==policy_ref()]
     assert len(refs)==1 and refs[0]['sha']==policy_ref().rsplit('@',1)[1]
+    jobs=json.loads(subprocess.check_output(['gh','api','repos/'+focused.REPOSITORY+'/actions/runs/'+ctx['GITHUB_RUN_ID']+'/attempts/'+ctx['GITHUB_RUN_ATTEMPT']+'/jobs?per_page=100'],text=True))
+    rows=jobs['jobs'];assert jobs['total_count']==len(rows)<=100
+    emit('FIRST_LINK_LIVE_JOBS',dict(context=ctx,jobs=[{k:r.get(k) for k in ('id','name','head_sha','run_id','run_attempt','status','conclusion')} for r in rows]))
+    assert {r['name'] for r in rows}<={'source_authority / verify','build','portable-windows-2022','portable-windows-2025'}
+    for name in ('source_authority / verify','build') if consumer else ('source_authority / verify',):
+        selected=[r for r in rows if r['name']==name]
+        assert len(selected)==1
+        job=selected[0]
+        assert job['status']=='completed' and job['conclusion']=='success'
+        assert job['head_sha']==ctx['GITHUB_SHA'] and str(job['run_id'])==ctx['GITHUB_RUN_ID'] and str(job['run_attempt'])==ctx['GITHUB_RUN_ATTEMPT']
     return ctx
 
 
@@ -109,7 +119,7 @@ def gnu_response(args):
     return ('\n'.join('"'+a.replace('\\','\\\\').replace('"','\\"')+'"' for a in args)+'\n').encode('utf-8')
 
 
-def completed_commands(log,compiler):
+def completed_commands(log,compiler,source_root=ROOT):
     result={}
     for line in log.splitlines():
         match=re.fullmatch(r'\[[0-9]+/[0-9]+\] (.*)',line)
@@ -118,7 +128,7 @@ def completed_commands(log,compiler):
         if '-c' not in args or '-o' not in args:continue
         source=args[args.index('-c')+1]
         for target,relative in TARGETS.items():
-            if source==str(ROOT/relative):
+            if source==str(source_root/relative):
                 assert target not in result
                 assert compiler['configured_drivers']['CXX'] in args
                 assert 'CMakeFiles/'+target+'.dir/' in args[args.index('-o')+1]
@@ -146,6 +156,14 @@ def build():
     diagnostic=build/'first-link-diagnostics';assert not diagnostic.exists();diagnostic.mkdir()
     original=json.loads((build/'binderd.exe.selected-pthread-link.json').read_text())
     protected=[build/'binderd.exe',build/'binderd.exe.selected-pthread-link.json']+[Path(r['path']) for r in original['evidence'].values()]
+    for argument in original['expanded_argv']:
+        if not argument.startswith('-Wl,'):continue
+        parts=argument[4:].split(',')
+        for n,part in enumerate(parts):
+            value=parts[n+1] if part=='--out-implib' else part.split('=',1)[1] if part.startswith('--out-implib=') else None
+            if value is not None:
+                path=(build/value).resolve();assert path.is_relative_to(build)
+                if path.exists():protected.append(path)
     protected_hashes={str(p):factory.sha(p) for p in protected}
     response_output=diagnostic/'first-link-response-diagnostic.exe'
     response,changed=response_args(original['expanded_argv'],response_output,diagnostic/'response.map',diagnostic/'response.dll.a',build)
@@ -202,16 +220,21 @@ def verify_files(root,expected,expected_policy):
     assert compiler['selected_toolchain']==link.identity(data,receipt)
     assert compiler['configured_drivers']=={lang:data['compiler_root']+'/bin/x86_64-w64-mingw32-'+suffix for lang,suffix in (('C','clang'),('CXX','clang++'))}
     assert set(compiler['generated_metadata'])=={'C','CXX'}
-    source=PurePosixPath(manifest['source_root']);assert source.is_absolute() and '..' not in source.parts
+    source=PurePosixPath(manifest['source_root']);assert source.is_absolute() and '..' not in source.parts and str(source)==manifest['source_root']
     for language,metadata in compiler['generated_metadata'].items():
         assert metadata['file']=='FIRST_LINK_ONLY_'+language+'Compiler.cmake'
+        original=PurePosixPath(metadata['path'])
+        assert original.is_relative_to(source/'out/CMakeFiles') and '..' not in original.parts
+        assert original.name=='CMake'+language+'Compiler.cmake'
         path=root/metadata['file'];assert factory.sha(path)==metadata['sha256']
         matches=re.findall(r'^\s*set\(CMAKE_'+language+r'_COMPILER\s+"([^"]+)"\)\s*$',path.read_text(encoding='utf-8'),re.MULTILINE)
         assert matches==[compiler['configured_drivers'][language]]
     for target,args in manifest['actual_completed_compile_commands'].items():
         assert isinstance(args,list) and compiler['configured_drivers']['CXX'] in args and '-c' in args and '-o' in args
+        assert all(flag in args for flag in ('-Wall','-Wextra','-Werror','-mno-ms-bitfields','-D_WIN32_WINNT=0x0A00','-DWINVER=0x0A00'))
         assert args[args.index('-c')+1]==str(source/TARGETS[target])
         assert 'CMakeFiles/'+target+'.dir/' in args[args.index('-o')+1]
+    assert completed_commands((root/'actual-small-build.log').read_text(encoding='utf-8'),compiler,source)==manifest['actual_completed_compile_commands']
     records={}
     for name,row in manifest['outputs'].items():
         assert row['kind']==KINDS[name]
@@ -238,8 +261,9 @@ def verify_files(root,expected,expected_policy):
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('mode',choices=('build','verify'));parser.add_argument('--root',type=Path,default=ROOT/'ci-suppliers/first-link-only');args=parser.parse_args()
-    if args.mode=='build':build()
+    parser=argparse.ArgumentParser();parser.add_argument('mode',choices=('authority','build','verify'));parser.add_argument('--root',type=Path,default=ROOT/'ci-suppliers/first-link-only');args=parser.parse_args()
+    if args.mode=='authority':current()
+    elif args.mode=='build':build()
     else:
         expected=current(consumer=True);manifest=verify_files(args.root,expected,os.environ['GESHER_FIRST_LINK_POLICY_REF'])
         emit('FIRST_LINK_ONLY_PORTABLE_VERIFIED',dict(context=expected,role=ROLE,outputs=sorted(manifest['outputs']),runtime_executed=False))

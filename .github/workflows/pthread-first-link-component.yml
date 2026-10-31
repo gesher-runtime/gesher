@@ -33,6 +33,7 @@ jobs:
         run: |
           python3 tools/toolchain/first_link_context.py --verify
           python3 tools/toolchain/test_first_link_context.py
+          python3 tools/toolchain/first_link.py authority
       - uses: ./.github/actions/setup-build
         id: toolchain
         with:
@@ -43,7 +44,9 @@ jobs:
         env:
           GESHER_SELECTED_PTHREAD_RECEIPT: ${{ steps.toolchain.outputs.selected_receipt }}
           GESHER_SELECTED_PTHREAD_RECEIPT_SHA256: ${{ steps.toolchain.outputs.selected_receipt_sha256 }}
-        run: python3 tools/toolchain/first_link.py build
+        run: |
+          python3 tools/toolchain/test_first_link_manifest.py --receipt "$GESHER_SELECTED_PTHREAD_RECEIPT"
+          python3 tools/toolchain/first_link.py build
       - name: Upload exact FIRST_LINK_ONLY outputs and portable evidence
         uses: actions/upload-artifact@v4
         with:
@@ -52,6 +55,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   portable:
+    name: portable-${{ matrix.os }}
     needs: [source_authority, build]
     strategy:
       fail-fast: false
