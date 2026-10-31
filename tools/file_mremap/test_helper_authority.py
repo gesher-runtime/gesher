@@ -300,6 +300,38 @@ class Helper(unittest.TestCase):
                 P.rejection_evidence(auth,{'id':42},'synthetic',lambda:{'trace':P.bounded_text('x'*262145)})
                 self.assertEqual(emitted.call_count,1)
 
+    def test_crt_collector_exact_members_and_lifetime_failure(self):
+        with pure_temp_directory()as temp:
+            root=Path(temp);tc=root/'publisher';build=root/'build';tc.mkdir();build.mkdir()
+            archive=tc/'libmsvcrt.a';archive.write_bytes(b'SYNTHETIC_ARCHIVE')
+            exe=build/'helper-qualification.exe';exe.write_bytes(b'SYNTHETIC_EXE')
+            archives={'libmsvcrt.a':{'path':str(archive),'sha256':P.sha(archive),'members':{}}}
+            loads=[('libmsvcrt.a','unique.o','symbol_a'),('libmsvcrt.a','duplicate.o','symbol_b')]
+            calls=[]
+            def fake_tool(argv,*args,**kwargs):
+                calls.append(list(map(str,argv)))
+                if '--coff-imports'in argv:return b'SYNTHETIC_IMPORTS\n',b''
+                if 't'in argv:return b'unique.o\nduplicate.o\nduplicate.o\n',b''
+                if 'p'in argv:return b'SYNTHETIC_MEMBER',b''
+                raise AssertionError('unexpected tool')
+            auth={'context':synthetic_context(),'authority':{'guard':'b'*40}}
+            with mock.patch.object(P,'tool',side_effect=fake_tool),mock.patch.object(P,'emit')as emitted:
+                P.collect_crt_identity(auth,{'id':42},archives,loads,'synthetic trace',tc,build,{})
+                label,record=emitted.call_args.args;self.assertEqual(label,'CRT_IDENTITY_COLLECTOR')
+                self.assertIs(record['qualification'],False);self.assertEqual(record['exe_sha256'],A.digest(b'SYNTHETIC_EXE'))
+                self.assertEqual({x['name']:x['state']for x in record['selected_members']},{'duplicate.o':'AMBIGUOUS_NOT_EXTRACTED','unique.o':'UNIQUE_EXTRACTED'})
+                self.assertEqual(sum('p'in call for call in calls),1)
+                with self.assertRaises(P.A.Rejected):P.collect_crt_identity(auth,{'id':42},archives,loads+[('libmsvcrt.a','missing.o','x')],'trace',tc,build,{})
+            # An uncertain original tool graph is never suppressed to continue as clean.
+            linktext='ld.lld: Reading '+str(archive)+'\nld.lld: Loaded '+str(archive)+'(unique.o) for x\n'
+            with self.assertRaisesRegex(P.A.Rejected,'missing positive CRT/STL/unwind/builtins/system dependency'):
+                P.link_dependencies(linktext,[],tc,build,{},lambda *args:None,lambda *args:(_ for _ in ()).throw(ValueError('settled synthetic failure')))
+            P.TOOL_GRAPHS.append({'synthetic':True})
+            try:
+                with self.assertRaisesRegex(RuntimeError,'synthetic uncertain'):
+                    P.link_dependencies(linktext,[],tc,build,{},None,lambda *args:(_ for _ in ()).throw(RuntimeError('synthetic uncertain')))
+            finally:P.TOOL_GRAPHS.pop()
+
     def test_owned_reader_quiescence_and_directory_retention(self):
         class Reader:
             def __init__(self,alive):self.alive=alive;self.joins=0

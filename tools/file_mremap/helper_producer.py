@@ -215,7 +215,38 @@ def parse_driver(raw,toolroot,source_root,build):
                     A.require(any(p.is_relative_to(root)for root in roots),'ambient implicit path')
     A.require(commands,'missing expanded driver commands');return commands
 
-def link_dependencies(text,expanded,toolroot,build,env,diagnostic=None):
+def collect_crt_identity(auth,job,archives,loads,text,toolroot,build,env):
+    selected=[v for v in archives.values()if Path(v['path']).name=='libmsvcrt.a']
+    A.require(len(selected)==1,'collector exact CRT archive')
+    archive=selected[0];rows=[list(x)for x in loads if Path(x[0]).name=='libmsvcrt.a']
+    A.require(0<len(rows)<=256,'collector loaded CRT rows')
+    members=sorted({x[1]for x in rows});A.require(0<len(members)<=64,'collector selected member count')
+    A.require(all(type(x)is str and 0<len(x)<=256 and '/'not in x and '\\'not in x and '\0'not in x for x in members),'collector member names')
+    exe=build/'helper-qualification.exe';exe_size=exe.stat().st_size;A.require(0<exe_size<=A.FILE_CAP,'collector EXE cap')
+    exe_hash=sha(exe);A.require(sha(archive['path'])==archive['sha256'],'collector pre archive hash')
+    imports,_=tool([toolroot/'bin/llvm-readobj','--coff-imports',exe],build,env)
+    A.require(imports,'collector empty imports')
+    table,_=tool([toolroot/'bin/llvm-ar','t',archive['path']],build,env)
+    table_text=A.diagnostic_text(table,262144);names=table.decode('utf-8').splitlines()
+    A.require(0<len(names)<=65536 and all(0<len(n)<=256 and '/'not in n and '\\'not in n and '\0'not in n for n in names),'collector archive table')
+    selected_members=[];aggregate=0
+    for name in members:
+        count=names.count(name);A.require(count>0,'collector loaded member absent from table')
+        record={'name':name,'table_occurrences':count,'state':'AMBIGUOUS_NOT_EXTRACTED'}
+        if count==1:
+            raw,_=tool([toolroot/'bin/llvm-ar','p',archive['path'],name],build,env,binary_stdout=True)
+            aggregate+=len(raw);A.require(0<len(raw)<=A.FILE_CAP and aggregate<=A.FILE_CAP,'collector member cap')
+            record.update(state='UNIQUE_EXTRACTED',bytes=len(raw),sha256=A.digest(raw))
+        selected_members.append(record)
+    A.require(sha(archive['path'])==archive['sha256'] and exe.stat().st_size==exe_size and sha(exe)==exe_hash,'collector post archive/EXE identity')
+    value={'schema':'CRT_IDENTITY_COLLECTOR_V1','context':auth['context'],'guard':auth['authority']['guard'],'publisher_archive_sha256_source_pin':ARCHIVE_SHA,
+           'producer_id':job['id'],'trace_sha256':A.digest(text.encode()),'archive':archive,
+           'exe_sha256':exe_hash,'exe_bytes':exe_size,'loaded_rows':rows,
+           'member_table':table_text,'selected_members':selected_members,
+           'imports':A.diagnostic_text(imports,262144),'qualification':False}
+    A.require(len(A.canonical(value))<=524288,'collector packet cap');emit('CRT_IDENTITY_COLLECTOR',value)
+
+def link_dependencies(text,expanded,toolroot,build,env,diagnostic=None,collector=None):
     reads=[];loads=[]
     for line in text.splitlines():
         m=re.fullmatch(r'(?:ld\.lld|lld-link): Reading (.+\.a)\s*',line)
@@ -236,6 +267,13 @@ def link_dependencies(text,expanded,toolroot,build,env,diagnostic=None):
         archives[name]={'path':str(path),'sha256':sha(path),'members':{}}
     names={Path(x['path']).name for x in archives.values()}
     rejected_if_false('libc++.a'in names and 'libunwind.a'in names and any('builtins'in n for n in names)and any('ucrt'in n for n in names)and 'libkernel32.a'in names,diagnostic,'required_archives',lambda:{'trace':bounded_text(text),'names':sorted(names),'archives':archives,'predicates':{'libc++.a':'libc++.a'in names,'libunwind.a':'libunwind.a'in names,'builtins':any('builtins'in n for n in names),'ucrt':any('ucrt'in n for n in names),'libkernel32.a':'libkernel32.a'in names}})
+    if not ('libc++.a'in names and 'libunwind.a'in names and any('builtins'in n for n in names)and any('ucrt'in n for n in names)and 'libkernel32.a'in names) and collector is not None:
+        try:collector(archives,loads,text)
+        except Exception as error:
+            if TOOL_GRAPHS or A.LIVE_GRAPHS:raise
+            if diagnostic is not None:
+                try:diagnostic('crt_collector_unavailable',lambda:{'error':repr(error)})
+                except Exception:pass
     A.require('libc++.a'in names and 'libunwind.a'in names and any('builtins'in n for n in names)and any('ucrt'in n for n in names)and 'libkernel32.a'in names,'missing positive CRT/STL/unwind/builtins/system dependency')
     for archive,member,symbol in loads:
         candidates=[v for k,v in archives.items()if k==archive or Path(k).name==Path(archive).name]
@@ -364,7 +402,8 @@ def produce():
     diagnostic=lambda gate,details:rejection_evidence(auth,job,gate,details)
     rejected_if_false(not any(x in lower for x in ('libgesher_posix','binder','gesher_crash_reporter_anchor','gesher_signal_mailbox_anchor','--wrap','wrap=free','wrap=realloc')),diagnostic,'foreign_link_root',lambda:{'trace':bounded_text(trace),'expanded':bounded_text((out+err).decode())})
     A.require(not any(x in lower for x in ('libgesher_posix','binder','gesher_crash_reporter_anchor','gesher_signal_mailbox_anchor','--wrap','wrap=free','wrap=realloc')),'foreign implicit root dependencies')
-    linked=link_dependencies(trace,exp,tc,build,env,diagnostic)
+    linked=link_dependencies(trace,exp,tc,build,env,diagnostic,
+        lambda archives,loads,text:collect_crt_identity(auth,job,archives,loads,text,tc,build,env))
     imports,_=tool([tc/'bin/llvm-readobj','--coff-imports',build/'helper-qualification.exe'],build,env)
     rejected_if_false(bool(imports and not re.search(rb'(?i)jvm|dalvik|libart|binder|gesher_posix',imports)),diagnostic,'imports_role',lambda:{'imports':A.diagnostic_text(imports,262144)})
     A.require(imports and not re.search(rb'(?i)jvm|dalvik|libart|binder|gesher_posix',imports),'imports role')
