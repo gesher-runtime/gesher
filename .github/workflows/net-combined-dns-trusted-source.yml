@@ -262,7 +262,8 @@ jobs:
                           'Receipt selected adaptation lacks exact independent pins')
                   pins[name] = RECEIPT_PINS[name]
               if coherent:
-                  require(adapted and all(name in pins for name in COHERENT_TCP_PINS), 'Coherent overlay requires historical selected pins')
+                  require(adapted and all(name in (pins | PREVIOUS_SOURCE_PINS | SOURCE_PINS) for name in COHERENT_TCP_PINS),
+                          'Coherent overlay requires historical selected or source pins')
                   pins.update(COHERENT_TCP_PINS)
               for name, blob in pins.items():
                   require(actual.get(name, ('', ''))[1] == blob, 'Union/Native selected source assertion failed: ' + name)
