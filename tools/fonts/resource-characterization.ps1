@@ -623,6 +623,10 @@ function Read-ResourceWitnessSchema([string]$Text) {
 function Read-ResourceWitnessFrames([string]$Text,$Identity,$Cache,$Fixture) {
  if(!$Identity.writer -or !$Identity.handler -or $Identity.writer -eq $Identity.handler){throw 'Distinct held native IDs required'}
  $basis=$Cache.basis;$base=[uint64]$Fixture.ucrt_base;$results=@{}
+ foreach($state in @($Cache.unwind,$basis)){
+  if($state.scope -isnot [string] -or $state.scope -cne 'POST_PROLOGUE_COMMON_BODY' -or $state.partial_prologue_qualified -isnot [bool] -or $state.partial_prologue_qualified -ne $false -or $state.runtime_unwind_integrity -isnot [bool] -or $state.runtime_unwind_integrity -ne $false){throw 'UNAVAILABLE: typed body-only frame scope'}
+ }
+ if($Cache.unwind.prolog_bytes -ne 10 -or $basis.body_after_rva -ne $Cache.start_rva+10 -or $basis.body_before_rva -ne $Cache.start_rva+58 -or $basis.writer_return_rva -ne $Cache.start_rva+29 -or $basis.handler_return_rva -ne $Cache.start_rva+41){throw 'UNAVAILABLE: exact settled body PCs'}
  foreach($role in @('WRITER','HANDLER')){
   $tid=if($role -ceq 'WRITER'){$Identity.writer}else{$Identity.handler}
   $block=[regex]::Matches($Text,'(?ms)^FONT_RESOURCE_'+$role+'\r?\n(.*?)(?=^\d+:[0-9a-f]+> \.echo FONT_RESOURCE_|\z)')
@@ -643,7 +647,7 @@ function Read-ResourceWitnessFrames([string]$Text,$Identity,$Cache,$Fixture) {
    }
    if($site -cmatch '^ucrtbase!common_putenv<char>\+0x[0-9a-f]+$'){
     $expected=if($role -ceq 'WRITER'){$basis.writer_return_rva}else{$basis.handler_return_rva}
-    if($pc -ne $base+$expected){throw 'UNAVAILABLE: adjacent caller frame PC'};$callerMatched++
+    if($pc -ne $base+$expected -or $pc -le $base+$basis.body_after_rva -or $pc -ge $base+$basis.body_before_rva){throw 'UNAVAILABLE: adjacent caller frame PC in settled body'};$callerMatched++
    }
    foreach($name in @('Invalid','Writer','Handler')){
     $f=$Fixture.frames[$name]
@@ -660,6 +664,10 @@ function Read-ResourceWitnessFrames([string]$Text,$Identity,$Cache,$Fixture) {
  $results
 }
 function Get-ResourceWitnessAddress($Cache,[uint64]$Base,$CodeResult) {
+ foreach($state in @($Cache.unwind,$Cache.basis)){
+  if($state.scope -isnot [string] -or $state.scope -cne 'POST_PROLOGUE_COMMON_BODY' -or $state.partial_prologue_qualified -isnot [bool] -or $state.partial_prologue_qualified -ne $false -or $state.runtime_unwind_integrity -isnot [bool] -or $state.runtime_unwind_integrity -ne $false){throw 'UNAVAILABLE: typed body-only address scope'}
+ }
+ if($Cache.unwind.prolog_bytes -ne 10 -or $Cache.basis.body_after_rva -ne $Cache.start_rva+10 -or $Cache.basis.body_before_rva -ne $Cache.start_rva+58 -or $Cache.basis.writer_return_rva -ne $Cache.start_rva+29 -or $Cache.basis.handler_return_rva -ne $Cache.start_rva+41){throw 'UNAVAILABLE: exact settled body address PCs'}
  if($Cache.function.begin -ne $Cache.start_rva -or $Cache.basis.function_begin -ne $Cache.start_rva -or $Cache.basis.function_end -ne $Cache.function.end -or $Cache.function.end-$Cache.start_rva -ne 69){throw 'UNAVAILABLE: independent whole function anchor'}
  $ends=@($CodeResult.rows|ForEach-Object{[int]($_.rva-$Cache.start_rva+$_.hex.Length/2)}|Where-Object{$_ -le 69})
  if(($ends -join ',') -cne ($Cache.basis.instruction_ends -join ',')){throw 'UNAVAILABLE: full decoded primary instruction boundaries'}

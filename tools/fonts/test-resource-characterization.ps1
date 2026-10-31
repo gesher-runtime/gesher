@@ -251,6 +251,9 @@ $ownerText="FONT_RESOURCE_OWNER_BEGIN`n0:000> dt ntdll!_RTL_CRITICAL_SECTION Own
 Check ((Read-ResourceOwnerField $ownerText ([uint64]0x10003200) 14 13).owner -eq 14)
 foreach($bad in @($ownerText.Replace('00000000`0000000e','00000001`0000000e'),$ownerText.Replace('00000000`0000000e','00000000`00000000'),$ownerText.Replace('00000000`0000000e','00000000`0000000d'),$ownerText.Replace('00000000`0000000e','e'),$ownerText.Replace('0x010','0x018'),$ownerText+$ownerText,$ownerText.Replace('10003200','10003208'),$ownerText.Replace('0x00000000`0000000e','??'))){Reject {Read-ResourceOwnerField $bad ([uint64]0x10003200) 14 13}}
 $packet=@{start_rva=0x3c1d8;function=@{begin=0x3c1d8;end=0x3c21d;nolock_begin=0x3c224;nolock_end=0x3c300};basis=@{function_begin=0x3c1d8;function_end=0x3c21d;candidate_rva=0x138a78;instruction_ends=@(5,6,10,13,16,23,29,30,33,36,41,43,50,56,58,63,67,68,69);writer_return_rva=0x3c1f5;handler_return_rva=0x3c201;virtual_object=@{rva=0x130000;extent=0x20000;flags=[uint32]3221225536}}}
+$packet.unwind=@{scope='POST_PROLOGUE_COMMON_BODY';partial_prologue_qualified=$false;runtime_unwind_integrity=$false;prolog_bytes=10}
+$packet.basis.scope='POST_PROLOGUE_COMMON_BODY';$packet.basis.partial_prologue_qualified=$false;$packet.basis.runtime_unwind_integrity=$false
+$packet.basis.body_after_rva=$packet.start_rva+10;$packet.basis.body_before_rva=$packet.start_rva+58
 Check ((Get-ResourceWitnessAddress $packet ([uint64]0x10000000) $result2025) -eq [uint64]0x10138a78)
 Reject {Get-ResourceWitnessAddress $packet ([uint64]::MaxValue) $result2025}
 $fixture=@{base=[uint64]0x20000000;ucrt_base=[uint64]0x10000000;frames=@{Invalid=@{begin_rva=0x400;end_rva=0x440};Writer=@{begin_rva=0x200;end_rva=0x240};Handler=@{begin_rva=0x300;end_rva=0x340}}}
@@ -274,6 +277,25 @@ FONT_RESOURCE_HANDLER
 '@
 Check ((Read-ResourceWitnessFrames $frames @{writer=[uint32]13;handler=[uint32]14} $packet $fixture).HANDLER.fixture_frames.Count -eq 2)
 foreach($bad in @($frames.Replace('1003c1f5','1003c1f6'),$frames.Replace('1003c201','1003c202'),$frames.Replace('~~[0xe]','~~[0xd]'),$frames.Replace('20000420','20000520'),$frames.Replace('KERNELBASE!WaitForSingleObjectEx','KERNELBASE!Other'),$frames+$frames,$frames.Replace('30002060','30002020'))){Reject {Read-ResourceWitnessFrames $bad @{writer=[uint32]13;handler=[uint32]14} $packet $fixture}}
+foreach($part in @('unwind','basis')){
+ foreach($key in @('scope','partial_prologue_qualified','runtime_unwind_integrity')){
+  foreach($value in @($null,0,'false',$true)){
+   $bad=ConvertFrom-Json -AsHashtable ($packet|ConvertTo-Json -Depth 20);$bad[$part][$key]=$value
+   Reject {Get-ResourceWitnessAddress $bad ([uint64]0x10000000) $result2025}
+   Reject {Read-ResourceWitnessFrames $frames @{writer=[uint32]13;handler=[uint32]14} $bad $fixture}
+  }
+  $bad=ConvertFrom-Json -AsHashtable ($packet|ConvertTo-Json -Depth 20);$bad[$part].Remove($key)
+  Reject {Get-ResourceWitnessAddress $bad ([uint64]0x10000000) $result2025}
+  Reject {Read-ResourceWitnessFrames $frames @{writer=[uint32]13;handler=[uint32]14} $bad $fixture}
+ }
+}
+foreach($offset in @(0,5,6,10,11,28,30,40,42,58,63,67,68,69)){
+ $bad=ConvertFrom-Json -AsHashtable ($packet|ConvertTo-Json -Depth 20);$bad.basis.writer_return_rva=$packet.start_rva+$offset
+ Reject {Get-ResourceWitnessAddress $bad ([uint64]0x10000000) $result2025}
+ Reject {Read-ResourceWitnessFrames $frames @{writer=[uint32]13;handler=[uint32]14} $bad $fixture}
+ $badPC=([uint64]0x10000000+$packet.start_rva+$offset).ToString('x8')
+ Reject {Read-ResourceWitnessFrames ($frames.Replace('1003c1f5',$badPC)) @{writer=[uint32]13;handler=[uint32]14} $packet $fixture}
+}
 # No actual OS Process. ScriptMethods and MemoryStream model completed IO.
 $clock=[Diagnostics.Stopwatch]::StartNew();$memory=[IO.MemoryStream]::new()
 $inputDouble=[pscustomobject]@{BaseStream=$memory}
