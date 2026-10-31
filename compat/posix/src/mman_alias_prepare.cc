@@ -228,6 +228,11 @@ PrepareStatus PreparePunchRequest(const RegionMap& source,uintptr_t begin,uintpt
     return PrepareStatus::InvalidSize;
   try {
     PreparedPunchRequest work;
+    std::map<SectionOwner*,size_t> published;
+    for(const auto& entry:source)if(entry.second.owner)++published[entry.second.owner];
+    for(const auto& owner:published)
+      if(owner.first->state!=SectionState::Live || owner.first->refs!=owner.second)
+        return PrepareStatus::InternalFailure; // no hidden stale pin/ref before retirement
     work.first_capacity=first->second.live.capacity();
     work.combined_pages=(end-begin)/page;
     const auto merged=PreparePunchLedger(end-begin,page,first->second.group,work.merged);

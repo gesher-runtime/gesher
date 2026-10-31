@@ -10,14 +10,16 @@ int mode = 0;
 int mapped_calls = 0, close_calls = 0, map_injected = 0, close_injected = 0;
 HANDLE failed_close = nullptr;
 int nth=1;
-long allocation_budget=-1;
+thread_local long allocation_budget=-1;
+thread_local int allocation_calls=0,allocation_injected=0;
+thread_local bool allocation_observing=false;
 int extra[8]={};
 int extended[14]={};
 int plain_unmap_calls=0,plain_unmap_injected=0;
 }
 extern "C" void FileAliasFailureReset(int value) {
   plain_unmap_calls=plain_unmap_injected=0;
-  allocation_budget=-1;for(int& value:extra)value=0;
+  allocation_budget=-1;allocation_calls=allocation_injected=0;allocation_observing=true;for(int& value:extra)value=0;
   mode=value; mapped_calls=close_calls=map_injected=close_injected=0;
   for(int& count:extended)count=0;
 }
@@ -32,6 +34,8 @@ extern "C" int FileAliasFailureMetric(int index) {
     case 3:return close_injected;
     case 18:return plain_unmap_calls;
     case 19:return plain_unmap_injected;
+    case 20:return allocation_calls;
+    case 21:return allocation_injected;
     default:return index>=20&&index<28?extra[index-20]:index>=4&&index<18?extended[index-4]:-1;
   }
 }
@@ -100,9 +104,9 @@ extern "C" BOOL WINAPI FileAliasUnmapViewOfFile(const void* view) {
 
 // Only linked into dedicated failure executables. Never the product allocator.
 void* operator new(std::size_t bytes) {
-  ++extra[0];
+  if(allocation_observing)++allocation_calls;
   if(allocation_budget==0) {
-    allocation_budget=-1;++extra[1];throw std::bad_alloc();
+    allocation_budget=-1;++allocation_injected;throw std::bad_alloc();
   }
   if(allocation_budget>0)--allocation_budget;
   void* result=std::malloc(bytes?bytes:1);if(!result)throw std::bad_alloc();return result;
