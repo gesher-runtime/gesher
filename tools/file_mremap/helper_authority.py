@@ -248,8 +248,18 @@ def constants(raw):
     require(raw == guard_bytes(values['PINS'], values['TEMPLATE']), 'whole guard template')
     return values
 
+def checked_out_hashes(root,names):
+    """One real Git read for every path, retaining attributes/EOL filters."""
+    require(0<len(names)<=10000 and len(set(names))==len(names),'checkout path count')
+    require(all(type(name)is str and name and not name.startswith('"') and not Path(name).is_absolute() and '..'not in Path(name).parts and not any(char in name for char in '\r\n\0') for name in names),'line-delimited checkout paths')
+    raw=subprocess.check_output(['git','-C',str(root),'hash-object','--stdin-paths'],input=('\n'.join(names)+'\n').encode('utf-8'))
+    hashes=raw.decode('ascii').splitlines();require(len(hashes)==len(names),'complete checkout hashes')
+    for value in hashes:hexid(value)
+    return dict(zip(names,hashes))
+
 def verify_source(root, source, reviewed, expected_guard=None):
     hexid(source); hexid(reviewed)
+    require(source==reviewed,'exact independently reviewed source SHA')
     require(git(root, 'cat-file', '-t', reviewed).strip() == b'commit', 'authority is not a commit')
     current_caller = git(root, 'show', source + ':' + CALLER)
     require(current_caller == git(root, 'show', reviewed + ':' + CALLER), 'independent caller authority')
@@ -268,9 +278,10 @@ def verify_source(root, source, reviewed, expected_guard=None):
     pins[GUARD] = git(root, 'rev-parse', guard + ':' + GUARD).decode().strip()
     verify_inventory(inventory(root, BASE), inventory(root, source), pins)
     require(subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor', BASE, source], capture_output=True).returncode == 0, 'source ancestry')
-    for path, row in inventory(root, source).items():
-        # Hash only; protected sources are preserved without inspection/execution.
-        require(git(root, 'hash-object', path).decode().strip() == row['blob'], 'checkout/no-op changed: ' + path)
+    checked_inventory=inventory(root,source)
+    # Actual Git hashing, not index/stat-cache trust. Protected bodies stay opaque.
+    observed=checked_out_hashes(root,tuple(checked_inventory))
+    require(all(observed[path]==row['blob']for path,row in checked_inventory.items()),'checkout/no-op changed')
     require(not git(root, 'status', '--porcelain', '--untracked-files=all').strip(), 'dirty/shadow checkout')
     return {'guard': guard, 'guard_blob': pins[GUARD], 'template': values['TEMPLATE'],
             'caller_authority': reviewed, 'pins': pins, 'manifest': source_manifest(root, source)}
