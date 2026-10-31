@@ -88,7 +88,8 @@ def decode(raw, cap=FILE_CAP):
             require(key not in result, 'duplicate JSON key')
             result[key] = value
         return result
-    return json.loads(raw, object_pairs_hook=unique)
+    def finite(token):raise Rejected('nonfinite JSON number')
+    return json.loads(raw, object_pairs_hook=unique,parse_constant=finite)
 
 def hexid(value, length=40):
     require(type(value) is str and re.fullmatch('[0-9a-f]{%d}' % length, value), 'hash identity')
@@ -222,9 +223,13 @@ jobs:
 ''').encode()
 
 def constants(raw):
-    text = raw.decode().split("          python3 -I - <<'PY'\n", 1)[1].rsplit('\n          PY', 1)[0]
     import textwrap
-    tree = ast.parse(textwrap.dedent(text))
+    require(type(raw) is bytes and len(raw) <= FILE_CAP, 'guard byte bound')
+    try:
+        text = raw.decode().split("          python3 -I - <<'PY'\n", 1)[1].rsplit('\n          PY', 1)[0]
+        tree = ast.parse(textwrap.dedent(text))
+    except (UnicodeError, IndexError, SyntaxError) as error:
+        raise Rejected('malformed immutable guard') from error
     values = {x.targets[0].id: ast.literal_eval(x.value) for x in tree.body
               if isinstance(x, ast.Assign) and isinstance(x.targets[0], ast.Name)
               and x.targets[0].id in ('PINS', 'TEMPLATE')}
@@ -299,7 +304,9 @@ def api(path):
     require(os.environ.get('GITHUB_ACTIONS') == 'true', 'API CI only')
     request = urllib.request.Request('https://api.github.com/repos/' + REPOSITORY + '/' + path,
         headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
-    with urllib.request.urlopen(request, timeout=30) as response:
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self,*args,**kwargs):raise Rejected('unexpected JSON API redirect')
+    with urllib.request.build_opener(NoRedirect()).open(request, timeout=30) as response:
         raw = response.read(FILE_CAP + 1)
     return decode(raw)
 
@@ -428,12 +435,24 @@ def validate_completion(record):
     require(record['started'] is True and type(record['pid'])is int and record['pid']>0 and record['creation_time']>0 and record['exe_verified'] is True, 'owned process identity')
     require(record['kernel_completed'] is True and record['io_completed'] is True and record['handles_closed'] is True and record['timed_out'] is False and record['overflow'] is False and record['exit']==0, 'process containment/completion')
 
+def settle_readers(graph, deadline):
+    """Join only started, rooted readers; false forbids stream disposal."""
+    for slot in graph['readers']:
+        if slot['started']:
+            try:
+                slot['thread'].join(timeout=max(0, deadline-time.monotonic()))
+            except BaseException as error:
+                graph['errors'].append(repr(error))
+    return all((slot['started'] and not slot['thread'].is_alive()) or
+               (not slot['started'] and not slot.get('start_attempted',False))
+               for slot in graph['readers'])
+
 def owned_helper(executable, expected_sha):
     """CI-only Windows child. Never dispose IO while its readers remain live."""
     require(os.environ.get('GITHUB_ACTIONS')=='true' and os.name=='nt', 'owned helper Windows CI only')
     executable=Path(executable).resolve();require(digest(executable.read_bytes())==expected_sha,'launch bytes')
     graph={'image_handle':None,'process':None,'readers':[],'buffers':[bytearray(),bytearray()],'errors':[],'record':{'started':False,'kernel_completed':False,'io_completed':False,'handles_closed':False,'timed_out':False,'overflow':False,'exit':None}}
-    LIVE_GRAPHS.append(graph);record=graph['record'];start=time.monotonic()
+    LIVE_GRAPHS.append(graph);record=graph['record'];start=time.monotonic();kernel=None
     try:
         import ctypes
         from ctypes import wintypes
@@ -464,13 +483,12 @@ def owned_helper(executable, expected_sha):
                     if len(chunk)>remaining:record['overflow']=True
             except BaseException as error:graph['errors'].append(repr(error))
         for i,stream in enumerate((proc.stdout,proc.stderr)):
-            reader=threading.Thread(target=drain,args=(i,stream),daemon=True);slot={'thread':reader,'started':False};graph['readers'].append(slot);reader.start();slot['started']=True
+            reader=threading.Thread(target=drain,args=(i,stream),daemon=True);slot={'thread':reader,'started':False,'start_attempted':False};graph['readers'].append(slot);slot['start_attempted']=True;reader.start();slot['started']=True
         deadline=start+PROCESS_SECONDS-CLEANUP_SECONDS
         while proc.poll()is None and time.monotonic()<deadline and not record['overflow']:time.sleep(.02)
         if proc.poll()is None:
             record['timed_out']=time.monotonic()>=deadline;proc.kill()
-        try:proc.wait(timeout=POSTKILL_SECONDS)
-        except subprocess.TimeoutExpired:raise Rejected('FAILED_CONTAINMENT: child kernel incomplete')
+        proc.wait(timeout=POSTKILL_SECONDS)
         record['kernel_completed']=True;record['exit']=proc.returncode
     except BaseException as error:
         graph['errors'].append(repr(error))
@@ -481,21 +499,26 @@ def owned_helper(executable, expected_sha):
                 if proc.poll()is None:proc.kill()
                 proc.wait(timeout=POSTKILL_SECONDS);record['kernel_completed']=True;record['exit']=proc.returncode
             except BaseException as error:graph['errors'].append(repr(error))
-        if record['kernel_completed']:
-            for slot in graph['readers']:
-                if slot['started']:slot['thread'].join(timeout=max(0,start+PROCESS_SECONDS-time.monotonic()))
-            record['io_completed']=len(graph['readers'])==2 and all(x['started']and not x['thread'].is_alive()for x in graph['readers'])
-            if record['io_completed']:
-                for stream in (proc.stdin,proc.stdout,proc.stderr):stream.close()
-                proc._handle.Close()
+        # A failed start has no child kernel or readers. It can release the image
+        # lease safely without pretending that a native process completed.
+        quiescent=(proc is None or record['kernel_completed']) and settle_readers(graph,start+PROCESS_SECONDS)
+        record['io_completed']=quiescent
+        if quiescent:
+            try:
+                if proc is not None:
+                    for stream in (proc.stdin,proc.stdout,proc.stderr):
+                        if stream is not None:stream.close()
+                    proc._handle.Close()
                 if graph['image_handle']is not None:
                     require(kernel.CloseHandle(graph['image_handle']),'retained image close');graph['image_handle']=None
                 record['handles_closed']=True
+            except BaseException as error:graph['errors'].append(repr(error))
         record['elapsed_seconds']=time.monotonic()-start;record['errors']=list(graph['errors'])
         record['stdout']=bytes(graph['buffers'][0]).decode('ascii',errors='backslashreplace');record['stderr']=bytes(graph['buffers'][1]).decode('ascii',errors='backslashreplace')
         record['stdout_sha256']=digest(bytes(graph['buffers'][0]));record['stderr_sha256']=digest(bytes(graph['buffers'][1]))
+        record['root_retained']=not(quiescent and record['handles_closed'])
         print('FILE_MREMAP_HELPER_PROCESS '+canonical(record).decode().rstrip(),flush=True)
-        if record['kernel_completed'] and record['io_completed'] and record['handles_closed']:LIVE_GRAPHS.remove(graph)
+        if not record['root_retained']:LIVE_GRAPHS.remove(graph)
     require(not graph['errors'],'process errors');validate_completion(record)
     result=parse_budgets(bytes(graph['buffers'][0]),bytes(graph['buffers'][1]),record['exit'])
     return record,result

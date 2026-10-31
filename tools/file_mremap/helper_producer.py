@@ -45,9 +45,10 @@ def sha(path):return A.digest(Path(path).read_bytes())
 def tool(argv,cwd,env,seconds=90):
     """Bounded concurrent tool capture with a graph saved before readers start."""
     A.require(os.environ.get('GITHUB_ACTIONS')=='true' and os.name=='posix','compiler tools Linux CI only')
-    graph={'argv':list(map(str,argv)),'process':None,'readers':[],'buffers':[bytearray(),bytearray()],'overflow':False,'errors':[]}
-    TOOL_GRAPHS.append(graph);start=time.monotonic();proc=None
+    graph={'argv':list(map(str,argv)),'process':None,'readers':[],'buffers':[bytearray(),bytearray()],'overflow':False,'errors':[],'executable_sha256':None,'executable_realpath':None}
+    TOOL_GRAPHS.append(graph);start=time.monotonic();proc=None;kernel_done=False;timed=False;closed=False
     try:
+        graph['executable_sha256']=sha(graph['argv'][0]);graph['executable_realpath']=str(Path(graph['argv'][0]).resolve())
         proc=subprocess.Popen(graph['argv'],cwd=cwd,env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE);graph['process']=proc
         def drain(index,stream):
             try:
@@ -56,28 +57,35 @@ def tool(argv,cwd,env,seconds=90):
                     if not chunk:break
                     remaining=A.FILE_CAP-len(graph['buffers'][index]);graph['buffers'][index].extend(chunk[:max(0,remaining)])
                     if len(chunk)>remaining:graph['overflow']=True
-            except BaseException as e:graph['errors'].append(repr(e))
+            except BaseException as error:graph['errors'].append(repr(error))
         for i,stream in enumerate((proc.stdout,proc.stderr)):
-            reader=threading.Thread(target=drain,args=(i,stream),daemon=True);graph['readers'].append(reader);reader.start()
+            reader=threading.Thread(target=drain,args=(i,stream),daemon=True);slot={'thread':reader,'started':False,'start_attempted':False};graph['readers'].append(slot);slot['start_attempted']=True;reader.start();slot['started']=True
         while proc.poll()is None and time.monotonic()<start+seconds and not graph['overflow']:time.sleep(.01)
-        timed=proc.poll()is None
-        if timed:proc.kill()
-        proc.wait(timeout=5)
-        for reader in graph['readers']:reader.join(timeout=5)
-        complete=len(graph['readers'])==2 and all(not t.is_alive()for t in graph['readers'])
-        record={'argv':graph['argv'],'pid':proc.pid,'elapsed_seconds':time.monotonic()-start,'exit':proc.returncode,'kernel_completed':True,'io_completed':complete,'overflow':graph['overflow'],'timed_out':timed,'stdout_sha256':A.digest(bytes(graph['buffers'][0])),'stderr_sha256':A.digest(bytes(graph['buffers'][1]))}
-        emit('TOOL',record)
-        A.require(complete and not timed and not graph['overflow'] and not graph['errors'] and proc.returncode==0,'tool failure or containment')
-        proc.stdout.close();proc.stderr.close();TOOL_GRAPHS.remove(graph)
-        return bytes(graph['buffers'][0]),bytes(graph['buffers'][1])
-    except BaseException:
-        if proc is not None:
+        timed=proc.poll()is None and time.monotonic()>=start+seconds
+        if proc.poll()is None:proc.kill()
+        proc.wait(timeout=5);kernel_done=True
+    except BaseException as error:
+        graph['errors'].append(repr(error))
+    finally:
+        if proc is not None and not kernel_done:
             try:
                 if proc.poll()is None:proc.kill()
-                proc.wait(timeout=5)
-            except BaseException:pass
-        emit('TOOL_FAILURE',{'argv':graph['argv'],'stdout':bytes(graph['buffers'][0]).decode(errors='backslashreplace'),'stderr':bytes(graph['buffers'][1]).decode(errors='backslashreplace'),'errors':graph['errors'],'pid':proc.pid if proc else None})
-        raise
+                proc.wait(timeout=5);kernel_done=True
+            except BaseException as error:graph['errors'].append(repr(error))
+        quiescent=(proc is None or kernel_done)and A.settle_readers(graph,start+seconds+10)
+        if quiescent:
+            try:
+                if proc is not None:
+                    proc.stdout.close();proc.stderr.close()
+                closed=True
+            except BaseException as error:graph['errors'].append(repr(error))
+        record={'argv':graph['argv'],'pid':proc.pid if proc else None,'started':proc is not None,'elapsed_seconds':time.monotonic()-start,'exit':proc.returncode if proc else None,'kernel_completed':kernel_done,'io_completed':quiescent,'handles_closed':closed,'overflow':graph['overflow'],'timed_out':timed,'root_retained':not(quiescent and closed),'errors':list(graph['errors']),'executable_sha256':graph['executable_sha256'],'executable_realpath':graph['executable_realpath'],'stdout_sha256':A.digest(bytes(graph['buffers'][0])),'stderr_sha256':A.digest(bytes(graph['buffers'][1]))}
+        emit('TOOL',record)
+        if not record['root_retained']:TOOL_GRAPHS.remove(graph)
+    if graph['errors']or timed or graph['overflow']or proc is None or proc.returncode!=0 or record['root_retained']:
+        emit('TOOL_FAILURE',{'record':record,'stdout':bytes(graph['buffers'][0]).decode(errors='backslashreplace'),'stderr':bytes(graph['buffers'][1]).decode(errors='backslashreplace')})
+        raise A.Rejected('tool failure or containment')
+    return bytes(graph['buffers'][0]),bytes(graph['buffers'][1])
 
 class Redirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):
@@ -131,16 +139,22 @@ def dependency_paths(raw,source_root,toolroot,build):
     A.require(required<={Path(x['path']).name for x in result},'SDK/STL dependencies missing')
     return result
 
-def parse_driver(raw,toolroot):
+def parse_driver(raw,toolroot,source_root,build):
+    # Constrain even not-yet-created outputs and attached option paths.
+    roots=tuple(p.resolve()for p in (toolroot,source_root,build))
     commands=[]
     for line in raw.decode().splitlines():
-        if line.startswith(' "'):
+        if line.lstrip().startswith('"'):
             row=shlex.split(line);A.require(row,'empty expanded command')
-            A.require(Path(row[0]).resolve().is_relative_to(toolroot.resolve()),'foreign implicit executable');commands.append(row)
-            for value in row:
-                if value.startswith('/') and Path(value).exists():
-                    p=Path(value).resolve()
-                    A.require(p.is_relative_to(toolroot.resolve())or p.is_relative_to(Path.cwd().resolve()),'ambient implicit path')
+            A.require(Path(row[0]).resolve().is_relative_to(roots[0]),'foreign implicit executable');commands.append(row)
+            for value in row[1:]:
+                A.require(not value.startswith('@'),'unrecorded response file')
+                candidate=value
+                for prefix in ('-I','-L','-isystem','-iquote','-idirafter','--sysroot=','-fdebug-compilation-dir=','-resource-dir='):
+                    if value.startswith(prefix)and len(value)>len(prefix):candidate=value[len(prefix):];break
+                if Path(candidate).is_absolute():
+                    p=Path(candidate).resolve()
+                    A.require(any(p.is_relative_to(root)for root in roots),'ambient implicit path')
     A.require(commands,'missing expanded driver commands');return commands
 
 def link_dependencies(text,expanded,toolroot,build,env):
@@ -176,7 +190,7 @@ def link_dependencies(text,expanded,toolroot,build,env):
                 if p.is_relative_to(build.resolve()):A.require(p.name in A.TUS,'foreign direct object')
                 else:A.require(p.is_relative_to(toolroot.resolve()),'foreign startup object')
                 direct.append({'path':str(p),'sha256':sha(p),'origin':'three-object'if p.is_relative_to(build.resolve())else'publisher-startup'})
-    A.require({Path(x['path']).name for x in direct if x['origin']=='three-object'}==set(A.TUS),'exact actual three link objects')
+    A.require([Path(x['path']).name for x in direct if x['origin']=='three-object']==list(A.TUS) and all(Path(x['path'])==build/Path(x['path']).name for x in direct if x['origin']=='three-object'),'exact actual three link objects')
     A.require(any(x['origin']=='publisher-startup'for x in direct),'missing actual startup objects')
     return {'archives':archives,'loaded':loads,'direct':direct}
 
@@ -205,7 +219,7 @@ def produce():
         dep=obj.replace('.obj','.d');argv=[str(driver),*COMMON]
         if obj!='caller.obj':argv.append('-fexceptions')
         argv+=['-MD','-MF',str(build/dep),'-c',str(root/source),'-o',str(build/obj)]
-        diagnostic=[argv[0],'-###',*argv[1:]];out,err=tool(diagnostic,build,env);expanded[obj]=parse_driver(out+err,tc)
+        diagnostic=[argv[0],'-###',*argv[1:]];out,err=tool(diagnostic,build,env);expanded[obj]=parse_driver(out+err,tc,root,build)
         cc1=[r for r in expanded[obj]if '-cc1'in r];A.require(len(cc1)==1 and ('-fexceptions'in cc1[0])==(obj!='caller.obj') and ('-fcxx-exceptions'in cc1[0])==(obj!='caller.obj'),'actual effective exception mode')
         stdout,stderr=tool(argv,build,env);transcripts.append({'object':obj,'argv':argv,'driver_expansion':(out+err).decode(),'stdout':stdout.decode(),'stderr':stderr.decode()})
         rawdep=(build/dep).read_bytes();deps[obj]=dependency_paths(rawdep,root,tc,build)
@@ -214,7 +228,7 @@ def produce():
         objects[obj]={'source':source,'source_blob':A.SOURCE_BLOBS[obj],'source_sha256':sha(root/source),'header_blob':A.HEADER_BLOB,'header_sha256':sha(root/A.HEADER),'sha256':sha(build/obj),'exceptions':obj!='caller.obj','argv':argv,'expanded':expanded[obj]}
         commands.append({'output':obj,'file':source,'argv':argv,'expanded':expanded[obj]})
     link=[str(driver),'--no-default-config',*(str(build/obj)for obj in A.TUS),'-static','-Wl,--verbose','-Wl,-Map,'+str(build/'helper-qualification.map'),'-o',str(build/'helper-qualification.exe')]
-    out,err=tool([link[0],'-###',*link[1:]],build,env);exp=parse_driver(out+err,tc)
+    out,err=tool([link[0],'-###',*link[1:]],build,env);exp=parse_driver(out+err,tc,root,build)
     stdout,stderr=tool(link,build,env);trace=(stdout+stderr).decode();lower=trace.lower()+(out+err).decode().lower()
     A.require(not any(x in lower for x in ('libgesher_posix','binder','gesher_crash_reporter_anchor','gesher_signal_mailbox_anchor','--wrap','wrap=free','wrap=realloc')),'foreign implicit root dependencies')
     linked=link_dependencies(trace,exp,tc,build,env)
@@ -236,6 +250,13 @@ def produce():
     local=dict(auth);local['roles']=dict(auth['roles'],**{'helper-producer':job});A.verify_bundle({p.name:p.read_bytes()for p in bundle.iterdir()},local)
     emit('PRODUCER_MANIFEST',{'sha256':sha(bundle/'producer-manifest.json'),'context':auth['context'],'producer_id':job['id'],'role':A.PROFILE,'qualification':False,'members':manifest['members']})
 
+def release_consumer_directory(dest,parent):
+    # No recursive deletion while a child/reader/image lease is retained.
+    A.require(not A.LIVE_GRAPHS,'FAILED_CONTAINMENT: retain owned directory')
+    A.require(dest.is_absolute() and dest.resolve().parent==parent.resolve() and re.fullmatch(r'mremap-helper-[1-9][0-9]*-[1-9][0-9]*-win(?:22|25)',dest.name),'owned absolute cleanup target')
+    A.require(not dest.is_symlink() and not(getattr(dest.lstat(),'st_file_attributes',0)&0x400),'cleanup reparse target')
+    shutil.rmtree(dest);A.require(not dest.exists(),'owned directory cleanup')
+
 def consume():
     A.require(os.name=='nt','consumer Windows only');auth=A.authorize('helper-windows',('source-authority / verify','helper-producer'))
     image=os.environ.get('ImageOS');A.require(image in ('win22','win25'),'host image role');role='helper-windows-'+('2022'if image=='win22'else'2025');current_job(auth,role)
@@ -243,12 +264,16 @@ def consume():
     raw=download('https://api.github.com/repos/'+A.REPOSITORY+'/actions/artifacts/'+str(artifact['id'])+'/zip',A.TOTAL_CAP,artifact['digest'].split(':')[1],os.environ['GH_TOKEN'])
     files=A.zip_members(raw);manifest=A.verify_bundle(files,auth);dest=Path(os.environ['RUNNER_TEMP'])/('mremap-helper-'+auth['context']['run']+'-'+auth['context']['attempt']+'-'+image)
     A.require(not dest.exists(),'fresh consumer directory');dest.mkdir()
-    for name,value in files.items():(dest/name).write_bytes(value)
-    # Remove token variables before native creation; download provenance already sealed.
-    os.environ.pop('GH_TOKEN',None);os.environ.pop('GITHUB_TOKEN',None)
-    record,result=A.owned_helper(dest/'helper-qualification.exe',manifest['members']['helper-qualification.exe']['sha256'])
-    A.require(not A.LIVE_GRAPHS,'no retained containment failure')
-    shutil.rmtree(dest);A.require(not dest.exists(),'owned directory cleanup')
+    try:
+        for name,value in files.items():(dest/name).write_bytes(value)
+        os.environ.pop('GH_TOKEN',None);os.environ.pop('GITHUB_TOKEN',None)
+        record,result=A.owned_helper(dest/'helper-qualification.exe',manifest['members']['helper-qualification.exe']['sha256'])
+    finally:
+        released=False
+        if not A.LIVE_GRAPHS:
+            release_consumer_directory(dest,Path(os.environ['RUNNER_TEMP']).resolve());released=True
+        emit('DIRECTORY',{'path':str(dest),'released':released,'retained_graphs':len(A.LIVE_GRAPHS)})
+    A.require(released,'retained containment failure')
     emit('RESULT',{'context':auth['context'],'host_role':role,'producer_id':manifest['producer_id'],'artifact_id':artifact['id'],'artifact_digest':artifact['digest'],'producer_manifest_sha256':A.digest(files['producer-manifest.json']),'process':record,'budgets':result,'directory_released':True,'full_A_qualified':False,'production_registry_qualified':False,'selected_supplier_qualified':False})
 
 def main():
