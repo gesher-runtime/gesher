@@ -4,7 +4,7 @@ $source=Join-Path $PSScriptRoot 'debugger-preflight.ps1'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($source,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw ($errors|Out-String)}
-$pure=@('Assert-OrdinaryWindowsPath','Join-WindowsLiteral','Select-UniqueDebugger','New-PreflightCommands','New-PreflightArguments','New-PreflightStartInfo','Assert-PreflightRequest','Assert-PreflightRawMarkers','Get-StageLimits','Assert-StageBudget','Assert-StageRelative','Assert-StageTrustRecord','Test-StageEligible','New-StageAdmission','Assert-StageIdentity','Assert-StageMembership','Assert-OwnedStageCleanupPath','Get-StageManifestText','Assert-StageModule')
+$pure=@('Assert-OrdinaryWindowsPath','Join-WindowsLiteral','Select-UniqueDebugger','New-PreflightCommands','New-PreflightArguments','New-PreflightStartInfo','Assert-PreflightRequest','Assert-PreflightRawMarkers','Get-StageLimits','Assert-StageBudget','Assert-StageRelative','Assert-StageTrustRecord','Test-StageEligible','New-StageAdmission','Assert-StageIdentity','Assert-StageMembership','Assert-OwnedStageCleanupPath','New-StageLifetimeRoot','Release-StageLifetimeRoot','Get-StageManifestText','Assert-StageModule')
 foreach($name in $pure){
  $nodes=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$true))
  if($nodes.Count -ne 1){throw 'Missing/duplicate pure function'}
@@ -143,7 +143,34 @@ foreach($badRoot in @('C:\SDK','C:\Windows\System32','D:\owned temp\font-debugge
  Reject {Assert-OwnedStageCleanupPath $badRoot 'D:\owned temp\font-debugger-abc'}
 }
 Check ($text -match 'if\(!\$bothCompleted\)\{throw[^\r\n]+stage handles/files retained') 'Missing completed-process guard before closing stage handles'
-Check ($text -match 'tool_request_and_detach_completed=\(\$ok -and \$closed -and \$bothCompleted -and \$stageHandlesClosed -and !\$stageCleanupError\)') 'Success ignores cleanup/completion failure'
+Check ($text -match 'tool_request_and_detach_completed=\(\$ok -and \$closed -and \$bothCompleted -and \$stageHandlesClosed -and !\$stageCleanupError -and \$stageRootReleased\)') 'Success ignores cleanup/completion/root failure'
+Check ($text.IndexOf('$stageLifetimeRoot=New-StageLifetimeRoot $stage') -lt $text.IndexOf('Initialize-SignedStage $sdk')) 'CLR root reserved after a staged resource could open'
+# Durable CLR root test uses ONLY ordinary managed metadata objects: no real
+# stream, file, native process, signature query or copy. No stale post-Free token.
+Reject {New-StageLifetimeRoot $null}
+Reject {New-StageLifetimeRoot @{}}
+$lifetime=& {
+ $fake=[pscustomobject]@{marker='SYNTHETIC_NO_IO_STREAM'}
+ $list=[Collections.Generic.List[object]]::new();$list.Add($fake)
+ $owner=@{handles=$list;marker='SYNTHETIC_STAGE_OWNER'}
+ @{root=(New-StageLifetimeRoot $owner);owner=[WeakReference]::new($owner);list=[WeakReference]::new($list);stream=[WeakReference]::new($fake)}
+}
+try{
+ [GC]::Collect()
+ Check $lifetime.root.active 'Root did not survive child scope'
+ $target=$lifetime.root.handle.Target
+ Check ([object]::ReferenceEquals($target,$lifetime.owner.Target)) 'Normal handle lost exact owner'
+ Check ([object]::ReferenceEquals($target.handles,$lifetime.list.Target)) 'Root lost exact owner list'
+ Check ([object]::ReferenceEquals($target.handles[0],$lifetime.stream.Target)) 'Root lost fake stream graph'
+ Check ($target.handles[0].marker -ceq 'SYNTHETIC_NO_IO_STREAM') 'Rooted graph changed'
+ Check (!(Release-StageLifetimeRoot $lifetime.root $false $true) -and $lifetime.root.active) 'Incomplete process released durable root'
+ Check (!(Release-StageLifetimeRoot $lifetime.root $true $false) -and $lifetime.root.active) 'Open staged streams released durable root'
+ Check (!(Release-StageLifetimeRoot $lifetime.root $false $false) -and $lifetime.root.active) 'Incomplete cleanup released durable root'
+ Check (Release-StageLifetimeRoot $lifetime.root $true $true) 'Completed owner root not released'
+ Check (!$lifetime.root.active) 'Released root still marked active'
+ # Repeated release must be a harmless state no-op; it must not call Free twice.
+ Check (Release-StageLifetimeRoot $lifetime.root $true $true) 'Root release is not idempotent'
+}finally{if($lifetime.root.active){$null=Release-StageLifetimeRoot $lifetime.root $true $true}}
 # Exercise the actual disk-record control flow in a finite child scope. Every
 # external operation is shadowed before invocation; no runner body is evaluated.
 $diskNode=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Get-StageDiskRecord'},$true))
