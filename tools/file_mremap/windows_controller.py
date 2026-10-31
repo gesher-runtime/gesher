@@ -278,7 +278,7 @@ def verify_punch(actor,case,page):
                 assert row['refs']==row['views']+row['pins']>0 and row['state']==0x1000 and row['type']==0x40000
             if phase=='cleanup':assert row['present']==0 and row['state']==0x10000
     assert phases['before'][0]['capacity']==result['capacity']
-    metrics=result['metrics'];assert len(metrics)==28 and all(type(v)is int and v>=0 for v in metrics)
+    metrics=result['metrics'];assert len(metrics)==28 and all(type(v)is int and v>=0 for v in metrics)and metrics[20]>=1
     if case in ('punch_prepare_failure','punch_file_prepare_failure'):
         assert result['failed']==1 and result['errno']==12 and result['source_unchanged']==1
         assert result['resources_before']==result['resources_after']>=0
