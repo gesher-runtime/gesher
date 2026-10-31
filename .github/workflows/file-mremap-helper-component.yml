@@ -1,0 +1,53 @@
+name: file-mremap-helper-component
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/file-mremap-helper-qualification]
+    paths: [.github/workflows/file-mremap-helper-component.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: file-mremap-helper-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  source-authority:
+    uses: gesher-runtime/gesher/.github/workflows/file-mremap-helper-trusted-source.yml@0000000000000000000000000000000000000000
+  helper-producer:
+    needs: source-authority
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FILE_MREMAP_HELPER_CALLER_COMMIT: ${{ vars.FILE_MREMAP_HELPER_CALLER_COMMIT }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Authenticate source and build only three standalone helper objects
+        run: python3 -I tools/file_mremap/helper_producer.py produce
+      - uses: actions/upload-artifact@v4
+        with:
+          name: file-mremap-helper-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: helper-bundle/
+          if-no-files-found: error
+          retention-days: 3
+  helper-windows:
+    name: helper-${{ matrix.os }}
+    needs: [source-authority, helper-producer]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FILE_MREMAP_HELPER_CALLER_COMMIT: ${{ vars.FILE_MREMAP_HELPER_CALLER_COMMIT }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Authenticate current producer and run only owned standalone helper
+        shell: pwsh
+        run: |
+          python -I tools/file_mremap/helper_producer.py consume
+          if ($LASTEXITCODE -ne 0) { throw 'Standalone helper qualification failed' }

@@ -1,0 +1,34 @@
+name: file-mremap-helper-trusted-source
+on:
+  workflow_call:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FILE_MREMAP_HELPER_CALLER_COMMIT: ${{ vars.FILE_MREMAP_HELPER_CALLER_COMMIT }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Verify immutable standalone source and full preserved history
+        shell: bash
+        run: |
+          python3 -I - <<'PY'
+          import hashlib,subprocess,sys
+          from pathlib import Path
+          PINS={'tools/file_mremap/helper_authority.py': '0000000000000000000000000000000000000000', 'tools/file_mremap/helper_producer.py': '0000000000000000000000000000000000000000', 'tools/file_mremap/test_helper_authority.py': '0000000000000000000000000000000000000000'}
+          TEMPLATE='0000000000000000000000000000000000000000'
+          path='tools/file_mremap/helper_authority.py'
+          raw=subprocess.check_output(['git','cat-file','blob',PINS[path]])
+          assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==PINS[path]
+          assert sys.flags.isolated==1
+          scope={'__name__':'immutable_helper_authority','__file__':str(Path(path).resolve())}
+          exec(compile(raw,'immutable-helper-authority','exec'),scope)
+          scope['guard_main'](PINS,TEMPLATE)
+          PY
+      - name: Run ordinary metadata controls only
+        run: python3 -I tools/file_mremap/test_helper_authority.py
