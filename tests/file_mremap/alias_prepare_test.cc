@@ -27,7 +27,7 @@ int main() {
     calls = 0;
     {
       PreparedAlias out;
-      status = PrepareAlias({0, 0, 4096, 4096, PAGE_READWRITE}, out);
+      status = PrepareAliasFromNoExceptions({0, 0, 4096, 4096, PAGE_READWRITE}, out);
       empty = out.node.empty() && !out.owner;
       budget = -1;
       if (status == PrepareStatus::NoMemory) { ++failures; if (!empty) ++failed; }
@@ -45,8 +45,38 @@ int main() {
   }
   budget = -1;
   PreparedAlias out;
-  if (PrepareAlias({0, 0, 0, 4096, PAGE_READWRITE}, out) != PrepareStatus::InvalidSize ||
+  if (PrepareAliasFromNoExceptions({0, 0, 0, 4096, PAGE_READWRITE}, out) != PrepareStatus::InvalidSize ||
       !out.node.empty() || out.owner || failures < 3 || successes != 1) ++failed;
+  {
+    SectionOwner owner; owner.state=SectionState::Live; owner.refs=3;
+    Region source; source.kind=Kind::kView; source.shared=true; source.owner=&owner;
+    source.group=0x10000; source.size=5*4096; source.view_protection=PAGE_READWRITE;
+    source.live.assign(5,true); source.live_pages=5;
+    bool surgery_success=false; int surgery_failures=0;
+    for(long point=0;point<64;++point) {
+      long before=live; budget=point; calls=0;
+      PrepareStatus status;
+      {
+        PreparedSurgery plan;
+        status=PrepareSurgeryFromNoExceptions(source,0x10000,0x12000,0x13000,4096,plan);
+        budget=-1;
+        if(status==PrepareStatus::NoMemory) {
+          ++surgery_failures;
+          if(!plan.holes[0].empty() || !plan.holes[1].empty() || !plan.desired_live.empty() ||
+             !plan.desired_protection.empty())++failed;
+        } else if(status==PrepareStatus::Ok) {
+          surgery_success=true;
+          if(plan.mapped[0].live_pages!=2 || plan.mapped[1].live_pages!=2 ||
+             plan.desired_live.size()!=5 || plan.desired_protection.size()!=5)++failed;
+        } else ++failed;
+      }
+      if(live!=before || owner.refs!=3)++failed;
+      std::printf("SURGERY_ALLOCATION point=%ld calls=%ld status=%d released=%d refs=%zu\n",
+                  point,calls,static_cast<int>(status),live==before,owner.refs);
+      if(surgery_success)break;
+    }
+    if(!surgery_success || surgery_failures<3)++failed;
+  }
   std::printf("PREPARE_RESULT failures=%d success=%d live=%ld failed=%d\n", failures,successes,live,failed);
   return failed ? 1 : 0;
 }

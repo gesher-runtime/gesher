@@ -64,6 +64,12 @@ using namespace gesher_mman_internal;
 #else
 #define FileAliasMapViewOfFile MapViewOfFile
 #define FileAliasCloseHandle CloseHandle
+#define FileAliasQuery VirtualQuery
+#define FileAliasProtect VirtualProtect
+#define FileAliasFree VirtualFree
+#define FileAliasPublicationAllowed() TRUE
+#define FileAliasMap3(fn,section,process,at,offset,size,flags,prot) fn(section,process,at,offset,size,flags,prot,nullptr,0)
+#define FileAliasUnmap2(fn,process,at,flags) fn(process,at,flags)
 #endif
 
 #ifndef MEM_RESERVE_PLACEHOLDER
@@ -116,6 +122,7 @@ struct State {
   RegionMap regions;  // keyed by region start
   SectionOwner* failed_owners = nullptr;  // failed invariant containment, not closed
   bool owner_failure = false;
+  int request_error = 0; // nondestructive preparation failure, not a poisoned owner
   std::map<uintptr_t, size_t> groups;   // placeholder reservations: start, size
   size_t page_size;
   size_t granularity;
@@ -247,7 +254,7 @@ void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int
   const DWORD protection = from.view_protection;
   for (size_t at = 0; at < from.size; at += s.page_size) {
     MEMORY_BASIC_INFORMATION info;
-    if (VirtualQuery(reinterpret_cast<void*>(begin + at), &info, sizeof(info)) != sizeof(info) ||
+    if (FileAliasQuery(reinterpret_cast<void*>(begin + at), &info, sizeof(info)) != sizeof(info) ||
         info.State != MEM_COMMIT || info.Type != MEM_MAPPED || info.Protect != protection) {
       errno = EINVAL; return MAP_FAILED;
     }
@@ -287,7 +294,9 @@ void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int
   node.key() = result;
   node.mapped().mapping = from.mapping;
   node.mapped().view = view;
-  auto published = s.regions.insert(std::move(node));
+  auto published = FileAliasPublicationAllowed()
+      ? s.regions.insert(std::move(node))
+      : RegionMap::insert_return_type{s.regions.end(),false,std::move(node)};
   if (!published.inserted) {
     if (!UnmapViewOfFile(view)) {
       SectionOwner* failed = prepared.owner.release();
@@ -324,13 +333,19 @@ std::map<uintptr_t, Region>::iterator SplitEntry(State& s,
                                                  std::map<uintptr_t, Region>::iterator it,
                                                  uintptr_t at) {
   Region& lower = it->second;
-  if (lower.owner != nullptr && lower.owner->refs == SIZE_MAX) {
-    s.owner_failure = true;
-    return it;
+  if (lower.owner != nullptr) {
+    if (lower.owner->refs == SIZE_MAX) { s.owner_failure = true; return it; }
+    PreparedSplit prepared;
+    const auto status = PrepareSplit(lower,it->first,at,s.page_size,prepared);
+    if (status != PrepareStatus::Ok) { s.request_error=status==PrepareStatus::NoMemory?ENOMEM:EIO; errno=s.request_error; return it; }
+    auto inserted = s.regions.insert(std::move(prepared.upper));
+    if (!inserted.inserted) { s.owner_failure=true; errno=EIO; return it; }
+    lower = std::move(prepared.lower); // same allocator, no allocation
+    ++lower.owner->refs; // only AFTER node publication
+    return inserted.position;
   }
   const size_t lower_pages = (at - it->first) / s.page_size;
   Region upper = lower;
-  if (upper.owner != nullptr) ++upper.owner->refs;
   lower.shared_alias = upper.shared_alias = false;
   upper.size = lower.size - (at - it->first);
   upper.live.assign(lower.live.begin() + lower_pages, lower.live.end());
@@ -376,17 +391,19 @@ uintptr_t ReserveNear(State& s, void* hint, size_t len) {
 
 // Frees a group's placeholders once nothing of it is mapped.
 void ReleaseGroupIfEmpty(State& s, uintptr_t group) {
-  auto g = s.groups.find(group);
-  if (g == s.groups.end()) return;
-  const uintptr_t end = group + g->second;
-  for (auto it = s.regions.lower_bound(group); it != s.regions.end() && it->first < end; ++it) {
-    if (it->second.kind != Kind::kHole) return;
+  auto g=s.groups.find(group);
+  if(g==s.groups.end()) return;
+  const uintptr_t end=group+g->second;
+  for(auto it=s.regions.lower_bound(group);it!=s.regions.end()&&it->first<end;++it)
+    if(it->second.kind!=Kind::kHole) return;
+  bool failed=false;
+  for(auto it=s.regions.lower_bound(group);it!=s.regions.end()&&it->first<end;) {
+    if(!FileAliasFree(reinterpret_cast<void*>(it->first),0,MEM_RELEASE)) {
+      it->second.operation_error=GetLastError();
+      s.owner_failure=true; failed=true; ++it; // exact surviving placeholder kept
+    } else it=s.regions.erase(it);
   }
-  for (auto it = s.regions.lower_bound(group); it != s.regions.end() && it->first < end;) {
-    VirtualFree(reinterpret_cast<void*>(it->first), 0, MEM_RELEASE);
-    it = s.regions.erase(it);
-  }
-  s.groups.erase(g);
+  if(!failed) s.groups.erase(g);
 }
 
 // The group whose regions cover [begin, end) without a gap, or 0.
@@ -420,10 +437,89 @@ struct SavedPage {
   std::vector<uint8_t> bytes;  // private views' live pages
 };
 
+// Shared promoted surgery never reaches the allocating legacy/private path.
+RegionMap::iterator PunchPromoted(State& s, RegionMap::iterator it, uintptr_t x, uintptr_t y) {
+  Region& original=it->second;
+  const uintptr_t start=it->first,end=start+original.size;
+  SectionOwner* owner=original.owner;
+  const size_t kept=(x>start?1:0)+(y<end?1:0);
+  if(!original.shared || !owner || owner->state!=SectionState::Live || owner->refs==0 || owner->refs>SIZE_MAX-(kept+1)) {
+    s.owner_failure=true; errno=EIO; return it;
+  }
+  PreparedSurgery prepared;
+  const auto status=PrepareSurgery(original,start,x,y,s.page_size,prepared);
+  if(status!=PrepareStatus::Ok) { s.request_error=status==PrepareStatus::NoMemory?ENOMEM:EIO; errno=s.request_error; return it; }
+  for(size_t i=0;i<prepared.desired_protection.size();++i) {
+    MEMORY_BASIC_INFORMATION info;
+    if(FileAliasQuery(reinterpret_cast<void*>(start+i*s.page_size),&info,sizeof(info))!=sizeof(info)) {
+      original.operation_error=GetLastError(); s.owner_failure=true; errno=EIO; return it;
+    }
+    prepared.desired_protection[i]=info.Protect;
+  }
+  ++owner->refs; // one pin, entire transient kept-view delta validated above
+  if(!FileAliasUnmap2(Placeholders().unmap2,GetCurrentProcess(),original.view,MEM_PRESERVE_PLACEHOLDER)) {
+    original.operation_error=GetLastError(); DropOwner(s,owner); s.owner_failure=true; return it;
+  }
+  DropSection(s,original); // pin prevents final section release
+  original.kind=Kind::kHole; original.view=nullptr;
+  std::fill(original.live.begin(),original.live.end(),false); original.live_pages=0;
+  // The existing entry always represents the remaining REAL unsplit extent.
+  auto remaining=it;
+  auto split=[&](uintptr_t boundary, RegionMap::node_type& prefix) -> bool {
+    if(!FileAliasFree(reinterpret_cast<void*>(remaining->first),boundary-remaining->first,
+                    MEM_RELEASE|MEM_PRESERVE_PLACEHOLDER)) {
+      remaining->second.operation_error=GetLastError(); s.owner_failure=true; return false;
+    }
+    auto tail=s.regions.extract(remaining);
+    const size_t removed=boundary-tail.key();
+    tail.key()=boundary; tail.mapped().size-=removed;
+    tail.mapped().live.resize(tail.mapped().size/s.page_size); // shrink, no allocation
+    auto tail_insert=s.regions.insert(std::move(tail));
+    auto prefix_insert=s.regions.insert(std::move(prefix));
+    if(!tail_insert.inserted || !prefix_insert.inserted) { s.owner_failure=true; return false; }
+    remaining=tail_insert.position; return true;
+  };
+  bool divided=true;
+  if(x>start) divided=split(x,prepared.holes[0]);
+  if(divided && y<end) divided=split(y,prepared.holes[1]);
+  // Failed splitting leaves a truthful actual placeholder partition; no assumed
+  // rollback and no remapping across an extent that did not successfully split.
+  if(!divided) { DropOwner(s,owner); return FindRegion(s,x); }
+  const uintptr_t starts[2]={start,y};
+  for(size_t piece=0;piece<2;++piece) {
+    Region& ready=prepared.mapped[piece];
+    if(ready.size==0) continue;
+    auto target=s.regions.find(starts[piece]);
+    if(target==s.regions.end()) { s.owner_failure=true; continue; }
+    if(!FileAliasMap3(Placeholders().map3,owner->handle,GetCurrentProcess(),reinterpret_cast<void*>(starts[piece]),ready.offset,ready.size,MEM_REPLACE_PLACEHOLDER,ready.view_protection)) {
+      target->second.operation_error=GetLastError(); s.owner_failure=true; continue;
+    }
+    ready.view=reinterpret_cast<void*>(starts[piece]);
+    target->second=std::move(ready); // COMPLETE physical view/live ledger first
+    Region& published=target->second; ++owner->refs;
+    const size_t base=(starts[piece]-start)/s.page_size;
+    for(size_t i=0;i<published.live.size();++i) {
+      DWORD previous;
+      DWORD desired=prepared.desired_protection[base+i];
+      if(FileAliasProtect(reinterpret_cast<void*>(starts[piece]+i*s.page_size),s.page_size,desired,&previous)) {
+        published.actual_protection[i]=desired;
+        if(!prepared.desired_live[base+i]) { published.live[i]=false; --published.live_pages; }
+      } else {
+        published.operation_error=GetLastError(); s.owner_failure=true;
+        // Continue bounded reconstruction: remaining pages stay counted/live,
+        // with their actual initial section protection, never a false bitmap.
+      }
+    }
+  }
+  DropOwner(s,owner);
+  return FindRegion(s,x);
+}
+
 // [x, y) inside the view region `it` becomes a hole; the rest of the view is
 // mapped again, with the protections and private changes it had.
 std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Region>::iterator it,
                                                 uintptr_t x, uintptr_t y) {
+  if(it->second.owner!=nullptr) return PunchPromoted(s,it,x,y);
   const uintptr_t start = it->first;
   const Region view = it->second;
   if (view.owner != nullptr && view.owner->refs == SIZE_MAX) {
@@ -571,7 +667,7 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
         }
         break;
     }
-    if (s.owner_failure) return it;
+    if (s.owner_failure || s.request_error) return it;
     at = y;
   }
   // One placeholder for the whole range.
@@ -611,8 +707,8 @@ void* GroupAnonymous(State& s, void* start, size_t len, int prot, int flags) {
   std::map<uintptr_t, Region>::iterator hole;
   if ((flags & MAP_FIXED) != 0 && CoveringGroup(s, addr, addr + len) != 0) {
     hole = Punch(s, addr, addr + len);
-    if (s.owner_failure) {
-      errno = EIO;
+    if (s.owner_failure || s.request_error) {
+      errno = s.request_error?s.request_error:EIO;
       return MAP_FAILED;
     }
   } else {
@@ -729,9 +825,9 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
   std::map<uintptr_t, Region>::iterator hole;
   if ((flags & MAP_FIXED) != 0 && CoveringGroup(s, addr, addr + len) != 0) {
     hole = Punch(s, addr, addr + len);
-    if (s.owner_failure) {
+    if (s.owner_failure || s.request_error) {
       if (mapping != nullptr) CloseHandle(mapping); // new legacy constructor owner
-      errno = EIO;
+      errno = s.request_error?s.request_error:EIO;
       return MAP_FAILED;
     }
   } else {
@@ -1030,6 +1126,7 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
   }
   length = RoundUp(length, s.page_size);
   std::lock_guard<std::mutex> guard(s.lock);
+  s.request_error=0;
   if (s.owner_failure) { errno = EIO; return MAP_FAILED; }
   void* result;
   if ((flags & MAP_ANONYMOUS) != 0 || fd == -1) {
@@ -1062,7 +1159,6 @@ int munmap(void* addr, size_t length) {
   TRACE("munmap(%p, 0x%zx)\n", addr, length);
 
   std::lock_guard<std::mutex> guard(s.lock);
-  std::vector<uintptr_t> groups;
   auto it = FindRegion(s, begin);
   if (it == s.regions.end()) it = s.regions.lower_bound(begin);
   while (it != s.regions.end() && it->first < end) {
@@ -1071,9 +1167,6 @@ int munmap(void* addr, size_t length) {
     uintptr_t from = std::max(begin, region_begin);
     uintptr_t to = std::min(end, region_begin + region.size);
     if (region.group != 0) {
-      if (std::find(groups.begin(), groups.end(), region.group) == groups.end()) {
-        groups.push_back(region.group);
-      }
       if (region.kind == Kind::kAnon) {
         // The pages go back to the placeholder.
         VirtualFree(reinterpret_cast<void*>(from), to - from,
@@ -1099,7 +1192,7 @@ int munmap(void* addr, size_t length) {
         if (region.live[i]) ++retiring;
       if (retiring == region.live_pages) {
         const BOOL retired = region.group != 0
-          ? Placeholders().unmap2(GetCurrentProcess(), region.view, MEM_PRESERVE_PLACEHOLDER)
+          ? FileAliasUnmap2(Placeholders().unmap2,GetCurrentProcess(),region.view,MEM_PRESERVE_PLACEHOLDER)
           : UnmapViewOfFile(region.view);
         if (!retired) { s.owner_failure = true; errno = EIO; return -1; }
         const uintptr_t group = region.group;
@@ -1113,9 +1206,24 @@ int munmap(void* addr, size_t length) {
         } else {
           it = s.regions.erase(it);
         }
-        if (!closed) { errno = EIO; return -1; }
+        if (!closed) {
+          if(group!=0) ReleaseGroupIfEmpty(s,group);
+          errno=EIO; return -1;
+        }
         continue;
       }
+      // Each successful one-page protection change commits exactly that page.
+      // Failures retain original logical liveness/ownership and are returned.
+      for(size_t i=(from-region_begin)/s.page_size,n=(to-region_begin)/s.page_size;i<n;++i) {
+        if(!region.live[i]) continue;
+        DWORD previous;
+        if(!FileAliasProtect(reinterpret_cast<void*>(region_begin+i*s.page_size),s.page_size,PAGE_NOACCESS,&previous)) {
+          region.operation_error=GetLastError(); s.owner_failure=true; continue;
+        }
+        region.live[i]=false; --region.live_pages;
+        if(!region.actual_protection.empty()) region.actual_protection[i]=PAGE_NOACCESS;
+      }
+      ++it; continue;
     }
     if (from < to) {
       for (size_t i = (from - region_begin) / s.page_size, n = (to - region_begin) / s.page_size;
@@ -1149,7 +1257,10 @@ int munmap(void* addr, size_t length) {
     }
     ++it;
   }
-  for (uintptr_t group : groups) ReleaseGroupIfEmpty(s, group);
+  for(auto group=s.groups.begin();group!=s.groups.end();) {
+    const uintptr_t value=group->first; ++group; // iterator survives erasing prior
+    ReleaseGroupIfEmpty(s,value);
+  }
   if (s.owner_failure) { errno = EIO; return -1; }
   return 0;
 }
@@ -1288,6 +1399,8 @@ void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...
   new_size = RoundUp(new_size, s.page_size);
 
   std::unique_lock<std::mutex> guard(s.lock);
+  s.request_error=0;
+  if (s.owner_failure) { errno = EIO; return MAP_FAILED; }
   auto file_source = FindRegion(s, old_begin);
   if (file_source != s.regions.end() && file_source->second.kind == Kind::kView)
     return SharedAlias(s, old_begin, old_size, new_size, flags);
