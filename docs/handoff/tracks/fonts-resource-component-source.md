@@ -3,7 +3,9 @@
 After 2a3a reported root named=1/IDs=2 on both hosts, this candidate permits
 bounded named root types according to the PE resource directory structure.
 It validates each name flag, length-prefixed UTF-16, alignment, sorting,
-uniqueness and target range/alias without traversing named types. Numeric IDs
+uniqueness and target range without traversing named types. Named targets may
+not alias one another or the visited VERSION structures or payload; unvisited
+non-VERSION numeric targets are not compared or traversed. Numeric IDs
 remain unique and ordered; only numeric RT_VERSION is traversed and nested
 named entries remain rejected. Existing depth, span, overlap, count, profile,
 language and provenance checks remain. Header diagnostics continue on rejected

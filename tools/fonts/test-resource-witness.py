@@ -214,7 +214,7 @@ class DiskMetadata(unittest.TestCase):
         data=disk_image_named_root();result=w.disk_version_metadata(data)
         self.assertEqual(len(result['records']),1);self.assertEqual(result['records'][0]['path'],[16,1,0x409])
         cases=[(0x1410,'<I',0x180),(0x1410,'<I',0x80000181),(0x1410,'<I',0x80000fff),
-               (0x1414,'<I',0x1c0),(0x1414,'<I',0x80000000),(0x1414,'<I',0x80000080),
+               (0x1414,'<I',0x1c0),(0x1414,'<I',0x80000000),(0x1414,'<I',0x80000080),(0x1414,'<I',0x80000200),
                (0x1418,'<I',16),(0x1420,'<I',3),(0x1580,'<H',257),(0x1582,'<H',0xd800)]
         for at,fmt,value in cases:
             bad=bytearray(data);struct.pack_into(fmt,bad,at,value)
