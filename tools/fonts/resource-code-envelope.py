@@ -1,4 +1,4 @@
-"""Version1 outer envelope; unchanged three-tool inventory has its OWN EOF.
+"""Version2 outer envelope; unchanged three-tool inventory has its OWN EOF.
 
 One existing imports PID receives a bounded legacy substream followed by one
 separately typed provider frame. No file opens, discovery or parser subprocess.
@@ -30,7 +30,7 @@ def line(stream):
 def envelope(stream, legacy, pe, provider):
     request=line(stream)
     provider.require(type(request) is dict and set(request)=={'version','legacy_bytes','context'},'outer schema')
-    provider.require(request['version']==1 and type(request['version']) is int,'outer version')
+    provider.require(request['version']==2 and type(request['version']) is int,'outer version')
     length=request['legacy_bytes']
     provider.require(type(length) is int and 1<=length<=3*pe.MAX_BYTES+16384+66,'legacy bound')
     data=stream.read(length);provider.require(len(data)==length,'truncated old substream')
@@ -41,7 +41,7 @@ def envelope(stream, legacy, pe, provider):
     provider.require(type(entry) is dict and type(entry.get('bytes')) is int and
                      64<=entry['bytes']<=provider.MAX_BYTES,'provider frame bound')
     data=stream.read(entry['bytes']);provider.require(len(data)==entry['bytes'],'provider truncated')
-    provider.require(stream.read(len(b'\nFONT_UCRT_CODE_END_V1\n\0\n'))==b'\nFONT_UCRT_CODE_END_V1\n\0\n','provider frame sentinel')
+    provider.require(stream.read(len(b'\nFONT_UCRT_CODE_END_V2\n\0\n'))==b'\nFONT_UCRT_CODE_END_V2\n\0\n','provider frame sentinel')
     provider.require(stream.read(1)==b'','outer trailing frame')
     yield provider.admit(data,entry,request['context'])
 

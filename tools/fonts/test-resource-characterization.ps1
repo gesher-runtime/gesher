@@ -232,4 +232,78 @@ foreach($changed in @($full2022.Replace($firstText,''),$full2022.Replace($firstT
 }
 # Extra address even after valid scoped label must fail start<=E.
 Reject {Read-ResourceCodeWindow ($full2022.Replace("FONT_RESOURCE_CODE_END`n","00007ffd``c14a8515 90 nop`nFONT_RESOURCE_CODE_END`n")) ([uint64]0x7ffdc13f0000) 0xb84b4 '48895c2408574883ec20488bda488bf9488d0d9d7f0400ff158ff5000090488bd3488bcfe8a70000008bd8488d0d827f0400ff156cf500008bc3488b5c24304883c4205fc340554883ec20488bea488d0d5f7f04004883c4205d48ff2543f50000cccccccccccccc48895c24085748'}
+# Witness tests use synthetic strings and managed-memory task doubles only.
+foreach($name in @('New-ResourceWitnessPrewarmCommands','New-ResourceWitnessCaptureCommands','New-ResourceOwnerTail','Wait-ResourceInputReady','Send-ResourceControlOnce','Assert-ResourceWitnessProfiles','Read-ResourceWitnessSchema','Read-ResourceWitnessFrames','Get-ResourceWitnessAddress','Read-ResourceOwnerField','Assert-ResourceWitnessRootTasks')){
+ $node=@($newFunctions|Where-Object{$_.Name -ceq $name});Check ($node.Count -eq 1);Invoke-Expression $node[0].Extent.Text
+}
+$coldPlan=New-ResourceWitnessPrewarmCommands 'C:\stage\winext' 0x3c1d8
+$heldPlan=New-ResourceWitnessCaptureCommands 'C:\stage\winext' 13 14 0x3c1d8
+Check ($coldPlan.EndsWith(".echo FONT_RESOURCE_PREWARM_INPUT_READY`n") -and !$coldPlan.EndsWith("qd`n"))
+Check ($heldPlan.EndsWith(".echo FONT_RESOURCE_WITNESS_INPUT_READY`n") -and $heldPlan.Contains('~~[0xd] kL 0x14') -and !$heldPlan.Contains('OwningThread 0x'))
+$tail=New-ResourceOwnerTail ([uint64]0x10003200)
+Check ($tail -ceq ".echo FONT_RESOURCE_OWNER_BEGIN`ndt ntdll!_RTL_CRITICAL_SECTION OwningThread 0x0000000010003200`n.echo FONT_RESOURCE_OWNER_END`nqd`n")
+foreach($bad in @(0,1,0x10003201,[uint64]::MaxValue)){Reject {New-ResourceOwnerTail $bad}}
+$schema="struct _RTL_CRITICAL_SECTION, 6 elements, 0x28 bytes`n   +0x000 DebugInfo        : Ptr64 to struct _RTL_CRITICAL_SECTION_DEBUG, 9 elements, 0x30 bytes`n   +0x008 LockCount        : Int4B`n   +0x00c RecursionCount   : Int4B`n   +0x010 OwningThread     : Ptr64 to Void`n   +0x018 LockSemaphore    : Ptr64 to Void`n   +0x020 SpinCount        : Uint8B`n"
+$schemaText="FONT_RESOURCE_TYPE_BEGIN`n0:000> dt -v -t ntdll!_RTL_CRITICAL_SECTION`n"+$schema+"FONT_RESOURCE_TYPE_END`n"
+Check ((Read-ResourceWitnessSchema $schemaText).fields -eq 6)
+foreach($bad in @($schemaText.Replace('0x010','0x014'),$schemaText.Replace('Ptr64 to Void','Ptr32 to Void'),$schemaText.Replace('6 elements','7 elements'),$schemaText+$schemaText)){Reject {Read-ResourceWitnessSchema $bad}}
+$ownerText="FONT_RESOURCE_OWNER_BEGIN`n0:000> dt ntdll!_RTL_CRITICAL_SECTION OwningThread 0x0000000010003200`n   +0x010 OwningThread     : 0x00000000``0000000e`n0:000> .echo FONT_RESOURCE_OWNER_END`nFONT_RESOURCE_OWNER_END`n"
+Check ((Read-ResourceOwnerField $ownerText ([uint64]0x10003200) 14 13).owner -eq 14)
+foreach($bad in @($ownerText.Replace('00000000`0000000e','00000001`0000000e'),$ownerText.Replace('00000000`0000000e','00000000`00000000'),$ownerText.Replace('00000000`0000000e','00000000`0000000d'),$ownerText.Replace('00000000`0000000e','e'),$ownerText.Replace('0x010','0x018'),$ownerText+$ownerText,$ownerText.Replace('10003200','10003208'),$ownerText.Replace('0x00000000`0000000e','??'))){Reject {Read-ResourceOwnerField $bad ([uint64]0x10003200) 14 13}}
+$packet=@{start_rva=0x3c1d8;function=@{begin=0x3c1d8;end=0x3c21d;nolock_begin=0x3c224;nolock_end=0x3c300};basis=@{function_begin=0x3c1d8;function_end=0x3c21d;candidate_rva=0x138a78;instruction_ends=@(5,6,10,13,16,23,29,30,33,36,41,43,50,56,58,63,67,68,69);writer_return_rva=0x3c1f5;handler_return_rva=0x3c201;virtual_object=@{rva=0x130000;extent=0x20000;flags=[uint32]3221225536}}}
+Check ((Get-ResourceWitnessAddress $packet ([uint64]0x10000000) $result2025) -eq [uint64]0x10138a78)
+Reject {Get-ResourceWitnessAddress $packet ([uint64]::MaxValue) $result2025}
+$fixture=@{base=[uint64]0x20000000;ucrt_base=[uint64]0x10000000;frames=@{Invalid=@{begin_rva=0x400;end_rva=0x440};Writer=@{begin_rva=0x200;end_rva=0x240};Handler=@{begin_rva=0x300;end_rva=0x340}}}
+$frames=@'
+FONT_RESOURCE_WRITER
+0:000> ~~[0xd] kL 0x14
+00000000`30001000 00000000`20000220 ntdll!NtWaitForAlertByThreadId+0x14
+00000000`30001020 00000000`1003c1f5 ntdll!RtlEnterCriticalSection+0x42
+00000000`30001040 00000000`20000220 ucrtbase!common_putenv<char>+0x1d
+00000000`30001060 00000000`00000000 font_environment_resource_characterization+0x220
+0:000> .echo FONT_RESOURCE_HANDLER
+FONT_RESOURCE_HANDLER
+0:000> ~~[0xe] kL 0x14
+00000000`30002000 00000000`40000100 ntdll!NtWaitForSingleObject+0x14
+00000000`30002020 00000000`20000420 KERNELBASE!WaitForSingleObjectEx+0x8e
+00000000`30002040 00000000`1003c250 font_environment_resource_characterization+0x420
+00000000`30002060 00000000`1003c201 ucrtbase!common_putenv_nolock<char>+0x68
+00000000`30002080 00000000`20000320 ucrtbase!common_putenv<char>+0x29
+00000000`300020a0 00000000`00000000 font_environment_resource_characterization+0x320
+0:000> .echo FONT_RESOURCE_CODE_BEGIN
+'@
+Check ((Read-ResourceWitnessFrames $frames @{writer=[uint32]13;handler=[uint32]14} $packet $fixture).HANDLER.fixture_frames.Count -eq 2)
+foreach($bad in @($frames.Replace('1003c1f5','1003c1f6'),$frames.Replace('1003c201','1003c202'),$frames.Replace('~~[0xe]','~~[0xd]'),$frames.Replace('20000420','20000520'),$frames.Replace('KERNELBASE!WaitForSingleObjectEx','KERNELBASE!Other'),$frames+$frames,$frames.Replace('30002060','30002020'))){Reject {Read-ResourceWitnessFrames $bad @{writer=[uint32]13;handler=[uint32]14} $packet $fixture}}
+# No actual OS Process. ScriptMethods and MemoryStream model completed IO.
+$clock=[Diagnostics.Stopwatch]::StartNew();$memory=[IO.MemoryStream]::new()
+$inputDouble=[pscustomobject]@{BaseStream=$memory}
+$inputDouble|Add-Member ScriptMethod Close { $this.BaseStream.Flush() }
+$processDouble=[pscustomobject]@{Id=22;StandardInput=$inputDouble}
+$processDouble|Add-Member ScriptMethod WaitForExit { param($milliseconds) $false }
+$mock=@{role='capture';state='RUNNING';pid=22;handle=@{IsClosed=$false};process=$processDouble}
+Send-ResourceControlOnce $mock $tail 90000
+Check ($mock.control_reserved -and $mock.writeTask.IsCompleted -and [Text.Encoding]::ASCII.GetString($memory.ToArray()) -ceq $tail)
+Reject {Send-ResourceControlOnce $mock $tail 90000}
+Assert-ResourceWitnessRootTasks @{processes=@{capture=$mock}}
+$mock.writeBuffer=$null;Reject {Assert-ResourceWitnessRootTasks @{processes=@{capture=$mock}}}
+$memory.Dispose()
+# Ready/prompt logic is exercised with a no-IO Update-BoundedPipe test double.
+# Original helper bytes were compared above; the actual reader is never invoked.
+function Update-BoundedPipe($State) {}
+$clock=[Diagnostics.Stopwatch]::StartNew()
+$readyDouble=@{role='prewarm';pid=22;handle=@{IsClosed=$false};process=$processDouble;out=@{Text=[Text.StringBuilder]::new("FONT_RESOURCE_PREWARM_INPUT_READY`n0:000> ")};err=@{Text=[Text.StringBuilder]::new()}}
+Check ((Wait-ResourceInputReady $readyDouble 'PREWARM' 90000).EndsWith('0:000> '))
+$readyDouble.pid=23;Reject {Wait-ResourceInputReady $readyDouble 'PREWARM' 90000};$readyDouble.pid=22
+$readyDouble.out.Text.Append("`nFONT_RESOURCE_PREWARM_INPUT_READY`n0:000> ")|Out-Null
+Reject {Wait-ResourceInputReady $readyDouble 'PREWARM' 90000}
+$readyDouble.err.Text.Append('diagnostic error')|Out-Null
+Reject {Wait-ResourceInputReady $readyDouble 'PREWARM' 90000}
+Reject {Wait-ResourceInputReady $readyDouble 'CAPTURE' 90000}
+$ntdllText="00000000``20000000 00000000``20001000 ntdll (pdb symbols)`n    Image path: C:\Windows\System32\ntdll.dll`n    ImageSize: 00001000`n    File version: 10.0.1.2`n0:000> qd`n"
+$cacheDouble=@{size_of_image=0x14b000;profile=@{version='10.0.26100.33648'}}
+$codeDouble=@{path='C:\Windows\System32\ucrtbase.dll';base=[uint64]0x10000000}
+$ntdllDouble=@{path='C:\Windows\System32\ntdll.dll';base=[uint64]0x20000000;extent=0x1000;version='10.0.1.2'}
+Assert-ResourceWitnessProfiles ($lmv+$ntdllText) $cacheDouble $codeDouble $ntdllDouble
+Check $true
+foreach($bad in @(($lmv+$ntdllText).Replace('20001000','20002000'),($lmv+$ntdllText).Replace('10.0.1.2','10.0.1.3'),($lmv+$ntdllText).Replace('System32\ntdll','SysWOW64\ntdll'))){Reject {Assert-ResourceWitnessProfiles $bad $cacheDouble $codeDouble $ntdllDouble}}
 Write-Host "FONT_RESOURCE_METADATA_PASS checks=$script:checks native_processes_started=0 real_tool_reads=0 actual_application_lookup=NOT_EXECUTED code_rows=SYNTHETIC_AND_SAVED_CI_TEXT"

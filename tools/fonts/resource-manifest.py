@@ -6,7 +6,7 @@ PUBLISHER_ARCHIVE_SHA='5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a
 COMPILER_SHA='c9b86311ade81d53235c93fafabdf98328d094de344ea9a9038e0dab6695ee9f'
 PTHREAD_SHA='dbbbb3a59f5a1077346b69d4dd8ea85eeca9574bfbd2d170eaf91b5fe5b2f88e'
 ROLE='CURRENT_SOURCE_HOST_FONT_OWNER_RESOURCE_CHARACTERIZATION'
-INPUTS=('CMakeLists.txt','compat/posix/posix.cmake','compat/posix/include/gesher/font_environment.h','compat/posix/src/font_environment.cc','compat/posix/src/path.cc','compat/posix/src/unistd.cc','compat/bionic/shim.cc','compat/bionic/native_fonts.cc','tests/native/font_environment_resource_characterization.cc','.github/workflows/fonts-resource-component.yml','tools/fonts/resource-manifest.py','tools/fonts/resource-characterization.ps1','tools/fonts/test-resource-characterization.ps1','tools/fonts/test-owner-host-evidence.py','tools/fonts/resource-import-inventory.py','tools/fonts/resource-code-envelope.py','tools/fonts/resource-code-provider.py','tools/fonts/test-resource-code.py','tools/fonts/resource-pe-imports.py','tools/fonts/resource-protocol.py','tools/fonts/test-resource-pe-imports.py','tools/fonts/test-resource-protocol.py','tools/fonts/font_records.py','tools/fonts/cli-link-evidence.py','tools/fonts/verify-standalone-link.py')
+INPUTS=('CMakeLists.txt','compat/posix/posix.cmake','compat/posix/include/gesher/font_environment.h','compat/posix/src/font_environment.cc','compat/posix/src/path.cc','compat/posix/src/unistd.cc','compat/bionic/shim.cc','compat/bionic/native_fonts.cc','tests/native/font_environment_resource_characterization.cc','.github/workflows/fonts-resource-component.yml','tools/fonts/resource-manifest.py','tools/fonts/resource-characterization.ps1','tools/fonts/test-resource-characterization.ps1','tools/fonts/test-owner-host-evidence.py','tools/fonts/resource-import-inventory.py','tools/fonts/resource-code-envelope.py','tools/fonts/resource-code-provider.py','tools/fonts/resource-witness.py','tools/fonts/test-resource-witness.py','tools/fonts/test-resource-code.py','tools/fonts/resource-pe-imports.py','tools/fonts/resource-protocol.py','tools/fonts/test-resource-pe-imports.py','tools/fonts/test-resource-protocol.py','tools/fonts/font_records.py','tools/fonts/cli-link-evidence.py','tools/fonts/verify-standalone-link.py')
 FILES=('font_environment_resource_characterization.exe','font_environment_resource_characterization.map','font_environment_resource_characterization.imports.txt','font-resource-build.log')
 ROLES={'owner':'compat/posix/src/font_environment.cc','host_POSIX':'compat/posix/src/unistd.cc','font_paths':'compat/posix/src/path.cc','fixture':'tests/native/font_environment_resource_characterization.cc'}
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
@@ -63,6 +63,28 @@ def capture(build,root):
  fixture_object=Path(compiled['fixture']['object']).resolve();assert fixture_object in direct,'Compiled fixture object is not an actual final direct link input'
  trace=Path('font-resource-build.log').read_text();mapping=(build/'font_environment_resource_characterization.map').read_text();emit('FONT_RESOURCE_MAP_RAW',{'first_lines':mapping.splitlines()[:8],'sha256':sha(build/'font_environment_resource_characterization.map')});rows=evidence.map_records(mapping)
  fixture_entry=evidence.entry(rows,'main',fixture_object,build.resolve())
+ # Bind actual address-taken fixture functions to direct object AND PE exception
+ # intervals, never whole-EXE bounds or a historical RVA. All binary reads CI only.
+ pe=load('resource-code-provider');witness=load('resource-witness')
+ image=(build/'font_environment_resource_characterization.exe').read_bytes()
+ facts=pe.window(image,fixture_entry['rva'])
+ directory=facts['exception_directory'];table=witness.mapped(image,facts['section_facts'],*directory)
+ assert 12<=len(table)<=512*1024 and len(table)%12==0 and len(table)//12<=32768
+ import struct
+ functions=[struct.unpack_from('<III',table,i)for i in range(0,len(table),12)]
+ assert all(a<b and (i==0 or functions[i-1][1]<=a)for i,(a,b,u)in enumerate(functions))
+ fixture_frames={}
+ for name in ('Invalid','Writer','Handler'):
+  symbols={symbol for rva,symbol,owner in rows if re.fullmatch(r'\(anonymous namespace\)::'+name+r'\([^\r\n]*\)',symbol)}
+  assert len(symbols)==1,('UNAVAILABLE fixture live symbol',name,sorted(symbols))
+  live=evidence.entry(rows,next(iter(symbols)),fixture_object,build.resolve())
+  spans=[v for v in functions if v[0]==live['rva']];assert len(spans)==1
+  begin,end,unwind=spans[0];assert 0<end-begin<=4096
+  witness.mapped(image,facts['section_facts'],begin,end-begin)
+  assert len([v for v in facts['section_facts']if v['flags']&0x20000000 and v['rva']<=begin and end<=v['rva']+v['raw_size']])==1
+  fixture_frames[name]={'symbol':live['symbol'],'begin_rva':begin,'end_rva':end,'unwind_rva':unwind,'object':str(fixture_object),'object_sha256':sha(fixture_object),'exe_sha256':sha(build/'font_environment_resource_characterization.exe'),'map_sha256':sha(build/'font_environment_resource_characterization.map')}
+  emit('FONT_RESOURCE_FIXTURE_FRAME_BINDING',{'role':name,**fixture_frames[name]})
+
  canonical={}
  for alias in ('libpthread.a','libwinpthread.a'):
   path=Path(os.path.abspath(subprocess.check_output([str(compiler),'-print-file-name='+alias],text=True).strip()));emit('FONT_RESOURCE_PTHREAD_BYTES_RAW',{'path':str(path),'sha256':sha(path),'expected_sha256':PTHREAD_SHA});assert sha(path)==PTHREAD_SHA
@@ -105,7 +127,7 @@ def capture(build,root):
  assert not re.search(r'(?i)(jvm|dalvik|libart|JNI_OnLoad|FontEnvironment)',imports)
  assert all(name in imports for name in ('CreateThread','WriteFile','ReadFile','SetEvent'))
  shutil.copy2(build/'font_environment_resource_characterization.exe',root/FILES[0]);shutil.copy2(build/'font_environment_resource_characterization.map',root/FILES[1]);(root/FILES[2]).write_text(imports,encoding='utf-8');shutil.copy2('font-resource-build.log',root/FILES[3])
- record={'publisher_archive_sha256':PUBLISHER_ARCHIVE_SHA,'role':ROLE,'context':context(),'inputs':inputs(),'outputs':{p:sha(root/p) for p in FILES},'compiler':{'path':str(compiler),'sha256':sha(compiler),'version':subprocess.check_output([str(compiler),'--version'],text=True)},'linker':{'sha256':sha(tools/'ld.lld'),'version':subprocess.check_output([str(tools/'ld.lld'),'--version'],text=True)},'compiled_objects':compiled,'fixture_entry':fixture_entry,'selected_owner_members':members,'actual_link_command':command,'caller_relocations':relocations,'canonical_pthread':canonical,'pthread_link_proof':pthread,'web3_query_tests':'OFF','exceptions':'OFF','runtime_shim_libcore_owner_qualified':False,'font_provider_OEM_caller_qualified':False,'font_fallback_qualified':False,'generic_getenv_qualified':False}
+ record={'publisher_archive_sha256':PUBLISHER_ARCHIVE_SHA,'role':ROLE,'context':context(),'inputs':inputs(),'outputs':{p:sha(root/p) for p in FILES},'compiler':{'path':str(compiler),'sha256':sha(compiler),'version':subprocess.check_output([str(compiler),'--version'],text=True)},'linker':{'sha256':sha(tools/'ld.lld'),'version':subprocess.check_output([str(tools/'ld.lld'),'--version'],text=True)},'compiled_objects':compiled,'fixture_entry':fixture_entry,'fixture_frame_bindings':fixture_frames,'selected_owner_members':members,'actual_link_command':command,'caller_relocations':relocations,'canonical_pthread':canonical,'pthread_link_proof':pthread,'web3_query_tests':'OFF','exceptions':'OFF','runtime_shim_libcore_owner_qualified':False,'font_provider_OEM_caller_qualified':False,'font_fallback_qualified':False,'generic_getenv_qualified':False}
  (root/'font-resource-provenance.json').write_text(json.dumps(record,sort_keys=True)+'\n',encoding='utf-8');log(record,root)
 
 def log(record,root):
@@ -116,6 +138,9 @@ def verify(root):
  actual={p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()};assert actual==set(FILES)|{'font-resource-provenance.json'}
  record=json.loads((root/'font-resource-provenance.json').read_text(encoding='utf-8'));assert record['publisher_archive_sha256']==PUBLISHER_ARCHIVE_SHA and record['role']==ROLE and record['context']==context() and record['inputs']==inputs() and record['outputs']=={p:sha(root/p) for p in FILES} and record['compiler']['sha256']==COMPILER_SHA
  assert record['fixture_entry']['symbol']=='main' and record['fixture_entry']['object']==record['compiled_objects']['fixture']['object'] and record['fixture_entry']['rva']>0
+ assert set(record['fixture_frame_bindings'])=={'Invalid','Writer','Handler'}
+ for name,frame in record['fixture_frame_bindings'].items():
+  assert 0<frame['begin_rva']<frame['end_rva'] and frame['end_rva']-frame['begin_rva']<=4096 and frame['object_sha256']==record['compiled_objects']['fixture']['object_sha256'] and frame['exe_sha256']==record['outputs'][FILES[0]] and frame['map_sha256']==record['outputs'][FILES[1]]
  assert record['exceptions']=='OFF' and record['web3_query_tests']=='OFF' and all(record[key] is False for key in ('runtime_shim_libcore_owner_qualified','font_provider_OEM_caller_qualified','font_fallback_qualified','generic_getenv_qualified'))
  assert (root/FILES[0]).read_bytes()[:2]==b'MZ' and {x['sha256'] for x in record['canonical_pthread'].values()}=={PTHREAD_SHA}
  log(record,root);return record

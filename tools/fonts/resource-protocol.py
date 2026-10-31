@@ -20,6 +20,40 @@ class ProtocolError(ValueError):
     pass
 
 
+class InputGate:
+    """Pure two-stage metadata; no actual pipe/GC/kernel success is invented."""
+    def __init__(self, role, pid, child, deadline):
+        require(role in ('prewarm','capture'), 'fixed gate role')
+        self.role=role; self.pid=dword(pid); self.child=dword(child)
+        require(pid!=child and type(deadline)is int and 0<deadline<=SESSION_MS-CLEANUP_RESERVE_MS,'gate budget')
+        self.deadline=deadline; self.ready=False; self.reserved=False
+        self.rooted=False; self.completed=False; self.failed=False
+
+    def marker(self, pid, child, *, count, prompt, alive, now):
+        require(not self.ready and not self.failed and now<self.deadline,'one ready phase/deadline')
+        require(pid==self.pid and child==self.child and count==1 and prompt is True and alive is True,'same owned marker/prompt')
+        self.ready=True
+
+    def reserve(self, *, kind, proof, rooted_buffer_task, now):
+        require(self.ready and not self.failed and not self.reserved and now<self.deadline,'one write, not retry')
+        require(kind in ('qd','owner') and (kind=='qd' or self.role=='capture'),'fixed tail')
+        require(rooted_buffer_task is True,'durable owner before write')
+        if kind=='owner':
+            expected={'profile','schema','metadata','whole_function','preceding_callee','held_callback','same_address','time_reserve'}
+            require(type(proof)is dict and set(proof)==expected and all(v is True for v in proof.values()),'all held proofs BEFORE instance')
+        self.reserved=True;self.rooted=True
+
+    def finish(self, *, full_write, qd, kernel, io, child_alive, now):
+        require(self.reserved and not self.completed and now<self.deadline,'finish phase')
+        if not all(v is True for v in (full_write,qd,kernel,io,child_alive)):
+            self.failed=True
+            raise ProtocolError('failed IO/qd/kernel; retain durable root')
+        self.completed=True
+
+    def may_release(self):
+        return self.completed and not self.failed
+
+
 def require(condition, message):
     if not condition:
         raise ProtocolError(message)

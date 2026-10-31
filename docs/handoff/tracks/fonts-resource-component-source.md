@@ -1,3 +1,71 @@
+# ONE current waiter address and SAMEADDRESS handler: SOURCE candidate
+
+This candidate extends bounded actual04a0/run41190767978 bothhost CODE+TYPE and
+normalcompletion. It has NO actual new witness result. Original four qualification
+flags remainFALSE/five WCT REDs preserved; runtime6913 remains parked. No new native
+fixture, original32helper, old3tool decoder/EOF, production or sixth-role change.
+
+Exactly14source paths include ONE pure witness module/test pair. Fresh producer
+27Gitinputs/4files retains canonicalcompiler/archive/pthread/member/main/REL32 and
+adds actual current Invalid/Writer/Handler directobject/live-map/PE runtimefunction
+ranges, object/EXE/map hashes. Missing/ambiguous ranges are UNAVAILABLE, never an
+old RVA/whole-EXE-range substitute. One current producer/currentattempt is mandatory.
+
+Version2 outer/provider framing retains unchanged bounded3tool substream/its own
+EOF, then separate signedSystem32UCRTcode provider. BeforeHOLD, fullprofile-verified
+bytes feed bounded ExceptionDirectory3 (<=512KiB/32768sorted disjoint entries), ONE
+containing RuntimeFunction Begin==S/End==S+69, <=256byte version1unwind/<=32slots,
+exact savedRBX/pushRDI/alloc32 prologue, complete observed primary-function byte
+shape/LEA+CALL+release path. Unknown/chained/unseen metadata failsUNAVAILABLE; actual
+unwind fields remain unobserved. No live arbitrary stack/unwind/PDB integrity claim.
+Metadata and all cached bytes/frame/input hashes stay in same rooted imports graph.
+
+NativeSystem32NTDLL signature/hash/version pair and Read/ShareRead lease are retained
+beforeHOLD. Prepared/prewarm/held current module/path/base/extent/schema bind exactly.
+Type schema must match six roots/size0x28 and frozen current rawschema hash, not
+merely a TYPE_SCHEMA_PARTIAL label. Candidate address derives from signed LEAdisp32
+and currentbase; checked64bit canonical/alignment8/full0x28 interval/one writable
+NONEXEC virtual section permits zero-fill, never reads object content from disk.
+
+New resource-only TWOstage protocol uses SAMEprewarm/capture PIDs. Cold samechild
+prewarm ends fixedmarker/prompt; parent validates current code/type/boundary and sends
+ONLY qd once. Actual cold redirectedstdin capability/normaldetach must succeed
+beforeSTART. Held phase1 captures fixed current stacks/code/type then marker/prompt;
+parent first hashes raw, validates currentprofiles, fullfunction/boundaries, writer
+PRECEDINGcallee return+adjacentcallerPC, heldhandler nolock return and exactsource-
+bound Invalid/Handler/Writer frame ancestry/nativewait. Only then writes one exact
+owner tail: `dt ntdll!_RTL_CRITICAL_SECTION OwningThread 0x` plus16canonicalhex,
+fixedmarkers and LASTqd. This is source text, not local command approval.
+
+ONEfield output must be bounded/unambiguous full64bit pointer equal zeroextended
+FULL retained handlernativeDWORD, nonzero/notwriter; null/changedhighbits/duplicate/
+ambiguousformat fail. Actual output formatting/pipebehavior are unseen. No register,
+framecontext, extension, instanceexpansion, alternateaddress, pointerwalk or scan.
+Final qd across two phases is explicit; phase1file itself intentionally lacksqd.
+Original command helper remains byteexact, no false static-file-lastqd claim.
+
+Root reserves bytes/tasks before one WriteAsync; partial/faulted writes cannot resend
+query. Failure emits bounded raw+hash, sends onlyqd once on healthy unreservedchannel,
+otherwise exactprocess containment, no fabricated normaldetach. All processes/
+IO/buffers/files/cache/leases remain rooted until complete; failedliveowners retain
+Normalroot in survivingparent. Native heap/kernel quarantine is separate. Original
+90ssetup/330ssession/180sdiagnostic hold/30scleanup reserve and >=10sholdmargin include
+suspension/validation. Samechild RELEASE/exactCOMPLETE and true kernel/IO/stream/root
+closure remain mandatory before even bounded successful observation.
+
+Pure controls are synthetic memory/AST/managed task doubles/savedCI TEXT only;
+unknown prerequisites are not synthetic PASS. Complete historical98/20/10/13/5/
+selected/whole/allowlist/DAG/noop/shadow/selfpin/currentrole gates retained;18outerpins,
+1638wholepaths anticipated after two additions. Separate immutable C/G/blob/template
+and different wholeSOURCE peer precede any separately authorized actualCI.
+
+Real ONEwaitedADDRESS+SAMEADDRESSowner still requires actualcurrentbothhost evidence
+and independent audit. Only then consider original observer and6913freshboth-runtime/
+JNI/guest/JavaOs/OEM/retention. Native161/default/full/hardware/release remainOPEN.
+
+Historical source checkpoints follow; new source predicate does not promote their
+actual outcomes or waive any preserved failed gate.
+
 # Fresh host-owner CODE+TYPE prerequisite: SOURCE candidate
 
 The next narrow correction preserves actual9df/run41187455486 overallRED. Its
@@ -141,7 +209,7 @@ remain admission observations, not OS loader confinement or exhaustive closure.
 CI source wiring uses a fresh authenticated20261006 publisher archive independently
 of mutable setup cache, separate fresh resource-out build, actual compiler hash,
 both canonical pthread aliases and real Reading/Loaded selected-member/ar/nm/map
-main/REL32 evidence. Fixtureג†’setenv/unsetenvג†’owner and pathג†’same owner are bound;
+main/REL32 evidence. Fixture׳’ג€ ג€™setenv/unsetenv׳’ג€ ג€™owner and path׳’ג€ ג€™same owner are bound;
 no unused source object is substituted. Fresh current-source/current-attempt archive
 receipts remain strict. The separate new guard wraps frozen4d54/e85b and all prior
 98/20/10/13/5 layers, exact whole source/pins/history/DAG/noop/shadow controls and
