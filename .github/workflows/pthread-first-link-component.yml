@@ -12,7 +12,7 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 jobs:
   source_authority:
-    # DRAFT: replaced with the separately frozen immutable policy commit.
+    # Independently frozen policy; approved caller source is a separate variable.
     uses: gesher-runtime/gesher/.github/workflows/pthread-first-link-trusted-source.yml@0000000000000000000000000000000000000000
   build:
     needs: [source_authority]
