@@ -389,16 +389,27 @@ std::map<uintptr_t, Region>::iterator SplitEntry(State& s,
 
 // A new placeholder reservation of `len` bytes at `at` (exactly) or, with
 // nullptr, anywhere: one hole. Returns its start, or 0.
-uintptr_t Reserve(State& s, void* at, size_t len) {
-  void* p = Placeholders().alloc2(GetCurrentProcess(), at, len,
-                                  MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, nullptr, 0);
-  if (p == nullptr) return 0;
-  const uintptr_t start = reinterpret_cast<uintptr_t>(p);
-  Region hole;
-  hole.kind = Kind::kHole;
-  hole.group = start;
-  AddRegion(s, start, len, std::move(hole));
-  s.groups[start] = len;
+uintptr_t Reserve(State& s,void* at,size_t len,PreparedReservation* prepared=nullptr) {
+  PreparedReservation local;PreparedReservation& plan=prepared?*prepared:local;
+  if(!prepared) {
+    const auto status=PrepareReservation(len,s.page_size,plan);
+    if(status!=PrepareStatus::Ok){s.request_error=status==PrepareStatus::NoMemory?ENOMEM:EIO;errno=s.request_error;return 0;}
+  }
+  void* memory=Placeholders().alloc2(GetCurrentProcess(),at,len,
+    MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,nullptr,0);
+  if(!memory)return 0;
+  const uintptr_t start=reinterpret_cast<uintptr_t>(memory);
+  plan.region.key()=start;plan.region.mapped().group=start;plan.group.key()=start;
+  auto region=s.regions.insert(std::move(plan.region));auto group=s.groups.insert(std::move(plan.group));
+  if(!region.inserted||!group.inserted) {
+    s.owner_failure=true;
+    if(!FileAliasFree(memory,0,MEM_RELEASE)) {
+      auto* failure=plan.failure.release();failure->rollback_view=memory;failure->rollback_placeholder=true;
+      RecordOwnerFailure(s,failure,SectionState::RollbackFailed,GetLastError());
+    } else if(region.inserted)s.regions.erase(region.position);
+    if(group.inserted)s.groups.erase(group.position);
+    errno=EIO;return 0;
+  }
   return start;
 }
 
@@ -411,11 +422,13 @@ uintptr_t ReserveNear(State& s, void* hint, size_t len) {
   uintptr_t at = 0;
   if (hint != nullptr) {
     at = Reserve(s, hint, len);
+    if(s.request_error||s.owner_failure)return 0;
     const uintptr_t next = RoundUp(reinterpret_cast<uintptr_t>(hint), s.granularity);
     if (at == 0 && next != reinterpret_cast<uintptr_t>(hint)) {
       at = Reserve(s, reinterpret_cast<void*>(next), len);
     }
   }
+  if(s.request_error||s.owner_failure)return 0;
   return at != 0 ? at : Reserve(s, nullptr, len);
 }
 
