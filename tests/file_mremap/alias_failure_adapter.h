@@ -22,7 +22,7 @@ BOOL FileAliasPublicationAllowed(void);
 /* Caller storage only: snapshot allocates nothing and holds registry lock.
  * query uses real VirtualQuery, bypassing injection; never a production ABI. */
 typedef struct FileAliasPage {
-  size_t page,region_page,region_size,live_pages,owner_refs;
+  size_t page,region_page,region_size,live_pages,owner_refs,owner_views,owner_backing_pins;
   int present,kind,live,owner_state,owner_failure;
   DWORD ledger_protection,operation_error,query_state,query_protection,query_type;
   int query_ok,group,failed_owners,failed_owner_state,rollback_view,failed_handle_valid,rollback_query_ok;

@@ -463,6 +463,7 @@ RegionMap::iterator PunchPromoted(State& s, RegionMap::iterator it, uintptr_t x,
   }
   DropSection(s,original); // pin prevents final section release
   original.kind=Kind::kHole; original.view=nullptr;
+  std::fill(original.actual_protection.begin(),original.actual_protection.end(),0);
   std::fill(original.live.begin(),original.live.end(),false); original.live_pages=0;
   // The existing entry always represents the remaining REAL unsplit extent.
   auto remaining=it;
@@ -1152,7 +1153,12 @@ int FileAliasRegistrySnapshot(const void* address,size_t length,FileAliasPage* r
       row.live_pages=region.live_pages; row.live=region.live[(at-entry->first)/s.page_size];
       row.group=region.group!=0; row.operation_error=region.operation_error;
       if(!region.actual_protection.empty()) row.ledger_protection=region.actual_protection[(at-entry->first)/s.page_size];
-      if(region.owner) { row.owner_refs=region.owner->refs; row.owner_state=static_cast<int>(region.owner->state); }
+      if(region.owner) {
+        row.owner_refs=region.owner->refs; row.owner_state=static_cast<int>(region.owner->state);
+        for(const auto& other:s.regions)if(other.second.owner==region.owner)++row.owner_views;
+        for(auto* failed=s.failed_owners;failed;failed=failed->next_failed)
+          if(failed->backing==region.owner)++row.owner_backing_pins;
+      }
     }
     MEMORY_BASIC_INFORMATION info={};
     row.query_ok=VirtualQuery(reinterpret_cast<void*>(at),&info,sizeof(info))==sizeof(info);
@@ -1249,6 +1255,7 @@ int munmap(void* addr, size_t length) {
         if (group != 0) {
           region.kind = Kind::kHole;
           region.view = nullptr;
+          std::fill(region.actual_protection.begin(),region.actual_protection.end(),0);
           std::fill(region.live.begin(), region.live.end(), false);
           region.live_pages = 0;
           ++it;
