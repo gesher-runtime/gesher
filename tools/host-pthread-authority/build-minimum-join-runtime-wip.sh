@@ -56,6 +56,20 @@ cc="$llvm/bin/x86_64-w64-mingw32-clang";lib="$llvm/x86_64-w64-mingw32/lib"
 cp "$lib/libwinpthread.a" "$out/libwinpthread.a"
 cp "$lib/libwinpthread.dll.a" "$out/libwinpthread.dll.a"
 "$llvm/bin/llvm-nm" --defined-only "$out/libwinpthread.dll.a" > "$out/import-archive-symbols.txt"
+python3 - "$lib" "$out" <<'PYCODE'
+import hashlib,json,os,sys
+from pathlib import Path
+lib,out=map(Path,sys.argv[1:])
+archives={}
+for name in ('libwinpthread.a','libwinpthread.dll.a'):
+ path=(lib/name).resolve(strict=True);raw=path.read_bytes()
+ assert hashlib.sha256(raw).digest()==hashlib.sha256((out/name).read_bytes()).digest()
+ archives[name]={'path':str(path),'sha256':hashlib.sha256(raw).hexdigest()}
+value={'source':os.environ['GITHUB_SHA'],'run':os.environ['GITHUB_RUN_ID'],
+       'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'role':'join-wait-diagnostic-only-v1',
+       'archives':archives,'sealed':False}
+(out/'producer-archive-observations.json').write_text(json.dumps(value,sort_keys=True,indent=2)+'\n')
+PYCODE
 for mode in static dynamic; do
  if [ "$mode" = static ]; then library="$lib/libwinpthread.a";flags=(-pthread); else library="$lib/libwinpthread.dll.a";flags=();fi
  "$cc" -static "${flags[@]}" "$out/candidate.obj" "$library" -Wl,--verbose -Wl,-Map,"$out/$mode.map" -o "$out/$mode.exe" 2>&1 | tee "$out/$mode-link.txt"
