@@ -1375,7 +1375,7 @@ int FileAliasRegistrySnapshot(const void* address,size_t length,FileAliasPage* r
     }
     MEMORY_BASIC_INFORMATION info={};
     row.query_ok=VirtualQuery(reinterpret_cast<void*>(at),&info,sizeof(info))==sizeof(info);
-    if(row.query_ok) { row.query_state=info.State; row.query_protection=info.Protect; row.query_type=info.Type; }
+    if(row.query_ok) { row.query_base=reinterpret_cast<uintptr_t>(info.BaseAddress);row.allocation_base=reinterpret_cast<uintptr_t>(info.AllocationBase);row.query_region_size=info.RegionSize; row.query_state=info.State; row.query_protection=info.Protect; row.query_type=info.Type; }
     rows[i]=row;
   }
   return static_cast<int>(length/s.page_size);

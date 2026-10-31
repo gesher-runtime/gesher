@@ -144,6 +144,21 @@ static int protect_result(const char* step,unsigned char* at,size_t length,int p
   printf("{\"event\":\"protection_result\",\"step\":\"%s\",\"result\":%d,\"errno\":%d,\"protect_before\":%d,\"protect_after\":%d,\"injected_before\":%d,\"injected_after\":%d}\n",step,status,error,before,after,injected,injected_after);
   return status!=wanted || (wanted && error!=wanted_errno);
 }
+static int punch_equal(const FileAliasPage* a,const FileAliasPage* b) {
+  return a->present==b->present&&a->region_page==b->region_page&&a->region_size==b->region_size&&
+    a->kind==b->kind&&a->live==b->live&&a->live_pages==b->live_pages&&a->live_capacity==b->live_capacity&&
+    a->owner_refs==b->owner_refs&&a->owner_views==b->owner_views&&a->owner_backing_pins==b->owner_backing_pins&&
+    a->owner_failure==b->owner_failure&&a->ledger_protection==b->ledger_protection&&
+    a->query_state==b->query_state&&a->query_protection==b->query_protection&&a->query_type==b->query_type&&
+    a->query_ok==b->query_ok&&a->query_base==b->query_base&&a->allocation_base==b->allocation_base&&a->query_region_size==b->query_region_size;
+}
+static void punch_rows(const char* phase,unsigned char* origin,const FileAliasPage* rows,size_t count) {
+  for(size_t i=0;i<count;++i) {
+    const FileAliasPage* q=&rows[i];
+    printf("{\"event\":\"punch_page\",\"phase\":\"%s\",\"page\":%zu,\"present\":%d,\"region_page\":%zu,\"region_size\":%zu,\"capacity\":%zu,\"kind\":%d,\"live\":%d,\"live_pages\":%zu,\"refs\":%zu,\"views\":%zu,\"pins\":%zu,\"failed\":%d,\"error\":%lu,\"state\":%lu,\"protection\":%lu,\"type\":%lu,\"ledger\":%lu,\"query_ok\":%d,\"query_base_offset\":%lld,\"query_size\":%zu,\"allocation_base_offset\":%lld}\n",
+      phase,i,q->present,q->region_page,q->region_size,q->live_capacity,q->kind,q->live,q->live_pages,q->owner_refs,q->owner_views,q->owner_backing_pins,q->owner_failure,q->operation_error,q->query_state,q->query_protection,q->query_type,q->ledger_protection,q->query_ok,(long long)((intptr_t)q->query_base-(intptr_t)origin),q->query_region_size,(long long)((intptr_t)q->allocation_base-(intptr_t)origin));
+  }
+}
 static int readable(unsigned char* at) {
   MEMORY_BASIC_INFORMATION q;return VirtualQuery(at,&q,sizeof(q))==sizeof(q)&&q.State==MEM_COMMIT&&q.Protect!=PAGE_NOACCESS&&!(q.Protect&PAGE_GUARD);
 }
@@ -166,12 +181,22 @@ int main(int argc,char** argv) {
   size_t page=(size_t)rawpage,size=page*5;
   if(argc<4)return 2;
   const char* mode=argv[1];const char* name=argv[2];const char* nonce=argv[3];
+#ifdef GESHER_FILE_MREMAP_FAILURE_TEST
+  int punch_case=!strncmp(mode,"punch_",6);
+  size_t punch_span=0;
+  if(punch_case)size=512*page;
+#else
+  int punch_case=0;
+#endif
   /* Owned relative filename/nonce grammar; no arbitrary filesystem requests. */
   if(strcmp(name,"backing.dat")||strlen(nonce)!=32||strspn(nonce,"0123456789abcdef")!=32)return 2;
   if(warm(page)){printf("{\"event\":\"prerequisite\",\"warm_failed\":true}\n");return 2;}
   long before=resources();int fd=-1,failed=0,cleanup=0;unsigned char *a=MAP_FAILED,*b=MAP_FAILED,*c=MAP_FAILED,*observed_source=MAP_FAILED;
   if(!strcmp(mode,"peer")) {
     fd=open(name,O_RDWR);if(fd<0)return 2;
+    struct stat peer_stat;
+    if(fstat(fd,&peer_stat)||peer_stat.st_size<=0 || (peer_stat.st_size!=(off_t)(5*page)&&peer_stat.st_size!=(off_t)(512*page))){close(fd);return 2;}
+    size=(size_t)peer_stat.st_size;
     a=mmap(NULL,size,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
     if(a==MAP_FAILED)failed=1;
     else {if(a[37]!=0x5a||a[43]!=(unsigned char)((43*13+7)&255))failed=1;a[43]=0x6b;}
@@ -187,7 +212,7 @@ int main(int argc,char** argv) {
 #else
   int protection_case=0;
 #endif
-  if(!adverse && !protection_case && strcmp(mode,"source_first")&&strcmp(mode,"alias_first")&&strcmp(mode,"partial")&&strcmp(mode,"middle"))return 2;
+  if(!adverse && !protection_case && !punch_case && strcmp(mode,"source_first")&&strcmp(mode,"alias_first")&&strcmp(mode,"partial")&&strcmp(mode,"middle"))return 2;
   fd=open(name,O_CREAT|O_EXCL|O_RDWR,0600);if(fd<0)return 2;
   if(ftruncate(fd,(off_t)size))failed=1;
   if(!failed)a=mmap(NULL,size,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
@@ -200,8 +225,54 @@ int main(int argc,char** argv) {
   printf("{\"event\":\"ready\",\"nonce\":\"%s\",\"pid\":%ld,\"page\":%zu,\"file_size\":%zu}\n",nonce,(long)getpid(),page,size);fflush(stdout);
   char control[40];if(!fgets(control,sizeof(control),stdin)||strcmp(control,"PEER_DONE\n")){failed=1;goto done;}
   if(!all_bytes(a,size)||!all_bytes(b,size)||!all_bytes(c,size))failed=1;
-  query("before",a,size,page);
+  query("before",a,punch_case?page:size,page);
 #ifdef GESHER_FILE_MREMAP_FAILURE_TEST
+  if(punch_case) {
+    FileAliasPage before_rows[512],after_rows[512];
+    void* middle=mmap(a+16*page,16*page,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);
+    if(middle==MAP_FAILED){failed=1;goto done;}
+    if(FileAliasRegistrySnapshot(a,size,before_rows,512)!=512){failed=1;goto done;}
+    const size_t capacity=before_rows[0].live_capacity;
+    size_t combined=capacity+1;if(combined<33)combined=33;
+    if(combined<=capacity||combined>128) {
+      printf("{\"event\":\"prerequisite\",\"production_capacity_unavailable\":true,\"capacity\":%zu}\n",capacity);
+      failed=1;goto done;
+    }
+    punch_span=combined;
+    punch_rows("before",a,before_rows,combined);
+    int injected_mode=!strcmp(mode,"punch_prepare_failure")||!strcmp(mode,"punch_file_prepare_failure")?12:!strcmp(mode,"punch_coalesce_failure")?13:!strcmp(mode,"punch_success")?0:-1;
+    if(injected_mode<0){failed=1;goto done;}
+    FileAliasFailureReset(injected_mode);FileAliasFailureNth(1);
+    long handles_before=resources();errno=0;
+    void* result=!strcmp(mode,"punch_file_prepare_failure")
+      ?mmap(a,combined*page,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_FIXED,fd,0)
+      :mmap(a,combined*page,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);
+    int error=errno;
+    FileAliasAllocationDisable();
+    int metrics[28];for(int n=0;n<28;++n)metrics[n]=FileAliasFailureMetric(n);
+    long handles_after=resources();
+    if(FileAliasRegistrySnapshot(a,size,after_rows,512)!=512){failed=1;goto done;}
+    int unchanged=1;for(size_t n=0;n<512;++n)if(!punch_equal(&before_rows[n],&after_rows[n]))unchanged=0;
+    punch_rows("after",a,after_rows,combined);
+    printf("{\"event\":\"punch_result\",\"case\":\"%s\",\"capacity\":%zu,\"combined_pages\":%zu,\"failed\":%d,\"errno\":%d,\"source_unchanged\":%d,\"resources_before\":%ld,\"resources_after\":%ld,\"metrics\":[",mode,capacity,combined,result==MAP_FAILED,error,unchanged,handles_before,handles_after);
+    for(int n=0;n<28;++n)printf("%s%d",n?",":"",metrics[n]);
+    printf("]}\n");
+    if(injected_mode==12) {
+      if(result!=MAP_FAILED||error!=ENOMEM||!unchanged||metrics[20]<1||metrics[21]!=1||handles_before!=handles_after)failed=1;
+      for(int n=0;n<20;++n)if(metrics[n])failed=1;
+      for(int n=22;n<28;++n)if(metrics[n])failed=1;
+    } else if(injected_mode==13) {
+      if(result!=MAP_FAILED||!after_rows[0].owner_failure||metrics[25]!=1||metrics[26]!=1)failed=1;
+      for(size_t n=0;n<combined;++n)if(after_rows[n].kind!=2||after_rows[n].live||after_rows[n].query_state!=MEM_RESERVE)failed=1;
+      /* Persistent partial outcome is FAILED_CONTAINMENT, never passed negative. */
+      failed=1;
+    } else {
+      if(result==MAP_FAILED||after_rows[0].owner_failure)failed=1;
+      for(size_t n=0;n<combined;++n)if(after_rows[n].kind!=0||!after_rows[n].live||after_rows[n].query_state!=MEM_COMMIT)failed=1;
+    }
+    if(!all_bytes(b,size)||!all_bytes(c,size))failed=1;
+    goto done;
+  }
   if(protection_case) {
     if(!strcmp(mode,"protect_dead")||!strcmp(mode,"protect_mixed")) {
       if(munmap(a+page,page))failed=1;
@@ -346,6 +417,11 @@ done:
   if(b!=MAP_FAILED&&munmap(b,size))++cleanup;
   if(c!=MAP_FAILED&&munmap(c,size))++cleanup;
 #ifdef GESHER_FILE_MREMAP_FAILURE_TEST
+  if(punch_case && punch_span && observed_source!=MAP_FAILED) {
+    FileAliasPage final_rows[128];
+    if(FileAliasRegistrySnapshot(observed_source,punch_span*page,final_rows,128)!=(int)punch_span)failed=1;
+    else punch_rows("cleanup",observed_source,final_rows,punch_span);
+  }
   if((adverse||protection_case) && observed_source!=MAP_FAILED)failed|=ledger("after_cleanup",observed_source,size,page);
 #else
   (void)observed_source;

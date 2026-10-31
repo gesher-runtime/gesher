@@ -5,6 +5,7 @@
 #error This header requires the separately compiled failure-test object
 #endif
 #include <windows.h>
+#include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -33,7 +34,8 @@ typedef struct FileAliasPage {
   DWORD ledger_protection,operation_error,query_state,query_protection,query_type;
   int query_ok,group,failed_owners,failed_owner_state,rollback_view,failed_handle_valid,rollback_query_ok;
   DWORD rollback_state,rollback_protection,rollback_type;
-  size_t backing_refs;
+  size_t backing_refs,query_region_size;
+  uintptr_t query_base,allocation_base;
   DWORD failed_owner_error;
   size_t failed_owner_refs;
 } FileAliasPage;
