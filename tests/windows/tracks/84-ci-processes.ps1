@@ -365,113 +365,134 @@ foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Exp
 
 } finally { $env:GESHER_CI_PROCESS_TRACE = $runTimed84SavedTrace }
 
-# Additional actual GraphicsDex controls; original43 + eight reader records
-# above are unchanged. Never dot-source track30's native/UI top-level probes.
+# Actual GraphicsDex, CI-only bridge; historical prefix43+8 remains exact.
+$graphics84Source = Join-Path $PSScriptRoot '../fixtures/Graphics84.cs'
+Add-Type -Path @($graphics84Source, $process84Source)
+if ([IntPtr]::Size -ne 8) { throw 'Graphics84 requires64bit handles' }
 $graphics84Directory = Join-Path $process84Root 'graphics'
 New-Item -ItemType Directory $graphics84Directory | Out-Null
 $graphics84Exe = Join-Path $graphics84Directory 'dalvikvm.exe'
-$graphics84Source = Join-Path $PSScriptRoot '../fixtures/Graphics84.cs'
 & $process84Compiler /nologo /warnaserror+ /platform:x64 /target:exe /main:Graphics84 "/out:$graphics84Exe" $graphics84Source $process84Source
-if ($LASTEXITCODE -ne 0) {
-  Write-Host 'FAIL  CI processes: actual graphics fixture compilation failed'
-  $script:failed++
-  return
-}
-$graphics84Tokens = $null; $graphics84Errors = $null
-$graphics84Ast = [Management.Automation.Language.Parser]::ParseFile(
-  (Join-Path $PSScriptRoot '30-graphics.ps1'), [ref]$graphics84Tokens, [ref]$graphics84Errors)
-$graphics84Function = @($graphics84Ast.FindAll({ param($n)
-  $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'GraphicsDex'
-}, $true))
-if ($graphics84Errors.Count -or $graphics84Function.Count -ne 1) { throw 'actual GraphicsDex source extraction failed' }
-. ([scriptblock]::Create($graphics84Function[0].Extent.Text))
-[IO.File]::WriteAllText((Join-Path $graphics84Directory 'graphics-tests.dex'), '')
-$graphics84SavedDir = $Dir
-$graphics84SavedEnv = @{}
-foreach ($name in 'GESHER_GRAPHICS84_MODE','GESHER_GRAPHICS84_RECEIPT','GESHER_GRAPHICS84_ARGS','GESHER_GRAPHICS84_CWD','GESHER_CI_PROCESS_TRACE') {
-  $graphics84SavedEnv[$name] = [Environment]::GetEnvironmentVariable($name)
-}
-try {
-  $Dir = $graphics84Directory
-  $env:GESHER_CI_PROCESS_TRACE = '1'
-  $env:GESHER_GRAPHICS84_CWD = [Environment]::CurrentDirectory
-  $graphics84Args = @('space argument', 'quote"argument', 'Unicode-אב')
-  $graphics84Bcp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
-  $env:GESHER_GRAPHICS84_ARGS = Join-Path $graphics84Directory 'expected-argv.txt'
-  [IO.File]::WriteAllLines($env:GESHER_GRAPHICS84_ARGS, [string[]](@("-Xbootclasspath:$graphics84Bcp",
-    "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false', '-cp',
-    (NoDrive "$Dir/graphics-tests.dex"), 'gesher.GraphicsFixture') + $graphics84Args))
-  foreach ($mode in 'normal','nonzero','missing-marker','timeout','retained') {
-    $env:GESHER_GRAPHICS84_MODE = $mode
-    $receipt = Join-Path $graphics84Directory "$mode.receipt"
-    $env:GESHER_GRAPHICS84_RECEIPT = $receipt
-    $before = $script:failed
-    $timer = [Diagnostics.Stopwatch]::StartNew()
-    try {
-      $text = (& { GraphicsDex "fixture-$mode" GraphicsFixture $graphics84Args 1 } 6>&1 | Out-String)
-      $delta = $script:failed - $before
-      $script:failed = $before # Expected negative outcomes remain required.
-      $expectedDelta = if ($mode -eq 'normal') { 0 } else { 1 }
-      $native = [regex]::Match($text, 'kernel=True tasks=True pipes=2 disposed=True output=(\d+) error=(\d+)')
-      $invalid = $false
-      $correct = $delta -eq $expectedDelta -and $native.Success -and (Test-Path -LiteralPath $receipt)
-      if ($native.Success) {
-        $invalid = [Gtest84NativeHandles]::Closed([IntPtr][long]$native.Groups[1].Value) -and
-          [Gtest84NativeHandles]::Closed([IntPtr][long]$native.Groups[2].Value)
-        $correct = $correct -and $invalid
+if ($LASTEXITCODE -ne 0) { throw 'Graphics84 CI compilation failed' }
+$t=$null; $e=$null
+$a=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '30-graphics.ps1'),[ref]$t,[ref]$e)
+$f=@($a.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'GraphicsDex'},$true))
+if($e.Count -or $f.Count -ne 1){throw 'actual GraphicsDex extraction failed'}
+. ([scriptblock]::Create($f[0].Extent.Text))
+[IO.File]::WriteAllText((Join-Path $graphics84Directory 'graphics-tests.dex'),'')
+$graphics84SavedDir=$Dir
+$graphics84SavedEnv=@{}
+foreach($n in 'GESHER_GRAPHICS84_MODE','GESHER_GRAPHICS84_RECEIPT','GESHER_GRAPHICS84_ARGS','GESHER_GRAPHICS84_CWD','GESHER_CI_PROCESS_TRACE','GESHER_GRAPHICS84_OWNER_PID','GESHER_GRAPHICS84_OWNER_FILETIME','GESHER_GRAPHICS84_NONCE','GESHER_GRAPHICS84_EXPECTED_IMAGE'){$graphics84SavedEnv[$n]=[Environment]::GetEnvironmentVariable($n)}
+$Dir=$graphics84Directory
+$env:GESHER_CI_PROCESS_TRACE='1'
+$env:GESHER_GRAPHICS84_CWD=[Environment]::CurrentDirectory
+$env:GESHER_GRAPHICS84_OWNER_PID=[string]$PID
+$env:GESHER_GRAPHICS84_OWNER_FILETIME=[string][Graphics84]::Birth([Graphics84]::GetCurrentProcess())
+$env:GESHER_GRAPHICS84_EXPECTED_IMAGE=$graphics84Exe
+$graphics84Args=@('space argument','quote"argument','Unicode-אב')
+$bcpGraphics=(('core-oj','core-libart','core-icu4j','framework','gesher-app')|ForEach-Object{NoDrive "$Dir/$_.jar"})-join ':'
+$env:GESHER_GRAPHICS84_ARGS=Join-Path $graphics84Directory 'expected-argv.txt'
+[IO.File]::WriteAllLines($env:GESHER_GRAPHICS84_ARGS,[string[]](@("-Xbootclasspath:$bcpGraphics","-Ximage:$(NoDrive "$root/system")/framework/boot.art",'-Xint','-Xusejit:false','-cp',(NoDrive "$Dir/graphics-tests.dex"),'gesher.GraphicsFixture')+$graphics84Args))
+foreach($mode in 'normal','nonzero','missing-marker','timeout','retained'){
+  # Pending receiver root precedes launch/sinks. A partial record never clears it.
+  $g=@{Phase='Launch';Failed=$false;Pending=($mode -eq 'retained');Receipt='UNATTEMPTED';Query='UNATTEMPTED';Wait='UNATTEMPTED';Kill=$false;Closed=$false;Slot=[Graphics84+Slot]::new();Obs=$null;Text='';Document=$null;DocClose='UNATTEMPTED';Delta=0;Before=$script:failed}
+  $env:GESHER_GRAPHICS84_MODE=$mode
+  $env:GESHER_GRAPHICS84_NONCE=[guid]::NewGuid().ToString('N')+[guid]::NewGuid().ToString('N')
+  $env:GESHER_GRAPHICS84_RECEIPT=Join-Path $graphics84Directory "$mode.receipt"
+  while($true){
+    try{
+      if($g.Phase -eq 'Launch'){
+        $g.Phase='UNKNOWN_LAUNCH'
+        $script:GraphicsDexObservation=$null
+        $g.Text=(& {GraphicsDex "fixture-$mode" GraphicsFixture $graphics84Args 1} 6>&1|Out-String)
+        $g.Obs=$script:GraphicsDexObservation
+        $g.Delta=$script:failed-$g.Before
+        $script:failed=$g.Before
+        $g.Phase=if($g.Pending){'Receipt'}else{'Report'}
       }
-      if (Test-Path -LiteralPath $receipt) {
-        $actual = [IO.File]::ReadAllLines($receipt)
-        $correct = $correct -and $actual.Count -eq 5 -and $actual[2] -eq $graphics84Exe -and
-          $actual[3] -eq $env:GESHER_GRAPHICS84_CWD -and $actual[4] -eq 'argv-and-env-exact' -and
-          $text.Contains("pid=$($actual[0]) start=$($actual[1]) expectedimage=$graphics84Exe")
-      }
-      if ($mode -eq 'retained') {
-        $correct = $correct -and $text.Contains('did not complete within ten seconds') -and
-          (Test-Path -LiteralPath ($receipt + '.child'))
-        if (Test-Path -LiteralPath ($receipt + '.child')) {
-          $childReceipt = [IO.File]::ReadAllLines($receipt + '.child')
-          $child = Get-Process -Id ([int]$childReceipt[0]) -ErrorAction SilentlyContinue
-          try {
-            $correct = $correct -and $null -ne $child -and -not $child.HasExited -and
-              $child.StartTime.ToUniversalTime().Ticks -eq [long]$childReceipt[1] -and $child.Path -eq $childReceipt[2]
-          } finally { if ($child) { $child.Dispose() } }
+      if($g.Phase -eq 'Receipt'){
+        if($g.Receipt -ne 'UNATTEMPTED'){throw 'uncertain receipt retained'}
+        $g.Receipt='FAILED'
+        $raw=[IO.File]::ReadAllBytes($env:GESHER_GRAPHICS84_RECEIPT+'.child')
+        if($raw.Length -gt 16384 -or -not $raw.Length){throw 'bounded receipt unavailable'}
+        $utf8=[Text.UTF8Encoding]::new($false,$true)
+        $g.Document=[Text.Json.JsonDocument]::Parse($utf8.GetString($raw))
+        $rootJson=$g.Document.RootElement
+        if($rootJson.ValueKind -ne [Text.Json.JsonValueKind]::Object){throw 'object required'}
+        $keys=@('schema','source','case','nonce','bits','parent_pid','parent_creation_filetime','fixture_pid','fixture_creation_filetime','child_pid','child_creation_filetime','destination_handle_hex16','duplicate_state','expected_create_application_path','parent_access','child_access','inherit','options','publication_phase','source_prepublication_releases','source_child_escrow')
+        $r=@{}
+        foreach($property in $rootJson.EnumerateObject()){
+          if($property.Name -cnotin $keys -or $r.ContainsKey($property.Name)){throw 'unknown/duplicate key'}
+          $r[$property.Name]=$property.Value
         }
-      }
-      if ($mode -eq 'timeout') { $correct = $correct -and $text.Contains('timed out after 1 s') }
-      Write-Host "ACTUAL_GRAPHICS_CONTROL case=$mode native-pipes-invalid=$invalid expected-failures=$expectedDelta actual-failures=$delta elapsed-ms=$($timer.ElapsedMilliseconds)"
-      Write-Host $text
-      if ($correct) { Write-Host "PASS  CI processes: GraphicsDex $mode actual helper/status/argv/ownership" }
-      else { Write-Host "FAIL  CI processes: GraphicsDex $mode actual helper/status/argv/ownership"; $script:failed++ }
-    } finally {
-      if (Test-Path -LiteralPath ($receipt + '.child')) {
-        $childReceipt = [IO.File]::ReadAllLines($receipt + '.child')
-        $owned = Get-Process -Id ([int]$childReceipt[0]) -ErrorAction SilentlyContinue
-        if ($owned) {
-          try {
-            if ($owned.Path -ne $graphics84Exe -or $owned.StartTime.ToUniversalTime().Ticks -ne [long]$childReceipt[1]) {
-              throw 'graphics retained child identity mismatch'
-            }
-            try { $owned.Kill($true) } catch {
-              Write-Host "FAIL  CI processes: graphics child kill failed: $_"
-              $script:failed++
-            }
-            $settled = $false
-            try { $settled = $owned.WaitForExit(5000) } catch {
-              Write-Host "FAIL  CI processes: graphics child kernel completion unavailable: $_"
-              $script:failed++
-            }
-            if (-not $settled) {
-              Write-Host 'FAIL  CI processes: graphics child cleanup failed; same parent retains ownership'
-              $script:failed++
-              while (-not $settled) { try { $settled = $owned.WaitForExit(5000) } catch {} }
-            }
-          } finally { $owned.Dispose() }
+        if($r.Count -ne $keys.Count){throw 'missing key'}
+        foreach($k in $keys|Where-Object{$_ -notin @('bits','parent_pid','fixture_pid','child_pid','inherit','options','source_prepublication_releases')}){if($r[$k].ValueKind -ne [Text.Json.JsonValueKind]::String){throw 'string type required'}}
+        foreach($k in 'bits','parent_pid','fixture_pid','child_pid','options'){if($r[$k].ValueKind -ne [Text.Json.JsonValueKind]::Number){throw 'integer type required'}}
+        foreach($k in 'parent_pid','fixture_pid','child_pid'){if($r[$k].GetUInt32() -eq 0){throw 'positive PID required'}}
+        $releases=@{}
+        if($r.source_prepublication_releases.ValueKind -ne [Text.Json.JsonValueKind]::Object){throw 'release object required'}
+        foreach($v in $r.source_prepublication_releases.EnumerateObject()){
+          if($v.Name -cnotin @('thread','output','error','target') -or $releases.ContainsKey($v.Name) -or $v.Value.ValueKind -ne [Text.Json.JsonValueKind]::String -or $v.Value.GetString() -cne 'DONE'){throw 'release facts rejected'}
+          $releases[$v.Name]=$true
         }
+        if($releases.Count -ne 4){throw 'release keyset'}
+        foreach($k in 'parent_creation_filetime','fixture_creation_filetime','child_creation_filetime'){
+          $v=$r[$k].GetString(); $u=[UInt64]0
+          if(-not [UInt64]::TryParse($v,[ref]$u) -or [string]$u -cne $v){throw 'canonical FILETIME required'}
+        }
+        if($r.schema.GetString() -cne 'GRAPHICS84_HANDLE_TRANSFER_V1' -or $r.source.GetString() -cne $env:GITHUB_SHA -or $env:GITHUB_SHA -cnotmatch '^[0-9a-f]{40}$' -or $r.case.GetString() -cne 'retained' -or $r.nonce.GetString() -cne $env:GESHER_GRAPHICS84_NONCE -or $env:GESHER_GRAPHICS84_NONCE -cnotmatch '^[0-9a-f]{64}$' -or $r.bits.GetUInt32() -ne 64 -or $r.parent_pid.GetUInt32() -ne $PID -or $r.parent_creation_filetime.GetString() -cne $env:GESHER_GRAPHICS84_OWNER_FILETIME -or $r.parent_access.GetString() -cne '0x1040' -or $r.child_access.GetString() -cne '0x101001' -or $r.inherit.ValueKind -ne [Text.Json.JsonValueKind]::False -or $r.options.GetUInt32() -ne 0 -or $r.publication_phase.GetString() -cne 'TRANSFER_PUBLISHED' -or $r.duplicate_state.GetString() -cne 'RETURNED_OWNED_TARGET' -or $r.source_child_escrow.GetString() -cne 'REQUIRES_EXACT_PARENT_NATIVE_EXIT0' -or $r.expected_create_application_path.GetString() -cne $graphics84Exe){throw 'case/source/authority/role mismatch'}
+        $obs=$g.Obs
+        if($null -eq $obs -or $obs.Source -cne $env:GITHUB_SHA -or $obs.Case -cne 'retained' -or $obs.Nonce -cne $env:GESHER_GRAPHICS84_NONCE -or -not $obs.KernelComplete -or -not $obs.Released -or $null -eq $obs.NativeExitCode -or $obs.NativeExitCode -ne 0 -or $obs.KillReserved -or $obs.Pid -ne $r.fixture_pid.GetUInt32() -or [string]$obs.CreationFiletime -cne $r.fixture_creation_filetime.GetString()){throw 'source parent native completion rejected'}
+        $hex=$r.destination_handle_hex16.GetString()
+        if($hex -cnotmatch '^[0-9a-f]{16}$' -or $hex -in @('0000000000000000','ffffffffffffffff','fffffffffffffffe','fffffffffffffffd','fffffffffffffffc','fffffffffffffffb','fffffffffffffffa')){throw 'fullwidth target handle rejected'}
+        $bits=[Convert]::ToUInt64($hex,16)
+        $g.Slot.Handle=[IntPtr]::new([BitConverter]::ToInt64([BitConverter]::GetBytes($bits),0))
+        $g.Query='FAILED'
+        $candidatePid=[Graphics84]::GetProcessId($g.Slot.Handle); $nativeError=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        if($candidatePid -eq 0 -or $candidatePid -ne $r.child_pid.GetUInt32() -or [string][Graphics84]::Birth($g.Slot.Handle) -cne $r.child_creation_filetime.GetString()){throw "receiver native identity rejected:$nativeError"}
+        $g.Slot.State='OWNED';$g.Query='DONE';$g.Receipt='DONE'
+        $g.DocClose='FAILED';$g.Document.Dispose();$g.DocClose='DONE'
+        $g.Phase='Settle'
       }
+      if($g.Phase -eq 'Settle'){
+        if($g.Wait -eq 'FAILED'){throw 'uncertain receiver wait retained'}
+        $g.Wait='FAILED'
+        $w=[Graphics84]::WaitForSingleObject($g.Slot.Handle,0);$err=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        if($w -ne 0 -and $w -ne 258){throw "receiver liveness unavailable:$err"}
+        if($w -eq 0 -and -not $g.Kill){$g.Failed=$true} # live-writer assertion required
+        if($w -eq 258 -and -not $g.Kill){
+          $g.Kill=$true
+          $ok=[Graphics84]::TerminateProcess($g.Slot.Handle,1);$err=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
+          if(-not $ok){$g.Failed=$true} # reservation is never retried
+        }
+        $w=[Graphics84]::WaitForSingleObject($g.Slot.Handle,5000);$err=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        if($w -eq 258){$g.Failed=$true;$g.Wait='UNATTEMPTED';continue}
+        if($w -ne 0){throw "receiver kernel unavailable:$err"}
+        $g.Wait='DONE';$g.Phase='Close'
+      }
+      if($g.Phase -eq 'Close'){
+        [Graphics84]::Close($g.Slot)
+        $g.Closed=$true;$g.Pending=$false;$g.Phase='Report'
+      }
+      if($g.Phase -eq 'Report'){
+        $expected=if($mode -eq 'normal'){0}else{1}
+        if($g.Delta -ne $expected){$g.Failed=$true}
+        $pair=[regex]::Match($g.Text,'kernel=True tasks=True pipes=2 disposed=True output=(\d+) error=(\d+)')
+        if(-not $pair.Success){$g.Failed=$true}
+        elseif(-not [Gtest84NativeHandles]::Closed([IntPtr][long]$pair.Groups[1].Value) -or
+               -not [Gtest84NativeHandles]::Closed([IntPtr][long]$pair.Groups[2].Value)){$g.Failed=$true}
+        if($mode -eq 'retained' -and -not $g.Text.Contains('did not complete within ten seconds')){$g.Failed=$true}
+        if($g.Failed){Write-Host "FAIL  CI processes: GraphicsDex $mode ownership/status";$script:failed++}
+        else{Write-Host "PASS  CI processes: GraphicsDex $mode actual helper/typed ownership"}
+        Write-Host $g.Text
+        break
+      }
+    }catch{
+      $g.Failed=$true
+      # No sink, query, file, close or root-release is needed to park this owner.
+      try{[Threading.Thread]::Sleep(5000)}catch{}
     }
   }
-} finally {
-  $Dir = $graphics84SavedDir
-  foreach ($name in $graphics84SavedEnv.Keys) { [Environment]::SetEnvironmentVariable($name, $graphics84SavedEnv[$name]) }
 }
+# Restore surrounding fixture environment through a protected owner boundary.
+while($true){try{$Dir=$graphics84SavedDir;foreach($n in $graphics84SavedEnv.Keys){[Environment]::SetEnvironmentVariable($n,$graphics84SavedEnv[$n])};break}catch{try{[Threading.Thread]::Sleep(5000)}catch{}}}
