@@ -3,7 +3,7 @@ import copy,unittest
 from source_contract import (INPUTS,BASE,SCOPE,REPO,RID,CALLER,POLICY,BRANCH,WORKFLOW,
     canonical,digest,decode,validate_freeze,validate_plan,ContractError)
 from producer_receipt import OUTPUT_ROLES,OBJECTS,validate_producer
-from windows_controller import verify_fault
+from windows_controller import verify_fault,verify_protection,PROTECTION_CASES
 H='1'*40;G='2'*40;D='3'*64
 
 def data():
@@ -65,6 +65,38 @@ def prefix_data():
       *[dict(event='failedstate_guard',route=i,rejected=1,errno=5)for i in range(11)],
       dict(event='failedstate_unchanged',ledger_and_backend_unchanged=1,resources_before=10,resources_after=10),
       dict(event='injection',reached=counts,outstanding_before_controller_cleanup=0)])
+
+def protection_data(case):
+    rows=[]
+    if case in ('protect_dead','protect_mixed'):phases=['protect_before','protect_after']
+    elif case=='protect_partial':phases=['protect_partial']
+    else:phases=['protect_changed','protect_surgery','protect_surgery_updated','protect_post_surgery_dead']
+    for phase in phases:
+        for i in range(5):
+            row=page(i,phase=phase,ledger_protection=4)
+            if case in ('protect_dead','protect_mixed'):
+                row['live_pages']=4
+                if i==1:row.update(live=0,protection=1,ledger_protection=1)
+            if case=='protect_partial'and i==0:row.update(protection=2,ledger_protection=2)
+            if case=='protect_surgery':
+                want=2 if i<3 else 4
+                if phase!='protect_changed':
+                    row.update(region_page=i if i<2 else 0 if i==2 else i-3,region_size=4096 if i==2 else 8192,live_pages=1 if i==2 else 2,owner_refs=4,owner_views=4)
+                    if i==2:row.update(kind=0,type=0x20000,owner_refs=0,owner_views=0,owner_state=-1);want=4
+                if phase in ('protect_surgery_updated','protect_post_surgery_dead')and i in (2,3):want=2
+                if phase=='protect_post_surgery_dead'and i<2:
+                    row['live_pages']=1
+                    if i==0:want=1;row['live']=0
+                row.update(protection=want,ledger_protection=want if i!=2 or phase=='protect_changed'else 0)
+            rows.append(row)
+    for phase in ('protect_retired','after_cleanup'):
+        rows.extend(page(i,phase=phase,present=0,live=0,live_pages=0,owner_refs=0,state=0x10000,protection=0,type=0)for i in range(5))
+    specs={'protect_dead':[('unaligned',-1,22,0,0),('length_overflow',-1,22,0,0),('dead',-1,12,0,0)],'protect_mixed':[('mixed',-1,12,0,0)],
+           'protect_partial':[('partial_failure',-1,13,2,1)],'protect_surgery':[('whole_read',0,0,5,0),('suffix_write',0,0,2,0),('post_surgery_live',0,0,2,0),('post_surgery_mixed',-1,12,0,0)]}[case]
+    calls=0;injected=0
+    for step,status,error,count,faults in specs:
+        rows.append(dict(event='protection_result',step=step,result=status,errno=error,protect_before=calls,protect_after=calls+count,injected_before=injected,injected_after=injected+faults));calls+=count;injected+=faults
+    return dict(event_rows=rows)
 
 class SourceContracts(unittest.TestCase):
     def test_structural_baselines_are_synthetic_only(self):
@@ -128,4 +160,20 @@ class SourceContracts(unittest.TestCase):
             with self.subTest(number=number):
                 d=prefix_data();change(d)
                 with self.assertRaises(AssertionError):verify_fault(d,'fault_middle',(5,2))
+    def test_protection_oracle_synthetic_baselines(self):
+        for case in PROTECTION_CASES:
+            with self.subTest(case=case):verify_protection(protection_data(case),case)
+    def test_dead_mixed_partial_surgery_protection_mutants(self):
+        cases=[('protect_dead',lambda d:d['event_rows'][1].update(protection=4)),
+               ('protect_mixed',lambda d:d['event_rows'][-1].update(protect_after=1)),
+               ('protect_partial',lambda d:d['event_rows'][2].update(protection=2,ledger_protection=2)),
+               ('protect_partial',lambda d:d['event_rows'][-1].update(errno=12)),
+               ('protect_partial',lambda d:d['event_rows'][-1].update(injected_after=0)),
+               ('protect_surgery',lambda d:d['event_rows'][0].update(owner_refs=99)),
+               ('protect_surgery',lambda d:d['event_rows'][8].update(ledger_protection=2)),
+               ('protect_surgery',lambda d:d['event_rows'].pop(10))]
+        for index,(case,change)in enumerate(cases):
+            with self.subTest(index=index):
+                value=protection_data(case);change(value)
+                with self.assertRaises(AssertionError):verify_protection(value,case)
 if __name__=='__main__':unittest.main()

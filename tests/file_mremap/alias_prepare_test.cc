@@ -27,14 +27,16 @@ int main() {
     calls = 0; injected=0;
     {
       PreparedAlias out;
-      status = PrepareAliasFromNoExceptions({0, 0, 4096, 4096, PAGE_READWRITE}, out);
-      empty = out.node.empty() && !out.owner;
+      status = PrepareAliasFromNoExceptions({0, 0, 4096, 4096, PAGE_READWRITE,5*4096}, out);
+      empty = out.node.empty() && !out.owner && out.source_protection.empty();
       budget = -1;
       if (status == PrepareStatus::NoMemory) { ++failures; if (!empty) ++failed; }
       else if (status == PrepareStatus::Ok) {
         ++successes;
         if (out.node.empty() || !out.owner || out.owner->state != SectionState::Borrowed ||
-            out.owner->handle != nullptr || out.node.mapped().live_pages != 1) ++failed;
+            out.owner->handle != nullptr || out.node.mapped().live_pages != 1 ||
+            out.node.mapped().actual_protection.size()!=1 || out.node.mapped().actual_protection[0]!=PAGE_READWRITE ||
+            out.source_protection.size()!=5 || out.source_protection[0]!=PAGE_READWRITE || out.source_protection[4]!=PAGE_READWRITE) ++failed;
       } else ++failed;
     }
     const bool released = live == initial;
@@ -49,12 +51,13 @@ int main() {
   budget = -1;
   PreparedAlias out;
   if (PrepareAliasFromNoExceptions({0, 0, 0, 4096, PAGE_READWRITE}, out) != PrepareStatus::InvalidSize ||
-      !out.node.empty() || out.owner || failures < 3 || successes != 1) ++failed;
+      !out.node.empty() || out.owner || !out.source_protection.empty() || failures < 3 || successes != 1) ++failed;
   {
     SectionOwner owner; owner.state=SectionState::Live; owner.refs=3;
     Region source; source.kind=Kind::kView; source.shared=true; source.owner=&owner;
     source.group=0x10000; source.size=5*4096; source.view_protection=PAGE_READWRITE;
     source.live.assign(5,true); source.live_pages=5;
+    source.actual_protection.assign(5,PAGE_READWRITE);
     bool surgery_success=false; int surgery_failures=0;
     for(long point=0;point<64;++point) {
       long before=live; budget=point; calls=0; injected=0;

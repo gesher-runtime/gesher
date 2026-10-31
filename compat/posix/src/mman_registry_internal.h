@@ -54,10 +54,12 @@ struct AliasInput {
   uint64_t offset;
   size_t padding, length, page;
   ULONG protection;
+  size_t source_length = 0; // zero means alias length in direct helper controls
 };
 struct PreparedAlias {
   RegionMap::node_type node;
   std::unique_ptr<SectionOwner> owner;
+  std::vector<DWORD> source_protection; // detached, no OS ownership
 };
 enum class PrepareStatus { Ok, NoMemory, InvalidSize, InternalFailure };
 PrepareStatus PrepareAlias(const AliasInput&, PreparedAlias&) noexcept;

@@ -243,6 +243,34 @@ void InvalidateSharedAliases(State& s, uintptr_t begin, size_t length) {
   }
 }
 
+// State::lock held. Complete logical preflight precedes ANY protection change,
+// including a mixed range's live prefix. Unregistered stack/reserve ranges retain
+// the legacy Win32 fallback; known registry holes are never resurrected by it.
+bool ProtectionPreflight(State& s, uintptr_t begin, size_t length) {
+  const uintptr_t end=begin+length;
+  auto entry=FindRegion(s,begin);
+  if(entry==s.regions.end())entry=s.regions.lower_bound(begin);
+  for(;entry!=s.regions.end() && entry->first<end;++entry) {
+    const Region& region=entry->second;
+    const uintptr_t low=std::max(begin,entry->first);
+    const uintptr_t high=std::min(end,entry->first+region.size);
+    if(region.kind==Kind::kHole) { errno=ENOMEM; return false; }
+    if(region.live.size()!=region.size/s.page_size) {
+      s.owner_failure=true; errno=EIO; return false;
+    }
+    for(size_t i=(low-entry->first)/s.page_size;i<(high-entry->first)/s.page_size;++i)
+      if(!region.live[i]) { errno=ENOMEM; return false; }
+    if(region.owner && (region.kind!=Kind::kView || !region.shared ||
+       region.owner->state!=SectionState::Live || region.owner->refs==0 ||
+       region.actual_protection.size()!=region.live.size() ||
+       region.live_pages!=static_cast<size_t>(std::count(region.live.begin(),region.live.end(),true)) ||
+       std::find(region.actual_protection.begin(),region.actual_protection.end(),0)!=region.actual_protection.end())) {
+      s.owner_failure=true; errno=EIO; return false;
+    }
+  }
+  return true;
+}
+
 // Slice A never retires source. It duplicates the retained section, not a
 // descriptor integer or pathname. All allocation occurs before a view exists.
 void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int flags) {
@@ -275,7 +303,7 @@ void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int
     errno = EIO; return MAP_FAILED;
   }
   PreparedAlias prepared;
-  const PrepareStatus status = PrepareAlias({from.offset, padding, length, s.page_size, protection}, prepared);
+  const PrepareStatus status = PrepareAlias({from.offset, padding, length, s.page_size, protection, from.size}, prepared);
   if (status != PrepareStatus::Ok) {
     errno = status == PrepareStatus::NoMemory ? ENOMEM : status == PrepareStatus::InvalidSize ? EINVAL : EIO;
     return MAP_FAILED;
@@ -320,6 +348,7 @@ void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int
     owner->refs = 1;
     owner->state = SectionState::Live;
     source_region.owner = owner;
+    source_region.actual_protection = std::move(prepared.source_protection);
   }
   ++owner->refs;
   published.position->second.owner = owner;
@@ -1327,22 +1356,46 @@ int mprotect(void* addr, size_t length, int prot) {
   State& s = state();
   std::lock_guard<std::mutex> registry_guard(s.lock);
   if(s.owner_failure) { errno=EIO; return -1; }
-  InvalidateSharedAliases(s, reinterpret_cast<uintptr_t>(addr), length);
+  const uintptr_t begin=reinterpret_cast<uintptr_t>(addr);
+  if(begin%s.page_size || length>SIZE_MAX-(s.page_size-1)) { errno=EINVAL; return -1; }
+  length=RoundUp(length,s.page_size);
+  if(begin>UINTPTR_MAX-length) { errno=EINVAL; return -1; }
+  if(!ProtectionPreflight(s,begin,length)) return -1;
+  InvalidateSharedAliases(s,begin,length);
   const DWORD protection = PageProtection(prot);
   const bool ok = ForEachRun(addr, length, [&](uint8_t* p, size_t n, const MEMORY_BASIC_INFORMATION& info) {
-    // Copy-on-write views stay copy-on-write when made writable.
     DWORD want = protection;
     if (info.Type == MEM_MAPPED &&
         (info.AllocationProtect == PAGE_WRITECOPY ||
-         info.AllocationProtect == PAGE_EXECUTE_WRITECOPY)) {
-      want = CopyOnWrite(want);
+         info.AllocationProtect == PAGE_EXECUTE_WRITECOPY)) want=CopyOnWrite(want);
+    uintptr_t at=reinterpret_cast<uintptr_t>(p),end=at+n;
+    while(at<end) {
+      auto entry=FindRegion(s,at);
+      uintptr_t stop=end;
+      if(entry!=s.regions.end()) stop=std::min(stop,entry->first+entry->second.size);
+      else {
+        auto next=s.regions.upper_bound(at);
+        if(next!=s.regions.end())stop=std::min(stop,next->first);
+      }
+      if(entry!=s.regions.end() && entry->second.owner) {
+        Region& region=entry->second;
+        for(;at<stop;at+=s.page_size) {
+          DWORD old;
+          if(!FileAliasProtect(reinterpret_cast<void*>(at),s.page_size,want,&old)) {
+            region.operation_error=GetLastError(); return false;
+          }
+          // Earlier successful pages stay changed if a later page fails. No
+          // liveness/ref mutation, rollback claim, allocation, or reentry.
+          region.actual_protection[(at-entry->first)/s.page_size]=want;
+        }
+      } else {
+        DWORD old;
+        if(!VirtualProtect(reinterpret_cast<void*>(at),stop-at,want,&old) &&
+           !(info.State==MEM_RESERVE && VirtualAlloc(reinterpret_cast<void*>(at),stop-at,MEM_COMMIT,want)!=nullptr)) return false;
+        at=stop;
+      }
     }
-    DWORD old;
-    if (VirtualProtect(p, n, want, &old)) return true;
-    // Reserved, not committed: a thread stack's pages below its committed
-    // part (mmap always commits). ART protects the bottom of each stack for
-    // its implicit stack overflow checks (fault_signals.cc).
-    return info.State == MEM_RESERVE && VirtualAlloc(p, n, MEM_COMMIT, want) != nullptr;
+    return true;
   });
   if (!ok) {
     errno = EACCES;
