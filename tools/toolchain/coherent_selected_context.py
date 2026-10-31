@@ -4,6 +4,7 @@ Source-only WIP: this module supplies no authority until an immutable guard
 actually emits the exact source and policy values and the full policy is peered.
 """
 import re
+from pathlib import Path
 
 REPOSITORY='gesher-runtime/gesher'
 REPOSITORY_ID='1426153186'
@@ -36,6 +37,16 @@ def context(env,selection):
 def descriptor(env):
     context(env,'selected-minimum')
     return dict(TUPLE,source=env['GITHUB_SHA'],policy_ref=env['GESHER_COHERENT_FULL_POLICY_REF'])
+
+def check_descriptor(value,expected):
+    assert set(value)==set(TUPLE)|{'source','policy_ref'}
+    assert all(value[k]==v for k,v in TUPLE.items())
+    assert value['source']==expected['GITHUB_SHA']
+    assert expected['GITHUB_REPOSITORY']==REPOSITORY and expected['GITHUB_REPOSITORY_ID']==REPOSITORY_ID
+    caller=(Path(__file__).resolve().parents[2]/PATH).read_text(encoding='utf-8')
+    pattern=r'(?m)^    uses: '+re.escape(REPOSITORY+'/'+POLICY_PATH+'@')+r'([0-9a-f]{40})$'
+    pins=re.findall(pattern,caller)
+    assert len(pins)==1 and value['policy_ref']==REPOSITORY+'/'+POLICY_PATH+'@'+pins[0]
 
 if __name__=='__main__':
     import json,os
