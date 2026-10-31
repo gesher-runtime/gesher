@@ -30,7 +30,7 @@ assert addition.count(b'BEGIN FONT_RESOURCE_CHARACTERIZATION_ADDITIVE') == 1
 assert addition.count(b'add_executable(') == addition.count(b'EXCLUDE_FROM_ALL') == 1
 assert b'target_link_libraries(font_environment_resource_characterization PRIVATE gesher_posix)' in addition
 assert addition.endswith(b'# END FONT_RESOURCE_CHARACTERIZATION_ADDITIVE\n')
-for name in ('resource-manifest.py', 'resource-import-inventory.py', 'resource-pe-imports.py', 'resource-protocol.py','resource-code-provider.py','resource-code-envelope.py'):
+for name in ('resource-manifest.py', 'resource-import-inventory.py', 'resource-pe-imports.py', 'resource-protocol.py','resource-code-provider.py','resource-code-envelope.py','resource-witness.py'):
     ast.parse(current('tools/fonts/' + name))
 spec=importlib.util.spec_from_file_location('resource_manifest', ROOT/'tools/fonts/resource-manifest.py')
 module=importlib.util.module_from_spec(spec);sys.path.insert(0,str(ROOT/'tools/fonts'));spec.loader.exec_module(module)
@@ -80,11 +80,19 @@ for name in ('resource-import-inventory.py','resource-pe-imports.py'):
     path='tools/fonts/'+name
     assert current(path)==subprocess.check_output(['git','show','a8e79c27639200c3a3ee9162fb053a22727df3f6:'+path])
 assert current(module.ROLES['fixture'])==subprocess.check_output(['git','show','a8e79c27639200c3a3ee9162fb053a22727df3f6:'+module.ROLES['fixture']])
-assert len(module.INPUTS)==25
+assert len(module.INPUTS)==27
 assert "'CODE_ENVELOPE_SCRIPT'" in runner and 'resource-code-envelope.py' in runner
 assert runner.index('Get-PreflightFileProfile $codePath') < runner.index('$child=Start-ResourceRole')
 assert runner.index('Read-ResourceLoadedUCRT $prewarm') < runner.index('$child.process.StandardInput.Write("START`n")')
 assert runner.index("$stage.code.cache=$cache[0]") < runner.index('$child=Start-ResourceRole')
 assert runner.count("Start-ResourceRole $stage 'imports'")==1
 assert not any(word in runner for word in ('uf /c','dt -r','!critsec ','.frame /r','r rcx'))
-print('FONT_RESOURCE_CODE_SOURCE_PASS original3decoder_native_exact=1 provider_is_consumer_local=1 source_inputs=25 native_processes_started=0')
+print('FONT_RESOURCE_CODE_SOURCE_PASS original3decoder_native_exact=1 provider_is_consumer_local=1 source_inputs=27 native_processes_started=0')
+
+# Witness transport does not add a process role or mutate old tools/native code.
+assert runner.index("$cold=Wait-ResourceInputReady") < runner.index('$child.process.StandardInput.Write("START`n")')
+assert runner.index('$frames=Read-ResourceWitnessFrames') < runner.index('Send-ResourceControlOnce $capture (New-ResourceOwnerTail')
+assert "schema=2;role='SIGNED_SYSTEM32_UCRT_CODE'" in runner and '@{version=2;legacy_bytes=' in runner
+assert 'fixture_frame_bindings' in current('tools/fonts/resource-manifest.py').decode()
+assert not any(token in runner for token in ('dt -r','!locks','!critsec ','.frame /r','r rcx','uf /c'))
+print('FONT_RESOURCE_WITNESS_SOURCE_PASS metadata_schema=2 five_roles=UNCHANGED guarded_owner_tail=1 local_native=0')

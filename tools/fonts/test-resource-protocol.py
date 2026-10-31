@@ -233,5 +233,32 @@ class Protocol(unittest.TestCase):
         with self.assertRaises(p.ProtocolError): p.NativeLifetime(handler_complete=1).disposition()
 
 
+class InputGateControls(unittest.TestCase):
+    def test_one_held_write_and_cold_capability(self):
+        from resource_protocol import InputGate
+        proof=dict.fromkeys(('profile','schema','metadata','whole_function','preceding_callee','held_callback','same_address','time_reserve'),True)
+        for role,kind in (('prewarm','qd'),('capture','owner')):
+            gate=InputGate(role,11,12,1000)
+            gate.marker(11,12,count=1,prompt=True,alive=True,now=10)
+            gate.reserve(kind=kind,proof=proof,rooted_buffer_task=True,now=20)
+            self.assertFalse(gate.may_release())
+            gate.finish(full_write=True,qd=True,kernel=True,io=True,child_alive=True,now=30)
+            self.assertTrue(gate.may_release())
+            with self.assertRaises(Exception):gate.reserve(kind=kind,proof=proof,rooted_buffer_task=True,now=40)
+    def test_marker_proof_write_cleanup_negatives(self):
+        from resource_protocol import InputGate
+        for field,value in (('pid',13),('child',13),('count',2),('prompt',False),('alive',False),('now',1000)):
+            gate=InputGate('capture',11,12,1000);args=dict(pid=11,child=12,count=1,prompt=True,alive=True,now=10);args[field]=value
+            with self.subTest(field=field),self.assertRaises(Exception):gate.marker(**args)
+        proof=dict.fromkeys(('profile','schema','metadata','whole_function','preceding_callee','held_callback','same_address','time_reserve'),True)
+        for field in proof:
+            gate=InputGate('capture',11,12,1000);gate.marker(11,12,count=1,prompt=True,alive=True,now=10)
+            with self.subTest(field=field),self.assertRaises(Exception):gate.reserve(kind='owner',proof=proof|{field:False},rooted_buffer_task=True,now=20)
+        for field in ('full_write','qd','kernel','io','child_alive'):
+            gate=InputGate('capture',11,12,1000);gate.marker(11,12,count=1,prompt=True,alive=True,now=10);gate.reserve(kind='owner',proof=proof,rooted_buffer_task=True,now=20)
+            args=dict(full_write=True,qd=True,kernel=True,io=True,child_alive=True,now=30);args[field]=False
+            with self.subTest(field=field),self.assertRaises(Exception):gate.finish(**args)
+            self.assertTrue(gate.rooted);self.assertFalse(gate.may_release())
+
 if __name__ == "__main__":
     unittest.main()

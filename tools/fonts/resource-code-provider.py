@@ -1,12 +1,14 @@
 """Pure SIGNED_SYSTEM32_UCRT_CODE byte admission; never opens a path.
 
 CI parent owns the signature, native System32 path and retained Read/ShareRead
-handle. This module authenticates its full framed bytes and caches only111
-bytes. Disk equality is not loaded-image trust, alignment or lock ownership.
+handle. This module authenticates full framed bytes and caches111 code bytes
+plus bounded independent function/unwind metadata. Disk equality is not loaded-image trust, alignment or lock ownership.
 """
 import hashlib
 import re
 import struct
+import importlib.util
+from pathlib import Path
 
 MAX_BYTES = 128 * 1024 * 1024
 MAX_SECTIONS = 96
@@ -44,7 +46,7 @@ def window(data, start):
     require(table+count*40 <= headers <= len(data) and headers <= image_size,
             'headers/image bounds')
     require(start+111 <= image_size, 'window image bound')
-    virtual = [(0, headers)]; raw_ranges = [(0, headers)]; selected = []
+    virtual = [(0, headers)]; raw_ranges = [(0, headers)]; selected = []; sections = []
     for index in range(count):
         at = table+index*40
         vs, rva, size, raw = unpack('<IIII', at+8)
@@ -57,6 +59,7 @@ def window(data, start):
             span(raw, size)
             require(all(raw+size <= lo or raw >= hi for lo, hi in raw_ranges), 'raw overlap')
             raw_ranges.append((raw, raw+size))
+        sections.append({'rva':rva,'extent':extent,'raw_size':size,'raw':raw,'flags':flags})
         if rva <= start and start+111 <= rva+size:
             require(flags & 0x20000000, 'window not executable')
             selected.append((raw+start-rva, index))
@@ -65,12 +68,15 @@ def window(data, start):
     cache = data[offset:offset+111]
     return {'start_rva':start, 'end_rva':start+95, 'cache_length':111,
             'comparison_last_rva':start+109, 'file_offset':offset, 'section':section,
-            'size_of_image':image_size, 'cache_hex':cache.hex(),
+            'size_of_image':image_size, 'section_facts':sections,
+            'exception_directory':list(unpack('<II',opt+112+3*8)) if opt_size>=144 and unpack('<I',opt+108)[0]>=4 else [0,0],
+            'cache_hex':cache.hex(),
             'cache_sha256':hashlib.sha256(cache).hexdigest()}
 
 def admit(data, entry, context):
-    require(type(entry) is dict and set(entry) == {'role','name','bytes','sha256','version'},
+    require(type(entry) is dict and set(entry) == {'schema','role','name','bytes','sha256','version'},
             'provider frame schema')
+    require(type(entry['schema']) is int and entry['schema']==2,'provider schema2')
     require(entry['role'] == ROLE and entry['name'] == 'ucrtbase.dll', 'provider role/name')
     require(type(entry['bytes']) is int and 64 <= entry['bytes'] <= MAX_BYTES, 'provider bytes')
     require(type(data) is bytes and len(data) == entry['bytes'], 'provider byte count')
@@ -83,6 +89,11 @@ def admit(data, entry, context):
     require(all(type(context[k]) is str and re.fullmatch('[1-9][0-9]{0,19}',context[k])
                 for k in ('run','attempt')), 'run/attempt')
     result = window(data, start); require(result['size_of_image'] == extent, 'profile image extent')
+    spec=importlib.util.spec_from_file_location('resource_witness',Path(__file__).with_name('resource-witness.py'))
+    witness=importlib.util.module_from_spec(spec);spec.loader.exec_module(witness)
+    result['function']=witness.runtime_function(data,result['section_facts'],result['exception_directory'],start)
+    result['unwind']=witness.unwind_prologue(data,result['section_facts'],result['function'],bytes.fromhex(result['cache_hex']))
+    result['basis']=witness.controlflow_basis(result)
     import json
     record_hash = hashlib.sha256(json.dumps(entry,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     key = '\n'.join((context['source'],context['run'],context['attempt'],ROLE,digest,

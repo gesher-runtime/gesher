@@ -408,6 +408,7 @@ function Get-ResourcePathRoles {
   PE_CDB='admitted signed stage root + cdb.exe';PE_DBGENG='admitted signed stage root + dbgeng.dll';PE_DBGHELP='admitted signed stage root + dbghelp.dll'
   PYTHON_APPLICATION_SOURCE='Get-Command Application -All execution precedence; single first Source only'
   IMPORT_SCRIPT='verified checkout root + fixed import inventory script';CHILD_PROVIDER='owned prepared child ucrtbase/ntdll module filename'
+  SYSTEM_NTDLL_SCHEMA='native64 fixed System32/ntdll.dll signed retained schema identity'
   SYSTEM_UCRT_CODE='native64 fixed System32/ucrtbase.dll signed retained provider'
   CODE_ENVELOPE_SCRIPT='current source exact envelope script'
   PREWARM_MODULE='owned prewarm process bounded module filename'
@@ -562,6 +563,127 @@ function Read-ResourceTypeState([string]$Text) {
  @{state=$(if($schema -and $named){'TYPE_SCHEMA_PARTIAL'}elseif($named){'TYPE_ENUM_ONLY'}else{'TYPE_UNAVAILABLE'});raw=$raw;full_layout_qualified=$false;owner_qualified=$false}
 }
 
+function New-ResourceWitnessPrewarmCommands([string]$Extension,[int]$Start) {
+ $commands=New-ResourceCodeCommands (New-PreflightCommands $Extension) $Start
+ $commands.Substring(0,$commands.Length-2)+'.echo FONT_RESOURCE_PREWARM_INPUT_READY'+"`n"
+}
+function New-ResourceWitnessCaptureCommands([string]$Extension,[uint32]$Writer,[uint32]$Handler,[int]$Start) {
+ $commands=New-ResourceCodeCommands (New-ResourceCommands $Extension $Writer $Handler) $Start
+ $commands.Substring(0,$commands.Length-2)+'.echo FONT_RESOURCE_WITNESS_INPUT_READY'+"`n"
+}
+function New-ResourceOwnerTail([uint64]$Address) {
+ if($Address -lt 65536 -or $Address -gt 0x00007fffffffffd7 -or $Address%8){throw 'UNAVAILABLE: canonical aligned one-object address'}
+ ".echo FONT_RESOURCE_OWNER_BEGIN`n"+'dt ntdll!_RTL_CRITICAL_SECTION OwningThread 0x'+$Address.ToString('x16')+"`n.echo FONT_RESOURCE_OWNER_END`nqd`n"
+}
+function Wait-ResourceInputReady($Record,[string]$Kind,[long]$Deadline) {
+ if($Kind -cnotin @('PREWARM','WITNESS') -or $Record.role -cne $(if($Kind -ceq 'PREWARM'){'prewarm'}else{'capture'})){throw 'Wrong input-ready role'}
+ $pattern='(?m)^FONT_RESOURCE_'+$Kind+'_INPUT_READY\r?\n\d+:[0-9a-fA-F]+> $'
+ while($true){
+  Update-BoundedPipe $Record.out;Update-BoundedPipe $Record.err
+  $null=Get-ResourceRemaining $clock.ElapsedMilliseconds $Deadline
+  if($Record.process.Id -ne $Record.pid -or $Record.handle.IsClosed -or $Record.process.WaitForExit(0) -or $Record.err.Text.Length){throw 'UNAVAILABLE: input-ready process/pipe'}
+  $text=$Record.out.Text.ToString();$matches=[regex]::Matches($text,$pattern)
+  if($matches.Count -gt 1){throw 'UNAVAILABLE: duplicate input-ready marker'}
+  if($matches.Count -eq 1){
+   Emit-PreflightRecord 'FONT_RESOURCE_READY_RAW' @{role=$Record.role;pid=$Record.pid;stdout=$text;sha256=(Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($text)));owner_qualified=$false}
+   return $text
+  }
+  Start-Sleep -Milliseconds 5
+ }
+}
+function Send-ResourceControlOnce($Record,[string]$Text,[long]$Deadline) {
+ if($Record.control_reserved -or $Record.state -cne 'RUNNING' -or $Record.role -cnotin @('prewarm','capture')){throw 'One control tail only'}
+ $bytes=[Text.Encoding]::ASCII.GetBytes($Text)
+ if($bytes.Length -gt 512 -or [Text.Encoding]::ASCII.GetString($bytes) -cne $Text -or !$Text.EndsWith("qd`n")){throw 'Fixed control tail encoding/budget'}
+ if($Record.role -ceq 'prewarm' -and $Text -cne "qd`n"){throw 'Prewarm never reads instance'}
+ if($Record.role -ceq 'capture' -and $Text -cne "qd`n" -and $Text -cnotmatch '^\.echo FONT_RESOURCE_OWNER_BEGIN\ndt ntdll!_RTL_CRITICAL_SECTION OwningThread 0x[0-9a-f]{16}\n\.echo FONT_RESOURCE_OWNER_END\nqd\n$'){throw 'One fixed field tail grammar'}
+ $null=Get-ResourceRemaining $clock.ElapsedMilliseconds $Deadline
+ if($Record.process.Id -ne $Record.pid -or $Record.handle.IsClosed -or $Record.process.WaitForExit(0)){throw 'Owned control process changed/exited'}
+ # Reserve BEFORE WriteAsync, even a synchronous failure forbids resubmission.
+ $Record.control_reserved=$true;$Record.writeBuffer=$bytes
+ Emit-PreflightRecord 'FONT_RESOURCE_CONTROL_PLAN' @{role=$Record.role;pid=$Record.pid;text=$Text;sha256=(Get-ResourceCodeHash $bytes);one_write=$true;owner_qualified=$false}
+ $Record.writeTask=$Record.process.StandardInput.BaseStream.WriteAsync($bytes,0,$bytes.Length)
+ while(!$Record.writeTask.IsCompleted){Update-BoundedPipe $Record.out;Update-BoundedPipe $Record.err;$null=Get-ResourceRemaining $clock.ElapsedMilliseconds $Deadline;Start-Sleep -Milliseconds 1}
+ $null=$Record.writeTask.GetAwaiter().GetResult();$Record.process.StandardInput.Close()
+}
+function Assert-ResourceWitnessProfiles([string]$Text,$Cache,$Code,$Ntdll) {
+ $null=Read-ResourceLoadedUCRT $Text $Code.path $Code.base $Cache.size_of_image $Cache.profile.version
+ $blocks=[regex]::Matches($Text,'(?mis)^([0-9a-f`]{8,17})\s+([0-9a-f`]{8,17})\s+ntdll\s+[^\r\n]*\r?\n(.*?)(?=^\d+:[0-9a-f]+>|\z)')
+ if($blocks.Count -ne 1){throw 'UNAVAILABLE: unique current ntdll block'}
+ $block=$blocks[0];$base=[Convert]::ToUInt64($block.Groups[1].Value.Replace('`',''),16);$end=[Convert]::ToUInt64($block.Groups[2].Value.Replace('`',''),16);$body=$block.Groups[3].Value
+ $paths=[regex]::Matches($body,'(?m)^\s+Image path:\s+([^\r\n]+)\r?$');$sizes=[regex]::Matches($body,'(?m)^\s+ImageSize:\s+([0-9a-fA-F]+)\s*\r?$');$versions=[regex]::Matches($body,'(?m)^\s+File version:\s+([^\r\n]+)\r?$')
+ if($base -ne $Ntdll.base -or $end -le $base -or $end-$base -ne $Ntdll.extent -or $paths.Count -ne 1 -or $paths[0].Groups[1].Value.Trim() -ine $Ntdll.path -or $sizes.Count -ne 1 -or [Convert]::ToUInt64($sizes[0].Groups[1].Value,16) -ne $Ntdll.extent -or $versions.Count -ne 1 -or $versions[0].Groups[1].Value.Trim() -cne $Ntdll.version){throw 'UNAVAILABLE: retained current ntdll profile/module mismatch'}
+}
+function Read-ResourceWitnessSchema([string]$Text) {
+ $state=Read-ResourceTypeState $Text
+ if((Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($state.raw))) -cne '6aba31bc35c03db9c20cc841ed6e889616b23cc77e7cdd601855aabb1bd841c9'){throw 'UNAVAILABLE: exact six-root-field schema'}
+ @{size=0x28;fields=6;owner_offset=0x10;owner_width=8;schema_sha256='6aba31bc35c03db9c20cc841ed6e889616b23cc77e7cdd601855aabb1bd841c9';private_PDB_attested=$false}
+}
+function Read-ResourceWitnessFrames([string]$Text,$Identity,$Cache,$Fixture) {
+ if(!$Identity.writer -or !$Identity.handler -or $Identity.writer -eq $Identity.handler){throw 'Distinct held native IDs required'}
+ $basis=$Cache.basis;$base=[uint64]$Fixture.ucrt_base;$results=@{}
+ foreach($role in @('WRITER','HANDLER')){
+  $tid=if($role -ceq 'WRITER'){$Identity.writer}else{$Identity.handler}
+  $block=[regex]::Matches($Text,'(?ms)^FONT_RESOURCE_'+$role+'\r?\n(.*?)(?=^\d+:[0-9a-f]+> \.echo FONT_RESOURCE_|\z)')
+  if($block.Count -ne 1 -or !$block[0].Groups[1].Value.Contains(('~~[0x'+$tid.ToString('x')+'] kL 0x14'))){throw 'UNAVAILABLE: same native thread block'}
+  $rows=[regex]::Matches($block[0].Groups[1].Value,'(?m)^([0-9a-f`]{8,17})\s+([0-9a-f`]{8,17})\s+([^\r\n]+)\r?$')
+  if($rows.Count -lt 3 -or $rows.Count -gt 20 -or $block[0].Value -match '(?i)unwind|stack unwind|following frames may'){throw 'UNAVAILABLE: bounded reliable frame transcript'}
+  $last=[uint64]0;$pc=[uint64]0;$bound=@{};$matched=0;$callerMatched=0;$previousSite=''
+  $firstSite=$rows[0].Groups[3].Value
+  if(($role -ceq 'WRITER' -and $firstSite -cnotmatch '^ntdll!NtWaitForAlertByThreadId\+0x[0-9a-f]+$') -or ($role -ceq 'HANDLER' -and $firstSite -cnotmatch '^ntdll!NtWaitForSingleObject\+0x[0-9a-f]+$')){throw 'UNAVAILABLE: actual held native wait frame'}
+  foreach($row in $rows){
+   $sp=[Convert]::ToUInt64($row.Groups[1].Value.Replace('`',''),16);$ret=[Convert]::ToUInt64($row.Groups[2].Value.Replace('`',''),16);$site=$row.Groups[3].Value
+   if($sp -le $last){throw 'UNAVAILABLE: nonmonotonic stack frames'};$last=$sp
+   if($role -ceq 'WRITER' -and $site -cmatch '^ntdll!RtlEnterCriticalSection\+0x[0-9a-f]+$'){
+    if($ret -ne $base+$basis.writer_return_rva){throw 'UNAVAILABLE: preceding callee return'};$matched++
+   }
+   if($role -ceq 'HANDLER' -and $site -cmatch '^ucrtbase!common_putenv_nolock<char>\+0x[0-9a-f]+$'){
+    if($ret -ne $base+$basis.handler_return_rva -or $pc -lt $base+$Cache.function.nolock_begin -or $pc -ge $base+$Cache.function.nolock_end){throw 'UNAVAILABLE: held nolock return/range'};$matched++
+   }
+   if($site -cmatch '^ucrtbase!common_putenv<char>\+0x[0-9a-f]+$'){
+    $expected=if($role -ceq 'WRITER'){$basis.writer_return_rva}else{$basis.handler_return_rva}
+    if($pc -ne $base+$expected){throw 'UNAVAILABLE: adjacent caller frame PC'};$callerMatched++
+   }
+   foreach($name in @('Invalid','Writer','Handler')){
+    $f=$Fixture.frames[$name]
+    if($pc -ge $Fixture.base+$f.begin_rva -and $pc -lt $Fixture.base+$f.end_rva -and $site -cmatch '^font_environment_resource_characterization(?:\+0x[0-9a-f]+|!.*)$'){
+     if($name -ceq 'Invalid' -and $previousSite -cnotmatch '^KERNELBASE!WaitForSingleObjectEx\+0x[0-9a-f]+$'){throw 'UNAVAILABLE: callback is not in actual native wait'}
+     if($bound.ContainsKey($name)){throw 'UNAVAILABLE: duplicate fixture function frame'};$bound[$name]=$pc
+    }
+   }
+   $pc=$ret;$previousSite=$site
+  }
+  if($matched -ne 1 -or $callerMatched -ne 1 -or ($role -ceq 'WRITER' -and (!$bound.ContainsKey('Writer') -or $bound.ContainsKey('Invalid') -or $bound.ContainsKey('Handler'))) -or ($role -ceq 'HANDLER' -and (!$bound.ContainsKey('Invalid') -or !$bound.ContainsKey('Handler') -or $bound.ContainsKey('Writer')))){throw 'UNAVAILABLE: exact current callback/creator ancestry'}
+  $results[$role]=@{tid=$tid;fixture_frames=$bound;callee_return_validated=$true}
+ }
+ $results
+}
+function Get-ResourceWitnessAddress($Cache,[uint64]$Base,$CodeResult) {
+ if($Cache.function.begin -ne $Cache.start_rva -or $Cache.basis.function_begin -ne $Cache.start_rva -or $Cache.basis.function_end -ne $Cache.function.end -or $Cache.function.end-$Cache.start_rva -ne 69){throw 'UNAVAILABLE: independent whole function anchor'}
+ $ends=@($CodeResult.rows|ForEach-Object{[int]($_.rva-$Cache.start_rva+$_.hex.Length/2)}|Where-Object{$_ -le 69})
+ if(($ends -join ',') -cne ($Cache.basis.instruction_ends -join ',')){throw 'UNAVAILABLE: full decoded primary instruction boundaries'}
+ $rva=[uint64]$Cache.basis.candidate_rva;$region=$Cache.basis.virtual_object
+ if($rva%8 -or $rva -lt $region.rva -or $rva+0x28 -gt $region.rva+$region.extent -or !($region.flags -band 0x80000000) -or ($region.flags -band 0x20000000) -or $Base -gt 0x00007fffffffffd7-$rva){throw 'UNAVAILABLE: checked writable nonexec object bound'}
+ $address=$Base+$rva;$null=New-ResourceOwnerTail $address;$address
+}
+function Read-ResourceOwnerField([string]$Text,[uint64]$Address,[uint32]$Handler,[uint32]$Writer) {
+ if(!$Handler -or !$Writer -or $Handler -eq $Writer){throw 'Same-child distinct DWORD IDs required'}
+ $blocks=[regex]::Matches($Text,'(?ms)^FONT_RESOURCE_OWNER_BEGIN\r?\n(.*?)^FONT_RESOURCE_OWNER_END\r?$')
+ if($blocks.Count -ne 1 -or [Text.Encoding]::UTF8.GetByteCount($blocks[0].Value) -gt 8192){throw 'UNAVAILABLE: unique bounded one-field block'}
+ $raw=$blocks[0].Groups[1].Value
+ $command='dt ntdll!_RTL_CRITICAL_SECTION OwningThread 0x'+$Address.ToString('x16')
+ $expected='\A\d+:[0-9a-fA-F]+> '+[regex]::Escape($command)+'\r?\n\s*\+0x010 OwningThread\s+: (?:0x)?([0-9a-fA-F]{8}`[0-9a-fA-F]{8})\r?\n\d+:[0-9a-fA-F]+> \.echo FONT_RESOURCE_OWNER_END\r?\n?\z'
+ if($raw -cnotmatch $expected){throw 'UNAVAILABLE: exact full-width one-field output (no format inference)'}
+ $owner=[Convert]::ToUInt64($Matches[1].Replace('`',''),16)
+ if(!$owner -or $owner -ne [uint64]$Handler -or $owner -eq [uint64]$Writer){throw 'UNAVAILABLE: SAMEADDRESS full native TID differs'}
+ @{address=$Address;offset=0x10;width=8;owner=$owner;handler=[uint64]$Handler;writer=[uint64]$Writer;same_address_owner_observed=$true;full_qualification=$false}
+}
+function Assert-ResourceWitnessRootTasks($Owner) {
+ foreach($record in $Owner.processes.Values){
+  if($record.control_reserved -and (!$record.writeBuffer -or !$record.writeTask)){throw 'Control buffer/task lost from durable root'}
+  if($record.control_reserved -and !$record.writeTask.IsCompleted){throw 'Incomplete rooted one-write IO'}
+ }
+}
 function Get-ResourceRemaining([long]$Now,[long]$Deadline) {
  if($Now -lt 0 -or $Now -ge $Deadline){throw 'Original monotonic phase deadline expired'}
  $Deadline-$Now
@@ -669,16 +791,26 @@ try{
  # lmv's numeric File version corresponds to the exact ProductVersion field.
  if($codeIdentity.file_version -cne ($codeProfile.version+' (WinBuild.160101.0800)')){throw 'UNAVAILABLE: exact observed disk FileVersion'}
  $stage.code.profile=$codeProfile
- $codeEntry=@{role='SIGNED_SYSTEM32_UCRT_CODE';name='ucrtbase.dll';bytes=$codeStream.Length;sha256=$codeIdentity.sha256;version=$codeIdentity.product_version}
+ $codeEntry=@{schema=2;role='SIGNED_SYSTEM32_UCRT_CODE';name='ucrtbase.dll';bytes=$codeStream.Length;sha256=$codeIdentity.sha256;version=$codeIdentity.product_version}
  $stage.code.frame=$codeEntry
  Emit-PreflightRecord 'FONT_RESOURCE_CODE_DISK_ADMISSION' @{path=$codePath;identity=$codeIdentity;frame=$codeEntry;profile=$codeProfile;lock='RETAINED_READ_SHARE_READ';memory_attestation=$false;owner_qualified=$false}
+ $ntdllPath=Resolve-ResourceLiteral 'SYSTEM_NTDLL_SCHEMA' ($system+'\ntdll.dll')
+ $ntdllStream=[IO.File]::Open($ntdllPath,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+ $stage.code.ntdllStream=$ntdllStream;$stage.handles.Add(@{stream=$ntdllStream;handle=$ntdllStream.SafeFileHandle})
+ if($ntdllStream.Length -lt 64 -or $ntdllStream.Length -gt 134217728){throw 'Native ntdll identity-file bound'}
+ if($stage.handles.Count -gt 128){throw 'Session held-stream cap'}
+ $ntdllIdentity=Get-PreflightFileProfile $ntdllPath
+ $ntdllVersions=@{'bcfe8a70a371a7d2fbcb429ab0a9e170aeebe4d73ae08d03a2da8fedec2efc78'='10.0.20348.5622';'160ef9b82e2895ef48fa031cb1cf683a8b123febf7cf7d5590cd3104864424b3'='10.0.26100.33648'}
+ if(!$ntdllVersions.ContainsKey($ntdllIdentity.sha256) -or $ntdllIdentity.product_version -cne $ntdllVersions[$ntdllIdentity.sha256] -or $ntdllIdentity.file_version -cne ($ntdllIdentity.product_version+' (WinBuild.160101.0800)')){throw 'UNAVAILABLE: pinned native ntdll schema provider'}
+ if(($codeProfile.start -eq 0xb84b4) -ne ($ntdllIdentity.product_version -ceq '10.0.20348.5622')){throw 'UNAVAILABLE: exact UCRT/NTDLL profile pair'}
+ $stage.code.ntdll=@{path=$ntdllPath;version=$ntdllIdentity.product_version;sha256=$ntdllIdentity.sha256}
  $pythonSource=Get-ResourcePythonSource
  $python=Resolve-ResourceLiteral 'PYTHON_APPLICATION_SOURCE' $pythonSource
  $psi=New-PreflightStartInfo $python ($work+'\imports') $windows ($work+'\temp') @((Resolve-ResourceLiteral 'CODE_ENVELOPE_SCRIPT' ($checkout+'\tools\fonts\resource-code-envelope.py'))) $false
  $imports=Start-ResourceRole $stage 'imports' $psi
  $header=[Text.Encoding]::UTF8.GetBytes((@{entries=$entries}|ConvertTo-Json -Depth 8 -Compress)+"`n")
  $legacyLength=[long]$header.Length;foreach($entry in $entries){$legacyLength+=[long]$entry.bytes+22}
- $outer=[Text.Encoding]::UTF8.GetBytes((@{version=1;legacy_bytes=$legacyLength;context=@{source=$env:GITHUB_SHA;run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT}}|ConvertTo-Json -Depth 8 -Compress)+"`n")
+ $outer=[Text.Encoding]::UTF8.GetBytes((@{version=2;legacy_bytes=$legacyLength;context=@{source=$env:GITHUB_SHA;run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT}}|ConvertTo-Json -Depth 8 -Compress)+"`n")
  $stage.code.outer=$outer;Send-ResourceBytes $imports $outer $outer.Length;Send-ResourceBytes $imports $header $header.Length
  foreach($entry in $entries){
   $stream=@($stage.handles|Where-Object{$_.stream.Name -ceq ($stage.root+'\'+$entry.name)})[0].stream
@@ -692,7 +824,7 @@ try{
  $codeStream.Position=0;$buffer=[byte[]]::new(65536);$total=0L
  while(($read=$codeStream.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $codeEntry.bytes){throw 'Provider stream overflow'};Send-ResourceBytes $imports $buffer $read}
  if($total -ne $codeEntry.bytes -or $codeStream.ReadByte() -ne -1){throw 'Provider full stream/EOF mismatch'}
- $providerEnd=[Text.Encoding]::ASCII.GetBytes("`nFONT_UCRT_CODE_END_V1`n`0`n");Send-ResourceBytes $imports $providerEnd $providerEnd.Length
+ $providerEnd=[Text.Encoding]::ASCII.GetBytes("`nFONT_UCRT_CODE_END_V2`n`0`n");Send-ResourceBytes $imports $providerEnd $providerEnd.Length
  $imports.process.StandardInput.Close()
  Wait-ResourceRole $imports 90000
  $cacheRows=@($imports.out.Text.ToString().Split("`n")|Where-Object{$_.Trim()}|ForEach-Object{ConvertFrom-Json -InputObject $_ -AsHashtable})
@@ -722,16 +854,29 @@ try{
  if($ucrt.Count -ne 1 -or $ucrt[0].FileName -ine $codePath -or $ucrt[0].ModuleMemorySize -ne $cache.size_of_image){throw 'Prepared current provider differs from signed retained cache'}
  $codeBase=[uint64]$ucrt[0].BaseAddress.ToInt64()
  $stage.code.loaded=@{base=$codeBase;extent=$ucrt[0].ModuleMemorySize;path=$codePath;version=$codeEntry.version}
- $prewarmFile=$work+'\commands\prewarm.txt';Write-ResourceCommand $stage $prewarmFile ((New-PreflightCommands $extension)+"`n")
+ $ntdllModule=@($modules|Where-Object{$_.ModuleName -ieq 'ntdll.dll'})
+ if($ntdllModule.Count -ne 1 -or $ntdllModule[0].FileName -ine $ntdllPath){throw 'UNAVAILABLE: current ntdll module'}
+ $stage.code.ntdll.base=[uint64]$ntdllModule[0].BaseAddress.ToInt64();$stage.code.ntdll.extent=$ntdllModule[0].ModuleMemorySize
+ $exeModule=$child.process.MainModule
+ if($exeModule.FileName -ine $probe -or !$receipt.fixture_frame_bindings){throw 'UNAVAILABLE: exact fixture module/frame bindings'}
+ $stage.fixture=@{base=[uint64]$exeModule.BaseAddress.ToInt64();frames=$receipt.fixture_frame_bindings;ucrt_base=$codeBase}
+ foreach($f in $stage.fixture.frames.Values){if($f.exe_sha256 -cne $receipt.outputs['font_environment_resource_characterization.exe'] -or $f.object_sha256 -cne $receipt.compiled_objects.fixture.object_sha256 -or $f.map_sha256 -cne $receipt.outputs['font_environment_resource_characterization.map']){throw 'UNAVAILABLE: current fixture frame source'} }
+ $prewarmFile=$work+'\commands\prewarm.txt';Write-ResourceCommand $stage $prewarmFile (New-ResourceWitnessPrewarmCommands $extension $codeProfile.start)
  $prewarm=Start-ResourceRole $stage 'prewarm' (New-PreflightStartInfo $tool ($work+'\prewarm') $windows ($work+'\temp') (New-PreflightArguments $child.pid $prewarmFile $system ($work+'\cache') $extension) $false)
- $prewarm.process.StandardInput.Close();Wait-ResourceRole $prewarm 90000
+ $cold=Wait-ResourceInputReady $prewarm 'PREWARM' 90000
+ Assert-ResourceWitnessProfiles $cold $cache $stage.code.loaded $stage.code.ntdll
+ $null=Read-ResourceWitnessSchema $cold
+ $coldCode=Read-ResourceCodeWindow $cold $codeBase $codeProfile.start $cache.cache_hex
+ $stage.code.armedAddress=Get-ResourceWitnessAddress $cache $codeBase $coldCode
+ Send-ResourceControlOnce $prewarm "qd`n" 90000
+ Wait-ResourceRole $prewarm 90000
  Assert-PreflightRawMarkers $prewarm.out.Text.ToString();Assert-OwnedAlive $child.process $child.pid $child.handle
  $loaded=Read-ResourceLoadedUCRT $prewarm.out.Text.ToString() $codePath $codeBase $cache.size_of_image $codeEntry.version
  Emit-PreflightRecord 'FONT_RESOURCE_CODE_PREWARM_BINDING' $loaded
  Assert-StageMembership $stage.expected @(Get-StageInventory $stage.root)
  $phase='PREWARM_COMPLETE';Emit-PreflightRecord 'FONT_RESOURCE_PHASE' @{phase=$phase;gallery='NOT_DISABLED';loader='NOT_EXHAUSTIVE';help='OMITTED';owner_qualified=$false}
  $null=Get-ResourceRemaining $clock.ElapsedMilliseconds 90000
- $captureFile=$work+'\commands\capture.txt';Write-ResourceCommand $stage $captureFile ((New-ResourceCodeCommands (New-ResourceCommands $extension $identity.writer $identity.handler) $codeProfile.start)+"`n")
+ $captureFile=$work+'\commands\capture.txt';Write-ResourceCommand $stage $captureFile (New-ResourceWitnessCaptureCommands $extension $identity.writer $identity.handler $codeProfile.start)
  $holdDeadline=[Math]::Min(300000,$clock.ElapsedMilliseconds+180000)
  $readyDeadline=[Math]::Min($holdDeadline,$clock.ElapsedMilliseconds+10000)
  $child.process.StandardInput.Write("START`n");$child.process.StandardInput.Flush()
@@ -742,7 +887,22 @@ try{
  if($held.writer -ne $identity.writer -or $held.handler -ne $identity.handler){throw 'Thread identity changed'}
  $phase='HOLD_READY';Emit-PreflightRecord 'FONT_RESOURCE_PHASE' @{phase=$phase;identity=$held;capture_preconditions_only=$true;owner_qualified=$false}
  $capture=Start-ResourceRole $stage 'capture' (New-PreflightStartInfo $tool ($work+'\capture') $windows ($work+'\temp') (New-PreflightArguments $child.pid $captureFile $system ($work+'\cache') $extension) $false)
- $capture.process.StandardInput.Close();Wait-ResourceRole $capture ([Math]::Min($holdDeadline-10000,$clock.ElapsedMilliseconds+120000))
+ $captureDeadline=[Math]::Min($holdDeadline-10000,$clock.ElapsedMilliseconds+120000)
+ $heldRaw=Wait-ResourceInputReady $capture 'WITNESS' $captureDeadline
+ Assert-OwnedAlive $child.process $child.pid $child.handle
+ Assert-ResourceWitnessProfiles $heldRaw $cache $stage.code.loaded $stage.code.ntdll
+ $null=Read-ResourceWitnessSchema $heldRaw
+ $heldCode=Read-ResourceCodeWindow $heldRaw $codeBase $codeProfile.start $cache.cache_hex
+ $heldAddress=Get-ResourceWitnessAddress $cache $codeBase $heldCode
+ if($heldAddress -ne $stage.code.armedAddress){throw 'UNAVAILABLE: cold/held address basis changed'}
+ $frames=Read-ResourceWitnessFrames $heldRaw $held $cache $stage.fixture
+ Emit-PreflightRecord 'FONT_RESOURCE_WITNESS_BASIS' @{address=$heldAddress;basis=$cache.basis;frames=$frames;owner_observed=$false}
+ Assert-OwnedAlive $child.process $child.pid $child.handle
+ Send-ResourceControlOnce $capture (New-ResourceOwnerTail $heldAddress) $captureDeadline
+ Wait-ResourceRole $capture $captureDeadline
+ $owner=Read-ResourceOwnerField $capture.out.Text.ToString() $heldAddress $held.handler $held.writer
+ Emit-PreflightRecord 'FONT_RESOURCE_ONE_ADDRESS_OWNER' $owner
+ Assert-ResourceWitnessRootTasks $stage
  Assert-PreflightRawMarkers $capture.out.Text.ToString();Assert-OwnedAlive $child.process $child.pid $child.handle
  # Raw complete capture was emitted by Wait-ResourceRole BEFORE all gates.
  $loaded=Read-ResourceLoadedUCRT $capture.out.Text.ToString() $codePath $codeBase $cache.size_of_image $codeEntry.version
@@ -758,7 +918,10 @@ try{
  Wait-ResourceRole $child ([Math]::Min(330000,$clock.ElapsedMilliseconds+20000))
  if($child.err.Text.Length -or $child.out.Text.ToString() -cne ($preparedText+'FONT_RESOURCE_HOLD_READY pid='+$held.pid+' writer='+$held.writer+' handler='+$held.handler+"`n"+'FONT_RESOURCE_COMPLETE pid='+$held.pid+' writer='+$held.writer+' handler='+$held.handler+"`n")){throw 'Same child exact COMPLETE receipt mismatch'}
  $phase='COMPLETE';$ok=$true
-}catch{$phase='FAILED';Emit-PreflightRecord 'FONT_RESOURCE_FAILURE' @{reason=$_.Exception.Message;phase=$phase;owner_qualified=$false};throw}finally{
+}catch{
+ foreach($r in @($stage.processes['capture'],$stage.processes['prewarm'])){if($r.out){$partial=$r.out.Text.ToString();Emit-PreflightRecord 'FONT_RESOURCE_WITNESS_FAILURE_RAW' @{role=$r.role;pid=$r.pid;stdout=$partial;stderr=$r.err.Text.ToString();sha256=(Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($partial)));owner_qualified=$false}}}
+ foreach($r in @($stage.processes['capture'],$stage.processes['prewarm'])){if($r.process -and $r.state -ceq 'RUNNING' -and !$r.control_reserved){try{Send-ResourceControlOnce $r "qd`n" ([Math]::Min(330000,$clock.ElapsedMilliseconds+2000))}catch{}}}
+ $phase='FAILED';Emit-PreflightRecord 'FONT_RESOURCE_FAILURE' @{reason=$_.Exception.Message;phase=$phase;owner_qualified=$false};throw}finally{
  # The reserved Normal root owns every process/pipe/handle before Start.
  $all=$true
  foreach($role in @('capture','prewarm','imports','child','help')){$record=$stage.processes[$role];try{if($record.state -ceq 'DISPOSED'){$completion[$role]=$true}else{Stop-ExactOwnedProcess $record.process $completion $role}}catch{$all=$false};if(!$completion[$role]){$all=$false}}
@@ -769,6 +932,7 @@ try{
    if($null -ne $task){try{$null=$task.Wait(100)}catch{};if(!$task.IsCompleted){$all=$false}}
   }
  }
+ if($phase -ceq 'FAILED'){foreach($r in @($stage.processes['capture'],$stage.processes['prewarm'])){if($r.out){$partial=$r.out.Text.ToString();Emit-PreflightRecord 'FONT_RESOURCE_WITNESS_CLEANUP_RAW' @{role=$r.role;pid=$r.pid;stdout=$partial;stderr=$r.err.Text.ToString();sha256=(Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($partial)));owner_qualified=$false}}}}
  $streamsClosed=$false;$cleanupError=$null
  if($all){try{foreach($held in $stage.handles){$held.stream.Dispose()};$streamsClosed=@($stage.handles|Where-Object{!$_.handle.IsClosed}).Count -eq 0;if($stage.root){Remove-ExactOwnedStage $stage $work $streamsClosed}}catch{$cleanupError=$_.Exception.Message}}
  $roleStates=@{};foreach($role in $stage.processes.Keys){$r=$stage.processes[$role];$roleStates[$role]=@{state=$r.state;pid=$r.pid;kernel_completed=$completion[$role]}}

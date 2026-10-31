@@ -20,8 +20,8 @@ def image():
     return data
 
 def provider_fixture():
-    data=bytes(image());digest=hashlib.sha256(data).hexdigest()
-    return data, {'role':p['ROLE'],'name':'ucrtbase.dll','bytes':len(data),
+    data=bytes(runpy.run_path(str(ROOT/'test-resource-witness.py'))['image']());digest=hashlib.sha256(data).hexdigest()
+    return data, {'schema':2,'role':p['ROLE'],'name':'ucrtbase.dll','bytes':len(data),
                   'sha256':digest,'version':'SYNTHETIC_ONLY'}
 
 class Code(unittest.TestCase):
@@ -67,7 +67,7 @@ class Code(unittest.TestCase):
             self.assertEqual(record['context'],context);self.assertFalse(record['owner_qualified'])
             key='\n'.join((context['source'],'1','1',p['ROLE'],entry['sha256'],'1000','111',record['input_record_sha256']))
             self.assertEqual(record['cache_key_sha256'],hashlib.sha256(key.encode('ascii')).hexdigest())
-            for key,value in (('role','TOOL'),('name','cdb.exe'),('bytes',True),('bytes',len(data)-1),
+            for key,value in (('schema',1),('schema',True),('role','TOOL'),('name','cdb.exe'),('bytes',True),('bytes',len(data)-1),
                               ('version','wrong'),('sha256','0'*64)):
                 bad=entry|{key:value};self.reject(lambda:p['admit'](data,bad,context))
             for bad in (context|{'source':'x'},context|{'run':1},context|{'attempt':'0'},context|{'extra':'x'}):
@@ -83,19 +83,19 @@ class Code(unittest.TestCase):
         import types
         provider=types.SimpleNamespace(**p)
         profiles=p['admit'].__globals__['PROFILES'];original=dict(profiles)
-        def frame(old=old,entry=entry,payload=data,tail=b'\nFONT_UCRT_CODE_END_V1\n\0\n',extra=b'',version=1):
+        def frame(old=old,entry=entry,payload=data,tail=b'\nFONT_UCRT_CODE_END_V2\n\0\n',extra=b'',version=2):
             return json.dumps({'version':version,'legacy_bytes':len(old),'context':context}).encode()+b'\n'+old+json.dumps(entry).encode()+b'\n'+payload+tail+extra
         def decode(value):return list(e['envelope'](io.BytesIO(value),legacy,pe,provider))
         try:
             profiles[entry['sha256']]=('SYNTHETIC_ONLY',0x1000,0x100000)
             rows=decode(frame());self.assertEqual(len(rows),4);self.assertEqual(rows[3]['record'],'PROVIDER_CACHE')
             for value in (frame(old=old+b'x'),frame(old=old[:-22]),frame(extra=b'x'),frame(tail=b''),
-                frame(tail=b'\nFONT_RESOURCE_PE_END\n'),frame(payload=data[:-1]),frame(version=2),
+                frame(tail=b'\nFONT_RESOURCE_PE_END\n'),frame(payload=data[:-1]),frame(version=1),
                 frame(entry=entry|{'role':'TOOL'}),frame(entry=entry|{'bytes':-1}),
                 frame(entry=entry|{'bytes':p['MAX_BYTES']+1}),frame(entry=entry|{'sha256':'0'*64}),
                 frame(entry=entry|{'offset':1}),frame(entry=entry|{'name':'C:\\arbitrary.dll'}),
                 frame(extra=frame()),frame()[:-len(data)-24],b' '*16385,
-                frame().replace(b'"version": 1',b'"version": 1, "version": 1',1)):
+                frame().replace(b'"version": 2',b'"version": 2, "version": 2',1)):
                 self.reject(lambda:decode(value))
         finally:profiles.clear();profiles.update(original)
     def test_old_codecs_immutable(self):
