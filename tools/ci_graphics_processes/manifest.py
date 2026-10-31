@@ -49,3 +49,19 @@ def manifest(context,producer_id,rows):
 def validate(value,context,producer_id,rows):
     assert canonical(value)==canonical(manifest(context,producer_id,rows))
     return hashlib.sha256(canonical(value)).hexdigest()
+
+def validate_download(directory,context,producer_id,rows):
+    directory=Path(directory)
+    files=list(directory.iterdir())
+    assert len(files)==1 and files[0].name=='graphicsdex-source-manifest.json'
+    assert files[0].is_file() and not files[0].is_symlink()
+    raw=files[0].read_bytes();assert 0<len(raw)<=262144
+    def pairs(values):
+        result={}
+        for key,value in values:
+            assert key not in result
+            result[key]=value
+        return result
+    value=json.loads(raw,object_pairs_hook=pairs,parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite')))
+    assert raw==canonical(value)+b'\n'
+    return validate(value,context,producer_id,rows)

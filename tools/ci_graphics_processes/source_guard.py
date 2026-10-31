@@ -4,6 +4,8 @@ These predicates alone do not authenticate a caller or trigger CI.
 """
 import hashlib
 import json
+from pathlib import Path
+import re
 import subprocess
 
 BASE='b0de972bb543e0dd20d125c990817fb5b3407112'
@@ -32,3 +34,19 @@ def verify_inventory(base,current,pins):
     assert set(current)==set(base)|set(ADDITIONS) and set(pins)==set(ADDITIONS)
     assert all(current[p]==v for p,v in base.items())
     assert all(current[p]=={'mode':'100644','blob':pins[p]} for p in ADDITIONS)
+
+def verify_checkout(root,source,pins):
+    root=Path(root)
+    assert type(source)is str and re.fullmatch('[0-9a-f]{40}',source)
+    def git(*args):return subprocess.check_output(['git','-C',str(root),*args])
+    assert git('rev-parse','HEAD').decode().strip()==source
+    assert subprocess.run(['git','-C',str(root),'merge-base','--is-ancestor',BASE,source],capture_output=True).returncode==0
+    current=inventory(root,source);verify_inventory(inventory(root,BASE),current,pins)
+    # Read actual working bytes, avoiding index/stat-cache based assertions.
+    for name,row in current.items():
+        path=root/name;assert path.is_file() and not path.is_symlink()
+        raw=path.read_bytes()
+        actual=hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()
+        assert actual==row['blob']
+    assert not git('status','--porcelain','--untracked-files=all').strip()
+    return current
