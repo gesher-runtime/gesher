@@ -27,7 +27,7 @@ jobs:
           HOST_GUARD='267bb2f7868dd85405e9336d3ec29a131535d7eb'
           HOST_TRUST='.github/workflows/fonts-owner-host-trusted-source.yml'
           HOST_GUARD_BLOB='399d2ffdf430dce00634021ddd4d21553ee7d262'
-          TEMPLATE='134915a1291bc10cc9e036ea543e6e0767cd4bd7'
+          TEMPLATE='7eb7485fb0e539508ed61581b5378733d964cc24'
           CALLER='.github/workflows/fonts-resource-component.yml'
           TRUST='.github/workflows/fonts-resource-trusted-source.yml'
           REPO='gesher-runtime/gesher'
