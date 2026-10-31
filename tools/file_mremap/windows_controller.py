@@ -213,7 +213,7 @@ def verify_protection(actor,case):
     assert case in PROTECTION_CASES
     rows=actor['event_rows'];ledger=[r for r in rows if r.get('event')=='ledger']
     expected_phases={'protect_retired','after_cleanup'}
-    if case in ('protect_dead','protect_mixed'):expected_phases|={'protect_before','protect_after'}
+    if case in ('protect_dead','protect_mixed'):expected_phases|={'protect_before','protect_after','protect_survivor'}
     elif case=='protect_partial':expected_phases|={'protect_partial'}
     else:expected_phases|={'protect_changed','protect_surgery','protect_surgery_updated','protect_post_surgery_dead'}
     assert {r['phase']for r in ledger}==expected_phases
@@ -234,7 +234,9 @@ def verify_protection(actor,case):
                 assert sum(v['live']for v in siblings)==r['live_pages']
             else:assert case=='protect_surgery'and r['page']==2 and r['kind']==0 and r['type']==0x20000 and r['live']==1
             want=4;live=1
-            if case in ('protect_dead','protect_mixed')and r['page']==1:want=1;live=0
+            if case in ('protect_dead','protect_mixed'):
+                if r['page']==1:want=1;live=0
+                if phase=='protect_survivor'and r['page']==2:want=2
             if case=='protect_partial'and r['page']==0:want=2
             if case=='protect_surgery':
                 want=2 if r['page']<3 else 4
@@ -243,7 +245,7 @@ def verify_protection(actor,case):
                 if phase=='protect_post_surgery_dead'and r['page']==0:want=1;live=0
             assert (r['protection'],r['live'])==(want,live)
     operations=[r for r in rows if r.get('event')=='protection_result']
-    wanted={'protect_dead':[('unaligned',-1,22,0,0),('length_overflow',-1,22,0,0),('dead',-1,12,0,0)],'protect_mixed':[('mixed',-1,12,0,0)],
+    wanted={'protect_dead':[('unaligned',-1,22,0,0),('length_overflow',-1,22,0,0),('dead',-1,12,0,0),('live_survivor',0,None,1,0)],'protect_mixed':[('mixed',-1,12,0,0),('live_survivor',0,None,1,0)],
             'protect_partial':[('partial_failure',-1,13,2,1)],
             'protect_surgery':[('whole_read',0,None,5,0),('suffix_write',0,None,2,0),('post_surgery_live',0,None,2,0),('post_surgery_mixed',-1,12,0,0)]}[case]
     assert len(operations)==len(wanted)

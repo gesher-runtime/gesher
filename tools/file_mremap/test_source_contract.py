@@ -68,7 +68,7 @@ def prefix_data():
 
 def protection_data(case):
     rows=[]
-    if case in ('protect_dead','protect_mixed'):phases=['protect_before','protect_after']
+    if case in ('protect_dead','protect_mixed'):phases=['protect_before','protect_after','protect_survivor']
     elif case=='protect_partial':phases=['protect_partial']
     else:phases=['protect_changed','protect_surgery','protect_surgery_updated','protect_post_surgery_dead']
     for phase in phases:
@@ -77,6 +77,7 @@ def protection_data(case):
             if case in ('protect_dead','protect_mixed'):
                 row['live_pages']=4
                 if i==1:row.update(live=0,protection=1,ledger_protection=1)
+                if phase=='protect_survivor'and i==2:row.update(protection=2,ledger_protection=2)
             if case=='protect_partial'and i==0:row.update(protection=2,ledger_protection=2)
             if case=='protect_surgery':
                 want=2 if i<3 else 4
@@ -91,7 +92,7 @@ def protection_data(case):
             rows.append(row)
     for phase in ('protect_retired','after_cleanup'):
         rows.extend(page(i,phase=phase,present=0,live=0,live_pages=0,owner_refs=0,state=0x10000,protection=0,type=0)for i in range(5))
-    specs={'protect_dead':[('unaligned',-1,22,0,0),('length_overflow',-1,22,0,0),('dead',-1,12,0,0)],'protect_mixed':[('mixed',-1,12,0,0)],
+    specs={'protect_dead':[('unaligned',-1,22,0,0),('length_overflow',-1,22,0,0),('dead',-1,12,0,0),('live_survivor',0,0,1,0)],'protect_mixed':[('mixed',-1,12,0,0),('live_survivor',0,0,1,0)],
            'protect_partial':[('partial_failure',-1,13,2,1)],'protect_surgery':[('whole_read',0,0,5,0),('suffix_write',0,0,2,0),('post_surgery_live',0,0,2,0),('post_surgery_mixed',-1,12,0,0)]}[case]
     calls=0;injected=0
     for step,status,error,count,faults in specs:
@@ -165,7 +166,7 @@ class SourceContracts(unittest.TestCase):
             with self.subTest(case=case):verify_protection(protection_data(case),case)
     def test_dead_mixed_partial_surgery_protection_mutants(self):
         cases=[('protect_dead',lambda d:d['event_rows'][1].update(protection=4)),
-               ('protect_mixed',lambda d:d['event_rows'][-1].update(protect_after=1)),
+               ('protect_mixed',lambda d:next(r for r in d['event_rows']if r.get('step')=='mixed').update(protect_after=1)),
                ('protect_partial',lambda d:d['event_rows'][2].update(protection=2,ledger_protection=2)),
                ('protect_partial',lambda d:d['event_rows'][-1].update(errno=12)),
                ('protect_partial',lambda d:d['event_rows'][-1].update(injected_after=0)),

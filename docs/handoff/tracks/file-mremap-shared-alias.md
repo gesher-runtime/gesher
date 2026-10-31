@@ -4,7 +4,8 @@ The independent9c7 blocker is corrected in source, not yet compiled or independe
 accepted. Under State::lock, mprotect validates alignment and nonwrapping rounded
 range, then preflights the ENTIRE registered overlap before any alias invalidation
 or OS protection change. Any known logical dead page or placeholder makes both
-dead-only and mixed live/dead requests fail ENOMEM. This includes known registry
+dead-only and mixed live/dead requests fail ENOMEM. A live-only subrange of the
+same partly retired view remains protectable and has its own native control. This includes known registry
 holes regardless of original mapping kind; healthy live pages retain their normal
 behavior. Unregistered stack/reserved memory retains the old Win32 commit fallback.
 The preflight allocates nothing and rejects malformed promoted ledgers EIO with
