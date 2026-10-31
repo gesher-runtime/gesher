@@ -6,10 +6,15 @@ test "${GITHUB_ACTIONS:-}" = true
 test "${GITHUB_JOB:-}" = diagnostic-producer
 test "${GESHER_MINIMUM_JOIN_COLLECT_AUTHORIZED_SOURCE:-}" = "${GITHUB_SHA:?}"
 root=$(git rev-parse --show-toplevel)
-llvm=$(realpath "${1:?authenticated pristine llvm-mingw root}")
+archive=$(realpath "${1:?pristine official compiler archive}")
 work="${RUNNER_TEMP:?}/minimum-join-collector-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"
 test ! -e "$work"
 mkdir "$work"
+printf '%s  %s\n' 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4 "$archive" | sha256sum --check --strict
+mkdir "$work/toolchain"
+tar -xJf "$archive" -C "$work/toolchain"
+llvm="$work/toolchain/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64"
+test -x "$llvm/bin/x86_64-w64-mingw32-clang"
 source="$work/source"
 git init -q "$source"
 git -C "$source" remote add origin https://github.com/mingw-w64/mingw-w64.git
