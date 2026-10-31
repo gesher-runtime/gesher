@@ -1,3 +1,64 @@
+# Current adverse matrix and pure receipt SOURCE checkpoint
+
+SOURCE WIP, not complete Slice A freeze or execution readiness. New dedicated
+failure actor/controller cells cover alias publication/map/query, middle surgery
+query/second-prefix protection/map3/unmap2/placeholder split, prefix/suffix/partial
+protection, source-first unmap, alias-first plain unmap, final owner close, and
+publication plus failed view rollback. No native cell was compiled or run.
+
+The dedicated target macro now exposes an allocation-free lock-held registry
+snapshot into caller storage, with independent real VirtualQuery and retained
+failed-handle/rollback-view observations. It records all five source pages before
+and after cleanup, actual page/region/live counts, protections, owner refs/state,
+placeholder state, retained failure owner and backing pins. These are test-only
+symbols; ordinary production still calls the fixed Win32 backend. The actor tests
+second-prefix readability, performs first-prefix cleanup, and probes the second
+prefix again. Missing/unhit injection or false ledger fails the controller oracle.
+
+Failed registry containment blocks mmap/mmap64, shared alias/equal and anonymous
+mremap, mprotect and allocating madvise DONTNEED/FREE/REMOVE before their OS
+side effects. The latter two newly guarded entry paths hold the same State lock;
+healthy bodies and nonallocating hint cases retain their prior behavior. This is
+a registry-wide guard, not a claim that an arbitrary healthy mapping is corrupt.
+The failed-state fixture checks eleven allocating routes, unchanged surviving
+registry/OS pages, unchanged wrapped-operation counters and warmed handle census.
+This does not measure every internal OS allocation. munmap remains available for
+cleanup; failed owner invariant is never silently cleared.
+
+Persistent close/rollback failure remains FAILED_CONTAINMENT, native exit nonzero
+and overall suite FAILED even when owned child kernel/IO/directory cleanup completes.
+A recovered OS handle/view is not inferred from a diagnostic record. Exactly one
+final failed CloseHandle attempt is required. Nondestructive intact-source rejection
+has a distinct PASS_NONDESTRUCTIVE_REJECTION observation, not release/full-A proof.
+
+The helper budget fixture emits measured real operator-new calls/injected counts,
+statuses, outstanding storage and source-owner ref invariants for alias/surgery
+through the noexceptions caller. It does not invent an OS-acquisition zero. Actual
+object commands, same pinned allocator/STL/unwind behavior and production-entry
+preparation OS-call ordering still require future CI qualification.
+
+New pure source_contract.py and producer_receipt.py validate immutable Git-source
+inventory/leaf hashes/envelope/history, removable root block, preserved anonymous
+suffix/native2, current caller/attempt/repository/policy anchors, complete producer
+role sets, actual API run/job/artifact cross-bindings, source/object stamps, effective
+last exception flag and target-only failure macro, and real allocator rows. Their
+synthetic controls run no native process. These validators are data checks: they
+cannot authenticate caller-provided JSON or grant policy authority. Existing Windows
+controller receipt checks remain structurally supplied by a future immutable gate;
+the new contracts are not yet wired into a real producer/caller/download pipeline.
+
+Concrete remainder: DIFFERENT whole-source/role peer must inspect the new snapshots,
+failed-state lock graph, adverse matrix and native fixture/API assumptions; dedicated
+immutable authority/producer/caller and selected supplier bridge have NOT been added.
+Base2e41 and Native997 diverge. A host/helper-only qualification can be a narrower
+future prerequisite, never complete A. Full A still requires genuine current runtime,
+translator and both guest ABIs, Linux reference and both Windows host results, actual
+artifact/member/source/compiler role proof and cleanup. See own external supplier-DAG
+addendum for exact immutable ordinary inputs. Full resize/private/inplace/EOF/FIXED
+mremap/DONTUNMAP and all original full/hardware/release gates remain OPEN.
+
+Historical checkpoints below are superseded only where stated above.
+
 # Current lifetime/controller/build SOURCE checkpoint
 
 New lifetime_cases.c implements four real alias-chain close-order/partial/middle cases plus a separately launched peer actor. Full byte patterns, reverse shared write visibility, file size/FNV receipt, Windows per-page VirtualQuery and warmed actual handle/fd counts are observed; no Windows query is simulated on Linux. Only owned case/peer processes can fault. The controller independently SHA256-hashes ALL file bytes before/after peer, owns exact PID/start/process handles, bounded stdout/stderr readers, native exit and IO completion; outstanding IO retains the graph as FAILED containment rather than closing borrowed streams or claiming cleanup success. Normal actor reports and controller file outcomes must both agree. No native actor has run.

@@ -6,8 +6,10 @@ int mapped_calls = 0, close_calls = 0, map_injected = 0, close_injected = 0;
 HANDLE failed_close = nullptr;
 int nth=1;
 int extended[14]={};
+int plain_unmap_calls=0,plain_unmap_injected=0;
 }
 extern "C" void FileAliasFailureReset(int value) {
+  plain_unmap_calls=plain_unmap_injected=0;
   mode=value; mapped_calls=close_calls=map_injected=close_injected=0;
   for(int& count:extended)count=0;
 }
@@ -19,6 +21,8 @@ extern "C" int FileAliasFailureMetric(int index) {
     case 1:return close_calls;
     case 2:return map_injected;
     case 3:return close_injected;
+    case 18:return plain_unmap_calls;
+    case 19:return plain_unmap_injected;
     default:return index>=4&&index<18?extended[index-4]:-1;
   }
 }
@@ -71,4 +75,11 @@ extern "C" BOOL FileAliasUnmap2(FileAliasUnmap2Routine fn,HANDLE process,void* a
 extern "C" BOOL FileAliasFree(void* at,SIZE_T size,DWORD flags) {
   return fail(4,8)?FALSE:VirtualFree(at,size,flags);
 }
-extern "C" BOOL FileAliasPublicationAllowed(void) { return fail(5,9)?FALSE:TRUE; }
+extern "C" BOOL FileAliasPublicationAllowed(void) { return fail(5,mode==11?11:9)?FALSE:TRUE; }
+extern "C" BOOL WINAPI FileAliasUnmapViewOfFile(const void* view) {
+  ++plain_unmap_calls;
+  if((mode==10||mode==11)&&plain_unmap_calls==nth) {
+    ++plain_unmap_injected;SetLastError(ERROR_ACCESS_DENIED);return FALSE;
+  }
+  return UnmapViewOfFile(view);
+}

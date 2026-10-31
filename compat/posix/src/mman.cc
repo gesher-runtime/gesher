@@ -64,6 +64,7 @@ using namespace gesher_mman_internal;
 #else
 #define FileAliasMapViewOfFile MapViewOfFile
 #define FileAliasCloseHandle CloseHandle
+#define FileAliasUnmapViewOfFile UnmapViewOfFile
 #define FileAliasQuery VirtualQuery
 #define FileAliasProtect VirtualProtect
 #define FileAliasFree VirtualFree
@@ -222,7 +223,7 @@ bool Release(State& s, uintptr_t start, Region& region) {
     VirtualFree(reinterpret_cast<void*>(start), 0, MEM_RELEASE);
     return true;
   }
-  if (region.owner != nullptr && !UnmapViewOfFile(region.view)) {
+  if (region.owner != nullptr && !FileAliasUnmapViewOfFile(region.view)) {
     s.owner_failure = true;
     return false; // keep published view and exact owner; failed operation
   }
@@ -298,7 +299,7 @@ void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int
       ? s.regions.insert(std::move(node))
       : RegionMap::insert_return_type{s.regions.end(),false,std::move(node)};
   if (!published.inserted) {
-    if (!UnmapViewOfFile(view)) {
+    if (!FileAliasUnmapViewOfFile(view)) {
       SectionOwner* failed = prepared.owner.release();
       failed->handle = from.mapping;
       failed->rollback_view = view;
@@ -1114,6 +1115,54 @@ bool ForEachRun(void* addr, size_t len, Fn fn) {
 
 extern "C" {
 
+#ifdef GESHER_FILE_MREMAP_FAILURE_TEST
+// Only in the dedicated backend object. No allocation, no public mmap call,
+// no adapter-injected query; snapshots observe exact surviving registry/OS state.
+int FileAliasRegistrySnapshot(const void* address,size_t length,FileAliasPage* rows,size_t capacity) {
+  State& s=state(); std::lock_guard<std::mutex> guard(s.lock);
+  if(!rows || length%s.page_size || capacity<length/s.page_size) return -1;
+  size_t failures=0;
+  for(auto* owner=s.failed_owners;owner;owner=owner->next_failed) ++failures;
+  const uintptr_t start=reinterpret_cast<uintptr_t>(address);
+  for(size_t i=0;i<length/s.page_size;++i) {
+    FileAliasPage row={}; row.page=i; row.owner_state=-1;
+    row.owner_failure=s.owner_failure; row.failed_owners=static_cast<int>(failures);
+    row.failed_owner_state=-1;
+    if(s.failed_owners) {
+      row.failed_owner_state=static_cast<int>(s.failed_owners->state);
+      row.failed_owner_error=s.failed_owners->error;
+      row.failed_owner_refs=s.failed_owners->refs;
+      row.rollback_view=s.failed_owners->rollback_view!=nullptr;
+      DWORD handle_flags=0;
+      row.failed_handle_valid=GetHandleInformation(s.failed_owners->handle,&handle_flags)!=FALSE;
+      row.backing_refs=s.failed_owners->backing?s.failed_owners->backing->refs:0;
+      if(s.failed_owners->rollback_view) {
+        MEMORY_BASIC_INFORMATION rollback={};
+        row.rollback_query_ok=VirtualQuery(s.failed_owners->rollback_view,&rollback,sizeof(rollback))==sizeof(rollback);
+        if(row.rollback_query_ok) {
+          row.rollback_state=rollback.State; row.rollback_protection=rollback.Protect; row.rollback_type=rollback.Type;
+        }
+      }
+    }
+    const uintptr_t at=start+i*s.page_size;
+    auto entry=FindRegion(s,at);
+    if(entry!=s.regions.end()) {
+      const Region& region=entry->second; row.present=1;
+      row.region_page=(at-entry->first)/s.page_size; row.region_size=region.size; row.kind=static_cast<int>(region.kind);
+      row.live_pages=region.live_pages; row.live=region.live[(at-entry->first)/s.page_size];
+      row.group=region.group!=0; row.operation_error=region.operation_error;
+      if(!region.actual_protection.empty()) row.ledger_protection=region.actual_protection[(at-entry->first)/s.page_size];
+      if(region.owner) { row.owner_refs=region.owner->refs; row.owner_state=static_cast<int>(region.owner->state); }
+    }
+    MEMORY_BASIC_INFORMATION info={};
+    row.query_ok=VirtualQuery(reinterpret_cast<void*>(at),&info,sizeof(info))==sizeof(info);
+    if(row.query_ok) { row.query_state=info.State; row.query_protection=info.Protect; row.query_type=info.Type; }
+    rows[i]=row;
+  }
+  return static_cast<int>(length/s.page_size);
+}
+#endif
+
 // Whether mappings are placeholder-based (MAP_FIXED over file views,
 // executable file views): ART's JIT asks before taking its dual view.
 int gesher_mmap_placeholders(void) { return Placeholders().available() ? 1 : 0; }
@@ -1193,7 +1242,7 @@ int munmap(void* addr, size_t length) {
       if (retiring == region.live_pages) {
         const BOOL retired = region.group != 0
           ? FileAliasUnmap2(Placeholders().unmap2,GetCurrentProcess(),region.view,MEM_PRESERVE_PLACEHOLDER)
-          : UnmapViewOfFile(region.view);
+          : FileAliasUnmapViewOfFile(region.view);
         if (!retired) { s.owner_failure = true; errno = EIO; return -1; }
         const uintptr_t group = region.group;
         const bool closed = DropSection(s, region);
@@ -1270,6 +1319,7 @@ int mprotect(void* addr, size_t length, int prot) {
   if (length == 0) return 0;
   State& s = state();
   std::lock_guard<std::mutex> registry_guard(s.lock);
+  if(s.owner_failure) { errno=EIO; return -1; }
   InvalidateSharedAliases(s, reinterpret_cast<uintptr_t>(addr), length);
   const DWORD protection = PageProtection(prot);
   const bool ok = ForEachRun(addr, length, [&](uint8_t* p, size_t n, const MEMORY_BASIC_INFORMATION& info) {
@@ -1300,6 +1350,11 @@ int madvise(void* addr, size_t length, int advice) {
     case MADV_DONTNEED:
     case MADV_FREE:
     case MADV_REMOVE: {
+      // Same registry-wide failed-containment guard as mmap/mremap: this
+      // path can decommit/recommit. Healthy anonymous operation stays intact.
+      State& s=state();
+      std::lock_guard<std::mutex> registry_guard(s.lock);
+      if(s.owner_failure) { errno=EIO; return -1; }
       // Linux semantics for private anonymous memory: the range reads back as
       // zeros. Decommit + recommit gives exactly that.
       bool ok = ForEachRun(addr, length, [](uint8_t* p, size_t n, const MEMORY_BASIC_INFORMATION& info) {

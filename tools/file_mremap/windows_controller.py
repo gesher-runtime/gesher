@@ -5,14 +5,25 @@ current receipts; this module does not manufacture/authenticate GitHub receipts.
 """
 import argparse,datetime,hashlib,json,os,platform,queue,re,subprocess,tempfile,threading,time,uuid
 from pathlib import Path
+from source_contract import decode
 CASES=('source_first','alias_first','partial','middle')
+# Exact, source-owned adverse cells. Any unhit injection is a FAILED row.
+# Destructive/final-release invariant failures remain FAILED_CONTAINMENT and
+# prevent the suite PASS; diagnostic coverage never converts them to success.
+FAULTS=(('fault_alias',1,1),('fault_alias',4,1),('fault_alias',4,5),
+        ('fault_alias',9,1),('fault_middle',4,3),('fault_middle',5,2),
+        ('fault_middle',6,1),('fault_middle',6,2),('fault_middle',7,1),
+        ('fault_middle',8,1),('fault_middle',8,2),
+        ('fault_prefix',5,1),('fault_suffix',5,1),('fault_partial',5,2),
+        ('fault_sourcefirst',7,1),('fault_aliasfirst',10,1),
+        ('fault_alias',11,1),('fault_finalclose',3,1))
 RETAINED=[]
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def atomic(path,value):
     temp=path.with_suffix(path.suffix+'.tmp');temp.write_text(json.dumps(value,indent=2)+'\n',encoding='utf-8');temp.replace(path)
 class Actor:
     def __init__(self,argv,cwd,environment):
-        self.record=dict(argv=argv,cwd=str(cwd),started_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),started_monotonic_ns=time.monotonic_ns(),pid=None,exit=None,stdout='',stderr='',overflow=False)
+        self.record=dict(argv=argv,cwd=str(cwd),started_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),started_monotonic_ns=time.monotonic_ns(),pid=None,exit=None,stdout='',stderr='',overflow=False,event_rows=[])
         self.events=queue.Queue();self.parts={'stdout':bytearray(),'stderr':bytearray()};self.threads=[];self.proc=None
         self.argv=argv;self.cwd=cwd;self.environment=environment
     def start(self):
@@ -34,8 +45,13 @@ class Actor:
                     while b'\n'in pending:
                         line,pending=pending.split(b'\n',1)
                         if len(line)>16384:self.record['overflow']=True;return
-                        try:self.events.put_nowait(json.loads(line))
+                        try:
+                            row=decode(line)
+                            if not isinstance(row,dict) or row.get('event') not in {'ready','peer_complete','query','ledger','failedstate_guard','failedstate_unchanged','fault_result','prefix_cleanup','containment','injection','complete','prerequisite','middle_result'}:raise ValueError('unknown/nonobject actor event')
+                            self.record['event_rows'].append(row);self.events.put_nowait(row)
                         except (ValueError,queue.Full):self.record['bad_json']=True
+                    if len(pending)>16384:self.record['overflow']=True;return
+            if name=='stdout' and pending:self.record['bad_json']=True
         except (OSError,ValueError)as error:self.record[name+'_io_error']=repr(error)
     def event(self,name,deadline):
         while time.monotonic()<deadline:
@@ -78,16 +94,16 @@ def expected_bytes(size,peer):
     data=bytearray((i*13+7)&255 for i in range(size));data[37]=0x5a
     if peer:data[43]=0x6b
     return bytes(data)
-def run_lifetime(prefix,case,environment=None):
+def run_lifetime(prefix,case,environment=None,fault=None):
     """Actual parent/peer handshake on Linux or Windows, one owned directory."""
     result=dict(case=case,verdict='FAILED',actors=[],cleanup=False)
     temporary=None;actors=[];deadline=time.monotonic()+45
     try:
-        assert case in CASES
+        assert case in CASES if fault is None else (case,*fault) in FAULTS
         temporary=tempfile.TemporaryDirectory(prefix='file-mremap-case-');cwd=Path(temporary.name);nonce=uuid.uuid4().hex
         environment=dict(environment or {k:v for k,v in os.environ.items()if k in ('SystemRoot','WINDIR','PATH','TEMP','TMP','GITHUB_ACTIONS')})
         environment['TMPDIR']=str(cwd).replace('\\','/')
-        parent=Actor(prefix+[case,'backing.dat',nonce],cwd,environment);actors.append(parent);parent.start()
+        parent=Actor(prefix+[case,'backing.dat',nonce]+([]if fault is None else [str(v)for v in fault]),cwd,environment);actors.append(parent);parent.start()
         ready=parent.event('ready',deadline);assert ready['nonce']==nonce and ready['pid']==parent.proc.pid
         size=ready['file_size'];assert type(size)is int and size==ready['page']*5 and 20480<=size<=5242880
         backing=cwd/'backing.dat';before=backing.read_bytes();assert before==expected_bytes(size,False)
@@ -95,16 +111,33 @@ def run_lifetime(prefix,case,environment=None):
         peer=Actor(prefix+['peer','backing.dat',nonce],cwd,environment);actors.append(peer);peer.start()
         peer_done=peer.event('peer_complete',deadline);assert peer_done['nonce']==nonce and peer_done['pid']==peer.proc.pid
         assert peer.close(deadline)and peer.record['exit']==0
+        assert sum(r['event']=='peer_complete'for r in peer.record['event_rows'])==1
         assert peer_done['failed']==peer_done['cleanup_failures']==0 and peer_done['resources_before']==peer_done['resources_after']>=0
         result['peer']=peer_done
         parent.proc.stdin.write(b'PEER_DONE\n');parent.proc.stdin.flush();parent.proc.stdin.close()
         done=parent.event('complete',deadline);assert done['nonce']==nonce and done['case']==case
-        assert parent.close(deadline)and parent.record['exit']==0
+        assert parent.close(deadline)
+        assert all(sum(r['event']==name for r in parent.record['event_rows'])==1 for name in ('ready','complete'))
+        if fault is None:assert parent.record['exit']==0
         after=backing.read_bytes();assert after==expected_bytes(size,True)
         result.update(file_size_after=len(after),file_sha256_after=hashlib.sha256(after).hexdigest(),parent=done)
-        assert done['failed']==done['cleanup_failures']==0 and done['file_size']==size
-        assert done['resources_before']==done['resources_after']>=0
-        result['verdict']='PASS'
+        assert done['file_size']==size
+        if fault is None:
+            assert done['failed']==done['cleanup_failures']==0
+            assert done['resources_before']==done['resources_after']>=0
+            result['verdict']='PASS'
+        else:
+            result['fault']=dict(mode=fault[0],nth=fault[1])
+            result['observation']=verify_fault(parent.record,case,fault)
+            # Observed failed containment is a real operation failure, not a
+            # passing negative. Preserve every actual receipt and resource delta.
+            if result['observation']['owner_failure']:
+                assert parent.record['exit']!=0 and done['failed']!=0
+                result['verdict']='FAILED_CONTAINMENT'
+            else:
+                assert parent.record['exit']==0 and done['failed']==done['cleanup_failures']==0
+                assert done['resources_before']==done['resources_after']>=0
+                result['verdict']='PASS_NONDESTRUCTIVE_REJECTION'
     except Exception as error:result['error']=repr(error)
     finally:
         complete=True
@@ -121,6 +154,57 @@ def run_lifetime(prefix,case,environment=None):
         result['cleanup']=complete
         if not complete:result['verdict']='FAILED'
     return result
+
+def verify_fault(actor,case,fault):
+    """Pure oracle of ACTUAL target-macro rows; synthetic controls never run OS."""
+    rows=actor['event_rows'];mode,nth=fault
+    assert (case,mode,nth)in FAULTS
+    def one(event):
+        selected=[r for r in rows if r.get('event')==event]
+        assert len(selected)==1,('event cardinality',event)
+        return selected[0]
+    injection=one('injection');metrics=injection['reached']
+    assert len(metrics)==20 and all(type(v)is int and v>=0 for v in metrics)
+    reached={1:0,3:1,4:4,5:5,6:6,7:7,8:8,9:9,10:18,11:9}[mode]
+    injected={1:2,3:3,4:11,5:12,6:13,7:14,8:15,9:16,10:19,11:16}[mode]
+    assert metrics[reached]>=nth and metrics[injected]>=1
+    assert metrics[injected]==1
+    if mode==3:assert metrics[1]==metrics[3]==injection['outstanding_before_controller_cleanup']==1
+    if mode==11:assert metrics[18]>=1 and metrics[19]==1
+    result=one('fault_result');assert result['case']==case and result['operation']==-1
+    ledger=[r for r in rows if r.get('event')=='ledger']
+    phases={'after_fault','after_cleanup'}|({'after_first_prefix_cleanup'}if(case,mode,nth)==('fault_middle',5,2)else set())
+    assert {r['phase']for r in ledger}==phases
+    for phase in phases:
+        pages=[r for r in ledger if r['phase']==phase]
+        assert [r['page']for r in pages]==list(range(5))
+        for r in pages:
+            assert r['query_ok']==1
+            if r['present']and r['kind']==1:
+                assert r['owner_refs']>0 and r['owner_state']==1
+                actual=[v for v in pages if v['present']and v['kind']==1 and v['page']-v['region_page']==r['page']-r['region_page']]
+                assert sum(v['live']for v in actual)==r['live_pages']
+                if r['live']:assert r['state']==0x1000 and r['type']==0x40000 and r['protection']!=1
+                elif r['state']==0x1000:assert r['protection']==1
+                if r['ledger_protection']:assert r['ledger_protection']==r['protection']
+            if r['present']and r['kind']==2:
+                assert r['state']==0x2000 and r['live']==r['live_pages']==r['owner_refs']==0
+    failed=any(r['owner_failure']for r in ledger)
+    if failed:
+        assert one('containment')['classification']=='FAILED_CONTAINMENT'
+        if mode in (3,11):
+            assert all(r['failed_owners']==1 and r['failed_owner_state']==(3 if mode==3 else 4) and r['failed_owner_error']>0 for r in ledger)
+            assert all(r['failed_handle_valid']==1 for r in ledger)
+            if mode==3:assert all(r['failed_owner_refs']==0 for r in ledger)
+            if mode==11:assert all(r['rollback_view']==r['rollback_query_ok']==1 and r['rollback_state']==0x1000 and r['rollback_type']==0x40000 and r['backing_refs']>0 for r in ledger)
+        guards=[r for r in rows if r.get('event')=='failedstate_guard']
+        assert [r['route']for r in guards]==list(range(11))
+        assert all(r['rejected']==1 and r['errno']==5 for r in guards)
+        unchanged=one('failedstate_unchanged')
+        assert unchanged['ledger_and_backend_unchanged']==1 and unchanged['resources_before']==unchanged['resources_after']>=0
+    else:assert not any(r.get('event')=='containment'for r in rows)
+    if(case,mode,nth)==('fault_middle',5,2):assert one('prefix_cleanup')['second_readable']==1
+    return dict(owner_failure=failed,injection_reached=metrics[reached],injected=metrics[injected],ledger_rows=len(ledger))
 
 def receipt(value,expected,role):
     assert value['role']==role and value['conclusion']=='success'
@@ -139,6 +223,7 @@ def main():
     assert not args.output.exists()
     record=dict(schema=1,role='file-mremap-windows-lifetime',verdict='PREREQUISITE_UNAVAILABLE',results=[])
     try:
+        if __debug__ is False:raise RuntimeError('optimized Python is not an admitted controller')
         assert os.environ.get('GITHUB_ACTIONS')=='true'and platform.system()=='Windows'
         assert os.environ.get('GITHUB_ACTOR')==os.environ.get('GITHUB_TRIGGERING_ACTOR')=='palmoni5'
         assert os.environ.get('GITHUB_WORKFLOW_SHA')==os.environ['GITHUB_SHA']
@@ -156,7 +241,7 @@ def main():
         assert reference['source']==sha(Path(__file__).resolve().parents[2]/'tests/file_mremap/shared_alias.c')
         assert reference['lifetime_source']==sha(Path(__file__).resolve().parents[2]/'tests/file_mremap/lifetime_cases.c')
         assert [v['case']for v in reference['lifetime']]==list(CASES)and all(v['verdict']=='PASS'and v['cleanup']for v in reference['lifetime'])
-        record.update(context=context,runner=plan['runner'],policy_ref=plan['policy_ref'],verdict='FAILED')
+        record.update(context=context,runner=plan['runner'],policy_ref=plan['policy_ref'],verdict='FAILED',authority_scope='STRUCTURAL_RECEIPTS_ONLY_IMMUTABLE_ADOPTION_PENDING')
         for role,entry in plan['roles'].items():
             fixture=bound_file(entry['fixture'],context,'file-mremap-fixture-'+role)
             assert entry['abi']==role
@@ -180,7 +265,11 @@ def main():
                 environment['LD_LIBRARY_PATH']=library.as_posix()[2:]
             for case in CASES:
                 actual=run_lifetime(prefix,case,environment);actual['role']=role;actual['compiler']=compiler;record['results'].append(actual)
-        if all(v['verdict']=='PASS'and v['cleanup']for v in record['results']):record['verdict']='PASS'
+            if role=='nativehost':
+                failure_fixture=bound_file(entry['failure_fixture'],context,'file-mremap-failure-fixture-nativehost')
+                for case,mode,nth in FAULTS:
+                    actual=run_lifetime([failure_fixture],case,environment,(mode,nth));actual['role']=role;record['results'].append(actual)
+        if len(record['results'])==len(CASES)*3+len(FAULTS) and all(v['verdict']=='PASS'and v['cleanup']for v in record['results']):record['verdict']='PASS'
     except Exception as error:record['error']=repr(error)
     finally:atomic(args.output,record)
     return 0 if record['verdict']=='PASS'else 1
