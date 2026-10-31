@@ -1,0 +1,76 @@
+name: fonts-resource-component
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/fonts-resource-parser]
+    paths: [.github/workflows/fonts-resource-component.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: fonts-resource-component-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  trusted-source:
+    uses: gesher-runtime/gesher/.github/workflows/fonts-resource-trusted-source.yml@0000000000000000000000000000000000000000
+  fixture-producer:
+    needs: trusted-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Authenticate and freshly extract canonical publisher independently of mutable toolchain cache
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" -o font-resource-llvm.tar.xz
+          printf '%s  font-resource-llvm.tar.xz\n' 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4 | sha256sum --check --strict
+          test ! -e resource-toolchain
+          mkdir resource-toolchain
+          tar -xJf font-resource-llvm.tar.xz -C resource-toolchain
+      - name: Configure ordinary default-OFF source and actual compiler command receipts
+        run: cmake -S . -B resource-out -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake -DLLVM_MINGW="$GITHUB_WORKSPACE/resource-toolchain/$LLVM_MINGW_NAME" -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_EXE_LINKER_FLAGS=-Wl,--verbose
+      - name: Build only actual gesher_posix host-owner fixture without ART or font provider
+        run: |
+          set -euo pipefail
+          ninja -C resource-out -v font_environment_resource_characterization 2>&1 | tee font-resource-build.log
+      - name: Bind actual host owner and POSIX/path archive members and caller relocations
+        run: python3 tools/fonts/resource-manifest.py capture --build resource-out --root resource-fixtures
+      - uses: actions/upload-artifact@v4
+        with:
+          name: font-resource-fixtures
+          path: resource-fixtures/
+          if-no-files-found: error
+  characterization:
+    needs: [trusted-source, fixture-producer]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify current-source current-attempt producer archive and host object proof
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name font-resource-fixtures --producer fixture-producer --destination current-resource-fixtures
+          if ($LASTEXITCODE -ne 0) { throw 'Current host-owner producer receipt failed' }
+          python tools/fonts/resource-manifest.py verify --root current-resource-fixtures
+          if ($LASTEXITCODE -ne 0) { throw 'Current host-owner source/object/output proof failed' }
+      - name: Run strict host-owner prepared-child bounded native-frame characterization only
+        shell: pwsh
+        run: ./tools/fonts/resource-characterization.ps1 -FixturesDirectory (Join-Path $env:GITHUB_WORKSPACE current-resource-fixtures)

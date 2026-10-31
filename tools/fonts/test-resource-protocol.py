@@ -18,6 +18,8 @@ def finish(s, role, pid, at, code=0):
 def prepared(*, help=False, prewarm=True):
     s = p.Session(optional_help=help, prewarm=prewarm)
     s.copied_handle(0)
+    s.start("imports", 50, 0)
+    finish(s, "imports", 50, 0)
     s.start("child", 100, 1)
     if help:
         s.start("help", 200, 2)
