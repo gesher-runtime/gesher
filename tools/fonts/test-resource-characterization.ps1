@@ -437,4 +437,66 @@ $ntNegatives=@(
 )
 Check ($ntNegatives.Count -eq 8)
 foreach($bad in $ntNegatives){Reject {Assert-ResourceWitnessProfiles ($lmv+$bad+"`n0:000> qd`n") $cacheDouble $codeDouble $positive}}
+# Actual resource-only cleanup/barrier functions, managed fakes ONLY.
+foreach($name in @('Test-ResourceTerminalTasks','Settle-ResourceRecord','Complete-ResourceSettlement')){
+ $node=@($newFunctions|Where-Object{$_.Name -ceq $name});Check ($node.Count -eq 1);Invoke-Expression $node[0].Extent.Text
+}
+function New-SettlementFake {
+ $m=@{kernel=$false;killThrows=$false;killCompletes=$false;waitThrows=$false;disposeThrows=$false;kills=0;streamDisposes=0;processDisposes=0}
+ $h=[pscustomobject]@{IsClosed=$false}
+ $p=[pscustomobject]@{Id=42;SafeHandle=$h;m=$m}
+ $p|Add-Member ScriptMethod WaitForExit {param($ms) if($this.m.waitThrows){$this.m.waitThrows=$false;throw 'query interruption'};return $this.m.kernel}
+ $p|Add-Member ScriptMethod Kill {$this.m.kills++;if($this.m.killThrows){throw 'kill failed'};if($this.m.killCompletes){$this.m.kernel=$true}}
+ $p|Add-Member ScriptMethod Dispose {$this.m.processDisposes++}
+ foreach($name in @('StandardInput','StandardOutput','StandardError')){
+  $stream=[pscustomobject]@{m=$m};$stream|Add-Member ScriptMethod Dispose {$this.m.streamDisposes++;if($this.m.disposeThrows){throw 'dispose failed'}}
+  $p|Add-Member NoteProperty $name $stream
+ }
+ $r=@{process=$p;settlementProcess=$p;pid=42;settlementPid=42;handle=$h;settlementHandle=$h;state='RUNNING';out=@{Task=$null};err=@{Task=$null};writeTask=$null}
+ $o=@{processes=@{capture=$r};failed=$false;settlementErrors=[Collections.Generic.List[string]]::new();handles=@()}
+ @{record=$r;owner=$o;metrics=$m}
+}
+$f=New-SettlementFake;$f.metrics.killThrows=$true
+Reject {Settle-ResourceRecord $f.owner $f.record}
+Check ($f.metrics.kills -eq 1 -and $f.metrics.streamDisposes -eq 0 -and $f.metrics.processDisposes -eq 0)
+Check (!(Settle-ResourceRecord $f.owner $f.record));Check ($f.metrics.kills -eq 1)
+$f.metrics.kernel=$true;Check (Settle-ResourceRecord $f.owner $f.record)
+Check (Settle-ResourceRecord $f.owner $f.record);Check ($f.metrics.streamDisposes -eq 3 -and $f.metrics.processDisposes -eq 1)
+$f=New-SettlementFake
+Check (!(Settle-ResourceRecord $f.owner $f.record));Check ($f.metrics.kills -eq 1 -and $f.metrics.streamDisposes -eq 0)
+foreach($where in @('read','write')){
+ $f=New-SettlementFake;$f.metrics.kernel=$true;$tcs=[Threading.Tasks.TaskCompletionSource[int]]::new()
+ if($where -ceq 'read'){$f.record.out.Task=$tcs.Task}else{$f.record.writeTask=$tcs.Task}
+ Check (!(Settle-ResourceRecord $f.owner $f.record));Check ($f.metrics.streamDisposes -eq 0)
+ $tcs.SetResult(0);Check (Settle-ResourceRecord $f.owner $f.record)
+}
+$f=New-SettlementFake;$f.metrics.kernel=$true;$f.record.out.Task=[Threading.Tasks.Task]::FromException([Exception]::new('reader error'))
+Check (Settle-ResourceRecord $f.owner $f.record);Check $f.owner.failed
+$f=New-SettlementFake;$f.record.state='EXITED';$f.metrics.kernel=$true
+Check (Settle-ResourceRecord $f.owner $f.record);Check ($f.metrics.kills -eq 0)
+$f=New-SettlementFake;$f.metrics.kernel=$true;$f.metrics.disposeThrows=$true
+Reject {Settle-ResourceRecord $f.owner $f.record};Check (!(Settle-ResourceRecord $f.owner $f.record))
+Check ($f.metrics.streamDisposes -eq 1 -and $f.metrics.processDisposes -eq 0)
+# Effective SAME-pwsh barrier paths: initial query error, sink error, repeated
+# passive interruption and current task completion; root/files cannot exit early.
+function Start-Sleep {param($Milliseconds) & $script:passiveHook}
+foreach($mode in @('kill','wait','sink','task','interrupt')){
+ $f=New-SettlementFake;$rootDouble=New-StageLifetimeRoot $f.owner;$script:barrierSteps=0;$script:files=0;$script:sinks=0
+ if($mode -ceq 'kill'){$f.metrics.killThrows=$true}
+ if($mode -ceq 'wait'){$f.metrics.waitThrows=$true}
+ $tcs=[Threading.Tasks.TaskCompletionSource[int]]::new();$f.record.writeTask=$tcs.Task
+ $script:passiveHook={
+  Check $rootDouble.active;Check ($script:files -eq 0 -and $f.metrics.streamDisposes -eq 0)
+  $script:barrierSteps++
+  if($mode -ceq 'interrupt' -and $script:barrierSteps -eq 1){throw 'passive interruption'}
+  $f.metrics.kernel=$true;if(!$tcs.Task.IsCompleted){$tcs.SetResult(0)}
+ }
+ try{
+  $result=Complete-ResourceSettlement $f.owner $rootDouble {Check $rootDouble.active;Check ($f.metrics.processDisposes -eq 1);$script:files++} {$script:sinks++;Check $rootDouble.active;if($mode -ceq 'sink'){throw 'failure sink interrupted'}}
+  Check (!$result -and $f.owner.failed -and !$rootDouble.active -and $script:files -eq 1)
+  Check ($f.metrics.kills -le 1 -and $f.metrics.streamDisposes -eq 3)
+ }finally{if($rootDouble.active){$rootDouble.handle.Free();$rootDouble.active=$false}}
+}
+Check ($new.Extent.Text -notmatch 'Stop-ExactOwnedProcess \$record.process')
+Check ($new.Extent.Text.Contains('-or !$settlementSuccess'))
 Write-Host "FONT_RESOURCE_METADATA_PASS checks=$script:checks native_processes_started=0 real_tool_reads=0 actual_application_lookup=NOT_EXECUTED code_rows=SYNTHETIC_AND_SAVED_CI_TEXT"

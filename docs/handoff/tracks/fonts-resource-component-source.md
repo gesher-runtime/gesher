@@ -291,3 +291,31 @@ metadata only; source freeze requires DIFFERENT wholepeer and separate CI. Same
 27input4output18pin1638whole/five roles/original32helpers/3decoderEOF/native bytes,
 all4flagsFALSE/old5WCTRED/6913parked. Actual owner +normalcleanup and fresh both
 runtime/JNI/guest/JavaOs/OEM/retention still required; release OPEN.
+
+## Resource-only terminal settlement and same-pwsh quarantine
+
+f527 was SOURCE BLOCKED: original unchanged Stop-ExactOwnedProcess could dispose
+before kernel/current IO terminality, and a GCHandle cannot survive pwsh exit.
+This resource component no longer routes finally through that unsafe helper.
+Original32 helper bodies remain exact. Resource-only settlement retains original
+Process/SafeHandle/PID; one kill reservation precedes actual Kill, never repeats.
+No stream/process disposal before exact kernel and every current read/write task
+terminal. Faulted tasks remain failure; disposal errors retain unresolved graph.
+
+Existing pwsh now has a passive settlement/quarantine barrier before return/throw
+with unresolved process/IO/file/root graph. Ownership queries, failure sink and
+initial/subsequent interruptions are protected; errors remain permanent. Root
+Free/directory release only after terminal process/tasks and closed owned leases.
+No repeated owner command/kill, new process/API/keeper/job/command/profile/timeout
+or renewed operation/hold/cleanup budget. Quarantine is passive lifetime ownership,
+not more observation. External forced process/workflow/host destruction remains
+explicitly UNPROVED. The owning pwsh may remain quarantined until that boundary.
+
+Managed fake controls cover kill/wait error, pending reader/writer, reader fault,
+terminal EXITED/repeated exact cleanup, disposal failure, query/sink/passive errors,
+root/file-release and permanent failed verdict. They do NOT prove native behavior.
+A original session/task/ONEwrite/ready/profile/phase/address grammar and B original
+NTDLL predicate remain unchanged; W22 identity BLOCKED. Same27input4output18pin/
+1638whole/history65/all4FALSE/old5WCTRED/6913parked. Different whole-source peer
+and separate CI required. Genuine owner/normalcleanup then bothruntime/JNI/guest/
+JavaOs/OEM/retention/release obligations remain OPEN.
