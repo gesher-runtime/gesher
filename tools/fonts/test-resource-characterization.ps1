@@ -132,4 +132,104 @@ foreach($bad in @($lmv+$lmv,$lmv.Replace('10000000','20000000'),$lmv.Replace('10
 Check ($new.Extent.Text.Contains("$"+'stage.code.cache=$cache[0]'))
 Check ($new.Extent.Text.IndexOf("Get-PreflightFileProfile $"+'codePath') -lt $new.Extent.Text.IndexOf('$child=Start-ResourceRole'))
 Check ($new.Extent.Text.Contains("'CODE_ENVELOPE_SCRIPT' ($"+'checkout'))
-Write-Host "FONT_RESOURCE_METADATA_PASS checks=$script:checks native_processes_started=0 real_tool_reads=0 actual_application_lookup=NOT_EXECUTED code_rows=SYNTHETIC"
+# The entire parser body differs from immutable9df by exactly ONE literal test.
+$priorRunner=(& git show '9df03ff1accac2c41a8831c490d2c6d1a0dcea53:tools/fonts/resource-characterization.ps1') -join "`n"
+$priorTokens=$null;$priorErrors=$null
+$priorAst=[Management.Automation.Language.Parser]::ParseInput($priorRunner,[ref]$priorTokens,[ref]$priorErrors)
+Check ($priorErrors.Count -eq 0)
+$priorWindow=@($priorAst.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Read-ResourceCodeWindow'},$true))[0].Extent.Text
+$currentWindow=@($newFunctions|Where-Object{$_.Name -ceq 'Read-ResourceCodeWindow'})[0].Extent.Text
+$literalAddition=" -or "+'$line'+" -ceq 'ucrtbase!``common_putenv<char>''::``1''::fin"+'$0'+":'"
+Check ($currentWindow.Replace($literalAddition,'') -ceq $priorWindow)
+# Saved CI TEXT golden fixtures ONLY. No real PE/disassembler operation.
+# Frozen run41187455486 source9df; both full blocks include original CDB echoes.
+$golden2022=@'
+0:000> u ucrtbase+0xb84b4 ucrtbase+0xb8513
+ucrtbase!common_putenv<char>:
+00007ffd`c14a84b4 48895c2408      mov     qword ptr [rsp+8],rbx
+00007ffd`c14a84b9 57              push    rdi
+00007ffd`c14a84ba 4883ec20        sub     rsp,20h
+00007ffd`c14a84be 488bda          mov     rbx,rdx
+00007ffd`c14a84c1 488bf9          mov     rdi,rcx
+00007ffd`c14a84c4 488d0d9d7f0400  lea     rcx,[ucrtbase!_environ_table+0x1c8 (00007ffd`c14f0468)]
+00007ffd`c14a84cb ff158ff50000    call    qword ptr [ucrtbase!__imp_EnterCriticalSection (00007ffd`c14b7a60)]
+00007ffd`c14a84d1 90              nop
+00007ffd`c14a84d2 488bd3          mov     rdx,rbx
+00007ffd`c14a84d5 488bcf          mov     rcx,rdi
+00007ffd`c14a84d8 e8a7000000      call    ucrtbase!common_putenv_nolock<char> (00007ffd`c14a8584)
+00007ffd`c14a84dd 8bd8            mov     ebx,eax
+00007ffd`c14a84df 488d0d827f0400  lea     rcx,[ucrtbase!_environ_table+0x1c8 (00007ffd`c14f0468)]
+00007ffd`c14a84e6 ff156cf50000    call    qword ptr [ucrtbase!__imp_LeaveCriticalSection (00007ffd`c14b7a58)]
+00007ffd`c14a84ec 8bc3            mov     eax,ebx
+00007ffd`c14a84ee 488b5c2430      mov     rbx,qword ptr [rsp+30h]
+00007ffd`c14a84f3 4883c420        add     rsp,20h
+00007ffd`c14a84f7 5f              pop     rdi
+00007ffd`c14a84f8 c3              ret
+ucrtbase!`common_putenv<char>'::`1'::fin$0:
+00007ffd`c14a84f9 4055            push    rbp
+00007ffd`c14a84fb 4883ec20        sub     rsp,20h
+00007ffd`c14a84ff 488bea          mov     rbp,rdx
+00007ffd`c14a8502 488d0d5f7f0400  lea     rcx,[ucrtbase!_environ_table+0x1c8 (00007ffd`c14f0468)]
+00007ffd`c14a8509 4883c420        add     rsp,20h
+00007ffd`c14a850d 5d              pop     rbp
+00007ffd`c14a850e 48ff2543f50000  jmp     qword ptr [ucrtbase!__imp_LeaveCriticalSection (00007ffd`c14b7a58)]
+'@
+$golden2022+=[char]10
+Check ((Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($golden2022))) -ceq 'd8123c68ca2f6bb0feda5be0c67930d4eb88fb0d91d5701327087546dbc72d7f')
+$full2022="FONT_RESOURCE_CODE_BEGIN`n"+$golden2022+"FONT_RESOURCE_CODE_END`n"
+$result2022=Read-ResourceCodeWindow $full2022 ([uint64]140727845584896) 754868 '48895c2408574883ec20488bda488bf9488d0d9d7f0400ff158ff5000090488bd3488bcfe8a70000008bd8488d0d827f0400ff156cf500008bc3488b5c24304883c4205fc340554883ec20488bea488d0d5f7f04004883c4205d48ff2543f50000cccccccccccccc48895c24085748'
+Check ($result2022.rows.Count -eq 26 -and (($result2022.rows|ForEach-Object{$_.hex.Length/2}|Measure-Object -Sum).Sum) -eq 97 -and !$result2022.instruction_boundary_proved)
+$golden2025=@'
+0:000> u ucrtbase+0x3c1d8 ucrtbase+0x3c237
+ucrtbase!common_putenv<char>:
+00007ffa`e326c1d8 48895c2408      mov     qword ptr [rsp+8],rbx
+00007ffa`e326c1dd 57              push    rdi
+00007ffa`e326c1de 4883ec20        sub     rsp,20h
+00007ffa`e326c1e2 488bda          mov     rbx,rdx
+00007ffa`e326c1e5 488bf9          mov     rdi,rcx
+00007ffa`e326c1e8 488d0d89c80f00  lea     rcx,[ucrtbase!?m_CHPENameOffset@UnDecorator@@0KA+0x1e8 (00007ffa`e3368a78)]
+00007ffa`e326c1ef ff15e3080c00    call    qword ptr [ucrtbase!__imp_EnterCriticalSection (00007ffa`e332cad8)]
+00007ffa`e326c1f5 90              nop
+00007ffa`e326c1f6 488bd3          mov     rdx,rbx
+00007ffa`e326c1f9 488bcf          mov     rcx,rdi
+00007ffa`e326c1fc e823000000      call    ucrtbase!common_putenv_nolock<char> (00007ffa`e326c224)
+00007ffa`e326c201 8bd8            mov     ebx,eax
+00007ffa`e326c203 488d0d6ec80f00  lea     rcx,[ucrtbase!?m_CHPENameOffset@UnDecorator@@0KA+0x1e8 (00007ffa`e3368a78)]
+00007ffa`e326c20a ff15e0080c00    call    qword ptr [ucrtbase!__imp_LeaveCriticalSection (00007ffa`e332caf0)]
+00007ffa`e326c210 8bc3            mov     eax,ebx
+00007ffa`e326c212 488b5c2430      mov     rbx,qword ptr [rsp+30h]
+00007ffa`e326c217 4883c420        add     rsp,20h
+00007ffa`e326c21b 5f              pop     rdi
+00007ffa`e326c21c c3              ret
+00007ffa`e326c21d cc              int     3
+00007ffa`e326c21e cc              int     3
+00007ffa`e326c21f cc              int     3
+00007ffa`e326c220 cc              int     3
+00007ffa`e326c221 cc              int     3
+00007ffa`e326c222 cc              int     3
+00007ffa`e326c223 cc              int     3
+ucrtbase!common_putenv_nolock<char>:
+00007ffa`e326c224 48895c2408      mov     qword ptr [rsp+8],rbx
+00007ffa`e326c229 48896c2410      mov     qword ptr [rsp+10h],rbp
+00007ffa`e326c22e 4889742418      mov     qword ptr [rsp+18h],rsi
+00007ffa`e326c233 57              push    rdi
+00007ffa`e326c234 4883ec20        sub     rsp,20h
+'@
+$golden2025+=[char]10
+Check ((Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($golden2025))) -ceq 'd5ebcf231bc9d7f86443cb6f20a4a7ee80a99736252e95a225a5305409054619')
+$full2025="FONT_RESOURCE_CODE_BEGIN`n"+$golden2025+"FONT_RESOURCE_CODE_END`n"
+$result2025=Read-ResourceCodeWindow $full2025 ([uint64]140715529273344) 246232 '48895c2408574883ec20488bda488bf9488d0d89c80f00ff15e3080c0090488bd3488bcfe8230000008bd8488d0d6ec80f00ff15e0080c008bc3488b5c24304883c4205fc3cccccccccccccc48895c240848896c24104889742418574883ec20488bf2488bf9e81981fdff488d2db6'
+Check ($result2025.rows.Count -eq 31 -and (($result2025.rows|ForEach-Object{$_.hex.Length/2}|Measure-Object -Sum).Sum) -eq 96 -and !$result2025.instruction_boundary_proved)
+$exactScoped='ucrtbase!`common_putenv<char>''::`1''::fin$0:'
+foreach($badHeader in @($exactScoped.Replace('ucrtbase!','other!'),$exactScoped.Replace('::',':'),$exactScoped.Replace('::',':::'),($exactScoped+':'),($exactScoped+'junk'),(' '+$exactScoped),($exactScoped+' '), $exactScoped.Replace('fin$0','fin$1'),$exactScoped.Replace('fin$0','qd;fin$0'),$exactScoped.Replace('char',''),$exactScoped.Replace('fin$0',('x'*257)),$exactScoped.Replace('fin$0',('x'+[char]0+'y')),$exactScoped.Replace('fin$0',('x'+[char]0x5d0+'y')),$exactScoped.Replace('fin$0',"x`ny"))){
+ Reject {Read-ResourceCodeWindow ($full2022.Replace($exactScoped,$badHeader)) ([uint64]0x7ffdc13f0000) 0xb84b4 '48895c2408574883ec20488bda488bf9488d0d9d7f0400ff158ff5000090488bd3488bcfe8a70000008bd8488d0d827f0400ff156cf500008bc3488b5c24304883c4205fc340554883ec20488bea488d0d5f7f04004883c4205d48ff2543f50000cccccccccccccc48895c24085748'}
+}
+# The exact extra header consumes no bytes and cannot hide invalid machine rows.
+$machineRows=$result2022.rows
+$firstText=@($golden2022 -split "`n"|Where-Object{$_ -match '^00007ffd`c14a84b4 '})[0]
+foreach($changed in @($full2022.Replace($firstText,''),$full2022.Replace($firstText,$firstText+"`n"+$firstText),$full2022.Replace('c14a84b9','c14a84ba'),$full2022.Replace('c14a84b9','c14a84b8'),$full2022.Replace('48895c2408','48895c240'),$full2022.Replace('48895c2408','48'*16),$full2022.Replace('48895c2408','??'),$full2022.Replace('48895c2408','48895c2409'),$full2022.Replace('mov     qword ptr [rsp+8],rbx','???'))){
+ Reject {Read-ResourceCodeWindow $changed ([uint64]0x7ffdc13f0000) 0xb84b4 '48895c2408574883ec20488bda488bf9488d0d9d7f0400ff158ff5000090488bd3488bcfe8a70000008bd8488d0d827f0400ff156cf500008bc3488b5c24304883c4205fc340554883ec20488bea488d0d5f7f04004883c4205d48ff2543f50000cccccccccccccc48895c24085748'}
+}
+# Extra address even after valid scoped label must fail start<=E.
+Reject {Read-ResourceCodeWindow ($full2022.Replace("FONT_RESOURCE_CODE_END`n","00007ffd``c14a8515 90 nop`nFONT_RESOURCE_CODE_END`n")) ([uint64]0x7ffdc13f0000) 0xb84b4 '48895c2408574883ec20488bda488bf9488d0d9d7f0400ff158ff5000090488bd3488bcfe8a70000008bd8488d0d827f0400ff156cf500008bc3488b5c24304883c4205fc340554883ec20488bea488d0d5f7f04004883c4205d48ff2543f50000cccccccccccccc48895c24085748'}
+Write-Host "FONT_RESOURCE_METADATA_PASS checks=$script:checks native_processes_started=0 real_tool_reads=0 actual_application_lookup=NOT_EXECUTED code_rows=SYNTHETIC_AND_SAVED_CI_TEXT"

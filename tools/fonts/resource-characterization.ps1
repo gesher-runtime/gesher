@@ -542,7 +542,7 @@ function Read-ResourceCodeWindow([string]$Text,[uint64]$Base,[int]$Start,[string
  $cursor=$Base+[uint64]$Start;$first=$cursor;$end=$first+95;$rows=[Collections.Generic.List[object]]::new()
  foreach($line in ($raw -split "`n")){
   $line=$line.TrimEnd("`r")
-  if(!$line.Trim() -or $line -cmatch '^\d+:[0-9a-fA-F]+> u ucrtbase\+0x[0-9a-f]+ ucrtbase\+0x[0-9a-f]+$' -or $line -cmatch '^ucrtbase![^\r\n:]{1,256}:$'){continue}
+  if(!$line.Trim() -or $line -cmatch '^\d+:[0-9a-fA-F]+> u ucrtbase\+0x[0-9a-f]+ ucrtbase\+0x[0-9a-f]+$' -or $line -cmatch '^ucrtbase![^\r\n:]{1,256}:$' -or $line -ceq 'ucrtbase!`common_putenv<char>''::`1''::fin$0:'){continue}
   if($line -cnotmatch '^([0-9a-fA-F`]{8,17})\s+([0-9a-fA-F]{2,30})\s+(.{1,512})$'){throw 'UNAVAILABLE: unknown/truncated code row'}
   $at=[Convert]::ToUInt64($Matches[1].Replace('`',''),16);$hex=$Matches[2].ToLowerInvariant();$decoded=$Matches[3]
   $length=$hex.Length/2
