@@ -15,7 +15,8 @@ GUARD='.github/workflows/graphicsdex-trusted-source.yml'
 PYTHON=('tools/ci_graphics_processes/manifest.py','tools/ci_graphics_processes/test_manifest.py',
         'tools/ci_graphics_processes/role_checks.py','tools/ci_graphics_processes/test_role_checks.py',
         'tools/ci_graphics_processes/source_guard.py','tools/ci_graphics_processes/test_source_guard.py',
-        'tools/ci_graphics_processes/api_context.py','tools/ci_graphics_processes/test_api_context.py')
+        'tools/ci_graphics_processes/api_context.py','tools/ci_graphics_processes/test_api_context.py',
+        'tools/ci_graphics_processes/bridge.py','tools/ci_graphics_processes/test_bridge.py')
 RUNNER='tools/ci_graphics_processes/run-fixture.ps1'
 ADDITIONS=(CALLER,GUARD,*PYTHON,RUNNER)
 
