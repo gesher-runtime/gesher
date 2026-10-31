@@ -31,7 +31,7 @@ jobs:
           CALLER='.github/workflows/fonts-debugger-preflight-component.yml'
           TRUST='.github/workflows/fonts-debugger-preflight-trusted-source.yml'
           REPO='gesher-runtime/gesher'
-          EXTRA_PINS={'tests/fonts-debugger-preflight/probe.cc': 'b658a210b5e0abfd30e0bcb102c50e0ea4bc2cc2', 'tools/fonts/debugger-probe.py': '91f338af75ac02add2c8b4ce190c676c25fcb050', 'tools/fonts/test-debugger-probe.py': 'd47940b6e2e72cf632c15bec7bc93a6de4be67fb', 'tools/fonts/debugger-preflight.ps1': '9ca2fb052127f2068ef965da5e33d6cb06fc1f4d', 'tools/fonts/test-debugger-preflight.ps1': '1298fe218fe10632a3f588f7d0b2c07dee396f64'}
+          EXTRA_PINS={'tests/fonts-debugger-preflight/probe.cc': 'b658a210b5e0abfd30e0bcb102c50e0ea4bc2cc2', 'tools/fonts/debugger-probe.py': '91f338af75ac02add2c8b4ce190c676c25fcb050', 'tools/fonts/test-debugger-probe.py': 'd47940b6e2e72cf632c15bec7bc93a6de4be67fb', 'tools/fonts/debugger-preflight.ps1': '4cf08c54499f44a771ef411f6f036b1948311c96', 'tools/fonts/test-debugger-preflight.ps1': '1298fe218fe10632a3f588f7d0b2c07dee396f64'}
           def require(value,message):
            if not value:raise RuntimeError(message)
           def git(*args):return subprocess.check_output(['git',*args])
