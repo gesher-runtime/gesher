@@ -498,7 +498,7 @@ def launch_quiescent(graph):
 
 def containment_error(graph,error):
     # Quarantine may be indefinite; storage/output must not grow each retry.
-    graph['settlement_error_count']=graph.get('settlement_error_count',0)+1
+    graph['settlement_error_count']=min(1000000,graph.get('settlement_error_count',0)+1)
     if 'settlement_error' not in graph:graph['settlement_error']=repr(error)[:4096]
 
 def settle_graph(graph,deadline):
