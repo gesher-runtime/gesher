@@ -543,9 +543,9 @@ jobs:
                   output.write('source=' + sha + '\npolicy_ref=' + REPO + '/' + TRUST + '@' + guard_commit + '\n')
               print('COMBINED_TRUSTED_SOURCE ' + json.dumps(dict(base=BASE, source=sha, run=run_id,
                   attempt=attempt, event=event, supplier_head=supplier_head,
-                  full_qualification=(event == 'workflow_dispatch'),
+                  full_qualification=False, full_dispatch_eligible=(event == 'workflow_dispatch'),
                   reviewed_caller_commit=reviewed, source_paths=len(expected),
-                  reviewed_blobs=SOURCE_PINS, original_preflight_pins=HISTORICAL_PINS, union_pins=UNION_PINS, native_pins=NATIVE_PINS, policy_pins=POLICY_PINS, historical_guard_blob=expected[GUARD][1],
+                  reviewed_blobs=SOURCE_PINS, original_preflight_pins=HISTORICAL_PINS, union_pins=UNION_PINS, native_pins=NATIVE_PINS, policy_pins=POLICY_PINS, historical_guard_blob=historical_authority[GUARD][1], current_guard_blob=expected[GUARD][1],
                   caller_blob=expected[CALLER][1], immutable_guard_commit=guard_commit, all_controls_restored=True, isolated_import_controls=2), sort_keys=True), flush=True)
 
           main()
