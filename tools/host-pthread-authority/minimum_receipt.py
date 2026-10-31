@@ -76,9 +76,14 @@ def context():
     assert os.environ.get('GITHUB_ACTIONS') == 'true'
     assert os.environ['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
     assert os.environ['GITHUB_REPOSITORY_ID'] == '1426153186'
-    assert os.environ['GITHUB_REF'] == 'refs/heads/wip/pthread-production-factory'
-    assert os.environ['GITHUB_WORKFLOW'] == 'ci' and os.environ['GITHUB_JOB']=='build'
-    assert os.environ['GESHER_HOST_PTHREAD_CALLER']=='ci/build'
+    if os.environ.get('GESHER_HOST_PTHREAD_CALLER')=='pthread-first-link/build':
+        sys.path.insert(0,str(ROOT/'tools/toolchain'))
+        import first_link_context
+        first_link_context.context(os.environ,'selected-minimum')
+    else:
+        assert os.environ['GITHUB_REF'] == 'refs/heads/wip/pthread-production-factory'
+        assert os.environ['GITHUB_WORKFLOW'] == 'ci' and os.environ['GITHUB_JOB']=='build'
+        assert os.environ['GESHER_HOST_PTHREAD_CALLER']=='ci/build'
     assert os.environ['GESHER_HOST_PTHREAD_SELECTION'] in ('publisher-control','selected-minimum')
     assert command('git', 'rev-parse', 'HEAD').strip() == os.environ['GITHUB_SHA']
     subprocess.check_call(['git', 'diff', '--exit-code', 'HEAD', '--'])

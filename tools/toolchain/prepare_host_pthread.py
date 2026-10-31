@@ -10,6 +10,7 @@ import shlex
 import subprocess
 import sys
 import tarfile
+import first_link_context as focused
 
 ROOT=Path(__file__).resolve().parents[2]
 CORE=ROOT/'tools/host-pthread-authority'
@@ -28,6 +29,8 @@ def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')
 
 
 def caller(env,selection):
+    if env.get('GESHER_HOST_PTHREAD_CALLER') == focused.CALLER:
+        return focused.context(env, selection)
     assert selection in ROLES and env.get('GESHER_HOST_PTHREAD_SELECTION')==selection
     assert env.get('GITHUB_ACTIONS')=='true'
     assert env['GITHUB_REF']=='refs/heads/wip/pthread-production-factory'
@@ -40,14 +43,20 @@ def caller(env,selection):
     return result
 
 
-def recipe():
+def recipe(caller_key='ci/build'):
+    assert caller_key in ('ci/build', focused.CALLER)
     paths=CORE_FILES+['tools/toolchain/prepare_host_pthread.py']
-    return dict(schema='gesher-original-profile-pthread-recipe-v1',caller='ci/build',pin=json.loads(json.dumps(minimum.PIN)),
+    # Both exact callers import this closed tuple; bind the shared policy source
+    # even when preserving the original production caller/default semantics.
+    paths+=['tools/toolchain/first_link_context.py']
+    result=dict(schema='gesher-original-profile-pthread-recipe-v1',caller=caller_key,pin=json.loads(json.dumps(minimum.PIN)),
                 core_sources={p:sha(ROOT/p) for p in paths},
                 selected_role=minimum.ROLE,publisher_role=ROLES['publisher-control'],
                 supplier_cflags='-g -O2 -mguard=cf -Werror -Xclang -fdump-record-layouts',
                 consumer_flags='unchanged product Win10; not supplier configure flags',
                 authority_policy='fresh archive; typed SDK601 before make; actual480/allfields; original public headers/aliases/exports/imports and actual DLL source object')
+    if caller_key == focused.CALLER:result['focused_caller']=focused.TUPLE
+    return result
 
 
 def fingerprint(value):return hashlib.sha256(canonical(value)).hexdigest()
@@ -56,7 +65,11 @@ def fingerprint(value):return hashlib.sha256(canonical(value)).hexdigest()
 def check_metadata(data,context):
     assert data['schema']=='gesher-host-toolchain-v1' and data['context']==context
     mode=data['selection'];assert mode in ROLES and data['role']==ROLES[mode]
-    assert data['recipe']==recipe() and data['recipe_fingerprint']==fingerprint(data['recipe'])
+    assert data['recipe']==recipe(data['recipe']['caller']) and data['recipe_fingerprint']==fingerprint(data['recipe'])
+    if data['recipe']['caller']==focused.CALLER:
+        assert mode=='selected-minimum'
+        focused.check_descriptor(data['caller_authority'],context)
+    else:assert 'caller_authority' not in data
     assert data['archive']==dict(url=URL,sha256=minimum.PIN['compiler_archive_sha256'],bytes=84003044)
     root=PurePosixPath(data['workspace']);assert root.is_absolute() and posixpath.normpath(str(root))==str(root)
     assert root.name=='gesher-host-pthread-'+mode+'-'+data['recipe_fingerprint'][:16]
@@ -148,7 +161,7 @@ def prepare(selection):
     context=caller(os.environ,selection)
     assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()==context['GITHUB_SHA']
     subprocess.check_call(['git','diff','--exit-code','HEAD','--'],cwd=ROOT)
-    definition=recipe();fp=fingerprint(definition)
+    definition=recipe(os.environ['GESHER_HOST_PTHREAD_CALLER']);fp=fingerprint(definition)
     temporary=Path(os.environ['RUNNER_TEMP']).resolve();workspace=temporary/('gesher-host-pthread-'+selection+'-'+fp[:16])
     assert workspace.is_relative_to(temporary) and not workspace.exists();workspace.mkdir()
     archive=workspace/'compiler.tar.xz'
@@ -175,6 +188,7 @@ def prepare(selection):
               source_commit=minimum.PIN['upstream_commit'],source_before=before,source_after={n:sha(source/n) for n in names},
               archive=dict(url=URL,sha256=sha(archive),bytes=archive.stat().st_size),authority=authority,
               authority_sha256=hashlib.sha256(json.dumps(authority,sort_keys=True,indent=2).encode()).hexdigest())
+    if definition['caller']==focused.CALLER:data['caller_authority']=focused.descriptor(os.environ)
     check_metadata(data,context);check_files(data)
     receipt=workspace/'production-toolchain-receipt.json';receipt.write_text(json.dumps(data,sort_keys=True,indent=2))
     summary=dict(source=context['GITHUB_SHA'],run=context['GITHUB_RUN_ID'],attempt=context['GITHUB_RUN_ATTEMPT'],selection=selection,
