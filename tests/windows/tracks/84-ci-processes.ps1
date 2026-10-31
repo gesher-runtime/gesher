@@ -364,3 +364,114 @@ foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Exp
 }
 
 } finally { $env:GESHER_CI_PROCESS_TRACE = $runTimed84SavedTrace }
+
+# Additional actual GraphicsDex controls; original43 + eight reader records
+# above are unchanged. Never dot-source track30's native/UI top-level probes.
+$graphics84Directory = Join-Path $process84Root 'graphics'
+New-Item -ItemType Directory $graphics84Directory | Out-Null
+$graphics84Exe = Join-Path $graphics84Directory 'dalvikvm.exe'
+$graphics84Source = Join-Path $PSScriptRoot '../fixtures/Graphics84.cs'
+& $process84Compiler /nologo /warnaserror+ /platform:x64 /target:exe /main:Graphics84 "/out:$graphics84Exe" $graphics84Source $process84Source
+if ($LASTEXITCODE -ne 0) {
+  Write-Host 'FAIL  CI processes: actual graphics fixture compilation failed'
+  $script:failed++
+  return
+}
+$graphics84Tokens = $null; $graphics84Errors = $null
+$graphics84Ast = [Management.Automation.Language.Parser]::ParseFile(
+  (Join-Path $PSScriptRoot '30-graphics.ps1'), [ref]$graphics84Tokens, [ref]$graphics84Errors)
+$graphics84Function = @($graphics84Ast.FindAll({ param($n)
+  $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'GraphicsDex'
+}, $true))
+if ($graphics84Errors.Count -or $graphics84Function.Count -ne 1) { throw 'actual GraphicsDex source extraction failed' }
+. ([scriptblock]::Create($graphics84Function[0].Extent.Text))
+[IO.File]::WriteAllText((Join-Path $graphics84Directory 'graphics-tests.dex'), '')
+$graphics84SavedDir = $Dir
+$graphics84SavedEnv = @{}
+foreach ($name in 'GESHER_GRAPHICS84_MODE','GESHER_GRAPHICS84_RECEIPT','GESHER_GRAPHICS84_ARGS','GESHER_GRAPHICS84_CWD','GESHER_CI_PROCESS_TRACE') {
+  $graphics84SavedEnv[$name] = [Environment]::GetEnvironmentVariable($name)
+}
+try {
+  $Dir = $graphics84Directory
+  $env:GESHER_CI_PROCESS_TRACE = '1'
+  $env:GESHER_GRAPHICS84_CWD = [Environment]::CurrentDirectory
+  $graphics84Args = @('space argument', 'quote"argument', 'Unicode-אב')
+  $graphics84Bcp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+  $env:GESHER_GRAPHICS84_ARGS = Join-Path $graphics84Directory 'expected-argv.txt'
+  [IO.File]::WriteAllLines($env:GESHER_GRAPHICS84_ARGS, [string[]](@("-Xbootclasspath:$graphics84Bcp",
+    "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false', '-cp',
+    (NoDrive "$Dir/graphics-tests.dex"), 'gesher.GraphicsFixture') + $graphics84Args))
+  foreach ($mode in 'normal','nonzero','missing-marker','timeout','retained') {
+    $env:GESHER_GRAPHICS84_MODE = $mode
+    $receipt = Join-Path $graphics84Directory "$mode.receipt"
+    $env:GESHER_GRAPHICS84_RECEIPT = $receipt
+    $before = $script:failed
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    try {
+      $text = (& { GraphicsDex "fixture-$mode" GraphicsFixture $graphics84Args 1 } 6>&1 | Out-String)
+      $delta = $script:failed - $before
+      $script:failed = $before # Expected negative outcomes remain required.
+      $expectedDelta = if ($mode -eq 'normal') { 0 } else { 1 }
+      $native = [regex]::Match($text, 'kernel=True tasks=True pipes=2 disposed=True output=(\d+) error=(\d+)')
+      $invalid = $false
+      $correct = $delta -eq $expectedDelta -and $native.Success -and (Test-Path -LiteralPath $receipt)
+      if ($native.Success) {
+        $invalid = [Gtest84NativeHandles]::Closed([IntPtr][long]$native.Groups[1].Value) -and
+          [Gtest84NativeHandles]::Closed([IntPtr][long]$native.Groups[2].Value)
+        $correct = $correct -and $invalid
+      }
+      if (Test-Path -LiteralPath $receipt) {
+        $actual = [IO.File]::ReadAllLines($receipt)
+        $correct = $correct -and $actual.Count -eq 5 -and $actual[2] -eq $graphics84Exe -and
+          $actual[3] -eq $env:GESHER_GRAPHICS84_CWD -and $actual[4] -eq 'argv-and-env-exact' -and
+          $text.Contains("pid=$($actual[0]) start=$($actual[1]) expectedimage=$graphics84Exe")
+      }
+      if ($mode -eq 'retained') {
+        $correct = $correct -and $text.Contains('did not complete within ten seconds') -and
+          (Test-Path -LiteralPath ($receipt + '.child'))
+        if (Test-Path -LiteralPath ($receipt + '.child')) {
+          $childReceipt = [IO.File]::ReadAllLines($receipt + '.child')
+          $child = Get-Process -Id ([int]$childReceipt[0]) -ErrorAction SilentlyContinue
+          try {
+            $correct = $correct -and $null -ne $child -and -not $child.HasExited -and
+              $child.StartTime.ToUniversalTime().Ticks -eq [long]$childReceipt[1] -and $child.Path -eq $childReceipt[2]
+          } finally { if ($child) { $child.Dispose() } }
+        }
+      }
+      if ($mode -eq 'timeout') { $correct = $correct -and $text.Contains('timed out after 1 s') }
+      Write-Host "ACTUAL_GRAPHICS_CONTROL case=$mode native-pipes-invalid=$invalid expected-failures=$expectedDelta actual-failures=$delta elapsed-ms=$($timer.ElapsedMilliseconds)"
+      Write-Host $text
+      if ($correct) { Write-Host "PASS  CI processes: GraphicsDex $mode actual helper/status/argv/ownership" }
+      else { Write-Host "FAIL  CI processes: GraphicsDex $mode actual helper/status/argv/ownership"; $script:failed++ }
+    } finally {
+      if (Test-Path -LiteralPath ($receipt + '.child')) {
+        $childReceipt = [IO.File]::ReadAllLines($receipt + '.child')
+        $owned = Get-Process -Id ([int]$childReceipt[0]) -ErrorAction SilentlyContinue
+        if ($owned) {
+          try {
+            if ($owned.Path -ne $graphics84Exe -or $owned.StartTime.ToUniversalTime().Ticks -ne [long]$childReceipt[1]) {
+              throw 'graphics retained child identity mismatch'
+            }
+            try { $owned.Kill($true) } catch {
+              Write-Host "FAIL  CI processes: graphics child kill failed: $_"
+              $script:failed++
+            }
+            $settled = $false
+            try { $settled = $owned.WaitForExit(5000) } catch {
+              Write-Host "FAIL  CI processes: graphics child kernel completion unavailable: $_"
+              $script:failed++
+            }
+            if (-not $settled) {
+              Write-Host 'FAIL  CI processes: graphics child cleanup failed; same parent retains ownership'
+              $script:failed++
+              while (-not $settled) { try { $settled = $owned.WaitForExit(5000) } catch {} }
+            }
+          } finally { $owned.Dispose() }
+        }
+      }
+    }
+  }
+} finally {
+  $Dir = $graphics84SavedDir
+  foreach ($name in $graphics84SavedEnv.Keys) { [Environment]::SetEnvironmentVariable($name, $graphics84SavedEnv[$name]) }
+}
