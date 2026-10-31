@@ -658,11 +658,12 @@ RegionMap::iterator PunchPromoted(State& s, RegionMap::iterator it, uintptr_t x,
 
 // [begin, end), covered by regions of one group, becomes one placeholder (a
 // single hole entry), which is returned.
-std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t end) {
+std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t end, PreparedPunchRequest* prepared=nullptr) {
   auto initial=FindRegion(s,begin);
   if(initial==s.regions.end() || end<=begin) { s.request_error=EIO;errno=EIO;return initial; }
-  PreparedPunchRequest plan;
-  auto status=PreparePunchRequest(s.regions,begin,end,s.page_size,plan);
+  PreparedPunchRequest local;
+  PreparedPunchRequest& plan=prepared?*prepared:local;
+  auto status=prepared?PrepareStatus::Ok:PreparePunchRequest(s.regions,begin,end,s.page_size,plan);
   if(status!=PrepareStatus::Ok) {
     s.request_error=status==PrepareStatus::NoMemory?ENOMEM:EIO;errno=s.request_error;return initial;
   }
@@ -829,6 +830,7 @@ bool FillAnonymous(std::map<uintptr_t, Region>::iterator it, int prot) {
   r.kind = Kind::kAnon;
   std::fill(r.live.begin(), r.live.end(), true);
   r.live_pages = r.live.size();
+  std::fill(r.actual_protection.begin(),r.actual_protection.end(),PageProtection(prot));
   return true;
 }
 
@@ -914,6 +916,21 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
     return MAP_FAILED;
   }
 
+  const uintptr_t requested=reinterpret_cast<uintptr_t>(start);
+  PreparedPunchRequest request;
+  const bool prepared_request=(flags&MAP_FIXED)!=0 && CoveringGroup(s,requested,requested+len)!=0;
+  if(prepared_request) {
+    const auto status=PreparePunchRequest(s.regions,requested,requested+len,s.page_size,request,in_file);
+    if(status!=PrepareStatus::Ok) { errno=status==PrepareStatus::NoMemory?ENOMEM:EIO;return MAP_FAILED; }
+  }
+  auto close_construct=[&](HANDLE& handle,size_t slot) {
+    if(!handle)return true;
+    if(!prepared_request) { CloseHandle(handle);handle=nullptr;return true; }
+    if(FileAliasCloseHandle(handle)){handle=nullptr;return true;}
+    const DWORD error=GetLastError();
+    auto* failed=request.constructor_failures[slot].release();failed->handle=handle;handle=nullptr;
+    RecordOwnerFailure(s,failed,SectionState::ReleaseFailed,error);return false;
+  };
   // The mapping object, executable views from a handle that may execute.
   // (A private mapping of a file that cannot be reopened so is copied.)
   size_t in_view = in_file;
@@ -946,7 +963,9 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
       view_protection = section;
     }
     mapping = CreateFileMappingW(source, nullptr, section, 0, 0, nullptr);
-    if (reopened != nullptr) CloseHandle(reopened);
+    if(reopened!=nullptr && !close_construct(reopened,1)) {
+      close_construct(mapping,0);errno=EIO;return MAP_FAILED;
+    }
     if (mapping == nullptr) {
       errno = EACCES;
       return MAP_FAILED;
@@ -957,9 +976,9 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
   const bool fixed = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0;
   std::map<uintptr_t, Region>::iterator hole;
   if ((flags & MAP_FIXED) != 0 && CoveringGroup(s, addr, addr + len) != 0) {
-    hole = Punch(s, addr, addr + len);
+    hole = Punch(s, addr, addr + len,prepared_request?&request:nullptr);
     if (s.owner_failure || s.request_error) {
-      if (mapping != nullptr) CloseHandle(mapping); // new legacy constructor owner
+      if(mapping!=nullptr)close_construct(mapping,0); // new constructor owner
       errno = s.request_error?s.request_error:EIO;
       return MAP_FAILED;
     }
@@ -978,30 +997,55 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
   const uintptr_t result = hole->first;
   const uintptr_t group = hole->second.group;
   auto fail = [&](int error) -> void* {
-    // Undo: the pages go back to a placeholder.
-    Punch(s, result, result + len);
+    if(prepared_request) {
+      for(auto at=s.regions.lower_bound(result);at!=s.regions.end()&&at->first<result+len;++at) {
+        Region& current=at->second;
+        BOOL retired=TRUE;
+        if(current.kind==Kind::kView)retired=FileAliasUnmap2(Placeholders().unmap2,GetCurrentProcess(),current.view,MEM_PRESERVE_PLACEHOLDER);
+        else if(current.kind==Kind::kAnon)retired=FileAliasFree(reinterpret_cast<void*>(at->first),current.size,MEM_RELEASE|MEM_PRESERVE_PLACEHOLDER);
+        if(!retired){current.operation_error=GetLastError();s.owner_failure=true;break;}
+        if(current.kind==Kind::kView)close_construct(current.mapping,0);
+        current.kind=Kind::kHole;current.view=nullptr;current.owner=nullptr;
+        std::fill(current.live.begin(),current.live.end(),false);current.live_pages=0;
+        std::fill(current.actual_protection.begin(),current.actual_protection.end(),0);
+        if(s.owner_failure)break;
+      }
+      close_construct(mapping,0);
+      // Keep exact existing placeholder partitions; cleanup does not need a
+      // fictitious merge or a newly allocating Punch after constructor failure.
+    } else Punch(s,result,result+len);
     ReleaseGroupIfEmpty(s, group);
-    errno = error;
+    errno=s.owner_failure?EIO:error;
     return MAP_FAILED;
   };
 
   // [result, result + in_view): the view.
   if (in_view != 0) {
     if (in_view != len) {
-      VirtualFree(reinterpret_cast<void*>(result), in_view, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
-      SplitEntry(s, hole, result + in_view);
+      if(prepared_request) {
+        if(!FileAliasFree(reinterpret_cast<void*>(result),in_view,MEM_RELEASE|MEM_PRESERVE_PLACEHOLDER)) {
+          hole->second.operation_error=GetLastError();s.owner_failure=true;return fail(EIO);
+        }
+        hole->second=std::move(request.constructor_first);
+        auto tail=s.regions.insert(std::move(request.constructor_tail));
+        if(!tail.inserted){s.owner_failure=true;return fail(EIO);}
+      } else {
+        VirtualFree(reinterpret_cast<void*>(result), in_view, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
+        SplitEntry(s, hole, result + in_view);
+      }
     }
     if (!MapViewInto(mapping, result, in_view, begin, view_protection)) {
       TRACE("MapViewOfFile3 at %p (0x%zx bytes, offset 0x%llx) failed: %lu\n",
             reinterpret_cast<void*>(result), in_view, static_cast<unsigned long long>(begin),
             GetLastError());
-      CloseHandle(mapping);
+      if(!prepared_request){CloseHandle(mapping);mapping=nullptr;}
       return fail(EACCES);
     }
     Region& r = hole->second;
     r.kind = Kind::kView;
     r.view = reinterpret_cast<void*>(result);
     r.mapping = mapping;
+    if(prepared_request)mapping=nullptr; // explicit transfer to published region
     r.offset = begin;
     r.view_protection = view_protection;
     r.shared = shared;
@@ -1011,6 +1055,7 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
                      GetFileType(file) == FILE_TYPE_DISK;
     std::fill(r.live.begin(), r.live.end(), true);
     r.live_pages = r.live.size();
+    std::fill(r.actual_protection.begin(),r.actual_protection.end(),view_protection);
     DWORD protection = PageProtection(prot);
     if (!shared) protection = CopyOnWrite(protection);
     DWORD old;
@@ -1018,6 +1063,7 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
         !VirtualProtect(reinterpret_cast<void*>(result), in_view, protection, &old)) {
       return fail(EACCES);
     }
+    std::fill(r.actual_protection.begin(),r.actual_protection.end(),protection);
   }
   // [result + in_view, result + len): anonymous, with what the file has there.
   if (in_view < len) {
@@ -1033,6 +1079,7 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
                         PageProtection(prot), &old)) {
       return fail(EACCES);
     }
+    std::fill(tail->second.actual_protection.begin(),tail->second.actual_protection.end(),PageProtection(prot));
   }
   if (exec) FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(result), len);
   TRACE("fd %d at %p: %s view of 0x%zx bytes, 0x%zx bytes copied\n", fd,

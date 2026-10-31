@@ -150,6 +150,10 @@ PrepareStatus PreparePunchRequest(const RegionMap& source,uintptr_t begin,uintpt
     const size_t length=end-begin;
     if(final_view==SIZE_MAX)final_view=length;
     if(final_view>length || final_view%page)return PrepareStatus::InvalidSize;
+    work.constructor_anonymous.kind=Kind::kHole;
+    work.constructor_anonymous.group=first->second.group;work.constructor_anonymous.size=length;
+    work.constructor_anonymous.live.assign(length/page,false);
+    work.constructor_anonymous.actual_protection.assign(length/page,0);
     work.constructor_first.kind=Kind::kHole;
     work.constructor_first.group=first->second.group;
     work.constructor_first.size=final_view?final_view:length;
