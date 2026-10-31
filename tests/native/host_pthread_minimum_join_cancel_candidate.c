@@ -36,7 +36,7 @@ static void *joiner_main(void *ignored) {
 }
 int main(void) {
   pthread_t joiner;
-  HANDLE owned_joiner = NULL;
+  HANDLE owned_joiner = NULL, owned_target = NULL;
   void *value = NULL;
   char input[32];
   DWORD tid, wait;
@@ -51,9 +51,16 @@ int main(void) {
   check(WaitForSingleObject(joiner_ready, 5000) == WAIT_OBJECT_0, "joiner ready wait");
   check(DuplicateHandle(GetCurrentProcess(), pthread_gethandle(joiner), GetCurrentProcess(),
                         &owned_joiner, 0, FALSE, DUPLICATE_SAME_ACCESS), "joiner handle");
+  check(DuplicateHandle(GetCurrentProcess(), pthread_gethandle(target), GetCurrentProcess(),
+                        &owned_target, 0, FALSE, DUPLICATE_SAME_ACCESS), "target handle");
+  check(GetThreadId(owned_target) != 0 && WaitForSingleObject(owned_target, 0) == WAIT_TIMEOUT,
+        "actual held target is live");
   tid = GetThreadId(owned_joiner);
   check(tid != 0, "joiner tid");
   printf("JOIN_CANCEL_WAIT_WITNESS tid=%lu\n", (unsigned long)tid);
+  printf("JOIN_CANCEL_TARGET pid=%lu tid=%lu handle=%llu alive=1\n",
+         (unsigned long)GetCurrentProcessId(), (unsigned long)GetThreadId(owned_target),
+         (unsigned long long)(uintptr_t)owned_target);
   /* Controller acknowledges only after sampling this exact TID in OS wait. */
   check(fgets(input, sizeof input, stdin) && strcmp(input, "observed\n") == 0, "wait witness");
   check(WaitForSingleObject(owned_joiner, 0) == WAIT_TIMEOUT, "joiner still live");
@@ -65,7 +72,7 @@ int main(void) {
   check(SetEvent(target_release), "release target");
   value = NULL;
   check(pthread_join(target, &value) == 0 && value == (void *)(uintptr_t)0x1234, "target remains joinable");
-  check(CloseHandle(owned_joiner) && CloseHandle(target_ready) && CloseHandle(target_release) && CloseHandle(joiner_ready), "owned cleanup");
+  check(CloseHandle(owned_joiner) && CloseHandle(owned_target) && CloseHandle(target_ready) && CloseHandle(target_release) && CloseHandle(joiner_ready), "owned cleanup");
   puts("JOIN_CANCEL_PASS cleanup=1 target_joinable=1 target_result=4660");
   return 0;
 }
