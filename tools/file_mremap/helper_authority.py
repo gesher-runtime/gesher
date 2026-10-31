@@ -42,6 +42,12 @@ COMMON = ('--no-default-config','-std=gnu++20','-mno-ms-bitfields','-fsized-deal
 TUS = {'helper.obj': 'compat/posix/src/mman_alias_prepare.cc',
        'qualification.obj': 'tests/file_mremap/alias_prepare_test.cc',
        'caller.obj': 'tests/file_mremap/alias_prepare_noexcept_caller.cc'}
+SDK_STL_ALL=frozenset(('windows.h','map','vector','memory','new','array','utility'))
+SDK_STL_REQUIRED={'helper.obj':SDK_STL_ALL,'qualification.obj':SDK_STL_ALL,
+                  'caller.obj':frozenset(('windows.h','map','vector','memory','array'))}
+def require_dependency_union(dependencies):
+    require(set(dependencies)==set(TUS),'aggregate dependency objects')
+    require(SDK_STL_ALL<={PurePosixPath(x['path']).name for rows in dependencies.values() for x in rows},'aggregate SDK/STL headers')
 HEADER = 'compat/posix/src/mman_registry_internal.h'
 SOURCE_BLOBS = {'helper.obj': 'd14206f2584886d06cd16ba98a9a77ad1e53bb29',
                 'qualification.obj': 'fa3b57bfe936bc0f331f1c1834f853139e9d441b',
@@ -486,7 +492,7 @@ def verify_bundle(files, auth):
         require(row['source_sha256']==digest(git(Path.cwd(),'cat-file','blob',SOURCE_BLOBS[obj])) and row['header_sha256']==digest(git(Path.cwd(),'cat-file','blob',HEADER_BLOB)),'actual immutable source/header')
         validate_producer_commands(row['expanded'],config);validate_cpp_expansion(row['expanded'],config,obj)
         dep=dependencies[obj];require(type(dep)is list and 1<=len(dep)<=8192,'dependency bounds')
-        require({'windows.h','map','vector','memory','new','array','utility'}<={Path(x['path']).name for x in dep},'positive SDK/STL headers')
+        require(SDK_STL_REQUIRED[obj]<={PurePosixPath(x['path']).name for x in dep},'positive SDK/STL headers')
         require(any(x['origin']=='source'and x['relative']==HEADER and x['sha256']==row['header_sha256']for x in dep),'bound dependency header')
         for x in dep:
             require(set(x)=={'origin','path','relative','sha256','bytes'}and x['origin']in ('source','toolchain')and type(x['bytes'])is int and x['bytes']>0,'dependency schema')
@@ -494,6 +500,7 @@ def verify_bundle(files, auth):
             require(not relative.is_absolute()and '..'not in relative.parts and str(relative)==x['relative'],'dependency path')
             base=producer_posix(config['roots']['source'if x['origin']=='source'else'supplier'])
             require(producer_posix(x['path'])==base/relative,'bound producer dependency root')
+    require_dependency_union(dependencies)
     transcript=decode(files['link-transcript.txt'])
     require(set(transcript)=={'compile','link'}and len(transcript['compile'])==3,'exact controlled transcript')
     for row,obj in zip(transcript['compile'],TUS):

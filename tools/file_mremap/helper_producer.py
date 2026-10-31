@@ -146,7 +146,8 @@ def extract_toolchain(raw,destination):
         archive.extractall(destination,filter='data')
     return destination/ARCHIVE_NAME
 
-def dependency_paths(raw,source_root,toolroot,build,diagnostic=None):
+def dependency_paths(raw,source_root,toolroot,build,diagnostic=None,obj='helper.obj'):
+    A.require(obj in A.SDK_STL_REQUIRED,'exact dependency object')
     text=raw.decode('utf-8').replace('\\\n',' ')
     A.require(': 'in text,'make dependency target')
     names=shlex.split(text.split(': ',1)[1]);A.require(1<=len(names)<=8192 and len(set(names))==len(names),'dependency count/duplicates')
@@ -157,7 +158,7 @@ def dependency_paths(raw,source_root,toolroot,build,diagnostic=None):
         A.require(source or supplier,'foreign dependency')
         if source:A.require(path.relative_to(source_root).as_posix()in (*A.TUS.values(),A.HEADER),'unreviewed local include')
         result.append({'origin':'source'if source else'toolchain','path':str(path),'relative':path.relative_to(source_root if source else toolroot).as_posix(),'sha256':sha(path),'bytes':path.stat().st_size})
-    required={'windows.h','map','vector','memory','new','array','utility'}
+    required=A.SDK_STL_REQUIRED[obj]
     if not required<={Path(x['path']).name for x in result} and diagnostic is not None:
         try:
             diagnostic(raw,result,required)
@@ -316,11 +317,12 @@ def produce():
         if obj=='helper.obj':emit_early_basis(auth,job,tc,root,build,configs,argv,expanded[obj],{'target':(target_raw,target_err),'version':(version,version_err),'expansion':(out,err)},basis_receipts,controlled)
         stdout,stderr=tool(argv,build,env);transcripts.append({'object':obj,'argv':argv,'driver_expansion':(out+err).decode(),'stdout':stdout.decode(),'stderr':stderr.decode()})
         rawdep=(build/dep).read_bytes();deps[obj]=dependency_paths(rawdep,root,tc,build,
-            lambda raw,rows,required:emit_dependency_rejection(raw,rows,required,auth,job,obj,controlled))
+            lambda raw,rows,required:emit_dependency_rejection(raw,rows,required,auth,job,obj,controlled),obj=obj)
         A.require(any(x['relative']==A.HEADER and x['origin']=='source'for x in deps[obj]),'current private header dependency')
         save(bundle/dep,rawdep);shutil.copyfile(build/obj,bundle/obj)
         objects[obj]={'source':source,'source_blob':A.SOURCE_BLOBS[obj],'source_sha256':sha(root/source),'header_blob':A.HEADER_BLOB,'header_sha256':sha(root/A.HEADER),'sha256':sha(build/obj),'exceptions':obj!='caller.obj','argv':argv,'expanded':expanded[obj]}
         commands.append({'output':obj,'file':source,'argv':argv,'expanded':expanded[obj]})
+    A.require_dependency_union(deps)
     link=A.link_recipe(controlled)
     out,err=tool([link[0],'-###',*link[1:]],build,env);exp=parse_driver(out+err,tc,root,build)
     stdout,stderr=tool(link,build,env);trace=(stdout+stderr).decode();lower=trace.lower()+(out+err).decode().lower()
