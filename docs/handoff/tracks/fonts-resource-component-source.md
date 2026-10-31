@@ -209,7 +209,7 @@ remain admission observations, not OS loader confinement or exhaustive closure.
 CI source wiring uses a fresh authenticated20261006 publisher archive independently
 of mutable setup cache, separate fresh resource-out build, actual compiler hash,
 both canonical pthread aliases and real Reading/Loaded selected-member/ar/nm/map
-main/REL32 evidence. Fixture׳’ג€ ג€™setenv/unsetenv׳’ג€ ג€™owner and path׳’ג€ ג€™same owner are bound;
+main/REL32 evidence. Fixture׳³ג€™׳’ג‚¬ֲ ׳’ג‚¬ג„¢setenv/unsetenv׳³ג€™׳’ג‚¬ֲ ׳’ג‚¬ג„¢owner and path׳³ג€™׳’ג‚¬ֲ ׳’ג‚¬ג„¢same owner are bound;
 no unused source object is substituted. Fresh current-source/current-attempt archive
 receipts remain strict. The separate new guard wraps frozen4d54/e85b and all prior
 98/20/10/13/5 layers, exact whole source/pins/history/DAG/noop/shadow controls and
@@ -228,3 +228,9 @@ required before proposing an equivalent observer and resuming runtime6913.
 No CRITICAL_SECTION/SRW layout or owner field is guessed. Managed DEFAULT,
 Windows fallback, updates/OEM policy, current both-runtime/JNI/guest/JavaOs/OEM
 retention and whole Gesher release obligations remain open.
+
+## Unwind mismatch evidence only (after actual b5b6 RED)
+
+Run41195005255/a1 on b5b6 failed both Windows imports before child/prewarm/capture. Actual rejected operations were not printed. This source adds only FONT_RESOURCE_UNWIND_MISMATCH_V1 at the existing strict operation mismatch: lossless selected12-byte entry and Begin/End/UnwindRVA, header4, rawrecord<=256 plus SHA, parsed header fields, receivedoperations<=32 and unchanged expected tuples, first10 prologue bytes. ASCII suffix including marker is capped4096 bytes; formatting/internal/overcap failures retain original UNAVAILABLE without evidence. No truncation, new output on valid results, machine stdout/protocol change, alternative tuple, profile/layout repair or new command. Original comparison, earlier guards and rejection order remain unchanged. Synthetic evidence is labeled synthetic in tests; current actual values remain unknown until separately reviewed changed-source CI.
+
+Same27 producer inputs/4 outputs/18 outer pins/1638 whole paths/five roles, original32 helpers/3-tool decoder/EOF/nativefixture and all4 qualification flags FALSE. b5b6 actual RED/oldfive WCT RED/parked6913 remain. DIFFERENT whole-source peer and separate CI scheduling required; this is not an owner/runtime/release acceptance.
