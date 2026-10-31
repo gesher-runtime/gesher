@@ -1,0 +1,66 @@
+name: pthread-minimum-join-runtime-component
+on:
+  push:
+    branches: [wip/pthread-minimum-join-witness-runtime]
+    paths: [.github/workflows/pthread-minimum-join-runtime-component.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  source-authority:
+    uses: gesher-runtime/gesher/.github/workflows/pthread-minimum-join-runtime-trusted-source.yml@0000000000000000000000000000000000000000
+  diagnostic-producer:
+    needs: source-authority
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PTHREAD_MINIMUM_JOIN_RUNTIME_CALLER_COMMIT: ${{ vars.PTHREAD_MINIMUM_JOIN_RUNTIME_CALLER_COMMIT }}
+      GESHER_MINIMUM_JOIN_RUNTIME_AUTHORIZED_SOURCE: ${{ needs.source-authority.outputs.source }}
+      GESHER_MINIMUM_JOIN_RUNTIME_POLICY_REF: ${{ needs.source-authority.outputs.policy_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Build exact diagnostic supplier, static and DLL consumers
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/llvm-mingw-diagnostic.tar.xz"
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64.tar.xz" -o "$archive"
+          bash tools/host-pthread-authority/build-minimum-join-runtime-wip.sh "$archive"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minimum-join-runtime-diagnostic
+          path: minimum-join-runtime-bundle/
+          if-no-files-found: error
+          retention-days: 3
+  diagnostic-windows:
+    name: diagnostic-windows-${{ matrix.os }}-${{ matrix.mode }}
+    needs: [source-authority, diagnostic-producer]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        mode: [static, dynamic]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PTHREAD_MINIMUM_JOIN_RUNTIME_CALLER_COMMIT: ${{ vars.PTHREAD_MINIMUM_JOIN_RUNTIME_CALLER_COMMIT }}
+      GESHER_MINIMUM_JOIN_RUNTIME_AUTHORIZED_SOURCE: ${{ needs.source-authority.outputs.source }}
+      GESHER_MINIMUM_JOIN_RUNTIME_POLICY_REF: ${{ needs.source-authority.outputs.policy_ref }}
+      JOIN_RUNTIME_OS: ${{ matrix.os }}
+      JOIN_RUNTIME_MODE: ${{ matrix.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Verify exact current producer receipt and diagnostic binding
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name minimum-join-runtime-diagnostic --producer diagnostic-producer --destination minimum-join-runtime-bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic producer receipt failed' }
+          python -I -B tools/host-pthread-authority/minimum_join_runtime_bundle_wip.py verify minimum-join-runtime-bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic binary/member provenance failed' }
+      - name: Capture bounded target-bound wait evidence
+        shell: pwsh
+        run: tools/host-pthread-authority/run-minimum-join-cancel-candidate.ps1 -Mode $env:JOIN_RUNTIME_MODE
