@@ -8,11 +8,11 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-BOOL WINAPI FileAliasDuplicateHandle(HANDLE,HANDLE,HANDLE,LPHANDLE,DWORD,BOOL,DWORD);
 LPVOID WINAPI FileAliasMapViewOfFile(HANDLE,DWORD,DWORD,DWORD,SIZE_T);
 BOOL WINAPI FileAliasCloseHandle(HANDLE);
 void FileAliasFailureReset(int mode);
 int FileAliasFailureOutstanding(void);
+int FileAliasFailureMetric(int index);
 int FileAliasFailureCleanup(void);
 #ifdef __cplusplus
 }
