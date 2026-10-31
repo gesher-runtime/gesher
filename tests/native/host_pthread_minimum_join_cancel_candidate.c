@@ -53,7 +53,10 @@ static void capture_joiner_stack(HANDLE thread, DWORD expected_tid) {
     }
   }
   resumed = ResumeThread(thread);
-  if (prior != 0 || resumed != 1) TerminateProcess(GetCurrentProcess(), 95);
+  if (prior != 0 || resumed != 1) {
+    TerminateProcess(GetCurrentProcess(), 95);
+    ExitProcess(95);
+  }
   check(captured && count > 0, "stack capture");
   printf("JOIN_CANCEL_STACK tid=%lu birth_hi=%lu birth_lo=%lu frames=%u suspend_before=%lu resume_before=%lu\n",
          (unsigned long)expected_tid, (unsigned long)created.dwHighDateTime,
