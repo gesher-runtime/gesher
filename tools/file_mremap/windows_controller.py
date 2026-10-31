@@ -181,7 +181,7 @@ def verify_fault(actor,case,fault):
         for r in pages:
             assert r['query_ok']==1
             if r['present']and r['kind']==1:
-                assert r['owner_refs']>0 and r['owner_state']==1
+                assert r['owner_refs']>0 and r['owner_state']==1 and r['owner_refs']==r['owner_views']+r['owner_backing_pins']
                 actual=[v for v in pages if v['present']and v['kind']==1 and v['page']-v['region_page']==r['page']-r['region_page']]
                 assert sum(v['live']for v in actual)==r['live_pages']
                 if r['live']:assert r['state']==0x1000 and r['type']==0x40000 and r['protection']!=1

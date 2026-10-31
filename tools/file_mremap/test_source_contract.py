@@ -37,7 +37,7 @@ def data():
 def union(d):return validate_producer(d['produced'],d['freeze'],d['context'],G,d['run'],d['jobs'],d['artifact'])
 def page(i,**change):
     row=dict(event='ledger',phase='after_fault',page=i,present=1,region_page=i,region_size=20480,
-      kind=1,live=1,live_pages=5,owner_refs=3,owner_state=1,owner_failure=0,failed_owners=0,
+      kind=1,live=1,live_pages=5,owner_refs=3,owner_views=3,owner_backing_pins=0,owner_state=1,owner_failure=0,failed_owners=0,
       failed_owner_state=-1,failed_owner_error=0,failed_owner_refs=0,rollback_view=0,
       failed_handle_valid=0,backing_refs=0,rollback_query_ok=0,rollback_state=0,rollback_protection=0,rollback_type=0,
       ledger_protection=0,operation_error=0,query_ok=1,state=0x1000,protection=4,type=0x40000,group=1)
@@ -50,7 +50,7 @@ def prefix_data():
     rows=[]
     for phase in ('after_fault','after_first_prefix_cleanup'):
         for i in range(5):
-            r=page(i,phase=phase,owner_failure=1,owner_refs=4)
+            r=page(i,phase=phase,owner_failure=1,owner_refs=4,owner_views=4)
             if i<2:r.update(region_size=8192,live_pages=2)
             elif i==2:r.update(kind=2,region_page=0,region_size=4096,live=0,live_pages=0,owner_refs=0,owner_state=-1,state=0x2000,protection=0,type=0)
             else:r.update(region_page=i-3,region_size=8192,live_pages=2)

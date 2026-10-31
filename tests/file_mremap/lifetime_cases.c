@@ -75,15 +75,15 @@ static int ledger(const char* phase,unsigned char* address,size_t size,size_t pa
       if(r->live && (r->query_state!=MEM_COMMIT || r->query_type!=MEM_MAPPED || r->query_protection==PAGE_NOACCESS))bad=1;
       if(!r->live && r->query_state==MEM_COMMIT && r->query_protection!=PAGE_NOACCESS)bad=1;
       if(r->ledger_protection && r->query_protection!=r->ledger_protection)bad=1;
-      if(!r->owner_refs || r->owner_state!=1)bad=1;
+      if(!r->owner_refs || r->owner_state!=1 || r->owner_refs!=r->owner_views+r->owner_backing_pins)bad=1;
       size_t counted=0;
       for(int j=0;j<5;++j)if(rows[j].present && rows[j].kind==1 &&
           (size_t)j-rows[j].region_page==(size_t)i-r->region_page && rows[j].live)++counted;
       if(counted!=r->live_pages)bad=1;
     }
     if(r->present && r->kind==2 && (r->live || r->live_pages || r->owner_refs || r->query_state!=MEM_RESERVE))bad=1;
-    printf("{\"event\":\"ledger\",\"phase\":\"%s\",\"page\":%d,\"present\":%d,\"region_page\":%zu,\"region_size\":%zu,\"kind\":%d,\"live\":%d,\"live_pages\":%zu,\"owner_refs\":%zu,\"owner_state\":%d,\"owner_failure\":%d,\"failed_owners\":%d,\"failed_owner_state\":%d,\"failed_owner_error\":%lu,\"failed_owner_refs\":%zu,\"rollback_view\":%d,\"failed_handle_valid\":%d,\"backing_refs\":%zu,\"rollback_query_ok\":%d,\"rollback_state\":%lu,\"rollback_protection\":%lu,\"rollback_type\":%lu,\"ledger_protection\":%lu,\"operation_error\":%lu,\"query_ok\":%d,\"state\":%lu,\"protection\":%lu,\"type\":%lu,\"group\":%d}\n",
-      phase,i,r->present,r->region_page,r->region_size,r->kind,r->live,r->live_pages,r->owner_refs,r->owner_state,r->owner_failure,r->failed_owners,r->failed_owner_state,r->failed_owner_error,r->failed_owner_refs,r->rollback_view,r->failed_handle_valid,r->backing_refs,r->rollback_query_ok,r->rollback_state,r->rollback_protection,r->rollback_type,r->ledger_protection,r->operation_error,r->query_ok,r->query_state,r->query_protection,r->query_type,r->group);
+    printf("{\"event\":\"ledger\",\"phase\":\"%s\",\"page\":%d,\"present\":%d,\"region_page\":%zu,\"region_size\":%zu,\"kind\":%d,\"live\":%d,\"live_pages\":%zu,\"owner_refs\":%zu,\"owner_views\":%zu,\"owner_backing_pins\":%zu,\"owner_state\":%d,\"owner_failure\":%d,\"failed_owners\":%d,\"failed_owner_state\":%d,\"failed_owner_error\":%lu,\"failed_owner_refs\":%zu,\"rollback_view\":%d,\"failed_handle_valid\":%d,\"backing_refs\":%zu,\"rollback_query_ok\":%d,\"rollback_state\":%lu,\"rollback_protection\":%lu,\"rollback_type\":%lu,\"ledger_protection\":%lu,\"operation_error\":%lu,\"query_ok\":%d,\"state\":%lu,\"protection\":%lu,\"type\":%lu,\"group\":%d}\n",
+      phase,i,r->present,r->region_page,r->region_size,r->kind,r->live,r->live_pages,r->owner_refs,r->owner_views,r->owner_backing_pins,r->owner_state,r->owner_failure,r->failed_owners,r->failed_owner_state,r->failed_owner_error,r->failed_owner_refs,r->rollback_view,r->failed_handle_valid,r->backing_refs,r->rollback_query_ok,r->rollback_state,r->rollback_protection,r->rollback_type,r->ledger_protection,r->operation_error,r->query_ok,r->query_state,r->query_protection,r->query_type,r->group);
   }
   return bad;
 }
@@ -120,6 +120,7 @@ static int failure_state(unsigned char* source,unsigned char* alias,size_t size,
     FileAliasPage* x=&rows[i];FileAliasPage* y=&after[i];
     if(x->present!=y->present||x->region_size!=y->region_size||x->kind!=y->kind||
        x->live!=y->live||x->live_pages!=y->live_pages||x->owner_refs!=y->owner_refs||
+       x->owner_views!=y->owner_views||x->owner_backing_pins!=y->owner_backing_pins||
        x->owner_state!=y->owner_state||x->owner_failure!=y->owner_failure||
        x->ledger_protection!=y->ledger_protection||x->operation_error!=y->operation_error||
        x->query_ok!=y->query_ok||x->query_state!=y->query_state||
