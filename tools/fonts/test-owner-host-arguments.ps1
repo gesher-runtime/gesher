@@ -19,3 +19,15 @@ foreach($mode in @('wide','missing','empty','invalid-wide','supplementary')){
  }
 }
 Write-Host 'FONT_OWNER_HOST_ARGUMENT_METADATA_PASS modes=5 exact_ArgumentList=1 missing_empty_distinct=1 raw_UTF16_BMP_SMP_unpaired=1 actual_child_transport_qualification=PENDING native_processes_started=0'
+$decoders=@($tree.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)|Where-Object Name -ceq 'Convert-OwnerModulePath')
+if($decoders.Count -ne 1){throw 'Missing/ambiguous native module decoder'}
+. ([scriptblock]::Create($decoders[0].Extent.Text))
+$wanted='C:\module-אב space\ucrtbase.dll'
+$units=($wanted.ToCharArray()|ForEach-Object{([int]$_).ToString('x4')}) -join ','
+if((Convert-OwnerModulePath $units) -cne $wanted){throw 'Exact native UTF16 module path changed'}
+foreach($bad in @('','0061','0043,003a,005c,0000','not-hex','12345','0061,')){
+ $rejected=$false
+ try{$null=Convert-OwnerModulePath $bad}catch{$rejected=$true}
+ if(-not $rejected){throw 'Unsafe native module path accepted'}
+}
+Write-Host 'FONT_OWNER_HOST_MODULE_PATH_METADATA_PASS exact_UTF16_literal_path=1 malformed_relative_NUL_rejected=1 native_processes_started=0'
