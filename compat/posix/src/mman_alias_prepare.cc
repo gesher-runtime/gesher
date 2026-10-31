@@ -172,6 +172,7 @@ PrepareStatus PreparePunchRequest(const RegionMap& source,uintptr_t begin,uintpt
       piece.start=at->first;piece.begin=cursor;
       piece.end=std::min(end,at->first+original.size);
       piece.original=original; // catches ALL vector snapshot allocation here
+      piece.original.actual_protection.assign(original.size/page,0);
       piece.desired_protection.assign(original.size/page,0);
       if(original.kind==Kind::kView && !original.shared &&
          (piece.begin>at->first || piece.end<at->first+original.size))
