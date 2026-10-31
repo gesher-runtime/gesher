@@ -1,10 +1,18 @@
 # Explicit ci/build selected-only injection, not a toolchain/default change.
 include_guard(GLOBAL)
-if(NOT "$ENV{GESHER_HOST_PTHREAD_SELECTION}" STREQUAL "selected-minimum"
-   OR NOT "$ENV{GESHER_HOST_PTHREAD_CALLER}" STREQUAL "ci/build")
+if(NOT "$ENV{GESHER_HOST_PTHREAD_SELECTION}" STREQUAL "selected-minimum")
   message(FATAL_ERROR "Selected link capture requires the explicit first caller")
 endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+if("$ENV{GESHER_HOST_PTHREAD_CALLER}" STREQUAL "pthread-first-link/build")
+  execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/first_link_context.py" --verify
+                  RESULT_VARIABLE _gesher_first_link_context)
+  if(NOT _gesher_first_link_context EQUAL 0)
+    message(FATAL_ERROR "Focused path/ref/source/policy caller authority failed")
+  endif()
+elseif(NOT "$ENV{GESHER_HOST_PTHREAD_CALLER}" STREQUAL "ci/build")
+  message(FATAL_ERROR "Unknown selected link caller")
+endif()
 set(_gesher_selected_linker "${Python3_EXECUTABLE};${CMAKE_CURRENT_LIST_DIR}/selected_link.py;launch")
 set(CMAKE_C_LINKER_LAUNCHER "${_gesher_selected_linker}")
 set(CMAKE_CXX_LINKER_LAUNCHER "${_gesher_selected_linker}")
