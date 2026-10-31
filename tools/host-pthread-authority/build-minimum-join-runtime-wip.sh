@@ -52,6 +52,10 @@ cc="$llvm/bin/x86_64-w64-mingw32-clang";lib="$llvm/x86_64-w64-mingw32/lib"
 "$cc" --version
 "$cc" -std=gnu11 -O2 -g -Wall -Wextra -Werror -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 \
  -DGESHER_MINIMUM_JOIN_WAIT_DIAGNOSTIC -c tests/native/host_pthread_minimum_join_cancel_candidate.c -o "$out/candidate.obj"
+"$llvm/bin/llvm-nm" --undefined-only "$out/candidate.obj" > "$out/candidate-undefined.txt"
+cp "$lib/libwinpthread.a" "$out/libwinpthread.a"
+cp "$lib/libwinpthread.dll.a" "$out/libwinpthread.dll.a"
+"$llvm/bin/llvm-nm" --defined-only "$out/libwinpthread.dll.a" > "$out/import-archive-symbols.txt"
 for mode in static dynamic; do
  if [ "$mode" = static ]; then library="$lib/libwinpthread.a";flags=(-pthread); else library="$lib/libwinpthread.dll.a";flags=();fi
  "$cc" -static "${flags[@]}" "$out/candidate.obj" "$library" -Wl,--verbose -Wl,-Map,"$out/$mode.map" -o "$out/$mode.exe" 2>&1 | tee "$out/$mode-link.txt"
