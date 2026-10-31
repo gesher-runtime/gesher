@@ -93,4 +93,43 @@ $lookup=@($newFunctions|Where-Object{$_.Name -ceq 'Get-ResourcePythonSource'})[0
 Check ($lookup.Contains('Microsoft.PowerShell.Core\Get-Command -Name python -CommandType Application -All -TotalCount 9 -ErrorAction Stop'))
 Check ($lookup.Contains('-isnot [System.Management.Automation.ApplicationInfo]'))
 Check ($lookup -notmatch 'Sort-Object|Start-Process|\.Start\(|Invoke-Expression|Where-Object')
-Write-Host "FONT_RESOURCE_METADATA_PASS checks=$script:checks native_processes_started=0 real_tool_reads=0 actual_application_lookup=NOT_EXECUTED"
+# New code/type controls are synthetic strings and AST only. No disassembler,
+# provider metadata, signature or actual tool operation occurs here.
+foreach($name in @('Get-ResourceCodeHash','Get-ResourceCodeProfile','New-ResourceCodeCommands','Read-ResourceCodeBlock','Read-ResourceLoadedUCRT','Read-ResourceCodeWindow','Read-ResourceTypeState')){
+ $node=@($newFunctions|Where-Object{$_.Name -ceq $name});Check ($node.Count -eq 1);Invoke-Expression $node[0].Extent.Text
+}
+$hash='9601850e2ede2cd86b441223557cae0fa7f5e33b1dd9d481c58c8cc2d688bdc3'
+Check ((Get-ResourceCodeProfile $hash '10.0.26100.33648').start -eq 0x3c1d8)
+Check ((Get-ResourceCodeProfile 'd06d0a421398fb663c6c49586e09774143460fdb1dce489aa9844846b9398555' '10.0.20348.5756').start -eq 0xb84b4)
+Check ((Get-ResourceCodeHash ([Text.Encoding]::ASCII.GetBytes('abc'))) -ceq 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+Reject {Get-ResourceCodeProfile $hash 'different'};Reject {Get-ResourceCodeProfile ('0'*64) '10.0.26100.33648'}
+$cmd=New-ResourceCodeCommands (New-ResourceCommands 'C:\stage\winext' 13 14) 0x3c1d8
+Check ($cmd.EndsWith("`nqd") -and $cmd.Contains('u ucrtbase+0x3c1d8 ucrtbase+0x3c237') -and $cmd.Contains('dt -v -t ntdll!_RTL_CRITICAL_SECTION'))
+Check ($cmd -cnotmatch '(?m)^(?:r |uf|ub|uu|\.frame|dt .*0x|!critsec)')
+Check ((New-ResourceCodeCommands (New-ResourceCommands 'C:\stage\winext' 13 14) 0xb84b4).Contains('u ucrtbase+0xb84b4 ucrtbase+0xb8513'))
+Reject {New-ResourceCodeCommands $cmd 0};Reject {New-ResourceCodeCommands 'qd' 0x3c1d8}
+$base=[uint64]0x10000000;$start=0x3c1d8
+$rows=@();foreach($i in 0..95){$rows+=('{0:x16} 90 nop' -f ($base+$start+$i))}
+$text="FONT_RESOURCE_CODE_BEGIN`nucrtbase!synthetic:`n"+($rows -join "`n")+"`n0:000> .echo FONT_RESOURCE_CODE_END`nFONT_RESOURCE_CODE_END`n"
+$cache='90'*111
+$code=Read-ResourceCodeWindow $text $base $start $cache
+Check ($code.state -ceq 'BYTE_MATCH' -and $code.rows.Count -eq 96 -and !$code.instruction_boundary_proved -and $code.internal_debugger_read_set -ceq 'UNKNOWN')
+$straddleRows=$rows[0..94]+(('{0:x16} {1} synthetic-final' -f ($base+$start+95),('90'*15)))
+$straddle="FONT_RESOURCE_CODE_BEGIN`n"+($straddleRows -join "`n")+"`nFONT_RESOURCE_CODE_END`n"
+Check ((Read-ResourceCodeWindow $straddle $base $start $cache).accepted_last_rva -eq $start+109)
+foreach($bad in @($text.Replace($rows[0],''),$text.Replace($rows[2],$rows[1]),$text.Replace('90 nop','?? unknown'),$text.Replace($rows[0],$rows[0].Replace('90','91')),$text.Replace($rows[-1],''),$text.Replace($rows[-1],$rows[-1]+"`n"+('{0:x16} 90 nop' -f ($base+$start+96))),$text+$text,$text.Replace('ucrtbase!synthetic:',('x'*8193)), $text.Replace($rows[0],$rows[0].Replace('90','909')))){
+ Reject {Read-ResourceCodeWindow $bad $base $start $cache}
+}
+Reject {Read-ResourceCodeWindow $text ([uint64]::MaxValue) $start $cache}
+Reject {Read-ResourceCodeWindow $text $base $start ('90'*110)}
+$type="FONT_RESOURCE_TYPE_BEGIN`n0:000> dt -v -t ntdll!_RTL_CRITICAL_SECTION`nSymbol not found`nFONT_RESOURCE_TYPE_END`n"
+Check ((Read-ResourceTypeState $type).state -ceq 'TYPE_UNAVAILABLE')
+Check ((Read-ResourceTypeState ($type.Replace('Symbol not found','ntdll!_RTL_CRITICAL_SECTION'))).state -ceq 'TYPE_ENUM_ONLY')
+Check ((Read-ResourceTypeState ($type.Replace('Symbol not found',"struct _RTL_CRITICAL_SECTION`n +0x010 OwningThread : Ptr64 Void"))).state -ceq 'TYPE_SCHEMA_PARTIAL')
+$lmv="00000000``10000000 00000000``1014b000 ucrtbase (pdb symbols)`n    Image path: C:\Windows\System32\ucrtbase.dll`n    ImageSize: 0014b000`n    File version: 10.0.26100.33648`n0:000> qd`n"
+Check ((Read-ResourceLoadedUCRT $lmv 'C:\Windows\System32\ucrtbase.dll' $base 0x14b000 '10.0.26100.33648').base -eq $base)
+foreach($bad in @($lmv+$lmv,$lmv.Replace('10000000','20000000'),$lmv.Replace('1014b000','1014c000'),$lmv.Replace('System32','SysWOW64'),$lmv.Replace('0014b000','0014c000'),$lmv.Replace('33648','99999'))){Reject {Read-ResourceLoadedUCRT $bad 'C:\Windows\System32\ucrtbase.dll' $base 0x14b000 '10.0.26100.33648'}}
+Check ($new.Extent.Text.Contains("$"+'stage.code.cache=$cache[0]'))
+Check ($new.Extent.Text.IndexOf("Get-PreflightFileProfile $"+'codePath') -lt $new.Extent.Text.IndexOf('$child=Start-ResourceRole'))
+Check ($new.Extent.Text.Contains("'CODE_ENVELOPE_SCRIPT' ($"+'checkout'))
+Write-Host "FONT_RESOURCE_METADATA_PASS checks=$script:checks native_processes_started=0 real_tool_reads=0 actual_application_lookup=NOT_EXECUTED code_rows=SYNTHETIC"

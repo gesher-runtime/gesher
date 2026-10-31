@@ -30,7 +30,7 @@ assert addition.count(b'BEGIN FONT_RESOURCE_CHARACTERIZATION_ADDITIVE') == 1
 assert addition.count(b'add_executable(') == addition.count(b'EXCLUDE_FROM_ALL') == 1
 assert b'target_link_libraries(font_environment_resource_characterization PRIVATE gesher_posix)' in addition
 assert addition.endswith(b'# END FONT_RESOURCE_CHARACTERIZATION_ADDITIVE\n')
-for name in ('resource-manifest.py', 'resource-import-inventory.py', 'resource-pe-imports.py', 'resource-protocol.py'):
+for name in ('resource-manifest.py', 'resource-import-inventory.py', 'resource-pe-imports.py', 'resource-protocol.py','resource-code-provider.py','resource-code-envelope.py'):
     ast.parse(current('tools/fonts/' + name))
 spec=importlib.util.spec_from_file_location('resource_manifest', ROOT/'tools/fonts/resource-manifest.py')
 module=importlib.util.module_from_spec(spec);sys.path.insert(0,str(ROOT/'tools/fonts'));spec.loader.exec_module(module)
@@ -73,3 +73,18 @@ for value in negatives:
     except (AssertionError,ValueError):pass
     else:raise AssertionError('Malformed frame accepted')
 print('FONT_RESOURCE_SOURCE_PASS old_owner7_old_WCT_old_preflight_exact=1 additive_CMake=1 metadata_only=1 native_processes_started=0')
+
+# Original3-tool passive decoder and native child remain exact; provider is a
+# consumer-local signed input, never redistributed by the Linux artifact.
+for name in ('resource-import-inventory.py','resource-pe-imports.py'):
+    path='tools/fonts/'+name
+    assert current(path)==subprocess.check_output(['git','show','a8e79c27639200c3a3ee9162fb053a22727df3f6:'+path])
+assert current(module.ROLES['fixture'])==subprocess.check_output(['git','show','a8e79c27639200c3a3ee9162fb053a22727df3f6:'+module.ROLES['fixture']])
+assert len(module.INPUTS)==25
+assert "'CODE_ENVELOPE_SCRIPT'" in runner and 'resource-code-envelope.py' in runner
+assert runner.index('Get-PreflightFileProfile $codePath') < runner.index('$child=Start-ResourceRole')
+assert runner.index('Read-ResourceLoadedUCRT $prewarm') < runner.index('$child.process.StandardInput.Write("START`n")')
+assert runner.index("$stage.code.cache=$cache[0]") < runner.index('$child=Start-ResourceRole')
+assert runner.count("Start-ResourceRole $stage 'imports'")==1
+assert not any(word in runner for word in ('uf /c','dt -r','!critsec ','.frame /r','r rcx'))
+print('FONT_RESOURCE_CODE_SOURCE_PASS original3decoder_native_exact=1 provider_is_consumer_local=1 source_inputs=25 native_processes_started=0')
