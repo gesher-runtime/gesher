@@ -2,6 +2,7 @@
 import argparse,hashlib,json,os,platform,shutil,subprocess,tempfile
 from pathlib import Path
 from oracle import verify
+from windows_controller import run_lifetime,CASES
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--output',type=Path,required=True);args=p.parse_args()
@@ -9,7 +10,7 @@ def main():
     root=Path(__file__).resolve().parents[2];source=root/'tests/file_mremap/shared_alias.c'
     record=dict(schema=2,role='file-mremap-linux-reference',source=hashlib.sha256(source.read_bytes()).hexdigest(),
                 commit=os.environ.get('GITHUB_SHA'),run=os.environ.get('GITHUB_RUN_ID'),attempt=os.environ.get('GITHUB_RUN_ATTEMPT'),
-                kernel=platform.release(),steps=[],verdict='FAILED',cleanup=dict(attempted=False,completed=False,error=None),
+                kernel=platform.release(),lifetime_source=hashlib.sha256((root/'tests/file_mremap/lifetime_cases.c').read_bytes()).hexdigest(),lifetime=[],steps=[],verdict='FAILED',cleanup=dict(attempted=False,completed=False,error=None),
                 scope='PARTIAL_A_ALIAS_EQUAL_ONLY',known_gap_families=['resize','private','fixed','dontunmap','beyond_eof','rollback_B'])
     temporary=None
     def invoke(name,command,timeout,cwd=None):
@@ -42,7 +43,12 @@ def main():
                         record['oracle']='PASS'
                     except (AssertionError,KeyError,TypeError,ValueError)as error:
                         record['oracle']='FAIL';record['oracle_error']=repr(error)
-                    if native['exit']==0 and record['oracle']=='PASS':record['verdict']='PASS'
+                    if native['exit']==0 and record['oracle']=='PASS':
+                        lifetime=Path(temporary.name)/'lifetime'
+                        lifetime_build=invoke('compile_lifetime',[str(compiler),'-std=c11','-Wall','-Wextra','-Werror',str(root/'tests/file_mremap/lifetime_cases.c'),'-o',str(lifetime)],60)
+                        if lifetime_build['exit']==0:
+                            record['lifetime']=[run_lifetime([str(lifetime)],case)for case in CASES]
+                            if all(row['verdict']=='PASS'and row['cleanup']for row in record['lifetime']):record['verdict']='PASS'
     except Exception as error:record['controller_error']=repr(error)
     finally:
         if temporary is not None:

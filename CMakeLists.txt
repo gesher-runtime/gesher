@@ -161,3 +161,8 @@ target_link_libraries(native3_lock_blocking_worker PRIVATE gesher_posix)
 add_executable(arm64_elf_test tests/native/arm64_elf_test.cc)
 target_compile_options(arm64_elf_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(arm64_elf_test PRIVATE gesher_bionic gesher_elf)
+
+# BEGIN FILE_MREMAP_SOURCE_QUALIFICATION
+# Explicit CI qualification targets; no fixture is part of the default product.
+add_subdirectory(tests/file_mremap EXCLUDE_FROM_ALL)
+# END FILE_MREMAP_SOURCE_QUALIFICATION
