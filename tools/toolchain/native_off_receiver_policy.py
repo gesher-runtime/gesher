@@ -11,8 +11,8 @@ FULL_BLOB='419783115876ababb9278e04d6b6092e02d2caf3'
 CALLER='.github/workflows/pthread-native-off-receiver-component.yml'
 TRUST='.github/workflows/pthread-native-off-receiver-trusted-source.yml'
 REPO='gesher-runtime/gesher';RID='1426153186'
-REF='refs/heads/wip/pthread-native-off-receiver';NAME='pthread-native-off-receiver-component'
-VARIABLE='PTHREAD_NATIVE_OFF_RECEIVER_CALLER_COMMIT'
+REF='refs/heads/wip/pthread-native-runtime161';NAME='pthread-native-off-receiver-component'
+VARIABLE='PTHREAD_NATIVE_RUNTIME161_CALLER_COMMIT'
 CHANGED={CALLER,TRUST,'tools/toolchain/native_off_receiver_context.py',
  'tools/toolchain/native_off_receiver.py','tools/toolchain/native_off_receiver_policy.py',
  'tools/toolchain/test_native_off_receiver_context.py','tools/toolchain/test_native_off_receiver_live.py',
