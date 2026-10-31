@@ -67,4 +67,70 @@ def main():
         else:raise AssertionError('Unwanted producer trigger admitted')
     print('NATIVE_OFF_SOURCE_PURE_PASS original_factory_ASTexact_after_closed_route_removal=1 opaque_paths='+str(len(opaque))+' copied_ordinary_steps11_native_receiver_steps3=EXACT trigger_negatives='+str(negatives)+' native_network0')
 
-if __name__=='__main__':main()
+def authority_controls():
+    env=dict(GITHUB_ACTIONS='true',GITHUB_REPOSITORY=p.REPO,GITHUB_REPOSITORY_ID=p.RID,
+             GITHUB_REF=p.REF,GITHUB_WORKFLOW=p.NAME,GITHUB_JOB='verify',
+             GITHUB_WORKFLOW_REF=p.REPO+'/'+p.CALLER+'@'+p.REF,
+             GITHUB_SHA='1'*40,GITHUB_WORKFLOW_SHA='1'*40,GITHUB_ACTOR='palmoni5',
+             GITHUB_TRIGGERING_ACTOR='palmoni5',GITHUB_EVENT_NAME='push',
+             GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='1',**{p.VARIABLE:'1'*40})
+    policy=p.REPO+'/'+p.TRUST+'@'+'2'*40
+    run=dict(id=123,run_attempt=1,head_sha='1'*40,head_branch=p.REF.removeprefix('refs/heads/'),
+             path=p.CALLER,name=p.NAME,event='push',repository=dict(full_name=p.REPO,id=int(p.RID)),
+             head_repository=dict(full_name=p.REPO,id=int(p.RID)),actor=dict(login='palmoni5'),
+             triggering_actor=dict(login='palmoni5'),referenced_workflows=[dict(path=policy,sha='2'*40)])
+    p.authority_run(env,run,policy);negatives=0
+    for key in env:
+        bad=dict(env);bad[key]='UNBOUND'
+        try:p.authority_run(bad,run,policy)
+        except (AssertionError,KeyError):negatives+=1
+        else:raise AssertionError('Wrong gate env admitted: '+key)
+    for key in ('id','run_attempt','head_sha','head_branch','path','name','event'):
+        bad=copy.deepcopy(run);bad[key]='UNBOUND'
+        try:p.authority_run(env,bad,policy)
+        except (AssertionError,KeyError):negatives+=1
+        else:raise AssertionError('Wrong gate live run admitted: '+key)
+    for key,sub in [('repository','id'),('repository','full_name'),('head_repository','id'),
+                    ('head_repository','full_name'),('actor','login'),('triggering_actor','login')]:
+        bad=copy.deepcopy(run);bad[key][sub]='UNBOUND'
+        try:p.authority_run(env,bad,policy)
+        except (AssertionError,KeyError):negatives+=1
+        else:raise AssertionError('Wrong gate live identity admitted')
+    for refs in ([],run['referenced_workflows']*2,[dict(path='wrong',sha='2'*40)],[dict(path=policy,sha='3'*40)]):
+        bad=copy.deepcopy(run);bad['referenced_workflows']=refs
+        try:p.authority_run(env,bad,policy)
+        except (AssertionError,KeyError):negatives+=1
+        else:raise AssertionError('Wrong immutable reference admitted')
+    print('NATIVE_OFF_POLICY_AUTHORITY_PURE_PASS negatives='+str(negatives)+' native_network0')
+
+def immutable_controls():
+    import textwrap
+    raw=(p.ROOT/p.TRUST).read_text()
+    code=textwrap.dedent(raw.split("python3 -I - <<'PY'\n",1)[1].rsplit('\n          PY',1)[0])
+    tree=ast.parse(code);definitions=[n for n in tree.body if not(isinstance(n,ast.Expr)and isinstance(n.value,ast.Call)and isinstance(n.value.func,ast.Name)and n.value.func.id=='gate_main')]
+    scope={};exec(compile(ast.Module(body=definitions,type_ignores=[]),'frozen-native-policy','exec'),scope)
+    source=p.git('rev-parse','HEAD').decode().strip()
+    scope['frozen_candidate'](scope['EXPECTED'],source)
+    actual=p.inventory(source);full=scope['frozen_history']();count=0
+    for path in actual:
+        bad=dict(actual);bad[path]=('100644','0'*40)
+        try:full['verify_tree'](bad,actual)
+        except RuntimeError:count+=1
+        else:raise AssertionError('Whole-tree mutation admitted: '+path)
+    for bad in (dict(actual,**{'UNREVIEWED.source':('100644','0'*40)}),{k:v for k,v in actual.items()if k!=p.CALLER}):
+        try:full['verify_tree'](bad,actual)
+        except RuntimeError:count+=1
+        else:raise AssertionError('Whole-tree addition/removal admitted')
+    # Each candidate leaf is independently digest-bound, including the helpers
+    # and this test. These are in-memory ablations, not self-approval of a run.
+    for path in scope['EXPECTED']:
+        wrong=dict(scope['EXPECTED']);wrong[path]='0'*64
+        try:scope['frozen_candidate'](wrong,source)
+        except AssertionError:count+=1
+        else:raise AssertionError('Immutable leaf pin ablation admitted: '+path)
+    print('NATIVE_OFF_IMMUTABLE_SOURCE_PURE_PASS whole_and_leaf_negatives='+str(count)+' independent_gate_definitions=true native_network0')
+
+if __name__=='__main__':
+    import sys
+    main();authority_controls()
+    if '--immutable'in sys.argv:immutable_controls()

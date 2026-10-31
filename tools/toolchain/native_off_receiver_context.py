@@ -48,6 +48,12 @@ def consumer_context(env, selection):
     return result
 
 
+def reference_context(env):
+    result=common_context(env,'selected-minimum')
+    assert env.get('GITHUB_JOB')=='native3-locks-reference' and env.get('GESHER_HOST_PTHREAD_CALLER')=='pthread-native-off-receiver/reference'
+    return result
+
+
 def descriptor(env):
     context(env, 'selected-minimum')
     return dict(TUPLE, source=env['GITHUB_SHA'], policy_ref=env['GESHER_NATIVE_OFF_RECEIVER_POLICY_REF'])
