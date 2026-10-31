@@ -1,7 +1,9 @@
 import copy
+import hashlib
 from pathlib import Path
 import types
 import unittest
+from unittest.mock import patch
 m=types.ModuleType('api_context')
 exec(compile(Path(__file__).with_name('api_context.py').read_bytes(),'api_context.py','exec'),m.__dict__)
 
@@ -13,5 +15,14 @@ class ContextTests(unittest.TestCase):
             bad=copy.deepcopy(e);bad[key]=value
             with self.assertRaises(AssertionError):m.context(bad,'fixture-producer')
         with self.assertRaises(AssertionError):m.api('../outside')
+        class Response:
+            def __enter__(self):return self
+            def __exit__(self,*args):pass
+            def read(self,n):return b'SYNTHETIC_ZIP'
+        class Opener:
+            def open(self,*args,**kwargs):return Response()
+        with patch.dict(m.os.environ,{'GITHUB_ACTIONS':'true','GH_TOKEN':'SYNTHETIC'}),patch.object(m.urllib.request,'build_opener',return_value=Opener()):
+            self.assertEqual(m.download_artifact(5,hashlib.sha256(b'SYNTHETIC_ZIP').hexdigest()),b'SYNTHETIC_ZIP')
+            with self.assertRaises(AssertionError):m.download_artifact(5,'0'*64)
 
 if __name__=='__main__':unittest.main()

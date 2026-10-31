@@ -4,9 +4,11 @@ These predicates alone do not authenticate a caller or trigger CI.
 """
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
+import types
 
 BASE='b0de972bb543e0dd20d125c990817fb5b3407112'
 BASE_INVENTORY='5c15755b5e6223b64305947c610bf3de69adb1edf03ef9dd2b690788ca20a905'
@@ -16,7 +18,9 @@ PYTHON=('tools/ci_graphics_processes/manifest.py','tools/ci_graphics_processes/t
         'tools/ci_graphics_processes/role_checks.py','tools/ci_graphics_processes/test_role_checks.py',
         'tools/ci_graphics_processes/source_guard.py','tools/ci_graphics_processes/test_source_guard.py',
         'tools/ci_graphics_processes/api_context.py','tools/ci_graphics_processes/test_api_context.py',
-        'tools/ci_graphics_processes/bridge.py','tools/ci_graphics_processes/test_bridge.py')
+        'tools/ci_graphics_processes/bridge.py','tools/ci_graphics_processes/test_bridge.py',
+        'tools/ci_graphics_processes/bridge_cli.py','tools/ci_graphics_processes/workflow_templates.py',
+        'tools/ci_graphics_processes/test_workflow_templates.py')
 RUNNER='tools/ci_graphics_processes/run-fixture.ps1'
 ADDITIONS=(CALLER,GUARD,*PYTHON,RUNNER)
 
@@ -52,3 +56,29 @@ def verify_checkout(root,source,pins):
         assert actual==row['blob']
     assert not git('status','--porcelain','--untracked-files=all').strip()
     return current
+
+def guard_main(pins,template):
+    root=Path.cwd()
+    def git(*args):return subprocess.check_output(['git','-C',str(root),*args])
+    source=os.environ['GITHUB_SHA'];reviewed=os.environ['GRAPHICSDEX_CALLER_COMMIT']
+    assert re.fullmatch('[0-9a-f]{40}',source) and source==reviewed and source!=template
+    assert set(pins)==set(PYTHON)|{RUNNER}
+    caller=git('show',source+':'+CALLER)
+    refs=re.findall(rb'graphicsdex-trusted-source.yml@([0-9a-f]{40})',caller)
+    assert len(refs)==1;guard=refs[0].decode()
+    guard_raw=git('show',guard+':'+GUARD);assert guard_raw==git('show',source+':'+GUARD)
+    allpins=dict(pins);allpins[CALLER]=git('rev-parse',source+':'+CALLER).decode().strip();allpins[GUARD]=git('rev-parse',guard+':'+GUARD).decode().strip()
+    verify_checkout(root,source,allpins)
+    def load(name):
+        p=root/'tools/ci_graphics_processes'/(name+'.py');m=types.ModuleType(name);m.__file__=str(p)
+        exec(compile(p.read_bytes(),str(p),'exec'),m.__dict__);return m
+    templates=load('workflow_templates')
+    assert caller==templates.caller_bytes(guard)
+    assert guard_raw==templates.guard_bytes(pins,template)
+    assert git('show',template+':'+CALLER)==templates.caller_bytes('0'*40)
+    current=load('api_context').context(os.environ,'verify')
+    run=load('api_context').api('actions/runs/'+current['run'])
+    load('role_checks').verify_run(run,current,guard)
+    with Path(os.environ['GITHUB_OUTPUT']).open('a',encoding='utf-8',newline='\n')as f:
+        f.write('pins='+json.dumps(allpins,sort_keys=True,separators=(',',':'))+'\n')
+        f.write('guard='+guard+'\ncaller='+source+'\n')

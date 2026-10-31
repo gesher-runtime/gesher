@@ -41,9 +41,15 @@ def producer_manifest(root,current,jobs,guard):
 
 def consumer_artifact(current,jobs,inventory):
     roles=module('role_checks')
+    image=os.environ.get('ImageOS');assert os.environ.get('RUNNER_OS')=='Windows' and image in ('win22','win25')
+    name='fixture (windows-'+('2022' if image=='win22' else '2025')+')'
+    found=[x for x in jobs['jobs'] if x['name']==name];assert len(found)==1
+    job=found[0]
+    assert job['head_sha']==current['source'] and str(job['run_id'])==current['run'] and str(job['run_attempt'])==current['attempt']
+    assert job['status']=='in_progress' and job['conclusion'] is None and type(job['id'])is int and job['id']>0
     verified=roles.verify_jobs(jobs,current,['source-authority / verify','fixture-producer'])
     return roles.verify_artifact(inventory,current,verified['fixture-producer']),verified['fixture-producer']['id']
 
-def consumer_manifest(root,directory,current,guard,producer_id):
+def consumer_manifest(root,archive,current,guard,producer_id):
     m=module('manifest')
-    return m.validate_download(directory,manifest_context(current,guard),producer_id,m.selected(root,current['source']))
+    return m.validate_archive(archive,manifest_context(current,guard),producer_id,m.selected(root,current['source']))

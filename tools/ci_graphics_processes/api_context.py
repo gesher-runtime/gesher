@@ -3,9 +3,11 @@
 This is a building block, not an immutable caller or complete authorization.
 """
 import json
+import hashlib
 import os
 import re
 import urllib.request
+import urllib.parse
 
 def context(env,job):
     assert env.get('GITHUB_ACTIONS')=='true' and env.get('GITHUB_JOB')==job
@@ -34,3 +36,20 @@ def api(path):
         for k,v in rows:assert k not in value;value[k]=v
         return value
     return json.loads(raw,object_pairs_hook=pairs,parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite')))
+
+def download_artifact(artifact_id,expected):
+    assert os.environ.get('GITHUB_ACTIONS')=='true' and type(artifact_id)is int and artifact_id>0
+    assert type(expected)is str and re.fullmatch('[0-9a-f]{64}',expected)
+    class Redirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self,req,fp,code,msg,headers,newurl):
+            p=urllib.parse.urlparse(newurl)
+            assert p.scheme=='https' and p.hostname and p.port in (None,443) and p.username is None and p.password is None
+            assert p.hostname in ('github.com','api.github.com','objects.githubusercontent.com','release-assets.githubusercontent.com') or p.hostname.endswith('.blob.core.windows.net')
+            result=super().redirect_request(req,fp,code,msg,headers,newurl)
+            if result is not None:result.remove_header('Authorization')
+            return result
+    url='https://api.github.com/repos/gesher-runtime/gesher/actions/artifacts/'+str(artifact_id)+'/zip'
+    request=urllib.request.Request(url,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN']})
+    with urllib.request.build_opener(Redirect()).open(request,timeout=60) as response:raw=response.read(1048577)
+    assert len(raw)<=1048576 and hashlib.sha256(raw).hexdigest()==expected
+    return raw

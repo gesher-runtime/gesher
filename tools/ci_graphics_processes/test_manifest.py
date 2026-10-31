@@ -2,6 +2,8 @@ import copy
 import unittest
 import types
 import tempfile
+import io
+import zipfile
 from pathlib import Path
 m=types.ModuleType('manifest')
 exec(compile(Path(__file__).with_name('manifest.py').read_bytes(),'manifest.py','exec'),m.__dict__)
@@ -33,13 +35,14 @@ class ManifestTests(unittest.TestCase):
         for change in changes:
             mutated=copy.deepcopy(value);change(mutated)
             with self.assertRaises(AssertionError):m.validate(mutated,context,42,rows)
-        with tempfile.TemporaryDirectory() as tmp:
-            directory=Path(tmp);p=directory/'graphicsdex-source-manifest.json'
-            p.write_bytes(m.canonical(value)+b'\n')
-            self.assertEqual(m.validate_download(directory,context,42,rows),m.validate(value,context,42,rows))
-            (directory/'extra').write_text('synthetic')
-            with self.assertRaises(AssertionError):m.validate_download(directory,context,42,rows)
-            (directory/'extra').unlink();p.write_bytes(b'{"schema":1,"schema":2}\n')
-            with self.assertRaises(AssertionError):m.validate_download(directory,context,42,rows)
+        def archive(data,extra=False):
+            stream=io.BytesIO()
+            with zipfile.ZipFile(stream,'w')as z:
+                z.writestr('graphicsdex-source-manifest.json',data)
+                if extra:z.writestr('extra','synthetic')
+            return stream.getvalue()
+        self.assertEqual(m.validate_archive(archive(m.canonical(value)+b'\n'),context,42,rows),m.validate(value,context,42,rows))
+        with self.assertRaises(AssertionError):m.validate_archive(archive(m.canonical(value)+b'\n',True),context,42,rows)
+        with self.assertRaises(AssertionError):m.validate_archive(archive(b'{"schema":1,"schema":2}\n'),context,42,rows)
 
 if __name__=='__main__':unittest.main()
