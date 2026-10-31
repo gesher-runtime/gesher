@@ -15,7 +15,7 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 jobs:
   trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/fonts-resource-trusted-source.yml@51f4d4ca7a78351fd2298925e8a41cd42dd2180a
+    uses: gesher-runtime/gesher/.github/workflows/fonts-resource-trusted-source.yml@0000000000000000000000000000000000000000
   fixture-producer:
     needs: trusted-source
     runs-on: ubuntu-24.04
@@ -71,6 +71,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Current host-owner producer receipt failed' }
           python tools/fonts/resource-manifest.py verify --root current-resource-fixtures
           if ($LASTEXITCODE -ne 0) { throw 'Current host-owner source/object/output proof failed' }
-      - name: Run strict host-owner prepared-child bounded native-frame characterization only
+      - name: Run profile-bound CODE and TYPE prerequisite with all owner qualification false
         shell: pwsh
         run: ./tools/fonts/resource-characterization.ps1 -FixturesDirectory (Join-Path $env:GITHUB_WORKSPACE current-resource-fixtures)

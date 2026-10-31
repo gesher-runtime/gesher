@@ -408,6 +408,8 @@ function Get-ResourcePathRoles {
   PE_CDB='admitted signed stage root + cdb.exe';PE_DBGENG='admitted signed stage root + dbgeng.dll';PE_DBGHELP='admitted signed stage root + dbghelp.dll'
   PYTHON_APPLICATION_SOURCE='Get-Command Application -All execution precedence; single first Source only'
   IMPORT_SCRIPT='verified checkout root + fixed import inventory script';CHILD_PROVIDER='owned prepared child ucrtbase/ntdll module filename'
+  SYSTEM_UCRT_CODE='native64 fixed System32/ucrtbase.dll signed retained provider'
+  CODE_ENVELOPE_SCRIPT='current source exact envelope script'
   PREWARM_MODULE='owned prewarm process bounded module filename'
  }
 }
@@ -494,6 +496,72 @@ function New-ResourceCommands([string]$Extension,[uint32]$Writer,[uint32]$Handle
  $extra=@('.echo FONT_RESOURCE_WRITER',('~~[0x'+$Writer.ToString('x')+'] kL 0x14'),'.echo FONT_RESOURCE_HANDLER',('~~[0x'+$Handler.ToString('x')+'] kL 0x14')) -join "`n"
  $base.Substring(0,$base.Length-2)+$extra+"`nqd"
 }
+# Pure definitions; metadata controls select their AST without runner execution.
+function Get-ResourceCodeHash([byte[]]$Bytes) {
+ [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
+}
+function Get-ResourceCodeProfile([string]$Hash,[string]$Version) {
+ $profiles=@{
+  d06d0a421398fb663c6c49586e09774143460fdb1dce489aa9844846b9398555=@{version='10.0.20348.5756';start=0xb84b4;extent=0x110000}
+  '9601850e2ede2cd86b441223557cae0fa7f5e33b1dd9d481c58c8cc2d688bdc3'=@{version='10.0.26100.33648';start=0x3c1d8;extent=0x14b000}
+ }
+ if(!$profiles.ContainsKey($Hash) -or $Version -cne $profiles[$Hash].version){throw 'UNAVAILABLE: exact signed UCRT profile'}
+ $profiles[$Hash]
+}
+function New-ResourceCodeCommands([string]$Base,[int]$Start) {
+ if($Start -notin @(0xb84b4,0x3c1d8) -or !$Base.EndsWith("`nqd")){throw 'Fixed code command profile'}
+ $extra=@('.echo FONT_RESOURCE_CODE_BEGIN',('u ucrtbase+0x'+$Start.ToString('x')+' ucrtbase+0x'+($Start+95).ToString('x')),'.echo FONT_RESOURCE_CODE_END','.echo FONT_RESOURCE_TYPE_BEGIN','dt -v -t ntdll!_RTL_CRITICAL_SECTION','.echo FONT_RESOURCE_TYPE_END') -join "`n"
+ $Base.Substring(0,$Base.Length-2)+$extra+"`nqd"
+}
+function Read-ResourceCodeBlock([string]$Text,[string]$Kind) {
+ if($Kind -cnotin @('CODE','TYPE')){throw 'Fixed block kind'}
+ $pattern='(?ms)^FONT_RESOURCE_'+$Kind+'_BEGIN\r?\n(.*?)^FONT_RESOURCE_'+$Kind+'_END\r?$'
+ $found=[regex]::Matches($Text,$pattern)
+ if($found.Count -ne 1){throw 'UNAVAILABLE: missing/duplicate code/type block'}
+ $value=$found[0].Groups[1].Value
+ # CDB echoes the next command before the ending echo output. Remove ONLY
+ # that fixed echoed marker line, never a code/data command or arbitrary text.
+ $value=[regex]::Replace($value,'(?m)^\d+:[0-9a-fA-F]+> \.echo FONT_RESOURCE_'+$Kind+'_END\r?\n?','')
+ if([Text.Encoding]::UTF8.GetByteCount($value) -gt 8192){throw 'UNAVAILABLE: code/type raw bound'}
+ $value
+}
+function Read-ResourceLoadedUCRT([string]$Text,[string]$Path,[uint64]$ExpectedBase,[int]$Extent,[string]$Version) {
+ $rows=[regex]::Matches($Text,'(?mi)^([0-9a-f`]{8,17})\s+([0-9a-f`]{8,17})\s+ucrtbase\s+[^\r\n]*\r?\n(?<body>.*?)(?=^\d+:[0-9a-f]+>|\z)',[Text.RegularExpressions.RegexOptions]::Singleline)
+ if($rows.Count -ne 1){throw 'UNAVAILABLE: unique loaded UCRT block'}
+ $row=$rows[0];$base=[Convert]::ToUInt64($row.Groups[1].Value.Replace('`',''),16);$end=[Convert]::ToUInt64($row.Groups[2].Value.Replace('`',''),16)
+ $body=$row.Groups['body'].Value
+ $paths=[regex]::Matches($body,'(?m)^\s+Image path:\s+([^\r\n]+)\r?$')
+ $sizes=[regex]::Matches($body,'(?m)^\s+ImageSize:\s+([0-9a-fA-F]+)\s*\r?$')
+ $versions=[regex]::Matches($body,'(?m)^\s+File version:\s+([^\r\n]+)\r?$')
+ if($base -ne $ExpectedBase -or $end -le $base -or $end-$base -ne $Extent -or $paths.Count -ne 1 -or $paths[0].Groups[1].Value.Trim() -ine $Path -or $sizes.Count -ne 1 -or [Convert]::ToUInt64($sizes[0].Groups[1].Value,16) -ne $Extent -or $versions.Count -ne 1 -or $versions[0].Groups[1].Value.Trim() -cne $Version){throw 'UNAVAILABLE: same-child loaded UCRT path/base/extent/profile mismatch'}
+ @{base=$base;end=$end;path=$Path;extent=$Extent;version=$Version;scope='LMV_AND_RETAINED_DISK_NOT_WHOLE_MEMORY_ATTESTATION'}
+}
+function Read-ResourceCodeWindow([string]$Text,[uint64]$Base,[int]$Start,[string]$CacheHex) {
+ if($Start -notin @(0xb84b4,0x3c1d8) -or $CacheHex -cnotmatch '^[0-9a-f]{222}$' -or $Base -gt [uint64]::MaxValue-($Start+111)){throw 'UNAVAILABLE: cache/window bounds'}
+ $raw=Read-ResourceCodeBlock $Text 'CODE'
+ $cursor=$Base+[uint64]$Start;$first=$cursor;$end=$first+95;$rows=[Collections.Generic.List[object]]::new()
+ foreach($line in ($raw -split "`n")){
+  $line=$line.TrimEnd("`r")
+  if(!$line.Trim() -or $line -cmatch '^\d+:[0-9a-fA-F]+> u ucrtbase\+0x[0-9a-f]+ ucrtbase\+0x[0-9a-f]+$' -or $line -cmatch '^ucrtbase![^\r\n:]{1,256}:$'){continue}
+  if($line -cnotmatch '^([0-9a-fA-F`]{8,17})\s+([0-9a-fA-F]{2,30})\s+(.{1,512})$'){throw 'UNAVAILABLE: unknown/truncated code row'}
+  $at=[Convert]::ToUInt64($Matches[1].Replace('`',''),16);$hex=$Matches[2].ToLowerInvariant();$decoded=$Matches[3]
+  $length=$hex.Length/2
+  if($hex.Length%2 -or $length -lt 1 -or $length -gt 15 -or $at -ne $cursor -or $at -gt $end -or $decoded -match '\?\?|\b(?:db|invalid|bad)\b' -or $at-$first+$length -gt 110){throw 'UNAVAILABLE: noncontiguous/overflow/unknown instruction candidate'}
+  $offset=[int]($at-$first)*2
+  if($hex -cne $CacheHex.Substring($offset,$hex.Length)){throw 'UNAVAILABLE: BYTE_MISMATCH (no relocation normalization)'}
+  $rows.Add(@{address=$at;rva=$Start+[int]($at-$first);hex=$hex;decode=$decoded});$cursor+=[uint64]$length
+ }
+ if(!$rows.Count -or $cursor -le $end){throw 'UNAVAILABLE: incomplete96-byte code coverage'}
+ @{state='BYTE_MATCH';rows=@($rows.ToArray());requested_bytes=96;cached_bytes=111;accepted_last_rva=$Start+[int]($cursor-$first)-1;instruction_boundary_proved=$false;internal_debugger_read_set='UNKNOWN';owner_qualified=$false}
+}
+function Read-ResourceTypeState([string]$Text) {
+ $raw=Read-ResourceCodeBlock $Text 'TYPE'
+ $raw=[regex]::Replace($raw,'(?m)^\d+:[0-9a-fA-F]+> dt -v -t ntdll!_RTL_CRITICAL_SECTION\r?\n?','')
+ $schema=$raw -match '(?m)^\s*\+0x[0-9a-fA-F]+\s+[A-Za-z_][A-Za-z0-9_]*\s+:'
+ $named=$raw -cmatch '(?m)^\s*(?:ntdll!|struct |union |class |0x[0-9a-fA-F]+\s+struct )_RTL_CRITICAL_SECTION\b'
+ @{state=$(if($schema -and $named){'TYPE_SCHEMA_PARTIAL'}elseif($named){'TYPE_ENUM_ONLY'}else{'TYPE_UNAVAILABLE'});raw=$raw;full_layout_qualified=$false;owner_qualified=$false}
+}
+
 function Get-ResourceRemaining([long]$Now,[long]$Deadline) {
  if($Now -lt 0 -or $Now -ge $Deadline){throw 'Original monotonic phase deadline expired'}
  $Deadline-$Now
@@ -560,7 +628,7 @@ if($env:GITHUB_ACTIONS -cne 'true' -or !$IsWindows){throw 'Windows CI only'}
 $clock=[Diagnostics.Stopwatch]::StartNew()
 $stage=@{root=$null;handles=[Collections.Generic.List[object]]::new();expected=@();manifest=@();processes=@{}}
 foreach($role in @('child','imports','help','prewarm','capture')){$stage.processes[$role]=@{role=$role;state=$(if($role -ceq 'help'){'OMITTED'}else{'NOT_STARTED'});process=$null;handle=$null;pid=0;out=$null;err=$null}}
-$root=$null;$work=$null;$ok=$false;$phase='PREPARED';$completion=@{}
+$stage.code=@{stream=$null;profile=$null;cache=$null;frame=$null;loaded=$null};$root=$null;$work=$null;$ok=$false;$phase='PREPARED';$completion=@{}
 try{
  $root=New-StageLifetimeRoot $stage
  $fixtureRoot=Resolve-ResourceLiteral 'FIXTURE_ROOT' $FixturesDirectory $true
@@ -588,11 +656,30 @@ try{
   $held=@($stage.handles|Where-Object{$_.stream.Name -ceq $path});if($held.Count -ne 1 -or $held[0].handle.IsClosed -or !$held[0].stream.CanRead -or $held[0].stream.Length -ne $row[0].size){throw 'Missing actual retained manifest PE lock'}
   $entries+=@{name=$name;bytes=$row[0].size;sha256=$row[0].sha256}
  }
+ # Separate fixed native System32 provider admission before any child/HOLD.
+ if(![Environment]::Is64BitProcess){throw 'Native64 System32 code view required'}
+ $codePath=Resolve-ResourceLiteral 'SYSTEM_UCRT_CODE' ($system+'\ucrtbase.dll')
+ $codeStream=[IO.File]::Open($codePath,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+ $stage.code.stream=$codeStream;$stage.handles.Add(@{stream=$codeStream;handle=$codeStream.SafeFileHandle})
+ if($stage.handles.Count -gt 128){throw 'Session held-stream cap'}
+ if($codeStream.Length -lt 64 -or $codeStream.Length -gt 134217728){throw 'Provider full-file bound'}
+ $codeIdentity=Get-PreflightFileProfile $codePath
+ $codeProfile=Get-ResourceCodeProfile $codeIdentity.sha256 $codeIdentity.product_version
+ # Actual saved a8e79 disk profiles include this literal FileVersion suffix;
+ # lmv's numeric File version corresponds to the exact ProductVersion field.
+ if($codeIdentity.file_version -cne ($codeProfile.version+' (WinBuild.160101.0800)')){throw 'UNAVAILABLE: exact observed disk FileVersion'}
+ $stage.code.profile=$codeProfile
+ $codeEntry=@{role='SIGNED_SYSTEM32_UCRT_CODE';name='ucrtbase.dll';bytes=$codeStream.Length;sha256=$codeIdentity.sha256;version=$codeIdentity.product_version}
+ $stage.code.frame=$codeEntry
+ Emit-PreflightRecord 'FONT_RESOURCE_CODE_DISK_ADMISSION' @{path=$codePath;identity=$codeIdentity;frame=$codeEntry;profile=$codeProfile;lock='RETAINED_READ_SHARE_READ';memory_attestation=$false;owner_qualified=$false}
  $pythonSource=Get-ResourcePythonSource
  $python=Resolve-ResourceLiteral 'PYTHON_APPLICATION_SOURCE' $pythonSource
- $psi=New-PreflightStartInfo $python ($work+'\imports') $windows ($work+'\temp') @((Resolve-ResourceLiteral 'IMPORT_SCRIPT' ($checkout+'\tools\fonts\resource-import-inventory.py'))) $false
+ $psi=New-PreflightStartInfo $python ($work+'\imports') $windows ($work+'\temp') @((Resolve-ResourceLiteral 'CODE_ENVELOPE_SCRIPT' ($checkout+'\tools\fonts\resource-code-envelope.py'))) $false
  $imports=Start-ResourceRole $stage 'imports' $psi
- $header=[Text.Encoding]::UTF8.GetBytes((@{entries=$entries}|ConvertTo-Json -Depth 8 -Compress)+"`n");Send-ResourceBytes $imports $header $header.Length
+ $header=[Text.Encoding]::UTF8.GetBytes((@{entries=$entries}|ConvertTo-Json -Depth 8 -Compress)+"`n")
+ $legacyLength=[long]$header.Length;foreach($entry in $entries){$legacyLength+=[long]$entry.bytes+22}
+ $outer=[Text.Encoding]::UTF8.GetBytes((@{version=1;legacy_bytes=$legacyLength;context=@{source=$env:GITHUB_SHA;run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT}}|ConvertTo-Json -Depth 8 -Compress)+"`n")
+ $stage.code.outer=$outer;Send-ResourceBytes $imports $outer $outer.Length;Send-ResourceBytes $imports $header $header.Length
  foreach($entry in $entries){
   $stream=@($stage.handles|Where-Object{$_.stream.Name -ceq ($stage.root+'\'+$entry.name)})[0].stream
   $stream.Position=0;$buffer=[byte[]]::new(65536);$total=0L
@@ -600,8 +687,24 @@ try{
   if($total -ne $entry.bytes -or $stream.ReadByte() -ne -1){throw 'Admitted full stream/EOF mismatch'}
   $end=[Text.Encoding]::ASCII.GetBytes("`nFONT_RESOURCE_PE_END`n");Send-ResourceBytes $imports $end $end.Length
  }
+ $providerHeader=[Text.Encoding]::UTF8.GetBytes(($codeEntry|ConvertTo-Json -Compress)+"`n");$stage.code.providerHeader=$providerHeader
+ Send-ResourceBytes $imports $providerHeader $providerHeader.Length
+ $codeStream.Position=0;$buffer=[byte[]]::new(65536);$total=0L
+ while(($read=$codeStream.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $codeEntry.bytes){throw 'Provider stream overflow'};Send-ResourceBytes $imports $buffer $read}
+ if($total -ne $codeEntry.bytes -or $codeStream.ReadByte() -ne -1){throw 'Provider full stream/EOF mismatch'}
+ $providerEnd=[Text.Encoding]::ASCII.GetBytes("`nFONT_UCRT_CODE_END_V1`n`0`n");Send-ResourceBytes $imports $providerEnd $providerEnd.Length
  $imports.process.StandardInput.Close()
  Wait-ResourceRole $imports 90000
+ $cacheRows=@($imports.out.Text.ToString().Split("`n")|Where-Object{$_.Trim()}|ForEach-Object{ConvertFrom-Json -InputObject $_ -AsHashtable})
+ $cache=@($cacheRows|Where-Object{$_.record -ceq 'PROVIDER_CACHE'})
+ if($cacheRows.Count -ne 4 -or $cache.Count -ne 1){throw 'Exact three-tool + provider output count'}
+ $stage.code.cache=$cache[0];$cache=$stage.code.cache
+ Emit-PreflightRecord 'FONT_RESOURCE_CODE_CACHE' $cache
+ if($cache.role -cne 'SIGNED_SYSTEM32_UCRT_CODE' -or $cache.profile.sha256 -cne $codeEntry.sha256 -or $cache.profile.version -cne $codeEntry.version -or $cache.context.source -cne $env:GITHUB_SHA -or $cache.context.run -cne $env:GITHUB_RUN_ID -or $cache.context.attempt -cne $env:GITHUB_RUN_ATTEMPT -or $cache.start_rva -ne $codeProfile.start -or $cache.size_of_image -ne $codeProfile.extent -or $cache.cache_length -ne 111 -or $cache.cache_hex -cnotmatch '^[0-9a-f]{222}$'){throw 'Provider cache source/profile/window mismatch'}
+ if($cache.profile.role -cne $codeEntry.role -or $cache.profile.name -cne $codeEntry.name -or $cache.profile.bytes -ne $codeEntry.bytes -or $cache.input_record_sha256 -cnotmatch '^[0-9a-f]{64}$' -or $cache.end_rva -ne $codeProfile.start+95 -or $cache.comparison_last_rva -ne $codeProfile.start+109){throw 'Provider cache exact role/frame/range mismatch'}
+ $cacheBytes=[Convert]::FromHexString($cache.cache_hex);$stage.code.bytes=$cacheBytes
+ $cacheKey=@($env:GITHUB_SHA,$env:GITHUB_RUN_ID,$env:GITHUB_RUN_ATTEMPT,$codeEntry.role,$codeEntry.sha256,$codeProfile.start.ToString('x'),'111',$cache.input_record_sha256) -join "`n"
+ if((Get-ResourceCodeHash $cacheBytes) -cne $cache.cache_sha256 -or (Get-ResourceCodeHash ([Text.Encoding]::ASCII.GetBytes($cacheKey))) -cne $cache.cache_key_sha256){throw 'Provider cache content/context key hash mismatch'}
  $child=Start-ResourceRole $stage 'child' (New-PreflightStartInfo $probe ($work+'\child') $windows ($work+'\temp') @() $false)
  while($child.out.Text.ToString() -cnotmatch '^FONT_RESOURCE_PREPARED [^\r\n]+\r?\n$'){
   Update-BoundedPipe $child.out;Update-BoundedPipe $child.err;Assert-OwnedAlive $child.process $child.pid $child.handle
@@ -615,14 +718,20 @@ try{
  $child.process.Refresh();$modules=@($child.process.Modules);if($modules.Count -gt 128){throw 'Module count bound'}
  $providers=@{};foreach($module in $modules){if($module.ModuleName -in @('ucrtbase.dll','ntdll.dll')){$path=Resolve-ResourceLiteral 'CHILD_PROVIDER' $module.FileName;if([IO.Path]::GetDirectoryName($path) -ine $system -or $providers.ContainsKey($module.ModuleName)){throw 'Provider identity'};$providers[$module.ModuleName]=$path;Emit-PreflightRecord 'FONT_RESOURCE_PROVIDER' (Get-PreflightFileProfile $path)}}
  if($providers.Count -ne 2){throw 'Actual prepared providers missing'}
+ $ucrt=@($modules|Where-Object{$_.ModuleName -ieq 'ucrtbase.dll'})
+ if($ucrt.Count -ne 1 -or $ucrt[0].FileName -ine $codePath -or $ucrt[0].ModuleMemorySize -ne $cache.size_of_image){throw 'Prepared current provider differs from signed retained cache'}
+ $codeBase=[uint64]$ucrt[0].BaseAddress.ToInt64()
+ $stage.code.loaded=@{base=$codeBase;extent=$ucrt[0].ModuleMemorySize;path=$codePath;version=$codeEntry.version}
  $prewarmFile=$work+'\commands\prewarm.txt';Write-ResourceCommand $stage $prewarmFile ((New-PreflightCommands $extension)+"`n")
  $prewarm=Start-ResourceRole $stage 'prewarm' (New-PreflightStartInfo $tool ($work+'\prewarm') $windows ($work+'\temp') (New-PreflightArguments $child.pid $prewarmFile $system ($work+'\cache') $extension) $false)
  $prewarm.process.StandardInput.Close();Wait-ResourceRole $prewarm 90000
  Assert-PreflightRawMarkers $prewarm.out.Text.ToString();Assert-OwnedAlive $child.process $child.pid $child.handle
+ $loaded=Read-ResourceLoadedUCRT $prewarm.out.Text.ToString() $codePath $codeBase $cache.size_of_image $codeEntry.version
+ Emit-PreflightRecord 'FONT_RESOURCE_CODE_PREWARM_BINDING' $loaded
  Assert-StageMembership $stage.expected @(Get-StageInventory $stage.root)
  $phase='PREWARM_COMPLETE';Emit-PreflightRecord 'FONT_RESOURCE_PHASE' @{phase=$phase;gallery='NOT_DISABLED';loader='NOT_EXHAUSTIVE';help='OMITTED';owner_qualified=$false}
  $null=Get-ResourceRemaining $clock.ElapsedMilliseconds 90000
- $captureFile=$work+'\commands\capture.txt';Write-ResourceCommand $stage $captureFile ((New-ResourceCommands $extension $identity.writer $identity.handler)+"`n")
+ $captureFile=$work+'\commands\capture.txt';Write-ResourceCommand $stage $captureFile ((New-ResourceCodeCommands (New-ResourceCommands $extension $identity.writer $identity.handler) $codeProfile.start)+"`n")
  $holdDeadline=[Math]::Min(300000,$clock.ElapsedMilliseconds+180000)
  $readyDeadline=[Math]::Min($holdDeadline,$clock.ElapsedMilliseconds+10000)
  $child.process.StandardInput.Write("START`n");$child.process.StandardInput.Flush()
@@ -635,6 +744,16 @@ try{
  $capture=Start-ResourceRole $stage 'capture' (New-PreflightStartInfo $tool ($work+'\capture') $windows ($work+'\temp') (New-PreflightArguments $child.pid $captureFile $system ($work+'\cache') $extension) $false)
  $capture.process.StandardInput.Close();Wait-ResourceRole $capture ([Math]::Min($holdDeadline-10000,$clock.ElapsedMilliseconds+120000))
  Assert-PreflightRawMarkers $capture.out.Text.ToString();Assert-OwnedAlive $child.process $child.pid $child.handle
+ # Raw complete capture was emitted by Wait-ResourceRole BEFORE all gates.
+ $loaded=Read-ResourceLoadedUCRT $capture.out.Text.ToString() $codePath $codeBase $cache.size_of_image $codeEntry.version
+ Emit-PreflightRecord 'FONT_RESOURCE_CODE_CAPTURE_BINDING' $loaded
+ $rawCode=Read-ResourceCodeBlock $capture.out.Text.ToString() 'CODE';$rawType=Read-ResourceCodeBlock $capture.out.Text.ToString() 'TYPE'
+ Emit-PreflightRecord 'FONT_RESOURCE_CODE_TYPE_RAW' @{code=$rawCode;type=$rawType;code_sha256=(Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($rawCode)));type_sha256=(Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($rawType)));cache_key_sha256=$cache.cache_key_sha256;state='CODE_RAW_CANDIDATE';alignment_qualified=$false;owner_qualified=$false}
+ $codeResult=Read-ResourceCodeWindow $capture.out.Text.ToString() $codeBase $codeProfile.start $cache.cache_hex
+ $typeResult=Read-ResourceTypeState $capture.out.Text.ToString()
+ Emit-PreflightRecord 'FONT_RESOURCE_CODE_BYTE_MATCH' $codeResult
+ Emit-PreflightRecord 'FONT_RESOURCE_TYPE_ENUM_OR_SCHEMA' $typeResult
+ $null=Get-ResourceRemaining $clock.ElapsedMilliseconds ($holdDeadline-10000)
  $phase='CAPTURE_COMPLETE';Emit-PreflightRecord 'FONT_RESOURCE_PHASE' @{phase=$phase;owner_qualified=$false};$child.process.StandardInput.Write("RELEASE`n");$child.process.StandardInput.Flush();$child.process.StandardInput.Close();$phase='RELEASED';Emit-PreflightRecord 'FONT_RESOURCE_PHASE' @{phase=$phase;owner_qualified=$false}
  Wait-ResourceRole $child ([Math]::Min(330000,$clock.ElapsedMilliseconds+20000))
  if($child.err.Text.Length -or $child.out.Text.ToString() -cne ($preparedText+'FONT_RESOURCE_HOLD_READY pid='+$held.pid+' writer='+$held.writer+' handler='+$held.handler+"`n"+'FONT_RESOURCE_COMPLETE pid='+$held.pid+' writer='+$held.writer+' handler='+$held.handler+"`n")){throw 'Same child exact COMPLETE receipt mismatch'}

@@ -150,6 +150,7 @@ jobs:
           python3 tools/fonts/test-resource-pe-imports.py
           python3 tools/fonts/test-resource-protocol.py
           python3 tools/fonts/test-resource-source.py
+          python3 tools/fonts/test-resource-code.py
       - name: Retain old argument contracts and verify preflight metadata without processes
         shell: pwsh
         run: |
