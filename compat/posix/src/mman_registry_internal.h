@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <vector>
+#include <array>
 namespace gesher_mman_internal {
 enum class SectionState { Borrowed, Live, Closed, ReleaseFailed, RollbackFailed };
 struct SectionOwner {
@@ -43,6 +44,8 @@ struct Region {
   bool shared = false;        // views: MAP_SHARED
   std::vector<bool> live;     // one entry per page
   size_t live_pages = 0;
+  std::vector<DWORD> actual_protection; // allocated only by promoted preparation
+  DWORD operation_error = 0;
 };
 
 
@@ -58,4 +61,16 @@ struct PreparedAlias {
 };
 enum class PrepareStatus { Ok, NoMemory, InvalidSize, InternalFailure };
 PrepareStatus PrepareAlias(const AliasInput&, PreparedAlias&) noexcept;
+PrepareStatus PrepareAliasFromNoExceptions(const AliasInput&, PreparedAlias&) noexcept; // dedicated CI caller object only
+struct PreparedSplit { Region lower; RegionMap::node_type upper; };
+PrepareStatus PrepareSplit(const Region&, uintptr_t, uintptr_t, size_t, PreparedSplit&) noexcept;
+struct PreparedSurgery {
+  std::array<RegionMap::node_type, 2> holes;
+  std::array<Region, 2> mapped;
+  std::vector<DWORD> desired_protection;
+  std::vector<bool> desired_live;
+};
+PrepareStatus PrepareSurgery(const Region&, uintptr_t, uintptr_t, uintptr_t,
+                             size_t, PreparedSurgery&) noexcept;
+PrepareStatus PrepareSurgeryFromNoExceptions(const Region&, uintptr_t, uintptr_t, uintptr_t, size_t, PreparedSurgery&) noexcept;
 }  // namespace gesher_mman_internal

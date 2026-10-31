@@ -35,4 +35,72 @@ PrepareStatus PrepareAlias(const AliasInput& in, PreparedAlias& out) noexcept {
     return PrepareStatus::InternalFailure;
   }
 }
+
+PrepareStatus PrepareSplit(const Region& source, uintptr_t start, uintptr_t at,
+                           size_t page, PreparedSplit& out) noexcept {
+  if (!out.upper.empty() || page == 0 || at <= start || at - start >= source.size ||
+      (at - start) % page != 0 || source.size%page || source.live.size()!=source.size/page ||
+      (!source.actual_protection.empty()&&source.actual_protection.size()!=source.live.size()))
+    return PrepareStatus::InvalidSize;
+  try {
+    Region lower = source, upper = source; // snapshots BORROW, never ref increments
+    size_t pages = (at - start) / page;
+    upper.size = source.size - (at - start);
+    upper.offset += at - start;
+    upper.live.assign(source.live.begin()+pages, source.live.end());
+    upper.live_pages = 0;
+    for (bool live : upper.live) if (live) ++upper.live_pages;
+    if (!source.actual_protection.empty()) upper.actual_protection.assign(
+        source.actual_protection.begin()+pages,source.actual_protection.end());
+    lower.size = at-start;
+    lower.live.resize(pages);
+    lower.live_pages -= upper.live_pages;
+    if (!lower.actual_protection.empty()) lower.actual_protection.resize(pages);
+    lower.shared_alias = upper.shared_alias = false;
+    RegionMap nodes;
+    nodes.emplace(at, std::move(upper));
+    out.lower = std::move(lower);
+    out.upper = nodes.extract(nodes.begin());
+    return PrepareStatus::Ok;
+  } catch (const std::bad_alloc&) { return PrepareStatus::NoMemory; }
+    catch (...) { return PrepareStatus::InternalFailure; }
+}
+
+PrepareStatus PrepareSurgery(const Region& source, uintptr_t start, uintptr_t x,
+                             uintptr_t y, size_t page, PreparedSurgery& out) noexcept {
+  if (page == 0 || !source.owner || !source.shared || x < start || y <= x ||
+      y-start > source.size || (x-start)%page || (y-start)%page ||
+      source.size%page || source.live.size()!=source.size/page)
+    return PrepareStatus::InvalidSize;
+  try {
+    PreparedSurgery work;
+    work.desired_live = source.live;
+    work.desired_protection.assign(source.size/page, PAGE_NOACCESS);
+    const uintptr_t starts[2] = {start,y};
+    const size_t lengths[2] = {x-start,source.size-(y-start)};
+    for (size_t i=0;i<2;++i) {
+      // Nodes for the two bounded actual placeholder splits, not for OS views.
+      Region hole;
+      hole.kind=Kind::kHole;
+      hole.group=source.group;
+      hole.size=i==0?x-start:y-x;
+      hole.live.assign(hole.size/page,false);
+      RegionMap staging;
+      staging.emplace(i==0?start:x,std::move(hole));
+      work.holes[i]=staging.extract(staging.begin());
+      Region& mapped=work.mapped[i];
+      mapped.kind=Kind::kView; mapped.group=source.group;
+      mapped.mapping=source.mapping; mapped.owner=source.owner;
+      mapped.shared=true; mapped.offset=source.offset+(starts[i]-start);
+      mapped.view_protection=source.view_protection;
+      mapped.size=lengths[i]; mapped.physical_extent=lengths[i];
+      mapped.live.assign(lengths[i]/page,true);
+      mapped.live_pages=mapped.live.size(); // entire actually created view
+      mapped.actual_protection.assign(mapped.live.size(),source.view_protection);
+    }
+    out=std::move(work);
+    return PrepareStatus::Ok;
+  } catch (const std::bad_alloc&) { return PrepareStatus::NoMemory; }
+    catch (...) { return PrepareStatus::InternalFailure; }
+}
 } // namespace gesher_mman_internal
