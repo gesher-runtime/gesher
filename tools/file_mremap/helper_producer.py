@@ -446,10 +446,12 @@ def release_consumer_directory(dest,parent):
 
 def consume():
     A.require(os.name=='nt','consumer Windows only');auth=A.authorize('helper-windows',('source-authority / verify','helper-producer'))
-    image=os.environ.get('ImageOS');A.require(image in ('win22','win25'),'host image role');role='helper-windows-'+('2022'if image=='win22'else'2025');current_job(auth,role)
+    image=os.environ.get('ImageOS');A.require(bool(image and (image in ('win22','win25','win25-vs2026') or image.startswith('win25'))),'host image role')
+    canonical_image='win22'if image=='win22'else'win25'
+    role='helper-windows-'+('2022'if canonical_image=='win22'else'2025');current_job(auth,role)
     artifact=A.verify_artifact(A.api('actions/runs/'+auth['context']['run']+'/artifacts?per_page=100'),auth['context'],auth['roles']['helper-producer']);emit('DOWNLOAD_AUTHORITY',{'context':auth['context'],'roles':auth['roles'],'artifact':artifact,'source_authority':auth['authority'],'host_role':role})
     raw=download('https://api.github.com/repos/'+A.REPOSITORY+'/actions/artifacts/'+str(artifact['id'])+'/zip',A.TOTAL_CAP,artifact['digest'].split(':')[1],os.environ['GH_TOKEN'])
-    files=A.zip_members(raw);manifest=A.verify_bundle(files,auth);emit_text_members(files,auth['context']);dest=Path(os.environ['RUNNER_TEMP'])/('mremap-helper-'+auth['context']['run']+'-'+auth['context']['attempt']+'-'+image)
+    files=A.zip_members(raw);manifest=A.verify_bundle(files,auth);emit_text_members(files,auth['context']);dest=Path(os.environ['RUNNER_TEMP'])/('mremap-helper-'+auth['context']['run']+'-'+auth['context']['attempt']+'-'+canonical_image)
     A.require(not dest.exists()and not dest.is_symlink(),'fresh consumer directory')
     directory={'path':dest,'parent':Path(os.environ['RUNNER_TEMP']).resolve()}
     DIRECTORY_ROOTS.append(directory)
