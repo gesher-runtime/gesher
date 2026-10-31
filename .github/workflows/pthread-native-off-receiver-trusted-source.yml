@@ -1,0 +1,8 @@
+name: pthread-native-off-receiver-trusted-source
+on:
+  workflow_call:
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: exit 1 # SOURCE-ONLY template, immutable gate not frozen

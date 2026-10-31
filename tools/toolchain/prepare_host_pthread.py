@@ -29,6 +29,9 @@ def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')
 
 
 def caller(env,selection):
+    if env.get('GESHER_HOST_PTHREAD_CALLER') == 'pthread-native-off-receiver/build':
+        import native_off_receiver_context as native
+        return native.context(env,selection)
     if env.get('GESHER_HOST_PTHREAD_CALLER') == focused.CALLER:
         return focused.context(env, selection)
     assert selection in ROLES and env.get('GESHER_HOST_PTHREAD_SELECTION')==selection
@@ -44,11 +47,12 @@ def caller(env,selection):
 
 
 def recipe(caller_key='ci/build'):
-    assert caller_key in ('ci/build', focused.CALLER)
+    assert caller_key in ('ci/build', focused.CALLER, 'pthread-native-off-receiver/build')
     paths=CORE_FILES+['tools/toolchain/prepare_host_pthread.py']
     # Both exact callers import this closed tuple; bind the shared policy source
     # even when preserving the original production caller/default semantics.
     paths+=['tools/toolchain/first_link_context.py']
+    if caller_key=='pthread-native-off-receiver/build':paths+=['tools/toolchain/native_off_receiver_context.py']
     result=dict(schema='gesher-original-profile-pthread-recipe-v1',caller=caller_key,pin=json.loads(json.dumps(minimum.PIN)),
                 core_sources={p:sha(ROOT/p) for p in paths},
                 selected_role=minimum.ROLE,publisher_role=ROLES['publisher-control'],
@@ -56,6 +60,9 @@ def recipe(caller_key='ci/build'):
                 consumer_flags='unchanged product Win10; not supplier configure flags',
                 authority_policy='fresh archive; typed SDK601 before make; actual480/allfields; original public headers/aliases/exports/imports and actual DLL source object')
     if caller_key == focused.CALLER:result['focused_caller']=focused.TUPLE
+    if caller_key=='pthread-native-off-receiver/build':
+        import native_off_receiver_context as native
+        result['native_off_receiver_caller']=native.TUPLE
     return result
 
 
@@ -69,6 +76,10 @@ def check_metadata(data,context):
     if data['recipe']['caller']==focused.CALLER:
         assert mode=='selected-minimum'
         focused.check_descriptor(data['caller_authority'],context)
+    elif data['recipe']['caller']=='pthread-native-off-receiver/build':
+        import native_off_receiver_context as native
+        assert mode=='selected-minimum'
+        native.check_descriptor(data['caller_authority'],context)
     else:assert 'caller_authority' not in data
     assert data['archive']==dict(url=URL,sha256=minimum.PIN['compiler_archive_sha256'],bytes=84003044)
     root=PurePosixPath(data['workspace']);assert root.is_absolute() and posixpath.normpath(str(root))==str(root)
@@ -189,6 +200,9 @@ def prepare(selection):
               archive=dict(url=URL,sha256=sha(archive),bytes=archive.stat().st_size),authority=authority,
               authority_sha256=hashlib.sha256(json.dumps(authority,sort_keys=True,indent=2).encode()).hexdigest())
     if definition['caller']==focused.CALLER:data['caller_authority']=focused.descriptor(os.environ)
+    if definition['caller']=='pthread-native-off-receiver/build':
+        import native_off_receiver_context as native
+        data['caller_authority']=native.descriptor(os.environ)
     check_metadata(data,context);check_files(data)
     receipt=workspace/'production-toolchain-receipt.json';receipt.write_text(json.dumps(data,sort_keys=True,indent=2))
     summary=dict(source=context['GITHUB_SHA'],run=context['GITHUB_RUN_ID'],attempt=context['GITHUB_RUN_ATTEMPT'],selection=selection,
