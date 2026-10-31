@@ -464,29 +464,95 @@ def settle_readers(graph, deadline):
             try:
                 slot['thread'].join(timeout=max(0, deadline-time.monotonic()))
             except BaseException as error:
-                graph['errors'].append(repr(error))
+                containment_error(graph,error)
     return all((slot['started'] and not slot['thread'].is_alive()) or
                (not slot['started'] and not slot.get('start_attempted',False))
                for slot in graph['readers'])
+
+def launch_owned(graph, argv, **kwargs):
+    """Publish uncertainty before acquisition; no returned object proves nothing."""
+    require(graph['launch_state']=='NOT_ATTEMPTED' and graph['process'] is None,'one owned launch')
+    graph['launch_state']='STARTING_UNCERTAIN'
+    proc=None
+    try:
+        proc=subprocess.Popen(argv,**kwargs)
+    finally:
+        # Also retain a returned local when interruption occurs before return.
+        if proc is not None:
+            graph['process']=proc
+            graph['launch_state']='RETURNED_OWNED'
+    return proc
+
+def prove_unattempted_failure(graph):
+    # No Popen exception classification claims absence. Only an operation which
+    # never crossed the attempted-launch boundary can acquire this proof.
+    if graph['launch_state']=='NOT_ATTEMPTED':
+        require(graph['process'] is None,'unattempted process contradiction')
+        graph['launch_state']='PROVEN_FAILED_NO_CHILD'
+
+def launch_quiescent(graph):
+    if graph['launch_state'] in ('NOT_ATTEMPTED','PROVEN_FAILED_NO_CHILD'):
+        return graph['process'] is None
+    return (graph['launch_state']=='RETURNED_OWNED' and graph['process'] is not None
+            and graph['kernel_completed'])
+
+def containment_error(graph,error):
+    # Quarantine may be indefinite; storage/output must not grow each retry.
+    graph['settlement_error_count']=graph.get('settlement_error_count',0)+1
+    if 'settlement_error' not in graph:graph['settlement_error']=repr(error)[:4096]
+
+def settle_graph(graph,deadline):
+    """Passive exact-owned settlement only. Never launch, kill or do test work."""
+    proc=graph['process']
+    try:
+        # A published object itself is positive ownership evidence even if an
+        # interruption preceded the following state-label assignment.
+        if graph['launch_state']=='STARTING_UNCERTAIN' and proc is not None:
+            graph['launch_state']='RETURNED_OWNED'
+        if graph.get('image_state')=='STARTING_UNCERTAIN' and graph.get('image_handle') is not None:
+            graph['image_state']='RETURNED_OWNED'
+        if graph.get('image_state')=='STARTING_UNCERTAIN':return False
+        if graph['launch_state']=='RETURNED_OWNED' and proc is not None and not graph['kernel_completed']:
+            if proc.poll() is not None:
+                proc.wait(timeout=0);graph['kernel_completed']=True
+        quiescent=launch_quiescent(graph) and settle_readers(graph,deadline)
+        if not quiescent:return False
+        if proc is not None:
+            for stream in (getattr(proc,'stdin',None),proc.stdout,proc.stderr):
+                if stream is not None and not stream.closed:stream.close()
+            if graph['kind']=='NATIVE' and not graph.get('process_handle_closed',False):
+                proc._handle.Close();graph['process_handle_closed']=True
+        if graph.get('image_handle') is not None:
+            require(graph['kernel'].CloseHandle(graph['image_handle']),'retained image close')
+            graph['image_handle']=None;graph['image_state']='CLOSED'
+        graph['handles_closed']=True
+        return True
+    except BaseException as error:
+        containment_error(graph,error);return False
 
 def owned_helper(executable, expected_sha, current):
     """CI-only Windows child. Never dispose IO while its readers remain live."""
     require(os.environ.get('GITHUB_ACTIONS')=='true' and os.name=='nt', 'owned helper Windows CI only')
     executable=Path(executable).resolve();require(digest(executable.read_bytes())==expected_sha,'launch bytes')
-    graph={'image_handle':None,'process':None,'readers':[],'buffers':[bytearray(),bytearray()],'errors':[],'record':{'context':current,'started':False,'kernel_completed':False,'io_completed':False,'handles_closed':False,'timed_out':False,'overflow':False,'exit':None}}
+    graph={'kind':'NATIVE','launch_state':'NOT_ATTEMPTED','kernel_completed':False,'handles_closed':False,'image_state':'NOT_ATTEMPTED','image_handle':None,'kernel':None,'process':None,'readers':[],'buffers':[bytearray(),bytearray()],'errors':[],'record':{'context':current,'started':False,'kernel_completed':False,'io_completed':False,'handles_closed':False,'timed_out':False,'overflow':False,'exit':None}}
     LIVE_GRAPHS.append(graph);record=graph['record'];start=time.monotonic();kernel=None
     try:
         import ctypes
         from ctypes import wintypes
-        kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+        kernel=ctypes.WinDLL('kernel32',use_last_error=True);graph['kernel']=kernel
         kernel.CreateFileW.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD,wintypes.LPVOID,wintypes.DWORD,wintypes.DWORD,wintypes.HANDLE];kernel.CreateFileW.restype=wintypes.HANDLE
         kernel.CloseHandle.argtypes=[wintypes.HANDLE];kernel.CloseHandle.restype=wintypes.BOOL
-        image_handle=kernel.CreateFileW(str(executable),0x80000000,1,None,3,0x80,None)
-        require(image_handle not in (None,ctypes.c_void_p(-1).value),'retained image handle')
-        graph['image_handle']=image_handle
+        image_handle=None;graph['image_state']='STARTING_UNCERTAIN'
+        try:
+            image_handle=kernel.CreateFileW(str(executable),0x80000000,1,None,3,0x80,None)
+        finally:
+            if image_handle not in (None,ctypes.c_void_p(-1).value):
+                graph['image_handle']=image_handle;graph['image_state']='RETURNED_OWNED'
+            elif image_handle is not None:graph['image_state']='PROVEN_FAILED_NO_HANDLE'
+        require(graph['image_handle'] is not None,'retained image handle')
         require(digest(executable.read_bytes())==expected_sha,'retained image bytes')
-        proc=subprocess.Popen([str(executable)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=clean_environment(os.environ),cwd=executable.parent)
-        graph['process']=proc;record.update(started=True,pid=proc.pid)
+        proc=launch_owned(graph,[str(executable)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=clean_environment(os.environ),cwd=executable.parent)
+        record.update(started=True,pid=proc.pid)
         # Retain graph BEFORE fallible ctypes/query/reader acquisition.
         kernel.GetProcessTimes.argtypes=[wintypes.HANDLE]+[ctypes.POINTER(wintypes.FILETIME)]*4;kernel.GetProcessTimes.restype=wintypes.BOOL
         times=[wintypes.FILETIME()for _ in range(4)];require(kernel.GetProcessTimes(int(proc._handle),*(ctypes.byref(x)for x in times)), 'creation time query')
@@ -511,34 +577,24 @@ def owned_helper(executable, expected_sha, current):
         if proc.poll()is None:
             record['timed_out']=time.monotonic()>=deadline;proc.kill()
         proc.wait(timeout=POSTKILL_SECONDS)
-        record['kernel_completed']=True;record['exit']=proc.returncode
+        graph['kernel_completed']=True;record['kernel_completed']=True;record['exit']=proc.returncode
     except BaseException as error:
-        graph['errors'].append(repr(error))
+        graph['errors'].append(repr(error));prove_unattempted_failure(graph)
     finally:
         proc=graph['process']
         if proc is not None and not record['kernel_completed']:
             try:
                 if proc.poll()is None:proc.kill()
-                proc.wait(timeout=POSTKILL_SECONDS);record['kernel_completed']=True;record['exit']=proc.returncode
+                proc.wait(timeout=POSTKILL_SECONDS);graph['kernel_completed']=True;record['kernel_completed']=True;record['exit']=proc.returncode
             except BaseException as error:graph['errors'].append(repr(error))
-        # A failed start has no child kernel or readers. It can release the image
-        # lease safely without pretending that a native process completed.
-        quiescent=(proc is None or record['kernel_completed']) and settle_readers(graph,start+PROCESS_SECONDS)
-        record['io_completed']=quiescent
-        if quiescent:
-            try:
-                if proc is not None:
-                    for stream in (proc.stdin,proc.stdout,proc.stderr):
-                        if stream is not None:stream.close()
-                    proc._handle.Close()
-                if graph['image_handle']is not None:
-                    require(kernel.CloseHandle(graph['image_handle']),'retained image close');graph['image_handle']=None
-                record['handles_closed']=True
-            except BaseException as error:graph['errors'].append(repr(error))
+        released=settle_graph(graph,start+PROCESS_SECONDS)
+        record['launch_state']=graph['launch_state'];record['kernel_completed']=graph['kernel_completed']
+        record['io_completed']=released;record['handles_closed']=graph['handles_closed']
+        if 'settlement_error' in graph:graph['errors'].append(graph['settlement_error'])
         record['elapsed_seconds']=time.monotonic()-start;record['errors']=list(graph['errors'])
         record['stdout']=bytes(graph['buffers'][0]).decode('ascii',errors='backslashreplace');record['stderr']=bytes(graph['buffers'][1]).decode('ascii',errors='backslashreplace')
         record['stdout_sha256']=digest(bytes(graph['buffers'][0]));record['stderr_sha256']=digest(bytes(graph['buffers'][1]))
-        record['root_retained']=not(quiescent and record['handles_closed'])
+        record['root_retained']=not released
         emit_record('PROCESS',record)
         if not record['root_retained']:LIVE_GRAPHS.remove(graph)
     require(not graph['errors'],'process errors');validate_completion(record)

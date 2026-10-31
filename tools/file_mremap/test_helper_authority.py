@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import stat
 import tempfile
+import types
 import unittest
 from unittest import mock
 import zipfile
@@ -261,6 +262,170 @@ class Helper(unittest.TestCase):
             self.reject(lambda:A.verify_source(ROOT,'a'*40,'b'*40))
             fake.assert_not_called()
 
+    def test_launch_boundary_and_no_child_proof_both_graph_modules(self):
+        for module in (A,P.A):
+            graph=synthetic_graph()
+            module.prove_unattempted_failure(graph)
+            self.assertEqual(graph['launch_state'],'PROVEN_FAILED_NO_CHILD')
+            self.assertTrue(module.settle_graph(graph,0));self.assertFalse(graph['kernel_completed'])
+            for error in (OSError('synthetic constructor failure'),KeyboardInterrupt()):
+                graph=synthetic_graph()
+                def acquire(*args,**kwargs):
+                    self.assertEqual(graph['launch_state'],'STARTING_UNCERTAIN')
+                    self.assertIsNone(graph['process']);raise error
+                with mock.patch.object(module.subprocess,'Popen',side_effect=acquire):
+                    with self.assertRaises(type(error)):module.launch_owned(graph,['SYNTHETIC_NEVER_EXECUTED'])
+                module.prove_unattempted_failure(graph)
+                self.assertEqual(graph['launch_state'],'STARTING_UNCERTAIN')
+                self.assertFalse(module.settle_graph(graph,0));self.assertFalse(graph['handles_closed'])
+            graph=synthetic_graph();proc=SyntheticProcess()
+            with mock.patch.object(module.subprocess,'Popen',return_value=proc)as acquire:
+                self.assertIs(module.launch_owned(graph,['SYNTHETIC_NEVER_EXECUTED']),proc)
+                self.assertIs(graph['process'],proc);self.assertEqual(graph['launch_state'],'RETURNED_OWNED')
+                with self.assertRaises(module.Rejected):module.launch_owned(graph,['NO_SECOND_LAUNCH'])
+                self.assertEqual(acquire.call_count,1)
+
+    def test_exact_owned_settlement_requires_kernel_readers_image_and_handles(self):
+        for kind in ('TOOL','NATIVE'):
+            graph=synthetic_graph(kind);proc=SyntheticProcess();graph.update(process=proc,launch_state='RETURNED_OWNED')
+            self.assertFalse(A.settle_graph(graph,0));self.assertEqual(proc.closes,0)
+            proc.done=True;reader=SyntheticReader(True)
+            graph['readers']=[{'thread':reader,'started':True,'start_attempted':True}]
+            self.assertFalse(A.settle_graph(graph,0));self.assertTrue(graph['kernel_completed']);self.assertFalse(proc.stdout.closed)
+            reader.alive=False;graph['readers'].append({'thread':reader,'started':False,'start_attempted':True})
+            self.assertFalse(A.settle_graph(graph,0));graph['readers'].pop()
+            proc.stdout.fail=True;self.assertFalse(A.settle_graph(graph,0));self.assertFalse(graph['handles_closed'])
+            proc.stdout.fail=False
+            graph.update(image_state='STARTING_UNCERTAIN');self.assertFalse(A.settle_graph(graph,0))
+            graph.update(image_state='RETURNED_OWNED',image_handle='SYNTHETIC_HANDLE',kernel=mock.Mock())
+            graph['kernel'].CloseHandle.return_value=False
+            self.assertFalse(A.settle_graph(graph,0));self.assertEqual(graph['image_handle'],'SYNTHETIC_HANDLE')
+            graph['kernel'].CloseHandle.return_value=True
+            self.assertTrue(A.settle_graph(graph,0));self.assertTrue(graph['handles_closed']);self.assertIsNone(graph['image_handle'])
+            self.assertTrue(A.settle_graph(graph,0));self.assertEqual(proc.closes,1 if kind=='NATIVE'else 0)
+            self.assertEqual(proc.kills,0);self.assertIn('settlement_error',graph)
+        graph=synthetic_graph();proc=SyntheticProcess();proc.done=True
+        graph.update(launch_state='STARTING_UNCERTAIN',process=proc)
+        self.assertTrue(A.settle_graph(graph,0));self.assertEqual(graph['launch_state'],'RETURNED_OWNED')
+
+    def test_effective_tool_and_native_failed_constructor_keep_original_graphs(self):
+        path_type=type(Path.cwd())
+        def unknown_tool(*args,**kwargs):
+            graph=P.TOOL_GRAPHS[-1]
+            self.assertEqual(graph['launch_state'],'STARTING_UNCERTAIN');raise KeyboardInterrupt()
+        try:
+            with mock.patch.dict(os.environ,{'GITHUB_ACTIONS':'true'}),mock.patch.object(P.os,'name','posix'),mock.patch.object(P,'Path',path_type),mock.patch.object(P,'sha',return_value='e'*64),mock.patch.object(P.subprocess,'Popen',side_effect=unknown_tool),contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(P.A.Rejected):P.tool(['SYNTHETIC_NEVER_EXECUTED'],Path.cwd(),{})
+            graph=P.TOOL_GRAPHS[-1];self.assertEqual(graph['launch_state'],'STARTING_UNCERTAIN')
+            self.assertFalse(graph['handles_closed']);self.assertFalse(P.settle_lifetime_once())
+        finally:P.TOOL_GRAPHS.clear()
+        # A fake ctypes module prevents EVERY Win32 acquisition/query. This
+        # exercises the actual owned_helper→launch_owned failure flow as source.
+        fake_kernel=mock.Mock();fake_kernel.CreateFileW.return_value=42
+        wt=types.SimpleNamespace(**{n:object()for n in ('LPCWSTR','DWORD','LPVOID','HANDLE','BOOL')})
+        ctypes=types.ModuleType('ctypes');ctypes.wintypes=wt
+        ctypes.WinDLL=mock.Mock(return_value=fake_kernel);ctypes.c_void_p=lambda value:types.SimpleNamespace(value=value)
+        def unknown_native(*args,**kwargs):
+            graph=P.A.LIVE_GRAPHS[-1]
+            self.assertEqual(graph['launch_state'],'STARTING_UNCERTAIN');self.assertEqual(graph['image_handle'],42)
+            raise KeyboardInterrupt()
+        with pure_temp_directory()as temp:
+            image=Path(temp)/'SYNTHETIC_NOT_AN_EXE';image.write_bytes(b'SYNTHETIC')
+            try:
+                with mock.patch.dict(os.environ,{'GITHUB_ACTIONS':'true'}),mock.patch.object(P.A.os,'name','nt'),mock.patch.object(P.A,'Path',path_type),mock.patch.dict(P.sys.modules,{'ctypes':ctypes}),mock.patch.object(P.subprocess,'Popen',side_effect=unknown_native),contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(P.A.Rejected):P.A.owned_helper(image,P.A.digest(b'SYNTHETIC'),synthetic_context())
+                graph=P.A.LIVE_GRAPHS[-1]
+                self.assertEqual(graph['launch_state'],'STARTING_UNCERTAIN');self.assertEqual(graph['image_handle'],42)
+                self.assertFalse(graph['kernel_completed']);self.assertFalse(graph['handles_closed']);fake_kernel.CloseHandle.assert_not_called()
+                self.assertFalse(P.settle_lifetime_once());self.assertTrue(P.lifetime_unresolved())
+            finally:P.A.LIVE_GRAPHS.clear()
+
+    def test_lifetime_policy_unknown_launch_and_cleanup_failure_forbid_exit(self):
+        for roots in (P.TOOL_GRAPHS,P.A.LIVE_GRAPHS):
+            graph=synthetic_graph();graph['launch_state']='STARTING_UNCERTAIN';roots.append(graph)
+            try:
+                self.assertFalse(P.settle_lifetime_once());self.assertTrue(P.lifetime_unresolved());self.assertIn(graph,roots)
+                with pure_temp_directory()as temp:
+                    owned=Path(temp)/'mremap-helper-123-1-win22';owned.mkdir()
+                    self.reject(lambda:P.release_consumer_directory(owned,Path(temp)));self.assertTrue(owned.exists())
+            finally:roots.remove(graph)
+        directory={'path':'SYNTHETIC_PATH','parent':'SYNTHETIC_PARENT'};P.DIRECTORY_ROOTS.append(directory)
+        try:
+            with mock.patch.object(P,'release_consumer_directory',side_effect=OSError('synthetic cleanup failure')):
+                for _ in range(3):self.assertFalse(P.settle_lifetime_once())
+            self.assertTrue(P.lifetime_unresolved());self.assertIn(directory,P.DIRECTORY_ROOTS)
+            self.assertEqual(directory['settlement_error_count'],3)
+            with mock.patch.object(P,'release_consumer_directory')as release:
+                self.assertTrue(P.settle_lifetime_once());release.assert_called_once()
+        finally:
+            if directory in P.DIRECTORY_ROOTS:P.DIRECTORY_ROOTS.remove(directory)
+
+    def test_cli_error_stays_failed_and_blocks_until_exact_owned_settlement(self):
+        proc=SyntheticProcess();graph=synthetic_graph();graph.update(process=proc,launch_state='RETURNED_OWNED')
+        reader=SyntheticReader(True);graph['readers']=[{'thread':reader,'started':True}]
+        original=P.A.Rejected('SYNTHETIC_PERMANENT_FAILURE');pauses=[]
+        def operation():P.TOOL_GRAPHS.append(graph);raise original
+        def passive():
+            self.assertTrue(P.lifetime_unresolved());self.assertIn(graph,P.TOOL_GRAPHS)
+            self.assertFalse(proc.stdout.closed);pauses.append(1)
+            if len(pauses)==1:proc.done=True
+            else:reader.alive=False
+        try:
+            with mock.patch.dict(os.environ,{'GITHUB_ACTIONS':'true'}),mock.patch.object(P.sys,'argv',['helper','produce']),mock.patch.object(P,'produce',side_effect=operation),mock.patch.object(P,'quarantine_pause',side_effect=passive),mock.patch.object(P.subprocess,'Popen')as launch,contextlib.redirect_stdout(io.StringIO())as out:
+                with self.assertRaises(P.A.Rejected)as failed:P.main()
+                self.assertIs(failed.exception,original);launch.assert_not_called()
+            self.assertEqual(len(pauses),2);self.assertFalse(P.lifetime_unresolved());self.assertTrue(proc.stdout.closed)
+            self.assertNotIn('FILE_MREMAP_HELPER_RESULT',out.getvalue());self.assertEqual(proc.kills,0)
+            # Already complete error exits as ERROR without waiting or converting.
+            with mock.patch.object(P,'quarantine_pause')as pause,contextlib.redirect_stdout(io.StringIO()):P.finish_failure('produce',original)
+            pause.assert_not_called()
+        finally:
+            if graph in P.TOOL_GRAPHS:P.TOOL_GRAPHS.remove(graph)
+
+    def test_cli_barrier_survives_output_and_inprocess_interruption(self):
+        graph=synthetic_graph();graph['launch_state']='STARTING_UNCERTAIN';P.TOOL_GRAPHS.append(graph)
+        seen=[]
+        original_settle=P.settle_lifetime_once
+        def step():
+            if len(seen)<2:
+                self.assertTrue(P.lifetime_unresolved());seen.append(1)
+                if len(seen)==1:raise KeyboardInterrupt()
+                proc=SyntheticProcess();proc.done=True;graph.update(process=proc,launch_state='RETURNED_OWNED')
+            return original_settle()
+        try:
+            with mock.patch.object(P,'emit',side_effect=OSError('synthetic output failure')),mock.patch.object(P,'settle_lifetime_once',side_effect=step),mock.patch.object(P,'quarantine_pause'):
+                with self.assertRaises(OSError):P.finish_failure('produce',ValueError('permanent'))
+            self.assertEqual(len(seen),2);self.assertFalse(P.lifetime_unresolved())
+        finally:
+            if graph in P.TOOL_GRAPHS:P.TOOL_GRAPHS.remove(graph)
+
+    def test_actual_consume_unwind_retains_same_authority_graph_and_directory(self):
+        owner=P.A;graph=synthetic_graph('NATIVE');proc=SyntheticProcess()
+        graph.update(process=proc,launch_state='RETURNED_OWNED',image_handle='SYNTHETIC_IMAGE',kernel=mock.Mock())
+        graph['kernel'].CloseHandle.return_value=True
+        context=synthetic_context();auth={'context':context,'roles':{'helper-producer':{}},'authority':{}}
+        manifest={'members':{'helper-qualification.exe':{'sha256':'e'*64}}}
+        original=owner.Rejected('SYNTHETIC_CONSUME_FAILURE');pauses=[]
+        def native(*args):
+            self.assertIs(P.A,owner);owner.LIVE_GRAPHS.append(graph);raise original
+        with pure_temp_directory()as temp:
+            # Capture the real platform Path BEFORE the synthetic OS-role gate.
+            path_type=type(Path(temp));dest=Path(temp)/'mremap-helper-123-2-win22'
+            def passive():
+                self.assertIs(P.A,owner);self.assertIn(graph,owner.LIVE_GRAPHS)
+                self.assertTrue(P.DIRECTORY_ROOTS);self.assertTrue(dest.exists())
+                self.assertFalse(proc.stdout.closed);self.assertEqual(graph['image_handle'],'SYNTHETIC_IMAGE')
+                pauses.append(1);proc.done=True
+            try:
+                with mock.patch.dict(os.environ,{'GITHUB_ACTIONS':'true','RUNNER_TEMP':temp,'ImageOS':'win22','GH_TOKEN':'SYNTHETIC_NOT_REAL'}),mock.patch.object(P.os,'name','nt'),mock.patch.object(P,'Path',path_type),mock.patch.object(P.sys,'argv',['helper','consume']),mock.patch.object(owner,'authorize',return_value=auth),mock.patch.object(P,'current_job'),mock.patch.object(owner,'api'),mock.patch.object(owner,'verify_artifact',return_value={'id':1,'digest':'sha256:'+'d'*64}),mock.patch.object(P,'download',return_value=b'SYNTHETIC'),mock.patch.object(owner,'zip_members',return_value={'helper-qualification.exe':b'SYNTHETIC_NON_EXECUTABLE'}),mock.patch.object(owner,'verify_bundle',return_value=manifest),mock.patch.object(P,'emit_text_members'),mock.patch.object(owner,'owned_helper',side_effect=native),mock.patch.object(P,'quarantine_pause',side_effect=passive),mock.patch.object(P.subprocess,'Popen')as launch,contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(owner.Rejected)as failed:P.main()
+                    self.assertIs(failed.exception,original);launch.assert_not_called()
+                self.assertEqual(len(pauses),1);self.assertIs(P.A,owner)
+                self.assertFalse(P.lifetime_unresolved());self.assertFalse(dest.exists());self.assertIsNone(graph['image_handle'])
+            finally:
+                if graph in owner.LIVE_GRAPHS:owner.LIVE_GRAPHS.remove(graph)
+                P.DIRECTORY_ROOTS[:]=[d for d in P.DIRECTORY_ROOTS if d['path']!=dest]
+
     def test_batch_hashes_match_real_single_path_git_filters(self):
         names=tuple(dict.fromkeys((*A.ADDITIONS,*A.INPUT21)))
         batch=A.checked_out_hashes(ROOT,names)
@@ -276,11 +441,38 @@ class Helper(unittest.TestCase):
         self.assertEqual(len(A.TUS),3);self.assertEqual(len(A.MEMBERS),16)
         self.assertEqual(P.COMMON,A.COMMON);self.assertIn('--no-default-config',A.COMMON);self.assertIn('-mno-ms-bitfields',A.COMMON);self.assertIn('-fsized-deallocation',A.COMMON)
         self.assertNotIn("['cmake'",producer);self.assertNotIn("['ninja'",producer)
-        self.assertLess(authority.index('LIVE_GRAPHS.append(graph)'),authority.index('proc=subprocess.Popen'))
-        self.assertLess(authority.index("graph['image_handle']=image_handle"),authority.index('proc=subprocess.Popen'))
-        self.assertIn("if quiescent:",authority);self.assertIn("slot['started']",authority)
+        native=ast.get_source_segment(authority,next(x for x in ast.parse(authority).body if isinstance(x,ast.FunctionDef)and x.name=='owned_helper'))
+        self.assertLess(native.index('LIVE_GRAPHS.append(graph)'),native.index('proc=launch_owned'))
+        self.assertLess(native.index("graph['image_handle']=image_handle"),native.index('proc=launch_owned'))
+        self.assertIn('proc=A.launch_owned(graph',producer);self.assertEqual(authority.count('subprocess.Popen('),1);self.assertNotIn('subprocess.Popen(',producer)
+        self.assertIn("if not quiescent:return False",authority);self.assertIn("slot['started']",authority)
         self.assertIn('A.verify_artifact(A.api',producer);self.assertIn('A.verify_bundle(files,auth)',producer)
         self.assertIn("os.environ.pop('GH_TOKEN',None)",producer)
+
+class SyntheticReader:
+    def __init__(self,alive):self.alive=alive
+    def join(self,timeout):pass
+    def is_alive(self):return self.alive
+
+class SyntheticStream:
+    def __init__(self):self.closed=False;self.fail=False
+    def close(self):
+        if self.fail:raise OSError('SYNTHETIC_CLOSE_FAILURE')
+        self.closed=True
+
+class SyntheticProcess:
+    def __init__(self):
+        self.done=False;self.kills=0;self.closes=0;self.returncode=None
+        self.stdin=SyntheticStream();self.stdout=SyntheticStream();self.stderr=SyntheticStream();self._handle=self
+    def poll(self):return 1 if self.done else None
+    def wait(self,timeout):
+        if not self.done:raise RuntimeError('SYNTHETIC_LIVE_KERNEL')
+        self.returncode=1;return 1
+    def kill(self):self.kills+=1;raise AssertionError('passive policy must never kill')
+    def Close(self):self.closes+=1
+
+def synthetic_graph(kind='TOOL'):
+    return {'kind':kind,'launch_state':'NOT_ATTEMPTED','process':None,'kernel_completed':False,'handles_closed':False,'readers':[],'errors':[]}
 
 def shlex_quote(path):
     import shlex
