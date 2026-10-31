@@ -1359,6 +1359,7 @@ int FileAliasRegistrySnapshot(const void* address,size_t length,FileAliasPage* r
       row.region_page=(at-entry->first)/s.page_size; row.region_size=region.size; row.kind=static_cast<int>(region.kind);
       row.live_pages=region.live_pages; row.live_capacity=region.live.capacity(); row.live=region.live[(at-entry->first)/s.page_size];
       row.group=region.group!=0; row.operation_error=region.operation_error;
+      if(region.mapping){DWORD flags=0;row.mapping_handle_valid=GetHandleInformation(region.mapping,&flags)!=FALSE;}
       if(!region.actual_protection.empty()) row.ledger_protection=region.actual_protection[(at-entry->first)/s.page_size];
       if(region.owner) {
         row.owner_refs=region.owner->refs; row.owner_state=static_cast<int>(region.owner->state);

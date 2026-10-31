@@ -150,7 +150,7 @@ static int punch_equal(const FileAliasPage* a,const FileAliasPage* b) {
     a->owner_refs==b->owner_refs&&a->owner_views==b->owner_views&&a->owner_backing_pins==b->owner_backing_pins&&
     a->owner_failure==b->owner_failure&&a->ledger_protection==b->ledger_protection&&
     a->query_state==b->query_state&&a->query_protection==b->query_protection&&a->query_type==b->query_type&&
-    a->query_ok==b->query_ok&&a->query_base==b->query_base&&a->allocation_base==b->allocation_base&&a->query_region_size==b->query_region_size;
+    a->mapping_handle_valid==b->mapping_handle_valid&&a->query_ok==b->query_ok&&a->query_base==b->query_base&&a->allocation_base==b->allocation_base&&a->query_region_size==b->query_region_size;
 }
 static void punch_rows(const char* phase,unsigned char* origin,const FileAliasPage* rows,size_t count) {
   for(size_t i=0;i<count;++i) {
@@ -229,8 +229,14 @@ int main(int argc,char** argv) {
 #ifdef GESHER_FILE_MREMAP_FAILURE_TEST
   if(punch_case) {
     FileAliasPage before_rows[512],after_rows[512];
-    void* middle=mmap(a+16*page,16*page,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);
+    const int private_case=!strcmp(mode,"punch_private_success");
+    void* middle=mmap(a+16*page,(private_case?128:16)*page,PROT_READ|PROT_WRITE,
+      private_case?(MAP_PRIVATE|MAP_FIXED):(MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED),private_case?fd:-1,private_case?(off_t)(16*page):0);
     if(middle==MAP_FAILED){failed=1;goto done;}
+    if(private_case) {
+      a[100*page]=0x9d;
+      if(mprotect(a+101*page,page,PROT_NONE)){failed=1;goto done;}
+    }
     if(FileAliasRegistrySnapshot(a,size,before_rows,512)!=512){failed=1;goto done;}
     const size_t capacity=before_rows[0].live_capacity;
     size_t combined=capacity+1;if(combined<33)combined=33;
@@ -240,7 +246,7 @@ int main(int argc,char** argv) {
     }
     punch_span=combined;
     punch_rows("before",a,before_rows,combined);
-    int injected_mode=!strcmp(mode,"punch_prepare_failure")||!strcmp(mode,"punch_file_prepare_failure")?12:!strcmp(mode,"punch_coalesce_failure")?13:!strcmp(mode,"punch_success")?0:-1;
+    int injected_mode=!strcmp(mode,"punch_prepare_failure")||!strcmp(mode,"punch_file_prepare_failure")?12:!strcmp(mode,"punch_coalesce_failure")?13:(!strcmp(mode,"punch_success")||private_case)?0:-1;
     if(injected_mode<0){failed=1;goto done;}
     FileAliasFailureReset(injected_mode);FileAliasFailureNth(1);
     long handles_before=resources();errno=0;
@@ -254,6 +260,12 @@ int main(int argc,char** argv) {
     if(FileAliasRegistrySnapshot(a,size,after_rows,512)!=512){failed=1;goto done;}
     int unchanged=1;for(size_t n=0;n<512;++n)if(!punch_equal(&before_rows[n],&after_rows[n]))unchanged=0;
     punch_rows("after",a,after_rows,combined);
+    if(private_case) {
+      const FileAliasPage* q=&after_rows[101];
+      int value=readable(a+100*page)?a[100*page]:-1;
+      printf("{\"event\":\"punch_private\",\"value100\":%d,\"live100\":%d,\"live101\":%d,\"protection101\":%lu,\"ledger101\":%lu,\"section_handle_valid\":%d,\"type101\":%lu}\n",value,after_rows[100].live,q->live,q->query_protection,q->ledger_protection,q->mapping_handle_valid,q->query_type);
+      if(value!=0x9d||!after_rows[100].live||!q->live||q->query_protection!=PAGE_NOACCESS||q->ledger_protection!=PAGE_NOACCESS||!q->mapping_handle_valid)failed=1;
+    }
     printf("{\"event\":\"punch_result\",\"case\":\"%s\",\"capacity\":%zu,\"combined_pages\":%zu,\"failed\":%d,\"errno\":%d,\"source_unchanged\":%d,\"resources_before\":%ld,\"resources_after\":%ld,\"metrics\":[",mode,capacity,combined,result==MAP_FAILED,error,unchanged,handles_before,handles_after);
     for(int n=0;n<28;++n)printf("%s%d",n?",":"",metrics[n]);
     printf("]}\n");
@@ -269,6 +281,20 @@ int main(int argc,char** argv) {
     } else {
       if(result==MAP_FAILED||after_rows[0].owner_failure)failed=1;
       for(size_t n=0;n<combined;++n)if(after_rows[n].kind!=0||!after_rows[n].live||after_rows[n].query_state!=MEM_COMMIT)failed=1;
+    }
+    if(!strcmp(mode,"punch_success")) {
+      memcpy(before_rows,after_rows,sizeof(before_rows));
+      FileAliasFailureReset(12);FileAliasFailureNth(1);errno=0;
+      int cleanup_result=munmap(a+page,page),cleanup_errno=errno;
+      FileAliasAllocationDisable();
+      if(FileAliasRegistrySnapshot(a,size,after_rows,512)!=512){failed=1;goto done;}
+      int same=1;for(size_t n=0;n<512;++n)if(!punch_equal(&before_rows[n],&after_rows[n]))same=0;
+      printf("{\"event\":\"punch_cleanup_prepare\",\"result\":%d,\"errno\":%d,\"source_unchanged\":%d,\"metrics\":[",cleanup_result,cleanup_errno,same);
+      for(int n=0;n<28;++n)printf("%s%d",n?",":"",FileAliasFailureMetric(n));
+      printf("]}\n");
+      if(cleanup_result!=-1||cleanup_errno!=ENOMEM||!same||FileAliasFailureMetric(20)<1||FileAliasFailureMetric(21)!=1)failed=1;
+      for(int n=0;n<20;++n)if(FileAliasFailureMetric(n))failed=1;
+      for(int n=22;n<28;++n)if(FileAliasFailureMetric(n))failed=1;
     }
     if(!all_bytes(b,size)||!all_bytes(c,size))failed=1;
     goto done;

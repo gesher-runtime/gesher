@@ -32,6 +32,7 @@ typedef struct FileAliasPage {
   size_t page,region_page,region_size,live_pages,live_capacity,owner_refs,owner_views,owner_backing_pins;
   int present,kind,live,owner_state,owner_failure;
   DWORD ledger_protection,operation_error,query_state,query_protection,query_type;
+  int mapping_handle_valid;
   int query_ok,group,failed_owners,failed_owner_state,rollback_view,failed_handle_valid,rollback_query_ok;
   DWORD rollback_state,rollback_protection,rollback_type;
   size_t backing_refs,query_region_size;

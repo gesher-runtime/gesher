@@ -112,14 +112,19 @@ def punch_data(case):
             if phase=='cleanup':row.update(present=0,state=0x10000)
             elif phase=='after'and case=='punch_coalesce_failure':
                 row.update(kind=2,live=0,live_pages=0,refs=0,views=0,failed=1,state=0x2000,ledger=0,protection=0,type=0x20000,region_size=(16 if i<32 else 33)*page_size,query_size=(16 if i<32 else 33)*page_size,error=8 if i<16 else 0)
-            elif phase=='after'and case=='punch_success':
+            elif phase=='after'and case in ('punch_success','punch_private_success'):
                 row.update(kind=0,region_page=i,region_size=count*page_size,live_pages=count,refs=0,views=0,type=0x20000,query_base_offset=0,query_size=count*page_size,allocation_base_offset=0)
             rows.append(row)
     metrics=[0]*28;metrics[20]=1
     prep=case in ('punch_prepare_failure','punch_file_prepare_failure')
     if prep:metrics[21]=1
     else:metrics[25]=1;metrics[26]=int(case=='punch_coalesce_failure')
-    rows.append(dict(event='punch_result',case=case,capacity=64,combined_pages=count,failed=int(case!='punch_success'),errno=12 if prep else 5 if case=='punch_coalesce_failure'else 0,source_unchanged=int(prep),resources_before=10,resources_after=10,metrics=metrics))
+    if case=='punch_private_success':metrics[24]=1
+    rows.append(dict(event='punch_result',case=case,capacity=64,combined_pages=count,failed=int(case not in ('punch_success','punch_private_success')),errno=12 if prep else 5 if case=='punch_coalesce_failure'else 0,source_unchanged=int(prep),resources_before=10,resources_after=10,metrics=metrics))
+    if case=='punch_private_success':rows.append(dict(event='punch_private',value100=0x9d,live100=1,live101=1,protection101=1,ledger101=1,section_handle_valid=1,type101=0x40000))
+    if case=='punch_success':
+        counters=[0]*28;counters[20]=counters[21]=1
+        rows.append(dict(event='punch_cleanup_prepare',result=-1,errno=12,source_unchanged=1,metrics=counters))
     return dict(event_rows=rows)
 
 class SourceContracts(unittest.TestCase):
@@ -204,11 +209,11 @@ class SourceContracts(unittest.TestCase):
         for case in PUNCH_CASES:
             with self.subTest(case=case):verify_punch(punch_data(case),case,4096)
     def test_punch_allocation_os_partition_mutants(self):
-        changes=[('punch_prepare_failure',lambda d:d['event_rows'][-1]['metrics'].__setitem__(21,0)),
-          ('punch_file_prepare_failure',lambda d:d['event_rows'][-1]['metrics'].__setitem__(23,1)),
-          ('punch_prepare_failure',lambda d:d['event_rows'][-1].update(capacity=65)),
+        changes=[('punch_prepare_failure',lambda d:next(v for v in d['event_rows']if v.get('event')=='punch_result')['metrics'].__setitem__(21,0)),
+          ('punch_file_prepare_failure',lambda d:next(v for v in d['event_rows']if v.get('event')=='punch_result')['metrics'].__setitem__(23,1)),
+          ('punch_prepare_failure',lambda d:next(v for v in d['event_rows']if v.get('event')=='punch_result').update(capacity=65)),
           ('punch_prepare_failure',lambda d:d['event_rows'][65].update(protection=2)),
-          ('punch_coalesce_failure',lambda d:d['event_rows'][-1]['metrics'].__setitem__(26,0)),
+          ('punch_coalesce_failure',lambda d:next(v for v in d['event_rows']if v.get('event')=='punch_result')['metrics'].__setitem__(26,0)),
           ('punch_coalesce_failure',lambda d:d['event_rows'][65+16].update(kind=0)),
           ('punch_coalesce_failure',lambda d:[r.update(query_base_offset=0,query_size=65*4096,allocation_base_offset=0)for r in d['event_rows']if r.get('phase')=='after']),
           ('punch_success',lambda d:d['event_rows'][130].update(present=1))]

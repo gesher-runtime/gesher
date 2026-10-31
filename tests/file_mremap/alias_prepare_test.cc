@@ -129,6 +129,9 @@ int main() {
     Region suffix;suffix.kind=Kind::kView;suffix.group=0x100000;
     suffix.size=128*4096;suffix.live.assign(128,true);suffix.live_pages=128;
     source.emplace(suffix_start,std::move(suffix)); // private continuation, partial edge
+    Region alias;alias.kind=Kind::kView;alias.shared=true;alias.owner=&source_owner;
+    alias.group=0x400000;alias.size=4096;alias.live.assign(1,true);alias.live_pages=1;
+    alias.actual_protection.assign(1,PAGE_READWRITE);source.emplace(0x400000,std::move(alias));
     bool success=false;int caught=0;
     for(long point=0;point<256;++point) {
       const long before=live;calls=0;injected=0;budget=point;

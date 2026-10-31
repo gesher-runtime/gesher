@@ -18,7 +18,7 @@ FAULTS=(('fault_alias',1,1),('fault_alias',4,1),('fault_alias',4,5),
         ('fault_sourcefirst',7,1),('fault_aliasfirst',10,1),
         ('fault_alias',11,1),('fault_finalclose',3,1))
 PROTECTION_CASES=('protect_dead','protect_mixed','protect_partial','protect_surgery')
-PUNCH_CASES=('punch_prepare_failure','punch_file_prepare_failure','punch_coalesce_failure','punch_success')
+PUNCH_CASES=('punch_prepare_failure','punch_file_prepare_failure','punch_coalesce_failure','punch_success','punch_private_success')
 RETAINED=[]
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def atomic(path,value):
@@ -49,7 +49,7 @@ class Actor:
                         if len(line)>16384:self.record['overflow']=True;return
                         try:
                             row=decode(line)
-                            if not isinstance(row,dict) or row.get('event') not in {'ready','peer_complete','query','ledger','failedstate_guard','failedstate_unchanged','fault_result','prefix_cleanup','containment','injection','complete','prerequisite','middle_result','protection_result','punch_page','punch_result'}:raise ValueError('unknown/nonobject actor event')
+                            if not isinstance(row,dict) or row.get('event') not in {'ready','peer_complete','query','ledger','failedstate_guard','failedstate_unchanged','fault_result','prefix_cleanup','containment','injection','complete','prerequisite','middle_result','protection_result','punch_page','punch_result','punch_private','punch_cleanup_prepare'}:raise ValueError('unknown/nonobject actor event')
                             self.record['event_rows'].append(row);self.events.put_nowait(row)
                         except (ValueError,queue.Full):self.record['bad_json']=True
                     if len(pending)>16384:self.record['overflow']=True;return
@@ -275,7 +275,9 @@ def verify_punch(actor,case,page):
         assert all(v['query_ok']==1 for v in rows)
         for row in rows:
             if row['present']and row['kind']==1:
-                assert row['refs']==row['views']+row['pins']>0 and row['state']==0x1000 and row['type']==0x40000
+                assert row['state']==0x1000 and row['type']==0x40000
+                if row['refs']:assert row['refs']==row['views']+row['pins']
+                else:assert case=='punch_private_success'and row['page']>=16
             if phase=='cleanup':assert row['present']==0 and row['state']==0x10000
     assert phases['before'][0]['capacity']==result['capacity']
     metrics=result['metrics'];assert len(metrics)==28 and all(type(v)is int and v>=0 for v in metrics)and metrics[20]>=1
@@ -299,6 +301,16 @@ def verify_punch(actor,case,page):
     else:
         assert result['failed']==0 and metrics[25]==1 and metrics[26]==metrics[21]==0
         assert all(v['present']==1 and v['kind']==0 and v['live']==1 and v['state']==0x1000 and not v['failed']for v in phases['after'])
+    if case=='punch_private_success':
+        proof=[v for v in events if v.get('event')=='punch_private'];assert len(proof)==1
+        private=proof[0]
+        assert private['value100']==0x9d and private['live100']==private['live101']==private['section_handle_valid']==1
+        assert private['protection101']==private['ledger101']==1 and private['type101']==0x40000 and metrics[24]>=1
+    if case=='punch_success':
+        proof=[v for v in events if v.get('event')=='punch_cleanup_prepare'];assert len(proof)==1
+        cleanup=proof[0];counts=cleanup['metrics']
+        assert cleanup['result']==-1 and cleanup['errno']==12 and cleanup['source_unchanged']==1
+        assert len(counts)==28 and counts[20]>=1 and counts[21]==1 and not any(counts[:20]+counts[22:])
     return dict(case=case,production_capacity=result['capacity'],combined_pages=count,actual_prep_injections=metrics[21],actual_coalesce_injections=metrics[26],failed_containment=case=='punch_coalesce_failure')
 
 def receipt(value,expected,role):
