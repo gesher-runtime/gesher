@@ -16,7 +16,7 @@ env:
 
 jobs:
   union-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@c6d3e5dbd6bded66a4c7d464cc3acb2b30654187
+    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@3b182eca178ef94c18eff6a7f007c20c14392746
   union-tsf:
     needs: [artifact-preflight]
     uses: ./.github/workflows/tsf-format-component.yml
@@ -1220,6 +1220,11 @@ jobs:
       TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
       GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.union-trusted-source.outputs.source }}
       GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.union-trusted-source.outputs.policy_ref }}
+      DYNARMIC_COMMIT: 9d4582339990d4eae53f1dc7160686920fc2075c
+      FMT_VERSION: "11.0.2"
+      BOOST_VERSION: "1.83.0"
+      NDK_VERSION: "27.2.12479018"
+      NDK_DIR: tcp-ndk-publisher/android-ndk-r27c
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
