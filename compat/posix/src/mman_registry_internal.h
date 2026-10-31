@@ -80,4 +80,25 @@ struct PreparedSurgery {
 PrepareStatus PrepareSurgery(const Region&, uintptr_t, uintptr_t, uintptr_t,
                              size_t, PreparedSurgery&) noexcept;
 PrepareStatus PrepareSurgeryFromNoExceptions(const Region&, uintptr_t, uintptr_t, uintptr_t, size_t, PreparedSurgery&) noexcept;
+// Request-wide PREPARATION DATA. Raw source handles are borrowed while the
+// registry lock is held; executor must explicitly acquire/pin/retire them.
+// No destructor closes a borrowed source handle or claims OS rollback.
+struct PreparedPunchPiece {
+  uintptr_t start=0,begin=0,end=0;
+  Region original;
+  std::array<RegionMap::node_type,3> partitions;
+  std::vector<DWORD> desired_protection;
+  std::vector<uint8_t> private_bytes;
+  std::array<std::unique_ptr<SectionOwner>,3> failure_records;
+  std::array<HANDLE,2> retained_handles{};
+};
+struct PreparedPunchRequest {
+  std::vector<PreparedPunchPiece> pieces;
+  PreparedPunchLedger merged;
+  size_t first_capacity=0,combined_pages=0;
+};
+PrepareStatus PreparePunchRequest(const RegionMap&,uintptr_t,uintptr_t,size_t,
+                                 PreparedPunchRequest&) noexcept;
+PrepareStatus PreparePunchRequestFromNoExceptions(const RegionMap&,uintptr_t,uintptr_t,
+                                                size_t,PreparedPunchRequest&) noexcept;
 }  // namespace gesher_mman_internal

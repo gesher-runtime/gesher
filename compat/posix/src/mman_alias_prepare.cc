@@ -1,6 +1,7 @@
 // This TU alone enables exceptions; same compiler, STL, allocator and CRT.
 #include "mman_registry_internal.h"
 #include <limits>
+#include <algorithm>
 #include <new>
 #if !defined(__cpp_exceptions)
 #error mman_alias_prepare must be compiled with exceptions enabled
@@ -128,4 +129,66 @@ PrepareStatus PrepareSurgery(const Region& source, uintptr_t start, uintptr_t x,
   } catch (const std::bad_alloc&) { return PrepareStatus::NoMemory; }
     catch (...) { return PrepareStatus::InternalFailure; }
 }
+PrepareStatus PreparePunchRequest(const RegionMap& source,uintptr_t begin,uintptr_t end,
+                                      size_t page,PreparedPunchRequest& out) noexcept {
+  if(!page || begin>=end || begin%page || end%page || !out.pieces.empty() ||
+     !out.merged.combined.live.empty()) return PrepareStatus::InvalidSize;
+  auto first=source.upper_bound(begin);
+  if(first==source.begin())return PrepareStatus::InvalidSize;
+  --first;
+  if(begin-first->first>=first->second.size || !first->second.group)
+    return PrepareStatus::InvalidSize;
+  try {
+    PreparedPunchRequest work;
+    work.first_capacity=first->second.live.capacity();
+    work.combined_pages=(end-begin)/page;
+    const auto merged=PreparePunchLedger(end-begin,page,first->second.group,work.merged);
+    if(merged!=PrepareStatus::Ok)return merged;
+    uintptr_t cursor=begin;
+    for(auto at=first;cursor<end;++at) {
+      if(at==source.end() || (at!=first && at->first!=cursor) || at->first>UINTPTR_MAX-at->second.size || at->first>cursor || cursor-at->first>=at->second.size ||
+         at->second.group!=first->second.group || at->second.size%page ||
+         at->second.live.size()!=at->second.size/page) return PrepareStatus::InvalidSize;
+      const Region& original=at->second;
+      PreparedPunchPiece piece;
+      piece.start=at->first;piece.begin=cursor;
+      piece.end=std::min(end,at->first+original.size);
+      piece.original=original; // catches ALL vector snapshot allocation here
+      piece.desired_protection.assign(original.size/page,0);
+      if(original.kind==Kind::kView && !original.shared &&
+         (piece.begin>at->first || piece.end<at->first+original.size))
+        piece.private_bytes.resize(original.size); // fill only after all prep succeeds
+      if(original.kind==Kind::kView && !original.owner)
+        for(auto& record:piece.failure_records)record=std::make_unique<SectionOwner>();
+      const uintptr_t boundaries[4]={at->first,piece.begin,piece.end,at->first+original.size};
+      for(size_t part=0;part<3;++part) {
+        const size_t length=boundaries[part+1]-boundaries[part];
+        if(!length)continue;
+        Region ready;
+        const size_t offset=(boundaries[part]-at->first)/page,count=length/page;
+        if(part!=1) {
+          ready=original;
+          ready.offset+=boundaries[part]-at->first;
+          ready.shared_alias=false;
+          ready.live.assign(original.live.begin()+offset,original.live.begin()+offset+count);
+          ready.live_pages=static_cast<size_t>(std::count(ready.live.begin(),ready.live.end(),true));
+          ready.actual_protection.assign(count,0); // populated by pre-retirement OS queries
+        } else {
+          ready.kind=Kind::kHole;ready.group=original.group;
+          ready.live.assign(count,false);ready.actual_protection.assign(count,0);
+        }
+        ready.size=length;ready.physical_extent=length;ready.view_padding=0;
+        RegionMap detached;
+        detached.emplace(boundaries[part],std::move(ready));
+        piece.partitions[part]=detached.extract(detached.begin());
+      }
+      work.pieces.push_back(std::move(piece));
+      cursor=work.pieces.back().end;
+    }
+    out=std::move(work);
+    return PrepareStatus::Ok;
+  } catch(const std::bad_alloc&) { return PrepareStatus::NoMemory; }
+    catch(...) { return PrepareStatus::InternalFailure; }
+}
+
 } // namespace gesher_mman_internal
