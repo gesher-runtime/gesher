@@ -1,5 +1,18 @@
 # Fresh host-owner CODE+TYPE prerequisite: SOURCE candidate
 
+The next narrow correction preserves actual9df/run41187455486 overallRED. Its
+Windows2022 parser rejected exactly the scoped symbol header
+`ucrtbase!`common_putenv<char>'::`1'::fin$0:`. Add only an exact case-sensitive
+literal alternative alongside the unchanged old simple-header regex. All
+machine-row/cursor/contiguity/cache/coverage/unknown/bounds predicates stay exact.
+Full saved2022 code golden SHA256d8123c68ca2f6bb0feda5be0c67930d4eb88fb0d91d5701327087546dbc72d7f
+contains26rows/97bytes (last instruction straddles inclusiveE by one byte);
+2025 golden d5ebcf231bc9d7f86443cb6f20a4a7ee80a99736252e95a225a5305409054619
+contains31rows/96bytes. Local tests replay saved TEXT only and reject changed
+headers, missing/duplicate/gap/overlap/extra/code/cache/unknown mutants. They do
+not retroactively promote failed2022, typeNOTREACHED or failure-killed child
+cleanup to normalcompletion. No broader symbol grammar or new command is added.
+
 This next source candidate preserves actual a8e79/run41183544365 bounded normal
 characterization. Its new CODE+TYPE outputs are unexecuted and cannot establish
 instruction alignment, a waiter resource address, SAMEADDRESS handler ownership
@@ -128,7 +141,7 @@ remain admission observations, not OS loader confinement or exhaustive closure.
 CI source wiring uses a fresh authenticated20261006 publisher archive independently
 of mutable setup cache, separate fresh resource-out build, actual compiler hash,
 both canonical pthread aliases and real Reading/Loaded selected-member/ar/nm/map
-main/REL32 evidence. Fixture→setenv/unsetenv→owner and path→same owner are bound;
+main/REL32 evidence. Fixtureג†’setenv/unsetenvג†’owner and pathג†’same owner are bound;
 no unused source object is substituted. Fresh current-source/current-attempt archive
 receipts remain strict. The separate new guard wraps frozen4d54/e85b and all prior
 98/20/10/13/5 layers, exact whole source/pins/history/DAG/noop/shadow controls and
