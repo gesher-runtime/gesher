@@ -6,7 +6,7 @@ Importing this file has no tool/network/native side effect.
 import argparse
 import ast
 import hashlib
-import importlib.util
+import types
 import io
 import json
 import os
@@ -23,8 +23,9 @@ import time
 import urllib.parse
 import urllib.request
 
-_spec=importlib.util.spec_from_file_location('standalone_helper_authority',Path(__file__).with_name('helper_authority.py'))
-A=importlib.util.module_from_spec(_spec);_spec.loader.exec_module(A)
+A=types.ModuleType('standalone_helper_authority')
+A.__file__=str(Path(__file__).with_name('helper_authority.py'))
+exec(compile(Path(A.__file__).read_bytes(),A.__file__,'exec'),A.__dict__)
 ARCHIVE_NAME='llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64'
 ARCHIVE_SHA='5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4'
 DRIVER_SHA='c9b86311ade81d53235c93fafabdf98328d094de344ea9a9038e0dab6695ee9f'
@@ -34,7 +35,17 @@ COMMON=A.COMMON
 TOOL_GRAPHS=[]
 
 def emit(label,value):
-    print('FILE_MREMAP_HELPER_'+label+' '+A.canonical(value).decode().rstrip(),flush=True)
+    A.emit_record(label,value)
+
+def emit_text_members(files,current):
+    # Raw PE/object bytes are never dumped or downloaded for local review.
+    # All twelve sealed text members are losslessly reviewable from plain logs.
+    emit('TEXT_PROOF_INDEX',{'context':current,'members':{name:{'bytes':len(files[name]),'sha256':A.digest(files[name])}for name in A.MEMBERS if not name.endswith(('.exe','.obj'))}})
+    for name in A.MEMBERS:
+        if name.endswith(('.exe','.obj')):continue
+        raw=files[name];raw.decode('utf-8')
+        label='MEMBER_'+name.upper().replace('-','_').replace('.','_')
+        A.emit_bytes(label,raw)
 
 def save(path,value):
     raw=value if type(value)is bytes else A.canonical(value)
@@ -149,11 +160,11 @@ def parse_driver(raw,toolroot,source_root,build):
             A.require(Path(row[0]).resolve().is_relative_to(roots[0]),'foreign implicit executable');commands.append(row)
             for value in row[1:]:
                 A.require(not value.startswith('@'),'unrecorded response file')
-                candidate=value
+                candidate=value;attached=False
                 for prefix in ('-I','-L','-isystem','-iquote','-idirafter','--sysroot=','-fdebug-compilation-dir=','-resource-dir='):
-                    if value.startswith(prefix)and len(value)>len(prefix):candidate=value[len(prefix):];break
-                if Path(candidate).is_absolute():
-                    p=Path(candidate).resolve()
+                    if value.startswith(prefix)and len(value)>len(prefix):candidate=value[len(prefix):];attached=True;break
+                if Path(candidate).is_absolute() or attached or (not candidate.startswith('-') and ('/'in candidate or '\\'in candidate or Path(candidate).suffix in ('.o','.obj','.a','.d','.cc','.cpp','.h','.rsp','.cfg'))):
+                    path=Path(candidate);p=(path if path.is_absolute()else build/path).resolve()
                     A.require(any(p.is_relative_to(root)for root in roots),'ambient implicit path')
     A.require(commands,'missing expanded driver commands');return commands
 
@@ -248,6 +259,7 @@ def produce():
     save(bundle/'producer-manifest.json',manifest);A.require(sum(p.stat().st_size for p in bundle.iterdir())<=A.TOTAL_CAP,'bundle aggregate cap')
     # Verify using independently selected current role ID, not the manifest itself.
     local=dict(auth);local['roles']=dict(auth['roles'],**{'helper-producer':job});A.verify_bundle({p.name:p.read_bytes()for p in bundle.iterdir()},local)
+    emit_text_members({p.name:p.read_bytes()for p in bundle.iterdir()},auth['context'])
     emit('PRODUCER_MANIFEST',{'sha256':sha(bundle/'producer-manifest.json'),'context':auth['context'],'producer_id':job['id'],'role':A.PROFILE,'qualification':False,'members':manifest['members']})
 
 def release_consumer_directory(dest,parent):
@@ -262,12 +274,12 @@ def consume():
     image=os.environ.get('ImageOS');A.require(image in ('win22','win25'),'host image role');role='helper-windows-'+('2022'if image=='win22'else'2025');current_job(auth,role)
     artifact=A.verify_artifact(A.api('actions/runs/'+auth['context']['run']+'/artifacts?per_page=100'),auth['context'],auth['roles']['helper-producer']);emit('DOWNLOAD_AUTHORITY',{'context':auth['context'],'roles':auth['roles'],'artifact':artifact,'source_authority':auth['authority'],'host_role':role})
     raw=download('https://api.github.com/repos/'+A.REPOSITORY+'/actions/artifacts/'+str(artifact['id'])+'/zip',A.TOTAL_CAP,artifact['digest'].split(':')[1],os.environ['GH_TOKEN'])
-    files=A.zip_members(raw);manifest=A.verify_bundle(files,auth);dest=Path(os.environ['RUNNER_TEMP'])/('mremap-helper-'+auth['context']['run']+'-'+auth['context']['attempt']+'-'+image)
+    files=A.zip_members(raw);manifest=A.verify_bundle(files,auth);emit_text_members(files,auth['context']);dest=Path(os.environ['RUNNER_TEMP'])/('mremap-helper-'+auth['context']['run']+'-'+auth['context']['attempt']+'-'+image)
     A.require(not dest.exists(),'fresh consumer directory');dest.mkdir()
     try:
         for name,value in files.items():(dest/name).write_bytes(value)
         os.environ.pop('GH_TOKEN',None);os.environ.pop('GITHUB_TOKEN',None)
-        record,result=A.owned_helper(dest/'helper-qualification.exe',manifest['members']['helper-qualification.exe']['sha256'])
+        record,result=A.owned_helper(dest/'helper-qualification.exe',manifest['members']['helper-qualification.exe']['sha256'],auth['context'])
     finally:
         released=False
         if not A.LIVE_GRAPHS:
@@ -278,7 +290,7 @@ def consume():
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('mode',choices=('produce','consume'));args=parser.parse_args()
-    A.require(os.environ.get('GITHUB_ACTIONS')=='true','CI execution only')
+    A.require(os.environ.get('GITHUB_ACTIONS')=='true' and sys.flags.isolated==1 and sys.dont_write_bytecode,'isolated no-cache CI execution only')
     try:
         (produce if args.mode=='produce'else consume)()
     except BaseException as error:

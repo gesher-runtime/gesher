@@ -4,6 +4,7 @@ CI entry points independently authenticate immutable caller, guard, current API
 roles and downloaded bytes. This is not selected-production or full-A authority.
 """
 import argparse
+import base64
 import ast
 import datetime
 import hashlib
@@ -80,6 +81,16 @@ def digest(raw):
 def canonical(value):
     return (json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True) + '\n').encode()
 
+def emit_bytes(label,raw):
+    require(re.fullmatch('[A-Z_0-9]+',label) and type(raw)is bytes and len(raw)<=FILE_CAP,'proof record bound')
+    parts=[raw[i:i+9000]for i in range(0,len(raw),9000)]or[b'']
+    for index,part in enumerate(parts,1):
+        print('FILE_MREMAP_HELPER_%s part=%d/%d bytes=%d sha256=%s base64=%s' %
+              (label,index,len(parts),len(raw),digest(raw),base64.b64encode(part).decode('ascii')),flush=True)
+
+def emit_record(label,value):
+    emit_bytes(label,canonical(value))
+
 def decode(raw, cap=FILE_CAP):
     require(type(raw) is bytes and len(raw) <= cap, 'JSON byte bound')
     def unique(pairs):
@@ -152,7 +163,7 @@ jobs:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0, persist-credentials: false}
       - name: Authenticate source and build only three standalone helper objects
-        run: python3 -I tools/file_mremap/helper_producer.py produce
+        run: python3 -I -B tools/file_mremap/helper_producer.py produce
       - uses: actions/upload-artifact@v4
         with:
           name: file-mremap-helper-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -177,7 +188,7 @@ jobs:
       - name: Authenticate current producer and run only owned standalone helper
         shell: pwsh
         run: |
-          python -I tools/file_mremap/helper_producer.py consume
+          python -I -B tools/file_mremap/helper_producer.py consume
           if ($LASTEXITCODE -ne 0) { throw 'Standalone helper qualification failed' }
 '''.replace('GUARD_SHA', guard)).encode()
 
@@ -192,7 +203,7 @@ TEMPLATE='TEMPLATE_LITERAL'
 path='tools/file_mremap/helper_authority.py'
 raw=subprocess.check_output(['git','cat-file','blob',PINS[path]])
 assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\\0'+raw).hexdigest()==PINS[path]
-assert sys.flags.isolated==1
+assert sys.flags.isolated==1 and sys.dont_write_bytecode
 scope={'__name__':'immutable_helper_authority','__file__':str(Path(path).resolve())}
 exec(compile(raw,'immutable-helper-authority','exec'),scope)
 scope['guard_main'](PINS,TEMPLATE)
@@ -216,17 +227,17 @@ jobs:
       - name: Verify immutable standalone source and full preserved history
         shell: bash
         run: |
-          python3 -I - <<'PY'
+          python3 -I -B - <<'PY'
 ''' + ''.join('          ' + line + '\n' for line in bootstrap.splitlines()) + '''          PY
       - name: Run ordinary metadata controls only
-        run: python3 -I tools/file_mremap/test_helper_authority.py
+        run: python3 -I -B tools/file_mremap/test_helper_authority.py
 ''').encode()
 
 def constants(raw):
     import textwrap
     require(type(raw) is bytes and len(raw) <= FILE_CAP, 'guard byte bound')
     try:
-        text = raw.decode().split("          python3 -I - <<'PY'\n", 1)[1].rsplit('\n          PY', 1)[0]
+        text = raw.decode().split("          python3 -I -B - <<'PY'\n", 1)[1].rsplit('\n          PY', 1)[0]
         tree = ast.parse(textwrap.dedent(text))
     except (UnicodeError, IndexError, SyntaxError) as error:
         raise Rejected('malformed immutable guard') from error
@@ -447,11 +458,11 @@ def settle_readers(graph, deadline):
                (not slot['started'] and not slot.get('start_attempted',False))
                for slot in graph['readers'])
 
-def owned_helper(executable, expected_sha):
+def owned_helper(executable, expected_sha, current):
     """CI-only Windows child. Never dispose IO while its readers remain live."""
     require(os.environ.get('GITHUB_ACTIONS')=='true' and os.name=='nt', 'owned helper Windows CI only')
     executable=Path(executable).resolve();require(digest(executable.read_bytes())==expected_sha,'launch bytes')
-    graph={'image_handle':None,'process':None,'readers':[],'buffers':[bytearray(),bytearray()],'errors':[],'record':{'started':False,'kernel_completed':False,'io_completed':False,'handles_closed':False,'timed_out':False,'overflow':False,'exit':None}}
+    graph={'image_handle':None,'process':None,'readers':[],'buffers':[bytearray(),bytearray()],'errors':[],'record':{'context':current,'started':False,'kernel_completed':False,'io_completed':False,'handles_closed':False,'timed_out':False,'overflow':False,'exit':None}}
     LIVE_GRAPHS.append(graph);record=graph['record'];start=time.monotonic();kernel=None
     try:
         import ctypes
@@ -517,7 +528,7 @@ def owned_helper(executable, expected_sha):
         record['stdout']=bytes(graph['buffers'][0]).decode('ascii',errors='backslashreplace');record['stderr']=bytes(graph['buffers'][1]).decode('ascii',errors='backslashreplace')
         record['stdout_sha256']=digest(bytes(graph['buffers'][0]));record['stderr_sha256']=digest(bytes(graph['buffers'][1]))
         record['root_retained']=not(quiescent and record['handles_closed'])
-        print('FILE_MREMAP_HELPER_PROCESS '+canonical(record).decode().rstrip(),flush=True)
+        emit_record('PROCESS',record)
         if not record['root_retained']:LIVE_GRAPHS.remove(graph)
     require(not graph['errors'],'process errors');validate_completion(record)
     result=parse_budgets(bytes(graph['buffers'][0]),bytes(graph['buffers'][1]),record['exit'])
@@ -527,5 +538,5 @@ def guard_main(pins,template):
     current=context(os.environ,'verify');root=Path.cwd()
     auth=authorize('verify');require(auth['authority']['template']==template and all(auth['authority']['pins'][p]==b for p,b in pins.items()), 'trusted bootstrap pins')
     # Candidate-root modules are never imported; no mutable no-op in real gate.
-    require(sys.flags.isolated==1 and all(Path(m.__file__).resolve().parent!=root for m in (json,hashlib)), 'isolated stdlib')
-    print('FILE_MREMAP_HELPER_SOURCE '+canonical({'context':current,'authority':auth['authority'],'qualification':False}).decode().rstrip(),flush=True)
+    require(sys.flags.isolated==1 and sys.dont_write_bytecode and all(Path(m.__file__).resolve().parent!=root for m in (json,hashlib)), 'isolated stdlib')
+    emit_record('SOURCE',{'context':current,'authority':auth['authority'],'qualification':False})
