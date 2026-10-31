@@ -1,0 +1,75 @@
+name: fonts-debugger-preflight-component
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/fonts-debugger-preflight]
+    paths: [.github/workflows/fonts-debugger-preflight-component.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: fonts-debugger-preflight-component-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  trusted-source:
+    uses: gesher-runtime/gesher/.github/workflows/fonts-debugger-preflight-trusted-source.yml@0000000000000000000000000000000000000000
+  probe-producer:
+    needs: trusted-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Cache only the authenticated fresh publisher archive
+        id: publisher
+        uses: actions/cache@v4
+        with:
+          path: font-debugger-llvm.tar.xz
+          key: font-debugger-publisher-20261006-5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4
+      - name: Fetch canonical publisher compiler without installing debugger tools
+        if: steps.publisher.outputs.cache-hit != 'true'
+        run: curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" -o font-debugger-llvm.tar.xz
+      - name: Authenticate publisher bytes and freshly extract compiler in CI
+        run: |
+          set -euo pipefail
+          printf '%s  font-debugger-llvm.tar.xz\n' 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4 | sha256sum --check --strict
+          test ! -e toolchain
+          mkdir toolchain
+          tar -xJf font-debugger-llvm.tar.xz -C toolchain
+      - name: Build only current harmless normal-start CRT child and bind actual output bytes
+        run: python3 tools/fonts/debugger-probe.py build --root preflight-probe --toolchain "toolchain/$LLVM_MINGW_NAME" --archive font-debugger-llvm.tar.xz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: font-debugger-preflight-probe
+          path: preflight-probe/
+          if-no-files-found: error
+  availability:
+    needs: [trusted-source, probe-producer]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify current-source current-attempt harmless probe supplier and actual bytes
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name font-debugger-preflight-probe --producer probe-producer --destination current-preflight-probe
+          if ($LASTEXITCODE -ne 0) { throw 'Current harmless child supplier receipt failed' }
+          python tools/fonts/debugger-probe.py verify --root current-preflight-probe
+          if ($LASTEXITCODE -ne 0) { throw 'Current harmless child/compiler/object/main/output proof failed' }
+      - name: Observe preinstalled CDB and symbols with owned sanitized child detach proof only
+        shell: pwsh
+        run: ./tools/fonts/debugger-preflight.ps1 -ProbeDirectory (Join-Path $env:GITHUB_WORKSPACE 'current-preflight-probe')
