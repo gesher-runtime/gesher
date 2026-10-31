@@ -3,9 +3,12 @@
 This module neither authenticates GitHub roles nor runs fixture/native code.
 """
 import hashlib
+import io
 import json
 import re
 import subprocess
+import stat
+import zipfile
 from pathlib import Path
 
 BASE='b0de972bb543e0dd20d125c990817fb5b3407112'
@@ -50,12 +53,8 @@ def validate(value,context,producer_id,rows):
     assert canonical(value)==canonical(manifest(context,producer_id,rows))
     return hashlib.sha256(canonical(value)).hexdigest()
 
-def validate_download(directory,context,producer_id,rows):
-    directory=Path(directory)
-    files=list(directory.iterdir())
-    assert len(files)==1 and files[0].name=='graphicsdex-source-manifest.json'
-    assert files[0].is_file() and not files[0].is_symlink()
-    raw=files[0].read_bytes();assert 0<len(raw)<=262144
+def validate_raw(raw,context,producer_id,rows):
+    assert type(raw)is bytes and 0<len(raw)<=262144
     def pairs(values):
         result={}
         for key,value in values:
@@ -65,3 +64,13 @@ def validate_download(directory,context,producer_id,rows):
     value=json.loads(raw,object_pairs_hook=pairs,parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite')))
     assert raw==canonical(value)+b'\n'
     return validate(value,context,producer_id,rows)
+
+def validate_archive(raw,context,producer_id,rows):
+    assert type(raw)is bytes and 0<len(raw)<=1048576
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        files=archive.infolist();assert len(files)==1
+        item=files[0];assert item.filename=='graphicsdex-source-manifest.json' and not item.is_dir()
+        assert not item.flag_bits&1 and 0<item.file_size<=262144 and item.compress_size<=1048576
+        mode=item.external_attr>>16;assert not stat.S_ISLNK(mode)
+        data=archive.read(item);assert len(data)==item.file_size
+    return validate_raw(data,context,producer_id,rows)
