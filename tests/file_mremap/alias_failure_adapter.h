@@ -10,6 +10,7 @@ extern "C" {
 #endif
 LPVOID WINAPI FileAliasMapViewOfFile(HANDLE,DWORD,DWORD,DWORD,SIZE_T);
 BOOL WINAPI FileAliasCloseHandle(HANDLE);
+BOOL WINAPI FileAliasUnmapViewOfFile(const void*);
 typedef void*(WINAPI* FileAliasMap3Routine)(HANDLE,HANDLE,void*,ULONG64,SIZE_T,ULONG,ULONG,void*,ULONG);
 typedef BOOL(WINAPI* FileAliasUnmap2Routine)(HANDLE,void*,ULONG);
 void* FileAliasMap3(FileAliasMap3Routine,HANDLE,HANDLE,void*,ULONG64,SIZE_T,ULONG,ULONG);
@@ -18,6 +19,19 @@ SIZE_T FileAliasQuery(const void*,MEMORY_BASIC_INFORMATION*,SIZE_T);
 BOOL FileAliasProtect(void*,SIZE_T,DWORD,PDWORD);
 BOOL FileAliasFree(void*,SIZE_T,DWORD);
 BOOL FileAliasPublicationAllowed(void);
+/* Caller storage only: snapshot allocates nothing and holds registry lock.
+ * query uses real VirtualQuery, bypassing injection; never a production ABI. */
+typedef struct FileAliasPage {
+  size_t page,region_page,region_size,live_pages,owner_refs;
+  int present,kind,live,owner_state,owner_failure;
+  DWORD ledger_protection,operation_error,query_state,query_protection,query_type;
+  int query_ok,group,failed_owners,failed_owner_state,rollback_view,failed_handle_valid,rollback_query_ok;
+  DWORD rollback_state,rollback_protection,rollback_type;
+  size_t backing_refs;
+  DWORD failed_owner_error;
+  size_t failed_owner_refs;
+} FileAliasPage;
+int FileAliasRegistrySnapshot(const void*,size_t,FileAliasPage*,size_t);
 void FileAliasFailureReset(int mode);
 void FileAliasFailureNth(int nth);
 int FileAliasFailureOutstanding(void);
