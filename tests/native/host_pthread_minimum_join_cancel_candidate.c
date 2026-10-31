@@ -70,7 +70,7 @@ static void capture_joiner_stack(HANDLE thread, DWORD expected_tid) {
           "stack frame image bytes");
     printf("JOIN_CANCEL_FRAME index=%u pc=%llu image=%llu prefix=", i,
            (unsigned long long)pcs[i], (unsigned long long)(uintptr_t)region.AllocationBase);
-    for (unsigned j = 0; j < sizeof bytes; ++j) printf("%02x", bytes[j]);
+    for (unsigned j = 0; j < sizeof bytes; ++j) printf("%02x", (unsigned)bytes[j]);
     putchar('\n');
   }
 #endif
