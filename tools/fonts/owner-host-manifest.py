@@ -5,7 +5,7 @@ from font_records import emit
 COMPILER_SHA='c9b86311ade81d53235c93fafabdf98328d094de344ea9a9038e0dab6695ee9f'
 PTHREAD_SHA='dbbbb3a59f5a1077346b69d4dd8ea85eeca9574bfbd2d170eaf91b5fe5b2f88e'
 ROLE='CURRENT_SOURCE_HOST_FONT_OWNER_ONLY'
-INPUTS=('CMakeLists.txt','compat/posix/posix.cmake','compat/posix/include/gesher/font_environment.h','compat/posix/src/font_environment.cc','compat/posix/src/path.cc','compat/posix/src/unistd.cc','compat/bionic/shim.cc','compat/bionic/native_fonts.cc','tests/native/font_environment_test.cc','.github/workflows/fonts-owner-host-component.yml','tools/fonts/owner-host-manifest.py','tools/fonts/run-owner-host.ps1','tools/fonts/test-owner-host-arguments.ps1','tools/fonts/font_records.py','tools/fonts/cli-link-evidence.py','tools/fonts/verify-standalone-link.py')
+INPUTS=('CMakeLists.txt','compat/posix/posix.cmake','compat/posix/include/gesher/font_environment.h','compat/posix/src/font_environment.cc','compat/posix/src/path.cc','compat/posix/src/unistd.cc','compat/bionic/shim.cc','compat/bionic/native_fonts.cc','tests/native/font_environment_test.cc','.github/workflows/fonts-owner-host-component.yml','tools/fonts/owner-host-manifest.py','tools/fonts/run-owner-host.ps1','tools/fonts/test-owner-host-arguments.ps1','tools/fonts/test-owner-host-evidence.py','tools/fonts/font_records.py','tools/fonts/cli-link-evidence.py','tools/fonts/verify-standalone-link.py')
 FILES=('font_environment_test.exe','font_environment_test.map','font_environment_test.imports.txt','font-owner-host-build.log')
 ROLES={'owner':'compat/posix/src/font_environment.cc','host_POSIX':'compat/posix/src/unistd.cc','font_paths':'compat/posix/src/path.cc','fixture':'tests/native/font_environment_test.cc'}
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
@@ -19,6 +19,23 @@ def inputs():
  result={p:subprocess.check_output(['git','hash-object',p],text=True).strip() for p in INPUTS}
  assert all(subprocess.check_output(['git','rev-parse','HEAD:'+p],text=True).strip()==b for p,b in result.items()),'Compiled/source receipt checkout dirty'
  return result
+
+def loaded_rows(scope):
+ result=[]
+ for line in scope.splitlines():
+  if not re.match(r'^(?:ld\.lld|lld-link): Loaded libgesher_posix\.a\(',line):continue
+  match=re.fullmatch(r'(?:ld\.lld|lld-link): Loaded libgesher_posix\.a\(([^()]+)\) for ([^\r\n]+)',line)
+  assert match and match[2].strip(),'Malformed selected-archive Loaded evidence'
+  result.append((match[1],match[2].rstrip()))
+ return result
+
+def bind_loaded(rows,member,raw,demangled):
+ selected=sorted(set((m,s) for m,s in rows if m==member))
+ emit('FONT_OWNER_HOST_LOADED_NM_EVIDENCE',{'member':member,'actual_selected_rows':selected,'raw_defined_count':len(raw),'demangled_defined_count':len(demangled),'exact_raw_matches':sorted(s for _,s in selected if s in raw),'exact_demangled_matches':sorted(s for _,s in selected if s in demangled)})
+ assert len(selected)==1,'Missing/ambiguous actual Loaded member'
+ required=selected[0][1]
+ assert required in raw or required in demangled,'Loaded symbol is not defined by this byte-bound member'
+ return [{'member':member,'required':required,'required_format':'raw' if required in raw else 'demangled'}]
 
 def capture(build,root):
  assert not root.exists();root.mkdir(parents=True);evidence=load('cli-link-evidence')
@@ -56,7 +73,7 @@ def capture(build,root):
  scope=evidence.link_scope(trace,command)
  for line in scope.splitlines():
   if 'libgesher_posix.a' in line or 'font_environment.cc.obj' in line:emit('FONT_OWNER_HOST_ARCHIVE_RAW',line)
- loaded=re.findall(r'(?m)^(?:ld\.lld|lld-link): Loaded libgesher_posix\.a\(([^()]+)\) for (\S+)\s*$',scope)
+ loaded=loaded_rows(scope)
  required={'owner':('gesher::ReadFontEnvironment(','gesher::WriteFontEnvironment('),'host_POSIX':('setenv','unsetenv'),'font_paths':('gesher::SystemFontFiles(',)};members={};symbols={}
  for role,prefixes in required.items():
   obj=Path(compiled[role]['object']);member=obj.name
@@ -70,7 +87,9 @@ def capture(build,root):
    candidates=[symbol for symbol in defined if symbol==prefix or symbol.startswith(prefix)];assert len(candidates)==1
    symbol=candidates[0];found={(rva,name,owner) for rva,name,owner in rows if name==symbol};emit('FONT_OWNER_HOST_REQUIRED_LIVE_RAW',{'role':role,'symbol':symbol,'rows':sorted(found)})
    assert len(found)==1 and next(iter(found))[2]==member;live[symbol]=sorted(found)
-  selected=[{'member':m,'required':s} for m,s in loaded if m==member];assert selected and all(x['required'] in raw for x in selected)
+  tokens=[p.split('(')[0].rsplit('::',1)[-1] for p in prefixes]
+  emit('FONT_OWNER_HOST_DEFINED_NM_RAW',{'role':role,'member':member,'object_sha256':sha(obj),'archive_member_sha256':hashlib.sha256(data).hexdigest(),'raw_candidates':sorted(s for s in raw if any(token in s for token in tokens)),'demangled_candidates':sorted(s for s in defined if any(s==prefix or s.startswith(prefix) for prefix in prefixes))})
+  selected=bind_loaded(loaded,member,raw,defined)
   members[role]={'archive':str(archive),'archive_sha256':sha(archive),'member':member,'member_sha256':hashlib.sha256(data).hexdigest(),'loaded':selected,'live_defined':live};symbols[role]=raw
   emit('FONT_OWNER_HOST_SELECTED_MEMBER',{'role':role,**members[role]})
  write=[symbol for symbol in symbols['owner'] if 'WriteFontEnvironment' in symbol];read=[symbol for symbol in symbols['owner'] if 'ReadFontEnvironment' in symbol];assert len(write)==len(read)==1
