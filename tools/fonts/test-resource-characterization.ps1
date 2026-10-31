@@ -438,7 +438,7 @@ $ntNegatives=@(
 Check ($ntNegatives.Count -eq 8)
 foreach($bad in $ntNegatives){Reject {Assert-ResourceWitnessProfiles ($lmv+$bad+"`n0:000> qd`n") $cacheDouble $codeDouble $positive}}
 # Actual resource-only cleanup/barrier functions, managed fakes ONLY.
-foreach($name in @('Test-ResourceTerminalTasks','Settle-ResourceRecord','Complete-ResourceSettlement')){
+foreach($name in @('Test-ResourceTerminalTasks','Close-ResourceRecord','Settle-ResourceRecord','Complete-ResourceSettlement','Wait-ResourceRole')){
  $node=@($newFunctions|Where-Object{$_.Name -ceq $name});Check ($node.Count -eq 1);Invoke-Expression $node[0].Extent.Text
 }
 function New-SettlementFake {
@@ -499,4 +499,44 @@ foreach($mode in @('kill','wait','sink','task','interrupt')){
 }
 Check ($new.Extent.Text -notmatch 'Stop-ExactOwnedProcess \$record.process')
 Check ($new.Extent.Text.Contains('-or !$settlementSuccess'))
+# Effective normal WaitRole and EXACT capture-success close call, then actual
+# barrier. A test-only outer labeled break bounds the indefinitely retained fake;
+# it is NOT a product exit/forced-termination containment claim.
+$captureCall='if(!(Close-ResourceRecord $capture)){throw ''UNAVAILABLE: capture close outcome uncertain''}'
+Check ($new.Extent.Text.Contains($captureCall))
+foreach($route in @('normal','capture')){
+ foreach($failure in @('StandardInput','StandardOutput','Process','NONE')){
+  $f=New-SettlementFake;$m=$f.metrics;$m.kernel=$true;$m.closeCounts=@{StandardInput=0;StandardOutput=0;StandardError=0;Process=0};$m.failName=$failure;$m.failedOnce=$false
+  $f.record.role=if($route -ceq 'normal'){'imports'}else{'capture'};$f.record.state='EXITED'
+  $f.record.out.Closed=$true;$f.record.err.Closed=$true;$f.record.out.Text=[Text.StringBuilder]::new();$f.record.err.Text=[Text.StringBuilder]::new()
+  $f.record.process|Add-Member NoteProperty ExitCode 0
+  foreach($name in @('StandardInput','StandardOutput','StandardError')){
+   $stream=$f.record.process.$name;$stream|Add-Member NoteProperty name $name
+   $stream|Add-Member ScriptMethod Dispose { $this.m.closeCounts[$this.name]++;if($this.m.failName -ceq $this.name -and !$this.m.failedOnce){$this.m.failedOnce=$true;throw 'normal stream close uncertain'} } -Force
+  }
+  $f.record.process|Add-Member ScriptMethod Dispose {$this.m.closeCounts.Process++;if($this.m.failName -ceq 'Process' -and !$this.m.failedOnce){$this.m.failedOnce=$true;throw 'normal Process close uncertain'}} -Force
+  $caught=$false
+  try{if($route -ceq 'normal'){Wait-ResourceRole $f.record 90000}else{$capture=$f.record;& ([scriptblock]::Create($captureCall))}}catch{$caught=$true;$f.owner.failed=$true}
+  Check ($caught -eq ($failure -cne 'NONE'))
+  $rootDouble=New-StageLifetimeRoot $f.owner;$script:files=0;$script:passes=0
+  $script:passiveHook={
+   $script:passes++;Check $rootDouble.active;Check ($script:files -eq 0)
+   Check ($f.record.disposeState[$failure] -ceq 'FAILED' -and $m.closeCounts[$failure] -eq 1)
+   if($script:passes -eq 3){break settlementWitness}
+  }
+  try{
+   :settlementWitness while($true){
+    $answer=Complete-ResourceSettlement $f.owner $rootDouble {$script:files++} {}
+    Check ($failure -ceq 'NONE' -and $answer -and !$rootDouble.active -and $script:files -eq 1)
+    break
+   }
+   if($failure -cne 'NONE'){
+    Check ($script:passes -eq 3 -and $rootDouble.active -and $script:files -eq 0 -and $f.owner.failed)
+    Check ($m.closeCounts[$failure] -eq 1)
+   }
+   foreach($name in @('StandardInput','StandardOutput','StandardError','Process')){Check ($m.closeCounts[$name] -le 1)}
+   if($failure -ceq 'NONE'){Check (Settle-ResourceRecord $f.owner $f.record);Check ($m.closeCounts.Process -eq 1)}
+  }finally{if($rootDouble.active){$rootDouble.handle.Free();$rootDouble.active=$false}}
+ }
+}
 Write-Host "FONT_RESOURCE_METADATA_PASS checks=$script:checks native_processes_started=0 real_tool_reads=0 actual_application_lookup=NOT_EXECUTED code_rows=SYNTHETIC_AND_SAVED_CI_TEXT"

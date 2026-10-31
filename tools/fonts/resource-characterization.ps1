@@ -767,8 +767,7 @@ function Wait-ResourceRole($Record,[long]$Deadline) {
  $Record.state='EXITED'
  foreach($task in @($Record.writeTask,$Record.out.Task,$Record.err.Task)){if($null -ne $task -and !$task.IsCompleted){throw 'UNAVAILABLE: terminal role has live IO task'}}
  if($Record.role -ceq 'capture' -and $Record.ownerWitness){return} # Retain live identity through parser; finally still owns containment.
- foreach($name in @('StandardInput','StandardOutput','StandardError')){$Record.process.$name.Dispose()}
- $Record.process.Dispose();$Record.state='DISPOSED'
+ if(!(Close-ResourceRecord $Record)){throw 'UNAVAILABLE: normal close outcome uncertain'}
 }
 function Send-ResourceBytes($Record,[byte[]]$Bytes,[int]$Count) {
  $Record.writeBuffer=$Bytes
@@ -794,11 +793,36 @@ function Test-ResourceTerminalTasks($Record) {
  }
  $true
 }
+function Close-ResourceRecord($Record) {
+ # Shared NORMAL + CAPTURE + FAILURE close ledger; this helper NEVER kills.
+ if(!(Test-ResourceTerminalTasks $Record)){throw 'Live IO forbids close'}
+ if(![object]::ReferenceEquals($Record.process,$Record.settlementProcess)){throw 'Original close process changed'}
+ if($Record.state -ceq 'DISPOSED'){
+  foreach($name in @('StandardInput','StandardOutput','StandardError','Process')){if($Record.disposeState[$name] -cne 'DONE'){throw 'Disposed without complete original close ledger'}}
+  return $true
+ }
+ if($Record.pid -ne $Record.settlementPid -or $Record.process.Id -ne $Record.pid -or ![object]::ReferenceEquals($Record.handle,$Record.settlementHandle) -or $Record.handle.IsClosed -or !$Record.process.WaitForExit(0)){throw 'Original terminal kernel required for close'}
+ if(!$Record.disposeState){$Record.disposeState=@{};$Record.disposeResources=@{}}
+ foreach($name in @('StandardInput','StandardOutput','StandardError','Process')){
+  if($Record.disposeState[$name] -ceq 'FAILED'){return $false}
+  if($Record.disposeState[$name] -cne 'DONE'){
+   $Record.disposeState[$name]='FAILED' # before getter/Dispose; unknown outcome is NEVER retried
+   $resource=if($name -ceq 'Process'){$Record.process}else{$Record.process.$name}
+   $Record.disposeResources[$name]=$resource
+   $resource.Dispose()
+   $Record.disposeState[$name]='DONE'
+  }
+ }
+ $Record.state='DISPOSED';$true
+}
 function Settle-ResourceRecord($Owner,$Record) {
  if(!(Test-ResourceTerminalTasks $Record)){ $tasksDone=$false }else{$tasksDone=$true}
  if($null -eq $Record.process){return ($Record.state -cin @('NOT_STARTED','OMITTED') -and $tasksDone)}
  if(![object]::ReferenceEquals($Record.process,$Record.settlementProcess)){throw 'Retained process changed'}
- if($Record.state -ceq 'DISPOSED'){return $tasksDone}
+ if($Record.state -ceq 'DISPOSED'){return (Close-ResourceRecord $Record)}
+ # Normal closes may have failed after Process.Dispose closed its handle;
+ # ledger uncertainty is authoritative and requires quarantine, not a requery.
+ if($Record.disposeState -and @($Record.disposeState.Values|Where-Object{$_ -ceq 'FAILED'}).Count){return $false}
  if($Record.pid -ne $Record.settlementPid -or $Record.process.Id -ne $Record.pid -or ![object]::ReferenceEquals($Record.handle,$Record.settlementHandle) -or $Record.handle.IsClosed){throw 'Retained kernel identity unavailable'}
  $kernel=$Record.process.WaitForExit(0)
  if(!$kernel -and !$Record.killReserved){
@@ -810,16 +834,7 @@ function Settle-ResourceRecord($Owner,$Record) {
  foreach($task in @($Record.writeTask,$Record.out.Task,$Record.err.Task)){
   if($null -ne $task){try{$null=$task.GetAwaiter().GetResult()}catch{$Owner.failed=$true;$Owner.settlementErrors.Add($_.Exception.Message)}}
  }
- if(!$Record.disposeState){$Record.disposeState=@{}}
- foreach($name in @('StandardInput','StandardOutput','StandardError','Process')){
-  if($Record.disposeState[$name] -ceq 'FAILED'){return $false}
-  if($Record.disposeState[$name] -cne 'DONE'){
-   $Record.disposeState[$name]='FAILED' # interruption/error keeps graph, no blind retry
-   if($name -ceq 'Process'){$Record.process.Dispose()}else{$Record.process.$name.Dispose()}
-   $Record.disposeState[$name]='DONE'
-  }
- }
- $Record.state='DISPOSED';$true
+ Close-ResourceRecord $Record
 }
 function Complete-ResourceSettlement($Owner,$Root,[scriptblock]$ReleaseFiles,[scriptblock]$FailureSink) {
  # Passive same-pwsh owner barrier, NOT more observation or a refreshed deadline.
@@ -1004,7 +1019,7 @@ try{
  Wait-ResourceRole $capture $captureDeadline
  $owner=Read-ResourceOwnerField $capture.out.Text.ToString() $heldAddress $held.handler $held.writer $stage
  if(!(Test-ResourceTerminalTasks $capture)){throw 'Capture still has live IO'}
- foreach($name in @('StandardInput','StandardOutput','StandardError')){$capture.process.$name.Dispose()};$capture.process.Dispose();$capture.state='DISPOSED'
+ if(!(Close-ResourceRecord $capture)){throw 'UNAVAILABLE: capture close outcome uncertain'}
  Emit-PreflightRecord 'FONT_RESOURCE_ONE_ADDRESS_OWNER' $owner
  Assert-ResourceWitnessRootTasks $stage
  Assert-PreflightRawMarkers $capture.out.Text.ToString();Assert-OwnedAlive $child.process $child.pid $child.handle

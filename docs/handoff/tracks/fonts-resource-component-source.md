@@ -319,3 +319,25 @@ NTDLL predicate remain unchanged; W22 identity BLOCKED. Same27input4output18pin/
 1638whole/history65/all4FALSE/old5WCTRED/6913parked. Different whole-source peer
 and separate CI required. Genuine owner/normalcleanup then bothruntime/JNI/guest/
 JavaOs/OEM/retention/release obligations remain OPEN.
+
+## Shared normal/capture/failure close ledger continuity
+
+092b SOURCE peer found normal WaitRole and capture-success closes bypassed the
+failure ledger. Shared close-only Close-ResourceRecord now serves ALL THREE routes.
+It never kills; exact original terminal kernel/current tasks are prerequisites.
+Before every stream/process getter or Dispose, same per-resource ledger is FAILED;
+exact resource reference is retained, DONE only after successful return. Partial
+normal-close errors therefore preserve earlier DONE entries and uncertain FAILED
+entry into actual failure settlement. No blind retry/replacement/idempotence claim.
+Settlement sees FAILED before querying possibly disposed Process/SafeHandle and
+retains original graph/files/Normalroot under same-pwsh passive quarantine.
+
+Managed effective actual-route tests exercise WaitRole and exact capture-success
+source call into actual barrier for first stream/later stream/Process errors and
+full success. Counts stay1, root/files retained under uncertainty; prior DONE
+entries never repeat. Test-only outer labeled break truncates three passive fake
+cycles for observation, NOT a supported product escape or forced-exit proof.
+Successful close remains exactly-once. Original32/A/B/body/TID/normal RELEASE/
+COMPLETE/budgets/27inputs4outputs18pins1638whole remain. W22 BLOCKED/all4FALSE/
+old5WCTRED/6913parked. External forced pwsh/workflow/host destruction UNPROVED.
+Different whole-source peer and separately scheduled actual CI still required.
