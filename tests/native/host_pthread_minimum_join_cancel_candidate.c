@@ -61,8 +61,18 @@ static void capture_joiner_stack(HANDLE thread, DWORD expected_tid) {
   printf("JOIN_CANCEL_STACK tid=%lu birth_hi=%lu birth_lo=%lu frames=%u suspend_before=%lu resume_before=%lu\n",
          (unsigned long)expected_tid, (unsigned long)created.dwHighDateTime,
          (unsigned long)created.dwLowDateTime, count, (unsigned long)prior, (unsigned long)resumed);
-  for (unsigned i = 0; i < count; ++i)
-    printf("JOIN_CANCEL_FRAME index=%u pc=%llu\n", i, (unsigned long long)pcs[i]);
+  for (unsigned i = 0; i < count; ++i) {
+    MEMORY_BASIC_INFORMATION region; unsigned char bytes[16]; SIZE_T copied = 0;
+    check(pcs[i] >= sizeof bytes && VirtualQuery((const void *)(uintptr_t)(pcs[i] - sizeof bytes),
+          &region, sizeof region) == sizeof region && region.Type == MEM_IMAGE &&
+          ReadProcessMemory(GetCurrentProcess(), (const void *)(uintptr_t)(pcs[i] - sizeof bytes),
+                            bytes, sizeof bytes, &copied) && copied == sizeof bytes,
+          "stack frame image bytes");
+    printf("JOIN_CANCEL_FRAME index=%u pc=%llu image=%llu prefix=", i,
+           (unsigned long long)pcs[i], (unsigned long long)(uintptr_t)region.AllocationBase);
+    for (unsigned j = 0; j < sizeof bytes; ++j) printf("%02x", bytes[j]);
+    putchar('\n');
+  }
 #endif
 }
 
