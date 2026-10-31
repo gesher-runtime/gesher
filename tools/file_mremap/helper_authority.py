@@ -11,8 +11,10 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
+import shlex
+import posixpath
 import stat
 import subprocess
 import sys
@@ -68,6 +70,10 @@ POSTKILL_SECONDS = 5
 CLEANUP_SECONDS = 10
 LIVE_GRAPHS = []  # failed containment retains the complete owned graph
 EARLY_ARCHIVE_PIN = '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4'
+CONFIG_POLICY = 'CONTROLLED_PINNED_TWO_FILE_CONFIG_V1'
+CONFIG_FILES = {
+    'target': ('x86_64-w64-windows-gnu.cfg', b'-target x86_64-w64-mingw32\n@mingw32-common.cfg\n# SEH is the default for x86_64.\n', 'ee12d9ca9abf3df1bd9312af1175c1751ca23dcbc2c67c70a326ff5679d439f5'),
+    'common': ('mingw32-common.cfg', b'-rtlib=compiler-rt\n-unwindlib=libunwind\n-stdlib=libc++\n-fuse-ld=lld\n', '0924577cab6fd9256fdd640f0ff5a7382446e968f2401a3df648d3bf4012bde6')}
 
 class Rejected(ValueError):
     pass
@@ -98,6 +104,67 @@ def diagnostic_text(raw,cap):
     text=raw.decode('utf-8')
     require(all(c.isprintable()or c in '\r\n\t'for c in text),'early diagnostic nontext')
     return {'text':text,'bytes':len(raw),'sha256':digest(raw)}
+
+def producer_posix(raw):
+    # Artifact consumers run on Windows: never interpret producer paths there.
+    require(type(raw)is str and 0<len(raw)<=4096 and '\\'not in raw and not any(c in raw for c in '\0\r\n'),'producer POSIX path')
+    p=PurePosixPath(raw)
+    require(p.is_absolute()and str(p)==raw and '..'not in p.parts,'canonical producer POSIX path')
+    return p
+
+def validate_controlled_config(value,current,guard,producer):
+    require(set(value)=={'schema','context','guard','producer_id','roots','files'}and value['schema']==CONFIG_POLICY,'controlled config schema')
+    require(value['context']==current and value['guard']==guard and value['producer_id']==producer,'controlled config current identity')
+    require(set(current)=={'source','run','attempt','repository','repository_id','profile'}and current['profile']==PROFILE and current['repository']==REPOSITORY and current['repository_id']==REPOSITORY_ID,'controlled profile')
+    hexid(current['source']);hexid(guard)
+    require(type(producer)is int and producer>0 and all(re.fullmatch('[1-9][0-9]*',current[k])for k in ('run','attempt')),'controlled producer/attempt')
+    roots=value['roots'];require(set(roots)=={'supplier','source','build'},'controlled roots')
+    paths={k:producer_posix(v)for k,v in roots.items()}
+    require(len(set(paths.values()))==3 and not any(a.is_relative_to(b)for k,a in paths.items()for j,b in paths.items()if k!=j),'distinct producer roots')
+    require(set(value['files'])==set(CONFIG_FILES),'exact two config files')
+    for role,(name,raw,pin)in CONFIG_FILES.items():
+        row=value['files'][role]
+        require(row=={'path':str(paths['supplier']/'bin'/name),'text':raw.decode('ascii'),'bytes':len(raw),'sha256':pin}and digest(raw)==pin,'exact config body/path/hash')
+    return value
+
+def config_options(config):
+    return ['--no-default-config','--config='+config['files']['target']['path']]
+
+def compile_recipe(config,obj):
+    require(obj in TUS,'exact compile object')
+    roots={k:producer_posix(v)for k,v in config['roots'].items()}
+    flags=[*config_options(config),*COMMON[1:],*(['-fexceptions']if obj!='caller.obj'else[])]
+    return [str(roots['supplier']/'bin/x86_64-w64-mingw32-clang++'),*flags,'-MD','-MF',str(roots['build']/obj.replace('.obj','.d')),'-c',str(roots['source']/TUS[obj]),'-o',str(roots['build']/obj)]
+
+def link_recipe(config):
+    roots={k:producer_posix(v)for k,v in config['roots'].items()}
+    return [str(roots['supplier']/'bin/x86_64-w64-mingw32-clang++'),*config_options(config),*(str(roots['build']/obj)for obj in TUS),'-static','-Wl,--verbose','-Wl,-Map,'+str(roots['build']/'helper-qualification.map'),'-o',str(roots['build']/'helper-qualification.exe')]
+
+def validate_cpp_expansion(commands,config,obj):
+    require(type(commands)is list and 0<len(commands)<=4096,'controlled expansion count')
+    tc=producer_posix(config['roots']['supplier']);cc1=[r for r in commands if '-cc1'in r]
+    require(len(cc1)==1,'unique controlled cc1');row=cc1[0]
+    require(producer_posix(row[0]).is_relative_to(tc),'supplier cc1')
+    require(('-fexceptions'in row)==(obj!='caller.obj')and ('-fcxx-exceptions'in row)==(obj!='caller.obj'),'effective controlled exception mode')
+    includes=[row[i+1]for i,x in enumerate(row[:-1])if x=='-internal-isystem']
+    require(any(producer_posix(p).is_relative_to(tc)and p.endswith('/include/c++/v1')for p in includes if p.startswith('/')),'positive supplier libc++ expansion')
+    return row
+
+def validate_producer_commands(commands,config):
+    roots=tuple(producer_posix(x)for x in config['roots'].values())
+    require(type(commands)is list and 0<len(commands)<=4096,'producer command count')
+    for row in commands:
+        require(type(row)is list and row and all(type(v)is str and len(v)<=4096 for v in row),'producer command row')
+        require(producer_posix(row[0]).is_relative_to(producer_posix(config['roots']['supplier'])),'producer implicit executable')
+        for value in row[1:]:
+            require(not value.startswith('@'),'producer implicit response file')
+            candidate=value;attached=False
+            for prefix in ('-I','-L','-isystem','-iquote','-idirafter','--sysroot=','-fdebug-compilation-dir=','-resource-dir='):
+                if value.startswith(prefix)and len(value)>len(prefix):candidate=value[len(prefix):];attached=True;break
+            if candidate.startswith('/')or attached or (not candidate.startswith('-')and ('/'in candidate or '\\'in candidate or PurePosixPath(candidate).suffix in ('.o','.obj','.a','.d','.cc','.cpp','.h','.rsp','.cfg'))):
+                absolute=posixpath.normpath(candidate if candidate.startswith('/')else config['roots']['build']+'/'+candidate)
+                require(any(producer_posix(absolute).is_relative_to(root)for root in roots),'foreign producer implicit path')
+    return commands
 
 def decode(raw, cap=FILE_CAP):
     require(type(raw) is bytes and len(raw) <= cap, 'JSON byte bound')
@@ -397,23 +464,36 @@ def verify_bundle(files, auth):
         require(row['source'] == source and row['source_blob'] == SOURCE_BLOBS[obj] and row['header_blob'] == HEADER_BLOB and row['sha256'] == digest(files[obj]) and row['exceptions'] == (obj != 'caller.obj'), 'source/object/exception stamp')
     require(profile['no_ambient_injection'] is True and profile['target'] == 'x86_64-w64-windows-gnu', 'target/config profile')
     require(profile['dependencies_verified'] is True and profile['link_dependencies_verified'] is True, 'dependency receipts missing')
-    require(profile['common_flags']==list(COMMON) and profile['config_policy']=='--no-default-config; no ambient HOME/include/library/config variables', 'visible ABI/config flags')
+    require(profile['common_flags']==list(COMMON) and profile['config_policy']==CONFIG_POLICY, 'visible ABI/config flags')
+    config=validate_controlled_config(profile['controlled_config'],auth['context'],auth['authority']['guard'],auth['roles']['helper-producer']['id'])
+    require(profile['link_argv']==link_recipe(config),'exact controlled link argv')
+    validate_producer_commands(profile['link_expanded'],config)
     commands=decode(files['compile-commands.json']);dependencies=decode(files['dependency-manifest.json'])
     require(type(commands)is list and len(commands)==3 and {v['output']for v in commands}==set(TUS) and set(dependencies)==set(TUS),'compile/dependency inventory')
     for obj,source in TUS.items():
         row=profile['objects'][obj];command=next(v for v in commands if v['output']==obj)
-        argv=row['argv'];expected_flags=list(COMMON)+(['-fexceptions']if obj!='caller.obj'else[])
-        require(argv[1:1+len(expected_flags)]==expected_flags and argv[1+len(expected_flags):][0:2]==['-MD','-MF'],'effective per-object flags')
+        argv=row['argv']
+        require(argv==compile_recipe(config,obj),'exact effective per-object controlled recipe')
         require(command=={'output':obj,'file':source,'argv':argv,'expanded':row['expanded']},'object command stamp')
         require(row['source_sha256']==digest(git(Path.cwd(),'cat-file','blob',SOURCE_BLOBS[obj])) and row['header_sha256']==digest(git(Path.cwd(),'cat-file','blob',HEADER_BLOB)),'actual immutable source/header')
-        expanded=[r for r in row['expanded']if '-cc1'in r]
-        require(len(expanded)==1 and ('-fexceptions'in expanded[0])==(obj!='caller.obj') and ('-fcxx-exceptions'in expanded[0])==(obj!='caller.obj'),'actual expanded exception mode')
+        validate_producer_commands(row['expanded'],config);validate_cpp_expansion(row['expanded'],config,obj)
         dep=dependencies[obj];require(type(dep)is list and 1<=len(dep)<=8192,'dependency bounds')
         require({'windows.h','map','vector','memory','new','array','utility'}<={Path(x['path']).name for x in dep},'positive SDK/STL headers')
         require(any(x['origin']=='source'and x['relative']==HEADER and x['sha256']==row['header_sha256']for x in dep),'bound dependency header')
         for x in dep:
             require(set(x)=={'origin','path','relative','sha256','bytes'}and x['origin']in ('source','toolchain')and type(x['bytes'])is int and x['bytes']>0,'dependency schema')
-            hexid(x['sha256'],64);require(not Path(x['relative']).is_absolute()and '..'not in Path(x['relative']).parts,'dependency path')
+            hexid(x['sha256'],64);relative=PurePosixPath(x['relative'])
+            require(not relative.is_absolute()and '..'not in relative.parts and str(relative)==x['relative'],'dependency path')
+            base=producer_posix(config['roots']['source'if x['origin']=='source'else'supplier'])
+            require(producer_posix(x['path'])==base/relative,'bound producer dependency root')
+    transcript=decode(files['link-transcript.txt'])
+    require(set(transcript)=={'compile','link'}and len(transcript['compile'])==3,'exact controlled transcript')
+    for row,obj in zip(transcript['compile'],TUS):
+        require(set(row)=={'object','argv','driver_expansion','stdout','stderr'}and row['object']==obj and row['argv']==compile_recipe(config,obj),'compile transcript recipe')
+        parsed=[shlex.split(line)for line in row['driver_expansion'].splitlines()if line.lstrip().startswith('"')]
+        require(parsed==profile['objects'][obj]['expanded'],'diagnostic/actual compile binding')
+    link=transcript['link'];require(set(link)=={'argv','expansion','stdout','stderr'}and link['argv']==link_recipe(config),'link transcript recipe')
+    require([shlex.split(line)for line in link['expansion'].splitlines()if line.lstrip().startswith('"')]==profile['link_expanded'],'diagnostic/actual link binding')
     links=profile['link_dependencies'];require(links['archives']and links['loaded']and len(links['direct'])>=4,'actual link dependencies')
     require({Path(x['path']).name for x in links['direct']if x['origin']=='three-object'}==set(TUS),'three direct link inputs')
     combined=files['link-transcript.txt'].lower()+canonical(profile['link_expanded']).lower()
