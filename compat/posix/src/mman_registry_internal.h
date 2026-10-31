@@ -103,6 +103,7 @@ struct PreparedPunchRequest {
   PreparedPunchLedger merged;
   PreparedPunchLedger cleanup_merged; // separate storage if constructor later fails
   Region constructor_first;
+  Region constructor_anonymous;
   RegionMap::node_type constructor_tail;
   std::array<std::unique_ptr<SectionOwner>,3> constructor_failures;
   size_t first_capacity=0,combined_pages=0;
