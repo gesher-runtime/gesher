@@ -1,5 +1,28 @@
 # GraphicsDex process ownership — SOURCE only
 
+Qualification/input correction after fe036 peer: ALL five cases require typed
+source/case/nonce/PID/rawcreation/kernel/nativeexit/kill/release/task/pipe facts
+and the consumed GRAPHICS84_PARENT_V1 receipt in the existing normal path.
+Its exact schema/source/case/nonce/pid/creation_filetime/expected_image/cwd/argv_env
+fields bind actual fixture argument/environment checks to original invoked
+process; native self FILETIME avoids UTC DateTime.Ticks epoch confusion.
+Normal requires0+marker; nonzero EXACT23+marker; missingmarker0+absent marker;
+those three require no operation expiration/EOF failure/unexpected kill.
+Timeout requires actual expiration+one reserved cleanup, absent marker and
+exact kernel/task release;91/92/93/94 never qualify. Retained requires native0,
+no treeKill, permanent EOFfailure and validated child nonsignaled as before.
+Typed marker presence does not invent a prefix lost by canceled reads.
+
+Both existing parent/.child receipts use the same rooted managed OpenRead/Read
+slot: UNKNOWN before open/read, original Stream ref published immediately,
+FAILED before Dispose and DONE only after return. One-byte managed requests
+bound CUMULATIVE requested/returned bytes to16385, including partial streams;
+EOF at<=16384 is mandatory before strict UTF8/JSON/field decoding. Overflow
+does not read the rest; Length is never trusted. Unknown open/read/close stays
+in the SAME owner with original refs, no blind retry or unproved release.
+All native cancellation/BOTH-live-writer behavior remains UNEXECUTED; source
+fake tasks cannot prove it, and nonsignaled-child/terminal-task gates remain.
+
 Correction after blocked db0dcead peer: durable launch/read UNKNOWN before
 attempt, one guarded original-owner stage loop and per-resource FAILED/DONE
 release ledgers replace catch-and-return. Unknown acquisition, query, sink or

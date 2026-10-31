@@ -21,8 +21,12 @@ public class Graphics84 {
     int selfPid;
     using (var self = Process.GetCurrentProcess()) {
       selfPid=self.Id;
-      File.WriteAllLines(receipt, new[] { self.Id.ToString(), self.StartTime.ToUniversalTime().Ticks.ToString(),
-        self.MainModule.FileName, Environment.CurrentDirectory, "argv-and-env-exact" });
+      string parentJson="{\"schema\":\"GRAPHICS84_PARENT_V1\",\"source\":"+Q(Environment.GetEnvironmentVariable("GITHUB_SHA"))+
+        ",\"case\":"+Q(mode)+",\"nonce\":"+Q(Environment.GetEnvironmentVariable("GESHER_GRAPHICS84_NONCE"))+
+        ",\"pid\":"+self.Id+",\"creation_filetime\":"+Q(Birth(GetCurrentProcess()).ToString())+
+        ",\"expected_image\":"+Q(self.MainModule.FileName)+",\"cwd\":"+Q(Environment.CurrentDirectory)+",\"argv_env\":\"EXACT\"}";
+      if(Encoding.UTF8.GetByteCount(parentJson)>16384) return 95;
+      File.WriteAllText(receipt,parentJson,new UTF8Encoding(false,true));
     }
     Console.Error.WriteLine("graphics84 actual stderr " + mode);
     if (mode == "timeout") { Thread.Sleep(300000); return 0; }

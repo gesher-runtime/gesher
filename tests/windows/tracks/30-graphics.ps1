@@ -41,6 +41,7 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
     Cancellation = $null; CancelState = 'UNATTEMPTED'; ProcessClose = 'UNATTEMPTED';
     CancelClose = 'UNATTEMPTED'; Kernel = $false; Kill = $false; Tasks = $false;
     Handle = $null; Pid = 0; Birth = [UInt64]0; NativeExit = $null; Out = '';
+    OperationExpired = $false; EofComplete = $false;
     Pipes = @(@{ Reader = $null; Handle = $null; Value = [Int64]0; Task = $null; Read = 'UNATTEMPTED'; Close = 'UNATTEMPTED'; Copied = $false },
               @{ Reader = $null; Handle = $null; Value = [Int64]0; Task = $null; Read = 'UNATTEMPTED'; Close = 'UNATTEMPTED'; Copied = $false }) }
   while ($true) {
@@ -68,6 +69,7 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
       }
       if ($o.Phase -eq 'Observe') {
         $o.Kernel = $o.P.WaitForExit($Seconds * 1000)
+        $o.OperationExpired = -not $o.Kernel
         if (-not $o.Kernel) { $o.Failed = $true }
         if ($o.Kernel) { $o.NativeExit = [int]$o.P.ExitCode }
         if (-not $o.Kernel -and -not $o.Kill) {
@@ -76,9 +78,10 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
           $o.Kernel = $o.P.WaitForExit(5000)
           if ($o.Kernel) { $o.NativeExit = [int]$o.P.ExitCode }
         }
+        $o.EofComplete = $true
         foreach ($q in $o.Pipes) {
           if ($q.Task.Wait(10000)) { $o.Out += $q.Task.Result; $q.Copied = $true }
-          else { $o.Failed = $true; $o.Out += "`n(reader did not complete within ten seconds)" }
+          else { $o.Failed = $true; $o.EofComplete = $false; $o.Out += "`n(reader did not complete within ten seconds)" }
         }
         $o.Phase = 'Settle'
       }
@@ -146,7 +149,11 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
         if ($env:GESHER_CI_PROCESS_TRACE -eq '1') {
           $script:GraphicsDexObservation = [pscustomobject]@{ Source = $env:GITHUB_SHA; Case = $env:GESHER_GRAPHICS84_MODE;
             Nonce = $env:GESHER_GRAPHICS84_NONCE; Pid = [UInt32]$o.Pid; CreationFiletime = [UInt64]$o.Birth;
-            KernelComplete = [bool]$o.Kernel; NativeExitCode = $o.NativeExit; KillReserved = [bool]$o.Kill; Released = $true }
+            KernelComplete = [bool]$o.Kernel; NativeExitCode = $o.NativeExit; KillReserved = [bool]$o.Kill; Released = $true;
+            MarkerPresent = [bool]$o.Out.Contains("$Main all passed"); OperationExpired = [bool]$o.OperationExpired;
+            EofComplete = [bool]$o.EofComplete; TasksComplete = [bool]$o.Tasks;
+            PipesClosed = [int]@($o.Pipes | Where-Object { $_.Close -eq 'DONE' -and $null -ne $_.Handle }).Count;
+            ObservationFailed = [bool]$o.Failed; ExpectedImage = [IO.Path]::GetFullPath($psi.FileName) }
           Write-Host "ACTUAL_GRAPHICS_CLEANUP pid=$($o.Pid) kernel=$($o.Kernel) tasks=$($o.Tasks) pipes=2 disposed=True output=$($o.Pipes[0].Value) error=$($o.Pipes[1].Value)"
         }
         $timedOut = [bool]$o.Failed
@@ -168,6 +175,7 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
       }
     } catch {
       $o.Failed = $true
+      if ($o.Phase -eq 'Observe') { $o.EofComplete = $false }
       if ($o.Phase -in @('Acquire','Observe')) { $o.Phase = 'Settle' }
       # Protected parking; no sink/query/close is required to retain ownership.
       try { [Threading.Thread]::Sleep(5000) } catch {}
