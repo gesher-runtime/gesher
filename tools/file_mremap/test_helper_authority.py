@@ -13,6 +13,7 @@ import re
 import stat
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 def load(name):
@@ -65,6 +66,12 @@ def synthetic_bundle():
     seal();return files,auth,seal
 
 class Helper(unittest.TestCase):
+    def setUp(self):
+        # CI runs this ordinary suite too: no real API/tool/native entry point
+        # can become armed merely because GITHUB_ACTIONS is true there.
+        gate=mock.patch.dict(os.environ,{'GITHUB_ACTIONS':'false'})
+        gate.start();self.addCleanup(gate.stop)
+
     def reject(self,fn):
         with self.assertRaises((A.Rejected,ValueError,KeyError,TypeError,AssertionError,zipfile.BadZipFile)):fn()
 
@@ -85,7 +92,8 @@ class Helper(unittest.TestCase):
         caller=A.caller_bytes('3'*40);self.assertEqual(caller.count(b'@'+b'3'*40),1);self.assertIn(b'name: helper-${{ matrix.os }}',caller);self.assertIn(b'timeout-minutes: 15',caller)
         source=(ROOT/'tools/file_mremap/helper_authority.py').read_text();tree=ast.parse(source)
         self.assertIn('sys.flags.isolated==1',source);self.assertIn('dirty/shadow checkout',source)
-        self.assertNotIn('source_contract',source);self.assertNotIn('producer_receipt',source)
+        imported={alias.name for node in ast.walk(tree) if isinstance(node,(ast.Import,ast.ImportFrom)) for alias in node.names}
+        self.assertFalse({'source_contract','producer_receipt'} & imported)
         self.assertTrue(any(isinstance(x,ast.FunctionDef)and x.name=='guard_main'for x in tree.body))
         env={'GITHUB_ACTIONS':'true','GITHUB_REPOSITORY':A.REPOSITORY,'GITHUB_REPOSITORY_ID':str(A.REPOSITORY_ID),'GITHUB_REF':'refs/heads/'+A.BRANCH,'GITHUB_WORKFLOW':A.WORKFLOW,'GITHUB_WORKFLOW_REF':A.REPOSITORY+'/'+A.CALLER+'@refs/heads/'+A.BRANCH,'GITHUB_JOB':'helper-producer','GITHUB_ACTOR':'palmoni5','GITHUB_TRIGGERING_ACTOR':'palmoni5','GITHUB_EVENT_NAME':'push','GITHUB_SHA':'a'*40,'GITHUB_WORKFLOW_SHA':'a'*40,'GITHUB_RUN_ID':'123','GITHUB_RUN_ATTEMPT':'2'}
         self.assertEqual(A.context(env,'helper-producer'),synthetic_context())
@@ -125,6 +133,7 @@ class Helper(unittest.TestCase):
             self.reject(lambda:A.zip_members(zipit(names)))
         self.reject(lambda:A.zip_members(zipit(A.MEMBERS,True)));self.reject(lambda:A.zip_members(b'notZIP'))
         self.reject(lambda:A.decode(b'{"x":1,"x":2}'))
+        self.reject(lambda:A.decode(b'{"x":NaN}'))
 
     def test_bundle_source_object_header_flags_and_dependency_mutants(self):
         files,auth,seal=synthetic_bundle();A.verify_bundle(files,auth)
@@ -162,15 +171,56 @@ class Helper(unittest.TestCase):
             root=Path(temp);tool=root/'publisher';build=root/'build';source=root/'source'
             for p in (tool/'bin',tool/'include',build,source):p.mkdir(parents=True,exist_ok=True)
             (tool/'bin/clang').write_text('SYNTHETIC')
-            raw=(' "'+str(tool/'bin/clang')+'" "-cc1"\n').encode();self.assertEqual(len(P.parse_driver(raw,tool)),1)
-            self.reject(lambda:P.parse_driver(b'no commands',tool))
-            self.reject(lambda:P.parse_driver(b' "/foreign/clang" "-cc1"\n',tool))
+            raw=(' "'+str(tool/'bin/clang')+'" "-cc1"\n').encode();self.assertEqual(len(P.parse_driver(raw,tool,source,build)),1)
+            self.reject(lambda:P.parse_driver(b'no commands',tool,source,build))
+            self.reject(lambda:P.parse_driver(b' "/foreign/clang" "-cc1"\n',tool,source,build))
             paths=[]
             for name in ('windows.h','map','vector','memory','new','array','utility'):
                 p=tool/'include'/name;p.write_text('SYNTHETIC_HEADER');paths.append(p)
             dep=('x.obj: '+' '.join(shlex_quote(p)for p in paths)+'\n').encode();self.assertEqual(len(P.dependency_paths(dep,source,tool,build)),7)
             self.reject(lambda:P.dependency_paths(b'x.obj: /foreign/header.h\n',source,tool,build))
             self.reject(lambda:P.dependency_paths(b'x.obj: \n',source,tool,build))
+
+    def test_owned_reader_quiescence_and_directory_retention(self):
+        class Reader:
+            def __init__(self,alive):self.alive=alive;self.joins=0
+            def join(self,timeout):self.joins+=1
+            def is_alive(self):return self.alive
+        idle=Reader(False);live=Reader(True);unstarted=Reader(True)
+        graph={'readers':[{'thread':idle,'started':True},{'thread':unstarted,'started':False}], 'errors':[]}
+        self.assertTrue(A.settle_readers(graph,0));self.assertEqual(idle.joins,1);self.assertEqual(unstarted.joins,0)
+        graph['readers'].append({'thread':idle,'started':False,'start_attempted':True});self.assertFalse(A.settle_readers(graph,0))
+        graph['readers'].pop()
+        graph['readers'].append({'thread':live,'started':True});self.assertFalse(A.settle_readers(graph,0))
+        with tempfile.TemporaryDirectory()as temp:
+            owned=Path(temp)/'mremap-helper-123-1-win22';owned.mkdir();(owned/'raw.txt').write_text('SYNTHETIC')
+            P.A.LIVE_GRAPHS.append({'SYNTHETIC_RETAINED':True})
+            try:
+                self.reject(lambda:P.release_consumer_directory(owned,Path(temp)));self.assertTrue((owned/'raw.txt').exists())
+            finally:P.A.LIVE_GRAPHS.pop()
+            P.release_consumer_directory(owned,Path(temp));self.assertFalse(owned.exists())
+
+    def test_driver_rejects_nonexistent_and_attached_foreign_paths(self):
+        import shlex
+        with tempfile.TemporaryDirectory()as temp:
+            root=Path(temp);tc=root/'tc';source=root/'source';build=root/'build'
+            for path in (tc/'bin',source,build):path.mkdir(parents=True,exist_ok=True)
+            exe=tc/'bin/clang';exe.write_text('SYNTHETIC')
+            def row(*args):return (' '+ ' '.join('"'+str(v).replace('\\','/')+'"'for v in (exe,*args))+'\n').encode()
+            self.assertEqual(len(P.parse_driver(row('-cc1','-o',build/'notcreated.obj'),tc,source,build)),1)
+            foreign=root/'foreign'/'notcreated.obj'
+            for args in (('-o',foreign),('-I'+str(foreign),),('--sysroot='+str(foreign),),('-fdebug-compilation-dir='+str(foreign),),('@unseen.rsp',)):
+                self.reject(lambda:P.parse_driver(row(*args),tc,source,build))
+
+    def test_every_base_blob_preserves_complete_history_without_body_inspection(self):
+        baseline=A.inventory(ROOT,A.BASE);pins={p:'1'*40 for p in A.ADDITIONS}
+        current=dict(baseline,**{p:{'mode':'100644','blob':v}for p,v in pins.items()})
+        A.verify_inventory(baseline,current,pins)
+        for path in baseline:
+            bad=dict(current);bad[path]={'mode':baseline[path]['mode'],'blob':'0'*40}
+            self.reject(lambda:A.verify_inventory(baseline,bad,pins))
+        # No historical/selected/workflow leaf is exempted or projected away.
+        self.assertGreater(len(baseline),1600)
 
     def test_recipe_source_isolated_three_object_and_no_native_test(self):
         authority=(ROOT/'tools/file_mremap/helper_authority.py').read_text();producer=(ROOT/'tools/file_mremap/helper_producer.py').read_text()
@@ -180,7 +230,7 @@ class Helper(unittest.TestCase):
         self.assertNotIn("['cmake'",producer);self.assertNotIn("['ninja'",producer)
         self.assertLess(authority.index('LIVE_GRAPHS.append(graph)'),authority.index('proc=subprocess.Popen'))
         self.assertLess(authority.index("graph['image_handle']=image_handle"),authority.index('proc=subprocess.Popen'))
-        self.assertIn("if record['io_completed']:",authority);self.assertIn("slot['started']",authority)
+        self.assertIn("if quiescent:",authority);self.assertIn("slot['started']",authority)
         self.assertIn('A.verify_artifact(A.api',producer);self.assertIn('A.verify_bundle(files,auth)',producer)
         self.assertIn("os.environ.pop('GH_TOKEN',None)",producer)
 
