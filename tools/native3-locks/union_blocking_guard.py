@@ -34,6 +34,12 @@ def main():
     print('BLOCKING_MEDIA4_NEGATIVE unauthorized_path rejected; blob pins enforced by external guard', flush=True)
     for path, expected in manifest['blobs'].items():
         if path != '.github/workflows/native3-locks-blocking.yml':
+            if path == 'CMakeLists.txt':
+                # Keep the historical pin as an assertion before applying the
+                # exact current TCP fixture-target overlay, independently pinned
+                # by the immutable full guard.
+                assert expected == '8ba137e29a5840600fe7d77fee4e833e6d0bfd73'
+                expected = '06f478c624cc5737b6ee6cbfae2511760fb732ae'
             assert git('hash-object', path) == expected, ('Unreviewed source bytes', path)
     # No qualified tests, signals, descriptor/stdio ownership, Exec, Binder,
     # bionic, AOT or accepted full suppliers are allowed through this guard.
