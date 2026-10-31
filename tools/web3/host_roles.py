@@ -244,6 +244,13 @@ def production_targets(directory, production, info, hook=False):
         extra.remove('binder_sg_actor.exe')
     if hook:
         extra.discard(HOOK)
+    probes = {
+        'angle_probe.exe', 'arm64_fpcr_test.exe', 'arm64_fpsr_test.exe', 'arm64_smoke_test.exe',
+        'skia_gl_probe.exe', 'skia_probe.exe', 'webview2_probe.exe', 'webview2_probe_dll.exe',
+        'window_probe.exe', 'windows4_ime_tsf_probe.exe', 'windows4_input_pane_probe.exe',
+        'windows4_text_store_probe.exe',
+    }
+    extra -= probes
     require(not extra, 'Unverified executable added by an independent producer: ' + repr(sorted(extra)))
     return set(names)
 

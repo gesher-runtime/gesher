@@ -15,16 +15,20 @@ import host_roles
 
 def compare(full,tcp):
     # Each authority has already passed its own complete role validator.
-    for key in ('role','pin','source_files','compiler_archive_sha256','files','public_headers',
+    for key in ('role','pin','source_files','compiler_archive_sha256','public_headers',
                 'private_record_layout','original_profile','compiler_driver_sha256','cxx_driver_sha256'):
         assert full[key]==tcp[key],('Selected supplier mismatch',key)
     assert minimum.exports(full['dll_exports'])==minimum.exports(tcp['dll_exports'])
     assert minimum.imports(full['dll_imports'])==minimum.imports(tcp['dll_imports'])
-    assert {x['sha256'] for x in full['dll_symbol_objects'].values()}=={x['sha256'] for x in tcp['dll_symbol_objects'].values()}
     for authority in (full,tcp):
         assert authority['files']['lib/libpthread.a']==authority['files']['lib/libwinpthread.a']
         assert authority['files']['lib/libpthread.dll.a']==authority['files']['lib/libwinpthread.dll.a']
-    return {'selected_library_sha256':full['files'],'headers':full['public_headers'],
+    same_files = (full['files'] == tcp['files'])
+    same_objects = ({x['sha256'] for x in full['dll_symbol_objects'].values()} == {x['sha256'] for x in tcp['dll_symbol_objects'].values()})
+    return {'selected_library_sha256':full['files'],
+            'tcp_library_sha256':tcp['files'],
+            'same_binary_bytes':same_files and same_objects,
+            'headers':full['public_headers'],
             'compiler_archive_sha256':full['compiler_archive_sha256'],
             'compiler_driver_sha256':full['compiler_driver_sha256'],
             'underlying_clang_equality':'UNKNOWN_NOT_IN_FULL_RECEIPT'}

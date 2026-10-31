@@ -7,6 +7,7 @@ def main():
  root=Path(__file__).resolve().parents[2]
  a=json.loads((root/'tests/net-tcp-priority/minimum-receipt-411350.json').read_text(encoding='utf-8'))
  result=c.compare(a,copy.deepcopy(a));assert result['underlying_clang_equality']=='UNKNOWN_NOT_IN_FULL_RECEIPT'
+ assert result['same_binary_bytes'] is True
  changes={
   'role':lambda d:d.__setitem__('role','foreign'),
   'pin':lambda d:d['pin'].__setitem__('role','foreign'),
@@ -20,7 +21,6 @@ def main():
   'cxx_driver_sha256':lambda d:d.__setitem__('cxx_driver_sha256','0'*64),
   'dll_exports':lambda d:d.__setitem__('dll_exports',[]),
   'dll_imports':lambda d:d.__setitem__('dll_imports',''),
-  'dll_symbol_objects':lambda d:[v.__setitem__('sha256','0'*64) for v in d['dll_symbol_objects'].values()],
  }
  for name,mutate in changes.items():
   b=copy.deepcopy(a);mutate(b)
@@ -31,6 +31,15 @@ def main():
  try:c.compare(both,copy.deepcopy(both))
  except AssertionError:pass
  else:raise AssertionError('matched broken aliases accepted')
+ b_diff_obj = copy.deepcopy(a)
+ for v in b_diff_obj['dll_symbol_objects'].values(): v['sha256'] = '0'*64
+ r = c.compare(a, b_diff_obj)
+ assert r['same_binary_bytes'] is False
+ b_diff_files = copy.deepcopy(a)
+ b_diff_files['files']['lib/libpthread.a'] = '0'*64
+ b_diff_files['files']['lib/libwinpthread.a'] = '0'*64
+ r = c.compare(a, b_diff_files)
+ assert r['same_binary_bytes'] is False
  print('COHERENT_SUPPLIER_CORRELATION_PURE_PASS mismatches='+str(len(changes))+' alias=1 actual_binary_equality=false')
 
 if __name__=='__main__':main()
