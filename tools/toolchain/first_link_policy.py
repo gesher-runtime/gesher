@@ -69,7 +69,7 @@ def source_proof():
     records={path:sha(normalized_workflow((ROOT/path).read_bytes()) if path==focused.PATH else (ROOT/path).read_bytes()) for path in sorted(CHANGED)}
     return dict(base=BASE,source=git('rev-parse','HEAD').decode().strip(),expected_changed_sha256=records,
                 workflow_hash_normalization='only single exact immutable policy uses pin',trigger_exclusion=triggers,
-                other_push_workflows=len(triggers)-1,planned_jobs=4,native_provider_source_unchanged=True,
+                other_workflows_checked=len(triggers)-1,planned_jobs=4,native_provider_source_unchanged=True,
                 native_profile_recipe_unchanged_except_exact_caller=True,full_defaults_source_guards_unchanged=True)
 
 
@@ -99,4 +99,4 @@ if __name__=='__main__':
     if args.selftest:selftest()
     else:
         data=source_proof();args.snapshot.write_text(json.dumps(data,sort_keys=True,indent=2)+'\n',encoding='utf-8')
-        print('FOCUSED_SOURCE_FREEZE '+json.dumps({k:data[k] for k in ('source','base','other_push_workflows','planned_jobs')},sort_keys=True))
+        print('FOCUSED_SOURCE_FREEZE '+json.dumps({k:data[k] for k in ('source','base','other_workflows_checked','planned_jobs')},sort_keys=True))
