@@ -132,7 +132,8 @@ PrepareStatus PrepareSurgery(const Region& source, uintptr_t start, uintptr_t x,
 PrepareStatus PreparePunchRequest(const RegionMap& source,uintptr_t begin,uintptr_t end,
                                       size_t page,PreparedPunchRequest& out) noexcept {
   if(!page || begin>=end || begin%page || end%page || !out.pieces.empty() ||
-     !out.merged.combined.live.empty()) return PrepareStatus::InvalidSize;
+     !out.merged.combined.live.empty() || !out.cleanup_merged.combined.live.empty() ||
+     !out.pins.empty()) return PrepareStatus::InvalidSize;
   auto first=source.upper_bound(begin);
   if(first==source.begin())return PrepareStatus::InvalidSize;
   --first;
@@ -188,6 +189,24 @@ PrepareStatus PreparePunchRequest(const RegionMap& source,uintptr_t begin,uintpt
         RegionMap detached;
         detached.emplace(boundaries[part],std::move(ready));
         piece.partitions[part]=detached.extract(detached.begin());
+      }
+      if(original.owner) {
+        if(original.kind!=Kind::kView || !original.shared ||
+           original.owner->state!=SectionState::Live || !original.owner->refs)
+          return PrepareStatus::InternalFailure;
+        auto pin=std::find_if(work.pins.begin(),work.pins.end(),
+          [&](const PreparedPunchPin& value){return value.owner==original.owner;});
+        if(pin==work.pins.end()) {
+          work.pins.push_back({original.owner,0,0});pin=std::prev(work.pins.end());
+        }
+        const size_t kept=(piece.start<piece.begin?1:0)+(piece.end<piece.start+original.size?1:0);
+        const size_t maximum=std::numeric_limits<size_t>::max();
+        if(pin->source_pins==maximum || pin->retained_views>maximum-kept)
+          return PrepareStatus::InternalFailure;
+        ++pin->source_pins;pin->retained_views+=kept;
+        if(pin->source_pins>maximum-pin->retained_views ||
+           original.owner->refs>maximum-pin->source_pins-pin->retained_views)
+          return PrepareStatus::InternalFailure;
       }
       work.pieces.push_back(std::move(piece));
       cursor=work.pieces.back().end;

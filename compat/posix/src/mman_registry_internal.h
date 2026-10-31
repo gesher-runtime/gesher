@@ -93,8 +93,13 @@ struct PreparedPunchPiece {
   std::array<std::unique_ptr<SectionOwner>,3> failure_records;
   std::array<HANDLE,2> retained_handles{};
 };
+struct PreparedPunchPin {
+  SectionOwner* owner=nullptr;
+  size_t source_pins=0,retained_views=0;
+};
 struct PreparedPunchRequest {
   std::vector<PreparedPunchPiece> pieces;
+  std::vector<PreparedPunchPin> pins;
   PreparedPunchLedger merged;
   PreparedPunchLedger cleanup_merged; // separate storage if constructor later fails
   size_t first_capacity=0,combined_pages=0;
