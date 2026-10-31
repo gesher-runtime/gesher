@@ -130,7 +130,7 @@ PrepareStatus PrepareSurgery(const Region& source, uintptr_t start, uintptr_t x,
     catch (...) { return PrepareStatus::InternalFailure; }
 }
 PrepareStatus PreparePunchRequest(const RegionMap& source,uintptr_t begin,uintptr_t end,
-                                      size_t page,PreparedPunchRequest& out) noexcept {
+                                      size_t page,PreparedPunchRequest& out,size_t final_view) noexcept {
   if(!page || begin>=end || begin%page || end%page || !out.pieces.empty() ||
      !out.merged.combined.live.empty() || !out.cleanup_merged.combined.live.empty() ||
      !out.pins.empty()) return PrepareStatus::InvalidSize;
@@ -147,6 +147,21 @@ PrepareStatus PreparePunchRequest(const RegionMap& source,uintptr_t begin,uintpt
     if(merged!=PrepareStatus::Ok)return merged;
     const auto cleanup=PreparePunchLedger(end-begin,page,first->second.group,work.cleanup_merged);
     if(cleanup!=PrepareStatus::Ok)return cleanup;
+    const size_t length=end-begin;
+    if(final_view==SIZE_MAX)final_view=length;
+    if(final_view>length || final_view%page)return PrepareStatus::InvalidSize;
+    work.constructor_first.kind=Kind::kHole;
+    work.constructor_first.group=first->second.group;
+    work.constructor_first.size=final_view?final_view:length;
+    work.constructor_first.live.assign(work.constructor_first.size/page,false);
+    work.constructor_first.actual_protection.assign(work.constructor_first.size/page,0);
+    if(final_view && final_view<length) {
+      Region tail;tail.kind=Kind::kHole;tail.group=first->second.group;tail.size=length-final_view;
+      tail.live.assign(tail.size/page,false);tail.actual_protection.assign(tail.size/page,0);
+      RegionMap detached;detached.emplace(begin+final_view,std::move(tail));
+      work.constructor_tail=detached.extract(detached.begin());
+    }
+    for(auto& record:work.constructor_failures)record=std::make_unique<SectionOwner>();
     uintptr_t cursor=begin;
     for(auto at=first;cursor<end;++at) {
       if(at==source.end() || (at!=first && at->first!=cursor) || at->first>UINTPTR_MAX-at->second.size || at->first>cursor || cursor-at->first>=at->second.size ||

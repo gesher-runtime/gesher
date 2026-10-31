@@ -119,7 +119,7 @@ int main() {
     SectionOwner source_owner;source_owner.state=SectionState::Live;source_owner.refs=2;
     RegionMap source;
     Region prefix;prefix.kind=Kind::kView;prefix.group=0x100000;
-    prefix.size=128*4096;prefix.shared=true;prefix.owner=&source_owner;prefix.live.assign(128,true);prefix.live_pages=128;
+    prefix.size=128*4096;prefix.shared=true;prefix.owner=&source_owner;prefix.live.assign(128,true);prefix.live_pages=128;prefix.actual_protection.assign(128,PAGE_READWRITE);
     source.emplace(0x100000,std::move(prefix));
     Region middle;middle.kind=Kind::kAnon;middle.group=0x100000;
     const size_t middle_pages=source.begin()->second.live.capacity()+16;
@@ -135,7 +135,7 @@ int main() {
       PrepareStatus status;
       {
         PreparedPunchRequest plan;
-        status=PreparePunchRequestFromNoExceptions(source,0x101000,suffix_start+127*4096,4096,plan);
+        status=PreparePunchRequestFromNoExceptions(source,0x101000,suffix_start+127*4096,4096,plan,8*4096);
         budget=-1;
         if(status==PrepareStatus::NoMemory) {
           ++caught;if(!plan.pieces.empty()||!plan.merged.combined.live.empty()||!plan.cleanup_merged.combined.live.empty())++failed;
@@ -145,7 +145,9 @@ int main() {
              plan.combined_pages<=plan.first_capacity || plan.cleanup_merged.combined.live.size()!=plan.combined_pages ||
              plan.pieces.front().partitions[0].mapped().kind!=Kind::kHole ||
              plan.pieces.front().kept[0].kind!=Kind::kView || plan.pins.size()!=1 ||
-             plan.pins[0].source_pins!=1 || plan.pins[0].retained_views!=1)++failed;
+             plan.pins[0].source_pins!=1 || plan.pins[0].retained_views!=1 ||
+             plan.constructor_first.live.size()!=8 || plan.constructor_tail.empty() ||
+             !plan.constructor_failures[0])++failed;
         } else ++failed;
       }
       if(live!=before || source_owner.refs!=2 || injected!=(status==PrepareStatus::NoMemory?1:0))++failed;

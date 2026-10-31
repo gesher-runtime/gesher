@@ -102,10 +102,13 @@ struct PreparedPunchRequest {
   std::vector<PreparedPunchPin> pins;
   PreparedPunchLedger merged;
   PreparedPunchLedger cleanup_merged; // separate storage if constructor later fails
+  Region constructor_first;
+  RegionMap::node_type constructor_tail;
+  std::array<std::unique_ptr<SectionOwner>,3> constructor_failures;
   size_t first_capacity=0,combined_pages=0;
 };
 PrepareStatus PreparePunchRequest(const RegionMap&,uintptr_t,uintptr_t,size_t,
-                                 PreparedPunchRequest&) noexcept;
+                                 PreparedPunchRequest&,size_t final_view=SIZE_MAX) noexcept;
 PrepareStatus PreparePunchRequestFromNoExceptions(const RegionMap&,uintptr_t,uintptr_t,
-                                                size_t,PreparedPunchRequest&) noexcept;
+                                                size_t,PreparedPunchRequest&,size_t final_view=SIZE_MAX) noexcept;
 }  // namespace gesher_mman_internal
