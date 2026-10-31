@@ -17,8 +17,8 @@ PrepareStatus PreparePunchLedgerFromNoExceptions(size_t length,size_t page,uintp
 }
 
 PrepareStatus PreparePunchRequestFromNoExceptions(const RegionMap& source,uintptr_t begin,
-    uintptr_t end,size_t page,PreparedPunchRequest& out) noexcept {
-  return PreparePunchRequest(source,begin,end,page,out);
+    uintptr_t end,size_t page,PreparedPunchRequest& out,size_t final_view) noexcept {
+  return PreparePunchRequest(source,begin,end,page,out,final_view);
 }
 
 }
