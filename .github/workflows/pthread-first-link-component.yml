@@ -33,6 +33,7 @@ jobs:
         run: |
           python3 tools/toolchain/first_link_context.py --verify
           python3 tools/toolchain/test_first_link_context.py
+          python3 tools/toolchain/test_first_link_live.py
           python3 tools/toolchain/first_link.py authority
       - uses: ./.github/actions/setup-build
         id: toolchain
