@@ -548,7 +548,7 @@ RegionMap::iterator PunchPromoted(State& s, RegionMap::iterator it, uintptr_t x,
 
 // [x, y) inside the view region `it` becomes a hole; the rest of the view is
 // mapped again, with the protections and private changes it had.
-std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Region>::iterator it,
+[[maybe_unused]] std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Region>::iterator it,
                                                 uintptr_t x, uintptr_t y) {
   if(it->second.owner!=nullptr) return PunchPromoted(s,it,x,y);
   const uintptr_t start = it->first;
@@ -660,75 +660,162 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
 // single hole entry), which is returned.
 std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t end) {
   auto initial=FindRegion(s,begin);
-  if(initial==s.regions.end() || end<=begin) {
-    s.request_error=EIO;errno=EIO;return initial;
+  if(initial==s.regions.end() || end<=begin) { s.request_error=EIO;errno=EIO;return initial; }
+  PreparedPunchRequest plan;
+  auto status=PreparePunchRequest(s.regions,begin,end,s.page_size,plan);
+  if(status!=PrepareStatus::Ok) {
+    s.request_error=status==PrepareStatus::NoMemory?ENOMEM:EIO;errno=s.request_error;return initial;
   }
-  PreparedPunchLedger ledger;
-  const auto prepared=PreparePunchLedger(end-begin,s.page_size,initial->second.group,ledger);
-  if(prepared!=PrepareStatus::Ok) {
-    s.request_error=prepared==PrepareStatus::NoMemory?ENOMEM:EIO;
-    errno=s.request_error; return initial;
-  }
-  for (uintptr_t at = begin; at < end;) {
-    auto it = FindRegion(s, at);
-    const uintptr_t region_end = it->first + it->second.size;
-    const uintptr_t x = at;
-    const uintptr_t y = std::min(end, region_end);
-    switch (it->second.kind) {
-      case Kind::kHole:
-        if (it->first != x || region_end != y) {
-          VirtualFree(reinterpret_cast<void*>(x), y - x, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
-          if (it->first != x) it = SplitEntry(s, it, x);
-          if (it->first + it->second.size != y) SplitEntry(s, it, y);
+  bool pinned=false;
+  auto close_owned=[&](HANDLE handle,std::unique_ptr<SectionOwner>& record) {
+    if(!handle)return true;
+    if(FileAliasCloseHandle(handle))return true;
+    const DWORD error=GetLastError();
+    SectionOwner* failed=record.release();failed->handle=handle;
+    RecordOwnerFailure(s,failed,SectionState::ReleaseFailed,error);return false;
+  };
+  auto finish=[&]() {
+    for(auto& piece:plan.pieces)for(size_t n=0;n<2;++n)if(piece.retained_handles[n]) {
+      close_owned(piece.retained_handles[n],piece.failure_records[n]);piece.retained_handles[n]=nullptr;
+    }
+    if(pinned)for(auto& pin:plan.pins)for(size_t n=0;n<pin.source_pins;++n)DropOwner(s,pin.owner);
+    return FindRegion(s,begin);
+  };
+  // All storage exists before any retained handle acquisition or source change.
+  for(auto& piece:plan.pieces) {
+    if(piece.original.kind==Kind::kView && !piece.original.owner)
+      for(size_t n=0;n<2;++n)if(piece.kept[n].size) {
+        if(!DuplicateHandle(GetCurrentProcess(),piece.original.mapping,GetCurrentProcess(),
+                            &piece.retained_handles[n],0,FALSE,DUPLICATE_SAME_ACCESS)) {
+          s.request_error=EIO;errno=EIO;return finish();
         }
-        break;
-      case Kind::kAnon: {
-        VirtualFree(reinterpret_cast<void*>(x), y - x, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
-        if (it->first != x) it = SplitEntry(s, it, x);
-        if (it->first + it->second.size != y) SplitEntry(s, it, y);
-        Region& r = it->second;
-        r.kind = Kind::kHole;
-        std::fill(r.live.begin(), r.live.end(), false);
-        r.live_pages = 0;
-        std::fill(r.actual_protection.begin(),r.actual_protection.end(),0);
-        break;
       }
-      case Kind::kView:
-        if (it->first == x && region_end == y) {
-          const BOOL retired = FileAliasUnmap2(Placeholders().unmap2,GetCurrentProcess(),it->second.view,MEM_PRESERVE_PLACEHOLDER);
-          if (it->second.owner != nullptr && !retired) { s.owner_failure = true; return it; }
-          DropSection(s, it->second);
-          Region& r = it->second;
-          r.kind = Kind::kHole;
-          r.view = nullptr;
-          r.mapping = nullptr;
-          std::fill(r.live.begin(), r.live.end(), false);
-          r.live_pages = 0;
-        std::fill(r.actual_protection.begin(),r.actual_protection.end(),0);
-        } else {
-          PunchView(s, it, x, y);
+    for(size_t n=0;n<piece.desired_protection.size();++n) {
+      MEMORY_BASIC_INFORMATION info;
+      if(FileAliasQuery(reinterpret_cast<void*>(piece.start+n*s.page_size),&info,sizeof(info))!=sizeof(info)) {
+        s.request_error=EIO;errno=EIO;return finish();
+      }
+      piece.desired_protection[n]=info.Protect;
+      piece.original.actual_protection[n]=info.Protect;
+    }
+    // Publish allocated metadata before temporary private-read changes, not a
+    // liveness/ref mutation. There is no allocation in this assignment.
+    FindRegion(s,piece.start)->second.actual_protection=std::move(piece.original.actual_protection);
+    if(!piece.private_bytes.empty())for(size_t n=0;n<piece.original.live.size();++n) {
+      const uintptr_t at=piece.start+n*s.page_size;
+      if((at>=piece.begin && at<piece.end)||!piece.original.live[n])continue;
+      const DWORD desired=piece.desired_protection[n];DWORD previous;
+      const DWORD access=desired&0xff;
+      const bool temporary=access==PAGE_NOACCESS || access==PAGE_EXECUTE || (desired&PAGE_GUARD)!=0;
+      if(temporary && !FileAliasProtect(reinterpret_cast<void*>(at),s.page_size,PAGE_READONLY,&previous)) {
+        s.request_error=EACCES;errno=EACCES;return finish();
+      }
+      if(temporary)FindRegion(s,at)->second.actual_protection[n]=PAGE_READONLY;
+      memcpy(piece.private_bytes.data()+n*s.page_size,reinterpret_cast<void*>(at),s.page_size);
+      if(temporary) {
+        if(!FileAliasProtect(reinterpret_cast<void*>(at),s.page_size,desired,&previous)) {
+          auto found=FindRegion(s,at);found->second.operation_error=GetLastError();
+          s.owner_failure=true;errno=EIO;return finish(); // actual READONLY retained
         }
-        break;
+        FindRegion(s,at)->second.actual_protection[n]=desired;
+      }
     }
-    if (s.owner_failure || s.request_error) return it;
-    at = y;
   }
-  // One placeholder for the whole range.
-  auto first = FindRegion(s, begin);
-  if (first->second.size != end - begin) {
-    if(!FileAliasFree(reinterpret_cast<void*>(begin),end-begin,
-                      MEM_RELEASE|MEM_COALESCE_PLACEHOLDERS)) {
-      first->second.operation_error=GetLastError();
-      s.owner_failure=true; errno=EIO;
-      return first; // real partitions still exist; never publish fictitious merge
+  for(auto& pin:plan.pins)pin.owner->refs+=pin.source_pins;
+  pinned=true;
+  for(auto& piece:plan.pieces) {
+    auto original=FindRegion(s,piece.start);
+    const uintptr_t full_end=piece.start+piece.original.size;
+    if(piece.original.kind==Kind::kAnon) {
+      if(!FileAliasFree(reinterpret_cast<void*>(piece.begin),piece.end-piece.begin,MEM_RELEASE|MEM_PRESERVE_PLACEHOLDER)) {
+        original->second.operation_error=GetLastError();s.owner_failure=true;errno=EIO;return finish();
+      }
+      s.regions.erase(original);
+      for(size_t n=0;n<3;++n)if(!piece.partitions[n].empty()) {
+        if(n!=1) {
+          Region& ready=piece.kept[n==0?0:1];
+          const size_t offset=(piece.partitions[n].key()-piece.start)/s.page_size;
+          for(size_t k=0;k<ready.actual_protection.size();++k)ready.actual_protection[k]=piece.desired_protection[offset+k];
+          piece.partitions[n].mapped()=std::move(ready);
+        }
+        auto published=s.regions.insert(std::move(piece.partitions[n]));
+        if(!published.inserted){s.owner_failure=true;errno=EIO;return finish();}
+      }
+      continue;
     }
-    for (auto next = std::next(first); next != s.regions.end() && next->first < end;) {
-      next = s.regions.erase(next);
+    if(piece.original.kind==Kind::kView) {
+      if(!FileAliasUnmap2(Placeholders().unmap2,GetCurrentProcess(),piece.original.view,MEM_PRESERVE_PLACEHOLDER)) {
+        original->second.operation_error=GetLastError();s.owner_failure=true;errno=EIO;return finish();
+      }
+      bool closed=true;
+      if(piece.original.owner)closed=DropSection(s,original->second);
+      else closed=close_owned(piece.original.mapping,piece.failure_records[2]);
+      Region& hole=original->second;hole.kind=Kind::kHole;hole.owner=nullptr;hole.mapping=nullptr;hole.view=nullptr;
+      std::fill(hole.live.begin(),hole.live.end(),false);hole.live_pages=0;
+      std::fill(hole.actual_protection.begin(),hole.actual_protection.end(),0);
+      if(!closed){errno=EIO;return finish();}
     }
-    static_assert(noexcept(first->second=std::move(ledger.combined)));
-    first->second=std::move(ledger.combined); // prepared storage, no post-OS growth
+    auto remaining=original;
+    auto split=[&](uintptr_t boundary,RegionMap::node_type& prefix) {
+      if(!FileAliasFree(reinterpret_cast<void*>(remaining->first),boundary-remaining->first,MEM_RELEASE|MEM_PRESERVE_PLACEHOLDER)) {
+        remaining->second.operation_error=GetLastError();s.owner_failure=true;return false;
+      }
+      auto tail=s.regions.extract(remaining);const size_t cut=boundary-tail.key();
+      tail.key()=boundary;tail.mapped().size-=cut;
+      tail.mapped().live.resize(tail.mapped().size/s.page_size);
+      tail.mapped().actual_protection.resize(tail.mapped().size/s.page_size);
+      auto result=s.regions.insert(std::move(tail));auto added=s.regions.insert(std::move(prefix));
+      if(!result.inserted||!added.inserted){s.owner_failure=true;return false;}
+      remaining=result.position;return true;
+    };
+    if(piece.begin>piece.start && !split(piece.begin,piece.partitions[0])){errno=EIO;return finish();}
+    if(piece.end<full_end && !split(piece.end,piece.partitions[1])){errno=EIO;return finish();}
+    if(piece.original.kind!=Kind::kView)continue;
+    const uintptr_t starts[2]={piece.start,piece.end};
+    for(size_t n=0;n<2;++n) {
+      Region& ready=piece.kept[n];if(!ready.size)continue;
+      HANDLE handle=piece.original.owner?piece.original.mapping:piece.retained_handles[n];
+      auto target=FindRegion(s,starts[n]);
+      if(!FileAliasMap3(Placeholders().map3,handle,GetCurrentProcess(),reinterpret_cast<void*>(starts[n]),ready.offset,ready.size,MEM_REPLACE_PLACEHOLDER,ready.view_protection)) {
+        target->second.operation_error=GetLastError();s.owner_failure=true;continue;
+      }
+      ready.mapping=handle;ready.view=reinterpret_cast<void*>(starts[n]);
+      std::fill(ready.live.begin(),ready.live.end(),true);ready.live_pages=ready.live.size();
+      std::fill(ready.actual_protection.begin(),ready.actual_protection.end(),ready.view_protection);
+      target->second=std::move(ready);
+      Region& published=target->second;
+      if(published.owner)++published.owner->refs;else piece.retained_handles[n]=nullptr;
+      const size_t base=(starts[n]-piece.start)/s.page_size;
+      for(size_t k=0;k<published.live.size();++k) {
+        const uintptr_t at=starts[n]+k*s.page_size;DWORD previous;
+        if(!piece.private_bytes.empty() && piece.original.live[base+k]) {
+          const DWORD copy=CopyOnWrite(PAGE_READWRITE);
+          if(!FileAliasProtect(reinterpret_cast<void*>(at),s.page_size,copy,&previous)) {
+            published.operation_error=GetLastError();s.owner_failure=true;continue;
+          }
+          published.actual_protection[k]=copy;
+          memcpy(reinterpret_cast<void*>(at),piece.private_bytes.data()+(base+k)*s.page_size,s.page_size);
+        }
+        const DWORD desired=piece.desired_protection[base+k];
+        if(!FileAliasProtect(reinterpret_cast<void*>(at),s.page_size,desired,&previous)) {
+          published.operation_error=GetLastError();s.owner_failure=true;continue;
+        }
+        published.actual_protection[k]=desired;
+        if(!piece.original.live[base+k]){published.live[k]=false;--published.live_pages;}
+      }
+    }
+    if(s.owner_failure){errno=EIO;return finish();}
   }
-  return first;
+  auto first=FindRegion(s,begin);
+  if(first->second.size!=end-begin) {
+    if(!FileAliasFree(reinterpret_cast<void*>(begin),end-begin,MEM_RELEASE|MEM_COALESCE_PLACEHOLDERS)) {
+      first->second.operation_error=GetLastError();s.owner_failure=true;errno=EIO;return finish();
+    }
+    for(auto next=std::next(first);next!=s.regions.end()&&next->first<end;)next=s.regions.erase(next);
+    static_assert(noexcept(first->second=std::move(plan.merged.combined)));
+    first->second=std::move(plan.merged.combined);
+  }
+  return finish();
 }
 
 // Fills the hole `it` with anonymous zero pages.
