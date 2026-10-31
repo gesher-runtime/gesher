@@ -13,7 +13,7 @@ def main():
   GITHUB_SHA=source,GITHUB_WORKFLOW_SHA=source,GESHER_COHERENT_TCP_AUTHORIZED_SOURCE=source,
   GESHER_COHERENT_TCP_POLICY_REF=c.REPOSITORY+'/'+c.TRUST+'@'+pins[0],GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='1')
  count=0
- for job in ('compile','linux-reference','windows','selected-supplier-correlation'):
+ for job in ('compile','linux-reference','windows','supplier-correlation'):
   e=dict(base,GITHUB_JOB=job)
   if job!='linux-reference':e['TCP_SUPPLIER_ROLE']='selected-minimum'
   assert c.context(e,job)['GITHUB_SHA']==source
