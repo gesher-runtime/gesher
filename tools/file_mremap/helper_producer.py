@@ -53,7 +53,16 @@ def save(path,value):
 
 def sha(path):return A.digest(Path(path).read_bytes())
 
-def tool(argv,cwd,env,seconds=90):
+def failure_output(raw,binary=False):
+    value={'bytes':len(raw),'sha256':A.digest(raw),'kind':'BINARY_NOT_PRINTED'if binary else'OVERSIZE_NOT_PRINTED'}
+    if binary or len(raw)>A.STREAM_CAP:return value
+    try:
+        text=raw.decode('utf-8')
+        A.require(all(char.isprintable()or char in '\r\n\t'for char in text),'non-text tool failure')
+    except (UnicodeError,A.Rejected):value['kind']='NON_TEXT_NOT_PRINTED';return value
+    value.update(kind='COMPLETE_UTF8_TEXT',text=text);return value
+
+def tool(argv,cwd,env,seconds=90,binary_stdout=False):
     """Bounded concurrent tool capture with a graph saved before readers start."""
     A.require(os.environ.get('GITHUB_ACTIONS')=='true' and os.name=='posix','compiler tools Linux CI only')
     graph={'argv':list(map(str,argv)),'process':None,'readers':[],'buffers':[bytearray(),bytearray()],'overflow':False,'errors':[],'executable_sha256':None,'executable_realpath':None}
@@ -94,14 +103,14 @@ def tool(argv,cwd,env,seconds=90):
         emit('TOOL',record)
         if not record['root_retained']:TOOL_GRAPHS.remove(graph)
     if graph['errors']or timed or graph['overflow']or proc is None or proc.returncode!=0 or record['root_retained']:
-        emit('TOOL_FAILURE',{'record':record,'stdout':bytes(graph['buffers'][0]).decode(errors='backslashreplace'),'stderr':bytes(graph['buffers'][1]).decode(errors='backslashreplace')})
+        emit('TOOL_FAILURE',{'record':record,'stdout':failure_output(bytes(graph['buffers'][0]),binary_stdout),'stderr':failure_output(bytes(graph['buffers'][1]))})
         raise A.Rejected('tool failure or containment')
     return bytes(graph['buffers'][0]),bytes(graph['buffers'][1])
 
 class Redirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):
         parsed=urllib.parse.urlparse(newurl)
-        A.require(parsed.scheme=='https' and parsed.hostname and (parsed.hostname in ('github.com','api.github.com','release-assets.githubusercontent.com','objects.githubusercontent.com') or parsed.hostname.endswith('.blob.core.windows.net')), 'untrusted download redirect')
+        A.require(parsed.scheme=='https' and parsed.hostname and parsed.port in (None,443) and parsed.username is None and parsed.password is None and (parsed.hostname in ('github.com','api.github.com','release-assets.githubusercontent.com','objects.githubusercontent.com') or parsed.hostname.endswith('.blob.core.windows.net')), 'untrusted download redirect')
         result=super().redirect_request(req,fp,code,msg,headers,newurl)
         if result is not None:
             result.remove_header('Authorization')
@@ -189,7 +198,7 @@ def link_dependencies(text,expanded,toolroot,build,env):
     for archive,member,symbol in loads:
         candidates=[v for k,v in archives.items()if k==archive or Path(k).name==Path(archive).name]
         A.require(len(candidates)==1,'Loaded member has no unique Reading origin')
-        raw,_=tool([toolroot/'bin/llvm-ar','p',candidates[0]['path'],member],build,env)
+        raw,_=tool([toolroot/'bin/llvm-ar','p',candidates[0]['path'],member],build,env,binary_stdout=True)
         A.require(raw,'empty loaded member');old=candidates[0]['members'].get(member)
         row={'sha256':A.digest(raw),'bytes':len(raw)};A.require(old is None or old==row,'member conflict');candidates[0]['members'][member]=row
     direct=[]

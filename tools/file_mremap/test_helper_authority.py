@@ -18,6 +18,14 @@ import unittest
 from unittest import mock
 import zipfile
 
+@contextlib.contextmanager
+def pure_temp_directory():
+    with tempfile.TemporaryDirectory(prefix='gesher-helper-pure-')as temp:
+        target=Path(temp).resolve();parent=Path(tempfile.gettempdir()).resolve()
+        A.require(target.is_absolute()and target.parent==parent and target.name.startswith('gesher-helper-pure-'),'owned pure fixture directory')
+        yield str(target)
+        A.require(target.resolve()==target and target.parent==parent,'pure fixture cleanup target')
+
 def load(name):
     spec=importlib.util.spec_from_file_location(name,Path(__file__).with_name(name+'.py'))
     value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
@@ -169,7 +177,7 @@ class Helper(unittest.TestCase):
         self.reject(lambda:A.api('not-run'))
 
     def test_driver_and_dependency_metadata_only(self):
-        with tempfile.TemporaryDirectory()as temp:
+        with pure_temp_directory()as temp:
             root=Path(temp);tool=root/'publisher';build=root/'build';source=root/'source'
             for p in (tool/'bin',tool/'include',build,source):p.mkdir(parents=True,exist_ok=True)
             (tool/'bin/clang').write_text('SYNTHETIC')
@@ -194,7 +202,7 @@ class Helper(unittest.TestCase):
         graph['readers'].append({'thread':idle,'started':False,'start_attempted':True});self.assertFalse(A.settle_readers(graph,0))
         graph['readers'].pop()
         graph['readers'].append({'thread':live,'started':True});self.assertFalse(A.settle_readers(graph,0))
-        with tempfile.TemporaryDirectory()as temp:
+        with pure_temp_directory()as temp:
             owned=Path(temp)/'mremap-helper-123-1-win22';owned.mkdir();(owned/'raw.txt').write_text('SYNTHETIC')
             P.A.LIVE_GRAPHS.append({'SYNTHETIC_RETAINED':True})
             try:
@@ -204,7 +212,7 @@ class Helper(unittest.TestCase):
 
     def test_driver_rejects_nonexistent_and_attached_foreign_paths(self):
         import shlex
-        with tempfile.TemporaryDirectory()as temp:
+        with pure_temp_directory()as temp:
             root=Path(temp);tc=root/'tc';source=root/'source';build=root/'build'
             for path in (tc/'bin',source,build):path.mkdir(parents=True,exist_ok=True)
             exe=tc/'bin/clang';exe.write_text('SYNTHETIC')
@@ -239,6 +247,14 @@ class Helper(unittest.TestCase):
         with contextlib.redirect_stdout(out):P.emit_text_members(files,synthetic_context())
         self.assertEqual(len(out.getvalue().splitlines()),13)
         self.assertNotIn('MEMBER_HELPER_OBJ',out.getvalue());self.assertNotIn('MEMBER_HELPER_QUALIFICATION_EXE',out.getvalue())
+
+    def test_failure_binary_opacity_and_complete_text_bound(self):
+        raw=b'SYNTHETIC_OBJECT_EVEN_IF_PRINTABLE'
+        opaque=P.failure_output(raw,True)
+        self.assertEqual(opaque,{'bytes':len(raw),'sha256':A.digest(raw),'kind':'BINARY_NOT_PRINTED'})
+        self.assertEqual(P.failure_output(b'complete error\n')['text'],'complete error\n')
+        for raw in (b'\x00binary',b'\xff',b'x'*(A.STREAM_CAP+1)):
+            value=P.failure_output(raw);self.assertNotIn('text',value);self.assertEqual(value['bytes'],len(raw));self.assertEqual(value['sha256'],A.digest(raw))
 
     def test_recipe_source_isolated_three_object_and_no_native_test(self):
         authority=(ROOT/'tools/file_mremap/helper_authority.py').read_text();producer=(ROOT/'tools/file_mremap/helper_producer.py').read_text()
