@@ -64,6 +64,10 @@ using namespace gesher_mman_internal;
 #else
 #define FileAliasMapViewOfFile MapViewOfFile
 #define FileAliasCloseHandle CloseHandle
+#define FileAliasReOpenFile ReOpenFile
+#define FileAliasCreateMapping(file,prot) CreateFileMappingW(file,nullptr,prot,0,0,nullptr)
+#define FileAliasDuplicate(source,target) DuplicateHandle(GetCurrentProcess(),source,GetCurrentProcess(),target,0,FALSE,DUPLICATE_SAME_ACCESS)
+#define FileAliasReserve(fn,process,at,size,flags,prot) fn(process,at,size,flags,prot,nullptr,0)
 #define FileAliasUnmapViewOfFile UnmapViewOfFile
 #define FileAliasQuery VirtualQuery
 #define FileAliasProtect VirtualProtect
@@ -395,8 +399,8 @@ uintptr_t Reserve(State& s,void* at,size_t len,PreparedReservation* prepared=nul
     const auto status=PrepareReservation(len,s.page_size,plan);
     if(status!=PrepareStatus::Ok){s.request_error=status==PrepareStatus::NoMemory?ENOMEM:EIO;errno=s.request_error;return 0;}
   }
-  void* memory=Placeholders().alloc2(GetCurrentProcess(),at,len,
-    MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,nullptr,0);
+  void* memory=FileAliasReserve(Placeholders().alloc2,GetCurrentProcess(),at,len,
+    MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS);
   if(!memory)return 0;
   const uintptr_t start=reinterpret_cast<uintptr_t>(memory);
   plan.region.key()=start;plan.region.mapped().group=start;plan.group.key()=start;
@@ -469,8 +473,8 @@ bool RangeIsOurs(State& s, uintptr_t begin, uintptr_t end) {
 
 // Maps a view of `mapping` into the hole exactly at [start, start + size).
 bool MapViewInto(HANDLE mapping, uintptr_t start, size_t size, uint64_t offset, ULONG protection) {
-  return Placeholders().map3(mapping, GetCurrentProcess(), reinterpret_cast<void*>(start), offset,
-                             size, MEM_REPLACE_PLACEHOLDER, protection, nullptr, 0) != nullptr;
+  return FileAliasMap3(Placeholders().map3,mapping,GetCurrentProcess(),reinterpret_cast<void*>(start),offset,
+                       size,MEM_REPLACE_PLACEHOLDER,protection)!=nullptr;
 }
 
 // One page of a view, as it was before the view was taken down.
@@ -699,8 +703,7 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
   for(auto& piece:plan.pieces) {
     if(piece.original.kind==Kind::kView && !piece.original.owner)
       for(size_t n=0;n<2;++n)if(piece.kept[n].size) {
-        if(!DuplicateHandle(GetCurrentProcess(),piece.original.mapping,GetCurrentProcess(),
-                            &piece.retained_handles[n],0,FALSE,DUPLICATE_SAME_ACCESS)) {
+        if(!FileAliasDuplicate(piece.original.mapping,&piece.retained_handles[n])) {
           s.request_error=EIO;errno=EIO;return finish();
         }
       }
@@ -834,9 +837,8 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
 
 // Fills the hole `it` with anonymous zero pages.
 bool FillAnonymous(std::map<uintptr_t, Region>::iterator it, int prot) {
-  if (Placeholders().alloc2(GetCurrentProcess(), reinterpret_cast<void*>(it->first),
-                            it->second.size, MEM_RESERVE | MEM_COMMIT | MEM_REPLACE_PLACEHOLDER,
-                            PageProtection(prot), nullptr, 0) == nullptr) {
+  if(FileAliasReserve(Placeholders().alloc2,GetCurrentProcess(),reinterpret_cast<void*>(it->first),
+                     it->second.size,MEM_RESERVE|MEM_COMMIT|MEM_REPLACE_PLACEHOLDER,PageProtection(prot))==nullptr) {
     return false;
   }
   Region& r = it->second;
@@ -893,7 +895,7 @@ bool CopyFromFile(State& s, HANDLE file, uint64_t file_size, uint64_t offset, ui
   const size_t available = static_cast<size_t>(std::min<uint64_t>(len, file_size - offset));
   const size_t padding = static_cast<size_t>(offset % s.granularity);
   const uint64_t view_offset = offset - padding;
-  HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+  HANDLE mapping = FileAliasCreateMapping(file,PAGE_READONLY);
   auto close_mapping=[&]() {
     if(!mapping)return true;
     if(!failure){CloseHandle(mapping);mapping=nullptr;return true;}
@@ -903,7 +905,7 @@ bool CopyFromFile(State& s, HANDLE file, uint64_t file_size, uint64_t offset, ui
     RecordOwnerFailure(s,record,SectionState::ReleaseFailed,error);return false;
   };
   void* view = mapping == nullptr ? nullptr
-      : MapViewOfFile(mapping, FILE_MAP_READ, static_cast<DWORD>(view_offset >> 32),
+      : FileAliasMapViewOfFile(mapping, FILE_MAP_READ, static_cast<DWORD>(view_offset >> 32),
                       static_cast<DWORD>(view_offset & 0xffffffffu), available + padding);
   if (view == nullptr) {
     close_mapping();
@@ -965,7 +967,7 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
   ULONG view_protection = 0;
   HANDLE reopened = nullptr;
   if (in_view != 0 && exec) {
-    reopened = ReOpenFile(file, GENERIC_READ | GENERIC_EXECUTE | (shared && write ? GENERIC_WRITE : 0),
+    reopened = FileAliasReOpenFile(file, GENERIC_READ | GENERIC_EXECUTE | (shared && write ? GENERIC_WRITE : 0),
                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
     if (reopened == INVALID_HANDLE_VALUE) {
       reopened = nullptr;
@@ -989,7 +991,7 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
       section = exec ? PAGE_EXECUTE_WRITECOPY : PAGE_WRITECOPY;
       view_protection = section;
     }
-    mapping = CreateFileMappingW(source, nullptr, section, 0, 0, nullptr);
+    mapping = FileAliasCreateMapping(source,section);
     if(reopened!=nullptr && !close_construct(reopened,1)) {
       close_construct(mapping,0);errno=EIO;return MAP_FAILED;
     }
@@ -1361,7 +1363,7 @@ int FileAliasRegistrySnapshot(const void* address,size_t length,FileAliasPage* r
     if(entry!=s.regions.end()) {
       const Region& region=entry->second; row.present=1;
       row.region_page=(at-entry->first)/s.page_size; row.region_size=region.size; row.kind=static_cast<int>(region.kind);
-      row.live_pages=region.live_pages; row.live=region.live[(at-entry->first)/s.page_size];
+      row.live_pages=region.live_pages; row.live_capacity=region.live.capacity(); row.live=region.live[(at-entry->first)/s.page_size];
       row.group=region.group!=0; row.operation_error=region.operation_error;
       if(!region.actual_protection.empty()) row.ledger_protection=region.actual_protection[(at-entry->first)/s.page_size];
       if(region.owner) {
