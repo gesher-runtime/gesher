@@ -322,6 +322,9 @@ class Helper(unittest.TestCase):
                 self.assertEqual({x['name']:x['state']for x in record['selected_members']},{'duplicate.o':'AMBIGUOUS_NOT_EXTRACTED','unique.o':'UNIQUE_EXTRACTED'})
                 self.assertEqual(sum('p'in call for call in calls),1)
                 with self.assertRaises(P.A.Rejected):P.collect_crt_identity(auth,{'id':42},archives,loads+[('libmsvcrt.a','missing.o','x')],'trace',tc,build,{})
+                with self.assertRaises(P.A.Rejected):P.collect_crt_identity(auth,{'id':42},archives,[('/foreign/libmsvcrt.a','unique.o','x')],'trace',tc,build,{})
+                duplicate=dict(archives);duplicate[str(archive)]=dict(archives['libmsvcrt.a'])
+                with self.assertRaises(P.A.Rejected):P.collect_crt_identity(auth,{'id':42},duplicate,loads,'trace',tc,build,{})
             # An uncertain original tool graph is never suppressed to continue as clean.
             linktext='ld.lld: Reading '+str(archive)+'\nld.lld: Loaded '+str(archive)+'(unique.o) for x\n'
             with self.assertRaisesRegex(P.A.Rejected,'missing positive CRT/STL/unwind/builtins/system dependency'):

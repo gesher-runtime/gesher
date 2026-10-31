@@ -220,6 +220,9 @@ def collect_crt_identity(auth,job,archives,loads,text,toolroot,build,env):
     A.require(len(selected)==1,'collector exact CRT archive')
     archive=selected[0];rows=[list(x)for x in loads if Path(x[0]).name=='libmsvcrt.a']
     A.require(0<len(rows)<=256,'collector loaded CRT rows')
+    for token,member,symbol in rows:
+        origins=[value for key,value in archives.items()if token==key or (token==Path(token).name and Path(key).name==token)]
+        A.require(len(origins)==1 and origins[0] is archive,'collector exact loaded archive origin')
     members=sorted({x[1]for x in rows});A.require(0<len(members)<=64,'collector selected member count')
     A.require(all(type(x)is str and 0<len(x)<=256 and '/'not in x and '\\'not in x and '\0'not in x for x in members),'collector member names')
     exe=build/'helper-qualification.exe';exe_size=exe.stat().st_size;A.require(0<exe_size<=A.FILE_CAP,'collector EXE cap')
