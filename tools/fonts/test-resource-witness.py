@@ -225,7 +225,7 @@ class DiskMetadata(unittest.TestCase):
         for offset,fmt,val in [(12,'H',1),(14,'H',65),(16,'I',15),(16,'I',0x80000000),
              (20,'I',24),(20,'I',0x80000000),(20,'I',0x80000fff),
              (44,'I',0x80000018),(68,'I',0x80000030),(68,'I',0xfffffff0),
-             (96,'I',0xfffffff0),(100,'I',65536),(100,'I',0),(108,'I',1)]:
+             (96,'I',0xfffffff0),(96,'I',0x3201),(100,'I',65536),(100,'I',0),(108,'I',1)]:
             with self.subTest(offset=offset):
                 data=bytearray(disk_image());struct.pack_into('<'+fmt,data,0x1400+offset,val)
                 self.reject(lambda:w.disk_version_metadata(bytes(data)))

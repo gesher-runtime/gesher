@@ -317,10 +317,11 @@ def disk_version_metadata(data):
             else:
                 require(not target&0x80000000 and target%4==0,'resource leaf depth/alignment')
                 claim(target,16);drva,n,cp,reserved=struct.unpack_from('<IIII',raw,target)
-                require(reserved==0 and 0<n<65536 and len(leaves)<8,'resource leaf WORD/count')
+                require(reserved==0 and drva%4==0 and 0<n<65536 and len(leaves)<8,'resource leaf WORD/count/alignment')
                 require(sum(v['bytes']for v in leaves)+n<=512*1024,'resource aggregate payload cap')
                 key=tuple(keys+[name]);require(key not in names,'resource duplicate path');names.add(key)
                 payload=mapped(data,sections,drva,n)
+                require(all((s['raw']+drva-s['rva'])%4==0 for s in sections if s['rva']<=drva and drva+n<=s['rva']+s['raw_size']),'resource file payload alignment')
                 # Payloads may live outside the directory extent, but never
                 # overlap structures or another payload in the same image.
                 leaves.append({'path':list(key),'rva':drva,'bytes':n,'codepage':cp,'payload':payload})
