@@ -93,10 +93,18 @@ function Resolve-PreflightLiteral([string]$Path,[bool]$Directory=$false) {
 function Get-PreflightFileProfile([string]$Path,[bool]$Microsoft=$true) {
  $path=Resolve-PreflightLiteral $Path
  $item=Get-Item -LiteralPath $path
- if([string]::IsNullOrWhiteSpace($item.VersionInfo.FileVersion) -or [string]::IsNullOrWhiteSpace($item.VersionInfo.ProductVersion)){throw 'UNAVAILABLE: no exact disk file/product version'}
  $record=@{path=$path;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant();file_version=$item.VersionInfo.FileVersion;product_version=$item.VersionInfo.ProductVersion;scope='DISK_AT_LOADED_OR_APPROVED_PATH_NOT_MEMORY_ATTESTATION'}
+ # Emit both sides before fail-closed gates, including the exact rejected file.
+ Emit-PreflightRecord 'FONT_DEBUGGER_FILE_PROFILE_BEFORE_GATE' @{received=$record;expected=@{file_version_present=$true;product_version_present=$true;valid_Microsoft_signature=$Microsoft};diagnostic_only=$true}
+ if([string]::IsNullOrWhiteSpace($item.VersionInfo.FileVersion) -or [string]::IsNullOrWhiteSpace($item.VersionInfo.ProductVersion)){throw 'UNAVAILABLE: no exact disk file/product version'}
  if($Microsoft){
-  $sig=Get-AuthenticodeSignature -LiteralPath $path
+  try{$sig=Get-AuthenticodeSignature -LiteralPath $path}catch{
+   Emit-PreflightRecord 'FONT_DEBUGGER_SIGNATURE_QUERY_ERROR' @{path=$path;sha256=$record.sha256;error=$_.Exception.Message;diagnostic_only=$true}
+   throw
+  }
+  $subject=if($sig.SignerCertificate){$sig.SignerCertificate.Subject}else{$null}
+  $thumbprint=if($sig.SignerCertificate){$sig.SignerCertificate.Thumbprint}else{$null}
+  Emit-PreflightRecord 'FONT_DEBUGGER_SIGNATURE_BEFORE_GATE' @{path=$path;sha256=$record.sha256;expected=@{status='Valid';signer_organization='Microsoft Corporation'};received=@{status=$sig.Status.ToString();message=$sig.StatusMessage;signature_type=[string]$sig.SignatureType;signer_subject=$subject;signer_thumbprint=$thumbprint};diagnostic_only=$true}
   if($sig.Status -ne 'Valid' -or !$sig.SignerCertificate -or $sig.SignerCertificate.Subject -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)'){throw 'UNAVAILABLE: valid Microsoft signature required'}
   $record.signature_status=$sig.Status.ToString();$record.signer=$sig.SignerCertificate.Subject;$record.signer_thumbprint=$sig.SignerCertificate.Thumbprint
  }
