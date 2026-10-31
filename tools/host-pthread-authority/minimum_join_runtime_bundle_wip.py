@@ -15,7 +15,11 @@ PAYLOAD={'candidate.obj','candidate-undefined.txt','static.exe','dynamic.exe',
  'static.map','dynamic.map','static-link.txt','dynamic-link.txt','static-imports.txt','dynamic-imports.txt',
  'static-symbols.txt','dynamic-symbols.txt','static-disassembly.txt','dynamic-disassembly.txt',
  'libwinpthread-1.dll','dll-exports.txt','dll-disassembly.txt','libwinpthread.a','libwinpthread.dll.a',
- 'import-archive-symbols.txt','producer-archive-observations.json','link-proof.json'}
+ 'import-archive-symbols.txt','producer-archive-observations.json','link-proof.json',
+ 'dll-imports.txt','dll-machine.txt','publisher-dll-exports.txt','publisher-dll-imports.txt',
+ 'publisher-headers.json','postbuild-headers.json','supplier-dll.map','supplier-build.log',
+ 'supplier-install.log','supplier-configure.log','sdk-macros.txt','supplier-macros.txt',
+ 'sdk-machine.txt','supplier-machine.txt','dll-source-thread.o','dll-source-observations.json'}
 CAP=128*1024*1024
 
 def digest(data):return hashlib.sha256(data).hexdigest()

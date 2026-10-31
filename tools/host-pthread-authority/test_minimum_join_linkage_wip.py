@@ -30,7 +30,8 @@ def main():
         def modules(_):return {'kernel32.dll':[]} if modules.calls.pop(0)=='static' else {'kernel32.dll':[],'libwinpthread-1.dll':[]}
         def check():
             modules.calls=['static','dynamic']
-            with mock.patch.object(v.prior,'import_symbols',side_effect=modules), \
+            with mock.patch.object(v,'verify_supplier',return_value={'synthetic':True}), \
+                 mock.patch.object(v.prior,'import_symbols',side_effect=modules), \
                  mock.patch.object(v.prior,'static_bindings',return_value={'synthetic':True}), \
                  mock.patch.object(v.prior,'short_import_members',return_value={}), \
                  mock.patch.object(v.prior,'pe_import_thunks',return_value={}), \
