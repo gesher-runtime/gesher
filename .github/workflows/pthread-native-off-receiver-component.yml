@@ -14,7 +14,7 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 jobs:
   source_authority:
-    uses: gesher-runtime/gesher/.github/workflows/pthread-native-off-receiver-trusted-source.yml@fa563d9a4ec833d0789c45060d9f631b82b68d05
+    uses: gesher-runtime/gesher/.github/workflows/pthread-native-off-receiver-trusted-source.yml@6edcb921e546698e503f18ad93e3dac690487be4
   build:
     needs:
     - source_authority
