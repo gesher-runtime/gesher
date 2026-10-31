@@ -77,9 +77,14 @@ def context():
     assert os.environ['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
     assert os.environ['GITHUB_REPOSITORY_ID'] == '1426153186'
     if os.environ.get('GITHUB_JOB')=='compile':
-        assert os.environ['GITHUB_REF'] == 'refs/heads/wip/tcp-minimum-selection'
-        assert os.environ['GITHUB_WORKFLOW'] == 'net-tcp-selected-component'
-        assert os.environ['TCP_SUPPLIER_ROLE'] == 'selected-minimum'
+        if os.environ.get('GITHUB_REF')=='refs/heads/wip/coherent-selected-tcp':
+            sys.path.insert(0,str(ROOT/'tools/toolchain'))
+            import coherent_tcp_context as tcp
+            tcp.context(os.environ,'compile')
+        else:
+            assert os.environ['GITHUB_REF'] == 'refs/heads/wip/tcp-minimum-selection'
+            assert os.environ['GITHUB_WORKFLOW'] == 'net-tcp-selected-component'
+            assert os.environ['TCP_SUPPLIER_ROLE'] == 'selected-minimum'
     elif os.environ.get('GESHER_HOST_PTHREAD_CALLER')=='coherent-selected-full/build':
         sys.path.insert(0,str(ROOT/'tools/toolchain'))
         import coherent_selected_context as coherent

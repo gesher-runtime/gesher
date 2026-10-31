@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,7 +41,12 @@ def main():
     context = {k: os.environ[k] for k in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID')}
     assert context['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
     role = os.environ['TCP_SUPPLIER_ROLE']
-    if os.environ['GITHUB_REF'] == 'refs/heads/wip/tcp-coherent-port':
+    if os.environ['GITHUB_REF'] == 'refs/heads/wip/coherent-selected-tcp':
+        sys.path.insert(0,str(ROOT/'tools/toolchain'))
+        import coherent_tcp_context as coherent
+        coherent.context(os.environ,'compile')
+        assert role == 'selected-minimum'
+    elif os.environ['GITHUB_REF'] == 'refs/heads/wip/tcp-coherent-port':
         assert os.environ['GITHUB_WORKFLOW']=='net-tcp-coherent-component'
         assert role in ('canonical','retirement')
     else:

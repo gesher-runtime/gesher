@@ -1006,7 +1006,7 @@ jobs:
         run: |
           pwsh -NoProfile -File tests/windows/run-tests.ps1 dist -Web3Observer dist/web3_process_waits.exe | Tee-Object -FilePath results.txt
           $code = $LASTEXITCODE
-          "### Tests — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
+          "### Tests ג€” ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
           Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL|INFO)|failed' >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
@@ -1207,3 +1207,181 @@ jobs:
             binder-full-output.txt
             ${{ runner.temp }}/gesher-sg-modes-*/**
           if-no-files-found: warn
+
+  # Current selected TCP role; historical canonical red remains separately preserved.
+  compile:
+    needs: [union-trusted-source]
+    name: compile-${{ matrix.supplier }}
+    strategy:
+      fail-fast: false
+      matrix:
+        supplier: [selected-minimum]
+    env:
+      TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
+      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.union-trusted-source.outputs.source }}
+      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.union-trusted-source.outputs.policy_ref }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify coherent selected TCP producer role
+        run: python3 tools/toolchain/coherent_tcp_context.py
+      - name: Verify exact source and two-supplier preservation before native compilation
+        run: |
+          python3 tools/net-tcp-priority/test-selected-policy.py
+          python3 tools/net-tcp-priority/test-selected-supplier.py
+          python3 tools/host-pthread-authority/minimum_receipt.py selftest
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Cache dynarmic, fmt and Boost headers
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: arm64-deps-${{ env.DYNARMIC_COMMIT }}-fmt${{ env.FMT_VERSION }}-boost${{ env.BOOST_VERSION }}-p3-fpsr-${{ hashFiles('compat/arm64/dll/patch-dynarmic-fpsr.py') }}
+
+      - name: Fetch and patch dynarmic, fmt and Boost
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p deps && cd deps
+
+          # dynarmic at the pinned commit, with its vendored externals.
+          git init -q dynarmic
+          git -C dynarmic fetch -q --depth 1 https://github.com/yuzu-mirror/dynarmic "$DYNARMIC_COMMIT"
+          git -C dynarmic checkout -q FETCH_HEAD
+
+          # Replace the vendored fmt (10.1.0) with a newer one that builds on
+          # the pinned llvm-mingw clang (docs/arm64.md).
+          curl -fsSL -o fmt.tar.gz "https://github.com/fmtlib/fmt/archive/refs/tags/$FMT_VERSION.tar.gz"
+          tar -xzf fmt.tar.gz
+          rm -rf dynarmic/externals/fmt
+          mv "fmt-$FMT_VERSION" dynarmic/externals/fmt
+          rm fmt.tar.gz
+
+          # Patch for the 2026 clang (docs/arm64.md, ADR 0047):
+          #  - fmt: force FMT_USE_CONSTEVAL 0 (FMT_STRING trips a consteval
+          #    evaluation error in fmt's own sources on this clang).
+          sed -i 's/^#  define FMT_USE_CONSTEVAL 1$/#  define FMT_USE_CONSTEVAL 0/' \
+            dynarmic/externals/fmt/include/fmt/base.h
+          #  - mcl: the template-template parameter no longer matches
+          #    std::integer_sequence on this clang.
+          sed -i 's@template<class T, template<class, T\.\.\.> class VLT, T\.\.\. values>@template<class T, template<class VT, VT...> class VLT, T... values>@' \
+            dynarmic/externals/mcl/include/mcl/mp/typelist/lift_sequence.hpp
+          #  - dynarmic: ir_emitter.h uses std::vector without including <vector>
+          #    (this clang's libc++ no longer provides it transitively).
+          sed -i 's@#include <mcl/stdint.hpp>@#include <vector>\n\n#include <mcl/stdint.hpp>@' \
+            dynarmic/src/dynarmic/ir/ir_emitter.h
+          grep -q 'FMT_USE_CONSTEVAL 1' dynarmic/externals/fmt/include/fmt/base.h && { echo 'fmt patch failed'; exit 1; } || true
+
+          # Boost headers (interval containers): header-only, extract just boost/.
+          curl -fsSL -o boost.tar.bz2 "https://archives.boost.io/release/$BOOST_VERSION/source/boost_${BOOST_VERSION//./_}.tar.bz2"
+          tar -xjf boost.tar.bz2 "boost_${BOOST_VERSION//./_}/boost"
+          mv "boost_${BOOST_VERSION//./_}" boost
+          rm boost.tar.bz2
+
+      - name: Verify and patch the pinned compiler FPSR boundary
+        run: python3 compat/arm64/dll/patch-dynarmic-fpsr.py deps/dynarmic
+
+      - uses: actions/cache@v4
+        with:
+          path: tcp-ndk-archive
+          key: tcp-ndk-r27c-090e8083a715fdb1a3e402d0763c388abb03fb4e
+      - name: Authenticate publisher NDK archive and freshly extract on every use
+        run: python3 tools/net-tcp-priority/prepare-ndk.py
+      - name: Prepare exact unmodified canonical or intentionally selected two-patch original-profile candidate
+        run: python3 tools/net-tcp-priority/prepare-supplier.py
+      - name: Build one fresh coherent host, translator, and both bionic ABI fixtures
+        run: |
+          set -euo pipefail
+          if [[ "$TCP_SUPPLIER_ROLE" == canonical ]]; then prefix=tcp-canonical-supplier; else prefix=tcp-selected-supplier; fi
+          llvm="$PWD/$prefix/$LLVM_MINGW_NAME"
+          cmake --fresh -S . -B out -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" -DLLVM_MINGW="$llvm" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_EXE_LINKER_FLAGS=-Wl,--verbose -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          ninja -C out gesher-exec 2>&1 | tee tcp-link-host-loader.log
+          ninja -C out net_tcp_priority_probe 2>&1 | tee tcp-link-host-probe.log
+          ninja -C out net_udp_guarded_probe 2>&1 | tee tcp-link-guarded.log
+          ninja -C out net_udp_guarded_fault_probe 2>&1 | tee tcp-link-guarded-fault.log
+          cmake -S compat/arm64/dll -B out-arm64 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" \
+            -DLLVM_MINGW="$llvm" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--verbose \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DDYNARMIC_DIR="$PWD/deps/dynarmic" -DBoost_INCLUDE_DIR="$PWD/deps/boost"
+          ninja -C out-arm64 gesher_arm64 2>&1 | tee tcp-link-translator.log
+          python3 tools/net-tcp-priority/build-guests.py
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pthread tests/native2/net_udp_trunc.cpp -o /tmp/udp-guarded-reference
+          gcc -std=c11 -O2 -Wall -Wextra -Werror tests/native2/net_udp_fault_observer.c -o /tmp/udp-guarded-fault-reference
+          timeout 90 /tmp/udp-guarded-reference | tee tcp-fixture/udp-guarded-linux.txt
+          timeout 90 /tmp/udp-guarded-fault-reference | tee tcp-fixture/udp-guarded-fault-linux.txt
+          set +e
+          timeout 20 /tmp/udp-guarded-reference --negative > /tmp/udp-guarded-negative.txt 2>&1
+          negative_rc=$?
+          set -e
+          cat /tmp/udp-guarded-negative.txt
+          test "$negative_rc" = 1
+          grep -F 'FAIL UDP: negative missing MSG_TRUNC rejected' /tmp/udp-guarded-negative.txt
+      - name: Bind executed compiler and exact Windows-system-only output roles
+        run: python3 tools/net-tcp-priority/manifest.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tcp-coherent-${{ matrix.supplier }}-${{ github.sha }}-a${{ github.run_attempt }}
+          path: tcp-fixture/
+          if-no-files-found: error
+          retention-days: 14
+  linux-reference:
+    needs: [union-trusted-source]
+    env:
+      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.union-trusted-source.outputs.source }}
+      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.union-trusted-source.outputs.policy_ref }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify coherent TCP reference role
+        run: python3 tools/toolchain/coherent_tcp_context.py
+      - name: Retain full independent Linux contract including inline mode
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
+          timeout 20 /tmp/tcp-priority-reference
+  windows:
+    needs: [union-trusted-source, compile, linux-reference]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        supplier: [selected-minimum]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
+      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.union-trusted-source.outputs.source }}
+      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.union-trusted-source.outputs.policy_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify coherent selected TCP receiver role
+        shell: pwsh
+        run: |
+          python tools/toolchain/coherent_tcp_context.py
+          if ($LASTEXITCODE -ne 0) { throw 'Coherent TCP receiver role rejected' }
+      - name: Check exact qualified controller helper hashes and source-only pin negatives
+        shell: pwsh
+        run: tools/net-tcp-priority/test-helper-metadata.ps1
+      - name: Reject incomplete expected-exit retirement metadata without native execution
+        shell: pwsh
+        run: tools/net-tcp-priority/test-retirement-metadata.ps1
+      - name: Prove unchanged receipt predicates and complete diagnostic observations without native execution
+        shell: pwsh
+        run: tools/net-tcp-priority/test-receipt-metadata.ps1
+      - name: Verify raw archive and exact producer, then run actual host and both ABI paths
+        shell: pwsh
+        run: tools/net-tcp-priority/run-component.ps1
