@@ -577,13 +577,14 @@ function New-ResourceOwnerTail([uint64]$Address) {
 }
 function Wait-ResourceInputReady($Record,[string]$Kind,[long]$Deadline) {
  if($Kind -cnotin @('PREWARM','WITNESS') -or $Record.role -cne $(if($Kind -ceq 'PREWARM'){'prewarm'}else{'capture'})){throw 'Wrong input-ready role'}
- $pattern='(?m)^FONT_RESOURCE_'+$Kind+'_INPUT_READY\r?\n\d+:[0-9a-fA-F]+> $'
+ $marker='(?m)^FONT_RESOURCE_'+$Kind+'_INPUT_READY\r?$'
+ $pattern='(?m)^FONT_RESOURCE_'+$Kind+'_INPUT_READY\r?\n\d+:[0-9a-fA-F]+> \z'
  while($true){
   Update-BoundedPipe $Record.out;Update-BoundedPipe $Record.err
   $null=Get-ResourceRemaining $clock.ElapsedMilliseconds $Deadline
   if($Record.process.Id -ne $Record.pid -or $Record.handle.IsClosed -or $Record.process.WaitForExit(0) -or $Record.err.Text.Length){throw 'UNAVAILABLE: input-ready process/pipe'}
   $text=$Record.out.Text.ToString();$matches=[regex]::Matches($text,$pattern)
-  if($matches.Count -gt 1){throw 'UNAVAILABLE: duplicate input-ready marker'}
+  if([regex]::Matches($text,$marker).Count -gt 1){throw 'UNAVAILABLE: duplicate input-ready marker'}
   if($matches.Count -eq 1){
    Emit-PreflightRecord 'FONT_RESOURCE_READY_RAW' @{role=$Record.role;pid=$Record.pid;stdout=$text;sha256=(Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($text)));owner_qualified=$false}
    return $text

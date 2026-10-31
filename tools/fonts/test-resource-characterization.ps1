@@ -299,6 +299,9 @@ Reject {Wait-ResourceInputReady $readyDouble 'PREWARM' 90000}
 $readyDouble.err.Text.Append('diagnostic error')|Out-Null
 Reject {Wait-ResourceInputReady $readyDouble 'PREWARM' 90000}
 Reject {Wait-ResourceInputReady $readyDouble 'CAPTURE' 90000}
+$readyDouble.err.Text.Clear()|Out-Null;$readyDouble.out.Text.Clear()|Out-Null
+$readyDouble.out.Text.Append("FONT_RESOURCE_PREWARM_INPUT_READY`n0:000> `nUNEXPECTED_TRAILING_DATA")|Out-Null
+Reject {Wait-ResourceInputReady $readyDouble 'PREWARM' ($clock.ElapsedMilliseconds+20)}
 $ntdllText="00000000``20000000 00000000``20001000 ntdll (pdb symbols)`n    Image path: C:\Windows\System32\ntdll.dll`n    ImageSize: 00001000`n    File version: 10.0.1.2`n0:000> qd`n"
 $cacheDouble=@{size_of_image=0x14b000;profile=@{version='10.0.26100.33648'}}
 $codeDouble=@{path='C:\Windows\System32\ucrtbase.dll';base=[uint64]0x10000000}
