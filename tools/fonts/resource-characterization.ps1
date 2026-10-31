@@ -406,7 +406,7 @@ function Get-ResourcePathRoles {
   WORK_CACHE='new owned work root + cache';WORK_COMMANDS='new owned work root + commands';WORK_TEMP='new owned work root + temp'
   STAGED_CDB='admitted signed stage root + cdb.exe';STAGED_EXTENSION='admitted signed stage root + winext'
   PE_CDB='admitted signed stage root + cdb.exe';PE_DBGENG='admitted signed stage root + dbgeng.dll';PE_DBGHELP='admitted signed stage root + dbghelp.dll'
-  PYTHON_APPLICATION_SOURCE='unchanged Get-Command python -CommandType Application .Source selection'
+  PYTHON_APPLICATION_SOURCE='Get-Command Application -All execution precedence; single first Source only'
   IMPORT_SCRIPT='verified checkout root + fixed import inventory script';CHILD_PROVIDER='owned prepared child ucrtbase/ntdll module filename'
   PREWARM_MODULE='owned prewarm process bounded module filename'
  }
@@ -445,6 +445,37 @@ function Resolve-ResourceLiteral([string]$Role,[object]$Candidate,[bool]$Directo
   Emit-PreflightRecord 'FONT_RESOURCE_PATH_REJECTED' @{input=$diagnostic;reason=$_.Exception.Message;predicate='ORIGINAL_Resolve-PreflightLiteral_AND_Assert-OrdinaryWindowsPath_UNCHANGED';exception_type=$_.Exception.GetType().FullName}
   throw
  }
+}
+
+function Select-ResourcePythonSource([object[]]$Records) {
+ # Pure metadata projection. Runtime below must validate REAL ApplicationInfo
+ # instances before creating these records; synthetic tests prove no OS lookup.
+ if($Records.Count -lt 1 -or $Records.Count -gt 9){throw 'Python application candidates missing or exceed bounded ninth sentinel'}
+ foreach($record in $Records){
+  if($null -eq $record -or $record -isnot [System.Collections.IDictionary] -or $record.Count -ne 2 -or
+     !$record.Contains('type') -or !$record.Contains('source') -or $record.type -cne 'System.Management.Automation.ApplicationInfo' -or
+     $record.source -isnot [string] -or [string]::IsNullOrEmpty($record.source)){throw 'Invalid typed Python application metadata; no fallback'}
+ }
+ $sources=@($Records|ForEach-Object{$_.source})
+ Emit-PreflightRecord 'FONT_RESOURCE_PYTHON_CANDIDATES' (Get-ResourcePathDiagnostic 'PYTHON_APPLICATION_SOURCE' $sources)
+ if($Records.Count -gt 8){throw 'Python application candidates exceed eight; ninth sentinel; no selection or fallback'}
+ # Microsoft Get-Command Example12: -All returns execution precedence order.
+ # Do not sort, join arrays, hardcode versions/drives or skip a bad first path.
+ $selected=$Records[0].source
+ Emit-PreflightRecord 'FONT_RESOURCE_PYTHON_SELECTION' @{query='Microsoft.PowerShell.Core\Get-Command -Name python -CommandType Application -All -TotalCount 9';selected_index=0;candidate_count=$Records.Count;selected_source=(Get-ResourcePathDiagnostic 'PYTHON_APPLICATION_SOURCE' $selected);type=$Records[0].type;policy='FIRST_APPLICATION_EXECUTION_PRECEDENCE';selected_path_validation='UNCHANGED_ORIGINAL_RESOLVER_NEXT';fallback=$false}
+ $selected
+}
+function Get-ResourcePythonSource {
+ # Only metadata discovery, never invoke Python to choose an application.
+ # TotalCount9 is a bounded sentinel: more than8 fails, never truncates to pass.
+ $applications=@(Microsoft.PowerShell.Core\Get-Command -Name python -CommandType Application -All -TotalCount 9 -ErrorAction Stop)
+ if($applications.Count -lt 1 -or $applications.Count -gt 9){throw 'Python application candidates missing or exceed bounded ninth sentinel'}
+ $records=@()
+ foreach($application in $applications){
+  if($application -isnot [System.Management.Automation.ApplicationInfo]){throw 'Expected actual Python ApplicationInfo; no fallback'}
+  $records+=@{type=$application.GetType().FullName;source=$application.Source}
+ }
+ Select-ResourcePythonSource $records
 }
 
 function Read-ResourceReady([string]$Text,[int]$OwnedId,[string]$Phase) {
@@ -557,7 +588,7 @@ try{
   $held=@($stage.handles|Where-Object{$_.stream.Name -ceq $path});if($held.Count -ne 1 -or $held[0].handle.IsClosed -or !$held[0].stream.CanRead -or $held[0].stream.Length -ne $row[0].size){throw 'Missing actual retained manifest PE lock'}
   $entries+=@{name=$name;bytes=$row[0].size;sha256=$row[0].sha256}
  }
- $pythonSource=(Get-Command python -CommandType Application -ErrorAction Stop).Source
+ $pythonSource=Get-ResourcePythonSource
  $python=Resolve-ResourceLiteral 'PYTHON_APPLICATION_SOURCE' $pythonSource
  $psi=New-PreflightStartInfo $python ($work+'\imports') $windows ($work+'\temp') @((Resolve-ResourceLiteral 'IMPORT_SCRIPT' ($checkout+'\tools\fonts\resource-import-inventory.py'))) $false
  $imports=Start-ResourceRole $stage 'imports' $psi
