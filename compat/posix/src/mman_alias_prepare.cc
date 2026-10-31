@@ -142,6 +142,55 @@ PrepareStatus PrepareReservation(size_t length,size_t page,PreparedReservation& 
     catch(...){return PrepareStatus::InternalFailure;}
 }
 
+PrepareStatus PrepareMunmap(const RegionMap& source,uintptr_t begin,uintptr_t end,
+    size_t page,PreparedMunmap& out) noexcept {
+  if(!page||begin>=end||begin%page||end%page||!out.anonymous.empty()||!out.views.empty())return PrepareStatus::InvalidSize;
+  try {
+    PreparedMunmap work;
+    auto entry=source.upper_bound(begin);if(entry!=source.begin())--entry;
+    for(;entry!=source.end()&&entry->first<end;++entry) {
+      const Region& original=entry->second;
+      if(entry->first>UINTPTR_MAX-original.size||original.size%page||original.live.size()!=original.size/page||original.live_pages!=static_cast<size_t>(std::count(original.live.begin(),original.live.end(),true))||
+         (!original.actual_protection.empty()&&original.actual_protection.size()!=original.live.size()))return PrepareStatus::InternalFailure;
+      if(entry->first+original.size<=begin)continue;
+      if(original.kind==Kind::kView&&!original.owner&&!original.actual_protection.empty()) {
+        size_t retiring=0;
+        for(size_t n=(std::max(begin,entry->first)-entry->first)/page;n<(std::min(end,entry->first+original.size)-entry->first)/page;++n)
+          if(original.live[n])++retiring;
+        if(retiring==original.live_pages) {
+          PreparedViewRetire view;view.start=entry->first;view.failure=std::make_unique<SectionOwner>();work.views.push_back(std::move(view));
+        }
+      }
+      if(original.kind!=Kind::kAnon||!original.group)continue;
+      const uintptr_t low=std::max(begin,entry->first),high=std::min(end,entry->first+original.size);
+      if(low==entry->first&&high==entry->first+original.size)continue;
+      PreparedAnonRetire plan;plan.start=entry->first;plan.begin=low;plan.end=high;
+      const uintptr_t points[4]={entry->first,low,high,entry->first+original.size};
+      for(size_t n=0;n<3;++n) {
+        const size_t bytes=points[n+1]-points[n];if(!bytes)continue;
+        const size_t index=(points[n]-entry->first)/page,count=bytes/page;
+        Region ready;
+        if(n!=1) {
+          ready=original;
+          std::vector<bool> live(original.live.begin()+index,original.live.begin()+index+count);
+          ready.live=std::move(live);ready.live_pages=static_cast<size_t>(std::count(ready.live.begin(),ready.live.end(),true));
+          if(!original.actual_protection.empty()) {
+            std::vector<DWORD> protection(original.actual_protection.begin()+index,original.actual_protection.begin()+index+count);
+            ready.actual_protection=std::move(protection);
+          }
+        } else {
+          ready.kind=Kind::kHole;ready.group=original.group;
+          ready.live.assign(count,false);ready.actual_protection.assign(count,0);
+        }
+        ready.size=bytes;RegionMap detached;detached.emplace(points[n],std::move(ready));
+        plan.partitions[n]=detached.extract(detached.begin());
+      }
+      work.anonymous.push_back(std::move(plan));
+    }
+    out=std::move(work);return PrepareStatus::Ok;
+  }catch(const std::bad_alloc&){return PrepareStatus::NoMemory;}catch(...){return PrepareStatus::InternalFailure;}
+}
+
 PrepareStatus PrepareFreshGroupFile(size_t length,size_t page,size_t view,PreparedPunchRequest& out) noexcept {
   if(!page||!length||length%page||view>length||view%page||!out.reservation.region.empty())
     return PrepareStatus::InvalidSize;

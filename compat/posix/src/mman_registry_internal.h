@@ -101,6 +101,16 @@ struct PreparedPunchPiece {
   std::array<std::unique_ptr<SectionOwner>,3> failure_records;
   std::array<HANDLE,2> retained_handles{};
 };
+struct PreparedAnonRetire {
+  uintptr_t start=0,begin=0,end=0;
+  std::array<RegionMap::node_type,3> partitions;
+};
+struct PreparedViewRetire { uintptr_t start=0; std::unique_ptr<SectionOwner> failure; };
+struct PreparedMunmap {
+  std::vector<PreparedAnonRetire> anonymous;
+  std::vector<PreparedViewRetire> views;
+};
+PrepareStatus PrepareMunmap(const RegionMap&,uintptr_t,uintptr_t,size_t,PreparedMunmap&) noexcept;
 struct PreparedPunchPin {
   SectionOwner* owner=nullptr;
   size_t source_pins=0,retained_views=0;

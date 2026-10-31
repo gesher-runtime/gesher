@@ -3,7 +3,7 @@ import copy,unittest
 from source_contract import (INPUTS,BASE,SCOPE,REPO,RID,CALLER,POLICY,BRANCH,WORKFLOW,
     canonical,digest,decode,validate_freeze,validate_plan,ContractError)
 from producer_receipt import OUTPUT_ROLES,OBJECTS,validate_producer
-from windows_controller import verify_fault,verify_protection,PROTECTION_CASES
+from windows_controller import verify_fault,verify_protection,PROTECTION_CASES,verify_punch,PUNCH_CASES
 H='1'*40;G='2'*40;D='3'*64
 
 def data():
@@ -99,6 +99,29 @@ def protection_data(case):
         rows.append(dict(event='protection_result',step=step,result=status,errno=error,protect_before=calls,protect_after=calls+count,injected_before=injected,injected_after=injected+faults));calls+=count;injected+=faults
     return dict(event_rows=rows)
 
+def punch_data(case):
+    count=65;page_size=4096;rows=[]
+    for phase in ('before','after','cleanup'):
+        for i in range(count):
+            start=0 if i<16 else 16 if i<32 else 32
+            length=16 if i<32 else 480
+            kind=1 if i<16 or i>=32 else 0
+            row=dict(event='punch_page',phase=phase,page=i,present=1,region_page=i-start,region_size=length*page_size,capacity=64 if i<32 else 512,
+              kind=kind,live=1,live_pages=length,refs=4 if kind else 0,views=4 if kind else 0,pins=0,failed=0,error=0,
+              state=0x1000,protection=4,type=0x40000 if kind else 0x20000,ledger=4,query_ok=1,query_base_offset=start*page_size,query_size=length*page_size,allocation_base_offset=start*page_size)
+            if phase=='cleanup':row.update(present=0,state=0x10000)
+            elif phase=='after'and case=='punch_coalesce_failure':
+                row.update(kind=2,live=0,live_pages=0,refs=0,views=0,failed=1,state=0x2000,ledger=0,protection=0,type=0x20000,region_size=(16 if i<32 else 33)*page_size,query_size=(16 if i<32 else 33)*page_size,error=8 if i<16 else 0)
+            elif phase=='after'and case=='punch_success':
+                row.update(kind=0,region_page=i,region_size=count*page_size,live_pages=count,refs=0,views=0,type=0x20000,query_base_offset=0,query_size=count*page_size,allocation_base_offset=0)
+            rows.append(row)
+    metrics=[0]*28;metrics[20]=1
+    prep=case in ('punch_prepare_failure','punch_file_prepare_failure')
+    if prep:metrics[21]=1
+    else:metrics[25]=1;metrics[26]=int(case=='punch_coalesce_failure')
+    rows.append(dict(event='punch_result',case=case,capacity=64,combined_pages=count,failed=int(case!='punch_success'),errno=12 if prep else 5 if case=='punch_coalesce_failure'else 0,source_unchanged=int(prep),resources_before=10,resources_after=10,metrics=metrics))
+    return dict(event_rows=rows)
+
 class SourceContracts(unittest.TestCase):
     def test_structural_baselines_are_synthetic_only(self):
         d=data();validate_freeze(d['freeze']);validate_plan(d['plan'],d['expected'],d['freeze']);union(d)
@@ -177,4 +200,20 @@ class SourceContracts(unittest.TestCase):
             with self.subTest(index=index):
                 value=protection_data(case);change(value)
                 with self.assertRaises(AssertionError):verify_protection(value,case)
+    def test_punch_capacity_oracle_synthetic_only(self):
+        for case in PUNCH_CASES:
+            with self.subTest(case=case):verify_punch(punch_data(case),case,4096)
+    def test_punch_allocation_os_partition_mutants(self):
+        changes=[('punch_prepare_failure',lambda d:d['event_rows'][-1]['metrics'].__setitem__(21,0)),
+          ('punch_file_prepare_failure',lambda d:d['event_rows'][-1]['metrics'].__setitem__(23,1)),
+          ('punch_prepare_failure',lambda d:d['event_rows'][-1].update(capacity=65)),
+          ('punch_prepare_failure',lambda d:d['event_rows'][65].update(protection=2)),
+          ('punch_coalesce_failure',lambda d:d['event_rows'][-1]['metrics'].__setitem__(26,0)),
+          ('punch_coalesce_failure',lambda d:d['event_rows'][65+16].update(kind=0)),
+          ('punch_coalesce_failure',lambda d:[r.update(query_base_offset=0,query_size=65*4096,allocation_base_offset=0)for r in d['event_rows']if r.get('phase')=='after']),
+          ('punch_success',lambda d:d['event_rows'][130].update(present=1))]
+        for index,(case,change)in enumerate(changes):
+            with self.subTest(index=index):
+                value=punch_data(case);change(value)
+                with self.assertRaises(AssertionError):verify_punch(value,case,4096)
 if __name__=='__main__':unittest.main()
