@@ -20,6 +20,49 @@ static volatile LONG cleanup_count;
 static void fail(const char *why) { fprintf(stderr, "JOIN_CANCEL_FAIL %s\n", why); fflush(stderr); ExitProcess(2); }
 static void check(int ok, const char *why) { if (!ok) fail(why); }
 static void cleanup(void *ignored) { (void)ignored; InterlockedIncrement(&cleanup_count); }
+/* Diagnostic capture only: stack rows do not themselves authorize a wait.
+   The controller remains fail-closed until current-binary callsite validation. */
+static void capture_joiner_stack(HANDLE thread, DWORD expected_tid) {
+#if !defined(_WIN64)
+  fail("stack witness requires reviewed x64 ABI");
+#else
+  DWORD64 pcs[32]; unsigned count = 0; DWORD prior, resumed; int captured = 1;
+  CONTEXT context; FILETIME created, exited, kernel, user;
+  check(GetThreadId(thread) == expected_tid && GetProcessIdOfThread(thread) == GetCurrentProcessId() &&
+        GetThreadTimes(thread, &created, &exited, &kernel, &user), "stack thread identity");
+  memset(&context, 0, sizeof context); context.ContextFlags = CONTEXT_FULL;
+  prior = SuspendThread(thread);
+  check(prior != (DWORD)-1, "stack suspend");
+  if (!GetThreadContext(thread, &context)) captured = 0;
+  while (captured && count < 32 && context.Rip != 0) {
+    DWORD64 image_base = 0; PRUNTIME_FUNCTION function;
+    pcs[count++] = context.Rip;
+    function = RtlLookupFunctionEntry(context.Rip, &image_base, NULL);
+    if (function) {
+      void *handler_data = NULL; DWORD64 establisher = 0;
+      RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, context.Rip, function,
+                       &context, &handler_data, &establisher, NULL);
+    } else {
+      SIZE_T copied = 0; DWORD64 next = 0;
+      if (!context.Rsp || context.Rsp > UINT64_MAX - sizeof next ||
+          !ReadProcessMemory(GetCurrentProcess(), (const void *)(uintptr_t)context.Rsp,
+                             &next, sizeof next, &copied) || copied != sizeof next) {
+        captured = 0; break;
+      }
+      context.Rip = next; context.Rsp += sizeof next;
+    }
+  }
+  resumed = ResumeThread(thread);
+  if (prior != 0 || resumed != 1) TerminateProcess(GetCurrentProcess(), 95);
+  check(captured && count > 0, "stack capture");
+  printf("JOIN_CANCEL_STACK tid=%lu birth_hi=%lu birth_lo=%lu frames=%u suspend_before=%lu resume_before=%lu\n",
+         (unsigned long)expected_tid, (unsigned long)created.dwHighDateTime,
+         (unsigned long)created.dwLowDateTime, count, (unsigned long)prior, (unsigned long)resumed);
+  for (unsigned i = 0; i < count; ++i)
+    printf("JOIN_CANCEL_FRAME index=%u pc=%llu\n", i, (unsigned long long)pcs[i]);
+#endif
+}
+
 static void *target_main(void *ignored) {
   (void)ignored;
   check(SetEvent(target_ready), "target ready");
@@ -76,6 +119,7 @@ int main(void) {
   check(compare && observed_tid == tid && compare(observed_target, owned_target),
         "actual prewait handle object and joiner identity");
   printf("JOIN_CANCEL_PREWAIT tid=%lu target_same_object=1 phase=1\n", (unsigned long)observed_tid);
+  capture_joiner_stack(owned_joiner, tid);
   printf("JOIN_CANCEL_TARGET pid=%lu tid=%lu handle=%llu alive=1\n",
          (unsigned long)GetCurrentProcessId(), (unsigned long)GetThreadId(owned_target),
          (unsigned long long)(uintptr_t)owned_target);
