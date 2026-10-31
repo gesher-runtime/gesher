@@ -1,6 +1,6 @@
 --- a/mingw-w64-libraries/winpthreads/src/thread.c
 +++ b/mingw-w64-libraries/winpthreads/src/thread.c
-@@ -1744,6 +1744,38 @@
+@@ -1744,6 +1744,40 @@
        WaitForSingleObject(native,0)==WAIT_TIMEOUT;
  }
  
@@ -32,14 +32,16 @@
 +  gesher_diag_handle = handle;
 +  gesher_diag_tid = GetCurrentThreadId ();
 +  InterlockedExchange (&gesher_diag_phase, 1);
-+  return WaitForSingleObject (handle, INFINITE);
++  DWORD result = WaitForSingleObject (handle, INFINITE);
++  InterlockedExchange (&gesher_diag_phase, 2);
++  return result;
 +}
 +#endif
 +
  int
  pthread_join (pthread_t t, void **res)
  {
-@@ -1767,7 +1799,14 @@
+@@ -1767,7 +1801,14 @@
  
    /* pthread_testcancel (); */
    if (tv->ended == 0 || (tv->h != NULL && tv->h != INVALID_HANDLE_VALUE))

@@ -36,7 +36,7 @@ for patch in minimum-detached-retirement.patch minimum-noattach-join.patch minim
   git -C "$source" apply "$root/tools/host-pthread-authority/$patch"
   sha256sum "$root/tools/host-pthread-authority/$patch"
 done
-printf '%s  %s\n' dd3f2c90ebb6b7ea22588c1548e7675332b1606745281120dd95189b7fd37541 "$source/mingw-w64-libraries/winpthreads/src/thread.c" | sha256sum --check --strict
+printf '%s  %s\n' f90a3275d5713751b3691dc4866831c746390e1784357a42285645d653ea71bf "$source/mingw-w64-libraries/winpthreads/src/thread.c" | sha256sum --check --strict
 mkdir "$work/build"
 cd "$work/build"
 export PATH="$llvm/bin:$PATH"
