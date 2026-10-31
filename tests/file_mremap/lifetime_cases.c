@@ -216,6 +216,9 @@ int main(int argc,char** argv) {
       if(FileAliasFailureMetric(5)!=0)failed=1;
       failed|=ledger("protect_after",a,size,page);
       if(readable(a+page)||!readable(a)||!readable(a+2*page))failed=1;
+      /* A dead page elsewhere in the SAME view must not reject a live-only range. */
+      failed|=protect_result("live_survivor",a+2*page,page,PROT_READ,0,0);
+      failed|=ledger("protect_survivor",a,size,page);
     } else if(!strcmp(mode,"protect_partial")) {
       FileAliasFailureReset(5);FileAliasFailureNth(2);
       failed|=protect_result("partial_failure",a,page*3,PROT_READ,-1,EACCES);
