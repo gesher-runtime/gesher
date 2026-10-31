@@ -17,6 +17,7 @@ FAULTS=(('fault_alias',1,1),('fault_alias',4,1),('fault_alias',4,5),
         ('fault_prefix',5,1),('fault_suffix',5,1),('fault_partial',5,2),
         ('fault_sourcefirst',7,1),('fault_aliasfirst',10,1),
         ('fault_alias',11,1),('fault_finalclose',3,1))
+PROTECTION_CASES=('protect_dead','protect_mixed','protect_partial','protect_surgery')
 RETAINED=[]
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def atomic(path,value):
@@ -47,7 +48,7 @@ class Actor:
                         if len(line)>16384:self.record['overflow']=True;return
                         try:
                             row=decode(line)
-                            if not isinstance(row,dict) or row.get('event') not in {'ready','peer_complete','query','ledger','failedstate_guard','failedstate_unchanged','fault_result','prefix_cleanup','containment','injection','complete','prerequisite','middle_result'}:raise ValueError('unknown/nonobject actor event')
+                            if not isinstance(row,dict) or row.get('event') not in {'ready','peer_complete','query','ledger','failedstate_guard','failedstate_unchanged','fault_result','prefix_cleanup','containment','injection','complete','prerequisite','middle_result','protection_result'}:raise ValueError('unknown/nonobject actor event')
                             self.record['event_rows'].append(row);self.events.put_nowait(row)
                         except (ValueError,queue.Full):self.record['bad_json']=True
                     if len(pending)>16384:self.record['overflow']=True;return
@@ -99,7 +100,7 @@ def run_lifetime(prefix,case,environment=None,fault=None):
     result=dict(case=case,verdict='FAILED',actors=[],cleanup=False)
     temporary=None;actors=[];deadline=time.monotonic()+45
     try:
-        assert case in CASES if fault is None else (case,*fault) in FAULTS
+        assert case in CASES+PROTECTION_CASES if fault is None else (case,*fault) in FAULTS
         temporary=tempfile.TemporaryDirectory(prefix='file-mremap-case-');cwd=Path(temporary.name);nonce=uuid.uuid4().hex
         environment=dict(environment or {k:v for k,v in os.environ.items()if k in ('SystemRoot','WINDIR','PATH','TEMP','TMP','GITHUB_ACTIONS')})
         environment['TMPDIR']=str(cwd).replace('\\','/')
@@ -125,6 +126,7 @@ def run_lifetime(prefix,case,environment=None,fault=None):
         if fault is None:
             assert done['failed']==done['cleanup_failures']==0
             assert done['resources_before']==done['resources_after']>=0
+            if case in PROTECTION_CASES:result['protection_observation']=verify_protection(parent.record,case)
             result['verdict']='PASS'
         else:
             result['fault']=dict(mode=fault[0],nth=fault[1])
@@ -206,6 +208,52 @@ def verify_fault(actor,case,fault):
     if(case,mode,nth)==('fault_middle',5,2):assert one('prefix_cleanup')['second_readable']==1
     return dict(owner_failure=failed,injection_reached=metrics[reached],injected=metrics[injected],ledger_rows=len(ledger))
 
+def verify_protection(actor,case):
+    """Independent data oracle: never creates an actor or native resource."""
+    assert case in PROTECTION_CASES
+    rows=actor['event_rows'];ledger=[r for r in rows if r.get('event')=='ledger']
+    expected_phases={'protect_retired','after_cleanup'}
+    if case in ('protect_dead','protect_mixed'):expected_phases|={'protect_before','protect_after'}
+    elif case=='protect_partial':expected_phases|={'protect_partial'}
+    else:expected_phases|={'protect_changed','protect_surgery','protect_surgery_updated','protect_post_surgery_dead'}
+    assert {r['phase']for r in ledger}==expected_phases
+    byphase={phase:[r for r in ledger if r['phase']==phase]for phase in expected_phases}
+    for phase,pages in byphase.items():
+        assert [r['page']for r in pages]==list(range(5))
+        assert all(r['query_ok']==1 and r['owner_failure']==r['failed_owners']==0 for r in pages)
+        if phase in ('protect_retired','after_cleanup'):
+            assert all(r['present']==0 and r['state']==0x10000 for r in pages)
+            continue
+        for r in pages:
+            assert r['present']==1 and r['state']==0x1000
+            if r['kind']==1:
+                assert r['type']==0x40000 and r['owner_state']==1
+                assert r['owner_refs']==r['owner_views']+r['owner_backing_pins']>0
+                assert r['ledger_protection']==r['protection']
+                siblings=[v for v in pages if v['kind']==1 and v['page']-v['region_page']==r['page']-r['region_page']]
+                assert sum(v['live']for v in siblings)==r['live_pages']
+            else:assert case=='protect_surgery'and r['page']==2 and r['kind']==0 and r['type']==0x20000 and r['live']==1
+            want=4;live=1
+            if case in ('protect_dead','protect_mixed')and r['page']==1:want=1;live=0
+            if case=='protect_partial'and r['page']==0:want=2
+            if case=='protect_surgery':
+                want=2 if r['page']<3 else 4
+                if phase!='protect_changed'and r['page']==2:want=4
+                if phase in ('protect_surgery_updated','protect_post_surgery_dead')and r['page']in (2,3):want=2
+                if phase=='protect_post_surgery_dead'and r['page']==0:want=1;live=0
+            assert (r['protection'],r['live'])==(want,live)
+    operations=[r for r in rows if r.get('event')=='protection_result']
+    wanted={'protect_dead':[('unaligned',-1,22,0,0),('length_overflow',-1,22,0,0),('dead',-1,12,0,0)],'protect_mixed':[('mixed',-1,12,0,0)],
+            'protect_partial':[('partial_failure',-1,13,2,1)],
+            'protect_surgery':[('whole_read',0,None,5,0),('suffix_write',0,None,2,0),('post_surgery_live',0,None,2,0),('post_surgery_mixed',-1,12,0,0)]}[case]
+    assert len(operations)==len(wanted)
+    for row,(step,status,error,calls,injected)in zip(operations,wanted):
+        assert row['step']==step and row['result']==status
+        if error is not None:assert row['errno']==error
+        assert row['protect_after']-row['protect_before']==calls
+        assert row['injected_after']-row['injected_before']==injected
+    return dict(case=case,ledger_rows=len(ledger),operations=operations,owner_failure=False)
+
 def receipt(value,expected,role):
     assert value['role']==role and value['conclusion']=='success'
     assert value['context']==expected
@@ -269,7 +317,9 @@ def main():
                 failure_fixture=bound_file(entry['failure_fixture'],context,'file-mremap-failure-fixture-nativehost')
                 for case,mode,nth in FAULTS:
                     actual=run_lifetime([failure_fixture],case,environment,(mode,nth));actual['role']=role;record['results'].append(actual)
-        if len(record['results'])==len(CASES)*3+len(FAULTS) and all(v['verdict']=='PASS'and v['cleanup']for v in record['results']):record['verdict']='PASS'
+                for case in PROTECTION_CASES:
+                    actual=run_lifetime([failure_fixture],case,environment);actual['role']=role;record['results'].append(actual)
+        if len(record['results'])==len(CASES)*3+len(FAULTS)+len(PROTECTION_CASES) and all(v['verdict']=='PASS'and v['cleanup']for v in record['results']):record['verdict']='PASS'
     except Exception as error:record['error']=repr(error)
     finally:atomic(args.output,record)
     return 0 if record['verdict']=='PASS'else 1

@@ -1,3 +1,66 @@
+# Current logical-hole mprotect correction SOURCE checkpoint
+
+The independent9c7 blocker is corrected in source, not yet compiled or independently
+accepted. Under State::lock, mprotect validates alignment and nonwrapping rounded
+range, then preflights the ENTIRE registered overlap before any alias invalidation
+or OS protection change. Any known logical dead page or placeholder makes both
+dead-only and mixed live/dead requests fail ENOMEM. This includes known registry
+holes regardless of original mapping kind; healthy live pages retain their normal
+behavior. Unregistered stack/reserved memory retains the old Win32 commit fallback.
+The preflight allocates nothing and rejects malformed promoted ledgers EIO with
+failed containment; it never invents resurrection.
+
+PrepareAlias now stages BOTH alias and original source full protection vectors in
+the caught helper before any OS mapping/publication. Source promotion transfers
+that detached vector allocation-free. Existing real operator-new budgets exercise
+these extra allocations and output their actual counts/injection/release results;
+there is no fixed count hiding the extra work. Source length can exceed alias
+length; the dedicated helper control prepares a five-page source/one-page alias.
+
+Promoted mprotect applies one actual page at a time through the fixed production
+Win32 route (target-only adapter in failure builds). Each successful page updates
+its already allocated protection ledger immediately; live bits/counts and owner
+refs stay unchanged. A later VirtualProtect failure returns EACCES with earlier
+changes truthful, failed/later pages untouched. No atomic rollback is claimed and
+an ordinary OS protection failure alone does not poison a consistent owner. The
+legacy healthy callback remains direct Win32 including reserved-memory commit.
+
+Four new target-only real-child cases supplement the unchanged18 fault cells:
+known dead-page + alignment/length overflow rejection; mixed live/dead rejection;
+second-call protection failure with first page changed/later pages unchanged;
+rounded-length mprotect -> middle split/surgery -> successful mixed live protection
+across a private replacement -> prefix logical retirement -> rejected dead/live
+mprotect -> full retirement. They retain per-step actual return/errno/protect-call
+and injected counts, real VirtualQuery/live/protection/owner snapshots, two-way
+owned peer backing/file checks and normal kernel/IO/resource cleanup obligations.
+The pure oracle verifies all expected page states/ledger equality/census/counts;
+its synthetic mutants run no native code. The original18/11 remain mandatory;
+persistent close/rollback failures are still nonzero FAILED_CONTAINMENT.
+
+Lock/reachability review: mprotect, mmap/mremap, munmap, mlock and allocating madvise
+share State lock; preflight/page updates call no public registry API, and direct
+Win32 query/protection/commit functions do not reenter it. The allocation helper
+runs only in pre-map preparation, not mprotect. mlock only invalidates new alias
+admission and changes lock state; no liveness resurrection. madvise's mapped-page
+write branch skips PAGE_NOACCESS and does not restore protection. msync/mincore
+query or flush existing physical mappings without making a logical dead page live;
+full Linux logical-hole query/advice parity remains an explicit old compatibility
+gap, not qualified by this correction. Direct external Win32 mutations/fd-table
+races remain outside the coordinated mapping-owner proof. Subsequent split/surgery
+queries actual desired protections and retains complete prepared metadata; ordinary
+mprotect conservatively keeps shared_alias disabled as before.
+
+This is saved SOURCE for a DIFFERENT complete21-path+delta peer, not a positive
+full-source review or native result. Native compiler/helper/STL/allocator/object
+commands and all actual host/guest/reference results remain CI-only/unexecuted.
+No new workflow/policy/producer/caller or supplier-bridge files are added. The
+separate direct-three-object helper proposal must avoid root implicit gesher_posix
+and forced anchors; it cannot claim selected production/full A. Full current runtime,
+translator, both guest ABIs, Linux reference, both Windows and original release/
+hardware requirements continue after this correction and architecture review.
+
+Historical checkpoints follow; superseded blocker statements remain historical.
+
 # Current adverse matrix and pure receipt SOURCE checkpoint
 
 SOURCE WIP, not complete Slice A freeze or execution readiness. New dedicated

@@ -137,6 +137,13 @@ static int failure_state(unsigned char* source,unsigned char* alias,size_t size,
   printf("{\"event\":\"failedstate_unchanged\",\"ledger_and_backend_unchanged\":%d,\"resources_before\":%ld,\"resources_after\":%ld}\n",unchanged,handles,handles_after);
   return bad||!unchanged;
 }
+static int protect_result(const char* step,unsigned char* at,size_t length,int prot,int wanted,int wanted_errno) {
+  int before=FileAliasFailureMetric(5),injected=FileAliasFailureMetric(12);
+  errno=0;int status=mprotect(at,length,prot),error=errno;
+  int after=FileAliasFailureMetric(5),injected_after=FileAliasFailureMetric(12);
+  printf("{\"event\":\"protection_result\",\"step\":\"%s\",\"result\":%d,\"errno\":%d,\"protect_before\":%d,\"protect_after\":%d,\"injected_before\":%d,\"injected_after\":%d}\n",step,status,error,before,after,injected,injected_after);
+  return status!=wanted || (wanted && error!=wanted_errno);
+}
 static int readable(unsigned char* at) {
   MEMORY_BASIC_INFORMATION q;return VirtualQuery(at,&q,sizeof(q))==sizeof(q)&&q.State==MEM_COMMIT&&q.Protect!=PAGE_NOACCESS&&!(q.Protect&PAGE_GUARD);
 }
@@ -175,7 +182,12 @@ int main(int argc,char** argv) {
     return failed||cleanup||before<0||after!=before;
   }
   int adverse=!strncmp(mode,"fault_",6);
-  if(!adverse && strcmp(mode,"source_first")&&strcmp(mode,"alias_first")&&strcmp(mode,"partial")&&strcmp(mode,"middle"))return 2;
+#ifdef GESHER_FILE_MREMAP_FAILURE_TEST
+  int protection_case=!strncmp(mode,"protect_",8);
+#else
+  int protection_case=0;
+#endif
+  if(!adverse && !protection_case && strcmp(mode,"source_first")&&strcmp(mode,"alias_first")&&strcmp(mode,"partial")&&strcmp(mode,"middle"))return 2;
   fd=open(name,O_CREAT|O_EXCL|O_RDWR,0600);if(fd<0)return 2;
   if(ftruncate(fd,(off_t)size))failed=1;
   if(!failed)a=mmap(NULL,size,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
@@ -190,6 +202,55 @@ int main(int argc,char** argv) {
   if(!all_bytes(a,size)||!all_bytes(b,size)||!all_bytes(c,size))failed=1;
   query("before",a,size,page);
 #ifdef GESHER_FILE_MREMAP_FAILURE_TEST
+  if(protection_case) {
+    if(!strcmp(mode,"protect_dead")||!strcmp(mode,"protect_mixed")) {
+      if(munmap(a+page,page))failed=1;
+      failed|=ledger("protect_before",a,size,page);
+      FileAliasFailureReset(0);FileAliasFailureNth(1);
+      if(!strcmp(mode,"protect_dead")) {
+        failed|=protect_result("unaligned",a+1,page,PROT_READ,-1,EINVAL);
+        failed|=protect_result("length_overflow",a,SIZE_MAX,PROT_READ,-1,EINVAL);
+        failed|=protect_result("dead",a+page,page,PROT_READ|PROT_WRITE,-1,ENOMEM);
+      }
+      else failed|=protect_result("mixed",a,page*3,PROT_READ,-1,ENOMEM);
+      if(FileAliasFailureMetric(5)!=0)failed=1;
+      failed|=ledger("protect_after",a,size,page);
+      if(readable(a+page)||!readable(a)||!readable(a+2*page))failed=1;
+    } else if(!strcmp(mode,"protect_partial")) {
+      FileAliasFailureReset(5);FileAliasFailureNth(2);
+      failed|=protect_result("partial_failure",a,page*3,PROT_READ,-1,EACCES);
+      if(FileAliasFailureMetric(5)!=2||FileAliasFailureMetric(12)!=1)failed=1;
+      failed|=ledger("protect_partial",a,size,page);
+      /* Harmless one-shot protection failure does not poison a sound owner;
+         record it before disabling injection for explicit native cleanup. */
+      FileAliasPage observed[5];
+      if(FileAliasRegistrySnapshot(a,size,observed,5)!=5||observed[0].owner_failure)failed=1;
+      if(!readable(a)||!readable(a+page)||a[0]!=expected(0)||a[page]!=expected(page))failed=1;
+      FileAliasFailureReset(0);
+    } else if(!strcmp(mode,"protect_surgery")) {
+      FileAliasFailureReset(0);FileAliasFailureNth(1);
+      failed|=protect_result("whole_read",a,size-1,PROT_READ,0,0);
+      failed|=protect_result("suffix_write",a+3*page,page*2,PROT_READ|PROT_WRITE,0,0);
+      failed|=ledger("protect_changed",a,size,page);
+      void* middle=mmap(a+2*page,page,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);
+      if(middle==MAP_FAILED){failed=1;goto done;}
+      if(!readable(a)||!readable(a+page)||!readable(a+3*page)||a[0]!=expected(0)||a[page]!=expected(page)||a[3*page]!=expected(3*page))failed=1;
+      if(((unsigned char*)middle)[0]!=0||!all_bytes(b,size)||!all_bytes(c,size))failed=1;
+      failed|=ledger("protect_surgery",a,size,page);
+      failed|=protect_result("post_surgery_live",a+page,page*3,PROT_READ,0,0);
+      failed|=ledger("protect_surgery_updated",a,size,page);
+      if(munmap(a,page))failed=1;
+      /* The now-dead prefix cannot become accessible through mixed mprotect. */
+      failed|=protect_result("post_surgery_mixed",a,page*2,PROT_READ,-1,ENOMEM);
+      if(readable(a)||!readable(a+page)||a[page]!=expected(page))failed=1;
+      failed|=ledger("protect_post_surgery_dead",a,size,page);
+    } else {failed=1;goto done;}
+    if(!all_bytes(b,size)||!all_bytes(c,size))failed=1;
+    if(munmap(a,size))++cleanup;
+    failed|=ledger("protect_retired",a,size,page);
+    a=MAP_FAILED;
+    goto done;
+  }
   if(adverse && argc!=6){failed=1;goto done;}
   if(argc==6){FileAliasFailureReset(atoi(argv[4]));FileAliasFailureNth(atoi(argv[5]));}
   if(adverse) {
@@ -282,7 +343,7 @@ done:
   if(b!=MAP_FAILED&&munmap(b,size))++cleanup;
   if(c!=MAP_FAILED&&munmap(c,size))++cleanup;
 #ifdef GESHER_FILE_MREMAP_FAILURE_TEST
-  if(adverse && observed_source!=MAP_FAILED)failed|=ledger("after_cleanup",observed_source,size,page);
+  if((adverse||protection_case) && observed_source!=MAP_FAILED)failed|=ledger("after_cleanup",observed_source,size,page);
 #else
   (void)observed_source;
 #endif
