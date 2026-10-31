@@ -15,5 +15,6 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaises(AssertionError):m.producer_job(bad,c)
         dup={'total_count':2,'jobs':[row,row]}
         with self.assertRaises(AssertionError):m.producer_job(dup,c)
+        self.assertEqual(m.manifest_context(c,'b'*40),{'repository':'gesher-runtime/gesher','repository_id':'1426153186','source':'a'*40,'run':'12','attempt':'1','guard':'b'*40})
 
 if __name__=='__main__':unittest.main()
