@@ -1,0 +1,78 @@
+name: pthread-first-link-component
+on:
+  push:
+    branches: [wip/pthread-first-link]
+    paths: [.github/workflows/pthread-first-link-component.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+env:
+  LLVM_MINGW_TAG: '20261006'
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  source_authority:
+    # DRAFT: replaced with the separately frozen immutable policy commit.
+    uses: gesher-runtime/gesher/.github/workflows/pthread-first-link-trusted-source.yml@0000000000000000000000000000000000000000
+  build:
+    needs: [source_authority]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GESHER_HOST_PTHREAD_SELECTION: selected-minimum
+      GESHER_HOST_PTHREAD_CALLER: pthread-first-link/build
+      GESHER_FIRST_LINK_AUTHORIZED_SOURCE: ${{ needs.source_authority.outputs.source }}
+      GESHER_FIRST_LINK_POLICY_REF: ${{ needs.source_authority.outputs.policy_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check exact focused source caller before any compiler preparation
+        run: |
+          python3 tools/toolchain/first_link_context.py --verify
+          python3 tools/toolchain/test_first_link_context.py
+      - uses: ./.github/actions/setup-build
+        id: toolchain
+        with:
+          ccache-key: pthread-first-link
+          pthread-supplier: selected-minimum
+          pthread-caller: pthread-first-link/build
+      - name: Build actual small outputs and separate response/nonlinked diagnostics ONLY
+        env:
+          GESHER_SELECTED_PTHREAD_RECEIPT: ${{ steps.toolchain.outputs.selected_receipt }}
+          GESHER_SELECTED_PTHREAD_RECEIPT_SHA256: ${{ steps.toolchain.outputs.selected_receipt_sha256 }}
+        run: python3 tools/toolchain/first_link.py build
+      - name: Upload exact FIRST_LINK_ONLY outputs and portable evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: pthread-first-link-only
+          path: dist-first-link-only/
+          if-no-files-found: error
+          retention-days: 7
+  portable:
+    needs: [source_authority, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GESHER_HOST_PTHREAD_SELECTION: selected-minimum
+      GESHER_HOST_PTHREAD_CALLER: pthread-first-link/portable
+      GESHER_FIRST_LINK_AUTHORIZED_SOURCE: ${{ needs.source_authority.outputs.source }}
+      GESHER_FIRST_LINK_POLICY_REF: ${{ needs.source_authority.outputs.policy_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require exact successful current build producer and artifact
+        shell: pwsh
+        run: python tools/ci/artifact_receipt.py --name pthread-first-link-only --producer build --destination ci-suppliers/first-link-only
+      - name: Verify actual selected small-output receipts without executing native outputs
+        shell: pwsh
+        run: python tools/toolchain/first_link.py verify

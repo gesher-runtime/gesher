@@ -16,13 +16,12 @@ TUPLE = dict(repository=REPOSITORY, repository_id=REPOSITORY_ID, ref='refs/heads
              source_authority='dedicated immutable reusable policy + PTHREAD_FIRST_LINK_CALLER_COMMIT')
 
 
-def context(env, selection):
+def common_context(env, selection):
     assert selection == 'selected-minimum' and env.get('GESHER_HOST_PTHREAD_SELECTION') == selection
     assert env.get('GITHUB_ACTIONS') == 'true'
     for key, expected in (('GITHUB_REPOSITORY', REPOSITORY), ('GITHUB_REPOSITORY_ID', REPOSITORY_ID),
                           ('GITHUB_REF', TUPLE['ref']), ('GITHUB_WORKFLOW', WORKFLOW),
-                          ('GITHUB_WORKFLOW_REF', TUPLE['workflow_ref']), ('GITHUB_JOB', 'build'),
-                          ('GESHER_HOST_PTHREAD_CALLER', CALLER)):
+                          ('GITHUB_WORKFLOW_REF', TUPLE['workflow_ref'])):
         assert env.get(key) == expected, ('Wrong focused caller field', key)
     source = env['GITHUB_SHA']
     assert re.fullmatch('[0-9a-f]{40}', source)
@@ -35,6 +34,18 @@ def context(env, selection):
     assert re.fullmatch(re.escape(REPOSITORY+'/'+POLICY_PATH+'@')+'[0-9a-f]{40}', policy)
     return {k: env[k] for k in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT',
                                'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID')}
+
+
+def context(env, selection):
+    result=common_context(env,selection)
+    assert env.get('GITHUB_JOB')=='build' and env.get('GESHER_HOST_PTHREAD_CALLER')==CALLER
+    return result
+
+
+def consumer_context(env, selection):
+    result=common_context(env,selection)
+    assert env.get('GITHUB_JOB')=='portable' and env.get('GESHER_HOST_PTHREAD_CALLER')=='pthread-first-link/portable'
+    return result
 
 
 def descriptor(env):
