@@ -15,6 +15,17 @@ def main():
     context=focused.context(env,'selected-minimum')
     assert factory.caller(env,'selected-minimum')==context
     focused.check_descriptor(focused.descriptor(env),context)
+    role_negatives=0
+    for job,caller,check in (
+        ('native3-locks-reference','pthread-native-off-receiver/reference',focused.reference_context),
+        ('native3-locks-regression','pthread-native-off-receiver/receiver',lambda e:focused.consumer_context(e,'selected-minimum'))):
+        role=dict(env,GITHUB_JOB=job,GESHER_HOST_PTHREAD_CALLER=caller)
+        assert check(role)==context
+        for key,value in [('GITHUB_JOB','build'),('GESHER_HOST_PTHREAD_CALLER',focused.CALLER)]:
+            bad=dict(role);bad[key]=value
+            try:check(bad)
+            except AssertionError:role_negatives+=1
+            else:raise AssertionError('Role context crossed: '+key)
     bad_values=dict(GITHUB_ACTIONS='false',GITHUB_REPOSITORY='other/gesher',GITHUB_REPOSITORY_ID='1',
                     GITHUB_REF='refs/heads/main',GITHUB_WORKFLOW='ci',GITHUB_WORKFLOW_REF=focused.REPOSITORY+'/.github/workflows/ci.yml@'+focused.TUPLE['ref'],
                     GITHUB_JOB='compile',GESHER_HOST_PTHREAD_CALLER='ci/build',GESHER_HOST_PTHREAD_SELECTION='publisher-control',
@@ -34,7 +45,7 @@ def main():
     assert factory.recipe()['caller']=='ci/build'
     assert factory.recipe(focused.CALLER)['native_off_receiver_caller']==focused.TUPLE
     assert factory.fingerprint(factory.recipe())!=factory.fingerprint(factory.recipe(focused.CALLER))
-    print('PASS focused exact path/ref/name/job/source/policy/actor authority:18 env+7descriptor negatives; explicit recipe distinction; native/network0')
+    print('PASS focused exact path/ref/name/job/source/policy/actor authority:18 env+7descriptor+4reference/receiver negatives; explicit recipe distinction; native/network0')
 
 
 if __name__=='__main__':main()

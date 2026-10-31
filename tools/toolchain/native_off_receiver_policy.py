@@ -10,6 +10,9 @@ FULL_TRUST='.github/workflows/net-combined-dns-trusted-source.yml'
 FULL_BLOB='419783115876ababb9278e04d6b6092e02d2caf3'
 CALLER='.github/workflows/pthread-native-off-receiver-component.yml'
 TRUST='.github/workflows/pthread-native-off-receiver-trusted-source.yml'
+REPO='gesher-runtime/gesher';RID='1426153186'
+REF='refs/heads/wip/pthread-native-off-receiver';NAME='pthread-native-off-receiver-component'
+VARIABLE='PTHREAD_NATIVE_OFF_RECEIVER_CALLER_COMMIT'
 CHANGED={CALLER,TRUST,'tools/toolchain/native_off_receiver_context.py',
  'tools/toolchain/native_off_receiver.py','tools/toolchain/native_off_receiver_policy.py',
  'tools/toolchain/test_native_off_receiver_context.py','tools/toolchain/test_native_off_receiver_live.py',
@@ -19,10 +22,63 @@ CHANGED={CALLER,TRUST,'tools/toolchain/native_off_receiver_context.py',
 
 def git(*args):return subprocess.check_output(['git',*args],cwd=ROOT)
 def digest(raw):return hashlib.sha256(raw).hexdigest()
+def inventory(commit):
+    # This additive envelope includes documentation too. Historic full guards
+    # retain their original non-document inventory and are replayed unchanged.
+    result={}
+    for row in filter(None,git('ls-tree','-r','-z',commit).split(b'\0')):
+        metadata,name=row.split(b'\t',1);mode,kind,blob=metadata.decode().split()
+        assert kind=='blob' and mode in ('100644','100755'), 'Linked source: '+name.decode()
+        result[name.decode()]=(mode,blob)
+    return result
 def normalized_workflow(raw):
     pattern=rb'(uses: gesher-runtime/gesher/\.github/workflows/pthread-native-off-receiver-trusted-source\.yml@)[0-9a-f]{40}'
     assert len(re.findall(pattern,raw))==1
     return re.sub(pattern,lambda m:m[1]+b'IMMUTABLE_POLICY_PIN',raw)
+
+def authority_env(env):
+    source=env.get(VARIABLE,'')
+    assert re.fullmatch('[0-9a-f]{40}',source)
+    values={'GITHUB_ACTIONS':'true','GITHUB_REPOSITORY':REPO,'GITHUB_REPOSITORY_ID':RID,
+            'GITHUB_REF':REF,'GITHUB_WORKFLOW':NAME,'GITHUB_JOB':'verify',
+            'GITHUB_WORKFLOW_REF':REPO+'/'+CALLER+'@'+REF,
+            'GITHUB_SHA':source,'GITHUB_WORKFLOW_SHA':source,
+            'GITHUB_ACTOR':'palmoni5','GITHUB_TRIGGERING_ACTOR':'palmoni5'}
+    assert all(env.get(k)==v for k,v in values.items())
+    assert env.get('GITHUB_EVENT_NAME')in ('push','workflow_dispatch')
+    assert all(re.fullmatch('[1-9][0-9]*',env.get(k,''))for k in ('GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT'))
+    return source
+
+def authority_run(env,run,policy):
+    source=authority_env(env)
+    assert str(run['id'])==env['GITHUB_RUN_ID'] and str(run['run_attempt'])==env['GITHUB_RUN_ATTEMPT']
+    assert run['head_sha']==source and run['head_branch']==REF.removeprefix('refs/heads/')
+    assert run['path']==CALLER and run['name']==NAME and run['event']==env['GITHUB_EVENT_NAME']
+    assert run['repository']['full_name']==run['head_repository']['full_name']==REPO
+    assert str(run['repository']['id'])==str(run['head_repository']['id'])==RID
+    assert run['actor']['login']==run['triggering_actor']['login']=='palmoni5'
+    refs=run['referenced_workflows']
+    assert len(refs)==1 and refs[0]['path']==policy and refs[0]['sha']==policy.rsplit('@',1)[1]
+
+def frozen_candidate(expected,source):
+    assert git('rev-parse','HEAD').decode().strip()==source
+    assert not git('status','--porcelain','--untracked-files=all')
+    assert set(expected)==CHANGED-{TRUST}
+    assert set(git('diff','--name-only',BASE,source).decode().splitlines())==CHANGED
+    workflow=(ROOT/CALLER).read_bytes()
+    pins=re.findall(rb'uses: '+re.escape((REPO+'/'+TRUST+'@').encode())+rb'([0-9a-f]{40})',workflow)
+    assert len(pins)==1 and pins[0]!=b'0'*40
+    policy_commit=pins[0].decode();policy_ref=REPO+'/'+TRUST+'@'+policy_commit
+    assert git('merge-base','--is-ancestor',policy_commit,source)==b''
+    assert (ROOT/TRUST).read_bytes()==git('show',policy_commit+':'+TRUST)
+    for path,wanted in expected.items():
+        raw=(ROOT/path).read_bytes()
+        if path==CALLER:raw=normalized_workflow(raw)
+        actual=digest(raw)
+        print('NATIVE_OFF_POLICY_FILE '+json.dumps(dict(path=path,expected=wanted,actual=actual),sort_keys=True),flush=True)
+        assert actual==wanted,'Unreviewed candidate leaf: '+path
+    source_proof()
+    return policy_ref
 
 def frozen_history():
     raw=git('show',FULL_GUARD+':'+FULL_TRUST)
@@ -66,7 +122,7 @@ def frozen_history():
 def source_proof():
     assert not git('status','--porcelain','--untracked-files=all')
     assert set(git('diff','--name-only',BASE,'HEAD').decode().splitlines())==CHANGED
-    full=frozen_history();expected=full['inventory'](BASE);current=full['inventory'](git('rev-parse','HEAD').decode().strip())
+    full=frozen_history();expected=inventory(BASE);current=inventory(git('rev-parse','HEAD').decode().strip())
     for path in CHANGED:expected[path]=current[path]
     full['verify_tree'](current,expected);full['verify_checkout'](expected)
     for path in CHANGED:
