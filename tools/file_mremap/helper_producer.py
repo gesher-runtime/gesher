@@ -223,7 +223,19 @@ def current_job(auth,name):
     A.require(len(rows)==1,'current named role');row=rows[0]
     A.require(row['status']=='in_progress'and row['head_sha']==current['source']and str(row['run_id'])==current['run']and str(row['run_attempt'])==current['attempt'],'current active role');return row
 
-def emit_early_basis(auth,job,tc,root,build,configs,argv,expanded,streams,receipts):
+def read_controlled_config(auth,job,tc,root,build):
+    """Only two already-inventoried supplier text files, bounded before decode."""
+    A.require(os.environ.get('GITHUB_ACTIONS')=='true'and os.name=='posix','supplier config reads Linux CI only')
+    value={'schema':A.CONFIG_POLICY,'context':auth['context'],'guard':auth['authority']['guard'],'producer_id':job['id'],'roots':{'supplier':str(tc),'source':str(root),'build':str(build)},'files':{}}
+    for role,(name,expected,pin)in A.CONFIG_FILES.items():
+        path=tc/'bin'/name
+        A.require(path.resolve().is_relative_to(tc)and path.resolve()==path,'exact supplier config path')
+        with path.open('rb')as stream:raw=stream.read(len(expected)+1)
+        A.require(raw==expected and A.digest(raw)==pin,'bounded exact supplier configuration')
+        value['files'][role]={'path':str(path),'text':raw.decode('ascii'),'bytes':len(raw),'sha256':pin}
+    return A.validate_controlled_config(value,auth['context'],auth['authority']['guard'],job['id'])
+
+def emit_early_basis(auth,job,tc,root,build,configs,argv,expanded,streams,receipts,controlled):
     """Only already obtained metadata; no tool/file/API acquisition here."""
     context=auth['context'];authority=auth['authority']
     A.require(ARCHIVE_SHA==A.EARLY_ARCHIVE_PIN,'early reviewed archive pin')
@@ -232,10 +244,12 @@ def emit_early_basis(auth,job,tc,root,build,configs,argv,expanded,streams,receip
     A.require(job['name']=='helper-producer'and job['status']=='in_progress'and job['head_sha']==context['source']and str(job['run_id'])==context['run']and str(job['run_attempt'])==context['attempt']and type(job['id'])is int and job['id']>0,'early current producer')
     tc,root,build=(p.resolve()for p in (tc,root,build))
     driver=str(tc/'bin/x86_64-w64-mingw32-clang++')
-    expected=[driver,*COMMON,'-fexceptions','-MD','-MF',str(build/'helper.d'),'-c',str(root/A.TUS['helper.obj']),'-o',str(build/'helper.obj')]
+    A.validate_controlled_config(controlled,context,authority['guard'],job['id'])
+    A.require(controlled['roots']=={'supplier':str(tc),'source':str(root),'build':str(build)},'early controlled current roots')
+    expected=A.compile_recipe(controlled,'helper.obj')
     A.require(argv==expected,'early exact unchanged compile argv')
     A.require(set(streams)=={'target','version','expansion'}and set(receipts)==set(streams),'early exact stream schema')
-    expected_calls={'target':[driver,'--no-default-config','-dumpmachine'],'version':[driver,'--version'],'expansion':[driver,'-###',*argv[1:]]}
+    expected_calls={'target':[driver,*A.config_options(controlled),'-dumpmachine'],'version':[driver,*A.config_options(controlled),'--version'],'expansion':[driver,'-###',*argv[1:]]}
     text={}
     for name,cap in (('target',4096),('version',65536),('expansion',262144)):
         A.require(len(streams[name])==2 and len(receipts[name])==1,'early complete streams/receipt')
@@ -254,11 +268,10 @@ def emit_early_basis(auth,job,tc,root,build,configs,argv,expanded,streams,receip
         A.require(set(row)=={'path','bytes','sha256'}and type(row['path'])is str and len(row['path'])<=4096 and Path(row['path']).is_absolute()and Path(row['path']).resolve().is_relative_to(tc)and Path(row['path']).suffix=='.cfg'and row['path']not in seen,'early confined config')
         A.require(type(row['bytes'])is int and 0<=row['bytes']<=A.FILE_CAP and re.fullmatch('[0-9a-f]{64}',row['sha256']),'early config identity');seen.add(row['path'])
     A.require(0<len(expanded)<=4096 and all(type(r)is list and 0<len(r)<=4096 and all(type(x)is str and len(x)<=4096 for x in r)for r in expanded),'early parsed command bounds')
-    cc1=[r for r in expanded if '-cc1'in r]
-    A.require(len(cc1)==1 and '-fexceptions'in cc1[0]and '-fcxx-exceptions'in cc1[0],'early unique effective cc1')
+    cc1=A.validate_cpp_expansion(expanded,controlled,'helper.obj')
     # Reuse exactly the existing confinement parser on already obtained bytes.
     A.require(expanded==parse_driver(b''.join(streams['expansion']),tc,root,build),'early parsed/raw confinement')
-    value={'schema':'EARLY_COMPILER_BASIS_V1','context':context,'guard':authority['guard'],'caller_authority':authority['caller_authority'],'producer_id':job['id'],'archive_sha256_source_pin':ARCHIVE_SHA,'linker_sha256_checked_pin':LINKER_SHA,'roots':{'supplier':str(tc),'source':str(root),'build':str(build)},'compile_argv':argv,'tool_receipts':receipts,'streams':text,'configs':configs,'config_selection':'UNPROVEN_INVENTORY_ONLY','parsed_commands':expanded,'unique_cc1':cc1[0],'confinement_validated':True,'effective_exceptions_validated':True,'qualification':False}
+    value={'schema':'EARLY_COMPILER_BASIS_V2','context':context,'guard':authority['guard'],'caller_authority':authority['caller_authority'],'producer_id':job['id'],'archive_sha256_source_pin':ARCHIVE_SHA,'linker_sha256_checked_pin':LINKER_SHA,'roots':{'supplier':str(tc),'source':str(root),'build':str(build)},'compile_argv':argv,'tool_receipts':receipts,'streams':text,'configs':configs,'config_selection':A.CONFIG_POLICY,'controlled_config':controlled,'parsed_commands':expanded,'unique_cc1':cc1,'confinement_validated':True,'effective_exceptions_validated':True,'qualification':False}
     A.require(len(A.canonical(value))<=A.FILE_CAP,'early combined record cap')
     emit('EARLY_COMPILER_BASIS',value)
 
@@ -273,24 +286,23 @@ def produce():
     tc=extract_toolchain(raw,work/'publisher').resolve();driver=tc/'bin/x86_64-w64-mingw32-clang++';linker=tc/'bin/ld.lld'
     A.require(sha(driver)==DRIVER_SHA and sha(linker)==LINKER_SHA,'pinned actual driver/linker');build=work/'build';build.mkdir()
     configs=[{'path':str(p),'sha256':sha(p),'bytes':p.stat().st_size}for p in sorted(tc.rglob('*.cfg'))if p.is_file()]
+    controlled=read_controlled_config(auth,job,tc,root,build)
     basis_receipts={name:[]for name in ('target','version','expansion')}
-    target_raw,target_err=tool([driver,'--no-default-config','-dumpmachine'],build,env,receipt=basis_receipts['target']);target=target_raw.decode().strip();A.require(target=='x86_64-w64-windows-gnu','actual target')
-    version,version_err=tool([driver,'--version'],build,env,receipt=basis_receipts['version']);A.require('23.1.3'in version.decode(),'actual compiler version')
+    target_raw,target_err=tool([driver,*A.config_options(controlled),'-dumpmachine'],build,env,receipt=basis_receipts['target']);target=target_raw.decode().strip();A.require(target=='x86_64-w64-windows-gnu','actual target')
+    version,version_err=tool([driver,*A.config_options(controlled),'--version'],build,env,receipt=basis_receipts['version']);A.require('23.1.3'in version.decode(),'actual compiler version')
     commands=[];deps={};objects={};expanded={};transcripts=[]
     for obj,source in A.TUS.items():
-        dep=obj.replace('.obj','.d');argv=[str(driver),*COMMON]
-        if obj!='caller.obj':argv.append('-fexceptions')
-        argv+=['-MD','-MF',str(build/dep),'-c',str(root/source),'-o',str(build/obj)]
+        dep=obj.replace('.obj','.d');argv=A.compile_recipe(controlled,obj)
         diagnostic=[argv[0],'-###',*argv[1:]];out,err=tool(diagnostic,build,env,receipt=basis_receipts['expansion']if obj=='helper.obj'else None);expanded[obj]=parse_driver(out+err,tc,root,build)
-        cc1=[r for r in expanded[obj]if '-cc1'in r];A.require(len(cc1)==1 and ('-fexceptions'in cc1[0])==(obj!='caller.obj') and ('-fcxx-exceptions'in cc1[0])==(obj!='caller.obj'),'actual effective exception mode')
-        if obj=='helper.obj':emit_early_basis(auth,job,tc,root,build,configs,argv,expanded[obj],{'target':(target_raw,target_err),'version':(version,version_err),'expansion':(out,err)},basis_receipts)
+        A.validate_cpp_expansion(expanded[obj],controlled,obj)
+        if obj=='helper.obj':emit_early_basis(auth,job,tc,root,build,configs,argv,expanded[obj],{'target':(target_raw,target_err),'version':(version,version_err),'expansion':(out,err)},basis_receipts,controlled)
         stdout,stderr=tool(argv,build,env);transcripts.append({'object':obj,'argv':argv,'driver_expansion':(out+err).decode(),'stdout':stdout.decode(),'stderr':stderr.decode()})
         rawdep=(build/dep).read_bytes();deps[obj]=dependency_paths(rawdep,root,tc,build)
         A.require(any(x['relative']==A.HEADER and x['origin']=='source'for x in deps[obj]),'current private header dependency')
         save(bundle/dep,rawdep);shutil.copyfile(build/obj,bundle/obj)
         objects[obj]={'source':source,'source_blob':A.SOURCE_BLOBS[obj],'source_sha256':sha(root/source),'header_blob':A.HEADER_BLOB,'header_sha256':sha(root/A.HEADER),'sha256':sha(build/obj),'exceptions':obj!='caller.obj','argv':argv,'expanded':expanded[obj]}
         commands.append({'output':obj,'file':source,'argv':argv,'expanded':expanded[obj]})
-    link=[str(driver),'--no-default-config',*(str(build/obj)for obj in A.TUS),'-static','-Wl,--verbose','-Wl,-Map,'+str(build/'helper-qualification.map'),'-o',str(build/'helper-qualification.exe')]
+    link=A.link_recipe(controlled)
     out,err=tool([link[0],'-###',*link[1:]],build,env);exp=parse_driver(out+err,tc,root,build)
     stdout,stderr=tool(link,build,env);trace=(stdout+stderr).decode();lower=trace.lower()+(out+err).decode().lower()
     A.require(not any(x in lower for x in ('libgesher_posix','binder','gesher_crash_reporter_anchor','gesher_signal_mailbox_anchor','--wrap','wrap=free','wrap=realloc')),'foreign implicit root dependencies')
@@ -304,7 +316,7 @@ def produce():
     A.require('PrepareAliasFromNoExceptions'in symbols['caller.obj']and 'PreparePunchRequestFromNoExceptions'in symbols['caller.obj'],'actual noexceptions caller functions')
     shutil.copyfile(build/'helper-qualification.exe',bundle/'helper-qualification.exe');shutil.copyfile(build/'helper-qualification.map',bundle/'helper-qualification.map')
     save(bundle/'helper-qualification.imports.txt',imports);save(bundle/'compile-commands.json',commands);save(bundle/'dependency-manifest.json',deps)
-    profile={'profile':A.PROFILE,'archive_name':ARCHIVE_NAME,'archive_sha256':ARCHIVE_SHA,'driver':str(driver),'driver_realpath':str(driver.resolve()),'driver_sha256':DRIVER_SHA,'linker_sha256':LINKER_SHA,'target':target,'version':version.decode(),'common_flags':COMMON,'configs':configs,'config_policy':'--no-default-config; no ambient HOME/include/library/config variables','objects':objects,'link_argv':link,'link_expanded':exp,'link_dependencies':linked,'no_ambient_injection':True,'dependencies_verified':True,'link_dependencies_verified':True}
+    profile={'profile':A.PROFILE,'archive_name':ARCHIVE_NAME,'archive_sha256':ARCHIVE_SHA,'driver':str(driver),'driver_realpath':str(driver.resolve()),'driver_sha256':DRIVER_SHA,'linker_sha256':LINKER_SHA,'target':target,'version':version.decode(),'common_flags':COMMON,'configs':configs,'config_policy':A.CONFIG_POLICY,'controlled_config':controlled,'objects':objects,'link_argv':link,'link_expanded':exp,'link_dependencies':linked,'no_ambient_injection':True,'dependencies_verified':True,'link_dependencies_verified':True}
     save(bundle/'compiler-profile.json',profile);save(bundle/'link-transcript.txt',A.canonical({'compile':transcripts,'link':{'argv':link,'expansion':(out+err).decode(),'stdout':stdout.decode(),'stderr':stderr.decode()}}));save(bundle/'object-symbols.json',symbols);save(bundle/'source-manifest.json',auth['authority']['manifest'])
     files={p.name:p.read_bytes()for p in bundle.iterdir()};A.require(set(files)==set(A.MEMBERS)-{'producer-manifest.json'},'producer exact fifteen payloads')
     manifest={'schema':1,'context':auth['context'],'authority':{k:auth['authority'][k]for k in ('guard','guard_blob','template','caller_authority')},'producer_id':job['id'],'members':{p:{'bytes':len(v),'sha256':A.digest(v)}for p,v in files.items()},'role':A.PROFILE}
