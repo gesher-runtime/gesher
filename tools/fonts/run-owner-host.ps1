@@ -30,7 +30,15 @@ function Convert-OwnerModulePath([string]$Units){
  if([string]::IsNullOrEmpty($Units) -or $Units -cnotmatch '^[0-9a-f]{4}(,[0-9a-f]{4})*$'){throw 'Missing/malformed native module UTF16 path'}
  $chars=[char[]]@($Units.Split(',')|ForEach-Object{[char][Convert]::ToUInt16($_,16)})
  $path=[string]::new($chars)
- if($path.Length -eq 0 -or $path.Contains([char]0) -or -not [IO.Path]::IsPathRooted($path)){throw 'Native module path is empty/nonrooted/contains NUL'}
+ # Guard metadata tests run under Linux pwsh too: use Windows lexical rules.
+ # Ordinary drive-absolute and UNC file paths only; device/extended namespaces
+ # are diagnostic errors rather than guessed or rewritten local paths.
+ $driveAbsolute=$path -cmatch '^[A-Za-z]:[\\/]'
+ $uncAbsolute=$false
+ if($path -cmatch '^\\\\([^\\/:?]+)\\([^\\/:?]+)\\.+$'){
+  $uncAbsolute=$Matches[1] -cnotin @('.','..') -and $Matches[2] -cnotin @('.','..')
+ }
+ if($path.Length -eq 0 -or $path.Contains([char]0) -or -not ($driveAbsolute -or $uncAbsolute)){throw 'Native module path is not an ordinary Windows absolute file path or contains NUL'}
  $path
 }
 function Emit-OwnerModuleProfiles([string]$Text,[string]$Mode){
