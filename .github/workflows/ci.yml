@@ -16,7 +16,7 @@ env:
 
 jobs:
   union-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@90f01cad1f3e189d30beaf4ad96fa15ae75048eb
+    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@c6d3e5dbd6bded66a4c7d464cc3acb2b30654187
   union-tsf:
     needs: [artifact-preflight]
     uses: ./.github/workflows/tsf-format-component.yml
@@ -855,7 +855,7 @@ jobs:
           path: e2e-results/
 
   test:
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
     strategy:
       fail-fast: false
       matrix:
@@ -1006,7 +1006,7 @@ jobs:
         run: |
           pwsh -NoProfile -File tests/windows/run-tests.ps1 dist -Web3Observer dist/web3_process_waits.exe | Tee-Object -FilePath results.txt
           $code = $LASTEXITCODE
-          "### Tests ג€” ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
+          "### Tests — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
           Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL|INFO)|failed' >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
@@ -1350,8 +1350,30 @@ jobs:
           set -euo pipefail
           g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
           timeout 20 /tmp/tcp-priority-reference
+  supplier-correlation:
+    needs: [union-trusted-source, build, compile]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TCP_SUPPLIER_ROLE: selected-minimum
+      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.union-trusted-source.outputs.source }}
+      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.union-trusted-source.outputs.policy_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify coherent selected TCP correlation role
+        run: python3 tools/toolchain/coherent_tcp_context.py
+      - name: Strict current Native host and TCP selected supplier artifacts
+        run: |
+          set -euo pipefail
+          python3 tools/ci/artifact_receipt.py --name native3-locks-host --producer build --destination ci-suppliers/native3_host
+          python3 tools/ci/artifact_receipt.py --name "tcp-coherent-selected-minimum-${{ github.sha }}-a${{ github.run_attempt }}" --producer "compile-selected-minimum" --destination ci-suppliers/tcp_selected
+      - name: Correlate selected host supplier between full build and TCP component
+        run: python3 tools/toolchain/coherent_supplier_correlation.py
   windows:
-    needs: [union-trusted-source, compile, linux-reference]
+    needs: [union-trusted-source, compile, linux-reference, supplier-correlation]
     strategy:
       fail-fast: false
       matrix:
