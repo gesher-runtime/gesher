@@ -137,11 +137,13 @@ int main() {
         status=PreparePunchRequestFromNoExceptions(source,0x101000,suffix_start+127*4096,4096,plan);
         budget=-1;
         if(status==PrepareStatus::NoMemory) {
-          ++caught;if(!plan.pieces.empty()||!plan.merged.combined.live.empty())++failed;
+          ++caught;if(!plan.pieces.empty()||!plan.merged.combined.live.empty()||!plan.cleanup_merged.combined.live.empty())++failed;
         } else if(status==PrepareStatus::Ok) {
           success=true;
           if(plan.pieces.size()!=3 || plan.pieces.back().private_bytes.size()!=128*4096 ||
-             plan.combined_pages<=plan.first_capacity)++failed;
+             plan.combined_pages<=plan.first_capacity || plan.cleanup_merged.combined.live.size()!=plan.combined_pages ||
+             plan.pieces.front().partitions[0].mapped().kind!=Kind::kHole ||
+             plan.pieces.front().kept[0].kind!=Kind::kView)++failed;
         } else ++failed;
       }
       if(live!=before || injected!=(status==PrepareStatus::NoMemory?1:0))++failed;

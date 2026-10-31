@@ -144,6 +144,8 @@ PrepareStatus PreparePunchRequest(const RegionMap& source,uintptr_t begin,uintpt
     work.combined_pages=(end-begin)/page;
     const auto merged=PreparePunchLedger(end-begin,page,first->second.group,work.merged);
     if(merged!=PrepareStatus::Ok)return merged;
+    const auto cleanup=PreparePunchLedger(end-begin,page,first->second.group,work.cleanup_merged);
+    if(cleanup!=PrepareStatus::Ok)return cleanup;
     uintptr_t cursor=begin;
     for(auto at=first;cursor<end;++at) {
       if(at==source.end() || (at!=first && at->first!=cursor) || at->first>UINTPTR_MAX-at->second.size || at->first>cursor || cursor-at->first>=at->second.size ||
@@ -178,6 +180,11 @@ PrepareStatus PreparePunchRequest(const RegionMap& source,uintptr_t begin,uintpt
           ready.live.assign(count,false);ready.actual_protection.assign(count,0);
         }
         ready.size=length;ready.physical_extent=length;ready.view_padding=0;
+        if(part!=1) {
+          piece.kept[part==0?0:1]=std::move(ready);
+          ready=Region{};ready.kind=Kind::kHole;ready.group=original.group;ready.size=length;
+          ready.live.assign(count,false);ready.actual_protection.assign(count,0);
+        }
         RegionMap detached;
         detached.emplace(boundaries[part],std::move(ready));
         piece.partitions[part]=detached.extract(detached.begin());
