@@ -373,6 +373,7 @@ def disk_version_metadata(data,provenance=None):
         lo=leaf['rva'];hi=lo+leaf['bytes']
         require(all(hi<=a or lo>=b for a,b in spans),'resource shared payload alias')
         require(all(hi<=rva+a or lo>=rva+b for a,b in claimed),'resource payload/structure overlap')
+        require(all(hi<=rva+a or lo>=rva+b for a,b in ignored_roots),'resource payload/named target overlap')
         spans.append((lo,hi))
         leaf['version']=version_payload(leaf.pop('payload'))
     require(all(v['version']['fixed_dwords']==leaves[0]['version']['fixed_dwords']for v in leaves),'conflicting fixed records')
