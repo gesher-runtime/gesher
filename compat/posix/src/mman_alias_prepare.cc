@@ -231,7 +231,10 @@ PrepareStatus PreparePunchRequest(const RegionMap& source,uintptr_t begin,uintpt
           ready=original;
           ready.offset+=boundaries[part]-at->first;
           ready.shared_alias=false;
-          ready.live.assign(original.live.begin()+offset,original.live.begin()+offset+count);
+          // A small retained interval must not inherit the whole source bitmap
+          // capacity; allocate its exact bounded slice during caught prep.
+          std::vector<bool> slice(original.live.begin()+offset,original.live.begin()+offset+count);
+          ready.live=std::move(slice);
           ready.live_pages=static_cast<size_t>(std::count(ready.live.begin(),ready.live.end(),true));
           ready.actual_protection.assign(count,0); // populated by pre-retirement OS queries
         } else {

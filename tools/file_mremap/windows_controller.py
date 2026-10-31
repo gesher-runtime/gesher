@@ -18,6 +18,7 @@ FAULTS=(('fault_alias',1,1),('fault_alias',4,1),('fault_alias',4,5),
         ('fault_sourcefirst',7,1),('fault_aliasfirst',10,1),
         ('fault_alias',11,1),('fault_finalclose',3,1))
 PROTECTION_CASES=('protect_dead','protect_mixed','protect_partial','protect_surgery')
+PUNCH_CASES=('punch_prepare_failure','punch_file_prepare_failure','punch_coalesce_failure','punch_success')
 RETAINED=[]
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def atomic(path,value):
@@ -48,7 +49,7 @@ class Actor:
                         if len(line)>16384:self.record['overflow']=True;return
                         try:
                             row=decode(line)
-                            if not isinstance(row,dict) or row.get('event') not in {'ready','peer_complete','query','ledger','failedstate_guard','failedstate_unchanged','fault_result','prefix_cleanup','containment','injection','complete','prerequisite','middle_result','protection_result'}:raise ValueError('unknown/nonobject actor event')
+                            if not isinstance(row,dict) or row.get('event') not in {'ready','peer_complete','query','ledger','failedstate_guard','failedstate_unchanged','fault_result','prefix_cleanup','containment','injection','complete','prerequisite','middle_result','protection_result','punch_page','punch_result'}:raise ValueError('unknown/nonobject actor event')
                             self.record['event_rows'].append(row);self.events.put_nowait(row)
                         except (ValueError,queue.Full):self.record['bad_json']=True
                     if len(pending)>16384:self.record['overflow']=True;return
@@ -100,13 +101,13 @@ def run_lifetime(prefix,case,environment=None,fault=None):
     result=dict(case=case,verdict='FAILED',actors=[],cleanup=False)
     temporary=None;actors=[];deadline=time.monotonic()+45
     try:
-        assert case in CASES+PROTECTION_CASES if fault is None else (case,*fault) in FAULTS
+        assert case in CASES+PROTECTION_CASES+PUNCH_CASES if fault is None else (case,*fault) in FAULTS
         temporary=tempfile.TemporaryDirectory(prefix='file-mremap-case-');cwd=Path(temporary.name);nonce=uuid.uuid4().hex
         environment=dict(environment or {k:v for k,v in os.environ.items()if k in ('SystemRoot','WINDIR','PATH','TEMP','TMP','GITHUB_ACTIONS')})
         environment['TMPDIR']=str(cwd).replace('\\','/')
         parent=Actor(prefix+[case,'backing.dat',nonce]+([]if fault is None else [str(v)for v in fault]),cwd,environment);actors.append(parent);parent.start()
         ready=parent.event('ready',deadline);assert ready['nonce']==nonce and ready['pid']==parent.proc.pid
-        size=ready['file_size'];assert type(size)is int and size==ready['page']*5 and 20480<=size<=5242880
+        size=ready['file_size'];assert type(size)is int and size==ready['page']*(512 if case in PUNCH_CASES else 5) and 20480<=size<=5242880
         backing=cwd/'backing.dat';before=backing.read_bytes();assert before==expected_bytes(size,False)
         result.update(page=ready['page'],file_size_before=len(before),file_sha256_before=hashlib.sha256(before).hexdigest())
         peer=Actor(prefix+['peer','backing.dat',nonce],cwd,environment);actors.append(peer);peer.start()
@@ -119,11 +120,16 @@ def run_lifetime(prefix,case,environment=None,fault=None):
         done=parent.event('complete',deadline);assert done['nonce']==nonce and done['case']==case
         assert parent.close(deadline)
         assert all(sum(r['event']==name for r in parent.record['event_rows'])==1 for name in ('ready','complete'))
-        if fault is None:assert parent.record['exit']==0
+        if fault is None and case!='punch_coalesce_failure':assert parent.record['exit']==0
         after=backing.read_bytes();assert after==expected_bytes(size,True)
         result.update(file_size_after=len(after),file_sha256_after=hashlib.sha256(after).hexdigest(),parent=done)
         assert done['file_size']==size
-        if fault is None:
+        if case in PUNCH_CASES:
+            result['punch_observation']=verify_punch(parent.record,case,ready['page'])
+        if case=='punch_coalesce_failure':
+            assert parent.record['exit']!=0 and done['failed']!=0
+            result['verdict']='FAILED_CONTAINMENT'
+        elif fault is None:
             assert done['failed']==done['cleanup_failures']==0
             assert done['resources_before']==done['resources_after']>=0
             if case in PROTECTION_CASES:result['protection_observation']=verify_protection(parent.record,case)
@@ -256,6 +262,45 @@ def verify_protection(actor,case):
         assert row['injected_after']-row['injected_before']==injected
     return dict(case=case,ledger_rows=len(ledger),operations=operations,owner_failure=False)
 
+def verify_punch(actor,case,page):
+    """Only persisted ACTUAL actor facts; no native invocation in this oracle."""
+    assert case in PUNCH_CASES
+    events=actor['event_rows'];results=[v for v in events if v.get('event')=='punch_result']
+    assert len(results)==1;result=results[0];count=result['combined_pages']
+    assert type(count)is int and 33<=count<=128 and count>result['capacity']
+    phases={phase:[v for v in events if v.get('event')=='punch_page'and v['phase']==phase]for phase in ('before','after','cleanup')}
+    assert sum(len(v)for v in phases.values())==sum(v.get('event')=='punch_page'for v in events)
+    for phase,rows in phases.items():
+        assert [v['page']for v in rows]==list(range(count))
+        assert all(v['query_ok']==1 for v in rows)
+        for row in rows:
+            if row['present']and row['kind']==1:
+                assert row['refs']==row['views']+row['pins']>0 and row['state']==0x1000 and row['type']==0x40000
+            if phase=='cleanup':assert row['present']==0 and row['state']==0x10000
+    assert phases['before'][0]['capacity']==result['capacity']
+    metrics=result['metrics'];assert len(metrics)==28 and all(type(v)is int and v>=0 for v in metrics)
+    if case in ('punch_prepare_failure','punch_file_prepare_failure'):
+        assert result['failed']==1 and result['errno']==12 and result['source_unchanged']==1
+        assert result['resources_before']==result['resources_after']>=0
+        assert metrics[20]>=1 and metrics[21]==1 and not any(metrics[:20]+metrics[22:])
+        for left,right in zip(phases['before'],phases['after']):
+            assert {k:v for k,v in left.items()if k!='phase'}=={k:v for k,v in right.items()if k!='phase'}
+    elif case=='punch_coalesce_failure':
+        assert result['failed']==1 and result['errno']==5 and metrics[25]==metrics[26]==1
+        starts=[]
+        for row in phases['after']:
+            assert row['present']==1 and row['kind']==2 and row['live']==row['live_pages']==row['refs']==0
+            assert row['state']==0x2000 and row['ledger']==0 and row['failed']==1
+            if row['region_page']==0:starts.append(row)
+            # Actual query extent is retained separately from registry extent.
+            assert row['query_size']>0 and row['query_base_offset']<=row['page']*page
+        assert len(starts)>=3 and starts[0]['error']>0
+        assert len({(v['query_base_offset'],v['query_size'],v['allocation_base_offset'])for v in starts})>=3
+    else:
+        assert result['failed']==0 and metrics[25]==1 and metrics[26]==metrics[21]==0
+        assert all(v['present']==1 and v['kind']==0 and v['live']==1 and v['state']==0x1000 and not v['failed']for v in phases['after'])
+    return dict(case=case,production_capacity=result['capacity'],combined_pages=count,actual_prep_injections=metrics[21],actual_coalesce_injections=metrics[26],failed_containment=case=='punch_coalesce_failure')
+
 def receipt(value,expected,role):
     assert value['role']==role and value['conclusion']=='success'
     assert value['context']==expected
@@ -319,9 +364,9 @@ def main():
                 failure_fixture=bound_file(entry['failure_fixture'],context,'file-mremap-failure-fixture-nativehost')
                 for case,mode,nth in FAULTS:
                     actual=run_lifetime([failure_fixture],case,environment,(mode,nth));actual['role']=role;record['results'].append(actual)
-                for case in PROTECTION_CASES:
+                for case in PROTECTION_CASES+PUNCH_CASES:
                     actual=run_lifetime([failure_fixture],case,environment);actual['role']=role;record['results'].append(actual)
-        if len(record['results'])==len(CASES)*3+len(FAULTS)+len(PROTECTION_CASES) and all(v['verdict']=='PASS'and v['cleanup']for v in record['results']):record['verdict']='PASS'
+        if len(record['results'])==len(CASES)*3+len(FAULTS)+len(PROTECTION_CASES)+len(PUNCH_CASES) and all(v['verdict']=='PASS'and v['cleanup']for v in record['results']):record['verdict']='PASS'
     except Exception as error:record['error']=repr(error)
     finally:atomic(args.output,record)
     return 0 if record['verdict']=='PASS'else 1
