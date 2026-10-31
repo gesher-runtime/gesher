@@ -533,14 +533,15 @@ foreach($mode in 'normal','nonzero','missing-marker','timeout','retained'){
           $obs.Source -ceq $env:GITHUB_SHA -and $obs.Case -ceq $mode -and $obs.Nonce -ceq $env:GESHER_GRAPHICS84_NONCE -and
           $obs.Pid -gt 0 -and $obs.CreationFiletime -gt 0 -and $obs.KernelComplete -and $obs.Released -and
           $obs.TasksComplete -and $obs.PipesClosed -eq 2 -and $obs.ExpectedImage -ceq $graphics84Exe -and
-          $obs.NativeExitCode -notin @(91,92,93,94)
+          $obs.NativeExitCode -notin @(91,92,93,94) -and $obs.MechanismFailure -is [bool] -and
+          $obs.CleanupBudgetExpired -is [bool] -and -not $obs.MechanismFailure -and -not $obs.CleanupBudgetExpired
         $expected=if($mode -eq 'normal'){0}else{1}
         $facts=$facts -and $g.Delta -eq $expected
         switch($mode){
           normal {$facts=$facts -and $obs.NativeExitCode -eq 0 -and $obs.MarkerPresent -and -not $obs.OperationExpired -and $obs.EofComplete -and -not $obs.KillReserved -and -not $obs.ObservationFailed}
           nonzero {$facts=$facts -and $obs.NativeExitCode -eq 23 -and $obs.MarkerPresent -and -not $obs.OperationExpired -and $obs.EofComplete -and -not $obs.KillReserved -and -not $obs.ObservationFailed}
           'missing-marker' {$facts=$facts -and $obs.NativeExitCode -eq 0 -and -not $obs.MarkerPresent -and -not $obs.OperationExpired -and $obs.EofComplete -and -not $obs.KillReserved -and -not $obs.ObservationFailed}
-          timeout {$facts=$facts -and -not $obs.MarkerPresent -and $obs.OperationExpired -and $obs.KillReserved -and $obs.ObservationFailed -and $null -ne $obs.NativeExitCode}
+          timeout {$facts=$facts -and -not $obs.MarkerPresent -and $obs.OperationExpired -and $obs.KillReserved -and $obs.ObservationFailed -and $obs.EofComplete -and $null -ne $obs.NativeExitCode}
           retained {$facts=$facts -and $obs.NativeExitCode -eq 0 -and -not $obs.OperationExpired -and -not $obs.KillReserved -and -not $obs.EofComplete -and $obs.ObservationFailed -and $g.ChildNonsignaled -and $g.Closed -and -not $g.Pending}
           default {$facts=$false}
         }
