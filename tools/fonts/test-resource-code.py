@@ -83,25 +83,45 @@ class Code(unittest.TestCase):
         import types
         provider=types.SimpleNamespace(**p)
         profiles=p['admit'].__globals__['PROFILES'];original=dict(profiles)
-        def frame(old=old,entry=entry,payload=data,tail=b'\nFONT_UCRT_CODE_END_V2\n\0\n',extra=b'',version=2):
-            return json.dumps({'version':version,'legacy_bytes':len(old),'context':context}).encode()+b'\n'+old+json.dumps(entry).encode()+b'\n'+payload+tail+extra
-        def decode(value):return list(e['envelope'](io.BytesIO(value),legacy,pe,provider))
+        synthetic=runpy.run_path(str(ROOT/'test-resource-witness.py'))
+        disk=synthetic['w'];disk_data=synthetic['disk_image']();disk_entry=synthetic['disk_entry'](disk_data,context)
+        originals=dict(disk.DISK_PROFILES)
+        def frame(old=old,entry=entry,payload=data,tail=b'\nFONT_UCRT_CODE_END_V2\n\0\n',extra=b'',version=3,
+                  disk_header=disk_entry,disk_payload=disk_data,disk_tail=b'\nFONT_NTDLL_DISK_END_V1\n\0\n',pid=123):
+            return json.dumps({'version':version,'legacy_bytes':len(old),'context':context,'imports_pid':pid}).encode()+b'\n'+old+json.dumps(entry).encode()+b'\n'+payload+tail+json.dumps(disk_header).encode()+b'\n'+disk_payload+disk_tail+extra
+        def decode(value):return list(e['envelope'](io.BytesIO(value),legacy,pe,provider,disk,123))
         try:
             profiles[entry['sha256']]=('SYNTHETIC_ONLY',0x1000,0x100000)
-            rows=decode(frame());self.assertEqual(len(rows),4);self.assertEqual(rows[3]['record'],'PROVIDER_CACHE')
+            disk.DISK_PROFILES[disk_entry['sha256']]='SYNTHETIC_ONLY'
+            rows=decode(frame());self.assertEqual(len(rows),5);self.assertEqual(rows[3]['record'],'PROVIDER_CACHE')
+            # Original three records and the separately signed UCRT output are
+            # byte-for-byte identical; only the versioned outer adds disk data.
+            self.assertEqual(rows[:3],list(legacy.inventory(io.BytesIO(old),pe)))
+            self.assertEqual(rows[3],p['admit'](data,entry,context))
+            self.assertEqual(rows[4]['record'],'NTDLL_DISK_METADATA')
             for value in (frame(old=old+b'x'),frame(old=old[:-22]),frame(extra=b'x'),frame(tail=b''),
                 frame(tail=b'\nFONT_RESOURCE_PE_END\n'),frame(payload=data[:-1]),frame(version=1),
+                frame(version=2),frame(pid=124),frame(pid=True),frame(disk_header=disk_entry|{'imports_pid':124}),
+                frame(disk_header=disk_entry|{'role':p['ROLE']}),frame(disk_payload=disk_data[:-1]),
+                frame(disk_tail=b''),frame(disk_header=disk_entry|{'bytes':disk.DISK_MAX+1}),
+                frame(disk_header=disk_entry|{'context':context|{'run':'2'}}),frame(disk_header=disk_entry|{'sha256':'0'*64}),
                 frame(entry=entry|{'role':'TOOL'}),frame(entry=entry|{'bytes':-1}),
                 frame(entry=entry|{'bytes':p['MAX_BYTES']+1}),frame(entry=entry|{'sha256':'0'*64}),
                 frame(entry=entry|{'offset':1}),frame(entry=entry|{'name':'C:\\arbitrary.dll'}),
                 frame(extra=frame()),frame()[:-len(data)-24],b' '*16385,
-                frame().replace(b'"version": 2',b'"version": 2, "version": 2',1)):
+                frame().replace(b'"version": 3',b'"version": 3, "version": 3',1)):
                 self.reject(lambda:decode(value))
-        finally:profiles.clear();profiles.update(original)
+        finally:
+            profiles.clear();profiles.update(original)
+            disk.DISK_PROFILES.clear();disk.DISK_PROFILES.update(originals)
     def test_old_codecs_immutable(self):
         import subprocess
         base='a8e79c27639200c3a3ee9162fb053a22727df3f6'
         for name in ('resource-import-inventory.py','resource-pe-imports.py'):
             self.assertEqual((ROOT/name).read_bytes(),subprocess.check_output(['git','show',base+':tools/fonts/'+name]))
+    def test_complete_output_cap_never_truncates(self):
+        small={'text':'\u05d0'*3};self.assertEqual(e['output_lines']([small]),[json.dumps(small,sort_keys=True)])
+        self.reject(lambda:e['output_lines']([{'text':'\u05d0'*50000}]))
+        self.reject(lambda:e['output_lines']([{'text':'x'*100000}]*3))
 
 if __name__=='__main__':unittest.main()

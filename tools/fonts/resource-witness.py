@@ -6,6 +6,7 @@ this is not runtime stack/unwind/PDB integrity or an owner observation.
 import hashlib
 import json
 import struct
+import re
 
 UNWIND_DIAGNOSTIC_CAP = 4096
 
@@ -165,3 +166,193 @@ def controlflow_basis(cache):
             'scope':'POST_PROLOGUE_COMMON_BODY','partial_prologue_qualified':False,
             'runtime_unwind_integrity':False,'body_after_rva':start+10,'body_before_rva':start+58,
             'owner_observed':False,'runtime_unwind_integrity_attested':False}
+
+# DISK metadata only. These routines accept bytes from an already authenticated
+# retained lease; they never open a path, query MUI, or inspect loaded memory.
+DISK_ROLE = 'SIGNED_SYSTEM32_NTDLL_DISK_METADATA'
+DISK_MAX = 128*1024*1024
+DISK_PROFILES = {
+ 'bcfe8a70a371a7d2fbcb429ab0a9e170aeebe4d73ae08d03a2da8fedec2efc78':'10.0.20348.5622',
+ '160ef9b82e2895ef48fa031cb1cf683a8b123febf7cf7d5590cd3104864424b3':'10.0.26100.33648',
+}
+
+def disk_pe(data):
+    require(type(data)is bytes and 64<=len(data)<=DISK_MAX,'disk file cap')
+    def take(at,n):
+        require(type(at)is int and type(n)is int and 0<=at<=len(data) and 0<=n<=len(data)-at,'disk file span')
+        return data[at:at+n]
+    def unpack(fmt,at):return struct.unpack(fmt,take(at,struct.calcsize(fmt)))
+    require(take(0,2)==b'MZ','disk DOS')
+    pe=unpack('<I',60)[0];require(pe>=64 and take(pe,4)==b'PE\0\0','disk PE')
+    machine,count,stamp=unpack('<HHI',pe+4)
+    require(machine==0x8664 and 1<=count<=96,'disk AMD64 sections')
+    opt_size=unpack('<H',pe+20)[0];opt=pe+24;take(opt,opt_size)
+    require(opt_size>=112 and unpack('<H',opt)[0]==0x20b,'disk PE32+')
+    image,headers,checksum=unpack('<III',opt+56)
+    dirs=unpack('<I',opt+108)[0]
+    require(3<=dirs<=16 and opt_size>=112+8*dirs,'disk directory table')
+    table=opt+opt_size;take(table,count*40)
+    require(table+count*40<=headers<=len(data) and headers<=image,'disk headers/image')
+    sections=[];vr=[(0,headers)];rr=[(0,headers)]
+    for i in range(count):
+        at=table+i*40;vs,rva,size,raw=unpack('<IIII',at+8);extent=max(vs,size)
+        require(0<extent<=2**32-rva and 0<rva and rva+extent<=image,'disk virtual span')
+        require(all(rva+extent<=lo or rva>=hi for lo,hi in vr),'disk virtual overlap')
+        vr.append((rva,rva+extent))
+        if size:
+            take(raw,size);require(all(raw+size<=lo or raw>=hi for lo,hi in rr),'disk raw overlap');rr.append((raw,raw+size))
+        sections.append({'rva':rva,'raw':raw,'raw_size':size})
+    def directory(index):return unpack('<II',opt+112+index*8)if index<dirs else (0,0)
+    resource=directory(2);require(resource[0]>0 and resource[1]>=16,'disk resource directory')
+    raw=mapped(data,sections,*resource)
+    # Debug type16 IMAGE_DEBUG_TYPE_REPRO means the COFF field is NOT a clock.
+    repro=[];debug=directory(6)
+    if debug!=(0,0):
+        require(debug[0]>0 and 0<debug[1]<=64*28 and debug[1]%28==0,'disk debug bounds')
+        records=mapped(data,sections,*debug)
+        for at in range(0,len(records),28):
+            _,_,_,_,kind,n,rva,offset=struct.unpack_from('<IIHHIIII',records,at)
+            if kind==16:
+                require(n<=65536 and (n==0 or rva>0),'disk repro cap')
+                payload=mapped(data,sections,rva,n)if n else b''
+                require(take(offset,n)==payload,'disk repro file/RVA equality')
+                repro.append({'bytes':n,'sha256':hashlib.sha256(payload).hexdigest()})
+    return sections,resource,raw,{'machine':machine,'section_count':count,'size_of_image':image,
+        'size_of_headers':headers,'checksum':checksum,'coff_timestamp_raw':stamp,
+        'coff_timestamp_is_wall_clock_attested':False,'repro_records':repro}
+
+def version_payload(payload):
+    require(type(payload)is bytes and 0<len(payload)<65536,'version WORD/file bound')
+    nodes=0
+    def align(n):return (n+3)&~3
+    def zeros(lo,hi,end):
+        require(lo<=hi<=end and not any(payload[lo:hi]),'version alignment padding')
+    def block(at,parent):
+        nonlocal nodes
+        nodes+=1;require(nodes<=256 and at%4==0 and at+6<=parent,'version node bounds')
+        length,value_length,kind=struct.unpack_from('<HHH',payload,at)
+        end=at+length;require(length>=8 and end<=parent and kind in (0,1),'version block length/type')
+        cursor=at+6;units=[]
+        while True:
+            require(cursor+2<=end and len(units)<=128,'version key bounds')
+            unit=struct.unpack_from('<H',payload,cursor)[0];cursor+=2
+            if unit==0:break
+            units.append(unit)
+        try:key=struct.pack('<'+'H'*len(units),*units).decode('utf-16-le','strict')
+        except UnicodeError:raise ValueError('UNAVAILABLE: version key UTF16')
+        value_at=align(cursor);zeros(cursor,value_at,end)
+        count=value_length*(2 if kind==1 else 1)
+        require(count<=end-value_at,'version value bounds/units')
+        value=payload[value_at:value_at+count];cursor=value_at+count;children=[]
+        while cursor<end:
+            next_at=align(cursor);zeros(cursor,min(next_at,end),end)
+            if next_at>=end:break
+            child=block(next_at,end);children.append(child);cursor=child['end']
+        return {'at':at,'end':end,'key':key,'type':kind,'value_length':value_length,'value':value,'children':children}
+    root=block(0,len(payload))
+    require(root['end']==len(payload) and root['key']=='VS_VERSION_INFO' and root['type']==0 and
+            root['value_length']==52,'version root/fixed52')
+    fixed=list(struct.unpack('<13I',root['value']))
+    require(fixed[0]==0xfeef04bd and fixed[1]==0x10000,'fixed signature/structure version')
+    def components(ms,ls):return [ms>>16,ms&65535,ls>>16,ls&65535]
+    tables=[];translations=[];seen=set()
+    for group in root['children']:
+        require(group['key']in ('StringFileInfo','VarFileInfo') and group['key']not in seen and
+                group['type']==1 and group['value_length']==0,'version unique supported child')
+        seen.add(group['key'])
+        if group['key']=='StringFileInfo':
+            require(len(group['children'])<=64,'string table count');keys=set()
+            for table in group['children']:
+                require(re.fullmatch('[0-9A-Fa-f]{8}',table['key'])is not None and
+                        table['key'].lower()not in keys and table['type']==1 and table['value_length']==0,'unique language/codepage table')
+                keys.add(table['key'].lower());strings={}
+                require(len(table['children'])<=64,'string count')
+                for item in table['children']:
+                    require(item['key'] and item['key']not in strings and item['type']==1 and
+                            not item['children'] and 1<=item['value_length']<=4096,'version unique string')
+                    try:text=item['value'].decode('utf-16-le','strict')
+                    except UnicodeError:raise ValueError('UNAVAILABLE: version value UTF16')
+                    require(text.endswith('\0') and '\0'not in text[:-1],'version string terminator')
+                    strings[item['key']]=text[:-1]
+                tables.append({'language':int(table['key'][:4],16),'codepage':int(table['key'][4:],16),'strings':strings})
+        else:
+            require(len(group['children'])==1,'translation child count')
+            item=group['children'][0]
+            require(item['key']=='Translation' and item['type']==0 and not item['children'] and
+                    0<item['value_length']<=256 and item['value_length']%4==0,'translation binary length')
+            for at in range(0,len(item['value']),4):
+                pair=list(struct.unpack_from('<HH',item['value'],at))
+                require(pair not in translations,'duplicate translation');translations.append(pair)
+    fields=('signature','structure_version','file_version_ms','file_version_ls','product_version_ms','product_version_ls',
+            'file_flags_mask','file_flags','file_os','file_type','file_subtype','file_date_ms','file_date_ls')
+    return {'fixed_dwords':fixed,'fixed_fields':dict(zip(fields,fixed)),'file_version_components':components(fixed[2],fixed[3]),
+            'product_version_components':components(fixed[4],fixed[5]),'string_tables':tables,
+            'translations':translations,'raw_bytes':len(payload),'raw_sha256':hashlib.sha256(payload).hexdigest()}
+
+def disk_version_metadata(data):
+    sections,(rva,size),raw,headers=disk_pe(data)
+    visited=0;claimed=[];leaves=[];names=set()
+    def claim(at,n):
+        require(0<=at<=len(raw) and 0<n<=len(raw)-at,'resource relative span')
+        require(all(at+n<=lo or at>=hi for lo,hi in claimed),'resource cycle/alias/overlap')
+        claimed.append((at,at+n))
+    def directory(at,level,keys):
+        nonlocal visited
+        require(level<=2 and at%4==0,'resource depth/alignment');claim(at,16)
+        named,ids=struct.unpack_from('<HH',raw,at+12);count=named+ids
+        require(named==0 and 0<count<=64,'resource numeric identifier/count')
+        claim(at+16,count*8);local=set();visited+=1+count
+        require(visited<=256,'resource aggregate visited')
+        rows=[]
+        for i in range(count):
+            name,target=struct.unpack_from('<II',raw,at+16+i*8)
+            require(name<=65535 and name not in local,'resource duplicate/named key');local.add(name)
+            rows.append((name,target))
+        for name,target in rows:
+            # Other resource types are not interpreted or recursively scanned.
+            if level==0 and name!=16:continue
+            if level<2:
+                require(target&0x80000000,'resource exact Type/Name/Language depth')
+                directory(target&0x7fffffff,level+1,keys+[name])
+            else:
+                require(not target&0x80000000 and target%4==0,'resource leaf depth/alignment')
+                claim(target,16);drva,n,cp,reserved=struct.unpack_from('<IIII',raw,target)
+                require(reserved==0 and 0<n<65536 and len(leaves)<8,'resource leaf WORD/count')
+                require(sum(v['bytes']for v in leaves)+n<=512*1024,'resource aggregate payload cap')
+                key=tuple(keys+[name]);require(key not in names,'resource duplicate path');names.add(key)
+                payload=mapped(data,sections,drva,n)
+                # Payloads may live outside the directory extent, but never
+                # overlap structures or another payload in the same image.
+                leaves.append({'path':list(key),'rva':drva,'bytes':n,'codepage':cp,'payload':payload})
+    directory(0,0,[]);require(leaves,'RT_VERSION absent')
+    spans=[];languages=set();version_names=set()
+    for leaf in leaves:
+        language=leaf['path'][2];version_names.add(leaf['path'][1])
+        require(language not in languages and len(version_names)==1,'ambiguous version name/language');languages.add(language)
+        lo=leaf['rva'];hi=lo+leaf['bytes']
+        require(all(hi<=a or lo>=b for a,b in spans),'resource shared payload alias')
+        require(all(hi<=rva+a or lo>=rva+b for a,b in claimed),'resource payload/structure overlap')
+        spans.append((lo,hi))
+        leaf['version']=version_payload(leaf.pop('payload'))
+    require(all(v['version']['fixed_dwords']==leaves[0]['version']['fixed_dwords']for v in leaves),'conflicting fixed records')
+    return {'headers':headers,'resource_rva':rva,'resource_bytes':size,
+            'resource_sha256':hashlib.sha256(raw).hexdigest(),'records':leaves,
+            'loaded_memory_identity_attested':False,'identity_predicate_repaired':False}
+
+def admit_disk_metadata(data,entry,context,pid):
+    require(type(entry)is dict and set(entry)=={'schema','role','name','bytes','sha256','version','path','signature_status','signer','signer_thumbprint','lease','context','imports_pid'},'disk frame schema')
+    require(type(entry['schema'])is int and entry['schema']==1 and entry['role']==DISK_ROLE and entry['name']=='ntdll.dll','disk role/schema')
+    require(type(context)is dict and set(context)=={'source','run','attempt'} and type(context['source'])is str and
+            re.fullmatch('[0-9a-f]{40}',context['source'])and all(type(context[k])is str and re.fullmatch('[1-9][0-9]{0,19}',context[k])for k in ('run','attempt')),'disk current context')
+    require(entry['context']==context and type(pid)is int and 0<pid<=0xffffffff and type(entry['imports_pid'])is int and entry['imports_pid']==pid,'disk same imports PID/context')
+    require(type(data)is bytes and type(entry['bytes'])is int and 64<=entry['bytes']<=DISK_MAX and len(data)==entry['bytes'],'disk full file length')
+    digest=hashlib.sha256(data).hexdigest()
+    require(entry['sha256']==digest and digest in DISK_PROFILES and entry['version']==DISK_PROFILES[digest],'disk pinned signed input hash/version')
+    require(type(entry['path'])is str and re.fullmatch(r'[A-Za-z]:\\(?:[^\\/:*?"<>|\x00-\x1f]+\\)*System32\\ntdll\.dll',entry['path'],re.I)and
+            all(v not in ('.','..')and not v.endswith((' ','.'))for v in entry['path'].split('\\')[1:]),'disk native System32 path')
+    require(entry['signature_status']=='Valid' and type(entry['signer'])is str and
+            re.search(r'(?:^|,\s*)O=Microsoft Corporation(?:,|$)',entry['signer'])and type(entry['signer_thumbprint'])is str and
+            re.fullmatch('[A-Fa-f0-9]{40,128}',entry['signer_thumbprint'])and entry['lease']=='RETAINED_READ_SHARE_READ','disk signature/retained lease')
+    return {'record':'NTDLL_DISK_METADATA','role':DISK_ROLE,'profile':entry,'context':context,'imports_pid':pid,
+            'input_record_sha256':hashlib.sha256(json.dumps(entry,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+            'metadata':disk_version_metadata(data),'qualification':False}

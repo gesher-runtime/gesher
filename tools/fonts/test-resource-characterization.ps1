@@ -539,4 +539,34 @@ foreach($route in @('normal','capture')){
   }finally{if($rootDouble.active){$rootDouble.handle.Free();$rootDouble.active=$false}}
  }
 }
+# Effective disk frame/response paths with managed property doubles only. No
+# filesystem, signature, real SafeHandle, native image, or process operation.
+foreach($name in @('New-ResourceDiskFrame','Assert-ResourceDiskRecord')){Invoke-Expression (@($newFunctions|Where-Object{$_.Name -ceq $name})[0].Extent.Text)}
+$diskHandle=[pscustomobject]@{IsClosed=$false}
+$diskStream=[pscustomobject]@{SafeFileHandle=$diskHandle;CanRead=$true;Name='C:\Windows\System32\ntdll.dll';Length=1234L}
+$diskOwner=@{handles=@(@{stream=$diskStream;handle=$diskHandle})}
+$diskIdentity=@{path=$diskStream.Name;sha256='a'*64;product_version='SYNTHETIC_ONLY';signature_status='Valid';signer='CN=Fixture, O=Microsoft Corporation';signer_thumbprint='A'*40}
+$diskContext=@{source='a'*40;run='1';attempt='1'}
+$diskFrame=New-ResourceDiskFrame $diskOwner $diskStream $diskIdentity $diskContext 123
+Check ($diskFrame.role -ceq 'SIGNED_SYSTEM32_NTDLL_DISK_METADATA' -and $diskFrame.imports_pid -eq 123 -and $diskFrame.bytes -eq 1234 -and $diskFrame.lease -ceq 'RETAINED_READ_SHARE_READ')
+$diskResult=@{record='NTDLL_DISK_METADATA';role=$diskFrame.role;imports_pid=123L;qualification=$false;input_record_sha256='b'*64;context=$diskContext;profile=$diskFrame;metadata=@{loaded_memory_identity_attested=$false;identity_predicate_repaired=$false;records=@(@{synthetic=$true})}}
+Assert-ResourceDiskRecord $diskResult $diskFrame $diskContext 123;Check $true
+foreach($key in @('role','imports_pid','qualification','input_record_sha256')){
+ $bad=$diskResult.Clone();$bad[$key]=if($key -ceq 'imports_pid'){124L}elseif($key -ceq 'qualification'){$true}else{'wrong'}
+ Reject {Assert-ResourceDiskRecord $bad $diskFrame $diskContext 123}
+}
+foreach($key in @('source','run','attempt')){$bad=$diskResult.Clone();$bad.context=$diskContext.Clone();$bad.context[$key]='wrong';Reject {Assert-ResourceDiskRecord $bad $diskFrame $diskContext 123}}
+foreach($key in @('schema','role','name','bytes','sha256','version','path','signature_status','signer','signer_thumbprint','lease','imports_pid')){$bad=$diskResult.Clone();$bad.profile=$diskFrame.Clone();$bad.profile[$key]='wrong';Reject {Assert-ResourceDiskRecord $bad $diskFrame $diskContext 123}}
+foreach($key in @('loaded_memory_identity_attested','identity_predicate_repaired')){$bad=$diskResult.Clone();$bad.metadata=$diskResult.metadata.Clone();$bad.metadata[$key]=$true;Reject {Assert-ResourceDiskRecord $bad $diskFrame $diskContext 123}}
+foreach($key in @('IsClosed','CanRead','Name','Length')){
+ if($key -ceq 'IsClosed'){$diskHandle.IsClosed=$true}else{$original=$diskStream.$key;$diskStream.$key=if($key -ceq 'CanRead'){$false}elseif($key -ceq 'Length'){0L}else{'wrong'}}
+ Reject {New-ResourceDiskFrame $diskOwner $diskStream $diskIdentity $diskContext 123}
+ if($key -ceq 'IsClosed'){$diskHandle.IsClosed=$false}else{$diskStream.$key=$original}
+}
+Reject {New-ResourceDiskFrame @{handles=@()} $diskStream $diskIdentity $diskContext 123}
+Reject {New-ResourceDiskFrame $diskOwner $diskStream $diskIdentity $diskContext 0}
+foreach($key in @('signature_status','signer','signer_thumbprint','sha256')){$bad=$diskIdentity.Clone();$bad[$key]='wrong';Reject {New-ResourceDiskFrame $diskOwner $diskStream $bad $diskContext 123}}
+$oldRunner=& git -C (Split-Path (Split-Path $PSScriptRoot)) show '7c83593e8955c39235182f6ac81035739c38354b:tools/fonts/resource-characterization.ps1'
+$oldPredicate=@($oldRunner|Where-Object{$_.Contains("throw 'UNAVAILABLE: retained current ntdll profile/module mismatch'")})
+Check ($oldPredicate.Count -eq 1 -and $new.Extent.Text.Split("`n").TrimEnd("`r").Contains($oldPredicate[0]))
 Write-Host "FONT_RESOURCE_METADATA_PASS checks=$script:checks native_processes_started=0 real_tool_reads=0 actual_application_lookup=NOT_EXECUTED code_rows=SYNTHETIC_AND_SAVED_CI_TEXT"
