@@ -43,9 +43,11 @@ TUS = {'helper.obj': 'compat/posix/src/mman_alias_prepare.cc',
        'qualification.obj': 'tests/file_mremap/alias_prepare_test.cc',
        'caller.obj': 'tests/file_mremap/alias_prepare_noexcept_caller.cc'}
 HEADER = 'compat/posix/src/mman_registry_internal.h'
-SOURCE_BLOBS = {'helper.obj': 'd6765c8572c7fa4fcfd439a6be4450b7d998e34b',
-                'qualification.obj': '215b460537b88827e64571e208f244e2d6f83755',
+SOURCE_BLOBS = {'helper.obj': 'd14206f2584886d06cd16ba98a9a77ad1e53bb29',
+                'qualification.obj': 'fa3b57bfe936bc0f331f1c1834f853139e9d441b',
                 'caller.obj': 'd4667a8c59e08ef875e7f9084fcfd2f033c76fe2'}
+SOURCE_OVERLAYS = {TUS['helper.obj']: SOURCE_BLOBS['helper.obj'],
+                   TUS['qualification.obj']: SOURCE_BLOBS['qualification.obj']}
 HEADER_BLOB = '90a729c51e7229a293df11f2902a1f16376d516b'
 INPUT21 = tuple(sorted(('CMakeLists.txt', 'compat/posix/posix.cmake',
  'compat/posix/src/mman.cc', HEADER, *TUS.values(),
@@ -198,17 +200,19 @@ def inventory(root, ref):
 def verify_inventory(base, current, allowed):
     require(digest(canonical(base)) == BASE_INVENTORY, 'frozen whole inventory')
     require(set(current) == set(base) | set(ADDITIONS), 'closed five additions')
-    require(all(current[p] == v for p, v in base.items()), 'baseline/history/selected source changed')
+    require(all(current[p] == ({'mode':'100644','blob':SOURCE_OVERLAYS[p]} if p in SOURCE_OVERLAYS else v)
+                for p,v in base.items()), 'baseline/history/selected source changed')
     require(set(allowed) == set(ADDITIONS), 'five exact pins')
     require(all(current[p] == {'mode': '100644', 'blob': allowed[p]} for p in ADDITIONS), 'new source pin')
 
 def source_manifest(root, source):
     base = inventory(root, BASE)
     require(digest(canonical(base)) == BASE_INVENTORY, 'base inventory')
+    current=inventory(root,source)
     return {'source': source, 'base': BASE, 'base_inventory_sha256': BASE_INVENTORY,
-            'profile': PROFILE, 'inputs21': {p: base[p] for p in INPUT21},
-            'direct_sources': {p: base[p] for p in (*TUS.values(), HEADER)},
-            'current_inventory_sha256': digest(canonical(inventory(root, source)))}
+            'profile': PROFILE, 'inputs21': {p: current[p] for p in INPUT21},
+            'direct_sources': {p: current[p] for p in (*TUS.values(), HEADER)},
+            'current_inventory_sha256': digest(canonical(current))}
 
 def caller_bytes(guard):
     hexid(guard)

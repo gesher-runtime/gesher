@@ -117,7 +117,9 @@ class Helper(unittest.TestCase):
 
     def test_whole_frozen_source_and_all_five_pins(self):
         baseline=A.inventory(ROOT,A.BASE);self.assertEqual(A.digest(A.canonical(baseline)),A.BASE_INVENTORY);self.assertEqual(len(A.INPUT21),21)
-        pins={p:'1'*40 for p in A.ADDITIONS};current=copy.deepcopy(baseline);current.update({p:{'mode':'100644','blob':b}for p,b in pins.items()});A.verify_inventory(baseline,current,pins)
+        pins={p:'1'*40 for p in A.ADDITIONS};current=copy.deepcopy(baseline);current.update({p:{'mode':'100644','blob':b}for p,b in pins.items()});current.update({p:{'mode':'100644','blob':b}for p,b in A.SOURCE_OVERLAYS.items()});A.verify_inventory(baseline,current,pins)
+        for path in A.SOURCE_OVERLAYS:
+            bad=copy.deepcopy(current);bad[path]=baseline[path];self.reject(lambda:A.verify_inventory(baseline,bad,pins))
         for path in (*A.ADDITIONS,'CMakeLists.txt','compat/posix/src/mman.cc','compat/posix/posix.cmake','.github/workflows/ci.yml'):
             bad=copy.deepcopy(current);bad[path]['blob']='2'*40;self.reject(lambda:A.verify_inventory(baseline,bad,pins))
         for path in A.ADDITIONS:
@@ -278,6 +280,7 @@ class Helper(unittest.TestCase):
     def test_every_base_blob_preserves_complete_history_without_body_inspection(self):
         baseline=A.inventory(ROOT,A.BASE);pins={p:'1'*40 for p in A.ADDITIONS}
         current=dict(baseline,**{p:{'mode':'100644','blob':v}for p,v in pins.items()})
+        current.update({p:{'mode':'100644','blob':v}for p,v in A.SOURCE_OVERLAYS.items()})
         A.verify_inventory(baseline,current,pins)
         for path in baseline:
             bad=dict(current);bad[path]={'mode':baseline[path]['mode'],'blob':'0'*40}

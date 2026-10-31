@@ -3,6 +3,7 @@
 #include <limits>
 #include <algorithm>
 #include <new>
+#include <utility>
 #if !defined(__cpp_exceptions)
 #error mman_alias_prepare must be compiled with exceptions enabled
 #endif
