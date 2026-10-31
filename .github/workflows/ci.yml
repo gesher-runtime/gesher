@@ -190,7 +190,7 @@ jobs:
               assert actor_launcher==production['compiler']['launcher'], 'Actor launcher differs from production'
           manifest['actor_compile_command']=argv
           manifest['actor_launcher']=actor_launcher
-          selected_links=host_roles.seal_selected([(Path('out/binder_sg_actor.exe'),root/'binder_sg_actor.exe')],production['compiler'])
+          selected_links=host_roles.seal_selected([(Path('out/binder_sg_actor.exe'),root/'binder_sg_actor.exe')],production['compiler'],'binder-ordinary-actor')
           if selected_links is not None:
               manifest['selected_link']=selected_links
           manifest['files']={p.name:host_roles.sha(p) for p in root.iterdir() if p.is_file()}

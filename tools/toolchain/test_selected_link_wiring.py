@@ -22,7 +22,7 @@ SELECTED_CASE = '''  selected-minimum)
     ;;
 '''
 OLD_CASE = '  selected-minimum) test -n "$SELECTED_LLVM"; llvm="$SELECTED_LLVM" ;;\n'
-ACTOR = '''selected_links=host_roles.seal_selected([(Path('out/binder_sg_actor.exe'),root/'binder_sg_actor.exe')],production['compiler'])
+ACTOR = '''selected_links=host_roles.seal_selected([(Path('out/binder_sg_actor.exe'),root/'binder_sg_actor.exe')],production['compiler'],'binder-ordinary-actor')
 if selected_links is not None:
     manifest['selected_link']=selected_links
 '''
@@ -135,49 +135,50 @@ def compiler_controls():
         with patch.dict(os.environ, {'GESHER_HOST_PTHREAD_SELECTION': 'publisher'}):
             before, after = namespace['compiler'](build), current.compiler(build)
         assert json.dumps(before, sort_keys=True).encode() == json.dumps(after, sort_keys=True).encode(), 'Publisher compiler bytes changed'
-        assert current.selected_members({'actual.exe'}, after) == set()
-        assert current.seal_selected([], after) is None
-        assert current.verify_selected(build, None, after, {}, set()) is None
+        assert current.selected_members({'actual.exe'}, after, 'production') == set()
+        assert current.seal_selected([], after, 'production') is None
+        assert current.verify_selected(build, None, after, {}, set(), 'production') is None
         try:
-            current.verify_selected(build, {}, after, {}, set())
+            current.verify_selected(build, {}, after, {}, set(), 'production')
         except SystemExit:
             pass
         else:
             raise AssertionError('Selected evidence accepted in publisher record')
         selected = dict(after, selected_toolchain={'context': {}})
-        expected = {'selected-pthread-toolchain.json'} | {'actual.exe.selected-pthread-'+s for s in ('link.json', 'map.txt', 'trace.txt', 'imports.txt')}
-        assert current.selected_members({'actual.exe'}, selected) == expected
+        expected = {'selected-pthread-production-toolchain.json'} | {'actual.exe.selected-pthread-'+s for s in ('link.json', 'map.txt', 'trace.txt', 'imports.txt')}
+        assert current.selected_members({'actual.exe'}, selected, 'production') == expected
         info = dict(source='1'*40, run='123456', attempt='1', repository='gesher-runtime/gesher', repository_id='1426153186')
         fields = dict(zip(('GITHUB_SHA','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_REPOSITORY','GITHUB_REPOSITORY_ID'),
                           (info['source'],info['run'],info['attempt'],info['repository'],info['repository_id'])))
         selected['selected_toolchain']['context'] = fields
         targets = {'native3_lock_command_worker.exe', 'native3_lock_duplicate_test.exe', 'binderd.exe'}
-        assert len(current.selected_members(targets, selected)) == 13
+        assert len(current.selected_members(targets, selected, 'native3-common-host-fixture')) == 13
         assert len({n+s for n in ('native3_lock_command_worker','native3_lock_duplicate_test','binderd') for s in ('.exe','.imports.txt')}
-                   | current.selected_members(targets, selected)) == 19
+                   | current.selected_members(targets, selected, 'native3-common-host-fixture')) == 19
         (build / 'synthetic-record.json').write_text('{"scope":"SYNTHETIC_METADATA_ONLY"}', encoding='utf-8')
         links = {name: {'file':'synthetic-record.json','index':'SYNTHETIC'} for name in targets}
         class Receiver:
             calls = []
-            def verify_sealed(self, directory, link, compiler, executable, expected_context):
-                self.calls.append((directory, link, compiler, executable, expected_context))
+            def verify_sealed(self, directory, link, compiler, executable, expected_context, receipt_name):
+                self.calls.append((directory, link, compiler, executable, expected_context, receipt_name))
         receiver = Receiver()
         with patch.object(current, 'selected_ledger', return_value=receiver), patch.object(current, 'ledger_lines', return_value=['SYNTHETIC_TRANSPORT_ONLY']), redirect_stdout(io.StringIO()):
-            current.verify_selected(build, links, selected, info, targets)
+            current.verify_selected(build, links, selected, info, targets, 'native3-common-host-fixture')
             assert len(receiver.calls) == 3 and {row[3] for row in receiver.calls} == targets
             assert all(row[4] == fields for row in receiver.calls), 'Mandatory context was not passed from actual outer producer'
+            assert all(row[5] == 'selected-pthread-native3-common-host-fixture-toolchain.json' for row in receiver.calls), 'Role-scoped receipt name was not passed'
             for field in fields:
                 bad = copy.deepcopy(selected)
                 bad['selected_toolchain']['context'][field] = 'older-or-other'
                 try:
-                    current.verify_selected(build, links, bad, info, targets)
+                    current.verify_selected(build, links, bad, info, targets, 'native3-common-host-fixture')
                 except SystemExit:
                     pass
                 else:
                     raise AssertionError('Receiver accepted coherent different outer producer context')
             for bad_links in ({}, dict(links, extra={})):
                 try:
-                    current.verify_selected(build, bad_links, selected, info, targets)
+                    current.verify_selected(build, bad_links, selected, info, targets, 'native3-common-host-fixture')
                 except SystemExit:
                     pass
                 else:
