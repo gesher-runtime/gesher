@@ -332,8 +332,11 @@ def quarantine_failure():
     can destroy this owner and remains an UNPROVED boundary, not cleanup.
     """
     entered=False
-    while lifetime_unresolved():
+    while True:
         try:
+            # Entry and EVERY subsequent exit query belong to this guard too.
+            # An interruption in the query is not proof that roots settled.
+            if not lifetime_unresolved():return
             if not entered:
                 entered=True
                 emit('QUARANTINE',{'qualification':False,'state':'PASSIVE_RETAINED_OWNER','operation_budget_extended':False,'external_forced_cancellation':'UNPROVED','tool_graphs':len(TOOL_GRAPHS),'native_graphs':len(A.LIVE_GRAPHS),'directory_roots':len(DIRECTORY_ROOTS)})

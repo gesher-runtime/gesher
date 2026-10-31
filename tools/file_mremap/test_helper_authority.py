@@ -426,6 +426,48 @@ class Helper(unittest.TestCase):
                 if graph in owner.LIVE_GRAPHS:owner.LIVE_GRAPHS.remove(graph)
                 P.DIRECTORY_ROOTS[:]=[d for d in P.DIRECTORY_ROOTS if d['path']!=dest]
 
+    def test_extracted_barrier_initial_and_subsequent_query_interruptions(self):
+        # Execute ONLY actual barrier/exit-query ASTs with inert owner lists.
+        # No module entrypoint, process, thread, ctypes or output pipe exists.
+        tree=ast.parse((ROOT/'tools/file_mremap/helper_producer.py').read_bytes())
+        names={'lifetime_unresolved','quarantine_failure','finish_failure'}
+        selected=ast.Module(body=[n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name in names],type_ignores=[])
+        for interrupt_at in (1,3):
+            for failure_sink in (False,True):
+                roots=[{'ORIGINAL_TOOL':True}];native=[{'ORIGINAL_NATIVE':True}];directories=[{'ORIGINAL_DIRECTORY':True}]
+                events=[];queries=[];steps=[];sink_error=OSError('SYNTHETIC_CLOSED_FAILURE_SINK')
+                scope={'TOOL_GRAPHS':roots,'A':types.SimpleNamespace(LIVE_GRAPHS=native),'DIRECTORY_ROOTS':directories}
+                def emit(label,value):
+                    self.assertIs(scope['A'].LIVE_GRAPHS,native);self.assertFalse(value['qualification'])
+                    events.append(label)
+                    if label=='QUARANTINE':raise OSError('SYNTHETIC_CLOSED_QUARANTINE_SINK')
+                    if failure_sink:raise sink_error
+                def settle():
+                    self.assertTrue(roots and native and directories);steps.append(1)
+                    if len(steps)==3:
+                        roots.clear();native.clear();directories.clear();return True
+                    return False
+                def pause():
+                    self.assertTrue(roots and native and directories)
+                scope.update(emit=emit,settle_lifetime_once=settle,quarantine_pause=pause)
+                exec(compile(selected,'extracted_actual_lifetime_barrier','exec'),scope)
+                actual_query=scope['lifetime_unresolved']
+                def query():
+                    queries.append(1)
+                    if len(queries)==interrupt_at:
+                        self.assertTrue(roots and native and directories);raise KeyboardInterrupt()
+                    return actual_query()
+                scope['lifetime_unresolved']=query
+                permanent=ValueError('SYNTHETIC_PERMANENT_OPERATION_FAILURE')
+                def caller():
+                    try:raise permanent
+                    except BaseException as error:
+                        scope['finish_failure']('consume',error);raise
+                with self.assertRaises(OSError if failure_sink else ValueError)as result:caller()
+                self.assertIs(result.exception,sink_error if failure_sink else permanent)
+                self.assertEqual(len(steps),3);self.assertGreaterEqual(len(queries),interrupt_at)
+                self.assertFalse(roots or native or directories);self.assertEqual(events,['FAILURE','QUARANTINE'])
+
     def test_batch_hashes_match_real_single_path_git_filters(self):
         names=tuple(dict.fromkeys((*A.ADDITIONS,*A.INPUT21)))
         batch=A.checked_out_hashes(ROOT,names)
