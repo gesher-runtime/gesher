@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   source-authority:
-    uses: gesher-runtime/gesher/.github/workflows/file-mremap-helper-trusted-source.yml@0000000000000000000000000000000000000000
+    uses: gesher-runtime/gesher/.github/workflows/file-mremap-helper-trusted-source.yml@c9f7bb28ac100552d4724552041a1831be6bfc4c
   helper-producer:
     needs: source-authority
     runs-on: ubuntu-24.04
