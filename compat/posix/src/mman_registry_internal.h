@@ -86,7 +86,8 @@ PrepareStatus PrepareSurgeryFromNoExceptions(const Region&, uintptr_t, uintptr_t
 struct PreparedPunchPiece {
   uintptr_t start=0,begin=0,end=0;
   Region original;
-  std::array<RegionMap::node_type,3> partitions;
+  std::array<RegionMap::node_type,3> partitions; // REAL placeholder states during transitions
+  std::array<Region,2> kept; // publish only after actual retained view succeeds
   std::vector<DWORD> desired_protection;
   std::vector<uint8_t> private_bytes;
   std::array<std::unique_ptr<SectionOwner>,3> failure_records;
@@ -95,6 +96,7 @@ struct PreparedPunchPiece {
 struct PreparedPunchRequest {
   std::vector<PreparedPunchPiece> pieces;
   PreparedPunchLedger merged;
+  PreparedPunchLedger cleanup_merged; // separate storage if constructor later fails
   size_t first_capacity=0,combined_pages=0;
 };
 PrepareStatus PreparePunchRequest(const RegionMap&,uintptr_t,uintptr_t,size_t,
