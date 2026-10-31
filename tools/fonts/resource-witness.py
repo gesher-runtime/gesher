@@ -31,7 +31,7 @@ def _unwind_mismatch_evidence(entry, raw, code, operations):
                   'raw_sha256':hashlib.sha256(raw).hexdigest(),
                   'version':raw[0]&7,'flags':raw[0]>>3,'count':raw[2],
                   'prolog':raw[1],'frame':raw[3],'received_operations':operations,
-                  'expected_operations':[(10,2,3,32),(6,0,7,0),(5,4,3,48)],
+                  'expected_operations':[(10,4,3,48),(10,2,3,32),(6,0,7,0)],
                   'prologue_hex':code[:10].hex()}
         encoded=json.dumps(evidence,ensure_ascii=True,separators=(',',':'))
         suffix='\nFONT_RESOURCE_UNWIND_MISMATCH '+encoded
@@ -43,6 +43,24 @@ def _unwind_mismatch_evidence(entry, raw, code, operations):
 
 def require(value, reason):
     if not value: raise ValueError('UNAVAILABLE: '+reason)
+
+def _fixed_body_state(operations):
+    # Save locations are relative to immutable F=entrySP-40, NOT virtual RSP.
+    fixed={48:'saved_RBX',32:'saved_RDI',40:'caller_return'}
+    virtual=0;restored={}
+    for offset,op,reg,value in operations:
+        if op==4:
+            require(reg==3 and value==48 and 'RBX'not in restored,'fixed RBX save slot')
+            restored['RBX']=fixed[value]
+        elif op==2:
+            require(value==32,'fixed allocation');virtual+=value
+        elif op==0:
+            require(reg==7 and virtual==32 and 'RDI'not in restored,'fixed RDI push slot')
+            restored['RDI']=fixed[virtual];virtual+=8
+        else:raise ValueError('UNAVAILABLE: unsupported body inverse')
+    require(virtual==40 and restored=={'RBX':'saved_RBX','RDI':'saved_RDI'} and fixed[virtual]=='caller_return','settled body inverse')
+    return {'fixed_base':'entrySP-40','entry_sp_offset':virtual,'RBX_slot':48,'RDI_slot':32,
+            'save_base_is_moving_virtual_sp':False,'restored':restored}
 
 def mapped(data, sections, rva, size):
     require(type(rva)is int and type(size)is int and 0<=rva<2**32 and 0<size<=2**32-rva,'RVA arithmetic')
@@ -94,16 +112,19 @@ def unwind_prologue(data, sections, entry, code):
         elif op==2:operations.append((off,op,info,info*8+8));i+=1
         else:raise ValueError('UNAVAILABLE: unseen unwind opcode')
     reason='prologue/unwind register and stack coherence'
-    if operations!=[(10,2,3,32),(6,0,7,0),(5,4,3,48)]:
+    if operations!=[(10,4,3,48),(10,2,3,32),(6,0,7,0)]:
         reason+=_unwind_mismatch_evidence(entry,raw,code,operations)
-    require(operations==[(10,2,3,32),(6,0,7,0),(5,4,3,48)],reason)
+    require(operations==[(10,4,3,48),(10,2,3,32),(6,0,7,0)],reason)
+    body=_fixed_body_state(operations)
     handler=None
     if flags:
         handler=struct.unpack_from('<I',raw,size-4)[0]
         require(len([s for s in sections if s['flags']&0x20000000 and s['rva']<=handler<s['rva']+s['raw_size']])==1,'opaque handler RVA')
     return {'rva':at,'bytes':size,'hex':raw.hex(),'sha256':hashlib.sha256(raw).hexdigest(),
             'version':version,'flags':flags,'prolog_bytes':prolog,'operations':operations,
-            'opaque_handler_rva':handler}
+            'opaque_handler_rva':handler,'scope':'POST_PROLOGUE_COMMON_BODY',
+            'partial_prologue_qualified':False,'runtime_unwind_integrity':False,
+            'fixed_body_state':body}
 
 def virtual_object_bounds(sections, candidate, image_size):
     require(type(candidate)is int and candidate%8==0 and 0<=candidate<=image_size-0x28,'object RVA/extent')
@@ -115,6 +136,12 @@ def virtual_object_bounds(sections, candidate, image_size):
 
 def controlflow_basis(cache):
     code=bytes.fromhex(cache['cache_hex']);start=cache['start_rva'];end=cache['function']['end']-start
+    unwind=cache['unwind']
+    require(type(unwind['scope'])is str and unwind['scope']=='POST_PROLOGUE_COMMON_BODY' and
+            type(unwind['partial_prologue_qualified'])is bool and unwind['partial_prologue_qualified']is False and
+            type(unwind['runtime_unwind_integrity'])is bool and unwind['runtime_unwind_integrity']is False,
+            'typed bounded body scope')
+    require(unwind['prolog_bytes']==10 and 10<29<58 and 10<41<58,'conservative body control PCs')
     # Decode EVERY primary-function instruction using this exact known template.
     # Only two signed RIP operands and the already-observed directcall vary.
     expected=[(0,'48895c2408'),(5,'57'),(6,'4883ec20'),(10,'488bda'),(13,'488bf9'),
@@ -135,4 +162,6 @@ def controlflow_basis(cache):
             'nolock_target_rva':start+41+int.from_bytes(code[37:41],'little',signed=True),
             'candidate_rva':candidate,'virtual_object':bounds,
             'instruction_ends':[5,6,10,13,16,23,29,30,33,36,41,43,50,56,58,63,67,68,69],
+            'scope':'POST_PROLOGUE_COMMON_BODY','partial_prologue_qualified':False,
+            'runtime_unwind_integrity':False,'body_after_rva':start+10,'body_before_rva':start+58,
             'owner_observed':False,'runtime_unwind_integrity_attested':False}

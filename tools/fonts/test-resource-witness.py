@@ -28,7 +28,7 @@ def image():
     data[0x400:0x400+len(code)]=code
     struct.pack_into('<III',data,0x1400,0x1000,0x1045,0x3100)
     struct.pack_into('<III',data,0x140c,0x104c,0x1100,0x3100)
-    data[0x1500:0x150c]=bytes.fromhex('010a04000a32067005340600')
+    data[0x1500:0x150c]=bytes.fromhex('010a04000a3406000a320670')
     return data
 
 def packet(data):
@@ -74,7 +74,7 @@ class Witness(unittest.TestCase):
         data[0x140c:0x1418]=data[0x1400:0x140c];self.reject(lambda:packet(data))
     def test_mismatch_lossless_bounded_stderr_evidence(self):
         # Synthetic wrong save offset, NOT an observed current-profile layout.
-        data=image();struct.pack_into('<H',data,0x150a,7)
+        data=image();struct.pack_into('<H',data,0x1506,7)
         stdout=io.StringIO()
         with contextlib.redirect_stdout(stdout), self.assertRaises(ValueError)as caught:
             packet(data)
@@ -89,11 +89,11 @@ class Witness(unittest.TestCase):
         self.assertEqual(bytes.fromhex(value['raw_hex']),raw)
         self.assertEqual(value['raw_sha256'],hashlib.sha256(raw).hexdigest())
         self.assertEqual([value[k]for k in ('version','flags','count','prolog','frame')],[1,0,4,10,0])
-        self.assertEqual(value['expected_operations'],[[10,2,3,32],[6,0,7,0],[5,4,3,48]])
-        self.assertEqual(value['received_operations'],[[10,2,3,32],[6,0,7,0],[5,4,3,56]])
+        self.assertEqual(value['expected_operations'],[[10,4,3,48],[10,2,3,32],[6,0,7,0]])
+        self.assertEqual(value['received_operations'],[[10,4,3,56],[10,2,3,32],[6,0,7,0]])
         self.assertEqual(bytes.fromhex(value['prologue_hex']),bytes(data[0x400:0x40a]))
     def test_diagnostic_failures_keep_original_rejection(self):
-        data=image();struct.pack_into('<H',data,0x150a,7)
+        data=image();struct.pack_into('<H',data,0x1506,7)
         for target,value in [('UNWIND_DIAGNOSTIC_CAP',1),('json.dumps',lambda *a,**k: (_ for _ in ()).throw(RuntimeError('internal')))]:
             control=patch.object(w,'UNWIND_DIAGNOSTIC_CAP',value)if target=='UNWIND_DIAGNOSTIC_CAP'else patch.object(w.json,'dumps',value)
             with self.subTest(target=target),control:
@@ -108,12 +108,45 @@ class Witness(unittest.TestCase):
         baseline=packet(image())
         with patch.object(w,'_unwind_mismatch_evidence',side_effect=AssertionError('valid must not format')):
             self.assertEqual(json.dumps(packet(image()),sort_keys=True),json.dumps(baseline,sort_keys=True))
-        for at,value in [(0x1500,2),(0x1505,0x31),(0x1506,11)]:
+        for at,value in [(0x1500,2),(0x1505,0x31),(0x1504,11)]:
             data=image();data[at]=value
             with patch.object(w,'_unwind_mismatch_evidence',side_effect=AssertionError('earlier guard must reject first')):
                 with self.assertRaises(ValueError):packet(data)
         data=image()[:0x150a]
         with patch.object(w,'_unwind_mismatch_evidence',side_effect=AssertionError('truncation first')):
             with self.assertRaises(ValueError):packet(data)
+    def test_actual_saved_metadata_and_fixed_frame_correction(self):
+        # Saved TEXT diagnostics, not local PE reads. d40e/run41198747288/a1.
+        fixtures=[(124530422116,'feafcc3e4cdd35eff38da982e39b639548122e62010f617e76d57132909056c0',
+                   'd8c103001dc2030088ce1100','190a04000a3406000a32067010170b00','678373fdb3eb3c07aeb2efee86558a3aca49dd0695cb51bdfc2da57577748f3c'),
+                  (124530422148,'b302ae62c709893fb175be0bcc76c066ff86797be0c143c7c5e57a4a16743c18',
+                   'b4840b00f9840b00b4e50e00','190a04000a3406000a32067070570400','c4efbe6192b33830570a209b4cf339c8b9aa396f4c2880c08a5b568def8de45b')]
+        source='d40e5398f22c8edaa85c36543b467f2ad1315ffb'
+        self.assertEqual(len(source),40)
+        for job,raw_sha,entry_hex,unwind_hex,digest in fixtures:
+            with self.subTest(job=job,raw_sha=raw_sha):
+                begin,end,at=struct.unpack('<III',bytes.fromhex(entry_hex));raw=bytes.fromhex(unwind_hex)
+                self.assertEqual(hashlib.sha256(raw).hexdigest(),digest)
+                handler=struct.unpack_from('<I',raw,12)[0]
+                sections=[{'rva':at,'raw':0,'raw_size':16,'flags':0},
+                          {'rva':handler,'raw':0,'raw_size':1,'flags':0x20000000}]
+                result=w.unwind_prologue(raw,sections,{'begin':begin,'end':end,'unwind_rva':at,'entry_hex':entry_hex},bytes.fromhex('48895c2408574883ec20'))
+                self.assertEqual(result['operations'],[(10,4,3,48),(10,2,3,32),(6,0,7,0)])
+                self.assertEqual(result['scope'],'POST_PROLOGUE_COMMON_BODY')
+                self.assertIs(result['partial_prologue_qualified'],False)
+                self.assertIs(result['runtime_unwind_integrity'],False)
+        # Both inverses read SAVE from FIXED F, including after virtual SP moves.
+        self.assertEqual(w._fixed_body_state([(10,4,3,48),(10,2,3,32),(6,0,7,0)]),
+                         w._fixed_body_state([(10,2,3,32),(6,0,7,0),(5,4,3,48)]))
+        data=image();data[0x1500:0x150c]=bytes.fromhex('010a04000a32067005340600')
+        self.reject(lambda:packet(data)) # Old list is NOT actual raw encoding.
+    def test_scope_missing_or_wrong_type_and_body_bounds(self):
+        for key in ('scope','partial_prologue_qualified','runtime_unwind_integrity'):
+            for value in (None,0,'false',True):
+                c=packet(image());c['unwind'][key]=value
+                self.reject(lambda:w.controlflow_basis(c))
+            c=packet(image());del c['unwind'][key];self.reject(lambda:w.controlflow_basis(c))
+        c=packet(image());self.assertEqual(c['basis']['body_after_rva'],0x100a)
+        self.assertEqual(c['basis']['body_before_rva'],0x103a)
 
 if __name__=='__main__':unittest.main()
