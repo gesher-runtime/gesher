@@ -1,13 +1,14 @@
 # ONE current waiter address and SAMEADDRESS handler: SOURCE candidate
 
-After 8563 actual root-directory rejection on both hosts, this candidate adds
-failure-only bounded header/operand evidence at the unchanged combined
-named/count predicate. It records the exact 16-byte header and hash, each field,
-both boolean outcomes, resource hash and validated disk profile/current
-context/PID/input-record hash. Successful metadata and stdout are unchanged;
-formatting failure retains the original rejection. It does not accept named
-resources, expand count bounds, interpret entries or establish actual metadata.
-Actual operands remain unknown until a separately reviewed changed-source run.
+After 2a3a reported root named=1/IDs=2 on both hosts, this candidate permits
+bounded named root types according to the PE resource directory structure.
+It validates each name flag, length-prefixed UTF-16, alignment, sorting,
+uniqueness and target range/alias without traversing named types. Numeric IDs
+remain unique and ordered; only numeric RT_VERSION is traversed and nested
+named entries remain rejected. Existing depth, span, overlap, count, profile,
+language and provenance checks remain. Header diagnostics continue on rejected
+counts or nested names. Actual entries and successful metadata are not yet
+observed; the new source does not qualify runtime, loader or owner behavior.
 
 This candidate extends bounded actual04a0/run41190767978 bothhost CODE+TYPE and
 normalcompletion. It has NO actual new witness result. Original four qualification

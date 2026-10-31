@@ -194,29 +194,63 @@ def disk_entry(data,context=None,pid=123):
             'signer':'CN=Synthetic, O=Microsoft Corporation','signer_thumbprint':'A'*40,
             'lease':'RETAINED_READ_SHARE_READ','context':context or {'source':'a'*40,'run':'1','attempt':'1'},'imports_pid':pid}
 
+def disk_image_named_root():
+    data=bytearray(disk_image());base=0x1400;data[base:base+0x200]=b'\0'*0x200
+    struct.pack_into('<HH',data,base+12,1,2)
+    struct.pack_into('<II',data,base+16,0x80000180,0x800001c0)
+    struct.pack_into('<II',data,base+24,3,0x800001d0)
+    struct.pack_into('<II',data,base+32,16,0x80000080)
+    struct.pack_into('<HHII',data,base+0x80+12,0,1,1,0x800000a0)
+    struct.pack_into('<HHII',data,base+0xa0+12,0,1,0x409,0xc0)
+    payload=version_root([('040904B0',[('FileVersion','10.0.20348.5622'),('ProductVersion','localized distinct')])],[(0x409,1200)])
+    struct.pack_into('<IIII',data,base+0xc0,0x3200,len(payload),1200,0)
+    struct.pack_into('<H',data,base+0x180,6);data[base+0x182:base+0x18e]='CUSTOM'.encode('utf-16-le')
+    return bytes(data)
+
 class DiskMetadata(unittest.TestCase):
     def reject(self,fn):
         with self.assertRaises((ValueError,KeyError,TypeError,struct.error)):fn()
+    def test_named_root_type_is_bounded_and_numeric_version_remains_strict(self):
+        data=disk_image_named_root();result=w.disk_version_metadata(data)
+        self.assertEqual(len(result['records']),1);self.assertEqual(result['records'][0]['path'],[16,1,0x409])
+        cases=[(0x1410,'<I',0x180),(0x1410,'<I',0x80000181),(0x1410,'<I',0x80000fff),
+               (0x1414,'<I',0x1c0),(0x1414,'<I',0x80000000),(0x1414,'<I',0x80000080),
+               (0x1418,'<I',16),(0x1420,'<I',3),(0x1580,'<H',257),(0x1582,'<H',0xd800)]
+        for at,fmt,value in cases:
+            bad=bytearray(data);struct.pack_into(fmt,bad,at,value)
+            with self.subTest(at=at,value=value):self.reject(lambda:w.disk_version_metadata(bytes(bad)))
+        two=bytearray(data);base=0x1400;struct.pack_into('<HH',two,base+12,2,2)
+        struct.pack_into('<II',two,base+24,0x800001a0,0x800001e0)
+        struct.pack_into('<II',two,base+32,3,0x800001d0)
+        struct.pack_into('<II',two,base+40,16,0x80000080)
+        struct.pack_into('<H',two,base+0x1a0,4);two[base+0x1a2:base+0x1aa]='ZETA'.encode('utf-16-le')
+        self.assertEqual(w.disk_version_metadata(bytes(two))['records'][0]['path'],[16,1,0x409])
+        for label,change in [('unsorted',lambda b:b.__setitem__(slice(base+0x1a2,base+0x1aa),'AAAA'.encode('utf-16-le'))),
+                             ('duplicate-target',lambda b:struct.pack_into('<I',b,base+28,0x800001c0)),
+                             ('duplicate-name',lambda b:struct.pack_into('<I',b,base+24,0x80000180))]:
+            bad=bytearray(two);change(bad)
+            with self.subTest(label=label):self.reject(lambda:w.disk_version_metadata(bytes(bad)))
     def test_actual_directory_rejection_operands_and_provenance(self):
         data=disk_image();entry=disk_entry(data);ctx=entry['context']
         provenance={'profile':{k:entry[k]for k in ('role','name','version','bytes','sha256')},'context':ctx,
                     'imports_pid':123,'input_record_sha256':hashlib.sha256(json.dumps(entry,sort_keys=True,separators=(',',':')).encode()).hexdigest()}
         for named,ids in ((1,1),(0,0),(0,65),(65535,65535)):
-            bad=bytearray(data);struct.pack_into('<HH',bad,0x1400+12,named,ids)
+            at=24 if (named,ids)==(1,1) else 0
+            bad=bytearray(data);struct.pack_into('<HH',bad,0x1400+at+12,named,ids)
             with contextlib.redirect_stdout(io.StringIO()) as stdout:
                 with self.assertRaises(ValueError) as error:w.disk_version_metadata(bytes(bad),provenance)
             self.assertEqual(stdout.getvalue(),'')
             reason=str(error.exception);prefix='UNAVAILABLE: resource numeric identifier/count\nFONT_RESOURCE_RESOURCE_DIRECTORY_REJECTION '
             self.assertTrue(reason.startswith(prefix));record=json.loads(reason[len(prefix):])
-            header=bytes(bad[0x1400:0x1410])
+            header=bytes(bad[0x1400+at:0x1410+at])
             self.assertEqual(record['header_hex'],header.hex());self.assertEqual(record['header_sha256'],hashlib.sha256(header).hexdigest())
             self.assertEqual((record['named'],record['ids'],record['count']),(named,ids,named+ids))
             self.assertEqual((record['named_zero'],record['count_in_range']),(named==0,0<named+ids<=64))
-            self.assertEqual(record['provenance'],provenance);self.assertEqual((record['level'],record['relative_offset'],record['key_path']),(0,0,[]))
+            self.assertEqual(record['provenance'],provenance);self.assertEqual((record['level'],record['relative_offset'],record['key_path']),(1,24,[16]) if at else (0,0,[]))
             self.assertEqual(record['resource_sha256'],hashlib.sha256(bytes(bad[0x1400:0x2400])).hexdigest())
         with patch.object(w,'_resource_directory_rejection',side_effect=AssertionError('must not run')):
             self.assertTrue(w.disk_version_metadata(data)['records'])
-            bad=bytearray(data);struct.pack_into('<HH',bad,0x1400+12,1,1)
+            bad=bytearray(data);struct.pack_into('<HH',bad,0x1400+12,0,65)
             with self.assertRaisesRegex(ValueError,'^UNAVAILABLE: resource numeric identifier/count$'):w.disk_version_metadata(bytes(bad),provenance)
         huge=dict(provenance,profile={'synthetic':'x'*9000})
         with self.assertRaisesRegex(ValueError,'^UNAVAILABLE: resource numeric identifier/count$'):w.disk_version_metadata(bytes(bad),huge)
