@@ -574,4 +574,3 @@ try{
  Emit-PreflightRecord 'FONT_RESOURCE_SUMMARY' @{phase=$phase;characterization_completed=($ok -and $all -and $streamsClosed -and $released -and !$cleanupError);process_completion=$completion;role_states=$roleStates;stage_root_released=$released;root_retained=($root -and $root.active);native_failure_lifetime='QUARANTINE_UNTIL_BOTH_NATIVE_KERNELS_OR_EXACT_CHILD_TERMINATION';gallery='NOT_DISABLED';loader='NOT_EXHAUSTIVE';help='OMITTED';font_owner_qualified=$false;host_WCT_Windows2025_qualified=$false;private_CRT_owner_symbols_qualified=$false;full_qualification=$false;elapsed_ms=$clock.ElapsedMilliseconds;cleanup_error=$cleanupError}
  if(!$all -or !$streamsClosed -or !$released -or $cleanupError){throw 'Exact owned cleanup failed; any live owners remain rooted'}
 }
-
