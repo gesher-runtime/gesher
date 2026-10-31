@@ -1,0 +1,23 @@
+import copy
+import unittest
+import types
+from pathlib import Path
+m=types.ModuleType('manifest')
+exec(compile(Path(__file__).with_name('manifest.py').read_bytes(),'manifest.py','exec'),m.__dict__)
+
+class ManifestTests(unittest.TestCase):
+    def test_binding_and_negative_substitutions(self):
+        context={'repository':'gesher-runtime/gesher','repository_id':'1426153186',
+                 'source':'a'*40,'run':'123','attempt':'1','guard':'b'*40}
+        rows={name:{'mode':'100644','blob':'c'*40,'bytes':1,'sha256':'d'*64} for name in m.PATHS}
+        value=m.manifest(context,42,rows)
+        self.assertEqual(len(m.validate(value,context,42,rows)),64)
+        changes=[lambda x:x['context'].update(source='e'*40),
+                 lambda x:x['context'].update(attempt='2'),lambda x:x['context'].update(guard='f'*40),
+                 lambda x:x.update(producer_id=43),lambda x:x.update(qualification=0),
+                 lambda x:x['members'].pop(m.PATHS[0]),lambda x:x.update(unexpected=True)]
+        for change in changes:
+            mutated=copy.deepcopy(value);change(mutated)
+            with self.assertRaises(AssertionError):m.validate(mutated,context,42,rows)
+
+if __name__=='__main__':unittest.main()
