@@ -2,6 +2,10 @@
 
 No root CMake/setup-build/global archive or production registry is executed.
 Importing this file has no tool/network/native side effect.
+Failed operations never become successful after containment. The existing CLI
+is the lifetime owner: unresolved launch/kernel/IO/image/directory state enters
+passive quarantine after the unchanged operation/finite cleanup budgets. Only
+exact owned settlement allows error exit; forced cancellation remains unproved.
 """
 import argparse
 import ast
@@ -33,6 +37,7 @@ LINKER_SHA='cbae3badcf29268220242e8875cb6c288336ab593238099746f0071c15bbf581'
 MACROS=A.MACROS
 COMMON=A.COMMON
 TOOL_GRAPHS=[]
+DIRECTORY_ROOTS=[]
 
 def emit(label,value):
     A.emit_record(label,value)
@@ -65,11 +70,11 @@ def failure_output(raw,binary=False):
 def tool(argv,cwd,env,seconds=90,binary_stdout=False):
     """Bounded concurrent tool capture with a graph saved before readers start."""
     A.require(os.environ.get('GITHUB_ACTIONS')=='true' and os.name=='posix','compiler tools Linux CI only')
-    graph={'argv':list(map(str,argv)),'process':None,'readers':[],'buffers':[bytearray(),bytearray()],'overflow':False,'errors':[],'executable_sha256':None,'executable_realpath':None}
-    TOOL_GRAPHS.append(graph);start=time.monotonic();proc=None;kernel_done=False;timed=False;closed=False
+    graph={'kind':'TOOL','launch_state':'NOT_ATTEMPTED','kernel_completed':False,'handles_closed':False,'argv':list(map(str,argv)),'process':None,'readers':[],'buffers':[bytearray(),bytearray()],'overflow':False,'errors':[],'executable_sha256':None,'executable_realpath':None}
+    TOOL_GRAPHS.append(graph);start=time.monotonic();proc=None;kernel_done=False;timed=False
     try:
         graph['executable_sha256']=sha(graph['argv'][0]);graph['executable_realpath']=str(Path(graph['argv'][0]).resolve())
-        proc=subprocess.Popen(graph['argv'],cwd=cwd,env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE);graph['process']=proc
+        proc=A.launch_owned(graph,graph['argv'],cwd=cwd,env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         def drain(index,stream):
             try:
                 while True:
@@ -83,23 +88,19 @@ def tool(argv,cwd,env,seconds=90,binary_stdout=False):
         while proc.poll()is None and time.monotonic()<start+seconds and not graph['overflow']:time.sleep(.01)
         timed=proc.poll()is None and time.monotonic()>=start+seconds
         if proc.poll()is None:proc.kill()
-        proc.wait(timeout=5);kernel_done=True
+        proc.wait(timeout=5);kernel_done=True;graph['kernel_completed']=True
     except BaseException as error:
-        graph['errors'].append(repr(error))
+        graph['errors'].append(repr(error));A.prove_unattempted_failure(graph)
     finally:
+        proc=graph['process']
         if proc is not None and not kernel_done:
             try:
                 if proc.poll()is None:proc.kill()
-                proc.wait(timeout=5);kernel_done=True
+                proc.wait(timeout=5);kernel_done=True;graph['kernel_completed']=True
             except BaseException as error:graph['errors'].append(repr(error))
-        quiescent=(proc is None or kernel_done)and A.settle_readers(graph,start+seconds+10)
-        if quiescent:
-            try:
-                if proc is not None:
-                    proc.stdout.close();proc.stderr.close()
-                closed=True
-            except BaseException as error:graph['errors'].append(repr(error))
-        record={'argv':graph['argv'],'pid':proc.pid if proc else None,'started':proc is not None,'elapsed_seconds':time.monotonic()-start,'exit':proc.returncode if proc else None,'kernel_completed':kernel_done,'io_completed':quiescent,'handles_closed':closed,'overflow':graph['overflow'],'timed_out':timed,'root_retained':not(quiescent and closed),'errors':list(graph['errors']),'executable_sha256':graph['executable_sha256'],'executable_realpath':graph['executable_realpath'],'stdout_sha256':A.digest(bytes(graph['buffers'][0])),'stderr_sha256':A.digest(bytes(graph['buffers'][1]))}
+        released=A.settle_graph(graph,start+seconds+10)
+        if 'settlement_error' in graph:graph['errors'].append(graph['settlement_error'])
+        record={'argv':graph['argv'],'launch_state':graph['launch_state'],'pid':proc.pid if proc else None,'started':proc is not None,'elapsed_seconds':time.monotonic()-start,'exit':proc.returncode if proc else None,'kernel_completed':graph['kernel_completed'],'io_completed':released,'handles_closed':graph['handles_closed'],'overflow':graph['overflow'],'timed_out':timed,'root_retained':not released,'errors':list(graph['errors']),'executable_sha256':graph['executable_sha256'],'executable_realpath':graph['executable_realpath'],'stdout_sha256':A.digest(bytes(graph['buffers'][0])),'stderr_sha256':A.digest(bytes(graph['buffers'][1]))}
         emit('TOOL',record)
         if not record['root_retained']:TOOL_GRAPHS.remove(graph)
     if graph['errors']or timed or graph['overflow']or proc is None or proc.returncode!=0 or record['root_retained']:
@@ -273,8 +274,10 @@ def produce():
 
 def release_consumer_directory(dest,parent):
     # No recursive deletion while a child/reader/image lease is retained.
-    A.require(not A.LIVE_GRAPHS,'FAILED_CONTAINMENT: retain owned directory')
+    A.require(not A.LIVE_GRAPHS and not TOOL_GRAPHS,'FAILED_CONTAINMENT: retain owned directory')
     A.require(dest.is_absolute() and dest.resolve().parent==parent.resolve() and re.fullmatch(r'mremap-helper-[1-9][0-9]*-[1-9][0-9]*-win(?:22|25)',dest.name),'owned absolute cleanup target')
+    if not dest.exists():
+        A.require(not dest.is_symlink(),'cleanup absent reparse target');return
     A.require(not dest.is_symlink() and not(getattr(dest.lstat(),'st_file_attributes',0)&0x400),'cleanup reparse target')
     shutil.rmtree(dest);A.require(not dest.exists(),'owned directory cleanup')
 
@@ -284,18 +287,69 @@ def consume():
     artifact=A.verify_artifact(A.api('actions/runs/'+auth['context']['run']+'/artifacts?per_page=100'),auth['context'],auth['roles']['helper-producer']);emit('DOWNLOAD_AUTHORITY',{'context':auth['context'],'roles':auth['roles'],'artifact':artifact,'source_authority':auth['authority'],'host_role':role})
     raw=download('https://api.github.com/repos/'+A.REPOSITORY+'/actions/artifacts/'+str(artifact['id'])+'/zip',A.TOTAL_CAP,artifact['digest'].split(':')[1],os.environ['GH_TOKEN'])
     files=A.zip_members(raw);manifest=A.verify_bundle(files,auth);emit_text_members(files,auth['context']);dest=Path(os.environ['RUNNER_TEMP'])/('mremap-helper-'+auth['context']['run']+'-'+auth['context']['attempt']+'-'+image)
-    A.require(not dest.exists(),'fresh consumer directory');dest.mkdir()
+    A.require(not dest.exists()and not dest.is_symlink(),'fresh consumer directory')
+    directory={'path':dest,'parent':Path(os.environ['RUNNER_TEMP']).resolve()}
+    DIRECTORY_ROOTS.append(directory)
     try:
+        dest.mkdir()
         for name,value in files.items():(dest/name).write_bytes(value)
         os.environ.pop('GH_TOKEN',None);os.environ.pop('GITHUB_TOKEN',None)
         record,result=A.owned_helper(dest/'helper-qualification.exe',manifest['members']['helper-qualification.exe']['sha256'],auth['context'])
     finally:
         released=False
-        if not A.LIVE_GRAPHS:
-            release_consumer_directory(dest,Path(os.environ['RUNNER_TEMP']).resolve());released=True
+        if not A.LIVE_GRAPHS and not TOOL_GRAPHS:
+            release_consumer_directory(dest,directory['parent']);DIRECTORY_ROOTS.remove(directory);released=True
         emit('DIRECTORY',{'path':str(dest),'released':released,'retained_graphs':len(A.LIVE_GRAPHS)})
     A.require(released,'retained containment failure')
     emit('RESULT',{'context':auth['context'],'host_role':role,'producer_id':manifest['producer_id'],'artifact_id':artifact['id'],'artifact_digest':artifact['digest'],'producer_manifest_sha256':A.digest(files['producer-manifest.json']),'process':record,'budgets':result,'directory_released':True,'full_A_qualified':False,'production_registry_qualified':False,'selected_supplier_qualified':False})
+
+def lifetime_unresolved():
+    return bool(TOOL_GRAPHS or A.LIVE_GRAPHS or DIRECTORY_ROOTS)
+
+def settle_lifetime_once():
+    # Past the finite cleanup budget this is ONLY a passive lifetime barrier:
+    # zero-time exact-owned polls/joins and disposal after proven quiescence.
+    # No kill retries, tool work, PID search, new process or success conversion.
+    for roots in (TOOL_GRAPHS,A.LIVE_GRAPHS):
+        for graph in tuple(roots):
+            if A.settle_graph(graph,time.monotonic()):roots.remove(graph)
+    if not TOOL_GRAPHS and not A.LIVE_GRAPHS:
+        for directory in tuple(DIRECTORY_ROOTS):
+            try:
+                release_consumer_directory(directory['path'],directory['parent'])
+                DIRECTORY_ROOTS.remove(directory)
+            except BaseException as error:
+                A.containment_error(directory,error)
+    return not lifetime_unresolved()
+
+def quarantine_pause():
+    time.sleep(1)
+
+def quarantine_failure():
+    """Keep THIS CLI and original graphs alive; qualification is forever failed.
+
+    Unknown launch cannot settle from process=None. An external forced cancel
+    can destroy this owner and remains an UNPROVED boundary, not cleanup.
+    """
+    entered=False
+    while lifetime_unresolved():
+        try:
+            if not entered:
+                entered=True
+                emit('QUARANTINE',{'qualification':False,'state':'PASSIVE_RETAINED_OWNER','operation_budget_extended':False,'external_forced_cancellation':'UNPROVED','tool_graphs':len(TOOL_GRAPHS),'native_graphs':len(A.LIVE_GRAPHS),'directory_roots':len(DIRECTORY_ROOTS)})
+            if settle_lifetime_once():break
+            quarantine_pause()
+        except BaseException:
+            # In-process interruption/output failure cannot authorize CLI exit.
+            # No repeated output or accumulating error log in this barrier.
+            try:quarantine_pause()
+            except BaseException:pass
+
+def finish_failure(mode,error):
+    try:
+        emit('FAILURE',{'mode':mode,'error':repr(error)[:4096],'retained_tool_graphs':len(TOOL_GRAPHS),'retained_native_graphs':len(A.LIVE_GRAPHS),'retained_directory_roots':len(DIRECTORY_ROOTS),'qualification':False})
+    finally:
+        quarantine_failure()
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('mode',choices=('produce','consume'));args=parser.parse_args()
@@ -303,6 +357,6 @@ def main():
     try:
         (produce if args.mode=='produce'else consume)()
     except BaseException as error:
-        emit('FAILURE',{'mode':args.mode,'error':repr(error),'retained_tool_graphs':len(TOOL_GRAPHS),'retained_native_graphs':len(A.LIVE_GRAPHS),'qualification':False});raise
+        finish_failure(args.mode,error);raise
 
 if __name__=='__main__':main()
