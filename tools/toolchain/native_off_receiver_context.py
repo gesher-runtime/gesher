@@ -6,14 +6,14 @@ import re
 REPOSITORY = 'gesher-runtime/gesher'
 REPOSITORY_ID = '1426153186'
 CALLER = 'pthread-native-off-receiver/build'
-BRANCH = 'wip/pthread-native-off-receiver'
+BRANCH = 'wip/pthread-native-runtime161'
 WORKFLOW = 'pthread-native-off-receiver-component'
 PATH = '.github/workflows/pthread-native-off-receiver-component.yml'
 POLICY_PATH = '.github/workflows/pthread-native-off-receiver-trusted-source.yml'
 TUPLE = dict(repository=REPOSITORY, repository_id=REPOSITORY_ID, ref='refs/heads/'+BRANCH,
              workflow=WORKFLOW, workflow_path=PATH, job='build', caller=CALLER,
              workflow_ref=REPOSITORY+'/'+PATH+'@refs/heads/'+BRANCH,
-             source_authority='dedicated immutable reusable policy + PTHREAD_NATIVE_OFF_RECEIVER_CALLER_COMMIT')
+             source_authority='dedicated immutable reusable policy + PTHREAD_NATIVE_RUNTIME161_CALLER_COMMIT')
 
 
 def common_context(env, selection):

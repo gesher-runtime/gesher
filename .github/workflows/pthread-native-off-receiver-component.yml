@@ -2,7 +2,7 @@ name: pthread-native-off-receiver-component
 'on':
   push:
     branches:
-    - wip/pthread-native-off-receiver
+    - wip/pthread-native-runtime161
     paths:
     - .github/workflows/pthread-native-off-receiver-component.yml
   workflow_dispatch: null
@@ -205,6 +205,6 @@ jobs:
         if ($LASTEXITCODE -ne 0) { throw ''Current Native payload/source/compiler manifest failed'' }
 
         '
-    - name: Report the bounded receiver scope without running native outputs
+    - name: Mandatory161 strict rows all4 actual evidence routes and13 resource modes
       shell: pwsh
-      run: Write-Host 'NATIVE_RECEIVER_CONTROLS_ASSEMBLY_ONLY runtime161_executed=false default_adopted=false full_qualification=false'
+      run: tests/windows/run-native3-locks-current.ps1

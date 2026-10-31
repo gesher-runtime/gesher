@@ -18,7 +18,7 @@ jobs:
       policy_ref: ${{ steps.gate.outputs.policy_ref }}
     env:
       GH_TOKEN: ${{ github.token }}
-      PTHREAD_NATIVE_OFF_RECEIVER_CALLER_COMMIT: ${{ vars.PTHREAD_NATIVE_OFF_RECEIVER_CALLER_COMMIT }}
+      PTHREAD_NATIVE_RUNTIME161_CALLER_COMMIT: ${{ vars.PTHREAD_NATIVE_RUNTIME161_CALLER_COMMIT }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,8 +42,8 @@ jobs:
           CALLER='.github/workflows/pthread-native-off-receiver-component.yml'
           TRUST='.github/workflows/pthread-native-off-receiver-trusted-source.yml'
           REPO='gesher-runtime/gesher';RID='1426153186'
-          REF='refs/heads/wip/pthread-native-off-receiver';NAME='pthread-native-off-receiver-component'
-          VARIABLE='PTHREAD_NATIVE_OFF_RECEIVER_CALLER_COMMIT'
+          REF='refs/heads/wip/pthread-native-runtime161';NAME='pthread-native-off-receiver-component'
+          VARIABLE='PTHREAD_NATIVE_RUNTIME161_CALLER_COMMIT'
           CHANGED={CALLER,TRUST,'tools/toolchain/native_off_receiver_context.py',
            'tools/toolchain/native_off_receiver.py','tools/toolchain/native_off_receiver_policy.py',
            'tools/toolchain/test_native_off_receiver_context.py','tools/toolchain/test_native_off_receiver_live.py',
@@ -168,7 +168,7 @@ jobs:
               print('NATIVE_OFF_SOURCE_PROOF exact_paths='+str(len(CHANGED))+' whole_tree='+str(len(current))+' scope=source_only',flush=True)
               return dict(expected=expected,current=current,full=full)
 
-          EXPECTED = {'.github/workflows/pthread-native-off-receiver-component.yml': 'ad275ebfb96b6cb07579a400b7e036a95c1c9e05037dcb55432dbb62373bf855', 'docs/handoff/tracks/pthread-native-off-receiver-component.md': '6aabfce945a58977d252bb630aacd1e6a4eb577f3e75b75b9acbfb99c4ddc3ea', 'tools/host-pthread-authority/minimum_receipt.py': 'f808ff36844677b0327ce162389687fe0703e6dd834092030f74abc31c8ab5d3', 'tools/toolchain/native_off_receiver.py': '46eeeeb96eb61e7c6ac2adc4f3bfc72eda3554fd870d6cd91361fc989388f8ea', 'tools/toolchain/native_off_receiver_context.py': 'f48324d3d40c8f219b1ca825c701ddd2f586565e0542a3af129cf6d2786dfe28', 'tools/toolchain/native_off_receiver_policy.py': '67612e9680a062c9de9032ca835d4d6c6b3323b8aa50b0cc6f96a21f069676c2', 'tools/toolchain/prepare_host_pthread.py': '894fabe1148e96e87d5f41a21996dfdee69057e2b674b396f53acc2824fdb72b', 'tools/toolchain/selected_link.cmake': '5c4413c11ef853f11b32a58a1a6be2020e6cdedfa8402e7ef0d85b380be27bfe', 'tools/toolchain/test_native_off_receiver_context.py': 'a47d270533e2836dac9b07a9426b8f3fb1365c4e1dca72af1cc71a88eb435caf', 'tools/toolchain/test_native_off_receiver_live.py': 'a5fe42e03e68c65fdb093563971765e81088681e9bc49673ca15b09f6fdb4954', 'tools/toolchain/test_native_off_receiver_policy.py': 'c4e914772cee828029f682f856b66f89e9f74284749c70a5ce0187eef3999683'}
+          EXPECTED = {'.github/workflows/pthread-native-off-receiver-component.yml': '2f4ad28c9bfd51f6b94c75713aea3c89a27704bc42a287b67e773fa3f2efe64a', 'docs/handoff/tracks/pthread-native-off-receiver-component.md': '91be4d44d2e1e9c3c92b244d4bd2a4e88298ef27ed0442fd261b628bce357e0d', 'tools/host-pthread-authority/minimum_receipt.py': 'f808ff36844677b0327ce162389687fe0703e6dd834092030f74abc31c8ab5d3', 'tools/toolchain/native_off_receiver.py': '46eeeeb96eb61e7c6ac2adc4f3bfc72eda3554fd870d6cd91361fc989388f8ea', 'tools/toolchain/native_off_receiver_context.py': '0be2e167d977be4d8b830d8a8d324dad03312a74309e4392064b4f476efeed0f', 'tools/toolchain/native_off_receiver_policy.py': '1acea9b635966498bfc79f4092dff79d8613aec2c2b9b8a26cdf5716781200ec', 'tools/toolchain/prepare_host_pthread.py': '894fabe1148e96e87d5f41a21996dfdee69057e2b674b396f53acc2824fdb72b', 'tools/toolchain/selected_link.cmake': '5c4413c11ef853f11b32a58a1a6be2020e6cdedfa8402e7ef0d85b380be27bfe', 'tools/toolchain/test_native_off_receiver_context.py': 'a47d270533e2836dac9b07a9426b8f3fb1365c4e1dca72af1cc71a88eb435caf', 'tools/toolchain/test_native_off_receiver_live.py': 'a5fe42e03e68c65fdb093563971765e81088681e9bc49673ca15b09f6fdb4954', 'tools/toolchain/test_native_off_receiver_policy.py': 'e6916759c563a8263542eb0a24ddec7481cab9b4ab9cb963114b07003fc6e2f8'}
 
           def gate_main():
               import os
@@ -184,7 +184,7 @@ jobs:
               print('NATIVE_OFF_POLICY_RUN '+json.dumps({k:run.get(k)for k in ('id','run_attempt','head_sha','head_branch','path','name','event','repository','head_repository','actor','triggering_actor','referenced_workflows')},sort_keys=True),flush=True)
               authority_run(env,run,policy)
               assert frozen_candidate(EXPECTED,source)==policy
-              print('NATIVE_OFF_POLICY_PASS '+json.dumps(dict(source=source,policy_ref=policy,changed_paths=len(CHANGED),pinned_leaves=len(EXPECTED),actual_jobs=5,scope='ORDINARY_OFF_NATIVE_RECEIVER_CONTROLS_ASSEMBLY_ONLY',runtime161_executed=False,canonical_adoption=False,full_qualification=False),sort_keys=True),flush=True)
+              print('NATIVE_OFF_POLICY_PASS '+json.dumps(dict(source=source,policy_ref=policy,changed_paths=len(CHANGED),pinned_leaves=len(EXPECTED),actual_jobs=5,scope='ORDINARY_OFF_NATIVE_RUNTIME161_SOURCE_AUTHORITY',runtime161_executed=False,canonical_adoption=False,full_qualification=False),sort_keys=True),flush=True)
               with Path(env['GITHUB_OUTPUT']).open('a',encoding='utf-8')as output:
                   output.write('source='+source+'\npolicy_ref='+policy+'\n')
 

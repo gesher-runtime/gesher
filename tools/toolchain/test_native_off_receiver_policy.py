@@ -15,7 +15,7 @@ def normalize_factory(raw):
             return self.generic_visit(node)
     return ast.dump(StripExactNativeRoute().visit(ast.parse(raw)),include_attributes=False)
 
-def workflows(values,branch='wip/pthread-native-off-receiver'):
+def workflows(values,branch='wip/pthread-native-runtime161'):
     matched=[]
     for name,raw in values.items():
         data=yaml.safe_load(raw);events=data.get('on',data.get(True,{}))
@@ -42,7 +42,7 @@ def main():
     assert 'GESHER_WEB3_QUERY_TESTS=ON'not in actual[p.CALLER]
     assert '--mode=hook'not in actual[p.CALLER]
     assert d['jobs']['native3-locks-regression']['steps'][2:5]==old['jobs']['native3-locks-regression']['steps'][1:4]
-    assert 'runtime161_executed=false'in d['jobs']['native3-locks-regression']['steps'][-1]['run']
+    assert d['jobs']['native3-locks-regression']['steps'][-1]==old['jobs']['native3-locks-regression']['steps'][4]
     # Exact additive route, not a weakened old factory algorithm/default.
     oldfactory=p.git('show',p.BASE+':tools/toolchain/prepare_host_pthread.py').decode()
     newfactory=(root/'tools/toolchain/prepare_host_pthread.py').read_text()
@@ -60,7 +60,7 @@ def main():
             'tools/host-pthread-authority/minimum-detached-retirement.patch','tools/host-pthread-authority/minimum-noattach-join.patch']
     assert not p.git('diff',p.BASE,'--',*opaque)
     negatives=0
-    for raw in ('name: bad\non: [push]\njobs: {}\n','name: bad\non:\n  push:\n    branches: [wip/pthread-native-off-receiver]\njobs: {}\n'):
+    for raw in ('name: bad\non: [push]\njobs: {}\n','name: bad\non:\n  push:\n    branches: [wip/pthread-native-runtime161]\njobs: {}\n'):
         bad=dict(actual);bad['.github/workflows/UNEXPECTED.yml']=raw
         try:workflows(bad)
         except (AssertionError,AttributeError):negatives+=1
