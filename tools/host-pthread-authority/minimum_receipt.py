@@ -80,6 +80,10 @@ def context():
         sys.path.insert(0,str(ROOT/'tools/toolchain'))
         import first_link_context
         first_link_context.context(os.environ,'selected-minimum')
+    elif os.environ.get('GESHER_HOST_PTHREAD_CALLER')=='pthread-native-off-receiver/build':
+        sys.path.insert(0,str(ROOT/'tools/toolchain'))
+        import native_off_receiver_context as native
+        native.context(os.environ,'selected-minimum')
     else:
         assert os.environ['GITHUB_REF'] == 'refs/heads/wip/pthread-production-factory'
         assert os.environ['GITHUB_WORKFLOW'] == 'ci' and os.environ['GITHUB_JOB']=='build'
