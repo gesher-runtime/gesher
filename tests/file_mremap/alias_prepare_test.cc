@@ -115,6 +115,42 @@ int main() {
     }
     if(!success||!caught)++failed;
   }
+  {
+    RegionMap source;
+    Region prefix;prefix.kind=Kind::kView;prefix.group=0x100000;
+    prefix.size=128*4096;prefix.shared=true;prefix.live.assign(128,true);prefix.live_pages=128;
+    source.emplace(0x100000,std::move(prefix));
+    Region middle;middle.kind=Kind::kAnon;middle.group=0x100000;
+    const size_t middle_pages=source.begin()->second.live.capacity()+16;
+    middle.size=middle_pages*4096;middle.live.assign(middle_pages,true);middle.live_pages=middle_pages;
+    const uintptr_t suffix_start=0x180000+middle.size;
+    source.emplace(0x180000,std::move(middle));
+    Region suffix;suffix.kind=Kind::kView;suffix.group=0x100000;
+    suffix.size=128*4096;suffix.live.assign(128,true);suffix.live_pages=128;
+    source.emplace(suffix_start,std::move(suffix)); // private continuation, partial edge
+    bool success=false;int caught=0;
+    for(long point=0;point<256;++point) {
+      const long before=live;calls=0;injected=0;budget=point;
+      PrepareStatus status;
+      {
+        PreparedPunchRequest plan;
+        status=PreparePunchRequestFromNoExceptions(source,0x101000,suffix_start+127*4096,4096,plan);
+        budget=-1;
+        if(status==PrepareStatus::NoMemory) {
+          ++caught;if(!plan.pieces.empty()||!plan.merged.combined.live.empty())++failed;
+        } else if(status==PrepareStatus::Ok) {
+          success=true;
+          if(plan.pieces.size()!=3 || plan.pieces.back().private_bytes.size()!=128*4096 ||
+             plan.combined_pages<=plan.first_capacity)++failed;
+        } else ++failed;
+      }
+      if(live!=before || injected!=(status==PrepareStatus::NoMemory?1:0))++failed;
+      std::printf("PUNCH_REQUEST_ALLOCATION point=%ld calls=%ld injected=%ld status=%d released=%d\n",
+        point,calls,injected,static_cast<int>(status),live==before);
+      if(success)break;
+    }
+    if(!success||!caught)++failed;
+  }
   std::printf("PREPARE_RESULT failures=%d success=%d live=%ld failed=%d\n", failures,successes,live,failed);
   return failed ? 1 : 0;
 }

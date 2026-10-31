@@ -1,3 +1,25 @@
+# Request-wide preparation data WIP (not routed to production executor yet)
+
+PreparedPunchRequest now constructs caught request-wide Region snapshots, all
+three detached prefix/hole/suffix nodes per piece, complete live/protection vectors,
+private-view preread byte buffers and preallocated legacy-handle failure records.
+It records the source first bitmap capacity and combined page count from the actual
+input registry. No OS function is called, no borrowed handle closes in destruction,
+and failure leaves output empty. A separate noexceptions helper budget builds a
+mixed shared/anonymous/private metadata request with span derived from first bitmap
+capacity, including partial private edge and actual allocator fault/release rows.
+This is a real preparation-helper code path, NOT a native production-capacity or
+zero-OS acquisition witness. Old alias/surgery/control rows remain intact.
+
+This new request plan is deliberately NOT yet connected to Punch/GroupFile: checked
+pre-retirement query/private temporary-read+restore, stable ref pins/duplicate-handle
+acquisition and cleanup, nonallocating executor, outer GroupFile new-section/tail/
+failed-constructor continuation plans and real native child fault controls are still
+required. Existing production uses only the preceding combined-ledger increment;
+no request-wide guarantee or source acceptance is asserted. The same State lock must
+span borrowed snapshot preparation through execution. This is implementation WIP,
+not a reason to relax any prior source/runtime/producer requirement.
+
 # Common-Punch correction INCREMENT: request-wide work remains
 
 SOURCE WIP after independent7f3 review, NOT complete source freeze/acceptance.
