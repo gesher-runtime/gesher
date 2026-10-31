@@ -875,23 +875,36 @@ void* GroupAnonymous(State& s, void* start, size_t len, int prot, int flags) {
 // The file's bytes from `offset` into [dest, dest + len) (zeros past its end),
 // through a temporary view (the descriptor's file position stays).
 bool CopyFromFile(State& s, HANDLE file, uint64_t file_size, uint64_t offset, uint8_t* dest,
-                  size_t len) {
+                  size_t len,std::unique_ptr<SectionOwner>* failure=nullptr) {
   if (offset >= file_size) return true;
   const size_t available = static_cast<size_t>(std::min<uint64_t>(len, file_size - offset));
   const size_t padding = static_cast<size_t>(offset % s.granularity);
   const uint64_t view_offset = offset - padding;
   HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+  auto close_mapping=[&]() {
+    if(!mapping)return true;
+    if(!failure){CloseHandle(mapping);mapping=nullptr;return true;}
+    if(FileAliasCloseHandle(mapping)){mapping=nullptr;return true;}
+    const DWORD error=GetLastError();auto* record=failure->release();
+    record->handle=mapping;mapping=nullptr;
+    RecordOwnerFailure(s,record,SectionState::ReleaseFailed,error);return false;
+  };
   void* view = mapping == nullptr ? nullptr
       : MapViewOfFile(mapping, FILE_MAP_READ, static_cast<DWORD>(view_offset >> 32),
                       static_cast<DWORD>(view_offset & 0xffffffffu), available + padding);
   if (view == nullptr) {
-    if (mapping != nullptr) CloseHandle(mapping);
+    close_mapping();
     return false;
   }
   memcpy(dest, static_cast<uint8_t*>(view) + padding, available);
-  UnmapViewOfFile(view);
-  CloseHandle(mapping);
-  return true;
+  if(failure && !FileAliasUnmapViewOfFile(view)) {
+    const DWORD error=GetLastError();auto* record=failure->release();
+    record->handle=mapping;record->rollback_view=view;
+    RecordOwnerFailure(s,record,SectionState::RollbackFailed,error);
+    return false; // both resources retained explicitly, never an invented cleanup
+  }
+  if(!failure)UnmapViewOfFile(view);
+  return close_mapping();
 }
 
 // A file mapping in a group. Returns MAP_FAILED with errno = 0 when it has to
@@ -1070,7 +1083,8 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
     auto tail = FindRegion(s, result + in_view);
     if (!FillAnonymous(tail, PROT_READ | PROT_WRITE)) return fail(ENOMEM);
     if (!CopyFromFile(s, file, file_size, begin + in_view,
-                      reinterpret_cast<uint8_t*>(result + in_view), len - in_view)) {
+                      reinterpret_cast<uint8_t*>(result + in_view), len - in_view,
+                      prepared_request?&request.constructor_failures[2]:nullptr)) {
       return fail(EACCES);
     }
     DWORD old;
