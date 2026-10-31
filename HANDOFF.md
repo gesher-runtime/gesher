@@ -4,6 +4,11 @@ The user requested a near-term stop and transfer to another computer. All listed
 
 This document and `evidence.zip` are backed up on the repository branch `wip/portable-handoff-2026-10-31`. The ZIP contains plain reports, scripts, metadata, and logs, not CI artifacts or native binaries. ZIP SHA256: `1fddb655d879033add23cce7a2c1225549ce653699652afa11560bcad98bc2af`; `EVIDENCE-MANIFEST.json` SHA256: `b39e9886f2828a0489cb44047209e9391552b7bdd38e2bafbbe1a27d36fc2480`. Each member's length/hash is in that manifest. Some historical reports mention old Windows absolute paths; resolve their basenames inside the ZIP's `evidence/` directory instead. The compact source-of-truth log is `evidence/recovery-2026-10-31-current.md`; later entries explicitly supersede stale earlier status. Read also `evidence/portable-fonts-2026-10-31.md`, `evidence/portable-pthread-2026-10-31.md`, and `evidence/track-rules.md`.
 
+## Working model and scope
+
+The primary agent is manager only. Delegate execution, Git, tests, and log work to at most three workers, with one sole owner for integration/main/PR/tag/release. Use independent worktrees and make a fresh assignment when a worker finishes. Reply to the owner in Hebrew; write code and project documentation in English. The later user preference is Terra with medium reasoning for routine work and high reasoning for complex work; it supersedes the historical Opus-only note.
+
+All known roadmap, handoff, and ADR gaps remain in scope. Do not weaken or delete requirements. Main and release are preauthorized only after every applicable qualification is met; do not ask again for approval already given. The current stop request supersedes the older instruction to continue until completion. On resumption, use the latest handoff and actual evidence over older snapshots. The historical 1,157-entry inventory is not a count of missing defects.
 ## Restore source and evidence
 
 ```sh
