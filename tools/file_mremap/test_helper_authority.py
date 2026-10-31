@@ -10,7 +10,7 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import stat
 import tempfile
@@ -58,18 +58,47 @@ def synthetic_job():
 def synthetic_artifact():
     return {'id':55,'name':A.artifact_name(synthetic_context()),'expired':False,'size_in_bytes':1234,'digest':'sha256:'+'c'*64,'created_at':'2026-10-31T00:05:00Z','workflow_run':{'id':123,'head_sha':'a'*40,'repository_id':A.REPOSITORY_ID,'head_repository_id':A.REPOSITORY_ID}}
 
+def synthetic_config(supplier='/publisher',source='/repo',build='/owned'):
+    value={'schema':A.CONFIG_POLICY,'context':synthetic_context(),'guard':'b'*40,'producer_id':42,'roots':{'supplier':supplier,'source':source,'build':build},'files':{}}
+    for role,(name,raw,pin)in A.CONFIG_FILES.items():value['files'][role]={'path':supplier+'/bin/'+name,'text':raw.decode(),'bytes':len(raw),'sha256':pin}
+    return value
+
+def synthetic_posix_filesystem(temp):
+    # Inert data-only files on Windows, POSIX producer spelling independently
+    # preserved. No shell, compiler, symlink, API or native process is involved.
+    physical=Path(temp)
+    class FS(PurePosixPath):
+        @property
+        def real(self):return physical.joinpath(*self.parts[1:])
+        @classmethod
+        def cwd(cls):return cls('/source')
+        def resolve(self):
+            import posixpath
+            return type(self)(posixpath.normpath(str(self)))
+        def exists(self):return self.real.exists()
+        def is_file(self):return self.real.is_file()
+        def mkdir(self,*a,**k):return self.real.mkdir(*a,**k)
+        def write_bytes(self,b):return self.real.write_bytes(b)
+        def read_bytes(self):return self.real.read_bytes()
+        def open(self,*a,**k):return self.real.open(*a,**k)
+        def stat(self):return self.real.stat()
+        def rglob(self,pattern):return (type(self)('/'+p.relative_to(physical).as_posix())for p in self.real.rglob(pattern))
+    return FS
+
 def synthetic_bundle():
     c=synthetic_context();auth={'context':c,'authority':{'guard':'b'*40,'guard_blob':'c'*40,'template':'d'*40,'caller_authority':'e'*40,'manifest':{'SYNTHETIC':True}},'roles':{'helper-producer':synthetic_job()}}
     files={name:b'SYNTHETIC_NOT_EXECUTABLE\n'for name in A.MEMBERS}
-    objects={};commands=[];deps={}
+    objects={};commands=[];deps={};config=synthetic_config()
     for obj,src in A.TUS.items():
-        flags=list(A.COMMON)+(['-fexceptions']if obj!='caller.obj'else[])
-        argv=['/publisher/bin/x86_64-w64-mingw32-clang++',*flags,'-MD','-MF','/owned/'+obj.replace('.obj','.d'),'-c','/repo/'+src,'-o','/owned/'+obj]
-        cc=['/publisher/bin/clang','-cc1']+(['-fexceptions','-fcxx-exceptions']if obj!='caller.obj'else[])
+        argv=A.compile_recipe(config,obj)
+        cc=['/publisher/bin/clang','-cc1','-internal-isystem','/publisher/include/c++/v1']+(['-fexceptions','-fcxx-exceptions']if obj!='caller.obj'else[])
         row={'source':src,'source_blob':A.SOURCE_BLOBS[obj],'source_sha256':A.digest(A.git(ROOT,'cat-file','blob',A.SOURCE_BLOBS[obj])),'header_blob':A.HEADER_BLOB,'header_sha256':A.digest(A.git(ROOT,'cat-file','blob',A.HEADER_BLOB)),'sha256':A.digest(files[obj]),'exceptions':obj!='caller.obj','argv':argv,'expanded':[cc]}
         objects[obj]=row;commands.append({'output':obj,'file':src,'argv':argv,'expanded':[cc]})
         deps[obj]=[{'origin':'toolchain','path':'/publisher/include/'+n,'relative':'include/'+n,'sha256':'f'*64,'bytes':10}for n in ('windows.h','map','vector','memory','new','array','utility')]+[{'origin':'source','path':'/repo/'+A.HEADER,'relative':A.HEADER,'sha256':row['header_sha256'],'bytes':100}]
-    profile={'profile':A.PROFILE,'archive_sha256':P.ARCHIVE_SHA,'driver_sha256':P.DRIVER_SHA,'linker_sha256':P.LINKER_SHA,'target':'x86_64-w64-windows-gnu','common_flags':list(A.COMMON),'config_policy':'--no-default-config; no ambient HOME/include/library/config variables','objects':objects,'no_ambient_injection':True,'dependencies_verified':True,'link_dependencies_verified':True,'link_dependencies':{'archives':{'SYNTHETIC.a':{}},'loaded':[['SYNTHETIC.a','SYNTHETIC.obj','symbol']],'direct':[{'path':'/owned/'+x,'origin':'three-object'}for x in A.TUS]+[{'path':'/publisher/crt2.o','origin':'publisher-startup'}]},'link_expanded':[['/publisher/ld.lld']]}
+    profile={'profile':A.PROFILE,'archive_sha256':P.ARCHIVE_SHA,'driver_sha256':P.DRIVER_SHA,'linker_sha256':P.LINKER_SHA,'target':'x86_64-w64-windows-gnu','common_flags':list(A.COMMON),'config_policy':A.CONFIG_POLICY,'controlled_config':config,'objects':objects,'no_ambient_injection':True,'dependencies_verified':True,'link_dependencies_verified':True,'link_dependencies':{'archives':{'SYNTHETIC.a':{}},'loaded':[['SYNTHETIC.a','SYNTHETIC.obj','symbol']],'direct':[{'path':'/owned/'+x,'origin':'three-object'}for x in A.TUS]+[{'path':'/publisher/crt2.o','origin':'publisher-startup'}]},'link_argv':A.link_recipe(config),'link_expanded':[['/publisher/ld.lld']]}
+    quoted=lambda row:' '.join(json.dumps(x)for x in row)+'\n'
+    profile.update(driver='/publisher/bin/x86_64-w64-mingw32-clang++',driver_realpath='/publisher/bin/clang-target-wrapper.sh',configs=[{k:r[k]for k in ('path','bytes','sha256')}for r in config['files'].values()])
+    files['link-transcript.txt']=A.canonical({'compile':[{'object':obj,'argv':objects[obj]['argv'],'driver_expansion':quoted(objects[obj]['expanded'][0]),'stdout':'','stderr':''}for obj in A.TUS],'link':{'argv':profile['link_argv'],'expansion':quoted(profile['link_expanded'][0]),'stdout':'','stderr':''}})
     files['compiler-profile.json']=A.canonical(profile);files['source-manifest.json']=A.canonical(auth['authority']['manifest']);files['compile-commands.json']=A.canonical(commands);files['dependency-manifest.json']=A.canonical(deps)
     def seal():
         manifest={'schema':1,'context':auth['context'],'authority':{k:auth['authority'][k]for k in ('guard','guard_blob','template','caller_authority')},'producer_id':42,'role':A.PROFILE,'members':{p:{'bytes':len(v),'sha256':A.digest(v)}for p,v in files.items()if p!='producer-manifest.json'}}
@@ -481,10 +510,12 @@ class Helper(unittest.TestCase):
         cases=('VALID','missing_target','foreign_config','oversize_expansion','non_utf8','missing_expansion','foreign_source','wrong_archive','wrong_driver','extra_environment','changed_flags','missing_cc1')
         for case in cases:
             with self.subTest(case=case),pure_temp_directory()as temp:
-                source=Path(temp)/'source';source.mkdir();runner=Path(temp)/'runner';runner.mkdir()
-                tc=Path(temp)/'supplier';(tc/'bin').mkdir(parents=True)
+                FS=synthetic_posix_filesystem(temp)
+                source=FS('/source');source.mkdir();runner=FS('/runner');runner.mkdir()
+                tc=FS('/supplier');(tc/'bin').mkdir(parents=True)
                 driver=tc/'bin/x86_64-w64-mingw32-clang++';driver.write_bytes(b'SYNTHETIC_NOT_EXECUTABLE')
                 (tc/'bin/ld.lld').write_bytes(b'SYNTHETIC_NOT_EXECUTABLE')
+                for name,raw,pin in A.CONFIG_FILES.values():(tc/'bin'/name).write_bytes(raw)
                 auth={'context':synthetic_context(),'authority':{'guard':'b'*40,'caller_authority':'a'*40},'roles':{}}
                 job=dict(synthetic_job(),status='in_progress');calls=[];events=[];packets=[]
                 real_emit=P.emit;real_basis=P.emit_early_basis
@@ -493,7 +524,7 @@ class Helper(unittest.TestCase):
                     argv=list(map(str,argv));calls.append(argv)
                     if '-dumpmachine'in argv:streams=(b'x86_64-w64-windows-gnu\n',b'')
                     elif '--version'in argv:streams=(b'SYNTHETIC clang 23.1.3\n',b'')
-                    elif '-###'in argv:streams=(b'',(' "'+str(tc/'bin/clang')+'" "-cc1" "-fexceptions" "-fcxx-exceptions"\n').encode())
+                    elif '-###'in argv:streams=(b'',(' "'+str(tc/'bin/clang')+'" "-cc1" "-internal-isystem" "'+str(tc/'include/c++/v1')+'" "-fexceptions" "-fcxx-exceptions"\n').encode())
                     else:
                         events.append('COMPILE_ATTEMPT')
                         raise P.A.Rejected('SYNTHETIC_FIRST_COMPILE_FAILURE')
@@ -514,18 +545,20 @@ class Helper(unittest.TestCase):
                     if case=='wrong_archive':
                         with mock.patch.object(P,'ARCHIVE_SHA','0'*64):return real_basis(*args)
                     return real_basis(*args)
-                with mock.patch.object(P.os,'name','posix'),mock.patch.object(P,'Path',type(source)),mock.patch.object(type(source),'cwd',return_value=source),mock.patch.dict(os.environ,{'RUNNER_TEMP':str(runner)}),mock.patch.object(P.A,'authorize',return_value=auth),mock.patch.object(P,'current_job',return_value=job),mock.patch.object(P,'download',return_value=b'SYNTHETIC_ARCHIVE'),mock.patch.object(P,'extract_toolchain',return_value=tc),mock.patch.object(P,'sha',side_effect=lambda p:P.LINKER_SHA if Path(p).name=='ld.lld'else P.DRIVER_SHA),mock.patch.object(P,'tool',side_effect=fake_tool),mock.patch.object(P,'emit',side_effect=emit),mock.patch.object(P,'emit_early_basis',side_effect=basis),contextlib.redirect_stdout(io.StringIO())as output:
+                with mock.patch.object(P.os,'name','posix'),mock.patch.object(P,'Path',FS),mock.patch.dict(os.environ,{'GITHUB_ACTIONS':'true','RUNNER_TEMP':str(runner)}),mock.patch.object(P.A,'authorize',return_value=auth),mock.patch.object(P,'current_job',return_value=job),mock.patch.object(P,'download',return_value=b'SYNTHETIC_ARCHIVE'),mock.patch.object(P,'extract_toolchain',return_value=tc),mock.patch.object(P,'sha',side_effect=lambda p:A.digest(p.read_bytes())if p.suffix=='.cfg'else P.LINKER_SHA if p.name=='ld.lld'else P.DRIVER_SHA),mock.patch.object(P,'tool',side_effect=fake_tool),mock.patch.object(P,'emit',side_effect=emit),mock.patch.object(P,'emit_early_basis',side_effect=basis),contextlib.redirect_stdout(io.StringIO())as output:
                     with self.assertRaises((ValueError,KeyError,UnicodeError)):P.produce()
-                self.assertEqual(calls[0],[str(driver),'--no-default-config','-dumpmachine'])
-                self.assertEqual(calls[1],[str(driver),'--version'])
+                options=['--no-default-config','--config='+str(tc/'bin/x86_64-w64-windows-gnu.cfg')]
+                self.assertEqual(calls[0],[str(driver),*options,'-dumpmachine'])
+                self.assertEqual(calls[1],[str(driver),*options,'--version'])
                 build=runner/'mremap-helper-123-2'/'build'
-                expected=[str(driver),*P.COMMON,'-fexceptions','-MD','-MF',str(build/'helper.d'),'-c',str(source/A.TUS['helper.obj']),'-o',str(build/'helper.obj')]
+                expected=[str(driver),*options,*P.COMMON[1:],'-fexceptions','-MD','-MF',str(build/'helper.d'),'-c',str(source/A.TUS['helper.obj']),'-o',str(build/'helper.obj')]
                 self.assertEqual(calls[2],[expected[0],'-###',*expected[1:]])
                 if case!='VALID':
                     self.assertEqual(len(calls),3);self.assertNotIn('EARLY_COMPILER_BASIS',events);self.assertNotIn('MUST_NOT_EMIT',output.getvalue());continue
                 self.assertEqual(calls[3],expected);self.assertEqual(events,['AUTHORITY','EARLY_COMPILER_BASIS','COMPILE_ATTEMPT'])
                 packet=dict(packets)['EARLY_COMPILER_BASIS'];self.assertEqual(packet['context'],auth['context']);self.assertEqual(packet['producer_id'],42)
-                self.assertEqual(packet['archive_sha256_source_pin'],A.EARLY_ARCHIVE_PIN);self.assertEqual(packet['configs'],[])
+                self.assertEqual(packet['archive_sha256_source_pin'],A.EARLY_ARCHIVE_PIN);self.assertEqual(len(packet['configs']),2)
+                self.assertEqual(packet['schema'],'EARLY_COMPILER_BASIS_V2');self.assertEqual(packet['config_selection'],A.CONFIG_POLICY)
                 self.assertEqual(packet['streams']['expansion']['stdout'],{'text':'','bytes':0,'sha256':A.digest(b'')})
                 encoded=[]
                 for line in output.getvalue().splitlines():
@@ -542,6 +575,89 @@ class Helper(unittest.TestCase):
             with self.assertRaises((ValueError,UnicodeError)):A.diagnostic_text(raw,262144)
         self.assertEqual(A.diagnostic_text(b'',4096)['text'],'')
         self.assertNotIn('text',P.failure_output(b'PRINTABLE_BINARY',True))
+
+    def test_controlled_config_contract_and_fourteen_plus_fifteen_peer_negatives(self):
+        original=synthetic_config()
+        A.validate_controlled_config(original,synthetic_context(),'b'*40,42)
+        # Combined independent architecture classes, with functional production
+        # validators and bundle resealing rather than lexical source assertions.
+        changes=[('schema',lambda v:v.update(schema='EARLY_COMPILER_BASIS_V1')),
+            ('source',lambda v:v['context'].update(source='d'*40)),('attempt',lambda v:v['context'].update(attempt='3')),
+            ('guard',lambda v:v.update(guard='d'*40)),('producer',lambda v:v.update(producer_id=43)),
+            ('profile',lambda v:v['context'].update(profile='SELECTED_PRODUCTION')),
+            ('root',lambda v:v['roots'].update(supplier='/foreign')),('WindowsRoot',lambda v:v['roots'].update(supplier='C:/foreign')),
+            ('targetPath',lambda v:v['files']['target'].update(path='/foreign/target.cfg')),
+            ('targetBody',lambda v:v['files']['target'].update(text='-I/foreign\n')),
+            ('commonBody',lambda v:v['files']['common'].update(text='@other.cfg\n')),
+            ('commonHash',lambda v:v['files']['common'].update(sha256='0'*64)),
+            ('missingCommon',lambda v:v['files'].pop('common')),('extraConfig',lambda v:v['files'].update(extra={})),
+            ('defaultEnabled',lambda v:v.update(default_enabled=True))]
+        for label,change in changes:
+            with self.subTest(label=label):
+                value=copy.deepcopy(original);change(value)
+                self.reject(lambda:A.validate_controlled_config(value,synthetic_context(),'b'*40,42))
+        # Recipes carry one exact config option; missing, extra, foreign options
+        # and diagnostic/real divergence are rejected by the actual consumer.
+        for mutation in ('oldV1','oldRecipe','foreignOption','extraOption','diagnosticDifferent','callerExceptions','foreignDependency','missingLibcxx'):
+            files,auth,seal=synthetic_bundle();profile=A.decode(files['compiler-profile.json'])
+            obj='caller.obj'if mutation=='callerExceptions'else'helper.obj'
+            if mutation=='oldV1':profile['config_policy']='UNPROVEN_INVENTORY_ONLY'
+            elif mutation=='oldRecipe':profile['objects'][obj]['argv'].pop(2)
+            elif mutation=='foreignOption':profile['objects'][obj]['argv'][2]='--config=/foreign/file.cfg'
+            elif mutation=='extraOption':profile['objects'][obj]['argv'].append('--config=/foreign/file.cfg')
+            elif mutation=='callerExceptions':profile['objects'][obj]['expanded'][0].append('-fexceptions')
+            elif mutation=='missingLibcxx':profile['objects'][obj]['expanded'][0][3]='/publisher/include/c++'
+            elif mutation=='foreignDependency':
+                deps=A.decode(files['dependency-manifest.json']);deps[obj][0]['path']='/foreign/windows.h';files['dependency-manifest.json']=A.canonical(deps)
+            elif mutation=='diagnosticDifferent':
+                transcript=A.decode(files['link-transcript.txt']);transcript['compile'][0]['argv'].append('-I/foreign');files['link-transcript.txt']=A.canonical(transcript)
+            files['compiler-profile.json']=A.canonical(profile);seal();self.reject(lambda:A.verify_bundle(files,auth))
+        for bad in ('C:/producer','/publisher/../foreign','/publisher//bin','relative','/publisher\\foreign'):
+            self.reject(lambda:A.producer_posix(bad))
+
+    def test_bounded_config_reads_reject_mutation_and_no_transitive_reads(self):
+        for role in ('target','common'):
+            for changed in (b'@extra.cfg\n',b'x'*1024,b'\xff'):
+                with pure_temp_directory()as temp:
+                    FS=synthetic_posix_filesystem(temp);tc=FS('/publisher');(tc/'bin').mkdir(parents=True)
+                    for key,(name,raw,pin)in A.CONFIG_FILES.items():(tc/'bin'/name).write_bytes(changed if key==role else raw)
+                    auth={'context':synthetic_context(),'authority':{'guard':'b'*40}}
+                    with mock.patch.object(P.os,'name','posix'),mock.patch.dict(os.environ,{'GITHUB_ACTIONS':'true'}):
+                        self.reject(lambda:P.read_controlled_config(auth,{'id':42},tc,FS('/source'),FS('/build')))
+
+    def test_actual_produce_all_three_compiles_and_link_use_same_controlled_recipe(self):
+        # Execute the actual produce function through all three objects up to
+        # injected LINK failure. Every tool/download/native boundary is fake.
+        with pure_temp_directory()as temp:
+            FS=synthetic_posix_filesystem(temp);source=FS('/source');source.mkdir();tc=FS('/publisher');(tc/'bin').mkdir(parents=True);runner=FS('/runner');runner.mkdir()
+            for name,raw,pin in A.CONFIG_FILES.values():(tc/'bin'/name).write_bytes(raw)
+            auth={'context':synthetic_context(),'authority':{'guard':'b'*40,'caller_authority':'a'*40},'roles':{}};job=dict(synthetic_job(),status='in_progress')
+            cfg=synthetic_config('/publisher','/source','/runner/mremap-helper-123-2/build');calls=[];events=[];real_emit=P.emit
+            def fake_tool(argv,cwd,env,**kw):
+                argv=list(map(str,argv));calls.append(argv)
+                if '-dumpmachine'in argv:streams=(b'x86_64-w64-windows-gnu\n',b'')
+                elif '--version'in argv:streams=(b'SYNTHETIC clang23.1.3\n',b'')
+                elif '-###'in argv:
+                    obj=next((o for o in A.TUS if str(FS(cfg['roots']['build'])/o)==argv[-1]),None)
+                    row=['/publisher/bin/clang','-cc1','-internal-isystem','/publisher/include/c++/v1',*(['-fexceptions','-fcxx-exceptions']if obj!='caller.obj'else[])]if '-c'in argv else['/publisher/bin/ld.lld']
+                    streams=(b'',(' '.join(json.dumps(x)for x in row)+'\n').encode())
+                elif '-c'in argv:
+                    FS(argv[-1]).write_bytes(b'SYNTHETIC_OBJECT_NEVER_EXECUTE');FS(argv[argv.index('-MF')+1]).write_bytes(b'SYNTHETIC_DEPENDENCIES');streams=(b'',b'')
+                else:events.append('LINK_ATTEMPT');raise P.A.Rejected('SYNTHETIC_LINK_FAILURE')
+                if kw.get('receipt')is not None:
+                    kw['receipt'].append({'argv':argv,'launch_state':'RETURNED_OWNED','pid':123,'started':True,'elapsed_seconds':0.0,'exit':0,'kernel_completed':True,'io_completed':True,'handles_closed':True,'overflow':False,'timed_out':False,'root_retained':False,'errors':[],'executable_sha256':P.DRIVER_SHA,'executable_realpath':'/publisher/bin/clang-target-wrapper.sh','stdout_sha256':A.digest(streams[0]),'stderr_sha256':A.digest(streams[1])})
+                return streams
+            dep=[{'relative':A.HEADER,'origin':'source'}]
+            def emit(label,value):events.append(label);real_emit(label,value)
+            def copyfile(a,b):FS(b).write_bytes(FS(a).read_bytes())
+            with mock.patch.object(P.os,'name','posix'),mock.patch.object(P,'Path',FS),mock.patch.dict(os.environ,{'GITHUB_ACTIONS':'true','RUNNER_TEMP':'/runner'}),mock.patch.object(P.A,'authorize',return_value=auth),mock.patch.object(P,'current_job',return_value=job),mock.patch.object(P,'download',return_value=b'SYNTHETIC'),mock.patch.object(P,'extract_toolchain',return_value=tc),mock.patch.object(P,'sha',side_effect=lambda p:A.digest(p.read_bytes())if p.suffix=='.cfg'else P.LINKER_SHA if p.name=='ld.lld'else P.DRIVER_SHA),mock.patch.object(P,'tool',side_effect=fake_tool),mock.patch.object(P,'dependency_paths',return_value=dep),mock.patch.object(P.shutil,'copyfile',side_effect=copyfile),mock.patch.object(P,'emit',side_effect=emit),contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(P.A.Rejected,'SYNTHETIC_LINK_FAILURE'):P.produce()
+            expected=[['/publisher/bin/x86_64-w64-mingw32-clang++',*A.config_options(cfg),'-dumpmachine'],['/publisher/bin/x86_64-w64-mingw32-clang++',*A.config_options(cfg),'--version']]
+            for obj in A.TUS:
+                command=A.compile_recipe(cfg,obj);expected.extend([[command[0],'-###',*command[1:]],command])
+            command=A.link_recipe(cfg);expected.extend([[command[0],'-###',*command[1:]],command])
+            self.assertEqual(calls,expected);self.assertEqual(events,['AUTHORITY','EARLY_COMPILER_BASIS','LINK_ATTEMPT'])
+            self.assertEqual(len(calls),10)
 
     def test_recipe_source_isolated_three_object_and_no_native_test(self):
         authority=(ROOT/'tools/file_mremap/helper_authority.py').read_text();producer=(ROOT/'tools/file_mremap/helper_producer.py').read_text()

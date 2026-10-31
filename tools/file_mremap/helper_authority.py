@@ -466,6 +466,10 @@ def verify_bundle(files, auth):
     require(profile['dependencies_verified'] is True and profile['link_dependencies_verified'] is True, 'dependency receipts missing')
     require(profile['common_flags']==list(COMMON) and profile['config_policy']==CONFIG_POLICY, 'visible ABI/config flags')
     config=validate_controlled_config(profile['controlled_config'],auth['context'],auth['authority']['guard'],auth['roles']['helper-producer']['id'])
+    require(profile['driver']==compile_recipe(config,'helper.obj')[0]and producer_posix(profile['driver_realpath']).is_relative_to(producer_posix(config['roots']['supplier'])),'controlled wrapper identity')
+    require(type(profile['configs'])is list and len(profile['configs'])<=4096,'profile config inventory')
+    for row in config['files'].values():
+        require({'path':row['path'],'bytes':row['bytes'],'sha256':row['sha256']}in profile['configs'],'controlled profile inventory')
     require(profile['link_argv']==link_recipe(config),'exact controlled link argv')
     validate_producer_commands(profile['link_expanded'],config)
     commands=decode(files['compile-commands.json']);dependencies=decode(files['dependency-manifest.json'])

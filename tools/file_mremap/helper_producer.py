@@ -267,6 +267,8 @@ def emit_early_basis(auth,job,tc,root,build,configs,argv,expanded,streams,receip
     for row in configs:
         A.require(set(row)=={'path','bytes','sha256'}and type(row['path'])is str and len(row['path'])<=4096 and Path(row['path']).is_absolute()and Path(row['path']).resolve().is_relative_to(tc)and Path(row['path']).suffix=='.cfg'and row['path']not in seen,'early confined config')
         A.require(type(row['bytes'])is int and 0<=row['bytes']<=A.FILE_CAP and re.fullmatch('[0-9a-f]{64}',row['sha256']),'early config identity');seen.add(row['path'])
+    for row in controlled['files'].values():
+        A.require({'path':row['path'],'bytes':row['bytes'],'sha256':row['sha256']}in configs,'controlled files match actual inventory')
     A.require(0<len(expanded)<=4096 and all(type(r)is list and 0<len(r)<=4096 and all(type(x)is str and len(x)<=4096 for x in r)for r in expanded),'early parsed command bounds')
     cc1=A.validate_cpp_expansion(expanded,controlled,'helper.obj')
     # Reuse exactly the existing confinement parser on already obtained bytes.
