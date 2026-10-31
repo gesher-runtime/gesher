@@ -70,7 +70,7 @@ def sealed_controls(old):
                       output=dict(path='/SYNTHETIC/out/payload.txt', sha256=ledger.factory.sha(directory / 'payload.txt')))
         record['expanded_argv'] = list(record['argv'])
         texts = dict(trace='ld.lld: Reading /SYNTHETIC/out/main.obj\n',
-                     map='Address  Size     Align Out     In      Symbol\n00001000 00000020 16 main.obj:(.text)\n00001000 00000000 0                 main\n',
+                     map='Address  Size     Align Out     In      Symbol\n00001000 00000020 4096 .text\n00001000 00000020 16         main.obj:(.text)\n00001000 00000000 0                 main\n',
                      imports='File: SYNTHETIC\nFormat: COFF-x86-64\nName: KERNEL32.dll\n')
         record['proof'] = ledger.prove(texts['trace'], texts['map'], texts['imports'], data, PurePosixPath(record['cwd']))
         record['evidence'] = {}
@@ -84,7 +84,7 @@ def sealed_controls(old):
             return dict(file=path.name, sha256=ledger.factory.sha(path), output_sha256=record['output']['sha256'],
                         status='NOT-LINKED', receipt_sha256=ledger.digest(raw))
         link = write(record)
-        assert ledger.verify_sealed(directory, link, compiler, 'payload.txt') == record
+        assert ledger.verify_sealed(directory, link, compiler, 'payload.txt', data['context']) == record
         mutations = [lambda r: r.update(exit_code=1), lambda r: r.update(schema='old'),
                      lambda r: r['argv'].__setitem__(0, '/SYNTHETIC/other/clang++'),
                      lambda r: r['expanded_argv'].append('hidden.obj'),
@@ -97,15 +97,40 @@ def sealed_controls(old):
             bad = copy.deepcopy(record)
             mutate(bad)
             link = write(bad)
-            reject(lambda: ledger.verify_sealed(directory, link, compiler, 'payload.txt'))
+            reject(lambda: ledger.verify_sealed(directory, link, compiler, 'payload.txt', data['context']))
         link = write(record)
         for key in ('sha256', 'receipt_sha256', 'output_sha256'):
             bad = dict(link)
             bad[key] = '0'*64
-            reject(lambda: ledger.verify_sealed(directory, bad, compiler, 'payload.txt'))
+            reject(lambda: ledger.verify_sealed(directory, bad, compiler, 'payload.txt', data['context']))
+        for field in data['context']:
+            expected = dict(data['context'])
+            expected[field] = 'wrong-outer-context'
+            reject(lambda: ledger.verify_sealed(directory, link, compiler, 'payload.txt', expected))
+        # A coherent older receipt + compiler + per-output sidecar still fails
+        # against the independently supplied current outer producer context.
+        for field, value in (('GITHUB_SHA', '2'*40), ('GITHUB_RUN_ID', '123455'), ('GITHUB_RUN_ATTEMPT', '2'),
+                             ('GITHUB_REPOSITORY', 'elsewhere/gesher'), ('GITHUB_REPOSITORY_ID', '1')):
+            older = copy.deepcopy(data)
+            older['context'][field] = value
+            if field in ledger.factory.FIELDS[:4]:
+                older['authority'][field] = value
+                older['authority']['original']['context'][field] = value
+            older['authority_sha256'] = ledger.digest(json.dumps(older['authority'], sort_keys=True, indent=2).encode())
+            ledger.factory.check_metadata(older, older['context'])
+            old_raw = json.dumps(older, sort_keys=True, indent=2).encode()
+            old_compiler = dict(selected_toolchain=ledger.identity(older, old_raw))
+            old_record = copy.deepcopy(record)
+            old_record['selected_toolchain'] = old_compiler['selected_toolchain']
+            old_link = write(old_record)
+            old_link['receipt_sha256'] = ledger.digest(old_raw)
+            (directory / 'selected-pthread-toolchain.json').write_bytes(old_raw)
+            reject(lambda: ledger.verify_sealed(directory, old_link, old_compiler, 'payload.txt', data['context']))
+        (directory / 'selected-pthread-toolchain.json').write_bytes(raw)
+        link = write(record)
         (directory / 'trace.txt').write_text('CHANGED', encoding='utf-8')
-        reject(lambda: ledger.verify_sealed(directory, link, compiler, 'payload.txt'))
-    print('PASS portable sealed metadata: 13 receipt/output/record/command/evidence negatives; textual fixtures only, no native/process/network')
+        reject(lambda: ledger.verify_sealed(directory, link, compiler, 'payload.txt', data['context']))
+    print('PASS portable sealed metadata: 23 receipt/output/record/command/evidence/outer-context negatives; textual fixtures only, no native/process/network')
 
 
 def controls(authority):
@@ -119,16 +144,16 @@ def controls(authority):
     assert ledger.symbol_inventory(authority['library_symbols']['lib/libwinpthread.a'])[0]['pthread_self'] == {member}
     trace = f'ld.lld: Reading {target}\nld.lld: Loaded libpthread.a(thread.o) for pthread_self\n'.replace('thread.o', member)
     header = 'Address  Size     Align Out     In      Symbol\n'
-    mapping = header + '00001000 00000020 16 thread.o:(.text)\n00001000 00000000 0                 pthread_self\n'.replace('thread.o', member)
+    mapping = header + '00001000 00000020 4096 .text\n00001000 00000020 16         thread.o:(.text)\n00001000 00000000 0                 pthread_self\n'.replace('thread.o', member)
     imported = 'File: SYNTHETIC.exe\nFormat: COFF-x86-64\nImport {\n  Name: KERNEL32.dll\n}\n'
     linked = ledger.prove(trace, mapping, imported, data, proof_cwd)
     assert linked['status'] == 'LINKED' and set(linked['definitions']) == {'pthread_self'}
-    assert ledger.prove(trace, mapping + mapping, imported, data, proof_cwd) == linked
+    assert ledger.prove(trace, mapping + mapping.splitlines()[-1]+'\n', imported, data, proof_cwd) == linked
     clock_trace = trace.replace(member, 'libwinpthread_la-clock.o').replace('pthread_self', 'clock_gettime64')
     clock_map = mapping.replace(member, 'libwinpthread_la-clock.o').replace('pthread_self', 'clock_gettime64')
     assert ledger.prove(clock_trace, clock_map, imported, data, proof_cwd)['status'] == 'LINKED'
     unused = ledger.prove('ld.lld: Reading /SYNTHETIC/out/ordinary.obj\n',
-                          header + '00001000 00000020 16 ordinary.obj:(.text)\n00001000 00000000 0                 main\n', imported, data, proof_cwd)
+                          header + '00001000 00000020 4096 .text\n00001000 00000020 16         ordinary.obj:(.text)\n00001000 00000000 0                 main\n', imported, data, proof_cwd)
     assert unused == dict(status='NOT-LINKED', definitions={}, loaded_members=[])
     negatives = [
         ('', mapping, imported),
@@ -160,6 +185,17 @@ def controls(authority):
         (trace.replace(member, 'nonexistent.o'), mapping.replace(member, 'nonexistent.o'), imported),
         (trace+'ld.lld: Reading /SYNTHETIC/other/ordinary.a\nld.lld: Loaded ordinary.a('+member+') for unrelated\n', mapping, imported),
         (trace+'ld.lld: Reading /SYNTHETIC/direct/'+member+'\n', mapping, imported),
+        (trace, mapping+'unknown writer row\n', imported),
+        (trace, mapping.replace('16         '+member, '16    '+member), imported),
+        (trace, mapping.replace('00001000 00000020 4096 .text\n', ''), imported),
+        (trace, mapping.replace('00001000 00000020 16', '00003000 00000020 16'), imported),
+        (trace, mapping.replace('00001000 00000000 0', '00003000 00000000 0'), imported),
+        (trace, mapping.replace('00001000 00000000 0', '00001000 00000001 0'), imported),
+        (trace, mapping.replace('00001000 00000000 0', '00001000 00000000 1'), imported),
+        (trace, mapping.replace(':(.text)', 'no-input-section'), imported),
+        (trace, mapping.replace(':(.text)', ':(.text'), imported),
+        (trace, mapping.replace('                pthread_self', '                '), imported),
+        (trace, mapping.replace('00001000 00000000 0', '00002000 00000020 4096 .other\n00001000 00000000 0'), imported),
     ]
     for t, m, i in negatives:
         reject(lambda: ledger.prove(t, m, i, data, proof_cwd))
@@ -201,7 +237,9 @@ def actual_replay(log, authority):
     a = json.loads(a_raw)
     assert a['GITHUB_RUN_ID'] == '41135044960' and a['GITHUB_RUN_ATTEMPT'] == '1'
     assert a['GITHUB_SHA'] == 'f0a8364afd3380eb0e25b8d82824dd1752f91e16'
-    lines = [re.sub(r'^\d{4}-\d\d-\d\dT\S+Z ', '', l) for l in raw.decode('utf-8').splitlines()]
+    # GitHub's saved job stream contains one BOM before a transport timestamp
+    # mid-map. Strip only that authenticated log prefix, not map input bytes.
+    lines = [re.sub(r'^\ufeff?\d{4}-\d\d-\d\dT\S+Z ', '', l) for l in raw.decode('utf-8').splitlines()]
     first = lines.index('MINIMUM_CONTROL_RAW_MAP_BEGIN tag=static')
     last = lines.index('MINIMUM_CONTROL_RAW_MAP_END', first)
     mapping = '\n'.join(lines[first+1:last]) + '\n'
@@ -210,7 +248,7 @@ def actual_replay(log, authority):
     start = lines.index('MINIMUM_CONTROL_RAW_IMPORTS_BEGIN tag=static', last)
     end = lines.index('MINIMUM_CONTROL_RAW_IMPORTS_END', start)
     imported = '\n'.join(lines[start+1:end]) + '\n'
-    assert ledger.digest(mapping.encode()) == '55b0b2f1cf48dc3fc82c9dbba0688248fa11387273ad7c5b2abe2775b3954b15'
+    assert ledger.digest(mapping.encode()) == '3e3a578a309fe72d78725e71eb59e3ce18db0061623fd3d0b46fca9d212800da'
     assert ledger.digest(trace.encode()) == '67c4315a459db9005c2877bd2e651cee7a321f8dd85a31fb6734fc0e57342805'
     assert ledger.digest(imported.encode()) == '21285f78bf2ac9f65e4d3a12e8684d283970a8a9a22ac1e63afd53a255daa3a8'
     root = a['compiler'].split('InstalledDir: ', 1)[1].split('/bin', 1)[0]

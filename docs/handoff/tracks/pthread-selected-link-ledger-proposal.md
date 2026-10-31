@@ -47,6 +47,15 @@ bytes because Ninja may delete the response file. Nested files, BOM/UTF16,
 invalid UTF8, NUL and unfinished quoting fail closed; none silently become a
 missing link. Broader formats require separate actual-toolchain evidence.
 
+Before interpreting any symbol RVA, the helper imports the unchanged qualified
+`tools/fonts/verify-standalone-link.py` map hierarchy/range parser (SHA256
+`7c52eca57259313f43aeea27e6aefa5e50cde6c0c5ddb4abc2ad6143fbb4af06`).
+Its actual header, output/input/symbol indentation, input/output range and
+symbol-size/alignment checks reject malformed/unknown rows; none are silently
+skipped. The second pass only adds RVAs to those same validated symbol/owner
+records. A positive NOT-LINKED fixture uses the real Out/Input/Symbol hierarchy.
+This existing parser's exact hash joins the stable compiler ledger sources.
+
 The static proof correlates actual full-path `Reading` records, `Loaded
 archive(member)` records and live provider-symbol map owners/addresses. The
 pinned LLD GNU writer uses **bare member names** in its map. Every such owner
@@ -80,6 +89,10 @@ index containing record/output/receipt hashes and status. Seal production
 before the hook relink; the latter gets its own record even when the original
 build path is reused. `verify_sealed()` is a portable, process-free receiver
 check of those archived bytes, command, current receipt identity and proof.
+Its mandatory `expected_context` parameter comes from the independently
+validated outer producer manifest, never from the sidecar itself. Coherently
+older source/run/attempt/repository/repository-ID receipt, compiler and link
+records cannot validate against a current outer context.
 Linux producer paths use pure POSIX normalization during Windows verification.
 
 ## Next integration, after independent interface peer
@@ -114,8 +127,8 @@ async or independent-root adoption gates recorded in the canonical map.
 C:/work/gesher-ci-review/tcp-selected-411396-current-authority.json` pins the
 actual old authority hash/source/run, then uses visibly SYNTHETIC map/command
 metadata only. It checks linked/unlinked positives, identical duplicates,
-29 origin/member/import/owner/address/map proof negatives, two mode failures,
-six command failures, eight response failures and 13 portable sealed-record
+40 origin/member/import/owner/address/map proof negatives, two mode failures,
+six command failures, eight response failures and 23 portable sealed-record
 negatives. No compiler/native process
 or network operation is started by this test. Actual new CMake/Ninja links
 and final map/member/receipt/Native receiver evidence remain unexecuted.
@@ -125,7 +138,7 @@ C:/work/gesher-ci-review/pthread-411350-124335330294.log --actual-authority
 C:/work/gesher-ci-review/pthread-411350-minimum-supplier-reconstructed.json`
 mode pins both complete saved inputs and reconstructs the entire actual
 static control trace/map/import blocks. The corrected helper accepts their
-16,013/67,513/4,273 bytes and binds 142 live definitions through seven selected
+16,013/67,481/4,273 bytes and binds 142 live definitions through seven selected
 members. All 18 prior actual member/address/archive bindings compare equal.
 Seven actual-derived missing-origin, ambiguous-origin, other-supplier,
 globally-ambiguous-member, unsupported-map-owner and conflicting-address
@@ -133,6 +146,14 @@ and direct-object collision controls reject. This is historical diagnostic archi
 does not relabel those bytes as the fresh selected `b415...` archive, perform
 a new link or qualify the new launcher/CMake integration. On a future actual
 proof failure the launcher prints the full raw map/import rows before raising.
+
+The strict range parser also exposed a saved-log transport detail: one mid-map
+GitHub BOM precedes a timestamp prefix. The replay now strips that explicit
+transport prefix (32 bytes) just like other authenticated timestamp prefixes;
+the pinned whole producer log remains unchanged. The complete normalized map
+SHA256 is `3e3a578a309fe72d78725e71eb59e3ce18db0061623fd3d0b46fca9d212800da`.
+This is replay-only normalization; actual captured map files are parsed as
+strict UTF8 without silently skipping a malformed line.
 
 Primary implementation references consulted: CMake 3.24
 [`<LANG>_LINKER_LAUNCHER`](https://cmake.org/cmake/help/v3.24/prop_tgt/LANG_LINKER_LAUNCHER.html),
