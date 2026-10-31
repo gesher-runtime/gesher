@@ -299,7 +299,8 @@ def _resource_directory_rejection(raw,rva,size,at,level,keys,provenance):
                 'level':level,'relative_offset':at,'key_path':keys,'header_hex':header.hex(),
                 'header_sha256':hashlib.sha256(header).hexdigest(),
                 'characteristics':characteristics,'timestamp_raw':timestamp,'major':major,'minor':minor,
-                'named':named,'ids':ids,'count':named+ids,'named_zero':named==0,'count_in_range':0<named+ids<=64}
+                'named':named,'ids':ids,'count':named+ids,'named_zero':named==0,
+                'named_allowed':named==0 or level==0,'count_in_range':0<named+ids<=64}
         suffix='\nFONT_RESOURCE_RESOURCE_DIRECTORY_REJECTION '+json.dumps(record,ensure_ascii=True,separators=(',',':'))
         if len(suffix.encode('ascii'))>8192:return ''
         return suffix
@@ -308,7 +309,7 @@ def _resource_directory_rejection(raw,rva,size,at,level,keys,provenance):
 
 def disk_version_metadata(data,provenance=None):
     sections,(rva,size),raw,headers=disk_pe(data)
-    visited=0;claimed=[];leaves=[];names=set()
+    visited=0;claimed=[];leaves=[];names=set();ignored_roots=[]
     def claim(at,n):
         require(0<=at<=len(raw) and 0<n<=len(raw)-at,'resource relative span')
         require(all(at+n<=lo or at>=hi for lo,hi in claimed),'resource cycle/alias/overlap')
@@ -318,16 +319,33 @@ def disk_version_metadata(data,provenance=None):
         require(level<=2 and at%4==0,'resource depth/alignment');claim(at,16)
         named,ids=struct.unpack_from('<HH',raw,at+12);count=named+ids
         reason='resource numeric identifier/count'
-        if not (named==0 and 0<count<=64):
+        if not ((named==0 or level==0) and 0<count<=64):
             try:reason+=_resource_directory_rejection(raw,rva,size,at,level,keys,provenance)
             except Exception:pass
-        require(named==0 and 0<count<=64,reason)
+        require((named==0 or level==0) and 0<count<=64,reason)
         claim(at+16,count*8);local=set();visited+=1+count
         require(visited<=256,'resource aggregate visited')
-        rows=[]
+        rows=[];previous_name=None;previous_id=-1
         for i in range(count):
             name,target=struct.unpack_from('<II',raw,at+16+i*8)
+            if i<named:
+                require(level==0 and bool(name&0x80000000),'resource named type flag')
+                string_at=name&0x7fffffff
+                require(string_at%2==0,'resource name alignment');claim(string_at,2)
+                length=struct.unpack_from('<H',raw,string_at)[0]
+                require(0<length<=256,'resource name length');claim(string_at+2,length*2)
+                value=raw[string_at+2:string_at+2+length*2]
+                decoded=value.decode('utf-16-le');require('\0' not in decoded,'resource name embedded NUL')
+                units=struct.unpack('<'+'H'*length,value)
+                require(previous_name is None or previous_name<units,'resource duplicate/unsorted name')
+                previous_name=units
+                target_at=target&0x7fffffff
+                require(bool(target&0x80000000) and target_at%4==0 and 0<target_at<=len(raw)-16,'resource named type target')
+                require(all(target_at+16<=lo or target_at>=hi for lo,hi in ignored_roots),'resource named type target alias')
+                ignored_roots.append((target_at,target_at+16))
+                continue
             require(name<=65535 and name not in local,'resource duplicate/named key');local.add(name)
+            require(name>previous_id,'resource unsorted numeric key');previous_id=name
             rows.append((name,target))
         for name,target in rows:
             # Other resource types are not interpreted or recursively scanned.
@@ -347,6 +365,7 @@ def disk_version_metadata(data,provenance=None):
                 # overlap structures or another payload in the same image.
                 leaves.append({'path':list(key),'rva':drva,'bytes':n,'codepage':cp,'payload':payload})
     directory(0,0,[]);require(leaves,'RT_VERSION absent')
+    require(all(hi<=a or lo>=b for lo,hi in ignored_roots for a,b in claimed),'resource named target/structure overlap')
     spans=[];languages=set();version_names=set()
     for leaf in leaves:
         language=leaf['path'][2];version_names.add(leaf['path'][1])
