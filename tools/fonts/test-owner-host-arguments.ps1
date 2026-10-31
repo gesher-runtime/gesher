@@ -22,12 +22,19 @@ Write-Host 'FONT_OWNER_HOST_ARGUMENT_METADATA_PASS modes=5 exact_ArgumentList=1 
 $decoders=@($tree.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)|Where-Object Name -ceq 'Convert-OwnerModulePath')
 if($decoders.Count -ne 1){throw 'Missing/ambiguous native module decoder'}
 . ([scriptblock]::Create($decoders[0].Extent.Text))
-$wanted='C:\module-אב space\ucrtbase.dll'
-$units=($wanted.ToCharArray()|ForEach-Object{([int]$_).ToString('x4')}) -join ','
-if((Convert-OwnerModulePath $units) -cne $wanted){throw 'Exact native UTF16 module path changed'}
+foreach($wanted in @('C:\module-אב space\ucrtbase.dll','D:/literal[module]/ucrtbase.dll','\\server\share\module-אב space.dll')){
+ $units=($wanted.ToCharArray()|ForEach-Object{([int]$_).ToString('x4')}) -join ','
+ if((Convert-OwnerModulePath $units) -cne $wanted){throw 'Exact native UTF16 Windows absolute module path changed'}
+}
 foreach($bad in @('','0061','0043,003a,005c,0000','not-hex','12345','0061,')){
  $rejected=$false
  try{$null=Convert-OwnerModulePath $bad}catch{$rejected=$true}
  if(-not $rejected){throw 'Unsafe native module path accepted'}
 }
-Write-Host 'FONT_OWNER_HOST_MODULE_PATH_METADATA_PASS exact_UTF16_literal_path=1 malformed_relative_NUL_rejected=1 native_processes_started=0'
+foreach($unsafePath in @('C:relative.dll','\current-drive.dll','/unix-root.dll','\\server','\\server\share','\\.\pipe\module','\\?\C:\module.dll','\\?\UNC\server\share\module.dll')){
+ $units=($unsafePath.ToCharArray()|ForEach-Object{([int]$_).ToString('x4')}) -join ','
+ $rejected=$false
+ try{$null=Convert-OwnerModulePath $units}catch{$rejected=$true}
+ if(-not $rejected){throw 'Non-absolute/unsupported Windows namespace accepted'}
+}
+Write-Host 'FONT_OWNER_HOST_MODULE_PATH_METADATA_PASS platform_independent_Windows_absolute=1 exact_UTF16_literal_path=1 positives=3 negatives=14 native_processes_started=0'
