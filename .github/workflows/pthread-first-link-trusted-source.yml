@@ -1,0 +1,98 @@
+name: pthread-first-link-trusted-source
+on:
+  workflow_call:
+    outputs:
+      source:
+        value: ${{ jobs.verify.outputs.source }}
+      policy_ref:
+        value: ${{ jobs.verify.outputs.policy_ref }}
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      source: ${{ steps.gate.outputs.source }}
+      policy_ref: ${{ steps.gate.outputs.policy_ref }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PTHREAD_FIRST_LINK_CALLER_COMMIT: ${{ vars.PTHREAD_FIRST_LINK_CALLER_COMMIT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require exact independently pinned focused caller before any compiler
+        id: gate
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import ast,hashlib,json,os,re,subprocess
+          from pathlib import Path
+          REPO='gesher-runtime/gesher';RID='1426153186'
+          CALLER_PATH='.github/workflows/pthread-first-link-component.yml'
+          POLICY_PATH='.github/workflows/pthread-first-link-trusted-source.yml'
+          REF='refs/heads/wip/pthread-first-link';NAME='pthread-first-link-component'
+          BASE='8e92d30b6b25faa3c1daf6014b7bd0ba2ebb6e2f'
+          EXPECTED={
+              ".github/workflows/pthread-first-link-component.yml": "247ce57bb43630f706ed66aca9af4374712029401090cbae77a763d6e98a5888",
+              "docs/handoff/tracks/pthread-first-link-component.md": "0b3fdc154ac2bcf0a99d1c36679c5d93095139181f6e3cdb688736ced24254e3",
+              "tools/host-pthread-authority/minimum_receipt.py": "c201597fac280ef706cdee77735648178e275c696c499aa1ddd8ef46eef76e9d",
+              "tools/toolchain/first_link.py": "6d6511ac3d95ed6ca3d3c00505ae5d9003a7aea878851ab3366a5d73385da39f",
+              "tools/toolchain/first_link_context.py": "17c58423d0f9a3de5ef985c65ef91081cbb4c35604b3c7d6bef3ead7016abcac",
+              "tools/toolchain/first_link_policy.py": "66ba189fabef44598bcd4c136e2b5b5803a0e00e3e151fb65932a94881fe632d",
+              "tools/toolchain/prepare_host_pthread.py": "480d247eb09dd7a524126e998b4c455a261fe9e6f1a3e6363cf51c8e1bf97789",
+              "tools/toolchain/selected_link.cmake": "05296177a700ae5998ef5712d461af0aa20a7e4ffaa24ae0d7f7f9eff9660225",
+              "tools/toolchain/test_first_link_context.py": "f3d357a933d085e899d5b669978a9e5ca6ae486903816228e5a3a507cd905bda",
+              "tools/toolchain/test_first_link_live.py": "83fc632fb7a2a44dfada8ac607198b6b34bab3dcb2a59c1b5e118a3eed15d581",
+              "tools/toolchain/test_first_link_manifest.py": "7cdd860b81275ca74f5cce547b2321e24c51f1f4c6ef415dfa30a42f414abc36"
+          }
+          env=os.environ
+          source=env.get('PTHREAD_FIRST_LINK_CALLER_COMMIT','')
+          observed={k:env.get(k) for k in ('GITHUB_REPOSITORY','GITHUB_REPOSITORY_ID','GITHUB_REF','GITHUB_WORKFLOW','GITHUB_WORKFLOW_REF','GITHUB_WORKFLOW_SHA','GITHUB_SHA','GITHUB_JOB','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_ACTOR','GITHUB_TRIGGERING_ACTOR','GITHUB_EVENT_NAME')}
+          print('FIRST_LINK_POLICY_CALLER '+json.dumps(dict(expected_source=source,received=observed),sort_keys=True),flush=True)
+          assert env.get('GITHUB_ACTIONS')=='true'
+          assert env['GITHUB_REPOSITORY']==REPO and env['GITHUB_REPOSITORY_ID']==RID
+          assert env['GITHUB_REF']==REF and env['GITHUB_WORKFLOW']==NAME
+          assert env['GITHUB_WORKFLOW_REF']==REPO+'/'+CALLER_PATH+'@'+REF
+          assert env['GITHUB_JOB']=='verify'
+          assert re.fullmatch('[0-9a-f]{40}',source) and source==env['GITHUB_SHA']==env['GITHUB_WORKFLOW_SHA']
+          assert env['GITHUB_ACTOR']==env['GITHUB_TRIGGERING_ACTOR']=='palmoni5'
+          assert env['GITHUB_EVENT_NAME'] in ('push','workflow_dispatch')
+          assert all(re.fullmatch('[1-9][0-9]*',env[k]) for k in ('GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT'))
+          run=json.loads(subprocess.check_output(['gh','api','repos/'+REPO+'/actions/runs/'+env['GITHUB_RUN_ID']],text=True))
+          received={k:run.get(k) for k in ('id','run_attempt','head_sha','head_branch','path','name','event','actor','triggering_actor','referenced_workflows')}
+          print('FIRST_LINK_POLICY_RUN '+json.dumps(received,sort_keys=True),flush=True)
+          assert str(run['id'])==env['GITHUB_RUN_ID'] and str(run['run_attempt'])==env['GITHUB_RUN_ATTEMPT']
+          assert run['head_sha']==source and run['head_branch']=='wip/pthread-first-link'
+          assert run['path']==CALLER_PATH and run['name']==NAME and run['event']==env['GITHUB_EVENT_NAME']
+          assert str(run['repository']['id'])==str(run['head_repository']['id'])==RID and run['repository']['full_name']==REPO
+          assert run['actor']['login']==run['triggering_actor']['login']=='palmoni5'
+          def git(*args):return subprocess.check_output(['git',*args])
+          assert git('rev-parse','HEAD').decode().strip()==source
+          assert not git('status','--porcelain')
+          assert set(git('diff','--name-only',BASE,source).decode().splitlines())==set(EXPECTED)
+          pin_pattern=rb'(uses: '+re.escape((REPO+'/'+POLICY_PATH+'@').encode())+rb')([0-9a-f]{40})'
+          workflow=Path(CALLER_PATH).read_bytes();pins=re.findall(pin_pattern,workflow);assert len(pins)==1
+          policy_ref=REPO+'/'+POLICY_PATH+'@'+pins[0][1].decode();assert pins[0][1]!=b'0'*40
+          refs=[r for r in run['referenced_workflows'] if r['path']==policy_ref]
+          assert len(refs)==1 and refs[0]['sha']==pins[0][1].decode()
+          for name,digest in EXPECTED.items():
+              path=Path(name);assert path.is_file() and not path.is_symlink()
+              raw=path.read_bytes()
+              if name==CALLER_PATH:raw=re.sub(pin_pattern,lambda m:m[1]+b'IMMUTABLE_POLICY_PIN',raw)
+              actual=hashlib.sha256(raw).hexdigest()
+              print('FIRST_LINK_POLICY_FILE '+json.dumps(dict(path=name,expected=digest,actual=actual),sort_keys=True),flush=True)
+              assert actual==digest
+          old=ast.parse(git('show',BASE+':tools/host-pthread-authority/minimum_receipt.py').decode())
+          new=ast.parse(Path('tools/host-pthread-authority/minimum_receipt.py').read_text(encoding='utf-8'))
+          def native(tree):return [ast.dump(n,include_attributes=False) for n in tree.body if not isinstance(n,ast.FunctionDef) or n.name!='context']
+          assert native(old)==native(new)
+          # Entire change set is exact; all original push filters/full/default/provider
+          # files remain at8e92. The reviewed trigger proof excludes every other branch.
+          print('FIRST_LINK_POLICY_PASS '+json.dumps(dict(source=source,policy_ref=policy_ref,files=len(EXPECTED),planned_jobs=4,scope='FIRST_LINK_ONLY'),sort_keys=True),flush=True)
+          with Path(env['GITHUB_OUTPUT']).open('a',encoding='utf-8') as output:
+              output.write('source='+source+'\npolicy_ref='+policy_ref+'\n')
+          PY
