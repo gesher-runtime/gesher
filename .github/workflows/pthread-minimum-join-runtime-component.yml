@@ -25,6 +25,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 -I -B tools/host-pthread-authority/minimum_join_runtime_authority_wip.py diagnostic-producer
           archive="$RUNNER_TEMP/llvm-mingw-diagnostic.tar.xz"
           curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64.tar.xz" -o "$archive"
           bash tools/host-pthread-authority/build-minimum-join-runtime-wip.sh "$archive"
@@ -57,6 +58,8 @@ jobs:
       - name: Verify exact current producer receipt and diagnostic binding
         shell: pwsh
         run: |
+          python -I -B tools/host-pthread-authority/minimum_join_runtime_authority_wip.py diagnostic-windows
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic consumer authority failed' }
           python tools/ci/artifact_receipt.py --name minimum-join-runtime-diagnostic --producer diagnostic-producer --destination minimum-join-runtime-bundle
           if ($LASTEXITCODE -ne 0) { throw 'Diagnostic producer receipt failed' }
           python -I -B tools/host-pthread-authority/minimum_join_runtime_bundle_wip.py verify minimum-join-runtime-bundle

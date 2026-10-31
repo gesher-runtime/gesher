@@ -3,7 +3,7 @@
 Call only after a separately frozen immutable gate has bound this exact file.
 No product/default selection or target-wait qualification follows.
 """
-import json, os, re, subprocess
+import json, os, re, subprocess, sys
 
 REPO='gesher-runtime/gesher'; REPO_ID=1426153186
 BRANCH='wip/pthread-minimum-join-witness-runtime'
@@ -67,7 +67,8 @@ def authorize(role='diagnostic-producer'):
     return {'context':c,'roles':roles,'qualification':False}
 
 def main():
-    result=authorize()
-    print('JOIN_RUNTIME_CURRENT_PRODUCER '+json.dumps(result,sort_keys=True),flush=True)
+    require(len(sys.argv)==2 and sys.argv[1] in ('diagnostic-producer','diagnostic-windows'),'explicit role argument')
+    result=authorize(sys.argv[1])
+    print('JOIN_RUNTIME_CURRENT_ROLE '+json.dumps(result,sort_keys=True),flush=True)
 
 if __name__=='__main__':main()
