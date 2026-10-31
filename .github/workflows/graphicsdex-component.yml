@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   source-authority:
-    uses: gesher-runtime/gesher/.github/workflows/graphicsdex-trusted-source.yml@0000000000000000000000000000000000000000
+    uses: gesher-runtime/gesher/.github/workflows/graphicsdex-trusted-source.yml@1601cde679fa28ef38042185522ae900f1da9200
   fixture-producer:
     needs: source-authority
     runs-on: ubuntu-24.04
