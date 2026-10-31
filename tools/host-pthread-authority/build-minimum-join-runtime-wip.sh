@@ -8,6 +8,7 @@ test "${GESHER_MINIMUM_JOIN_RUNTIME_AUTHORIZED_SOURCE:-}" = "${GITHUB_SHA:?}"
 root=$(git rev-parse --show-toplevel)
 test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 test -z "$(git status --porcelain --untracked-files=all)"
+python3 -I -B tools/host-pthread-authority/minimum_join_runtime_authority_wip.py
 archive=$(realpath "${1:?official compiler archive}")
 work="${RUNNER_TEMP:?}/join-runtime-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"
 test ! -e "$work"; mkdir -p "$work/toolchain"
