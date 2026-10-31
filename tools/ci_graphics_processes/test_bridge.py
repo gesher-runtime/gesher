@@ -29,5 +29,9 @@ class BridgeTests(unittest.TestCase):
                 with self.assertRaises(AssertionError):m.consumer_artifact(c,bad,{'total_count':1,'artifacts':[artifact]})
             bad=copy.deepcopy(jobs);bad['jobs'][1]['conclusion']='failure'
             with self.assertRaises(AssertionError):m.consumer_artifact(c,bad,{'total_count':1,'artifacts':[artifact]})
+        jobs25=copy.deepcopy(jobs);jobs25['jobs'][2]['name']='fixture (windows-2025)'
+        for img in ('win25','win25-vs2026'):
+            with patch.dict(m.os.environ,{'RUNNER_OS':'Windows','ImageOS':img}):
+                self.assertEqual(m.consumer_artifact(c,jobs25,{'total_count':1,'artifacts':[artifact]})[1],2)
 
 if __name__=='__main__':unittest.main()

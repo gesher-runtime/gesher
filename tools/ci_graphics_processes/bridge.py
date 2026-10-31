@@ -41,7 +41,7 @@ def producer_manifest(root,current,jobs,guard):
 
 def consumer_artifact(current,jobs,inventory):
     roles=module('role_checks')
-    image=os.environ.get('ImageOS');assert os.environ.get('RUNNER_OS')=='Windows' and image in ('win22','win25')
+    image=os.environ.get('ImageOS');assert os.environ.get('RUNNER_OS')=='Windows' and (image=='win22' or (bool(image) and (image.startswith('win25') or 'win25' in image)))
     name='fixture (windows-'+('2022' if image=='win22' else '2025')+')'
     found=[x for x in jobs['jobs'] if x['name']==name];assert len(found)==1
     job=found[0]
