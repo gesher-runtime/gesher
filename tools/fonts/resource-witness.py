@@ -4,7 +4,42 @@ Caller authenticates full admitted image first. Static metadata anchors decoding
 this is not runtime stack/unwind/PDB integrity or an owner observation.
 """
 import hashlib
+import json
 import struct
+
+UNWIND_DIAGNOSTIC_CAP = 4096
+
+def _unwind_mismatch_evidence(entry, raw, code, operations):
+    """Lossless bounded failure suffix only; formatting failure never admits data."""
+    try:
+        if type(raw)is not bytes or not 4<=len(raw)<=256 or type(code)is not bytes or len(code)<10:
+            return ''
+        if type(operations)is not list or len(operations)>32:
+            return ''
+        if not all(type(row)is tuple and len(row)==4 and
+                   all(type(v)is int and 0<=v<2**32 for v in row) for row in operations):
+            return ''
+        selected={key:entry[key] for key in ('begin','end','unwind_rva','entry_hex')}
+        if not all(type(selected[k])is int and 0<=selected[k]<2**32 for k in ('begin','end','unwind_rva')):
+            return ''
+        if type(selected['entry_hex'])is not str or len(selected['entry_hex'])!=24:
+            return ''
+        if len(bytes.fromhex(selected['entry_hex']))!=12:
+            return ''
+        evidence={'schema':'FONT_RESOURCE_UNWIND_MISMATCH_V1','selected_entry':selected,
+                  'header_hex':raw[:4].hex(),'raw_hex':raw.hex(),
+                  'raw_sha256':hashlib.sha256(raw).hexdigest(),
+                  'version':raw[0]&7,'flags':raw[0]>>3,'count':raw[2],
+                  'prolog':raw[1],'frame':raw[3],'received_operations':operations,
+                  'expected_operations':[(10,2,3,32),(6,0,7,0),(5,4,3,48)],
+                  'prologue_hex':code[:10].hex()}
+        encoded=json.dumps(evidence,ensure_ascii=True,separators=(',',':'))
+        suffix='\nFONT_RESOURCE_UNWIND_MISMATCH '+encoded
+        if len(suffix.encode('ascii'))>UNWIND_DIAGNOSTIC_CAP:
+            return ''
+        return suffix
+    except Exception:
+        return ''
 
 def require(value, reason):
     if not value: raise ValueError('UNAVAILABLE: '+reason)
@@ -58,7 +93,10 @@ def unwind_prologue(data, sections, entry, code):
         elif op==0:operations.append((off,op,info,0));i+=1
         elif op==2:operations.append((off,op,info,info*8+8));i+=1
         else:raise ValueError('UNAVAILABLE: unseen unwind opcode')
-    require(operations==[(10,2,3,32),(6,0,7,0),(5,4,3,48)],'prologue/unwind register and stack coherence')
+    reason='prologue/unwind register and stack coherence'
+    if operations!=[(10,2,3,32),(6,0,7,0),(5,4,3,48)]:
+        reason+=_unwind_mismatch_evidence(entry,raw,code,operations)
+    require(operations==[(10,2,3,32),(6,0,7,0),(5,4,3,48)],reason)
     handler=None
     if flags:
         handler=struct.unpack_from('<I',raw,size-4)[0]

@@ -3,6 +3,11 @@ import importlib.util
 from pathlib import Path
 import struct
 import unittest
+import json
+import hashlib
+import io
+import contextlib
+from unittest.mock import patch
 
 def load(name):
     spec=importlib.util.spec_from_file_location(name,Path(__file__).with_name(name+'.py'))
@@ -67,5 +72,48 @@ class Witness(unittest.TestCase):
     def test_duplicate_overlapping_runtime_entries(self):
         data=image();struct.pack_into('<I',data,0x80+24+116+24,24)
         data[0x140c:0x1418]=data[0x1400:0x140c];self.reject(lambda:packet(data))
+    def test_mismatch_lossless_bounded_stderr_evidence(self):
+        # Synthetic wrong save offset, NOT an observed current-profile layout.
+        data=image();struct.pack_into('<H',data,0x150a,7)
+        stdout=io.StringIO()
+        with contextlib.redirect_stdout(stdout), self.assertRaises(ValueError)as caught:
+            packet(data)
+        self.assertEqual(stdout.getvalue(),'')
+        reason,suffix=str(caught.exception).split('\nFONT_RESOURCE_UNWIND_MISMATCH ')
+        self.assertEqual(reason,'UNAVAILABLE: prologue/unwind register and stack coherence')
+        self.assertLessEqual(len(suffix.encode('ascii')),4096)
+        value=json.loads(suffix);raw=bytes(data[0x1500:0x150c])
+        self.assertEqual(value['schema'],'FONT_RESOURCE_UNWIND_MISMATCH_V1')
+        self.assertEqual(value['selected_entry'],{'begin':0x1000,'end':0x1045,'unwind_rva':0x3100,'entry_hex':bytes(data[0x1400:0x140c]).hex()})
+        self.assertEqual(bytes.fromhex(value['header_hex']),raw[:4])
+        self.assertEqual(bytes.fromhex(value['raw_hex']),raw)
+        self.assertEqual(value['raw_sha256'],hashlib.sha256(raw).hexdigest())
+        self.assertEqual([value[k]for k in ('version','flags','count','prolog','frame')],[1,0,4,10,0])
+        self.assertEqual(value['expected_operations'],[[10,2,3,32],[6,0,7,0],[5,4,3,48]])
+        self.assertEqual(value['received_operations'],[[10,2,3,32],[6,0,7,0],[5,4,3,56]])
+        self.assertEqual(bytes.fromhex(value['prologue_hex']),bytes(data[0x400:0x40a]))
+    def test_diagnostic_failures_keep_original_rejection(self):
+        data=image();struct.pack_into('<H',data,0x150a,7)
+        for target,value in [('UNWIND_DIAGNOSTIC_CAP',1),('json.dumps',lambda *a,**k: (_ for _ in ()).throw(RuntimeError('internal')))]:
+            control=patch.object(w,'UNWIND_DIAGNOSTIC_CAP',value)if target=='UNWIND_DIAGNOSTIC_CAP'else patch.object(w.json,'dumps',value)
+            with self.subTest(target=target),control:
+                with self.assertRaisesRegex(ValueError,'^UNAVAILABLE: prologue/unwind register and stack coherence$'):
+                    packet(data)
+        for raw,ops in [(b'x'*257,[]),(b'1234',[(1,2,3,4)]*33),(b'1234',[[1,2,3,4]]),(b'1234',[(1,2,3,2**32)])]:
+            self.assertEqual(w._unwind_mismatch_evidence({},raw,b'0'*10,ops),'')
+        maximum=w._unwind_mismatch_evidence({'begin':2**32-1,'end':2**32-1,'unwind_rva':2**32-1,'entry_hex':'ff'*12},b'\xff'*256,b'0'*10,[(2**32-1,)*4]*32)
+        self.assertTrue(maximum)
+        self.assertLessEqual(len(maximum.encode('ascii')),4096)
+    def test_valid_result_exact_and_no_diagnostic_or_reordered_failure(self):
+        baseline=packet(image())
+        with patch.object(w,'_unwind_mismatch_evidence',side_effect=AssertionError('valid must not format')):
+            self.assertEqual(json.dumps(packet(image()),sort_keys=True),json.dumps(baseline,sort_keys=True))
+        for at,value in [(0x1500,2),(0x1505,0x31),(0x1506,11)]:
+            data=image();data[at]=value
+            with patch.object(w,'_unwind_mismatch_evidence',side_effect=AssertionError('earlier guard must reject first')):
+                with self.assertRaises(ValueError):packet(data)
+        data=image()[:0x150a]
+        with patch.object(w,'_unwind_mismatch_evidence',side_effect=AssertionError('truncation first')):
+            with self.assertRaises(ValueError):packet(data)
 
 if __name__=='__main__':unittest.main()
