@@ -659,6 +659,16 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
 // [begin, end), covered by regions of one group, becomes one placeholder (a
 // single hole entry), which is returned.
 std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t end) {
+  auto initial=FindRegion(s,begin);
+  if(initial==s.regions.end() || end<=begin) {
+    s.request_error=EIO;errno=EIO;return initial;
+  }
+  PreparedPunchLedger ledger;
+  const auto prepared=PreparePunchLedger(end-begin,s.page_size,initial->second.group,ledger);
+  if(prepared!=PrepareStatus::Ok) {
+    s.request_error=prepared==PrepareStatus::NoMemory?ENOMEM:EIO;
+    errno=s.request_error; return initial;
+  }
   for (uintptr_t at = begin; at < end;) {
     auto it = FindRegion(s, at);
     const uintptr_t region_end = it->first + it->second.size;
@@ -680,11 +690,12 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
         r.kind = Kind::kHole;
         std::fill(r.live.begin(), r.live.end(), false);
         r.live_pages = 0;
+        std::fill(r.actual_protection.begin(),r.actual_protection.end(),0);
         break;
       }
       case Kind::kView:
         if (it->first == x && region_end == y) {
-          const BOOL retired = Placeholders().unmap2(GetCurrentProcess(), it->second.view, MEM_PRESERVE_PLACEHOLDER);
+          const BOOL retired = FileAliasUnmap2(Placeholders().unmap2,GetCurrentProcess(),it->second.view,MEM_PRESERVE_PLACEHOLDER);
           if (it->second.owner != nullptr && !retired) { s.owner_failure = true; return it; }
           DropSection(s, it->second);
           Region& r = it->second;
@@ -693,6 +704,7 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
           r.mapping = nullptr;
           std::fill(r.live.begin(), r.live.end(), false);
           r.live_pages = 0;
+        std::fill(r.actual_protection.begin(),r.actual_protection.end(),0);
         } else {
           PunchView(s, it, x, y);
         }
@@ -704,14 +716,17 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
   // One placeholder for the whole range.
   auto first = FindRegion(s, begin);
   if (first->second.size != end - begin) {
-    VirtualFree(reinterpret_cast<void*>(begin), end - begin,
-                MEM_RELEASE | MEM_COALESCE_PLACEHOLDERS);
+    if(!FileAliasFree(reinterpret_cast<void*>(begin),end-begin,
+                      MEM_RELEASE|MEM_COALESCE_PLACEHOLDERS)) {
+      first->second.operation_error=GetLastError();
+      s.owner_failure=true; errno=EIO;
+      return first; // real partitions still exist; never publish fictitious merge
+    }
     for (auto next = std::next(first); next != s.regions.end() && next->first < end;) {
       next = s.regions.erase(next);
     }
-    first->second.size = end - begin;
-    first->second.live.assign((end - begin) / s.page_size, false);
-    first->second.live_pages = 0;
+    static_assert(noexcept(first->second=std::move(ledger.combined)));
+    first->second=std::move(ledger.combined); // prepared storage, no post-OS growth
   }
   return first;
 }

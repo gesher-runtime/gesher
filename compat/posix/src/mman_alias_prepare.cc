@@ -45,6 +45,22 @@ PrepareStatus PrepareAlias(const AliasInput& in, PreparedAlias& out) noexcept {
   }
 }
 
+PrepareStatus PreparePunchLedger(size_t length,size_t page,uintptr_t group,
+                                      PreparedPunchLedger& out) noexcept {
+  if(!page || !length || length%page || !group || !out.combined.live.empty() ||
+     !out.combined.actual_protection.empty()) return PrepareStatus::InvalidSize;
+  try {
+    Region ready; ready.kind=Kind::kHole; ready.group=group; ready.size=length;
+    if(length/page>ready.live.max_size() || length/page>ready.actual_protection.max_size())
+      return PrepareStatus::InvalidSize;
+    ready.live.assign(length/page,false);
+    ready.actual_protection.assign(length/page,0);
+    out.combined=std::move(ready);
+    return PrepareStatus::Ok;
+  } catch(const std::bad_alloc&) { return PrepareStatus::NoMemory; }
+    catch(...) { return PrepareStatus::InternalFailure; }
+}
+
 PrepareStatus PrepareSplit(const Region& source, uintptr_t start, uintptr_t at,
                            size_t page, PreparedSplit& out) noexcept {
   if (!out.upper.empty() || page == 0 || at <= start || at - start >= source.size ||

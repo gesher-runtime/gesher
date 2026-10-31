@@ -85,6 +85,36 @@ int main() {
     }
     if(!surgery_success || surgery_failures<3)++failed;
   }
+  {
+    // Positively choose growth beyond the ACTUAL first bitmap capacity, not
+    // a hardcoded five-page assumption. Native execution remains CI-only.
+    std::vector<bool> first(128,false);
+    const size_t capacity=first.capacity(),pages=capacity+1;
+    bool success=false;int caught=0;
+    if(pages<=capacity || pages>SIZE_MAX/4096)++failed;
+    else for(long point=0;point<32;++point) {
+      const long before=live;budget=point;calls=0;injected=0;
+      PrepareStatus status;
+      {
+        PreparedPunchLedger plan;
+        status=PreparePunchLedgerFromNoExceptions(pages*4096,4096,0x10000,plan);
+        budget=-1;
+        if(status==PrepareStatus::NoMemory) {
+          ++caught;
+          if(!plan.combined.live.empty()||!plan.combined.actual_protection.empty())++failed;
+        } else if(status==PrepareStatus::Ok) {
+          success=true;
+          if(plan.combined.live.size()!=pages || plan.combined.live_pages ||
+             plan.combined.actual_protection.size()!=pages || plan.combined.owner)++failed;
+        } else ++failed;
+      }
+      if(live!=before || injected!=(status==PrepareStatus::NoMemory?1:0))++failed;
+      std::printf("PUNCH_LEDGER_ALLOCATION capacity=%zu combined_pages=%zu point=%ld calls=%ld injected=%ld status=%d released=%d\n",
+        capacity,pages,point,calls,injected,static_cast<int>(status),live==before);
+      if(success)break;
+    }
+    if(!success||!caught)++failed;
+  }
   std::printf("PREPARE_RESULT failures=%d success=%d live=%ld failed=%d\n", failures,successes,live,failed);
   return failed ? 1 : 0;
 }
