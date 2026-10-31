@@ -71,4 +71,26 @@ foreach($function in $newFunctions|Where-Object{$_.Name -cnotin $oldNames -and $
 }
 $topCommands=@($new.EndBlock.Statements|ForEach-Object{$_.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Resolve-PreflightLiteral'},$true)}|Where-Object{$_.Extent.StartLineNumber -gt $newFunctions[-1].Extent.EndLineNumber})
 Check ($topCommands.Count -eq 0)
-Write-Host "FONT_RESOURCE_METADATA_PASS checks=$script:checks native_processes_started=0 real_tool_reads=0"
+foreach($name in @('Select-ResourcePythonSource')){
+ $node=@($newFunctions|Where-Object{$_.Name -ceq $name});Check ($node.Count -eq 1);Invoke-Expression $node[0].Extent.Text
+}
+$kind='System.Management.Automation.ApplicationInfo'
+$records=@(@{type=$kind;source='D:\first\python.exe'},@{type=$kind;source='C:\WindowsApps\python.exe'})
+$script:pathRecords.Clear()
+Check ((Select-ResourcePythonSource $records) -ceq 'D:\first\python.exe')
+Check ($script:pathRecords.Count -eq 2 -and $script:pathRecords[1].record.selected_index -eq 0 -and !$script:pathRecords[1].record.fallback)
+Check ($script:pathRecords[0].record.items[0].prefix -ceq 'D:\first\python.exe' -and $script:pathRecords[0].record.items[1].prefix -ceq 'C:\WindowsApps\python.exe')
+Check ((Select-ResourcePythonSource @($records[1],$records[0])) -ceq 'C:\WindowsApps\python.exe')
+Check ((Select-ResourcePythonSource @($records[0])) -ceq 'D:\first\python.exe')
+foreach($bad in @(@(),(@($records[0])*9),@(@{type='AliasInfo';source='D:\python.exe'}),@(@{type=$kind;source=''}),@(@{type=$kind;source=@('D:\a.exe','D:\b.exe')}),@(@{type=$kind;source='D:\a.exe';extra='no'}),@('D:\python.exe'),@(@{type=$kind;source=$null}))){Reject {Select-ResourcePythonSource $bad}}
+$script:pathRecords.Clear()
+$badFirst=@(@{type=$kind;source='C:relative'},@{type=$kind;source='D:\valid\python.exe'})
+Check ((Select-ResourcePythonSource $badFirst) -ceq 'C:relative')
+Reject {Resolve-ResourceLiteral 'PYTHON_APPLICATION_SOURCE' (Select-ResourcePythonSource $badFirst)}
+Check ($script:pathRecords[-1].label -ceq 'FONT_RESOURCE_PATH_REJECTED')
+foreach($n in 1..8){Check ((Select-ResourcePythonSource (@($records[0])*$n)) -ceq 'D:\first\python.exe')}
+$lookup=@($newFunctions|Where-Object{$_.Name -ceq 'Get-ResourcePythonSource'})[0].Extent.Text
+Check ($lookup.Contains('Microsoft.PowerShell.Core\Get-Command -Name python -CommandType Application -All -TotalCount 9 -ErrorAction Stop'))
+Check ($lookup.Contains('-isnot [System.Management.Automation.ApplicationInfo]'))
+Check ($lookup -notmatch 'Sort-Object|Start-Process|\.Start\(|Invoke-Expression|Where-Object')
+Write-Host "FONT_RESOURCE_METADATA_PASS checks=$script:checks native_processes_started=0 real_tool_reads=0 actual_application_lookup=NOT_EXECUTED"
