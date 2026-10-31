@@ -31,5 +31,13 @@ def main():
             bad=copy.deepcopy(jobs);bad['jobs'][i][key]=None;reject(lambda:a.check_jobs(bad,c));count+=1
     bad=copy.deepcopy(jobs);bad['jobs'].append(copy.deepcopy(bad['jobs'][1]));bad['total_count']=3;reject(lambda:a.check_jobs(bad,c));count+=1
     bad=copy.deepcopy(jobs);bad['jobs'][0]['id']=12;reject(lambda:a.check_jobs(bad,c));count+=1
+    consumer_env=dict(env,GITHUB_JOB='diagnostic-windows',JOIN_RUNTIME_OS='windows-2025',JOIN_RUNTIME_MODE='dynamic')
+    consumer=a.context(consumer_env,'diagnostic-windows')
+    consumer_jobs={'total_count':3,'jobs':[job('source-authority / verify',11,'completed','success'),job('diagnostic-producer',12,'completed','success'),job('diagnostic-windows-windows-2025-dynamic',13,'in_progress',None)]}
+    assert a.check_jobs(consumer_jobs,consumer)['diagnostic-producer']==12
+    for index,key in ((0,'conclusion'),(1,'conclusion'),(1,'run_attempt'),(2,'head_sha'),(2,'status'),(2,'id')):
+        bad=copy.deepcopy(consumer_jobs);bad['jobs'][index][key]=None;reject(lambda:a.check_jobs(bad,consumer));count+=1
+    for key in ('JOIN_RUNTIME_OS','JOIN_RUNTIME_MODE'):
+        bad=dict(consumer_env);bad[key]='bad';reject(lambda:a.context(bad,'diagnostic-windows'));count+=1
     print('JOIN_RUNTIME_AUTHORITY_PURE_PASS negatives='+str(count)+' immutable_gate=false native_network=0')
 if __name__=='__main__':main()

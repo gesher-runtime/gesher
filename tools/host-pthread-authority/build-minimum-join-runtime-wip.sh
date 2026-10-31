@@ -83,4 +83,5 @@ cp "$llvm/x86_64-w64-mingw32/bin/libwinpthread-1.dll" "$out/libwinpthread-1.dll"
 "$llvm/bin/llvm-objdump" --disassemble --reloc "$out/libwinpthread-1.dll" > "$out/dll-disassembly.txt"
 python3 -I -B tools/host-pthread-authority/verify-minimum-join-linkage-wip.py "$out"
 sha256sum "$cc" "$lib/libwinpthread.a" "$lib/libwinpthread.dll.a" "$out"/*
-printf '%s\n' 'JOIN_RUNTIME_DIAGNOSTIC_BUILD_ONLY receipt_not_sealed=true target_wait_proved=false product_qualification=false'
+python3 -I -B tools/host-pthread-authority/minimum_join_runtime_bundle_wip.py seal "$out"
+printf '%s\n' 'JOIN_RUNTIME_DIAGNOSTIC_BUILD_ONLY current_manifest_sealed=true target_wait_proved=false product_qualification=false'
