@@ -14,6 +14,9 @@ add_executable(file_mremap_prepare EXCLUDE_FROM_ALL alias_prepare_test.cc
 set_source_files_properties(alias_prepare_test.cc PROPERTIES COMPILE_OPTIONS "-fexceptions")
 set_source_files_properties(alias_prepare_noexcept_caller.cc PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_compile_options(file_mremap_prepare PRIVATE -Wall -Wextra -Werror)
+# This TU is test-only; throwing allocator faults are caught inside the helper.
+# Never apply this source property or a target-wide exception flag to mman.cc.
+set_source_files_properties(alias_failure_adapter.cc PROPERTIES COMPILE_OPTIONS "-fexceptions")
 add_library(file_mremap_failure_objects OBJECT
   "${_file_mremap_root}/compat/posix/src/mman.cc" alias_failure_adapter.cc)
 set_target_properties(file_mremap_failure_objects PROPERTIES EXCLUDE_FROM_ALL TRUE)

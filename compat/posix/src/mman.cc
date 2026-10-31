@@ -418,18 +418,18 @@ uintptr_t Reserve(State& s,void* at,size_t len,PreparedReservation* prepared=nul
 // one), else anywhere. The second try keeps ART's search for free address
 // space in the low 4 GiB, which steps through pages, from ending up anywhere
 // at each page that is not on a boundary.
-uintptr_t ReserveNear(State& s, void* hint, size_t len) {
+uintptr_t ReserveNear(State& s, void* hint, size_t len,PreparedReservation* prepared=nullptr) {
   uintptr_t at = 0;
   if (hint != nullptr) {
-    at = Reserve(s, hint, len);
+    at = Reserve(s, hint, len,prepared);
     if(s.request_error||s.owner_failure)return 0;
     const uintptr_t next = RoundUp(reinterpret_cast<uintptr_t>(hint), s.granularity);
     if (at == 0 && next != reinterpret_cast<uintptr_t>(hint)) {
-      at = Reserve(s, reinterpret_cast<void*>(next), len);
+      at = Reserve(s, reinterpret_cast<void*>(next), len,prepared);
     }
   }
   if(s.request_error||s.owner_failure)return 0;
-  return at != 0 ? at : Reserve(s, nullptr, len);
+  return at != 0 ? at : Reserve(s, nullptr, len,prepared);
 }
 
 // Frees a group's placeholders once nothing of it is mapped.
@@ -944,11 +944,12 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
 
   const uintptr_t requested=reinterpret_cast<uintptr_t>(start);
   PreparedPunchRequest request;
-  const bool prepared_request=(flags&MAP_FIXED)!=0 && CoveringGroup(s,requested,requested+len)!=0;
-  if(prepared_request) {
-    const auto status=PreparePunchRequest(s.regions,requested,requested+len,s.page_size,request,in_file);
-    if(status!=PrepareStatus::Ok) { errno=status==PrepareStatus::NoMemory?ENOMEM:EIO;return MAP_FAILED; }
-  }
+  const bool existing_group=(flags&MAP_FIXED)!=0 && CoveringGroup(s,requested,requested+len)!=0;
+  const bool prepared_request=true;
+  const auto preparation=existing_group
+    ?PreparePunchRequest(s.regions,requested,requested+len,s.page_size,request,in_file)
+    :PrepareFreshGroupFile(len,s.page_size,in_file,request);
+  if(preparation!=PrepareStatus::Ok){errno=preparation==PrepareStatus::NoMemory?ENOMEM:EIO;return MAP_FAILED;}
   auto close_construct=[&](HANDLE& handle,size_t slot) {
     if(!handle)return true;
     if(!prepared_request) { CloseHandle(handle);handle=nullptr;return true; }
@@ -1011,14 +1012,19 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
   } else {
     uintptr_t at = 0;
     if (!(fixed && RangeIsOurs(s, addr, addr + len))) {
-      at = fixed ? Reserve(s, start, len) : ReserveNear(s, start, len);
+      at = fixed ? Reserve(s,start,len,&request.reservation) : ReserveNear(s,start,len,&request.reservation);
     }
     if (at == 0) {
-      if (mapping != nullptr) CloseHandle(mapping);
+      if(mapping!=nullptr)close_construct(mapping,0);
       errno = fixed ? ((flags & MAP_FIXED_NOREPLACE) != 0 ? EEXIST : EINVAL) : ENOMEM;
       return MAP_FAILED;
     }
     hole = s.regions.find(at);
+    request.constructor_first.group=at;request.constructor_anonymous.group=at;
+    request.cleanup_merged.combined.group=at;
+    if(!request.constructor_tail.empty()) {
+      request.constructor_tail.key()+=at;request.constructor_tail.mapped().group=at;
+    }
   }
   const uintptr_t result = hole->first;
   const uintptr_t group = hole->second.group;

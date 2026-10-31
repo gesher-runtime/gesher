@@ -108,6 +108,7 @@ struct PreparedPunchPin {
 struct PreparedPunchRequest {
   std::vector<PreparedPunchPiece> pieces;
   std::vector<PreparedPunchPin> pins;
+  PreparedReservation reservation;
   PreparedPunchLedger merged;
   PreparedPunchLedger cleanup_merged; // separate storage if constructor later fails
   Region constructor_first;
@@ -116,6 +117,7 @@ struct PreparedPunchRequest {
   std::array<std::unique_ptr<SectionOwner>,3> constructor_failures;
   size_t first_capacity=0,combined_pages=0;
 };
+PrepareStatus PrepareFreshGroupFile(size_t,size_t,size_t,PreparedPunchRequest&) noexcept;
 PrepareStatus PreparePunchRequest(const RegionMap&,uintptr_t,uintptr_t,size_t,
                                  PreparedPunchRequest&,size_t final_view=SIZE_MAX) noexcept;
 PrepareStatus PreparePunchRequestFromNoExceptions(const RegionMap&,uintptr_t,uintptr_t,
