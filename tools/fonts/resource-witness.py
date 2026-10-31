@@ -289,7 +289,24 @@ def version_payload(payload):
             'product_version_components':components(fixed[4],fixed[5]),'string_tables':tables,
             'translations':translations,'raw_bytes':len(payload),'raw_sha256':hashlib.sha256(payload).hexdigest()}
 
-def disk_version_metadata(data):
+def _resource_directory_rejection(raw,rva,size,at,level,keys,provenance):
+    try:
+        if type(provenance)is not dict or set(provenance)!={'profile','context','imports_pid','input_record_sha256'}:return ''
+        if type(raw)is not bytes or not (0<=at<=len(raw)-16) or type(keys)is not list or len(keys)>2:return ''
+        header=raw[at:at+16];characteristics,timestamp,major,minor,named,ids=struct.unpack('<IIHHHH',header)
+        record={'schema':'FONT_RESOURCE_RESOURCE_DIRECTORY_REJECTION_V1','provenance':provenance,
+                'resource_rva':rva,'resource_bytes':size,'resource_sha256':hashlib.sha256(raw).hexdigest(),
+                'level':level,'relative_offset':at,'key_path':keys,'header_hex':header.hex(),
+                'header_sha256':hashlib.sha256(header).hexdigest(),
+                'characteristics':characteristics,'timestamp_raw':timestamp,'major':major,'minor':minor,
+                'named':named,'ids':ids,'count':named+ids,'named_zero':named==0,'count_in_range':0<named+ids<=64}
+        suffix='\nFONT_RESOURCE_RESOURCE_DIRECTORY_REJECTION '+json.dumps(record,ensure_ascii=True,separators=(',',':'))
+        if len(suffix.encode('ascii'))>8192:return ''
+        return suffix
+    except Exception:
+        return ''
+
+def disk_version_metadata(data,provenance=None):
     sections,(rva,size),raw,headers=disk_pe(data)
     visited=0;claimed=[];leaves=[];names=set()
     def claim(at,n):
@@ -300,7 +317,11 @@ def disk_version_metadata(data):
         nonlocal visited
         require(level<=2 and at%4==0,'resource depth/alignment');claim(at,16)
         named,ids=struct.unpack_from('<HH',raw,at+12);count=named+ids
-        require(named==0 and 0<count<=64,'resource numeric identifier/count')
+        reason='resource numeric identifier/count'
+        if not (named==0 and 0<count<=64):
+            try:reason+=_resource_directory_rejection(raw,rva,size,at,level,keys,provenance)
+            except Exception:pass
+        require(named==0 and 0<count<=64,reason)
         claim(at+16,count*8);local=set();visited+=1+count
         require(visited<=256,'resource aggregate visited')
         rows=[]
@@ -354,6 +375,7 @@ def admit_disk_metadata(data,entry,context,pid):
     require(entry['signature_status']=='Valid' and type(entry['signer'])is str and
             re.search(r'(?:^|,\s*)O=Microsoft Corporation(?:,|$)',entry['signer'])and type(entry['signer_thumbprint'])is str and
             re.fullmatch('[A-Fa-f0-9]{40,128}',entry['signer_thumbprint'])and entry['lease']=='RETAINED_READ_SHARE_READ','disk signature/retained lease')
+    input_hash=hashlib.sha256(json.dumps(entry,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    provenance={'profile':{k:entry[k]for k in ('role','name','version','bytes','sha256')},'context':context,'imports_pid':pid,'input_record_sha256':input_hash}
     return {'record':'NTDLL_DISK_METADATA','role':DISK_ROLE,'profile':entry,'context':context,'imports_pid':pid,
-            'input_record_sha256':hashlib.sha256(json.dumps(entry,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
-            'metadata':disk_version_metadata(data),'qualification':False}
+            'input_record_sha256':input_hash,'metadata':disk_version_metadata(data,provenance),'qualification':False}

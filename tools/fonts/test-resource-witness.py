@@ -197,6 +197,38 @@ def disk_entry(data,context=None,pid=123):
 class DiskMetadata(unittest.TestCase):
     def reject(self,fn):
         with self.assertRaises((ValueError,KeyError,TypeError,struct.error)):fn()
+    def test_actual_directory_rejection_operands_and_provenance(self):
+        data=disk_image();entry=disk_entry(data);ctx=entry['context']
+        provenance={'profile':{k:entry[k]for k in ('role','name','version','bytes','sha256')},'context':ctx,
+                    'imports_pid':123,'input_record_sha256':hashlib.sha256(json.dumps(entry,sort_keys=True,separators=(',',':')).encode()).hexdigest()}
+        for named,ids in ((1,1),(0,0),(0,65),(65535,65535)):
+            bad=bytearray(data);struct.pack_into('<HH',bad,0x1400+12,named,ids)
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                with self.assertRaises(ValueError) as error:w.disk_version_metadata(bytes(bad),provenance)
+            self.assertEqual(stdout.getvalue(),'')
+            reason=str(error.exception);prefix='UNAVAILABLE: resource numeric identifier/count\nFONT_RESOURCE_RESOURCE_DIRECTORY_REJECTION '
+            self.assertTrue(reason.startswith(prefix));record=json.loads(reason[len(prefix):])
+            header=bytes(bad[0x1400:0x1410])
+            self.assertEqual(record['header_hex'],header.hex());self.assertEqual(record['header_sha256'],hashlib.sha256(header).hexdigest())
+            self.assertEqual((record['named'],record['ids'],record['count']),(named,ids,named+ids))
+            self.assertEqual((record['named_zero'],record['count_in_range']),(named==0,0<named+ids<=64))
+            self.assertEqual(record['provenance'],provenance);self.assertEqual((record['level'],record['relative_offset'],record['key_path']),(0,0,[]))
+            self.assertEqual(record['resource_sha256'],hashlib.sha256(bytes(bad[0x1400:0x2400])).hexdigest())
+        with patch.object(w,'_resource_directory_rejection',side_effect=AssertionError('must not run')):
+            self.assertTrue(w.disk_version_metadata(data)['records'])
+            bad=bytearray(data);struct.pack_into('<HH',bad,0x1400+12,1,1)
+            with self.assertRaisesRegex(ValueError,'^UNAVAILABLE: resource numeric identifier/count$'):w.disk_version_metadata(bytes(bad),provenance)
+        huge=dict(provenance,profile={'synthetic':'x'*9000})
+        with self.assertRaisesRegex(ValueError,'^UNAVAILABLE: resource numeric identifier/count$'):w.disk_version_metadata(bytes(bad),huge)
+        actual=bytes(bad);admitted=disk_entry(actual)
+        with patch.dict(w.DISK_PROFILES,{admitted['sha256']:'SYNTHETIC_ONLY'}):
+            with self.assertRaises(ValueError) as error:w.admit_disk_metadata(actual,admitted,admitted['context'],123)
+        record=json.loads(str(error.exception).split('\nFONT_RESOURCE_RESOURCE_DIRECTORY_REJECTION ',1)[1])
+        self.assertEqual(record['provenance']['input_record_sha256'],hashlib.sha256(json.dumps(admitted,sort_keys=True,separators=(',',':')).encode()).hexdigest())
+        self.assertEqual(record['provenance']['profile']['sha256'],admitted['sha256'])
+        self.assertEqual(record['provenance']['context'],admitted['context']);self.assertEqual(record['provenance']['imports_pid'],123)
+        with patch.object(w,'_resource_directory_rejection',side_effect=AssertionError('earlier rejection invoked formatter')):
+            self.reject(lambda:w.disk_version_metadata(data[:100],provenance))
     def test_effective_walker_all_categories_and_languages(self):
         payload=version_root([('040904B0',[('FileVersion','10.0.20348.5622')]),('040D04B0',[('FileVersion','\u05d0\u05d1')])],[(0x409,1200),(0x40d,1200)])
         result=w.disk_version_metadata(disk_image(records=[(0x409,payload),(0x40d,payload)]))
