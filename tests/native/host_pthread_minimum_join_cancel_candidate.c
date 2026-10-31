@@ -62,7 +62,7 @@ static void capture_joiner_stack(HANDLE thread, DWORD expected_tid) {
          (unsigned long)expected_tid, (unsigned long)created.dwHighDateTime,
          (unsigned long)created.dwLowDateTime, count, (unsigned long)prior, (unsigned long)resumed);
   for (unsigned i = 0; i < count; ++i) {
-    MEMORY_BASIC_INFORMATION region; unsigned char bytes[16]; SIZE_T copied = 0;
+    MEMORY_BASIC_INFORMATION region; unsigned char bytes[64]; SIZE_T copied = 0;
     check(pcs[i] >= sizeof bytes && VirtualQuery((const void *)(uintptr_t)(pcs[i] - sizeof bytes),
           &region, sizeof region) == sizeof region && region.Type == MEM_IMAGE &&
           ReadProcessMemory(GetCurrentProcess(), (const void *)(uintptr_t)(pcs[i] - sizeof bytes),

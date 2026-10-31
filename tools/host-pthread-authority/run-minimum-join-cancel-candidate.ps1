@@ -54,7 +54,7 @@ try {
             $line = $captureLine.GetAwaiter().GetResult()
             if ($null -eq $line) { throw 'Fixture exited during stack capture' }
             Write-Host $line
-            if ($line -cmatch '^JOIN_CANCEL_FRAME index=([0-9]+) pc=([0-9]+) image=([0-9]+) prefix=([0-9a-f]{32})$') { $frameCount++ }
+            if ($line -cmatch '^JOIN_CANCEL_FRAME index=([0-9]+) pc=([0-9]+) image=([0-9]+) prefix=([0-9a-f]{128})$') { $frameCount++ }
             if ($line -ceq 'JOIN_CANCEL_STACK_COMPLETE') { $captureComplete = $true; break }
             $captureLine = $process.StandardOutput.ReadLineAsync()
           } else { Start-Sleep -Milliseconds 20 }
