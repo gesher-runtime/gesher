@@ -31,6 +31,18 @@ the additive84 block; no local import/compilation is permitted. Native API role,
 rights, UInt64 FILETIME/handle widths and receiver-only termination are source
 contracts pending independent whole peer and actual CI.
 
+Correction source checks:11 actual extracted product managed-double controls
+and33 actual receiver-stage controls pass, with native calls/constructors/query
+sites explicitly replaced, Sleep removed and original owner loop truncated at12
+iterations by the harness. These are source-state/root-retention witnesses,
+never native-handle or infinite-lifetime execution proof. Positive and adverse
+cases include unknown launch/read, first/later queries and reader/process/cancel
+close, sinks, fixed-schema rejection, identity/parent gates, wait/kill/close
+uncertainty. Fixture escrow/publication ordering, rights/termination role and
+lexical balance are checked statically only; C# is UNCOMPILED. AST2/diff/scope,
+old84 exact prefix, outsideGraphics+oneimport and unchanged shared helpers plus
+Process84 pass. DIFFERENT complete source/lifetime/role review remains required.
+
 Owned wip/ci-graphics-processes from exact2e41f6d21b21639d586986b83e2a05df9bc7b688.
 Only GraphicsDex30, additive84 controls, Graphics84.cs and this document change.
 Shared reader helpers are unchanged. No compiler/fixture/tool runs locally.

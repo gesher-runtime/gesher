@@ -456,17 +456,20 @@ foreach($mode in 'normal','nonzero','missing-marker','timeout','retained'){
       }
       if($g.Phase -eq 'Settle'){
         if($g.Wait -eq 'FAILED'){throw 'uncertain receiver wait retained'}
-        $g.Wait='FAILED'
-        $w=[Graphics84]::WaitForSingleObject($g.Slot.Handle,0);$err=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        if($w -ne 0 -and $w -ne 258){throw "receiver liveness unavailable:$err"}
-        if($w -eq 0 -and -not $g.Kill){$g.Failed=$true} # live-writer assertion required
-        if($w -eq 258 -and -not $g.Kill){
-          $g.Kill=$true
-          $ok=[Graphics84]::TerminateProcess($g.Slot.Handle,1);$err=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
-          if(-not $ok){$g.Failed=$true} # reservation is never retried
+        if($g.Wait -eq 'UNATTEMPTED'){
+          $g.Wait='FAILED'
+          $w=[Graphics84]::WaitForSingleObject($g.Slot.Handle,0);$err=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
+          if($w -ne 0 -and $w -ne 258){throw "receiver liveness unavailable:$err"}
+          if($w -eq 0){$g.Failed=$true} # original live-writer assertion required
+          if($w -eq 258){
+            $g.Kill=$true
+            $ok=[Graphics84]::TerminateProcess($g.Slot.Handle,1);$err=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            if(-not $ok){$g.Failed=$true} # reservation is never retried
+          }
         }
+        $g.Wait='FAILED'
         $w=[Graphics84]::WaitForSingleObject($g.Slot.Handle,5000);$err=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        if($w -eq 258){$g.Failed=$true;$g.Wait='UNATTEMPTED';continue}
+        if($w -eq 258){$g.Failed=$true;$g.Wait='PASSIVE';continue}
         if($w -ne 0){throw "receiver kernel unavailable:$err"}
         $g.Wait='DONE';$g.Phase='Close'
       }
