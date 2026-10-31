@@ -9,6 +9,10 @@ foreach(_target file_mremap_lifetime file_mremap_alias)
 endforeach()
 add_executable(file_mremap_prepare EXCLUDE_FROM_ALL alias_prepare_test.cc
   alias_prepare_noexcept_caller.cc "${_file_mremap_root}/compat/posix/src/mman_alias_prepare.cc")
+# Source properties are explicit in THIS qualification directory too; actual
+# effective command ordering remains a CI stamp requirement.
+set_source_files_properties("${_file_mremap_root}/compat/posix/src/mman_alias_prepare.cc"
+  PROPERTIES COMPILE_OPTIONS "-fexceptions")
 # Test-only sources occur in no production target. Helper's existing source-local
 # -fexceptions option remains identical to its production helper compilation.
 set_source_files_properties(alias_prepare_test.cc PROPERTIES COMPILE_OPTIONS "-fexceptions")
