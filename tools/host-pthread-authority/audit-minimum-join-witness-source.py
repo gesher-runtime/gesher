@@ -8,7 +8,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 UPSTREAM = 'c2fcaa54269f0e773069aeeec8212cac71f417483bf65d5e75f100311df4080b'
 MINIMUM = 'c8fd0dece0f412bbdffab2df27df462eeef131a6b671e0e5a13ccde2364d0f78'
-DIAGNOSTIC = '19a80c3b62044f439447f39fbbc02ed2486ad47c497fcf50ef153a1ae6c16328'
+DIAGNOSTIC = 'dd3f2c90ebb6b7ea22588c1548e7675332b1606745281120dd95189b7fd37541'
 
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
@@ -36,7 +36,7 @@ def main():
         end = diagnostic.index(b'\nint\npthread_join (pthread_t t, void **res)', start)
         reduced = diagnostic[:start] + diagnostic[end + 1:]
         block_start = reduced.index(b'    {\n#ifdef GESHER_MINIMUM_JOIN_WAIT_DIAGNOSTIC\n')
-        expected_block = b'''    {\n#ifdef GESHER_MINIMUM_JOIN_WAIT_DIAGNOSTIC\n      if (t == gesher_diag_target) {\n        gesher_diag_handle = tv->h;\n        gesher_diag_tid = GetCurrentThreadId ();\n        InterlockedExchange (&gesher_diag_phase, 1);\n      }\n#endif\n      WaitForSingleObject (tv->h, INFINITE);\n    }\n'''
+        expected_block = b"    {\n#ifdef GESHER_MINIMUM_JOIN_WAIT_DIAGNOSTIC\n      if (t == gesher_diag_target)\n        gesher_minimum_join_diag_wait (tv->h);\n      else\n#endif\n        WaitForSingleObject (tv->h, INFINITE);\n    }\n"
         block_end = block_start + len(expected_block)
         assert reduced[block_start:block_end] == expected_block
         reduced = reduced[:block_start] + b'    WaitForSingleObject (tv->h, INFINITE);\n' + reduced[block_end:]
