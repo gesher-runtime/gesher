@@ -4,7 +4,7 @@ $source=Join-Path $PSScriptRoot 'debugger-preflight.ps1'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($source,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw ($errors|Out-String)}
-$pure=@('Assert-OrdinaryWindowsPath','Join-WindowsLiteral','Select-UniqueDebugger','New-PreflightCommands','New-PreflightArguments','New-PreflightStartInfo','Assert-PreflightRequest','Assert-PreflightRawMarkers')
+$pure=@('Assert-OrdinaryWindowsPath','Join-WindowsLiteral','Select-UniqueDebugger','New-PreflightCommands','New-PreflightArguments','New-PreflightStartInfo','Assert-PreflightRequest','Assert-PreflightRawMarkers','Get-StageLimits','Assert-StageBudget','Assert-StageRelative','Assert-StageTrustRecord','Test-StageEligible','New-StageAdmission','Assert-StageIdentity','Assert-StageMembership','Assert-OwnedStageCleanupPath','Get-StageManifestText','Assert-StageModule')
 foreach($name in $pure){
  $nodes=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$true))
  if($nodes.Count -ne 1){throw 'Missing/duplicate pure function'}
@@ -72,4 +72,126 @@ try{
   if($isProbe){Check ($psi.Environment['FONT_DEBUGGER_PREFLIGHT_CANARY'] -ceq 'probe-v1') 'Missing canary';Check ($psi.ArgumentList.Count -eq 0) 'Probe extra arguments'}else{Exact @($psi.ArgumentList) $expected}
  }
 }finally{foreach($key in $poisons){[Environment]::SetEnvironmentVariable($key,$saved[$key])}}
-Write-Host ('FONT_DEBUGGER_PURE_TESTS checks='+$script:checks+' process_start_count=0')
+# Synthetic trust metadata only: no real signatures, copies or binary opens.
+function New-SyntheticTrust([string]$Name){
+ @{relative=$Name;size=1024L;sha256=('a'*64);file_version='1.2.3.4';product_version='1.2.3.4';signature_status='Valid';signature_type='Authenticode';signature_message='synthetic fixture';signer='CN=Synthetic, O=Microsoft Corporation, C=US';signer_thumbprint=('B'*40);query_error=''}
+}
+$required=@('cdb.exe','dbgeng.dll','dbghelp.dll','symsrv.dll','winext\ext.dll')
+$records=@($required|ForEach-Object{New-SyntheticTrust $_})
+$admission=New-StageAdmission $records 1
+Check ($admission.admitted.Count -eq 5 -and $admission.excluded.Count -eq 0) 'Eligible required synthetic set rejected'
+$unsigned=New-SyntheticTrust 'optional.dll';$unsigned.signature_status='NotSigned';$unsigned.signature_type='None';$unsigned.signer='';$unsigned.signer_thumbprint=''
+$admission=New-StageAdmission ($records+@($unsigned)) 1
+Check ($admission.admitted.Count -eq 5 -and $admission.excluded.Count -eq 1 -and $admission.admitted.relative -cnotcontains 'optional.dll') 'Unsigned optional admitted'
+foreach($field in @('signature_status','signer','file_version','product_version')){
+ $bad=$records[0].Clone()
+ switch($field){'signature_status'{$bad[$field]='NotTrusted'} 'signer'{$bad[$field]='CN=Synthetic, O=Other Company'} default{$bad[$field]=''}}
+ Reject {New-StageAdmission (@($bad)+$records[1..4]) 1}
+}
+Reject {New-StageAdmission $records[1..4] 1}
+Reject {New-StageAdmission ($records+@($records[0].Clone())) 1}
+$collision=$records[0].Clone();$collision.relative='CDB.EXE'
+Reject {New-StageAdmission ($records+@($collision)) 1}
+foreach($bad in @($null,@{},@{relative='optional.dll'})){Reject {Assert-StageTrustRecord $bad}}
+foreach($field in @('query_error','signature_status','signature_type','signer_thumbprint')){
+ $bad=$records[0].Clone();$bad[$field]='MALFORMED_OR_QUERY_ERROR'
+ Reject {Assert-StageTrustRecord $bad}
+}
+foreach($relative in @('winext\nested\ext.dll','..\cdb.exe','C:\cdb.exe','cdb.exe:ads','winext\NUL.dll','a.txt','winext\\ext.dll')){Reject {Assert-StageRelative $relative}}
+foreach($field in @('sha256','size','file_version','product_version','signature_status','signature_type','signer','signer_thumbprint','relative')){
+ $changed=$records[0].Clone()
+ switch($field){'sha256'{$changed[$field]='b'*64} 'size'{$changed[$field]=2048L} 'signature_status'{$changed[$field]='NotTrusted'} 'signature_type'{$changed[$field]='Catalog'} 'signer_thumbprint'{$changed[$field]='C'*40} 'relative'{$changed[$field]='another.dll'} default{$changed[$field]='changed'}}
+ Reject {Assert-StageIdentity $records[0] $changed}
+}
+Assert-StageMembership $required $required
+Reject {Assert-StageMembership $required ($required+@('extra.dll'))}
+Reject {Assert-StageMembership $required $required[1..4]}
+Assert-StageMembership $required $required[1..4] $true
+Reject {Assert-StageMembership $required @('CDB.EXE') $true}
+Check ((Get-StageManifestText $records) -ceq (Get-StageManifestText @($records[4..0]))) 'Nondeterministic manifest ordering'
+$large=$records[0].Clone();$large.size=134217729L
+Reject {New-StageAdmission (@($large)+$records[1..4]) 1}
+$aggregate=@($records|ForEach-Object{$r=$_.Clone();$r.size=134217728L;$r})
+Reject {New-StageAdmission $aggregate 1}
+$many=@($records)+@(0..123|ForEach-Object{New-SyntheticTrust ('optional'+$_+'.dll')})
+Reject {New-StageAdmission $many 1}
+$inventory=@(0..256|ForEach-Object{New-SyntheticTrust ('optional'+$_+'.dll')})
+Reject {New-StageAdmission $inventory 1}
+Reject {Assert-StageBudget 90000};Reject {Assert-StageBudget -1};Assert-StageBudget 89999
+$manifestLarge=@(0..99|ForEach-Object{$r=New-SyntheticTrust ('member'+$_+'.dll');$r.file_version='v'*4096;$r.product_version='p'*4096;$r})
+Reject {Get-StageManifestText $manifestLarge}
+Assert-StageModule 'D:\owned\stage\cdb.exe' 'D:\owned\stage' 'C:\Windows\System32' $records $records[0]
+Assert-StageModule 'D:\owned\stage\CDB.EXE' 'D:\owned\stage' 'C:\Windows\System32' $records $records[0]
+$systemRecord=New-SyntheticTrust 'ntdll.dll'
+Assert-StageModule 'C:\Windows\System32\ntdll.dll' 'D:\owned\stage' 'C:\Windows\System32' $records $systemRecord
+Reject {Assert-StageModule 'C:\SDK\cdb.exe' 'D:\owned\stage' 'C:\Windows\System32' $records $records[0]}
+Reject {Assert-StageModule 'D:\owned\stage\extra.dll' 'D:\owned\stage' 'C:\Windows\System32' $records (New-SyntheticTrust 'extra.dll')}
+$wrong=$records[0].Clone();$wrong.sha256='b'*64
+Reject {Assert-StageModule 'D:\owned\stage\cdb.exe' 'D:\owned\stage' 'C:\Windows\System32' $records $wrong}
+Reject {Assert-StageModule 'C:\Windows\System32\optional.dll' 'D:\owned\stage' 'C:\Windows\System32' $records $unsigned}
+# Source guards are not execution tests; verify critical lifetime and CI boundaries.
+$text=$ast.Extent.Text
+foreach($fn in @('Get-StageDiskRecord','Get-StageInventory','Initialize-SignedStage','Remove-ExactOwnedStage')){
+ $node=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $fn},$true)
+ Check ($node.Body.Extent.Text -match 'Assert-StageCI') 'Staging IO lacks Windows CI gate'
+}
+Check ($text -notmatch 'FileShare\]::Inheritable|Remove-Item[^\r\n]*-Recurse') 'Unsafe inherited stage handle/recursive removal'
+Check ($text.IndexOf('$writer.Dispose()') -lt $text.IndexOf('$State.handles.Add(')) 'Stage writer remains open before held read'
+Check ($text.IndexOf('Stop-ExactOwnedProcess $child') -lt $text.LastIndexOf('Remove-ExactOwnedStage $stage')) 'Stage cleanup precedes process cleanup'
+Assert-OwnedStageCleanupPath 'D:\owned temp\font-debugger-abc\stage' 'D:\owned temp\font-debugger-abc'
+foreach($badRoot in @('C:\SDK','C:\Windows\System32','D:\owned temp\font-debugger-abcd\stage','D:\owned temp\font-debugger-abc\stage\extra','D:\owned temp\font-debugger-abc\..\stage')){
+ Reject {Assert-OwnedStageCleanupPath $badRoot 'D:\owned temp\font-debugger-abc'}
+}
+Check ($text -match 'if\(!\$bothCompleted\)\{throw[^\r\n]+stage handles/files retained') 'Missing completed-process guard before closing stage handles'
+Check ($text -match 'tool_request_and_detach_completed=\(\$ok -and \$closed -and \$bothCompleted -and \$stageHandlesClosed -and !\$stageCleanupError\)') 'Success ignores cleanup/completion failure'
+# Exercise the actual disk-record control flow in a finite child scope. Every
+# external operation is shadowed before invocation; no runner body is evaluated.
+$diskNode=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Get-StageDiskRecord'},$true))
+Check ($diskNode.Count -eq 1) 'Missing/duplicate mocked disk-record function'
+foreach($case in @('success','query_throw','null','multiple','missing_property','null_status','bad_enum','bad_signer')){
+ & {
+  param($Definition,$Case)
+  $mock=@{signature_calls=0;item_calls=0;hash_calls=0;events=[Collections.Generic.List[object]]::new()}
+  $clock=[pscustomobject]@{ElapsedMilliseconds=1L}
+  function Assert-StageCI {}
+  function Resolve-PreflightLiteral([string]$Path){$Path}
+  function Get-Item([string]$LiteralPath,[switch]$Force,[string]$ErrorAction){
+   $mock.item_calls++
+   [pscustomobject]@{Length=1024L;VersionInfo=[pscustomobject]@{FileVersion='1.2.3.4';ProductVersion='1.2.3.4'}}
+  }
+  function Get-FileHash([string]$LiteralPath,[string]$Algorithm){$mock.hash_calls++;[pscustomobject]@{Hash=('A'*64)}}
+  function Get-AuthenticodeSignature([string]$LiteralPath,[string]$ErrorAction){
+   $mock.signature_calls++
+   $fake=[pscustomobject]@{Status='Valid';StatusMessage='synthetic query';SignatureType='Authenticode';SignerCertificate=[pscustomobject]@{Subject='CN=Synthetic, O=Microsoft Corporation, C=US';Thumbprint=('B'*40)}}
+   switch($Case){
+    'query_throw'{throw 'SYNTHETIC_SIGNATURE_QUERY_EXCEPTION'}
+    'null'{return $null}
+    'multiple'{return @($fake,$fake)}
+    'missing_property'{$fake.PSObject.Properties.Remove('SignatureType')}
+    'null_status'{$fake.Status=$null}
+    'bad_enum'{$fake.Status='SYNTHETIC_INVALID_ENUM'}
+    'bad_signer'{$fake.SignerCertificate=$null}
+   }
+   $fake
+  }
+  function Emit-PreflightRecord([string]$Stage,$Value){$mock.events.Add(@{stage=$Stage;value=$Value})}
+  Invoke-Expression $Definition
+  $threw=$false;$result=$null
+  try{$result=Get-StageDiskRecord 'D:\synthetic only\stage\cdb.exe' 'cdb.exe'}catch{$threw=$true}
+  Check ($mock.signature_calls -eq 1 -and $mock.item_calls -eq 1) ('Signature mock branch did not execute: '+$Case)
+  if($Case -ceq 'success'){
+   Check (!$threw -and $mock.hash_calls -eq 1 -and $mock.events.Count -eq 0) 'Mocked valid query unexpectedly failed'
+   Check ($result.relative -ceq 'cdb.exe' -and $result.sha256 -ceq ('a'*64) -and (Test-StageEligible $result)) 'Mocked success identity differs'
+  }else{
+   Check $threw ('Signature failure became an optional exclusion: '+$Case)
+   Check ($mock.events.Count -eq 1) ('Missing structured query diagnostic: '+$Case)
+   $event=$mock.events[0]
+   $expectedStage=if($Case -ceq 'query_throw'){'FONT_DEBUGGER_STAGE_SIGNATURE_QUERY_ERROR'}else{'FONT_DEBUGGER_STAGE_SIGNATURE_MALFORMED'}
+   Check ($event.stage -ceq $expectedStage) 'Signature failure misclassified as unsigned exclusion'
+   Check ($event.value.path -ceq 'D:\synthetic only\stage\cdb.exe' -and $event.value.relative -ceq 'cdb.exe') 'Diagnostic lost exact synthetic path/relative'
+   Check (!$event.value.signature_validated -and !$event.value.Contains('copied')) 'Generic signature diagnostic asserts copy state'
+   Check ($event.value.query_succeeded -eq ($Case -cne 'query_throw')) 'Query-success fact differs from mocked branch'
+  }
+ } $diskNode[0].Extent.Text $case
+}
+Write-Host ('FONT_DEBUGGER_PURE_TESTS checks='+$script:checks+' process_start_count=0 synthetic_stage_trust_only=true')

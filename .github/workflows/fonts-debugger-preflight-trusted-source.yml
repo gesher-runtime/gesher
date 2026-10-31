@@ -31,7 +31,7 @@ jobs:
           CALLER='.github/workflows/fonts-debugger-preflight-component.yml'
           TRUST='.github/workflows/fonts-debugger-preflight-trusted-source.yml'
           REPO='gesher-runtime/gesher'
-          EXTRA_PINS={'tests/fonts-debugger-preflight/probe.cc': 'b658a210b5e0abfd30e0bcb102c50e0ea4bc2cc2', 'tools/fonts/debugger-probe.py': '91f338af75ac02add2c8b4ce190c676c25fcb050', 'tools/fonts/test-debugger-probe.py': 'd47940b6e2e72cf632c15bec7bc93a6de4be67fb', 'tools/fonts/debugger-preflight.ps1': '4cf08c54499f44a771ef411f6f036b1948311c96', 'tools/fonts/test-debugger-preflight.ps1': '1298fe218fe10632a3f588f7d0b2c07dee396f64'}
+          EXTRA_PINS={'tests/fonts-debugger-preflight/probe.cc': 'b658a210b5e0abfd30e0bcb102c50e0ea4bc2cc2', 'tools/fonts/debugger-probe.py': '91f338af75ac02add2c8b4ce190c676c25fcb050', 'tools/fonts/test-debugger-probe.py': 'd47940b6e2e72cf632c15bec7bc93a6de4be67fb', 'tools/fonts/debugger-preflight.ps1': 'e1b46c92a34ae729aeedffd081e5f851801d531f', 'tools/fonts/test-debugger-preflight.ps1': 'e26c367654efdd11f5bdfaaa12f57326c92b33e6'}
           def require(value,message):
            if not value:raise RuntimeError(message)
           def git(*args):return subprocess.check_output(['git',*args])
@@ -109,7 +109,7 @@ jobs:
             for p,raw in originals.items():Path(p).write_bytes(raw)
            full['verify_checkout'](expected);full['isolated_import_controls']()
            require(not git('status','--porcelain','--untracked-files=all').strip(),'Dirty preflight checkout')
-           print('FONT_DEBUGGER_TRUSTED_SOURCE '+json.dumps({'source':source,'run':run_id,'attempt':attempt,'immutable_guard':guard,'caller_authority':reviewed,'frozen_host_source':BASE,'extra_pins':EXTRA_PINS,'roles':{'probe':'CURRENT_SOURCE_CURRENT_ATTEMPT_HARMLESS_CRT_CHILD','Windows':'PREINSTALLED_TOOL_SYMBOL_OBSERVATION_AND_SAME_CHILD_QD_ONLY'},'font_owner_qualified':False,'host_WCT_Windows2025_qualified':False,'private_CRT_owner_symbols_qualified':False,'full_qualification':False},sort_keys=True),flush=True)
+           print('FONT_DEBUGGER_TRUSTED_SOURCE '+json.dumps({'source':source,'run':run_id,'attempt':attempt,'immutable_guard':guard,'caller_authority':reviewed,'frozen_host_source':BASE,'extra_pins':EXTRA_PINS,'roles':{'probe':'CURRENT_SOURCE_CURRENT_ATTEMPT_HARMLESS_CRT_CHILD','Windows':'STAGED_SIGNED_COPY_FROM_REGISTERED_SDK_OBSERVATION_AND_SAME_CHILD_QD_ONLY'},'font_owner_qualified':False,'host_WCT_Windows2025_qualified':False,'private_CRT_owner_symbols_qualified':False,'full_qualification':False},sort_keys=True),flush=True)
           main()
           PY
       - name: Retain all existing compiler and artifact ownership metadata controls

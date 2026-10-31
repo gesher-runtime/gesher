@@ -27,7 +27,8 @@ function Select-UniqueDebugger([string[]]$Candidates) {
 function New-PreflightCommands([string]$ExtensionDirectory) {
  $null=Assert-OrdinaryWindowsPath $ExtensionDirectory
  if($ExtensionDirectory.IndexOfAny([char[]]'$%`') -ge 0){throw 'UNAVAILABLE: command path expansion metacharacter'}
- # No extension is invoked. The initial absolute -a also confines default DLL selection.
+ # No extension is invoked. Absolute -a selects only the initial default extension;
+ # it does not confine the OS loader or prove complete dependency observation.
  @(('.extpath '+$ExtensionDirectory),
    '.symopt- 0x00000040','.symopt+ 0x00000400','.symopt', '.echo FONT_DEBUGGER_MODULES',
    'lmv m ntdll','lmv m ucrtbase',
@@ -69,6 +70,99 @@ function Assert-PreflightRawMarkers([string]$Text) {
   if(@($Text -split "`r?`n"|Where-Object{$_ -ceq $marker}).Count -ne 1){throw 'UNAVAILABLE: missing/duplicate command-file handshake'}
  }
 }
+function Get-StageLimits {
+ @{file_bytes=134217728L;aggregate_bytes=536870912L;members=128;handles=128;inventory=256;manifest_bytes=262144;setup_ms=90000}
+}
+function Assert-StageBudget([long]$ElapsedMs) {
+ if($ElapsedMs -lt 0 -or $ElapsedMs -ge (Get-StageLimits).setup_ms){throw 'UNAVAILABLE: monotonic staging setup budget'}
+}
+function Assert-StageRelative([string]$Relative) {
+ $null=Assert-OrdinaryWindowsPath ('C:\stage\'+$Relative)
+ if($Relative -cnotmatch '^(?:winext\\)?[^\\]+\.(?i:dll|exe)$'){throw 'UNAVAILABLE: unexpected stage relative layout'}
+ $Relative
+}
+function Assert-StageTrustRecord($Record) {
+ if($null -eq $Record -or $Record -isnot [System.Collections.IDictionary]){throw 'UNAVAILABLE: null/malformed trust record'}
+ foreach($key in @('relative','size','sha256','file_version','product_version','signature_status','signature_type','signature_message','signer','signer_thumbprint','query_error')){
+  if(!$Record.Contains($key)){throw 'UNAVAILABLE: missing trust field'}
+ }
+ $null=Assert-StageRelative $Record.relative
+ if($Record.query_error -cne '' -or $Record.size -isnot [long] -or $Record.size -le 0 -or
+    $Record.sha256 -isnot [string] -or $Record.sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'UNAVAILABLE: source identity/query failure'}
+ foreach($key in @('file_version','product_version','signature_status','signature_type','signature_message','signer','signer_thumbprint','query_error')){
+  if($Record[$key] -isnot [string] -or $Record[$key].Length -gt 4096){throw 'UNAVAILABLE: malformed trust field'}
+ }
+ if($Record.signature_status -cnotin @('Valid','UnknownError','NotSigned','HashMismatch','NotTrusted','NotSupportedFileFormat','Incompatible') -or
+    $Record.signature_type -cnotin @('None','Authenticode','Catalog')){throw 'UNAVAILABLE: malformed signature response'}
+ if($Record.signature_status -ceq 'Valid' -and ($Record.signature_type -ceq 'None' -or !$Record.signer -or $Record.signer_thumbprint -cnotmatch '^[A-Fa-f0-9]{40,128}$')){throw 'UNAVAILABLE: malformed valid signer'}
+}
+function Test-StageEligible($Record) {
+ Assert-StageTrustRecord $Record
+ $Record.signature_status -ceq 'Valid' -and $Record.signer -match '(?:^|,\s*)O=Microsoft Corporation(?:,|$)' -and
+ ![string]::IsNullOrWhiteSpace($Record.file_version) -and ![string]::IsNullOrWhiteSpace($Record.product_version)
+}
+function New-StageAdmission([object[]]$Records,[long]$ElapsedMs) {
+ Assert-StageBudget $ElapsedMs
+ $limits=Get-StageLimits
+ if($Records.Count -gt $limits.inventory){throw 'UNAVAILABLE: source inventory count cap'}
+ $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+ $admitted=[Collections.Generic.List[object]]::new();$excluded=[Collections.Generic.List[object]]::new();$total=0L
+ foreach($record in $Records){
+  Assert-StageTrustRecord $record
+  if(!$seen.Add($record.relative)){throw 'UNAVAILABLE: duplicate/case collision source member'}
+  if($record.size -gt $limits.file_bytes){throw 'UNAVAILABLE: source per-file byte cap'}
+  if(Test-StageEligible $record){$admitted.Add($record);$total+=$record.size}else{$excluded.Add($record)}
+ }
+ if($total -gt $limits.aggregate_bytes -or $admitted.Count -gt $limits.members -or $admitted.Count -gt $limits.handles){throw 'UNAVAILABLE: stage aggregate/count/handle cap'}
+ foreach($required in @('cdb.exe','dbgeng.dll','dbghelp.dll','symsrv.dll','winext\ext.dll')){
+  if(@($admitted|Where-Object{$_.relative -ieq $required}).Count -ne 1){throw 'UNAVAILABLE: required signed stage member missing/excluded'}
+ }
+ @{admitted=$admitted.ToArray();excluded=$excluded.ToArray();total_bytes=$total}
+}
+function Assert-StageIdentity($Source,$Destination) {
+ Assert-StageTrustRecord $Source;Assert-StageTrustRecord $Destination
+ if(!(Test-StageEligible $Source) -or !(Test-StageEligible $Destination)){throw 'UNAVAILABLE: unsigned identity replay'}
+ foreach($key in @('relative','size','sha256','file_version','product_version','signature_status','signature_type','signer','signer_thumbprint')){
+  if($Source[$key] -cne $Destination[$key]){throw 'UNAVAILABLE: source/destination identity mismatch'}
+ }
+}
+function Assert-StageMembership([string[]]$Expected,[string[]]$Actual,[bool]$AllowPartial=$false) {
+ $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+ foreach($name in $Actual){
+  $null=Assert-StageRelative $name
+  if(!$seen.Add($name) -or $Expected -cnotcontains $name){throw 'UNAVAILABLE: extra/case-collision stage member'}
+ }
+ if(!$AllowPartial -and $Actual.Count -ne $Expected.Count){throw 'UNAVAILABLE: missing stage member'}
+}
+function Assert-OwnedStageCleanupPath([string]$Root,[string]$OwnedWork) {
+ foreach($path in @($Root,$OwnedWork)){$null=Assert-OrdinaryWindowsPath $path}
+ if($Root -cne ($OwnedWork+'\stage') -or !$Root.StartsWith($OwnedWork+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'UNAVAILABLE: cleanup outside exact owned stage'}
+}
+function Get-StageManifestText([object[]]$Records) {
+ $lines=[Collections.Generic.List[string]]::new()
+ $names=[string[]]@($Records|ForEach-Object{$_.relative});[Array]::Sort($names,[StringComparer]::Ordinal)
+ foreach($name in $names){
+  $r=@($Records|Where-Object{$_.relative -ceq $name})
+  if($r.Count -ne 1){throw 'UNAVAILABLE: ambiguous manifest member'}
+  Assert-StageTrustRecord $r[0]
+  $v=$r[0]
+  $lines.Add((ConvertTo-Json -InputObject ([ordered]@{relative=$v.relative;size=$v.size;sha256=$v.sha256;file_version=$v.file_version;product_version=$v.product_version;signature_status=$v.signature_status;signature_type=$v.signature_type;signer=$v.signer;signer_thumbprint=$v.signer_thumbprint}) -Compress -EscapeHandling EscapeNonAscii))
+ }
+ $text="FONT_DEBUGGER_SIGNED_STAGE_MANIFEST_V1`n"+($lines -join "`n")+"`n"
+ if([Text.Encoding]::UTF8.GetByteCount($text) -gt (Get-StageLimits).manifest_bytes){throw 'UNAVAILABLE: deterministic manifest byte cap'}
+ $text
+}
+function Assert-StageModule([string]$Path,[string]$StageRoot,[string]$SystemDirectory,[object[]]$Manifest,$Observed) {
+ foreach($p in @($Path,$StageRoot,$SystemDirectory)){$null=Assert-OrdinaryWindowsPath $p}
+ if($Path.StartsWith($StageRoot+'\',[StringComparison]::OrdinalIgnoreCase)){
+  $relative=$Path.Substring($StageRoot.Length+1).ToLowerInvariant()
+  $match=@($Manifest|Where-Object{$_.relative -ceq $relative})
+  if($match.Count -ne 1){throw 'UNAVAILABLE: observed stage module absent from manifest'}
+  Assert-StageIdentity $match[0] $Observed
+ }elseif($Path.Substring(0,$Path.LastIndexOf('\')) -ieq $SystemDirectory){
+  if(!(Test-StageEligible $Observed)){throw 'UNAVAILABLE: observed unsigned System32 module'}
+ }else{throw 'UNAVAILABLE: observed original SDK/other module path'}
+}
 function Emit-PreflightRecord([string]$Stage,$Value) {
  $payload=ConvertTo-Json -InputObject $Value -Depth 12 -Compress -EscapeHandling EscapeNonAscii
  if($payload.Length -gt 4000000){throw 'Record bound exceeded'}
@@ -89,6 +183,136 @@ function Resolve-PreflightLiteral([string]$Path,[bool]$Directory=$false) {
  $item=Get-Item -LiteralPath $Path -Force -ErrorAction Stop
  if($item.PSIsContainer -ne $Directory -or $item.FullName -ine $Path){throw 'UNAVAILABLE: literal file/directory mismatch'}
  $item.FullName
+}
+function Assert-StageCI {
+ if($env:GITHUB_ACTIONS -cne 'true' -or !$IsWindows){throw 'Windows CI staging only'}
+}
+function Get-StageDiskRecord([string]$Path,[string]$Relative,[bool]$Setup=$true) {
+ Assert-StageCI
+ # Signature/filesystem calls are synchronous: budget checks bound admission at
+ # call boundaries, not cancellation of an individual OS call already in flight.
+ if($Setup){Assert-StageBudget $clock.ElapsedMilliseconds}
+ $path=Resolve-PreflightLiteral $Path
+ $item=Get-Item -LiteralPath $path -Force -ErrorAction Stop
+ if($item.Length -le 0 -or $item.Length -gt (Get-StageLimits).file_bytes){throw 'UNAVAILABLE: disk per-file byte cap'}
+ # Query exceptions/null/malformed responses are failures, never unsigned exclusions.
+ try{$sig=Get-AuthenticodeSignature -LiteralPath $path -ErrorAction Stop}catch{
+  Emit-PreflightRecord 'FONT_DEBUGGER_STAGE_SIGNATURE_QUERY_ERROR' @{path=$path;relative=$Relative;error=$_.Exception.Message;query_succeeded=$false;signature_validated=$false}
+  throw
+ }
+ if($Setup){Assert-StageBudget $clock.ElapsedMilliseconds}
+ if($null -eq $sig -or @($sig).Count -ne 1){
+  Emit-PreflightRecord 'FONT_DEBUGGER_STAGE_SIGNATURE_MALFORMED' @{path=$path;relative=$Relative;reason='null/multiple response';query_succeeded=$true;signature_validated=$false}
+  throw 'UNAVAILABLE: null/multiple signature response'
+ }
+ foreach($key in @('Status','StatusMessage','SignatureType','SignerCertificate')){
+  if($null -eq $sig.PSObject.Properties[$key]){Emit-PreflightRecord 'FONT_DEBUGGER_STAGE_SIGNATURE_MALFORMED' @{path=$path;relative=$Relative;missing_property=$key;query_succeeded=$true;signature_validated=$false};throw 'UNAVAILABLE: malformed signature query object'}
+ }
+ if($null -eq $sig.Status -or $null -eq $sig.SignatureType -or $null -eq $sig.StatusMessage){Emit-PreflightRecord 'FONT_DEBUGGER_STAGE_SIGNATURE_MALFORMED' @{path=$path;relative=$Relative;reason='null field';query_succeeded=$true;signature_validated=$false};throw 'UNAVAILABLE: malformed signature query values'}
+ $record=@{relative=$Relative;size=[long]$item.Length;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant();file_version=[string]$item.VersionInfo.FileVersion;product_version=[string]$item.VersionInfo.ProductVersion;signature_status=$sig.Status.ToString();signature_type=$sig.SignatureType.ToString();signature_message=[string]$sig.StatusMessage;signer=[string]$sig.SignerCertificate.Subject;signer_thumbprint=[string]$sig.SignerCertificate.Thumbprint;query_error=''}
+ try{Assert-StageTrustRecord $record}catch{Emit-PreflightRecord 'FONT_DEBUGGER_STAGE_SIGNATURE_MALFORMED' @{path=$path;relative=$Relative;received=$record;error=$_.Exception.Message;query_succeeded=$true;signature_validated=$false};throw}
+ if($Setup){Assert-StageBudget $clock.ElapsedMilliseconds}
+ $record
+}
+function Get-StageInventory([string]$Root,[bool]$Setup=$false) {
+ Assert-StageCI
+ if($Setup){Assert-StageBudget $clock.ElapsedMilliseconds}
+ $root=Resolve-PreflightLiteral $Root $true
+ $names=[Collections.Generic.List[string]]::new()
+ foreach($item in @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)){
+  if($Setup){Assert-StageBudget $clock.ElapsedMilliseconds}
+  if($item.PSIsContainer){
+   if($item.Name -cne 'winext'){throw 'UNAVAILABLE: unexpected stage directory'}
+   $null=Resolve-PreflightLiteral $item.FullName $true
+   foreach($leaf in @(Get-ChildItem -LiteralPath $item.FullName -Force -ErrorAction Stop)){
+    if($Setup){Assert-StageBudget $clock.ElapsedMilliseconds}
+    if($leaf.PSIsContainer){throw 'UNAVAILABLE: nested stage directory'}
+    $null=Resolve-PreflightLiteral $leaf.FullName;$names.Add(('winext\'+$leaf.Name))
+    if($names.Count -gt (Get-StageLimits).members){throw 'UNAVAILABLE: stage membership count cap'}
+   }
+  }else{$null=Resolve-PreflightLiteral $item.FullName;$names.Add($item.Name)}
+  if($names.Count -gt (Get-StageLimits).members){throw 'UNAVAILABLE: stage membership count cap'}
+ }
+ if($Setup){Assert-StageBudget $clock.ElapsedMilliseconds}
+ $names.ToArray()
+}
+function Initialize-SignedStage([string]$SDK,[string]$StageRoot,$State) {
+ Assert-StageCI;Assert-StageBudget $clock.ElapsedMilliseconds
+ $records=[Collections.Generic.List[object]]::new();$sources=@{}
+ foreach($relativeDirectory in @('','winext')){
+  $directory=if($relativeDirectory){$SDK+'\'+$relativeDirectory}else{$SDK}
+  $directory=Resolve-PreflightLiteral $directory $true
+  $files=@(Get-ChildItem -LiteralPath $directory -File -Force -ErrorAction Stop|Where-Object{$_.Extension -in @('.exe','.dll')})
+  if($files.Count -eq 0 -or $files.Count -gt 128){throw 'UNAVAILABLE: bounded immediate SDK inventory'}
+  foreach($file in $files){
+   Assert-StageBudget $clock.ElapsedMilliseconds
+   $relative=if($relativeDirectory){$relativeDirectory+'\'+$file.Name.ToLowerInvariant()}else{$file.Name.ToLowerInvariant()}
+   if($sources.ContainsKey($relative)){throw 'UNAVAILABLE: source case collision'}
+   $path=Resolve-PreflightLiteral $file.FullName
+   $sourceLock=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+   try{$record=Get-StageDiskRecord $path $relative}finally{$sourceLock.Dispose()}
+   Emit-PreflightRecord 'FONT_DEBUGGER_STAGING_SOURCE_INVENTORY' @{path=$path;identity=$record;layout='STAGED_SIGNED_COPY_FROM_REGISTERED_SDK'}
+   $records.Add($record);$sources[$relative]=$path
+  }
+ }
+ # All well-formed records are inventoried before selection/required decisions.
+ foreach($record in $records){if(!(Test-StageEligible $record)){Emit-PreflightRecord 'FONT_DEBUGGER_STAGING_EXCLUDED_UNTRUSTED' @{source=$sources[$record.relative];identity=$record;copied=$false}}}
+ $admission=New-StageAdmission $records.ToArray() $clock.ElapsedMilliseconds
+ $null=Get-StageManifestText $admission.admitted
+ $State.expected=[string[]]@($admission.admitted|ForEach-Object{$_.relative})
+ $null=New-Item -ItemType Directory -Path $StageRoot -ErrorAction Stop
+ $State.root=Resolve-PreflightLiteral $StageRoot $true
+ $null=New-Item -ItemType Directory -Path ($StageRoot+'\winext') -ErrorAction Stop
+ foreach($record in $admission.admitted){
+  Assert-StageBudget $clock.ElapsedMilliseconds
+  $source=Resolve-PreflightLiteral $sources[$record.relative]
+  $destination=Join-WindowsLiteral $StageRoot $record.relative
+  $null=Resolve-PreflightLiteral ([IO.Path]::GetDirectoryName($destination)) $true
+  $sourceLock=[IO.File]::Open($source,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+  try{
+   Assert-StageIdentity $record (Get-StageDiskRecord $source $record.relative)
+   $writer=[IO.File]::Open($destination,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+   try{
+    $buffer=[byte[]]::new(65536);$copied=0L
+    while(($read=$sourceLock.Read($buffer,0,$buffer.Length)) -gt 0){
+     Assert-StageBudget $clock.ElapsedMilliseconds;$copied+=$read
+     if($copied -gt $record.size){throw 'UNAVAILABLE: source grew during bounded copy'}
+     $writer.Write($buffer,0,$read)
+    }
+    if($copied -ne $record.size){throw 'UNAVAILABLE: truncated staged copy'}
+    $writer.Flush($true)
+   }finally{$writer.Dispose()}
+   # Read/ShareRead excludes writes/delete, no FileShare.Inheritable bit.
+   $held=[IO.File]::Open($destination,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+   $State.handles.Add(@{stream=$held;handle=$held.SafeFileHandle})
+   if($State.handles.Count -gt (Get-StageLimits).handles){throw 'UNAVAILABLE: held stage handle cap'}
+   $actual=Get-StageDiskRecord $destination $record.relative
+   Assert-StageIdentity $record $actual
+   Assert-StageIdentity $record (Get-StageDiskRecord $source $record.relative)
+   Emit-PreflightRecord 'FONT_DEBUGGER_STAGE_COPY_IDENTITY' @{source=$source;destination=$destination;source_identity=$record;destination_identity=$actual;scope='DISK_IDENTITY_NOT_NTFS_OBJECT_OR_MEMORY_ATTESTATION'}
+  }finally{$sourceLock.Dispose()}
+ }
+ Assert-StageMembership $State.expected @(Get-StageInventory $StageRoot $true)
+ $State.manifest=$admission.admitted
+ $manifestText=Get-StageManifestText $State.manifest
+ $State.manifest_sha256=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($manifestText))).ToLowerInvariant()
+ Emit-PreflightRecord 'FONT_DEBUGGER_SIGNED_STAGE_MANIFEST' @{schema='FONT_DEBUGGER_SIGNED_STAGE_MANIFEST_V1';layout='STAGED_SIGNED_COPY_FROM_REGISTERED_SDK';root=$StageRoot;sha256=$State.manifest_sha256;manifest=$manifestText;limits=(Get-StageLimits);loader_closure='UNPROVED_SNAPSHOTS_ONLY';source_sdk_modified=$false}
+ Assert-StageBudget $clock.ElapsedMilliseconds
+}
+function Remove-ExactOwnedStage($State,[string]$OwnedWork,[bool]$ProcessesCompleted) {
+ Assert-StageCI
+ if(!$State.root){return}
+ if(!$ProcessesCompleted){throw 'UNAVAILABLE: stage cleanup requires completed/disposed owned processes'}
+ foreach($held in $State.handles){if(!$held.handle.IsClosed){throw 'UNAVAILABLE: stage cleanup before handle closure'}}
+ $work=Resolve-PreflightLiteral $OwnedWork $true
+ $root=Resolve-PreflightLiteral $State.root $true
+ Assert-OwnedStageCleanupPath $root $work
+ $actual=@(Get-StageInventory $root)
+ Assert-StageMembership $State.expected $actual $true
+ # No recursion: every literal member and directory was checked above.
+ foreach($name in $actual){Remove-Item -LiteralPath (Resolve-PreflightLiteral ($root+'\'+$name)) -Force -ErrorAction Stop}
+ if(Test-Path -LiteralPath ($root+'\winext')){Remove-Item -LiteralPath (Resolve-PreflightLiteral ($root+'\winext') $true) -ErrorAction Stop}
+ Remove-Item -LiteralPath $root -ErrorAction Stop
 }
 function Get-PreflightFileProfile([string]$Path,[bool]$Microsoft=$true) {
  $path=Resolve-PreflightLiteral $Path
@@ -146,11 +370,15 @@ function Update-BoundedPipe($State) {
 function Assert-OwnedAlive($Process,[int]$OwnedProcessId,$Handle) {
  if($Process.Id -ne $OwnedProcessId -or $Handle.IsClosed -or $Handle.IsInvalid -or $Process.WaitForExit(0)){throw 'UNAVAILABLE: exact owned child no longer alive'}
 }
-function Stop-ExactOwnedProcess($Process) {
+function Stop-ExactOwnedProcess($Process,[hashtable]$Completion,[string]$Role) {
+ $Completion[$Role]=$false
+ if($null -eq $Process){$Completion[$Role]=$true;return}
  if($null -ne $Process){
-  try{if(!$Process.WaitForExit(0)){$Process.Kill();if(!$Process.WaitForExit(2000)){throw 'Owned cleanup did not complete'}}}finally{
+  $completed=$false
+  try{if(!$Process.WaitForExit(0)){$Process.Kill();if(!$Process.WaitForExit(2000)){throw 'Owned cleanup did not complete'}};$completed=$Process.WaitForExit(0)}finally{
    foreach($stream in @('StandardInput','StandardOutput','StandardError')){try{$Process.$stream.Dispose()}catch{}}
    $Process.Dispose()
+   $Completion[$Role]=$completed
   }
  }
 }
@@ -162,27 +390,25 @@ if($env:GITHUB_ACTIONS -cne 'true' -or !$IsWindows){
 }
 $clock=[Diagnostics.Stopwatch]::StartNew()
 $child=$null;$debugger=$null;$childHandle=$null;$debuggerHandle=$null;$work=$null;$ok=$false
+$stage=@{root=$null;handles=[Collections.Generic.List[object]]::new();expected=@();manifest=@()}
+$processCompletion=@{child=$false;debugger=$false}
 try {
  Emit-PreflightRecord 'FONT_DEBUGGER_HOST_PROFILE' @{os_version=[Environment]::OSVersion.VersionString;framework=[Runtime.InteropServices.RuntimeInformation]::FrameworkDescription;powershell=$PSVersionTable.PSVersion.ToString();runner_os=$env:RUNNER_OS;runner_arch=$env:RUNNER_ARCH;image_os=$env:ImageOS;image_version=$env:ImageVersion;source=$env:GITHUB_SHA;run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT;diagnostic_only=$true}
  $probeRoot=Resolve-PreflightLiteral $ProbeDirectory $true
  python tools/fonts/debugger-probe.py verify --root $probeRoot
  if($LASTEXITCODE -ne 0){throw 'UNAVAILABLE: current-source/current-attempt probe provenance'}
  $probe=Resolve-PreflightLiteral ($probeRoot+'\probe.exe')
- $tool=Get-RegisteredDebugger
- $sdk=[IO.Path]::GetDirectoryName($tool);$extension=Resolve-PreflightLiteral ($sdk+'\winext') $true
+ $sourceTool=Get-RegisteredDebugger
+ $sdk=[IO.Path]::GetDirectoryName($sourceTool);$sourceExtension=Resolve-PreflightLiteral ($sdk+'\winext') $true
  $checkout=Resolve-PreflightLiteral $env:GITHUB_WORKSPACE $true
- foreach($dir in @($sdk,$extension)){
+ foreach($dir in @($sdk,$sourceExtension)){
   if($dir.StartsWith($checkout+'\',[StringComparison]::OrdinalIgnoreCase) -or $dir -ieq $checkout){throw 'UNAVAILABLE: SDK inside checkout'}
-  $files=@(Get-ChildItem -LiteralPath $dir -File -Force|Where-Object{$_.Extension -in @('.dll','.exe')})
-  if($files.Count -eq 0 -or $files.Count -gt 128){throw 'UNAVAILABLE: SDK dependency inventory bound'}
-  foreach($file in $files){Emit-PreflightRecord 'FONT_DEBUGGER_TOOL_DISK_PROFILE' (Get-PreflightFileProfile $file.FullName)}
  }
- foreach($required in @('cdb.exe','dbgeng.dll','dbghelp.dll','symsrv.dll')){$null=Resolve-PreflightLiteral ($sdk+'\'+$required)}
- $null=Resolve-PreflightLiteral ($extension+'\ext.dll')
  $windows=Resolve-PreflightLiteral ([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)) $true
  $system=Resolve-PreflightLiteral ($windows+'\System32') $true
  $temp=Resolve-PreflightLiteral ([IO.Path]::GetTempPath().TrimEnd('\')) $true
  if($temp -ieq $checkout -or $temp.StartsWith($checkout+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'UNAVAILABLE: temporary root inside checkout'}
+ if($temp -ieq $sdk -or $temp.StartsWith($sdk+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'UNAVAILABLE: temporary root inside read-only source SDK'}
  $work=$temp+'\font-debugger-'+[guid]::NewGuid().ToString('N')
  $null=New-Item -ItemType Directory -Path $work -ErrorAction Stop
  $work=Resolve-PreflightLiteral $work $true
@@ -191,6 +417,9 @@ try {
   $null=Resolve-PreflightLiteral ($work+'\'+$leaf) $true
   if(@(Get-ChildItem -LiteralPath ($work+'\'+$leaf) -Force).Count){throw 'UNAVAILABLE: nonempty owned directory'}
  }
+ Initialize-SignedStage $sdk ($work+'\stage') $stage
+ $tool=Resolve-PreflightLiteral ($stage.root+'\cdb.exe')
+ $extension=Resolve-PreflightLiteral ($stage.root+'\winext') $true
  $commandFile=$work+'\commands\preflight.txt'
  $commands=(New-PreflightCommands $extension)+"`n"
  $commandBytes=[Text.Encoding]::ASCII.GetBytes($commands)
@@ -206,7 +435,8 @@ try {
   $commandHash=(Get-FileHash -LiteralPath $commandFile -Algorithm SHA256).Hash.ToLowerInvariant()
   Emit-PreflightRecord 'FONT_DEBUGGER_COMMAND_PLAN' @{sha256=$commandHash;commands=$commands;symbols='OBSERVATION_PENDING_RAW_ONLY';suspension_is_real_wait=$false}
   $psi=New-PreflightStartInfo $probe ($work+'\child') $windows ($work+'\temp') @() $true
-  if($clock.ElapsedMilliseconds -ge 90000){throw 'UNAVAILABLE: prerequisite setup exceeded start budget'}
+  Assert-StageMembership $stage.expected @(Get-StageInventory $stage.root $true)
+  Assert-StageBudget $clock.ElapsedMilliseconds
   $child=[Diagnostics.Process]::new();$child.StartInfo=$psi
   if(!$child.Start()){throw 'UNAVAILABLE: probe start failed'}
   $childId=$child.Id;$childHandle=$child.SafeHandle;$null=$childHandle.DangerousGetHandle()
@@ -239,6 +469,12 @@ try {
   $dpsi=New-PreflightStartInfo $tool ($work+'\debugger') $windows ($work+'\temp') $arguments $false
   Assert-PreflightRequest $dpsi $tool ($work+'\debugger') $childId $commandFile $images[0] ($work+'\cache') $extension $commands
   Emit-PreflightRecord 'FONT_DEBUGGER_REQUEST' @{owned_pid=$childId;executable=$tool;arguments=$arguments;environment_keys=@($dpsi.Environment.Keys|Sort-Object);working_directory=$dpsi.WorkingDirectory}
+  Assert-StageMembership $stage.expected @(Get-StageInventory $stage.root)
+  foreach($member in $stage.manifest){
+   $memberPath=Resolve-PreflightLiteral ($stage.root+'\'+$member.relative)
+   if((Get-FileHash -LiteralPath $memberPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $member.sha256){throw 'UNAVAILABLE: stage path bytes changed before CDB'}
+  }
+  if($clock.ElapsedMilliseconds -ge 240000){throw 'UNAVAILABLE: whole deadline before CDB'}
   $debugger=[Diagnostics.Process]::new();$debugger.StartInfo=$dpsi
   if(!$debugger.Start()){throw 'UNAVAILABLE: CDB start failed'}
   $debuggerId=$debugger.Id;$debuggerHandle=$debugger.SafeHandle;$null=$debuggerHandle.DangerousGetHandle()
@@ -256,11 +492,15 @@ try {
      Emit-PreflightRecord 'FONT_DEBUGGER_MODULE_PROFILE_UNAVAILABLE' @{reason='process exited during module snapshot';diagnostic_only=$true}
     }
     if($loadedPaths.Count -gt 128){throw 'UNAVAILABLE: debugger module bound'}
+    if($loadedPaths.Count -eq 0){Emit-PreflightRecord 'FONT_DEBUGGER_MODULE_PROFILE_UNAVAILABLE' @{reason='empty bounded module snapshot';symbol_availability='PENDING';module_closure='PENDING_UNPROVED';diagnostic_only=$true}}
     foreach($loadedPath in $loadedPaths){
+     if($clock.ElapsedMilliseconds -ge $deadline){throw 'UNAVAILABLE: module observation deadline'}
      $path=Resolve-PreflightLiteral $loadedPath
-     $dir=[IO.Path]::GetDirectoryName($path)
-     if($dir -ine $sdk -and $dir -ine $extension -and $dir -ine $system){throw 'UNAVAILABLE: loaded debugger dependency outside approved directories'}
-     Emit-PreflightRecord 'FONT_DEBUGGER_LOADED_MODULE_DISK_PROFILE' (Get-PreflightFileProfile $path)
+     $relative=if($path.StartsWith($stage.root+'\',[StringComparison]::OrdinalIgnoreCase)){$path.Substring($stage.root.Length+1).ToLowerInvariant()}else{[IO.Path]::GetFileName($path).ToLowerInvariant()}
+     $observed=Get-StageDiskRecord $path $relative $false
+     Assert-StageModule $path $stage.root $system $stage.manifest $observed
+     Emit-PreflightRecord 'FONT_DEBUGGER_LOADED_MODULE_DISK_PROFILE' @{path=$path;identity=$observed;scope='BOUNDED_OBSERVATION_NOT_LOADER_CLOSURE_OR_MEMORY_ATTESTATION'}
+     if($clock.ElapsedMilliseconds -ge $deadline){throw 'UNAVAILABLE: module observation deadline'}
     }
     $loadedProfiled=$true
    }
@@ -289,13 +529,27 @@ try {
  Emit-PreflightRecord 'FONT_DEBUGGER_UNAVAILABLE' @{error=$_.Exception.Message;diagnostic_only=$true}
  throw
 } finally {
- try{Stop-ExactOwnedProcess $debugger}finally{
-  try{Stop-ExactOwnedProcess $child}finally{
+ try{Stop-ExactOwnedProcess $debugger $processCompletion 'debugger'}finally{
+  try{Stop-ExactOwnedProcess $child $processCompletion 'child'}finally{
+   $stageCleanupError=$null;$stageHandlesClosed=$false
+   $bothCompleted=$processCompletion.child -and $processCompletion.debugger
+   try{
+    if(!$bothCompleted){throw 'UNAVAILABLE: process kernel completion failed; stage handles/files retained for surviving parent lifetime'}
+    $closeError=$null
+    foreach($held in $stage.handles){try{$held.stream.Dispose()}catch{$closeError=$_.Exception.Message}}
+    $stageHandlesClosed=@($stage.handles|Where-Object{!$_.handle.IsClosed}).Count -eq 0
+    if($closeError -or !$stageHandlesClosed){throw 'UNAVAILABLE: retained stage handle closure failed'}
+    Remove-ExactOwnedStage $stage $work ($bothCompleted -and $stageHandlesClosed)
+   }catch{
+    $stageCleanupError=$_.Exception.Message
+    Emit-PreflightRecord 'FONT_DEBUGGER_STAGE_CLEANUP_ERROR' @{error=$stageCleanupError;process_completion=$processCompletion;stage_handles_closed=$stageHandlesClosed;files_retained=$true}
+   }
    foreach($pipe in @($out,$err,$dout,$derr)){
     if($null -ne $pipe -and $null -ne $pipe.Task){try{$null=$pipe.Task.Wait(100)}catch{}}
    }
    $closed=($null -eq $childHandle -or $childHandle.IsClosed) -and ($null -eq $debuggerHandle -or $debuggerHandle.IsClosed)
-   Emit-PreflightRecord 'FONT_DEBUGGER_PREFLIGHT_SUMMARY' @{tool_request_and_detach_completed=($ok -and $closed);owned_handles_closed=$closed;font_owner_qualified=$false;host_WCT_Windows2025_qualified=$false;private_CRT_owner_symbols_qualified=$false;full_qualification=$false;symbol_availability='OBSERVATION_PENDING';elapsed_ms=$clock.ElapsedMilliseconds}
+   Emit-PreflightRecord 'FONT_DEBUGGER_PREFLIGHT_SUMMARY' @{tool_request_and_detach_completed=($ok -and $closed -and $bothCompleted -and $stageHandlesClosed -and !$stageCleanupError);owned_handles_closed=$closed;owned_kernel_completion=$bothCompleted;stage_handles_closed=$stageHandlesClosed;stage_cleanup_error=$stageCleanupError;layout='STAGED_SIGNED_COPY_FROM_REGISTERED_SDK';loader_closure='UNPROVED_BOUNDED_MODULE_SNAPSHOTS_ONLY';font_owner_qualified=$false;host_WCT_Windows2025_qualified=$false;private_CRT_owner_symbols_qualified=$false;full_qualification=$false;symbol_availability='OBSERVATION_PENDING';elapsed_ms=$clock.ElapsedMilliseconds}
+   if($stageCleanupError){throw $stageCleanupError}
    if(!$closed){throw 'UNAVAILABLE: owned process handle closure failed'}
   }
  }
