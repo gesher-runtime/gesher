@@ -67,6 +67,7 @@ PROCESS_SECONDS = 60
 POSTKILL_SECONDS = 5
 CLEANUP_SECONDS = 10
 LIVE_GRAPHS = []  # failed containment retains the complete owned graph
+EARLY_ARCHIVE_PIN = '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4'
 
 class Rejected(ValueError):
     pass
@@ -90,6 +91,13 @@ def emit_bytes(label,raw):
 
 def emit_record(label,value):
     emit_bytes(label,canonical(value))
+
+def diagnostic_text(raw,cap):
+    """Complete existing textual tool output only; never truncation/binary."""
+    require(type(raw)is bytes and len(raw)<=cap,'early diagnostic byte cap')
+    text=raw.decode('utf-8')
+    require(all(c.isprintable()or c in '\r\n\t'for c in text),'early diagnostic nontext')
+    return {'text':text,'bytes':len(raw),'sha256':digest(raw)}
 
 def decode(raw, cap=FILE_CAP):
     require(type(raw) is bytes and len(raw) <= cap, 'JSON byte bound')

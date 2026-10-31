@@ -320,7 +320,7 @@ class Helper(unittest.TestCase):
             self.assertFalse(graph['handles_closed']);self.assertFalse(P.settle_lifetime_once())
         finally:P.TOOL_GRAPHS.clear()
         # A fake ctypes module prevents EVERY Win32 acquisition/query. This
-        # exercises the actual owned_helper→launch_owned failure flow as source.
+        # exercises the actual owned_helperג†’launch_owned failure flow as source.
         fake_kernel=mock.Mock();fake_kernel.CreateFileW.return_value=42
         wt=types.SimpleNamespace(**{n:object()for n in ('LPCWSTR','DWORD','LPVOID','HANDLE','BOOL')})
         ctypes=types.ModuleType('ctypes');ctypes.wintypes=wt
@@ -476,6 +476,72 @@ class Helper(unittest.TestCase):
         for names in ((),('json.py\nhelper.py',),('"quoted',),('../escape',),('duplicate','duplicate')):
             with mock.patch.object(A.subprocess,'check_output')as fake:
                 self.reject(lambda:A.checked_out_hashes(ROOT,names));fake.assert_not_called()
+
+    def test_actual_produce_early_basis_before_compile_and_eleven_negatives(self):
+        cases=('VALID','missing_target','foreign_config','oversize_expansion','non_utf8','missing_expansion','foreign_source','wrong_archive','wrong_driver','extra_environment','changed_flags','missing_cc1')
+        for case in cases:
+            with self.subTest(case=case),pure_temp_directory()as temp:
+                source=Path(temp)/'source';source.mkdir();runner=Path(temp)/'runner';runner.mkdir()
+                tc=Path(temp)/'supplier';(tc/'bin').mkdir(parents=True)
+                driver=tc/'bin/x86_64-w64-mingw32-clang++';driver.write_bytes(b'SYNTHETIC_NOT_EXECUTABLE')
+                (tc/'bin/ld.lld').write_bytes(b'SYNTHETIC_NOT_EXECUTABLE')
+                auth={'context':synthetic_context(),'authority':{'guard':'b'*40,'caller_authority':'a'*40},'roles':{}}
+                job=dict(synthetic_job(),status='in_progress');calls=[];events=[];packets=[]
+                real_emit=P.emit;real_basis=P.emit_early_basis
+                def emit(label,value):events.append(label);packets.append((label,value));real_emit(label,value)
+                def fake_tool(argv,cwd,env,**kwargs):
+                    argv=list(map(str,argv));calls.append(argv)
+                    if '-dumpmachine'in argv:streams=(b'x86_64-w64-windows-gnu\n',b'')
+                    elif '--version'in argv:streams=(b'SYNTHETIC clang 23.1.3\n',b'')
+                    elif '-###'in argv:streams=(b'',(' "'+str(tc/'bin/clang')+'" "-cc1" "-fexceptions" "-fcxx-exceptions"\n').encode())
+                    else:
+                        events.append('COMPILE_ATTEMPT')
+                        raise P.A.Rejected('SYNTHETIC_FIRST_COMPILE_FAILURE')
+                    record={'argv':argv,'launch_state':'RETURNED_OWNED','pid':123,'started':True,'elapsed_seconds':0.0,'exit':0,'kernel_completed':True,'io_completed':True,'handles_closed':True,'overflow':False,'timed_out':False,'root_retained':False,'errors':[],'executable_sha256':P.DRIVER_SHA,'executable_realpath':str(driver),'stdout_sha256':A.digest(streams[0]),'stderr_sha256':A.digest(streams[1])}
+                    kwargs['receipt'].append(record);return streams
+                def basis(*args):
+                    args=list(copy.deepcopy(args))
+                    if case=='missing_target':args[8]['target']=(b'',b'')
+                    elif case=='foreign_config':args[5]=[{'path':str(type(source)(temp)/'foreign.cfg'),'bytes':1,'sha256':'e'*64}]
+                    elif case=='oversize_expansion':args[8]['expansion']=(b'x'*262145,b'')
+                    elif case=='non_utf8':args[8]['expansion']=(b'\xff',b'')
+                    elif case=='missing_expansion':del args[8]['expansion']
+                    elif case=='foreign_source':args[0]['context']['source']='d'*40
+                    elif case=='wrong_driver':args[9]['expansion'][0]['executable_sha256']='0'*64
+                    elif case=='extra_environment':args[9]['expansion'][0]['environment']={'SECRET':'MUST_NOT_EMIT'}
+                    elif case=='changed_flags':args[6].append('-I/UNREVIEWED')
+                    elif case=='missing_cc1':args[7]=[[str(driver),'-cc1'],[str(driver),'-cc1']]
+                    if case=='wrong_archive':
+                        with mock.patch.object(P,'ARCHIVE_SHA','0'*64):return real_basis(*args)
+                    return real_basis(*args)
+                with mock.patch.object(P.os,'name','posix'),mock.patch.object(P,'Path',type(source)),mock.patch.object(type(source),'cwd',return_value=source),mock.patch.dict(os.environ,{'RUNNER_TEMP':str(runner)}),mock.patch.object(P.A,'authorize',return_value=auth),mock.patch.object(P,'current_job',return_value=job),mock.patch.object(P,'download',return_value=b'SYNTHETIC_ARCHIVE'),mock.patch.object(P,'extract_toolchain',return_value=tc),mock.patch.object(P,'sha',side_effect=lambda p:P.LINKER_SHA if Path(p).name=='ld.lld'else P.DRIVER_SHA),mock.patch.object(P,'tool',side_effect=fake_tool),mock.patch.object(P,'emit',side_effect=emit),mock.patch.object(P,'emit_early_basis',side_effect=basis),contextlib.redirect_stdout(io.StringIO())as output:
+                    with self.assertRaises((ValueError,KeyError,UnicodeError)):P.produce()
+                self.assertEqual(calls[0],[str(driver),'--no-default-config','-dumpmachine'])
+                self.assertEqual(calls[1],[str(driver),'--version'])
+                build=runner/'mremap-helper-123-2'/'build'
+                expected=[str(driver),*P.COMMON,'-fexceptions','-MD','-MF',str(build/'helper.d'),'-c',str(source/A.TUS['helper.obj']),'-o',str(build/'helper.obj')]
+                self.assertEqual(calls[2],[expected[0],'-###',*expected[1:]])
+                if case!='VALID':
+                    self.assertEqual(len(calls),3);self.assertNotIn('EARLY_COMPILER_BASIS',events);self.assertNotIn('MUST_NOT_EMIT',output.getvalue());continue
+                self.assertEqual(calls[3],expected);self.assertEqual(events,['AUTHORITY','EARLY_COMPILER_BASIS','COMPILE_ATTEMPT'])
+                packet=dict(packets)['EARLY_COMPILER_BASIS'];self.assertEqual(packet['context'],auth['context']);self.assertEqual(packet['producer_id'],42)
+                self.assertEqual(packet['archive_sha256_source_pin'],A.EARLY_ARCHIVE_PIN);self.assertEqual(packet['configs'],[])
+                self.assertEqual(packet['streams']['expansion']['stdout'],{'text':'','bytes':0,'sha256':A.digest(b'')})
+                encoded=[]
+                for line in output.getvalue().splitlines():
+                    if not line.startswith('FILE_MREMAP_HELPER_EARLY_COMPILER_BASIS '):continue
+                    m=re.fullmatch(r'.*part=(\d+)/(\d+) bytes=(\d+) sha256=([0-9a-f]{64}) base64=(.*)',line);self.assertIsNotNone(m)
+                    encoded.append(base64.b64decode(m[5],validate=True))
+                joined=b''.join(encoded);self.assertEqual(joined,A.canonical(packet));self.assertEqual(A.digest(joined),m[4]);self.assertEqual(len(joined),int(m[3]))
+
+    def test_early_utf8_caps_and_binary_opacity(self):
+        for cap in (4096,65536,262144):
+            self.assertEqual(A.diagnostic_text(b'x'*cap,cap)['bytes'],cap)
+            self.reject(lambda:A.diagnostic_text(b'x'*(cap+1),cap))
+        for raw in (b'\xff',b'\0',b'\x1b[31m'):
+            with self.assertRaises((ValueError,UnicodeError)):A.diagnostic_text(raw,262144)
+        self.assertEqual(A.diagnostic_text(b'',4096)['text'],'')
+        self.assertNotIn('text',P.failure_output(b'PRINTABLE_BINARY',True))
 
     def test_recipe_source_isolated_three_object_and_no_native_test(self):
         authority=(ROOT/'tools/file_mremap/helper_authority.py').read_text();producer=(ROOT/'tools/file_mremap/helper_producer.py').read_text()

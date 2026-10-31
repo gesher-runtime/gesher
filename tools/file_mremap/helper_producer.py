@@ -67,7 +67,7 @@ def failure_output(raw,binary=False):
     except (UnicodeError,A.Rejected):value['kind']='NON_TEXT_NOT_PRINTED';return value
     value.update(kind='COMPLETE_UTF8_TEXT',text=text);return value
 
-def tool(argv,cwd,env,seconds=90,binary_stdout=False):
+def tool(argv,cwd,env,seconds=90,binary_stdout=False,receipt=None):
     """Bounded concurrent tool capture with a graph saved before readers start."""
     A.require(os.environ.get('GITHUB_ACTIONS')=='true' and os.name=='posix','compiler tools Linux CI only')
     graph={'kind':'TOOL','launch_state':'NOT_ATTEMPTED','kernel_completed':False,'handles_closed':False,'argv':list(map(str,argv)),'process':None,'readers':[],'buffers':[bytearray(),bytearray()],'overflow':False,'errors':[],'executable_sha256':None,'executable_realpath':None}
@@ -106,6 +106,7 @@ def tool(argv,cwd,env,seconds=90,binary_stdout=False):
     if graph['errors']or timed or graph['overflow']or proc is None or proc.returncode!=0 or record['root_retained']:
         emit('TOOL_FAILURE',{'record':record,'stdout':failure_output(bytes(graph['buffers'][0]),binary_stdout),'stderr':failure_output(bytes(graph['buffers'][1]))})
         raise A.Rejected('tool failure or containment')
+    if receipt is not None:receipt.append(record)
     return bytes(graph['buffers'][0]),bytes(graph['buffers'][1])
 
 class Redirect(urllib.request.HTTPRedirectHandler):
@@ -222,6 +223,45 @@ def current_job(auth,name):
     A.require(len(rows)==1,'current named role');row=rows[0]
     A.require(row['status']=='in_progress'and row['head_sha']==current['source']and str(row['run_id'])==current['run']and str(row['run_attempt'])==current['attempt'],'current active role');return row
 
+def emit_early_basis(auth,job,tc,root,build,configs,argv,expanded,streams,receipts):
+    """Only already obtained metadata; no tool/file/API acquisition here."""
+    context=auth['context'];authority=auth['authority']
+    A.require(ARCHIVE_SHA==A.EARLY_ARCHIVE_PIN,'early reviewed archive pin')
+    A.require(set(context)=={'source','run','attempt','repository','repository_id','profile'} and context['source']==authority['caller_authority'] and context['profile']==A.PROFILE and context['repository']==A.REPOSITORY and context['repository_id']==A.REPOSITORY_ID,'early current context')
+    A.hexid(context['source']);A.hexid(authority['guard'])
+    A.require(job['name']=='helper-producer'and job['status']=='in_progress'and job['head_sha']==context['source']and str(job['run_id'])==context['run']and str(job['run_attempt'])==context['attempt']and type(job['id'])is int and job['id']>0,'early current producer')
+    tc,root,build=(p.resolve()for p in (tc,root,build))
+    driver=str(tc/'bin/x86_64-w64-mingw32-clang++')
+    expected=[driver,*COMMON,'-fexceptions','-MD','-MF',str(build/'helper.d'),'-c',str(root/A.TUS['helper.obj']),'-o',str(build/'helper.obj')]
+    A.require(argv==expected,'early exact unchanged compile argv')
+    A.require(set(streams)=={'target','version','expansion'}and set(receipts)==set(streams),'early exact stream schema')
+    expected_calls={'target':[driver,'--no-default-config','-dumpmachine'],'version':[driver,'--version'],'expansion':[driver,'-###',*argv[1:]]}
+    text={}
+    for name,cap in (('target',4096),('version',65536),('expansion',262144)):
+        A.require(len(streams[name])==2 and len(receipts[name])==1,'early complete streams/receipt')
+        record=receipts[name][0]
+        A.require(set(record)=={'argv','launch_state','pid','started','elapsed_seconds','exit','kernel_completed','io_completed','handles_closed','overflow','timed_out','root_retained','errors','executable_sha256','executable_realpath','stdout_sha256','stderr_sha256'},'early exact receipt schema')
+        A.require(record['argv']==expected_calls[name]and record['exit']==0 and record['executable_sha256']==DRIVER_SHA and Path(record['executable_realpath']).is_relative_to(tc),'early actual driver receipt')
+        A.require(record['started']is True and record['launch_state']=='RETURNED_OWNED'and type(record['pid'])is int and record['pid']>0,'early returned owned tool')
+        A.require(record['kernel_completed']and record['io_completed']and record['handles_closed']and not record['root_retained']and not record['timed_out']and not record['overflow']and not record['errors'],'early completed tool')
+        text[name]={}
+        for stream,raw in zip(('stdout','stderr'),streams[name]):
+            value=A.diagnostic_text(raw,cap);A.require(value['sha256']==record[stream+'_sha256'],'early actual stream binding');text[name][stream]=value
+    A.require(text['target']['stdout']['text'].strip()=='x86_64-w64-windows-gnu'and '23.1.3'in text['version']['stdout']['text'],'early required target/version')
+    A.require(type(configs)is list and len(configs)<=4096,'early config count')
+    seen=set()
+    for row in configs:
+        A.require(set(row)=={'path','bytes','sha256'}and type(row['path'])is str and len(row['path'])<=4096 and Path(row['path']).is_absolute()and Path(row['path']).resolve().is_relative_to(tc)and Path(row['path']).suffix=='.cfg'and row['path']not in seen,'early confined config')
+        A.require(type(row['bytes'])is int and 0<=row['bytes']<=A.FILE_CAP and re.fullmatch('[0-9a-f]{64}',row['sha256']),'early config identity');seen.add(row['path'])
+    A.require(0<len(expanded)<=4096 and all(type(r)is list and 0<len(r)<=4096 and all(type(x)is str and len(x)<=4096 for x in r)for r in expanded),'early parsed command bounds')
+    cc1=[r for r in expanded if '-cc1'in r]
+    A.require(len(cc1)==1 and '-fexceptions'in cc1[0]and '-fcxx-exceptions'in cc1[0],'early unique effective cc1')
+    # Reuse exactly the existing confinement parser on already obtained bytes.
+    A.require(expanded==parse_driver(b''.join(streams['expansion']),tc,root,build),'early parsed/raw confinement')
+    value={'schema':'EARLY_COMPILER_BASIS_V1','context':context,'guard':authority['guard'],'caller_authority':authority['caller_authority'],'producer_id':job['id'],'archive_sha256_source_pin':ARCHIVE_SHA,'linker_sha256_checked_pin':LINKER_SHA,'roots':{'supplier':str(tc),'source':str(root),'build':str(build)},'compile_argv':argv,'tool_receipts':receipts,'streams':text,'configs':configs,'config_selection':'UNPROVEN_INVENTORY_ONLY','parsed_commands':expanded,'unique_cc1':cc1[0],'confinement_validated':True,'effective_exceptions_validated':True,'qualification':False}
+    A.require(len(A.canonical(value))<=A.FILE_CAP,'early combined record cap')
+    emit('EARLY_COMPILER_BASIS',value)
+
 def produce():
     A.require(os.name=='posix','producer Linux only')
     auth=A.authorize('helper-producer',('source-authority / verify',));job=current_job(auth,'helper-producer');emit('AUTHORITY',auth)
@@ -233,15 +273,17 @@ def produce():
     tc=extract_toolchain(raw,work/'publisher').resolve();driver=tc/'bin/x86_64-w64-mingw32-clang++';linker=tc/'bin/ld.lld'
     A.require(sha(driver)==DRIVER_SHA and sha(linker)==LINKER_SHA,'pinned actual driver/linker');build=work/'build';build.mkdir()
     configs=[{'path':str(p),'sha256':sha(p),'bytes':p.stat().st_size}for p in sorted(tc.rglob('*.cfg'))if p.is_file()]
-    target,_=tool([driver,'--no-default-config','-dumpmachine'],build,env);target=target.decode().strip();A.require(target=='x86_64-w64-windows-gnu','actual target')
-    version,_=tool([driver,'--version'],build,env);A.require('23.1.3'in version.decode(),'actual compiler version')
+    basis_receipts={name:[]for name in ('target','version','expansion')}
+    target_raw,target_err=tool([driver,'--no-default-config','-dumpmachine'],build,env,receipt=basis_receipts['target']);target=target_raw.decode().strip();A.require(target=='x86_64-w64-windows-gnu','actual target')
+    version,version_err=tool([driver,'--version'],build,env,receipt=basis_receipts['version']);A.require('23.1.3'in version.decode(),'actual compiler version')
     commands=[];deps={};objects={};expanded={};transcripts=[]
     for obj,source in A.TUS.items():
         dep=obj.replace('.obj','.d');argv=[str(driver),*COMMON]
         if obj!='caller.obj':argv.append('-fexceptions')
         argv+=['-MD','-MF',str(build/dep),'-c',str(root/source),'-o',str(build/obj)]
-        diagnostic=[argv[0],'-###',*argv[1:]];out,err=tool(diagnostic,build,env);expanded[obj]=parse_driver(out+err,tc,root,build)
+        diagnostic=[argv[0],'-###',*argv[1:]];out,err=tool(diagnostic,build,env,receipt=basis_receipts['expansion']if obj=='helper.obj'else None);expanded[obj]=parse_driver(out+err,tc,root,build)
         cc1=[r for r in expanded[obj]if '-cc1'in r];A.require(len(cc1)==1 and ('-fexceptions'in cc1[0])==(obj!='caller.obj') and ('-fcxx-exceptions'in cc1[0])==(obj!='caller.obj'),'actual effective exception mode')
+        if obj=='helper.obj':emit_early_basis(auth,job,tc,root,build,configs,argv,expanded[obj],{'target':(target_raw,target_err),'version':(version,version_err),'expansion':(out,err)},basis_receipts)
         stdout,stderr=tool(argv,build,env);transcripts.append({'object':obj,'argv':argv,'driver_expansion':(out+err).decode(),'stdout':stdout.decode(),'stderr':stderr.decode()})
         rawdep=(build/dep).read_bytes();deps[obj]=dependency_paths(rawdep,root,tc,build)
         A.require(any(x['relative']==A.HEADER and x['origin']=='source'for x in deps[obj]),'current private header dependency')
