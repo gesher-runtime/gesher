@@ -146,7 +146,7 @@ def extract_toolchain(raw,destination):
         archive.extractall(destination,filter='data')
     return destination/ARCHIVE_NAME
 
-def dependency_paths(raw,source_root,toolroot,build):
+def dependency_paths(raw,source_root,toolroot,build,diagnostic=None):
     text=raw.decode('utf-8').replace('\\\n',' ')
     A.require(': 'in text,'make dependency target')
     names=shlex.split(text.split(': ',1)[1]);A.require(1<=len(names)<=8192 and len(set(names))==len(names),'dependency count/duplicates')
@@ -158,8 +158,24 @@ def dependency_paths(raw,source_root,toolroot,build):
         if source:A.require(path.relative_to(source_root).as_posix()in (*A.TUS.values(),A.HEADER),'unreviewed local include')
         result.append({'origin':'source'if source else'toolchain','path':str(path),'relative':path.relative_to(source_root if source else toolroot).as_posix(),'sha256':sha(path),'bytes':path.stat().st_size})
     required={'windows.h','map','vector','memory','new','array','utility'}
+    if not required<={Path(x['path']).name for x in result} and diagnostic is not None:
+        try:
+            diagnostic(raw,result,required)
+        except Exception:
+            pass # Diagnostic failure cannot change the original rejection.
     A.require(required<={Path(x['path']).name for x in result},'SDK/STL dependencies missing')
     return result
+
+def emit_dependency_rejection(raw,result,required,auth,job,obj,controlled):
+    observed=sorted({Path(x['path']).name for x in result})
+    value={'schema':'DEPENDENCY_GATE_V1','context':auth['context'],
+           'guard':auth['authority']['guard'],'producer_id':job['id'],'object':obj,
+           'controlled_config_sha256':A.digest(A.canonical(controlled)),
+           'raw':A.diagnostic_text(raw,262144),'required':sorted(required),
+           'observed':observed,'missing':sorted(required-set(observed)),
+           'qualification':False}
+    A.require(len(A.canonical(value))<=524288,'dependency diagnostic cap')
+    emit('DEPENDENCY_GATE',value)
 
 def parse_driver(raw,toolroot,source_root,build):
     # Constrain even not-yet-created outputs and attached option paths.
@@ -299,7 +315,8 @@ def produce():
         A.validate_cpp_expansion(expanded[obj],controlled,obj)
         if obj=='helper.obj':emit_early_basis(auth,job,tc,root,build,configs,argv,expanded[obj],{'target':(target_raw,target_err),'version':(version,version_err),'expansion':(out,err)},basis_receipts,controlled)
         stdout,stderr=tool(argv,build,env);transcripts.append({'object':obj,'argv':argv,'driver_expansion':(out+err).decode(),'stdout':stdout.decode(),'stderr':stderr.decode()})
-        rawdep=(build/dep).read_bytes();deps[obj]=dependency_paths(rawdep,root,tc,build)
+        rawdep=(build/dep).read_bytes();deps[obj]=dependency_paths(rawdep,root,tc,build,
+            lambda raw,rows,required:emit_dependency_rejection(raw,rows,required,auth,job,obj,controlled))
         A.require(any(x['relative']==A.HEADER and x['origin']=='source'for x in deps[obj]),'current private header dependency')
         save(bundle/dep,rawdep);shutil.copyfile(build/obj,bundle/obj)
         objects[obj]={'source':source,'source_blob':A.SOURCE_BLOBS[obj],'source_sha256':sha(root/source),'header_blob':A.HEADER_BLOB,'header_sha256':sha(root/A.HEADER),'sha256':sha(build/obj),'exceptions':obj!='caller.obj','argv':argv,'expanded':expanded[obj]}

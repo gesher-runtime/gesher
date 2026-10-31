@@ -218,6 +218,29 @@ class Helper(unittest.TestCase):
             for name in ('windows.h','map','vector','memory','new','array','utility'):
                 p=tool/'include'/name;p.write_text('SYNTHETIC_HEADER');paths.append(p)
             dep=('x.obj: '+' '.join(shlex_quote(p)for p in paths)+'\n').encode();self.assertEqual(len(P.dependency_paths(dep,source,tool,build)),7)
+            seen=[]
+            self.assertEqual(len(P.dependency_paths(dep,source,tool,build,lambda *x:seen.append(x))),7)
+            self.assertEqual(seen,[])
+            missing=('x.obj: '+shlex_quote(paths[0])+'\n').encode()
+            self.reject(lambda:P.dependency_paths(missing,source,tool,build,lambda *x:seen.append(x)))
+            self.assertEqual(seen[0][0],missing)
+            self.assertEqual(seen[0][2],{'windows.h','map','vector','memory','new','array','utility'})
+            auth={'context':synthetic_context(),'authority':{'guard':'b'*40}}
+            with mock.patch.object(P,'emit') as emitted:
+                P.emit_dependency_rejection(*seen[0],auth,{'id':42},'helper.obj',{'synthetic':True})
+                label,packet=emitted.call_args.args
+                self.assertEqual(label,'DEPENDENCY_GATE')
+                self.assertEqual(packet['raw']['text'],missing.decode())
+                self.assertEqual(packet['raw']['sha256'],A.digest(missing))
+                self.assertEqual(packet['missing'],['array','map','memory','new','utility','vector'])
+                self.assertIs(packet['qualification'],False)
+                self.assertEqual(packet['producer_id'],42)
+                self.assertEqual(packet['guard'],'b'*40)
+                self.assertEqual(packet['controlled_config_sha256'],A.digest(A.canonical({'synthetic':True})))
+                self.reject(lambda:P.emit_dependency_rejection(b'x'*262145,seen[0][1],seen[0][2],auth,{'id':42},'helper.obj',{}))
+                self.assertEqual(emitted.call_count,1)
+            def broken(*args):raise RuntimeError('synthetic diagnostic failure')
+            self.reject(lambda:P.dependency_paths(missing,source,tool,build,broken))
             self.reject(lambda:P.dependency_paths(b'x.obj: /foreign/header.h\n',source,tool,build))
             self.reject(lambda:P.dependency_paths(b'x.obj: \n',source,tool,build))
 
