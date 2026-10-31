@@ -142,6 +142,31 @@ PrepareStatus PrepareReservation(size_t length,size_t page,PreparedReservation& 
     catch(...){return PrepareStatus::InternalFailure;}
 }
 
+PrepareStatus PrepareFreshGroupFile(size_t length,size_t page,size_t view,PreparedPunchRequest& out) noexcept {
+  if(!page||!length||length%page||view>length||view%page||!out.reservation.region.empty())
+    return PrepareStatus::InvalidSize;
+  try {
+    PreparedPunchRequest work;
+    auto status=PrepareReservation(length,page,work.reservation);
+    if(status!=PrepareStatus::Ok)return status;
+    status=PreparePunchLedger(length,page,1,work.cleanup_merged);
+    if(status!=PrepareStatus::Ok)return status;
+    work.constructor_anonymous.kind=Kind::kHole;work.constructor_anonymous.size=length;
+    work.constructor_anonymous.live.assign(length/page,false);
+    work.constructor_anonymous.actual_protection.assign(length/page,0);
+    work.constructor_first.kind=Kind::kHole;work.constructor_first.size=view?view:length;
+    work.constructor_first.live.assign(work.constructor_first.size/page,false);
+    work.constructor_first.actual_protection.assign(work.constructor_first.size/page,0);
+    if(view&&view<length) {
+      Region tail;tail.kind=Kind::kHole;tail.size=length-view;
+      tail.live.assign(tail.size/page,false);tail.actual_protection.assign(tail.size/page,0);
+      RegionMap nodes;nodes.emplace(view,std::move(tail));work.constructor_tail=nodes.extract(nodes.begin());
+    }
+    for(auto& failure:work.constructor_failures)failure=std::make_unique<SectionOwner>();
+    out=std::move(work);return PrepareStatus::Ok;
+  }catch(const std::bad_alloc&){return PrepareStatus::NoMemory;}catch(...){return PrepareStatus::InternalFailure;}
+}
+
 PrepareStatus PreparePunchRequest(const RegionMap& source,uintptr_t begin,uintptr_t end,
                                       size_t page,PreparedPunchRequest& out,size_t final_view) noexcept {
   if(!page || begin>=end || begin%page || end%page || !out.pieces.empty() ||
