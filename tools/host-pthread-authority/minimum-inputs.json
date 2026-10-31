@@ -1,0 +1,41 @@
+{
+  "role": "gesher-winpthreads-selected-minimum-v1",
+  "upstream_commit": "a3d93999ef0521681d45e445c39964a7af0f593f",
+  "source_sha256": {
+    "mingw-w64-libraries/winpthreads/src/thread.c": "c2fcaa54269f0e773069aeeec8212cac71f417483bf65d5e75f100311df4080b",
+    "mingw-w64-libraries/winpthreads/src/thread.h": "3c105e10217cabae5a34d1e6e83352fb4eb8a9c2cf048de8053351eb6edf6a25",
+    "mingw-w64-libraries/winpthreads/include/pthread.h": "bf3fd920306acb4144873d1099490cf332700c268a8ede0e484c7c0e721c7995",
+    "mingw-w64-libraries/winpthreads/src/clock.c": "5d5a7ba2ef59415b080cae0170da9b50763f4352cc1c080e231568dc264259c1",
+    "mingw-w64-libraries/winpthreads/src/sched.c": "21b5569cfce648dd2c75fea05cffab92d8aa2abca64ab091e15fb8a0bf1a6cd7",
+    "mingw-w64-libraries/winpthreads/src/mutex.c": "b69813a7e26fff119799b80e634bade747607b7348ad9b563d70cfebf32c523b",
+    "mingw-w64-libraries/winpthreads/src/cond.c": "0c189408edf1a87ba1a92807ccd42b9fb6e6397f9265aeea470028d58d6d7c2d",
+    "mingw-w64-libraries/winpthreads/src/rwlock.c": "3410bc1626aea891c8690eedb2442c81600f9634e2f7a465e10baef8077dfcc1",
+    "mingw-w64-libraries/winpthreads/src/barrier.c": "bc8dc6fb69ec64970e59d346cd8eebd54203b9ad2e51aba676d85e67c24e70ae",
+    "mingw-w64-libraries/winpthreads/src/spinlock.c": "ac82c387ec78932eb1b1f8ebf6494a0264fa1d964d58a7fc8ba8a31197c05129",
+    "mingw-w64-libraries/winpthreads/src/sem.c": "471f545d01bd1ea55fcab4429db92152c81d5f77c274dee87c8e4b43d2450e32",
+    "mingw-w64-libraries/winpthreads/src/rwlock.h": "6d0a3bd1467599e2b447b3e32d36c4329a6b8e39faf0b13de74a08e6fba4ef81"
+  },
+  "ordered_patch_sha256": {
+    "minimum-detached-retirement.patch": "ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad",
+    "minimum-noattach-join.patch": "c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96"
+  },
+  "output_source_sha256": {
+    "mingw-w64-libraries/winpthreads/src/thread.c": "c8fd0dece0f412bbdffab2df27df462eeef131a6b671e0e5a13ccde2364d0f78",
+    "mingw-w64-libraries/winpthreads/src/thread.h": "3c105e10217cabae5a34d1e6e83352fb4eb8a9c2cf048de8053351eb6edf6a25",
+    "mingw-w64-libraries/winpthreads/include/pthread.h": "bf3fd920306acb4144873d1099490cf332700c268a8ede0e484c7c0e721c7995",
+    "mingw-w64-libraries/winpthreads/src/clock.c": "5d5a7ba2ef59415b080cae0170da9b50763f4352cc1c080e231568dc264259c1",
+    "mingw-w64-libraries/winpthreads/src/sched.c": "21b5569cfce648dd2c75fea05cffab92d8aa2abca64ab091e15fb8a0bf1a6cd7",
+    "mingw-w64-libraries/winpthreads/src/mutex.c": "b69813a7e26fff119799b80e634bade747607b7348ad9b563d70cfebf32c523b",
+    "mingw-w64-libraries/winpthreads/src/cond.c": "0c189408edf1a87ba1a92807ccd42b9fb6e6397f9265aeea470028d58d6d7c2d",
+    "mingw-w64-libraries/winpthreads/src/rwlock.c": "3410bc1626aea891c8690eedb2442c81600f9634e2f7a465e10baef8077dfcc1",
+    "mingw-w64-libraries/winpthreads/src/barrier.c": "bc8dc6fb69ec64970e59d346cd8eebd54203b9ad2e51aba676d85e67c24e70ae",
+    "mingw-w64-libraries/winpthreads/src/spinlock.c": "ac82c387ec78932eb1b1f8ebf6494a0264fa1d964d58a7fc8ba8a31197c05129",
+    "mingw-w64-libraries/winpthreads/src/sem.c": "471f545d01bd1ea55fcab4429db92152c81d5f77c274dee87c8e4b43d2450e32",
+    "mingw-w64-libraries/winpthreads/src/rwlock.h": "6d0a3bd1467599e2b447b3e32d36c4329a6b8e39faf0b13de74a08e6fba4ef81"
+  },
+  "compiler_archive_sha256": "5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4",
+  "publisher_static_sha256": "dbbbb3a59f5a1077346b69d4dd8ea85eeca9574bfbd2d170eaf91b5fe5b2f88e",
+  "sdk_processthreadsapi_sha256": "fa2a3887fbae6c61ee3c20027101dbe71492c1c2d63ab178746b16777cff052b",
+  "calculated_private_size": 480,
+  "calculated_private_align": 16
+}

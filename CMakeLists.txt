@@ -92,6 +92,16 @@ target_link_libraries(platform_probe PRIVATE synchronization)
 add_executable(socket_probe probes/posix/socket_probe.cc)
 target_compile_options(socket_probe PRIVATE -Wall -Wextra -Werror)
 
+# Exact current-source TCP and guarded UDP contracts, isolated CI targets.
+add_executable(net_tcp_priority_probe tests/net-tcp-priority/contract.cc tests/net-tcp-priority/native_udp_control.cc)
+target_compile_options(net_tcp_priority_probe PRIVATE -Wall -Wextra -Werror)
+target_link_options(net_tcp_priority_probe PRIVATE "-Wl,-Map,tcp-priority-link.map")
+add_executable(net_udp_guarded_probe tests/native2/net_udp_trunc.cpp)
+target_compile_options(net_udp_guarded_probe PRIVATE -Wall -Wextra -Werror)
+add_executable(net_udp_guarded_fault_probe tests/native2/net_udp_fault_observer.c)
+target_compile_options(net_udp_guarded_fault_probe PRIVATE -Wall -Wextra -Werror)
+set_target_properties(net_udp_guarded_fault_probe PROPERTIES LINKER_LANGUAGE CXX)
+
 # gesher-base's mmap layer: placeholder mappings, executable file views
 # (stack track, docs/decisions/0036); run in CI on Windows.
 add_executable(mman_probe probes/posix/mman_probe.cc)

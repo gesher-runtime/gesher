@@ -12,6 +12,8 @@
 #include <stdint.h>
 #include <cstdlib>
 #include <memory>
+#include <atomic>
+#include <mutex>
 
 #include <string>
 #include <vector>
@@ -63,22 +65,58 @@ inline constexpr int kPollErr = 8;
 inline constexpr int kPollHup = 16;
 inline constexpr int kPollNval = 32;
 
+enum class ConnectState { kInitial, kConnecting, kConnected, kFailed };
+enum class Provider { kOther, kNativeIpv4Tcp, kNativeIpv4Udp };
+struct ConnectOperation;
+struct SocketDescription {
+  std::atomic<ConnectState> state{ConnectState::kInitial};
+  Provider provider = Provider::kOther;  // exact base-provider identity before publication
+  bool native_nonblocking_datagram = false;  // immutable after ownership registration
+  uint64_t connect_generation = 0;  // error_mutex; never a numeric fd identity
+  int connect_result = 0, connect_error = 0;  // completion / caller-unread token
+  uint64_t refusal_generation = 0;  // positively completed ConnectEx refusal only
+  bool native_closed = false, native_closing = false;  // short native lifetime transaction
+  bool legacy_connect_active = false;  // non-owned connect/disconnect serialization
+  std::shared_ptr<ConnectOperation> connect_operation;  // cleared after drain
+  std::atomic<bool> nonblocking{false}, reuse_addr{false};
+  std::mutex error_mutex;
+  std::mutex status_mutex;
+  std::mutex native_call_mutex;  // legacy control call vs physical close, never poll
+  Socket quarantined_socket = kInvalidSocket;
+  std::shared_ptr<SocketDescription> failed_close_owner;  // explicit failure quarantine
+  size_t descriptor_refs = 0;  // fd.cc's table mutex; snapshots are not fd refs
+};
 struct PollEntry {
   Socket socket;
   int events;
   int revents;
+  std::shared_ptr<SocketDescription> description;
 };
 
 // Starts Winsock once; false (errno set) if it cannot.
 bool Startup();
+Provider ClassifyProvider(Socket s);  // exact provider identity, never SO_ERROR
+int ConfigureOwnedDatagram(Socket s);  // -1 failure, 0 other socket, 1 permanent native NB UDP
 
 Socket Open(Family family, Type type, int protocol, bool process_binding = true);
-int Close(Socket s);
+int Close(Socket s, const std::shared_ptr<SocketDescription>& description = {}, bool retain_failure = false);
 Socket Duplicate(Socket s);  // a second socket for the same endpoint
 int SetNonBlocking(Socket s, bool on);
-int Bind(Socket s, const Address& address);
+int Bind(Socket s, const Address& address, const std::shared_ptr<SocketDescription>& description = {});
 int Connect(Socket s, const Address& address);  // EINPROGRESS when non-blocking
-int Listen(Socket s, int backlog);
+int ConnectLegacy(Socket s, const Address& address, const std::shared_ptr<SocketDescription>& description,
+                  void (*before_native)(void*) = nullptr, void* context = nullptr);
+// Start under the descriptor transaction, then wait only after releasing it.
+// The native operation always uses ConnectEx, independent of FIONBIO mode.
+std::shared_ptr<ConnectOperation> StartConnect(Socket s, const Address& address,
+    const std::shared_ptr<SocketDescription>& description);
+int AwaitConnect(const std::shared_ptr<ConnectOperation>& operation, bool nonblocking);
+// Internal lifetime evidence: waits for the actual WinAPI reaper thread exit.
+int AwaitConnectRetirement(const std::shared_ptr<ConnectOperation>& operation, int timeout_ms);
+struct OwnerCensus { uint32_t handles = 0, threads = 0; };
+bool ReadConnectOwnerCensus(OwnerCensus* result);  // read-only HOST lifetime evidence
+void RefreshConnect(const std::shared_ptr<SocketDescription>& description);
+int Listen(Socket s, int backlog, const std::shared_ptr<SocketDescription>& description = {});
 Socket Accept(Socket s, Address* peer);
 int GetSockName(Socket s, Address* address);
 int GetPeerName(Socket s, Address* address);
@@ -97,6 +135,13 @@ ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from
                int* result_flags = nullptr);
 bool CopyFromUser(void* destination, const void* source, size_t size);
 bool CopyToUser(void* destination, const void* source, size_t size);
+// Owned UDP keeps native I/O nonblocking; logical blocking, timeout and caller
+// cancellation are implemented without changing the shared native socket mode.
+ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
+                    std::shared_ptr<SocketDescription>& description, bool dont_wait = false);
+ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
+                    std::shared_ptr<SocketDescription>& description, bool dont_wait = false,
+                    int* result_flags = nullptr);
 
 int GetOption(Socket s, Option option, int* value);
 int SetOption(Socket s, Option option, int value);
@@ -109,7 +154,9 @@ int Membership(Socket s, bool join, Family family, const uint8_t* group, uint32_
 
 // Returns how many entries have revents set, 0 on timeout (timeout_ms < 0
 // waits forever).
-int Poll(PollEntry* entries, size_t count, int timeout_ms);
+using NativePollObserver = void (*)(bool before, int result, int native_error, void*);
+int Poll(PollEntry* entries, size_t count, int timeout_ms,
+         NativePollObserver observer = nullptr, void* context = nullptr);
 
 // --- names --------------------------------------------------------------------
 
@@ -213,15 +260,25 @@ namespace gesher {
 
 struct SocketFd {
   ws::Socket socket = ws::kInvalidSocket;
-  bool nonblocking = false;
-  bool reuse_addr = false;  // recorded only; see socket.cc
+  bool initial_nonblocking = false;  // registration hint; live flags are shared
+  // Open-description lifetime: dup/dup2 retain the same connect lifecycle.
+  std::shared_ptr<ws::SocketDescription> description;
 };
+
+// Immutable operation dependencies for real CI barriers. The POSIX entries
+// pass nullptr; no global mutable hook or guest symbol exists. Connect result
+// -2 identifies a held legacy lease before its native call; other observations
+// follow actual submission. Poll observes the held production snapshots.
+using ConnectObserver = void (*)(ws::Socket, int, int, void*);
+int ConnectWithObserver(int fd, const void* address, uint32_t length, ConnectObserver observer, void* context);
+using PollObserver = void (*)(void*);
+int PollWithObserver(void* records, size_t count, int timeout_ms, PollObserver observer, void* context,
+                     ws::NativePollObserver native_observer = nullptr, void* native_context = nullptr);
 
 // Takes ownership of `state.socket`: returns its new fd, or -1 with errno set
 // (the socket is then closed).
 int RegisterSocket(const SocketFd& state);
 // False if fd is not a socket.
 bool LookupSocket(int fd, SocketFd* state);
-void UpdateSocket(int fd, const SocketFd& state);
 
 }  // namespace gesher
