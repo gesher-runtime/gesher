@@ -393,9 +393,35 @@ $graphics84Args=@('space argument','quote"argument','Unicode-אב')
 $bcpGraphics=(('core-oj','core-libart','core-icu4j','framework','gesher-app')|ForEach-Object{NoDrive "$Dir/$_.jar"})-join ':'
 $env:GESHER_GRAPHICS84_ARGS=Join-Path $graphics84Directory 'expected-argv.txt'
 [IO.File]::WriteAllLines($env:GESHER_GRAPHICS84_ARGS,[string[]](@("-Xbootclasspath:$bcpGraphics","-Ximage:$(NoDrive "$root/system")/framework/boot.art",'-Xint','-Xusejit:false','-cp',(NoDrive "$Dir/graphics-tests.dex"),'gesher.GraphicsFixture')+$graphics84Args))
+# Each input slot belongs to g BEFORE open/read/close, including unknown return.
+# One-byte managed requests keep CUMULATIVE requested bytes <=16385 even when
+# a stream lies about Length, returns partial data, or changes during the read.
+$graphics84ReadBounded = {
+  param($slot,[string]$path)
+  if($slot.Open -ne 'UNATTEMPTED'){throw 'uncertain input acquisition retained'}
+  $slot.Open='UNKNOWN'
+  $slot.Stream=[IO.File]::OpenRead($path)
+  $slot.Open='OWNED'
+  while($slot.Requested -lt 16385){
+    $slot.Read='UNKNOWN'
+    $slot.Requested++
+    $n=$slot.Stream.Read($slot.Buffer,$slot.Count,1)
+    if($n -lt 0 -or $n -gt 1){throw 'invalid managed stream read count'}
+    $slot.Read='DONE'
+    if($n -eq 0){$slot.Eof=$true;break}
+    $slot.Count+=$n
+    if($slot.Count -eq 16385){break}
+  }
+  $slot.Close='FAILED'
+  $slot.Stream.Dispose()
+  $slot.Close='DONE'
+  if(-not $slot.Eof -or $slot.Count -gt 16384){throw 'input exceeds acquisition cap or lacks bounded EOF'}
+  $slot.Text=[Text.UTF8Encoding]::new($false,$true).GetString($slot.Buffer,0,$slot.Count)
+}
 foreach($mode in 'normal','nonzero','missing-marker','timeout','retained'){
   # Pending receiver root precedes launch/sinks. A partial record never clears it.
-  $g=@{Phase='Launch';Failed=$false;Pending=($mode -eq 'retained');Receipt='UNATTEMPTED';Query='UNATTEMPTED';Wait='UNATTEMPTED';Kill=$false;Closed=$false;Slot=[Graphics84+Slot]::new();Obs=$null;Text='';Document=$null;DocClose='UNATTEMPTED';Delta=0;Before=$script:failed}
+  $g=@{Phase='Launch';Failed=$false;Pending=($mode -eq 'retained');Receipt='UNATTEMPTED';Query='UNATTEMPTED';Wait='UNATTEMPTED';Kill=$false;Closed=$false;Slot=[Graphics84+Slot]::new();Obs=$null;Text='';Document=$null;DocClose='UNATTEMPTED';Delta=0;Before=$script:failed;Inputs=@{};ParentReceipt='UNATTEMPTED';ParentDocument=$null;ParentDocClose='UNATTEMPTED';ParentBound=$false;ChildNonsignaled=$false}
+  foreach($name in 'Parent','Child'){$g.Inputs[$name]=@{Open='UNATTEMPTED';Stream=$null;Read='UNATTEMPTED';Close='UNATTEMPTED';Buffer=[byte[]]::new(16385);Count=0;Requested=0;Eof=$false;Text=$null}}
   $env:GESHER_GRAPHICS84_MODE=$mode
   $env:GESHER_GRAPHICS84_NONCE=[guid]::NewGuid().ToString('N')+[guid]::NewGuid().ToString('N')
   $env:GESHER_GRAPHICS84_RECEIPT=Join-Path $graphics84Directory "$mode.receipt"
@@ -408,15 +434,38 @@ foreach($mode in 'normal','nonzero','missing-marker','timeout','retained'){
         $g.Obs=$script:GraphicsDexObservation
         $g.Delta=$script:failed-$g.Before
         $script:failed=$g.Before
+        $g.Phase='ParentReceipt'
+      }
+      if($g.Phase -eq 'ParentReceipt'){
+        if($g.ParentReceipt -ne 'UNATTEMPTED'){throw 'uncertain parent receipt retained'}
+        $g.ParentReceipt='FAILED'
+        & $graphics84ReadBounded $g.Inputs.Parent $env:GESHER_GRAPHICS84_RECEIPT
+        $g.ParentDocument=[Text.Json.JsonDocument]::Parse($g.Inputs.Parent.Text)
+        $parent=$g.ParentDocument.RootElement
+        if($parent.ValueKind -ne [Text.Json.JsonValueKind]::Object){throw 'parent object required'}
+        $keys=@('schema','source','case','nonce','pid','creation_filetime','expected_image','cwd','argv_env')
+        $r=@{}
+        foreach($v in $parent.EnumerateObject()){
+          if($v.Name -cnotin $keys -or $r.ContainsKey($v.Name)){throw 'parent unknown/duplicate key'}
+          $r[$v.Name]=$v.Value
+        }
+        if($r.Count -ne $keys.Count){throw 'parent missing key'}
+        foreach($k in $keys|Where-Object{$_ -ne 'pid'}){if($r[$k].ValueKind -ne [Text.Json.JsonValueKind]::String){throw 'parent string type required'}}
+        if($r.pid.ValueKind -ne [Text.Json.JsonValueKind]::Number -or $r.pid.GetUInt32() -eq 0){throw 'parent PID type/range'}
+        $birth=[UInt64]0;$birthText=$r.creation_filetime.GetString()
+        if(-not [UInt64]::TryParse($birthText,[ref]$birth) -or [string]$birth -cne $birthText){throw 'parent canonical raw FILETIME required'}
+        $obs=$g.Obs
+        if($null -eq $obs -or $obs.Source -cne $env:GITHUB_SHA -or $env:GITHUB_SHA -cnotmatch '^[0-9a-f]{40}$' -or $obs.Case -cne $mode -or $obs.Nonce -cne $env:GESHER_GRAPHICS84_NONCE -or $env:GESHER_GRAPHICS84_NONCE -cnotmatch '^[0-9a-f]{64}$' -or -not $obs.KernelComplete -or -not $obs.Released -or -not $obs.TasksComplete -or $obs.PipesClosed -ne 2 -or $null -eq $obs.NativeExitCode -or $obs.ExpectedImage -cne $graphics84Exe){throw 'all-case typed parent proof rejected'}
+        if($r.schema.GetString() -cne 'GRAPHICS84_PARENT_V1' -or $r.source.GetString() -cne $env:GITHUB_SHA -or $r.case.GetString() -cne $mode -or $r.nonce.GetString() -cne $env:GESHER_GRAPHICS84_NONCE -or $r.pid.GetUInt32() -ne $obs.Pid -or $birth -ne $obs.CreationFiletime -or $r.expected_image.GetString() -cne $graphics84Exe -or $r.cwd.GetString() -cne $env:GESHER_GRAPHICS84_CWD -or $r.argv_env.GetString() -cne 'EXACT'){throw 'parent receipt case/process/argv-env rejected'}
+        $g.ParentDocClose='FAILED';$g.ParentDocument.Dispose();$g.ParentDocClose='DONE'
+        $g.ParentReceipt='DONE';$g.ParentBound=$true
         $g.Phase=if($g.Pending){'Receipt'}else{'Report'}
       }
       if($g.Phase -eq 'Receipt'){
         if($g.Receipt -ne 'UNATTEMPTED'){throw 'uncertain receipt retained'}
         $g.Receipt='FAILED'
-        $raw=[IO.File]::ReadAllBytes($env:GESHER_GRAPHICS84_RECEIPT+'.child')
-        if($raw.Length -gt 16384 -or -not $raw.Length){throw 'bounded receipt unavailable'}
-        $utf8=[Text.UTF8Encoding]::new($false,$true)
-        $g.Document=[Text.Json.JsonDocument]::Parse($utf8.GetString($raw))
+        & $graphics84ReadBounded $g.Inputs.Child ($env:GESHER_GRAPHICS84_RECEIPT+'.child')
+        $g.Document=[Text.Json.JsonDocument]::Parse($g.Inputs.Child.Text)
         $rootJson=$g.Document.RootElement
         if($rootJson.ValueKind -ne [Text.Json.JsonValueKind]::Object){throw 'object required'}
         $keys=@('schema','source','case','nonce','bits','parent_pid','parent_creation_filetime','fixture_pid','fixture_creation_filetime','child_pid','child_creation_filetime','destination_handle_hex16','duplicate_state','expected_create_application_path','parent_access','child_access','inherit','options','publication_phase','source_prepublication_releases','source_child_escrow')
@@ -462,6 +511,7 @@ foreach($mode in 'normal','nonzero','missing-marker','timeout','retained'){
           if($w -ne 0 -and $w -ne 258){throw "receiver liveness unavailable:$err"}
           if($w -eq 0){$g.Failed=$true} # original live-writer assertion required
           if($w -eq 258){
+            $g.ChildNonsignaled=$true
             $g.Kill=$true
             $ok=[Graphics84]::TerminateProcess($g.Slot.Handle,1);$err=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
             if(-not $ok){$g.Failed=$true} # reservation is never retried
@@ -478,8 +528,23 @@ foreach($mode in 'normal','nonzero','missing-marker','timeout','retained'){
         $g.Closed=$true;$g.Pending=$false;$g.Phase='Report'
       }
       if($g.Phase -eq 'Report'){
+        $obs=$g.Obs
+        $facts=$g.ParentBound -and $g.ParentReceipt -eq 'DONE' -and $null -ne $obs -and
+          $obs.Source -ceq $env:GITHUB_SHA -and $obs.Case -ceq $mode -and $obs.Nonce -ceq $env:GESHER_GRAPHICS84_NONCE -and
+          $obs.Pid -gt 0 -and $obs.CreationFiletime -gt 0 -and $obs.KernelComplete -and $obs.Released -and
+          $obs.TasksComplete -and $obs.PipesClosed -eq 2 -and $obs.ExpectedImage -ceq $graphics84Exe -and
+          $obs.NativeExitCode -notin @(91,92,93,94)
         $expected=if($mode -eq 'normal'){0}else{1}
-        if($g.Delta -ne $expected){$g.Failed=$true}
+        $facts=$facts -and $g.Delta -eq $expected
+        switch($mode){
+          normal {$facts=$facts -and $obs.NativeExitCode -eq 0 -and $obs.MarkerPresent -and -not $obs.OperationExpired -and $obs.EofComplete -and -not $obs.KillReserved -and -not $obs.ObservationFailed}
+          nonzero {$facts=$facts -and $obs.NativeExitCode -eq 23 -and $obs.MarkerPresent -and -not $obs.OperationExpired -and $obs.EofComplete -and -not $obs.KillReserved -and -not $obs.ObservationFailed}
+          'missing-marker' {$facts=$facts -and $obs.NativeExitCode -eq 0 -and -not $obs.MarkerPresent -and -not $obs.OperationExpired -and $obs.EofComplete -and -not $obs.KillReserved -and -not $obs.ObservationFailed}
+          timeout {$facts=$facts -and -not $obs.MarkerPresent -and $obs.OperationExpired -and $obs.KillReserved -and $obs.ObservationFailed -and $null -ne $obs.NativeExitCode}
+          retained {$facts=$facts -and $obs.NativeExitCode -eq 0 -and -not $obs.OperationExpired -and -not $obs.KillReserved -and -not $obs.EofComplete -and $obs.ObservationFailed -and $g.ChildNonsignaled -and $g.Closed -and -not $g.Pending}
+          default {$facts=$false}
+        }
+        if(-not $facts){$g.Failed=$true}
         $pair=[regex]::Match($g.Text,'kernel=True tasks=True pipes=2 disposed=True output=(\d+) error=(\d+)')
         if(-not $pair.Success){$g.Failed=$true}
         elseif(-not [Gtest84NativeHandles]::Closed([IntPtr][long]$pair.Groups[1].Value) -or
