@@ -1,0 +1,38 @@
+name: pthread-minimum-join-runtime-trusted-source
+on:
+  workflow_call:
+    outputs:
+      source:
+        value: ${{ jobs.verify.outputs.source }}
+      policy_ref:
+        value: ${{ jobs.verify.outputs.policy_ref }}
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      source: ${{ steps.gate.outputs.source }}
+      policy_ref: ${{ steps.gate.outputs.policy_ref }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PTHREAD_MINIMUM_JOIN_RUNTIME_CALLER_COMMIT: ${{ vars.PTHREAD_MINIMUM_JOIN_RUNTIME_CALLER_COMMIT }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Immutable isolated diagnostic runtime source gate
+        id: gate
+        shell: bash
+        run: |
+          python3 -I -B - <<'PYCODE'
+          import hashlib, subprocess, types
+          pins = {'.github/workflows/pthread-minimum-join-cancel-component.yml': '874ce6d9509f5acb2d3b84c5f055c3f02ff7834e', '.github/workflows/pthread-minimum-join-cancel-trusted-source.yml': 'acb9d71cbb7493135b18e81a40f35af92a7232cf', '.github/workflows/pthread-minimum-join-runtime-component.yml': 'de3f58bc82aaee729f1b18ddc11d854b2fcec2ab', 'docs/handoff/tracks/pthread-minimum-join-cancellation-candidate.md': '3c68436d009174e1ab3d34bbe1faa543f1790a15', 'tests/native/host_pthread_minimum_join_cancel_candidate.c': '5988b3181516df700aa486bb01ed926786d13aea', 'tools/host-pthread-authority/audit-minimum-join-witness-source.py': 'a74f04c7e3dc80e23f855170adf58067fb67ecb4', 'tools/host-pthread-authority/build-minimum-join-runtime-wip.sh': '1481918d65aea19614c9ade2d927f4ac4b677cb5', 'tools/host-pthread-authority/collect-minimum-join-object-wip.sh': '826dc12499ae6f02e4f338dcecf13598e192f029', 'tools/host-pthread-authority/minimum-join-wait-diagnostic.patch': '9c260f5073bd9b010b71cdec69aec3ed1d2eee7e', 'tools/host-pthread-authority/minimum_join_collector_policy.py': '69be465ceed3d3f02583d0bfdace49e01bd1f952', 'tools/host-pthread-authority/minimum_join_identity_candidate.py': 'cbfd303eda3a0b1d827ebc28bea0c6fae6a96a59', 'tools/host-pthread-authority/minimum_join_runtime_authority_wip.py': '5f7ab21e57dffa4e35a43e07a4cfa7a476e81597', 'tools/host-pthread-authority/minimum_join_runtime_bundle_wip.py': '56b5081b649c2bee611f68e048f3ac587110a693', 'tools/host-pthread-authority/minimum_join_runtime_policy_wip.py': '9826e0771dd232a7e9c4e440fb9f86f24186d897', 'tools/host-pthread-authority/run-minimum-join-cancel-candidate.ps1': 'd44968a03ce1539ff3de9aaa1ee068dd268486d3', 'tools/host-pthread-authority/test_minimum_join_identity_candidate.py': '4cfa840d4a48dae49685631486b09fd4d0179d4f', 'tools/host-pthread-authority/test_minimum_join_linkage_wip.py': '59d4a75e84660ca71a9b6ef02f6e139bdf957457', 'tools/host-pthread-authority/test_minimum_join_runtime_authority_wip.py': '95e7e5492bb0fdab5aad8e42c7653e4c8c092c9d', 'tools/host-pthread-authority/test_minimum_join_runtime_bundle_wip.py': '6748216809c7c8e3ea00962ae142558ae2ccc06d', 'tools/host-pthread-authority/verify-minimum-join-linkage-wip.py': 'b6e88a0cc5dd57a8245c4585dad369ff23acc7b9'}
+          policy = '9826e0771dd232a7e9c4e440fb9f86f24186d897'
+          raw = subprocess.check_output(['git','cat-file','blob',policy])
+          assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==policy
+          module=types.ModuleType('immutable_runtime_gate')
+          exec(compile(raw,'immutable-runtime-gate','exec'),module.__dict__)
+          module.gate(pins)
+          PYCODE
