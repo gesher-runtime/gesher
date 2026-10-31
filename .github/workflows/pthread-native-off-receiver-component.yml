@@ -1,0 +1,210 @@
+name: pthread-native-off-receiver-component
+'on':
+  push:
+    branches:
+    - wip/pthread-native-runtime161
+    paths:
+    - .github/workflows/pthread-native-off-receiver-component.yml
+  workflow_dispatch: null
+permissions:
+  contents: read
+  actions: read
+env:
+  LLVM_MINGW_TAG: '20261006'
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  source_authority:
+    uses: gesher-runtime/gesher/.github/workflows/pthread-native-off-receiver-trusted-source.yml@6edcb921e546698e503f18ad93e3dac690487be4
+  build:
+    needs:
+    - source_authority
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GESHER_HOST_PTHREAD_SELECTION: selected-minimum
+      GESHER_NATIVE_OFF_RECEIVER_AUTHORIZED_SOURCE: ${{ needs.source_authority.outputs.source }}
+      GESHER_NATIVE_OFF_RECEIVER_POLICY_REF: ${{ needs.source_authority.outputs.policy_ref }}
+      GESHER_HOST_PTHREAD_CALLER: pthread-native-off-receiver/build
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify exact live current-attempt build authority
+      run: python3 tools/toolchain/native_off_receiver.py build
+    - uses: ./.github/actions/setup-build
+      id: toolchain
+      with:
+        ccache-key: pthread-native-off-receiver
+        pthread-supplier: selected-minimum
+        pthread-caller: pthread-native-off-receiver/build
+    - name: Bind exact selected root and force ordinary OFF compile metadata
+      env:
+        LLVM: ${{ steps.toolchain.outputs.selected_compiler_root }}
+        RECEIPT: ${{ steps.toolchain.outputs.selected_receipt }}
+        RECEIPT_SHA: ${{ steps.toolchain.outputs.selected_receipt_sha256 }}
+      run: 'set -euo pipefail
+
+        python3 tools/toolchain/native_off_receiver.py build
+
+        test -n "$LLVM" && test -n "$RECEIPT" && test -n "$RECEIPT_SHA"
+
+        printf ''GESHER_BUILD_LLVM=%s\nGESHER_SELECTED_PTHREAD_RECEIPT=%s\nGESHER_SELECTED_PTHREAD_RECEIPT_SHA256=%s\n'' "$LLVM" "$RECEIPT" "$RECEIPT_SHA"
+        >> "$GITHUB_ENV"
+
+        cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+        '
+    - name: Build the separate bounded native teardown observer
+      run: bash tools/web3/build-teardown-probe.sh "$GESHER_BUILD_LLVM"
+    - name: Build
+      run: "# Canonical suite/package/e2e always receive the production role.\nif [[ \"$GESHER_HOST_PTHREAD_SELECTION\" == selected-minimum ]];\
+        \ then\n  cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW=\"$GESHER_BUILD_LLVM\"\nelif\
+        \ [[ \"$GESHER_HOST_PTHREAD_SELECTION\" == publisher ]]; then\n  cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON\n\
+        else\n  exit 1\nfi\n# Compile/link ordered spawn setup and its actual no-console caller first.\nninja -C out exec4_no_console_probe gesher-exec\n\
+        # Check the new native format ABI bridge before the full AOSP graph.\nninja -C out CMakeFiles/gesher_media_format.dir/compat/media/ndk/media_format.cc.obj\n\
+        ninja -C out surface_invalidation_test\nninja -C out CMakeFiles/gesher_media_muxer.dir/compat/media/ndk/media_muxer.cc.obj\nninja -C out\
+        \ media_muxer_verify\nninja -C out CMakeFiles/oatdump.dir/third_party/aosp/art/oatdump/oatdump.cc.obj\n# Validate changed after-app shared-library\
+        \ matching before the full graph.\nninja -C out CMakeFiles/art_runtime.dir/third_party/aosp/art/runtime/class_loader_context.cc.obj\n\
+        # Compile the new bridge before the full runtime to expose its\n# header/ABI errors without waiting for every AOSP object.\nninja -C out\
+        \ CMakeFiles/gesher_native_fonts.dir/compat/bionic/native_fonts.cc.obj\nninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_bionic.cc.obj\n\
+        ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj\nninja -C out native3_unicode_test\nninja -C out\
+        \ native3_cpu_clock_test\nninja -C out\n"
+    - name: Build and isolate bounded Native lock fixtures under production OFF
+      run: "ninja -C out native3_lock_command_worker native3_lock_duplicate_test\nmkdir dist-native3-locks\nmv out/native3_lock_command_worker.exe\
+        \ out/native3_lock_duplicate_test.exe dist-native3-locks/\ncp out/binderd.exe dist-native3-locks/\nfor target in native3_lock_command_worker\
+        \ native3_lock_duplicate_test binderd; do\n  \"$GESHER_BUILD_LLVM/bin/llvm-readobj\" --coff-imports \"dist-native3-locks/$target.exe\"\
+        \ > \"dist-native3-locks/$target.imports.txt\"\ndone\ntest ! -e out/native3_lock_command_worker.exe\ntest ! -e out/native3_lock_duplicate_test.exe\n"
+    - name: Check assembly boundaries use the System V ABI
+      run: python3 tools/abi-check.py out third_party/aosp
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '21'
+    - name: Build test apps
+      run: tests/build-test-apps.sh out/test-apps
+    - name: Build boot class path (core-oj, core-libart)
+      run: tools/build-boot-jars.sh out/boot-jars
+    - name: Build the framework's resources (framework-res.apk)
+      run: tools/build-framework-res.sh out/framework-res
+    - name: Collect artifacts
+      run: 'mkdir -p dist
+
+        cp out/*.exe out/dalvikvm.map out/dex2oat.map out/test-apps/* out/boot-jars/*.jar dist/
+
+        cp dist-web3-observer/web3_process_waits.exe dist/
+
+        # ICU''s data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
+
+        cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat dist/
+
+        # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
+
+        tools/fonts/collect-fonts.sh third_party/aosp dist
+
+        # Time zone data, for $ANDROID_TZDATA_ROOT (docs/posix.md).
+
+        compat/libcore/collect-tzdata.sh third_party/aosp dist
+
+        # Android''s CA certificates and the networking libraries'' licenses (docs/network.md).
+
+        tools/net/collect.sh third_party/aosp dist
+
+        ls -la dist
+
+        '
+    - name: Freeze default-OFF production role and unchanged shared-code boundary
+      run: python3 tools/web3/host_roles.py capture-production --build out --dist dist --state out/web3-production-state.json
+    - name: Bind isolated Native fixtures to the actual current production compiler and source
+      run: python3 tools/native3-locks/union_payload.py host
+    - uses: actions/upload-artifact@v4
+      with:
+        name: native3-locks-host
+        path: dist-native3-locks/
+        if-no-files-found: error
+  native3-locks-reference:
+    needs:
+    - source_authority
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GESHER_HOST_PTHREAD_SELECTION: selected-minimum
+      GESHER_NATIVE_OFF_RECEIVER_AUTHORIZED_SOURCE: ${{ needs.source_authority.outputs.source }}
+      GESHER_NATIVE_OFF_RECEIVER_POLICY_REF: ${{ needs.source_authority.outputs.policy_ref }}
+      GESHER_HOST_PTHREAD_CALLER: pthread-native-off-receiver/reference
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify exact live current-attempt reference authority
+      run: python3 tools/toolchain/native_off_receiver.py reference
+    - name: Fresh independent Linux reference only
+      run: python3 tools/native3-locks/union_payload.py reference
+    - uses: actions/upload-artifact@v4
+      with:
+        name: native3-locks-reference
+        path: native3-reference/
+        if-no-files-found: error
+  native3-locks-regression:
+    name: native3-locks-regression-${{ matrix.os }}
+    needs:
+    - source_authority
+    - build
+    - native3-locks-reference
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - windows-2022
+        - windows-2025
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GESHER_HOST_PTHREAD_SELECTION: selected-minimum
+      GESHER_NATIVE_OFF_RECEIVER_AUTHORIZED_SOURCE: ${{ needs.source_authority.outputs.source }}
+      GESHER_NATIVE_OFF_RECEIVER_POLICY_REF: ${{ needs.source_authority.outputs.policy_ref }}
+      GESHER_HOST_PTHREAD_CALLER: pthread-native-off-receiver/receiver
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify exact live current producer and reference authority
+      shell: pwsh
+      run: 'python tools/toolchain/native_off_receiver.py receiver
+
+        if ($LASTEXITCODE -ne 0) { throw ''Native OFF current-role authority failed'' }'
+    - name: Strict current Native host and independent Linux reference suppliers
+      shell: pwsh
+      run: '$ErrorActionPreference = ''Stop''
+
+        python tools/ci/artifact_receipt.py --name native3-locks-host --producer build --destination ci-suppliers/native3_host
+
+        if ($LASTEXITCODE -ne 0) { throw ''Current typed Native host archive failed'' }
+
+        python tools/ci/artifact_receipt.py --name native3-locks-reference --producer native3-locks-reference --destination ci-suppliers/native3_reference
+
+        if ($LASTEXITCODE -ne 0) { throw ''Current Linux reference archive failed'' }
+
+        '
+    - name: Actual Native whole-member source and role rejection controls
+      shell: pwsh
+      run: 'python tools/native3-locks/union_payload.py controls --host ci-suppliers/native3_host --reference ci-suppliers/native3_reference
+
+        if ($LASTEXITCODE -ne 0) { throw ''Current Native supplier controls failed'' }
+
+        '
+    - name: Verify and assemble exact current Native production-compiler fixture roles
+      shell: pwsh
+      run: 'python tools/native3-locks/union_payload.py verify --host ci-suppliers/native3_host --reference ci-suppliers/native3_reference
+
+        if ($LASTEXITCODE -ne 0) { throw ''Current Native payload/source/compiler manifest failed'' }
+
+        '
+    - name: Mandatory161 strict rows all4 actual evidence routes and13 resource modes
+      shell: pwsh
+      run: tests/windows/run-native3-locks-current.ps1

@@ -2,7 +2,14 @@
 # CI only; two reviewed minimum patches on pristine source, never private SDK code.
 set -euo pipefail
 test "${GITHUB_ACTIONS:-}" = true
-test "${GITHUB_JOB:-}" = compile
+if [[ "${GITHUB_JOB:-}" == compile ]]; then
+  test "${GITHUB_REF:-}" = refs/heads/wip/tcp-minimum-selection
+  test "${GITHUB_WORKFLOW:-}" = net-tcp-selected-component
+  test "${TCP_SUPPLIER_ROLE:-}" = selected-minimum
+else
+  test "${GITHUB_JOB:-}" = build
+  test "${GESHER_HOST_PTHREAD_SELECTION:-}" = selected-minimum
+fi
 llvm=$(realpath "${1:?fresh original extracted compiler}")
 root=$(git rev-parse --show-toplevel)
 # The product consumer prepares and inventories this pristine checkout first.

@@ -44,21 +44,51 @@ jobs:
   build:
     needs: [artifact-preflight]
     runs-on: ubuntu-24.04
+    env:
+      GESHER_HOST_PTHREAD_SELECTION: ${{ github.ref == 'refs/heads/wip/pthread-production-factory' && 'selected-minimum' || 'publisher' }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: ./.github/actions/setup-build
+        id: host_toolchain
         with:
           # The former runtime-port job's cache already holds the runtime.
           ccache-key: runtime
+          # Source-only proposal: no main/default change and no dispatch approval.
+          pthread-supplier: ${{ env.GESHER_HOST_PTHREAD_SELECTION }}
+          pthread-caller: ci/build
+
+      - name: Bind the verified compiler root for this product build
+        env:
+          SELECTED_LLVM: ${{ steps.host_toolchain.outputs.selected_compiler_root }}
+          SELECTED_RECEIPT: ${{ steps.host_toolchain.outputs.selected_receipt }}
+          SELECTED_RECEIPT_SHA256: ${{ steps.host_toolchain.outputs.selected_receipt_sha256 }}
+        run: |
+          set -euo pipefail
+          case "$GESHER_HOST_PTHREAD_SELECTION" in
+            selected-minimum)
+              test -n "$SELECTED_LLVM" && test -n "$SELECTED_RECEIPT" && test -n "$SELECTED_RECEIPT_SHA256"
+              llvm="$SELECTED_LLVM"
+              printf 'GESHER_SELECTED_PTHREAD_RECEIPT=%s\nGESHER_SELECTED_PTHREAD_RECEIPT_SHA256=%s\nGESHER_HOST_PTHREAD_CALLER=ci/build\n' "$SELECTED_RECEIPT" "$SELECTED_RECEIPT_SHA256" >> "$GITHUB_ENV"
+              ;;
+            publisher) llvm="$HOME/toolchain/$LLVM_MINGW_NAME" ;;
+            *) exit 1 ;;
+          esac
+          printf 'GESHER_BUILD_LLVM=%s\n' "$llvm" >> "$GITHUB_ENV"
 
       - name: Build the separate bounded native teardown observer
-        run: bash tools/web3/build-teardown-probe.sh "$HOME/toolchain/$LLVM_MINGW_NAME"
+        run: bash tools/web3/build-teardown-probe.sh "$GESHER_BUILD_LLVM"
 
       - name: Build
         run: |
           # Canonical suite/package/e2e always receive the production role.
-          cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
+            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+          elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
+            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          else
+            exit 1
+          fi
           # Compile/link ordered spawn setup and its actual no-console caller first.
           ninja -C out exec4_no_console_probe gesher-exec
           # Check the new native format ABI bridge before the full AOSP graph.
@@ -93,7 +123,7 @@ jobs:
           mv out/native3_lock_command_worker.exe out/native3_lock_duplicate_test.exe dist-native3-locks/
           cp out/binderd.exe dist-native3-locks/
           for target in native3_lock_command_worker native3_lock_duplicate_test binderd; do
-            "$HOME/toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj" --coff-imports "dist-native3-locks/$target.exe" > "dist-native3-locks/$target.imports.txt"
+            "$GESHER_BUILD_LLVM/bin/llvm-readobj" --coff-imports "dist-native3-locks/$target.exe" > "dist-native3-locks/$target.imports.txt"
           done
           test ! -e out/native3_lock_command_worker.exe
           test ! -e out/native3_lock_duplicate_test.exe
@@ -160,6 +190,9 @@ jobs:
               assert actor_launcher==production['compiler']['launcher'], 'Actor launcher differs from production'
           manifest['actor_compile_command']=argv
           manifest['actor_launcher']=actor_launcher
+          selected_links=host_roles.seal_selected([(Path('out/binder_sg_actor.exe'),root/'binder_sg_actor.exe')],production['compiler'],'binder-ordinary-actor')
+          if selected_links is not None:
+              manifest['selected_link']=selected_links
           manifest['files']={p.name:host_roles.sha(p) for p in root.iterdir() if p.is_file()}
           manifest['sources']={p:host_roles.sha(p) for p in (
               'compat/posix/src/binder.cc','compat/posix/src/binder_sg.h','compat/posix/src/binder_wire.h',
@@ -190,7 +223,13 @@ jobs:
 
       - name: Build separately named same-source query-hook runtime after production package is sealed
         run: |
-          cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON
+          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
+            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+          elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
+            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON
+          else
+            exit 1
+          fi
           ninja -C out dalvikvm
           python3 tools/web3/host_roles.py capture-hook --build out --dist dist --state out/web3-production-state.json --out dist-web3-query
       - uses: actions/upload-artifact@v4

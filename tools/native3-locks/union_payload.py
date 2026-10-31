@@ -153,6 +153,10 @@ def write_manifest(root, metadata):
 def check_manifest(root, role, expected, context, sources):
     actual = json.loads((root / 'provenance.json').read_text(encoding='utf-8'))
     assert actual['context'] == context and actual['sources'] == sources and actual['role'] == role
+    if role == 'native3-common-host-fixture':
+        executables = {name + '.exe' for name in TARGETS}
+        host_roles.verify_selected(root, actual.get('selected_link'), actual['compiler'], context, executables, role)
+        expected = expected | host_roles.selected_members(executables, actual['compiler'], role)
     files = flat_inventory(root, expected | {'provenance.json'})
     del files['provenance.json']
     assert files == actual['outputs'], 'Actual fixture bytes differ from producer manifest'
@@ -234,7 +238,6 @@ def main():
               compiler_sha256=host_roles.sha(driver), compiler_version=version), sort_keys=True), flush=True)
     elif args.mode == 'host':
         import re
-        outputs = flat_inventory(args.host, HOST_FILES)
         production = json.loads((ROOT / 'dist/web3-production-role.json').read_text())
         compiler = host_roles.compiler(ROOT / 'out')
         assert all(production.get(key) == value for key, value in context.items())
@@ -242,6 +245,10 @@ def main():
         assert production['compiler'] == compiler
         assert production['executable_sha256'] == host_roles.sha(ROOT / 'dist/dalvikvm.exe')
         assert host_roles.cache(ROOT / 'out')['GESHER_WEB3_QUERY_TESTS'] == 'OFF'
+        selected_links = host_roles.seal_selected([(ROOT / 'out' / (name + '.exe'), args.host / (name + '.exe'))
+                                                  for name in TARGETS], compiler, 'native3-common-host-fixture')
+        outputs = flat_inventory(args.host, HOST_FILES | host_roles.selected_members(
+            {name + '.exe' for name in TARGETS}, compiler, 'native3-common-host-fixture'))
         compile_commands = {}
         for name in TARGETS[:2]:
             relative = 'tests/native3-locks/' + ('command_worker.cc' if name.endswith('command_worker') else 'duplicate_windows_test.cc')
@@ -260,10 +267,13 @@ def main():
         for name in TARGETS[:2]:
             assert not (ROOT / 'out' / (name + '.exe')).exists()
             assert not (ROOT / 'dist' / (name + '.exe')).exists(), 'Native fixture leaked into production'
-        write_manifest(args.host, dict(context=context, sources=sources, role='native3-common-host-fixture',
-            outputs=outputs, compiler=compiler, production_role=production, compile_commands=compile_commands))
-        print('ACTUAL_NATIVE3_CURRENT_HOST ' + json.dumps(dict(context=context, outputs=outputs,
-              compiler=compiler, production_runtime_sha256=production['executable_sha256']), sort_keys=True), flush=True)
+        metadata = dict(context=context, sources=sources, role='native3-common-host-fixture',
+            outputs=outputs, compiler=compiler, production_role=production, compile_commands=compile_commands)
+        if selected_links is not None:
+            metadata['selected_link'] = selected_links
+        write_manifest(args.host, metadata)
+        host_roles.emit_record('ACTUAL_NATIVE3_CURRENT_HOST', dict(context=context, outputs=outputs,
+              compiler=compiler, production_runtime_sha256=production['executable_sha256']), flush=True)
     else:
         host = check_manifest(args.host, 'native3-common-host-fixture', HOST_FILES, context, sources)
         reference = check_manifest(args.reference, 'native3-linux-reference', REFERENCE_FILES, context, sources)
@@ -330,10 +340,10 @@ def main():
                 shutil.copyfile(root / name, target)
                 assert host_roles.sha(target) == expected
                 print(f'ACTUAL_COMMAND_OUTPUT name={name} sha256={expected} source={context["source"]} run={context["run"]} attempt={context["attempt"]}', flush=True)
-        flat_inventory(args.destination, HOST_FILES | REFERENCE_FILES)
-        print('VERIFIED_NATIVE3_CURRENT_SUPPLIERS ' + json.dumps(dict(context=context,
+        flat_inventory(args.destination, set(host['outputs']) | REFERENCE_FILES)
+        host_roles.emit_record('VERIFIED_NATIVE3_CURRENT_SUPPLIERS', dict(context=context,
               compiler=host['compiler'], production_runtime_sha256=production['executable_sha256'],
-              output_members=7), sort_keys=True), flush=True)
+              output_members=len(host['outputs'])+len(reference['outputs'])), flush=True)
 
 
 if __name__ == '__main__':
