@@ -20,8 +20,8 @@ jobs:
           python3 -I -B - <<'PY'
           import hashlib,subprocess,sys
           from pathlib import Path
-          PINS={'tools/file_mremap/helper_authority.py': 'f35c903e3c48fa95dfc54666a1eb02b1d104123a', 'tools/file_mremap/helper_producer.py': 'ea56461fe7de0509d65673fc914f7ebdf5f6b559', 'tools/file_mremap/test_helper_authority.py': '7cbe81db74183e20d7545ff8d975d750647ca60d'}
-          TEMPLATE='081a154f204edb5c5b084cd85d530daf95bae20e'
+          PINS={'tools/file_mremap/helper_authority.py': 'f35c903e3c48fa95dfc54666a1eb02b1d104123a', 'tools/file_mremap/helper_producer.py': 'ea3880a9081579fe10478770ce4c7c2797382597', 'tools/file_mremap/test_helper_authority.py': '4358490e2bb8d861b0b2ed25c31d9d63fdcf3945'}
+          TEMPLATE='eeb3d99ae685f42fab28dfeee0fd1f01dfd30b66'
           path='tools/file_mremap/helper_authority.py'
           raw=subprocess.check_output(['git','cat-file','blob',PINS[path]])
           assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==PINS[path]
