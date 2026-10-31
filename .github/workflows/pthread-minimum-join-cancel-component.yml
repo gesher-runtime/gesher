@@ -1,0 +1,29 @@
+name: pthread-minimum-join-cancel-component
+on:
+  push:
+    branches: [wip/pthread-minimum-join-cancellation]
+    paths: [.github/workflows/pthread-minimum-join-cancel-component.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  source-authority:
+    uses: gesher-runtime/gesher/.github/workflows/pthread-minimum-join-cancel-trusted-source.yml@0000000000000000000000000000000000000000
+  diagnostic-producer:
+    needs: source-authority
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GESHER_MINIMUM_JOIN_COLLECT_AUTHORIZED_SOURCE: ${{ needs.source-authority.outputs.source }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Collect diagnostic object code, never execute fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GESHER_MINIMUM_JOIN_COLLECT_AUTHORIZED_SOURCE"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          archive="$RUNNER_TEMP/llvm-mingw-diagnostic.tar.xz"
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64.tar.xz" -o "$archive"
+          bash tools/host-pthread-authority/collect-minimum-join-object-wip.sh "$archive"
