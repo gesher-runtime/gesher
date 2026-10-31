@@ -23,6 +23,20 @@ in the SAME owner with original refs, no blind retry or unproved release.
 All native cancellation/BOTH-live-writer behavior remains UNEXECUTED; source
 fake tasks cannot prove it, and nonsignaled-child/terminal-task gates remain.
 
+Current pure qualification controls execute actual extracted Report stages:
+12 prior false-PASS substitutions reproduce against fe036 and all reject now;
+five intended contrasts plus59 substitutions pass their expected verdicts.
+Twenty actual ParentReceipt bindings and nine bounded-stream doubles pass,
+including16384-byte EOF,16385 overflow, lying Length, partial reads and unknown
+open/read/close/native text. Requested/read totals are recorded, not inferred
+from rejection. Prior14 independent product lifecycle cases replay unchanged;
+35 receiver source cases retain prior33 plus explicit waitthrow/passive paths.
+The prior38-case categories remain represented:14product,9receiver and15mode
+contrasts (the12 false passes now rejected). Counts overlap; do not sum repeats.
+All native API/constructors/query results are substituted where declared;
+source loops are finite-truncated only by the pure harness. No Add-Type/C# or
+native fixture executes locally; real source loops and lifetime rules remain.
+
 Correction after blocked db0dcead peer: durable launch/read UNKNOWN before
 attempt, one guarded original-owner stage loop and per-resource FAILED/DONE
 release ledgers replace catch-and-return. Unknown acquisition, query, sink or
