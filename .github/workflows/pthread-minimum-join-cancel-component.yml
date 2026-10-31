@@ -8,7 +8,7 @@ permissions:
   actions: read
 jobs:
   source-authority:
-    uses: gesher-runtime/gesher/.github/workflows/pthread-minimum-join-cancel-trusted-source.yml@2cb7a9731f1296c567eb6be3054a2b26dc2f3ea5
+    uses: gesher-runtime/gesher/.github/workflows/pthread-minimum-join-cancel-trusted-source.yml@70d73132368f08d855dd7d3d1603da9bd7c65bce
   diagnostic-producer:
     needs: source-authority
     runs-on: ubuntu-24.04
