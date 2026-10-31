@@ -35,106 +35,145 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
   $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
-  # Own the entire graph before any fallible process/reader acquisition.
-  $p = [Diagnostics.Process]::new()
-  $cancellation = [Threading.CancellationTokenSource]::new()
-  $pipes = @(@{ Name = 'stdout'; Reader = $null; Handle = $null; Task = $null; Copied = $false },
-             @{ Name = 'stderr'; Reader = $null; Handle = $null; Task = $null; Copied = $false })
-  $started = $false; $kernelComplete = $false; $tasksComplete = $false; $killAttempted = $false
-  $timedOut = $false; $code = -1; $out = ''; $closed = 0; $disposed = $false
-  $processHandle = $null; $processId = 0; $startTicks = 0; $image = ''
-  try {
-    $p.StartInfo = $psi
-    $started = $p.Start()
-    if (-not $started) { throw 'graphics process did not start' }
-    $processHandle = $p.SafeHandle
-    $processId = $p.Id; $startTicks = $p.StartTime.ToUniversalTime().Ticks
-    $image = [IO.Path]::GetFullPath($psi.FileName)
-    $pipes[0].Reader = $p.StandardOutput
-    $pipes[0].Handle = $pipes[0].Reader.BaseStream.SafeFileHandle
-    $pipes[1].Reader = $p.StandardError
-    $pipes[1].Handle = $pipes[1].Reader.BaseStream.SafeFileHandle
-    foreach ($pipe in $pipes) { $pipe.Task = $pipe.Reader.ReadToEndAsync($cancellation.Token) }
-    $kernelComplete = $p.WaitForExit($Seconds * 1000)
-    $timedOut = -not $kernelComplete
-    if ($timedOut) {
-      $killAttempted = $true
-      try { $p.Kill($true) } catch { $out += "`n(graphics kill failed: $_)" }
-      $kernelComplete = $p.WaitForExit(5000)
-    }
-    foreach ($pipe in $pipes) {
-      if ($pipe.Task.Wait(10000)) {
-        $out += $pipe.Task.Result; $pipe.Copied = $true
-      } else {
-        $timedOut = $true
-        $out += "`n($($pipe.Name) did not complete within ten seconds)"
+  # Original references survive every attempted call; FAILED never becomes DONE
+  # by retry. This same invocation is the owner, including error/report sinks.
+  $o = @{ Phase = 'Acquire'; Failed = $false; Launch = 'UNATTEMPTED'; P = $null;
+    Cancellation = $null; CancelState = 'UNATTEMPTED'; ProcessClose = 'UNATTEMPTED';
+    CancelClose = 'UNATTEMPTED'; Kernel = $false; Kill = $false; Tasks = $false;
+    Handle = $null; Pid = 0; Birth = [UInt64]0; NativeExit = $null; Out = '';
+    Pipes = @(@{ Reader = $null; Handle = $null; Value = [Int64]0; Task = $null; Read = 'UNATTEMPTED'; Close = 'UNATTEMPTED'; Copied = $false },
+              @{ Reader = $null; Handle = $null; Value = [Int64]0; Task = $null; Read = 'UNATTEMPTED'; Close = 'UNATTEMPTED'; Copied = $false }) }
+  while ($true) {
+    try {
+      if ($o.Phase -eq 'Acquire') {
+        $o.P = [Diagnostics.Process]::new()
+        $o.Cancellation = [Threading.CancellationTokenSource]::new()
+        $o.P.StartInfo = $psi
+        $o.Launch = 'UNKNOWN' # before invocation, including interruption/unreturned
+        if (-not $o.P.Start()) { throw 'process launch did not return owned child' }
+        $o.Launch = 'OWNED'
+        $o.Handle = $o.P.SafeHandle
+        $o.Pid = $o.P.Id
+        $o.Birth = [UInt64]$o.P.StartTime.ToUniversalTime().ToFileTimeUtc()
+        for ($i = 0; $i -lt 2; $i++) {
+          $q = $o.Pipes[$i]
+          $q.Read = 'UNKNOWN'
+          $q.Reader = if ($i -eq 0) { $o.P.StandardOutput } else { $o.P.StandardError }
+          $q.Handle = $q.Reader.BaseStream.SafeFileHandle
+          $q.Value = $q.Handle.DangerousGetHandle().ToInt64()
+          $q.Task = $q.Reader.ReadToEndAsync($o.Cancellation.Token)
+          $q.Read = 'OWNED'
+        }
+        $o.Phase = 'Observe'
       }
-    }
-    if (-not $timedOut -and $kernelComplete) { $code = $p.ExitCode }
-  } catch {
-    $timedOut = $true; $out += "`n(graphics process/reader failure: $_)"
-  } finally {
-    # An expired operation/EOF verdict is permanent. Cleanup cannot grant PASS.
-    if ($started -and -not $kernelComplete) {
-      $timedOut = $true
-      if (-not $killAttempted) {
-        $killAttempted = $true
-        try { $p.Kill($true) } catch { $out += "`n(final graphics kill failed: $_)" }
-        try { $kernelComplete = $p.WaitForExit(5000) } catch { $out += "`n(kernel completion unavailable: $_)" }
+      if ($o.Phase -eq 'Observe') {
+        $o.Kernel = $o.P.WaitForExit($Seconds * 1000)
+        if (-not $o.Kernel) { $o.Failed = $true }
+        if ($o.Kernel) { $o.NativeExit = [int]$o.P.ExitCode }
+        if (-not $o.Kernel -and -not $o.Kill) {
+          $o.Kill = $true # one reservation BEFORE attempt
+          $o.P.Kill($true)
+          $o.Kernel = $o.P.WaitForExit(5000)
+          if ($o.Kernel) { $o.NativeExit = [int]$o.P.ExitCode }
+        }
+        foreach ($q in $o.Pipes) {
+          if ($q.Task.Wait(10000)) { $o.Out += $q.Task.Result; $q.Copied = $true }
+          else { $o.Failed = $true; $o.Out += "`n(reader did not complete within ten seconds)" }
+        }
+        $o.Phase = 'Settle'
       }
-    }
-    if (-not $started) { $kernelComplete = $true }
-    try { $cancellation.Cancel() } catch { $timedOut = $true; $out += "`n(cancel failed: $_)" }
-    $tasks = [Threading.Tasks.Task[]]@($pipes | Where-Object { $null -ne $_.Task } | ForEach-Object { $_.Task })
-    if ($tasks.Count) { try { [void][Threading.Tasks.Task]::WaitAll($tasks, 5000) } catch {} }
-    $tasksComplete = @($tasks | Where-Object { -not $_.IsCompleted }).Count -eq 0
-    if (-not $kernelComplete -or -not $tasksComplete) {
-      $timedOut = $true
-      Write-Host "FAIL  dalvikvm: $Name (failed containment; original parent passively retains process/readers/tasks)"
-      # A local/static root alone dies with pwsh. Keep THIS original invocation
-      # alive until settlement. No new kill, operation budget or success retry.
-      # External forced termination of this owner is explicitly unqualified.
-      while (-not $kernelComplete -or -not $tasksComplete) {
-        if (-not $kernelComplete) { try { $kernelComplete = $p.WaitForExit(5000) } catch {} }
-        foreach ($task in $tasks) { if (-not $task.IsCompleted) { try { [void]$task.Wait(5000) } catch {} } }
-        $tasksComplete = @($tasks | Where-Object { -not $_.IsCompleted }).Count -eq 0
+      if ($o.Phase -eq 'Settle') {
+        # Unknown launch/read outcome cannot be reconstructed from null fields.
+        if ($o.Launch -eq 'UNKNOWN' -or @($o.Pipes | Where-Object { $_.Read -eq 'UNKNOWN' }).Count) {
+          $o.Failed = $true; [Threading.Thread]::Sleep(5000); continue
+        }
+        if ($o.Launch -eq 'UNATTEMPTED') { $o.Kernel = $true }
+        if (-not $o.Kernel) {
+          $o.Failed = $true
+          if (-not $o.Kill) { $o.Kill = $true; $o.P.Kill($true) }
+          $o.Kernel = $o.P.WaitForExit(5000)
+          if ($o.Kernel) { $o.NativeExit = [int]$o.P.ExitCode }
+        }
+        if ($o.CancelState -eq 'UNATTEMPTED') {
+          $o.CancelState = 'FAILED'
+          if ($null -ne $o.Cancellation) { $o.Cancellation.Cancel() }
+          $o.CancelState = 'DONE'
+        }
+        if ($o.CancelState -ne 'DONE') { $o.Failed = $true; [Threading.Thread]::Sleep(5000); continue }
+        $o.Tasks = $true
+        foreach ($q in $o.Pipes) {
+          if ($q.Read -eq 'OWNED' -and -not $q.Task.IsCompleted) {
+            $o.Tasks = $false
+            try { [void]$q.Task.Wait(5000) } catch { $o.Failed = $true }
+          }
+        }
+        foreach ($q in $o.Pipes) { if ($q.Read -eq 'OWNED' -and -not $q.Task.IsCompleted) { $o.Tasks = $false } }
+        if (-not $o.Kernel -or -not $o.Tasks) { $o.Failed = $true; continue }
+        $o.Phase = 'Close'
       }
-    }
-    # Only exact kernel AND every acquired task terminal permits disposal.
-    foreach ($pipe in $pipes) {
-      if ($null -ne $pipe.Task -and -not $pipe.Copied -and
-          $pipe.Task.Status -eq [Threading.Tasks.TaskStatus]::RanToCompletion) { $out += $pipe.Task.Result }
-      if ($null -ne $pipe.Reader) {
-        try {
-          if ($null -ne $pipe.Handle) {
-            if ([GtestProcessNativeHandles]::CloseOwnedReader($pipe.Reader, $pipe.Handle)) { $closed++ }
-            else { $timedOut = $true; $out += "`n(owned graphics pipe close not proved)" }
-          } else { $pipe.Reader.Dispose(); $timedOut = $true }
-        } catch { $timedOut = $true; $out += "`n(reader close failed: $_)" }
+      if ($o.Phase -eq 'Close') {
+        # No acquisition/task/kernel query is repeated after uncertain close.
+        foreach ($q in $o.Pipes) {
+          if ($q.Close -eq 'FAILED') { throw 'uncertain reader close retained' }
+          if ($q.Close -eq 'DONE') { continue }
+          if ($q.Read -eq 'OWNED' -and -not $q.Copied -and $q.Task.Status -eq [Threading.Tasks.TaskStatus]::RanToCompletion) {
+            $o.Out += $q.Task.Result; $q.Copied = $true
+          }
+          $q.Close = 'FAILED'
+          if ($null -ne $q.Reader) {
+            if ($null -eq $q.Handle -or -not [GtestProcessNativeHandles]::CloseOwnedReader($q.Reader, $q.Handle)) {
+              throw 'exact reader close/native invalidity unavailable'
+            }
+          }
+          $q.Close = 'DONE'
+        }
+        if ($o.CancelClose -eq 'FAILED') { throw 'uncertain cancellation close retained' }
+        if ($o.CancelClose -eq 'UNATTEMPTED') {
+          $o.CancelClose = 'FAILED'
+          if ($null -ne $o.Cancellation) { $o.Cancellation.Dispose() }
+          $o.CancelClose = 'DONE'
+        }
+        if ($o.ProcessClose -eq 'FAILED') { throw 'uncertain process close retained' }
+        if ($o.ProcessClose -eq 'UNATTEMPTED') {
+          $o.ProcessClose = 'FAILED'
+          if ($null -ne $o.P) { $o.P.Dispose() }
+          if ($o.Launch -eq 'OWNED' -and ($null -eq $o.Handle -or -not $o.Handle.IsClosed)) { throw 'process close unproved' }
+          $o.ProcessClose = 'DONE'
+        }
+        $o.Phase = 'Report'
       }
+      if ($o.Phase -eq 'Report') {
+        if ($env:GESHER_CI_PROCESS_TRACE -eq '1') {
+          $script:GraphicsDexObservation = [pscustomobject]@{ Source = $env:GITHUB_SHA; Case = $env:GESHER_GRAPHICS84_MODE;
+            Nonce = $env:GESHER_GRAPHICS84_NONCE; Pid = [UInt32]$o.Pid; CreationFiletime = [UInt64]$o.Birth;
+            KernelComplete = [bool]$o.Kernel; NativeExitCode = $o.NativeExit; KillReserved = [bool]$o.Kill; Released = $true }
+          Write-Host "ACTUAL_GRAPHICS_CLEANUP pid=$($o.Pid) kernel=$($o.Kernel) tasks=$($o.Tasks) pipes=2 disposed=True output=$($o.Pipes[0].Value) error=$($o.Pipes[1].Value)"
+        }
+        $timedOut = [bool]$o.Failed
+        $out = $o.Out
+        $code = if ($o.Failed -or $null -eq $o.NativeExit) { -1 } else { $o.NativeExit }
+        # All downstream report/symbolizer/root-release boundaries stay inside
+        # this barrier. A throwing sink cannot discard the retained owner.
+        if ($timedOut) { $out += "`n(timed out after $Seconds s)" }
+        if ($code -eq 0 -and $out.Contains("$Main all passed")) {
+          Write-Host "PASS  dalvikvm: $Name"
+          ($out -split "`n" | Select-String -Pattern '^(PASS|FAIL)  ') | Out-Host
+        } else {
+          Write-Host ("FAIL  dalvikvm: $Name (exit 0x{0:X8})" -f $code)
+          if (Test-Path "$Dir/dalvikvm.map") { $out | python "$PSScriptRoot/../../../tools/symbolize.py" "$Dir/dalvikvm.map" | Out-Host }
+          else { Write-Host $out }
+          $script:failed++
+        }
+        break
+      }
+    } catch {
+      $o.Failed = $true
+      if ($o.Phase -in @('Acquire','Observe')) { $o.Phase = 'Settle' }
+      # Protected parking; no sink/query/close is required to retain ownership.
+      try { [Threading.Thread]::Sleep(5000) } catch {}
     }
-    try { $cancellation.Dispose() } catch { $timedOut = $true }
-    try { $p.Dispose(); $disposed = $null -eq $processHandle -or $processHandle.IsClosed } catch { $timedOut = $true }
   }
-  if ($env:GESHER_CI_PROCESS_TRACE -eq '1') {
-    $outputHandle = if ($null -ne $pipes[0].Handle) { $pipes[0].Handle.DangerousGetHandle() } else { [IntPtr]::Zero }
-    $errorHandle = if ($null -ne $pipes[1].Handle) { $pipes[1].Handle.DangerousGetHandle() } else { [IntPtr]::Zero }
-    Write-Host "ACTUAL_GRAPHICS_CLEANUP pid=$processId start=$startTicks expectedimage=$image kernel=$kernelComplete tasks=$tasksComplete pipes=$closed disposed=$disposed output=$outputHandle error=$errorHandle"
-  }
-  if ($timedOut -or -not $disposed) { $code = -1 }
-  if ($timedOut) { $out += "`n(timed out after $Seconds s)" }
-  if ($code -eq 0 -and $out.Contains("$Main all passed")) {
-    Write-Host "PASS  dalvikvm: $Name"
-    ($out -split "`n" | Select-String -Pattern '^(PASS|FAIL)  ') | Out-Host
-  } else {
-    Write-Host ("FAIL  dalvikvm: $Name (exit 0x{0:X8})" -f $code)
-    if (Test-Path "$Dir/dalvikvm.map") {
-      $out | python "$PSScriptRoot/../../../tools/symbolize.py" "$Dir/dalvikvm.map" | Out-Host
-    } else {
-      Write-Host $out
-    }
-    $script:failed++
-  }
+
 }
 
 # android.graphics on framework.jar with hwui's natives (Bitmap, Canvas, Paint
