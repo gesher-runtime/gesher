@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <new>
 using namespace gesher_mman_internal;
-namespace { long budget = -1; long live = 0; long calls = 0; long injected = 0; }
+namespace { thread_local long budget = -1; thread_local long live = 0; thread_local long calls = 0; thread_local long injected = 0; }
 void* operator new(std::size_t size) {
   ++calls;
   if (budget == 0) { ++injected; throw std::bad_alloc(); }
