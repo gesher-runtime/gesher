@@ -138,6 +138,19 @@ function Assert-OwnedStageCleanupPath([string]$Root,[string]$OwnedWork) {
  foreach($path in @($Root,$OwnedWork)){$null=Assert-OrdinaryWindowsPath $path}
  if($Root -cne ($OwnedWork+'\stage') -or !$Root.StartsWith($OwnedWork+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'UNAVAILABLE: cleanup outside exact owned stage'}
 }
+function New-StageLifetimeRoot([hashtable]$Owner) {
+ if($null -eq $Owner -or !$Owner.Contains('handles')){throw 'UNAVAILABLE: missing complete stage owner'}
+ # A normal CLR handle is a durable strong root until explicit Free, even if
+ # the script/runspace unwinds. A global PowerShell variable is insufficient.
+ # https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.gchandletype
+ @{handle=[Runtime.InteropServices.GCHandle]::Alloc($Owner,[Runtime.InteropServices.GCHandleType]::Normal);active=$true}
+}
+function Release-StageLifetimeRoot([hashtable]$Root,[bool]$BothCompleted,[bool]$StreamsClosed) {
+ if($null -eq $Root){return $false}
+ if(!$BothCompleted -or !$StreamsClosed){return $false}
+ if($Root.active){$Root.handle.Free();$Root.active=$false}
+ $true
+}
 function Get-StageManifestText([object[]]$Records) {
  $lines=[Collections.Generic.List[string]]::new()
  $names=[string[]]@($Records|ForEach-Object{$_.relative});[Array]::Sort($names,[StringComparer]::Ordinal)
@@ -391,8 +404,12 @@ if($env:GITHUB_ACTIONS -cne 'true' -or !$IsWindows){
 $clock=[Diagnostics.Stopwatch]::StartNew()
 $child=$null;$debugger=$null;$childHandle=$null;$debuggerHandle=$null;$work=$null;$ok=$false
 $stage=@{root=$null;handles=[Collections.Generic.List[object]]::new();expected=@();manifest=@()}
+$stageLifetimeRoot=$null
 $processCompletion=@{child=$false;debugger=$false}
 try {
+ # Reserve the only CLR root before opening any stage stream or owned process;
+ # failure here leaves no such resources. Retain it on failed kernel cleanup.
+ $stageLifetimeRoot=New-StageLifetimeRoot $stage
  Emit-PreflightRecord 'FONT_DEBUGGER_HOST_PROFILE' @{os_version=[Environment]::OSVersion.VersionString;framework=[Runtime.InteropServices.RuntimeInformation]::FrameworkDescription;powershell=$PSVersionTable.PSVersion.ToString();runner_os=$env:RUNNER_OS;runner_arch=$env:RUNNER_ARCH;image_os=$env:ImageOS;image_version=$env:ImageVersion;source=$env:GITHUB_SHA;run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT;diagnostic_only=$true}
  $probeRoot=Resolve-PreflightLiteral $ProbeDirectory $true
  python tools/fonts/debugger-probe.py verify --root $probeRoot
@@ -544,11 +561,14 @@ try {
     $stageCleanupError=$_.Exception.Message
     Emit-PreflightRecord 'FONT_DEBUGGER_STAGE_CLEANUP_ERROR' @{error=$stageCleanupError;process_completion=$processCompletion;stage_handles_closed=$stageHandlesClosed;files_retained=$true}
    }
+   # Closed-file cleanup errors need no live handle retention, but an incomplete
+   # process/stream must keep its CLR root until this parent process terminates.
+   $stageRootReleased=Release-StageLifetimeRoot $stageLifetimeRoot $bothCompleted $stageHandlesClosed
    foreach($pipe in @($out,$err,$dout,$derr)){
     if($null -ne $pipe -and $null -ne $pipe.Task){try{$null=$pipe.Task.Wait(100)}catch{}}
    }
    $closed=($null -eq $childHandle -or $childHandle.IsClosed) -and ($null -eq $debuggerHandle -or $debuggerHandle.IsClosed)
-   Emit-PreflightRecord 'FONT_DEBUGGER_PREFLIGHT_SUMMARY' @{tool_request_and_detach_completed=($ok -and $closed -and $bothCompleted -and $stageHandlesClosed -and !$stageCleanupError);owned_handles_closed=$closed;owned_kernel_completion=$bothCompleted;stage_handles_closed=$stageHandlesClosed;stage_cleanup_error=$stageCleanupError;layout='STAGED_SIGNED_COPY_FROM_REGISTERED_SDK';loader_closure='UNPROVED_BOUNDED_MODULE_SNAPSHOTS_ONLY';font_owner_qualified=$false;host_WCT_Windows2025_qualified=$false;private_CRT_owner_symbols_qualified=$false;full_qualification=$false;symbol_availability='OBSERVATION_PENDING';elapsed_ms=$clock.ElapsedMilliseconds}
+   Emit-PreflightRecord 'FONT_DEBUGGER_PREFLIGHT_SUMMARY' @{tool_request_and_detach_completed=($ok -and $closed -and $bothCompleted -and $stageHandlesClosed -and !$stageCleanupError -and $stageRootReleased);owned_handles_closed=$closed;owned_kernel_completion=$bothCompleted;stage_handles_closed=$stageHandlesClosed;stage_cleanup_error=$stageCleanupError;stage_CLR_root_released=$stageRootReleased;stage_CLR_root_retained=($null -ne $stageLifetimeRoot -and $stageLifetimeRoot.active);retained_root_scope='SURVIVING_CLR_PARENT_PROCESS_ONLY';layout='STAGED_SIGNED_COPY_FROM_REGISTERED_SDK';loader_closure='UNPROVED_BOUNDED_MODULE_SNAPSHOTS_ONLY';font_owner_qualified=$false;host_WCT_Windows2025_qualified=$false;private_CRT_owner_symbols_qualified=$false;full_qualification=$false;symbol_availability='OBSERVATION_PENDING';elapsed_ms=$clock.ElapsedMilliseconds}
    if($stageCleanupError){throw $stageCleanupError}
    if(!$closed){throw 'UNAVAILABLE: owned process handle closure failed'}
   }
