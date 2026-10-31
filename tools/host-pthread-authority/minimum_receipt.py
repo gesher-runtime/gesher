@@ -80,6 +80,10 @@ def context():
         assert os.environ['GITHUB_REF'] == 'refs/heads/wip/tcp-minimum-selection'
         assert os.environ['GITHUB_WORKFLOW'] == 'net-tcp-selected-component'
         assert os.environ['TCP_SUPPLIER_ROLE'] == 'selected-minimum'
+    elif os.environ.get('GESHER_HOST_PTHREAD_CALLER')=='coherent-selected-full/build':
+        sys.path.insert(0,str(ROOT/'tools/toolchain'))
+        import coherent_selected_context as coherent
+        coherent.context(os.environ,'selected-minimum')
     elif os.environ.get('GESHER_HOST_PTHREAD_CALLER')=='pthread-first-link/build':
         sys.path.insert(0,str(ROOT/'tools/toolchain'))
         import first_link_context

@@ -42,10 +42,13 @@ jobs:
   # Everything is cross-compiled on Linux with llvm-mingw, then executed on
   # real Windows runners.
   build:
-    needs: [artifact-preflight]
+    needs: [artifact-preflight, union-trusted-source]
     runs-on: ubuntu-24.04
     env:
-      GESHER_HOST_PTHREAD_SELECTION: ${{ github.ref == 'refs/heads/wip/pthread-production-factory' && 'selected-minimum' || 'publisher' }}
+      GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher' }}
+      GESHER_HOST_PTHREAD_CALLER: ${{ github.ref == 'refs/heads/wip/coherent-selected-tcp' && 'coherent-selected-full/build' || 'ci/build' }}
+      GESHER_COHERENT_FULL_AUTHORIZED_SOURCE: ${{ needs.union-trusted-source.outputs.source }}
+      GESHER_COHERENT_FULL_POLICY_REF: ${{ needs.union-trusted-source.outputs.policy_ref }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,7 +59,7 @@ jobs:
           ccache-key: runtime
           # Source-only proposal: no main/default change and no dispatch approval.
           pthread-supplier: ${{ env.GESHER_HOST_PTHREAD_SELECTION }}
-          pthread-caller: ci/build
+          pthread-caller: ${{ env.GESHER_HOST_PTHREAD_CALLER }}
 
       - name: Bind the verified compiler root for this product build
         env:
@@ -69,7 +72,7 @@ jobs:
             selected-minimum)
               test -n "$SELECTED_LLVM" && test -n "$SELECTED_RECEIPT" && test -n "$SELECTED_RECEIPT_SHA256"
               llvm="$SELECTED_LLVM"
-              printf 'GESHER_SELECTED_PTHREAD_RECEIPT=%s\nGESHER_SELECTED_PTHREAD_RECEIPT_SHA256=%s\nGESHER_HOST_PTHREAD_CALLER=ci/build\n' "$SELECTED_RECEIPT" "$SELECTED_RECEIPT_SHA256" >> "$GITHUB_ENV"
+              printf 'GESHER_SELECTED_PTHREAD_RECEIPT=%s\nGESHER_SELECTED_PTHREAD_RECEIPT_SHA256=%s\n' "$SELECTED_RECEIPT" "$SELECTED_RECEIPT_SHA256" >> "$GITHUB_ENV"
               ;;
             publisher) llvm="$HOME/toolchain/$LLVM_MINGW_NAME" ;;
             *) exit 1 ;;

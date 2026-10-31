@@ -29,6 +29,9 @@ def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')
 
 
 def caller(env,selection):
+    if env.get('GESHER_HOST_PTHREAD_CALLER') == 'coherent-selected-full/build':
+        import coherent_selected_context as coherent
+        return coherent.context(env,selection)
     if env.get('GESHER_HOST_PTHREAD_CALLER') == 'pthread-native-off-receiver/build':
         import native_off_receiver_context as native
         return native.context(env,selection)
@@ -47,18 +50,22 @@ def caller(env,selection):
 
 
 def recipe(caller_key='ci/build'):
-    assert caller_key in ('ci/build', focused.CALLER, 'pthread-native-off-receiver/build')
+    assert caller_key in ('ci/build', focused.CALLER, 'pthread-native-off-receiver/build', 'coherent-selected-full/build')
     paths=CORE_FILES+['tools/toolchain/prepare_host_pthread.py']
     # Both exact callers import this closed tuple; bind the shared policy source
     # even when preserving the original production caller/default semantics.
     paths+=['tools/toolchain/first_link_context.py']
     if caller_key=='pthread-native-off-receiver/build':paths+=['tools/toolchain/native_off_receiver_context.py']
+    if caller_key=='coherent-selected-full/build':paths+=['tools/toolchain/coherent_selected_context.py']
     result=dict(schema='gesher-original-profile-pthread-recipe-v1',caller=caller_key,pin=json.loads(json.dumps(minimum.PIN)),
                 core_sources={p:sha(ROOT/p) for p in paths},
                 selected_role=minimum.ROLE,publisher_role=ROLES['publisher-control'],
                 supplier_cflags='-g -O2 -mguard=cf -Werror -Xclang -fdump-record-layouts',
                 consumer_flags='unchanged product Win10; not supplier configure flags',
                 authority_policy='fresh archive; typed SDK601 before make; actual480/allfields; original public headers/aliases/exports/imports and actual DLL source object')
+    if caller_key == 'coherent-selected-full/build':
+        import coherent_selected_context as coherent
+        result['coherent_selected_caller']=coherent.TUPLE
     if caller_key == focused.CALLER:result['focused_caller']=focused.TUPLE
     if caller_key=='pthread-native-off-receiver/build':
         import native_off_receiver_context as native
