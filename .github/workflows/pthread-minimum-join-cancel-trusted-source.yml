@@ -15,7 +15,7 @@ jobs:
       source: ${{ steps.gate.outputs.source }}
     env:
       GH_TOKEN: ${{ github.token }}
-      PTHREAD_MINIMUM_JOIN_CANCEL_CALLER_COMMIT: ${{ vars.PTHREAD_MINIMUM_JOIN_CANCEL_CALLER_COMMIT }}
+      PTHREAD_MINIMUM_JOIN_NONTAIL_CALLER_COMMIT: ${{ vars.PTHREAD_MINIMUM_JOIN_NONTAIL_CALLER_COMMIT }}
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0, persist-credentials: false}
@@ -25,8 +25,8 @@ jobs:
         run: |
           python3 -I -B - <<'PYCODE'
           import hashlib, subprocess, types
-          pins = {'.github/workflows/pthread-minimum-join-cancel-component.yml': '7a185ee3dde22979e1d822d1920670fccb00756f', 'docs/handoff/tracks/pthread-minimum-join-cancellation-candidate.md': 'f6997db56bb9a1efcc46ffd2934b7544bb20b573', 'tests/native/host_pthread_minimum_join_cancel_candidate.c': 'f2b98089501d10e68f87fbea1d0bc8b078b1c421', 'tools/host-pthread-authority/audit-minimum-join-witness-source.py': 'c37807322d9e39b072b4db062fe5db693f4d6c34', 'tools/host-pthread-authority/collect-minimum-join-object-wip.sh': 'aeea25a46e7b6d2b43c1ca26f8daf17e86ef80a3', 'tools/host-pthread-authority/minimum-join-wait-diagnostic.patch': 'a2fd3b530c2cb0cd8738103a974cf99fe2f31c23', 'tools/host-pthread-authority/minimum_join_identity_candidate.py': 'cbfd303eda3a0b1d827ebc28bea0c6fae6a96a59', 'tools/host-pthread-authority/run-minimum-join-cancel-candidate.ps1': 'd0b5f35c06e11289f12594e29e03a6693d39e663', 'tools/host-pthread-authority/test_minimum_join_identity_candidate.py': '4cfa840d4a48dae49685631486b09fd4d0179d4f', 'tools/host-pthread-authority/minimum_join_collector_policy.py': '69be465ceed3d3f02583d0bfdace49e01bd1f952'}
-          policy = '69be465ceed3d3f02583d0bfdace49e01bd1f952'
+          pins = {'.github/workflows/pthread-minimum-join-cancel-component.yml': '12a9daa63058480e78b06d25bc83893db1e1182e', 'docs/handoff/tracks/pthread-minimum-join-cancellation-candidate.md': '3c68436d009174e1ab3d34bbe1faa543f1790a15', 'tests/native/host_pthread_minimum_join_cancel_candidate.c': 'f2b98089501d10e68f87fbea1d0bc8b078b1c421', 'tools/host-pthread-authority/audit-minimum-join-witness-source.py': 'a74f04c7e3dc80e23f855170adf58067fb67ecb4', 'tools/host-pthread-authority/collect-minimum-join-object-wip.sh': '826dc12499ae6f02e4f338dcecf13598e192f029', 'tools/host-pthread-authority/minimum-join-wait-diagnostic.patch': '9c260f5073bd9b010b71cdec69aec3ed1d2eee7e', 'tools/host-pthread-authority/minimum_join_identity_candidate.py': 'cdcf5120329f6571602a8ba90a4186ed9dc78d3e', 'tools/host-pthread-authority/run-minimum-join-cancel-candidate.ps1': 'd0b5f35c06e11289f12594e29e03a6693d39e663', 'tools/host-pthread-authority/test_minimum_join_identity_candidate.py': '4cfa840d4a48dae49685631486b09fd4d0179d4f', 'tools/host-pthread-authority/minimum_join_collector_policy.py': 'fd0b7468587b2f8bf2c7dabd7e4aaa54736d69ee'}
+          policy = 'fd0b7468587b2f8bf2c7dabd7e4aaa54736d69ee'
           raw = subprocess.check_output(['git','cat-file','blob',policy])
           assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==policy
           module=types.ModuleType('immutable_collector_gate')

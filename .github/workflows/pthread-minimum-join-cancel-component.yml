@@ -1,14 +1,14 @@
 name: pthread-minimum-join-cancel-component
 on:
   push:
-    branches: [wip/pthread-minimum-join-cancellation]
+    branches: [wip/pthread-minimum-join-nontail-object]
     paths: [.github/workflows/pthread-minimum-join-cancel-component.yml]
 permissions:
   contents: read
   actions: read
 jobs:
   source-authority:
-    uses: gesher-runtime/gesher/.github/workflows/pthread-minimum-join-cancel-trusted-source.yml@70d73132368f08d855dd7d3d1603da9bd7c65bce
+    uses: gesher-runtime/gesher/.github/workflows/pthread-minimum-join-cancel-trusted-source.yml@0000000000000000000000000000000000000000
   diagnostic-producer:
     needs: source-authority
     runs-on: ubuntu-24.04
