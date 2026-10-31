@@ -16,6 +16,12 @@ elseif("$ENV{GESHER_HOST_PTHREAD_CALLER}" STREQUAL "pthread-native-off-receiver/
   if(NOT _gesher_native_off_context EQUAL 0)
     message(FATAL_ERROR "Exact Native OFF path/ref/source/policy caller authority failed")
   endif()
+elseif("$ENV{GESHER_HOST_PTHREAD_CALLER}" STREQUAL "coherent-selected-full/build")
+  execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/coherent_selected_context.py"
+                  RESULT_VARIABLE _gesher_coherent_selected_context)
+  if(NOT _gesher_coherent_selected_context EQUAL 0)
+    message(FATAL_ERROR "Exact coherent selected full caller authority failed")
+  endif()
 elseif(NOT "$ENV{GESHER_HOST_PTHREAD_CALLER}" STREQUAL "ci/build")
   message(FATAL_ERROR "Unknown selected link caller")
 endif()
