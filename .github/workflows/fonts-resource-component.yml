@@ -15,7 +15,7 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 jobs:
   trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/fonts-resource-trusted-source.yml@da7ee25cdb1b3a483c3a6f7b72a288192024ed03
+    uses: gesher-runtime/gesher/.github/workflows/fonts-resource-trusted-source.yml@0000000000000000000000000000000000000000
   fixture-producer:
     needs: trusted-source
     runs-on: ubuntu-24.04
