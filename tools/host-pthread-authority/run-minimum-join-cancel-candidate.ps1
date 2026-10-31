@@ -1,10 +1,11 @@
+param([Parameter(Mandatory=$true)][ValidateSet('static','dynamic')][string]$Mode)
 # Source-only scaffold: never acknowledges a generic wait as the target join.
 # Exact independently verified target/stack evidence and authority are not yet implemented.
 if ($env:GITHUB_ACTIONS -cne 'true') { throw 'CI only' }
 $ErrorActionPreference = 'Stop'
 $start = [Diagnostics.ProcessStartInfo]::new()
-$start.FileName = Join-Path $pwd 'minimum-join-cancel/candidate.exe'
-$start.WorkingDirectory = Join-Path $pwd 'minimum-join-cancel'
+$start.FileName = Join-Path $pwd ("minimum-join-runtime-bundle/$Mode.exe")
+$start.WorkingDirectory = Join-Path $pwd 'minimum-join-runtime-bundle'
 $start.UseShellExecute = $false
 $start.CreateNoWindow = $true
 $start.RedirectStandardInput = $true
