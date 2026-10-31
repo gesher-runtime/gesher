@@ -250,8 +250,9 @@ def version_payload(payload):
             child=block(next_at,end);children.append(child);cursor=child['end']
         return {'at':at,'end':end,'key':key,'type':kind,'value_length':value_length,'value':value,'children':children}
     root=block(0,len(payload))
-    require(root['end']==len(payload) and root['key']=='VS_VERSION_INFO' and root['type']==0 and
-            root['value_length']==52,'version root/fixed52')
+    require(root['end']<=len(payload) and len(payload)-root['end']<=8 and root['key']=='VS_VERSION_INFO' and
+            root['type']==0 and root['value_length']==52,'version root/fixed52')
+    zeros(root['end'],len(payload),len(payload))
     fixed=list(struct.unpack('<13I',root['value']))
     require(fixed[0]==0xfeef04bd and fixed[1]==0x10000,'fixed signature/structure version')
     def components(ms,ls):return [ms>>16,ms&65535,ls>>16,ls&65535]
