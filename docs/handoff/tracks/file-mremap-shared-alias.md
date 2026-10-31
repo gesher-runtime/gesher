@@ -1,3 +1,30 @@
+# Current routed request executor / fixed GroupFile continuation WIP
+
+Common Punch now consumes request-wide caught preparation before any of its OS
+transitions. All per-piece snapshots/holes/kept metadata/private buffers/failure
+records and aggregate pin bounds exist first; explicit legacy duplicates and source
+queries/private checked temporary-read+restore precede retirement. Executor consumes
+detached partition nodes and shrinks existing storage only, restores complete mapped
+view/live/protection state on partial failure, and checks coalescing before merge.
+Failed partial outcomes remain tracked and contained. No native code has run.
+
+Fixed GroupFile over an existing group now prepares before new section/reopen
+acquisition, retains the same request through Punch, consumes staged constructor
+tail metadata instead of late SplitEntry, explicitly transfers section ownership,
+and cleans failed constructors by checked nonallocating exact-partition traversal.
+FillAnonymous/constructor protection metadata is updated after actual OS success.
+
+NOT complete request-wide source closure: fresh Reserve/new-group paths still use
+legacy allocation/publication and are not routed through preallocated reservations;
+temporary CopyFromFile map/section close ownership remains to integrate; actual
+production registry-capacity/prepfail-zero-OS/coalesce-failure child controls and
+full current-source/native qualification remain missing. Source allocator fixtures
+are meaningful helper code, not executed target results. A DIFFERENT complete peer
+must assess all executor/constructor changes after remaining implementation, not
+treat earlier preparation-only or this WIP as positive acceptance.
+
+Historical text below is superseded where it says the request plan is not routed.
+
 # Request-wide preparation data WIP (not routed to production executor yet)
 
 PreparedPunchRequest now constructs caught request-wide Region snapshots, all
