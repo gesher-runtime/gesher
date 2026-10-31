@@ -6,6 +6,19 @@ m=types.ModuleType('manifest')
 exec(compile(Path(__file__).with_name('manifest.py').read_bytes(),'manifest.py','exec'),m.__dict__)
 
 class ManifestTests(unittest.TestCase):
+    def test_runner_preserves_original_bootstrap(self):
+        root=Path(__file__).resolve().parents[2]
+        old=(root/'.github/workflows/ci-processes.yml').read_text(encoding='utf-8').split('        run: |\n',1)[1]
+        original='\n'.join(line[10:] if line else '' for line in old.splitlines())+'\n'
+        runner=(root/'tools/ci_graphics_processes/run-fixture.ps1').read_text(encoding='utf-8')
+        start=runner.index('# Additional original dependencies required by the GraphicsDex body.\n')
+        end=runner.index('. "$pwd/tests/windows/tracks/84-ci-processes.ps1"',start)
+        extra=runner[start:end]
+        self.assertIn('tests/windows/helpers/ProcessReaderHandles.ps1',extra)
+        self.assertIn('tests/windows/run-tests.ps1',extra)
+        self.assertIn("$noDrive.Count -ne 1",extra)
+        self.assertEqual(runner[:start]+runner[end:],original)
+
     def test_binding_and_negative_substitutions(self):
         context={'repository':'gesher-runtime/gesher','repository_id':'1426153186',
                  'source':'a'*40,'run':'123','attempt':'1','guard':'b'*40}
