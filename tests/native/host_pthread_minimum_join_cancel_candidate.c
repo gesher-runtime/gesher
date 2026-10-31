@@ -132,12 +132,15 @@ int main(void) {
   check(compare && observed_tid == tid && compare(observed_target, owned_target),
         "actual prewait handle object and joiner identity");
   printf("JOIN_CANCEL_PREWAIT tid=%lu target_same_object=1 phase=1\n", (unsigned long)observed_tid);
-  capture_joiner_stack(owned_joiner, tid);
   printf("JOIN_CANCEL_TARGET pid=%lu tid=%lu handle=%llu alive=1\n",
          (unsigned long)GetCurrentProcessId(), (unsigned long)GetThreadId(owned_target),
          (unsigned long long)(uintptr_t)owned_target);
   printf("JOIN_CANCEL_WAIT_WITNESS tid=%lu\n", (unsigned long)tid);
-  /* Controller acknowledges only after sampling this exact TID in OS wait. */
+  /* First command requests capture; it is not a successful wait assertion. */
+  check(fgets(input, sizeof input, stdin) && strcmp(input, "sample\n") == 0, "capture request");
+  capture_joiner_stack(owned_joiner, tid);
+  puts("JOIN_CANCEL_STACK_COMPLETE");
+  /* Controller acknowledges only after independent target-bound validation. */
   check(fgets(input, sizeof input, stdin) && strcmp(input, "observed\n") == 0, "wait witness");
   check(WaitForSingleObject(owned_joiner, 0) == WAIT_TIMEOUT, "joiner still live");
   check(pthread_cancel(joiner) == 0, "cancel request");
