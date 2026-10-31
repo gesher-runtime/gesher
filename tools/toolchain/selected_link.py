@@ -5,6 +5,7 @@ Missing/failed capture is never evidence that a target does not use pthread.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -52,7 +53,8 @@ def identity(data, raw):
                 original_profile=a['original_profile'],
                 ledger_sources={p: factory.sha(ROOT / p) for p in (
                     'tools/toolchain/selected_link.py',
-                    'tools/toolchain/selected_link.cmake')})
+                    'tools/toolchain/selected_link.cmake',
+                    'tools/fonts/verify-standalone-link.py')})
 
 
 def compiler_identity(driver, env=os.environ):
@@ -181,10 +183,36 @@ def provider_name(name):
     return name.startswith(('pthread_', '_pthread', '__pthread', '__pth_')) or name in ('__dyn_tls_pthread', '__xl_f')
 
 
+def map_records(mapping):
+    """Reuse the qualified GNU hierarchy/range gate before reading any RVA."""
+    path = ROOT / 'tools/fonts/verify-standalone-link.py'
+    assert factory.sha(path) == '7c52eca57259313f43aeea27e6aefa5e50cde6c0c5ddb4abc2ad6143fbb4af06', 'Qualified map schema parser changed'
+    spec = importlib.util.spec_from_file_location('selected_qualified_gnu_map', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    expected = module.map_rows(mapping)
+    rows, owner = [], None
+    for line in mapping.splitlines()[1:]:
+        if not line.strip():
+            continue
+        match = re.fullmatch(r'([0-9a-fA-F]{8,16}) ([0-9a-fA-F]{8,16})\s+([0-9]+) (.*)', line)
+        body = match[4]
+        indent = len(body) - len(body.lstrip(' '))
+        text = body[indent:]
+        if indent == 0:
+            owner = None
+        elif indent == 8:
+            owner = text.rpartition(':(')[0]
+        elif indent == 16:
+            rows.append((match[1].lower(), text, owner))
+    assert [(symbol, origin) for _, symbol, origin in rows] == expected
+    return rows
+
+
 def prove(trace, mapping, imports, data, cwd):
     """Pure actual LLD proof; exact symbol/address/owner duplicates coalesce."""
     assert trace.strip() and mapping.strip() and imports.strip()
-    assert re.search(r'^\s*Address\s+Size\s+Align\s+Out\s+In\s+Symbol\s*$', mapping, re.MULTILINE), 'Missing actual LLD map header'
+    records = map_records(mapping)
     assert re.search(r'\bReading [^\r\n]+\r?$', trace, re.MULTILINE), 'Missing actual linker Reading observations'
     assert 'Format: COFF-x86-64' in imports, 'Missing actual target PE import capture'
     inventory, members = symbol_inventory(data['authority']['library_symbols']['lib/libwinpthread.a'])
@@ -218,27 +246,13 @@ def prove(trace, mapping, imports, data, cwd):
             assert member in members, 'Loaded member absent from current supplier inventory'
             loaded.add((PurePosixPath(origin).name, member, origin))
     definitions = {}
-    owner = None
-    input_sections = 0
-    for line in mapping.splitlines():
-        row = re.fullmatch(r'([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+[0-9]+ (.*)', line)
-        if not row:
-            continue
-        tail = row[2]
-        if ':(' in tail:
-            owner = tail.strip().rsplit(':(', 1)[0]
-            assert owner
-            input_sections += 1
-        elif tail.startswith('                '):
-            symbol = tail.strip()
-            selected_owner = owner is not None and any(owner == member for _, member, _ in loaded)
-            if symbol in names or (symbol in inventory and selected_owner):
-                value = (owner, row[1].lower())
-                assert symbol not in definitions or definitions[symbol] == value, 'Conflicting provider definition: ' + symbol
-                definitions[symbol] = value
-        else:
-            owner = None
-    assert input_sections > 0, 'No actual mapped input sections'
+    assert records, 'No actual mapped input symbols'
+    for address, symbol, owner in records:
+        selected_owner = any(owner == member for _, member, _ in loaded)
+        if symbol in names or (symbol in inventory and selected_owner):
+            value = (owner, address)
+            assert symbol not in definitions or definitions[symbol] == value, 'Conflicting provider definition: ' + symbol
+            definitions[symbol] = value
     bindings = {}
     for symbol, (owner, address) in definitions.items():
         assert owner is not None
@@ -349,7 +363,7 @@ def seal(original, published, compiler):
                 status=record['proof']['status'], receipt_sha256=digest(raw))
 
 
-def verify_sealed(directory, link, compiler, executable):
+def verify_sealed(directory, link, compiler, executable, expected_context):
     """Portable receiver proof: actual archived evidence, no native processes."""
     def member(name):
         assert isinstance(name, str) and Path(name).name == name and name not in ('', '.', '..')
@@ -358,7 +372,7 @@ def verify_sealed(directory, link, compiler, executable):
         return path
     raw = member('selected-pthread-toolchain.json').read_bytes()
     data = json.loads(raw)
-    factory.check_metadata(data, data['context'])
+    factory.check_metadata(data, expected_context)
     assert identity(data, raw) == compiler['selected_toolchain']
     assert link['receipt_sha256'] == digest(raw)
     record_path = member(link['file'])
