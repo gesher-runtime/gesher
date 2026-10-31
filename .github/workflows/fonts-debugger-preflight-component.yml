@@ -15,7 +15,7 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 jobs:
   trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/fonts-debugger-preflight-trusted-source.yml@67b0782d021479fbd098f05635976062526edc50
+    uses: gesher-runtime/gesher/.github/workflows/fonts-debugger-preflight-trusted-source.yml@bf66afa10198a02406d0f40cff76cd8664b63cdd
   probe-producer:
     needs: trusted-source
     runs-on: ubuntu-24.04
