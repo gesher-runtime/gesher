@@ -27,7 +27,7 @@ jobs:
           HOST_GUARD='267bb2f7868dd85405e9336d3ec29a131535d7eb'
           HOST_TRUST='.github/workflows/fonts-owner-host-trusted-source.yml'
           HOST_GUARD_BLOB='399d2ffdf430dce00634021ddd4d21553ee7d262'
-          TEMPLATE='6378f5090ca25c8567ebfb26d01a26856ab1163a'
+          TEMPLATE='0000000000000000000000000000000000000000'
           CALLER='.github/workflows/fonts-resource-component.yml'
           TRUST='.github/workflows/fonts-resource-trusted-source.yml'
           REPO='gesher-runtime/gesher'
@@ -72,6 +72,15 @@ jobs:
             projected[p]=(actual[p][0],pins[p])
            full['verify_selected'](projected,adapted=True)
 
+          def verify_document_identities(blobs):
+           require(blobs=={p:b for p,b in EXTRA_PINS.items() if p.startswith('docs/')},'Exact new source-document identities differ')
+          def verify_documents(source):
+           head={p:git('rev-parse',source+':'+p).decode().strip() for p in EXTRA_PINS if p.startswith('docs/')}
+           checkout={p:git('hash-object',p).decode().strip() for p in head}
+           verify_document_identities(head);verify_document_identities(checkout)
+           for p in head:
+            bad=copy.deepcopy(head);bad[p]='0'*40;reject('resource_document_'+p,lambda:verify_document_identities(bad))
+
           def run_identity(run,source,run_id,attempt,event):
            require(run['repository']['full_name']==run['head_repository']['full_name']==REPO and run['repository']['id']==run['head_repository']['id']==1426153186,'Wrong preflight repositories')
            require(str(run['id'])==run_id and str(run['run_attempt'])==attempt and run['head_sha']==source,'Wrong preflight source/run/attempt')
@@ -108,9 +117,10 @@ jobs:
            cmake=git('show',source+':CMakeLists.txt');old_cmake=git('show',BASE+':CMakeLists.txt')
            require(cmake.startswith(old_cmake) and cmake[len(old_cmake):]==CMAKE_ADDITION.encode(),'Only exact removable CMake target addition allowed')
            subprocess.run(['git','merge-base','--is-ancestor',BASE,source],check=True)
-           for p,b in EXTRA_PINS.items():expected[p]=(expected.get(p,('100644',''))[0],b)
+           for p,b in EXTRA_PINS.items():
+            if not p.startswith('docs/'):expected[p]=(expected.get(p,('100644',''))[0],b)
            for p in (CALLER,TRUST):expected[p]=inventory(reviewed)[p]
-           actual=inventory(source);full['verify_tree'](actual,expected);verify_current_selected(full,actual);full['verify_checkout'](expected)
+           actual=inventory(source);verify_documents(source);full['verify_tree'](actual,expected);verify_current_selected(full,actual);full['verify_checkout'](expected)
            for p in EXTRA_PINS:
             bad=copy.deepcopy(actual);bad[p]=('100644','0'*40);reject('preflight_blob_'+p,lambda:full['verify_tree'](bad,expected))
            bad=copy.deepcopy(actual);bad['tools/fonts/forged.py']=('100644','0'*40);reject('unknown_preflight_path',lambda:full['verify_tree'](bad,expected))
