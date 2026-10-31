@@ -42,6 +42,25 @@ DIRECTORY_ROOTS=[]
 def emit(label,value):
     A.emit_record(label,value)
 
+def rejection_evidence(auth,job,gate,details):
+    """Best effort only: failure to format or emit never changes rejection."""
+    try:
+        value={'schema':'POST_LINK_REJECTION_V1','context':auth['context'],
+               'guard':auth['authority']['guard'],'producer_id':job['id'],
+               'gate':gate,'details':details(),'qualification':False}
+        A.require(len(A.canonical(value))<=524288,'post-link diagnostic cap')
+        emit('POST_LINK_REJECTION',value)
+    except Exception:
+        pass
+
+def rejected_if_false(condition,diagnostic,gate,details):
+    if not condition and diagnostic is not None:
+        try:diagnostic(gate,details)
+        except Exception:pass
+
+def bounded_text(text):
+    return A.diagnostic_text(text.encode('utf-8'),262144)
+
 def emit_text_members(files,current):
     # Raw PE/object bytes are never dumped or downloaded for local review.
     # All twelve sealed text members are losslessly reviewable from plain logs.
@@ -196,40 +215,52 @@ def parse_driver(raw,toolroot,source_root,build):
                     A.require(any(p.is_relative_to(root)for root in roots),'ambient implicit path')
     A.require(commands,'missing expanded driver commands');return commands
 
-def link_dependencies(text,expanded,toolroot,build,env):
+def link_dependencies(text,expanded,toolroot,build,env,diagnostic=None):
     reads=[];loads=[]
     for line in text.splitlines():
         m=re.fullmatch(r'(?:ld\.lld|lld-link): Reading (.+\.a)\s*',line)
         if m:reads.append(m[1]);continue
         m=re.fullmatch(r'(?:ld\.lld|lld-link): Loaded ([^()]+\.a)\(([^()]+)\) for (.+)',line)
         if m:loads.append(m.groups())
+    rejected_if_false(bool(reads and loads),diagnostic,'reading_loaded',lambda:{'trace':bounded_text(text),'reads':reads,'loads':loads})
     A.require(reads and loads,'missing actual Reading/Loaded dependencies')
     archives={}
     for name in sorted(set(reads)):
         path=Path(name)
         if not path.is_absolute():
             candidates=[p.resolve()for p in toolroot.rglob(path.name)if p.is_file()]
+            rejected_if_false(len(set(candidates))==1,diagnostic,'archive_ambiguity',lambda:{'name':name,'candidates':list(map(str,candidates))})
             A.require(len(set(candidates))==1,'ambiguous archive path');path=candidates[0]
-        path=path.resolve();A.require(path.is_relative_to(toolroot.resolve()),'foreign archive')
+        path=path.resolve();rejected_if_false(path.is_relative_to(toolroot.resolve()),diagnostic,'foreign_archive',lambda:{'path':str(path),'root':str(toolroot)})
+        A.require(path.is_relative_to(toolroot.resolve()),'foreign archive')
         archives[name]={'path':str(path),'sha256':sha(path),'members':{}}
     names={Path(x['path']).name for x in archives.values()}
+    rejected_if_false('libc++.a'in names and 'libunwind.a'in names and any('builtins'in n for n in names)and any('ucrt'in n for n in names)and 'libkernel32.a'in names,diagnostic,'required_archives',lambda:{'trace':bounded_text(text),'names':sorted(names),'archives':archives,'predicates':{'libc++.a':'libc++.a'in names,'libunwind.a':'libunwind.a'in names,'builtins':any('builtins'in n for n in names),'ucrt':any('ucrt'in n for n in names),'libkernel32.a':'libkernel32.a'in names}})
     A.require('libc++.a'in names and 'libunwind.a'in names and any('builtins'in n for n in names)and any('ucrt'in n for n in names)and 'libkernel32.a'in names,'missing positive CRT/STL/unwind/builtins/system dependency')
     for archive,member,symbol in loads:
         candidates=[v for k,v in archives.items()if k==archive or Path(k).name==Path(archive).name]
+        rejected_if_false(len(candidates)==1,diagnostic,'loaded_origin',lambda:{'archive':archive,'member':member,'symbol':symbol,'candidates':candidates})
         A.require(len(candidates)==1,'Loaded member has no unique Reading origin')
         raw,_=tool([toolroot/'bin/llvm-ar','p',candidates[0]['path'],member],build,env,binary_stdout=True)
+        rejected_if_false(bool(raw),diagnostic,'empty_member',lambda:{'archive':archive,'member':member,'symbol':symbol,'bytes':len(raw),'sha256':A.digest(raw)})
         A.require(raw,'empty loaded member');old=candidates[0]['members'].get(member)
-        row={'sha256':A.digest(raw),'bytes':len(raw)};A.require(old is None or old==row,'member conflict');candidates[0]['members'][member]=row
+        row={'sha256':A.digest(raw),'bytes':len(raw)};rejected_if_false(old is None or old==row,diagnostic,'member_conflict',lambda:{'archive':archive,'member':member,'old':old,'current':row});A.require(old is None or old==row,'member conflict');candidates[0]['members'][member]=row
     direct=[]
     for row in expanded:
         if not Path(row[0]).name.startswith('ld.lld'):continue
         for name in row[1:]:
             if name.endswith(('.o','.obj')):
                 p=Path(name);p=p if p.is_absolute()else build/p;p=p.resolve()
-                if p.is_relative_to(build.resolve()):A.require(p.name in A.TUS,'foreign direct object')
-                else:A.require(p.is_relative_to(toolroot.resolve()),'foreign startup object')
+                if p.is_relative_to(build.resolve()):
+                    rejected_if_false(p.name in A.TUS,diagnostic,'foreign_direct',lambda:{'path':str(p),'expected':list(A.TUS)})
+                    A.require(p.name in A.TUS,'foreign direct object')
+                else:
+                    rejected_if_false(p.is_relative_to(toolroot.resolve()),diagnostic,'foreign_startup',lambda:{'path':str(p),'root':str(toolroot)})
+                    A.require(p.is_relative_to(toolroot.resolve()),'foreign startup object')
                 direct.append({'path':str(p),'sha256':sha(p),'origin':'three-object'if p.is_relative_to(build.resolve())else'publisher-startup'})
+    rejected_if_false([Path(x['path']).name for x in direct if x['origin']=='three-object']==list(A.TUS) and all(Path(x['path'])==build/Path(x['path']).name for x in direct if x['origin']=='three-object'),diagnostic,'direct_objects',lambda:{'direct':direct,'expanded':expanded,'expected':list(A.TUS)})
     A.require([Path(x['path']).name for x in direct if x['origin']=='three-object']==list(A.TUS) and all(Path(x['path'])==build/Path(x['path']).name for x in direct if x['origin']=='three-object'),'exact actual three link objects')
+    rejected_if_false(any(x['origin']=='publisher-startup'for x in direct),diagnostic,'startup_objects',lambda:{'direct':direct,'expanded':expanded})
     A.require(any(x['origin']=='publisher-startup'for x in direct),'missing actual startup objects')
     return {'archives':archives,'loaded':loads,'direct':direct}
 
@@ -324,26 +355,39 @@ def produce():
         commands.append({'output':obj,'file':source,'argv':argv,'expanded':expanded[obj]})
     A.require_dependency_union(deps)
     link=A.link_recipe(controlled)
-    out,err=tool([link[0],'-###',*link[1:]],build,env);exp=parse_driver(out+err,tc,root,build)
+    out,err=tool([link[0],'-###',*link[1:]],build,env)
+    try:exp=parse_driver(out+err,tc,root,build)
+    except Exception as error:
+        rejection_evidence(auth,job,'link_expansion',lambda:{'output':A.diagnostic_text(out+err,262144),'error':repr(error)})
+        raise
     stdout,stderr=tool(link,build,env);trace=(stdout+stderr).decode();lower=trace.lower()+(out+err).decode().lower()
+    diagnostic=lambda gate,details:rejection_evidence(auth,job,gate,details)
+    rejected_if_false(not any(x in lower for x in ('libgesher_posix','binder','gesher_crash_reporter_anchor','gesher_signal_mailbox_anchor','--wrap','wrap=free','wrap=realloc')),diagnostic,'foreign_link_root',lambda:{'trace':bounded_text(trace),'expanded':bounded_text((out+err).decode())})
     A.require(not any(x in lower for x in ('libgesher_posix','binder','gesher_crash_reporter_anchor','gesher_signal_mailbox_anchor','--wrap','wrap=free','wrap=realloc')),'foreign implicit root dependencies')
-    linked=link_dependencies(trace,exp,tc,build,env)
+    linked=link_dependencies(trace,exp,tc,build,env,diagnostic)
     imports,_=tool([tc/'bin/llvm-readobj','--coff-imports',build/'helper-qualification.exe'],build,env)
+    rejected_if_false(bool(imports and not re.search(rb'(?i)jvm|dalvik|libart|binder|gesher_posix',imports)),diagnostic,'imports_role',lambda:{'imports':A.diagnostic_text(imports,262144)})
     A.require(imports and not re.search(rb'(?i)jvm|dalvik|libart|binder|gesher_posix',imports),'imports role')
     symbols={}
     for obj in A.TUS:
         value,_=tool([tc/'bin/llvm-nm','--defined-only','--demangle',build/obj],build,env);symbols[obj]=value.decode()
+    rejected_if_false('operator new('in symbols['qualification.obj']and 'operator new('not in symbols['helper.obj']and 'operator new('not in symbols['caller.obj'],diagnostic,'new_ownership',lambda:{'symbols':{k:bounded_text(v)for k,v in symbols.items()}})
     A.require('operator new('in symbols['qualification.obj']and 'operator new('not in symbols['helper.obj']and 'operator new('not in symbols['caller.obj'],'test-only new ownership')
+    rejected_if_false('PrepareAliasFromNoExceptions'in symbols['caller.obj']and 'PreparePunchRequestFromNoExceptions'in symbols['caller.obj'],diagnostic,'caller_symbols',lambda:{'symbols':bounded_text(symbols['caller.obj'])})
     A.require('PrepareAliasFromNoExceptions'in symbols['caller.obj']and 'PreparePunchRequestFromNoExceptions'in symbols['caller.obj'],'actual noexceptions caller functions')
     shutil.copyfile(build/'helper-qualification.exe',bundle/'helper-qualification.exe');shutil.copyfile(build/'helper-qualification.map',bundle/'helper-qualification.map')
     save(bundle/'helper-qualification.imports.txt',imports);save(bundle/'compile-commands.json',commands);save(bundle/'dependency-manifest.json',deps)
     profile={'profile':A.PROFILE,'archive_name':ARCHIVE_NAME,'archive_sha256':ARCHIVE_SHA,'driver':str(driver),'driver_realpath':str(driver.resolve()),'driver_sha256':DRIVER_SHA,'linker_sha256':LINKER_SHA,'target':target,'version':version.decode(),'common_flags':COMMON,'configs':configs,'config_policy':A.CONFIG_POLICY,'controlled_config':controlled,'objects':objects,'link_argv':link,'link_expanded':exp,'link_dependencies':linked,'no_ambient_injection':True,'dependencies_verified':True,'link_dependencies_verified':True}
     save(bundle/'compiler-profile.json',profile);save(bundle/'link-transcript.txt',A.canonical({'compile':transcripts,'link':{'argv':link,'expansion':(out+err).decode(),'stdout':stdout.decode(),'stderr':stderr.decode()}}));save(bundle/'object-symbols.json',symbols);save(bundle/'source-manifest.json',auth['authority']['manifest'])
-    files={p.name:p.read_bytes()for p in bundle.iterdir()};A.require(set(files)==set(A.MEMBERS)-{'producer-manifest.json'},'producer exact fifteen payloads')
+    files={p.name:p.read_bytes()for p in bundle.iterdir()};rejected_if_false(set(files)==set(A.MEMBERS)-{'producer-manifest.json'},diagnostic,'payload_members',lambda:{'observed':sorted(files),'expected':sorted(set(A.MEMBERS)-{'producer-manifest.json'})});A.require(set(files)==set(A.MEMBERS)-{'producer-manifest.json'},'producer exact fifteen payloads')
     manifest={'schema':1,'context':auth['context'],'authority':{k:auth['authority'][k]for k in ('guard','guard_blob','template','caller_authority')},'producer_id':job['id'],'members':{p:{'bytes':len(v),'sha256':A.digest(v)}for p,v in files.items()},'role':A.PROFILE}
-    save(bundle/'producer-manifest.json',manifest);A.require(sum(p.stat().st_size for p in bundle.iterdir())<=A.TOTAL_CAP,'bundle aggregate cap')
+    save(bundle/'producer-manifest.json',manifest);total=sum(p.stat().st_size for p in bundle.iterdir());rejected_if_false(total<=A.TOTAL_CAP,diagnostic,'bundle_cap',lambda:{'bytes':total,'cap':A.TOTAL_CAP});A.require(total<=A.TOTAL_CAP,'bundle aggregate cap')
     # Verify using independently selected current role ID, not the manifest itself.
-    local=dict(auth);local['roles']=dict(auth['roles'],**{'helper-producer':job});A.verify_bundle({p.name:p.read_bytes()for p in bundle.iterdir()},local)
+    local=dict(auth);local['roles']=dict(auth['roles'],**{'helper-producer':job})
+    try:A.verify_bundle({p.name:p.read_bytes()for p in bundle.iterdir()},local)
+    except Exception as error:
+        diagnostic('bundle_verification',lambda:{'error':repr(error),'manifest':manifest})
+        raise
     emit_text_members({p.name:p.read_bytes()for p in bundle.iterdir()},auth['context'])
     emit('PRODUCER_MANIFEST',{'sha256':sha(bundle/'producer-manifest.json'),'context':auth['context'],'producer_id':job['id'],'role':A.PROFILE,'qualification':False,'members':manifest['members']})
 

@@ -270,6 +270,36 @@ class Helper(unittest.TestCase):
             self.reject(lambda:P.dependency_paths(b'x.obj: /foreign/header.h\n',source,tool,build))
             self.reject(lambda:P.dependency_paths(b'x.obj: \n',source,tool,build))
 
+    def test_actual_link_rejection_evidence_is_failure_only(self):
+        with pure_temp_directory() as temp:
+            root=Path(temp);tc=root/'publisher';build=root/'build';tc.mkdir();build.mkdir()
+            names=('libc++.a','libunwind.a','libclang_rt.builtins.a','libucrt.a','libkernel32.a')
+            for name in names:(tc/name).write_bytes(b'SYNTHETIC_ARCHIVE')
+            for name in A.TUS:(build/name).write_bytes(b'SYNTHETIC_OBJECT')
+            (tc/'startup.o').write_bytes(b'SYNTHETIC_STARTUP')
+            expanded=[['ld.lld',*[str(build/n)for n in A.TUS],str(tc/'startup.o')]]
+            def trace(selected):
+                return ''.join('ld.lld: Reading '+str(tc/n)+'\n'for n in selected)+'ld.lld: Loaded '+str(tc/selected[0])+'(member.o) for symbol\n'
+            captured=[]
+            with mock.patch.object(P,'tool',return_value=(b'SYNTHETIC_MEMBER',b'')):
+                result=P.link_dependencies(trace(names),expanded,tc,build,{},lambda gate,details:captured.append((gate,details())))
+                self.assertEqual(len(result['archives']),5);self.assertEqual(captured,[])
+                for omitted in names:
+                    selected=tuple(n for n in names if n!=omitted)
+                    self.reject(lambda:P.link_dependencies(trace(selected),expanded,tc,build,{},lambda gate,details:captured.append((gate,details()))))
+                    gate,record=captured.pop();self.assertEqual(gate,'required_archives')
+                    self.assertNotIn(omitted,record['names']);self.assertEqual(sum(not x for x in record['predicates'].values()),1)
+                def broken(*args):raise RuntimeError('synthetic formatter failure')
+                self.reject(lambda:P.link_dependencies(trace(names[1:]),expanded,tc,build,{},broken))
+                self.reject(lambda:P.link_dependencies('',expanded,tc,build,{},lambda gate,details:captured.append((gate,details()))))
+                self.assertEqual(captured.pop()[0],'reading_loaded')
+            auth={'context':synthetic_context(),'authority':{'guard':'b'*40}}
+            with mock.patch.object(P,'emit')as emitted:
+                P.rejection_evidence(auth,{'id':42},'synthetic',lambda:{'trace':P.bounded_text('bounded')})
+                self.assertEqual(emitted.call_args.args[1]['qualification'],False)
+                P.rejection_evidence(auth,{'id':42},'synthetic',lambda:{'trace':P.bounded_text('x'*262145)})
+                self.assertEqual(emitted.call_count,1)
+
     def test_owned_reader_quiescence_and_directory_retention(self):
         class Reader:
             def __init__(self,alive):self.alive=alive;self.joins=0
