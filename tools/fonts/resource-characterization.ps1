@@ -858,6 +858,18 @@ function Complete-ResourceSettlement($Owner,$Root,[scriptblock]$ReleaseFiles,[sc
  return (!$Owner.failed) # Caller MUST preserve non-success after safe settlement.
 }
 
+function New-ResourceDiskFrame($Owner,$Stream,$Identity,$Context,[uint32]$ImportsPid) {
+ $held=@($Owner.handles|Where-Object{[object]::ReferenceEquals($_.stream,$Stream)})
+ if($held.Count -ne 1 -or ![object]::ReferenceEquals($held[0].handle,$Stream.SafeFileHandle) -or $held[0].handle.IsClosed -or !$Stream.CanRead -or $Stream.Name -cne $Identity.path -or $Stream.Length -lt 64 -or $Stream.Length -gt 134217728 -or $ImportsPid -eq 0){throw 'UNAVAILABLE: retained NTDLL frame lease'}
+ if($Identity.signature_status -cne 'Valid' -or $Identity.signer -notmatch '(?:^|,\s*)O=Microsoft Corporation(?:,|$)' -or $Identity.signer_thumbprint -cnotmatch '^[A-Fa-f0-9]{40,128}$' -or $Identity.sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'UNAVAILABLE: retained NTDLL frame signature'}
+ @{schema=1;role='SIGNED_SYSTEM32_NTDLL_DISK_METADATA';name='ntdll.dll';bytes=$Stream.Length;sha256=$Identity.sha256;version=$Identity.product_version;path=$Identity.path;signature_status=$Identity.signature_status;signer=$Identity.signer;signer_thumbprint=$Identity.signer_thumbprint;lease='RETAINED_READ_SHARE_READ';context=$Context;imports_pid=[long]$ImportsPid}
+}
+function Assert-ResourceDiskRecord($Record,$Frame,$Context,[uint32]$ImportsPid) {
+ if($Record.record -cne 'NTDLL_DISK_METADATA' -or $Record.role -cne $Frame.role -or $Record.imports_pid -ne $ImportsPid -or $Record.qualification -isnot [bool] -or $Record.qualification -or $Record.input_record_sha256 -cnotmatch '^[0-9a-f]{64}$'){throw 'UNAVAILABLE: NTDLL disk output role/PID'}
+ foreach($key in @('source','run','attempt')){if($Record.context[$key] -cne $Context[$key] -or $Record.profile.context[$key] -cne $Context[$key]){throw 'UNAVAILABLE: NTDLL disk current context'}}
+ foreach($key in @('schema','role','name','bytes','sha256','version','path','signature_status','signer','signer_thumbprint','lease','imports_pid')){if($Record.profile[$key] -cne $Frame[$key]){throw 'UNAVAILABLE: NTDLL disk exact retained frame'}}
+ if($Record.metadata.loaded_memory_identity_attested -isnot [bool] -or $Record.metadata.loaded_memory_identity_attested -or $Record.metadata.identity_predicate_repaired -isnot [bool] -or $Record.metadata.identity_predicate_repaired -or @($Record.metadata.records).Count -lt 1 -or @($Record.metadata.records).Count -gt 8){throw 'UNAVAILABLE: NTDLL disk metadata scope'}
+}
 if($env:GITHUB_ACTIONS -cne 'true' -or !$IsWindows){throw 'Windows CI only'}
 $clock=[Diagnostics.Stopwatch]::StartNew()
 $stage=@{root=$null;handles=[Collections.Generic.List[object]]::new();expected=@();manifest=@();processes=@{};failed=$false;settlementErrors=[Collections.Generic.List[string]]::new()}
@@ -922,7 +934,10 @@ try{
  $imports=Start-ResourceRole $stage 'imports' $psi
  $header=[Text.Encoding]::UTF8.GetBytes((@{entries=$entries}|ConvertTo-Json -Depth 8 -Compress)+"`n")
  $legacyLength=[long]$header.Length;foreach($entry in $entries){$legacyLength+=[long]$entry.bytes+22}
- $outer=[Text.Encoding]::UTF8.GetBytes((@{version=2;legacy_bytes=$legacyLength;context=@{source=$env:GITHUB_SHA;run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT}}|ConvertTo-Json -Depth 8 -Compress)+"`n")
+ $diskContext=@{source=$env:GITHUB_SHA;run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT}
+ $diskEntry=New-ResourceDiskFrame $stage $ntdllStream $ntdllIdentity $diskContext $imports.pid
+ $stage.code.diskFrame=$diskEntry
+ $outer=[Text.Encoding]::UTF8.GetBytes((@{version=3;legacy_bytes=$legacyLength;context=$diskContext;imports_pid=[long]$imports.pid}|ConvertTo-Json -Depth 8 -Compress)+"`n")
  $stage.code.outer=$outer;Send-ResourceBytes $imports $outer $outer.Length;Send-ResourceBytes $imports $header $header.Length
  foreach($entry in $entries){
   $stream=@($stage.handles|Where-Object{$_.stream.Name -ceq ($stage.root+'\'+$entry.name)})[0].stream
@@ -937,11 +952,21 @@ try{
  while(($read=$codeStream.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $codeEntry.bytes){throw 'Provider stream overflow'};Send-ResourceBytes $imports $buffer $read}
  if($total -ne $codeEntry.bytes -or $codeStream.ReadByte() -ne -1){throw 'Provider full stream/EOF mismatch'}
  $providerEnd=[Text.Encoding]::ASCII.GetBytes("`nFONT_UCRT_CODE_END_V2`n`0`n");Send-ResourceBytes $imports $providerEnd $providerEnd.Length
+ $diskHeader=[Text.Encoding]::UTF8.GetBytes(($diskEntry|ConvertTo-Json -Depth 8 -Compress)+"`n");$stage.code.diskHeader=$diskHeader
+ Send-ResourceBytes $imports $diskHeader $diskHeader.Length
+ $ntdllStream.Position=0;$buffer=[byte[]]::new(65536);$total=0L
+ while(($read=$ntdllStream.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $diskEntry.bytes){throw 'NTDLL retained stream overflow'};Send-ResourceBytes $imports $buffer $read}
+ if($total -ne $diskEntry.bytes -or $ntdllStream.ReadByte() -ne -1){throw 'NTDLL retained full stream/EOF mismatch'}
+ $diskEnd=[Text.Encoding]::ASCII.GetBytes("`nFONT_NTDLL_DISK_END_V1`n`0`n");Send-ResourceBytes $imports $diskEnd $diskEnd.Length
  $imports.process.StandardInput.Close()
  Wait-ResourceRole $imports 90000
  $cacheRows=@($imports.out.Text.ToString().Split("`n")|Where-Object{$_.Trim()}|ForEach-Object{ConvertFrom-Json -InputObject $_ -AsHashtable})
  $cache=@($cacheRows|Where-Object{$_.record -ceq 'PROVIDER_CACHE'})
- if($cacheRows.Count -ne 4 -or $cache.Count -ne 1){throw 'Exact three-tool + provider output count'}
+ $diskRows=@($cacheRows|Where-Object{$_.record -ceq 'NTDLL_DISK_METADATA'})
+ if($cacheRows.Count -ne 5 -or $cache.Count -ne 1 -or $diskRows.Count -ne 1){throw 'Exact three-tool + UCRT + NTDLL disk output count'}
+ Assert-ResourceDiskRecord $diskRows[0] $diskEntry $diskContext $imports.pid
+ $stage.code.diskMetadata=$diskRows[0]
+ Emit-PreflightRecord 'FONT_RESOURCE_NTDLL_DISK_METADATA' $diskRows[0]
  $stage.code.cache=$cache[0];$cache=$stage.code.cache
  Emit-PreflightRecord 'FONT_RESOURCE_CODE_CACHE' $cache
  if($cache.role -cne 'SIGNED_SYSTEM32_UCRT_CODE' -or $cache.profile.sha256 -cne $codeEntry.sha256 -or $cache.profile.version -cne $codeEntry.version -or $cache.context.source -cne $env:GITHUB_SHA -or $cache.context.run -cne $env:GITHUB_RUN_ID -or $cache.context.attempt -cne $env:GITHUB_RUN_ATTEMPT -or $cache.start_rva -ne $codeProfile.start -or $cache.size_of_image -ne $codeProfile.extent -or $cache.cache_length -ne 111 -or $cache.cache_hex -cnotmatch '^[0-9a-f]{222}$'){throw 'Provider cache source/profile/window mismatch'}

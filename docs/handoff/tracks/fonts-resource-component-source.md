@@ -341,3 +341,55 @@ Successful close remains exactly-once. Original32/A/B/body/TID/normal RELEASE/
 COMPLETE/budgets/27inputs4outputs18pins1638whole remain. W22 BLOCKED/all4FALSE/
 old5WCTRED/6913parked. External forced pwsh/workflow/host destruction UNPROVED.
 Different whole-source peer and separately scheduled actual CI still required.
+
+## Retained signed NTDLL disk metadata prerequisite
+
+The complete7c83 actual audit supports bounded Windows2025 SAMEADDRESS owner8176
+and normal SAMEchild6888 completion. Windows2022 remains BLOCKED: retained signed
+disk profile5622 differs from unique LMV5756 while base/extent/path/size agree.
+There is no actual numeric fixed-version evidence yet. No MUI, stale-symbol,
+update or loaded-byte explanation follows from this observation.
+
+Outer envelope version3 preserves the original three-tool substream and its EOF,
+and preserves the separate schema2 signed-UCRT frame/sentinel/cache semantics.
+Exactly one additional SIGNED_SYSTEM32_NTDLL_DISK_METADATA frame follows, with
+its own sentinel and absolute EOF. It uses the ALREADY retained native System32
+NTDLL Read/ShareRead lease, original signature/profile/full-file SHA and length,
+current source/run/attempt, and the SAME actual imports PID. The existing imports
+process validates its own PID; no sixth process, new API/command, MUI search,
+directory discovery, native fixture or new supplier/profile is introduced.
+Parent validates the returned exact frame/context/PID and emits it before child
+start. Existing process/task/buffer/root containment and budgets remain unchanged.
+
+Pure byte-only decoder bounds:128MiB AMD64 PE32+, at most96 sections, nonoverlapping
+raw/virtual intervals, checked unique file-backed RVA spans (no BSS). Headers retain
+SizeOfImage/checksum/raw COFF timestamp and bounded type16 reproducible debug data;
+timestamp is explicitly NOT attested wall-clock time. Resource identifiers are
+numeric16-bit Type/Name/Language only; unsupported named keys reject. Type16 only
+is interpreted, exact three levels,64 entries/node,256 visited nodes+entries,
+eight leaves, WORD payload length strictly below65536 and aggregate512KiB. Alias,
+overlap/cycle/duplicate language/ambiguous version name and conflicting fixed
+records reject rather than selecting a convenient one.
+
+VS_VERSION_INFO uses strict UTF16LE terminated keys and parent-relative checked
+length/alignment/zero padding, binary52-byte13DWORD fixed data, signatureFEEF04BD
+and supported structure version00010000. All fixed fields, raw payload hashes,
+numeric file/product four-word components are preserved. StringFileInfo and
+VarFileInfo use their distinct character/binary length units, bounded tables and
+strings, all language/codepage records/translations, strict text termination and
+unique keys. Unknown/trailing malformed children reject; no language is chosen
+or normalized. Complete JSON output also fits the unchanged262144-character pipe
+cap; oversized metadata is UNAVAILABLE, never truncated. Eight leaves each with
+WORD length<65536 imply aggregate<512KiB; both explicit gates are retained.
+
+Fixed numeric and localized string versions are DIFFERENT categories. Synthetic
+fixed5756/nonfixed5622 is a test, NOT an actual NTDLL diagnosis or an equality
+repair. Even equal fixed numbers cannot establish loaded-memory/file identity.
+The original NTDLL module/version predicate is BYTE-EXACT and still rejects the
+current Windows2022 mismatch. The three-tool decoder/EOF, signed-UCRT provider,
+original32helpers/native child/five roles and27inputs4outputs18pins1638tree remain.
+All four broader flags FALSE, old five WCT2025 REDs/6913parked/partial-prologue and
+runtime-unwind-integrity FALSE remain. Local controls use constructed bytes and
+managed doubles only; actual disk bytes and the whole changed component require
+DIFFERENT source/role/whole-policy peer and separately authorized CI. Fresh both
+runtime/JNI/guest/JavaOs/OEM/retention/full/default/released-byte obligations OPEN.
