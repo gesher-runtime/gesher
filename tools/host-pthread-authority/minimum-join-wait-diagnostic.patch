@@ -1,0 +1,50 @@
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -1744,6 +1744,29 @@
+       WaitForSingleObject(native,0)==WAIT_TIMEOUT;
+ }
+ 
++#ifdef GESHER_MINIMUM_JOIN_WAIT_DIAGNOSTIC
++/* Isolated diagnostic role only. Configure once before starting one joiner. */
++static pthread_t gesher_diag_target;
++static HANDLE gesher_diag_handle;
++static DWORD gesher_diag_tid;
++static volatile LONG gesher_diag_phase;
++__declspec(dllexport) void __cdecl
++gesher_minimum_join_diag_configure (pthread_t target)
++{
++  gesher_diag_target = target;
++  gesher_diag_handle = NULL;
++  gesher_diag_tid = 0;
++  InterlockedExchange (&gesher_diag_phase, 0);
++}
++__declspec(dllexport) LONG __cdecl
++gesher_minimum_join_diag_snapshot (HANDLE *handle, DWORD *tid)
++{
++  LONG phase = InterlockedCompareExchange (&gesher_diag_phase, 0, 0);
++  if (phase == 1) { *handle = gesher_diag_handle; *tid = gesher_diag_tid; }
++  return phase;
++}
++#endif
++
+ int
+ pthread_join (pthread_t t, void **res)
+ {
+@@ -1767,7 +1790,16 @@
+ 
+   /* pthread_testcancel (); */
+   if (tv->ended == 0 || (tv->h != NULL && tv->h != INVALID_HANDLE_VALUE))
+-    WaitForSingleObject (tv->h, INFINITE);
++    {
++#ifdef GESHER_MINIMUM_JOIN_WAIT_DIAGNOSTIC
++      if (t == gesher_diag_target) {
++        gesher_diag_handle = tv->h;
++        gesher_diag_tid = GetCurrentThreadId ();
++        InterlockedExchange (&gesher_diag_phase, 1);
++      }
++#endif
++      WaitForSingleObject (tv->h, INFINITE);
++    }
+   CloseHandle (tv->h);
+   if (tv->evStart)
+     CloseHandle (tv->evStart);
