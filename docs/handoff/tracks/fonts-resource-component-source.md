@@ -265,3 +265,29 @@ All4 qualification flags FALSE, original5WCT RED/6913parked unchanged. DIFFERENT
 whole-source peer and separately authorized changed CI are required; even actual
 body-scoped success would still need genuine same-address handler-owner proof,
 then the fresh both-runtime/JNI/guest/JavaOs/OEM/retention chain. Release OPEN.
+
+## Request-bound redirected owner grammar and unresolved NTDLL diagnostics
+
+Actual88a W25 reached ONEaddress but rejected prompt-prefixed/literalVoid output;
+no accepted owner/normal COMPLETE. New CDB_REDIRECTED_OWNER_PROMPT_VOID_V1 admits
+only exact observed0:000> BEGIN/one full16hex +0x010 OwningThread Void/END/quit/EOF
+after the retained validated ready boundary, <=8KiB. No fabricated command echo.
+Acceptance checks original rooted record/session/process/SafeHandle/PID/phase,
+current held/armed address/fullTIDs and admitted stage profile snapshot. Original
+ONE reserved write retains canonical bytes/hash/task and successful GetResult;
+parser rechecks same completed Task/bytes/hash and completed stdout/stderr. Capture
+handle stays live across parse, disposes afterward; failure finally still owns it.
+No qualification shortcut: qd/alive/RELEASE/exactCOMPLETE/kernelIO/root gates remain.
+
+NTDLL diagnostics before the UNCHANGED identity predicate emit actual retained
+Process.Modules expected base/extent/path/diskSHA/version/provider/context and
+received uniqueLMV raw/hash/fields/counts/individual comparisons. Complete block
+cap64KiB, max4selected blocks, fieldcap4096, no truncation. Expected values never
+come from received text or a requery. W22 retained5622 vsLMV5756 remains BLOCKED,
+no new profile/version allowance, normalization or cause diagnosis.
+
+Saved raw/source/run/job/plan provenance,37 A and8 B negative classes are pure
+metadata only; source freeze requires DIFFERENT wholepeer and separate CI. Same
+27input4output18pin1638whole/five roles/original32helpers/3decoderEOF/native bytes,
+all4flagsFALSE/old5WCTRED/6913parked. Actual owner +normalcleanup and fresh both
+runtime/JNI/guest/JavaOs/OEM/retention still required; release OPEN.

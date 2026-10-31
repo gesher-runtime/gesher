@@ -233,7 +233,7 @@ foreach($changed in @($full2022.Replace($firstText,''),$full2022.Replace($firstT
 # Extra address even after valid scoped label must fail start<=E.
 Reject {Read-ResourceCodeWindow ($full2022.Replace("FONT_RESOURCE_CODE_END`n","00007ffd``c14a8515 90 nop`nFONT_RESOURCE_CODE_END`n")) ([uint64]0x7ffdc13f0000) 0xb84b4 '48895c2408574883ec20488bda488bf9488d0d9d7f0400ff158ff5000090488bd3488bcfe8a70000008bd8488d0d827f0400ff156cf500008bc3488b5c24304883c4205fc340554883ec20488bea488d0d5f7f04004883c4205d48ff2543f50000cccccccccccccc48895c24085748'}
 # Witness tests use synthetic strings and managed-memory task doubles only.
-foreach($name in @('New-ResourceWitnessPrewarmCommands','New-ResourceWitnessCaptureCommands','New-ResourceOwnerTail','Wait-ResourceInputReady','Send-ResourceControlOnce','Assert-ResourceWitnessProfiles','Read-ResourceWitnessSchema','Read-ResourceWitnessFrames','Get-ResourceWitnessAddress','Read-ResourceOwnerField','Assert-ResourceWitnessRootTasks')){
+foreach($name in @('New-ResourceWitnessPrewarmCommands','New-ResourceWitnessCaptureCommands','New-ResourceOwnerTail','Wait-ResourceInputReady','Send-ResourceControlOnce','Assert-ResourceWitnessProfiles','Write-ResourceNtdllDiagnostic','Read-ResourceWitnessSchema','Read-ResourceWitnessFrames','Get-ResourceWitnessAddress','Read-ResourceOwnerField','Assert-ResourceWitnessRootTasks')){
  $node=@($newFunctions|Where-Object{$_.Name -ceq $name});Check ($node.Count -eq 1);Invoke-Expression $node[0].Extent.Text
 }
 $coldPlan=New-ResourceWitnessPrewarmCommands 'C:\stage\winext' 0x3c1d8
@@ -247,9 +247,65 @@ $schema="struct _RTL_CRITICAL_SECTION, 6 elements, 0x28 bytes`n   +0x000 DebugIn
 $schemaText="FONT_RESOURCE_TYPE_BEGIN`n0:000> dt -v -t ntdll!_RTL_CRITICAL_SECTION`n"+$schema+"FONT_RESOURCE_TYPE_END`n"
 Check ((Read-ResourceWitnessSchema $schemaText).fields -eq 6)
 foreach($bad in @($schemaText.Replace('0x010','0x014'),$schemaText.Replace('Ptr64 to Void','Ptr32 to Void'),$schemaText.Replace('6 elements','7 elements'),$schemaText+$schemaText)){Reject {Read-ResourceWitnessSchema $bad}}
-$ownerText="FONT_RESOURCE_OWNER_BEGIN`n0:000> dt ntdll!_RTL_CRITICAL_SECTION OwningThread 0x0000000010003200`n   +0x010 OwningThread     : 0x00000000``0000000e`n0:000> .echo FONT_RESOURCE_OWNER_END`nFONT_RESOURCE_OWNER_END`n"
-Check ((Read-ResourceOwnerField $ownerText ([uint64]0x10003200) 14 13).owner -eq 14)
-foreach($bad in @($ownerText.Replace('00000000`0000000e','00000001`0000000e'),$ownerText.Replace('00000000`0000000e','00000000`00000000'),$ownerText.Replace('00000000`0000000e','00000000`0000000d'),$ownerText.Replace('00000000`0000000e','e'),$ownerText.Replace('0x010','0x018'),$ownerText+$ownerText,$ownerText.Replace('10003200','10003208'),$ownerText.Replace('0x00000000`0000000e','??'))){Reject {Read-ResourceOwnerField $bad ([uint64]0x10003200) 14 13}}
+# Saved 88a/run41201795245/a1/job124539168894 rawSHA c042b6f544172a89138c031f301875c06ff207b00797ea6073fff196be277bb2.
+# PlanSHA49217fc784065339d10ee0eab402dfb84f815453378a50bb7544707474400f63.
+function Test-OwnerSession([scriptblock]$Mutate) {
+ $address=[uint64]0x7fff0e608a78;$handler=[uint32]6060;$writer=[uint32]9820
+ $ready="FONT_RESOURCE_WITNESS_INPUT_READY`n0:000> "
+ $tail="FONT_RESOURCE_OWNER_BEGIN`n0:000>    +0x010 OwningThread : 0x00000000``000017ac Void`n0:000> FONT_RESOURCE_OWNER_END`n0:000> quit:`n"
+ $h=[pscustomobject]@{IsClosed=$false};$proc=[pscustomobject]@{Id=8044;SafeHandle=$h;ExitCode=0;StartInfo=@{FileName='C:\stage\cdb.exe'}}
+ $proc|Add-Member ScriptMethod WaitForExit {param($ms) $true}
+ $task=[Threading.Tasks.Task]::CompletedTask;$buffer=[Text.Encoding]::ASCII.GetBytes((New-ResourceOwnerTail $address))
+ $r=@{role='capture';state='EXITED';pid=8044;handle=$h;process=$proc;out=@{Closed=$true;Text=[Text.StringBuilder]::new($ready+$tail)};err=@{Closed=$true;Text=[Text.StringBuilder]::new()};control_reserved=$true;controlProcess=$proc;controlHandle=$h;controlPid=8044;writeBuffer=$buffer;controlHash=(Get-ResourceCodeHash $buffer);writeTask=$task;controlCompletedTask=$task;readySnapshot=$ready;readyHash=(Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($ready)))}
+ $profile=@{relative='cdb.exe';signature_status='Valid';sha256=('a'*64);file_version='saved-profile'}
+ $session=@{record=$r;process=$proc;handle=$h;pid=8044;ready=$ready;readyHash=$r.readyHash;address=$address;handler=$handler;writer=$writer;childPid=5916;profile=$profile}
+ $r.ownerWitness=$session;$o=@{root='C:\stage';handles=@();processes=@{capture=$r;child=@{pid=5916}};ownerWitness=$session;code=@{armedAddress=$address};manifest=@($profile)}
+ $session.profileHash=$profile.sha256;$session.profileVersion=$profile.file_version
+ $script:root=New-StageLifetimeRoot $o;$script:phase='HOLD_READY'
+ try{& $Mutate $o $r $session;Read-ResourceOwnerField $r.out.Text.ToString() $address $handler $writer $o}finally{if($root.active){$root.handle.Free();$root.active=$false}}
+}
+Check ((Test-OwnerSession {}).owner -eq 6060)
+$ownerNegatives=@(
+ {param($o,$r,$s)$script:phase='PREPARED'},
+ {param($o,$r,$s)$s.pid++},
+ {param($o,$r,$s)$s.address+=8},
+ {param($o,$r,$s)$s.handler++},
+ {param($o,$r,$s)$s.writer++},
+ {param($o,$r,$s)$s.childPid++},
+ {param($o,$r,$s)$s.profile=@{}},
+ {param($o,$r,$s)$s.profile.signature_status='NotSigned'},
+ {param($o,$r,$s)$s.profile.sha256='bad'},
+ {param($o,$r,$s)$r.control_reserved=$false},
+ {param($o,$r,$s)$r.controlPid++},
+ {param($o,$r,$s)$r.controlHash='0'*64},
+ {param($o,$r,$s)$r.writeBuffer=[Text.Encoding]::ASCII.GetBytes("qd`n")},
+ {param($o,$r,$s)$r.controlCompletedTask=[Threading.Tasks.Task]::Delay(100)},
+ {param($o,$r,$s)$r.writeTask=[Threading.Tasks.Task]::FromException([Exception]::new('failed'))},
+ {param($o,$r,$s)$r.err.Closed=$false},
+ {param($o,$r,$s)$r.out.Closed=$false},
+ {param($o,$r,$s)$r.err.Text.Append('error')|Out-Null},
+ {param($o,$r,$s)$r.process.Id++},
+ {param($o,$r,$s)$r.handle.IsClosed=$true},
+ {param($o,$r,$s)$r.process.ExitCode=1},
+ {param($o,$r,$s)$r.state='RUNNING'},
+ {param($o,$r,$s)$r.readyHash='0'*64},
+ {param($o,$r,$s)$s.ready+='changed'},
+ {param($o,$r,$s)$r.out.Text.Replace('0:000>','1:000>')|Out-Null},
+ {param($o,$r,$s)$r.out.Text.Replace('+0x010','+0x018')|Out-Null},
+ {param($o,$r,$s)$r.out.Text.Replace(' Void',' Other')|Out-Null},
+ {param($o,$r,$s)$r.out.Text.Replace('00000000`000017ac','00000001`000017ac')|Out-Null},
+ {param($o,$r,$s)$r.out.Text.Replace('000017ac','0000265c')|Out-Null},
+ {param($o,$r,$s)$r.out.Text.Replace('000017ac','00000000')|Out-Null},
+ {param($o,$r,$s)$r.out.Text.Replace('0x00000000`000017ac','6060')|Out-Null},
+ {param($o,$r,$s)$r.out.Text.Append('extra')|Out-Null},
+ {param($o,$r,$s)$r.out.Text.Append('x'*8193)|Out-Null},
+ {param($o,$r,$s)$r.out.Text.Replace('FONT_RESOURCE_OWNER_END','FONT_RESOURCE_OWNER_BEGIN')|Out-Null},
+ {param($o,$r,$s)$r.out.Text.Replace('quit:','dt other')|Out-Null},
+ {param($o,$r,$s)$r.out.Text.Replace('OwningThread :','OwningThread : ??')|Out-Null},
+ {param($o,$r,$s)$r.out.Text.Replace('FONT_RESOURCE_OWNER_BEGIN','FONT_RESOURCE_OWNER_BEGIN`nFONT_RESOURCE_OWNER_BEGIN')|Out-Null}
+)
+Check ($ownerNegatives.Count -eq 37)
+foreach($mutate in $ownerNegatives){Reject {Test-OwnerSession $mutate}}
 $packet=@{start_rva=0x3c1d8;function=@{begin=0x3c1d8;end=0x3c21d;nolock_begin=0x3c224;nolock_end=0x3c300};basis=@{function_begin=0x3c1d8;function_end=0x3c21d;candidate_rva=0x138a78;instruction_ends=@(5,6,10,13,16,23,29,30,33,36,41,43,50,56,58,63,67,68,69);writer_return_rva=0x3c1f5;handler_return_rva=0x3c201;virtual_object=@{rva=0x130000;extent=0x20000;flags=[uint32]3221225536}}}
 $packet.unwind=@{scope='POST_PROLOGUE_COMMON_BODY';partial_prologue_qualified=$false;runtime_unwind_integrity=$false;prolog_bytes=10}
 $packet.basis.scope='POST_PROLOGUE_COMMON_BODY';$packet.basis.partial_prologue_qualified=$false;$packet.basis.runtime_unwind_integrity=$false
@@ -331,4 +387,54 @@ $ntdllDouble=@{path='C:\Windows\System32\ntdll.dll';base=[uint64]0x20000000;exte
 Assert-ResourceWitnessProfiles ($lmv+$ntdllText) $cacheDouble $codeDouble $ntdllDouble
 Check $true
 foreach($bad in @(($lmv+$ntdllText).Replace('20001000','20002000'),($lmv+$ntdllText).Replace('10.0.1.2','10.0.1.3'),($lmv+$ntdllText).Replace('System32\ntdll','SysWOW64\ntdll'))){Reject {Assert-ResourceWitnessProfiles $bad $cacheDouble $codeDouble $ntdllDouble}}
+# Exact saved 88a/run41201795245/a1/job124539168941 NTDLL block (raw SHA cb30893c2764bd8fb18003771e97fea31a532870e603123f5e8452b14e212d56).
+$savedNtdll=@'
+00007ffd`f5bc0000 00007ffd`f5dc4000   ntdll      (pdb symbols)          c:\users\runneradmin\appdata\local\temp\font-resource-c1faf5bbb63545b9974cfcbcf991a2ea\cache\ntdll.pdb\58CA28F4C1F00E50F15DE78A44B054C21\ntdll.pdb
+    Loaded symbol image file: C:\Windows\SYSTEM32\ntdll.dll
+    Image path: C:\Windows\SYSTEM32\ntdll.dll
+    Image name: ntdll.dll
+    Image was built with /Brepro flag.
+    Timestamp:        D0106634 (This is a reproducible build file hash, not a timestamp)
+    CheckSum:         00213EC2
+    ImageSize:        00204000
+    File version:     10.0.20348.5756
+    Product version:  10.0.20348.5756
+    File flags:       0 (Mask 3F)
+    File OS:          40004 NT Win32
+    File type:        2.0 Dll
+    File date:        00000000.00000000
+    Translations:     0409.04b0
+    Information from resource tables:
+        CompanyName:      Microsoft Corporation
+        ProductName:      Microsoft� Windows� Operating System
+        InternalName:     ntdll.dll
+        OriginalFilename: ntdll.dll
+        ProductVersion:   10.0.20348.5756
+        FileVersion:      10.0.20348.5756 (WinBuild.160101.0800)
+        FileDescription:  NT Layer DLL
+        LegalCopyright:   � Microsoft Corporation. All rights reserved.
+'@
+Check ((Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($savedNtdll+"`n"))) -ceq '079483c383ad0bfffab61e34ca26a841b0499f66b48aa8879b920cc8f886b1f1')
+$retained=@{path='C:\Windows\SYSTEM32\ntdll.dll';base=[uint64]0x7ffdf5bc0000;extent=0x204000;version='10.0.20348.5622';sha256='bcfe8a70a371a7d2fbcb429ab0a9e170aeebe4d73ae08d03a2da8fedec2efc78';context=@{source='88a02325e724ff1ee6393aa68c9cbea6a6258aa1';run='41201795245';attempt='1'}}
+# Expected base/extent HERE are SYNTHETIC controls, not recovered historical expectations.
+$before=$script:pathRecords.Count
+Reject {Assert-ResourceWitnessProfiles ($lmv+$savedNtdll+"`n0:000> qd`n") $cacheDouble $codeDouble $retained}
+$diag=$script:pathRecords[$script:pathRecords.Count-1].record
+Check ($diag.selected_count -eq 1 -and !$diag.received[0].outcomes.version -and $diag.expected.version -ceq '10.0.20348.5622')
+Check ($diag.received[0].fields['Product version'][0] -ceq '10.0.20348.5756')
+$positive=$retained.Clone();$positive.version='10.0.20348.5756'
+Assert-ResourceWitnessProfiles ($lmv+$savedNtdll+"`n0:000> qd`n") $cacheDouble $codeDouble $positive
+Check $true # Explicit synthetic equal-profile sensitivity, not a new admission.
+$ntNegatives=@(
+ ($savedNtdll.Replace('f5bc0000','f5bb0000')),
+ ($savedNtdll.Replace('f5dc4000','f5dc5000')),
+ ($savedNtdll.Replace('ImageSize:        00204000','ImageSize:        00205000')),
+ ($savedNtdll.Replace('Image path: C:\Windows\SYSTEM32','Image path: C:\Windows\SysWOW64')),
+ ($savedNtdll.Replace('File version:     10.0.20348.5756','File version:     10.0.20348.5622')),
+ ($savedNtdll.Replace('    File version:     10.0.20348.5756','')),
+ ($savedNtdll.Replace('    ImageSize:        00204000','    ImageSize:        malformed')),
+ ($savedNtdll+"`n"+$savedNtdll)
+)
+Check ($ntNegatives.Count -eq 8)
+foreach($bad in $ntNegatives){Reject {Assert-ResourceWitnessProfiles ($lmv+$bad+"`n0:000> qd`n") $cacheDouble $codeDouble $positive}}
 Write-Host "FONT_RESOURCE_METADATA_PASS checks=$script:checks native_processes_started=0 real_tool_reads=0 actual_application_lookup=NOT_EXECUTED code_rows=SYNTHETIC_AND_SAVED_CI_TEXT"
