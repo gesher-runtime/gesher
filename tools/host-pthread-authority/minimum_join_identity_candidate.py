@@ -7,11 +7,11 @@ import re
 
 REPOSITORY = 'gesher-runtime/gesher'
 REPOSITORY_ID = 1426153186
-BRANCH = 'wip/pthread-minimum-join-cancellation'
+BRANCH = 'wip/pthread-minimum-join-nontail-object'
 WORKFLOW = 'pthread-minimum-join-cancel-component'
 CALLER = '.github/workflows/pthread-minimum-join-cancel-component.yml'
 GUARD = '.github/workflows/pthread-minimum-join-cancel-trusted-source.yml'
-VARIABLE = 'PTHREAD_MINIMUM_JOIN_CANCEL_CALLER_COMMIT'
+VARIABLE = 'PTHREAD_MINIMUM_JOIN_NONTAIL_CALLER_COMMIT'
 JOBS = frozenset(('verify', 'diagnostic-producer', 'diagnostic-windows'))
 
 

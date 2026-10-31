@@ -4,11 +4,11 @@ from pathlib import Path
 
 BASE='f0a8364afd3380eb0e25b8d82824dd1752f91e16'
 REPO='gesher-runtime/gesher'; RID='1426153186'
-BRANCH='wip/pthread-minimum-join-cancellation'
+BRANCH='wip/pthread-minimum-join-nontail-object'
 NAME='pthread-minimum-join-cancel-component'
 CALLER='.github/workflows/pthread-minimum-join-cancel-component.yml'
 GUARD='.github/workflows/pthread-minimum-join-cancel-trusted-source.yml'
-VAR='PTHREAD_MINIMUM_JOIN_CANCEL_CALLER_COMMIT'
+VAR='PTHREAD_MINIMUM_JOIN_NONTAIL_CALLER_COMMIT'
 ADDITIONS={CALLER,GUARD,
  'docs/handoff/tracks/pthread-minimum-join-cancellation-candidate.md',
  'tests/native/host_pthread_minimum_join_cancel_candidate.c',
