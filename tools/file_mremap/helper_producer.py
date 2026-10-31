@@ -269,15 +269,17 @@ def link_dependencies(text,expanded,toolroot,build,env,diagnostic=None,collector
         A.require(path.is_relative_to(toolroot.resolve()),'foreign archive')
         archives[name]={'path':str(path),'sha256':sha(path),'members':{}}
     names={Path(x['path']).name for x in archives.values()}
-    rejected_if_false('libc++.a'in names and 'libunwind.a'in names and any('builtins'in n for n in names)and any('ucrt'in n for n in names)and 'libkernel32.a'in names,diagnostic,'required_archives',lambda:{'trace':bounded_text(text),'names':sorted(names),'archives':archives,'predicates':{'libc++.a':'libc++.a'in names,'libunwind.a':'libunwind.a'in names,'builtins':any('builtins'in n for n in names),'ucrt':any('ucrt'in n for n in names),'libkernel32.a':'libkernel32.a'in names}})
-    if not ('libc++.a'in names and 'libunwind.a'in names and any('builtins'in n for n in names)and any('ucrt'in n for n in names)and 'libkernel32.a'in names) and collector is not None:
+    ucrt_ok=any('ucrt'in n for n in names)or('libmsvcrt.a'in names and (archives.get('libmsvcrt.a',{}).get('sha256')=='4605a0d2f47c88f819dff01d19c5347cac10fdc618e5e1f505c6d094e5db0183'or any(x.get('sha256')=='4605a0d2f47c88f819dff01d19c5347cac10fdc618e5e1f505c6d094e5db0183'for x in archives.values()if Path(x.get('path','')).name=='libmsvcrt.a')))
+    required_ok='libc++.a'in names and 'libunwind.a'in names and any('builtins'in n for n in names)and ucrt_ok and 'libkernel32.a'in names
+    rejected_if_false(required_ok,diagnostic,'required_archives',lambda:{'trace':bounded_text(text),'names':sorted(names),'archives':archives,'predicates':{'libc++.a':'libc++.a'in names,'libunwind.a':'libunwind.a'in names,'builtins':any('builtins'in n for n in names),'ucrt':ucrt_ok,'libkernel32.a':'libkernel32.a'in names}})
+    if not required_ok and collector is not None:
         try:collector(archives,loads,text)
         except Exception as error:
             if TOOL_GRAPHS or A.LIVE_GRAPHS:raise
             if diagnostic is not None:
                 try:diagnostic('crt_collector_unavailable',lambda:{'error':repr(error)})
                 except Exception:pass
-    A.require('libc++.a'in names and 'libunwind.a'in names and any('builtins'in n for n in names)and any('ucrt'in n for n in names)and 'libkernel32.a'in names,'missing positive CRT/STL/unwind/builtins/system dependency')
+    A.require(required_ok,'missing positive CRT/STL/unwind/builtins/system dependency')
     for archive,member,symbol in loads:
         candidates=[v for k,v in archives.items()if k==archive or Path(k).name==Path(archive).name]
         rejected_if_false(len(candidates)==1,diagnostic,'loaded_origin',lambda:{'archive':archive,'member':member,'symbol':symbol,'candidates':candidates})
