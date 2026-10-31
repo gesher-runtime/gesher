@@ -396,6 +396,57 @@ function Stop-ExactOwnedProcess($Process,[hashtable]$Completion,[string]$Role) {
  }
 }
 
+function Get-ResourcePathRoles {
+ @{
+  FIXTURE_ROOT='FixturesDirectory parameter';FIXTURE_EXE='current verified fixture root + fixed EXE leaf'
+  WINDOWS_ROOT='Environment.GetFolderPath Windows';SYSTEM_ROOT='validated Windows root + System32'
+  CHECKOUT_ROOT='GITHUB_WORKSPACE path only';TEMP_ROOT='Path.GetTempPath path only'
+  WORK_CHILD='new owned work root + child';WORK_IMPORTS='new owned work root + imports'
+  WORK_PREWARM='new owned work root + prewarm';WORK_CAPTURE='new owned work root + capture'
+  WORK_CACHE='new owned work root + cache';WORK_COMMANDS='new owned work root + commands';WORK_TEMP='new owned work root + temp'
+  STAGED_CDB='admitted signed stage root + cdb.exe';STAGED_EXTENSION='admitted signed stage root + winext'
+  PE_CDB='admitted signed stage root + cdb.exe';PE_DBGENG='admitted signed stage root + dbgeng.dll';PE_DBGHELP='admitted signed stage root + dbghelp.dll'
+  PYTHON_APPLICATION_SOURCE='unchanged Get-Command python -CommandType Application .Source selection'
+  IMPORT_SCRIPT='verified checkout root + fixed import inventory script';CHILD_PROVIDER='owned prepared child ucrtbase/ntdll module filename'
+  PREWARM_MODULE='owned prewarm process bounded module filename'
+ }
+}
+function Get-ResourcePathDiagnostic([string]$Role,[object]$Candidate,[bool]$Directory=$false) {
+ $roles=Get-ResourcePathRoles
+ if(!$roles.ContainsKey($Role)){throw 'Unapproved resource path diagnostic role'}
+ $values=@();if($null -ne $Candidate){$values=@($Candidate)}
+ $rows=[Collections.Generic.List[object]]::new()
+ for($i=0;$i -lt [Math]::Min(8,$values.Count);$i++){
+  $value=$values[$i];$type=if($null -eq $value){'NULL'}else{$value.GetType().FullName}
+  $row=@{index=$i;type=$type;value_logged=$false}
+  if($value -is [string]){
+   $prefix=$value.Substring(0,[Math]::Min(512,$value.Length))
+   $chars=$value.Substring(0,[Math]::Min(4096,$value.Length)).ToCharArray();$bytes=[byte[]]::new($chars.Length*2)
+   if($bytes.Length){[Buffer]::BlockCopy($chars,0,$bytes,0,$bytes.Length)}
+   $row.value_logged=$true;$row.length=$value.Length;$row.prefix=$prefix
+   $row.prefix_utf16=@($prefix.ToCharArray()|ForEach-Object{([int]$_).ToString('x4')})
+   $row.sha256_utf16le=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+   $row.hash_scope=if($value.Length -le 4096){'FULL_UTF16LE'}else{'FIRST_4096_UTF16_UNITS_ONLY'}
+   $row.prefix_truncated=$value.Length -gt 512
+  }
+  # No ToString/property traversal of an unexpected object/credential bag.
+  $rows.Add($row)
+ }
+ @{role=$Role;provenance=$roles[$Role];directory=$Directory;input_type=$(if($null -eq $Candidate){'NULL'}else{$Candidate.GetType().FullName});count=$values.Count;items=$rows.ToArray();items_truncated=($values.Count -gt 8);scope='KNOWN_PATH_INPUT_ONLY_NOT_ENVIRONMENT_OR_COMMANDLINE';selection_changed=$false}
+}
+function Resolve-ResourceLiteral([string]$Role,[object]$Candidate,[bool]$Directory=$false) {
+ $diagnostic=Get-ResourcePathDiagnostic $Role $Candidate $Directory
+ Emit-PreflightRecord 'FONT_RESOURCE_PATH_INPUT' $diagnostic
+ try{
+  # Keep the ORIGINAL typed parameter binder and exact path predicate. Do not
+  # select/join/coerce/filter/normalize the candidate in this wrapper.
+  Resolve-PreflightLiteral $Candidate $Directory
+ }catch{
+  Emit-PreflightRecord 'FONT_RESOURCE_PATH_REJECTED' @{input=$diagnostic;reason=$_.Exception.Message;predicate='ORIGINAL_Resolve-PreflightLiteral_AND_Assert-OrdinaryWindowsPath_UNCHANGED';exception_type=$_.Exception.GetType().FullName}
+  throw
+ }
+}
+
 function Read-ResourceReady([string]$Text,[int]$OwnedId,[string]$Phase) {
  if($Phase -cnotin @('PREPARED','HOLD_READY')){throw 'Invalid readiness phase'}
  $pattern='^FONT_RESOURCE_'+$Phase+' pid=([1-9][0-9]{0,9}) writer=([1-9][0-9]{0,9}) handler=([1-9][0-9]{0,9})\r?\n$'
@@ -436,7 +487,7 @@ function Wait-ResourceRole($Record,[long]$Deadline) {
    $paths=@();try{$Record.process.Refresh();$paths=@($Record.process.Modules|ForEach-Object{$_.FileName})}catch{if(!$Record.process.WaitForExit(0)){throw}}
    if($paths.Count -gt 128){throw 'Prewarm module snapshot bound'}
    foreach($loaded in $paths){
-    $path=Resolve-PreflightLiteral $loaded
+    $path=Resolve-ResourceLiteral 'PREWARM_MODULE' $loaded
     $relative=if($path.StartsWith($stage.root+'\',[StringComparison]::OrdinalIgnoreCase)){$path.Substring($stage.root.Length+1).ToLowerInvariant()}else{[IO.Path]::GetFileName($path).ToLowerInvariant()}
     $observed=Get-StageDiskRecord $path $relative $false
     Assert-StageModule $path $stage.root $system $stage.manifest $observed
@@ -481,33 +532,34 @@ foreach($role in @('child','imports','help','prewarm','capture')){$stage.process
 $root=$null;$work=$null;$ok=$false;$phase='PREPARED';$completion=@{}
 try{
  $root=New-StageLifetimeRoot $stage
- $fixtureRoot=Resolve-PreflightLiteral $FixturesDirectory $true
+ $fixtureRoot=Resolve-ResourceLiteral 'FIXTURE_ROOT' $FixturesDirectory $true
  # The preceding immutable workflow step verifies the complete current receipt.
  # Bind its context and EXE bytes again under this session's retained read lock.
  $receipt=Get-Content -LiteralPath ($fixtureRoot+'\font-resource-provenance.json') -Raw -Encoding utf8|ConvertFrom-Json -AsHashtable
  if($receipt.context.source -cne $env:GITHUB_SHA -or $receipt.context.run -cne $env:GITHUB_RUN_ID -or $receipt.context.attempt -cne $env:GITHUB_RUN_ATTEMPT -or $receipt.role -cne 'CURRENT_SOURCE_HOST_FONT_OWNER_RESOURCE_CHARACTERIZATION'){throw 'Resource context mismatch'}
- $probe=Resolve-PreflightLiteral ($fixtureRoot+'\font_environment_resource_characterization.exe')
+ $probe=Resolve-ResourceLiteral 'FIXTURE_EXE' ($fixtureRoot+'\font_environment_resource_characterization.exe')
  $probeStream=[IO.File]::Open($probe,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read);$stage.handles.Add(@{stream=$probeStream;handle=$probeStream.SafeFileHandle})
  if((Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash.ToLowerInvariant() -cne $receipt.outputs['font_environment_resource_characterization.exe']){throw 'Current EXE changed after receipt'}
  $sourceTool=Get-RegisteredDebugger;$sdk=[IO.Path]::GetDirectoryName($sourceTool)
- $windows=Resolve-PreflightLiteral ([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)) $true
- $system=Resolve-PreflightLiteral ($windows+'\System32') $true
- $checkout=Resolve-PreflightLiteral $env:GITHUB_WORKSPACE $true
- $temp=Resolve-PreflightLiteral ([IO.Path]::GetTempPath().TrimEnd('\')) $true
+ $windows=Resolve-ResourceLiteral 'WINDOWS_ROOT' ([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)) $true
+ $system=Resolve-ResourceLiteral 'SYSTEM_ROOT' ($windows+'\System32') $true
+ $checkout=Resolve-ResourceLiteral 'CHECKOUT_ROOT' $env:GITHUB_WORKSPACE $true
+ $temp=Resolve-ResourceLiteral 'TEMP_ROOT' ([IO.Path]::GetTempPath().TrimEnd('\')) $true
  foreach($path in @($sdk,$temp)){if($path -ieq $checkout -or $path.StartsWith($checkout+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'SDK/temp inside checkout'}}
  if($temp -ieq $sdk -or $temp.StartsWith($sdk+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Temp inside source SDK'}
  $work=$temp+'\font-resource-'+[guid]::NewGuid().ToString('N');$null=New-Item -ItemType Directory -Path $work
- foreach($leaf in @('child','imports','prewarm','capture','cache','commands','temp')){$null=New-Item -ItemType Directory -Path ($work+'\'+$leaf);$null=Resolve-PreflightLiteral ($work+'\'+$leaf) $true}
+ foreach($leaf in @('child','imports','prewarm','capture','cache','commands','temp')){$null=New-Item -ItemType Directory -Path ($work+'\'+$leaf);$null=Resolve-ResourceLiteral ('WORK_'+$leaf.ToUpperInvariant()) ($work+'\'+$leaf) $true}
  Initialize-SignedStage $sdk ($work+'\stage') $stage
- $tool=Resolve-PreflightLiteral ($stage.root+'\cdb.exe');$extension=Resolve-PreflightLiteral ($stage.root+'\winext') $true
+ $tool=Resolve-ResourceLiteral 'STAGED_CDB' ($stage.root+'\cdb.exe');$extension=Resolve-ResourceLiteral 'STAGED_EXTENSION' ($stage.root+'\winext') $true
  $entries=@();foreach($name in @('cdb.exe','dbgeng.dll','dbghelp.dll')){
   $row=@($stage.manifest|Where-Object{$_.relative -ceq $name});if($row.Count -ne 1){throw 'Missing exact admitted PE member'}
-  $path=Resolve-PreflightLiteral ($stage.root+'\'+$name)
+  $path=Resolve-ResourceLiteral (@{'cdb.exe'='PE_CDB';'dbgeng.dll'='PE_DBGENG';'dbghelp.dll'='PE_DBGHELP'}[$name]) ($stage.root+'\'+$name)
   $held=@($stage.handles|Where-Object{$_.stream.Name -ceq $path});if($held.Count -ne 1 -or $held[0].handle.IsClosed -or !$held[0].stream.CanRead -or $held[0].stream.Length -ne $row[0].size){throw 'Missing actual retained manifest PE lock'}
   $entries+=@{name=$name;bytes=$row[0].size;sha256=$row[0].sha256}
  }
- $python=Resolve-PreflightLiteral (Get-Command python -CommandType Application -ErrorAction Stop).Source
- $psi=New-PreflightStartInfo $python ($work+'\imports') $windows ($work+'\temp') @((Resolve-PreflightLiteral ($checkout+'\tools\fonts\resource-import-inventory.py'))) $false
+ $pythonSource=(Get-Command python -CommandType Application -ErrorAction Stop).Source
+ $python=Resolve-ResourceLiteral 'PYTHON_APPLICATION_SOURCE' $pythonSource
+ $psi=New-PreflightStartInfo $python ($work+'\imports') $windows ($work+'\temp') @((Resolve-ResourceLiteral 'IMPORT_SCRIPT' ($checkout+'\tools\fonts\resource-import-inventory.py'))) $false
  $imports=Start-ResourceRole $stage 'imports' $psi
  $header=[Text.Encoding]::UTF8.GetBytes((@{entries=$entries}|ConvertTo-Json -Depth 8 -Compress)+"`n");Send-ResourceBytes $imports $header $header.Length
  foreach($entry in $entries){
@@ -530,7 +582,7 @@ try{
  # All cold module/signature work is before START. Same admitted tools are
  # prewarmed against this real prepared child, not an unrelated help process.
  $child.process.Refresh();$modules=@($child.process.Modules);if($modules.Count -gt 128){throw 'Module count bound'}
- $providers=@{};foreach($module in $modules){if($module.ModuleName -in @('ucrtbase.dll','ntdll.dll')){$path=Resolve-PreflightLiteral $module.FileName;if([IO.Path]::GetDirectoryName($path) -ine $system -or $providers.ContainsKey($module.ModuleName)){throw 'Provider identity'};$providers[$module.ModuleName]=$path;Emit-PreflightRecord 'FONT_RESOURCE_PROVIDER' (Get-PreflightFileProfile $path)}}
+ $providers=@{};foreach($module in $modules){if($module.ModuleName -in @('ucrtbase.dll','ntdll.dll')){$path=Resolve-ResourceLiteral 'CHILD_PROVIDER' $module.FileName;if([IO.Path]::GetDirectoryName($path) -ine $system -or $providers.ContainsKey($module.ModuleName)){throw 'Provider identity'};$providers[$module.ModuleName]=$path;Emit-PreflightRecord 'FONT_RESOURCE_PROVIDER' (Get-PreflightFileProfile $path)}}
  if($providers.Count -ne 2){throw 'Actual prepared providers missing'}
  $prewarmFile=$work+'\commands\prewarm.txt';Write-ResourceCommand $stage $prewarmFile ((New-PreflightCommands $extension)+"`n")
  $prewarm=Start-ResourceRole $stage 'prewarm' (New-PreflightStartInfo $tool ($work+'\prewarm') $windows ($work+'\temp') (New-PreflightArguments $child.pid $prewarmFile $system ($work+'\cache') $extension) $false)
