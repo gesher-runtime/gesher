@@ -1,3 +1,33 @@
+# Common-Punch correction INCREMENT: request-wide work remains
+
+SOURCE WIP after independent7f3 review, NOT complete source freeze/acceptance.
+Common Punch now prepares combined hole live/protection vectors in the caught
+helper before its retirement loop; after actual checked FileAliasFree coalescing,
+merged publication is a compile-time no-throw same-allocator Region move. A failed
+coalesce keeps the real separate entries and records error/failed containment;
+no fictitious enlarged interval is published. Full common view retirement now
+uses the target-only unmap route and clears stale hole protection metadata.
+
+The dedicated helper/noexceptions caller budgets real new combined-ledger
+allocations, choosing pages greater than a measured local vector<bool> capacity.
+This is not the required production registry first.live.capacity witness. Native
+helper/control compilation and execution remain CI-only/unexecuted.
+
+Remaining concrete implementation is substantial: combined-ledger staging alone
+is NOT a request-wide no-allocation guarantee. GroupFile still creates a section
+before Punch and can later split a private tail; common anon/hole splits still
+call allocating legacy SplitEntry after OS changes; PunchPromoted prepares each
+piece when visited, potentially after a prior piece retired; legacy PunchView
+copies Region/SavedPage/private bytes and duplicates handles around transitions.
+The next request-wide plan must preallocate ALL those nodes/vectors/snapshots and
+bounded owner pins before the outer request's first OS acquisition/effect. Allocate
+private buffers before checked temporary-read/restoration of NOACCESS COW pages,
+with explicit retained handle ownership/cleanup; no fake rollback on partial failure.
+Actual production-capacity/prepfailure-zero-OS and explicit coalesce failure native
+children/ledger/resource controls are NOT yet implemented. All old18/11/4-protection
+controls remain; helper/full-A workflow files stay unedited. Full-source acceptance
+requires completing these continuations and a DIFFERENT whole peer.
+
 # Current logical-hole mprotect correction SOURCE checkpoint
 
 The independent9c7 blocker is corrected in source, not yet compiled or independently

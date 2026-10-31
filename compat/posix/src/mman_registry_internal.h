@@ -64,6 +64,11 @@ struct PreparedAlias {
 enum class PrepareStatus { Ok, NoMemory, InvalidSize, InternalFailure };
 PrepareStatus PrepareAlias(const AliasInput&, PreparedAlias&) noexcept;
 PrepareStatus PrepareAliasFromNoExceptions(const AliasInput&, PreparedAlias&) noexcept; // dedicated CI caller object only
+// Combined placeholder ledger prepared before common Punch transitions.
+// This alone does not prepare per-piece/private constructor continuations.
+struct PreparedPunchLedger { Region combined; };
+PrepareStatus PreparePunchLedger(size_t, size_t, uintptr_t, PreparedPunchLedger&) noexcept;
+PrepareStatus PreparePunchLedgerFromNoExceptions(size_t,size_t,uintptr_t,PreparedPunchLedger&) noexcept;
 struct PreparedSplit { Region lower; RegionMap::node_type upper; };
 PrepareStatus PrepareSplit(const Region&, uintptr_t, uintptr_t, size_t, PreparedSplit&) noexcept;
 struct PreparedSurgery {
