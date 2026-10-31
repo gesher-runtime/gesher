@@ -3,6 +3,7 @@
 import argparse
 import fnmatch
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -179,19 +180,24 @@ def emit_record(label, value, raw=None, flush=None):
         print(line, flush=True)
 
 
-def selected_members(executables, compiler_info):
+def receipt_name(role):
+    require(role in ('production', 'query-hook', 'binder-ordinary-actor', 'native3-common-host-fixture'), 'Unknown selected artifact role')
+    return 'selected-pthread-' + role + '-toolchain.json'
+
+
+def selected_members(executables, compiler_info, role):
     if 'selected_toolchain' not in compiler_info:
         return set()
-    return {'selected-pthread-toolchain.json'} | {
+    return {receipt_name(role)} | {
         name + '.selected-pthread-' + tail for name in executables
         for tail in ('link.json', 'trace.txt', 'map.txt', 'imports.txt')}
 
 
-def seal_selected(outputs, compiler_info):
+def seal_selected(outputs, compiler_info, role):
     if 'selected_toolchain' not in compiler_info:
         return None
     outputs = list(outputs)
-    result = {published.name: selected_ledger().seal(original, published, compiler_info)
+    result = {published.name: selected_ledger().seal(original, published, compiler_info, receipt_name(role))
               for original, published in outputs}
     for _, published in outputs:
         raw = (published.parent / result[published.name]['file']).read_bytes()
@@ -200,7 +206,7 @@ def seal_selected(outputs, compiler_info):
     return result
 
 
-def verify_selected(directory, links, compiler_info, info, executables):
+def verify_selected(directory, links, compiler_info, info, executables, role):
     if 'selected_toolchain' not in compiler_info:
         require(links is None, 'Selected evidence injected into a publisher role')
         return
@@ -213,10 +219,33 @@ def verify_selected(directory, links, compiler_info, info, executables):
         expected[field] = info[key]
     require(isinstance(links, dict) and set(links) == set(executables), 'Missing/extra selected target records')
     for name, link in links.items():
-        selected_ledger().verify_sealed(directory, link, compiler_info, name, expected)
+        selected_ledger().verify_sealed(directory, link, compiler_info, name, expected, receipt_name(role))
     for link in links.values():
         for line in ledger_lines((directory / link['file']).read_bytes(), 'VERIFIED_SELECTED_TARGET_LINK'):
             print(line, flush=True)
+
+
+def production_targets(directory, production, info, hook=False):
+    """Selected producer inventory; merged actors are a separately verified role."""
+    if 'selected_toolchain' not in production['compiler']:
+        return {p.name for p in directory.glob('*.exe') if p.name != HOOK}
+    names = production['selected_executables']
+    require(isinstance(names, list) and names and names == sorted(set(names)), 'Invalid producer executable inventory')
+    require(all(Path(n).name == n and n.endswith('.exe') for n in names), 'Invalid producer executable path')
+    require(not ({HOOK, 'binder_sg_actor.exe'} & set(names)), 'Secondary role absorbed into production inventory')
+    present = {p.name for p in directory.glob('*.exe')}
+    require(set(names) <= present, 'Missing actual production executable')
+    extra = present - set(names)
+    if 'binder_sg_actor.exe' in extra:
+        spec = importlib.util.spec_from_file_location('selected_binder_full_host', ROOT / 'tools/binder/verify-full-host.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.verify_actor(directory, production, info, strict_payload=False)
+        extra.remove('binder_sg_actor.exe')
+    if hook:
+        extra.discard(HOOK)
+    require(not extra, 'Unverified executable added by an independent producer: ' + repr(sorted(extra)))
+    return set(names)
 
 def compiler_preflight(args):
     info = context()
@@ -252,9 +281,10 @@ def capture_production(args):
                 shared_sources=sources(), executable="dalvikvm.exe", executable_sha256=sha(executable),
                 executable_map_sha256=sha(dist / "dalvikvm.map"))
     links = seal_selected([(Path('dist-web3-observer') / p.name if p.name == 'web3_process_waits.exe' else build / p.name, p)
-                           for p in sorted(dist.glob('*.exe'))], role['compiler'])
+                           for p in sorted(dist.glob('*.exe'))], role['compiler'], 'production')
     if links is not None:
         role['selected_link'] = links
+        role['selected_executables'] = sorted(links)
     (dist / "web3-production-role.json").write_text(json.dumps(role, indent=2) + "\n", encoding="utf-8")
     state = {"role": role, "commands": [[list(key), value] for key, value in before.items()]}
     Path(args.state).write_text(json.dumps(state) + "\n", encoding="utf-8")
@@ -290,7 +320,7 @@ def capture_hook(args):
                 executable_map_sha256=sha(out / "dalvikvm-web3-query-test.map"),
                 production_runtime_sha256=production["executable_sha256"],
                 changed_compile_definitions=sorted(changed))
-    links = seal_selected([(build / 'dalvikvm.exe', out / HOOK)], role['compiler'])
+    links = seal_selected([(build / 'dalvikvm.exe', out / HOOK)], role['compiler'], 'query-hook')
     if links is not None:
         role['selected_link'] = links
     (out / "web3-query-hook-role.json").write_text(json.dumps(role, indent=2) + "\n", encoding="utf-8")
@@ -308,7 +338,7 @@ def verify(args):
     require(sha(dist / "dalvikvm.map") == production["executable_map_sha256"], "Production exact map copy mismatch")
     installer_excludes_fixture()
     verify_selected(dist, production.get('selected_link'), production['compiler'], info,
-                    {p.name for p in dist.glob('*.exe') if p.name != HOOK})
+                    production_targets(dist, production, info, hook=args.hook), 'production')
     if args.hook:
         hook = json.loads((dist / "web3-query-hook-role.json").read_text(encoding="utf-8"))
         require(all(hook[key] == value for key, value in info.items()), "Hook supplier context mismatch")
@@ -320,7 +350,7 @@ def verify(args):
                 "Different compiler or production code for query-hook runtime")
         require(hook["production_runtime_sha256"] == production["executable_sha256"] and
                 set(hook["changed_compile_definitions"]) == CHANGED, "Different role boundary")
-        verify_selected(dist, hook.get('selected_link'), hook['compiler'], info, {HOOK})
+        verify_selected(dist, hook.get('selected_link'), hook['compiler'], info, {HOOK}, 'query-hook')
         print("VERIFIED_WEB3_FULL_ROLES source=" + info["source"] + " production=" + production["executable_sha256"] +
               " hook=" + hook["executable_sha256"] + " shared-source-identical=True compiler-identical=True")
     else:

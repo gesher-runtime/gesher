@@ -1,9 +1,9 @@
 # Selected first-caller ledger wiring: source-only proposal
 
 Base helper: `4216a2999f0755faa42993fe4ea38fe66efc4957`, independently API-peered.
-The separate helper and factory worktrees stay frozen. This branch changes
-only five existing tooling/action/first-job paths and adds this handoff and
-one source/metadata test. No supplier implementation, public header, runtime,
+The separate helper and factory worktrees stay frozen. The corrected receiver
+branch intentionally extends the helper's receipt-filename API only, adds the
+actual Binder reader, and includes assembly controls. No supplier implementation, public header, runtime,
 source-authority guard, default supplier or Web4 implementation changes.
 There is no CI/publication/full-adoption approval.
 
@@ -25,11 +25,27 @@ field. The original metadata/driver/launcher/compile-command checks remain.
 Publisher return JSON is byte-equal to the original function with the same
 inputs. Production OFF/hook ON keep their original compiler equality check.
 
-Production capture seals every actual copied executable before the hook
-relink, including the separately built observer. Hook capture seals a separate
-record for its renamed executable; production verification excludes that
-separate hook filename from the production target set. Ordinary Binder actor
+Production capture records an explicit sorted executable inventory and seals
+every actual copied executable before the hook
+relink, including the separately built observer. Verification uses this
+producer inventory, not an enumeration after artifact merging; missing or
+absorbed secondary roles and unknown extra executables reject. Hook capture
+seals a separate record for its renamed executable. Ordinary Binder actor
 capture seals its moved output before computing the existing whole-file map.
+The actual Binder reader validates exact two-file publisher/seven-file
+selected payloads, all original source/compiler/role bindings and portable
+selected evidence before assembly. When production verification encounters
+the merged actor, it invokes that same actor verifier for its role-owned
+subset; it does not demand the actor inside production's own link records.
+Strict whole isolated actor inventory remains the CLI default. Global
+`tools/surface/assemble-artifacts.py` collision rules are byte-unchanged.
+
+The receipt names are explicitly scoped as
+`selected-pthread-{production,query-hook,binder-ordinary-actor,native3-common-host-fixture}-toolchain.json`.
+Both seal and portable verification require the caller's explicit name; the
+index also binds that name and whole receipt hash. This avoids generic-name
+collisions between production, hook and Binder artifacts without waiving
+identical-byte collisions or overwriting another owner's payload.
 
 Native capture seals the three existing outputs before computing its inventory:
 exact original six EXE/import files plus exactly 13 selected evidence members
@@ -68,18 +84,30 @@ bytes and original flush behavior stay exact.
 - Exact publisher log output/flush and selected whole-byte transport roundtrip;
   nine missing/order/namespace/label/hash/long-line controls rejected.
 
-The unchanged helper's 40 proof / two mode / six argv / eight response / 23
-sealed negatives and full actual historical C++ replay remain passing:
+The helper's narrow receipt-name extension retains 40 proof / two mode / six
+argv / eight response / 25 sealed negatives, including wrong-role/nonleaf
+receipt names. The full actual historical C++ replay remains passing:
 142 definitions/seven members/all 18 old bindings equal/seven actual ablations.
 That replay is only old diagnostic archive `5c53...`, not fresh selected
 `b415...` or a new execution. Python AST, YAML and Bash `-n` checks pass.
+
+`python tools/toolchain/test_selected_link_assembly.py` invokes the actual
+unchanged Surface assembler and actual new Binder verifier in an owned
+temporary directory containing plain ASCII metadata markers (including some
+`.exe` filenames, with no PE/native code). It exercises the real
+production-to-hook and production-to-Binder consumer order before and after
+assembly, distinct receipt ownership and exact producer inventories. Two
+identical-byte collision controls reject atomically, three missing/absorbed/
+unverified executable controls reject, and six actor/hook/receipt/context controls
+reject. Default publisher Binder still accepts exactly its original two
+files and emits exactly its old JSON log bytes. No native fixture is executed.
 
 ## Deliberately open adoption gates
 
 Actual selected CMake launcher/response/map/sidecar execution is unqualified.
 Existing complete-source/trusted-caller guards still reject this new source;
-none is relaxed. Global and independent roots, full runtime/tests, later
-Binder consumer use of the portable member verifier, packaging consumers and
+none is relaxed. Global and independent roots, full runtime/tests, actual
+integrated Binder portable verification execution, packaging consumers and
 all stronger clock/provider/lifecycle/bootstrap/cancellation/TSD/async promises
 remain separate gates. Existing canonical publisher failures remain hard.
 

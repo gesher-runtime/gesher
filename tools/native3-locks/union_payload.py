@@ -155,8 +155,8 @@ def check_manifest(root, role, expected, context, sources):
     assert actual['context'] == context and actual['sources'] == sources and actual['role'] == role
     if role == 'native3-common-host-fixture':
         executables = {name + '.exe' for name in TARGETS}
-        host_roles.verify_selected(root, actual.get('selected_link'), actual['compiler'], context, executables)
-        expected = expected | host_roles.selected_members(executables, actual['compiler'])
+        host_roles.verify_selected(root, actual.get('selected_link'), actual['compiler'], context, executables, role)
+        expected = expected | host_roles.selected_members(executables, actual['compiler'], role)
     files = flat_inventory(root, expected | {'provenance.json'})
     del files['provenance.json']
     assert files == actual['outputs'], 'Actual fixture bytes differ from producer manifest'
@@ -246,9 +246,9 @@ def main():
         assert production['executable_sha256'] == host_roles.sha(ROOT / 'dist/dalvikvm.exe')
         assert host_roles.cache(ROOT / 'out')['GESHER_WEB3_QUERY_TESTS'] == 'OFF'
         selected_links = host_roles.seal_selected([(ROOT / 'out' / (name + '.exe'), args.host / (name + '.exe'))
-                                                  for name in TARGETS], compiler)
+                                                  for name in TARGETS], compiler, 'native3-common-host-fixture')
         outputs = flat_inventory(args.host, HOST_FILES | host_roles.selected_members(
-            {name + '.exe' for name in TARGETS}, compiler))
+            {name + '.exe' for name in TARGETS}, compiler, 'native3-common-host-fixture'))
         compile_commands = {}
         for name in TARGETS[:2]:
             relative = 'tests/native3-locks/' + ('command_worker.cc' if name.endswith('command_worker') else 'duplicate_windows_test.cc')

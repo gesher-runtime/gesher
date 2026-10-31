@@ -63,7 +63,7 @@ def sealed_controls(old):
     with tempfile.TemporaryDirectory(prefix='gesher-selected-ledger-metadata-') as temporary:
         directory = Path(temporary)
         (directory / 'payload.txt').write_bytes(b'SYNTHETIC_METADATA_ONLY_NOT_PE')
-        (directory / 'selected-pthread-toolchain.json').write_bytes(raw)
+        (directory / 'selected-pthread-test-toolchain.json').write_bytes(raw)
         record = dict(schema=ledger.SCHEMA, selected_toolchain=compiler['selected_toolchain'], cwd='/SYNTHETIC/out',
                       argv=[driver, '-o', 'payload.txt', '-Wl,--verbose', '-Wl,-Map,payload.map'],
                       response_files=[], exit_code=0,
@@ -82,9 +82,9 @@ def sealed_controls(old):
         def write(value):
             path.write_text(json.dumps(value), encoding='utf-8')
             return dict(file=path.name, sha256=ledger.factory.sha(path), output_sha256=record['output']['sha256'],
-                        status='NOT-LINKED', receipt_sha256=ledger.digest(raw))
+                        status='NOT-LINKED', receipt_sha256=ledger.digest(raw), receipt_file='selected-pthread-test-toolchain.json')
         link = write(record)
-        assert ledger.verify_sealed(directory, link, compiler, 'payload.txt', data['context']) == record
+        assert ledger.verify_sealed(directory, link, compiler, 'payload.txt', data['context'], 'selected-pthread-test-toolchain.json') == record
         mutations = [lambda r: r.update(exit_code=1), lambda r: r.update(schema='old'),
                      lambda r: r['argv'].__setitem__(0, '/SYNTHETIC/other/clang++'),
                      lambda r: r['expanded_argv'].append('hidden.obj'),
@@ -97,16 +97,20 @@ def sealed_controls(old):
             bad = copy.deepcopy(record)
             mutate(bad)
             link = write(bad)
-            reject(lambda: ledger.verify_sealed(directory, link, compiler, 'payload.txt', data['context']))
+            reject(lambda: ledger.verify_sealed(directory, link, compiler, 'payload.txt', data['context'], 'selected-pthread-test-toolchain.json'))
         link = write(record)
         for key in ('sha256', 'receipt_sha256', 'output_sha256'):
             bad = dict(link)
             bad[key] = '0'*64
-            reject(lambda: ledger.verify_sealed(directory, bad, compiler, 'payload.txt', data['context']))
+            reject(lambda: ledger.verify_sealed(directory, bad, compiler, 'payload.txt', data['context'], 'selected-pthread-test-toolchain.json'))
+        bad = dict(link);bad['receipt_file'] = 'selected-pthread-other-role-toolchain.json'
+        reject(lambda: ledger.verify_sealed(directory, bad, compiler, 'payload.txt', data['context'], 'selected-pthread-test-toolchain.json'))
+        bad = dict(link);bad['receipt_file'] = '../outside.json'
+        reject(lambda: ledger.verify_sealed(directory, bad, compiler, 'payload.txt', data['context'], '../outside.json'))
         for field in data['context']:
             expected = dict(data['context'])
             expected[field] = 'wrong-outer-context'
-            reject(lambda: ledger.verify_sealed(directory, link, compiler, 'payload.txt', expected))
+            reject(lambda: ledger.verify_sealed(directory, link, compiler, 'payload.txt', expected, 'selected-pthread-test-toolchain.json'))
         # A coherent older receipt + compiler + per-output sidecar still fails
         # against the independently supplied current outer producer context.
         for field, value in (('GITHUB_SHA', '2'*40), ('GITHUB_RUN_ID', '123455'), ('GITHUB_RUN_ATTEMPT', '2'),
@@ -124,13 +128,13 @@ def sealed_controls(old):
             old_record['selected_toolchain'] = old_compiler['selected_toolchain']
             old_link = write(old_record)
             old_link['receipt_sha256'] = ledger.digest(old_raw)
-            (directory / 'selected-pthread-toolchain.json').write_bytes(old_raw)
-            reject(lambda: ledger.verify_sealed(directory, old_link, old_compiler, 'payload.txt', data['context']))
-        (directory / 'selected-pthread-toolchain.json').write_bytes(raw)
+            (directory / 'selected-pthread-test-toolchain.json').write_bytes(old_raw)
+            reject(lambda: ledger.verify_sealed(directory, old_link, old_compiler, 'payload.txt', data['context'], 'selected-pthread-test-toolchain.json'))
+        (directory / 'selected-pthread-test-toolchain.json').write_bytes(raw)
         link = write(record)
         (directory / 'trace.txt').write_text('CHANGED', encoding='utf-8')
-        reject(lambda: ledger.verify_sealed(directory, link, compiler, 'payload.txt', data['context']))
-    print('PASS portable sealed metadata: 23 receipt/output/record/command/evidence/outer-context negatives; textual fixtures only, no native/process/network')
+        reject(lambda: ledger.verify_sealed(directory, link, compiler, 'payload.txt', data['context'], 'selected-pthread-test-toolchain.json'))
+    print('PASS portable sealed metadata: 25 receipt/output/record/command/evidence/outer-context/role-name negatives; textual fixtures only, no native/process/network')
 
 
 def controls(authority):

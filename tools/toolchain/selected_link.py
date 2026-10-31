@@ -326,7 +326,7 @@ def capture(argv):
     return 0
 
 
-def seal(original, published, compiler):
+def seal(original, published, compiler, receipt_name):
     """Copy reconstructible evidence beside an already copied/moved final PE."""
     data, raw = authority()
     assert compiler['selected_toolchain'] == identity(data, raw)
@@ -352,7 +352,8 @@ def seal(original, published, compiler):
     assert prove(Path(record['evidence']['trace']['path']).read_text(), mapping.read_text(),
                  Path(record['evidence']['imports']['path']).read_text(), data, Path(record['cwd'])) == record['proof']
     sealed = dict(record, evidence=evidence)
-    receipt = published.with_name('selected-pthread-toolchain.json')
+    assert isinstance(receipt_name, str) and Path(receipt_name).name == receipt_name and receipt_name.endswith('.json')
+    receipt = published.with_name(receipt_name)
     if receipt.exists():
         assert receipt.read_bytes() == raw
     else:
@@ -360,17 +361,18 @@ def seal(original, published, compiler):
     path = published.with_name(published.name + '.selected-pthread-link.json')
     path.write_text(json.dumps(sealed, sort_keys=True, indent=2) + '\n', encoding='utf-8')
     return dict(file=path.name, sha256=factory.sha(path), output_sha256=record['output']['sha256'],
-                status=record['proof']['status'], receipt_sha256=digest(raw))
+                status=record['proof']['status'], receipt_sha256=digest(raw), receipt_file=receipt_name)
 
 
-def verify_sealed(directory, link, compiler, executable, expected_context):
+def verify_sealed(directory, link, compiler, executable, expected_context, receipt_name):
     """Portable receiver proof: actual archived evidence, no native processes."""
     def member(name):
         assert isinstance(name, str) and Path(name).name == name and name not in ('', '.', '..')
         path = directory / name
         assert path.is_file() and not path.is_symlink()
         return path
-    raw = member('selected-pthread-toolchain.json').read_bytes()
+    assert link['receipt_file'] == receipt_name
+    raw = member(receipt_name).read_bytes()
     data = json.loads(raw)
     factory.check_metadata(data, expected_context)
     assert identity(data, raw) == compiler['selected_toolchain']
