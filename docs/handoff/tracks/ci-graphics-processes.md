@@ -22,10 +22,16 @@ does not read the rest; Length is never trusted. Unknown open/read/close stays
 in the SAME owner with original refs, no blind retry or unproved release.
 All native cancellation/BOTH-live-writer behavior remains UNEXECUTED; source
 fake tasks cannot prove it, and nonsignaled-child/terminal-task gates remain.
+Typed MechanismFailure and CleanupBudgetExpired latch unexpected acquisition,
+query/IO/sink/close faults or expired process/task cleanup. ALL five cases
+require both explicit booleans false; timeout also requires original EOF
+completion. Late settlement never clears these facts or qualifies an intended
+negative. Five actual-product timeout/reason branches distinguish clean expiry
+from late postkill completion and IO/query/sink faults, without native calls.
 
 Current pure qualification controls execute actual extracted Report stages:
 12 prior false-PASS substitutions reproduce against fe036 and all reject now;
-five intended contrasts plus59 substitutions pass their expected verdicts.
+five intended contrasts plus69 substitutions pass their expected verdicts.
 Twenty actual ParentReceipt bindings and nine bounded-stream doubles pass,
 including16384-byte EOF,16385 overflow, lying Length, partial reads and unknown
 open/read/close/native text. Requested/read totals are recorded, not inferred

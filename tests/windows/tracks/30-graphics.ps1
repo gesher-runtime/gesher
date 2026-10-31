@@ -41,7 +41,7 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
     Cancellation = $null; CancelState = 'UNATTEMPTED'; ProcessClose = 'UNATTEMPTED';
     CancelClose = 'UNATTEMPTED'; Kernel = $false; Kill = $false; Tasks = $false;
     Handle = $null; Pid = 0; Birth = [UInt64]0; NativeExit = $null; Out = '';
-    OperationExpired = $false; EofComplete = $false;
+    OperationExpired = $false; EofComplete = $false; MechanismFailure = $false; CleanupBudgetExpired = $false;
     Pipes = @(@{ Reader = $null; Handle = $null; Value = [Int64]0; Task = $null; Read = 'UNATTEMPTED'; Close = 'UNATTEMPTED'; Copied = $false },
               @{ Reader = $null; Handle = $null; Value = [Int64]0; Task = $null; Read = 'UNATTEMPTED'; Close = 'UNATTEMPTED'; Copied = $false }) }
   while ($true) {
@@ -76,6 +76,7 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
           $o.Kill = $true # one reservation BEFORE attempt
           $o.P.Kill($true)
           $o.Kernel = $o.P.WaitForExit(5000)
+          if (-not $o.Kernel) { $o.CleanupBudgetExpired = $true }
           if ($o.Kernel) { $o.NativeExit = [int]$o.P.ExitCode }
         }
         $o.EofComplete = $true
@@ -95,6 +96,7 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
           $o.Failed = $true
           if (-not $o.Kill) { $o.Kill = $true; $o.P.Kill($true) }
           $o.Kernel = $o.P.WaitForExit(5000)
+          if (-not $o.Kernel) { $o.CleanupBudgetExpired = $true }
           if ($o.Kernel) { $o.NativeExit = [int]$o.P.ExitCode }
         }
         if ($o.CancelState -eq 'UNATTEMPTED') {
@@ -107,10 +109,12 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
         foreach ($q in $o.Pipes) {
           if ($q.Read -eq 'OWNED' -and -not $q.Task.IsCompleted) {
             $o.Tasks = $false
-            try { [void]$q.Task.Wait(5000) } catch { $o.Failed = $true }
+            try { if (-not $q.Task.Wait(5000)) { $o.CleanupBudgetExpired = $true } }
+            catch { $o.Failed = $true; if ($q.Task.Status -ne [Threading.Tasks.TaskStatus]::Canceled) { $o.MechanismFailure = $true } }
           }
         }
-        foreach ($q in $o.Pipes) { if ($q.Read -eq 'OWNED' -and -not $q.Task.IsCompleted) { $o.Tasks = $false } }
+        $o.Tasks = $true
+        foreach ($q in $o.Pipes) { if ($q.Read -eq 'OWNED' -and -not $q.Task.IsCompleted) { $o.Tasks = $false; $o.CleanupBudgetExpired = $true } }
         if (-not $o.Kernel -or -not $o.Tasks) { $o.Failed = $true; continue }
         $o.Phase = 'Close'
       }
@@ -153,7 +157,8 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
             MarkerPresent = [bool]$o.Out.Contains("$Main all passed"); OperationExpired = [bool]$o.OperationExpired;
             EofComplete = [bool]$o.EofComplete; TasksComplete = [bool]$o.Tasks;
             PipesClosed = [int]@($o.Pipes | Where-Object { $_.Close -eq 'DONE' -and $null -ne $_.Handle }).Count;
-            ObservationFailed = [bool]$o.Failed; ExpectedImage = [IO.Path]::GetFullPath($psi.FileName) }
+            ObservationFailed = [bool]$o.Failed; ExpectedImage = [IO.Path]::GetFullPath($psi.FileName);
+            MechanismFailure = [bool]$o.MechanismFailure; CleanupBudgetExpired = [bool]$o.CleanupBudgetExpired }
           Write-Host "ACTUAL_GRAPHICS_CLEANUP pid=$($o.Pid) kernel=$($o.Kernel) tasks=$($o.Tasks) pipes=2 disposed=True output=$($o.Pipes[0].Value) error=$($o.Pipes[1].Value)"
         }
         $timedOut = [bool]$o.Failed
@@ -175,6 +180,7 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
       }
     } catch {
       $o.Failed = $true
+      $o.MechanismFailure = $true
       if ($o.Phase -eq 'Observe') { $o.EofComplete = $false }
       if ($o.Phase -in @('Acquire','Observe')) { $o.Phase = 'Settle' }
       # Protected parking; no sink/query/close is required to retain ownership.
