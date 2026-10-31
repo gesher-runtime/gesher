@@ -56,6 +56,15 @@
 
 #include "binder_internal.h"
 
+// Dedicated failure object only; normal production route is fixed Win32.
+#ifdef GESHER_FILE_MREMAP_FAILURE_TEST
+#include "../../../tests/file_mremap/alias_failure_adapter.h"
+#else
+#define FileAliasDuplicateHandle DuplicateHandle
+#define FileAliasMapViewOfFile MapViewOfFile
+#define FileAliasCloseHandle CloseHandle
+#endif
+
 #ifndef MEM_RESERVE_PLACEHOLDER
 #define MEM_RESERVE_PLACEHOLDER 0x00040000
 #endif
@@ -258,14 +267,14 @@ void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int
   prepared.emplace(0, std::move(alias));
   auto node = prepared.extract(prepared.begin());
   HANDLE mapping = nullptr;
-  if (!DuplicateHandle(GetCurrentProcess(), from.mapping, GetCurrentProcess(), &mapping,
+  if (!FileAliasDuplicateHandle(GetCurrentProcess(), from.mapping, GetCurrentProcess(), &mapping,
                        0, FALSE, DUPLICATE_SAME_ACCESS)) { errno = ENOMEM; return MAP_FAILED; }
   const DWORD access = protection == PAGE_READWRITE ? FILE_MAP_WRITE : FILE_MAP_READ;
-  void* view = MapViewOfFile(mapping, access, static_cast<DWORD>(section_offset >> 32),
+  void* view = FileAliasMapViewOfFile(mapping, access, static_cast<DWORD>(section_offset >> 32),
                              static_cast<DWORD>(section_offset), node.mapped().physical_extent);
   if (view == nullptr) {
     const DWORD error = GetLastError();
-    CloseHandle(mapping);  // exact successfully duplicated handle, never borrowed
+    FileAliasCloseHandle(mapping);  // exact successfully duplicated handle, never borrowed
     errno = error == ERROR_ACCESS_DENIED ? EACCES : ENOMEM;
     return MAP_FAILED;
   }
@@ -912,7 +921,7 @@ void* MapFile(State& s, void* start, size_t len, int prot, int flags, int fd, of
   region.view_protection = map_access;
   region.view_padding = padding;
   region.physical_extent = len + padding;
-  region.shared_alias = shared && (prot == PROT_READ || prot == (PROT_READ | PROT_WRITE)) &&
+  region.shared_alias = view_length != 0 && shared && (prot == PROT_READ || prot == (PROT_READ | PROT_WRITE)) &&
                         GetFileType(file) == FILE_TYPE_DISK;
   AddRegion(s, reinterpret_cast<uintptr_t>(result), RoundUp(len, s.page_size), std::move(region));
   return result;
