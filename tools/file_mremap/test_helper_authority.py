@@ -3,6 +3,8 @@
 No compiler, CMake, native process, network, artifact fetch or actual PE reader.
 """
 import ast
+import base64
+import contextlib
 import copy
 import importlib.util
 import io
@@ -161,7 +163,7 @@ class Helper(unittest.TestCase):
         for key in good:
             bad=dict(good);bad[key]=1 if key in ('timed_out','overflow','exit')else 0;self.reject(lambda:A.validate_completion(bad))
         self.assertEqual(A.clean_environment({'SystemRoot':'Windows','GH_TOKEN':'secret','GITHUB_TOKEN':'secret','CPATH':'evil','LIBRARY_PATH':'evil','PATH':'system'}),{'SystemRoot':'Windows','PATH':'system'})
-        self.reject(lambda:A.owned_helper('not-run.exe','0'*64))
+        self.reject(lambda:A.owned_helper('not-run.exe','0'*64,synthetic_context()))
         self.reject(lambda:P.tool(['not-run'],Path.cwd(),{},1))
         self.reject(lambda:P.download('https://invalid',1,'0'*64))
         self.reject(lambda:A.api('not-run'))
@@ -209,7 +211,7 @@ class Helper(unittest.TestCase):
             def row(*args):return (' '+ ' '.join('"'+str(v).replace('\\','/')+'"'for v in (exe,*args))+'\n').encode()
             self.assertEqual(len(P.parse_driver(row('-cc1','-o',build/'notcreated.obj'),tc,source,build)),1)
             foreign=root/'foreign'/'notcreated.obj'
-            for args in (('-o',foreign),('-I'+str(foreign),),('--sysroot='+str(foreign),),('-fdebug-compilation-dir='+str(foreign),),('@unseen.rsp',)):
+            for args in (('-o',foreign),('-I'+str(foreign),),('--sysroot='+str(foreign),),('-fdebug-compilation-dir='+str(foreign),),('@unseen.rsp',),('-I../../foreign',),('-o','../../foreign/new.obj')):
                 self.reject(lambda:P.parse_driver(row(*args),tc,source,build))
 
     def test_every_base_blob_preserves_complete_history_without_body_inspection(self):
@@ -221,6 +223,22 @@ class Helper(unittest.TestCase):
             self.reject(lambda:A.verify_inventory(baseline,bad,pins))
         # No historical/selected/workflow leaf is exempted or projected away.
         self.assertGreater(len(baseline),1600)
+
+    def test_lossless_chunked_plain_text_proofs(self):
+        raw=('SYNTHETIC unicode \u05d0\n'*2000).encode()
+        out=io.StringIO()
+        with contextlib.redirect_stdout(out):A.emit_bytes('SYNTHETIC_21',raw)
+        rows=out.getvalue().splitlines();joined=b''
+        for index,row in enumerate(rows,1):
+            match=re.fullmatch(r'FILE_MREMAP_HELPER_SYNTHETIC_21 part=(\d+)/(\d+) bytes=(\d+) sha256=([0-9a-f]{64}) base64=(.*)',row)
+            self.assertIsNotNone(match);self.assertEqual(int(match[1]),index);self.assertEqual(int(match[2]),len(rows));self.assertEqual(int(match[3]),len(raw));self.assertEqual(match[4],A.digest(raw));self.assertLess(len(row),12500)
+            joined+=base64.b64decode(match[5],validate=True)
+        self.assertEqual(joined,raw)
+        self.reject(lambda:A.emit_bytes('BAD-LABEL',b'x'))
+        files={name:b'SYNTHETIC_TEXT'for name in A.MEMBERS};out=io.StringIO()
+        with contextlib.redirect_stdout(out):P.emit_text_members(files,synthetic_context())
+        self.assertEqual(len(out.getvalue().splitlines()),13)
+        self.assertNotIn('MEMBER_HELPER_OBJ',out.getvalue());self.assertNotIn('MEMBER_HELPER_QUALIFICATION_EXE',out.getvalue())
 
     def test_recipe_source_isolated_three_object_and_no_native_test(self):
         authority=(ROOT/'tools/file_mremap/helper_authority.py').read_text();producer=(ROOT/'tools/file_mremap/helper_producer.py').read_text()
