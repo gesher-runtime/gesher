@@ -61,6 +61,18 @@ void __cdecl Invalid(const wchar_t*,const wchar_t*,const wchar_t*,unsigned int,u
 }
 // Public WCT accepts a caller buffer of up to16 nodes; MinGW omits the SDK macro.
 constexpr DWORD kWaitChainCapacity = 16;
+// Diagnostic module identity only: the address may resolve to an EXE thunk.
+// Discover before entering any held invalid handler; never load a module here.
+void ModuleProfile(const char* label, uintptr_t address, HMODULE named=nullptr){
+  HMODULE module=named;SetLastError(ERROR_SUCCESS);
+  BOOL located=module?TRUE:GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,reinterpret_cast<LPCWSTR>(address),&module);
+  DWORD locate_error=GetLastError();wchar_t path[32768]{};
+  SetLastError(ERROR_SUCCESS);DWORD length=located?GetModuleFileNameW(module,path,32768):0;
+  DWORD path_error=GetLastError();bool valid=located&&length>0&&length<32768;
+  std::printf("FONT_ENV_MODULE label=%s address=0x%llx base=0x%llx offset=0x%llx located=%d locate_error=%lu path_valid=%d path_error=%lu units=%lu utf16=",label,static_cast<unsigned long long>(address),reinterpret_cast<unsigned long long>(module),located&&address?static_cast<unsigned long long>(address-reinterpret_cast<uintptr_t>(module)):0,located,locate_error,valid,path_error,valid?length:0);
+  if(valid)for(DWORD i=0;i<length;++i)std::printf("%s%04x",i?",":"",static_cast<unsigned>(path[i]));
+  std::puts("");
+}
 // WCT is used only by this CI fixture and only for its own process threads.
 // All setup/lazy WCT work and the writer body precede the held CRT callback.
 struct Cycle {
@@ -74,16 +86,26 @@ struct Cycle {
   std::string invalid_value=std::string(32767,'x');
   std::atomic<bool> read_ok{false},handler_wait_ok{false};
   std::atomic<int> writer_result{-99},handler_result{-99},handler_errno{0};
+  std::atomic<DWORD> writer_body_tid{0},handler_body_tid{0},callback_tid{0};
+  std::atomic<int> writer_stage{0},handler_stage{0},callback_stage{0},writer_errno{0};
+  void DiagnosticState(const char* phase) noexcept;
   bool Cleanup() noexcept;
 };
 std::atomic<Cycle*> g_cycle{nullptr};
 void FailureCycleCleanup(){if(auto* cycle=g_cycle.load())cycle->Cleanup();}
+void Cycle::DiagnosticState(const char* phase) noexcept {
+  DWORD handler_wait=handler?WaitForSingleObject(handler,0):WAIT_FAILED;
+  DWORD writer_wait=writer?WaitForSingleObject(writer,0):WAIT_FAILED;
+  std::printf("FONT_ENV_WCT_STATE phase=%s pid=%lu observer_tid=%lu writer_tid=%lu handler_tid=%lu writer_body_tid=%lu handler_body_tid=%lu callback_tid=%lu writer_stage=%d handler_stage=%d callback_stage=%d writer_result=%d writer_errno=%d handler_result=%d handler_errno=%d handler_wait_ok=%d read_ok=%d handler_kernel_wait=%lu writer_kernel_wait=%lu\n",phase,GetCurrentProcessId(),GetCurrentThreadId(),writer_tid,handler_tid,writer_body_tid.load(),handler_body_tid.load(),callback_tid.load(),writer_stage.load(),handler_stage.load(),callback_stage.load(),writer_result.load(),writer_errno.load(),handler_result.load(),handler_errno.load(),handler_wait_ok.load(),read_ok.load(),handler_wait,writer_wait);
+}
 bool Cycle::Cleanup() noexcept {
   if(cleaned)return cleanup_ok;
   cleaned=true;
+  DiagnosticState("before_cleanup");
   if(writer_go)SetEvent(writer_go);
   if(proceed)SetEvent(proceed);
   for(HANDLE thread:{handler,writer})if(thread&&WaitForSingleObject(thread,10000)!=WAIT_OBJECT_0)cleanup_ok=false;
+  DiagnosticState("after_release_completion");
   if(handler_installed){_set_invalid_parameter_handler(previous_handler);handler_installed=false;}
   if(session){CloseThreadWaitChainSession(session);session=nullptr;}
   if(privilege_saved){
@@ -101,26 +123,39 @@ bool Cycle::Cleanup() noexcept {
 }
 bool HeldCallback() noexcept {
   auto* cycle=g_cycle.load();if(!cycle)return false;
+  cycle->callback_tid.store(GetCurrentThreadId());cycle->callback_stage.store(1);
   if(!SetEvent(cycle->entered)||WaitForSingleObject(cycle->proceed,15000)!=WAIT_OBJECT_0)return true;
+  cycle->callback_stage.store(2);
   cycle->handler_wait_ok.store(true);
   auto value=gesher::ReadFontEnvironment(Key(0));
   cycle->read_ok.store(value.state==State::kValue&&value.value()==kA);
+  cycle->callback_stage.store(3);
   return true;
 }
 DWORD WINAPI HeldWriter(void* argument){
   auto& cycle=*static_cast<Cycle*>(argument);
+  cycle.writer_body_tid.store(GetCurrentThreadId());cycle.writer_stage.store(1);
   if(!SetEvent(cycle.writer_ready)||WaitForSingleObject(cycle.writer_go,15000)!=WAIT_OBJECT_0)return 1;
+  cycle.writer_stage.store(2);
   // Existing owned key + unset has zero owner-buffer preparatory allocation.
-  cycle.writer_result.store(unsetenv("ANDROID_ROOT"));return 0;
+  errno=0;cycle.writer_stage.store(3);
+  int result=unsetenv("ANDROID_ROOT");int error=errno;
+  cycle.writer_result.store(result);cycle.writer_errno.store(error);cycle.writer_stage.store(4);return 0;
 }
 DWORD WINAPI HeldInvalid(void* argument){
   auto& cycle=*static_cast<Cycle*>(argument);errno=0;
+  cycle.handler_body_tid.store(GetCurrentThreadId());cycle.handler_stage.store(1);
   cycle.handler_result.store(setenv("ANDROID_ROOT",cycle.invalid_value.c_str(),1));
-  cycle.handler_errno.store(errno);return 0;
+  cycle.handler_errno.store(errno);cycle.handler_stage.store(2);return 0;
 }
 void ConcurrentReadCallback(){
   Require(setenv("ANDROID_ROOT",kA,1)==0,"prepare held CRT owner");
   auto retained=Check(0,State::kValue,kA);
+  ModuleProfile("putenv_s",reinterpret_cast<uintptr_t>(&_putenv_s));
+  ModuleProfile("getenv",reinterpret_cast<uintptr_t>(&std::getenv));
+  HMODULE ucrt=GetModuleHandleW(L"ucrtbase.dll");
+  if(ucrt)ModuleProfile("already_loaded_ucrtbase",0,ucrt);
+  else std::puts("FONT_ENV_MODULE label=already_loaded_ucrtbase path_valid=0 diagnostic_error=NOT_ALREADY_LOADED");
   Cycle cycle;g_cycle.store(&cycle);g_failure_cleanup=FailureCycleCleanup;
   Require(OpenProcessToken(GetCurrentProcess(),TOKEN_ADJUST_PRIVILEGES|TOKEN_QUERY,&cycle.token),"WCT own-token prerequisite");
   TOKEN_PRIVILEGES requested{};requested.PrivilegeCount=1;
@@ -133,7 +168,9 @@ void ConcurrentReadCallback(){
   Require(adjusted&&privilege_error==ERROR_SUCCESS,"WCT missing privilege prerequisite");
   cycle.session=OpenThreadWaitChainSession(0,nullptr);Require(cycle.session!=nullptr,"synchronous WCT prerequisite");
   WAITCHAIN_NODE_INFO nodes[kWaitChainCapacity]{};DWORD count=kWaitChainCapacity;BOOL is_cycle=FALSE;
-  Require(GetThreadWaitChain(cycle.session,0,0,GetCurrentThreadId(),&count,nodes,&is_cycle),"WCT prewarm own observer");
+  SetLastError(ERROR_SUCCESS);BOOL prewarm=GetThreadWaitChain(cycle.session,0,0,GetCurrentThreadId(),&count,nodes,&is_cycle);DWORD prewarm_error=GetLastError();
+  std::printf("FONT_ENV_WCT_QUERY phase=prewarm sample=0 success=%d count=%lu cycle=%d error=%lu error_meaningful=%d\n",prewarm,count,is_cycle,prewarm_error,!prewarm);
+  Require(prewarm,"WCT prewarm own observer");
   cycle.writer_ready=CreateEventW(nullptr,TRUE,FALSE,nullptr);cycle.writer_go=CreateEventW(nullptr,TRUE,FALSE,nullptr);
   cycle.entered=CreateEventW(nullptr,TRUE,FALSE,nullptr);cycle.proceed=CreateEventW(nullptr,TRUE,FALSE,nullptr);
   Require(cycle.writer_ready&&cycle.writer_go&&cycle.entered&&cycle.proceed,"held choreography events");
@@ -144,17 +181,34 @@ void ConcurrentReadCallback(){
   cycle.previous_handler=_set_invalid_parameter_handler(Invalid);cycle.handler_installed=true;
   cycle.handler=CreateThread(nullptr,0,HeldInvalid,&cycle,0,&cycle.handler_tid);
   Require(cycle.handler&&WaitForSingleObject(cycle.entered,10000)==WAIT_OBJECT_0,"actual held CRT handler");
+  cycle.DiagnosticState("handler_entered_before_writer_release");
   Require(SetEvent(cycle.writer_go),"release prestarted tracked unset");
   bool observed=false;ULONGLONG deadline=GetTickCount64()+10000;
+  unsigned sample=0,dumps=0;DWORD previous_count=0;BOOL previous_cycle=FALSE;
+  WAITCHAIN_NODE_INFO previous_nodes[kWaitChainCapacity]{};
   do{
     count=kWaitChainCapacity;is_cycle=FALSE;
-    Require(GetThreadWaitChain(cycle.session,0,0,cycle.writer_tid,&count,nodes,&is_cycle),"own writer WCT retrieval prerequisite");
+    SetLastError(ERROR_SUCCESS);BOOL query=GetThreadWaitChain(cycle.session,0,0,cycle.writer_tid,&count,nodes,&is_cycle);DWORD query_error=GetLastError();
+    ++sample;if(sample<=1024)std::printf("FONT_ENV_WCT_QUERY phase=writer sample=%u success=%d count=%lu cycle=%d error=%lu error_meaningful=%d\n",sample,query,count,is_cycle,query_error,!query);
+    bool changed=count!=previous_count||is_cycle!=previous_cycle;
+    for(DWORD i=0;!changed&&i<count&&i<kWaitChainCapacity;++i){
+      const auto& a=nodes[i];const auto& b=previous_nodes[i];
+      changed=a.ObjectType!=b.ObjectType||a.ObjectStatus!=b.ObjectStatus||(a.ObjectType==WctThreadType&&(a.ThreadObject.ProcessId!=b.ThreadObject.ProcessId||a.ThreadObject.ThreadId!=b.ThreadObject.ThreadId));
+    }
+    if(dumps<32&&(sample<=4||changed||!query)){
+      for(DWORD i=0;i<count&&i<kWaitChainCapacity;++i)std::printf("FONT_ENV_WCT_SAMPLE_NODE sample=%u index=%lu type=%u status=%u pid=%lu tid=%lu\n",sample,i,static_cast<unsigned>(nodes[i].ObjectType),static_cast<unsigned>(nodes[i].ObjectStatus),nodes[i].ObjectType==WctThreadType?nodes[i].ThreadObject.ProcessId:0,nodes[i].ObjectType==WctThreadType?nodes[i].ThreadObject.ThreadId:0);
+      cycle.DiagnosticState("sample");++dumps;
+    }
+    previous_count=count;previous_cycle=is_cycle;std::memcpy(previous_nodes,nodes,sizeof(nodes));
+    Require(query,"own writer WCT retrieval prerequisite");
     observed=count>=3&&!is_cycle&&nodes[0].ObjectType==WctThreadType&&nodes[0].ObjectStatus==WctStatusBlocked&&
       nodes[0].ThreadObject.ProcessId==GetCurrentProcessId()&&nodes[0].ThreadObject.ThreadId==cycle.writer_tid&&
       nodes[1].ObjectType==WctCriticalSectionType&&nodes[1].ObjectStatus==WctStatusOwned&&
       nodes[2].ObjectType==WctThreadType&&nodes[2].ThreadObject.ProcessId==GetCurrentProcessId()&&nodes[2].ThreadObject.ThreadId==cycle.handler_tid;
     if(!observed)Sleep(10);
   }while(!observed&&GetTickCount64()<deadline);
+  std::printf("FONT_ENV_WCT_SAMPLE_TOTAL queries=%u query_record_limit=1024 full_dumps=%u full_dump_limit=32\n",sample,dumps);
+  cycle.DiagnosticState("final_before_ownership_gate");
   for(DWORD i=0;i<count&&i<kWaitChainCapacity;++i)
     std::printf("FONT_ENV_WCT_NODE index=%lu type=%u status=%u pid=%lu tid=%lu\n",i,static_cast<unsigned>(nodes[i].ObjectType),static_cast<unsigned>(nodes[i].ObjectStatus),nodes[i].ObjectType==WctThreadType?nodes[i].ThreadObject.ProcessId:0,nodes[i].ObjectType==WctThreadType?nodes[i].ThreadObject.ThreadId:0);
   Require(observed&&WaitForSingleObject(cycle.writer,0)==WAIT_TIMEOUT&&!cycle.handler_wait_ok.load(),"positive writer to CRT critical-section to held handler ownership");
