@@ -117,6 +117,12 @@ struct Region {
   HANDLE mapping = nullptr;   // views: the mapping object (owned)
   uint64_t offset = 0;        // group views: the file offset of the region's start
   ULONG view_protection = 0;  // group views: the protection they were mapped with
+  // Slice A admission only: not the section maximum. Bounds certified by
+  // this successfully created, whole logical view; invalidated by splits,
+  // protection/locking changes. Each Region still owns its own section handle.
+  bool shared_alias = false;
+  size_t physical_extent = 0;
+  size_t view_padding = 0;
   bool shared = false;        // views: MAP_SHARED
   std::vector<bool> live;     // one entry per page
   size_t live_pages = 0;
@@ -197,6 +203,81 @@ void Release(uintptr_t start, Region& region) {
   }
 }
 
+// Caller holds State::lock. Registry operations never call public mprotect/
+// mlock; Win32 protection/locking functions do not reenter this registry.
+// Invalidate conservatively even if the requested operation later fails.
+void InvalidateSharedAliases(State& s, uintptr_t begin, size_t length) {
+  for (auto& entry : s.regions) {
+    const uintptr_t at = entry.first;
+    const size_t size = entry.second.size;
+    if ((at <= begin && begin - at < size) || (begin < at && at - begin < length))
+      entry.second.shared_alias = false;
+  }
+}
+
+// Slice A never retires source. It duplicates the retained section, not a
+// descriptor integer or pathname. All allocation occurs before a view exists.
+void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int flags) {
+  auto source = FindRegion(s, begin);
+  if (source == s.regions.end() || source->first != begin) { errno = EINVAL; return MAP_FAILED; }
+  const Region& from = source->second;
+  if (!from.shared_alias || !from.shared || from.kind != Kind::kView ||
+      from.live_pages != from.live.size() || length > from.size ||
+      (flags != 0 && flags != MREMAP_MAYMOVE)) { errno = EINVAL; return MAP_FAILED; }
+  const DWORD protection = from.view_protection;
+  for (size_t at = 0; at < from.size; at += s.page_size) {
+    MEMORY_BASIC_INFORMATION info;
+    if (VirtualQuery(reinterpret_cast<void*>(begin + at), &info, sizeof(info)) != sizeof(info) ||
+        info.State != MEM_COMMIT || info.Type != MEM_MAPPED || info.Protect != protection) {
+      errno = EINVAL; return MAP_FAILED;
+    }
+  }
+  if (old_size != 0) {
+    if (old_size == length && old_size == from.size) return reinterpret_cast<void*>(begin);
+    errno = EINVAL; return MAP_FAILED;  // resize is a visible outstanding family
+  }
+  if (flags != MREMAP_MAYMOVE) { errno = EINVAL; return MAP_FAILED; }
+  const size_t padding = static_cast<size_t>(from.offset % s.granularity);
+  const uint64_t section_offset = from.offset - padding;
+  if (length > SIZE_MAX - padding) {
+    errno = EINVAL; return MAP_FAILED;
+  }
+  Region alias;
+  alias.kind = Kind::kView;
+  alias.shared = true;
+  alias.shared_alias = true;
+  alias.offset = from.offset;
+  alias.view_protection = protection;
+  alias.view_padding = padding;
+  alias.physical_extent = length + alias.view_padding;
+  alias.size = length;
+  alias.live.assign(length / s.page_size, true);
+  alias.live_pages = alias.live.size();
+  // A C++17 node handle makes final address publication allocation-free.
+  std::map<uintptr_t, Region> prepared;
+  prepared.emplace(0, std::move(alias));
+  auto node = prepared.extract(prepared.begin());
+  HANDLE mapping = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), from.mapping, GetCurrentProcess(), &mapping,
+                       0, FALSE, DUPLICATE_SAME_ACCESS)) { errno = ENOMEM; return MAP_FAILED; }
+  const DWORD access = protection == PAGE_READWRITE ? FILE_MAP_WRITE : FILE_MAP_READ;
+  void* view = MapViewOfFile(mapping, access, static_cast<DWORD>(section_offset >> 32),
+                             static_cast<DWORD>(section_offset), node.mapped().physical_extent);
+  if (view == nullptr) {
+    const DWORD error = GetLastError();
+    CloseHandle(mapping);  // exact successfully duplicated handle, never borrowed
+    errno = error == ERROR_ACCESS_DENIED ? EACCES : ENOMEM;
+    return MAP_FAILED;
+  }
+  const uintptr_t result = reinterpret_cast<uintptr_t>(view) + node.mapped().view_padding;
+  node.key() = result;
+  node.mapped().mapping = mapping;
+  node.mapped().view = view;
+  // Fresh nonfixed OS view cannot overlap an existing live registry range.
+  s.regions.insert(std::move(node));
+  return reinterpret_cast<void*>(result);
+}
+
 // --- placeholder groups -----------------------------------------------------
 
 // Splits the bookkeeping entry `it` at `at` (inside it); returns the upper
@@ -207,6 +288,7 @@ std::map<uintptr_t, Region>::iterator SplitEntry(State& s,
   Region& lower = it->second;
   const size_t lower_pages = (at - it->first) / s.page_size;
   Region upper = lower;
+  lower.shared_alias = upper.shared_alias = false;
   upper.size = lower.size - (at - it->first);
   upper.live.assign(lower.live.begin() + lower_pages, lower.live.end());
   upper.live_pages = static_cast<size_t>(std::count(upper.live.begin(), upper.live.end(), true));
@@ -615,6 +697,10 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
     r.offset = begin;
     r.view_protection = view_protection;
     r.shared = shared;
+    r.physical_extent = in_view;
+    r.view_padding = 0;
+    r.shared_alias = shared && !exec && (prot == PROT_READ || prot == (PROT_READ | PROT_WRITE)) &&
+                     GetFileType(file) == FILE_TYPE_DISK;
     std::fill(r.live.begin(), r.live.end(), true);
     r.live_pages = r.live.size();
     DWORD protection = PageProtection(prot);
@@ -822,6 +908,12 @@ void* MapFile(State& s, void* start, size_t len, int prot, int flags, int fd, of
   region.view = view;
   region.mapping = mapping;
   region.shared = shared;
+  region.offset = static_cast<uint64_t>(offset);
+  region.view_protection = map_access;
+  region.view_padding = padding;
+  region.physical_extent = len + padding;
+  region.shared_alias = shared && (prot == PROT_READ || prot == (PROT_READ | PROT_WRITE)) &&
+                        GetFileType(file) == FILE_TYPE_DISK;
   AddRegion(s, reinterpret_cast<uintptr_t>(result), RoundUp(len, s.page_size), std::move(region));
   return result;
 }
@@ -959,6 +1051,9 @@ int munmap(void* addr, size_t length) {
 int mprotect(void* addr, size_t length, int prot) {
   TRACE("mprotect(%p, 0x%zx, %d)\n", addr, length, prot);
   if (length == 0) return 0;
+  State& s = state();
+  std::lock_guard<std::mutex> registry_guard(s.lock);
+  InvalidateSharedAliases(s, reinterpret_cast<uintptr_t>(addr), length);
   const DWORD protection = PageProtection(prot);
   const bool ok = ForEachRun(addr, length, [&](uint8_t* p, size_t n, const MEMORY_BASIC_INFORMATION& info) {
     // Copy-on-write views stay copy-on-write when made writable.
@@ -1038,6 +1133,9 @@ int mincore(void* addr, size_t length, unsigned char* vec) {
 }
 
 int mlock(const void* addr, size_t length) {
+  State& s = state();
+  std::lock_guard<std::mutex> registry_guard(s.lock);
+  InvalidateSharedAliases(s, reinterpret_cast<uintptr_t>(addr), length);
   return VirtualLock(const_cast<void*>(addr), length) ? 0 : (errno = ENOMEM, -1);
 }
 
@@ -1074,10 +1172,19 @@ void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...
     errno = EINVAL;
     return MAP_FAILED;
   }
+  // Validate additions before rounding. Existing anonymous algorithm follows
+  // unchanged; Slice A dispatch is limited to owned nonanonymous file views.
+  if (old_size > SIZE_MAX - (s.page_size - 1) || new_size > SIZE_MAX - (s.page_size - 1)) {
+    errno = EINVAL;
+    return MAP_FAILED;
+  }
   old_size = RoundUp(old_size, s.page_size);
   new_size = RoundUp(new_size, s.page_size);
 
   std::unique_lock<std::mutex> guard(s.lock);
+  auto file_source = FindRegion(s, old_begin);
+  if (file_source != s.regions.end() && file_source->second.kind == Kind::kView)
+    return SharedAlias(s, old_begin, old_size, new_size, flags);
   // The source: live pages of anonymous regions.
   for (uintptr_t at = old_begin; at < old_begin + old_size;) {
     auto source = FindRegion(s, at);
