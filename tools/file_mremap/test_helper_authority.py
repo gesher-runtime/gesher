@@ -256,6 +256,20 @@ class Helper(unittest.TestCase):
         for raw in (b'\x00binary',b'\xff',b'x'*(A.STREAM_CAP+1)):
             value=P.failure_output(raw);self.assertNotIn('text',value);self.assertEqual(value['bytes'],len(raw));self.assertEqual(value['sha256'],A.digest(raw))
 
+    def test_exact_approved_source_sha_before_candidate_git_reads(self):
+        with mock.patch.object(A,'git')as fake:
+            self.reject(lambda:A.verify_source(ROOT,'a'*40,'b'*40))
+            fake.assert_not_called()
+
+    def test_batch_hashes_match_real_single_path_git_filters(self):
+        names=tuple(dict.fromkeys((*A.ADDITIONS,*A.INPUT21)))
+        batch=A.checked_out_hashes(ROOT,names)
+        single={name:A.git(ROOT,'hash-object',name).decode().strip()for name in names}
+        self.assertEqual(batch,single)
+        for names in ((),('json.py\nhelper.py',),('"quoted',),('../escape',),('duplicate','duplicate')):
+            with mock.patch.object(A.subprocess,'check_output')as fake:
+                self.reject(lambda:A.checked_out_hashes(ROOT,names));fake.assert_not_called()
+
     def test_recipe_source_isolated_three_object_and_no_native_test(self):
         authority=(ROOT/'tools/file_mremap/helper_authority.py').read_text();producer=(ROOT/'tools/file_mremap/helper_producer.py').read_text()
         ast.parse(authority);ast.parse(producer)
