@@ -8,7 +8,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 UPSTREAM = 'c2fcaa54269f0e773069aeeec8212cac71f417483bf65d5e75f100311df4080b'
 MINIMUM = 'c8fd0dece0f412bbdffab2df27df462eeef131a6b671e0e5a13ccde2364d0f78'
-DIAGNOSTIC = 'dd3f2c90ebb6b7ea22588c1548e7675332b1606745281120dd95189b7fd37541'
+DIAGNOSTIC = 'f90a3275d5713751b3691dc4866831c746390e1784357a42285645d653ea71bf'
 
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
