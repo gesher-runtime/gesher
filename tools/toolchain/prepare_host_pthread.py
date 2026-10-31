@@ -80,7 +80,11 @@ def check_metadata(data,context):
     assert data['schema']=='gesher-host-toolchain-v1' and data['context']==context
     mode=data['selection'];assert mode in ROLES and data['role']==ROLES[mode]
     assert data['recipe']==recipe(data['recipe']['caller']) and data['recipe_fingerprint']==fingerprint(data['recipe'])
-    if data['recipe']['caller']==focused.CALLER:
+    if data['recipe']['caller']=='coherent-selected-full/build':
+        import coherent_selected_context as coherent
+        assert mode=='selected-minimum'
+        coherent.check_descriptor(data['caller_authority'],context)
+    elif data['recipe']['caller']==focused.CALLER:
         assert mode=='selected-minimum'
         focused.check_descriptor(data['caller_authority'],context)
     elif data['recipe']['caller']=='pthread-native-off-receiver/build':
@@ -206,6 +210,9 @@ def prepare(selection):
               source_commit=minimum.PIN['upstream_commit'],source_before=before,source_after={n:sha(source/n) for n in names},
               archive=dict(url=URL,sha256=sha(archive),bytes=archive.stat().st_size),authority=authority,
               authority_sha256=hashlib.sha256(json.dumps(authority,sort_keys=True,indent=2).encode()).hexdigest())
+    if definition['caller']=='coherent-selected-full/build':
+        import coherent_selected_context as coherent
+        data['caller_authority']=coherent.descriptor(os.environ)
     if definition['caller']==focused.CALLER:data['caller_authority']=focused.descriptor(os.environ)
     if definition['caller']=='pthread-native-off-receiver/build':
         import native_off_receiver_context as native
