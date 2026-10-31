@@ -7,6 +7,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef GESHER_MINIMUM_JOIN_WAIT_DIAGNOSTIC
+#error This fixture requires a separately named diagnostic supplier role.
+#endif
+void __cdecl gesher_minimum_join_diag_configure(pthread_t);
+LONG __cdecl gesher_minimum_join_diag_snapshot(HANDLE *, DWORD *);
+typedef BOOL (WINAPI *compare_fn)(HANDLE, HANDLE);
 static HANDLE target_ready, target_release, joiner_ready;
 static pthread_t target;
 static volatile LONG cleanup_count;
@@ -39,7 +45,10 @@ int main(void) {
   HANDLE owned_joiner = NULL, owned_target = NULL;
   void *value = NULL;
   char input[32];
-  DWORD tid, wait;
+  DWORD tid, wait, observed_tid = 0;
+  HANDLE observed_target = NULL;
+  ULONGLONG deadline;
+  compare_fn compare;
   setvbuf(stdout, NULL, _IONBF, 0);
   target_ready = CreateEventW(NULL, TRUE, FALSE, NULL);
   target_release = CreateEventW(NULL, TRUE, FALSE, NULL);
@@ -47,6 +56,7 @@ int main(void) {
   check(target_ready && target_release && joiner_ready, "events");
   check(pthread_create(&target, NULL, target_main, NULL) == 0, "target create");
   check(WaitForSingleObject(target_ready, 5000) == WAIT_OBJECT_0, "target ready wait");
+  gesher_minimum_join_diag_configure(target);
   check(pthread_create(&joiner, NULL, joiner_main, NULL) == 0, "joiner create");
   check(WaitForSingleObject(joiner_ready, 5000) == WAIT_OBJECT_0, "joiner ready wait");
   check(DuplicateHandle(GetCurrentProcess(), pthread_gethandle(joiner), GetCurrentProcess(),
@@ -57,6 +67,15 @@ int main(void) {
         "actual held target is live");
   tid = GetThreadId(owned_joiner);
   check(tid != 0, "joiner tid");
+  deadline = GetTickCount64() + 5000;
+  while (gesher_minimum_join_diag_snapshot(&observed_target, &observed_tid) != 1) {
+    check(GetTickCount64() < deadline, "diagnostic phase deadline");
+    Sleep(1);
+  }
+  compare = (compare_fn)GetProcAddress(GetModuleHandleW(L"kernelbase.dll"), "CompareObjectHandles");
+  check(compare && observed_tid == tid && compare(observed_target, owned_target),
+        "actual prewait handle object and joiner identity");
+  printf("JOIN_CANCEL_PREWAIT tid=%lu target_same_object=1 phase=1\n", (unsigned long)observed_tid);
   printf("JOIN_CANCEL_TARGET pid=%lu tid=%lu handle=%llu alive=1\n",
          (unsigned long)GetCurrentProcessId(), (unsigned long)GetThreadId(owned_target),
          (unsigned long long)(uintptr_t)owned_target);
