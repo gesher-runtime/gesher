@@ -57,10 +57,10 @@ int main(void) {
         "actual held target is live");
   tid = GetThreadId(owned_joiner);
   check(tid != 0, "joiner tid");
-  printf("JOIN_CANCEL_WAIT_WITNESS tid=%lu\n", (unsigned long)tid);
   printf("JOIN_CANCEL_TARGET pid=%lu tid=%lu handle=%llu alive=1\n",
          (unsigned long)GetCurrentProcessId(), (unsigned long)GetThreadId(owned_target),
          (unsigned long long)(uintptr_t)owned_target);
+  printf("JOIN_CANCEL_WAIT_WITNESS tid=%lu\n", (unsigned long)tid);
   /* Controller acknowledges only after sampling this exact TID in OS wait. */
   check(fgets(input, sizeof input, stdin) && strcmp(input, "observed\n") == 0, "wait witness");
   check(WaitForSingleObject(owned_joiner, 0) == WAIT_TIMEOUT, "joiner still live");
