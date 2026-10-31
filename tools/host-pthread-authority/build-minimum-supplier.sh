@@ -3,9 +3,13 @@
 set -euo pipefail
 test "${GITHUB_ACTIONS:-}" = true
 if [[ "${GITHUB_JOB:-}" == compile ]]; then
-  test "${GITHUB_REF:-}" = refs/heads/wip/tcp-minimum-selection
-  test "${GITHUB_WORKFLOW:-}" = net-tcp-selected-component
-  test "${TCP_SUPPLIER_ROLE:-}" = selected-minimum
+  if [[ "${GITHUB_REF:-}" == refs/heads/wip/coherent-selected-tcp ]]; then
+    python3 tools/toolchain/coherent_tcp_context.py
+  else
+    test "${GITHUB_REF:-}" = refs/heads/wip/tcp-minimum-selection
+    test "${GITHUB_WORKFLOW:-}" = net-tcp-selected-component
+    test "${TCP_SUPPLIER_ROLE:-}" = selected-minimum
+  fi
 else
   test "${GITHUB_JOB:-}" = build
   test "${GESHER_HOST_PTHREAD_SELECTION:-}" = selected-minimum

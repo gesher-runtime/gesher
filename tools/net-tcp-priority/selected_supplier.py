@@ -144,8 +144,13 @@ def main():
     parser=argparse.ArgumentParser();parser.add_argument('--manifest',type=Path,required=True);args=parser.parse_args()
     context={k:os.environ[k] for k in CONTEXT}
     assert os.environ.get('GITHUB_ACTIONS')=='true'
-    assert os.environ['GITHUB_REF']=='refs/heads/wip/tcp-minimum-selection'
-    assert os.environ['GITHUB_WORKFLOW']=='net-tcp-selected-component'
+    if os.environ.get('GITHUB_REF')=='refs/heads/wip/coherent-selected-tcp':
+        sys.path.insert(0,str(ROOT/'tools/toolchain'))
+        import coherent_tcp_context as coherent
+        coherent.context(os.environ,'windows')
+    else:
+        assert os.environ['GITHUB_REF']=='refs/heads/wip/tcp-minimum-selection'
+        assert os.environ['GITHUB_WORKFLOW']=='net-tcp-selected-component'
     manifest=json.loads(args.manifest.read_text())
     assert manifest['repository']==context['GITHUB_REPOSITORY'] and str(manifest['repository_id'])==context['GITHUB_REPOSITORY_ID']
     assert manifest['source']==context['GITHUB_SHA'] and str(manifest['run'])==context['GITHUB_RUN_ID'] and str(manifest['attempt'])==context['GITHUB_RUN_ATTEMPT']
