@@ -75,9 +75,25 @@ def reconstruct_receipt(lines):
 def context():
     assert os.environ.get('GITHUB_ACTIONS') == 'true'
     assert os.environ['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
-    assert os.environ['GITHUB_REF'] == 'refs/heads/wip/tcp-minimum-selection'
-    assert os.environ['GITHUB_WORKFLOW'] == 'net-tcp-selected-component'
-    assert os.environ['TCP_SUPPLIER_ROLE'] == 'selected-minimum'
+    assert os.environ['GITHUB_REPOSITORY_ID'] == '1426153186'
+    if os.environ.get('GITHUB_JOB')=='compile':
+        assert os.environ['GITHUB_REF'] == 'refs/heads/wip/tcp-minimum-selection'
+        assert os.environ['GITHUB_WORKFLOW'] == 'net-tcp-selected-component'
+        assert os.environ['TCP_SUPPLIER_ROLE'] == 'selected-minimum'
+    elif os.environ.get('GESHER_HOST_PTHREAD_CALLER')=='pthread-first-link/build':
+        sys.path.insert(0,str(ROOT/'tools/toolchain'))
+        import first_link_context
+        first_link_context.context(os.environ,'selected-minimum')
+    elif os.environ.get('GESHER_HOST_PTHREAD_CALLER')=='pthread-native-off-receiver/build':
+        sys.path.insert(0,str(ROOT/'tools/toolchain'))
+        import native_off_receiver_context as native
+        native.context(os.environ,'selected-minimum')
+    else:
+        assert os.environ['GITHUB_REF'] == 'refs/heads/wip/pthread-production-factory'
+        assert os.environ['GITHUB_WORKFLOW'] == 'ci' and os.environ['GITHUB_JOB']=='build'
+        assert os.environ['GESHER_HOST_PTHREAD_CALLER']=='ci/build'
+    if os.environ['GITHUB_JOB'] != 'compile':
+        assert os.environ['GESHER_HOST_PTHREAD_SELECTION'] in ('publisher-control','selected-minimum')
     assert command('git', 'rev-parse', 'HEAD').strip() == os.environ['GITHUB_SHA']
     subprocess.check_call(['git', 'diff', '--exit-code', 'HEAD', '--'])
     return {k: os.environ[k] for k in ('GITHUB_SHA', 'GITHUB_RUN_ID',
@@ -169,7 +185,7 @@ def map_symbols(text, names):
 
 def original(llvm, source, output):
     ctx = context()
-    assert os.environ['GITHUB_JOB'] == 'compile'
+    assert os.environ['GITHUB_JOB'] in ('compile','build')
     target = llvm / 'x86_64-w64-mingw32'
     assert not (llvm / 'gesher-winpthreads-authority.json').exists()
     assert sha(llvm.parent / 'compiler.tar.xz') == PIN['compiler_archive_sha256']
@@ -199,7 +215,7 @@ def original(llvm, source, output):
 
 def supplier(source, llvm, original_file):
     ctx = context()
-    assert os.environ['GITHUB_JOB'] == 'compile'
+    assert os.environ['GITHUB_JOB']=='compile' or (os.environ['GITHUB_JOB']=='build' and os.environ['GESHER_HOST_PTHREAD_SELECTION']=='selected-minimum')
     inputs(source, patched=True)
     baseline = json.loads(original_file.read_text())
     assert baseline['context'] == ctx and baseline['role'] == 'publisher-reference-unmodified-v1'
@@ -289,7 +305,7 @@ def supplier(source, llvm, original_file):
 
 def profile(build):
     context()
-    assert os.environ['GITHUB_JOB']=='compile'
+    assert os.environ['GITHUB_JOB']=='compile' or (os.environ['GITHUB_JOB']=='build' and os.environ['GESHER_HOST_PTHREAD_SELECTION']=='selected-minimum')
     profiles={}
     for prefix in ('sdk','supplier'):
         assert 'IMAGE_FILE_MACHINE_AMD64' in (build/(prefix+'-profile-machine.txt')).read_text()
