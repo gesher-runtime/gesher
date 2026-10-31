@@ -10,6 +10,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 SENTINEL = b"nativeRegisterFixture\0"
@@ -121,16 +122,110 @@ def compiler(build):
         seen.add(source)
     require(seen == CHANGED, "Missing actual query CXX commands for configured compiler proof")
     require(len(forms) == 1, "Inconsistent CMake command export form across query objects")
-    return {"path": str(path), "configured_driver": str(configured), "sha256": sha(path),
+    result = {"path": str(path), "configured_driver": str(configured), "sha256": sha(path),
             "metadata_file": str(metadata), "metadata_sha256": sha(metadata),
             "compile_database_form": forms.pop(),
             "launcher": str(launcher_path) if launcher_path is not None else None,
             "launcher_sha256": sha(launcher_path) if launcher_path is not None else None}
+    selected = selected_ledger().compiler_identity(configured)
+    if selected is not None:
+        result['selected_toolchain'] = selected
+    return result
+
+
+def selected_ledger():
+    sys.path.insert(0, str(ROOT / 'tools/toolchain'))
+    import selected_link
+    return selected_link
+
+
+def ledger_lines(raw, label):
+    """Reuse the qualified byte codec under a distinct ledger namespace."""
+    require(re.fullmatch('[A-Z][A-Z0-9_]{0,95}', label), 'Invalid ledger record label')
+    rows = []
+    for line in selected_ledger().factory.minimum.receipt_lines(raw):
+        marker, encoded = line.split(' ', 1)
+        item = json.loads(encoded)
+        item['label'] = label
+        rows.append(marker.replace('MINIMUM_RECEIPT_', 'SELECTED_LEDGER_') + ' ' + json.dumps(item, sort_keys=True))
+    require(all(row.isascii() and len(row) <= 4096 for row in rows), 'Unbounded ledger record')
+    return rows
+
+
+def reconstruct_ledger(rows, label):
+    result = []
+    require(rows and all(row.isascii() and len(row) <= 4096 for row in rows), 'Unbounded/missing ledger transport')
+    for row in rows:
+        marker, encoded = row.split(' ', 1)
+        require(marker in ('SELECTED_LEDGER_BEGIN', 'SELECTED_LEDGER_PART', 'SELECTED_LEDGER_END'), 'Wrong ledger namespace')
+        item = json.loads(encoded)
+        require(item['label'] == label, 'Mixed ledger labels')
+        item['label'] = 'minimum-supplier'
+        result.append(marker.replace('SELECTED_LEDGER_', 'MINIMUM_RECEIPT_') + ' ' + json.dumps(item, sort_keys=True))
+    return selected_ledger().factory.minimum.reconstruct_receipt(result)
+
+
+def emit_record(label, value, raw=None, flush=None):
+    if 'selected_toolchain' not in value.get('compiler', {}):
+        if flush is None:
+            print(label + ' ' + json.dumps(value, sort_keys=True))
+        else:
+            print(label + ' ' + json.dumps(value, sort_keys=True), flush=flush)
+        return
+    if raw is None:
+        raw = json.dumps(value, sort_keys=True).encode('utf-8')
+    require(json.loads(raw) == value, 'Ledger payload differs from archived record')
+    for line in ledger_lines(raw, label):
+        print(line, flush=True)
+
+
+def selected_members(executables, compiler_info):
+    if 'selected_toolchain' not in compiler_info:
+        return set()
+    return {'selected-pthread-toolchain.json'} | {
+        name + '.selected-pthread-' + tail for name in executables
+        for tail in ('link.json', 'trace.txt', 'map.txt', 'imports.txt')}
+
+
+def seal_selected(outputs, compiler_info):
+    if 'selected_toolchain' not in compiler_info:
+        return None
+    outputs = list(outputs)
+    result = {published.name: selected_ledger().seal(original, published, compiler_info)
+              for original, published in outputs}
+    for _, published in outputs:
+        raw = (published.parent / result[published.name]['file']).read_bytes()
+        for line in ledger_lines(raw, 'ACTUAL_SELECTED_TARGET_LINK'):
+            print(line, flush=True)
+    return result
+
+
+def verify_selected(directory, links, compiler_info, info, executables):
+    if 'selected_toolchain' not in compiler_info:
+        require(links is None, 'Selected evidence injected into a publisher role')
+        return
+    current = compiler_info['selected_toolchain']['context']
+    expected = {}
+    for field, key in (('GITHUB_SHA', 'source'), ('GITHUB_RUN_ID', 'run'),
+                       ('GITHUB_RUN_ATTEMPT', 'attempt'), ('GITHUB_REPOSITORY', 'repository'),
+                       ('GITHUB_REPOSITORY_ID', 'repository_id')):
+        require(current[field] == info[key], 'Selected toolchain has a different current producer context')
+        expected[field] = info[key]
+    require(isinstance(links, dict) and set(links) == set(executables), 'Missing/extra selected target records')
+    for name, link in links.items():
+        selected_ledger().verify_sealed(directory, link, compiler_info, name, expected)
+    for link in links.values():
+        for line in ledger_lines((directory / link['file']).read_bytes(), 'VERIFIED_SELECTED_TARGET_LINK'):
+            print(line, flush=True)
 
 def compiler_preflight(args):
     info = context()
-    print(json.dumps({"source": info["source"], "compiler": compiler(Path(args.build)),
-                      "actual_query_cpp_commands": sorted(CHANGED)}, sort_keys=True))
+    record = {"source": info["source"], "compiler": compiler(Path(args.build)),
+              "actual_query_cpp_commands": sorted(CHANGED)}
+    if 'selected_toolchain' in record['compiler']:
+        emit_record('ACTUAL_SELECTED_COMPILER_PREFLIGHT', record)
+    else:
+        print(json.dumps(record, sort_keys=True))
 
 def sources():
     return {name: sha(ROOT / name) for name in SHARED}
@@ -156,10 +251,14 @@ def capture_production(args):
     role = dict(info, role="production", test_hook_compiled=False, compiler=compiler(build),
                 shared_sources=sources(), executable="dalvikvm.exe", executable_sha256=sha(executable),
                 executable_map_sha256=sha(dist / "dalvikvm.map"))
+    links = seal_selected([(Path('dist-web3-observer') / p.name if p.name == 'web3_process_waits.exe' else build / p.name, p)
+                           for p in sorted(dist.glob('*.exe'))], role['compiler'])
+    if links is not None:
+        role['selected_link'] = links
     (dist / "web3-production-role.json").write_text(json.dumps(role, indent=2) + "\n", encoding="utf-8")
     state = {"role": role, "commands": [[list(key), value] for key, value in before.items()]}
     Path(args.state).write_text(json.dumps(state) + "\n", encoding="utf-8")
-    print("ACTUAL_WEB3_PRODUCTION_ROLE " + json.dumps(role, sort_keys=True))
+    emit_record('ACTUAL_WEB3_PRODUCTION_ROLE', role, (dist / 'web3-production-role.json').read_bytes())
 
 def capture_hook(args):
     info = context()
@@ -191,8 +290,11 @@ def capture_hook(args):
                 executable_map_sha256=sha(out / "dalvikvm-web3-query-test.map"),
                 production_runtime_sha256=production["executable_sha256"],
                 changed_compile_definitions=sorted(changed))
+    links = seal_selected([(build / 'dalvikvm.exe', out / HOOK)], role['compiler'])
+    if links is not None:
+        role['selected_link'] = links
     (out / "web3-query-hook-role.json").write_text(json.dumps(role, indent=2) + "\n", encoding="utf-8")
-    print("ACTUAL_WEB3_QUERY_HOOK_ROLE " + json.dumps(role, sort_keys=True))
+    emit_record('ACTUAL_WEB3_QUERY_HOOK_ROLE', role, (out / 'web3-query-hook-role.json').read_bytes())
 
 def verify(args):
     info = context()
@@ -205,6 +307,8 @@ def verify(args):
     require(SENTINEL not in (dist / "dalvikvm.exe").read_bytes(), "Test registration in normal runtime")
     require(sha(dist / "dalvikvm.map") == production["executable_map_sha256"], "Production exact map copy mismatch")
     installer_excludes_fixture()
+    verify_selected(dist, production.get('selected_link'), production['compiler'], info,
+                    {p.name for p in dist.glob('*.exe') if p.name != HOOK})
     if args.hook:
         hook = json.loads((dist / "web3-query-hook-role.json").read_text(encoding="utf-8"))
         require(all(hook[key] == value for key, value in info.items()), "Hook supplier context mismatch")
@@ -216,6 +320,7 @@ def verify(args):
                 "Different compiler or production code for query-hook runtime")
         require(hook["production_runtime_sha256"] == production["executable_sha256"] and
                 set(hook["changed_compile_definitions"]) == CHANGED, "Different role boundary")
+        verify_selected(dist, hook.get('selected_link'), hook['compiler'], info, {HOOK})
         print("VERIFIED_WEB3_FULL_ROLES source=" + info["source"] + " production=" + production["executable_sha256"] +
               " hook=" + hook["executable_sha256"] + " shared-source-identical=True compiler-identical=True")
     else:

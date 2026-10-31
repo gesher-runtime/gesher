@@ -94,6 +94,7 @@ runs:
           cmake --fresh -S . -B out -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
             -DLLVM_MINGW="$llvm" \
+            -DCMAKE_PROJECT_INCLUDE="$GITHUB_WORKSPACE/tools/toolchain/selected_link.cmake" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
         else
           test "$GESHER_HOST_PTHREAD_SELECTION" = publisher
