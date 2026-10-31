@@ -50,25 +50,35 @@ def current(consumer=False):
     run=json.loads(subprocess.check_output(['gh','api','repos/'+focused.REPOSITORY+'/actions/runs/'+ctx['GITHUB_RUN_ID']],text=True))
     observed={k:run.get(k) for k in ('id','run_attempt','head_sha','head_branch','path','name','event','actor','triggering_actor','referenced_workflows')}
     emit('FIRST_LINK_LIVE_RUN',observed)
+    jobs=json.loads(subprocess.check_output(['gh','api','repos/'+focused.REPOSITORY+'/actions/runs/'+ctx['GITHUB_RUN_ID']+'/attempts/'+ctx['GITHUB_RUN_ATTEMPT']+'/jobs?per_page=100'],text=True))
+    emit('FIRST_LINK_LIVE_JOBS',dict(context=ctx,jobs=[{k:r.get(k) for k in ('id','name','head_sha','run_id','run_attempt','status','conclusion')} for r in jobs['jobs']]))
+    validate_live(run,jobs,ctx,policy_ref(),os.environ['GITHUB_EVENT_NAME'],consumer)
+    return ctx
+
+
+def validate_live(run,jobs,ctx,policy,event,consumer=False):
     assert str(run['id'])==ctx['GITHUB_RUN_ID'] and str(run['run_attempt'])==ctx['GITHUB_RUN_ATTEMPT']
     assert run['head_sha']==ctx['GITHUB_SHA'] and run['head_branch']==focused.BRANCH
-    assert run['path']==focused.PATH and run['name']==focused.WORKFLOW and run['event']==os.environ['GITHUB_EVENT_NAME']
+    assert run['path']==focused.PATH and run['name']==focused.WORKFLOW and run['event']==event
     assert run['repository']['full_name']==focused.REPOSITORY
     assert str(run['repository']['id'])==str(run['head_repository']['id'])==focused.REPOSITORY_ID
     assert run['actor']['login']==run['triggering_actor']['login']=='palmoni5'
-    refs=[r for r in run['referenced_workflows'] if r['path']==policy_ref()]
-    assert len(refs)==1 and refs[0]['sha']==policy_ref().rsplit('@',1)[1]
-    jobs=json.loads(subprocess.check_output(['gh','api','repos/'+focused.REPOSITORY+'/actions/runs/'+ctx['GITHUB_RUN_ID']+'/attempts/'+ctx['GITHUB_RUN_ATTEMPT']+'/jobs?per_page=100'],text=True))
+    refs=[r for r in run['referenced_workflows'] if r['path']==policy]
+    assert len(refs)==1 and refs[0]['sha']==policy.rsplit('@',1)[1]
     rows=jobs['jobs'];assert jobs['total_count']==len(rows)<=100
-    emit('FIRST_LINK_LIVE_JOBS',dict(context=ctx,jobs=[{k:r.get(k) for k in ('id','name','head_sha','run_id','run_attempt','status','conclusion')} for r in rows]))
     assert {r['name'] for r in rows}<={'source_authority / verify','build','portable-windows-2022','portable-windows-2025'}
+    assert len({r['name'] for r in rows})==len(rows)
+    assert all(r['head_sha']==ctx['GITHUB_SHA'] and str(r['run_id'])==ctx['GITHUB_RUN_ID'] and str(r['run_attempt'])==ctx['GITHUB_RUN_ATTEMPT'] for r in rows)
     for name in ('source_authority / verify','build') if consumer else ('source_authority / verify',):
         selected=[r for r in rows if r['name']==name]
         assert len(selected)==1
         job=selected[0]
         assert job['status']=='completed' and job['conclusion']=='success'
         assert job['head_sha']==ctx['GITHUB_SHA'] and str(job['run_id'])==ctx['GITHUB_RUN_ID'] and str(job['run_attempt'])==ctx['GITHUB_RUN_ATTEMPT']
-    return ctx
+    producer=[r for r in rows if r['name']=='build'];assert len(producer)==1
+    assert producer[0]['head_sha']==ctx['GITHUB_SHA'] and str(producer[0]['run_attempt'])==ctx['GITHUB_RUN_ATTEMPT'] and str(producer[0]['run_id'])==ctx['GITHUB_RUN_ID']
+    assert producer[0]['status']==('completed' if consumer else 'in_progress')
+    assert producer[0]['conclusion']==('success' if consumer else None)
 
 
 def run(argv,cwd,log):
@@ -117,6 +127,12 @@ def response_args(original,output,map_path,implib,cwd,portable=False):
 
 def gnu_response(args):
     return ('\n'.join('"'+a.replace('\\','\\\\').replace('"','\\"')+'"' for a in args)+'\n').encode('utf-8')
+
+
+def notlinked_args(driver,source,diagnostic):
+    return [driver,'-std=gnu17','-static','-mno-ms-bitfields','-D_WIN32_WINNT=0x0A00','-DWINVER=0x0A00',
+            '-Wall','-Wextra','-Werror',str(source/'probes/platform/platform_probe.c'),'-lsynchronization','-Wl,--verbose',
+            '-Wl,-Map,'+str(diagnostic/'notlinked.map'),'-o',str(diagnostic/'first-link-notlinked-diagnostic.exe')]
 
 
 def completed_commands(log,compiler,source_root=ROOT):
@@ -178,9 +194,7 @@ def build():
         link=link.seal(response_output,published,compiler,RECEIPT))
     assert outputs[published.name]['link']['status']=='LINKED'
     native=diagnostic/'first-link-notlinked-diagnostic.exe'
-    argv=[compiler['configured_drivers']['C'],'-std=gnu17','-static','-mno-ms-bitfields','-D_WIN32_WINNT=0x0A00','-DWINVER=0x0A00',
-          '-Wall','-Wextra','-Werror',str(ROOT/'probes/platform/platform_probe.c'),'-lsynchronization','-Wl,--verbose',
-          '-Wl,-Map,'+str(diagnostic/'notlinked.map'),'-o',str(native)]
+    argv=notlinked_args(compiler['configured_drivers']['C'],ROOT,diagnostic)
     run([sys.executable,ROOT/'tools/toolchain/selected_link.py','launch',*argv],ROOT,out/'actual-notlinked-diagnostic.log')
     published=out/native.name;shutil.copyfile(native,published)
     outputs[published.name]=dict(kind='NOTLINKED_DIAGNOSTIC',source=dict(file='probes/platform/platform_probe.c',sha256=factory.sha(ROOT/'probes/platform/platform_probe.c')),
@@ -244,9 +258,16 @@ def verify_files(root,expected,expected_policy):
         if row['kind']=='CMAKE_SMALL_OUTPUT':
             assert record['cwd']==str(source/'out')
             assert row['target'] in TARGETS and name==row['target']+'.exe'
+            assert record['expanded_argv'][0]==compiler['configured_drivers']['CXX']
+            assert record['output']['path']==str(source/'out'/name)
+            compile_args=manifest['actual_completed_compile_commands'][row['target']]
+            obj=source/'out'/compile_args[compile_args.index('-o')+1]
+            assert any(source/'out'/arg==obj for arg in record['expanded_argv'][1:] if not arg.startswith('-'))
             assert row['source']==dict(file=TARGETS[row['target']],sha256=factory.sha(ROOT/TARGETS[row['target']]))
         elif row['kind']=='NOTLINKED_DIAGNOSTIC':
             assert row['source']==dict(file='probes/platform/platform_probe.c',sha256=factory.sha(ROOT/'probes/platform/platform_probe.c'))
+            expected_args=notlinked_args(compiler['configured_drivers']['C'],source,source/'out/first-link-diagnostics')
+            assert record['cwd']==str(source) and record['argv']==record['expanded_argv']==expected_args
         else:
             assert row['source_target']=='binderd'
     response=manifest['outputs']['first-link-response-diagnostic.exe'];record=records['first-link-response-diagnostic.exe']

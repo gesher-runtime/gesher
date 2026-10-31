@@ -68,7 +68,7 @@ def fixture(root,data):
     after,changed=component.response_args(original,diagnostic/'first-link-response-diagnostic.exe',diagnostic/'response.map',diagnostic/'response.dll.a',cwd,portable=True)
     name='first-link-response-diagnostic.exe';outputs[name]=dict(kind='RESPONSE_DIAGNOSTIC',source_target='binderd',changed_output_arg_indices=changed,
         original_expanded_argv=original,diagnostic_expanded_argv=after,link=record(root,name,after,cwd,compiler,data,response=True))
-    name='first-link-notlinked-diagnostic.exe';args=[compiler['configured_drivers']['C'],'-o',str(diagnostic/name),'-Wl,--verbose','-Wl,-Map,'+str(diagnostic/'notlinked.map')]
+    name='first-link-notlinked-diagnostic.exe';args=component.notlinked_args(compiler['configured_drivers']['C'],source,diagnostic)
     outputs[name]=dict(kind='NOTLINKED_DIAGNOSTIC',source=dict(file='probes/platform/platform_probe.c',sha256=factory.sha(component.ROOT/'probes/platform/platform_probe.c')),link=record(root,name,args,source,compiler,data))
     (root/'actual-small-build.log').write_text('\n'.join(logs)+'\n',encoding='utf8')
     for name in ('actual-response-diagnostic.log','actual-notlinked-diagnostic.log'):(root/name).write_text('SYNTHETIC_METADATA_LOG_NOT_ACTUAL_EXECUTION\n',encoding='utf8')
@@ -104,6 +104,34 @@ def tests(data):
             try:component.verify_files(root,expected,policy)
             except (AssertionError,KeyError,ValueError,FileNotFoundError):pass
             else:raise AssertionError('Malformed FIRST_LINK_ONLY metadata accepted')
+        coherent=0
+        def changed_record(name,mutate):
+            nonlocal coherent
+            bad=copy.deepcopy(good);path=root/bad['outputs'][name]['link']['file'];saved=path.read_bytes();value=json.loads(saved)
+            mutate(value,bad['outputs'][name]);path.write_text(json.dumps(value,sort_keys=True,indent=2)+'\n',encoding='utf8')
+            bad['outputs'][name]['link']['sha256']=factory.sha(path);bad['files'][path.name]=factory.sha(path)
+            (root/'first-link-only.json').write_text(json.dumps(bad),encoding='utf8')
+            try:component.verify_files(root,expected,policy)
+            except (AssertionError,KeyError,ValueError,FileNotFoundError):coherent+=1
+            else:raise AssertionError('Coherent wrong source/response link record accepted')
+            finally:path.write_bytes(saved)
+        def replace_args(value,before,after):
+            value['argv']=[x.replace(before,after) for x in value['argv']]
+            value['expanded_argv']=[x.replace(before,after) for x in value['expanded_argv']]
+        changed_record('binderd.exe',lambda v,r:replace_args(v,'CMakeFiles/binderd.dir/'+component.TARGETS['binderd']+'.obj','other-object.obj'))
+        changed_record('binderd.exe',lambda v,r:replace_args(v,'binderd.exe','other-output.exe'))
+        changed_record('binderd.exe',lambda v,r:replace_args(v,'x86_64-w64-mingw32-clang++','x86_64-w64-mingw32-clang'))
+        changed_record('first-link-notlinked-diagnostic.exe',lambda v,r:replace_args(v,'x86_64-w64-mingw32-clang','x86_64-w64-mingw32-clang++'))
+        changed_record('first-link-notlinked-diagnostic.exe',lambda v,r:replace_args(v,'platform_probe.c','other-source.c'))
+        def not_response(value,row):value['argv']=value['expanded_argv'][:];value['response_files']=[]
+        changed_record('first-link-response-diagnostic.exe',not_response)
+        def response_flag(value,row,before,after):
+            value['expanded_argv']=[x.replace(before,after) for x in value['expanded_argv']]
+            row['diagnostic_expanded_argv']=value['expanded_argv'][:]
+            body=component.gnu_response(value['expanded_argv'][1:]);item=value['response_files'][0]
+            item.update(text=body.decode(),sha256=helper.digest(body),bytes=len(body))
+        changed_record('first-link-response-diagnostic.exe',lambda v,r:response_flag(v,r,'-static','-shared'))
+        changed_record('first-link-response-diagnostic.exe',lambda v,r:response_flag(v,r,'/SYNTHETIC/source/out/first-link-diagnostics/response.dll.a','libbinderd.dll.a'))
         (root/'first-link-only.json').write_text(json.dumps(good),encoding='utf8')
         receipt=root/component.RECEIPT;body=receipt.read_bytes();receipt.write_text('CORRUPTED_SYNTHETIC_RECEIPT')
         try:component.verify_files(root,expected,policy)
@@ -111,7 +139,7 @@ def tests(data):
         else:raise AssertionError('Wrong receipt bytes accepted')
         receipt.write_bytes(body)
         assert component.verify_files(root,expected,policy)==good
-    print('PASS FIRST_LINK_ONLY exact5-output/31-file portable TEXT fixture; '+str(len(mutations)+1)+' source/run/policy/driver/role/response/receipt negatives; no compiler/network/native process')
+    print('PASS FIRST_LINK_ONLY exact5-output/31-file portable TEXT fixture; '+str(len(mutations)+1)+' metadata+'+str(coherent)+' coherently rehashed source/driver/object/response negatives; no compiler/network/native process')
 
 
 if __name__=='__main__':
