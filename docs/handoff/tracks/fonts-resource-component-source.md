@@ -234,3 +234,34 @@ retention and whole Gesher release obligations remain open.
 Run41195005255/a1 on b5b6 failed both Windows imports before child/prewarm/capture. Actual rejected operations were not printed. This source adds only FONT_RESOURCE_UNWIND_MISMATCH_V1 at the existing strict operation mismatch: lossless selected12-byte entry and Begin/End/UnwindRVA, header4, rawrecord<=256 plus SHA, parsed header fields, receivedoperations<=32 and unchanged expected tuples, first10 prologue bytes. ASCII suffix including marker is capped4096 bytes; formatting/internal/overcap failures retain original UNAVAILABLE without evidence. No truncation, new output on valid results, machine stdout/protocol change, alternative tuple, profile/layout repair or new command. Original comparison, earlier guards and rejection order remain unchanged. Synthetic evidence is labeled synthetic in tests; current actual values remain unknown until separately reviewed changed-source CI.
 
 Same27 producer inputs/4 outputs/18 outer pins/1638 whole paths/five roles, original32 helpers/3-tool decoder/EOF/nativefixture and all4 qualification flags FALSE. b5b6 actual RED/oldfive WCT RED/parked6913 remain. DIFFERENT whole-source peer and separate CI scheduling required; this is not an owner/runtime/release acceptance.
+
+## Settled common-body scope after actual d40e diagnostics
+
+The exact current signed-profile records from run41198747288/a1 give only
+[(10,4,3,48),(10,2,3,32),(6,0,7,0)]. The old expected tuple is rejected because
+it is not that actual encoding, NOT because its body inverse necessarily fails.
+SAVE uses immutable fixed frame F=entrySP-40, even after virtualSP advances.
+Both lists can restore body state under that fixed-F rule; the prior sourceowner
+moving-SP/E+48 argument was wrong and is superseded, with historical reports kept.
+
+Admission now matches ONE actual list, preserves lossless mismatch diagnostics,
+raw slots/header/prologue/opaque-handler/bounds and full69byte flow/cache/pdata
+anchors, and checks a fixed-F inverse. Typed present scope is
+POST_PROLOGUE_COMMON_BODY; partial_prologue_qualified and runtime_unwind_integrity
+are boolean FALSE. Actual SAVE CodeOffset10 versus MOV ending5 remains unqualified
+partial-prologue semantics; no broad ABI/unwind/PDB correctness follows.
+
+Code basis and actual address/frame arming both require exact common caller PCs
+S+29 and S+41, strictly after prolog10 and before conservative restoration58
+(reload starts58, formal stack deallocation63). Adjacent caller PC and preceding
+callee return must still agree on the SAME current base/profile/child, precise
+fixture/callee/callback/native wait/fullTID bounds. No frame/register/address
+fallback. Saved16byte fixtures are TEXT diagnostics with source/run/job/rawSHA,
+not local PE reads. Missing/wrong typed scope/flags and boundary PCs reject.
+
+Same seven-path source envelope,27input4output18pin1638tree, original32helpers/
+3decoderEOF/nativefixture/five roles/current producer/history/DAG/whole gates.
+All4 qualification flags FALSE, original5WCT RED/6913parked unchanged. DIFFERENT
+whole-source peer and separately authorized changed CI are required; even actual
+body-scoped success would still need genuine same-address handler-owner proof,
+then the fresh both-runtime/JNI/guest/JavaOs/OEM/retention chain. Release OPEN.
