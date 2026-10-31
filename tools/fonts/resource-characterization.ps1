@@ -731,9 +731,10 @@ function Start-ResourceRole($Owner,[string]$Role,$Info) {
  if(!$Owner.processes.Contains($Role) -or $Owner.processes[$Role].state -cne 'NOT_STARTED'){throw 'Process role replacement forbidden'}
  $record=$Owner.processes[$Role]
  Emit-PreflightRecord 'FONT_RESOURCE_REQUEST' @{role=$Role;executable=$Info.FileName;arguments=@($Info.ArgumentList);environment_keys=@($Info.Environment.Keys|Sort-Object);working_directory=$Info.WorkingDirectory;gallery='NOT_DISABLED';loader='NOT_EXHAUSTIVE'}
- $record.process=[Diagnostics.Process]::new();$record.process.StartInfo=$Info
+ $record.process=[Diagnostics.Process]::new();$record.settlementProcess=$record.process;$record.process.StartInfo=$Info
  if(!$record.process.Start()){throw 'Owned process start failed'}
  $record.pid=$record.process.Id;$record.handle=$record.process.SafeHandle;$null=$record.handle.DangerousGetHandle()
+ $record.settlementHandle=$record.handle;$record.settlementPid=$record.pid
  $record.state='RUNNING';$record.out=New-BoundedPipe $record.process.StandardOutput;$record.err=New-BoundedPipe $record.process.StandardError
  $record
 }
@@ -764,6 +765,7 @@ function Wait-ResourceRole($Record,[long]$Deadline) {
  Emit-PreflightRecord 'FONT_RESOURCE_RAW' @{role=$Record.role;pid=$Record.pid;stdout=$stdout;stderr=$stderr;exit=$Record.process.ExitCode;private_owner_qualified=$false}
  if($Record.process.ExitCode -ne 0){throw 'Owned role nonzero exit'}
  $Record.state='EXITED'
+ foreach($task in @($Record.writeTask,$Record.out.Task,$Record.err.Task)){if($null -ne $task -and !$task.IsCompleted){throw 'UNAVAILABLE: terminal role has live IO task'}}
  if($Record.role -ceq 'capture' -and $Record.ownerWitness){return} # Retain live identity through parser; finally still owns containment.
  foreach($name in @('StandardInput','StandardOutput','StandardError')){$Record.process.$name.Dispose()}
  $Record.process.Dispose();$Record.state='DISPOSED'
@@ -786,9 +788,64 @@ function Write-ResourceCommand($Owner,[string]$Path,[string]$Text) {
  Emit-PreflightRecord 'FONT_RESOURCE_COMMAND_PLAN' @{path=$Path;commands=$Text;sha256=(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant();owner_qualified=$false}
 }
 
+function Test-ResourceTerminalTasks($Record) {
+ foreach($task in @($Record.writeTask,$Record.out.Task,$Record.err.Task)){
+  if($null -ne $task -and !$task.IsCompleted){return $false}
+ }
+ $true
+}
+function Settle-ResourceRecord($Owner,$Record) {
+ if(!(Test-ResourceTerminalTasks $Record)){ $tasksDone=$false }else{$tasksDone=$true}
+ if($null -eq $Record.process){return ($Record.state -cin @('NOT_STARTED','OMITTED') -and $tasksDone)}
+ if(![object]::ReferenceEquals($Record.process,$Record.settlementProcess)){throw 'Retained process changed'}
+ if($Record.state -ceq 'DISPOSED'){return $tasksDone}
+ if($Record.pid -ne $Record.settlementPid -or $Record.process.Id -ne $Record.pid -or ![object]::ReferenceEquals($Record.handle,$Record.settlementHandle) -or $Record.handle.IsClosed){throw 'Retained kernel identity unavailable'}
+ $kernel=$Record.process.WaitForExit(0)
+ if(!$kernel -and !$Record.killReserved){
+  $Record.killReserved=$true # One attempt, even if Kill/Wait throws.
+  $Record.process.Kill();$kernel=$Record.process.WaitForExit(2000)
+ }
+ if(!$kernel -or !$tasksDone){return $false}
+ # No stream/process disposal may precede BOTH facts above.
+ foreach($task in @($Record.writeTask,$Record.out.Task,$Record.err.Task)){
+  if($null -ne $task){try{$null=$task.GetAwaiter().GetResult()}catch{$Owner.failed=$true;$Owner.settlementErrors.Add($_.Exception.Message)}}
+ }
+ if(!$Record.disposeState){$Record.disposeState=@{}}
+ foreach($name in @('StandardInput','StandardOutput','StandardError','Process')){
+  if($Record.disposeState[$name] -ceq 'FAILED'){return $false}
+  if($Record.disposeState[$name] -cne 'DONE'){
+   $Record.disposeState[$name]='FAILED' # interruption/error keeps graph, no blind retry
+   if($name -ceq 'Process'){$Record.process.Dispose()}else{$Record.process.$name.Dispose()}
+   $Record.disposeState[$name]='DONE'
+  }
+ }
+ $Record.state='DISPOSED';$true
+}
+function Complete-ResourceSettlement($Owner,$Root,[scriptblock]$ReleaseFiles,[scriptblock]$FailureSink) {
+ # Passive same-pwsh owner barrier, NOT more observation or a refreshed deadline.
+ # External forced process/workflow/host destruction is not proved containable.
+ $done=$false;$reported=$false
+ while(!$done){
+  try{
+   $all=$true
+   foreach($role in @('capture','prewarm','imports','child','help')){if($Owner.processes.Contains($role)){if(!(Settle-ResourceRecord $Owner $Owner.processes[$role])){$all=$false}}}
+   if(!$all){$Owner.failed=$true}
+   if(!$reported -and $Owner.failed){$reported=$true;& $FailureSink}
+   if($all){
+    if(!$Owner.filesAttempted){
+     $Owner.filesAttempted=$true;& $ReleaseFiles;$Owner.filesReleased=$true
+    }
+    if($Owner.filesReleased){$done=if($null -eq $Root){$true}else{Release-StageLifetimeRoot $Root $true $true}}
+   }
+  }catch{$Owner.failed=$true;try{$Owner.settlementErrors.Add($_.Exception.Message)}catch{}}
+  if(!$done){try{Start-Sleep -Milliseconds 50}catch{$Owner.failed=$true;try{$Owner.settlementErrors.Add($_.Exception.Message)}catch{}}}
+ }
+ return (!$Owner.failed) # Caller MUST preserve non-success after safe settlement.
+}
+
 if($env:GITHUB_ACTIONS -cne 'true' -or !$IsWindows){throw 'Windows CI only'}
 $clock=[Diagnostics.Stopwatch]::StartNew()
-$stage=@{root=$null;handles=[Collections.Generic.List[object]]::new();expected=@();manifest=@();processes=@{}}
+$stage=@{root=$null;handles=[Collections.Generic.List[object]]::new();expected=@();manifest=@();processes=@{};failed=$false;settlementErrors=[Collections.Generic.List[string]]::new()}
 foreach($role in @('child','imports','help','prewarm','capture')){$stage.processes[$role]=@{role=$role;state=$(if($role -ceq 'help'){'OMITTED'}else{'NOT_STARTED'});process=$null;handle=$null;pid=0;out=$null;err=$null}}
 $stage.code=@{stream=$null;profile=$null;cache=$null;frame=$null;loaded=$null};$root=$null;$work=$null;$ok=$false;$phase='PREPARED';$completion=@{}
 try{
@@ -946,6 +1003,7 @@ try{
  Send-ResourceControlOnce $capture (New-ResourceOwnerTail $heldAddress) $captureDeadline
  Wait-ResourceRole $capture $captureDeadline
  $owner=Read-ResourceOwnerField $capture.out.Text.ToString() $heldAddress $held.handler $held.writer $stage
+ if(!(Test-ResourceTerminalTasks $capture)){throw 'Capture still has live IO'}
  foreach($name in @('StandardInput','StandardOutput','StandardError')){$capture.process.$name.Dispose()};$capture.process.Dispose();$capture.state='DISPOSED'
  Emit-PreflightRecord 'FONT_RESOURCE_ONE_ADDRESS_OWNER' $owner
  Assert-ResourceWitnessRootTasks $stage
@@ -965,24 +1023,20 @@ try{
  if($child.err.Text.Length -or $child.out.Text.ToString() -cne ($preparedText+'FONT_RESOURCE_HOLD_READY pid='+$held.pid+' writer='+$held.writer+' handler='+$held.handler+"`n"+'FONT_RESOURCE_COMPLETE pid='+$held.pid+' writer='+$held.writer+' handler='+$held.handler+"`n")){throw 'Same child exact COMPLETE receipt mismatch'}
  $phase='COMPLETE';$ok=$true
 }catch{
+ $stage.failed=$true
  foreach($r in @($stage.processes['capture'],$stage.processes['prewarm'])){if($r.out){$partial=$r.out.Text.ToString();Emit-PreflightRecord 'FONT_RESOURCE_WITNESS_FAILURE_RAW' @{role=$r.role;pid=$r.pid;stdout=$partial;stderr=$r.err.Text.ToString();sha256=(Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($partial)));owner_qualified=$false}}}
  foreach($r in @($stage.processes['capture'],$stage.processes['prewarm'])){if($r.process -and $r.state -ceq 'RUNNING' -and !$r.control_reserved){try{Send-ResourceControlOnce $r "qd`n" ([Math]::Min(330000,$clock.ElapsedMilliseconds+2000))}catch{}}}
  $phase='FAILED';Emit-PreflightRecord 'FONT_RESOURCE_FAILURE' @{reason=$_.Exception.Message;phase=$phase;owner_qualified=$false};throw}finally{
- # The reserved Normal root owns every process/pipe/handle before Start.
- $all=$true
- foreach($role in @('capture','prewarm','imports','child','help')){$record=$stage.processes[$role];try{if($record.state -ceq 'DISPOSED'){$completion[$role]=$true}else{Stop-ExactOwnedProcess $record.process $completion $role}}catch{$all=$false};if(!$completion[$role]){$all=$false}}
- # Kill/wait and stream disposal must finish every retained asynchronous IO
- # task too. Otherwise keep the whole session root and every file lease alive.
- foreach($record in $stage.processes.Values){
-  foreach($task in @($record.writeTask,$record.out.Task,$record.err.Task)){
-   if($null -ne $task){try{$null=$task.Wait(100)}catch{};if(!$task.IsCompleted){$all=$false}}
-  }
+ # Every query/exit/release/error sink is inside the existing-pwsh barrier.
+ $settlementSuccess=Complete-ResourceSettlement $stage $root {
+  foreach($held in $stage.handles){$held.stream.Dispose()}
+  if(@($stage.handles|Where-Object{!$_.handle.IsClosed}).Count){throw 'Owned file lease still open'}
+  if($stage.root){Remove-ExactOwnedStage $stage $work $true}
+ } {
+  foreach($r in @($stage.processes['capture'],$stage.processes['prewarm'])){if($r.out){$partial=$r.out.Text.ToString();Emit-PreflightRecord 'FONT_RESOURCE_WITNESS_CLEANUP_RAW' @{role=$r.role;pid=$r.pid;stdout=$partial;stderr=$r.err.Text.ToString();sha256=(Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($partial)));owner_qualified=$false}}}
  }
- if($phase -ceq 'FAILED'){foreach($r in @($stage.processes['capture'],$stage.processes['prewarm'])){if($r.out){$partial=$r.out.Text.ToString();Emit-PreflightRecord 'FONT_RESOURCE_WITNESS_CLEANUP_RAW' @{role=$r.role;pid=$r.pid;stdout=$partial;stderr=$r.err.Text.ToString();sha256=(Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($partial)));owner_qualified=$false}}}}
- $streamsClosed=$false;$cleanupError=$null
- if($all){try{foreach($held in $stage.handles){$held.stream.Dispose()};$streamsClosed=@($stage.handles|Where-Object{!$_.handle.IsClosed}).Count -eq 0;if($stage.root){Remove-ExactOwnedStage $stage $work $streamsClosed}}catch{$cleanupError=$_.Exception.Message}}
- $roleStates=@{};foreach($role in $stage.processes.Keys){$r=$stage.processes[$role];$roleStates[$role]=@{state=$r.state;pid=$r.pid;kernel_completed=$completion[$role]}}
- $released=Release-StageLifetimeRoot $root $all $streamsClosed
+ $all=$true;$streamsClosed=$true;$cleanupError=$null;$released=$true;$ok=$ok -and $settlementSuccess
+ $roleStates=@{};foreach($role in $stage.processes.Keys){$completion[$role]=$true;$r=$stage.processes[$role];$roleStates[$role]=@{state=$r.state;pid=$r.pid;kernel_completed=$true}}
  Emit-PreflightRecord 'FONT_RESOURCE_SUMMARY' @{phase=$phase;characterization_completed=($ok -and $all -and $streamsClosed -and $released -and !$cleanupError);process_completion=$completion;role_states=$roleStates;stage_root_released=$released;root_retained=($root -and $root.active);native_failure_lifetime='QUARANTINE_UNTIL_BOTH_NATIVE_KERNELS_OR_EXACT_CHILD_TERMINATION';gallery='NOT_DISABLED';loader='NOT_EXHAUSTIVE';help='OMITTED';font_owner_qualified=$false;host_WCT_Windows2025_qualified=$false;private_CRT_owner_symbols_qualified=$false;full_qualification=$false;elapsed_ms=$clock.ElapsedMilliseconds;cleanup_error=$cleanupError}
- if(!$all -or !$streamsClosed -or !$released -or $cleanupError){throw 'Exact owned cleanup failed; any live owners remain rooted'}
+ if(!$all -or !$streamsClosed -or !$released -or $cleanupError -or !$settlementSuccess){throw 'Exact owned settlement retained a permanent failure'}
 }
