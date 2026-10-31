@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 BASE='b0de972bb543e0dd20d125c990817fb5b3407112'
-PATHS=('tests/windows/fixtures/Graphics84.cs','tests/windows/fixtures/Gtest84.cs',
+PATHS=('tests/windows/run-tests.ps1','tests/windows/fixtures/Graphics84.cs','tests/windows/fixtures/Gtest84.cs',
        'tests/windows/fixtures/Process84.cs','tests/windows/helpers/CloseProcessReaders.ps1',
        'tests/windows/helpers/GtestProcess.ps1','tests/windows/helpers/ProcessReaderHandles.ps1',
        'tests/windows/tracks/20-libs.ps1','tests/windows/tracks/21-posix.ps1',
