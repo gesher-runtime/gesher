@@ -16,7 +16,7 @@ def main():
  with tempfile.TemporaryDirectory(prefix='join-envelope-') as d:
   root=Path(d)
   for name in b.PAYLOAD-{'link-proof.json'}:(root/name).write_bytes(('inert '+name).encode())
-  with mock.patch.object(b.linkage,'verify',return_value=proof):
+  with mock.patch.object(b,'verify_checkout'), mock.patch.object(b.linkage,'verify',return_value=proof):
    manifest=b.seal(root,producer);assert manifest['target_wait_proved'] is False and b.verify(root,consumer)==manifest
    count=0
    for name in b.PAYLOAD:

@@ -3,7 +3,7 @@
 Only a separately reviewed immutable workflow and current artifact receipt may
 call these routines. This file alone cannot authorize or publish a producer.
 """
-import hashlib, importlib.util, json, os, sys
+import hashlib, importlib.util, json, os, subprocess, sys
 from pathlib import Path
 
 HERE=Path(__file__).resolve().parent
@@ -28,8 +28,15 @@ def scan(root,names):
         result[name]={'bytes':len(data),'sha256':digest(data)}
     return result
 
+def verify_checkout(source):
+    assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==source
+    subprocess.check_call(['git','diff','--exit-code','HEAD','--'])
+    rows=subprocess.check_output(['git','status','--porcelain','--untracked-files=all'],text=True).splitlines()
+    assert all(row.startswith('?? minimum-join-runtime-bundle/') for row in rows), 'unexpected untracked or modified source'
+
 def seal(root,auth):
     root=Path(root);c=auth['context'];assert c['role']=='diagnostic-producer'
+    verify_checkout(c['source'])
     assert {p.name for p in root.iterdir()}==PAYLOAD-{'link-proof.json'}
     ctx={'source':c['source'],'run':str(c['run']),'attempt':str(c['attempt'])}
     proof=linkage.verify(root,ctx)
@@ -44,6 +51,7 @@ def seal(root,auth):
 
 def verify(root,auth):
     root=Path(root);c=auth['context'];assert c['role']=='diagnostic-windows'
+    verify_checkout(c['source'])
     members=scan(root,PAYLOAD|{'producer-manifest.json'});manifest=json.loads((root/'producer-manifest.json').read_text(encoding='utf-8'))
     assert set(manifest)=={'schema','source','run','attempt','guard','producer_id','role','members','target_wait_proved','product_qualification'}
     assert manifest['schema']==1 and manifest['source']==c['source'] and manifest['run']==c['run'] and manifest['attempt']==c['attempt'] and manifest['guard']==c['guard']
