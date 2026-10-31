@@ -221,4 +221,14 @@ class SourceContracts(unittest.TestCase):
             with self.subTest(index=index):
                 value=punch_data(case);change(value)
                 with self.assertRaises(AssertionError):verify_punch(value,case,4096)
+    def test_private_and_cleanup_preparation_proof_mutants(self):
+        changes=[('punch_private_success',lambda d:next(v for v in d['event_rows']if v.get('event')=='punch_private').update(value100=0)),
+          ('punch_private_success',lambda d:next(v for v in d['event_rows']if v.get('event')=='punch_private').update(protection101=2)),
+          ('punch_private_success',lambda d:next(v for v in d['event_rows']if v.get('event')=='punch_private').update(section_handle_valid=0)),
+          ('punch_success',lambda d:next(v for v in d['event_rows']if v.get('event')=='punch_cleanup_prepare').update(source_unchanged=0)),
+          ('punch_success',lambda d:next(v for v in d['event_rows']if v.get('event')=='punch_cleanup_prepare')['metrics'].__setitem__(8,1))]
+        for index,(case,change)in enumerate(changes):
+            with self.subTest(index=index):
+                value=punch_data(case);change(value)
+                with self.assertRaises(AssertionError):verify_punch(value,case,4096)
 if __name__=='__main__':unittest.main()

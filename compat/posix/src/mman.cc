@@ -863,16 +863,16 @@ void* GroupAnonymous(State& s, void* start, size_t len, int prot, int flags) {
     }
   } else {
     if (fixed && RangeIsOurs(s, addr, addr + len)) {
-      errno = (flags & MAP_FIXED_NOREPLACE) != 0 ? EEXIST : EINVAL;
+      errno=s.owner_failure?EIO:s.request_error?s.request_error:(flags&MAP_FIXED_NOREPLACE)!=0?EEXIST:EINVAL;
       return MAP_FAILED;
     }
     uintptr_t at = fixed ? Reserve(s, start, len) : ReserveNear(s, start, len);
     if (at == 0 && fixed) {
-      errno = (flags & MAP_FIXED_NOREPLACE) != 0 ? EEXIST : EINVAL;
+      errno=s.owner_failure?EIO:s.request_error?s.request_error:(flags&MAP_FIXED_NOREPLACE)!=0?EEXIST:EINVAL;
       return MAP_FAILED;
     }
     if (at == 0) {
-      errno = ENOMEM;
+      errno=s.owner_failure?EIO:s.request_error?s.request_error:ENOMEM;
       return MAP_FAILED;
     }
     hole = s.regions.find(at);
@@ -1016,7 +1016,7 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
     }
     if (at == 0) {
       if(mapping!=nullptr)close_construct(mapping,0);
-      errno = fixed ? ((flags & MAP_FIXED_NOREPLACE) != 0 ? EEXIST : EINVAL) : ENOMEM;
+      errno=s.owner_failure?EIO:s.request_error?s.request_error:fixed?((flags&MAP_FIXED_NOREPLACE)!=0?EEXIST:EINVAL):ENOMEM;
       return MAP_FAILED;
     }
     hole = s.regions.find(at);
