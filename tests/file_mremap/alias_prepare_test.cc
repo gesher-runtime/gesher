@@ -116,9 +116,10 @@ int main() {
     if(!success||!caught)++failed;
   }
   {
+    SectionOwner source_owner;source_owner.state=SectionState::Live;source_owner.refs=2;
     RegionMap source;
     Region prefix;prefix.kind=Kind::kView;prefix.group=0x100000;
-    prefix.size=128*4096;prefix.shared=true;prefix.live.assign(128,true);prefix.live_pages=128;
+    prefix.size=128*4096;prefix.shared=true;prefix.owner=&source_owner;prefix.live.assign(128,true);prefix.live_pages=128;
     source.emplace(0x100000,std::move(prefix));
     Region middle;middle.kind=Kind::kAnon;middle.group=0x100000;
     const size_t middle_pages=source.begin()->second.live.capacity()+16;
@@ -143,10 +144,11 @@ int main() {
           if(plan.pieces.size()!=3 || plan.pieces.back().private_bytes.size()!=128*4096 ||
              plan.combined_pages<=plan.first_capacity || plan.cleanup_merged.combined.live.size()!=plan.combined_pages ||
              plan.pieces.front().partitions[0].mapped().kind!=Kind::kHole ||
-             plan.pieces.front().kept[0].kind!=Kind::kView)++failed;
+             plan.pieces.front().kept[0].kind!=Kind::kView || plan.pins.size()!=1 ||
+             plan.pins[0].source_pins!=1 || plan.pins[0].retained_views!=1)++failed;
         } else ++failed;
       }
-      if(live!=before || injected!=(status==PrepareStatus::NoMemory?1:0))++failed;
+      if(live!=before || source_owner.refs!=2 || injected!=(status==PrepareStatus::NoMemory?1:0))++failed;
       std::printf("PUNCH_REQUEST_ALLOCATION point=%ld calls=%ld injected=%ld status=%d released=%d\n",
         point,calls,injected,static_cast<int>(status),live==before);
       if(success)break;
