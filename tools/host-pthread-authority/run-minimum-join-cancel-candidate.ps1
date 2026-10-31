@@ -60,7 +60,7 @@ try {
           } else { Start-Sleep -Milliseconds 20 }
         }
         if (-not $captureComplete -or $frameCount -lt 1) { throw 'UNKNOWN: incomplete current stack capture' }
-        throw 'UNKNOWN: authenticated callsite and handle dataflow not yet verified' 
+        throw 'UNKNOWN: authenticated callsite and handle dataflow not yet verified'
       }
       $next = $process.StandardOutput.ReadLineAsync()
     } else { Start-Sleep -Milliseconds 20 }
