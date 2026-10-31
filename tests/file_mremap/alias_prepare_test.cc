@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <new>
+#include <utility>
 using namespace gesher_mman_internal;
 namespace { thread_local long budget = -1; thread_local long live = 0; thread_local long calls = 0; thread_local long injected = 0; }
 void* operator new(std::size_t size) {
