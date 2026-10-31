@@ -32,7 +32,7 @@ jobs:
           """Pure source/history/trigger proof; never approve or run native outputs."""
           import ast,copy,hashlib,json,re,subprocess,textwrap
           from pathlib import Path
-          
+
           ROOT=Path.cwd()
           BASE='f9288a647298adb90bdef82302d745cf806bb7ea'
           FULL='1bf8fad9ec3b423ddef8c97c1d72b25790974364'
@@ -50,7 +50,7 @@ jobs:
            'tools/toolchain/test_native_off_receiver_policy.py','tools/toolchain/prepare_host_pthread.py',
            'tools/host-pthread-authority/minimum_receipt.py','tools/toolchain/selected_link.cmake',
            'docs/handoff/tracks/pthread-native-off-receiver-component.md'}
-          
+
           def git(*args):return subprocess.check_output(['git',*args],cwd=ROOT)
           def digest(raw):return hashlib.sha256(raw).hexdigest()
           def inventory(commit):
@@ -66,7 +66,7 @@ jobs:
               pattern=rb'(uses: gesher-runtime/gesher/\.github/workflows/pthread-native-off-receiver-trusted-source\.yml@)[0-9a-f]{40}'
               assert len(re.findall(pattern,raw))==1
               return re.sub(pattern,lambda m:m[1]+b'IMMUTABLE_POLICY_PIN',raw)
-          
+
           def authority_env(env):
               source=env.get(VARIABLE,'')
               assert re.fullmatch('[0-9a-f]{40}',source)
@@ -79,7 +79,7 @@ jobs:
               assert env.get('GITHUB_EVENT_NAME')in ('push','workflow_dispatch')
               assert all(re.fullmatch('[1-9][0-9]*',env.get(k,''))for k in ('GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT'))
               return source
-          
+
           def authority_run(env,run,policy):
               source=authority_env(env)
               assert str(run['id'])==env['GITHUB_RUN_ID'] and str(run['run_attempt'])==env['GITHUB_RUN_ATTEMPT']
@@ -90,7 +90,7 @@ jobs:
               assert run['actor']['login']==run['triggering_actor']['login']=='palmoni5'
               refs=run['referenced_workflows']
               assert len(refs)==1 and refs[0]['path']==policy and refs[0]['sha']==policy.rsplit('@',1)[1]
-          
+
           def frozen_candidate(expected,source):
               assert git('rev-parse','HEAD').decode().strip()==source
               assert not git('status','--porcelain','--untracked-files=all')
@@ -110,7 +110,7 @@ jobs:
                   assert actual==wanted,'Unreviewed candidate leaf: '+path
               source_proof()
               return policy_ref
-          
+
           def frozen_history():
               raw=git('show',FULL_GUARD+':'+FULL_TRUST)
               assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==FULL_BLOB
@@ -149,7 +149,7 @@ jobs:
               assert set(legacy_scope['PINNED_SOURCE'])<=set(selected['PINNED_SOURCE'])
               print('NATIVE_OFF_FROZEN_HISTORY qualified_full='+FULL+' historical_inner98/current_inner104 selected_outer_history=UNCHANGED native_executed=false',flush=True)
               return scope
-          
+
           def source_proof():
               assert not git('status','--porcelain','--untracked-files=all')
               assert set(git('diff','--name-only',BASE,'HEAD').decode().splitlines())==CHANGED
@@ -167,9 +167,9 @@ jobs:
               assert native(old)==native(new)
               print('NATIVE_OFF_SOURCE_PROOF exact_paths='+str(len(CHANGED))+' whole_tree='+str(len(current))+' scope=source_only',flush=True)
               return dict(expected=expected,current=current,full=full)
-          
+
           EXPECTED = {'.github/workflows/pthread-native-off-receiver-component.yml': 'ad275ebfb96b6cb07579a400b7e036a95c1c9e05037dcb55432dbb62373bf855', 'docs/handoff/tracks/pthread-native-off-receiver-component.md': '6aabfce945a58977d252bb630aacd1e6a4eb577f3e75b75b9acbfb99c4ddc3ea', 'tools/host-pthread-authority/minimum_receipt.py': 'f808ff36844677b0327ce162389687fe0703e6dd834092030f74abc31c8ab5d3', 'tools/toolchain/native_off_receiver.py': '46eeeeb96eb61e7c6ac2adc4f3bfc72eda3554fd870d6cd91361fc989388f8ea', 'tools/toolchain/native_off_receiver_context.py': 'f48324d3d40c8f219b1ca825c701ddd2f586565e0542a3af129cf6d2786dfe28', 'tools/toolchain/native_off_receiver_policy.py': '67612e9680a062c9de9032ca835d4d6c6b3323b8aa50b0cc6f96a21f069676c2', 'tools/toolchain/prepare_host_pthread.py': '894fabe1148e96e87d5f41a21996dfdee69057e2b674b396f53acc2824fdb72b', 'tools/toolchain/selected_link.cmake': '5c4413c11ef853f11b32a58a1a6be2020e6cdedfa8402e7ef0d85b380be27bfe', 'tools/toolchain/test_native_off_receiver_context.py': 'a47d270533e2836dac9b07a9426b8f3fb1365c4e1dca72af1cc71a88eb435caf', 'tools/toolchain/test_native_off_receiver_live.py': 'a5fe42e03e68c65fdb093563971765e81088681e9bc49673ca15b09f6fdb4954', 'tools/toolchain/test_native_off_receiver_policy.py': 'c4e914772cee828029f682f856b66f89e9f74284749c70a5ce0187eef3999683'}
-          
+
           def gate_main():
               import os
               env=os.environ
@@ -187,6 +187,6 @@ jobs:
               print('NATIVE_OFF_POLICY_PASS '+json.dumps(dict(source=source,policy_ref=policy,changed_paths=len(CHANGED),pinned_leaves=len(EXPECTED),actual_jobs=5,scope='ORDINARY_OFF_NATIVE_RECEIVER_CONTROLS_ASSEMBLY_ONLY',runtime161_executed=False,canonical_adoption=False,full_qualification=False),sort_keys=True),flush=True)
               with Path(env['GITHUB_OUTPUT']).open('a',encoding='utf-8')as output:
                   output.write('source='+source+'\npolicy_ref='+policy+'\n')
-          
+
           gate_main()
           PY
