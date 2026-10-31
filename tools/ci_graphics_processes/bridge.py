@@ -30,3 +30,20 @@ def producer_job(jobs,current):
     assert job['head_sha']==current['source'] and str(job['run_id'])==current['run'] and str(job['run_attempt'])==current['attempt']
     assert job['status']=='in_progress' and job['conclusion'] is None and type(job['id'])is int and job['id']>0
     return job
+
+def manifest_context(current,guard):
+    return {'repository':'gesher-runtime/gesher','repository_id':'1426153186',
+            'source':current['source'],'run':current['run'],'attempt':current['attempt'],'guard':guard}
+
+def producer_manifest(root,current,jobs,guard):
+    m=module('manifest');job=producer_job(jobs,current)
+    return m.manifest(manifest_context(current,guard),job['id'],m.selected(root,current['source']))
+
+def consumer_artifact(current,jobs,inventory):
+    roles=module('role_checks')
+    verified=roles.verify_jobs(jobs,current,['source-authority / verify','fixture-producer'])
+    return roles.verify_artifact(inventory,current,verified['fixture-producer']),verified['fixture-producer']['id']
+
+def consumer_manifest(root,directory,current,guard,producer_id):
+    m=module('manifest')
+    return m.validate_download(directory,manifest_context(current,guard),producer_id,m.selected(root,current['source']))
