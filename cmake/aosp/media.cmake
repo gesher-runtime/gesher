@@ -28,6 +28,7 @@ set(GESHER_MEDIA_AUDIO_SOURCES
   ${_media}/audio/shared_state.cc
   ${_media}/audio/sink_file.cc
   ${_media}/audio/sink_wasapi.cc
+  ${_media}/audio/wasapi_sink.cc
   # Audio input (media3, ADR 0059).
   ${_media}/audio/capture.cc
   ${_media}/audio/capture_wasapi.cc)
@@ -35,7 +36,7 @@ set(GESHER_MEDIA_AUDIO_SOURCES
 # Pure audio and its recording gate have no Java VM dependency.
 add_library(gesher_media_audio OBJECT ${GESHER_MEDIA_AUDIO_SOURCES}
   ${_media}/audio/record_permission.cc)
-target_link_libraries(gesher_media_audio PUBLIC log ole32 uuid)
+target_link_libraries(gesher_media_audio PUBLIC log ole32 mmdevapi avrt uuid)
 target_compile_options(gesher_media_audio PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 
 add_library(gesher_media OBJECT
@@ -43,7 +44,7 @@ add_library(gesher_media OBJECT
   ${_media}/jni/audio_system_jni.cc
   ${_media}/jni/audio_track_jni.cc
   ${_media}/jni/audio_record_jni.cc)
-target_link_libraries(gesher_media PUBLIC gesher_media_audio nativehelper log ole32 uuid)
+target_link_libraries(gesher_media PUBLIC gesher_media_audio nativehelper log ole32 mmdevapi avrt uuid)
 target_compile_options(gesher_media PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 
 target_link_libraries(dalvikvm PRIVATE gesher_media)
@@ -60,13 +61,14 @@ add_library(gesher_media_player_core OBJECT
   ${_media}/player/player.cc
   # Video (stage 2, ADR 0051): decoders and MediaCodec.
   ${_media}/video/video_decoder.cc
+  ${_media}/video/d3d11_decoder.cc
   ${_media}/video/mf_video.cc
   ${_media}/video/soft_video.cc
   ${_media}/video/soft_video_avc.cc
   ${_media}/video/soft_video_m4v.cc
   ${_media}/video/render.cc)
 target_link_libraries(gesher_media_player_core PUBLIC gesher_media_audio gesher_media_codecs
-  gesher_bionic gesher_window_surface winhttp ole32)
+  gesher_bionic gesher_window_surface winhttp ole32 mmdevapi avrt d3d11 dxgi)
 target_compile_options(gesher_media_player_core PRIVATE -Wall -Wextra -Werror
   -Wno-unused-parameter -Wno-deprecated-copy)
 set_target_properties(gesher_media_player_core PROPERTIES CXX_STANDARD 23)
@@ -77,7 +79,8 @@ target_link_libraries(gesher_media_ndk PUBLIC gesher_media_audio gesher_media_pl
 target_compile_options(gesher_media_ndk PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 set_target_properties(gesher_media_ndk PROPERTIES CXX_STANDARD 23)
 foreach(_host dalvikvm gesher-exec)
-  target_link_libraries(${_host} PRIVATE gesher_media_audio gesher_media_player_core gesher_media_ndk)
+  target_link_libraries(${_host} PRIVATE gesher_media_audio gesher_media_player_core gesher_media_ndk
+    ole32 mmdevapi avrt d3d11)
 endforeach()
 
 # The actual container writers and pure packet metadata are shared by JNI
@@ -123,7 +126,7 @@ add_library(gesher_media_player OBJECT
   ${_media}/jni/media_recorder_jni.cc)
 target_include_directories(gesher_media_player PRIVATE ${CMAKE_SOURCE_DIR}/compat/bionic)
 target_link_libraries(gesher_media_player PUBLIC gesher_media gesher_media_player_core gesher_media_ndk gesher_media_muxer gesher_media_codecs gesher_bionic
-  winhttp ole32)
+  winhttp ole32 mmdevapi avrt d3d11 dxgi)
 target_compile_options(gesher_media_player PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter
   # libutils' TypeHelpers.h trips -Wdeprecated-copy on key_value_pair_t<String8, String8>.
   -Wno-deprecated-copy)
@@ -161,7 +164,7 @@ target_link_libraries(dalvikvm PRIVATE gesher_media_player)
 add_executable(media_probe ${_media}/probe/media_probe.cc ${GESHER_MEDIA_AUDIO_SOURCES})
 target_compile_definitions(media_probe PRIVATE GESHER_MEDIA_STANDALONE)
 target_compile_options(media_probe PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
-target_link_libraries(media_probe PRIVATE ole32 uuid pthread)
+target_link_libraries(media_probe PRIVATE ole32 mmdevapi avrt uuid pthread)
 
 # The CPU estimate block comes from the patched heap.cc compiled into ART.
 # Compile/run this regression in CI only (59-media3), preserving all valid
