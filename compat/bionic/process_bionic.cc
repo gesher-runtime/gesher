@@ -151,7 +151,7 @@ struct FdAction {
 // fork's own frame (which the child's deeper calls overwrite). caller_ctx holds
 // rbx, rbp, rsi, rdi, r12-r15, the caller's rsp and its return address.
 struct ForkChild {
-  uint64_t caller_ctx[10];
+  uint64_t caller_ctx[16];
   std::map<int, bool> present;          // fd -> open, the shadow table
   std::vector<FdAction> fd_actions;
   std::vector<std::string> env;         // the child's environment, editable
@@ -239,8 +239,8 @@ extern "C" void* gesher_fork_prepare();  // builds the child; returns &caller_ct
 extern "C" int gesher_fork();            // the fork()/vfork() entry (asm)
 extern "C" [[noreturn]] void gesher_fork_return(const void* ctx, long value);
 
-// Saves the 10-qword caller context (filled by gesher_fork). MS x64: result in
-// rax. On entry rsp points at the return address; rsp%16 == 8.
+// Saves the caller context (filled by gesher_fork).
+#if defined(__x86_64__)
 asm(".text\n"
     ".globl gesher_fork\n"
     ".p2align 4\n"
@@ -292,6 +292,59 @@ asm(".text\n"
     "  movq %rdx, %rax\n"         // the parent's fork() return value
     "  movq %r10, %rsp\n"
     "  jmpq *%r11\n");
+#elif defined(__aarch64__)
+asm(".text\n"
+    ".globl gesher_fork\n"
+    ".p2align 2\n"
+    "gesher_fork:\n"
+    "  stp x29, x30, [sp, #-112]!\n"
+    "  mov x29, sp\n"
+    "  stp x19, x20, [sp, #16]\n"
+    "  stp x21, x22, [sp, #32]\n"
+    "  stp x23, x24, [sp, #48]\n"
+    "  stp x25, x26, [sp, #64]\n"
+    "  stp x27, x28, [sp, #80]\n"
+    "  add x0, x29, #112\n"
+    "  str x0, [sp, #96]\n"
+    "  bl gesher_fork_prepare\n"
+    "  ldp x2, x3, [sp, #16]\n"
+    "  stp x2, x3, [x0, #0]\n"
+    "  ldp x2, x3, [sp, #32]\n"
+    "  stp x2, x3, [x0, #16]\n"
+    "  ldp x2, x3, [sp, #48]\n"
+    "  stp x2, x3, [x0, #32]\n"
+    "  ldp x2, x3, [sp, #64]\n"
+    "  stp x2, x3, [x0, #48]\n"
+    "  ldp x2, x3, [sp, #80]\n"
+    "  stp x2, x3, [x0, #64]\n"
+    "  ldp x2, x3, [sp]\n"
+    "  stp x2, x3, [x0, #80]\n"
+    "  ldr x2, [sp, #96]\n"
+    "  str x2, [x0, #96]\n"
+    "  ldp x19, x20, [sp, #16]\n"
+    "  ldp x21, x22, [sp, #32]\n"
+    "  ldp x23, x24, [sp, #48]\n"
+    "  ldp x25, x26, [sp, #64]\n"
+    "  ldp x27, x28, [sp, #80]\n"
+    "  ldp x29, x30, [sp], #112\n"
+    "  mov x0, #0\n"
+    "  ret\n");
+
+asm(".text\n"
+    ".globl gesher_fork_return\n"
+    ".p2align 2\n"
+    "gesher_fork_return:\n"
+    "  ldp x19, x20, [x0, #0]\n"
+    "  ldp x21, x22, [x0, #16]\n"
+    "  ldp x23, x24, [x0, #32]\n"
+    "  ldp x25, x26, [x0, #48]\n"
+    "  ldp x27, x28, [x0, #64]\n"
+    "  ldp x29, x30, [x0, #80]\n"
+    "  ldr x2, [x0, #96]\n"
+    "  mov sp, x2\n"
+    "  mov x0, x1\n"
+    "  ret\n");
+#endif
 
 std::atomic<int> g_synthetic_pid{1};
 
@@ -307,7 +360,7 @@ extern "C" void* gesher_fork_prepare() {
 // Returns to fork's caller with `result`, after copying the context off the
 // child (which is freed here) onto the stack, so the jump reads valid memory.
 [[noreturn]] void FinishChild(ForkChild* child, int result) {
-  uint64_t ctx[10];
+  uint64_t ctx[16];
   std::memcpy(ctx, child->caller_ctx, sizeof(ctx));
   t_fork = nullptr;
   delete child;

@@ -642,13 +642,23 @@ int BIONIC_SYSV Sethostname(const char*, size_t) { return errno = kEPERM, -1; }
 // translator has guest versions: guest_libc.cc.)
 extern "C" void BIONIC_SYSV gesher_bionic_jmp_savemask(uint64_t* env) {
   static auto fn = Shim<int(BIONIC_SYSV*)(int, const uint64_t*, uint64_t*)>("sigprocmask");
+#if defined(__x86_64__)
   env[9] = 0;
   if (fn != nullptr) fn(0 /* SIG_BLOCK */, nullptr, &env[9]);
+#elif defined(__aarch64__)
+  env[24] = 0;
+  if (fn != nullptr) fn(0 /* SIG_BLOCK */, nullptr, &env[24]);
+#endif
 }
 extern "C" void BIONIC_SYSV gesher_bionic_jmp_restoremask(uint64_t* env) {
   static auto fn = Shim<int(BIONIC_SYSV*)(int, const uint64_t*, uint64_t*)>("sigprocmask");
+#if defined(__x86_64__)
   if (fn != nullptr) fn(2 /* SIG_SETMASK */, &env[9], nullptr);
+#elif defined(__aarch64__)
+  if (fn != nullptr) fn(2 /* SIG_SETMASK */, &env[24], nullptr);
+#endif
 }
+#if defined(__x86_64__)
 asm(".text\n"
     ".globl gesher_bionic_setjmp\n"
     ".p2align 4\n"
@@ -707,6 +717,71 @@ asm(".text\n"
     "  movl $1, %eax\n"
     "2:\n"
     "  jmp *56(%rdi)\n");
+#elif defined(__aarch64__)
+asm(".text\n"
+    ".globl gesher_bionic_setjmp\n"
+    ".p2align 2\n"
+    "gesher_bionic_setjmp:\n"
+    "  mov w1, #1\n"
+    "  b gesher_bionic_sigsetjmp\n"
+    ".globl gesher_bionic__setjmp\n"
+    ".p2align 2\n"
+    "gesher_bionic__setjmp:\n"
+    "  mov w1, #0\n"
+    ".globl gesher_bionic_sigsetjmp\n"
+    "gesher_bionic_sigsetjmp:\n"
+    "  stp x19, x20, [x0, #0]\n"
+    "  stp x21, x22, [x0, #16]\n"
+    "  stp x23, x24, [x0, #32]\n"
+    "  stp x25, x26, [x0, #48]\n"
+    "  stp x27, x28, [x0, #64]\n"
+    "  stp x29, x30, [x0, #80]\n"
+    "  mov x2, sp\n"
+    "  str x2, [x0, #96]\n"
+    "  stp d8, d9, [x0, #104]\n"
+    "  stp d10, d11, [x0, #120]\n"
+    "  stp d12, d13, [x0, #136]\n"
+    "  stp d14, d15, [x0, #152]\n"
+    "  str w1, [x0, #168]\n"
+    "  cbz w1, 1f\n"
+    "  stp x29, x30, [sp, #-32]!\n"
+    "  mov x29, sp\n"
+    "  str x0, [sp, #16]\n"
+    "  bl gesher_bionic_jmp_savemask\n"
+    "  ldr x0, [sp, #16]\n"
+    "  ldp x29, x30, [sp], #32\n"
+    "1:\n"
+    "  mov w0, #0\n"
+    "  ret\n"
+    ".globl gesher_bionic_longjmp\n"
+    ".p2align 2\n"
+    "gesher_bionic_longjmp:\n"
+    "  ldr w2, [x0, #168]\n"
+    "  cbz w2, 1f\n"
+    "  stp x29, x30, [sp, #-32]!\n"
+    "  mov x29, sp\n"
+    "  stp x0, x1, [sp, #16]\n"
+    "  bl gesher_bionic_jmp_restoremask\n"
+    "  ldp x0, x1, [sp, #16]\n"
+    "  ldp x29, x30, [sp], #32\n"
+    "1:\n"
+    "  ldp x19, x20, [x0, #0]\n"
+    "  ldp x21, x22, [x0, #16]\n"
+    "  ldp x23, x24, [x0, #32]\n"
+    "  ldp x25, x26, [x0, #48]\n"
+    "  ldp x27, x28, [x0, #64]\n"
+    "  ldp x29, x30, [x0, #80]\n"
+    "  ldr x2, [x0, #96]\n"
+    "  mov sp, x2\n"
+    "  ldp d8, d9, [x0, #104]\n"
+    "  ldp d10, d11, [x0, #120]\n"
+    "  ldp d12, d13, [x0, #136]\n"
+    "  ldp d14, d15, [x0, #152]\n"
+    "  cmp w1, #0\n"
+    "  mov w2, #1\n"
+    "  csel w0, w1, w2, ne\n"
+    "  br x30\n");
+#endif
 extern "C" int gesher_bionic_setjmp();
 extern "C" int gesher_bionic__setjmp();
 extern "C" int gesher_bionic_sigsetjmp();
