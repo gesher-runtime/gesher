@@ -118,7 +118,7 @@ long ShowShellBalloonNotification(const NotificationRequest& req) {
     if (icon != nullptr) custom_icon = true;
   }
   if (icon == nullptr) {
-    icon = LoadIconW(nullptr, IDI_APPLICATION);
+    icon = LoadIconW(nullptr, reinterpret_cast<LPCWSTR>(IDI_APPLICATION));
   }
   nid.hIcon = icon;
 
