@@ -14,13 +14,6 @@
 #include <utility>
 #include <vector>
 
-namespace android {
-class AndroidRuntime {
- public:
-  static JavaVM* getJavaVM();
-};
-}  // namespace android
-
 namespace gesher {
 namespace windows {
 namespace {
@@ -36,7 +29,16 @@ static JavaVM* g_vm = nullptr;
 
 JavaVM* ResolveJavaVM() {
   if (g_vm != nullptr) return g_vm;
-  return android::AndroidRuntime::getJavaVM();
+  HMODULE mod = GetModuleHandleW(nullptr);
+  if (mod != nullptr) {
+    auto fn = reinterpret_cast<JavaVM* (*)()>(
+        GetProcAddress(mod, "_ZN7android14AndroidRuntime9getJavaVMEv"));
+    if (fn != nullptr) {
+      g_vm = fn();
+      return g_vm;
+    }
+  }
+  return nullptr;
 }
 
 }  // namespace

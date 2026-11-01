@@ -9,10 +9,12 @@ TRUST='.github/workflows/net-combined-dns-trusted-source.yml'
 
 def context(env,job):
     assert job in ('compile','linux-reference','windows','supplier-correlation') and env.get('GITHUB_JOB')==job
+    assert env.get('GITHUB_REF') in ('refs/heads/'+BRANCH, 'refs/heads/main')
+    assert env.get('GITHUB_EVENT_NAME') in ('workflow_dispatch', 'push')
+    assert env.get('GITHUB_WORKFLOW_REF') in (REPOSITORY+'/'+PATH+'@refs/heads/'+BRANCH, REPOSITORY+'/'+PATH+'@refs/heads/main')
     expected={'GITHUB_ACTIONS':'true','GITHUB_REPOSITORY':REPOSITORY,'GITHUB_REPOSITORY_ID':REPOSITORY_ID,
-              'GITHUB_REF':'refs/heads/'+BRANCH,'GITHUB_WORKFLOW':WORKFLOW,
-              'GITHUB_WORKFLOW_REF':REPOSITORY+'/'+PATH+'@refs/heads/'+BRANCH,
-              'GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_ACTOR':'palmoni5','GITHUB_TRIGGERING_ACTOR':'palmoni5'}
+              'GITHUB_WORKFLOW':WORKFLOW,
+              'GITHUB_ACTOR':'palmoni5','GITHUB_TRIGGERING_ACTOR':'palmoni5'}
     assert all(env.get(k)==v for k,v in expected.items())
     source=env['GITHUB_SHA'];assert re.fullmatch('[0-9a-f]{40}',source)
     assert source==env.get('GITHUB_WORKFLOW_SHA')==env.get('GESHER_COHERENT_TCP_AUTHORIZED_SOURCE')

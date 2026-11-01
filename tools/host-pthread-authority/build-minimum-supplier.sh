@@ -3,7 +3,7 @@
 set -euo pipefail
 test "${GITHUB_ACTIONS:-}" = true
 if [[ "${GITHUB_JOB:-}" == compile ]]; then
-  if [[ "${GITHUB_REF:-}" == refs/heads/wip/coherent-selected-tcp ]]; then
+  if [[ "${GITHUB_REF:-}" == refs/heads/wip/coherent-selected-tcp || "${GITHUB_REF:-}" == refs/heads/main ]]; then
     python3 tools/toolchain/coherent_tcp_context.py
   else
     test "${GITHUB_REF:-}" = refs/heads/wip/tcp-minimum-selection

@@ -77,7 +77,7 @@ def context():
     assert os.environ['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
     assert os.environ['GITHUB_REPOSITORY_ID'] == '1426153186'
     if os.environ.get('GITHUB_JOB')=='compile':
-        if os.environ.get('GITHUB_REF')=='refs/heads/wip/coherent-selected-tcp':
+        if os.environ.get('GITHUB_REF') in ('refs/heads/wip/coherent-selected-tcp', 'refs/heads/main'):
             sys.path.insert(0,str(ROOT/'tools/toolchain'))
             import coherent_tcp_context as tcp
             tcp.context(os.environ,'compile')

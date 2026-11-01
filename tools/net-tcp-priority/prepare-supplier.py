@@ -41,7 +41,7 @@ def main():
     context = {k: os.environ[k] for k in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID')}
     assert context['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
     role = os.environ['TCP_SUPPLIER_ROLE']
-    if os.environ['GITHUB_REF'] == 'refs/heads/wip/coherent-selected-tcp':
+    if os.environ['GITHUB_REF'] in ('refs/heads/wip/coherent-selected-tcp', 'refs/heads/main'):
         sys.path.insert(0,str(ROOT/'tools/toolchain'))
         import coherent_tcp_context as coherent
         coherent.context(os.environ,'compile')
