@@ -134,9 +134,11 @@ final class BroadcastController {
                 }
             }
         }
-        // Manifest receivers: explicit, or implicit to a package.
+        // Manifest receivers: explicit, or implicit to a package, or C2DM/FCM push actions.
         List<ActivityInfo> manifest = new ArrayList<>();
-        if (intent.getComponent() != null || intent.getPackage() != null) {
+        if (intent.getComponent() != null || intent.getPackage() != null
+                || "com.google.android.c2dm.intent.RECEIVE".equals(intent.getAction())
+                || "com.google.android.c2dm.intent.REGISTRATION".equals(intent.getAction())) {
             for (ResolveInfo ri : mPm.receivers(intent, resolvedType,
                     PackageManager.GET_META_DATA | PackageManager.GET_SHARED_LIBRARY_FILES)) {
                 manifest.add(ri.activityInfo);

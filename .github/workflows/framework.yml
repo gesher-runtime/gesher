@@ -391,13 +391,14 @@ jobs:
               --framework-classes out/framework/classes --core-classes out/coremod
           done
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/web3app/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod  # web3 (ADR 0058)
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/gmsapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
 
       - name: Collect framework artifacts
         run: |
           mkdir -p dist-framework
           cp out/framework/framework-minus-apex.jar dist-framework/framework.jar
           cp out/framework-res/framework-res.apk out/app/gesher-app.jar out/app/build.prop \
-            out/app/lifecycle.apk out/app/components.apk out/app/peer.apk out/app/uiapp.apk out/app/dbapp.apk out/app/devsvc.apk out/app/devices.apk out/app/nodevices.apk dist-framework/
+            out/app/lifecycle.apk out/app/components.apk out/app/peer.apk out/app/uiapp.apk out/app/dbapp.apk out/app/devsvc.apk out/app/devices.apk out/app/nodevices.apk out/app/gmsapp.apk dist-framework/
           cp out/framework-res-after/framework-res.apk dist-framework/framework-res-after.apk
           cp out/app/popupapp.apk dist-framework/
           cp out/app/gesher-camera.apk dist-framework/

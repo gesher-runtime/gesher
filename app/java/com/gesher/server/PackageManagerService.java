@@ -65,19 +65,31 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public boolean isPackageAvailable(String packageName, int userId) {
-        return get(packageName) != null;
+        return get(packageName) != null || GmsPackageSupport.isSyntheticPackage(packageName);
     }
 
     @Override
     public PackageInfo getPackageInfo(String packageName, long flags, int userId) {
         ApkPackage p = get(packageName);
-        return p == null ? null : p.packageInfo(flags);
+        if (p != null) {
+            return p.packageInfo(flags);
+        }
+        if (GmsPackageSupport.isSyntheticPackage(packageName)) {
+            return GmsPackageSupport.createSyntheticPackageInfo(packageName, flags);
+        }
+        return null;
     }
 
     @Override
     public ApplicationInfo getApplicationInfo(String packageName, long flags, int userId) {
         ApkPackage p = get(packageName);
-        return p == null ? null : p.applicationInfo(flags);
+        if (p != null) {
+            return p.applicationInfo(flags);
+        }
+        if (GmsPackageSupport.isSyntheticPackage(packageName)) {
+            return GmsPackageSupport.createSyntheticApplicationInfo(packageName, flags);
+        }
+        return null;
     }
 
     @Override
@@ -118,6 +130,9 @@ public final class PackageManagerService extends IPackageManager.Default {
         List<ResolveInfo> result = new ArrayList<>();
         for (ApkPackage p : mPackages.values()) {
             result.addAll(p.queryIntentServices(intent, resolvedType, flags));
+        }
+        if (result.isEmpty() && intent != null) {
+            result.addAll(GmsPackageSupport.querySyntheticServices(intent, resolvedType, flags));
         }
         return result;
     }
@@ -196,6 +211,12 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (ApkPackage p : mPackages.values()) {
             result.add(p.packageInfo(flags));
         }
+        if (get(GmsPackageSupport.PACKAGE_GMS) == null) {
+            result.add(GmsPackageSupport.createSyntheticPackageInfo(GmsPackageSupport.PACKAGE_GMS, flags));
+        }
+        if (get(GmsPackageSupport.PACKAGE_VENDING) == null) {
+            result.add(GmsPackageSupport.createSyntheticPackageInfo(GmsPackageSupport.PACKAGE_VENDING, flags));
+        }
         return new ParceledListSlice<>(result);
     }
 
@@ -204,6 +225,12 @@ public final class PackageManagerService extends IPackageManager.Default {
         List<ApplicationInfo> result = new ArrayList<>();
         for (ApkPackage p : mPackages.values()) {
             result.add(p.applicationInfo(flags));
+        }
+        if (get(GmsPackageSupport.PACKAGE_GMS) == null) {
+            result.add(GmsPackageSupport.createSyntheticApplicationInfo(GmsPackageSupport.PACKAGE_GMS, flags));
+        }
+        if (get(GmsPackageSupport.PACKAGE_VENDING) == null) {
+            result.add(GmsPackageSupport.createSyntheticApplicationInfo(GmsPackageSupport.PACKAGE_VENDING, flags));
         }
         return new ParceledListSlice<>(result);
     }
@@ -215,6 +242,9 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public int getApplicationEnabledSetting(String packageName, int userId) {
+        if (GmsPackageSupport.isSyntheticPackage(packageName)) {
+            return PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
+        }
         return PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
     }
 
