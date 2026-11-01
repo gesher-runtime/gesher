@@ -11,8 +11,14 @@
 
 namespace gesher::bionic {
 
-// System V, like all loaded code (docs/decisions/0006-managed-abi.md).
+// System V on x86-64, AAPCS64 on ARM64.
+#if defined(__x86_64__)
 #define BIONIC_SYSV __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define BIONIC_SYSV
+#else
+#define BIONIC_SYSV
+#endif
 
 // pthread_t is `unsigned long` under bionic LP64: a 64-bit opaque id.
 using bionic_pthread_t = uint64_t;

@@ -55,9 +55,14 @@ using Elf64_Relr = uint64_t;
 #define R_AARCH64_IRELATIVE 1032
 #endif
 
-// Loaded Android code is System V ABI (docs/decisions/0006-managed-abi.md), so
+// Loaded Android code is System V ABI on x86-64 (docs/decisions/0006-managed-abi.md), so
 // every call into it (init, ifunc resolvers) goes through a sysv_abi pointer.
+// On AArch64, AAPCS64 is the standard calling convention for both guest and host.
+#if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV
+#endif
 
 namespace gesher::elf {
 
@@ -487,7 +492,9 @@ bool ProtectSegments(Library* lib, const uint8_t* data, std::string* error) {
     uint8_t* start = lib->load_bias + PageDown(phdr[i].p_vaddr);
     size_t len = PageUp(phdr[i].p_vaddr + phdr[i].p_memsz) - PageDown(phdr[i].p_vaddr);
     int prot = ProtFor(phdr[i].p_flags);
+#if !defined(__aarch64__)
     if (lib->is_aarch64 && (prot & PROT_EXEC)) prot = (prot & ~PROT_EXEC) | PROT_READ;
+#endif
     if (mprotect(start, len, prot) != 0) {
       Fail(error, "mprotect of a segment failed");
       return false;

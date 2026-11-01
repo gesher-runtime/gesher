@@ -124,7 +124,11 @@ target_link_libraries(libutils_probe PRIVATE utils)
 
 # Phase 6: can Windows user code use %fs for bionic's TLS (WRFSBASE)?
 add_executable(fsbase_probe probes/elf/fsbase_probe.cc)
-target_compile_options(fsbase_probe PRIVATE -Wall -Wextra -Werror -mfsgsbase)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  target_compile_options(fsbase_probe PRIVATE -Wall -Wextra -Werror -mfsgsbase)
+else()
+  target_compile_options(fsbase_probe PRIVATE -Wall -Wextra -Werror)
+endif()
 
 # Focused CI fixture; no new production track or generic environment API.
 add_executable(font_environment_test EXCLUDE_FROM_ALL tests/native/font_environment_test.cc)

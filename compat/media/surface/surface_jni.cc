@@ -56,7 +56,11 @@
 #include "frame_invalidation.h"
 #include "queue_surface.h"
 
+#if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV
+#endif
 
 // The device stand-ins' BLASTBufferQueue natives (compat/framework/device_standins.cc).
 extern "C" {

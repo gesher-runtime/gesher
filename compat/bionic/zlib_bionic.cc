@@ -27,8 +27,8 @@
 #include <zlib.h>
 
 extern "C" {
-int __attribute__((sysv_abi)) gesher_bionic_vsnprintf(char* buf, size_t n, const char* fmt,
-                                                      gesher::bionic::SysvVaList* ap);
+int BIONIC_SYSV gesher_bionic_vsnprintf(char* buf, size_t n, const char* fmt,
+                                        gesher::bionic::SysvVaList* ap);
 }
 
 namespace gesher::bionic {

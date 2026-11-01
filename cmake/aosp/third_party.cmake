@@ -57,9 +57,19 @@ target_include_directories(lz4 PUBLIC ${_l4})
 # Android.bp builds impl_x86_linux_or_android.c for every x86-64 target, which
 # is empty on Windows; upstream's Windows implementation is used instead.
 set(_cf "${AOSP_DIR}/external/cpu_features")
+set(_cf_impl ${_cf}/src/impl_x86_windows.c)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
+  if(EXISTS ${_cf}/src/impl_aarch64_windows.c)
+    set(_cf_impl ${_cf}/src/impl_aarch64_windows.c)
+  elseif(EXISTS ${_cf}/src/impl_arm_windows.c)
+    set(_cf_impl ${_cf}/src/impl_arm_windows.c)
+  elseif(EXISTS ${_cf}/src/impl_aarch64_linux_or_android.c)
+    set(_cf_impl ${_cf}/src/impl_aarch64_linux_or_android.c)
+  endif()
+endif()
 add_library(cpu_features STATIC
   ${_cf}/src/filesystem.c ${_cf}/src/stack_line_reader.c ${_cf}/src/string_view.c
-  ${_cf}/src/impl_x86_windows.c)
+  ${_cf_impl})
 target_include_directories(cpu_features PUBLIC ${_cf}/include)
 target_compile_definitions(cpu_features PRIVATE STACK_LINE_READER_BUFFER_SIZE=1024)
 target_compile_options(cpu_features PRIVATE -Wno-gnu-designator -Wno-unused-variable)
@@ -67,12 +77,17 @@ target_compile_options(cpu_features PRIVATE -Wno-gnu-designator -Wno-unused-vari
 # --- libpng (external/libpng; host configuration, which leaves the SSE
 # filters to Android's x86 targets) -----------------------------------------
 set(_png "${AOSP_DIR}/external/libpng")
+set(_png_arch)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  set(_png_arch ${_png}/intel/filter_sse2_intrinsics.c ${_png}/intel/intel_init.c)
+elseif(EXISTS ${_png}/arm/arm_init.c)
+  set(_png_arch ${_png}/arm/arm_init.c ${_png}/arm/filter_neon_intrinsics.c)
+endif()
 add_library(png STATIC
   ${_png}/png.c ${_png}/pngerror.c ${_png}/pngget.c ${_png}/pngmem.c ${_png}/pngpread.c
   ${_png}/pngread.c ${_png}/pngrio.c ${_png}/pngrtran.c ${_png}/pngrutil.c ${_png}/pngset.c
   ${_png}/pngtrans.c ${_png}/pngwio.c ${_png}/pngwrite.c ${_png}/pngwtran.c ${_png}/pngwutil.c
-  # x86_64
-  ${_png}/intel/filter_sse2_intrinsics.c ${_png}/intel/intel_init.c)
+  ${_png_arch})
 target_include_directories(png PUBLIC ${_png})
 target_link_libraries(png PUBLIC z)
 target_compile_options(png PRIVATE -std=gnu89 -Wall -Werror -Wno-unused-parameter)

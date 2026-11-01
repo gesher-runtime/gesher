@@ -25,12 +25,18 @@ int SpawnFailure(const char* operation, const char* path, int fd, int new_fd, in
   return 127;
 }
 
+#if defined(__x86_64__)
+#define SYSV_FN __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV_FN
+#endif
+
 int ApplySpawnActions(const SpawnRequest& request) {
-  using Open = int (__attribute__((sysv_abi))*)(const char*, int, int);
-  using Close = int (__attribute__((sysv_abi))*)(int);
-  using Dup2 = int (__attribute__((sysv_abi))*)(int, int);
-  using Chdir = int (__attribute__((sysv_abi))*)(const char*);
-  using Fcntl = int (__attribute__((sysv_abi))*)(int, int, uint64_t);
+  using Open = int (SYSV_FN*)(const char*, int, int);
+  using Close = int (SYSV_FN*)(int);
+  using Dup2 = int (SYSV_FN*)(int, int);
+  using Chdir = int (SYSV_FN*)(const char*);
+  using Fcntl = int (SYSV_FN*)(int, int, uint64_t);
   auto open = reinterpret_cast<Open>(gesher::bionic::LookupBionicSymbol("open"));
   auto close = reinterpret_cast<Close>(gesher::bionic::LookupBionicSymbol("close"));
   auto dup2 = reinterpret_cast<Dup2>(gesher::bionic::LookupBionicSymbol("dup2"));

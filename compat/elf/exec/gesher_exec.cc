@@ -48,14 +48,19 @@
 #include "gesher_shell.h"
 #include "spawn_actions.h"
 
+#if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV
+#endif
 
 namespace elf = gesher::elf;
 namespace ex = gesher::exec;
 
 // Enters the program: %rsp = `sp` (argc at 0(%rsp)), %rdx = 0 (no rtld fini
-// function), jump to `entry`. Microsoft ABI: rcx = entry, rdx = sp.
+// function), jump to `entry`. Microsoft ABI: rcx/x0 = entry, rdx/x1 = sp.
 extern "C" [[noreturn]] void gesher_exec_enter(void* entry, void* sp);
+#if defined(__x86_64__)
 asm(".text\n"
     ".globl gesher_exec_enter\n"
     ".p2align 4\n"
@@ -64,6 +69,18 @@ asm(".text\n"
     "  xorl %ebp, %ebp\n"
     "  xorl %edx, %edx\n"
     "  jmpq *%rcx\n");
+#elif defined(__aarch64__)
+asm(".text\n"
+    ".globl gesher_exec_enter\n"
+    ".p2align 2\n"
+    "gesher_exec_enter:\n"
+    "  mov x16, x0\n"
+    "  mov sp, x1\n"
+    "  mov x29, #0\n"
+    "  mov x30, #0\n"
+    "  mov x0, #0\n"
+    "  br x16\n");
+#endif
 
 namespace {
 

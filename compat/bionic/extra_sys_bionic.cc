@@ -295,6 +295,11 @@ int BIONIC_SYSV SpinTrylock(void* l) {
 }
 int BIONIC_SYSV SpinLock(void* l) {
   for (int spins = 0; SpinTrylock(l) != 0; ++spins) {
+#if defined(__x86_64__)
+    __asm__ __volatile__("pause" ::: "memory");
+#elif defined(__aarch64__)
+    __asm__ __volatile__("yield" ::: "memory");
+#endif
     if (spins > 100) SwitchToThread();
   }
   return 0;

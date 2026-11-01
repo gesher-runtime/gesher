@@ -7,12 +7,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__x86_64__)
+#define SYSV_ABI __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV_ABI
+#else
+#define SYSV_ABI
+#endif
+
 extern "C" {
 
-__attribute__((sysv_abi)) void* gesher_sysv_memcpy(void* dst, const void* src, size_t n) {
+SYSV_ABI void* gesher_sysv_memcpy(void* dst, const void* src, size_t n) {
   return memcpy(dst, src, n);
 }
 
-__attribute__((sysv_abi)) void gesher_sysv_free(void* p) { free(p); }
+SYSV_ABI void gesher_sysv_free(void* p) { free(p); }
 
 }  // extern "C"

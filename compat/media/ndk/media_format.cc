@@ -15,13 +15,19 @@ extern "C" {
 namespace gesher::media {
 namespace {
 
+#if defined(__x86_64__)
+#define SYSV __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV
+#endif
+
 // These signatures use fixed-width integers, LP64 size_t and opaque pointers;
 // only the host calling convention differs from an Android ELF caller's.
 template <auto F>
 struct Sysv;
 template <class R, class... A, R (*F)(A...)>
 struct Sysv<F> {
-  static R __attribute__((sysv_abi)) Call(A... args) { return F(args...); }
+  static R SYSV Call(A... args) { return F(args...); }
 };
 
 void Register() {

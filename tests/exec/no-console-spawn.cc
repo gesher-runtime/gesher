@@ -32,9 +32,14 @@ int main() {
              static_cast<unsigned>(initial.cbReserved2), initial.hStdInput);
       return 1;
     }
-    using Spawn = int (__attribute__((sysv_abi))*)(int*, const char*, const void*, const void*,
-                                                   char* const*, char* const*);
-    using Wait = int (__attribute__((sysv_abi))*)(int, int*, int);
+#if defined(__x86_64__)
+#define SYSV_FN __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV_FN
+#endif
+    using Spawn = int (SYSV_FN*)(int*, const char*, const void*, const void*,
+                                 char* const*, char* const*);
+    using Wait = int (SYSV_FN*)(int, int*, int);
     auto spawn = reinterpret_cast<Spawn>(gesher::bionic::LookupBionicSymbol("posix_spawn"));
     auto wait = reinterpret_cast<Wait>(gesher::bionic::LookupBionicSymbol("waitpid"));
     if (spawn == nullptr || wait == nullptr) return 1;

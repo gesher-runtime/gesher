@@ -26,7 +26,12 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "exec4 environment load failed: %s\n", error.c_str());
     return 1;
   }
-  using Run = int(__attribute__((sysv_abi))*)(const char*, const char*);
+#if defined(__x86_64__)
+#define SYSV_FN __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV_FN
+#endif
+  using Run = int(SYSV_FN*)(const char*, const char*);
   auto run = reinterpret_cast<Run>(elf::Lookup(library, "Exec4Environment"));
   auto mutate = reinterpret_cast<Run>(elf::Lookup(library, "Exec4EnvironmentMutations"));
   if (run == nullptr || mutate == nullptr) return 1;

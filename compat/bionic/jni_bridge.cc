@@ -59,7 +59,13 @@ using gesher::bionic::NextFp;
 using gesher::bionic::NextGp;
 using gesher::bionic::SysvVaList;
 
+#if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV
+#else
+#define SYSV
+#endif
 
 extern "C" {
 // Assembly, below.
@@ -210,6 +216,7 @@ void* EmitStubLocked(uint8_t rex, uint8_t op, void* ctx, void* entry) {
   uint8_t* p = g_stub_page + g_stub_used;
   g_stub_used += kStubSize;
   uint64_t c = reinterpret_cast<uint64_t>(ctx), e = reinterpret_cast<uint64_t>(entry);
+#if defined(__x86_64__)
   p[0] = rex;
   p[1] = op;
   std::memcpy(p + 2, &c, 8);
@@ -218,6 +225,26 @@ void* EmitStubLocked(uint8_t rex, uint8_t op, void* ctx, void* entry) {
   std::memcpy(p + 12, &e, 8);
   p[20] = 0xFF;
   p[21] = 0xE0;  // jmp rax
+#elif defined(__aarch64__)
+  (void)rex;
+  uint32_t insns[4];
+  if (op == 0xB8) {
+    // OnLoad stub: pass ctx in x2 (3rd arg for gesher_jni_onload_bridge)
+    insns[0] = 0x58000082u;  // ldr x2, [pc, #16] -> ctx
+    insns[1] = 0x580000B0u;  // ldr x16, [pc, #20] -> entry
+    insns[2] = 0xD61F0200u;  // br x16
+    insns[3] = 0xD503201Fu;  // nop
+  } else {
+    // Native stub: pass ctx in x16 for gesher_jni_native_entry
+    insns[0] = 0x58000090u;  // ldr x16, [pc, #16] -> ctx
+    insns[1] = 0x580000B1u;  // ldr x17, [pc, #20] -> entry
+    insns[2] = 0xD61F0220u;  // br x17
+    insns[3] = 0xD503201Fu;  // nop
+  }
+  std::memcpy(p, insns, sizeof(insns));
+  std::memcpy(p + 16, &c, 8);
+  std::memcpy(p + 24, &e, 8);
+#endif
   FlushInstructionCache(GetCurrentProcess(), p, kStubSize);
   return p;
 }
@@ -611,6 +638,7 @@ asm(".text\n"
 // On entry %rsp is 8 mod 16; after the push and 224 bytes it is 16-aligned.
 // The same body for the host entry (calls gesher_jni_enter) and the guest entry
 // (calls gesher_jni_enter_guest, which sets the thread's guest mode).
+#if defined(__x86_64__)
 #define GESHER_JNI_NATIVE_ENTRY(NAME, ENTER)                   \
   ".globl " NAME "\n"                                          \
   ".p2align 4\n" NAME ":\n"                                    \
@@ -652,6 +680,32 @@ asm(".text\n"
   "  movq %rbp, %rsp\n"                                        \
   "  popq %rbp\n"                                              \
   "  jmpq *%r11\n"
+#elif defined(__aarch64__)
+#define GESHER_JNI_NATIVE_ENTRY(NAME, ENTER)                   \
+  ".globl " NAME "\n"                                          \
+  ".p2align 4\n" NAME ":\n"                                    \
+  "  stp x29, x30, [sp, #-208]!\n"                             \
+  "  mov x29, sp\n"                                            \
+  "  stp x1, x2, [sp, #16]\n"                                  \
+  "  stp x3, x4, [sp, #32]\n"                                  \
+  "  stp x5, x6, [sp, #48]\n"                                  \
+  "  stp x7, x16, [sp, #64]\n"                                 \
+  "  stp q0, q1, [sp, #80]\n"                                  \
+  "  stp q2, q3, [sp, #112]\n"                                 \
+  "  stp q4, q5, [sp, #144]\n"                                 \
+  "  stp q6, q7, [sp, #176]\n"                                 \
+  "  bl " ENTER "\n"                                           \
+  "  ldp x1, x2, [sp, #16]\n"                                  \
+  "  ldp x3, x4, [sp, #32]\n"                                  \
+  "  ldp x5, x6, [sp, #48]\n"                                  \
+  "  ldp x7, x16, [sp, #64]\n"                                 \
+  "  ldp q0, q1, [sp, #80]\n"                                  \
+  "  ldp q2, q3, [sp, #112]\n"                                 \
+  "  ldp q4, q5, [sp, #144]\n"                                 \
+  "  ldp q6, q7, [sp, #176]\n"                                 \
+  "  ldp x29, x30, [sp], #208\n"                               \
+  "  br x16\n"
+#endif
 asm(".text\n" GESHER_JNI_NATIVE_ENTRY("gesher_jni_native_entry", "gesher_jni_enter")
         GESHER_JNI_NATIVE_ENTRY("gesher_jni_native_entry_guest", "gesher_jni_enter_guest"));
 

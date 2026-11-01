@@ -22,7 +22,11 @@
 
 #include "gesher_device_standins.h"
 
+#if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV
+#endif
 
 namespace gesher_device {
 

@@ -45,8 +45,8 @@
 
 extern "C" {
 // stdio_bionic.cc's va_list forms (System V, extern "C" for its trampolines).
-int __attribute__((sysv_abi)) gesher_bionic_vfprintf(void* f, const char* fmt,
-                                                     gesher::bionic::SysvVaList* ap);
+int BIONIC_SYSV gesher_bionic_vfprintf(void* f, const char* fmt,
+                                       gesher::bionic::SysvVaList* ap);
 }
 
 namespace gesher::bionic {
@@ -142,6 +142,7 @@ int Classify(int c) {
 int BIONIC_SYSV Fpclassify(double x) { return Classify(std::fpclassify(x)); }
 int BIONIC_SYSV Fpclassifyf(float x) { return Classify(std::fpclassify(x)); }
 
+#if defined(__x86_64__)
 // The x86-64 floating-point environment: bionic's fenv_t is the x87
 // environment (fnstenv's 28 bytes, padded to 28) and MXCSR. FE_* values are
 // x86's, the same as the CRT's. (The arm64 translator has its own: guest_libc.cc.)
@@ -152,17 +153,18 @@ struct X64Fenv {
 };
 static_assert(sizeof(X64Fenv) == 32, "bionic x86-64 fenv_t");
 const X64Fenv kDefaultFenv = {0x037f, 0, 0xffff, {}, 0x1f80};
+using HostFenv = X64Fenv;
 constexpr int kFeAll = 0x3d;  // FE_INVALID | DIVBYZERO | OVERFLOW | UNDERFLOW | INEXACT (| DENORMAL 2)
 
-int BIONIC_SYSV Fegetenv(X64Fenv* env) {
+int BIONIC_SYSV Fegetenv(HostFenv* env) {
   __asm__ volatile("fnstenv %0" : "=m"(*env));
   __asm__ volatile("fldenv %0" : : "m"(*env));  // fnstenv masks exceptions: restore
   __asm__ volatile("stmxcsr %0" : "=m"(env->mxcsr));
   return 0;
 }
-int BIONIC_SYSV Fesetenv(const X64Fenv* env) {
+int BIONIC_SYSV Fesetenv(const HostFenv* env) {
   if (env == nullptr) env = &kDefaultFenv;
-  X64Fenv e = *env;
+  HostFenv e = *env;
   __asm__ volatile("fldenv %0" : : "m"(e));
   __asm__ volatile("ldmxcsr %0" : : "m"(e.mxcsr));
   return 0;
@@ -192,7 +194,7 @@ int BIONIC_SYSV Fetestexcept(int excepts) {
   return (sw | m) & excepts & kFeAll;
 }
 int BIONIC_SYSV Feclearexcept(int excepts) {
-  X64Fenv env;
+  HostFenv env;
   __asm__ volatile("fnstenv %0" : "=m"(env));
   env.status &= ~static_cast<uint32_t>(excepts & kFeAll);
   __asm__ volatile("fldenv %0" : : "m"(env));
@@ -209,16 +211,82 @@ int BIONIC_SYSV Feraiseexcept(int excepts) {
   __asm__ volatile("ldmxcsr %0" : : "m"(m));
   return 0;
 }
-int BIONIC_SYSV Feholdexcept(X64Fenv* env) {
+int BIONIC_SYSV Feholdexcept(HostFenv* env) {
   Fegetenv(env);
-  X64Fenv e = *env;
+  HostFenv e = *env;
   e.status &= ~static_cast<uint32_t>(kFeAll);
   e.control |= kFeAll;  // non-stop: every exception masked
   e.mxcsr = (e.mxcsr & ~static_cast<uint32_t>(kFeAll)) | (static_cast<uint32_t>(kFeAll) << 7);
   Fesetenv(&e);
   return 0;
 }
-int BIONIC_SYSV Feupdateenv(const X64Fenv* env) {
+#elif defined(__aarch64__)
+struct Arm64Fenv {
+  uint32_t control;
+  uint32_t status;
+};
+static_assert(sizeof(Arm64Fenv) == 8, "bionic arm64 fenv_t");
+const Arm64Fenv kDefaultFenv = {0, 0};
+using HostFenv = Arm64Fenv;
+constexpr int kFeAll = 0x9f;  // FE_INVALID | FE_DIVBYZERO | FE_OVERFLOW | FE_UNDERFLOW | FE_INEXACT | FE_DENORMAL
+
+int BIONIC_SYSV Fegetenv(HostFenv* env) {
+  uint64_t fpcr, fpsr;
+  __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr));
+  __asm__ volatile("mrs %0, fpsr" : "=r"(fpsr));
+  env->control = static_cast<uint32_t>(fpcr);
+  env->status = static_cast<uint32_t>(fpsr);
+  return 0;
+}
+int BIONIC_SYSV Fesetenv(const HostFenv* env) {
+  if (env == nullptr) env = &kDefaultFenv;
+  uint64_t fpcr = env->control;
+  uint64_t fpsr = env->status;
+  __asm__ volatile("msr fpcr, %0" : : "r"(fpcr));
+  __asm__ volatile("msr fpsr, %0" : : "r"(fpsr));
+  return 0;
+}
+int BIONIC_SYSV Fegetround() {
+  uint64_t fpcr;
+  __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr));
+  return static_cast<int>(fpcr & 0x00c00000u);
+}
+int BIONIC_SYSV Fesetround(int mode) {
+  if ((mode & ~0x00c00000) != 0) return -1;
+  uint64_t fpcr;
+  __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr));
+  fpcr = (fpcr & ~0x00c00000ull) | static_cast<uint32_t>(mode);
+  __asm__ volatile("msr fpcr, %0" : : "r"(fpcr));
+  return 0;
+}
+int BIONIC_SYSV Fetestexcept(int excepts) {
+  uint64_t fpsr;
+  __asm__ volatile("mrs %0, fpsr" : "=r"(fpsr));
+  return static_cast<int>(fpsr & excepts & kFeAll);
+}
+int BIONIC_SYSV Feclearexcept(int excepts) {
+  uint64_t fpsr;
+  __asm__ volatile("mrs %0, fpsr" : "=r"(fpsr));
+  fpsr &= ~static_cast<uint64_t>(excepts & kFeAll);
+  __asm__ volatile("msr fpsr, %0" : : "r"(fpsr));
+  return 0;
+}
+int BIONIC_SYSV Feraiseexcept(int excepts) {
+  uint64_t fpsr;
+  __asm__ volatile("mrs %0, fpsr" : "=r"(fpsr));
+  fpsr |= static_cast<uint64_t>(excepts & kFeAll);
+  __asm__ volatile("msr fpsr, %0" : : "r"(fpsr));
+  return 0;
+}
+int BIONIC_SYSV Feholdexcept(HostFenv* env) {
+  Fegetenv(env);
+  uint64_t fpsr = env->status & ~static_cast<uint64_t>(kFeAll);
+  __asm__ volatile("msr fpsr, %0" : : "r"(fpsr));
+  return 0;
+}
+#endif
+
+int BIONIC_SYSV Feupdateenv(const HostFenv* env) {
   int raised = Fetestexcept(kFeAll);
   Fesetenv(env);
   Feraiseexcept(raised);
@@ -1687,7 +1755,7 @@ void RegisterExtra(SymbolTable& t) {
   E("feenableexcept", Feenableexcept);
   E("fedisableexcept", Fedisableexcept);
   E("fegetexcept", Fegetexcept);
-  t["__fe_dfl_env"] = const_cast<X64Fenv*>(&kDefaultFenv);
+  t["__fe_dfl_env"] = const_cast<HostFenv*>(&kDefaultFenv);
   // stdlib.
   E("div", Div);
   E("ldiv", Ldiv);

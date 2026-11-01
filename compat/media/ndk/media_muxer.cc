@@ -196,10 +196,16 @@ AMediaFormat* TrackFormat(AMediaMuxer* muxer, size_t index) {
   return android::AMediaFormat_fromMsg(&muxer->formats[index]);
 }
 
+#if defined(__x86_64__)
+#define SYSV __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV
+#endif
+
 template <auto F> struct Sysv;
 template <class R, class... A, R (*F)(A...)>
 struct Sysv<F> {
-  static R __attribute__((sysv_abi)) Call(A... args) { return F(args...); }
+  static R SYSV Call(A... args) { return F(args...); }
 };
 
 void Register() {

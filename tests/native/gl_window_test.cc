@@ -37,7 +37,11 @@
 
 namespace {
 
+#if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV
+#endif
 using CpuDraw = int(SYSV*)(ANativeWindow* window, char* out, size_t n);
 using GlDraw = int(SYSV*)(ANativeWindow* window, int es, char* out, size_t n);
 using GlFinish = void(SYSV*)();
