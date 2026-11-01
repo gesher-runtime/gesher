@@ -61,14 +61,33 @@ final class ClipboardService extends IClipboard.Default implements WindowsHost.L
         }
         String text = WindowsHost.clipboardText();
         String html = WindowsHost.clipboardHtml();
+        byte[] image = WindowsHost.clipboardImage();
         ClipData clip = null;
-        if (text != null && html != null) {
-            clip = ClipData.newHtmlText(WINDOWS_LABEL, text, html);
-        } else if (text != null) {
-            clip = ClipData.newPlainText(WINDOWS_LABEL, text);
-        } else if (html != null) {
-            clip = ClipData.newHtmlText(WINDOWS_LABEL, android.text.Html.fromHtml(html,
-                    android.text.Html.FROM_HTML_MODE_LEGACY).toString(), html);
+        if (image != null && image.length > 0) {
+            try {
+                java.io.File cacheDir = new java.io.File(
+                        System.getProperty("java.io.tmpdir", "."), "gesher_clipboard");
+                cacheDir.mkdirs();
+                java.io.File imgFile = new java.io.File(cacheDir, "clip_" + seq + ".bmp");
+                java.nio.file.Files.write(imgFile.toPath(), image);
+                android.net.Uri uri = android.net.Uri.fromFile(imgFile);
+                ClipDescription desc = new ClipDescription(WINDOWS_LABEL,
+                        new String[] {"image/bmp", "image/*"});
+                ClipData.Item item = new ClipData.Item(text != null ? text : "", html, null, uri);
+                clip = new ClipData(desc, item);
+            } catch (Throwable t) {
+                SystemServer.log("clipboard: failed to cache image from Windows: " + t);
+            }
+        }
+        if (clip == null) {
+            if (text != null && html != null) {
+                clip = ClipData.newHtmlText(WINDOWS_LABEL, text, html);
+            } else if (text != null) {
+                clip = ClipData.newPlainText(WINDOWS_LABEL, text);
+            } else if (html != null) {
+                clip = ClipData.newHtmlText(WINDOWS_LABEL, android.text.Html.fromHtml(html,
+                        android.text.Html.FROM_HTML_MODE_LEGACY).toString(), html);
+            }
         }
         synchronized (this) {
             if (seq == mSequence) return;  // another thread took it meanwhile
@@ -76,9 +95,10 @@ final class ClipboardService extends IClipboard.Default implements WindowsHost.L
             mClip = clip;
             mSource = null;
         }
-        SystemServer.log("clipboard: from Windows (" + (clip == null ? "no text"
-                : (text != null ? text.length() : 0) + " characters" + (html != null
-                        ? ", HTML" : "")) + ")");
+        SystemServer.log("clipboard: from Windows (" + (clip == null ? "empty"
+                : (image != null ? image.length + " bytes image, " : "")
+                + (text != null ? text.length() + " characters" : "no text")
+                + (html != null ? ", HTML" : "")) + ")");
         if (notify) notifyListeners();
     }
 
@@ -128,6 +148,32 @@ final class ClipboardService extends IClipboard.Default implements WindowsHost.L
         return new String[] {text.toString(), anyHtml ? html.toString() : null};
     }
 
+    private static byte[] extractImage(ClipData clip) {
+        if (clip == null) return null;
+        for (int i = 0; i < clip.getItemCount(); i++) {
+            ClipData.Item item = clip.getItemAt(i);
+            android.net.Uri uri = item.getUri();
+            if (uri != null) {
+                String path = uri.getPath();
+                if (path != null) {
+                    java.io.File file = new java.io.File(path);
+                    if (file.exists() && file.isFile()) {
+                        String name = file.getName().toLowerCase(java.util.Locale.ROOT);
+                        if (name.endsWith(".bmp") || name.endsWith(".png")
+                                || name.endsWith(".jpg") || name.endsWith(".jpeg")
+                                || name.endsWith(".webp") || name.endsWith(".gif")) {
+                            try {
+                                return java.nio.file.Files.readAllBytes(file.toPath());
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     // --- IClipboard -------------------------------------------------------------------------
 
     @Override
@@ -138,15 +184,23 @@ final class ClipboardService extends IClipboard.Default implements WindowsHost.L
             throw new IllegalArgumentException("No items");
         }
         String[] windows = forWindows(clip);
-        boolean written = WindowsHost.available() && WindowsHost.setClipboard(windows[0],
-                windows[1]);
+        byte[] imageBytes = extractImage(clip);
+        boolean written = false;
+        if (WindowsHost.available()) {
+            if (imageBytes != null && imageBytes.length > 0) {
+                written = WindowsHost.setClipboardRich(windows[0], windows[1], imageBytes);
+            } else {
+                written = WindowsHost.setClipboard(windows[0], windows[1]);
+            }
+        }
         synchronized (this) {
             mClip = clip;
             mSource = callingPackage;
             if (written) mSequence = WindowsHost.clipboardSequence();
         }
         SystemServer.log("clipboard: set by " + callingPackage + " (" + windows[0].length()
-                + " characters" + (windows[1] != null ? ", HTML" : "") + ")"
+                + " characters" + (windows[1] != null ? ", HTML" : "")
+                + (imageBytes != null ? ", " + imageBytes.length + " bytes image" : "") + ")"
                 + (written ? ", on Windows' clipboard" : WindowsHost.available()
                         ? ", Windows' clipboard could not be opened" : ""));
         notifyListeners();
@@ -162,7 +216,7 @@ final class ClipboardService extends IClipboard.Default implements WindowsHost.L
     public void clearPrimaryClip(String callingPackage, String attributionTag, int userId,
             int deviceId) {
         start();
-        boolean written = WindowsHost.available() && WindowsHost.setClipboard("", null);
+        boolean written = WindowsHost.available() && WindowsHost.setClipboardRich("", null, null);
         synchronized (this) {
             mClip = null;
             mSource = callingPackage;

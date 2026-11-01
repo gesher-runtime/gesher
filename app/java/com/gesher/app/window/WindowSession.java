@@ -2061,6 +2061,140 @@ public final class WindowSession extends IWindowSession.Stub {
         return null;
     }
 
+    /**
+     * Native OLE Drag & Drop callback from drop_target.cc (desktop polish track):
+     * translates Windows OLE drag & drop events (CF_HDROP files, CF_UNICODETEXT / CF_TEXT text)
+     * into android.view.DragEvent dispatched to the focused Android window session.
+     */
+    public static void onNativeDragEvent(long hwnd, int action, float x, float y,
+            String[] files, String text) {
+        WindowSession session = get();
+        if (session != null) {
+            session.handleNativeDrag(hwnd, action, x, y, files, text);
+        }
+    }
+
+    private void handleNativeDrag(long hwnd, int action, float x, float y,
+            String[] files, String text) {
+        AppWindow target = null;
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow w = mWindows.valueAt(i);
+                if (w.nativeWindow != null && w.nativeWindow.getHwnd() == hwnd) {
+                    target = w;
+                    break;
+                }
+            }
+            if (target == null) target = activeRoot();
+        }
+        if (target == null) return;
+
+        ClipData data = null;
+        ClipDescription desc = null;
+        if (files != null && files.length > 0) {
+            String[] mimeTypes = new String[] {
+                ClipDescription.MIMETYPE_TEXT_URILIST,
+                "application/octet-stream"
+            };
+            desc = new ClipDescription("Files", mimeTypes);
+            android.net.Uri firstUri = android.net.Uri.fromFile(new java.io.File(files[0]));
+            data = new ClipData(desc, new ClipData.Item(firstUri));
+            for (int i = 1; i < files.length; i++) {
+                data.addItem(new ClipData.Item(android.net.Uri.fromFile(new java.io.File(files[i]))));
+            }
+        } else if (text != null && !text.isEmpty()) {
+            data = ClipData.newPlainText("text/plain", text);
+            desc = data.getDescription();
+        } else {
+            desc = new ClipDescription("text/plain", new String[] {"text/plain"});
+        }
+
+        android.view.DragEvent event = createDragEvent(action, x, y, data, desc);
+        if (event == null) return;
+
+        final AppWindow w = target;
+        final android.view.DragEvent dragEvent = event;
+        Runnable dispatch = () -> {
+            ViewRootImpl root = viewRoot(w);
+            if (root != null) {
+                try {
+                    root.dispatchDragEvent(dragEvent);
+                } catch (Throwable t) {
+                    log("root.dispatchDragEvent: " + t);
+                }
+            } else if (w.client != null) {
+                try {
+                    w.client.dispatchDragEvent(dragEvent);
+                } catch (RemoteException e) {
+                    log("client.dispatchDragEvent: " + e);
+                }
+            }
+        };
+
+        if (w.handler != null) {
+            w.handler.post(dispatch);
+        } else {
+            dispatch.run();
+        }
+    }
+
+    private static android.view.DragEvent createDragEvent(int action, float x, float y,
+            ClipData data, ClipDescription desc) {
+        for (java.lang.reflect.Method m : android.view.DragEvent.class.getDeclaredMethods()) {
+            if ("obtain".equals(m.getName())) {
+                m.setAccessible(true);
+                Class<?>[] types = m.getParameterTypes();
+                Object[] args = new Object[types.length];
+                for (int i = 0; i < types.length; i++) {
+                    if (types[i] == int.class) {
+                        args[i] = (i == 0) ? action : 0;
+                    } else if (types[i] == float.class) {
+                        if (i == 1) args[i] = x;
+                        else if (i == 2) args[i] = y;
+                        else args[i] = 0f;
+                    } else if (types[i] == boolean.class) {
+                        args[i] = (action == android.view.DragEvent.ACTION_DROP
+                                || action == android.view.DragEvent.ACTION_DRAG_ENDED);
+                    } else if (ClipData.class.isAssignableFrom(types[i])) {
+                        args[i] = data;
+                    } else if (ClipDescription.class.isAssignableFrom(types[i])) {
+                        args[i] = desc != null ? desc : (data != null ? data.getDescription() : null);
+                    } else {
+                        args[i] = null;
+                    }
+                }
+                try {
+                    return (android.view.DragEvent) m.invoke(null, args);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        try {
+            java.lang.reflect.Constructor<?> c =
+                    android.view.DragEvent.class.getDeclaredConstructor();
+            c.setAccessible(true);
+            android.view.DragEvent event = (android.view.DragEvent) c.newInstance();
+            setDragField(event, "mAction", action);
+            setDragField(event, "mX", x);
+            setDragField(event, "mY", y);
+            setDragField(event, "mClipData", data);
+            setDragField(event, "mClipDescription",
+                    desc != null ? desc : (data != null ? data.getDescription() : null));
+            return event;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static void setDragField(Object obj, String fieldName, Object val) {
+        try {
+            Field f = obj.getClass().getDeclaredField(fieldName);
+            f.setAccessible(true);
+            f.set(obj, val);
+        } catch (Throwable ignored) {
+        }
+    }
+
     @Override
     public boolean dropForAccessibility(IWindow window, int x, int y) {
         return false;

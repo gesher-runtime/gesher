@@ -20,6 +20,7 @@
 
 #include "gesher_window.h"
 #include "input_pane.h"
+#include "drop_target.h"
 
 namespace gesher {
 namespace {
@@ -275,8 +276,10 @@ Window* Window::Start(Window* window, const std::string& title_utf8, int width, 
 }
 
 void Window::Run(std::wstring title, int width, int height) {
-  // COM for the window's property store, on the window's own thread.
-  HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  // OLE / COM for the window's property store and OLE Drag & Drop, on the window's own thread.
+  HRESULT ole = OleInitialize(nullptr);
+  HRESULT com = SUCCEEDED(ole) ? ole
+                               : CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
   // A popup (CreatePopup): no frame, owned, so no taskbar button.
   DWORD style = popup_ ? WS_POPUP : WS_OVERLAPPEDWINDOW;
   RECT r = {0, 0, width, height};
@@ -290,6 +293,9 @@ void Window::Run(std::wstring title, int width, int height) {
     if (!id.empty() && SUCCEEDED(SetWindowAppUserModelId(hwnd, id))) {
       app_user_model_id_ = Narrow(id);
     }
+  }
+  if (hwnd != nullptr) {
+    gesher::windows::RegisterWindowDropTarget(hwnd);
   }
   {
     std::lock_guard<std::mutex> lock(create_mutex_);
@@ -333,7 +339,14 @@ void Window::Run(std::wstring title, int width, int height) {
       }
     }
   }
-  if (SUCCEEDED(com)) CoUninitialize();
+  if (hwnd != nullptr) {
+    gesher::windows::RevokeWindowDropTarget(hwnd);
+  }
+  if (SUCCEEDED(ole)) {
+    OleUninitialize();
+  } else if (SUCCEEDED(com)) {
+    CoUninitialize();
+  }
 }
 
 void Window::SetRetireCallback(RetireCallback callback) {
