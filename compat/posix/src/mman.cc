@@ -239,11 +239,15 @@ bool Release(State& s, uintptr_t start, Region& region) {
 // mlock; Win32 protection/locking functions do not reenter this registry.
 // Invalidate conservatively even if the requested operation later fails.
 void InvalidateSharedAliases(State& s, uintptr_t begin, size_t length) {
-  for (auto& entry : s.regions) {
-    const uintptr_t at = entry.first;
-    const size_t size = entry.second.size;
+  const uintptr_t end = begin + length;
+  auto it = FindRegion(s, begin);
+  if (it == s.regions.end()) it = s.regions.lower_bound(begin);
+  for (; it != s.regions.end() && it->first < end; ++it) {
+    if (!it->second.shared_alias) continue;
+    const uintptr_t at = it->first;
+    const size_t size = it->second.size;
     if ((at <= begin && begin - at < size) || (begin < at && at - begin < length))
-      entry.second.shared_alias = false;
+      it->second.shared_alias = false;
   }
 }
 
