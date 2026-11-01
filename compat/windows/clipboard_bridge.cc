@@ -38,10 +38,6 @@ std::u16string U16(const wchar_t* s, size_t n) {
   return std::u16string(reinterpret_cast<const char16_t*>(s), n);
 }
 
-std::u16string U16(const wchar_t* s) {
-  return s ? U16(s, wcslen(s)) : std::u16string();
-}
-
 std::string Utf8(const std::u16string& s) {
   if (s.empty()) return std::string();
   int n = WideCharToMultiByte(CP_UTF8, 0, W(s), static_cast<int>(s.size()), nullptr, 0,
