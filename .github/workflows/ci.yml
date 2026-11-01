@@ -16,7 +16,7 @@ env:
 
 jobs:
   union-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@3ad12750d4e8d6cdb28717412f447f7cb72343ad
+    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@f2f5e00387ee5c8a75e57ad4e10e33649adda5f8
   union-tsf:
     needs: [artifact-preflight]
     uses: ./.github/workflows/tsf-format-component.yml
