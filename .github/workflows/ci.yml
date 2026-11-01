@@ -16,7 +16,7 @@ env:
 
 jobs:
   union-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@7213bd471fb26a904dc1e45633f0e4da8cc86656
+    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@a81c995d0bccee18a2c00e9dbab39b917e8e35e1
   union-tsf:
     needs: [artifact-preflight]
     uses: ./.github/workflows/tsf-format-component.yml
@@ -427,6 +427,8 @@ jobs:
             tools/toolchain
             tools/host-pthread-authority
             .github/workflows
+            tools/fonts
+            tools/binder
 
       - name: Verify and assemble windows-x64 artifact
         shell: pwsh
@@ -888,6 +890,8 @@ jobs:
             tools/toolchain
             tools/host-pthread-authority
             .github/workflows
+            tools/fonts
+            tools/binder
 
       - name: Verify and assemble windows-x64 artifact
         shell: pwsh
