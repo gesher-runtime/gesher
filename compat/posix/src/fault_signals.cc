@@ -335,11 +335,19 @@ LONG CALLBACK Dispatch(EXCEPTION_POINTERS* info) {
       // native code that overflows (a push, a call) is left to Windows' own
       // handling and the crash report, as the few pages left are all the
       // stack there is to handle it on.
+#if defined(__x86_64__)
       if (rec->NumberParameters < 2 ||
           info->ContextRecord->Rsp - rec->ExceptionInformation[1] <= kPage ||
           info->ContextRecord->Rsp < rec->ExceptionInformation[1]) {
         return EXCEPTION_CONTINUE_SEARCH;
       }
+#elif defined(__aarch64__)
+      if (rec->NumberParameters < 2 ||
+          info->ContextRecord->Sp - rec->ExceptionInformation[1] <= kPage ||
+          info->ContextRecord->Sp < rec->ExceptionInformation[1]) {
+        return EXCEPTION_CONTINUE_SEARCH;
+      }
+#endif
       signo = SIGSEGV;
       code = SEGV_ACCERR;
       addr = reinterpret_cast<void*>(rec->ExceptionInformation[1]);

@@ -79,6 +79,7 @@ typedef struct {
   uint64_t sp;
   uint64_t pc;
   uint64_t pstate;
+  fpregset_t fpregs;
   uint8_t __reserved[4096] __attribute__((__aligned__(16)));
 } mcontext_t;
 
