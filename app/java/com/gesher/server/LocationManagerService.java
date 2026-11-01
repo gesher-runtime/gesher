@@ -148,7 +148,7 @@ public final class LocationManagerService extends ILocationManager.Default {
         if (test != null) return test.enabled;
         if (!isReal(provider)) return false;
         if (LocationManager.PASSIVE_PROVIDER.equals(provider)) return isLocationEnabled();
-        return WindowsLocation.enabled();
+        return WindowsLocation.enabled() || isIpFallbackEnabled(provider);
     }
 
     /** Location is on when Windows gives it to this program, or a test provider is on. */
@@ -158,7 +158,7 @@ public final class LocationManagerService extends ILocationManager.Default {
                 if (t.enabled) return true;
             }
         }
-        return WindowsLocation.enabled();
+        return WindowsLocation.enabled() || isIpFallbackEnabled(null);
     }
 
     private static ProviderProperties realProperties(String provider) {
@@ -367,14 +367,21 @@ public final class LocationManagerService extends ILocationManager.Default {
         synchronized (mLock) {
             last = mLast.get(provider);
         }
-        if (last == null && !isTest(provider) && !LocationManager.PASSIVE_PROVIDER.equals(provider)
-                && WindowsLocation.enabled()) {
-            // Windows keeps a last position too: a cached one, if any, quickly.
-            try {
-                last = WindowsLocation.fix(provider, false, 24L * 3600_000, 1000);
-                report(provider, last, false);
-            } catch (WindowsLocation.WindowsException e) {
-                log("no last location from Windows: " + e.getMessage());
+        if (last == null && !isTest(provider) && !LocationManager.PASSIVE_PROVIDER.equals(provider)) {
+            if (WindowsLocation.enabled()) {
+                // Windows keeps a last position too: a cached one, if any, quickly.
+                try {
+                    last = WindowsLocation.fix(provider, false, 24L * 3600_000, 1000);
+                    report(provider, last, false);
+                } catch (WindowsLocation.WindowsException e) {
+                    log("no last location from Windows: " + e.getMessage());
+                }
+            }
+            if (last == null && isIpFallbackEnabled(provider)) {
+                last = getCachedIpLocation(provider);
+                if (last != null) {
+                    report(provider, last, false);
+                }
             }
         }
         return forPermission(last, level);
@@ -687,7 +694,7 @@ public final class LocationManagerService extends ILocationManager.Default {
 
     private void poll() {
         checkEnabledChanges();
-        if (!WindowsLocation.enabled()) return;
+        boolean windowsEnabled = WindowsLocation.enabled();
         boolean high = false;
         List<String> providers = new ArrayList<>();
         synchronized (mLock) {
@@ -702,15 +709,135 @@ public final class LocationManagerService extends ILocationManager.Default {
             }
         }
         if (providers.isEmpty()) return;
-        Location fix;
-        try {
-            fix = WindowsLocation.fix(providers.get(0), high, mPollInterval,
-                    Math.min(Math.max(mPollInterval, 5000), 30_000));
-        } catch (WindowsLocation.WindowsException e) {
-            log("Windows gave no position: " + e.getMessage());
-            return;
+        Location fix = null;
+        if (windowsEnabled) {
+            try {
+                fix = WindowsLocation.fix(providers.get(0), high, mPollInterval,
+                        Math.min(Math.max(mPollInterval, 5000), 30_000));
+            } catch (WindowsLocation.WindowsException e) {
+                log("Windows gave no position: " + e.getMessage() + ", trying IP geolocation fallback");
+            }
         }
+        if (fix == null && isIpFallbackEnabled(providers.get(0))) {
+            fix = getIpLocation(providers.get(0));
+        }
+        if (fix == null) return;
         for (String p : providers) report(p, fix, true);
+    }
+
+    // --- IP-based geolocation fallback ---------------------------------------------------
+
+    private static final String IP_GEO_URL = "http://ip-api.com/json/?fields=status,message,country,city,lat,lon";
+    private static final long IP_CACHE_MS = 600_000;  // 10 minutes cache
+    private static final Object sIpLock = new Object();
+    private static Location sCachedIpLocation;
+    private static long sCachedIpTime;
+    private static volatile boolean sIpFallbackAvailable = true;
+
+    private boolean isIpFallbackEnabled(String provider) {
+        if (provider != null && LocationManager.GPS_PROVIDER.equals(provider)) {
+            return false;
+        }
+        return sIpFallbackAvailable;
+    }
+
+    private static Location getCachedIpLocation(String provider) {
+        synchronized (sIpLock) {
+            if (sCachedIpLocation == null) return null;
+            Location copy = new Location(sCachedIpLocation);
+            copy.setProvider(provider);
+            copy.setTime(System.currentTimeMillis());
+            copy.setElapsedRealtimeNanos(SystemClock.elapsedRealtimeNanos());
+            return copy;
+        }
+    }
+
+    private Location getIpLocation(String provider) {
+        long now = SystemClock.elapsedRealtime();
+        synchronized (sIpLock) {
+            if (sCachedIpLocation != null && (now - sCachedIpTime) < IP_CACHE_MS) {
+                Location copy = new Location(sCachedIpLocation);
+                copy.setProvider(provider);
+                copy.setTime(System.currentTimeMillis());
+                copy.setElapsedRealtimeNanos(SystemClock.elapsedRealtimeNanos());
+                return copy;
+            }
+        }
+
+        try {
+            java.net.URL url = new java.net.URL(IP_GEO_URL);
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(3000);
+            conn.setReadTimeout(3000);
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("User-Agent", "Gesher/1.0");
+
+            if (conn.getResponseCode() == 200) {
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(conn.getInputStream(),
+                                java.nio.charset.StandardCharsets.UTF_8));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line);
+                }
+                reader.close();
+
+                String json = sb.toString();
+                double lat = parseJsonDouble(json, "\"lat\":");
+                double lon = parseJsonDouble(json, "\"lon\":");
+                if (!Double.isNaN(lat) && !Double.isNaN(lon)) {
+                    Location loc = new Location(provider);
+                    loc.setLatitude(lat);
+                    loc.setLongitude(lon);
+                    loc.setAccuracy(5000.0f);
+                    loc.setTime(System.currentTimeMillis());
+                    loc.setElapsedRealtimeNanos(SystemClock.elapsedRealtimeNanos());
+                    Bundle extras = new Bundle();
+                    extras.putString("windowsPositionSource", "ip-address");
+                    loc.setExtras(extras);
+
+                    synchronized (sIpLock) {
+                        sCachedIpLocation = loc;
+                        sCachedIpTime = now;
+                    }
+                    log("IP geolocation resolved fallback location: " + lat + ", " + lon);
+                    return loc;
+                }
+            }
+        } catch (Exception e) {
+            log("IP geolocation fallback request error: " + e.getMessage());
+        }
+
+        synchronized (sIpLock) {
+            if (sCachedIpLocation != null) {
+                Location copy = new Location(sCachedIpLocation);
+                copy.setProvider(provider);
+                copy.setTime(System.currentTimeMillis());
+                copy.setElapsedRealtimeNanos(SystemClock.elapsedRealtimeNanos());
+                return copy;
+            }
+        }
+        return null;
+    }
+
+    private static double parseJsonDouble(String json, String key) {
+        int idx = json.indexOf(key);
+        if (idx < 0) return Double.NaN;
+        idx += key.length();
+        while (idx < json.length() && Character.isWhitespace(json.charAt(idx))) idx++;
+        int start = idx;
+        if (start < json.length() && (json.charAt(start) == '-' || json.charAt(start) == '+')) {
+            idx++;
+        }
+        while (idx < json.length() && (Character.isDigit(json.charAt(idx)) || json.charAt(idx) == '.')) {
+            idx++;
+        }
+        try {
+            return Double.parseDouble(json.substring(start, idx));
+        } catch (Exception e) {
+            return Double.NaN;
+        }
     }
 
     /** Tells registrations about providers turned on or off since the last check. */

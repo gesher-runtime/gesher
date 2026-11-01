@@ -80,6 +80,10 @@ include(cmake/aosp/input.cmake)
 include(cmake/aosp/media.cmake)
 # Devices (docs/devices.md): location, sensors and cameras over Windows' APIs.
 include(compat/devices/devices.cmake)
+# Camera (compat/camera): Media Foundation webcam capture and Camera2 delivery
+include(compat/camera/camera.cmake)
+target_link_libraries(framework_runtime PUBLIC mfplat mfreadwrite mfuuid)
+target_link_libraries(dalvikvm PRIVATE mfplat mfreadwrite mfuuid)
 # android.webkit.WebView on WebView2 (docs/webview.md): libgesher_webview.so, builtin.
 include(cmake/webview.cmake)
 
