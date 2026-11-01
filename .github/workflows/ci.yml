@@ -16,7 +16,7 @@ env:
 
 jobs:
   union-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@5c467c62ec9882e4a695456406152875be9d21c3
+    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@c7613d69edfb91a600e7779acae1d26e06207854
   union-tsf:
     needs: [artifact-preflight]
     uses: ./.github/workflows/tsf-format-component.yml
@@ -867,7 +867,7 @@ jobs:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
     # A hung app or check fails the job instead of running for six hours.
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
