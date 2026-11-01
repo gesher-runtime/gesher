@@ -6,6 +6,7 @@
 // detection (wintz.cpp) does. The table is generated from the pinned ICU's
 // windowsZones.txt (gen_windows_zones.py, posix.cmake).
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <windows.h>
 
