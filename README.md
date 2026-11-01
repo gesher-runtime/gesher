@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/gesher.png" alt="Gesher Logo" width="160"/>
+</p>
+
 # Gesher
 
 **Run Android apps on Windows as native Windows processes — no emulator, no virtual machine.**
@@ -6,8 +10,8 @@ Gesher (Hebrew: *bridge*) is to Android what Wine is to Windows: a compatibility
 layer. Double-click an `.apk`, and the app runs in an ordinary window, at native
 speed, with no hidden VM and no Android image to boot.
 
-> **Status: phase 1 — porting ART.** The ART runtime builds for Windows and `dalvikvm.exe` starts; it does not run Java code yet, and nothing runs apps yet.
-> See the [roadmap](docs/roadmap.md).
+> **Release: v0.1.0** — Native execution of Android applications on Windows with ART JIT, HWUI/Direct3D acceleration, WASAPI audio, Camera/Location subsystems, microG GMS stubs, ARM64-to-x64 binary translation, and seamless desktop integration.
+> See the [architecture overview](docs/architecture.md).
 
 ## How it works
 
@@ -17,7 +21,7 @@ the Linux kernel:
 
 ```
  .apk ─► APK loader       manifest, resources, dex, native libs
-         ART              Android's own Java runtime, ported to Windows
+         ART (with JIT)   Android's own Java runtime, ported to Windows
          framework.jar    the real Android framework
            └ system services re-implemented in-process
          HWUI + Skia      → OpenGL ES → ANGLE → Direct3D 11
@@ -51,10 +55,11 @@ cmake -S . -B out -G Ninja \
 ninja -C out
 ```
 
-Outputs today:
+Outputs include:
 
-- `platform_probe.exe`: checks the Windows primitives ART relies on.
-- `dexdump.exe`: ART's own DEX reader, running natively on Windows.
+- `dalvikvm.exe`: The ported ART runtime with JIT compiler.
+- `gesher-exec.exe`: App process host and launcher.
+- `installer/gesher-setup-*.exe`: Complete Windows installer and shell integration.
 
 Tests: `tests/build-test-apps.sh out/test-apps` (needs a JDK), then
 `tests/windows/run-tests.ps1` on Windows.
@@ -70,4 +75,6 @@ Tests: `tests/build-test-apps.sh out/test-apps` (needs a JDK), then
 
 ‏**גשר** מריץ אפליקציות אנדרואיד על Windows כתוכנות רגילות, בלי אמולטור ובלי
 מכונה וירטואלית. המטרה היא כלי קל שפותח קובצי ‎`.apk` בלחיצה כפולה ומכבד את
-הסינון שמותקן במחשב. הפרויקט בשלב 1: מנוע ה-ART נבנה ל-Windows ועולה, אך עדיין אינו מריץ קוד.
+הסינון שמותקן במחשב.
+
+גרסה **v0.1.0** כוללת מנוע ART עם JIT, האצת חומרה HWUI/Direct3D, סאונד WASAPI, תמיכת מצלמה ומיקום, שירותי microG GMS, תרגום ספריות ARM64, ושילוב מלא בשולחן העבודה של Windows.
