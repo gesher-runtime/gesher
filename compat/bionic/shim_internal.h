@@ -86,6 +86,7 @@ inline double NextFp(SysvVaList* ap) {
 // its address as argument K+1 (in REG) and call the va_list form. The fixed
 // arguments are still in their registers. 216 bytes keep %rsp 16-aligned for
 // the call and the movaps.
+#if defined(__x86_64__)
 #define GESHER_VA_TRAMPOLINE(NAME, TARGET, GP_OFFSET, REG) \
   ".globl " NAME "\n"                                      \
   ".p2align 4\n" NAME ":\n"                                \
@@ -113,6 +114,12 @@ inline double NextFp(SysvVaList* ap) {
   "  call " TARGET "\n"                                    \
   "  addq $216, %rsp\n"                                    \
   "  ret\n"
+#elif defined(__aarch64__)
+#define GESHER_VA_TRAMPOLINE(NAME, TARGET, GP_OFFSET, REG) \
+  ".globl " NAME "\n"                                      \
+  ".p2align 4\n" NAME ":\n"                                \
+  "  b " TARGET "\n"
+#endif
 
 // Symbol name -> address of the System V entry point (or data object).
 using SymbolTable = std::unordered_map<std::string, void*>;

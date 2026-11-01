@@ -31,7 +31,11 @@ namespace elf = gesher::elf;
 
 // Loaded code is System V ABI (docs/decisions/0006-managed-abi.md), so its
 // entry points are called through sysv_abi pointers.
+#if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV
+#endif
 
 static int failures = 0;
 

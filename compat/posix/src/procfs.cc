@@ -23,7 +23,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <windows.h>
+#if defined(__x86_64__)
 #include <intrin.h>
+#endif
 #include <psapi.h>
 #include <shellapi.h>
 #include <tlhelp32.h>
@@ -386,6 +388,7 @@ std::string Meminfo() {
 }
 
 std::string Cpuinfo() {
+#if defined(__x86_64__)
   int regs[4];
   __cpuid(regs, 0);
   char vendor[13] = {};
@@ -441,6 +444,23 @@ std::string Cpuinfo() {
     s += "flags\t\t: " + flags + "\n\n";
   }
   return s;
+#elif defined(__aarch64__)
+  DWORD cpus = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+  std::string s;
+  for (DWORD i = 0; i < cpus; ++i) {
+    s += Format("processor\t: %lu\n", static_cast<unsigned long>(i));
+    s += "BogoMIPS\t: 38.40\n";
+    s += "Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp\n";
+    s += "CPU implementer\t: 0x51\n";
+    s += "CPU architecture: 8\n";
+    s += "CPU variant\t: 0x0\n";
+    s += "CPU part\t: 0x805\n";
+    s += "CPU revision\t: 1\n\n";
+  }
+  return s;
+#else
+  return "processor\t: 0\n\n";
+#endif
 }
 
 std::string Uptime() {

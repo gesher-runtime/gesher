@@ -118,11 +118,19 @@ extern "C" void _Init_thread_footer(int* once) {
 // that is a plain jump. Weak: mingw-w64's runtime may define it.
 
 extern "C" void gesher_guard_dispatch_icall_nop();
+#if defined(__x86_64__)
 __asm__(
     ".text\n"
     ".globl gesher_guard_dispatch_icall_nop\n"
     "gesher_guard_dispatch_icall_nop:\n"
     "  jmp *%rax\n");
+#elif defined(__aarch64__)
+__asm__(
+    ".text\n"
+    ".globl gesher_guard_dispatch_icall_nop\n"
+    "gesher_guard_dispatch_icall_nop:\n"
+    "  br x15\n");
+#endif
 
 extern "C" {
 __attribute__((weak)) void (*__guard_dispatch_icall_fptr)() = gesher_guard_dispatch_icall_nop;

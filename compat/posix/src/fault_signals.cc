@@ -78,13 +78,21 @@ bool Tracing() {
   return on;
 }
 void TraceStackWords(const CONTEXT* context) {
-  // A system-DLL RIP does not identify its caller. Read a bounded snapshot
+  // A system-DLL RIP/PC does not identify its caller. Read a bounded snapshot
   // without dereferencing suspect stack pointers or unwinding corrupted state.
   // These are candidate code addresses in stack words, not proven frames.
   DWORD64 words[64]{};
   SIZE_T bytes = 0;
-  ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(context->Rsp),
-                    words, sizeof(words), &bytes);
+#if defined(__x86_64__)
+  const void* sp = reinterpret_cast<const void*>(context->Rsp);
+#elif defined(__aarch64__)
+  const void* sp = reinterpret_cast<const void*>(context->Sp);
+#else
+  const void* sp = nullptr;
+#endif
+  if (sp != nullptr) {
+    ReadProcessMemory(GetCurrentProcess(), sp, words, sizeof(words), &bytes);
+  }
   DWORD64 printed[8]{};
   size_t count = 0;
   for (size_t index = 0; index < bytes / sizeof(words[0]) && count < 8; ++index) {
@@ -119,13 +127,21 @@ void Trace(const EXCEPTION_RECORD* rec, const CONTEXT* c, const char* what, bool
   HMODULE module = nullptr;
   char name[MAX_PATH] = "?";
   uintptr_t base = 0;
+#if defined(__x86_64__)
+  uintptr_t pc = c->Rip;
+#elif defined(__aarch64__)
+  uintptr_t pc = c->Pc;
+#else
+  uintptr_t pc = 0;
+#endif
   if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                         reinterpret_cast<LPCSTR>(c->Rip), &module) &&
+                         reinterpret_cast<LPCSTR>(pc), &module) &&
       GetModuleFileNameA(module, name, sizeof(name)) != 0) {
     base = reinterpret_cast<uintptr_t>(module);
   }
   const char* file = strrchr(name, '\\');
+#if defined(__x86_64__)
   fprintf(stderr,
           "gesher-signal: thread %lu code 0x%08lx address 0x%llx rip %s+0x%llx (0x%llx) rsp 0x%llx: %s\n",
           GetCurrentThreadId(), rec->ExceptionCode, static_cast<unsigned long long>(fault),
@@ -142,6 +158,23 @@ void Trace(const EXCEPTION_RECORD* rec, const CONTEXT* c, const char* what, bool
     TraceStackWords(c);
     fflush(stderr);
   }
+#elif defined(__aarch64__)
+  fprintf(stderr,
+          "gesher-signal: thread %lu code 0x%08lx address 0x%llx pc %s+0x%llx (0x%llx) sp 0x%llx: %s\n",
+          GetCurrentThreadId(), rec->ExceptionCode, static_cast<unsigned long long>(fault),
+          file != nullptr ? file + 1 : name, static_cast<unsigned long long>(c->Pc - base),
+          static_cast<unsigned long long>(c->Pc), static_cast<unsigned long long>(c->Sp), what);
+  if (sentinel) {
+    const char* access = rec->NumberParameters >= 2 && rec->ExceptionInformation[0] == 0 ? "read" :
+                         rec->NumberParameters >= 2 && rec->ExceptionInformation[0] == 1 ? "write" :
+                         rec->NumberParameters >= 2 && rec->ExceptionInformation[0] == 8 ? "execute" : "unknown";
+    fprintf(stderr,
+            "gesher-signal: access=%s x0=%016llx x1=%016llx x2=%016llx x3=%016llx fp=%016llx lr=%016llx\n",
+            access, c->X[0], c->X[1], c->X[2], c->X[3], c->Fp, c->Lr);
+    TraceStackWords(c);
+    fflush(stderr);
+  }
+#endif
 }
 
 void Unhandled(int, siginfo_t*, void*) { t_unhandled = true; }
@@ -183,6 +216,7 @@ bool GrowStack(uintptr_t addr) {
   return true;
 }
 
+#if defined(__x86_64__)
 void ToUcontext(const CONTEXT* c, const EXCEPTION_RECORD* rec, ucontext_t* uc) {
   greg_t* g = uc->uc_mcontext.gregs;
   g[REG_R8] = c->R8;
@@ -241,6 +275,37 @@ void FromUcontext(const ucontext_t* uc, CONTEXT* c) {
     c->MxCsr = uc->uc_mcontext.fpregs->mxcsr;
   }
 }
+#elif defined(__aarch64__)
+void ToUcontext(const CONTEXT* c, const EXCEPTION_RECORD* rec, ucontext_t* uc) {
+  for (int i = 0; i < 29; ++i) uc->uc_mcontext.regs[i] = c->X[i];
+  uc->uc_mcontext.regs[29] = c->Fp;
+  uc->uc_mcontext.regs[30] = c->Lr;
+  uc->uc_mcontext.sp = c->Sp;
+  uc->uc_mcontext.pc = c->Pc;
+  uc->uc_mcontext.pstate = c->Cpsr;
+  uc->uc_mcontext.fault_address = rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2
+                                      ? static_cast<uint64_t>(rec->ExceptionInformation[1])
+                                      : 0;
+  uc->uc_mcontext.fpregs = &uc->__fpregs_mem;
+  uc->__fpregs_mem.fpcr = c->Fpcr;
+  uc->__fpregs_mem.fpsr = c->Fpsr;
+  memcpy(uc->__fpregs_mem.vregs, c->V, sizeof(c->V));
+}
+
+void FromUcontext(const ucontext_t* uc, CONTEXT* c) {
+  for (int i = 0; i < 29; ++i) c->X[i] = uc->uc_mcontext.regs[i];
+  c->Fp = uc->uc_mcontext.regs[29];
+  c->Lr = uc->uc_mcontext.regs[30];
+  c->Sp = uc->uc_mcontext.sp;
+  c->Pc = uc->uc_mcontext.pc;
+  c->Cpsr = static_cast<DWORD>(uc->uc_mcontext.pstate);
+  if (uc->uc_mcontext.fpregs != nullptr) {
+    c->Fpcr = uc->uc_mcontext.fpregs->fpcr;
+    c->Fpsr = uc->uc_mcontext.fpregs->fpsr;
+    memcpy(c->V, uc->uc_mcontext.fpregs->vregs, sizeof(c->V));
+  }
+}
+#endif
 
 LONG CALLBACK Dispatch(EXCEPTION_POINTERS* info) {
   const EXCEPTION_RECORD* rec = info->ExceptionRecord;
@@ -270,11 +335,19 @@ LONG CALLBACK Dispatch(EXCEPTION_POINTERS* info) {
       // native code that overflows (a push, a call) is left to Windows' own
       // handling and the crash report, as the few pages left are all the
       // stack there is to handle it on.
+#if defined(__x86_64__)
       if (rec->NumberParameters < 2 ||
           info->ContextRecord->Rsp - rec->ExceptionInformation[1] <= kPage ||
           info->ContextRecord->Rsp < rec->ExceptionInformation[1]) {
         return EXCEPTION_CONTINUE_SEARCH;
       }
+#elif defined(__aarch64__)
+      if (rec->NumberParameters < 2 ||
+          info->ContextRecord->Sp - rec->ExceptionInformation[1] <= kPage ||
+          info->ContextRecord->Sp < rec->ExceptionInformation[1]) {
+        return EXCEPTION_CONTINUE_SEARCH;
+      }
+#endif
       signo = SIGSEGV;
       code = SEGV_ACCERR;
       addr = reinterpret_cast<void*>(rec->ExceptionInformation[1]);

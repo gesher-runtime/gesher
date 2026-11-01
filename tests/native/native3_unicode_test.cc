@@ -12,11 +12,16 @@
 
 int main() {
   gesher::bionic::InstallBionicShim();
-  using Plain = uint32_t(__attribute__((sysv_abi))*)(uint32_t);
-  using Localized = uint32_t(__attribute__((sysv_abi))*)(uint32_t, void*);
-  using NewLocale = void*(__attribute__((sysv_abi))*)(int, const char*, void*);
-  using FreeLocale = void(__attribute__((sysv_abi))*)(void*);
-  using Width = int(__attribute__((sysv_abi))*)(uint32_t);
+#if defined(__x86_64__)
+#define SYSV_FN __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV_FN
+#endif
+  using Plain = uint32_t(SYSV_FN*)(uint32_t);
+  using Localized = uint32_t(SYSV_FN*)(uint32_t, void*);
+  using NewLocale = void*(SYSV_FN*)(int, const char*, void*);
+  using FreeLocale = void(SYSV_FN*)(void*);
+  using Width = int(SYSV_FN*)(uint32_t);
   auto lookup = gesher::bionic::LookupBionicSymbol;
   auto make_locale = reinterpret_cast<NewLocale>(lookup("newlocale"));
   auto free_locale = reinterpret_cast<FreeLocale>(lookup("freelocale"));

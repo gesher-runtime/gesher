@@ -41,7 +41,15 @@ int HostDescribe(const void* addr, const char** object, const void** object_base
   return 1;
 }
 
+bool InitDynarmicBridge(const gesher_arm64_host* host, const gesher_arm64_api** out_api,
+                        void* (**out_bind)(void*));
+
 void Load() {
+  static gesher_arm64_host host = {GESHER_ARM64_API_VERSION, HostResolve, HostDescribe};
+  if (InitDynarmicBridge(&host, &g_api, &g_bind)) {
+    g_ok = true;
+    return;
+  }
   HMODULE dll = LoadLibraryA(GESHER_ARM64_DLL);
   if (dll == nullptr) {
     std::fprintf(stderr, "gesher arm64: %s not found; arm64 libraries cannot be loaded\n",
@@ -56,7 +64,6 @@ void Load() {
     std::fprintf(stderr, "gesher arm64: %s lacks its entry points\n", GESHER_ARM64_DLL);
     return;
   }
-  static gesher_arm64_host host = {GESHER_ARM64_API_VERSION, HostResolve, HostDescribe};
   g_api = init(&host);
   if (g_api == nullptr || g_api->version != GESHER_ARM64_API_VERSION) {
     std::fprintf(stderr, "gesher arm64: %s version mismatch\n", GESHER_ARM64_DLL);

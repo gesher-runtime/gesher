@@ -58,6 +58,7 @@ void Report(const char* what, EXCEPTION_POINTERS* info) {
     }
   }
   fprintf(stderr, "\n");
+#if defined(__x86_64__)
   fprintf(stderr, "  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n", ctx.Rax, ctx.Rbx,
           ctx.Rcx, ctx.Rdx);
   fprintf(stderr, "  rsi=%016llx rdi=%016llx rbp=%016llx rsp=%016llx\n", ctx.Rsi, ctx.Rdi,
@@ -77,6 +78,30 @@ void Report(const char* what, EXCEPTION_POINTERS* info) {
     RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, ctx.Rip, fn, &ctx, &handler_data,
                      &establisher, nullptr);
   }
+#elif defined(__aarch64__)
+  fprintf(stderr, "  x0 =%016llx x1 =%016llx x2 =%016llx x3 =%016llx\n",
+          static_cast<unsigned long long>(ctx.X0), static_cast<unsigned long long>(ctx.X1),
+          static_cast<unsigned long long>(ctx.X2), static_cast<unsigned long long>(ctx.X3));
+  fprintf(stderr, "  x4 =%016llx x5 =%016llx x6 =%016llx x7 =%016llx\n",
+          static_cast<unsigned long long>(ctx.X4), static_cast<unsigned long long>(ctx.X5),
+          static_cast<unsigned long long>(ctx.X6), static_cast<unsigned long long>(ctx.X7));
+  fprintf(stderr, "  fp =%016llx lr =%016llx sp =%016llx pc =%016llx\n",
+          static_cast<unsigned long long>(ctx.Fp), static_cast<unsigned long long>(ctx.Lr),
+          static_cast<unsigned long long>(ctx.Sp), static_cast<unsigned long long>(ctx.Pc));
+  fprintf(stderr, "backtrace:\n");
+  for (int frame = 0; frame < 64 && ctx.Pc != 0; ++frame) {
+    char prefix[16];
+    snprintf(prefix, sizeof(prefix), "  #%02d ", frame);
+    PrintAddress(prefix, ctx.Pc);
+    DWORD64 image_base = 0;
+    RUNTIME_FUNCTION* fn = RtlLookupFunctionEntry(ctx.Pc, &image_base, nullptr);
+    if (fn == nullptr) break;  // no unwind info (e.g. an assembly stub)
+    void* handler_data = nullptr;
+    DWORD64 establisher = 0;
+    RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, ctx.Pc, fn, &ctx, &handler_data,
+                     &establisher, nullptr);
+  }
+#endif
   fflush(stderr);
 }
 

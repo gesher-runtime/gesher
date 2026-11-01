@@ -1,0 +1,123 @@
+name: arm64-windows
+
+on:
+  push:
+    branches:
+      - 'feature/arm64-windows'
+      - 'wip/arm64-windows'
+  pull_request:
+    branches:
+      - 'feature/arm64-windows'
+      - 'main'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchain
+          key: ${{ env.LLVM_MINGW_NAME }}
+
+      - name: Fetch llvm-mingw
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p ~/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
+            | tar -xJ -C ~/toolchain
+
+      - name: Cache AOSP sources
+        uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Fetch AOSP sources
+        shell: bash
+        run: tools/fetch-aosp.sh
+
+      - name: Install build tools
+        shell: bash
+        run: sudo apt-get install -y --no-install-recommends ninja-build ccache
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-arm64-windows-${{ github.sha }}
+          restore-keys: ccache-arm64-windows-
+
+      - name: Configure CMake for ARM64 Windows
+        shell: bash
+        run: |
+          ccache --set-config=max_size=2G
+          cmake -S . -B out-arm64 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw-arm64.cmake \
+            -DLLVM_MINGW="$HOME/toolchain/$LLVM_MINGW_NAME" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build target binaries and libraries
+        shell: bash
+        run: |
+          ninja -C out-arm64 \
+            platform_probe \
+            socket_probe \
+            mman_probe \
+            epoll_probe \
+            posix_probe \
+            gesher_elf \
+            gesher_bionic \
+            gesher_posix \
+            arm64_elf_test
+
+      - name: Verify PE/COFF architecture is aarch64
+        shell: bash
+        run: |
+          OBJDUMP="$HOME/toolchain/$LLVM_MINGW_NAME/bin/llvm-objdump"
+          binaries=(
+            out-arm64/platform_probe.exe
+            out-arm64/socket_probe.exe
+            out-arm64/mman_probe.exe
+            out-arm64/epoll_probe.exe
+            out-arm64/posix_probe.exe
+            out-arm64/arm64_elf_test.exe
+          )
+          for b in "${binaries[@]}"; do
+            echo "Checking architecture for $b..."
+            info=$("$OBJDUMP" -f "$b")
+            echo "$info"
+            echo "$info" | grep -iE 'aarch64|arm64' || {
+              echo "ERROR: $b is not aarch64!"
+              exit 1
+            }
+          done
+          echo "All binaries verified as aarch64!"
+
+      - name: Upload ARM64 Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64-windows-binaries
+          path: |
+            out-arm64/*.exe
+            out-arm64/*.a
+          if-no-files-found: warn

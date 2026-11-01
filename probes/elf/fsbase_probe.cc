@@ -13,10 +13,12 @@
 // confirming the base is set. A #UD (feature off) is caught by a vectored
 // handler. So the probe always prints a verdict and exits cleanly.
 
-#include <windows.h>
-
-#include <cstdint>
 #include <cstdio>
+
+#if defined(__x86_64__)
+
+#include <windows.h>
+#include <cstdint>
 
 namespace {
 
@@ -113,3 +115,12 @@ int main() {
   }
   return failures == 0 ? 0 : 1;
 }
+
+#else
+
+int main() {
+  std::printf("fsbase probe: not applicable on non-x86_64 architecture\n");
+  return 0;
+}
+
+#endif

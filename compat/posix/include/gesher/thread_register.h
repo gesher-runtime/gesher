@@ -36,7 +36,13 @@ int gesher_thread_register_is_fixed(void);
 
 static inline void* gesher_get_thread_register(void) {
   void* value;
+#if defined(__x86_64__)
   __asm__ __volatile__("movq %%gs:(%1), %0" : "=r"(value) : "r"(gesher_thread_self_slot));
+#elif defined(__aarch64__)
+  __asm__ __volatile__("ldr %0, [x18, %1]" : "=r"(value) : "r"(gesher_thread_self_slot));
+#else
+  value = nullptr;
+#endif
   return value;
 }
 

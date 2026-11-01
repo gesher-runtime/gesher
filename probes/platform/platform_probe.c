@@ -35,12 +35,21 @@ static volatile LONG npe_hits;
 
 __attribute__((noinline)) static int64_t npe_load(int64_t *p) {
   int64_t v = 7;
+#if defined(__x86_64__)
   __asm__ volatile("movq 8(%1), %0\n\t"
                    ".globl gesher_npe_resume\n"
                    "gesher_npe_resume:\n\t"
                    : "+r"(v)
                    : "r"(p)
                    : "memory");
+#elif defined(__aarch64__)
+  __asm__ volatile("ldr %0, [%1, #8]\n\t"
+                   ".globl gesher_npe_resume\n"
+                   "gesher_npe_resume:\n\t"
+                   : "+r"(v)
+                   : "r"(p)
+                   : "memory");
+#endif
   return v;
 }
 
@@ -49,7 +58,11 @@ static LONG CALLBACK fault_handler(EXCEPTION_POINTERS *ep) {
   if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
       er->NumberParameters >= 2 && er->ExceptionInformation[1] < 0x10000) {
     InterlockedIncrement(&npe_hits);
+#if defined(__x86_64__)
     ep->ContextRecord->Rip = (DWORD64)(uintptr_t)gesher_npe_resume;
+#elif defined(__aarch64__)
+    ep->ContextRecord->Pc = (DWORD64)(uintptr_t)gesher_npe_resume;
+#endif
     return EXCEPTION_CONTINUE_EXECUTION;
   }
   return EXCEPTION_CONTINUE_SEARCH;
@@ -75,8 +88,13 @@ static LONG CALLBACK overflow_handler(EXCEPTION_POINTERS *ep) {
     return EXCEPTION_CONTINUE_SEARCH;
   InterlockedExchange(&overflow_seen, 1);
   CONTEXT *c = ep->ContextRecord;
+#if defined(__x86_64__)
   c->Rsp = (c->Rsp & ~(DWORD64)0xF) - 8;  // ABI alignment at function entry
   c->Rip = (DWORD64)(uintptr_t)overflow_exit;
+#elif defined(__aarch64__)
+  c->Sp = (c->Sp & ~(DWORD64)0xF);
+  c->Pc = (DWORD64)(uintptr_t)overflow_exit;
+#endif
   return EXCEPTION_CONTINUE_EXECUTION;
 }
 
@@ -199,7 +217,12 @@ static void probe_filemap(void) {
 // --- jit -------------------------------------------------------------------
 
 static void probe_jit(void) {
+#if defined(__x86_64__)
   static const unsigned char code[] = {0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3};
+#elif defined(__aarch64__)
+  // movz w0, #42 (0x52800540); ret (0xD65F03C0)
+  static const unsigned char code[] = {0x40, 0x05, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6};
+#endif
   unsigned char *mem =
       VirtualAlloc(NULL, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
   memcpy(mem, code, sizeof code);

@@ -64,10 +64,15 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  using IntFn = int(__attribute__((sysv_abi))*)();
-  using AddFn = int(__attribute__((sysv_abi))*)(int, int);
-  using SelftestFn = int(__attribute__((sysv_abi))*)(const char*);
-  using PerfFn = uint64_t(__attribute__((sysv_abi))*)(uint32_t);
+#if defined(__x86_64__)
+#define SYSV_FN __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV_FN
+#endif
+  using IntFn = int(SYSV_FN*)();
+  using AddFn = int(SYSV_FN*)(int, int);
+  using SelftestFn = int(SYSV_FN*)(const char*);
+  using PerfFn = uint64_t(SYSV_FN*)(uint32_t);
 
   if (auto selftest = Entry<SelftestFn>(lib, "gesher_selftest")) {
     // The first search directory doubles as a scratch directory.

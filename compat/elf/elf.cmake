@@ -7,7 +7,8 @@ add_library(gesher_elf STATIC
   ${CMAKE_CURRENT_LIST_DIR}/fs_rewrite.cc
   ${CMAKE_CURRENT_LIST_DIR}/tls.cc
   ${CMAKE_CURRENT_LIST_DIR}/x86_decode.cc
-  ${CMAKE_CURRENT_LIST_DIR}/../arm64/arm64_runtime.cc)
+  ${CMAKE_CURRENT_LIST_DIR}/../arm64/arm64_runtime.cc
+  ${CMAKE_CURRENT_LIST_DIR}/../arm64/dynarmic_bridge.cc)
 target_include_directories(gesher_elf PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include
   ${CMAKE_CURRENT_LIST_DIR}/../arm64/include)
 target_include_directories(gesher_elf PRIVATE ${CMAKE_CURRENT_LIST_DIR})

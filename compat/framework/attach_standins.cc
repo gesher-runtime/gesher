@@ -32,7 +32,11 @@
 
 #include <log/log.h>
 
+#if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define SYSV
+#endif
 
 // compat/hwui/graphics_runtime.cc: a FrameMetricsObserver of hwui that drops the metrics.
 extern "C" jlong gesher_standin_frame_metrics_observer();
