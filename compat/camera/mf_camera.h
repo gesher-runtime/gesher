@@ -18,11 +18,7 @@
 #include <utility>
 #include <vector>
 
-// Forward declarations for Android/JNI types for Camera2 delivery
-struct JNIEnv_;
-typedef struct JNIEnv_ JNIEnv;
-class _jobject;
-typedef _jobject* jobject;
+#include <jni.h>
 
 namespace gesher::camera {
 
