@@ -296,7 +296,7 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     private final PackageInstallerService mInstallerService = new PackageInstallerService();
     private final android.content.pm.IPackageInstaller mInstaller =
-            StandIn.of(android.content.pm.IPackageInstaller.class, mInstallerService).asProxy();
+            StandIn.of(android.content.pm.IPackageInstaller.class, mInstallerService).asInterface();
 
     @Override
     public android.content.pm.IPackageInstaller getPackageInstaller() {

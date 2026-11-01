@@ -36,7 +36,6 @@ public final class AccountManagerService extends IAccountManager.Default {
         return filterAccounts(type);
     }
 
-    @Override
     public Account[] getAccounts(String type, String opPackageName) {
         return filterAccounts(type);
     }
@@ -98,7 +97,6 @@ public final class AccountManagerService extends IAccountManager.Default {
         return "dummy_user_data";
     }
 
-    @Override
     public boolean addAccountExplicitly(Account account, String password, Bundle extras) {
         if (account == null) return false;
         synchronized (this) {

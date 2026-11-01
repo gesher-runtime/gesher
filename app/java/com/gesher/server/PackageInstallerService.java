@@ -70,7 +70,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
     }
 
     @Override
-    public void unregisterCallback(IPackageInstallerCallback callback, int userId) {
+    public void unregisterCallback(IPackageInstallerCallback callback) {
     }
 
     @Override

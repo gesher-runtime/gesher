@@ -7,6 +7,7 @@ package com.gesher.app.window;
 import android.app.ActivityThread;
 import android.app.WindowConfiguration;
 import android.content.ClipData;
+import android.content.ClipDescription;
 import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.graphics.Region;
