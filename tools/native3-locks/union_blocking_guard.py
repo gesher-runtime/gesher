@@ -412,7 +412,7 @@ def main():
                 # exact current TCP fixture-target overlay, independently pinned
                 # by the immutable full guard.
                 assert expected == '8ba137e29a5840600fe7d77fee4e833e6d0bfd73'
-                expected = '9966ffe8d9a1cf8a59c3f187c95c28c506623c9e'
+                expected = '94f2ee6faf01b3bf619348464d82f01805f6aece'
             elif path == 'compat/posix/posix.cmake':
                 assert expected == 'bd7a73bd589c30617b9a4ee29b4d15bba3f20221'
                 expected = '18db90528bbee6a114cd64a0400acbfe40c15c3d'
