@@ -30,6 +30,38 @@ namespace gesher::media {
 namespace {
 
 // GUIDs
+typedef HRESULT (WINAPI *PFN_D3D11_CREATE_DEVICE)(
+    IDXGIAdapter*,
+    D3D_DRIVER_TYPE,
+    HMODULE,
+    UINT,
+    const D3D_FEATURE_LEVEL*,
+    UINT,
+    UINT,
+    ID3D11Device**,
+    D3D_FEATURE_LEVEL*,
+    ID3D11DeviceContext**);
+
+static HRESULT DynamicD3D11CreateDevice(
+    IDXGIAdapter* pAdapter,
+    D3D_DRIVER_TYPE DriverType,
+    HMODULE Software,
+    UINT Flags,
+    const D3D_FEATURE_LEVEL* pFeatureLevels,
+    UINT FeatureLevels,
+    UINT SDKVersion,
+    ID3D11Device** ppDevice,
+    D3D_FEATURE_LEVEL* pFeatureLevel,
+    ID3D11DeviceContext** ppImmediateContext) {
+  static HMODULE h = LoadLibraryW(L"d3d11.dll");
+  if (!h) return E_FAIL;
+  static auto pfn = reinterpret_cast<PFN_D3D11_CREATE_DEVICE>(
+      reinterpret_cast<void*>(GetProcAddress(h, "D3D11CreateDevice")));
+  if (!pfn) return E_FAIL;
+  return pfn(pAdapter, DriverType, Software, Flags, pFeatureLevels,
+             FeatureLevels, SDKVersion, ppDevice, pFeatureLevel, ppImmediateContext);
+}
+
 GUID FourCcSubtype(uint32_t fourcc) {
   return GUID{fourcc, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71}};
 }
@@ -151,7 +183,7 @@ bool D3D11VideoDecoder::IsHardwareSupported() {
   D3D_FEATURE_LEVEL feature_level;
   ID3D11Device* dev = nullptr;
   ID3D11DeviceContext* ctx = nullptr;
-  HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+  HRESULT hr = DynamicD3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
                                  D3D11_CREATE_DEVICE_VIDEO_SUPPORT, feature_levels,
                                  ARRAYSIZE(feature_levels), D3D11_SDK_VERSION, &dev,
                                  &feature_level, &ctx);
@@ -213,12 +245,12 @@ bool D3D11VideoDecoder::InitD3D11(std::string* error) {
   D3D_FEATURE_LEVEL feature_level;
   UINT flags = D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
 
-  HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
+  HRESULT hr = DynamicD3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
                                  feature_levels, ARRAYSIZE(feature_levels),
                                  D3D11_SDK_VERSION, &device_, &feature_level, &context_);
   if (FAILED(hr) || device_ == nullptr) {
     // Fall back to WARP
-    hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags,
+    hr = DynamicD3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags,
                            feature_levels, ARRAYSIZE(feature_levels),
                            D3D11_SDK_VERSION, &device_, &feature_level, &context_);
     hardware_ = false;

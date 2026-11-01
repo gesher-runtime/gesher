@@ -31,6 +31,27 @@
 namespace gesher::media {
 namespace {
 
+typedef HANDLE (WINAPI *PFN_AvSetMmThreadCharacteristicsW)(LPCWSTR, LPDWORD);
+typedef BOOL (WINAPI *PFN_AvRevertMmThreadCharacteristics)(HANDLE);
+
+static HANDLE DynamicAvSetMmThreadCharacteristicsW(LPCWSTR TaskName, LPDWORD TaskIndex) {
+  HMODULE h = LoadLibraryW(L"avrt.dll");
+  if (!h) return nullptr;
+  auto pfn = reinterpret_cast<PFN_AvSetMmThreadCharacteristicsW>(
+      reinterpret_cast<void*>(GetProcAddress(h, "AvSetMmThreadCharacteristicsW")));
+  if (!pfn) return nullptr;
+  return pfn(TaskName, TaskIndex);
+}
+
+static BOOL DynamicAvRevertMmThreadCharacteristics(HANDLE AvrtHandle) {
+  HMODULE h = GetModuleHandleW(L"avrt.dll");
+  if (!h) return FALSE;
+  auto pfn = reinterpret_cast<PFN_AvRevertMmThreadCharacteristics>(
+      reinterpret_cast<void*>(GetProcAddress(h, "AvRevertMmThreadCharacteristics")));
+  if (!pfn) return FALSE;
+  return pfn(AvrtHandle);
+}
+
 // Explicit COM interface IDs and Class IDs
 const CLSID kClsidMMDeviceEnumerator = {0xBCDE0395, 0xE52F, 0x467C,
                                         {0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E}};
@@ -562,9 +583,9 @@ void WasapiAudioSink::ReadDeviceProperties() {
 void WasapiAudioSink::FeedLoop() {
   // Join Pro Audio / Audio MMCSS task via avrt.dll
   DWORD task_index = 0;
-  HANDLE avrt_handle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index);
+  HANDLE avrt_handle = DynamicAvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index);
   if (avrt_handle == nullptr) {
-    avrt_handle = AvSetMmThreadCharacteristicsW(L"Audio", &task_index);
+    avrt_handle = DynamicAvSetMmThreadCharacteristicsW(L"Audio", &task_index);
   }
 
   HANDLE wait_handles[2] = {stop_event_, buffer_event_};
@@ -652,7 +673,7 @@ void WasapiAudioSink::FeedLoop() {
   }
 
   if (avrt_handle != nullptr) {
-    AvRevertMmThreadCharacteristics(avrt_handle);
+    DynamicAvRevertMmThreadCharacteristics(avrt_handle);
   }
 }
 
