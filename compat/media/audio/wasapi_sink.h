@@ -133,7 +133,6 @@ class WasapiAudioSink : public Sink {
   IAudioRenderClient* render_ = nullptr;
   ISimpleAudioVolume* simple_volume_ = nullptr;
   IAudioSessionControl* session_control_ = nullptr;
-  void* session_events_ = nullptr;
 
   HANDLE buffer_event_ = nullptr;
   HANDLE stop_event_ = nullptr;
