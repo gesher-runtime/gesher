@@ -117,8 +117,20 @@ public final class WindowsHost {
         return available() ? nativeClipboardHtml() : null;
     }
 
+    public static byte[] clipboardImage() {
+        return available() ? nativeClipboardImage() : null;
+    }
+
+    public static boolean hasClipboardImage() {
+        return available() && nativeHasClipboardImage();
+    }
+
     public static boolean setClipboard(String text, String html) {
         return available() && nativeSetClipboard(text, html);
+    }
+
+    public static boolean setClipboardRich(String text, String html, byte[] imageBytes) {
+        return available() && nativeSetClipboardRich(text, html, imageBytes);
     }
 
     public static int clipboardSequence() {
@@ -209,6 +221,21 @@ public final class WindowsHost {
         return available() ? nativeClearToasts(appId) : 0x80004001;
     }
 
+    /**
+     * Bridges notification to Windows Action Center WinRT toast, falling back to
+     * Shell_NotifyIconW balloon notification with app icon and title.
+     */
+    public static int showNotificationBridge(String appId, String tag, String group,
+            String title, String text, String iconPath, int id) {
+        return available() ? nativeShowNotificationBridge(appId, tag, group, title, text,
+                iconPath, id) : 0x80004001;
+    }
+
+    public static int cancelNotificationBridge(String appId, String tag, String group, int id) {
+        return available() ? nativeCancelNotificationBridge(appId, tag, group, id)
+                : 0x80004001;
+    }
+
     /** The AppUserModelID's name and icon for its toasts (HKCU\Software\Classes\AppUserModelId). */
     public static int registerAppId(String appId, String displayName, String iconPath) {
         return available() ? nativeRegisterAppId(appId, displayName, iconPath) : 0x80004001;
@@ -265,7 +292,11 @@ public final class WindowsHost {
     private static native String[] nativeNextActivation();
     private static native String nativeClipboardText();
     private static native String nativeClipboardHtml();
+    private static native byte[] nativeClipboardImage();
+    private static native boolean nativeHasClipboardImage();
     private static native boolean nativeSetClipboard(String text, String html);
+    private static native boolean nativeSetClipboardRich(String text, String html,
+            byte[] imageBytes);
     private static native int nativeClipboardSequence();
     private static native int nativeAlarmWait(long utcMillis, boolean wakeup, int timeoutMs);
     private static native void nativeAlarmKick();
@@ -279,6 +310,10 @@ public final class WindowsHost {
             String xml, boolean suppressPopup, boolean high);
     private static native int nativeRemoveToast(String appId, String tag, String group);
     private static native int nativeClearToasts(String appId);
+    private static native int nativeShowNotificationBridge(String appId, String tag,
+            String group, String title, String text, String iconPath, int id);
+    private static native int nativeCancelNotificationBridge(String appId, String tag,
+            String group, int id);
     private static native int nativeRegisterAppId(String appId, String displayName,
             String iconPath);
     private static native int nativeUnregisterAppId(String appId);

@@ -186,8 +186,8 @@ public final class NotificationManagerService extends INotificationManager.Defau
             return;
         }
         NotificationStore.delete(pkg, r.sbn.getKey());
-        int hr = WindowsHost.removeToast(AppShell.appUserModelId(pkg), toastTag(tag, id),
-                TOAST_GROUP);
+        int hr = WindowsHost.cancelNotificationBridge(AppShell.appUserModelId(pkg), toastTag(tag, id),
+                TOAST_GROUP, id);
         SystemServer.log("notification " + id + " of " + pkg + " cancelled"
                 + (hr == 0 ? ", its toast removed" : String.format(" (toast: 0x%08x)", hr)));
         notifyListeners(r, false, reason);
@@ -218,8 +218,21 @@ public final class NotificationManagerService extends INotificationManager.Defau
                 || (update && (n.flags & Notification.FLAG_ONLY_ALERT_ONCE) != 0);
         boolean high = importance >= NotificationManager.IMPORTANCE_HIGH;
         String xml = toastXml(r, large != null ? large : icon, quiet || update);
-        return WindowsHost.showToast(appId, toastTag(r.sbn.getTag(), r.sbn.getId()),
+        int hr = WindowsHost.showToast(appId, toastTag(r.sbn.getTag(), r.sbn.getId()),
                 TOAST_GROUP, xml, suppressPopup, high);
+        if (hr != 0) {
+            // Fall back to Shell_NotifyIcon balloon notification bridge with app icon and title
+            CharSequence title = n.extras != null ? n.extras.getCharSequence(Notification.EXTRA_TITLE) : null;
+            CharSequence text = n.extras != null ? n.extras.getCharSequence(Notification.EXTRA_TEXT) : null;
+            File iconFile = large != null ? large : icon;
+            hr = WindowsHost.showNotificationBridge(
+                    appId, toastTag(r.sbn.getTag(), r.sbn.getId()), TOAST_GROUP,
+                    title != null ? title.toString() : "",
+                    text != null ? text.toString() : "",
+                    iconFile != null ? iconFile.getAbsolutePath() : "",
+                    r.sbn.getId());
+        }
+        return hr;
     }
 
     /** Names the app id after the app (label and icon), once per device run. */

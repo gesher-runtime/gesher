@@ -74,6 +74,8 @@ include(cmake/aosp/core_libs_tests.cmake)
 # ART's own gtests for libartbase and libdexfile (docs/posix.md).
 include(cmake/aosp/art_gtests.cmake)
 include(cmake/aosp/graphics.cmake)
+# gesher: Windows desktop integration (desktop polish track: drag & drop, rich clipboard, notifications).
+include(compat/windows/windows.cmake)
 # Input (docs/input.md): libinput, the input natives, Win32 messages to Android events.
 include(cmake/aosp/input.cmake)
 # Media (docs/media.md): the audio engine and the framework's media natives.
@@ -89,6 +91,9 @@ target_link_libraries(framework_runtime PUBLIC mfplat mfreadwrite mfuuid)
 target_link_libraries(dalvikvm PRIVATE mfplat mfreadwrite mfuuid)
 # android.webkit.WebView on WebView2 (docs/webview.md): libgesher_webview.so, builtin.
 include(cmake/webview.cmake)
+
+# Link Windows desktop integration libraries: ole32, shell32, user32.
+target_link_libraries(dalvikvm PRIVATE ole32 shell32 user32)
 
 # Phase 0 probe: Windows primitives ART relies on.
 add_executable(platform_probe probes/platform/platform_probe.c)
