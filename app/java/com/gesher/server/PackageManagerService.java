@@ -294,6 +294,15 @@ public final class PackageManagerService extends IPackageManager.Default {
         return null;
     }
 
+    private final PackageInstallerService mInstallerService = new PackageInstallerService();
+    private final android.content.pm.IPackageInstaller mInstaller =
+            StandIn.of(android.content.pm.IPackageInstaller.class, mInstallerService).asProxy();
+
+    @Override
+    public android.content.pm.IPackageInstaller getPackageInstaller() {
+        return mInstaller;
+    }
+
     @Override
     public void notifyDexLoad(String loadingPackageName,
             java.util.Map<String, String> classLoaderContextMap, String loaderIsa) {
