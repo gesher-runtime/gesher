@@ -18,6 +18,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/links.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/logging.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/memalign.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/mman_alias_prepare.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/mman.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/misc.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/netdb.cc
@@ -77,3 +78,8 @@ target_compile_options(gesher_posix PRIVATE -Wall -Wextra -Werror)
 # uapi header; searched last, so gesher-base's <linux/*.h> come first.
 set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/binder.cc PROPERTIES
   COMPILE_OPTIONS "-idirafter;${AOSP_DIR}/bionic/libc/kernel/uapi")
+
+# Only detached alias bookkeeping may throw; same pinned STL/CRT/allocator ABI.
+# Actual compile_commands effective ordering and throwing runtime require CI proof.
+set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/mman_alias_prepare.cc PROPERTIES
+  COMPILE_OPTIONS "-fexceptions")
