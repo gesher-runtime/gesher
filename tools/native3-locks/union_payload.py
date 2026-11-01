@@ -116,7 +116,7 @@ PINNED_SOURCE.update(RECEIPT_PINS)
 COHERENT_TCP_PINS = {
     '.github/workflows/framework.yml': 'a15bb994b5e3a5025f436129393b9dcc60a88423',
     '.github/workflows/native2.yml': '7958a0939a6971180f41a71f5254c52fdee257a9',
-    'CMakeLists.txt': '9966ffe8d9a1cf8a59c3f187c95c28c506623c9e',
+    'CMakeLists.txt': '94f2ee6faf01b3bf619348464d82f01805f6aece',
     'compat/bionic/extra_bionic.cc': 'ddafe2adbfa647d4bb8347a889dea832b6f178a5',
     'compat/bionic/native_fonts.cc': 'fb682f51a95bfe48d8aa96128b21883b083361fd',
     'compat/bionic/shim.cc': '37b6bc0b73eecc5ddea6120cc97455238a96f1cf',
