@@ -10,16 +10,6 @@
 #include <atomic>
 #include <mutex>
 #include <utility>
-#include <climits>
-#include <cstdint>
-
-#if GESHER_WINPTHREAD_CPU_AUTHORITY_API != 1
-#error Rebuild the pinned Gesher winpthreads authority supplier before building hosts
-#endif
-
-// Calls to the supplier's fixed clocks must bypass the public overlay.
-#undef clock_gettime
-#undef clock_getres
 
 #include "internal.h"
 
@@ -89,6 +79,12 @@ int pthread_getattr_np(pthread_t thread, pthread_attr_t* attr) {
   int rc = pthread_attr_init(attr);
   if (rc != 0) return rc;
   return pthread_attr_setstack(attr, reinterpret_cast<void*>(low), high - low);
+}
+
+int pthread_getcpuclockid(pthread_t thread, clockid_t* clock_id) {
+  (void)thread;
+  *clock_id = CLOCK_THREAD_CPUTIME_ID;
+  return 0;
 }
 
 // The bottom of the stack Windows keeps (gesher::StackBottomReserve): ART

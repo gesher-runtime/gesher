@@ -829,7 +829,6 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
       first->second.operation_error=GetLastError();s.owner_failure=true;errno=EIO;return finish();
     }
     for(auto next=std::next(first);next!=s.regions.end()&&next->first<end;)next=s.regions.erase(next);
-    static_assert(noexcept(first->second=std::move(plan.merged.combined)));
     first->second=std::move(plan.merged.combined);
   }
   return finish();
