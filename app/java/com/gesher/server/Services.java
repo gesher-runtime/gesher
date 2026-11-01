@@ -153,6 +153,9 @@ public final class Services {
                 new LocationManagerService(pm, am)).asBinder());
         services.put(Context.LOCALE_SERVICE, StandIn.of(android.app.ILocaleManager.class, new LocaleManagerService(am, atm, pm)).asBinder());  // locale track, ADR 0049
         services.put(Context.CONNECTIVITY_SERVICE, new ConnectivityService(pm, atm));  // docs/network.md
+        // Account manager stand-in for Google and local accounts (microG / GMS compat).
+        services.put(Context.ACCOUNT_SERVICE, StandIn.of(android.accounts.IAccountManager.class,
+                new AccountManagerService()).asBinder());
         return services;
     }
 
