@@ -2,16 +2,29 @@
 
 # --- zlib (external/zlib, Chromium's zlib) ---------------------------------
 set(_z "${AOSP_DIR}/external/zlib")
-add_library(z STATIC
-  ${_z}/adler32.c ${_z}/adler32_simd.c ${_z}/compress.c ${_z}/cpu_features.c
-  ${_z}/crc32.c ${_z}/crc32_simd.c ${_z}/crc_folding.c ${_z}/deflate.c
-  ${_z}/gzclose.c ${_z}/gzlib.c ${_z}/gzread.c ${_z}/gzwrite.c ${_z}/infback.c
-  ${_z}/inffast.c ${_z}/inflate.c ${_z}/inftrees.c ${_z}/trees.c
-  ${_z}/uncompr.c ${_z}/zutil.c)
-target_include_directories(z PUBLIC ${_z})
-target_compile_definitions(z PRIVATE
-  HAVE_HIDDEN ZLIB_CONST CHROMIUM_ZLIB_NO_CASTAGNOLI
-  ADLER32_SIMD_SSSE3 DEFLATE_CHUNK_WRITE_64LE INFLATE_CHUNK_READ_64LE X86_WINDOWS)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64|arm64")
+  add_library(z STATIC
+    ${_z}/adler32.c ${_z}/compress.c ${_z}/cpu_features.c
+    ${_z}/crc32.c ${_z}/deflate.c
+    ${_z}/gzclose.c ${_z}/gzlib.c ${_z}/gzread.c ${_z}/gzwrite.c ${_z}/infback.c
+    ${_z}/inffast.c ${_z}/inflate.c ${_z}/inftrees.c ${_z}/trees.c
+    ${_z}/uncompr.c ${_z}/zutil.c)
+  target_include_directories(z PUBLIC ${_z})
+  target_compile_definitions(z PRIVATE
+    HAVE_HIDDEN ZLIB_CONST CHROMIUM_ZLIB_NO_CASTAGNOLI
+    DEFLATE_CHUNK_WRITE_64LE INFLATE_CHUNK_READ_64LE)
+else()
+  add_library(z STATIC
+    ${_z}/adler32.c ${_z}/adler32_simd.c ${_z}/compress.c ${_z}/cpu_features.c
+    ${_z}/crc32.c ${_z}/crc32_simd.c ${_z}/crc_folding.c ${_z}/deflate.c
+    ${_z}/gzclose.c ${_z}/gzlib.c ${_z}/gzread.c ${_z}/gzwrite.c ${_z}/infback.c
+    ${_z}/inffast.c ${_z}/inflate.c ${_z}/inftrees.c ${_z}/trees.c
+    ${_z}/uncompr.c ${_z}/zutil.c)
+  target_include_directories(z PUBLIC ${_z})
+  target_compile_definitions(z PRIVATE
+    HAVE_HIDDEN ZLIB_CONST CHROMIUM_ZLIB_NO_CASTAGNOLI
+    ADLER32_SIMD_SSSE3 DEFLATE_CHUNK_WRITE_64LE INFLATE_CHUNK_READ_64LE X86_WINDOWS)
+endif()
 target_compile_options(z PRIVATE -O3 -Wno-deprecated-non-prototype -Wno-unused -Wno-unused-parameter)
 
 # --- tinyxml2 ---------------------------------------------------------------
