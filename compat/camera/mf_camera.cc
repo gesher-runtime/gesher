@@ -359,13 +359,13 @@ bool CameraCharacteristicsProvider::GetCharacteristics(const std::string& device
     }
   }
   // Try matching numeric index (e.g. "0", "1")
-  try {
-    size_t idx = std::stoul(device_id);
-    if (idx < devices.size()) {
+  if (!device_id.empty() && std::all_of(device_id.begin(), device_id.end(), ::isdigit)) {
+    char* end = nullptr;
+    unsigned long idx = std::strtoul(device_id.c_str(), &end, 10);
+    if (end != device_id.c_str() && *end == '\0' && idx < devices.size()) {
       *out_chars = devices[idx];
       return true;
     }
-  } catch (...) {
   }
   return false;
 }
