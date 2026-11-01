@@ -897,6 +897,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
+        shard: [1, 2, 3, 4]
     runs-on: ${{ matrix.os }}
     # A hung app or check fails the job instead of running for six hours.
     timeout-minutes: 120
@@ -1043,12 +1044,26 @@ jobs:
           python tools/web3/host_roles.py verify --dist dist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Shard test tracks
+        shell: pwsh
+        run: |
+          $tracks = @(Get-ChildItem tests/windows/tracks/*.ps1 | Sort-Object Name)
+          $shard = [int]'${{ matrix.shard }}'
+          $total = 4
+          for ($i = 0; $i -lt $tracks.Count; $i++) {
+            if (($i % $total) -ne ($shard - 1)) {
+              Remove-Item $tracks[$i].FullName -Force
+            }
+          }
+          Write-Host "Shard $shard running tracks:"
+          Get-ChildItem tests/windows/tracks/*.ps1 | ForEach-Object { Write-Host " - $($_.Name)" }
+
       - name: Run tests
         shell: pwsh
         run: |
           pwsh -NoProfile -File tests/windows/run-tests.ps1 dist -Web3Observer dist/web3_process_waits.exe | Tee-Object -FilePath results.txt
           $code = $LASTEXITCODE
-          "### Tests — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
+          "### Tests — ${{ matrix.os }} (shard ${{ matrix.shard }}/4)" >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
           Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL|INFO)|failed' >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
