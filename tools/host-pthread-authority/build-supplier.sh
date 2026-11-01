@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# CI only. The caller supplies a private extracted compiler, never a shared cache.
+set -euo pipefail
+test "${GITHUB_ACTIONS:-}" = true
+llvm=$(realpath "${1:?private compiler directory}")
+role=${2:-production}
+case "$role" in
+  production) suffix= ;;
+  fault) suffix=-fault ;;
+  probe) suffix=-probe ;;
+  probe-fault) suffix=-probe-fault ;;
+  probe-legacy) suffix=-probe-legacy ;;
+  probe-reaper) suffix=-probe-reaper ;;
+  probe-resource) suffix=-probe-resource ;;
+  probe-deferred) suffix=-probe-deferred ;;
+  *) exit 2 ;;
+esac
+root=$(git rev-parse --show-toplevel)
+test "$llvm" != "$HOME/toolchain/${LLVM_MINGW_NAME:-}"
+supplier="$PWD/host-authority-supplier$suffix"
+test ! -e "$supplier"
+mkdir "$supplier"
+git -C "$supplier" init -q
+git -C "$supplier" remote add origin https://github.com/mingw-w64/mingw-w64.git
+git -C "$supplier" fetch --depth=1 origin a3d93999ef0521681d45e445c39964a7af0f593f
+git -C "$supplier" checkout --detach FETCH_HEAD
+python3 "$root/tools/host-pthread-authority/receipt.py" inputs "$supplier"
+git -C "$supplier" apply --check "$root/tools/host-pthread-authority/supplier.patch"
+git -C "$supplier" apply "$root/tools/host-pthread-authority/supplier.patch"
+if test "$role" = fault || test "$role" = probe-fault; then
+  git -C "$supplier" apply --check "$root/tools/host-pthread-authority/fault-supplier.patch"
+  git -C "$supplier" apply "$root/tools/host-pthread-authority/fault-supplier.patch"
+fi
+if test "$role" = probe-deferred; then
+  git -C "$supplier" apply --check "$root/tools/host-pthread-authority/deferred-supplier.patch"
+  git -C "$supplier" apply "$root/tools/host-pthread-authority/deferred-supplier.patch"
+fi
+export PATH="$llvm/bin:$PATH"
+supplier_cflags='-g -O2 -mguard=cf -Werror -Xclang -fdump-record-layouts'
+if test "$role" = probe || test "$role" = probe-fault || test "$role" = probe-legacy || test "$role" = probe-reaper || test "$role" = probe-resource || test "$role" = probe-deferred; then supplier_cflags="$supplier_cflags -DGESHER_PTHREAD_ROUTING_PROBE=1"; fi
+if test "$role" = probe-resource || test "$role" = probe-deferred; then supplier_cflags="$supplier_cflags -DGESHER_RESOURCE_LEASE_PROBE=1"; fi
+if test "$role" = probe-deferred; then supplier_cflags="$supplier_cflags -DGESHER_CANCEL_STATE_PROBE=1 -DGESHER_DEFERRED_ONLY_PROBE=1"; fi
+if test "$role" = probe-reaper; then supplier_cflags="$supplier_cflags -DGESHER_REAPER_PROBE=1"; fi
+if test "$role" = probe-legacy; then supplier_cflags="$supplier_cflags -DGESHER_RWLOCK_ORIGINAL_RECHECK=1"; fi
+mkdir "$supplier/build"
+cd "$supplier/build"
+../mingw-w64-libraries/winpthreads/configure \
+  --host=x86_64-w64-mingw32 --prefix="$llvm/x86_64-w64-mingw32" \
+  --libdir="$llvm/x86_64-w64-mingw32/lib" --enable-shared --enable-static \
+  CFLAGS="$supplier_cflags" CXXFLAGS='-g -O2 -mguard=cf -Werror' \
+  CC="$llvm/bin/x86_64-w64-mingw32-clang" \
+  AR="$llvm/bin/llvm-ar" RANLIB="$llvm/bin/llvm-ranlib" \
+  RC="$llvm/bin/x86_64-w64-mingw32-windres" 2>&1 | tee configure-command.log
+# Upstream's GCC-only -Wc,-no-pthread becomes an unused Clang argument at
+# link time. Override that one make variable; keep every warning fatal.
+# Clang adds winpthread only with -pthread, which this build never supplies.
+supplier_ldflags='-no-undefined -version-info 1:0:0 -L$(builddir)/fakelib'
+if ! make -j2 V=1 "libwinpthread_la_LDFLAGS=$supplier_ldflags" 2>&1 | tee build-commands.log; then
+  # Libtool suppresses output from its non-PIC compilation. Repeat only the
+  # failing-source diagnostic with the same private compiler and role flags;
+  # never turn the failed make into a successful build.
+  "$llvm/bin/x86_64-w64-mingw32-clang" -DHAVE_CONFIG_H -I. -I../mingw-w64-libraries/winpthreads \
+    -I../mingw-w64-libraries/winpthreads/include -DIN_WINPTHREAD -D__USE_MINGW_ANSI_STDIO=0 \
+    -Wall $supplier_cflags -c ../mingw-w64-libraries/winpthreads/src/thread.c -o thread-static-diagnostic.o 2>&1 || :
+  exit 1
+fi
+make install "libwinpthread_la_LDFLAGS=$supplier_ldflags" 2>&1 | tee install-commands.log
+mkdir -p "$llvm/x86_64-w64-mingw32/share/mingw32"
+cp ../mingw-w64-libraries/winpthreads/COPYING "$llvm/x86_64-w64-mingw32/share/mingw32/COPYING.winpthreads.txt"
+cd "$root"
+python3 tools/host-pthread-authority/receipt.py supplier "$supplier" "$llvm" "$role"

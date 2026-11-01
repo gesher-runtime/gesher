@@ -15,6 +15,8 @@
 #include <windows.h>
 
 #include <atomic>
+#include <array>
+#include <climits>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -110,10 +112,43 @@ struct ThreadRecord {
 
 std::mutex g_threads_mutex;
 std::unordered_map<bionic_pthread_t, ThreadRecord*> g_threads;
+// Host/ART-created threads can enter bionic without pthread_create. Keep
+// their self identities authoritative too; reclaim terminated objects on
+// subsequent identity/clock operations. No TID is reopened after exit.
+std::unordered_map<bionic_pthread_t, HANDLE> g_external_threads;
 std::atomic<bionic_pthread_t> g_next_id{1};
 
 thread_local bionic_pthread_t t_self = 0;
 thread_local ThreadRecord* t_record = nullptr;
+
+// Clock IDs are capabilities for one retained kernel thread object, never a
+// Windows TID (which Windows can reuse). All access uses g_threads_mutex.
+// Repeated acquisition shares a slot; dead slots close their handle on the
+// next clock operation. Retired IDs are never assigned again.
+struct CpuClock {
+  bionic_pthread_t thread = 0;
+  HANDLE handle = nullptr;
+  int id = 0;
+};
+std::array<CpuClock, 256> g_cpu_clocks{};
+int64_t g_next_cpu_clock = -65536;
+
+void ReapCpuClocks() {
+  for (auto it = g_external_threads.begin(); it != g_external_threads.end();) {
+    if (it->second != nullptr && WaitForSingleObject(it->second, 0) != WAIT_TIMEOUT) {
+      CloseHandle(it->second);
+      it = g_external_threads.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (auto& clock : g_cpu_clocks) {
+    if (clock.handle != nullptr && WaitForSingleObject(clock.handle, 0) != WAIT_TIMEOUT) {
+      CloseHandle(clock.handle);
+      clock = {};
+    }
+  }
+}
 
 struct StartArg {
   void* (BIONIC_SYSV* start)(void*);
@@ -148,7 +183,17 @@ DWORD WINAPI ThreadTrampoline(void* raw) {
 }
 
 bionic_pthread_t SelfId() {
-  if (t_self == 0) t_self = g_next_id.fetch_add(1);
+  if (t_self == 0) {
+    t_self = g_next_id.fetch_add(1);
+    std::lock_guard<std::mutex> lock(g_threads_mutex);
+    ReapCpuClocks();
+    HANDLE retained = nullptr;
+    DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &retained,
+                    THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0);
+    // A null entry records resource exhaustion without confusing this valid
+    // pthread identity with an unknown one. Acquisition then returns EAGAIN.
+    g_external_threads.emplace(t_self, retained);
+  }
   return t_self;
 }
 
@@ -634,6 +679,62 @@ int BIONIC_SYSV gesher_bionic_register_atfork(void*, void*, void*, void*) { retu
 }  // extern "C"
 
 uint64_t PthreadSelfId() { return SelfId(); }
+
+int PthreadCpuClock(uint64_t thread, int* clock_id) {
+  if (clock_id == nullptr) return kEINVAL;
+  // SelfId can allocate an identity for a host/ART-created caller. Other
+  // identities must come from the live bionic registry, never a cast handle.
+  uint64_t self = SelfId();
+  std::lock_guard<std::mutex> lock(g_threads_mutex);
+  ReapCpuClocks();
+  HANDLE target = nullptr;
+  if (thread == self) {
+    target = GetCurrentThread();
+  } else {
+    auto found = g_threads.find(thread);
+    if (found != g_threads.end()) target = found->second->handle;
+    auto external = g_external_threads.find(thread);
+    if (external != g_external_threads.end()) {
+      target = external->second;
+      if (target == nullptr) return kEAGAIN;
+    }
+  }
+  // A previously acquired clock also retains an externally created caller.
+  for (const auto& clock : g_cpu_clocks) {
+    if (clock.handle != nullptr && clock.thread == thread) {
+      *clock_id = clock.id;
+      return 0;
+    }
+  }
+  if (target == nullptr || WaitForSingleObject(target, 0) != WAIT_TIMEOUT) return kESRCH;
+  if (g_next_cpu_clock < INT_MIN) return kEAGAIN;
+  for (auto& clock : g_cpu_clocks) {
+    if (clock.handle != nullptr) continue;
+    HANDLE retained = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), target, GetCurrentProcess(), &retained,
+                         THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0)) return kEAGAIN;
+    clock = {thread, retained, static_cast<int>(g_next_cpu_clock--)};
+    *clock_id = clock.id;
+    return 0;
+  }
+  return kEAGAIN;
+}
+
+int ReadPthreadCpuClock(int clock_id, int64_t* nanos) {
+  std::lock_guard<std::mutex> lock(g_threads_mutex);
+  ReapCpuClocks();
+  for (const auto& clock : g_cpu_clocks) {
+    if (clock.handle == nullptr || clock.id != clock_id) continue;
+    FILETIME created, exited, kernel, user;
+    if (!GetThreadTimes(clock.handle, &created, &exited, &kernel, &user)) return kEINVAL;
+    auto ticks = [](FILETIME t) {
+      return (static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime;
+    };
+    *nanos = static_cast<int64_t>((ticks(kernel) + ticks(user)) * 100);
+    return 0;
+  }
+  return kEINVAL;
+}
 
 void RegisterPthread(SymbolTable& t) {
 #define P(name) t[#name] = reinterpret_cast<void*>(&gesher_bionic_##name)

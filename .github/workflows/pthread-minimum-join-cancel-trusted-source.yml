@@ -1,0 +1,35 @@
+name: pthread-minimum-join-cancel-trusted-source
+on:
+  workflow_call:
+    outputs:
+      source:
+        value: ${{ jobs.verify.outputs.source }}
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      source: ${{ steps.gate.outputs.source }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PTHREAD_MINIMUM_JOIN_NONTAIL_CALLER_COMMIT: ${{ vars.PTHREAD_MINIMUM_JOIN_NONTAIL_CALLER_COMMIT }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Immutable isolated collector source gate
+        id: gate
+        shell: bash
+        run: |
+          python3 -I -B - <<'PYCODE'
+          import hashlib, subprocess, types
+          pins = {'.github/workflows/pthread-minimum-join-cancel-component.yml': '12a9daa63058480e78b06d25bc83893db1e1182e', 'docs/handoff/tracks/pthread-minimum-join-cancellation-candidate.md': '3c68436d009174e1ab3d34bbe1faa543f1790a15', 'tests/native/host_pthread_minimum_join_cancel_candidate.c': 'f2b98089501d10e68f87fbea1d0bc8b078b1c421', 'tools/host-pthread-authority/audit-minimum-join-witness-source.py': 'a74f04c7e3dc80e23f855170adf58067fb67ecb4', 'tools/host-pthread-authority/collect-minimum-join-object-wip.sh': '826dc12499ae6f02e4f338dcecf13598e192f029', 'tools/host-pthread-authority/minimum-join-wait-diagnostic.patch': '9c260f5073bd9b010b71cdec69aec3ed1d2eee7e', 'tools/host-pthread-authority/minimum_join_identity_candidate.py': 'cdcf5120329f6571602a8ba90a4186ed9dc78d3e', 'tools/host-pthread-authority/run-minimum-join-cancel-candidate.ps1': 'd0b5f35c06e11289f12594e29e03a6693d39e663', 'tools/host-pthread-authority/test_minimum_join_identity_candidate.py': '4cfa840d4a48dae49685631486b09fd4d0179d4f', 'tools/host-pthread-authority/minimum_join_collector_policy.py': 'fd0b7468587b2f8bf2c7dabd7e4aaa54736d69ee'}
+          policy = 'fd0b7468587b2f8bf2c7dabd7e4aaa54736d69ee'
+          raw = subprocess.check_output(['git','cat-file','blob',policy])
+          assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==policy
+          module=types.ModuleType('immutable_collector_gate')
+          exec(compile(raw,'immutable-collector-gate','exec'),module.__dict__)
+          module.gate(pins)
+          PYCODE
