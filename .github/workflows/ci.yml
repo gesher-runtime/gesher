@@ -16,7 +16,7 @@ env:
 
 jobs:
   union-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@735de2623766aaf96d65380cbac70f4b3acdce0f
+    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@f940f2a906cf623833def30aca8756192ba1651f
   union-tsf:
     needs: [artifact-preflight]
     uses: ./.github/workflows/tsf-format-component.yml
@@ -44,6 +44,16 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache AOSP sources
+        uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Fetch AOSP sources
+        run: tools/fetch-aosp.sh
 
       - uses: actions/setup-java@v4
         with:
