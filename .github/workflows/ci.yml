@@ -16,7 +16,7 @@ env:
 
 jobs:
   union-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@c7613d69edfb91a600e7779acae1d26e06207854
+    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@735de2623766aaf96d65380cbac70f4b3acdce0f
   union-tsf:
     needs: [artifact-preflight]
     uses: ./.github/workflows/tsf-format-component.yml
@@ -39,10 +39,49 @@ jobs:
           python3 tools/ci/receipt_identity.py
           python3 tools/surface/test-verified-artifact.py
 
+  build-framework-assets:
+    needs: [artifact-preflight, union-trusted-source]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Build test apps
+        run: tests/build-test-apps.sh out/test-apps
+
+      - name: Build boot class path (core-oj, core-libart)
+        run: tools/build-boot-jars.sh out/boot-jars
+
+      - name: Build the framework's resources (framework-res.apk)
+        run: tools/build-framework-res.sh out/framework-res
+
+      - name: Collect framework assets
+        run: |
+          mkdir -p framework-assets
+          cp out/test-apps/* out/boot-jars/*.jar framework-assets/
+          # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
+          cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat framework-assets/
+          # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
+          tools/fonts/collect-fonts.sh third_party/aosp framework-assets
+          # Time zone data, for $ANDROID_TZDATA_ROOT (docs/posix.md).
+          compat/libcore/collect-tzdata.sh third_party/aosp framework-assets
+          # Android's CA certificates and the networking libraries' licenses (docs/network.md).
+          tools/net/collect.sh third_party/aosp framework-assets
+          ls -la framework-assets
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: framework-assets
+          path: framework-assets/
+
   # Everything is cross-compiled on Linux with llvm-mingw, then executed on
   # real Windows runners.
   build:
-    needs: [artifact-preflight, union-trusted-source]
+    needs: [artifact-preflight, union-trusted-source, build-framework-assets]
     runs-on: ubuntu-24.04
     env:
       GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher' }}
@@ -134,33 +173,16 @@ jobs:
       - name: Check assembly boundaries use the System V ABI
         run: python3 tools/abi-check.py out third_party/aosp
 
-      - uses: actions/setup-java@v4
+      - uses: actions/download-artifact@v4
         with:
-          distribution: temurin
-          java-version: 21
-
-      - name: Build test apps
-        run: tests/build-test-apps.sh out/test-apps
-
-      - name: Build boot class path (core-oj, core-libart)
-        run: tools/build-boot-jars.sh out/boot-jars
-
-      - name: Build the framework's resources (framework-res.apk)
-        run: tools/build-framework-res.sh out/framework-res
+          name: framework-assets
+          path: dist
 
       - name: Collect artifacts
         run: |
           mkdir -p dist
-          cp out/*.exe out/dalvikvm.map out/dex2oat.map out/test-apps/* out/boot-jars/*.jar dist/
+          cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
           cp dist-web3-observer/web3_process_waits.exe dist/
-          # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
-          cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat dist/
-          # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
-          tools/fonts/collect-fonts.sh third_party/aosp dist
-          # Time zone data, for $ANDROID_TZDATA_ROOT (docs/posix.md).
-          compat/libcore/collect-tzdata.sh third_party/aosp dist
-          # Android's CA certificates and the networking libraries' licenses (docs/network.md).
-          tools/net/collect.sh third_party/aosp dist
           ls -la dist
 
       - name: Freeze default-OFF production role and unchanged shared-code boundary
