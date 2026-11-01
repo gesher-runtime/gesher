@@ -126,6 +126,13 @@ target_link_libraries(libutils_probe PRIVATE utils)
 add_executable(fsbase_probe probes/elf/fsbase_probe.cc)
 target_compile_options(fsbase_probe PRIVATE -Wall -Wextra -Werror -mfsgsbase)
 
+# Focused CI fixture; no new production track or generic environment API.
+add_executable(font_environment_test EXCLUDE_FROM_ALL tests/native/font_environment_test.cc)
+target_link_libraries(font_environment_test PRIVATE gesher_posix)
+target_compile_options(font_environment_test PRIVATE -Wall -Wextra -Werror)
+target_link_options(font_environment_test PRIVATE
+  "-Wl,-Map,${CMAKE_BINARY_DIR}/font_environment_test.map")
+
 # Phase 6: the ELF loader loads an x86-64 Android .so and calls its exports.
 add_executable(elf_load_test tests/native/elf_load_test.cc)
 target_compile_options(elf_load_test PRIVATE -Wall -Wextra -Werror)
@@ -176,3 +183,12 @@ target_link_libraries(arm64_elf_test PRIVATE gesher_bionic gesher_elf)
 # Explicit CI qualification targets; no fixture is part of the default product.
 add_subdirectory(tests/file_mremap EXCLUDE_FROM_ALL)
 # END FILE_MREMAP_SOURCE_QUALIFICATION
+
+# BEGIN FONT_RESOURCE_CHARACTERIZATION_ADDITIVE
+add_executable(font_environment_resource_characterization EXCLUDE_FROM_ALL
+  tests/native/font_environment_resource_characterization.cc)
+target_link_libraries(font_environment_resource_characterization PRIVATE gesher_posix)
+target_compile_options(font_environment_resource_characterization PRIVATE -Wall -Wextra -Werror)
+target_link_options(font_environment_resource_characterization PRIVATE
+  "-Wl,-Map,${CMAKE_BINARY_DIR}/font_environment_resource_characterization.map")
+# END FONT_RESOURCE_CHARACTERIZATION_ADDITIVE

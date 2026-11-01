@@ -149,7 +149,11 @@ set(ART_RUNTIME_DEPS art_elffile art_profile art_sigchain art_nativebridge
 target_link_libraries(art_runtime PUBLIC ${ART_RUNTIME_DEPS})
 
 # --- dalvikvm (art/dalvikvm/Android.bp) -------------------------------------
+# Keep upstream ART entry semantics while receiving Windows argv as UTF-16.
+set_property(SOURCE ${_art}/dalvikvm/dalvikvm.cc APPEND PROPERTY COMPILE_DEFINITIONS
+  main=gesher_dalvikvm_main)
 add_executable(dalvikvm ${_art}/dalvikvm/dalvikvm.cc
+  ${CMAKE_SOURCE_DIR}/compat/art/dalvikvm_main.cc
   # Gesher: in place of libnativehelper's dlopen-based JniInvocation.
   ${CMAKE_SOURCE_DIR}/compat/art/jni_invocation_static.cc)
 target_include_directories(dalvikvm PRIVATE ${AOSP_DIR}/libnativehelper/include_platform
@@ -158,4 +162,5 @@ target_link_libraries(dalvikvm PRIVATE art_runtime)
 # dalvikvm links libart-compiler for the JIT (cmake/aosp/dex2oat.cmake,
 # docs/compiled-code.md).
 # A linker map, for tools/symbolize.py (the executable is stripped).
-target_link_options(dalvikvm PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/dalvikvm.map)
+# Link-only: the pinned MinGW driver selects crt2u.o and wmain.
+target_link_options(dalvikvm PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/dalvikvm.map -municode)

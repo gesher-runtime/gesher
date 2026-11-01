@@ -1,0 +1,93 @@
+name: fonts-core-component
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/fonts-cli-utf8]
+    paths: [.github/workflows/fonts-core-component.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: fonts-core-component-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  trusted-source:
+    uses: gesher-runtime/gesher/.github/workflows/fonts-core-trusted-source.yml@e7ef94f878725e7a2f7899e7e4652335ec969607
+  fixture-producer:
+    needs: trusted-source
+    uses: ./.github/workflows/native2.yml
+  runtime-producer:
+    needs: trusted-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Configure ordinary default-OFF runtime with actual compile-command receipts
+        run: cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_EXE_LINKER_FLAGS=-Wl,--verbose
+      - name: Build fresh current-source CLI and independent no-JVM executable
+        run: |
+          set -euo pipefail
+          ninja -C out -v gesher-exec 2>&1 | tee fonts-gesher-exec-build.log
+          ninja -C out -v dalvikvm 2>&1 | tee fonts-dalvikvm-build.log
+      - name: Bind real CRT entry, adapter relocation, imports, compiler and output bytes
+        run: python3 tools/fonts/core-runtime-manifest.py capture --build out --root fresh-runtime
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fonts-core-runtime
+          path: fresh-runtime/
+          if-no-files-found: error
+  compare:
+    needs: [trusted-source, fixture-producer, runtime-producer]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        runtime_role: [current-utf8, old42076]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact current-attempt fixture and fresh-runtime archives and outputs
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name native2 --producer 'fixture-producer / native2' --destination current-fixtures
+          if ($LASTEXITCODE -ne 0) { throw 'Current fixture producer receipt failed' }
+          python tools/fonts/dex-fixture-manifest.py verify --root current-fixtures
+          if ($LASTEXITCODE -ne 0) { throw 'Current fixture compiler/source/output receipt failed' }
+          python tools/ci/artifact_receipt.py --name fonts-core-runtime --producer runtime-producer --destination fresh-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Current runtime producer receipt failed' }
+          python tools/fonts/core-runtime-manifest.py verify --root fresh-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Current runtime compiler/source/output receipt failed' }
+      - name: Verify explicitly qualified data and translator and OLD contrast suppliers inside CI
+        shell: pwsh
+        run: |
+          $role = if ('${{ matrix.runtime_role }}' -ceq 'current-utf8') { 'qualified-data' } else { 'old-runtime' }
+          python tools/fonts/baseline-supplier.py $role --destination comparison-base
+          if ($LASTEXITCODE -ne 0) { throw 'Explicit comparison data supplier failed' }
+          python tools/fonts/baseline-supplier.py qualified-translator --destination comparison-translator
+          if ($LASTEXITCODE -ne 0) { throw 'Explicit qualified translator supplier failed' }
+          python tools/fonts/baseline-supplier.py old-framework --destination comparison-old-framework
+          if ($LASTEXITCODE -ne 0) { throw 'Explicit OLD framework supplier failed' }
+      - name: Assemble exact data whitelist with separately owned executable and translator bytes
+        shell: pwsh
+        run: |
+          python tools/fonts/assemble-core-runtime.py --base comparison-base --translator comparison-translator --fresh fresh-runtime --destination comparison-runtime --role '${{ matrix.runtime_role }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Comparison runtime ownership/ABI/data whitelist failed' }
+      - name: Execute strict fresh CLI and core-only contracts plus explicitly OLD managed before-comparison
+        shell: pwsh
+        run: |
+          ./tools/fonts/run-dex-comparison.ps1 -RuntimeDirectory comparison-runtime -OldFrameworkDirectory comparison-old-framework -FixturesDirectory current-fixtures -RuntimeRole '${{ matrix.runtime_role }}'
