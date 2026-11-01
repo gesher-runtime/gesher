@@ -32,7 +32,14 @@ const std::vector<VideoCodecInfo>& VideoDecoder::Available() {
     const char* only = getenv("GESHER_VIDEO_DECODERS");
     const bool soft_only = only != nullptr && std::string(only) == "soft";
     std::vector<VideoCodecInfo> all;
-    if (!soft_only) all = MfVideoCodecs();
+    if (!soft_only) {
+      all = D3D11VideoCodecs();
+      for (const VideoCodecInfo& m : MfVideoCodecs()) {
+        bool have = std::any_of(all.begin(), all.end(),
+                                [&](const VideoCodecInfo& c) { return c.mime == m.mime; });
+        if (!have) all.push_back(m);
+      }
+    }
     for (const VideoCodecInfo& s : SoftVideoCodecs()) {
       bool have = std::any_of(all.begin(), all.end(),
                               [&](const VideoCodecInfo& c) { return c.mime == s.mime; });
@@ -60,11 +67,17 @@ std::unique_ptr<VideoDecoder> VideoDecoder::Create(const Format& track, std::str
   AddCsdFromEsds(track);
   for (const VideoCodecInfo& c : Available()) {
     if (c.mime != mime) continue;
-    std::unique_ptr<VideoDecoder> d = c.backend == "mf" ? CreateMfVideoDecoder(track, error)
-                                                         : CreateSoftVideoDecoder(track, error);
+    std::unique_ptr<VideoDecoder> d;
+    if (c.backend == "d3d11") {
+      d = CreateD3D11VideoDecoder(track, error);
+    } else if (c.backend == "mf") {
+      d = CreateMfVideoDecoder(track, error);
+    } else {
+      d = CreateSoftVideoDecoder(track, error);
+    }
     if (d != nullptr) return d;
-    // Media Foundation refused the stream: a software decoder may still take it.
-    if (c.backend == "mf") {
+    // Hardware or Media Foundation refused the stream: a software decoder may still take it.
+    if (c.backend == "d3d11" || c.backend == "mf") {
       std::string soft_error;
       for (const VideoCodecInfo& s : SoftVideoCodecs()) {
         if (s.mime == mime) {

@@ -85,6 +85,10 @@ std::unique_ptr<VideoDecoder> CreateMfVideoDecoder(const Format& track, std::str
 // The MF decoders present, by MIME type.
 std::vector<VideoCodecInfo> MfVideoCodecs();
 
+// D3D11 / DXVA2 hardware video decoder (d3d11_decoder.cc).
+std::unique_ptr<VideoDecoder> CreateD3D11VideoDecoder(const Format& track, std::string* error);
+std::vector<VideoCodecInfo> D3D11VideoCodecs();
+
 // AOSP's software decoders (soft_video.cc).
 std::unique_ptr<VideoDecoder> CreateSoftVideoDecoder(const Format& track, std::string* error);
 std::vector<VideoCodecInfo> SoftVideoCodecs();

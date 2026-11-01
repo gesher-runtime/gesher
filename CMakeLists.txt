@@ -78,6 +78,9 @@ include(cmake/aosp/graphics.cmake)
 include(cmake/aosp/input.cmake)
 # Media (docs/media.md): the audio engine and the framework's media natives.
 include(cmake/aosp/media.cmake)
+# Link Windows audio and video APIs (WASAPI, D3D11/DXVA) when building media components.
+target_link_libraries(dalvikvm PRIVATE ole32 mmdevapi avrt d3d11)
+target_link_libraries(gesher-exec PRIVATE ole32 mmdevapi avrt d3d11)
 # Devices (docs/devices.md): location, sensors and cameras over Windows' APIs.
 include(compat/devices/devices.cmake)
 # Camera (compat/camera): Media Foundation webcam capture and Camera2 delivery

@@ -29,6 +29,7 @@
 #include "log.h"
 #include "shared_state.h"
 #include "sink.h"
+#include "wasapi_sink.h"
 
 namespace gesher::media {
 namespace {
@@ -437,6 +438,8 @@ class WasapiSink : public Sink {
 }  // namespace
 
 std::unique_ptr<Sink> OpenWasapiSink(const std::u16string& app_name, std::string* error) {
+  auto low_latency = OpenLowLatencyWasapiSink(app_name, error);
+  if (low_latency != nullptr) return low_latency;
   auto sink = std::make_unique<WasapiSink>();
   if (!sink->Open(app_name, error)) return nullptr;
   return sink;
