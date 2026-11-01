@@ -13,5 +13,10 @@ target_include_directories(gesher_desktop_compat PUBLIC ${_win_compat}
 target_compile_options(gesher_desktop_compat PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(gesher_desktop_compat PUBLIC ole32 shell32 user32)
 
-target_link_libraries(framework_runtime PUBLIC gesher_desktop_compat)
-target_link_libraries(gesher_window PUBLIC gesher_desktop_compat)
+if(TARGET framework_runtime)
+  target_link_libraries(framework_runtime PUBLIC gesher_desktop_compat)
+endif()
+
+if(TARGET gesher_window)
+  target_link_libraries(gesher_window PUBLIC gesher_desktop_compat)
+endif()

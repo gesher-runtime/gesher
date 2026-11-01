@@ -67,8 +67,6 @@ include(cmake/aosp/framework_e2e.cmake)
 include(cmake/aosp/shell.cmake)
 # gesher: the device-state services' Windows side: alarms, clipboard, toasts, power (devsvc track).
 include(cmake/aosp/devsvc.cmake)
-# gesher: Windows desktop integration (desktop polish track: drag & drop, rich clipboard, notifications).
-include(compat/windows/windows.cmake)
 # gesher: System.loadLibrary of an app's ELF .so in dalvikvm (Phase 6).
 include(compat/bionic/jni.cmake)
 include(cmake/aosp/googletest.cmake)
@@ -76,6 +74,8 @@ include(cmake/aosp/core_libs_tests.cmake)
 # ART's own gtests for libartbase and libdexfile (docs/posix.md).
 include(cmake/aosp/art_gtests.cmake)
 include(cmake/aosp/graphics.cmake)
+# gesher: Windows desktop integration (desktop polish track: drag & drop, rich clipboard, notifications).
+include(compat/windows/windows.cmake)
 # Input (docs/input.md): libinput, the input natives, Win32 messages to Android events.
 include(cmake/aosp/input.cmake)
 # Media (docs/media.md): the audio engine and the framework's media natives.
