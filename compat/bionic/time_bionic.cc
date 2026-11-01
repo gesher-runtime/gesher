@@ -10,12 +10,18 @@
 
 #include "shim_internal.h"
 
+#include <windows.h>
 #include <errno.h>
+#include <sys/eventfd.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 
 namespace gesher::bionic {
 
@@ -322,6 +328,237 @@ char* BIONIC_SYSV CtimeR(const int64_t* t, char* buf) {
 }
 char* BIONIC_SYSV Ctime(const int64_t* t) { return CtimeR(t, t_asctime); }
 
+// --- timerfd -----------------------------------------------------------------
+
+constexpr int kTfdTimerAbstime = 1 << 0;
+constexpr int kTfdCloexec = 02000000;
+constexpr int kTfdNonblock = 04000;
+
+constexpr int kClockRealtime = 0;
+constexpr int kClockMonotonic = 1;
+constexpr int kClockMonotonicRaw = 4;
+constexpr int kClockBoottime = 7;
+
+struct LinuxItimerspec {
+  LinuxTimespec it_interval;
+  LinuxTimespec it_value;
+};
+static_assert(sizeof(LinuxItimerspec) == 32, "LinuxItimerspec size mismatch");
+
+struct TimerState {
+  int fd = -1;
+  int clockid = 0;
+  PTP_TIMER tp_timer = nullptr;
+  std::mutex mtx;
+  LinuxItimerspec spec{};
+  int64_t next_expire_ns = 0;
+  int64_t interval_ns = 0;
+
+  ~TimerState() {
+    if (tp_timer != nullptr) {
+      SetThreadpoolTimer(tp_timer, nullptr, 0, 0);
+      WaitForThreadpoolTimerCallbacks(tp_timer, TRUE);
+      CloseThreadpoolTimer(tp_timer);
+      tp_timer = nullptr;
+    }
+  }
+};
+
+std::mutex g_timer_mutex;
+std::unordered_map<int, std::shared_ptr<TimerState>> g_timers;
+
+int64_t MonotonicNowNanos() {
+  static LARGE_INTEGER freq = [] {
+    LARGE_INTEGER f;
+    QueryPerformanceFrequency(&f);
+    return f;
+  }();
+  LARGE_INTEGER now;
+  QueryPerformanceCounter(&now);
+  return static_cast<int64_t>((static_cast<__int128>(now.QuadPart) * 1000000000LL) / freq.QuadPart);
+}
+
+int64_t RealtimeNowNanos() {
+  LinuxTimespec ts = RealtimeNow();
+  return ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+VOID CALLBACK TimerCallback(PTP_CALLBACK_INSTANCE, PVOID context, PTP_TIMER) {
+  auto* state = static_cast<TimerState*>(context);
+  if (state == nullptr) return;
+
+  {
+    std::lock_guard<std::mutex> lock(state->mtx);
+    if (state->interval_ns > 0) {
+      state->next_expire_ns += state->interval_ns;
+    } else {
+      state->next_expire_ns = 0;
+    }
+  }
+
+  uint64_t val = 1;
+  int res = eventfd_write(state->fd, val);
+  if (res != 0 && errno == kEBADF) {
+    SetThreadpoolTimer(state->tp_timer, nullptr, 0, 0);
+  }
+}
+
+int BIONIC_SYSV TimerfdCreate(int clockid, int flags) {
+  if (clockid != kClockRealtime && clockid != kClockMonotonic &&
+      clockid != kClockBoottime && clockid != kClockMonotonicRaw) {
+    errno = kEINVAL;
+    return -1;
+  }
+  if ((flags & ~(kTfdNonblock | kTfdCloexec)) != 0) {
+    errno = kEINVAL;
+    return -1;
+  }
+
+  int efd_flags = 0;
+  if ((flags & kTfdNonblock) != 0) efd_flags |= EFD_NONBLOCK;
+  if ((flags & kTfdCloexec) != 0) efd_flags |= EFD_CLOEXEC;
+
+  int fd = eventfd(0, efd_flags);
+  if (fd < 0) return -1;
+
+  auto state = std::make_shared<TimerState>();
+  state->fd = fd;
+  state->clockid = clockid;
+  state->tp_timer = CreateThreadpoolTimer(&TimerCallback, state.get(), nullptr);
+  if (state->tp_timer == nullptr) {
+    close(fd);
+    errno = kENOMEM;
+    return -1;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(g_timer_mutex);
+    auto it = g_timers.find(fd);
+    if (it != g_timers.end()) {
+      g_timers.erase(it);
+    }
+    g_timers[fd] = state;
+  }
+
+  return fd;
+}
+
+int BIONIC_SYSV TimerfdGettime(int fd, LinuxItimerspec* curr_value) {
+  if (curr_value == nullptr) {
+    errno = kEFAULT;
+    return -1;
+  }
+
+  std::shared_ptr<TimerState> state;
+  {
+    std::lock_guard<std::mutex> lock(g_timer_mutex);
+    auto it = g_timers.find(fd);
+    if (it == g_timers.end()) {
+      errno = kEBADF;
+      return -1;
+    }
+    state = it->second;
+  }
+
+  std::lock_guard<std::mutex> lock(state->mtx);
+  curr_value->it_interval = state->spec.it_interval;
+
+  if (state->next_expire_ns == 0) {
+    curr_value->it_value.tv_sec = 0;
+    curr_value->it_value.tv_nsec = 0;
+  } else {
+    int64_t now_ns = (state->clockid == kClockRealtime) ? RealtimeNowNanos() : MonotonicNowNanos();
+    int64_t rem_ns = state->next_expire_ns - now_ns;
+    if (rem_ns <= 0) {
+      if (state->interval_ns > 0) {
+        curr_value->it_value.tv_sec = 0;
+        curr_value->it_value.tv_nsec = 1;
+      } else {
+        curr_value->it_value.tv_sec = 0;
+        curr_value->it_value.tv_nsec = 0;
+      }
+    } else {
+      curr_value->it_value.tv_sec = rem_ns / 1000000000LL;
+      curr_value->it_value.tv_nsec = rem_ns % 1000000000LL;
+    }
+  }
+  return 0;
+}
+
+int BIONIC_SYSV TimerfdSettime(int fd, int flags, const LinuxItimerspec* new_value, LinuxItimerspec* old_value) {
+  if (new_value == nullptr) {
+    errno = kEFAULT;
+    return -1;
+  }
+  if ((flags & ~kTfdTimerAbstime) != 0) {
+    errno = kEINVAL;
+    return -1;
+  }
+  if (new_value->it_value.tv_nsec < 0 || new_value->it_value.tv_nsec >= 1000000000LL ||
+      new_value->it_interval.tv_nsec < 0 || new_value->it_interval.tv_nsec >= 1000000000LL) {
+    errno = kEINVAL;
+    return -1;
+  }
+
+  std::shared_ptr<TimerState> state;
+  {
+    std::lock_guard<std::mutex> lock(g_timer_mutex);
+    auto it = g_timers.find(fd);
+    if (it == g_timers.end()) {
+      errno = kEBADF;
+      return -1;
+    }
+    state = it->second;
+  }
+
+  if (old_value != nullptr) {
+    TimerfdGettime(fd, old_value);
+  }
+
+  std::lock_guard<std::mutex> lock(state->mtx);
+  state->spec = *new_value;
+
+  if (new_value->it_value.tv_sec == 0 && new_value->it_value.tv_nsec == 0) {
+    state->next_expire_ns = 0;
+    state->interval_ns = 0;
+    SetThreadpoolTimer(state->tp_timer, nullptr, 0, 0);
+    return 0;
+  }
+
+  int64_t interval_ns = new_value->it_interval.tv_sec * 1000000000LL + new_value->it_interval.tv_nsec;
+  state->interval_ns = interval_ns;
+
+  DWORD ms_period = 0;
+  if (interval_ns > 0) {
+    int64_t ms = interval_ns / 1000000LL;
+    ms_period = static_cast<DWORD>(ms < 1 ? 1 : ms);
+  }
+
+  int64_t delay_ns = 0;
+  if ((flags & kTfdTimerAbstime) != 0) {
+    int64_t now_ns = (state->clockid == kClockRealtime) ? RealtimeNowNanos() : MonotonicNowNanos();
+    int64_t target_ns = new_value->it_value.tv_sec * 1000000000LL + new_value->it_value.tv_nsec;
+    delay_ns = target_ns - now_ns;
+    state->next_expire_ns = target_ns;
+    if (delay_ns < 0) delay_ns = 0;
+  } else {
+    delay_ns = new_value->it_value.tv_sec * 1000000000LL + new_value->it_value.tv_nsec;
+    int64_t now_ns = (state->clockid == kClockRealtime) ? RealtimeNowNanos() : MonotonicNowNanos();
+    state->next_expire_ns = now_ns + delay_ns;
+  }
+
+  int64_t delay_100ns = delay_ns / 100;
+  if (delay_100ns <= 0) delay_100ns = 1;
+  int64_t rel_ft = -delay_100ns;
+
+  FILETIME ft;
+  ft.dwLowDateTime = static_cast<DWORD>(rel_ft & 0xFFFFFFFF);
+  ft.dwHighDateTime = static_cast<DWORD>((rel_ft >> 32) & 0xFFFFFFFF);
+
+  SetThreadpoolTimer(state->tp_timer, &ft, ms_period, 0);
+  return 0;
+}
+
 }  // namespace
 
 void RegisterTime(SymbolTable& t) {
@@ -346,6 +583,11 @@ void RegisterTime(SymbolTable& t) {
   E("asctime_r", AsctimeR);
   E("ctime", Ctime);
   E("ctime_r", CtimeR);
+  E("timerfd_create", TimerfdCreate);
+  E("timerfd_settime", TimerfdSettime);
+  E("timerfd_settime64", TimerfdSettime);
+  E("timerfd_gettime", TimerfdGettime);
+  E("timerfd_gettime64", TimerfdGettime);
 #undef E
   t["tzname"] = g_tzname;
   t["timezone"] = &g_timezone;
