@@ -15,6 +15,9 @@
 
 namespace gesher::arm64 {
 
+bool InitDynarmicBridge(const gesher_arm64_host* host, const gesher_arm64_api** out_api,
+                        void* (**out_bind)(void*));
+
 namespace {
 
 const gesher_arm64_api* g_api = nullptr;
@@ -40,9 +43,6 @@ int HostDescribe(const void* addr, const char** object, const void** object_base
   if (symbol_addr) *symbol_addr = info.symbol_addr;
   return 1;
 }
-
-bool InitDynarmicBridge(const gesher_arm64_host* host, const gesher_arm64_api** out_api,
-                        void* (**out_bind)(void*));
 
 void Load() {
   static gesher_arm64_host host = {GESHER_ARM64_API_VERSION, HostResolve, HostDescribe};

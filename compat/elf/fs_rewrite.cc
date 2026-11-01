@@ -85,7 +85,11 @@ LONG CALLBACK FsVectoredHandler(EXCEPTION_POINTERS* info) {
     ReleaseSRWLockShared(&g_lock);
     if (site == nullptr) return EXCEPTION_CONTINUE_SEARCH;
     if (copy.stub != 0) {
+#if defined(__x86_64__)
       info->ContextRecord->Rip = copy.stub;
+#elif defined(__aarch64__)
+      info->ContextRecord->Pc = copy.stub;
+#endif
       return EXCEPTION_CONTINUE_EXECUTION;
     }
     std::fprintf(stderr,
@@ -101,7 +105,11 @@ LONG CALLBACK FsVectoredHandler(EXCEPTION_POINTERS* info) {
   if (code == EXCEPTION_ACCESS_VIOLATION) {
     // Diagnostics only: name the cause of a fault in loaded code that comes
     // from %fs/%gs thread state, then let the fault take its normal course.
+#if defined(__x86_64__)
     uintptr_t rip = info->ContextRecord->Rip;
+#elif defined(__aarch64__)
+    uintptr_t rip = info->ContextRecord->Pc;
+#endif
     AcquireSRWLockShared(&g_lock);
     const CodeRange* range = FindRangeLocked(rip);
     CodeRange r{};
