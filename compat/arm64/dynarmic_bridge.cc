@@ -44,7 +44,8 @@ uint64_t NativeCall(const void* fn, const uint64_t* args, size_t nargs) {
   uint64_t a6 = nargs > 6 ? args[6] : 0;
   uint64_t a7 = nargs > 7 ? args[7] : 0;
   auto target = reinterpret_cast<uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                              uint64_t, uint64_t, uint64_t, uint64_t)>(fn);
+                                              uint64_t, uint64_t, uint64_t, uint64_t)>(
+      reinterpret_cast<uintptr_t>(fn));
   return target(a0, a1, a2, a3, a4, a5, a6, a7);
 }
 
