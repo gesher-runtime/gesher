@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#undef NOGDI
 #include "clipboard_bridge.h"
+#include <wingdi.h>
 
 #include <jni.h>
 
