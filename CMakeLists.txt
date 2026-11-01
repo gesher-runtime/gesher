@@ -126,6 +126,11 @@ target_link_libraries(libutils_probe PRIVATE utils)
 add_executable(fsbase_probe probes/elf/fsbase_probe.cc)
 target_compile_options(fsbase_probe PRIVATE -Wall -Wextra -Werror -mfsgsbase)
 
+# ART x86-64 native JIT: low-4GiB executable allocation, SEH unwinding, ABI calling convention bridge
+add_executable(jit_windows_probe probes/art/jit_windows_probe.cc compat/art/jit_windows.cc)
+target_compile_options(jit_windows_probe PRIVATE -Wall -Wextra -Werror)
+target_include_directories(jit_windows_probe PRIVATE compat/art compat/art/include)
+
 # Focused CI fixture; no new production track or generic environment API.
 add_executable(font_environment_test EXCLUDE_FROM_ALL tests/native/font_environment_test.cc)
 target_link_libraries(font_environment_test PRIVATE gesher_posix)

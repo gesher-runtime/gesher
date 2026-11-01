@@ -63,8 +63,19 @@ set(_compiler_srcs
   utils/x86_64/managed_register_x86_64.cc)
 list(TRANSFORM _compiler_srcs PREPEND "${_cc}/")
 add_library(art_compiler STATIC ${_compiler_srcs} ${compiler_ops})
-target_include_directories(art_compiler PUBLIC ${_cc} ${_art}/disassembler)
+target_include_directories(art_compiler PUBLIC
+  ${_cc}
+  ${_art}/disassembler
+  ${CMAKE_SOURCE_DIR}/compat/art
+  ${CMAKE_SOURCE_DIR}/compat/art/include)
 target_compile_definitions(art_compiler PUBLIC ART_ENABLE_CODEGEN_x86 ART_ENABLE_CODEGEN_x86_64)
+target_compile_options(art_compiler PRIVATE
+  -Wno-invalid-offsetof
+  -Wno-unused-parameter
+  -Wno-unused-variable
+  -Wno-unused-but-set-variable
+  -Wno-macro-redefined
+  -Wno-sign-compare)
 target_link_libraries(art_compiler PUBLIC art_runtime)
 add_dependencies(art_compiler art_asm_support_headers)
 

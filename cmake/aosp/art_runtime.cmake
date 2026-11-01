@@ -47,7 +47,9 @@ target_include_directories(art_runtime_headers INTERFACE
   ${AOSP_DIR}/external/lz4/lib
   ${AOSP_DIR}/external/cpu_features/include
   ${AOSP_DIR}/system/unwinding/libunwindstack/include
-  ${AOSP_DIR}/system/core/libcutils/include)
+  ${AOSP_DIR}/system/core/libcutils/include
+  ${CMAKE_SOURCE_DIR}/compat/art
+  ${CMAKE_SOURCE_DIR}/compat/art/include)
 target_link_libraries(art_runtime_headers INTERFACE dexfile gesher_posix)
 add_dependencies(art_runtime_headers art_aconfig_headers)
 
@@ -141,7 +143,8 @@ target_link_libraries(art_odrstatslog PUBLIC art_defaults)
 # rw-flag accessor (see compat/art/).
 add_library(art_runtime_glue STATIC
   ${CMAKE_SOURCE_DIR}/compat/art/runtime_glue.cc
-  ${CMAKE_SOURCE_DIR}/compat/art/unwindstack_stub.cc)
+  ${CMAKE_SOURCE_DIR}/compat/art/unwindstack_stub.cc
+  ${CMAKE_SOURCE_DIR}/compat/art/jit_windows.cc)
 target_link_libraries(art_runtime_glue PUBLIC art_runtime_headers)
 
 set(ART_RUNTIME_DEPS art_elffile art_profile art_sigchain art_nativebridge
