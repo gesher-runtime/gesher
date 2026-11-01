@@ -11,6 +11,7 @@
 #include <mferror.h>
 #include <mfidl.h>
 #include <mftransform.h>
+#include <d3d9types.h>
 #include <dxva2api.h>
 #include <jni.h>
 
