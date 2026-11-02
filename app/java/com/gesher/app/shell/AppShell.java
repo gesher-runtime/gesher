@@ -113,9 +113,13 @@ public final class AppShell {
             throws Exception {
         if ("0".equals(System.getenv(ENV_SHORTCUTS))) return;
         String gesher = installDir();
-        String target = gesher + "\\gesher-app.cmd";
-        if (!Shell.exists(target)) {
-            log("no Start menu shortcut for " + packageName + ": no " + target
+        String systemRoot = System.getenv("SystemRoot");
+        if (systemRoot == null || systemRoot.isEmpty()) systemRoot = "C:\\Windows";
+        String psExe = systemRoot + "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+        String target = Shell.exists(psExe) ? psExe : "powershell.exe";
+        String psScript = gesher + "\\gesher-app.ps1";
+        if (!Shell.exists(psScript)) {
+            log("no Start menu shortcut for " + packageName + ": no " + psScript
                     + " (not an installed Gesher)");
             return;
         }
@@ -126,8 +130,9 @@ public final class AppShell {
         }
         Properties old = shortcutOf(packageName);
         String oldLink = old != null ? old.getProperty("link") : null;
+        String oldTarget = old != null ? old.getProperty("target") : null;
         if (!changed && oldLink != null && codePath.equals(old.getProperty("code"))
-                && Shell.exists(oldLink)) {
+                && Shell.exists(oldLink) && "powershell".equals(oldTarget)) {
             return;  // up to date
         }
 
@@ -154,7 +159,9 @@ public final class AppShell {
         if (!Shell.makeDirectories(folder)) throw new IllegalStateException("cannot create " + folder);
         String link = linkPath(folder, icon.label, packageName, oldLink);
         String id = appUserModelId(packageName);
-        int hr = Shell.createShortcut(link, target, "launch " + packageName, gesher, iconPath,
+        String arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \""
+                + psScript + "\" launch " + packageName;
+        int hr = Shell.createShortcut(link, target, arguments, gesher, iconPath,
                 icon.label + " (" + packageName + "), an Android app on Gesher", id);
         if (hr != 0) {
             throw new IllegalStateException(String.format("saving %s failed: HRESULT 0x%08x",
@@ -168,6 +175,7 @@ public final class AppShell {
         record.setProperty("icon", iconPath);
         record.setProperty("code", codePath);
         record.setProperty("app_user_model_id", id);
+        record.setProperty("target", "powershell");
         dir.mkdirs();
         Device.write(new File(dir, RECORD), record);
         log("Start menu shortcut " + link + ": " + icon.label + ", AppUserModelID " + id

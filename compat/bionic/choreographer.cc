@@ -22,10 +22,13 @@
 #include <gesher/bionic_shim.h>
 
 #include <utils/Looper.h>
-#include <utils/Mutex.h>
 #include <utils/Timers.h>
 
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -54,27 +57,43 @@ struct FrameCallbackData {
 
 class Choreographer : public android::MessageHandler {
  public:
-  explicit Choreographer(const sp<Looper>& looper) : looper_(looper) {}
+  explicit Choreographer(const sp<Looper>& looper) : looper_(looper) {
+    timer_thread_ = std::thread([this] { TimerLoop(); });
+  }
+
+  ~Choreographer() override {
+    {
+      std::unique_lock<std::mutex> l(lock_);
+      stopped_ = true;
+      cv_.notify_all();
+    }
+    if (timer_thread_.joinable()) {
+      timer_thread_.join();
+    }
+  }
 
   void post(bool vsync, void* fn, void* data, nsecs_t delay) {
     nsecs_t now = systemTime(SYSTEM_TIME_MONOTONIC);
-    android::Mutex::Autolock _l(lock_);
+    std::unique_lock<std::mutex> _l(lock_);
     callbacks_.push_back({vsync, fn, data, NextVsyncAtOrAfter(now + std::max<nsecs_t>(delay, 0) + 1)});
     scheduleLocked();
   }
 
   void addRefreshRateCallback(void* fn, void* data) {
-    android::Mutex::Autolock _l(lock_);
+    std::unique_lock<std::mutex> _l(lock_);
     for (const auto& r : refresh_) {
       if (r.first == fn && r.second == data) return;
     }
     refresh_.emplace_back(fn, data);
     pending_refresh_.emplace_back(fn, data);  // told the period once
-    looper_->sendMessage(sp<android::MessageHandler>::fromExisting(this), android::Message(kRefresh));
+    if (looper_ != nullptr) {
+      looper_->sendMessage(sp<android::MessageHandler>::fromExisting(this), android::Message(kRefresh));
+    }
+    cv_.notify_all();
   }
 
   void removeRefreshRateCallback(void* fn, void* data) {
-    android::Mutex::Autolock _l(lock_);
+    std::unique_lock<std::mutex> _l(lock_);
     auto same = [&](const std::pair<void*, void*>& r) { return r.first == fn && r.second == data; };
     refresh_.erase(std::remove_if(refresh_.begin(), refresh_.end(), same), refresh_.end());
     pending_refresh_.erase(std::remove_if(pending_refresh_.begin(), pending_refresh_.end(), same),
@@ -86,7 +105,7 @@ class Choreographer : public android::MessageHandler {
     if (message.what == kRefresh) {
       std::vector<std::pair<void*, void*>> told;
       {
-        android::Mutex::Autolock _l(lock_);
+        std::unique_lock<std::mutex> _l(lock_);
         told.swap(pending_refresh_);
       }
       for (const auto& r : told) reinterpret_cast<SysvRefreshRateCallback>(r.first)(kVsyncPeriod, r.second);
@@ -96,14 +115,15 @@ class Choreographer : public android::MessageHandler {
     nsecs_t vsync = now / kVsyncPeriod * kVsyncPeriod;  // this frame's vsync
     std::vector<Callback> due;
     {
-      android::Mutex::Autolock _l(lock_);
+      std::unique_lock<std::mutex> _l(lock_);
       scheduled_ = 0;
       auto split = std::stable_partition(callbacks_.begin(), callbacks_.end(),
                                          [&](const Callback& c) { return c.due > now; });
       due.assign(split, callbacks_.end());
       callbacks_.erase(split, callbacks_.end());
-      ++vsync_id_;
+      if (!due.empty()) ++vsync_id_;
     }
+    if (due.empty()) return;
     FrameCallbackData frame{vsync, vsync_id_, vsync + kVsyncPeriod, vsync + kVsyncPeriod};
     for (const Callback& c : due) {
       if (c.vsync) {
@@ -112,7 +132,7 @@ class Choreographer : public android::MessageHandler {
         reinterpret_cast<SysvFrameCallback>(c.fn)(vsync, c.data);
       }
     }
-    android::Mutex::Autolock _l(lock_);
+    std::unique_lock<std::mutex> _l(lock_);
     scheduleLocked();  // callbacks posted meanwhile, or delayed ones
   }
 
@@ -131,15 +151,94 @@ class Choreographer : public android::MessageHandler {
     if (callbacks_.empty()) return;
     nsecs_t first = callbacks_.front().due;
     for (const Callback& c : callbacks_) first = std::min(first, c.due);
-    if (scheduled_ != 0 && scheduled_ <= first) return;
-    sp<android::MessageHandler> self = sp<android::MessageHandler>::fromExisting(this);
-    if (scheduled_ != 0) looper_->removeMessages(self, kFrame);
-    scheduled_ = first;
-    looper_->sendMessageAtTime(first, self, android::Message(kFrame));
+    if (looper_ != nullptr) {
+      if (scheduled_ == 0 || scheduled_ > first) {
+        sp<android::MessageHandler> self = sp<android::MessageHandler>::fromExisting(this);
+        if (scheduled_ != 0) looper_->removeMessages(self, kFrame);
+        scheduled_ = first;
+        looper_->sendMessageAtTime(first, self, android::Message(kFrame));
+      }
+    }
+    cv_.notify_all();
+  }
+
+  void TimerLoop() {
+    std::unique_lock<std::mutex> l(lock_);
+    while (!stopped_) {
+      if (!pending_refresh_.empty() && looper_ == nullptr) {
+        std::vector<std::pair<void*, void*>> told;
+        told.swap(pending_refresh_);
+        l.unlock();
+        EnterLoadedCode();
+        for (const auto& r : told) {
+          reinterpret_cast<SysvRefreshRateCallback>(r.first)(kVsyncPeriod, r.second);
+        }
+        l.lock();
+        continue;
+      }
+
+      if (callbacks_.empty()) {
+        cv_.wait(l, [this] {
+          return stopped_ || !callbacks_.empty() || (!pending_refresh_.empty() && looper_ == nullptr);
+        });
+        continue;
+      }
+
+      nsecs_t now = systemTime(SYSTEM_TIME_MONOTONIC);
+      nsecs_t first = callbacks_.front().due;
+      for (const Callback& c : callbacks_) first = std::min(first, c.due);
+
+      // If looper_ != nullptr, give the thread's looper 2ms leeway to process the message first.
+      nsecs_t target_time = looper_ != nullptr ? first + 2'000'000 : first;
+      if (now < target_time) {
+        nsecs_t wait_ns = target_time - now;
+        cv_.wait_for(l, std::chrono::nanoseconds(wait_ns), [this, first, target_time] {
+          if (stopped_) return true;
+          if (callbacks_.empty()) return true;
+          nsecs_t current_first = callbacks_.front().due;
+          for (const Callback& c : callbacks_) current_first = std::min(current_first, c.due);
+          return current_first < first;
+        });
+        continue;
+      }
+
+      // Check due callbacks
+      now = systemTime(SYSTEM_TIME_MONOTONIC);
+      std::vector<Callback> due;
+      auto split = std::stable_partition(callbacks_.begin(), callbacks_.end(),
+                                         [&](const Callback& c) { return c.due > now; });
+      due.assign(split, callbacks_.end());
+      callbacks_.erase(split, callbacks_.end());
+
+      if (due.empty()) {
+        continue;
+      }
+
+      scheduled_ = 0;
+      ++vsync_id_;
+      nsecs_t vsync = now / kVsyncPeriod * kVsyncPeriod;
+      FrameCallbackData frame{vsync, vsync_id_, vsync + kVsyncPeriod, vsync + kVsyncPeriod};
+
+      l.unlock();
+      EnterLoadedCode();
+      for (const Callback& c : due) {
+        if (c.vsync) {
+          reinterpret_cast<SysvVsyncCallback>(c.fn)(&frame, c.data);
+        } else {
+          reinterpret_cast<SysvFrameCallback>(c.fn)(vsync, c.data);
+        }
+      }
+      l.lock();
+
+      scheduleLocked();
+    }
   }
 
   sp<Looper> looper_;
-  android::Mutex lock_;
+  std::mutex lock_;
+  std::condition_variable cv_;
+  std::thread timer_thread_;
+  bool stopped_ = false;
   std::vector<Callback> callbacks_;
   std::vector<std::pair<void*, void*>> refresh_;
   std::vector<std::pair<void*, void*>> pending_refresh_;
@@ -155,7 +254,6 @@ Choreographer* C(void* choreographer) { return static_cast<Choreographer*>(chore
 void* BIONIC_SYSV GetInstance() {
   if (t_choreographer == nullptr) {
     sp<Looper> looper = Looper::getForThread();
-    if (looper == nullptr) return nullptr;  // as on Android: the thread needs a Looper
     t_choreographer = new Choreographer(looper);
     t_choreographer->incStrong(&t_choreographer);
   }
@@ -163,22 +261,27 @@ void* BIONIC_SYSV GetInstance() {
 }
 
 void BIONIC_SYSV PostFrameCallback(void* c, void* cb, void* data) {
-  C(c)->post(false, cb, data, 0);
+  if (c == nullptr) c = GetInstance();
+  if (c != nullptr) C(c)->post(false, cb, data, 0);
 }
 void BIONIC_SYSV PostFrameCallbackDelayed(void* c, void* cb, void* data, int64_t delayMillis) {
-  C(c)->post(false, cb, data, ms2ns(delayMillis));
+  if (c == nullptr) c = GetInstance();
+  if (c != nullptr) C(c)->post(false, cb, data, ms2ns(delayMillis));
 }
 void BIONIC_SYSV PostFrameCallbackDelayed64(void* c, void* cb, void* data, uint32_t delayMillis) {
-  C(c)->post(false, cb, data, ms2ns(static_cast<nsecs_t>(delayMillis)));
+  if (c == nullptr) c = GetInstance();
+  if (c != nullptr) C(c)->post(false, cb, data, ms2ns(static_cast<nsecs_t>(delayMillis)));
 }
 void BIONIC_SYSV PostVsyncCallback(void* c, void* cb, void* data) {
-  C(c)->post(true, cb, data, 0);
+  if (c == nullptr) c = GetInstance();
+  if (c != nullptr) C(c)->post(true, cb, data, 0);
 }
 void BIONIC_SYSV RegisterRefreshRateCallback(void* c, void* cb, void* data) {
-  C(c)->addRefreshRateCallback(cb, data);
+  if (c == nullptr) c = GetInstance();
+  if (c != nullptr) C(c)->addRefreshRateCallback(cb, data);
 }
 void BIONIC_SYSV UnregisterRefreshRateCallback(void* c, void* cb, void* data) {
-  C(c)->removeRefreshRateCallback(cb, data);
+  if (c != nullptr) C(c)->removeRefreshRateCallback(cb, data);
 }
 
 const FrameCallbackData* D(const void* d) { return static_cast<const FrameCallbackData*>(d); }

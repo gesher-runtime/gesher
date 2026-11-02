@@ -469,7 +469,7 @@ if ($null -ne $first) {
     else { Report "PASS  e2e: $pkg starts through the .apk association's registered command, draws, closes" }
 
     $lnk = Get-ChildItem (Join-Path ([Environment]::GetFolderPath('Programs')) 'Gesher Apps') -Filter *.lnk -ErrorAction SilentlyContinue |
-      Where-Object { (New-Object -ComObject WScript.Shell).CreateShortcut($_.FullName).Arguments -eq "launch $pkg" } | Select-Object -First 1
+      Where-Object { (New-Object -ComObject WScript.Shell).CreateShortcut($_.FullName).Arguments -match "launch $pkg" } | Select-Object -First 1
     if ($null -eq $lnk) { Report "FAIL  e2e: $pkg has no Start menu shortcut in Gesher Apps"; $script:failed++ }
     else {
       $link = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk.FullName)

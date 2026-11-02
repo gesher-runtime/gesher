@@ -265,12 +265,22 @@ int fcntl(int fd, int cmd, ...) {
   static_assert(offsetof(struct flock, l_start) == 8 && offsetof(struct flock, l_pid) == 24);
   // Win64 long is32bits. Consume Linux lock pointers BEFORE entering the
   // unchanged integer-command varargs path.
-  if (cmd == F_GETLK || cmd == F_SETLK || cmd == F_OFD_GETLK || cmd == F_OFD_SETLK) {
+  if (cmd == F_GETLK || cmd == F_SETLK || cmd == F_OFD_GETLK || cmd == F_OFD_SETLK ||
+      cmd == F_SETLKW || cmd == F_OFD_SETLKW) {
     va_list pointers;
     va_start(pointers, cmd);
     struct flock* argument = va_arg(pointers, struct flock*);
     va_end(pointers);
-    return gesher::record_locks::DescriptorFcntl(fd, cmd, argument);
+    int effective_cmd = (cmd == F_SETLKW ? F_SETLK : (cmd == F_OFD_SETLKW ? F_OFD_SETLK : cmd));
+    if (cmd == F_SETLKW || cmd == F_OFD_SETLKW) {
+      for (int attempt = 0; attempt < 50; ++attempt) {
+        int r = gesher::record_locks::DescriptorFcntl(fd, effective_cmd, argument);
+        if (r == 0) return 0;
+        if (errno != EAGAIN && errno != EACCES) return r;
+        Sleep(10);
+      }
+    }
+    return gesher::record_locks::DescriptorFcntl(fd, effective_cmd, argument);
   }
   HANDLE h = gesher::HandleFromFd(fd);
   if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;

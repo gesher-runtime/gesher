@@ -23,7 +23,7 @@ Everything is per user, under `HKCU\Software\Classes`:
 | `Gesher.Apk` (default) | `Android app (Gesher)` |
 | `Gesher.Apk\DefaultIcon` (default) | `<app>\gesher.ico,0` |
 | `Gesher.Apk\shell\open` (default) | `Run with Gesher` |
-| `Gesher.Apk\shell\open\command` (default) | `"<app>\gesher-app.cmd" "%1"` |
+| `Gesher.Apk\shell\open\command` (default) | `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<app>\gesher-app.ps1" "%1"` |
 
 `ChangesAssociations=yes` makes Setup and the uninstaller notify the shell
 (`SHChangeNotify`), so Explorer picks up the change without a sign-out.
@@ -46,7 +46,7 @@ menu shortcut, as a launcher lists it
 | | |
 |---|---|
 | Shortcut | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Gesher Apps\<label>.lnk` (FOLDERID_Programs; `<label> (<package>).lnk` if another app has that label) |
-| Command | `"<app>\gesher-app.cmd" launch <package>`, in `<app>` |
+| Command | `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<app>\gesher-app.ps1" launch <package>`, in `<app>` |
 | Name | the app's label in the default locale (`android:label`, else the package name) |
 | Icon | `%LOCALAPPDATA%\Gesher\data\data\<package>\gesher-shell\icon.ico` |
 | AppUserModelID | `Gesher.App.<package>` (`System.AppUserModel.ID` in the link) |
