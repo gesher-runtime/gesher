@@ -49,6 +49,20 @@ namespace gesher::camera {
 
 namespace {
 
+typedef HRESULT (STDAPICALLTYPE *pfnMFEnumDeviceSources)(IMFAttributes*, IMFActivate***, UINT32*);
+
+inline HRESULT DynamicMFEnumDeviceSources(IMFAttributes* pAttributes, IMFActivate*** pppSourceAddrs, UINT32* pcSourceAddrs) {
+  static HMODULE hMf = LoadLibraryW(L"mf.dll");
+  if (!hMf) {
+    return E_FAIL;
+  }
+  static auto fn = reinterpret_cast<pfnMFEnumDeviceSources>(GetProcAddress(hMf, "MFEnumDeviceSources"));
+  if (!fn) {
+    return E_FAIL;
+  }
+  return fn(pAttributes, pppSourceAddrs, pcSourceAddrs);
+}
+
 // Media Foundation GUIDs
 constexpr GUID kDevSourceType = {0xc60ac5fe, 0x252a, 0x478f,
                                  {0xa0, 0xef, 0xbc, 0x8f, 0xa5, 0xf7, 0xca, 0xd3}};
@@ -266,7 +280,7 @@ std::vector<CameraCharacteristics> EnumerateCaptureDevices(std::string* status_o
   IMFActivate** devices = nullptr;
   UINT32 count = 0;
   if (SUCCEEDED(hr)) {
-    hr = MFEnumDeviceSources(attributes, &devices, &count);
+    hr = DynamicMFEnumDeviceSources(attributes, &devices, &count);
   }
   SafeRelease(attributes);
 
@@ -395,7 +409,7 @@ class MFCameraCapture::Impl {
     IMFActivate** devices = nullptr;
     UINT32 count = 0;
     if (SUCCEEDED(hr)) {
-      hr = MFEnumDeviceSources(attributes, &devices, &count);
+      hr = DynamicMFEnumDeviceSources(attributes, &devices, &count);
     }
     SafeRelease(attributes);
     if (FAILED(hr)) return hr;
