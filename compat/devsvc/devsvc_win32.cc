@@ -629,8 +629,22 @@ std::u16string FullPath(const std::u16string& path) {
 
 bool OpenUrl(const std::u16string& url) {
   if (url.empty()) return false;
-  HINSTANCE res = ShellExecuteW(nullptr, L"open", W(url), nullptr, nullptr, SW_SHOWNORMAL);
-  return reinterpret_cast<INT_PTR>(res) > 32;
+  AllowSetForegroundWindow(ASFW_ANY);
+  std::wstring wurl = W(url);
+  SHELLEXECUTEINFOW sei = {};
+  sei.cbSize = sizeof(sei);
+  sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+  sei.lpVerb = L"open";
+  sei.lpFile = wurl.c_str();
+  sei.nShow = SW_SHOWNORMAL;
+  if (ShellExecuteExW(&sei)) {
+    if (sei.hProcess != nullptr) {
+      AllowSetForegroundWindow(GetProcessId(sei.hProcess));
+      CloseHandle(sei.hProcess);
+    }
+    return true;
+  }
+  return false;
 }
 
 }  // namespace devsvc

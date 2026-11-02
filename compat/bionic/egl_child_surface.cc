@@ -291,6 +291,18 @@ void ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
   }
   const Angle* gl = GetAngle();
   if (gl == nullptr || gl->get_current_surface(EGL_DRAW) != surface) return;
+
+  // The window's size now (setFixedSize, a resized view): the helper follows,
+  // and ANGLE resizes its swap chain at this swap.
+  int ww, wh;
+  WindowSize(c->window, &ww, &wh);
+  if (ww != c->helper_width || wh != c->helper_height) {
+    c->helper_width = ww;
+    c->helper_height = wh;
+    SetWindowPos(c->helper, nullptr, 0, 0, ww, wh,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+  }
+
   EGLint w = 0, h = 0;
   gl->query_surface(display, surface, EGL_WIDTH, &w);
   gl->query_surface(display, surface, EGL_HEIGHT, &h);
@@ -343,16 +355,6 @@ void ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
       }
       ANativeWindow_unlockAndPost(c->window);
     }
-  }
-  // The window's size now (setFixedSize, a resized view): the helper follows,
-  // and ANGLE resizes its swap chain at this swap.
-  int ww, wh;
-  WindowSize(c->window, &ww, &wh);
-  if (ww != c->helper_width || wh != c->helper_height) {
-    c->helper_width = ww;
-    c->helper_height = wh;
-    SetWindowPos(c->helper, nullptr, 0, 0, ww, wh,
-                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
   }
   // Paced as a 60 Hz display would (the hidden swap chain is not).
   auto now = std::chrono::steady_clock::now();

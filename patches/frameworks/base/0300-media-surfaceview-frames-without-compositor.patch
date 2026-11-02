@@ -10,15 +10,19 @@ index 49a7da2..9c168a8 100644
  
          mAttachedToWindow = false;
          if (mGlobalListenersAdded) {
-@@ -703,6 +704,10 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
-                 // punch a whole in the view-hierarchy below us
-                 clearSurfaceViewPort(canvas);
-             }
-+        } else if (mDrawFinished) {
+@@ -700,6 +701,6 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
+-        if (mDrawFinished && !isAboveParent()) {
+-            if ((mPrivateFlags & PFLAG_SKIP_DRAW) == 0) {
+-                // punch a whole in the view-hierarchy below us
+-                clearSurfaceViewPort(canvas);
+-            }
+-        }
++        clearSurfaceViewPort(canvas);
++        if (isAboveParent()) {
 +            // Gesher: a surface above its window (setZOrderOnTop) is drawn over every view,
 +            // by a drawable in the root view's overlay (gesherUpdateOverlay).
 +            gesherUpdateOverlay();
-         }
++        }
          super.dispatchDraw(canvas);
      }
 @@ -774,6 +779,107 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
@@ -134,7 +138,7 @@ index 49a7da2..9c168a8 100644
      /** @hide */
      protected void updateSurface() {
 +        // Gesher: a surface above its window follows the view (moved, hidden, shown).
-+        if (mGesherOverlay != null || mDrawFinished) gesherUpdateOverlay();
++        if (mGesherOverlay != null || isAboveParent()) gesherUpdateOverlay();
          if (!mHaveFrame) {
              if (DEBUG) {
                  Log.d(TAG, System.identityHashCode(this) + " updateSurface: has no frame");

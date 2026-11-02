@@ -8,12 +8,15 @@ import android.app.AppOpsManager;
 import android.app.ISearchManager;
 import android.app.SyncNotedAppOp;
 import android.app.admin.IDevicePolicyManager;
+import android.app.trust.ITrustManager;
 import android.app.usage.IUsageStatsManager;
 import android.content.ComponentName;
+import android.content.pm.IShortcutService;
 import android.content.pm.ParceledListSlice;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IThermalService;
+import android.view.ISensitiveContentProtectionManager;
 
 import com.android.internal.app.IAppOpsService;
 import com.android.internal.appwidget.IAppWidgetHost;
@@ -218,5 +221,34 @@ final class DeviceServices {
      * {@code telephony.registry}: TelephonyRegistry service stand-in for event callbacks.
      */
     static final class TelephonyRegistryService extends ITelephonyRegistry.Default {
+    }
+
+    /**
+     * {@code trust}: TrustManager service stand-in for ITrustManager. Reports device as
+     * unlocked and not secure so KeyguardManager initializes and isDeviceSecure() returns false.
+     */
+    static final class TrustService extends ITrustManager.Default {
+        @Override
+        public boolean isDeviceLocked(int userId, int deviceId) {
+            return false;
+        }
+
+        @Override
+        public boolean isDeviceSecure(int userId, int deviceId) {
+            return false;
+        }
+    }
+
+    /**
+     * {@code sensitive_content_protection_service}: SensitiveContentProtectionManager stand-in.
+     */
+    static final class SensitiveContentProtectionService
+            extends ISensitiveContentProtectionManager.Default {
+    }
+
+    /**
+     * {@code shortcut}: ShortcutManager service stand-in.
+     */
+    static final class ShortcutService extends IShortcutService.Default {
     }
 }

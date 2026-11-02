@@ -178,6 +178,15 @@ public final class Services {
         services.put(Context.TELEPHONY_REGISTRY_SERVICE, StandIn.of(
                 com.android.internal.telephony.ITelephonyRegistry.class,
                 new DeviceServices.TelephonyRegistryService()).asBinder());
+        services.put(Context.TRUST_SERVICE, StandIn.of(
+                android.app.trust.ITrustManager.class,
+                new DeviceServices.TrustService()).asBinder());
+        services.put(Context.SHORTCUT_SERVICE, StandIn.of(
+                android.content.pm.IShortcutService.class,
+                new DeviceServices.ShortcutService()).asBinder());
+        services.put("sensitive_content_protection_service", StandIn.of(
+                android.view.ISensitiveContentProtectionManager.class,
+                new DeviceServices.SensitiveContentProtectionService()).asBinder());
         return services;
     }
 

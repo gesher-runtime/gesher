@@ -465,6 +465,7 @@ struct ViewSurface {
   FrameInvalidation invalidation;
   std::atomic<unsigned> requests{0}, failures{0}, draws{0}, consumes{0};
   std::atomic<bool> traced_nonblack{false};
+  std::atomic<bool> pending_frame{false};
 };
 
 bool TraceInvalidation() {
@@ -539,6 +540,7 @@ std::shared_ptr<ViewSurface> ViewSurfaceFor(jlong blast, bool create) {
           env->ExceptionClear();
           return FrameInvalidation::Result::kJavaFailure;
         }
+        v->pending_frame.store(true, std::memory_order_release);
         return FrameInvalidation::Result::kNoView;
       }
       env->CallVoidMethod(view, gST.post_invalidate);
@@ -598,16 +600,23 @@ class ViewSurfaceDrawable : public SkDrawable {
 void JNICALL SV_drawSurface(JNIEnv* env, jclass, jlong canvas_ptr, jlong blast, jobject view,
                             jint width, jint height, jfloat radius, jfloat alpha) {
   auto* canvas = reinterpret_cast<android::Canvas*>(canvas_ptr);
-  std::shared_ptr<ViewSurface> vs = ViewSurfaceFor(blast, false);
+  std::shared_ptr<ViewSurface> vs = ViewSurfaceFor(blast, true);
   if (canvas == nullptr || vs == nullptr) return;
+  bool was_unbound = false;
   vs->invalidation.Acknowledge([&] {
     std::lock_guard<std::mutex> lock(gViewMutex);
     if (vs->view == nullptr || !env->IsSameObject(vs->view, view)) {
       if (vs->view != nullptr) env->DeleteWeakGlobalRef(vs->view);
       vs->view = env->NewWeakGlobalRef(view);
+      was_unbound = true;
     }
   });
   if (env->ExceptionCheck()) return;
+  if (was_unbound && (vs->pending_frame.exchange(false, std::memory_order_acq_rel) ||
+                      (vs->surface != nullptr && vs->surface->frames() > 0))) {
+    env->CallVoidMethod(view, gST.post_invalidate);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+  }
   if (TraceInvalidation()) {
     const unsigned draw = vs->draws.fetch_add(1, std::memory_order_relaxed) + 1;
     if (draw <= 16) {

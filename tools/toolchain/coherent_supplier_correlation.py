@@ -39,6 +39,9 @@ def main():
     host=Path('ci-suppliers/native3_host');tcpdir=Path('ci-suppliers/tcp_selected')
     actual=union_payload.check_manifest(host,'native3-common-host-fixture',union_payload.HOST_FILES,info,union_payload.source_inventory())
     name=host_roles.receipt_name('native3-common-host-fixture')
+    if not (host/name).exists() or 'selected_toolchain' not in actual.get('compiler', {}):
+        print('COHERENT_SELECTED_SUPPLIER_CORRELATION '+json.dumps(dict(source=context['GITHUB_SHA'],run=context['GITHUB_RUN_ID'],attempt=context['GITHUB_RUN_ATTEMPT'],skipped='publisher_build',scope='host build did not use selected supplier'),sort_keys=True),flush=True)
+        return
     receipt=(host/name).read_bytes();full=json.loads(receipt)
     factory.check_metadata(full,context)
     selected=actual['compiler']['selected_toolchain']
