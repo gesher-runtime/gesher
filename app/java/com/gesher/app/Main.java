@@ -316,6 +316,21 @@ public final class Main {
                     new android.media.MediaServiceManager());
         }
 
+        // Telephony mainline service manager stand-in, needed by TelephonyManager.
+        if (android.telephony.TelephonyFrameworkInitializer.getTelephonyServiceManager() == null) {
+            android.telephony.TelephonyFrameworkInitializer.setTelephonyServiceManager(
+                    new android.os.TelephonyServiceManager());
+        }
+
+        // Default uncaught exception handler, as RuntimeInit.commonInit installs.
+        // ACRA and other crash reporters assert non-null during startup (e.g. F-Droid).
+        if (Thread.getDefaultUncaughtExceptionHandler() == null) {
+            Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+                System.err.println("FATAL EXCEPTION: " + thread.getName());
+                throwable.printStackTrace(System.err);
+            });
+        }
+
         // 2b. The default locales: Windows' languages and regional format, or
         //     $GESHER_LOCALES (com.gesher.app.locale.SystemLocale, docs/fonts.md).
         com.gesher.app.locale.SystemLocale.applyDefault();

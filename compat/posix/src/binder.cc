@@ -518,13 +518,20 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
   if (m.bytes.size() - 4 > binder_sg::kMaxBytes) return errno = EINVAL, -1;
 
   std::vector<uint8_t> reply;
-  if (!Send(pipe, m) || !Receive(pipe, &reply)) return errno = EBADF, -1;
+  if (!Send(pipe, m) || !Receive(pipe, &reply)) {
+    CloseThreadPipe(file.get());
+    return errno = EBADF, -1;
+  }
   Reader r{reply.data(), reply.data() + reply.size()};
   int32_t status;
   uint32_t consumed;
-  if (!r.Get(&status) || !r.Get(&consumed)) return errno = EBADF, -1;
+  if (!r.Get(&status) || !r.Get(&consumed)) {
+    CloseThreadPipe(file.get());
+    return errno = EBADF, -1;
+  }
   bwr->write_consumed = consumed >= starts.size() ? bwr->write_size : starts[consumed];
   if (status < 0) {
+    if (status == -EBADF) CloseThreadPipe(file.get());
     bwr->read_consumed = 0;
     return errno = -status, -1;
   }

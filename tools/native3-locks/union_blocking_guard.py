@@ -395,6 +395,13 @@ def main():
         'tests/windows/run-microg-gms.ps1',
         'tests/windows/tracks/93-microg-gms.ps1',
         'tools/package/gesher.ico',
+        'app/java/com/gesher/app/Launcher.java',
+        'app/java/com/gesher/app/Main.java',
+        'app/java/com/gesher/server/DeviceServices.java',
+        'app/java/com/gesher/server/SettingsProvider.java',
+        'compat/binder/binderd.cc',
+        'compat/posix/src/binder.cc',
+        'tools/package/gesher-app.ps1',
     ])
     assert not (code | {'tools/ci/receipt-unreviewed.py'}) <= allowed
     print('BLOCKING_RECEIPT_NEGATIVE unauthorized_path rejected; exact pins enforced externally', flush=True)

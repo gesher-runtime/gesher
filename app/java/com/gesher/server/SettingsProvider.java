@@ -81,9 +81,12 @@ final class SettingsProvider extends ContentProvider {
         secure.put(Settings.Secure.ACCESSIBILITY_ENABLED, "0");
         secure.put(Settings.Secure.LOCATION_MODE, "0");
         secure.put(Settings.Secure.SHOW_IME_WITH_HARD_KEYBOARD, "0");
+        secure.put("install_non_market_apps", "1");
         secure.put("ui_night_mode", "1");
         Map<String, String> global = mTables.get(GLOBAL);
         global.put(Settings.Global.DEVICE_PROVISIONED, "1");
+        global.put("package_verifier_enable", "0");
+        global.put("package_verifier_user_consent", "1");
         global.put(Settings.Global.AUTO_TIME, "1");
         global.put(Settings.Global.AUTO_TIME_ZONE, "1");
         global.put(Settings.Global.AIRPLANE_MODE_ON, "0");
@@ -140,6 +143,7 @@ final class SettingsProvider extends ContentProvider {
 
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
+        if (method == null) return null;
         String table = table(method);
         Map<String, String> values;
         synchronized (this) {

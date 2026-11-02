@@ -1630,6 +1630,7 @@ void ServeThread(HANDLE pipe, In in) {
     if (thread->is_dead || proc->is_dead) {
       lock.unlock();
       reply.Put<int32_t>(-EBADF);
+      reply.Put<uint32_t>(0);
       if (!WriteMessage(pipe, reply)) break;
       continue;
     }

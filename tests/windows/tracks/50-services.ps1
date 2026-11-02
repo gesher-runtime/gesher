@@ -142,7 +142,7 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
   'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-  'gesher-app: stand-in services in this process: activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, clipboard, connectivity, content, display, input, input_method, jobscheduler, locale, location, media_session, mount, notification, package, power, search, thermalservice, uimode, user, vibrator_manager, window',
+  'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, clipboard, connectivity, content, device_policy, display, dropbox, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_session, mount, notification, package, phone, power, search, telephony.registry, thermalservice, uimode, usagestats, user, vibrator_manager, window',
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 

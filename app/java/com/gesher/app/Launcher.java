@@ -418,7 +418,7 @@ public final class Launcher {
             }
         }
         if (apk == null) return usage();
-        ensureDevice(true);
+        Properties state = ensureDevice(true);
         GesherService.Client gesher = gesher();
         // An APK is installed or updated first; a package name (a Start menu shortcut's
         // `launch <package>`) must be installed.
@@ -481,17 +481,52 @@ public final class Launcher {
             // Until the package's process ends: the server ends it with its last activity
             // (and service, and provider client).
             IActivityManager am = ActivityManager.getService();
-            while (running(am, pkg)) {
+            int consecutiveFailures = 0;
+            while (true) {
+                boolean isRunning = false;
+                try {
+                    isRunning = running(am, pkg);
+                    consecutiveFailures = 0;
+                } catch (Throwable t) {
+                    consecutiveFailures++;
+                    if (state != null && !Device.alive(state, Device.SYSTEM_SERVER)) {
+                        log("the system server is no longer running");
+                        break;
+                    }
+                    if (consecutiveFailures >= 5) {
+                        log("warning: lost communication with system server after repeated failures: " + t.getMessage());
+                        break;
+                    }
+                    try {
+                        am = ActivityManager.getService();
+                    } catch (Throwable ignored) {
+                    }
+                    SystemClock.sleep(300);
+                    continue;
+                }
+                if (!isRunning) {
+                    break;
+                }
                 SystemClock.sleep(300);
             }
             int exit = Integer.MIN_VALUE;
             for (int i = 0; i < 40 && exit == Integer.MIN_VALUE; i++) {
-                exit = gesher.lastExitCode(pkg);
+                try {
+                    exit = gesher.lastExitCode(pkg);
+                } catch (Throwable t) {
+                    if (state != null && !Device.alive(state, Device.SYSTEM_SERVER)) {
+                        break;
+                    }
+                }
                 if (exit == Integer.MIN_VALUE) SystemClock.sleep(250);
             }
             tail.finish();
             if (exit == Integer.MIN_VALUE) {
-                log("failed: no OS exit code for the package's latest process: " + pkg);
+                if (state != null && !Device.alive(state, Device.SYSTEM_SERVER)) {
+                    log("failed: the system server ended unexpectedly");
+                } else {
+                    log("failed: no OS exit code for the package's latest process: " + pkg);
+                }
                 return 1;
             }
             log("the process of " + pkg + " ended"
@@ -508,6 +543,7 @@ public final class Launcher {
     }
 
     private static boolean running(IActivityManager am, String pkg) throws Exception {
+        if (am == null) return false;
         List<ActivityManager.RunningAppProcessInfo> processes = am.getRunningAppProcesses();
         if (processes == null) return false;
         for (ActivityManager.RunningAppProcessInfo p : processes) {

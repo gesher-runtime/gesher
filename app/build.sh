@@ -87,7 +87,14 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   android.os.IPowerManager android.os.IThermalService android.app.IAlarmManager android.content.IClipboard \
   com.android.internal.app.IAppOpsService com.android.internal.appwidget.IAppWidgetService \
   android.app.ISearchManager android.app.ILocaleManager android.app.job.IJobScheduler android.os.IBatteryPropertiesRegistrar com.android.internal.app.IBatteryStats android.location.ILocationManager android.os.IVibratorManagerService \
-  android.accounts.IAccountManager
+  android.accounts.IAccountManager \
+  com.android.internal.os.IDropBoxManagerService \
+  android.app.usage.IUsageStatsManager \
+  android.app.admin.IDevicePolicyManager \
+  com.android.internal.telephony.ITelephony \
+  com.android.internal.telephony.IPhoneSubInfo \
+  com.android.internal.telephony.ISub \
+  com.android.internal.telephony.ITelephonyRegistry
 # The framework's app-compat changes (@ChangeId fields), for bindApplication's
 # disabledCompatChanges (com.gesher.server.CompatChanges, docs/e2e.md). The annotations
 # have SOURCE retention: they are read from frameworks/base's sources (what the

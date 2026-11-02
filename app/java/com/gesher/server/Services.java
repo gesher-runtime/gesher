@@ -156,6 +156,28 @@ public final class Services {
         // Account manager stand-in for Google and local accounts (microG / GMS compat).
         services.put(Context.ACCOUNT_SERVICE, StandIn.of(android.accounts.IAccountManager.class,
                 new AccountManagerService()).asBinder());
+        // System services queried by crash reporters (ACRA) and common apps (e.g. F-Droid).
+        services.put(Context.DROPBOX_SERVICE, StandIn.of(
+                com.android.internal.os.IDropBoxManagerService.class,
+                new DeviceServices.DropBoxManagerService()).asBinder());
+        services.put(Context.USAGE_STATS_SERVICE, StandIn.of(
+                android.app.usage.IUsageStatsManager.class,
+                new DeviceServices.UsageStatsService()).asBinder());
+        services.put(Context.DEVICE_POLICY_SERVICE, StandIn.of(
+                android.app.admin.IDevicePolicyManager.class,
+                new DeviceServices.DevicePolicyService()).asBinder());
+        services.put(Context.TELEPHONY_SERVICE, StandIn.of(
+                com.android.internal.telephony.ITelephony.class,
+                new DeviceServices.TelephonyService()).asBinder());
+        services.put("iphonesubinfo", StandIn.of(
+                com.android.internal.telephony.IPhoneSubInfo.class,
+                new DeviceServices.PhoneSubInfoService()).asBinder());
+        services.put("isub", StandIn.of(
+                com.android.internal.telephony.ISub.class,
+                new DeviceServices.SubscriptionService()).asBinder());
+        services.put(Context.TELEPHONY_REGISTRY_SERVICE, StandIn.of(
+                com.android.internal.telephony.ITelephonyRegistry.class,
+                new DeviceServices.TelephonyRegistryService()).asBinder());
         return services;
     }
 

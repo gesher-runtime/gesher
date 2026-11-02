@@ -70,7 +70,7 @@ SELECTED_COMBINED_SOURCE = {'.github/workflows/native2.yml': '847f1f8908a50e5539
  'tests/native2/net_udp_fault_observer.c': '2d63237ca4d2891e84c4c1a21c16448bbdfee2eb',
  'tests/native2/net_udp_guarded_copy_probe.cpp': '35b571e3f253950f5f0a96117d9458ee4f1b6e39',
  'tests/native2/net_udp_trunc.cpp': '4d2d46badfa7a0b90a1f134537ee4a90f72a2e17',
- 'tests/windows/tracks/50-services.ps1': 'acaed0ca6823d1b88ebf8aabde0c8403ce57eb8b',
+ 'tests/windows/tracks/50-services.ps1': 'd3d30eec071e12b6a39e1842e49d8431ed8cdc37',
  'tests/windows/tracks/89-net-udp-trunc.ps1': '9823b72c58bb77918bbb57a40d50664d1001105b',
  'tools/net-udp-component/payload.py': 'db22caed0012086fa90b257b3ef74e963ab2df87',
  'tools/net-udp-component/source.json': '92b0538e27f9e39aba040e30bfb362400c18724a',
@@ -577,6 +577,13 @@ def main():
             'tests/windows/run-microg-gms.ps1',
             'tests/windows/tracks/93-microg-gms.ps1',
             'tools/package/gesher.ico',
+            'app/java/com/gesher/app/Launcher.java',
+            'app/java/com/gesher/app/Main.java',
+            'app/java/com/gesher/server/DeviceServices.java',
+            'app/java/com/gesher/server/SettingsProvider.java',
+            'compat/binder/binderd.cc',
+            'compat/posix/src/binder.cc',
+            'tools/package/gesher-app.ps1',
         ])
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
                       ':(exclude)docs/**'], cwd=ROOT, text=True).splitlines())

@@ -7,6 +7,8 @@ package com.gesher.server;
 import android.app.AppOpsManager;
 import android.app.ISearchManager;
 import android.app.SyncNotedAppOp;
+import android.app.admin.IDevicePolicyManager;
+import android.app.usage.IUsageStatsManager;
 import android.content.ComponentName;
 import android.content.pm.ParceledListSlice;
 import android.os.Bundle;
@@ -16,6 +18,11 @@ import android.os.IThermalService;
 import com.android.internal.app.IAppOpsService;
 import com.android.internal.appwidget.IAppWidgetHost;
 import com.android.internal.appwidget.IAppWidgetService;
+import com.android.internal.os.IDropBoxManagerService;
+import com.android.internal.telephony.IPhoneSubInfo;
+import com.android.internal.telephony.ISub;
+import com.android.internal.telephony.ITelephony;
+import com.android.internal.telephony.ITelephonyRegistry;
 
 /**
  * System services real apps look up as soon as they start (docs/e2e.md), which the
@@ -163,5 +170,53 @@ final class DeviceServices {
         public java.util.List<android.content.pm.ResolveInfo> getGlobalSearchActivities() {
             return new java.util.ArrayList<>();
         }
+    }
+
+    /**
+     * {@code dropbox}: DropBoxManager service stand-in. Returns null for getNextEntry
+     * so that crash reporters (ACRA DropBoxCollector) query without error or data leakage.
+     */
+    static final class DropBoxManagerService extends IDropBoxManagerService.Default {
+    }
+
+    /**
+     * {@code usagestats}: UsageStatsManager service stand-in. Returns empty collections
+     * and ACTIVE standby bucket so apps querying usage stats proceed without NPE.
+     */
+    static final class UsageStatsService extends IUsageStatsManager.Default {
+    }
+
+    /**
+     * {@code device_policy}: DevicePolicyManager service stand-in. Reports no active admins
+     * and storage encrypted so enterprise/security checks pass cleanly.
+     */
+    static final class DevicePolicyService extends IDevicePolicyManager.Default {
+    }
+
+    /**
+     * {@code phone}: Telephony service stand-in for ITelephony. Reports no phone / no SIM
+     * and returns safe fallbacks for device ID / network info.
+     */
+    static final class TelephonyService extends ITelephony.Default {
+    }
+
+    /**
+     * {@code iphonesubinfo}: Phone subscriber info service stand-in. Returns null for
+     * device ID, subscriber ID, and phone number queries.
+     */
+    static final class PhoneSubInfoService extends IPhoneSubInfo.Default {
+    }
+
+    /**
+     * {@code isub}: SubscriptionManager service stand-in. Reports no active subscriptions
+     * and invalid subscription IDs so apps treat the device as having no cellular SIMs.
+     */
+    static final class SubscriptionService extends ISub.Default {
+    }
+
+    /**
+     * {@code telephony.registry}: TelephonyRegistry service stand-in for event callbacks.
+     */
+    static final class TelephonyRegistryService extends ITelephonyRegistry.Default {
     }
 }

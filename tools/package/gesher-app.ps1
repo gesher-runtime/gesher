@@ -42,6 +42,29 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
+
+# When started interactively from Explorer (.apk double-click or Start menu shortcut),
+# hide the black console window so only the app UI is shown.
+try {
+  if (-not [Console]::IsOutputRedirected -and -not [Console]::IsErrorRedirected) {
+    $parentPid = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId
+    $p = Get-Process -Id $parentPid -ErrorAction SilentlyContinue
+    $fromExplorer = ($p -and $p.ProcessName -ieq 'explorer')
+    if (-not $fromExplorer -and $p -and $p.ProcessName -ieq 'cmd') {
+      $gp = Get-Process -Id (Get-CimInstance Win32_Process -Filter "ProcessId = $($p.Id)").ParentProcessId -ErrorAction SilentlyContinue
+      if ($gp -and $gp.ProcessName -ieq 'explorer') { $fromExplorer = $true }
+    }
+    if ($fromExplorer) {
+      Add-Type -Name Win32Console -Namespace Native -MemberDefinition '
+        [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+      ' -ErrorAction SilentlyContinue
+      $hwnd = [Native.Win32Console]::GetConsoleWindow()
+      if ($hwnd -ne [IntPtr]::Zero) { [Native.Win32Console]::ShowWindow($hwnd, 0) }
+    }
+  }
+} catch { }
+
 $root = Join-Path $env:LOCALAPPDATA 'Gesher'
 $commands = 'install', 'uninstall', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated'
 if ($Arguments.Count -eq 0) {
