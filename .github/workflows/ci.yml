@@ -16,7 +16,7 @@ env:
 
 jobs:
   union-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@16836c937baf50a93cd1bdc47f6f7f44f80793b4
+    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@d768300d5f0992c047265a796295dcc87415a81b
   union-tsf:
     needs: [artifact-preflight]
     uses: ./.github/workflows/tsf-format-component.yml
@@ -658,8 +658,10 @@ jobs:
           $aumid = Get-LinkAppUserModelId $lnk
           Write-Host "$lnk -> $($link.TargetPath) $($link.Arguments) (in $($link.WorkingDirectory); icon $($link.IconLocation); AppUserModelID $aumid)"
           $problems = @()
-          if ($link.TargetPath -ne "$app\gesher-app.cmd") { $problems += "target $($link.TargetPath)" }
-          if ($link.Arguments -ne 'launch com.gesher.lifecycle') { $problems += "arguments $($link.Arguments)" }
+          $expectedTarget = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+          if ($link.TargetPath -ne $expectedTarget) { $problems += "target $($link.TargetPath)" }
+          $expectedArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$app\gesher-app.ps1`" launch com.gesher.lifecycle"
+          if ($link.Arguments -ne $expectedArgs) { $problems += "arguments $($link.Arguments)" }
           if ($link.WorkingDirectory -ne $app) { $problems += "working directory $($link.WorkingDirectory)" }
           if ($link.IconLocation -ne "$lifecycleIco,0") { $problems += "icon $($link.IconLocation)" }
           if ($aumid -ne 'Gesher.App.com.gesher.lifecycle') { $problems += "AppUserModelID $aumid" }
