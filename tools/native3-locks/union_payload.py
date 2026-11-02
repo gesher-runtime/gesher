@@ -581,10 +581,14 @@ def main():
             'app/java/com/gesher/app/Main.java',
             'app/java/com/gesher/server/DeviceServices.java',
             'app/java/com/gesher/server/SettingsProvider.java',
+            'app/java/com/gesher/app/shell/AppShell.java',
+            'compat/bionic/choreographer.cc',
             'compat/binder/binderd.cc',
             'compat/devsvc/devsvc_natives.cc',
             'compat/posix/src/binder.cc',
+            'tests/e2e/run-e2e.ps1',
             'tools/package/gesher-app.ps1',
+            'tools/package/gesher.iss',
         ])
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
                       ':(exclude)docs/**'], cwd=ROOT, text=True).splitlines())

@@ -6,10 +6,14 @@
 #include <jni.h>
 #include <nativehelper/JNIHelp.h>
 
+#include <errno.h>
+#include <fcntl.h>
 #include <string>
 
 #include "core_jni_helpers.h"
 #include "devsvc_win32.h"
+
+extern "C" void __stdcall Sleep(unsigned long dwMilliseconds);
 
 namespace android {
 
@@ -17,6 +21,109 @@ int RegisterGesherNatives(JNIEnv* env, const char* className, const JNINativeMet
                           int count);  // services_natives.cc
 
 namespace {
+
+int GetFd(JNIEnv* env, jobject fdo) {
+  if (fdo == nullptr) return -1;
+  jclass cls = env->GetObjectClass(fdo);
+  if (cls == nullptr) return -1;
+  jfieldID fid = env->GetFieldID(cls, "descriptor", "I");
+  env->DeleteLocalRef(cls);
+  if (fid == nullptr) {
+    env->ExceptionClear();
+    return -1;
+  }
+  return env->GetIntField(fdo, fid);
+}
+
+void ThrowIoException(JNIEnv* env, const char* msg) {
+  jclass ioe = env->FindClass("java/io/IOException");
+  if (ioe != nullptr) {
+    env->ThrowNew(ioe, msg);
+    env->DeleteLocalRef(ioe);
+  }
+}
+
+void ThrowNullPointerException(JNIEnv* env, const char* msg) {
+  jclass npe = env->FindClass("java/lang/NullPointerException");
+  if (npe != nullptr) {
+    env->ThrowNew(npe, msg);
+    env->DeleteLocalRef(npe);
+  }
+}
+
+jint Gesher_FileDispatcherImpl_lock0(JNIEnv* env, jclass, jobject fdo, jboolean block,
+                                     jlong pos, jlong size, jboolean shared) {
+  if (fdo == nullptr) {
+    ThrowNullPointerException(env, "FileDescriptor is null");
+    return -1;
+  }
+  int fd = GetFd(env, fdo);
+  if (fd < 0) {
+    ThrowIoException(env, "Bad file descriptor");
+    return -1;
+  }
+
+  struct flock fl{};
+  fl.l_whence = SEEK_SET;
+  fl.l_start = static_cast<off_t>(pos);
+  fl.l_len = (size == 0x7fffffffffffffffLL) ? 0 : static_cast<off_t>(size);
+  fl.l_type = (shared == JNI_TRUE) ? F_RDLCK : F_WRLCK;
+
+  int ret = -1;
+  const int max_attempts = (block == JNI_TRUE) ? 200 : 1;
+  for (int attempt = 0; attempt < max_attempts; ++attempt) {
+    ret = fcntl(fd, F_SETLK, &fl);
+    if (ret == 0) {
+      return 0;  // sun.nio.ch.FileDispatcher.LOCKED
+    }
+    if (errno != EAGAIN && errno != EACCES) {
+      break;
+    }
+    if (block == JNI_TRUE) {
+      Sleep(10);
+    }
+  }
+
+  if (ret != 0) {
+    if (errno == EAGAIN || errno == EACCES) {
+      return -1;  // sun.nio.ch.FileDispatcher.NO_LOCK
+    }
+    if (errno == EINTR) {
+      return 2;  // sun.nio.ch.FileDispatcher.INTERRUPTED
+    }
+    ThrowIoException(env, "Lock failed");
+    return -1;
+  }
+  return 0;
+}
+
+void Gesher_FileDispatcherImpl_release0(JNIEnv* env, jclass, jobject fdo, jlong pos,
+                                        jlong size) {
+  if (fdo == nullptr) {
+    ThrowNullPointerException(env, "FileDescriptor is null");
+    return;
+  }
+  int fd = GetFd(env, fdo);
+  if (fd < 0) {
+    ThrowIoException(env, "Bad file descriptor");
+    return;
+  }
+
+  struct flock fl{};
+  fl.l_whence = SEEK_SET;
+  fl.l_start = static_cast<off_t>(pos);
+  fl.l_len = (size == 0x7fffffffffffffffLL) ? 0 : static_cast<off_t>(size);
+  fl.l_type = F_UNLCK;
+
+  if (fcntl(fd, F_SETLK, &fl) < 0) {
+    ThrowIoException(env, "Release failed");
+  }
+}
+
+const JNINativeMethod gFileDispatcherMethods[] = {
+    {"lock0", "(Ljava/io/FileDescriptor;ZJJZ)I", GESHER_JNI(Gesher_FileDispatcherImpl_lock0)},
+    {"release0", "(Ljava/io/FileDescriptor;JJ)V", GESHER_JNI(Gesher_FileDispatcherImpl_release0)},
+};
 
 namespace dev = gesher::devsvc;
 
@@ -203,6 +310,8 @@ const JNINativeMethod gWindowsHostMethods[] = {
 }  // namespace
 
 int register_gesher_WindowsHost(JNIEnv* env) {
+  RegisterGesherNatives(env, "sun/nio/ch/FileDispatcherImpl", gFileDispatcherMethods,
+                        NELEM(gFileDispatcherMethods));
   return RegisterGesherNatives(env, "com/gesher/server/WindowsHost", gWindowsHostMethods,
                                NELEM(gWindowsHostMethods));
 }
