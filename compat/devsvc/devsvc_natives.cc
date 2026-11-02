@@ -145,6 +145,18 @@ jstring WindowsHost_fullPath(JNIEnv* env, jclass, jstring path) {
   return JStr(env, dev::FullPath(Str(env, path)));
 }
 
+extern "C" {
+jbyteArray Java_com_gesher_server_WindowsHost_nativeClipboardImage(JNIEnv* env, jclass);
+jboolean Java_com_gesher_server_WindowsHost_nativeHasClipboardImage(JNIEnv*, jclass);
+jboolean Java_com_gesher_server_WindowsHost_nativeSetClipboardRich(JNIEnv* env, jclass,
+                                                                   jstring, jstring,
+                                                                   jbyteArray);
+jint Java_com_gesher_server_WindowsHost_nativeShowNotificationBridge(
+    JNIEnv* env, jclass, jstring, jstring, jstring, jstring, jstring, jstring, jint);
+jint Java_com_gesher_server_WindowsHost_nativeCancelNotificationBridge(
+    JNIEnv* env, jclass, jstring, jstring, jstring, jint);
+}
+
 #define DEVSVC_STRING "Ljava/lang/String;"
 
 const JNINativeMethod gWindowsHostMethods[] = {
@@ -153,8 +165,14 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeNextActivation", "()[" DEVSVC_STRING, GESHER_JNI(WindowsHost_nextActivation)},
     {"nativeClipboardText", "()" DEVSVC_STRING, GESHER_JNI(WindowsHost_clipboardText)},
     {"nativeClipboardHtml", "()" DEVSVC_STRING, GESHER_JNI(WindowsHost_clipboardHtml)},
+    {"nativeClipboardImage", "()[B",
+     GESHER_JNI(Java_com_gesher_server_WindowsHost_nativeClipboardImage)},
+    {"nativeHasClipboardImage", "()Z",
+     GESHER_JNI(Java_com_gesher_server_WindowsHost_nativeHasClipboardImage)},
     {"nativeSetClipboard", "(" DEVSVC_STRING DEVSVC_STRING ")Z",
      GESHER_JNI(WindowsHost_setClipboard)},
+    {"nativeSetClipboardRich", "(" DEVSVC_STRING DEVSVC_STRING "[B)Z",
+     GESHER_JNI(Java_com_gesher_server_WindowsHost_nativeSetClipboardRich)},
     {"nativeClipboardSequence", "()I", GESHER_JNI(WindowsHost_clipboardSequence)},
     {"nativeAlarmWait", "(JZI)I", GESHER_JNI(WindowsHost_alarmWait)},
     {"nativeAlarmKick", "()V", GESHER_JNI(WindowsHost_alarmKick)},
@@ -168,6 +186,11 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeRemoveToast", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING ")I",
      GESHER_JNI(WindowsHost_removeToast)},
     {"nativeClearToasts", "(" DEVSVC_STRING ")I", GESHER_JNI(WindowsHost_clearToasts)},
+    {"nativeShowNotificationBridge",
+     "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING "I)I",
+     GESHER_JNI(Java_com_gesher_server_WindowsHost_nativeShowNotificationBridge)},
+    {"nativeCancelNotificationBridge", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING "I)I",
+     GESHER_JNI(Java_com_gesher_server_WindowsHost_nativeCancelNotificationBridge)},
     {"nativeRegisterAppId", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING ")I",
      GESHER_JNI(WindowsHost_registerAppId)},
     {"nativeUnregisterAppId", "(" DEVSVC_STRING ")I", GESHER_JNI(WindowsHost_unregisterAppId)},

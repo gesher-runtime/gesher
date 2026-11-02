@@ -118,19 +118,39 @@ public final class WindowsHost {
     }
 
     public static byte[] clipboardImage() {
-        return available() ? nativeClipboardImage() : null;
+        if (!available()) return null;
+        try {
+            return nativeClipboardImage();
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     public static boolean hasClipboardImage() {
-        return available() && nativeHasClipboardImage();
+        if (!available()) return false;
+        try {
+            return nativeHasClipboardImage();
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     public static boolean setClipboard(String text, String html) {
-        return available() && nativeSetClipboard(text, html);
+        if (!available()) return false;
+        try {
+            return nativeSetClipboard(text, html);
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     public static boolean setClipboardRich(String text, String html, byte[] imageBytes) {
-        return available() && nativeSetClipboardRich(text, html, imageBytes);
+        if (!available()) return false;
+        try {
+            return nativeSetClipboardRich(text, html, imageBytes);
+        } catch (Throwable t) {
+            return setClipboard(text, html);
+        }
     }
 
     public static int clipboardSequence() {
@@ -227,13 +247,21 @@ public final class WindowsHost {
      */
     public static int showNotificationBridge(String appId, String tag, String group,
             String title, String text, String iconPath, int id) {
-        return available() ? nativeShowNotificationBridge(appId, tag, group, title, text,
-                iconPath, id) : 0x80004001;
+        if (!available()) return 0x80004001;
+        try {
+            return nativeShowNotificationBridge(appId, tag, group, title, text, iconPath, id);
+        } catch (Throwable t) {
+            return 0x80004001;
+        }
     }
 
     public static int cancelNotificationBridge(String appId, String tag, String group, int id) {
-        return available() ? nativeCancelNotificationBridge(appId, tag, group, id)
-                : 0x80004001;
+        if (!available()) return 0x80004001;
+        try {
+            return nativeCancelNotificationBridge(appId, tag, group, id);
+        } catch (Throwable t) {
+            return 0x80004001;
+        }
     }
 
     /** The AppUserModelID's name and icon for its toasts (HKCU\Software\Classes\AppUserModelId). */

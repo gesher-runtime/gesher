@@ -55,13 +55,25 @@ final class ClipboardService extends IClipboard.Default implements WindowsHost.L
      * set from here); tells the listeners if {@code notify}.
      */
     private void syncFromWindows(boolean notify) {
-        int seq = WindowsHost.clipboardSequence();
+        int seq = 0;
+        try {
+            seq = WindowsHost.clipboardSequence();
+        } catch (Throwable t) {
+            return;
+        }
         synchronized (this) {
             if (seq == mSequence) return;  // ours, or seen
         }
-        String text = WindowsHost.clipboardText();
-        String html = WindowsHost.clipboardHtml();
-        byte[] image = WindowsHost.clipboardImage();
+        String text = null;
+        String html = null;
+        byte[] image = null;
+        try {
+            text = WindowsHost.clipboardText();
+            html = WindowsHost.clipboardHtml();
+            image = WindowsHost.clipboardImage();
+        } catch (Throwable t) {
+            // keep whatever could be read
+        }
         ClipData clip = null;
         if (image != null && image.length > 0) {
             try {

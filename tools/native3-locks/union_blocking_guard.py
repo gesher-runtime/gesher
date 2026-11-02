@@ -400,6 +400,7 @@ def main():
         'app/java/com/gesher/server/DeviceServices.java',
         'app/java/com/gesher/server/SettingsProvider.java',
         'compat/binder/binderd.cc',
+        'compat/devsvc/devsvc_natives.cc',
         'compat/posix/src/binder.cc',
         'tools/package/gesher-app.ps1',
     ])

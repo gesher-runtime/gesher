@@ -6,7 +6,10 @@ package com.google.firebase;
 
 import android.content.Context;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -77,6 +80,36 @@ public class FirebaseApp {
 
     public FirebaseOptions getOptions() {
         return mOptions;
+    }
+
+    public static List<FirebaseApp> getApps(Context context) {
+        synchronized (sLock) {
+            return new ArrayList<>(sApps.values());
+        }
+    }
+
+    public boolean isDefaultApp() {
+        return DEFAULT_APP_NAME.equals(getName());
+    }
+
+    public boolean isDataCollectionDefaultEnabled() {
+        return false;
+    }
+
+    public void setDataCollectionDefaultEnabled(boolean enabled) {
+    }
+
+    public void setDataCollectionDefaultEnabled(Boolean enabled) {
+    }
+
+    public <T> T get(Class<T> anInterface) {
+        return null;
+    }
+
+    public void delete() {
+        synchronized (sLock) {
+            sApps.remove(mName);
+        }
     }
 
     public static void clearInstancesForTest() {
