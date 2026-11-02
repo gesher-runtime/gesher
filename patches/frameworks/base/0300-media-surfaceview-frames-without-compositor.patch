@@ -1,5 +1,5 @@
 diff --git a/core/java/android/view/SurfaceView.java b/core/java/android/view/SurfaceView.java
-index 49a7da2..9c168a8 100644
+index 49a7da2..87c1d8f 100644
 --- a/core/java/android/view/SurfaceView.java
 +++ b/core/java/android/view/SurfaceView.java
 @@ -617,6 +617,7 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
@@ -10,22 +10,25 @@ index 49a7da2..9c168a8 100644
  
          mAttachedToWindow = false;
          if (mGlobalListenersAdded) {
-@@ -700,6 +701,6 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
+@@ -697,12 +698,11 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
+ 
+     @Override
+     protected void dispatchDraw(Canvas canvas) {
 -        if (mDrawFinished && !isAboveParent()) {
--            if ((mPrivateFlags & PFLAG_SKIP_DRAW) == 0) {
+-            // draw() is not called when SKIP_DRAW is set
+-            if ((mPrivateFlags & PFLAG_SKIP_DRAW) == PFLAG_SKIP_DRAW) {
 -                // punch a whole in the view-hierarchy below us
 -                clearSurfaceViewPort(canvas);
 -            }
--        }
 +        clearSurfaceViewPort(canvas);
 +        if (isAboveParent()) {
 +            // Gesher: a surface above its window (setZOrderOnTop) is drawn over every view,
 +            // by a drawable in the root view's overlay (gesherUpdateOverlay).
 +            gesherUpdateOverlay();
-+        }
+         }
          super.dispatchDraw(canvas);
      }
-@@ -774,6 +779,107 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
+@@ -774,6 +774,107 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
          } else {
              canvas.punchHole(0f, 0f, getWidth(), getHeight(), 0f, 0f, alpha);
          }
@@ -133,7 +136,7 @@ index 49a7da2..9c168a8 100644
      }
  
      /**
-@@ -1263,6 +1369,8 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
+@@ -1263,6 +1364,8 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
  
      /** @hide */
      protected void updateSurface() {
