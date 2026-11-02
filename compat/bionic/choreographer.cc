@@ -192,7 +192,7 @@ class Choreographer : public android::MessageHandler {
       nsecs_t target_time = looper_ != nullptr ? first + 2'000'000 : first;
       if (now < target_time) {
         nsecs_t wait_ns = target_time - now;
-        cv_.wait_for(l, std::chrono::nanoseconds(wait_ns), [this, first, target_time] {
+        cv_.wait_for(l, std::chrono::nanoseconds(wait_ns), [this, first] {
           if (stopped_) return true;
           if (callbacks_.empty()) return true;
           nsecs_t current_first = callbacks_.front().due;

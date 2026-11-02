@@ -315,6 +315,16 @@ public final class WindowsHost {
         return available() ? nativeFullPath(path) : path;
     }
 
+    /** Launches the default Windows handler/browser for the given URL. */
+    public static boolean openUrl(String url) {
+        if (!available() || url == null) return false;
+        try {
+            return nativeOpenUrl(url);
+        } catch (UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
     private static native long nativeStartEvents();
     private static native int nativeWaitEvents(int timeoutMs);
     private static native String[] nativeNextActivation();
@@ -346,6 +356,7 @@ public final class WindowsHost {
             String iconPath);
     private static native int nativeUnregisterAppId(String appId);
     private static native String nativeFullPath(String path);
+    private static native boolean nativeOpenUrl(String url);
     /** The IANA id of a Windows time zone key name (Windows' icu.dll), or null. */
     public static String ianaZone(String windowsId) {
         if (!available() || windowsId == null) return null;

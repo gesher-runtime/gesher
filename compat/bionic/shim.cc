@@ -27,6 +27,7 @@
 #include <malloc.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <ftw.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -157,6 +158,40 @@ int64_t BIONIC_SYSV Atol(const char* s) { return std::atoll(s); }
 int64_t BIONIC_SYSV Labs(int64_t v) { return v < 0 ? -v : v; }
 int64_t BIONIC_SYSV Lround(double v) { return std::llround(v); }
 int64_t BIONIC_SYSV Lroundf(float v) { return ::llroundf(v); }
+
+// bionic's x86-64 long double is IEEE binary128, passed in %xmm0 as 16 bytes.
+typedef int32_t Quad __attribute__((vector_size(16)));
+
+static double Binary128ToDouble(Quad q) {
+  uint64_t lo = 0, hi = 0;
+  std::memcpy(&lo, &q, 8);
+  std::memcpy(&hi, reinterpret_cast<const char*>(&q) + 8, 8);
+  uint64_t sign = hi >> 63;
+  int64_t exp = static_cast<int64_t>((hi >> 48) & 0x7fff);
+  uint64_t mant = ((hi & 0xffffffffffffULL) << 4) | (lo >> 60);
+  uint64_t bits;
+  if (exp == 0x7fff) {
+    bits = (sign << 63) | (0x7ffULL << 52) | mant;
+  } else if (exp == 0) {
+    bits = sign << 63;
+  } else {
+    int64_t e = exp - 16383 + 1023;
+    if (e >= 0x7ff) {
+      bits = (sign << 63) | (0x7ffULL << 52);
+    } else if (e <= 0) {
+      bits = sign << 63;
+    } else {
+      bits = (sign << 63) | (static_cast<uint64_t>(e) << 52) | mant;
+    }
+  }
+  double d = 0.0;
+  std::memcpy(&d, &bits, 8);
+  return d;
+}
+
+int64_t BIONIC_SYSV Llroundl(Quad v) {
+  return std::llround(Binary128ToDouble(v));
+}
 int64_t BIONIC_SYSV Lrint(double v) { return std::llrint(v); }
 int64_t BIONIC_SYSV Lrintf(float v) { return ::llrintf(v); }
 double BIONIC_SYSV Ldexp(double v, int e) { return std::ldexp(v, e); }
@@ -565,6 +600,30 @@ int BIONIC_SYSV Fstat(int fd, struct stat* st) {
   return r;
 }
 
+// File tree walk (<ftw.h>). The callback from the .so is System V and expects
+// bionic's LP64 struct stat (tv_nsec 64-bit), adapted from gesher-base's nftw.
+using SysvNftwFn = int (BIONIC_SYSV*)(const char*, const struct stat*, int, struct FTW*);
+thread_local SysvNftwFn g_nftw_fn = nullptr;
+
+static int NftwThunk(const char* path, const struct stat* sb, int type, struct FTW* ftw) {
+  if (!g_nftw_fn) return -1;
+  struct stat copy = *sb;
+  FixStat(&copy);
+  return g_nftw_fn(path, &copy, type, ftw);
+}
+
+int BIONIC_SYSV Nftw(const char* dir, SysvNftwFn fn, int nopenfd, int flags) {
+  if (!dir || !fn) {
+    errno = EINVAL;
+    return -1;
+  }
+  auto saved = g_nftw_fn;
+  g_nftw_fn = fn;
+  int r = ::nftw(dir, NftwThunk, nopenfd, flags);
+  g_nftw_fn = saved;
+  return r;
+}
+
 void* BIONIC_SYSV Mmap(void* addr, size_t len, int prot, int flags, int fd, int64_t off) {
   return mmap(addr, len, prot, flags, fd, static_cast<off_t>(off));
 }
@@ -844,6 +903,8 @@ uint32_t MillisUntil(const LinuxTimespec* abstime, bool monotonic) {
   return ms > 0x7ffffffe ? 0x7ffffffe : static_cast<uint32_t>(ms);
 }
 
+void BIONIC_SYSV GcovStub() {}
+
 void RegisterLibc(SymbolTable& t) {
   // Memory.
   ENTRY("malloc", Malloc);
@@ -989,6 +1050,8 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("lstat64", Lstat);
   ENTRY("fstat", Fstat);
   ENTRY("fstat64", Fstat);
+  ENTRY("nftw", Nftw);
+  ENTRY("nftw64", Nftw);
   ENTRY("mmap", Mmap);
   ENTRY("mmap64", Mmap);
   ENTRY("munmap", Munmap);
@@ -1024,6 +1087,8 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("llrint", Lrint);
   ENTRY("lrintf", Lrintf);
   ENTRY("llrintf", Lrintf);
+  ENTRY("lroundl", Llroundl);
+  ENTRY("llroundl", Llroundl);
   // libdl.
   ENTRY("dlopen", DlOpen);
   ENTRY("android_dlopen_ext", DlOpen);
@@ -1041,6 +1106,8 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("__cxa_finalize", CxaFinalize);
   ENTRY("atexit", Atexit);
   ENTRY("__tls_get_addr", TlsGetAddr);
+  ENTRY("__gcov_dump", GcovStub);
+  ENTRY("__gcov_flush", GcovStub);
 }
 
 namespace {

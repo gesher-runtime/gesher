@@ -115,5 +115,8 @@ void RevokeActivator();
 // GetFullPathNameW: a drive-less path ("\\a\\b") made absolute on the current drive.
 std::u16string FullPath(const std::u16string& path);
 
+// ShellExecuteW: opens an external URL with the user's default browser / handler.
+bool OpenUrl(const std::u16string& url);
+
 }  // namespace devsvc
 }  // namespace gesher

@@ -10,6 +10,7 @@
 #include <objbase.h>
 #include <oleauto.h>
 #include <netlistmgr.h>
+#include <shellapi.h>
 
 #include "devsvc_toast.h"
 
@@ -624,6 +625,12 @@ std::u16string FullPath(const std::u16string& path) {
   n = GetFullPathNameW(in.c_str(), n, out.data(), nullptr);
   out.resize(n);
   return U16(out.c_str(), out.size());
+}
+
+bool OpenUrl(const std::u16string& url) {
+  if (url.empty()) return false;
+  HINSTANCE res = ShellExecuteW(nullptr, L"open", W(url), nullptr, nullptr, SW_SHOWNORMAL);
+  return reinterpret_cast<INT_PTR>(res) > 32;
 }
 
 }  // namespace devsvc

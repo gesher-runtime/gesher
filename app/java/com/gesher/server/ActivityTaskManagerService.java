@@ -34,6 +34,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.Configuration;
 import android.graphics.Rect;
+import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
@@ -452,6 +453,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         // resolves MAIN/LAUNCHER in a package, as a launcher does.
         ActivityInfo info = resolve(intent, resolvedType, caller != null);
         if (info == null) {
+            if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction())) {
+                Uri data = intent.getData();
+                if (data != null) {
+                    String scheme = data.getScheme();
+                    if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)
+                            || "mailto".equalsIgnoreCase(scheme)) {
+                        String url = data.toString();
+                        SystemServer.log("startActivity: delegating external URL to Windows: " + url);
+                        WindowsHost.openUrl(url);
+                        return ActivityManager.START_SUCCESS;
+                    }
+                }
+            }
             SystemServer.log("startActivity: nothing handles " + intent);
             return ActivityManager.START_INTENT_NOT_RESOLVED;
         }

@@ -252,6 +252,10 @@ jstring WindowsHost_fullPath(JNIEnv* env, jclass, jstring path) {
   return JStr(env, dev::FullPath(Str(env, path)));
 }
 
+jboolean WindowsHost_openUrl(JNIEnv* env, jclass, jstring url) {
+  return dev::OpenUrl(Str(env, url)) ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" {
 jbyteArray Java_com_gesher_server_WindowsHost_nativeClipboardImage(JNIEnv* env, jclass);
 jboolean Java_com_gesher_server_WindowsHost_nativeHasClipboardImage(JNIEnv*, jclass);
@@ -302,6 +306,7 @@ const JNINativeMethod gWindowsHostMethods[] = {
      GESHER_JNI(WindowsHost_registerAppId)},
     {"nativeUnregisterAppId", "(" DEVSVC_STRING ")I", GESHER_JNI(WindowsHost_unregisterAppId)},
     {"nativeFullPath", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_fullPath)},
+    {"nativeOpenUrl", "(" DEVSVC_STRING ")Z", GESHER_JNI(WindowsHost_openUrl)},
     {"nativeIanaZone", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_ianaZone)},
     {"nativeRegisterActivator", "(Z)I", GESHER_JNI(WindowsHost_registerActivator)},
     {"nativeRevokeActivator", "()V", GESHER_JNI(WindowsHost_revokeActivator)},

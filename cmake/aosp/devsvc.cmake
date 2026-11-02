@@ -11,4 +11,4 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_toast.c
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_activator.c)
 target_include_directories(framework_runtime PRIVATE ${CMAKE_SOURCE_DIR}/compat/devsvc)
-target_link_libraries(framework_runtime PUBLIC ole32 oleaut32 uuid user32 advapi32)
+target_link_libraries(framework_runtime PUBLIC ole32 oleaut32 uuid user32 advapi32 shell32)
