@@ -82,3 +82,8 @@ Check 'services: a stand-in service answers an empty list, not null, for a list 
   $fixesOut
 } @('FrameworkFixesTest: a stand-in''s unimplemented list method answers an empty list (IShortcutService.getShortcuts), not null',
   'FrameworkFixesTest all passed')
+Check 'services: android.text.Html.fromHtml parses with tagsoup (the ext boot jar''s classes in gesher-app.jar)' {
+  $global:LASTEXITCODE = $fixesCode
+  $fixesOut
+} @('FrameworkFixesTest: android.text.Html.fromHtml parses with tagsoup (the ext boot jar''s): text, entities, a bold span and a link',
+  'FrameworkFixesTest all passed')

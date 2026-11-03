@@ -4,6 +4,12 @@
  */
 package gesher.services;
 
+import android.graphics.Typeface;
+import android.text.Html;
+import android.text.Spanned;
+import android.text.style.StyleSpan;
+import android.text.style.URLSpan;
+
 import java.io.File;
 import java.io.RandomAccessFile;
 import java.lang.reflect.Method;
@@ -35,6 +41,11 @@ import java.nio.channels.OverlappingFileLockException;
  *  - a stand-in service's unimplemented method that returns a list answers an empty
  *    one, not null (com.gesher.server.StandIn): ShortcutManager.getDynamicShortcuts
  *    called getList() on null (Wikipedia).
+ *  - org.ccil.cowan.tagsoup (frameworks/base's ext boot jar, compile only in the framework
+ *    build; its classes in gesher-app.jar, app/build.sh): android.text.Html.fromHtml died
+ *    on a stackless NoClassDefFoundError ("Class not found using the boot class loader"),
+ *    and Wikipedia's onboarding stopped on its first page (its next page's Compose text
+ *    goes through Html.fromHtml; the error was captured in composition).
  * Prints "FrameworkFixesTest all passed".
  */
 public final class FrameworkFixesTest {
@@ -256,6 +267,28 @@ public final class FrameworkFixesTest {
                 + "an empty list (IShortcutService.getShortcuts), not null");
     }
 
+    private static void htmlFromHtml() throws Exception {
+        // On a device tagsoup is in the ext boot jar; Html.fromHtml's first instruction is
+        // `new Parser()`, so without it every call fails, whatever the markup.
+        Class.forName("org.ccil.cowan.tagsoup.Parser");
+        Class.forName("org.ccil.cowan.tagsoup.HTMLSchema");
+        Spanned s = Html.fromHtml("<p><b>Bold</b> and <a href=\"https://example.org/\">a link</a>"
+                + " &amp; &#x5e9;&#x5dc;&#x5d5;&#x5dd;</p>", Html.FROM_HTML_MODE_COMPACT);
+        String text = s.toString().trim();
+        require(text.equals("Bold and a link & שלום"),
+                "fromHtml's text is wrong: '" + text + "'");
+        StyleSpan[] bold = s.getSpans(0, s.length(), StyleSpan.class);
+        require(bold.length == 1 && bold[0].getStyle() == Typeface.BOLD
+                && s.getSpanStart(bold[0]) == text.indexOf("Bold")
+                && s.getSpanEnd(bold[0]) == text.indexOf("Bold") + 4, "<b> is not one bold span");
+        URLSpan[] links = s.getSpans(0, s.length(), URLSpan.class);
+        require(links.length == 1 && "https://example.org/".equals(links[0].getURL())
+                && text.substring(s.getSpanStart(links[0]), s.getSpanEnd(links[0])).equals("a link"),
+                "<a href> is not one URLSpan over its text");
+        System.out.println("FrameworkFixesTest: android.text.Html.fromHtml parses with tagsoup "
+                + "(the ext boot jar's): text, entities, a bold span and a link");
+    }
+
     public static void main(String[] args) throws Exception {
         colorMatrix();
         fileLocks();
@@ -263,6 +296,7 @@ public final class FrameworkFixesTest {
         nsd();
         splitAbi();
         standInLists();
+        htmlFromHtml();
         System.out.println("FrameworkFixesTest all passed");
     }
 }

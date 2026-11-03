@@ -62,6 +62,18 @@ if ($dartExited -and $dart.ExitCode -eq 0 -and -not $dartMissing) {
   $failed++
 }
 
+# A fork child that closes every fd above 2 (a close loop, closefrom, close_range),
+# dup2s onto an fd and flips FD_CLOEXEC before an exec that fails, as Java's
+# childproc and root checkers do: the vfork-style child runs in this process, so
+# all of it must stay in the child's own fd table, and the failed exec must
+# return to the child, which exits 127 (docs/exec.md).
+Check 'exec2: a fork child''s fd calls and failed exec leave the parent''s fds open (close loop, closefrom, close_range, dup2, F_SETFD; exit 127)' {
+  & "$Dir/gesher-exec.exe" --elf $driver 'libexec2test.so' '--fork-fds'
+} @('exec2: PASS a fork child''s failed exec returns to the child (ENOENT), which exits 127',
+    'exec2: PASS a fork child''s close loop, closefrom, close_range and dup2 leave the parent''s fds open',
+    'exec2: PASS a fork child''s fcntl(F_SETFD) leaves the parent''s FD_CLOEXEC alone',
+    'exec2: SUMMARY pass=3 fail=0')
+
 # The /system/bin programs gesher-exec provides (docs/exec.md): the minimal
 # shell runs them as external commands.
 $lsOut = & "$Dir/gesher-exec.exe" --sh -c "ls $(NoDrive $Dir)" 2>&1 | Out-String

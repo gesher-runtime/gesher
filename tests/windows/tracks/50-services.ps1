@@ -503,6 +503,29 @@ if ($ok -and -not ((Test-Path (Join-Path $root 'data/app/com.gesher.peer-1/base.
 }
 if (-not $ok) { Write-Host ($out + $list) }
 
+# The same file again is "unchanged" from install-sources.list (its size and last
+# write time) without reading it; a new last write time (same bytes) is read and
+# compared, and is still "unchanged".
+$copy = Join-Path $root 'lifecycle-copy.apk'
+Copy-Item "$Dir/lifecycle.apk" $copy -Force
+$again = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'install', (NoDrive $copy)) 300
+$code = $LASTEXITCODE
+$again += RunTimed "$Dir/dalvikvm.exe" ($launcher + 'install', (NoDrive $copy)) 300
+$code = [Math]::Max($code, $LASTEXITCODE)
+(Get-Item $copy).LastWriteTime = (Get-Date).AddMinutes(5)
+$again += RunTimed "$Dir/dalvikvm.exe" ($launcher + 'install', (NoDrive $copy)) 300
+$code = [Math]::Max($code, $LASTEXITCODE)
+$sources = Get-Content (Join-Path $root 'data/system/install-sources.list') -Raw -ErrorAction SilentlyContinue
+$unchanged = ([regex]::Matches($again, 'com\.gesher\.lifecycle is installed and unchanged')).Count
+if ($code -eq 0 -and $unchanged -eq 3 -and "$sources" -match "lifecycle-copy\.apk`t\d+`t\d+`t-1`t-1`tcom\.gesher\.lifecycle`t") {
+  Write-Host 'PASS  services: installing the same file again is unchanged from install-sources.list (size and time), and after a new time by its bytes'
+} else {
+  Write-Host "FAIL  services: install-sources.list (exit $code, $unchanged of 3 unchanged): $sources"
+  Write-Host $again
+  $failed++
+}
+Remove-Item $copy -ErrorAction SilentlyContinue
+
 # A launch through the device: lifecycle.apk (installed, unchanged), its
 # process started by the system server, the activity to onResume, the task
 # removed once idle, the process ended; the app's output comes from its log.

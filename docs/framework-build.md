@@ -49,4 +49,6 @@ and the API stubs of the mainline modules the framework calls
 (`framework-updatable-stubs-module_libs_api`, `framework-statsd`), and
 `ext` (tagsoup), a boot jar of its own on Android: the
 framework compiles against them; at run time a module's own jar is needed
-only when the headless lifecycle reaches it.
+only when the headless lifecycle reaches it. tagsoup's classes (`ext`) are
+needed by `android.text.Html.fromHtml`: `app/build.sh` copies them from the
+framework build's classes into gesher-app.jar.

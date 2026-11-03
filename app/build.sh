@@ -145,8 +145,27 @@ if [[ -d $fwloc && -d $loc ]]; then
   echo "framework-location: $(find "$work/location" -name '*.class' | wc -l) classes into gesher-app.jar"
 fi
 
+# ext (external/tagsoup, org.ccil.cowan.tagsoup): on a device a boot jar of its own
+# (frameworks/base's "ext"), which framework.jar is compiled against but does not contain.
+# android.text.Html.fromHtml parses with its Parser and HTMLSchema: without them every
+# fromHtml call died on a stackless NoClassDefFoundError ("Class not found using the boot
+# class loader"), which Compose apps hit while composing (Wikipedia's onboarding). The
+# framework build compiles tagsoup's sources (compile only); its classes join gesher-app.jar.
+mkdir -p "$work/ext"
+if [[ -f $framework ]]; then
+  (cd "$work/ext" && unzip -q -o "$(native "$framework")" 'org/ccil/cowan/tagsoup/*' || true)
+elif [[ -d $framework/org/ccil/cowan/tagsoup ]]; then
+  mkdir -p "$work/ext/org/ccil/cowan"
+  cp -R "$framework/org/ccil/cowan/tagsoup" "$work/ext/org/ccil/cowan/"
+fi
+tagsoup=$(find "$work/ext" -name '*.class' | wc -l)
+if [[ $tagsoup -eq 0 ]]; then
+  echo "warning: no org.ccil.cowan.tagsoup classes in $framework: android.text.Html.fromHtml will fail" >&2
+fi
+echo "ext (tagsoup): $tagsoup classes into gesher-app.jar"
+
 # One dex for all, into a jar.
-( cd "$work" && find classes compat location -name '*.class' ) > "$work/dex.txt"
+( cd "$work" && find classes compat location ext -name '*.class' ) > "$work/dex.txt"
 (cd "$work" && java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
   --output "$(native "$out/gesher-app.jar")" @dex.txt)
 cp "$root/app/build.prop" "$out/build.prop"

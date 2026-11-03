@@ -36,10 +36,16 @@ Check 'ELF loader: a loaded-code thread takes a large frame without stack probes
 # pthread (tests/native/libc_test.c) loads through the ELF loader and passes
 # its own checks: memory, strings, printf/scanf through the System V vararg
 # bridge, errno, time, qsort, threads, mutexes, condition variables, keys,
-# dlsym and dl_iterate_phdr.
+# dlsym and dl_iterate_phdr. With Android's CA certificates next to
+# elf_load_test.exe (cacerts\, tools/net/collect.sh), it also requires
+# /system/etc/security/cacerts and /apex/com.android.conscrypt/cacerts to be
+# that directory, as Dart's dart:io and BoringSSL read them
+# (compat/bionic/system_cacerts.h).
+$env:GESHER_TEST_SYSTEM_CACERTS = if (Test-Path "$Dir/cacerts/*.0") { '1' } else { '' }
 Check 'bionic shim: a libc/pthread .so runs its checks' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/libc_test.so")
 } @('libc_test: all passed', 'elf_load_test all passed')
+Remove-Item Env:GESHER_TEST_SYSTEM_CACERTS -ErrorAction SilentlyContinue
 
 # %fs without WRFSBASE (ADR 0014): NDK libraries built with the default stack
 # protector and thread-locals (tests/native/fs_test.c). The loader rewrites

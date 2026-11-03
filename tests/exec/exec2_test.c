@@ -9,10 +9,12 @@
 // ("exit 17"), to show exec outside a fork replaces the image (the launcher
 // process exits 17). With "--dart-start <child>" it starts the child as dart:io's
 // Process.start does (dart_start below); the track runs that one with a time
-// limit, as a regression there hangs.
+// limit, as a regression there hangs. With "--fork-fds" it checks that a fork
+// child's fd calls and failed exec leave this process's fds alone (fork_fds).
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE  // pipe2
 #endif
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -24,6 +26,9 @@
 #include <unistd.h>
 
 extern char** environ;
+// Declared here too: exec3_jni.c includes this file after <unistd.h>, so the
+// _GNU_SOURCE above comes too late for bionic's declaration.
+int pipe2(int fds[2], int flags);
 
 static int g_pass, g_fail;
 
@@ -101,7 +106,72 @@ static void dart_start(const char* child) {
      strcmp(out, "child-ready\n") == 0, out);
 }
 
+// A fork child that drops every fd above 2 before an exec that fails, as Java's
+// childproc (closeDescriptors) and root checkers ("exec which/su/busybox") do. The
+// vfork-style child runs in this process (docs/exec.md), so its close loop,
+// closefrom/close_range, dup2 onto an fd and fcntl(F_SETFD) must act on the
+// child's fd table only, never on this process's fds (ART's among them), and its
+// failed exec must return to the child, which then exits 127 as on Linux.
+typedef int (*close_range_fn)(unsigned first, unsigned last, int flags);
+typedef void (*closefrom_fn)(int lowest);
+
+static void fork_fds(void) {
+  const char* name_exit = "a fork child's failed exec returns to the child (ENOENT), which exits 127";
+  const char* name_fds =
+      "a fork child's close loop, closefrom, close_range and dup2 leave the parent's fds open";
+  const char* name_flags = "a fork child's fcntl(F_SETFD) leaves the parent's FD_CLOEXEC alone";
+  close_range_fn close_range_p = (close_range_fn)dlsym(RTLD_DEFAULT, "close_range");
+  closefrom_fn closefrom_p = (closefrom_fn)dlsym(RTLD_DEFAULT, "closefrom");
+  int p[2];
+  if (pipe(p) != 0) {
+    ok(name_fds, 0, "pipe");
+    return;
+  }
+  int extra = dup(p[1]);
+  int flags_before = fcntl(p[0], F_GETFD);
+  pid_t pid = fork();
+  if (pid == 0) {
+    fcntl(p[0], F_SETFD, (flags_before & FD_CLOEXEC) != 0 ? 0 : FD_CLOEXEC);
+    dup2(0, extra);
+    for (int fd = 3; fd < 1024; ++fd) close(fd);
+    if (closefrom_p != NULL) closefrom_p(3);
+    if (close_range_p != NULL) close_range_p(3, ~0u, 0);
+    char* a[] = {(char*)"/system/xbin/gesher-no-such-program", (char*)"su", NULL};
+    execv(a[0], a);
+    _exit(errno == ENOENT ? 127 : 126);
+  }
+  int status = -1;
+  pid_t waited = pid > 0 ? waitpid(pid, &status, 0) : -1;
+  char detail[128];
+  snprintf(detail, sizeof(detail), "fork %d, waitpid %d, status 0x%x", (int)pid, (int)waited, status);
+  ok(name_exit, pid > 0 && waited == pid && WIFEXITED(status) && WEXITSTATUS(status) == 127, detail);
+
+  char c = 0;
+  ssize_t wrote = write(extra, "x", 1);
+  ssize_t got = wrote == 1 ? read(p[0], &c, 1) : -1;
+  ssize_t wrote_again = write(p[1], "y", 1);
+  snprintf(detail, sizeof(detail), "close_range %s, closefrom %s, write %d, read %d '%c', write %d",
+           close_range_p != NULL ? "found" : "missing", closefrom_p != NULL ? "found" : "missing",
+           (int)wrote, (int)got, c != 0 ? c : '?', (int)wrote_again);
+  ok(name_fds,
+     close_range_p != NULL && closefrom_p != NULL && wrote == 1 && got == 1 && c == 'x' &&
+         wrote_again == 1,
+     detail);
+  int flags_after = fcntl(p[0], F_GETFD);
+  snprintf(detail, sizeof(detail), "F_GETFD %d before, %d after", flags_before, flags_after);
+  ok(name_flags, flags_before >= 0 && flags_after == flags_before, detail);
+  close(p[0]);
+  close(p[1]);
+  close(extra);
+}
+
 int main(int argc, char** argv) {
+  if (argc >= 2 && strcmp(argv[1], "--fork-fds") == 0) {
+    fork_fds();
+    printf("exec2: SUMMARY pass=%d fail=%d\n", g_pass, g_fail);
+    fflush(stdout);
+    return g_fail == 0 ? 0 : 1;
+  }
   if (argc >= 3 && strcmp(argv[1], "--dart-start") == 0) {
     dart_start(argv[2]);
     printf("exec2: SUMMARY pass=%d fail=%d\n", g_pass, g_fail);

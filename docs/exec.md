@@ -77,12 +77,24 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   its file actions: open, close, dup2, chdir) run programs directly, no fork
   needed; `system`/`popen` through the launcher's `sh -c`.
 - **`fork()`/`vfork()`** are a **vfork-style** child on the calling thread:
-  `fork()` returns 0, the child's fd (`dup2`, `close`, `open`), environment and
-  `chdir` calls are recorded, and its `exec*()` spawns the program with them
-  while `fork()` returns the child's pid to the parent; its `exit`/`_exit` ends
-  the child. The child must only prepare and `exec`/`_exit`, as `vfork` requires.
+  `fork()` returns 0, the child's fd (`open`, `close`, `dup`, `dup2`, `dup3`,
+  `fcntl` `F_DUPFD`/`F_DUPFD_CLOEXEC`/`F_GETFD`/`F_SETFD`, `close_range`,
+  `closefrom`), environment and `chdir` calls are recorded in the child's own
+  table, and its `exec*()` spawns the program with them while `fork()` returns
+  the child's pid to the parent; its `exit`/`_exit` ends the child. A child that
+  closes every fd above 2 before `exec` (Java's childproc, root checkers) or
+  flips `FD_CLOEXEC` therefore leaves the parent's fds as they were: the child
+  runs in the parent's process, so an unrecorded call would close or change
+  the parent's own fd (on Windows `FD_CLOEXEC` is the handle's inherit flag).
+  An `exec*()` that cannot start the program fails in the child as on Linux:
+  it returns -1 with `errno` (`ENOENT`...) to the child, which goes on, usually
+  to `_exit(127)`; the parent's `fork()` then returns a pid whose `waitpid`
+  status is that exit (it used to return -1 from `fork()`). `close_range` and
+  `closefrom` outside a fork child close this process's fds in the range.
+  The child must only prepare and `exec`/`_exit`, as `vfork` requires.
   `exec` passes the program the child's fds without the close-on-exec ones
-  (`O_CLOEXEC`, `FD_CLOEXEC` at fork, `dup2` clearing it, `dup3`'s flag).
+  (`O_CLOEXEC`, `FD_CLOEXEC` at fork or set by the child's `F_SETFD`, `dup2`
+  clearing it, `dup3`'s flag, `F_DUPFD_CLOEXEC`) (exec2 track: `--fork-fds`).
   A child that waits for its parent through a pipe before `exec` would wait
   forever (the parent runs only after it): dart:io's `Process.start`/`run`
   does, so a Flutter app that runs a program hung its UI thread. A fork child's
@@ -119,9 +131,10 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   <29) and library ELF TLS retain their existing paths.
 - A real `fork()` that does work other than `exec`/`_exit` in the child is not
   supported (vfork-style only, ADR 0055). Beyond the one-byte go-ahead above, a
-  fork child cannot wait for its parent; `fcntl(F_SETFD)` and `environ`
-  assignments in the child are not recorded (the program gets the fds' flags
-  and the environment as they were at fork).
+  fork child cannot wait for its parent; `environ` assignments in the child
+  are not recorded (the program gets the environment as it was at fork, with
+  the child's `setenv`/`unsetenv`/`putenv`), and `execve`'s `envp` in a fork
+  child is not used either.
 - Exit-status convention: a child that dies of a signal carries a Windows
   exit code of 128 + signal (the posix layer's `kill` and the launcher's
   fault mapping both use it), and `waitForProcessExit` passes such codes
@@ -210,6 +223,17 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
   ps, cat; ELF TLS in the executable.
 - Not done: ELF TLS in the executable (ADR 0055 explains why); `pm`/`am`
   decline; `setprop` does not persist; a real fork that does work before exec.
+- Fork-child fd isolation (uncommitted, not CI-verified): `dup`, `fcntl`'s
+  fd-table commands, `close_range` and `closefrom` are now child-aware (the
+  last two were missing from the shim), and a failed `exec*()` in a fork child
+  returns to the child instead of making `fork()` return -1. Checked by
+  `libexec2test.so --fork-fds` (43-exec2) and ExecTest's failed-probes-then-GC
+  check. Prompted by a banking app's CMC abort (`ioctl_userfaultfd: copy
+  failed: Bad file descriptor`) after root-check execs; that abort is not
+  explained by fds: the process ran CMC in fallback mode (no userfaultfd fd
+  exists), its execs went through `UNIXProcess` (`CreateProcessW`, no fork),
+  and the fault path that issues `UFFDIO_COPY` in fallback mode is ART's
+  SIGBUS handler, whose trigger there is still open.
 
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._

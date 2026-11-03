@@ -9,6 +9,7 @@
 // returns the number of failures.
 
 #include <android/log.h>
+#include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -22,6 +23,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
+#include <sys/stat.h>
 #include <sys/vfs.h>
 #include <sys/xattr.h>
 #include <time.h>
@@ -233,6 +235,107 @@ static void test_statfs(void) {
         mount("none", "/gesher-no-such-dir", "tmpfs", 0, NULL) == -1 && errno == EPERM);
 }
 
+// Android's system CA directory under its Android names (compat/bionic/
+// system_cacerts.h, docs/network.md): what Dart's dart:io and BoringSSL's
+// by-dir lookup do with it. Checked when GESHER_TEST_SYSTEM_CACERTS=1 (the
+// x86-64 track sets it when cacerts\ is next to elf_load_test.exe); otherwise
+// a missing directory is reported, not failed.
+static int is_cert_name(const char* name) {
+  for (int i = 0; i < 8; ++i) {
+    char c = name[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) return 0;
+  }
+  return strcmp(name + 8, ".0") == 0;
+}
+
+static int file_is_pem(const char* path) {
+  FILE* f = fopen(path, "r");
+  if (f == NULL) return 0;
+  static char buf[65536];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+  return n > 0 && strstr(buf, "-----BEGIN CERTIFICATE-----") != NULL;
+}
+
+static void test_system_cacerts(void) {
+  static const char kDir[] = "/system/etc/security/cacerts";
+  static const char kApex[] = "/apex/com.android.conscrypt/cacerts";
+  const char* strict_env = getenv("GESHER_TEST_SYSTEM_CACERTS");
+  int strict = strict_env != NULL && strcmp(strict_env, "1") == 0;
+  struct stat st;
+  errno = 0;
+  int is_dir = stat(kDir, &st) == 0 && S_ISDIR(st.st_mode);
+  if (!is_dir && !strict) {
+    printf("  INFO  %s: not found (errno %d); GESHER_TEST_SYSTEM_CACERTS unset, not checked\n",
+           kDir, errno);
+    return;
+  }
+  check("stat(/system/etc/security/cacerts): a directory", is_dir);
+  struct stat64 st64;
+  check("fstatat64(AT_FDCWD, cacerts, 0): a directory (Dart)",
+        fstatat64(AT_FDCWD, kDir, &st64, 0) == 0 && S_ISDIR(st64.st_mode));
+  check("lstat(cacerts/): a directory", lstat("/system/etc/security/cacerts/", &st) == 0 &&
+                                            S_ISDIR(st.st_mode));
+
+  char name[256] = "";
+  DIR* d = opendir(kDir);
+  check("opendir(/system/etc/security/cacerts)", d != NULL);
+  if (d != NULL) {
+    struct dirent* e;
+    while ((e = readdir(d)) != NULL) {
+      if (strlen(e->d_name) == 10 && is_cert_name(e->d_name)) {
+        snprintf(name, sizeof(name), "%s", e->d_name);
+        break;
+      }
+    }
+    closedir(d);
+  }
+  check("cacerts has a <subject hash>.0 entry", name[0] != '\0');
+  if (name[0] == '\0') return;
+
+  char path[512];
+  snprintf(path, sizeof(path), "%s/%s", kDir, name);
+  check("stat(cacerts/<hash>.0): a regular file", stat(path, &st) == 0 && S_ISREG(st.st_mode));
+  check("fopen+fread(cacerts/<hash>.0): PEM (BoringSSL by-dir)", file_is_pem(path));
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  check("open(cacerts/<hash>.0)", fd >= 0);
+  if (fd >= 0) close(fd);
+
+  // The Conscrypt APEX's name (newer Dart probes it first) is the same directory.
+  d = opendir(kApex);
+  int apex_entry = 0;
+  if (d != NULL) {
+    struct dirent* e;
+    while ((e = readdir(d)) != NULL) {
+      if (strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0) {
+        apex_entry = 1;
+        break;
+      }
+    }
+    closedir(d);
+  }
+  check("opendir(/apex/com.android.conscrypt/cacerts): has entries", apex_entry);
+  snprintf(path, sizeof(path), "%s/%s", kApex, name);
+  check("fopen(/apex/.../cacerts/<hash>.0): PEM", file_is_pem(path));
+
+  // Nothing escapes the directory, and only that exact name maps.
+  errno = 0;
+  check("stat(cacerts/../cacerts) fails with ENOENT",
+        stat("/system/etc/security/cacerts/../cacerts", &st) == -1 && errno == ENOENT);
+  errno = 0;
+  check("stat(cacerts/..\cacerts) fails with ENOENT",
+        stat("/system/etc/security/cacerts/..\cacerts", &st) == -1 && errno == ENOENT);
+  snprintf(path, sizeof(path), "%s/%s:x", kDir, name);
+  errno = 0;
+  check("fopen(cacerts/<hash>.0:x) fails with ENOENT", fopen(path, "r") == NULL && errno == ENOENT);
+  errno = 0;
+  check("open(cacerts/NUL) fails with ENOENT",
+        open("/system/etc/security/cacerts/NUL", O_RDONLY) == -1 && errno == ENOENT);
+  check("stat(/system/etc/security/cacertsX) is not mapped",
+        stat("/system/etc/security/cacertsX", &st) == -1);
+}
+
 static int compare_ints(const void* a, const void* b) {
   return *(const int*)a - *(const int*)b;
 }
@@ -400,6 +503,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_format();
   test_errno_files();
   test_statfs();
+  test_system_cacerts();
   test_ldar_readonly();
   test_time_math();
   test_qsort();

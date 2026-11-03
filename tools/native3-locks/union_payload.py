@@ -70,7 +70,7 @@ SELECTED_COMBINED_SOURCE = {'.github/workflows/native2.yml': '847f1f8908a50e5539
  'tests/native2/net_udp_fault_observer.c': '2d63237ca4d2891e84c4c1a21c16448bbdfee2eb',
  'tests/native2/net_udp_guarded_copy_probe.cpp': '35b571e3f253950f5f0a96117d9458ee4f1b6e39',
  'tests/native2/net_udp_trunc.cpp': '4d2d46badfa7a0b90a1f134537ee4a90f72a2e17',
- 'tests/windows/tracks/50-services.ps1': '1ec3933f6ce3b6bd1999b442704697b1c89dc8c7',
+ 'tests/windows/tracks/50-services.ps1': '6f541d2d9f0edc56c7c1446ff8f4113e4431619e',
  'tests/windows/tracks/89-net-udp-trunc.ps1': '9823b72c58bb77918bbb57a40d50664d1001105b',
  'tools/net-udp-component/payload.py': 'db22caed0012086fa90b257b3ef74e963ab2df87',
  'tools/net-udp-component/source.json': '92b0538e27f9e39aba040e30bfb362400c18724a',
@@ -645,6 +645,8 @@ def main():
             'tests/windows/tracks/43-exec2.ps1',
             'tests/apps/uiapp/java/com/gesher/uiapp/UiActivity.java',
             'tests/windows/tracks/34-windows.ps1',
+            'compat/bionic/system_cacerts.h',
+            'tests/exec/java/gesher/ExecTest.java',
         ])
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
                       ':(exclude)docs/**'], cwd=ROOT, text=True).splitlines())

@@ -12,9 +12,15 @@
 //    attributes applied. None of these needs fork.
 //  - fork()/vfork(): a vfork-style child that runs inline on the calling
 //    thread (fork returns 0). The fd, environment and working-directory calls
-//    it makes are recorded, not applied to this process; its exec*() spawns the
+//    it makes are recorded, not applied to this process -- open, close, dup,
+//    dup2/dup3, fcntl's F_DUPFD/F_DUPFD_CLOEXEC/F_GETFD/F_SETFD, close_range
+//    and closefrom act on the child's own fd table only, so a child that closes
+//    every fd above 2 before exec (as Java's childproc and root checkers do)
+//    leaves this process's fds open; its exec*() spawns the
 //    real program with them and fork() returns the child's pid to the "parent";
-//    its exit()/_exit() ends the child without spawning. Anything else the
+//    an exec*() that fails returns -1 to the child, which goes on (usually to
+//    _exit), as on Linux; its exit()/_exit() ends the child without spawning
+//    (a zombie with that status for waitpid). Anything else the
 //    child does between fork and exec (real work, touching the parent's memory)
 //    is not supported, as vfork never allowed it.
 //  - wait()/waitpid()/wait4(): over the shim's own children, with Linux's
@@ -47,6 +53,7 @@
 
 #include "exec_spawn.h"
 #include "spawn_actions.h"
+#include "system_cacerts.h"
 
 // gesher-base: kill() of a process other than this one's children (signal
 // mailbox, compat/posix/src/process.cc).
@@ -167,10 +174,15 @@ thread_local ForkChild* t_fork = nullptr;
 
 constexpr int kLinuxOCloexec = 02000000;  // O_CLOEXEC, open's and dup3's flag
 
-int LowestFreeFd(ForkChild* c) {
-  int fd = 0;
+int LowestFreeFd(ForkChild* c, int from = 0) {
+  int fd = from < 0 ? 0 : from;
   while (c->present.count(fd) && c->present[fd]) ++fd;
   return fd;
+}
+
+bool ChildHasFd(ForkChild* c, int fd) {
+  auto it = c->present.find(fd);
+  return it != c->present.end() && it->second;
 }
 
 // --- the originals RegisterProcess wraps --------------------------------------
@@ -179,6 +191,8 @@ using OpenFn = int (BIONIC_SYSV*)(const char*, int, int);
 using OpenatFn = int (BIONIC_SYSV*)(int, const char*, int, int);
 using CloseFn = int (BIONIC_SYSV*)(int);
 using Dup2Fn = int (BIONIC_SYSV*)(int, int);
+using DupFn = int (BIONIC_SYSV*)(int);
+using FcntlFn = int (BIONIC_SYSV*)(int, int, uint64_t);
 using ChdirFn = int (BIONIC_SYSV*)(const char*);
 using SetenvFn = int (BIONIC_SYSV*)(const char*, const char*, int);
 using UnsetenvFn = int (BIONIC_SYSV*)(const char*);
@@ -191,6 +205,8 @@ OpenFn g_open = nullptr;
 OpenatFn g_openat = nullptr;
 CloseFn g_close = nullptr;
 Dup2Fn g_dup2 = nullptr;
+DupFn g_dup = nullptr;
+FcntlFn g_fcntl = nullptr;
 ChdirFn g_chdir = nullptr;
 SetenvFn g_setenv = nullptr;
 UnsetenvFn g_unsetenv = nullptr;
@@ -425,20 +441,27 @@ int MaterializeAndSpawn(ForkChild* child, const std::string& program,
     if (kv.second != INVALID_HANDLE_VALUE && kv.second != nullptr) fds.push_back({kv.first, kv.second});
   }
   int pid = SpawnProgram(program, argv, child->env, child->dir, search, fds);
+  int error = errno;  // the spawn's, for a failed exec in the child
   for (int fd : opened) {
     if (g_close != nullptr) g_close(fd);
   }
+  errno = error;
   return pid;
 }
 
 // The child's exec*(): spawn with its recorded state, then return to fork's
-// caller with the pid (or -1 with errno set). Does not return here.
-[[noreturn]] void ChildExec(const std::string& program, const std::vector<std::string>& argv,
-                            bool search) {
+// caller with the pid. If the program cannot be started, exec fails in the
+// child as on Linux: -1 with errno set is returned to the child, which is still
+// the child (its fd table and environment unchanged) and goes on -- usually to
+// report errno and _exit(127), which fork's caller then sees through waitpid.
+int ChildExec(const std::string& program, const std::vector<std::string>& argv, bool search) {
   ForkChild* child = t_fork;
   t_fork = nullptr;
   int pid = MaterializeAndSpawn(child, program, argv, search);
-  FinishChild(child, pid > 0 ? pid : -1);
+  if (pid > 0) FinishChild(child, pid);  // does not return
+  int error = errno;
+  t_fork = child;
+  return errno = error, -1;
 }
 
 // --- execve / execvp and friends ----------------------------------------------
@@ -470,7 +493,7 @@ int DoExec(const char* path, char* const argv[], char* const envp[], bool search
   if (path == nullptr || argv == nullptr) return errno = EFAULT, -1;
   std::vector<std::string> args = FromList(argv);
   if (args.empty()) args.push_back(path);
-  if (t_fork != nullptr) ChildExec(path, args, search);  // does not return
+  if (t_fork != nullptr) return ChildExec(path, args, search);  // returns only on failure
   std::vector<std::string> env = envp != nullptr ? FromList(envp) : CurrentEnv();
   ExecReplace(path, args, env, search);  // returns only on failure
   return -1;
@@ -819,6 +842,108 @@ int BIONIC_SYSV Dup3(int old_fd, int new_fd, int flags) {
   return r;
 }
 
+constexpr int kFdLimit = 2048;  // getdtablesize(), InheritedFds()
+
+// A fork child's new fd `new_fd` as a copy of `old_fd` (dup, F_DUPFD): recorded
+// as a dup2 in the child's table only.
+int ChildDupTo(ForkChild* c, int old_fd, int new_fd, bool cloexec) {
+  c->present[new_fd] = true;
+  c->cloexec[new_fd] = cloexec;
+  FdAction a;
+  a.kind = FdAction::kDup2;
+  a.a = old_fd;
+  a.b = new_fd;
+  c->fd_actions.push_back(a);
+  return new_fd;
+}
+
+int BIONIC_SYSV Dup(int fd) {
+  if (t_fork != nullptr) {
+    ForkChild* c = t_fork;
+    if (!ChildHasFd(c, fd)) return errno = EBADF, -1;
+    return ChildDupTo(c, fd, LowestFreeFd(c), false);
+  }
+  return g_dup != nullptr ? g_dup(fd) : (errno = EBADF, -1);
+}
+
+// fcntl in a fork child: the fd-table commands act on the child's table (a
+// child's F_SETFD must not change this process's fd: on Windows FD_CLOEXEC is
+// the handle's inherit flag, shared with the parent); the others (F_GETFL,
+// F_SETFL, locks) concern the open file, which parent and child share on Linux
+// too, and go through.
+int BIONIC_SYSV Fcntl(int fd, int cmd, uint64_t arg) {
+  constexpr int kFDupfd = 0, kFGetfd = 1, kFSetfd = 2, kFDupfdCloexec = 1030;
+  constexpr int kFdCloexec = 1;
+  if (t_fork != nullptr &&
+      (cmd == kFDupfd || cmd == kFDupfdCloexec || cmd == kFGetfd || cmd == kFSetfd)) {
+    ForkChild* c = t_fork;
+    if (!ChildHasFd(c, fd)) return errno = EBADF, -1;
+    switch (cmd) {
+      case kFGetfd: {
+        auto it = c->cloexec.find(fd);
+        return it != c->cloexec.end() && it->second ? kFdCloexec : 0;
+      }
+      case kFSetfd:
+        c->cloexec[fd] = (arg & kFdCloexec) != 0;
+        return 0;
+      default: {
+        // An int argument: only the low 32 bits of the register are defined.
+        int from = static_cast<int>(static_cast<uint32_t>(arg));
+        if (from < 0 || from >= kFdLimit) return errno = EINVAL, -1;
+        return ChildDupTo(c, fd, LowestFreeFd(c, from), cmd == kFDupfdCloexec);
+      }
+    }
+  }
+  return g_fcntl != nullptr ? g_fcntl(fd, cmd, arg) : (errno = ENOSYS, -1);
+}
+
+// close_range(2) and closefrom(3) (bionic, API 34). In a fork child they close
+// (or mark close-on-exec) the child's fds only. Elsewhere they close this
+// process's fds in the range, as Linux does.
+constexpr unsigned kCloseRangeUnshare = 1u << 1, kCloseRangeCloexec = 1u << 2;
+
+int BIONIC_SYSV CloseRange(unsigned first, unsigned last, int flags) {
+  unsigned f = static_cast<unsigned>(flags);
+  if ((f & ~(kCloseRangeUnshare | kCloseRangeCloexec)) != 0 || first > last) {
+    return errno = EINVAL, -1;
+  }
+  bool cloexec = (f & kCloseRangeCloexec) != 0;
+  unsigned end = std::min<unsigned>(last, kFdLimit - 1);
+  if (t_fork != nullptr) {
+    ForkChild* c = t_fork;
+    std::vector<int> open_fds;
+    for (const auto& kv : c->present) {
+      if (kv.second && kv.first >= 0 && static_cast<unsigned>(kv.first) >= first &&
+          static_cast<unsigned>(kv.first) <= end) {
+        open_fds.push_back(kv.first);
+      }
+    }
+    for (int fd : open_fds) {
+      if (cloexec) {
+        c->cloexec[fd] = true;
+      } else {
+        Close(fd);  // t_fork is set: recorded in the child's table only
+      }
+    }
+    return 0;
+  }
+  // Every fd in the range: one that is not open just fails with EBADF.
+  for (unsigned fd = first; fd <= end; ++fd) {
+    int i = static_cast<int>(fd);
+    if (cloexec) {
+      if (g_fcntl != nullptr) g_fcntl(i, 2 /*F_SETFD*/, 1 /*FD_CLOEXEC*/);
+    } else if (g_close != nullptr) {
+      g_close(i);
+    }
+  }
+  return 0;
+}
+
+void BIONIC_SYSV Closefrom(int lowest) {
+  if (lowest < 0) lowest = 0;
+  CloseRange(static_cast<unsigned>(lowest), ~0u, 0);
+}
+
 // --- a child waiting for its parent ----------------------------------------------
 //
 // The vfork-style child runs before its parent: the parent goes on only once the child
@@ -1014,6 +1139,8 @@ void RegisterProcess(SymbolTable& t) {
   GET(g_openat, "openat", OpenatFn);
   GET(g_close, "close", CloseFn);
   GET(g_dup2, "dup2", Dup2Fn);
+  GET(g_dup, "dup", DupFn);
+  GET(g_fcntl, "fcntl", FcntlFn);
   GET(g_chdir, "chdir", ChdirFn);
   GET(g_setenv, "setenv", SetenvFn);
   GET(g_unsetenv, "unsetenv", UnsetenvFn);
@@ -1065,6 +1192,10 @@ void RegisterProcess(SymbolTable& t) {
   E("close", Close);
   E("dup2", Dup2);
   E("dup3", Dup3);
+  E("dup", Dup);
+  E("fcntl", Fcntl);
+  E("close_range", CloseRange);
+  E("closefrom", Closefrom);
   E("chdir", Chdir);
   E("setenv", Setenv);
   E("unsetenv", Unsetenv);
@@ -1075,6 +1206,9 @@ void RegisterProcess(SymbolTable& t) {
   E("write", ForkWrite);
   E("__write_chk", ForkWriteChk);
 #undef E
+  // Last of all: Android's CA directory names over every path-taking entry,
+  // these child-aware ones included (system_cacerts.h).
+  WrapSystemCacerts(t);
 }
 
 }  // namespace gesher::bionic

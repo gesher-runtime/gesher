@@ -40,6 +40,12 @@ import java.util.Map;
  */
 final class Installer {
     private static final String REGISTRY = "system/packages.list";
+    /**
+     * The files packages were last installed from (path, size, last write time, those of
+     * its .dm, package, code path): opening the same file again is "unchanged" without
+     * reading it, as the byte comparison of a 200 MB APK took seconds at every launch.
+     */
+    private static final String SOURCES = "system/install-sources.list";
 
     /** An installed package's entry. */
     private static final class Entry {
@@ -218,6 +224,12 @@ final class Installer {
     synchronized String[] install(String apk) throws Exception {
         File source = new File(apk);
         if (!source.isFile()) throw new IllegalArgumentException("no such file: " + apk);
+        final File original = source;
+        Entry recorded = recordedSource(original);
+        if (recorded != null) {
+            ApkPackage parsed = ApkPackage.parse(recorded.codePath + "/base.apk");
+            return unchanged(apk, recorded.packageName, parsed, recorded);
+        }
         File tempDir = null;
         try {
             if (source.getName().toLowerCase().endsWith(".xapk")
@@ -255,20 +267,8 @@ final class Installer {
                     && sameMetadata(metadata, new File(old.codePath, "base.dm"))
                     && sameSplits(companionSplits(source), old.codePath)
                     && mPm.get(pkg) != null) {
-                SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
-                        + old.codePath + ")");
-                // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
-                boolean libraryChange = !parsed.sharedLibraries.matchesArtifacts(Dexopt.oatDir(old.codePath));
-                if (libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile()) {
-                    if (libraryChange) {
-                        mAtm.forceStopPackage(pkg);
-                        SystemServer.log("install " + pkg + ": shared-library context/content changed");
-                    }
-                    Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
-                    mPm.add(open(old));
-                }
-                return new String[] {pkg, "unchanged", old.codePath,
-                        String.valueOf(parsed.versionCode())};
+                recordSource(original, pkg, old.codePath);
+                return unchanged(apk, pkg, parsed, old);
             }
             if (old != null || mPm.get(pkg) != null) mAtm.forceStopPackage(pkg);
             int n = 1;
@@ -318,9 +318,83 @@ final class Installer {
             SystemServer.log(what + " " + installed.describe() + ", in " + code.getPath()
                     + (libs > 0 ? ", " + libs + " native libraries (" + abi
                             + ")" : ""));
+            recordSource(original, pkg, code.getPath());
             return new String[] {pkg, what, code.getPath(), String.valueOf(installed.versionCode())};
         } finally {
             if (tempDir != null) deleteTree(tempDir);
+        }
+    }
+
+    /** The "unchanged" answer for {@code pkg}, installed in {@code old}. */
+    private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old)
+            throws Exception {
+        SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
+                + old.codePath + ")");
+        // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
+        boolean libraryChange = !parsed.sharedLibraries.matchesArtifacts(Dexopt.oatDir(old.codePath));
+        if (libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile()) {
+            if (libraryChange) {
+                mAtm.forceStopPackage(pkg);
+                SystemServer.log("install " + pkg + ": shared-library context/content changed");
+            }
+            Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
+            mPm.add(open(old));
+        }
+        return new String[] {pkg, "unchanged", old.codePath,
+                String.valueOf(parsed.versionCode())};
+    }
+
+    /** {@code file}'s line in install-sources.list: path, size, time, .dm size and time. */
+    private static String sourceKey(File file) throws IOException {
+        File dm = dexMetadata(file);
+        return file.getCanonicalPath() + "\t" + file.length() + "\t" + file.lastModified() + "\t"
+                + (dm.isFile() ? dm.length() + "\t" + dm.lastModified() : "-1\t-1");
+    }
+
+    /**
+     * The installed package {@code source} was last installed from, if the file (and its
+     * .dm) has the same size and last write time and the package is still installed from
+     * that code path; null otherwise.
+     */
+    private Entry recordedSource(File source) {
+        try {
+            File f = new File(Device.dataDir(), SOURCES);
+            if (!f.isFile()) return null;
+            String key = sourceKey(source) + "\t";
+            for (String line : Files.readAllLines(f.toPath(), StandardCharsets.UTF_8)) {
+                if (!line.startsWith(key)) continue;
+                String[] rest = line.substring(key.length()).split("\t");
+                if (rest.length < 2) return null;
+                Entry e = mEntries.get(rest[0]);
+                if (e == null || !e.codePath.equals(rest[1]) || mPm.get(e.packageName) == null
+                        || !new File(e.codePath, "base.apk").isFile()) {
+                    return null;
+                }
+                return e;
+            }
+        } catch (IOException e) {
+            SystemServer.log("install-sources.list: " + e);
+        }
+        return null;
+    }
+
+    /** Records that {@code source} is installed as {@code pkg} in {@code codePath}. */
+    private static void recordSource(File source, String pkg, String codePath) {
+        try {
+            File f = new File(Device.dataDir(), SOURCES);
+            String path = source.getCanonicalPath() + "\t";
+            List<String> lines = new ArrayList<>();
+            if (f.isFile()) {
+                for (String line : Files.readAllLines(f.toPath(), StandardCharsets.UTF_8)) {
+                    if (!line.startsWith(path)) lines.add(line);
+                }
+            }
+            lines.add(sourceKey(source) + "\t" + pkg + "\t" + codePath);
+            while (lines.size() > 200) lines.remove(0);
+            f.getParentFile().mkdirs();
+            Files.write(f.toPath(), lines, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            SystemServer.log("install-sources.list: " + e);
         }
     }
 

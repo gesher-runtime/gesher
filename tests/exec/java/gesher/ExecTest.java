@@ -198,6 +198,30 @@ public class ExecTest {
     } catch (IOException e) {
       check("a directory: IOException error=13", String.valueOf(e.getMessage()).contains("error=13"), e.getMessage());
     }
+    // A root checker's probes (exec of which/su/busybox that fail), then forced
+    // collections: the runtime and its heap go on (a banking app aborted in the GC
+    // shortly after such probes).
+    {
+      int failedStarts = 0;
+      for (int i = 0; i < 20; i++) {
+        for (String p : new String[] {"/system/xbin/which", "/system/xbin/busybox", "/system/xbin/su", "/sbin/su"}) {
+          try {
+            new ProcessBuilder(p, "su").start().waitFor();
+          } catch (IOException e) {
+            failedStarts++;
+          }
+        }
+      }
+      java.util.List<byte[]> keep = new java.util.ArrayList<>();
+      for (int i = 0; i < 2000; i++) keep.add(new byte[1024 + (i % 7) * 512]);
+      System.gc();
+      Runtime.getRuntime().gc();
+      keep.subList(0, 1000).clear();
+      Runtime.getRuntime().gc();
+      boolean intact = keep.size() == 1000 && keep.get(999).length == 1024 + (1999 % 7) * 512;
+      check("failed exec probes, then forced GCs: the heap survives", failedStarts == 80 && intact,
+            "failed starts " + failedStarts + ", intact " + intact);
+    }
 
     // Runtime.exec and the minimal sh.
     {

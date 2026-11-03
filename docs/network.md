@@ -90,6 +90,25 @@ named mutex serializes writers; `GESHER_WINDOWS_CERTS=0` leaves Windows'
 stores out; `GESHER_TRACE_CACERTS=1` reports what was written. User CAs
 (`$ANDROID_DATA/misc/keychain`) are Android's, unchanged.
 
+### Native TLS clients
+
+Native code that does its own TLS reads the system CAs by their Android
+names: Flutter's dart:io opendir()s `/apex/com.android.conscrypt/cacerts`
+(newer SDKs) or fstatat()s `/system/etc/security/cacerts`, and BoringSSL's
+by-dir lookup (`SSL_CTX_load_verify_locations`) fopen()s
+`<dir>/<subject hash>.<n>`. A drive-less `/system/...` would be the current
+drive's root, so the bionic shim maps exactly those two names, and the names
+under them, for apps' native code (`compat/bionic/system_cacerts.h`, wrapping
+stat/lstat/fstatat/statfs/statvfs/access/faccessat/open/openat/fopen/freopen/
+opendir/realpath and their 64/_2 aliases in the shim's table) to
+`$ANDROID_ROOT/etc/security/cacerts` when that directory exists, else to
+`cacerts\` next to the executable (Android's own set, without Windows' roots
+until a Java TLS client has synced the directory). Only a whole path component
+matches (`.../cacertsX` is not mapped); a name under it with `..`, a
+backslash, a colon, a trailing dot or space or a Win32 device name fails with
+ENOENT. tests/native/libc_test.c checks it in the x86-64 native track when
+`cacerts\` is next to elf_load_test.exe (`GESHER_TEST_SYSTEM_CACERTS=1`).
+
 Hostname verification (OkHttp's `OkHostnameVerifier`, Conscrypt's endpoint
 identification), SNI and TLS 1.3 are Conscrypt's and BoringSSL's.
 

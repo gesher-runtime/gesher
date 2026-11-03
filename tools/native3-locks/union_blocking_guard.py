@@ -463,6 +463,8 @@ def main():
         'tests/windows/tracks/43-exec2.ps1',
         'tests/apps/uiapp/java/com/gesher/uiapp/UiActivity.java',
         'tests/windows/tracks/34-windows.ps1',
+        'compat/bionic/system_cacerts.h',
+        'tests/exec/java/gesher/ExecTest.java',
     ])
     assert not (code | {'tools/ci/receipt-unreviewed.py'}) <= allowed
     print('BLOCKING_RECEIPT_NEGATIVE unauthorized_path rejected; exact pins enforced externally', flush=True)
