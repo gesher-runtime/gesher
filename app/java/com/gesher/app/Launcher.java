@@ -364,6 +364,8 @@ public final class Launcher {
         }
         // Its Start menu shortcut (docs/installer.md), made or updated.
         AppShell.registerQuietly(r[0], r[2], !"unchanged".equals(r[1]));
+        // The APK file shows the app's icon in Explorer (gesher_shellext.dll).
+        AppShell.rememberApkQuietly(r[0], f);
         return r[0];
     }
 

@@ -473,23 +473,31 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     SystemServer.log("startActivity: handling document/tree picker intent: " + action);
                     ActivityRecord source = resultToToken != null ? forToken(resultToToken) : null;
                     boolean isTree = Intent.ACTION_OPEN_DOCUMENT_TREE.equals(action);
-                    String picked = isTree ? WindowsHost.pickFolder("Select Folder")
-                            : WindowsHost.pickFile("Select File");
-                    if (source != null && requestCode >= 0) {
+                    // The Windows dialog is modal and stays up as long as the user takes: not
+                    // on this binder thread, which the app's main thread waits on (its UI
+                    // would stop, as the app's own startActivityForResult returns at once
+                    // on Android). The result comes when the dialog closes.
+                    Thread picker = new Thread(() -> {
+                        String picked = isTree ? WindowsHost.pickFolder("Select Folder")
+                                : WindowsHost.pickFile("Select File");
+                        SystemServer.log("startActivity: " + action + " picked "
+                                + (picked != null && !picked.isEmpty() ? picked : "nothing"));
+                        if (source == null || requestCode < 0) return;
                         Intent resultData = null;
                         int resultCode = android.app.Activity.RESULT_CANCELED;
                         if (picked != null && !picked.isEmpty()) {
                             resultCode = android.app.Activity.RESULT_OK;
                             resultData = new Intent();
-                            java.io.File file = new java.io.File(picked);
-                            Uri uri = Uri.fromFile(file);
+                            Uri uri = Uri.fromFile(new java.io.File(Zygote.fromWindowsPath(picked)));
                             resultData.setData(uri);
                             resultData.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                                     | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
                             resultData.setClipData(android.content.ClipData.newUri(null, "document", uri));
                         }
                         deliverResult(source, resultWho, requestCode, resultCode, resultData);
-                    }
+                    }, "document-picker");
+                    picker.setDaemon(true);
+                    picker.start();
                     return ActivityManager.START_SUCCESS;
                 }
             }

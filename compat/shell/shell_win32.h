@@ -43,5 +43,9 @@ bool RemoveEmptyDirectory(const std::u16string& dir);
 
 bool Exists(const std::u16string& path);
 
+// Tells the shell the file at `path` changed (SHCNE_UPDATEITEM): Explorer reads
+// its icon again.
+void NotifyChanged(const std::u16string& path);
+
 }  // namespace shell
 }  // namespace gesher

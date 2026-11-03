@@ -48,6 +48,14 @@ int ModifierOfKey(uintptr_t vk) {
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+  // What the user's click or key starts often shows a window of another
+  // process: a picker or a browser the system server opens (startActivity),
+  // another app's window. Windows keeps those behind unless the foreground
+  // process allows them: this one is, while the user works in its window.
+  if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP || msg == WM_MBUTTONUP || msg == WM_KEYUP ||
+      msg == WM_SYSKEYUP || msg == WM_POINTERUP) {
+    AllowSetForegroundWindow(ASFW_ANY);
+  }
   if (msg == WM_NCCREATE) {
     auto* cs = reinterpret_cast<CREATESTRUCTW*>(lparam);
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));

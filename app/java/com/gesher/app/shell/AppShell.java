@@ -116,8 +116,13 @@ public final class AppShell {
         String systemRoot = System.getenv("SystemRoot");
         if (systemRoot == null || systemRoot.isEmpty()) systemRoot = "C:\\Windows";
         String psExe = systemRoot + "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
-        String target = Shell.exists(psExe) ? psExe : "powershell.exe";
         String psScript = gesher + "\\gesher-app.ps1";
+        // gesher-launch.exe runs gesher-app.ps1 with no console window and lets the app's
+        // window come to the front (compat/shell/gesher_launch.cc); an older Gesher has none.
+        String launchExe = gesher + "\\gesher-launch.exe";
+        boolean viaLauncher = Shell.exists(launchExe);
+        String kind = viaLauncher ? "launcher" : "powershell";
+        String target = viaLauncher ? launchExe : Shell.exists(psExe) ? psExe : "powershell.exe";
         if (!Shell.exists(psScript)) {
             log("no Start menu shortcut for " + packageName + ": no " + psScript
                     + " (not an installed Gesher)");
@@ -132,7 +137,7 @@ public final class AppShell {
         String oldLink = old != null ? old.getProperty("link") : null;
         String oldTarget = old != null ? old.getProperty("target") : null;
         if (!changed && oldLink != null && codePath.equals(old.getProperty("code"))
-                && Shell.exists(oldLink) && "powershell".equals(oldTarget)) {
+                && Shell.exists(oldLink) && kind.equals(oldTarget)) {
             return;  // up to date
         }
 
@@ -159,8 +164,9 @@ public final class AppShell {
         if (!Shell.makeDirectories(folder)) throw new IllegalStateException("cannot create " + folder);
         String link = linkPath(folder, icon.label, packageName, oldLink);
         String id = appUserModelId(packageName);
-        String arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \""
-                + psScript + "\" launch " + packageName;
+        String arguments = viaLauncher ? "launch " + packageName
+                : "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + psScript
+                        + "\" launch " + packageName;
         int hr = Shell.createShortcut(link, target, arguments, gesher, iconPath,
                 icon.label + " (" + packageName + "), an Android app on Gesher", id);
         if (hr != 0) {
@@ -175,7 +181,7 @@ public final class AppShell {
         record.setProperty("icon", iconPath);
         record.setProperty("code", codePath);
         record.setProperty("app_user_model_id", id);
-        record.setProperty("target", "powershell");
+        record.setProperty("target", kind);
         dir.mkdirs();
         Device.write(new File(dir, RECORD), record);
         log("Start menu shortcut " + link + ": " + icon.label + ", AppUserModelID " + id
@@ -194,9 +200,64 @@ public final class AppShell {
             new File(dir, ICON).delete();
             new File(dir, RECORD).delete();
             java.nio.file.Files.deleteIfExists(dir.toPath());
+            rewriteApkIcons(packageName, null);
         } catch (Throwable t) {
             log("the Start menu shortcut of " + packageName + " was not removed: " + t);
         }
+    }
+
+    // --- the .apk files' icons ---------------------------------------------------------
+
+    /**
+     * The APK files Gesher installed, for the .apk file type's icon handler
+     * (compat/shell/gesher_shellext.cc): a line per file, its size, its last write time
+     * (milliseconds), the app's .ico (a Windows path) and the package, tab-separated.
+     */
+    private static final String APK_ICONS = "system/apk-icons.list";
+    /** Lines kept: the most recent files. */
+    private static final int APK_ICONS_KEPT = 256;
+
+    /**
+     * After {@code packageName} was installed from {@code apk} (and {@link #registerQuietly}
+     * made its icon): Explorer shows that file with the app's icon. Never throws.
+     */
+    public static void rememberApkQuietly(String packageName, File apk) {
+        try {
+            File ico = new File(shellDir(packageName), ICON);
+            if (!ico.isFile()) return;  // no icon of its own: Gesher's, as any other APK
+            String line = apk.length() + "\t" + apk.lastModified() + "\t"
+                    + Zygote.windowsPath(ico.getPath()) + "\t" + packageName;
+            rewriteApkIcons(null, line);
+            Shell.notifyChanged(Zygote.windowsPath(apk.getAbsolutePath()));
+        } catch (Throwable t) {
+            log("no Explorer icon for " + apk + ": " + t);
+        }
+    }
+
+    /** Drops the lines of {@code dropPackage} or for {@code added}'s file, then adds it. */
+    private static synchronized void rewriteApkIcons(String dropPackage, String added)
+            throws java.io.IOException {
+        File list = new File(Device.dataDir(), APK_ICONS);
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        if (list.isFile()) {
+            lines.addAll(java.nio.file.Files.readAllLines(list.toPath(),
+                    java.nio.charset.StandardCharsets.UTF_8));
+        }
+        String addedKey = added != null ? key(added) : null;
+        lines.removeIf(l -> l.isEmpty() || key(l).equals(addedKey)
+                || (dropPackage != null && l.endsWith("\t" + dropPackage)));
+        if (added != null) lines.add(added);
+        while (lines.size() > APK_ICONS_KEPT) lines.remove(0);
+        list.getParentFile().mkdirs();
+        // Written in place: a reader that meets it half written shows Gesher's icon once.
+        java.nio.file.Files.write(list.toPath(), lines, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /** A line's file: its size and time. */
+    private static String key(String line) {
+        int first = line.indexOf('\t');
+        int second = first < 0 ? -1 : line.indexOf('\t', first + 1);
+        return second < 0 ? line : line.substring(0, second);
     }
 
     private static void removeShortcut(Properties shortcut) {

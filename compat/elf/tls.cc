@@ -4,6 +4,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -142,6 +143,50 @@ Arena* CurrentArena() {
   return static_cast<Arena*>(FlsGetValue(g_fls));
 }
 
+// The stack's bottom that stays as Windows keeps it (its guarantee, ART's
+// protected region, fault_signals.cc's GrowStack rules), above the lowest page.
+constexpr size_t kStackBottomKeep = 0x10000;
+
+// Linux maps a thread's whole stack; Windows commits it a page at a time behind
+// a guard page. Code built for Linux moves %rsp past many pages at once (a large
+// frame, no probes: libonnxruntime.so's `sub $0x119c0,%rsp`), and with %rsp in
+// reserved memory Windows cannot even deliver the fault: the process is ended,
+// no handler runs. Commits the reserved pages above the bottom, once per thread
+// that runs loaded code, with a guard page below them as Windows would have.
+void CommitStack() {
+  ULONG_PTR low = 0, high = 0;
+  GetCurrentThreadStackLimits(&low, &high);
+  NT_TIB* tib = reinterpret_cast<NT_TIB*>(NtCurrentTeb());
+  const uintptr_t limit = reinterpret_cast<uintptr_t>(tib->StackLimit);
+  const uintptr_t bottom = low + kStackBottomKeep;
+  if (bottom + kPage >= limit || limit > high) return;
+  for (uintptr_t p = bottom; p < limit;) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(reinterpret_cast<void*>(p), &mbi, sizeof(mbi)) == 0) return;
+    uintptr_t end = std::min<uintptr_t>(reinterpret_cast<uintptr_t>(mbi.BaseAddress) +
+                                            mbi.RegionSize, limit);
+    if (mbi.State == MEM_RESERVE) {
+      if (VirtualAlloc(reinterpret_cast<void*>(p), end - p, MEM_COMMIT, PAGE_READWRITE) ==
+          nullptr) {
+        return;
+      }
+    } else if (mbi.State == MEM_COMMIT && (mbi.Protect & PAGE_GUARD) != 0) {
+      DWORD old;
+      VirtualProtect(reinterpret_cast<void*>(p), end - p, PAGE_READWRITE, &old);
+    }
+    p = end;
+  }
+  // A stack committed whole already (a thread created with a stack size to
+  // commit) keeps its pages as they are.
+  MEMORY_BASIC_INFORMATION below;
+  if (VirtualQuery(reinterpret_cast<void*>(bottom - kPage), &below, sizeof(below)) != 0 &&
+      below.State == MEM_RESERVE &&
+      VirtualAlloc(reinterpret_cast<void*>(bottom - kPage), kPage, MEM_COMMIT,
+                   PAGE_READWRITE | PAGE_GUARD) != nullptr) {
+    tib->StackLimit = reinterpret_cast<void*>(bottom);
+  }
+}
+
 }  // namespace
 
 uint32_t TlsThreadPointerSlot() {
@@ -210,6 +255,7 @@ bool TlsSetupThread() {
     a = BuildArena();
     if (a == nullptr) return false;
     FlsSetValue(g_fls, a);
+    CommitStack();
   }
   TlsSetValue(g_slot_index, reinterpret_cast<void*>(a->tp));
   return true;

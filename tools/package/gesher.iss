@@ -54,6 +54,13 @@ Source: "{#BuildDir}\binderd.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\servicemanager.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; gesher-exec (docs/exec.md): runs an app's ELF executables (ProcessBuilder) next to dalvikvm.
 Source: "{#BuildDir}\gesher-exec.exe"; DestDir: "{app}"; Flags: ignoreversion
+; gesher-launch (compat/shell/gesher_launch.cc): what the apps' shortcuts, a
+; double-clicked .apk and a toast click start: gesher-app with no console window.
+Source: "{#BuildDir}\gesher-launch.exe"; DestDir: "{app}"; Flags: ignoreversion
+; The .apk file type's icon handler (compat/shell/gesher_shellext.cc): an APK
+; Gesher installed shows its app's icon in Explorer (which keeps it loaded: an
+; update closes and restarts what uses it, Inno Setup's CloseApplications).
+Source: "{#BuildDir}\gesher_shellext.dll"; DestDir: "{app}"; Flags: ignoreversion
 ; dex2oat and profman (docs/compiled-code.md, ADR 0054): the device compiles apps at
 ; install and, with their JIT profiles, in the background.
 Source: "{#BuildDir}\dex2oat.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -118,15 +125,22 @@ Name: "{autoprograms}\Gesher README"; Filename: "{app}\README.txt"
 Root: HKCU; Subkey: "Software\Classes\.apk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Apk"; Check: ApkUnclaimed
 Root: HKCU; Subkey: "Software\Classes\.apk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Apk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: ""; ValueData: "Android app (Gesher)"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\gesher.ico,0"
+; Each APK's icon comes from Gesher's icon handler (DefaultIcon %1): its app's
+; for an APK Gesher installed, gesher.ico for any other.
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "%1"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shellex\IconHandler"; ValueType: string; ValueName: ""; ValueData: "{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"; ValueType: string; ValueName: ""; ValueData: "Gesher APK icon handler"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}\InprocServer32"; ValueType: string; ValueName: ""; ValueData: "{app}\gesher_shellext.dll"
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}\InprocServer32"; ValueType: string; ValueName: "ThreadingModel"; ValueData: "Apartment"
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "Run with Gesher"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{sys}\WindowsPowerShell\v1.0\powershell.exe"" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\gesher-app.ps1"" ""%1"""
+; gesher-launch.exe: no console window flashes (compat/shell/gesher_launch.cc).
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""
 ; Gesher's toast activator (ADR 0051): the CustomActivator of every app's
 ; AppUserModelID. A click on an app's toast when no Gesher device runs makes COM
 ; start `gesher-app toast-activated`, which starts the device and hands it the
 ; click (the notification's intent is sent).
 Root: HKCU; Subkey: "Software\Classes\CLSID\{{C18D9445-A7F0-472E-985F-AC354EBEB660}"; ValueType: string; ValueName: ""; ValueData: "Gesher toast activator"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\CLSID\{{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32"; ValueType: string; ValueName: ""; ValueData: """{sys}\WindowsPowerShell\v1.0\powershell.exe"" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\gesher-app.ps1"" toast-activated"
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" toast-activated"
 
 [UninstallRun]
 ; The Gesher device (binderd, servicemanager, the system server and app

@@ -192,6 +192,7 @@ jobs:
         run: |
           mkdir -p dist
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
+          cp out/gesher_shellext.dll dist/
           cp dist-web3-observer/web3_process_waits.exe dist/
           ls -la dist
 
@@ -658,24 +659,31 @@ jobs:
           $aumid = Get-LinkAppUserModelId $lnk
           Write-Host "$lnk -> $($link.TargetPath) $($link.Arguments) (in $($link.WorkingDirectory); icon $($link.IconLocation); AppUserModelID $aumid)"
           $problems = @()
-          $expectedTarget = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+          # gesher-launch.exe (a Windows-subsystem program: no console window flashes).
+          $expectedTarget = "$app\gesher-launch.exe"
           if ($link.TargetPath -ne $expectedTarget) { $problems += "target $($link.TargetPath)" }
-          $expectedArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$app\gesher-app.ps1`" launch com.gesher.lifecycle"
+          $expectedArgs = "launch com.gesher.lifecycle"
           if ($link.Arguments -ne $expectedArgs) { $problems += "arguments $($link.Arguments)" }
+          $subsystem = [BitConverter]::ToUInt16([IO.File]::ReadAllBytes($expectedTarget), [BitConverter]::ToInt32([IO.File]::ReadAllBytes($expectedTarget), 0x3C) + 0x5C)
+          if ($subsystem -ne 2) { $problems += "gesher-launch.exe is not a Windows-subsystem program (subsystem $subsystem)" }
           if ($link.WorkingDirectory -ne $app) { $problems += "working directory $($link.WorkingDirectory)" }
           if ($link.IconLocation -ne "$lifecycleIco,0") { $problems += "icon $($link.IconLocation)" }
           if ($aumid -ne 'Gesher.App.com.gesher.lifecycle') { $problems += "AppUserModelID $aumid" }
           $problems += @(Test-AppIco $lifecycleIco @{ '2,2' = 'transparent'; '128,128' = @(0xD3, 0x2F, 0x2F) })
           if ($problems) { throw "The shortcut of lifecycle.apk: $($problems -join '; ')" }
-          'PASS  installer: gesher-app install makes Gesher Apps\Gesher Lifecycle.lnk: gesher-app launch com.gesher.lifecycle, the app''s icon as a multi-size .ico, AppUserModelID Gesher.App.com.gesher.lifecycle' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
-          # The shortcut's command line, as the Start menu starts it.
-          $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$($link.TargetPath)`" $($link.Arguments) 2>&1`"")
+          'PASS  installer: gesher-app install makes Gesher Apps\Gesher Lifecycle.lnk: gesher-launch launch com.gesher.lifecycle (no console window), the app''s icon as a multi-size .ico, AppUserModelID Gesher.App.com.gesher.lifecycle' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The shortcut's command line, as the Start menu starts it (its output
+          # passed on by gesher-launch).
+          $psi = [Diagnostics.ProcessStartInfo]::new($link.TargetPath, $link.Arguments)
           $psi.UseShellExecute = $false
           $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
           $psi.WorkingDirectory = $link.WorkingDirectory
           $p = [Diagnostics.Process]::Start($psi)
+          $errors = $p.StandardError.ReadToEndAsync()
           $out = $p.StandardOutput.ReadToEnd()
           $p.WaitForExit()
+          $out += $errors.Result
           Write-Host (($out -split "`n" | Select-Object -Last 8) -join "`n")
           if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'launching the installed package com\.gesher\.lifecycle' -or
               $out -notmatch 'LifecycleActivity onResume') {
@@ -723,13 +731,16 @@ jobs:
           if ($null -eq (Get-ItemProperty "$cls\.apk\OpenWithProgids").'Gesher.Apk') { throw '.apk OpenWithProgids lacks Gesher.Apk' }
           $open = (Get-ItemProperty "$cls\Gesher.Apk\shell\open\command").'(default)'
           Write-Host "Gesher.Apk open command: $open"
-          $cmdLine = $open.Replace('%1', "$app\lifecycle.apk")
-          $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"$cmdLine 2>&1`"")
+          if ($open -notmatch '^"([^"]+)"\s*(.*)$' -or $Matches[1] -ne "$app\gesher-launch.exe") { throw "Gesher.Apk's open command does not start gesher-launch.exe: $open" }
+          $psi = [Diagnostics.ProcessStartInfo]::new($Matches[1], $Matches[2].Replace('%1', "$app\lifecycle.apk"))
           $psi.UseShellExecute = $false
           $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
           $p = [Diagnostics.Process]::Start($psi)
+          $errors = $p.StandardError.ReadToEndAsync()
           $out = $p.StandardOutput.ReadToEnd()
           $p.WaitForExit()
+          $out += $errors.Result
           Write-Host (($out -split "`n" | Select-Object -Last 5) -join "`n")
           if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device') {
             throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($p.ExitCode))"
@@ -738,15 +749,40 @@ jobs:
           # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
           $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
           Write-Host "toast activator: $activator"
-          if (-not $activator -or -not $activator.Contains("$app\gesher-app.ps1") -or -not $activator.Contains('toast-activated')) { throw "The toast activator's LocalServer32 is '$activator'" }
-          'PASS  installer: Gesher''s toast activator is registered (LocalServer32: gesher-app.ps1 toast-activated)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
-          # Gesher's icon: the .apk file type's, and the Start menu entries'.
+          if (-not $activator -or -not $activator.Contains("$app\gesher-launch.exe") -or -not $activator.Contains('toast-activated')) { throw "The toast activator's LocalServer32 is '$activator'" }
+          'PASS  installer: Gesher''s toast activator is registered (LocalServer32: gesher-launch.exe toast-activated)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The .apk file type's icons come from Gesher's icon handler (gesher_shellext.dll):
+          # an installed APK's is its app's, any other's gesher.ico; the Start menu entries'.
           $defaultIcon = (Get-ItemProperty "$cls\Gesher.Apk\DefaultIcon" -ErrorAction SilentlyContinue).'(default)'
-          if ($defaultIcon -ne "$app\gesher.ico,0") { throw "Gesher.Apk's DefaultIcon is '$defaultIcon'" }
+          if ($defaultIcon -ne '%1') { throw "Gesher.Apk's DefaultIcon is '$defaultIcon', not %1 (its icon handler)" }
+          $handler = (Get-ItemProperty "$cls\Gesher.Apk\shellex\IconHandler" -ErrorAction SilentlyContinue).'(default)'
+          if ($handler -ne '{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}') { throw "Gesher.Apk's IconHandler is '$handler'" }
+          $server = (Get-ItemProperty "$cls\CLSID\$handler\InprocServer32" -ErrorAction SilentlyContinue)
+          if ($server.'(default)' -ne "$app\gesher_shellext.dll" -or $server.ThreadingModel -ne 'Apartment' -or -not (Test-Path $server.'(default)')) {
+            throw "The icon handler's InprocServer32 is '$($server.'(default)')' ($($server.ThreadingModel))"
+          }
           $sizes = @(Read-Ico "$app\gesher.ico" | ForEach-Object Width)
           foreach ($s in 16, 32, 48, 256) { if ($sizes -notcontains $s) { throw "gesher.ico has no ${s}x$s image ($($sizes -join ', '))" } }
           if ($wsh.CreateShortcut("$programs\Gesher Hello.lnk").IconLocation -ne "$app\gesher.ico,0") { throw 'The Gesher Hello shortcut lacks Gesher''s icon' }
-          'PASS  installer: .apk files and the Start menu entries get Gesher''s icon (DefaultIcon, gesher.ico)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          'PASS  installer: .apk files get their icons from Gesher''s icon handler (DefaultIcon %1, gesher_shellext.dll); the Start menu entries get gesher.ico' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The installed lifecycle.apk, as the shell names its icon (IExtractIcon through
+          # SHGetFileInfo): the app's .ico. Reported, not required: a runner's shell may
+          # not load in-process handlers.
+          Add-Type -Namespace GesherShell -Name Info -MemberDefinition @'
+          [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+          public struct SHFILEINFO { public IntPtr hIcon; public int iIcon; public uint dwAttributes;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szDisplayName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)] public string szTypeName; }
+          [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+          public static extern IntPtr SHGetFileInfo(string path, uint attributes, ref SHFILEINFO info, uint size, uint flags);
+          '@
+          $info = New-Object GesherShell.Info+SHFILEINFO
+          [void][GesherShell.Info]::SHGetFileInfo("$app\lifecycle.apk", 0, [ref]$info, [Runtime.InteropServices.Marshal]::SizeOf($info), 0x1000)
+          if ($info.szDisplayName -eq $lifecycleIco) {
+            'PASS  installer: Explorer shows the installed lifecycle.apk with its app''s icon (the icon handler names its .ico)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          } else {
+            "INFO  installer: the shell names '$($info.szDisplayName)' as lifecycle.apk's icon (expected $lifecycleIco)" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          }
           # The device outlives the console that started it.
           $running = DevicePids
           if ($running.Count -ne 3) { throw "The Gesher device did not outlive the .apk open command's console: $running" }
@@ -899,7 +935,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
-        shard: [1, 2, 3, 4]
     runs-on: ${{ matrix.os }}
     # A hung app or check fails the job instead of running for six hours.
     timeout-minutes: 120
@@ -1046,26 +1081,12 @@ jobs:
           python tools/web3/host_roles.py verify --dist dist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Shard test tracks
-        shell: pwsh
-        run: |
-          $tracks = @(Get-ChildItem tests/windows/tracks/*.ps1 | Sort-Object Name)
-          $shard = [int]'${{ matrix.shard }}'
-          $total = 4
-          for ($i = 0; $i -lt $tracks.Count; $i++) {
-            if (($i % $total) -ne ($shard - 1)) {
-              Remove-Item $tracks[$i].FullName -Force
-            }
-          }
-          Write-Host "Shard $shard running tracks:"
-          Get-ChildItem tests/windows/tracks/*.ps1 | ForEach-Object { Write-Host " - $($_.Name)" }
-
       - name: Run tests
         shell: pwsh
         run: |
           pwsh -NoProfile -File tests/windows/run-tests.ps1 dist -Web3Observer dist/web3_process_waits.exe | Tee-Object -FilePath results.txt
           $code = $LASTEXITCODE
-          "### Tests — ${{ matrix.os }} (shard ${{ matrix.shard }}/4)" >> $env:GITHUB_STEP_SUMMARY
+          "### Tests — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
           Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL|INFO)|failed' >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY

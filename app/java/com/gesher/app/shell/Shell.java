@@ -58,6 +58,11 @@ public final class Shell {
         return nativeExists(path);
     }
 
+    /** Tells the shell the file changed: Explorer reads its icon again. */
+    public static void notifyChanged(String path) {
+        nativeNotifyChanged(path);
+    }
+
     private static native String nativeProgramsFolder();
     private static native int nativeCreateShortcut(String link, String target, String arguments,
             String workDir, String icon, String description, String appUserModelId);
@@ -67,4 +72,5 @@ public final class Shell {
     private static native boolean nativeRemoveFile(String path);
     private static native boolean nativeRemoveEmptyDirectory(String dir);
     private static native boolean nativeExists(String path);
+    private static native void nativeNotifyChanged(String path);
 }

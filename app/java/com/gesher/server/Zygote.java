@@ -163,4 +163,22 @@ public final class Zygote {
         }
         return p;
     }
+
+    /**
+     * A Windows path with a drive letter (a file picker's) as gesher-base's path model reads
+     * it (docs/posix.md, gesher-app.ps1's NoDrive): no drive on Gesher's drive,
+     * {@code /mnt/<drive>/...} on another. Other paths are returned with '/' separators.
+     */
+    public static String fromWindowsPath(String path) {
+        String p = path.replace('\\', '/');
+        if (p.length() >= 2 && p.charAt(1) == ':' && Character.isLetter(p.charAt(0))) {
+            String rest = p.substring(2);
+            if (!rest.startsWith("/")) rest = "/" + rest;
+            String exe = exePath();
+            boolean sameDrive = exe != null && exe.length() > 1 && exe.charAt(1) == ':'
+                    && Character.toLowerCase(exe.charAt(0)) == Character.toLowerCase(p.charAt(0));
+            return sameDrive ? rest : "/mnt/" + Character.toLowerCase(p.charAt(0)) + rest;
+        }
+        return p;
+    }
 }

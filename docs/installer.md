@@ -9,8 +9,8 @@ Start menu shortcuts of their own ([below](#installed-apps-in-the-start-menu)).
 
 Gesher's icon, `tools/package/gesher.ico` (a bridge, drawn by
 `tools/icons/make-icons.py`), is Setup's (`SetupIconFile`), Add/Remove
-Programs' (`UninstallDisplayIcon`), the Start menu entries' and the `.apk`
-type's.
+Programs' (`UninstallDisplayIcon`), the Start menu entries' and that of an
+`.apk` file Gesher has not installed.
 
 ## The `.apk` association
 
@@ -21,12 +21,30 @@ Everything is per user, under `HKCU\Software\Classes`:
 | `.apk` (default) | `Gesher.Apk`, only when `.apk` is unclaimed (see below) |
 | `.apk\OpenWithProgids` | `Gesher.Apk` (empty string) |
 | `Gesher.Apk` (default) | `Android app (Gesher)` |
-| `Gesher.Apk\DefaultIcon` (default) | `<app>\gesher.ico,0` |
+| `Gesher.Apk\DefaultIcon` (default) | `%1` (the icon handler's) |
+| `Gesher.Apk\shellex\IconHandler` (default) | `{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}` |
+| `CLSID\{6B0C3C9E-...}\InprocServer32` | `<app>\gesher_shellext.dll`, `ThreadingModel` `Apartment` |
 | `Gesher.Apk\shell\open` (default) | `Run with Gesher` |
-| `Gesher.Apk\shell\open\command` (default) | `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<app>\gesher-app.ps1" "%1"` |
+| `Gesher.Apk\shell\open\command` (default) | `"<app>\gesher-launch.exe" "%1"` |
 
 `ChangesAssociations=yes` makes Setup and the uninstaller notify the shell
 (`SHChangeNotify`), so Explorer picks up the change without a sign-out.
+
+`gesher-launch.exe` (`compat/shell/gesher_launch.cc`) runs `gesher-app.ps1`
+with the same arguments. It is a Windows-subsystem program: Explorer starting
+`powershell.exe` (a console program) directly flashed a console window before
+`-WindowStyle Hidden` hid it, while gesher-launch starts it with
+`CREATE_NO_WINDOW`. It also calls `AllowSetForegroundWindow(ASFW_ANY)`: the
+app's window belongs to a process the device's system server starts, which
+Windows would otherwise keep behind Explorer.
+
+Each `.apk` file's icon comes from `gesher_shellext.dll`
+(`compat/shell/gesher_shellext.cc`), loaded by Explorer: an APK Gesher
+installed shows its app's icon (the shortcut's `.ico`, below), any other
+Gesher's. It parses no APK: `gesher-app install` and launches record the file
+(its size and last write time) with the app's `.ico` in
+`%LOCALAPPDATA%\Gesher\data\system\apk-icons.list`, and the handler looks the
+file up there.
 
 Opening an APK this way runs it the way `gesher-app my.apk` does: it is
 installed (or updated) on the user's Gesher device and its launcher Activity
@@ -46,7 +64,7 @@ menu shortcut, as a launcher lists it
 | | |
 |---|---|
 | Shortcut | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Gesher Apps\<label>.lnk` (FOLDERID_Programs; `<label> (<package>).lnk` if another app has that label) |
-| Command | `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<app>\gesher-app.ps1" launch <package>`, in `<app>` |
+| Command | `<app>\gesher-launch.exe launch <package>`, in `<app>` (an older Gesher without it: `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<app>\gesher-app.ps1" launch <package>`) |
 | Name | the app's label in the default locale (`android:label`, else the package name) |
 | Icon | `%LOCALAPPDATA%\Gesher\data\data\<package>\gesher-shell\icon.ico` |
 | AppUserModelID | `Gesher.App.<package>` (`System.AppUserModel.ID` in the link) |
@@ -117,7 +135,7 @@ server's shutdown event, waits for it to exit and ends whatever is left.
   (another app may have claimed it since), and the `.apk` key only if it is
   then empty.
 
-APKs show Gesher's icon (`DefaultIcon`) while `.apk` opens with Gesher.
+APKs show their icons from Gesher's icon handler while `.apk` opens with Gesher.
 
 ### How CI checks it
 

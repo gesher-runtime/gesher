@@ -66,6 +66,10 @@ static jboolean Shell_exists(JNIEnv* env, jclass, jstring path) {
     return gesher::shell::Exists(ShellString(env, path)) ? JNI_TRUE : JNI_FALSE;
 }
 
+static void Shell_notifyChanged(JNIEnv* env, jclass, jstring path) {
+    gesher::shell::NotifyChanged(ShellString(env, path));
+}
+
 #define SHELL_STRING "Ljava/lang/String;"
 
 static const JNINativeMethod gShellMethods[] = {
@@ -80,6 +84,7 @@ static const JNINativeMethod gShellMethods[] = {
     {"nativeRemoveFile", "(" SHELL_STRING ")Z", GESHER_JNI(Shell_removeFile)},
     {"nativeRemoveEmptyDirectory", "(" SHELL_STRING ")Z", GESHER_JNI(Shell_removeEmptyDirectory)},
     {"nativeExists", "(" SHELL_STRING ")Z", GESHER_JNI(Shell_exists)},
+    {"nativeNotifyChanged", "(" SHELL_STRING ")V", GESHER_JNI(Shell_notifyChanged)},
 };
 
 int register_gesher_Shell(JNIEnv* env) {
