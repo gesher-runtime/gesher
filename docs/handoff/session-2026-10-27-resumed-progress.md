@@ -26,12 +26,12 @@ full or retry unchanged red source seeking luck. Preserve original failures.
 ## Accepted integration
 
 C:/work/gesher-int, phase4/integration, accepted head before this docs-only
-checkpoint is a7889e7601fd47722fa85949c065b62e2bfbb40a. Resolver merge
-3fb8255d7dd4b9bb26c1d92dfdcf01f7475a3729 accepts frozen50017009/full40519019567
-atf36317637e01fdeeebcb1cbc4777c1cc8f9cea9a. Libcore merge
-c0d0dfe537659024733f0cf884df0a73fa5c7b39 accepts frozen
-ba967deac84ec79da6d4156e10f32a8ee4b3ac12/full40550474909 at
-944a0eeffe5157d662f0278e992c421eebc86255. The entire integrated non-doc tree
+checkpoint is 7c47fe1f7ae9d914302fc62ac12896719dd643e3. Resolver merge
+0ded3da4d4c1be2425917222408d95a9a4baa2fa accepts frozen50017009/full40519019567
+at869d63c3c411ca5cc1bf8bd6cd2453ee167c3cb0. Libcore merge
+31b257c71e871ee98b3d6ec5e4e2079046a3846e accepts frozen
+2e5ca3d81f192358eed131cd23cfd87c114271ad/full40550474909 at
+397ded5dc3fae8bcf629a3e7a91f2d3e5c3947ae. The entire integrated non-doc tree
 equals944a exactly; later a788 and this checkpoint are docs only. No extra
 rule-g full is needed. Both merges are --no-ff with required coauthor.
 
@@ -52,14 +52,14 @@ proof: tracks/libcore-io-final.md; all five logs under C:/work/gesher-ci-review/
 
 | Track / owned worktree | Exact source / run and state | Next action |
 | --- | --- | --- |
-| Native coherent, gesher-arm64-varargs /wip/arm64-varargs |942f2c16b1219cd25bcb1c1ca4215f41639cc88f,40556015168 pending. SourceCPP unchanged0cf; corrected current host+DLL/all boot tools/JDK21/absolute image paths+cwd restore/eight supplier identities/fifteen image-copy hashes reviewed |Require actual ART/APK/copiedJNI-V/FPCR/FPSR and jar/image provenance on both Windows, then hand exact prerequisite to Media. Never overlay new DLL alone. Older405498 was3834native compilations then JDK failure, not runtime proof; intermediate attempts superseded after actual guard defects |
+| Native coherent, gesher-arm64-varargs /wip/arm64-varargs |db5a97fd084556b4db1d2f00260c442a19a1b129,40556015168 pending. SourceCPP unchanged0cf; corrected current host+DLL/all boot tools/JDK21/absolute image paths+cwd restore/eight supplier identities/fifteen image-copy hashes reviewed |Require actual ART/APK/copiedJNI-V/FPCR/FPSR and jar/image provenance on both Windows, then hand exact prerequisite to Media. Never overlay new DLL alone. Older405498 was3834native compilations then JDK failure, not runtime proof; intermediate attempts superseded after actual guard defects |
 | ARM env85, gesher-arm64-env /wip/arm64-env |2be04857 review checkpoint, no runtime CI; frozen review ref only |Gated on coherent Native. Keep full environment/default object/binary128/trap/host-isolation gaps explicit |
-| Muxer, gesher-media4-muxer /wip/media4-muxer |56899f17648f0f7cca86c7c279fbec73389834aa/component40555035592 green; d55212cf9dda1d6fd00015da815220608f10c608/component40556590031 green; full40556596204 active |d552 includes acceptedb323 and distinct payload-EOS; each runner8 contexts for relative+absolute paths, original18/12/10 and10 independent decodes,48 extra0/1/2-boundary audits,16 actual payload-EOS rows. Matching API2 pair only: no Native prerequisite readiness or final leaf acceptance. Once Native942 is actually verified, combine exact code plus latest accepted Libcore, rebuild host+DLL together and qualify changed-union full; supersede only owned old full if still active |
-| AOT3, gesher-aot3 /wip/aot3 |DLC7c2beb18ed6becb2fa449654320cc2b4d8a255ab/component40554342416 green; full4502599386a693cc7673ea8a01f7ec09c915cccc/40557661255 active on acceptedb323 |Both21PCL+21DLC scoped passes; fifteen original graph controls repeated per case are30 records, not30 new controls. Actual Main/deviceDLC/context/oat/image/stale-update proof. Full includes corrected73 log/Main and post-original-failure Web3 observer. Later qualifying union must include accepted Libcore. After-resource/staticSDK/secondary/factory remain open |
+| Muxer, gesher-media4-muxer /wip/media4-muxer |f32c0357a5c8fff3fc76810566cbfbb5f28cf4cd/component40555035592 green; cfdd23e39337e239d3d35ceb7f648ac19f599744/component40556590031 green; full40556596204 active |d552 includes acceptedb323 and distinct payload-EOS; each runner8 contexts for relative+absolute paths, original18/12/10 and10 independent decodes,48 extra0/1/2-boundary audits,16 actual payload-EOS rows. Matching API2 pair only: no Native prerequisite readiness or final leaf acceptance. Once Native942 is actually verified, combine exact code plus latest accepted Libcore, rebuild host+DLL together and qualify changed-union full; supersede only owned old full if still active |
+| AOT3, gesher-aot3 /wip/aot3 |DLCeb1eab90bb88d340f91e3b9feac02deef0585d1c/component40554342416 green; full11716459e315d8f725e3f44f5fed3daef115bbfe/40557661255 active on acceptedb323 |Both21PCL+21DLC scoped passes; fifteen original graph controls repeated per case are30 records, not30 new controls. Actual Main/deviceDLC/context/oat/image/stale-update proof. Full includes corrected73 log/Main and post-original-failure Web3 observer. Later qualifying union must include accepted Libcore. After-resource/staticSDK/secondary/factory remain open |
 | AOT after-resource, gesher-aot3-after-resource /wip/aot3-after-resource |Separate450+a788 preparation, no acceptance; worker prioritizes Web3 evidence |Actual CI resource overlay/stable resource IDs/PCL-DLC order oracle/shutdown/hash restore planned; do not count preparation as behavior |
 | Web3, gesher-webview /wip/web3 |Observerf4b5bdf5/40550620230 red.2022 no hang, only known old73 log-sharing failure.2025 actual job122353154161 records original A11y failure first at17:48:48UTC, then bounded WCT/native-PC observer exit0; launcher4000/server2960/app7400 |Actual nativeWindow.close enter unmatched, fresh app completion absent; later original proxy/PAC400+60+60 failures and old73 sharing give4 failures. Saved native-PC/WCT evidence now exists; Windows is classifying actual app stack. No root cause or fix proven. Keep strict deadlines/fresh-child requirements; observer success alone is not a fix |
-| Exec spawn, gesher-exec4-spawn /wip/exec4-spawn |00c7af776e729abf9e533383ed7c6f685c300263/scoped40549932840 green; laterfec66a76 docs only |Absolute+relative Dir each four ABI action/no-console passes per host. Full still required with accepted baseline/Web3 resolution; no production Unicode-chdir fix justified |
-| Processes84, gesher-ci-processes /wip/ci-processes |ebae3e0b28513aa6f3567be4066bb76714dda29d/40556470317 scoped green25 actual controls per host/0, no full |RunTimed4+SurfaceRun4+frozen InvokeOpenSl4+StartTimed/WaitTimed4+LocaleStart/LocaleWait4+N2Run5; genuine timeout/retained pipes/23/cwd/env/124/handle disposal. Test76 imported explicitly from frozen58a24583; only helper delta.29 further zero-argument legacy waits inventoried; source/functions/semantics preserved. Final combined source needs full |
+| Exec spawn, gesher-exec4-spawn /wip/exec4-spawn |924e7f41bc1b2d140cfe1e15de76cbfba41b8898/scoped40549932840 green; laterfec66a76 docs only |Absolute+relative Dir each four ABI action/no-console passes per host. Full still required with accepted baseline/Web3 resolution; no production Unicode-chdir fix justified |
+| Processes84, gesher-ci-processes /wip/ci-processes |258096818661f3f0c53554b83927a66b23e08d08/40556470317 scoped green25 actual controls per host/0, no full |RunTimed4+SurfaceRun4+frozen InvokeOpenSl4+StartTimed/WaitTimed4+LocaleStart/LocaleWait4+N2Run5; genuine timeout/retained pipes/23/cwd/env/124/handle disposal. Test76 imported explicitly from frozen58a24583; only helper delta.29 further zero-argument legacy waits inventoried; source/functions/semantics preserved. Final combined source needs full |
 | Native locks87, gesher-native3-locks /wip/native3-locks |a70682a33de6a7cc89c0d4fc87092cf18c5f84ce/40559255447 green Linux pure core+reference126 rows; earlier40555739745 reference114 rows |10000 mutations/20000 queries, signedEOF and capacity failure, EINTR/SA_RESTART/deadlock/failed-freopen/crash/exec controls. Pure core/oracle only, no Windows production lock closure. Stable file identity, process-creation/crash-safe registry, fd/stdio/spawn/OFD/signal hooks and full runtime remain |
 | Binder2-SG88, gesher-binder2-sg /wip/binder2-sg |Created clean fromb323, source audit only; existing reservedADR0068/test88 assigned integration worker |Own only SG serialization/broker/PTR parent-buffer validation/rebasing/lifetime. Native confirms no binder.cc/wire/epoll edits planned. Raw binder currently rejects nonzero buffers_size. Require independent processes, real nested parent/pointer ownership, sender mutation/death/free, malicious bounds/order/overflow/cancellation and existing FD/Bitmap/InputChannel regressions; FDA/security/freeze/priority/readiness remain open |
 | Surface/AAudio/notice, gesher-media4-invalidation |Originalfull405078 still red; logger compile40526285481 only |Exact verified coherent Native prerequisite, actual80+86 component preserving legacy logger/pixel/phase gates; broad full also requires actual Web3 fix. No new installed-notice proof from muxer package |
@@ -125,23 +125,23 @@ main provenance/PR/merge and immutable asset/hash/source identity gates remain.
 ## Continuation update: accepted prerequisite and frozen candidates
 
 The preceding table preserves its earlier snapshot. Current accepted integration
-before this update is fbfd9bb3da9774b81fe66684e8d7dbe43c44acae, clean;
+before this update is cdcedca4ff14c375a1fc43f0cfad426ec3bd215f, clean;
 this update changes documentation only. Resolver/Libcore acceptance and exact
 non-doc equality with944a remain as recorded above.
 
-- Native prerequisite942f2c16b1219cd25bcb1c1ca4215f41639cc88f is now actually
+- Native prerequisitedb5a97fd084556b4db1d2f00260c442a19a1b129 is now actually
   verified by component40556015168 attempt1: nine jobs, eight success and one
   intentional smoke skip. Both actual Windows jobs122393236254/122393236300
   finish0: six Native2 ABI/mode reports, shallow/deep and ELF contracts,
   copied JNI-V/int/object and Arm64Jni, five FPCR/five FPSR and10384 oracle
   rows per host. All eight producer identities, current API3 host/DLL/tools,
   actual rebuild for four changed jars and all fifteen image-copy hashes
-  were read. Frozen head db9fa9adb15008d2c99e953a24fa2d4de923b32a is docs only
+  were read. Frozen head 5f7558358d04300b3c3c5f542050bead65ad2137 is docs only
   above942. This is a scoped Media/Env prerequisite, not full/Surface proof.
   Authoritative report: gesher-arm64-varargs/docs/handoff/tracks/
   arm64-varargs-component-verified.md; native-arm64-component-40556015168-*
   plain logs under C:/work/gesher-ci-review.
-- Env85 source b497b8c7997c02bd862daec9c473e57e38a4f5c6/component40564869955
+- Env85 source 3cf5b2d9f4b1bec9a6c6bf1f2c7aff2bd832e347/component40564869955
   is pending, Native-owned watcher32504. It pins the exact942 accepted run,
   ten-file reviewed-source allowlist, eight artifact identities and fifteen
   copied-image hashes. No Env85 runtime acceptance yet.
@@ -153,7 +153,7 @@ non-doc equality with944a remain as recorded above.
   gesher-web3-query-bound/wip/web3-query-bound from accepted a788 plus exact
   Native db9. There is no fix component proof. Original failing observer
   evidence and deadlines remain intact; diagnostic success is not closure.
-- Muxer API2 full40556596204 at d55212cf9dda1d6fd00015da815220608f10c608
+- Muxer API2 full40556596204 at cfdd23e39337e239d3d35ceb7f648ac19f599744
   is now terminal green (28 jobs:22 success/six skip; watcher28683 ended0).
   Actual Windows jobs122378233713/122378233726 each show eight contexts,
   144 semantic rows,96 FD rows,80 output/independent-decode rows, eight
@@ -165,7 +165,7 @@ non-doc equality with944a remain as recorded above.
   {test2022,test2025,package,e2e2022,e2e2025}.log and reviewed-proof.json
   preserve the actual evidence. This API2 source lacks accepted Libcore and
   Native942; it does not qualify the new union or the installed notice.
-- Media's clean local candidate eaa0eb05321f9a3da2c8150b4a8cf8d0a5eaf62a,
+- Media's clean local candidate 7e1532a6b5c7296d50b650ba3a621205b68f4743,
   also ref wip/media4-native-libcore-checkpoint, merges accepted fbfd/Libcore
   and exact frozen Native db9 into Media. All1157 old inventory rows/fields/
   proofs were preserved without inflation. It is not pushed or dispatched;
@@ -173,7 +173,7 @@ non-doc equality with944a remain as recorded above.
   component proof, then freeze the selected union and freshly rebuild host,
   DLL, framework jars and images together for its qualifying full.
 - Binder SG candidate76a121e8 and corrected checkpoint
-  3a2efbc39b61f842dd6ed3876d7e8cd8a019e016 remain uncompiled/unverified in
+  eff918c34461c71ffb8c643ea269b7f089444d0e remain uncompiled/unverified in
   gesher-binder2-sg/wip/binder2-sg. Aggregate preallocation budget, aligned
   receiver capacity, raw-wire body bounds and null/zero guards are corrected
   in source. Guarded receiver publication now adds claim/finish ownership
@@ -198,7 +198,7 @@ environment exists. Together with repository runners0, this confirms an
 external environment blocker for all ten hardware groups and final all-gap/
 release completion. Preserve every gate; software work remains active.
 
-Native has actually reviewed Env85 exactb497b8c7997c02bd862daec9c473e57e38a4f5c6,
+Native has actually reviewed Env85 exact3cf5b2d9f4b1bec9a6c6bf1f2c7aff2bd832e347,
 component40564869955 attempt1: ten jobs, nine success/one intentional skip;
 all nine executed plain logs read. Windows122414930631/122414930394 both0,
 with four actual ARM environment contexts of256 pinned rows/default-object
@@ -218,16 +218,16 @@ Media dispatch or code integration occurred.
 
 ## Current local candidates and source-only work
 
-AOT full40557661255/source4502599386a693cc7673ea8a01f7ec09c915cccc was
+AOT full40557661255/source11716459e315d8f725e3f44f5fed3daef115bbfe was
 independently reviewed by the integrator:28jobs22success/sixskip, actual
 Windows122390523396/122390523351 each21PCL+21DLC/14Web3/whole0, package
 122390523488 actual23 and both e2e122391690045/122391690141 actual ten apps,
 four transports, association/shortcut and0unexpected. Frozen docs-only head
-0c1f4d57a2ddffe65bd6b8c8151ce544f17aae57 has empty entire non-doc diff450.
+d0ff18e8a233aa8ef6279c0ef80311d8cf46d26a has empty entire non-doc diff450.
 Saved extracted actual evidence: aot3-coherent-full-40557661255-integration-review.json.
 No recurrence of Web3 in this full establishes a fix.
 
-New clean LOCAL candidatef4a2b3726cc9e1d81a117564ea45a578f7946dd1/ref
+New clean LOCAL candidateb6bf7d43b749c3b551991746b56eacbf272202a3/ref
 wip/media4-aot-native-env-libcore-checkpoint combines that exact AOT scope
 with7beb Native/Env/Media/acceptedLibcore. Actual AOT application/installer/
 graph/DLC/test73 files equal frozen0c1; prior Native942/Envb497/Media/Libcore
@@ -240,11 +240,11 @@ then the integration merge/equality gate. No integration code merge occurred.
 
 Env precision: four actual ARM contexts each256 pinned cases (JNI/dalvikvm,
 single APK, device APK, native ELF), alongside six retained two-ABI Native2
-controls. Frozen5587c780bb6607d70cba2cfc29fe1fef591b3bff is docs-only above
+controls. Frozen0f6589a361bc253ea1dbcbbf28cf4d9929f4b4aa is docs-only above
 verifiedb497/40564869955. Earlier six-context environment wording was ambiguous
 and is corrected; it never meant six new environment contexts.
 
-SG compile-only40571824155/exact7e9549d89fc871f4d88a29e62c887e36723e6be8
+SG compile-only40571824155/exactb56338fa9d8e3ed49c0dc30f73705878b7e115aa
 is green two jobs; actual host122427752555 compiles binder.cc and links broker/
 actors under Werror, Android122427752185 compiles both ABI actor objects.
 No runtime/ART/APK/full acceptance. Watch2129 completed0; no active watcher
@@ -258,7 +258,7 @@ Active SG worktree is clean on separate wip/binder2-sg-mode-wiring from known
 compile source7e9549, for ordinary ART/APK library/actor wiring only.
 
 Latest shared Web3 state reported by manager: Windows production query-bound
-017c293c53d0044be867f37def848bb4485f1fae implements four pre-ScopedEnv query
+7a2a661b4035fe9fde7d252b571c745aab13b8ca implements four pre-ScopedEnv query
 handoffs, generation retirement, Java cancellation/deadlines/side-effect checks
 and bounded VM/event drain; runtime remains unverified, real lock/join fixture
 in progress. Native helper9dc is source-only pending peer/CI. No fix imported
@@ -274,7 +274,7 @@ f4a2b372 remains clean, unpushed and undispatched; its inventory blob is still
 or release operation occurred. All final all-gap and ten hardware gates remain.
 
 Binder ordinary mode source selected exact accepted645 and frozen5587 atcf416.
-Final Native peer ofd280bce02e06dd5a2fb77e8bf09dd1387be8cf3f covered clean JNI
+Final Native peer of849370acebd66e74b01c5ee349ff15318627a321 covered clean JNI
 registration failure, failed-open endpoint restoration and exact packaged
 bytes. Build-only40577028890 on that exact source is now green two jobs;
 actual host122446098275 compiles binder.cc and links broker/host actors under
@@ -296,7 +296,7 @@ unverifiedb52d0bda after the reported content-filter interruptions; it has not
 been resumed or replaced by ordinary/raw-handle/BR_NOOP-prefix coverage.
 
 Windows reports actual Web3 correction component40577659058 on exact
-fc17670355e8a694ecc83b632eb5e2610a968796, own required watch active. Await actual
+dece704b6cd35e042c0696e4eb47b2bc4b2bb73e, own required watch active. Await actual
 held-WMG-lock/four-wrapper/real-owner-join, cancellation/generation/drain and
 original14 positive UIA/fresh-exit proof before any union import. Native helper
 25e708d21fc532fa1f518aed242ec8eddeeb0285/component40575187153 remains bounded
@@ -310,10 +310,10 @@ Binder's final Native peer found and corrected two actual acceptance gaps:
 actual per-package normal exit0 and matching app/native PID must be validated
 before one-way release, and all actual artifact supplier jobs must have the
 exact successful current source/run/attempt. Corrected source is
-ed741c99367d61df2bb2c07ae4d01753d9a03c06. Final focused peer found no further
+796f11f691327faebe2fa994ba42642995468e8b. Final focused peer found no further
 definite source/wiring blocker; narrow push started40579429217. Required
 watch18559 writes binder2-sg-modes-component-40579429217-watch.log; runtime is
-pending. Clean pushed d001411cea2333d8b4b695aa02ba1f6ca4aa5ff8 adds docs only.
+pending. Clean pushed 2a3abe016cc38df96bfb5fcd70672027cc44a1b1 adds docs only.
 No full/leaf/public-prefix acceptance follows. Successful OpenBinder eagerly
 completes the traced HelloProc before ReserveFd; only thread ioctl pipes are
 lazy. Exact observed broker totals therefore include even unused successful
@@ -346,7 +346,7 @@ belongs SG); no new allocation is made by this update.
 
 ## Qualified Web3 prerequisite, prepared union and actual ordinary SG proof
 
-Web3 component40577659058 at fc17670355e8a694ecc83b632eb5e2610a968796 is
+Web3 component40577659058 at dece704b6cd35e042c0696e4eb47b2bc4b2bb73e is
 independently accepted at bounded prerequisite scope:9jobs8success/one smoke
 skip, exactattempt1; all six supplier and both actual Windows logs read.
 Each Windows has eight pinned scaffold/four current artifact identities,
@@ -356,28 +356,28 @@ blocked15s and only that owned process is terminated. Four actual corrected
 owner wrappers join before monitor release around3.01-3.04s, actual detach/
 cache0 and inflight drain, original14 controls plus mapped Main/device twice
 positive/canceled/stale, seven actual app-child0 and two shutdown0 per host.
-Frozen d192cab95c59616ecee61c18791bbbbda59d84b0 changes docs only; entire non-doc
+Frozen 4387cf8784ce47823d72c29634cd3f49ac82f423 changes docs only; entire non-doc
 diff to fc176 is empty. Authoritative web3-query-component-proof.md and the
 integration source/evidence records retain exact limits. This proof uses the
 hook host; canonical production-OFF/full/package/e2e remain required.
 
-New LOCAL unqualified candidate source120f8120b00e258469864ad6a589179976196ff2,
-docs-only tip17fc9da8815df3d83f94c4804deeb433b728a6b7, is clean in
+New LOCAL unqualified candidate sourcee057d8170f4e2931cb6c43c8f5ab11218ab8c585,
+docs-only tip035b06993684497ec1556fb558594d644c38ea3b, is clean in
 gesher-media4-muxer/wip/media4-web3-union-pending, unpushed/undispatched.
 It preserves f4/7beb/eaa and remote Media d552 while adding exact frozenWeb3,
 process helpers and the complete bounded Exec ordered-spawn leaf. Framework
 merge retains AOT/DLC build/copies AND query dex. Native's independent AST
 peer of process port ade69654 confirms all current44/76 surrounding assertions
 and signatures preserved, only cleanup bodies ported; all25 component controls
-and remaining helpers equal ebae3e0b/40556470317. Exec frozen6e846e15c00af84a20bfb2a4869d3a3f850fcf1b
-has empty non-doc diff to82d41d2117ea587876e3cc1a153dc6486c8b4d6a;
+and remaining helpers equal ebae3e0b/40556470317. Exec frozen7866fd2864935f2457a6384620e4589b994e8811
+has empty non-doc diff tod066bccd9648e1418f4fc86f7c024b1d5d2e32cb;
 actual40582080725 attempt1 has all4jobs success and both genuine absolute/
 relative entries with8original passes/host0. Integrator read all four logs.
 Current Native/Env/Media/Libcore/query/AOT intent and all1157 inventory fields/
 proofs survive; blob55e03c68 is unchanged. See the new Media union pending report.
 
 Windows alone owns canonical full wiring in gesher-web3-full-bound/
-wip/web3-full-bound. Exact local58a085a2902ab8864e8ce8f559610464dbddec2f is
+wip/web3-full-bound. Exact localb478b64ac57f3e0472aaa36bf0eeffe11ff83c0a is
 source-only pending Native/integrator peer, not dispatched: explicit sealed
 productionOFF for normal suite/package/e2e, separate same-source/compiler ON
 hook artifact, two added full regression jobs with exact current supplier/role/
@@ -387,14 +387,14 @@ all selected old/new gates including actual25 process controls and8Exec passes,
 both whole Windows0 within unchanged60min, package23 and both complete e2e0;
 then exact source/equality audit before phase4 code acceptance.
 
-Separate SG ordinary component40579429217 at ed741c99367d61df2bb2c07ae4d01753d9a03c06
+Separate SG ordinary component40579429217 at 796f11f691327faebe2fa994ba42642995468e8b
 is green12jobs11success/one skip; all nine actual supplier and both Windows
 logs read. Each has nine contexts times seven cases,63 actual client+63 server
 reports totaling1440 actual C++ actor checks0, separately723parent checks0,
 63 successful-open occurrence audits, nine real sender-normal0-before-delivery
 and28 normal0 actual device apps. All source/run/attempt, five current artifact
 packages, eleven fixture hashes/five jars/fifteen fresh image copies checked.
-Frozen b49d29a0a570406b6dc7a81632d0b5da74d1884e/ref
+Frozen e9ef9a1c3e03f83a4e8d8af8d975beebc6f77aac/ref
 wip/binder2-sg-ordinary-component-verified is docs-only aboveed741. Exact
 bounded report binder2-sg-ordinary-component-proof.md preserves raw protocol,
 filtered public-prefixb52, remote-close/PID/other Binder2/full gaps. SG is NOT
@@ -418,7 +418,7 @@ and next unallocated ADR0081/test89 remain unchanged.
 ## Fresh canonical union qualification dispatched
 
 Native and integrator completed bounded source peer of exact Windows wiring
-58a085a2902ab8864e8ce8f559610464dbddec2f with no definite blocker. Merge08909b8b
+b478b64ac57f3e0472aaa36bf0eeffe11ff83c0a with no definite blocker. Merge08909b8b
 retains productionOFF configuration before the original Exec early compile,
 all AOT/DLC/query framework producers, current Media/observer/Native/Env intent,
 and original54 assertions/deadlines while routing an explicitly named runtime.
@@ -429,16 +429,16 @@ Static YAML/Python/PowerShell and original60min/matrix checks pass; no local
 compiler or native/JVM/C# fixture runs.
 
 After verifying no live same-ref run, the sole integrator pushed frozen
-4a47a20ef652eff2dfd6d477cf1acbc29d98fc45 on wip/media4-web3-union-pending and
+32765f0b898416c7e4b796426fe7aef11cc63d81 on wip/media4-web3-union-pending and
 used the prescribed canonical ci.yml command exactly once. New full40588525037
 is ACTIVE, not accepted. Required watch16062 writes
 C:/work/gesher-ci-review/coherent-web3-union-full-40588525037-watch.log at120s.
 Do not duplicate/restart this full or infer any conclusion before actual
 terminal jobs and all scope/package/e2e/new-regression logs are read.
 
-Current clean pushed candidate tipcd82c49ab0a84696be3c51d2a5f7017a7fb5bb77
+Current clean pushed candidate tipe451f48e467af40118fbf7d99db713b231e62722
 only adds documentation to full source4a47, including Windows' process proof
-freezece44b68f01ae7d15b0ca7b0354e1199b16261533 (entire non-doc diff toebae empty).
+freezee4a4ee3be882ce9d7a41be105ef7b4afdba65cd8 (entire non-doc diff toebae empty).
 All1157 inventory fields/history remain exact55e03c68. Original f4/7beb/eaa
 and remote Media d552 refs remain. SGb49, after-resource958 cleanup-source and
 Surface5c remain excluded. Both actual SG ordinary component logs/provenance
@@ -450,7 +450,7 @@ No phase4 code merge, main/PR/tag/release or further allocation occurred.
 Successor recovery found watch40543 no longer present. A single prescribed
 reattach to existing full40588525037 returned its terminal failure; no new
 dispatch, retry or CI restart occurred. Exact source remains
-4a47a20ef652eff2dfd6d477cf1acbc29d98fc45. Saved terminal metadata records
+32765f0b898416c7e4b796426fe7aef11cc63d81. Saved terminal metadata records
 28jobs:16success,1failure,11skipped. Six skips are the intentional reusable
 probes; boot-image, normal test, query regression, package and e2e were
 blocked downstream and provide no acceptance evidence.
@@ -478,8 +478,8 @@ and all-gap completion gate remains open as previously recorded.
 
 ## Corrected compiler provenance and fresh canonical full (2026-10-28)
 
-Windows frozen primary34ba544b1ef55c36522d0df01a552af38b595fb3 changes docs
-only above12db63e5304ac3ede0538a3e882196550f9fb5b0; the only non-doc change
+Windows frozen primaryea0408289b0107f3bb753c490d65a2ca1d8aec9b changes docs
+only above0da765a1b3dd7a311ea9cfad27bcdf991a68c17c; the only non-doc change
 from original58a wiring is tools/web3/host_roles.py. Source peer/AST comparison
 preserve every existing role/source/flag/exe/map/installer guard outside the
 compiler extraction and added preflight entry. It uses unique absolute
@@ -497,7 +497,7 @@ all reject. Its helper blob7889dd3e07abec6d057190858acc36ca59fb1bc4 equals
 primary12db/frozen34ba. The separate helper workflow is excluded from the
 union. This preflight proves configuration/identity parsing only, not runtime.
 
-Candidate --no-ff merge30db7709838839d28be68d8b467a57b26a3ac667 imports that
+Candidate --no-ff merge9d2232622c7d8279514a13e7007c2987d1d7a3a1 imports that
 reviewed correction. Entire other non-doc tree exactly equals failed4a47,
 and all1157 inventory rows/fields/history remain exact55e03c68. No live
 same-ref full existed before push/dispatch. Canonical ci.yml was dispatched
@@ -572,7 +572,7 @@ No extra dispatch, primary source edit, code merge/main/PR/tag/release occurred.
 ## Canonical union accepted and merged, 2026-10-28
 
 Recovery used the prescribed watch on existing40596167427, which had completed
-success. Terminal attempt1/source30db7709838839d28be68d8b467a57b26a3ac667
+success. Terminal attempt1/source9d2232622c7d8279514a13e7007c2987d1d7a3a1
 records31jobs25success/6intentional reusable probes skipped, with no skipped
 acceptance consumer. Both full normal Windows actual logs were newly read,
 hashed and independently counted: whole0 each, Process25, genuine Exec absolute/
@@ -591,9 +591,9 @@ same exact source/run/attempt. Installer artifact12779320697/digest8815eb8c
 is ordinary0.1.543 CI and does not establish new installed-notice/release0.1.0.
 No CI artifact was downloaded and no local compilation/fixture execution ran.
 
-Frozen6a057cccbb381b6b43ea1dd5b70915d9545b8505 adds only the bounded acceptance
+Frozenddb8b00256f2b4ecde36ac76c009ac409a687961 adds only the bounded acceptance
 report. Sole integrator performed authorized --no-ff phase4 merge
-fb0a4fe24286ccf2d69ed4fe987989fddc7db1b9 without conflicts. Both staged and
+74c0987b7192f3c7ff381f72bf16ec5b9062c651 without conflicts. Both staged and
 post-commit entire non-doc trees independently equal verified30db. Inventory
 blob55e03c68ed061ecbfa718cfa02ca64516b9d9233/all1157 rows/fields/history is
 unchanged. No rule-g extra full is required for identical code. Any later
@@ -639,7 +639,7 @@ open until actual strict helper proof, distinct from actual runtime31/0.
 - Windows reader component40655610161/attempt1/sourcef5f8fe91 is bounded green:
   both43 retained controls0 plus eight actual reader observations (four
   RunTimed/four InvokeOpenSl), real handle invalidity/reprobe and original
-  retained-writer EOF failure preserved. Frozen921418533f4fb35d52e988bc644db8d590207ee3
+  retained-writer EOF failure preserved. Frozen675b9f0b9f34633b5ffef9f28fe5499f0192aa23
   adds docs only. This leaf is excluded from primary; broader helpers and
   coherent full acceptance remain required.
 - Terra owns new C:/work/gesher-surface-visual-current,
@@ -668,7 +668,7 @@ open until actual strict helper proof, distinct from actual runtime31/0.
   582326 are source-only. Native independent peer at552c5488 found no remaining
   bounded guard/fixture blocker after missing OutputActorPid was predeclared;
   four source hashes and precise peer are saved in ci-review. Current clean
-  pushed2430c0372ddf61503266288c8c3e6353a5950416 adds a fresh-component draft,
+  pushed0144abc8492c97f018a6d4ef3d901082dc841eac adds a fresh-component draft,
   with NO push trigger and no dispatch: exact ancestry/delta/current attempts,
   whole host payload and configured compiler guards are prepared; strict ZIP/
   collision helpers and their own preflight remain mandatory before launch.
@@ -694,7 +694,7 @@ The helpers' source byte identities are independently frozen and may be reused
 for their own actual preflight without waiting for unrelated Surface pixels.
 
 Binder narrow component40664399508 is ACTIVE, exact source
-6375ce97f5febfbd88fd210aaa31d3c315177535, pushed once after no live same-ref
+80f5e4699d64665cafd06a1a09108333ed89b5ca, pushed once after no live same-ref
 run existed. Prescribed watch at120s uses session27486 and writes
 C:/work/gesher-ci-review/binder-stable-readonly-40664399508-watch.log.
 No manual duplicate dispatch, restart or unchanged-red retry occurred.
@@ -724,13 +724,13 @@ release gate remain separate. No primary code/main/PR/tag/release operation.
 ## Coherent candidate full launched, 2026-10-28
 
 This entry supersedes older pending component states above. Primary before
-this docs-only checkpoint is bab651b384f0747cd84dd23a8d55b49959dffcfa;
-its entire non-doc tree remains qualified30db7709838839d28be68d8b467a57b26a3ac667.
+this docs-only checkpoint is 3957ec4ff8c3b8383734e92c2536f0c5f72a8cf3;
+its entire non-doc tree remains qualified9d2232622c7d8279514a13e7007c2987d1d7a3a1.
 Inventory blob55e03c68/all1157 fields and proof history remain unchanged.
 
 The integrator's clean pushed candidate in C:/work/gesher-media4-muxer,
 wip/coherent-surface-reader-binder-integrity, is exact
-7bbccfcddbac826f50b78175f4d23f8702fd7741. Full40678371420/attempt1 was
+429b08826923ab0b1fff80529499bfdcfaa68caa. Full40678371420/attempt1 was
 dispatched once after the same-ref guard found no runs. Prescribed watch120
 session3966 writes coherent-surface-reader-binder-integrity-40678371420-watch.log
 under C:/work/gesher-ci-review. Initial preflight job122782470754 started;
@@ -739,23 +739,23 @@ all actual expanded job counts and runtime conclusions remain pending.
 - Surface sourcea94a77cb/component40664447274 is bounded green on both
   Windows: seven controls, four actual ABI/mode pixel/phase/cold-logger contexts,
   fresh pinned native child0, original86, strict archives and5jars/15images.
-  Frozen16102cd5acc958695a4d42374659f494b5236b24 adds docs only.
+  Frozen1155e663e6862cc43c3acfbfd7c0d961f46edb93 adds docs only.
 - Reader sourcef5f8fe91/component40655610161 is bounded green on both Windows:
   43 controls include the original25; eight separate reader observations are
-  not extra control counts. Frozen921418533f4fb35d52e988bc644db8d590207ee3
+  not extra control counts. Frozen675b9f0b9f34633b5ffef9f28fe5499f0192aa23
   adds docs only. Full still must exercise the actual shared consumers.
 - Canonical integrity source1ac73c5e/preflight40670202635 is green on both
   Windows:15 adversarial archive cases, positive and identity/upload-policy
   controls, and a real authenticated accepted boot ZIP. Frozen
-  b80e4e8d615b969237618e0db1fe68c04124354a adds docs only. Fresh framework
+  62133ebbb688694276cd225bfdb926cd0a884e4e adds docs only. Fresh framework
   tools and canonical producer/consumer receipts still require actual full.
-- Binder source6375ce97f5febfbd88fd210aaa31d3c315177535/component40664399508
+- Binder source80f5e4699d64665cafd06a1a09108333ed89b5ca/component40664399508
   is bounded green:12jobs11success/one intentional translator standalone skip.
   Each actual Windows log has9contexts x9scenarios=81 cases,1944 actor checks,
   963 parent checks0, nine RW/nine RO,36 independent full-page observations,
   actual protection/content/FD rollback and162 dead actor PIDs;36 actual app
   normal0 and nine sender normal0 before delivery. Frozen
-  7c72a3af6e41ca184b385697ae8e2979414181de adds docs only. Component archive
+  85ecceed46285d17e8f972cde974c84ae27f2ae9 adds docs only. Component archive
   controls used the historical nine-case helper; canonical candidate uses
   the newer15-case reserved-alias validator. Stable protection only is proved;
   concurrent protection/unmap/partial-copy and wider Binder contracts stay open.
@@ -799,7 +799,7 @@ No primary code merge/main/PR/tag/release or aggregate completion is claimed.
 ## Full40678371420 accepted and integrated, 2026-10-28
 
 This entry supersedes the pending candidate state above. Exact source
-7bbccfcddbac826f50b78175f4d23f8702fd7741/attempt1 is terminal SUCCESS:
+429b08826923ab0b1fff80529499bfdcfaa68caa/attempt1 is terminal SUCCESS:
 35 actual jobs29success/six original intentional standalone probes skipped.
 Both normal122801461100/windows2022 and122801461113/windows2025 have whole0
 after42m49s. All29 successful plain logs, final metadata/artifact inventory and
@@ -832,9 +832,9 @@ Production5894c8e2 is sealed before hooke0e4e189; the ordinary actor stays in a
 separate typed artifact outside installer/normal/hook roles. Twelve shared and
 nine actor source hashes independently match canonical Git blobs/compiler.
 
-Frozen2634c778ed49d2c0f948fbf910566f718e12abd5 adds exactly two docs files above
+Frozenf582e320944769d8d3a84cfda25de7a99f739e04 adds exactly two docs files above
 verified7bb. Integration --no-ff merge
-695ef6b81ac31662f3a51fa3195ace11923058e2 was pushed clean after both staged and
+c46374e2992d70c3fa1af2054ffe08695dcb9a2b was pushed clean after both staged and
 postcommit entire non-doc diffs to7bb were EMPTY. Inventory remains exact
 55e03c68ed061ecbfa718cfa02ca64516b9d9233/all1157 fields/proof history. No extra
 rule-g full is required for identical code. The next changed candidate needs

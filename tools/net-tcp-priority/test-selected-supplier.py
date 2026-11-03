@@ -82,5 +82,5 @@ if __name__=='__main__':
     import argparse
     p=argparse.ArgumentParser();p.add_argument('--diagnostic-receipt',type=Path,default=HERE.parents[1]/'tests/net-tcp-priority/minimum-receipt-411350.json');a=p.parse_args()
     raw=a.diagnostic_receipt.read_bytes();assert hashlib.sha256(raw).hexdigest()=='aba3e32beef66ec5ca6919e65f5e49f8b40f587599a8d2f43205e60bab873701'
-    original=json.loads(raw);assert original['GITHUB_SHA']=='f0a8364afd3380eb0e25b8d82824dd1752f91e16' and original['GITHUB_RUN_ID']=='41135044960' and original['role']=='gesher-winpthreads-minimum-candidate-v1'
+    original=json.loads(raw);assert original['GITHUB_SHA']=='3c76d9f4f259ff3110b27e753b514838628989aa' and original['GITHUB_RUN_ID']=='41135044960' and original['role']=='gesher-winpthreads-minimum-candidate-v1'
     check(original)

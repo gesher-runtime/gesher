@@ -133,7 +133,7 @@ Check ($new.Extent.Text.Contains("$"+'stage.code.cache=$cache[0]'))
 Check ($new.Extent.Text.IndexOf("Get-PreflightFileProfile $"+'codePath') -lt $new.Extent.Text.IndexOf('$child=Start-ResourceRole'))
 Check ($new.Extent.Text.Contains("'CODE_ENVELOPE_SCRIPT' ($"+'checkout'))
 # The entire parser body differs from immutable9df by exactly ONE literal test.
-$priorRunner=(& git show '9df03ff1accac2c41a8831c490d2c6d1a0dcea53:tools/fonts/resource-characterization.ps1') -join "`n"
+$priorRunner=(& git show '2ba8ab0facdb5251a867568ae1640b9c70c14009:tools/fonts/resource-characterization.ps1') -join "`n"
 $priorTokens=$null;$priorErrors=$null
 $priorAst=[Management.Automation.Language.Parser]::ParseInput($priorRunner,[ref]$priorTokens,[ref]$priorErrors)
 Check ($priorErrors.Count -eq 0)
@@ -415,7 +415,7 @@ $savedNtdll=@'
         LegalCopyright:   � Microsoft Corporation. All rights reserved.
 '@
 Check ((Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($savedNtdll+"`n"))) -ceq '079483c383ad0bfffab61e34ca26a841b0499f66b48aa8879b920cc8f886b1f1')
-$retained=@{path='C:\Windows\SYSTEM32\ntdll.dll';base=[uint64]0x7ffdf5bc0000;extent=0x204000;version='10.0.20348.5622';sha256='bcfe8a70a371a7d2fbcb429ab0a9e170aeebe4d73ae08d03a2da8fedec2efc78';context=@{source='88a02325e724ff1ee6393aa68c9cbea6a6258aa1';run='41201795245';attempt='1'}}
+$retained=@{path='C:\Windows\SYSTEM32\ntdll.dll';base=[uint64]0x7ffdf5bc0000;extent=0x204000;version='10.0.20348.5622';sha256='bcfe8a70a371a7d2fbcb429ab0a9e170aeebe4d73ae08d03a2da8fedec2efc78';context=@{source='b3a691e37b70071d5b1aa9d888bdb9ef06d84531';run='41201795245';attempt='1'}}
 # Expected base/extent HERE are SYNTHETIC controls, not recovered historical expectations.
 $before=$script:pathRecords.Count
 Reject {Assert-ResourceWitnessProfiles ($lmv+$savedNtdll+"`n0:000> qd`n") $cacheDouble $codeDouble $retained}
@@ -566,7 +566,7 @@ foreach($key in @('IsClosed','CanRead','Name','Length')){
 Reject {New-ResourceDiskFrame @{handles=@()} $diskStream $diskIdentity $diskContext 123}
 Reject {New-ResourceDiskFrame $diskOwner $diskStream $diskIdentity $diskContext 0}
 foreach($key in @('signature_status','signer','signer_thumbprint','sha256')){$bad=$diskIdentity.Clone();$bad[$key]='wrong';Reject {New-ResourceDiskFrame $diskOwner $diskStream $bad $diskContext 123}}
-$oldRunner=& git -C (Split-Path (Split-Path $PSScriptRoot)) show '7c83593e8955c39235182f6ac81035739c38354b:tools/fonts/resource-characterization.ps1'
+$oldRunner=& git -C (Split-Path (Split-Path $PSScriptRoot)) show '7935f3cbc319e5d22c072fd52e82bfc5f00803a9:tools/fonts/resource-characterization.ps1'
 $oldPredicate=@($oldRunner|Where-Object{$_.Contains("throw 'UNAVAILABLE: retained current ntdll profile/module mismatch'")})
 Check ($oldPredicate.Count -eq 1 -and $new.Extent.Text.Split("`n").TrimEnd("`r").Contains($oldPredicate[0]))
 Write-Host "FONT_RESOURCE_METADATA_PASS checks=$script:checks native_processes_started=0 real_tool_reads=0 actual_application_lookup=NOT_EXECUTED code_rows=SYNTHETIC_AND_SAVED_CI_TEXT"

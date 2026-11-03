@@ -36,14 +36,14 @@ jobs:
       - name: Require exact selected prerequisite and actual mode build proof
         shell: pwsh
         run: |
-          $qualified = '30db7709838839d28be68d8b467a57b26a3ac667'
-          $baseline = 'a474aefaa553f53f3fdf14345c199b0a4ae3683c'
+          $qualified = '9d2232622c7d8279514a13e7007c2987d1d7a3a1'
+          $baseline = '4103be2a204a1b170e2702a22515262b60ac42a3'
           $proof = gh api repos/${{ github.repository }}/actions/runs/40596167427 | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $proof.head_sha -cne $qualified -or
               $proof.name -cne 'ci' -or $proof.run_attempt -ne 1 -or $proof.conclusion -cne 'success' -or
               $proof.repository.full_name -cne '${{ github.repository }}' -or
               $proof.head_repository.id -ne $proof.repository.id) { throw 'Qualified coherent union identity mismatch' }
-          foreach ($ancestor in $qualified, $baseline, 'ed741c99367d61df2bb2c07ae4d01753d9a03c06') {
+          foreach ($ancestor in $qualified, $baseline, '796f11f691327faebe2fa994ba42642995468e8b') {
             git merge-base --is-ancestor $ancestor HEAD
             if ($LASTEXITCODE -ne 0) { throw "Missing exact selected prerequisite $ancestor" }
           }
@@ -54,7 +54,7 @@ jobs:
           $changed = @(git diff --name-only $baseline HEAD -- . ':!docs/**')
           if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect exact successor source delta' }
           foreach ($path in $changed) { if ($path -cnotin $allowed) { throw "Unreviewed Binder successor source delta: $path" } }
-          Write-Host "ACTUAL_BINDER_READONLY_BASE source=$baseline union=$qualified full=40596167427 attempt=1 ordinary=ed741c99367d61df2bb2c07ae4d01753d9a03c06 current=${{ github.sha }}"
+          Write-Host "ACTUAL_BINDER_READONLY_BASE source=$baseline union=$qualified full=40596167427 attempt=1 ordinary=796f11f691327faebe2fa994ba42642995468e8b current=${{ github.sha }}"
       - name: Verify one real pinned archive before expensive producers
         shell: pwsh
         run: |
@@ -62,12 +62,12 @@ jobs:
           $digest = 'sha256:c0eb14751722b28dac9d0024e168cd8fb8e6441798f8b747063d092432baee9d'
           if ($LASTEXITCODE -ne 0 -or $a.id -ne 12777738989 -or $a.name -cne 'boot-image' -or $a.expired -or
               $a.digest -cne $digest -or $a.workflow_run.id -ne 40596167427 -or
-              $a.workflow_run.head_sha -cne '30db7709838839d28be68d8b467a57b26a3ac667' -or
+              $a.workflow_run.head_sha -cne '9d2232622c7d8279514a13e7007c2987d1d7a3a1' -or
               "$($a.workflow_run.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or
               "$($a.workflow_run.head_repository_id)" -cne $env:GITHUB_REPOSITORY_ID) { throw 'Known archive positive control identity mismatch' }
           $j = gh api repos/${{ github.repository }}/actions/jobs/122529052458 | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $j.conclusion -cne 'success' -or $j.run_id -ne 40596167427 -or $j.run_attempt -ne 1 -or
-              $j.head_sha -cne '30db7709838839d28be68d8b467a57b26a3ac667' -or
+              $j.head_sha -cne '9d2232622c7d8279514a13e7007c2987d1d7a3a1' -or
               [datetime]$a.created_at -lt [datetime]$j.started_at -or [datetime]$a.created_at -gt [datetime]$j.completed_at) { throw 'Known archive producer attempt mismatch' }
           python3 tools/surface/download-verified-artifact.py --id 12777738989 --digest $digest --destination preflight-only-accepted-boot
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

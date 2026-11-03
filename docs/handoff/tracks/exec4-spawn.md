@@ -39,7 +39,7 @@ the workflow is absent from main, so direct dispatch cannot bootstrap it.
 Scoped40472829064 at5f2653c6 built both NDK callers. Corrected scoped
 40497922800 at47733cd3 also succeeds; actual job122167992203 is awaiting
 root log review. Full40498406783 runs at exact
-e8e827e599077f994be650d1e7b7e40cc78b193c after importing accepted
+1f32ac0baa6bfd015ee678b5d6ba4240b5fb9dbf after importing accepted
 Windows160e25e8 and integrationdb847. Watch log is
 C:\work\gesher-ci-review\exec4-spawn-full-40498406783-watch.log, interval120.
 Host bridge compilation and actual Windows runtime remain pending; nothing
@@ -56,7 +56,7 @@ mandatory in test77; main CI builds this host target and launcher early.
 This is a source finding, not an error observed in the earlier run.
 Full40498406783 is superseded by the corrected source before acceptance.
 Corrected full40502225202 is dispatched at exact
-0808ba71b62ea784432de52f31bd3f86c9e2e3ad after merging accepted current
+a8cdf2cc0c9ac7dada5ad5652480d2b6ac97d8a6 after merging accepted current
 integration7b49a718 (docs above Windows6297/160). The second bounded peer
 review of6eeb773d found no blocker; neither review supplies runtime proof.
 Watch C:\work\gesher-ci-review\exec4-spawn-full-40502225202-watch.log,
@@ -130,7 +130,7 @@ original action, PID, isolation, failure and no-console assertion is retained.
 The scoped driver now runs the entire unchanged assertion body with both an
 absolute Dir and relative Dir=dist on each Windows host. Only PowerShell
 parsing and whitespace checks run locally.
-Scoped40549932840/source00c7af776e729abf9e533383ed7c6f685c300263 is
+Scoped40549932840/source924e7f41bc1b2d140cfe1e15de76cbfba41b8898 is
 complete GREEN4jobs. Both actual Windows logs122350989344/122350989592
 were read: each absolute and relative driver entry has all four mandatory
 two-ABI ordered-action/no-console PASS records, eight per host, then0failed.
@@ -140,7 +140,7 @@ old full/Web3 failure and the requirement for coherent full CI remain.
 ## Historical owner-requested stop checkpoint
 
 Work stopped on2026-10-27 for a new coordinating session. Full40521839555
-at b4c350b80b5b74ea87b2fe4933b185137b39449a is RED: Windows2022 has2 top
+at 9a9848df6731ed8ee17731fdfb56fcf486b0b8ae is RED: Windows2022 has2 top
 failures (the two ABI action callers);2025 has those two plus3 repeated
 Web3 teardown/launch failures. Both actual no-console callers pass. Package
 and both e2e jobs have successful conclusions; their actual logs have not

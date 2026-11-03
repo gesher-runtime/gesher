@@ -12,7 +12,7 @@ import yaml
 import first_link_context as focused
 
 ROOT=Path(__file__).resolve().parents[2]
-BASE='8e92d30b6b25faa3c1daf6014b7bd0ba2ebb6e2f'
+BASE='54c6b2301e26e74422133b7a33c89dad830be345'
 CHANGED={focused.PATH,'tools/host-pthread-authority/minimum_receipt.py',
          'tools/toolchain/prepare_host_pthread.py','tools/toolchain/selected_link.cmake',
          'tools/toolchain/first_link_context.py','tools/toolchain/first_link.py','tools/toolchain/first_link_policy.py',

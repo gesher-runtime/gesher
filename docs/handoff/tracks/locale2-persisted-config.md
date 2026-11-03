@@ -1,7 +1,7 @@
 # Locale2 persisted-config first slice: scoped proof, coherent full red
 
 Coherent full[40516054280](https://github.com/gesher-runtime/gesher/actions/runs/40516054280)
-at exactca4ed3cfff46d4843485d89859370dc5b86a4146 completed red, attempt1.
+at exacta63a3fe9bd7c2d80c1145bd624594723722347cb completed red, attempt1.
 All29 conclusions were read:22success/one failure/six skips. The five actual
 critical logs were independently read by the successor, without artifact
 downloads or local executable runs:
@@ -32,7 +32,7 @@ The complete local evidence files have prefix
 `C:\work\gesher-ci-review\native-locale2-40516054280-`, with jobs.json,
 test2022.log, test2025.log, package.log, e2e2022.log and e2e2025.log.
 
-Source `004fff103e7b31af519a24f63b0893cb16e8ef79` passes scoped CI
+Source `477087d26457ac3f5f9c1fbb91572911f416ab32` passes scoped CI
 [40512781936](https://github.com/gesher-runtime/gesher/actions/runs/40512781936).
 All four actual executed job logs and conclusions were personally read:
 
@@ -44,7 +44,7 @@ All four actual executed job logs and conclusions were personally read:
 | Windows 2022 |122222254971| Same actual 21 groups and zero summary |
 
 This run compiles current Java/APKs and verifies exact native runtime provenance
-`40498782924` / `8ec4bf3c30160575c8df794ad2ca1406957adc98` inside CI. Execution
+`40498782924` / `0498d825871a54b81b9bb51ef4610d9bb655cd44` inside CI. Execution
 is explicitly imageless. It is not a native rebuild, boot-image, installer or
 e2e acceptance claim. There was no local compilation, fixture execution or
 artifact download.
@@ -86,10 +86,10 @@ Primary hashes and exact baseline semantics are in
 
 ## Coherent full candidate
 
-Merge `acb144fbe14d191ce6b476d7f8c4a299b92e4b0c` imports current accepted
-integration `bc6e05bea341d1dc79920deaf3f069ad690fedc4`, including Net4.
-Merge `d698a74e51f8aee7b0042ef93f0c70dbbce47f4c` imports immutable verified
-Wide/FPCR/FPSR stage `75e7ef29645302a860e702207b43131f9f28b1d3`.
+Merge `bcbb90c4cc6a4f5ae57a9b383fa1547b6ee73d4b` imports current accepted
+integration `45891282a524016f80b3d38028495e4495499456`, including Net4.
+Merge `c1df0c581e6399f818fcb51599de41a8942408a4` imports immutable verified
+Wide/FPCR/FPSR stage `596041528ac98b62a1abd3500041c225e57bf86a`.
 The two Native2 include/Run conflicts retain all four headers and
 Extras/Unicode/Wide/Dlopen/Files/ifaddrs plus ARM-only ArmFpcr/ArmFpsr.
 Both reference builds, APK ifaddrs markers and all captured evidence remain.

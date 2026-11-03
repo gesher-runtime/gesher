@@ -1,6 +1,6 @@
 # First-product selected supplier ledger proposal (source only)
 
-This separate worktree starts at `0cf4106cd0636073b0fb28f360409b3a5a83d81d`.
+This separate worktree starts at `4c49462701f8de673dd8ca0de4fe914e1ceb88e7`.
 The factory worktree remains frozen. No main/default supplier, workflow,
 product implementation, trusted-source guard or Web4 implementation is changed
 by this helper proposal. There is no CI/publication approval for it.

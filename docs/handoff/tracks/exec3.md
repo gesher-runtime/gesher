@@ -1,7 +1,7 @@
 # Track brief: exec3
 
 Final verified slice (2026-10-27): CI 40410489251 is fully green at
-51bbfaccddf1fd7f466cab2a493874fbf0e1cb01, 22 successful jobs and six intentional
+462b7e86f0907b57fdf3d71ca5ec497d09d6f372, 22 successful jobs and six intentional
 skips. Both actual Windows logs end in zero failed tests; all 11 exec3 Checks,
 57 shell cases each, default-tag NDK assertions in three ART/APK modes and all
 original/new track58 assertions pass. No signal records. Actual package and
@@ -13,7 +13,7 @@ The full track remains open for the explicit umask/permission/console and
 architectural limits; neither green run proves the prior ntdll fault's cause.
 
 Previous verified foundation: CI 40405306826 is fully green at
-87d5adadea4008a9c4340b9ee58fbabf9aedb00f, 22 successful jobs and six intentional
+57b717f8f13f3b3013a60ca1644bc23ba52239f8, 22 successful jobs and six intentional
 skips. Both actual Windows logs end with zero failed tests. Every exec3 Check,
 the new ART camera request-selection regression and every original track58
 device/single-process assertion pass; no signal records. Actual package and both
@@ -24,7 +24,7 @@ follow-up 97e63e5 plus integration f520fd1 now passes final CI40410489251; no
 local compilation. The full track's umask/permissions/console and architectural
 limitations remain explicit. Earlier continuation entries below are historical.
 Final combined CI 40410489251 verified source
-51bbfaccddf1fd7f466cab2a493874fbf0e1cb01 (default-tag follow-up plus f520fd1).
+462b7e86f0907b57fdf3d71ca5ec497d09d6f372 (default-tag follow-up plus f520fd1).
 Watch C:\work\gesher-ci-review\exec3-watch-40410489251.log completed exit 0.
 Do not change runtime code above this verified candidate;
 preserve the fully green 87d5ada evidence independently.

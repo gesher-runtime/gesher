@@ -1,7 +1,7 @@
 # Windows4 and Web3 frozen combined evidence
 
 Full [CI40466021634](https://github.com/gesher-runtime/gesher/actions/runs/40466021634),
-attempt1, source `160e25e8a77857cc50dd3e7c76e0616fb9fd1043`:
+attempt1, source `a0ad48926a674fa01e0cfdc6e6e4497b90ad417b`:
 28 jobs,22success/6skip; both actual Windows suites end with
 `0 test(s) failed`. Root independently accepted the bounded source after
 reading all metadata and the five critical logs. Later documentation commits

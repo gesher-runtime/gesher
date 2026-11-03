@@ -2,7 +2,7 @@
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -cne 'true') { throw 'CI only' }
 $baseId = '40596167427'
-$baseSha = '30db7709838839d28be68d8b467a57b26a3ac667'
+$baseSha = '9d2232622c7d8279514a13e7007c2987d1d7a3a1'
 function Test-RunIdentity($run, [string] $id, [string] $sha, [int] $attempt, [string] $repository) {
   return "$($run.id)" -ceq $id -and $run.head_sha -ceq $sha -and $run.run_attempt -eq $attempt -and
     "$($run.repository.id)" -ceq $repository -and "$($run.head_repository.id)" -ceq $repository

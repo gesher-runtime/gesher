@@ -764,7 +764,7 @@ Design: [ADR 0057](decisions/0057-native2-shim-and-filesystem.md). Brief:
 
 _Last updated 2026-10-26 (continuation after handover)._
 
-- **Verified: ci 40296960603 at d380a3e0190f5b418cfa3ee042691db601092e25.**
+- **Verified: ci 40296960603 at a30ea54bd77dcafe757d484b610d6d748465da5f.**
   Personally read every job's conclusion (success/skipped), all 26 native2
   PASS lines per runner, and both `0 test(s) failed` summaries. Both ABIs
   pass extras (Unicode BMP/supplementary case/classes, datagram batches,

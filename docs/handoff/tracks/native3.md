@@ -176,7 +176,7 @@ diagnostic as a descriptor-inheritance contract to audit, not a package
 smoke-test failure or an assumed out-of-memory error.
 
 Verified Unicode/Process stage: full ci 40386670586 at
-6f6ac6fa9519207797ee5b997e0ae1e5b9e77049, attempt 1, including oatdump
+04db6b6df79c474cc33f807bb5c98f3d4d9da703, attempt 1, including oatdump
 integration 634a273. Every job personally read (22 success/six skipped),
 both zero-failure summaries, complete code-point/locale comparison, both NDK
 ABIs and four APK cases per runner, existing Bitmap/font/Process checks,
@@ -228,7 +228,7 @@ production change or proof of Windows ICU parity; that gap stays open.
 No Rust/AOSP build ran locally and no Actions artifact was downloaded.
 
 Verified Process follow-up: full ci 40367959106 at
-644e7f8c6596b0de10233f947504f2bcf5a5de98, with integration f677944. Every
+dda29a39e9f36662cddd5a825f544335a105d2ee, with integration f677944. Every
 job personally read (22 success/six skipped), all five native3/four APK PASS
 lines per runner, both 0 test(s) failed summaries, actual package input/
 uninstall cleanup and both required Puzzles/TIC-80 e2e logs (0 unexpected
@@ -289,7 +289,7 @@ Pending-run instructions below are historical and superseded by the
 authoritative results above.
 
 Current full CI: 40333703940 at
-f24223c7508a56722bc4e06d29d79b34026f559f, including verified aot2 and
+f5df5fd4770d020e3fe0fe19f243c5360b5e6c3f, including verified aot2 and
 integration b9f93f0. Watching with interval 120; no result is claimed yet.
 Superseded failing 40332803102 was cancelled after this run was dispatched.
 
@@ -322,7 +322,7 @@ geocoder probe. Timeouts and all app/status assertions still fail normally.
 These are additive changes outside native3's domain, awaiting full CI.
 
 Diagnostic CI: 40328565752 at
-9c4d3803722eba83475ebe2475b7457ded394f21, with surfaces/integration 8590f4b.
+6bd0846187bedf65d16e5534d9c3e68be75149db, with surfaces/integration 8590f4b.
 Native test compilation passed; the main build failed before Windows tests:
 `hwui/MinikinSkia.h` was not found. Its pinned source is under
 libs/hwui/hwui, so the private include root is corrected to libs/hwui.
@@ -345,7 +345,7 @@ ABIs and both APK modes plus framework dalvikvm. Current integration
 8590f4b (surfaces included) is merged. No AOSP code was built locally;
 the Minikin-linked bridge and native tests require CI compilation/runtime.
 
-Verified: ci 40305973210 at e94f760a5a56593187fc8bd1bae77fc716f8ac97,
+Verified: ci 40305973210 at 777d6fbac44a7c7b7cdf868aac88aee5c74579a9,
 including integration 91c195d. Personally read every job (success/skipped),
 both zero-failure Windows summaries, all bitmap dalvikvm and APK checks,
 package install/run/uninstall cleanup and e2e (0 unexpected failures).

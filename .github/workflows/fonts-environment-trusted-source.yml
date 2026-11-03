@@ -23,11 +23,11 @@ jobs:
           """Dedicated metadata-only environment diagnostic source authority."""
           import ast,copy,hashlib,json,os,re,subprocess,sys,textwrap,urllib.request
           from pathlib import Path
-          BASE='f78bcbbb10050267374fa5b94318174f384a0b7e'
-          CORE_GUARD='e7ef94f878725e7a2f7899e7e4652335ec969607'
+          BASE='7ee85a5632b8d2b4d0b9a076f81d04bfa3a22714'
+          CORE_GUARD='e55f360cbb9767768bb2d6583501486e7913bb6c'
           CORE_TRUST='.github/workflows/fonts-core-trusted-source.yml'
           CORE_GUARD_BLOB='1e03bec758c52198828037edd0302be2e0a447ff'
-          TEMPLATE='a4d1fc5775ca751c51794ce2a3676588931403a9'
+          TEMPLATE='b8e9fedc6fff3dccbf4d36ec1b32c1c0387f9ede'
           CALLER='.github/workflows/fonts-environment-characterization.yml'
           TRUST='.github/workflows/fonts-environment-trusted-source.yml'
           REPO='gesher-runtime/gesher'

@@ -10,7 +10,7 @@ the independent unsigned oracle and actual per-ABI whole-range guest tests
 now pass in the later full run. The evidence below remains historical and
 must not be cited as the corrected ARM-width proof.
 
-Source 581e88f4d63896ab648994772832cbf327e61c55, full ci 40404678100.
+Source 54c67ccf951ec5c5a0de65432c6b065206ba3365, full ci 40404678100.
 Root personally read every job (22 success/six skipped), both zero-failure
 Windows summaries, actual width/classification/NDK ABI and APK PASS lines,
 installed window/input/uninstall cleanup and both nine-app e2e logs with

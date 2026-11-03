@@ -31,7 +31,7 @@ jobs:
       - name: Require exact verified coherent API3 prerequisite and reviewed environment delta
         shell: pwsh
         run: |
-          $source = '942f2c16b1219cd25bcb1c1ca4215f41639cc88f'
+          $source = 'db5a97fd084556b4db1d2f00260c442a19a1b129'
           $proof = gh api repos/${{ github.repository }}/actions/runs/40556015168 | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $proof.head_sha -cne $source -or $proof.name -cne 'arm64-varargs-component' -or
               $proof.conclusion -cne 'success' -or $proof.run_attempt -ne 1) { throw 'Unverified coherent API3 prerequisite' }
@@ -107,7 +107,7 @@ jobs:
         shell: pwsh
         run: |
           $base = gh api repos/${{ github.repository }}/actions/runs/40516054280 | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $base.head_sha -cne 'ca4ed3cfff46d4843485d89859370dc5b86a4146' -or
+          if ($LASTEXITCODE -ne 0 -or $base.head_sha -cne 'a63a3fe9bd7c2d80c1145bd624594723722347cb' -or
               $base.name -cne 'ci' -or $base.conclusion -cne 'failure' -or $base.run_attempt -ne 1) {
             throw 'Unexpected immutable Locale run/source/attempt'
           }

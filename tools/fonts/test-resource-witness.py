@@ -121,7 +121,7 @@ class Witness(unittest.TestCase):
                    'd8c103001dc2030088ce1100','190a04000a3406000a32067010170b00','678373fdb3eb3c07aeb2efee86558a3aca49dd0695cb51bdfc2da57577748f3c'),
                   (124530422148,'b302ae62c709893fb175be0bcc76c066ff86797be0c143c7c5e57a4a16743c18',
                    'b4840b00f9840b00b4e50e00','190a04000a3406000a32067070570400','c4efbe6192b33830570a209b4cf339c8b9aa396f4c2880c08a5b568def8de45b')]
-        source='d40e5398f22c8edaa85c36543b467f2ad1315ffb'
+        source='a0e16b1621fd69322b087b56f3779cbb5c02fcc7'
         self.assertEqual(len(source),40)
         for job,raw_sha,entry_hex,unwind_hex,digest in fixtures:
             with self.subTest(job=job,raw_sha=raw_sha):

@@ -36,7 +36,7 @@ faults, repeated reuse, hostile or malformed authority and full product remain
 open. The next source adds an invalid-descriptor ownership/output control.
 
 Initial component run40801790244/attempt1 at exact
-67e4f27486f6a63a8becb1c518c02b6b6afac02f passed its compile and both Windows
+9b051f4602f56f22ac99d4c4ccb24db73e4d51b3 passed its compile and both Windows
 jobs. Actual pthread/std-thread/detached-create/live-detach/Win32-self-attach
 target brackets, busy/idle/dedup, retired-clock/invalid/fixed clocks,
 exit259 and dynamic-export checks passed. Handle counts were133→135 on2022

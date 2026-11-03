@@ -32,7 +32,7 @@ jobs:
       - name: Require exact selected prerequisite and actual mode build proof
         shell: pwsh
         run: |
-          $compiled = 'd280bce02e06dd5a2fb77e8bf09dd1387be8cf3f'
+          $compiled = '849370acebd66e74b01c5ee349ff15318627a321'
           $proof = gh api repos/${{ github.repository }}/actions/runs/40577028890 | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $proof.head_sha -cne $compiled -or
               $proof.name -cne 'binder2-sg-modes-build' -or $proof.run_attempt -ne 1 -or
@@ -42,7 +42,7 @@ jobs:
               @($jobs.jobs | Where-Object { $_.conclusion -cne 'success' -or $_.head_sha -cne $compiled -or $_.run_attempt -ne 1 }).Count) {
             throw 'SG mode prerequisite did not build both actual jobs successfully'
           }
-          foreach ($ancestor in '6457470e5114b7ca0ec4decea97e462fafc044e6', '5587c780bb6607d70cba2cfc29fe1fef591b3bff', $compiled) {
+          foreach ($ancestor in '0434f3ed476af5aa47b97b6929c1fe321470f017', '0f6589a361bc253ea1dbcbbf28cf4d9929f4b4aa', $compiled) {
             git merge-base --is-ancestor $ancestor HEAD
             if ($LASTEXITCODE -ne 0) { throw "Missing selected accepted Libcore/Native/Env/compiled source $ancestor" }
           }

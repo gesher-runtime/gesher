@@ -23,11 +23,11 @@ jobs:
           """Immutable cheap host-owner source scope; runtime/provider remain unqualified."""
           import ast,copy,hashlib,json,os,re,subprocess,sys,textwrap,urllib.request
           from pathlib import Path
-          BASE='a51e29776185da5c9da5d24c7f4a0b8b5aa24b4a'
-          ENV_GUARD='5d7f0bce3fac42123c6bce314580f46344b62d4b'
+          BASE='a47ff3876ab1d121a78096207fd7f02524265ba2'
+          ENV_GUARD='6834452fd041760d1c09037b1dd372b445f9f377'
           ENV_TRUST='.github/workflows/fonts-environment-trusted-source.yml'
           ENV_GUARD_BLOB='70fee2d0f2bdfabddf611966f3ced7d647c5065f'
-          TEMPLATE='32629ee67b7e2345c3b8034ddb0baffeb838d4c6'
+          TEMPLATE='eb7386cc60b728435eeff21120814a2cc6dfb698'
           CALLER='.github/workflows/fonts-owner-host-component.yml'
           TRUST='.github/workflows/fonts-owner-host-trusted-source.yml'
           REPO='gesher-runtime/gesher'

@@ -30,7 +30,7 @@ $psi=[Diagnostics.ProcessStartInfo]::new('metadata-only-never-started.exe')
 foreach($value in $actual){$psi.ArgumentList.Add($value)}
 if(-not(Exact-Arguments @($psi.ArgumentList) $expected)){throw 'Actual ArgumentList changed values/count'}
 # Reproduce the exact failed036a expression, not a reconstruction of the bug.
-$old=git show '036a49bd9b594fbc6393108bde6947bcd5e6c9d2:tools/fonts/run-dex-comparison.ps1'
+$old=git show 'e2125ddd7279ef62114136f82adcb6fd16ddf668:tools/fonts/run-dex-comparison.ps1'
 if($LASTEXITCODE -ne 0){throw 'Frozen failed source unavailable'}
 $oldTree=[Management.Automation.Language.Parser]::ParseInput(($old -join "`n"),[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'Failed-source parser error'}

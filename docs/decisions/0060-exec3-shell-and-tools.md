@@ -201,7 +201,7 @@ not used as proof that the complete ELF startup works.
 
 ## Verification
 
-Final CI 40410489251 at 51bbfaccddf1fd7f466cab2a493874fbf0e1cb01 is fully
+Final CI 40410489251 at 462b7e86f0907b57fdf3d71ca5ec497d09d6f372 is fully
 green (22 success, six intentional skips). Both Windows whole suites have zero
 failed tests, all 11 exec3 Checks/57 shell cases each pass, including the
 default-tag setter and null/empty/zero-length filter assertions through the real
@@ -210,7 +210,7 @@ package and both nine-app e2e runs pass; zero unexpected failures and no signal
 records. Only result docs follow this source. Root owns combination with the
 concurrent AOT cloud integration and its required integration CI.
 
-CI 40405306826 at 87d5adadea4008a9c4340b9ee58fbabf9aedb00f is fully green:
+CI 40405306826 at 57b717f8f13f3b3013a60ca1644bc23ba52239f8 is fully green:
 both Windows whole-suite zero summaries, all exec3 and new ART camera-race
 checks, package and both nine-app e2e runs. The prior post-steps fault does not
 recur in this combined tree; its exact cause is not inferred. The later

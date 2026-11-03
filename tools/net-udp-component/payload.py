@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-BASE = 'f1550540186b4ae3f17a5e501a886ec1c4d5d613'
+BASE = 'c199c5f1a7e71c7cf8540f21723fa6fcb55790d6'
 ROLE = 'bionic-udp-truncation-component-v1'
 MEMBERS = {'gesher-exec.exe', 'gesher_arm64.dll', 'arm64_smoke_test.exe',
            'net-udp-x86_64', 'net-udp-arm64', 'net-udp-fault-x86_64', 'net-udp-fault-arm64',

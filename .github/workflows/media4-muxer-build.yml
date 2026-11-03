@@ -54,7 +54,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           framework_source_sha=$(gh api repos/gesher-runtime/gesher/actions/runs/40527788805 --jq '.head_sha')
-          test "$framework_source_sha" = 5d9e24d3df1e9caa77c21dbae360a1f32988b943
+          test "$framework_source_sha" = c1d27f22398be7b2b053f42f9be20b77fd21fe7d
           printf 'Pinned framework source: %s\n' "$framework_source_sha"
       - uses: actions/download-artifact@v4
         with:

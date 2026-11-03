@@ -1,10 +1,10 @@
 # Native3 foreign pthread CPU clocks: source checkpoint
 
-Base: accepted integration f1550540186b4ae3f17a5e501a886ec1c4d5d613.
+Base: accepted integration c199c5f1a7e71c7cf8540f21723fa6fcb55790d6.
 Exclusive tree C:/work/gesher-pthread-foreign-cpu-clock, branch
 wip/pthread-foreign-cpu-clock. Existing ADR0075; test90 is reserved.
 No local native/Java/C# compilation or execution. Narrow Linux observation
-run 40790238879 / attempt 1 at 9f748617e951aaccad3608ddd8b630ce06e1448e succeeded;
+run 40790238879 / attempt 1 at 312f3bdcc928cd8ef872e471c27f5e6f80a9e1fd succeeded;
 its actual job log reports post-join gettime=-1 errno22, getres=-1 errno22.
 It does not compile or exercise the Windows source. The observed EINVAL
 results are now asserted in subsequent Linux source and guest resolution
@@ -16,7 +16,7 @@ run and attempt must be bound into the later qualification supplier.
 ## Linux oracle correction: controlled final task release
 
 Component run 40792024272 / attempt 1 at exact source
-1869f3abffbefaf7c1ca40771388465d245d0997 failed its immediate-postjoin
+cd2f30903d8ebab1de6ddb8f3ef52f235c4c8095 failed its immediate-postjoin
 Linux assertion: gettime=0 errno0 and getres=0 errno0. No Windows job ran.
 The earlier 40790238879 observation of EINVAL is therefore not a universal
 join boundary. Do not retry the red source or claim Windows qualification.

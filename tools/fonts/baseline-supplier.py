@@ -14,7 +14,7 @@ from font_records import emit
 REPO = 'gesher-runtime/gesher'
 REPO_ID = '1426153186'
 RUN = 40953048849
-SOURCE = '42076a8f28c0d23eee5b10ee0acf0844be0dc277'
+SOURCE = '5a1aa4c566aace572e8b2627106a84493db01bf6'
 SUPPLIERS = {
     'old-runtime': {'artifact': 'windows-x64', 'id': 12934605958,
                 'digest': 'sha256:64089fbce38e36da3ab72823837aaa3c7b78ca500d53e675b899c1091948c6a9',
@@ -25,15 +25,15 @@ SUPPLIERS = {
     'qualified-data': {'artifact':'windows-x64','id':12990368305,
         'digest':'sha256:27d03cec3d032263e467da92e725ca1a20c1a26dcc7f5f4eda0ead9c522cbacd',
         'producer':'build','job':124142855542,'run':41078972594,
-        'source':'1bf8fad9ec3b423ddef8c97c1d72b25790974364','overall_conclusion':'success'},
+        'source':'6d135abf73b29f7f60cf4e19e5de858bce04f2db','overall_conclusion':'success'},
     'qualified-translator': {'artifact':'arm64','id':12988403859,
         'digest':'sha256:d4acec0555947e3097cffd445e5d244d1c5ff032e02b4893c580e6e4645259f8',
         'producer':'arm64 / build','job':124143790496,'run':41078972594,
-        'source':'1bf8fad9ec3b423ddef8c97c1d72b25790974364','overall_conclusion':'success'},
+        'source':'6d135abf73b29f7f60cf4e19e5de858bce04f2db','overall_conclusion':'success'},
     'current-runtime': {'artifact': 'windows-x64', 'id': 12980654577,
         'digest': 'sha256:1a33a935e1758802df1eb1b636968854d6125e63ec807e8f19f62e80ba43adf1',
         'producer': 'build', 'job': 124093862352,
-        'run': 41064959428, 'source': '00f96217616c5892dd8364067d007f92d541585b',
+        'run': 41064959428, 'source': '6e021688aa83b4f88e672c19b145bc019445631e',
         'overall_conclusion': 'failure'},
 }
 

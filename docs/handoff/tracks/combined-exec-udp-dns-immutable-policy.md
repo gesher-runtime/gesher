@@ -1,6 +1,6 @@
 # Combined Exec/UDP/DNS candidate (qualification pending)
 
-The isolated branch starts at 2ac42ca1b05a452419d546e7c923e11c09b556aa,
+The isolated branch starts at 085165b6229bf7f47bf43ca77bb7caaf7c9e9983,
 qualified by full40847922962 (45 success/six optional skips). Integration127b0f64
 has the same non-documentation source. DNS source is exact80aa1992f85f6bbc824f925fd39008ac6b81eb85,
 qualified by full40846687611 (33 success/six optional skips).
@@ -40,9 +40,9 @@ All other known gaps and inventory history remain open and unchanged.
 ## Frozen handoff, 2026-10-29
 
 Actual implementation/immutable-checker commit:
-424ee30d1ab6e4be9828b907bc187c73f3d94103.
+1c704fdc243bfc4e470f16a74c402cffda2947e6.
 Caller commit/current reviewed candidate:
-27fdd2c2c954bbee6c39ae08d4af24f49e31a4bc.
+c7d03b324649dd289361431f5c359b19717a66b4.
 Both are pushed to wip/coherent-exec-udp-dns-next. The caller references the
 immutable424 workflow. No new repository variable has been set and no CI has
 been dispatched. The branch push cannot trigger ci.yml (push is main-only),
@@ -59,7 +59,7 @@ matches (guard pin plus three sparse paths). git diff --check passed.
 No native/Java/C# compilation, fixture execution or artifact download occurred.
 
 Fresh independent peer review is mandatory before publishing
-NET_COMBINED_DNS_CALLER_COMMIT=27fdd2c2c954bbee6c39ae08d4af24f49e31a4bc
+NET_COMBINED_DNS_CALLER_COMMIT=c7d03b324649dd289361431f5c359b19717a66b4
 and dispatching canonical full. The source author does not certify that review.
 After peer PASS, the authorized maintainer must verify gh account palmoni5
 immediately before each remote write, inspect existing runs before dispatch,

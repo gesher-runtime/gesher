@@ -10,7 +10,7 @@ import json
 import runpy
 
 ROOT = Path(__file__).resolve().parents[2]
-BASE = '4d54ade1b53483f6d604bd989a7674ea6c376a1f'
+BASE = '28c175af3ae13a866cf71bcd85db447ca4254170'
 def old(path):
     return subprocess.check_output(['git', '-C', str(ROOT), 'show', BASE + ':' + path])
 def current(path):
@@ -78,8 +78,8 @@ print('FONT_RESOURCE_SOURCE_PASS old_owner7_old_WCT_old_preflight_exact=1 additi
 # consumer-local signed input, never redistributed by the Linux artifact.
 for name in ('resource-import-inventory.py','resource-pe-imports.py'):
     path='tools/fonts/'+name
-    assert current(path)==subprocess.check_output(['git','show','a8e79c27639200c3a3ee9162fb053a22727df3f6:'+path])
-assert current(module.ROLES['fixture'])==subprocess.check_output(['git','show','a8e79c27639200c3a3ee9162fb053a22727df3f6:'+module.ROLES['fixture']])
+    assert current(path)==subprocess.check_output(['git','show','b2f06450457adfaaabd176e3a6d7c1abc5d57e3c:'+path])
+assert current(module.ROLES['fixture'])==subprocess.check_output(['git','show','b2f06450457adfaaabd176e3a6d7c1abc5d57e3c:'+module.ROLES['fixture']])
 assert len(module.INPUTS)==27
 assert "'CODE_ENVELOPE_SCRIPT'" in runner and 'resource-code-envelope.py' in runner
 assert runner.index('Get-PreflightFileProfile $codePath') < runner.index('$child=Start-ResourceRole')
@@ -98,7 +98,7 @@ assert not any(token in runner for token in ('dt -r','!locks','!critsec ','.fram
 print('FONT_RESOURCE_WITNESS_SOURCE_PASS metadata_schema=2 five_roles=UNCHANGED guarded_owner_tail=1 local_native=0')
 
 # The old identity predicate and every UCRT byte-send operation stay exact.
-prior=subprocess.check_output(['git','show','7c83593e8955c39235182f6ac81035739c38354b:tools/fonts/resource-characterization.ps1']).decode()
+prior=subprocess.check_output(['git','show','7935f3cbc319e5d22c072fd52e82bfc5f00803a9:tools/fonts/resource-characterization.ps1']).decode()
 predicate=next(line for line in prior.splitlines()if "throw 'UNAVAILABLE: retained current ntdll profile/module mismatch'"in line)
 assert predicate in runner.splitlines()
 ucrt=prior.split(' $providerHeader=',1)[1].split(' $imports.process.StandardInput.Close()',1)[0]
@@ -108,5 +108,5 @@ assert runner.index('Emit-PreflightRecord \'FONT_RESOURCE_NTDLL_DISK_METADATA\''
 assert runner.count("Start-ResourceRole $stage 'imports'")==1
 assert '$ntdllStream.Position=0;'in runner and '$ntdllStream.ReadByte() -ne -1'in runner
 assert 'GetFileVersionInfo'not in current('tools/fonts/resource-witness.py').decode()
-assert current('tools/fonts/resource-code-provider.py')==subprocess.check_output(['git','show','7c83593e8955c39235182f6ac81035739c38354b:tools/fonts/resource-code-provider.py'])
+assert current('tools/fonts/resource-code-provider.py')==subprocess.check_output(['git','show','7935f3cbc319e5d22c072fd52e82bfc5f00803a9:tools/fonts/resource-code-provider.py'])
 print('FONT_RESOURCE_DISK_METADATA_SOURCE_PASS old_NTDLL_predicate_exact=1 old_UCRT_bytes_exact=1 inputs=27 process_roles=5 qualification=false')

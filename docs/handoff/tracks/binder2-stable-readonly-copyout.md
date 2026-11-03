@@ -2,7 +2,7 @@
 
 Source-only work; no new compile/runtime/full acceptance. The designated
 integrator owns C:/work/gesher-binder2-sg on wip/binder2-stable-readonly.
-Reconciliation merge a474aefaa553f53f3fdf14345c199b0a4ae3683c starts from
+Reconciliation merge 4103be2a204a1b170e2702a22515262b60ac42a3 starts from
 qualified phase4e837f8c1 (code-identical to full40596167427/source30db) and
 ordinary component docs headdbe66a4f (runtimeed741/full component40579429217).
 It merged cleanly. All selected Binder driver/broker/actors/component wiring
@@ -88,7 +88,7 @@ component workflow wiring as a qualifying run.
 
 ## Independent fixture peer and strict archive dependency
 
-Independent Native review at552c548808c45ae03e1ed62cd7ab86f9907d88ca found
+Independent Native review ata645fadafd66f94bd0f32a2caab6afc006dae0e3 found
 no additional definite stable-pointer/actor/owned-FD/page-observer blocker
 after the missing PSCustomObject OutputActorPid predeclaration was corrected.
 Exact peer and four blob/SHA256 records are saved in

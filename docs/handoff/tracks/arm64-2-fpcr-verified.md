@@ -1,6 +1,6 @@
 # arm64-2: verified FPCR rounding slice
 
-Full source `49ade2057a9d2f4e167f4a376467d9607adaf2d4`, full ci
+Full source `34a8ab34c0d73eb08921f8ecfc44e8beac69c5d3`, full ci
 [40451978087](https://github.com/gesher-runtime/gesher/actions/runs/40451978087),
 attempt 2. All 28 job conclusions were personally read: 22 successful and
 six skipped. All 22 actual successful job logs were read under the current

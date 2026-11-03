@@ -1,7 +1,7 @@
 # Bounded coherent union acceptance, 2026-10-28
 
 Canonical full [40596167427](https://github.com/gesher-runtime/gesher/actions/runs/40596167427),
-attempt 1, exact source `30db7709838839d28be68d8b467a57b26a3ac667`, is accepted
+attempt 1, exact source `9d2232622c7d8279514a13e7007c2987d1d7a3a1`, is accepted
 for the selected scope below. Terminal prescribed watch returned success.
 All 31 jobs completed: 25 success and six intentional reusable probes skipped
 (angle, posix, graphics, libs, arm64 and webview). No runtime gate was skipped.

@@ -2,10 +2,10 @@
 from pathlib import Path
 import ast,hashlib,json,subprocess
 ROOT=Path(__file__).resolve().parents[2]
-BASE='26526e6864fde173c4090e9d5271412657fa6ad9'
+BASE='18ee0a63ea9ae1915c83604a07902621dfb75560'
 def old(path):return subprocess.check_output(['git','-C',str(ROOT),'show',BASE+':'+path])
 def check():
- paths=subprocess.check_output(['git','-C',str(ROOT),'diff','842b9d7cb9ef050a2cf668ba8caf5b71c9d3e74d^','842b9d7cb9ef050a2cf668ba8caf5b71c9d3e74d','--name-only'],text=True).splitlines()
+ paths=subprocess.check_output(['git','-C',str(ROOT),'diff','1745e99d7f2849ba81784545e07d60cb2b7800c3^','1745e99d7f2849ba81784545e07d60cb2b7800c3','--name-only'],text=True).splitlines()
  paths+=['.github/workflows/net-tcp-coherent-component.yml','tests/net-tcp-priority/contract.cc','tests/net-tcp-priority/native_udp_control.cc','tests/native2/net_udp_trunc.cpp','tests/native2/net_udp_fault_observer.c','tools/net-tcp-priority/qualified/TsfJobSupervisor.cs','tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfJobWorker.cs','tools/windows4/test-tsf-job-supervisor.ps1','tools/ci/receipt-diagnostics.ps1','tools/net-tcp-priority/import-policy.json','tools/net-tcp-priority/import_policy.py','tools/net-tcp-priority/build-guests.py','tools/net-tcp-priority/prepare-ndk.py']
  for path in paths:assert (ROOT/path).read_bytes()==old(path),path
  before=old('tools/net-tcp-priority/run-component.ps1').decode();after=(ROOT/'tools/net-tcp-priority/run-component.ps1').read_text(encoding='utf-8')

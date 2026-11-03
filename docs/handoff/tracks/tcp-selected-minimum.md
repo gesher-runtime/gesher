@@ -1,6 +1,6 @@
 # Coherent TCP consumer with an intentionally selected minimum supplier
 
-This isolated candidate starts at26526e6864fde173c4090e9d5271412657fa6ad9. All five qualified TCP/UDP product files, original guarded-copy/fault/negative fixtures, public contracts, controller execution and census tail remain byte-exact. The original net-tcp-coherent-component workflow and its detached-only diagnostic results remain immutable. No runtime or global canonical build is adopted by this candidate.
+This isolated candidate starts at18ee0a63ea9ae1915c83604a07902621dfb75560. All five qualified TCP/UDP product files, original guarded-copy/fault/negative fixtures, public contracts, controller execution and census tail remain byte-exact. The original net-tcp-coherent-component workflow and its detached-only diagnostic results remain immutable. No runtime or global canonical build is adopted by this candidate.
 
 The new net-tcp-selected-component uses two separately named fresh supplier roles: canonical is the actual unpatched publisher control; selected-minimum intentionally rebuilds the exact two-patch original-profile candidate. Its role is gesher-winpthreads-selected-minimum-v1, not the old diagnostic role. Both source and binary identities are fresh current-attempt receipts. Historical411350 actual480/SDK601/short-import/API/C++ positives authorize this source preparation; its5c53 archive is not relabeled as the new build. Historical original canonical detached+1 and CPP+10 failures remain preserved. A selected positive result never turns the original control green.
 

@@ -1,6 +1,6 @@
 # Net4: deterministic HTTP and certificate fixtures
 
-Source slice imported from Media3 836482975254ec3fbcbbdb190398d65dc79fae11.
+Source slice imported from Media3 c15a20d358d7b1f6735df809bc65d5957b827bb3.
 The combined patch has SHA-256
 73d3132e04c05833c396cf095e3529a251f1b1ececa2d0cb0f7de01f886a2c3b
 and changes five test files only. Root independently reviewed the Java,

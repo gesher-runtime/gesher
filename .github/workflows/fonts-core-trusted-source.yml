@@ -24,11 +24,11 @@ jobs:
           import ast,copy,hashlib,json,os,re,subprocess,sys,textwrap,urllib.request
           from pathlib import Path
           
-          BASE='00f96217616c5892dd8364067d007f92d541585b'
-          FULL_GUARD='3a45b2db5fddeb4afb7b6c7e2d20d978f8286549'
+          BASE='6e021688aa83b4f88e672c19b145bc019445631e'
+          FULL_GUARD='1aa9630265b127ae76c5b18e06bb63af1a433969'
           FULL_TRUST='.github/workflows/net-combined-dns-trusted-source.yml'
           FULL_GUARD_BLOB='429419da45459e3fd5852e90f7f1600afc5a674b'
-          TEMPLATE='fe5eec4d01794906eb0400454c221b9863dee22e'
+          TEMPLATE='1bf4c26e34edf6a4b1eadb15e2f624dc5913d422'
           CALLER='.github/workflows/fonts-core-component.yml'
           TRUST='.github/workflows/fonts-core-trusted-source.yml'
           REPO='gesher-runtime/gesher'
@@ -64,7 +64,7 @@ jobs:
            end=next(i for i,n in enumerate(main.body) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='reviewed' for t in n.targets))
            trusted['sha']=BASE;exec(compile(ast.Module(body=main.body[start:end],type_ignores=[]),'frozen-historical-assertions','exec'),trusted)
            actual=trusted['inventory'](BASE);expected=trusted['inventory'](trusted['COMBINED_BASE'])
-           old_framework=trusted['inventory']('42076a8f28c0d23eee5b10ee0acf0844be0dc277')
+           old_framework=trusted['inventory']('5a1aa4c566aace572e8b2627106a84493db01bf6')
            framework_input=lambda p:p.startswith(('patches/','config/','tools/framework/')) or p in ('.github/workflows/framework.yml','tools/fetch-aosp.sh')
            require({p:b for p,b in old_framework.items() if framework_input(p)}=={p:b for p,b in actual.items() if framework_input(p)},'Old framework source/tool/patch inputs differ from current native baseline')
            print('FONTS_CORE_FRAMEWORK_PAIRING old_framework_source=42076 current_native_source=00f framework_build_inputs=UNCHANGED full_current_framework_qualification=false',flush=True)
@@ -73,7 +73,7 @@ jobs:
            trusted['verify_tree'](actual,expected);trusted['verify_selected'](actual,adapted=True)
            require(git('show',BASE+':'+FULL_TRUST)==raw,'Frozen full caller guard differs')
            old=git('show',trusted['COMBINED_BASE']+':'+trusted['CALLER'])
-           intended=old.replace(b'gesher-runtime/gesher/.github/workflows/combined-full-trusted-source.yml@21c81672d87b5d37607bfcab676d67f2a23d3114',b'gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@'+FULL_GUARD.encode())
+           intended=old.replace(b'gesher-runtime/gesher/.github/workflows/combined-full-trusted-source.yml@35d4be09c9702a385ccdd068a2299191bd5d6041',b'gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@'+FULL_GUARD.encode())
            intended=intended.replace(b'            tools/net-udp\n',b'            tools/net-udp\n            tools/net-udp-component\n            tools/net-dns\n            tools/net-dns-component\n')
            require(intended==git('show',BASE+':'+trusted['CALLER']),'Frozen full DAG differs')
            # Prove all original inner selected pins and allowed-path predicates on
@@ -89,7 +89,7 @@ jobs:
            branch=next(n for n in inner_main.body if isinstance(n,ast.If) and ast.unparse(n.test)=="args.mode == 'preflight'")
            allow_nodes=[n for n in branch.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='allowed' for t in n.targets) or isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and isinstance(n.value.func.value,ast.Name) and n.value.func.value.id=='allowed']
            exec(compile(ast.Module(body=allow_nodes,type_ignores=[]),'frozen-inner-allowlist','exec'),scope)
-           historical=trusted['inventory']('8b1e9b509ceef7e532a7ff5bc085ecdbc476d292')
+           historical=trusted['inventory']('7c926e5a179aa6a77d8f39a12436885666f1a78e')
            changed={p for p in actual.keys()|historical.keys() if actual.get(p)!=historical.get(p)}
            require(changed and changed<=scope['allowed'],'Frozen union preflight delta differs')
            require(not (changed|{'tools/fonts/forged.py'})<=scope['allowed'],'Frozen union negative accepted')

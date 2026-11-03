@@ -79,7 +79,7 @@ jobs:
         shell: pwsh
         run: |
           $base = gh api repos/${{ github.repository }}/actions/runs/40557661255 | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $base.head_sha -cne '4502599386a693cc7673ea8a01f7ec09c915cccc' -or
+          if ($LASTEXITCODE -ne 0 -or $base.head_sha -cne '11716459e315d8f725e3f44f5fed3daef115bbfe' -or
               $base.name -cne 'ci' -or $base.conclusion -cne 'success' -or $base.run_attempt -ne 1) {
             throw 'Unexpected immutable AOT-qualified run/source/attempt'
           }

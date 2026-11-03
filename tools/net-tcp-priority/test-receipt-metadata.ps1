@@ -3,7 +3,7 @@ param([string] $JobsSnapshot='')
 $ErrorActionPreference='Stop'
 $root=Resolve-Path (Join-Path $PSScriptRoot '../..')
 $source=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'run-component.ps1'))
-$baseline=git -C $root show f6b15746e1dfac3711c2687f728eafbd48094eba:tools/net-tcp-priority/run-component.ps1
+$baseline=git -C $root show c0d497aac1c7cbb80686397dd5b5336b418087cf:tools/net-tcp-priority/run-component.ps1
 if($LASTEXITCODE -ne 0){throw 'Cannot read immutable original predicates'}
 function Parse($Text){
  $tokens=$null;$errors=$null
@@ -25,7 +25,7 @@ foreach($message in @('Producer mismatch','Artifact not unique','Artifact source
 . (Join-Path $root 'tools/ci/receipt-diagnostics.ps1')
 $env:GITHUB_REPOSITORY='gesher-runtime/gesher';$env:GITHUB_REPOSITORY_ID='1'
 $env:GITHUB_RUN_ID='41101529359';$env:GITHUB_RUN_ATTEMPT='1'
-$env:GITHUB_SHA='f6b15746e1dfac3711c2687f728eafbd48094eba'
+$env:GITHUB_SHA='c0d497aac1c7cbb80686397dd5b5336b418087cf'
 $env:GITHUB_WORKFLOW='net-tcp-coherent-component'
 $valid=[pscustomobject]@{id=124219437252;name='compile-canonical';workflow_name=$env:GITHUB_WORKFLOW;run_id=41101529359;run_attempt=1;head_sha=$env:GITHUB_SHA;status='completed';conclusion='success';started_at='2026-10-30T17:47:28Z';completed_at='2026-10-30T17:54:42Z'}
 $expectedProducer='compile-canonical'

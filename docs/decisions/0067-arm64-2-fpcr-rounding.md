@@ -2,7 +2,7 @@
 
 Status: accepted for translated FPCR rounding and the bounded sticky-FPSR
 contracts below. Combined full ci 40498782924 at exact source
-8ec4bf3c30160575c8df794ad2ca1406957adc98, attempt 1, is green: all 29
+0498d825871a54b81b9bb51ef4610d9bb655cd44, attempt 1, is green: all 29
 conclusions (23 success/six skipped) and all 23 actual executed job logs were
 personally read, including both zero summaries, actual JNI/APK/native ELF,
 package and both ten-app e2e zeros. Exact FPSR scope, independent 10384-row

@@ -79,7 +79,7 @@ both runners and ABIs. All 37 media3 and 12 part-1 device checks pass with
 both whole Windows suites, package and required e2e green; none of those
 checks implements the 313 unresolved exports inherited by media4.
 
-Full GREEN ci **40459815375** at **c5962291855b13ebd0d21fcf72981db973ad9e72**
+Full GREEN ci **40459815375** at **1c984e73b76850927c73594c812537d7fa841ba0**
 then verifies the actual format subset in both ABIs/runners, through core
 ART JNI, standalone ELF and single/device APKs. The historical list and
 every baseline/owner/observation remain intact; exact per-entry subsequent
@@ -92,7 +92,7 @@ media baseline therefore has **170 remaining** entries: 133 libmediandk,
 indirection, pinned string values and ordinary typed-key storage; it does
 not close the codec, hardware or protected-media contract named by a key.
 
-Full GREEN ci **40476766790** at **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**
+Full GREEN ci **40476766790** at **3868e4564ee780fb71a4081bb86652e1335af225**
 then verifies all53 canonical OpenSL IID pointer objects, including the34
 old missing entries and19 corrected values. Both ABIs/runners execute core
 JNI and manifest-allowed/denied single/device APKs: pinned UUID fields,

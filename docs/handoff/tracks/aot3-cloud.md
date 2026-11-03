@@ -1,7 +1,7 @@
 # aot3: verified install-time cloud-profile stage
 
 Frozen branch: wip/aot3-cloud. Verified source:
-05ca072cad7a23d83403a0c039d47d4fec0c07b5, full ci 40408733247.
+6a85d389aff5bd685384f3e596eb436b00fd5a88, full ci 40408733247.
 The coordinator personally read all 28 jobs (22 success/six skipped), both
 zero-failure Windows summaries, all 16 aot3 PASS lines per runner, actual
 package installation/input/uninstall and both nine-app e2e logs, including

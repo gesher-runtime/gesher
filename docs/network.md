@@ -246,7 +246,7 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 ## Status and next steps (web3)
 
 Completed full ci **40376044459** at
-`939ec313d0fe5a2d8410ee700a927fad0538269e`, with AOT3 foundation f5ce6f6
+`4081cb819bf86b8f0eb9822ba645eba3c4d09b8c`, with AOT3 foundation f5ce6f6
 and bounded TLS fixture cleanup. All 14 web3 checks and the new TLS fixture
 pass on each runner; root-test, all four negative and app-server cleanup
 markers complete on both, with accepted clients joined and certificates
@@ -260,7 +260,7 @@ new combined CI remains required. Watch/logs are under
 `C:/work/gesher-ci-review/web3-40376044459-*`.
 
 Completed diagnostic ci **40364697280**, exact source
-`eee306b12a958286b72da8b30071438a9f1acdf3`; watch output:
+`8b6fc327dff0447dc7290564401a92e6bca66315`; watch output:
 `C:/work/gesher-ci-review/web3-40364697280-successor-watch.log`. Both runners
 pass all 14 web3 checks; 2022 has zero failed tests and actual package cleanup
 and both nine-app e2e jobs pass with required TIC-80/Puzzles. Windows 2025
@@ -288,7 +288,7 @@ Window/frame/action assertions remain unchanged. Full CI still must pass.
 
 Full-stage gate awaits a next combined CI with native geocoder probe exit
 1f1cc96 and exec3's Launcher line-framing fix. Completed ci 40353139413 at
-`6270c9e84e0a8f3486a77824ecb113c563d2871d` again passes all 14 web3 checks
+`d8b14694f757a75f87c6cd648054ea40fc0499ae` again passes all 14 web3 checks
 per runner, package and both e2e jobs. Windows 2022 fails the probe's CLR
 teardown; Windows 2025 also fails windows3 because a real first-frame line
 was split by a concurrent launcher status line. Neither failure is waived.

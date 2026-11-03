@@ -3,8 +3,8 @@ import argparse,hashlib,importlib.util,json,os,shutil,subprocess,xml.etree.Eleme
 from pathlib import Path
 from font_records import emit
 
-QUALIFIED='1bf8fad9ec3b423ddef8c97c1d72b25790974364'
-OLD='42076a8f28c0d23eee5b10ee0acf0844be0dc277'
+QUALIFIED='6d135abf73b29f7f60cf4e19e5de858bce04f2db'
+OLD='5a1aa4c566aace572e8b2627106a84493db01bf6'
 EXECUTABLES=('dalvikvm.exe','gesher-exec.exe')
 TIMEZONE={'tzdata/etc/tz/tzdata','tzdata/etc/tz/tz_version',
  'tzdata/etc/tz/versioned/9/tzdata','tzdata/etc/tz/versioned/9/tz_version',
@@ -54,8 +54,8 @@ def compatibility_proof(current_source):
      assert kind=='blob' and mode in ('100644','100755');result[name]=blob
   return result
  expected=tree(QUALIFIED)
- assert expected and tree(OLD)==expected and tree('00f96217616c5892dd8364067d007f92d541585b')==expected and tree(current_source)==expected
- return {'qualified_translator_source':QUALIFIED,'old_runtime_source':OLD,'native_font_baseline':'00f96217616c5892dd8364067d007f92d541585b','interface_and_translator_input_blobs':expected,
+ assert expected and tree(OLD)==expected and tree('6e021688aa83b4f88e672c19b145bc019445631e')==expected and tree(current_source)==expected
+ return {'qualified_translator_source':QUALIFIED,'old_runtime_source':OLD,'native_font_baseline':'6e021688aa83b4f88e672c19b145bc019445631e','interface_and_translator_input_blobs':expected,
   'scope':'exact unchanged translator/build/dependency-version/ABI source, not aggregate source equivalence'}
 def assemble(base,translator,fresh,destination,role):
  assert not destination.exists(),'Comparison destination must be fresh'

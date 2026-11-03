@@ -2,13 +2,13 @@
 
 **Current continuation:** [2026-10-29 manager checkpoint](session-2026-10-29-continuation.md) supersedes older live status below.
 
-**Newest accepted integration, 2026-10-29:** coherent full 40913529657 at 0a1a3224 passed 45 jobs with six optional skips; local integration merge 813df03ba61c0b9546e109992a348af0f4a47440 has an empty entire non-doc diff to that exact source. Both Windows normal suites, UDP and DNS on both ABIs, source-clean device checks, TSF/Services, native blocking, package and e2e passed within their documented scopes. Binder production trust, AppContainer, secondary AOT, public blocking and TCP gaps, pthread lifecycle, hardware and other known requirements remain open. See the current continuation and `C:/work/gesher-ci-review/combined-409135-terminal-audit.md`.
+**Newest accepted integration, 2026-10-29:** coherent full 40913529657 at 0a1a3224 passed 45 jobs with six optional skips; local integration merge efcc7113f1b1c10e83f0204d59e42dc5a0e328b2 has an empty entire non-doc diff to that exact source. Both Windows normal suites, UDP and DNS on both ABIs, source-clean device checks, TSF/Services, native blocking, package and e2e passed within their documented scopes. Binder production trust, AppContainer, secondary AOT, public blocking and TCP gaps, pthread lifecycle, hardware and other known requirements remain open. See the current continuation and `C:/work/gesher-ci-review/combined-409135-terminal-audit.md`.
 
 [Bounded requirement matrix and unsurveyed scope](requirement-matrix-2026-10-29.md).
 
 **Latest continuation, 2026-10-29:** TSF8ad component actual audit is complete and bounded; Binder authenticated private admission remains source-only and is a security prerequisite for secondary AOT. Services corrected fixture needs fresh proof. Interactive hardware Windows CI does not exist; hardware remains an external blocker. Read [the continuation checkpoint](session-2026-10-28-aot-native-full.md#continued-audit-and-security-dependency-2026-10-29).
 
-**Newest accepted integration, 2026-10-28:** full40731915058/attempt1 at exact81fd3eb194c9a56f1e111c8d26d33aeccc5d8c1a is accepted:38jobs32success/6intentional skips, both normal whole0, all new AOT/selected Native and original gates,84 verified archive receipts, package23/two e2e0. Frozen80d5920e adds docs only; --no-ff mergef1550540186b4ae3f17a5e501a886ec1c4d5d613 has an empty entire non-doc diff to81fd before/after commit; inventory55e03/all1157 preserved. Read [the bounded acceptance](tracks/coherent-aot-native-40731915058-accepted.md). Services/TSF remain separate pending actual audit/future full; Native raw-CLOEXEC, blocking/signals, AOTsecondary and hardware/main/release stay open. This supersedes older active-full/component statuses below.
+**Newest accepted integration, 2026-10-28:** full40731915058/attempt1 at exactd3ce9f9a42f4ecd4e5cde71d4b6d39653c9b865c is accepted:38jobs32success/6intentional skips, both normal whole0, all new AOT/selected Native and original gates,84 verified archive receipts, package23/two e2e0. Frozen80d5920e adds docs only; --no-ff mergec199c5f1a7e71c7cf8540f21723fa6fcb55790d6 has an empty entire non-doc diff to81fd before/after commit; inventory55e03/all1157 preserved. Read [the bounded acceptance](tracks/coherent-aot-native-40731915058-accepted.md). Services/TSF remain separate pending actual audit/future full; Native raw-CLOEXEC, blocking/signals, AOTsecondary and hardware/main/release stay open. This supersedes older active-full/component statuses below.
 
 **Newest active full, 2026-10-28:** read [the AOT / Native checkpoint](session-2026-10-28-aot-native-full.md). AOTc544 and selected Native156 components are accepted; canonical full40731915058/source81fd3eb1 is pending. Primary code remains7bb. This supersedes older source-only component status below.
 
@@ -23,21 +23,21 @@ qualification and remaining gaps persist. The current GitHub account gate is
 palmoni5 immediately before each write, with gh-authenticated transport.
 
 **Newest integration acceptance, 2026-10-28:** canonical full40678371420/attempt1
-at exact7bbccfcddbac826f50b78175f4d23f8702fd7741 is accepted:35jobs29success/
+at exact429b08826923ab0b1fff80529499bfdcfaa68caa is accepted:35jobs29success/
 six original intentional probes skipped, both actual normal Windows whole0,
 mandatory Binder/Surface/reader and strict80-archive supplier paths, installed
 package23 and both ten-app e2e0. Frozen2634c778 adds docs only; --no-ff phase4
-merge695ef6b81ac31662f3a51fa3195ace11923058e2 has an independently verified
+mergec46374e2992d70c3fa1af2054ffe08695dcb9a2b has an independently verified
 empty entire non-doc diff to7bb before and after commit. Inventory55e03/all1157
 is unchanged. Read [the exact bounded report](tracks/coherent-surface-reader-binder-integrity-40678371420-accepted.md)
 and newest resumed-progress entry. Failed Native3, source/diagnostic Web4,
 AOT after-resource and all remaining roadmap/hardware/release gates stay open.
 
 **Prior bounded integration acceptance, 2026-10-28:** canonical full40596167427
-attempt1 at exact30db7709838839d28be68d8b467a57b26a3ac667 is accepted:
+attempt1 at exact9d2232622c7d8279514a13e7007c2987d1d7a3a1 is accepted:
 31jobs25success/6intentional reusable probes skipped, both actual Windows
 whole0, package23 and both complete ten-app e2e0. Frozen6a057ccc adds docs only;
-phase4 mergefb0a4fe24286ccf2d69ed4fe987989fddc7db1b9 has an independently
+phase4 merge74c0987b7192f3c7ff381f72bf16ec5b9062c651 has an independently
 verified empty entire non-doc diff to30db. Inventory55e03c68/all1157 is unchanged.
 Read [the exact bounded report](tracks/coherent-union-40596167427-accepted.md)
 and the newest resumed-progress entry. Surface/new notice, SG, after-resource,
@@ -51,19 +51,19 @@ Web3 failing native stacks, worker ownership and the remaining gap plan.
 The original session-stop checkpoint is retained as history.
 
 **Libcore bounded acceptance,2026-10-27:** full40550474909, source
-`944a0eeffe5157d662f0278e992c421eebc86255`, is independently accepted:
+`397ded5dc3fae8bcf629a3e7a91f2d3e5c3947ae`, is independently accepted:
 28jobs22success/6skip, both actual15 child copy/native groups plus final
 verdict and whole0, package23 real installed UI/input/uninstall and both
 ten-app/4transport/association/shortcut e2e0. Frozen
-`ba967deac84ec79da6d4156e10f32a8ee4b3ac12` adds three docs only. The
+`2e5ca3d81f192358eed131cd23cfd87c114271ad` adds three docs only. The
 integration merge's entire non-doc tree equals944; no extra rule-g full is
 needed. [Exact report](tracks/libcore-io-final.md) retains uninduced IO and
 other native gaps. This supersedes the resumed log-visibility pending state
 below; no main/tag/release completion is claimed.
 
 **Resumed integration acceptance,2026-10-27:** Net4 legacy resolver frozen
-`50017009bc4d94b5dc0c57103686fd0761de7bf8` is accepted from full40519019567,
-exact source `f36317637e01fdeeebcb1cbc4777c1cc8f9cea9a`. The integration
+`37d73642ce8c2bbf9ca9a478362c79db900dd31b` is accepted from full40519019567,
+exact source `869d63c3c411ca5cc1bf8bd6cd2453ee167c3cb0`. The integration
 worker reread all28 job conclusions (22success/6skip), both whole-suite0
 summaries,16 actual ABI/policy/caller contexts plus independent WinSDK oracle
 and cleanup (18 top PASS records per runner), actual package23 installed
@@ -240,7 +240,7 @@ on2026-10-27 and found none; agents received the same explicit instruction.
 Earlier local fixtures built Gesher files only; AOSP/ART builds stayed in CI.
 
 Exit freshness is merged as35fba0ab: full CI 40455262527 at
-29fa0bdf665a2cc5ee707524e7edd2a670391451 passed attempt1,22 success/6 skips.
+226a02562336c6fca3a4cab38104086f1bb54b84 passed attempt1,22 success/6 skips.
 Root read both whole0 Windows logs, test70's actual ART generation/PID
 controls and normal0/abnormal23/normal0 app results with launcher0/1/0,
 package23 actual installed UI/input/uninstall passes and both ten-app e2e0.
@@ -331,7 +331,7 @@ NDK ABI callers, but production/runtime acceptance awaits full CI
 ([brief](tracks/exec4-actions.md)); full40466021634 now proves both ABI
 registration callers and their real child waits in the merged code.
 Root's ordered spawn child-actions full40502225202 is red at exact
-0808ba71b62ea784432de52f31bd3f86c9e2e3ad, containing accepted Windows160
+a8cdf2cc0c9ac7dada5ad5652480d2b6ac97d8a6, containing accepted Windows160
 and current-at-dispatch integration7b49a718. Old40498406783/e8e827e5 was
 cancelled/superseded for a further source finding: UCRT uses-2 for unbound
 stdio, which must never be used as a Win32 file handle. The new actual
@@ -481,7 +481,7 @@ inventory entries move from native3 to net4. Next free ADR is now 0071.
 These are open work, not completion claims.
 
 native2 is merged as 4459570: verified at
-d380a3e0190f5b418cfa3ee042691db601092e25 (ci 40296960603), head 0fc20d0
+a30ea54bd77dcafe757d484b610d6d748465da5f (ci 40296960603), head 0fc20d0
 adds docs only. Every job is success/skipped; both Windows jobs end with
 0 test(s) failed and 26 native2 PASS lines each (both ABIs, dalvikvm, APKs
 in both modes, third-party executables). Package install/run/uninstall
@@ -492,7 +492,7 @@ and POSIX work is assigned to [native3](tracks/native3.md), ADR 0062;
 complete public NDK API coverage is not claimed. Open tracks must include
 this new integration code before their final verification/merge.
 
-surfaces is merged as 4f99afd: verified at b1b59a65d30eef81bdc7208a4c88dbfdeab5e35c
+surfaces is merged as 4f99afd: verified at 1204b262027468f68ae43bf39fc0d93d61af0e64
 (ci 40307919084, attempt 2), head 180782f adds docs only. All 28 jobs are
 success/skipped, both test summaries say 0 test(s) failed, and all 32
 surfaces checks pass per runner. Package install/run/input/uninstall cleanup
@@ -503,7 +503,7 @@ no integration rerun is needed for this merge. Remaining GL, layer, hardware,
 JPEG_R and parcel-storage contracts belong to surfaces2, ADR 0063.
 
 aot2 is merged as 4d14466: verified at
-ae75766b0bcbcc04f2161cb3d8b4c8fc54510cc9 (ci 40320549410), head 20650a3
+a4471216af8adbeafaee3319fdb5354fb4e1ab02 (ci 40320549410), head 20650a3
 adds docs only. All 28 jobs are success/skipped (22/6), with no retry.
 Both runners have all 13 aot2 PASS lines and 0 test(s) failed. Package
 install/run/input/uninstall cleanup and both required TIC-80/Puzzles e2e
@@ -527,7 +527,7 @@ integration run is needed for this merge. Remaining NDK/POSIX scope stays
 open on native3; this is not a complete API-coverage claim.
 
 Native3's Process/Unicode continuation is now merged as 117629e, verified at
-6f6ac6fa9519207797ee5b997e0ae1e5b9e77049 in ci 40386670586, attempt 1.
+04db6b6df79c474cc33f807bb5c98f3d4d9da703 in ci 40386670586, attempt 1.
 Personally read all 28 jobs (22 success/six skipped), both zero-failure
 summaries, the full-code-point pinned ICU4X parity checks and both ABI/APK
 modes, package install/input/uninstall cleanup, and both required
@@ -538,7 +538,7 @@ scoped closures; wide widths/collation, binary128 libm, other NDK/POSIX and
 native-only font contracts remain on native3.
 
 Install-time cloud profiles are merged as 6dc3f03: full ci 40408733247 at
-05ca072cad7a23d83403a0c039d47d4fec0c07b5, attempt 1. Personally read all
+6a85d389aff5bd685384f3e596eb436b00fd5a88, attempt 1. Personally read all
 28 jobs (22 success/six skipped), all 16 aot3 PASS lines per runner, both
 zero-failure summaries, actual installed oatdump/window/input/uninstall
 cleanup and both required Puzzles/TIC-80 e2e logs (0 unexpected failures).
@@ -547,7 +547,7 @@ verified tree, so no additional integration CI is needed for this merge.
 See [the report](tracks/aot3-cloud.md). Shared-library contexts and secondary
 dex remain open on aot3.
 
-Exec3 is merged as 94ccde1, verified at 51bbfaccddf1fd7f466cab2a493874fbf0e1cb01
+Exec3 is merged as 94ccde1, verified at 462b7e86f0907b57fdf3d71ca5ec497d09d6f372
 in ci 40410489251. Root read all 28 jobs, all 11 exec3 PASS lines per runner,
 both zero-failure summaries, actual package install/input/uninstall and both
 required nine-app e2e logs (zero unexpected). Combined integration ci
@@ -557,7 +557,7 @@ fault recurring in Windows4 remains open on exec4; a green run alone does
 not establish its cause.
 
 The startup-profile stage is merged as 2ba9a11, verified at
-ca46e9967f8994fe329f3f10c88de7141e494f76 in ci 40414859801. Root read all
+83dcd8d616d5b186d46838740a4903a964968f32 in ci 40414859801. Root read all
 28 jobs, all 18 aot3 PASS lines per runner, both zero-failure summaries,
 actual package input/uninstall and both required e2e logs (zero unexpected).
 Frozen wip/aot3-startup head dc6196a adds docs only. Original image-size and
@@ -575,7 +575,7 @@ No retry was requested. Later integration heads add docs only, satisfying
 the pending rule-g gate before the next verified track merge.
 
 Native3's corrected per-ABI widths, CPU and monotonic/deadline clocks are
-merged as 62e64e0. Full ci 40434741055 at bdfb230fa3d70797caece6568b6ac529e854b4ee
+merged as 62e64e0. Full ci 40434741055 at 349a207cd7f03628629c8663de62595c63643bc0
 is personally inspected: all 28 conclusions (22 success/six skipped), both
 zero summaries, actual whole-range signed/unsigned ABI/APK and production
 clock checks, actual package window/input/uninstall and both required e2e
@@ -587,7 +587,7 @@ and [the prerequisite report](tracks/native3-width-clock.md). Other native3
 gaps remain open; future changed combinations still require rule-g CI.
 
 Media3 is merged as a1edcb0, verified at
-dd06d296e35ffd47fcecba9d0b88559360163500 in full ci 40448521754, attempt 1.
+a1c67b4f106890ca0d583a1bc079df23d7fd45b8 in full ci 40448521754, attempt 1.
 Root personally read all 28 conclusions (22 success/six skipped), both
 zero-failure Windows summaries and all 37 scoped media PASS labels per
 runner, exact local HTTP/SNI/certificate controls, live-environ67/time68,

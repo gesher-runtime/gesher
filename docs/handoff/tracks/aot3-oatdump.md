@@ -7,7 +7,7 @@ the later install-time .dm implementation is not included.
 ## Verification
 
 Full ci 40368334642, attempt 1, source
-96ef68790fc59098758ddead6b5f58be9eb5d648, already containing integration
+aa1787535b692ab06723b48213ad803863e9ae97, already containing integration
 d68ec79/f677944. All 28 jobs were personally reviewed: 22 success, six
 skipped. Both Windows suites end with 0 test(s) failed. No rerun.
 

@@ -1,7 +1,7 @@
 # 0061. Text services, IME occlusion and the shared Application display
 
 Status: accepted for the bounded scope below. Full40466021634 at exact
-160e25e8a77857cc50dd3e7c76e0616fb9fd1043 passes all28 jobs (22success,
+a0ad48926a674fa01e0cfdc6e6e4497b90ad417b passes all28 jobs (22success,
 6skip), both zero-failure Windows suites, package23 and both complete ten-app
 e2e sets. Root independently read/accepted the source and five critical logs.
 The corrected non-editor focus fixture passes in actual Android in both

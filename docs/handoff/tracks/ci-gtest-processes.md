@@ -2,11 +2,11 @@
 
 2026-10-28, existing ADR0078/test84. Owned wip/ci-gtest-processes /
 C:/work/gesher-ci-gtest-processes starts at reviewed canonical union
-30db7709838839d28be68d8b467a57b26a3ac667. Its active full remains immutable.
+9d2232622c7d8279514a13e7007c2987d1d7a3a1. Its active full remains immutable.
 
 ## 2026-10-28 verified current component
 
-Exact source df61f06118a38402670dc54594577d65b48dbe21 /run40600988297 attempt1
+Exact source 7e93e38725a8a8f4cbf65becd9794ffbcc19c861 /run40600988297 attempt1
 is GREEN2/2. Both actual job logs122528753952 (Windows2022) and122528754343
 (Windows2025) plus metadata were read. Required watch69026 completed0. Saved
 plain logs/result/control-review.json share C:/work/gesher-ci-review/
@@ -67,7 +67,7 @@ remaining legacy helpers and hardware-positive requirements remain open.
 
 ## First actual component and concrete resource follow-up
 
-Frozen1a3b366fafae4a94593a7c2038f6190d03209924/component40597998338 attempt1
+Frozenad318fff40554b23d83e18bf3eec62bfefd18c60/component40597998338 attempt1
 passed both actual jobs122518708798/122518709120. Each has43controls/0fail:
 18new controls and all exact25prior40556470317 records. Exit23 despite PASS,
 failed/zero/absent summaries, real timeout and exited-parent/retained pipes

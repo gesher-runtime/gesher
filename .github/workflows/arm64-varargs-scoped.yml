@@ -45,7 +45,7 @@ jobs:
         shell: pwsh
         run: |
           $run = gh api repos/${{ github.repository }}/actions/runs/40498782924 | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $run.head_sha -cne '8ec4bf3c30160575c8df794ad2ca1406957adc98' -or
+          if ($LASTEXITCODE -ne 0 -or $run.head_sha -cne '0498d825871a54b81b9bb51ef4610d9bb655cd44' -or
               $run.conclusion -cne 'success') { throw 'Unexpected runtime provenance' }
           Write-Host "ACTUAL_VARARGS_HOST_RUNTIME run=$($run.id) source=$($run.head_sha)"
           gh run download 40498782924 -R '${{ github.repository }}' -n windows-x64 -D dist

@@ -56,7 +56,7 @@ Merge latest integration before final CI and read every claimed PASS line.
 ## Status and next steps
 
 The separate legacy resolver candidate is now full-green40519019567 at
-f36317637e01fdeeebcb1cbc4777c1cc8f9cea9a: both Windows0failed/730topPASS,
+869d63c3c411ca5cc1bf8bd6cd2453ee167c3cb0: both Windows0failed/730topPASS,
 all16 real NDK contexts per runner, independent host/service oracle8 per
 allowed standalone ABI, actual four-thread TLS/error/lifetime/permission
 controls and cleanup. Package23 and both ten-app e2e sets0unexpected pass;
@@ -73,7 +73,7 @@ real NDK/oracle/negative/thread-lifetime fixtures and CI proof follow. The
 accepted interface stage stays frozen. No additional entry/count is closed.
 
 Coherent full **40499454478**, exact source
-`694a4cd6b067f1deea87015bceb2ad2160260154`, attempt1, is complete green:
+`015d8269025f9d35083038ecee1cea672d748f38`, attempt1, is complete green:
 28jobs22success/6skip, both actual Windows suites0failed with712 top PASS
 records and no top FAIL. Each retains38 Windows4/14 Web3/4 exit70/10 format71/
 2 action74 PASS, alongside Net4's2 ABI dalvikvm/4 APK contexts/2 standalone
@@ -86,7 +86,7 @@ Coordinator independent acceptance/merge remains separate; no more runtime
 source changes or unchanged-code CI reruns follow from this result.
 
 The coherent continuation now includes accepted Windows4/Web3 integration
-6297e80a3bddd1903790406bfc306cac92150153 (clean merge4e8b41a6).
+b695868ae30fe2f4a2b113f9e034d2f0e5500776 (clean merge4e8b41a6).
 Shared networking/native2 merges preserve all seven Web3 bridges, both new
 ifaddrs bridges/module assertions and Media4's real AMediaFormat_new probe.
 The four AAudio result hashes still match exact78ee5e12. Source outside docs
@@ -97,7 +97,7 @@ Windows4/Web3/70/71/74 plus real Net4 host-oracle9, strict AAudio controls,
 package23 and both complete ten-app e2e sets. Frozen6f073f45 remains the
 documentation-only bounded proof above source646f; do not move that ref.
 
-Bounded interface candidate full40469857757 at exact646f9fb1e6b932317c089c829b80ec9d58ee50d0
+Bounded interface candidate full40469857757 at exactaf8962719f998d2ce0a8b76ac3cccd05c5754340
 is complete green:28jobs22success/6skip, both actual Windows suites0failed,
 package23 and both ten-app e2e sets0unexpected. Actual both ABI dalvikvm,
 four APK contexts and two standalone callers pass per runner. Each standalone

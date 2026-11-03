@@ -36,7 +36,7 @@ def first_job_policy(current,prior):
 
 def source_policy():
     import yaml
-    root=Path(__file__).resolve().parents[2];base='1bf8fad9ec3b423ddef8c97c1d72b25790974364'
+    root=Path(__file__).resolve().parents[2];base='6d135abf73b29f7f60cf4e19e5de858bce04f2db'
     def old(path):return yaml.safe_load(subprocess.check_output(['git','-C',str(root),'show',base+':'+path],text=True))
     prior=old('.github/workflows/ci.yml');current=yaml.safe_load((root/'.github/workflows/ci.yml').read_text())
     first_job_policy(current,prior)
@@ -132,6 +132,6 @@ def tests(old):
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--diagnostic-receipt',type=Path,required=True);args=parser.parse_args()
     raw=args.diagnostic_receipt.read_bytes();assert hashlib.sha256(raw).hexdigest()=='aba3e32beef66ec5ca6919e65f5e49f8b40f587599a8d2f43205e60bab873701'
-    old=json.loads(raw);assert old['GITHUB_RUN_ID']=='41135044960' and old['GITHUB_SHA']=='f0a8364afd3380eb0e25b8d82824dd1752f91e16'
+    old=json.loads(raw);assert old['GITHUB_RUN_ID']=='41135044960' and old['GITHUB_SHA']=='3c76d9f4f259ff3110b27e753b514838628989aa'
     source_policy()
     tests(old)

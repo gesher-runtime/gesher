@@ -7,7 +7,7 @@ Build and execute process fixtures only in CI.
 
 ## Status and next steps
 
-Exact current sourceebae3e0b28513aa6f3567be4066bb76714dda29d,
+Exact current source258096818661f3f0c53554b83927a66b23e08d08,
 component40556470317 is GREEN both Windows hosts. Actual jobs122373745827
 and122373746029 logs were read:25 mandatory real controls perhost and0failed.
 Includes all prior20 controls plus N2Run normal/exit23/timeout124/retained
@@ -62,8 +62,8 @@ diagnostic bounds, adds finite post-kill/final cleanup and finally disposal,
 and returns-1 for timed-out completion. The existing pixel/GL oracles remain
 unchanged and now also require actual successful process completion.
 The test76 file is imported exactly from coordinator-authorized frozen
-OpenSL58a24583d06432f0f025a7e845fcdbca885989e0 (docs above verified
-d10bea3a98bb8dfe76972209b6aff5df4fed58ec/full40476766790), changing only
+OpenSL0a8784622c7705b9530813ca732a6224ab2fe5a4 (docs above verified
+3868e4564ee780fb71a4081bb86652e1335af225/full40476766790), changing only
 InvokeOpenSl's bounded termination/read/disposal. No Media worktree is edited.
 Test84 compiles the real fixture and invokes all three actual helper bodies
 for normal/23/timeout/retained-output cases. SurfaceRun uses file redirection,
@@ -125,7 +125,7 @@ status behavior remain unchanged. No full/product acceptance yet.
 ## Owner-requested stop checkpoint
 
 Work stopped on2026-10-27. Changed-source scoped40526183946 at
-ec0f003cc149a0f985b5f280924477dc20414872 is GREEN on both Windows hosts.
+8fde93f31feb2f4bc8c940117119191d03930be7 is GREEN on both Windows hosts.
 Root independently read actual122266298232/122266298625 logs: each compiles
 the real fixture and has four mandatory normal/23/timeout/retained-pipe
 PASS records, then0 test(s) failed and successful job conclusion. The last

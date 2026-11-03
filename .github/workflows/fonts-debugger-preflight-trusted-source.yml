@@ -23,11 +23,11 @@ jobs:
           """Immutable supported-tool prerequisite; never host/font/runtime acceptance."""
           import ast,copy,hashlib,json,os,re,subprocess,sys,textwrap,urllib.request
           from pathlib import Path
-          BASE='78ff47fadc8ff3d15133a892ca6dbb45bdca2264'
-          HOST_GUARD='267bb2f7868dd85405e9336d3ec29a131535d7eb'
+          BASE='a5d0f4d5257ad1d417c5045a0193122b8f98ee39'
+          HOST_GUARD='68ba180b38d56810de55a374f472bf91fefec636'
           HOST_TRUST='.github/workflows/fonts-owner-host-trusted-source.yml'
           HOST_GUARD_BLOB='399d2ffdf430dce00634021ddd4d21553ee7d262'
-          TEMPLATE='833f29c0e80e17383ced0ee7940cfaba56a153d0'
+          TEMPLATE='7b1e2bb51a75d2df1d216e2864b31ed2d1347e90'
           CALLER='.github/workflows/fonts-debugger-preflight-component.yml'
           TRUST='.github/workflows/fonts-debugger-preflight-trusted-source.yml'
           REPO='gesher-runtime/gesher'
