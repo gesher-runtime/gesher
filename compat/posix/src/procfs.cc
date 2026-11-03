@@ -496,6 +496,12 @@ Node Lookup(const std::wstring& name, bool list) {
     n.file = "timezone";
     return n;
   }
+  if (p.size() == 5 && p[0] == "sys" && p[1] == "devices" && p[2] == "system" &&
+      p[3] == "cpu" && (p[4] == "possible" || p[4] == "present")) {
+    n.type = kFile;
+    n.file = "cpu_list";
+    return n;
+  }
   if (p.empty() || p[0] != "proc") return n;
   if (p.size() == 1) {
     n.type = kDir;
@@ -598,6 +604,11 @@ std::string Content(const Node& n) {
   if (f == "maps") return Maps();
   if (f == "meminfo") return Meminfo();
   if (f == "cpuinfo") return Cpuinfo();
+  if (f == "cpu_list") {
+    // /sys/devices/system/cpu/{possible,present}: "0-<n-1>".
+    const DWORD cpus = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    return cpus > 1 ? Format("0-%lu\n", cpus - 1) : std::string("0\n");
+  }
   if (f == "uptime") return Uptime();
   return "";  // mounts: no mount table (misc.cc's setmntent agrees)
 }

@@ -75,6 +75,14 @@ PathKind VirtualKind(std::string_view path, std::wstring* name) {
     *name = Widen(joined.c_str());
     return PathKind::kVirtual;
   }
+  // /sys/devices/system/cpu/{possible,present}: the CPU lists cpuinfo
+  // (XNNPACK, onnxruntime) reads first, served like /proc's files.
+  if (parts.size() == 5 && parts[0] == "sys" && parts[1] == "devices" &&
+      parts[2] == "system" && parts[3] == "cpu" &&
+      (parts[4] == "possible" || parts[4] == "present")) {
+    *name = L"sys/devices/system/cpu/" + Widen(std::string(parts[4]).c_str());
+    return PathKind::kVirtual;
+  }
   if (parts[0] != "dev" && parts[0] != "sys") return PathKind::kFile;
   if (parts.size() == 2 && parts[0] == "dev") {
     if (parts[1] == "null") return PathKind::kNull;

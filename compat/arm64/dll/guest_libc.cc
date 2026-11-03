@@ -350,6 +350,30 @@ const SyscallMap kSyscalls[] = {
 std::unordered_map<uint32_t, std::pair<void*, char>> g_syscalls;
 void* g_host_syscall = nullptr;
 
+// mprotect/mmap: the host never runs guest code (guest code pages are not
+// executable, so a host call of a guest function pointer faults into its
+// host_entry stub). A guest that makes pages PROT_EXEC itself - an
+// anti-tamper library re-protecting its own text, libtaz_full.so - would make
+// them host-executable: a host call of a guest pointer there (pthread_once,
+// qsort, a JNI callback) then runs AArch64 bytes as x86 and dies with SIGILL
+// (or worse) instead. PROT_EXEC becomes PROT_READ: the translator reads it.
+constexpr int kProtRead = 1;
+constexpr int kProtExec = 4;
+void* g_mprotect = nullptr;
+void* g_mmap = nullptr;
+
+int GuestProt(int prot) { return (prot & kProtExec) != 0 ? (prot & ~kProtExec) | kProtRead : prot; }
+
+int GESHER_SYSV GuestMprotect(void* addr, size_t len, int prot) {
+  return reinterpret_cast<int(GESHER_SYSV*)(void*, size_t, int)>(g_mprotect)(addr, len,
+                                                                           GuestProt(prot));
+}
+
+void* GESHER_SYSV GuestMmap(void* addr, size_t len, int prot, int flags, int fd, int64_t off) {
+  return reinterpret_cast<void*(GESHER_SYSV*)(void*, size_t, int, int, int, int64_t)>(g_mmap)(
+      addr, len, GuestProt(prot), flags, fd, off);
+}
+
 // libc-style result: -1 with errno set on failure.
 int64_t DoSyscall(uint64_t nr, const int64_t a[6]) {
   switch (nr) {
@@ -378,6 +402,16 @@ int64_t DoSyscall(uint64_t nr, const int64_t a[6]) {
     case 25:  // fcntl
       if (g_fcntl == nullptr) break;
       return GuestFcntl(static_cast<int>(a[0]), static_cast<int>(a[1]), a[2]);
+    case 226:  // mprotect
+      if (g_mprotect == nullptr) break;
+      return GuestMprotect(reinterpret_cast<void*>(a[0]), static_cast<size_t>(a[1]),
+                           static_cast<int>(a[2]));
+    case 222:  // mmap
+      if (g_mmap == nullptr) break;
+      return reinterpret_cast<int64_t>(GuestMmap(reinterpret_cast<void*>(a[0]),
+                                                 static_cast<size_t>(a[1]), static_cast<int>(a[2]),
+                                                 static_cast<int>(a[3]), static_cast<int>(a[4]),
+                                                 a[5]));
     case 168:  // getcpu(cpu, node, cache)
       if (a[0] != 0) *reinterpret_cast<uint32_t*>(a[0]) = 0;
       if (a[1] != 0) *reinterpret_cast<uint32_t*>(a[1]) = 0;
@@ -611,6 +645,14 @@ void InitGuestLibc() {
     Override("wcswidth", reinterpret_cast<void*>(&GuestWcswidth));
   }
   Override("getauxval", reinterpret_cast<void*>(&GuestGetauxval));
+
+  g_mprotect = Host("mprotect");
+  g_mmap = Host("mmap");
+  if (g_mprotect) Override("mprotect", reinterpret_cast<void*>(&GuestMprotect));
+  if (g_mmap) {
+    Override("mmap", reinterpret_cast<void*>(&GuestMmap));
+    Override("mmap64", reinterpret_cast<void*>(&GuestMmap));
+  }
 
   g_host_syscall = Host("syscall");
   for (const SyscallMap& s : kSyscalls) g_syscalls[s.nr] = {Host(s.fn), s.ret};

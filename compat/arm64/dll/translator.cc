@@ -72,8 +72,6 @@ const gesher_arm64_host* g_host = nullptr;
 
 namespace {
 
-int GuestProt(int prot);  // guest PROT_EXEC (ApiGuestSymbol, below)
-
 // A guest's rounding mode must not escape into its native host caller. This
 // also contains deliberate host fenv changes made by a nested callback.
 class HostFenvScope {
@@ -599,11 +597,7 @@ class Env final : public A64::UserCallbacks {
         HostFenvScope host_fenv;
         uint64_t args[6];
         for (int i = 0; i < 6; ++i) args[i] = jit->GetRegister(i);
-        const uint64_t nr = jit->GetRegister(8);
-        if (nr == 222 || nr == 226) {  // mmap, mprotect: no host-executable guest pages
-          args[2] = static_cast<uint64_t>(GuestProt(static_cast<int>(args[2])));
-        }
-        int64_t result = GuestRawSyscall(nr, args);
+        int64_t result = GuestRawSyscall(jit->GetRegister(8), args);
         jit->SetRegister(0, static_cast<uint64_t>(result));
       } else if (pending.fn != nullptr) {
         CallHost(jit, pending.fn, pending.va_index);
@@ -1096,102 +1090,7 @@ uint64_t ApiCall(const void* fn, const uint64_t* args, size_t nargs) {
 
 void* ApiHostEntry(const void* fn) { return MakeHostEntry(fn); }
 
-// Guest PROT_EXEC. The host never runs guest code: guest code pages are not
-// executable, so a host call of a guest function pointer faults into its
-// host_entry stub. A guest that makes pages PROT_EXEC itself (an anti-tamper
-// library re-protecting its own text: libtaz_full.so) made them
-// host-executable, and a host call of a guest pointer there (pthread_once, a
-// JNI callback) ran AArch64 bytes as x86 (SIGILL). PROT_EXEC becomes
-// PROT_READ: the translator only reads guest code.
-constexpr int kGuestProtRead = 1, kGuestProtExec = 4;
-
-int GuestProt(int prot) {
-  return (prot & kGuestProtExec) != 0 ? (prot & ~kGuestProtExec) | kGuestProtRead : prot;
-}
-
-void* HostLibc(const char* name) {
-  return g_host != nullptr && g_host->resolve != nullptr ? g_host->resolve(name) : nullptr;
-}
-
-int GESHER_SYSV GuestMprotect(void* addr, size_t len, int prot) {
-  static auto fn = reinterpret_cast<int(GESHER_SYSV*)(void*, size_t, int)>(HostLibc("mprotect"));
-  return fn(addr, len, GuestProt(prot));
-}
-
-void* GESHER_SYSV GuestMmap(void* addr, size_t len, int prot, int flags, int fd, int64_t off) {
-  static auto fn = reinterpret_cast<void*(GESHER_SYSV*)(void*, size_t, int, int, int, int64_t)>(
-      HostLibc("mmap"));
-  return fn(addr, len, GuestProt(prot), flags, fd, off);
-}
-
-// /sys/devices/system/cpu/{possible,present}: the CPU lists cpuinfo (XNNPACK,
-// onnxruntime) parses before anything else; without them it fails to
-// initialize and onnxruntime aborts. Gesher has no /sys, so a guest's open of
-// either is a pipe holding "0-<n-1>\n", which the guest reads as the file.
-void* GuestOpenTarget(const char* name) {
-  void* g = GuestSymbol(name);
-  return g != nullptr ? g : HostLibc(name);
-}
-
-bool IsCpuListFile(const char* path) {
-  return path != nullptr && (std::strcmp(path, "/sys/devices/system/cpu/possible") == 0 ||
-                             std::strcmp(path, "/sys/devices/system/cpu/present") == 0);
-}
-
-int CpuListPipe() {
-  static auto pipe_fn = reinterpret_cast<int(GESHER_SYSV*)(int*)>(HostLibc("pipe"));
-  static auto write_fn = reinterpret_cast<int64_t(GESHER_SYSV*)(int, const void*, size_t)>(
-      HostLibc("write"));
-  static auto close_fn = reinterpret_cast<int(GESHER_SYSV*)(int)>(HostLibc("close"));
-  int fds[2];
-  if (pipe_fn == nullptr || write_fn == nullptr || close_fn == nullptr || pipe_fn(fds) != 0) {
-    return -1;
-  }
-  const DWORD cpus = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-  char list[32];
-  const int length = cpus > 1 ? std::snprintf(list, sizeof list, "0-%lu\n", cpus - 1)
-                              : std::snprintf(list, sizeof list, "0\n");
-  write_fn(fds[1], list, static_cast<size_t>(length));
-  close_fn(fds[1]);
-  return fds[0];
-}
-
-int GESHER_SYSV GuestOpen(const char* path, int flags, int mode) {
-  if (IsCpuListFile(path)) return CpuListPipe();
-  static auto fn = reinterpret_cast<int(GESHER_SYSV*)(const char*, int, int)>(
-      GuestOpenTarget("open"));
-  return fn(path, flags, mode);
-}
-
-int GESHER_SYSV GuestOpenat(int dirfd, const char* path, int flags, int mode) {
-  if (IsCpuListFile(path)) return CpuListPipe();
-  static auto fn = reinterpret_cast<int(GESHER_SYSV*)(int, const char*, int, int)>(
-      GuestOpenTarget("openat"));
-  return fn(dirfd, path, flags, mode);
-}
-
-void* ApiGuestSymbol(const char* name) {
-  if (name != nullptr && (std::strcmp(name, "open") == 0 || std::strcmp(name, "open64") == 0) &&
-      GuestOpenTarget("open") != nullptr) {
-    static void* open = BindHost(reinterpret_cast<void*>(&GuestOpen), -1);
-    return open;
-  }
-  if (name != nullptr && (std::strcmp(name, "openat") == 0 || std::strcmp(name, "openat64") == 0) &&
-      GuestOpenTarget("openat") != nullptr) {
-    static void* openat = BindHost(reinterpret_cast<void*>(&GuestOpenat), -1);
-    return openat;
-  }
-  if (name != nullptr && std::strcmp(name, "mprotect") == 0 && HostLibc("mprotect") != nullptr) {
-    static void* mprotect = BindHost(reinterpret_cast<void*>(&GuestMprotect), -1);
-    return mprotect;
-  }
-  if (name != nullptr && (std::strcmp(name, "mmap") == 0 || std::strcmp(name, "mmap64") == 0) &&
-      HostLibc("mmap") != nullptr) {
-    static void* mmap = BindHost(reinterpret_cast<void*>(&GuestMmap), -1);
-    return mmap;
-  }
-  return GuestSymbol(name);
-}
+void* ApiGuestSymbol(const char* name) { return GuestSymbol(name); }
 
 void ApiAddVaListFunction(const void* fn, int index) { AddVaListFunction(fn, index); }
 
