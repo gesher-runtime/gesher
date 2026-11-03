@@ -466,6 +466,7 @@ def main():
         'compat/bionic/system_cacerts.h',
         'tests/exec/java/gesher/ExecTest.java',
         'compat/posix/src/errno.cc',
+        'app/gesher-camera/java/com/google/android/gms/common/security/ProviderInstallerImpl.java',
     ])
     assert not (code | {'tools/ci/receipt-unreviewed.py'}) <= allowed
     print('BLOCKING_RECEIPT_NEGATIVE unauthorized_path rejected; exact pins enforced externally', flush=True)

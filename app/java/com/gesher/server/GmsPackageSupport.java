@@ -15,6 +15,7 @@ import android.content.pm.ServiceInfo;
 import android.content.pm.Signature;
 import android.os.Process;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -111,6 +112,25 @@ public final class GmsPackageSupport {
         return pi;
     }
 
+    private static volatile String sGmsCodeApk;
+
+    /** gesher-camera.apk next to dalvikvm.exe (drive-less, '/'), or null. */
+    private static String gmsCodeApk() {
+        String apk = sGmsCodeApk;
+        if (apk == null) {
+            try {
+                String exe = Zygote.exePath();
+                apk = (exe.substring(0, exe.lastIndexOf('\\') + 1) + "gesher-camera.apk")
+                        .replace('\\', '/').replaceFirst("^[A-Za-z]:", "");
+                if (!new File(apk).isFile()) apk = "";
+            } catch (Throwable t) {
+                apk = "";
+            }
+            sGmsCodeApk = apk;
+        }
+        return apk.isEmpty() ? null : apk;
+    }
+
     public static ApplicationInfo createSyntheticApplicationInfo(String packageName, long flags) {
         if (!isSyntheticPackage(packageName)) return null;
 
@@ -122,6 +142,11 @@ public final class GmsPackageSupport {
         ai.uid = Process.myUid();
         ai.targetSdkVersion = 34;
         ai.sourceDir = "/system/priv-app/" + (PACKAGE_GMS.equals(packageName) ? "PrebuiltGmsCore" : "Phonesky") + ".apk";
+        // Play services' code, for apps that load it (createPackageContext with
+        // CONTEXT_INCLUDE_CODE: the client library's ProviderInstaller): an APK that is
+        // there, gesher-camera.apk, which carries ProviderInstallerImpl.
+        String code = gmsCodeApk();
+        if (PACKAGE_GMS.equals(packageName) && code != null) ai.sourceDir = code;
         ai.publicSourceDir = ai.sourceDir;
         ai.dataDir = "/data/data/" + packageName;
         return ai;
