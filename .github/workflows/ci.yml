@@ -669,6 +669,8 @@ jobs:
           if ($link.WorkingDirectory -ne $app) { $problems += "working directory $($link.WorkingDirectory)" }
           if ($link.IconLocation -ne "$lifecycleIco,0") { $problems += "icon $($link.IconLocation)" }
           if ($aumid -ne 'Gesher.App.com.gesher.lifecycle') { $problems += "AppUserModelID $aumid" }
+          # SW_SHOWNORMAL (1), not SW_SHOWMINNOACTIVE (7): the window must not open minimized behind Explorer.
+          if ($link.WindowStyle -ne 1) { $problems += "show command $($link.WindowStyle), not SW_SHOWNORMAL" }
           $problems += @(Test-AppIco $lifecycleIco @{ '2,2' = 'transparent'; '128,128' = @(0xD3, 0x2F, 0x2F) })
           if ($problems) { throw "The shortcut of lifecycle.apk: $($problems -join '; ')" }
           'PASS  installer: gesher-app install makes Gesher Apps\Gesher Lifecycle.lnk: gesher-launch launch com.gesher.lifecycle (no console window), the app''s icon as a multi-size .ico, AppUserModelID Gesher.App.com.gesher.lifecycle' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -704,6 +706,22 @@ jobs:
           if ((Get-LinkAppUserModelId $componentsLnk) -ne 'Gesher.App.com.gesher.components') { $problems += 'not its AppUserModelID' }
           if ($problems) { throw "The shortcut of components.apk: $($problems -join '; ')" }
           'PASS  installer: components.apk''s shortcut has its adaptive icon (foreground over background, masked)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # An APK Gesher never installed (gesher-app apk-icon, what the .apk icon handler
+          # runs in the background): its icon drawn and recorded, nothing installed.
+          $iconApk = Join-Path $env:TEMP 'components-icon.apk'
+          Copy-Item dist\components.apk $iconApk -Force
+          (Get-Item $iconApk).LastWriteTimeUtc = [DateTime]::UtcNow.AddMinutes(-1)
+          $f = Get-Item $iconApk
+          $key = "$($f.Length)`t$([DateTimeOffset]::new($f.LastWriteTimeUtc).ToUnixTimeMilliseconds())`t"
+          $out = & "$app\gesher-app.cmd" apk-icon $iconApk 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          $line = Get-Content "$env:LOCALAPPDATA\Gesher\data\system\apk-icons.list" -Encoding UTF8 | Where-Object { $_.StartsWith($key) } | Select-Object -First 1
+          $drawnIco = if ($line) { ($line -split "`t")[2] } else { '' }
+          if ($code -ne 0 -or $drawnIco -notlike "$env:LOCALAPPDATA\Gesher\data\system\apk-icons\*.ico") { throw "gesher-app apk-icon recorded no drawn icon for $iconApk (exit $code, line '$line')" }
+          $problems = @(Test-AppIco $drawnIco @{ '2,2' = 'transparent'; '128,128' = @(0xFF, 0xFF, 0xFF); '128,30' = @(0x1E, 0x63, 0xD6) })
+          if ($problems) { throw "The icon gesher-app apk-icon drew for components.apk: $($problems -join '; ')" }
+          'PASS  installer: gesher-app apk-icon draws an APK''s adaptive icon without installing it and records it in apk-icons.list' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           $out = & "$app\gesher-app.cmd" shutdown 2>&1 | Out-String
           Write-Host $out
           Start-Sleep 1
@@ -753,6 +771,9 @@ jobs:
           'PASS  installer: Gesher''s toast activator is registered (LocalServer32: gesher-launch.exe toast-activated)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # The .apk file type's icons come from Gesher's icon handler (gesher_shellext.dll):
           # an installed APK's is its app's, any other's gesher.ico; the Start menu entries'.
+          # Opened APKs are recent items of Gesher.Installer, not of each app's jump list.
+          $progAumid = (Get-ItemProperty "$cls\Gesher.Apk" -ErrorAction SilentlyContinue).AppUserModelID
+          if ($progAumid -ne 'Gesher.Installer') { throw "Gesher.Apk's AppUserModelID is '$progAumid', not Gesher.Installer" }
           $defaultIcon = (Get-ItemProperty "$cls\Gesher.Apk\DefaultIcon" -ErrorAction SilentlyContinue).'(default)'
           if ($defaultIcon -ne '%1') { throw "Gesher.Apk's DefaultIcon is '$defaultIcon', not %1 (its icon handler)" }
           $handler = (Get-ItemProperty "$cls\Gesher.Apk\shellex\IconHandler" -ErrorAction SilentlyContinue).'(default)'

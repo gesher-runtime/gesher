@@ -1,5 +1,5 @@
 # microG / Google Play Services compatibility track (GMS, FCM, Location, Auth, Synthetic Packages).
-# Dot-sourced by run-tests.ps1, using Check, NoDrive, $Dir, $root, $bcp and $failed from there.
+# Dot-sourced by run-tests.ps1, using Check, NoDrive, $Dir, $root, $bcpApp and $failed from there.
 
 if (-not (Test-Path "$Dir/gmsapp.apk")) {
   Write-Host 'SKIP  microg-gms: gmsapp.apk not present in build output'
@@ -7,7 +7,7 @@ if (-not (Test-Path "$Dir/gmsapp.apk")) {
 }
 
 $dvmGms = @(
-  "-Xbootclasspath:$bcp",
+  "-Xbootclasspath:$bcpApp",  # framework.jar and gesher-app.jar: com.gesher.app.Main / Launcher
   "-Ximage:$(NoDrive $root)/system/framework/boot.art",
   '-Xint',
   '-Xusejit:false'
@@ -27,6 +27,13 @@ function GmsCheck([string] $Name, [string] $Out, [int] $Code, [string[]] $Expect
 # Single process execution: app driver runs with in-process stand-in services.
 $outSingle = RunTimed "$Dir/dalvikvm.exe" ($dvmGms + 'com.gesher.app.Main' + (NoDrive "$Dir/gmsapp.apk")) 300
 $codeSingle = $LASTEXITCODE
+
+# The client-SDK stubs are the APK's own classes (tests/apps/gmsapp/build.sh bundles
+# them); gesher-app.jar on the boot class path has none (app/build.sh), or they would
+# shadow an app's real Firebase / play-services (parent-first loading).
+GmsCheck 'microg-gms (single process): client SDK classes come from the APK, none from the boot class path' $outSingle $codeSingle @(
+  'gms: client SDK: FirebaseApp and play-services classes loaded from the APK, none on the boot class path'
+)
 
 GmsCheck 'microg-gms (single process): GoogleApiAvailability stand-ins' $outSingle $codeSingle @(
   'gms: GoogleApiAvailability: isGooglePlayServicesAvailable SUCCESS (0)',
@@ -64,6 +71,7 @@ $outDevice += "`n" + (Get-Content $serverLog -Raw -ErrorAction SilentlyContinue)
 $outDevice += "`n" + (Get-Content $appLog -Raw -ErrorAction SilentlyContinue)
 
 GmsCheck 'microg-gms (device): full GMS compatibility suite in system server' $outDevice $codeDevice @(
+  'gms: client SDK: FirebaseApp and play-services classes loaded from the APK, none on the boot class path',
   'gms: GoogleApiAvailability: isGooglePlayServicesAvailable SUCCESS (0)',
   'gms: PackageManager: com.google.android.gms synthetic package present, enabled, valid signatures',
   'gms: FusedLocationProviderClient: connected to LocationManagerService, updates received',

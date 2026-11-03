@@ -45,11 +45,47 @@ public final class GmsUnitSteps {
     }
 
     public void runAll() throws Exception {
+        testClientSdkFromApk();
         testGoogleApiAvailability();
         testPackageManagerSyntheticGms();
         testFusedLocationProviderClient();
         testGoogleSignInAndAccountManager();
         testFirebaseAndFcmRouting();
+    }
+
+    /**
+     * The client-SDK classes (play-services, Firebase) are the APK's own, as on Android:
+     * gesher-app.jar on the boot class path has none (app/build.sh), which would shadow
+     * an app's real copies (parent-first loading; a stub FirebaseApp.get() answering null
+     * is "FirebaseCrashlytics component is not present").
+     */
+    public void testClientSdkFromApk() throws Exception {
+        ClassLoader own = GmsUnitSteps.class.getClassLoader();
+        Class<?>[] sdk = {
+            com.google.firebase.FirebaseApp.class,
+            FirebaseMessaging.class,
+            GoogleApiAvailability.class,
+            Tasks.class,
+            LocationServices.class,
+        };
+        for (Class<?> c : sdk) {
+            if (c.getClassLoader() != own) {
+                throw new AssertionError(c.getName() + " was loaded by " + c.getClassLoader()
+                        + ", not the APK's class loader " + own);
+            }
+        }
+        // Not on the boot class path at all (Context's loader is the boot class loader).
+        ClassLoader boot = Context.class.getClassLoader();
+        for (String name : new String[] {"com.google.firebase.FirebaseApp",
+                "com.google.android.gms.common.GoogleApiAvailability"}) {
+            try {
+                Class<?> c = Class.forName(name, false, boot);
+                throw new AssertionError(name + " is on the boot class path (" + c.getClassLoader() + ")");
+            } catch (ClassNotFoundException expected) {
+                // as on Android
+            }
+        }
+        Report.line("client SDK: FirebaseApp and play-services classes loaded from the APK, none on the boot class path");
     }
 
     public void testGoogleApiAvailability() throws Exception {

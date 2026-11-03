@@ -223,6 +223,38 @@ foreach ($e in 'devsvc: listener: connected', 'devsvc: listener: posted com.gesh
 }
 DevsvcCheck 'devsvc: notifications: a NotificationListenerService is bound and gets onListenerConnected, onNotificationPosted and onNotificationRemoved' $problems $log
 
+# A feed refresh's notification (AntennaPod's): ongoing, low importance, progress, a
+# Hebrew title, updated five times in a row and cancelled at once. The cancel once
+# crashed the system server (SIGSEGV: WindowsHost.nativeCancelNotificationBridge was
+# entered with the Microsoft ABI and took the JNIEnv* for a string); the same system
+# server must take the next notification and its cancel.
+$mark = (DevsvcText $devsvcLog).Length
+$serverMark = (DevsvcText $serverLog).Length
+$serverBefore = (DeviceState)
+$t = DevsvcLaunch 'ProgressNotifyActivity'
+$after = DevsvcWait $mark @('devsvc: progress: after the cancel, posted and cancelled 10') 300
+Start-Sleep 2
+$tags = ToastTags
+$out = WaitTimed $t 200
+$code = $LASTEXITCODE
+$log = DevsvcSince $mark
+$serverText = DevsvcText $serverLog
+$server = if ($serverText.Length -gt $serverMark) { $serverText.Substring($serverMark) } else { '' }
+$serverAfter = (DeviceState)
+$problems = @()
+if (-not $log.Contains('devsvc: progress: cancelled 9')) { $problems += 'the app did not cancel 9' }
+if (-not $after) { $problems += 'the app did not post and cancel 10 after cancelling 9' }
+foreach ($e in 'notification 9 posted for com.gesher.devsvc: channel refreshing', 'notification 9 updated for com.gesher.devsvc', 'notification 9 of com.gesher.devsvc cancelled', 'notification 10 of com.gesher.devsvc cancelled') {
+  if (-not $server.Contains($e)) { $problems += "the system server log has no '$e'" }
+}
+if ($server.Contains('Fatal signal')) { $problems += 'the system server took a fatal signal' }
+if ($serverBefore -and $serverAfter -and $serverBefore['system_server'] -ne $serverAfter['system_server']) {
+  $problems += "the system server changed (pid $($serverBefore['system_server']) -> $($serverAfter['system_server']))"
+}
+if ($tags.Contains('tag=9 group=android') -or $tags.Contains('tag=10 group=android')) { $problems += "after the cancels the history has: $($tags.Trim())" }
+if ($code -ne 0) { $problems += "launch exit $code" }
+DevsvcCheck 'devsvc: notifications: an ongoing progress notification with a Hebrew title, updated five times and cancelled at once, leaves the system server running and its toast removed' $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + $server)
+
 # --- power and battery -------------------------------------------------------------
 # A partial wake lock is a Windows power request (powercfg /requests) until it
 # is released; the battery is Windows' (GetSystemPowerStatus).

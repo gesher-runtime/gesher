@@ -14,11 +14,16 @@
 #include <fcntl.h>
 #include <link.h>
 #include <math.h>
+#include <mntent.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/mount.h>
+#include <sys/vfs.h>
+#include <sys/xattr.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -132,6 +137,100 @@ static void test_time_math(void) {
   check("CLOCK_REALTIME is after 2020", rt.tv_sec > 1577836800);
   check("libm", fabs(sqrt(2.0) * sqrt(2.0) - 2.0) < 1e-12 && fabs(sin(0.0)) < 1e-12 &&
                     fabs(pow(2.0, 10.0) - 1024.0) < 1e-9);
+}
+
+// statfs and its neighbours: imports the shim once lacked, so they were bound
+// to stubs that abort when called (Material Files died in statfs from
+// libselinux-jni.so). statfs on the working directory and on Android's /data
+// (not on the disk: it answers for the volume it would be on, as
+// SQLiteGlobal's StatFs("/data") needs), fstatfs on an open file, the xattr
+// family failing with ENOTSUP, an empty mount table and mount refused.
+// Acquire loads of read-only memory (LocalSend's libflutter: Dart reads its
+// write-protected VM isolate heap with LDAR). The arm64 translator's dynarmic
+// emits an ordered load as `lock xadd [m], 0`, which faults as a write on a
+// read-only page; the translator completes the load instead.
+static void test_ldar_readonly(void) {
+#if defined(__aarch64__)
+  long page = sysconf(_SC_PAGESIZE);
+  uint64_t* data = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  check("mmap for guest acquire loads", data != MAP_FAILED);
+  if (data == MAP_FAILED) return;
+  const uint64_t v = 0x8899AABBCCDDEEF1ull;
+  data[8] = v;
+  check("mprotect PROT_READ", mprotect(data, page, PROT_READ) == 0);
+  uint64_t x;
+  uint32_t w, h, b;
+  __asm__ volatile("ldar %0, [%1]" : "=r"(x) : "r"(&data[8]) : "memory");
+  __asm__ volatile("ldar %w0, [%1]" : "=r"(w) : "r"(&data[8]) : "memory");
+  __asm__ volatile("ldarh %w0, [%1]" : "=r"(h) : "r"(&data[8]) : "memory");
+  __asm__ volatile("ldarb %w0, [%1]" : "=r"(b) : "r"(&data[8]) : "memory");
+  check("LDAR/LDARH/LDARB of a read-only page",
+        x == v && w == (uint32_t)v && h == (uint16_t)v && b == (uint8_t)v);
+  check("read-only page unchanged after acquire loads", data[8] == v);
+  munmap(data, page);
+#endif
+}
+
+static void test_statfs(void) {
+  char cwd[1024];
+  struct statfs st;
+  memset(&st, 0, sizeof(st));
+  int ok = getcwd(cwd, sizeof(cwd)) != NULL && statfs(cwd, &st) == 0;
+  check("statfs(cwd)", ok);
+  check("statfs: f_bsize > 0, f_blocks > 0", ok && st.f_bsize > 0 && st.f_blocks > 0);
+  check("statfs: free <= total, an ext4 f_type",
+        ok && st.f_bfree <= st.f_blocks && st.f_bavail <= st.f_blocks && st.f_type == 0xEF53);
+  struct statfs data;
+  memset(&data, 0, sizeof(data));
+  check("statfs(\"/data\"): f_bsize > 0, f_blocks > 0",
+        statfs("/data", &data) == 0 && data.f_bsize > 0 && data.f_blocks > 0);
+  struct statfs64 st64;
+  memset(&st64, 0, sizeof(st64));
+  check("statfs64(cwd)", ok && statfs64(cwd, &st64) == 0 && st64.f_bsize == st.f_bsize &&
+                             st64.f_blocks == st.f_blocks);
+
+  char tmp[1100];
+  snprintf(tmp, sizeof(tmp), "%s/libc_test_statfs.tmp", ok ? cwd : ".");
+  int fd = open(tmp, O_RDWR | O_CREAT | O_TRUNC, 0600);
+  struct statfs fst;
+  memset(&fst, 0, sizeof(fst));
+  check("fstatfs(an open file)",
+        fd >= 0 && fstatfs(fd, &fst) == 0 && fst.f_bsize > 0 && fst.f_blocks > 0);
+  char value[16];
+  errno = 0;
+  check("fgetxattr fails with ENOTSUP",
+        fd >= 0 && fgetxattr(fd, "user.x", value, sizeof(value)) == -1 && errno == ENOTSUP);
+  errno = 0;
+  check("fsetxattr fails with ENOTSUP",
+        fd >= 0 && fsetxattr(fd, "user.x", "1", 1, 0) == -1 && errno == ENOTSUP);
+  if (fd >= 0) close(fd);
+  errno = 0;
+  check("getxattr fails with ENOTSUP",
+        getxattr(tmp, "security.selinux", value, sizeof(value)) == -1 && errno == ENOTSUP);
+  errno = 0;
+  check("lgetxattr fails with ENOTSUP",
+        lgetxattr(tmp, "security.selinux", value, sizeof(value)) == -1 && errno == ENOTSUP);
+  errno = 0;
+  check("setxattr fails with ENOTSUP",
+        setxattr(tmp, "user.inode_cache", "1", 1, 0) == -1 && errno == ENOTSUP);
+  errno = 0;
+  check("lsetxattr fails with ENOTSUP", lsetxattr(tmp, "user.x", "1", 1, 0) == -1 &&
+                                            errno == ENOTSUP);
+  char list[64];
+  errno = 0;
+  check("llistxattr fails with ENOTSUP",
+        llistxattr(tmp, list, sizeof(list)) == -1 && errno == ENOTSUP);
+  errno = 0;
+  check("removexattr fails with ENOTSUP", removexattr(tmp, "user.x") == -1 && errno == ENOTSUP);
+  unlink(tmp);
+
+  FILE* mounts = setmntent("/proc/mounts", "re");
+  check("setmntent(/proc/mounts) opens a stream", mounts != NULL);
+  check("getmntent: no entries", mounts == NULL || getmntent(mounts) == NULL);
+  if (mounts != NULL) check("endmntent", endmntent(mounts) == 1);
+  errno = 0;
+  check("mount fails with EPERM",
+        mount("none", "/gesher-no-such-dir", "tmpfs", 0, NULL) == -1 && errno == EPERM);
 }
 
 static int compare_ints(const void* a, const void* b) {
@@ -300,6 +399,8 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_strings();
   test_format();
   test_errno_files();
+  test_statfs();
+  test_ldar_readonly();
   test_time_math();
   test_qsort();
   test_pthread();

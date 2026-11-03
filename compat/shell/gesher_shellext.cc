@@ -1,15 +1,26 @@
 // gesher_shellext.dll: the icon handler of Gesher's .apk file type
 // (Gesher.Apk\shellex\IconHandler, docs/installer.md). Explorer asks it for each
-// .apk file's icon: an APK Gesher installed shows its app's icon (the .ico
-// com.gesher.app.shell.AppShell made for the app's Start menu shortcut), any
-// other APK Gesher's own (gesher.ico, next to this DLL).
+// .apk file's icon: its app's icon (the .ico com.gesher.app.shell.AppShell made
+// for the app's Start menu shortcut, or drew for the file), Gesher's own
+// (gesher.ico, next to this DLL) until that is drawn.
 //
 // It parses no APK: Explorer loads it in its own process, for every .apk it
-// shows. Gesher records the APK files it installs in
-// %LOCALAPPDATA%\Gesher\data\system\apk-icons.list (AppShell.rememberApkQuietly), a
-// line per file: its size, its last write time (milliseconds since 1970), the
-// app's .ico and the package, tab-separated, UTF-8. A file is the one recorded
-// when its size and time are; a copy or a move keeps both.
+// shows. Gesher records APK files and their icons in
+// %LOCALAPPDATA%\Gesher\data\system\apk-icons.list (AppShell.rememberApkQuietly for
+// the ones it installs, AppShell.apkIcon for any other), a line per file: its
+// size, its last write time (milliseconds since 1970), the app's .ico and the
+// package, tab-separated, UTF-8. A file is the one recorded when its size and
+// time are; a copy or a move keeps both.
+//
+// An APK not recorded shows gesher.ico for now, and its icon is drawn in the
+// background: a thread of this DLL runs `gesher-launch.exe apk-icon "<file>"`
+// (next to this DLL; no window), which draws the app's icon without installing
+// the app, records it and tells the shell the file changed, so Explorer asks
+// again. Never on the caller's thread; once per file (path, size and time) in
+// this process, at most kQueued waiting; at most two runs at once in the
+// session (two named mutexes, shared by every process that loads this DLL);
+// not for an empty file or one written in the last seconds (still being
+// written).
 //
 // In-process COM server, apartment threaded: IPersistFile::Load gets the file,
 // IExtractIconW::GetIconLocation names the icon, and the shell extracts it.
@@ -112,6 +123,228 @@ bool RecordedIcon(unsigned long long size, unsigned long long millis, wchar_t* o
   return found;
 }
 
+// --- drawing a missing icon in the background ----------------------------------
+
+constexpr UINT kPathChars = MAX_PATH * 4;
+// Files waiting to be drawn, and the files asked for in this process (a hash of
+// path, size and time each); while either is full no more are asked for.
+constexpr int kQueued = 16;
+constexpr int kSeen = 1024;
+// A file written this recently may still be being written (milliseconds).
+constexpr unsigned long long kSettleMs = 3000;
+// How long a run of `gesher-launch apk-icon` may take before the next one starts.
+constexpr DWORD kRunTimeoutMs = 180000;
+// How long a request waits for one of the two run slots.
+constexpr DWORD kSlotTimeoutMs = 600000;
+
+struct IconRequest {
+  wchar_t path[kPathChars];
+  unsigned long long size;
+  unsigned long long millis;
+};
+
+CRITICAL_SECTION g_queue_lock;  // initialized in DllMain
+IconRequest g_queue[kQueued];
+int g_queue_head = 0;
+int g_queue_count = 0;
+unsigned long long g_seen[kSeen];
+int g_seen_count = 0;
+bool g_worker_running = false;
+
+unsigned long long FileTimeMillis(unsigned long long ft) {
+  // FILETIME (100 ns since 1601) as java.io.File.lastModified's milliseconds.
+  return ft >= 116444736000000000ULL ? (ft - 116444736000000000ULL) / 10000ULL : 0;
+}
+
+// The file's size and last write time.
+bool FileKey(const wchar_t* path, unsigned long long* size, unsigned long long* millis) {
+  WIN32_FILE_ATTRIBUTE_DATA data;
+  if (path[0] == L'\0' || !GetFileAttributesExW(path, GetFileExInfoStandard, &data)) return false;
+  if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) return false;
+  *size = (static_cast<unsigned long long>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+  *millis = FileTimeMillis((static_cast<unsigned long long>(data.ftLastWriteTime.dwHighDateTime)
+                            << 32) | data.ftLastWriteTime.dwLowDateTime);
+  return true;
+}
+
+unsigned long long NowMillis() {
+  FILETIME now;
+  GetSystemTimeAsFileTime(&now);
+  return FileTimeMillis((static_cast<unsigned long long>(now.dwHighDateTime) << 32) |
+                        now.dwLowDateTime);
+}
+
+unsigned long long RequestHash(const wchar_t* path, unsigned long long size,
+                               unsigned long long millis) {
+  unsigned long long h = 14695981039346656037ULL;  // FNV-1a
+  for (const wchar_t* p = path; *p != L'\0'; ++p) {
+    unsigned c = static_cast<unsigned>(*p);
+    if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+    if (c == '/') c = '\\';
+    h = (h ^ c) * 1099511628211ULL;
+  }
+  h = (h ^ size) * 1099511628211ULL;
+  h = (h ^ millis) * 1099511628211ULL;
+  return h;
+}
+
+// The directory of this DLL, with its trailing backslash.
+bool ModuleDirectory(wchar_t* out, UINT cch) {
+  DWORD n = GetModuleFileNameW(g_module, out, cch);
+  if (n == 0 || n >= cch) return false;
+  wchar_t* slash = nullptr;
+  for (wchar_t* p = out; *p != L'\0'; ++p) {
+    if (*p == L'\\' || *p == L'/') slash = p;
+  }
+  if (slash == nullptr) return false;
+  slash[1] = L'\0';
+  return true;
+}
+
+// SHChangeNotify(SHCNE_UPDATEITEM): the shell reads the file's icon again.
+void NotifyShell(const wchar_t* path) {
+  using SHChangeNotifyFn = void(WINAPI*)(LONG, UINT, LPCVOID, LPCVOID);
+  HMODULE shell32 = GetModuleHandleW(L"shell32.dll");  // loaded: the shell asked for an icon
+  if (shell32 == nullptr) return;
+  auto notify = reinterpret_cast<SHChangeNotifyFn>(
+      reinterpret_cast<void*>(GetProcAddress(shell32, "SHChangeNotify")));
+  if (notify != nullptr) notify(SHCNE_UPDATEITEM, SHCNF_PATHW, path, nullptr);
+}
+
+// Runs `gesher-launch.exe apk-icon "<file>"` for a request, in one of the two run
+// slots, and waits for it.
+void DrawIcon(const IconRequest& r) {
+  // Not while the file is being written: its size or time still change. A file
+  // that changed is asked for again with its new size and time.
+  for (int i = 0;; ++i) {
+    unsigned long long size = 0, millis = 0;
+    if (!FileKey(r.path, &size, &millis) || size == 0) return;
+    if (size != r.size || millis != r.millis) return;
+    unsigned long long now = NowMillis();
+    if (now < millis || now - millis >= kSettleMs) break;
+    if (i >= 10) return;
+    Sleep(static_cast<DWORD>(kSettleMs - (now - millis)) + 100);
+  }
+  wchar_t icon[kPathChars];
+  if (RecordedIcon(r.size, r.millis, icon, kPathChars)) return;  // drawn meanwhile
+
+  wchar_t dir[kPathChars];
+  if (!ModuleDirectory(dir, kPathChars)) return;
+  if (lstrlenW(dir) + 20 >= static_cast<int>(kPathChars)) return;
+  wchar_t exe[kPathChars];
+  lstrcpyW(exe, dir);
+  lstrcatW(exe, L"gesher-launch.exe");
+  if (GetFileAttributesW(exe) == INVALID_FILE_ATTRIBUTES) return;
+  // "<exe>" apk-icon "<file>" (a Windows path holds no '"').
+  constexpr UINT kCommandChars = kPathChars * 2 + 32;
+  wchar_t command[kCommandChars];
+  if (lstrlenW(exe) + lstrlenW(r.path) + 20 >= static_cast<int>(kCommandChars)) return;
+  lstrcpyW(command, L"\"");
+  lstrcatW(command, exe);
+  lstrcatW(command, L"\" apk-icon \"");
+  lstrcatW(command, r.path);
+  lstrcatW(command, L"\"");
+
+  HANDLE slots[2] = {CreateMutexW(nullptr, FALSE, L"Local\\Gesher.ApkIcon.0"),
+                     CreateMutexW(nullptr, FALSE, L"Local\\Gesher.ApkIcon.1")};
+  if (slots[0] == nullptr || slots[1] == nullptr) {
+    if (slots[0] != nullptr) CloseHandle(slots[0]);
+    if (slots[1] != nullptr) CloseHandle(slots[1]);
+    return;
+  }
+  DWORD w = WaitForMultipleObjects(2, slots, FALSE, kSlotTimeoutMs);
+  HANDLE slot = nullptr;
+  if (w == WAIT_OBJECT_0 || w == WAIT_OBJECT_0 + 1) {
+    slot = slots[w - WAIT_OBJECT_0];
+  } else if (w == WAIT_ABANDONED_0 || w == WAIT_ABANDONED_0 + 1) {
+    slot = slots[w - WAIT_ABANDONED_0];  // its owner ended without releasing it: free
+  }
+  if (slot != nullptr && !RecordedIcon(r.size, r.millis, icon, kPathChars)) {
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    // No window, and no standard handles (gesher-launch passes on those it has).
+    si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    si.wShowWindow = SW_HIDE;
+    si.hStdInput = nullptr;
+    si.hStdOutput = nullptr;
+    si.hStdError = nullptr;
+    PROCESS_INFORMATION pi = {};
+    if (CreateProcessW(exe, command, nullptr, nullptr, FALSE,
+                       CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr, dir, &si, &pi)) {
+      CloseHandle(pi.hThread);
+      DWORD code = 1;
+      if (WaitForSingleObject(pi.hProcess, kRunTimeoutMs) == WAIT_OBJECT_0 &&
+          GetExitCodeProcess(pi.hProcess, &code) && code == 0) {
+        // The command tells the shell too; this notice cannot be lost with the
+        // process that sent it.
+        NotifyShell(r.path);
+      }
+      CloseHandle(pi.hProcess);
+    }
+  }
+  if (slot != nullptr) ReleaseMutex(slot);
+  CloseHandle(slots[0]);
+  CloseHandle(slots[1]);
+}
+
+// The background thread: draws the queued requests, then ends. It holds a
+// reference to this DLL (`module`) while it runs.
+DWORD WINAPI Worker(LPVOID module) {
+  for (;;) {
+    IconRequest r;
+    EnterCriticalSection(&g_queue_lock);
+    if (g_queue_count == 0) {
+      g_worker_running = false;
+      LeaveCriticalSection(&g_queue_lock);
+      break;
+    }
+    r = g_queue[g_queue_head];
+    g_queue_head = (g_queue_head + 1) % kQueued;
+    --g_queue_count;
+    LeaveCriticalSection(&g_queue_lock);
+    DrawIcon(r);
+  }
+  FreeLibraryAndExitThread(static_cast<HMODULE>(module), 0);
+  return 0;
+}
+
+// Asks for the icon of `path`, not recorded, to be drawn in the background.
+void RequestIcon(const wchar_t* path, unsigned long long size, unsigned long long millis) {
+  if (size == 0) return;  // still being written
+  if (lstrlenW(path) >= static_cast<int>(kPathChars)) return;
+  unsigned long long hash = RequestHash(path, size, millis);
+  EnterCriticalSection(&g_queue_lock);
+  bool seen = false;
+  for (int i = 0; i < g_seen_count && !seen; ++i) seen = g_seen[i] == hash;
+  if (!seen && g_seen_count < kSeen && g_queue_count < kQueued) {
+    bool running = g_worker_running;
+    if (!running) {
+      HMODULE pinned = nullptr;
+      if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                             reinterpret_cast<LPCWSTR>(&g_module), &pinned)) {
+        HANDLE thread = CreateThread(nullptr, 0, Worker, pinned, 0, nullptr);
+        if (thread != nullptr) {
+          CloseHandle(thread);
+          running = true;
+          g_worker_running = true;
+        } else {
+          FreeLibrary(pinned);
+        }
+      }
+    }
+    if (running) {
+      // Queued under the lock the worker takes before it ends: it is drawn.
+      IconRequest& r = g_queue[(g_queue_head + g_queue_count) % kQueued];
+      lstrcpyW(r.path, path);
+      r.size = size;
+      r.millis = millis;
+      ++g_queue_count;
+      g_seen[g_seen_count++] = hash;
+    }
+  }
+  LeaveCriticalSection(&g_queue_lock);
+}
+
 class IconHandler final : public IPersistFile, public IExtractIconW {
  public:
   IconHandler() { InterlockedIncrement(&g_objects); }
@@ -147,7 +380,7 @@ class IconHandler final : public IPersistFile, public IExtractIconW {
   }
   STDMETHODIMP IsDirty() override { return S_FALSE; }
   STDMETHODIMP Load(LPCOLESTR name, DWORD) override {
-    if (name == nullptr || lstrlenW(name) >= MAX_PATH * 4) return E_INVALIDARG;
+    if (name == nullptr || lstrlenW(name) >= static_cast<int>(kPathChars)) return E_INVALIDARG;
     lstrcpyW(path_, name);
     return S_OK;
   }
@@ -160,17 +393,14 @@ class IconHandler final : public IPersistFile, public IExtractIconW {
     if (file == nullptr || index == nullptr || flags == nullptr || cch == 0) return E_INVALIDARG;
     *index = 0;
     *flags = GIL_PERINSTANCE | GIL_DONTCACHE;
-    WIN32_FILE_ATTRIBUTE_DATA data;
-    if (path_[0] != L'\0' && GetFileAttributesExW(path_, GetFileExInfoStandard, &data)) {
-      unsigned long long size =
-          (static_cast<unsigned long long>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
-      unsigned long long ft = (static_cast<unsigned long long>(data.ftLastWriteTime.dwHighDateTime)
-                               << 32) | data.ftLastWriteTime.dwLowDateTime;
-      // FILETIME (100 ns since 1601) as java.io.File.lastModified's milliseconds.
-      unsigned long long millis = ft >= 116444736000000000ULL
-                                      ? (ft - 116444736000000000ULL) / 10000ULL
-                                      : 0;
+    unsigned long long size = 0, millis = 0;
+    if (FileKey(path_, &size, &millis)) {
       if (RecordedIcon(size, millis, file, cch)) return S_OK;
+      if (size > 0) {
+        // Gesher's icon until the app's is drawn; the shell asks again then.
+        RequestIcon(path_, size, millis);
+        return DefaultIcon(file, cch) ? S_OK : S_FALSE;
+      }
     }
     *flags = 0;  // Gesher's icon is the same for every other APK
     return DefaultIcon(file, cch) ? S_OK : S_FALSE;
@@ -181,7 +411,7 @@ class IconHandler final : public IPersistFile, public IExtractIconW {
 
  private:
   LONG refs_ = 1;
-  wchar_t path_[MAX_PATH * 4] = {};
+  wchar_t path_[kPathChars] = {};
 };
 
 class Factory final : public IClassFactory {
@@ -226,6 +456,7 @@ extern "C" {
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
   if (reason == DLL_PROCESS_ATTACH) {
     g_module = instance;
+    InitializeCriticalSection(&g_queue_lock);
     DisableThreadLibraryCalls(instance);
   }
   return TRUE;

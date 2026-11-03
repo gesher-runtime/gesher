@@ -17,6 +17,7 @@ import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
 import android.os.Process;
 
+import com.android.internal.pm.parsing.AppInfoUtils;
 import com.android.internal.pm.parsing.PackageInfoCommonUtils;
 import com.android.internal.pm.parsing.PackageParser2;
 import com.android.internal.pm.parsing.pkg.ParsedPackage;
@@ -429,6 +430,15 @@ public final class ApkPackage {
             // which this parse never reaches; without it views ignore RTL layouts.
             ai.flags |= ApplicationInfo.FLAG_SUPPORTS_RTL;
         }
+        // privateFlagsExt comes from PackageImpl's mBaseAppInfoPrivateFlagsExt, also set only
+        // in hideAsFinal (assignDerivedFields2), so it was 0 here: an application's
+        // android:enableOnBackInvokedCallback="true" (PRIVATE_FLAG_EXT_ENABLE_ON_BACK_INVOKED_CALLBACK)
+        // was dropped and WindowOnBackInvokedDispatcher logged "OnBackInvokedCallback is not
+        // enabled for the application". The same derivation, from the parsed manifest
+        // (the attributions bit is left as PackageInfoCommonUtils.generate set it for the flags).
+        ai.privateFlagsExt |= AppInfoUtils.appInfoPrivateFlagsExt(parsed,
+                false /* not allowlisted for hidden APIs */)
+                & ~ApplicationInfo.PRIVATE_FLAG_EXT_ATTRIBUTIONS_ARE_USER_VISIBLE;
         ai.dataDir = mDataDir;
         ai.credentialProtectedDataDir = mDataDir;
         ai.deviceProtectedDataDir = mDataDir;

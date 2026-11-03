@@ -60,9 +60,11 @@ import java.util.Properties;
  *     shutdown          stop the device: its app processes, the system server,
  *                       servicemanager and binderd
  *     toast-activated   (run by COM) a click on an app's toast, given to the device
+ *     apk-icon APK      (run by the .apk icon handler, gesher_shellext.dll) draw the APK's
+ *                       app icon for Explorer without installing it (AppShell.apkIcon)
  * </pre>
  *
- * Every command but shutdown and status starts the device if it does not run: binderd,
+ * Every command but shutdown, status and apk-icon starts the device if it does not run: binderd,
  * servicemanager and the system server ({@code --persistent}), detached (no console
  * window: they outlive the console), with a binder device of their own; it stops when shut
  * down, or after {@code $GESHER_IDLE_TIMEOUT} seconds (default 600) with no app process.
@@ -153,6 +155,11 @@ public final class Launcher {
             }
             case "shutdown": return shutdown();
             case "toast-activated": return toastActivated();
+            case "apk-icon": {
+                // Not on the device: the APK is read here, not installed.
+                if (rest.size() != 1) return usage();
+                return AppShell.apkIcon(new File(rest.get(0)));
+            }
             default: return usage();
         }
     }
@@ -188,7 +195,8 @@ public final class Launcher {
     private static int usage() {
         System.err.println("usage: gesher-app launch APK|PACKAGE [--activity CLASS] [--ez KEY"
                 + " true|false]... [--window | --hidden-window | --headless [--keep-task]]"
-                + " | install APK | uninstall PACKAGE | list | status | start | shutdown");
+                + " | install APK | uninstall PACKAGE | list | status | start | shutdown"
+                + " | apk-icon APK");
         return 2;
     }
 

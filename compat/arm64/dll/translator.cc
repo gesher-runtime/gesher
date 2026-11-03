@@ -733,6 +733,211 @@ void* MakeHostEntry(const void* fn) {
   return p;
 }
 
+// --- acquire loads on read-only memory ---------------------------------------
+// dynarmic emits a fastmem acquire load (LDAR, LDARB, LDARH, LDAPR*, and the
+// ordered 128-bit read) as a locked read-modify-write that leaves memory as it
+// was: `lock xadd [m], r` with r zeroed, or `lock cmpxchg16b [m]` with
+// rdx:rax = rcx:rbx = 0 (src/dynarmic/backend/x64/emit_x64_memory.h,
+// EmitReadMemoryMov). A locked instruction always performs its write cycle, so
+// on a page the guest may only read (Dart's write-protected VM isolate heap,
+// .rodata, any PROT_READ mapping) the guest's load faults as a write, where
+// the AArch64 load succeeds. CompleteOrderedLoad finishes such a load in the
+// handler: it reads the value, puts it where the instruction would, and
+// resumes after the instruction. Ordered stores are `xchg`, so the plain read
+// done here keeps the acquire/RCsc ordering the guest asked for.
+enum class OrderedLoad {
+  kNone,        // not one of dynarmic's ordered-load idioms
+  kCompleted,   // done; resume after the instruction
+  kUnreadable,  // an ordered load of memory the guest may not read either
+};
+
+DWORD64* GprOf(CONTEXT* c, unsigned index) {
+  switch (index) {
+    case 0: return &c->Rax;
+    case 1: return &c->Rcx;
+    case 2: return &c->Rdx;
+    case 3: return &c->Rbx;
+    case 4: return &c->Rsp;
+    case 5: return &c->Rbp;
+    case 6: return &c->Rsi;
+    case 7: return &c->Rdi;
+    case 8: return &c->R8;
+    case 9: return &c->R9;
+    case 10: return &c->R10;
+    case 11: return &c->R11;
+    case 12: return &c->R12;
+    case 13: return &c->R13;
+    case 14: return &c->R14;
+    case 15: return &c->R15;
+    default: return nullptr;
+  }
+}
+
+// [addr, addr + size) is committed and readable (whatever its write access).
+bool ReadableRange(uintptr_t addr, size_t size) {
+  const uintptr_t end = addr + size;
+  if (end < addr) return false;
+  for (uintptr_t at = addr; at < end;) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(reinterpret_cast<void*>(at), &mbi, sizeof(mbi)) == 0) return false;
+    if (mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD) != 0) return false;
+    const DWORD p = mbi.Protect & 0xFF;
+    if (p != PAGE_READONLY && p != PAGE_READWRITE && p != PAGE_WRITECOPY &&
+        p != PAGE_EXECUTE_READ && p != PAGE_EXECUTE_READWRITE && p != PAGE_EXECUTE_WRITECOPY) {
+      return false;
+    }
+    const uintptr_t next = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+    if (next <= at) return false;
+    at = next;
+  }
+  return true;
+}
+
+template <typename T>
+T LoadAt(uintptr_t a) {
+  if (a % sizeof(T) == 0) return __atomic_load_n(reinterpret_cast<const T*>(a), __ATOMIC_SEQ_CST);
+  T v;
+  std::memcpy(&v, reinterpret_cast<const void*>(a), sizeof(T));
+  return v;
+}
+
+// A write fault at `fault` (ExceptionInformation[1]) with context `c`.
+OrderedLoad CompleteOrderedLoad(CONTEXT* c, uintptr_t fault) {
+  // Only dynarmic's generated code (private executable memory): never an
+  // instruction of this DLL or of any other image.
+  MEMORY_BASIC_INFORMATION jit_code;
+  if (VirtualQuery(reinterpret_cast<void*>(c->Rip), &jit_code, sizeof(jit_code)) == 0 ||
+      jit_code.State != MEM_COMMIT || jit_code.Type != MEM_PRIVATE) {
+    return OrderedLoad::kNone;
+  }
+  // Each byte is read only once the bytes before it say the instruction goes
+  // on, so nothing past the faulting instruction is touched.
+  const auto* ip = reinterpret_cast<const uint8_t*>(c->Rip);
+  size_t n = 0;
+  bool lock = false;
+  bool opsize = false;
+  for (; n < 4; ++n) {
+    if (ip[n] == 0xF0) {
+      lock = true;
+    } else if (ip[n] == 0x66) {
+      opsize = true;
+    } else {
+      break;
+    }
+  }
+  if (!lock) return OrderedLoad::kNone;
+  unsigned rex = 0;
+  if ((ip[n] & 0xF0) == 0x40) rex = ip[n++];
+  if (ip[n] != 0x0F) return OrderedLoad::kNone;
+  const uint8_t opcode = ip[n + 1];
+  if (opcode != 0xC0 && opcode != 0xC1 && opcode != 0xC7) return OrderedLoad::kNone;
+  n += 2;
+  const uint8_t modrm = ip[n++];
+  const unsigned mod = modrm >> 6;
+  const unsigned reg = ((modrm >> 3) & 7) | ((rex & 4) << 1);
+  const unsigned rm = modrm & 7;
+  if (mod == 3) return OrderedLoad::kNone;  // a register operand
+
+  // The memory operand: [base + index * scale + disp] or [rip + disp32].
+  uint64_t ea = 0;
+  bool rip_relative = false;
+  bool disp32 = mod == 2;
+  if (rm == 4) {
+    const uint8_t sib = ip[n++];
+    const unsigned index = ((sib >> 3) & 7) | ((rex & 2) << 2);
+    if (index != 4) ea += *GprOf(c, index) << (sib >> 6);
+    if ((sib & 7) == 5 && mod == 0) {
+      disp32 = true;  // no base
+    } else {
+      ea += *GprOf(c, (sib & 7) | ((rex & 1) << 3));
+    }
+  } else if (rm == 5 && mod == 0) {
+    rip_relative = true;
+    disp32 = true;
+  } else {
+    ea += *GprOf(c, rm | ((rex & 1) << 3));
+  }
+  if (mod == 1) {
+    ea += static_cast<uint64_t>(static_cast<int64_t>(static_cast<int8_t>(ip[n])));
+    n += 1;
+  } else if (disp32) {
+    int32_t d;
+    std::memcpy(&d, ip + n, 4);
+    ea += static_cast<uint64_t>(static_cast<int64_t>(d));
+    n += 4;
+  }
+  if (rip_relative) ea += c->Rip + n;
+
+  // The instruction, its size, and that it would leave memory unchanged.
+  size_t size;
+  if (opcode == 0xC7) {  // cmpxchg16b m128: only /1 with REX.W
+    if ((reg & 7) != 1 || (rex & 8) == 0 || opsize) return OrderedLoad::kNone;
+    if (c->Rax != 0 || c->Rdx != 0 || c->Rbx != 0 || c->Rcx != 0) return OrderedLoad::kNone;
+    size = 16;
+  } else if (opcode == 0xC0) {  // xadd m8, r8
+    size = 1;
+  } else {  // xadd m16/32/64, r
+    size = (rex & 8) != 0 ? 8 : opsize ? 2 : 4;
+  }
+  // xadd's register (an 8-bit one without REX: 4..7 are ah, ch, dh, bh).
+  DWORD64* source = nullptr;
+  unsigned shift = 0;
+  if (opcode != 0xC7) {
+    if (size == 1 && rex == 0 && reg >= 4) {
+      source = GprOf(c, reg - 4);
+      shift = 8;
+    } else {
+      source = GprOf(c, reg);
+    }
+    if (source == nullptr) return OrderedLoad::kNone;
+    const uint64_t mask = size == 8 ? ~uint64_t{0} : ((uint64_t{1} << (size * 8)) - 1);
+    if (((*source >> shift) & mask) != 0) return OrderedLoad::kNone;  // a real add
+  }
+  if (fault < ea || fault - ea >= size) return OrderedLoad::kNone;
+  if (!ReadableRange(static_cast<uintptr_t>(ea), size)) return OrderedLoad::kUnreadable;
+
+  const uintptr_t a = static_cast<uintptr_t>(ea);
+  constexpr DWORD kCf = 0x1, kPf = 0x4, kAf = 0x10, kZf = 0x40, kSf = 0x80, kOf = 0x800;
+  if (size == 16) {
+    // cmpxchg16b: equal to rdx:rax (zero) leaves it and sets ZF; otherwise
+    // rdx:rax gets the value and ZF is clear. Either way rdx:rax = memory.
+    const uint64_t lo = LoadAt<uint64_t>(a);
+    const uint64_t hi = LoadAt<uint64_t>(a + 8);
+    c->Rax = lo;
+    c->Rdx = hi;
+    c->EFlags = (lo == 0 && hi == 0) ? (c->EFlags | kZf) : (c->EFlags & ~kZf);
+  } else {
+    // xadd with a zero register: the register gets the value; memory and
+    // the flags are those of value + 0.
+    uint64_t v;
+    uint64_t sign;
+    switch (size) {
+      case 1: v = LoadAt<uint8_t>(a); sign = 0x80; break;
+      case 2: v = LoadAt<uint16_t>(a); sign = 0x8000; break;
+      case 4: v = LoadAt<uint32_t>(a); sign = 0x80000000u; break;
+      default: v = LoadAt<uint64_t>(a); sign = uint64_t{1} << 63; break;
+    }
+    switch (size) {
+      case 1:
+        *source = (*source & ~(uint64_t{0xFF} << shift)) | (v << shift);
+        break;
+      case 2:
+        *source = (*source & ~uint64_t{0xFFFF}) | v;
+        break;
+      default:  // a 32-bit result zero-extends, as on hardware
+        *source = v;
+        break;
+    }
+    DWORD flags = c->EFlags & ~(kCf | kPf | kAf | kZf | kSf | kOf);
+    if (v == 0) flags |= kZf;
+    if ((v & sign) != 0) flags |= kSf;
+    if ((__builtin_popcount(static_cast<unsigned>(v & 0xFF)) & 1) == 0) flags |= kPf;
+    c->EFlags = flags;
+  }
+  c->Rip += n;
+  return OrderedLoad::kCompleted;
+}
+
 // The vectored exception handler, first in the chain.
 //  - A host function called a guest function pointer directly (a qsort
 //    comparator, a pthread start routine, a key destructor, any callback the
@@ -762,6 +967,18 @@ LONG CALLBACK VectoredHandler(EXCEPTION_POINTERS* info) {
         mapped = mbi.State == MEM_COMMIT;
       }
       const char* detail = kind == 1 ? "guest write" : kind == 8 ? "guest execute" : "guest read";
+      if (kind == 1) {
+        // An acquire load that faulted as a write (see CompleteOrderedLoad).
+        switch (CompleteOrderedLoad(c, addr)) {
+          case OrderedLoad::kCompleted:
+            return EXCEPTION_CONTINUE_EXECUTION;
+          case OrderedLoad::kUnreadable:
+            detail = "guest read";
+            break;
+          case OrderedLoad::kNone:
+            break;
+        }
+      }
       if (t_env_raw != nullptr && t_env_raw->InStackGuard(addr)) detail = "guest stack overflow";
       GuestCrash(kSigSegv, mapped ? 2 : 1, mapped ? "SEGV_ACCERR" : "SEGV_MAPERR", addr, detail);
     }

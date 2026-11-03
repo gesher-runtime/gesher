@@ -234,23 +234,147 @@ public final class AppShell {
         }
     }
 
-    /** Drops the lines of {@code dropPackage} or for {@code added}'s file, then adds it. */
+    /**
+     * The icons {@link #apkIcon} drew for APK files of apps not installed: {@code
+     * <size>-<time>.ico}, as long as a line of the list names them.
+     */
+    private static final String APK_ICON_CACHE = "system/apk-icons";
+    /** A drawn icon no line names is removed once it is this old (ms). */
+    private static final long APK_ICON_CACHE_GRACE_MS = 10 * 60_000L;
+
+    /**
+     * {@code gesher-app apk-icon APK}, what the icon handler runs for an APK file it has no
+     * icon of (gesher_shellext.dll, in the background, at most twice at once): draws the
+     * app's icon as {@link #registerQuietly} does, without installing the app, into
+     * {@code <data>/system/apk-icons/<size>-<time>.ico}, records the file in the list, and
+     * tells the shell the file changed. A file that is no APK, or whose icon cannot be drawn,
+     * is recorded with Gesher's icon, so it is not tried again until it changes. Returns the
+     * exit code: 0 when the file is recorded.
+     */
+    public static int apkIcon(File apk) {
+        long size = apk.length();
+        long time = apk.lastModified();
+        if (!apk.isFile() || size == 0) {
+            apkIconLog(apk + ": no such file, or empty");
+            return 1;
+        }
+        String windowsApk = Zygote.windowsPath(apk.getAbsolutePath());
+        String iconPath = null;
+        String packageName = "-";
+        String what;
+        try {
+            ApkPackage pkg = ApkPackage.parse(apk.getAbsolutePath());
+            packageName = pkg.packageName;
+            AppIcon icon = AppIcon.load(pkg.apkPath, pkg.applicationInfo(0),
+                    launcherActivity(pkg));
+            if (icon.hasImages()) {
+                File ico = new File(new File(Device.dataDir(), APK_ICON_CACHE),
+                        size + "-" + time + ".ico");
+                icon.writeIco(ico);
+                iconPath = Zygote.windowsPath(ico.getPath());
+                what = packageName + " (" + icon.label + "): " + iconPath + " from "
+                        + icon.source;
+            } else {
+                what = packageName + ": no icon drawn (" + icon.source + ")";
+            }
+        } catch (Throwable t) {
+            what = "not read: " + t;
+        }
+        if (apk.length() != size || apk.lastModified() != time) {
+            // Changed meanwhile: the handler asks again for the file as it is now.
+            apkIconLog(windowsApk + ": changed while it was read; " + what);
+            return 1;
+        }
+        if (iconPath == null) {
+            iconPath = installDir() + "\\gesher.ico";
+            what += "; Gesher's icon";
+        }
+        try {
+            rewriteApkIcons(null, size + "\t" + time + "\t" + iconPath + "\t" + packageName);
+        } catch (Throwable t) {
+            apkIconLog(windowsApk + ": " + what + "; not recorded: " + t);
+            return 1;
+        }
+        try {
+            Shell.notifyChanged(windowsApk);
+        } catch (Throwable t) {
+            // The handler tells the shell too.
+        }
+        apkIconLog(windowsApk + ": " + what);
+        return 0;
+    }
+
+    /** A line in {@code <logs>/apk-icons.log} (and on the output); never throws. */
+    private static void apkIconLog(String message) {
+        log("apk-icon: " + message);
+        try {
+            File file = new File(Device.logsDir(), "apk-icons.log");
+            file.getParentFile().mkdirs();
+            if (file.length() > 256 * 1024) file.delete();
+            String line = new java.util.Date() + " " + message + System.lineSeparator();
+            java.nio.file.Files.write(file.toPath(),
+                    line.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND);
+        } catch (Throwable t) {
+            // Only a log.
+        }
+    }
+
+    /**
+     * The mutex every process holds while it rewrites the list: launchers, and the icon
+     * handler's {@code apk-icon} runs.
+     */
+    private static String apkIconsLockName() {
+        return "Local\\gesher-" + Integer.toHexString(
+                Device.dataDir().toLowerCase(Locale.ROOT).hashCode()) + "-apk-icons";
+    }
+
+    /**
+     * Drops the lines of {@code dropPackage} (but not the icons {@link #apkIcon} drew: they
+     * are not its data directory's) or for {@code added}'s file, then adds it.
+     */
     private static synchronized void rewriteApkIcons(String dropPackage, String added)
             throws java.io.IOException {
-        File list = new File(Device.dataDir(), APK_ICONS);
-        java.util.List<String> lines = new java.util.ArrayList<>();
-        if (list.isFile()) {
-            lines.addAll(java.nio.file.Files.readAllLines(list.toPath(),
-                    java.nio.charset.StandardCharsets.UTF_8));
+        long lock = Zygote.lock(apkIconsLockName(), 30_000);
+        try {
+            File list = new File(Device.dataDir(), APK_ICONS);
+            File cache = new File(Device.dataDir(), APK_ICON_CACHE);
+            String cachePrefix = Zygote.windowsPath(cache.getPath()).toLowerCase(Locale.ROOT)
+                    + "\\";
+            java.util.List<String> lines = new java.util.ArrayList<>();
+            if (list.isFile()) {
+                lines.addAll(java.nio.file.Files.readAllLines(list.toPath(),
+                        java.nio.charset.StandardCharsets.UTF_8));
+            }
+            String addedKey = added != null ? key(added) : null;
+            lines.removeIf(l -> l.isEmpty() || key(l).equals(addedKey)
+                    || (dropPackage != null && l.endsWith("\t" + dropPackage)
+                            && !icon(l).toLowerCase(Locale.ROOT).startsWith(cachePrefix)));
+            if (added != null) lines.add(added);
+            while (lines.size() > APK_ICONS_KEPT) lines.remove(0);
+            list.getParentFile().mkdirs();
+            // Written in place: a reader that meets it half written shows Gesher's icon once.
+            java.nio.file.Files.write(list.toPath(), lines,
+                    java.nio.charset.StandardCharsets.UTF_8);
+            // The drawn icons no line names any more (not one being drawn now: they are
+            // written before their line).
+            File[] drawn = cache.listFiles();
+            if (drawn != null) {
+                java.util.Set<String> named = new java.util.HashSet<>();
+                for (String l : lines) named.add(icon(l).toLowerCase(Locale.ROOT));
+                long now = System.currentTimeMillis();
+                for (File f : drawn) {
+                    if (!f.getName().endsWith(".ico")) continue;
+                    if (named.contains(Zygote.windowsPath(f.getPath()).toLowerCase(Locale.ROOT))) {
+                        continue;
+                    }
+                    if (now - f.lastModified() > APK_ICON_CACHE_GRACE_MS) f.delete();
+                }
+            }
+        } finally {
+            if (lock != 0) Zygote.unlock(lock);
         }
-        String addedKey = added != null ? key(added) : null;
-        lines.removeIf(l -> l.isEmpty() || key(l).equals(addedKey)
-                || (dropPackage != null && l.endsWith("\t" + dropPackage)));
-        if (added != null) lines.add(added);
-        while (lines.size() > APK_ICONS_KEPT) lines.remove(0);
-        list.getParentFile().mkdirs();
-        // Written in place: a reader that meets it half written shows Gesher's icon once.
-        java.nio.file.Files.write(list.toPath(), lines, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /** A line's file: its size and time. */
@@ -258,6 +382,14 @@ public final class AppShell {
         int first = line.indexOf('\t');
         int second = first < 0 ? -1 : line.indexOf('\t', first + 1);
         return second < 0 ? line : line.substring(0, second);
+    }
+
+    /** A line's .ico. */
+    private static String icon(String line) {
+        String k = key(line);
+        if (k.length() >= line.length()) return "";
+        int end = line.indexOf('\t', k.length() + 1);
+        return end < 0 ? line.substring(k.length() + 1) : line.substring(k.length() + 1, end);
     }
 
     private static void removeShortcut(Properties shortcut) {

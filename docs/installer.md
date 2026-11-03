@@ -21,6 +21,7 @@ Everything is per user, under `HKCU\Software\Classes`:
 | `.apk` (default) | `Gesher.Apk`, only when `.apk` is unclaimed (see below) |
 | `.apk\OpenWithProgids` | `Gesher.Apk` (empty string) |
 | `Gesher.Apk` (default) | `Android app (Gesher)` |
+| `Gesher.Apk` `AppUserModelID` | `Gesher.Installer`: opened APKs are its recent items, not those of every app's jump list |
 | `Gesher.Apk\DefaultIcon` (default) | `%1` (the icon handler's) |
 | `Gesher.Apk\shellex\IconHandler` (default) | `{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}` |
 | `CLSID\{6B0C3C9E-...}\InprocServer32` | `<app>\gesher_shellext.dll`, `ThreadingModel` `Apartment` |
@@ -39,12 +40,15 @@ app's window belongs to a process the device's system server starts, which
 Windows would otherwise keep behind Explorer.
 
 Each `.apk` file's icon comes from `gesher_shellext.dll`
-(`compat/shell/gesher_shellext.cc`), loaded by Explorer: an APK Gesher
-installed shows its app's icon (the shortcut's `.ico`, below), any other
-Gesher's. It parses no APK: `gesher-app install` and launches record the file
-(its size and last write time) with the app's `.ico` in
-`%LOCALAPPDATA%\Gesher\data\system\apk-icons.list`, and the handler looks the
-file up there.
+(`compat/shell/gesher_shellext.cc`), loaded by Explorer: its app's icon. It
+parses no APK: it looks the file (its size and last write time) up in
+`%LOCALAPPDATA%\Gesher\data\system\apk-icons.list`, which `gesher-app install`
+and launches fill with the shortcut's `.ico`. An APK not listed shows Gesher's
+icon at first, while the handler runs `gesher-launch.exe apk-icon "<file>"` in
+the background (no window; once per file, at most two at once, not for an empty
+file or one still being written). That command draws the app's icon without
+installing it into `data\system\apk-icons\<size>-<time>.ico`, records it, and
+Explorer shows it.
 
 Opening an APK this way runs it the way `gesher-app my.apk` does: it is
 installed (or updated) on the user's Gesher device and its launcher Activity

@@ -112,6 +112,123 @@ EXPORT void glapp_gl_finish(void) {
 
 #define FAIL(...) return append(out, n, " FAIL: " __VA_ARGS__), 1
 
+// GLES 3, as Flutter's Impeller draws: arguments the System V -> Microsoft
+// thunks must pass whole. GLintptr/GLsizeiptr are 64 bits here and in ANGLE
+// (khrplatform.h spells them `long`, which is 32 bits where the thunks are
+// compiled): glBindBufferRange's size is its fifth argument, on the Microsoft
+// stack, where a 32-bit store leaves the slot's upper half as it was; Impeller
+// then bound every uniform block with a huge size and drew nothing but its
+// clear colour. Checked: the range ANGLE records for a size above 4 GiB
+// (glGetInteger64i_v), then a draw into a framebuffer whose colour comes from a
+// uniform block bound at an aligned offset (glBindBufferRange), a 9-argument
+// glTexImage2D, a 10-argument glBlitFramebuffer and a 7-argument glReadPixels.
+static int check_buffer_ranges(char* out, size_t n) {
+  GLint align = 0;
+  glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &align);
+  if (align <= 0 || align > 4096) FAIL("GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT=%d", align);
+  GLuint ubo = 0;
+  glGenBuffers(1, &ubo);
+  glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+  unsigned char data[8192];
+  memset(data, 0, sizeof data);
+  const GLfloat kColor[4] = {1.0f, 0.0f, 1.0f, 1.0f};  // magenta, at offset `align`
+  memcpy(data + align, kColor, sizeof kColor);
+  glBufferData(GL_UNIFORM_BUFFER, (GLsizeiptr)(align + 4096), data, GL_STATIC_DRAW);
+
+  const GLsizeiptr kHuge = (GLsizeiptr)0x100000010LL;  // 4 GiB + 16: needs the upper half
+  glBindBufferRange(GL_UNIFORM_BUFFER, 0, ubo, (GLintptr)align, kHuge);
+  GLint64 start = -1, size = -1;
+  glGetInteger64i_v(GL_UNIFORM_BUFFER_START, 0, &start);
+  glGetInteger64i_v(GL_UNIFORM_BUFFER_SIZE, 0, &size);
+  if (start != align || size != kHuge) {
+    FAIL("glBindBufferRange(offset %d, size 0x%llx) recorded offset %lld, size 0x%llx", align,
+         (unsigned long long)kHuge, (long long)start, (unsigned long long)size);
+  }
+  glBindBufferRange(GL_UNIFORM_BUFFER, 0, ubo, (GLintptr)align, (GLsizeiptr)(4 * sizeof(GLfloat)));
+  glGetInteger64i_v(GL_UNIFORM_BUFFER_SIZE, 0, &size);
+  if (size != (GLint64)(4 * sizeof(GLfloat))) FAIL("uniform buffer size %lld", (long long)size);
+
+  const char* vs = "#version 300 es\nin vec2 pos;\nvoid main() { gl_Position = vec4(pos, 0.0, 1.0); }\n";
+  const char* fs = "#version 300 es\nprecision mediump float;\n"
+                   "layout(std140) uniform FragInfo { vec4 color; } frag_info;\nout vec4 color;\n"
+                   "void main() { color = frag_info.color; }\n";
+  GLuint v = compile(GL_VERTEX_SHADER, vs, out, n);
+  GLuint f = compile(GL_FRAGMENT_SHADER, fs, out, n);
+  if (v == 0 || f == 0) return 1;
+  GLuint program = glCreateProgram();
+  glAttachShader(program, v);
+  glAttachShader(program, f);
+  glBindAttribLocation(program, 0, "pos");
+  glLinkProgram(program);
+  GLint linked = 0;
+  glGetProgramiv(program, GL_LINK_STATUS, &linked);
+  if (!linked) FAIL("uniform block program link");
+  GLuint block = glGetUniformBlockIndex(program, "FragInfo");
+  if (block == GL_INVALID_INDEX) FAIL("no FragInfo block");
+  glUniformBlockBinding(program, block, 0);
+  glUseProgram(program);
+
+  // A 4x4 texture to draw into, and one to blit to.
+  enum { kSide = 4 };
+  GLuint tex[2] = {0, 0}, fbo[2] = {0, 0};
+  glGenTextures(2, tex);
+  glGenFramebuffers(2, fbo);
+  for (int i = 0; i < 2; i++) {
+    glBindTexture(GL_TEXTURE_2D, tex[i]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kSide, kSide, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo[i]);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex[i], 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) FAIL("framebuffer %d", i);
+  }
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
+  glViewport(0, 0, kSide, kSide);
+  glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT);
+  static const GLfloat kQuad[] = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
+  GLuint vao = 0, vbo = 0;
+  glGenVertexArrays(1, &vao);
+  glBindVertexArray(vao);
+  glGenBuffers(1, &vbo);
+  glBindBuffer(GL_ARRAY_BUFFER, vbo);
+  // The quad at offset 64 of a larger buffer, as Impeller's host buffer has it.
+  GLfloat vertices[16 + 8];
+  memset(vertices, 0, sizeof vertices);
+  memcpy(vertices + 16, kQuad, sizeof kQuad);
+  glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof vertices, NULL, GL_STREAM_DRAW);
+  glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)0, (GLsizeiptr)sizeof vertices, vertices);
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(GLfloat), (const void*)(16 * sizeof(GLfloat)));
+  glEnableVertexAttribArray(0);
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo[0]);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo[1]);
+  glBlitFramebuffer(0, 0, kSide, kSide, 0, 0, kSide, kSide, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+  unsigned char px[kSide * kSide * 4];
+  memset(px, 0x55, sizeof px);
+  glReadPixels(0, 0, kSide, kSide, GL_RGBA, GL_UNSIGNED_BYTE, px);
+  GLenum gl_error = glGetError();
+
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glDeleteFramebuffers(2, fbo);
+  glDeleteTextures(2, tex);
+  glDeleteBuffers(1, &vbo);
+  glDeleteBuffers(1, &ubo);
+  glDeleteVertexArrays(1, &vao);
+  glDeleteProgram(program);
+  if (gl_error != GL_NO_ERROR) FAIL("uniform block draw: GL error 0x%x", gl_error);
+  for (int i = 0; i < kSide * kSide; i++) {
+    const unsigned char* p = px + i * 4;
+    if (p[0] != 255 || p[1] != 0 || p[2] != 255) {
+      FAIL("uniform block draw: pixel %d is %02x%02x%02x, not the block's magenta", i, p[0], p[1],
+           p[2]);
+    }
+  }
+  append(out, n, ", buffer ranges=ok");
+  return 0;
+}
+
 EXPORT int glapp_gl_draw(ANativeWindow* window, int es, char* out, size_t n) {
   out[0] = 0;
   g_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
@@ -223,6 +340,7 @@ EXPORT int glapp_gl_draw(ANativeWindow* window, int es, char* out, size_t n) {
   append(out, n, ": readpixels=ok");
   if (!eglSwapBuffers(g_display, g_surface)) FAIL("eglSwapBuffers 0x%x", eglGetError());
   append(out, n, ", swap=ok");
+  if (es >= 3 && check_buffer_ranges(out, n) != 0) return 1;
   return 0;
 }
 

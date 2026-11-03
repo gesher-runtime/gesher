@@ -27,6 +27,10 @@
 #include <string>
 #include <vector>
 
+#if defined(__x86_64__)
+#include <windows.h>
+#endif
+
 namespace elf = gesher::elf;
 
 // Loaded code is System V ABI (docs/decisions/0006-managed-abi.md), so its
@@ -44,6 +48,45 @@ static void Check(const char* what, bool ok, const char* detail = "") {
   if (!ok) ++failures;
 }
 
+#if defined(__x86_64__)
+// Code built for Linux allocates a large frame with no stack probes and first
+// writes its bottom (libonnxruntime.so's `sub $0x119c0,%rsp`). Windows commits a
+// thread's stack a page at a time behind a guard page: with %rsp in reserved
+// memory it cannot deliver the fault and ends the process. The thread's TLS
+// setup for loaded code commits its stack (compat/elf/tls.cc, CommitStack).
+// 256 KiB, as such code would, on a fresh thread of 1 MiB (bionic's default).
+static long long LargeFrameTouch() {
+  long long value;
+  __asm__ volatile(
+      "mov %%rsp, %%r11\n\t"
+      "sub $0x40000, %%rsp\n\t"
+      "movq $42, (%%rsp)\n\t"
+      "movq (%%rsp), %0\n\t"
+      "mov %%r11, %%rsp\n\t"
+      : "=r"(value)
+      :
+      : "r11", "memory");
+  return value;
+}
+
+static DWORD WINAPI LargeFrameThread(void* out) {
+  if (!elf::SetupThreadTls()) return 2;
+  *static_cast<long long*>(out) = LargeFrameTouch();
+  return 0;
+}
+
+static void CheckLargeFrame() {
+  long long touched = 0;
+  HANDLE h = CreateThread(nullptr, 1024 * 1024, LargeFrameThread, &touched,
+                          STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+  DWORD code = 1;
+  bool ran = h != nullptr && WaitForSingleObject(h, 30000) == WAIT_OBJECT_0 &&
+             GetExitCodeThread(h, &code) && code == 0;
+  if (h != nullptr) CloseHandle(h);
+  Check("unprobed 256 KiB frame on a loaded-code thread", ran && touched == 42);
+}
+#endif
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::fprintf(stderr, "usage: %s <library.so> [search-dir ...]\n", argv[0]);
@@ -55,6 +98,11 @@ int main(int argc, char** argv) {
   // This thread's TLS block, for the loaded code's (rewritten) %fs:0 accesses.
   bool tls = elf::SetupThreadTls();
   Check("thread TLS block set up", tls);
+#if defined(__x86_64__)
+  // Before anything is loaded: a crash here ends the process without output.
+  std::fflush(stdout);
+  CheckLargeFrame();
+#endif
 
   elf::LoadOptions options;
   for (int i = 2; i < argc; ++i) options.search_paths.emplace_back(argv[i]);

@@ -34,6 +34,12 @@ Phase 1 items closed by the posix track (branch `wip/posix`). Design:
   `android.icu` agreeing; `21-posix.ps1` sets Windows' zone to
   Eastern, Israel, AUS Eastern and UTC in turn and compares the offsets with
   .NET's (Windows' own rules) at every transition of 2025-2027.
+- `tests/dex-libcore/LocaleDisplayTest.java`: `Locale`'s display names
+  (`getDisplayCountry`/`Language`/`Script`/`Variant`/`Name`, libicu_jni's
+  `LocaleNative`) are never null, after natives that leave ICU error codes on
+  the stack, at several call depths: libicu_jni hands ICU an uninitialized
+  `UErrorCode` and relies on Soong's `-ftrivial-auto-var-init=zero`, which
+  `cmake/aosp/icu.cmake` applies too.
 - `tests/dex-libcore/WatchServiceTest.java`, `tests/dex-posix/FileObserverTest.java`
   (on framework.jar).
 - A Hello whose class path entry is on another drive (`/mnt/c/...`).

@@ -260,6 +260,54 @@ public final class FontsTest {
       t.printStackTrace();
       check(false, "StaticLayout: a Hebrew paragraph (" + t + ")");
     }
+    englishInRtlLocale(new android.text.TextPaint(paint));
+  }
+
+  /**
+   * English under a right-to-left locale (he-IL): what a TextView's default textDirection
+   * (FIRST_STRONG in an RTL layout: FIRSTSTRONG_RTL) gives is a left-to-right paragraph,
+   * the period last and drawn at the right; only an explicit RTL (TextView
+   * textDirection="rtl", or Compose's Text, whose unspecified TextDirection resolves to
+   * the layout direction) puts the period first, at the left, as on Android.
+   */
+  private static void englishInRtlLocale(android.text.TextPaint textPaint) {
+    java.util.Locale saved = java.util.Locale.getDefault();
+    try {
+      java.util.Locale.setDefault(java.util.Locale.forLanguageTag("he-IL"));
+      String text = "Hello world.";
+      int dot = text.length() - 1;
+      for (android.text.TextDirectionHeuristic dir : new android.text.TextDirectionHeuristic[] {
+          android.text.TextDirectionHeuristics.FIRSTSTRONG_RTL,
+          android.text.TextDirectionHeuristics.FIRSTSTRONG_LTR}) {
+        String name = dir == android.text.TextDirectionHeuristics.FIRSTSTRONG_RTL
+            ? "FIRSTSTRONG_RTL" : "FIRSTSTRONG_LTR";
+        android.text.StaticLayout layout = android.text.StaticLayout.Builder
+            .obtain(text, 0, text.length(), textPaint, 400).setTextDirection(dir).build();
+        float world = layout.getPrimaryHorizontal(text.indexOf('w'));
+        float period = layout.getPrimaryHorizontal(dot);
+        check(!dir.isRtl(text, 0, text.length())
+                && layout.getParagraphDirection(0) == android.text.Layout.DIR_LEFT_TO_RIGHT
+                && !layout.isRtlCharAt(dot) && period > world,
+            "StaticLayout: \"" + text + "\" with " + name + " under he-IL is left to right,"
+                + " the period last at the right (paragraph direction "
+                + layout.getParagraphDirection(0) + ", w at " + world + ", period at "
+                + period + ")");
+      }
+      android.text.StaticLayout rtl = android.text.StaticLayout.Builder
+          .obtain(text, 0, text.length(), textPaint, 400)
+          .setTextDirection(android.text.TextDirectionHeuristics.RTL).build();
+      float rtlWorld = rtl.getPrimaryHorizontal(text.indexOf('w'));
+      float rtlPeriod = rtl.getPrimaryHorizontal(dot);
+      check(rtl.getParagraphDirection(0) == android.text.Layout.DIR_RIGHT_TO_LEFT
+              && rtl.isRtlCharAt(dot) && rtlPeriod < rtlWorld,
+          "StaticLayout: \"" + text + "\" with an explicit RTL direction is right to left,"
+              + " the period at the left (period at " + rtlPeriod + ", w at " + rtlWorld + ")");
+    } catch (Throwable t) {
+      t.printStackTrace();
+      check(false, "StaticLayout: English under he-IL (" + t + ")");
+    } finally {
+      java.util.Locale.setDefault(saved);
+    }
   }
 
   // --- helpers --------------------------------------------------------------------------

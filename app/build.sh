@@ -107,7 +107,13 @@ java -cp "$gencp" "$(native "$root/app/gen/CompatChangesGen.java")" "$(native "$
   "$(native "$work/gen")" com.gesher.server.gen "$(native "$aosp/frameworks/base")"
 
 mkdir -p "$work/classes"
-find "$root/app/java" "$work/gen" -name '*.java' > "$work/sources.txt"
+# Not app/java/com/google: those are client-SDK stubs (play-services, Firebase) that
+# apps bundle in their own dex (tests/apps/gmsapp/build.sh compiles them into
+# gmsapp.apk). On the boot class path they would shadow an APK's real copies
+# (parent-first loading): a stub FirebaseApp.get() answering null is
+# "FirebaseCrashlytics component is not present".
+find "$root/app/java" "$work/gen" -name '*.java' -not -path "$root/app/java/com/google/*" \
+  > "$work/sources.txt"
 native_list "$work/sources.txt"
 javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \
   -cp "$(native "$framework")" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"

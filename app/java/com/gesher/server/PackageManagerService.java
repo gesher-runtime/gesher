@@ -294,6 +294,22 @@ public final class PackageManagerService extends IPackageManager.Default {
         return null;
     }
 
+    /**
+     * Where an installed package came from: nowhere known (sideloaded through Gesher's
+     * installer), but it is installed. IPackageManager.Default returns null, which
+     * ApplicationPackageManager turns into NameNotFoundException for every package, so
+     * code that asks about its own package (Flutter's package_info_plus, store checks)
+     * failed.
+     */
+    @Override
+    public android.content.pm.InstallSourceInfo getInstallSourceInfo(String packageName,
+            int userId) {
+        if (get(packageName) == null && !GmsPackageSupport.isSyntheticPackage(packageName)) {
+            return null;
+        }
+        return new android.content.pm.InstallSourceInfo(null, null, null, null);
+    }
+
     private final PackageInstallerService mInstallerService = new PackageInstallerService();
     private final android.content.pm.IPackageInstaller mInstaller =
             StandIn.of(android.content.pm.IPackageInstaller.class, mInstallerService).asInterface();

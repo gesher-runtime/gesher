@@ -30,6 +30,7 @@
         <activity android:name=".JobActivity" android:exported="true" />
         <activity android:name=".ClipActivity" android:exported="true" />
         <activity android:name=".NotifyActivity" android:exported="true" />
+        <activity android:name=".ProgressNotifyActivity" android:exported="true" />
         <activity android:name=".PowerActivity" android:exported="true" />
         <activity android:name=".TimeActivity" android:exported="true" />
         <activity android:name=".ClickActivity" android:exported="true" />

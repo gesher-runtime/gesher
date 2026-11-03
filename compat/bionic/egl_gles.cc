@@ -542,21 +542,24 @@ EGLint BIONIC_SYSV DebugMessageControlKhr(SysvEglDebugProc callback, const EGLAt
                                        attribs);
 }
 
-using SysvSetBlob = void(BIONIC_SYSV*)(const void* key, EGLsizeiANDROID key_size,
-                                       const void* value, EGLsizeiANDROID value_size);
-using SysvGetBlob = EGLsizeiANDROID(BIONIC_SYSV*)(const void* key, EGLsizeiANDROID key_size,
-                                                  void* value, EGLsizeiANDROID value_size);
+// EGLsizeiANDROID is khronos_ssize_t, `long` in AOSP's headers: 64 bits for the
+// .so and for ANGLE (Win64), but 32 under mingw. The sizes are spelled with a
+// fixed width here (gen_gl_thunks.py does the same for the generated thunks).
+using BlobSize = int64_t;
+using SysvSetBlob = void(BIONIC_SYSV*)(const void* key, BlobSize key_size, const void* value,
+                                       BlobSize value_size);
+using SysvGetBlob = BlobSize(BIONIC_SYSV*)(const void* key, BlobSize key_size, void* value,
+                                           BlobSize value_size);
 std::atomic<SysvSetBlob> g_set_blob{nullptr};
 std::atomic<SysvGetBlob> g_get_blob{nullptr};
 
-void SetBlobTrampoline(const void* key, EGLsizeiANDROID key_size, const void* value,
-                       EGLsizeiANDROID value_size) {
+void SetBlobTrampoline(const void* key, BlobSize key_size, const void* value,
+                       BlobSize value_size) {
   gesher::elf::SetupThreadTls();
   g_set_blob.load()(key, key_size, value, value_size);
 }
 
-EGLsizeiANDROID GetBlobTrampoline(const void* key, EGLsizeiANDROID key_size, void* value,
-                                  EGLsizeiANDROID value_size) {
+BlobSize GetBlobTrampoline(const void* key, BlobSize key_size, void* value, BlobSize value_size) {
   gesher::elf::SetupThreadTls();
   return g_get_blob.load()(key, key_size, value, value_size);
 }
@@ -564,8 +567,14 @@ EGLsizeiANDROID GetBlobTrampoline(const void* key, EGLsizeiANDROID key_size, voi
 void BIONIC_SYSV SetBlobCacheFuncs(EGLDisplay dpy, SysvSetBlob set, SysvGetBlob get) {
   g_set_blob.store(set);
   g_get_blob.store(get);
-  MS(eglSetBlobCacheFuncsANDROID)(dpy, set != nullptr ? &SetBlobTrampoline : nullptr,
-                                  get != nullptr ? &GetBlobTrampoline : nullptr);
+  // As ANGLE's EGLSetBlobFuncANDROID/EGLGetBlobFuncANDROID (64-bit sizes), not
+  // as AOSP's header spells them under mingw.
+  auto set_fn =
+      reinterpret_cast<EGLSetBlobFuncANDROID>(reinterpret_cast<void*>(&SetBlobTrampoline));
+  auto get_fn =
+      reinterpret_cast<EGLGetBlobFuncANDROID>(reinterpret_cast<void*>(&GetBlobTrampoline));
+  MS(eglSetBlobCacheFuncsANDROID)(dpy, set != nullptr ? set_fn : nullptr,
+                                  get != nullptr ? get_fn : nullptr);
 }
 
 // --- the table -----------------------------------------------------------------------------------

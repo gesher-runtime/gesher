@@ -160,6 +160,94 @@ bool CheckGlWindow(HWND hwnd, const char* label) {
   return any;
 }
 
+// AllowSetForegroundWindow, counted: this executable's import of it (what
+// gesher_window.cc, linked in statically, calls) points here.
+LONG g_allow_calls = 0;
+DWORD g_allow_last = 0;
+BOOL WINAPI CountingAllowSetForegroundWindow(DWORD pid) {
+  g_allow_last = pid;
+  InterlockedIncrement(&g_allow_calls);
+  return TRUE;
+}
+
+bool HookAllowSetForegroundWindow() {
+  auto* base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
+  auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+  auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+  const IMAGE_DATA_DIRECTORY& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+  if (dir.VirtualAddress == 0) return false;
+  bool hooked = false;
+  for (auto* d = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + dir.VirtualAddress); d->Name != 0;
+       ++d) {
+    if (_stricmp(reinterpret_cast<const char*>(base + d->Name), "user32.dll") != 0 ||
+        d->OriginalFirstThunk == 0) {
+      continue;
+    }
+    auto* names = reinterpret_cast<IMAGE_THUNK_DATA*>(base + d->OriginalFirstThunk);
+    auto* slots = reinterpret_cast<IMAGE_THUNK_DATA*>(base + d->FirstThunk);
+    for (; names->u1.AddressOfData != 0; ++names, ++slots) {
+      if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal)) continue;
+      auto* by_name = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + names->u1.AddressOfData);
+      if (std::strcmp(reinterpret_cast<const char*>(by_name->Name), "AllowSetForegroundWindow") != 0) {
+        continue;
+      }
+      DWORD old = 0;
+      if (!VirtualProtect(&slots->u1.Function, sizeof slots->u1.Function, PAGE_READWRITE, &old)) {
+        return false;
+      }
+      slots->u1.Function = reinterpret_cast<ULONG_PTR>(&CountingAllowSetForegroundWindow);
+      VirtualProtect(&slots->u1.Function, sizeof slots->u1.Function, old, &old);
+      hooked = true;
+    }
+  }
+  return hooked;
+}
+
+// The user's click or key in a Gesher window lets other processes take the
+// foreground (the system server's picker or browser, another app's window):
+// AllowSetForegroundWindow(ASFW_ANY) on a button or key going up, not on
+// presses or moves (compat/hwui/window/gesher_window.cc, WindowProc).
+bool CheckForegroundOnInput(HWND hwnd) {
+  if (!HookAllowSetForegroundWindow()) {
+    std::printf("FAIL: foreground: gl_window_test.exe imports no user32!AllowSetForegroundWindow"
+                " (the window never allows another process the foreground)\n");
+    return false;
+  }
+  struct Step {
+    UINT msg;
+    WPARAM wparam;
+    LPARAM lparam;
+    bool allows;
+  } steps[] = {
+      {WM_MOUSEMOVE, 0, MAKELPARAM(4, 4), false},
+      {WM_MBUTTONDOWN, MK_MBUTTON, MAKELPARAM(4, 4), false},
+      {WM_MBUTTONUP, 0, MAKELPARAM(4, 4), true},
+      {WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(4, 4), false},
+      {WM_LBUTTONUP, 0, MAKELPARAM(4, 4), true},
+      {WM_KEYDOWN, VK_F24, 1, false},
+      {WM_KEYUP, VK_F24, static_cast<LPARAM>(0xC0000001u), true},
+  };
+  bool ok = true;
+  for (const Step& s : steps) {
+    LONG before = InterlockedCompareExchange(&g_allow_calls, 0, 0);
+    SendMessageW(hwnd, s.msg, s.wparam, s.lparam);
+    LONG calls = InterlockedCompareExchange(&g_allow_calls, 0, 0) - before;
+    bool right = s.allows ? calls >= 1 && g_allow_last == ASFW_ANY : calls == 0;
+    if (!right) {
+      std::printf("FAIL: foreground: message 0x%04x made %ld AllowSetForegroundWindow call(s)"
+                  " (last pid 0x%lx), expected %s\n",
+                  s.msg, static_cast<long>(calls), static_cast<unsigned long>(g_allow_last),
+                  s.allows ? "ASFW_ANY" : "none");
+      ok = false;
+    }
+  }
+  if (ok) {
+    std::printf("foreground: a button or key going up in the window allows other processes the"
+                " foreground (ASFW_ANY); presses and moves do not\n");
+  }
+  return ok;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -223,6 +311,7 @@ int main(int argc, char** argv) {
                 cpu_image.at(3 * w / 4, 3 * h / 4));
     if (wrong != 0) failures++;
   }
+  if (!CheckForegroundOnInput(static_cast<HWND>(gesher_window_hwnd(cpu_window)))) failures++;
   ANativeWindow_release(cpu_window);
 
   // EGL/GLES 3 and 2, each on a window of its own.

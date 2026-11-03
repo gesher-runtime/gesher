@@ -197,6 +197,17 @@ try {
   Set-TimeZone -Id $originalZone
 }
 
+# --- Locale display names ---------------------------------------------------------
+# java.util.Locale's display names (libicu_jni's LocaleNative) are never null, after
+# natives that leave ICU error codes on the stack (tests/dex-libcore/LocaleDisplayTest.java):
+# libicu_jni passes ICU an uninitialized UErrorCode, zeroed as by Soong
+# (-ftrivial-auto-var-init=zero, cmake/aosp/icu.cmake). Breezy Weather crashed on a null
+# getDisplayCountry() without it.
+Check 'dalvikvm: Locale display names are never null (libicu_jni zero-initialized locals)' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/libcore-tests.dex") gesher.LocaleDisplayTest
+} @('LocaleDisplayTest all passed')
+
 # --- inotify from Java ------------------------------------------------------------
 # java.nio.file.WatchService (LinuxWatchService) and android.os.FileObserver
 # (framework.jar) over gesher-base's inotify.

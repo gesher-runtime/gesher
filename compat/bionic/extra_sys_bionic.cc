@@ -2,7 +2,8 @@
 // (docs/native-libs.md, ADR 0057): POSIX semaphores, scheduling parameters,
 // pthread spinlocks/barriers and the timed and attribute forms the core lacks,
 // resource usage, utime/utimes, clock_nanosleep, sysinfo, prctl, getrandom,
-// memfd_create, madvise, dup3, tgkill, flock and lockf. Registered (from
+// memfd_create, madvise, dup3, tgkill, flock and lockf, statfs, the xattr
+// family, the mount table and mount. Registered (from
 // RegisterExtra) before the core files, so their definitions win.
 
 #include "extra_bionic.h"
@@ -17,15 +18,20 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <io.h>
+#include <mntent.h>
 #include <sys/file.h>
 #include <sys/inotify.h>
 #include <sys/mman.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 
 namespace gesher::bionic {
@@ -631,6 +637,121 @@ int BIONIC_SYSV Getdomainname(char* buf, size_t size) {
 }
 int BIONIC_SYSV Sethostname(const char*, size_t) { return errno = kEPERM, -1; }
 
+// --- statfs, extended attributes, the mount table ----------------------------
+// An import the shim lacks is bound to a stub that aborts when called
+// (compat/elf/elf_loader.cc), so these must exist even where they only fail.
+
+// bionic's LP64 struct statfs; x86_64 and arm64 lay it out alike (every field
+// 64-bit but the two-int fsid). statfs64 is the same structure.
+struct BionicStatfs {
+  uint64_t f_type;
+  uint64_t f_bsize;
+  uint64_t f_blocks;
+  uint64_t f_bfree;
+  uint64_t f_bavail;
+  uint64_t f_files;
+  uint64_t f_ffree;
+  int32_t f_fsid[2];
+  uint64_t f_namelen;
+  uint64_t f_frsize;
+  uint64_t f_flags;
+  uint64_t f_spare[4];
+};
+static_assert(sizeof(BionicStatfs) == 120, "bionic LP64 struct statfs");
+static_assert(offsetof(BionicStatfs, f_fsid) == 56, "bionic LP64 struct statfs");
+static_assert(offsetof(BionicStatfs, f_namelen) == 64, "bionic LP64 struct statfs");
+
+constexpr uint64_t kExt4SuperMagic = 0xEF53;  // what an Android /data reports
+constexpr uint64_t kStRdonly = 0x0001;
+constexpr uint64_t kStValid = 0x0020;         // f_flags is filled in
+
+void FillStatfs(const struct statvfs& v, BionicStatfs* out) {
+  std::memset(out, 0, sizeof(*out));
+  out->f_type = kExt4SuperMagic;
+  out->f_bsize = v.f_bsize;
+  out->f_frsize = v.f_frsize != 0 ? v.f_frsize : v.f_bsize;
+  out->f_blocks = v.f_blocks;
+  out->f_bfree = v.f_bfree;
+  out->f_bavail = v.f_bavail;
+  out->f_files = v.f_files;
+  out->f_ffree = v.f_ffree;
+  out->f_namelen = v.f_namemax != 0 ? v.f_namemax : 255;
+  out->f_flags = kStValid | ((v.f_flag & ST_RDONLY) != 0 ? kStRdonly : 0);
+}
+
+// The volume's serial number (f_fsid), name limit and read-only flag, from
+// the volume that holds `path` (a Windows path); best effort: the sizes are
+// gesher-base's statvfs's either way.
+void AddVolumeInfo(const wchar_t* path, BionicStatfs* out) {
+  wchar_t root[MAX_PATH + 1];
+  if (!GetVolumePathNameW(path, root, MAX_PATH + 1)) return;
+  DWORD serial = 0, max_component = 0, flags = 0;
+  if (!GetVolumeInformationW(root, nullptr, 0, &serial, &max_component, &flags, nullptr, 0)) {
+    return;
+  }
+  out->f_fsid[0] = static_cast<int32_t>(serial);
+  if (max_component != 0) out->f_namelen = max_component;
+  if ((flags & FILE_READ_ONLY_VOLUME) != 0) out->f_flags |= kStRdonly;
+}
+
+// statfs over gesher-base's statvfs, which takes the .so's path as the rest
+// of the shim's file calls do (an Android directory that is not on the disk,
+// such as /data, answers for the volume it would be on).
+int BIONIC_SYSV Statfs(const char* path, BionicStatfs* out) {
+  if (path == nullptr || out == nullptr) return errno = kEFAULT, -1;
+  struct statvfs v;
+  std::memset(&v, 0, sizeof(v));
+  if (::statvfs(path, &v) != 0) return -1;
+  FillStatfs(v, out);
+  int n = MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
+  if (n > 0) {
+    std::wstring w(static_cast<size_t>(n), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, w.data(), n) > 0) {
+      AddVolumeInfo(w.c_str(), out);
+    }
+  }
+  return 0;
+}
+int BIONIC_SYSV Fstatfs(int fd, BionicStatfs* out) {
+  if (out == nullptr) return errno = kEFAULT, -1;
+  struct statvfs v;
+  std::memset(&v, 0, sizeof(v));
+  if (::fstatvfs(fd, &v) != 0) return -1;
+  FillStatfs(v, out);
+  auto h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+  if (h != INVALID_HANDLE_VALUE && h != nullptr) {
+    std::wstring w(32768, L'\0');
+    DWORD len =
+        GetFinalPathNameByHandleW(h, w.data(), 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (len != 0 && len < 32768) {
+      w.resize(len);
+      AddVolumeInfo(w.c_str(), out);
+    }
+  }
+  return 0;
+}
+
+// Extended attributes are not supported (as gesher-base's <sys/xattr.h>):
+// every xattr call fails with ENOTSUP, which callers (SELinux label lookups,
+// ContextImpl's cache-dir tagging) treat as "no attributes here". One
+// function serves every signature: System V ignores the arguments it does not
+// read, and -1 in the 64-bit return register is -1 as an int too.
+int64_t BIONIC_SYSV XattrUnsupported() { return errno = kEOPNOTSUPP, -1; }
+
+// The mount table is gesher-base's: setmntent opens an empty stream (the mode
+// is not passed on: bionic's "re" is not a CRT fopen mode), getmntent finds
+// no entries. mount and umount fail as for an unprivileged Linux process.
+FILE* BIONIC_SYSV Setmntent(const char* path, const char*) { return setmntent(path, "r"); }
+struct mntent* BIONIC_SYSV Getmntent(FILE* stream) { return getmntent(stream); }
+struct mntent* BIONIC_SYSV GetmntentR(FILE* stream, struct mntent* entry, char* buf, int size) {
+  return getmntent_r(stream, entry, buf, size);
+}
+int BIONIC_SYSV Endmntent(FILE* stream) { return endmntent(stream); }
+char* BIONIC_SYSV Hasmntopt(const struct mntent* entry, const char* opt) {
+  return entry != nullptr && opt != nullptr ? hasmntopt(entry, opt) : nullptr;
+}
+int64_t BIONIC_SYSV MountUnpermitted() { return errno = kEPERM, -1; }
+
 }  // namespace
 
 // --- setjmp/longjmp (x86-64, System V) ---------------------------------------
@@ -919,6 +1040,23 @@ void RegisterExtraSys(SymbolTable& t) {
   E("inotify_rm_watch", InotifyRmWatch);
   E("getdomainname", Getdomainname);
   E("sethostname", Sethostname);
+  E("statfs", Statfs);
+  E("statfs64", Statfs);
+  E("fstatfs", Fstatfs);
+  E("fstatfs64", Fstatfs);
+  for (const char* name : {"getxattr", "lgetxattr", "fgetxattr", "setxattr", "lsetxattr",
+                           "fsetxattr", "listxattr", "llistxattr", "flistxattr", "removexattr",
+                           "lremovexattr", "fremovexattr"}) {
+    t[name] = reinterpret_cast<void*>(&XattrUnsupported);
+  }
+  E("setmntent", Setmntent);
+  E("getmntent", Getmntent);
+  E("getmntent_r", GetmntentR);
+  E("endmntent", Endmntent);
+  E("hasmntopt", Hasmntopt);
+  E("mount", MountUnpermitted);
+  E("umount", MountUnpermitted);
+  E("umount2", MountUnpermitted);
 }
 
 }  // namespace gesher::bionic

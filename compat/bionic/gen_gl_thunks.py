@@ -46,6 +46,30 @@ CALLBACK_TYPES = ('GLDEBUGPROC', 'GLDEBUGPROCKHR', 'EGLDEBUGPROCKHR', 'EGLSetBlo
 # loader's stub names them if an app calls one).
 LEFT_OUT = {'glGetVkProcAddrNV'}
 
+# Types the headers spell with `long` (khrplatform.h's khronos_intptr_t and
+# khronos_ssize_t are `signed long int`: AOSP's copy is for LP64 Android). The
+# .so passes them as 64 bits and ANGLE's own headers make them 64 bits on Win64,
+# but the shim is compiled with mingw, where `long` is 32 bits: as the header
+# spells them, a thunk would drop the upper half and, for an argument on the
+# Microsoft stack (the fifth and later), store only 4 of the slot's 8 bytes,
+# leaving garbage above (glBindBufferRange's size: Flutter's Impeller then drew
+# nothing but its clear colour). The thunks spell them with a fixed width.
+LP64_TYPES = {
+    'GLintptr': 'int64_t',
+    'GLsizeiptr': 'int64_t',
+    'EGLsizeiANDROID': 'int64_t',
+    'khronos_intptr_t': 'int64_t',
+    'khronos_ssize_t': 'int64_t',
+    'khronos_uintptr_t': 'uint64_t',
+    'khronos_usize_t': 'uint64_t',
+}
+LP64_TYPE = re.compile(r'\b(' + '|'.join(LP64_TYPES) + r')\b')
+
+
+def fixed_width(t):
+    return LP64_TYPE.sub(lambda m: LP64_TYPES[m.group(1)], t)
+
+
 PROTO = re.compile(r'^(?:GL_APICALL|GL_API|EGLAPI)\s+(?P<ret>.*?)\s*\b(?:GL_APIENTRY|EGLAPIENTRY)\s+'
                    r'(?P<name>\w+)\s*\((?P<args>.*)\)\s*;\s*$')
 PARAM = re.compile(r'^(?P<type>.*?)(?P<name>\b\w+)\s*(?P<array>\[[^\]]*\])?\s*$')
@@ -112,6 +136,8 @@ def main():
         if any(re.search(r'\b' + t + r'\b', text) for t in CALLBACK_TYPES):
             raise SystemExit(f'{header}: {name} takes or returns a callback; handwrite it '
                              f'(egl_gles.cc) or add it to LEFT_OUT')
+        ret = fixed_width(ret)
+        params = [(fixed_width(t), arr) for t, arr in params]
         decl = ', '.join(f'{t} a{i}{arr}' for i, (t, arr) in enumerate(params)) or 'void'
         types = ', '.join(f'{t}{"*" if arr else ""}' for t, arr in params) or 'void'
         call = ', '.join(f'a{i}' for i in range(len(params)))

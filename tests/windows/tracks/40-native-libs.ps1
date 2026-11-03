@@ -23,6 +23,15 @@ Check 'ELF loader: load a trivial .so and call it' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/trivial.so")
 } @('elf_load_test all passed')
 
+# A thread that runs loaded code has its stack committed (compat/elf/tls.cc,
+# CommitStack): code built for Linux allocates large frames without probing
+# (libonnxruntime.so's `sub $0x119c0,%rsp`), and with %rsp past the guard page
+# Windows cannot deliver the fault and ends the process without a word.
+# elf_load_test makes such a frame (256 KiB) on a fresh thread after its TLS setup.
+Check 'ELF loader: a loaded-code thread takes a large frame without stack probes' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/trivial.so")
+} @('unprobed 256 KiB frame on a loaded-code thread ok', 'elf_load_test all passed')
+
 # The bionic shim: a .so built against bionic's libc, libm, libdl, liblog and
 # pthread (tests/native/libc_test.c) loads through the ELF loader and passes
 # its own checks: memory, strings, printf/scanf through the System V vararg
@@ -113,11 +122,33 @@ Check 'native libs: ANativeWindow_lock from an NDK .so into a Win32 window, read
   $glTestOut
 } @(', posted: lock ok', 'quadrants ok', 'gl_window_test all passed')
 
+# The user's click or key in a Gesher window lets other processes take the
+# foreground (the system server's picker or browser, other apps' windows):
+# gesher_window.cc's WindowProc calls AllowSetForegroundWindow(ASFW_ANY) on a
+# button or key going up; gl_window_test counts the calls through its import.
+Check 'native libs: a click or key in a Gesher window allows other processes the foreground' {
+  $global:LASTEXITCODE = $glTestExit
+  $glTestOut
+} @('foreground: a button or key going up in the window allows other processes the foreground (ASFW_ANY); presses and moves do not',
+    'gl_window_test all passed')
+
 Check 'native libs: EGL/GLES 3 and 2 from an NDK .so through ANGLE onto a window surface; glReadPixels' {
   $global:LASTEXITCODE = $glTestExit
   $glTestOut
 } @('gesher EGL: default display: ANGLE, Direct3D 11', 'es3: EGL 1.5', 'es2: EGL 1.5', 'GL_VERSION=OpenGL ES 3.',
     'readpixels=ok, swap=ok', 'gl_window_test all passed')
+
+# GLintptr/GLsizeiptr reach ANGLE whole (compat/bionic/gen_gl_thunks.py,
+# LP64_TYPES): AOSP's khrplatform.h spells them `long`, 32 bits under mingw, so
+# glBindBufferRange's size (its fifth argument, on the Microsoft stack) reached
+# ANGLE with garbage above bit 31 and Flutter's Impeller drew only its clear
+# colour. libglapp.so's GLES 3 run binds a range above 4 GiB and reads it back
+# (glGetInteger64i_v), then draws with a uniform block bound at an aligned
+# offset into a texture, blits it and checks the pixels.
+Check 'native libs: GLES 3 buffer ranges (64-bit GLintptr/GLsizeiptr) and a uniform block draw from an NDK .so' {
+  $global:LASTEXITCODE = $glTestExit
+  $glTestOut
+} @('es3: EGL 1.5', 'swap=ok, buffer ranges=ok', 'gl_window_test all passed')
 
 # What DWM composed from the swap chain, read back with PrintWindow
 # (PW_RENDERFULLCONTENT): the triangle is in the window itself.

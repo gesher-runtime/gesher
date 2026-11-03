@@ -31,6 +31,18 @@ default 400x800@160; docs/graphics.md, ADR 0029).
 On Windows, `tools/package/gesher-app.cmd` sets up the directories and the
 boot class path and runs it.
 
+`gesher-app apk-icon <app.apk>` (`Launcher` -> `AppShell.apkIcon`) is what the
+`.apk` icon handler (`compat/shell/gesher_shellext.cc`) runs, in the
+background through `gesher-launch.exe`, for an APK it has no icon of: the
+app's launcher icon is drawn as for its Start menu shortcut (`AppIcon`, the
+framework's drawables, adaptive icons included) without installing the app or
+starting the device, written to
+`%LOCALAPPDATA%\Gesher\data\system\apk-icons\<size>-<time>.ico`, recorded in
+`apk-icons.list` (a file that is no APK, or has no drawable icon, is recorded
+with `gesher.ico`, so it is not tried again until it changes), and the shell
+is told the file changed. Each run appends a line to
+`%LOCALAPPDATA%\Gesher\logs\apk-icons.log`.
+
 ## Where it runs from
 
 `gesher-app.jar` goes on the **boot class path, after framework.jar**. The

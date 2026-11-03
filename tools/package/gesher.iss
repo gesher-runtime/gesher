@@ -125,6 +125,9 @@ Name: "{autoprograms}\Gesher README"; Filename: "{app}\README.txt"
 Root: HKCU; Subkey: "Software\Classes\.apk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Apk"; Check: ApkUnclaimed
 Root: HKCU; Subkey: "Software\Classes\.apk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Apk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: ""; ValueData: "Android app (Gesher)"; Flags: uninsdeletekey
+; The APKs Explorer opens go to the recent list of Gesher.Installer, not of every
+; app whose shortcut runs gesher-launch.exe (each app's taskbar jump list).
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "Gesher.Installer"
 ; Each APK's icon comes from Gesher's icon handler (DefaultIcon %1): its app's
 ; for an APK Gesher installed, gesher.ico for any other.
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "%1"

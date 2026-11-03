@@ -18,16 +18,23 @@ target_include_directories(icu_headers INTERFACE
 target_compile_definitions(icu_headers INTERFACE U_STATIC_IMPLEMENTATION
   UCONFIG_USE_ML_PHRASE_BREAKING=1)
 
-set(_icu4c_flags -Wall -Wno-ambiguous-reversed-operator -Wno-deprecated-declarations
-  -Wno-unused-parameter -Wno-unused-const-variable -Wno-unneeded-internal-declaration
-  -Wno-missing-field-initializers -Wno-sign-compare)
+# Soong's global cflags zero uninitialized locals (-ftrivial-auto-var-init=zero,
+# device and host), and external/icu relies on it: libicu_jni's ScopedIcuLocale
+# passes an uninitialized UErrorCode to Locale::forLanguageTag, which returns a
+# bogus locale when the stack garbage reads as a failure, so LocaleNative's
+# display names (Locale.getDisplayCountry/Language/Script/Variant) came back
+# null, depending on what was on the stack (Breezy Weather's launch).
+set(_icu_soong_flags -ftrivial-auto-var-init=zero)
+set(_icu4c_flags ${_icu_soong_flags} -Wall -Wno-ambiguous-reversed-operator
+  -Wno-deprecated-declarations -Wno-unused-parameter -Wno-unused-const-variable
+  -Wno-unneeded-internal-declaration -Wno-missing-field-initializers -Wno-sign-compare)
 
 # --- libandroidicuinit --------------------------------------------------------
 set(_aii "${_icu}/libandroidicuinit")
 add_library(androidicuinit STATIC ${_aii}/IcuRegistration.cpp ${_aii}/android_icu_init.cpp)
 target_include_directories(androidicuinit PUBLIC ${_aii}/include PRIVATE ${_aii})
 target_link_libraries(androidicuinit PRIVATE icu_headers)
-target_compile_options(androidicuinit PRIVATE -Wall)
+target_compile_options(androidicuinit PRIVATE ${_icu_soong_flags} -Wall)
 
 # --- libicuuc (with libicuuc_stubdata, the empty linked-in data) --------------
 file(GLOB _icuuc_srcs "${_icu4c}/common/*.cpp")
@@ -71,6 +78,6 @@ target_compile_definitions(icu_jni PRIVATE U_USING_ICU_NAMESPACE=0
   # libjavacore has a JniConstants and a maybeThrowIcuException too, apart in
   # their .so files on Android; linked into one executable they would clash.
   JniConstants=IcuJniConstants maybeThrowIcuException=IcuJniMaybeThrowIcuException)
-target_compile_options(icu_jni PRIVATE -Wall -Wextra)
+target_compile_options(icu_jni PRIVATE ${_icu_soong_flags} -Wall -Wextra)
 set_source_files_properties("${_icu}/android_icu4j/libcore_bridge/src/native/Register.cpp"
   PROPERTIES COMPILE_DEFINITIONS "JNI_OnLoad=JNI_OnLoad_icu_jni;JNI_OnUnload=JNI_OnUnload_icu_jni")

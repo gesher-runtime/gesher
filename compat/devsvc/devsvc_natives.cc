@@ -268,15 +268,21 @@ jstring WindowsHost_pickFile(JNIEnv* env, jclass, jstring title) {
   return path.empty() ? nullptr : JStr(env, path);
 }
 
+// Defined JNIEXPORT ... JNICALL (clipboard_bridge.cc, notifications.cc): System V
+// under GESHER already, so they are declared JNICALL here too and registered as they
+// are (GESHER_JNI_SYSV). Declared without JNICALL, GESHER_JNI's thunk called them
+// with the Microsoft ABI and they read their arguments from the wrong registers:
+// nativeCancelNotificationBridge took the JNIEnv* for its tag string, and the system
+// server crashed in GetStringChars on any app's NotificationManager.cancel.
 extern "C" {
-jbyteArray Java_com_gesher_server_WindowsHost_nativeClipboardImage(JNIEnv* env, jclass);
-jboolean Java_com_gesher_server_WindowsHost_nativeHasClipboardImage(JNIEnv*, jclass);
-jboolean Java_com_gesher_server_WindowsHost_nativeSetClipboardRich(JNIEnv* env, jclass,
-                                                                   jstring, jstring,
-                                                                   jbyteArray);
-jint Java_com_gesher_server_WindowsHost_nativeShowNotificationBridge(
+jbyteArray JNICALL Java_com_gesher_server_WindowsHost_nativeClipboardImage(JNIEnv* env, jclass);
+jboolean JNICALL Java_com_gesher_server_WindowsHost_nativeHasClipboardImage(JNIEnv*, jclass);
+jboolean JNICALL Java_com_gesher_server_WindowsHost_nativeSetClipboardRich(JNIEnv* env, jclass,
+                                                                           jstring, jstring,
+                                                                           jbyteArray);
+jint JNICALL Java_com_gesher_server_WindowsHost_nativeShowNotificationBridge(
     JNIEnv* env, jclass, jstring, jstring, jstring, jstring, jstring, jstring, jint);
-jint Java_com_gesher_server_WindowsHost_nativeCancelNotificationBridge(
+jint JNICALL Java_com_gesher_server_WindowsHost_nativeCancelNotificationBridge(
     JNIEnv* env, jclass, jstring, jstring, jstring, jint);
 }
 
@@ -289,13 +295,13 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeClipboardText", "()" DEVSVC_STRING, GESHER_JNI(WindowsHost_clipboardText)},
     {"nativeClipboardHtml", "()" DEVSVC_STRING, GESHER_JNI(WindowsHost_clipboardHtml)},
     {"nativeClipboardImage", "()[B",
-     GESHER_JNI(Java_com_gesher_server_WindowsHost_nativeClipboardImage)},
+     GESHER_JNI_SYSV(Java_com_gesher_server_WindowsHost_nativeClipboardImage)},
     {"nativeHasClipboardImage", "()Z",
-     GESHER_JNI(Java_com_gesher_server_WindowsHost_nativeHasClipboardImage)},
+     GESHER_JNI_SYSV(Java_com_gesher_server_WindowsHost_nativeHasClipboardImage)},
     {"nativeSetClipboard", "(" DEVSVC_STRING DEVSVC_STRING ")Z",
      GESHER_JNI(WindowsHost_setClipboard)},
     {"nativeSetClipboardRich", "(" DEVSVC_STRING DEVSVC_STRING "[B)Z",
-     GESHER_JNI(Java_com_gesher_server_WindowsHost_nativeSetClipboardRich)},
+     GESHER_JNI_SYSV(Java_com_gesher_server_WindowsHost_nativeSetClipboardRich)},
     {"nativeClipboardSequence", "()I", GESHER_JNI(WindowsHost_clipboardSequence)},
     {"nativeAlarmWait", "(JZI)I", GESHER_JNI(WindowsHost_alarmWait)},
     {"nativeAlarmKick", "()V", GESHER_JNI(WindowsHost_alarmKick)},
@@ -311,9 +317,9 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeClearToasts", "(" DEVSVC_STRING ")I", GESHER_JNI(WindowsHost_clearToasts)},
     {"nativeShowNotificationBridge",
      "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING "I)I",
-     GESHER_JNI(Java_com_gesher_server_WindowsHost_nativeShowNotificationBridge)},
+     GESHER_JNI_SYSV(Java_com_gesher_server_WindowsHost_nativeShowNotificationBridge)},
     {"nativeCancelNotificationBridge", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING "I)I",
-     GESHER_JNI(Java_com_gesher_server_WindowsHost_nativeCancelNotificationBridge)},
+     GESHER_JNI_SYSV(Java_com_gesher_server_WindowsHost_nativeCancelNotificationBridge)},
     {"nativeRegisterAppId", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING ")I",
      GESHER_JNI(WindowsHost_registerAppId)},
     {"nativeUnregisterAppId", "(" DEVSVC_STRING ")I", GESHER_JNI(WindowsHost_unregisterAppId)},

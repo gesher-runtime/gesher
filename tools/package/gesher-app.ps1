@@ -23,6 +23,8 @@
 #   gesher-app shutdown                stop the device
 #   gesher-app toast-activated         (COM runs it: Gesher's toast activator) a click
 #                                      on an app's toast, given to the device (ADR 0051)
+#   gesher-app apk-icon my.apk         (the .apk icon handler runs it) draw my.apk's app
+#                                      icon for Explorer, without installing it
 #   gesher-app my.apk --single-process the app alone in this process, with
 #                                      stand-in services (no device)
 #   gesher-app my.apk --system-server  a device of this run only, the app in
@@ -66,7 +68,7 @@ try {
 } catch { }
 
 $root = Join-Path $env:LOCALAPPDATA 'Gesher'
-$commands = 'install', 'uninstall', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated'
+$commands = 'install', 'uninstall', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon'
 if ($Arguments.Count -eq 0) {
   Write-Host 'usage: gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--single-process | --system-server]'
   Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | list | status | start | shutdown'
@@ -129,9 +131,9 @@ if ($root.Substring(0, 2) -ne $here.Substring(0, 2)) {
 $apkFull = $null
 if ($commands -notcontains $command) {
   $apkFull = (Resolve-Path $command).Path
-} elseif ($rest.Count -gt 0 -and ($command -eq 'install' -or
+} elseif ($rest.Count -gt 0 -and ($command -eq 'install' -or $command -eq 'apk-icon' -or
     ($command -eq 'launch' -and (Test-Path -LiteralPath $rest[0] -PathType Leaf)))) {
-  $apkFull = (Resolve-Path $rest[0]).Path
+  $apkFull = (Resolve-Path -LiteralPath $rest[0]).Path
   $rest = @($rest | Select-Object -Skip 1)
 }
 Set-Location $here
