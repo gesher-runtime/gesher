@@ -2,11 +2,17 @@
 // CRT's and winpthreads' values to Linux's, and formats Linux's.
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "internal.h"
 
 extern "C" int gesher_errno_from_crt(int crt_errno) {
+  // _write to a pipe whose reader has closed: the CRT reports ERROR_NO_DATA as
+  // EINVAL, Linux EPIPE (Dart aborts on a write error other than EPIPE).
+  if (crt_errno == EINVAL && (_doserrno == ERROR_NO_DATA || _doserrno == ERROR_BROKEN_PIPE)) {
+    return EPIPE;
+  }
   // 1-34 are the same; the others are mingw-w64's <errno.h> values.
   if (crt_errno >= 0 && crt_errno <= 34) return crt_errno;
   switch (crt_errno) {

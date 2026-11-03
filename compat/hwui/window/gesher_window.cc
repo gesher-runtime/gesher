@@ -147,6 +147,42 @@ HRESULT SetWindowAppUserModelId(HWND hwnd, const std::wstring& id) {
   return hr;
 }
 
+// The window's System.AppUserModel.ID, or "".
+std::wstring WindowAppUserModelId(HWND hwnd) {
+  using GetStoreFn = HRESULT(WINAPI*)(HWND, REFIID, void**);
+  auto get = reinterpret_cast<GetStoreFn>(Shell32("SHGetPropertyStoreForWindow"));
+  IPropertyStore* store = nullptr;
+  if (get == nullptr || FAILED(get(hwnd, kIidPropertyStore, reinterpret_cast<void**>(&store)))) {
+    return std::wstring();
+  }
+  PROPVARIANT value;
+  std::memset(&value, 0, sizeof(value));
+  std::wstring id;
+  if (SUCCEEDED(store->GetValue(kAppUserModelId, &value)) && value.vt == VT_LPWSTR &&
+      value.pwszVal != nullptr) {
+    id = value.pwszVal;
+  }
+  PropVariantClear(&value);
+  store->Release();
+  return id;
+}
+
+// The screen point where gesher-launch's splash for this app (class
+// GesherSplash, the app's AppUserModelID; compat/shell/gesher_launch.cc) has
+// its client area: the app's window opens there, where the user saw it start.
+bool SplashClientOrigin(const std::wstring& id, POINT* origin) {
+  if (id.empty()) return false;
+  HWND splash = nullptr;
+  while ((splash = FindWindowExW(nullptr, splash, L"GesherSplash", nullptr)) != nullptr) {
+    if (!IsWindowVisible(splash) || IsIconic(splash) || WindowAppUserModelId(splash) != id) continue;
+    POINT p = {0, 0};
+    if (!ClientToScreen(splash, &p)) continue;
+    *origin = p;
+    return true;
+  }
+  return false;
+}
+
 std::string Narrow(const std::wstring& w) {
   if (w.empty()) return std::string();
   int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0,
@@ -292,7 +328,12 @@ void Window::Run(std::wstring title, int width, int height) {
   DWORD style = popup_ ? WS_POPUP : WS_OVERLAPPEDWINDOW;
   RECT r = {0, 0, width, height};
   AdjustWindowRectEx(&r, style, FALSE, 0);
-  const int x = popup_ ? 0 : CW_USEDEFAULT, y = popup_ ? 0 : CW_USEDEFAULT;
+  int x = popup_ ? 0 : CW_USEDEFAULT, y = popup_ ? 0 : CW_USEDEFAULT;
+  POINT splash;
+  if (!popup_ && SplashClientOrigin(ProcessAppUserModelId(), &splash)) {
+    x = splash.x + r.left;  // r.left, r.top: minus the frame's left and top
+    y = splash.y + r.top;
+  }
   HWND hwnd = CreateWindowExW(0, kClassName, title.c_str(), style, x, y, r.right - r.left,
                               r.bottom - r.top, static_cast<HWND>(owner_hwnd_), nullptr,
                               GetModuleHandleW(nullptr), this);

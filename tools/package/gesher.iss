@@ -143,6 +143,17 @@ Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "Run with Gesher"
 ; gesher-launch.exe: no console window flashes (compat/shell/gesher_launch.cc).
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""
+; Split APK bundles (.xapk, .apks: base.apk with its config.*.apk), the same way
+; as `.apk` but with gesher.ico: the icon handler reads one APK, not a bundle.
+Root: HKCU; Subkey: "Software\Classes\.xapk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: BundleUnclaimed('.xapk')
+Root: HKCU; Subkey: "Software\Classes\.xapk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKCU; Subkey: "Software\Classes\.apks"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: BundleUnclaimed('.apks')
+Root: HKCU; Subkey: "Software\Classes\.apks\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: ""; ValueData: "Android app bundle (Gesher)"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "Gesher.Installer"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\gesher.ico"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shell\open"; ValueType: string; ValueName: ""; ValueData: "Run with Gesher"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""
 ; Gesher's toast activator (ADR 0051): the CustomActivator of every app's
 ; AppUserModelID. A click on an app's toast when no Gesher device runs makes COM
 ; start `gesher-app toast-activated`, which starts the device and hands it the
@@ -170,6 +181,7 @@ const
   EnvKey = 'Environment';
   ApkKey = 'Software\Classes\.apk';
   ApkProgId = 'Gesher.Apk';
+  BundleProgId = 'Gesher.Xapk';
 
 // True when `.apk` has no default ProgID, or Gesher's: HKCR is the merged
 // per-user and per-machine view, so another app's machine-wide association
@@ -181,6 +193,27 @@ begin
   if not RegQueryStringValue(HKEY_CLASSES_ROOT, '.apk', '', ProgId) then
     ProgId := '';
   Result := (ProgId = '') or (CompareText(ProgId, ApkProgId) = 0);
+end;
+
+// The same for a bundle extension (.xapk, .apks) and Gesher.Xapk.
+function BundleUnclaimed(Ext: String): Boolean;
+var
+  ProgId: String;
+begin
+  if not RegQueryStringValue(HKEY_CLASSES_ROOT, Ext, '', ProgId) then
+    ProgId := '';
+  Result := (ProgId = '') or (CompareText(ProgId, BundleProgId) = 0);
+end;
+
+// Removes a per-user extension's default while it still names ProgId.
+procedure RemoveDefault(Key, ProgId: String);
+var
+  Value: String;
+begin
+  if RegQueryStringValue(HKEY_CURRENT_USER, Key, '', Value) and
+     (CompareText(Value, ProgId) = 0) then
+    RegDeleteValue(HKEY_CURRENT_USER, Key, '');
+  RegDeleteKeyIfEmpty(HKEY_CURRENT_USER, Key);
 end;
 
 // The Microsoft Edge WebView2 Runtime's registration (per machine or per user).
@@ -322,10 +355,9 @@ begin
   begin
     RemoveAppIds();
     RemoveUrlProtocols();
-    if RegQueryStringValue(HKEY_CURRENT_USER, ApkKey, '', Path) and
-       (CompareText(Path, ApkProgId) = 0) then
-      RegDeleteValue(HKEY_CURRENT_USER, ApkKey, '');
-    RegDeleteKeyIfEmpty(HKEY_CURRENT_USER, ApkKey);
+    RemoveDefault(ApkKey, ApkProgId);
+    RemoveDefault('Software\Classes\.xapk', BundleProgId);
+    RemoveDefault('Software\Classes\.apks', BundleProgId);
     Path := PathEntries();
     Dir := ExpandConstant('{app}');
     if HasEntry(Path, Dir) then

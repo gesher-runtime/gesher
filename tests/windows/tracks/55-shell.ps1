@@ -115,7 +115,7 @@ if (-not (Test-Path "$Dir/gesher-launch.exe")) {
   Copy-Item "$Dir/gesher-launch.exe" $splashDir -Force
   # As Properties.store writes it: ISO-8859-1, other characters \u-escaped.
   Set-Content -LiteralPath (Join-Path $splashShell 'shortcut.properties') -Encoding ascii -Value @(
-    '#Gesher device', 'package=com.gesher.splashprobe', 'label=Splash Probe é', 'app_user_model_id=Gesher.App.com.gesher.splashprobe')
+    '#Gesher device', 'package=com.gesher.splashprobe', 'label=Splash Probe \u00e9', 'app_user_model_id=Gesher.App.com.gesher.splashprobe')
   $splashIco = Join-Path $shellOut 'lifecycle.ico'  # drawn above
   if (Test-Path $splashIco) { Copy-Item $splashIco (Join-Path $splashShell 'icon.ico') -Force }
   $probeApk = Join-Path $splashDir 'probe.apk'
@@ -152,6 +152,7 @@ public static class SplashProbe {
   [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int cmd);
   // The first window of class `cls` of process `pid`, or zero.
   public static IntPtr Find(string cls, uint pid) {
     IntPtr h = IntPtr.Zero;
@@ -235,6 +236,8 @@ if ($splash -ne [IntPtr]::Zero) {
     $null = $form.Handle
     $lines += "set-aumid=$([SplashProbe]::SetAppUserModelId($form.Handle, 'Gesher.App.com.gesher.splashprobe'))"
     $form.Show()
+    # gesher-launch starts this powershell with SW_HIDE, which the first show takes.
+    [void][SplashProbe]::ShowWindow($form.Handle, 5)  # SW_SHOW
     $gone = $false
     for ($i = 0; $i -lt 100; $i++) {
       [System.Windows.Forms.Application]::DoEvents()

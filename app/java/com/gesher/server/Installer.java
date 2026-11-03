@@ -171,12 +171,15 @@ final class Installer {
     /**
      * Whether the installed splits are {@code splits}, by name and content: installing
      * an .xapk over the same base.apk installed alone adds its splits (its ABI split's
-     * native libraries), so it is not "unchanged".
+     * native libraries), so it is not "unchanged". No splits match any installed ones.
      */
     private static boolean sameSplits(File[] splits, String codePath) throws IOException {
         String[] installed = new File(codePath).list(
                 (dir, name) -> name.startsWith("split_") && name.endsWith(".apk"));
         int count = splits != null ? splits.length : 0;
+        // base.apk alone over the same base installed with its splits (an .xapk's)
+        // keeps them: without its density split the app misses its drawables.
+        if (count == 0) return true;
         if ((installed != null ? installed.length : 0) != count) return false;
         for (int i = 0; i < count; i++) {
             String name = splits[i].getName();
