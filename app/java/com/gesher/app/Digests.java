@@ -77,10 +77,14 @@ public final class Digests extends Provider {
         }
     }
 
-    /** Rewrites the configured provider list as described above. */
+    /**
+     * Rewrites the configured provider list as described above, then appends
+     * {@link AndroidKeyStore} (on a device the zygote installs keystore2's).
+     */
     public static void install() {
         String first = Security.getProperty("security.provider.1");
         if (first != null && exists(first.trim().split("\\s+")[0])) {
+            AndroidKeyStore.configure(null);
             return;  // Conscrypt: Android's own providers (docs/network.md)
         }
         List<String> kept = new ArrayList<>();
@@ -96,6 +100,7 @@ public final class Digests extends Provider {
                 Main.log("security provider not on the boot class path: " + className);
             }
         }
+        AndroidKeyStore.configure(kept);
         for (int i = 1; Security.getProperty("security.provider." + i) != null; i++) {
             Security.setProperty("security.provider." + i, "");
         }

@@ -651,6 +651,8 @@ def main():
             'app/java/com/gesher/server/ActivityClientController.java',
             'compat/bionic/stdio_bionic.cc',
             'cmake/aosp/hwui.cmake',
+            'app/java/com/gesher/app/AndroidKeyStore.java',
+            'app/java/com/gesher/app/Digests.java',
             'app/gesher-camera/java/com/google/android/gms/common/security/ProviderInstallerImpl.java',
         ])
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
