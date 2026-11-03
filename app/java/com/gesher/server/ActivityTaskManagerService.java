@@ -477,6 +477,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private int start(IApplicationThread caller, Intent intent, String resolvedType,
             String callingPackage, IBinder resultToToken, String resultWho, int requestCode,
             int launchTaskId, ActivityRecord[] started) {
+        // ACTION_CHOOSER ("open with", "share via"): the device has no ChooserActivity, so the
+        // choice is the first target, as a chooser with one option starts it at once; an
+        // http(s) VIEW goes on to the Windows browser below.
+        if (intent != null && Intent.ACTION_CHOOSER.equals(intent.getAction())) {
+            Intent target = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class);
+            if (target != null && !Intent.ACTION_CHOOSER.equals(target.getAction())) {
+                target = new Intent(target);
+                target.addFlags(intent.getFlags());
+                SystemServer.log("startActivity: chooser, starting its target " + target);
+                return start(caller, target, target.getType(), callingPackage, resultToToken,
+                        resultWho, requestCode, launchTaskId, started);
+            }
+        }
         // Starts from apps resolve implicit intents to filters with CATEGORY_DEFAULT, as
         // ActivityStarter asks (MATCH_DEFAULT_ONLY); gesher-app's launcher (no caller)
         // resolves MAIN/LAUNCHER in a package, as a launcher does.
