@@ -1002,10 +1002,17 @@ jobs:
           # An update while a program has the .apk icon handler loaded (Explorer always
           # has): Setup must not close that program (it took the desktop away), and
           # the update must still succeed: the loaded copy is moved aside.
-          $holder = Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command',
-            "Add-Type -Name K -Namespace Ci -MemberDefinition '[DllImport(`"kernel32.dll`", CharSet = CharSet.Unicode)] public static extern System.IntPtr LoadLibraryW(string p);'; if ([Ci.K]::LoadLibraryW('$app\gesher_shellext.dll') -eq [IntPtr]::Zero) { exit 3 }; Start-Sleep 600"
-          for ($i = 0; $i -lt 30 -and -not ((Get-Process -Id $holder.Id -ErrorAction SilentlyContinue).Modules | Where-Object ModuleName -eq 'gesher_shellext.dll'); $i++) { Start-Sleep 1 }
+          # Encoded: Start-Process passes a -Command's inner quotes unescaped.
+          $holdCmd = "Add-Type -Name K -Namespace Ci -MemberDefinition '[DllImport(`"kernel32.dll`", CharSet = CharSet.Unicode)] public static extern System.IntPtr LoadLibraryW(string p);'; if ([Ci.K]::LoadLibraryW('$app\gesher_shellext.dll') -eq [IntPtr]::Zero) { exit 3 }; Start-Sleep 600"
+          $holder = Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-EncodedCommand',
+            ([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($holdCmd)))
+          $loaded = $false
+          for ($i = 0; $i -lt 30 -and -not $loaded; $i++) {
+            $loaded = [bool]((Get-Process -Id $holder.Id -ErrorAction SilentlyContinue).Modules | Where-Object ModuleName -eq 'gesher_shellext.dll')
+            if (-not $loaded) { Start-Sleep 1 }
+          }
           if ($holder.HasExited) { throw "The process holding gesher_shellext.dll ended before the update (exit $($holder.ExitCode))" }
+          if (-not $loaded) { Stop-Process -Id $holder.Id -Force; throw 'The holder process never had gesher_shellext.dll loaded' }
           $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
           $problems = @()
           if ($p.ExitCode -ne 0) { $problems += "Setup exit $($p.ExitCode)" }
