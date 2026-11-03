@@ -649,6 +649,8 @@ def main():
             'tests/exec/java/gesher/ExecTest.java',
             'compat/posix/src/errno.cc',
             'app/java/com/gesher/server/ActivityClientController.java',
+            'compat/bionic/stdio_bionic.cc',
+            'cmake/aosp/hwui.cmake',
             'app/gesher-camera/java/com/google/android/gms/common/security/ProviderInstallerImpl.java',
         ])
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',

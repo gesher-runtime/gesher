@@ -467,6 +467,8 @@ def main():
         'tests/exec/java/gesher/ExecTest.java',
         'compat/posix/src/errno.cc',
         'app/java/com/gesher/server/ActivityClientController.java',
+        'compat/bionic/stdio_bionic.cc',
+        'cmake/aosp/hwui.cmake',
         'app/gesher-camera/java/com/google/android/gms/common/security/ProviderInstallerImpl.java',
     ])
     assert not (code | {'tools/ci/receipt-unreviewed.py'}) <= allowed

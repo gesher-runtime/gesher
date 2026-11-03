@@ -36,8 +36,14 @@ gesher_bp_library(minikin MINIKIN)
 # libminikin_defaults (frameworks/minikin/Android.bp)
 target_compile_options(minikin PRIVATE -Wall -Wextra -Wthread-safety "-DLOG_TAG=\"Minikin\""
   -Wno-unused-parameter)
+if(CMAKE_HOST_WIN32)
+  # A case-insensitive host: as -I, its private Locale.h would be <locale.h>
+  # for libc++. Its sources include their headers in quotes.
+  target_compile_options(minikin PRIVATE "SHELL:-iquote ${AOSP_DIR}/frameworks/minikin/libs/minikin")
+else()
+  target_include_directories(minikin PRIVATE ${AOSP_DIR}/frameworks/minikin/libs/minikin)
+endif()
 target_include_directories(minikin
-  PRIVATE ${AOSP_DIR}/frameworks/minikin/libs/minikin
   PUBLIC ${AOSP_DIR}/frameworks/minikin/include
          ${AOSP_DIR}/external/googletest/googletest/include)  # gtest_prod.h
 target_link_libraries(minikin PUBLIC harfbuzz icu_headers icuuc icui18n utils cutils log base)

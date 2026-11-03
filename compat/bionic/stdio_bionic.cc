@@ -829,6 +829,21 @@ asm(".text\n"
     GESHER_VA_TRAMPOLINE("gesher_bionic_snprintf_chk", "gesher_bionic_vsnprintf_chk", "40",
                          "%r9"));
 
+// fts(3) directory-tree walks: no FTS here (its FTSENT carries the caller's
+// struct stat, which differs between x86_64 and a translated arm64 guest).
+// fts_open fails as an unreadable tree does, so a caller that walks a tree
+// (libtaz_full.so's integrity checks) sees an error instead of an abort.
+void* BIONIC_SYSV gesher_bionic_fts_open(char* const*, int, void*) {
+  errno = kENOSYS;
+  return nullptr;
+}
+void* BIONIC_SYSV gesher_bionic_fts_read(void*) {
+  errno = kENOSYS;
+  return nullptr;
+}
+int BIONIC_SYSV gesher_bionic_fts_close(void*) { return 0; }
+int BIONIC_SYSV gesher_bionic_fts_set(void*, void*, int) { return 0; }
+
 void RegisterStdio(SymbolTable& t) {
 #define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
   // Formatted output, variadic and va_list forms.
@@ -858,6 +873,11 @@ void RegisterStdio(SymbolTable& t) {
   E("vswprintf", gesher_bionic_vswprintf);
   E("syslog", gesher_bionic_syslog);
   E("vsyslog", gesher_bionic_vsyslog);
+  E("fts_open", gesher_bionic_fts_open);
+  E("fts_read", gesher_bionic_fts_read);
+  E("fts_children", gesher_bionic_fts_read);
+  E("fts_close", gesher_bionic_fts_close);
+  E("fts_set", gesher_bionic_fts_set);
   // FILE.
   E("fopen", Fopen);
   E("fopen64", Fopen);

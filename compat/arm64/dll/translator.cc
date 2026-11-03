@@ -1124,7 +1124,63 @@ void* GESHER_SYSV GuestMmap(void* addr, size_t len, int prot, int flags, int fd,
   return fn(addr, len, GuestProt(prot), flags, fd, off);
 }
 
+// /sys/devices/system/cpu/{possible,present}: the CPU lists cpuinfo (XNNPACK,
+// onnxruntime) parses before anything else; without them it fails to
+// initialize and onnxruntime aborts. Gesher has no /sys, so a guest's open of
+// either is a pipe holding "0-<n-1>\n", which the guest reads as the file.
+void* GuestOpenTarget(const char* name) {
+  void* g = GuestSymbol(name);
+  return g != nullptr ? g : HostLibc(name);
+}
+
+bool IsCpuListFile(const char* path) {
+  return path != nullptr && (std::strcmp(path, "/sys/devices/system/cpu/possible") == 0 ||
+                             std::strcmp(path, "/sys/devices/system/cpu/present") == 0);
+}
+
+int CpuListPipe() {
+  static auto pipe_fn = reinterpret_cast<int(GESHER_SYSV*)(int*)>(HostLibc("pipe"));
+  static auto write_fn = reinterpret_cast<int64_t(GESHER_SYSV*)(int, const void*, size_t)>(
+      HostLibc("write"));
+  static auto close_fn = reinterpret_cast<int(GESHER_SYSV*)(int)>(HostLibc("close"));
+  int fds[2];
+  if (pipe_fn == nullptr || write_fn == nullptr || close_fn == nullptr || pipe_fn(fds) != 0) {
+    return -1;
+  }
+  const DWORD cpus = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+  char list[32];
+  const int length = cpus > 1 ? std::snprintf(list, sizeof list, "0-%lu\n", cpus - 1)
+                              : std::snprintf(list, sizeof list, "0\n");
+  write_fn(fds[1], list, static_cast<size_t>(length));
+  close_fn(fds[1]);
+  return fds[0];
+}
+
+int GESHER_SYSV GuestOpen(const char* path, int flags, int mode) {
+  if (IsCpuListFile(path)) return CpuListPipe();
+  static auto fn = reinterpret_cast<int(GESHER_SYSV*)(const char*, int, int)>(
+      GuestOpenTarget("open"));
+  return fn(path, flags, mode);
+}
+
+int GESHER_SYSV GuestOpenat(int dirfd, const char* path, int flags, int mode) {
+  if (IsCpuListFile(path)) return CpuListPipe();
+  static auto fn = reinterpret_cast<int(GESHER_SYSV*)(int, const char*, int, int)>(
+      GuestOpenTarget("openat"));
+  return fn(dirfd, path, flags, mode);
+}
+
 void* ApiGuestSymbol(const char* name) {
+  if (name != nullptr && (std::strcmp(name, "open") == 0 || std::strcmp(name, "open64") == 0) &&
+      GuestOpenTarget("open") != nullptr) {
+    static void* open = BindHost(reinterpret_cast<void*>(&GuestOpen), -1);
+    return open;
+  }
+  if (name != nullptr && (std::strcmp(name, "openat") == 0 || std::strcmp(name, "openat64") == 0) &&
+      GuestOpenTarget("openat") != nullptr) {
+    static void* openat = BindHost(reinterpret_cast<void*>(&GuestOpenat), -1);
+    return openat;
+  }
   if (name != nullptr && std::strcmp(name, "mprotect") == 0 && HostLibc("mprotect") != nullptr) {
     static void* mprotect = BindHost(reinterpret_cast<void*>(&GuestMprotect), -1);
     return mprotect;
