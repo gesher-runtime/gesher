@@ -108,7 +108,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p>Closing a Win32 window (its close button, Alt+F4, WM_CLOSE) goes to the close
  * handler ({@link #setCloseHandler}); by default an Activity's window finishes its
- * Activity. Closing a popup that is not an Activity's window presses Back in it. The
+ * Activity's task (finishAndRemoveTask: X closes the app's window, not one screen of it;
+ * Back is the window's Back button). Closing a popup that is not an Activity's window
+ * presses Back in it. The
  * session runs in the app's process, where the windows are drawn; it is an
  * {@code IWindowSession.Stub}, so WindowManagerService's session factory can hand it out.
  */
@@ -397,14 +399,17 @@ public final class WindowSession extends IWindowSession.Stub {
         }
     }
 
-    /** The default close handler: finish the window's Activity, if this process has it. */
+    /**
+     * The default close handler: finish the window's Activity and the rest of its task (the
+     * screens below it, shown in the same window), if this process has it.
+     */
     private static void finishActivity(WindowSession session, IBinder window,
             WindowManager.LayoutParams attrs) {
         ActivityThread thread = ActivityThread.currentActivityThread();
         android.app.Activity a = thread != null && attrs.token != null
                 ? thread.getActivity(attrs.token) : null;
         if (a != null) {
-            a.finish();
+            a.finishAndRemoveTask();
         } else {
             log("window \"" + attrs.getTitle() + "\" closed; no Activity to finish");
         }

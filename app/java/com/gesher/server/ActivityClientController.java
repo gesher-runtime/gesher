@@ -92,6 +92,13 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public boolean finishActivity(IBinder token, int code, Intent data, int finishTask) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        // Activity.FINISH_TASK_WITH_ACTIVITY (finishAndRemoveTask, closing the window):
+        // the activity and the rest of its task.
+        if (r != null && finishTask == 2) {
+            mAtm.finish(r, "app-request", code, data);
+            mAtm.removeTask(r.taskId);
+            return true;
+        }
         if (r != null) return mAtm.finish(r, "app-request", code, data);
         com.gesher.app.window.WindowSession session = com.gesher.app.window.WindowSession.get();
         return session != null && session.finishLocalActivity(token);

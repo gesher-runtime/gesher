@@ -193,6 +193,83 @@ std::string Narrow(const std::wstring& w) {
   return out;
 }
 
+// The Back bar: an Android navigation bar's Back button under a top-level
+// window's client area. It is non-client area, so the client area stays the
+// app's display; the X closes the app's task, Back goes one screen back.
+constexpr int kBackBarDip = 40;
+constexpr LRESULT kHitBack = HTOBJECT;  // the Back button's hit-test code
+constexpr wchar_t kBackStateProp[] = L"GesherBackState";  // 1 hot, 2 pressed
+
+int BackBarHeight(HWND hwnd) {
+  return MulDiv(kBackBarDip, static_cast<int>(GetDpiForWindow(hwnd)), 96);
+}
+
+// The bar, in window coordinates.
+RECT BackBarRect(HWND hwnd) {
+  RECT client = {}, window = {};
+  POINT origin = {0, 0};
+  GetClientRect(hwnd, &client);
+  ClientToScreen(hwnd, &origin);
+  GetWindowRect(hwnd, &window);
+  const int left = origin.x - window.left, top = origin.y - window.top + client.bottom;
+  return {left, top, left + client.right, top + BackBarHeight(hwnd)};
+}
+
+// The Back button: the middle of the bar, as wide as two bar heights.
+RECT BackButtonRect(HWND hwnd) {
+  RECT bar = BackBarRect(hwnd);
+  const int h = bar.bottom - bar.top, middle = (bar.left + bar.right) / 2;
+  return {middle - h, bar.top, middle + h, bar.bottom};
+}
+
+int BackState(HWND hwnd) {
+  return static_cast<int>(reinterpret_cast<intptr_t>(GetPropW(hwnd, kBackStateProp)));
+}
+
+void PaintBackBar(HWND hwnd) {
+  if (IsIconic(hwnd)) return;
+  const RECT bar = BackBarRect(hwnd);
+  if (bar.right <= bar.left || bar.bottom <= bar.top) return;
+  HDC dc = GetWindowDC(hwnd);
+  if (dc == nullptr) return;
+  HBRUSH fill = CreateSolidBrush(RGB(0x20, 0x20, 0x20));
+  FillRect(dc, &bar, fill);
+  DeleteObject(fill);
+  const int h = bar.bottom - bar.top;
+  const int cx = (bar.left + bar.right) / 2, cy = (bar.top + bar.bottom) / 2;
+  HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+  HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+  if (int state = BackState(hwnd)) {
+    // Hot or pressed: a circle behind the button, as Android's ripple.
+    HBRUSH ripple = CreateSolidBrush(state == 2 ? RGB(0x55, 0x55, 0x55) : RGB(0x3a, 0x3a, 0x3a));
+    SelectObject(dc, ripple);
+    const int r = h * 2 / 5;
+    Ellipse(dc, cx - r, cy - r, cx + r + 1, cy + r + 1);
+    SelectObject(dc, GetStockObject(NULL_BRUSH));
+    DeleteObject(ripple);
+  }
+  // Android's Back: an outlined triangle pointing left.
+  const int a = h / 4;
+  POINT triangle[3] = {{cx - a * 4 / 5, cy}, {cx + a * 3 / 5, cy - a}, {cx + a * 3 / 5, cy + a}};
+  HPEN pen = CreatePen(PS_SOLID, h / 20 > 1 ? h / 20 : 1, RGB(0xe8, 0xe8, 0xe8));
+  SelectObject(dc, pen);
+  Polygon(dc, triangle, 3);
+  SelectObject(dc, old_pen);
+  SelectObject(dc, old_brush);
+  DeleteObject(pen);
+  ReleaseDC(hwnd, dc);
+}
+
+void SetBackState(HWND hwnd, int state) {
+  if (BackState(hwnd) == state) return;
+  if (state != 0) {
+    SetPropW(hwnd, kBackStateProp, reinterpret_cast<HANDLE>(static_cast<intptr_t>(state)));
+  } else {
+    RemovePropW(hwnd, kBackStateProp);
+  }
+  PaintBackBar(hwnd);
+}
+
 struct StartArgs {
   Window* window;
   std::wstring title;
@@ -488,6 +565,7 @@ void Window::SetClientSize(int width, int height) {
   AdjustWindowRectExForDpi(&r, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)), FALSE,
                            static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)),
                            GetDpiForWindow(hwnd));
+  if (!popup_) r.bottom += BackBarHeight(hwnd);
   // SetWindowPos from another thread waits for the window's thread, which
   // handles WM_SIZE (the new client size) before it returns.
   SetWindowPos(hwnd, nullptr, 0, 0, r.right - r.left, r.bottom - r.top,
@@ -689,6 +767,64 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
     case WM_MOVE:
       if (input_pane_screen_[3] > input_pane_screen_[1]) UpdateInputPane();
       return -1;
+    case WM_NCCALCSIZE: {
+      if (popup_) return -1;
+      LRESULT r = DefWindowProcW(hwnd, msg, wparam, lparam);
+      RECT* client = wparam ? &reinterpret_cast<NCCALCSIZE_PARAMS*>(lparam)->rgrc[0]
+                            : reinterpret_cast<RECT*>(lparam);
+      client->bottom -= BackBarHeight(hwnd);
+      if (client->bottom < client->top) client->bottom = client->top;
+      return r;
+    }
+    case WM_NCPAINT:
+    case WM_NCACTIVATE: {
+      if (popup_) return -1;
+      LRESULT r = DefWindowProcW(hwnd, msg, wparam, lparam);
+      PaintBackBar(hwnd);
+      return r;
+    }
+    case WM_NCHITTEST: {
+      if (popup_) return -1;
+      LRESULT r = DefWindowProcW(hwnd, msg, wparam, lparam);
+      if (r == HTCLIENT || IsIconic(hwnd)) return r;
+      RECT window, button = BackButtonRect(hwnd), bar = BackBarRect(hwnd);
+      GetWindowRect(hwnd, &window);
+      POINT p = {GET_X_LPARAM(lparam) - window.left, GET_Y_LPARAM(lparam) - window.top};
+      if (PtInRect(&button, p)) return kHitBack;
+      return PtInRect(&bar, p) ? HTNOWHERE : r;
+    }
+    case WM_NCMOUSEMOVE:
+      if (popup_) return -1;
+      if (wparam == static_cast<WPARAM>(kHitBack)) {
+        TRACKMOUSEEVENT track = {sizeof track, TME_LEAVE | TME_NONCLIENT, hwnd, 0};
+        TrackMouseEvent(&track);
+        if (BackState(hwnd) == 0) SetBackState(hwnd, 1);
+      } else {
+        SetBackState(hwnd, 0);
+      }
+      return -1;
+    case WM_NCMOUSELEAVE:
+      if (popup_) return -1;
+      SetBackState(hwnd, 0);
+      return -1;
+    case WM_NCLBUTTONDOWN:
+    case WM_NCLBUTTONDBLCLK:
+      if (popup_ || wparam != static_cast<WPARAM>(kHitBack)) return -1;
+      SetBackState(hwnd, 2);
+      return 0;
+    case WM_NCLBUTTONUP:
+      if (popup_ || wparam != static_cast<WPARAM>(kHitBack)) return -1;
+      if (BackState(hwnd) == 2) {
+        // Back, pressed and released (KEYCODE_BACK: VK_BROWSER_BACK).
+        e.type = WindowEvent::kKeyDown;
+        e.key = VK_BROWSER_BACK;
+        e.scan = 0x16a;  // E0 6A
+        Queue(e);
+        e.type = WindowEvent::kKeyUp;
+        Queue(e);
+      }
+      SetBackState(hwnd, 1);
+      return 0;
     case WM_CLOSE:
       e.type = WindowEvent::kClose;
       Queue(e);
@@ -738,6 +874,7 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
         AdjustWindowRectExForDpi(&r, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)),
                                  FALSE, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)),
                                  GetDpiForWindow(hwnd));
+        if (!popup_) r.bottom += BackBarHeight(hwnd);
         if (min_w > 0) info->ptMinTrackSize.x = r.right - r.left;
         if (min_h > 0) info->ptMinTrackSize.y = r.bottom - r.top;
       }

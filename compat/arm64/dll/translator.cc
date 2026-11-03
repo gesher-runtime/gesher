@@ -566,6 +566,8 @@ class Env final : public A64::UserCallbacks {
     return a >= reinterpret_cast<uint64_t>(stack_base_) &&
            a < reinterpret_cast<uint64_t>(stack_base_) + kGuardSize;
   }
+  void* host_fn() const { return host_fn_; }
+  uint64_t host_caller() const { return host_caller_; }
 
  private:
   struct PendingHostCall {
@@ -656,10 +658,17 @@ class Env final : public A64::UserCallbacks {
     // live frames.
     uint64_t saved_stack_cur = stack_cur_;
     stack_cur_ = gsp;
+    // For fault reports: which host function the guest is in, called from where.
+    void* saved_host_fn = host_fn_;
+    uint64_t saved_host_caller = host_caller_;
+    host_fn_ = fn;
+    host_caller_ = jit->GetRegister(30);
     int saved_running = t_guest_running;
     t_guest_running = 0;
     uint64_t rax = gesher_call_host_sysv(&call);
     t_guest_running = saved_running;
+    host_fn_ = saved_host_fn;
+    host_caller_ = saved_host_caller;
     stack_cur_ = saved_stack_cur;
     jit->SetRegister(0, rax);
     jit->SetRegister(1, call.out_rdx);
@@ -678,6 +687,8 @@ class Env final : public A64::UserCallbacks {
   uint64_t stack_cur_ = 0;
   uint64_t last_fp_result_ = 0;
   uint64_t last_x1_ = 0;
+  void* host_fn_ = nullptr;    // the host function of the innermost guest -> host call
+  uint64_t host_caller_ = 0;   // its guest return address (X30)
   static std::atomic<size_t> next_id_;
 };
 
@@ -945,9 +956,73 @@ OrderedLoad CompleteOrderedLoad(CONTEXT* c, uintptr_t fault) {
 //    host_entry stub makes it exactly a call of the stub.
 //  - Any other fault while this thread runs guest code is the guest's: it is
 //    reported Android-style and the process ends.
+// `addr` for a report: guest object+offset (symbol+n), host module+offset, or raw.
+void PrintWhere(const char* label, uint64_t addr) {
+  const char* object = nullptr;
+  const void* base = nullptr;
+  const char* symbol = nullptr;
+  const void* symbol_addr = nullptr;
+  if (g_host != nullptr && g_host->describe != nullptr &&
+      g_host->describe(reinterpret_cast<const void*>(addr), &object, &base, &symbol,
+                       &symbol_addr)) {
+    std::fprintf(stderr, "%s%s+0x%llx", label, object ? object : "?",
+                 static_cast<unsigned long long>(addr - reinterpret_cast<uint64_t>(base)));
+    if (symbol != nullptr) {
+      std::fprintf(stderr, " (%s+%llu)", symbol,
+                   static_cast<unsigned long long>(addr - reinterpret_cast<uint64_t>(symbol_addr)));
+    }
+    std::fprintf(stderr, "\n");
+    return;
+  }
+  HMODULE module = nullptr;
+  char name[MAX_PATH] = "?";
+  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCSTR>(addr), &module) &&
+      GetModuleFileNameA(module, name, sizeof(name)) != 0) {
+    const char* file = std::strrchr(name, '\\');
+    std::fprintf(stderr, "%s%s+0x%llx\n", label, file != nullptr ? file + 1 : name,
+                 static_cast<unsigned long long>(addr - reinterpret_cast<uint64_t>(module)));
+  } else {
+    std::fprintf(stderr, "%s0x%llx\n", label, static_cast<unsigned long long>(addr));
+  }
+}
+
+// A fault in host code during a guest -> host call: ART's fatal-signal report
+// that may follow has no registers or backtrace on Windows, so say where the
+// guest was. A note only (ART may still handle the fault); the first few.
+void NoteHostCallFault(const EXCEPTION_RECORD* r, const CONTEXT* c) {
+  static std::atomic<int> notes{0};
+  Env* env = t_env_raw;
+  if (env == nullptr || env->host_fn() == nullptr || notes.fetch_add(1) >= 8) return;
+  const char* op = r->ExceptionInformation[0] == 0   ? "reading"
+                   : r->ExceptionInformation[0] == 1 ? "writing"
+                                                     : "executing";
+  std::fprintf(stderr, "gesher arm64: tid %lu: host fault %s 0x%llx in a call from guest code\n",
+               GetCurrentThreadId(), op,
+               static_cast<unsigned long long>(r->ExceptionInformation[1]));
+  PrintWhere("    host pc        ", c->Rip);
+  PrintWhere("    host function  ", reinterpret_cast<uint64_t>(env->host_fn()));
+  PrintWhere("    called from    ", env->host_caller());
+  std::fflush(stderr);
+}
+
 LONG CALLBACK VectoredHandler(EXCEPTION_POINTERS* info) {
   const EXCEPTION_RECORD* r = info->ExceptionRecord;
   CONTEXT* c = info->ContextRecord;
+  // The host itself running guest (AArch64) bytes: a guest page became
+  // host-executable, so a host call of a guest pointer did not fault into its
+  // host_entry stub. Whatever x86 those bytes decode to ends in a fault here.
+  auto host_ran_guest_code = [&]() {
+    if (t_guest_running || !InGuestCode(c->Rip)) return;
+    char detail[160];
+    std::snprintf(detail, sizeof(detail),
+                  "the host executed guest code at 0x%llx (exception 0x%08lx): a guest page "
+                  "is host-executable (guest mprotect/mmap with PROT_EXEC?)",
+                  static_cast<unsigned long long>(c->Rip), r->ExceptionCode);
+    PrintWhere("gesher arm64: host executed guest code at ", c->Rip);
+    GuestCrash(kSigIll, 1, "ILL_ILLOPC", c->Rip, detail);
+  };
   if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r->NumberParameters >= 2) {
     auto kind = r->ExceptionInformation[0];
     auto addr = static_cast<uintptr_t>(r->ExceptionInformation[1]);
@@ -958,6 +1033,8 @@ LONG CALLBACK VectoredHandler(EXCEPTION_POINTERS* info) {
         return EXCEPTION_CONTINUE_EXECUTION;
       }
     }
+    if (!(kind == 8 && addr == c->Rip)) host_ran_guest_code();
+    if (!t_guest_running && addr < 0x10000) NoteHostCallFault(r, c);
     if (t_guest_running) {
       bool mapped = false;
       MEMORY_BASIC_INFORMATION mbi;
@@ -981,6 +1058,10 @@ LONG CALLBACK VectoredHandler(EXCEPTION_POINTERS* info) {
       GuestCrash(kSigSegv, mapped ? 2 : 1, mapped ? "SEGV_ACCERR" : "SEGV_MAPERR", addr, detail);
     }
     return EXCEPTION_CONTINUE_SEARCH;
+  }
+  if (r->ExceptionCode == EXCEPTION_ILLEGAL_INSTRUCTION ||
+      r->ExceptionCode == EXCEPTION_PRIV_INSTRUCTION) {
+    host_ran_guest_code();
   }
   if (t_guest_running) {
     switch (r->ExceptionCode) {
@@ -1120,6 +1201,10 @@ void* EmitGuestCode(const uint32_t* insns, size_t count) {
   std::fprintf(stderr, "    Cause: %s\n", detail);
   std::fflush(stderr);
   Env* env = t_env_raw;
+  if (env != nullptr && env->host_fn() != nullptr && !t_guest_running) {
+    PrintWhere("    in host function ", reinterpret_cast<uint64_t>(env->host_fn()));
+    PrintWhere("    called from guest ", env->host_caller());
+  }
   A64::Jit* jit = env != nullptr ? env->CurrentJit() : nullptr;
   if (jit != nullptr) {
     // dynarmic keeps the PC per block, so `pc` is the start of the faulting

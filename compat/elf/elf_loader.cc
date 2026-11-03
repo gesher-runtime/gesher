@@ -28,6 +28,21 @@
 // DT_RELR's entry type; this elf.h predates it.
 using Elf64_Relr = uint64_t;
 
+// Android's own dynamic tags: packed relocations (lld/relocation_packer
+// --pack-dyn-relocs=android, "APS2") and the pre-standard RELR tags.
+#ifndef DT_ANDROID_RELA
+#define DT_ANDROID_RELA 0x60000011
+#endif
+#ifndef DT_ANDROID_RELASZ
+#define DT_ANDROID_RELASZ 0x60000012
+#endif
+#ifndef DT_ANDROID_RELR
+#define DT_ANDROID_RELR 0x6fffe000
+#endif
+#ifndef DT_ANDROID_RELRSZ
+#define DT_ANDROID_RELRSZ 0x6fffe001
+#endif
+
 // AArch64 e_machine and relocations (this elf.h defines most, but guard each
 // in case the toolchain's headers differ).
 #ifndef EM_AARCH64
@@ -135,6 +150,8 @@ struct Library {
   size_t jmprel_count = 0;
   const Elf64_Relr* relr = nullptr;
   size_t relr_count = 0;
+  const uint8_t* android_rela = nullptr;  // DT_ANDROID_RELA: packed (APS2)
+  size_t android_rela_size = 0;
 
   // Init/fini. System V, like all loaded code.
   void (SYSV* init_func)() = nullptr;
@@ -588,6 +605,10 @@ void ParseDynamic(Library* lib, const uint8_t* data) {
       case DT_PLTRELSZ: pltrel_size = v; break;
       case DT_RELR: lib->relr = reinterpret_cast<const Elf64_Relr*>(p); break;
       case DT_RELRSZ: lib->relr_count = v / sizeof(Elf64_Relr); break;
+      case DT_ANDROID_RELR: lib->relr = reinterpret_cast<const Elf64_Relr*>(p); break;
+      case DT_ANDROID_RELRSZ: lib->relr_count = v / sizeof(Elf64_Relr); break;
+      case DT_ANDROID_RELA: lib->android_rela = p; break;
+      case DT_ANDROID_RELASZ: lib->android_rela_size = v; break;
       case DT_TEXTREL: lib->text_relocations = true; break;
       case DT_FLAGS: lib->text_relocations |= (v & DF_TEXTREL) != 0; break;
       case DT_INIT: lib->init_func = reinterpret_cast<void (SYSV*)()>(p); break;
@@ -860,11 +881,86 @@ bool ApplyRelr(Library* lib) {
   return true;
 }
 
+// DT_ANDROID_RELA: "APS2", then SLEB128s: the count, the first r_offset, and
+// groups (size, flags, the fields the flags say the group shares, then each
+// relocation's own fields). bionic's linker/linker_reloc_iterators.h. NDK
+// libraries linked with --pack-dyn-relocs=android carry all their non-PLT
+// relocations here (libwaze.so: 281843; their GOT, .init_array and
+// .data.rel.ro are zeros in the file until these are applied).
+bool DecodeAndroidRela(const uint8_t* p, size_t size, std::vector<Elf64_Rela>* out,
+                       std::string* error) {
+  const uint8_t* end = p + size;
+  if (size < 4 || std::memcmp(p, "APS2", 4) != 0) {
+    Fail(error, "DT_ANDROID_RELA is not APS2-packed");
+    return false;
+  }
+  p += 4;
+  bool ok = true;
+  auto sleb = [&]() -> uint64_t {
+    uint64_t value = 0;
+    unsigned shift = 0;
+    uint8_t byte = 0;
+    do {
+      if (p >= end) {
+        ok = false;
+        return 0;
+      }
+      byte = *p++;
+      if (shift < 64) value |= static_cast<uint64_t>(byte & 0x7f) << shift;
+      shift += 7;
+    } while (byte & 0x80);
+    if (shift < 64 && (byte & 0x40)) value |= ~uint64_t{0} << shift;
+    return value;
+  };
+  constexpr uint64_t kGroupedByInfo = 1, kGroupedByOffsetDelta = 2, kGroupedByAddend = 4,
+                     kGroupHasAddend = 8;
+  const uint64_t count = sleb();
+  Elf64_Rela r{};
+  r.r_offset = sleb();
+  if (ok && count < size * 8) out->reserve(count);
+  while (ok && out->size() < count) {
+    const uint64_t group_size = sleb();
+    const uint64_t flags = sleb();
+    if (!ok || group_size == 0 || group_size > count - out->size()) {
+      ok = false;
+      break;
+    }
+    const uint64_t delta = (flags & kGroupedByOffsetDelta) ? sleb() : 0;
+    if (flags & kGroupedByInfo) r.r_info = sleb();
+    if ((flags & kGroupHasAddend) && (flags & kGroupedByAddend)) {
+      r.r_addend += static_cast<int64_t>(sleb());
+    } else if (!(flags & kGroupHasAddend)) {
+      r.r_addend = 0;
+    }
+    for (uint64_t i = 0; ok && i < group_size; ++i) {
+      r.r_offset += (flags & kGroupedByOffsetDelta) ? delta : sleb();
+      if (!(flags & kGroupedByInfo)) r.r_info = sleb();
+      if ((flags & kGroupHasAddend) && !(flags & kGroupedByAddend)) {
+        r.r_addend += static_cast<int64_t>(sleb());
+      }
+      out->push_back(r);
+    }
+  }
+  if (!ok) {
+    Fail(error, "malformed DT_ANDROID_RELA (APS2) relocations");
+    return false;
+  }
+  return true;
+}
+
 bool Relocate(Library* lib, std::string* error) {
   if (lib->relr) ApplyRelr(lib);  // DT_RELR is arch-neutral (load-bias add)
+  std::vector<Elf64_Rela> packed;
+  if (lib->android_rela != nullptr &&
+      !DecodeAndroidRela(lib->android_rela, lib->android_rela_size, &packed, error)) {
+    return false;
+  }
   if (lib->is_aarch64) {
     for (size_t i = 0; i < lib->rela_count; ++i) {
       if (!ApplyRelaAarch64(lib, lib->rela[i], error)) return false;
+    }
+    for (const Elf64_Rela& r : packed) {
+      if (!ApplyRelaAarch64(lib, r, error)) return false;
     }
     for (size_t i = 0; i < lib->jmprel_count; ++i) {
       if (!ApplyRelaAarch64(lib, lib->jmprel[i], error)) return false;
@@ -873,6 +969,9 @@ bool Relocate(Library* lib, std::string* error) {
   }
   for (size_t i = 0; i < lib->rela_count; ++i) {
     if (!ApplyRela(lib, lib->rela[i], error)) return false;
+  }
+  for (const Elf64_Rela& r : packed) {
+    if (!ApplyRela(lib, r, error)) return false;
   }
   for (size_t i = 0; i < lib->jmprel_count; ++i) {
     if (!ApplyRela(lib, lib->jmprel[i], error)) return false;

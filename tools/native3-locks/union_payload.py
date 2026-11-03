@@ -648,6 +648,7 @@ def main():
             'compat/bionic/system_cacerts.h',
             'tests/exec/java/gesher/ExecTest.java',
             'compat/posix/src/errno.cc',
+            'app/java/com/gesher/server/ActivityClientController.java',
             'app/gesher-camera/java/com/google/android/gms/common/security/ProviderInstallerImpl.java',
         ])
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
