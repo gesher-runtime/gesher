@@ -301,7 +301,7 @@ final class Installer {
             String abi = NativeLibs.forApk(apks);
             String libDir = new File(code, "lib/" + NativeLibs.instructionSetDir(abi)).getPath();
             int libs = 0;
-            for (String apk : apks) libs += NativeLibs.extract(apk, libDir, abi);
+            for (String file : apks) libs += NativeLibs.extract(file, libDir, abi);
             // dexopt, as the package manager runs it at install (Dexopt; ADR 0054).
             Dexopt.onInstall(pkg, code.getPath(), parsed.sharedLibraries);
             long now = System.currentTimeMillis();

@@ -1270,19 +1270,6 @@ public final class WindowSession extends IWindowSession.Stub {
         return best;
     }
 
-    /** The Activity whose token is {@code token} in this process, or null. */
-    private static android.app.Activity activity(IBinder token) {
-        if (token == null) return null;
-        ActivityThread thread = ActivityThread.currentActivityThread();
-        android.app.Activity a = thread != null ? thread.getActivity(token) : null;
-        if (a == null) {
-            // gesher-app's single process: its driver's Activity is not ActivityThread's.
-            android.app.Activity local = android.app.GesherAppDriver.currentActivity();
-            if (local != null && local.getActivityToken() == token) a = local;
-        }
-        return a;
-    }
-
     /** The task of the Activity whose token is {@code token}, or -1. */
     private static int taskOf(IBinder token) {
         try {
