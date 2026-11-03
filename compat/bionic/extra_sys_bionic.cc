@@ -712,22 +712,34 @@ int BIONIC_SYSV Statfs(const char* path, BionicStatfs* out) {
   }
   return 0;
 }
+
+// fstatfs answers for the volume that holds the fd's file: its root, as
+// statfs takes it (gesher-base's fstatvfs asks GetDiskFreeSpaceEx for the
+// file's own path, which it only takes for a directory, and fails on a file).
 int BIONIC_SYSV Fstatfs(int fd, BionicStatfs* out) {
   if (out == nullptr) return errno = kEFAULT, -1;
+  auto h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+  if (h == INVALID_HANDLE_VALUE || h == nullptr) return errno = kEBADF, -1;
+  std::wstring w(32768, L'\0');
+  DWORD len =
+      GetFinalPathNameByHandleW(h, w.data(), 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  if (len == 0 || len >= 32768) return errno = kEBADF, -1;
+  w.resize(len);
+  wchar_t root[MAX_PATH + 1];
+  if (!GetVolumePathNameW(w.c_str(), root, MAX_PATH + 1)) return errno = kEBADF, -1;
+  std::wstring r(root);
+  if (r.rfind(L"\\\\?\\", 0) == 0) r = r.substr(4);
+  int n = WideCharToMultiByte(CP_UTF8, 0, r.c_str(), -1, nullptr, 0, nullptr, nullptr);
+  std::string path(n > 0 ? static_cast<size_t>(n) : 0, '\0');
+  if (n <= 0 || WideCharToMultiByte(CP_UTF8, 0, r.c_str(), -1, path.data(), n, nullptr,
+                                    nullptr) <= 0) {
+    return errno = kEBADF, -1;
+  }
   struct statvfs v;
   std::memset(&v, 0, sizeof(v));
-  if (::fstatvfs(fd, &v) != 0) return -1;
+  if (::statvfs(path.c_str(), &v) != 0) return -1;
   FillStatfs(v, out);
-  auto h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
-  if (h != INVALID_HANDLE_VALUE && h != nullptr) {
-    std::wstring w(32768, L'\0');
-    DWORD len =
-        GetFinalPathNameByHandleW(h, w.data(), 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-    if (len != 0 && len < 32768) {
-      w.resize(len);
-      AddVolumeInfo(w.c_str(), out);
-    }
-  }
+  AddVolumeInfo(w.c_str(), out);
   return 0;
 }
 

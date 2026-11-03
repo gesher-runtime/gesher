@@ -36,6 +36,7 @@
 #include <fcntl.h>
 #include <io.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -153,6 +154,7 @@ struct FdAction {
 struct ForkChild {
   uint64_t caller_ctx[16];
   std::map<int, bool> present;          // fd -> open, the shadow table
+  std::map<int, bool> cloexec;          // fd -> FD_CLOEXEC: not passed to the program
   std::vector<FdAction> fd_actions;
   std::vector<std::string> env;         // the child's environment, editable
   std::string dir;                      // the child's working directory
@@ -162,6 +164,8 @@ struct ForkChild {
 };
 
 thread_local ForkChild* t_fork = nullptr;
+
+constexpr int kLinuxOCloexec = 02000000;  // O_CLOEXEC, open's and dup3's flag
 
 int LowestFreeFd(ForkChild* c) {
   int fd = 0;
@@ -178,6 +182,10 @@ using Dup2Fn = int (BIONIC_SYSV*)(int, int);
 using ChdirFn = int (BIONIC_SYSV*)(const char*);
 using SetenvFn = int (BIONIC_SYSV*)(const char*, const char*, int);
 using UnsetenvFn = int (BIONIC_SYSV*)(const char*);
+using ReadFn = int64_t (BIONIC_SYSV*)(int, void*, size_t);
+using WriteFn = int64_t (BIONIC_SYSV*)(int, const void*, size_t);
+using ReadChkFn = int64_t (BIONIC_SYSV*)(int, void*, size_t, size_t);
+using WriteChkFn = int64_t (BIONIC_SYSV*)(int, const void*, size_t, size_t);
 
 OpenFn g_open = nullptr;
 OpenatFn g_openat = nullptr;
@@ -186,6 +194,10 @@ Dup2Fn g_dup2 = nullptr;
 ChdirFn g_chdir = nullptr;
 SetenvFn g_setenv = nullptr;
 UnsetenvFn g_unsetenv = nullptr;
+ReadFn g_read = nullptr;
+WriteFn g_write = nullptr;
+ReadChkFn g_read_chk = nullptr;
+WriteChkFn g_write_chk = nullptr;
 
 // --- spawning ------------------------------------------------------------------
 
@@ -352,7 +364,14 @@ extern "C" void* gesher_fork_prepare() {
   auto* child = new ForkChild();
   child->env = CurrentEnv();
   child->dir = CurrentDir();
-  for (const ex::ChildFd& f : InheritedFds()) child->present[f.fd] = true;
+  for (const ex::ChildFd& f : InheritedFds()) {
+    child->present[f.fd] = true;
+    // FD_CLOEXEC is the handle's inherit flag (fcntl F_SETFD, pipe2/open O_CLOEXEC).
+    // The standard streams are passed whatever their handles' flag.
+    DWORD flags = 0;
+    child->cloexec[f.fd] = f.fd > 2 && GetHandleInformation(f.handle, &flags) &&
+                           (flags & HANDLE_FLAG_INHERIT) == 0;
+  }
   t_fork = child;
   return child->caller_ctx;
 }
@@ -399,6 +418,10 @@ int MaterializeAndSpawn(ForkChild* child, const std::string& program,
   }
   std::vector<ex::ChildFd> fds;
   for (auto& kv : handles) {
+    // exec closes the close-on-exec fds (Dart's ProcessStarter reads its exec-status
+    // pipe until the program's end of it closes: it must not reach the program).
+    auto cloexec = child->cloexec.find(kv.first);
+    if (cloexec != child->cloexec.end() && cloexec->second) continue;
     if (kv.second != INVALID_HANDLE_VALUE && kv.second != nullptr) fds.push_back({kv.first, kv.second});
   }
   int pid = SpawnProgram(program, argv, child->env, child->dir, search, fds);
@@ -743,6 +766,7 @@ int BIONIC_SYSV Open(const char* path, int flags, int mode) {
     ForkChild* c = t_fork;
     int fd = LowestFreeFd(c);
     c->present[fd] = true;
+    c->cloexec[fd] = (flags & kLinuxOCloexec) != 0;
     FdAction a;
     a.kind = FdAction::kOpen;
     a.a = fd;
@@ -764,6 +788,7 @@ int BIONIC_SYSV Close(int fd) {
   if (t_fork != nullptr) {
     ForkChild* c = t_fork;
     c->present[fd] = false;
+    c->cloexec.erase(fd);
     FdAction a;
     a.kind = FdAction::kClose;
     a.a = fd;
@@ -776,7 +801,9 @@ int BIONIC_SYSV Dup2(int old_fd, int new_fd) {
   if (t_fork != nullptr) {
     ForkChild* c = t_fork;
     if (!c->present.count(old_fd) || !c->present[old_fd]) return errno = EBADF, -1;
+    if (old_fd == new_fd) return new_fd;  // Linux: nothing changes, FD_CLOEXEC included
     c->present[new_fd] = true;
+    c->cloexec[new_fd] = false;  // dup2's new fd is inherited across exec
     FdAction a;
     a.kind = FdAction::kDup2;
     a.a = old_fd;
@@ -786,7 +813,110 @@ int BIONIC_SYSV Dup2(int old_fd, int new_fd) {
   }
   return g_dup2 != nullptr ? g_dup2(old_fd, new_fd) : (errno = EBADF, -1);
 }
-int BIONIC_SYSV Dup3(int old_fd, int new_fd, int /*flags*/) { return Dup2(old_fd, new_fd); }
+int BIONIC_SYSV Dup3(int old_fd, int new_fd, int flags) {
+  int r = Dup2(old_fd, new_fd);
+  if (r >= 0 && t_fork != nullptr && (flags & kLinuxOCloexec) != 0) t_fork->cloexec[r] = true;
+  return r;
+}
+
+// --- a child waiting for its parent ----------------------------------------------
+//
+// The vfork-style child runs before its parent: the parent goes on only once the child
+// execs or exits. A child that first waits for its parent through a pipe -- Dart's
+// ProcessStarter (dart:io Process.start/run): the child reads one byte from a pipe the
+// parent writes once it has registered the pid, then execs -- would wait forever, the
+// parent's thread being its own (a Flutter app's UI thread hangs). So a fork child's read
+// from an empty pipe this process created (which only this process writes) does not wait:
+// it reads one byte (0), the one the parent is about to write, and the parent's next
+// write to that pipe leaves that byte out, so nobody else reads it.
+
+std::mutex g_parent_bytes_mutex;
+std::map<uint64_t, size_t> g_parent_bytes;  // pipe -> bytes its fork child took
+std::atomic<int> g_parent_bytes_pending{0};
+
+HANDLE FdHandle(int fd) {
+  intptr_t value = _get_osfhandle(fd);
+  return value == -1 || value == -2 ? INVALID_HANDLE_VALUE : reinterpret_cast<HANDLE>(value);
+}
+
+// The pipe `h` is an end of, the same for both its ends; 0 if `h` is not a pipe.
+uint64_t PipeId(HANDLE h) {
+  BY_HANDLE_FILE_INFORMATION info;
+  if (h == INVALID_HANDLE_VALUE || GetFileType(h) != FILE_TYPE_PIPE ||
+      !GetFileInformationByHandle(h, &info)) {
+    return 0;
+  }
+  return (static_cast<uint64_t>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+}
+
+// A fork child's read of `fd`: the parent's byte if it is an empty pipe of this process's,
+// else -1 (read it).
+int64_t ChildReadsParentByte(int fd, void* buf, size_t n) {
+  HANDLE h = FdHandle(fd);
+  DWORD available = 0;
+  ULONG server = 0;
+  if (n == 0 || h == INVALID_HANDLE_VALUE || GetFileType(h) != FILE_TYPE_PIPE ||
+      !PeekNamedPipe(h, nullptr, 0, nullptr, &available, nullptr) || available != 0 ||
+      !GetNamedPipeServerProcessId(h, &server) || server != GetCurrentProcessId()) {
+    return -1;
+  }
+  uint64_t pipe = PipeId(h);
+  if (pipe == 0) return -1;
+  {
+    std::lock_guard<std::mutex> lock(g_parent_bytes_mutex);
+    ++g_parent_bytes[pipe];
+  }
+  g_parent_bytes_pending.fetch_add(1);
+  static_cast<char*>(buf)[0] = 0;
+  return 1;
+}
+
+// The parent's write of `n` bytes to `fd`: how many of them its fork child already took
+// (left out, counted as written).
+size_t ParentBytesTaken(int fd, size_t n) {
+  if (n == 0 || t_fork != nullptr || g_parent_bytes_pending.load(std::memory_order_relaxed) == 0) {
+    return 0;
+  }
+  uint64_t pipe = PipeId(FdHandle(fd));
+  if (pipe == 0) return 0;
+  std::lock_guard<std::mutex> lock(g_parent_bytes_mutex);
+  auto it = g_parent_bytes.find(pipe);
+  if (it == g_parent_bytes.end()) return 0;
+  size_t taken = std::min(n, it->second);
+  it->second -= taken;
+  if (it->second == 0) g_parent_bytes.erase(it);
+  g_parent_bytes_pending.fetch_sub(static_cast<int>(taken));
+  return taken;
+}
+
+int64_t BIONIC_SYSV ForkRead(int fd, void* buf, size_t n) {
+  if (t_fork != nullptr) {
+    int64_t r = ChildReadsParentByte(fd, buf, n);
+    if (r >= 0) return r;
+  }
+  return g_read != nullptr ? g_read(fd, buf, n) : (errno = EBADF, -1);
+}
+int64_t BIONIC_SYSV ForkReadChk(int fd, void* buf, size_t n, size_t buf_size) {
+  if (t_fork != nullptr && n <= buf_size) {
+    int64_t r = ChildReadsParentByte(fd, buf, n);
+    if (r >= 0) return r;
+  }
+  return g_read_chk != nullptr ? g_read_chk(fd, buf, n, buf_size) : (errno = EBADF, -1);
+}
+int64_t BIONIC_SYSV ForkWrite(int fd, const void* buf, size_t n) {
+  size_t taken = ParentBytesTaken(fd, n);
+  if (taken > 0 && taken == n) return static_cast<int64_t>(n);
+  if (g_write == nullptr) return errno = EBADF, -1;
+  int64_t r = g_write(fd, static_cast<const char*>(buf) + taken, n - taken);
+  return r < 0 ? (taken > 0 ? static_cast<int64_t>(taken) : r) : r + static_cast<int64_t>(taken);
+}
+int64_t BIONIC_SYSV ForkWriteChk(int fd, const void* buf, size_t n, size_t buf_size) {
+  size_t taken = n <= buf_size ? ParentBytesTaken(fd, n) : 0;
+  if (taken > 0 && taken == n) return static_cast<int64_t>(n);
+  if (g_write_chk == nullptr) return errno = EBADF, -1;
+  int64_t r = g_write_chk(fd, static_cast<const char*>(buf) + taken, n - taken, buf_size - taken);
+  return r < 0 ? (taken > 0 ? static_cast<int64_t>(taken) : r) : r + static_cast<int64_t>(taken);
+}
 
 int BIONIC_SYSV Chdir(const char* path) {
   if (t_fork != nullptr) {
@@ -887,6 +1017,10 @@ void RegisterProcess(SymbolTable& t) {
   GET(g_chdir, "chdir", ChdirFn);
   GET(g_setenv, "setenv", SetenvFn);
   GET(g_unsetenv, "unsetenv", UnsetenvFn);
+  GET(g_read, "read", ReadFn);
+  GET(g_write, "write", WriteFn);
+  GET(g_read_chk, "__read_chk", ReadChkFn);
+  GET(g_write_chk, "__write_chk", WriteChkFn);
 #undef GET
 #define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
   E("fork", gesher_fork);
@@ -935,6 +1069,11 @@ void RegisterProcess(SymbolTable& t) {
   E("setenv", Setenv);
   E("unsetenv", Unsetenv);
   E("putenv", Putenv);
+  // A fork child reading the byte its parent is about to write (above).
+  E("read", ForkRead);
+  E("__read_chk", ForkReadChk);
+  E("write", ForkWrite);
+  E("__write_chk", ForkWriteChk);
 #undef E
 }
 

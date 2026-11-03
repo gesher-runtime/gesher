@@ -67,3 +67,18 @@ Check 'services: android.view.RenderNode and DisplayListCanvas (pre-API-29 names
   $fixesOut
 } @('FrameworkFixesTest: android.view.RenderNode and DisplayListCanvas with create, start, end, drawRenderNode',
   'FrameworkFixesTest all passed')
+Check 'services: android.net.nsd.NsdManager (the Connectivity module''s API) on the boot class path' {
+  $global:LASTEXITCODE = $fixesCode
+  $fixesOut
+} @('FrameworkFixesTest: android.net.nsd.NsdManager: discovery starts, registration fails through its listener, unregistering does not throw',
+  'FrameworkFixesTest all passed')
+Check 'services: a split APK install takes its native libraries and ABI from the ABI split (config.arm64_v8a.apk)' {
+  $global:LASTEXITCODE = $fixesCode
+  $fixesOut
+} @('FrameworkFixesTest: NativeLibs: the package ABI and libraries come from its ABI split (config.arm64_v8a.apk), not base.apk alone',
+  'FrameworkFixesTest all passed')
+Check 'services: a stand-in service answers an empty list, not null, for a list method it does not implement' {
+  $global:LASTEXITCODE = $fixesCode
+  $fixesOut
+} @('FrameworkFixesTest: a stand-in''s unimplemented list method answers an empty list (IShortcutService.getShortcuts), not null',
+  'FrameworkFixesTest all passed')

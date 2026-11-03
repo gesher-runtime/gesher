@@ -5,6 +5,7 @@
 package com.gesher.app;
 
 import android.app.ActivityManager;
+import android.app.ActivityOptions;
 import android.app.ActivityTaskManager;
 import android.app.GesherAppProcess;
 import android.app.IActivityManager;
@@ -15,6 +16,7 @@ import android.content.Intent;
 import android.content.pm.IPackageManager;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.ServiceManager;
 import android.os.SystemClock;
 
@@ -53,6 +55,9 @@ import java.util.Properties;
  *                       back). --headless: no windows; once the activity is idle its task
  *                       is removed (with --keep-task it runs until it finishes)
  *     install APK       install or update the package
+ *     view PACKAGE URL  (run by an app's URL protocol, docs/installer.md) start the package's
+ *                       activity for URL (ACTION_VIEW, BROWSABLE) in its task: an OAuth
+ *                       redirect the Windows browser opened comes back to the app
  *     uninstall PACKAGE
  *     list              the installed packages (IPackageManager.getInstalledPackages)
  *     status            the device: its processes
@@ -131,15 +136,24 @@ public final class Launcher {
             case "uninstall": {
                 if (rest.size() != 1) return usage();
                 ensureDevice(true);
-                // Its Start menu shortcut, recorded in its data directory, which goes too.
+                // Its Start menu shortcut and URL protocols, recorded in its data directory,
+                // which goes too.
                 Properties shortcut = AppShell.shortcutOf(rest.get(0));
+                Properties protocols = AppShell.urlProtocolsOf(rest.get(0));
                 boolean removed = gesher().uninstall(rest.get(0));
                 log(removed ? "uninstalled " + rest.get(0)
                         : rest.get(0) + " is not installed");
-                if (removed) AppShell.unregisterQuietly(rest.get(0), shortcut);
+                if (removed) {
+                    AppShell.unregisterQuietly(rest.get(0), shortcut);
+                    AppShell.unregisterUrlProtocolsQuietly(rest.get(0), protocols);
+                }
                 return removed ? 0 : 1;
             }
             case "list": return list();
+            case "view": {
+                if (rest.size() != 2) return usage();
+                return view(rest.get(0), rest.get(1));
+            }
             case "start": {
                 ensureDevice(true);
                 log(gesher().status());
@@ -195,8 +209,8 @@ public final class Launcher {
     private static int usage() {
         System.err.println("usage: gesher-app launch APK|PACKAGE [--activity CLASS] [--ez KEY"
                 + " true|false]... [--window | --hidden-window | --headless [--keep-task]]"
-                + " | install APK | uninstall PACKAGE | list | status | start | shutdown"
-                + " | apk-icon APK");
+                + " | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
+                + " | shutdown | apk-icon APK");
         return 2;
     }
 
@@ -370,8 +384,9 @@ public final class Launcher {
             default:
                 log(r[1] + " " + r[0] + " (version " + r[3] + ") in " + r[2]);
         }
-        // Its Start menu shortcut (docs/installer.md), made or updated.
+        // Its Start menu shortcut and URL protocols (docs/installer.md), made or updated.
         AppShell.registerQuietly(r[0], r[2], !"unchanged".equals(r[1]));
+        AppShell.registerUrlProtocolsQuietly(r[0], r[2], !"unchanged".equals(r[1]));
         // The APK file shows the app's icon in Explorer (gesher_shellext.dll).
         AppShell.rememberApkQuietly(r[0], f);
         return r[0];
@@ -402,6 +417,48 @@ public final class Launcher {
     }
 
     // --- launching ---------------------------------------------------------------------
+
+    /**
+     * {@code view PACKAGE URL}: what an app's URL protocol runs (AppShell), as a browser on
+     * Android starts the activity of a BROWSABLE link: ACTION_VIEW of {@code url} in the
+     * package. It goes into the package's task when it has one (ActivityOptions'
+     * launch task), so that an OAuth redirect reaches the activity that waits for it (AppAuth's
+     * RedirectUriReceiverActivity hands it down with CLEAR_TOP); a package that does not run
+     * is started in windows, as a launch. Returns once the activity is started.
+     */
+    private static int view(String pkg, String url) throws Exception {
+        ensureDevice(true);
+        GesherService.Client gesher = gesher();
+        IPackageManager pm = IPackageManager.Stub.asInterface(
+                ServiceManager.getService("package"));
+        if (pm.getPackageInfo(pkg, 0L, 0) == null) {
+            log(pkg + " is not installed: " + url + " goes nowhere");
+            return 1;
+        }
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                .addCategory(Intent.CATEGORY_BROWSABLE)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .setPackage(pkg);
+        IActivityTaskManager atm = ActivityTaskManager.getService();
+        ActivityManager.RunningTaskInfo task = GesherAppProcess.taskOf(atm, pkg);
+        android.os.Bundle options = null;
+        if (task != null) {
+            ActivityOptions o = ActivityOptions.makeBasic();
+            o.setLaunchTaskId(task.taskId);
+            options = o.toBundle();
+        } else if (!running(ActivityManager.getService(), pkg)) {
+            gesher.setWindowMode(pkg, WindowMode.fromEnvironment(WindowMode.WINDOW));
+        }
+        log("starting " + intent.toShortString(false, true, true, false)
+                + (task != null ? " in task " + task.taskId : "") + " through the system server");
+        WaitResult result = atm.startActivityAndWait(null /* caller: the launcher */,
+                "com.gesher.launcher", null, intent, null, null, null, 0, 0, null, options, 0);
+        log("startActivityAndWait: result " + result.result + ", "
+                + (result.who != null ? result.who.flattenToShortString() : "no new activity")
+                + (result.timeout ? ", timed out" : ""));
+        // START_SUCCESS, or a delivery to a running activity (START_DELIVERED_TO_TOP).
+        return result.result >= ActivityManager.START_SUCCESS ? 0 : 1;
+    }
 
     private static int launch(List<String> args) throws Exception {
         String apk = null;

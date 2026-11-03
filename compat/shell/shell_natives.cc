@@ -1,6 +1,6 @@
 // Gesher: com.gesher.app.shell.Shell's natives (gesher-app.jar), registered by
-// android_runtime.cc: Start menu shortcuts and AppUserModelIDs for installed
-// Android apps (shell track, docs/installer.md). The Win32 side is
+// android_runtime.cc: Start menu shortcuts, AppUserModelIDs and URL protocols
+// for installed Android apps (shell track, docs/installer.md). The Win32 side is
 // shell_win32.cc.
 
 #include <jni.h>
@@ -70,6 +70,22 @@ static void Shell_notifyChanged(JNIEnv* env, jclass, jstring path) {
     gesher::shell::NotifyChanged(ShellString(env, path));
 }
 
+static jint Shell_registerUrlProtocol(JNIEnv* env, jclass, jstring scheme, jstring owner,
+                                      jstring description, jstring command, jstring icon) {
+    return static_cast<jint>(gesher::shell::RegisterUrlProtocol(
+            ShellString(env, scheme), ShellString(env, owner), ShellString(env, description),
+            ShellString(env, command), ShellString(env, icon)));
+}
+
+static jint Shell_unregisterUrlProtocol(JNIEnv* env, jclass, jstring scheme, jstring owner) {
+    return static_cast<jint>(gesher::shell::UnregisterUrlProtocol(ShellString(env, scheme),
+                                                                  ShellString(env, owner)));
+}
+
+static jstring Shell_urlProtocolOwner(JNIEnv* env, jclass, jstring scheme) {
+    return ShellJavaString(env, gesher::shell::UrlProtocolOwner(ShellString(env, scheme)));
+}
+
 #define SHELL_STRING "Ljava/lang/String;"
 
 static const JNINativeMethod gShellMethods[] = {
@@ -85,6 +101,13 @@ static const JNINativeMethod gShellMethods[] = {
     {"nativeRemoveEmptyDirectory", "(" SHELL_STRING ")Z", GESHER_JNI(Shell_removeEmptyDirectory)},
     {"nativeExists", "(" SHELL_STRING ")Z", GESHER_JNI(Shell_exists)},
     {"nativeNotifyChanged", "(" SHELL_STRING ")V", GESHER_JNI(Shell_notifyChanged)},
+    {"nativeRegisterUrlProtocol",
+     "(" SHELL_STRING SHELL_STRING SHELL_STRING SHELL_STRING SHELL_STRING ")I",
+     GESHER_JNI(Shell_registerUrlProtocol)},
+    {"nativeUnregisterUrlProtocol", "(" SHELL_STRING SHELL_STRING ")I",
+     GESHER_JNI(Shell_unregisterUrlProtocol)},
+    {"nativeUrlProtocolOwner", "(" SHELL_STRING ")" SHELL_STRING,
+     GESHER_JNI(Shell_urlProtocolOwner)},
 };
 
 int register_gesher_Shell(JNIEnv* env) {

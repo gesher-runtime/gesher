@@ -4,6 +4,7 @@
  */
 package com.gesher.server;
 
+import android.content.pm.ParceledListSlice;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.IInterface;
@@ -12,7 +13,10 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -22,7 +26,7 @@ import java.util.Set;
  * that overrides the methods the headless lifecycle calls, so javac checks each one
  * against the interface. A {@link Proxy} over the interface dispatches to it; a call to a
  * method the subclass does not override is logged once and gets {@code Default}'s answer
- * (null, 0, false), or throws {@link UnsupportedOperationException} in strict mode
+ * (null, 0, false; an empty list for a method that returns one), or throws {@link UnsupportedOperationException} in strict mode
  * ({@code --strict-services}). That log is the list of what to implement next.
  *
  * <p>The service's Binder is {@code com.gesher.server.stub.IFooStub}, a concrete
@@ -145,6 +149,16 @@ public final class StandIn<T extends IInterface> implements InvocationHandler {
             if (first) {
                 System.err.println(sTag + ": stand-in " + mInterface.getSimpleName() + "."
                         + name + " not implemented; returning a default");
+            }
+            // A list is answered empty, not null: the framework's managers call getList()
+            // on what the service returns (ShortcutManager.getDynamicShortcuts threw
+            // NullPointerException in Wikipedia).
+            Class<?> type = method.getReturnType();
+            if (type == ParceledListSlice.class) {
+                return new ParceledListSlice<>(Collections.emptyList());
+            }
+            if (type == List.class) {
+                return new ArrayList<>();
             }
         }
         try {

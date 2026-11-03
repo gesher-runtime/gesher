@@ -101,6 +101,65 @@ WindowAppCheck 'uiapp.apk drawn in a Win32 window by hwui (layout colors and tex
 $inputName = 'input reaches uiapp.apk''s views in its Win32 window: a click (WM_LBUTTONDOWN/UP) runs the Button''s onClick and the window shows its new color, keys (WM_KEYDOWN/UP) and a WM_CHAR type into the focused EditText and its echo is drawn, the wheel scrolls a ScrollView; the user resizing the window (at least its minimum) lays it out and redraws it at the new size'
 if ($failed -eq $failedBeforeWindows) { Write-Host "PASS  gesher-app: $inputName (single process)" }
 
+# 1b. Closing the window ends an app whose main thread is stuck (WindowSession.watchClose):
+#     F12 makes uiapp.apk's main thread sleep for good; WM_CLOSE must end the process
+#     within seconds (CLOSE_TAKE_TIMEOUT_MS, 5 s), as SIGKILL ends one (exit code 137).
+function StuckCloseCheck {
+  $name = 'WM_CLOSE ends uiapp.apk whose main thread is stuck, within seconds (single process)'
+  $log = Join-Path $env:RUNNER_TEMP "window-app-stuck-$(Get-Random).log"
+  $arguments = @($dvmWindows) + @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', (NoDrive "$Dir/uiapp.apk"))
+  $quoted = ($arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_ + '"' } else { $_ } }) -join ' '
+  $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $quoted > `"$log`" 2>&1`"")
+  $psi.UseShellExecute = $false
+  $p = [Diagnostics.Process]::Start($psi)
+  $problems = @()
+  $hwnd = [IntPtr]::Zero
+  $deadline = (Get-Date).AddSeconds(400)
+  while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
+    $text = if (Test-Path $log) { Get-Content -Raw $log } else { '' }
+    $m = [regex]::Match("$text", 'first frame drawn \((\d+) presented\), \w+, hwnd 0x([0-9a-f]+)')
+    if ($m.Success) { $hwnd = [IntPtr][Convert]::ToInt64($m.Groups[2].Value, 16); break }
+    Start-Sleep -Milliseconds 250
+  }
+  if ($hwnd -eq [IntPtr]::Zero) {
+    $problems += 'no first frame'
+  } else {
+    Start-Sleep -Seconds 3
+    # F12 down and up (VK_F12, scan code 0x58).
+    [void][GesherWin32]::PostMessageW($hwnd, 0x0100, [IntPtr]0x7B, [IntPtr]0x00580001)
+    [void][GesherWin32]::PostMessageW($hwnd, 0x0101, [IntPtr]0x7B, [IntPtr]0xC0580001L)
+    $stuck = $false
+    $until = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $until -and -not $p.HasExited) {
+      if ("$(Get-Content -Raw $log -ErrorAction SilentlyContinue)".Contains('UiActivity main thread stuck')) { $stuck = $true; break }
+      Start-Sleep -Milliseconds 250
+    }
+    if (-not $stuck) { $problems += 'F12 did not make the main thread stuck' }
+    $closed = Get-Date
+    [void][GesherWin32]::PostMessageW($hwnd, 0x0010 <# WM_CLOSE #>, [IntPtr]::Zero, [IntPtr]::Zero)
+    if (-not $p.WaitForExit(30000)) {
+      $p.Kill($true); $p.WaitForExit(); $problems += 'still running 30 s after WM_CLOSE'
+    } else {
+      Write-Host "INFO  the stuck app ended $([int]((Get-Date) - $closed).TotalSeconds) s after WM_CLOSE"
+      if ($p.ExitCode -ne 137) { $problems += "exit $($p.ExitCode), not 137" }
+    }
+  }
+  if (-not $p.HasExited) { $p.Kill($true); $p.WaitForExit() }
+  $text = if (Test-Path $log) { Get-Content -Raw $log } else { '' }
+  if ($hwnd -ne [IntPtr]::Zero -and -not "$text".Contains('the app did not take the user''s close within 5 s (its thread is stuck): ending the process')) {
+    $problems += 'no "did not take the user''s close" line'
+  }
+  if ($hwnd -ne [IntPtr]::Zero -and [GesherWin32]::IsWindow($hwnd)) { $problems += 'the window is still there' }
+  if (-not $problems) {
+    Write-Host "PASS  gesher-app: $name"
+  } else {
+    Write-Host "FAIL  gesher-app: $name ($($problems -join '; '))"
+    Write-Host $text
+    $script:failed++
+  }
+}
+StuckCloseCheck
+
 # 2. The Gesher device (gesher-app's default; ADR 0026), a device of its own
 #    (its own $ANDROID_DATA and logs: 50-services.ps1 checks the shared one):
 #    the launcher installs uiapp.apk and asks the system server to start it

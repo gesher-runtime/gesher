@@ -175,7 +175,10 @@ public final class Services {
         services.put("isub", StandIn.of(
                 com.android.internal.telephony.ISub.class,
                 new DeviceServices.SubscriptionService()).asBinder());
-        services.put(Context.TELEPHONY_REGISTRY_SERVICE, StandIn.of(
+        // The binder service's name, which TelephonyRegistryManager looks up, not
+        // Context.TELEPHONY_REGISTRY_SERVICE ("telephony_registry", the manager's): under
+        // that name registerTelephonyCallback / listen threw NullPointerException (Waze).
+        services.put("telephony.registry", StandIn.of(
                 com.android.internal.telephony.ITelephonyRegistry.class,
                 new DeviceServices.TelephonyRegistryService()).asBinder());
         services.put(Context.TRUST_SERVICE, StandIn.of(

@@ -26,8 +26,17 @@
         </activity>
         <activity android:name=".SecondActivity" android:exported="false" />
         <!-- Uses another package's activity and provider (tests/apps/peer); the launcher
-             starts it explicitly. -->
-        <activity android:name=".CrossActivity" android:exported="true" />
+             starts it explicitly. Its BROWSABLE custom scheme (as an OAuth redirect's) makes
+             gesher-app install register the URL protocol gesher-components (the package
+             job, docs/installer.md); nothing starts it through it. -->
+        <activity android:name=".CrossActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="gesher-components" android:host="callback" />
+            </intent-filter>
+        </activity>
         <activity
             android:name=".SingleTopActivity"
             android:launchMode="singleTop"

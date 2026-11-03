@@ -92,6 +92,12 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   package's Start menu icon (`WM_SETICON`, `<data>/gesher-shell`). Closing it
   (`WM_CLOSE`) calls `Activity.finish()`: on the device the system server
   destroys the activity and ends the process; `remove` closes the window.
+  Closing always closes the app: if the window's thread has not taken the
+  close within 5 s (its main thread is stuck), or its Activity is finishing
+  but its window is still there 10 s after that, the process ends as SIGKILL
+  ends one (`WindowSession.watchClose`, exit code 137) and the system server
+  cleans up after it as after a crash (binder death). Windows without
+  WindowInput get the close on their Looper only, without that watch.
   Window mode per launch (`--window`, `--hidden-window`, `--headless`,
   `$GESHER_APP_WINDOW`): the launcher tells the system server (`gesher`
   service, `WINDOW_MODE`), which starts the package's processes with it;

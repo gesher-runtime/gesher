@@ -198,6 +198,50 @@ JNIEXPORT jint JNICALL Java_gesher_Arm64Jni_attachedThread(JNIEnv* env, jclass c
   return tl_marker == 1 ? (jint)(intptr_t)r : -4;
 }
 
+// --- a native with many arguments: AAPCS64 stack arguments -----------------------
+// The signature of Flutter's FlutterJNI.nativeSetViewportMetrics (long, float,
+// 15 x int, 3 x int[], 4 x int): X0..X7 take env, the class, the long and five
+// ints, V0 the float; the other ten ints, the three arrays and the last four
+// ints are 17 stack arguments (8-byte slots), entered from ART's System V call
+// through the host_entry stub. Every value is checked; returns the failures.
+
+static int check_int_array(JNIEnv* env, jintArray a, jint first, jsize len) {
+  if (a == NULL || (*env)->GetArrayLength(env, a) != len) return 0;
+  jint buf[8];
+  if (len > 8) return 0;
+  (*env)->GetIntArrayRegion(env, a, 0, len, buf);
+  for (jsize i = 0; i < len; ++i) {
+    if (buf[i] != first + i) return 0;
+  }
+  return 1;
+}
+
+JNIEXPORT jint JNICALL Java_gesher_Arm64Jni_manyArguments(
+    JNIEnv* env, jclass cls, jlong id, jfloat ratio, jint i0, jint i1, jint i2, jint i3, jint i4,
+    jint i5, jint i6, jint i7, jint i8, jint i9, jint i10, jint i11, jint i12, jint i13, jint i14,
+    jintArray bounds, jintArray types, jintArray states, jint t0, jint t1, jint t2, jint t3) {
+  failures = 0;
+  check("many arguments: the class (X1)", (*env)->IsSameObject(env, cls, g_class));
+  check("many arguments: jlong (X2)", id == 0x1122334455667788LL);
+  check("many arguments: jfloat (V0)", ratio == 2.625f);
+  const jint ints[15] = {i0, i1, i2, i3, i4, i5, i6, i7, i8, i9, i10, i11, i12, i13, i14};
+  int ints_ok = 1;
+  for (int i = 0; i < 15; ++i) {
+    if (ints[i] != 101 + i) {
+      printf("    native: int argument %d is %d, not %d\n", i, ints[i], 101 + i);
+      ints_ok = 0;
+    }
+  }
+  check("many arguments: 15 jints (X3..X7, then the stack)", ints_ok);
+  check("many arguments: jintArray 1 (stack slot 10)", check_int_array(env, bounds, 1, 4));
+  check("many arguments: jintArray 2 (stack slot 11)", check_int_array(env, types, 11, 2));
+  check("many arguments: jintArray 3 (stack slot 12)", check_int_array(env, states, 21, 3));
+  int tail_ok = t0 == -201 && t1 == 202 && t2 == -203 && t3 == 204;
+  if (!tail_ok) printf("    native: trailing ints %d %d %d %d\n", t0, t1, t2, t3);
+  check("many arguments: 4 trailing jints (stack slots 13..16)", tail_ok);
+  return failures;
+}
+
 // --- registered in JNI_OnLoad ------------------------------------------------
 
 static jint registered_twice(JNIEnv* env, jclass cls, jint x) {

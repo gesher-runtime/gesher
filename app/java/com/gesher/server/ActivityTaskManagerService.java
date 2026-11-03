@@ -95,6 +95,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** How long startActivityAndWait waits for the activity to be idle. */
     private static final long WAIT_TIMEOUT_MS = 300_000;
 
+    /**
+     * Opens a URL no activity of the device handles (http, https, mailto) with Windows'
+     * handler (WindowsHost.openUrl): the user's default browser or mail app. The tests
+     * replace it (gesher.services.BrowserIntentTest), so that no browser opens.
+     */
+    static volatile java.util.function.Predicate<String> sOpenExternalUrl = WindowsHost::openUrl;
+
     /** STARTED: made visible again without being resumed (StartActivityItem). */
     enum State { INITIALIZING, LAUNCHING, RESUMING, RESUMED, PAUSING, PAUSED, STARTED, STOPPING,
             STOPPED, DESTROYING, DESTROYED }
@@ -309,7 +316,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             Bundle options, int userId) {
         ActivityRecord[] started = new ActivityRecord[1];
         return start(caller, intent, resolvedType, callingPackage, resultTo, resultWho,
-                requestCode, started);
+                requestCode, launchTaskId(options), started);
+    }
+
+    /** ActivityOptions.setLaunchTaskId of a start's options, or -1. */
+    private static int launchTaskId(Bundle options) {
+        if (options == null) return -1;
+        try {
+            return android.app.ActivityOptions.fromBundle(options).getLaunchTaskId();
+        } catch (RuntimeException e) {
+            return -1;
+        }
     }
 
     /**
@@ -345,7 +362,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         WaitResult result = new WaitResult();
         ActivityRecord[] started = new ActivityRecord[1];
         result.result = start(caller, intent, resolvedType, callingPackage, resultTo,
-                resultWho, requestCode, started);
+                resultWho, requestCode, launchTaskId(options), started);
         ActivityRecord r = started[0];
         if (r == null) return result;
         result.who = r.component();
@@ -448,6 +465,18 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private int start(IApplicationThread caller, Intent intent, String resolvedType,
             String callingPackage, IBinder resultToToken, String resultWho, int requestCode,
             ActivityRecord[] started) {
+        return start(caller, intent, resolvedType, callingPackage, resultToToken, resultWho,
+                requestCode, -1, started);
+    }
+
+    /**
+     * {@link #start}, into the task {@code launchTaskId} when it has activities
+     * (ActivityOptions.setLaunchTaskId: gesher-app's {@code view} puts the activity that
+     * receives a URL from Windows, an OAuth redirect, in the app's task).
+     */
+    private int start(IApplicationThread caller, Intent intent, String resolvedType,
+            String callingPackage, IBinder resultToToken, String resultWho, int requestCode,
+            int launchTaskId, ActivityRecord[] started) {
         // Starts from apps resolve implicit intents to filters with CATEGORY_DEFAULT, as
         // ActivityStarter asks (MATCH_DEFAULT_ONLY); gesher-app's launcher (no caller)
         // resolves MAIN/LAUNCHER in a package, as a launcher does.
@@ -461,9 +490,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         String scheme = data.getScheme();
                         if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)
                                 || "mailto".equalsIgnoreCase(scheme)) {
+                            // Also a VIEW for the Windows default browser's package
+                            // (BrowserPackageSupport, of which resolve() runs nothing).
                             String url = data.toString();
                             SystemServer.log("startActivity: delegating external URL to Windows: " + url);
-                            WindowsHost.openUrl(url);
+                            sOpenExternalUrl.test(url);
                             return ActivityManager.START_SUCCESS;
                         }
                     }
@@ -513,19 +544,38 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean translucent = ActivityTheme.isTranslucentOrFloating(info);
         ActivityRecord r = null;
         ActivityRecord deliverTo = null;
+        List<ActivityRecord> clearTop = new ArrayList<>();
         ActivityRecord pause = null;
         ProcessRecord bind = null;
         boolean launchNow = false;
         boolean needProcess = false;
         List<ActivityRecord> reconfigure = new ArrayList<>();
         synchronized (this) {
-            int taskId = source != null && (launchFlags & Intent.FLAG_ACTIVITY_NEW_TASK) == 0
+            int taskId = launchTaskId >= 0 && topOf(launchTaskId) != null ? launchTaskId
+                    : source != null && (launchFlags & Intent.FLAG_ACTIVITY_NEW_TASK) == 0
                     ? source.taskId : mNextTaskId++;
             ActivityRecord top = topOf(taskId);
+            boolean singleTop = info.launchMode == ActivityInfo.LAUNCH_SINGLE_TOP
+                    || (launchFlags & Intent.FLAG_ACTIVITY_SINGLE_TOP) != 0;
+            ActivityRecord below = (launchFlags & Intent.FLAG_ACTIVITY_CLEAR_TOP) != 0
+                    && singleTop ? belowInTask(taskId, launch.getComponent()) : null;
             if (top != null && top.app != null && top.component().equals(launch.getComponent())
-                    && (info.launchMode == ActivityInfo.LAUNCH_SINGLE_TOP
-                            || (launchFlags & Intent.FLAG_ACTIVITY_SINGLE_TOP) != 0)) {
+                    && singleTop) {
                 deliverTo = top;
+            } else if (below != null) {
+                // FLAG_ACTIVITY_CLEAR_TOP with singleTop (Task.performClearTop): the
+                // activities above it in the task finish and it gets the intent (AppAuth's
+                // RedirectUriReceiverActivity hands the redirect to the
+                // AuthorizationManagementActivity below it this way). Without singleTop,
+                // Android would recreate it: that start stays a plain one here.
+                deliverTo = below;
+                for (int i = mActivities.size() - 1; i >= 0; i--) {
+                    ActivityRecord a = mActivities.get(i);
+                    if (a == below) break;
+                    if (a.taskId == taskId && !a.finishing && a.state != State.DESTROYED) {
+                        clearTop.add(a);
+                    }
+                }
             } else {
                 ActivityRecord resultRecord = requestCode >= 0 ? source : null;
                 r = new ActivityRecord(info, launch, taskId, callingPid, callingPackage,
@@ -570,7 +620,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (deliverTo != null) {
             SystemServer.log("START u0 {" + launch.toShortString(false, true, true, false)
                     + "} from " + callerName(callingPackage, callingPid)
-                    + ": delivered to the top activity " + deliverTo.name() + " (singleTop)");
+                    + (clearTop.isEmpty() ? ": delivered to the top activity " + deliverTo.name()
+                            + " (singleTop)" : ": delivered to " + deliverTo.name()
+                            + " (clear top: the " + clearTop.size() + " above it finish)"));
+            // Top first, as the task's activities are finished.
+            for (ActivityRecord a : clearTop) {
+                finish(a, "clear-top", android.app.Activity.RESULT_CANCELED, null);
+            }
             deliverNewIntent(deliverTo, launch, callingPackage);
             return ActivityManager.START_DELIVERED_TO_TOP;
         }
@@ -607,11 +663,30 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             info = ri != null ? ri.activityInfo : null;
         }
         if (info == null) return null;
+        // The Windows default browser (BrowserPackageSupport) has no activity to run: the
+        // start delegates the URL to Windows, as when nothing resolves it.
+        if (BrowserPackageSupport.isBrowserPackage(info.packageName)) return null;
         info = new ActivityInfo(info);
         if (info.applicationInfo == null) {
             info.applicationInfo = mPm.getApplicationInfo(info.packageName, flags, 0);
         }
         return info;
+    }
+
+    /**
+     * The topmost activity of {@code component} in the task below its top activity, not
+     * finishing and in a process; or null. Guarded by this.
+     */
+    private ActivityRecord belowInTask(int taskId, ComponentName component) {
+        ActivityRecord top = topOf(taskId);
+        for (int i = mActivities.size() - 1; i >= 0; i--) {
+            ActivityRecord a = mActivities.get(i);
+            if (a == top || a.taskId != taskId || a.finishing || a.state == State.DESTROYED) {
+                continue;
+            }
+            if (a.app != null && a.component().equals(component)) return a;
+        }
+        return null;
     }
 
     /** The task's top activity that is not finishing, or null. Guarded by this. */

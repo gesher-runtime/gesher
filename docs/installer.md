@@ -39,6 +39,52 @@ with the same arguments. It is a Windows-subsystem program: Explorer starting
 app's window belongs to a process the device's system server starts, which
 Windows would otherwise keep behind Explorer.
 
+### The splash window
+
+A launch can take several seconds before the app's window is up (the first
+one starts the device, installs and compiles the APK; every one starts the
+app's process). So that something is on screen at once, gesher-launch shows a
+splash window (class `GesherSplash`) right after it starts `gesher-app.ps1`:
+
+- **When**: for `gesher-launch launch <package>`, `gesher-launch launch <file.apk>`
+  and `gesher-launch <file.apk>` (a double-click) whose app's window is shown;
+  not for `install`, `uninstall`, `view`, `list`, `status`, `start`,
+  `shutdown`, `toast-activated` or `apk-icon`, nor with `--hidden-window`,
+  `--headless`, `--single-process`, `--system-server` or
+  `GESHER_APP_WINDOW=hidden|headless` (`--window` shows it again).
+  `GESHER_SPLASH=0` turns it off. When the app already has its window (it
+  runs), none is shown.
+- **What**: the size of the app's window (`GESHER_DISPLAY`'s, else 400x800
+  pixels, within the work area), centered on the monitor of the pointer, with
+  the app's icon (`gesher-shell\icon.ico` of the package, else the APK's
+  `apk-icons.list` entry, else `gesher.ico`), its label (`label` of
+  `gesher-shell\shortcut.properties`, else the package name or the APK's file
+  name) as title and text, and "Starting…". With the package known (a
+  package name, or an APK `apk-icons.list` names), it carries the app's
+  AppUserModelID `Gesher.App.<package>` (`PKEY_AppUserModel_ID`), so its
+  taskbar button is the app's.
+- **Until**: a visible top-level window (not a tool window, not a splash) with
+  that AppUserModelID is up, the app's own (the app process's windows carry it);
+  for an APK whose package is not known, a new window with any `Gesher.App.*`
+  ID. It looks every 200 ms. It also goes when `gesher-app.ps1` ends (the
+  launch failed, or the app ended without a window) and after 2 minutes. If
+  it still has the foreground when the app's window is up, it hands it on to
+  that window; it never takes it from the app. Closing it (its X) only closes
+  it: gesher-launch goes on waiting for the launch, and its exit code is
+  still `gesher-app.ps1`'s.
+
+CI: `tests/windows/tracks/55-shell.ps1` runs a copy of gesher-launch with a
+stand-in `gesher-app.ps1` and a stand-in `%LOCALAPPDATA%` (a shortcut record
+with an escaped label, an icon, an `apk-icons.list` line): `launch <package>`
+and a double-clicked APK show the splash with the label, icon and
+AppUserModelID, it stays while no app window is up and goes once a window with
+the app's AppUserModelID is shown; closing it leaves the launch running (its
+exit code comes back); `install` and `--headless` show none. The package job
+runs the installed `gesher-launch install uiapp.apk` (no splash) and
+`gesher-launch launch com.gesher.uiapp` with its window shown: the splash,
+with `Gesher UI` and `Gesher.App.com.gesher.uiapp`, is gone within 5 s of the
+app's `GesherWindow` being visible.
+
 Each `.apk` file's icon comes from `gesher_shellext.dll`
 (`compat/shell/gesher_shellext.cc`), loaded by Explorer: its app's icon. It
 parses no APK: it looks the file (its size and last write time) up in
@@ -106,8 +152,59 @@ menu shortcut, as a launcher lists it
   Nothing else of the Start menu is touched.
 
 The natives (`com.gesher.app.shell.Shell`: `IShellLinkW`, `IPropertyStore`,
-`SHGetKnownFolderPath`, `SetCurrentProcessExplicitAppUserModelID`) are in
-`compat/shell`, part of libandroid_runtime's builtin library.
+`SHGetKnownFolderPath`, `SetCurrentProcessExplicitAppUserModelID`, the URL
+protocols' registry keys) are in `compat/shell`, part of libandroid_runtime's
+builtin library.
+
+## Installed apps' URL protocols (OAuth redirects)
+
+An app that signs in with OAuth (AppAuth, as Thunderbird does) opens the sign-in
+page in a browser and waits for the browser to open its redirect URL, a custom
+scheme one of its activities declares (`<data android:scheme=...>` in a VIEW
+filter with BROWSABLE, e.g. `net.thunderbird.android:/oauth2redirect` or
+`msauth://net.thunderbird.android/...`). On Gesher the browser is Windows':
+
+- **The browser**: apps that look for one (`queryIntentActivities` of VIEW
+  `http:` BROWSABLE) find `com.gesher.browser`, a synthetic package with a full
+  browser's filter (`com.gesher.server.BrowserPackageSupport`); starting it opens
+  the URL with Windows' default browser (`WindowsHost.openUrl`), as any http(s)
+  VIEW nothing else handles.
+- **The way back**: `gesher-app install` (and launches that install or update)
+  registers each custom scheme of the package's BROWSABLE VIEW filters as a URL
+  protocol, per user:
+
+  | Key (`HKCU\Software\Classes`) | Value |
+  |---|---|
+  | `<scheme>` (default) | `URL:<scheme> (<package>, an Android app on Gesher)` |
+  | `<scheme>` `URL Protocol` | empty |
+  | `<scheme>` `GesherPackage` | `<package>`: the key is Gesher's, for that package |
+  | `<scheme>\DefaultIcon` (default) | the app's `.ico` (the shortcut's) |
+  | `<scheme>\shell\open\command` (default) | `"<app>\gesher-launch.exe" view <package> "%1"` |
+
+  When the browser opens such a URL (asking the user first), `gesher-app view
+  <package> <url>` starts ACTION_VIEW of it (BROWSABLE) in the package through
+  the device, in the app's task when it runs, where AppAuth's
+  RedirectUriReceiverActivity hands it to the activity waiting below it
+  (`FLAG_ACTIVITY_CLEAR_TOP | FLAG_ACTIVITY_SINGLE_TOP`: `onNewIntent`).
+- **Not taking over another's scheme**: the web's, mail's, files' and Android's
+  own schemes (`http`, `https`, `mailto`, `file`, `content`, `tel`, ...) are
+  never registered, nor a scheme with a key of another program (in HKCU without
+  `GesherPackage`, or in HKLM) or another package's; the install says so
+  (`gesher-app: URL protocol <scheme>: not registered ...`).
+- **Removal**: `url-protocols.properties` in the package's `gesher-shell`
+  folder records its schemes; an update removes those it no longer declares,
+  `gesher-app uninstall PACKAGE` removes them all (only keys whose
+  `GesherPackage` still names it), and uninstalling Gesher removes every key of
+  `HKCU\Software\Classes` with a `GesherPackage` value (`RemoveUrlProtocols`).
+  `GESHER_SHORTCUTS=0` turns them off with the shortcuts.
+
+CI: `tests/windows/tracks/95-browser.ps1` checks the browser package and the
+delegation (`gesher.services.BrowserIntentTest`, with no browser opened); the
+package job installs components.apk (CrossActivity declares
+`gesher-components://callback`), reads its URL protocol, uninstalls and
+reinstalls it around a key of another program's, runs a protocol command line
+through `gesher-launch.exe` and, after uninstalling Gesher, checks the key is
+gone.
 
 ## The Gesher device and (un)installing
 
@@ -119,6 +216,15 @@ install folder and keeps files of `%LOCALAPPDATA%\Gesher` open, so:
   logs;
 - Setup runs `gesher-app shutdown` before it replaces the files of an earlier
   version (`PrepareToInstall`).
+- Explorer, and any program whose file dialog showed an APK, keeps
+  `gesher_shellext.dll` loaded. Setup does not close them for it
+  (`CloseApplicationsFilter=*.exe,*.chm`: closing Explorer took the desktop away
+  mid-update). `PrepareToInstall` renames the loaded copy to
+  `gesher_shellext.<time>.old` (a loaded DLL can be renamed, not replaced) and the
+  new one is written in its place; those processes keep the old copy until they
+  end. The next update deletes the `.old` copies nothing has loaded any more, and
+  uninstalling deletes them too. CI loads the DLL into a process, runs Setup again
+  and checks that the process is still running.
 
 `gesher-app shutdown` needs no runtime: `gesher-app.ps1` reads the device's
 state file (`%LOCALAPPDATA%\Gesher\data\system\gesher-device`), sets the system

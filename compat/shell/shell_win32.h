@@ -1,9 +1,10 @@
 // Gesher: Windows shell integration of installed Android apps, the Win32 side
 // (shell track, docs/installer.md, docs/decisions/0028-shell-start-menu-apps.md):
 // Start menu shortcuts with an AppUserModelID, the process's AppUserModelID,
-// and the file operations on the Start menu folder (which may be on another
-// drive than Gesher's, so not through java.io's drive-less paths). The JNI
-// side is shell_natives.cc (com.gesher.app.shell.Shell).
+// the file operations on the Start menu folder (which may be on another
+// drive than Gesher's, so not through java.io's drive-less paths), and the
+// apps' URL protocols (their custom schemes, as OAuth redirects come back from
+// the browser). The JNI side is shell_natives.cc (com.gesher.app.shell.Shell).
 #pragma once
 
 #include <string>
@@ -46,6 +47,25 @@ bool Exists(const std::u16string& path);
 // Tells the shell the file at `path` changed (SHCNE_UPDATEITEM): Explorer reads
 // its icon again.
 void NotifyChanged(const std::u16string& path);
+
+// The URL protocol `scheme`, per user (HKCU\Software\Classes\<scheme>: "URL
+// Protocol", DefaultIcon `icon` (none when empty) and shell\open\command
+// `command`), for the installed package `owner`, whose name it keeps in the
+// key's GesherPackage value. A scheme that is not `owner`'s (a key of it in
+// HKCU without that value, or in HKLM) is left alone:
+// HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS). Returns S_OK or the error.
+long RegisterUrlProtocol(const std::u16string& scheme, const std::u16string& owner,
+                         const std::u16string& description, const std::u16string& command,
+                         const std::u16string& icon);
+
+// Removes the URL protocol `scheme` if it is `owner`'s (RegisterUrlProtocol).
+// Returns S_OK when it was removed, S_FALSE when it is not `owner`'s, or the
+// error.
+long UnregisterUrlProtocol(const std::u16string& scheme, const std::u16string& owner);
+
+// The package whose URL protocol `scheme` is (its GesherPackage value); empty
+// when it is none's or not Gesher's.
+std::u16string UrlProtocolOwner(const std::u16string& scheme);
 
 }  // namespace shell
 }  // namespace gesher

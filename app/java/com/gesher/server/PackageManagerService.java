@@ -65,7 +65,8 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public boolean isPackageAvailable(String packageName, int userId) {
-        return get(packageName) != null || GmsPackageSupport.isSyntheticPackage(packageName);
+        return get(packageName) != null || GmsPackageSupport.isSyntheticPackage(packageName)
+                || BrowserPackageSupport.isBrowserPackage(packageName);
     }
 
     @Override
@@ -76,6 +77,9 @@ public final class PackageManagerService extends IPackageManager.Default {
         }
         if (GmsPackageSupport.isSyntheticPackage(packageName)) {
             return GmsPackageSupport.createSyntheticPackageInfo(packageName, flags);
+        }
+        if (BrowserPackageSupport.isBrowserPackage(packageName)) {
+            return BrowserPackageSupport.createPackageInfo(flags);
         }
         return null;
     }
@@ -89,6 +93,9 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (GmsPackageSupport.isSyntheticPackage(packageName)) {
             return GmsPackageSupport.createSyntheticApplicationInfo(packageName, flags);
         }
+        if (BrowserPackageSupport.isBrowserPackage(packageName)) {
+            return BrowserPackageSupport.createApplicationInfo(flags);
+        }
         return null;
     }
 
@@ -101,6 +108,9 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public ActivityInfo getActivityInfo(ComponentName className, long flags, int userId) {
         ApkPackage p = get(className.getPackageName());
+        if (p == null && BrowserPackageSupport.isBrowserPackage(className.getPackageName())) {
+            return BrowserPackageSupport.activityInfo(className.getClassName(), flags);
+        }
         return p == null ? null : p.activityInfo(className.getClassName(), flags);
     }
 
@@ -121,6 +131,12 @@ public final class PackageManagerService extends IPackageManager.Default {
         List<ResolveInfo> result = new ArrayList<>();
         for (ApkPackage p : mPackages.values()) {
             result.addAll(p.queryIntentActivities(intent, resolvedType, flags));
+        }
+        // The Windows default browser (BrowserPackageSupport), after the installed apps'
+        // activities: an app's own http(s) filter still resolves first.
+        if (intent != null && get(BrowserPackageSupport.PACKAGE) == null) {
+            result.addAll(BrowserPackageSupport.queryIntentActivities(intent, resolvedType,
+                    flags));
         }
         return result;
     }
@@ -242,7 +258,8 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public int getApplicationEnabledSetting(String packageName, int userId) {
-        if (GmsPackageSupport.isSyntheticPackage(packageName)) {
+        if (GmsPackageSupport.isSyntheticPackage(packageName)
+                || BrowserPackageSupport.isBrowserPackage(packageName)) {
             return PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
         }
         return PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
@@ -304,7 +321,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public android.content.pm.InstallSourceInfo getInstallSourceInfo(String packageName,
             int userId) {
-        if (get(packageName) == null && !GmsPackageSupport.isSyntheticPackage(packageName)) {
+        if (get(packageName) == null && !GmsPackageSupport.isSyntheticPackage(packageName)
+                && !BrowserPackageSupport.isBrowserPackage(packageName)) {
             return null;
         }
         return new android.content.pm.InstallSourceInfo(null, null, null, null);

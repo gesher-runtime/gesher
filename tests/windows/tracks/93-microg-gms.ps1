@@ -41,7 +41,7 @@ GmsCheck 'microg-gms (single process): GoogleApiAvailability stand-ins' $outSing
 )
 
 GmsCheck 'microg-gms (single process): PackageManager synthetic GMS & Vending packages' $outSingle $codeSingle @(
-  'gms: PackageManager: com.google.android.gms synthetic package present, enabled, valid signatures',
+  'gms: PackageManager: com.google.android.gms synthetic package present, enabled, valid signatures (Google''s certificate)',
   'gms: PackageManager: com.android.vending synthetic package present, enabled'
 )
 
@@ -73,7 +73,7 @@ $outDevice += "`n" + (Get-Content $appLog -Raw -ErrorAction SilentlyContinue)
 GmsCheck 'microg-gms (device): full GMS compatibility suite in system server' $outDevice $codeDevice @(
   'gms: client SDK: FirebaseApp and play-services classes loaded from the APK, none on the boot class path',
   'gms: GoogleApiAvailability: isGooglePlayServicesAvailable SUCCESS (0)',
-  'gms: PackageManager: com.google.android.gms synthetic package present, enabled, valid signatures',
+  'gms: PackageManager: com.google.android.gms synthetic package present, enabled, valid signatures (Google''s certificate)',
   'gms: FusedLocationProviderClient: connected to LocationManagerService, updates received',
   'gms: GoogleSignIn: dummy account user@gesher.local signed in with idToken',
   'gms: FirebaseMessaging: token obtained, com.google.android.c2dm.intent.RECEIVE routed and received',

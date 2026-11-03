@@ -198,5 +198,93 @@ void NotifyChanged(const std::u16string& path) {
   }
 }
 
+namespace {
+
+// The value that names the package a URL protocol key is Gesher's for.
+const wchar_t kGesherPackage[] = L"GesherPackage";
+
+std::wstring ClassesKey(const std::u16string& scheme) {
+  return std::wstring(L"Software\\Classes\\") + W(scheme);
+}
+
+bool KeyExists(HKEY root, const std::wstring& key) {
+  HKEY h = nullptr;
+  if (RegOpenKeyExW(root, key.c_str(), 0, KEY_QUERY_VALUE, &h) != ERROR_SUCCESS) return false;
+  RegCloseKey(h);
+  return true;
+}
+
+// The GesherPackage value of HKCU's key of `scheme` (empty without one); false
+// when HKCU has no key of it.
+bool ReadOwner(const std::u16string& scheme, std::u16string* owner) {
+  owner->clear();
+  HKEY h = nullptr;
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, ClassesKey(scheme).c_str(), 0, KEY_QUERY_VALUE, &h) !=
+      ERROR_SUCCESS) {
+    return false;
+  }
+  wchar_t value[512];
+  DWORD type = 0;
+  DWORD bytes = sizeof(value) - sizeof(wchar_t);
+  if (RegQueryValueExW(h, kGesherPackage, nullptr, &type, reinterpret_cast<BYTE*>(value),
+                       &bytes) == ERROR_SUCCESS &&
+      type == REG_SZ) {
+    value[bytes / sizeof(wchar_t)] = L'\0';
+    *owner = U(value);
+  }
+  RegCloseKey(h);
+  return true;
+}
+
+LONG SetString(const std::wstring& key, const wchar_t* name, const std::u16string& value) {
+  HKEY h = nullptr;
+  LONG r = RegCreateKeyExW(HKEY_CURRENT_USER, key.c_str(), 0, nullptr, 0, KEY_SET_VALUE, nullptr,
+                           &h, nullptr);
+  if (r != ERROR_SUCCESS) return r;
+  r = RegSetValueExW(h, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(W(value)),
+                     static_cast<DWORD>((value.size() + 1) * sizeof(char16_t)));
+  RegCloseKey(h);
+  return r;
+}
+
+}  // namespace
+
+long RegisterUrlProtocol(const std::u16string& scheme, const std::u16string& owner,
+                         const std::u16string& description, const std::u16string& command,
+                         const std::u16string& icon) {
+  if (scheme.empty() || owner.empty() || command.empty()) return E_INVALIDARG;
+  const std::wstring key = ClassesKey(scheme);
+  std::u16string current;
+  bool ours = ReadOwner(scheme, &current);
+  // Another's: a key without Gesher's value (or another package's), or the
+  // machine's (HKLM, which HKCU's would hide).
+  if (ours ? current != owner : KeyExists(HKEY_LOCAL_MACHINE, key)) {
+    return HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS);
+  }
+  // The owner first: a key left half written is still known as Gesher's.
+  LONG r = SetString(key, kGesherPackage, owner);
+  if (r == ERROR_SUCCESS) r = SetString(key, nullptr, description);
+  if (r == ERROR_SUCCESS) r = SetString(key, L"URL Protocol", std::u16string());
+  if (r == ERROR_SUCCESS && !icon.empty()) r = SetString(key + L"\\DefaultIcon", nullptr, icon);
+  if (r == ERROR_SUCCESS) r = SetString(key + L"\\shell\\open\\command", nullptr, command);
+  return r == ERROR_SUCCESS ? S_OK : HRESULT_FROM_WIN32(r);
+}
+
+long UnregisterUrlProtocol(const std::u16string& scheme, const std::u16string& owner) {
+  if (scheme.empty() || owner.empty()) return E_INVALIDARG;
+  std::u16string current;
+  if (!ReadOwner(scheme, &current) || current != owner) return S_FALSE;
+  LONG r = RegDeleteTreeW(HKEY_CURRENT_USER, ClassesKey(scheme).c_str());
+  if (r == ERROR_SUCCESS || r == ERROR_FILE_NOT_FOUND) return S_OK;
+  return HRESULT_FROM_WIN32(r);
+}
+
+std::u16string UrlProtocolOwner(const std::u16string& scheme) {
+  std::u16string owner;
+  if (scheme.empty()) return owner;
+  ReadOwner(scheme, &owner);
+  return owner;
+}
+
 }  // namespace shell
 }  // namespace gesher

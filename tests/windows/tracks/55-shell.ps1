@@ -94,6 +94,203 @@ if (-not $problems) {
   $failed++
 }
 
+# gesher-launch's splash window (compat/shell/gesher_launch.cc): a launch shows
+# one (class GesherSplash) while the app starts, with the app's label and icon
+# (its shortcut's, under %LOCALAPPDATA%\Gesher\data\data\<package>\gesher-shell)
+# and AppUserModelID, until a visible window with that AppUserModelID is up.
+# A copy runs a stand-in gesher-app.ps1 (Windows PowerShell) that looks for its
+# parent's splash and, per $env:SPLASH_PROBE_MODE: 'app' shows a window with the
+# app's AppUserModelID and sees the splash go; 'close' closes the splash (the
+# launch goes on: its exit code comes back); 'none' expects no splash (install,
+# --headless). A double-clicked APK's package comes from apk-icons.list.
+$splashName = 'shell: gesher-launch shows a splash (the app''s label, icon and AppUserModelID) until the app''s window is up; closing it does not end the launch; none for install or --headless'
+$problems = @()
+if (-not (Test-Path "$Dir/gesher-launch.exe")) {
+  $problems += "no $Dir/gesher-launch.exe"
+} else {
+  $splashDir = Join-Path $shellOut 'splash'
+  $splashData = Join-Path $splashDir 'localappdata'
+  $splashShell = Join-Path $splashData 'Gesher\data\data\com.gesher.splashprobe\gesher-shell'
+  New-Item -ItemType Directory -Force $splashShell, (Join-Path $splashData 'Gesher\data\system') | Out-Null
+  Copy-Item "$Dir/gesher-launch.exe" $splashDir -Force
+  # As Properties.store writes it: ISO-8859-1, other characters \u-escaped.
+  Set-Content -LiteralPath (Join-Path $splashShell 'shortcut.properties') -Encoding ascii -Value @(
+    '#Gesher device', 'package=com.gesher.splashprobe', 'label=Splash Probe é', 'app_user_model_id=Gesher.App.com.gesher.splashprobe')
+  $splashIco = Join-Path $shellOut 'lifecycle.ico'  # drawn above
+  if (Test-Path $splashIco) { Copy-Item $splashIco (Join-Path $splashShell 'icon.ico') -Force }
+  $probeApk = Join-Path $splashDir 'probe.apk'
+  Set-Content -LiteralPath $probeApk -Value 'not an APK: the stand-in never reads it'
+  $apkItem = Get-Item -LiteralPath $probeApk
+  $apkMillis = [DateTimeOffset]::new($apkItem.LastWriteTimeUtc).ToUnixTimeMilliseconds()
+  Set-Content -LiteralPath (Join-Path $splashData 'Gesher\data\system\apk-icons.list') -Encoding utf8NoBOM -Value (
+    "$($apkItem.Length)`t$apkMillis`t$(Join-Path $splashShell 'icon.ico')`tcom.gesher.splashprobe")
+  Set-Content -LiteralPath (Join-Path $splashDir 'gesher-app.ps1') -Encoding utf8 -Value @'
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class SplashProbe {
+  [StructLayout(LayoutKind.Sequential, Pack = 4)] struct PropertyKey { public Guid FormatId; public uint PropertyId; }
+  [StructLayout(LayoutKind.Sequential)] struct PropVariant { public ushort vt; public ushort r1, r2, r3; public IntPtr p; public IntPtr p2; }
+  [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IPropertyStore {
+    [PreserveSig] int GetCount(out uint count);
+    [PreserveSig] int GetAt(uint index, out PropertyKey key);
+    [PreserveSig] int GetValue(ref PropertyKey key, out PropVariant value);
+    [PreserveSig] int SetValue(ref PropertyKey key, ref PropVariant value);
+    [PreserveSig] int Commit();
+  }
+  [DllImport("shell32.dll")] static extern int SHGetPropertyStoreForWindow(IntPtr hwnd, ref Guid iid,
+      [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
+  [DllImport("ole32.dll")] static extern int PropVariantClear(ref PropVariant value);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowExW(IntPtr parent, IntPtr after, string cls, string title);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr hwnd, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern IntPtr SendMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+  // The first window of class `cls` of process `pid`, or zero.
+  public static IntPtr Find(string cls, uint pid) {
+    IntPtr h = IntPtr.Zero;
+    while ((h = FindWindowExW(IntPtr.Zero, h, cls, null)) != IntPtr.Zero) {
+      uint owner;
+      GetWindowThreadProcessId(h, out owner);
+      if (owner == pid) return h;
+    }
+    return IntPtr.Zero;
+  }
+  public static string Title(IntPtr hwnd) {
+    var s = new StringBuilder(512);
+    GetWindowTextW(hwnd, s, s.Capacity);
+    return s.ToString();
+  }
+  public static bool HasIcon(IntPtr hwnd) {
+    return SendMessageW(hwnd, 0x007F, (IntPtr) 1, IntPtr.Zero) != IntPtr.Zero;  // WM_GETICON ICON_BIG
+  }
+  static PropertyKey AppIdKey() {
+    return new PropertyKey { FormatId = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), PropertyId = 5 };
+  }
+  public static string AppUserModelId(IntPtr hwnd) {
+    Guid iid = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
+    IPropertyStore store;
+    int hr = SHGetPropertyStoreForWindow(hwnd, ref iid, out store);
+    if (hr != 0) return "(HRESULT 0x" + hr.ToString("x8") + ")";
+    try {
+      var key = AppIdKey();
+      PropVariant value;
+      hr = store.GetValue(ref key, out value);
+      if (hr != 0) return "(HRESULT 0x" + hr.ToString("x8") + ")";
+      try {
+        return value.vt == 31 ? Marshal.PtrToStringUni(value.p) : "(vt " + value.vt + ")";
+      } finally {
+        PropVariantClear(ref value);
+      }
+    } finally {
+      Marshal.ReleaseComObject(store);
+    }
+  }
+  public static int SetAppUserModelId(IntPtr hwnd, string id) {
+    Guid iid = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
+    IPropertyStore store;
+    int hr = SHGetPropertyStoreForWindow(hwnd, ref iid, out store);
+    if (hr != 0) return hr;
+    try {
+      var key = AppIdKey();
+      var value = new PropVariant { vt = 31, p = Marshal.StringToCoTaskMemUni(id) };  // VT_LPWSTR
+      hr = store.SetValue(ref key, ref value);
+      if (hr == 0) hr = store.Commit();
+      PropVariantClear(ref value);
+      return hr;
+    } finally {
+      Marshal.ReleaseComObject(store);
+    }
+  }
+}
+"@
+$launcher = [uint32](Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId
+$mode = $env:SPLASH_PROBE_MODE
+$lines = @("args=$($args -join '|')")
+$splash = [IntPtr]::Zero
+$tries = if ($mode -eq 'none') { 30 } else { 150 }
+for ($i = 0; $i -lt $tries -and $splash -eq [IntPtr]::Zero; $i++) {
+  $splash = [SplashProbe]::Find('GesherSplash', $launcher)
+  if ($splash -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 100 }
+}
+$lines += "splash=$($splash -ne [IntPtr]::Zero)"
+$code = 0
+if ($splash -ne [IntPtr]::Zero) {
+  $title = [SplashProbe]::Title($splash)
+  $lines += "title=$title", "title-ok=$($title -eq "Splash Probe $([char]0xE9)")", "visible=$([SplashProbe]::IsWindowVisible($splash))",
+    "icon=$([SplashProbe]::HasIcon($splash))", "aumid=$([SplashProbe]::AppUserModelId($splash))"
+  if ($mode -eq 'app') {
+    # Not yet: no window of the app is up.
+    Start-Sleep -Milliseconds 1000
+    $lines += "early=$([SplashProbe]::IsWindow($splash))"
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = 'Splash probe app'
+    $form.Width = 300; $form.Height = 300
+    $null = $form.Handle
+    $lines += "set-aumid=$([SplashProbe]::SetAppUserModelId($form.Handle, 'Gesher.App.com.gesher.splashprobe'))"
+    $form.Show()
+    $gone = $false
+    for ($i = 0; $i -lt 100; $i++) {
+      [System.Windows.Forms.Application]::DoEvents()
+      if (-not [SplashProbe]::IsWindow($splash)) { $gone = $true; break }
+      Start-Sleep -Milliseconds 100
+    }
+    $lines += "gone=$gone"
+    $form.Close()
+  } elseif ($mode -eq 'close') {
+    [void][SplashProbe]::PostMessageW($splash, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)  # WM_CLOSE
+    Start-Sleep -Milliseconds 1000
+    $lines += "gone=$(-not [SplashProbe]::IsWindow($splash))"
+    $code = 5
+  }
+}
+Set-Content -LiteralPath (Join-Path $PSScriptRoot "splash-$mode.txt") -Encoding ascii -Value $lines
+exit $code
+'@
+  $cases = @(
+    @{ Mode = 'app'; Args = 'launch com.gesher.splashprobe'; Code = 0 },
+    @{ Mode = 'app'; Args = "`"$probeApk`""; Code = 0 },
+    @{ Mode = 'close'; Args = 'launch com.gesher.splashprobe'; Code = 5 },
+    @{ Mode = 'none'; Args = "install `"$probeApk`""; Code = 0 },
+    @{ Mode = 'none'; Args = 'launch com.gesher.splashprobe --headless'; Code = 0 }
+  )
+  foreach ($case in $cases) {
+    $probeOut = Join-Path $splashDir "splash-$($case.Mode).txt"
+    Remove-Item $probeOut -ErrorAction SilentlyContinue
+    $psi = [Diagnostics.ProcessStartInfo]::new((Join-Path $splashDir 'gesher-launch.exe'), $case.Args)
+    $psi.UseShellExecute = $false
+    $psi.WorkingDirectory = $splashDir
+    $psi.EnvironmentVariables['LOCALAPPDATA'] = $splashData
+    $psi.EnvironmentVariables['SPLASH_PROBE_MODE'] = $case.Mode
+    foreach ($v in 'GESHER_APP_WINDOW', 'GESHER_SPLASH', 'GESHER_DISPLAY') { $psi.EnvironmentVariables.Remove($v) }
+    $p = [Diagnostics.Process]::Start($psi)
+    $what = "gesher-launch $($case.Args) ($($case.Mode))"
+    if (-not $p.WaitForExit(120000)) { $p.Kill($true); $problems += "$($what): did not exit within 120 s"; continue }
+    if ($p.ExitCode -ne $case.Code) { $problems += "$($what): exit $($p.ExitCode), not $($case.Code)" }
+    $probe = if (Test-Path $probeOut) { @(Get-Content -LiteralPath $probeOut) } else { @() }
+    Write-Host "$($what): $($probe -join '; ')"
+    $want = switch ($case.Mode) {
+      'app' { 'splash=True', 'title-ok=True', 'visible=True', 'aumid=Gesher.App.com.gesher.splashprobe', 'early=True', 'set-aumid=0', 'gone=True' }
+      'close' { 'splash=True', 'gone=True' }
+      'none' { 'splash=False' }
+    }
+    if ($case.Mode -ne 'none' -and (Test-Path (Join-Path $splashShell 'icon.ico'))) { $want += 'icon=True' }
+    foreach ($w in $want) { if ($probe -notcontains $w) { $problems += "$($what): no '$w' ($($probe -join '; '))" } }
+  }
+}
+if (-not $problems) {
+  Write-Host "PASS  $splashName"
+} else {
+  Write-Host "FAIL  $splashName ($($problems -join '; '))"
+  $failed++
+}
+
 # gesher_shellext.dll (compat/shell/gesher_shellext.cc), Gesher.Apk's icon
 # handler, called as Explorer calls it (DllGetClassObject, IPersistFile::Load,
 # IExtractIconW::GetIconLocation) on a copy away from gesher-launch.exe (so it

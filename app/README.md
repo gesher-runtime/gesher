@@ -253,7 +253,7 @@ is what `gesher-app` runs by default:
 dalvikvm -Xbootclasspath:...:framework.jar:gesher-app.jar ... com.gesher.app.Launcher COMMAND
   launch APK|PACKAGE [--activity CLASS] [--ez KEY true|false]...
          [--window | --hidden-window | --headless [--keep-task]]
-  install APK | uninstall PACKAGE | list | status | start | shutdown
+  install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown
 ```
 
 The first command starts the user's Gesher device, detached (no console window;
@@ -302,6 +302,19 @@ in a job that ends them with it.
   (`GESHER_APP_USER_MODEL_ID`; `GesherAppProcess` sets it); `uninstall` removes it
   (`com.gesher.app.shell`, [docs/installer.md](../docs/installer.md),
   [0028](../docs/decisions/0028-shell-start-menu-apps.md)).
+- The custom schemes of a package's BROWSABLE VIEW filters (an OAuth redirect's) become
+  per-user URL protocols at `install`, running `gesher-launch view PACKAGE "%1"`;
+  `uninstall` removes them. `view PACKAGE URL` starts ACTION_VIEW of the URL in the
+  package, in its task when it runs (`ActivityOptions.setLaunchTaskId`), so the
+  activity that waits for the redirect gets it (AppAuth's RedirectUriReceiverActivity
+  hands it down with `FLAG_ACTIVITY_CLEAR_TOP | FLAG_ACTIVITY_SINGLE_TOP`, which the
+  system server delivers to the activity below with `onNewIntent`).
+- Apps that look for a browser before they open a page (AppAuth's `BrowserSelector`)
+  find `com.gesher.browser`, a synthetic package like the GMS ones
+  (`com.gesher.server.BrowserPackageSupport`: a full browser's VIEW http/https
+  BROWSABLE filter, a signature, no custom tabs service). Starting it, as any http(s)
+  or mailto VIEW nothing else handles, opens the URL with Windows' default handler
+  (`WindowsHost.openUrl`).
 
 ## Classes framework.jar does not have
 
@@ -326,7 +339,12 @@ placeholders for them (they need framework types): `android.net.TrafficStats`
 `ActivityContextInfo` (no intent starts an SDK sandbox activity),
 `android.util.StatsEvent`/`StatsLog` (no statsd: events are dropped), and
 `android.health.connect.HealthConnectManager` (`AppOpsManager.permissionToOp` asks it
-whether a permission is a health permission: none is). When
+whether a permission is a health permission: none is). Apps reach one more:
+`android.net.nsd.NsdManager` and `NsdServiceInfo` (the Connectivity module's network
+service discovery, `servicediscovery`, registered by `ConnectivityFrameworkInitializer`).
+There is no mDNS responder: a discovery starts and finds nothing, registering or
+resolving a service fails through its listener (`FAILURE_INTERNAL_ERROR`), and
+unregistering one that failed does nothing. When
 framework.jar (or a module jar ahead of gesher-app.jar on the boot class path)
 brings the real class, it wins.
 

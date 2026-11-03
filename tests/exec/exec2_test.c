@@ -7,8 +7,15 @@
 //
 // With "--exec-replace <child>" as the arguments it instead execv()s the child
 // ("exit 17"), to show exec outside a fork replaces the image (the launcher
-// process exits 17).
+// process exits 17). With "--dart-start <child>" it starts the child as dart:io's
+// Process.start does (dart_start below); the track runs that one with a time
+// limit, as a regression there hangs.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE  // pipe2
+#endif
 #include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +46,68 @@ static void ok(const char* name, int cond, const char* detail) {
   fflush(stdout);
 }
 
+// dart:io's ProcessStarter (runtime/bin/process_android.cc), how a Flutter app runs a
+// program: O_CLOEXEC pipes; the fork child first waits for one byte the parent writes
+// once it has registered the pid, then puts its stdout on a pipe and execs; the parent
+// reads the exec-status pipe until the program's end of it closes at exec (its errno if
+// exec failed), then the program's output. The fork child runs before its parent (a
+// vfork-style child, docs/exec.md), so the child's read must not wait for the parent;
+// the parent's byte must not reach the program's output either. The program keeps
+// running (sigloop) until it is killed, so the exec-status pipe ends only if exec
+// closed it.
+static void dart_start(const char* child) {
+  int exec_control[2], read_in[2];
+  if (pipe2(exec_control, O_CLOEXEC) != 0 || pipe2(read_in, O_CLOEXEC) != 0) {
+    ok("a fork child waits for its parent's byte before exec (dart:io Process.start)", 0, "pipe2");
+    return;
+  }
+  pid_t pid = fork();
+  if (pid == 0) {
+    char go;
+    if (read(read_in[0], &go, 1) != 1) _exit(126);
+    dup2(read_in[1], 1);
+    char* a[] = {(char*)child, (char*)"sigloop", NULL};
+    execvp(child, a);
+    int e = errno;
+    ssize_t reported = write(exec_control[1], &e, sizeof(e));
+    (void)reported;
+    _exit(127);
+  }
+  ok("a fork child waits for its parent's byte before exec (dart:io Process.start)", pid > 0,
+     "fork");
+  if (pid <= 0) return;
+  char go = '1';
+  ssize_t sent = write(read_in[1], &go, 1);
+  close(exec_control[1]);
+  int child_errno = 0;
+  ssize_t got = read(exec_control[0], &child_errno, sizeof(child_errno));
+  close(exec_control[0]);
+  close(read_in[1]);
+  ok("exec closes the O_CLOEXEC fds: the exec-status pipe ends while the program runs",
+     sent == 1 && got == 0, "exec status");
+  // The program's whole output, once it is gone: its "child-ready" line, nothing else.
+  char out[128] = {0};
+  size_t used = 0;
+  ssize_t n = read(read_in[0], out, sizeof(out) - 1);
+  if (n > 0) used = (size_t)n;
+  kill(pid, SIGKILL);
+  int status = -1;
+  waitpid(pid, &status, 0);
+  while (used < sizeof(out) - 1 && (n = read(read_in[0], out + used, sizeof(out) - 1 - used)) > 0) {
+    used += (size_t)n;
+  }
+  close(read_in[0]);
+  ok("the parent's byte for the child is not in the program's output",
+     strcmp(out, "child-ready\n") == 0, out);
+}
+
 int main(int argc, char** argv) {
+  if (argc >= 3 && strcmp(argv[1], "--dart-start") == 0) {
+    dart_start(argv[2]);
+    printf("exec2: SUMMARY pass=%d fail=%d\n", g_pass, g_fail);
+    fflush(stdout);
+    return g_fail == 0 ? 0 : 1;
+  }
   // exec outside a fork: replace this image with the child.
   if (argc >= 3 && strcmp(argv[1], "--exec-replace") == 0) {
     char* a[] = {argv[2], (char*)"exit", (char*)"17", NULL};

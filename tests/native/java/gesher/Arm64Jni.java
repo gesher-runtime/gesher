@@ -25,6 +25,10 @@ public class Arm64Jni {
     static native int vaForms();
     static native int nativeNest(int n);
     static native int attachedThread();
+    // FlutterJNI.nativeSetViewportMetrics's shape: 17 AAPCS64 stack arguments.
+    static native int manyArguments(long id, float ratio, int i0, int i1, int i2, int i3,
+            int i4, int i5, int i6, int i7, int i8, int i9, int i10, int i11, int i12, int i13,
+            int i14, int[] bounds, int[] types, int[] states, int t0, int t1, int t2, int t3);
 
     // Java <-> guest nesting: nest(n) calls the guest, which calls nest(n-1).
     static int nest(int n) {
@@ -84,6 +88,10 @@ public class Arm64Jni {
         int t = attachedThread();
         if (t != 121) System.out.println("  attachedThread returned " + t);
         check("a guest pthread attaches, calls Java, detaches", t == 121);
+        check("a guest native with 25 arguments (long, float, 15 ints, 3 int[], 4 ints)",
+                manyArguments(0x1122334455667788L, 2.625f, 101, 102, 103, 104, 105, 106, 107,
+                        108, 109, 110, 111, 112, 113, 114, 115, new int[] {1, 2, 3, 4},
+                        new int[] {11, 12}, new int[] {21, 22, 23}, -201, 202, -203, 204) == 0);
 
         if (failures == 0) {
             System.out.println("Arm64Jni all passed");

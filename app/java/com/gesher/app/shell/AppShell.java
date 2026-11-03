@@ -4,16 +4,23 @@
  */
 package com.gesher.app.shell;
 
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
 
+import com.android.internal.pm.pkg.component.ParsedActivity;
+import com.android.internal.pm.pkg.component.ParsedIntentInfo;
 import com.gesher.app.Main;
 import com.gesher.server.ApkPackage;
 import com.gesher.server.Device;
 import com.gesher.server.Zygote;
 
 import java.io.File;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Properties;
+import java.util.Set;
 
 /**
  * Installed apps as Windows apps (docs/installer.md, ADR 0028): each package with a launcher
@@ -27,6 +34,13 @@ import java.util.Properties;
  * #registerQuietly}), {@code gesher-app uninstall} removes it ({@link #unregisterQuietly});
  * uninstalling Gesher removes the whole folder (gesher.iss). What a shortcut belongs to is
  * recorded in {@code <data dir>/gesher-shell/shortcut.properties}, next to {@code icon.ico}.
+ *
+ * <p>The custom schemes of a package's BROWSABLE VIEW filters (an OAuth redirect, as AppAuth's
+ * RedirectUriReceiverActivity declares one) become per-user URL protocols that run {@code
+ * gesher-launch view <package> "%1"} ({@link #registerUrlProtocolsQuietly}): a URL the Windows
+ * browser opens comes back to the app as ACTION_VIEW. They are recorded in {@code
+ * url-protocols.properties} and removed with the package ({@link
+ * #unregisterUrlProtocolsQuietly}).
  */
 public final class AppShell {
     /** The Start menu folder of the apps, under the user's Programs folder. */
@@ -37,7 +51,7 @@ public final class AppShell {
      * processes it starts for a package.
      */
     public static final String ENV_APP_USER_MODEL_ID = "GESHER_APP_USER_MODEL_ID";
-    /** {@code GESHER_SHORTCUTS=0}: no Start menu shortcuts. */
+    /** {@code GESHER_SHORTCUTS=0}: no Start menu shortcuts (and no URL protocols). */
     public static final String ENV_SHORTCUTS = "GESHER_SHORTCUTS";
 
     private static final String TAG = "gesher-app";
@@ -203,6 +217,155 @@ public final class AppShell {
             rewriteApkIcons(packageName, null);
         } catch (Throwable t) {
             log("the Start menu shortcut of " + packageName + " was not removed: " + t);
+        }
+    }
+
+    // --- URL protocols -------------------------------------------------------------------
+
+    private static final String PROTOCOLS = "url-protocols.properties";
+
+    /**
+     * Schemes that are never an app's own on Windows, whatever its filters say: the web's,
+     * mail's, files' and Android's own (Windows' browser, mail and phone apps open them).
+     */
+    private static final Set<String> SYSTEM_SCHEMES = Set.of("http", "https", "mailto",
+            "file", "ftp", "content", "android.resource", "intent", "javascript", "data",
+            "about", "blob", "ws", "wss", "tel", "sms", "smsto", "mms", "mmsto", "geo", "market",
+            "android-app");
+
+    /** The URL protocols recorded for the package, or null. */
+    public static Properties urlProtocolsOf(String packageName) {
+        try {
+            return Device.read(new File(shellDir(packageName), PROTOCOLS));
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * The custom schemes of the package's BROWSABLE VIEW filters, lower case, as Windows
+     * names URL protocols: a letter, then letters, digits, '+', '-' or '.' (at least two
+     * characters: one is a drive letter). Not {@link #SYSTEM_SCHEMES}.
+     */
+    static Set<String> customSchemes(ApkPackage pkg) {
+        Set<String> schemes = new LinkedHashSet<>();
+        for (ParsedActivity a : pkg.parsed.getActivities()) {
+            for (ParsedIntentInfo info : a.getIntents()) {
+                IntentFilter filter = info.getIntentFilter();
+                if (!filter.hasAction(Intent.ACTION_VIEW)
+                        || !filter.hasCategory(Intent.CATEGORY_BROWSABLE)) {
+                    continue;
+                }
+                Iterator<String> it = filter.schemesIterator();
+                while (it != null && it.hasNext()) {
+                    String scheme = it.next().toLowerCase(Locale.ROOT);
+                    if (scheme.matches("[a-z][a-z0-9+.-]+") && !SYSTEM_SCHEMES.contains(scheme)) {
+                        schemes.add(scheme);
+                    }
+                }
+            }
+        }
+        return schemes;
+    }
+
+    /**
+     * After {@code packageName} was installed or updated ({@code changed}), or found installed,
+     * with its code in {@code codePath}: registers the URL protocols of its custom schemes
+     * ({@link #customSchemes}) and removes those it no longer declares, unless its record is
+     * up to date. A scheme another program (or another package) has is left to it. Logs
+     * what it did; never throws.
+     */
+    public static void registerUrlProtocolsQuietly(String packageName, String codePath,
+            boolean changed) {
+        try {
+            registerUrlProtocols(packageName, codePath, changed);
+        } catch (Throwable t) {
+            log("no URL protocols for " + packageName + ": " + t);
+        }
+    }
+
+    private static void registerUrlProtocols(String packageName, String codePath,
+            boolean changed) throws Exception {
+        if ("0".equals(System.getenv(ENV_SHORTCUTS))) return;
+        String gesher = installDir();
+        String systemRoot = System.getenv("SystemRoot");
+        if (systemRoot == null || systemRoot.isEmpty()) systemRoot = "C:\\Windows";
+        String psExe = systemRoot + "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+        String psScript = gesher + "\\gesher-app.ps1";
+        String launchExe = gesher + "\\gesher-launch.exe";
+        if (!Shell.exists(psScript)) return;  // not an installed Gesher (register says so)
+        // The shortcut's way (register): gesher-launch.exe, else powershell.
+        boolean viaLauncher = Shell.exists(launchExe);
+        String kind = viaLauncher ? "launcher" : "powershell";
+        Properties old = urlProtocolsOf(packageName);
+        if (!changed && old != null && codePath.equals(old.getProperty("code"))
+                && kind.equals(old.getProperty("target"))) {
+            return;  // up to date
+        }
+        Set<String> schemes = customSchemes(ApkPackage.parse(codePath + "/base.apk"));
+        String command = viaLauncher
+                ? "\"" + launchExe + "\" view " + packageName + " \"%1\""
+                : "\"" + (Shell.exists(psExe) ? psExe : "powershell.exe")
+                        + "\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \""
+                        + psScript + "\" view " + packageName + " \"%1\"";
+        File ico = new File(shellDir(packageName), ICON);
+        String icon = ico.isFile() ? Zygote.windowsPath(ico.getPath()) : gesher + "\\gesher.ico";
+        Set<String> registered = new LinkedHashSet<>();
+        for (String scheme : schemes) {
+            int hr = Shell.registerUrlProtocol(scheme, packageName,
+                    "URL:" + scheme + " (" + packageName + ", an Android app on Gesher)",
+                    command, icon);
+            if (hr == 0) {
+                registered.add(scheme);
+                log("URL protocol " + scheme + ": " + command);
+            } else if (hr == Shell.ALREADY_EXISTS) {
+                String owner = Shell.urlProtocolOwner(scheme);
+                log("URL protocol " + scheme + ": not registered for " + packageName + ", it is "
+                        + (owner != null ? owner + "'s" : "another program's"));
+            } else {
+                log(String.format("URL protocol %s: not registered for %s: HRESULT 0x%08x",
+                        scheme, packageName, hr));
+            }
+        }
+        // Those the package no longer declares (an update).
+        String oldSchemes = old != null ? old.getProperty("schemes", "") : "";
+        for (String scheme : oldSchemes.split(",")) {
+            if (!scheme.isEmpty() && !registered.contains(scheme)
+                    && Shell.unregisterUrlProtocol(scheme, packageName) == 0) {
+                log("URL protocol " + scheme + ": removed (" + packageName
+                        + " no longer declares it)");
+            }
+        }
+        Properties record = new Properties();
+        record.setProperty("package", packageName);
+        record.setProperty("code", codePath);
+        record.setProperty("target", kind);
+        record.setProperty("schemes", String.join(",", registered));
+        File dir = shellDir(packageName);
+        dir.mkdirs();
+        Device.write(new File(dir, PROTOCOLS), record);
+    }
+
+    /**
+     * Before uninstalling {@code packageName}, {@link #urlProtocolsOf} it; after, this removes
+     * its URL protocols (those still its own). Logs what it did; never throws.
+     */
+    public static void unregisterUrlProtocolsQuietly(String packageName, Properties record) {
+        try {
+            if (record == null) return;
+            for (String scheme : record.getProperty("schemes", "").split(",")) {
+                if (scheme.isEmpty()) continue;
+                int hr = Shell.unregisterUrlProtocol(scheme, packageName);
+                if (hr == 0) {
+                    log("removed the URL protocol " + scheme + " of " + packageName);
+                } else if (hr != 1) {  // 1 (S_FALSE): no longer its own
+                    log(String.format("the URL protocol %s of %s was not removed: HRESULT 0x%08x",
+                            scheme, packageName, hr));
+                }
+            }
+            new File(shellDir(packageName), PROTOCOLS).delete();
+        } catch (Throwable t) {
+            log("the URL protocols of " + packageName + " were not removed: " + t);
         }
     }
 

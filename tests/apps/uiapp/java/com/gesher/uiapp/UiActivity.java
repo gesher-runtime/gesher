@@ -8,7 +8,9 @@ import android.app.Activity;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.os.SystemClock;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewTreeObserver;
 import android.widget.EditText;
@@ -20,7 +22,8 @@ import android.widget.TextView;
  * click turns the red View cyan, an EditText (focused) echoed into a TextView, and a
  * ScrollView. Reports its layout once the window has laid it out and whenever its size
  * changes, the clicks, the echoed text (other than ASCII as backslash-u escapes), the scroll position and
- * each lifecycle step, on stdout (tests/windows/tracks/34-windows.ps1 reads them).
+ * each lifecycle step, on stdout (tests/windows/tracks/34-windows.ps1 reads them). F12 makes
+ * its main thread stuck for good, as a hung app's: closing its window must still end it.
  */
 public class UiActivity extends Activity {
     private static final String TAG = "UiActivity";
@@ -100,6 +103,18 @@ public class UiActivity extends Activity {
             }
         }
         return out.toString();
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getKeyCode() == KeyEvent.KEYCODE_F12
+                && event.getAction() == KeyEvent.ACTION_DOWN) {
+            say("UiActivity main thread stuck");
+            while (true) {
+                SystemClock.sleep(60000);
+            }
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     @Override

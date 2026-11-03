@@ -55,6 +55,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * The window session of an app process on Windows (docs/graphics.md, "An app's window"):
@@ -116,6 +119,21 @@ public final class WindowSession extends IWindowSession.Stub {
         thread.setDaemon(true);
         return thread;
     });
+
+    /**
+     * How long the window's thread has to take the user's close of its window (WM_CLOSE)
+     * before this process is ended: closing must close the app even when its main thread
+     * is stuck ({@link #watchClose}).
+     */
+    static final long CLOSE_TAKE_TIMEOUT_MS = 5000;
+    /** How long an Activity finishing for the user's close then has to remove its window. */
+    static final long CLOSE_FINISH_TIMEOUT_MS = 10000;
+    private static final ScheduledExecutorService sCloseWatch =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread thread = new Thread(r, "gesher-close-watch");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     /** What closing a window does. Runs on the thread that added the window. */
     public interface CloseHandler {
@@ -621,9 +639,15 @@ public final class WindowSession extends IWindowSession.Stub {
         }
         if (w == null || w.handler == null) return;
         switch (type) {
-            case WindowInput.EVENT_CLOSE:
-                w.handler.post(() -> close(key));
+            case WindowInput.EVENT_CLOSE: {
+                AtomicBoolean taken = new AtomicBoolean();
+                w.handler.post(() -> {
+                    taken.set(true);
+                    close(key);
+                });
+                watchClose(key, w, taken);
                 break;
+            }
             case WindowInput.EVENT_RESIZE:
                 synchronized (w) {
                     // While the user drags, only the latest size matters.
@@ -777,6 +801,64 @@ public final class WindowSession extends IWindowSession.Stub {
         }
         log("window \"" + w.title() + "\" closed by the user");
         mCloseHandler.onClose(this, key, w.attrs);
+    }
+
+    /**
+     * The user's close must close the app, even one whose main thread is stuck: Windows
+     * leaves the window to its process, so an app that never handles the close keeps a
+     * window its X does not close. If the window's thread has not taken the close
+     * ({@code taken}) within {@link #CLOSE_TAKE_TIMEOUT_MS} while the window is still there,
+     * or took it for an Activity's window whose Activity is finishing but has not removed
+     * the window {@link #CLOSE_FINISH_TIMEOUT_MS} later, the process is ended as SIGKILL
+     * ends one (exit code 137). The system server sees it die (binder death), as it sees an
+     * app that crashed: its Activities are destroyed, its task's window is gone.
+     */
+    private void watchClose(IBinder key, AppWindow w, AtomicBoolean taken) {
+        sCloseWatch.schedule(() -> {
+            if (!present(key, w)) return;
+            if (!taken.get()) {
+                endProcess("window \"" + w.title() + "\": the app did not take the user's close"
+                        + " within " + CLOSE_TAKE_TIMEOUT_MS / 1000 + " s (its thread is stuck)");
+                return;
+            }
+            if (w.attrs.type != WindowManager.LayoutParams.TYPE_BASE_APPLICATION) return;
+            sCloseWatch.schedule(() -> {
+                android.app.Activity a = present(key, w) ? activity(w.attrs.token) : null;
+                if (a != null && a.isFinishing() && !a.isDestroyed()) {
+                    endProcess("window \"" + w.title() + "\": its Activity did not finish within "
+                            + CLOSE_FINISH_TIMEOUT_MS / 1000 + " s of the user's close");
+                }
+            }, CLOSE_FINISH_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        }, CLOSE_TAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+    }
+
+    private boolean present(IBinder key, AppWindow w) {
+        synchronized (mWindows) {
+            return mWindows.get(key) == w && w.nativeWindow != null;
+        }
+    }
+
+    /** This process's Activity of {@code token} (any thread), or null. */
+    private static android.app.Activity activity(IBinder token) {
+        if (token == null) return null;
+        try {
+            ActivityThread thread = ActivityThread.currentActivityThread();
+            android.app.Activity a = thread != null ? thread.getActivity(token) : null;
+            if (a == null) {
+                a = android.app.GesherAppDriver.currentActivity();  // the single process's
+                if (a != null && a.getActivityToken() != token) a = null;
+            }
+            return a;
+        } catch (RuntimeException e) {
+            return null;  // read while the main thread changes it
+        }
+    }
+
+    /** Ends this process now, as SIGKILL does: nothing more of the app runs. */
+    private static void endProcess(String why) {
+        log(why + ": ending the process");
+        System.err.flush();
+        com.gesher.server.Zygote.kill(android.os.Process.myPid());
     }
 
     /** An application window that fills its bounds: the user may resize it. */

@@ -22,6 +22,7 @@ import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -153,16 +154,57 @@ final class Installer {
         return paths;
     }
 
+    /** The split APKs beside {@code apk} (an extracted .xapk's config.*.apk), or null. */
+    private static File[] companionSplits(File apk) {
+        File dir = apk.getParentFile();
+        if (dir == null) return null;
+        return dir.listFiles((d, name) -> (name.startsWith("split_") || name.startsWith("config."))
+                && name.endsWith(".apk") && !name.equals(apk.getName()));
+    }
+
+    /**
+     * Whether the installed splits are {@code splits}, by name and content: installing
+     * an .xapk over the same base.apk installed alone adds its splits (its ABI split's
+     * native libraries), so it is not "unchanged".
+     */
+    private static boolean sameSplits(File[] splits, String codePath) throws IOException {
+        String[] installed = new File(codePath).list(
+                (dir, name) -> name.startsWith("split_") && name.endsWith(".apk"));
+        int count = splits != null ? splits.length : 0;
+        if ((installed != null ? installed.length : 0) != count) return false;
+        for (int i = 0; i < count; i++) {
+            String name = splits[i].getName();
+            File target = new File(codePath, name.startsWith("split_") ? name : "split_" + name);
+            if (!sameContent(splits[i], target)) return false;
+        }
+        return true;
+    }
+
+    /** base.apk and the split APKs installed beside it (split_*.apk). */
+    private static String[] apksOf(String codePath) {
+        List<String> apks = new ArrayList<>();
+        apks.add(codePath + "/base.apk");
+        String[] names = new File(codePath).list(
+                (dir, name) -> name.startsWith("split_") && name.endsWith(".apk"));
+        if (names != null) {
+            Arrays.sort(names);
+            for (String name : names) apks.add(codePath + "/" + name);
+        }
+        return apks.toArray(new String[0]);
+    }
+
     private static ApkPackage open(Entry e) throws Exception {
         ApkPackage p = ApkPackage.parse(e.codePath + "/base.apk");
         if (!p.packageName.equals(e.packageName)) {
             throw new IllegalStateException("base.apk is " + p.packageName);
         }
         p.setDataDir(Device.dataDir() + "/data/" + p.packageName);
-        // lib/x86_64, or lib/arm64 for an arm64-v8a-only APK (docs/arm64.md).
-        String abi = NativeLibs.forApk(e.codePath + "/base.apk");
+        // lib/x86_64, or lib/arm64 for an arm64-v8a-only package (docs/arm64.md); its
+        // splits count (an .xapk's libraries are in config.arm64_v8a.apk).
+        String[] apks = apksOf(e.codePath);
+        String abi = NativeLibs.forApk(apks);
         p.setNativeLibraryDir(e.codePath + "/lib/" + NativeLibs.instructionSetDir(abi));
-        p.setPrimaryCpuAbi(NativeLibs.abiFor(e.codePath + "/base.apk"));
+        p.setPrimaryCpuAbi(NativeLibs.abiFor(apks));
         p.setInstallTimes(e.firstInstallTime, e.lastUpdateTime);
         new File(p.dataDir()).mkdirs();
         return p;
@@ -211,6 +253,7 @@ final class Installer {
             Entry old = mEntries.get(pkg);
             if (old != null && sameContent(source, new File(old.codePath, "base.apk"))
                     && sameMetadata(metadata, new File(old.codePath, "base.dm"))
+                    && sameSplits(companionSplits(source), old.codePath)
                     && mPm.get(pkg) != null) {
                 SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
                         + old.codePath + ")");
@@ -243,23 +286,22 @@ final class Installer {
             File base = new File(code, "base.apk");
             copy(source, base);
             if (metadata.isFile()) copy(metadata, new File(code, "base.dm"));
-            int libs = NativeLibs.extract(base.getPath(), new File(code, "lib/"
-                    + NativeLibs.instructionSetDir(NativeLibs.forApk(base.getPath()))).getPath());
-            final File sourceApk = source;
-            File[] companionSplits = source.getParentFile() != null ? source.getParentFile().listFiles(
-                    (dir, name) -> (name.startsWith("split_") || name.startsWith("config."))
-                            && name.endsWith(".apk") && !name.equals(sourceApk.getName())) : null;
+            File[] companionSplits = companionSplits(source);
             if (companionSplits != null) {
-                String libDir = new File(code, "lib/"
-                        + NativeLibs.instructionSetDir(NativeLibs.forApk(base.getPath()))).getPath();
                 for (File split : companionSplits) {
                     String targetName = split.getName().startsWith("split_")
                             ? split.getName() : "split_" + split.getName();
-                    File dest = new File(code, targetName);
-                    copy(split, dest);
-                    libs += NativeLibs.extract(dest.getPath(), libDir);
+                    copy(split, new File(code, targetName));
                 }
             }
+            // The package's ABI over base.apk and its splits: an ABI split's libraries
+            // (an .xapk's config.arm64_v8a.apk) go to lib/arm64 and the package runs as
+            // arm64-v8a, not as an x86_64 package without its libraries.
+            String[] apks = apksOf(code.getPath());
+            String abi = NativeLibs.forApk(apks);
+            String libDir = new File(code, "lib/" + NativeLibs.instructionSetDir(abi)).getPath();
+            int libs = 0;
+            for (String apk : apks) libs += NativeLibs.extract(apk, libDir, abi);
             // dexopt, as the package manager runs it at install (Dexopt; ADR 0054).
             Dexopt.onInstall(pkg, code.getPath(), parsed.sharedLibraries);
             long now = System.currentTimeMillis();
@@ -274,7 +316,7 @@ final class Installer {
             }
             String what = old != null ? "updated" : "installed";
             SystemServer.log(what + " " + installed.describe() + ", in " + code.getPath()
-                    + (libs > 0 ? ", " + libs + " native libraries (" + NativeLibs.forApk(base.getPath())
+                    + (libs > 0 ? ", " + libs + " native libraries (" + abi
                             + ")" : ""));
             return new String[] {pkg, what, code.getPath(), String.valueOf(installed.versionCode())};
         } finally {

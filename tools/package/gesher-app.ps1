@@ -17,7 +17,10 @@
 #                                      Start menu shortcut, Gesher Apps\<label>)
 #   gesher-app launch com.example      start an installed package (its shortcut's
 #                                      command; `launch my.apk` = `gesher-app my.apk`)
-#   gesher-app uninstall com.example   uninstall a package (and its shortcut)
+#   gesher-app uninstall com.example   uninstall a package (and its shortcut and
+#                                      URL protocols)
+#   gesher-app view com.example URL    (an app's URL protocol runs it) ACTION_VIEW of
+#                                      URL in the package: an OAuth redirect comes back
 #   gesher-app list                    the installed packages
 #   gesher-app status                  the device's processes
 #   gesher-app shutdown                stop the device
@@ -68,10 +71,10 @@ try {
 } catch { }
 
 $root = Join-Path $env:LOCALAPPDATA 'Gesher'
-$commands = 'install', 'uninstall', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon'
+$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon'
 if ($Arguments.Count -eq 0) {
   Write-Host 'usage: gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--single-process | --system-server]'
-  Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | list | status | start | shutdown'
+  Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown'
   exit 2
 }
 $command = $Arguments[0]

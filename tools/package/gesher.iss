@@ -38,6 +38,11 @@ UninstallDisplayName=Gesher {#AppVersion}
 ; Start menu entries and the .apk file type.
 SetupIconFile=gesher.ico
 UninstallDisplayIcon={app}\gesher.ico
+; Setup closes (Restart Manager) what uses a file it replaces, but not for the
+; .apk icon handler: Explorer keeps gesher_shellext.dll loaded, and so does any
+; program whose file dialog showed an APK. Closing them took the desktop away
+; (Explorer) mid-update. PrepareToInstall moves the loaded copy aside instead.
+CloseApplicationsFilter=*.exe,*.chm
 
 [Files]
 Source: "{#BuildDir}\dalvikvm.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -58,8 +63,8 @@ Source: "{#BuildDir}\gesher-exec.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; double-clicked .apk and a toast click start: gesher-app with no console window.
 Source: "{#BuildDir}\gesher-launch.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; The .apk file type's icon handler (compat/shell/gesher_shellext.cc): an APK
-; Gesher installed shows its app's icon in Explorer (which keeps it loaded: an
-; update closes and restarts what uses it, Inno Setup's CloseApplications).
+; shows its app's icon in Explorer, which keeps it loaded: an update renames the
+; loaded copy (PrepareToInstall) and writes the new one beside it.
 Source: "{#BuildDir}\gesher_shellext.dll"; DestDir: "{app}"; Flags: ignoreversion
 ; dex2oat and profman (docs/compiled-code.md, ADR 0054): the device compiles apps at
 ; install and, with their JIT profiles, in the background.
@@ -157,6 +162,8 @@ Type: filesandordirs; Name: "{localappdata}\Gesher"
 ; The installed apps' Start menu shortcuts (gesher-app install; their icons are
 ; in the packages' data directories, above).
 Type: filesandordirs; Name: "{userprograms}\Gesher Apps"
+; Icon handlers an update moved aside (PrepareToInstall) while Explorer had them loaded.
+Type: files; Name: "{app}\gesher_shellext.*.old"
 
 [Code]
 const
@@ -205,6 +212,35 @@ begin
   end;
 end;
 
+// The icon handler an earlier version installed, which Explorer (and any program
+// whose file dialog showed an APK) keeps loaded: a loaded DLL cannot be replaced
+// but can be renamed, so it is moved aside and the new one written in its place;
+// those processes go on with the old copy until they end. Copies moved aside by
+// earlier updates are deleted once nothing has them loaded.
+procedure MoveShellExtAside();
+var
+  Dir, Old: String;
+  Find: TFindRec;
+begin
+  Dir := ExpandConstant('{app}');
+  if FindFirst(Dir + '\gesher_shellext.*.old', Find) then
+  begin
+    try
+      repeat
+        DeleteFile(Dir + '\' + Find.Name);
+      until not FindNext(Find);
+    finally
+      FindClose(Find);
+    end;
+  end;
+  if FileExists(Dir + '\gesher_shellext.dll') and not DeleteFile(Dir + '\gesher_shellext.dll') then
+  begin
+    Old := Dir + '\gesher_shellext.' + GetDateTimeString('yyyymmddhhnnsszzz', #0, #0) + '.old';
+    if not RenameFile(Dir + '\gesher_shellext.dll', Old) then
+      Log('Could not move the loaded gesher_shellext.dll aside');
+  end;
+end;
+
 // An update replaces files a running Gesher device uses: it is stopped first.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
@@ -215,6 +251,7 @@ begin
   if FileExists(Launcher) then
     Exec(ExpandConstant('{cmd}'), '/d /c ""' + Launcher + '" shutdown"', '', SW_HIDE,
       ewWaitUntilTerminated, Code);
+  MoveShellExtAside();
   Result := '';
 end;
 
@@ -261,6 +298,21 @@ begin
         RegDeleteKeyIncludingSubkeys(HKEY_CURRENT_USER, 'Software\Classes\AppUserModelId\' + Names[I]);
 end;
 
+// The apps' URL protocols (their custom schemes, registered by gesher-app install,
+// com.gesher.app.shell.AppShell) go with Gesher: the keys of HKCU\Software\Classes
+// with a GesherPackage value, and no other.
+procedure RemoveUrlProtocols();
+var
+  Names: TArrayOfString;
+  I: Integer;
+begin
+  if RegGetSubkeyNames(HKEY_CURRENT_USER, 'Software\Classes', Names) then
+    for I := 0 to GetArrayLength(Names) - 1 do
+      if (Copy(Names[I], 1, 1) <> '.') and
+         RegValueExists(HKEY_CURRENT_USER, 'Software\Classes\' + Names[I], 'GesherPackage') then
+        RegDeleteKeyIncludingSubkeys(HKEY_CURRENT_USER, 'Software\Classes\' + Names[I]);
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Path, Dir: String;
@@ -269,6 +321,7 @@ begin
   if CurUninstallStep = usPostUninstall then
   begin
     RemoveAppIds();
+    RemoveUrlProtocols();
     if RegQueryStringValue(HKEY_CURRENT_USER, ApkKey, '', Path) and
        (CompareText(Path, ApkProgId) = 0) then
       RegDeleteValue(HKEY_CURRENT_USER, ApkKey, '');

@@ -39,6 +39,29 @@ if ($LASTEXITCODE -eq 17) {
   $failed++
 }
 
+# fork()+exec as dart:io's Process.start does it (a Flutter app's UI thread): the
+# fork child waits for its parent's byte before exec, exec closes the O_CLOEXEC
+# fds. A regression hangs, so this runs with a time limit.
+$dartLog = Join-Path $env:RUNNER_TEMP "exec2-dart-start-$(Get-Random).log"
+$dart = Start-Process "$Dir/gesher-exec.exe" -ArgumentList @('--elf', "`"$driver`"", 'libexec2test.so', '--dart-start', "`"$(NoDrive $child)`"") `
+  -NoNewWindow -PassThru -RedirectStandardOutput $dartLog -RedirectStandardError "$dartLog.err"
+$dartExited = $dart.WaitForExit(60000)
+if (-not $dartExited) { $dart.Kill($true); $dart.WaitForExit() }
+$dartOut = (Get-Content -Raw $dartLog -ErrorAction SilentlyContinue) + (Get-Content -Raw "$dartLog.err" -ErrorAction SilentlyContinue)
+$dartExpect = @('exec2: PASS a fork child waits for its parent''s byte before exec (dart:io Process.start)',
+  'exec2: PASS exec closes the O_CLOEXEC fds: the exec-status pipe ends while the program runs',
+  'exec2: PASS the parent''s byte for the child is not in the program''s output',
+  'exec2: SUMMARY pass=3 fail=0')
+$dartMissing = $dartExpect | Where-Object { -not "$dartOut".Contains($_) }
+if ($dartExited -and $dart.ExitCode -eq 0 -and -not $dartMissing) {
+  Write-Host 'PASS  exec2: fork+exec as dart:io''s Process.start (the child waits for its parent''s byte; exec closes O_CLOEXEC fds)'
+} else {
+  $why = if (-not $dartExited) { 'hung for 60 s' } else { "exit $($dart.ExitCode); missing: $($dartMissing -join ', ')" }
+  Write-Host "FAIL  exec2: fork+exec as dart:io's Process.start ($why)"
+  Write-Host $dartOut
+  $failed++
+}
+
 # The /system/bin programs gesher-exec provides (docs/exec.md): the minimal
 # shell runs them as external commands.
 $lsOut = & "$Dir/gesher-exec.exe" --sh -c "ls $(NoDrive $Dir)" 2>&1 | Out-String

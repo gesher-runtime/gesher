@@ -504,9 +504,7 @@ class Env final : public A64::UserCallbacks {
     if (sp < reinterpret_cast<uint64_t>(stack_base_) + 0x20000) {
       GuestCrash(kSigSegv, 2, "SEGV_ACCERR", sp, "guest stack exhausted (nested callbacks)");
     }
-    for (size_t i = 0; i < nstack; ++i) {
-      std::memcpy(reinterpret_cast<void*>(sp + i * 8), &stack_args[i], 8);
-    }
+    if (nstack != 0) std::memcpy(reinterpret_cast<void*>(sp), stack_args, nstack * 8);
     ++depth_;
     for (int i = 0; i < 8; ++i) {
       jit->SetRegister(i, gpr[i]);
@@ -1174,10 +1172,61 @@ void* EmitGuestCode(const uint32_t* insns, size_t count) {
 
 using namespace gesher_arm64;
 
+namespace {
+
+// How many System V stack words (after the two that become X6, X7) a
+// host_entry call copies to the guest stack. The stub does not know the
+// callee's signature, so it copies a window large enough for any JNI native:
+// a Java method has at most 255 parameter slots, so with JNIEnv* and the
+// jclass/jobject at most 249 arguments are left after X0..X7 (and V0..V7).
+// Flutter's FlutterJNI.nativeSetViewportMetrics(long, float, 15 x int,
+// 3 x int[], 4 x int) alone has 17 AAPCS64 stack arguments: a window of 8
+// gave the guest garbage (null) for its int[] arguments.
+constexpr size_t kEntryStackWords = 256;
+
+// The words of the System V caller's stack arguments that can be read at
+// `stack`: kEntryStackWords, or fewer near the top of the thread's stack (the
+// window must not run past it). The words beyond the real arguments are the
+// caller's frames; the guest callee never reads them.
+size_t EntryStackWords(const uint64_t* stack) {
+  const auto s = reinterpret_cast<uintptr_t>(stack);
+  const auto* tib = reinterpret_cast<const NT_TIB*>(NtCurrentTeb());
+  uintptr_t end = 0;
+  if (s >= reinterpret_cast<uintptr_t>(tib->StackLimit) &&
+      s < reinterpret_cast<uintptr_t>(tib->StackBase)) {
+    end = reinterpret_cast<uintptr_t>(tib->StackBase);
+  } else {
+    // Not the thread's Windows stack (a fiber, a private stack): the
+    // committed readable region holding the arguments.
+    MEMORY_BASIC_INFORMATION mbi;
+    constexpr DWORD kReadable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                                PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                                PAGE_EXECUTE_WRITECOPY;
+    if (VirtualQuery(stack, &mbi, sizeof(mbi)) == sizeof(mbi) && mbi.State == MEM_COMMIT &&
+        (mbi.Protect & kReadable) != 0 && (mbi.Protect & PAGE_GUARD) == 0) {
+      end = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+    }
+  }
+  if (end <= s) return 0;
+  size_t words = (end - s) / 8;
+  return words < kEntryStackWords ? words : kEntryStackWords;
+}
+
+}  // namespace
+
 // Called (Microsoft ABI) by gesher_guest_entry_shim with the guest function
 // (from the host_entry stub's r10) and the System V call's arguments.
+//
+// System V passes integer arguments 1-6 and FP arguments 1-8 in registers and
+// every further one on the stack in argument order, one 8-byte slot each;
+// AAPCS64 on Linux/Android passes integer arguments 1-8 and FP arguments 1-8
+// in registers and the rest the same way (8-byte slots, argument order; not
+// Apple's packed layout). So System V stack words 0 and 1 are X6 and X7 (the
+// shim's gpr[6..7]) and words 2.. are the guest's stack arguments 0.., as
+// long as no FP argument overflows V7 before the 8th integer argument.
 extern "C" uint64_t gesher_guest_entry_trampoline(const void* fn, EntryFrame* frame) {
-  uint64_t r = EnterGuest(fn, frame->gpr, frame->xmm, frame->stack, 8);
+  uint64_t r =
+      EnterGuest(fn, frame->gpr, frame->xmm, frame->stack, EntryStackWords(frame->stack));
   frame->out_rdx = t_env->last_x1();
   frame->out_xmm0 = t_env->last_fp_result();
   return r;

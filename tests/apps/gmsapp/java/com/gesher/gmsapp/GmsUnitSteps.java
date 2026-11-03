@@ -135,6 +135,16 @@ public final class GmsUnitSteps {
         if (gmsInfo.signatures == null || gmsInfo.signatures.length == 0) {
             throw new AssertionError("com.google.android.gms has no signatures");
         }
+        // Google's own certificate, which the real client libraries' GoogleSignatureVerifier
+        // requires (Gmail: "signature is invalid", error 9, with any other).
+        byte[] sha1 = java.security.MessageDigest.getInstance("SHA-1")
+                .digest(gmsInfo.signatures[0].toByteArray());
+        StringBuilder hex = new StringBuilder();
+        for (byte b : sha1) hex.append(String.format("%02x", b & 0xff));
+        if (!"38918a453d07199354f8b19af05ec6562ced5788".equals(hex.toString())) {
+            throw new AssertionError("com.google.android.gms is not signed with Google's certificate: "
+                    + hex);
+        }
         if (gmsInfo.applicationInfo == null || !gmsInfo.applicationInfo.enabled) {
             throw new AssertionError("com.google.android.gms applicationInfo not enabled");
         }
@@ -164,7 +174,7 @@ public final class GmsUnitSteps {
                     + hasGms + " vending=" + hasVending);
         }
 
-        Report.line("PackageManager: com.google.android.gms synthetic package present, enabled, valid signatures");
+        Report.line("PackageManager: com.google.android.gms synthetic package present, enabled, valid signatures (Google's certificate)");
         Report.line("PackageManager: com.android.vending synthetic package present, enabled");
     }
 

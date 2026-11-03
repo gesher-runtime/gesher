@@ -81,6 +81,14 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   `chdir` calls are recorded, and its `exec*()` spawns the program with them
   while `fork()` returns the child's pid to the parent; its `exit`/`_exit` ends
   the child. The child must only prepare and `exec`/`_exit`, as `vfork` requires.
+  `exec` passes the program the child's fds without the close-on-exec ones
+  (`O_CLOEXEC`, `FD_CLOEXEC` at fork, `dup2` clearing it, `dup3`'s flag).
+  A child that waits for its parent through a pipe before `exec` would wait
+  forever (the parent runs only after it): dart:io's `Process.start`/`run`
+  does, so a Flutter app that runs a program hung its UI thread. A fork child's
+  `read` from an empty pipe this process created therefore returns one byte
+  (0) at once, and the parent's next `write` to that pipe leaves one byte out,
+  so the parent's go-ahead reaches nobody (exec2 track: `--dart-start`).
 - **`exec*()` outside a fork** spawns the program with this process's fds,
   environment and working directory, waits and exits with its status (the pid
   changes).
@@ -110,7 +118,10 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   instruction forms fail or trap explicitly (ADR 0060). Emulated TLS (API
   <29) and library ELF TLS retain their existing paths.
 - A real `fork()` that does work other than `exec`/`_exit` in the child is not
-  supported (vfork-style only, ADR 0055).
+  supported (vfork-style only, ADR 0055). Beyond the one-byte go-ahead above, a
+  fork child cannot wait for its parent; `fcntl(F_SETFD)` and `environ`
+  assignments in the child are not recorded (the program gets the fds' flags
+  and the environment as they were at fork).
 - Exit-status convention: a child that dies of a signal carries a Windows
   exit code of 128 + signal (the posix layer's `kill` and the launcher's
   fault mapping both use it), and `waitForProcessExit` passes such codes

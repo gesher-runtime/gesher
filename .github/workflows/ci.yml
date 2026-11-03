@@ -706,6 +706,60 @@ jobs:
           if ((Get-LinkAppUserModelId $componentsLnk) -ne 'Gesher.App.com.gesher.components') { $problems += 'not its AppUserModelID' }
           if ($problems) { throw "The shortcut of components.apk: $($problems -join '; ')" }
           'PASS  installer: components.apk''s shortcut has its adaptive icon (foreground over background, masked)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Its BROWSABLE custom scheme (CrossActivity's gesher-components://callback, as an
+          # OAuth redirect's) is a per-user URL protocol that runs gesher-launch view.
+          $proto = 'HKCU:\Software\Classes\gesher-components'
+          $problems = @()
+          if (-not (Test-Path $proto)) {
+            $problems += "no $proto"
+          } else {
+            $protoKey = Get-ItemProperty $proto
+            if ($protoKey.GesherPackage -ne 'com.gesher.components') { $problems += "GesherPackage '$($protoKey.GesherPackage)'" }
+            if ($null -eq $protoKey.'URL Protocol') { $problems += 'no URL Protocol value' }
+            $protoCommand = (Get-ItemProperty "$proto\shell\open\command" -ErrorAction SilentlyContinue).'(default)'
+            if ($protoCommand -ne "`"$app\gesher-launch.exe`" view com.gesher.components `"%1`"") { $problems += "command '$protoCommand'" }
+            if ((Get-ItemProperty "$proto\DefaultIcon" -ErrorAction SilentlyContinue).'(default)' -ne $componentsIco) { $problems += 'not its icon' }
+          }
+          if ($out -notmatch 'URL protocol gesher-components: ') { $problems += 'gesher-app install did not report it' }
+          if ($problems) { throw "The URL protocol of components.apk: $($problems -join '; ')" }
+          'PASS  installer: gesher-app install registers components.apk''s custom scheme as a URL protocol (gesher-launch view com.gesher.components "%1")' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # gesher-app uninstall removes it; a scheme another program has is left to it on install.
+          $out = & "$app\gesher-app.cmd" uninstall com.gesher.components 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0 -or (Test-Path $proto)) { throw "gesher-app uninstall left $proto (exit $LASTEXITCODE)" }
+          $null = New-Item "$proto\shell\open\command" -Force -Value 'not-gesher.exe "%1"'
+          $out = & "$app\gesher-app.cmd" install $components 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          $protoCommand = (Get-ItemProperty "$proto\shell\open\command").'(default)'
+          $kept = $code -eq 0 -and $protoCommand -eq 'not-gesher.exe "%1"' -and $null -eq (Get-ItemProperty $proto).GesherPackage
+          Remove-Item $proto -Recurse -Force
+          if (-not $kept) { throw "gesher-app install took over another program's URL protocol gesher-components (exit $code, command '$protoCommand')" }
+          # The record: a scheme it did not get is not its own (reinstalled, it gets it).
+          $out = & "$app\gesher-app.cmd" uninstall com.gesher.components 2>&1 | Out-String
+          $out = & "$app\gesher-app.cmd" install $components 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or (Get-ItemProperty $proto -ErrorAction SilentlyContinue).GesherPackage -ne 'com.gesher.components') {
+            Write-Host $out
+            throw 'gesher-app install did not register gesher-components again'
+          }
+          'PASS  installer: gesher-app uninstall removes the app''s URL protocol; install leaves a scheme another program has alone' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The URL protocol's command line, as Windows runs it (%1: the URL), for a package
+          # that is not installed: gesher-app view gets the package and the whole URL.
+          $psi = [Diagnostics.ProcessStartInfo]::new("$app\gesher-launch.exe", 'view com.gesher.notinstalled "gesher-components://callback?code=1&state=2"')
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $psi.WorkingDirectory = $app
+          $p = [Diagnostics.Process]::Start($psi)
+          $errors = $p.StandardError.ReadToEndAsync()
+          $out = $p.StandardOutput.ReadToEnd()
+          $p.WaitForExit()
+          $out += $errors.Result
+          if ($p.ExitCode -ne 1 -or $out -notmatch 'com\.gesher\.notinstalled is not installed: gesher-components://callback\?code=1&state=2 goes nowhere') {
+            Write-Host $out
+            throw "gesher-launch view of a package that is not installed (exit $($p.ExitCode))"
+          }
+          'PASS  installer: a URL protocol''s command line (gesher-launch view PACKAGE "%1") hands gesher-app the package and the whole URL' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # An APK Gesher never installed (gesher-app apk-icon, what the .apk icon handler
           # runs in the background): its icon drawn and recorded, nothing installed.
           $iconApk = Join-Path $env:TEMP 'components-icon.apk'
@@ -861,6 +915,106 @@ jobs:
           }
           'PASS  installer: gesher-app runs uiapp.apk on the Gesher device in a Win32 window of its app process (hwui''s frame read back with PrintWindow; the Activity''s label, AppUserModelID Gesher.App.com.gesher.uiapp, its icon); closing it ends the app' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: input reaches uiapp.apk''s views on the Gesher device (a click runs the Button''s onClick, keys and a WM_CHAR type into its EditText, the wheel scrolls, the resized window redraws at 600x700)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # gesher-launch's splash (compat/shell/gesher_launch.cc, docs/installer.md):
+          # `gesher-launch install` shows none; `gesher-launch launch com.gesher.uiapp`
+          # (the shortcut's command, the app's window shown) shows a GesherSplash
+          # window with the app's label and AppUserModelID at once, which goes once
+          # the app's own window (GesherWindow, the same AppUserModelID) is visible.
+          if (-not ('GesherSplashCi' -as [type])) {
+            Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class GesherSplashCi {
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowExW(IntPtr parent, IntPtr after, string cls, string title);
+            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+            // The visible windows of class `cls` (of process `pid`, unless 0).
+            public static IntPtr[] Find(string cls, uint pid) {
+              var found = new System.Collections.Generic.List<IntPtr>();
+              IntPtr h = IntPtr.Zero;
+              while ((h = FindWindowExW(IntPtr.Zero, h, cls, null)) != IntPtr.Zero) {
+                uint owner;
+                GetWindowThreadProcessId(h, out owner);
+                if ((pid == 0 || owner == pid) && IsWindowVisible(h)) found.Add(h);
+              }
+              return found.ToArray();
+            }
+          }
+          '@
+          }
+          $problems = @()
+          $psi = [Diagnostics.ProcessStartInfo]::new("$app\gesher-launch.exe", "install `"$uiapp`"")
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $p = [Diagnostics.Process]::Start($psi)
+          $errors = $p.StandardError.ReadToEndAsync()
+          $outs = $p.StandardOutput.ReadToEndAsync()
+          $sawSplash = $false
+          while (-not $p.WaitForExit(100)) { if ([GesherSplashCi]::Find('GesherSplash', [uint32]$p.Id).Count -gt 0) { $sawSplash = $true } }
+          $p.WaitForExit()
+          if ($p.ExitCode -ne 0) { $problems += "gesher-launch install exit $($p.ExitCode): $($outs.Result)$($errors.Result)" }
+          if ($sawSplash) { $problems += 'gesher-launch install showed a splash' }
+          $psi = [Diagnostics.ProcessStartInfo]::new("$app\gesher-launch.exe", 'launch com.gesher.uiapp')
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $psi.EnvironmentVariables['GESHER_APP_WINDOW'] = 'window'
+          $p = [Diagnostics.Process]::Start($psi)
+          $errors = $p.StandardError.ReadToEndAsync()
+          $outs = $p.StandardOutput.ReadToEndAsync()
+          $splash = [IntPtr]::Zero; $appWindow = [IntPtr]::Zero; $splashGone = $false
+          $deadline = (Get-Date).AddSeconds(400)
+          while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
+            if ($splash -eq [IntPtr]::Zero) {
+              $s = @([GesherSplashCi]::Find('GesherSplash', [uint32]$p.Id))
+              if ($s.Count -gt 0) {
+                $splash = $s[0]
+                Write-Host "splash: title '$([GesherWin32]::Title($splash))', AppUserModelID '$([GesherWin32]::AppUserModelId($splash))', icon: $([GesherWin32]::HasIcon($splash))"
+                if ([GesherWin32]::AppUserModelId($splash) -ne 'Gesher.App.com.gesher.uiapp') { $problems += "the splash's AppUserModelID is '$([GesherWin32]::AppUserModelId($splash))'" }
+                if ([GesherWin32]::Title($splash) -ne 'Gesher UI') { $problems += "the splash's title is '$([GesherWin32]::Title($splash))', not the app's label" }
+                if (-not [GesherWin32]::HasIcon($splash)) { $problems += 'the splash has no icon' }
+              }
+            }
+            $w = @([GesherSplashCi]::Find('GesherWindow', 0) | Where-Object { [GesherWin32]::AppUserModelId($_) -eq 'Gesher.App.com.gesher.uiapp' })
+            if ($w.Count -gt 0) {
+              $appWindow = $w[0]
+              # The splash looks every 200 ms.
+              for ($i = 0; $i -lt 50 -and -not $splashGone; $i++) {
+                $splashGone = $splash -ne [IntPtr]::Zero -and -not [GesherWin32]::IsWindow($splash)
+                if (-not $splashGone) { Start-Sleep -Milliseconds 100 }
+              }
+              break
+            }
+            Start-Sleep -Milliseconds 100
+          }
+          if ($splash -eq [IntPtr]::Zero) { $problems += 'no splash window' }
+          if ($appWindow -eq [IntPtr]::Zero) { $problems += 'the app''s window was not shown' }
+          elseif (-not $splashGone) { $problems += 'the splash was still up 5 s after the app''s window was shown' }
+          if ($appWindow -ne [IntPtr]::Zero) { [void][GesherWin32]::PostMessageW($appWindow, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }  # WM_CLOSE
+          if (-not $p.WaitForExit(120000)) { $p.Kill($true); $problems += 'gesher-launch did not end after the app''s window was closed' }
+          elseif ($p.ExitCode -ne 0) { $problems += "gesher-launch launch exit $($p.ExitCode)" }
+          if ($problems) {
+            Write-Host "$($outs.Result)$($errors.Result)"
+            throw "gesher-launch's splash: $($problems -join '; ')"
+          }
+          'PASS  installer: gesher-launch launch com.gesher.uiapp shows a splash (GesherSplash: the app''s label, icon and AppUserModelID) until the app''s window is up; gesher-launch install shows none' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # An update while a program has the .apk icon handler loaded (Explorer always
+          # has): Setup must not close that program (it took the desktop away), and
+          # the update must still succeed: the loaded copy is moved aside.
+          $holder = Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command',
+            "Add-Type -Name K -Namespace Ci -MemberDefinition '[DllImport(`"kernel32.dll`", CharSet = CharSet.Unicode)] public static extern System.IntPtr LoadLibraryW(string p);'; if ([Ci.K]::LoadLibraryW('$app\gesher_shellext.dll') -eq [IntPtr]::Zero) { exit 3 }; Start-Sleep 600"
+          for ($i = 0; $i -lt 30 -and -not ((Get-Process -Id $holder.Id -ErrorAction SilentlyContinue).Modules | Where-Object ModuleName -eq 'gesher_shellext.dll'); $i++) { Start-Sleep 1 }
+          if ($holder.HasExited) { throw "The process holding gesher_shellext.dll ended before the update (exit $($holder.ExitCode))" }
+          $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          $problems = @()
+          if ($p.ExitCode -ne 0) { $problems += "Setup exit $($p.ExitCode)" }
+          if ($holder.HasExited) { $problems += 'Setup closed the process that had gesher_shellext.dll loaded' }
+          if (-not (Test-Path "$app\gesher_shellext.dll")) { $problems += 'no gesher_shellext.dll after the update' }
+          if (-not (Get-ChildItem "$app\gesher_shellext.*.old" -ErrorAction SilentlyContinue)) { $problems += 'the loaded copy was not moved aside' }
+          Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
+          if ($problems) { throw "Updating with the icon handler loaded: $($problems -join '; ')" }
+          'PASS  installer: an update with gesher_shellext.dll loaded in another process leaves that process running (Explorer is not closed) and moves the loaded copy aside' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Something of the Start menu that is not Gesher's, which uninstalling must keep.
           $sentinel = Join-Path $programs 'gesher-ci-sentinel.txt'
           Set-Content $sentinel 'not Gesher''s'
@@ -883,7 +1037,9 @@ jobs:
           if (Test-Path "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}") { throw 'Uninstall left the toast activator' }
           $appIds = @(Get-ChildItem "$cls\AppUserModelId" -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'Gesher.App.*')
           if ($appIds) { throw "Uninstall left app ids: $($appIds.PSChildName -join ', ')" }
-          'PASS  installer: uninstall removes the toast activator and the apps'' AppUserModelIDs' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # components.apk was still installed: its URL protocol goes with Gesher.
+          if (Test-Path "$cls\gesher-components") { throw 'Uninstall left the URL protocol gesher-components' }
+          'PASS  installer: uninstall removes the toast activator and the apps'' AppUserModelIDs and URL protocols' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           if (Test-Path $appsFolder) { throw "Uninstall left $appsFolder" }
           if (-not (Test-Path $sentinel)) { throw "Uninstall removed $sentinel" }
           Remove-Item $sentinel

@@ -448,6 +448,21 @@ def main():
         'compat/bionic/gen_gl_thunks.py',
         'compat/bionic/egl_gles.cc',
         'tests/apps/glapp/jni/glapp.c',
+        'app/java/android/net/ConnectivityFrameworkInitializer.java',
+        'app/java/android/net/nsd/NsdManager.java',
+        'app/java/android/net/nsd/NsdServiceInfo.java',
+        'app/java/com/gesher/server/BrowserPackageSupport.java',
+        'tests/apps/components/AndroidManifest.xml',
+        'tests/dex-services/gesher/services/BrowserIntentTest.java',
+        'tests/windows/tracks/95-browser.ps1',
+        'app/java/com/gesher/app/NativeLibs.java',
+        'app/java/com/gesher/server/StandIn.java',
+        'tests/native/arm64_jni_test.c',
+        'tests/native/java/gesher/Arm64Jni.java',
+        'tests/exec/exec2_test.c',
+        'tests/windows/tracks/43-exec2.ps1',
+        'tests/apps/uiapp/java/com/gesher/uiapp/UiActivity.java',
+        'tests/windows/tracks/34-windows.ps1',
     ])
     assert not (code | {'tools/ci/receipt-unreviewed.py'}) <= allowed
     print('BLOCKING_RECEIPT_NEGATIVE unauthorized_path rejected; exact pins enforced externally', flush=True)

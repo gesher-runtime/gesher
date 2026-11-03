@@ -35,24 +35,33 @@ public final class NativeLibs {
     }
 
     /**
-     * The best-matching ABI the APK actually ships native code for: the first of
-     * {@link #SUPPORTED} that has a {@code lib/<abi>/*.so} entry, or {@code null}
-     * if the APK has no native code for any of them.
+     * The best-matching ABI the APKs (a base APK and its splits) actually ship native code
+     * for: the first of {@link #SUPPORTED} that one of them has a {@code lib/<abi>/*.so}
+     * entry for, or {@code null} if none has native code for any of them. A split APK
+     * install (.xapk, .apks) has its libraries in an ABI split (config.arm64_v8a.apk),
+     * not in base.apk.
      */
-    public static String abiFor(String apk) throws IOException {
-        try (ZipFile zip = new ZipFile(apk)) {
-            for (String abi : SUPPORTED) {
-                String prefix = "lib/" + abi + "/";
-                for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
-                    String name = e.nextElement().getName();
-                    if (name.startsWith(prefix) && name.endsWith(".so")
-                            && name.indexOf('/', prefix.length()) < 0) {
-                        return abi;
-                    }
-                }
+    public static String abiFor(String... apks) throws IOException {
+        for (String abi : SUPPORTED) {
+            for (String apk : apks) {
+                if (has(apk, abi)) return abi;
             }
         }
         return null;
+    }
+
+    private static boolean has(String apk, String abi) throws IOException {
+        String prefix = "lib/" + abi + "/";
+        try (ZipFile zip = new ZipFile(apk)) {
+            for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
+                String name = e.nextElement().getName();
+                if (name.startsWith(prefix) && name.endsWith(".so")
+                        && name.indexOf('/', prefix.length()) < 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -60,9 +69,9 @@ public final class NativeLibs {
      * APK's best match, or {@link #ABI} for an APK without native code (or one
      * that cannot be read).
      */
-    public static String forApk(String apk) {
+    public static String forApk(String... apks) {
         try {
-            String abi = abiFor(apk);
+            String abi = abiFor(apks);
             return abi != null ? abi : ABI;
         } catch (IOException e) {
             return ABI;
@@ -86,9 +95,14 @@ public final class NativeLibs {
      */
     public static int extract(String apk, String dir) throws IOException {
         String abi = abiFor(apk);
-        if (abi == null) {
-            return 0;
-        }
+        return abi != null ? extract(apk, dir, abi) : 0;
+    }
+
+    /**
+     * Copies the APK's native libraries for {@code abi} (the package's, {@link #abiFor}
+     * over all its APKs) into {@code dir}; returns how many.
+     */
+    public static int extract(String apk, String dir, String abi) throws IOException {
         String prefix = "lib/" + abi + "/";
         int count = 0;
         byte[] buffer = new byte[64 * 1024];
