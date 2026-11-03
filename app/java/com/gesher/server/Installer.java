@@ -161,6 +161,34 @@ final class Installer {
     }
 
     /** The split APKs beside {@code apk} (an extracted .xapk's config.*.apk), or null. */
+    /**
+     * The ABIs {@code apk} and its companion splits ship native code for, if none of
+     * them is one Gesher runs ({@link NativeLibs#SUPPORTED}); null if one is, or if
+     * there is no native code.
+     */
+    private static String[] unsupportedAbis(File apk) throws IOException {
+        List<File> files = new ArrayList<>();
+        files.add(apk);
+        File[] splits = companionSplits(apk);
+        if (splits != null) files.addAll(Arrays.asList(splits));
+        java.util.Set<String> abis = new java.util.TreeSet<>();
+        for (File f : files) {
+            try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(f)) {
+                for (java.util.Enumeration<? extends java.util.zip.ZipEntry> e = zip.entries();
+                        e.hasMoreElements(); ) {
+                    String[] parts = e.nextElement().getName().split("/");
+                    if (parts.length == 3 && parts[0].equals("lib") && parts[2].endsWith(".so")) {
+                        abis.add(parts[1]);
+                    }
+                }
+            }
+        }
+        for (String abi : NativeLibs.SUPPORTED) {
+            if (abis.contains(abi)) return null;
+        }
+        return abis.isEmpty() ? null : abis.toArray(new String[0]);
+    }
+
     private static File[] companionSplits(File apk) {
         File dir = apk.getParentFile();
         if (dir == null) return null;
@@ -264,6 +292,17 @@ final class Installer {
                     throw new IllegalArgumentException("INSTALL_FAILED_BAD_DEX_METADATA: "
                             + result.getErrorMessage(), result.getException());
                 }
+            }
+            String[] foreign = unsupportedAbis(source);
+            if (foreign != null) {
+                // Native code only for ABIs Gesher cannot run (32-bit armeabi-v7a, x86):
+                // refused, as a device refuses it, instead of an app whose libraries
+                // never load (and an update that replaces a working install).
+                throw new IllegalArgumentException("INSTALL_FAILED_NO_MATCHING_ABIS: "
+                        + source.getName() + " has native code only for "
+                        + String.join(", ", foreign) + "; Gesher runs "
+                        + String.join(" and ", NativeLibs.SUPPORTED)
+                        + " (use the app's arm64-v8a, x86_64 or universal APK)");
             }
             Entry old = mEntries.get(pkg);
             if (old != null && sameContent(source, new File(old.codePath, "base.apk"))
