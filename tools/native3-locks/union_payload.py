@@ -647,6 +647,7 @@ def main():
             'tests/windows/tracks/34-windows.ps1',
             'compat/bionic/system_cacerts.h',
             'tests/exec/java/gesher/ExecTest.java',
+            'compat/posix/src/errno.cc',
         ])
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
                       ':(exclude)docs/**'], cwd=ROOT, text=True).splitlines())
