@@ -325,6 +325,26 @@ public final class WindowsHost {
         }
     }
 
+    /** Shows the native Windows folder picker dialog. Returns the selected folder path, or null. */
+    public static String pickFolder(String title) {
+        if (!available()) return null;
+        try {
+            return nativePickFolder(title);
+        } catch (UnsatisfiedLinkError e) {
+            return null;
+        }
+    }
+
+    /** Shows the native Windows file picker dialog. Returns the selected file path, or null. */
+    public static String pickFile(String title) {
+        if (!available()) return null;
+        try {
+            return nativePickFile(title);
+        } catch (UnsatisfiedLinkError e) {
+            return null;
+        }
+    }
+
     private static native long nativeStartEvents();
     private static native int nativeWaitEvents(int timeoutMs);
     private static native String[] nativeNextActivation();
@@ -357,6 +377,8 @@ public final class WindowsHost {
     private static native int nativeUnregisterAppId(String appId);
     private static native String nativeFullPath(String path);
     private static native boolean nativeOpenUrl(String url);
+    private static native String nativePickFolder(String title);
+    private static native String nativePickFile(String title);
     /** The IANA id of a Windows time zone key name (Windows' icu.dll), or null. */
     public static String ianaZone(String windowsId) {
         if (!available() || windowsId == null) return null;

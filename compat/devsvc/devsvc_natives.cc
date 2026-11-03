@@ -256,6 +256,18 @@ jboolean WindowsHost_openUrl(JNIEnv* env, jclass, jstring url) {
   return dev::OpenUrl(Str(env, url)) ? JNI_TRUE : JNI_FALSE;
 }
 
+jstring WindowsHost_pickFolder(JNIEnv* env, jclass, jstring title) {
+  std::u16string t = title != nullptr ? Str(env, title) : std::u16string();
+  std::u16string path = dev::PickFolder(t);
+  return path.empty() ? nullptr : JStr(env, path);
+}
+
+jstring WindowsHost_pickFile(JNIEnv* env, jclass, jstring title) {
+  std::u16string t = title != nullptr ? Str(env, title) : std::u16string();
+  std::u16string path = dev::PickFile(t);
+  return path.empty() ? nullptr : JStr(env, path);
+}
+
 extern "C" {
 jbyteArray Java_com_gesher_server_WindowsHost_nativeClipboardImage(JNIEnv* env, jclass);
 jboolean Java_com_gesher_server_WindowsHost_nativeHasClipboardImage(JNIEnv*, jclass);
@@ -307,6 +319,8 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeUnregisterAppId", "(" DEVSVC_STRING ")I", GESHER_JNI(WindowsHost_unregisterAppId)},
     {"nativeFullPath", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_fullPath)},
     {"nativeOpenUrl", "(" DEVSVC_STRING ")Z", GESHER_JNI(WindowsHost_openUrl)},
+    {"nativePickFolder", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_pickFolder)},
+    {"nativePickFile", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_pickFile)},
     {"nativeIanaZone", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_ianaZone)},
     {"nativeRegisterActivator", "(Z)I", GESHER_JNI(WindowsHost_registerActivator)},
     {"nativeRevokeActivator", "()V", GESHER_JNI(WindowsHost_revokeActivator)},

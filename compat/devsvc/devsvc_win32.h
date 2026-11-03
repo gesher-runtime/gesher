@@ -118,5 +118,11 @@ std::u16string FullPath(const std::u16string& path);
 // ShellExecuteW: opens an external URL with the user's default browser / handler.
 bool OpenUrl(const std::u16string& url);
 
+// IFileOpenDialog: native Windows folder picker dialog.
+std::u16string PickFolder(const std::u16string& title);
+
+// IFileOpenDialog: native Windows file picker dialog.
+std::u16string PickFile(const std::u16string& title);
+
 }  // namespace devsvc
 }  // namespace gesher

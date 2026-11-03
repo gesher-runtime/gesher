@@ -398,7 +398,10 @@ bool Window::SetIcon(const std::string& ico_path_utf8) {
 
 void Window::Show() {
   offscreen_ = false;
-  ShowWindowAsync(static_cast<HWND>(hwnd_), SW_SHOWNORMAL);
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  ShowWindow(hwnd, SW_SHOWNORMAL);
+  SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+  SetForegroundWindow(hwnd);
 }
 
 void Window::Hide() {

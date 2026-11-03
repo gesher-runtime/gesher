@@ -11,6 +11,7 @@
 #include <oleauto.h>
 #include <netlistmgr.h>
 #include <shellapi.h>
+#include <shobjidl.h>
 
 #include "devsvc_toast.h"
 
@@ -630,10 +631,12 @@ std::u16string FullPath(const std::u16string& path) {
 bool OpenUrl(const std::u16string& url) {
   if (url.empty()) return false;
   AllowSetForegroundWindow(ASFW_ANY);
+  HWND fg = GetForegroundWindow();
   std::wstring wurl = W(url);
   SHELLEXECUTEINFOW sei = {};
   sei.cbSize = sizeof(sei);
-  sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+  sei.hwnd = fg;
+  sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
   sei.lpVerb = L"open";
   sei.lpFile = wurl.c_str();
   sei.nShow = SW_SHOWNORMAL;
@@ -645,6 +648,84 @@ bool OpenUrl(const std::u16string& url) {
     return true;
   }
   return false;
+}
+
+std::u16string PickFolder(const std::u16string& title) {
+  HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  bool need_uninit = (hr == S_OK || hr == S_FALSE);
+
+  IFileOpenDialog* pfd = nullptr;
+  hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                        IID_PPV_ARGS(&pfd));
+  if (FAILED(hr) || !pfd) {
+    if (need_uninit) CoUninitialize();
+    return std::u16string();
+  }
+
+  if (!title.empty()) {
+    pfd->SetTitle(W(title));
+  }
+  FILEOPENDIALOGOPTIONS opt = 0;
+  if (SUCCEEDED(pfd->GetOptions(&opt))) {
+    pfd->SetOptions(opt | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+  }
+
+  HWND owner = GetForegroundWindow();
+  hr = pfd->Show(owner);
+  std::u16string result;
+  if (SUCCEEDED(hr)) {
+    IShellItem* psi = nullptr;
+    if (SUCCEEDED(pfd->GetResult(&psi)) && psi) {
+      PWSTR path = nullptr;
+      if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
+        result = U16(path);
+        CoTaskMemFree(path);
+      }
+      psi->Release();
+    }
+  }
+  pfd->Release();
+  if (need_uninit) CoUninitialize();
+  return result;
+}
+
+std::u16string PickFile(const std::u16string& title) {
+  HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  bool need_uninit = (hr == S_OK || hr == S_FALSE);
+
+  IFileOpenDialog* pfd = nullptr;
+  hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                        IID_PPV_ARGS(&pfd));
+  if (FAILED(hr) || !pfd) {
+    if (need_uninit) CoUninitialize();
+    return std::u16string();
+  }
+
+  if (!title.empty()) {
+    pfd->SetTitle(W(title));
+  }
+  FILEOPENDIALOGOPTIONS opt = 0;
+  if (SUCCEEDED(pfd->GetOptions(&opt))) {
+    pfd->SetOptions(opt | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST);
+  }
+
+  HWND owner = GetForegroundWindow();
+  hr = pfd->Show(owner);
+  std::u16string result;
+  if (SUCCEEDED(hr)) {
+    IShellItem* psi = nullptr;
+    if (SUCCEEDED(pfd->GetResult(&psi)) && psi) {
+      PWSTR path = nullptr;
+      if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
+        result = U16(path);
+        CoTaskMemFree(path);
+      }
+      psi->Release();
+    }
+  }
+  pfd->Release();
+  if (need_uninit) CoUninitialize();
+  return result;
 }
 
 }  // namespace devsvc

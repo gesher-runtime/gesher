@@ -27,6 +27,7 @@ import com.android.internal.pm.pkg.component.ParsedIntentInfo;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -433,6 +434,25 @@ public final class ApkPackage {
         ai.deviceProtectedDataDir = mDataDir;
         ai.nativeLibraryDir = nativeLibraryDir();
         ai.primaryCpuAbi = mPrimaryCpuAbi;
+
+        File parentDir = new File(apkPath).getParentFile();
+        if (parentDir != null && parentDir.isDirectory()) {
+            File[] splits = parentDir.listFiles((dir, name) -> name.startsWith("split_") && name.endsWith(".apk"));
+            if (splits != null && splits.length > 0) {
+                Arrays.sort(splits, (a, b) -> a.getName().compareTo(b.getName()));
+                String[] splitPaths = new String[splits.length];
+                String[] splitNames = new String[splits.length];
+                for (int i = 0; i < splits.length; i++) {
+                    splitPaths[i] = splits[i].getAbsolutePath();
+                    String name = splits[i].getName();
+                    splitNames[i] = name.substring("split_".length(), name.length() - ".apk".length());
+                }
+                ai.splitSourceDirs = splitPaths;
+                ai.splitPublicSourceDirs = splitPaths;
+                ai.splitNames = splitNames;
+            }
+        }
+
         // A long-lived PM record must not publish a cached graph after XML/jar updates.
         // Ordinary packages keep the cheap immutable empty graph path.
         try {

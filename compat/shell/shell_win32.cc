@@ -137,6 +137,7 @@ long CreateShortcut(const std::u16string& link_path, const std::u16string& targe
   if (SUCCEEDED(hr) && !work_dir.empty()) hr = link->SetWorkingDirectory(W(work_dir));
   if (SUCCEEDED(hr) && !icon.empty()) hr = link->SetIconLocation(W(icon), 0);
   if (SUCCEEDED(hr) && !description.empty()) hr = link->SetDescription(W(description));
+  if (SUCCEEDED(hr)) link->SetShowCmd(SW_SHOWMINNOACTIVE);
   if (SUCCEEDED(hr) && !app_id.empty()) hr = SetAppId(link.get(), app_id);
   if (SUCCEEDED(hr)) {
     Ref<IPersistFile> file;

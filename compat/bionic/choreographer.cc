@@ -58,7 +58,9 @@ struct FrameCallbackData {
 class Choreographer : public android::MessageHandler {
  public:
   explicit Choreographer(const sp<Looper>& looper) : looper_(looper) {
-    timer_thread_ = std::thread([this] { TimerLoop(); });
+    if (looper_ == nullptr) {
+      timer_thread_ = std::thread([this] { TimerLoop(); });
+    }
   }
 
   ~Choreographer() override {
@@ -158,14 +160,15 @@ class Choreographer : public android::MessageHandler {
         scheduled_ = first;
         looper_->sendMessageAtTime(first, self, android::Message(kFrame));
       }
+    } else {
+      cv_.notify_all();
     }
-    cv_.notify_all();
   }
 
   void TimerLoop() {
     std::unique_lock<std::mutex> l(lock_);
     while (!stopped_) {
-      if (!pending_refresh_.empty() && looper_ == nullptr) {
+      if (!pending_refresh_.empty()) {
         std::vector<std::pair<void*, void*>> told;
         told.swap(pending_refresh_);
         l.unlock();
@@ -179,7 +182,7 @@ class Choreographer : public android::MessageHandler {
 
       if (callbacks_.empty()) {
         cv_.wait(l, [this] {
-          return stopped_ || !callbacks_.empty() || (!pending_refresh_.empty() && looper_ == nullptr);
+          return stopped_ || !callbacks_.empty() || !pending_refresh_.empty();
         });
         continue;
       }
@@ -188,10 +191,8 @@ class Choreographer : public android::MessageHandler {
       nsecs_t first = callbacks_.front().due;
       for (const Callback& c : callbacks_) first = std::min(first, c.due);
 
-      // If looper_ != nullptr, give the thread's looper 2ms leeway to process the message first.
-      nsecs_t target_time = looper_ != nullptr ? first + 2'000'000 : first;
-      if (now < target_time) {
-        nsecs_t wait_ns = target_time - now;
+      if (now < first) {
+        nsecs_t wait_ns = first - now;
         cv_.wait_for(l, std::chrono::nanoseconds(wait_ns), [this, first] {
           if (stopped_) return true;
           if (callbacks_.empty()) return true;

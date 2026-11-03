@@ -176,71 +176,128 @@ final class Installer {
     synchronized String[] install(String apk) throws Exception {
         File source = new File(apk);
         if (!source.isFile()) throw new IllegalArgumentException("no such file: " + apk);
-        ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
-        String pkg = parsed.packageName;
-        File metadata = dexMetadata(source);
-        if (metadata.isFile()) {
-            ParseResult<?> result = DexMetadataHelper.validateDexMetadataFile(
-                    ParseTypeImpl.forDefaultParsing(), metadata.getPath(), pkg, parsed.versionCode());
-            if (result.isError()) {
-                throw new IllegalArgumentException("INSTALL_FAILED_BAD_DEX_METADATA: "
-                        + result.getErrorMessage(), result.getException());
-            }
-        }
-        Entry old = mEntries.get(pkg);
-        if (old != null && sameContent(source, new File(old.codePath, "base.apk"))
-                && sameMetadata(metadata, new File(old.codePath, "base.dm"))
-                && mPm.get(pkg) != null) {
-            SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
-                    + old.codePath + ")");
-            // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
-            boolean libraryChange = !parsed.sharedLibraries.matchesArtifacts(Dexopt.oatDir(old.codePath));
-            if (libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile()) {
-                if (libraryChange) {
-                    mAtm.forceStopPackage(pkg);
-                    SystemServer.log("install " + pkg + ": shared-library context/content changed");
+        File tempDir = null;
+        try {
+            if (source.getName().toLowerCase().endsWith(".xapk")
+                    || source.getName().toLowerCase().endsWith(".apks")) {
+                tempDir = Files.createTempDirectory("gesher-xapk-").toFile();
+                extractZip(source, tempDir);
+                File[] apks = tempDir.listFiles((dir, name) -> name.endsWith(".apk"));
+                if (apks == null || apks.length == 0) {
+                    throw new IllegalArgumentException("no apk found in " + apk);
                 }
-                Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
-                mPm.add(open(old));
+                File mainApk = null;
+                for (File a : apks) {
+                    if (a.getName().equals("base.apk")
+                            || (!a.getName().startsWith("config.") && !a.getName().startsWith("split_"))) {
+                        mainApk = a;
+                        break;
+                    }
+                }
+                if (mainApk == null) mainApk = apks[0];
+                source = mainApk;
             }
-            return new String[] {pkg, "unchanged", old.codePath,
-                    String.valueOf(parsed.versionCode())};
+            ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
+            String pkg = parsed.packageName;
+            File metadata = dexMetadata(source);
+            if (metadata.isFile()) {
+                ParseResult<?> result = DexMetadataHelper.validateDexMetadataFile(
+                        ParseTypeImpl.forDefaultParsing(), metadata.getPath(), pkg, parsed.versionCode());
+                if (result.isError()) {
+                    throw new IllegalArgumentException("INSTALL_FAILED_BAD_DEX_METADATA: "
+                            + result.getErrorMessage(), result.getException());
+                }
+            }
+            Entry old = mEntries.get(pkg);
+            if (old != null && sameContent(source, new File(old.codePath, "base.apk"))
+                    && sameMetadata(metadata, new File(old.codePath, "base.dm"))
+                    && mPm.get(pkg) != null) {
+                SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
+                        + old.codePath + ")");
+                // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
+                boolean libraryChange = !parsed.sharedLibraries.matchesArtifacts(Dexopt.oatDir(old.codePath));
+                if (libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile()) {
+                    if (libraryChange) {
+                        mAtm.forceStopPackage(pkg);
+                        SystemServer.log("install " + pkg + ": shared-library context/content changed");
+                    }
+                    Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
+                    mPm.add(open(old));
+                }
+                return new String[] {pkg, "unchanged", old.codePath,
+                        String.valueOf(parsed.versionCode())};
+            }
+            if (old != null || mPm.get(pkg) != null) mAtm.forceStopPackage(pkg);
+            int n = 1;
+            if (old != null) {
+                String name = new File(old.codePath).getName();
+                try {
+                    n = Integer.parseInt(name.substring(name.lastIndexOf('-') + 1)) + 1;
+                } catch (NumberFormatException e) {
+                    n = 2;
+                }
+            }
+            File code = new File(Device.dataDir(), "app/" + pkg + "-" + n);
+            deleteTree(code);
+            code.mkdirs();
+            File base = new File(code, "base.apk");
+            copy(source, base);
+            if (metadata.isFile()) copy(metadata, new File(code, "base.dm"));
+            int libs = NativeLibs.extract(base.getPath(), new File(code, "lib/"
+                    + NativeLibs.instructionSetDir(NativeLibs.forApk(base.getPath()))).getPath());
+            final File sourceApk = source;
+            File[] companionSplits = source.getParentFile() != null ? source.getParentFile().listFiles(
+                    (dir, name) -> (name.startsWith("split_") || name.startsWith("config."))
+                            && name.endsWith(".apk") && !name.equals(sourceApk.getName())) : null;
+            if (companionSplits != null) {
+                String libDir = new File(code, "lib/"
+                        + NativeLibs.instructionSetDir(NativeLibs.forApk(base.getPath()))).getPath();
+                for (File split : companionSplits) {
+                    String targetName = split.getName().startsWith("split_")
+                            ? split.getName() : "split_" + split.getName();
+                    File dest = new File(code, targetName);
+                    copy(split, dest);
+                    libs += NativeLibs.extract(dest.getPath(), libDir);
+                }
+            }
+            // dexopt, as the package manager runs it at install (Dexopt; ADR 0054).
+            Dexopt.onInstall(pkg, code.getPath(), parsed.sharedLibraries);
+            long now = System.currentTimeMillis();
+            Entry entry = new Entry(pkg, code.getPath(), old != null ? old.firstInstallTime : now,
+                    now);
+            ApkPackage installed = open(entry);
+            mEntries.put(pkg, entry);
+            writeRegistry();
+            mPm.add(installed);
+            if (old != null && !old.codePath.equals(entry.codePath)) {
+                delete(new File(old.codePath));
+            }
+            String what = old != null ? "updated" : "installed";
+            SystemServer.log(what + " " + installed.describe() + ", in " + code.getPath()
+                    + (libs > 0 ? ", " + libs + " native libraries (" + NativeLibs.forApk(base.getPath())
+                            + ")" : ""));
+            return new String[] {pkg, what, code.getPath(), String.valueOf(installed.versionCode())};
+        } finally {
+            if (tempDir != null) deleteTree(tempDir);
         }
-        if (old != null || mPm.get(pkg) != null) mAtm.forceStopPackage(pkg);
-        int n = 1;
-        if (old != null) {
-            String name = new File(old.codePath).getName();
-            try {
-                n = Integer.parseInt(name.substring(name.lastIndexOf('-') + 1)) + 1;
-            } catch (NumberFormatException e) {
-                n = 2;
+    }
+
+    private static void extractZip(File zipFile, File destDir) throws IOException {
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(zipFile)) {
+            java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zip.entries();
+            while (entries.hasMoreElements()) {
+                java.util.zip.ZipEntry entry = entries.nextElement();
+                if (entry.isDirectory()) continue;
+                String name = entry.getName();
+                if (!name.endsWith(".apk") && !name.endsWith(".dm")) continue;
+                File out = new File(destDir, new File(name).getName());
+                try (InputStream in = zip.getInputStream(entry);
+                        OutputStream os = new FileOutputStream(out)) {
+                    byte[] buf = new byte[64 * 1024];
+                    for (int n; (n = in.read(buf)) > 0; ) os.write(buf, 0, n);
+                }
             }
         }
-        File code = new File(Device.dataDir(), "app/" + pkg + "-" + n);
-        deleteTree(code);
-        code.mkdirs();
-        File base = new File(code, "base.apk");
-        copy(source, base);
-        if (metadata.isFile()) copy(metadata, new File(code, "base.dm"));
-        int libs = NativeLibs.extract(base.getPath(), new File(code, "lib/"
-                + NativeLibs.instructionSetDir(NativeLibs.forApk(base.getPath()))).getPath());
-        // dexopt, as the package manager runs it at install (Dexopt; ADR 0054).
-        Dexopt.onInstall(pkg, code.getPath(), parsed.sharedLibraries);
-        long now = System.currentTimeMillis();
-        Entry entry = new Entry(pkg, code.getPath(), old != null ? old.firstInstallTime : now,
-                now);
-        ApkPackage installed = open(entry);
-        mEntries.put(pkg, entry);
-        writeRegistry();
-        mPm.add(installed);
-        if (old != null && !old.codePath.equals(entry.codePath)) {
-            delete(new File(old.codePath));
-        }
-        String what = old != null ? "updated" : "installed";
-        SystemServer.log(what + " " + installed.describe() + ", in " + code.getPath()
-                + (libs > 0 ? ", " + libs + " native libraries (" + NativeLibs.forApk(base.getPath())
-                        + ")" : ""));
-        return new String[] {pkg, what, code.getPath(), String.valueOf(installed.versionCode())};
     }
 
     /** Uninstalls the package: its processes, code, data and entry. */

@@ -453,17 +453,44 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         // resolves MAIN/LAUNCHER in a package, as a launcher does.
         ActivityInfo info = resolve(intent, resolvedType, caller != null);
         if (info == null) {
-            if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction())) {
-                Uri data = intent.getData();
-                if (data != null) {
-                    String scheme = data.getScheme();
-                    if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)
-                            || "mailto".equalsIgnoreCase(scheme)) {
-                        String url = data.toString();
-                        SystemServer.log("startActivity: delegating external URL to Windows: " + url);
-                        WindowsHost.openUrl(url);
-                        return ActivityManager.START_SUCCESS;
+            if (intent != null) {
+                String action = intent.getAction();
+                if (Intent.ACTION_VIEW.equals(action)) {
+                    Uri data = intent.getData();
+                    if (data != null) {
+                        String scheme = data.getScheme();
+                        if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)
+                                || "mailto".equalsIgnoreCase(scheme)) {
+                            String url = data.toString();
+                            SystemServer.log("startActivity: delegating external URL to Windows: " + url);
+                            WindowsHost.openUrl(url);
+                            return ActivityManager.START_SUCCESS;
+                        }
                     }
+                } else if (Intent.ACTION_OPEN_DOCUMENT_TREE.equals(action)
+                        || Intent.ACTION_OPEN_DOCUMENT.equals(action)
+                        || Intent.ACTION_GET_CONTENT.equals(action)) {
+                    SystemServer.log("startActivity: handling document/tree picker intent: " + action);
+                    ActivityRecord source = resultToToken != null ? forToken(resultToToken) : null;
+                    boolean isTree = Intent.ACTION_OPEN_DOCUMENT_TREE.equals(action);
+                    String picked = isTree ? WindowsHost.pickFolder("Select Folder")
+                            : WindowsHost.pickFile("Select File");
+                    if (source != null && requestCode >= 0) {
+                        Intent resultData = null;
+                        int resultCode = android.app.Activity.RESULT_CANCELED;
+                        if (picked != null && !picked.isEmpty()) {
+                            resultCode = android.app.Activity.RESULT_OK;
+                            resultData = new Intent();
+                            java.io.File file = new java.io.File(picked);
+                            Uri uri = Uri.fromFile(file);
+                            resultData.setData(uri);
+                            resultData.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                            resultData.setClipData(android.content.ClipData.newUri(null, "document", uri));
+                        }
+                        deliverResult(source, resultWho, requestCode, resultCode, resultData);
+                    }
+                    return ActivityManager.START_SUCCESS;
                 }
             }
             SystemServer.log("startActivity: nothing handles " + intent);
@@ -1338,6 +1365,27 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ClientTransaction t = new ClientTransaction(r.app.thread);
         t.addTransactionItem(new NewIntentItem(r.token, intents, resumed));
         schedule(r, t, "NewIntentItem");
+    }
+
+    private void deliverResult(ActivityRecord r, String resultWho, int requestCode,
+            int resultCode, Intent resultData) {
+        if (r == null) return;
+        ResultInfo info = new ResultInfo(resultWho, requestCode, resultCode, resultData);
+        boolean resumed;
+        synchronized (this) {
+            resumed = (r.state == State.RESUMED || r.state == State.LAUNCHING || r.state == State.RESUMING);
+            if (!resumed) {
+                r.pendingResults.add(info);
+                return;
+            }
+        }
+        if (r.app != null && r.app.thread != null) {
+            List<ResultInfo> list = new ArrayList<>();
+            list.add(info);
+            ClientTransaction t = new ClientTransaction(r.app.thread);
+            t.addTransactionItem(new ActivityResultItem(r.token, list));
+            schedule(r, t, "ActivityResultItem");
+        }
     }
 
     /** Pauses an activity (PauseActivityItem): finishing, or for another in front. */
