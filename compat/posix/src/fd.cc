@@ -238,6 +238,11 @@ int gesher_is_socket(int fd) {
   return gesher::LookupSocket(fd, &state) ? 1 : 0;
 }
 
+int gesher_is_device_fd(int fd) {
+  Device device;
+  return gesher::LookupDevice(fd, &device) ? 1 : 0;
+}
+
 int close(int fd) { return CloseDescriptor(fd); }
 
 int read(int fd, void* buf, unsigned int count) {

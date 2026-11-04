@@ -360,6 +360,30 @@ std::string CrtMode(const char* mode) {
   if (noinherit) out += 'N';
   return out;
 }
+}  // namespace
+
+// /dev/zero and /dev/random are NUL handles that gesher's read() fills: the
+// CRT's own read of one returns nothing (mbedtls seeds its DRBG with
+// fread from fopen("/dev/urandom"), and WhatsApp aborts when that fails).
+size_t ReadStream(void* buf, size_t size, size_t n, FILE* f, bool unlocked) {
+  int fd = _fileno(f);
+  if (size == 0 || n == 0 || fd < 0 || !gesher_is_device_fd(fd)) {
+    return unlocked ? _fread_nolock(buf, size, n, f) : std::fread(buf, size, n, f);
+  }
+  auto* p = static_cast<unsigned char*>(buf);
+  size_t total = n > SIZE_MAX / size ? SIZE_MAX / size * size : size * n;
+  size_t done = 0;
+  while (done < total) {
+    size_t chunk = total - done < 0x40000000 ? total - done : 0x40000000;
+    int r = read(fd, p + done, static_cast<unsigned int>(chunk));
+    if (r <= 0) break;
+    done += static_cast<size_t>(r);
+  }
+  return done / size;
+}
+
+namespace {
+
 // fopen through gesher-base's open (Linux O_* flags, delete access shared, so
 // the file can be unlinked or renamed while open, as on Linux), then fdopen.
 FILE* BIONIC_SYSV Fopen(const char* path, const char* mode) {
@@ -481,7 +505,7 @@ uint32_t BIONIC_SYSV Putwchar(uint32_t c) { return Fputwc(c, stdout); }
 int BIONIC_SYSV Fwide(void*, int mode) { return mode > 0 ? 1 : mode < 0 ? -1 : 0; }
 int BIONIC_SYSV Fclose(void* f) { return std::fclose(F(f)); }
 size_t BIONIC_SYSV Fread(void* buf, size_t size, size_t n, void* f) {
-  return std::fread(buf, size, n, F(f));
+  return ReadStream(buf, size, n, F(f));
 }
 size_t BIONIC_SYSV Fwrite(const void* buf, size_t size, size_t n, void* f) {
   return std::fwrite(buf, size, n, F(f));
@@ -501,13 +525,18 @@ char* BIONIC_SYSV FgetsChk(char* s, int n, void* f, size_t buf_size) {
 }
 size_t BIONIC_SYSV FreadChk(void* buf, size_t size, size_t n, void* f, size_t buf_size) {
   if (size != 0 && n > buf_size / size) StdioFortify("fread");
-  return std::fread(buf, size, n, F(f));
+  return ReadStream(buf, size, n, F(f));
 }
 size_t BIONIC_SYSV FwriteChk(const void* buf, size_t size, size_t n, void* f, size_t buf_size) {
   if (size != 0 && n > buf_size / size) StdioFortify("fwrite");
   return std::fwrite(buf, size, n, F(f));
 }
-int BIONIC_SYSV Fgetc(void* f) { return std::fgetc(F(f)); }
+int BIONIC_SYSV Fgetc(void* f) {
+  unsigned char c;
+  int fd = _fileno(F(f));
+  if (fd >= 0 && gesher_is_device_fd(fd)) return ReadStream(&c, 1, 1, F(f)) == 1 ? c : EOF;
+  return std::fgetc(F(f));
+}
 int BIONIC_SYSV Getchar() { return std::getchar(); }
 int BIONIC_SYSV Ungetc(int c, void* f) { return std::ungetc(c, F(f)); }
 int BIONIC_SYSV Fflush(void* f) { return std::fflush(f ? F(f) : nullptr); }

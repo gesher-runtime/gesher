@@ -96,6 +96,33 @@ static void test_ctype_table(void) {
   check("_ctype_ classes ASCII as the C locale does", ok);
 }
 
+// /dev/urandom through stdio: mbedtls seeds its DRBG with fread from
+// fopen("/dev/urandom"), and WhatsApp aborts when that yields nothing. The
+// device is a NUL handle that read() fills; a FILE's own reads must use it too.
+static void test_urandom_stdio(void) {
+  unsigned char a[64], b[64];
+  memset(a, 0, sizeof(a));
+  memset(b, 0, sizeof(b));
+  FILE* f = fopen("/dev/urandom", "rb");
+  check("fopen(\"/dev/urandom\")", f != NULL);
+  if (f == NULL) return;
+  setbuf(f, NULL);  // as mbedtls does
+  size_t n = fread(a, 1, sizeof(a), f);
+  size_t m = fread(b, sizeof(b), 1, f);
+  int c = fgetc(f);
+  fclose(f);
+  int nonzero = 0;
+  for (size_t i = 0; i < sizeof(a); ++i) nonzero |= a[i];
+  check("fread of /dev/urandom fills the buffer", n == sizeof(a) && m == 1 && nonzero);
+  check("two reads of /dev/urandom differ", memcmp(a, b, sizeof(a)) != 0);
+  check("fgetc of /dev/urandom gives a byte", c != EOF);
+  FILE* z = fopen("/dev/zero", "rb");
+  memset(a, 0xAA, sizeof(a));
+  check("fread of /dev/zero gives zeros",
+        z != NULL && fread(a, 1, sizeof(a), z) == sizeof(a) && a[0] == 0 && a[63] == 0);
+  if (z != NULL) fclose(z);
+}
+
 static void test_format(void) {
   char buf[256];
   snprintf(buf, sizeof(buf), "%d %ld %s %c %x %%", -7, 9000000000L, "str", 'Q', 255);
@@ -514,6 +541,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_memory();
   test_strings();
   test_ctype_table();
+  test_urandom_stdio();
   test_format();
   test_errno_files();
   test_statfs();

@@ -187,6 +187,10 @@ int nice(int inc);
 // The host's DNS name in UTF-8; ENAMETOOLONG if it does not fit.
 int gesher_gethostname(char* name, size_t len);
 
+// Is `fd` /dev/zero, /dev/random or /dev/urandom? Those are NUL handles that
+// read() fills; the CRT's own reads of them (a FILE's) get nothing.
+int gesher_is_device_fd(int fd);
+
 // The CRT's rmdir reports ENOTEMPTY with its own number (see <errno.h>).
 int gesher_rmdir(const char* path);
 #define rmdir gesher_rmdir

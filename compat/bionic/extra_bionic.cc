@@ -1100,7 +1100,9 @@ int BIONIC_SYSV GetcUnlocked(void* f) { return _getc_nolock(F(f)); }
 int BIONIC_SYSV GetcharUnlocked() { return _getc_nolock(stdin); }
 int BIONIC_SYSV PutcUnlocked(int c, void* f) { return _putc_nolock(c, F(f)); }
 int BIONIC_SYSV PutcharUnlocked(int c) { return _putc_nolock(c, stdout); }
-size_t BIONIC_SYSV FreadUnlocked(void* b, size_t s, size_t n, void* f) { return _fread_nolock(b, s, n, F(f)); }
+size_t BIONIC_SYSV FreadUnlocked(void* b, size_t s, size_t n, void* f) {
+  return ReadStream(b, s, n, F(f), true);
+}
 size_t BIONIC_SYSV FwriteUnlocked(const void* b, size_t s, size_t n, void* f) {
   return _fwrite_nolock(b, s, n, F(f));
 }
