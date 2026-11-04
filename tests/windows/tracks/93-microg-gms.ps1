@@ -79,3 +79,7 @@ GmsCheck 'microg-gms (device): full GMS compatibility suite in system server' $o
   'gms: FirebaseMessaging: token obtained, com.google.android.c2dm.intent.RECEIVE routed and received',
   'gms: all steps ran'
 )
+
+# The device was kept up (--keep-task): shut it down, or its processes keep
+# system/framework/framework-res.apk mapped and the next track cannot replace it.
+$null = RunTimed "$Dir/dalvikvm.exe" ($launcherGms + 'shutdown') 120
