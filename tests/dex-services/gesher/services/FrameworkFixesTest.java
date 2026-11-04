@@ -22,7 +22,9 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
@@ -52,6 +54,15 @@ import java.nio.channels.OverlappingFileLockException;
  *    on a stackless NoClassDefFoundError ("Class not found using the boot class loader"),
  *    and Wikipedia's onboarding stopped on its first page (its next page's Compose text
  *    goes through Html.fromHtml; the error was captured in composition).
+ *  - android.net.DnsResolver (app/java, the Connectivity module's API): Waze died with
+ *    NoClassDefFoundError when an address was chosen; query answers localhost's
+ *    addresses through the executor, rawQuery a DNS response, other record types
+ *    NOTIMP, and a cancelled query no callback;
+ *  - android.bluetooth.BluetoothManager and BluetoothAdapter (app/java, commit
+ *    ea735dee): Waze's beacon status died with NoClassDefFoundError; the adapter is
+ *    null, as on a device without Bluetooth;
+ *  - android.os.Debug's native heap counters (compat/framework/android_runtime.cc):
+ *    Waze's startup died with UnsatisfiedLinkError on getNativeHeapSize.
  * Prints "FrameworkFixesTest all passed".
  */
 public final class FrameworkFixesTest {
@@ -198,6 +209,108 @@ public final class FrameworkFixesTest {
                 + "registration fails through its listener, unregistering does not throw");
     }
 
+    /** Runs a DnsResolver call whose last argument is its callback; the answer or error. */
+    private static Object[] dnsCall(Class<?> callback, Method method, Object resolver,
+            Object... args) throws Exception {
+        Object[] result = new Object[3];
+        CountDownLatch done = new CountDownLatch(1);
+        Object cb = Proxy.newProxyInstance(callback.getClassLoader(), new Class<?>[] {callback},
+                (proxy, m, a) -> {
+                    if (m.getDeclaringClass() == Object.class) return identity(proxy, m, a);
+                    result[0] = m.getName();
+                    result[1] = a[0];
+                    result[2] = a.length > 1 ? a[1] : null;
+                    done.countDown();
+                    return null;
+                });
+        Object[] all = java.util.Arrays.copyOf(args, args.length + 1);
+        all[args.length] = cb;
+        method.invoke(resolver, all);
+        require(done.await(30, TimeUnit.SECONDS), method.getName() + ": no callback");
+        return result;
+    }
+
+    private static void dnsResolver() throws Exception {
+        Class<?> type = Class.forName("android.net.DnsResolver");
+        Class<?> callback = Class.forName("android.net.DnsResolver$Callback");
+        Class<?> network = Class.forName("android.net.Network");
+        Class<?> signalType = Class.forName("android.os.CancellationSignal");
+        Object resolver = type.getMethod("getInstance").invoke(null);
+        int typeA = type.getField("TYPE_A").getInt(null);
+        int classIn = type.getField("CLASS_IN").getInt(null);
+        Method query = type.getMethod("query", network, String.class, int.class, int.class,
+                Executor.class, signalType, callback);
+        Method rawQuery = type.getMethod("rawQuery", network, String.class, int.class, int.class,
+                int.class, Executor.class, signalType, callback);
+        List<Thread> ran = new ArrayList<>();
+        Executor executor = r -> {
+            ran.add(Thread.currentThread());
+            r.run();
+        };
+
+        Object[] a = dnsCall(callback, query, resolver, null, "localhost", typeA, 0, executor, null);
+        require("onAnswer".equals(a[0]), "query localhost: " + a[0] + " " + a[1]);
+        List<?> addresses = (List<?>) a[1];
+        require((Integer) a[2] == 0, "query localhost: rcode " + a[2]);
+        require(addresses.contains(java.net.InetAddress.getByAddress(new byte[] {127, 0, 0, 1})),
+                "query localhost (TYPE_A): " + addresses);
+        for (Object address : addresses) {
+            require(address instanceof java.net.Inet4Address, "TYPE_A answered " + address);
+        }
+        require(ran.size() == 1, "the callback did not run on the executor");
+
+        Object[] r = dnsCall(callback, rawQuery, resolver, null, "localhost", classIn, typeA, 0,
+                executor, null);
+        require("onAnswer".equals(r[0]), "rawQuery localhost: " + r[0] + " " + r[1]);
+        byte[] response = (byte[]) r[1];
+        require((response[2] & 0x80) != 0 && (response[3] & 0x0f) == 0 && (Integer) r[2] == 0,
+                "rawQuery localhost: not a NOERROR response");
+        int answers = ((response[6] & 0xff) << 8) | (response[7] & 0xff);
+        require(answers >= 1, "rawQuery localhost: no answers");
+        // One question (localhost: 11 bytes of name, type, class), then the first answer.
+        int rdata = 12 + 11 + 4 + 12;
+        require(response.length >= rdata + 4 && response[rdata] == 127 && response[rdata + 3] == 1,
+                "rawQuery localhost: the first answer is not 127.0.0.1");
+
+        Object[] mx = dnsCall(callback, rawQuery, resolver, null, "localhost", classIn, 15, 0,
+                executor, null);
+        require("onAnswer".equals(mx[0]) && (Integer) mx[2] == 4,
+                "rawQuery MX: " + mx[0] + " rcode " + mx[2]);
+
+        Object signal = signalType.getConstructor().newInstance();
+        signalType.getMethod("cancel").invoke(signal);
+        List<Object> late = new ArrayList<>();
+        Object cb = Proxy.newProxyInstance(callback.getClassLoader(), new Class<?>[] {callback},
+                (proxy, m, x) -> {
+                    if (m.getDeclaringClass() == Object.class) return identity(proxy, m, x);
+                    late.add(m.getName());
+                    return null;
+                });
+        query.invoke(resolver, null, "localhost", typeA, 0, executor, signal, cb);
+        Thread.sleep(500);
+        require(late.isEmpty(), "a cancelled query called back: " + late);
+        System.out.println("FrameworkFixesTest: android.net.DnsResolver: query and rawQuery answer "
+                + "localhost through the executor, other types NOTIMP, a cancelled query is silent");
+    }
+
+    private static void bluetoothAndNativeHeap() throws Exception {
+        Class<?> manager = Class.forName("android.bluetooth.BluetoothManager");
+        Class<?> adapter = Class.forName("android.bluetooth.BluetoothAdapter");
+        Object bluetooth = manager.getConstructor(Class.forName("android.content.Context"))
+                .newInstance((Object) null);
+        require(manager.getMethod("getAdapter").invoke(bluetooth) == null,
+                "BluetoothManager.getAdapter() is not null");
+        require(adapter.getMethod("getDefaultAdapter").invoke(null) == null,
+                "BluetoothAdapter.getDefaultAdapter() is not null");
+        long size = android.os.Debug.getNativeHeapSize();
+        long allocated = android.os.Debug.getNativeHeapAllocatedSize();
+        long free = android.os.Debug.getNativeHeapFreeSize();
+        require(size > 0 && allocated > 0 && free >= 0 && allocated <= size,
+                "native heap: size " + size + " allocated " + allocated + " free " + free);
+        System.out.println("FrameworkFixesTest: BluetoothManager without an adapter; "
+                + "Debug.getNativeHeapSize, getNativeHeapAllocatedSize and getNativeHeapFreeSize");
+    }
+
     private static File zip(File file, String... entries) throws Exception {
         try (java.util.zip.ZipOutputStream out =
                 new java.util.zip.ZipOutputStream(new java.io.FileOutputStream(file))) {
@@ -324,6 +437,8 @@ public final class FrameworkFixesTest {
         splitAbi();
         standInLists();
         htmlFromHtml();
+        dnsResolver();
+        bluetoothAndNativeHeap();
         System.out.println("FrameworkFixesTest all passed");
     }
 }

@@ -144,7 +144,13 @@ a ConnectivityThread) as on Android: `onAvailable`, `onCapabilitiesChanged`,
 changed ones after, `onLost`. `Network`, `NetworkCapabilities`,
 `LinkProperties`, `LinkAddress`, `RouteInfo`, `IpPrefix`, `ProxyInfo`,
 `NetworkInfo`, `NetworkRequest`, `InetAddresses` and `TransportInfo` are
-written with the module's public API and Parcelable.
+written with the module's public API and Parcelable. `DnsResolver` (Waze's
+network stack died without it) resolves A and AAAA records through a network's
+interface as `Network.getAllByName` does, on a thread of its own, and calls back
+on the executor unless cancelled; a name that does not resolve is NXDOMAIN with
+no addresses. `rawQuery` answers A/AAAA questions with a DNS response built from
+those addresses (TTL 0) and other types with NOTIMP: Windows' resolver gives no
+other records (FrameworkFixesTest, 94-framework-fixes).
 
 Capabilities: the transport; NOT_RESTRICTED, TRUSTED, NOT_SUSPENDED,
 FOREGROUND, NOT_VCN_MANAGED; NOT_VPN unless a VPN; INTERNET with a gateway

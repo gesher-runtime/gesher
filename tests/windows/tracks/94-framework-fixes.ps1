@@ -87,3 +87,13 @@ Check 'services: android.text.Html.fromHtml parses with tagsoup (the ext boot ja
   $fixesOut
 } @('FrameworkFixesTest: android.text.Html.fromHtml parses with tagsoup (the ext boot jar''s): text, entities, a bold span and a link',
   'FrameworkFixesTest all passed')
+Check 'services: android.net.DnsResolver (the Connectivity module''s API) resolves through Windows' {
+  $global:LASTEXITCODE = $fixesCode
+  $fixesOut
+} @('FrameworkFixesTest: android.net.DnsResolver: query and rawQuery answer localhost through the executor, other types NOTIMP, a cancelled query is silent',
+  'FrameworkFixesTest all passed')
+Check 'services: BluetoothManager without an adapter, and android.os.Debug''s native heap counters' {
+  $global:LASTEXITCODE = $fixesCode
+  $fixesOut
+} @('FrameworkFixesTest: BluetoothManager without an adapter; Debug.getNativeHeapSize, getNativeHeapAllocatedSize and getNativeHeapFreeSize',
+  'FrameworkFixesTest all passed')
