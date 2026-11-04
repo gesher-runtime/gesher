@@ -44,12 +44,27 @@ struct BionicTm {
 static_assert(sizeof(BionicTm) == 56);
 
 // tzname/timezone/daylight, bionic's data symbols, kept in step by tzset.
-char g_std_name[64] = "UTC";
-char g_dst_name[64] = "UTC";
+char g_std_name[128] = "UTC";
+char g_dst_name[128] = "UTC";
 char* g_tzname[2] = {g_std_name, g_dst_name};
 int64_t g_timezone = 0;
 int32_t g_daylight = 0;
 const char kUtc[] = "UTC";
+
+// The CRT's zone name is Windows' (GetTimeZoneInformation's), in the ANSI code page:
+// on a Hebrew Windows "שעון רגיל של ישראל" in windows-1255. Apps take tzname and
+// tm_zone as UTF-8 (Dart's DateTime.timeZoneName aborted on it: Otzaria crashed).
+void CrtZoneName(int index, char* out, size_t size) {
+  char ansi[128];
+  size_t n = 0;
+  wchar_t wide[128];
+  if (_get_tzname(&n, ansi, sizeof(ansi), index) != 0 ||
+      MultiByteToWideChar(CP_ACP, 0, ansi, -1, wide, 128) == 0 ||
+      WideCharToMultiByte(CP_UTF8, 0, wide, -1, out, static_cast<int>(size), nullptr,
+                          nullptr) == 0) {
+    std::strcpy(out, "UTC");
+  }
+}
 
 void BIONIC_SYSV Tzset() {
   _tzset();
@@ -59,9 +74,8 @@ void BIONIC_SYSV Tzset() {
   _get_daylight(&dl);
   g_timezone = tz;
   g_daylight = dl;
-  size_t n = 0;
-  if (_get_tzname(&n, g_std_name, sizeof(g_std_name), 0) != 0) std::strcpy(g_std_name, "UTC");
-  if (_get_tzname(&n, g_dst_name, sizeof(g_dst_name), 1) != 0) std::strcpy(g_dst_name, "UTC");
+  CrtZoneName(0, g_std_name, sizeof(g_std_name));
+  CrtZoneName(1, g_dst_name, sizeof(g_dst_name));
 }
 
 void FromCrt(const struct tm& in, BionicTm* out) {
