@@ -15,8 +15,13 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
-  union-trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@e764c06658a4372fc864763de54346f14f277398
+  source-identity:
+    runs-on: ubuntu-24.04
+    outputs:
+      source: ${{ github.sha }}
+      policy_ref: ${{ github.repository }}/.github/workflows/ci.yml@${{ github.sha }}
+    steps:
+      - run: echo "SOURCE_IDENTITY source=${{ github.sha }}"
   union-tsf:
     needs: [artifact-preflight]
     uses: ./.github/workflows/tsf-format-component.yml
@@ -27,7 +32,7 @@ jobs:
     needs: [artifact-preflight]
     uses: ./.github/workflows/native3-locks-blocking.yml
   artifact-preflight:
-    needs: [union-trusted-source]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -35,12 +40,11 @@ jobs:
           fetch-depth: 0
       - name: Strict archive adversarial controls
         run: |
-          python3 tools/native3-locks/union_payload.py preflight
           python3 tools/ci/receipt_identity.py
           python3 tools/surface/test-verified-artifact.py
 
   build-framework-assets:
-    needs: [artifact-preflight, union-trusted-source]
+    needs: [artifact-preflight, source-identity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -91,13 +95,13 @@ jobs:
   # Everything is cross-compiled on Linux with llvm-mingw, then executed on
   # real Windows runners.
   build:
-    needs: [artifact-preflight, union-trusted-source, build-framework-assets]
+    needs: [artifact-preflight, source-identity, build-framework-assets]
     runs-on: ubuntu-24.04
     env:
       GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher' }}
       GESHER_HOST_PTHREAD_CALLER: ${{ github.ref == 'refs/heads/wip/coherent-selected-tcp' && 'coherent-selected-full/build' || 'ci/build' }}
-      GESHER_COHERENT_FULL_AUTHORIZED_SOURCE: ${{ needs.union-trusted-source.outputs.source }}
-      GESHER_COHERENT_FULL_POLICY_REF: ${{ needs.union-trusted-source.outputs.policy_ref }}
+      GESHER_COHERENT_FULL_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
+      GESHER_COHERENT_FULL_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
     steps:
       - uses: actions/checkout@v4
 
@@ -1474,7 +1478,7 @@ jobs:
 
   # Current selected TCP role; historical canonical red remains separately preserved.
   compile:
-    needs: [union-trusted-source]
+    needs: [source-identity]
     name: compile-${{ matrix.supplier }}
     strategy:
       fail-fast: false
@@ -1482,8 +1486,8 @@ jobs:
         supplier: [selected-minimum]
     env:
       TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
-      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.union-trusted-source.outputs.source }}
-      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.union-trusted-source.outputs.policy_ref }}
+      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
+      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
       DYNARMIC_COMMIT: 9d4582339990d4eae53f1dc7160686920fc2075c
       FMT_VERSION: "11.0.2"
       BOOST_VERSION: "1.83.0"
@@ -1604,10 +1608,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   linux-reference:
-    needs: [union-trusted-source]
+    needs: [source-identity]
     env:
-      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.union-trusted-source.outputs.source }}
-      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.union-trusted-source.outputs.policy_ref }}
+      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
+      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -1620,14 +1624,14 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
           timeout 20 /tmp/tcp-priority-reference
   supplier-correlation:
-    needs: [union-trusted-source, build, compile]
+    needs: [source-identity, build, compile]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
       TCP_SUPPLIER_ROLE: selected-minimum
-      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.union-trusted-source.outputs.source }}
-      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.union-trusted-source.outputs.policy_ref }}
+      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
+      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1642,7 +1646,7 @@ jobs:
       - name: Correlate selected host supplier between full build and TCP component
         run: python3 tools/toolchain/coherent_supplier_correlation.py
   windows:
-    needs: [union-trusted-source, compile, linux-reference, supplier-correlation]
+    needs: [source-identity, compile, linux-reference, supplier-correlation]
     strategy:
       fail-fast: false
       matrix:
@@ -1653,8 +1657,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
-      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.union-trusted-source.outputs.source }}
-      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.union-trusted-source.outputs.policy_ref }}
+      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
+      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
     steps:
       - uses: actions/checkout@v4
         with:

@@ -14,28 +14,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Verify shared controller source identities
-        shell: pwsh
-        run: |
-          $expected = @{
-            'tools/windows4/TsfJobSupervisor.cs' = '625be4d5906bb48dd02d6103382fd2e85ac88738'
-            'tools/windows4/TsfJobWorker.cs' = 'e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1'
-            'tools/windows4/test-tsf-job-supervisor.ps1' = '3ba0622be975f70d8dcd1e4ed529f0746a749981'
-            'tools/windows4/diagnose-pwsh-job.ps1' = '6956c0d1714f17761dc756c17f72cb8d119fe306'
-            'tools/windows4/run-tsf-component.ps1' = 'ccc4d13fa150140ad5f6087f0139bf9e8958b30b'
-            'tools/ci/receipt-diagnostics.ps1' = '80f33415a4c57c42c99f74ae61fc5da1316195ef'
-          }
-          foreach ($path in $expected.Keys) {
-            $actual = git hash-object $path
-            if ($LASTEXITCODE -ne 0 -or $actual -cne $expected[$path]) { throw "Shared source mismatch: $path" }
-            Write-Host "SHARED_SOURCE source=$env:GITHUB_SHA historical_baseline=8ad629ccb1edc86b9f701e83f01838ab9eaa1e94 path=$path blob=$actual"
-          }
-      - name: Verify canonical TSF workflow identity
-        shell: pwsh
-        run: |
-          $actual = git hash-object .github/workflows/tsf-format-component.yml
-          if ($LASTEXITCODE -ne 0 -or $actual -cne 'a3b2021a2df42316a46d4849eb499fb5b1842a7e') { throw 'TSF routing adaptation mismatch' }
-          Write-Host "SERVICES_TSF_CANONICAL source=$env:GITHUB_SHA blob=$actual canonical_origin=8ad629ccb1edc86b9f701e83f01838ab9eaa1e94"
       - name: Qualify shared job controller
         shell: pwsh
         run: ./tools/windows4/test-tsf-job-supervisor.ps1

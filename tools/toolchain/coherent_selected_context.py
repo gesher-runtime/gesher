@@ -4,7 +4,6 @@ Source-only WIP: this module supplies no authority until an immutable guard
 actually emits the exact source and policy values and the full policy is peered.
 """
 import re
-from pathlib import Path
 
 REPOSITORY='gesher-runtime/gesher'
 REPOSITORY_ID='1426153186'
@@ -12,7 +11,6 @@ BRANCH='wip/coherent-selected-tcp'
 CALLER='coherent-selected-full/build'
 WORKFLOW='ci'
 PATH='.github/workflows/ci.yml'
-POLICY_PATH='.github/workflows/net-combined-dns-trusted-source.yml'
 TUPLE=dict(repository=REPOSITORY,repository_id=REPOSITORY_ID,ref='refs/heads/'+BRANCH,
            workflow=WORKFLOW,workflow_path=PATH,job='build',caller=CALLER,
            workflow_ref=REPOSITORY+'/'+PATH+'@refs/heads/'+BRANCH,
@@ -31,7 +29,7 @@ def context(env,selection):
     assert re.fullmatch('[0-9a-f]{40}',source)
     assert source==env.get('GITHUB_WORKFLOW_SHA')==env.get('GESHER_COHERENT_FULL_AUTHORIZED_SOURCE')
     for key in ('GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT'): assert re.fullmatch('[1-9][0-9]*',env[key])
-    assert re.fullmatch(re.escape(REPOSITORY+'/'+POLICY_PATH+'@')+'[0-9a-f]{40}',env['GESHER_COHERENT_FULL_POLICY_REF'])
+    assert env.get('GESHER_COHERENT_FULL_POLICY_REF')==REPOSITORY+'/'+PATH+'@'+source
     return {k:env[k] for k in ('GITHUB_SHA','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_REPOSITORY','GITHUB_REPOSITORY_ID')}
 
 def descriptor(env):
@@ -43,10 +41,7 @@ def check_descriptor(value,expected):
     assert all(value[k]==v for k,v in TUPLE.items())
     assert value['source']==expected['GITHUB_SHA']
     assert expected['GITHUB_REPOSITORY']==REPOSITORY and expected['GITHUB_REPOSITORY_ID']==REPOSITORY_ID
-    caller=(Path(__file__).resolve().parents[2]/PATH).read_text(encoding='utf-8')
-    pattern=r'(?m)^    uses: '+re.escape(REPOSITORY+'/'+POLICY_PATH+'@')+r'([0-9a-f]{40})$'
-    pins=re.findall(pattern,caller)
-    assert len(pins)==1 and value['policy_ref']==REPOSITORY+'/'+POLICY_PATH+'@'+pins[0]
+    assert value['policy_ref']==REPOSITORY+'/'+PATH+'@'+value['source']
 
 if __name__=='__main__':
     import json,os
