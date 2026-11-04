@@ -25,6 +25,7 @@ public class JniTest {
     static native int callbacks(JniTest self);
     static native int callReflected(Method m);
     static native int threadAttach();
+    static native int threadExitAttached();
     static native boolean onLoadRan();
     // Registered by JNI_OnLoad.
     static native int registeredTwice(int x);
@@ -88,6 +89,8 @@ public class JniTest {
         Method m = JniTest.class.getDeclaredMethod("combine", int.class, double.class, long.class);
         check("FromReflectedMethod + variadic call", callReflected(m) == 512);
         check("a native thread attaches and calls Java", threadAttach() == 105);
+        check("a native thread that ends attached only warns, as on Android",
+                threadExitAttached() == 14);
         // Initial-exec TLS: each thread starts from the initial value 5.
         check("initial-exec TLS on the main thread", tlsBump() == 6 && tlsBump() == 7);
         final int[] other = new int[2];

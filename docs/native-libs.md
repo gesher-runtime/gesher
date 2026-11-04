@@ -103,7 +103,11 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     per winpthreads round, so a library's destructor that detaches the
     thread from the VM runs before ART's key comes round a second time (an
     abort: "Native thread exited without calling DetachCurrentThread");
-    `bionic_key_exit_test`.
+    `bionic_key_exit_test`. A thread that ends still attached (Waze's arm64
+    daemon threads never detach) only warns, as on Android: ART's
+    `ThreadExitCallback` gives `Thread::Current()` the thread back without
+    re-setting its key, as bionic's build does (patches/art/0770), where
+    winpthreads would call it a second time and it would abort; `JniTest`.
   - Imports nothing defines: the loader binds a function import it cannot
     resolve to a stub that names the symbol and aborts **when called**, so a
     `.so` with unused missing imports still loads (`LoadOptions::

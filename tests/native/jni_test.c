@@ -191,6 +191,31 @@ JNIEXPORT jint JNICALL Java_gesher_JniTest_threadAttach(JNIEnv* env, jclass cls)
   return result;  // 100 + the new thread's initial tls_counter (5)
 }
 
+// A thread that ends still attached, as an arm64 library's daemon threads do
+// (Waze): ART warns and keeps it listed, as on Android, where its key
+// destructor is not called a second time (patches/art/0770); it aborted the
+// process ("Native thread exited without calling DetachCurrentThread").
+static void* attached_worker(void* out) {
+  JNIEnv* env = NULL;
+  if ((*g_vm)->AttachCurrentThreadAsDaemon(g_vm, &env, NULL) != JNI_OK) {
+    *(int*)out = -1;
+    return NULL;
+  }
+  jmethodID twice = (*env)->GetStaticMethodID(env, g_class, "twice", "(I)I");
+  *(int*)out = (*env)->CallStaticIntMethod(env, g_class, twice, 7);
+  return NULL;  // no DetachCurrentThread
+}
+
+JNIEXPORT jint JNICALL Java_gesher_JniTest_threadExitAttached(JNIEnv* env, jclass cls) {
+  (void)env;
+  (void)cls;
+  int result = 0;
+  pthread_t t;
+  if (pthread_create(&t, NULL, attached_worker, &result) != 0) return -2;
+  pthread_join(t, NULL);
+  return result;  // 14
+}
+
 // --- registered in JNI_OnLoad --------------------------------------------------
 
 static jint registered_twice(JNIEnv* env, jclass cls, jint x) {

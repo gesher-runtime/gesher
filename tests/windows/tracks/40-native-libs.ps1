@@ -84,7 +84,8 @@ Check 'native libs: stack-protected .so with ELF TLS (API 29), threads and a lat
 Check 'native libs: System.load of an NDK .so; JNI_OnLoad, RegisterNatives, Java_* and JNIEnv calls into ART' {
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/jni-test.dex") gesher.JniTest (NoDrive (Resolve-Path "$Dir/jni_test.so").Path)
-} @('JNI_OnLoad ran: ok', 'JniTest all passed')
+} @('JNI_OnLoad ran: ok', 'a native thread that ends attached only warns, as on Android: ok',
+    'JniTest all passed')
 
 # Step 5, libc++: a C++ .so against the NDK's libc++_shared.so, which the
 # loader loads from the same directory; C++ exceptions are thrown and caught

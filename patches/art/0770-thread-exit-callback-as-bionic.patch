@@ -1,0 +1,29 @@
+diff --git a/runtime/thread.cc b/runtime/thread.cc
+--- a/runtime/thread.cc
++++ b/runtime/thread.cc
+@@ -2552,16 +2552,23 @@
+ void Thread::ThreadExitCallback(void* arg) {
+   Thread* self = reinterpret_cast<Thread*>(arg);
+   if (self->tls32_.thread_exit_check_count == 0) {
+     LOG(WARNING) << "Native thread exiting without having called DetachCurrentThread (maybe it's "
+         "going to use a pthread_key_create destructor?): " << *self;
+     CHECK(is_started_);
+-#ifdef __BIONIC__
++#if defined(__BIONIC__)
+     __get_tls()[TLS_SLOT_ART_THREAD_SELF] = self;
++#elif defined(_WIN32)
++    // Gesher: as on bionic, only Thread::Current() gets the thread back, for
++    // the other keys' destructors (a library's that detaches it). Re-setting
++    // the key would have winpthreads call this again in its next round and
++    // abort the process; an Android thread that exits attached (Waze's arm64
++    // threads attach as daemons and never detach) only warns and stays listed.
++    Thread::self_tls_ = self;
+ #else
+     CHECK_PTHREAD_CALL(pthread_setspecific, (Thread::pthread_key_self_, self), "reattach self");
+     Thread::self_tls_ = self;
+ #endif
+     self->tls32_.thread_exit_check_count = 1;
+   } else {
+     LOG(FATAL) << "Native thread exited without calling DetachCurrentThread: " << *self;
+   }
+ }
