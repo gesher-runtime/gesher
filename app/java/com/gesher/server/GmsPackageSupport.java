@@ -146,7 +146,13 @@ public final class GmsPackageSupport {
         // CONTEXT_INCLUDE_CODE: the client library's ProviderInstaller): an APK that is
         // there, gesher-camera.apk, which carries ProviderInstallerImpl.
         String code = gmsCodeApk();
-        if (PACKAGE_GMS.equals(packageName) && code != null) ai.sourceDir = code;
+        // FLAG_HAS_CODE too: without it ActivityThread.getPackageInfo drops
+        // CONTEXT_INCLUDE_CODE and the package's class loader is empty (Gmail: "Didn't
+        // find class ...ProviderInstallerImpl on path: DexPathList[[]]").
+        if (PACKAGE_GMS.equals(packageName) && code != null) {
+            ai.sourceDir = code;
+            ai.flags |= ApplicationInfo.FLAG_HAS_CODE;
+        }
         ai.publicSourceDir = ai.sourceDir;
         ai.dataDir = "/data/data/" + packageName;
         return ai;
