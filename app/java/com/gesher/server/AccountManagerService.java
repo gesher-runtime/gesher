@@ -156,6 +156,13 @@ public final class AccountManagerService extends IAccountManager.Default {
         return list.toArray(new Account[0]);
     }
 
+    /** The apps' accounts, which their sync adapters sync (not the dummy Google account). */
+    synchronized Account[] syncableAccounts() {
+        List<Account> list = new ArrayList<>(mAccounts.keySet());
+        list.remove(DEFAULT_ACCOUNT);
+        return list.toArray(new Account[0]);
+    }
+
     private synchronized boolean exists(Account account) {
         return account != null && mAccounts.containsKey(account);
     }

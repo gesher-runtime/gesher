@@ -4,10 +4,18 @@
  */
 package com.gesher.server;
 
+import android.accounts.Account;
+import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.IContentService;
+import android.content.ISyncStatusObserver;
+import android.content.PeriodicSync;
+import android.content.SyncAdapterType;
+import android.content.SyncInfo;
+import android.content.SyncRequest;
 import android.database.IContentObserver;
 import android.net.Uri;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
 
@@ -27,8 +35,9 @@ import java.util.function.BiConsumer;
  * ContentService's ObserverNode tree does, each once with all its URIs
  * ({@code onChangeEtc}); the observer that made the change only if it wants its own
  * changes. Change listeners in the system server ({@link #addChangeListener}: the job
- * scheduler's content URI triggers) see every change. No sync adapters (requestSync and
- * the sync settings keep their defaults).
+ * scheduler's content URI triggers) see every change. Syncs and their settings are
+ * {@link SyncManager}'s; a change notified with NOTIFY_SYNC_TO_NETWORK starts an upload
+ * sync of its authority.
  */
 final class ContentService extends IContentService.Default {
     /** An observer: ObserverEntry. */
@@ -50,6 +59,11 @@ final class ContentService extends IContentService.Default {
     }
 
     private final List<Observer> mObservers = new ArrayList<>();  // guarded by itself
+    private final SyncManager mSync;
+
+    ContentService(SyncManager sync) {
+        mSync = sync;
+    }
     private static final List<BiConsumer<Uri[], Integer>> sListeners =
             new CopyOnWriteArrayList<>();
 
@@ -122,6 +136,9 @@ final class ContentService extends IContentService.Default {
                 unregisterContentObserver(o.observer);
             }
         }
+        if ((flags & ContentResolver.NOTIFY_SYNC_TO_NETWORK) != 0) {
+            for (Uri uri : uris) mSync.localChange(uri.getAuthority());
+        }
         for (BiConsumer<Uri[], Integer> l : sListeners) {
             try {
                 l.accept(uris, flags);
@@ -129,6 +146,183 @@ final class ContentService extends IContentService.Default {
                 SystemServer.log("content: a change listener failed: " + t);
             }
         }
+    }
+
+    // --- sync (SyncManager) -------------------------------------------------------------
+
+    @Override
+    public void requestSync(Account account, String authority, Bundle extras,
+            String callingPackage) {
+        mSync.requestSync(account, authority, extras, false);
+    }
+
+    @Override
+    public void sync(SyncRequest request, String callingPackage) {
+        syncAsUser(request, 0, callingPackage);
+    }
+
+    @Override
+    public void syncAsUser(SyncRequest request, int userId, String callingPackage) {
+        if (request == null) return;
+        if (request.isPeriodic()) {
+            mSync.addPeriodicSync(request.getAccount(), request.getProvider(),
+                    request.getBundle(), request.getSyncRunTime());
+        } else {
+            mSync.requestSync(request.getAccount(), request.getProvider(), request.getBundle(),
+                    false);
+        }
+    }
+
+    @Override
+    public void cancelSync(Account account, String authority, ComponentName cname) {
+        mSync.cancelSync(account, authority);
+    }
+
+    @Override
+    public void cancelSyncAsUser(Account account, String authority, ComponentName cname,
+            int userId) {
+        mSync.cancelSync(account, authority);
+    }
+
+    @Override
+    public void cancelRequest(SyncRequest request) {
+        if (request == null) return;
+        if (request.isPeriodic()) {
+            mSync.removePeriodicSync(request.getAccount(), request.getProvider(),
+                    request.getBundle());
+        } else {
+            mSync.cancelSync(request.getAccount(), request.getProvider());
+        }
+    }
+
+    @Override
+    public boolean getSyncAutomatically(Account account, String providerName) {
+        return mSync.getSyncAutomatically(account, providerName);
+    }
+
+    @Override
+    public boolean getSyncAutomaticallyAsUser(Account account, String providerName, int userId) {
+        return mSync.getSyncAutomatically(account, providerName);
+    }
+
+    @Override
+    public void setSyncAutomatically(Account account, String providerName, boolean sync) {
+        mSync.setSyncAutomatically(account, providerName, sync);
+    }
+
+    @Override
+    public void setSyncAutomaticallyAsUser(Account account, String providerName, boolean sync,
+            int userId) {
+        mSync.setSyncAutomatically(account, providerName, sync);
+    }
+
+    @Override
+    public List<PeriodicSync> getPeriodicSyncs(Account account, String providerName,
+            ComponentName cname) {
+        return mSync.getPeriodicSyncs(account, providerName);
+    }
+
+    @Override
+    public void addPeriodicSync(Account account, String providerName, Bundle extras,
+            long pollFrequency) {
+        mSync.addPeriodicSync(account, providerName, extras, pollFrequency);
+    }
+
+    @Override
+    public void removePeriodicSync(Account account, String providerName, Bundle extras) {
+        mSync.removePeriodicSync(account, providerName, extras);
+    }
+
+    @Override
+    public int getIsSyncable(Account account, String providerName) {
+        return mSync.getIsSyncable(account, providerName);
+    }
+
+    @Override
+    public int getIsSyncableAsUser(Account account, String providerName, int userId) {
+        return mSync.getIsSyncable(account, providerName);
+    }
+
+    @Override
+    public void setIsSyncable(Account account, String providerName, int syncable) {
+        mSync.setIsSyncable(account, providerName, syncable);
+    }
+
+    @Override
+    public void setIsSyncableAsUser(Account account, String providerName, int syncable,
+            int userId) {
+        mSync.setIsSyncable(account, providerName, syncable);
+    }
+
+    @Override
+    public void setMasterSyncAutomatically(boolean flag) {
+        mSync.setMasterSyncAutomatically(flag);
+    }
+
+    @Override
+    public void setMasterSyncAutomaticallyAsUser(boolean flag, int userId) {
+        mSync.setMasterSyncAutomatically(flag);
+    }
+
+    @Override
+    public boolean getMasterSyncAutomatically() {
+        return mSync.getMasterSyncAutomatically();
+    }
+
+    @Override
+    public boolean getMasterSyncAutomaticallyAsUser(int userId) {
+        return mSync.getMasterSyncAutomatically();
+    }
+
+    @Override
+    public List<SyncInfo> getCurrentSyncs() {
+        return mSync.getCurrentSyncs();
+    }
+
+    @Override
+    public List<SyncInfo> getCurrentSyncsAsUser(int userId) {
+        return mSync.getCurrentSyncs();
+    }
+
+    @Override
+    public SyncAdapterType[] getSyncAdapterTypes() {
+        return mSync.getSyncAdapterTypes();
+    }
+
+    @Override
+    public SyncAdapterType[] getSyncAdapterTypesAsUser(int userId) {
+        return mSync.getSyncAdapterTypes();
+    }
+
+    @Override
+    public String[] getSyncAdapterPackagesForAuthorityAsUser(String authority, int userId) {
+        return mSync.getSyncAdapterPackagesForAuthority(authority);
+    }
+
+    @Override
+    public boolean isSyncActive(Account account, String authority, ComponentName cname) {
+        return mSync.isSyncActive(account, authority);
+    }
+
+    @Override
+    public boolean isSyncPending(Account account, String authority, ComponentName cname) {
+        return mSync.isSyncPending(account, authority);
+    }
+
+    @Override
+    public boolean isSyncPendingAsUser(Account account, String authority, ComponentName cname,
+            int userId) {
+        return mSync.isSyncPending(account, authority);
+    }
+
+    @Override
+    public void addStatusChangeListener(int mask, ISyncStatusObserver callback) {
+        mSync.addStatusChangeListener(mask, callback);
+    }
+
+    @Override
+    public void removeStatusChangeListener(ISyncStatusObserver callback) {
+        mSync.removeStatusChangeListener(callback);
     }
 
     /** Whether an observer of {@code o.uri} is told of a change of {@code changed}. */

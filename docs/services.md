@@ -57,7 +57,7 @@ built in framework.yml).
 |---|---|---|
 | `alarm` | `AlarmManagerService` | a waitable timer at the next alarm's wall-clock time (resume flag for `_WAKEUP`); WM_TIMECHANGE, time zone (`GetDynamicTimeZoneInformation`), resume |
 | `jobscheduler` | `JobSchedulerService` | constraints: the net track's ConnectivityManager networks (`WindowsNetworks`; the Network List Manager without them), `GetSystemPowerStatus`, `GetLastInputInfo`; content URI triggers from `content` |
-| `content` | `ContentService` | (none: observers and `notifyChange` in the system server; hwsvc2) |
+| `content` | `ContentService`, `SyncManager` | (none: observers and `notifyChange` in the system server, hwsvc2; apps' sync adapters) |
 | `vibrator_manager` | `VibratorManagerService` | (none: a device without a vibrator; hwsvc2) |
 | `clipboard` | `ClipboardService` | CF_UNICODETEXT and CF_HTML, `AddClipboardFormatListener` |
 | `notification` | `NotificationManagerService`, `NotificationIcons`, `NotificationStore` | toasts of `Gesher.App.<package>` (WinRT `ToastNotificationManager`), `HKCU\Software\Classes\AppUserModelId\<id>` with `CustomActivator`; Gesher's toast activator (COM, `devsvc_activator.c`; the installer's LocalServer32 runs `gesher-app toast-activated`) |
@@ -103,6 +103,18 @@ Behaviour, in short (details in the classes' comments and ADR 0038):
   `hasVibrator()` false, the null vibrator, vibrate/cancel accepted.
 - Content observers: register/unregister/`notifyChange` with ContentService's
   URI matching, each observer once per change.
+- Sync: apps' sync adapters (services for `android.content.SyncAdapter` with a
+  `sync-adapter` XML) run for their account type's accounts, bound by the
+  system server, as Android's SyncManager runs them: on `requestSync`/`sync`,
+  on their periodic syncs, 10 s after the system server starts (Android syncs
+  the accounts when the device starts), and as an upload 3 s after a change
+  notified with `NOTIFY_SYNC_TO_NETWORK` (Android: 30 s). One sync of an
+  account and authority at a time, a request while it runs runs it again
+  after; one silent for 30 minutes is cancelled. Master and per-authority
+  automatic sync (on unless an app turns them off), syncable and the periodic
+  syncs are kept in `<data>/system/sync.properties`; status listeners hear of
+  settings, pending and active changes. Gmail's IMAP and POP3 accounts sync
+  so: without it its folders never load and its outbox is never sent.
 - Screen: not interactive between PBT_APMSUSPEND and the resume; registered
   receivers get ACTION_SCREEN_OFF and ACTION_SCREEN_ON.
 

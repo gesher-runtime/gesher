@@ -105,8 +105,10 @@ public final class Services {
                 new com.gesher.server.stub.IAudioServiceStub(audio));
         services.put(Context.MEDIA_SESSION_SERVICE, StandIn.of(
                 android.media.session.ISessionManager.class, new MediaSessionService(audio)).asBinder());
+        // content: observers, and apps' sync adapters (SyncManager).
+        SyncManager sync = new SyncManager(am, pm);
         services.put(ContentResolver.CONTENT_SERVICE_NAME,
-                StandIn.of(IContentService.class, new ContentService()).asBinder());
+                StandIn.of(IContentService.class, new ContentService(sync)).asBinder());
         // input_method: Windows' text input (docs/input.md "Text input", ADR 0039).
         services.put(Context.INPUT_METHOD_SERVICE, StandIn.of(IInputMethodManager.class,
                 new InputMethodManagerService()).asBinder());
@@ -155,8 +157,10 @@ public final class Services {
         services.put(Context.CONNECTIVITY_SERVICE, new ConnectivityService(pm, atm));  // docs/network.md
         // Accounts: a dummy Google account (microG / GMS compat) and apps' own, through
         // their authenticators.
+        AccountManagerService accounts = new AccountManagerService(am, pm);
         services.put(Context.ACCOUNT_SERVICE, StandIn.of(android.accounts.IAccountManager.class,
-                new AccountManagerService(am, pm)).asBinder());
+                accounts).asBinder());
+        sync.start(accounts::syncableAccounts);
         // System services queried by crash reporters (ACRA) and common apps (e.g. F-Droid).
         services.put(Context.DROPBOX_SERVICE, StandIn.of(
                 com.android.internal.os.IDropBoxManagerService.class,
