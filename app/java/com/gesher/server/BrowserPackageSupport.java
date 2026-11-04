@@ -13,6 +13,8 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.pm.Signature;
+import android.content.pm.SigningDetails;
+import android.content.pm.SigningInfo;
 import android.os.Process;
 
 import java.util.ArrayList;
@@ -122,6 +124,13 @@ public final class BrowserPackageSupport {
         if ((flags & PackageManager.GET_SIGNATURES) != 0
                 || (flags & PackageManager.GET_SIGNING_CERTIFICATES) != 0) {
             pi.signatures = new Signature[] { getSignature() };
+        }
+        // What GET_SIGNING_CERTIFICATES asks for (WhatsApp's AppIdentity of Play services:
+        // "signingInfo was null" ends its process).
+        if ((flags & PackageManager.GET_SIGNING_CERTIFICATES) != 0) {
+            pi.signingInfo = new SigningInfo(new SigningDetails(
+                    new Signature[] { getSignature() },
+                    SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3, null, null));
         }
         if ((flags & PackageManager.GET_ACTIVITIES) != 0) {
             pi.activities = new ActivityInfo[] { createActivityInfo(flags) };
