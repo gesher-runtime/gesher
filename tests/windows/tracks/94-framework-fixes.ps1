@@ -97,3 +97,9 @@ Check 'services: BluetoothManager without an adapter, and android.os.Debug''s na
   $fixesOut
 } @('FrameworkFixesTest: BluetoothManager without an adapter; Debug.getNativeHeapSize, getNativeHeapAllocatedSize and getNativeHeapFreeSize',
   'FrameworkFixesTest all passed')
+
+Check 'services: HandlerThread.quit with tracing off (MessageQueue''s Perfetto counter event; Gmail''s emojiCompat thread)' {
+  $global:LASTEXITCODE = $fixesCode
+  $fixesOut
+} @('FrameworkFixesTest: HandlerThread.quit after a message, and every PerfettoTrackEventExtra class initializes with tracing off',
+  'FrameworkFixesTest all passed')

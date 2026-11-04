@@ -451,6 +451,27 @@ public final class FrameworkFixesTest {
                 + "and BluetoothDevice resolve on a device without Bluetooth");
     }
 
+    private static void handlerThreadQuit() throws Exception {
+        // MessageQueue.quit builds a Perfetto counter event: its classes' natives
+        // (PerfettoTrackEventExtra and the nested ones) must be there with tracing off.
+        // Gmail's emojiCompat thread died on native_delete at quit.
+        android.os.HandlerThread thread = new android.os.HandlerThread("fixes-quit");
+        thread.start();
+        java.util.concurrent.CountDownLatch ran = new java.util.concurrent.CountDownLatch(1);
+        new android.os.Handler(thread.getLooper()).post(ran::countDown);
+        require(ran.await(10, java.util.concurrent.TimeUnit.SECONDS), "the handler thread did not run");
+        require(thread.quit(), "HandlerThread.quit returned false");
+        thread.join(10_000);
+        require(!thread.isAlive(), "the handler thread did not end");
+        for (String nested : new String[] {"", "$ArgInt64", "$ArgBool", "$ArgDouble", "$ArgString",
+                "$FieldInt64", "$FieldDouble", "$FieldString", "$FieldNested", "$Proto", "$Flow",
+                "$NamedTrack", "$CounterTrack", "$CounterInt64", "$CounterDouble"}) {
+            Class.forName("android.os.PerfettoTrackEventExtra" + nested, true, null);
+        }
+        System.out.println("FrameworkFixesTest: HandlerThread.quit after a message, and every "
+                + "PerfettoTrackEventExtra class initializes with tracing off");
+    }
+
     public static void main(String[] args) throws Exception {
         // The FileChannel lock natives and Binder's (gesher-app loads them in an app).
         System.loadLibrary("android_runtime");
@@ -464,6 +485,7 @@ public final class FrameworkFixesTest {
         dnsResolver();
         bluetoothAndNativeHeap();
         bluetoothProfiles();
+        handlerThreadQuit();
         System.out.println("FrameworkFixesTest all passed");
     }
 }

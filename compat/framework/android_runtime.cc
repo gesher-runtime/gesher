@@ -579,7 +579,133 @@ static const JNINativeMethod gPerfettoTraceMethods[] = {
     {"native_stop_session", "(J)[B", GESHER_JNI(PerfettoTrace_stopSession)},
 };
 
+// PerfettoTrackEventExtra and its nested arguments, fields, flows and tracks:
+// the objects a trace event is built from. With tracing off they record
+// nothing, but their classes are still initialized (each static initializer
+// takes native_delete for its NativeAllocationRegistry): MessageQueue.quit
+// builds a counter event, so HandlerThread.quit reached them. Natives with a
+// String are @FastNative, the others @CriticalNative.
+
+static jlong PerfettoExtra_init() {
+  return reinterpret_cast<jlong>(calloc(1, 16));
+}
+static jlong PerfettoExtra_initS(JNIEnv*, jclass, jstring) {
+  return PerfettoExtra_init();
+}
+static jlong PerfettoExtra_initSJ(JNIEnv*, jclass, jstring, jlong) {
+  return PerfettoExtra_init();
+}
+static jlong PerfettoExtra_initJSJ(JNIEnv*, jclass, jlong, jstring, jlong) {
+  return PerfettoExtra_init();
+}
+static jlong PerfettoExtra_delete() {
+  return reinterpret_cast<jlong>(&PerfettoCategory_free);
+}
+static jlong PerfettoExtra_getExtraPtr(jlong ptr) {
+  return ptr;
+}
+static void PerfettoExtra_j(jlong) {}
+static void PerfettoExtra_jj(jlong, jlong) {}
+static void PerfettoExtra_jjj(jlong, jlong, jlong) {}
+static void PerfettoExtra_jd(jlong, jdouble) {}
+static void PerfettoExtra_jjd(jlong, jlong, jdouble) {}
+static void PerfettoExtra_jz(jlong, jboolean) {}
+static void PerfettoExtra_jS(JNIEnv*, jclass, jlong, jstring) {}
+static void PerfettoExtra_jjS(JNIEnv*, jclass, jlong, jlong, jstring) {}
+static void PerfettoExtra_emit(JNIEnv*, jclass, jint, jlong, jstring, jlong) {}
+
+#define PERFETTO_EXTRA_INIT {"native_init", "()J", GESHER_JNI(PerfettoExtra_init)}
+#define PERFETTO_EXTRA_INIT_S \
+  {"native_init", "(Ljava/lang/String;)J", GESHER_JNI(PerfettoExtra_initS)}
+#define PERFETTO_EXTRA_DELETE {"native_delete", "()J", GESHER_JNI(PerfettoExtra_delete)}
+#define PERFETTO_EXTRA_PTR {"native_get_extra_ptr", "(J)J", GESHER_JNI(PerfettoExtra_getExtraPtr)}
+
+static const JNINativeMethod gPerfettoExtraMethods[] = {
+    PERFETTO_EXTRA_INIT,
+    PERFETTO_EXTRA_DELETE,
+    {"native_add_arg", "(JJ)V", GESHER_JNI(PerfettoExtra_jj)},
+    {"native_clear_args", "(J)V", GESHER_JNI(PerfettoExtra_j)},
+    {"native_emit", "(IJLjava/lang/String;J)V", GESHER_JNI(PerfettoExtra_emit)},
+};
+static const JNINativeMethod gPerfettoArgInt64Methods[] = {
+    PERFETTO_EXTRA_INIT_S, PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+    {"native_set_value", "(JJ)V", GESHER_JNI(PerfettoExtra_jj)},
+};
+static const JNINativeMethod gPerfettoArgBoolMethods[] = {
+    PERFETTO_EXTRA_INIT_S, PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+    {"native_set_value", "(JZ)V", GESHER_JNI(PerfettoExtra_jz)},
+};
+static const JNINativeMethod gPerfettoArgDoubleMethods[] = {
+    PERFETTO_EXTRA_INIT_S, PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+    {"native_set_value", "(JD)V", GESHER_JNI(PerfettoExtra_jd)},
+};
+static const JNINativeMethod gPerfettoArgStringMethods[] = {
+    PERFETTO_EXTRA_INIT_S, PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+    {"native_set_value", "(JLjava/lang/String;)V", GESHER_JNI(PerfettoExtra_jS)},
+};
+static const JNINativeMethod gPerfettoFieldInt64Methods[] = {
+    PERFETTO_EXTRA_INIT, PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+    {"native_set_value", "(JJJ)V", GESHER_JNI(PerfettoExtra_jjj)},
+};
+static const JNINativeMethod gPerfettoFieldDoubleMethods[] = {
+    PERFETTO_EXTRA_INIT, PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+    {"native_set_value", "(JJD)V", GESHER_JNI(PerfettoExtra_jjd)},
+};
+static const JNINativeMethod gPerfettoFieldStringMethods[] = {
+    PERFETTO_EXTRA_INIT, PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+    {"native_set_value", "(JJLjava/lang/String;)V", GESHER_JNI(PerfettoExtra_jjS)},
+};
+static const JNINativeMethod gPerfettoFieldNestedMethods[] = {
+    PERFETTO_EXTRA_INIT, PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+    {"native_add_field", "(JJ)V", GESHER_JNI(PerfettoExtra_jj)},
+    {"native_set_id", "(JJ)V", GESHER_JNI(PerfettoExtra_jj)},
+};
+static const JNINativeMethod gPerfettoProtoMethods[] = {
+    PERFETTO_EXTRA_INIT, PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+    {"native_add_field", "(JJ)V", GESHER_JNI(PerfettoExtra_jj)},
+    {"native_clear_fields", "(J)V", GESHER_JNI(PerfettoExtra_j)},
+};
+static const JNINativeMethod gPerfettoFlowMethods[] = {
+    PERFETTO_EXTRA_INIT, PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+    {"native_set_process_flow", "(JJ)V", GESHER_JNI(PerfettoExtra_jj)},
+    {"native_set_process_terminating_flow", "(JJ)V", GESHER_JNI(PerfettoExtra_jj)},
+};
+static const JNINativeMethod gPerfettoNamedTrackMethods[] = {
+    {"native_init", "(JLjava/lang/String;J)J", GESHER_JNI(PerfettoExtra_initJSJ)},
+    PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+};
+static const JNINativeMethod gPerfettoCounterTrackMethods[] = {
+    {"native_init", "(Ljava/lang/String;J)J", GESHER_JNI(PerfettoExtra_initSJ)},
+    PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+};
+static const JNINativeMethod gPerfettoCounterInt64Methods[] = {
+    PERFETTO_EXTRA_INIT, PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+    {"native_set_value", "(JJ)V", GESHER_JNI(PerfettoExtra_jj)},
+};
+static const JNINativeMethod gPerfettoCounterDoubleMethods[] = {
+    PERFETTO_EXTRA_INIT, PERFETTO_EXTRA_DELETE, PERFETTO_EXTRA_PTR,
+    {"native_set_value", "(JD)V", GESHER_JNI(PerfettoExtra_jd)},
+};
+
+#define PERFETTO_EXTRA_CLASS(suffix, methods) \
+  RegisterMethodsOrDie(env, "android/os/PerfettoTrackEventExtra" suffix, methods, NELEM(methods))
+
 static int register_android_os_PerfettoTrace(JNIEnv* env) {
+  PERFETTO_EXTRA_CLASS("", gPerfettoExtraMethods);
+  PERFETTO_EXTRA_CLASS("$ArgInt64", gPerfettoArgInt64Methods);
+  PERFETTO_EXTRA_CLASS("$ArgBool", gPerfettoArgBoolMethods);
+  PERFETTO_EXTRA_CLASS("$ArgDouble", gPerfettoArgDoubleMethods);
+  PERFETTO_EXTRA_CLASS("$ArgString", gPerfettoArgStringMethods);
+  PERFETTO_EXTRA_CLASS("$FieldInt64", gPerfettoFieldInt64Methods);
+  PERFETTO_EXTRA_CLASS("$FieldDouble", gPerfettoFieldDoubleMethods);
+  PERFETTO_EXTRA_CLASS("$FieldString", gPerfettoFieldStringMethods);
+  PERFETTO_EXTRA_CLASS("$FieldNested", gPerfettoFieldNestedMethods);
+  PERFETTO_EXTRA_CLASS("$Proto", gPerfettoProtoMethods);
+  PERFETTO_EXTRA_CLASS("$Flow", gPerfettoFlowMethods);
+  PERFETTO_EXTRA_CLASS("$NamedTrack", gPerfettoNamedTrackMethods);
+  PERFETTO_EXTRA_CLASS("$CounterTrack", gPerfettoCounterTrackMethods);
+  PERFETTO_EXTRA_CLASS("$CounterInt64", gPerfettoCounterInt64Methods);
+  PERFETTO_EXTRA_CLASS("$CounterDouble", gPerfettoCounterDoubleMethods);
   RegisterMethodsOrDie(env, "android/os/PerfettoTrace", gPerfettoTraceMethods,
                        NELEM(gPerfettoTraceMethods));
   return RegisterMethodsOrDie(env, "android/os/PerfettoTrace$Category", gPerfettoCategoryMethods,
