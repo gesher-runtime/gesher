@@ -47,6 +47,18 @@ Check 'bionic shim: a libc/pthread .so runs its checks' {
 } @('libc_test: all passed', 'elf_load_test all passed')
 Remove-Item Env:GESHER_TEST_SYSTEM_CACERTS -ErrorAction SilentlyContinue
 
+# Key and thread_local destructors of the bionic shim on threads it did not
+# start (ART's, and Windows threads host code calls back on): they run in the
+# rounds of ART's winpthreads key, so a library's destructor that detaches
+# from the VM runs before ART's key comes round again, which aborted Waze
+# ("Native thread exited without calling DetachCurrentThread").
+Check 'bionic shim: key destructors detach a thread before ART checks it, on every kind of thread' {
+  & "$Dir/bionic_key_exit_test.exe"
+} @("ok    bionic keys: a shim-started thread detaches before ART's key comes round again",
+    "ok    bionic keys: a winpthreads thread detaches before ART's key comes round again",
+    "ok    bionic keys: a Windows thread detaches before ART's key comes round again",
+    'bionic_key_exit_test all passed')
+
 # %fs without WRFSBASE (ADR 0014): NDK libraries built with the default stack
 # protector and thread-locals (tests/native/fs_test.c). The loader rewrites
 # their %fs accesses to %gs-based ones at load time; the libraries check the

@@ -12,6 +12,7 @@
 
 #include "shim_internal.h"
 
+#include <pthread.h>
 #include <windows.h>
 
 #include <atomic>
@@ -67,34 +68,43 @@ struct ThreadAtExit {
 };
 thread_local std::vector<ThreadAtExit>* t_thread_atexit = nullptr;
 
-void RunThreadExit() {
-  // C++ thread_local destructors first, last registered first (as bionic).
-  if (t_thread_atexit != nullptr) {
-    while (!t_thread_atexit->empty()) {
-      ThreadAtExit e = t_thread_atexit->back();
-      t_thread_atexit->pop_back();
-      e.dtor(e.obj);
-    }
-    delete t_thread_atexit;
-    t_thread_atexit = nullptr;
+// C++ thread_local destructors, last registered first (as bionic).
+void RunThreadAtExit() {
+  if (t_thread_atexit == nullptr) return;
+  while (!t_thread_atexit->empty()) {
+    ThreadAtExit e = t_thread_atexit->back();
+    t_thread_atexit->pop_back();
+    e.dtor(e.obj);
   }
-  for (int pass = 0; pass < kDestructorPasses; ++pass) {
-    bool any = false;
-    for (int k = 0; k < kKeysMax; ++k) {
-      void* value = t_key_values[k];
-      if (value == nullptr) continue;
-      void (BIONIC_SYSV* dtor)(void*) = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(g_keys_mutex);
-        if (g_key_used[k]) dtor = g_key_dtors[k];
-      }
-      t_key_values[k] = nullptr;
-      if (dtor != nullptr) {
-        dtor(value);
-        any = true;
-      }
+  delete t_thread_atexit;
+  t_thread_atexit = nullptr;
+}
+
+// One round of key destructors: each key set when the round reaches it, once.
+// Returns whether any destructor ran.
+bool RunKeyRound() {
+  bool any = false;
+  for (int k = 0; k < kKeysMax; ++k) {
+    void* value = t_key_values[k];
+    if (value == nullptr) continue;
+    void (BIONIC_SYSV* dtor)(void*) = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(g_keys_mutex);
+      if (g_key_used[k]) dtor = g_key_dtors[k];
     }
-    if (!any) break;
+    t_key_values[k] = nullptr;
+    if (dtor != nullptr) {
+      dtor(value);
+      any = true;
+    }
+  }
+  return any;
+}
+
+void RunThreadExit() {
+  RunThreadAtExit();
+  for (int pass = 0; pass < kDestructorPasses; ++pass) {
+    if (!RunKeyRound()) break;
   }
 }
 
@@ -148,6 +158,37 @@ void ReapCpuClocks() {
       clock = {};
     }
   }
+}
+
+// A thread this shim did not start (ART's threads, Windows' and host
+// libraries' callback threads) has no FinishThread. Its exit work runs from a
+// winpthreads key instead, in the rounds winpthreads runs ART's key in: one
+// round of these per round of those, as bionic runs all of a thread's keys
+// together. A library's destructor that detaches the thread from the VM then
+// runs before ART's key comes round again; ART's first call only warns and
+// re-sets its key, its second aborts the process ("Native thread exited
+// without calling DetachCurrentThread", Waze's attached threads).
+pthread_key_t g_host_exit_key;
+std::once_flag g_host_exit_once;
+thread_local int t_host_exit_rounds = -1;  // -1: not armed on this thread
+
+void HostExitRound(void*) {
+  ++t_host_exit_rounds;
+  RunThreadAtExit();
+  RunKeyRound();
+}
+
+void ArmHostExit() {
+  if (t_record != nullptr) return;
+  if (t_host_exit_rounds < 0) {
+    std::call_once(g_host_exit_once,
+                   [] { pthread_key_create(&g_host_exit_key, HostExitRound); });
+    t_host_exit_rounds = 0;
+  } else if (t_host_exit_rounds == 0 || t_host_exit_rounds >= kDestructorPasses) {
+    return;
+  }
+  // Armed, or set again while the thread exits: its destructor runs next round.
+  pthread_setspecific(g_host_exit_key, &t_host_exit_rounds);
 }
 
 struct StartArg {
@@ -662,15 +703,17 @@ void* BIONIC_SYSV gesher_bionic_pthread_getspecific(bionic_pthread_key_t key) {
 int BIONIC_SYSV gesher_bionic_pthread_setspecific(bionic_pthread_key_t key, const void* value) {
   if (key < 0 || key >= kKeysMax) return kEINVAL;
   t_key_values[key] = const_cast<void*>(value);
+  if (value != nullptr) ArmHostExit();
   return 0;
 }
 
 // C++ thread_local destructors (libc++abi calls this for every thread_local
-// object with a destructor). Run when a shim-created thread ends.
+// object with a destructor). Run when the thread ends, before its keys.
 int BIONIC_SYSV gesher_bionic_cxa_thread_atexit_impl(void (BIONIC_SYSV* dtor)(void*), void* obj,
                                                     void* /*dso*/) {
   if (t_thread_atexit == nullptr) t_thread_atexit = new std::vector<ThreadAtExit>();
   t_thread_atexit->push_back({dtor, obj});
+  ArmHostExit();
   return 0;
 }
 

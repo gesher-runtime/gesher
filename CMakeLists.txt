@@ -187,6 +187,12 @@ add_executable(pthread_cpu_clock_target_test tests/native/pthread_cpu_clock_targ
 target_compile_options(pthread_cpu_clock_target_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(pthread_cpu_clock_target_test PRIVATE gesher_bionic gesher_elf)
 
+# The bionic shim's key and thread_local destructors on threads it did not
+# start, in the rounds of ART's winpthreads key (tracks/40-native-libs.ps1).
+add_executable(bionic_key_exit_test tests/native/bionic_key_exit_test.cc)
+target_compile_options(bionic_key_exit_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(bionic_key_exit_test PRIVATE gesher_bionic gesher_elf)
+
 # The same source calls actual Linux fcntl in the independent reference job.
 # This Windows target links the actual common POSIX fd/stdio/lock code.
 add_executable(native3_lock_command_worker EXCLUDE_FROM_ALL tests/native3-locks/command_worker.cc)

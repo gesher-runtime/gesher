@@ -97,7 +97,13 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     bits 14-15 of the mutex's first word): attrs, create/join/detach/exit,
     mutexes (normal/recursive/error-check, timed), condition variables
     (timed, monotonic), rwlocks, once, keys with destructors at thread exit,
-    `__cxa_thread_atexit_impl`.
+    `__cxa_thread_atexit_impl`. On a thread the shim did not start (ART's,
+    or a Windows thread host code calls back on), the first key set arms a
+    winpthreads key whose destructor runs one round of the bionic destructors
+    per winpthreads round, so a library's destructor that detaches the
+    thread from the VM runs before ART's key comes round a second time (an
+    abort: "Native thread exited without calling DetachCurrentThread");
+    `bionic_key_exit_test`.
   - Imports nothing defines: the loader binds a function import it cannot
     resolve to a stub that names the symbol and aborts **when called**, so a
     `.so` with unused missing imports still loads (`LoadOptions::
@@ -634,8 +640,6 @@ see "After that" for what is left._
   imports load as stubs that print the name and abort when called; missing
   **data** imports load as inaccessible placeholders that name the symbol if
   touched.
-- Threads ART creates (not through the shim's `pthread_create`) do not run
-  bionic key destructors or `thread_local` destructors when they exit.
 - `__system_property_get` returns "" for everything; `__android_log_*` writes
   `P/tag: text` to stderr.
 - Closing a library does not unmap it or release its TLS offset.
