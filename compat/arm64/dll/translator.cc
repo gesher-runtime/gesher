@@ -1231,6 +1231,18 @@ void* EmitGuestCode(const uint32_t* insns, size_t count) {
                signo, name, code, code_name, static_cast<unsigned long long>(fault_addr),
                GetCurrentThreadId());
   std::fprintf(stderr, "    Cause: %s\n", detail);
+  if (signo == kSigSegv) {
+    // What is at the fault address: which allocation, and how it is protected.
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(reinterpret_cast<void*>(fault_addr), &mbi, sizeof(mbi)) != 0) {
+      std::fprintf(stderr,
+                   "    memory: allocation %p (protect 0x%lx), region %p+0x%llx, state 0x%lx, "
+                   "protect 0x%lx, type 0x%lx\n",
+                   mbi.AllocationBase, mbi.AllocationProtect, mbi.BaseAddress,
+                   static_cast<unsigned long long>(mbi.RegionSize), mbi.State, mbi.Protect,
+                   mbi.Type);
+    }
+  }
   std::fflush(stderr);
   Env* env = t_env_raw;
   if (env != nullptr && env->host_fn() != nullptr && !t_guest_running) {
@@ -1243,6 +1255,16 @@ void* EmitGuestCode(const uint32_t* insns, size_t count) {
     // block (or the instruction itself for an undefined one).
     uint64_t frames[16];
     int n = 0;
+    // The registers, as debuggerd prints them (as of the block's last sync).
+    for (int r = 0; r < 30; r += 2) {
+      std::fprintf(stderr, "    x%-2d %016llx  x%-2d %016llx\n", r,
+                   static_cast<unsigned long long>(jit->GetRegister(r)), r + 1,
+                   static_cast<unsigned long long>(jit->GetRegister(r + 1)));
+    }
+    std::fprintf(stderr, "    lr  %016llx  sp  %016llx  pc  %016llx\n",
+                 static_cast<unsigned long long>(jit->GetRegister(30)),
+                 static_cast<unsigned long long>(jit->GetSP()),
+                 static_cast<unsigned long long>(jit->GetPC()));
     frames[n++] = jit->GetPC();
     frames[n++] = jit->GetRegister(30);
     uint64_t fp = jit->GetRegister(29);
