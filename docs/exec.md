@@ -231,9 +231,13 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
   check. Prompted by a banking app's CMC abort (`ioctl_userfaultfd: copy
   failed: Bad file descriptor`) after root-check execs; that abort is not
   explained by fds: the process ran CMC in fallback mode (no userfaultfd fd
-  exists), its execs went through `UNIXProcess` (`CreateProcessW`, no fork),
-  and the fault path that issues `UFFDIO_COPY` in fallback mode is ART's
-  SIGBUS handler, whose trigger there is still open.
+  exists), its execs went through `UNIXProcess` (`CreateProcessW`, no fork).
+  The `UFFDIO_COPY` came from `MoveBlackDensePageForUpdate`, which took the
+  userfaultfd path even in fallback mode, when a class's instance-reference
+  bitmap had a zero word on a page of its own in the black-dense region (Waze
+  aborted at startup the same way). art 0760 updates and copies that page
+  without an ioctl in fallback mode; tests/dex-codegen/GcBlackDense.java
+  reproduces the abort and runs in 70-codegen under switch, nterp and jit.
 
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._

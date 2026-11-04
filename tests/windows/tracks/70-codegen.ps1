@@ -236,6 +236,24 @@ if (Test-Path $jniLib) {
   $script:failed++
 }
 
+# The CMC collector's stop-the-world compaction (no userfaultfd on Windows) over
+# classes whose instance-reference bitmap spans pages (tests/dex-codegen/
+# GcBlackDense.java, patches/art/0760-cmc-fallback-black-dense-page.patch): 30
+# collections the heap starts itself (young ones keep the old generation in
+# place) must not abort with "ioctl_userfaultfd: copy failed" (Waze at startup)
+# nor change a live object.
+foreach ($name in @($modes.Keys)) {
+  if ($name -eq 'interpret-only') { continue }
+  $m = $modes[$name]
+  $r = RunMode $m.Args @('gesher.GcBlackDense', '30') $m.Env
+  if ($r.Exit -eq 0 -and $r.Out.Contains('GcBlackDense all passed') -and $r.Out -notmatch 'ioctl_userfaultfd') {
+    $line = ($r.Out -split "`n" | Where-Object { $_ -match '^ok   GcBlackDense: ' } | Select-Object -First 1) -replace '^ok   GcBlackDense: ', ''
+    Write-Host "PASS  codegen: stop-the-world compaction keeps page-spanning reference bitmaps under $name ($($line.Trim()))"
+  } else {
+    ReportFailure "stop-the-world compaction with page-spanning reference bitmaps under $name" $r
+  }
+}
+
 # ART's own run-tests (tests/build-art-run-tests.sh): each runs under the
 # switch interpreter first; one that passes there must pass under every
 # other mode too. (One that fails there fails for reasons of its own, not
