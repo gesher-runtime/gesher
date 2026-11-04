@@ -21,6 +21,10 @@
 #                                      URL protocols)
 #   gesher-app view com.example URL    (an app's URL protocol runs it) ACTION_VIEW of
 #                                      URL in the package: an OAuth redirect comes back
+#   gesher-app my.apk --proxy 127.0.0.1:8080  ... through that HTTP proxy (this launch)
+#   gesher-app proxy [PACKAGE] 127.0.0.1:8080  Gesher's own proxy for every app (or one
+#                                      package), over Windows' settings; `direct`: none,
+#                                      `windows`: Windows' settings again (docs/network.md)
 #   gesher-app list                    the installed packages
 #   gesher-app status                  the device's processes
 #   gesher-app shutdown                stop the device
@@ -71,10 +75,10 @@ try {
 } catch { }
 
 $root = Join-Path $env:LOCALAPPDATA 'Gesher'
-$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon'
+$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy'
 if ($Arguments.Count -eq 0) {
-  Write-Host 'usage: gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--single-process | --system-server]'
-  Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown'
+  Write-Host 'usage: gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--single-process | --system-server]'
+  Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows]'
   exit 2
 }
 $command = $Arguments[0]

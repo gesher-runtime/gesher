@@ -30,6 +30,8 @@ public final class GesherService extends Binder {
     static final int WINDOW_MODE = IBinder.FIRST_CALL_TRANSACTION + 5;
     /** A click on a toast, which Windows' toast activator gave a launcher (ADR 0051). */
     static final int TOAST_ACTIVATED = IBinder.FIRST_CALL_TRANSACTION + 6;
+    /** The proxy of a package's next process (com.gesher.net.ProxySetting.setForLaunch). */
+    static final int PROXY = IBinder.FIRST_CALL_TRANSACTION + 7;
 
     /** What the service does; the system server implements it. */
     interface Device {
@@ -55,7 +57,7 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > TOAST_ACTIVATED) {
+        if (code < INSTALL || code > PROXY) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
@@ -96,6 +98,12 @@ public final class GesherService extends Binder {
                 case TOAST_ACTIVATED: {
                     String appId = data.readString();
                     mDevice.toastActivated(appId, data.readString());
+                    reply.writeNoException();
+                    return true;
+                }
+                case PROXY: {
+                    String pkg = data.readString();
+                    com.gesher.net.ProxySetting.setForLaunch(pkg, data.readString());
                     reply.writeNoException();
                     return true;
                 }
@@ -186,6 +194,25 @@ public final class GesherService extends Binder {
                 data.writeString(packageName);
                 data.writeString(mode);
                 mBinder.transact(WINDOW_MODE, data, reply, 0);
+                reply.readException();
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        /**
+         * The proxy ({@code host:port}, {@code direct}, {@code windows}; null: the saved
+         * settings) of the package's processes the system server starts from now on.
+         */
+        public void setProxy(String packageName, String value) throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(packageName);
+                data.writeString(value);
+                mBinder.transact(PROXY, data, reply, 0);
                 reply.readException();
             } finally {
                 data.recycle();

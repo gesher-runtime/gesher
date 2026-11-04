@@ -282,7 +282,7 @@ bool SplashFor(const std::wstring& here, Splash* splash) {
     // gesher-app.ps1's other commands show no window of an app; anything else is an APK.
     static const wchar_t* const kCommands[] = {L"install", L"uninstall", L"view", L"list",
                                                L"status", L"start", L"shutdown",
-                                               L"toast-activated", L"apk-icon"};
+                                               L"toast-activated", L"apk-icon", L"proxy"};
     for (const wchar_t* command : kCommands) {
       if (Lower(args[0]) == command) return false;
     }
@@ -296,7 +296,7 @@ bool SplashFor(const std::wstring& here, Splash* splash) {
     if (a == L"--window") shown = true;
     if (a == L"--hidden-window" || a == L"--headless") shown = false;
     if (a == L"--single-process" || a == L"--system-server") return false;  // no AppUserModelID
-    if (a == L"--activity") ++i;
+    if (a == L"--activity" || a == L"--proxy") ++i;
     if (a == L"--ez") i += 2;
   }
   if (!shown) return false;

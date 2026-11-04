@@ -22,6 +22,7 @@ import android.os.SystemClock;
 
 import com.gesher.app.shell.AppShell;
 import com.gesher.app.window.WindowMode;
+import com.gesher.net.ProxySetting;
 import com.gesher.server.Device;
 import com.gesher.server.GesherService;
 import com.gesher.server.SystemServer;
@@ -46,6 +47,7 @@ import java.util.Properties;
  * <pre>
  *   Launcher [--build-prop FILE] [--framework-res FILE] COMMAND
  *     launch APK|PACKAGE [--activity CLASS] [--ez KEY true|false]...
+ *            [--proxy host:port|direct|windows]
  *            [--window | --hidden-window | --headless [--keep-task]]
  *                       install or update the APK, start its launcher activity through the
  *                       system server (am start -W) and show the app's output until the
@@ -53,7 +55,12 @@ import java.util.Properties;
  *                       default, or $GESHER_APP_WINDOW): the app runs until they are
  *                       closed. --hidden-window: the same, never shown (tests read them
  *                       back). --headless: no windows; once the activity is idle its task
- *                       is removed (with --keep-task it runs until it finishes)
+ *                       is removed (with --keep-task it runs until it finishes).
+ *                       --proxy: the app's HTTP proxy for this launch (its next process)
+ *     proxy [[PACKAGE] host:port|direct|windows]
+ *                       Gesher's own proxy, over Windows' settings: for every app, or for
+ *                       one package (windows: Windows' settings for it); no argument
+ *                       shows them. App processes started from now on use it
  *     install APK       install or update the package
  *     view PACKAGE URL  (run by an app's URL protocol, docs/installer.md) start the package's
  *                       activity for URL (ACTION_VIEW, BROWSABLE) in its task: an OAuth
@@ -150,6 +157,7 @@ public final class Launcher {
                 return removed ? 0 : 1;
             }
             case "list": return list();
+            case "proxy": return proxy(rest);
             case "view": {
                 if (rest.size() != 2) return usage();
                 return view(rest.get(0), rest.get(1));
@@ -206,10 +214,39 @@ public final class Launcher {
         return 0;
     }
 
+    /**
+     * {@code proxy [[PACKAGE] host:port|direct|windows]}: Gesher's own proxy for every app,
+     * or for one package, over Windows' settings (com.gesher.net.ProxySetting); no
+     * argument shows the saved settings. App processes started from now on use it.
+     */
+    private static int proxy(List<String> args) throws Exception {
+        if (args.size() > 2) return usage();
+        if (args.isEmpty()) {
+            Properties p = ProxySetting.load();
+            if (p.isEmpty()) log("no proxy of Gesher's own: Windows' settings");
+            for (String key : new java.util.TreeSet<>(p.stringPropertyNames())) {
+                log((key.equals("proxy") ? "every app" : key.substring(6)) + ": "
+                        + p.getProperty(key));
+            }
+            return 0;
+        }
+        String pkg = args.size() == 2 ? args.get(0) : null;
+        String value = ProxySetting.parse(args.get(args.size() - 1));
+        if (value == null) {
+            log(args.get(args.size() - 1) + ": not host:port, direct or windows");
+            return usage();
+        }
+        ProxySetting.save(pkg, value);
+        log("proxy of " + (pkg == null ? "every app" : pkg) + ": " + value
+                + " (app processes started from now on)");
+        return 0;
+    }
+
     private static int usage() {
         System.err.println("usage: gesher-app launch APK|PACKAGE [--activity CLASS] [--ez KEY"
-                + " true|false]... [--window | --hidden-window | --headless [--keep-task]]"
-                + " | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
+                + " true|false]... [--proxy host:port|direct|windows]"
+                + " [--window | --hidden-window | --headless [--keep-task]]"
+                + " | proxy [[PACKAGE] host:port|direct|windows] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
                 + " | shutdown | apk-icon APK");
         return 2;
     }
@@ -464,6 +501,7 @@ public final class Launcher {
         String apk = null;
         String activity = null;
         boolean keepTask = false;
+        String proxy = null;
         String windowMode = WindowMode.fromEnvironment(WindowMode.WINDOW);
         Map<String, Boolean> extras = new LinkedHashMap<>();
         for (int i = 0; i < args.size(); i++) {
@@ -471,6 +509,14 @@ public final class Launcher {
             switch (a) {
                 case "--activity": activity = args.get(++i); break;
                 case "--keep-task": keepTask = true; break;
+                case "--proxy": {
+                    proxy = ProxySetting.parse(args.get(++i));
+                    if (proxy == null) {
+                        log("--proxy " + args.get(i) + ": not host:port, direct or windows");
+                        return usage();
+                    }
+                    break;
+                }
                 case "--window": windowMode = WindowMode.WINDOW; break;
                 case "--hidden-window": windowMode = WindowMode.HIDDEN; break;
                 case "--headless": windowMode = WindowMode.HEADLESS; break;
@@ -521,6 +567,13 @@ public final class Launcher {
         gesher.setWindowMode(pkg, windowMode);
         if (!WindowMode.HEADLESS.equals(windowMode)) keepTask = true;
         log("windows of " + pkg + ": " + windowMode);
+        // Its proxy: this launch's, else the saved settings (gesher-app proxy).
+        gesher.setProxy(pkg, proxy);
+        if (proxy != null) {
+            log("proxy of " + pkg + ": " + proxy
+                    + (running(ActivityManager.getService(), pkg)
+                            ? " (from its next process: it is running)" : ""));
+        }
 
         // The app's output: its process appends to the package's log.
         Tail tail = new Tail(Device.packageLog(pkg));

@@ -26,7 +26,8 @@ import java.util.Map;
  * {@code com.android.net.IProxyService} for each URL, which this class serves in every
  * process with Windows' own evaluation of the script (WinHttpGetProxyForUrl). A watcher
  * applies Windows' changes. The natives are compat/net/windows_proxy.cc
- * (libgesher_proxy.so).
+ * (libgesher_proxy.so). Gesher's own proxy for the process ({@link ProxySetting}) comes
+ * before Windows' settings.
  */
 public final class WindowsProxy {
     private WindowsProxy() {
@@ -74,8 +75,13 @@ public final class WindowsProxy {
         }
     }
 
-    /** Windows' settings now (an empty Config without the natives). */
+    /**
+     * Windows' settings now (an empty Config without the natives), or Gesher's own proxy
+     * for this process ({@link ProxySetting}) instead.
+     */
     public static Config config() {
+        String own = ProxySetting.ofProcess();
+        if (own != null) return configOf(own);
         Config c = new Config();
         if (!load()) return c;
         for (String line : nativeConfig().split("\n")) {
@@ -88,6 +94,19 @@ public final class WindowsProxy {
                 case "bypass": c.bypass = f[1]; break;
                 default: break;
             }
+        }
+        return c;
+    }
+
+    /**
+     * A ProxySetting as a Config: {@code direct} none, a proxy server with this machine's
+     * own names left out.
+     */
+    static Config configOf(String setting) {
+        Config c = new Config();
+        if (!setting.equals(ProxySetting.DIRECT)) {
+            c.proxy = setting;
+            c.bypass = "localhost;127.0.0.1;[::1]";
         }
         return c;
     }
@@ -158,7 +177,7 @@ public final class WindowsProxy {
 
     /** Windows' answer for a URL under the current PAC script: a PAC result. */
     public static String resolve(String url) {
-        if (!load()) return null;
+        if (ProxySetting.ofProcess() == null && !load()) return null;
         Config c = config();
         if (c.pacUrl.isEmpty()) {
             android.net.ProxyInfo p = defaultProxy(c);
@@ -199,6 +218,11 @@ public final class WindowsProxy {
         } catch (ReflectiveOperationException | RuntimeException e) {
             System.out.println("gesher-net: no proxy service in this process: " + e);
         }
+        if (ProxySetting.ofProcess() != null) {
+            // Gesher's own proxy: Windows' changes do not matter.
+            apply();
+            return;
+        }
         if (!load()) return;
         apply();
         Thread watcher = new Thread(() -> {
@@ -222,7 +246,11 @@ public final class WindowsProxy {
         } catch (RuntimeException | LinkageError e) {
             System.out.println("gesher-net: setHttpProxyConfiguration: " + e);
         }
-        if (p != null || !first) {
+        String own = ProxySetting.ofProcess();
+        if (own != null) {
+            System.out.println("gesher-net: Gesher's proxy (" + ProxySetting.ENV + "=" + own
+                    + "): " + p);
+        } else if (p != null || !first) {
             System.out.println("gesher-net: Windows' proxy (" + now + "): " + p);
         }
     }

@@ -184,6 +184,15 @@ processes of packages without it; gesher-app applies it in its own process
   every process serves itself with `WinHttpGetProxyForUrl` (Windows fetches and runs the
   script, in process). `ConnectivityManager.getDefaultProxy()` and `getProxyForNetwork`
   return it.
+- **Gesher's own proxy**, over Windows' settings (`com.gesher.net.ProxySetting`): for every
+  app or for one package, saved in `<data>/system/proxy.properties` by
+  `gesher-app proxy [PACKAGE] host:port|direct|windows` (no argument shows them; `direct`
+  is no proxy; `windows` for a package is Windows' settings over every app's setting), or for
+  one launch (`gesher-app launch PACKAGE --proxy host:port`). The system server gives an app
+  process its setting (the launch's, else the package's, else every app's) as
+  `$GESHER_PROXY` when it starts it; `WindowsProxy` then takes it instead of Windows'
+  settings (an HTTP proxy server, with localhost, 127.0.0.1 and [::1] left out) and does not
+  follow Windows' changes. A running app keeps its proxy until its process ends.
 - **CONNECTIVITY_ACTION**: the connectivity service keeps it sticky (made at the first
   sticky query, as BatteryService's battery broadcast) and sends it when the default
   network (its netId or kind) changes: EXTRA_NETWORK_INFO, EXTRA_NETWORK_TYPE,

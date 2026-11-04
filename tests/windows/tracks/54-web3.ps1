@@ -390,6 +390,26 @@ try {
   } finally {
     [GesherWeb3Proxy]::Restore()
   }
+
+  # Gesher's own proxy (com.gesher.net.ProxySetting), with Windows' settings restored: a
+  # package's saved setting, then one launch's --proxy over it.
+  $proxyLog = Join-Path $env:RUNNER_TEMP 'web3-proxy-command.log'
+  $pc = Start-Process "$Web3RuntimeExe" -ArgumentList (@($dvmWeb3) + 'com.gesher.app.Launcher', 'proxy', 'com.gesher.web3app', 'direct') `
+    -NoNewWindow -PassThru -RedirectStandardOutput $proxyLog -RedirectStandardError "$proxyLog.err"
+  if (-not $pc.WaitForExit(120000)) { $pc.Kill($true) }
+  $saved = Join-Path $env:ANDROID_DATA 'system/proxy.properties'
+  if ("$(Get-Content -Raw $proxyLog -ErrorAction SilentlyContinue)".Contains('proxy of com.gesher.web3app: direct') -and
+      "$(Get-Content -Raw $saved -ErrorAction SilentlyContinue)".Contains('proxy.com.gesher.web3app=direct')) {
+    Write-Host 'PASS  web3: gesher-app proxy com.gesher.web3app direct saved the package''s setting'
+  } else {
+    Write-Host "FAIL  web3: gesher-app proxy did not save the package's setting ($(Get-Content -Raw $proxyLog -ErrorAction SilentlyContinue))"
+    $failed++
+  }
+  $null = Web3Run 'the Gesher device: web3app.apk''s NetActivity launched with --proxy (Gesher''s own proxy over the package''s saved direct, Windows'' settings off): Proxy.getDefaultHost/Port and HttpURLConnection through it' ($launch + '--activity', 'com.gesher.web3app.NetActivity', '--proxy', "127.0.0.1:$web3Proxy") @(
+    "gesher-net: Gesher's proxy (GESHER_PROXY=127.0.0.1:$web3Proxy)",
+    "Web3 net Proxy.getDefaultHost 127.0.0.1 port $web3Proxy",
+    'Web3 net http://web3-proxied.test/net: 200 proxied by the test proxy for web3-proxied.test',
+    'Web3 net done') 'Web3 net done'
 } finally {
   $shutdownLog = Join-Path $env:RUNNER_TEMP 'web3-device-shutdown.log'
   $sd = Start-Process "$Web3RuntimeExe" -ArgumentList (@($dvmWeb3) + 'com.gesher.app.Launcher', 'shutdown') `
