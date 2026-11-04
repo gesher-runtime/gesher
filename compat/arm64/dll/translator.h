@@ -33,6 +33,10 @@ bool InGuestCode(uintptr_t addr);
 // already are: memory the guest made PROT_EXEC itself.
 void AddGuestCode(const void* start, size_t size);
 
+// Does [start, start + size) touch the translator's own code pages (the
+// trampolines and guest-side helpers it writes)?
+bool InTranslatorCode(const void* start, size_t size);
+
 // The guest-specific definition of a libc symbol whose host (bionic shim)
 // version has an x86-64 ABI the guest cannot use (struct layouts, syscall
 // numbers, jmp_buf, auxv): a guest-callable address, or nullptr.

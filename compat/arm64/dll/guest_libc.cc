@@ -361,7 +361,14 @@ void* g_host_syscall = nullptr;
 // no guest library's: Facebook's force_dlopen (libforce_dlopen.so, WhatsApp)
 // writes a `blr x2` trampoline over the string gai_strerror(EAI_NONAME)
 // returns, so that dlopen sees a caller inside libc, then jumps to it.
+//
+// The translator's own pages hold the trampolines of host functions, and it
+// adds one each time the guest binds another. A guest that hooks a libc
+// function in place (WhatsApp's libessential) re-protects that trampoline's
+// page PROT_READ|PROT_EXEC when done. Those pages stay read-write, or the
+// next binding (the next library's imports) faults in the host.
 constexpr int kProtRead = 1;
+constexpr int kProtWrite = 2;
 constexpr int kProtExec = 4;
 void* g_mprotect = nullptr;
 void* g_mmap = nullptr;
@@ -369,8 +376,10 @@ void* g_mmap = nullptr;
 int GuestProt(int prot) { return (prot & kProtExec) != 0 ? (prot & ~kProtExec) | kProtRead : prot; }
 
 int GESHER_SYSV GuestMprotect(void* addr, size_t len, int prot) {
+  int host_prot = GuestProt(prot);
+  if (InTranslatorCode(addr, len)) host_prot = kProtRead | kProtWrite;
   int r = reinterpret_cast<int(GESHER_SYSV*)(void*, size_t, int)>(g_mprotect)(addr, len,
-                                                                              GuestProt(prot));
+                                                                              host_prot);
   if (r == 0 && (prot & kProtExec) != 0) AddGuestCode(addr, len);
   return r;
 }

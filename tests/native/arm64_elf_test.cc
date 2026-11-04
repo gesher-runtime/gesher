@@ -43,6 +43,15 @@ static Fn Entry(elf::Library* lib, const char* name) {
   return reinterpret_cast<Fn>(arm64::HostEntry(guest));
 }
 
+// Host functions bound after the guest re-protected a trampoline page.
+#if defined(__x86_64__)
+#define HOST_SYSV __attribute__((sysv_abi))
+#else
+#define HOST_SYSV
+#endif
+HOST_SYSV static uint64_t HostSeven() { return 7; }
+HOST_SYSV static uint64_t HostNine() { return 9; }
+
 int main(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   if (argc < 2) {
@@ -73,11 +82,22 @@ int main(int argc, char** argv) {
   using AddFn = int(SYSV_FN*)(int, int);
   using SelftestFn = int(SYSV_FN*)(const char*);
   using PerfFn = uint64_t(SYSV_FN*)(uint32_t);
+  using ReprotectFn = int(SYSV_FN*)(void*);
 
   if (auto selftest = Entry<SelftestFn>(lib, "gesher_selftest")) {
     // The first search directory doubles as a scratch directory.
     int rc = selftest(argc > 2 ? argv[2] : ".");
     Check("gesher_selftest() == 0", rc == 0);
+    if (auto reprotect = Entry<ReprotectFn>(lib, "gesher_reprotect")) {
+      // The guest re-protects the page of a host function's trampoline
+      // PROT_READ|PROT_EXEC; binding the next host function writes there.
+      void* first = arm64::BindHostFunction(reinterpret_cast<void*>(&HostSeven));
+      Check("guest re-protects a trampoline page", first != nullptr && reprotect(first) == 0);
+      void* next = arm64::BindHostFunction(reinterpret_cast<void*>(&HostNine));
+      Check("binding a host function after that",
+            next != nullptr && arm64::Call(first, nullptr, 0) == 7 &&
+                arm64::Call(next, nullptr, 0) == 9);
+    }
     if (auto perf = Entry<PerfFn>(lib, "gesher_perf_kernel")) {
       // The same kernel (arm64_perf_kernel.h) translated and native.
       constexpr uint32_t kRounds = 100;

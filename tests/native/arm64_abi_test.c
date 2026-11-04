@@ -291,6 +291,21 @@ static void test_written_code(void) {
   check("force_dlopen: dlsym on its handle", handle != NULL && dlsym(handle, "dlopen") != NULL);
 }
 
+// Called by arm64_elf_test with the trampoline of a host function: re-protects
+// its page as a hook made in place does (WhatsApp's libessential patches a
+// libc function: PROT_READ|PROT_EXEC, then RWX, then PROT_READ|PROT_EXEC).
+// The host binds more functions on that page afterwards.
+int gesher_reprotect(void* addr);
+int gesher_reprotect(void* addr) {
+  long page = sysconf(_SC_PAGESIZE);
+  void* first = (void*)((uintptr_t)addr & ~(uintptr_t)(page - 1));
+  return mprotect(first, page, PROT_READ | PROT_EXEC) == 0 &&
+                 mprotect(first, page, PROT_READ | PROT_WRITE | PROT_EXEC) == 0 &&
+                 mprotect(first, page, PROT_READ | PROT_EXEC) == 0
+             ? 0
+             : -1;
+}
+
 // --- the stack protector ------------------------------------------------------------------------
 static int __attribute__((noinline)) protected_frame(const char* s) {
   char buf[32];

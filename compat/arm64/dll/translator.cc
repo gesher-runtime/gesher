@@ -112,6 +112,7 @@ std::mutex g_code_mutex;
 uint8_t* g_code_page = nullptr;
 size_t g_code_used = 0;
 constexpr size_t kCodePage = 0x10000;
+std::vector<uint8_t*> g_code_pages;  // every one so far
 
 uint32_t* AllocGuestCode(size_t words) {
   std::lock_guard<std::mutex> lock(g_code_mutex);
@@ -121,6 +122,7 @@ uint32_t* AllocGuestCode(size_t words) {
         VirtualAlloc(nullptr, kCodePage, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
     g_code_used = 0;
     if (g_code_page == nullptr) return nullptr;
+    g_code_pages.push_back(g_code_page);
     AddRegion(reinterpret_cast<uintptr_t>(g_code_page), kCodePage);
   }
   auto* p = reinterpret_cast<uint32_t*>(g_code_page + g_code_used);
@@ -1174,6 +1176,15 @@ void* BindHost(void* fn, int va_list_index) {
   g_tramp_count.store(index + 1, std::memory_order_release);
   g_tramp_by_fn[fn] = p;
   return p;
+}
+
+bool InTranslatorCode(const void* start, size_t size) {
+  auto first = static_cast<const uint8_t*>(start);
+  std::lock_guard<std::mutex> lock(g_code_mutex);
+  for (uint8_t* page : g_code_pages) {
+    if (first < page + kCodePage && first + size > page) return true;
+  }
+  return false;
 }
 
 void AddGuestCode(const void* start, size_t size) {
