@@ -140,7 +140,10 @@ Pages see the https origin: same-origin requests between assets work without
   Android loads it.
 - `loadDataWithBaseURL`: with an http(s) or file base, the base URL is
   navigated to and its main document answered with the data (so relative
-  URLs and the origin are the base's); without one, `NavigateToString`.
+  URLs and the origin are the base's); without one, `NavigateToString`,
+  its `file:///android_asset/` and `file:///android_res/` URLs (which
+  Android's page loads, as Gmail's compose editor its script) made the
+  file origin's.
 - `postUrl` posts the data (form-encoded, as Android) with
   `NavigateWithWebResourceRequest`; other schemes load without it.
 

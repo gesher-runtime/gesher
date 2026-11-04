@@ -583,7 +583,13 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 || baseUrl.startsWith("about:")) {
             if (mHost == null) return;
             mOriginalUrl = historyUrl != null ? historyUrl : "about:blank";
-            mHost.navigateToString(new String(bytes, StandardCharsets.UTF_8));
+            // Android's data page may load the app's assets and resources (Gmail's compose
+            // editor: <script src="file:///android_asset/...">); WebView2's about:blank
+            // cannot load file: URLs, so they are FileUrls' origin's.
+            String html = new String(bytes, StandardCharsets.UTF_8)
+                    .replace("file:///android_asset/", FileUrls.toWebView2("file:///android_asset/"))
+                    .replace("file:///android_res/", FileUrls.toWebView2("file:///android_res/"));
+            mHost.navigateToString(html);
             return;
         }
         // The base URL is loaded, and its main document is answered with the data.
