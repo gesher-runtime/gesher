@@ -41,7 +41,8 @@ if ($LASTEXITCODE -eq 17) {
 
 # fork()+exec as dart:io's Process.start does it (a Flutter app's UI thread): the
 # fork child waits for its parent's byte before exec, exec closes the O_CLOEXEC
-# fds. A regression hangs, so this runs with a time limit.
+# fds; a child whose exec fails is not waited for before that byte. A regression
+# hangs, so this runs with a time limit.
 $dartLog = Join-Path $env:RUNNER_TEMP "exec2-dart-start-$(Get-Random).log"
 $dart = Start-Process "$Dir/gesher-exec.exe" -ArgumentList @('--elf', "`"$driver`"", 'libexec2test.so', '--dart-start', "`"$(NoDrive $child)`"") `
   -NoNewWindow -PassThru -RedirectStandardOutput $dartLog -RedirectStandardError "$dartLog.err"
@@ -51,7 +52,9 @@ $dartOut = (Get-Content -Raw $dartLog -ErrorAction SilentlyContinue) + (Get-Cont
 $dartExpect = @('exec2: PASS a fork child waits for its parent''s byte before exec (dart:io Process.start)',
   'exec2: PASS exec closes the O_CLOEXEC fds: the exec-status pipe ends while the program runs',
   'exec2: PASS the parent''s byte for the child is not in the program''s output',
-  'exec2: SUMMARY pass=3 fail=0')
+  'exec2: PASS a fork child whose exec fails is not waited for before its parent''s byte',
+  'exec2: PASS then it is, with exit 127 and exec''s errno',
+  'exec2: SUMMARY pass=5 fail=0')
 $dartMissing = $dartExpect | Where-Object { -not "$dartOut".Contains($_) }
 if ($dartExited -and $dart.ExitCode -eq 0 -and -not $dartMissing) {
   Write-Host 'PASS  exec2: fork+exec as dart:io''s Process.start (the child waits for its parent''s byte; exec closes O_CLOEXEC fds)'

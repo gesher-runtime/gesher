@@ -75,6 +75,12 @@ struct Child {
   bool exited = false;
   int status = 0;  // Linux waitpid status word, once reaped by the watcher
   HANDLE wait = nullptr;
+  // The pipe whose byte the fork child read ahead of its parent's write (ChildReadsParentByte):
+  // until the parent writes it, the child is not waited for. On Linux it cannot have exited
+  // before then; Dart's Process.start registers the pid between fork and that write, and a
+  // child its exit-code thread reaped before that left the thread counting one child too many
+  // ("Wait for process exit failed: 10", Otzaria aborted).
+  uint64_t gate = 0;
 };
 
 std::mutex g_children_mutex;
@@ -168,6 +174,7 @@ struct ForkChild {
   int pid = 0;                          // the spawned pid, for fork()'s return
   bool exited = false;                  // the child called _exit without exec
   int exit_status = 0;                  // its status word
+  uint64_t gate = 0;                    // the pipe it read its parent's byte from (Child::gate)
 };
 
 thread_local ForkChild* t_fork = nullptr;
@@ -458,6 +465,11 @@ int ChildExec(const std::string& program, const std::vector<std::string>& argv, 
   ForkChild* child = t_fork;
   t_fork = nullptr;
   int pid = MaterializeAndSpawn(child, program, argv, search);
+  if (pid > 0) {
+    std::lock_guard<std::mutex> lock(g_children_mutex);
+    auto it = g_children.find(pid);
+    if (it != g_children.end()) it->second.gate = child->gate;
+  }
   if (pid > 0) FinishChild(child, pid);  // does not return
   int error = errno;
   t_fork = child;
@@ -518,14 +530,15 @@ constexpr int kWNOHANG = 1;
 
 int CollectOne(int pid, int* status, int options) {
   for (;;) {
-    HANDLE h = nullptr;
     {
       std::lock_guard<std::mutex> lock(g_children_mutex);
       if (g_children.empty()) return errno = 10 /*ECHILD*/, -1;
       // A specific pid, or any (-1/0).
+      bool found = false;
       for (auto& kv : g_children) {
         if (pid > 0 && kv.first != pid) continue;
-        if (kv.second.exited) {
+        found = true;
+        if (kv.second.exited && kv.second.gate == 0) {
           if (status != nullptr) *status = kv.second.status;
           int got = kv.first;
           if (kv.second.wait != nullptr) UnregisterWaitEx(kv.second.wait, nullptr);
@@ -533,16 +546,10 @@ int CollectOne(int pid, int* status, int options) {
           g_children.erase(kv.first);
           return got;
         }
-        if (pid > 0) {
-          h = kv.second.process;
-          break;
-        }
+        if (pid > 0) break;
       }
-      if (pid <= 0) {
-        // None exited yet; wait on them all below (release the lock first).
-      } else if (h == nullptr) {
-        return errno = 10 /*ECHILD*/, -1;  // no such child
-      }
+      // None exited (or none the parent let go of yet): wait below, the lock released.
+      if (!found) return errno = 10 /*ECHILD*/, -1;  // no such child
     }
     if ((options & kWNOHANG) != 0) return 0;
     // Block until a child exits (the watcher sets `exited`), then re-scan.
@@ -992,6 +999,7 @@ int64_t ChildReadsParentByte(int fd, void* buf, size_t n) {
     ++g_parent_bytes[pipe];
   }
   g_parent_bytes_pending.fetch_add(1);
+  t_fork->gate = pipe;
   static_cast<char*>(buf)[0] = 0;
   return 1;
 }
@@ -1009,7 +1017,13 @@ size_t ParentBytesTaken(int fd, size_t n) {
   if (it == g_parent_bytes.end()) return 0;
   size_t taken = std::min(n, it->second);
   it->second -= taken;
-  if (it->second == 0) g_parent_bytes.erase(it);
+  if (it->second == 0) {
+    g_parent_bytes.erase(it);
+    std::lock_guard<std::mutex> children(g_children_mutex);
+    for (auto& kv : g_children) {
+      if (kv.second.gate == pipe) kv.second.gate = 0;
+    }
+  }
   g_parent_bytes_pending.fetch_sub(static_cast<int>(taken));
   return taken;
 }
@@ -1120,6 +1134,7 @@ void ExitIfVforkChild(int status) {
     c.process = nullptr;
     c.exited = true;
     c.status = (status & 0xff) << 8;  // WIFEXITED
+    c.gate = child->gate;
   }
   DeliverExternalSignal(kSigchld, 0, kCldExited, (status & 0xff) << 8, false);
   FinishChild(child, pid);

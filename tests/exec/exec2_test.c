@@ -106,6 +106,48 @@ static void dart_start(const char* child) {
      strcmp(out, "child-ready\n") == 0, out);
 }
 
+// dart:io's Process.start of a program that is not there ("which" on a device without
+// it): the child's exec fails and it exits before its parent has written its byte. On
+// Linux it could not have: it was still waiting for that byte, which the parent writes
+// once it has registered the pid. Dart's exit-code thread, in wait() for another
+// program, reaped such a child before its registration, kept counting it and aborted
+// ("Wait for process exit failed: 10"). So it is not waited for until the byte.
+static void dart_start_missing(void) {
+  int exec_control[2], read_in[2];
+  if (pipe2(exec_control, O_CLOEXEC) != 0 || pipe2(read_in, O_CLOEXEC) != 0) {
+    ok("a fork child whose exec fails is not waited for before its parent's byte", 0, "pipe2");
+    return;
+  }
+  pid_t pid = fork();
+  if (pid == 0) {
+    char go;
+    if (read(read_in[0], &go, 1) != 1) _exit(126);
+    char* a[] = {(char*)"/system/xbin/gesher-no-such-program", NULL};
+    execvp(a[0], a);
+    int e = errno;
+    ssize_t reported = write(exec_control[1], &e, sizeof(e));
+    (void)reported;
+    _exit(127);
+  }
+  int status = -1;
+  pid_t early = waitpid(-1, &status, WNOHANG);
+  char go = '1';
+  ssize_t sent = write(read_in[1], &go, 1);
+  close(exec_control[1]);
+  int child_errno = 0;
+  ssize_t got = read(exec_control[0], &child_errno, sizeof(child_errno));
+  close(exec_control[0]);
+  close(read_in[0]);
+  close(read_in[1]);
+  ok("a fork child whose exec fails is not waited for before its parent's byte",
+     pid > 0 && early == 0, "waitpid(-1, WNOHANG) before the byte");
+  pid_t reaped = waitpid(-1, &status, 0);
+  ok("then it is, with exit 127 and exec's errno",
+     sent == 1 && got == (ssize_t)sizeof(child_errno) && child_errno == ENOENT &&
+         reaped == pid && WIFEXITED(status) && WEXITSTATUS(status) == 127,
+     "waitpid after the byte");
+}
+
 // A fork child that drops every fd above 2 before an exec that fails, as Java's
 // childproc (closeDescriptors) and root checkers ("exec which/su/busybox") do. The
 // vfork-style child runs in this process (docs/exec.md), so its close loop,
@@ -174,6 +216,7 @@ int main(int argc, char** argv) {
   }
   if (argc >= 3 && strcmp(argv[1], "--dart-start") == 0) {
     dart_start(argv[2]);
+    dart_start_missing();
     printf("exec2: SUMMARY pass=%d fail=%d\n", g_pass, g_fail);
     fflush(stdout);
     return g_fail == 0 ? 0 : 1;
