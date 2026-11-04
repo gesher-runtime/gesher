@@ -2,7 +2,7 @@
 from pathlib import Path
 import ast,hashlib,json,subprocess
 ROOT=Path(__file__).resolve().parents[2]
-BASE='18ee0a63ea9ae1915c83604a07902621dfb75560'
+BASE='637098c2f80151aef6dfb560196bbb1448c89cae'
 def old(path):return subprocess.check_output(['git','-C',str(ROOT),'show',BASE+':'+path])
 def check():
  paths=subprocess.check_output(['git','-C',str(ROOT),'diff','1745e99d7f2849ba81784545e07d60cb2b7800c3^','1745e99d7f2849ba81784545e07d60cb2b7800c3','--name-only'],text=True).splitlines()
