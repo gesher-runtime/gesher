@@ -155,6 +155,10 @@ public final class GmsPackageSupport {
         }
         ai.publicSourceDir = ai.sourceDir;
         ai.dataDir = "/data/data/" + packageName;
+        // LoadedApk's class loader adds it as a native path (new File(nativeLibraryDir)):
+        // without one, the package context's getClassLoader throws a NullPointerException
+        // (Gmail's ProviderInstaller: "Failed to install provider").
+        ai.nativeLibraryDir = "/data/app/" + packageName + "/lib";
         return ai;
     }
 

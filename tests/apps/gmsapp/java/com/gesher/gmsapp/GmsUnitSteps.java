@@ -35,6 +35,7 @@ import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.messaging.FirebaseMessaging;
 
+import java.lang.reflect.Method;
 import java.util.List;
 
 public final class GmsUnitSteps {
@@ -46,6 +47,7 @@ public final class GmsUnitSteps {
 
     public void runAll() throws Exception {
         testClientSdkFromApk();
+        testProviderInstallerCode();
         testGoogleApiAvailability();
         testPackageManagerSyntheticGms();
         testFusedLocationProviderClient();
@@ -86,6 +88,22 @@ public final class GmsUnitSteps {
             }
         }
         Report.line("client SDK: FirebaseApp and play-services classes loaded from the APK, none on the boot class path");
+    }
+
+    /**
+     * Play services' code, as the client library's ProviderInstaller loads it (Gmail
+     * refuses its mail servers without): the package context with CONTEXT_INCLUDE_CODE,
+     * its class loader, ProviderInstallerImpl's insertProvider and reportRequestStats2.
+     */
+    public void testProviderInstallerCode() throws Exception {
+        Context gms = mActivity.createPackageContext("com.google.android.gms",
+                Context.CONTEXT_INCLUDE_CODE | Context.CONTEXT_IGNORE_SECURITY);
+        Class<?> impl = gms.getClassLoader().loadClass("com.google.android.gms.common.security.ProviderInstallerImpl");
+        Method insert = impl.getMethod("insertProvider", Context.class);
+        insert.invoke(null, gms);
+        Method stats = impl.getMethod("reportRequestStats2", Context.class, long.class, long.class);
+        stats.invoke(null, mActivity, 0L, 1L);
+        Report.line("ProviderInstaller: Play services' code loads from its package context, insertProvider runs");
     }
 
     public void testGoogleApiAvailability() throws Exception {

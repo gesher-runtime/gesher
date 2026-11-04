@@ -35,6 +35,12 @@ GmsCheck 'microg-gms (single process): client SDK classes come from the APK, non
   'gms: client SDK: FirebaseApp and play-services classes loaded from the APK, none on the boot class path'
 )
 
+# Play services' code from its package context, as the client library's ProviderInstaller
+# loads it (GmsPackageSupport: the synthetic package's code is gesher-camera.apk).
+GmsCheck 'microg-gms (single process): ProviderInstaller loads Play services'' code from its package context' $outSingle $codeSingle @(
+  'gms: ProviderInstaller: Play services'' code loads from its package context, insertProvider runs'
+)
+
 GmsCheck 'microg-gms (single process): GoogleApiAvailability stand-ins' $outSingle $codeSingle @(
   'gms: GoogleApiAvailability: isGooglePlayServicesAvailable SUCCESS (0)',
   'gms: GoogleApiAvailability: makeGooglePlayServicesAvailable completed'
@@ -72,6 +78,7 @@ $outDevice += "`n" + (Get-Content $appLog -Raw -ErrorAction SilentlyContinue)
 
 GmsCheck 'microg-gms (device): full GMS compatibility suite in system server' $outDevice $codeDevice @(
   'gms: client SDK: FirebaseApp and play-services classes loaded from the APK, none on the boot class path',
+  'gms: ProviderInstaller: Play services'' code loads from its package context, insertProvider runs',
   'gms: GoogleApiAvailability: isGooglePlayServicesAvailable SUCCESS (0)',
   'gms: PackageManager: com.google.android.gms synthetic package present, enabled, valid signatures (Google''s certificate)',
   'gms: FusedLocationProviderClient: connected to LocationManagerService, updates received',
