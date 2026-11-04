@@ -54,7 +54,9 @@ $dartExpect = @('exec2: PASS a fork child waits for its parent''s byte before ex
   'exec2: PASS the parent''s byte for the child is not in the program''s output',
   'exec2: PASS a fork child whose exec fails is not waited for before its parent''s byte',
   'exec2: PASS then it is, with exit 127 and exec''s errno',
-  'exec2: SUMMARY pass=5 fail=0')
+  'exec2: PASS a fork child''s environ is the program''s environment',
+  'exec2: PASS and not this process''s: environ and getenv are as before the fork',
+  'exec2: SUMMARY pass=7 fail=0')
 $dartMissing = $dartExpect | Where-Object { -not "$dartOut".Contains($_) }
 if ($dartExited -and $dart.ExitCode -eq 0 -and -not $dartMissing) {
   Write-Host 'PASS  exec2: fork+exec as dart:io''s Process.start (the child waits for its parent''s byte; exec closes O_CLOEXEC fds)'

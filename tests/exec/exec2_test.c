@@ -148,6 +148,44 @@ static void dart_start_missing(void) {
      "waitpid after the byte");
 }
 
+// dart:io's Process.start with an environment: the fork child sets environ to the array
+// it was given, then execvp. The vfork-style child runs in this process (docs/exec.md),
+// so that environ was this process's, left pointing at the array the parent frees:
+// getenv on any thread then read freed memory (Otzaria crashed in HWUI's render thread).
+// The program gets the child's environ; this process keeps its own.
+extern char** environ;
+static void dart_start_environment(const char* child) {
+  char** before = environ;
+  int out[2];
+  if (pipe2(out, O_CLOEXEC) != 0) {
+    ok("a fork child's environ is the program's environment", 0, "pipe2");
+    return;
+  }
+  char* program_environment[] = {(char*)"GESHER_EXEC2_CHILD_ENV=from-the-child", NULL};
+  pid_t pid = fork();
+  if (pid == 0) {
+    dup2(out[1], 1);
+    environ = program_environment;
+    char* a[] = {(char*)child, (char*)"env", (char*)"GESHER_EXEC2_CHILD_ENV", NULL};
+    execvp(child, a);
+    _exit(127);
+  }
+  close(out[1]);
+  char text[128] = {0};
+  size_t used = 0;
+  ssize_t n;
+  while (used < sizeof(text) - 1 && (n = read(out[0], text + used, sizeof(text) - 1 - used)) > 0) {
+    used += (size_t)n;
+  }
+  close(out[0]);
+  int status = -1;
+  waitpid(pid, &status, 0);
+  ok("a fork child's environ is the program's environment",
+     pid > 0 && strstr(text, "from-the-child") != NULL, text);
+  ok("and not this process's: environ and getenv are as before the fork",
+     environ == before && getenv("GESHER_EXEC2_CHILD_ENV") == NULL, "environ");
+}
+
 // A fork child that drops every fd above 2 before an exec that fails, as Java's
 // childproc (closeDescriptors) and root checkers ("exec which/su/busybox") do. The
 // vfork-style child runs in this process (docs/exec.md), so its close loop,
@@ -217,6 +255,7 @@ int main(int argc, char** argv) {
   if (argc >= 3 && strcmp(argv[1], "--dart-start") == 0) {
     dart_start(argv[2]);
     dart_start_missing();
+    dart_start_environment(argv[2]);
     printf("exec2: SUMMARY pass=%d fail=%d\n", g_pass, g_fail);
     fflush(stdout);
     return g_fail == 0 ? 0 : 1;

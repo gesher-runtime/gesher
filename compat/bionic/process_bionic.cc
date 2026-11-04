@@ -175,6 +175,7 @@ struct ForkChild {
   bool exited = false;                  // the child called _exit without exec
   int exit_status = 0;                  // its status word
   uint64_t gate = 0;                    // the pipe it read its parent's byte from (Child::gate)
+  char** parent_environ = nullptr;      // the process's environ when it forked (TakeEnviron)
 };
 
 thread_local ForkChild* t_fork = nullptr;
@@ -385,6 +386,7 @@ std::atomic<int> g_synthetic_pid{1};
 
 extern "C" void* gesher_fork_prepare() {
   auto* child = new ForkChild();
+  child->parent_environ = _environ;
   child->env = CurrentEnv();
   child->dir = CurrentDir();
   for (const ex::ChildFd& f : InheritedFds()) {
@@ -399,9 +401,21 @@ extern "C" void* gesher_fork_prepare() {
   return child->caller_ctx;
 }
 
+// A child that sets environ (dart:io's Process.start does, to the environment it was
+// given, before execvp) sets this process's: on Linux only the child's. The array is the
+// parent's, which frees it once the program started, and environ was left pointing there:
+// getenv on any thread then read freed memory (Otzaria crashed in HWUI's render thread).
+// The child's environ becomes the program's environment; the process's is put back.
+void TakeEnviron(ForkChild* child) {
+  if (_environ == child->parent_environ) return;
+  child->env = FromList(_environ);
+  _environ = child->parent_environ;
+}
+
 // Returns to fork's caller with `result`, after copying the context off the
 // child (which is freed here) onto the stack, so the jump reads valid memory.
 [[noreturn]] void FinishChild(ForkChild* child, int result) {
+  TakeEnviron(child);
   uint64_t ctx[16];
   std::memcpy(ctx, child->caller_ctx, sizeof(ctx));
   t_fork = nullptr;
@@ -464,6 +478,7 @@ int MaterializeAndSpawn(ForkChild* child, const std::string& program,
 int ChildExec(const std::string& program, const std::vector<std::string>& argv, bool search) {
   ForkChild* child = t_fork;
   t_fork = nullptr;
+  TakeEnviron(child);
   int pid = MaterializeAndSpawn(child, program, argv, search);
   if (pid > 0) {
     std::lock_guard<std::mutex> lock(g_children_mutex);
@@ -505,7 +520,11 @@ int DoExec(const char* path, char* const argv[], char* const envp[], bool search
   if (path == nullptr || argv == nullptr) return errno = EFAULT, -1;
   std::vector<std::string> args = FromList(argv);
   if (args.empty()) args.push_back(path);
-  if (t_fork != nullptr) return ChildExec(path, args, search);  // returns only on failure
+  if (t_fork != nullptr) {
+    TakeEnviron(t_fork);
+    if (envp != nullptr) t_fork->env = FromList(envp);
+    return ChildExec(path, args, search);  // returns only on failure
+  }
   std::vector<std::string> env = envp != nullptr ? FromList(envp) : CurrentEnv();
   ExecReplace(path, args, env, search);  // returns only on failure
   return -1;
