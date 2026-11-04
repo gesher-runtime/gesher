@@ -175,7 +175,8 @@ struct ForkChild {
   bool exited = false;                  // the child called _exit without exec
   int exit_status = 0;                  // its status word
   uint64_t gate = 0;                    // the pipe it read its parent's byte from (Child::gate)
-  char** parent_environ = nullptr;      // the process's environ when it forked (TakeEnviron)
+  char*** environ_slot = nullptr;       // where loaded code's environ is (TakeEnviron)
+  char** parent_environ = nullptr;      // the process's environ when it forked
 };
 
 thread_local ForkChild* t_fork = nullptr;
@@ -386,7 +387,11 @@ std::atomic<int> g_synthetic_pid{1};
 
 extern "C" void* gesher_fork_prepare() {
   auto* child = new ForkChild();
-  child->parent_environ = _environ;
+  // The variable loaded code's environ is: the CRT's in an app, gesher-exec's own in a
+  // program it runs.
+  child->environ_slot = static_cast<char***>(LookupBionicSymbol("environ"));
+  if (child->environ_slot == nullptr) child->environ_slot = &_environ;
+  child->parent_environ = *child->environ_slot;
   child->env = CurrentEnv();
   child->dir = CurrentDir();
   for (const ex::ChildFd& f : InheritedFds()) {
@@ -407,9 +412,9 @@ extern "C" void* gesher_fork_prepare() {
 // getenv on any thread then read freed memory (Otzaria crashed in HWUI's render thread).
 // The child's environ becomes the program's environment; the process's is put back.
 void TakeEnviron(ForkChild* child) {
-  if (_environ == child->parent_environ) return;
-  child->env = FromList(_environ);
-  _environ = child->parent_environ;
+  if (*child->environ_slot == child->parent_environ) return;
+  child->env = FromList(*child->environ_slot);
+  *child->environ_slot = child->parent_environ;
 }
 
 // Returns to fork's caller with `result`, after copying the context off the
