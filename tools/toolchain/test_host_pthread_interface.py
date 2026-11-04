@@ -36,7 +36,7 @@ def first_job_policy(current,prior):
 
 def source_policy():
     import yaml
-    root=Path(__file__).resolve().parents[2];base='6d135abf73b29f7f60cf4e19e5de858bce04f2db'
+    root=Path(__file__).resolve().parents[2];base='1bf8fad9ec3b423ddef8c97c1d72b25790974364'
     def old(path):return yaml.safe_load(subprocess.check_output(['git','-C',str(root),'show',base+':'+path],text=True))
     prior=old('.github/workflows/ci.yml');current=yaml.safe_load((root/'.github/workflows/ci.yml').read_text())
     first_job_policy(current,prior)

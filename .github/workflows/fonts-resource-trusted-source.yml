@@ -23,11 +23,11 @@ jobs:
           """Immutable supported-tool prerequisite; never host/font/runtime acceptance."""
           import ast,copy,hashlib,json,os,re,subprocess,sys,textwrap,urllib.request
           from pathlib import Path
-          BASE='28c175af3ae13a866cf71bcd85db447ca4254170'
-          HOST_GUARD='68ba180b38d56810de55a374f472bf91fefec636'
+          BASE='4d54ade1b53483f6d604bd989a7674ea6c376a1f'
+          HOST_GUARD='267bb2f7868dd85405e9336d3ec29a131535d7eb'
           HOST_TRUST='.github/workflows/fonts-owner-host-trusted-source.yml'
           HOST_GUARD_BLOB='399d2ffdf430dce00634021ddd4d21553ee7d262'
-          TEMPLATE='0fc631585e736a8dda770c025ddb44fb52f639ed'
+          TEMPLATE='7eb7485fb0e539508ed61581b5378733d964cc24'
           CALLER='.github/workflows/fonts-resource-component.yml'
           TRUST='.github/workflows/fonts-resource-trusted-source.yml'
           REPO='gesher-runtime/gesher'
@@ -41,7 +41,7 @@ jobs:
            except (RuntimeError,KeyError):print('FONT_DEBUGGER_NEGATIVE '+label+'=rejected',flush=True)
            else:raise RuntimeError('Negative accepted: '+label)
           def frozen_host():
-           prior_guard='112bfee48e2f661d03cc612cb130ce81754eeb7f';prior_path='.github/workflows/fonts-debugger-preflight-trusted-source.yml'
+           prior_guard='e85b200113fd6ab99c404b288cbd9334842cb2e1';prior_path='.github/workflows/fonts-debugger-preflight-trusted-source.yml'
            raw=git('show',prior_guard+':'+prior_path)
            require(hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()=='348e0edf4394c18b34d8e6fdc1e175128386f821' and raw==git('show',BASE+':'+prior_path),'Frozen CDB policy changed')
            code=textwrap.dedent(raw.decode().split("          python3 -I - <<'PY'\n",1)[1].rsplit('\n          PY',1)[0]);tree=ast.parse(code)

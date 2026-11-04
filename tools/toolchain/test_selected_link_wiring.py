@@ -14,7 +14,7 @@ from unittest.mock import patch
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-BASE = '88f0d2314f8459be08a70ae109fe320fb7d76aea'
+BASE = '4216a2999f0755faa42993fe4ea38fe66efc4957'
 SELECTED_CASE = '''  selected-minimum)
     test -n "$SELECTED_LLVM" && test -n "$SELECTED_RECEIPT" && test -n "$SELECTED_RECEIPT_SHA256"
     llvm="$SELECTED_LLVM"

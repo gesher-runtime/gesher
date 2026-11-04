@@ -31,7 +31,7 @@ jobs:
       - name: Require exact verified coherent API3 prerequisite and reviewed environment delta
         shell: pwsh
         run: |
-          $source = 'db5a97fd084556b4db1d2f00260c442a19a1b129'
+          $source = '942f2c16b1219cd25bcb1c1ca4215f41639cc88f'
           $proof = gh api repos/${{ github.repository }}/actions/runs/40556015168 | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $proof.head_sha -cne $source -or $proof.name -cne 'arm64-varargs-component' -or
               $proof.conclusion -cne 'success' -or $proof.run_attempt -ne 1) { throw 'Unverified coherent API3 prerequisite' }

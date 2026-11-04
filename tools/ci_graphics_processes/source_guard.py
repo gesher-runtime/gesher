@@ -10,7 +10,7 @@ import re
 import subprocess
 import types
 
-BASE='f39e3e616a2baeb2123d8c6e192decdf0b29aa8e'
+BASE='b0de972bb543e0dd20d125c990817fb5b3407112'
 BASE_INVENTORY='5c15755b5e6223b64305947c610bf3de69adb1edf03ef9dd2b690788ca20a905'
 CALLER='.github/workflows/graphicsdex-component.yml'
 GUARD='.github/workflows/graphicsdex-trusted-source.yml'

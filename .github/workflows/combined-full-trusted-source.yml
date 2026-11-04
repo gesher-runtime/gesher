@@ -30,12 +30,12 @@ jobs:
           import subprocess
           import urllib.request
 
-          BASE = '051b0b7c949cef08dd36a7ef9246d0550d6b388d'
+          BASE = 'c254c6c19fb3c8553208a096116eab7350d4de49'
           REPO = 'gesher-runtime/gesher'
           CALLER = '.github/workflows/ci.yml'
           TRUST = '.github/workflows/combined-full-trusted-source.yml'
           GUARD = 'tools/native3-locks/union_payload.py'
-          HISTORICAL_BASE = '429b08826923ab0b1fff80529499bfdcfaa68caa'
+          HISTORICAL_BASE = '7bbccfcddbac826f50b78175f4d23f8702fd7741'
           # Independently frozen original preflight assertions; never import candidate policy.
           HISTORICAL_PINS = {
               ".github/workflows/aot3-after-resource-component.yml": "27aa2b609cb52e934796075548690a42d338e344",
@@ -157,8 +157,8 @@ jobs:
            'tests/native3-locks/blocking_worker.cc': '5356ae4a174ebca86d160a49e4dac0256f4586e5',
            'tests/native3-locks/cleanup_controls.h': '7c638b3dad4090b1a05b611e001db24f2c2d52eb',
            'tools/native3-locks/blocking_source_guard.py': 'a255b8105d9a3f58e904e9a7797f492676a6481d'}
-          ORIGINAL_BASE = 'c199c5f1a7e71c7cf8540f21723fa6fcb55790d6'
-          UNION_BASE = '7c926e5a179aa6a77d8f39a12436885666f1a78e'
+          ORIGINAL_BASE = 'f1550540186b4ae3f17a5e501a886ec1c4d5d613'
+          UNION_BASE = '8b1e9b509ceef7e532a7ff5bc085ecdbc476d292'
 
 
           def require(condition, message):

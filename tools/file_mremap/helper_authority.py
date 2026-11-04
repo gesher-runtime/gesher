@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-BASE = '2deeab09a72585e61ddeaa462e4cecbedddb3448'
+BASE = '15dde556967b8a366477d3d7b3839abbcbfd42c6'
 BASE_INVENTORY = 'c2bafd90c2783383db1ca6b1c73d0365ad87d91e7f35fe9c96b885a75f25225e'
 REPOSITORY = 'gesher-runtime/gesher'
 REPOSITORY_ID = 1426153186

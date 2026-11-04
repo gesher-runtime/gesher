@@ -7,7 +7,7 @@ network, artifact fetch, compiler, PE parsing or native operation lives here.
 """
 import hashlib,json,re,subprocess
 from pathlib import Path
-BASE='f3ceca08e99370b22ef213af3678120833f00aa8'
+BASE='2e41f6d21b21639d586986b83e2a05df9bc7b688'
 REPO='gesher-runtime/gesher';RID='1426153186'
 BRANCH='wip/file-mremap-shared-alias'
 CALLER='.github/workflows/file-mremap-component.yml'

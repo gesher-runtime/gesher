@@ -17,7 +17,7 @@ env:
   R8_VERSION: "9.5.26"
 jobs:
   trusted-source:
-    uses: gesher-runtime/gesher/.github/workflows/fonts-environment-trusted-source.yml@6834452fd041760d1c09037b1dd372b445f9f377
+    uses: gesher-runtime/gesher/.github/workflows/fonts-environment-trusted-source.yml@5d7f0bce3fac42123c6bce314580f46344b62d4b
   fixture-producer:
     needs: trusted-source
     runs-on: ubuntu-24.04

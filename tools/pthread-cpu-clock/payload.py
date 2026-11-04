@@ -9,7 +9,7 @@ import shlex
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
-BASE = 'c199c5f1a7e71c7cf8540f21723fa6fcb55790d6'
+BASE = 'f1550540186b4ae3f17a5e501a886ec1c4d5d613'
 ROLE = 'bionic-retained-cpu-clock-core-v1'
 MEMBERS = {'pthread_cpu_clock_target_test.exe', 'gesher-exec.exe', 'gesher_arm64.dll',
            'arm64_smoke_test.exe', 'cpu-clock-x86_64', 'cpu-clock-arm64',

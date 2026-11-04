@@ -37,14 +37,14 @@ jobs:
       - name: Verify exact unchanged ART/ABI/jars and successful matching scaffolding producers
         shell: pwsh
         run: |
-          $source = 'c1d27f22398be7b2b053f42f9be20b77fd21fe7d'
+          $source = '5d9e24d3df1e9caa77c21dbae360a1f32988b943'
           $run = gh api repos/${{ github.repository }}/actions/runs/40527788805 | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $run.head_sha -cne $source -or $run.name -cne 'ci' -or
               $run.run_attempt -ne 1 -or $run.conclusion -cne 'failure') {
             throw 'Unexpected immutable muxer full run/source/attempt'
           }
-          $resolverSource = '0ded3da4d4c1be2425917222408d95a9a4baa2fa'
-          $resolverPaths = @(git diff --name-only 45891282a524016f80b3d38028495e4495499456 $resolverSource -- . ':!docs/**')
+          $resolverSource = '3fb8255d7dd4b9bb26c1d92dfdcf01f7475a3729'
+          $resolverPaths = @(git diff --name-only bc6e05bea341d1dc79920deaf3f069ad690fedc4 $resolverSource -- . ':!docs/**')
           if ($LASTEXITCODE -ne 0 -or $resolverPaths.Count -eq 0) { throw 'Missing immutable accepted resolver source paths' }
           git diff --exit-code $resolverSource HEAD -- @resolverPaths
           if ($LASTEXITCODE -ne 0) { throw 'Merged resolver paths differ from independently accepted full40519019567 source' }
@@ -73,7 +73,7 @@ jobs:
       - name: Verify fresh host/caller source and matching unchanged jars/image/DLL
         shell: pwsh
         run: |
-          $source = 'c1d27f22398be7b2b053f42f9be20b77fd21fe7d'
+          $source = '5d9e24d3df1e9caa77c21dbae360a1f32988b943'
           foreach ($marker in 'muxer-host-source.txt','muxer-fixture-source.txt') {
             if ((Get-Content "dist/$marker" -Raw).Trim() -cne '${{ github.sha }}') { throw "Current producer identity mismatch $marker" }
             Write-Host "ACTUAL_MUXER_CURRENT_PRODUCER member=$marker source=${{ github.sha }}"

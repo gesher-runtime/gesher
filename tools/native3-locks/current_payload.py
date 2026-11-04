@@ -114,7 +114,7 @@ def main():
     context = host_roles.context()
     sources = source_inventory()
     if args.mode == 'preflight':
-        base = '429b08826923ab0b1fff80529499bfdcfaa68caa'
+        base = '7bbccfcddbac826f50b78175f4d23f8702fd7741'
         subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], cwd=ROOT, check=True)
         allowed = set(PINNED_SOURCE) | {'.github/workflows/ci.yml',
             'tools/native3-locks/current_payload.py', 'tests/windows/run-native3-locks-current.ps1'}

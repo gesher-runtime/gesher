@@ -116,7 +116,7 @@ class Code(unittest.TestCase):
             disk.DISK_PROFILES.clear();disk.DISK_PROFILES.update(originals)
     def test_old_codecs_immutable(self):
         import subprocess
-        base='b2f06450457adfaaabd176e3a6d7c1abc5d57e3c'
+        base='a8e79c27639200c3a3ee9162fb053a22727df3f6'
         for name in ('resource-import-inventory.py','resource-pe-imports.py'):
             self.assertEqual((ROOT/name).read_bytes(),subprocess.check_output(['git','show',base+':tools/fonts/'+name]))
     def test_complete_output_cap_never_truncates(self):

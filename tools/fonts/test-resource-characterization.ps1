@@ -133,7 +133,7 @@ Check ($new.Extent.Text.Contains("$"+'stage.code.cache=$cache[0]'))
 Check ($new.Extent.Text.IndexOf("Get-PreflightFileProfile $"+'codePath') -lt $new.Extent.Text.IndexOf('$child=Start-ResourceRole'))
 Check ($new.Extent.Text.Contains("'CODE_ENVELOPE_SCRIPT' ($"+'checkout'))
 # The entire parser body differs from immutable9df by exactly ONE literal test.
-$priorRunner=(& git show '2ba8ab0facdb5251a867568ae1640b9c70c14009:tools/fonts/resource-characterization.ps1') -join "`n"
+$priorRunner=(& git show '9df03ff1accac2c41a8831c490d2c6d1a0dcea53:tools/fonts/resource-characterization.ps1') -join "`n"
 $priorTokens=$null;$priorErrors=$null
 $priorAst=[Management.Automation.Language.Parser]::ParseInput($priorRunner,[ref]$priorTokens,[ref]$priorErrors)
 Check ($priorErrors.Count -eq 0)
@@ -566,7 +566,7 @@ foreach($key in @('IsClosed','CanRead','Name','Length')){
 Reject {New-ResourceDiskFrame @{handles=@()} $diskStream $diskIdentity $diskContext 123}
 Reject {New-ResourceDiskFrame $diskOwner $diskStream $diskIdentity $diskContext 0}
 foreach($key in @('signature_status','signer','signer_thumbprint','sha256')){$bad=$diskIdentity.Clone();$bad[$key]='wrong';Reject {New-ResourceDiskFrame $diskOwner $diskStream $bad $diskContext 123}}
-$oldRunner=& git -C (Split-Path (Split-Path $PSScriptRoot)) show '7935f3cbc319e5d22c072fd52e82bfc5f00803a9:tools/fonts/resource-characterization.ps1'
+$oldRunner=& git -C (Split-Path (Split-Path $PSScriptRoot)) show '7c83593e8955c39235182f6ac81035739c38354b:tools/fonts/resource-characterization.ps1'
 $oldPredicate=@($oldRunner|Where-Object{$_.Contains("throw 'UNAVAILABLE: retained current ntdll profile/module mismatch'")})
 Check ($oldPredicate.Count -eq 1 -and $new.Extent.Text.Split("`n").TrimEnd("`r").Contains($oldPredicate[0]))
 Write-Host "FONT_RESOURCE_METADATA_PASS checks=$script:checks native_processes_started=0 real_tool_reads=0 actual_application_lookup=NOT_EXECUTED code_rows=SYNTHETIC_AND_SAVED_CI_TEXT"

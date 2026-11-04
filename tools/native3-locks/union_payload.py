@@ -655,17 +655,6 @@ def main():
             'app/java/com/gesher/app/Digests.java',
             'app/gesher-camera/java/com/google/android/gms/common/security/ProviderInstallerImpl.java',
         ])
-        # Commit pins re-pointed at the rewritten history; only their SHAs changed.
-        allowed.update([
-            '.github/workflows/aot3-shared-probes.yml',
-            '.github/workflows/arm64-environment-component.yml',
-            '.github/workflows/binder2-sg-modes-component.yml',
-            '.github/workflows/binder2-stable-readonly-component.yml',
-            '.github/workflows/media4-muxer-component.yml',
-            'tools/native3-locks/blocking-source.json',
-            'tools/native3-locks/current_payload.py',
-            'tools/surface/verify-component-suppliers.ps1',
-        ])
         changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', '.',
                       ':(exclude)docs/**'], cwd=ROOT, text=True).splitlines())
         assert changed <= allowed and changed, ('Unreviewed coherent production delta', changed - allowed)

@@ -3,9 +3,9 @@ import ast,copy,hashlib,json,re,subprocess,textwrap
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
-BASE='d11313d04167ac20d477ac1c7952a7136e431f8b'
-FULL='6d135abf73b29f7f60cf4e19e5de858bce04f2db'
-FULL_GUARD='4e51a35edb1996a44c653ee299fcf0d767b02b91'
+BASE='f9288a647298adb90bdef82302d745cf806bb7ea'
+FULL='1bf8fad9ec3b423ddef8c97c1d72b25790974364'
+FULL_GUARD='340e30efafce7f232fb6e03197b775dc595c94e6'
 FULL_TRUST='.github/workflows/net-combined-dns-trusted-source.yml'
 FULL_BLOB='419783115876ababb9278e04d6b6092e02d2caf3'
 CALLER='.github/workflows/pthread-native-off-receiver-component.yml'
@@ -105,7 +105,7 @@ def frozen_history():
     assert len(selected['PINNED_SOURCE'])==104
     full=scope['inventory'](FULL)
     assert all(full[p][1]==b for p,b in selected['PINNED_SOURCE'].items())
-    historical='6e021688aa83b4f88e672c19b145bc019445631e'
+    historical='00f96217616c5892dd8364067d007f92d541585b'
     legacy=ast.parse(git('show',historical+':tools/native3-locks/union_payload.py').decode());nodes=[]
     for n in legacy.body:
         if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='TARGETS'for t in n.targets):break
