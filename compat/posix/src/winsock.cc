@@ -1232,11 +1232,21 @@ void DrainWakeSocket(Socket s) {
 
 void CloseWakeSocket(Socket s) { closesocket(static_cast<SOCKET>(s)); }
 
+namespace {
+// Winsock's WSAPOLLFD is itself named `struct pollfd` (a SOCKET-wide one),
+// as is gesher-base's (an int fd). std::vector members of either would share
+// mangled names, and the linker keeps one copy for both: a vector of the
+// other's size then corrupts select's and epoll's. A type of this file's own
+// keeps its instantiations apart.
+struct NativePollFd : WSAPOLLFD {};
+static_assert(sizeof(NativePollFd) == sizeof(WSAPOLLFD));
+}  // namespace
+
 int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver observer, void* context,
          Socket wake, bool* woken) {
   if (woken != nullptr) *woken = false;
   const ULONGLONG sample_started = GetTickCount64();
-  std::vector<WSAPOLLFD> fds(count);
+  std::vector<NativePollFd> fds(count);
   std::vector<bool> lifecycle_hup(count, false);
   std::vector<bool> owned_pending(count, false), closed(count, false);
   bool has_lifecycle_hup = false;
@@ -1299,7 +1309,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   // An owned pending connection has no usable connected context yet. Its
   // completion is the readiness source; a native write wake could precede
   // context publication and otherwise spin or expose a premature success.
-  std::vector<WSAPOLLFD> active;
+  std::vector<NativePollFd> active;
   std::vector<size_t> active_index;
   for (size_t i = 0; i < count; ++i) {
     if (!owned_pending[i] && !closed[i]) { active.push_back(fds[i]); active_index.push_back(i); }
@@ -1309,7 +1319,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
     int sample_wait = wait;
     for (;;) {
       // The wake socket rides last and leaves before the entries are read.
-      if (wake != kInvalidSocket) active.push_back({static_cast<SOCKET>(wake), POLLRDNORM, 0});
+      if (wake != kInvalidSocket) active.push_back({{static_cast<SOCKET>(wake), POLLRDNORM, 0}});
       const int result = WSAPoll(active.data(), static_cast<ULONG>(active.size()), sample_wait);
       const int native_error = result == SOCKET_ERROR ? WSAGetLastError() : 0;
       if (wake != kInvalidSocket) {
@@ -1324,7 +1334,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
       // positively retired by their original description; arbitrary native
       // errors retain their original failure. Every retry removes an entry,
       // takes no further wait and never extends the caller's finite deadline.
-      std::vector<WSAPOLLFD> remaining;
+      std::vector<NativePollFd> remaining;
       std::vector<size_t> remaining_index;
       for (size_t k = 0; k < active.size(); ++k) {
         const size_t i = active_index[k];
