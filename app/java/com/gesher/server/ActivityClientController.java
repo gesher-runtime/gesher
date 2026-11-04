@@ -7,12 +7,14 @@ package com.gesher.server;
 import android.app.ActivityManager;
 import android.app.HandoffActivityData;
 import android.app.IActivityClientController;
+import android.app.IRequestFinishCallback;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.PersistableBundle;
+import android.os.RemoteException;
 import android.view.Display;
 import android.window.SizeConfigurationBuckets;
 
@@ -120,7 +122,26 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public int getTaskForActivity(IBinder token, boolean onlyRoot) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        return r != null ? r.taskId : 1;  // gesher-app's single-process activity: task 1
+        if (r == null) return 1;  // gesher-app's single-process activity: task 1
+        // onlyRoot (Activity.isTaskRoot): -1 unless it is its task's root.
+        return !onlyRoot || mAtm.isTaskRoot(r) ? r.taskId : -1;
+    }
+
+    /**
+     * Activity.onBackPressed with no fragment to pop (onBackInvoked; so OnBackPressedDispatcher's
+     * fallback, and a dialog's "discard changes" that goes back): Android finishes the
+     * activity (callback.requestFinish) unless it is the root of a task launched from home,
+     * whose task moves to the back. A root stays here: closing its window finishes it.
+     */
+    @Override
+    public void onBackPressed(IBinder token, IRequestFinishCallback callback) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        if (r != null && mAtm.isTaskRoot(r)) return;
+        try {
+            callback.requestFinish();
+        } catch (RemoteException e) {
+            // The app is gone.
+        }
     }
 
     @Override

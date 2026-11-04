@@ -1660,6 +1660,18 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
     }
 
+    /** Whether the activity is its task's root (the bottom one not finishing). */
+    boolean isTaskRoot(ActivityRecord r) {
+        synchronized (this) {
+            for (ActivityRecord a : mActivities) {
+                if (a.taskId == r.taskId && !a.finishing && a.state != State.DESTROYED) {
+                    return a == r;
+                }
+            }
+            return false;
+        }
+    }
+
     // --- reports from the app (ActivityClientController) --------------------------------
 
     void activityResumed(ActivityRecord r) {
