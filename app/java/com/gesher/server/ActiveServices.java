@@ -136,7 +136,15 @@ final class ActiveServices {
     private ServiceInfo resolve(Intent service, String resolvedType) {
         List<ResolveInfo> all = mPm.services(service, resolvedType,
                 PackageManager.GET_META_DATA | PackageManager.GET_SHARED_LIBRARY_FILES);
-        return all.isEmpty() ? null : all.get(0).serviceInfo;
+        ServiceInfo info = all.isEmpty() ? null : all.get(0).serviceInfo;
+        // Play services' stand-in package (GmsPackageSupport) has no process to run its
+        // services in: one started for it ends at once ("No data directory found"), and a
+        // client's binding waits for its timeout (WhatsApp's SmsRetriever: 3 minutes before
+        // the code request). Not bound, the client library fails at once.
+        if (info != null && GmsPackageSupport.isSyntheticPackage(info.packageName)) {
+            return null;
+        }
+        return info;
     }
 
     private ServiceRecord record(ServiceInfo info) {
