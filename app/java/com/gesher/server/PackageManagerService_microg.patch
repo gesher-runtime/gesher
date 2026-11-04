@@ -1,0 +1,59 @@
+--- a/app/java/com/gesher/server/PackageManagerService.java
++++ b/app/java/com/gesher/server/PackageManagerService.java
+@@ -26,6 +26,7 @@ public final class PackageManagerService extends IPackageManager.Default {
+     private volatile Map<String, ApkPackage> mPackages = new LinkedHashMap<>();
++    private volatile boolean mMicrogSpoofingEnabled = false;
+ 
+     public PackageManagerService(Collection<ApkPackage> packages) {
+         for (ApkPackage p : packages) {
+@@ -33,6 +34,14 @@ public final class PackageManagerService extends IPackageManager.Default {
+         }
+     }
+ 
++    public void setMicrogSpoofingEnabled(boolean enabled) {
++        mMicrogSpoofingEnabled = enabled;
++    }
++
++    public boolean isMicrogSpoofingEnabled() {
++        return GmsSignatureSpoofing.isSpoofingEnabled(mMicrogSpoofingEnabled);
++    }
++
+     synchronized void add(ApkPackage p) {
+         Map<String, ApkPackage> next = new LinkedHashMap<>(mPackages);
+         next.put(p.packageName, p);
+@@ -57,7 +66,11 @@ public final class PackageManagerService extends IPackageManager.Default {
+     public PackageInfo getPackageInfo(String packageName, long flags, int userId) {
+         ApkPackage p = get(packageName);
+         if (p != null) {
+-            return p.generatePackageInfo(flags);
++            PackageInfo pi = p.generatePackageInfo(flags);
++            return GmsSignatureSpoofing.maybeSpoofPackageInfo(
++                    p, pi, flags, mMicrogSpoofingEnabled);
+         }
+         if (GmsPackageSupport.isSyntheticPackage(packageName)) {
+             return GmsPackageSupport.createSyntheticPackageInfo(packageName, flags);
+@@ -78,6 +91,20 @@ public final class PackageManagerService extends IPackageManager.Default {
+         return null;
+     }
+ 
++    @Override
++    public int checkPermission(String permName, String pkgName, int userId) {
++        if (GmsSignatureSpoofing.PERMISSION_FAKE_PACKAGE_SIGNATURE.equals(permName)) {
++            return (isMicrogSpoofingEnabled()
++                    && GmsSignatureSpoofing.isAllowlistedPackage(pkgName))
++                    ? PackageManager.PERMISSION_GRANTED
++                    : PackageManager.PERMISSION_DENIED;
++        }
++        return PackageManager.PERMISSION_GRANTED;
++    }
++
+--- a/app/java/com/gesher/server/ActiveServices.java
++++ b/app/java/com/gesher/server/ActiveServices.java
+@@ -112,7 +112,8 @@ final class ActiveServices {
+         // client's binding waits for its timeout (WhatsApp's SmsRetriever: 3 minutes before
+         // the code request). Not bound, the client library fails at once.
+-        if (info != null && GmsPackageSupport.isSyntheticPackage(info.packageName)) {
++        if (info != null && GmsPackageSupport.isSyntheticPackage(info.packageName)
++                && mPm.get(info.packageName) == null) {
+             return null;
+         }
