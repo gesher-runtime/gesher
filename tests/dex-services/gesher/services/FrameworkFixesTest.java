@@ -14,6 +14,10 @@ import android.text.Spanned;
 import android.text.style.StyleSpan;
 import android.text.style.URLSpan;
 
+import com.android.i18n.phonenumbers.PhoneNumberMatch;
+import com.android.i18n.phonenumbers.PhoneNumberUtil;
+import com.android.i18n.phonenumbers.Phonenumber;
+
 import java.io.File;
 import java.io.RandomAccessFile;
 import java.lang.reflect.Constructor;
@@ -67,6 +71,10 @@ import java.nio.channels.OverlappingFileLockException;
  *    BluetoothDevice (app/java, the Bluetooth module's API on a device without
  *    Bluetooth): WhatsApp's headset listener implements ServiceListener and holds a
  *    BluetoothHeadset, and its worker died with NoClassDefFoundError resolving it.
+ *  - libphonenumber (com.android.i18n.phonenumbers, the ext boot jar's; bundled into
+ *    framework.jar with its metadata, tools/framework/plan.py's EXT_BUNDLED): Gmail's
+ *    compose window died on a stackless NoClassDefFoundError for
+ *    PhoneNumberUtil$PhoneNumberFormat when a recipient was typed.
  * Prints "FrameworkFixesTest all passed".
  */
 public final class FrameworkFixesTest {
@@ -431,6 +439,38 @@ public final class FrameworkFixesTest {
                 + "(the ext boot jar's): text, entities, a bold span and a link");
     }
 
+    private static void phoneNumbers() throws Exception {
+        PhoneNumberUtil util = PhoneNumberUtil.getInstance();
+        // Parsing reads the region's metadata from framework.jar's resources.
+        Phonenumber.PhoneNumber us = util.parse("(650) 253-0000", "US");
+        require(us.getCountryCode() == 1 && us.getNationalNumber() == 6502530000L,
+                "parse gave " + us);
+        require(util.isValidNumber(us), "+1 650-253-0000 is not valid");
+        String e164 = util.format(us, PhoneNumberUtil.PhoneNumberFormat.E164);
+        String intl = util.format(us, PhoneNumberUtil.PhoneNumberFormat.INTERNATIONAL);
+        String national = util.format(us, PhoneNumberUtil.PhoneNumberFormat.NATIONAL);
+        require(e164.equals("+16502530000") && intl.equals("+1 650-253-0000")
+                && national.equals("(650) 253-0000"),
+                "format gave " + e164 + " / " + intl + " / " + national);
+        Phonenumber.PhoneNumber il = util.parse("050-123-4567", "IL");
+        require(util.format(il, PhoneNumberUtil.PhoneNumberFormat.E164).equals("+972501234567"),
+                "an Israeli number parsed as " + il);
+        require(util.getRegionCodeForNumber(il).equals("IL"), "+972 50 is not IL");
+        // The framework's API over it, as apps call it.
+        String formatted = android.telephony.PhoneNumberUtils.formatNumber("6502530000", "US");
+        require("(650) 253-0000".equals(formatted), "PhoneNumberUtils.formatNumber gave " + formatted);
+        String toE164 = android.telephony.PhoneNumberUtils.formatNumberToE164("650-253-0000", "US");
+        require("+16502530000".equals(toE164), "PhoneNumberUtils.formatNumberToE164 gave " + toE164);
+        int found = 0;
+        for (PhoneNumberMatch m : util.findNumbers("call 650-253-0000 today", "US")) {
+            require(m.rawString().equals("650-253-0000"), "findNumbers found " + m.rawString());
+            found++;
+        }
+        require(found == 1, "findNumbers found " + found + " numbers");
+        System.out.println("FrameworkFixesTest: libphonenumber on the boot class path: parse, format "
+                + "(E164, INTERNATIONAL, NATIONAL), findNumbers and PhoneNumberUtils.formatNumber");
+    }
+
     private static void bluetoothProfiles() throws Exception {
         Class<?> profile = Class.forName("android.bluetooth.BluetoothProfile");
         Class<?> listener = Class.forName("android.bluetooth.BluetoothProfile$ServiceListener");
@@ -485,6 +525,7 @@ public final class FrameworkFixesTest {
         dnsResolver();
         bluetoothAndNativeHeap();
         bluetoothProfiles();
+        phoneNumbers();
         handlerThreadQuit();
         System.out.println("FrameworkFixesTest all passed");
     }

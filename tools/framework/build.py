@@ -16,7 +16,7 @@ static dependencies') sources before everything compiles together, and the
 module's own rules (framework-jarjar-rules) are applied over all bundled
 sources last, as jarjar on the finished jar would be. On a clean compile the
 bundled classes are split out, dexed with D8 and packed with the mime map
-resources into <out>/<module>.jar — the dex jar that joins the boot class
+and java_resource_dirs resources into <out>/<module>.jar — the dex jar that joins the boot class
 path after the core jars (the boot image build wires it in, not this
 script).
 """
@@ -654,6 +654,8 @@ class Builder:
         planner.root = self.args.module  # not core_platform()'s first library
         planner.core_platform()
         planner.library(self.args.module)
+        if self.args.module == 'framework-minus-apex':
+            planner.ext_libraries()
         plan = self.plan = planner.plan
         if self.args.checkout:
             checkout(tree, plan.needed | {
@@ -855,7 +857,7 @@ class Builder:
 
     def package(self):
         """<out>/<module>.jar: the module's classes dexed with D8 plus its
-        resources (the mime map), a dex jar like tools/build-boot-jars.sh
+        resources (the mime map, libphonenumber's metadata), a dex jar like tools/build-boot-jars.sh
         makes the core jars. The runtime's boot class path takes it after
         the core jars (core-oj, core-libart, core-icu4j, then framework);
         that wiring lives with the boot image build, not here."""
@@ -875,7 +877,18 @@ class Builder:
              '--android-platform-build', '--output', dex, f'@{argfile}'])
         jar = os.path.join(self.out, f'{self.args.module}.jar')
         cmd = [sys.executable, os.path.join(HERE, '..', 'gen', 'make_jar.py'), jar, dex]
-        res_dir = os.path.join(self.out, 'resources', 'mimemap')
+        # The jar's resources, gathered in one tree: the mime map's and the
+        # bundled libraries' java_resource_dirs (libphonenumber's metadata).
+        res_dir = os.path.join(self.out, 'resources', 'jar')
+        shutil.rmtree(res_dir, ignore_errors=True)
+        mimemap = os.path.join(self.out, 'resources', 'mimemap')
+        if os.path.isdir(mimemap):
+            shutil.copytree(mimemap, res_dir)
+        for d, files in sorted(self.plan.resources.items()):
+            for f in files:
+                out = os.path.join(res_dir, os.path.relpath(f, d))
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                shutil.copy(self.path(f), out)
         if os.path.isdir(res_dir):
             res_list = os.path.join(self.out, 'resources.txt')
             with open(res_list, 'w') as f:

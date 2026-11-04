@@ -47,6 +47,7 @@ class Plan:
         self.lib_files = {}        # library -> the Java files its srcs add
         self.lib_tasks = {}        # library -> the generation tasks its srcs add
         self.lib_static = {}       # library -> its static_libs
+        self.resources = {}        # bundled libraries' java_resource_dirs -> their files
         # Compile-only sources and generation tasks by class path position:
         # where two define one class, the earlier wins, as on javac's class
         # path (a module's `defaults` libs first, then its own, in order).
@@ -85,6 +86,10 @@ CORE_PLATFORM_API_FILES = ['external/conscrypt/api/platform/current.txt']
 CORE_PLATFORM_LIBRARIES = ['okhttp']
 SDK_LIBRARY_VARIANT = re.compile(r'^(.+?)(\.impl|\.stubs(?:\.[a-z_]+)*|\.module_lib)$')
 API_FILES = ('current.txt', 'system-current.txt', 'module-lib-current.txt')
+# The ext boot jar's libraries (frameworks/base's `ext`) that Gesher bundles into
+# the framework jar, as it has no ext jar: libphonenumber, which the framework
+# calls (PhoneNumberUtils, Linkify) and loads its metadata from as resources.
+EXT_BUNDLED = ['libphonenumber-platform']
 PROTO_RUNTIMES = {'lite': 'libprotobuf-java-lite', 'nano': 'libprotobuf-java-nano',
                   'micro': 'libprotobuf-java-micro'}
 
@@ -118,6 +123,12 @@ class Planner:
             self.plan.order.pop('api-stubs', None)
         for lib in CORE_PLATFORM_LIBRARIES:
             self.library(lib, False, 'core_platform')
+
+    def ext_libraries(self):
+        """EXT_BUNDLED, bundled (after the framework's `libs` made them
+        compile only)."""
+        for lib in EXT_BUNDLED:
+            self.library(lib, True, 'ext')
 
     def library(self, name, bundle=True, referrer=None):
         if self.root is None:
@@ -252,6 +263,12 @@ class Planner:
         self.plan.include_dirs.update(ctx.includes)
         if bundle:
             self.plan.plugins.update(as_list(props.get('plugins')))
+            # As Soong's java_resource_dirs: every file under them but sources.
+            for d in as_list(props.get('java_resource_dirs')):
+                d = norm(f'{mod.dir}/{d}')
+                files = [f for f in self.tree.dir_files(d) if not f.endswith('.java')]
+                self.plan.resources[d] = files
+                self.plan.needed.update(files)
         self.plan.lib_files[mod.name] = ctx.files
         self.plan.lib_tasks[mod.name] = ctx.tasks
         self.plan.lib_static[mod.name] = as_list(props.get('static_libs')) + ctx.static

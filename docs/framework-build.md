@@ -42,6 +42,13 @@ aconfig's Java storage readers (build/make/tools/aconfig), bouncycastle
 (repackaged), libphonenumber, rappor, protobuf-nano's runtime, perfetto's
 framework Java library, mimemap.
 
+libphonenumber (`libphonenumber-platform`, `com.android.i18n.phonenumbers`)
+is a static library of `ext`, a boot jar of its own on Android, which the
+framework only compiles against. Gesher has no ext jar, so `plan.py`'s
+`EXT_BUNDLED` bundles it into framework.jar, with its `java_resource_dirs`
+(the phone number metadata and the geocoder's data, which `PhoneNumberUtil`
+reads with `getResourceAsStream`) packed beside the mime map's resources.
+
 ## Compile-only
 Annotations (`androidx.annotation`, `app-compat-annotations`,
 `unsupportedappusage`, `framework-annotations-lib`, error-prone's, jsr305)

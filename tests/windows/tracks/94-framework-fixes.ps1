@@ -97,6 +97,11 @@ Check 'services: BluetoothManager without an adapter, and android.os.Debug''s na
   $fixesOut
 } @('FrameworkFixesTest: BluetoothManager without an adapter; Debug.getNativeHeapSize, getNativeHeapAllocatedSize and getNativeHeapFreeSize',
   'FrameworkFixesTest all passed')
+Check 'services: libphonenumber (the ext boot jar''s, in framework.jar with its metadata) parses and formats numbers' {
+  $global:LASTEXITCODE = $fixesCode
+  $fixesOut
+} @('FrameworkFixesTest: libphonenumber on the boot class path: parse, format (E164, INTERNATIONAL, NATIONAL), findNumbers and PhoneNumberUtils.formatNumber',
+  'FrameworkFixesTest all passed')
 
 Check 'services: HandlerThread.quit with tracing off (MessageQueue''s Perfetto counter event; Gmail''s emojiCompat thread)' {
   $global:LASTEXITCODE = $fixesCode
