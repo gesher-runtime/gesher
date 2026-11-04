@@ -83,6 +83,19 @@ static void test_strings(void) {
   check("atoi", atoi("-42") == -42);
 }
 
+// bionic's ctype table, read directly by code built for an old API level
+// (WhatsApp's libar-bundle3.so: `_ctype_[1 + c] & 7` is isalnum).
+extern const char* _ctype_;
+
+static void test_ctype_table(void) {
+  int ok = _ctype_ != NULL && _ctype_[0] == 0;
+  ok = ok && (_ctype_[1 + 'Q'] & 0x01) && (_ctype_[1 + 'q'] & 0x02) && (_ctype_[1 + '7'] & 0x04);
+  ok = ok && (_ctype_[1 + 'f'] & 0x40) && !(_ctype_[1 + 'g'] & 0x40);
+  ok = ok && (_ctype_[1 + ' '] & 0x08) && (_ctype_[1 + 9] & 0x20) && (_ctype_[1 + '_'] & 0x10);
+  ok = ok && (_ctype_[1 + '_'] & 7) == 0 && _ctype_[1 + 200] == 0;
+  check("_ctype_ classes ASCII as the C locale does", ok);
+}
+
 static void test_format(void) {
   char buf[256];
   snprintf(buf, sizeof(buf), "%d %ld %s %c %x %%", -7, 9000000000L, "str", 'Q', 255);
@@ -500,6 +513,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   printf("libc_test: bionic libc through the shim\n");
   test_memory();
   test_strings();
+  test_ctype_table();
   test_format();
   test_errno_files();
   test_statfs();

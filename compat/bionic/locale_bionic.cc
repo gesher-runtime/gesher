@@ -99,6 +99,34 @@ size_t BIONIC_SYSV CtypeGetMbCurMax() {
   return (t_locale != nullptr ? t_locale : g_global.load())->mb_cur_max;
 }
 
+// bionic's `const char* _ctype_` (OpenBSD's ctype_.c): the class bits of EOF
+// and of bytes 0..255, which the NDK's <ctype.h> inlines read for C++ code
+// built against an old API level (libar-bundle3.so: `_ctype_[1 + c] & 7`,
+// isalnum). ASCII only, as in the C locale.
+constexpr uint8_t kCtU = 0x01, kCtL = 0x02, kCtN = 0x04, kCtS = 0x08, kCtP = 0x10,
+                  kCtC = 0x20, kCtX = 0x40, kCtB = 0x80;
+struct CtypeTable {
+  char bits[1 + 256];
+};
+constexpr CtypeTable MakeCtypeTable() {
+  CtypeTable t{};
+  for (int c = 0; c < 128; ++c) {
+    uint8_t v = 0;
+    if (c < 32 || c == 127) v |= kCtC;
+    if ((c >= 9 && c <= 13) || c == ' ') v |= kCtS;
+    if (c == ' ') v |= kCtB;
+    if (c >= '0' && c <= '9') v |= kCtN;
+    if (c >= 'A' && c <= 'Z') v |= kCtU;
+    if (c >= 'a' && c <= 'z') v |= kCtL;
+    if ((c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) v |= kCtX;
+    if (c > ' ' && c < 127 && (v & (kCtU | kCtL | kCtN)) == 0) v |= kCtP;
+    t.bits[1 + c] = static_cast<char>(v);
+  }
+  return t;
+}
+constexpr CtypeTable kCtypeTable = MakeCtypeTable();
+const char* g_ctype = kCtypeTable.bits;
+
 char* BIONIC_SYSV Setlocale(int category, const char* name) {
   static char utf8[] = "C.UTF-8";
   static char c[] = "C";
@@ -697,6 +725,7 @@ void RegisterLocale(SymbolTable& t) {
   L("duplocale", Duplocale);
   L("uselocale", Uselocale);
   L("__ctype_get_mb_cur_max", CtypeGetMbCurMax);
+  L("_ctype_", g_ctype);
   L("setlocale", Setlocale);
   L("localeconv", Localeconv);
   L("mbrtowc", MbrtowcSysv);
