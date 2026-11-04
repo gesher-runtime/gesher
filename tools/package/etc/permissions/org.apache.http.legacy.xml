@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The org.apache.http.legacy shared library (external/apache-http), declared as
+     Android declares it. gesher-app.ps1 installs this file as
+     $ANDROID_ROOT/etc/permissions and the jar as $ANDROID_ROOT/framework, where
+     SharedLibraryRegistry finds /system paths. -->
+<permissions>
+    <library name="org.apache.http.legacy"
+            file="/system/framework/org.apache.http.legacy.jar" />
+</permissions>

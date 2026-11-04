@@ -5,6 +5,7 @@
 package com.gesher.server;
 
 import android.internal.modules.utils.build.UnboundedSdkLevel;
+import android.os.Build;
 import android.util.Xml;
 
 import com.android.internal.pm.parsing.pkg.ParsedPackage;
@@ -28,6 +29,10 @@ import java.util.Set;
 
 /** Java system libraries from the device's permissions/sysconfig XML files. */
 public final class SharedLibraryRegistry {
+    /** Apache HTTP, which apps targeting API 27 or lower get without naming it. */
+    public static final String ORG_APACHE_HTTP_LEGACY = "org.apache.http.legacy";
+    private static final String SYSTEM = "/system/";
+
     private static final class Entry {
         final String name;
         final File file;
@@ -45,14 +50,38 @@ public final class SharedLibraryRegistry {
 
     private final Map<String, Entry> entries = new LinkedHashMap<>();
 
+    /** Whether the app names no library and gets none implicitly. */
+    public static boolean usesNone(ParsedPackage app) {
+        return app.getUsesLibraries().isEmpty() && app.getUsesOptionalLibraries().isEmpty()
+                && app.getTargetSdkVersion() > Build.VERSION_CODES.O_MR1;
+    }
+
     public static SharedLibraryGraph resolve(ParsedPackage app) throws IOException {
         // Preserve the ordinary app's cheap startup path: no XML, hashing or SDK work.
-        if (app.getUsesLibraries().isEmpty() && app.getUsesOptionalLibraries().isEmpty()) {
+        if (usesNone(app)) {
             return SharedLibraryGraph.forSystem(Collections.emptyList(), app.getClassLoaderName());
         }
         String root = System.getenv("ANDROID_ROOT");
-        return read(new File(root == null || root.isEmpty() ? "/system" : root))
-                .resolve(app.getUsesLibraries(), app.getUsesOptionalLibraries(), app.getClassLoaderName());
+        SharedLibraryRegistry registry = read(new File(root == null || root.isEmpty() ? "/system" : root));
+        return registry.resolve(registry.withImplicit(app.getTargetSdkVersion(), app.getUsesLibraries(),
+                app.getUsesOptionalLibraries()), app.getUsesOptionalLibraries(), app.getClassLoaderName());
+    }
+
+    /**
+     * The required libraries with the ones Android adds by target SDK, as
+     * PackageBackwardCompatibility's OrgApacheHttpLegacyUpdater does: org.apache.http.legacy
+     * first for apps targeting API 27 or lower. Only when the device declares it, so a
+     * system root without it still installs those apps.
+     */
+    public List<String> withImplicit(int targetSdk, List<String> required, List<String> optional) {
+        if (targetSdk > Build.VERSION_CODES.O_MR1 || required.contains(ORG_APACHE_HTTP_LEGACY)
+                || optional.contains(ORG_APACHE_HTTP_LEGACY) || !entries.containsKey(ORG_APACHE_HTTP_LEGACY)) {
+            return required;
+        }
+        List<String> libraries = new ArrayList<>();
+        libraries.add(ORG_APACHE_HTTP_LEGACY);
+        libraries.addAll(required);
+        return libraries;
     }
 
     public static SharedLibraryRegistry read(File systemRoot) throws IOException {
@@ -62,12 +91,12 @@ public final class SharedLibraryRegistry {
                     file -> file.isFile() && file.getName().endsWith(".xml"));
             if (files == null) continue;
             Arrays.sort(files, (first, second) -> first.getName().compareTo(second.getName()));
-            for (File file : files) registry.readXml(file);
+            for (File file : files) registry.readXml(systemRoot, file);
         }
         return registry;
     }
 
-    private void readXml(File config) throws IOException {
+    private void readXml(File systemRoot, File config) throws IOException {
         try (FileInputStream input = new FileInputStream(config)) {
             XmlPullParser parser = Xml.newPullParser();
             parser.setInput(input, null);
@@ -90,7 +119,9 @@ public final class SharedLibraryRegistry {
                 String max = parser.getAttributeValue(null, "max-device-sdk");
                 if (name != null && !name.isEmpty() && path != null && !path.isEmpty()
                         && (min == null || atLeast(min)) && (max == null || atMost(max))) {
-                    File jar = new File(path);
+                    // Android's /system paths are under the device's system root.
+                    File jar = path.startsWith(SYSTEM)
+                            ? new File(systemRoot, path.substring(SYSTEM.length())) : new File(path);
                     // SystemConfig ignores missing/out-of-range library declarations.
                     if (jar.isFile()) {
                         String since = parser.getAttributeValue(null, "on-bootclasspath-since");

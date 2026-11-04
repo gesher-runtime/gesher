@@ -303,6 +303,12 @@ no service, nothing was ever enabled and nothing read an app's views. Now:
 ## Status and next steps
 
 ### Done and verified
+- **org.apache.http.legacy** ([framework-build.md](framework-build.md#shared-libraries)):
+  the shared library is built from external/apache-http and declared in
+  `$ANDROID_ROOT/etc/permissions`; `SharedLibraryRegistry` resolves its
+  `/system` path under `$ANDROID_ROOT` and adds it for apps targeting API 27
+  or lower. Gmail's account setup died on NoClassDefFoundError for
+  `BasicHttpParams` (`HttpLegacyTest`, track 94).
 - **Real apps** ([e2e.md](e2e.md), ADR 0034; ci run 40077182991): stand-ins
   for `power`, `thermalservice`, `alarm`, `clipboard`, `appops`, `appwidget`
   and `search` (`DeviceServices.java`), a primary shared storage volume in

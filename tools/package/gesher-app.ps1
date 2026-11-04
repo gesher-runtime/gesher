@@ -170,6 +170,13 @@ $data = Get-Item (Join-Path $here 'icudt*l.dat')
 Install $data.FullName (Join-Path $root "i18n/etc/icu/$($data.Name)")
 Install (Join-Path $here 'framework-res.apk') (Join-Path $root 'system/framework/framework-res.apk')
 Install (Join-Path $here 'build.prop') (Join-Path $root 'system/build.prop')
+# The shared libraries apps name in <uses-library> (org.apache.http.legacy), and
+# their declarations, as /system/framework and /system/etc/permissions.
+if (Test-Path (Join-Path $here 'org.apache.http.legacy.jar')) {
+  New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null
+  Install (Join-Path $here 'org.apache.http.legacy.jar') (Join-Path $root 'system/framework/org.apache.http.legacy.jar')
+  Install (Join-Path $here 'etc/permissions/org.apache.http.legacy.xml') (Join-Path $root 'system/etc/permissions/org.apache.http.legacy.xml')
+}
 # The system fonts and fonts.xml (docs/fonts.md), as /system/fonts and /system/etc.
 if (Test-Path (Join-Path $here 'fonts/fonts.xml')) {
   foreach ($d in 'system/fonts', 'system/etc') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }

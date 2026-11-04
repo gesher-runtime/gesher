@@ -108,3 +108,29 @@ Check 'services: HandlerThread.quit with tracing off (MessageQueue''s Perfetto c
   $fixesOut
 } @('FrameworkFixesTest: HandlerThread.quit after a message, and every PerfettoTrackEventExtra class initializes with tracing off',
   'FrameworkFixesTest all passed')
+
+# org.apache.http.legacy (external/apache-http), a shared library apps name in
+# <uses-library>, not on the boot class path: laid out as gesher-app.ps1 installs it
+# ($ANDROID_ROOT/framework and etc/permissions, the declaration Gesher ships), in a
+# system root of its own so the other tracks' apps do not get it implicitly.
+$httpRoot = Join-Path $root 'http-legacy-system'
+New-Item -ItemType Directory -Force (Join-Path $httpRoot 'framework'), (Join-Path $httpRoot 'etc/permissions') | Out-Null
+Copy-Item "$Dir/org.apache.http.legacy.jar" (Join-Path $httpRoot 'framework') -Force
+Copy-Item (Join-Path $PSScriptRoot '../../../tools/package/etc/permissions/org.apache.http.legacy.xml') (Join-Path $httpRoot 'etc/permissions') -Force
+$httpOut = FixesRun ($dvmFixes + 'gesher.services.HttpLegacyTest' + (NoDrive $httpRoot)) 90
+$httpCode = $LASTEXITCODE
+Check 'services: org.apache.http.legacy resolves from its declaration to the system root''s jar' {
+  $global:LASTEXITCODE = $httpCode
+  $httpOut
+} @('HttpLegacyTest: org.apache.http.legacy resolves to $ANDROID_ROOT/framework/org.apache.http.legacy.jar',
+  'HttpLegacyTest all passed')
+Check 'services: apps targeting API 27 or lower get org.apache.http.legacy implicitly' {
+  $global:LASTEXITCODE = $httpCode
+  $httpOut
+} @('HttpLegacyTest: apps targeting API 27 or lower get it implicitly, API 28 and up only by name',
+  'HttpLegacyTest all passed')
+Check 'services: BasicHttpParams (Gmail''s account setup) loads from org.apache.http.legacy.jar' {
+  $global:LASTEXITCODE = $httpCode
+  $httpOut
+} @('HttpLegacyTest: BasicHttpParams, HttpConnectionParams and HttpGet load from the jar, not the boot class path',
+  'HttpLegacyTest all passed')

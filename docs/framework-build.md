@@ -60,6 +60,27 @@ only when the headless lifecycle reaches it. tagsoup's classes (`ext`) are
 needed by `android.text.Html.fromHtml`: `app/build.sh` copies them from the
 framework build's classes into gesher-app.jar.
 
+## Shared libraries
+`org.apache.http.legacy` (external/apache-http's java_sdk_library), the
+library apps name in `<uses-library>` (Gmail's account setup needs its
+`BasicHttpParams`), is built by the same script as a module of its own,
+against the framework's classes:
+
+```
+tools/framework/build.py org.apache.http.legacy --aosp <aosp> --out out/http-legacy   --core-classes out/coremod --classpath out/framework/classes --checkout
+```
+
+It writes `out/http-legacy/org.apache.http.legacy.jar`, a dex jar that is
+not on the boot class path. The installer ships it with its declaration,
+`tools/package/etc/permissions/org.apache.http.legacy.xml` (Android's
+`/system/framework/...` path). `gesher-app.ps1` installs both under
+`$ANDROID_ROOT` (`framework/`, `etc/permissions/`). There
+`com.gesher.server.SharedLibraryRegistry` reads the declaration, with
+`/system/` paths taken under `$ANDROID_ROOT`. It puts the jar on the class
+path of apps that name the library, and of apps targeting API 27 or lower,
+which get it without naming it, as Android's OrgApacheHttpLegacyUpdater
+adds it. FrameworkFixesTest's track (94) checks it with `HttpLegacyTest`.
+
 ## gesher-app.jar without building the framework
 `app/build.sh` needs framework.jar's classes and libcore's java.base, not the
 framework build: the `framework-classes` artifact of a CI run (the `ci`

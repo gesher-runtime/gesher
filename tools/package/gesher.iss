@@ -55,6 +55,10 @@ Source: "{#BuildDir}\framework.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\framework-res.apk"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\build.prop"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\gesher-app.jar"; DestDir: "{app}"; Flags: ignoreversion
+; The org.apache.http.legacy shared library (not on the boot class path), and
+; its declaration: gesher-app.ps1 installs both under $ANDROID_ROOT.
+Source: "{#BuildDir}\org.apache.http.legacy.jar"; DestDir: "{app}"; Flags: ignoreversion
+Source: "etc\permissions\org.apache.http.legacy.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
 Source: "{#BuildDir}\binderd.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\servicemanager.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; gesher-exec (docs/exec.md): runs an app's ELF executables (ProcessBuilder) next to dalvikvm.

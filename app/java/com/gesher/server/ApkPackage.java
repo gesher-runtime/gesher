@@ -466,8 +466,7 @@ public final class ApkPackage {
         // A long-lived PM record must not publish a cached graph after XML/jar updates.
         // Ordinary packages keep the cheap immutable empty graph path.
         try {
-            SharedLibraryGraph graph = parsed.getUsesLibraries().isEmpty()
-                    && parsed.getUsesOptionalLibraries().isEmpty() ? sharedLibraries
+            SharedLibraryGraph graph = SharedLibraryRegistry.usesNone(parsed) ? sharedLibraries
                     : SharedLibraryRegistry.resolve(parsed);
             graph.apply(ai);
         } catch (IOException invalidLibrary) {

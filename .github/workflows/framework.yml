@@ -328,6 +328,15 @@ jobs:
           fi
           echo "::notice::javac: no errors"
 
+      # org.apache.http.legacy.jar, the shared library apps name in <uses-library>
+      # (external/apache-http's java_sdk_library), against the framework's classes:
+      # installed as /system/framework, not on the boot class path.
+      - name: Build org.apache.http.legacy
+        run: |
+          python3 tools/framework/build.py org.apache.http.legacy --aosp third_party/aosp             --out out/http-legacy --core-classes out/coremod --classpath out/framework/classes             --checkout --javac-memory 4g 2>&1 | grep -v '^warning:' | tee build-http-legacy.log
+          grep -q '^javac exit 0, 0 errors' build-http-legacy.log
+          test -f out/http-legacy/org.apache.http.legacy.jar
+
       # gesher-app's driver and its test APK compile against the framework's
       # classes, so they are built here, next to them.
       - name: Build gesher-app and lifecycle.apk
@@ -397,6 +406,7 @@ jobs:
         run: |
           mkdir -p dist-framework
           cp out/framework/framework-minus-apex.jar dist-framework/framework.jar
+          cp out/http-legacy/org.apache.http.legacy.jar dist-framework/
           cp out/framework-res/framework-res.apk out/app/gesher-app.jar out/app/build.prop \
             out/app/lifecycle.apk out/app/components.apk out/app/peer.apk out/app/uiapp.apk out/app/dbapp.apk out/app/devsvc.apk out/app/devices.apk out/app/nodevices.apk out/app/gmsapp.apk dist-framework/
           cp out/framework-res-after/framework-res.apk dist-framework/framework-res-after.apk
@@ -467,6 +477,7 @@ jobs:
           name: framework-logs
           path: |
             build-framework.log
+            build-http-legacy.log
             framework-res.log
             out/framework/javac.log
             out/framework/*.sources.txt

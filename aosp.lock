@@ -61,6 +61,8 @@ external/noto-fonts /notosanshebrew/ /notoserif/ /notonaskharabic/ /notonaskhara
 build/make=platform/build *.bp
 build/soong *.bp
 external/abseil-cpp
+# org.apache.http.legacy, the shared library apps name in <uses-library>.
+external/apache-http *.bp
 external/bouncycastle *.bp /NOTICE repackaged/bcprov/src/main/java/
 external/conscrypt *.bp /NOTICE common/src/jni/main/ repackaged/common/src/main/java/ repackaged/platform/src/main/java/ publicapi/src/main/java/ constants/src/gen/ conscrypt.aconfig networksecurity.aconfig apex/ca-certificates/files/
 external/cronet *.bp
