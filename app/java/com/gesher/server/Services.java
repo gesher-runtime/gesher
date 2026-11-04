@@ -194,6 +194,11 @@ public final class Services {
         services.put("sensitive_content_protection_service", StandIn.of(
                 android.view.ISensitiveContentProtectionManager.class,
                 new DeviceServices.SensitiveContentProtectionService()).asBinder());
+        // Activity.requestPermissions asks it each permission's request state; without it
+        // getSystemService(PermissionManager.class) is null and the request throws
+        // NullPointerException (WhatsApp's phone number screen).
+        services.put("permissionmgr", StandIn.of(android.permission.IPermissionManager.class,
+                new PermissionManagerService()).asBinder());
         return services;
     }
 
@@ -394,6 +399,31 @@ public final class Services {
         public int checkOp(int op, android.content.AttributionSourceState attributionSource,
                 String message, boolean forDataDelivery, boolean startDataDelivery) {
             return android.content.PermissionChecker.PERMISSION_GRANTED;
+        }
+    }
+
+    /**
+     * permissionmgr: PermissionManagerService, with every permission granted (as
+     * permission_checker): a runtime permission request ends at once, with no dialog,
+     * Activity.requestPermissions short-circuiting when no permission is requestable.
+     */
+    public static final class PermissionManagerService
+            extends android.permission.IPermissionManager.Default {
+        @Override
+        public int getPermissionRequestState(String packageName, String permissionName,
+                int deviceId) {
+            return Context.PERMISSION_REQUEST_STATE_GRANTED;
+        }
+
+        @Override
+        public int checkPermission(String packageName, String permissionName,
+                String persistentDeviceId, int userId) {
+            return android.content.pm.PackageManager.PERMISSION_GRANTED;
+        }
+
+        @Override
+        public int checkUidPermission(int uid, String permissionName, int deviceId) {
+            return android.content.pm.PackageManager.PERMISSION_GRANTED;
         }
     }
 

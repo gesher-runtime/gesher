@@ -142,7 +142,7 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
   'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-  'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, clipboard, connectivity, content, device_identifiers, device_policy, display, dropbox, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_session, mount, notification, package, phone, power, search, sensitive_content_protection_service, shortcut, telephony.registry, thermalservice, trust, uimode, usagestats, user, vibrator_manager, window',
+  'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, clipboard, connectivity, content, device_identifiers, device_policy, display, dropbox, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_session, mount, notification, package, permissionmgr, phone, power, search, sensitive_content_protection_service, shortcut, telephony.registry, thermalservice, trust, uimode, usagestats, user, vibrator_manager, window',
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 
@@ -237,6 +237,18 @@ if (-not (CheckOrdered 'services: LifecycleActivity finish(): the system server 
   'LifecycleActivity onStop',
   'LifecycleActivity onDestroy',
   'gesher-app: the system server ended the process (scheduleExit)',
+  'gesher-app: done') $appCode)) { Write-Host $appOut }
+
+# A runtime permission request (lifecycle.apk with com.gesher.lifecycle.REQUEST_PERMISSIONS):
+# Activity.requestPermissions asks permissionmgr for each permission's request state; every
+# permission is granted, so the result comes without a permission dialog.
+$appOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.app.Main', '--system-server',
+  '--ez', 'com.gesher.lifecycle.REQUEST_PERMISSIONS', 'true', (NoDrive "$Dir/lifecycle.apk")) 400
+$appCode = $LASTEXITCODE
+if (-not (CheckOrdered 'services: requestPermissions: permissionmgr grants it, onRequestPermissionsResult' $appOut @(
+  'LifecycleActivity onResume',
+  'LifecycleActivity onRequestPermissionsResult 7: android.permission.CAMERA=0',
+  'LifecycleActivity onDestroy',
   'gesher-app: done') $appCode)) { Write-Host $appOut }
 
 # The rest of the app model in the system server (tests/apps/components):

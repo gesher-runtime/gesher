@@ -67,6 +67,24 @@ public class LifecycleActivity extends Activity {
             report("LifecycleActivity finish()");
             finish();
         }
+        // ... with com.gesher.lifecycle.REQUEST_PERMISSIONS it asks for a runtime
+        // permission (the framework asks permissionmgr for its request state), and
+        // finishes once the result comes.
+        if (getIntent().getBooleanExtra("com.gesher.lifecycle.REQUEST_PERMISSIONS", false)) {
+            requestPermissions(new String[] {android.Manifest.permission.CAMERA}, 7);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions,
+            int[] grantResults) {
+        StringBuilder s = new StringBuilder("LifecycleActivity onRequestPermissionsResult ")
+                .append(requestCode).append(':');
+        for (int i = 0; i < permissions.length; i++) {
+            s.append(' ').append(permissions[i]).append('=').append(grantResults[i]);
+        }
+        report(s.toString());
+        finish();
     }
 
     @Override
