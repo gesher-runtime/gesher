@@ -24,9 +24,12 @@ import android.content.pm.ProviderInfoList;
 import android.content.pm.SystemFeaturesCache;
 import android.content.pm.UserInfo;
 import android.content.res.CompatibilityInfo;
+import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.RemoteCallback;
+import android.os.RemoteException;
 import android.os.SystemClock;
 import android.system.Os;
 import android.util.ArrayMap;
@@ -117,6 +120,28 @@ public final class ActivityManagerService extends IActivityManager.Default {
     public ContentProviderHolder getContentProviderExternal(String name, int userId,
             IBinder token, String tag) {
         return mProviders.getContentProvider(null, tag, name);
+    }
+
+    /**
+     * ContentResolver.getType of a content URI whose provider the app could not acquire (Gmail's
+     * settings link, content://ui.email.android.com/settings: no provider): the provider's
+     * anonymous type, or none. The answer is owed at once; unanswered, getType waits out its
+     * timeout (13 s) on the caller's thread.
+     */
+    @Override
+    public void getMimeTypeFilterAsync(Uri uri, int userId, RemoteCallback resultCallback) {
+        String authority = uri != null ? uri.getAuthority() : null;
+        ContentProviderHolder holder = authority != null
+                ? mProviders.getContentProvider(null, "*getmimetype*", authority) : null;
+        if (holder != null && holder.provider != null) {
+            try {
+                holder.provider.getTypeAnonymousAsync(uri, resultCallback);
+                return;
+            } catch (RemoteException e) {
+                // Its process is gone: no type.
+            }
+        }
+        resultCallback.sendResult(Bundle.EMPTY);
     }
 
     @Override
