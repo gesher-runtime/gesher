@@ -22,8 +22,10 @@ Needed, all from `frameworks/base/core/jni`:
 | `com_android_internal_util_VirtualRefBasePtr` | libutils |
 | `android_util_jar_StrictJarFile` | libziparchive |
 
-Gesher-owned: an `android.app.Activity` stub (`getDlWarning` returns null)
-and a small `android.os.Process` set (thread priority, argv0, CPU time),
+Gesher-owned: an `android.app.Activity` stub (`getDlWarning` returns null),
+a small `android.os.Process` set (thread priority, argv0, CPU time)
+and `android.os.Debug`'s native heap counters (the process heap's
+`HeapSummary`),
 grown as `UnsatisfiedLinkError`s appear. The lifecycle also reached, and
 Gesher stands in for: `android.os.PerfettoTrace` (categories never enabled;
 MessageQueue builds them). Phase 2 also stood in for

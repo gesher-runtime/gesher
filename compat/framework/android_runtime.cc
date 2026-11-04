@@ -25,6 +25,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <windows.h>
 
 #include <string>
 #include <vector>
@@ -453,6 +454,59 @@ static const JNINativeMethod gProcessMethods[] = {
      GESHER_JNI(Process_parseProcLine)},
 };
 
+// --- android.os.Debug (native heap counters) --------------------------------------
+// AOSP's android_os_Debug.cpp answers these @CriticalNative methods from
+// bionic's mallinfo(). The host malloc is the UCRT's, over the process heap,
+// so HeapSummary (kernel32, Windows 10) gives the same three numbers: the
+// heap's committed bytes, the bytes allocated in it and the rest. Apps poll
+// them for memory metrics (Waze's startup coroutine calls getNativeHeapSize
+// and dies of the UnsatisfiedLinkError when it is unregistered).
+
+namespace {
+
+struct NativeHeap {
+  jlong size = 0;
+  jlong allocated = 0;
+  jlong available = 0;
+};
+
+NativeHeap NativeHeapSummary() {
+  struct Summary {  // heapapi.h's HEAP_SUMMARY
+    DWORD cb;
+    SIZE_T allocated;
+    SIZE_T committed;
+    SIZE_T reserved;
+    SIZE_T max_reserve;
+  };
+  using HeapSummaryFn = BOOL(WINAPI*)(HANDLE, DWORD, Summary*);
+  static const HeapSummaryFn heap_summary = reinterpret_cast<HeapSummaryFn>(
+      reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "HeapSummary")));
+  NativeHeap heap;
+  Summary summary = {};
+  summary.cb = sizeof(summary);
+  if (heap_summary == nullptr || !heap_summary(GetProcessHeap(), 0, &summary)) return heap;
+  heap.size = static_cast<jlong>(summary.committed);
+  heap.allocated = static_cast<jlong>(summary.allocated);
+  heap.available = summary.committed > summary.allocated
+                  ? static_cast<jlong>(summary.committed - summary.allocated)
+                  : 0;
+  return heap;
+}
+
+}  // namespace
+
+static jlong Debug_getNativeHeapSize() { return NativeHeapSummary().size; }
+
+static jlong Debug_getNativeHeapAllocatedSize() { return NativeHeapSummary().allocated; }
+
+static jlong Debug_getNativeHeapFreeSize() { return NativeHeapSummary().available; }
+
+static const JNINativeMethod gDebugMethods[] = {
+    {"getNativeHeapSize", "()J", GESHER_JNI(Debug_getNativeHeapSize)},
+    {"getNativeHeapAllocatedSize", "()J", GESHER_JNI(Debug_getNativeHeapAllocatedSize)},
+    {"getNativeHeapFreeSize", "()J", GESHER_JNI(Debug_getNativeHeapFreeSize)},
+};
+
 // --- android.os.PerfettoTrace (Gesher stub) ---------------------------------------
 // The real android_os_PerfettoTrace.cpp is the perfetto SDK, which Gesher does
 // not build (tracing_perfetto_stub.cc). These natives keep the Java side
@@ -570,6 +624,10 @@ static int register_android_os_Process(JNIEnv* env) {
   return RegisterMethodsOrDie(env, "android/os/Process", gProcessMethods, NELEM(gProcessMethods));
 }
 
+static int register_android_os_Debug(JNIEnv* env) {
+  return RegisterMethodsOrDie(env, "android/os/Debug", gDebugMethods, NELEM(gDebugMethods));
+}
+
 static int register_gesher_NativeCanary(JNIEnv* env) {
   return RegisterMethodsOrDie(env, "gesher/NativeCanary", gCanaryMethods, NELEM(gCanaryMethods));
 }
@@ -599,6 +657,7 @@ static const struct {
     {"android_os_PerfettoTrace", "android/os/PerfettoTrackEventExtra",
      register_android_os_PerfettoTrace},
     {"android_os_Process", "android/os/Process", register_android_os_Process},
+    {"android_os_Debug", "android/os/Debug", register_android_os_Debug},
     {"gesher_shared_memory", "android/os/SharedMemory", ::register_gesher_shared_memory},
     {"android_text_AndroidCharacter", "android/text/AndroidCharacter",
      register_android_text_AndroidCharacter},
