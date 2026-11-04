@@ -63,6 +63,10 @@ import java.nio.channels.OverlappingFileLockException;
  *    null, as on a device without Bluetooth;
  *  - android.os.Debug's native heap counters (compat/framework/android_runtime.cc):
  *    Waze's startup died with UnsatisfiedLinkError on getNativeHeapSize.
+ *  - android.bluetooth.BluetoothProfile (with ServiceListener), BluetoothHeadset and
+ *    BluetoothDevice (app/java, the Bluetooth module's API on a device without
+ *    Bluetooth): WhatsApp's headset listener implements ServiceListener and holds a
+ *    BluetoothHeadset, and its worker died with NoClassDefFoundError resolving it.
  * Prints "FrameworkFixesTest all passed".
  */
 public final class FrameworkFixesTest {
@@ -427,6 +431,26 @@ public final class FrameworkFixesTest {
                 + "(the ext boot jar's): text, entities, a bold span and a link");
     }
 
+    private static void bluetoothProfiles() throws Exception {
+        Class<?> profile = Class.forName("android.bluetooth.BluetoothProfile");
+        Class<?> listener = Class.forName("android.bluetooth.BluetoothProfile$ServiceListener");
+        Class<?> headset = Class.forName("android.bluetooth.BluetoothHeadset");
+        Class<?> device = Class.forName("android.bluetooth.BluetoothDevice");
+        require(profile.isInterface() && listener.isInterface(), "BluetoothProfile types are not interfaces");
+        require(profile.isAssignableFrom(headset), "BluetoothHeadset is not a BluetoothProfile");
+        require(profile.getField("HEADSET").getInt(null) == 1
+                && headset.getField("STATE_AUDIO_CONNECTED").getInt(null) == 12
+                && device.getField("BOND_BONDED").getInt(null) == 12, "Bluetooth constants are wrong");
+        // An app's listener, as WhatsApp's implements it; with no adapter it is never called.
+        Object app = Proxy.newProxyInstance(listener.getClassLoader(), new Class<?>[] {listener},
+                (proxy, method, args) -> null);
+        listener.getMethod("onServiceDisconnected", int.class).invoke(app, 1);
+        listener.getMethod("onServiceConnected", int.class, profile).invoke(app, 1, null);
+        require(headset.getMethod("isAudioConnected", device) != null, "isAudioConnected is missing");
+        System.out.println("FrameworkFixesTest: BluetoothProfile, its ServiceListener, BluetoothHeadset "
+                + "and BluetoothDevice resolve on a device without Bluetooth");
+    }
+
     public static void main(String[] args) throws Exception {
         // The FileChannel lock natives and Binder's (gesher-app loads them in an app).
         System.loadLibrary("android_runtime");
@@ -439,6 +463,7 @@ public final class FrameworkFixesTest {
         htmlFromHtml();
         dnsResolver();
         bluetoothAndNativeHeap();
+        bluetoothProfiles();
         System.out.println("FrameworkFixesTest all passed");
     }
 }
