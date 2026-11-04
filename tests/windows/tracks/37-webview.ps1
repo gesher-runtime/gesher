@@ -256,6 +256,7 @@ $webAppExpect = @(
   'gesher-webview: WebView2 Runtime ',
   'WebActivity onPageFinished: file:///android_asset/index.html',
   'WebActivity bridge report: sum 5, Hello WebView',
+  'WebActivity bridge report: total 15',
   'WebActivity bridge report: secret hidden',
   'WebActivity console: console from the page (LOG)',
   'WebActivity onJsAlert: hello from the page',

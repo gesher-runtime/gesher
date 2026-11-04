@@ -174,6 +174,41 @@ final class JsBridge {
             if (v instanceof String && !((String) v).isEmpty()) return ((String) v).charAt(0);
             return n != null ? (char) n.intValue() : '\0';
         }
+        if (type.isArray()) return missing ? null : toArray(v, type.getComponentType());
         return missing ? null : (type.isInstance(v) ? v : null);
+    }
+
+    /**
+     * A JavaScript array (or a typed array, which JSON.stringify writes as {"0":..,"1":..}) as
+     * a Java array of {@code component}, each element converted as an argument is, as
+     * Android's bridge does; anything else is null.
+     */
+    private static Object toArray(Object v, Class<?> component) {
+        JSONArray items;
+        if (v instanceof JSONArray) {
+            items = (JSONArray) v;
+        } else if (v instanceof JSONObject) {
+            JSONObject o = (JSONObject) v;
+            int length = o.optInt("length", -1);
+            if (length < 0) {
+                for (java.util.Iterator<String> keys = o.keys(); keys.hasNext(); ) {
+                    try {
+                        length = Math.max(length, Integer.parseInt(keys.next()));
+                    } catch (NumberFormatException e) {
+                        return null;
+                    }
+                }
+                length++;
+            }
+            items = new JSONArray();
+            for (int i = 0; i < length; i++) items.put(o.opt(String.valueOf(i)));
+        } else {
+            return null;
+        }
+        Object array = java.lang.reflect.Array.newInstance(component, items.length());
+        for (int i = 0; i < items.length(); i++) {
+            java.lang.reflect.Array.set(array, i, convert(items.opt(i), component));
+        }
+        return array;
     }
 }

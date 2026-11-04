@@ -72,6 +72,15 @@ public class WebActivity extends Activity {
             say("WebActivity bridge report: " + text);
         }
 
+        /** Arrays arrive as Java arrays (a JS array and a typed array, as Gmail passes). */
+        @JavascriptInterface
+        public int total(int[] values, int[] more) {
+            int sum = 0;
+            for (int v : values) sum += v;
+            for (int v : more) sum += v;
+            return sum;
+        }
+
         /** Not annotated: not callable from the page. */
         public String secret() {
             return "secret";
