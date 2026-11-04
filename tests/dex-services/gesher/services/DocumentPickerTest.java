@@ -61,6 +61,8 @@ public final class DocumentPickerTest {
     }
 
     public static void main(String[] args) throws Exception {
+        // Zygote's and Binder's natives (gesher-app loads them in an app).
+        System.loadLibrary("android_runtime");
         fromWindowsPath();
 
         Class<?> pmClass = Class.forName("com.gesher.server.PackageManagerService");

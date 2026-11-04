@@ -4,6 +4,10 @@
  */
 package gesher.services;
 
+import android.app.ActivityThread;
+import android.app.Application;
+import android.content.res.AssetManager;
+import android.content.res.Resources;
 import android.graphics.Typeface;
 import android.text.Html;
 import android.text.Spanned;
@@ -12,6 +16,8 @@ import android.text.style.URLSpan;
 
 import java.io.File;
 import java.io.RandomAccessFile;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
@@ -272,6 +278,25 @@ public final class FrameworkFixesTest {
         // `new Parser()`, so without it every call fails, whatever the markup.
         Class.forName("org.ccil.cowan.tagsoup.Parser");
         Class.forName("org.ccil.cowan.tagsoup.HTMLSchema");
+        // A bold end tag reads the font weight adjustment from the current application's
+        // configuration: an app has one, this process none, so it gets one here, with the
+        // system resources from $ANDROID_ROOT's framework-res.apk as gesher-app's Main has them.
+        AssetManager.createSystemAssetsInZygoteLocked(false,
+                System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
+        Constructor<ActivityThread> newThread = ActivityThread.class.getDeclaredConstructor();
+        newThread.setAccessible(true);
+        ActivityThread thread = newThread.newInstance();
+        Field initial = ActivityThread.class.getDeclaredField("mInitialApplication");
+        initial.setAccessible(true);
+        initial.set(thread, new Application() {
+            @Override
+            public Resources getResources() {
+                return Resources.getSystem();
+            }
+        });
+        Field current = ActivityThread.class.getDeclaredField("sCurrentActivityThread");
+        current.setAccessible(true);
+        current.set(null, thread);
         Spanned s = Html.fromHtml("<p><b>Bold</b> and <a href=\"https://example.org/\">a link</a>"
                 + " &amp; &#x5e9;&#x5dc;&#x5d5;&#x5dd;</p>", Html.FROM_HTML_MODE_COMPACT);
         String text = s.toString().trim();
@@ -290,6 +315,8 @@ public final class FrameworkFixesTest {
     }
 
     public static void main(String[] args) throws Exception {
+        // The FileChannel lock natives and Binder's (gesher-app loads them in an app).
+        System.loadLibrary("android_runtime");
         colorMatrix();
         fileLocks();
         legacyRenderNode();

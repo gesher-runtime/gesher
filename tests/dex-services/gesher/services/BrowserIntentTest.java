@@ -40,6 +40,8 @@ public final class BrowserIntentTest {
 
     @SuppressWarnings("unchecked")
     public static void main(String[] args) throws Exception {
+        // Binder's natives, for the services' stand-ins (gesher-app loads them in an app).
+        System.loadLibrary("android_runtime");
         Class<?> pmClass = Class.forName("com.gesher.server.PackageManagerService");
         Constructor<?> pmConstructor = pmClass.getDeclaredConstructor(java.util.Collection.class);
         pmConstructor.setAccessible(true);
