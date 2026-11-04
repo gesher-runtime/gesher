@@ -134,3 +134,20 @@ Check 'services: BasicHttpParams (Gmail''s account setup) loads from org.apache.
   $httpOut
 } @('HttpLegacyTest: BasicHttpParams, HttpConnectionParams and HttpGet load from the jar, not the boot class path',
   'HttpLegacyTest all passed')
+
+# An installed APK's signers (ApkPackage), which apps read for their own: WhatsApp's
+# registration token is built from GET_SIGNATURES. Its fixtures (tests/dex-services/
+# fixtures, generate.sh) are signed as WhatsApp is: a key rotated for SDK 33 and up.
+$signingOut = FixesRun ($dvmFixes + 'gesher.services.SigningTest' + (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures'))) 90
+$signingCode = $LASTEXITCODE
+Check 'services: GET_SIGNATURES answers a rotated APK''s oldest key, as WhatsApp''s token needs' {
+  $global:LASTEXITCODE = $signingCode
+  $signingOut
+} @('SigningTest: GET_SIGNATURES answers a rotated APK''s oldest key',
+  'SigningTest: GET_SIGNING_CERTIFICATES answers the current key and its rotation history',
+  'SigningTest all passed')
+Check 'services: a v2-signed APK answers its key, an unsigned one none' {
+  $global:LASTEXITCODE = $signingCode
+  $signingOut
+} @('SigningTest: a v2-signed APK answers its key, an unsigned one none',
+  'SigningTest all passed')

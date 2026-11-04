@@ -15,7 +15,12 @@ import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
+import android.content.pm.Signature;
+import android.content.pm.SigningDetails;
 import android.os.Process;
+import android.util.apk.ApkSignatureSchemeV2Verifier;
+import android.util.apk.ApkSignatureSchemeV3Verifier;
+import android.util.apk.SignatureNotFoundException;
 
 import com.android.internal.pm.parsing.AppInfoUtils;
 import com.android.internal.pm.parsing.PackageInfoCommonUtils;
@@ -27,6 +32,7 @@ import com.android.internal.pm.pkg.component.ParsedIntentInfo;
 
 import java.io.File;
 import java.io.IOException;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -40,7 +46,9 @@ import java.util.Set;
  * {@link PackageInfo}, {@link ApplicationInfo} and {@link ActivityInfo}s come from
  * {@link PackageInfoCommonUtils}, the framework's PackageInfoUtils for packages outside
  * PackageManagerService, plus what installing adds (paths, uid, data directories,
- * enabled). Certificates are not collected (gesher does not verify signatures).
+ * enabled). Its signing certificates are collected, not verified (gesher does not verify
+ * signatures): apps read their own (GET_SIGNATURES, GET_SIGNING_CERTIFICATES), as WhatsApp
+ * does for its registration token.
  */
 public final class ApkPackage {
     /** Flags for a PackageInfo with everything: every component, meta-data, permissions. */
@@ -117,7 +125,53 @@ public final class ApkPackage {
                 new ParserCallback())) {
             pkg = parser.parsePackage(new File(apkPath), 0 /* flags */, false /* useCaches */);
         }
+        SigningDetails signing = signingDetails(apkPath);
+        if (signing != null) {
+            pkg.setSigningDetails(signing);
+        }
         return new ApkPackage(apkPath, pkg);
+    }
+
+    /**
+     * The APK's signers from its v3 or v2 signing block, unverified, as ApkSignatureVerifier
+     * collects them (with v3's proof-of-rotation: GET_SIGNATURES answers the oldest key of a
+     * rotated one); null (no signatures) for an unsigned or v1-only APK. Not
+     * ApkSignatureVerifier itself: it tries v4 first, through IncrementalManager's native
+     * code, which Gesher does not have.
+     */
+    private static SigningDetails signingDetails(String apkPath) {
+        try {
+            try {
+                ApkSignatureSchemeV3Verifier.VerifiedSigner v3 =
+                        ApkSignatureSchemeV3Verifier.unsafeGetCertsWithoutVerification(apkPath);
+                Signature[] past = null;
+                if (v3.por != null) {
+                    past = new Signature[v3.por.certs.size()];
+                    for (int i = 0; i < past.length; i++) {
+                        past[i] = new Signature(v3.por.certs.get(i).getEncoded());
+                        past[i].setFlags(v3.por.flagsList.get(i));
+                    }
+                }
+                return new SigningDetails(signatures(new X509Certificate[][] {v3.certs}),
+                        SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3, past);
+            } catch (SignatureNotFoundException e) {
+                // Not v3: try v2.
+            }
+            return new SigningDetails(signatures(
+                    ApkSignatureSchemeV2Verifier.unsafeGetCertsWithoutVerification(apkPath)),
+                    SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V2);
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    /** One Signature per signer, with its certificate chain (convertToSignatures). */
+    private static Signature[] signatures(X509Certificate[][] signers) throws Exception {
+        Signature[] signatures = new Signature[signers.length];
+        for (int i = 0; i < signers.length; i++) {
+            signatures[i] = new Signature(signers[i]);
+        }
+        return signatures;
     }
 
     /** One line about what was parsed, for logs (and the tests' checks). */
