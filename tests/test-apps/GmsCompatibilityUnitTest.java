@@ -200,7 +200,12 @@ public final class GmsCompatibilityUnitTest {
                 GmsPackageSupport.PACKAGE_GMS, PackageManager.GET_SIGNATURES);
         assertTrue(gmsInfo != null, "gmsInfo not null");
         assertEquals("com.google.android.gms", gmsInfo.packageName, "gmsInfo packageName");
-        assertEquals(233013000, gmsInfo.versionCode, "gmsInfo versionCode");
+        assertEquals(GmsPackageSupport.GMS_VERSION_CODE, gmsInfo.versionCode, "gmsInfo versionCode");
+        assertTrue(gmsInfo.versionCode >= 264280000, "gmsInfo versionCode current");
+        PackageInfo signing = GmsPackageSupport.createSyntheticPackageInfo(
+                GmsPackageSupport.PACKAGE_GMS, PackageManager.GET_SIGNING_CERTIFICATES);
+        assertTrue(signing.signingInfo != null
+                && signing.signingInfo.getApkContentsSigners().length == 1, "gmsInfo signingInfo");
         assertTrue(gmsInfo.signatures != null && gmsInfo.signatures.length > 0, "gmsInfo signatures");
         assertTrue(gmsInfo.applicationInfo != null && gmsInfo.applicationInfo.enabled, "gmsInfo applicationInfo enabled");
 

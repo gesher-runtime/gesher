@@ -29,8 +29,10 @@ public final class GmsPackageSupport {
     public static final String PACKAGE_GMS = "com.google.android.gms";
     public static final String PACKAGE_VENDING = "com.android.vending";
 
-    public static final int GMS_VERSION_CODE = 233013000;
-    public static final String GMS_VERSION_NAME = "23.30.13 (190400-549429184)";
+    // A current Play services: apps compare it with the version their client libraries
+    // need (Gmail 2026: 264280000) and, below it, post "update Google Play services".
+    public static final int GMS_VERSION_CODE = 264434000;
+    public static final String GMS_VERSION_NAME = "26.44.34 (190400-000000000)";
 
     public static final int VENDING_VERSION_CODE = 83000000;
     public static final String VENDING_VERSION_NAME = "83.0.00";

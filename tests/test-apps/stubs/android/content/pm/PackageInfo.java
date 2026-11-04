@@ -12,6 +12,7 @@ public class PackageInfo {
     public long lastUpdateTime;
     public ApplicationInfo applicationInfo;
     public Signature[] signatures;
+    public SigningInfo signingInfo;
     public ServiceInfo[] services;
     public ActivityInfo[] receivers;
 
