@@ -319,8 +319,10 @@ public final class AccountManagerService extends IAccountManager.Default {
         mCalls.execute(() -> {
             Authenticator a = authenticator(accountType);
             if (a == null) {
-                error(response, AccountManager.ERROR_CODE_BAD_ARGUMENTS,
-                        "no authenticator for " + accountType);
+                // As Android's Session when it cannot bind an authenticator: an
+                // AuthenticatorException for the app (Gmail's setup of a Google account
+                // catches it), not an IllegalArgumentException that ends its process.
+                error(response, AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "bind failure");
                 return;
             }
             Answer answer = call(a, (auth, r) ->
