@@ -39,6 +39,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.Mac;
@@ -199,6 +201,8 @@ public final class NetTest {
             }
         });
         check("NIO: non-blocking channels with a Selector", NetTest::nioEcho);
+        check("NIO: a download handed back to the Selector through its wakeup pipe, as Dart's event loop does",
+                NetTest::selectorHandOff);
         check("HTTP: HttpURLConnection (OkHttp) GET and POST to a local server", NetTest::localHttp);
         check("BigInteger: NativeBN over BoringSSL", () -> {
             BigInteger p = new BigInteger("170141183460469231731687303715884105727");  // 2^127 - 1
@@ -344,6 +348,73 @@ public final class NetTest {
             String got = new String(back.array(), 0, back.position(), StandardCharsets.UTF_8);
             require(got.equals("over NIO"), got);
             return "'" + got + "' after " + events + " selected keys";
+        }
+    }
+
+    // Dart's event handler (and so every Flutter app's HttpClient) reads a
+    // socket the way this does: one thread waits in epoll_wait; a ready socket
+    // loses its interest until the isolate has read what is available and
+    // hands it back by writing to a pipe that the wait includes. Every read
+    // waits for that pipe write to wake the poll, so a poll that sees it only
+    // on its next 10 ms look made downloads crawl (0.3 MB/s from GitHub).
+    private static String selectorHandOff() throws Exception {
+        final int total = 4 << 20;
+        try (ServerSocket server = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
+             Selector selector = Selector.open()) {
+            Thread sender = new Thread(() -> {
+                try (Socket s = server.accept()) {
+                    byte[] chunk = new byte[64 * 1024];
+                    OutputStream out = s.getOutputStream();
+                    for (int sent = 0; sent < total; sent += chunk.length) out.write(chunk);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            sender.start();
+            SocketChannel channel = SocketChannel.open(server.getLocalSocketAddress());
+            channel.configureBlocking(false);
+            SelectionKey key = channel.register(selector, SelectionKey.OP_READ);
+            SynchronousQueue<Boolean> ready = new SynchronousQueue<>();
+            long[] received = {0};
+            AtomicBoolean done = new AtomicBoolean();
+            Thread reader = new Thread(() -> {
+                ByteBuffer buffer = ByteBuffer.allocateDirect(16 * 1024);  // Dart's TLS read size
+                try {
+                    while (true) {
+                        ready.take();
+                        buffer.clear();
+                        int n = channel.read(buffer);
+                        if (n < 0) done.set(true);
+                        else received[0] += n;
+                        key.interestOps(n < 0 ? 0 : SelectionKey.OP_READ);
+                        selector.wakeup();
+                        if (n < 0) return;
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            reader.start();
+            long start = System.nanoTime();
+            int rounds = 0;
+            while (!done.get()) {
+                require(System.nanoTime() - start < 60_000_000_000L, "timed out after " + rounds + " reads");
+                selector.select(1000);
+                if (selector.selectedKeys().remove(key)) {
+                    key.interestOps(0);
+                    rounds++;
+                    ready.put(true);
+                }
+            }
+            reader.join(10_000);
+            sender.join(10_000);
+            channel.close();
+            double seconds = (System.nanoTime() - start) / 1e9;
+            double perRound = seconds * 1000 / rounds;
+            require(received[0] == total, received[0] + " of " + total + " bytes");
+            // A missed wake costs 10-16 ms; the interpreter alone well under 1.
+            require(perRound < 4, String.format("%.1f ms per read", perRound));
+            return String.format("%d reads, %.2f ms each, %.1f MB/s", rounds, perRound, total / seconds / (1 << 20));
         }
     }
 

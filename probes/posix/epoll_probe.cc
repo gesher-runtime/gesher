@@ -294,6 +294,48 @@ int main() {
     close(late);
   }
 
+  // A pipe written by another thread wakes the wait at once, as Dart's event
+  // handler needs: it waits on its interrupt pipe and a timerfd, with or
+  // without sockets, and every socket read hands its interest back through
+  // that pipe. 200 round trips took 5 s when the wait saw the pipe only on
+  // its next 10 ms look.
+  for (int with_socket = 0; with_socket < 2; ++with_socket) {
+    int ping[2], pong[2], idle[2] = {-1, -1};
+    CHECK(pipe(ping) == 0 && pipe(pong) == 0);
+    int wait_ep = epoll_create1(0);
+    int timer = eventfd(0, EFD_NONBLOCK);
+    CHECK(Add(wait_ep, ping[0], EPOLLIN, 1) == 0 && Add(wait_ep, timer, EPOLLIN, 2) == 0);
+    if (with_socket) {
+      CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, idle) == 0);
+      CHECK(Add(wait_ep, idle[0], EPOLLIN | EPOLLET, 3) == 0);
+    }
+    constexpr int kRounds = 200;
+    std::atomic<int> answered{0};
+    std::thread echo([&] {
+      epoll_event e[4];
+      char b;
+      for (int i = 0; i < kRounds; ++i) {
+        if (epoll_wait(wait_ep, e, 4, 5000) != 1 || e[0].data.u64 != 1) break;
+        if (read(ping[0], &b, 1) != 1 || write(pong[1], &b, 1) != 1) break;
+        ++answered;
+      }
+    });
+    pollfd back = {pong[0], POLLIN, 0};
+    DWORD start = GetTickCount();
+    for (int i = 0; i < kRounds; ++i) {
+      char b = 'p';
+      if (write(ping[1], &b, 1) != 1 || poll(&back, 1, 5000) != 1 || read(pong[0], &b, 1) != 1) break;
+    }
+    DWORD took = GetTickCount() - start;
+    echo.join();
+    printf("pipe round trips through epoll%s: %d in %lu ms\n", with_socket ? " beside a socket" : "",
+           answered.load(), static_cast<unsigned long>(took));
+    CHECK(answered == kRounds && took < 1000);
+    for (int fd : {ping[0], ping[1], pong[0], pong[1], timer, wait_ep, idle[0], idle[1]}) {
+      if (fd >= 0) close(fd);
+    }
+  }
+
   CHECK(close(ep) == 0);
   CHECK(epoll_wait(ep, out, 8, 0) == -1 && errno == EBADF);
   CHECK(close(efd) == 0);

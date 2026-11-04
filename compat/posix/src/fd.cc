@@ -18,6 +18,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -178,7 +179,11 @@ int CloseFdBody(int fd, bool unpublished, SocketFd* deferred = nullptr) {
     gesher::ForgetDevice(fd);
     gesher::ForgetEventObject(fd);
     gesher::ForgetBinder(fd);
+    // A pipe's last writer closing makes its reader readable (end of file).
+    const bool pipe = gesher::HasPollWaiters() &&
+                      GetFileType(gesher::HandleFromFd(fd)) == FILE_TYPE_PIPE;
     result = gesher::CrtResult(_close(fd));
+    if (pipe) gesher::WakePollers();
   } else {
     // Only the last descriptor closes the native socket. Shared metadata
     // snapshots do not extend its lifetime or delay the existing close wake.
@@ -265,6 +270,10 @@ int write(int fd, const void* buf, unsigned int count) {
     if (gesher::WriteEventObject(fd, buf, count, &result)) return result;
     result = gesher::CrtResult(_write(fd, buf, count));
     if (result > 0) gesher::InotifyNoteWrite(fd);
+    if (result > 0 && gesher::HasPollWaiters() &&
+        GetFileType(gesher::HandleFromFd(fd)) == FILE_TYPE_PIPE) {
+      gesher::WakePollers();
+    }
     return result;
   }
   gesher::ws::Buffer buffer = {const_cast<void*>(buf), count};
@@ -394,9 +403,81 @@ bool PollFile(pollfd* p) {
   return (p->events & kIn) == 0 || avail > 0;
 }
 
+// A thread's way to be woken in poll: an auto-reset event when it waits with
+// WaitForMultipleObjects, a wake socket when it waits in WSAPoll. Shared, so
+// that a registration a cancelled thread left behind stays valid.
+struct PollWaiter {
+  HANDLE event = nullptr;
+  gesher::ws::Socket socket = gesher::ws::kInvalidSocket;
+  uint16_t port = 0;
+  bool with_socket = false;
+  std::atomic<bool> pending{false};  // a wake datagram is on its way
+
+  ~PollWaiter() {
+    if (event != nullptr) CloseHandle(event);
+    if (socket != gesher::ws::kInvalidSocket) gesher::ws::CloseWakeSocket(socket);
+  }
+};
+
+std::mutex waiters_mutex;
+std::vector<std::shared_ptr<PollWaiter>> waiters;
+std::atomic<size_t> waiter_count{0};
+
+// Registers the calling thread's waiter for one poll; empty if it has none
+// (it is then left to the 10 ms looks).
+class WaiterRegistration {
+ public:
+  WaiterRegistration(bool with_socket) {
+    thread_local std::shared_ptr<PollWaiter> mine = std::make_shared<PollWaiter>();
+    if (mine->event == nullptr) mine->event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (with_socket && mine->socket == gesher::ws::kInvalidSocket) {
+      mine->socket = gesher::ws::NewWakeSocket(&mine->port);
+    }
+    if (mine->event == nullptr || (with_socket && mine->socket == gesher::ws::kInvalidSocket)) return;
+    std::lock_guard<std::mutex> lock(waiters_mutex);
+    mine->with_socket = with_socket;
+    // A datagram still queued from an earlier poll only wakes this one early.
+    mine->pending.store(false);
+    waiters.push_back(mine);
+    waiter_count.store(waiters.size(), std::memory_order_release);
+    waiter_ = mine.get();
+  }
+  ~WaiterRegistration() {
+    if (waiter_ == nullptr) return;
+    std::shared_ptr<PollWaiter> released;  // freed after the lock
+    std::lock_guard<std::mutex> lock(waiters_mutex);
+    for (auto& w : waiters) {
+      if (w.get() != waiter_) continue;
+      std::swap(w, waiters.back());
+      released = std::move(waiters.back());
+      waiters.pop_back();
+      break;
+    }
+    waiter_count.store(waiters.size(), std::memory_order_release);
+  }
+  WaiterRegistration(const WaiterRegistration&) = delete;
+  WaiterRegistration& operator=(const WaiterRegistration&) = delete;
+
+  PollWaiter* get() const { return waiter_; }
+
+ private:
+  PollWaiter* waiter_ = nullptr;
+};
+
 }  // namespace
 
 namespace gesher {
+
+bool HasPollWaiters() { return waiter_count.load(std::memory_order_acquire) != 0; }
+
+void WakePollers() {
+  if (!HasPollWaiters()) return;
+  std::lock_guard<std::mutex> lock(waiters_mutex);
+  for (auto& w : waiters) {
+    if (!w->with_socket) SetEvent(w->event);
+    else if (!w->pending.exchange(true)) ws::Wake(w->port);
+  }
+}
 
 static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted, PollObserver observer, void* context,
                        ws::NativePollObserver native_observer, void* native_context) {
@@ -443,10 +524,20 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
   // Socket numbers may be closed/reused while waiting. Bound every native
   // sample, then revalidate the exact description before delivering readiness.
   bool sliced = waiting_files || !sockets.empty();
+  // What has no wait handle a wait here can take (pipes; eventfds and the
+  // interrupt next to sockets) wakes it through WakePollers. A write before
+  // the registration woke nobody, so the first round only looks.
+  std::optional<WaiterRegistration> registration;
+  if (ready == 0 && timeout != 0 &&
+      (waiting_files || (!sockets.empty() && (!eventfds.empty() || interrupt != nullptr)))) {
+    registration.emplace(!sockets.empty());
+  }
+  PollWaiter* waiter = registration ? registration->get() : nullptr;
+  bool look_first = waiter != nullptr;
   std::vector<HANDLE> handles;
   for (;;) {
     int wait_ms = 0;  // with something ready, only collect what the rest has
-    if (ready == 0) {
+    if (ready == 0 && !look_first) {
       if (timeout < 0) {
         wait_ms = -1;
       } else {
@@ -454,11 +545,19 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
       }
       if (sliced && (wait_ms < 0 || wait_ms > 10)) wait_ms = 10;
     }
+    look_first = false;
 
     if (!sockets.empty()) {
-      const int sampled = ws::Poll(sockets.data(), sockets.size(), wait_ms, native_observer, native_context);
+      bool woken = false;
+      const ws::Socket wake = waiter != nullptr && waiter->with_socket ? waiter->socket : ws::kInvalidSocket;
+      const int sampled = ws::Poll(sockets.data(), sockets.size(), wait_ms, native_observer, native_context,
+                                   wake, &woken);
       native_observer = nullptr;  // one real native sample, never a mutable global hook
       if (sampled < 0) return -1;
+      if (woken) {
+        waiter->pending.store(false);  // a later wake sends again
+        ws::DrainWakeSocket(waiter->socket);
+      }
       for (size_t k = 0; k < sockets.size(); ++k) {
         pollfd* p = &fds[socket_index[k]];
         SocketFd current;
@@ -485,7 +584,8 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
         if (p->revents != 0) wait_ms = 0;  // ready since the last look
         if (wake != nullptr) handles.push_back(wake);
       }
-      if (interrupt != nullptr) handles.push_back(interrupt);
+      if (waiter != nullptr) handles.push_back(waiter->event);
+      if (interrupt != nullptr) handles.push_back(interrupt);  // last, as below
       if (handles.size() > MAXIMUM_WAIT_OBJECTS) {
         handles.clear();  // too many to wait for: look every 10 ms
         if (wait_ms < 0 || wait_ms > 10) wait_ms = 10;

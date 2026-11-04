@@ -153,10 +153,20 @@ int Membership(Socket s, bool join, Family family, const uint8_t* group, uint32_
                const uint8_t* source);
 
 // Returns how many entries have revents set, 0 on timeout (timeout_ms < 0
-// waits forever).
+// waits forever). A `wake` socket (NewWakeSocket) is waited on too; it does
+// not count, and *woken says whether it was readable.
 using NativePollObserver = void (*)(bool before, int result, int native_error, void*);
 int Poll(PollEntry* entries, size_t count, int timeout_ms,
-         NativePollObserver observer = nullptr, void* context = nullptr);
+         NativePollObserver observer = nullptr, void* context = nullptr,
+         Socket wake = kInvalidSocket, bool* woken = nullptr);
+
+// WSAPoll waits for sockets only. A wake socket is a nonblocking loopback
+// datagram socket that Wake(port) makes readable from any thread, so a Poll
+// can also return for readiness that has no socket (pipes, eventfds).
+Socket NewWakeSocket(uint16_t* port);
+void Wake(uint16_t port);
+void DrainWakeSocket(Socket s);
+void CloseWakeSocket(Socket s);
 
 // --- names --------------------------------------------------------------------
 

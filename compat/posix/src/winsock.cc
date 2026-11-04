@@ -1186,7 +1186,55 @@ Provider ClassifyProvider(Socket s) {
   return Provider::kOther;
 }
 
-int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver observer, void* context) {
+Socket NewWakeSocket(uint16_t* port) {
+  if (!Startup()) return kInvalidSocket;
+  SOCKET s = WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0, kSocketFlags);
+  if (s == INVALID_SOCKET) return Fail(), kInvalidSocket;
+  sockaddr_in address = {};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  int length = sizeof(address);
+  u_long nonblocking = 1;
+  if (Api().bind(s, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 ||
+      Api().getsockname(s, reinterpret_cast<sockaddr*>(&address), &length) != 0 ||
+      ioctlsocket(s, FIONBIO, &nonblocking) != 0) {
+    Fail();
+    closesocket(s);
+    return kInvalidSocket;
+  }
+  *port = ntohs(address.sin_port);
+  return static_cast<Socket>(s);
+}
+
+void Wake(uint16_t port) {
+  // One unbound sender for every wake; sendto is safe from any thread.
+  static const SOCKET sender = [] {
+    return Startup() ? WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0, kSocketFlags)
+                     : INVALID_SOCKET;
+  }();
+  if (sender == INVALID_SOCKET) return;
+  sockaddr_in to = {};
+  to.sin_family = AF_INET;
+  to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  to.sin_port = htons(port);
+  char byte = 0;
+  WSABUF buffer = {1, &byte};
+  DWORD sent = 0;
+  WSASendTo(sender, &buffer, 1, &sent, 0, reinterpret_cast<sockaddr*>(&to), sizeof(to), nullptr, nullptr);
+}
+
+void DrainWakeSocket(Socket s) {
+  char bytes[64];
+  WSABUF buffer = {sizeof(bytes), bytes};
+  DWORD received = 0, flags = 0;
+  while (WSARecv(static_cast<SOCKET>(s), &buffer, 1, &received, &flags, nullptr, nullptr) == 0) flags = 0;
+}
+
+void CloseWakeSocket(Socket s) { closesocket(static_cast<SOCKET>(s)); }
+
+int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver observer, void* context,
+         Socket wake, bool* woken) {
+  if (woken != nullptr) *woken = false;
   const ULONGLONG sample_started = GetTickCount64();
   std::vector<WSAPOLLFD> fds(count);
   std::vector<bool> lifecycle_hup(count, false);
@@ -1256,12 +1304,18 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   for (size_t i = 0; i < count; ++i) {
     if (!owned_pending[i] && !closed[i]) { active.push_back(fds[i]); active_index.push_back(i); }
   }
-  if (!active.empty()) {
+  if (!active.empty() || wake != kInvalidSocket) {
     if (observer) observer(true, 0, 0, context);  // finalized real native inputs; no locks
     int sample_wait = wait;
     for (;;) {
+      // The wake socket rides last and leaves before the entries are read.
+      if (wake != kInvalidSocket) active.push_back({static_cast<SOCKET>(wake), POLLRDNORM, 0});
       const int result = WSAPoll(active.data(), static_cast<ULONG>(active.size()), sample_wait);
       const int native_error = result == SOCKET_ERROR ? WSAGetLastError() : 0;
+      if (wake != kInvalidSocket) {
+        if (result != SOCKET_ERROR && active.back().revents != 0 && woken != nullptr) *woken = true;
+        active.pop_back();
+      }
       if (observer) { observer(false, result, native_error, context); observer = nullptr; }
       if (result != SOCKET_ERROR) break;
       if (native_error != WSAEINVAL && native_error != WSAENOTSOCK) return errno = ErrnoFromWsa(native_error), -1;

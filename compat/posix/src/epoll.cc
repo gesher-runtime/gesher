@@ -56,6 +56,8 @@ struct EventFd {
   // and writers. Called with `mutex` held.
   void Update() {
     bool r = counter > 0, w = counter < kMax;
+    // A poll waiting in WSAPoll, next to sockets, sees no event.
+    const bool became_ready = (r && !readable_set) || (w && !writable_set);
     if (r != readable_set) {
       if (r) SetEvent(readable); else ResetEvent(readable);
       readable_set = r;
@@ -64,6 +66,7 @@ struct EventFd {
       if (w) SetEvent(writable); else ResetEvent(writable);
       writable_set = w;
     }
+    if (became_ready) WakePollers();
     changed.notify_all();
   }
 };
@@ -388,6 +391,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
     }
   }
   SetEvent(ep->changed);  // a waiter takes the new list
+  gesher::WakePollers();  // one in WSAPoll too
   return 0;
 }
 

@@ -46,6 +46,14 @@ std::shared_ptr<Inotify> LookupInotify(int fd);
 // Takes a closed (or replaced) fd number out of every epoll interest list.
 void ForgetEpollEntries(int fd);
 
+// A pipe has no handle to wait for, and WSAPoll waits for sockets only, so a
+// poll over a pipe, or over sockets and eventfds, would see a write only on
+// its next 10 ms look. Writes to pipes and eventfds in this process (and
+// epoll_ctl) call WakePollers, which wakes every poll waiting on such a
+// mix; HasPollWaiters lets them skip it when there is none (fd.cc).
+bool HasPollWaiters();
+void WakePollers();
+
 // poll() (fd.cc), which also returns, with what is ready so far and
 // *interrupted set, when the auto-reset event `interrupt` is signaled.
 // `interrupt` may be null.
