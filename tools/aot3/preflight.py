@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 
-BASE = '429b08826923ab0b1fff80529499bfdcfaa68caa'
+BASE = '7bbccfcddbac826f50b78175f4d23f8702fd7741'
 ALLOWED = {
     '.github/workflows/framework.yml', 'tests/apps/sharedlibraryapp/build.sh',
     'tests/dex-graphics/gesher/Aot3SharedLibraryTest.java',

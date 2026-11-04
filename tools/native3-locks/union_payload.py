@@ -662,7 +662,6 @@ def main():
             '.github/workflows/binder2-sg-modes-component.yml',
             '.github/workflows/binder2-stable-readonly-component.yml',
             '.github/workflows/media4-muxer-component.yml',
-            'tools/aot3/preflight.py',
             'tools/native3-locks/blocking-source.json',
             'tools/native3-locks/current_payload.py',
             'tools/surface/verify-component-suppliers.ps1',
