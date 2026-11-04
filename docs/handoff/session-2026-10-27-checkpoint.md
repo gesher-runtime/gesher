@@ -39,14 +39,14 @@ artifacts with source/jar/image identity checks. Read track-rules.md in full.
 ## Integration and immediately mergeable leaf
 
 Integration worktree C:\work\gesher-int, branch phase4/integration. Its code
-is the already accepted Net4 merge45891282a524016f80b3d38028495e4495499456,
-exact non-doc source015d8269025f9d35083038ecee1cea672d748f38/full40499454478.
+is the already accepted Net4 mergebc6e05bea341d1dc79920deaf3f069ad690fedc4,
+exact non-doc source694a4cd6b067f1deea87015bceb2ad2160260154/full40499454478.
 Later13603d54 and this checkpoint add docs only. Main/release remain unchanged.
 
 NetResolver is ready for coordinator acceptance/merge after final independent
 guards: C:\work\gesher-net4-resolver, wip/net4-resolver and immutable
-wip/net4-resolver-verified=37d73642ce8c2bbf9ca9a478362c79db900dd31b,
-docs-only above 869d63c3c411ca5cc1bf8bd6cd2453ee167c3cb0. Full40519019567
+wip/net4-resolver-verified=50017009bc4d94b5dc0c57103686fd0761de7bf8,
+docs-only above f36317637e01fdeeebcb1cbc4777c1cc8f9cea9a. Full40519019567
 attempt1 is28jobs22success/6skip. Root independently read metadata and all
 five actual critical logs and reviewed the bounded production/caller source:
 no additional blocker. Each Windows has18 resolver passes (16 ABI/policy/
@@ -65,8 +65,8 @@ Read tracks/net4-resolver-final.md. No merge was done before this stop.
 
 | Run / source | State at last required-watch observation | Next action |
 | --- | --- | --- |
-|40522376074 /63e5d6a035d80450036861de5cb15ea19f7e3693|Libcore build37m44 success; Windows122275166484/122275166538 still active; package122275166541 and e2e122276311510/122276311525 successful conclusions|Read final metadata and actual15 CopyFileTest groups, both summaries, installed package/e2e; Root has not reread those product logs.|
-|40527788805 /c1d27f22398be7b2b053f42f9be20b77fd21fe7d|NDK muxer full still active when Media stopped; Windows/e2e had started|Read all final jobs and actual8 contexts x18 semantic parts/12 FD rows/10 independent decodes per runner, both0/package/e2e. This source excludes the notice/AAudio/Surface candidate.|
+|40522376074 /2913d484b4f3adee64acd44c5dd7b7e4a042d6f7|Libcore build37m44 success; Windows122275166484/122275166538 still active; package122275166541 and e2e122276311510/122276311525 successful conclusions|Read final metadata and actual15 CopyFileTest groups, both summaries, installed package/e2e; Root has not reread those product logs.|
+|40527788805 /5d9e24d3df1e9caa77c21dbae360a1f32988b943|NDK muxer full still active when Media stopped; Windows/e2e had started|Read all final jobs and actual8 contexts x18 semantic parts/12 FD rows/10 independent decodes per runner, both0/package/e2e. This source excludes the notice/AAudio/Surface candidate.|
 
 Restart watches with the exact command in the owner rules. Do not dispatch
 another run on an active ref: concurrency cancels its predecessor. Plain
@@ -76,9 +76,9 @@ logs/reviews are under C:\work\gesher-ci-review; keep them.
 
 | Worktree / branch | Saved HEAD | Evidence / next action |
 | --- | --- | --- |
-|C:\work\gesher-exec4-spawn /wip/exec4-spawn|096d906a10daae125aefe458a6b952abc22fed8a|Scoped40520772723/9b9f625b passes all4 jobs and both four-case ABI suites. Full40521839555/b4c350b8 RED:2022 two spawn cases;2025 those two plus3 Web3 cases. See exact new path finding below.|
-|C:\work\gesher-libcore-io /wip/libcore-io|333794075d1e1658821e7b79852ce8e484a017a2|Full405223 pending on2913. Production is three registration lines exposing the already compiled upstream UnixCopyFile.transfer;15 public/native/cancellation groups. Bounded independent peer report exists.|
-|C:\work\gesher-ci-processes /wip/ci-processes|c30a4cb191a052203a458122af0433bcdb089e63|Scoped40526183946/ec0f003c GREEN; Root read both actual logs,4 cases each then0. Shared RunTimed has bounded termination/output waits and no unfinished Task.Result. No full dispatched; legacy SurfaceRun/test76 still open.|
+|C:\work\gesher-exec4-spawn /wip/exec4-spawn|1ebc4b3c3dff79fbaa32786f389b23f88171a336|Scoped40520772723/9b9f625b passes all4 jobs and both four-case ABI suites. Full40521839555/b4c350b8 RED:2022 two spawn cases;2025 those two plus3 Web3 cases. See exact new path finding below.|
+|C:\work\gesher-libcore-io /wip/libcore-io|7da19ebdbbc59960b12cb035190728800f9874c5|Full405223 pending on2913. Production is three registration lines exposing the already compiled upstream UnixCopyFile.transfer;15 public/native/cancellation groups. Bounded independent peer report exists.|
+|C:\work\gesher-ci-processes /wip/ci-processes|6b3f24555549440aec2c6c1e3c68a88efde4c210|Scoped40526183946/ec0f003c GREEN; Root read both actual logs,4 cases each then0. Shared RunTimed has bounded termination/output waits and no unfinished Task.Result. No full dispatched; legacy SurfaceRun/test76 still open.|
 
 Important newly identified spawn fixture cause: full run-tests passes relative
 Dir=dist. Test77 derives relative self-program dist/exec4-spawn-ABI, then

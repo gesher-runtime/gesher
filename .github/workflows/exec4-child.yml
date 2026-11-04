@@ -54,7 +54,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $sourceRun = '40502225202'
-          $sourceSha = 'a8cdf2cc0c9ac7dada5ad5652480d2b6ac97d8a6'
+          $sourceSha = '0808ba71b62ea784432de52f31bd3f86c9e2e3ad'
           $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$sourceRun" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $run.head_sha -cne $sourceSha -or
               $run.status -cne 'completed' -or $run.run_attempt -ne 1 -or

@@ -21,7 +21,7 @@ the destructive native exit query under its ownership lock. Launcher fails
 when the latest result remains unknown instead of manufacturing success.
 
 Accepted as a bounded slice in full CI 40455262527 at
-226a02562336c6fca3a4cab38104086f1bb54b84, merged35fba0ab. Both Windows
+29fa0bdf665a2cc5ee707524e7edd2a670391451, merged35fba0ab. Both Windows
 suites have0 failed tests, actual ART generation/PID controls and the real
 same-package app0/23/0 versus launcher0/1/0 sequence. Installed package and
 both ten-app e2e pass. The merged code equals the verified source.
@@ -67,7 +67,7 @@ verified compatibility. Keep them separate from the live-environment candidate.
 ## Verified live-environment slice
 
 Full CI40430496516 attempt2 passes at exact source
-1aa313f1f2174c25a8772818414a6ad5f0a02524: all 28 jobs completed, 22 success
+9f250803cd184e05d024733da8296410007de76f: all 28 jobs completed, 22 success
 and six intentional skips. Actual logs were read for both zero-failure Windows
 suites, every exec3 Check/57 shell cases, the new host CRT/NDK/spawn regression,
 both host-mutated APK modes, package install/oatdump/window/input/cleanup and

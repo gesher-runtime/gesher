@@ -73,7 +73,7 @@ jobs:
            trusted['verify_tree'](actual,expected);trusted['verify_selected'](actual,adapted=True)
            require(git('show',BASE+':'+FULL_TRUST)==raw,'Frozen full caller guard differs')
            old=git('show',trusted['COMBINED_BASE']+':'+trusted['CALLER'])
-           intended=old.replace(b'gesher-runtime/gesher/.github/workflows/combined-full-trusted-source.yml@35d4be09c9702a385ccdd068a2299191bd5d6041',b'gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@'+FULL_GUARD.encode())
+           intended=old.replace(b'gesher-runtime/gesher/.github/workflows/combined-full-trusted-source.yml@21c81672d87b5d37607bfcab676d67f2a23d3114',b'gesher-runtime/gesher/.github/workflows/net-combined-dns-trusted-source.yml@'+FULL_GUARD.encode())
            intended=intended.replace(b'            tools/net-udp\n',b'            tools/net-udp\n            tools/net-udp-component\n            tools/net-dns\n            tools/net-dns-component\n')
            require(intended==git('show',BASE+':'+trusted['CALLER']),'Frozen full DAG differs')
            # Prove all original inner selected pins and allowed-path predicates on

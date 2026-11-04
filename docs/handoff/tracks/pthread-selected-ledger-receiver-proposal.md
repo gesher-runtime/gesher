@@ -1,6 +1,6 @@
 # Selected first-caller ledger wiring: source-only proposal
 
-Base helper: `88f0d2314f8459be08a70ae109fe320fb7d76aea`, independently API-peered.
+Base helper: `4216a2999f0755faa42993fe4ea38fe66efc4957`, independently API-peered.
 The separate helper and factory worktrees stay frozen. The corrected receiver
 branch intentionally extends the helper's receipt-filename API only, adds the
 actual Binder reader, and includes assembly controls. No supplier implementation, public header, runtime,

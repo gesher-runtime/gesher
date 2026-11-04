@@ -35,8 +35,8 @@ Internal54-lineage callbacks are explicit selected unit dependencies. Broad
 Native54, blocking/signals, inherited OFD/atomic spawn, guest/bionic/ART ABI
 and remaining hardware contracts remain open.
 
-Canonical candidated3ce9f9a42f4ecd4e5cde71d4b6d39653c9b865c is docs-only above
-peeredfc990849d2ae23f16a23e35bc35ff1c2c9bb57ac code. All44 selected source
+Canonical candidate81fd3eb194c9a56f1e111c8d26d33aeccc5d8c1a is docs-only above
+peered2a90bd238e368b1e768ad39136caaa712fc5afab code. All44 selected source
 pins, Native port/EXCLUDE roles, AOT patches and final automation deltas have
 independent source peers. Only selected Native hunks are ported; qualified
 Chdir/Exec/Binder/Media/Surface/reader changes are retained. The original22
@@ -87,10 +87,10 @@ Libcore/Env/Media/Exec/Process/defaultOFFWeb3, package23 and both ten-app e2e0
 were independently audited from saved plain logs and final metadata. Exact
 report: tracks/coherent-aot-native-40731915058-accepted.md.
 
-Docs-only freeze54eb0a1b8e1885ed09bd5cd94053602f84561caf was pushed. Authorized
---no-ff mergec199c5f1a7e71c7cf8540f21723fa6fcb55790d6 has parents6b95a773 and
+Docs-only freeze80d5920e5fb2be0db5ed32ac26f7d4365126374a was pushed. Authorized
+--no-ff mergef1550540186b4ae3f17a5e501a886ec1c4d5d613 has parents6b95a773 and
 80d5920e. Entire non-doc working/index tree before commit and HEAD after commit
-are identical to verifiedd3ce9f9a42f4ecd4e5cde71d4b6d39653c9b865c; inventory
+are identical to verified81fd3eb194c9a56f1e111c8d26d33aeccc5d8c1a; inventory
 55e03c68/all1157 unchanged. This subsequent checkpoint changes docs only.
 
 Separate TSFda559/40751383586 and Servicesd9e6/40751467438 components are green

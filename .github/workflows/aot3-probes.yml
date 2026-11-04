@@ -26,7 +26,7 @@ permissions:
 # Push probes explicitly use this completed, recorded runtime build.
 env:
   SOURCE_RUN: ${{ inputs.source_run || '40403284714' }}
-  SOURCE_SHA: ${{ inputs.source_sha || '041585a9589261760f2534b1ddd17b9d6f888b35' }}
+  SOURCE_SHA: ${{ inputs.source_sha || 'e928eec662f9763d3d102661ab1b11908f5791d4' }}
 
 concurrency:
   group: aot3-probes-${{ github.ref }}

@@ -11,11 +11,11 @@ clean with unchanged HEADs on recovery:
 
 | Owner / path | Checkpoint | Scope |
 |---|---|---|
-| Sole integrator, C:/work/gesher-int | 48745d8255d64c651629ebdedfc6eee41c494972 before this docs-only checkpoint | Qualified code equals full40678371420/source429b08826923ab0b1fff80529499bfdcfaa68caa; accepted merge695ef6b8. No new primary code |
+| Sole integrator, C:/work/gesher-int | ac403c36a8a1b4af55b65085b4b6f552277e9574 before this docs-only checkpoint | Qualified code equals full40678371420/source7bbccfcddbac826f50b78175f4d23f8702fd7741; accepted merge695ef6b8. No new primary code |
 | Sole integrator, C:/work/gesher-aot3-resource-current | LOCAL5d3fc5aa26a4c6e5e7c07aa3eeeba27b16196fd3 above pushed9242b5e3 | Six-file after-resource slice and strict fresh component prepared. Prior Terra automation/provenance source peer passed; Native's focused loader/fixture peer and all actual component/full proof remain pending |
 | Native, C:/work/gesher-native3-locks | 65c83f7e86d384e372b7a652c390144f7c8d9f35 | New four-cycle diagnostic source selected-peer passed. Run40711407869 is queued/active, not a result. Original WCT-only acceptance is unchanged; prior40689909664 remains overall red |
 | Terra, C:/work/gesher-web4-frames | LOCALe3abd0b8faae2aad430fa1742023b981b2fa4ff0, ahead3 | Host-object platform probe source is unrun, Native peer pending. No production Web4 acceptance |
-| Canonical repository, C:/work/gesher | 8bc088a675f038141bf3a09e12d74fdad7fcf2cd | Retain C:/work/gesher/.git, all branches, objects and recovery refs |
+| Canonical repository, C:/work/gesher | ccffea10dc02d885c3e3b7a851e4163e06fa3f8e | Retain C:/work/gesher/.git, all branches, objects and recovery refs |
 
 The original `windows_terra` worker could not resume its encrypted context.
 `windows_terra_cleanup_successor` now owns the same Web4 path exclusively.

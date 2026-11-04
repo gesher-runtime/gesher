@@ -150,7 +150,7 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
 _Updated by the exec track (branch `wip/exec`)._
 
 _Exec4 live-environment correction (wip/exec4, ADR 0074):_ full CI40430496516
-attempt2 is green at 1aa313f1f2174c25a8772818414a6ad5f0a02524 (22 success,
+attempt2 is green at 9f250803cd184e05d024733da8296410007de76f (22 success,
 six intentional skips). Shared-library `environ`/`__environ` bind the CRT's
 live pointer slot, so host narrow/wide setters cannot leave their relocated
 ELF imports bound to an old array. Actual Windows tests verify slot identity
@@ -239,7 +239,7 @@ _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
 **Current review:** final CI 40410489251 is fully green at
-462b7e86f0907b57fdf3d71ca5ec497d09d6f372: all 28 jobs completed, 22 success
+51bbfaccddf1fd7f466cab2a493874fbf0e1cb01: all 28 jobs completed, 22 success
 and six intentional skips. Actual Windows-2022/2025 logs end in
 `0 test(s) failed`, with all 11 exec3 Checks, 57 shell cases each and the new
 NDK default-tag assertions through standalone ART and both APK modes. The
@@ -257,7 +257,7 @@ run; these results do not establish its precise cause. Compatibility limits in
 ADR0060 remain open. No further local compilers or native fixtures were run.
 
 **Verified foundation:** CI 40405306826 is fully green at
-57b717f8f13f3b3013a60ca1644bc23ba52239f8: all 28 jobs completed (22 success,
+87d5adadea4008a9c4340b9ee58fbabf9aedb00f: all 28 jobs completed (22 success,
 six intentional skips). Both actual Windows logs end in `0 test(s) failed`.
 Every exec3 Check passes, including shell57, signals/processes/tools, the full
 shared-property/log suites in three modes, executable TLS, broker readiness and
@@ -275,12 +275,12 @@ passes LauncherTailTest and LauncherCommandLineTest's 13 cases. The later
 97e63e5 default-tag filter/setter regression and integration f520fd1's CI-only
 rules are prepared for final combined CI; no new local compiler will run.
 Final CI 40410489251 verified that candidate at
-462b7e86f0907b57fdf3d71ca5ec497d09d6f372. Watch
+51bbfaccddf1fd7f466cab2a493874fbf0e1cb01. Watch
 C:\work\gesher-ci-review\exec3-watch-40410489251.log completed with exit 0; retain
 87d5ada and its completed logs as the separately verified combined foundation.
 
 **Previous review:** CI 40393019261 completed at
-1c22cb6253fa7c0a020f6c28b942af807cb9385f. Every exec3 Check passes on both
+6a3289d2162359aa4f59d22a39b52d724b61517b. Every exec3 Check passes on both
 runners, including all exact installed-device pm/am expectations (actual list/
 path, separate resumed target/receiver and force-stop). Windows-2022's entire
 suite has zero failures. Windows-2025 has nine devices Checks affected by one
@@ -322,7 +322,7 @@ own host-wrapper contract with mocked upstream tag access passes; it does not
 compile AOSP or establish the full liblog ABI.
 
 **Previous review:** CI 40385411337 completed at
-8cea7d6ac569a49c21095e0e98386ae7cd38cfc2. All build/media/package and both
+80bf3947bee2dabf428b2c5c07b7c672dec0a947. All build/media/package and both
 required e2e jobs pass. Both e2e logs have zero unexpected failures, all nine
 apps including TIC-80, four transport fixtures and Puzzles generators 4076/7544
 exiting 0. Actual package proof includes installed oatdump/boot image, device
@@ -356,7 +356,7 @@ context before the category/200-line filter. An own fatal-child probe verifies
 publication beyond 300 preceding lines, symbolizer invocation and original
 exit7 preservation. No new native diagnostic or runtime cause is claimed.
 The camera callback work remains separately owned/coordinated by media3_next.
-CI 40393019261 is now running at 1c22cb6253fa7c0a020f6c28b942af807cb9385f
+CI 40393019261 is now running at 6a3289d2162359aa4f59d22a39b52d724b61517b
 (prepared code e064969 plus docs-only integration cd0b849). It tests the actual
 pm/am correction and visibility of the already captured sentinel context,
 without importing the separate camera callback patch or changing native signal
@@ -364,7 +364,7 @@ diagnostics. Watch C:\work\gesher-ci-review\exec3-watch-40393019261.log at
 120-second intervals. No green final tree or shutdown root cause is claimed.
 
 **Previous review:** CI 40372171824 completed at
-b0050e3039bcd033516c23c56ce26d242e2a3690. All build/package and both e2e jobs
+7ae515fdd4a7dd84af4a65f15e19392d6517a437. All build/package and both e2e jobs
 pass; both e2e logs have zero unexpected failures, nine apps including TIC-80,
 four transport fixtures and Puzzles generator pids 2560/8992 exiting 0. Both
 Windows logs pass the previous loggability canary, libartbase's 233 tests,
@@ -391,7 +391,7 @@ disposition is unchanged. Own-file syntax and a fatal-handler native contract
 probe pass (same exit with diagnostics enabled/disabled). The devices helper
 symbolizes captured addresses with the runner's existing map on failure.
 Combined diagnostic/full CI 40382268730 was dispatched at
-70b9e44b67c706aa24707209b754122615de5179, including integration 634a273,
+4568c71db6ee033bcd7e4c4014e9f36cae8e71b5, including integration 634a273,
 the fixture namespace correction, inherited boot-root/ART regressions and the
 narrow sentinel trace. Watch log:
 C:\work\gesher-ci-review\exec3-watch-40382268730.log (120-second interval).
@@ -407,13 +407,13 @@ ffmpeg, otherwise bounds apt retries/timeouts, prints the actual version and
 has a ten-minute step limit. Fixtures and their assertions are unchanged. The
 same source has actual media-job proof in media3 CI; this branch's YAML/Bash
 parsing passes. One replacement diagnostic/full run, 40385411337, is now active
-at 8cea7d6ac569a49c21095e0e98386ae7cd38cfc2. It keeps all assertions and the
+at 80bf3947bee2dabf428b2c5c07b7c672dec0a947. It keeps all assertions and the
 sentinel diagnosis; watch C:\work\gesher-ci-review\exec3-watch-40385411337.log
 at 120-second intervals. Neither runtime root cause nor a green final tree is
 claimed from the canceled preparation run.
 
 **Previous review:** completed CI 40352529279 at
-9c5ffb3266885df6291afef4dd8eadffc0cd765d includes integration 46bc9e5.
+dc19ee29190961bb6238081d1978d0882ab77f44 includes integration 46bc9e5.
 All build jobs, package and both e2e jobs pass; both e2e summaries have zero
 unexpected failures, required TIC-80 and Puzzles generator pids 5244/8604
 exiting 0. Both Windows suites retain 57 shell cases with zero failures,
@@ -438,7 +438,7 @@ C:\work\gesher-ci-review\exec3-40352529279-windows-*.log.
 
 The prepared tree also merges verified native3 integration f677944 (merge
 333b1d6). Its separate green CI does not verify this combination. Combined CI
-40372171824 ran at b0050e3039bcd033516c23c56ce26d242e2a3690 after
+40372171824 ran at 7ae515fdd4a7dd84af4a65f15e19392d6517a437 after
 the complete Process follow-up and integration d68ec795 (docs on f677944).
 Watch log C:\work\gesher-ci-review\exec3-watch-40372171824.log uses 120 seconds.
 After dispatch, merge 2ba2375 incorporates integration 634a273 (documentation

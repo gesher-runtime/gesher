@@ -240,7 +240,7 @@ def actual_replay(log, authority):
     assert ledger.digest(a_raw) == 'aba3e32beef66ec5ca6919e65f5e49f8b40f587599a8d2f43205e60bab873701'
     a = json.loads(a_raw)
     assert a['GITHUB_RUN_ID'] == '41135044960' and a['GITHUB_RUN_ATTEMPT'] == '1'
-    assert a['GITHUB_SHA'] == '3c76d9f4f259ff3110b27e753b514838628989aa'
+    assert a['GITHUB_SHA'] == 'f0a8364afd3380eb0e25b8d82824dd1752f91e16'
     # GitHub's saved job stream contains one BOM before a transport timestamp
     # mid-map. Strip only that authenticated log prefix, not map input bytes.
     lines = [re.sub(r'^\ufeff?\d{4}-\d\d-\d\dT\S+Z ', '', l) for l in raw.decode('utf-8').splitlines()]
@@ -299,7 +299,7 @@ def main():
     assert ledger.digest(raw) == '9fa310b69e9bc4a0c7081b8667c8dcb019481b07e644cb7875334d880a6886f8'
     data = json.loads(raw)
     assert data['GITHUB_RUN_ID'] == '41139659911' and data['GITHUB_RUN_ATTEMPT'] == '1'
-    assert data['GITHUB_SHA'] == '76cf882cd8804f71c4f345e9606967f44a86d083'
+    assert data['GITHUB_SHA'] == '695229f0c31939ef4a95dc0cb4eef7ba5172786a'
     controls(data)
     sealed_controls(data)
     assert bool(args.actual_producer_log) == bool(args.actual_authority)

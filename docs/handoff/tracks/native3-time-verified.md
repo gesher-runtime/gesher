@@ -1,6 +1,6 @@
 # Native3-time: verified elapsed and deadline clocks
 
-Source 349a207cd7f03628629c8663de62595c63643bc0, full ci 40434741055,
+Source bdfb230fa3d70797caece6568b6ac529e854b4ee, full ci 40434741055,
 attempt 1. Root personally inspected all 28 job conclusions (22 success/six
 skipped), both zero-failure Windows summaries, actual new clock/CPU/ABI PASS
 lines, package install/window/input/uninstall and both required nine-app

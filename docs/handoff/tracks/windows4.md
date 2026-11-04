@@ -35,7 +35,7 @@ No roadmap checkmark for an implementation without CI verification.
 ## Status and next steps
 
 Accepted bounded Windows4/Web3 candidate: full **40466021634** at exact
-`a0ad48926a674fa01e0cfdc6e6e4497b90ad417b`, attempt1, all28 jobs
+`160e25e8a77857cc50dd3e7c76e0616fb9fd1043`, attempt1, all28 jobs
 22success/6skip. Root independently read all metadata and five critical logs
 and accepted this source. Both actual Windows logs have zero failed tests,
 38 top Windows4 PASS lines (159 native/ART/app PASS records),14 Web3 PASS,
@@ -83,7 +83,7 @@ proof does not accept this changed combination. The exact dispatched source
 and full results will be recorded separately; no roadmap tick yet.
 
 Prepared source now includes coordinator integration
-ea67aa02631e218ee231e36c11fec1242f3c8baf (mergef92be5cf). Root personally
+f17d03b1a96f4f0f62ad1d1101ec1eb01b93873d (mergef92be5cf). Root personally
 verified Media3/live-environ/deterministic-TLS full40448521754/dd06d296;
 the merged non-doc integration tree matches that source exactly. All five
 network test hashes remain unchanged, and the automatic Services merge retains
@@ -93,7 +93,7 @@ Player/Puzzles/TIC80, plus the pending corrected exit-freshness prerequisite.
 No new CI run or local compilation follows from this preparation merge.
 
 Full validation **40447661700** at exact
-`99ae0107fe9c620a22a5507f791444f7eca6f9a3` is COMPLETE RED: 28 jobs,
+`8d97726de522800bccffd994d5e91ae6d5136bbf` is COMPLETE RED: 28 jobs,
 20 success, six skipped and two failed Windows jobs. Actual logs122004647145
 (2022) and122004647104 (2025) each end with four failed checks: the new
 non-editor observation in both modes, and badssl.com positive SNI TCP15s
@@ -116,7 +116,7 @@ too. It still requires focused=true, accepting=false, HRESULT8000ffff and
 unchanged editor text, followed by real editor recovery. No production code,
 assertion or deadline is weakened. This fixture correction needs new CI.
 The next source imports the coordinator-reviewed deterministic positive
-HTTP/SNI slice from Media3, sourcec15a20d358d7b1f6735df809bc65d5957b827bb3,
+HTTP/SNI slice from Media3, source836482975254ec3fbcbbdb190398d65dc79fae11,
 and the earlier two-file NetApp slice. All five resulting network test files
 match the combined patch's audited source hashes exactly, including the
 already-present negative fixture. Positive patch SHA256 is
@@ -130,7 +130,7 @@ identity over an already-connected loopback socket, never a network target.
 Public DNS/Google HTTPS204/TLS1.3/SNI/hostname blocks and all four negative
 certificate causes remain intact. PS syntax and exact hashes pass locally;
 no C#/Java/native compilation or fixture execution occurred. Media full
-40448521754 at a1c67b4f106890ca0d583a1bc079df23d7fd45b8 is now reported
+40448521754 at dd06d296e35ffd47fcecba9d0b88559360163500 is now reported
 complete green (22 success/six skipped). This agent read the actual network
 slice in both logs122008646975/122008646925: HTTP200, two virtual-host names/
 distinct certificate thumbprints, missing/wrong-SNI exact hostname rejections,
@@ -143,7 +143,7 @@ network-failure waiver is planned. Corrected targeted framework40446866229
 at73ba54f is earlier build evidence only.
 
 Latest full diagnostic **40441680201** at exact
-`ec1a48468d736efa6b0cb98346a793f7499f518d` is COMPLETE RED: 28 jobs,
+`5b5b51d0b858c6b08602af6450eed2a49025d71f` is COMPLETE RED: 28 jobs,
 20 success, six skipped, two failed Windows jobs. Actual logs 121985265563
 (2022) and 121985265568 (2025) each have exactly two failures: the first TSF
 reconversion in single-process and device modes. All stronger native-foreground
@@ -181,7 +181,7 @@ restartInput path. This failed build is not runtime evidence.
 ## Previous diagnostic and source preparation
 
 Completed full diagnostic **40433828877** uses exact source
-`a1fe188caada0ab790bf51f3d43f9b2864e84b92`. It includes the focused Java,
+`0344cee6c70ecb8603bd7f19bdfd35a3b79fe20b`. It includes the focused Java,
 activation and fixture corrections below, coordinator profile integration
 9dd57f5 (verified startup merge2ba9a11) and the source-only Exec4 environment
 patch. Watch: C:/work/gesher-ci-review/windows4-40433828877-watch.log,
@@ -314,7 +314,7 @@ canonical HTTPS mirrors and 240-second install bound alongside command tracing.
 No local C/C++ build or native fixture execution is allowed.
 
 Standalone **40415866523** at exact
-`bcda2819f4c7910741f0f9725335ba41432f71da` is complete green: llvm-mingw/Werror
+`d50084d731be343bc6c8cb30756a5cc713d89c14` is complete green: llvm-mingw/Werror
 build plus Windows 2022 and 2025. Both actual Windows logs were read. All four
 canonical aggregates are zero with no raw FAIL. Held-COM unavailable/Disconnect
 layout denial and fresh-epoch geometry recovery pass on both; the five changed
@@ -351,7 +351,7 @@ host-tools and framework jobs). The actual framework job log confirms javac
 exit zero/zero errors and successful graphics-tests.dex, gesher-app and both
 Windows4 test APK builds, establishing the class-graph correction only.
 New full combined diagnostic **40417632512** uses exact
-`5714675502c72546d4453e6bf15652668050bac1`, including verified runtime/exec3
+`cde1c797434401bb94db24f5281a98829d15bddf`, including verified runtime/exec3
 integration 94ccde1 and the missing CursorAnchorInfo publication correction.
 Watch: `C:/work/gesher-ci-review/windows4-40417632512-watch.log`, interval 120.
 It is diagnostic until every required result is read; no threshold or runtime
@@ -417,7 +417,7 @@ input-pane callbacks/candidate occlusion and old-target adjustResize. ADR 0061
 records the work. The physical touch keyboard remains unverified.
 
 First full display-stage CI: **40377891527** at
-`5869679a75f873ee8c51d3a99e53d0e7e330b7fb`; watch log
+`dd6e65fe64196542ca8ae99d8953b8fdd39a7f89`; watch log
 `C:/work/gesher-ci-review/windows4-40377891527-watch.log`. Complete red:
 2025 has 20 failures, 2022 has 21; only each runner's initial portrait W4
 snapshot passes before the nonce crash. The actual package install/run/input/
@@ -736,7 +736,7 @@ capacity checked before mutation. A native partial-edit fixture is prepared;
 actual InputConnection coverage and CI results remain pending.
 
 Standalone **40409646065** at
-`f321cd111bbc332cc3da2c357da25a58996b3bb6` completes all three jobs successfully.
+`e408f423cb13d64a1008a478531020cced3abd16` completes all three jobs successfully.
 The actual llvm-mingw 23.1.3/Werror/no-exceptions build and both Windows logs
 were read. All COM geometry/initial-size/source-lifetime checks and ACP
 composition/measurement/hit-test/offset/partial-caret checks pass on both.
@@ -779,7 +779,7 @@ and native client sizes at source changes. Its existing 500-pixel content
 assertion stays intact while locating the missing propagation.
 
 Standalone **40411795761** at
-`0e810d9cd7404d1003899aa5b6b42a8e6b42ff02` is complete green: the pinned
+`828dc874538ab51ed35e4671776a618278583656` is complete green: the pinned
 llvm-mingw/Werror/no-exceptions build and both Windows fixture jobs succeed.
 Both actual logs were read. Each ACP, production-IME and COM aggregate is
 zero, and there is no raw FAIL. The expected detach interruption is INFO

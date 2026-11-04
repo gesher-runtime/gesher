@@ -64,7 +64,7 @@ your domain, the verified SHA).
 
 ## Status and next steps
 
-Full ci 40448521754 is GREEN at a1c67b4f106890ca0d583a1bc079df23d7fd45b8,
+Full ci 40448521754 is GREEN at dd06d296e35ffd47fcecba9d0b88559360163500,
 after merging current integration 7694f18 and Root's independent source
 review of the corrected 8364829 fixtures. This source combines all 37
 media gates, verified clock/width and live-environ prerequisites with

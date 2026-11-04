@@ -1,6 +1,6 @@
 # aot3: verified Gesher startup-profile coverage
 
-Source 83dcd8d616d5b186d46838740a4903a964968f32, full ci 40414859801.
+Source ca46e9967f8994fe329f3f10c88de7141e494f76, full ci 40414859801.
 Root personally read all 28 jobs (22 success/six skipped), both zero-failure
 Windows summaries, all 18 aot3 PASS lines per runner, actual package
 window/input/uninstall cleanup and both required Puzzles/TIC-80 e2e logs

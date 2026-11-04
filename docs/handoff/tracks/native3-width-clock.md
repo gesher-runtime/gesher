@@ -1,6 +1,6 @@
 # Native3: verified per-ABI width and ART CPU clocks
 
-Source 1446f640ce242fa149facc7930ac12d02a25b1c0, full ci 40430425743,
+Source b3ecc85efd95caa7403a4c02516a6dfc3779803a, full ci 40430425743,
 attempt 1. Root personally read all 28 job conclusions (22 success/six
 skipped), both zero-failure Windows summaries, actual scoped PASS lines,
 package install/window/input/uninstall and both required nine-app e2e logs

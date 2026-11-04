@@ -1,6 +1,6 @@
 # ARM variadic-list correction: scoped verification
 
-Exact source73eeaa09fd07d4595fa1967016e29e040923319f passes
+Exact source928a09b71b0e2a6d3a9e284583c8d9002479bdad passes
 [scoped40528739976](https://github.com/gesher-runtime/gesher/actions/runs/40528739976),
 attempt1. All five conclusions and four actual executed logs were personally
 read: four success and one intentional reusable-workflow smoke skip. The real
@@ -67,7 +67,7 @@ guards remain unchanged. Runtime evidence is pending; no acceptance or
 roadmap closure follows from registering the workflow.
 
 Actual resumed component40549806536 uses exact
-08b762b8f09c92d18e4ec1941b23899e3c8ae126, triggered by that narrow push.
+c7a4365393efb869b572b16fd6aff50f7d09f0a4, triggered by that narrow push.
 The API3 production/Native2 source is unchanged from0cfcd2e0. At the current
 checkpoint Native2, independent QEMU oracle and translator builds succeeded;
 host/framework and subsequent Windows runtime are still pending. Read the
@@ -115,7 +115,7 @@ Current64f33ff3 adds the same contract body to Native2's actual JNI/APK library,
 requires its marker in both ABI dalvikvm/single/device contexts, and reserves
 test86 for the original baseline/standalone/API controls. No production source
 changes follow scoped928. Compile-only40529197932 at exact
-d36a0b6c4443a1187fae140d3d7cc7d419fa0b0f passes attempt1. The actual completed
+64f33ff3a27364bcb46aeb3a0f75f38921fd2462 passes attempt1. The actual completed
 job122277019774 log was personally read: both NDK shared libraries and
 corresponding real APK native-library entries build, javac/d8 and the existing
 third-party/symbol pipeline complete, and the final artifact is published.

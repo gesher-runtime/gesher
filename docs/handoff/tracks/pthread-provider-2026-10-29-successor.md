@@ -14,7 +14,7 @@ using the prescribed `gh run watch` interval. No watcher remains active.
 
 * Clock tree `C:/work/gesher-pthread-provider-completion`, branch
   `wip/pthread-provider-completion`, source
-  `1ff01d3c96e9b73cfae2c604a67f4c967e4f3858`, followed by this docs-only
+  `1653cb92d2328fcd1bcefc2c967730b00d397511`, followed by this docs-only
   checkpoint. No implementation is qualified for integration. Prior preserved
   `C:/work/gesher-host-public-clock-dispatch` remains at `ff50d473` and was not
   edited. `40909289961/e0a89122` failed supplier compilation; fixed declaration
@@ -22,12 +22,12 @@ using the prescribed `gh run watch` interval. No watcher remains active.
   and DLL clock IDs alias distinct actual threads. `40911784373/ace7a6ce`
   additionally proved both distinct pthread identities equal 1 and wrong-provider
   acquisition resolves to the local target.
-* Clock-only anchor `76805088fb669771ae1b725b1ee3ea9fe69e6d4d` passed
+* Clock-only anchor `2f7d8c519de7eef8321a030876bfd5c5250ad7b8` passed
   `40917856459` Linux and both Windows; independent actual audit is
   `C:/work/gesher-ci-review/pthread-clock-409178-independent-audit.md`.
   It uses a host executable export with a versioned descriptor and kernel
   object comparison, and pins the fallback DLL. It does not solve pthread_t.
-  `dcf934233c5fca7395e6e09e30f01aa0276e13f8` passed `40919168634` on both
+  `79f11ebd756273c80949f08c79336929f965d3c1` passed `40919168634` on both
   Windows, including a malformed descriptor rejection with unchanged output and
   process handle count. This is one negative case, not full security or ABI.
 * `40919845971/1653cb92` all three jobs passed: Linux single-provider direct/

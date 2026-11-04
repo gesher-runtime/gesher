@@ -6,7 +6,7 @@ NDK/POSIX scope. No remaining contract is removed or called complete.
 
 ## Verification
 
-CI 40344682373, SHA 182f7c1ac35a7422fa5fe1482787ecd66807e52c, attempt 2.
+CI 40344682373, SHA 1e881b508b9a663f6d4cdd6f43ad629b8782a8ea, attempt 2.
 All 28 jobs are success/skipped (22/6). The coordinator personally read
 every job conclusion and the following actual logs:
 - Windows2022 job 121676117601: four native3 PASS lines (Bitmap + fonts for

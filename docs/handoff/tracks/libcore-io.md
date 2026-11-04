@@ -8,7 +8,7 @@ execution belongs in CI.
 
 ## Status and next steps
 
-Full40503913306 at b742cc58e5fe5b802f7f7925903d20b0d2a64637 exposed a real
+Full40503913306 at c35abe7cccb3d2ae5896ce16933d5b6573eb6936 exposed a real
 missing native on both Windows runners:
 
 > java.lang.UnsatisfiedLinkError: sun.nio.fs.UnixCopyFile.transfer(int, int, long)
@@ -47,7 +47,7 @@ box is ticked before actual compile/runtime/package/e2e verification.
 ## Owner-requested stop checkpoint
 
 Work stopped on2026-10-27; full40522376074 remains on exact source
-63e5d6a035d80450036861de5cb15ea19f7e3693. At the last required-watch
+2913d484b4f3adee64acd44c5dd7b7e4a042d6f7. At the last required-watch
 snapshot15:32UTC, build122252635829 succeeded37m44, both Windows tests
 122275166484/122275166538 were active, and package122275166541 plus
 e2e122276311510/122276311525 had successful conclusions. Root has not
@@ -59,7 +59,7 @@ No code change, new dispatch, merge or roadmap tick after the stop request.
 
 ## Resumed verification (2026-10-27)
 
-Full40522376074 completed green on63e5d6a035d80450036861de5cb15ea19f7e3693:
+Full40522376074 completed green on2913d484b4f3adee64acd44c5dd7b7e4a042d6f7:
 28jobs22success/6skip, both whole suites0, actual package23 and both ten-app
 transport/association/shortcut e2e0. However CheckTimed suppressed successful
 child output: only its aggregate verdict appears in plain job logs. No claim

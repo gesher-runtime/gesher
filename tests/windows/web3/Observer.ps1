@@ -1,5 +1,5 @@
 # CI-only diagnostic runner. The exact RunTimed body is copied from
-# Root source 8fde93f31feb2f4bc8c940117119191d03930be7, renamed only.
+# Root source ec0f003cc149a0f985b5f280924477dc20414872, renamed only.
 # It preserves native status/-1 and bounds process, termination and pipe waits.
 function Web3DiagnosticRun([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 120) {
   $psi = [Diagnostics.ProcessStartInfo]::new($Exe)

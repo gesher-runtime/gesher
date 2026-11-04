@@ -1,14 +1,14 @@
 # Net4 legacy host and service resolver continuation
 
 Worktree `C:\work\gesher-net4-resolver`, branch `wip/net4-resolver`, starts
-from accepted integration `45891282a524016f80b3d38028495e4495499456`.
+from accepted integration `bc6e05bea341d1dc79920deaf3f069ad690fedc4`.
 ADR 0070 and test 82 belong to this component. The accepted interface stage
 and its immutable `wip/net4-coherent-verified` ref remain unchanged.
 
 ## Status and next steps
 
 Full **40519019567**, exact source
-`869d63c3c411ca5cc1bf8bd6cd2453ee167c3cb0`, attempt1, is complete green:
+`f36317637e01fdeeebcb1cbc4777c1cc8f9cea9a`, attempt1, is complete green:
 28jobs22success/6skip; both actual Windows logs730 top PASS/0 FAIL and zero
 failed tests. Each runner has all16 NDK caller contexts, eight real WinSDK
 comparisons per allowed standalone ABI, four-thread TLS/ownership/error

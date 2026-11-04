@@ -235,7 +235,7 @@ the microphone (looped, from its start each time recording starts);
   MMAP/notice source in test78 is unverified and excluded from this run.
 
 - Corrected OpenSL full ci **40476766790** is GREEN at
-  **3868e4564ee780fb71a4081bb86652e1335af225**, attempt1:22 success/six
+  **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**, attempt1:22 success/six
   skipped, both Windows whole0 and14 test76 PASS each. Both ABIs pass core
   JNI and real manifest-allowed/denied single/device APKs, all50 semantic
   rows and40 volume results per runner. All53 UUID pointer objects/pinned
@@ -254,7 +254,7 @@ the microphone (looped, from its start each time recording starts);
   independently accepted above; no effects/3D or full OpenSL contract follows.
 
 - OpenSL full ci **40470959941** is RED at
-  **35470d485d9ecf05a454d9a041e65d16465d93b5**, with accepted integration
+  **2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, with accepted integration
   db84749b/fresh exit-status30deb08c merged:20 success/six skipped/two failed.
   Both Windows jobs fail exactly6 test76 cases: core recording-grant
   expectations (actual bare-core denial) and all five ARM signed16 volume
@@ -275,7 +275,7 @@ the microphone (looped, from its start each time recording starts);
   All broader [media4](handoff/tracks/media4.md) contracts stay open.
 
 - Corrected Media4 full ci **40459815375** is GREEN at
-  **1c984e73b76850927c73594c812537d7fa841ba0**, after merging current
+  **c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current
   integration 53898b51's docs and source correction 73c20d70 below. Main
   122041490613 passes the early bridge compile, both host executable links
   and 203 assembly boundaries/zero problems; media 122043516317 passes the
@@ -300,7 +300,7 @@ the microphone (looped, from its start each time recording starts);
   integration CI remains required. All other Media4 contracts stay open.
 
 - Media4's first NDK format slice has RED full ci **40456299720** at
-  **c749fca4bb1472e9a0146c93071f1a5d9928089e**, after current integration
+  **92e914238cc8655aef472887ad9f494eec5c8a97**, after current integration
   808ea746. ADR 0064 uses the actual AOSP format backend through 21
   System V entries and 152 pointer data objects in both app/native process
   hosts. Test71 builds/runs both ABI libraries, standalone ELF and APK modes
@@ -312,7 +312,7 @@ the microphone (looped, from its start each time recording starts);
   all remaining contracts are in [media4](handoff/tracks/media4.md).
 
 - Full ci **40448521754** is GREEN at
-  **a1c67b4f106890ca0d583a1bc079df23d7fd45b8** after merging current
+  **dd06d296e35ffd47fcecba9d0b88559360163500** after merging current
   integration 7694f18 (docs only above the verified clock/width code).
   Root independently reviewed the corrected local HTTP/SNI fixtures,
   including the isolated SNI listener and selected-certificate controls.
@@ -367,9 +367,9 @@ the microphone (looped, from its start each time recording starts);
 ### media3 (stage 3) — earlier failed-source evidence, 2026-10-27
 
 - **Combined CI 40438975894 is complete RED at
-  aede269cdfb479ad87a95a909a661b597b12814b:** all 28 job conclusions are
+  0148698211cb5cf2e7d2d5813f4d04f8756f4bdb:** all 28 job conclusions are
   read, **21 success, six skipped, one failed**. Its
-  integration **d879792e49ad6be9f1ba7d7a4dcb64beb94103a2** (docs-only above
+  integration **2f8ed7a481e26405f02bdd334d9e05512a0c3129** (docs-only above
   630c20c; coordinator's full 40432541082 at 42cc1c0) is merged.
   Source **06dbe8f** adds the coordinator-approved, three-file test slice
   from frozen Web3 2755f21 / original ec111f78: real local expired,
@@ -428,7 +428,7 @@ the microphone (looped, from its start each time recording starts);
   process counters. One slow array entry per runner is 122,967/61,723 us,
   with bodies 10/6 us; no global ThreadCpuNanoTime unimplemented warnings.
   No single-patch FPS or mremap-optimization claim follows.
-- Candidate source **3700d12042d63253efc7b3f14a0dba79179eb4ef**, full CI
+- Candidate source **e8b37b9296e16cfa605b9b2f963bf4d234c17208**, full CI
   **40430522654**, has actual **37 media3 PASS on both Windows runners**.
   Attempt 1 has 28 conclusions: **21 success, six skipped, one failed**.
   Windows **121949711710** (2022) ends `0 test(s) failed`. Windows
@@ -499,7 +499,7 @@ the microphone (looped, from its start each time recording starts);
 
 Local fixture results in this history predate the owner's CI-only rule.
 - Full diagnostic **40425000165**, source
-  **7f7ba14a63d7ef11568c841611596fe5c178f981**, is complete. All 28 job
+  **487c5e54917a4b4747d1852312fe7d7c5e862cb5**, is complete. All 28 job
   conclusions are read: **21 success, six skipped, one failed**. Windows
   **121931002560** (2025) has `0 test(s) failed` and all 36 media3 PASS,
   including device camera (34 source callbacks). Windows **121931002372**
@@ -522,7 +522,7 @@ Local fixture results in this history predate the owner's CI-only rule.
   whole-process totals. No mremap, collector selection or scheduling change
   is made from this observation. ART NanoTime markers and steady/QPC
   camera clocks are separate domains; overlap analysis uses ART markers only.
-- Full diagnostic CI **40416959340** at **c89711fca3288ba428f1325330c913ab2ec13219**
+- Full diagnostic CI **40416959340** at **fe137c83667bf927d3ec331dc10a30ac2b8ef866**
   includes verified integration 94ccde1 (AOT cloud/Exec3 and the independently
   verified camera ownership/race correction). All 28 job conclusions are
   read: 20 success, six skipped, two Windows failures. Windows **121913530707**
@@ -568,7 +568,7 @@ Local fixture results in this history predate the owner's CI-only rule.
   fixtures, all ten apps including Just Player/TIC-80/Puzzles,
   association/shortcut launch and `0 unexpected failures`.
 - Full runtime CI **40402212195** at
-  **365fb96b5bb5754c8ec08d84bdf81df1c337bb8e**, still including integration
+  **6c76a9035f0f479f30fc025fc7d8b5c479cc8995**, still including integration
   117629e and the original 36-check/recording/boot gates. Media
   **121853665655** passes in 52 seconds: ffmpeg was absent, canonical HTTPS
   preparation actually downloaded 62.8 MB in three seconds, installed the
@@ -604,7 +604,7 @@ Local fixture results in this history predate the owner's CI-only rule.
   local-load rule (integration f520fd1). Their compile/runtime proof is now
   40416959340 above; the device throughput gate remains open.
 - Diagnostic full CI **40398992353** at
-  **c882d4106c0fbefb1bffb1a4f8fa165d22af9901**, including verified integration
+  **64cf512f5334829c189cd1e3a9c2d4438bd9b70c**, including verified integration
   117629e (Native3 Unicode/Process), the 1,000-race camera repair, ART phase
   diagnostics and traced/bounded media preparation. Expected media3 count
   is 36; all original recording and boot criteria remain in force. Media
@@ -621,7 +621,7 @@ Local fixture results in this history predate the owner's CI-only rule.
   passed locally before the CI-only local-load rule. Runtime/package/e2e and
   the new 36-check set were unverified at that checkpoint; 40402212195 above
   subsequently runs them and retains the device camera failure.
-- Diagnostic CI **40395297550** at **0e05a426a0ed4a287b0df1dedcfb7d964977aa59**:
+- Diagnostic CI **40395297550** at **786668275aa0846bf1952f5d8ff49d2124d1427d**:
   atomic request-selection repair, 1,000-race regression and the approved
   ART array entry/decode/body/exit diagnostic compile successfully (main
   **121826632633**, framework **121826759951**); actual jni_internal.cc is
@@ -656,7 +656,7 @@ Local fixture results in this history predate the owner's CI-only rule.
   explicit incomplete/error labeling). It compiles in 40395297550 and
   produces runtime evidence in 40402212195; the extended flag/cause
   diagnostics execute in 40416959340.
-- Earlier full CI **40386129131** at **2d6cb6afffa1cb3f80ee95f770a91e51ef8852d9**:
+- Earlier full CI **40386129131** at **6293a20ee08173d17bf3c643457d14b68ad74f9e**:
   terminal callback fix 6722364 plus native phase diagnostics 7c5024a.
   Integration 634a273 is included. All 28 job results are read: 20 success,
   six skipped and two failed runtime jobs (2022 **121797816741**, 2025
@@ -686,7 +686,7 @@ Local fixture results in this history predate the owner's CI-only rule.
   Boot profile-vs-speed criteria pass (2022 JIT 421/436 ms, 2025 467/473 ms).
   This is a red full run, not a mergeable source or broader API claim.
 - Previous full CI **40377453079**, attempt 1, exact source SHA
-  **8b6e2621dff462a0887834fc5a6f60fbfab93e24**, includes integration
+  **ad004619c279877dfbfa2927b0cc1114a9c8e7a0**, includes integration
   634a273 (README-only above verified oatdump integration f5ce6f64). All
   28 job conclusions and both runtime logs are read: 20 success, six skipped,
   two failed jobs. Windows-2022 **121769036527** and Windows-2025

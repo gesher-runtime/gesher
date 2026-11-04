@@ -132,6 +132,6 @@ def tests(old):
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--diagnostic-receipt',type=Path,required=True);args=parser.parse_args()
     raw=args.diagnostic_receipt.read_bytes();assert hashlib.sha256(raw).hexdigest()=='aba3e32beef66ec5ca6919e65f5e49f8b40f587599a8d2f43205e60bab873701'
-    old=json.loads(raw);assert old['GITHUB_RUN_ID']=='41135044960' and old['GITHUB_SHA']=='3c76d9f4f259ff3110b27e753b514838628989aa'
+    old=json.loads(raw);assert old['GITHUB_RUN_ID']=='41135044960' and old['GITHUB_SHA']=='f0a8364afd3380eb0e25b8d82824dd1752f91e16'
     source_policy()
     tests(old)

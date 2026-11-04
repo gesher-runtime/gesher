@@ -1,7 +1,7 @@
 # Exec4 recovery checkpoint
 
 - Only write checkout: `C:\work\gesher-exec4`, branch `wip/exec4`.
-- Verified live-environment source: `1aa313f1f2174c25a8772818414a6ad5f0a02524`.
+- Verified live-environment source: `9f250803cd184e05d024733da8296410007de76f`.
   Full CI40430496516 attempt2: all 28 jobs complete (22 success/six skips),
   both Windows zero failures, 11 exec3 Checks/57 shell cases, new test67,
   both host-mutated APK modes, actual package and both required e2e pass.
@@ -9,7 +9,7 @@
   curl92; retry occurred after completion on the identical source.
 - Frozen refs: `wip/exec4-live-environ` = `9f25080`;
   `wip/exec4-live-environ-reviewed` = docs-only `76b8d5c`.
-- Final combined source: `f1465022b815792a63b8f0ee18227206e76f90cd`.
+- Final combined source: `b42922049201d5dc7ef1c1ca61cd7fb2db404220`.
   This cleanly merges integration630c20c (root-verified code42cc1c0,
   CI40432541082) and its real startup profile/checks into the verified slice.
   Native3 width/CPU and monotonic-clock candidates remain outside it.

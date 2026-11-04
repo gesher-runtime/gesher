@@ -2,7 +2,7 @@
 
 ## DelegateLast component result and qualifying full preparation
 
-Corrected component40554342416/sourceeb1eab90bb88d340f91e3b9feac02deef0585d1c
+Corrected component40554342416/source7c2beb18ed6becb2fa449654320cc2b4d8a255ab
 is GREEN4jobs. Actual framework122366339848 reports javac0/errors0 and
 builds/publishes sharedlibrarydlc.apk. Both actual runtime logs
 122370177406/122370177548 contain21 PCL+21 DLC PASS,0failed and the original
@@ -55,7 +55,7 @@ changes. Changed-source CI remains required.
 
 This is component proof, not a complete CI result or merge acceptance.
 Diagnostic **40524933356**, harness source
-`4089e49a692e2834cbc1fdfea71ae600a22280d6`, attempt 1, is green on both
+`1120e8a6c9303890bc5d267286e4cc29c3d24438`, attempt 1, is green on both
 Windows versions. Both actual logs were read:
 
 | Runner | Job | Actual result |
@@ -64,9 +64,9 @@ Windows versions. Both actual logs were read:
 | windows-2025 | 122261801862 | 21 scoped PASS, 15 real graph controls, 0 FAIL |
 
 Native runtime and supporting artifacts come from exact full CI
-40512344714 / `0f951ae5c9e21c986b6079a092f01b4ac5ec0ed7`. Its supplying
+40512344714 / `96b12ab6f9b5146870c7a373e337f762010eb6f1`. Its supplying
 jobs succeeded, but the full is red. Java comes from successful compiler
-40523146557 / `cea450ede7aea38f020c1d0fece073cde437bae1`; actual compiler
+40523146557 / `f4378a98ccbd4d42496d44ba4dd3a7437c128ba0`; actual compiler
 122255489323 reports javac exit 0, 0 errors and builds the real jar/APK
 fixtures. The framework artifact is ID12743730526, digest
 `sha256:a8e60d7025658430cb77f95d5bd542d3e9f2d9c66c6b6637acc61593121cbd13`.

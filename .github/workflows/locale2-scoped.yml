@@ -37,7 +37,7 @@ jobs:
       # Immutable, personally verified full runtime. This scoped run compiles the
       # current Java/APKs; it is not a native rebuild or product/package acceptance.
       LOCALE2_RUNTIME_RUN: '40498782924'
-      LOCALE2_RUNTIME_SHA: '0498d825871a54b81b9bb51ef4610d9bb655cd44'
+      LOCALE2_RUNTIME_SHA: '8ec4bf3c30160575c8df794ad2ca1406957adc98'
     steps:
       - uses: actions/checkout@v4
       - name: Verify exact accepted runtime source and download inside CI only

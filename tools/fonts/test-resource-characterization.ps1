@@ -415,7 +415,7 @@ $savedNtdll=@'
         LegalCopyright:   � Microsoft Corporation. All rights reserved.
 '@
 Check ((Get-ResourceCodeHash ([Text.Encoding]::UTF8.GetBytes($savedNtdll+"`n"))) -ceq '079483c383ad0bfffab61e34ca26a841b0499f66b48aa8879b920cc8f886b1f1')
-$retained=@{path='C:\Windows\SYSTEM32\ntdll.dll';base=[uint64]0x7ffdf5bc0000;extent=0x204000;version='10.0.20348.5622';sha256='bcfe8a70a371a7d2fbcb429ab0a9e170aeebe4d73ae08d03a2da8fedec2efc78';context=@{source='b3a691e37b70071d5b1aa9d888bdb9ef06d84531';run='41201795245';attempt='1'}}
+$retained=@{path='C:\Windows\SYSTEM32\ntdll.dll';base=[uint64]0x7ffdf5bc0000;extent=0x204000;version='10.0.20348.5622';sha256='bcfe8a70a371a7d2fbcb429ab0a9e170aeebe4d73ae08d03a2da8fedec2efc78';context=@{source='88a02325e724ff1ee6393aa68c9cbea6a6258aa1';run='41201795245';attempt='1'}}
 # Expected base/extent HERE are SYNTHETIC controls, not recovered historical expectations.
 $before=$script:pathRecords.Count
 Reject {Assert-ResourceWitnessProfiles ($lmv+$savedNtdll+"`n0:000> qd`n") $cacheDouble $codeDouble $retained}

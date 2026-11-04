@@ -54,12 +54,12 @@ stale dependency/recompile/update-preservation and cleanup gates are pending.
 See aot3-shared-diagnostic.md. No new scope is accepted from source changes;
 after-resource/staticSDK/secondary/factory-loader contracts remain open.
 
-Owner-requested checkpoint: work stops above docs-only11ecb99de79167af51833a973e7d76a9a1204d2e;
-no active own full/scoped CI remains. The latest source4089e49a692e2834cbc1fdfea71ae600a22280d6
+Owner-requested checkpoint: work stops above docs-onlyb93b5562511c701b193c4b951738efe1316ee1f3;
+no active own full/scoped CI remains. The latest source1120e8a6c9303890bc5d267286e4cc29c3d24438
 component40524933356 is green, actual jobs122261802698/122261801862 read21scopedPASS
 +15graph/0FAIL each. Its completed120s watcher log is
 `C:/work/gesher-ci-review/aot3-shared-probe-40524933356-watch.log`.
-Compiler sourcecea450ede7aea38f020c1d0fece073cde437bae1/run40523146557 is green;
+Compiler sourcef4378a98ccbd4d42496d44ba4dd3a7437c128ba0/run40523146557 is green;
 actual122255489323 javac0. Old full40512344714/96b remains RED (1 failure2022,
 4 on2025): active-log sharing plus deviceWeb3teardown/two following launches.
 Web3 observer40531106587 on accepted694 bytes did not reproduce the hang and
@@ -121,7 +121,7 @@ probe files. A supplying full can still be running or red: this is explicit
 component evidence, never full acceptance. All original test73 assertions,
 compiled-app/image/stale/unchanged-APK/rejection and cleanup gates are retained.
 
-Corrected full40512344714 is running at exact0f951ae5c9e21c986b6079a092f01b4ac5ec0ed7.
+Corrected full40512344714 is running at exact96b12ab6f9b5146870c7a373e337f762010eb6f1.
 It includes accepted Net4 integrationbc6e05be through mergef67611d. The17
 non-documentation paths match the prior reviewed scope; only the fixture's
 stream-copy hash differs from revieweda79. All AOT production files are byte
@@ -236,7 +236,7 @@ pinned default config_sharedLibrariesLoadedAfterApp array is empty; serializer
 support alone is not claimed as runtime after-app policy coverage.
 
 Startup-profile stage fully verified: ci 40414859801 at
-83dcd8d616d5b186d46838740a4903a964968f32. Root read every job, all 18
+ca46e9967f8994fe329f3f10c88de7141e494f76. Root read every job, all 18
 scoped PASS lines per runner, both zero-failure summaries, actual installed
 input/uninstall and both required e2e logs (zero unexpected). See
 [the frozen startup report](aot3-startup.md). Original size/timing gates
@@ -245,7 +245,7 @@ predates exec3/94ccde1, so their merge requires combined integration CI.
 Shared-library contexts and secondary dex remain open.
 
 Frozen cloud stage is fully verified in ci 40408733247 at
-6a85d389aff5bd685384f3e596eb436b00fd5a88. Every job, all 16 scoped aot3
+05ca072cad7a23d83403a0c039d47d4fec0c07b5. Every job, all 16 scoped aot3
 PASS lines per runner, both zero-failure summaries, actual installed
 input/uninstall cleanup and both required e2e logs personally read. See
 [the cloud-stage report](aot3-cloud.md). wip/aot3-cloud adds docs only;
@@ -354,7 +354,7 @@ framework startup methods as evidence for a targeted profile improvement.
 The current supplied boot profiles and performance gate are unchanged.
 
 Verified oatdump stage: full ci 40368334642 at
-aa1787535b692ab06723b48213ad803863e9ae97, attempt 1. Personally read every
+96ef68790fc59098758ddead6b5f58be9eb5d648, attempt 1. Personally read every
 job (22 success/six skipped), all four aot3 and 14 aot2 PASS lines per runner,
 both zero-failure summaries, installed-copy/cleanup and both Puzzles/TIC-80
 e2e logs (0 unexpected failures). Merged into integration as f5ce6f6 through
@@ -404,7 +404,7 @@ First implementation on 2026-10-26: worktree C:\work\gesher-aot3,
 branch wip/aot3, current integration b9f93f0 included. Added real ART
 oatdump/disassembler CMake targets, installer entry/installed-copy check and
 62-aot3's independent oat/app-image checks. Running full CI 40334251458 at
-2110be4f972830643af6c1f2bac77ef31196ccb4; watching at interval 120.
+47224d88838189c43724746d1075199bb2d77cd5; watching at interval 120.
 No local AOSP build and no CI verification yet. All four contracts above
 remain open. Next: compile and
 execute this first slice in CI before implementing the remaining dexopt work.

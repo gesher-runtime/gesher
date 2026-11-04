@@ -537,7 +537,7 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
 
 Status and next steps (2026-10-26):
 
-- Verified at 1204b262027468f68ae43bf39fc0d93d61af0e64, ci 40307919084,
+- Verified at b1b59a65d30eef81bdc7208a4c88dbfdeab5e35c, ci 40307919084,
   attempt 2. All 28 jobs are success/skipped (22 success, 6 skipped); both
   Windows test summaries end with `0 test(s) failed`. Attempt 1 failed only
   the known wrong.host.badssl.com connection timeout on Windows 2025 (two

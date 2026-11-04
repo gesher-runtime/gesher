@@ -55,7 +55,7 @@ def compatibility_proof(current_source):
   return result
  expected=tree(QUALIFIED)
  assert expected and tree(OLD)==expected and tree('6e021688aa83b4f88e672c19b145bc019445631e')==expected and tree(current_source)==expected
- return {'qualified_translator_source':QUALIFIED,'old_runtime_source':OLD,'native_font_baseline':'6e021688aa83b4f88e672c19b145bc019445631e','interface_and_translator_input_blobs':expected,
+ return {'qualified_translator_source':QUALIFIED,'old_runtime_source':OLD,'native_font_baseline':'00f96217616c5892dd8364067d007f92d541585b','interface_and_translator_input_blobs':expected,
   'scope':'exact unchanged translator/build/dependency-version/ABI source, not aggregate source equivalence'}
 def assemble(base,translator,fresh,destination,role):
  assert not destination.exists(),'Comparison destination must be fresh'

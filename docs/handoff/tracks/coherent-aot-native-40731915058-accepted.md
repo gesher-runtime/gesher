@@ -1,7 +1,7 @@
 # Coherent AOT / selected Native — actual full accepted, 2026-10-28
 
-Verified source:d3ce9f9a42f4ecd4e5cde71d4b6d39653c9b865c, code identical to
-peeredfc990849d2ae23f16a23e35bc35ff1c2c9bb57ac. Canonical full40731915058,
+Verified source:81fd3eb194c9a56f1e111c8d26d33aeccc5d8c1a, code identical to
+peered2a90bd238e368b1e768ad39136caaa712fc5afab. Canonical full40731915058,
 attempt1, terminal SUCCESS. Actual expanded metadata:38jobs,32success and
 six original intentional standalone probes skipped. Both normal Windows
 whole suites end0 test(s) failed (2022:42m35s;2025:43m9s). Required watch33242

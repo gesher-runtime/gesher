@@ -123,7 +123,7 @@ failure codes are retained in Java/native output. No precise crash cause is
 claimed from the source defect alone.
 
 Corrected full CI40430496516 is dispatched at exact source
-1aa313f1f2174c25a8772818414a6ad5f0a02524 on the immutable candidate ref
+9f250803cd184e05d024733da8296410007de76f on the immutable candidate ref
 wip/exec4-live-environ. It includes 1cc12d7's live-export correction and
 the bounded-harness follow-up. Watch log:
 C:\work\gesher-ci-review\exec4-live-environ-watch-40430496516.log, interval120.
@@ -198,7 +198,7 @@ absent from9f25080. The new combined source requires its own full CI before
 acceptance. Concurrent Native3 width/CPU and monotonic-clock candidates remain
 outside it. Future spawn semantics stay in a separate next-source slice.
 Final combined full CI40438421809 runs at exact merge source
-f1465022b815792a63b8f0ee18227206e76f90cd on wip/exec4. Watch:
+b42922049201d5dc7ef1c1ca61cd7fb2db404220 on wip/exec4. Watch:
 C:\work\gesher-ci-review\exec4-final-combined-watch-40438421809.log,
 interval120. No combined result is claimed yet.
 No integration/main, PR or release operation was performed by this track.

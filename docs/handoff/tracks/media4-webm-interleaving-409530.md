@@ -1,8 +1,8 @@
 # Media4 WebM interleaving: bounded CI evidence
 
 Full CI 40953048849 attempt 1 tested source
-`5a1aa4c566aace572e8b2627106a84493db01bf6` with immutable guard
-`4fb3264a7de67793a109ff1ce2e4f71f5f42d9d9`: 45 jobs succeeded,
+`42076a8f28c0d23eee5b10ee0acf0844be0dc277` with immutable guard
+`0e6787570e85c4a05d58668c050c2555fdc92a5a`: 45 jobs succeeded,
 six optional jobs skipped. The isolated external authority was
 `NET_MEDIA4_WEBM_CALLER_COMMIT`; the prior manager authority was unchanged.
 The source and preflight negative controls and current-run producer identities

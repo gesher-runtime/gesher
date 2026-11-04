@@ -4,7 +4,7 @@ This is source implementation, awaiting independent review and actual CI. It doe
 not accept a combined runtime result or close any remaining roadmap contract.
 
 The accepted entire non-documentation baseline is
-`051b0b7c949cef08dd36a7ef9246d0550d6b388d` (full40802752388).
+`c254c6c19fb3c8553208a096116eab7350d4de49` (full40802752388).
 The checker permits exactly seventeen selected leaves plus the explicit policy
 extension and externally approved canonical caller. Two Exec leaves are byte
 identical to `68d9118e37c7936bbcf653e72cab8199f1feb097` (full40796808833):

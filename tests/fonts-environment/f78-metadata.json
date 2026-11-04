@@ -16,7 +16,7 @@
         "workflow_run": {
           "head_branch": "wip/fonts-cli-utf8",
           "head_repository_id": 1426153186,
-          "head_sha": "7ee85a5632b8d2b4d0b9a076f81d04bfa3a22714",
+          "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
           "id": 41108241255,
           "repository_id": 1426153186
         }
@@ -36,7 +36,7 @@
         "workflow_run": {
           "head_branch": "wip/fonts-cli-utf8",
           "head_repository_id": 1426153186,
-          "head_sha": "7ee85a5632b8d2b4d0b9a076f81d04bfa3a22714",
+          "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
           "id": 41108241255,
           "repository_id": 1426153186
         }
@@ -49,7 +49,7 @@
       {
         "completed_at": "2026-10-30T18:35:46Z",
         "conclusion": "success",
-        "head_sha": "7ee85a5632b8d2b4d0b9a076f81d04bfa3a22714",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
         "id": 124243600680,
         "name": "trusted-source / verify",
         "run_attempt": 1,
@@ -61,7 +61,7 @@
       {
         "completed_at": "2026-10-30T19:14:16Z",
         "conclusion": "success",
-        "head_sha": "7ee85a5632b8d2b4d0b9a076f81d04bfa3a22714",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
         "id": 124243711875,
         "name": "runtime-producer",
         "run_attempt": 1,
@@ -73,7 +73,7 @@
       {
         "completed_at": "2026-10-30T18:39:53Z",
         "conclusion": "success",
-        "head_sha": "7ee85a5632b8d2b4d0b9a076f81d04bfa3a22714",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
         "id": 124243712498,
         "name": "fixture-producer / native2",
         "run_attempt": 1,
@@ -85,7 +85,7 @@
       {
         "completed_at": "2026-10-30T19:15:25Z",
         "conclusion": "success",
-        "head_sha": "7ee85a5632b8d2b4d0b9a076f81d04bfa3a22714",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
         "id": 124261932573,
         "name": "compare (windows-2022, current-utf8)",
         "run_attempt": 1,
@@ -97,7 +97,7 @@
       {
         "completed_at": "2026-10-30T19:15:14Z",
         "conclusion": "success",
-        "head_sha": "7ee85a5632b8d2b4d0b9a076f81d04bfa3a22714",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
         "id": 124261932591,
         "name": "compare (windows-2025, old42076)",
         "run_attempt": 1,
@@ -109,7 +109,7 @@
       {
         "completed_at": "2026-10-30T19:15:17Z",
         "conclusion": "success",
-        "head_sha": "7ee85a5632b8d2b4d0b9a076f81d04bfa3a22714",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
         "id": 124261932679,
         "name": "compare (windows-2025, current-utf8)",
         "run_attempt": 1,
@@ -121,7 +121,7 @@
       {
         "completed_at": "2026-10-30T19:14:59Z",
         "conclusion": "failure",
-        "head_sha": "7ee85a5632b8d2b4d0b9a076f81d04bfa3a22714",
+        "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
         "id": 124261932732,
         "name": "compare (windows-2022, old42076)",
         "run_attempt": 1,
@@ -141,7 +141,7 @@
       "full_name": "gesher-runtime/gesher",
       "id": 1426153186
     },
-    "head_sha": "7ee85a5632b8d2b4d0b9a076f81d04bfa3a22714",
+    "head_sha": "f78bcbbb10050267374fa5b94318174f384a0b7e",
     "id": 41108241255,
     "name": "fonts-core-component",
     "path": ".github/workflows/fonts-core-component.yml",

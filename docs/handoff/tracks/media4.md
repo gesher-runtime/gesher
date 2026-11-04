@@ -185,7 +185,7 @@ still requires source peer review and the latest accepted integration.
 The separate Surface405078 source remains immutable after its two Windows
 suites failed only the new test80; its correction is tracked in surfaces2.md.
 
-First compile-only ci40517106801 ate223b77d02a9009865894817312476b9ebc916aa
+First compile-only ci40517106801 at0841f609853f0b996b5620a0aab82002eaa9ee44
 is complete RED: fixtures122233582626 passes in1m10s with actual encoded
 packet/typed-field hashes, sixty video packets, both NDK JNI/ELF ABIs and
 both single-ABI APKs. Host122233583005 fails in1m5s on the exact new bridge:
@@ -202,7 +202,7 @@ and NdkMediaMuxer.h SHA256 4FC08AFB8507C72C01A8C62086F8D4D85529E64A0B598B2EEEECF
 are preserved in the source audit. All subsequent builds remain CI-only.
 
 Corrected compile-only ci40519714094 at
-f92231ab1409955d9afe1eb77f991d4b59cdafd4 is complete RED. Its actual host
+ca2dc5a5ecfbc0c53a629483a2e7a368e789db98 is complete RED. Its actual host
 log shows the bridge object and independent verify_output.cc compile with
 the explicit ABI declarations, then the oracle link fails on14 unresolved
 real audio-backend entries, including BytesPerSample and Track methods.
@@ -217,7 +217,7 @@ saved. No host executable link or Windows runtime acceptance follows from
 that failed source.
 
 Compile-only ci40523933946 is GREEN at
-4d99d4e6dc13ff83cce109c53470309f273fa1fd. Both completed job logs and metadata
+3208ff7deefe7b10be1d12fbbd49953739e6531c. Both completed job logs and metadata
 were read: host122258201851 passes in4m54s, compiling the exact bridge and
 linking media_muxer_verify.exe with the direct audio OBJECT dependency.
 Fixtures122258202167 passes in59s, generating all four real packet datasets
@@ -238,7 +238,7 @@ actual caller, generator, test79 and independent reader/decoder without an
 additional blocker. The reviewed FD order, host/NDK ABI guards and strict
 18 semantic/12 descriptor/10 decoded-container oracles remain unchanged.
 Coherent full ci40527788805 is running at
-c1d27f22398be7b2b053f42f9be20b77fd21fe7d. That source is frozen while its
+5d9e24d3df1e9caa77c21dbae360a1f32988b943. That source is frozen while its
 actual runtime evidence remains open; subsequent branch changes may only
 record documentation. Both Windows suites must finish zero failures, all
 jobs success/skipped, package and both complete required e2e runs green.
@@ -359,7 +359,7 @@ observed TIC-80 result is still unproved and any fix requires peer review
 and fresh CI, preserving the original blank/text assertions.
 
 Native OpenSL full ci **40477536464** is complete GREEN at
-**907c2a0edbd1bb43813658665eedab4517354061**, attempt 1 without retries.
+**e569341230b3970cadaeb48a235a12a4645da74a**, attempt 1 without retries.
 All 28 conclusions were read:22 success/six skipped. Main122099364029
 passes36m30s (actual record_permission.cc compile, both executable links,
 203 assembly boundaries/zero problems); framework122099455423 passes8m18s,
@@ -398,7 +398,7 @@ Separate test78 AAudio MMAP source94e4a0e7/noticecf9240cc remains unverified
 in wip/media4-aaudio (next test79); it is not in this frozen native source.
 
 Corrected full ci **40476766790** is complete GREEN at
-**3868e4564ee780fb71a4081bb86652e1335af225**, attempt 1 without retries,
+**d10bea3a98bb8dfe76972209b6aff5df4fed58ec**, attempt 1 without retries,
 with accepted integration db84749b/freshExit30deb08c contained. All 28 job
 conclusions were read: **22 success, six skipped**. Main122096814825 passes
 in 2m47s (actual opensles.cc compile, both host links, 203 assembly
@@ -447,7 +447,7 @@ verified: C:\work\gesher-ci-review\media4-opensl-notice-proposal.patch
 This proposal is not applied to either frozen candidate.
 
 Full ci **40470959941** is complete RED at
-**35470d485d9ecf05a454d9a041e65d16465d93b5**, after merging accepted
+**2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, after merging accepted
 integration db84749b (docs above fresh-exit30deb08c). All28 conclusions were
 read:20 success/six skipped/two failed. Main122077706841 passes3m28s,
 framework122077748379 passes6m11s, and media122079941894 passes1m31s with
@@ -483,14 +483,14 @@ zero loss/xruns. The old1153.3Hz observation remains without loss counters;
 these new controlled results do not retrospectively prove its cause.
 
 Frozen **wip/media4-format-verified** still points at docs-only
-**2bc8a26d755dca8edc52c2236e023abf88ba0c56** above the accepted format
+**ba3c1c2dc94e2e6e69c8e7c050df9dc3145c0317** above the accepted format
 source below. The separate78ee5e12 lossless-capacity/diagnostic/probe slice
 is now verified with OpenSL in full40476766790 above. Production buffering,
 resampling and the separate three-cycle cumulative overrun check stay
 unchanged. Test76 belongs to OpenSL; Exec4-spawn owns77; AAudio owns78; next free79.
 
 Corrected full ci **40459815375** is complete GREEN at
-**1c984e73b76850927c73594c812537d7fa841ba0**, after merging current
+**c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current
 integration 53898b51's docs. Source 73c20d70 adds the explicit cstdint
 prerequisite and the early exact-object CI compile. Source is frozen;
 later branch commits change docs only. All 28 conclusions were read:
@@ -546,7 +546,7 @@ owns the new checks, with bounded processes, fresh device roots and native
 ABI/caller markers. All compilation and fixture execution are CI-only.
 
 Full ci **40456299720** is complete RED at
-**c749fca4bb1472e9a0146c93071f1a5d9928089e** (source 9f4dee5 after merging
+**92e914238cc8655aef472887ad9f494eec5c8a97** (source 9f4dee5 after merging
 integration 808ea746's docs): 15 successful, ten skipped and one failed job.
 Main build 122030308024 fails on the new bridge at object 3093/3187:
 NdkMediaFormat.h has 12 `unknown type name 'int32_t'/'int64_t'` errors with
@@ -571,7 +571,7 @@ open. No later Media4 implementation is included in this frozen source.
 
 ## Resumed muxer startup diagnosis (2026-10-27)
 
-Full40527788805/sourcec1d27f22398be7b2b053f42f9be20b77fd21fe7d is red:
+Full40527788805/source5d9e24d3df1e9caa77c21dbae360a1f32988b943 is red:
 both Windows18 failed. All eight contexts failed before their ABI/caller and
 semantic markers, so no18-part/12FD/10-output or independent decode proof
 exists. Package and e2e conclusions are green; no installed-new-notice claim.
@@ -635,7 +635,7 @@ The source and existing red proofs are retained, not reclassified.
 
 ## Corrected component proof and coherent full candidate
 
-Component40555035592 atf32c0357a5c8fff3fc76810566cbfbb5f28cf4cd is green:
+Component40555035592 at56899f17648f0f7cca86c7c279fbec73389834aa is green:
 fresh host/fixtures and both Windows jobs allsuccess. Each host runs eight
 actual contexts with relative Dir plus eight with absolute Dir; all original
 18 semantic parts/12 FD rows/10 outputs and10 independent decodes pass.

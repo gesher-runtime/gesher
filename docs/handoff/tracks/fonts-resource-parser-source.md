@@ -1,7 +1,7 @@
 # Passive Fonts resource preparation: source slice only
 
 This additive slice is based on immutable
-`28c175af3ae13a866cf71bcd85db447ca4254170`. It adds no native child, debugger
+`4d54ade1b53483f6d604bd989a7674ea6c376a1f`. It adds no native child, debugger
 command, workflow, target, authority or process runner. The old five WCT modes,
 their 15-second bounds, production owner, published preflight and parked runtime
 6913 remain unchanged. Original Windows2025 WCT ownership is still RED. All

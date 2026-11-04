@@ -40,7 +40,7 @@ full narrow gdtoa/tzcode and other native3/POSIX contracts remain open.
 
 ## Earlier frozen prerequisite
 
-Full source 9c842f60d77210c70f0581bfcb8ee44fc0d918fa, ci 40425393716,
+Full source 57782e5896497cdd5a5f32779bdb73dcb9edb2bc, ci 40425393716,
 attempt 2. Root read all 28 conclusions (22 success/six skipped), both
 zero-failure summaries, all six actual test66 ABI/mode PASS lines per
 runner, actual package window/input/uninstall and both required e2e logs

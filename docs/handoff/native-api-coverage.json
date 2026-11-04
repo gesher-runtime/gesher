@@ -1,7 +1,7 @@
 {
   "source": {
     "ci_run": 40296960603,
-    "sha": "a30ea54bd77dcafe757d484b610d6d748465da5f",
+    "sha": "d380a3e0190f5b418cfa3ee042691db601092e25",
     "jobs": {
       "windows-2022": 121487355022,
       "windows-2025": 121487354891
@@ -418,7 +418,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -437,7 +437,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -456,7 +456,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -475,7 +475,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -494,7 +494,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -513,7 +513,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -532,7 +532,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -551,7 +551,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -570,7 +570,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -589,7 +589,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -608,7 +608,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -627,7 +627,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -646,7 +646,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -665,7 +665,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -684,7 +684,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -703,7 +703,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -722,7 +722,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -741,7 +741,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -760,7 +760,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -779,7 +779,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -798,7 +798,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -817,7 +817,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -836,7 +836,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -855,7 +855,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -874,7 +874,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -893,7 +893,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -912,7 +912,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -931,7 +931,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -950,7 +950,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -969,7 +969,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -988,7 +988,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -1007,7 +1007,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -1026,7 +1026,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -1045,7 +1045,7 @@
       "verification": {
         "ci_run": 40476766790,
         "attempt": 1,
-        "sha": "3868e4564ee780fb71a4081bb86652e1335af225",
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
         "status": "verified-opensl-iid-values-and-capability-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
       }
@@ -1100,7 +1100,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1119,7 +1119,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1138,7 +1138,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1157,7 +1157,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1176,7 +1176,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1195,7 +1195,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1214,7 +1214,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1233,7 +1233,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1252,7 +1252,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1271,7 +1271,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1290,7 +1290,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1309,7 +1309,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1328,7 +1328,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1347,7 +1347,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1366,7 +1366,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1973,7 +1973,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -1992,7 +1992,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -2011,7 +2011,7 @@
       "verification": {
         "ci_run": 40344682373,
         "attempt": 2,
-        "sha": "182f7c1ac35a7422fa5fe1482787ecd66807e52c",
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
         "status": "verified-framework-font-api-contexts",
         "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
       }
@@ -2413,7 +2413,7 @@
       ],
       "verification": {
         "ci_run": 40296960603,
-        "sha": "a30ea54bd77dcafe757d484b610d6d748465da5f",
+        "sha": "d380a3e0190f5b418cfa3ee042691db601092e25",
         "status": "verified-in-launcher-context",
         "scope": "PT_INTERP executable bootstrap; availability through dlopen/dlsym in an arbitrary library is not claimed."
       }
@@ -3874,7 +3874,7 @@
       "verification": {
         "ci_run": 40499454478,
         "attempt": 1,
-        "sha": "015d8269025f9d35083038ecee1cea672d748f38",
+        "sha": "694a4cd6b067f1deea87015bceb2ad2160260154",
         "status": "verified-interface-address-contexts",
         "scope": "Both ABIs through dalvikvm JNI, APKs in both modes and standalone ELF on both Windows runners: real LP64 lists, loopback/address/netmask/broadcast, link index/MAC, twelve simultaneously owned list mutation/free cycles and freeifaddrs(nullptr). Standalone matches nine independent Windows IP-bound link/address rows. Allocation failures, down/unbound adapters, other physical adapters and routing contracts remain open."
       }
@@ -4193,7 +4193,7 @@
       "verification": {
         "ci_run": 40499454478,
         "attempt": 1,
-        "sha": "015d8269025f9d35083038ecee1cea672d748f38",
+        "sha": "694a4cd6b067f1deea87015bceb2ad2160260154",
         "status": "verified-interface-address-contexts",
         "scope": "Both ABIs through dalvikvm JNI, APKs in both modes and standalone ELF on both Windows runners: real LP64 lists, loopback/address/netmask/broadcast, link index/MAC, twelve simultaneously owned list mutation/free cycles and freeifaddrs(nullptr). Standalone matches nine independent Windows IP-bound link/address rows. Allocation failures, down/unbound adapters, other physical adapters and routing contracts remain open."
       }
@@ -4824,7 +4824,7 @@
       "verification": {
         "ci_run": 40386670586,
         "attempt": 1,
-        "sha": "04db6b6df79c474cc33f807bb5c98f3d4d9da703",
+        "sha": "6f6ac6fa9519207797ee5b997e0ae1e5b9e77049",
         "status": "verified-wide-classification-transform-abi",
         "scope": "Plain/locale System V shim entry matches all 1,114,112 code points and four invalid values against pinned ICU4X beta2, on both Windows versions. Both NDK ABIs through dalvikvm and APKs in single/device modes. Does not establish wcwidth, collation or unrelated Unicode/POSIX contracts."
       }
@@ -4843,7 +4843,7 @@
       "verification": {
         "ci_run": 40386670586,
         "attempt": 1,
-        "sha": "04db6b6df79c474cc33f807bb5c98f3d4d9da703",
+        "sha": "6f6ac6fa9519207797ee5b997e0ae1e5b9e77049",
         "status": "verified-wide-classification-transform-abi",
         "scope": "Plain/locale System V shim entry matches all 1,114,112 code points and four invalid values against pinned ICU4X beta2, on both Windows versions. Both NDK ABIs through dalvikvm and APKs in single/device modes. Does not establish wcwidth, collation or unrelated Unicode/POSIX contracts."
       }
@@ -6808,7 +6808,7 @@
       "verification": {
         "ci_run": 40386670586,
         "attempt": 1,
-        "sha": "04db6b6df79c474cc33f807bb5c98f3d4d9da703",
+        "sha": "6f6ac6fa9519207797ee5b997e0ae1e5b9e77049",
         "status": "verified-wide-classification-transform-abi",
         "scope": "Transform handles, 11 reference boundary rows and invalid-name/handle EINVAL behavior on both Windows versions. Both NDK ABIs through dalvikvm and APKs in single/device modes. Does not establish wcwidth, collation or unrelated Unicode/POSIX contracts."
       }
@@ -7245,7 +7245,7 @@
       "verification": {
         "ci_run": 40386670586,
         "attempt": 1,
-        "sha": "04db6b6df79c474cc33f807bb5c98f3d4d9da703",
+        "sha": "6f6ac6fa9519207797ee5b997e0ae1e5b9e77049",
         "status": "verified-wide-classification-transform-abi",
         "scope": "Transform handles, 11 reference boundary rows and invalid-name/handle EINVAL behavior on both Windows versions. Both NDK ABIs through dalvikvm and APKs in single/device modes. Does not establish wcwidth, collation or unrelated Unicode/POSIX contracts."
       }
@@ -7311,7 +7311,7 @@
       ],
       "verification": {
         "ci_run": 40305973210,
-        "sha": "777d6fbac44a7c7b7cdf868aac88aee5c74579a9",
+        "sha": "e94f760a5a56593187fc8bd1bae77fc716f8ac97",
         "status": "verified-software-bitmaps",
         "scope": "Symbol presence on both ABIs/runners plus direct RGBA storage, PNG callback/decode, data space and error tests in dalvikvm and APKs in both modes. Hardware storage remains open."
       }
@@ -7329,7 +7329,7 @@
       ],
       "verification": {
         "ci_run": 40305973210,
-        "sha": "777d6fbac44a7c7b7cdf868aac88aee5c74579a9",
+        "sha": "e94f760a5a56593187fc8bd1bae77fc716f8ac97",
         "status": "verified-software-bitmaps",
         "scope": "Symbol presence on both ABIs/runners plus direct RGBA storage, PNG callback/decode, data space and error tests in dalvikvm and APKs in both modes. Hardware storage remains open."
       }
@@ -7347,7 +7347,7 @@
       ],
       "verification": {
         "ci_run": 40305973210,
-        "sha": "777d6fbac44a7c7b7cdf868aac88aee5c74579a9",
+        "sha": "e94f760a5a56593187fc8bd1bae77fc716f8ac97",
         "status": "verified-software-bitmaps",
         "scope": "Symbol presence on both ABIs/runners plus direct RGBA storage, PNG callback/decode, data space and error tests in dalvikvm and APKs in both modes. Hardware storage remains open."
       }
@@ -7365,7 +7365,7 @@
       ],
       "verification": {
         "ci_run": 40305973210,
-        "sha": "777d6fbac44a7c7b7cdf868aac88aee5c74579a9",
+        "sha": "e94f760a5a56593187fc8bd1bae77fc716f8ac97",
         "status": "verified-software-bitmaps",
         "scope": "Symbol presence on both ABIs/runners plus direct RGBA storage, PNG callback/decode, data space and error tests in dalvikvm and APKs in both modes. Hardware storage remains open."
       }
@@ -9328,7 +9328,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9347,7 +9347,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9366,7 +9366,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9385,7 +9385,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9404,7 +9404,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9423,7 +9423,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9442,7 +9442,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9461,7 +9461,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9480,7 +9480,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9499,7 +9499,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9518,7 +9518,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9537,7 +9537,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9556,7 +9556,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9575,7 +9575,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9594,7 +9594,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9613,7 +9613,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9632,7 +9632,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9651,7 +9651,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9670,7 +9670,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9689,7 +9689,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9708,7 +9708,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9727,7 +9727,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9746,7 +9746,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9765,7 +9765,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9784,7 +9784,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9803,7 +9803,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9822,7 +9822,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9841,7 +9841,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9860,7 +9860,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9879,7 +9879,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9898,7 +9898,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9917,7 +9917,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9936,7 +9936,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9955,7 +9955,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9974,7 +9974,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -9993,7 +9993,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10012,7 +10012,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10031,7 +10031,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10050,7 +10050,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10069,7 +10069,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10088,7 +10088,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10107,7 +10107,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10126,7 +10126,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10145,7 +10145,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10164,7 +10164,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10183,7 +10183,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10202,7 +10202,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10221,7 +10221,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10240,7 +10240,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10259,7 +10259,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10278,7 +10278,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10297,7 +10297,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10316,7 +10316,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10335,7 +10335,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10354,7 +10354,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10373,7 +10373,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10392,7 +10392,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10411,7 +10411,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10430,7 +10430,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10449,7 +10449,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10468,7 +10468,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10487,7 +10487,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10506,7 +10506,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10525,7 +10525,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10544,7 +10544,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10563,7 +10563,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10582,7 +10582,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10601,7 +10601,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10620,7 +10620,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10639,7 +10639,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10658,7 +10658,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10677,7 +10677,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10696,7 +10696,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10715,7 +10715,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10734,7 +10734,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10753,7 +10753,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10772,7 +10772,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10791,7 +10791,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10810,7 +10810,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10829,7 +10829,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10848,7 +10848,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10867,7 +10867,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10886,7 +10886,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10905,7 +10905,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10924,7 +10924,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10943,7 +10943,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10962,7 +10962,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -10981,7 +10981,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11000,7 +11000,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11019,7 +11019,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11038,7 +11038,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11057,7 +11057,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11076,7 +11076,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11095,7 +11095,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11114,7 +11114,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11133,7 +11133,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11152,7 +11152,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11171,7 +11171,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11190,7 +11190,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11209,7 +11209,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11228,7 +11228,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11247,7 +11247,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11266,7 +11266,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11285,7 +11285,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11304,7 +11304,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11323,7 +11323,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11342,7 +11342,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11361,7 +11361,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11380,7 +11380,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11399,7 +11399,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11418,7 +11418,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11437,7 +11437,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11456,7 +11456,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11475,7 +11475,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11494,7 +11494,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11513,7 +11513,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11532,7 +11532,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11551,7 +11551,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11570,7 +11570,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11589,7 +11589,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11608,7 +11608,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -11627,7 +11627,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-data-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
       }
@@ -12834,7 +12834,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Old entries removed without changing failed outputs; typed reuse and copy independence. Other native media families remain open."
       }
@@ -12853,7 +12853,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Target replacement, null-source/destination errors, UTF-8/buffer values surviving source deletion. Other native media families remain open."
       }
@@ -12872,7 +12872,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Delete-null AMEDIA_OK, source deletion preserving copied values and 128 object lifetime cycles. Other native media families remain open."
       }
@@ -12891,7 +12891,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Binary caller bytes copied; size/data preserved after source deletion and missing getter outputs unchanged after clear. Other native media families remain open."
       }
@@ -12910,7 +12910,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual double set/get and typed dlsym calls across the floating-point ABI. Other native media families remain open."
       }
@@ -12929,7 +12929,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual float set/get values and strict double/float type mismatch preserving output. Other native media families remain open."
       }
@@ -12948,7 +12948,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Full int32 and pinned-key set/get values, including negative minimum-near values and getter null/missing outputs. Other native media families remain open."
       }
@@ -12967,7 +12967,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Full-width 0x1122334455667788 values and strict type mismatch preserving getter output. Other native media families remain open."
       }
@@ -12986,7 +12986,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). All four signed rectangle coordinates preserved through actual set/get calls. Other native media families remain open."
       }
@@ -13005,7 +13005,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). LP64 size_t value (1<<40)+23 without truncation. Other native media families remain open."
       }
@@ -13024,7 +13024,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). UTF-8 caller bytes copied, borrowed getter data and copied value surviving source deletion. Other native media families remain open."
       }
@@ -13043,7 +13043,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pinned format allocation and 128 independent new/copy/clear/delete cycles. Other native media families remain open."
       }
@@ -13062,7 +13062,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Binary caller bytes copied; size/data preserved after source deletion and missing getter outputs unchanged after clear. Other native media families remain open."
       }
@@ -13081,7 +13081,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual double set/get and typed dlsym calls across the floating-point ABI. Other native media families remain open."
       }
@@ -13100,7 +13100,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual float set/get values and strict double/float type mismatch preserving output. Other native media families remain open."
       }
@@ -13119,7 +13119,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Full int32 and pinned-key set/get values, including negative minimum-near values and getter null/missing outputs. Other native media families remain open."
       }
@@ -13138,7 +13138,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Full-width 0x1122334455667788 values and strict type mismatch preserving getter output. Other native media families remain open."
       }
@@ -13157,7 +13157,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). All four signed rectangle coordinates preserved through actual set/get calls. Other native media families remain open."
       }
@@ -13176,7 +13176,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). LP64 size_t value (1<<40)+23 without truncation. Other native media families remain open."
       }
@@ -13195,7 +13195,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). UTF-8 caller bytes copied, borrowed getter data and copied value surviving source deletion. Other native media families remain open."
       }
@@ -13214,7 +13214,7 @@
       "verification": {
         "ci_run": 40459815375,
         "attempt": 1,
-        "sha": "1c984e73b76850927c73594c812537d7fa841ba0",
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
         "status": "verified-native-format-api-contexts",
         "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Typed debug text, borrowed text valid until the next call, and updated map values. Other native media families remain open."
       }

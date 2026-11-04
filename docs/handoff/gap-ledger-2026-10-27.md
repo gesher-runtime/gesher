@@ -217,7 +217,7 @@ Strict helper/source/upload-policy preflight40670202635 at1ac73c5e is bounded
 green on both Windows, including15 actual adversarial controls and a real ZIP.
 This supersedes the older helper-preparation state only; canonical receipt/
 download/assembly/fresh-framework coverage is pending full40678371420 at exact
-429b08826923ab0b1fff80529499bfdcfaa68caa. Surface16102, reader921418 and
+7bbccfcddbac826f50b78175f4d23f8702fd7741. Surface16102, reader921418 and
 Binder7c72a3af are component-qualified leaves in that candidate; primary code
 remains30db. Binder component40664399508 proves9x9 ordinary stable RW/RO/page/
 FD/PID controls per Windows, not concurrent protection/partial-copy atomicity,
@@ -231,7 +231,7 @@ new candidate's launch.
 
 Full40678371420/attempt1/source7bbccfcd is independently accepted35jobs29success/
 six intended skips, both normal0, real package23 and two ten-app e2e0. Phase4
-mergec46374e2992d70c3fa1af2054ffe08695dcb9a2b has the exact entire non-doc tree
+merge695ef6b81ac31662f3a51fa3195ace11923058e2 has the exact entire non-doc tree
 of verified7bb; frozen2634c778 is docs-only. All1157 inventory fields/history
 remain blob55e03c68. [Exact bounded proof](tracks/coherent-surface-reader-binder-integrity-40678371420-accepted.md).
 

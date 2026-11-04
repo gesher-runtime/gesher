@@ -170,7 +170,7 @@ it starts, and its startup methods run their AOT code.
 
 ## Status and next steps (aot2 track, ADR 0054)
 Final combined verification: **ci 40320549410** at
-`a4471216af8adbeafaee3319fdb5354fb4e1ab02`, after merging integration
+`ae75766b0bcbcc04f2161cb3d8b4c8fc54510cc9`, after merging integration
 8590f4b (including native2 and surfaces). All 28 jobs are success/skipped
 (22 success, 6 skipped), with no retry. The coordinator personally read all
 13 aot2 PASS lines on each runner, both `0 test(s) failed` summaries, the

@@ -1,7 +1,7 @@
 # Coherent Surface/reader/Binder/integrity: bounded full acceptance
 
 Accepted2026-10-28 from exact source
-`429b08826923ab0b1fff80529499bfdcfaa68caa`, canonical
+`7bbccfcddbac826f50b78175f4d23f8702fd7741`, canonical
 [full40678371420](https://github.com/gesher-runtime/gesher/actions/runs/40678371420),
 attempt1/workflow_dispatch: actual35jobs29success/six original intentional
 standalone probes skipped. Both complete normal Windows suites have0 failed;

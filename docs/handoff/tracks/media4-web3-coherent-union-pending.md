@@ -1,7 +1,7 @@
 # Prepared coherent Web3/Media/AOT/Native/Env/Libcore/Exec/process union
 
 Latest authoritative state,2026-10-28: new canonical full40596167427 is
-ACTIVE at exact frozen9d2232622c7d8279514a13e7007c2987d1d7a3a1, not accepted.
+ACTIVE at exact frozen30db7709838839d28be68d8b467a57b26a3ac667, not accepted.
 Required watch97520 uses interval120 and writes
 C:/work/gesher-ci-review/coherent-web3-union-full-40596167427-watch.log.
 The prescribed ci.yml command was dispatched once after confirming no live
@@ -23,12 +23,12 @@ gate below remains required in the new current-source full. Failed4a47/
 Earlier preparation and run statuses below are retained historical context;
 the latest state above supersedes their pending/unpushed descriptions.
 
-LOCAL unqualified sourcee057d8170f4e2931cb6c43c8f5ab11218ab8c585 on
+LOCAL unqualified source120f8120b00e258469864ad6a589179976196ff2 on
 wip/media4-web3-union-pending, C:/work/gesher-media4-muxer. It is not pushed,
 dispatched or merged into phase4. Original f4/7beb/eaa checkpoint refs and
 remote Media d552 remain intact. All commits retain both parent histories.
 
-Superseding ready-for-CI source checkpoint:0cae258cbb90ec749ba1fbbd54056afc66d44cb3
+Superseding ready-for-CI source checkpoint:08909b8bb0b07bd85cf18460b0086eefb7be16eb
 adds exact reviewed canonical wiring58a085a2 after both Native and integrator
 bounded peers. The only CI merge conflict retains explicit productionOFF
 configuration BEFORE the original Exec early build; all current AOT/Media/
@@ -42,7 +42,7 @@ historical; this source is ready for one freshly frozen canonical qualification
 run, not accepted/integrated code. No CI result is inferred from static checks.
 
 Canonical full40588525037 was dispatched exactly once at frozen
-32765f0b898416c7e4b796426fe7aef11cc63d81 after confirming no live same-ref
+4a47a20ef652eff2dfd6d477cf1acbc29d98fc45 after confirming no live same-ref
 run, using `gh workflow run ci.yml --ref wip/media4-web3-union-pending -R
 gesher-runtime/gesher`. Required watch16062 writes
 C:/work/gesher-ci-review/coherent-web3-union-full-40588525037-watch.log at

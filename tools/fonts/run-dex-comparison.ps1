@@ -80,7 +80,7 @@ function Invoke-FontChild([string] $Role, [string[]] $Bcp, [string[]] $Tail) {
   $psi.Environment['GESHER_CI_PROCESS_TRACE'] = '1'
   $receipt = @{runtime_role=$RuntimeRole; child_role=$Role; argv=$childArguments; argv_count=$childArguments.Count; actual_argument_list=@($psi.ArgumentList); cwd=$work;
     android_root=$psi.Environment['ANDROID_ROOT']; require_boot_image=$psi.Environment['GESHER_REQUIRE_BOOT_IMAGE'];
-    supplied_images=0; old_framework_source='5a1aa4c566aace572e8b2627106a84493db01bf6'}
+    supplied_images=0; old_framework_source='42076a8f28c0d23eee5b10ee0acf0844be0dc277'}
   Write-Host ('FONT_DIAGNOSTIC_CHILD '+($receipt | ConvertTo-Json -Depth 8 -Compress))
   $process = [Diagnostics.Process]::Start($psi)
   $handle = $process.SafeHandle; $nativeId = $process.Id

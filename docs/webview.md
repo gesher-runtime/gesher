@@ -6,7 +6,7 @@ Work happens on branch `wip/webview`; the decision record is
 [ADR 0041](decisions/0041-webview-webview2.md).
 
 Current Web3 acceptance: full40466021634 at
-a0ad48926a674fa01e0cfdc6e6e4497b90ad417b combines the prepared Web3 code
+160e25e8a77857cc50dd3e7c76e0616fb9fd1043 combines the prepared Web3 code
 with Windows4 and verified process-exit freshness. Both actual Windows logs
 have14 Web3 PASS, five single-process VM0, six launcher0 and six fresh
 child0 records, and zero failed tests. All28 jobs, actual package23 and both
@@ -372,7 +372,7 @@ e2e suites. The earlier strict4f25387 result below remains separate evidence;
 it is not retroactively upgraded to fresh-exit or combined-source acceptance.
 
 Prepared source now includes coordinator integration
-ea67aa02631e218ee231e36c11fec1242f3c8baf (merge079e0d4b). Root personally
+f17d03b1a96f4f0f62ad1d1101ec1eb01b93873d (merge079e0d4b). Root personally
 verified Media3/live-environ/deterministic-TLS full40448521754/dd06d296 and
 the merged non-doc tree matches that source. The Services merge preserves
 Web3 service changes and adds MediaSession registration; all five network
@@ -381,7 +381,7 @@ exit-freshness prerequisite and both complete ten-app e2e suites, including
 Just Player/Puzzles/TIC80. No new CI is dispatched by this preparation merge.
 
 Strict-exit full CI **40449137605** completes green at exact
-`2cdb752d6f3301a18d32cf97e7d49c8311bbc3b3`. Commit5d802f5 adds only the
+`4f253878331b4662abe044fa71127b87b881fd1a`. Commit5d802f5 adds only the
 PowerShell exit checks and successful lifecycle output described below; app
 assertions, runtime and deadlines are unchanged. Actual main122007461704
 has203ABI boundaries/zero problems, framework122007511312 has javac zero
@@ -410,7 +410,7 @@ marker as fresh OS-exit proof until that prerequisite is verified. This is
 not a claim about the cause of the earlier UIA teardown stall.
 
 The next source imports the reviewed positive HTTP/SNI test slice from Media3
-c15a20d358d7b1f6735df809bc65d5957b827bb3 (patch SHA256
+836482975254ec3fbcbbdb190398d65dc79fae11 (patch SHA256
 ae93ceeed2954f7795bdc052383b8a2be9277696236ea6441904b9b016e89689).
 All five resulting network test files match the combined audit's exact hashes;
 the negative-certificate and NetApp files already matched. This agent read
@@ -425,7 +425,7 @@ Web3 full run with the corrected process-exit prerequisite and latest verified
 integration. Strict4f25387 above remains evidence for its original frozen source.
 
 Completed full diagnostic **40444053066** uses exact
-`d2b4c8e15258668780930b7ea6106644e0ab1f03`, with the lifecycle/window/log-tail
+`cbf56399203dbdc2729f20a40b8ff69b821145a6`, with the lifecycle/window/log-tail
 instrumentation below and coordinator-verified native clock/width integration
 8922a3e. Those runtime changes are not claimed as the cause of the prior
 teardown failure. Actual main121990960481 confirms patch0573, width/clock
@@ -451,7 +451,7 @@ required before the final Web3 handoff. The earlier green source is retained
 without claiming unprinted normal-exit evidence or the prior stall's cause.
 
 Completed changed-source full CI **40432795403** uses exact
-`07171c3f14ac6b069b650390dc72688e83f2c75a`. It merges current integration
+`2755f218b41f3e4c474d3151ce66a2f005d3aa8a`. It merges current integration
 9dd57f5 (documentation-only after coordinator tip 42cc1c0), including verified
 startup profile merge 2ba9a11. The coordinator personally read profile source
 ca46e99/run 40414859801 (18 AOT checks per runner and original gates) and combined
@@ -491,7 +491,7 @@ native UIA calls; an initial hypothesis of an immediate COM outcall under
 the original caller's framework lock was rejected before any code change.
 
 Completed full ci **40376044459** at
-`4081cb819bf86b8f0eb9822ba645eba3c4d09b8c`, with AOT3 foundation f5ce6f6
+`939ec313d0fe5a2d8410ee700a927fad0538269e`, with AOT3 foundation f5ce6f6
 and bounded TLS fixture cleanup. All 14 web3 checks pass per runner; the new
 TLS fixture and every root/negative/app cleanup marker complete on both.
 Windows 2025 ends with zero failed tests; Windows 2022 has one AOT2 JIT
@@ -504,7 +504,7 @@ Watch/logs: `C:/work/gesher-ci-review/web3-40376044459-watch.log` and
 `web3-40376044459-win2022.log` / `-win2025.log`. No merge gate is closed.
 
 Completed diagnostic ci **40364697280**, exact source
-`8b6fc327dff0447dc7290564401a92e6bca66315`; watch output:
+`eee306b12a958286b72da8b30071438a9f1acdf3`; watch output:
 `C:/work/gesher-ci-review/web3-40364697280-successor-watch.log`. All 14 web3
 checks pass on both runners. Windows 2022 ends with `0 test(s) failed`;
 package actual cleanup and both nine-app e2e jobs pass with required
@@ -532,7 +532,7 @@ fragments; exec.yml now checks out its helper and runs that JDK regression.
 Window/frame/action assertions remain unchanged. Full CI still must pass.
 
 Full-stage gate awaits the next combined run. Completed **ci 40353139413**
-at `d8b14694f757a75f87c6cd648054ea40fc0499ae` again passes all 14 web3
+at `6270c9e84e0a8f3486a77824ecb113c563d2871d` again passes all 14 web3
 checks per runner, package and both e2e jobs. Windows 2022 fails only the
 completed geocoder probe's CLR teardown; Windows 2025 has the same failure
 and a windows3 launcher-log framing failure. These remain failed checks.
@@ -621,7 +621,7 @@ Recovery update (2026-10-27): current integration a0f32e1 (including verified
 AOT runtime merge 6dc3f03) is merged into the Web3 preparation branch. The
 coordinator's new native CI-only rule applies to every C/C++ fixture as well;
 there will be no local native compilation or execution. Web3's latest own
-full diagnostic remains 40376044459 at 4081cb819bf86b8f0eb9822ba645eba3c4d09b8c:
+full diagnostic remains 40376044459 at 939ec313d0fe5a2d8410ee700a927fad0538269e:
 all 14 Web3 checks pass on both runners, with package and both e2e jobs green;
 Windows 2022's boot performance failure still prevents full-stage acceptance.
 The earlier hold for coordinator startup diagnosis ended only after its

@@ -299,7 +299,7 @@ jobs:
                       'Reviewed guard differs from immutable invocation')
               require(git('show', sha + ':' + CALLER) == approved_caller, 'Caller policy differs from external approval')
               original_caller = git('show', BASE + ':' + CALLER)
-              old_call = b'gesher-runtime/gesher/.github/workflows/coherent-union-trusted-source.yml@1ed0de45391ef235b04cc036e7b9c4effbf670dd'
+              old_call = b'gesher-runtime/gesher/.github/workflows/coherent-union-trusted-source.yml@c9eb7842e8891307f339b2758f26aeb20ea53be1'
               new_call = b'gesher-runtime/gesher/.github/workflows/combined-full-trusted-source.yml@' + guard_commit.encode()
               require(original_caller.count(old_call) == 1, 'Original caller pin missing')
               intended_caller = original_caller.replace(old_call, new_call)

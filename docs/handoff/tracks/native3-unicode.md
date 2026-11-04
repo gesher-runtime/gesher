@@ -1,7 +1,7 @@
 # Verified stage: pinned Unicode and Process proc natives
 
 Full ci 40386670586, attempt 1, source
-04db6b6df79c474cc33f807bb5c98f3d4d9da703, including verified oatdump
+6f6ac6fa9519207797ee5b997e0ae1e5b9e77049, including verified oatdump
 integration 634a273. All 28 jobs personally read: 22 success, six skipped.
 Both Windows summaries end with 0 test(s) failed. No retry.
 

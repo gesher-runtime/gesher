@@ -1,7 +1,7 @@
 # FIRST_LINK_ONLY focused source/policy proposal
 
 This isolated proposal builds from the independently source-peered receiver
-`54c6b2301e26e74422133b7a33c89dad830be345`. It is not a full product run,
+`8e92d30b6b25faa3c1daf6014b7bd0ba2ebb6e2f`. It is not a full product run,
 canonical supplier activation, source-authority approval or publication/CI
 permission. The full/default workflows, Web4 preservation boundary and all
 existing trusted-source guards remain unchanged.

@@ -50,7 +50,7 @@ address of that object, not the first byte of its string literal.
 ## Consequences
 
 Compilation and every native/JVM fixture run happen only in CI. Full ci
-**40459815375**, attempt 1 at **1c984e73b76850927c73594c812537d7fa841ba0**,
+**40459815375**, attempt 1 at **c5962291855b13ebd0d21fcf72981db973ad9e72**,
 passes all 28 jobs (22 success, six skipped). Windows jobs 122048294283
 (2022) and 122048294275 (2025) each finish with `0 test(s) failed`. Each
 runner proves both ABIs in all four contexts, all eight semantic parts per
@@ -97,7 +97,7 @@ the ARM guest does not promise incoming short sign extension. Actual current
 CI records raw64936→signed16 -600, with set/get/value success at -600/-32768/
 -1/0. No register contents are inferred for the previous failing source.
 
-Full ci **40476766790**, attempt1 at **3868e4564ee780fb71a4081bb86652e1335af225**,
+Full ci **40476766790**, attempt1 at **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**,
 contains accepted integration db84749b/freshExit30deb08c and passes22 jobs/
 six skipped. Windows122099872570/122099872556 finish0 failures, with14 test76
 PASS each: ten ABI/context combinations plus four device shutdowns. All50
@@ -128,7 +128,7 @@ no recording identity is installed, while ART registers the unchanged
 MayRecordAudio manifest/bare-core decision. No recording grant is invented.
 
 Full **40477536464**, attempt1 at
-**907c2a0edbd1bb43813658665eedab4517354061**, passes22 jobs/six skipped,
+**e569341230b3970cadaeb48a235a12a4645da74a**, passes22 jobs/six skipped,
 both whole0, actual package23 and both ten-app/four-transport e2e0. Actual
 logs and all60 semantic rows/48 volume rows/12 callback traces per runner
 were read. The same NDK fixture runs through core JNI, genuine standalone

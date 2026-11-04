@@ -68,7 +68,7 @@ jobs:
         shell: pwsh
         run: |
           $base = gh api repos/${{ github.repository }}/actions/runs/40516054280 | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $base.head_sha -cne 'a63a3fe9bd7c2d80c1145bd624594723722347cb' -or
+          if ($LASTEXITCODE -ne 0 -or $base.head_sha -cne 'ca4ed3cfff46d4843485d89859370dc5b86a4146' -or
               $base.name -cne 'ci' -or $base.conclusion -cne 'failure' -or $base.run_attempt -ne 1) {
             throw 'Unexpected immutable Locale run/source/attempt'
           }

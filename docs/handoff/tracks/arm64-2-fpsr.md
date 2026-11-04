@@ -1,6 +1,6 @@
 # arm64-2 sticky FPSR: verified bounded stage
 
-Exact combined source `0498d825871a54b81b9bb51ef4610d9bb655cd44` passes full
+Exact combined source `8ec4bf3c30160575c8df794ad2ca1406957adc98` passes full
 CI [40498782924](https://github.com/gesher-runtime/gesher/actions/runs/40498782924),
 attempt 1. All 29 job conclusions (23 success/six intentional skips) and all
 23 actual executed job logs were personally read. Both Windows suites print
@@ -13,7 +13,7 @@ below. It does not close the full fenv/ARM track. The immutable verification
 branch is `wip/arm64-2-fpsr-verified`, with documentation only above this source.
 Earlier frozen FPCR `dab49ab0` and Wide `e7c1b06` references are unchanged.
 
-Source 46d92367419c4b6fc129949e237aee3c863ab398 passes scoped
+Source 93f7637a090e40f3bfc3615a04bed2076dbf501c passes scoped
 ci 40475532910, six success/one skipped. All six actual executed job logs
 were personally read. Both Windows hosts match all 10384 independent QEMU
 numeric/status tuples, every diagnostic classification counter is 0, and
