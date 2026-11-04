@@ -137,6 +137,13 @@ constexpr uint32_t kRet = 0xD65F03C0;
 constexpr uint32_t Svc(uint32_t imm) { return 0xD4000001u | (imm << 5); }
 constexpr uint32_t kReturnSvc = 0xFFFF;
 constexpr size_t kMaxTramps = 0xFFFE;
+// Each trampoline has 32 bytes to itself, the rest BRK: an in-place hook of a
+// libc function (WhatsApp's libessential) overwrites its first instructions
+// with a jump and a literal address, 20 bytes and more. In a 16-byte slot
+// that address landed on the next function's trampoline (abort's), and the
+// guest's next call there ran half an address as code.
+constexpr size_t kTrampWords = 8;
+constexpr uint32_t kBrk = 0xD4200000;
 
 struct Trampoline {
   void* host_fn;
@@ -1168,11 +1175,12 @@ void* BindHost(void* fn, int va_list_index) {
   if (it != g_tramp_by_fn.end()) return it->second;
   size_t index = g_tramp_count.load(std::memory_order_relaxed);
   if (index >= kMaxTramps) return nullptr;
-  uint32_t* p = AllocGuestCode(2);
+  uint32_t* p = AllocGuestCode(kTrampWords);
   if (p == nullptr) return nullptr;
   g_tramps[index] = {fn, va_list_index};
   p[0] = Svc(static_cast<uint32_t>(index + 1));
   p[1] = kRet;
+  for (size_t i = 2; i < kTrampWords; ++i) p[i] = kBrk;
   g_tramp_count.store(index + 1, std::memory_order_release);
   g_tramp_by_fn[fn] = p;
   return p;

@@ -306,6 +306,31 @@ int gesher_reprotect(void* addr) {
              : -1;
 }
 
+// Called by arm64_elf_test with the trampoline of a host function: hooks it in
+// place as WhatsApp's libessential hooks a libc function, with 24 bytes
+// (`bti c; ldr x17, #12; br x17; nop; .quad hook`). The trampoline after it
+// must stay intact, and calls of this one reach the hook.
+static int hook_target(void) { return 42; }
+
+int gesher_hook_in_place(void* fn);
+int gesher_hook_in_place(void* fn) {
+  static const uint32_t kPatch[] = {
+      0xD503245F,  // bti c
+      0x58000071,  // ldr x17, #12
+      0xD61F0220,  // br x17
+      0xD503201F,  // nop
+  };
+  long page = sysconf(_SC_PAGESIZE);
+  uintptr_t first = (uintptr_t)fn & ~(uintptr_t)(page - 1);
+  size_t span = (uintptr_t)fn + 24 - first;
+  if (mprotect((void*)first, span, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) return -1;
+  uint64_t target = (uint64_t)(uintptr_t)hook_target;
+  memcpy(fn, kPatch, sizeof(kPatch));
+  memcpy((char*)fn + sizeof(kPatch), &target, sizeof(target));
+  __builtin___clear_cache((char*)fn, (char*)fn + 24);
+  return mprotect((void*)first, span, PROT_READ | PROT_EXEC) == 0 ? 0 : -1;
+}
+
 // --- the stack protector ------------------------------------------------------------------------
 static int __attribute__((noinline)) protected_frame(const char* s) {
   char buf[32];

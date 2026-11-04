@@ -51,6 +51,9 @@ static Fn Entry(elf::Library* lib, const char* name) {
 #endif
 HOST_SYSV static uint64_t HostSeven() { return 7; }
 HOST_SYSV static uint64_t HostNine() { return 9; }
+// Host functions whose trampolines the guest hooks in place.
+HOST_SYSV static uint64_t HostOne() { return 1; }
+HOST_SYSV static uint64_t HostTwo() { return 2; }
 
 int main(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -83,6 +86,7 @@ int main(int argc, char** argv) {
   using SelftestFn = int(SYSV_FN*)(const char*);
   using PerfFn = uint64_t(SYSV_FN*)(uint32_t);
   using ReprotectFn = int(SYSV_FN*)(void*);
+  using HookFn = int(SYSV_FN*)(void*);
 
   if (auto selftest = Entry<SelftestFn>(lib, "gesher_selftest")) {
     // The first search directory doubles as a scratch directory.
@@ -97,6 +101,15 @@ int main(int argc, char** argv) {
       Check("binding a host function after that",
             next != nullptr && arm64::Call(first, nullptr, 0) == 7 &&
                 arm64::Call(next, nullptr, 0) == 9);
+    }
+    if (auto hook = Entry<HookFn>(lib, "gesher_hook_in_place")) {
+      // Two trampolines in a row; the guest overwrites the first with a 24-byte
+      // jump to a guest function, as an in-place hook of a libc function does.
+      void* hooked = arm64::BindHostFunction(reinterpret_cast<void*>(&HostOne));
+      void* after = arm64::BindHostFunction(reinterpret_cast<void*>(&HostTwo));
+      Check("guest hooks a trampoline in place", hooked != nullptr && hook(hooked) == 0);
+      Check("the next trampoline is intact", after != nullptr && arm64::Call(after, nullptr, 0) == 2);
+      Check("the hooked trampoline runs the hook", arm64::Call(hooked, nullptr, 0) == 42);
     }
     if (auto perf = Entry<PerfFn>(lib, "gesher_perf_kernel")) {
       // The same kernel (arm64_perf_kernel.h) translated and native.
