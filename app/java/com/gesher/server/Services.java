@@ -153,9 +153,10 @@ public final class Services {
                 new LocationManagerService(pm, am)).asBinder());
         services.put(Context.LOCALE_SERVICE, StandIn.of(android.app.ILocaleManager.class, new LocaleManagerService(am, atm, pm)).asBinder());  // locale track, ADR 0049
         services.put(Context.CONNECTIVITY_SERVICE, new ConnectivityService(pm, atm));  // docs/network.md
-        // Account manager stand-in for Google and local accounts (microG / GMS compat).
+        // Accounts: a dummy Google account (microG / GMS compat) and apps' own, through
+        // their authenticators.
         services.put(Context.ACCOUNT_SERVICE, StandIn.of(android.accounts.IAccountManager.class,
-                new AccountManagerService()).asBinder());
+                new AccountManagerService(am, pm)).asBinder());
         // System services queried by crash reporters (ACRA) and common apps (e.g. F-Droid).
         services.put(Context.DROPBOX_SERVICE, StandIn.of(
                 com.android.internal.os.IDropBoxManagerService.class,

@@ -6,7 +6,8 @@
      (a one-off and a periodic JobService), the clipboard with Windows', notifications
      (toasts, a notification listener), wake locks and the battery, clock changes; and the
      hwsvc2 track's: toast clicks after the device stopped, the vibrator, content URI job
-     triggers, sleep and resume, a time zone change. No
+     triggers, sleep and resume, a time zone change; accounts through the app's own
+     authenticator. No
      action bar: no text to lay out while app processes have no system fonts. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.gesher.devsvc"
@@ -39,6 +40,15 @@
         <activity android:name=".SleepActivity" android:exported="true" />
         <activity android:name=".ZoneActivity" android:exported="true" />
         <activity android:name=".NetJobActivity" android:exported="true" />
+        <activity android:name=".AccountActivity" android:exported="true" />
+        <service android:name=".TestAuthenticator" android:exported="true">
+            <intent-filter>
+                <action android:name="android.accounts.AccountAuthenticator" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accounts.AccountAuthenticator"
+                android:resource="@xml/authenticator" />
+        </service>
         <receiver android:name=".ClickReceiver" android:exported="false" />
         <provider
             android:name=".NotesProvider"

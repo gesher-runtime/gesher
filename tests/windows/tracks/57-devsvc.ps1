@@ -2,7 +2,8 @@
 # services", docs/decisions/0038-devsvc-windows-backed-services.md): alarms
 # that fire (also with the app's process ended), jobs, the clipboard linked
 # with Windows', notifications as toasts (and a notification listener), wake
-# locks as power requests, the battery, clock changes. tests/apps/devsvc
+# locks as power requests, the battery, clock changes, accounts through an
+# app's authenticator. tests/apps/devsvc
 # (devsvc.apk) runs one activity per service on a Gesher device of its own.
 # Dot-sourced by run-tests.ps1 after 50-services.ps1, whose helpers
 # (RunTimed, StartTimed, WaitTimed, CheckOrdered, DeviceState, DeviceAlive,
@@ -191,6 +192,29 @@ if (-not $winHtml.Contains('<b>android html 57</b>')) { $problems += "Windows' H
 if (-not $log.Contains('devsvc: clip: changed from Windows: from windows 57 (label Windows)')) { $problems += 'the app''s listener did not get the clip from Windows' }
 if ($code -ne 0) { $problems += "launch exit $code" }
 DevsvcCheck 'devsvc: clipboard: an app''s clip is on Windows'' clipboard (Get-Clipboard: text, and HTML Format), and Set-Clipboard reaches the app''s OnPrimaryClipChangedListener and getPrimaryClip' $problems ($out + "`n--- package log`n" + $log + "`n--- HTML`n" + $winHtml)
+
+# --- accounts ----------------------------------------------------------------------
+# addAccount reaches the app's authenticator (its service and account-authenticator
+# XML), which adds the account with addAccountExplicitly; the account, password and
+# user data read back and persist; hasFeatures asks the authenticator; it is removed.
+$mark = (DevsvcText $devsvcLog).Length
+$t = DevsvcLaunch 'AccountActivity'
+$done = DevsvcWait $mark @('devsvc: account: removed') 240
+$out = WaitTimed $t 200
+$code = $LASTEXITCODE
+$log = DevsvcSince $mark
+$problems = @()
+foreach ($want in 'account: authenticator listed true', 'account: authenticator adds user', 'account: addAccount answered true',
+                  'account: listed true, password true, user data true', 'account: set user data true',
+                  'account: features true false, by features 1', 'account: removed true, left 0') {
+  if (-not $log.Contains($want)) { $problems += "no '$want'" }
+}
+if (-not ($log -match 'account: authenticator adds \S+: true, caller uid true')) { $problems += 'the authenticator did not add the account' }
+if ($log.Contains('account: failed')) { $problems += 'the activity failed' }
+if (-not (Test-Path (Join-Path $root 'data/system/accounts'))) { $problems += 'the accounts were not saved' }
+if (-not $done) { $problems += 'the activity did not finish its checks' }
+if ($code -ne 0) { $problems += "launch exit $code" }
+DevsvcCheck 'devsvc: accounts: addAccount goes to the app''s authenticator (getAuthenticatorTypes lists it), which adds the account; password and user data read back and are saved; hasFeatures and getAccountsByTypeAndFeatures ask the authenticator; removeAccountExplicitly removes it' $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'accounts' | Out-String))
 
 # --- notifications -----------------------------------------------------------------
 # Two notifications are two toasts of the app's AppUserModelID in Windows' toast
