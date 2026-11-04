@@ -72,3 +72,16 @@ GraphicsDex 'HardwareRenderer: skiagl without ANGLE falls back to the CPU pipeli
   HardwareRendererGlTest @($hwuiFont, $hwuiFrame, 'fallback', 'GESHER_HWUI_RENDERER')
 $Dir = $distDir
 Remove-Item Env:GESHER_HWUI_RENDERER
+
+# The framework's Java OpenGL ES/EGL bindings over ANGLE (docs/angle.md, "Java
+# apps"; tests/dex-graphics/gesher/GlBindingsTest.java), what GLSurfaceView and
+# apps' renderers call, on WARP: EGL10 (EGLImpl) with an ES 2 context on a
+# pbuffer, GLES20 shaders and glReadPixels, GLUtils.texImage2D, GL10 (GLImpl) on
+# an ES 1 context, an EGL10 window surface on a Win32 window's Surface (one
+# frame swapped, read back from what Windows composed), and window surfaces on
+# a SurfaceView-like Surface over a SurfaceTexture (EGL10) and on the
+# SurfaceTexture itself (EGL10, EGL14), whose swapped frames reach it.
+$env:GESHER_EGL_DEVICE = 'warp'
+GraphicsDex 'OpenGL ES for Java apps: EGL10 and GLES20 draw a frame (pbuffer, Win32 window, SurfaceTexture), GL10, GLUtils, EGL14' `
+  GlBindingsTest @()
+Remove-Item Env:GESHER_EGL_DEVICE

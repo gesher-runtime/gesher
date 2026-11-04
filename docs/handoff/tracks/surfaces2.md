@@ -13,6 +13,8 @@ bridge and the complete roadmap/ADR graphics limits before implementation.
 - Java EGL14/GLES20 natives and GLSurfaceView, including a renderer lifecycle
   on the GL thread, context loss/recreation, resize/pause/resume and camera
   preview into that path. Reuse pinned AOSP implementation where practical.
+  The natives themselves are now built over ANGLE (docs/angle.md, "Java apps";
+  GlBindingsTest); a GLSurfaceView lifecycle fixture is what remains here.
 - SurfaceTexture consumed by GLES: attach/detach, updateTexImage, transform
   matrix/timestamps and external-OES texture sampling. CPU TextureView
   rendering alone does not establish this path.

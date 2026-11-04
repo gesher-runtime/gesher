@@ -334,6 +334,7 @@ EGLBoolean EGLAPIENTRY eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface su
   }
   static const bool has_damage = AngleExtension(dpy, "EGL_KHR_swap_buffers_with_damage");
   gesher_hwui_gl_before_swap(dpy, surface);
+  gesher_egl_before_swap(dpy, surface);  // a child surface (a Java app's EGL14 on a SurfaceView)
   if (has_damage) return ANGLE(eglSwapBuffersWithDamageKHR)(dpy, surface, rects, n_rects);
   return ANGLE(eglSwapBuffers)(dpy, surface);
 }

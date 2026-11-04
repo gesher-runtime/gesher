@@ -45,6 +45,9 @@ int register_android_os_Binder(JNIEnv* env);
 // hwui's natives (android.graphics, RenderNode, HardwareRenderer) and
 // Surface's: compat/hwui/graphics_runtime.cc, docs/graphics.md.
 int register_gesher_graphics(JNIEnv* env);
+// The Java OpenGL ES/EGL bindings (EGL10/GL10, android.opengl) over ANGLE:
+// compat/opengl/opengl_jni.cc, docs/angle.md.
+int register_gesher_opengl(JNIEnv* env);
 int register_gesher_attach_standins(JNIEnv* env);
 // libandroid_runtime's input natives (InputChannel, InputEventReceiver/Sender,
 // KeyEvent, MotionEvent, KeyCharacterMap, VelocityTracker) and gesher-app's
@@ -700,6 +703,8 @@ static const struct {
     // hwui (AndroidRuntime.cpp registers it through libhwui's
     // register_android_graphics_classes), then the device-only stand-ins.
     {"gesher_graphics", "android/graphics/RenderNode", ::register_gesher_graphics},
+    // The Java OpenGL ES/EGL bindings over ANGLE (compat/opengl/opengl_jni.cc).
+    {"gesher_opengl", "com/google/android/gles_jni/EGLImpl", ::register_gesher_opengl},
     // The input natives, after the stand-ins they replace (each class is checked).
     {"gesher_input", "android/view/KeyEvent", ::register_gesher_input},
     {"gesher_native_activity", "android/app/NativeActivity", ::register_gesher_native_activity},

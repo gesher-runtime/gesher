@@ -100,6 +100,60 @@ The decision record is [0030](decisions/0030-angle-hwui-skiagl.md).
   `NativeWindow.capture()` and `readBackBuffer()` show the CPU back buffer,
   which GL frames do not update.
 
+## Java apps: android.opengl and EGL10/GL10
+
+The framework's Java bindings, what GLSurfaceView and apps' renderers call
+(`javax.microedition.khronos.egl.EGL10` and `opengles.GL10`, which are
+`com.google.android.gles_jni.EGLImpl`/`GLImpl`; `android.opengl.EGL14`,
+`EGL15`, `EGLExt`, `GLES10`-`GLES32` and their extensions, `GLUtils`, `ETC1`,
+`Visibility`), are built from core/jni as they are (`cmake/aosp/opengl.cmake`,
+target `gesher_opengl` in dalvikvm), with libETC1
+(frameworks/native `opengl/libs/ETC1`, added to the sparse checkout).
+
+- **JNI**: their tables register System V entries
+  (`patches/frameworks/base/0760-gl-sysv-jni-tables.patch`, made by
+  `tools/jni-sysv-patch.py <frameworks/base> gl`, which also adds the
+  `core_jni_helpers.h` include these glgen files lack). libandroid_runtime's
+  table (`compat/framework/android_runtime.cc`, row `gesher_opengl`) runs
+  AndroidRuntime.cpp's registrations of them (`compat/opengl/opengl_jni.cc`:
+  `register_gesher_opengl`).
+- **EGL and GLES in the executable**: the sources call `eglXxx`/`glXxx` as
+  code linked against libEGL and libGLESv*. `compat/hwui/gl/angle_gl.cc`
+  (hwui's) and `compat/opengl/opengl_jni.cc` define those with Android's
+  meanings; `compat/opengl/gen_gl_forwarders.py` generates every other
+  function the Khronos headers declare (1100-odd) as a Microsoft-ABI function
+  that calls ANGLE's entry point, resolved on first call (`gesher_egl_proc`;
+  a missing one aborts with `gesher OpenGL ES: ANGLE does not provide ...`).
+  GLsizeiptr/GLintptr, `long` (32 bits) under mingw with AOSP's
+  khrplatform.h, are passed to ANGLE widened to 64 bits. The sources are
+  compiled with hwui's `EGL/eglplatform.h` (`EGLNativeWindowType` is
+  `ANativeWindow*`); libgui's `GLConsumer.h` and libEGL's private `display.h`
+  are `compat/opengl/include`'s (`egl_get_init_count` is 1 for a display).
+- **Android's meanings**, the same as an app's .so gets (`egl_gles.cc`):
+  `eglGetDisplay` and `eglGetPlatformDisplay(EXT)` for
+  `EGL_PLATFORM_ANDROID_KHR` give the default display (ANGLE's Direct3D 11
+  device, hardware else WARP; `GESHER_EGL_DEVICE=warp`); `eglChooseConfig`
+  and `eglGetConfigAttrib` know Android's attributes; a window surface takes
+  the Surface's ANativeWindow: a Gesher window's (a Win32Surface, an HWND)
+  gets ANGLE's swap chain, a SurfaceView's or a SurfaceTexture's (a
+  QueueSurface, `compat/media/surface`) a hidden helper window whose frames
+  `eglSwapBuffers` reads back and posts to it (`egl_child_surface.cc`,
+  surfaces track). GLSurfaceView's SurfaceHolder Surface is the SurfaceView's.
+- **SurfaceTexture**: EGL10's and EGL14's `eglCreateWindowSurface` with a
+  SurfaceTexture make, on the device, a Surface on its BufferQueue producer;
+  here `_eglCreateWindowSurfaceTexture` is replaced
+  (`opengl_jni.cc`) by the Surface path with a `new Surface(SurfaceTexture)`
+  (its QueueSurface), so libgui's producer is never asked for.
+- **Test**: `tests/dex-graphics/gesher/GlBindingsTest.java`
+  (`tests/windows/tracks/31-angle.ps1`, on WARP): EGL10 with an ES 2 context
+  on a pbuffer, GLES20 shaders drawing a quad read back with glReadPixels,
+  `GLUtils.texImage2D` of a Bitmap drawn as a texture, GL10 on an ES 1
+  context, an EGL10 window surface on a Win32 window's Surface (one frame
+  swapped, read back with PrintWindow `PW_RENDERFULLCONTENT`), and window
+  surfaces on a Surface over a SurfaceTexture (EGL10) and on the
+  SurfaceTexture itself (EGL10, EGL14), whose frames reach it
+  (`onFrameAvailable`).
+
 ## Licensing
 
 ANGLE is under a BSD 3-clause license. The DLLs also contain zlib (zlib
@@ -173,8 +227,13 @@ notice requirements. All of these are compatible with Gesher's Apache 2.0.
   hardware bitmaps (`Bitmap.Config.HARDWARE`), HardwareBufferRenderer,
   WebView functors, the persistent shader cache and the device's GPU memory
   budget (Ganesh's default cache limit). Vulkan is not built.
-- `android.opengl.*` (GLES20 and friends, GLSurfaceView) for Java apps: its
-  natives (core/jni/android_opengl_*.cpp) are not built.
+- Java apps' GL (above): a frame drawn into a SurfaceView's or a
+  SurfaceTexture's surface is read back with glReadPixels at each swap and
+  copied (the surfaces track's child surfaces), not shared with the window's
+  swap chain; `SurfaceTexture.updateTexImage` gives no GL texture
+  (`GL_TEXTURE_EXTERNAL_OES` consumers see nothing new); Android-only EGL
+  extensions (`eglPresentationTimeANDROID`, native fences) reach ANGLE's
+  exports, which fail on the Direct3D 11 backend.
 - The runners report OpenGL ES 3.0 on both devices; ES 3.1 and hwui on a
   real GPU through this build are unverified.
 - `gclient sync` still fetches `buildtools/reclient` (~470 MB, a CIPD

@@ -665,6 +665,10 @@ extern "C" unsigned gesher_egl_destroy_surface(void* display, void* surface) {
   return gesher::bionic::gl::DestroySurface(display, surface);
 }
 
+extern "C" void gesher_egl_before_swap(void* display, void* surface) {
+  gesher::bionic::gl::ChildSurfaceBeforeSwap(display, surface);
+}
+
 extern "C" void* gesher_egl_surface_hwnd(void* surface) {
   namespace gl = gesher::bionic::gl;
   std::lock_guard<std::mutex> lock(gl::g_surface_mutex);

@@ -3,6 +3,7 @@
 
   jni-sysv-patch.py <frameworks/base checkout> > patches/frameworks/base/0002-sysv-jni-tables.patch
   jni-sysv-patch.py <frameworks/base checkout> e2e > patches/frameworks/base/0200-e2e-sysv-jni-tables.patch
+  jni-sysv-patch.py <frameworks/base checkout> gl > patches/frameworks/base/0760-gl-sysv-jni-tables.patch
 
 ART enters natives with the System V ABI (docs/decisions/0006-managed-abi.md).
 The framework's JNI tables are written by hand, `{"name", "sig", (void*) fn}`,
@@ -49,6 +50,28 @@ E2E_FILES = [
     'core/jni/android_database_SQLiteRawStatement.cpp',
 ]
 
+# The Java OpenGL ES and EGL bindings (cmake/aosp/opengl.cmake, docs/angle.md), in a
+# patch of their own. These files (made by frameworks/native/opengl/tools/glgen) do
+# not include core_jni_helpers.h: the patch adds it after AndroidRuntime.h.
+GL_FILES = [
+    'core/jni/android/opengl/util.cpp',
+    'core/jni/android_opengl_EGL14.cpp',
+    'core/jni/android_opengl_EGL15.cpp',
+    'core/jni/android_opengl_EGLExt.cpp',
+    'core/jni/android_opengl_GLES10.cpp',
+    'core/jni/android_opengl_GLES10Ext.cpp',
+    'core/jni/android_opengl_GLES11.cpp',
+    'core/jni/android_opengl_GLES11Ext.cpp',
+    'core/jni/android_opengl_GLES20.cpp',
+    'core/jni/android_opengl_GLES30.cpp',
+    'core/jni/android_opengl_GLES31.cpp',
+    'core/jni/android_opengl_GLES31Ext.cpp',
+    'core/jni/android_opengl_GLES32.cpp',
+    'core/jni/com_google_android_gles_jni_EGLImpl.cpp',
+    'core/jni/com_google_android_gles_jni_GLImpl.cpp',
+]
+RUNTIME_INCLUDE = '#include <android_runtime/AndroidRuntime.h>\n'
+
 # The start of a table: `JNINativeMethod name[] = {`, const or static or not.
 TABLE = re.compile(r'\bJNINativeMethod\s+\w+\s*\[\s*\w*\s*\]\s*=\s*\{')
 # A function name, qualified and with template arguments: ns::fn<jint>.
@@ -78,7 +101,10 @@ def table_end(text, start):
     return i
 
 
-def rewrite(path, text):
+def rewrite(path, text, add_include=False):
+    if add_include and 'core_jni_helpers.h' not in text and RUNTIME_INCLUDE in text:
+        text = text.replace(RUNTIME_INCLUDE,
+                            RUNTIME_INCLUDE + '#include "core_jni_helpers.h"  // GESHER_JNI\n', 1)
     out = []
     pos = 0
     tables = 0
@@ -115,15 +141,16 @@ def rewrite(path, text):
 
 
 def main():
-    if len(sys.argv) not in (2, 3) or sys.argv[2:] not in ([], ['e2e']):
+    if len(sys.argv) not in (2, 3) or sys.argv[2:] not in ([], ['e2e'], ['gl']):
         sys.exit(__doc__)
     checkout = sys.argv[1]
-    files = E2E_FILES if sys.argv[2:] == ['e2e'] else FILES
+    mode = sys.argv[2] if len(sys.argv) == 3 else None
+    files = {'e2e': E2E_FILES, 'gl': GL_FILES}.get(mode, FILES)
     sys.stdout.reconfigure(newline='\n')  # LF on Windows too
     for path in files:
         old = subprocess.run(['git', '-C', checkout, 'show', 'HEAD:' + path], check=True,
                              capture_output=True).stdout.decode('utf-8')
-        new = rewrite(path, old)
+        new = rewrite(path, old, add_include=mode == 'gl')
         if new == old:
             continue
         sys.stdout.write(f'diff --git a/{path} b/{path}\n')

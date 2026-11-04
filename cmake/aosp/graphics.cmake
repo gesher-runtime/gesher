@@ -3,6 +3,8 @@
 include(${CMAKE_CURRENT_LIST_DIR}/skia.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/hwui.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/window.cmake)
+# The Java OpenGL ES/EGL bindings (android.opengl, EGL10/GL10) over ANGLE.
+include(${CMAKE_CURRENT_LIST_DIR}/opengl.cmake)
 
 # hwui in dalvikvm: libandroid_runtime's table (compat/framework/android_runtime.cc)
 # registers its natives through register_gesher_graphics.
