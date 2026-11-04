@@ -1176,6 +1176,19 @@ void* BindHost(void* fn, int va_list_index) {
   return p;
 }
 
+void AddGuestCode(const void* start, size_t size) {
+  if (size == 0) return;
+  uintptr_t first = reinterpret_cast<uintptr_t>(start) & ~uintptr_t{0xFFF};
+  uintptr_t end = (reinterpret_cast<uintptr_t>(start) + size + 0xFFF) & ~uintptr_t{0xFFF};
+  {
+    std::shared_lock<std::shared_mutex> lock(g_regions_mutex);
+    for (const CodeRegion& r : g_regions) {
+      if (first >= r.start && end <= r.end) return;  // already guest code
+    }
+  }
+  AddRegion(first, end - first);
+}
+
 void* EmitGuestCode(const uint32_t* insns, size_t count) {
   uint32_t* p = AllocGuestCode(count);
   if (p != nullptr) std::memcpy(p, insns, count * 4);

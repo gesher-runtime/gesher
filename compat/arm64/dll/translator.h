@@ -29,6 +29,10 @@ void* EmitGuestCode(const uint32_t* insns, size_t count);
 // Is `addr` inside a registered guest code region?
 bool InGuestCode(uintptr_t addr);
 
+// Registers the pages of [start, start + size) as guest code, unless they
+// already are: memory the guest made PROT_EXEC itself.
+void AddGuestCode(const void* start, size_t size);
+
 // The guest-specific definition of a libc symbol whose host (bionic shim)
 // version has an x86-64 ABI the guest cannot use (struct layouts, syscall
 // numbers, jmp_buf, auxv): a guest-callable address, or nullptr.

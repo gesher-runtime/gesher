@@ -12,11 +12,14 @@
 //  - C11 atomics from four threads (LL/SC through the exclusive monitor);
 //  - va_list: the guest's own variadic wrappers around vsnprintf (AAPCS64
 //    va_list converted to System V), with more than six integer arguments;
-//  - a host function pointer from dlsym called directly by guest code.
+//  - a host function pointer from dlsym called directly by guest code;
+//  - code the guest writes and makes PROT_EXEC itself, in an anonymous mapping
+//    and over a libc string (Facebook's force_dlopen).
 
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netdb.h>
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdarg.h>
@@ -29,6 +32,7 @@
 #include <string.h>
 #include <sys/auxv.h>
 #include <sys/epoll.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -230,6 +234,63 @@ static void test_host_pointer(void) {
         st != NULL && st(".", &s) == 0 && S_ISDIR(s.st_mode));
 }
 
+// --- code the guest writes ---------------------------------------------------------------------
+// The translator runs only registered guest code; pages the guest makes
+// PROT_EXEC become guest code. Facebook's force_dlopen (libforce_dlopen.so,
+// WhatsApp's setUpBreakpad) writes this `blr x2` trampoline over the string
+// gai_strerror(EAI_NONAME) returns, so that dlopen sees a caller inside libc,
+// and calls it with dlopen in x2: in gesher that string is in the host's image.
+static const uint32_t kBlrX2[] = {
+    0xA9BF7BFD,  // stp x29, x30, [sp, #-16]!
+    0x910003FD,  // mov x29, sp
+    0xD63F0040,  // blr x2
+    0xA8C17BFD,  // ldp x29, x30, [sp], #16
+    0xD65F03C0,  // ret
+};
+
+static void test_written_code(void) {
+  long page = sysconf(_SC_PAGESIZE);
+  uint32_t* code = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  check("mmap for written code", code != MAP_FAILED);
+  if (code != MAP_FAILED) {
+    code[0] = 0x52800540;  // mov w0, #42
+    code[1] = 0xD65F03C0;  // ret
+    __builtin___clear_cache((char*)code, (char*)(code + 2));
+    int ok = mprotect(code, page, PROT_READ | PROT_EXEC) == 0;
+    check("calling code made PROT_EXEC by mprotect", ok && ((int (*)(void))code)() == 42);
+  }
+  // Still mapped: the translator keeps the blocks it translated at an address
+  // (it does not act on IC IVAU), so a new mapping there would run the old code.
+  uint32_t* rwx =
+      mmap(NULL, page, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (rwx != MAP_FAILED) {
+    rwx[0] = 0x52800F60;  // mov w0, #123
+    rwx[1] = 0xD65F03C0;  // ret
+    __builtin___clear_cache((char*)rwx, (char*)(rwx + 2));
+  }
+  check("calling code in a PROT_EXEC mmap", rwx != MAP_FAILED && ((int (*)(void))rwx)() == 123);
+  if (rwx != MAP_FAILED) munmap(rwx, page);
+  if (code != MAP_FAILED) munmap(code, page);
+
+  const char* text = gai_strerror(EAI_NONAME);
+  uintptr_t at = ((uintptr_t)text + 7) & ~(uintptr_t)7;
+  uintptr_t first = (uintptr_t)text & ~(uintptr_t)(page - 1);
+  size_t span = at + sizeof(kBlrX2) - first;
+  int ok = strlen(text) >= at - (uintptr_t)text + sizeof(kBlrX2) &&
+           mprotect((void*)first, span, PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+  if (ok) {
+    memcpy((void*)at, kBlrX2, sizeof(kBlrX2));
+    ok = mprotect((void*)first, span, PROT_READ | PROT_EXEC) == 0;
+    __builtin___clear_cache((char*)at, (char*)at + sizeof(kBlrX2));
+  }
+  check("force_dlopen: a trampoline over gai_strerror's text", ok);
+  void* (*call)(const char*, int, void* (*)(const char*, int)) =
+      (void* (*)(const char*, int, void* (*)(const char*, int)))at;
+  void* handle = ok ? call("libdl.so", RTLD_NOW, dlopen) : NULL;
+  check("force_dlopen: dlopen through the trampoline", handle != NULL);
+  check("force_dlopen: dlsym on its handle", handle != NULL && dlsym(handle, "dlopen") != NULL);
+}
+
 // --- the stack protector ------------------------------------------------------------------------
 static int __attribute__((noinline)) protected_frame(const char* s) {
   char buf[32];
@@ -250,6 +311,7 @@ int gesher_selftest(const char* dir) {
   test_atomics();
   test_va_list();
   test_host_pointer();
+  test_written_code();
   failures += Arm64FpcrContracts();
   failures += Arm64FpsrContracts();
   printf(failures == 0 ? "arm64_abi_test: all passed\n" : "arm64_abi_test: %d failed\n", failures);

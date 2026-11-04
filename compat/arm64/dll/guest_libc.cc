@@ -356,7 +356,11 @@ void* g_host_syscall = nullptr;
 // anti-tamper library re-protecting its own text, libtaz_full.so - would make
 // them host-executable: a host call of a guest pointer there (pthread_once,
 // qsort, a JNI callback) then runs AArch64 bytes as x86 and dies with SIGILL
-// (or worse) instead. PROT_EXEC becomes PROT_READ: the translator reads it.
+// (or worse) instead. PROT_EXEC becomes PROT_READ: the translator reads it,
+// and the pages become guest code. A guest may write code into memory that is
+// no guest library's: Facebook's force_dlopen (libforce_dlopen.so, WhatsApp)
+// writes a `blr x2` trampoline over the string gai_strerror(EAI_NONAME)
+// returns, so that dlopen sees a caller inside libc, then jumps to it.
 constexpr int kProtRead = 1;
 constexpr int kProtExec = 4;
 void* g_mprotect = nullptr;
@@ -365,13 +369,17 @@ void* g_mmap = nullptr;
 int GuestProt(int prot) { return (prot & kProtExec) != 0 ? (prot & ~kProtExec) | kProtRead : prot; }
 
 int GESHER_SYSV GuestMprotect(void* addr, size_t len, int prot) {
-  return reinterpret_cast<int(GESHER_SYSV*)(void*, size_t, int)>(g_mprotect)(addr, len,
-                                                                           GuestProt(prot));
+  int r = reinterpret_cast<int(GESHER_SYSV*)(void*, size_t, int)>(g_mprotect)(addr, len,
+                                                                              GuestProt(prot));
+  if (r == 0 && (prot & kProtExec) != 0) AddGuestCode(addr, len);
+  return r;
 }
 
 void* GESHER_SYSV GuestMmap(void* addr, size_t len, int prot, int flags, int fd, int64_t off) {
-  return reinterpret_cast<void*(GESHER_SYSV*)(void*, size_t, int, int, int, int64_t)>(g_mmap)(
+  void* p = reinterpret_cast<void*(GESHER_SYSV*)(void*, size_t, int, int, int, int64_t)>(g_mmap)(
       addr, len, GuestProt(prot), flags, fd, off);
+  if (p != reinterpret_cast<void*>(-1) && (prot & kProtExec) != 0) AddGuestCode(p, len);
+  return p;
 }
 
 // libc-style result: -1 with errno set on failure.
