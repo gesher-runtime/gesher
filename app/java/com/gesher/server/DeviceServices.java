@@ -13,8 +13,10 @@ import android.app.usage.IUsageStatsManager;
 import android.content.ComponentName;
 import android.content.pm.IShortcutService;
 import android.content.pm.ParceledListSlice;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.IDeviceIdentifiersPolicyService;
 import android.os.IThermalService;
 import android.view.ISensitiveContentProtectionManager;
 
@@ -208,6 +210,24 @@ final class DeviceServices {
      * device ID, subscriber ID, and phone number queries.
      */
     static final class PhoneSubInfoService extends IPhoneSubInfo.Default {
+    }
+
+    /**
+     * {@code device_identifiers}: Build.getSerial()'s service. The serial is
+     * {@link Build#UNKNOWN}, as an app without the privileged phone permission sees it
+     * through device_info_plus (Flutter's RustDesk); without the service getSerial threw
+     * NullPointerException and the app's initialization failed.
+     */
+    static final class DeviceIdentifiersPolicyService extends IDeviceIdentifiersPolicyService.Default {
+        @Override
+        public String getSerial() {
+            return Build.UNKNOWN;
+        }
+
+        @Override
+        public String getSerialForPackage(String callingPackage, String callingFeatureId) {
+            return Build.UNKNOWN;
+        }
     }
 
     /**

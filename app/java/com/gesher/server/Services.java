@@ -172,6 +172,9 @@ public final class Services {
         services.put("iphonesubinfo", StandIn.of(
                 com.android.internal.telephony.IPhoneSubInfo.class,
                 new DeviceServices.PhoneSubInfoService()).asBinder());
+        services.put("device_identifiers", StandIn.of(
+                android.os.IDeviceIdentifiersPolicyService.class,
+                new DeviceServices.DeviceIdentifiersPolicyService()).asBinder());
         services.put("isub", StandIn.of(
                 com.android.internal.telephony.ISub.class,
                 new DeviceServices.SubscriptionService()).asBinder());

@@ -40,6 +40,28 @@ HEADERS = [
     'GLES/gl.h', 'GLES/glext.h',
 ]
 
+# Extensions ANGLE advertises that AOSP's headers do not declare (ANGLE's
+# include/GLES2/gl2ext_angle.h). A client that sees one in GL_EXTENSIONS takes
+# its functions as required: Skia's GrGLInterface fails validation, and
+# Flutter's Skia renderer draws nothing, when glBindUniformLocationCHROMIUM is
+# null.
+EXTRA = 'ANGLE gl2ext_angle.h'
+EXTRA_PROTOTYPES = [
+    # GL_CHROMIUM_bind_uniform_location
+    'GL_APICALL void GL_APIENTRY glBindUniformLocationCHROMIUM (GLuint program, GLint location, '
+    'const GLchar *name);',
+    # GL_CHROMIUM_copy_texture
+    'GL_APICALL void GL_APIENTRY glCopyTextureCHROMIUM (GLuint sourceId, GLint sourceLevel, '
+    'GLenum destTarget, GLuint destId, GLint destLevel, GLint internalFormat, GLenum destType, '
+    'GLboolean unpackFlipY, GLboolean unpackPremultiplyAlpha, GLboolean unpackUnmultiplyAlpha);',
+    'GL_APICALL void GL_APIENTRY glCopySubTextureCHROMIUM (GLuint sourceId, GLint sourceLevel, '
+    'GLenum destTarget, GLuint destId, GLint destLevel, GLint xoffset, GLint yoffset, GLint x, '
+    'GLint y, GLint width, GLint height, GLboolean unpackFlipY, GLboolean unpackPremultiplyAlpha, '
+    'GLboolean unpackUnmultiplyAlpha);',
+    # GL_CHROMIUM_framebuffer_mixed_samples
+    'GL_APICALL void GL_APIENTRY glCoverageModulationCHROMIUM (GLenum components);',
+]
+
 CALLBACK_TYPES = ('GLDEBUGPROC', 'GLDEBUGPROCKHR', 'EGLDEBUGPROCKHR', 'EGLSetBlobFuncANDROID',
                   'EGLGetBlobFuncANDROID', 'GLVULKANPROCNV', '__eglMustCastToProperFunctionPointerType')
 # Taking a callback, not forwarded and not handwritten: not provided (the
@@ -78,26 +100,30 @@ PARAM = re.compile(r'^(?P<type>.*?)(?P<name>\b\w+)\s*(?P<array>\[[^\]]*\])?\s*$'
 def parse(include_dir):
     funcs = {}
     order = []
-    for header in HEADERS:
-        with open(os.path.join(include_dir, header), encoding='utf-8') as f:
-            for line in f:
-                m = PROTO.match(line.strip())
-                if not m:
-                    continue
-                name = m.group('name')
-                if name in funcs:
-                    continue
-                ret = m.group('ret').strip()
-                args = m.group('args').strip()
-                params = []
-                if args and args != 'void':
-                    for i, p in enumerate(a.strip() for a in args.split(',')):
-                        pm = PARAM.match(p)
-                        if not pm or not pm.group('type').strip() or pm.group('type').strip() == 'const':
-                            raise SystemExit(f'{header}: cannot parse parameter "{p}" of {name}')
-                        params.append((pm.group('type').strip(), pm.group('array') or ''))
-                funcs[name] = (ret, params, header)
-                order.append(name)
+    for header in HEADERS + [EXTRA]:
+        if header == EXTRA:
+            lines = EXTRA_PROTOTYPES
+        else:
+            with open(os.path.join(include_dir, header), encoding='utf-8') as f:
+                lines = f.readlines()
+        for line in lines:
+            m = PROTO.match(line.strip())
+            if not m:
+                continue
+            name = m.group('name')
+            if name in funcs:
+                continue
+            ret = m.group('ret').strip()
+            args = m.group('args').strip()
+            params = []
+            if args and args != 'void':
+                for i, p in enumerate(a.strip() for a in args.split(',')):
+                    pm = PARAM.match(p)
+                    if not pm or not pm.group('type').strip() or pm.group('type').strip() == 'const':
+                        raise SystemExit(f'{header}: cannot parse parameter "{p}" of {name}')
+                    params.append((pm.group('type').strip(), pm.group('array') or ''))
+            funcs[name] = (ret, params, header)
+            order.append(name)
     return funcs, order
 
 
