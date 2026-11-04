@@ -24,7 +24,7 @@ import java.util.Properties;
  * launch ({@code gesher-app launch PACKAGE --proxy ...}). {@code windows} is Windows'
  * settings again. The system server gives an app process its setting as
  * {@code $GESHER_PROXY} when it starts it, which {@link WindowsProxy} takes instead of
- * Windows' settings.
+ * Windows' settings, and as the http(s)_proxy variables other HTTP clients read.
  */
 public final class ProxySetting {
     private ProxySetting() {
@@ -130,10 +130,23 @@ public final class ProxySetting {
         return v == null || v.equals(WINDOWS) ? null : v;
     }
 
-    /** {@code GESHER_PROXY=<setting>} for the package's process, or null. */
-    public static String environment(String packageName) {
+    /**
+     * The package's process environment for its setting (none for Windows' settings):
+     * {@code GESHER_PROXY}, and the variables HTTP clients outside Android's proxy read
+     * (Dart's HttpClient, curl, Go): {@code HTTP_PROXY}/{@code HTTPS_PROXY}, empty for
+     * {@code direct}, with this machine's names in {@code NO_PROXY}. Windows' names do not
+     * differ by case: these replace the device's own, in either case.
+     */
+    public static java.util.List<String> environment(String packageName) {
+        java.util.List<String> env = new java.util.ArrayList<>();
         String v = forPackage(packageName);
-        return v == null ? null : ENV + "=" + v;
+        if (v == null) return env;
+        env.add(ENV + "=" + v);
+        String url = v.equals(DIRECT) ? "" : "http://" + v;
+        env.add("HTTP_PROXY=" + url);
+        env.add("HTTPS_PROXY=" + url);
+        env.add("NO_PROXY=localhost,127.0.0.1,::1");
+        return env;
     }
 
     /** This process's setting ($GESHER_PROXY), or null for Windows' settings. */

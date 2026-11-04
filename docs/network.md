@@ -190,8 +190,9 @@ processes of packages without it; gesher-app applies it in its own process
   is no proxy; `windows` for a package is Windows' settings over every app's setting), or for
   one launch (`gesher-app launch PACKAGE --proxy host:port`). The system server gives an app
   process its setting (the launch's, else the package's, else every app's) as
-  `$GESHER_PROXY` when it starts it; `WindowsProxy` then takes it instead of Windows'
-  settings (an HTTP proxy server, with localhost, 127.0.0.1 and [::1] left out) and does not
+  `$GESHER_PROXY` when it starts it, with `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` for HTTP
+  clients that read those (Dart's HttpClient: Flutter apps); `WindowsProxy` then takes it
+  instead of Windows' settings (an HTTP proxy server, with localhost, 127.0.0.1 and [::1] left out) and does not
   follow Windows' changes. A running app keeps its proxy until its process ends.
 - **CONNECTIVITY_ACTION**: the connectivity service keeps it sticky (made at the first
   sticky query, as BatteryService's battery broadcast) and sends it when the default

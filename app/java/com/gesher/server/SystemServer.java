@@ -213,8 +213,7 @@ public final class SystemServer {
             String inet = ConnectivityService.internetEnvironment(packageName);
             if (inet != null) env.add(inet);
             // Gesher's own proxy for the package, over Windows' (docs/network.md).
-            String proxy = com.gesher.net.ProxySetting.environment(packageName);
-            if (proxy != null) env.add(proxy);
+            env.addAll(com.gesher.net.ProxySetting.environment(packageName));
             return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
                     String.valueOf(targetSdk))), env, logFile.getPath(), false);
