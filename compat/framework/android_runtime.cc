@@ -69,6 +69,8 @@ int register_android_content_StringBlock(JNIEnv* env);
 int register_android_content_XmlBlock(JNIEnv* env);
 int register_android_os_FileObserver(JNIEnv* env);
 int register_android_os_MessageQueue(JNIEnv* env);
+int register_gesher_MemoryFile(JNIEnv* env);
+int register_gesher_MemoryIntArray(JNIEnv* env);
 int register_android_os_Parcel(JNIEnv* env);
 int register_android_os_ServiceManagerNative(JNIEnv* env);
 int register_android_os_SystemClock(JNIEnv* env);
@@ -812,6 +814,8 @@ static const struct {
     {"android_util_jar_StrictJarFile", "android/util/jar/StrictJarFile",
      register_android_util_jar_StrictJarFile},
     {"android_os_MessageQueue", "android/os/MessageQueue", register_android_os_MessageQueue},
+    {"gesher_MemoryFile", "android/os/MemoryFile", register_gesher_MemoryFile},
+    {"gesher_MemoryIntArray", "android/util/MemoryIntArray", register_gesher_MemoryIntArray},
     // FileObserver over gesher-base's inotify (docs/posix.md).
     {"android_os_FileObserver", "android/os/FileObserver", register_android_os_FileObserver},
     {"android_os_Binder", "com/android/internal/os/BinderInternal", ::register_android_os_Binder},
