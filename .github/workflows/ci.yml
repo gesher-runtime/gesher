@@ -41,6 +41,8 @@ jobs:
       - name: Strict archive adversarial controls
         run: |
           python3 tools/ci/receipt_identity.py
+          python3 -m unittest discover -s tools/ci -p test_source_identity.py
+          python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/surface/test-verified-artifact.py
 
       - name: Compatibility inventory parser tests

@@ -12,6 +12,7 @@ $trusted = @{
   'tools/net-tcp-priority/qualified/TsfJobSupervisor.cs'='625be4d5906bb48dd02d6103382fd2e85ac88738'
   'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
   'tools/ci/receipt-diagnostics.ps1'='80f33415a4c57c42c99f74ae61fc5da1316195ef'
+  'tools/ci/source_identity.py'='6c8acc8c90ec2bc134604041a7a60a67b06af235'
 }
 foreach ($entry in $trusted.GetEnumerator()) {
   $actualHelperBlob = git hash-object $entry.Key
@@ -20,20 +21,23 @@ foreach ($entry in $trusted.GetEnumerator()) {
   if ($actualHelperBlob -cne $entry.Value -or $helperHashExit -ne 0) { throw "Unreviewed helper $($entry.Key)" }
 }
 if ((git rev-parse HEAD) -cne $env:GITHUB_SHA -or $LASTEXITCODE -ne 0) { throw 'Checkout mismatch' }
+$sourceJson = python tools/ci/source_identity.py
+if ($LASTEXITCODE -ne 0) { throw 'Invalid CI source identity' }
+$ciSource = $sourceJson | ConvertFrom-Json
 . (Join-Path $PSScriptRoot '../ci/receipt-diagnostics.ps1')
 $jobsRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"
 if ($LASTEXITCODE -ne 0) { throw 'Cannot read producer jobs' }
 $jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -CEQ $expectedProducer)
 Write-Host ('TCP_COHERENT_PRODUCER_INVENTORY ' + ([ordered]@{ expected_producer=$expectedProducer; selection=$selection; total_count=($jobsRaw | ConvertFrom-Json).total_count; received_count=@(($jobsRaw | ConvertFrom-Json).jobs).Count; selected_count=$jobs.Count; names=@(($jobsRaw | ConvertFrom-Json).jobs | ForEach-Object name) } | ConvertTo-Json -Depth 8 -Compress))
 Write-CiProducerIdentity -Producer $expectedProducer -Rows $jobs
-if ($jobs.Count -ne 1 -or $jobs[0].conclusion -cne 'success' -or "$($jobs[0].run_id)" -cne $env:GITHUB_RUN_ID -or "$($jobs[0].run_attempt)" -cne $env:GITHUB_RUN_ATTEMPT -or $jobs[0].head_sha -cne $env:GITHUB_SHA) { throw 'Producer mismatch' }
+if ($jobs.Count -ne 1 -or $jobs[0].conclusion -cne 'success' -or "$($jobs[0].run_id)" -cne $env:GITHUB_RUN_ID -or "$($jobs[0].run_attempt)" -cne $env:GITHUB_RUN_ATTEMPT -or $jobs[0].head_sha -cne $ciSource.api_head_sha) { throw 'Producer mismatch' }
 $raw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts?per_page=100"
 if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect artifact inventory' }
 $rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -CEQ "tcp-coherent-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT")
 Write-CiArtifactInventory -Name "tcp-coherent-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT" -Inventory ($raw | ConvertFrom-Json) -Rows $rows -Producer $jobs[0]
 if ($rows.Count -ne 1) { throw 'Artifact not unique' }
 $a = $rows[0]
-if ($a.id -le 0 -or $a.size_in_bytes -le 0 -or $a.expired -or $a.digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or "$($a.workflow_run.id)" -cne $env:GITHUB_RUN_ID -or "$($a.workflow_run.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or "$($a.workflow_run.head_repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or $a.workflow_run.head_sha -cne $env:GITHUB_SHA -or [datetime]$a.created_at -lt [datetime]$jobs[0].started_at -or [datetime]$a.created_at -gt [datetime]$jobs[0].completed_at) { throw 'Artifact source/run/attempt provenance mismatch' }
+if ($a.id -le 0 -or $a.size_in_bytes -le 0 -or $a.expired -or $a.digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or "$($a.workflow_run.id)" -cne $env:GITHUB_RUN_ID -or "$($a.workflow_run.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or "$($a.workflow_run.head_repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or $a.workflow_run.head_sha -cne $ciSource.api_head_sha -or [datetime]$a.created_at -lt [datetime]$jobs[0].started_at -or [datetime]$a.created_at -gt [datetime]$jobs[0].completed_at) { throw 'Artifact source/run/attempt provenance mismatch' }
 python tools/native3-locks/artifact/download-verified-artifact.py --id "$($a.id)" --digest $a.digest --destination tcp-fixture
 if ($LASTEXITCODE -ne 0) { throw 'Raw archive digest or extraction failed' }
 $m = Get-Content -LiteralPath tcp-fixture/provenance.json -Raw | ConvertFrom-Json
