@@ -8,6 +8,7 @@
 #pragma once
 
 #include <poll.h>
+#include <sys/epoll.h>
 #include <windows.h>
 
 #include <memory>
@@ -61,5 +62,10 @@ void WakePollers();
 // *interrupted set, when the auto-reset event `interrupt` is signaled.
 // `interrupt` may be null.
 int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted);
+
+// Deterministic readiness-race probe: invoke the per-call observer once after
+// the first interest snapshot, with no graph/descriptor/epoll locks held.
+int EpollWaitWithObserver(int epfd, epoll_event* events, int maxevents, int timeout,
+                          void (*observer)(void*), void* context);
 
 }  // namespace gesher

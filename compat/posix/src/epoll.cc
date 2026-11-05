@@ -6,8 +6,9 @@
 // wait on them with the real timeout; blocking reads and writes wait on a
 // condition variable instead, since a writer may need more room than
 // "writable" promises. An epoll is an interest list, fd -> (events, data),
-// whose epoll_wait is poll() (fd.cc) over that list, woken early by an
-// auto-reset event when epoll_ctl changes it.
+// whose epoll_wait is poll() (fd.cc) over that list. Every waiter registers
+// its own interrupt event before sampling the list, so changes cannot be
+// consumed by another waiter or lost before generic poll-wake registration.
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -90,13 +91,41 @@ struct Epoll {
   std::mutex mutex;
   std::map<int, Entry> entries;
   uint64_t next_id = 1;
-  HANDLE changed = nullptr;  // auto-reset; epoll_ctl sets it to wake waiters
+  std::vector<HANDLE> waiters;  // each handle's lifetime is protected by mutex
+
+  void NotifyLocked() {
+    for (HANDLE waiter : waiters) SetEvent(waiter);
+  }
 
   Epoll() { epoll_count.fetch_add(1, std::memory_order_release); }
   ~Epoll() {
-    if (changed != nullptr) CloseHandle(changed);
     epoll_count.fetch_sub(1, std::memory_order_release);
   }
+};
+
+class EpollWaiter {
+ public:
+  explicit EpollWaiter(std::shared_ptr<Epoll> ep) : ep_(std::move(ep)) {
+    changed_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (changed_ == nullptr) return;
+    std::lock_guard<std::mutex> lock(ep_->mutex);
+    ep_->waiters.push_back(changed_);
+  }
+  ~EpollWaiter() {
+    if (changed_ == nullptr) return;
+    {
+      std::lock_guard<std::mutex> lock(ep_->mutex);
+      std::erase(ep_->waiters, changed_);
+    }
+    CloseHandle(changed_);
+  }
+  EpollWaiter(const EpollWaiter&) = delete;
+  EpollWaiter& operator=(const EpollWaiter&) = delete;
+  HANDLE changed() const { return changed_; }
+
+ private:
+  std::shared_ptr<Epoll> ep_;  // survives a concurrent close of the descriptor
+  HANDLE changed_ = nullptr;
 };
 
 // fd -> object, for each kind. An inotify's fd has its readiness as its
@@ -385,7 +414,7 @@ void ForgetEpollEntries(int fd) {
   }
   for (auto& ep : live) {
     std::lock_guard<std::mutex> lock(ep->mutex);
-    ep->entries.erase(fd);
+    if (ep->entries.erase(fd) != 0) ep->NotifyLocked();
   }
 }
 
@@ -426,8 +455,6 @@ int eventfd_write(int fd, eventfd_t value) {
 int epoll_create1(int flags) {
   if ((flags & ~EPOLL_CLOEXEC) != 0) return errno = EINVAL, -1;  // always CLOEXEC, as eventfd
   auto ep = std::make_shared<Epoll>();
-  ep->changed = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-  if (ep->changed == nullptr) return gesher::FailWithLastError();
   {
     std::lock_guard<std::mutex> lock(gesher::epolls_mutex);
     gesher::epolls.push_back(ep);
@@ -481,18 +508,23 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
         ep->entries.erase(it);
         break;
     }
+    ep->NotifyLocked();
   }
-  SetEvent(ep->changed);  // a waiter takes the new list
-  gesher::WakePollers();  // one in WSAPoll too
+  gesher::WakePollers();  // nested epoll/poll and waiters in WSAPoll too
   return 0;
 }
 
-int epoll_wait(int epfd, struct epoll_event* events, int maxevents, int timeout) {
+static int EpollWaitImpl(int epfd, struct epoll_event* events, int maxevents, int timeout,
+                         void (*observer)(void*), void* context) {
   if (maxevents <= 0) return errno = EINVAL, -1;
   std::shared_ptr<Epoll> ep = gesher::LookupEpoll(epfd);
   if (ep == nullptr) {
     return errno = gesher::HandleFromFd(epfd) == INVALID_HANDLE_VALUE ? EBADF : EINVAL, -1;
   }
+  // Register before the first snapshot. A topology change in the gap before
+  // PollFds registers its generic wake channel stays pending on this handle.
+  gesher::EpollWaiter waiter(ep);
+  if (waiter.changed() == nullptr) return gesher::FailWithLastError();
   ULONGLONG deadline = gesher::DeadlineAfter(timeout);
   std::vector<pollfd> fds;
   std::vector<uint64_t> ids;
@@ -507,12 +539,17 @@ int epoll_wait(int epfd, struct epoll_event* events, int maxevents, int timeout)
         ids.push_back(entry.id);
       }
     }
+    if (observer != nullptr) {
+      auto call = observer;
+      observer = nullptr;
+      call(context);
+    }
     int wait_ms = -1;
     if (timeout >= 0) {
       wait_ms = gesher::MillisUntil(deadline);
     }
     bool interrupted = false;
-    int ready = gesher::PollFds(fds.data(), fds.size(), wait_ms, ep->changed, &interrupted);
+    int ready = gesher::PollFds(fds.data(), fds.size(), wait_ms, waiter.changed(), &interrupted);
     if (ready < 0) return -1;
 
     int count = 0;
@@ -543,6 +580,10 @@ int epoll_wait(int epfd, struct epoll_event* events, int maxevents, int timeout)
   }
 }
 
+int epoll_wait(int epfd, struct epoll_event* events, int maxevents, int timeout) {
+  return EpollWaitImpl(epfd, events, maxevents, timeout, nullptr, nullptr);
+}
+
 // Signals are not delivered asynchronously here, so the mask has nothing to
 // change while waiting (as ppoll, fd.cc).
 int epoll_pwait(int epfd, struct epoll_event* events, int maxevents, int timeout,
@@ -551,3 +592,10 @@ int epoll_pwait(int epfd, struct epoll_event* events, int maxevents, int timeout
 }
 
 }  // extern "C"
+
+namespace gesher {
+int EpollWaitWithObserver(int epfd, epoll_event* events, int maxevents, int timeout,
+                          void (*observer)(void*), void* context) {
+  return EpollWaitImpl(epfd, events, maxevents, timeout, observer, context);
+}
+}  // namespace gesher
