@@ -25,17 +25,24 @@ def extract(text, pid=None):
     fatals = [(index, match) for index, line in enumerate(lines)
               if (match := FATAL.search(line))]
     mappings = []
-    # Mapping records after the fatal marker cannot explain that crash.
-    for line in lines[:fatals[-1][0] if fatals else len(lines)]:
+    for index, line in enumerate(lines):
         match = MAPPING.fullmatch(line)
         if match:
             process, abi, base, bias, span, name = match.groups()
             mappings.append(dict(pid=int(process), abi=abi, name=name,
-                                 base=int(base, 16), bias=int(bias, 16), span=int(span, 16)))
+                                 base=int(base, 16), bias=int(bias, 16), span=int(span, 16),
+                                 line=index))
     pids = sorted({item['pid'] for item in mappings})
     if pid is None and len(pids) == 1:
         pid = pids[0]
-    result = dict(crash_found=bool(fatals), pid=pid, mapping_pids=pids)
+    process_maps = [item for item in mappings if item['pid'] == pid]
+    if process_maps:
+        # Zygote appends logs. A previous process's fatal before this process
+        # first mapped an ELF is not evidence that this process has crashed.
+        start = process_maps[0]['line']
+        fatals = [(index, match) for index, match in fatals if index >= start]
+    result = dict(crash_found=bool(fatals), pid=pid, mapping_pids=pids,
+                  pid_verified_from_mapping=bool(process_maps), host_pc=None, elf_pc=None)
     if not fatals:
         return result
     index, fatal = fatals[-1]
@@ -58,7 +65,8 @@ def extract(text, pid=None):
     if 'rip' in registers and pid is not None:
         pc = int(registers['rip'], 16)
         for item in reversed(mappings):
-            if (item['pid'] == pid and item['base'] <= pc and item['bias'] <= pc
+            if (item['line'] < index and item['pid'] == pid
+                    and item['base'] <= pc and item['bias'] <= pc
                     and pc - item['base'] < item['span']):
                 result['elf_pc'] = dict(name=item['name'], abi=item['abi'],
                                          offset=f"0x{pc - item['bias']:x}",
@@ -73,11 +81,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--log', type=Path, required=True)
     parser.add_argument('--pid', type=int)
+    parser.add_argument('--start-offset', type=int, default=0,
+                        help='Byte length recorded before the current app launch/observation')
     parser.add_argument('--out', type=Path)
     args = parser.parse_args()
     # Raw messages, thread names, stack words and fault messages are never
     # copied. This output is metadata, not a native backtrace or cause claim.
-    result = extract(args.log.read_text(encoding='utf-8', errors='replace'), args.pid)
+    with args.log.open('rb') as stream:
+        size = stream.seek(0, 2)
+        if args.start_offset < 0 or args.start_offset > size:
+            parser.error('log is shorter than --start-offset; capture a new observation boundary')
+        stream.seek(args.start_offset)
+        text = stream.read().decode('utf-8', errors='replace')
+    result = extract(text, args.pid)
+    result['start_offset_bytes'] = args.start_offset
     encoded = json.dumps(result, indent=2) + '\n'
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

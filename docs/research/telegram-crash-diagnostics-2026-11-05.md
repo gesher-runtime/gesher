@@ -24,11 +24,18 @@ the interrupted loader thread.
 For a per-app process log, extract the technical record only:
 
 ```powershell
-python tools/extract_native_crash.py --log <per-process-log> --pid <app-pid> `
+python tools/extract_native_crash.py --log <app-log> --pid <app-pid> `
+  --start-offset <byte-length-recorded-before-launch> `
   --out out/telegram-network/current-crash-redacted.json
 ```
 
-The extractor selects the last fatal record in that process log. It copies
+Zygote appends logs across launches. Record the existing log's byte length
+before launching the app, then provide that boundary so an old fatal cannot
+be mistaken for a recurrence. The extractor also ignores fatal records before
+the selected PID's first mapping record. A truncated/rotated log rejects an
+invalid byte boundary rather than silently reading historical data.
+
+The extractor selects the last fatal record in that observation segment. It copies
 only numeric signal/fault/register fields, sanitized mapping metadata and PE
 module offsets. App messages, thread names, stack contents and fault messages
 are excluded. A shared multi-process log must first be separated by process;
@@ -51,13 +58,13 @@ that exact ELF places `Java_gesher_JniTest_fatalNullRead` at 0x5270 with size
 disabled, the host fixture reports `ucrtbase.dll+0xed171` and emits no ELF
 mapping records. Both intentionally exit 1 with SIGSEGV and valid RIP/RSP.
 The Windows codegen track now requires this map-containment contract and the
-disabled-trace control. Five extractor tests cover payload exclusion, load
-bias, PID ambiguity, stale fatal records and invalid/out-of-range mappings.
+disabled-trace control. Six extractor tests cover payload exclusion, load
+bias, PID ambiguity, stale/appended fatal records and invalid/out-of-range mappings.
 
 Local synthetic results are in `out/telegram-network/trace-fatal-results.json`.
 The artifact/source receipt is
 `out/telegram-network/diagnostic-runtime-receipt.json`, SHA-256
-`ff331571056aef01d432839052d062ee0c4c95282d575776c2fa4be3e7de8cf8`.
+`fa951ba6ac78eecc5a5f1fc7e6390c53c46cb3429170f1ef89b45ff14390aba9`.
 These results validate diagnostics; they do not establish a Telegram crash fix
 or successful Telegram login. A fresh real fatal PC and matching native binary
 are still required for causal disassembly and a targeted regression.

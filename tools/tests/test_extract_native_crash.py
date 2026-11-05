@@ -51,6 +51,14 @@ class ExtractNativeCrashTest(unittest.TestCase):
         self.assertFalse(result['crash_found'])
         self.assertNotIn('registers', result)
 
+    def test_new_process_mapping_does_not_inherit_appended_old_fatal(self):
+        text = mapping(1, 'old.so') + FATAL + mapping(2, 'current.so')
+        current = extract(text, 2)
+        self.assertFalse(current['crash_found'])
+        self.assertTrue(current['pid_verified_from_mapping'])
+        self.assertNotIn('registers', current)
+        self.assertEqual(extract(text, 1)['elf_pc']['name'], 'old.so')
+
 
 if __name__ == '__main__':
     unittest.main()
