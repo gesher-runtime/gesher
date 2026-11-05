@@ -108,10 +108,20 @@ if ($BootProfiles) {
   $pa = @('--output-profile-type=boot', "--create-profile-from=$(NoDrive $text)", "--reference-profile-file=$bootProfile")
   foreach ($jar in $jars) { $pa += "--apk=$(NoDrive "$dist/$jar.jar")", "--dex-location=$jar.jar" }
   $watch = [Diagnostics.Stopwatch]::StartNew()
-  $out = & (Join-Path $dist 'profman.exe') @pa 2>&1 | Out-String
-  if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $root 'boot.prof'))) {
+  # Windows PowerShell 5 wraps native stderr as ErrorRecords. Profman's normal
+  # diagnostic output must not terminate the pipeline before its exit is checked.
+  $savedErrorPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $out = & (Join-Path $dist 'profman.exe') @pa 2>&1 | Out-String
+    $profmanCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $savedErrorPreference
+  }
+  $profileFile = Join-Path $root 'boot.prof'
+  if ($profmanCode -ne 0 -or -not (Test-Path $profileFile) -or (Get-Item $profileFile).Length -eq 0) {
     Write-Host $out
-    throw ('profman failed to make the boot image profile (exit 0x{0:X8})' -f $LASTEXITCODE)
+    throw ('profman failed to make the boot image profile (exit 0x{0:X8})' -f $profmanCode)
   }
   Write-Host ("profman: boot image profile from {0} ({1:N0} lines): {2:N0} bytes in {3:N1} s" -f
     (($BootProfiles | ForEach-Object { Split-Path -Leaf $_ }) -join ' + '), $lines, (Get-Item (Join-Path $root 'boot.prof')).Length, $watch.Elapsed.TotalSeconds)
