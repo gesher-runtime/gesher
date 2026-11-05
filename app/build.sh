@@ -9,7 +9,8 @@
 #   root), as tools/framework/build.py takes it. Without it the JDK's java.base stands
 #   in, which is enough to compile but not a check against Android's libcore.
 #
-# Writes <out-dir>/gesher-app.jar (classes.dex) and <out-dir>/build.prop. gesher-app.jar
+# Writes <out-dir>/gesher-app.jar (classes.dex), gesher-app-classes.jar (compile-only),
+# and <out-dir>/build.prop. gesher-app.jar
 # goes on -Xbootclasspath after framework.jar (see app/README.md). Needs a JDK 17+ and
 # curl; d8 comes from Google's Maven repository (R8_JAR to use a local copy). Runs on
 # Linux and in Git Bash on Windows.
@@ -166,6 +167,12 @@ fi
 echo "ext (tagsoup): $tagsoup classes into gesher-app.jar"
 
 # One dex for all, into a jar.
+# Preserve those same class inputs for compiling tests of API classes supplied by
+# gesher-app rather than the base framework. This JVM archive is compile-only;
+# installer/CI distribution packaging continues to name its DEX artifacts explicitly.
+jar --create --file "$(native "$out/gesher-app-classes.jar")" --no-manifest \
+  -C "$(native "$work/classes")" . -C "$(native "$work/compat")" . \
+  -C "$(native "$work/location")" . -C "$(native "$work/ext")" .
 ( cd "$work" && find classes compat location ext -name '*.class' ) > "$work/dex.txt"
 (cd "$work" && java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
   --output "$(native "$out/gesher-app.jar")" @dex.txt)

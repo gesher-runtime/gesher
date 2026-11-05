@@ -342,7 +342,7 @@ jobs:
       - name: Build gesher-app and lifecycle.apk
         run: |
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
-          tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
+          tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
           tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           tests/web3-query/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           chmod +x work/build-tools-36.1/zipalign  # a cache saved before zipalign was made executable
