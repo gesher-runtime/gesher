@@ -15,3 +15,26 @@ transport data and parcel formats. They neither start scanning nor advertise a
 Bluetooth feature. `BluetoothDevice` supplies the address value/parcel and
 attribution contract those types need, while its hardware-dependent answers
 remain unavailable.
+
+The additional scan settings/filter, advertisement data/settings/parameters,
+periodic parameters/report, transport filter and advertising callback use the
+same pinned AOSP tag. BluetoothAssignedNumbers, BluetoothStatusCodes and the
+scan permission annotation supply their real constant/annotation dependencies.
+Exact URLs and upstream/local SHA-256 receipts are in
+`docs/research/aosp-bluetooth-values-2026-11-05.json`.
+
+The local adaptations are limited to generated flag annotation constants being
+spelled as their string literals, ScanSettings' active scan default (both
+branches of the upstream flag expression have value 2), and inlining the
+BluetoothUtils.writeStringToParcel wrapper as Parcel.writeString. These avoid
+importing the Bluetooth service stack and preserve the value/parcel behavior.
+BluetoothDevice supplies its SOURCE-retained AddressType annotation;
+BluetoothAdapter supplies upstream random-static address classification and
+reports transport-discovery offload as unsupported.
+
+BluetoothValueContractTest passed 31 assertions in a separate Windows runtime
+with isolated ART data and no Binder connection. It covers settings defaults
+and validation, real advertisement parsing, compound and masked filter matches
+and mismatches, builder conflicts, and complete parcel consumption for seven
+value types. Adapter availability remains null before and after all tests.
+It does not test scanning, advertising, connections or any Bluetooth hardware.

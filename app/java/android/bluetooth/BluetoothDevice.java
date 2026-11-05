@@ -4,6 +4,7 @@
  */
 package android.bluetooth;
 
+import android.annotation.IntDef;
 import android.content.AttributionSource;
 import android.os.Parcel;
 import android.os.Parcelable;
@@ -14,6 +15,10 @@ import android.os.Parcelable;
  * still cross a Parcel, as the Bluetooth module's ScanResult requires.
  */
 public final class BluetoothDevice implements Parcelable, Attributable {
+    /** @hide Address value annotation used by the AOSP BLE value classes. */
+    @IntDef({ADDRESS_TYPE_PUBLIC, ADDRESS_TYPE_RANDOM, ADDRESS_TYPE_ANONYMOUS})
+    @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.SOURCE)
+    public @interface AddressType {}
     public static final String ACTION_FOUND = "android.bluetooth.device.action.FOUND";
     public static final String ACTION_ACL_CONNECTED = "android.bluetooth.device.action.ACL_CONNECTED";
     public static final String ACTION_ACL_DISCONNECTED =
