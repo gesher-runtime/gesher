@@ -314,3 +314,28 @@ independent clients, Play Integrity, proprietary billing and DRM remain
 unvalidated. Android API identity and DPAPI checks do not provide a Windows OS
 sandbox against code running with the same user's host privileges. See the
 [current integration guide](../microg.md) for supported paths and limitations.
+
+## Authenticator discovery follow-up
+
+The official microG v0.3.17.252432 APK declares its GoogleLoginService as private,
+without `BIND_ACCOUNT_AUTHENTICATOR`. Gesher's original discovery predicate
+incorrectly excluded it. A metadata-only ART regression reproduced the absent
+descriptor on the earlier build and verified it after accepting enabled private
+authenticators. Exported services still require the platform bind permission,
+Google account types retain the verified official-owner gate, and disabled
+services and manifest-disabled owner applications are excluded. XML custom-token
+flags and literal Boolean compatibility metadata are handled without mistaking
+resource-reference metadata for a Boolean.
+
+The follow-up jar and fixture passed all 37 offline integration checks. Exact
+hashes are in the [separate validation record](microg-authenticator-validation-2026-11-05.json).
+The active interactive sign-in profile was not replaced or copied for these
+tests, and the tests read no personal accounts, cookies or credentials.
+
+This fixes discovery, not the observed consent-page stall. The completion path
+also requires a general WebView bridge threading correction: microG's JavaScript
+`closeView` callback synchronously reads CookieManager, while Gesher currently
+runs that callback on WebView2's thread and returns null for synchronous cookie
+reads there. No successful real Google account registration or token use is
+claimed by this follow-up. The earlier FCM measurements remain tied to their
+explicitly recorded prior artifact hash.

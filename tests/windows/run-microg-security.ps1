@@ -315,6 +315,7 @@ try {
     }
     $env:GESHER_MICROG_SPOOF = '1'
     if ($GmsCoreApk) {
+        Guest 'MicrogAuthenticatorTest' @((AndroidPath $GmsCoreApk), (AndroidPath $DevsvcApk))
         Guest 'PermissionRequestsTest' $metadata 'async grant/deny, result mapping and replacement race passed'
         Guest 'DispatchSecurityTest' (@($fixtures) + $metadata)
         Guest 'BroadcastLifecycleTest' $metadata

@@ -45,6 +45,24 @@
         <activity android:name=".AccountActivity" android:exported="true" />
         <activity android:name=".AccountTokenActivity" android:exported="false" />
         <service android:name=".PrivateAccountService" android:exported="false" />
+        <service android:name=".TestPrivateAuthenticator" android:exported="false">
+            <intent-filter><action android:name="android.accounts.AccountAuthenticator" /></intent-filter>
+            <meta-data android:name="android.accounts.AccountAuthenticator" android:resource="@xml/authenticator_private" />
+            <meta-data android:name="android.accounts.AccountAuthenticator.customTokens" android:value="true" />
+        </service>
+        <service android:name=".TestDisabledAuthenticator" android:exported="false" android:enabled="false">
+            <intent-filter><action android:name="android.accounts.AccountAuthenticator" /></intent-filter>
+            <meta-data android:name="android.accounts.AccountAuthenticator" android:resource="@xml/authenticator_disabled" />
+        </service>
+        <!-- Negative authenticator descriptor fixtures; never requested by AccountActivity. -->
+        <service android:name=".TestUnprotectedAuthenticator" android:exported="true">
+            <intent-filter><action android:name="android.accounts.AccountAuthenticator" /></intent-filter>
+            <meta-data android:name="android.accounts.AccountAuthenticator" android:resource="@xml/authenticator_unprotected" />
+        </service>
+        <service android:name=".TestForgedGoogleAuthenticator" android:exported="false">
+            <intent-filter><action android:name="android.accounts.AccountAuthenticator" /></intent-filter>
+            <meta-data android:name="android.accounts.AccountAuthenticator" android:resource="@xml/authenticator_forged_google" />
+        </service>
         <service android:name=".TestCustomAuthenticator" android:exported="true"
             android:permission="android.permission.BIND_ACCOUNT_AUTHENTICATOR">
             <intent-filter><action android:name="android.accounts.AccountAuthenticator" /></intent-filter>

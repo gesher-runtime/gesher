@@ -185,6 +185,20 @@ These account paths have been exercised with test authenticators and fake
 credentials. They do not validate microG's embedded Google login flow or the
 safety of entering a personal Google password into this runtime.
 
+Authenticator discovery accepts enabled private services and enabled exported
+services protected by `BIND_ACCOUNT_AUTHENTICATOR`; the Google-type signer gate
+still applies. A follow-up regression against the unmodified official APK found
+that requiring this permission on private services excluded microG's actual
+GoogleLoginService. The correction passed the expanded 37-check offline suite,
+including disabled services/apps, unsafe exports and forged Google owners.
+See the [authenticator validation record](research/microg-authenticator-validation-2026-11-05.json).
+
+Google login completion remains incomplete. A consent page is not evidence of a
+registered account or a usable client token. There is also a separate WebView
+completion blocker: synchronous JavaScript-interface callbacks run on the WebView2
+thread, where the cookie API cannot synchronously retrieve the login cookie.
+Fixing authenticator discovery alone does not establish end-to-end Google sign-in.
+
 ## Notification access
 
 Application notification mutation and queries authenticate the owning package.

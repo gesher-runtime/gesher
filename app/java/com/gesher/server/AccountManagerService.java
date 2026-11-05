@@ -1034,8 +1034,14 @@ public final class AccountManagerService extends IAccountManager.Default {
         Intent intent = new Intent(AccountManager.ACTION_AUTHENTICATOR_INTENT);
         for (ResolveInfo ri : mPm.services(intent, null, PackageManager.GET_META_DATA)) {
             ServiceInfo service = ri.serviceInfo;
-            if (service == null || service.metaData == null
-                    || !"android.permission.BIND_ACCOUNT_AUTHENTICATOR".equals(service.permission)) continue;
+            // Private authenticators (including official microG) are reachable
+            // only by their owner or the trusted account service. An exported
+            // authenticator must additionally require the platform bind permission.
+            if (service == null || service.metaData == null || !service.enabled) continue;
+            ApkPackage owner = mPm.get(service.packageName);
+            if (owner == null || !owner.parsed.isEnabled()) continue;
+            if (service.exported && !"android.permission.BIND_ACCOUNT_AUTHENTICATOR"
+                    .equals(service.permission)) continue;
             int xml = service.metaData.getInt(AccountManager.AUTHENTICATOR_META_DATA_NAME);
             if (xml == 0) continue;
             Authenticator a = parse(service, xml);
@@ -1092,7 +1098,9 @@ public final class AccountManagerService extends IAccountManager.Default {
                         parser.getAttributeResourceValue(ANDROID_NS, "icon", 0),
                         parser.getAttributeResourceValue(ANDROID_NS, "smallIcon", 0),
                         parser.getAttributeResourceValue(ANDROID_NS, "accountPreferences", 0),
-                        parser.getAttributeBooleanValue(ANDROID_NS, "customTokens", false));
+                        parser.getAttributeBooleanValue(ANDROID_NS, "customTokens", false)
+                                || Boolean.TRUE.equals(service.metaData.get(
+                                        AccountManager.AUTHENTICATOR_META_DATA_NAME + ".customTokens")));
             }
         } catch (Exception e) {
             SystemServer.log(TAG + "the authenticator of " + component.flattenToShortString()
