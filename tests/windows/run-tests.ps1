@@ -155,6 +155,11 @@ Check 'framework LocalSocket: filesystem streams, EOF, ownership and unsupported
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/framework-tests.dex") gesher.FrameworkLocalSocketTest
 } @('FrameworkLocalSocketTest all passed')
 
+Check 'framework CharsetUtils: UTF bytes, capacity and buffer ownership' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpFramework" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/framework-tests.dex") gesher.FrameworkCharsetTest
+} @('FrameworkCharsetTest all passed')
+
 # gesher-app drives lifecycle.apk's Activity to onResume (app/README.md): the
 # app's manifest, its resources and framework-res.apk's theme are read, and
 # the Application and the Activity go through their callbacks.

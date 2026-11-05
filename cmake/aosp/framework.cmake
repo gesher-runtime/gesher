@@ -121,6 +121,7 @@ add_library(framework_runtime OBJECT
   ${CMAKE_SOURCE_DIR}/compat/framework/memory_int_array.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/scrypt.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/local_socket.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/charset_utils.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/tracing_perfetto_stub.cc)
 target_include_directories(framework_runtime PRIVATE
   ${_fwjni} ${_fwjni}/include ${CMAKE_SOURCE_DIR}/compat/framework/include
