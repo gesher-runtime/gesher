@@ -124,6 +124,10 @@ public final class Services {
         // answers null.
         services.put(Context.POWER_SERVICE, StandIn.of(android.os.IPowerManager.class,
                 new PowerManagerService()).asBinder());
+        // DeviceIdleManager is also PowerExemptionManager's constructor dependency.
+        // Register the real Binder stub in both in-process and system-server modes.
+        services.put(Context.DEVICE_IDLE_CONTROLLER, StandIn.of(android.os.IDeviceIdleController.class,
+                new DeviceIdleController()).asBinder());
         services.put(Context.THERMAL_SERVICE, StandIn.of(android.os.IThermalService.class,
                 new DeviceServices.ThermalService()).asBinder());
         services.put(Context.ALARM_SERVICE, StandIn.of(android.app.IAlarmManager.class,
