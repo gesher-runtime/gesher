@@ -235,17 +235,16 @@ final class DeviceServices {
     }
 
     /**
-     * {@code usagestats}: UsageStatsManager service stand-in. Returns empty collections
-     * and ACTIVE standby bucket so apps querying usage stats proceed without NPE.
+     * {@code usagestats}: no collected usage history or Android app standby.
      */
-    static final class UsageStatsService extends IUsageStatsManager.Default {
+    static final class UsageStatsService extends DesktopUsageStatsService {
+        UsageStatsService(PackageManagerService packages) { super(packages); }
     }
 
     /**
-     * {@code device_policy}: DevicePolicyManager service stand-in. Reports no active admins
-     * and storage encrypted so enterprise/security checks pass cleanly.
+     * {@code device_policy}: no Android administrators; Android encryption is unsupported.
      */
-    static final class DevicePolicyService extends IDevicePolicyManager.Default {
+    static final class DevicePolicyService extends UnmanagedDevicePolicyService {
     }
 
     /**
@@ -317,8 +316,9 @@ final class DeviceServices {
     }
 
     /**
-     * {@code shortcut}: ShortcutManager service stand-in.
+     * {@code shortcut}: explicit absence of an Android shortcut host/publisher.
      */
-    static final class ShortcutService extends IShortcutService.Default {
+    static final class ShortcutService extends DesktopShortcutService {
+        ShortcutService(PackageManagerService packages) { super(packages); }
     }
 }

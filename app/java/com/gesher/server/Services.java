@@ -171,7 +171,7 @@ public final class Services {
                 new DeviceServices.DropBoxManagerService()).asBinder());
         services.put(Context.USAGE_STATS_SERVICE, StandIn.of(
                 android.app.usage.IUsageStatsManager.class,
-                new DeviceServices.UsageStatsService()).asBinder());
+                new DeviceServices.UsageStatsService(pm)).asBinder());
         services.put(Context.DEVICE_POLICY_SERVICE, StandIn.of(
                 android.app.admin.IDevicePolicyManager.class,
                 new DeviceServices.DevicePolicyService()).asBinder());
@@ -198,7 +198,7 @@ public final class Services {
                 new DeviceServices.TrustService()).asBinder());
         services.put(Context.SHORTCUT_SERVICE, StandIn.of(
                 android.content.pm.IShortcutService.class,
-                new DeviceServices.ShortcutService()).asBinder());
+                new DeviceServices.ShortcutService(pm)).asBinder());
         services.put("sensitive_content_protection_service", StandIn.of(
                 android.view.ISensitiveContentProtectionManager.class,
                 new DeviceServices.SensitiveContentProtectionService()).asBinder());
