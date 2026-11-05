@@ -302,6 +302,7 @@ try {
     Guest 'IdentitySecurityTest' @('uid-write', $durableUids) 'IdentitySecurityTest all passed' 'uid-write'
     Guest 'IdentitySecurityTest' @('uid-read', $durableUids) 'existing UID registry reopened without reassignment' 'uid-read'
     Guest 'AccountSecurityTest' @()
+    Guest 'AccountSecurityTest' @('authenticator-client', (AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountSecurityTest all passed' 'authenticator-client-delegation'
     Guest 'AccountSecurityTest' @('crypto-denied') 'loaded native protect/unprotect reject non-server role without plaintext fallback' 'native-crypto-denied'
     Guest 'NotificationSecurityTest' @((AndroidPath $ProbeApk), (AndroidPath $DevsvcApk))
     Guest 'SystemBindingCleanupTest' @((AndroidPath $DevsvcApk))

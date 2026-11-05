@@ -1,0 +1,59 @@
+{
+  "date": "2026-11-06",
+  "decision": "APPROVE",
+  "scope": "Independent final review after real Gmail account, mailbox and blank composer acceptance",
+  "reviewed_snapshot_parent": "21a2af8378dd1561e1364bee5ca3c3b55105fe36",
+  "reviewed_snapshot_sha256": "92f1557a769b2bcc00cec88d6bb826f2170093d9a9bb741a1f2f2f15a87cf0dc",
+  "reviewed_files": {
+    ".github/workflows/framework.yml": "3cbe8cd943518bc806622fbb5b2ff91f83c5411276a1e22e03ccc0a582b4e701",
+    "app/build.sh": "1f1660de4776869afa03401ceee404e2c98ad83b19ffc66b16a8e973b1990672",
+    "app/java/android/provider/MediaStore.java": "63fdd708e51a8aaa53841e6b6d4b5de3b290c1ce1c06f2da22e583d621550703",
+    "app/java/com/gesher/server/AccountManagerService.java": "0b0d7a085d7299b4d970a255d45508fcb6b655d4adfa9cef6ed448c8d5107737",
+    "compat/bionic/shim.cc": "e2a5b6c3a777d70ed3528f04572faabe763f0555ed2ba089312fe939c425201e",
+    "compat/bionic/shim_internal.h": "dd07562041cbf871ab2acd313144443b1a1264c39ae8c3e009a4061be74679da",
+    "compat/bionic/time_bionic.cc": "49769d0722148b7cfd054f84168eea3dec205013c240d29bd9d43075116f9deb",
+    "docs/microg.md": "37829e83f2c74d7ba28b415c383dd97128cf6592bf96e4da5488a43c1b8a5de9",
+    "docs/research/microg-signed-client-validation-2026-11-05.json": "b5a154ba05c2ff05b1a0478d4b4e7c32855b04d5eccce74d0252ff33f7cb6606",
+    "tests/dex-services/build.sh": "7e0123fc695a7a7b36ef93638b55764edf142be241a685e9cb397cc14d0416d6",
+    "tests/dex-services/gesher/services/AccountSecurityTest.java": "240d4a7eb0127d95b231be2f0610f88293673c5ac6a558e336de0e5073607edb",
+    "tests/native/libc_test.c": "836e6377c853282e25e1e07d7ab4f60165f9690154305bc143f845874c66a547",
+    "tests/windows/run-microg-security.ps1": "be87e5915d766b6b70c75b46497637bf83558cb0e97dd5986faa9e2c3c8c3bee",
+    "tests/windows/tracks/50-services.ps1": "a5db03b79c94d63498df136fb9cc36c0c43dfb8b350f2359d767fa65d754c5b6",
+    "docs/research/aosp-mediastore-contracts-2026-11-05.json": "ce31d00d7ddc085e1498da953d26a7215a41af76470338c6f6172edb2ed51666",
+    "docs/research/mediastore-contracts-2026-11-05.md": "b423b5bde4f26713a53320bedbbf22c3c4bcc38284fd6912eea085f75124c983",
+    "docs/research/microg-compose-validation-2026-11-05.json": "8e1e1c9b354b7d6a66e6efed1997f443150ebae2edf28ed0c2b4c77e5083cc84",
+    "docs/research/microg-gmail-validation-2026-11-05.json": "ce1f446c4c2158fbfa910f9a74e88e4ad8740efc45ed27fd47b84dd0cb0a2f2e",
+    "docs/research/microg-native-client-validation-2026-11-05.json": "00d6cf00d2cab38b5985d3bba2e438c4585ede1a9072426eaf4b7a48e238b0dd",
+    "patches/frameworks/base/0780-cursorwindow-parcel-jni-windows.patch": "77048e4d5a58f885a5b8efceb3a279ac99d45287405f603dc6a07227c3b2408e",
+    "tests/dex-services/gesher/services/CursorWindowParcelTest.java": "59f38e949f10ae59966bcbb1af2b095ba22dfe3fca87f3b4b4e5cd81f58a09ca",
+    "tests/dex-services/gesher/services/MediaStoreContractTest.java": "9f2fa8ea6aa5782e1e46cf7a4fcc8fa9e3b27afa4940fa89b161fc022d27e314",
+    "tests/native/timerfd_syscall_test.c": "cf63eb73441d74da17210d3d4e6b6b0b514ec5bc58a8a74ae123cc70e9db17c6",
+    "tests/native/timerfd_syscall_test.inc": "865617bc1c270d70a6a032ef8e63fc7d5987c0752064dc8f11a905c2fe3df836",
+    "tests/windows/tracks/94-framework-fixes.ps1": "fe4ba1ff93c3dec29f26fc174c519214572dcb6d90ec080f7a392d9f2602de32"
+  },
+  "reviewed_file_count": 25,
+  "findings": "No blocking findings remain; canonical MediaStore test invocation added during this same final review",
+  "runtime_sha256": {
+    "gesher-app.jar": "0cc47fe59548652393c4c38009a52f90426286b6fcd8e1e65f53b0b2c3da278d",
+    "dalvikvm.exe": "6fbc8a815ab3bb5eecd07994dd26e0426c068a38ffce26ee0bf62e73e09cdadf",
+    "libgesher_webview_bridge.so": "9c51dafefb525dd9916abe1bc8be36bdc993b5d16e3e8fb81fc361abf3b6b29a",
+    "services-tests.dex": "78ad5cff158a23da335944c1ad464a60a84ce7744ac7cba3fa6838c4805766ef"
+  },
+  "verified_evidence": [
+    "38 offline account/service/security checks on final tuple",
+    "28 MediaStore assertions against production boot jar; test DEX has no shadow MediaStore",
+    "4 actual loopback WebView cases on final tuple",
+    "16 numeric timerfd checks and frozen negative control",
+    "CursorWindow local and actual two-process Binder transfer",
+    "Clean Java rebuild byte-identical to installed experimental jar",
+    "Pinned Android16 MediaStore upstream source hash independently verified",
+    "Actual Gmail account/mailbox and blank-composer acceptance reported by root; no personal logs or mail read by reviewer"
+  ],
+  "limits": [
+    "Native executable reuses broader cached81af stability inputs, not a clean isolated-PR native build",
+    "Canonical track94 entry statically reviewed; PS7 helper not executed locally because PS7 unavailable; same28 assertions did run against actual production boot jar",
+    "Editing, sending, attachments, other client paths and full Google-service parity unvalidated",
+    "Full packaging and green GitHub CI not claimed"
+  ],
+  "metadata_finalization": "After approval, only approval references in three validation records and this receipt were added; reviewed code and test files remain unchanged"
+}

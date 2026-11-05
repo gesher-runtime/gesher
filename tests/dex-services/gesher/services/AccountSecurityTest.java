@@ -253,6 +253,98 @@ public final class AccountSecurityTest {
         System.out.println("AccountSecurityTest: unattached Binder caller cannot read, modify, delete or impersonate account owner");
     }
 
+    private static void authenticatorClient(String[] args) throws Exception {
+        require(args.length == 3, "Pass metadata-only devsvc.apk and microgprobe.apk fixtures");
+        android.content.res.AssetManager.createSystemAssetsInZygoteLocked(false,
+                System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
+        File temporary = Files.createTempDirectory("gesher-authenticator-client-").toFile();
+        android.system.Os.setenv("ANDROID_DATA", temporary.getAbsolutePath(), true);
+        android.system.Os.setenv("GESHER_MICROG_SPOOF", "1", true);
+        Class<?> apk = Class.forName("com.gesher.server.ApkPackage");
+        Object ownerApk = apk.getMethod("parse", String.class).invoke(null, args[1]);
+        Object clientApk = apk.getMethod("parse", String.class).invoke(null, args[2]);
+        String ownerName = (String) apk.getField("packageName").get(ownerApk);
+        String clientName = (String) apk.getField("packageName").get(clientApk);
+        Class<?> service = Class.forName("com.gesher.server.AccountManagerService");
+        Class<?> pm = Class.forName("com.gesher.server.PackageManagerService");
+        Class<?> am = Class.forName("com.gesher.server.ActivityManagerService");
+        Object packages = pm.getConstructor(java.util.Collection.class).newInstance(
+                java.util.Arrays.asList(ownerApk, clientApk));
+        Object manager = service.getConstructor(am, pm).newInstance(null, packages);
+        Class<?> caller = Class.forName(service.getName() + "$Caller");
+        Class<?> entry = Class.forName(service.getName() + "$Entry");
+        Class<?>[] callerArguments = {String.class, String.class, boolean.class, int.class, int.class};
+        String ownerCode = (String) method(service, "packageIdentity", String.class).invoke(manager, ownerName);
+        String clientCode = (String) method(service, "packageIdentity", String.class).invoke(manager, clientName);
+        require(ownerCode != null && clientCode != null, "Fixture code identities unavailable");
+        int ownerUid = (int) method(apk, "uid").invoke(ownerApk);
+        int clientUid = (int) method(apk, "uid").invoke(clientApk);
+        Object owner = construct(caller, callerArguments, ownerName, ownerCode, false, ownerUid, 123);
+        Object client = construct(caller, callerArguments, clientName, clientCode, false, clientUid, 124);
+        Object staleOwner = construct(caller, callerArguments, ownerName, "stale-code", false, ownerUid, 123);
+        Method query = method(service, "accountsByTypeForClient", String.class, String.class, caller);
+        Method registered = method(service, "authenticator", String.class);
+        String type = "com.gesher.devsvc.account";
+        require(registered.invoke(manager, type) != null, "Real enabled fixture authenticator was not registered");
+        @SuppressWarnings("unchecked") Map<Account, Object> accounts = (Map<Account, Object>) field(manager, "mAccounts");
+        accounts.clear();
+        Account visible = new Account("visible-delegated@example.test", type);
+        Account hidden = new Account("hidden-delegated@example.test", type);
+        String clientKey = (String) method(caller, "key").invoke(client);
+        Object visibleEntry = null;
+        for (Account account : java.util.Arrays.asList(visible, hidden,
+                new Account("other-type@example.test", "unregistered.other"),
+                new Account("foreign-owner@example.test", type),
+                new Account("stale-owner@example.test", type))) {
+            Object value = construct(entry, new Class<?>[0]);
+            field(value, "owner", account.name.startsWith("foreign-") ? clientName : ownerName);
+            field(value, "ownerIdentity", account.name.startsWith("foreign-") ? clientCode
+                    : account.name.startsWith("stale-") ? "old-owner-code" : ownerCode);
+            @SuppressWarnings("unchecked") Map<String, Integer> visibility = (Map<String, Integer>) field(value, "visibility");
+            if (!account.equals(hidden)) visibility.put(clientKey, AccountManager.VISIBILITY_VISIBLE);
+            accounts.put(account, value);
+            if (account.equals(visible)) visibleEntry = value;
+        }
+        Account[] delegated = (Account[]) query.invoke(manager, type, clientName, owner);
+        require(delegated.length == 1 && visible.equals(delegated[0]),
+                "Typed owner delegation leaked hidden, foreign-owned, stale-code or other-type accounts");
+        Account[] self = (Account[]) query.invoke(manager, type, ownerName, owner);
+        require(self.length == 2 && java.util.Arrays.asList(self).contains(hidden),
+                "Normal authenticator self enumeration changed");
+        denied(() -> query.invoke(manager, type, ownerName, client));
+        denied(() -> query.invoke(manager, null, clientName, owner));
+        denied(() -> query.invoke(manager, "unregistered.other", clientName, owner));
+        denied(() -> query.invoke(manager, type, clientName, staleOwner));
+        denied(() -> query.invoke(manager, type, "missing.client", owner));
+        require(!(Boolean) method(service, "tokenAuthorized", caller, entry, String.class)
+                .invoke(manager, client, visibleEntry, "fixture-scope"),
+                "Owner's enumeration granted a client token right");
+        @SuppressWarnings("unchecked") Map<String, Integer> visibility = (Map<String, Integer>) field(visibleEntry, "visibility");
+        require(visibility.size() == 1 && visibility.get(clientKey) == AccountManager.VISIBILITY_VISIBLE,
+                "Owner enumeration mutated visibility");
+        visibility.clear(); visibility.put(clientName + "\u0000old-client-code", AccountManager.VISIBILITY_VISIBLE);
+        require(((Account[]) query.invoke(manager, type, clientName, owner)).length == 0,
+                "Client code replacement inherited prior visibility");
+        visibility.clear(); visibility.put(clientKey, AccountManager.VISIBILITY_VISIBLE);
+
+        Object rawOwner = apk.getField("parsed").get(ownerApk);
+        Object authenticatorService = null;
+        for (Object component : (List<?>) rawOwner.getClass().getMethod("getServices").invoke(rawOwner)) {
+            if (((String) component.getClass().getMethod("getName").invoke(component)).endsWith(".TestAuthenticator")) {
+                authenticatorService = component; break;
+            }
+        }
+        require(authenticatorService != null, "Cannot locate the real fixture authenticator component");
+        Method enabled = authenticatorService.getClass().getMethod("setEnabled", boolean.class);
+        enabled.invoke(authenticatorService, false);
+        require(registered.invoke(manager, type) == null, "Disabled fixture remained registered");
+        denied(() -> query.invoke(manager, type, clientName, owner));
+        enabled.invoke(authenticatorService, true);
+        rawOwner.getClass().getMethod("setEnabled", boolean.class).invoke(rawOwner, false);
+        denied(() -> query.invoke(manager, type, clientName, owner));
+        System.out.println("AccountSecurityTest: typed authenticator delegation preserves client visibility, owner/code/type isolation and credential denial; disabled or stale owners cannot delegate");
+    }
+
     private static void cryptoDenied() throws Exception {
         boolean libraryPresent = false;
         for (String entry : System.getProperty("java.boot.class.path", "").split(
@@ -297,6 +389,7 @@ public final class AccountSecurityTest {
                     scope, uid, args.length > 1 && Boolean.parseBoolean(args[1]));
             System.out.println("AccountSecurityTest: explicit host fixture credential grant updated");
         }
+        else if (args.length > 0 && args[0].equals("authenticator-client")) authenticatorClient(args);
         else if (args.length > 0 && args[0].equals("remote-denied")) remoteDenied(args);
         else if (args.length > 0 && args[0].equals("crypto-denied")) cryptoDenied();
         else policy();

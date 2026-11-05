@@ -135,6 +135,9 @@ void RegisterDnsWire(SymbolTable& table); // dns_wire.cc
 void RegisterSocket(SymbolTable& table);   // socket_bionic.cc
 void RegisterSignal(SymbolTable& table);   // signal_bionic.cc
 void RegisterTime(SymbolTable& table);     // time_bionic.cc
+// x86-64 Linux numeric timerfd syscalls share the libc exports' implementation.
+bool DispatchTimerfdSyscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
+                           int64_t* result);
 // Last: fork/exec/spawn/wait, and the vfork-style child's view of fds, the
 // environment and the working directory over the entries already there.
 void RegisterProcess(SymbolTable& table);  // process_bionic.cc

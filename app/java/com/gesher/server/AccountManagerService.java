@@ -267,9 +267,29 @@ public final class AccountManagerService extends IAccountManager.Default {
     @Override
     public Account[] getAccountsByTypeForPackage(String type, String packageName,
             String opPackageName) {
-        Caller c = caller(opPackageName);
-        if (!c.system && !packageName.equals(c.name)) throw new SecurityException("Account client mismatch");
-        return filterAccounts(type, c.system ? targetCaller(packageName) : c);
+        return accountsByTypeForClient(type, packageName, caller(opPackageName));
+    }
+
+    private synchronized Account[] accountsByTypeForClient(String type, String packageName,
+            Caller c) {
+        if (c.system) return filterAccounts(type, targetCaller(packageName));
+        if (packageName.equals(c.name)) return filterAccounts(type, c);
+        // Authenticators query which of their own accounts a client may already
+        // see (microG's account provider uses this for calling applications).
+        // This typed delegation never grants visibility or credential access.
+        Authenticator authenticator = authenticator(type);
+        if (authenticator == null || !authenticator.service.getPackageName().equals(c.name)
+                || !callerUnchanged(c)) throw new SecurityException("Account client mismatch");
+        Caller target = targetCaller(packageName);
+        if (target.code == null) throw new SecurityException("Unknown account client package");
+        List<Account> result = new ArrayList<>();
+        for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
+            Account account = item.getKey(); Entry entry = item.getValue();
+            if (type.equals(account.type) && owns(c, entry) && visible(target, account, entry)) {
+                result.add(account);
+            }
+        }
+        return result.toArray(new Account[0]);
     }
 
     @Override

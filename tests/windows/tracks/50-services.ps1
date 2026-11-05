@@ -119,17 +119,27 @@ $servicemanager = Start-Process "$Dir/servicemanager.exe" -PassThru -NoNewWindow
 $bcpServices = (('core-oj', 'core-libart', 'core-icu4j', 'framework') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $dvm = @("-Xbootclasspath:$bcpServices", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"))
+CheckTimed 'binder: CursorWindow inline/shared-memory Parcel data and lifetime' "$Dir/dalvikvm.exe" `
+  ($dvm + 'gesher.services.CursorWindowParcelTest') @('CursorWindowParcelTest all passed')
 $service = Start-Process "$Dir/dalvikvm.exe" -ArgumentList ($dvm + 'gesher.services.BinderTest', 'service') `
   -PassThru -NoNewWindow -RedirectStandardOutput "$logs/service.out" -RedirectStandardError "$logs/service.err"
 $failedBefore = $failed
 CheckTimed 'binder: two dalvikvm processes, ServiceManager, a Binder passed back, death' "$Dir/dalvikvm.exe" `
   ($dvm + 'gesher.services.BinderTest', 'client') @('BinderTest all passed',
     'BinderTest PASS remote SYSPROPS reports, live values, local-only explicit report, ordinary-set silence and callback removal') 240 -Publish
-foreach ($p in $service, $servicemanager, $binderd) {
+$cursorName = "gesher.cursor.tests.$PID"
+$cursorService = Start-Process "$Dir/dalvikvm.exe" `
+  -ArgumentList ($dvm + 'gesher.services.CursorWindowParcelTest', 'service', $cursorName) `
+  -PassThru -WindowStyle Hidden -RedirectStandardOutput "$logs/cursor-service.out" -RedirectStandardError "$logs/cursor-service.err"
+CheckTimed 'binder: CursorWindow types/data and descriptor lifetime across two processes' "$Dir/dalvikvm.exe" `
+  ($dvm + 'gesher.services.CursorWindowParcelTest', 'client', $cursorName) @(
+    'CursorWindowParcelTest: two-process Binder inline/shared-memory cursor transfer preserves types/data and descriptor lifetime',
+    'CursorWindowParcelTest all passed')
+foreach ($p in $cursorService, $service, $servicemanager, $binderd) {
   if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
 }
 if ($failed -ne $failedBefore) {
-  foreach ($f in 'service.out', 'service.err', 'servicemanager.log', 'binderd.log') {
+  foreach ($f in 'service.out', 'service.err', 'cursor-service.out', 'cursor-service.err', 'servicemanager.log', 'binderd.log') {
     Write-Host "--- $f"
     Get-Content "$logs/$f" -ErrorAction SilentlyContinue | Select-Object -Last 80 | Out-Host
   }

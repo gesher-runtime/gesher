@@ -1,0 +1,83 @@
+{
+  "baseline_unchanged": true,
+  "baseline_sha256": {
+    "exe": "eb5033dad481b248f53f5b28f6d16feace695d20064a89e88e8ce35a4adca095",
+    "map": "622d0dd27d4530fd300cd78c46c0224f7edb34e9c1cdd73c6fc2363a2a330ef7",
+    "archive": "b722d0292191360c805de2e1ed96a4dee621a77ff47b2d3bd27624f86c267b02"
+  },
+  "candidate_exe_sha256": "6fbc8a815ab3bb5eecd07994dd26e0426c068a38ffce26ee0bf62e73e09cdadf",
+  "elf_fixture_sha256": "2c202eb86710069c7b29a190297c650757a2591fbd3d5ac51f0884cc9d5fecfc",
+  "elf_loader_sha256": "65af05134374ed84c20a34402c5ee5234f43d06fa73a375fcc6651e822197b74",
+  "source_sha256": {
+    "compat/bionic/shim.cc": "e2a5b6c3a777d70ed3528f04572faabe763f0555ed2ba089312fe939c425201e",
+    "compat/bionic/shim_internal.h": "dd07562041cbf871ab2acd313144443b1a1264c39ae8c3e009a4061be74679da",
+    "compat/bionic/time_bionic.cc": "49769d0722148b7cfd054f84168eea3dec205013c240d29bd9d43075116f9deb",
+    "tests/native/timerfd_syscall_test.c": "cf63eb73441d74da17210d3d4e6b6b0b514ec5bc58a8a74ae123cc70e9db17c6",
+    "tests/native/timerfd_syscall_test.inc": "865617bc1c270d70a6a032ef8e63fc7d5987c0752064dc8f11a905c2fe3df836"
+  },
+  "retained_cursor_jni_object": true,
+  "frozen_control": {
+    "dalvikvm.exe": "eb5033dad481b248f53f5b28f6d16feace695d20064a89e88e8ce35a4adca095",
+    "dalvikvm.map": "622d0dd27d4530fd300cd78c46c0224f7edb34e9c1cdd73c6fc2363a2a330ef7",
+    "libgesher_bionic.a": "b722d0292191360c805de2e1ed96a4dee621a77ff47b2d3bd27624f86c267b02",
+    "elf_load_test.exe": "e75e9b4123d5da0344fe432fe4ace8c333ada8494506cd47d89fb7b122939337"
+  },
+  "native_source_control_commit": "81af15341c467f22675086fb2eb3b5bc72631775",
+  "validation": {
+    "baseline_fixture_exit": 1,
+    "baseline_exact_cronet_create": "FAIL, errno ENOSYS",
+    "candidate_fixture_exit": 0,
+    "candidate_timerfd_checks_passed": 16,
+    "logs": [
+      "out/native-cursor/timerfd/baseline-fixture.log",
+      "out/native-cursor/timerfd/candidate-fixture.log"
+    ],
+    "shared_fixture_source": "tests/native/timerfd_syscall_test.inc",
+    "normal_native_fixture_integration": {
+      "path": "tests/native/libc_test.c",
+      "scope": "x86_64 only, same 16 checks as standalone ELF fixture",
+      "change": "seven lines, includes and invokes the common regression"
+    },
+    "cursor_local_and_actual_two_process_binder": {
+      "result": "PASS",
+      "services_dex_sha256": "784857958cfef7515dc17222658a01821aad368592c5cf9090bc5dbc9c50fd28",
+      "logs": [
+        "out/native-cursor/timerfd/standard-candidate-local.out.log",
+        "out/native-cursor/timerfd/standard-cursor-client.out.log"
+      ]
+    },
+    "actual_webview": {
+      "result": "4 PASS",
+      "record": "out/native-timerfd-webview/validation.json",
+      "scope": "isolated loopback regressions; not final QA approval"
+    }
+  },
+  "owned_pr_snapshot_sources_match": true,
+  "owned_patch_sha256": "c4d9e39768fe6cc9da58181b203bed42da44a25dfb30fb9c7cf71d0a68c75979",
+  "provenance_note": "Uses the broader cached native objects from 81af15341c467f22675086fb2eb3b5bc72631775, with the CursorWindow JNI object and private Bionic archive containing the three reviewed timerfd source hunks. This is not a reproducible build of only the isolated PR snapshot, nor the earlier 4a321 baseline. Frozen control inputs and actual synthetic negative-control results are retained separately.",
+  "scope": "Direct native and offline regression evidence; subsequent real Gmail account/mailbox acceptance passed; final independent QA approved for this scoped follow-up",
+  "offline_security": {
+    "result": "38PASS",
+    "evidence": "out/microg-timerfd-validation/security-current-fixtures/20261105-221858-d3efb0d17c9b4a4aa82ee8fe49af2836",
+    "java_sha256": "e63e3abbfd2caaed1b93af858f90cb1eb299efbfda6a79afde3de7d58820a453",
+    "services_dex_sha256": "784857958cfef7515dc17222658a01821aad368592c5cf9090bc5dbc9c50fd28",
+    "devsvc_apk_sha256": "eef259cf1f93b6b549bdbe6dd1deb87d20e2dd6ddd35f8bd87bea7e6f497be6f",
+    "probe_apk_sha256": "4e114290680ef3e57c2c4a6260813628d1dcc5ab7f1a0d7a6c0486a016176c13",
+    "initial_attempt": "Stopped at metadata test after16PASS because a stale devsvc APK lacked TestPrivateAuthenticator; corrected fixture run passed38 without source/runtime changes",
+    "initial_attempt_evidence": "out/microg-timerfd-validation/security/20261105-221711-ff1a8746e2f14620a961b32a70cf5d45"
+  },
+  "application_acceptance_record": "microg-gmail-validation-2026-11-05.json",
+  "compiled_source_sha256": {
+    "compat/bionic/shim.cc": "e2a5b6c3a777d70ed3528f04572faabe763f0555ed2ba089312fe939c425201e",
+    "compat/bionic/shim_internal.h": "dd07562041cbf871ab2acd313144443b1a1264c39ae8c3e009a4061be74679da",
+    "compat/bionic/time_bionic.cc": "49769d0722148b7cfd054f84168eea3dec205013c240d29bd9d43075116f9deb",
+    "tests/native/timerfd_syscall_test.c": "216d4c0437ab8a953783bfc1075f033b2fee72882fb88d38a0f0ad9588bb0f93",
+    "tests/native/timerfd_syscall_test.inc": "276da3c6b81d50b3ed84bb9ec7c17806fdae62c4fb08debce4a85ceeef9300ec"
+  },
+  "source_text_normalization": "Repository files normalized to LF; compiled input hashes are retained separately; no executable statements changed",
+  "final_qa": {
+    "decision": "APPROVE",
+    "reviewed_snapshot_sha256": "92f1557a769b2bcc00cec88d6bb826f2170093d9a9bb741a1f2f2f15a87cf0dc",
+    "record": "microg-gmail-final-qa-2026-11-06.json"
+  }
+}

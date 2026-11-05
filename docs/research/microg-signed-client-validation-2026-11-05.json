@@ -1,5 +1,5 @@
 {
-  "scope": "Manual account client signing correction; Google token acceptance still requires user retry",
+  "scope": "Manual account client signing correction and subsequent Google client-registration rejection",
   "observed_after_manual_login": {
     "registered_google_account_count": 1,
     "google_authenticator_count": 1,
@@ -30,6 +30,11 @@
     "Only preceding account visibility for the same test package was restored; no token request, token grant, owner privilege or global visibility change"
   ],
   "runtime": "Java jar and shared bridge unchanged from microg-login-validation-2026-11-05.json",
-  "manual_next_step": "Retry the signed client's token-verification button; Google may still reject an unregistered developer client or scope",
+  "manual_retry": {
+    "registered_google_account_count": 1,
+    "token_failure_public_code": "UNREGISTERED_ON_API_CONSOLE",
+    "result": "Real developer signing supplies client identity, but this client is not registered for the requested Google API",
+    "user_selected_next_step": "Test an existing legitimately signed and registered application instead of registering the test client"
+  },
   "qa": "Independent agent APPROVE for signed client and scoped update"
 }

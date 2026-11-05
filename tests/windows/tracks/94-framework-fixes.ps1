@@ -31,6 +31,14 @@ $bcpFixes = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app')
 $dvmFixes = @("-Xbootclasspath:$bcpFixes", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
   '-cp', (NoDrive "$Dir/services-tests.dex"))
 
+# Exercise the MediaStore implementation from the production boot jar.
+$mediaStoreOut = FixesRun ($dvmFixes + 'gesher.services.MediaStoreContractTest') 90
+$mediaStoreCode = $LASTEXITCODE
+Check 'services: MediaStore picker/collection contracts and missing-provider handling' {
+  $global:LASTEXITCODE = $mediaStoreCode
+  $mediaStoreOut
+} @('MediaStoreContractTest all passed: 28')
+
 # The document picker (ACTION_OPEN_DOCUMENT / _TREE, ActivityTaskManagerService)
 # shows the Windows dialog on a thread of its own: startActivity returns while it
 # is up, not when the user closes it (the app's UI froze meanwhile); the picked

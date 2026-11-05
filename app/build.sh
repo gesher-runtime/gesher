@@ -9,7 +9,8 @@
 #   root), as tools/framework/build.py takes it. Without it the JDK's java.base stands
 #   in, which is enough to compile but not a check against Android's libcore.
 #
-# Writes <out-dir>/gesher-app.jar (classes.dex) and <out-dir>/build.prop. gesher-app.jar
+# Writes <out-dir>/gesher-app.jar (classes.dex), gesher-app-classes.jar (compile-only),
+# and <out-dir>/build.prop. gesher-app.jar
 # goes on -Xbootclasspath after framework.jar (see app/README.md). Needs a JDK 17+ and
 # curl; d8 comes from Google's Maven repository (R8_JAR to use a local copy). Runs on
 # Linux and in Git Bash on Windows.
@@ -182,6 +183,12 @@ echo "ext (tagsoup): $tagsoup classes into gesher-app.jar"
 # SDK apksigner.jar. The runtime uses only the APK verifier library.
 mkdir -p "$work/apksig"
 (cd "$work/apksig" && unzip -q -o "$apksig")
+
+# Compile-only API overlay for tests of classes supplied by gesher-app.
+# Distribution packaging names the runtime DEX archives explicitly.
+jar --create --file "$(native "$out/gesher-app-classes.jar")" --no-manifest \
+  -C "$(native "$work/classes")" . -C "$(native "$work/compat")" . \
+  -C "$(native "$work/location")" . -C "$(native "$work/ext")" .
 
 # One dex for all, into a jar.
 ( cd "$work" && find classes compat location ext apksig/com/android/apksig -name '*.class' ) > "$work/dex.txt"

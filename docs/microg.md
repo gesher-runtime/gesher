@@ -194,9 +194,14 @@ GoogleLoginService. The correction passed the expanded 37-check offline suite,
 including disabled services/apps, unsafe exports and forged Google owners.
 See the [authenticator validation record](research/microg-authenticator-validation-2026-11-05.json).
 
-Google login still requires end-to-end manual validation. A consent page is not
-evidence of a registered account or a usable client token. Two host completion
-bugs have been corrected: HTTP(S) JavaScript-interface callbacks now use a
+Manual account registration and real Gmail mailbox access have succeeded on the
+recorded experimental Windows runtime. The original Google-signed Gmail APK
+displayed the existing microG account and loaded its mailbox in a fresh Gmail
+profile; no existing mail/app data was imported and no individual message was
+opened. This validates that client path on the recorded local tuple. The native
+binary reuses a broader cached baseline, rather than a clean build of only this
+PR's sources. Two host completion bugs have been corrected: HTTP(S)
+JavaScript-interface callbacks now use a
 serialized worker while WebView2 remains free to retrieve real login cookies,
 and same-document fragment navigation delivers Android's `onPageFinished`
 callback (used for completion URLs such as `#close`). The Java jar and its
@@ -218,7 +223,16 @@ and verifies the APK before publishing the final output. The first unsigned
 manual client registered an account but received Google's `BAD_REQUEST` during
 token issuance. See the [signed-client follow-up](research/microg-signed-client-validation-2026-11-05.json).
 Signing supplies the missing identity field; it does not itself establish that
-Google accepts a developer client or scope.
+Google accepts a developer client or scope. The subsequent manual retry returned
+`UNREGISTERED_ON_API_CONSOLE`. The follow-up uses the original Google-signed
+installed Gmail APK as an existing client. See the
+[Gmail acceptance record](research/microg-gmail-validation-2026-11-05.json) for
+the three runtime fixes, actual mailbox loading and validation limits. The
+follow-up also reuses the existing pinned MediaStore contracts from the stability
+branch: Gmail's new-message screen calls `getPickImagesMaxLimit()`. The updated
+local build opens that screen without the previous linkage failure; text entry,
+attachments and sending were not exercised. See the
+[composer validation record](research/microg-compose-validation-2026-11-05.json).
 
 ## Notification access
 
@@ -255,7 +269,7 @@ it with the matching rebuilt native runtime:
 
 ```bash
 app/build.sh out/app --framework-classes out/framework-classes.zip --core-classes out/coremod
-tests/dex-services/build.sh out/app --framework-classes out/framework-classes.zip --core-classes out/coremod
+tests/dex-services/build.sh out/app --framework-classes out/framework-classes.zip --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
 tests/apps/devsvc/build.sh out/app --framework-res out/framework-res.apk --framework-classes out/framework-classes.zip --core-classes out/coremod
 tests/apps/microgprobe/build.sh out/app --framework-res out/framework-res.apk --framework-classes out/framework-classes.zip --core-classes out/coremod
 ```

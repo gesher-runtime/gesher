@@ -1,0 +1,118 @@
+{
+  "scope": "Manual end-to-end existing-account acceptance using the original Google-signed Gmail APK in a fresh experimental Gmail app profile",
+  "status": "PASS: existing microG account, real mailbox loading and opening blank composer; sending and other app paths untested",
+  "application": {
+    "package": "com.google.android.gm",
+    "version_code": 66123533,
+    "version_name": "2026.10.19.1007695413.Release",
+    "apk_sha256": "674de1b62625d205cab88255223b9b625c0595f8af342aa387d4ed2817c0f1f8",
+    "actual_current_google_certificate_sha256": "7ce83c1b71f3d572fed04c8d40c5cb10ff75e6d87d9df6fbd53f0468c2905053",
+    "legacy_google_certificate_sha256": "f0fd6c5b410f25cb25c3b53346c8972fae30f8ee7411df910480ad6b2d60db83",
+    "apk_modified_or_resigned": false,
+    "normal_installed_profile_application_or_mail_data_copied": false
+  },
+  "preparation": {
+    "existing_google_accounts": 1,
+    "existing_account_visibility_restored_only_for_gmail": true,
+    "preparation_token_requests_or_token_grants": 0,
+    "personal_names_credentials_tokens_or_mail_contents_published": false
+  },
+  "experimental_runtime": {
+    "java_sha256": "0cc47fe59548652393c4c38009a52f90426286b6fcd8e1e65f53b0b2c3da278d",
+    "native_exe_sha256": "6fbc8a815ab3bb5eecd07994dd26e0426c068a38ffce26ee0bf62e73e09cdadf",
+    "shared_webview_bridge_sha256": "9c51dafefb525dd9916abe1bc8be36bdc993b5d16e3e8fb81fc361abf3b6b29a",
+    "native_build_scope": "Broader cached native commit81af15341c467f22675086fb2eb3b5bc72631775, controlEB5033, plus retained Cursor JNI and private Bionic archive with three timerfd routing hunks; not a clean isolated-PR build",
+    "native_evidence": "microg-native-client-validation-2026-11-05.json",
+    "composer_evidence": "microg-compose-validation-2026-11-05.json",
+    "runtime_binary_adopted_or_published": false
+  },
+  "runtime_fixes": [
+    {
+      "problem": "Typed getAccountsByTypeForPackage incorrectly rejected the current account authenticator querying for its real installed client",
+      "change": "Allow current enabled type owner delegation, restricted to its own account type, current code identities and client-visible accounts; grant no new visibility or token rights",
+      "offline_security_checks_passed": 38,
+      "real_gmail_account_client_mismatch_after_fix": 0
+    },
+    {
+      "problem": "CursorWindow Parcel JNI methods were excluded from the Windows native registration table",
+      "change": "Enable the three existing JNI guards for GESHER; retain Android Parcel and cursor ownership behavior",
+      "original_missing_jni_reproduced": true,
+      "local_inline_and_128kib_shared_memory_round_trips": "PASS",
+      "actual_two_process_binder_types_data_and_descriptor_lifetime": "PASS",
+      "normal_services_tests_dex_sha256": "784857958cfef7515dc17222658a01821aad368592c5cf9090bc5dbc9c50fd28",
+      "real_microg_cursor_jni_linkage_errors_after_fix": 0
+    },
+    {
+      "problem": "microG x86_64 Cronet102 CHECK trap after numeric timerfd_create returned ENOSYS",
+      "change": "Route x86_64 syscalls283/286/287 to the existing timerfd create/settime/gettime implementations; ARM64 dispatch remains separate",
+      "frozen_control_reproduces_exact_cronet_request_failure": true,
+      "candidate_android_elf_timerfd_checks_passed": 16,
+      "previous_gmail_startup_trap_recurred_during_observation": false,
+      "fresh_gmail_authenticated_mailbox_loading_observed": true
+    }
+  ],
+  "regressions_on_experimental_runtime": {
+    "account_and_service_security": "38 PASS",
+    "loopback_webview_completion_and_bridge": "4 PASS",
+    "personal_google_network_used_by_offline_regressions": false,
+    "cursor_local_and_actual_two_process_binder": "PASS",
+    "mediastore_contracts": "28 PASS"
+  },
+  "remaining_observations": {
+    "gmail_first_frame_logged": true,
+    "gmail_java_fatal_exception_after_fix": false,
+    "gmail_minimum_gms_version": 261200000,
+    "actual_microg_reported_version": 252432034,
+    "version_warning_is_not_proof_of_native_crash_cause": true,
+    "microg_version_or_client_identity_falsified": false,
+    "previous_gmail_native_exit_code": "0x80000003",
+    "new_gmail_launcher_exit_code_observed": false,
+    "process_observation": "Launcher remains active more than9minutes after22:12:14 launch, first frame logged, no fatal Java or native-exit code",
+    "previous_ui_observation_failure": {
+      "status": "Awaiting user feedback; no email opened",
+      "screenshot_error": "IGraphicsCaptureItemInterop.CreateForMonitor 0x80070057",
+      "activation_error": "GetCursorPos AccessDenied 0x80070005",
+      "user_question_sent": true
+    },
+    "ui_verification": {
+      "status": "PASS after user restored desktop access",
+      "gmail_account_enumeration": "PASS",
+      "fresh_profile_mailbox_loading": "PASS",
+      "emails_opened_or_sent": false
+    }
+  },
+  "qa_policy": "Independent final QA approved the frozen follow-up after real Gmail behavior passed and before commit/publication",
+  "previous_experimental_native": {
+    "sha256": "b1731c40b7ba46928a804a3a3c77ba5061848be0ec71cffa82a071dd0aa094c8",
+    "scope": "Cached local native baseline 4a321bded33b1cbd0026c0c6683e0debc6e377db9d319e0b06a972d9546fef0e with exactly one CursorWindow JNI object rebuilt; other baseline objects reused"
+  },
+  "manual_acceptance": {
+    "observed_at_utc": "2026-11-05T21:29:55.507717+00:00",
+    "existing_microg_account_shown_in_gmail": true,
+    "fresh_gmail_profile_loaded_actual_mailbox": true,
+    "individual_messages_opened": false,
+    "messages_sent_or_modified": false,
+    "existing_mail_or_app_data_imported": false,
+    "account_names_tokens_or_mail_contents_committed_or_uploaded": false,
+    "authentication_or_cloud_permission_dialog_automated": false,
+    "notification_permission": "User manually chose Yes in the native POST_NOTIFICATIONS prompt",
+    "raw_oauth_token_or_authenticated_protocol_response_inspected": false,
+    "authentication_acceptance": "Inferred from fresh-profile real-mailbox loading; not from inspecting token values",
+    "scope_limitation": "This Gmail account path only, not all Google Sign-In SDKs, billing, Integrity or other applications",
+    "new_message_screen_opened_after_mediastore_reuse": true,
+    "composer_text_entry_attachments_and_sending_tested": false
+  },
+  "previous_account_acceptance_runtime": {
+    "java_sha256": "e63e3abbfd2caaed1b93af858f90cb1eb299efbfda6a79afde3de7d58820a453",
+    "native_exe_sha256": "6fbc8a815ab3bb5eecd07994dd26e0426c068a38ffce26ee0bf62e73e09cdadf",
+    "shared_webview_bridge_sha256": "9c51dafefb525dd9916abe1bc8be36bdc993b5d16e3e8fb81fc361abf3b6b29a",
+    "native_build_scope": "Broader cached native commit81af15341c467f22675086fb2eb3b5bc72631775, controlEB5033, plus retained Cursor JNI and private Bionic archive with three timerfd routing hunks; not a clean isolated-PR build",
+    "adopted_or_published": false,
+    "native_evidence": "microg-native-client-validation-2026-11-05.json"
+  },
+  "final_qa": {
+    "decision": "APPROVE",
+    "reviewed_snapshot_sha256": "92f1557a769b2bcc00cec88d6bb826f2170093d9a9bb741a1f2f2f15a87cf0dc",
+    "record": "microg-gmail-final-qa-2026-11-06.json"
+  }
+}
