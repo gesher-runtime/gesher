@@ -97,6 +97,16 @@ Check 'services: BluetoothManager without an adapter, and android.os.Debug''s na
   $fixesOut
 } @('FrameworkFixesTest: BluetoothManager without an adapter; Debug.getNativeHeapSize, getNativeHeapAllocatedSize and getNativeHeapFreeSize',
   'FrameworkFixesTest all passed')
+Check 'services: BLE callback subclasses link without an adapter; scan records and device/result parcels work' {
+  $global:LASTEXITCODE = $fixesCode
+  $fixesOut
+} @('FrameworkFixesTest: BLE callback subclass links without an adapter; AOSP advertisement parsing and ScanResult/device parcels round trip',
+  'FrameworkFixesTest all passed')
+Check 'services: Binder Debug counters use actual native objects and report unavailable transaction totals' {
+  $global:LASTEXITCODE = $fixesCode
+  $fixesOut
+} @('FrameworkFixesTest: Binder Debug counters track native local objects and Parcel release; proxy/death counts resolve, transaction totals unavailable',
+  'FrameworkFixesTest all passed')
 Check 'services: libphonenumber (the ext boot jar''s, in framework.jar with its metadata) parses and formats numbers' {
   $global:LASTEXITCODE = $fixesCode
   $fixesOut

@@ -457,7 +457,7 @@ static const JNINativeMethod gProcessMethods[] = {
      GESHER_JNI(Process_parseProcLine)},
 };
 
-// --- android.os.Debug (native heap counters) --------------------------------------
+// --- android.os.Debug (native heap and Binder counters) ----------------------------
 // AOSP's android_os_Debug.cpp answers these @CriticalNative methods from
 // bionic's mallinfo(). The host malloc is the UCRT's, over the process heap,
 // so HeapSummary (kernel32, Windows 10) gives the same three numbers: the
@@ -504,10 +504,27 @@ static jlong Debug_getNativeHeapAllocatedSize() { return NativeHeapSummary().all
 
 static jlong Debug_getNativeHeapFreeSize() { return NativeHeapSummary().available; }
 
+// These AOSP functions are already built with android_util_Binder.cpp. They
+// report the real JavaBBinder, BpBinder and JavaDeathRecipient object counts;
+// OsmAnd's diagnostic worker calls them while sampling process memory.
+jint android_os_Debug_getLocalObjectCount(JNIEnv* env, jobject clazz);
+jint android_os_Debug_getProxyObjectCount(JNIEnv* env, jobject clazz);
+jint android_os_Debug_getDeathObjectCount(JNIEnv* env, jobject clazz);
+
+// AOSP reads transaction totals from the kernel's Binder stats file and returns
+// -1 when that file is unavailable. Gesher's broker has no such stats interface.
+// Preserve that unavailable result, rather than reporting invented zero totals.
+static jint Debug_binderTransactionsUnavailable(JNIEnv*, jobject) { return -1; }
+
 static const JNINativeMethod gDebugMethods[] = {
     {"getNativeHeapSize", "()J", GESHER_JNI(Debug_getNativeHeapSize)},
     {"getNativeHeapAllocatedSize", "()J", GESHER_JNI(Debug_getNativeHeapAllocatedSize)},
     {"getNativeHeapFreeSize", "()J", GESHER_JNI(Debug_getNativeHeapFreeSize)},
+    {"getBinderLocalObjectCount", "()I", GESHER_JNI(android_os_Debug_getLocalObjectCount)},
+    {"getBinderProxyObjectCount", "()I", GESHER_JNI(android_os_Debug_getProxyObjectCount)},
+    {"getBinderDeathObjectCount", "()I", GESHER_JNI(android_os_Debug_getDeathObjectCount)},
+    {"getBinderSentTransactions", "()I", GESHER_JNI(Debug_binderTransactionsUnavailable)},
+    {"getBinderReceivedTransactions", "()I", GESHER_JNI(Debug_binderTransactionsUnavailable)},
 };
 
 // --- android.os.PerfettoTrace (Gesher stub) ---------------------------------------

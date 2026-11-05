@@ -19,6 +19,11 @@ public final class BluetoothAdapter {
         return null;
     }
 
+    /** @hide No LE controller is available on this device. */
+    public boolean isLeEnabled() {
+        return false;
+    }
+
     public static boolean checkBluetoothAddress(String address) {
         if (address == null || address.length() != 17) return false;
         for (int i = 0; i < 17; i++) {

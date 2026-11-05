@@ -71,6 +71,13 @@ import java.nio.channels.OverlappingFileLockException;
  *    BluetoothDevice (app/java, the Bluetooth module's API on a device without
  *    Bluetooth): WhatsApp's headset listener implements ServiceListener and holds a
  *    BluetoothHeadset, and its worker died with NoClassDefFoundError resolving it.
+ *  - android.bluetooth.le.ScanCallback and its real ScanResult value dependencies:
+ *    OsmAnd constructs an external-sensors callback during Application.onCreate,
+ *    before checking for an adapter. Missing callback or result types prevent
+ *    its subclass from linking even on a device without Bluetooth.
+ *  - android.os.Debug's Binder counters (compat/framework/android_runtime.cc):
+ *    OsmAnd's diagnostic worker died with UnsatisfiedLinkError; real AOSP
+ *    Binder object counts are registered and absent transaction totals stay -1.
  *  - libphonenumber (com.android.i18n.phonenumbers, the ext boot jar's; bundled into
  *    framework.jar with its metadata, tools/framework/plan.py's EXT_BUNDLED): Gmail's
  *    compose window died on a stackless NoClassDefFoundError for
@@ -512,6 +519,99 @@ public final class FrameworkFixesTest {
                 + "PerfettoTrackEventExtra class initializes with tracing off");
     }
 
+    private static void bluetoothLeCallbacks() throws Exception {
+        // This subclass must link before an app can discover there is no adapter.
+        final int[] delivered = {0};
+        android.bluetooth.le.ScanCallback callback = new android.bluetooth.le.ScanCallback() {
+            @Override
+            public void onScanResult(int type, android.bluetooth.le.ScanResult result) {
+                require(type == 1 && result.getRssi() == -52, "BLE result callback changed");
+                delivered[0]++;
+            }
+        };
+        require(android.bluetooth.BluetoothAdapter.getDefaultAdapter() == null
+                && new android.bluetooth.BluetoothManager(null).getAdapter() == null,
+                "BLE callback availability must not advertise an adapter");
+        require(android.bluetooth.le.ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED == 4
+                && android.bluetooth.le.ScanCallback.SCAN_FAILED_SCANNING_TOO_FREQUENTLY == 6,
+                "BLE callback failure codes changed");
+
+        // AOSP's actual advertisement parser, not a placeholder ScanResult type.
+        byte[] advertisement = {2, 1, 6, 3, 3, 0x0d, 0x18, 4, 9, 'O', 'S', 'M',
+                5, (byte) 0xff, 0x4c, 0, 1, 2, 0};
+        android.bluetooth.le.ScanRecord record =
+                android.bluetooth.le.ScanRecord.parseFromBytes(advertisement);
+        require(record.getAdvertiseFlags() == 6 && "OSM".equals(record.getDeviceName())
+                && record.getServiceUuids().get(0).toString()
+                        .equals("0000180d-0000-1000-8000-00805f9b34fb")
+                && java.util.Arrays.equals(record.getManufacturerSpecificData(0x004c),
+                        new byte[] {1, 2}), "BLE advertisement parsing changed");
+
+        android.os.Parcel deviceParcel = android.os.Parcel.obtain();
+        android.os.Parcel resultParcel = android.os.Parcel.obtain();
+        try {
+            deviceParcel.writeString("02:00:00:00:00:01");
+            deviceParcel.writeInt(android.bluetooth.BluetoothDevice.ADDRESS_TYPE_PUBLIC);
+            deviceParcel.setDataPosition(0);
+            android.bluetooth.BluetoothDevice device =
+                    android.bluetooth.BluetoothDevice.CREATOR.createFromParcel(deviceParcel);
+            android.bluetooth.le.ScanResult result = new android.bluetooth.le.ScanResult(
+                    device, 0x11, 1, 0, 0xff, 0x7f, -52, 0, record, 123456789L);
+            result.setAttributionSource(new android.content.AttributionSource.Builder(10000)
+                    .setPackageName("gesher.services").build());
+            callback.onScanResult(1, result);
+            new android.bluetooth.le.ScanCallback() {}.onBatchScanResults(List.of(result));
+            new android.bluetooth.le.ScanCallback() {}.onScanFailed(4);
+            result.writeToParcel(resultParcel, 0);
+            resultParcel.setDataPosition(0);
+            android.bluetooth.le.ScanResult copy =
+                    android.bluetooth.le.ScanResult.CREATOR.createFromParcel(resultParcel);
+            require(delivered[0] == 1 && copy.getDevice().equals(device)
+                    && copy.getRssi() == -52 && copy.getTimestampNanos() == 123456789L
+                    && copy.isLegacy() && copy.isConnectable()
+                    && java.util.Arrays.equals(copy.getScanRecord().getBytes(), advertisement),
+                    "BLE result/device parcel round trip changed");
+        } finally {
+            deviceParcel.recycle();
+            resultParcel.recycle();
+        }
+        System.out.println("FrameworkFixesTest: BLE callback subclass links without an adapter; "
+                + "AOSP advertisement parsing and ScanResult/device parcels round trip");
+    }
+
+    private static void binderDebugCounters() {
+        int baseline = android.os.Debug.getBinderLocalObjectCount();
+        require(baseline >= 0 && android.os.Debug.getBinderProxyObjectCount() >= 0
+                && android.os.Debug.getBinderDeathObjectCount() >= 0,
+                "Binder object counters are unavailable or negative");
+        android.os.Binder[] binders = new android.os.Binder[8];
+        android.os.Parcel[] parcels = new android.os.Parcel[binders.length];
+        int held = baseline;
+        try {
+            // Binder constructs a holder first; flattening it creates the native
+            // JavaBBinder counted by AOSP. Each Parcel owns that strong reference.
+            for (int i = 0; i < binders.length; i++) {
+                binders[i] = new android.os.Binder();
+                parcels[i] = android.os.Parcel.obtain();
+                parcels[i].writeStrongBinder(binders[i]);
+            }
+            held = android.os.Debug.getBinderLocalObjectCount();
+            require(held >= baseline + binders.length,
+                    "Binder local count did not track live flattened objects: "
+                            + baseline + " -> " + held);
+        } finally {
+            for (android.os.Parcel parcel : parcels) if (parcel != null) parcel.recycle();
+        }
+        require(android.os.Debug.getBinderLocalObjectCount() <= held - binders.length,
+                "Binder local count did not release Parcel-owned native objects");
+        java.lang.ref.Reference.reachabilityFence(binders);
+        require(android.os.Debug.getBinderSentTransactions() == -1
+                && android.os.Debug.getBinderReceivedTransactions() == -1,
+                "Unavailable Binder transaction statistics must stay unavailable");
+        System.out.println("FrameworkFixesTest: Binder Debug counters track native local objects "
+                + "and Parcel release; proxy/death counts resolve, transaction totals unavailable");
+    }
+
     public static void main(String[] args) throws Exception {
         // The FileChannel lock natives and Binder's (gesher-app loads them in an app).
         System.loadLibrary("android_runtime");
@@ -525,6 +625,8 @@ public final class FrameworkFixesTest {
         dnsResolver();
         bluetoothAndNativeHeap();
         bluetoothProfiles();
+        bluetoothLeCallbacks();
+        binderDebugCounters();
         phoneNumbers();
         handlerThreadQuit();
         System.out.println("FrameworkFixesTest all passed");
