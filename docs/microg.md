@@ -16,7 +16,8 @@ and the [sanitized validation record](research/microg-integration-validation-202
 ## Install, enable and remove
 
 Use the matching native runtime, with the existing `GESHER_UID` and
-`GESHER_BINDER_UID` identity hooks and the new `libgesher_account_crypto.so`.
+`GESHER_BINDER_UID` identity hooks, `libgesher_account_crypto.so` and the matching
+`libgesher_webview_bridge.so`.
 Updating only `gesher-app.jar` in an older runtime is insufficient. The runtime
 includes AOSP's real `com.android.location.provider`
 shared library and declaration, the privileged-permission allowlist and the setup
@@ -193,11 +194,23 @@ GoogleLoginService. The correction passed the expanded 37-check offline suite,
 including disabled services/apps, unsafe exports and forged Google owners.
 See the [authenticator validation record](research/microg-authenticator-validation-2026-11-05.json).
 
-Google login completion remains incomplete. A consent page is not evidence of a
-registered account or a usable client token. There is also a separate WebView
-completion blocker: synchronous JavaScript-interface callbacks run on the WebView2
-thread, where the cookie API cannot synchronously retrieve the login cookie.
-Fixing authenticator discovery alone does not establish end-to-end Google sign-in.
+Google login still requires end-to-end manual validation. A consent page is not
+evidence of a registered account or a usable client token. Two host completion
+bugs have been corrected: HTTP(S) JavaScript-interface callbacks now use a
+serialized worker while WebView2 remains free to retrieve real login cookies,
+and same-document fragment navigation delivers Android's `onPageFinished`
+callback (used for completion URLs such as `#close`). The Java jar and its
+shared WebView bridge must be updated together. The new bridge preserves browser
+CSP/synchronous-XHR restrictions and fails honestly when the page blocks it.
+
+`tests/apps/googleaccount` provides a separate manual client. Its first button
+uses the real authenticator through AccountManager; its second requests the
+basic email scope and verifies the resulting token with Google's fixed HTTPS
+userinfo endpoint. Success requires HTTP 200, an account ID and the selected
+account's email. It initiates neither authentication nor network requests on
+launch and never logs or stores tokens. This validates that client/scope only,
+not every application's Google Sign-In SDK, billing or Play Integrity. Google
+may reject an unregistered developer client's scope request.
 
 ## Notification access
 

@@ -117,7 +117,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private final Context mContext;
     private final Handler mUi;
     private final GesherWebSettings mSettings;
-    private WebView2Host mHost;
+    private volatile WebView2Host mHost;
     private boolean mDestroyed;
 
     private volatile WebViewClient mClient = new WebViewClient();
@@ -127,6 +127,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private volatile boolean mInterceptsRequests;
     private final Map<String, Object> mInterfaces = new ConcurrentHashMap<>();
     private final boolean mRequireAnnotation;
+    private final JsBridgeDispatcher mBridgeDispatcher;
+    private final String mBridgeEndpoint = "/.gesher-js-bridge/" + java.util.UUID.randomUUID();
 
     // What WebView2 reported (the WebView's Looper).
     private String mUrl;
@@ -329,6 +331,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         Looper looper = Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper();
         mUi = new Handler(looper);
         mRequireAnnotation = mContext.getApplicationInfo().targetSdkVersion >= 17;
+        mBridgeDispatcher = new JsBridgeDispatcher(mInterfaces, mRequireAnnotation);
         GesherWebView.configure(mContext);
         mSettings = new GesherWebSettings(GesherWebView.defaultUserAgent(), this::settingsChanged);
     }
@@ -350,6 +353,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             GesherWebView.log("no WebView2 for this WebView: " + WebView2Host.runtimeError());
             return;
         }
+        mHost.setBridgeEndpoint(mBridgeEndpoint);
         applySettings();
         updateDocumentScript();
         // <input type=file>: WebChromeClient.onShowFileChooser, else a Windows file dialog.
@@ -398,7 +402,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         }
         script.append(PageScripts.PORTS);
         if (mTextZoom != 100) script.append(PageScripts.textZoom(mTextZoom));
-        script.append(JsBridge.script(mInterfaces, mRequireAnnotation));
+        script.append(JsBridge.script(mInterfaces, mRequireAnnotation, mBridgeEndpoint));
         // androidx.webkit (ADR 0058): WebMessageListeners' objects, then the app's
         // document-start scripts, in the order they were added.
         script.append(PageScripts.ORIGINS);
@@ -468,6 +472,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     public void destroy() {
         if (mDestroyed) return;
         mDestroyed = true;
+        mBridgeDispatcher.close();
         removeListeners();
         mGeolocation.pageGone();
         if (mHost != null) mHost.destroy();
@@ -1725,6 +1730,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public void onEvent(int type, long id, int arg, String a, String b, String c, byte[] bytes) {
+        if (type == WebView2Host.EVENT_PAGE_STARTED) mBridgeDispatcher.navigationStarted();
         if (type == WebView2Host.EVENT_PARKED) {
             CountDownLatch parked = mParked;
             if (parked != null) parked.countDown();
@@ -1774,6 +1780,11 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     @Override
     public String onBridgeCall(String object, String method, String argsJson) {
         return JsBridge.call(mInterfaces, mRequireAnnotation, object, method, argsJson);
+    }
+
+    @Override
+    public void onBridgeRequest(long id, String body) {
+        mBridgeDispatcher.submit(mHost, id, body);
     }
 
     // ---- Requests (a worker thread) ----
@@ -1933,8 +1944,14 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             case WebView2Host.EVENT_SOURCE_CHANGED: {
                 String url = FileUrls.fromWebView2(a);
                 if (url != null && !url.isEmpty() && !"about:blank".equals(url)) {
+                    String previous = mUrl;
                     mUrl = url;
                     mClient.doUpdateVisitedHistory(mView, url, false);
+                    // Android also finishes main-frame same-document fragment navigations.
+                    // OAuth clients can use #close without a network NavigationCompleted.
+                    if (arg == 0 && fragmentNavigation(previous, url)) {
+                        mClient.onPageFinished(mView, url);
+                    }
                 }
                 break;
             }
@@ -2053,6 +2070,14 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             default:
                 break;
         }
+    }
+
+    private static boolean fragmentNavigation(String previous, String current) {
+        if (previous == null || previous.equals(current)) return false;
+        int oldFragment = previous.indexOf('#'), newFragment = current.indexOf('#');
+        String oldBase = oldFragment < 0 ? previous : previous.substring(0, oldFragment);
+        String newBase = newFragment < 0 ? current : current.substring(0, newFragment);
+        return oldBase.equals(newBase);
     }
 
     // ---- Windows, messages, files, permissions, authentication (the WebView's Looper) ----

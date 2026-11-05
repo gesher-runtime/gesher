@@ -2,9 +2,8 @@
 // app/java/com/gesher/app/webview/WebView2Host.java) over webview_host.h:
 // android.webkit.WebView on WebView2 (docs/webview.md, ADR 0041).
 //
-// A builtin native library of dalvikvm, libgesher_webview.so
-// (gesher_register_builtin_library): WebView2Host loads it with
-// System.loadLibrary("gesher_webview"). The natives are JNICALL, which is
+// The loadable libgesher_webview_bridge.so (or the legacy builtin library
+// libgesher_webview.so). The natives are JNICALL, which is
 // System V under GESHER, as ART calls natives (ADR 0006); JNI_OnLoad is
 // called as a C function, like libandroid_runtime's builtin one.
 
@@ -15,7 +14,9 @@
 #include <string>
 #include <vector>
 
+#ifndef GESHER_WEBVIEW_SHARED
 #include <gesher/builtin_library.h>
+#endif
 
 #include "webview_host.h"
 
@@ -31,6 +32,7 @@ jmethodID g_on_event = nullptr;
 jmethodID g_on_navigation_starting = nullptr;
 jmethodID g_on_resource_request = nullptr;
 jmethodID g_on_bridge_call = nullptr;
+jmethodID g_on_bridge_request = nullptr;
 jmethodID g_on_global = nullptr;
 
 // The calling thread's JNIEnv, attaching it (as a daemon) the first time:
@@ -125,6 +127,19 @@ class JavaListener final : public Listener {
     env->DeleteLocalRef(ja);
     if (result != nullptr) env->DeleteLocalRef(result);
     return out;
+  }
+
+  bool OnBridgeRequest(int64_t id, const std::wstring& body) override {
+    JNIEnv* env = Env();
+    if (env == nullptr) return false;
+    jstring data = JStr(env, body);
+    if (data == nullptr) { env->ExceptionClear(); return false; }
+    env->CallVoidMethod(peer_, g_on_bridge_request, static_cast<jlong>(id), data);
+    // Exception messages can contain interface arguments. Never describe them.
+    bool ok = !env->ExceptionCheck();
+    if (!ok) env->ExceptionClear();
+    env->DeleteLocalRef(data);
+    return ok;
   }
 
   void OnDestroyed() override {
@@ -333,6 +348,9 @@ void JNICALL WebView2Host_executeScript(JNIEnv* env, jclass, jlong h, jstring sc
 void JNICALL WebView2Host_setDocumentScript(JNIEnv* env, jclass, jlong h, jstring script) {
   Get(h)->SetDocumentScript(Str(env, script));
 }
+void JNICALL WebView2Host_setBridgeEndpoint(JNIEnv* env, jclass, jlong h, jstring path) {
+  Get(h)->SetBridgeEndpoint(Str(env, path));
+}
 
 void JNICALL WebView2Host_respond(JNIEnv* env, jclass, jlong h, jlong id, jint status,
                                   jstring reason, jstring headers, jbyteArray body) {
@@ -426,6 +444,8 @@ const JNINativeMethod kMethods[] = {
      reinterpret_cast<void*>(&WebView2Host_executeScript)},
     {"nSetDocumentScript", "(JLjava/lang/String;)V",
      reinterpret_cast<void*>(&WebView2Host_setDocumentScript)},
+    {"nSetBridgeEndpoint", "(JLjava/lang/String;)V",
+     reinterpret_cast<void*>(&WebView2Host_setBridgeEndpoint)},
     {"nRespond", "(JJILjava/lang/String;Ljava/lang/String;[B)V",
      reinterpret_cast<void*>(&WebView2Host_respond)},
     {"nCompleteDialog", "(JJZLjava/lang/String;)V",
@@ -458,9 +478,11 @@ extern "C" jint JNI_OnLoad_gesher_webview(JavaVM* vm, void*) {
   g_on_bridge_call = env->GetMethodID(
       c, "onBridgeCall",
       "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+  g_on_bridge_request = env->GetMethodID(c, "onBridgeRequest", "(JLjava/lang/String;)V");
   g_on_global = env->GetStaticMethodID(c, "onGlobal", "(IJILjava/lang/String;)V");
   if (g_on_event == nullptr || g_on_navigation_starting == nullptr ||
-      g_on_resource_request == nullptr || g_on_bridge_call == nullptr || g_on_global == nullptr) {
+      g_on_resource_request == nullptr || g_on_bridge_call == nullptr || g_on_global == nullptr
+      || g_on_bridge_request == nullptr) {
     return JNI_ERR;
   }
   if (env->RegisterNatives(c, kMethods, sizeof(kMethods) / sizeof(kMethods[0])) < 0) {
@@ -470,6 +492,17 @@ extern "C" jint JNI_OnLoad_gesher_webview(JavaVM* vm, void*) {
   Host::SetGlobalCallback(&GlobalCallback);
   return JNI_VERSION_1_6;
 }
+
+#ifdef GESHER_WEBVIEW_SHARED
+
+// ART enters PE JNI_OnLoad through the Microsoft ABI. Only the managed native
+// methods registered above use JNICALL/System V. JNI tables retain the host ABI.
+// Exported explicitly by webview_bridge.def; no builtin registration in a DLL.
+extern "C" jint JNI_OnLoad(JavaVM* vm, void* reserved) {
+  return JNI_OnLoad_gesher_webview(vm, reserved);
+}
+
+#else
 
 namespace {
 
@@ -484,3 +517,5 @@ const gesher_builtin_symbol kWebView[] = {
 }();
 
 }  // namespace
+
+#endif  // GESHER_WEBVIEW_SHARED

@@ -4,6 +4,7 @@
 #include "webview_host.h"
 
 #include <shobjidl.h>
+#include <bcrypt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,9 @@ constexpr UINT kRunTask = WM_APP + 1;
 constexpr wchar_t kTaskClass[] = L"GesherWebViewTasks";
 constexpr wchar_t kContainerClass[] = L"GesherWebView";
 constexpr wchar_t kParkingClass[] = L"GesherWebViewParking";
+constexpr wchar_t kBridgePrefix[] = L"/.gesher-js-bridge/";
+constexpr size_t kBridgeBodyLimit = 1024 * 1024;
+constexpr ULONGLONG kBridgeTimeoutMs = 30'000;
 
 // --- The WebView thread ---------------------------------------------------
 
@@ -266,6 +270,7 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   bool ready = false;
   bool failed = false;
   bool destroyed = false;
+  bool closing = false;
   std::vector<std::function<void(Impl*)>> pending;  // until ready
 
   Settings settings;
@@ -301,10 +306,24 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
 
   std::wstring document_script_id;
   uint64_t document_script_generation = 0;
+  std::wstring bridge_endpoint;
+  bool bridge_guarded = false;
+  uint64_t bridge_generation = 0;
+  struct PreparedCall {
+    std::wstring payload;
+    uint64_t generation;
+    ULONGLONG deadline;
+  };
+  std::map<std::wstring, PreparedCall> prepared_calls;
+  std::set<std::wstring> bridge_acknowledgments;
 
   struct Request {
     Com<ICoreWebView2WebResourceRequestedEventArgs> args;
     Com<ICoreWebView2Deferral> deferral;
+    Com<ICoreWebView2WebResourceRequest> bridge_request;
+    bool bridge = false;
+    uint64_t generation = 0;
+    ULONGLONG deadline = 0;
   };
   std::map<int64_t, Request> requests;
   int64_t next_request = 1;
@@ -349,7 +368,7 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   void Report(int32_t type, int64_t id = 0, int32_t arg = 0, const std::wstring& a = {},
               const std::wstring& b = {}, const std::wstring& c = {},
               const std::vector<uint8_t>* bytes = nullptr) {
-    if (listener != nullptr && !destroyed) listener->OnEvent(type, id, arg, a, b, c, bytes);
+    if (listener != nullptr && !destroyed && !closing) listener->OnEvent(type, id, arg, a, b, c, bytes);
   }
 };
 
@@ -358,7 +377,95 @@ namespace {
 using Impl = Host::Impl;
 
 std::set<Impl*> g_live;  // the WebView thread's: hosts with a controller
+// A logically destroyed view waits for JavaScript to consume its denied XHR
+// response before physically closing its controller. No Java arguments are in XHR.
+std::map<Impl*, std::shared_ptr<Impl>> g_retiring;
+void FinishDestroy(const std::shared_ptr<Impl>& impl);
 std::shared_ptr<Impl> g_service;  // a hidden host for cookies and data, when no WebView exists
+
+// This path is reserved on every origin, including absent/stale capabilities.
+// No arguments or method names are ever accepted from the URL.
+std::wstring BridgePath(const std::wstring& url) {
+  size_t start;
+  if (_wcsnicmp(url.c_str(), L"https://", 8) == 0) start = 8;
+  else if (_wcsnicmp(url.c_str(), L"http://", 7) == 0) start = 7;
+  else return {};
+  size_t path = url.find_first_of(L"/?#", start);
+  if (path == std::wstring::npos || url[path] != L'/') return {};
+  size_t end = url.find_first_of(L"?#", path);
+  return url.substr(path, end == std::wstring::npos ? end : end - path);
+}
+
+bool ScrubBridgeRequest(ICoreWebView2WebResourceRequest* request) {
+  if (request == nullptr) return false;
+  // Controller teardown can discard a synthetic response and resume its original
+  // request. The original must therefore contain neither a network URI nor a body.
+  // Attempt every mutation even if another fails; never dispatch a partial scrub.
+  bool content = SUCCEEDED(request->put_Content(nullptr));
+  bool method = SUCCEEDED(request->put_Method(L"GET"));
+  bool uri = SUCCEEDED(request->put_Uri(L"about:blank"));
+  Com<ICoreWebView2HttpRequestHeaders> headers;
+  bool framing = SUCCEEDED(request->get_Headers(headers.Put())) && headers;
+  if (framing) {
+    for (const wchar_t* name : {L"Content-Length", L"Content-Type", L"Transfer-Encoding"}) {
+      BOOL present = FALSE;
+      if (FAILED(headers->Contains(name, &present))) framing = false;
+      else if (present && FAILED(headers->RemoveHeader(name))) framing = false;
+    }
+  }
+  return content && method && uri && framing;
+}
+
+void CancelBridgeRequests(Impl* impl) {
+  ++impl->bridge_generation;
+  impl->prepared_calls.clear();
+  for (auto it = impl->requests.begin(); it != impl->requests.end();) {
+    if (!it->second.bridge) { ++it; continue; }
+    // Keep the original request inert even if closing its controller loses the response.
+    if (it->second.bridge_request) ScrubBridgeRequest(it->second.bridge_request.get());
+    it->second.deferral->Complete();
+    it = impl->requests.erase(it);
+  }
+}
+
+void CALLBACK BridgeTimeouts(HWND, UINT, UINT_PTR, DWORD) {
+  ULONGLONG now = GetTickCount64();
+  for (Impl* impl : g_live) {
+    for (auto it = impl->prepared_calls.begin(); it != impl->prepared_calls.end();) {
+      if (it->second.deadline <= now) it = impl->prepared_calls.erase(it);
+      else ++it;
+    }
+    for (auto it = impl->requests.begin(); it != impl->requests.end();) {
+      if (!it->second.bridge || it->second.deadline > now) { ++it; continue; }
+      if (it->second.bridge_request) ScrubBridgeRequest(it->second.bridge_request.get());
+      it->second.deferral->Complete();
+      it = impl->requests.erase(it);
+    }
+  }
+}
+
+bool BridgeBody(ICoreWebView2WebResourceRequest* request, std::wstring* out) {
+  Com<IStream> stream;
+  if (FAILED(request->get_Content(stream.Put())) || !stream) return false;
+  STATSTG stat = {};
+  if (SUCCEEDED(stream->Stat(&stat, STATFLAG_NONAME)) && stat.cbSize.QuadPart > kBridgeBodyLimit) return false;
+  std::vector<char> bytes;
+  char block[16384];
+  while (true) {
+    ULONG read = 0;
+    HRESULT hr = stream->Read(block, sizeof(block), &read);
+    if (FAILED(hr) || read > kBridgeBodyLimit - bytes.size()) return false;
+    bytes.insert(bytes.end(), block, block + read);
+    if (hr == S_FALSE || read == 0) break;
+  }
+  if (bytes.empty() || std::find(bytes.begin(), bytes.end(), '\0') != bytes.end()) return false;
+  int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, bytes.data(),
+                                  static_cast<int>(bytes.size()), nullptr, 0);
+  if (count <= 0) return false;
+  out->resize(count);
+  return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, bytes.data(),
+                             static_cast<int>(bytes.size()), out->data(), count) == count;
+}
 Host::GlobalCallback g_global_callback = nullptr;
 
 class NullListener final : public Listener {
@@ -543,7 +650,7 @@ void Fail(Impl* impl, HRESULT hr, const std::wstring& what) {
 // or is destroyed).
 void Do(const std::shared_ptr<Impl>& impl, std::function<void(Impl*)> fn) {
   PostToWebViewThread([impl, fn = std::move(fn)]() mutable {
-    if (impl->destroyed || impl->failed) return;
+    if (impl->destroyed || impl->closing || impl->failed) return;
     if (!impl->ready) {
       impl->pending.push_back(std::move(fn));
       return;
@@ -574,8 +681,8 @@ std::wstring Headers(ICoreWebView2HttpRequestHeaders* headers) {
 // (not "call": the proxy is a function, whose .call is Function.prototype.call).
 class Bridge final : public IDispatch {
  public:
-  explicit Bridge(std::weak_ptr<Impl> impl, bool callable = false)
-      : impl_(std::move(impl)), callable_(callable) {}
+  explicit Bridge(std::weak_ptr<Impl> impl, bool callable = false, DISPID method = kCall)
+      : impl_(std::move(impl)), callable_(callable), method_(method) {}
 
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override {
     if (out == nullptr) return E_POINTER;
@@ -608,6 +715,12 @@ class Bridge final : public IDispatch {
     for (UINT i = 0; i < count; ++i) {
       if (names[i] != nullptr && _wcsicmp(names[i], L"callJava") == 0) {
         ids[i] = kCall;
+      } else if (names[i] != nullptr && _wcsicmp(names[i], L"canPost") == 0) {
+        ids[i] = kCanPost;
+      } else if (names[i] != nullptr && _wcsicmp(names[i], L"prepareCall") == 0) {
+        ids[i] = kPrepare;
+      } else if (names[i] != nullptr && _wcsicmp(names[i], L"finishCall") == 0) {
+        ids[i] = kFinish;
       } else {
         ids[i] = DISPID_UNKNOWN;
         hr = DISP_E_UNKNOWNNAME;
@@ -622,27 +735,87 @@ class Bridge final : public IDispatch {
       fprintf(stderr, "gesher-webview: bridge Invoke(dispid %ld, flags %u, %u args)%s\n",
               static_cast<long>(id), static_cast<unsigned>(flags), argc,
               callable_ ? " on the method" : "");
-      for (UINT i = 0; i < argc; ++i) {
-        VARIANT& v = params->rgvarg[argc - 1 - i];
-        std::wstring text = Arg(v);
-        fprintf(stderr, "gesher-webview:   arg %u: vt %u '%ls'\n", i,
-                static_cast<unsigned>(V_VT(&v)), text.c_str());
-      }
+      // JavaScript arguments may contain credentials; never print their values.
       fflush(stderr);
     }
     // Without type information WebView2's proxy may read "callJava" as a property
     // and then calls what it got: hand out a callable object for it.
-    if (id == kCall && !callable_ && (flags & DISPATCH_PROPERTYGET) != 0 && argc == 0) {
+    if ((id == kCall || id == kCanPost || id == kPrepare || id == kFinish) && !callable_
+        && (flags & DISPATCH_PROPERTYGET) != 0 && argc == 0) {
       if (result != nullptr) {
         VariantInit(result);
         V_VT(result) = VT_DISPATCH;
-        V_DISPATCH(result) = new Bridge(impl_, /*callable=*/true);
+        V_DISPATCH(result) = new Bridge(impl_, /*callable=*/true, id);
       }
       return S_OK;
     }
     bool call = (flags & DISPATCH_METHOD) != 0 &&
-                (id == kCall || (callable_ && id == DISPID_VALUE));
+                (id == kCall || id == kCanPost || id == kPrepare || id == kFinish
+                 || (callable_ && id == DISPID_VALUE));
     if (!call) return DISP_E_MEMBERNOTFOUND;
+    DISPID operation = callable_ && id == DISPID_VALUE ? method_ : id;
+    if (operation == kCanPost) {
+      if (argc != 0) return DISP_E_BADPARAMCOUNT;
+      bool available = false;
+      if (auto impl = impl_.lock()) {
+        available = impl->ready && !impl->destroyed && !impl->closing && impl->bridge_guarded
+                    && !impl->bridge_endpoint.empty();
+      }
+      if (result != nullptr) {
+        VariantInit(result); V_VT(result) = VT_BOOL;
+        V_BOOL(result) = available ? VARIANT_TRUE : VARIANT_FALSE;
+      }
+      return S_OK;
+    }
+    if (operation == kFinish) {
+      if (argc != 1) return DISP_E_BADPARAMCOUNT;
+      std::wstring nonce = Arg(params->rgvarg[0]);
+      if (auto impl = impl_.lock()) {
+        impl->prepared_calls.erase(nonce);
+        impl->bridge_acknowledgments.erase(nonce);
+        if (impl->closing && impl->bridge_acknowledgments.empty()) {
+          // Leave this IDispatch invocation before disposing its controller.
+          PostToWebViewThread([impl] { FinishDestroy(impl); });
+        }
+      }
+      if (result != nullptr) { VariantInit(result); V_VT(result) = VT_EMPTY; }
+      return S_OK;
+    }
+    if (operation == kPrepare) {
+      if (argc != 3) return DISP_E_BADPARAMCOUNT;
+      auto impl = impl_.lock();
+      if (!impl || !impl->ready || impl->destroyed || impl->closing || !impl->bridge_guarded
+          || impl->bridge_endpoint.empty()) return E_ABORT;
+      ULONGLONG now = GetTickCount64();
+      for (auto it = impl->prepared_calls.begin(); it != impl->prepared_calls.end();) {
+        if (it->second.deadline <= now) it = impl->prepared_calls.erase(it);
+        else ++it;
+      }
+      if (impl->prepared_calls.size() + impl->bridge_acknowledgments.size() >= 16) return E_OUTOFMEMORY;
+      std::wstring object = Arg(params->rgvarg[2]), method = Arg(params->rgvarg[1]);
+      std::wstring args = Arg(params->rgvarg[0]);
+      if (object.size() > kBridgeBodyLimit || method.size() > kBridgeBodyLimit
+          || args.size() > kBridgeBodyLimit) return E_INVALIDARG;
+      std::wstring payload = L"{\"version\":1,\"object\":" + JsonString(object)
+          + L",\"method\":" + JsonString(method) + L",\"args\":" + args + L"}";
+      int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, payload.data(),
+          static_cast<int>(payload.size()), nullptr, 0, nullptr, nullptr);
+      if (bytes <= 0 || static_cast<size_t>(bytes) > kBridgeBodyLimit) return E_INVALIDARG;
+      uint8_t random[32];
+      if (BCryptGenRandom(nullptr, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
+        return E_FAIL;
+      constexpr wchar_t hex[] = L"0123456789abcdef";
+      std::wstring nonce;
+      nonce.reserve(64);
+      for (uint8_t byte : random) { nonce += hex[byte >> 4]; nonce += hex[byte & 15]; }
+      impl->prepared_calls.emplace(nonce, Impl::PreparedCall{
+          std::move(payload), impl->bridge_generation, now + kBridgeTimeoutMs});
+      if (result != nullptr) {
+        VariantInit(result); V_VT(result) = VT_BSTR;
+        V_BSTR(result) = SysAllocStringLen(nonce.data(), static_cast<UINT>(nonce.size()));
+      }
+      return S_OK;
+    }
     if (argc != 3) return DISP_E_BADPARAMCOUNT;
     // Arguments come last to first.
     std::wstring object = Arg(params->rgvarg[2]);
@@ -650,7 +823,7 @@ class Bridge final : public IDispatch {
     std::wstring args = Arg(params->rgvarg[0]);
     std::wstring answer = L"{\"e\":\"the WebView is gone\"}";
     if (auto impl = impl_.lock()) {
-      if (!impl->destroyed && impl->listener != nullptr) {
+      if (!impl->destroyed && !impl->closing && impl->listener != nullptr) {
         answer = impl->listener->OnBridgeCall(object, method, args);
       }
     }
@@ -664,6 +837,9 @@ class Bridge final : public IDispatch {
 
  private:
   static constexpr DISPID kCall = 1;
+  static constexpr DISPID kCanPost = 2;
+  static constexpr DISPID kPrepare = 3;
+  static constexpr DISPID kFinish = 4;
   ~Bridge() = default;
   static std::wstring Arg(VARIANT& v) {
     if (V_VT(&v) == VT_BSTR) {
@@ -682,14 +858,30 @@ class Bridge final : public IDispatch {
   std::atomic<ULONG> refs_{1};
   std::weak_ptr<Impl> impl_;
   bool callable_;  // the object "callJava" reads as
+  DISPID method_;
 };
 
 // Registers the controller's and the WebView's handlers. The WebView thread.
-void AddHandlers(const std::shared_ptr<Impl>& shared) {
+bool AddHandlers(const std::shared_ptr<Impl>& shared) {
   Impl* impl = shared.get();
   std::weak_ptr<Impl> weak = shared;
   EventRegistrationToken token;
   ICoreWebView2* wv = impl->webview.get();
+  // A response is mandatory even if Java, a listener or the capability is gone.
+  // Capture it in the handler so weak/destroyed paths cannot fall through.
+  Com<IStream> empty(SHCreateMemStream(nullptr, 0), false);
+  Com<ICoreWebView2WebResourceResponse> denied;
+  if (!empty || !impl->env || FAILED(impl->env->CreateWebResourceResponse(
+          empty.get(), 403, L"Forbidden", L"Cache-Control: no-store\r\nContent-Length: 0\r\n",
+          denied.Put())) || !denied) return false;
+  Com<ICoreWebView2_22> modern;
+  impl->bridge_guarded = impl->webview.As(IID_ICoreWebView2_22, &modern)
+      && SUCCEEDED(modern->AddWebResourceRequestedFilterWithRequestSourceKinds(
+          L"*://*/.gesher-js-bridge/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+          COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL));
+  // Shared/service-worker requests may reach multiple controllers in one environment;
+  // each only denies them. DOCUMENT includes frames and dedicated workers.
+  if (SetTimer(g_task_window, 0x4742, 1000, BridgeTimeouts) == 0) impl->bridge_guarded = false;
 
   wv->add_NavigationStarting(
       GESHER_CALLBACK(ICoreWebView2NavigationStartingEventHandler,
@@ -724,6 +916,7 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                         }
                         impl->main_document = url;
                         if (!redirect) {
+                          CancelBridgeRequests(impl.get());
                           UINT64 nav = 0;
                           args->get_NavigationId(&nav);
                           impl->Report(kPageStarted, static_cast<int64_t>(nav), api ? 1 : 0, url);
@@ -784,12 +977,14 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
 
   wv->add_SourceChanged(
       GESHER_CALLBACK(ICoreWebView2SourceChangedEventHandler,
-                      [weak](ICoreWebView2* sender, ICoreWebView2SourceChangedEventArgs*) -> HRESULT {
+                      [weak](ICoreWebView2* sender, ICoreWebView2SourceChangedEventArgs* args) -> HRESULT {
                         auto impl = weak.lock();
                         if (!impl) return S_OK;
                         CoString source;
                         sender->get_Source(source.Put());
-                        impl->Report(kSourceChanged, 0, 0, source.str());
+                        BOOL new_document = TRUE; // Fail closed: never invent a fragment finish.
+                        args->get_IsNewDocument(&new_document);
+                        impl->Report(kSourceChanged, 0, new_document ? 1 : 0, source.str());
                         return S_OK;
                       })
           .get(),
@@ -848,17 +1043,101 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
   // Every request is seen here; the Listener gets file URLs, documents, and
   // with intercept_all (WebViewClient.shouldInterceptRequest) the rest.
   wv->AddWebResourceRequestedFilter(L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-  wv->add_WebResourceRequested(
+  HRESULT request_hook = wv->add_WebResourceRequested(
       GESHER_CALLBACK(ICoreWebView2WebResourceRequestedEventHandler,
-                      [weak](ICoreWebView2*, ICoreWebView2WebResourceRequestedEventArgs* args)
+                      [weak, denied](ICoreWebView2*, ICoreWebView2WebResourceRequestedEventArgs* args)
                           -> HRESULT {
-                        auto impl = weak.lock();
-                        if (!impl || impl->destroyed || impl->listener == nullptr) return S_OK;
                         Com<ICoreWebView2WebResourceRequest> request;
-                        if (FAILED(args->get_Request(request.Put())) || !request) return S_OK;
                         CoString uri;
-                        request->get_Uri(uri.Put());
+                        if (FAILED(args->get_Request(request.Put())) || !request
+                            || FAILED(request->get_Uri(uri.Put())) || uri.str().empty()) {
+                          // An unidentified request may contain a bridge body. Do not
+                          // let getter failures release it to its original destination.
+                          if (request) ScrubBridgeRequest(request.get());
+                          if (SUCCEEDED(args->put_Response(denied.get()))) return S_OK;
+                          if (auto impl = weak.lock()) {
+                            impl->bridge_guarded = false;
+                            impl->failed = true;
+                            impl->webview->Stop();
+                            impl->controller->Close();
+                          }
+                          return E_ABORT;
+                        }
                         std::wstring url = uri.str();
+                        std::wstring path = BridgePath(url);
+                        if (StartsWith(path, kBridgePrefix)) {
+                          // Set denial before deferral, capability, body or Java work.
+                          if (FAILED(args->put_Response(denied.get()))) {
+                            // Never release an original POST after a failed denial.
+                            ScrubBridgeRequest(request.get());
+                            if (auto impl = weak.lock()) {
+                              impl->bridge_guarded = false;
+                              impl->failed = true;
+                              impl->webview->Stop();
+                              impl->controller->Close();
+                            }
+                            return E_ABORT;
+                          }
+                          auto impl = weak.lock();
+                          bool eligible = impl && !impl->destroyed && !impl->closing && impl->bridge_guarded
+                              && impl->listener != nullptr && !impl->bridge_endpoint.empty()
+                              && path == impl->bridge_endpoint && url.find_first_of(L"?#") == std::wstring::npos;
+                          Com<ICoreWebView2WebResourceRequestedEventArgs2> source;
+                          COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS kind =
+                              COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_NONE;
+                          if (!Com<ICoreWebView2WebResourceRequestedEventArgs>(args).As(
+                                  IID_ICoreWebView2WebResourceRequestedEventArgs2, &source)
+                              || FAILED(source->get_RequestedSourceKind(&kind))
+                              || kind != COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_DOCUMENT)
+                            eligible = false;
+                          CoString method;
+                          if (FAILED(request->get_Method(method.Put())) || method.str() != L"POST") eligible = false;
+                          std::wstring body;
+                          if (eligible && !BridgeBody(request.get(), &body)) eligible = false;
+                          // HTTP carries only an opaque one-use ticket. Java arguments
+                          // came through IDispatch and never enter a browser request.
+                          std::wstring payload;
+                          if (eligible) {
+                            auto prepared = impl->prepared_calls.find(body);
+                            if (prepared == impl->prepared_calls.end()
+                                || prepared->second.generation != impl->bridge_generation
+                                || prepared->second.deadline <= GetTickCount64()) eligible = false;
+                            else {
+                              payload = std::move(prepared->second.payload);
+                              impl->prepared_calls.erase(prepared);
+                              impl->bridge_acknowledgments.insert(body);
+                            }
+                          }
+                          // Read the bounded private copy first, then scrub EVERY reserved
+                          // request before deferral or any early return from this handler.
+                          if (!ScrubBridgeRequest(request.get())) {
+                            if (impl) {
+                              impl->bridge_guarded = false;
+                              impl->failed = true;
+                              impl->webview->Stop();
+                              impl->controller->Close();
+                            }
+                            return E_ABORT;
+                          }
+                          if (!eligible) return S_OK;
+                          Impl::Request r;
+                          r.args = Com<ICoreWebView2WebResourceRequestedEventArgs>(args);
+                          r.bridge_request = request;
+                          if (FAILED(args->GetDeferral(r.deferral.Put()))) return S_OK;
+                          r.bridge = true; r.generation = impl->bridge_generation;
+                          r.deadline = GetTickCount64() + kBridgeTimeoutMs;
+                          int64_t id = impl->next_request++;
+                          impl->requests.emplace(id, std::move(r));
+                          if (!impl->listener->OnBridgeRequest(id, payload)) {
+                            auto it = impl->requests.find(id);
+                            if (it != impl->requests.end()) {
+                              it->second.deferral->Complete(); impl->requests.erase(it);
+                            }
+                          }
+                          return S_OK;
+                        }
+                        auto impl = weak.lock();
+                        if (!impl || impl->destroyed || impl->closing || impl->listener == nullptr) return S_OK;
                         COREWEBVIEW2_WEB_RESOURCE_CONTEXT context =
                             COREWEBVIEW2_WEB_RESOURCE_CONTEXT_OTHER;
                         args->get_ResourceContext(&context);
@@ -882,6 +1161,7 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                       })
           .get(),
       &token);
+  if (FAILED(request_hook)) return false;
 
   wv->add_NewWindowRequested(
       GESHER_CALLBACK(ICoreWebView2NewWindowRequestedEventHandler,
@@ -1199,6 +1479,7 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
   V_DISPATCH(&bridge) = new Bridge(weak);
   wv->AddHostObjectToScript(L"gesherBridge", &bridge);
   VariantClear(&bridge);
+  return true;
 }
 
 void OnController(const std::shared_ptr<Impl>& impl, HRESULT hr,
@@ -1229,7 +1510,11 @@ void OnController(const std::shared_ptr<Impl>& impl, HRESULT hr,
                                 static_cast<BYTE>(c >> 8), static_cast<BYTE>(c)};
     c2->put_DefaultBackgroundColor(color);
   }
-  AddHandlers(impl);
+  if (!AddHandlers(impl)) {
+    controller->Close();
+    Fail(impl.get(), E_FAIL, L"Install internal request guard");
+    return;
+  }
   if (impl->has_settings) ApplySettings(impl.get());
   ApplyBounds(impl.get());
   impl->ready = true;
@@ -1407,11 +1692,13 @@ Host* Host::Create(Listener* listener, const HostOptions& options) {
   return new Host(impl);
 }
 
-void Host::Destroy() {
-  std::shared_ptr<Impl> impl = std::move(impl_);
-  PostToWebViewThread([impl] {
-    if (impl->destroyed) return;
-    // Pending requests and dialogs go on unanswered.
+namespace {
+
+void FinishDestroy(const std::shared_ptr<Impl>& impl) {
+    if (impl->destroyed || !impl->bridge_acknowledgments.empty()) return;
+    impl->destroyed = true;
+    // Bridge deferrals have been denied while the controller was still alive;
+    // JavaScript consumed their responses and acknowledged them before this close.
     for (auto& r : impl->requests) r.second.deferral->Complete();
     impl->requests.clear();
     for (auto& d : impl->dialogs) d.second.deferral->Complete();
@@ -1441,8 +1728,33 @@ void Host::Destroy() {
     impl->container = nullptr;
     impl->pending.clear();
     Listener* listener = impl->listener;
-    impl->destroyed = true;
+    impl->listener = nullptr;
     if (listener != nullptr) listener->OnDestroyed();
+    g_retiring.erase(impl.get());
+}
+
+}  // namespace
+
+void Host::Destroy() {
+  std::shared_ptr<Impl> impl = std::move(impl_);
+  PostToWebViewThread([impl] {
+    if (impl->destroyed || impl->closing) return;
+    impl->closing = true;
+    impl->bridge_guarded = false;
+    // Detach before the Android parent window is destroyed; retain a hidden
+    // controller until its synchronous XHR has actually consumed our denial.
+    if (impl->container != nullptr) {
+      Reparent(impl.get(), g_parking);
+      ShowWindow(impl->container, SW_HIDE);
+    }
+    g_retiring.emplace(impl.get(), impl);
+    if (impl->webview) impl->webview->Stop();
+    CancelBridgeRequests(impl.get());
+    impl->pending.clear();
+    if (impl->bridge_acknowledgments.empty()) FinishDestroy(impl);
+    // No timer forces a controller closed with outstanding acknowledgments.
+    // A vanished renderer may retain this inert controller until process exit;
+    // even abrupt failure can expose only an opaque ticket, never call arguments.
   });
   delete this;
 }
@@ -1485,6 +1797,21 @@ void Host::NavigateToString(const std::wstring& html) {
       impl->api_navigation = false;
       impl->Report(kFailed, 0, static_cast<int32_t>(hr), L"NavigateToString: " + Hex(hr));
     }
+  });
+}
+
+void Host::SetBridgeEndpoint(const std::wstring& path) {
+  Do(impl_, [path](Impl* impl) {
+    CancelBridgeRequests(impl);
+    impl->bridge_endpoint.clear();
+    size_t prefix = std::wstring(kBridgePrefix).size();
+    if (!StartsWith(path, kBridgePrefix) || path.size() <= prefix || path.size() > prefix + 128) return;
+    for (size_t i = prefix; i < path.size(); ++i) {
+      wchar_t c = path[i];
+      if (!((c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z')
+              || (c >= L'0' && c <= L'9') || c == L'-')) return;
+    }
+    impl->bridge_endpoint = path;
   });
 }
 
@@ -1652,13 +1979,22 @@ void Host::RespondToRequest(int64_t id, int32_t status, const std::wstring& reas
     if (it == impl->requests.end()) return;
     Impl::Request r = std::move(it->second);
     impl->requests.erase(it);
+    if (r.bridge && (status != 200 || impl->destroyed || !impl->bridge_guarded
+            || r.generation != impl->bridge_generation || GetTickCount64() >= r.deadline
+            || body.size() > kBridgeBodyLimit)) {
+      r.deferral->Complete(); // Keep the response installed before dispatch.
+      return;
+    }
     if (status > 0 && impl->env && !impl->destroyed) {
       Com<IStream> stream(SHCreateMemStream(body.empty() ? nullptr : body.data(),
                                             static_cast<UINT>(body.size())),
                           /*add_ref=*/false);
       Com<ICoreWebView2WebResourceResponse> response;
+      const wchar_t* response_headers = r.bridge
+          ? L"Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n"
+          : headers.c_str();
       if (stream && SUCCEEDED(impl->env->CreateWebResourceResponse(
-                        stream.get(), status, reason.c_str(), headers.c_str(), response.Put()))) {
+                        stream.get(), status, reason.c_str(), response_headers, response.Put()))) {
         r.args->put_Response(response.get());
       }
     }

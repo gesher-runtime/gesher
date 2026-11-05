@@ -339,3 +339,58 @@ runs that callback on WebView2's thread and returns null for synchronous cookie
 reads there. No successful real Google account registration or token use is
 claimed by this follow-up. The earlier FCM measurements remain tied to their
 explicitly recorded prior artifact hash.
+
+## WebView login completion follow-up
+
+Two general host bugs prevented supported completion paths: JavaScript-interface
+methods ran on WebView2's STA, where a synchronous cookie read cannot wait for
+itself, and primary-frame same-document fragment changes did not deliver
+Android's `onPageFinished`. The latter matters to microG's `#close` completion
+path. These are host compatibility fixes, not a claim that the earlier consent
+screen trace reached either completion path.
+
+HTTP(S) bridge methods now run in order on a Java worker while JavaScript keeps
+its synchronous return semantics. A cheap native `prepareCall` stores bounded
+arguments locally and produces a random, expiring, one-use ticket. Only this
+ticket enters the same-origin XHR. The native broker consumes it before Java
+dispatch; `finally` retires it even when browser policy rejects the XHR. Real
+browser CSP and synchronous-XHR restrictions remain in force.
+
+A live destruction test found that WebView2 could release the original POST to
+the loopback origin when a controller closed, despite a preinstalled rejection
+response and subsequent request mutation. The rejected development candidate
+sent 116 bytes of synthetic fixture arguments. No personal data or Google login
+was involved. The final protocol keeps arguments out of HTTP entirely and parks
+a retiring controller until outstanding response acknowledgments allow closure.
+The original failing evidence is retained alongside the successful regressions;
+this is not an assertion of zero packets after arbitrary browser/host crashes.
+
+The final four actual WebView2 cases passed: HttpOnly cookies and ordered
+non-STA void/nonvoid calls; nine fragment/history callback steps; dedicated,
+shared and service-worker boundaries with fresh valid tickets; and a view
+destroyed while its Java callback was active. The origin counters remained zero
+for requests, body bytes, reserved paths and private fixture payloads. The server
+leak detectors were independently exercised with deliberate local POST controls.
+The native Release helper suite also exercises CNG ticket creation, private
+payload retention, cancellation, expiry, generation and prepared-call bounds.
+
+The same final Java jar/native bridge also passed all 37 account/security
+integration checks. Exact artifact hashes and the measured boundaries are in
+the [login validation record](microg-login-validation-2026-11-05.json).
+
+The native component is built from the reviewable `gesher_webview_bridge`
+shared CMake target and loaded by absolute path beside `gesher-app.jar`.
+The validated local runtime retains the original working executable. A separate
+new full-native baseline failed controller creation before loading pages, so it
+is not the runtime deployed for this follow-up. Long nested fixture paths also
+failed controller creation; the committed runner uses fresh short workspace
+profiles and records their locations. The complete installer pipeline was not
+run locally.
+
+A separate manual `googleaccount` app uses real AccountManager delegation, then
+requests an email-scope access token and verifies HTTP 200, an account ID and the
+selected account's email against Google's fixed HTTPS userinfo endpoint. It
+starts no login or network action until the user presses a button, and logs no
+credentials. This is a manual acceptance tool, not a recorded successful Google
+login or validation of every other application's scopes/SDK. Account visibility
+and Google's developer-client policy remain applicable.
