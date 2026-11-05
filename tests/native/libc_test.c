@@ -48,6 +48,7 @@ static void check_str(const char* what, const char* got, const char* want) {
 }
 
 #include "tgnet_event_loop_test.inc"
+#include "epoll_nested_test.inc"
 
 // --- memory and strings -------------------------------------------------------
 
@@ -559,6 +560,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_pthread();
   test_pthread_cleanup();
   test_tgnet_event_loop();
+  test_epoll_nested();
   test_dl();
   if (failures == 0) {
     printf("libc_test: all passed\n");

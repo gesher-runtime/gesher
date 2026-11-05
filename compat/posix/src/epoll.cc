@@ -18,6 +18,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <algorithm>
 #include <condition_variable>
 #include <map>
 #include <memory>
@@ -28,6 +29,7 @@
 #include "event_internal.h"
 #include "internal.h"
 #include "socket_internal.h"
+#include "record_lock_descriptors.h"
 
 namespace gesher {
 
@@ -73,11 +75,13 @@ struct EventFd {
 
 namespace {
 
+struct Epoll;
 struct Entry {
   uint32_t events;
   epoll_data_t data;
   uint64_t id;  // tells a re-added fd from the entry a wait started with
   bool armed;   // false once an EPOLLONESHOT entry fired, until EPOLL_CTL_MOD
+  std::weak_ptr<Epoll> child;
 };
 
 std::atomic<size_t> epoll_count{0};
@@ -111,6 +115,9 @@ std::atomic<size_t> object_count{0};
 // Every live epoll, for ForgetEpollEntries; expired ones are pruned there.
 std::mutex epolls_mutex;
 std::vector<std::weak_ptr<Epoll>> epolls;
+// Serialize graph changes, including opposing ADDs from separate threads.
+// Readiness sampling never holds this mutex while it recurses into a child.
+std::mutex epoll_graph_mutex;
 
 bool Lookup(int fd, Object* object) {
   if (object_count.load(std::memory_order_acquire) == 0) return false;
@@ -183,6 +190,42 @@ uint32_t ToEpoll(short revents, uint32_t events) {
   return r;
 }
 
+// Linux permits at most five epoll instances on a nesting path. Validate the
+// whole affected graph, so adding above OR below an existing chain cannot
+// bypass the bound. Called with graph and descriptor transactions held.
+bool CanNest(const std::shared_ptr<Epoll>& parent, const std::shared_ptr<Epoll>& child) {
+  std::vector<std::shared_ptr<Epoll>> live;
+  {
+    std::lock_guard<std::mutex> lock(epolls_mutex);
+    for (const auto& weak : epolls) if (auto ep = weak.lock()) live.push_back(std::move(ep));
+  }
+  std::map<Epoll*, std::vector<std::shared_ptr<Epoll>>> graph;
+  for (const auto& ep : live) {
+    std::lock_guard<std::mutex> lock(ep->mutex);
+    for (const auto& [fd, entry] : ep->entries) {
+      if (auto nested = entry.child.lock()) graph[ep.get()].push_back(std::move(nested));
+    }
+  }
+  graph[parent.get()].push_back(child);
+  // A bounded walk avoids unbounded recursion even if a corrupt old graph
+  // were supplied. Repeated nodes on different DAG branches are allowed.
+  std::map<Epoll*, int> heights;
+  auto height = [&](auto&& self, Epoll* node, int depth) -> int {
+    if (depth > 4) return 5;
+    auto known = heights.find(node);
+    if (known != heights.end()) return known->second;
+    int result = 0;
+    for (const auto& next : graph[node]) {
+      result = std::max(result, 1 + self(self, next.get(), depth + 1));
+      if (result > 4) break;
+    }
+    heights[node] = result;
+    return result;
+  };
+  for (const auto& ep : live) if (height(height, ep.get(), 0) > 4) return false;
+  return true;
+}
+
 // Regular files and directories cannot be polled on Linux, so epoll refuses
 // them with EPERM. Pipes, sockets, eventfds and character devices can.
 bool Pollable(int fd) {
@@ -191,6 +234,45 @@ bool Pollable(int fd) {
 }
 
 }  // namespace
+
+bool PollEpoll(int fd, short events, short* ready) {
+  auto ep = LookupEpoll(fd);
+  if (!ep) return false;
+  *ready = 0;
+  if ((events & (POLLIN | POLLRDNORM)) == 0) return true;
+  // Concurrent graph reversals can expose different, individually acyclic
+  // snapshots to successive recursive samples. Bound that historical walk
+  // without retaining graph/parent locks across a child's poll.
+  thread_local Epoll* active[5] = {};
+  thread_local size_t depth = 0;
+  if (depth == 5 || std::find(active, active + depth, ep.get()) != active + depth) return true;
+  active[depth++] = ep.get();
+  struct Leave {
+    size_t& depth;
+    ~Leave() { --depth; }
+  } leave{depth};
+  std::vector<pollfd> fds;
+  std::vector<uint64_t> ids;
+  {
+    std::lock_guard<std::mutex> lock(ep->mutex);
+    for (const auto& [watched, entry] : ep->entries) {
+      if (!entry.armed) continue;
+      fds.push_back({watched, static_cast<short>(entry.events & kPollable), 0});
+      ids.push_back(entry.id);
+    }
+  }
+  if (PollFds(fds.data(), fds.size(), 0, nullptr, nullptr) <= 0) return true;
+  std::lock_guard<std::mutex> lock(ep->mutex);
+  for (size_t i = 0; i < fds.size(); ++i) {
+    auto found = ep->entries.find(fds[i].fd);
+    if (found != ep->entries.end() && found->second.id == ids[i] && found->second.armed &&
+        (fds[i].revents & POLLNVAL) == 0 && ToEpoll(fds[i].revents, found->second.events) != 0) {
+      *ready = events & (POLLIN | POLLRDNORM);
+      break;
+    }
+  }
+  return true;
+}
 
 std::shared_ptr<EventFd> LookupEventFd(int fd) {
   Object object;
@@ -359,30 +441,40 @@ int epoll_create(int size) { return size <= 0 ? (errno = EINVAL, -1) : epoll_cre
 // reports what is ready, so a caller that drains the fd, as edge-triggered
 // callers must, sees the same events, plus at worst a spurious repeat.
 int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
+  gesher::record_locks::DescriptorGuard descriptors;
   if (gesher::HandleFromFd(epfd) == INVALID_HANDLE_VALUE ||
       gesher::HandleFromFd(fd) == INVALID_HANDLE_VALUE) {
     return errno = EBADF, -1;
   }
   std::shared_ptr<Epoll> ep = gesher::LookupEpoll(epfd);
-  if (ep == nullptr || fd == epfd) return errno = EINVAL, -1;
+  auto child = gesher::LookupEpoll(fd);
+  if (ep == nullptr || fd == epfd || child == ep) return errno = EINVAL, -1;
   if (op != EPOLL_CTL_ADD && op != EPOLL_CTL_MOD && op != EPOLL_CTL_DEL) return errno = EINVAL, -1;
   if (op != EPOLL_CTL_DEL && event == nullptr) return errno = EFAULT, -1;
-  // Nested epolls, which Linux allows, are not supported.
-  if (gesher::LookupEpoll(fd) != nullptr) return errno = EINVAL, -1;
   if (!gesher::Pollable(fd)) return errno = EPERM, -1;
   uint32_t events = event != nullptr ? event->events : 0;
   if (op == EPOLL_CTL_MOD && (events & EPOLLEXCLUSIVE) != 0) return errno = EINVAL, -1;
+  if (child && (events & EPOLLEXCLUSIVE) != 0 && op != EPOLL_CTL_DEL) return errno = EINVAL, -1;
+  std::lock_guard<std::mutex> graph(gesher::epoll_graph_mutex);
+  if (op == EPOLL_CTL_ADD && child) {
+    {
+      std::lock_guard<std::mutex> lock(ep->mutex);
+      if (ep->entries.count(fd) != 0) return errno = EEXIST, -1;
+    }
+    if (!gesher::CanNest(ep, child)) return errno = ELOOP, -1;
+  }
   {
     std::lock_guard<std::mutex> lock(ep->mutex);
     auto it = ep->entries.find(fd);
     switch (op) {
       case EPOLL_CTL_ADD:
         if (it != ep->entries.end()) return errno = EEXIST, -1;
-        ep->entries[fd] = {events, event->data, ep->next_id++, true};
+        ep->entries[fd] = {events, event->data, ep->next_id++, true, child};
         break;
       case EPOLL_CTL_MOD:
         if (it == ep->entries.end()) return errno = ENOENT, -1;
-        it->second = {events, event->data, ep->next_id++, true};
+        if ((it->second.events & EPOLLEXCLUSIVE) != 0) return errno = EINVAL, -1;
+        it->second = {events, event->data, ep->next_id++, true, child};
         break;
       case EPOLL_CTL_DEL:
         if (it == ep->entries.end()) return errno = ENOENT, -1;

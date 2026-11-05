@@ -22,6 +22,9 @@ std::shared_ptr<EventFd> LookupEventFd(int fd);
 // not null, *wake is a Win32 event that is signaled once one may be (null
 // if none can be).
 short PollEventFd(EventFd& eventfd, short events, HANDLE* wake);
+// True for an epoll descriptor; sample its readable interest list without
+// consuming events or disarming EPOLLONESHOT registrations.
+bool PollEpoll(int fd, short events, short* ready);
 bool IsNonBlocking(EventFd& eventfd);
 void SetNonBlocking(EventFd& eventfd, bool on);
 

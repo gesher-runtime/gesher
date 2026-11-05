@@ -37,6 +37,12 @@ static int Add(int ep, int fd, uint32_t events, uint64_t tag) {
   return epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev);
 }
 
+static void check(const char* what, int ok) {
+  if (!ok) printf("FAIL nested epoll: %s\n", what);
+  CHECK(ok);
+}
+#include "../../tests/native/epoll_nested_test.inc"
+
 // Writes `value` to the eventfd `fd` after `delay_ms`, from a pthread.
 struct DelayedWrite {
   int fd;
@@ -53,6 +59,7 @@ static void* WriteLater(void* arg) {
 
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0);
+  test_epoll_nested();
   uint64_t v = 0;
 
   // eventfd: a counter that reads return and reset.
