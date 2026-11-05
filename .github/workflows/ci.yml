@@ -43,6 +43,9 @@ jobs:
           python3 tools/ci/receipt_identity.py
           python3 tools/surface/test-verified-artifact.py
 
+      - name: Compatibility audit parser tests
+        run: python3 -m unittest discover -s tools/tests -p test_compatibility_audit.py
+
   build-framework-assets:
     needs: [artifact-preflight, source-identity]
     runs-on: ubuntu-24.04
