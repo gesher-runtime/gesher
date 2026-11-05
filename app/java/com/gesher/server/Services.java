@@ -241,6 +241,8 @@ public final class Services {
             final String name;
             final android.os.IServiceCallback callback;
             final IBinder token;
+            private IBinder pending;
+            private boolean dispatching;
 
             Registration(String name, android.os.IServiceCallback callback) {
                 this.name = name;
@@ -253,12 +255,48 @@ public final class Services {
             void notifyService(IBinder service) {
                 synchronized (ServiceManagerStandIn.this) {
                     Map<IBinder, Registration> registrations = mNotifications.get(name);
-                    if (registrations == null || registrations.get(token) != this) return;
+                    if (registrations == null || registrations.get(token) != this
+                            || mServices.get(name) != service) return;
+                    synchronized (this) {
+                        // Validate and enqueue atomically with service publication, so
+                        // a delayed old snapshot cannot overwrite a pending replacement.
+                        pending = service;
+                        if (dispatching) return;
+                        dispatching = true;
+                    }
                 }
+                boolean completed = false;
                 try {
-                    callback.onRegistration(name, service);
-                } catch (android.os.RemoteException e) {
-                    remove(this);
+                    while (true) {
+                        synchronized (this) {
+                            service = pending;
+                            pending = null;
+                            if (service == null) {
+                                dispatching = false;
+                                completed = true;
+                                return;
+                            }
+                        }
+                        synchronized (ServiceManagerStandIn.this) {
+                            Map<IBinder, Registration> registrations = mNotifications.get(name);
+                            if (registrations == null || registrations.get(token) != this
+                                    || mServices.get(name) != service) continue;
+                        }
+                        // Never hold either monitor while calling a local observer. It
+                        // may register a service watched by another active observer.
+                        try {
+                            callback.onRegistration(name, service);
+                        } catch (android.os.RemoteException | RuntimeException e) {
+                            remove(this);
+                        }
+                    }
+                } finally {
+                    if (!completed) {
+                        synchronized (this) {
+                            pending = null;
+                            dispatching = false;
+                        }
+                    }
                 }
             }
         }
@@ -272,7 +310,7 @@ public final class Services {
         }
 
         ServiceManagerStandIn(Map<String, IBinder> services) {
-            mServices = services;
+            mServices = new TreeMap<>(services);
         }
 
         @Override
