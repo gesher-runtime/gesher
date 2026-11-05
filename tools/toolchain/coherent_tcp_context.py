@@ -10,9 +10,9 @@ REPOSITORY='gesher-runtime/gesher'; REPOSITORY_ID='1426153186'
 BRANCH='wip/coherent-selected-tcp'; WORKFLOW='ci'
 PATH='.github/workflows/ci.yml'
 
-def context(env,job,event=None):
+def context(env,job,event=None,checkout_parents=None):
     assert job in ('compile','linux-reference','windows','supplier-correlation') and env.get('GITHUB_JOB')==job
-    identity = source_identity(env, event)
+    identity = source_identity(env, event, checkout_parents)
     ref = env['GITHUB_REF']
     if env['GITHUB_EVENT_NAME'] == 'pull_request':
         assert env['GITHUB_BASE_REF'] == 'main'

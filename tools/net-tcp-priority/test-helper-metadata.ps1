@@ -13,7 +13,7 @@ $reviewed=@{
  'tools/net-tcp-priority/qualified/TsfJobSupervisor.cs'='625be4d5906bb48dd02d6103382fd2e85ac88738'
  'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
  'tools/ci/receipt-diagnostics.ps1'='80f33415a4c57c42c99f74ae61fc5da1316195ef'
- 'tools/ci/source_identity.py'='6c8acc8c90ec2bc134604041a7a60a67b06af235'
+ 'tools/ci/source_identity.py'='efa44e058d4ca09fc556661967c7fdc13f8515ba'
 }
 function ExactMap($Value){
  if($Value.Count -ne $reviewed.Count){return $false}
