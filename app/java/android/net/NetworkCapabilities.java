@@ -11,6 +11,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * The Connectivity module's NetworkCapabilities (framework.jar compiles against the
@@ -79,6 +81,8 @@ public final class NetworkCapabilities implements Parcelable {
     public static final int NET_ENTERPRISE_ID_5 = 5;
 
     public static final int SIGNAL_STRENGTH_UNSPECIFIED = Integer.MIN_VALUE;
+    /** @hide Transport data restricted to callers with NETWORK_SETTINGS. */
+    public static final long REDACT_FOR_NETWORK_SETTINGS = 1L << 2;
 
     private static final String[] TRANSPORT_NAMES = {"CELLULAR", "WIFI", "BLUETOOTH",
         "ETHERNET", "VPN", "WIFI_AWARE", "LOWPAN", "TEST", "USB", "THREAD", "SATELLITE"};
@@ -96,6 +100,7 @@ public final class NetworkCapabilities implements Parcelable {
     private TransportInfo mTransportInfo;
     private int mOwnerUid = android.os.Process.INVALID_UID;
     private List<Network> mUnderlyingNetworks;
+    private Set<Integer> mSubscriptionIds = new HashSet<>();
 
     public NetworkCapabilities() {
         mCapabilities = DEFAULT_CAPABILITIES;
@@ -108,6 +113,7 @@ public final class NetworkCapabilities implements Parcelable {
     /** @hide */
     public NetworkCapabilities(NetworkCapabilities nc, long redactions) {
         this(nc);
+        if (mTransportInfo != null) mTransportInfo = mTransportInfo.makeCopy(redactions);
     }
 
     /** @hide */
@@ -121,6 +127,7 @@ public final class NetworkCapabilities implements Parcelable {
         mTransportInfo = nc.mTransportInfo;
         mOwnerUid = nc.mOwnerUid;
         mUnderlyingNetworks = nc.mUnderlyingNetworks;
+        mSubscriptionIds = new HashSet<>(nc.mSubscriptionIds);
     }
 
     /** @hide */
@@ -133,6 +140,8 @@ public final class NetworkCapabilities implements Parcelable {
         mNetworkSpecifier = null;
         mTransportInfo = null;
         mUnderlyingNetworks = null;
+        mSubscriptionIds.clear();
+        mOwnerUid = android.os.Process.INVALID_UID;
     }
 
     /** @hide */
@@ -255,7 +264,13 @@ public final class NetworkCapabilities implements Parcelable {
 
     /** @hide */
     public java.util.Set<Integer> getSubscriptionIds() {
-        return Collections.emptySet();
+        return new HashSet<>(mSubscriptionIds);
+    }
+
+    /** @hide Copies the subscription filter, as in the Connectivity module. */
+    public NetworkCapabilities setSubscriptionIds(Set<Integer> subscriptionIds) {
+        mSubscriptionIds = new HashSet<>(Objects.requireNonNull(subscriptionIds));
+        return this;
     }
 
     /** @hide */
@@ -287,8 +302,11 @@ public final class NetworkCapabilities implements Parcelable {
                 && mSignalStrength > nc.mSignalStrength) {
             return false;
         }
-        return mNetworkSpecifier == null || mNetworkSpecifier instanceof MatchAllNetworkSpecifier
-                || mNetworkSpecifier.equals(nc.mNetworkSpecifier);
+        if (!mSubscriptionIds.isEmpty()
+                && Collections.disjoint(mSubscriptionIds, nc.mSubscriptionIds)) return false;
+        return mNetworkSpecifier == null
+                || mNetworkSpecifier.canBeSatisfiedBy(nc.mNetworkSpecifier)
+                || nc.mNetworkSpecifier instanceof MatchAllNetworkSpecifier;
     }
 
     private static int[] bits(long mask) {
@@ -370,13 +388,15 @@ public final class NetworkCapabilities implements Parcelable {
                 && mSignalStrength == nc.mSignalStrength && mOwnerUid == nc.mOwnerUid
                 && Objects.equals(mNetworkSpecifier, nc.mNetworkSpecifier)
                 && Objects.equals(mTransportInfo, nc.mTransportInfo)
+                && mSubscriptionIds.equals(nc.mSubscriptionIds)
                 && Objects.equals(mUnderlyingNetworks, nc.mUnderlyingNetworks);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(mCapabilities, mTransports, mLinkUpBandwidthKbps,
-                mLinkDownBandwidthKbps, mSignalStrength, mNetworkSpecifier, mOwnerUid);
+                mLinkDownBandwidthKbps, mSignalStrength, mNetworkSpecifier, mTransportInfo,
+                mOwnerUid, mUnderlyingNetworks, mSubscriptionIds);
     }
 
     @Override
@@ -393,6 +413,12 @@ public final class NetworkCapabilities implements Parcelable {
         dest.writeInt(mSignalStrength);
         dest.writeInt(mOwnerUid);
         dest.writeTypedList(mUnderlyingNetworks);
+        dest.writeParcelable((Parcelable) mNetworkSpecifier, flags);
+        dest.writeParcelable((Parcelable) mTransportInfo, flags);
+        int[] subscriptionIds = new int[mSubscriptionIds.size()];
+        int index = 0;
+        for (int subscriptionId : mSubscriptionIds) subscriptionIds[index++] = subscriptionId;
+        dest.writeIntArray(subscriptionIds);
     }
 
     public static final Creator<NetworkCapabilities> CREATOR =
@@ -407,6 +433,11 @@ public final class NetworkCapabilities implements Parcelable {
                     nc.mSignalStrength = in.readInt();
                     nc.mOwnerUid = in.readInt();
                     nc.mUnderlyingNetworks = in.createTypedArrayList(Network.CREATOR);
+                    nc.mNetworkSpecifier = in.readParcelable(null);
+                    nc.mTransportInfo = in.readParcelable(null);
+                    for (int subscriptionId : in.createIntArray()) {
+                        nc.mSubscriptionIds.add(subscriptionId);
+                    }
                     return nc;
                 }
 

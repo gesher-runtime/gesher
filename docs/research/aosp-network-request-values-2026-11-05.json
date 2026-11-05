@@ -6,13 +6,13 @@
       "local_path": "app/java/android/net/DhcpInfo.java",
       "source_url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework/src/android/net/DhcpInfo.java",
       "upstream_sha256": "57b059edbdb19c0397af4642a54c9661b86d93515e73577571a2c4f2f70e6b31",
-      "local_sha256": "3c893bc844dedb0624a8c4d721e3b9138843ad60801326ecb0783bedf0f54937"
+      "local_sha256": "b0fe895018c425d01406c5fdd398e569d661eba3cbab95fc24d1c4ed8762c102"
     },
     {
       "local_path": "app/java/android/net/L2capNetworkSpecifier.java",
       "source_url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework/src/android/net/L2capNetworkSpecifier.java",
       "upstream_sha256": "4a6071181a0e57cd094db097cf496ad1dabb4c4290a1c5f89ce339a76eae9ab1",
-      "local_sha256": "011389eaa22c6ac8f3a0a3e9e399d2daf34ba00e43e4f3dff54c7a7169c9c722"
+      "local_sha256": "6bf5234e59c3452ee8d65aece7a3b10f98fd59b34a035387593d3656d76e3694"
     },
     {
       "local_path": "app/java/android/net/ParseException.java",
@@ -24,18 +24,19 @@
       "local_path": "app/java/android/net/nsd/DiscoveryRequest.java",
       "source_url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework-t/src/android/net/nsd/DiscoveryRequest.java",
       "upstream_sha256": "9c0639fc84a69fc3af28cbc19663f68e75dedac46ba08c3f5d847394181169d8",
-      "local_sha256": "3796b20ceb03c71f1d40aa1a9c36d73d4a78d497404cf66b0aa9cd9775d7065c"
+      "local_sha256": "c2387380ea46115426d448bfab113a0aee84c6db1b2ad9492f015eb8f4a35f1b"
     },
     {
       "local_path": "app/java/android/net/nsd/AdvertisingRequest.java",
       "source_url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework-t/src/android/net/nsd/AdvertisingRequest.java",
       "upstream_sha256": "0c4f57a2d86e3930a4fddb13a6d8c3b231fb099627c7679a2c795c95518d362a",
-      "local_sha256": "38d0bb5c6baa1f8637bbb72f086634a2452e61bec230b3f337cb8cf3327e8a1e"
+      "local_sha256": "c6e3074277107c90b28f5c53a1ee23b38908aa0f69cb1203862151835b800705"
     }
   ],
   "adaptations": [
     "Generated Flags annotation constants replaced by the same literal strings.",
     "The SOURCE-only ProtocolType annotation is omitted; DiscoveryRequest inlines the identical NsdManager.checkProtocol validation because the local manager keeps this helper private.",
     "DhcpInfo directly formats the seven original little-endian IPv4 integers instead of referencing NetworkUtils; no DNS or hardware operations are needed."
-  ]
+  ],
+  "local_source_encoding": "UTF-8 with LF, matching repository .gitattributes"
 }

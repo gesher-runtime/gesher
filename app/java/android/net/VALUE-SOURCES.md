@@ -29,3 +29,17 @@ copy/parcel behavior; parse error fields; L2CAP wildcard matching, role/PSM
 validation and address redaction; DNS-SD service/subtype/network parcels and
 advertisement flags/TTL bounds/truncation. These types do not start discovery,
 advertise a service or create an L2CAP network. Those backends remain separate.
+
+The request regression was expanded to 38 assertions when fixing existing
+NetworkCapabilities/NetworkRequest behavior: subscription IDs now survive
+builders, copies and parcels and constrain matching by intersection; specifier
+matching uses canBeSatisfiedBy; specifier and transport data survive parcels;
+clear removes the filters; transport copies apply requested redactions.
+VpnTransportInfo is the real pinned value implementation used by the positive
+transport parcel/redaction checks. The source receipt and limited adaptations
+are in `docs/research/aosp-network-request-semantics-2026-11-05.json`.
+
+The local NetworkCapabilities parcel layout remains local: new fields are
+appended to its existing format and both reader and writer change together.
+These assertions do not establish whole-AOSP parcel interoperability or
+cross-version IPC with an older Gesher process.

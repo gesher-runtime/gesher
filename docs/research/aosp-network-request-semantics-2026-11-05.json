@@ -1,0 +1,33 @@
+{
+  "tag": "android-16.0.0_r4",
+  "files": [
+    {
+      "local_path": "app/java/android/net/NetworkCapabilities.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework/src/android/net/NetworkCapabilities.java",
+      "upstream_sha256": "c8618524256b165b833b773b51f539a6cb9b08d4ce6145b326f9657858ce8821",
+      "local_sha256": "29e2286004ae1dec6d5e9ff1c690ef6478a1fbf9dbe3002de53096fce7a6f8fc",
+      "relationship": "Existing Gesher implementation corrected against the pinned source contracts"
+    },
+    {
+      "local_path": "app/java/android/net/NetworkRequest.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework/src/android/net/NetworkRequest.java",
+      "upstream_sha256": "b6322f059cbb2c96b7a75fce385446d191915ff107e1e5cfa913e78561605051",
+      "local_sha256": "cd86eb5fc9cbd0a27862ca8165a7cfe2eb47ff5e5dd9803b9a4b2d64c4c79d9f",
+      "relationship": "Existing Gesher implementation corrected against the pinned source contracts"
+    },
+    {
+      "local_path": "app/java/android/net/VpnTransportInfo.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework/src/android/net/VpnTransportInfo.java",
+      "upstream_sha256": "7a997f7c32a103b32fecd19ef6eb5555adb9ec99a0b074aeb9496d321fc943ee",
+      "local_sha256": "eb25c22ce25169acc483c6d93ef964c97d1975d206a80e86dc3fdf09167d74df",
+      "relationship": "Restored AOSP source with annotation/build-check adaptations"
+    }
+  ],
+  "adaptations": [
+    "VpnTransportInfo omits source-only RedactionType and androidx RequiresApi annotations. For the API36 runtime, the module SdkLevel.isAtLeastU guard is expressed as Build.VERSION.SDK_INT >= 34.",
+    "Local NetworkCapabilities retains its existing local parcel prefix and appends the previously omitted specifier, transport value and subscription IDs. Both writer and reader are updated together; this is not a claim to match the whole AOSP parcel wire layout.",
+    "Subscription IDs are defensive HashSet copies with the same public set behavior, matching by nonempty intersection.",
+    "Specifier matching calls canBeSatisfiedBy and recognizes MatchAll on the offered network, matching upstream."
+  ],
+  "local_source_encoding": "UTF-8 with LF, matching repository .gitattributes"
+}

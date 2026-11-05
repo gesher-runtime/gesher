@@ -5,7 +5,10 @@ import android.net.DhcpInfo;
 import android.net.L2capNetworkSpecifier;
 import android.net.MacAddress;
 import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
 import android.net.ParseException;
+import android.net.VpnTransportInfo;
 import android.net.nsd.AdvertisingRequest;
 import android.net.nsd.DiscoveryRequest;
 import android.net.nsd.NsdServiceInfo;
@@ -84,6 +87,36 @@ public final class NetworkRequestValueContractTest {
         check(new AdvertisingRequest.Builder(info).build().getTtl() == null, "default advertisement TTL");
         rejects(() -> new AdvertisingRequest.Builder(info).setTtl(Duration.ofSeconds(-1)), "negative TTL");
         rejects(() -> new AdvertisingRequest.Builder(info).setTtl(Duration.ofSeconds(0x100000000L)), "TTL upper bound");
+
+        java.util.Set<Integer> subscriptions = new java.util.HashSet<>(java.util.Arrays.asList(1, 2));
+        NetworkRequest request = new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_BLUETOOTH)
+                .setNetworkSpecifier(new L2capNetworkSpecifier.Builder().setPsm(128).build())
+                .setSubscriptionIds(subscriptions).build();
+        subscriptions.clear();
+        check(request.getSubscriptionIds().size() == 2, "request copies subscription filter");
+        request.getSubscriptionIds().clear();
+        check(request.getSubscriptionIds().size() == 2, "request getter copies subscription filter");
+        NetworkCapabilities offered = new NetworkCapabilities().addTransportType(NetworkCapabilities.TRANSPORT_BLUETOOTH)
+                .setNetworkSpecifier(client).setSubscriptionIds(java.util.Collections.singleton(2));
+        check(request.canBeSatisfiedBy(offered), "request honors wildcard specifier and intersecting subscription");
+        offered.setSubscriptionIds(java.util.Collections.singleton(3));
+        check(!request.canBeSatisfiedBy(offered), "request rejects disjoint subscription");
+        offered.setSubscriptionIds(java.util.Collections.emptySet());
+        check(!request.canBeSatisfiedBy(offered), "request rejects absent subscription");
+        NetworkRequest copiedRequest = roundTrip(request, NetworkRequest.CREATOR);
+        check(copiedRequest.equals(request) && copiedRequest.hashCode() == request.hashCode(), "request parcel preserves specifier and subscriptions");
+        VpnTransportInfo vpn = new VpnTransportInfo(1, "test-session", true, true);
+        offered.setTransportInfo(vpn).setSubscriptionIds(java.util.Collections.singleton(2));
+        NetworkCapabilities offeredCopy = roundTrip(offered, NetworkCapabilities.CREATOR);
+        check(offeredCopy.equals(offered) && offeredCopy.getTransportInfo().equals(vpn), "capabilities parcel preserves transport value");
+        check(request.canBeSatisfiedBy(offeredCopy), "matching preserved after parcel");
+        NetworkCapabilities redactedCapabilities = new NetworkCapabilities(offered, NetworkCapabilities.REDACT_FOR_NETWORK_SETTINGS);
+        check(((VpnTransportInfo)redactedCapabilities.getTransportInfo()).getSessionId() == null
+                && vpn.getSessionId().equals("test-session"), "transport session redaction without mutation");
+        check(vpn.isBypassable() && vpn.areLongLivedTcpConnectionsExpensive(), "VPN transport attributes");
+        offeredCopy.clearAll();
+        check(offeredCopy.getSubscriptionIds().isEmpty() && offeredCopy.getTransportInfo() == null
+                && offeredCopy.getNetworkSpecifier() == null, "clear removes value filters");
         System.out.println("NetworkRequestValueContractTest all passed: " + checks);
     }
 }

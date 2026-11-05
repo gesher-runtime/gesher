@@ -49,6 +49,10 @@ public class NetworkRequest implements Parcelable {
         return networkCapabilities.getNetworkSpecifier();
     }
 
+    public java.util.Set<Integer> getSubscriptionIds() {
+        return networkCapabilities.getSubscriptionIds();
+    }
+
     public boolean canBeSatisfiedBy(NetworkCapabilities nc) {
         return networkCapabilities.satisfiedByNetworkCapabilities(nc);
     }
@@ -152,6 +156,7 @@ public class NetworkRequest implements Parcelable {
         }
 
         public Builder setSubscriptionIds(java.util.Set<Integer> subIds) {
+            mCapabilities.setSubscriptionIds(subIds);
             return this;
         }
 

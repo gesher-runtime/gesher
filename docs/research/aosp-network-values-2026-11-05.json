@@ -18,7 +18,7 @@
       "local_path": "app/java/android/net/IpConfiguration.java",
       "source_url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework/src/android/net/IpConfiguration.java",
       "upstream_sha256": "c62c01325eeb329b41b74944c31edfb8b0a756fffb24b045bda7e8e07ce28a16",
-      "local_sha256": "9ba18b68fda3bff3e042fa0ab37bf6ae17c368f0799b86d8a48eb816e7238363"
+      "local_sha256": "eb6e366f227c119f0ad1478fdd52346f46af8a0813acc4dfc77fbacc91d8d3de"
     },
     {
       "local_path": "app/java/com/android/net/module/util/MacAddressUtils.java",
@@ -32,5 +32,6 @@
       "upstream_sha256": "144776363bb7b32cfe557131256cce91f7cd3228cc5f24deab1c247cb3cc344d",
       "local_sha256": "144776363bb7b32cfe557131256cce91f7cd3228cc5f24deab1c247cb3cc344d"
     }
-  ]
+  ],
+  "local_source_encoding": "UTF-8 with LF, matching repository .gitattributes"
 }

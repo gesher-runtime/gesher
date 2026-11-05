@@ -4,7 +4,7 @@
   "source_url": "https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/tags/android-16.0.0_r4/apex/framework/java/android/provider/MediaStore.java",
   "upstream_sha256": "7390e74594fda2c5a6f464ff9c1b43ecfccfaa65875b13842ff4163e3ad88cf2",
   "local_path": "app/java/android/provider/MediaStore.java",
-  "local_sha256": "d87334f36dde3fcc96f1e4ccc6d007eef25de92a6e76e2b72b3632690cef166c",
+  "local_sha256": "c551aa728cd871746646ea40375c4bb8791ca4beb4c7fbb82b9c3a671e3ae41d",
   "scope": "Pinned public constants, metadata columns, Audio collection contracts, Images.Media operations, image/video thumbnail implementations and helpers; selected pure root URI functions. Existing local no-provider policies retained.",
   "adaptations": [
     "Excerpts omit documentation and source-only API annotations; no generated MediaProvider Flags dependency is introduced.",
@@ -12,5 +12,6 @@
     "Public legacy constructors exposed as in the SDK, while thumbnail classes remain extensible.",
     "Selected original Gesher collection URI builders remain, equivalent to the upstream builders for these paths.",
     "MediaProvider permission prompts/cloud media, redaction, scanning and storage backends are not supplied by this change."
-  ]
+  ],
+  "local_source_encoding": "UTF-8 with LF, matching repository .gitattributes"
 }

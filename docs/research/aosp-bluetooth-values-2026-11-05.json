@@ -6,13 +6,13 @@
       "local_path": "app/java/android/bluetooth/le/ScanSettings.java",
       "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/le/ScanSettings.java",
       "upstream_sha256": "8111f3ce0eca803443ddea550f826ef2158300b515df182de561fb9c2b06f79e",
-      "local_sha256": "6f91c5792367c67d42331529ce3a796c5c5bed0d66e8a1f93fe8e53d195aaa5e"
+      "local_sha256": "18d5442730aa6b1c24ce1923b9b5ac7f5ff3f1f652f39971a3cd5c9f59363610"
     },
     {
       "local_path": "app/java/android/bluetooth/le/ScanFilter.java",
       "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/le/ScanFilter.java",
       "upstream_sha256": "aa501408a731149b4f06581b76bfe73bb87562cc0ad34aa02ecc7f3e5b79dec6",
-      "local_sha256": "6ec8c523e18528b97bd44345e8be4748236a116477a5bfe3337715af9557d82a"
+      "local_sha256": "3b0855e0677a79fb4922e0d2cd8472ffafb4386c70d645a9573338faf6badfc8"
     },
     {
       "local_path": "app/java/android/bluetooth/le/TransportBlockFilter.java",
@@ -42,7 +42,7 @@
       "local_path": "app/java/android/bluetooth/le/AdvertisingSetParameters.java",
       "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/le/AdvertisingSetParameters.java",
       "upstream_sha256": "796975aabd6e8af73789dbba2d7d23fa63dfc32fc74256852497cc06209bc21b",
-      "local_sha256": "636f763fa33a5ef94edbfcea6cf4ada42a8da3755a83b4196e48794e0b016ac6"
+      "local_sha256": "6ce41d5698808899959864ef486a4d7ff90e5cccc477ee9cc64865d59da53ea9"
     },
     {
       "local_path": "app/java/android/bluetooth/le/PeriodicAdvertisingParameters.java",
@@ -60,7 +60,7 @@
       "local_path": "app/java/android/bluetooth/BluetoothStatusCodes.java",
       "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/BluetoothStatusCodes.java",
       "upstream_sha256": "dbe44875dfea3cf5c293b150f70b65a55aca53e437dfd4603a33c9c46aec3426",
-      "local_sha256": "1e8d44f8375bfb877d0f2cc1a9c48d08d2d5fb4e6fde158995b7a47c2b369ad1"
+      "local_sha256": "8b3f5c6e612cd0434780e2c03ad07c73c7fa2530967d84dcb52cece834278b48"
     },
     {
       "local_path": "app/java/android/bluetooth/BluetoothAssignedNumbers.java",
@@ -74,5 +74,6 @@
       "upstream_sha256": "f41accd3ecb8296668d85ab7d3b1eb3da99098271f5c53c982202614aefde23f",
       "local_sha256": "f41accd3ecb8296668d85ab7d3b1eb3da99098271f5c53c982202614aefde23f"
     }
-  ]
+  ],
+  "local_source_encoding": "UTF-8 with LF, matching repository .gitattributes"
 }
