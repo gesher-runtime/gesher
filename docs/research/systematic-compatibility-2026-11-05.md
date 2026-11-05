@@ -1,5 +1,10 @@
 # Systematic compatibility inventory, 2026-11-05
 
+The measurements below describe the initial inventory snapshot. Subsequent
+fixes and the final combined candidate are covered in the
+[integrated stability QA report](stability-qa-2026-11-05.md), including updated
+API member counts and explicit remaining limits.
+
 The objective is to find missing Android contracts before a particular app
 hits them. The audit therefore uses Android API references, the actual boot
 class path, native library lookup, Binder/JNI implementation inventories and
