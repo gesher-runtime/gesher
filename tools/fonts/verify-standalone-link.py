@@ -1,4 +1,5 @@
-"""CI-only font input proof from actual GNU -Map hierarchy and exact object bytes."""
+"""Font input proof from actual GNU -Map hierarchy and exact object bytes."""
+import argparse
 import hashlib
 import json
 import os
@@ -6,7 +7,6 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
-import sys
 import tempfile
 
 NATIVE = 'CMakeFiles/gesher_native_fonts.dir/compat/bionic/native_fonts.cc.obj'
@@ -66,8 +66,17 @@ def check_map(mapping):
 
 def link_inputs(command, compiler, base):
     assert len(command.strip().splitlines()) == 1, 'Ambiguous target commands'
+    # Native Windows Ninja wraps the entire link/post-build chain in cmd /C.
+    # Remove only that outer wrapper before parsing its quoted compiler path;
+    # POSIX shlex would otherwise consume the whole chain as a single argument.
+    windows = re.fullmatch(r'(?:"[^"]*/cmd\.exe"|[^"\s]*/cmd\.exe|cmd\.exe)\s+/C\s+"(.*)"',
+                           command.strip().replace('\\', '/'), re.IGNORECASE)
+    if windows:
+        command = windows[1]
     tokens = shlex.split(command)
-    index = tokens.index(str(compiler))
+    compiler_name = str(compiler).replace('\\', '/')
+    index = next(index for index, token in enumerate(tokens)
+                 if token.replace('\\', '/') == compiler_name)
     end = tokens.index('&&', index) if '&&' in tokens[index:] else len(tokens)
     argv = tokens[index:end]
     assert not any(token.startswith('@') for token in argv), 'Unresolved response file'
@@ -130,9 +139,22 @@ def member_proof(archive, member, inventories, objects, rows, tools):
             'matching_symbols': len(matched), 'sample_symbol': matched[0]}
 
 
+def execution_metadata(local, environment):
+    if local:
+        return {'execution_context': 'local', 'workflow_source': None}
+    assert environment.get('GITHUB_ACTIONS') == 'true', 'Native input inspection requires CI or --local'
+    return {'execution_context': 'github-actions', 'workflow_source': environment['GITHUB_SHA']}
+
+
 def main():
-    assert os.environ.get('GITHUB_ACTIONS') == 'true', 'Native input inspection is CI only'
-    exe, map_file, compiler = map(Path, sys.argv[1:])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--local', action='store_true', help='Verify a local build without CI provenance claims')
+    parser.add_argument('executable', type=Path)
+    parser.add_argument('map_file', type=Path)
+    parser.add_argument('compiler', type=Path)
+    args = parser.parse_args()
+    context = execution_metadata(args.local, os.environ)
+    exe, map_file, compiler = args.executable, args.map_file, args.compiler
     raw = map_file.read_bytes()
     mapping = raw.decode('utf-8', errors='strict')
     raw_lines = mapping.splitlines()
@@ -143,6 +165,7 @@ def main():
     command = subprocess.check_output(['ninja', '-t', 'commands', '-s', exe.name], text=True)
     argv, archives, objects = link_inputs(command, compiler, Path.cwd())
     tools = compiler.parent
+    linker = tools / ('ld.lld.exe' if os.name == 'nt' else 'ld.lld')
     inventories = inventory_members(archives, tools)
     proofs = {name: member_proof(archives[name], member, inventories, objects, rows, tools)
               for name, member in (('libminikin.a', 'FontCollection.cpp.obj'),
@@ -157,15 +180,16 @@ def main():
     imports = subprocess.check_output([str(tools / 'llvm-readobj'), '--coff-imports', str(exe)], text=True)
     assert not re.search(r'(?i)(jvm|dalvik|libart_runtime)', imports), imports
     versions = {name: subprocess.check_output([str(tool), '--version'], text=True).splitlines()[0]
-                for name, tool in (('compiler', compiler), ('linker', tools / 'ld.lld'))}
+                for name, tool in (('compiler', compiler), ('linker', linker))}
     print('FONT_STANDALONE_LINK ' + json.dumps({
         'executable_sha256': hashlib.sha256(exe.read_bytes()).hexdigest(),
         'map_sha256': hashlib.sha256(raw).hexdigest(),
         'proof_script_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        'compiled_source': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
-        'workflow_source': os.environ['GITHUB_SHA'],
+        'compiled_source': subprocess.check_output(['git', '-C', str(Path(__file__).resolve().parents[2]),
+                                                    'rev-parse', 'HEAD'], text=True).strip(),
+        **context,
         'compiler_sha256': hashlib.sha256(compiler.read_bytes()).hexdigest(),
-        'linker_sha256': hashlib.sha256((tools / 'ld.lld').read_bytes()).hexdigest(),
+        'linker_sha256': hashlib.sha256(linker.read_bytes()).hexdigest(),
         'native_object_sha256': hashlib.sha256(native.read_bytes()).hexdigest(),
         'link_command_sha256': hashlib.sha256(command.encode()).hexdigest(),
         'link_argv': argv, 'archive_members': proofs, 'tool_versions': versions,

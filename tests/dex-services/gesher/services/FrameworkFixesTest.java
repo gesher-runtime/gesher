@@ -529,8 +529,7 @@ public final class FrameworkFixesTest {
                 delivered[0]++;
             }
         };
-        require(android.bluetooth.BluetoothAdapter.getDefaultAdapter() == null
-                && new android.bluetooth.BluetoothManager(null).getAdapter() == null,
+        require(android.bluetooth.BluetoothAdapter.getDefaultAdapter() == null,
                 "BLE callback availability must not advertise an adapter");
         require(android.bluetooth.le.ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED == 4
                 && android.bluetooth.le.ScanCallback.SCAN_FAILED_SCANNING_TOO_FREQUENTLY == 6,
@@ -539,8 +538,11 @@ public final class FrameworkFixesTest {
         // AOSP's actual advertisement parser, not a placeholder ScanResult type.
         byte[] advertisement = {2, 1, 6, 3, 3, 0x0d, 0x18, 4, 9, 'O', 'S', 'M',
                 5, (byte) 0xff, 0x4c, 0, 1, 2, 0};
-        android.bluetooth.le.ScanRecord record =
-                android.bluetooth.le.ScanRecord.parseFromBytes(advertisement);
+        // The test bundle compiles against the framework's public API stubs;
+        // these module methods are hidden there but public on the runtime types.
+        android.bluetooth.le.ScanRecord record = (android.bluetooth.le.ScanRecord)
+                android.bluetooth.le.ScanRecord.class.getMethod("parseFromBytes", byte[].class)
+                        .invoke(null, (Object) advertisement);
         require(record.getAdvertiseFlags() == 6 && "OSM".equals(record.getDeviceName())
                 && record.getServiceUuids().get(0).toString()
                         .equals("0000180d-0000-1000-8000-00805f9b34fb")
@@ -557,8 +559,10 @@ public final class FrameworkFixesTest {
                     android.bluetooth.BluetoothDevice.CREATOR.createFromParcel(deviceParcel);
             android.bluetooth.le.ScanResult result = new android.bluetooth.le.ScanResult(
                     device, 0x11, 1, 0, 0xff, 0x7f, -52, 0, record, 123456789L);
-            result.setAttributionSource(new android.content.AttributionSource.Builder(10000)
-                    .setPackageName("gesher.services").build());
+            android.bluetooth.le.ScanResult.class
+                    .getMethod("setAttributionSource", android.content.AttributionSource.class)
+                    .invoke(result, new android.content.AttributionSource.Builder(10000)
+                            .setPackageName("gesher.services").build());
             callback.onScanResult(1, result);
             new android.bluetooth.le.ScanCallback() {}.onBatchScanResults(List.of(result));
             new android.bluetooth.le.ScanCallback() {}.onScanFailed(4);

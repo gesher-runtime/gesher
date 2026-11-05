@@ -70,13 +70,34 @@ thread, eventfd wakeups, opaque epoll cookies, nonblocking TCP and a synthetic
 SOCKS5/PING/PONG loopback exchange across four bounded cycles. It passes on
 the installed runtime in an isolated ART process and joins `libc_test.c`.
 
-The user's inability to foreground the subsequent login window remains a
-separate open investigation; successful network activity does not close it.
+The foreground failure was caused by thread suspensions left by the diagnostic
+debugger. With the user's explicit approval, all 302 remaining suspension holds
+on the same 101 Telegram threads were released and checked at zero. The same
+process then foregrounded successfully. This was a diagnostic incident, not
+evidence for a production window fix. No further debugger attaches are planned.
+
+A subsequent native SIGSEGV at address 0x308 remains unexplained. The installed
+ART omitted the faulting PC on Windows. Patch 0771 adds the existing register
+dump and best-effort PE module offset, plus two disposable native fault fixtures;
+it improves diagnosis and does not claim to fix the Telegram crash. See the
+[network and recovery report](telegram-native-network-2026-11-05.md).
+
+## Phone Doctor 6.4
+
+The installed runtime closes at startup because PowerExemptionManager obtains
+a null DeviceIdleManager service. The current main working tree has separate
+device-idle work, which is not part of this isolated candidate. This finding
+is included in the systematic service inventory; a source declaration alone
+does not establish that the installed runtime provides the service.
 
 ## Integration scope
 
 The isolated candidate branch is based on `6b69e2af`. It contains only this
 investigation's changes and the required device-configuration answer; unrelated
 local microG/account/process-authentication changes are excluded. A complete
-CI build and runtime integration remain required before changing the installed
-runtime. Diagnostic logs are local under `out/` and are not committed.
+runtime integration remains required before changing the installed runtime.
+The native targets now build locally with pinned dependencies and an explicit
+local provenance mode for the font verifier. Initial socket, epoll and pthread
+exit probes pass; the diagnostic patch still needs its incremental verification.
+No GitHub upload was necessary. Diagnostic logs are local under `out/` and are
+not committed.

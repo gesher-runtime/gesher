@@ -51,7 +51,9 @@ function RunDalvikvm([string[]] $Arguments, [hashtable] $Env = @{}, [int] $Secon
   $stderr = $p.StandardError.ReadToEndAsync()
   $stdout = $p.StandardOutput.ReadToEndAsync()
   $extra = ''
+  $timedOut = $false
   if (-not $p.WaitForExit($Seconds * 1000)) {
+    $timedOut = $true
     $extra = "`n(timed out after $Seconds s; its threads:)`n" + (CodegenStacks $p.Id)
     try { $p.Kill($true) } catch {}
     $null = $p.WaitForExit(30000)
@@ -61,7 +63,7 @@ function RunDalvikvm([string[]] $Arguments, [hashtable] $Env = @{}, [int] $Secon
   $o = if ($stdout.IsCompleted) { $stdout.Result } else { '' }
   $e = if ($stderr.IsCompleted) { $stderr.Result } else { '' }
   [pscustomobject]@{ Exit = $(if ($p.HasExited) { $p.ExitCode } else { -1 }); Out = $o + "`n" + $e + $extra;
-                     Stdout = $o; Err = $e + $extra; Ms = [int]$watch.Elapsed.TotalMilliseconds }
+                     Stdout = $o; Err = $e + $extra; Ms = [int]$watch.Elapsed.TotalMilliseconds; TimedOut = $timedOut }
 }
 
 function RunMode([string[]] $ModeArgs, [string[]] $Program, [hashtable] $Env = @{}) {
@@ -214,6 +216,25 @@ if ($modes.Contains('jit')) {
 # image's AOT JNI stubs (the count is in the "boot image:" line).
 $jniLib = Join-Path $Dir 'jni_test.so'
 if (Test-Path $jniLib) {
+  # A native fault must retain its PC even when the Windows unwinder cannot
+  # produce a backtrace. Each case deliberately ends its own disposable VM.
+  foreach ($faultMode in 'native', 'host') {
+    $r = RunDalvikvm @("-Xbootclasspath:$bcp", $image, '-Xint', '-Xusejit:false',
+      '-cp', $codegenDex, 'gesher.FatalContext', (NoDrive (Resolve-Path $jniLib).Path), $faultMode) @{} 30
+    $registers = $r.Out -match 'rip:\s+0x(?!0{16}\b)[0-9a-fA-F]{16}\b' -and
+      $r.Out -match 'rsp:\s+0x(?!0{16}\b)[0-9a-fA-F]{16}\b'
+    $module = $faultMode -ne 'host' -or $r.Out -match 'pc module: [^\r\n]+\.dll\+0x[0-9a-fA-F]+'
+    $expectedFault = $r.Out -match 'Fatal signal 11 \(SIGSEGV\), code 1 \(SEGV_MAPERR\) fault addr (?:0x)?0*308\b'
+    $startupError = $r.Out -match 'Exception in thread|UnsatisfiedLinkError|Could not find main class|JNI DETECTED ERROR IN APPLICATION'
+    if (!$r.TimedOut -and $r.Exit -eq 1 -and !$startupError -and
+        $r.Out.Contains("FatalContext entering $faultMode") -and
+        $expectedFault -and $registers -and $module -and
+        !$r.Out.Contains('Unknown architecture/word size/OS')) {
+      Write-Host "PASS  codegen: native fatal context ($faultMode PC, registers$(if ($faultMode -eq 'host') { ', PE module offset' }))"
+    } else {
+      ReportFailure "native fatal context ($faultMode)" $r
+    }
+  }
   foreach ($name in @($modes.Keys)) {
     if ($name -eq 'interpret-only') { continue }
     $m = $modes[$name]

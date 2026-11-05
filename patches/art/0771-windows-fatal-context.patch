@@ -1,0 +1,54 @@
+diff --git a/runtime/runtime_common.cc b/runtime/runtime_common.cc
+--- a/runtime/runtime_common.cc
++++ b/runtime/runtime_common.cc
+@@ -18,6 +18,11 @@
+ 
+ #include <signal.h>
+ 
++#if defined(GESHER) && defined(_WIN32)
++#include <dlfcn.h>
++#include <cstring>
++#endif
++
+ #include <cinttypes>
+ #include <iostream>
+ #include <sstream>
+@@ -199,7 +204,13 @@ void UContext::Dump(std::ostream& os) const {
+   os << '\n';
+   DumpRegister32(os, "gs",  context.gregs[REG_GS]);
+   DumpRegister32(os, "ss",  context.gregs[REG_SS]);
+-#elif defined(__linux__) && defined(__x86_64__)
++#elif (defined(__linux__) || (defined(GESHER) && defined(_WIN32))) && defined(__x86_64__)
++  // Gesher delivers Linux-layout ucontexts from Windows CONTEXT records.
++  // Keep the layout contract explicit: a fatal report must include its PC,
++  // even though libunwindstack's Windows backtrace is not implemented yet.
++  static_assert(REG_RAX == 13 && REG_RSP == 15 && REG_RIP == 16 && REG_EFL == 17);
++  static_assert(sizeof(context.gregs[REG_RIP]) == sizeof(uint64_t));
++
+   DumpRegister64(os, "rax", context.gregs[REG_RAX]);
+   DumpRegister64(os, "rbx", context.gregs[REG_RBX]);
+   DumpRegister64(os, "rcx", context.gregs[REG_RCX]);
+@@ -238,6 +249,23 @@ void UContext::Dump(std::ostream& os) const {
+   DumpRegister32(os, "gs",  (context.gregs[REG_CSGSFS] >> 16) & 0x0FFFF);
+   DumpRegister32(os, "fs",  (context.gregs[REG_CSGSFS] >> 32) & 0x0FFFF);
+   os << '\n';
++#if defined(GESHER) && defined(_WIN32)
++  // Best effort for PE code, using the existing host dladdr implementation.
++  // Manually mapped ELF/JIT code still has the raw RIP above; do not invent
++  // a module name or attempt to unwind untrusted state in the fatal path.
++  const uintptr_t pc = static_cast<uintptr_t>(context.gregs[REG_RIP]);
++  Dl_info location{};
++  if (dladdr(reinterpret_cast<const void*>(pc), &location) != 0 &&
++      location.dli_fname != nullptr && location.dli_fbase != nullptr) {
++    const char* file = std::strrchr(location.dli_fname, '\\');
++    if (file == nullptr) file = std::strrchr(location.dli_fname, '/');
++    os << "  pc module: " << (file != nullptr ? file + 1 : location.dli_fname)
++       << StringPrintf("+0x%" PRIxPTR, pc - reinterpret_cast<uintptr_t>(location.dli_fbase))
++       << '\n';
++  } else {
++    os << "  pc module: <unresolved; use raw rip>\n";
++  }
++#endif
+ #elif defined(__linux__) && defined(__arm__)
+   DumpRegister32(os, "r0", context.arm_r0);
+   DumpRegister32(os, "r1", context.arm_r1);
