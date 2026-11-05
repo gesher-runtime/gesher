@@ -142,6 +142,11 @@ Check 'services: BasicHttpParams (Gmail''s account setup) loads from org.apache.
   $httpOut
 } @('HttpLegacyTest: BasicHttpParams, HttpConnectionParams and HttpGet load from the jar, not the boot class path',
   'HttpLegacyTest all passed')
+Check 'services: BasicCookieStore (Gmail''s contacts client) loads and works from org.apache.http.legacy.jar' {
+  $global:LASTEXITCODE = $httpCode
+  $httpOut
+} @('HttpLegacyTest: BasicCookieStore loads from the shared jar and stores and clears a synthetic cookie',
+  'HttpLegacyTest all passed')
 
 # An installed APK's signers (ApkPackage), which apps read for their own: WhatsApp's
 # registration token is built from GET_SIGNATURES. Its fixtures (tests/dex-services/

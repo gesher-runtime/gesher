@@ -230,9 +230,14 @@ installed Gmail APK as an existing client. See the
 the three runtime fixes, actual mailbox loading and validation limits. The
 follow-up also reuses the existing pinned MediaStore contracts from the stability
 branch: Gmail's new-message screen calls `getPickImagesMaxLimit()`. The updated
-local build opens that screen without the previous linkage failure; text entry,
-attachments and sending were not exercised. See the
-[composer validation record](research/microg-compose-validation-2026-11-05.json).
+local build opens that screen without the previous linkage failure. A later
+contacts task exposed a missing standard Apache library JAR in the experiment;
+completing that existing runtime artifact removed the background failure. The
+composer remained active during the recorded observation, and the user then
+manually sent a message and reported success. The agent entered no message text
+and sent no mail; attachments and independent delivery tracing remain untested.
+See the [composer validation record](research/microg-compose-validation-2026-11-05.json)
+and [shared-library follow-up](research/microg-http-library-validation-2026-11-06.json).
 
 ## Notification access
 

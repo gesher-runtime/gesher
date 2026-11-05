@@ -1,6 +1,6 @@
 {
   "scope": "Manual end-to-end existing-account acceptance using the original Google-signed Gmail APK in a fresh experimental Gmail app profile",
-  "status": "PASS: existing microG account, real mailbox loading and opening blank composer; sending and other app paths untested",
+  "status": "PASS: real account/mailbox, sustained blank composer after standard shared-library completion, and subsequent user-reported successful send",
   "application": {
     "package": "com.google.android.gm",
     "version_code": 66123533,
@@ -24,7 +24,8 @@
     "native_build_scope": "Broader cached native commit81af15341c467f22675086fb2eb3b5bc72631775, controlEB5033, plus retained Cursor JNI and private Bionic archive with three timerfd routing hunks; not a clean isolated-PR build",
     "native_evidence": "microg-native-client-validation-2026-11-05.json",
     "composer_evidence": "microg-compose-validation-2026-11-05.json",
-    "runtime_binary_adopted_or_published": false
+    "runtime_binary_adopted_or_published": false,
+    "org.apache.http.legacy.jar_sha256": "6f2b6187c97c1e658ed443cbed74c9529ed4c984ad7803cc1bf7a8055024295b"
   },
   "runtime_fixes": [
     {
@@ -91,7 +92,6 @@
     "existing_microg_account_shown_in_gmail": true,
     "fresh_gmail_profile_loaded_actual_mailbox": true,
     "individual_messages_opened": false,
-    "messages_sent_or_modified": false,
     "existing_mail_or_app_data_imported": false,
     "account_names_tokens_or_mail_contents_committed_or_uploaded": false,
     "authentication_or_cloud_permission_dialog_automated": false,
@@ -100,7 +100,9 @@
     "authentication_acceptance": "Inferred from fresh-profile real-mailbox loading; not from inspecting token values",
     "scope_limitation": "This Gmail account path only, not all Google Sign-In SDKs, billing, Integrity or other applications",
     "new_message_screen_opened_after_mediastore_reuse": true,
-    "composer_text_entry_attachments_and_sending_tested": false
+    "messages_sent_or_modified_by_agent": false,
+    "composer_text_entry_and_attachments_tested_by_agent": false,
+    "successful_message_send_reported_by_user": true
   },
   "previous_account_acceptance_runtime": {
     "java_sha256": "e63e3abbfd2caaed1b93af858f90cb1eb299efbfda6a79afde3de7d58820a453",
@@ -114,5 +116,6 @@
     "decision": "APPROVE",
     "reviewed_snapshot_sha256": "92f1557a769b2bcc00cec88d6bb826f2170093d9a9bb741a1f2f2f15a87cf0dc",
     "record": "microg-gmail-final-qa-2026-11-06.json"
-  }
+  },
+  "shared_library_follow_up": "microg-http-library-validation-2026-11-06.json"
 }

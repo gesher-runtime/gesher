@@ -93,6 +93,34 @@ public final class HttpLegacyTest {
                 "HttpGet's request line is wrong");
         System.out.println("HttpLegacyTest: BasicHttpParams, HttpConnectionParams and HttpGet "
                 + "load from the jar, not the boot class path");
+
+        // Gmail's contacts client also uses this class. Keep the implementation,
+        // not just the older parameter API, covered by the shipped-jar check.
+        try {
+            Class.forName("org.apache.http.impl.client.BasicCookieStore", false, null);
+            throw new AssertionError("BasicCookieStore is on the boot class path");
+        } catch (ClassNotFoundException expected) {
+        }
+        Class<?> cookieInterface = loader.loadClass("org.apache.http.cookie.Cookie");
+        Class<?> cookieClass = loader.loadClass("org.apache.http.impl.cookie.BasicClientCookie");
+        Object cookie = cookieClass.getConstructor(String.class, String.class)
+                .newInstance("fixture", "synthetic");
+        cookieClass.getMethod("setDomain", String.class).invoke(cookie, "example.invalid");
+        cookieClass.getMethod("setPath", String.class).invoke(cookie, "/");
+        Class<?> storeClass = loader.loadClass("org.apache.http.impl.client.BasicCookieStore");
+        require(storeClass.getClassLoader() == loader, "BasicCookieStore has the wrong loader");
+        Object store = storeClass.getConstructor().newInstance();
+        storeClass.getMethod("addCookie", cookieInterface).invoke(store, cookie);
+        List<?> cookies = (List<?>) storeClass.getMethod("getCookies").invoke(store);
+        require(cookies.size() == 1
+                        && "fixture".equals(cookieInterface.getMethod("getName").invoke(cookies.get(0)))
+                        && "synthetic".equals(cookieInterface.getMethod("getValue").invoke(cookies.get(0))),
+                "BasicCookieStore did not retain the synthetic cookie");
+        storeClass.getMethod("clear").invoke(store);
+        require(((List<?>) storeClass.getMethod("getCookies").invoke(store)).isEmpty(),
+                "BasicCookieStore.clear did not clear the store");
+        System.out.println("HttpLegacyTest: BasicCookieStore loads from the shared jar "
+                + "and stores and clears a synthetic cookie");
         System.out.println("HttpLegacyTest all passed");
     }
 }

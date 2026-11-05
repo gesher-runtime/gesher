@@ -1,6 +1,6 @@
 {
   "scope": "Reuse the prior MediaStore client contracts to fix Gmail new-message startup",
-  "status": "PASS opening the blank composer; editing, attachment selection and sending untested",
+  "status": "MediaStore linkage fixed; sustained composer and user-reported send acceptance followed completion of the standard Apache shared library",
   "observed_at_utc": "2026-11-05T21:48:43.528329+00:00",
   "prior_failure": {
     "runtime_java_sha256": "e63e3abbfd2caaed1b93af858f90cb1eb299efbfda6a79afde3de7d58820a453",
@@ -32,7 +32,7 @@
     "security_evidence": "out/microg-compose-validation/security/20261105-234426-defc9dab9f8e4189afe723836edab67c",
     "actual_loopback_webview": "4 PASS",
     "webview_evidence": "out/native-compose-webview/evidence/20261105-234502-d4e16cdbb80749c29aff2ceb1e674fa1",
-    "actual_gmail": "Existing account retained, mailbox reopened, new-message UI opened without the missing-method exception or process exit",
+    "actual_gmail": "Composer initially opened after the MediaStore fix, but a later contacts task still failed without BasicCookieStore. The linked artifact-completion record covers the subsequent sustained run.",
     "google_network_used_by_regressions": false
   },
   "build": {
@@ -45,13 +45,20 @@
   "boundaries": {
     "typed_by_agent_into_recipient_subject_or_body": false,
     "individual_email_opened": false,
-    "mail_sent": false,
     "raw_account_names_tokens_or_mail_contents_published": false,
-    "native_provenance": "Same broader cached81af native control plus Cursor/timerfd fixes; not a clean isolated-PR native build"
+    "native_provenance": "Same broader cached81af native control plus Cursor/timerfd fixes; not a clean isolated-PR native build",
+    "mail_sent_by_agent": false,
+    "send_success_reported_by_user": true
   },
   "final_qa": {
     "decision": "APPROVE",
     "reviewed_snapshot_sha256": "92f1557a769b2bcc00cec88d6bb826f2170093d9a9bb741a1f2f2f15a87cf0dc",
     "record": "microg-gmail-final-qa-2026-11-06.json"
+  },
+  "shared_library_follow_up": "microg-http-library-validation-2026-11-06.json",
+  "later_discovered_failure": {
+    "class": "org.apache.http.impl.client.BasicCookieStore",
+    "cause": "Expected library JAR omitted from experimental runtime while its XML declaration was present",
+    "production_classloader_change_required": false
   }
 }
