@@ -235,25 +235,60 @@ public final class Services {
     /** servicemanager in a single process: the services above, and nothing else. */
     public static final class ServiceManagerStandIn extends IServiceManager.Default {
         private final Map<String, IBinder> mServices;
+        private final Map<String, Map<IBinder, Registration>> mNotifications = new LinkedHashMap<>();
+
+        private final class Registration implements IBinder.DeathRecipient {
+            final String name;
+            final android.os.IServiceCallback callback;
+            final IBinder token;
+
+            Registration(String name, android.os.IServiceCallback callback) {
+                this.name = name;
+                this.callback = callback;
+                token = java.util.Objects.requireNonNull(callback.asBinder(), "callback binder");
+            }
+
+            @Override public void binderDied() { remove(this); }
+
+            void notifyService(IBinder service) {
+                synchronized (ServiceManagerStandIn.this) {
+                    Map<IBinder, Registration> registrations = mNotifications.get(name);
+                    if (registrations == null || registrations.get(token) != this) return;
+                }
+                try {
+                    callback.onRegistration(name, service);
+                } catch (android.os.RemoteException e) {
+                    remove(this);
+                }
+            }
+        }
+
+        private synchronized void remove(Registration registration) {
+            Map<IBinder, Registration> registrations = mNotifications.get(registration.name);
+            if (registrations == null || registrations.get(registration.token) != registration) return;
+            registrations.remove(registration.token);
+            if (registrations.isEmpty()) mNotifications.remove(registration.name);
+            registration.token.unlinkToDeath(registration, 0);
+        }
 
         ServiceManagerStandIn(Map<String, IBinder> services) {
             mServices = services;
         }
 
         @Override
-        public IBinder getService(String name) {
+        public synchronized IBinder getService(String name) {
             return mServices.get(name);
         }
 
         @Override
         public IBinder checkService(String name) {
-            return mServices.get(name);
+            return getService(name);
         }
 
         @Override
         public Service getService2(String name) {
             ServiceWithMetadata s = new ServiceWithMetadata();
-            s.service = mServices.get(name);
+            s.service = getService(name);
             return Service.serviceWithMetadata(s);
         }
 
@@ -265,13 +300,55 @@ public final class Services {
         @Override
         public void addService(String name, IBinder service, boolean allowIsolated,
                 int dumpPriority) {
-            mServices.put(name, service);
+            java.util.Objects.requireNonNull(name, "name");
+            java.util.Objects.requireNonNull(service, "service");
+            java.util.List<Registration> notify;
+            synchronized (this) {
+                mServices.put(name, service);
+                Map<IBinder, Registration> registrations = mNotifications.get(name);
+                notify = registrations == null ? java.util.Collections.emptyList()
+                        : new java.util.ArrayList<>(registrations.values());
+            }
+            for (Registration registration : notify) registration.notifyService(service);
         }
 
         @Override
-        public String[] listServices(int dumpPriority) {
+        public synchronized String[] listServices(int dumpPriority) {
             return mServices.keySet().toArray(new String[0]);
         }
+
+        @Override
+        public void registerForNotifications(String name, android.os.IServiceCallback callback)
+                throws android.os.RemoteException {
+            java.util.Objects.requireNonNull(name, "name");
+            java.util.Objects.requireNonNull(callback, "callback");
+            Registration registration = new Registration(name, callback);
+            IBinder existing;
+            synchronized (this) {
+                Map<IBinder, Registration> registrations = mNotifications.get(name);
+                if (registrations != null && registrations.containsKey(registration.token)) return;
+                registration.token.linkToDeath(registration, 0);
+                mNotifications.computeIfAbsent(name, unused -> new LinkedHashMap<>())
+                        .put(registration.token, registration);
+                existing = mServices.get(name);
+            }
+            // No callback runs under the registry lock. Reentrant unregister is safe.
+            if (existing != null) registration.notifyService(existing);
+        }
+
+        @Override
+        public void unregisterForNotifications(String name, android.os.IServiceCallback callback) {
+            java.util.Objects.requireNonNull(callback, "callback");
+            Registration registration;
+            synchronized (this) {
+                Map<IBinder, Registration> registrations = mNotifications.get(name);
+                registration = registrations == null ? null : registrations.get(callback.asBinder());
+            }
+            if (registration != null) remove(registration);
+        }
+
+        @Override public String[] getDeclaredInstances(String iface) { return new String[0]; }
+        @Override public String[] getUpdatableNames(String apex) { return new String[0]; }
 
         @Override
         public boolean isDeclared(String name) {
