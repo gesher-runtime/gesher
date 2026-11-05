@@ -15,7 +15,7 @@ is not treated as proof of the operations below.
 | `android.net.LocalSocketImpl` | Seven natives over Gesher's descriptor-based AF_UNIX stream operations. Filesystem bind/connect, single-byte and array transfer, partial-write completion and EOF are implemented. The upstream libcutils Windows helpers and libbase ancillary backend are not usable implementations in this build, so simply compiling the upstream source would not supply the required behavior. |
 | `android.util.CharsetUtils` | ART JNI string conversion and AOSP's temporary-terminator decoder. Capacity arithmetic avoids signed overflow, and null-address/invalid-range guards prevent several invalid raw-buffer calls from reaching pointer accesses. |
 
-Source commits are `67ccb0fb`, `6767251d`, `20d39858` and `720394d1`;
+Source commits are `67ccb0fb`, `6767251d`, `20d39858`, `720394d1` and `0455e955`;
 bounded runner/integration-test commits are `b1f15e78` and `317e91d4`.
 No AOSP checkout was changed: wrappers compile its selected sources directly,
 and the new sources are selected by `cmake/aosp/framework.cmake`.
@@ -53,8 +53,27 @@ not start a Binder server or alter the installed runtime/profile.
 
 All five new native sources and `android_runtime.cc` compile with the current
 Windows candidate's flags, including `-Werror`. The four fixture classes compile
-with the existing local JDK 21 and D8 for API 36. Candidate runtime results
-are recorded separately after a coordinated host rebuild.
+with the existing local JDK 21 and D8 for API 36. All four fixtures passed
+against the rebuilt host runtime at 11:14 local time, using read-only installed
+boot JARs and the bounded runner above. The first candidate run found that a
+negative Scrypt output length violated a JNI allocation precondition and
+aborted under CheckJNI. `0455e955` fixes this by throwing the Java exception
+before calling JNI; the final run includes that exact negative case.
+
+Exact SHA-256 identities for the passing run:
+
+| Input | SHA-256 |
+| --- | --- |
+| Candidate `dalvikvm.exe` | `4a321bded33b1cbd0026c0c6683e0debc6e377db9d319e0b06a972d9546fef0e` |
+| Test DEX JAR | `66e59b416d2018bcd5b0efc6a4d5cfc65b9a2aca33c8fccdaf28a39f6109a1ea` |
+| Installed `core-oj.jar` | `d436cba5465c8c0d3e9bbd2967b423df9d0e3ba71be9c08164f425e8407ab674` |
+| Installed `core-libart.jar` | `af10dc2e86b6186a25d4f5864325977bd507cb3218bd7f74cff734406c54135c` |
+| Installed `core-icu4j.jar` | `3c91994ac6ca535c31f0329e67181fff42cf86b90c67d051b63fcd49f2e26f5a` |
+| Installed `framework.jar` | `5909839b6c6b3558cc3a9ba1fc8c71def67ca1e7eba5a9a62a7d2c5d03e4d821` |
+
+Private stdout/stderr and an exact input/source receipt are retained under
+`out/stability-worktree/out/jni-check/final` in the shared workspace. The
+candidate executable was not installed, and no shared app/device was restarted.
 
 The pre-change `564118b1` host executable (SHA-256
 `31423e063a16d760ed47dddb0655dad282f0befe6ff5130f84faeb43b35a6342`)

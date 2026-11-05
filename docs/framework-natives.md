@@ -104,3 +104,15 @@ the tests are in `tests/dex-natives`, see
    window, display), then ActivityThread, LoadedApk, the app and activity
    contexts, `attach`, `performCreate`, `performStart`, `performResume`.
    `SystemServiceRegistry`'s mainline initializers need real or no-op code.
+
+## Software JNI contract regressions
+
+The 2026-11-05 candidate also binds MemoryFile, MemoryIntArray, Scrypt,
+filesystem LocalSocketImpl streams and CharsetUtils. Four boot-framework
+fixtures verify bytes, errors and ownership, including Parcel memory readers,
+RFC 7914 answers, stream half-close and real fast UTF stream callers. The
+[contract report](research/framework-jni-contracts-2026-11-05.md) records the
+passing candidate identities and exact remaining ashmem protection, local
+namespace/ancillary and raw-buffer limits. The bounded standalone runner is
+`tests/windows/run-framework-jni.ps1`; the main Windows suite includes these
+fixtures as well.
