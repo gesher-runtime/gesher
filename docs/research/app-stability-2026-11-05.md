@@ -17,7 +17,9 @@ and translated ARM64 tracks. Focused Windows System V checks pass, and both
 NDK test libraries compile. An isolated ARM64 preload using the same source
 lets the real VLC APK draw its first frame and survive a 20-second observation.
 This preload is diagnosis, not an installed-runtime update or playback proof.
-The rebuilt native runtime still requires integrated tracks 40 and 47.
+The locally rebuilt runtime and matching translator now pass the libc and
+native2 regressions on both ABIs, including tree callbacks and cleanup ordering.
+Complete packaged/app integration is still required; playback is not claimed.
 
 ## OsmAnd 5.4.9
 
@@ -32,7 +34,8 @@ implementations; unavailable transaction statistics return -1.
 The BLE regression passes in real ART. With the BLE changes and an app-only
 proxy mirroring the source device-configuration answer, OsmAnd reaches
 MapActivity and renders its bundled native basemap for 15 seconds. The new
-Binder native registrations require the rebuilt host. See
+Binder native registrations also pass on the newly rebuilt host, with real
+object creation/release observed in the isolated Binder-counter regression. See
 [the detailed report](osmand-startup-stability-2026-11-05.md).
 
 ## Gmail: Manage notifications
@@ -79,7 +82,8 @@ evidence for a production window fix. No further debugger attaches are planned.
 A subsequent native SIGSEGV at address 0x308 remains unexplained. The installed
 ART omitted the faulting PC on Windows. Patch 0771 adds the existing register
 dump and best-effort PE module offset, plus two disposable native fault fixtures;
-it improves diagnosis and does not claim to fix the Telegram crash. See the
+it improves diagnosis and does not claim to fix the Telegram crash. Both
+disposable native/host fault fixtures pass on the rebuilt host. See the
 [network and recovery report](telegram-native-network-2026-11-05.md).
 
 ## Phone Doctor 6.4
@@ -97,7 +101,8 @@ investigation's changes and the required device-configuration answer; unrelated
 local microG/account/process-authentication changes are excluded. A complete
 runtime integration remains required before changing the installed runtime.
 The native targets now build locally with pinned dependencies and an explicit
-local provenance mode for the font verifier. Initial socket, epoll and pthread
-exit probes pass; the diagnostic patch still needs its incremental verification.
+local provenance mode for the font verifier. Socket, epoll, pthread exit,
+Binder-counter and fatal-context probes pass, along with libc/native2 on both
+ABIs and a matching ARM64 smoke test.
 No GitHub upload was necessary. Diagnostic logs are local under `out/` and are
 not committed.

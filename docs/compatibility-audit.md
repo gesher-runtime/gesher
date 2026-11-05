@@ -88,4 +88,70 @@ weak and guarded references need separate states; unresolved references alone
 do not prove startup failure. Correlating that static inventory with this tool's
 runtime observations gives a prioritized work list. Behavioral regression tests,
 actual app interaction and hardware checks still establish whether an API works.
-The full static API/APK scan is a follow-up, not implemented by this tool.
+The log parser itself does not implement a static API/APK scan. Separate
+inventories now provide broader measurements, described below.
+
+## Systematic inventories independent of app selection
+
+Start at the [central compatibility map](research/systematic-compatibility-2026-11-05.md).
+It links measured reference differences, reviewed source limitations and the
+remaining behavioral/hardware requirements. Counts from different inventories
+must not be added together or presented as a percentage of Android support.
+
+`tools/java_api_inventory.py` compares class definitions in an SDK JAR with
+class definitions in actual DEX boot JARs. It reads the class-file `this_class`
+and DEX `class_defs`, not every referenced type, and unions multidex files.
+Use repeated `--boot-jar` arguments for core-oj, core-libart, core-icu4j,
+framework and gesher-app, `--sdk-jar` for SDK 36 android.jar, and optionally
+`--candidate-replace gesher-app.jar=PATH`. It records file hashes, separates
+module/annotation families, and correlates named class observations when
+`--observations-json` is supplied. A class missing from that boot path can
+have a module/APK/shared-library provider elsewhere. The tool does not test
+methods, native registration or behavior.
+
+`tools/java_member_inventory.py` adds public/protected fields, constructors and
+methods with exact JVM descriptors. It resolves definitions through supplied
+boot-order superclass/interface chains; constructors are not inherited.
+Members on absent classes are counted separately from descriptors absent on
+present classes. Unresolved ancestry and possible access/modifier differences
+have separate states. The summary, hashed inputs and complete JSONL are under
+`out/compat-audit/java-members`; this remains structural comparison, not method
+body, constant-value, generic/source-access or behavioral conformance.
+
+`tools/native_api_inventory.py` compares pinned NDK API 36 exports with actual
+`dlopen`/`dlsym` results in disposable x86_64 and ARM64 guest VMs. It requires
+the verified reference subset, runtime/boot inputs and an NDK compiler. The
+probe looks up names without calling the inventoried APIs. Its report retains
+GLOBAL/WEAK/type/version names and library-open outcomes. Gesher's handle and
+global resolver can share a table, so a successful lookup is not proof of
+per-library namespace correctness. API 36 linker-script inputs are explicitly
+skipped rather than silently treated as empty ELF libraries.
+
+`tools/audit_services_jni.py` inventories current source Default/Stub services,
+direct registrations and generated/attach JNI fallbacks against a supplied
+framework Java-class ZIP and pinned AOSP source. The [detailed report](research/systematic-services-jni-2026-11-05.md)
+separates reviewed families from raw registration-name candidates. Alternate
+registrations, app-local service injection and later native overrides require
+individual review. AIDL inherited-method comparison is by name, not full type
+or overload resolution; explicit bodies remain semantically unverified.
+
+`tools/compatibility_contracts.py` indexes all Markdown documentation under
+`docs`, including architecture decisions and old handoffs, with content hashes:
+
+```powershell
+python tools/compatibility_contracts.py
+python -m unittest discover -s tools/tests -p 'test_compatibility_*.py'
+python -m unittest discover -s tools/tests -p test_java_api_inventory.py
+python -m unittest discover -s tools/tests -p test_java_member_inventory.py
+```
+
+It emits section/line navigation for explicit gap/remaining/unsupported/limit
+markers. Historical, superseded and negative statements can match: every row
+is `unreviewed_navigation_candidate`, not a current defect assertion. The
+central map reconciles selected cross-cutting families with newer source and
+bounded evidence instead of declaring all old gaps absent or closed.
+
+APK reference/dependency scans, generic/source-access details, constant values,
+reflection/dynamic code, callback completion, resource/ownership semantics and
+physical hardware need additional layers. Keep those limits visible even when
+all parser tests pass.

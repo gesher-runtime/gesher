@@ -138,8 +138,15 @@ offset. Their native fixture compiled with -Wall -Wextra -Werror, the Java
 fixture compiled and dexed, and the PowerShell track parsed successfully.
 The installed unmodified runtime was run as a negative control in separate
 VMs with workspace-only data: both cases exited 1 with SIGSEGV and the unknown
-context marker, with no RIP/RSP. Verification against the rebuilt patched
-runtime is pending. No user app was involved in those fixtures.
+context marker, with no RIP/RSP. The native-build agent then applied the
+reviewed patch from isolated source commit 564118b1 and rebuilt successfully.
+Both fixtures passed against the fresh `out/native-build/build/dalvikvm.exe`:
+exit 1, exact SIGSEGV/SEGV_MAPERR address 0x308, nonzero RIP/RSP, no timeout or
+startup error, no unknown-context marker. The ELF case retained a raw PC;
+the host case resolved `ucrtbase.dll+0xed171`. Results and synthetic logs are
+`out/telegram-network/fatal-patched-results.json` and `fatal-patched-*.log`.
+No user app was involved in those fixtures. The original Telegram crash's
+cause remains unresolved; these changes improve the next fatal report.
 
 Local evidence is under `out/telegram-network/`. `evidence-redacted.json`
 contains only binary identities, call counts, connection-success observations
