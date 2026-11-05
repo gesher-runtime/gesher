@@ -10,6 +10,12 @@ behavioral families. It is not a claim to have discovered every possible bug.
 No sum of class, export, default-method and documentation counts measures
 semantic compatibility: these sets overlap and include optional interfaces.
 
+The inventory totals below retain their original hashed candidate snapshot.
+Subsequent source fixes restore network/BLE value families and MediaStore
+contracts; their isolated value tests pass 124 assertions. This does not update
+those structural counts or establish the complete current app candidate's
+compatibility. See the verified client-contract slice below.
+
 ## Reference and evidence rules
 
 The managed reference is the installed SDK 36 `android.jar` (Android 16).
@@ -68,9 +74,40 @@ The candidate class-presence differences split into 285 connectivity-module,
 reference java/javax/dalvik classes are all present on this boot path; their
 member scan found no absent descriptors on those present core classes, while
 behavior still needs separate verification. Examples absent from
-the inspected path include AppSearch value/session types, BluetoothGattCallback,
-MacAddress and SocketKeepalive. A value or callback type can be needed during
+that snapshot include AppSearch value/session types, BluetoothGattCallback,
+MacAddress and SocketKeepalive. MacAddress has since been restored and tested
+in the isolated source candidate. A value or callback type can be needed during
 class construction even when the app later checks for absent hardware.
+
+## Verified client-contract slice
+
+Pinned Android 16 r4 implementations restore MacAddress, StaticIpConfiguration,
+IpConfiguration, DHCP and L2CAP values, DNS-SD requests, BLE filters/settings/
+advertisement builders and periodic reports. The local request implementation
+now retains subscription filters, specifiers and transport parcel values,
+uses wildcard-aware matching, and applies VPN transport session redactions.
+[Source and test notes](../../app/java/android/net/VALUE-SOURCES.md) and
+[BLE source/test notes](../../app/java/android/bluetooth/README.md) preserve exact
+upstream URLs, source hashes and deliberate adaptations. Bluetooth still has
+no adapter; the tests do not advertise a hardware capability.
+
+MediaStore now includes its pinned metadata/query/intent constants, Audio
+collection contracts, URI helpers, legacy search keys, and actual resolver
+query/bitmap/thumbnail/playlist helpers. The
+[MediaStore contract report](mediastore-contracts-2026-11-05.md) bounds the
+restored API surface and backend obligations. It supplies no MediaProvider,
+cloud media, scan index or permission-prompt activity.
+
+Four separate-process tests passed together with isolated ART data and no
+Binder connection: NetworkValueContractTest (30 assertions),
+BluetoothValueContractTest (31), MediaStoreContractTest (25) and
+NetworkRequestValueContractTest (38). They cover real parsers, validation,
+positive/negative matching, complete parcel consumption, redaction, URI
+construction and resolver forwarding. Exact runtime/candidate/input/log
+hashes are retained in `out/stability/java-values-candidate/qa-receipt.json`.
+The tests use a private DEX ahead of the prior app candidate on the boot path;
+they do not substitute for a final whole-app build or end-to-end hardware/
+provider testing. The installed shared app and its processes were unchanged.
 
 The largest native lookup differences are libc (437), libicu (306), Vulkan
 (251), libmediandk (197), libandroid (156), libbinder_ndk (150) and libm (133)
