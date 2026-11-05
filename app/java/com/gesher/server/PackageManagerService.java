@@ -13,6 +13,8 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.ProviderInfo;
+import android.content.pm.PermissionGroupInfo;
+import android.content.pm.Signature;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
 
@@ -24,12 +26,37 @@ import java.util.Map;
 
 /**
  * {@code package}: PackageManagerService, knowing the APKs it was given and the installed
- * packages ({@link Installer}; parsed with PackageParser2, {@link ApkPackage}). All of them
- * run as the same uid. Packages come and go while it serves (install, uninstall): readers
+ * packages ({@link Installer}; parsed with PackageParser2, {@link ApkPackage}). Each has its own UID in real microG mode. Packages come and go while it serves (install, uninstall): readers
  * see one version of the map, replaced as a whole.
  */
 public final class PackageManagerService extends IPackageManager.Default {
     private volatile Map<String, ApkPackage> mPackages = new LinkedHashMap<>();
+    private final PermissionPolicy mPermissions = new PermissionPolicy(this);
+
+    public PermissionPolicy permissions() { return mPermissions; }
+
+    @Override public boolean isProtectedBroadcast(String action) {
+        return mPermissions.isProtectedBroadcast(action);
+    }
+
+    private boolean synthetic(String name) {
+        return GmsPackageSupport.isSyntheticPackage(name)
+                && (!GmsPackageSupport.PACKAGE_VENDING.equals(name)
+                        || get(GmsPackageSupport.PACKAGE_GMS) == null);
+    }
+
+    private PackageInfo installedInfo(ApkPackage pkg, long flags) {
+        PackageInfo info = mPermissions.annotate(pkg.packageInfo(flags));
+        // The compatibility parser can collect an unverified signing block. In real
+        // microG mode no public signature query may turn that block into trust.
+        if (GmsSignatureSpoofing.isEnabled()
+                && (flags & (PackageManager.GET_SIGNATURES | PackageManager.GET_SIGNING_CERTIFICATES)) != 0
+                && !pkg.hasVerifiedSigningIdentity()) {
+            info.signatures = null;
+            info.signingInfo = null;
+        }
+        return info;
+    }
 
     public PackageManagerService(Collection<ApkPackage> packages) {
         Map<String, ApkPackage> map = new LinkedHashMap<>();
@@ -65,17 +92,27 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public boolean isPackageAvailable(String packageName, int userId) {
-        return get(packageName) != null || GmsPackageSupport.isSyntheticPackage(packageName)
+        if (userId != 0) return false;
+        if ("android".equals(packageName)) return true;
+        return get(packageName) != null || synthetic(packageName)
                 || BrowserPackageSupport.isBrowserPackage(packageName);
     }
 
     @Override
     public PackageInfo getPackageInfo(String packageName, long flags, int userId) {
+        if (userId != 0) return null;
+        if ("android".equals(packageName)) {
+            PackageInfo info = new PackageInfo();
+            info.packageName = "android";
+            info.applicationInfo = platformApplication();
+            info.setLongVersionCode(android.os.Build.VERSION.SDK_INT);
+            return info;
+        }
         ApkPackage p = get(packageName);
         if (p != null) {
-            return p.packageInfo(flags);
+            return installedInfo(p, flags);
         }
-        if (GmsPackageSupport.isSyntheticPackage(packageName)) {
+        if (synthetic(packageName)) {
             return GmsPackageSupport.createSyntheticPackageInfo(packageName, flags);
         }
         if (BrowserPackageSupport.isBrowserPackage(packageName)) {
@@ -86,17 +123,32 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ApplicationInfo getApplicationInfo(String packageName, long flags, int userId) {
+        if (userId != 0) return null;
+        if ("android".equals(packageName)) return platformApplication();
         ApkPackage p = get(packageName);
         if (p != null) {
             return p.applicationInfo(flags);
         }
-        if (GmsPackageSupport.isSyntheticPackage(packageName)) {
+        if (synthetic(packageName)) {
             return GmsPackageSupport.createSyntheticApplicationInfo(packageName, flags);
         }
         if (BrowserPackageSupport.isBrowserPackage(packageName)) {
             return BrowserPackageSupport.createApplicationInfo(flags);
         }
         return null;
+    }
+
+    private ApplicationInfo platformApplication() {
+        ApplicationInfo info = new ApplicationInfo();
+        String root = System.getenv("ANDROID_ROOT");
+        info.packageName = "android";
+        info.sourceDir = (root == null ? "/system" : root) + "/framework/framework-res.apk";
+        info.publicSourceDir = info.sourceDir;
+        info.uid = android.os.Process.SYSTEM_UID;
+        info.flags = ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_INSTALLED;
+        info.enabled = true;
+        info.targetSdkVersion = android.os.Build.VERSION.SDK_INT;
+        return info;
     }
 
     @Override
@@ -147,7 +199,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (ApkPackage p : mPackages.values()) {
             result.addAll(p.queryIntentServices(intent, resolvedType, flags));
         }
-        if (result.isEmpty() && intent != null) {
+        if (result.isEmpty() && intent != null && get(GmsPackageSupport.PACKAGE_GMS) == null) {
             result.addAll(GmsPackageSupport.querySyntheticServices(intent, resolvedType, flags));
         }
         return result;
@@ -225,12 +277,13 @@ public final class PackageManagerService extends IPackageManager.Default {
     public ParceledListSlice getInstalledPackages(long flags, int userId) {
         List<PackageInfo> result = new ArrayList<>();
         for (ApkPackage p : mPackages.values()) {
-            result.add(p.packageInfo(flags));
+            result.add(installedInfo(p, flags));
         }
         if (get(GmsPackageSupport.PACKAGE_GMS) == null) {
             result.add(GmsPackageSupport.createSyntheticPackageInfo(GmsPackageSupport.PACKAGE_GMS, flags));
         }
-        if (get(GmsPackageSupport.PACKAGE_VENDING) == null) {
+        if (get(GmsPackageSupport.PACKAGE_VENDING) == null
+                && get(GmsPackageSupport.PACKAGE_GMS) == null) {
             result.add(GmsPackageSupport.createSyntheticPackageInfo(GmsPackageSupport.PACKAGE_VENDING, flags));
         }
         return new ParceledListSlice<>(result);
@@ -245,7 +298,8 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (get(GmsPackageSupport.PACKAGE_GMS) == null) {
             result.add(GmsPackageSupport.createSyntheticApplicationInfo(GmsPackageSupport.PACKAGE_GMS, flags));
         }
-        if (get(GmsPackageSupport.PACKAGE_VENDING) == null) {
+        if (get(GmsPackageSupport.PACKAGE_VENDING) == null
+                && get(GmsPackageSupport.PACKAGE_GMS) == null) {
             result.add(GmsPackageSupport.createSyntheticApplicationInfo(GmsPackageSupport.PACKAGE_VENDING, flags));
         }
         return new ParceledListSlice<>(result);
@@ -258,7 +312,7 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public int getApplicationEnabledSetting(String packageName, int userId) {
-        if (GmsPackageSupport.isSyntheticPackage(packageName)
+        if (synthetic(packageName)
                 || BrowserPackageSupport.isBrowserPackage(packageName)) {
             return PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
         }
@@ -297,13 +351,83 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public String getNameForUid(int uid) {
-        Map<String, ApkPackage> packages = mPackages;
-        return packages.isEmpty() ? null : packages.keySet().iterator().next();
+        if (uid == android.os.Process.SYSTEM_UID) return "android.uid.system";
+        String[] names = getPackagesForUid(uid);
+        return names == null || names.length == 0 ? null : names[0];
     }
 
     @Override
     public String[] getPackagesForUid(int uid) {
-        return mPackages.keySet().toArray(new String[0]);
+        if (uid == android.os.Process.SYSTEM_UID) return new String[] {"android"};
+        List<String> result = new ArrayList<>();
+        for (ApkPackage pkg : mPackages.values()) if (pkg.uid() == uid) result.add(pkg.packageName);
+        return result.isEmpty() ? null : result.toArray(new String[0]);
+    }
+
+    @Override
+    public int getPackageUid(String name, long flags, int userId) {
+        ApplicationInfo info = userId == 0 ? getApplicationInfo(name, flags, userId) : null;
+        return info == null ? -1 : info.uid;
+    }
+
+    @Override
+    public int checkSignatures(String first, String second, int userId) {
+        PackageInfo a = getPackageInfo(first, PackageManager.GET_SIGNATURES, userId);
+        PackageInfo b = getPackageInfo(second, PackageManager.GET_SIGNATURES, userId);
+        if (a == null || b == null) return PackageManager.SIGNATURE_UNKNOWN_PACKAGE;
+        if (a.signatures == null) return b.signatures == null ? PackageManager.SIGNATURE_NEITHER_SIGNED : PackageManager.SIGNATURE_FIRST_NOT_SIGNED;
+        if (b.signatures == null) return PackageManager.SIGNATURE_SECOND_NOT_SIGNED;
+        java.util.Set<Signature> aa = new java.util.HashSet<>(java.util.Arrays.asList(a.signatures));
+        java.util.Set<Signature> bb = new java.util.HashSet<>(java.util.Arrays.asList(b.signatures));
+        return aa.equals(bb) ? PackageManager.SIGNATURE_MATCH : PackageManager.SIGNATURE_NO_MATCH;
+    }
+
+    @Override
+    public int checkUidSignatures(int first, int second) {
+        String[] a = getPackagesForUid(first), b = getPackagesForUid(second);
+        if (a == null || b == null) return PackageManager.SIGNATURE_UNKNOWN_PACKAGE;
+        if (first == second) return PackageManager.SIGNATURE_MATCH;
+        for (String aa : a) for (String bb : b) {
+            if (checkSignatures(aa, bb, 0) != PackageManager.SIGNATURE_MATCH) return PackageManager.SIGNATURE_NO_MATCH;
+        }
+        return PackageManager.SIGNATURE_MATCH;
+    }
+
+    @Override
+    public boolean hasSigningCertificate(String name, byte[] certificate, int type) {
+        if (certificate == null) return false;
+        PackageInfo info = getPackageInfo(name, PackageManager.GET_SIGNING_CERTIFICATES, 0);
+        if (info == null || info.signingInfo == null) return false;
+        Signature[] signatures = info.signingInfo.hasMultipleSigners()
+                ? info.signingInfo.getApkContentsSigners() : info.signingInfo.getSigningCertificateHistory();
+        if (signatures == null) return false;
+        for (Signature signature : signatures) {
+            byte[] bytes = signature.toByteArray();
+            if (type == PackageManager.CERT_INPUT_SHA256) {
+                try { bytes = java.security.MessageDigest.getInstance("SHA-256").digest(bytes); }
+                catch (java.security.NoSuchAlgorithmException e) { throw new AssertionError(e); }
+            } else if (type != PackageManager.CERT_INPUT_RAW_X509) return false;
+            if (java.util.Arrays.equals(bytes, certificate)) return true;
+        }
+        return false;
+    }
+
+    @Override public boolean hasUidSigningCertificate(int uid, byte[] certificate, int type) {
+        String[] packages = getPackagesForUid(uid);
+        if (packages != null) for (String pkg : packages) if (hasSigningCertificate(pkg, certificate, type)) return true;
+        return false;
+    }
+    @Override public int checkPermission(String permission, String pkg, int userId) {
+        return mPermissions.checkPermission(pkg, permission, "default:0", userId);
+    }
+    @Override public int checkUidPermission(String permission, int uid) {
+        return mPermissions.checkUidPermission(uid, permission, 0);
+    }
+    @Override public void grantRuntimePermission(String pkg, String permission, int userId) {
+        mPermissions.grantRuntimePermission(pkg, permission, "default:0", userId);
+    }
+    @Override public PermissionGroupInfo getPermissionGroupInfo(String name, int flags) {
+        return mPermissions.getPermissionGroupInfo(name, flags);
     }
 
     @Override
@@ -321,7 +445,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public android.content.pm.InstallSourceInfo getInstallSourceInfo(String packageName,
             int userId) {
-        if (get(packageName) == null && !GmsPackageSupport.isSyntheticPackage(packageName)
+        if (get(packageName) == null && !synthetic(packageName)
                 && !BrowserPackageSupport.isBrowserPackage(packageName)) {
             return null;
         }

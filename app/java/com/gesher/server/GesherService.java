@@ -48,10 +48,13 @@ public final class GesherService extends Binder {
     }
 
     private final Device mDevice;
+    private final CallerIdentity mCallers;
 
     GesherService(Device device) {
         super(DESCRIPTOR);
         mDevice = device;
+        Services.Created created = Services.sLast;
+        mCallers = created == null ? null : new CallerIdentity(created.pm, created.atm);
     }
 
     @Override
@@ -61,6 +64,10 @@ public final class GesherService extends Binder {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
+        if (mCallers == null ? Binder.getCallingPid() != android.os.Process.myPid()
+                : !mCallers.isSystem()) {
+            throw new SecurityException("The Gesher control service is restricted to the host shell");
+        }
         mDevice.touch();
         try {
             switch (code) {

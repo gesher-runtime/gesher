@@ -22,6 +22,15 @@ import android.os.Process;
  */
 public class TestAuthenticator extends Service {
     static final String TYPE = "com.gesher.devsvc.account";
+    static synchronized int tokenRequests(Context context) {
+        return context.getSharedPreferences("account-token-fixture", 0).getInt("requests", 0);
+    }
+
+    private static synchronized int nextTokenRequest(Context context) {
+        int value = tokenRequests(context) + 1;
+        context.getSharedPreferences("account-token-fixture", 0).edit().putInt("requests", value).commit();
+        return value;
+    }
 
     private Authenticator mAuthenticator;
 
@@ -59,6 +68,7 @@ public class TestAuthenticator extends Service {
             Bundle result = new Bundle();
             result.putString(AccountManager.KEY_ACCOUNT_NAME, name);
             result.putString(AccountManager.KEY_ACCOUNT_TYPE, accountType);
+            result.putString(AccountManager.KEY_AUTHTOKEN, "must-not-leak-from-account-add");
             return result;
         }
 
@@ -86,7 +96,22 @@ public class TestAuthenticator extends Service {
         @Override
         public Bundle getAuthToken(AccountAuthenticatorResponse response, Account account,
                 String authTokenType, Bundle options) {
-            return null;
+            int sequence = nextTokenRequest(mContext);
+            Report.line("account: authenticator token request " + sequence);
+            if ("interactive".equals(authTokenType)) {
+                Intent intent = new Intent(mContext, AccountTokenActivity.class);
+                intent.putExtra(AccountManager.KEY_ACCOUNT_AUTHENTICATOR_RESPONSE, response);
+                intent.putExtra("account", account);
+                Bundle result = new Bundle();
+                result.putParcelable(AccountManager.KEY_INTENT, intent);
+                return result;
+            }
+            Bundle result = new Bundle();
+            result.putString(AccountManager.KEY_ACCOUNT_NAME, account.name);
+            result.putString(AccountManager.KEY_ACCOUNT_TYPE, account.type);
+            result.putString(AccountManager.KEY_AUTHTOKEN, "fixture-token-" + sequence);
+            result.putLong("android.accounts.expiry", System.currentTimeMillis() + 3000);
+            return result;
         }
 
         @Override
@@ -97,7 +122,13 @@ public class TestAuthenticator extends Service {
         @Override
         public Bundle updateCredentials(AccountAuthenticatorResponse response, Account account,
                 String authTokenType, Bundle options) {
-            return null;
+            AccountManager.get(mContext).setPassword(account, "updated-fixture-secret");
+            Bundle result = new Bundle();
+            result.putString(AccountManager.KEY_ACCOUNT_NAME, account.name);
+            result.putString(AccountManager.KEY_ACCOUNT_TYPE, account.type);
+            result.putBoolean(AccountManager.KEY_BOOLEAN_RESULT, true);
+            result.putString(AccountManager.KEY_AUTHTOKEN, "must-not-leak-from-credentials-update");
+            return result;
         }
     }
 }

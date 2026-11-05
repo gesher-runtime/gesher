@@ -197,6 +197,7 @@ jobs:
           mkdir -p dist
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
           cp out/gesher_shellext.dll dist/
+          cp out/libgesher_account_crypto.so dist/
           cp dist-web3-observer/web3_process_waits.exe dist/
           ls -la dist
 

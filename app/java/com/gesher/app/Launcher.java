@@ -98,6 +98,8 @@ public final class Launcher {
     public static void main(String[] args) {
         int code;
         try {
+            // The trusted host launcher is the shell, not an Android application.
+            android.system.Os.setenv("GESHER_BINDER_UID", "2000", true);
             code = run(args);
         } catch (Throwable t) {
             System.out.flush();

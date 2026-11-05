@@ -1,64 +1,55 @@
-# PROTOTYPE: End-to-End Windows Test Track for microG Integration on Gesher
-# Track 52: Verifies signature spoofing gating, GmsCore/FakeStore package resolution,
-# Chimera & Auth ContentProviders, AccountAuthenticator registration, and C2DM/FCM broadcast routing.
-
-. "$PSScriptRoot/../helpers/CloseProcessReaders.ps1"
-
-$dalvikvm = Join-Path $Dir 'dalvikvm.exe'
-$dvm = @(
-    "-Xbootclasspath:$bcp",
-    "-Ximage:$(NoDrive "$Dir/framework/boot.art")",
-    '-Xint',
-    '-Xusejit:false'
-)
-
-# 1. Verify synthetic GMS fallback when microG APK is NOT installed
-$env:GESHER_MICROG_SPOOF = "0"
-CheckTimed "microg-synthetic-fallback" $dalvikvm ($dvm + @(
-    "com.gesher.server.RuntimeCommands",
-    "verify-gms-fallback"
-)) @(
-    "gms.synthetic=true",
-    "gms.signature.match=true"
-)
-
-# 2. Verify signature spoofing is denied to non-allowlisted packages even when GESHER_MICROG_SPOOF=1
-$env:GESHER_MICROG_SPOOF = "1"
-CheckTimed "microg-spoof-allowlist-enforcement" $dalvikvm ($dvm + @(
-    "com.gesher.server.RuntimeCommands",
-    "verify-spoof-gate",
-    "com.example.untrusted"
-)) @(
-    "spoof.allowed=false",
-    "permission.FAKE_PACKAGE_SIGNATURE=DENIED"
-)
-
-# 3. Verify signature spoofing is granted to allowlisted com.google.android.gms when enabled
-CheckTimed "microg-spoof-gmscore-granted" $dalvikvm ($dvm + @(
-    "com.gesher.server.RuntimeCommands",
-    "verify-spoof-gate",
-    "com.google.android.gms"
-)) @(
-    "spoof.allowed=true",
-    "permission.FAKE_PACKAGE_SIGNATURE=GRANTED",
-    "signature.sha1=38918a453d07199354f8b19af05ec6562ced5788"
-)
-
-# 4. Optional full APK track (runs when microG GmsCore APK is staged under system/priv-app/GmsCore)
-$gmsApk = Join-Path $root "system/priv-app/GmsCore/com.google.android.gms.apk"
-if (Test-Path $gmsApk) {
-    CheckTimed "microg-gmscore-providers-and-auth" $dalvikvm ($dvm + @(
-        "com.gesher.server.RuntimeCommands",
-        "verify-microg-apk",
-        (NoDrive $gmsApk)
-    )) @(
-        "provider.chimera=org.microg.gms.chimera.ServiceProvider",
-        "provider.auth.accounts=org.microg.gms.auth.AccountContentProvider",
-        "provider.gservices=org.microg.gms.gservices.GServicesProvider",
-        "authenticator.google=org.microg.gms.auth.loginservice.GoogleLoginService",
-        "service.clearcut=org.microg.gms.clearcut.ClearcutLoggerService",
-        "service.mcs=org.microg.gms.gcm.McsService"
-    )
-} else {
-    Write-Host "SKIP  microg-gmscore-providers-and-auth (GmsCore APK not staged at $gmsApk)"
+# Offline microG regressions. Live Google Check-in/FCM is a separate, opt-in test.
+# Optional GESHER_MICROG_TEST_APK points to an unmodified official GmsCore APK.
+# Dot-sourced after track 50 (CheckTimed); bcpApp includes gesher-app.jar.
+if (Test-Path "$Dir/com.android.location.provider.jar") {
+    New-Item -ItemType Directory -Force "$root/system/etc/permissions" | Out-Null
+    Copy-Item "$Dir/com.android.location.provider.jar" "$root/system/framework" -Force
+    Copy-Item "$PSScriptRoot/../../../tools/package/etc/permissions/com.android.location.provider.xml" `
+        "$root/system/etc/permissions" -Force
 }
+$microgVm = @(
+    "-Xbootclasspath:$bcpApp",
+    "-Ximage:$(NoDrive "$root/system/framework/boot.art")",
+    '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"),
+    'gesher.services.MicrogTest',
+    (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures'))
+)
+if ($env:GESHER_MICROG_TEST_APK) {
+    $microgVm += NoDrive $env:GESHER_MICROG_TEST_APK
+    if ($env:GESHER_MICROG_TEST_TAMPERED_APK -or $env:GESHER_MICROG_TEST_COMPANION_APK -or $env:GESHER_MICROG_TEST_GSF_APK) {
+        $microgVm += if ($env:GESHER_MICROG_TEST_TAMPERED_APK) { NoDrive $env:GESHER_MICROG_TEST_TAMPERED_APK } else { '' }
+    }
+    if ($env:GESHER_MICROG_TEST_COMPANION_APK -or $env:GESHER_MICROG_TEST_GSF_APK) {
+        $microgVm += if ($env:GESHER_MICROG_TEST_COMPANION_APK) { NoDrive $env:GESHER_MICROG_TEST_COMPANION_APK } else { '' }
+    }
+    if ($env:GESHER_MICROG_TEST_GSF_APK) { $microgVm += NoDrive $env:GESHER_MICROG_TEST_GSF_APK }
+}
+$microgPrevious = $env:GESHER_MICROG_SPOOF
+try {
+    foreach ($mode in '0', '1') {
+        $env:GESHER_MICROG_SPOOF = $mode
+        CheckTimed "microg: offline signer, fallback and opt-in checks (enabled=$mode)" `
+            "$Dir/dalvikvm.exe" $microgVm @('MicrogTest all passed') 120
+    }
+    if ($env:GESHER_MICROG_TEST_APK) {
+        $consentVm = @(
+            "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system/framework/boot.art")",
+            '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"),
+            'gesher.services.PermissionRequestsTest', (NoDrive $env:GESHER_MICROG_TEST_APK)
+        )
+        CheckTimed 'microg: runtime consent grant/deny and replacement race (injected test decisions)' `
+            "$Dir/dalvikvm.exe" $consentVm @('PermissionRequestsTest: async grant/deny, result mapping and replacement race passed') 120
+    }
+} finally {
+    $env:GESHER_MICROG_SPOOF = $microgPrevious
+}
+
+# Real app Binder identities, native credential sealing/restart and live
+# permission invalidation run without installing or executing any Google APK.
+$securityArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+    "$PSScriptRoot/../run-microg-security.ps1", '-Dir', $Dir)
+if ($env:GESHER_MICROG_TEST_APK) {
+    $securityArgs += @('-GmsCoreApk', $env:GESHER_MICROG_TEST_APK, '-RequireMetadataSuites')
+}
+CheckTimed 'microg: isolated account, identity and permission integration' `
+    'powershell.exe' $securityArgs @('PASS  offline microG security integration complete') 900 -Publish

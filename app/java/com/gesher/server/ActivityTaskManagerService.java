@@ -92,6 +92,18 @@ import java.util.function.Consumer;
  * cached process.
  */
 public final class ActivityTaskManagerService extends IActivityTaskManager.Default {
+    @Override
+    public android.content.pm.ConfigurationInfo getDeviceConfigurationInfo() {
+        Configuration config = DeviceProfile.configuration();
+        android.content.pm.ConfigurationInfo info = new android.content.pm.ConfigurationInfo();
+        info.reqTouchScreen = config.touchscreen;
+        info.reqKeyboardType = config.keyboard;
+        info.reqNavigation = config.navigation;
+        info.reqInputFeatures = 0;
+        info.reqGlEsVersion = android.os.SystemProperties.getInt("ro.opengles.version", 0x20000);
+        return info;
+    }
+
     /** How long startActivityAndWait waits for the activity to be idle. */
     private static final long WAIT_TIMEOUT_MS = 300_000;
 
@@ -109,6 +121,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** An app process attached to the server. */
     final class ProcessRecord {
         final int pid;
+        final int uid;
         final IApplicationThread thread;
         String packageName;  // null until a start binds it to a package
         boolean ready;       // finishAttachApplication came
@@ -121,6 +134,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
         ProcessRecord(int pid, IApplicationThread thread) {
             this.pid = pid;
+            this.uid = Binder.getCallingUid();
             this.thread = thread;
         }
 
@@ -225,6 +239,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private final List<ActivityRecord> mActivities = new ArrayList<>();
     /** Work for a package's process once it is attached and bound (services, broadcasts). */
     private final List<PendingWork> mPendingWork = new ArrayList<>();
+    private final PermissionRequests mPermissionRequests;
+    private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
     private int mNextTaskId = 1;
     /** Tasks moved to the back (their window minimized): none of their activities is visible. */
     private final java.util.Set<Integer> mHiddenTasks = new java.util.HashSet<>();
@@ -282,6 +298,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     ActivityTaskManagerService(PackageManagerService pm) {
         mPm = pm;
+        mPermissionRequests = new PermissionRequests(pm);
     }
 
     void setActivityManager(ActivityManagerService am) {
@@ -462,6 +479,54 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * front is paused. Returns the ActivityManager.START_* code; {@code started[0]} is the
      * activity.
      */
+    /** PendingIntent dispatch uses the validated creator, even when it has no process. */
+    int startActivityForVerifiedCreator(String packageName, Intent intent, String resolvedType) {
+        if (Binder.getCallingPid() != android.os.Process.myPid() || mPm.get(packageName) == null) {
+            throw new SecurityException("Only a validated local capability may supply a creator");
+        }
+        String previous = mVerifiedCreator.get();
+        mVerifiedCreator.set(packageName);
+        try {
+            return start(null, intent, resolvedType, packageName, null, null, -1,
+                    new ActivityRecord[1]);
+        } finally {
+            if (previous == null) mVerifiedCreator.remove(); else mVerifiedCreator.set(previous);
+        }
+    }
+
+    private int requestPermissions(IApplicationThread caller, String callingPackage,
+            Intent intent, IBinder resultToToken, String resultWho, int requestCode) {
+        mAm.callers().requirePackage(callingPackage);
+        final ActivityRecord source;
+        final ProcessRecord process;
+        final ApkPackage captured;
+        synchronized (this) {
+            source = forToken(resultToToken);
+            if (source == null || source.app == null || source.finishing
+                    || source.state == State.DESTROYED || caller == null
+                    || source.app.pid != Binder.getCallingPid()
+                    || !caller.asBinder().equals(source.app.thread.asBinder())
+                    || !source.info.packageName.equals(callingPackage)) {
+                throw new SecurityException("Permission request must come from its own activity");
+            }
+            process = source.app;
+            captured = mPm.get(callingPackage);
+        }
+        if (intent.getIntExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_DEVICE_ID, 0) != 0) {
+            throw new SecurityException("Only the default permission device is supported");
+        }
+        mPermissionRequests.request(captured,
+                intent.getStringArrayExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_NAMES), data -> {
+                    synchronized (ActivityTaskManagerService.this) {
+                        if (source.app != process || source.finishing
+                                || source.state == State.DESTROYED || !mActivities.contains(source)
+                                || mPm.get(callingPackage) != captured) return;
+                    }
+                    deliverResult(source, resultWho, requestCode, android.app.Activity.RESULT_OK, data);
+                });
+        return ActivityManager.START_SUCCESS;
+    }
+
     private int start(IApplicationThread caller, Intent intent, String resolvedType,
             String callingPackage, IBinder resultToToken, String resultWho, int requestCode,
             ActivityRecord[] started) {
@@ -477,6 +542,27 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private int start(IApplicationThread caller, Intent intent, String resolvedType,
             String callingPackage, IBinder resultToToken, String resultWho, int requestCode,
             int launchTaskId, ActivityRecord[] started) {
+        String verifiedCaller = mVerifiedCreator.get();
+        if (verifiedCaller == null && GmsSignatureSpoofing.isEnabled()
+                && mAm != null && !mAm.callers().isSystem()) {
+            verifiedCaller = mAm.callers().requirePackage(callingPackage);
+            boolean matchingThread = false;
+            synchronized (this) {
+                for (ProcessRecord app : mProcesses) {
+                    if (app.pid == Binder.getCallingPid() && !app.exiting
+                            && verifiedCaller.equals(app.packageName) && caller != null
+                            && app.thread.asBinder().equals(caller.asBinder())) {
+                        matchingThread = true;
+                        break;
+                    }
+                }
+            }
+            if (!matchingThread) throw new SecurityException("Unrecognized activity caller thread");
+        }
+        if (intent != null && PackageManager.ACTION_REQUEST_PERMISSIONS.equals(intent.getAction())) {
+            return requestPermissions(caller, callingPackage, intent, resultToToken,
+                    resultWho, requestCode);
+        }
         // ACTION_CHOOSER ("open with", "share via"): the device has no ChooserActivity, so the
         // choice is the first target, as a chooser with one option starts it at once; an
         // http(s) VIEW goes on to the Windows browser below.
@@ -547,6 +633,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             SystemServer.log("startActivity: nothing handles " + intent);
             return ActivityManager.START_INTENT_NOT_RESOLVED;
+        }
+        if (verifiedCaller != null && !verifiedCaller.equals(info.packageName)) {
+            if (!info.exported) throw new SecurityException("Activity is not exported");
+            if (info.permission != null && mPm.permissions().checkPermission(verifiedCaller,
+                    info.permission) != PackageManager.PERMISSION_GRANTED) {
+                throw new SecurityException("Activity permission denied");
+            }
         }
         Intent launch = new Intent(intent);
         launch.setComponent(new ComponentName(info.packageName, info.name));
@@ -743,6 +836,16 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return null;
     }
 
+    /** Only a package assigned to a live, attached Binder PID can act as that app. */
+    synchronized String authenticatedPackageForPid(int pid) {
+        for (ProcessRecord app : mProcesses) {
+            if (app.pid == pid && !app.exiting && app.packageName != null) {
+                return app.packageName;
+            }
+        }
+        return null;
+    }
+
     /** Binds an attached process to a package without reusing an older start's exit. Guarded by this. */
     private void assignPackage(ProcessRecord app, String packageName) {
         app.packageName = packageName;
@@ -807,6 +910,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             pending.pid = pid;
             mExitStatus.bind(packageName, seq, pid);
+            notifyAll();
         }
         SystemServer.log("starting a process for " + packageName + " (" + reason + "): pid "
                 + pid + ", start seq " + seq);
@@ -911,6 +1015,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * others told to exit; waits up to 5 s for them to go.
      */
     void forceStopPackage(String packageName) {
+        // Also cancel sticky-service restarts when the old process has already died.
+        if (mAm != null) mAm.stopServicesForPackage(packageName);
         List<ProcessRecord> stop = new ArrayList<>();
         synchronized (this) {
             for (ProcessRecord p : mProcesses) {
@@ -935,6 +1041,27 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
         }
         endProcesses(all, waitMs);
+    }
+
+    /** Retire one unresponsive broadcast generation, retaining normal service recovery. */
+    void receiverTimedOut(ProcessRecord app) {
+        synchronized (this) {
+            if (!mProcesses.contains(app)) return;
+        }
+        SystemServer.log("manifest receiver timeout in " + app);
+        // Remove its authenticated PID before a late finishReceiver/new broadcast can
+        // reach it. This is unexpected death, not package force-stop: sticky services
+        // and bindings retain their ordinary recovery policy.
+        try {
+            processDied(app);
+        } finally {
+            if (app.spawned) {
+                Zygote.kill(app.pid);
+            } else {
+                try { app.thread.scheduleExit(); }
+                catch (RemoteException ignored) { }
+            }
+        }
     }
 
     private void endProcesses(List<ProcessRecord> processes, long waitMs) {
@@ -984,9 +1111,31 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ProcessRecord app = new ProcessRecord(pid, thread);
         boolean bind = false;
         synchronized (this) {
+            PendingProcess started = startSeq > 0 ? mStarting.get(startSeq) : null;
+            if (startSeq > 0) {
+                long deadline = SystemClock.uptimeMillis() + 5000;
+                while (started != null && started.pid == 0
+                        && SystemClock.uptimeMillis() < deadline) {
+                    try { wait(Math.max(1, deadline - SystemClock.uptimeMillis())); }
+                    catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new SecurityException("Interrupted process authentication");
+                    }
+                }
+                if (started == null || started.pid != pid || mStarting.get(startSeq) != started) {
+                    throw new SecurityException("App process does not match its start sequence");
+                }
+                ApkPackage expected = mPm.get(started.packageName);
+                if (GmsSignatureSpoofing.isEnabled()
+                        && (expected == null || expected.uid() != app.uid)) {
+                    throw new SecurityException("App Binder UID does not match its package");
+                }
+                mStarting.remove(startSeq);
+            } else if (GmsSignatureSpoofing.isEnabled() && mStarter != null) {
+                throw new SecurityException("Protected app processes must be started by the server");
+            }
             mProcesses.add(app);
             updateIdle();
-            PendingProcess started = startSeq > 0 ? mStarting.remove(startSeq) : null;
             String waiting = null;
             if (started != null) {
                 app.spawned = true;

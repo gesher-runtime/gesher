@@ -308,18 +308,35 @@ public final class LocationManagerService extends ILocationManager.Default {
 
     /** The location permission {@code packageName} holds: what its manifest asks for. */
     private int permissionLevel(String packageName) {
+        CallerIdentity callers = mAm != null ? mAm.callers() : new CallerIdentity(mPm, null);
+        if (!callers.isSystem()) callers.requirePackage(packageName);
+        return grantedLocationLevel(packageName, callers.isSystem());
+    }
+
+    private int grantedLocationLevel(String packageName, boolean system) {
         ApkPackage p = mPm.get(packageName);
         if (p == null) {
-            // Not an installed package (a tool on the device's own uid): the system's own.
-            return packageName == null || "android".equals(packageName) ? PERMISSION_FINE
-                    : PERMISSION_NONE;
+            return system && (packageName == null || "android".equals(packageName))
+                    ? PERMISSION_FINE : PERMISSION_NONE;
         }
-        java.util.Collection<String> requested = p.parsed.getRequestedPermissions();
-        if (requested.contains(Manifest.permission.ACCESS_FINE_LOCATION)) return PERMISSION_FINE;
-        if (requested.contains(Manifest.permission.ACCESS_COARSE_LOCATION)) {
+        if (mPm.permissions().checkPermission(packageName, Manifest.permission.ACCESS_FINE_LOCATION)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED) return PERMISSION_FINE;
+        if (mPm.permissions().checkPermission(packageName, Manifest.permission.ACCESS_COARSE_LOCATION)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             return PERMISSION_COARSE;
         }
         return PERMISSION_NONE;
+    }
+
+    private void enforceMockPermission(String packageName) {
+        if (!GmsSignatureSpoofing.isEnabled()) return;
+        CallerIdentity callers = mAm != null ? mAm.callers() : new CallerIdentity(mPm, null);
+        if (callers.isSystem()) return;
+        String actual = callers.requirePackage(packageName);
+        if (mPm.permissions().checkPermission(actual, "android.permission.ACCESS_MOCK_LOCATION")
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Mock location requires explicit system authorization");
+        }
     }
 
     private int enforceLocationPermission(String packageName) {
@@ -478,6 +495,8 @@ public final class LocationManagerService extends ILocationManager.Default {
 
         /** Delivers {@code location} if the request wants it now; false once it is done. */
         boolean deliver(Location location) {
+            int granted = grantedLocationLevel(packageName, false);
+            if (granted == PERMISSION_NONE) return false;
             long now = SystemClock.elapsedRealtime();
             if (now > expiresAt) return false;
             if (lastDelivered != null) {
@@ -489,7 +508,7 @@ public final class LocationManagerService extends ILocationManager.Default {
                     return true;
                 }
             }
-            Location l = forPermission(location, level);
+            Location l = forPermission(location, Math.min(level, granted));
             if (!provider.equals(l.getProvider())) l.setProvider(provider);
             lastDelivered = location;
             updates++;
@@ -735,6 +754,8 @@ public final class LocationManagerService extends ILocationManager.Default {
     private static volatile boolean sIpFallbackAvailable = true;
 
     private boolean isIpFallbackEnabled(String provider) {
+        if (GmsSignatureSpoofing.isEnabled()
+                && !"1".equals(System.getenv("GESHER_IP_GEOLOCATION"))) return false;
         if (provider != null && LocationManager.GPS_PROVIDER.equals(provider)) {
             return false;
         }
@@ -875,6 +896,7 @@ public final class LocationManagerService extends ILocationManager.Default {
     @Override
     public void addTestProvider(String name, ProviderProperties properties,
             List<String> locationTags, String packageName, String attributionTag) {
+        enforceMockPermission(packageName);
         if (name == null || LocationManager.PASSIVE_PROVIDER.equals(name)) {
             throw new IllegalArgumentException("cannot mock the passive provider");
         }
@@ -889,6 +911,7 @@ public final class LocationManagerService extends ILocationManager.Default {
 
     @Override
     public void removeTestProvider(String provider, String packageName, String attributionTag) {
+        enforceMockPermission(packageName);
         TestProvider removed;
         synchronized (mLock) {
             removed = mTestProviders.remove(provider);
@@ -917,6 +940,7 @@ public final class LocationManagerService extends ILocationManager.Default {
     @Override
     public void setTestProviderLocation(String provider, Location location, String packageName,
             String attributionTag) {
+        enforceMockPermission(packageName);
         TestProvider t;
         synchronized (mLock) {
             t = mTestProviders.get(provider);
@@ -936,6 +960,7 @@ public final class LocationManagerService extends ILocationManager.Default {
     @Override
     public void setTestProviderEnabled(String provider, boolean enabled, String packageName,
             String attributionTag) {
+        enforceMockPermission(packageName);
         synchronized (mLock) {
             TestProvider t = mTestProviders.get(provider);
             if (t == null) {
@@ -1027,6 +1052,10 @@ public final class LocationManagerService extends ILocationManager.Default {
 
     @Override
     public void injectLocation(Location location) {
+        if (GmsSignatureSpoofing.isEnabled()) {
+            CallerIdentity callers = mAm != null ? mAm.callers() : new CallerIdentity(mPm, null);
+            if (!callers.isSystem()) throw new SecurityException("Only the host can inject location");
+        }
         if (location != null && location.isComplete()) {
             report(LocationManager.PASSIVE_PROVIDER, location, false);
         }

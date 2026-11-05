@@ -40,6 +40,8 @@ final class SettingsProvider extends ContentProvider {
     // Guarded by this. Table name -> setting -> value.
     private final Map<String, Map<String, String>> mTables = new HashMap<>();
     private final ProviderInfo mInfo = new ProviderInfo();
+    private final PackageManagerService mPm;
+    private final CallerIdentity mCallers;
 
     /** The provider of this process (the system server's), for {@link #putSystem}. */
     private static volatile SettingsProvider sInstance;
@@ -58,6 +60,12 @@ final class SettingsProvider extends ContentProvider {
     }
 
     SettingsProvider() {
+        this(null, null);
+    }
+
+    SettingsProvider(PackageManagerService pm, ActivityTaskManagerService atm) {
+        mPm = pm;
+        mCallers = pm == null ? null : new CallerIdentity(pm, atm);
         sInstance = this;
         for (String table : new String[] {SYSTEM, SECURE, GLOBAL}) {
             mTables.put(table, new HashMap<>());
@@ -141,6 +149,20 @@ final class SettingsProvider extends ContentProvider {
         return i < 0 ? null : method.substring(i + 1);
     }
 
+    private void enforceWrite(String table) {
+        if (!GmsSignatureSpoofing.isEnabled()) return;
+        if (android.os.Binder.getCallingPid() == Process.myPid()) return;
+        if (mCallers == null) throw new SecurityException("Settings writer identity unavailable");
+        if (mCallers.isSystem()) return;
+        String actual = mCallers.callerPackage();
+        String permission = SYSTEM.equals(table) ? "android.permission.WRITE_SETTINGS"
+                : "android.permission.WRITE_SECURE_SETTINGS";
+        if (mPm.permissions().checkPermission(actual, permission)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Settings write permission denied");
+        }
+    }
+
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
         if (method == null) return null;
@@ -159,16 +181,18 @@ final class SettingsProvider extends ContentProvider {
             }
         }
         if (method.startsWith("PUT_")) {
+            enforceWrite(table);
             String value = extras != null ? extras.getString(Settings.NameValueTable.VALUE)
                     : null;
             synchronized (this) {
                 if (value == null) values.remove(arg);
                 else values.put(arg, value);
             }
-            SystemServer.log("settings: " + table + " " + arg + " = " + value);
+            SystemServer.log("settings: updated " + table + " key " + arg);
             return new Bundle();
         }
         if (method.startsWith("DELETE_")) {
+            enforceWrite(table);
             synchronized (this) {
                 values.remove(arg);
             }
@@ -224,16 +248,19 @@ final class SettingsProvider extends ContentProvider {
 
     @Override
     public Uri insert(Uri uri, ContentValues values) {
+        enforceWrite(uri.getPathSegments().isEmpty() ? null : uri.getPathSegments().get(0));
         return null;
     }
 
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
+        enforceWrite(uri.getPathSegments().isEmpty() ? null : uri.getPathSegments().get(0));
         return 0;
     }
 
     @Override
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
+        enforceWrite(uri.getPathSegments().isEmpty() ? null : uri.getPathSegments().get(0));
         return 0;
     }
 }

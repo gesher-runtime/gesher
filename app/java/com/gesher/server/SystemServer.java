@@ -138,9 +138,42 @@ public final class SystemServer {
                 log("installed: " + p.describe());
             }
         }
+        if (GmsSignatureSpoofing.isEnabled()) {
+            // Deliberately only these addon slots, not arbitrary files in priv-app.
+            for (String name : MicrogAddons.PACKAGES) {
+                File apk = new File(androidRoot, "priv-app/" + name + "/base.apk");
+                if (!apk.isFile()) continue;
+                ApkPackage p = MicrogAddons.load(apk, name);
+                for (ApkPackage installed : packages) {
+                    if (!name.equals(installed.packageName)) continue;
+                    if (!GmsSignatureSpoofing.verifyAddonApk(name, installed.apkPath)) {
+                        throw new SecurityException("Untrusted installed microG addon override: " + name);
+                    }
+                    // As an updated system app: preserve a valid newer user-installed
+                    // release and its privileges, with the staged APK as fallback.
+                    if (installed.versionCode() >= p.versionCode()) {
+                        installed.setSystemAddon(true);
+                        p = installed;
+                    }
+                }
+                packages.removeIf(old -> name.equals(old.packageName));
+                new File(p.dataDir()).mkdirs();
+                packages.add(p);
+                log("microg addon: " + p.describe());
+            }
+        }
         for (String apk : apks) {
             ApkPackage p = ApkPackage.parse(apk);
+            for (ApkPackage previous : packages) {
+                if (previous.packageName.equals(p.packageName) && previous.isSystemAddon()) {
+                    if (!GmsSignatureSpoofing.verifyAddonApk(p.packageName, apk)) {
+                        throw new SecurityException("Untrusted microG addon override: " + p.packageName);
+                    }
+                    p.setSystemAddon(true);
+                }
+            }
             new File(p.dataDir()).mkdirs();
+            packages.removeIf(old -> p.packageName.equals(old.packageName));
             packages.add(p);
             log(p.describe());
         }
@@ -152,7 +185,7 @@ public final class SystemServer {
         services.put("permission_checker", StandIn.of(
                 android.permission.IPermissionChecker.class,
                 new Services.PermissionChecker()).asBinder());
-        startAppProcessesOnDemand(created.atm);
+        startAppProcessesOnDemand(created.atm, created.pm);
         PersistentDevice device = null;
         if (persistent) {
             device = new PersistentDevice(created, Installer.create(created.pm, created.atm),
@@ -172,6 +205,17 @@ public final class SystemServer {
         // 31 (BinderInternal.setMaxThreads); here a few.
         startBinderThreads(TAG, 7);
         if (device != null) device.start();
+        if (persistent && GmsSignatureSpoofing.isEnabled()) {
+            ApkPackage gms = created.pm.get(GmsPackageSupport.PACKAGE_GMS);
+            if (gms != null && gms.hasVerifiedMicrogSigner()) {
+                // Let microG restore its own enabled services after a device restart.
+                // Its settings decide whether Check-in / Cloud Messaging is enabled.
+                android.content.Intent boot = new android.content.Intent(
+                        android.content.Intent.ACTION_BOOT_COMPLETED).setPackage(gms.packageName);
+                created.am.broadcastIntentWithFeature(null, null, boot, null, null, 0, null,
+                        null, null, null, null, -1, null, false, false, 0);
+            }
+        }
 
         // This thread serves binder calls from now on, as system_server's main thread
         // ends in Looper.loop() and its binder threads in joinThreadPool.
@@ -183,7 +227,8 @@ public final class SystemServer {
      * android.app.GesherAppProcess for the package, its output appended to the package's
      * log.
      */
-    private static void startAppProcessesOnDemand(ActivityTaskManagerService atm) {
+    private static void startAppProcessesOnDemand(ActivityTaskManagerService atm,
+            PackageManagerService pm) {
         final String vm;
         try {
             // With the JIT and its profile saver, as Android's app processes (ADR 0054).
@@ -197,7 +242,12 @@ public final class SystemServer {
         atm.setProcessStarter((packageName, startSeq, targetSdk) -> {
             File logFile = Device.packageLog(packageName);
             logFile.getParentFile().mkdirs();
+            ApkPackage pkg = pm.get(packageName);
+            if (pkg == null) throw new IllegalStateException("Unknown package " + packageName);
+            String uid = String.valueOf(pkg.uid());
             List<String> env = new java.util.ArrayList<>(List.of("GESHER_BINDER=" + binder,
+                    "GESHER_UID=" + uid,
+                    "GESHER_BINDER_UID=" + uid,
                     "GESHER_LOG_FILE=" + logFile.getPath() + ".logcat",
                     // The package's AppUserModelID, its Start menu shortcut's (shell track).
                     com.gesher.app.shell.AppShell.ENV_APP_USER_MODEL_ID + "="

@@ -21,12 +21,17 @@ import android.content.res.CompatibilityInfo;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.os.SystemClock;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * ActiveServices, lite: started and bound services, in the app processes
@@ -52,12 +57,20 @@ import java.util.Map;
  *     the foreground service rules (types, the 10 s to call startForeground).
  * </ul>
  *
- * <p>A service whose process is gone goes with it ({@link #processDied}).
+ * <p>Unexpected process death restarts sticky/redelivery services and live auto-create
+ * bindings. An intentional exit/force-stop cancels recovery ({@link #processDied}).
  */
 final class ActiveServices {
     private final ActivityTaskManagerService mAtm;
     private final PackageManagerService mPm;
     private final NotificationManagerService mNotifications;
+    private final CallerIdentity mCallers;
+
+    private static final class Sender {
+        final String packageName;
+        final boolean system;
+        Sender(String packageName, boolean system) { this.packageName = packageName; this.system = system; }
+    }
 
     /** A service: ServiceRecord. */
     private static final class ServiceRecord extends Binder {
@@ -68,6 +81,11 @@ final class ActiveServices {
         boolean startRequested;
         int lastStartId;
         int foregroundId;
+        int startResult = Service.START_STICKY_COMPATIBILITY;
+        Intent lastStartIntent;
+        long createdAt;
+        int restartAttempts;
+        ScheduledFuture<?> restart;
         final List<ServiceStartArgs> pendingStarts = new ArrayList<>();
         final Map<Intent.FilterComparison, IntentBindRecord> bindings = new LinkedHashMap<>();
 
@@ -113,11 +131,16 @@ final class ActiveServices {
         final IntentBindRecord binding;
         final IServiceConnection conn;
         final long flags;
+        final IBinder caller;
+        final int callerPid;
 
-        ConnectionRecord(IntentBindRecord binding, IServiceConnection conn, long flags) {
+        ConnectionRecord(IntentBindRecord binding, IServiceConnection conn, long flags,
+                IApplicationThread caller) {
             this.binding = binding;
             this.conn = conn;
             this.flags = flags;
+            this.caller = caller == null ? null : caller.asBinder();
+            this.callerPid = Binder.getCallingPid();
         }
     }
 
@@ -125,12 +148,58 @@ final class ActiveServices {
     private final Map<ComponentName, ServiceRecord> mServices = new HashMap<>();
     private final Map<IBinder, List<ConnectionRecord>> mConnections = new HashMap<>();
     private long mBindSeq;
+    private final ScheduledExecutorService mRestarts = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "service-restarts");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     ActiveServices(ActivityTaskManagerService atm, PackageManagerService pm,
             NotificationManagerService notifications) {
         mAtm = atm;
         mPm = pm;
         mNotifications = notifications;
+        mCallers = new CallerIdentity(pm, atm);
+    }
+
+    private Sender sender(IApplicationThread thread, String claimed, boolean requireThread) {
+        if (mCallers.isSystem()) {
+            ApkPackage owner = claimed == null ? null : mPm.get(claimed);
+            if (owner != null) return new Sender(owner.packageName, false);
+            if (claimed != null && !"android".equals(claimed)) {
+                throw new SecurityException("Unknown service caller package");
+            }
+            return new Sender("android", true);
+        }
+        String actual = mCallers.callerPackage();
+        if (claimed != null && !actual.equals(claimed)) {
+            throw new SecurityException("Caller cannot act for another service package");
+        }
+        ActivityTaskManagerService.ProcessRecord app = mAtm.callerProcess(Binder.getCallingPid());
+        if (app == null || (requireThread && thread == null)
+                || (thread != null && !thread.asBinder().equals(app.thread.asBinder()))) {
+            throw new SecurityException("Service call requires the caller's application thread");
+        }
+        return new Sender(actual, false);
+    }
+
+    private void enforceAccess(ServiceInfo info, Sender sender) {
+        if (sender.system || info.packageName.equals(sender.packageName)) return;
+        if (!info.exported) throw new SecurityException("Service is not exported");
+        if (info.permission != null && !info.permission.isEmpty()
+                && mPm.permissions().checkPermission(sender.packageName, info.permission)
+                        != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Service requires " + info.permission);
+        }
+    }
+
+    private void requireServiceOwner(ServiceRecord service) {
+        if (mCallers.isSystem()) return;
+        String actual = mCallers.callerPackage();
+        if (!service.info.packageName.equals(actual) || service.app == null
+                || service.app.pid != Binder.getCallingPid()) {
+            throw new SecurityException("Service token belongs to another application");
+        }
     }
 
     private ServiceInfo resolve(Intent service, String resolvedType) {
@@ -141,7 +210,8 @@ final class ActiveServices {
         // services in: one started for it ends at once ("No data directory found"), and a
         // client's binding waits for its timeout (WhatsApp's SmsRetriever: 3 minutes before
         // the code request). Not bound, the client library fails at once.
-        if (info != null && GmsPackageSupport.isSyntheticPackage(info.packageName)) {
+        if (info != null && GmsPackageSupport.isSyntheticPackage(info.packageName)
+                && mPm.get(info.packageName) == null) {
             return null;
         }
         return info;
@@ -166,28 +236,34 @@ final class ActiveServices {
 
     ComponentName startService(IApplicationThread caller, Intent service, String resolvedType,
             boolean requireForeground, String callingPackage) {
+        Sender sender = sender(caller, callingPackage, true);
         ServiceInfo info = resolve(service, resolvedType);
         if (info == null) {
             SystemServer.log("startService: nothing handles " + service);
             return null;
         }
+        enforceAccess(info, sender);
         ServiceRecord r;
         synchronized (this) {
             r = record(info);
             r.startRequested = true;
+            r.lastStartIntent = new Intent(service);
             int startId = ++r.lastStartId;
             r.pendingStarts.add(new ServiceStartArgs(false /* taskRemoved */, startId,
                     0 /* flags */, new Intent(service)));
         }
         SystemServer.log("startService " + r + " from " + callingPackage
                 + (requireForeground ? " (foreground)" : ""));
-        bringUp(r);
+        long identity = Binder.clearCallingIdentity();
+        try { bringUp(r); } finally { Binder.restoreCallingIdentity(identity); }
         return r.name;
     }
 
     int stopService(IApplicationThread caller, Intent service, String resolvedType) {
+        Sender sender = sender(caller, null, true);
         ServiceInfo info = resolve(service, resolvedType);
         if (info == null) return 0;
+        enforceAccess(info, sender);
         ServiceRecord r;
         synchronized (this) {
             r = mServices.get(new ComponentName(info.packageName, info.name));
@@ -205,6 +281,7 @@ final class ActiveServices {
         synchronized (this) {
             r = byToken(token);
             if (r == null) return false;
+            requireServiceOwner(r);
             // stopSelf(startId) stops only if no later start came.
             if (startId >= 0 && startId != r.lastStartId) return false;
             r.startRequested = false;
@@ -217,11 +294,14 @@ final class ActiveServices {
 
     int bindService(IApplicationThread caller, Intent service, String resolvedType,
             IServiceConnection connection, long flags, String callingPackage) {
+        Sender sender = sender(caller, callingPackage, true);
+        if (connection == null) throw new IllegalArgumentException("Missing service connection");
         ServiceInfo info = resolve(service, resolvedType);
         if (info == null) {
             SystemServer.log("bindService: nothing handles " + service);
             return 0;
         }
+        enforceAccess(info, sender);
         ServiceRecord r;
         IntentBindRecord b;
         IBinder published = null;
@@ -233,18 +313,21 @@ final class ActiveServices {
                 b = new IntentBindRecord(r, key.getIntent());
                 r.bindings.put(key, b);
             }
-            ConnectionRecord c = new ConnectionRecord(b, connection, flags);
+            ConnectionRecord c = new ConnectionRecord(b, connection, flags, caller);
             b.connections.add(c);
             mConnections.computeIfAbsent(connection.asBinder(), k -> new ArrayList<>()).add(c);
             if (b.received) published = b.binder;
         }
         SystemServer.log("bindService " + r + " from " + callingPackage + " (flags 0x"
                 + Long.toHexString(flags) + ")");
-        if (published != null) {
-            connected(connection, r, published);
-        } else if ((flags & Context.BIND_AUTO_CREATE) != 0 || r.created) {
-            bringUp(r);
-        }
+        long identity = Binder.clearCallingIdentity();
+        try {
+            if (published != null) {
+                connected(connection, r, published);
+            } else if ((flags & Context.BIND_AUTO_CREATE) != 0 || r.created) {
+                bringUp(r);
+            }
+        } finally { Binder.restoreCallingIdentity(identity); }
         return 1;
     }
 
@@ -254,6 +337,7 @@ final class ActiveServices {
         synchronized (this) {
             r = byToken(token);
             if (r == null || !(bindToken instanceof IntentBindRecord)) return;
+            requireServiceOwner(r);
             IntentBindRecord b = (IntentBindRecord) bindToken;
             if (b.service != r) return;
             b.binder = service;
@@ -279,6 +363,15 @@ final class ActiveServices {
         List<IntentBindRecord> unbind = new ArrayList<>();
         List<ServiceRecord> services = new ArrayList<>();
         synchronized (this) {
+            List<ConnectionRecord> existing = mConnections.get(connection.asBinder());
+            if (existing != null && !mCallers.isSystem()) {
+                mCallers.callerPackage();
+                for (ConnectionRecord record : existing) {
+                    if (record.callerPid != Binder.getCallingPid()) {
+                        throw new SecurityException("Cannot unbind another application's connection");
+                    }
+                }
+            }
             removed = mConnections.remove(connection.asBinder());
             if (removed == null) return false;
             for (ConnectionRecord c : removed) {
@@ -317,6 +410,10 @@ final class ActiveServices {
         ServiceRecord r;
         synchronized (this) {
             r = token instanceof ServiceRecord ? (ServiceRecord) token : null;
+            if (r != null) requireServiceOwner(r);
+            if (r != null && type == 1 && startId == r.lastStartId) {
+                r.startResult = res;
+            }
         }
         if (r == null) return;
         String what;
@@ -338,6 +435,7 @@ final class ActiveServices {
         synchronized (this) {
             r = byToken(token);
             if (r == null) return;
+            requireServiceOwner(r);
             previous = r.foregroundId;
             r.foregroundId = id;
         }
@@ -362,13 +460,16 @@ final class ActiveServices {
     int getForegroundServiceType(ComponentName className, IBinder token) {
         synchronized (this) {
             ServiceRecord r = byToken(token);
+            if (r != null) requireServiceOwner(r);
             return r != null && r.foregroundId != 0 ? r.info.getForegroundServiceType() : 0;
         }
     }
 
     IBinder peekService(Intent service, String resolvedType) {
+        Sender sender = sender(null, null, false);
         ServiceInfo info = resolve(service, resolvedType);
         if (info == null) return null;
+        enforceAccess(info, sender);
         synchronized (this) {
             ServiceRecord r = mServices.get(new ComponentName(info.packageName, info.name));
             if (r == null) return null;
@@ -391,6 +492,7 @@ final class ActiveServices {
                 r.app = app;
                 create = !r.created;
                 r.created = true;
+                if (create) r.createdAt = SystemClock.uptimeMillis();
                 starts = new ArrayList<>(r.pendingStarts);
                 r.pendingStarts.clear();
                 for (IntentBindRecord b : r.bindings.values()) {
@@ -433,6 +535,7 @@ final class ActiveServices {
             if (r.startRequested || r.hasAutoCreateConnections()) return;
             if (mServices.get(r.name) != r) return;
             mServices.remove(r.name);
+            if (r.restart != null) { r.restart.cancel(false); r.restart = null; }
             for (IntentBindRecord b : r.bindings.values()) {
                 for (ConnectionRecord c : b.connections) {
                     List<ConnectionRecord> l = mConnections.get(c.conn.asBinder());
@@ -460,10 +563,108 @@ final class ActiveServices {
         return false;
     }
 
-    /** The process went away: so did its services. */
-    void processDied(ActivityTaskManagerService.ProcessRecord app) {
+    /** Explicit force-stop/uninstall also cancels a service waiting for its retry timer. */
+    void stopPackage(String packageName) {
+        List<ServiceRecord> stopped = new ArrayList<>();
+        List<ConnectionRecord> disconnected = new ArrayList<>();
         synchronized (this) {
-            mServices.values().removeIf(r -> r.app == app);
+            for (ServiceRecord r : mServices.values()) {
+                if (!packageName.equals(r.info.packageName)) continue;
+                r.startRequested = false;
+                r.pendingStarts.clear();
+                if (r.restart != null) { r.restart.cancel(false); r.restart = null; }
+                for (IntentBindRecord b : r.bindings.values()) {
+                    for (ConnectionRecord c : b.connections) {
+                        disconnected.add(c);
+                        List<ConnectionRecord> list = mConnections.get(c.conn.asBinder());
+                        if (list != null) list.remove(c);
+                    }
+                    b.connections.clear();
+                }
+                stopped.add(r);
+            }
+        }
+        for (ConnectionRecord c : disconnected) connected(c.conn, c.binding.service, null);
+        for (ServiceRecord r : stopped) maybeBringDown(r);
+    }
+
+    /** The process went away: release dead bindings and recover Android sticky services. */
+    void processDied(ActivityTaskManagerService.ProcessRecord app) {
+        List<ServiceRecord> recovered = new ArrayList<>();
+        List<ServiceRecord> reconsider = new ArrayList<>();
+        List<ConnectionRecord> disconnected = new ArrayList<>();
+        synchronized (this) {
+            // A dead client's BIND_AUTO_CREATE must not keep somebody else's process
+            // alive forever. System-owned bindings have no app caller and survive.
+            mConnections.entrySet().removeIf(entry -> {
+                entry.getValue().removeIf(c -> {
+                    if (c.caller == null || !c.caller.equals(app.thread.asBinder())) return false;
+                    c.binding.connections.remove(c);
+                    if (!reconsider.contains(c.binding.service)) reconsider.add(c.binding.service);
+                    return true;
+                });
+                return entry.getValue().isEmpty();
+            });
+            for (ServiceRecord r : new ArrayList<>(mServices.values())) {
+                if (r.app != app) continue;
+                if (r.foregroundId != 0) {
+                    mNotifications.cancel(r.info.packageName, null, r.foregroundId);
+                    r.foregroundId = 0;
+                }
+                r.app = null;
+                r.created = false;
+                for (IntentBindRecord b : r.bindings.values()) {
+                    disconnected.addAll(b.connections);
+                    b.requested = false;
+                    b.received = false;
+                    b.binder = null;
+                }
+                boolean started = r.startRequested && (r.startResult != Service.START_NOT_STICKY
+                        || !r.pendingStarts.isEmpty());
+                if (!started) r.startRequested = false;
+                if (!app.exiting && (started || r.hasAutoCreateConnections())) {
+                    if (r.startRequested && r.pendingStarts.isEmpty() && started) {
+                        Intent redelivery = r.startResult == Service.START_REDELIVER_INTENT
+                                && r.lastStartIntent != null ? new Intent(r.lastStartIntent) : null;
+                        int flags = redelivery != null ? Service.START_FLAG_REDELIVERY : 0;
+                        r.pendingStarts.add(new ServiceStartArgs(false, ++r.lastStartId, flags, redelivery));
+                    }
+                    if (SystemClock.uptimeMillis() - r.createdAt > 60_000) r.restartAttempts = 0;
+                    recovered.add(r);
+                } else {
+                    r.startRequested = false;
+                    mServices.remove(r.name);
+                    for (IntentBindRecord b : r.bindings.values()) {
+                        for (ConnectionRecord c : b.connections) {
+                            List<ConnectionRecord> list = mConnections.get(c.conn.asBinder());
+                            if (list != null) list.remove(c);
+                        }
+                    }
+                }
+            }
+        }
+        for (ConnectionRecord c : disconnected) connected(c.conn, c.binding.service, null);
+        for (ServiceRecord r : reconsider) maybeBringDown(r);
+        for (ServiceRecord r : recovered) scheduleRestart(r);
+    }
+
+    private void scheduleRestart(ServiceRecord r) {
+        synchronized (this) {
+            if (mServices.get(r.name) != r || r.restart != null) return;
+            long delay = Math.min(60_000, 1000L << Math.min(r.restartAttempts++, 6));
+            SystemServer.log("restarting service " + r + " after " + delay + " ms");
+            r.restart = mRestarts.schedule(() -> {
+                synchronized (ActiveServices.this) {
+                    r.restart = null;
+                    if (mServices.get(r.name) != r
+                            || (!r.startRequested && !r.hasAutoCreateConnections())) return;
+                }
+                try { bringUp(r); }
+                catch (RuntimeException e) {
+                    SystemServer.log("restarting service " + r + " failed: " + e);
+                    scheduleRestart(r);
+                }
+            }, delay, TimeUnit.MILLISECONDS);
         }
     }
 }

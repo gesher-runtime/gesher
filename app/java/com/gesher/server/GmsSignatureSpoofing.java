@@ -1,177 +1,142 @@
+/*
+ * Copyright (C) 2026 The Gesher Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
 package com.gesher.server;
 
-import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.content.pm.SigningDetails;
 import android.content.pm.SigningInfo;
-import android.os.Bundle;
+import com.android.apksig.ApkVerifier;
+import com.android.apksig.apk.ApkUtils;
+import com.android.apksig.util.DataSources;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.RandomAccessFile;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Locale;
-import java.util.Set;
+import java.security.cert.X509Certificate;
+import java.util.List;
 
 /**
- * PROTOTYPE: Restricted Signature Spoofing support for microG on Gesher.
- *
- * Implements the LineageOS / CalyxOS / microG documented security model:
- * 1. Gated behind an explicit runtime/system setting:
- *    - System property / env: GESHER_MICROG_SPOOF=1 (or Settings.Secure "gesher_microg_signature_spoofing")
- * 2. Restricted strictly to the allowlisted microG target packages:
- *    - com.google.android.gms (microG Services / GmsCore)
- *    - com.android.vending    (microG Companion / FakeStore)
- *    - com.google.android.gsf (microG Services Framework Proxy)
- * 3. Requires the package to declare android.permission.FAKE_PACKAGE_SIGNATURE
- *    and <meta-data android:name="fake-signature" android:value="..." />
- *    (or matches the pinned official microG signing certificate SHA-256).
+ * Optional Google certificate compatibility for official microG Services/Companion.
+ * APK contents and the current signer are verified before substituting a certificate.
+ * Manifest fake-signature metadata cannot select a certificate or authorize spoofing.
  */
 public final class GmsSignatureSpoofing {
-
+    public static final String ENV_MICROG_SPOOF = "GESHER_MICROG_SPOOF";
     public static final String PERMISSION_FAKE_PACKAGE_SIGNATURE =
             "android.permission.FAKE_PACKAGE_SIGNATURE";
-
-    public static final String METADATA_FAKE_SIGNATURE = "fake-signature";
-
-    public static final String SETTING_MICROG_SIGNATURE_SPOOFING =
-            "gesher_microg_signature_spoofing";
-
-    public static final String ENV_MICROG_SPOOF = "GESHER_MICROG_SPOOF";
-
-    /**
-     * Official microG Team signing certificate SHA-256 fingerprint (O=NOGAPPS Project, C=DE).
-     */
     public static final String MICROG_CERT_SHA256 =
             "9bd06727e62796c0130eb6dab39b73157451582cbd138e86c468acc395d14165";
+    public static final String PACKAGE_GSF = "com.google.android.gsf";
+    // Upstream GsfProxy v0.1.0 is v1-only. Permit this exact signed artifact,
+    // rather than treating arbitrary v1 metadata/unsigned entries as trusted code.
+    public static final String LEGACY_GSF_SHA256 =
+            "86891b174301f06a1c84187b545a0a2a57044c6b768f3e84e865908743349692";
 
-    private static final Set<String> ALLOWED_PACKAGES;
-    static {
-        Set<String> pkgs = new HashSet<>();
-        pkgs.add(GmsPackageSupport.PACKAGE_GMS);
-        pkgs.add(GmsPackageSupport.PACKAGE_VENDING);
-        pkgs.add("com.google.android.gsf");
-        ALLOWED_PACKAGES = Collections.unmodifiableSet(pkgs);
+    private GmsSignatureSpoofing() { }
+
+    public static boolean isEnabled() {
+        String value = System.getenv(ENV_MICROG_SPOOF);
+        return "1".equals(value) || "true".equalsIgnoreCase(value);
     }
 
-    private GmsSignatureSpoofing() {}
-
-    /**
-     * Checks whether signature spoofing is enabled in Gesher settings or environment.
-     */
-    public static boolean isSpoofingEnabled(boolean settingEnabled) {
-        if (settingEnabled) {
-            return true;
-        }
-        String env = System.getenv(ENV_MICROG_SPOOF);
-        return "1".equals(env) || "true".equalsIgnoreCase(env);
+    public static boolean isAllowlistedPackage(String name) {
+        return GmsPackageSupport.PACKAGE_GMS.equals(name)
+                || GmsPackageSupport.PACKAGE_VENDING.equals(name);
     }
 
-    /**
-     * Checks whether the given package is in the strict microG package allowlist.
-     */
-    public static boolean isAllowlistedPackage(String packageName) {
-        return packageName != null && ALLOWED_PACKAGES.contains(packageName);
+    public static boolean isAddonPackage(String name) {
+        return isAllowlistedPackage(name) || PACKAGE_GSF.equals(name);
     }
 
-    /**
-     * Applies signature spoofing to a PackageInfo generated for an installed ApkPackage
-     * if and only if all security gates pass.
-     */
-    public static PackageInfo maybeSpoofPackageInfo(
-            ApkPackage pkg,
-            PackageInfo pi,
-            long flags,
-            boolean settingEnabled) {
-        if (pkg == null || pi == null) {
-            return pi;
-        }
-        if (!isSpoofingEnabled(settingEnabled)) {
-            return pi;
-        }
-        if (!isAllowlistedPackage(pi.packageName)) {
-            return pi;
-        }
-        boolean requestsSig =
-                (flags & PackageManager.GET_SIGNATURES) != 0
-                || (flags & PackageManager.GET_SIGNING_CERTIFICATES) != 0;
-        if (!requestsSig) {
-            return pi;
-        }
-        if (!requestsFakeSignaturePermission(pkg, pi)) {
-            return pi;
-        }
+    /** The same policy is used by package signatures and permission enforcement. */
+    public static boolean isTrustedPackage(ApkPackage pkg) {
+        return pkg != null && isEnabled() && isAllowlistedPackage(pkg.packageName)
+                && pkg.parsed.getRequestedPermissions().contains(PERMISSION_FAKE_PACKAGE_SIGNATURE)
+                && pkg.hasVerifiedMicrogSigner();
+    }
 
-        Signature spoofed = extractFakeSignatureFromMetaData(pi.applicationInfo);
-        if (spoofed == null) {
-            spoofed = GmsPackageSupport.getGoogleSignature();
+    private static String sha256(String path) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (FileInputStream in = new FileInputStream(path)) {
+            byte[] block = new byte[64 * 1024];
+            for (int n; (n = in.read(block)) != -1;) digest.update(block, 0, n);
         }
-        if (spoofed == null) {
+        StringBuilder hex = new StringBuilder(64);
+        for (byte b : digest.digest()) {
+            hex.append(Character.forDigit((b >>> 4) & 15, 16));
+            hex.append(Character.forDigit(b & 15, 16));
+        }
+        return hex.toString();
+    }
+
+    /** Verify the expected manifest name without executing code or parsing shared libraries. */
+    public static boolean verifyAddonApk(String expectedPackage, String path) {
+        if (!isAddonPackage(expectedPackage)) return false;
+        try (RandomAccessFile file = new RandomAccessFile(path, "r")) {
+            String actual = ApkUtils.getPackageNameFromBinaryAndroidManifest(
+                    ApkUtils.getAndroidManifest(DataSources.asDataSource(file)));
+            return expectedPackage.equals(actual) && verifyOfficialApk(path);
+        } catch (Exception | LinkageError e) {
+            return false;
+        }
+    }
+
+    public static boolean isOfficialMicrogCertificate(byte[] certificate) {
+        if (certificate == null || certificate.length == 0) return false;
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(certificate);
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : digest) {
+                hex.append(Character.forDigit((b >>> 4) & 15, 16));
+                hex.append(Character.forDigit(b & 15, 16));
+            }
+            return MICROG_CERT_SHA256.contentEquals(hex);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    /** A copied signing block alone is insufficient: verify the signed content digests. */
+    public static boolean verifyOfficialApk(String path) {
+        try {
+            // apksig verifies file content without Android's missing incremental-fs JNI.
+            ApkVerifier.Result result = new ApkVerifier.Builder(new File(path))
+                    .setMinCheckedPlatformVersion(36).setMaxCheckedPlatformVersion(36)
+                    .build().verify();
+            List<X509Certificate> signers = result.getSignerCertificates();
+            return result.isVerified()
+                    && (result.isVerifiedUsingV2Scheme() || result.isVerifiedUsingV3Scheme()
+                            || result.isVerifiedUsingV31Scheme()
+                            || (result.isVerifiedUsingV1Scheme()
+                                    && LEGACY_GSF_SHA256.equals(sha256(path))))
+                    && signers.size() == 1
+                    && isOfficialMicrogCertificate(signers.get(0).getEncoded());
+        } catch (Exception | LinkageError e) {
+            SystemServer.log("microg: APK verification denied for " + path + ": "
+                    + e.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    static PackageInfo maybeSpoofPackageInfo(ApkPackage pkg, PackageInfo pi, long flags) {
+        if ((flags & (PackageManager.GET_SIGNATURES
+                        | PackageManager.GET_SIGNING_CERTIFICATES)) == 0
+                || !isTrustedPackage(pkg)) {
             return pi;
         }
-
+        Signature google = GmsPackageSupport.getGoogleSignature();
         if ((flags & PackageManager.GET_SIGNATURES) != 0) {
-            pi.signatures = new Signature[] { spoofed };
+            pi.signatures = new Signature[] { google };
         }
         if ((flags & PackageManager.GET_SIGNING_CERTIFICATES) != 0) {
-            SigningDetails details = new SigningDetails(
-                    new Signature[] { spoofed },
-                    SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V2,
-                    null,
-                    null);
-            pi.signingInfo = new SigningInfo(details);
+            pi.signingInfo = new SigningInfo(new SigningDetails(new Signature[] { google },
+                    SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V2, null, null));
         }
         return pi;
-    }
-
-    private static boolean requestsFakeSignaturePermission(ApkPackage pkg, PackageInfo pi) {
-        if (pi.requestedPermissions != null) {
-            for (String perm : pi.requestedPermissions) {
-                if (PERMISSION_FAKE_PACKAGE_SIGNATURE.equals(perm)) {
-                    return true;
-                }
-            }
-        }
-        if (pkg.parsed != null && pkg.parsed.getRequestedPermissions() != null) {
-            return pkg.parsed.getRequestedPermissions().contains(PERMISSION_FAKE_PACKAGE_SIGNATURE);
-        }
-        return false;
-    }
-
-    private static Signature extractFakeSignatureFromMetaData(ApplicationInfo ai) {
-        if (ai == null || ai.metaData == null) {
-            return null;
-        }
-        Bundle meta = ai.metaData;
-        String fakeSigHex = meta.getString(METADATA_FAKE_SIGNATURE);
-        if (fakeSigHex != null && !fakeSigHex.isEmpty()) {
-            try {
-                return new Signature(fakeSigHex);
-            } catch (IllegalArgumentException ignored) {
-                return null;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Verifies whether a raw X.509 certificate matches the official microG signing key SHA-256.
-     */
-    public static boolean isOfficialMicrogCertificate(byte[] certBytes) {
-        if (certBytes == null || certBytes.length == 0) {
-            return false;
-        }
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] digest = md.digest(certBytes);
-            StringBuilder sb = new StringBuilder(digest.length * 2);
-            for (byte b : digest) {
-                sb.append(String.format(Locale.ROOT, "%02x", b & 0xff));
-            }
-            return MICROG_CERT_SHA256.equals(sb.toString());
-        } catch (NoSuchAlgorithmException e) {
-            return false;
-        }
     }
 }

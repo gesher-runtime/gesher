@@ -373,6 +373,10 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/devsvc/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
+          # Offline microG cross-UID account, provider, notification and permission probes.
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/microgprobe/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod
           # Gesher Camera (hwsvc2, ADR 0051): ACTION_IMAGE_CAPTURE's app, shipped with Gesher.
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/app/gesher-camera" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
@@ -406,6 +410,7 @@ jobs:
         run: |
           mkdir -p dist-framework
           cp out/framework/framework-minus-apex.jar dist-framework/framework.jar
+          cp out/app/com.android.location.provider.jar dist-framework/
           cp out/http-legacy/org.apache.http.legacy.jar dist-framework/
           cp out/framework-res/framework-res.apk out/app/gesher-app.jar out/app/build.prop \
             out/app/lifecycle.apk out/app/components.apk out/app/peer.apk out/app/uiapp.apk out/app/dbapp.apk out/app/devsvc.apk out/app/devices.apk out/app/nodevices.apk out/app/gmsapp.apk dist-framework/
@@ -423,6 +428,7 @@ jobs:
           cp out/app/netapp.apk out/app/nonetapp.apk dist-framework/
           cp out/app/web3app.apk dist-framework/
           cp out/app/services-tests.dex dist-framework/
+          cp out/app/microgprobe.apk dist-framework/
           cp out/app/exitstatusapp.apk dist-framework/
           cp out/app/sharedlibraryapp.apk out/app/sharedlibrarydlc.apk out/app/sharedlibraryafter.apk out/app/sharedlibraryafterdlc.apk out/app/sharedlibrarybad.apk out/app/shared-base-v1.jar out/app/shared-base-v2.jar out/app/shared-entry.jar dist-framework/
           cp out/app/graphics-tests.dex out/app/web3-query-tests.dex dist-framework/

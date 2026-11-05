@@ -46,6 +46,7 @@ CloseApplicationsFilter=*.exe,*.chm
 
 [Files]
 Source: "{#BuildDir}\dalvikvm.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\libgesher_account_crypto.so"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\core-oj.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\core-libart.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\core-icu4j.jar"; DestDir: "{app}"; Flags: ignoreversion
@@ -59,6 +60,9 @@ Source: "{#BuildDir}\gesher-app.jar"; DestDir: "{app}"; Flags: ignoreversion
 ; its declaration: gesher-app.ps1 installs both under $ANDROID_ROOT.
 Source: "{#BuildDir}\org.apache.http.legacy.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "etc\permissions\org.apache.http.legacy.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
+Source: "{#BuildDir}\com.android.location.provider.jar"; DestDir: "{app}"; Flags: ignoreversion
+Source: "etc\permissions\com.android.location.provider.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
+Source: "etc\permissions\privapp-permissions-microg.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
 Source: "{#BuildDir}\binderd.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\servicemanager.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; gesher-exec (docs/exec.md): runs an app's ELF executables (ProcessBuilder) next to dalvikvm.
@@ -112,6 +116,8 @@ Source: "gesher.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-app-microg.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "licenses\APKSIG-LICENSE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "gesher.ico"; DestDir: "{app}"; Flags: ignoreversion
 

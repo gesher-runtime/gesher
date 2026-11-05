@@ -81,6 +81,8 @@ public final class Services {
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
         sLast = new Created(pm, atm, am);
+        services.put("uri_grants", StandIn.of(android.app.IUriGrantsManager.class,
+                new UriGrantsManagerService(pm, atm, am)).asBinder());
         services.put("package", StandIn.of(IPackageManager.class, pm).asBinder());
         services.put(Context.ACTIVITY_SERVICE,
                 StandIn.of(IActivityManager.class, am).asBinder());
@@ -124,6 +126,10 @@ public final class Services {
         // answers null.
         services.put(Context.POWER_SERVICE, StandIn.of(android.os.IPowerManager.class,
                 new PowerManagerService()).asBinder());
+        // Windows has no Android Doze policy. Answer the default (no exemption)
+        // rather than crashing PowerManager.isIgnoringBatteryOptimizations.
+        services.put("deviceidle", StandIn.of(android.os.IDeviceIdleController.class,
+                new android.os.IDeviceIdleController.Default()).asBinder());
         services.put(Context.THERMAL_SERVICE, StandIn.of(android.os.IThermalService.class,
                 new DeviceServices.ThermalService()).asBinder());
         services.put(Context.ALARM_SERVICE, StandIn.of(android.app.IAlarmManager.class,
@@ -160,7 +166,7 @@ public final class Services {
         AccountManagerService accounts = new AccountManagerService(am, pm);
         services.put(Context.ACCOUNT_SERVICE, StandIn.of(android.accounts.IAccountManager.class,
                 accounts).asBinder());
-        sync.start(accounts::syncableAccounts);
+        sync.start(accounts::syncableAccounts, accounts::canAccessAccount);
         // System services queried by crash reporters (ACRA) and common apps (e.g. F-Droid).
         services.put(Context.DROPBOX_SERVICE, StandIn.of(
                 com.android.internal.os.IDropBoxManagerService.class,
@@ -202,7 +208,9 @@ public final class Services {
         // getSystemService(PermissionManager.class) is null and the request throws
         // NullPointerException (WhatsApp's phone number screen).
         services.put("permissionmgr", StandIn.of(android.permission.IPermissionManager.class,
-                new PermissionManagerService()).asBinder());
+                pm.permissions()).asBinder());
+        services.put(Context.CROSS_PROFILE_APPS_SERVICE, StandIn.of(
+                android.content.pm.ICrossProfileApps.class, new CrossProfileApps()).asBinder());
         return services;
     }
 
@@ -378,56 +386,57 @@ public final class Services {
         }
     }
 
-    /**
-     * permission_checker: PermissionCheckerService, granting everything (every app runs as
-     * one uid; no permission is enforced). A provider's Transport asks it before it
-     * answers another process (getType, query...).
-     */
-    public static final class PermissionChecker
-            extends android.permission.IPermissionChecker.Default {
-        @Override
-        public int checkPermission(String permission,
-                android.content.AttributionSourceState attributionSource, String message,
+    /** Permission checks follow the same package policy as PackageManager and AM. */
+    public static final class PermissionChecker extends android.permission.IPermissionChecker.Default {
+        private PermissionPolicy policy() {
+            Created created = sLast;
+            return created == null ? null : created.pm.permissions();
+        }
+        @Override public int checkPermission(String permission,
+                android.content.AttributionSourceState source, String message,
                 boolean forDataDelivery, boolean startDataDelivery, boolean fromDatasource,
                 int attributedOp) {
-            return android.content.PermissionChecker.PERMISSION_GRANTED;
+            PermissionPolicy policy = policy();
+            return policy == null ? android.content.PermissionChecker.PERMISSION_HARD_DENIED
+                    : policy.checkAttribution(permission, source, fromDatasource);
         }
-
-        @Override
-        public void finishDataDelivery(int op,
-                android.content.AttributionSourceState attributionSource,
-                boolean fromDatasource) {
-        }
-
-        @Override
-        public int checkOp(int op, android.content.AttributionSourceState attributionSource,
+        @Override public void finishDataDelivery(int op,
+                android.content.AttributionSourceState source, boolean fromDatasource) { }
+        @Override public int checkOp(int op, android.content.AttributionSourceState source,
                 String message, boolean forDataDelivery, boolean startDataDelivery) {
-            return android.content.PermissionChecker.PERMISSION_GRANTED;
+            PermissionPolicy policy = policy();
+            return policy == null ? android.content.PermissionChecker.PERMISSION_HARD_DENIED
+                    : policy.checkAttribution(android.app.AppOpsManager.opToPermission(op), source, false);
         }
     }
 
-    /**
-     * permissionmgr: PermissionManagerService, with every permission granted (as
-     * permission_checker): a runtime permission request ends at once, with no dialog,
-     * Activity.requestPermissions short-circuiting when no permission is requestable.
-     */
-    public static final class PermissionManagerService
-            extends android.permission.IPermissionManager.Default {
-        @Override
-        public int getPermissionRequestState(String packageName, String permissionName,
-                int deviceId) {
-            return Context.PERMISSION_REQUEST_STATE_GRANTED;
+    /** A single-user Windows runtime has no work profile to request access to. */
+    public static final class CrossProfileApps extends android.content.pm.ICrossProfileApps.Default {
+        @Override public java.util.List<android.os.UserHandle> getTargetUserProfiles(String pkg) {
+            return java.util.Collections.emptyList();
         }
-
-        @Override
-        public int checkPermission(String packageName, String permissionName,
-                String persistentDeviceId, int userId) {
-            return android.content.pm.PackageManager.PERMISSION_GRANTED;
+        @Override public boolean canInteractAcrossProfiles(String pkg) { return false; }
+        @Override public boolean canRequestInteractAcrossProfiles(String pkg) { return false; }
+        @Override public boolean canConfigureInteractAcrossProfiles(int userId, String pkg) { return false; }
+        @Override public boolean canUserAttemptToConfigureInteractAcrossProfiles(int userId, String pkg) { return false; }
+        @Override public void startActivityAsUser(android.app.IApplicationThread caller,
+                String pkg, String attributionTag, android.content.ComponentName component,
+                int userId, boolean launchMainActivity, android.os.IBinder token, android.os.Bundle options) {
+            throw new SecurityException("No cross-profile target exists on this device");
         }
-
-        @Override
-        public int checkUidPermission(int uid, String permissionName, int deviceId) {
-            return android.content.pm.PackageManager.PERMISSION_GRANTED;
+        @Override public void startActivityAsUserByIntent(android.app.IApplicationThread caller,
+                String pkg, String attributionTag, android.content.Intent intent, int userId,
+                android.os.IBinder token, android.os.Bundle options) {
+            throw new SecurityException("No cross-profile target exists on this device");
+        }
+        @Override public void setInteractAcrossProfilesAppOp(int userId, String pkg, int mode) {
+            throw new SecurityException("Cross-profile access is unavailable");
+        }
+        @Override public void resetInteractAcrossProfilesAppOps(int userId, java.util.List<String> pkgs) {
+            throw new SecurityException("Cross-profile access is unavailable");
+        }
+        @Override public void clearInteractAcrossProfilesAppOps(int userId) {
+            throw new SecurityException("Cross-profile access is unavailable");
         }
     }
 

@@ -61,6 +61,7 @@ include(cmake/aosp/conscrypt.cmake)
 include(cmake/aosp/binder.cmake)
 include(cmake/aosp/servicemanager.cmake)
 include(cmake/aosp/framework.cmake)
+include(compat/credentials/credentials.cmake)
 # Framework natives real apps need: SQLite, android.database, animators (docs/e2e.md).
 include(cmake/aosp/framework_e2e.cmake)
 # gesher: Start menu shortcuts and AppUserModelIDs for installed apps (shell track).
