@@ -145,6 +145,11 @@ Check 'framework shared memory: MemoryFile and MemoryIntArray' {
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/framework-tests.dex") gesher.FrameworkMemoryTest
 } @('FrameworkMemoryTest all passed')
 
+Check 'framework Scrypt: RFC 7914 and invalid parameters' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpFramework" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/framework-tests.dex") gesher.FrameworkScryptTest
+} @('FrameworkScryptTest all passed')
+
 # gesher-app drives lifecycle.apk's Activity to onResume (app/README.md): the
 # app's manifest, its resources and framework-res.apk's theme are read, and
 # the Application and the Activity go through their callbacks.
