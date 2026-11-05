@@ -8,6 +8,12 @@ A subsequent native crash of that same process at 02:30:56 remains unresolved;
 the successful network observation and suspension recovery do not establish
 overall Telegram stability.
 
+The resumed investigation adds an opt-in, load-time ELF mapping record and a
+strict technical crash extractor so the next raw RIP can be resolved without
+a debugger. See [controlled crash diagnostics](telegram-crash-diagnostics-2026-11-05.md)
+for the exact host identity, synthetic PC-to-symbol proof and reproduction
+route. This diagnostic addition does not establish the original crash's cause.
+
 ## Exact observed configuration
 
 - Telegram `org.telegram.messenger.web`, version 13.1.1, versionCode 72379.

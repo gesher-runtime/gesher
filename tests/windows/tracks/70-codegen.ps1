@@ -219,16 +219,37 @@ if (Test-Path $jniLib) {
   # A native fault must retain its PC even when the Windows unwinder cannot
   # produce a backtrace. Each case deliberately ends its own disposable VM.
   foreach ($faultMode in 'native', 'host') {
+    $fatalEnv = @{ 'GESHER_TRACE_ELF_MAPPINGS' = '0' }
+    if ($faultMode -eq 'native') { $fatalEnv['GESHER_TRACE_ELF_MAPPINGS'] = '1' }
     $r = RunDalvikvm @("-Xbootclasspath:$bcp", $image, '-Xint', '-Xusejit:false',
-      '-cp', $codegenDex, 'gesher.FatalContext', (NoDrive (Resolve-Path $jniLib).Path), $faultMode) @{} 30
+      '-cp', $codegenDex, 'gesher.FatalContext', (NoDrive (Resolve-Path $jniLib).Path), $faultMode) $fatalEnv 30
     $registers = $r.Out -match 'rip:\s+0x(?!0{16}\b)[0-9a-fA-F]{16}\b' -and
       $r.Out -match 'rsp:\s+0x(?!0{16}\b)[0-9a-fA-F]{16}\b'
     $module = $faultMode -ne 'host' -or $r.Out -match 'pc module: [^\r\n]+\.dll\+0x[0-9a-fA-F]+'
+    $elfMapped = $r.Out -notmatch 'gesher-elf-map:'
+    if ($faultMode -eq 'native') {
+      $elfMapped = $false
+      $pc = [regex]::Match($r.Out, 'rip:\s+0x([0-9a-fA-F]{16})\b')
+      $maps = [regex]::Matches($r.Out, '(?m)^gesher-elf-map: pid=\d+ abi=x86_64 base=0x([0-9a-f]+) bias=0x([0-9a-f]+) span=0x([0-9a-f]+) name=([A-Za-z0-9_.+-]{1,128})\r?$')
+      if ($pc.Success) {
+        $rip = [Convert]::ToUInt64($pc.Groups[1].Value, 16)
+        foreach ($map in $maps) {
+          $base = [Convert]::ToUInt64($map.Groups[1].Value, 16)
+          $bias = [Convert]::ToUInt64($map.Groups[2].Value, 16)
+          $span = [Convert]::ToUInt64($map.Groups[3].Value, 16)
+          if ($map.Groups[4].Value -eq (Split-Path $jniLib -Leaf) -and
+              $rip -ge $base -and $rip -ge $bias -and ($rip - $base) -lt $span) {
+            $elfMapped = $true
+            Write-Host ('INFO  codegen: ELF fault {0}+0x{1:x}' -f $map.Groups[4].Value, ($rip - $bias))
+          }
+        }
+      }
+    }
     $expectedFault = $r.Out -match 'Fatal signal 11 \(SIGSEGV\), code 1 \(SEGV_MAPERR\) fault addr (?:0x)?0*308\b'
     $startupError = $r.Out -match 'Exception in thread|UnsatisfiedLinkError|Could not find main class|JNI DETECTED ERROR IN APPLICATION'
     if (!$r.TimedOut -and $r.Exit -eq 1 -and !$startupError -and
         $r.Out.Contains("FatalContext entering $faultMode") -and
-        $expectedFault -and $registers -and $module -and
+        $expectedFault -and $registers -and $module -and $elfMapped -and
         !$r.Out.Contains('Unknown architecture/word size/OS')) {
       Write-Host "PASS  codegen: native fatal context ($faultMode PC, registers$(if ($faultMode -eq 'host') { ', PE module offset' }))"
     } else {

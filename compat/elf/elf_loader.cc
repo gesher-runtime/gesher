@@ -198,6 +198,38 @@ SymbolResolver g_resolver;
 uint64_t g_load_count = 0;  // under g_mutex
 UnresolvedHandler g_unresolved_handler = nullptr;
 
+// Opt-in load-time metadata lets a later raw fatal PC be resolved offline.
+// Do not call FindAddress from a fault handler: the interrupted thread may
+// already hold g_mutex. No process memory, arguments or app payload is logged.
+void TraceMapping(const Library& lib) {
+  static const bool enabled = [] {
+    const char* value = std::getenv("GESHER_TRACE_ELF_MAPPINGS");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+  }();
+  if (!enabled) return;
+  const char* basename = lib.name.c_str();
+  for (const char* p = basename; *p != '\0'; ++p) {
+    if (*p == '/' || *p == '\\') basename = p + 1;
+  }
+  char name[129];
+  size_t length = 0;
+  while (basename[length] != '\0' && length < sizeof(name) - 1) {
+    unsigned char c = basename[length];
+    name[length++] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                       (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '+' || c == '-')
+                        ? c : '_';
+  }
+  if (length == 0) name[length++] = '_';
+  name[length] = '\0';
+  std::fprintf(stderr,
+               "gesher-elf-map: pid=%lu abi=%s base=0x%llx bias=0x%llx span=0x%llx name=%s\n",
+               GetCurrentProcessId(), lib.is_aarch64 ? "arm64-v8a" : "x86_64",
+               static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(lib.base)),
+               static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(lib.load_bias)),
+               static_cast<unsigned long long>(lib.map_size), name);
+  std::fflush(stderr);  // initializers/IFUNC resolvers can fault before load returns
+}
+
 // --- stubs for unresolved function imports ---------------------------------
 
 // Called by a stub, System V, with the symbol's name.
@@ -1050,6 +1082,7 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
     return nullptr;
   }
   ParseDynamic(lib, data);
+  TraceMapping(*lib);
 
   size_t executable_tls_size = 0;
   if (!aarch64 && options.main_executable && lib->has_interp && lib->tls.present) {
