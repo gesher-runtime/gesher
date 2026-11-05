@@ -119,6 +119,22 @@ Check 'services: HandlerThread.quit with tracing off (MessageQueue''s Perfetto c
 } @('FrameworkFixesTest: HandlerThread.quit after a message, and every PerfettoTrackEventExtra class initializes with tracing off',
   'FrameworkFixesTest all passed')
 
+# These module value classes are packaged in gesher-app.jar. Run each fixture in
+# its own bounded ART process, preserving its exit status as well as its marker.
+foreach ($fixture in @(
+  @('BluetoothValueContractTest', 'BLE settings, filters, advertisements and parcels without an adapter'),
+  @('MediaStoreContractTest', 'media collections, resolver forwarding and unavailable-provider handling'),
+  @('NetworkRequestValueContractTest', 'DHCP, L2CAP, DNS-SD and network request filters and parcels'),
+  @('NetworkValueContractTest', 'MAC, static routes, IP and proxy value contracts')
+)) {
+  $valueOut = FixesRun ($dvmFixes + "gesher.services.$($fixture[0])") 45
+  $valueCode = $LASTEXITCODE
+  Check "services: $($fixture[1])" {
+    $global:LASTEXITCODE = $valueCode
+    $valueOut
+  } @("$($fixture[0]) all passed:")
+}
+
 # org.apache.http.legacy (external/apache-http), a shared library apps name in
 # <uses-library>, not on the boot class path: laid out as gesher-app.ps1 installs it
 # ($ANDROID_ROOT/framework and etc/permissions, the declaration Gesher ships), in a

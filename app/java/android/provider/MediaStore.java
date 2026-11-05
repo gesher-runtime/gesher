@@ -540,10 +540,9 @@ public final class MediaStore {
             }
             public static final Bitmap getBitmap(ContentResolver cr, Uri url)
                     throws FileNotFoundException, IOException {
-                InputStream input = cr.openInputStream(url);
-                Bitmap bitmap = BitmapFactory.decodeStream(input);
-                input.close();
-                return bitmap;
+                try (InputStream input = cr.openInputStream(url)) {
+                    return BitmapFactory.decodeStream(input);
+                }
             }
             public static final String insertImage(ContentResolver cr, String imagePath,
                     String name, String description) throws FileNotFoundException {
@@ -567,6 +566,7 @@ public final class MediaStore {
                 values.put(MediaColumns.DATE_MODIFIED, now / 1000);
                 values.put(MediaColumns.IS_PENDING, 1);
                 final Uri uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+                if (uri == null) return null;
                 try {
                     try (OutputStream out = cr.openOutputStream(uri)) {
                         source.compress(Bitmap.CompressFormat.JPEG, 90, out);
@@ -577,7 +577,11 @@ public final class MediaStore {
                     return uri.toString();
                 } catch (Exception e) {
                     Log.w(TAG, "Failed to insert image", e);
-                    cr.delete(uri, null, null);
+                    try {
+                        cr.delete(uri, null, null);
+                    } catch (Exception cleanupError) {
+                        Log.w(TAG, "Failed to remove incomplete image", cleanupError);
+                    }
                     return null;
                 }
             }

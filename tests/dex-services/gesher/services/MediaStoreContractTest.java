@@ -9,10 +9,12 @@ import android.content.ContextWrapper;
 import android.content.IContentProvider;
 import android.content.pm.ApplicationInfo;
 import android.database.MatrixCursor;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.MediaStore;
 
+import java.io.FileNotFoundException;
 import java.lang.reflect.Proxy;
 
 /** Pure contracts and forwarding tested without a media provider or Binder server. */
@@ -20,6 +22,9 @@ public final class MediaStoreContractTest {
     private static int checks;
     private static Object[] call;
     private static String method;
+    private static Uri insertedUri;
+    private static int deleteCalls;
+    private static boolean missingInputStream;
     private static void check(boolean condition, String name) {
         if (!condition) throw new AssertionError(name);
         checks++;
@@ -38,7 +43,7 @@ public final class MediaStoreContractTest {
         @Override public boolean releaseUnstableProvider(IContentProvider p) { return true; }
         @Override public void unstableProviderDied(IContentProvider p) {}
     }
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         System.loadLibrary("android_runtime");
         uri(MediaStore.Audio.Albums.getContentUri("external_primary"), "content://media/external_primary/audio/albums");
         uri(MediaStore.Audio.Artists.Albums.getContentUri("internal", 42), "content://media/internal/audio/artists/42/albums");
@@ -73,6 +78,15 @@ public final class MediaStoreContractTest {
                     method = called.getName(); call = values;
                     if (method.equals("query")) return new MatrixCursor(new String[]{"_id"});
                     if (method.equals("update")) return 1;
+                    if (method.equals("insert")) return insertedUri;
+                    if (method.equals("openAssetFile")) {
+                        if (missingInputStream) return null;
+                        throw new FileNotFoundException("provider unavailable");
+                    }
+                    if (method.equals("delete")) {
+                        deleteCalls++;
+                        throw new IllegalStateException("provider unavailable during cleanup");
+                    }
                     throw new AssertionError("Unexpected resolver call: " + method);
                 });
         Resolver resolver = new Resolver(target);
@@ -89,6 +103,14 @@ public final class MediaStoreContractTest {
         check(MediaStore.Audio.Playlists.Members.moveItem(resolver, 5, 2, 8), "playlist update result");
         uri((Uri)call[0], "content://media/external/audio/playlists/5/members/2?move=true");
         check(method.equals("update") && ((ContentValues)call[1]).getAsInteger("play_order") == 8, "playlist update order");
+        check(MediaStore.Images.Media.insertImage(resolver, (Bitmap)null, "image", null) == null
+                && method.equals("insert") && deleteCalls == 0, "failed insertion does not use a null URI");
+        insertedUri = Uri.parse("content://media/external/images/media/99");
+        check(MediaStore.Images.Media.insertImage(resolver, (Bitmap)null, "image", null) == null
+                && deleteCalls == 1, "failed image write tolerates unavailable cleanup provider");
+        missingInputStream = true;
+        check(MediaStore.Images.Media.getBitmap(resolver, original) == null,
+                "provider death may return a null input stream");
         System.out.println("MediaStoreContractTest all passed: " + checks);
     }
 }
