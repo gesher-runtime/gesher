@@ -9,6 +9,21 @@ spec.loader.exec_module(audit)
 
 
 class JniEvidenceTests(unittest.TestCase):
+    def test_reviewed_alternate_registration_is_source_evidence(self):
+        locations = [{'path': 'compat/framework/memory_file.cc', 'line': 7}]
+        symbol = 'register_android_os_MemoryFile'
+        result = audit.jni_finding({
+            'symbol': symbol, 'local_symbol_references': [],
+            'local_registration_aliases': [{
+                'symbol': audit.REGISTRATION_ALIASES[symbol],
+                'source_references': locations,
+            }],
+            'aosp_source': {'path': 'AndroidRuntime.cpp', 'line': 1},
+        })
+        self.assertEqual(result['status'], 'implemented_unverified')
+        self.assertEqual(result['evidence'], locations)
+        self.assertNotIn('negative_search_scope', result)
+
     def test_new_local_registration_removes_stale_missing_claim(self):
         locations = [{'path': 'compat/framework/memory_file.cc', 'line': 14}]
         result = audit.jni_finding({

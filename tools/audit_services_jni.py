@@ -15,6 +15,15 @@ import re
 import subprocess
 
 
+# Reviewed alternate names in android_runtime.cc, not a heuristic name match.
+REGISTRATION_ALIASES = {
+    'register_android_net_LocalSocketImpl': 'register_gesher_LocalSocketImpl',
+    'register_android_util_MemoryIntArray': 'register_gesher_MemoryIntArray',
+    'register_android_os_MemoryFile': 'register_gesher_MemoryFile',
+    'register_android_security_Scrypt': 'register_gesher_Scrypt',
+}
+
+
 def mask(text):
     return re.sub(r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
                   lambda m: ''.join('\n' if c == '\n' else ' ' for c in m[0]), text)
@@ -49,7 +58,9 @@ def arity(args):
 
 def jni_finding(row):
     """Keep source references distinct from absence and runtime acceptance."""
-    found = row['local_symbol_references']
+    found = list(row['local_symbol_references'])
+    for alias in row.get('local_registration_aliases', []):
+        found.extend(alias['source_references'])
     result = {
         'id': 'jni-' + row['symbol'].removeprefix('register_'),
         'status': 'implemented_unverified' if found else 'missing',
@@ -196,9 +207,15 @@ def main():
     for m in re.finditer(r'REG_JNI\((register_\w+)\)', upstream_text):
         symbol = m[1]
         found = local_symbols.get(symbol, [])
+        alias = REGISTRATION_ALIASES.get(symbol)
+        aliases = ([{'symbol': alias, 'source_references': local_symbols[alias]}]
+                   if alias and local_symbols.get(alias) else [])
         registration_rows.append({'symbol': symbol, 'aosp_source': ref(upstream, upstream_text, m.start()),
                                   'local_symbol_references': found,
-                                  'status': 'registration_symbol_referenced_unverified' if found else 'upstream_registration_not_referenced_by_local_surface',
+                                  'local_registration_aliases': aliases,
+                                  'status': ('registration_symbol_referenced_unverified' if found else
+                                             'alternate_registration_symbol_referenced_unverified' if aliases else
+                                             'upstream_registration_not_referenced_by_local_surface'),
                                   'caveat': 'Textual registration-symbol comparison, not a reachable-call graph; aliases and alternate implementations need review.'})
 
     standins = []

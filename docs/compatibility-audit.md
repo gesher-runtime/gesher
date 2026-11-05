@@ -93,6 +93,13 @@ inventories now provide broader measurements, described below.
 
 ## Systematic inventories independent of app selection
 
+`audit_services_jni.py` distinguishes exact upstream registration names from
+four reviewed `register_gesher_*` aliases for MemoryFile, MemoryIntArray,
+LocalSocketImpl and Scrypt. A local reference clears the corresponding
+missing-source claim, but remains `implemented_unverified`: registration
+reachability and behavior require separate runtime tests. The original
+inventory counts below describe their recorded snapshot.
+
 Start at the [central compatibility map](research/systematic-compatibility-2026-11-05.md).
 It links measured reference differences, reviewed source limitations and the
 remaining behavioral/hardware requirements. Counts from different inventories
