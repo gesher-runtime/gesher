@@ -1,0 +1,41 @@
+{
+  "tag": "android-16.0.0_r4",
+  "license": "Apache-2.0 (headers retained)",
+  "files": [
+    {
+      "local_path": "app/java/android/net/DhcpInfo.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework/src/android/net/DhcpInfo.java",
+      "upstream_sha256": "57b059edbdb19c0397af4642a54c9661b86d93515e73577571a2c4f2f70e6b31",
+      "local_sha256": "3c893bc844dedb0624a8c4d721e3b9138843ad60801326ecb0783bedf0f54937"
+    },
+    {
+      "local_path": "app/java/android/net/L2capNetworkSpecifier.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework/src/android/net/L2capNetworkSpecifier.java",
+      "upstream_sha256": "4a6071181a0e57cd094db097cf496ad1dabb4c4290a1c5f89ce339a76eae9ab1",
+      "local_sha256": "011389eaa22c6ac8f3a0a3e9e399d2daf34ba00e43e4f3dff54c7a7169c9c722"
+    },
+    {
+      "local_path": "app/java/android/net/ParseException.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework/src/android/net/ParseException.java",
+      "upstream_sha256": "685e7ed6a53c541532e7e3a8928a3da99a195e283ff94345b10a047c27493fbd",
+      "local_sha256": "685e7ed6a53c541532e7e3a8928a3da99a195e283ff94345b10a047c27493fbd"
+    },
+    {
+      "local_path": "app/java/android/net/nsd/DiscoveryRequest.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework-t/src/android/net/nsd/DiscoveryRequest.java",
+      "upstream_sha256": "9c0639fc84a69fc3af28cbc19663f68e75dedac46ba08c3f5d847394181169d8",
+      "local_sha256": "3796b20ceb03c71f1d40aa1a9c36d73d4a78d497404cf66b0aa9cd9775d7065c"
+    },
+    {
+      "local_path": "app/java/android/net/nsd/AdvertisingRequest.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework-t/src/android/net/nsd/AdvertisingRequest.java",
+      "upstream_sha256": "0c4f57a2d86e3930a4fddb13a6d8c3b231fb099627c7679a2c795c95518d362a",
+      "local_sha256": "38d0bb5c6baa1f8637bbb72f086634a2452e61bec230b3f337cb8cf3327e8a1e"
+    }
+  ],
+  "adaptations": [
+    "Generated Flags annotation constants replaced by the same literal strings.",
+    "The SOURCE-only ProtocolType annotation is omitted; DiscoveryRequest inlines the identical NsdManager.checkProtocol validation because the local manager keeps this helper private.",
+    "DhcpInfo directly formats the seven original little-endian IPv4 integers instead of referencing NetworkUtils; no DNS or hardware operations are needed."
+  ]
+}

@@ -19,3 +19,13 @@ static connected, host and default routes; DNS copy ownership; IPv6 rejection;
 DHCP, direct proxy and PAC configuration. Output is retained under
 `out/stability/java-values-candidate`. This verifies value behavior, not applying
 these configurations to a Windows interface.
+
+DhcpInfo, ParseException, L2capNetworkSpecifier and the NSD DiscoveryRequest and
+AdvertisingRequest are also pinned AOSP value implementations. Their exact
+receipts and limited annotation/formatting adaptations are in
+`docs/research/aosp-network-request-values-2026-11-05.json`.
+NetworkRequestValueContractTest passed another 25 assertions: DHCP byte order,
+copy/parcel behavior; parse error fields; L2CAP wildcard matching, role/PSM
+validation and address redaction; DNS-SD service/subtype/network parcels and
+advertisement flags/TTL bounds/truncation. These types do not start discovery,
+advertise a service or create an L2CAP network. Those backends remain separate.
