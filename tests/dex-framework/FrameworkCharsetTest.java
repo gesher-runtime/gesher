@@ -1,5 +1,13 @@
 package gesher;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.Flushable;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.UTFDataFormatException;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -56,6 +64,32 @@ public final class FrameworkCharsetTest {
         "exact capacity with terminator accepted");
   }
 
+  static void fastData() throws Exception {
+    // Real framework callers exercise the negative-size/retry path as their
+    // eight-byte buffers overflow, including temporary nonmoving allocations.
+    ByteArrayOutputStream wire = new ByteArrayOutputStream();
+    Object output = Class.forName("com.android.internal.util.ArtFastDataOutput")
+        .getConstructor(OutputStream.class, int.class).newInstance(wire, 8);
+    DataOutput writer = (DataOutput) output;
+    char[] large = new char[1024];
+    Arrays.fill(large, '\u05e9');
+    String[] values = {"", "ascii", "x\u0000y", "\ud83d\ude80", "\ud800", new String(large)};
+    writer.writeInt(0x12345678);
+    for (String value : values) writer.writeUTF(value);
+    ((Flushable) output).flush();
+    DataInput reader = (DataInput) Class.forName("com.android.internal.util.ArtFastDataInput")
+        .getConstructor(InputStream.class, int.class)
+        .newInstance(new ByteArrayInputStream(wire.toByteArray()), 8);
+    check(reader.readInt() == 0x12345678, "FastData primitive framing");
+    for (String value : values) check(value.equals(reader.readUTF()), "FastData UTF round trip");
+    char[] oversized = new char[65536];
+    Arrays.fill(oversized, 'a');
+    try {
+      writer.writeUTF(new String(oversized));
+      throw new AssertionError("oversize UTF accepted");
+    } catch (UTFDataFormatException expected) { }
+  }
+
   public static void main(String[] args) throws Exception {
     System.loadLibrary("android_runtime");
     Class<?> type = Class.forName("android.util.CharsetUtils");
@@ -90,6 +124,7 @@ public final class FrameworkCharsetTest {
       expect(IndexOutOfBoundsException.class, () -> decode.invoke(null, memory, 0, -1));
       expect(IndexOutOfBoundsException.class,
           () -> decode.invoke(null, memory, Integer.MAX_VALUE, 1));
+      fastData();
       System.out.println("FrameworkCharsetTest all passed");
     } finally {
       unsafeClass.getMethod("freeMemory", long.class).invoke(unsafe, memory);
