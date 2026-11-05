@@ -72,6 +72,7 @@ int register_android_os_MessageQueue(JNIEnv* env);
 int register_gesher_MemoryFile(JNIEnv* env);
 int register_gesher_MemoryIntArray(JNIEnv* env);
 int register_gesher_Scrypt(JNIEnv* env);
+int register_gesher_LocalSocketImpl(JNIEnv* env);
 int register_android_os_Parcel(JNIEnv* env);
 int register_android_os_ServiceManagerNative(JNIEnv* env);
 int register_android_os_SystemClock(JNIEnv* env);
@@ -818,6 +819,7 @@ static const struct {
     {"gesher_MemoryFile", "android/os/MemoryFile", register_gesher_MemoryFile},
     {"gesher_MemoryIntArray", "android/util/MemoryIntArray", register_gesher_MemoryIntArray},
     {"gesher_Scrypt", "android/security/Scrypt", register_gesher_Scrypt},
+    {"gesher_LocalSocketImpl", "android/net/LocalSocketImpl", register_gesher_LocalSocketImpl},
     // FileObserver over gesher-base's inotify (docs/posix.md).
     {"android_os_FileObserver", "android/os/FileObserver", register_android_os_FileObserver},
     {"android_os_Binder", "com/android/internal/os/BinderInternal", ::register_android_os_Binder},
