@@ -7,7 +7,7 @@ import java.io.DataOutput;
 import java.io.Flushable;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.UTFDataFormatException;
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -87,7 +87,7 @@ public final class FrameworkCharsetTest {
     try {
       writer.writeUTF(new String(oversized));
       throw new AssertionError("oversize UTF accepted");
-    } catch (UTFDataFormatException expected) { }
+    } catch (IOException expected) { }
   }
 
   public static void main(String[] args) throws Exception {

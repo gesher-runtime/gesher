@@ -12,6 +12,12 @@ namespace {
 jbyteArray JNICALL NativeScrypt(JNIEnv* env, jobject, jbyteArray password, jbyteArray salt,
                                jint n, jint r, jint p, jint outputLength) {
     if (password == nullptr || salt == nullptr) return nullptr;
+    // NewByteArray's JNI precondition excludes negative lengths. CheckJNI
+    // aborts the process rather than raising a Java exception for a violation.
+    if (outputLength < 0) {
+        jniThrowException(env, "java/lang/NegativeArraySizeException", nullptr);
+        return nullptr;
+    }
     jbyteArray output = env->NewByteArray(outputLength);
     if (output == nullptr) return nullptr;
     // Reject signed values before converting to the unsigned crypto API.

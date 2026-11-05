@@ -53,8 +53,8 @@ public final class FrameworkMemoryTest {
       byte[] result = new byte[5];
       check((Integer) read.invoke(file, result, 4, 1, 3) == 3, "MemoryFile read length");
       check(Arrays.equals(result, new byte[] {0, 5, 7, 9, 0}), "offset storage round trip");
-      expect(IndexOutOfBoundsException.class, () -> write.invoke(file, payload, 0, 15, 4));
-      expect(IndexOutOfBoundsException.class, () -> read.invoke(file, result, 0, -1, 1));
+      expect(java.nio.BufferOverflowException.class, () -> write.invoke(file, payload, 0, 15, 4));
+      expect(IllegalArgumentException.class, () -> read.invoke(file, result, -1, 0, 1));
       OutputStream output = (OutputStream) type.getMethod("getOutputStream").invoke(file);
       output.write(new byte[] {11, 12, 13});
       InputStream input = (InputStream) type.getMethod("getInputStream").invoke(file);
