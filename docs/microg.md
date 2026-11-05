@@ -212,6 +212,14 @@ launch and never logs or stores tokens. This validates that client/scope only,
 not every application's Google Sign-In SDK, billing or Play Integrity. Google
 may reject an unregistered developer client's scope request.
 
+The manual client must be genuinely developer-signed: Google client identity
+includes a certificate digest. Its build now retains a unique local signing key
+and verifies the APK before publishing the final output. The first unsigned
+manual client registered an account but received Google's `BAD_REQUEST` during
+token issuance. See the [signed-client follow-up](research/microg-signed-client-validation-2026-11-05.json).
+Signing supplies the missing identity field; it does not itself establish that
+Google accepts a developer client or scope.
+
 ## Notification access
 
 Application notification mutation and queries authenticate the owning package.

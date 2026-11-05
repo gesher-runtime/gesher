@@ -1,0 +1,35 @@
+{
+  "scope": "Manual account client signing correction; Google token acceptance still requires user retry",
+  "observed_after_manual_login": {
+    "registered_google_account_count": 1,
+    "google_authenticator_count": 1,
+    "token_failure_public_code": "BAD_REQUEST",
+    "transport_tls_or_socket_failure_proven": false,
+    "raw_account_names_credentials_or_auth_messages_published": false
+  },
+  "original_client": {
+    "package": "com.gesher.googleaccount",
+    "signed": false,
+    "apk_sha256": "6b3e99c357a56ce2541628177c3dcc6851b2f6fc64d1be36cbc32039b931d482"
+  },
+  "updated_client": {
+    "package": "com.gesher.googleaccount",
+    "version_code": 2,
+    "apk_sha256": "04777ed100b67d80509fa536a0ed4e9c82ba0b78845ca727a369cfda70ddd641",
+    "developer_certificate_sha256": "de759e883d2680e1ecfc85e4c73b9aba626aad66a2ffa992941a69d6a3e88f68",
+    "developer_certificate_sha1": "4b63700d8325ea18c1d86df9a2429ad1b8bcd0eb",
+    "identity": "Real locally generated test-app certificate, not a Google/package override",
+    "private_key_and_password": "Kept in ignored local build output; never committed or uploaded"
+  },
+  "checks": [
+    "apksigner verifies the actual signed APK",
+    "Two builds retain the same developer certificate",
+    "Missing signing tool causes build failure and retains the preceding final APK",
+    "Before update, trusted host verified exact original code and exactly one preexisting code-bound account visibility grant",
+    "After update, trusted host verified exact new APK, own developer signer and unchanged package UID",
+    "Only preceding account visibility for the same test package was restored; no token request, token grant, owner privilege or global visibility change"
+  ],
+  "runtime": "Java jar and shared bridge unchanged from microg-login-validation-2026-11-05.json",
+  "manual_next_step": "Retry the signed client's token-verification button; Google may still reject an unregistered developer client or scope",
+  "qa": "Independent agent APPROVE for signed client and scoped update"
+}

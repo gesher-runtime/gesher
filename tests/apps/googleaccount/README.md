@@ -3,10 +3,21 @@
 Build `build.sh <out> --framework-res <apk> --framework-classes <archive> --core-classes <coremod>`.
 The normal lifecycle wrapper emits `googleaccount.apk`.
 
-This separate, unsigned developer test APK exercises public Android `AccountManager`
+This separate, developer-signed test APK exercises public Android `AccountManager`
 APIs against the installed authenticator. It never installs an authenticator or
 substitutes credentials. Nothing initiates sign-in or token requests on launch;
 the user starts each action and completes all login/consent UI manually.
+
+Set `BUILD_TOOLS_DIR` (or `APKSIGNER_JAR`) for APK signing. The build creates a
+unique local developer key under `<out>/.googleaccount-signing` and reuses it on
+subsequent builds. Keep that directory private and retain it across updates;
+`GOOGLEACCOUNT_SIGNING_DIR` can select a stable location when changing output
+directories. Never commit or upload the keystore/password. The signing identity
+is this test app's own identity; it does not impersonate Google or another app.
+Real signing supplies the certificate digest that microG sends as `client_sig`.
+An unsigned build omitted that field and received `BAD_REQUEST` in the manual
+test. Signing repairs this omission, but Google may still require registration
+or reject a particular client/scope.
 
 Step 1 uses `addAccount` so the resulting account can be visible to this client.
 This is a new account flow, not a general existing-account picker. An account
