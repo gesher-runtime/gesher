@@ -44,7 +44,14 @@ public final class FrameworkLocalSocketTest {
     Class<?> serverType = Class.forName("android.net.LocalServerSocket");
     check(type.getClassLoader() == Object.class.getClassLoader(), "real LocalSocket class");
     Object filesystem = namespace.getField("FILESYSTEM").get(null);
-    File endpoint = File.createTempFile("gs-local-", ".sock");
+    // /tmp is not a guaranteed host directory on a fresh Windows runner.
+    // The launcher supplies an owned short directory; direct runs use their
+    // disposable ANDROID_DATA directory rather than a machine-global /tmp.
+    String directoryPath = args.length == 1 ? args[0] : System.getenv("ANDROID_DATA");
+    check(directoryPath != null, "provide an endpoint directory or ANDROID_DATA");
+    File directory = new File(directoryPath);
+    check(directory.isDirectory() || directory.mkdirs(), "create endpoint directory");
+    File endpoint = File.createTempFile("gsl-", ".sock", directory);
     check(endpoint.delete(), "remove endpoint placeholder");
     Object localAddress = address.getConstructor(String.class, namespace)
         .newInstance(endpoint.getAbsolutePath(), filesystem);

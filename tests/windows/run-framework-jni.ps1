@@ -30,6 +30,19 @@ foreach ($class in $Classes) {
   $start.WorkingDirectory = Split-Path $RuntimeExe
   $vmArgs = @("-Xbootclasspath:$bcp", "-Ximage:$(AndroidPath "$BootDir/framework/boot.art")",
               '-Xint', '-Xusejit:false', '-cp', (AndroidPath $TestDex), $class)
+  $socketDirectory = $null
+  if ($class -eq 'gesher.FrameworkLocalSocketTest') {
+    # A short, per-run endpoint avoids both absent /tmp and sun_path limits.
+    $socketDirectory = Join-Path ([IO.Path]::GetTempPath()) ('gsl-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $socketDirectory | Out-Null
+    $socketPath = $socketDirectory -replace '\\', '/'
+    if ([IO.Path]::GetPathRoot($socketDirectory) -ieq [IO.Path]::GetPathRoot($RuntimeExe)) {
+      $socketPath = $socketPath -replace '^[A-Za-z]:', ''
+    } else {
+      $socketPath = '/mnt/' + $socketPath.Substring(0, 1).ToLowerInvariant() + $socketPath.Substring(2)
+    }
+    $vmArgs += $socketPath
+  }
   $start.Arguments = ($vmArgs | ForEach-Object { '"' + $_ + '"' }) -join ' '
   $start.UseShellExecute = $false
   $start.CreateNoWindow = $true
@@ -62,5 +75,6 @@ foreach ($class in $Classes) {
     $failures++
   }
   $process.Dispose()
+  if ($socketDirectory -and $passed) { Remove-Item -LiteralPath $socketDirectory }
 }
 exit ([int]($failures -ne 0))
