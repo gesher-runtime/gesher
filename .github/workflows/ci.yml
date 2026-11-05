@@ -48,6 +48,7 @@ jobs:
           python3 -m unittest discover -s tools/tests -p 'test_compatibility_*.py'
           python3 -m unittest discover -s tools/tests -p 'test_*api_inventory.py'
           python3 -m unittest discover -s tools/tests -p test_java_member_inventory.py
+          python3 -m unittest discover -s tools/tests -p test_audit_services_jni.py
 
   build-framework-assets:
     needs: [artifact-preflight, source-identity]

@@ -47,6 +47,24 @@ def arity(args):
     return result
 
 
+def jni_finding(row):
+    """Keep source references distinct from absence and runtime acceptance."""
+    found = row['local_symbol_references']
+    result = {
+        'id': 'jni-' + row['symbol'].removeprefix('register_'),
+        'status': 'implemented_unverified' if found else 'missing',
+        'priority': 2, 'family': row['symbol'],
+        'risk': ('Local registration-symbol references exist; reachability, registration order and '
+                 'behavior require separate build/runtime evidence.' if found else
+                 'No local registration-symbol reference was found. Verify aliases and alternate '
+                 'implementations before treating this as a runtime gap.'),
+        'evidence': found if found else row['aosp_source'],
+    }
+    if not found:
+        result['negative_search_scope'] = ['compat/**/*.cc', 'compat/**/*.cpp', 'compat/**/*.h']
+    return result
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--framework-jar', type=pathlib.Path, required=True)
@@ -242,18 +260,20 @@ def main():
          'evidence': anchor('app/java/com/gesher/server/ActivityTaskManagerService.java', '// ACTION_CHOOSER')},
         {'id': 'deviceidle-source-installed-skew', 'status': 'source_installed_skew', 'priority': 1,
          'family': 'DeviceIdleManager constructor and battery-exemption queries',
-         'risk': 'Current source registers deviceidle with the entire IDeviceIdleController.Default. Parent confirmed installed PhoneDoctor constructor NPE from absent service. Source presence does not prove installation or semantics.',
+         'risk': 'Current source registers a desktop DeviceIdleController. The installed PhoneDoctor constructor NPE was from an absent service. Candidate source presence does not prove installation or complete device-idle semantics.',
          'evidence': anchor('app/java/com/gesher/server/Services.java', 'services.put("deviceidle"')},
         {'id': 'local-binder-injection', 'status': 'implemented_unverified', 'priority': 2,
          'family': 'Camera/accessibility app-local ServiceManager cache interception',
          'risk': 'Do not classify these as absent solely from central service keys. Cross-process, death/reconnect and per-method contracts still need explicit validation.',
          'evidence': [anchor('app/java/com/gesher/server/CameraService.java', 'public static void installInProcess()'),
                       anchor('app/java/com/gesher/app/accessibility/AccessibilityService.java', 'public static void installInProcess()')]},
-        {'id': 'enterprise-shortcuts-usage', 'status': 'missing', 'priority': 2,
+        {'id': 'enterprise-shortcuts-usage', 'status': 'implemented_unverified', 'priority': 2,
          'family': 'Device policy, shortcuts, usage stats and DropBox implementations',
-         'risk': 'Empty Default subclasses are placeholders; source comments about device state are not additional implementation.',
-         'classes': ['DevicePolicyService','ShortcutService','UsageStatsService','DropBoxManagerService'],
-         'evidence': anchor('app/java/com/gesher/server/DeviceServices.java', 'class DevicePolicyService extends')},
+         'risk': 'Desktop policy, shortcut and usage implementations provide selected contracts; inherited Default methods and the DropBox placeholder remain separately unverified.',
+         'classes': ['UnmanagedDevicePolicyService','DesktopShortcutService','DesktopUsageStatsService','DropBoxManagerService'],
+         'evidence': [anchor('app/java/com/gesher/server/UnmanagedDevicePolicyService.java', 'extends IDevicePolicyManager.Default'),
+                      anchor('app/java/com/gesher/server/DesktopShortcutService.java', 'extends IShortcutService.Default'),
+                      anchor('app/java/com/gesher/server/DesktopUsageStatsService.java', 'extends IUsageStatsManager.Default')]},
         {'id': 'cellular-unsupported', 'status': 'intentional_default', 'priority': 3,
          'family': 'Cellular/SIM/subscription services',
          'risk': 'Telephony/phone subscriber/subscription/registry services use Default subclasses. A desktop without cellular hardware should report unavailable capabilities consistently; missing callback semantics remain separate.',
@@ -279,9 +299,7 @@ def main():
     for symbol in ('register_android_net_LocalSocketImpl','register_android_util_MemoryIntArray',
                    'register_android_os_MemoryFile','register_android_security_Scrypt'):
         row = next(r for r in registration_rows if r['symbol'] == symbol)
-        reviewed.append({'id': 'jni-'+symbol.removeprefix('register_'), 'status': 'missing', 'priority': 2,
-                         'family': symbol, 'risk': 'No local registration-symbol reference or selected source mention was found. Native class/API availability is separately audited; verify aliases before implementation.',
-                         'evidence': row['aosp_source'], 'negative_search_scope': ['compat','cmake','app/java']})
+        reviewed.append(jni_finding(row))
 
     for finding in reviewed:
         evidence = finding['evidence']
