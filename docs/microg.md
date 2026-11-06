@@ -323,6 +323,99 @@ grant revocation between observer callbacks. All 36 checks passed on the same
 source-built Java runtime used for the final real FCM cases.
 A complete Windows CI/installer pass remains separate from these targeted results.
 
+## Ordinary APK install sessions and declared component processes
+
+Services, activities, providers and broadcasts now select the process declared in
+their manifest. Sibling processes retain the same authenticated package identity
+and assigned UID. Provider installation and publication are restricted to the
+provider's declared process. This corrected the original Play Store's startup
+component-graph cast failure; reaching its login screen did not establish catalog
+or download support.
+
+PackageInstaller supports caller-owned ordinary full-APK sessions. The server
+checks the current installer code identity, bounds staged files, verifies and
+freezes the complete APK set, and reuses the existing Installer signature/update
+checks. Every commit requires a fresh default-No host installation dialog.
+Caller flags and claimed package names cannot supply silent-install authority.
+Stale installer sessions release their quota, and callback registrations use
+Binder identity and death cleanup.
+
+The Android FileBridge protocol uses a small server-only Windows named-pipe JNI
+library. Its actual pipe handles survive Binder transfer. A process-local socket
+descriptor did not. Cancellation uses repeated nonblocking CancelIoEx calls while
+the writer owns descriptor closure, so abandon does not wait for the client's
+descriptor to close.
+
+The [recorded prototype trial](research/microg-package-installer-validation-2026-11-06.json)
+passed 46 offline checks, real two-process APK write/fsync/close/readback, native
+role denials, and 20 retained-descriptor abandon/cleanup cycles. The user then
+manually approved one signed synthetic APK: the real server returned success
+through an authenticated callback and published identical APK bytes. These
+measurements identify the frozen prototype artifacts and predate integration on
+the updated main baseline. They do not establish an actual Play Store download.
+
+`tests/windows/run-package-installer.ps1` is the noninteractive regression runner.
+It runs the native transport checks and actual Binder stream, cancellation and
+unprivileged-role tests in a fresh disposable device. Its client never commits,
+so CI cannot open an installation consent dialog. Track 52 invokes it through
+the offline microG security runner. The native test executable is a CI fixture
+and is omitted from the installed product.
+
+Inherited/split-removal installs, APEX, rollback, data loaders, multi-package
+sessions, transfers, uninstall and the raw write(PFD) API remain unsupported.
+Installer-source attribution remains unknown. An attached application success
+trial and a complete Play Store catalog/download/install trial remain separate.
+
+## Account selection
+
+`AccountManager.newChooseAccountIntent` routes its exact Android platform component
+to a server-owned Windows chooser. The source activity, application thread, Binder
+PID and installed package must match. Account names remain in the trusted dialog
+until the user explicitly selects a row, including when there is just one row.
+Cancel is the default. Source death, finishing or package replacement invalidates
+the request. Filters and explicit authenticator visibility denials remain effective;
+an unset client policy can be offered for manual selection without exposing it in
+ordinary account enumeration.
+
+Selection persists user-managed visibility for the original caller's code identity
+and returns only Android's account-name/type result. It grants no credential scope
+or authenticated status. Add requires an explicit user action and account-type
+choice, uses the installed authenticator's validated activity/session, and returns
+to account selection without granting visibility automatically. Missing native UI,
+invalid responses and unsupported requests cancel instead of synthesizing an account.
+
+An activity starting another package can pass its captured window mode to that
+package's fresh process. Its application thread, PID and package must match its
+activity token. A tokenless Context start instead requires that same process to
+own a front, non-hidden activity that is launching, resuming or resumed.
+Explicit host choices for the target, including headless and hidden,
+take precedence. Inheritance is transient start metadata and does not change the
+host policy map or later background service/provider starts. A process started
+implicitly headless by a background service can install graphics for a new approved
+activity without restarting that service. A typed lifecycle capability rechecks the
+target PID/UID, token, installed code, lifetime and current explicit policy; only
+that activity's roots and popups may appear on the desktop. Unapproved roots remain
+offscreen. Existing headless ViewRoots are preserved; upgrading those roots requires
+a separate relaunch and is not attempted here.
+
+## Ordered broadcasts
+
+Ordered broadcasts keep their initial result, receiver priority and required/excluded
+permissions. Both registered and manifest receivers explicitly acknowledge completion,
+including `goAsync`, before their results reach the next receiver. Abort skips the
+remaining receivers while retaining the final caller callback; `FLAG_RECEIVER_NO_ABORT`
+prevents that skip. The original sender process and installed code receive one final
+callback even when every recipient was filtered out. Dead or replaced sender code
+does not receive a callback intended for its old generation.
+
+Each process has one acknowledged receiver slot shared with ordinary manifest work.
+Independent chains can progress in other processes. Receiver and total deadlines,
+queue/payload limits and process-generation retirement prevent an old timed-out finish
+from consuming another delivery. Mutable sticky and app-op-checked acknowledged
+broadcasts remain explicitly unsupported. The canonical offline regression exercises
+real two-APK framework dispatch, delayed `goAsync`, a separate manifest process and
+the caller's final receiver after garbage collection.
+
 ## Current limits and trust boundary
 
 - Only Android user 0 exists. There are no work profiles or cross-user account,

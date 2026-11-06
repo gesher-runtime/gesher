@@ -26,6 +26,7 @@ import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.os.SystemClock;
 import android.util.DisplayMetrics;
 
 import org.xmlpull.v1.XmlPullParser;
@@ -111,6 +112,11 @@ public final class AccountManagerService extends IAccountManager.Default {
     private String mUnclaimedLegacy;
     private final AccountSessions mSessions = new AccountSessions();
     private final Map<ApkPackage, String> mCodeIdentities = new WeakHashMap<>();
+    /** Server-local test seam; never exposed through Binder or process settings. */
+    private interface VisibilityNotifier {
+        void changed(String packageName, String codeIdentity, boolean visibleTransition);
+    }
+    private VisibilityNotifier mVisibilityNotifier = this::notifyVisibility;
 
     private static final class CachedToken {
         final String value;
@@ -175,6 +181,136 @@ public final class AccountManagerService extends IAccountManager.Default {
             mAccounts.put(DEFAULT_ACCOUNT, dummy);
         }
         load();
+        if (am != null) am.setAccountManager(this);
+    }
+
+    /** Called only after ATM authenticated the source activity, PID and application thread. */
+    ChooserSession prepareChooser(String packageName, int uid, int pid, Intent request) {
+        mCallers.requirePackage(packageName);
+        String code = packageIdentity(packageName);
+        if (code == null) throw new SecurityException("Unknown chooser client code");
+        return new ChooserSession(new Caller(packageName, code, false, uid, pid), request);
+    }
+
+    final class ChooserSession {
+        private final Caller client;
+        private final Set<Account> allowedAccounts;
+        private final Set<String> allowedTypes;
+        private final Bundle addOptions;
+        private final String authTokenType;
+        private final String[] requiredFeatures;
+        private final Runnable persist;
+        private final Map<Account, Entry> displayed = new LinkedHashMap<>();
+
+        ChooserSession(Caller client, Intent request) {
+            this(client, request, AccountManagerService.this::save);
+        }
+        ChooserSession(Caller client, Intent request, Runnable persist) {
+            this.client = client;
+            this.persist = persist;
+            ArrayList<Account> accounts = request.getParcelableArrayListExtra("allowableAccounts", Account.class);
+            String[] types = request.getStringArrayExtra("allowableAccountTypes");
+            String[] features = request.getStringArrayExtra("addAccountRequiredFeatures");
+            requiredFeatures = features == null ? null : features.clone();
+            if (accounts != null && accounts.size() > 1024 || types != null && types.length > 64
+                    || requiredFeatures != null && requiredFeatures.length > 128) {
+                throw new IllegalArgumentException("Account chooser filters too large");
+            }
+            allowedAccounts = accounts == null ? null : new HashSet<>(accounts);
+            allowedTypes = types == null ? null : new HashSet<>(java.util.Arrays.asList(types));
+            addOptions = options(client, request.getBundleExtra("addAccountOptions"));
+            authTokenType = request.getStringExtra("authTokenType");
+        }
+        String packageName() { return client.name; }
+        boolean active() { synchronized (AccountManagerService.this) { return callerUnchanged(client); } }
+        private boolean permittedType(String type) { return allowedTypes == null || allowedTypes.contains(type); }
+        private boolean eligible(Account account, Entry entry) {
+            if (entry == null || entry.owner == null || entry.ownerIdentity == null
+                    || !entry.ownerIdentity.equals(packageIdentity(entry.owner))
+                    || !permittedType(account.type)
+                    || allowedAccounts != null && !allowedAccounts.contains(account)) return false;
+            Authenticator owner = authenticator(account.type);
+            if (owner == null || !entry.owner.equals(owner.service.getPackageName())) return false;
+            // Unset policy is a manual-choice candidate, while an explicit owner deny is final.
+            return owns(client, entry) || !Integer.valueOf(AccountManager.VISIBILITY_NOT_VISIBLE)
+                    .equals(entry.visibility.get(client.key()));
+        }
+        List<Account> accounts() {
+            synchronized (AccountManagerService.this) {
+                displayed.clear();
+                if (callerUnchanged(client)) for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
+                    if (eligible(item.getKey(), item.getValue())) displayed.put(item.getKey(), item.getValue());
+                }
+                return new ArrayList<>(displayed.keySet());
+            }
+        }
+        List<String> types() {
+            synchronized (AccountManagerService.this) {
+                List<String> result = new ArrayList<>();
+                if (callerUnchanged(client)) for (Authenticator a : authenticators()) {
+                    if (permittedType(a.type) && !result.contains(a.type)) result.add(a.type);
+                }
+                return result;
+            }
+        }
+        Intent select(Account account, AccountChooser.Lifetime lifetime) {
+            synchronized (AccountManagerService.this) {
+                Entry entry = displayed.get(account);
+                if (!callerUnchanged(client) || entry == null || mAccounts.get(account) != entry
+                        || !eligible(account, entry)) return null;
+                Integer previous = entry.visibility.get(client.key());
+                int previousEffective = visibility(client, entry);
+                boolean[] applied = {false};
+                boolean committed = lifetime.whileActive(() -> {
+                    if (!callerUnchanged(client) || !eligible(account, entry)) return;
+                    beginMutation();
+                    entry.visibility.put(client.key(), AccountManager.VISIBILITY_USER_MANAGED_VISIBLE);
+                    persist.run();
+                    applied[0] = true;
+                });
+                if (!committed || !applied[0] || !Integer.valueOf(AccountManager.VISIBILITY_USER_MANAGED_VISIBLE)
+                        .equals(entry.visibility.get(client.key()))) return null;
+                visibilityCommitted(client, previous, previousEffective,
+                        AccountManager.VISIBILITY_USER_MANAGED_VISIBLE, visibility(client, entry));
+                return new Intent().putExtra(AccountManager.KEY_ACCOUNT_NAME, account.name)
+                        .putExtra(AccountManager.KEY_ACCOUNT_TYPE, account.type);
+            }
+        }
+        boolean add(String type, AccountChooser.Launcher launcher, java.util.function.BooleanSupplier active) {
+            if (!types().contains(type) || !active.getAsBoolean()) return false;
+            Authenticator owner = authenticator(type);
+            if (owner == null) return false;
+            String ownerCode = packageIdentity(owner.service.getPackageName());
+            Answer answer = call(owner, (auth, response) -> auth.addAccount(response, type,
+                    authTokenType, requiredFeatures, new Bundle(addOptions)));
+            CountDownLatch done = new CountDownLatch(1);
+            java.util.concurrent.atomic.AtomicBoolean success = new java.util.concurrent.atomic.AtomicBoolean();
+            java.util.concurrent.atomic.AtomicBoolean launched = new java.util.concurrent.atomic.AtomicBoolean();
+            answer.deliverSession(new IAccountManagerResponse.Stub() {
+                @Override public void onResult(Bundle result) {
+                    if (!active.getAsBoolean()) { done.countDown(); return; }
+                    Intent intent = result.getParcelable(AccountManager.KEY_INTENT, Intent.class);
+                    if (intent == null) { success.set(true); done.countDown(); }
+                    else if (!launched.compareAndSet(false, true)
+                            || !launcher.launch(intent, () -> { success.set(true); done.countDown(); })) done.countDown();
+                }
+                @Override public void onError(int code, String message) { done.countDown(); }
+            }, value -> {
+                Authenticator current = authenticator(type);
+                if (!active.getAsBoolean() || !callerUnchanged(client) || current == null
+                        || !current.service.equals(owner.service) || ownerCode == null
+                        || !ownerCode.equals(packageIdentity(owner.service.getPackageName()))) return null;
+                // Unlike addAccount, adding through the chooser grants no visibility.
+                return validatedResult(owner, value, null);
+            });
+            try {
+                long end = SystemClock.elapsedRealtime() + TimeUnit.MINUTES.toMillis(10);
+                while (!done.await(250, TimeUnit.MILLISECONDS)) {
+                    if (!active.getAsBoolean() || SystemClock.elapsedRealtime() >= end) return false;
+                }
+                return success.get() && active.getAsBoolean();
+            } catch (InterruptedException e) { Thread.currentThread().interrupt(); return false; }
+        }
     }
 
     private Caller caller(String claimed) {
@@ -345,13 +481,73 @@ public final class AccountManagerService extends IAccountManager.Default {
         Entry e = mAccounts.get(account); requireOwner(caller(null), e);
         validateVisibility(value);
         String key = targetKey(packageName);
+        Caller target = targetCaller(packageName);
+        Integer previous = e.visibility.get(key);
+        int previousEffective = visibility(target, e);
         beginMutation();
         e.visibility.put(key, value);
         if (value != AccountManager.VISIBILITY_VISIBLE && value != AccountManager.VISIBILITY_USER_MANAGED_VISIBLE) {
             for (Set<String> grants : e.tokenGrants.values()) grants.remove(key);
             e.customTokens.keySet().removeIf(k -> k.startsWith(key + "\u0000"));
         }
-        save(); return true;
+        save();
+        visibilityCommitted(target, previous, previousEffective, value, visibility(target, e));
+        return true;
+    }
+
+    private static boolean visibleValue(int value) {
+        return value == AccountManager.VISIBILITY_VISIBLE
+                || value == AccountManager.VISIBILITY_USER_MANAGED_VISIBLE;
+    }
+
+    /** A failed persistence operation never invalidates or announces a new grant. */
+    private void visibilityCommitted(Caller target, Integer previous, int previousEffective,
+            int value, int currentEffective) {
+        invalidateAccountListCache();
+        if (previous == null || previous.intValue() != value) {
+            mVisibilityNotifier.changed(target.name, target.code,
+                    visibleValue(previousEffective) != visibleValue(currentEffective));
+        }
+    }
+
+    private void invalidateAccountListCache() {
+        try { AccountManager.invalidateLocalAccountsDataCaches(); }
+        catch (RuntimeException e) {
+            SystemServer.log(TAG + "account cache invalidation unavailable: " + e.getClass().getSimpleName());
+        }
+    }
+
+    private void invalidateAccountUserDataCache() {
+        try { AccountManager.invalidateLocalAccountUserDataCaches(); }
+        catch (RuntimeException e) {
+            SystemServer.log(TAG + "account user-data cache invalidation unavailable: " + e.getClass().getSimpleName());
+        }
+    }
+
+    private void notifyVisibility(String packageName, String codeIdentity, boolean visibleTransition) {
+        if (mAm == null) return;
+        // Deliver after releasing the account/lifetime locks. No account name or
+        // credential travels in either event, including on visibility revocation.
+        mCalls.execute(() -> {
+            synchronized (AccountManagerService.this) {
+                if (!codeIdentity.equals(packageIdentity(packageName))) return;
+            }
+            long token = Binder.clearCallingIdentity();
+            try {
+                if (visibleTransition) {
+                    Intent visible = new Intent(AccountManager.ACTION_VISIBLE_ACCOUNTS_CHANGED)
+                            .setPackage(packageName).addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY);
+                    mAm.broadcastIntentWithFeature(null, null, visible, null, null, 0, null,
+                            null, null, null, null, -1, null, false, false, 0);
+                }
+                Intent changed = new Intent(AccountManager.LOGIN_ACCOUNTS_CHANGED_ACTION)
+                        .setPackage(packageName);
+                mAm.broadcastIntentWithFeature(null, null, changed, null, null, 0, null,
+                        null, null, null, null, -1, null, false, false, 0);
+            } catch (RuntimeException e) {
+                SystemServer.log(TAG + "account visibility notification unavailable: " + e.getClass().getSimpleName());
+            } finally { Binder.restoreCallingIdentity(token); }
+        });
     }
 
     @Override
@@ -663,7 +859,9 @@ public final class AccountManagerService extends IAccountManager.Default {
         Entry e = mAccounts.get(account); requireOwner(caller(null), e);
         if (key == null) throw new IllegalArgumentException("key");
         beginMutation();
-        if (value == null) e.data.remove(key); else e.data.put(key, value); save();
+        if (value == null) e.data.remove(key); else e.data.put(key, value);
+        save();
+        invalidateAccountUserDataCache();
     }
 
     @Override
@@ -1306,7 +1504,13 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private void changed(Account account, boolean removed, Entry e) {
-        if (mAm == null || e == null) return;
+        if (e == null) return;
+        // Once account caches have a nonce, later add/remove/rename operations
+        // must invalidate them too; otherwise enabling the cache would make a
+        // subsequent account change stale despite a correctly delivered event.
+        invalidateAccountListCache();
+        invalidateAccountUserDataCache();
+        if (mAm == null) return;
         Set<String> recipients = new HashSet<>(); recipients.add(e.owner);
         synchronized (this) {
             for (Map.Entry<String, Integer> grant : e.visibility.entrySet()) {

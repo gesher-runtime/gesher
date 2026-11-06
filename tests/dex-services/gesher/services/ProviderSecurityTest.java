@@ -103,7 +103,9 @@ public final class ProviderSecurityTest {
         Object senderProcess = construct(processType,
                 new Class<?>[] {atmType, int.class, IApplicationThread.class}, atm, 31702, thread());
         field(processType, "packageName").set(ownerProcess, ownerName);
+        field(processType, "processName").set(ownerProcess, provider.processName);
         field(processType, "packageName").set(senderProcess, senderName);
+        field(processType, "processName").set(senderProcess, senderName);
         ((List<Object>) field(atmType, "mProcesses").get(atm)).addAll(Arrays.asList(ownerProcess, senderProcess));
         Method get = method(cpType, "getContentProvider", processType, String.class, String.class);
         Method publish = method(cpType, "publishContentProviders", processType, List.class);
@@ -134,6 +136,7 @@ public final class ProviderSecurityTest {
         Object otherOwner = construct(processType,
                 new Class<?>[] {atmType, int.class, IApplicationThread.class}, atm, 31703, thread());
         field(processType, "packageName").set(otherOwner, ownerName);
+        field(processType, "processName").set(otherOwner, provider.processName);
         ((List<Object>) field(atmType, "mProcesses").get(atm)).add(otherOwner);
         denied(() -> publish.invoke(providers, otherOwner, List.of(holder(provider))));
         System.out.println("ProviderSecurityTest: local sibling, canonical metadata and publication/authority/UID barriers passed");

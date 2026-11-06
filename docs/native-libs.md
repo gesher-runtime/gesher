@@ -54,8 +54,9 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
   keeps no user `%fs` base across kernel entry (the `fsbase` probe), so the
   loader **rewrites the object's `%fs` accesses at load time**
   (`compat/elf/fs_rewrite.cc`, with the x86-64 length decoder
-  `compat/elf/x86_decode.cc`): it decodes the code over the FDE ranges of
-  `.eh_frame_hdr` and turns `%fs:0x28` (the stack guard) into `%gs:0x30`
+  `compat/elf/x86_decode.cc`): it decodes executable sections with FDE
+  boundary anchors from `.eh_frame_hdr` (whose coverage can be partial)
+  and turns `%fs:0x28` (the stack guard) into `%gs:0x30`
   (`NT_TIB.Self`) and `%fs:0` (the thread pointer) into a `TlsAlloc` slot of
   the TEB, keeping instruction lengths; register-based `%fs:(%reg)` accesses
   (initial-exec TLS) are replayed in out-of-line stubs; anything else becomes

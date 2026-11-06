@@ -1,5 +1,6 @@
 # Offline microG security integration on the actual Windows ART runtime.
-# No Google APK is installed or executed, and no native consent dialog is driven.
+# No Google APK is installed or executed, and no actual user's consent dialog is driven.
+# Native chooser controls use synthetic labels on owned private desktops, never SwitchDesktop.
 # Optional GmsCoreApk is parsed only by offline metadata/policy tests.
 # Example (a complete assembled runtime, with the two test APKs and services-tests.dex):
 #   powershell -File tests/windows/run-microg-security.ps1 -Dir out/windows-x64
@@ -38,14 +39,14 @@ if ($RequireMetadataSuites -and -not $GmsCoreApk) {
 foreach ($file in 'dalvikvm.exe', 'binderd.exe', 'servicemanager.exe',
         'core-oj.jar', 'core-libart.jar', 'core-icu4j.jar', 'framework.jar',
         'gesher-app.jar', 'framework-res.apk', 'build.prop', 'framework/x86_64/boot.art',
-        'libgesher_account_crypto.so') {
+        'libgesher_account_crypto.so', 'libgesher_install_pipe.so') {
     if (-not (Test-Path -LiteralPath (Join-Path $Dir $file) -PathType Leaf)) {
         throw "Missing runtime input: $file"
     }
 }
 $icu = @(Get-ChildItem -LiteralPath $Dir -Filter 'icudt*l.dat' -File)
 if ($icu.Count -ne 1) { throw 'The runtime must contain exactly one icudt*l.dat.' }
-foreach ($file in 'v2only.apk', 'rotated.apk', 'unsigned.apk',
+foreach ($file in 'v2only.apk', 'rotated.apk', 'unsigned.apk', 'process-metadata.apk',
         '../identity-fixtures/old.apk', '../identity-fixtures/rotated-no-data.apk',
         '../identity-fixtures/rotated-no-auth.apk') {
     if (-not (Test-Path -LiteralPath (Join-Path $SigningFixtures $file) -PathType Leaf)) {
@@ -294,8 +295,31 @@ try {
         ForEach-Object { AndroidPath "$Dir/$_.jar" }) -join ':'
     $script:vm = @("-Xbootclasspath:$bcp", "-Ximage:$(AndroidPath "$Dir/framework/boot.art")", '-Xint', '-Xusejit:false')
     $fixtures = AndroidPath $SigningFixtures
+    # Separate empty device; actual Binder descriptor transfer and cancellation.
+    # The CI client never commits, so no native installation dialog can appear.
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-package-installer.ps1" `
+        -Dir $Dir -ServicesDex $ServicesDex -SigningFixtures $SigningFixtures -EvidenceDir (Join-Path $EvidenceDir 'installer')
+    if ($LASTEXITCODE -ne 0) { throw 'Actual Binder package-installer regression failed.' }
+    Passed 'package installer actual Binder transport and cancellation'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-account-chooser-native.ps1" `
+        -RuntimeDir $Dir -OutputRoot (Join-Path $EvidenceDir 'chooser')
+    if ($LASTEXITCODE -ne 0) { throw 'Native account chooser regression failed.' }
+    Passed 'native account chooser private-desktop JNI and role integration'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-window-promotion.ps1" `
+        -RuntimeDir $Dir -FixtureDir $Dir -OutputRoot (Join-Path $EvidenceDir 'graphics')
+    if ($LASTEXITCODE -ne 0) { throw 'Actual service-first activity graphics regression failed.' }
+    Passed 'service-first activity graphics and selective visibility on private desktops'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-ordered-broadcast.ps1" `
+        -RuntimeDir $Dir -AppsDir $Dir -OutputRoot (Join-Path $EvidenceDir 'ordered')
+    if ($LASTEXITCODE -ne 0) { throw 'Actual ordered broadcast goAsync/result callback regression failed.' }
+    Passed 'ordered broadcast real goAsync, manifest propagation and retained final callback'
     Guest 'SigningTest' @($fixtures)
     Guest 'InstallerSigningTest' @($fixtures)
+    Guest 'PackageInstallerSessionTest' @($fixtures) 'PackageInstallerSessionTest all passed:'
+    $processMetadata = AndroidPath (Join-Path $SigningFixtures 'process-metadata.apk')
+    Guest 'ComponentProcessTest' @($processMetadata, 'gesher.test.processmeta.SecondaryService') 'ComponentProcessTest all passed:'
+    Guest 'BroadcastLifecycleTest' @($processMetadata)
+    Guest 'OrderedBroadcastTest' @((AndroidPath $DevsvcApk)) 'OrderedBroadcastTest all passed:'
     Guest 'SigningRotationTest' @($fixtures, (AndroidPath (Join-Path $SigningFixtures '../identity-fixtures')))
     Guest 'IdentitySecurityTest' @($fixtures)
     $durableUids = AndroidPath (Join-Path $run 'uid-persistence')
@@ -303,6 +327,25 @@ try {
     Guest 'IdentitySecurityTest' @('uid-read', $durableUids) 'existing UID registry reopened without reassignment' 'uid-read'
     Guest 'AccountSecurityTest' @()
     Guest 'AccountSecurityTest' @('authenticator-client', (AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountSecurityTest all passed' 'authenticator-client-delegation'
+    Guest 'AccountChooserTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountChooserTest all passed:'
+    Guest 'AccountVisibilityNotificationTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountVisibilityNotificationTest all passed:'
+    Guest 'SharedLibraryNamesTest' @() 'SharedLibraryNamesTest all passed:'
+    Guest 'SdkSandboxUnsupportedTest' @() 'SdkSandboxUnsupportedTest all passed:'
+    Guest 'NetworkStatsUnavailableTest' @() 'NetworkStatsUnavailableTest all passed:'
+    Guest 'RollbackUnsupportedTest' @((AndroidPath (Join-Path $SigningFixtures 'unsigned.apk'))) 'RollbackUnsupportedTest all passed:'
+    Guest 'WindowModeInheritanceTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'WindowModeInheritanceTest all passed:'
+    Guest 'ActivityWindowPromotionTest' @((AndroidPath $DevsvcApk)) 'ActivityWindowPromotionTest all passed:'
+    $windowRoleUid = $env:GESHER_UID
+    $windowRoleBinderUid = $env:GESHER_BINDER_UID
+    try {
+        $env:GESHER_UID = '12345'; $env:GESHER_BINDER_UID = '12345'
+        $windowRole = InvokeVm 'window-item-client-denied' @('-cp', (AndroidPath $ServicesDex),
+            'gesher.services.ActivityWindowPromotionTest', 'client-denied')
+        RequireOutput 'ordinary client cannot authenticate window lifecycle metadata' $windowRole @(
+            'ActivityWindowPromotionTest client role denied')
+    } finally {
+        $env:GESHER_UID = $windowRoleUid; $env:GESHER_BINDER_UID = $windowRoleBinderUid
+    }
     Guest 'AccountSecurityTest' @('crypto-denied') 'loaded native protect/unprotect reject non-server role without plaintext fallback' 'native-crypto-denied'
     Guest 'NotificationSecurityTest' @((AndroidPath $ProbeApk), (AndroidPath $DevsvcApk))
     Guest 'SystemBindingCleanupTest' @((AndroidPath $DevsvcApk))
@@ -319,7 +362,6 @@ try {
         Guest 'MicrogAuthenticatorTest' @((AndroidPath $GmsCoreApk), (AndroidPath $DevsvcApk))
         Guest 'PermissionRequestsTest' $metadata 'async grant/deny, result mapping and replacement race passed'
         Guest 'DispatchSecurityTest' (@($fixtures) + $metadata)
-        Guest 'BroadcastLifecycleTest' $metadata
         Guest 'ProviderSecurityTest' (@($fixtures) + $metadata)
         # MicrogTest above also exercises ServiceRecoveryTest with parsed GmsCore metadata.
     } else {

@@ -74,14 +74,19 @@ public final class ServiceRecoveryTest {
         Object services = construct(servicesClass, new Class<?>[]{atmClass, pmClass, notificationsClass},
                 atm, pm, construct(notificationsClass, new Class<?>[0]));
         String pkg = (String) apkClass.getField("packageName").get(apk);
+        ComponentName component = new ComponentName(pkg, "org.microg.gms.gcm.McsService");
+        ServiceInfo declared = (ServiceInfo) pmClass.getMethod("getServiceInfo", ComponentName.class,
+                long.class, int.class).invoke(pm, component, 0L, 0);
+        require(declared != null, "service metadata fixture missing");
         List<Object> processes = (List<Object>) field(atmClass, "mProcesses").get(atm);
         AppThread oldThread = new AppThread();
         Object oldProcess = construct(processClass,
                 new Class<?>[]{atmClass, int.class, IApplicationThread.class}, atm, 999_991, oldThread);
         field(processClass, "packageName").set(oldProcess, pkg);
+        field(processClass, "processName").set(oldProcess, declared.processName);
         field(processClass, "ready").setBoolean(oldProcess, true);
         synchronized (atm) { processes.add(oldProcess); }
-        Intent start = new Intent().setComponent(new ComponentName(pkg, "org.microg.gms.gcm.McsService"))
+        Intent start = new Intent().setComponent(component)
                 .putExtra("recovery-probe", "preserved");
         method(servicesClass, "startService", IApplicationThread.class, Intent.class,
                 String.class, boolean.class, String.class).invoke(services, null, start, null, false, pkg);
@@ -99,6 +104,7 @@ public final class ServiceRecoveryTest {
         Object nextProcess = construct(processClass,
                 new Class<?>[]{atmClass, int.class, IApplicationThread.class}, atm, 999_992, nextThread);
         field(processClass, "packageName").set(nextProcess, pkg);
+        field(processClass, "processName").set(nextProcess, declared.processName);
         field(processClass, "ready").setBoolean(nextProcess, true);
         synchronized (atm) { processes.add(nextProcess); }
         boolean restarted = nextThread.started.await(1800, TimeUnit.MILLISECONDS);

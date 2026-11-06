@@ -61,10 +61,20 @@ public final class SharedLibraryRegistry {
         if (usesNone(app)) {
             return SharedLibraryGraph.forSystem(Collections.emptyList(), app.getClassLoaderName());
         }
-        String root = System.getenv("ANDROID_ROOT");
-        SharedLibraryRegistry registry = read(new File(root == null || root.isEmpty() ? "/system" : root));
+        SharedLibraryRegistry registry = readSystem();
         return registry.resolve(registry.withImplicit(app.getTargetSdkVersion(), app.getUsesLibraries(),
                 app.getUsesOptionalLibraries()), app.getUsesOptionalLibraries(), app.getClassLoaderName());
+    }
+
+    /** The same installed declarations used when resolving an application's libraries. */
+    public static SharedLibraryRegistry readSystem() throws IOException {
+        String root = System.getenv("ANDROID_ROOT");
+        return read(new File(root == null || root.isEmpty() ? "/system" : root));
+    }
+
+    /** A fresh snapshot; absent files and SDK-excluded declarations were filtered by read. */
+    public String[] names() {
+        return entries.keySet().toArray(new String[0]);
     }
 
     /**

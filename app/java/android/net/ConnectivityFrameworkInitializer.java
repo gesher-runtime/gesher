@@ -5,6 +5,7 @@
 package android.net;
 
 import android.app.SystemServiceRegistry;
+import android.app.usage.NetworkStatsManager;
 import android.content.Context;
 import android.net.nsd.NsdManager;
 
@@ -15,7 +16,8 @@ import android.net.nsd.NsdManager;
  * connectivity service that describes Windows' networks (docs/network.md), and
  * {@link NsdManager} as {@code servicediscovery} (on a device the Tiramisu initializer
  * registers it; that one is a no-op here); the module's other services are not
- * registered.
+ * registered. Network usage queries have an unavailable-accounting wrapper;
+ * no Android UID-based measurements are supplied by Windows.
  */
 public final class ConnectivityFrameworkInitializer {
     private ConnectivityFrameworkInitializer() {
@@ -30,5 +32,9 @@ public final class ConnectivityFrameworkInitializer {
                 NsdManager.class,
                 (SystemServiceRegistry.ContextAwareServiceProducerWithoutBinder<NsdManager>)
                         NsdManager::new);
+        SystemServiceRegistry.registerContextAwareService(Context.NETWORK_STATS_SERVICE,
+                NetworkStatsManager.class,
+                (SystemServiceRegistry.ContextAwareServiceProducerWithoutBinder<NetworkStatsManager>)
+                        NetworkStatsManager::new);
     }
 }

@@ -35,6 +35,14 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     public PermissionPolicy permissions() { return mPermissions; }
 
+    @Override public String[] getSystemSharedLibraryNames() {
+        try {
+            return SharedLibraryRegistry.readSystem().names();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Cannot read system shared libraries", e);
+        }
+    }
+
     @Override public boolean isProtectedBroadcast(String action) {
         return mPermissions.isProtectedBroadcast(action);
     }
@@ -452,7 +460,11 @@ public final class PackageManagerService extends IPackageManager.Default {
         return new android.content.pm.InstallSourceInfo(null, null, null, null);
     }
 
-    private final PackageInstallerService mInstallerService = new PackageInstallerService();
+    private final PackageInstallerService mInstallerService = new PackageInstallerService(this);
+
+    void attachInstaller(ActivityTaskManagerService atm, Installer installer) {
+        mInstallerService.attach(atm, installer);
+    }
     private final android.content.pm.IPackageInstaller mInstaller =
             StandIn.of(android.content.pm.IPackageInstaller.class, mInstallerService).asInterface();
 

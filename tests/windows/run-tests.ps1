@@ -165,6 +165,10 @@ Check 'framework CharsetUtils: UTF bytes, capacity and buffer ownership' {
 # the Application and the Activity go through their callbacks.
 Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework')
 Copy-Item "$Dir/build.prop" (Join-Path $root 'system')
+Check 'framework SQLiteRawStatement: 64-bit pointers, bindings, UTF16 text and bounds' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpFramework" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/framework-tests.dex") gesher.FrameworkSQLiteRawStatementTest
+} @('FrameworkSQLiteRawStatementTest all passed')
 $bcpApp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
   -Xint '-Xusejit:false' com.gesher.app.Main (NoDrive "$Dir/lifecycle.apk") 2>&1 | Out-String

@@ -47,6 +47,7 @@ CloseApplicationsFilter=*.exe,*.chm
 [Files]
 Source: "{#BuildDir}\dalvikvm.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libgesher_account_crypto.so"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\libgesher_install_pipe.so"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libgesher_webview_bridge.so"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\core-oj.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\core-libart.jar"; DestDir: "{app}"; Flags: ignoreversion

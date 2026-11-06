@@ -1,0 +1,86 @@
+{
+  "status": "real_binder_commit_and_manual_consent_passed_not_adopted",
+  "date": "2026-11-06",
+  "source": {
+    "root": "out/microg-package-installer-cancel-source",
+    "files_verified": 293,
+    "manifest": "out/microg-package-installer/cancel-source-manifest.json",
+    "manifest_sha256": "ed43cb3b4dd000ec6216e3793379109a5848c497986cfba47ebaa64ece3d45d0",
+    "baseline": "Frozen A461 trial source containing validated process, unmanaged policy, and Wi-Fi prerequisites"
+  },
+  "artifact_sha256": {
+    "out/microg-package-installer-ipc/pipe-cancel/runtime/gesher-app.jar": "f90c08b4de0edabb0ab2232014edea60a3b145f5a40b7d22d677408432ad79fc",
+    "out/microg-package-installer-ipc/pipe-cancel/runtime/libgesher_install_pipe.so": "fed1fe7716833eb2fc76f421ea57293e9c9ca940ba17f4a0595931602c3c4de9",
+    "out/microg-package-installer-ipc/pipe-cancel/runtime/dalvikvm.exe": "6fbc8a815ab3bb5eecd07994dd26e0426c068a38ffce26ee0bf62e73e09cdadf",
+    "out/microg-package-installer-ipc/pipe-cancel/runtime/libgesher_account_crypto.so": "59bee712e151d177c145379f42dda1edf1916a6354e3042fc3a42bb8937c6a30",
+    "out/microg-package-installer-cancel-source/buildfinal/services-tests.dex": "146dea3033d6941cc3ff200f452e1c5c72529b514d283b3b63616f205b549efc",
+    "out/native-install-pipe/input/install_pipe.c": "8cef4dc6316a7c239f85d4952926d404ee29dcdb1631cd307c9a8cedd87d2a22",
+    "out/native-install-pipe/input/jni.h": "99e64ebbe749e6df284f852f11b3c73f6ea97baf15120428f40f887fe0616e61",
+    "out/native-install-pipe/input/jni_md.h": "c9d8269215e2d617d338f9162b8e8955da817ac24ff2c1b5c3a3bd7d438ba419",
+    "out/microg-package-installer/final-commit-probe-source.java": "4364bcfa0b002e69f3135c3edb55c19b894caafd0f12f8edce7796bbfb42089b",
+    "out/microg-package-installer/final-commit-probe.dex": "e1267a1c3d767b190a03fbb7d8df8edcbb4a82102b8fd7d1c743d9651ed5fc38",
+    "out/microg-package-installer/PackageInstallerCallerProbe.java": "68d70d6e537a4efc3d871b68b11e6a3e8d849670a7952092f29a7ad95a0569e4",
+    "out/microg-package-installer/caller-dex/classes.dex": "22efe225f5c4aa1630f14a0dcee2ef835611bb88ef54eca9f2ecc424c4ff2afe",
+    "out/microg-package-installer-source/tests/dex-services/fixtures/v2only.apk": "6bf0e3c99f6ec4fbf8719818c40727ff8765c17c6627ae383cc72692547fdb33"
+  },
+  "proof": {
+    "offline_sessions": {
+      "checks": 46,
+      "stdout": "out/microg-package-installer-cancel-tests/sessions.out.log",
+      "scope": "Server-local caller/consent/transport injection and real signed synthetic Installer publication"
+    },
+    "socket_negative": {
+      "stdout": "out/microg-package-installer-ipc/socket/same-client-probe.out.log",
+      "result": "Expected IOException; process-local socket CRT descriptors do not survive Binder transfer"
+    },
+    "named_pipe_positive": {
+      "stdout": "out/microg-package-installer-ipc/pipe-cancel/final-stream-probe.out.log",
+      "result": "Real remote framework Session write/fsync/close/readback preserves the APK bytes"
+    },
+    "blocked_close_control": {
+      "stdout": "out/microg-package-installer-ipc/pipe/close-control-probe.out.log",
+      "abandon_ms": 1904,
+      "result": "Old close waited until watchdog closed retained client FD"
+    },
+    "cancellation": {
+      "stdout": "out/microg-package-installer-ipc/pipe-cancel/retained-client-cancel-probe.out.log",
+      "rounds": 20,
+      "maximum_abandon_ms": 6,
+      "client_fd_stayed_open_until_after_staging_cleanup": true
+    },
+    "unprivileged_client": {
+      "stdout": "out/microg-package-installer-ipc/pipe-cancel/final-untrusted-caller-probe.out.log",
+      "uid": 12345,
+      "attached_application": false,
+      "native_create_and_cancel_denied": true,
+      "claimed_system_store_fixture_and_enumeration_denied": true
+    },
+    "manual_commit": {
+      "stdout": "out/microg-package-installer-ipc/pipe-cancel/commit-probe.out.log",
+      "user_clicked_yes": true,
+      "source_of_user_action": "Parent observed and reported the user manually clicked Yes",
+      "status": 0,
+      "authenticated_server_pid_callback": true,
+      "installed_package": "gesher.test.rotated",
+      "version_code": 0,
+      "published_apk_bytes_equal": true,
+      "client_authority": "Explicit host shell UID 2000, owner android, disposable device"
+    }
+  },
+  "implementation": [
+    "Caller-owned ordinary full-APK sessions with fresh host consent for every commit",
+    "Verified immutable unique APK snapshots reuse Installer signature/split/update checks",
+    "Bounded FileBridge protocol over a server-only Windows duplex named pipe",
+    "Asynchronous repeated CancelIoEx, descriptor-lock ownership, worker closure and cleanup retry",
+    "Stale owner sessions release quota; callbacks use Binder identity and death cleanup"
+  ],
+  "limits": [
+    "No actual Google Play catalog download/install has been demonstrated",
+    "Real session success uses host shell authority; an attached application caller trial is still separate",
+    "No personal profile, account, credentials, Google requests, APK application code execution, or normal-install update",
+    "Advanced inherit/APEX/data-loader/multi-package/rollback/transfer/uninstall and raw write(PFD) APIs remain unsupported",
+    "Installer source attribution remains unknown; no fake Play-origin metadata",
+    "Interpreter reuses the previously validated 6FBC broader cached baseline; the new pipe helper is separately built",
+    "Final independent QA and integration on the updated main baseline remain parent tasks"
+  ]
+}

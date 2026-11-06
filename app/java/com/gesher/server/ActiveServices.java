@@ -482,7 +482,7 @@ final class ActiveServices {
 
     /** ActiveServices.bringUpServiceLocked: create, then the starts and bind requests. */
     private void bringUp(ServiceRecord r) {
-        mAtm.withProcess(r.info.packageName, "service " + r, app -> {
+        mAtm.withProcess(r.info.packageName, r.info.processName, "service " + r, app -> {
             boolean create;
             List<ServiceStartArgs> starts;
             List<IntentBindRecord> binds = new ArrayList<>();

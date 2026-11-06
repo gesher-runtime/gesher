@@ -18,6 +18,7 @@ import android.app.servertransaction.ActivityResultItem;
 import android.app.servertransaction.ClientTransaction;
 import android.app.servertransaction.ConfigurationChangeItem;
 import android.app.servertransaction.DestroyActivityItem;
+import android.app.servertransaction.GesherActivityWindowModeItem;
 import android.app.servertransaction.LaunchActivityItem;
 import android.app.servertransaction.NewIntentItem;
 import android.app.servertransaction.PauseActivityItem;
@@ -38,6 +39,7 @@ import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.Parcel;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import android.util.MergedConfiguration;
@@ -127,6 +129,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final int uid;
         final IApplicationThread thread;
         String packageName;  // null until a start binds it to a package
+        String processName;  // the manifest component process, within this package UID
+        /** Actual mode captured for this server-spawned process, never an Intent extra. */
+        String windowMode;
+        boolean windowModeExplicit;
         boolean ready;       // finishAttachApplication came
         boolean exiting;
         boolean spawned;     // started by this server (startProcess), not by itself
@@ -143,7 +149,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
         @Override
         public String toString() {
-            return "process " + pid + (packageName != null ? " (" + packageName + ")" : "");
+            return "process " + pid + (packageName != null ? " (" + processName + ")" : "");
         }
     }
 
@@ -167,6 +173,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         State state = State.INITIALIZING;
         boolean idle;
         boolean finishing;
+        /** Only an authenticated server chooser may consume its authenticator UI result. */
+        Runnable accountCompletion;
+        String inheritedWindowMode;
+        String activityWindowMode;
+        IBinder activityWindowGrant;
         /** The activity in front, being paused before this one launches. */
         ActivityRecord waitingFor;
         /** Paused because another activity came in front: stopped once one is idle. */
@@ -244,6 +255,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private final List<PendingWork> mPendingWork = new ArrayList<>();
     private final PermissionRequests mPermissionRequests;
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
+    private final ThreadLocal<Runnable> mAccountCompletion = new ThreadLocal<>();
+    private final Map<IBinder, Object> mAccountChoosers = new HashMap<>();
+    private AccountManagerService mAccounts;
+    private AccountChooser.Dialog mAccountDialog; // server-local synthetic fixture injection
     private int mNextTaskId = 1;
     /** Tasks moved to the back (their window minimized): none of their activities is visible. */
     private final java.util.Set<Integer> mHiddenTasks = new java.util.HashSet<>();
@@ -276,25 +291,52 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** Starts a process for a package and returns its pid (ProcessList's zygote request). */
     interface ProcessStarter {
         int start(String packageName, long startSeq, int targetSdkVersion) throws Exception;
+
+        default int start(String packageName, String processName, long startSeq,
+                int targetSdkVersion) throws Exception {
+            if (!packageName.equals(processName)) {
+                throw new IllegalStateException("Process starter does not support " + processName);
+            }
+            return start(packageName, startSeq, targetSdkVersion);
+        }
+        default int start(String packageName, String processName, long startSeq,
+                int targetSdkVersion, String windowMode) throws Exception {
+            return start(packageName, processName, startSeq, targetSdkVersion);
+        }
     }
 
     private static final class PendingProcess {
         final String packageName;
+        final String processName;
         final String reason;
+        final String windowMode;
+        final boolean windowModeExplicit;
         int pid;
 
-        PendingProcess(String packageName, String reason) {
+        PendingProcess(String packageName, String processName, String reason) {
+            this(packageName, processName, reason, null);
+        }
+        PendingProcess(String packageName, String processName, String reason, String windowMode) {
+            this(packageName, processName, reason, windowMode, false);
+        }
+        PendingProcess(String packageName, String processName, String reason, String windowMode,
+                boolean windowModeExplicit) {
             this.packageName = packageName;
+            this.processName = processName;
             this.reason = reason;
+            this.windowMode = windowMode;
+            this.windowModeExplicit = windowModeExplicit;
         }
     }
 
     private static final class PendingWork {
         final String packageName;
+        final String processName;
         final Consumer<ProcessRecord> work;
 
-        PendingWork(String packageName, Consumer<ProcessRecord> work) {
+        PendingWork(String packageName, String processName, Consumer<ProcessRecord> work) {
             this.packageName = packageName;
+            this.processName = processName;
             this.work = work;
         }
     }
@@ -306,6 +348,96 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     void setActivityManager(ActivityManagerService am) {
         mAm = am;
+    }
+
+    void setAccountManager(AccountManagerService accounts) { mAccounts = accounts; }
+
+    private int chooseAccount(IApplicationThread caller, String callingPackage, Intent intent,
+            IBinder token, String resultWho, int requestCode) {
+        mAm.callers().requirePackage(callingPackage);
+        final ActivityRecord source;
+        final ProcessRecord process;
+        final ApkPackage code;
+        final Object reservation = new Object();
+        synchronized (this) {
+            source = forToken(token);
+            if (source == null || source.app == null || source.app.thread == null
+                    || source.finishing || source.state == State.DESTROYED || source.app.exiting
+                    || !mProcesses.contains(source.app) || caller == null || requestCode < 0
+                    || source.app.pid != Binder.getCallingPid()
+                    || !caller.asBinder().equals(source.app.thread.asBinder())
+                    || !source.info.packageName.equals(callingPackage)
+                    || !source.info.packageName.equals(source.app.packageName)) {
+                throw new SecurityException("Account chooser must come from its own live activity");
+            }
+            if (mAccounts == null) return ActivityManager.START_INTENT_NOT_RESOLVED;
+            if (mAccountChoosers.containsKey(token) || mAccountChoosers.size() >= 16) {
+                throw new IllegalStateException("Account chooser already pending");
+            }
+            process = source.app; code = mPm.get(callingPackage);
+            if (code == null) throw new SecurityException("Unknown chooser package");
+            mAccountChoosers.put(token, reservation);
+        }
+        AccountChooser.Lifetime lifetime = new AccountChooser.Lifetime() {
+            private boolean valid() {
+                return mAccountChoosers.get(token) == reservation && source.app == process
+                        && !process.exiting && mProcesses.contains(process)
+                        && !source.finishing && source.state != State.DESTROYED
+                        && mActivities.contains(source) && mPm.get(callingPackage) == code;
+            }
+            @Override public boolean active() { synchronized (ActivityTaskManagerService.this) { return valid(); } }
+            @Override public boolean whileActive(Runnable action) {
+                synchronized (ActivityTaskManagerService.this) {
+                    if (!valid()) return false;
+                    action.run(); return true;
+                }
+            }
+        };
+        try {
+            AccountManagerService.ChooserSession session = mAccounts.prepareChooser(callingPackage,
+                    process.uid, process.pid, new Intent(intent));
+            AccountChooser.Result result = data -> {
+                boolean deliver;
+                synchronized (ActivityTaskManagerService.this) {
+                    deliver = lifetime.active();
+                    mAccountChoosers.remove(token, reservation);
+                }
+                if (deliver) deliverResult(source, resultWho, requestCode, data == null
+                        ? android.app.Activity.RESULT_CANCELED : android.app.Activity.RESULT_OK, data);
+            };
+            AccountChooser.Launcher launcher = (authIntent, finished) -> {
+                if (authIntent.getComponent() == null || !lifetime.active()) return false;
+                // The authenticator's response validator supplies this explicit component;
+                // caller extras cannot access this server-private launch capability.
+                String previous = mVerifiedCreator.get();
+                Runnable oldCompletion = mAccountCompletion.get();
+                mVerifiedCreator.set(authIntent.getComponent().getPackageName());
+                mAccountCompletion.set(finished);
+                long identity = Binder.clearCallingIdentity();
+                try {
+                    return start(null, new Intent(authIntent), authIntent.getType(), callingPackage,
+                            token, null, -1, new ActivityRecord[1]) == ActivityManager.START_SUCCESS;
+                } finally {
+                    Binder.restoreCallingIdentity(identity);
+                    if (previous == null) mVerifiedCreator.remove(); else mVerifiedCreator.set(previous);
+                    if (oldCompletion == null) mAccountCompletion.remove(); else mAccountCompletion.set(oldCompletion);
+                }
+            };
+            AccountChooser chooser = mAccountDialog == null
+                    ? new AccountChooser(session, lifetime, launcher, result)
+                    : new AccountChooser(session, lifetime, launcher, result, mAccountDialog);
+            chooser.start();
+            return ActivityManager.START_SUCCESS;
+        } catch (RuntimeException | Error e) {
+            synchronized (this) { mAccountChoosers.remove(token, reservation); }
+            throw e;
+        }
+    }
+
+    private static void accountActivityFinished(ActivityRecord record) {
+        Runnable completion = record.accountCompletion;
+        record.accountCompletion = null;
+        if (completion != null) completion.run();
     }
 
     /** Lets the server start app processes on demand ({@link #startProcess}). */
@@ -566,10 +698,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             return requestPermissions(caller, callingPackage, intent, resultToToken,
                     resultWho, requestCode);
         }
+        if (AccountChooser.handles(intent)) {
+            return chooseAccount(caller, callingPackage, intent, resultToToken, resultWho, requestCode);
+        }
         // ACTION_CHOOSER ("open with", "share via"): the device has no ChooserActivity, so the
         // choice is the first target, as a chooser with one option starts it at once; an
         // http(s) VIEW goes on to the Windows browser below.
-        if (intent != null && Intent.ACTION_CHOOSER.equals(intent.getAction())) {
+        if (mAccountCompletion.get() == null && intent != null && Intent.ACTION_CHOOSER.equals(intent.getAction())) {
             Intent target = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class);
             if (target != null && !Intent.ACTION_CHOOSER.equals(target.getAction())) {
                 target = new Intent(target);
@@ -675,14 +810,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ProcessRecord bind = null;
         boolean launchNow = false;
         boolean needProcess = false;
+        String sourceWindowMode = null;
         List<ActivityRecord> reconfigure = new ArrayList<>();
         synchronized (this) {
+            sourceWindowMode = sourceWindowMode(caller, callingPackage, source, callingPid,
+                    resultToToken == null, info.packageName,
+                    componentProcess(info.packageName, info.processName));
             int taskId = launchTaskId >= 0 && topOf(launchTaskId) != null ? launchTaskId
                     : source != null && (launchFlags & Intent.FLAG_ACTIVITY_NEW_TASK) == 0
                     ? source.taskId : mNextTaskId++;
             ActivityRecord top = topOf(taskId);
-            boolean singleTop = info.launchMode == ActivityInfo.LAUNCH_SINGLE_TOP
-                    || (launchFlags & Intent.FLAG_ACTIVITY_SINGLE_TOP) != 0;
+            boolean singleTop = mAccountCompletion.get() == null
+                    && (info.launchMode == ActivityInfo.LAUNCH_SINGLE_TOP
+                    || (launchFlags & Intent.FLAG_ACTIVITY_SINGLE_TOP) != 0);
             ActivityRecord below = (launchFlags & Intent.FLAG_ACTIVITY_CLEAR_TOP) != 0
                     && singleTop ? belowInTask(taskId, launch.getComponent()) : null;
             if (top != null && top.app != null && top.component().equals(launch.getComponent())
@@ -706,6 +846,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 ActivityRecord resultRecord = requestCode >= 0 ? source : null;
                 r = new ActivityRecord(info, launch, taskId, callingPid, callingPackage,
                         resultRecord, resultWho, requestCode);
+                r.accountCompletion = mAccountCompletion.get();
+                r.inheritedWindowMode = sourceWindowMode;
                 r.translucent = translucent;
                 // A start in a task moved to the back brings it to the front.
                 mHiddenTasks.remove(taskId);
@@ -722,11 +864,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         }
                     }
                 }
-                ProcessRecord app = processFor(info.packageName);
+                ProcessRecord app = processFor(info.packageName, componentProcess(info.packageName, info.processName));
                 if (app == null) {
                     app = unassignedProcess(callingPid);
                     if (app != null) {
-                        assignPackage(app, info.packageName);
+                        assignPackage(app, info.packageName, componentProcess(info.packageName, info.processName));
                         bind = app;
                     }
                 }
@@ -766,7 +908,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 + (r.resultTo != null ? ", result to " + r.resultTo.name() + " (request "
                         + r.requestCode + ")" : ""));
         if (bind != null) bindApplication(bind);
-        if (needProcess) startProcess(info.packageName, "activity " + r.name());
+        if (needProcess) startProcess(info.packageName, componentProcess(info.packageName, info.processName),
+                "activity " + r.name(), sourceWindowMode);
         if (pause != null) pause(pause, false);
         if (launchNow) realStartActivity(r);
         for (ActivityRecord a : reconfigure) ensureConfiguration(a);
@@ -776,6 +919,69 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     private static String callerName(String callingPackage, int callingPid) {
         return callingPackage != null ? callingPackage : "pid " + callingPid;
+    }
+
+    /** Caller activity authority for mode inheritance only. Guarded by this. */
+    private String sourceWindowMode(IApplicationThread caller, String packageName,
+            ActivityRecord source, int callingPid, boolean noSourceToken,
+            String targetPackage, String targetProcess) {
+        if (source == null && noSourceToken && caller != null && packageName != null) {
+            ProcessRecord process = processByPid(callingPid);
+            if (process == null || process.exiting || process.thread == null
+                    || !packageName.equals(process.packageName)
+                    || !caller.asBinder().equals(process.thread.asBinder())) {
+                traceActivityMode(source, process, noSourceToken, false, false, null,
+                        targetPackage, targetProcess);
+                return null;
+            }
+            // Context/Application.startActivity has no result token. Its app must
+            // currently own the front activity of a non-hidden task. A service or
+            // provider process with no foreground/launching activity cannot inherit.
+            for (int i = mActivities.size() - 1; i >= 0; i--) {
+                ActivityRecord candidate = mActivities.get(i);
+                if (candidate.app != process || candidate.finishing
+                        || !packageName.equals(candidate.info.packageName)
+                        || mHiddenTasks.contains(candidate.taskId)
+                        || topOf(candidate.taskId) != candidate) continue;
+                if (candidate.state == State.LAUNCHING || candidate.state == State.RESUMING
+                        || candidate.state == State.RESUMED) {
+                    source = candidate;
+                    break;
+                }
+            }
+        }
+        boolean sourceLive = source != null && source.app != null && source.app.thread != null
+                && !source.finishing && source.state != State.DESTROYED && !source.app.exiting
+                && mActivities.contains(source) && mProcesses.contains(source.app);
+        if (!sourceLive || !source.info.packageName.equals(packageName)
+                || !source.info.packageName.equals(source.app.packageName)) {
+            traceActivityMode(source, source != null ? source.app : processByPid(callingPid),
+                    noSourceToken, false, sourceLive, null, targetPackage, targetProcess);
+            return null;
+        }
+        boolean internalAuthenticator = mAccountCompletion.get() != null
+                && callingPid == android.os.Process.myPid();
+        boolean authenticated = internalAuthenticator || caller != null && source.app.pid == callingPid
+                && caller.asBinder().equals(source.app.thread.asBinder());
+        String mode = authenticated ? com.gesher.app.window.WindowMode.parse(
+                source.activityWindowMode != null ? source.activityWindowMode : source.app.windowMode) : null;
+        traceActivityMode(source, source.app, noSourceToken, authenticated, true, mode,
+                targetPackage, targetProcess);
+        return mode;
+    }
+
+    /** Opt-in diagnostics contain only public identity, enums and policy booleans. */
+    private void traceActivityMode(ActivityRecord source, ProcessRecord process, boolean noToken,
+            boolean authenticated, boolean live, String inherited, String target, String targetProcess) {
+        if (!"1".equals(System.getenv("GESHER_TRACE_ACTIVITY_MODE"))) return;
+        SystemServer.log("activity-mode source-package=" + (process != null ? process.packageName : null)
+                + " source-process=" + (process != null ? process.processName : null)
+                + " target-package=" + target + " target-process=" + targetProcess
+                + " resultTo-null=" + noToken + " source-state=" + (source != null ? source.state : null)
+                + " source-mode=" + (process != null ? process.windowMode : null)
+                + " source-authenticated=" + authenticated + " source-live=" + live
+                + " explicit-target=" + WindowManagerService.windowMode(target)
+                + " inherited=" + inherited);
     }
 
     private ActivityInfo resolve(Intent intent, String resolvedType, boolean defaultOnly) {
@@ -849,9 +1055,27 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return null;
     }
 
+    private static String processKey(String packageName, String processName) {
+        return packageName + "\n" + processName;
+    }
+
+    String componentProcess(String packageName, String declared) {
+        if (declared == null || declared.isEmpty()) {
+            ApplicationInfo ai = mPm.getApplicationInfo(packageName, 0, 0);
+            declared = ai != null ? ai.processName : null;
+        }
+        if (declared == null || declared.isEmpty()) return packageName;
+        return declared.charAt(0) == ':' ? packageName + declared : declared;
+    }
+
     private ProcessRecord processFor(String packageName) {
+        return processFor(packageName, componentProcess(packageName, null));
+    }
+
+    private ProcessRecord processFor(String packageName, String processName) {
         for (ProcessRecord p : mProcesses) {
-            if (packageName.equals(p.packageName) && !p.exiting) return p;
+            if (packageName.equals(p.packageName) && !p.exiting
+                    && processName.equals(componentProcess(p.packageName, p.processName))) return p;
         }
         return null;
     }
@@ -867,13 +1091,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     /** Binds an attached process to a package without reusing an older start's exit. Guarded by this. */
-    private void assignPackage(ProcessRecord app, String packageName) {
+    private void assignPackage(ProcessRecord app, String packageName, String processName) {
         app.packageName = packageName;
+        app.processName = processName;
         if (app.startSeq == 0) {
             app.startSeq = mNextStartSeq++;
-            mExitStatus.started(packageName, app.startSeq);
+            mExitStatus.started(processKey(packageName, processName), app.startSeq);
         }
-        mExitStatus.bind(packageName, app.startSeq, app.pid);
+        mExitStatus.bind(processKey(packageName, processName), app.startSeq, app.pid);
     }
 
     /**
@@ -892,8 +1117,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /** Whether a process for the package is being started. Guarded by this. */
     private boolean starting(String packageName) {
+        return starting(packageName, componentProcess(packageName, null));
+    }
+
+    private boolean starting(String packageName, String processName) {
         for (PendingProcess p : mStarting.values()) {
-            if (p.packageName.equals(packageName)) return true;
+            if (p.packageName.equals(packageName) && p.processName.equals(processName)) return true;
         }
         return false;
     }
@@ -905,22 +1134,39 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * itself.
      */
     void startProcess(String packageName, String reason) {
+        startProcess(packageName, componentProcess(packageName, null), reason);
+    }
+
+    void startProcess(String packageName, String processName, String reason) {
+        startProcess(packageName, processName, reason, null);
+    }
+
+    private void startProcess(String packageName, String processName, String reason, String sourceMode) {
         ProcessStarter starter = mStarter;
         if (starter == null) return;
         long seq;
         PendingProcess pending;
         synchronized (this) {
-            if (processFor(packageName) != null || starting(packageName)) return;
+            if (processFor(packageName, processName) != null || starting(packageName, processName)) return;
             seq = mNextStartSeq++;
-            mExitStatus.started(packageName, seq);
-            pending = new PendingProcess(packageName, reason);
+            mExitStatus.started(processKey(packageName, processName), seq);
+            WindowManagerService.WindowPolicy policy =
+                    WindowManagerService.resolveWindowPolicy(packageName, sourceMode);
+            pending = new PendingProcess(packageName, processName, reason, policy.mode, policy.explicit);
+            if ("1".equals(System.getenv("GESHER_TRACE_ACTIVITY_MODE"))) {
+                SystemServer.log("activity-mode process-start target-package=" + packageName
+                        + " target-process=" + processName + " explicit-target="
+                        + WindowManagerService.windowMode(packageName) + " inherited=" + sourceMode
+                        + " resolved=" + policy.mode + " captured-explicit=" + policy.explicit);
+            }
             mStarting.put(seq, pending);
             updateIdle();
         }
         ApplicationInfo ai = mPm.getApplicationInfo(packageName, 0, 0);
         int pid;
         try {
-            pid = starter.start(packageName, seq, ai != null ? ai.targetSdkVersion : 0);
+            pid = starter.start(packageName, processName, seq, ai != null ? ai.targetSdkVersion : 0,
+                    pending.windowMode);
         } catch (Throwable t) {
             SystemServer.log("starting a process for " + packageName + " (" + reason
                     + ") failed: " + t);
@@ -929,7 +1175,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         synchronized (this) {
             pending.pid = pid;
-            mExitStatus.bind(packageName, seq, pid);
+            mExitStatus.bind(processKey(packageName, processName), seq, pid);
             notifyAll();
         }
         SystemServer.log("starting a process for " + packageName + " (" + reason + "): pid "
@@ -945,7 +1191,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     // processDied's observer, so two readers cannot consume it.
                     code = Zygote.exitCode(pid);
                     if (code != Zygote.STILL_ACTIVE) {
-                        mExitStatus.exited(packageName, seq, pid, code);
+                        mExitStatus.exited(processKey(packageName, processName), seq, pid, code);
                     }
                 }
                 if (code != Zygote.STILL_ACTIVE) {
@@ -967,12 +1213,15 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             mStarting.remove(seq);
             for (int i = mActivities.size() - 1; i >= 0; i--) {
                 ActivityRecord r = mActivities.get(i);
-                if (r.app == null && r.info.packageName.equals(pending.packageName)) {
+                if (r.app == null && r.info.packageName.equals(pending.packageName)
+                        && componentProcess(r.info.packageName, r.info.processName).equals(pending.processName)) {
                     r.state = State.DESTROYED;
+                    accountActivityFinished(r);
                     mActivities.remove(i);
                 }
             }
-            mPendingWork.removeIf(w -> w.packageName.equals(pending.packageName));
+            mPendingWork.removeIf(w -> w.packageName.equals(pending.packageName)
+                    && w.processName.equals(pending.processName));
             updateIdle();
             notifyAll();
         }
@@ -994,7 +1243,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /** The exit code of the package's last process, or null if none ended (or unknown). */
     synchronized Integer lastExitCode(String packageName) {
-        return mExitStatus.code(packageName);
+        return mExitStatus.code(processKey(packageName, componentProcess(packageName, null)));
     }
 
     /** The app processes, for getRunningAppProcesses. */
@@ -1011,7 +1260,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             if (app.exiting || !app.ready || !app.activities.isEmpty()) return;
             for (PendingWork w : mPendingWork) {
-                if (w.packageName.equals(app.packageName)) return;
+                if (w.packageName.equals(app.packageName)
+                        && w.processName.equals(app.processName)) return;
             }
         }
         if (mAm.keepsAlive(app)) return;
@@ -1157,35 +1407,47 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             mProcesses.add(app);
             updateIdle();
             String waiting = null;
+            String waitingProcess = null;
             if (started != null) {
                 app.spawned = true;
                 app.startSeq = startSeq;
+                app.windowMode = started.windowMode;
+                app.windowModeExplicit = started.windowModeExplicit;
                 waiting = started.packageName;
+                waitingProcess = started.processName;
             } else {
                 // A start waiting for a process (none being started for its package): the
                 // one asked by this process, else the first.
                 for (ActivityRecord r : mActivities) {
                     if (r.app != null || r.state != State.INITIALIZING
-                            || starting(r.info.packageName)) {
+                            || starting(r.info.packageName, componentProcess(r.info.packageName, r.info.processName))) {
                         continue;
                     }
                     if (r.launchedFromPid == pid) {
                         waiting = r.info.packageName;
+                        waitingProcess = componentProcess(r.info.packageName, r.info.processName);
                         break;
                     }
-                    if (waiting == null) waiting = r.info.packageName;
+                    if (waiting == null) {
+                        waiting = r.info.packageName;
+                        waitingProcess = componentProcess(r.info.packageName, r.info.processName);
+                    }
                 }
                 // Else other work waiting for a package's process (a service, a broadcast).
                 for (PendingWork w : mPendingWork) {
                     if (waiting != null) break;
-                    if (!starting(w.packageName)) waiting = w.packageName;
+                    if (!starting(w.packageName, w.processName)) {
+                        waiting = w.packageName;
+                        waitingProcess = w.processName;
+                    }
                 }
             }
-            if (waiting != null && processFor(waiting) == null) {
-                assignPackage(app, waiting);
+            if (waiting != null && processFor(waiting, waitingProcess) == null) {
+                assignPackage(app, waiting, waitingProcess);
                 for (ActivityRecord r : mActivities) {
                     if (r.app == null && r.state == State.INITIALIZING
-                            && app.packageName.equals(r.info.packageName)) {
+                            && app.packageName.equals(r.info.packageName)
+                            && app.processName.equals(componentProcess(r.info.packageName, r.info.processName))) {
                         attach(r, app);
                     }
                 }
@@ -1217,7 +1479,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             for (int i = 0; i < mPendingWork.size(); i++) {
                 PendingWork w = mPendingWork.get(i);
-                if (w.packageName.equals(app.packageName)) {
+                if (w.packageName.equals(app.packageName) && w.processName.equals(app.processName)) {
                     work.add(w.work);
                     mPendingWork.remove(i--);
                 }
@@ -1239,16 +1501,22 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /** {@link #withProcess(String, Consumer)}, starting a process if none runs. */
     void withProcess(String packageName, String reason, Consumer<ProcessRecord> work) {
+        withProcess(packageName, null, reason, work);
+    }
+
+    void withProcess(String packageName, String declaredProcess, String reason,
+            Consumer<ProcessRecord> work) {
+        String processName = componentProcess(packageName, declaredProcess);
         ProcessRecord app;
         synchronized (this) {
-            app = processFor(packageName);
+            app = processFor(packageName, processName);
             if (app == null || !app.ready) {
-                mPendingWork.add(new PendingWork(packageName, work));
+                mPendingWork.add(new PendingWork(packageName, processName, work));
                 SystemServer.log("waiting for a process of " + packageName);
             }
         }
         if (app == null) {
-            startProcess(packageName, reason);
+            startProcess(packageName, processName, reason);
         } else if (app.ready) {
             work.accept(app);
         }
@@ -1264,6 +1532,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private void bindApplication(ProcessRecord app) {
         ApplicationInfo ai = mPm.getApplicationInfo(app.packageName,
                 PackageManager.GET_META_DATA | PackageManager.GET_SHARED_LIBRARY_FILES, 0);
+        ai = new ApplicationInfo(ai);
+        ai.processName = app.processName;
         Configuration config = LocaleManagerService.configurationFor(app.packageName);
         synchronized (this) {
             app.config = config;
@@ -1285,6 +1555,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (!mProcesses.remove(app)) return;
             for (ActivityRecord r : app.activities) {
                 r.state = State.DESTROYED;
+                accountActivityFinished(r);
                 mActivities.remove(r);
             }
             updateIdle();
@@ -1303,7 +1574,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 if (code != Zygote.STILL_ACTIVE) {
                     boolean published;
                     synchronized (this) {
-                        published = mExitStatus.exited(app.packageName, app.startSeq, app.pid, code);
+                        published = mExitStatus.exited(processKey(app.packageName, app.processName), app.startSeq, app.pid, code);
                     }
                     if (published) SystemServer.log(app + " exited with code " + code);
                 }
@@ -1321,6 +1592,65 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     // --- the client transactions -------------------------------------------------------
+
+    /** Only new windows in an implicitly headless process may gain inherited graphics. */
+    private String promotedActivityMode(ActivityRecord r, ProcessRecord process) {
+        if (!com.gesher.app.window.WindowMode.HEADLESS.equals(process.windowMode)) return null;
+        String explicit = WindowManagerService.windowMode(r.info.packageName);
+        if (com.gesher.app.window.WindowMode.HEADLESS.equals(explicit)) return null;
+        if (explicit != null) return explicit; // an explicit hidden mode remains hidden
+        if (process.windowModeExplicit) return null;
+        String inherited = com.gesher.app.window.WindowMode.parse(r.inheritedWindowMode);
+        return com.gesher.app.window.WindowMode.WINDOW.equals(inherited)
+                || com.gesher.app.window.WindowMode.HIDDEN.equals(inherited) ? inherited : null;
+    }
+
+    /** Private capability accompanies exactly one system-created activity launch. */
+    private IBinder createActivityWindowGrant(ActivityRecord r) {
+        synchronized (this) {
+            if (r.app == null || r.finishing || r.state != State.INITIALIZING
+                    || !mActivities.contains(r)) return null;
+            String mode = promotedActivityMode(r, r.app);
+            if ("1".equals(System.getenv("GESHER_TRACE_ACTIVITY_MODE"))) {
+                SystemServer.log("activity-mode new-activity target-package=" + r.info.packageName
+                        + " target-process=" + r.app.processName + " startup=" + r.app.windowMode
+                        + " captured-explicit=" + r.app.windowModeExplicit + " explicit-target="
+                        + WindowManagerService.windowMode(r.info.packageName) + " resolved=" + mode);
+            }
+            if (mode == null) return null;
+            ProcessRecord process = r.app;
+            ApkPackage code = mPm.get(r.info.packageName);
+            if (code == null) return null;
+            r.activityWindowMode = mode;
+            Binder grant = new Binder(GesherActivityWindowModeItem.DESCRIPTOR) {
+                @Override protected boolean onTransact(int transaction, Parcel data, Parcel reply,
+                        int flags) throws RemoteException {
+                    if (transaction != GesherActivityWindowModeItem.RESOLVE) {
+                        return super.onTransact(transaction, data, reply, flags);
+                    }
+                    data.enforceInterface(GesherActivityWindowModeItem.DESCRIPTOR);
+                    IBinder token = data.readStrongBinder(); data.enforceNoDataAvail();
+                    if (Binder.getCallingPid() != process.pid || Binder.getCallingUid() != process.uid) {
+                        throw new SecurityException("Activity window capability belongs to its target process");
+                    }
+                    String permitted = null;
+                    synchronized (ActivityTaskManagerService.this) {
+                        if (r.activityWindowGrant == this && r.token.equals(token) && r.app == process
+                                && !r.finishing && r.state != State.DESTROYED && !process.exiting
+                                && mActivities.contains(r) && mProcesses.contains(process)
+                                && mPm.get(r.info.packageName) == code) {
+                            permitted = promotedActivityMode(r, process);
+                        }
+                        r.activityWindowMode = permitted;
+                    }
+                    reply.writeNoException(); reply.writeString(permitted);
+                    return true;
+                }
+            };
+            r.activityWindowGrant = grant;
+            return grant;
+        }
+    }
 
     /** ActivityTaskSupervisor.realStartActivityLocked: launch and resume. */
     private void realStartActivity(ActivityRecord r) {
@@ -1344,6 +1674,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ActivityWindowInfo windowInfo = windowInfo(task);
         List<ResultInfo> results = takeResults(r);
         ClientTransaction t = new ClientTransaction(r.app.thread);
+        IBinder windowGrant = createActivityWindowGrant(r);
+        if (windowGrant != null) {
+            t.addTransactionItem(new GesherActivityWindowModeItem(r.token, windowGrant));
+        }
         t.addTransactionItem(new LaunchActivityItem(r.token, r.intent,
                 System.identityHashCode(r), r.info, config, override,
                 Context.DEVICE_ID_DEFAULT, r.launchedFromPackage, null /* voiceInteractor */,
@@ -1675,6 +2009,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             if (r.finishing) return true;
             r.finishing = true;
+            accountActivityFinished(r);
             state = r.state;
             // The activity below may ask for another orientation (it gets the configuration
             // as it resumes).
@@ -1767,6 +2102,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private void destroy(ActivityRecord r) {
         setState(r, State.DESTROYING);
         ClientTransaction t = new ClientTransaction(r.app.thread);
+        synchronized (this) {
+            if (r.activityWindowGrant != null) {
+                r.activityWindowGrant = null;
+                r.activityWindowMode = null;
+                t.addTransactionItem(GesherActivityWindowModeItem.revoke(r.token));
+            }
+        }
         t.addTransactionItem(new DestroyActivityItem(r.token, r.finishing));
         schedule(r, t, "DestroyActivityItem");
     }
@@ -1791,6 +2133,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ProcessRecord check = null;
         synchronized (this) {
             r.state = State.DESTROYED;
+            accountActivityFinished(r);
             mActivities.remove(r);
             for (ActivityRecord a : mActivities) {
                 if (a.waitingFor == r) a.waitingFor = null;

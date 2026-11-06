@@ -94,6 +94,15 @@ public final class Services {
                 StandIn.of(IDisplayManager.class, new DisplayManager()).asBinder());
         services.put(Context.USER_SERVICE,
                 StandIn.of(IUserManager.class, new UserManager()).asBinder());
+        services.put(Context.RESTRICTIONS_SERVICE,
+                StandIn.of(android.content.IRestrictionsManager.class,
+                        new ApplicationRestrictionsService()).asBinder());
+        services.put(Context.BLOB_STORE_SERVICE,
+                StandIn.of(android.app.blob.IBlobStoreManager.class,
+                        new BlobStoreService()).asBinder());
+        services.put(Context.ROLLBACK_SERVICE,
+                StandIn.of(android.content.rollback.IRollbackManager.class,
+                        new RollbackManagerService(pm, atm)).asBinder());
         // input: InputManagerService with the virtual keyboard (docs/input.md): its device
         // and key character map (Generic.kcm), for KeyEvent.getUnicodeChar, the text
         // views' key listeners and VelocityTracker.
@@ -558,8 +567,34 @@ public final class Services {
     /** user: UserManagerService, with the system user, running and unlocked. */
     public static final class UserManager extends IUserManager.Default {
         static UserInfo owner() {
-            return new UserInfo(0, "Owner",
-                    UserInfo.FLAG_ADMIN | UserInfo.FLAG_FULL | UserInfo.FLAG_SYSTEM);
+            return new UserInfo(0, "Owner", null,
+                    UserInfo.FLAG_ADMIN | UserInfo.FLAG_FULL | UserInfo.FLAG_SYSTEM,
+                    android.os.UserManager.USER_TYPE_FULL_SYSTEM);
+        }
+
+        @Override
+        public int[] getProfileIds(int userId, boolean enabledOnly) {
+            // The only user is enabled and has no additional profiles. Android's
+            // UserManager wrappers require the queried user itself in this array.
+            return userId == 0 ? new int[] {0} : new int[0];
+        }
+
+        @Override
+        public java.util.List<UserInfo> getProfiles(int userId, boolean enabledOnly) {
+            return userId == 0 ? java.util.Collections.singletonList(owner())
+                    : java.util.Collections.emptyList();
+        }
+
+        @Override
+        public android.os.Bundle getApplicationRestrictions(String packageName) {
+            // This desktop user has no Android application restrictions. The
+            // framework contract represents that absence with an empty Bundle.
+            return new android.os.Bundle();
+        }
+
+        @Override
+        public android.os.Bundle getApplicationRestrictionsForUser(String packageName, int userId) {
+            return new android.os.Bundle();
         }
 
         @Override

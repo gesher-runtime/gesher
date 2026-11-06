@@ -163,3 +163,5 @@ Java_com_gesher_server_AccountManagerService_nativeConfirmToken(JNIEnv* env, jcl
   HeapFree(GetProcessHeap(), 0, text);
   return choice == IDYES ? JNI_TRUE : JNI_FALSE;
 }
+
+#include "account_chooser.inc"

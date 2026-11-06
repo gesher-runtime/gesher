@@ -84,6 +84,7 @@ public final class SystemBindingCleanupTest {
                         atm, appPid, thread);
             } finally { Binder.restoreCallingIdentity(original); }
             field(processType, "packageName").set(app, owner);
+            field(processType, "processName").set(app, owner);
             field(processType, "ready").setBoolean(app, true);
             ((List<Object>) field(atmType, "mProcesses").get(atm)).add(app);
         }

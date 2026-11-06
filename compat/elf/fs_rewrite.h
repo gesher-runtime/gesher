@@ -27,10 +27,11 @@
 // replay) becomes an int3 that, if reached, prints what and where and aborts;
 // the load reports it on stderr.
 //
-// Code is found by decoding instruction by instruction over the object's FDE
-// ranges (.eh_frame_hdr), so bytes inside other instructions or data are not
-// mistaken for %fs prefixes; objects without unwind tables are swept over their
-// executable sections. See docs/decisions/0014-native-libs-fs-base.md.
+// Code is decoded instruction by instruction over executable sections, using
+// FDE starts/ends (.eh_frame_hdr) as additional instruction-boundary anchors.
+// Unwind coverage can be partial and must not hide code without an FDE. If
+// section metadata is absent, FDE ranges are used; executable segments are the
+// last fallback. See docs/decisions/0014-native-libs-fs-base.md.
 #pragma once
 
 #include <stddef.h>
@@ -47,7 +48,7 @@ struct FsRewriteStats {
   size_t trapped = 0;       // cannot be rewritten: int3 + diagnostic
   size_t bytes_decoded = 0;
   size_t decode_errors = 0; // bytes skipped because they did not decode
-  bool used_fdes = false;   // regions came from .eh_frame_hdr
+  bool used_fdes = false;   // .eh_frame_hdr supplied ranges or boundary anchors
 };
 
 // Rewrites the %fs accesses in a loaded object's executable segments. `file`

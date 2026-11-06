@@ -162,7 +162,7 @@ public final class IdentitySecurityTest {
 
         denied(() -> attach.invoke(atm, thread, 888881, 913L), "start sequence");
         require(processes.isEmpty(), "Rejected unknown start registered a process");
-        Object expected = construct(pendingClass, new Class<?>[] {String.class, String.class}, pkg, "identity test");
+        Object expected = construct(pendingClass, new Class<?>[] {String.class, String.class, String.class}, pkg, pkg, "identity test");
         field(pendingClass, "pid").setInt(expected, 888882);
         pending.put(914L, expected);
         denied(() -> attach.invoke(atm, thread, 888883, 914L), "start sequence");
@@ -178,6 +178,7 @@ public final class IdentitySecurityTest {
         Object record = construct(processClass, new Class<?>[] {atmClass, int.class, IApplicationThread.class},
                 atm, 888884, thread);
         field(processClass, "packageName").set(record, pkg);
+        field(processClass, "processName").set(record, pkg);
         processes.add(record);
         Class<?> identityClass = Class.forName("com.gesher.server.CallerIdentity");
         Object identity = construct(identityClass, new Class<?>[] {pmClass, atmClass}, pm, atm);

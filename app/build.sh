@@ -91,7 +91,9 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   "$(native "$work/gen")" com.gesher.server.stub \
   android.permission.IPermissionChecker \
   android.app.IActivityManager android.app.IActivityTaskManager android.app.IUriGrantsManager \
-  android.app.IActivityClientController android.content.pm.IPackageManager android.content.pm.IPackageInstaller \
+  android.app.IActivityClientController android.content.pm.IPackageManager android.content.pm.IPackageInstaller android.content.pm.IPackageInstallerSession \
+  android.content.IRestrictionsManager android.app.blob.IBlobStoreManager android.os.IDeviceIdentifiersPolicyService \
+  android.content.rollback.IRollbackManager \
   android.view.IWindowManager android.view.IWindowSession \
   android.hardware.display.IDisplayManager android.os.IUserManager   com.android.internal.view.IInputMethodManager \
   android.app.INotificationManager android.app.IUiModeManager android.hardware.input.IInputManager \

@@ -239,7 +239,17 @@ public final class SystemServer {
             return;
         }
         final String binder = System.getenv("GESHER_BINDER");
-        atm.setProcessStarter((packageName, startSeq, targetSdk) -> {
+        atm.setProcessStarter(new ActivityTaskManagerService.ProcessStarter() {
+            @Override public int start(String packageName, long startSeq, int targetSdk) throws Exception {
+                return start(packageName, packageName, startSeq, targetSdk);
+            }
+            @Override public int start(String packageName, String processName, long startSeq,
+                    int targetSdk) throws Exception {
+                return start(packageName, processName, startSeq, targetSdk,
+                        WindowManagerService.resolveWindowMode(packageName, null));
+            }
+            @Override public int start(String packageName, String processName, long startSeq,
+                    int targetSdk, String windowMode) throws Exception {
             File logFile = Device.packageLog(packageName);
             logFile.getParentFile().mkdirs();
             ApkPackage pkg = pm.get(packageName);
@@ -254,11 +264,11 @@ public final class SystemServer {
                             + com.gesher.app.shell.AppShell.appUserModelId(packageName),
                     // The display the server describes, which the app's windows are on.
                     "GESHER_DISPLAY=" + com.gesher.app.DeviceProfile.describe()));
-            // Its windows (graphics track, ADR 0029): what the launcher asked for.
-            String windowMode = WindowManagerService.windowMode(packageName);
-            if (windowMode != null) {
-                env.add(com.gesher.app.window.WindowMode.ENV + "=" + windowMode);
+            // ATM captured this exact mode with its pending process, before spawning.
+            if (com.gesher.app.window.WindowMode.parse(windowMode) == null) {
+                throw new IllegalArgumentException("Missing resolved app window mode");
             }
+            env.add(com.gesher.app.window.WindowMode.ENV + "=" + windowMode);
             // Android's INTERNET permission: no inet sockets without it (docs/network.md).
             String inet = ConnectivityService.internetEnvironment(packageName);
             if (inet != null) env.add(inet);
@@ -267,6 +277,7 @@ public final class SystemServer {
             return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
                     String.valueOf(targetSdk))), env, logFile.getPath(), false);
+            }
         });
     }
 

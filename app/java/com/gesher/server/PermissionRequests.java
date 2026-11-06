@@ -46,7 +46,7 @@ final class PermissionRequests {
         mDecision = decision;
     }
 
-    private static boolean confirm(String packageName, String permissions) {
+    static boolean confirm(String packageName, String permissions) {
         try {
             AccountSecretStore.ensureLoaded();
             return nativeConfirm(packageName, permissions);

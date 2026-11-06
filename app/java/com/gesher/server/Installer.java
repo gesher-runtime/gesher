@@ -148,6 +148,7 @@ final class Installer {
     static Installer create(PackageManagerService pm, ActivityTaskManagerService atm)
             throws IOException {
         Installer installer = new Installer(pm, atm, readRegistry());
+        pm.attachInstaller(atm, installer);
         // Background dexopt with the apps' JIT profiles, while the device is idle (ADR 0054).
         Dexopt.startBackground(installer::codePaths, atm::idleSince);
         return installer;

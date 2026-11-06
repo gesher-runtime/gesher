@@ -78,6 +78,7 @@ jobs:
           "$cc" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_test26.so -o dist-native/fs_test26.so tests/native/fs_test.c -ldl
           "$cc29" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_test29.so -o dist-native/fs_test29.so tests/native/fs_test.c -ldl
           "$cc29" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_late.so -o dist-native/fs_late.so tests/native/fs_late.c
+            "$cc29" -shared -fPIC -O2 -fstack-protector-strong -fasynchronous-unwind-tables -Wall -Wextra -Werror -Wl,-soname,fs_partial_unwind.so -o dist-native/fs_partial_unwind.so tests/native/fs_partial_unwind.c
           echo "--- fs_test29.so ---"
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"             -d -r -l dist-native/fs_test29.so
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"             -d dist-native/fs_test29.so | grep '%fs:' | head -40 || true

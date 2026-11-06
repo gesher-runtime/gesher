@@ -377,6 +377,19 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/microgprobe/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
+          # Actual service-first foreground delegation and selective background window probes.
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/windowpromotion/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+          # Ordinary cross-process ordered broadcast/PendingResult/final-callback probes.
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/orderedbroadcast/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod
+          # Startup disable, first-use ordering and per-process data directory lifecycles.
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/webviewlifecycle/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod
           # Gesher Camera (hwsvc2, ADR 0051): ACTION_IMAGE_CAPTURE's app, shipped with Gesher.
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/app/gesher-camera" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
@@ -429,6 +442,9 @@ jobs:
           cp out/app/web3app.apk dist-framework/
           cp out/app/services-tests.dex dist-framework/
           cp out/app/microgprobe.apk dist-framework/
+          cp out/app/windowpromotion-target.apk out/app/windowpromotion-source.apk out/app/windowpromotion-control.dex dist-framework/
+          cp out/app/orderedbroadcast-source.apk out/app/orderedbroadcast-target.apk dist-framework/
+          cp out/app/webviewlifecycle.apk dist-framework/
           cp out/app/exitstatusapp.apk dist-framework/
           cp out/app/sharedlibraryapp.apk out/app/sharedlibrarydlc.apk out/app/sharedlibraryafter.apk out/app/sharedlibraryafterdlc.apk out/app/sharedlibrarybad.apk out/app/shared-base-v1.jar out/app/shared-base-v2.jar out/app/shared-entry.jar dist-framework/
           cp out/app/graphics-tests.dex out/app/web3-query-tests.dex dist-framework/

@@ -173,6 +173,8 @@ jobs:
           ninja -C out native3_unicode_test
           ninja -C out native3_cpu_clock_test
           ninja -C out
+          # Native fixtures are CI-only; none is installed by gesher.iss.
+          ninja -C out install_pipe_test account_chooser_test window_promotion_test
 
       - name: Build and isolate ordinary Binder host actor under production OFF
         run: |
@@ -208,6 +210,7 @@ jobs:
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
           cp out/gesher_shellext.dll dist/
           cp out/libgesher_account_crypto.so dist/
+          cp out/libgesher_install_pipe.so dist/
           cp out/libgesher_webview_bridge.so dist/
           cp dist-web3-observer/web3_process_waits.exe dist/
           ls -la dist

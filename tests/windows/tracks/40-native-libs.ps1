@@ -74,6 +74,10 @@ Check 'native libs: stack-protected .so with ELF TLS (API 29), threads and a lat
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/fs_test29.so") (NoDrive "$Dir")
 } @('fs_test: all passed', 'elf_load_test all passed')
 
+Check 'native libs: partial unwind metadata does not hide stack guards' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/fs_partial_unwind.so")
+} @('partial_unwind: all passed', 'elf_load_test all passed')
+
 # Step 4, the JNI path: dalvikvm runs gesher.JniTest (tests/native/java), whose
 # System.load of jni_test.so goes through ART's host libnativeloader path to
 # gesher-base's dlopen, the ELF loader and the JNI bridge

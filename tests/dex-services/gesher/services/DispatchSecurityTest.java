@@ -125,11 +125,15 @@ public final class DispatchSecurityTest {
                 "Rejected service access created service state");
         System.out.println("DispatchSecurityTest: private and permission-guarded service start/bind denied");
 
+        ActivityInfo hiddenReceiver = null;
+        for (ActivityInfo receiver : info.receivers) if (!receiver.exported) { hiddenReceiver = receiver; break; }
+        require(hiddenReceiver != null, "GmsCore lacks a private manifest receiver fixture");
         ThreadStub receiverThread = new ThreadStub();
         Class<?> processType = Class.forName(atmType.getName() + "$ProcessRecord");
         Object process = construct(processType, new Class<?>[] {atmType, int.class, IApplicationThread.class},
                 atm, 888891, receiverThread);
         field(processType, "packageName").set(process, ownerPackage);
+        field(processType, "processName").set(process, hiddenReceiver.processName);
         field(processType, "ready").setBoolean(process, true);
         ((List<Object>) field(atmType, "mProcesses").get(atm)).add(process);
         Method register = method(broadcastType, "registerReceiver", IApplicationThread.class, String.class,
@@ -155,9 +159,6 @@ public final class DispatchSecurityTest {
         broadcast.invoke(broadcasts, new Intent("test.dispatch.PUBLIC"), null, senderPackage,
                 android.os.Process.myPid(), null, null, null);
         require(receiverThread.broadcasts == 1, "Allowed exported receiver did not receive its broadcast");
-        ActivityInfo hiddenReceiver = null;
-        for (ActivityInfo receiver : info.receivers) if (!receiver.exported) { hiddenReceiver = receiver; break; }
-        require(hiddenReceiver != null, "GmsCore lacks a private manifest receiver fixture");
         Intent privateManifest = new Intent("test.dispatch.PRIVATE_MANIFEST")
                 .setComponent(new ComponentName(ownerPackage, hiddenReceiver.name));
         broadcast.invoke(broadcasts, privateManifest, null, senderPackage,
