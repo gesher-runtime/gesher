@@ -21,6 +21,7 @@ import android.os.ServiceManager;
 import android.os.SystemClock;
 
 import com.gesher.app.shell.AppShell;
+import static com.gesher.app.locale.UiText.text;
 import com.gesher.app.window.WindowMode;
 import com.gesher.net.ProxySetting;
 import com.gesher.server.Device;
@@ -103,7 +104,7 @@ public final class Launcher {
             code = run(args);
         } catch (Throwable t) {
             System.out.flush();
-            System.err.println(TAG + ": failed: " + t);
+            System.err.println(TAG + ": " + text("failed", t));
             t.printStackTrace();
             code = 1;
         }
@@ -150,8 +151,7 @@ public final class Launcher {
                 Properties shortcut = AppShell.shortcutOf(rest.get(0));
                 Properties protocols = AppShell.urlProtocolsOf(rest.get(0));
                 boolean removed = gesher().uninstall(rest.get(0));
-                log(removed ? "uninstalled " + rest.get(0)
-                        : rest.get(0) + " is not installed");
+                log(text(removed ? "uninstalled" : "not_installed", rest.get(0)));
                 if (removed) {
                     AppShell.unregisterQuietly(rest.get(0), shortcut);
                     AppShell.unregisterUrlProtocolsQuietly(rest.get(0), protocols);
@@ -171,7 +171,7 @@ public final class Launcher {
             }
             case "status": {
                 if (ensureDevice(false) == null) {
-                    log("no Gesher device is running");
+                    log(text("no_device"));
                     return 0;
                 }
                 log(gesher().status());
@@ -198,21 +198,20 @@ public final class Launcher {
     private static int toastActivated() throws Exception {
         int hr = com.gesher.server.WindowsHost.registerToastActivator(true);
         if (hr != 0) {
-            log(String.format("toast activator: not registered (0x%08x)", hr));
+            log(text("toast_not_registered", String.format("0x%08x", hr)));
             return 1;
         }
-        log("toast activator: serving " + com.gesher.server.WindowsHost.TOAST_ACTIVATOR_CLSID
-                + " for one activation");
+        log(text("toast_serving", com.gesher.server.WindowsHost.TOAST_ACTIVATOR_CLSID));
         String[] a = com.gesher.server.WindowsHost.waitActivation(60_000);
         com.gesher.server.WindowsHost.revokeToastActivator();
         if (a == null) {
-            log("toast activator: no activation came in 60 s");
+            log(text("toast_timeout"));
             return 1;
         }
-        log("toast activator: a click on a toast of " + a[0] + ": " + a[3]);
+        log(text("toast_click", a[0], a[3]));
         ensureDevice(true);
         gesher().toastActivated(a[0], a[3]);
-        log("toast activator: the click went to the Gesher device");
+        log(text("toast_sent"));
         return 0;
     }
 
@@ -225,9 +224,9 @@ public final class Launcher {
         if (args.size() > 2) return usage();
         if (args.isEmpty()) {
             Properties p = ProxySetting.load();
-            if (p.isEmpty()) log("no proxy of Gesher's own: Windows' settings");
+            if (p.isEmpty()) log(text("proxy_windows"));
             for (String key : new java.util.TreeSet<>(p.stringPropertyNames())) {
-                log((key.equals("proxy") ? "every app" : key.substring(6)) + ": "
+                log((key.equals("proxy") ? text("every_app") : key.substring(6)) + ": "
                         + p.getProperty(key));
             }
             return 0;
@@ -235,17 +234,16 @@ public final class Launcher {
         String pkg = args.size() == 2 ? args.get(0) : null;
         String value = ProxySetting.parse(args.get(args.size() - 1));
         if (value == null) {
-            log(args.get(args.size() - 1) + ": not host:port, direct or windows");
+            log(text("proxy_invalid", args.get(args.size() - 1)));
             return usage();
         }
         ProxySetting.save(pkg, value);
-        log("proxy of " + (pkg == null ? "every app" : pkg) + ": " + value
-                + " (app processes started from now on)");
+        log(text("proxy_saved", pkg == null ? text("every_app") : pkg, value));
         return 0;
     }
 
     private static int usage() {
-        System.err.println("usage: gesher-app launch APK|PACKAGE [--activity CLASS] [--ez KEY"
+        System.err.println(text("usage") + "gesher-app launch APK|PACKAGE [--activity CLASS] [--ez KEY"
                 + " true|false]... [--proxy host:port|direct|windows]"
                 + " [--window | --hidden-window | --headless [--keep-task]]"
                 + " | proxy [[PACKAGE] host:port|direct|windows] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
@@ -262,20 +260,18 @@ public final class Launcher {
      */
     static Properties ensureDevice(boolean start) throws Exception {
         long lock = Zygote.lock(Device.lockName(), (int) (2 * READY_TIMEOUT_MS));
-        if (lock == 0) throw new IllegalStateException("cannot take " + Device.lockName());
+        if (lock == 0) throw new IllegalStateException(text("cannot_lock", Device.lockName()));
         try {
             Properties state = Device.read(Device.stateFile());
             if (state != null) {
                 String name = state.getProperty(Device.STATE_DEVICE);
                 if (Device.alive(state, Device.SYSTEM_SERVER) && waitReady(state)) {
                     use(state);
-                    log("connected to the running Gesher device " + name + " (system server"
-                            + " pid " + Device.pid(state, Device.SYSTEM_SERVER) + ")");
+                    log(text("connected", name, Device.pid(state, Device.SYSTEM_SERVER)));
                     return state;
                 }
                 // Crashed or killed, or never got ready: what is left of it goes.
-                log("cleaning up the Gesher device " + name + ": its system server is gone"
-                        + " or does not answer");
+                log(text("cleaning", name));
                 Device.killLeftovers(state);
                 Device.stateFile().delete();
                 Device.readyFile().delete();
@@ -321,7 +317,7 @@ public final class Launcher {
                 "system_server.log"}) {
             new File(logs, log).delete();
         }
-        log("starting the Gesher device " + name + " (logs in " + logs + ")");
+        log(text("device_starting", name, logs));
         Properties state = new Properties();
         state.setProperty(Device.STATE_DEVICE, name);
         state.setProperty(Device.STATE_SHUTDOWN_EVENT, Device.shutdownEventName());
@@ -333,10 +329,9 @@ public final class Launcher {
             int code = Zygote.exitCode(binderd);
             Zygote.kill(binderd);
             printTail(new File(logs, "binderd.log"), 40);
-            throw new IllegalStateException("the binder endpoint of the Gesher device "
-                    + name + " did not complete its connection handshake (binderd exit " + code + ")");
+            throw new IllegalStateException(text("binder_handshake", name, code));
         }
-        log("binder endpoint accepted a protocol connection: " + name + " (pid " + binderd + ")");
+        log(text("binder_ready", name, binderd));
         int servicemanager = Zygote.spawn(Zygote.quote(dir + "servicemanager.exe"), env,
                 new File(logs, "servicemanager.log").getPath(), true);
         record(state, Device.SERVICEMANAGER, servicemanager);
@@ -358,12 +353,9 @@ public final class Launcher {
             Device.killLeftovers(state);
             Device.stateFile().delete();
             printTail(new File(logs, "system_server.log"), 40);
-            throw new IllegalStateException("the system server of the Gesher device " + name
-                    + " did not get ready (its log: " + new File(logs, "system_server.log")
-                    + ")");
+            throw new IllegalStateException(text("server_not_ready", name, new File(logs, "system_server.log")));
         }
-        log("started the Gesher device " + name + ": binderd pid " + binderd
-                + ", servicemanager pid " + servicemanager + ", system server pid " + server);
+        log(text("device_started", name, binderd, servicemanager, server));
         return state;
     }
 
@@ -379,7 +371,7 @@ public final class Launcher {
             if (c != null) return c;
             SystemClock.sleep(100);
         }
-        throw new IllegalStateException("no gesher service in the device's servicemanager");
+        throw new IllegalStateException(text("no_service"));
     }
 
     private static int shutdown() throws Exception {
@@ -387,7 +379,7 @@ public final class Launcher {
         try {
             Properties state = Device.read(Device.stateFile());
             if (state == null) {
-                log("no Gesher device is running");
+                log(text("no_device"));
                 return 0;
             }
             String name = state.getProperty(Device.STATE_DEVICE);
@@ -403,7 +395,7 @@ public final class Launcher {
             Device.killLeftovers(state);
             Device.stateFile().delete();
             Device.readyFile().delete();
-            log("the Gesher device " + name + " stopped");
+            log(text("device_stopped", name));
             return 0;
         } finally {
             Zygote.unlock(lock);
@@ -414,14 +406,14 @@ public final class Launcher {
 
     private static String install(GesherService.Client gesher, String apk) throws Exception {
         File f = new File(apk);
-        if (!f.isFile()) throw new IllegalArgumentException("no such file: " + apk);
+        if (!f.isFile()) throw new IllegalArgumentException(text("no_file", apk));
         String[] r = gesher.install(f.getAbsolutePath());
         switch (r[1]) {
             case "unchanged":
-                log(r[0] + " is installed and unchanged (" + r[2] + ")");
+                log(text("unchanged", r[0], r[2]));
                 break;
             default:
-                log(r[1] + " " + r[0] + " (version " + r[3] + ") in " + r[2]);
+                log(text("updated".equals(r[1]) ? "updated" : "installed", r[0], r[3], r[2]));
         }
         // Its Start menu shortcut and URL protocols (docs/installer.md), made or updated.
         AppShell.registerQuietly(r[0], r[2], !"unchanged".equals(r[1]));
@@ -438,15 +430,14 @@ public final class Launcher {
                 ServiceManager.getService("package"));
         @SuppressWarnings("unchecked")
         List<PackageInfo> packages = pm.getInstalledPackages(0, 0).getList();
-        log(packages.size() + " installed " + (packages.size() == 1 ? "package" : "packages"));
+        log(text(packages.size() == 1 ? "package_count_one" : "package_count", packages.size()));
         for (PackageInfo p : packages) {
             // getPackageInfo for each, as `pm dump` asks.
             PackageInfo full = pm.getPackageInfo(p.packageName, PackageManager.GET_ACTIVITIES
                     | PackageManager.GET_SERVICES | PackageManager.GET_PROVIDERS, 0);
-            System.out.println("package:" + p.packageName + " version " + p.versionName + " ("
-                    + p.getLongVersionCode() + ") " + p.applicationInfo.sourceDir + ", "
-                    + count(full.activities) + " activities, " + count(full.services)
-                    + " services, " + count(full.providers) + " providers");
+            System.out.println(text("package_details", p.packageName, p.versionName,
+                    p.getLongVersionCode(), p.applicationInfo.sourceDir, count(full.activities),
+                    count(full.services), count(full.providers)));
         }
         return 0;
     }
@@ -471,7 +462,7 @@ public final class Launcher {
         IPackageManager pm = IPackageManager.Stub.asInterface(
                 ServiceManager.getService("package"));
         if (pm.getPackageInfo(pkg, 0L, 0) == null) {
-            log(pkg + " is not installed: " + url + " goes nowhere");
+            log(text("not_installed_url", pkg, url));
             return 1;
         }
         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url))
@@ -488,13 +479,13 @@ public final class Launcher {
         } else if (!running(ActivityManager.getService(), pkg)) {
             gesher.setWindowMode(pkg, WindowMode.fromEnvironment(WindowMode.WINDOW));
         }
-        log("starting " + intent.toShortString(false, true, true, false)
-                + (task != null ? " in task " + task.taskId : "") + " through the system server");
+        log(text("start_intent", intent.toShortString(false, true, true, false)
+                + (task != null ? text("in_task", task.taskId) : "")));
         WaitResult result = atm.startActivityAndWait(null /* caller: the launcher */,
                 "com.gesher.launcher", null, intent, null, null, null, 0, 0, null, options, 0);
-        log("startActivityAndWait: result " + result.result + ", "
-                + (result.who != null ? result.who.flattenToShortString() : "no new activity")
-                + (result.timeout ? ", timed out" : ""));
+        log(text("start_result", result.result,
+                result.who != null ? result.who.flattenToShortString() : text("no_new_activity"),
+                result.timeout ? text("timed_out") : ""));
         // START_SUCCESS, or a delivery to a running activity (START_DELIVERED_TO_TOP).
         return result.result >= ActivityManager.START_SUCCESS ? 0 : 1;
     }
@@ -514,7 +505,7 @@ public final class Launcher {
                 case "--proxy": {
                     proxy = ProxySetting.parse(args.get(++i));
                     if (proxy == null) {
-                        log("--proxy " + args.get(i) + ": not host:port, direct or windows");
+                        log(text("proxy_invalid", "--proxy " + args.get(i)));
                         return usage();
                     }
                     break;
@@ -545,10 +536,10 @@ public final class Launcher {
             IPackageManager pm = IPackageManager.Stub.asInterface(
                     ServiceManager.getService("package"));
             if (pm.getPackageInfo(pkg, 0L, 0) == null) {
-                log(pkg + " is not installed (gesher-app install APK)");
+                log(text("not_installed_hint", pkg));
                 return 1;
             }
-            log("launching the installed package " + pkg);
+            log(text("launching", pkg));
         }
 
         Intent intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -568,96 +559,80 @@ public final class Launcher {
         // windows, the app runs until the user closes them (the task stays).
         gesher.setWindowMode(pkg, windowMode);
         if (!WindowMode.HEADLESS.equals(windowMode)) keepTask = true;
-        log("windows of " + pkg + ": " + windowMode);
+        log(text("windows", pkg, windowMode));
         // Its proxy: this launch's, else the saved settings (gesher-app proxy).
         gesher.setProxy(pkg, proxy);
         if (proxy != null) {
-            log("proxy of " + pkg + ": " + proxy
-                    + (running(ActivityManager.getService(), pkg)
-                            ? " (from its next process: it is running)" : ""));
+            log(text("proxy_launch", pkg, proxy, running(ActivityManager.getService(), pkg)
+                    ? text("next_process") : ""));
         }
 
         // The app's output: its process appends to the package's log.
         Tail tail = new Tail(Device.packageLog(pkg));
         tail.start();
         try {
-            log("starting " + intent.toShortString(false, true, true, false)
-                    + " through the system server");
+            log(text("start_intent", intent.toShortString(false, true, true, false)));
             IActivityTaskManager atm = ActivityTaskManager.getService();
-            WaitResult result = atm.startActivityAndWait(null /* caller: the launcher */,
-                    "com.gesher.launcher", null, intent, null, null, null, 0, 0, null, null, 0);
-            log("startActivityAndWait: result " + result.result + ", "
-                    + (result.who != null ? result.who.flattenToShortString() : "no activity")
-                    + (result.timeout ? ", timed out" : "") + ", " + result.totalTime + " ms");
-            if (result.result != ActivityManager.START_SUCCESS) {
-                throw new IllegalStateException("the system server did not start " + intent);
+            GesherService.LaunchResult launch = gesher.startActivityAndWait(intent);
+            WaitResult result = launch.result;
+            log(text("start_result", result.result,
+                    result.who != null ? result.who.flattenToShortString() : text("no_activity"),
+                    result.timeout ? text("timed_out") : "") + ", " + result.totalTime + " ms");
+            if (!ActivityManager.isStartResultSuccessful(result.result)) {
+                throw new IllegalStateException(text("start_failed", intent));
+            }
+            if (launch.exitReceipt == null || launch.taskId < 0) {
+                throw new IllegalStateException(text("launch_not_identified"));
             }
             if (!keepTask) {
-                ActivityManager.RunningTaskInfo task = GesherAppProcess.taskOf(atm, pkg);
-                if (task != null) {
-                    log("removing task " + task.taskId + " ("
-                            + task.baseActivity.flattenToShortString() + ")");
-                    atm.removeTask(task.taskId);
-                }
+                log(text("remove_task", launch.taskId,
+                        result.who != null ? result.who.flattenToShortString() : pkg));
+                atm.removeTask(launch.taskId);
             }
-            // Until the package's process ends: the server ends it with its last activity
-            // (and service, and provider client).
-            IActivityManager am = ActivityManager.getService();
+            // Follow only this resolved launch's retained process generation. Another
+            // package sibling or a newer same-name process must not supply its result.
+            GesherService.LaunchExit terminal = null;
             int consecutiveFailures = 0;
             while (true) {
-                boolean isRunning = false;
                 try {
-                    isRunning = running(am, pkg);
+                    GesherService.LaunchExit status = gesher.launchExit(launch.exitReceipt);
                     consecutiveFailures = 0;
+                    if (status.hasExitCode) {
+                        terminal = status;
+                        break;
+                    }
+                    if (status.state == GesherService.EXIT_UNAVAILABLE) break;
                 } catch (Throwable t) {
                     consecutiveFailures++;
                     if (state != null && !Device.alive(state, Device.SYSTEM_SERVER)) {
-                        log("the system server is no longer running");
+                        log(text("server_stopped"));
                         break;
                     }
                     if (consecutiveFailures >= 5) {
-                        log("warning: lost communication with system server after repeated failures: " + t.getMessage());
+                        log(text("server_lost", t.getMessage()));
                         break;
-                    }
-                    try {
-                        am = ActivityManager.getService();
-                    } catch (Throwable ignored) {
                     }
                     SystemClock.sleep(300);
                     continue;
                 }
-                if (!isRunning) {
-                    break;
-                }
                 SystemClock.sleep(300);
             }
-            int exit = Integer.MIN_VALUE;
-            for (int i = 0; i < 40 && exit == Integer.MIN_VALUE; i++) {
-                try {
-                    exit = gesher.lastExitCode(pkg);
-                } catch (Throwable t) {
-                    if (state != null && !Device.alive(state, Device.SYSTEM_SERVER)) {
-                        break;
-                    }
-                }
-                if (exit == Integer.MIN_VALUE) SystemClock.sleep(250);
-            }
             tail.finish();
-            if (exit == Integer.MIN_VALUE) {
+            if (terminal == null) {
                 if (state != null && !Device.alive(state, Device.SYSTEM_SERVER)) {
-                    log("failed: the system server ended unexpectedly");
+                    log(text("server_unexpected"));
                 } else {
-                    log("failed: no OS exit code for the package's latest process: " + pkg);
+                    log(text("no_exit_code", pkg));
                 }
                 return 1;
             }
-            log("the process of " + pkg + " ended"
-                    + " (exit code " + exit + ")");
+            int exit = terminal.exitCode;
+            log(text("process_ended", pkg, exit));
             if (exit != 0) {
-                log("failed: the app's process exited with code " + exit);
+                log(text("process_failed", exit));
                 return 1;
             }
-            log("done");
+            log(text("done"));
             return 0;
         } finally {
             tail.finish();

@@ -35,7 +35,7 @@ try {
         $consentVm = @(
             "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system/framework/boot.art")",
             '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"),
-            'gesher.services.PermissionRequestsTest', (NoDrive $env:GESHER_MICROG_TEST_APK)
+            'gesher.services.ServiceFixtureRunner', 'PermissionRequestsTest', (NoDrive $env:GESHER_MICROG_TEST_APK)
         )
         CheckTimed 'microg: runtime consent grant/deny and replacement race (injected test decisions)' `
             "$Dir/dalvikvm.exe" $consentVm @('PermissionRequestsTest: async grant/deny, result mapping and replacement race passed') 120

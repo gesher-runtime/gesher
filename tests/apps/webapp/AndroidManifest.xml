@@ -23,5 +23,6 @@
             android:name=".FeaturesActivity"
             android:label="@string/activity_label"
             android:exported="true" />
+        <activity android:name=".DarkeningActivity" android:exported="true" />
     </application>
 </manifest>

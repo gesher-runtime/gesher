@@ -43,10 +43,20 @@ UninstallDisplayIcon={app}\gesher.ico
 ; program whose file dialog showed an APK. Closing them took the desktop away
 ; (Explorer) mid-update. PrepareToInstall moves the loaded copy aside instead.
 CloseApplicationsFilter=*.exe,*.chm
+LanguageDetectionMethod=uilanguage
+ShowLanguageDialog=no
+UsePreviousLanguage=no
+
+[Languages]
+Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "he"; MessagesFile: "compiler:Languages\Hebrew.isl"
+
+#include "ui-messages.iss"
 
 [Files]
 Source: "{#BuildDir}\dalvikvm.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libgesher_account_crypto.so"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\libgesher_install_pipe.so"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libgesher_webview_bridge.so"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\core-oj.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\core-libart.jar"; DestDir: "{app}"; Flags: ignoreversion
@@ -118,19 +128,22 @@ Source: "gesher.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app-microg.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-ui.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "ui-messages.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "licenses\APKSIG-LICENSE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
-Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
+Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme; Languages: en
+Source: "README.he.txt"; DestDir: "{app}"; DestName: "README.txt"; Flags: ignoreversion isreadme; Languages: he
 Source: "gesher.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Tasks]
 ; android.webkit.WebView runs on Microsoft Edge WebView2 (docs/webview.md):
 ; Windows 11 has its runtime; elsewhere Setup offers to install it (Microsoft's
 ; Evergreen bootstrapper, downloaded; a per-user install without elevation).
-Name: "webview2"; Description: "Install the Microsoft Edge WebView2 Runtime (Android apps' web views need it)"; Check: not WebView2Installed
+Name: "webview2"; Description: "{cm:setup_webview}"; Check: not WebView2Installed
 
 [Icons]
-Name: "{autoprograms}\Gesher Hello"; Filename: "{app}\gesher.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\gesher.ico"
-Name: "{autoprograms}\Gesher README"; Filename: "{app}\README.txt"
+Name: "{autoprograms}\{cm:setup_hello}"; Filename: "{app}\gesher.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\gesher.ico"
+Name: "{autoprograms}\{cm:setup_readme}"; Filename: "{app}\README.txt"
 
 [Registry]
 ; The `.apk` association, per user (HKCU\Software\Classes). Gesher.Apk opens
@@ -140,7 +153,7 @@ Name: "{autoprograms}\Gesher README"; Filename: "{app}\README.txt"
 ; only while it still names Gesher.Apk (CurUninstallStepChanged).
 Root: HKCU; Subkey: "Software\Classes\.apk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Apk"; Check: ApkUnclaimed
 Root: HKCU; Subkey: "Software\Classes\.apk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Apk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: ""; ValueData: "Android app (Gesher)"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_apk}"; Flags: uninsdeletekey
 ; The APKs Explorer opens go to the recent list of Gesher.Installer, not of every
 ; app whose shortcut runs gesher-launch.exe (each app's taskbar jump list).
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "Gesher.Installer"
@@ -151,19 +164,20 @@ Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shellex\IconHandler"; ValueType
 Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"; ValueType: string; ValueName: ""; ValueData: "Gesher APK icon handler"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}\InprocServer32"; ValueType: string; ValueName: ""; ValueData: "{app}\gesher_shellext.dll"
 Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}\InprocServer32"; ValueType: string; ValueName: "ThreadingModel"; ValueData: "Apartment"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "Run with Gesher"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_run}"
 ; gesher-launch.exe: no console window flashes (compat/shell/gesher_launch.cc).
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""
 ; Split APK bundles (.xapk, .apks: base.apk with its config.*.apk), the same way
-; as `.apk` but with gesher.ico: the icon handler reads one APK, not a bundle.
+; as `.apk`, including per-file icons drawn from the base APK and resource splits.
 Root: HKCU; Subkey: "Software\Classes\.xapk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: BundleUnclaimed('.xapk')
 Root: HKCU; Subkey: "Software\Classes\.xapk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\Classes\.apks"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: BundleUnclaimed('.apks')
 Root: HKCU; Subkey: "Software\Classes\.apks\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: ""; ValueData: "Android app bundle (Gesher)"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_bundle}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "Gesher.Installer"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\gesher.ico"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shell\open"; ValueType: string; ValueName: ""; ValueData: "Run with Gesher"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "%1"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shellex\IconHandler"; ValueType: string; ValueName: ""; ValueData: "{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shell\open"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_run}"
 Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""
 ; Gesher's toast activator (ADR 0051): the CustomActivator of every app's
 ; AppUserModelID. A click on an app's toast when no Gesher device runs makes COM
@@ -183,7 +197,7 @@ Filename: "{cmd}"; Parameters: "/d /c """"{app}\gesher-app.cmd"" shutdown"""; Fl
 Type: filesandordirs; Name: "{localappdata}\Gesher"
 ; The installed apps' Start menu shortcuts (gesher-app install; their icons are
 ; in the packages' data directories, above).
-Type: filesandordirs; Name: "{userprograms}\Gesher Apps"
+; Every translated Start menu folder is listed by ui-messages.iss.
 ; Icon handlers an update moved aside (PrepareToInstall) while Explorer had them loaded.
 Type: files; Name: "{app}\gesher_shellext.*.old"
 

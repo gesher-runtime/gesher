@@ -36,6 +36,7 @@
 #include <propidl.h>
 #include <propsys.h>
 #include <shellapi.h>
+#include "../locale/ui_locale.h"
 
 #include <algorithm>
 #include <cstring>
@@ -328,7 +329,7 @@ bool SplashFor(const std::wstring& here, Splash* splash) {
   }
   if (splash->icon.empty() && !apk_icon.empty() && IsFile(apk_icon)) splash->icon = apk_icon;
   if (splash->icon.empty()) splash->icon = here + L"\\gesher.ico";
-  if (splash->label.empty()) splash->label = L"Gesher";
+  if (splash->label.empty()) splash->label = GesherUiText(GesherUiCurrentLanguage(), "brand");
   return true;
 }
 
@@ -434,7 +435,9 @@ LRESULT CALLBACK SplashProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     SelectObject(dc, g_splash->text_font);
     SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
     RECT status = {16, label.bottom + 8, w - 16, label.bottom + 40};
-    DrawTextW(dc, L"Starting\u2026", -1, &status, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
+    const auto language = GesherUiCurrentLanguage();
+    DrawTextW(dc, GesherUiText(language, "starting"), -1, &status,
+              DT_CENTER | DT_SINGLELINE | DT_NOPREFIX | (GesherUiRtl(language) ? DT_RTLREADING : 0));
     SelectObject(dc, old);
     EndPaint(hwnd, &ps);
     return 0;
@@ -491,7 +494,8 @@ HWND ShowSplash(Splash* splash) {
                                   DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
   g_splash = splash;
 
-  HWND hwnd = CreateWindowExW(0, kSplashClass, splash->label.c_str(), style, x, y, ww, wh, nullptr,
+  const DWORD ex_style = GesherUiRtl(GesherUiCurrentLanguage()) ? WS_EX_RTLREADING : 0;
+  HWND hwnd = CreateWindowExW(ex_style, kSplashClass, splash->label.c_str(), style, x, y, ww, wh, nullptr,
                               nullptr, instance, nullptr);
   if (hwnd == nullptr) return nullptr;
   // Before it is shown: its taskbar button is the app's (the shortcut's icon).

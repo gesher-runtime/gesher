@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.gesher.orderedbroadcast.target" android:versionCode="1" android:versionName="1">
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <application android:label="Ordered broadcast target" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+    <service android:name=".TargetService" android:exported="true" />
+    <receiver android:name=".ManifestReceiver" android:exported="true" android:process=":ordered" android:permission="android.permission.ACCESS_NETWORK_STATE">
+      <intent-filter android:priority="100"><action android:name="com.gesher.orderedbroadcast.EVENT" /></intent-filter>
+    </receiver>
+  </application>
+</manifest>

@@ -76,6 +76,7 @@ final class JobSchedulerService extends IJobScheduler.Default
     /** A scheduled job: JobStatus. */
     private final class Job {
         final String packageName;
+        final long removalEpoch;
         final String namespace;
         final JobInfo info;
         final int ownerUid;
@@ -95,6 +96,7 @@ final class JobSchedulerService extends IJobScheduler.Default
 
         Job(String packageName, String namespace, JobInfo info) {
             this.packageName = packageName;
+            removalEpoch = mRemovalEpochs.getOrDefault(packageName, 0L);
             this.namespace = namespace;
             this.info = info;
             ApkPackage owner = mPm.get(packageName);
@@ -271,12 +273,13 @@ final class JobSchedulerService extends IJobScheduler.Default
         @Override
         public void setNotification(int jobId, int notificationId,
                 android.app.Notification notification, int jobEndNotificationPolicy) {
+            ApkPackage captured = mPm.get(job.packageName);
             callback(jobId);
             synchronized (JobSchedulerService.this) { if (done) return; }
             // User-initiated jobs' notifications: posted as the app's.
             NotificationManagerService n = NotificationManagerService.sLast;
             if (n != null && notification != null) {
-                n.post(job.packageName, null, notificationId, notification);
+                n.postFor(captured, job.packageName, null, notificationId, notification);
             }
         }
 
@@ -293,6 +296,8 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     // Guarded by this.
     private final List<Job> mJobs = new ArrayList<>();
+    private final Map<String, Long> mRemovalEpochs = new java.util.concurrent.ConcurrentHashMap<>();
+    private Runnable mBeforePersist; // Server-local race fixture; never a Binder option.
     private int mRunning;
     private Thread mThread;
 
@@ -302,6 +307,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         mAtm = atm;
         mPm = pm;
         mCallers = new CallerIdentity(pm, atm);
+        pm.onPackageRemoval(this::packageRemoved);
         double scale = 1;
         String s = System.getenv("GESHER_JOBS_TIME_SCALE");
         if (s != null) {
@@ -368,6 +374,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         if (info == null || info.getService() == null) throw new IllegalArgumentException("Missing job service");
         ComponentName service = info.getService();
         String pkg = service.getPackageName();
+        ApkPackage capturedOwner = mPm.get(pkg);
         own(pkg);
         ServiceInfo si = checkedService(pkg, info);
         if (si == null) {
@@ -388,6 +395,9 @@ final class JobSchedulerService extends IJobScheduler.Default
         Run stop = null;
         Job job;
         synchronized (this) {
+            if (capturedOwner == null || mPm.get(pkg) != capturedOwner || mPm.isRemovalPending(pkg)) {
+                throw new SecurityException("Job owner changed before publication");
+            }
             Job old = find(pkg, namespace, info.getId());
             if (work != null && old != null && old.info.equals(info)) {
                 // enqueue onto the same job: its work queue grows.
@@ -629,7 +639,9 @@ final class JobSchedulerService extends IJobScheduler.Default
     private boolean current(Job job) {
         ApkPackage owner = mPm.get(job.packageName);
         ServiceInfo service = checkedService(job.packageName, job.info);
-        return owner != null && owner.uid() == job.ownerUid && job.ownerIdentity != null
+        return owner != null && !mPm.isRemovalPending(job.packageName)
+                && job.removalEpoch == mRemovalEpochs.getOrDefault(job.packageName, 0L)
+                && owner.uid() == job.ownerUid && job.ownerIdentity != null
                 && job.ownerIdentity.equals(NotificationManagerService.codeIdentity(owner))
                 && service != null && android.Manifest.permission.BIND_JOB_SERVICE.equals(service.permission);
     }
@@ -1006,6 +1018,16 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     /** Writes a persisted job (package, namespace and the JobInfo's Parcel). */
     private void persist(Job j) {
+        Runnable beforePersist = mBeforePersist;
+        if (beforePersist != null) beforePersist.run();
+        synchronized (this) { persistLocked(j); }
+    }
+
+    private void persistLocked(Job j) {
+        ApkPackage owner = mPm.get(j.packageName);
+        if (!mJobs.contains(j) || mPm.isRemovalPending(j.packageName) || owner == null
+                || j.removalEpoch != mRemovalEpochs.getOrDefault(j.packageName, 0L)
+                || owner.uid() != j.ownerUid || !Objects.equals(j.ownerIdentity, NotificationManagerService.codeIdentity(owner))) return;
         if (!j.info.isPersisted()) return;
         Parcel p = Parcel.obtain();
         try {
@@ -1027,8 +1049,30 @@ final class JobSchedulerService extends IJobScheduler.Default
         }
     }
 
-    private void unpersist(Job j) {
+    private synchronized void unpersist(Job j) {
+        if (j.removalEpoch != mRemovalEpochs.getOrDefault(j.packageName, 0L)) return;
+        for (Job current : mJobs) {
+            if (current != j && current.same(j.packageName, j.namespace, j.info.getId())) return;
+        }
         if (j.info.isPersisted()) persistFile(j).delete();
+    }
+
+    private void packageRemoved(String name) {
+        List<Job> cancelled = new ArrayList<>();
+        synchronized (this) {
+            mRemovalEpochs.put(name, mRemovalEpochs.getOrDefault(name, 0L) + 1);
+            for (Job job : mJobs) if (name.equals(job.packageName)) cancelled.add(job);
+            mJobs.removeAll(cancelled);
+            File[] persisted = persistDir().listFiles();
+            if (persisted != null) for (File file : persisted) {
+                if (!file.getName().startsWith(name + "-") || !file.getName().endsWith(".job")) continue;
+                try { java.nio.file.Files.deleteIfExists(file.toPath()); }
+                catch (java.io.IOException failed) {
+                    throw new IllegalStateException("Could not revoke persisted package jobs", failed);
+                }
+            }
+        }
+        cancelled(cancelled, "package removed");
     }
 
     private List<Job> loadPersisted() {

@@ -66,6 +66,7 @@ final class Installer {
     private final PackageManagerService mPm;
     private final ActivityTaskManagerService mAtm;
     private final Map<String, Entry> mEntries;
+    private boolean mRemovalActive;
 
     private Installer(PackageManagerService pm, ActivityTaskManagerService atm,
             Map<String, Entry> entries) {
@@ -99,17 +100,21 @@ final class Installer {
         File f = registry();
         f.getParentFile().mkdirs();
         File tmp = new File(f.getPath() + ".tmp");
-        try (Writer w = new OutputStreamWriter(new FileOutputStream(tmp),
+        try (FileOutputStream out = new FileOutputStream(tmp);
+                Writer w = new OutputStreamWriter(out,
                 StandardCharsets.UTF_8)) {
             w.write("# package\tcode path\tfirst install\tlast update (Gesher, ADR 0026)\n");
             for (Entry e : mEntries.values()) {
                 w.write(e.packageName + "\t" + e.codePath + "\t" + e.firstInstallTime + "\t"
                         + e.lastUpdateTime + "\n");
             }
+            w.flush(); out.getFD().sync();
         }
-        if (!tmp.renameTo(f)) {
-            f.delete();
-            if (!tmp.renameTo(f)) throw new IOException("cannot write " + f);
+        try {
+            Files.move(tmp.toPath(), f.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (java.nio.file.AtomicMoveNotSupportedException unavailable) {
+            Files.move(tmp.toPath(), f.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
@@ -120,6 +125,9 @@ final class Installer {
     static List<ApkPackage> loadInstalled() throws IOException {
         List<ApkPackage> result = new ArrayList<>();
         Map<String, Entry> entries = readRegistry();
+        Map<String, String> installed = new LinkedHashMap<>();
+        for (Entry entry : entries.values()) installed.put(entry.packageName, entry.codePath);
+        PackageRemovalStorage.recover(installed);
         // Code directories no entry names: an uninstall or update that could not delete
         // them (a file still open), or one that did not finish.
         java.util.Set<String> kept = new java.util.HashSet<>();
@@ -148,6 +156,7 @@ final class Installer {
     static Installer create(PackageManagerService pm, ActivityTaskManagerService atm)
             throws IOException {
         Installer installer = new Installer(pm, atm, readRegistry());
+        pm.attachInstaller(atm, installer);
         // Background dexopt with the apps' JIT profiles, while the device is idle (ADR 0054).
         Dexopt.startBackground(installer::codePaths, atm::idleSince);
         return installer;
@@ -253,10 +262,18 @@ final class Installer {
      * version code.
      */
     synchronized String[] install(String apk) throws Exception {
+        return install(apk, null);
+    }
+
+    /** Server-owned immutable session metadata, copied before package publication. */
+    synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata) throws Exception {
+        // A failed rollback is in doubt: no subsequent publication may skip it and
+        // thereby turn recoverable old data into a committed deletion.
+        recoverRemovals();
         File source = new File(apk);
         if (!source.isFile()) throw new IllegalArgumentException("no such file: " + apk);
         final File original = source;
-        Entry recorded = recordedSource(original);
+        Entry recorded = sessionMetadata == null ? recordedSource(original) : null;
         if (recorded != null) {
             ApkPackage parsed = ApkPackage.parse(recorded.codePath + "/base.apk");
             return unchanged(apk, recorded.packageName, parsed, recorded);
@@ -287,7 +304,7 @@ final class Installer {
             File metadata = dexMetadata(source);
             if (metadata.isFile()) {
                 ParseResult<?> result = DexMetadataHelper.validateDexMetadataFile(
-                        ParseTypeImpl.forDefaultParsing(), metadata.getPath(), pkg, parsed.versionCode());
+                        ParseTypeImpl.forParsingWithoutPlatformCompat(), metadata.getPath(), pkg, parsed.versionCode());
                 if (result.isError()) {
                     throw new IllegalArgumentException("INSTALL_FAILED_BAD_DEX_METADATA: "
                             + result.getErrorMessage(), result.getException());
@@ -330,6 +347,7 @@ final class Installer {
             if (old != null && sameContent(source, new File(old.codePath, "base.apk"))
                     && sameMetadata(metadata, new File(old.codePath, "base.dm"))
                     && sameSplits(companionSplits(source), old.codePath)
+                    && (sessionMetadata == null || sessionMetadata.matches(new File(old.codePath)))
                     && mPm.get(pkg) != null) {
                 recordSource(original, pkg, old.codePath);
                 return unchanged(apk, pkg, parsed, old);
@@ -344,7 +362,12 @@ final class Installer {
                 }
             }
             File code = new File(Device.dataDir(), "app/" + pkg + "-" + n);
-            deleteTree(code);
+            int occupied = 0;
+            while (Files.exists(code.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                    || PackageRemovalStorage.reserves(code.toPath())) {
+                if (++occupied > 10000 || n == Integer.MAX_VALUE) throw new IOException("No free package code generation");
+                code = new File(Device.dataDir(), "app/" + pkg + "-" + (++n));
+            }
             code.mkdirs();
             File base = new File(code, "base.apk");
             copy(source, base);
@@ -355,8 +378,12 @@ final class Installer {
                     String targetName = split.getName().startsWith("split_")
                             ? split.getName() : "split_" + split.getName();
                     copy(split, new File(code, targetName));
+                    File splitMetadata = dexMetadata(split);
+                    if (splitMetadata.isFile()) copy(splitMetadata,
+                            new File(code, InstallSessionMetadata.dexName(targetName)));
                 }
             }
+            if (sessionMetadata != null) sessionMetadata.copyTo(code);
             // Verification must apply to the bytes being published, not a mutable
             // download that could change after its initial parse/verification.
             ApkPackage staged = ApkPackage.parse(base.getAbsolutePath());
@@ -416,6 +443,7 @@ final class Installer {
                     + (libs > 0 ? ", " + libs + " native libraries (" + abi
                             + ")" : ""));
             recordSource(original, pkg, code.getPath());
+            mPm.packageInstalled(installed, old != null || previous != null, this);
             return new String[] {pkg, what, code.getPath(), String.valueOf(installed.versionCode())};
         } finally {
             if (tempDir != null) deleteTree(tempDir);
@@ -513,21 +541,60 @@ final class Installer {
         }
     }
 
-    /** Uninstalls the package: its processes, code, data and entry. */
+    synchronized boolean ordinaryInstalled(ApkPackage target) {
+        if (target == null || target.isSystemAddon()) return false;
+        Entry entry = mEntries.get(target.packageName);
+        return entry != null && mPm.get(target.packageName) == target
+                && new File(entry.codePath, "base.apk").equals(new File(target.apkPath));
+    }
+
+    private void recoverRemovals() throws IOException {
+        if (mRemovalActive) throw new IllegalStateException("Package removal is active");
+        PackageRemovalStorage.recover(codePaths());
+        mPm.recoveredPackageRemovals();
+    }
+
+    /** Uninstalls only a persistent ordinary package, retaining its allocated UID tombstone. */
     synchronized boolean uninstall(String packageName) throws IOException {
+        recoverRemovals();
         Entry e = mEntries.get(packageName);
         if (e == null) return false;
-        mAtm.forceStopPackage(packageName);
-        mPm.permissions().forgetPackage(packageName);
-        mPm.remove(packageName);
-        mEntries.remove(packageName);
-        writeRegistry();
-        delete(new File(e.codePath));
-        delete(new File(Device.dataDir(), "data/" + packageName));
+        ApkPackage target = mPm.get(packageName);
+        if (!ordinaryInstalled(target)) throw new SecurityException("System or nonpersistent package");
+        PackageRemovalStorage quarantine = new PackageRemovalStorage(packageName, e.codePath);
+        mPm.beginPackageRemoval(target);
+        mRemovalActive = true;
+        boolean committed = false, restored = false;
+        try {
+            mPm.checkPackageRemoval(packageName);
+            mAtm.forceStopPackage(packageName);
+            // Fail closed on persistent revocation errors. A failed removal can leave
+            // fewer grants, but never restores a capability across a later reinstall.
+            mPm.revokePackageCapabilities(packageName);
+            mPm.permissions().forgetPackage(packageName);
+            NotificationManagerService notifications = NotificationManagerService.sLast;
+            if (notifications != null) notifications.packageRemoved(packageName);
+            // Retire any background start already queued while capabilities were canceled.
+            mAtm.forceStopPackage(packageName);
+            quarantine.stage();
+            mEntries.remove(packageName);
+            writeRegistry();
+            committed = true;
+            mPm.remove(packageName);
+        } catch (IOException | RuntimeException failure) {
+            if (!committed) {
+                mEntries.put(packageName, e);
+                try { quarantine.rollback(); restored = true; }
+                catch (IOException restore) { failure.addSuppressed(restore); }
+            }
+            throw failure;
+        } finally {
+            mRemovalActive = false;
+            if (committed || restored) mPm.endPackageRemoval(target);
+        }
+        quarantine.discard(); // Locked remnants stay private and are reaped at next boot.
         Dexopt.deleteProfiles(packageName);
-        // Its toasts and its AppUserModelID's registration go too (hwsvc2, ADR 0051).
-        NotificationManagerService notifications = NotificationManagerService.sLast;
-        if (notifications != null) notifications.packageRemoved(packageName);
+        mPm.packageRemoved(target, this);
         SystemServer.log("uninstalled " + packageName + " (" + e.codePath + ")");
         return true;
     }
@@ -608,17 +675,6 @@ final class Installer {
     }
 
     private static boolean deleteTree(File f) {
-        File[] children = f.listFiles();
-        if (children != null) {
-            for (File c : children) deleteTree(c);
-        }
-        // Not File.delete: that is remove(3), which removes no directory on Windows' C
-        // runtime; java.nio's delete calls rmdir for one.
-        try {
-            Files.deleteIfExists(f.toPath());
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
+        return PackageRemovalStorage.deleteNoFollow(f.toPath());
     }
 }

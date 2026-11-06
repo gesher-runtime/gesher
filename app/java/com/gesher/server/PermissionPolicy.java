@@ -206,6 +206,9 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             throw new IllegalArgumentException("Not a requested runtime permission: " + permission);
         }
         synchronized (this) {
+            if (mPm.get(pkg) != installed || mPm.isRemovalPending(pkg)) {
+                throw new SecurityException("Runtime permission owner changed or is retiring");
+            }
             String key = key(installed, permission);
             Object previous = mDecisions.setProperty(key, decision);
             try { Device.write(mFile, mDecisions); }

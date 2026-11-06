@@ -17,3 +17,15 @@ set_target_properties(gesher_account_crypto PROPERTIES
   PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "gesher_account_crypto")
 target_compile_options(gesher_account_crypto PRIVATE -Wall -Wextra -Werror)
 add_dependencies(dalvikvm gesher_account_crypto)
+
+add_executable(account_chooser_test EXCLUDE_FROM_ALL
+  "${CMAKE_SOURCE_DIR}/tests/native/account_chooser_test.c")
+target_link_libraries(account_chooser_test PRIVATE kernel32 user32)
+target_compile_options(account_chooser_test PRIVATE -UNOGDI -Wall -Wextra -Werror)
+target_link_options(account_chooser_test PRIVATE -municode)
+
+add_executable(window_promotion_test EXCLUDE_FROM_ALL
+  "${CMAKE_SOURCE_DIR}/tests/native/window_promotion_test.c")
+target_link_libraries(window_promotion_test PRIVATE kernel32 user32)
+target_compile_options(window_promotion_test PRIVATE -UNOGDI -Wall -Wextra -Werror)
+target_link_options(window_promotion_test PRIVATE -municode)

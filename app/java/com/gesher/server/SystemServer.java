@@ -11,6 +11,7 @@ import android.os.ServiceManager;
 import android.os.SystemClock;
 
 import com.gesher.app.Main;
+import static com.gesher.app.locale.UiText.text;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -181,6 +182,9 @@ public final class SystemServer {
         // The services, published with servicemanager.
         Map<String, IBinder> services = Services.create(packages);
         Services.Created created = Services.sLast;
+        // Host installation can precede the first application bind. Initialize the
+        // server's writable region and real package-cache nonce before publishing APIs.
+        created.am.invalidatePermissionCaches();
         // Providers answering other processes ask the permission checker.
         services.put("permission_checker", StandIn.of(
                 android.permission.IPermissionChecker.class,
@@ -239,7 +243,17 @@ public final class SystemServer {
             return;
         }
         final String binder = System.getenv("GESHER_BINDER");
-        atm.setProcessStarter((packageName, startSeq, targetSdk) -> {
+        atm.setProcessStarter(new ActivityTaskManagerService.ProcessStarter() {
+            @Override public int start(String packageName, long startSeq, int targetSdk) throws Exception {
+                return start(packageName, packageName, startSeq, targetSdk);
+            }
+            @Override public int start(String packageName, String processName, long startSeq,
+                    int targetSdk) throws Exception {
+                return start(packageName, processName, startSeq, targetSdk,
+                        WindowManagerService.resolveWindowMode(packageName, null));
+            }
+            @Override public int start(String packageName, String processName, long startSeq,
+                    int targetSdk, String windowMode) throws Exception {
             File logFile = Device.packageLog(packageName);
             logFile.getParentFile().mkdirs();
             ApkPackage pkg = pm.get(packageName);
@@ -254,11 +268,11 @@ public final class SystemServer {
                             + com.gesher.app.shell.AppShell.appUserModelId(packageName),
                     // The display the server describes, which the app's windows are on.
                     "GESHER_DISPLAY=" + com.gesher.app.DeviceProfile.describe()));
-            // Its windows (graphics track, ADR 0029): what the launcher asked for.
-            String windowMode = WindowManagerService.windowMode(packageName);
-            if (windowMode != null) {
-                env.add(com.gesher.app.window.WindowMode.ENV + "=" + windowMode);
+            // ATM captured this exact mode with its pending process, before spawning.
+            if (com.gesher.app.window.WindowMode.parse(windowMode) == null) {
+                throw new IllegalArgumentException("Missing resolved app window mode");
             }
+            env.add(com.gesher.app.window.WindowMode.ENV + "=" + windowMode);
             // Android's INTERNET permission: no inet sockets without it (docs/network.md).
             String inet = ConnectivityService.internetEnvironment(packageName);
             if (inet != null) env.add(inet);
@@ -267,6 +281,7 @@ public final class SystemServer {
             return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
                     String.valueOf(targetSdk))), env, logFile.getPath(), false);
+            }
         });
     }
 
@@ -370,16 +385,18 @@ public final class SystemServer {
         }
 
         @Override
+        public GesherService.LaunchResult startActivityAndWait(android.content.Intent intent) {
+            return mServices.atm.startActivityForHost(intent);
+        }
+
+        @Override
         public String status() {
             StringBuilder sb = new StringBuilder();
-            sb.append("device ").append(System.getenv("GESHER_BINDER"))
-                    .append(", system server pid ").append(Process.myPid())
-                    .append(", up ").append((System.currentTimeMillis() - mStarted) / 1000)
-                    .append(" s, ").append(mServices.pm.packages().size())
-                    .append(" packages");
+            sb.append(text("device_status", System.getenv("GESHER_BINDER"), Process.myPid(),
+                    (System.currentTimeMillis() - mStarted) / 1000, mServices.pm.packages().size()));
             for (ActivityTaskManagerService.ProcessRecord p : mServices.atm.processes()) {
                 sb.append("\n  ").append(p).append(p.activities.isEmpty() ? ""
-                        : ", " + p.activities.size() + " activities");
+                        : text("activities_count", p.activities.size()));
             }
             return sb.toString();
         }

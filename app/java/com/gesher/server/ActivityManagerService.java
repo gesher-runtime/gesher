@@ -73,6 +73,8 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     CallerIdentity callers() { return mCallers; }
 
+    void setAccountManager(AccountManagerService accounts) { mAtm.setAccountManager(accounts); }
+
     void invalidatePermissionCaches() {
         if (!String.valueOf(android.os.Process.SYSTEM_UID).equals(System.getenv("GESHER_BINDER_UID"))) {
             // In-process compatibility services share the app's read-only region;
@@ -117,7 +119,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
         for (ActivityTaskManagerService.ProcessRecord p : mAtm.processes()) {
             if (p.packageName == null) continue;
             android.app.ActivityManager.RunningAppProcessInfo info =
-                    new android.app.ActivityManager.RunningAppProcessInfo(p.packageName, p.pid,
+                    new android.app.ActivityManager.RunningAppProcessInfo(p.processName, p.pid,
                             new String[] {p.packageName});
             ApkPackage installed = mPm.get(p.packageName);
             info.uid = installed == null ? -1 : installed.uid();
@@ -338,19 +340,37 @@ public final class ActivityManagerService extends IActivityManager.Default {
     }
 
     int sendBroadcastFor(String packageName, Intent intent, String resolvedType, String requiredPermission) {
+        return sendBroadcastFor(packageName, intent, resolvedType, requiredPermission, () -> true);
+    }
+
+    int sendBroadcastFor(String packageName, Intent intent, String resolvedType,
+            String requiredPermission, java.util.function.BooleanSupplier lifetime) {
+        if (!lifetime.getAsBoolean()) return ActivityManager.START_CANCELED;
         return mBroadcasts.broadcastIntent(intent, resolvedType, packageName,
                 android.os.Process.myPid(), requiredPermission == null ? null : new String[]{requiredPermission},
-                null, null);
+                null, null, lifetime);
     }
 
     int startActivityFor(String packageName, Intent intent, String resolvedType) {
+        return startActivityFor(packageName, intent, resolvedType, () -> true);
+    }
+
+    int startActivityFor(String packageName, Intent intent, String resolvedType,
+            java.util.function.BooleanSupplier lifetime) {
+        if (!lifetime.getAsBoolean()) return ActivityManager.START_CANCELED;
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        return mAtm.startActivityForVerifiedCreator(packageName, intent, resolvedType);
+        return mAtm.startActivityForVerifiedCreator(packageName, intent, resolvedType, lifetime);
     }
 
     void startServiceFor(String packageName, Intent intent, String resolvedType,
             boolean foreground) {
-        mServices.startService(null, intent, resolvedType, foreground, packageName);
+        startServiceFor(packageName, intent, resolvedType, foreground, () -> true);
+    }
+
+    void startServiceFor(String packageName, Intent intent, String resolvedType,
+            boolean foreground, java.util.function.BooleanSupplier lifetime) {
+        if (!lifetime.getAsBoolean()) return;
+        mServices.startService(null, intent, resolvedType, foreground, packageName, lifetime);
     }
 
     // --- services (ActiveServices) -------------------------------------------------------
@@ -468,11 +488,16 @@ public final class ActivityManagerService extends IActivityManager.Default {
             String resultData, Bundle map, String[] requiredPermissions,
             String[] excludePermissions, String[] excludePackages, int appOp, Bundle options,
             boolean serialized, boolean sticky, int userId) {
+        if (userId != 0) throw new SecurityException("Only the current Gesher user is supported");
+        if ((serialized || resultTo != null) && (sticky || appOp != android.app.AppOpsManager.OP_NONE)) {
+            throw new UnsupportedOperationException("Sticky or app-op acknowledged broadcasts are unsupported");
+        }
         ActivityTaskManagerService.ProcessRecord app =
                 mAtm.callerProcess(Binder.getCallingPid());
-        return mBroadcasts.broadcastIntent(intent, resolvedType,
+        return mBroadcasts.broadcastIntent(caller, intent, resolvedType,
                 app != null ? app.packageName : null, Binder.getCallingPid(),
-                requiredPermissions, excludePermissions, excludePackages);
+                resultTo, resultCode, resultData, map,
+                requiredPermissions, excludePermissions, excludePackages, serialized);
     }
 
     @Override

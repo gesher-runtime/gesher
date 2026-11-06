@@ -42,7 +42,8 @@ public final class CallerIdentity {
         if (isSystem()) return "android";
         String name = packageForPid(callerPid());
         ApkPackage pkg = name == null ? null : mPm.get(name);
-        if (pkg == null || (GmsSignatureSpoofing.isEnabled() && pkg.uid() != callerUid())) {
+        if (pkg == null || mPm.isRemovalPending(name)
+                || (GmsSignatureSpoofing.isEnabled() && pkg.uid() != callerUid())) {
             throw new SecurityException("Unrecognized application Binder identity");
         }
         return name;

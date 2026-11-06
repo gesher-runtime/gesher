@@ -6,8 +6,12 @@ from pathlib import Path
 import shutil
 
 FRAMEWORK = set('framework.jar framework-res.apk gesher-app.jar org.apache.http.legacy.jar com.android.location.provider.jar build.prop lifecycle.apk components.apk peer.apk uiapp.apk dbapp.apk devsvc.apk microgprobe.apk devices.apk nodevices.apk popupapp.apk gesher-camera.apk rtlapp.apk imeapp.apk lifeapp.apk localeapp.apk locale2app.apk locale2other.apk surfaceapp.apk winapp.apk winlegacy.apk netapp.apk nonetapp.apk web3app.apk services-tests.dex exitstatusapp.apk sharedlibraryapp.apk sharedlibrarydlc.apk sharedlibrarybad.apk shared-base-v1.jar shared-base-v2.jar shared-entry.jar graphics-tests.dex web3-query-tests.dex'.split())
-HOST = set('libgesher_account_crypto.so libgesher_webview_bridge.so dalvikvm.exe dex2oat.exe profman.exe dexdump.exe gesher-exec.exe arm64_elf_test.exe surface_invalidation_test.exe dalvikvm.map dex2oat.map core-oj.jar core-libart.jar core-icu4j.jar hello.dex'.split())
+HOST = set('libgesher_account_crypto.so libgesher_install_pipe.so libgesher_webview_bridge.so install_pipe_test.exe account_chooser_test.exe window_promotion_test.exe dalvikvm.exe dex2oat.exe profman.exe dexdump.exe gesher-exec.exe arm64_elf_test.exe surface_invalidation_test.exe dalvikvm.map dex2oat.map core-oj.jar core-libart.jar core-icu4j.jar hello.dex'.split())
 ALLOWED = {'current_framework': ('base_framework', FRAMEWORK), 'current_host': ('base_windows_x64', HOST)}
+FRAMEWORK.update('orderedbroadcast-source.apk orderedbroadcast-target.apk webviewlifecycle.apk namedprocesslauncher.apk windowpromotion-source.apk windowpromotion-target.apk windowpromotion-control.dex'.split())
+FRAMEWORK.update('packageevents-observer.apk packageevents-target-v1.apk packageevents-target-v2.apk packageevents-control.dex'.split())
+HOST.add('account-chooser-native-tests.dex')
+FRAMEWORK.update('icon-base.apk icon-density.apk icon-bundle.apks icon-bundle.xapk'.split())
 
 def assemble(source, dest, ledger, owner, prefix='', exclude=()):
     source, dest, ledger = Path(source).resolve(), Path(dest).resolve(), Path(ledger).resolve()

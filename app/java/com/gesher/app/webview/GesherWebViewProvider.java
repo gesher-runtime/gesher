@@ -1,5 +1,7 @@
 package com.gesher.app.webview;
 
+import static com.gesher.app.locale.UiText.text;
+
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
@@ -117,6 +119,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private final Context mContext;
     private final Handler mUi;
     private final GesherWebSettings mSettings;
+    private final WebViewDarkening mDarkening;
     private volatile WebView2Host mHost;
     private boolean mDestroyed;
 
@@ -334,6 +337,15 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         mBridgeDispatcher = new JsBridgeDispatcher(mInterfaces, mRequireAnnotation);
         GesherWebView.configure(mContext);
         mSettings = new GesherWebSettings(GesherWebView.defaultUserAgent(), this::settingsChanged);
+        mDarkening = new WebViewDarkening((method, parameters, completed) ->
+                devTools(method, parameters, result -> {
+                    boolean success = result != null;
+                    if (success) {
+                        try { success = !new JSONObject(result).has("error"); }
+                        catch (Exception failure) { success = false; }
+                    }
+                    completed.accept(success);
+                }), GesherWebView::log);
     }
 
     // ---- WebViewProvider ----
@@ -378,6 +390,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 || s.getBlockNetworkImage() || !s.getLoadsImagesAutomatically();
         mHost.setSettings(s.getJavaScriptEnabled(), zoom, zoom, sDevTools, intercept,
                 s.getSafeBrowsingEnabled(), s.getUserAgentString());
+        applyDarkening();
         // Text zoom scales the text alone (PageScripts.textZoom), not the page.
         int textZoom = s.getTextZoom() > 0 ? s.getTextZoom() : 100;
         if (textZoom != mTextZoom) {
@@ -660,6 +673,17 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             }
             if (callback != null) callback.onReceiveValue(path);
         });
+    }
+
+    private void applyDarkening() {
+        if (mHost == null || mDestroyed) return;
+        android.util.TypedValue value = new android.util.TypedValue();
+        boolean lightTheme = mContext.getTheme() == null
+                || !mContext.getTheme().resolveAttribute(com.android.internal.R.attr.isLightTheme,
+                        value, true)
+                || value.type != android.util.TypedValue.TYPE_INT_BOOLEAN || value.data != 0;
+        mDarkening.apply(lightTheme, mContext.getApplicationInfo().targetSdkVersion,
+                mSettings.isAlgorithmicDarkeningAllowed());
     }
 
     /** A DevTools protocol method; the callback gets its result (JSON) or null, on the UI thread. */
@@ -1532,6 +1556,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
+        settingsChanged();
     }
 
     @Override
@@ -2337,8 +2362,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             if (patterns.length() > 0) patterns.append(';');
             patterns.append(p);
         }
-        String all = "All files|*.*";
-        return patterns.length() > 0 ? "Accepted files|" + patterns + "\n" + all : all;
+        String all = text("files_all") + "|*.*";
+        return patterns.length() > 0 ? text("files_accepted") + "|" + patterns + "\n" + all : all;
     }
 
     /** COREWEBVIEW2_PERMISSION_KIND. */

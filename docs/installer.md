@@ -85,7 +85,7 @@ runs the installed `gesher-launch install uiapp.apk` (no splash) and
 with `Gesher UI` and `Gesher.App.com.gesher.uiapp`, is gone within 5 s of the
 app's `GesherWindow` being visible.
 
-Each `.apk` file's icon comes from `gesher_shellext.dll`
+Each `.apk`, `.apks` and `.xapk` file's icon comes from `gesher_shellext.dll`
 (`compat/shell/gesher_shellext.cc`), loaded by Explorer: its app's icon. It
 parses no APK: it looks the file (its size and last write time) up in
 `%LOCALAPPDATA%\Gesher\data\system\apk-icons.list`, which `gesher-app install`
@@ -94,7 +94,11 @@ icon at first, while the handler runs `gesher-launch.exe apk-icon "<file>"` in
 the background (no window; once per file, at most two at once, not for an empty
 file or one still being written). That command draws the app's icon without
 installing it into `data\system\apk-icons\<size>-<time>.ico`, records it, and
-Explorer shows it.
+Explorer shows it. Bundles are read in a temporary directory without installing
+the app: the base APK supplies package metadata and the resource splits supply
+the density-specific images. The cache key remains that of the original bundle.
+Temporary icon files have unique names, and complete icon lists are published by
+replacement so concurrent requests do not expose partially written cache data.
 
 Opening an APK this way runs it the way `gesher-app my.apk` does: it is
 installed (or updated) on the user's Gesher device and its launcher Activity

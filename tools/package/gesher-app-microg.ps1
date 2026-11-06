@@ -10,17 +10,18 @@ param(
     [switch] $Remove
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'gesher-ui.ps1')
 $ProfileRoot = [IO.Path]::GetFullPath($ProfileRoot)
 $RuntimeDir = [IO.Path]::GetFullPath($RuntimeDir)
 $marker = Join-Path $ProfileRoot 'microg.enabled'
 $packages = 'com.google.android.gms', 'com.android.vending', 'com.google.android.gsf'
-if ($Disable -and $Remove) { throw 'Choose -Disable or -Remove.' }
+if ($Disable -and $Remove) { throw (Get-GesherText 'microg_choose') }
 if (($Disable -or $Remove) -and ($GmsCoreApk -or $CompanionApk -or $GsfProxyApk)) {
-    throw 'Do not combine addon files with -Disable or -Remove.'
+    throw (Get-GesherText 'microg_no_files')
 }
 if ($Disable) {
     if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker }
-    Write-Host 'microG disabled for the next Gesher device start. APKs and data are retained.'
+    Write-Host (Get-GesherText 'microg_disabled')
     return
 }
 # Replacing mapped APK contents can invalidate the verified identity. Require the
@@ -30,7 +31,7 @@ if (Test-Path -LiteralPath $ready) {
     $serverId = 0
     if ([int]::TryParse((Get-Content -LiteralPath $ready -Raw).Trim(), [ref] $serverId)) {
         if (Get-Process -Id $serverId -ErrorAction SilentlyContinue) {
-            throw 'Stop this Gesher device before changing addon files (gesher-app shutdown).'
+            throw (Get-GesherText 'microg_stop')
         }
     }
 }
@@ -43,10 +44,10 @@ if ($Remove) {
             if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file }
         }
     }
-    Write-Host 'microG addon APKs removed. Application and account data are retained.'
+    Write-Host (Get-GesherText 'microg_removed')
     return
 }
-if (-not $GmsCoreApk) { throw 'Pass -GmsCoreApk with an official microG Services APK.' }
+if (-not $GmsCoreApk) { throw (Get-GesherText 'microg_pass_apk') }
 $entries = @(
     @{ Package = $packages[0]; Source = $GmsCoreApk },
     @{ Package = $packages[1]; Source = $CompanionApk },
@@ -54,7 +55,7 @@ $entries = @(
 ) | Where-Object { $_.Source }
 foreach ($entry in $entries) {
     if (-not (Test-Path -LiteralPath $entry.Source -PathType Leaf)) {
-        throw "The addon file does not exist: $($entry.Source)"
+        throw (Get-GesherText 'microg_missing' @($entry.Source))
     }
     $entry.Source = (Resolve-Path -LiteralPath $entry.Source).ProviderPath
 }
@@ -69,7 +70,7 @@ function AndroidPath([string] $path) {
 }
 $dalvikvm = Join-Path $RuntimeDir 'dalvikvm.exe'
 if (-not (Test-Path -LiteralPath $dalvikvm)) {
-    throw 'Use the rebuilt Gesher runtime, or pass -RuntimeDir with its location.'
+    throw (Get-GesherText 'microg_runtime')
 }
 # Only public runtime data needed to start the offline APK verifier. Child-only
 # environment variables keep the calling shell's profile/UID unchanged.
@@ -77,7 +78,7 @@ foreach ($dir in 'system', 'art', 'data', 'i18n/etc/icu') {
     New-Item -ItemType Directory -Force (Join-Path $ProfileRoot $dir) | Out-Null
 }
 $icu = @(Get-ChildItem -LiteralPath $RuntimeDir -Filter 'icudt*l.dat')
-if ($icu.Count -ne 1) { throw 'The Gesher runtime must contain exactly one ICU data file.' }
+if ($icu.Count -ne 1) { throw (Get-GesherText 'microg_icu') }
 $icuTarget = Join-Path $ProfileRoot "i18n/etc/icu/$($icu[0].Name)"
 if (-not (Test-Path -LiteralPath $icuTarget) -or (Get-Item $icuTarget).Length -ne $icu[0].Length) {
     Copy-Item -LiteralPath $icu[0].FullName -Destination $icuTarget -Force
@@ -114,14 +115,14 @@ try {
             if (-not $process.WaitForExit(120000)) {
                 $process.Kill()
                 $process.WaitForExit()
-                throw 'The offline microG APK verifier timed out.'
+                throw (Get-GesherText 'microg_timeout')
             }
             $stdout = $output.GetAwaiter().GetResult()
             $stderr = $errors.GetAwaiter().GetResult()
             if ($process.ExitCode -ne 0 -or -not $stdout.Contains("Verified official microG addon: $($entry.Package)")) {
-                throw "APK verification failed for $($entry.Package). Use the unmodified official release. $stderr"
+                throw (Get-GesherText 'microg_verify_failed' @($entry.Package, $stderr))
             }
-            Write-Host "Verified official microG addon: $($entry.Package)"
+            Write-Host (Get-GesherText 'microg_verified' @($entry.Package))
         } finally { $process.Dispose() }
     }
     foreach ($entry in $entries) {
@@ -134,5 +135,5 @@ try {
         if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp }
     }
 }
-Write-Host 'microG staged. Start the Gesher device to load the verified addons.'
-Write-Host 'Open microG Settings to configure Check-in, Cloud Messaging and accounts.'
+Write-Host (Get-GesherText 'microg_staged')
+Write-Host (Get-GesherText 'microg_settings')

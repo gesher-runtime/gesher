@@ -1,0 +1,96 @@
+{
+  "date": "2026-11-06",
+  "scope": "Public Otzaria APK preparation diagnosis and generic WebView algorithmic-darkening regression; no personal application data",
+  "public_apk": {
+    "package": "org.otzaria.otzaria",
+    "version_name": "0.9.98",
+    "version_code": 99802,
+    "sha256": "5acf62dc7eb3a86443d5e62ea783e1056d9bdd26ad3eb51b3014e17dda3080b8",
+    "redistributed_in_repository": false
+  },
+  "static_api_trace": {
+    "preparation": "com.pichillilorenzo.flutter_inappwebview_android.webview.in_app_webview.InAppWebView.prepare",
+    "exception_factory": "q1.w.a(): generic UnsupportedOperationException factory",
+    "feature": "ALGORITHMIC_DARKENING",
+    "outer_check": "p1.d.a accepts q1.u.a framework SDK>=33 OR provider support",
+    "setter_check": "prepare then checks provider-only q1.u.b and throws when absent",
+    "boundary_method": "org.chromium.support_lib_boundary.WebSettingsBoundaryInterface.setAlgorithmicDarkeningAllowed(boolean)",
+    "getter": "isAlgorithmicDarkeningAllowed()",
+    "default_false_still_invokes_setter": true,
+    "old_public_program": {
+      "native_sha256": "da36f059ff75a35fb42be9174bc974086d885a9a808f4f696f4917cb2bfef61a",
+      "app_jar_sha256": "086e5797098f509f6780b8764be9c1ffadbf38fefb9aeaeaa59520b29a2ce369",
+      "sdk": 36,
+      "feature_and_boundary_methods_absent": true,
+      "scope": "Read-only public code observation; never a deployment preflight pin"
+    },
+    "prior_canonical_source_had_same_gap": true
+  },
+  "implementation": {
+    "requested_setting_default": false,
+    "effective_algorithmic_darkening": "targetSdk>=33 AND isLightTheme=false AND allowed=true",
+    "missing_isLightTheme": "light",
+    "media_scheme": "isLightTheme, independent of allowed",
+    "cdp_controls": [
+      "Emulation.setEmulatedMedia",
+      "Emulation.setAutoDarkModeOverride"
+    ],
+    "scope": "Per-WebView target; no document-root style, global profile or native ABI changes",
+    "ordering": "One outstanding command per control; completion drains latest coalesced desired state",
+    "failure": "Bounded warning; retain renderer state; retry failed unchanged value on next explicit update",
+    "android_force_dark_pipeline_implemented": false,
+    "production_source_sha256": {
+      "app/java/com/gesher/app/webview/SupportLib.java": "81834cade42f4081ace05083e884d98e957aaa6e049365398dc5e8704a353a86",
+      "app/java/com/gesher/app/webview/GesherWebSettings.java": "92bb694d9dc7af7b9152edf09dd8cc70c212339fca9f1cb0aa03dc810f1f2255",
+      "app/java/com/gesher/app/webview/GesherWebViewProvider.java": "5f192b02327572b5bdd2edd8b9ca505b72aeda755ebe8bb9f37e0f7f973390c2",
+      "app/java/com/gesher/app/webview/WebViewDarkening.java": "25a2a8807bef58b3edb4c31f18d70978325a026300746164d128c0e3b6a035d1"
+    },
+    "fixture_source_sha256": {
+      "tests/webview-darkening/WebViewDarkeningTest.java": "53b5c496883ebcc8b7cea2b06c82f7f0fab52143faf0536d9579c8964e553bd9",
+      "tests/apps/webapp/java/com/gesher/webapp/DarkeningActivity.java": "fa10662d60a38f6ff0c8b26fb0aabd948f2abd789d935d45e9deb8f73dfcfe75",
+      "tests/apps/webapp/AndroidManifest.xml": "b024acc9b63427df99736e2ecec65039b9d67a9f77c666895163e2ecfb622c3d",
+      "tests/windows/run-webview-darkening.ps1": "32e797a76d132d6c3816716d689efebc2d6c2d52c17f66e0a552ec2504221f1f",
+      "tests/windows/helpers/PrivateDesktopProcess.cs": "8593bd0bd7c87e3b8d3c0afb7a750fa2cabe7379e078c61ee5f24824fd08acf2"
+    }
+  },
+  "validation": {
+    "full_app_and_fixture_build_exit": 0,
+    "build_receipt_sha256": "835e6b46af186eca67466e1c08d596b66df9d8e464291a9a4ac262e2c09d7e8a",
+    "source_inputs_sha256": "d4bc8e1b491085bfe744d0ab5f405afff6eef6c0bb837a5a19a0420e698cd65f",
+    "app_jar_sha256": "a2d4920a61f51dbd9764612a00cff00540baea82ed9b6c05263fa07485def989",
+    "webapp_apk_sha256": "2d0ba7f1ec19e470335c19f4011566470f7826795cc2fdf0e7a8e69d6abfe80d",
+    "native_bridge_sha256": "2f28a116af31591993d801c2c6606b96c0398eb682729f5aa75054a0ecfb7d15",
+    "runtime_manifest_sha256": "6cd570081b3cbddc1220916492e2349fa919ba0e56064eb2df23a11071f78a34",
+    "runtime_inputs_rehashed": 282,
+    "matching_boot_files": 15,
+    "required_boot_spaces": 5,
+    "host_policy_checks_passed": 36,
+    "host_policy_scope": "Default, light/dark/legacy target, cross-view, delayed actual command effects, serialization, coalescing and failed-disable retry",
+    "host_policy_results_sha256": "7a37917771d1b8efbe43cd50978e1fa738e40a74ce3928f58008d316e7b2f0e3",
+    "actual_boundary_and_renderer_checks_passed": 17,
+    "actual_renderer_receipt_sha256": "95bb80890860c200472c2c96cc164717743f64d99c819572b4b2264ad1d109bc",
+    "actual_renderer_log_sha256": "b0116dbb4c036748032e7cafe57b79878ef4b6eae9577883d03309fde1ebb6af",
+    "actual_pixels": [
+      "webdark: PASS renderer phase 1 pixels ffffff/ffffff/ffffff",
+      "webdark: PASS renderer phase 2 pixels 121212/ffffff/ffffff",
+      "webdark: PASS renderer phase 3 pixels ffffff/ffffff/ffffff",
+      "webdark: PASS renderer phase 4 pixels 123456/ffffff/ffffff",
+      "webdark: PASS renderer phase 5 pixels ffffff/ffffff/ffffff"
+    ],
+    "theme_media_and_unchanged_root_inline_style_proved": true,
+    "author_dark_style_and_only_light_opt_out_proved": true,
+    "desktop": "Owned synthetic desktop, never switched or displayed",
+    "content": "Source-owned inline HTML only; no remote page requests"
+  },
+  "primary_contracts": [
+    "https://developer.android.com/reference/android/webkit/WebSettings#setAlgorithmicDarkeningAllowed(boolean)",
+    "https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2#calldevtoolsprotocolmethod"
+  ],
+  "claim_boundaries": [
+    "The public preparation path and supplied sanitized exception symbols identify a deterministic capability mismatch.",
+    "No user book, account, profile, application log or personal UI content was inspected.",
+    "Synthetic API/boundary/rendering proof does not establish completion of the actual user plugin workflow.",
+    "Normal-program deployment and the user plugin retest remain separate; no activation was performed by this task.",
+    "The earlier C534 renderer proof preceded the serialization correction and is historical only."
+  ]
+}

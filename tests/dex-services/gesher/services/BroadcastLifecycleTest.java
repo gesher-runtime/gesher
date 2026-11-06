@@ -112,6 +112,7 @@ public final class BroadcastLifecycleTest {
             app = construct(processType, new Class<?>[]{atmType, int.class, IApplicationThread.class},
                     atm, Binder.getCallingPid(), thread);
             field(processType, "packageName").set(app, owner);
+            field(processType, "processName").set(app, owner);
             field(processType, "ready").setBoolean(app, true);
             synchronized (atm) { processes.add(app); }
         }
@@ -137,7 +138,7 @@ public final class BroadcastLifecycleTest {
     }
 
     public static void main(String[] args) throws Exception {
-        require(args.length == 1, "Pass an official GmsCore APK for offline receiver metadata");
+        require(args.length == 1, "Pass the code-free process metadata APK with two same-process boot receivers");
         System.loadLibrary("android_runtime");
         AssetManager.createSystemAssetsInZygoteLocked(false,
                 System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");

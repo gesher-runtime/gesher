@@ -6,6 +6,10 @@ package com.gesher.server;
 
 import android.content.ComponentName;
 import android.content.Intent;
+import android.app.ActivityManager;
+import android.net.Uri;
+import android.os.Binder;
+import android.os.RemoteException;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageManager;
@@ -23,6 +27,9 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 
 /**
  * {@code package}: PackageManagerService, knowing the APKs it was given and the installed
@@ -32,8 +39,58 @@ import java.util.Map;
 public final class PackageManagerService extends IPackageManager.Default {
     private volatile Map<String, ApkPackage> mPackages = new LinkedHashMap<>();
     private final PermissionPolicy mPermissions = new PermissionPolicy(this);
+    private final Executor mPackageEventExecutor = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "gesher-package-events");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private Consumer<Intent> mPackageEventSender = PackageManagerService::broadcastPackageEvent;
+    private final List<Consumer<String>> mPackageRemoval = new ArrayList<>();
+    private final List<Consumer<String>> mPackageRemovalChecks = new ArrayList<>();
+    private volatile Map<String, ApkPackage> mRemoving = new LinkedHashMap<>();
+
+    boolean isRemovalPending(String name) { return mRemoving.containsKey(name); }
+
+    synchronized void beginPackageRemoval(ApkPackage original) {
+        if (original == null || mPackages.get(original.packageName) != original
+                || mRemoving.containsKey(original.packageName)) throw new SecurityException("Package removal already pending or changed");
+        Map<String, ApkPackage> next = new LinkedHashMap<>(mRemoving);
+        next.put(original.packageName, original); mRemoving = next;
+    }
+    synchronized void endPackageRemoval(ApkPackage original) {
+        if (mRemoving.get(original.packageName) != original) return;
+        Map<String, ApkPackage> next = new LinkedHashMap<>(mRemoving);
+        next.remove(original.packageName); mRemoving = next;
+    }
+    /** Installer holds its monitor and has restored every unresolved precommit journal. */
+    synchronized void recoveredPackageRemovals() { mRemoving = new LinkedHashMap<>(); }
+
+    /** Server-local capability cleanup; never callable through the package Binder. */
+    synchronized void onPackageRemoval(Consumer<String> cleanup) { mPackageRemoval.add(cleanup); }
+
+    synchronized void onPackageRemovalCheck(Consumer<String> check) { mPackageRemovalChecks.add(check); }
+
+    void checkPackageRemoval(String name) {
+        List<Consumer<String>> checks;
+        synchronized (this) { checks = new ArrayList<>(mPackageRemovalChecks); }
+        for (Consumer<String> check : checks) check.accept(name);
+    }
+
+    void revokePackageCapabilities(String name) {
+        List<Consumer<String>> cleanup;
+        synchronized (this) { cleanup = new ArrayList<>(mPackageRemoval); }
+        for (Consumer<String> action : cleanup) action.accept(name);
+    }
 
     public PermissionPolicy permissions() { return mPermissions; }
+
+    @Override public String[] getSystemSharedLibraryNames() {
+        try {
+            return SharedLibraryRegistry.readSystem().names();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Cannot read system shared libraries", e);
+        }
+    }
 
     @Override public boolean isProtectedBroadcast(String action) {
         return mPermissions.isProtectedBroadcast(action);
@@ -71,6 +128,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         Map<String, ApkPackage> map = new LinkedHashMap<>(mPackages);
         map.put(p.packageName, p);
         mPackages = map;
+        PackageManager.invalidatePackageInfoCache();
     }
 
     /** Removes a package (an uninstall); returns it, or null. */
@@ -78,7 +136,59 @@ public final class PackageManagerService extends IPackageManager.Default {
         Map<String, ApkPackage> map = new LinkedHashMap<>(mPackages);
         ApkPackage p = map.remove(packageName);
         mPackages = map;
+        if (p != null) PackageManager.invalidatePackageInfoCache();
         return p;
+    }
+
+    /** A completed durable publication, as distinct from boot scanning or an unchanged APK. */
+    void packageInstalled(ApkPackage pkg, boolean replacing, Object publicationLock) {
+        final String name = pkg.packageName;
+        final int uid = pkg.uid();
+        mPackageEventExecutor.execute(() -> {
+            // A session also holds the installer monitor around its final consent/code
+            // checks. Do not call application Binders until that outer lock is released.
+            synchronized (publicationLock) { }
+            Intent added = new Intent(Intent.ACTION_PACKAGE_ADDED, Uri.fromParts("package", name, null))
+                    .putExtra(Intent.EXTRA_UID, uid)
+                    .putExtra(Intent.EXTRA_REPLACING, replacing);
+            sendPackageEvent(added);
+            if (replacing) {
+                sendPackageEvent(new Intent(added).setAction(Intent.ACTION_PACKAGE_REPLACED));
+                sendPackageEvent(new Intent(Intent.ACTION_MY_PACKAGE_REPLACED).setPackage(name));
+            }
+        });
+    }
+
+    /** Only after durable removal, with all old client capabilities revoked. */
+    void packageRemoved(ApkPackage pkg, Object publicationLock) {
+        final String name = pkg.packageName;
+        final int uid = pkg.uid();
+        mPackageEventExecutor.execute(() -> {
+            synchronized (publicationLock) { }
+            Intent removed = new Intent(Intent.ACTION_PACKAGE_REMOVED, Uri.fromParts("package", name, null))
+                    .putExtra(Intent.EXTRA_UID, uid).putExtra(Intent.EXTRA_REPLACING, false)
+                    .putExtra(Intent.EXTRA_DATA_REMOVED, true);
+            sendPackageEvent(removed);
+            sendPackageEvent(new Intent(removed).setAction(Intent.ACTION_PACKAGE_FULLY_REMOVED));
+            // PackageUids retains a tombstone for this name. No UID_REMOVED claim is made.
+        });
+    }
+
+    private void sendPackageEvent(Intent intent) {
+        try { mPackageEventSender.accept(intent); }
+        catch (RuntimeException failure) {
+            SystemServer.log("package event unavailable: " + failure.getClass().getSimpleName());
+        }
+    }
+
+    private static void broadcastPackageEvent(Intent intent) {
+        long identity = Binder.clearCallingIdentity();
+        try {
+            ActivityManager.getService().broadcastIntentWithFeature(null, null, intent, null,
+                    null, 0, null, null, null, null, null, -1, null, false, false, 0);
+        } catch (RemoteException failure) {
+            throw new IllegalStateException("Package event transport unavailable", failure);
+        } finally { Binder.restoreCallingIdentity(identity); }
     }
 
     /** The packages, now. */
@@ -159,6 +269,7 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ActivityInfo getActivityInfo(ComponentName className, long flags, int userId) {
+        if (isRemovalPending(className.getPackageName())) return null;
         ApkPackage p = get(className.getPackageName());
         if (p == null && BrowserPackageSupport.isBrowserPackage(className.getPackageName())) {
             return BrowserPackageSupport.activityInfo(className.getClassName(), flags);
@@ -182,6 +293,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     private List<ResolveInfo> query(Intent intent, String resolvedType, long flags) {
         List<ResolveInfo> result = new ArrayList<>();
         for (ApkPackage p : mPackages.values()) {
+            if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentActivities(intent, resolvedType, flags));
         }
         // The Windows default browser (BrowserPackageSupport), after the installed apps'
@@ -197,6 +309,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     List<ResolveInfo> services(Intent intent, String resolvedType, long flags) {
         List<ResolveInfo> result = new ArrayList<>();
         for (ApkPackage p : mPackages.values()) {
+            if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentServices(intent, resolvedType, flags));
         }
         if (result.isEmpty() && intent != null && get(GmsPackageSupport.PACKAGE_GMS) == null) {
@@ -209,6 +322,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     List<ResolveInfo> receivers(Intent intent, String resolvedType, long flags) {
         List<ResolveInfo> result = new ArrayList<>();
         for (ApkPackage p : mPackages.values()) {
+            if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentReceivers(intent, resolvedType, flags));
         }
         return result;
@@ -217,6 +331,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     /** The provider with authority {@code authority} (one of its authorities), or null. */
     ProviderInfo provider(String authority, long flags) {
         for (ApkPackage p : mPackages.values()) {
+            if (isRemovalPending(p.packageName)) continue;
             for (ProviderInfo info : p.providers(flags)) {
                 if (info.authority == null) continue;
                 for (String a : info.authority.split(";")) {
@@ -248,12 +363,14 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ServiceInfo getServiceInfo(ComponentName className, long flags, int userId) {
+        if (isRemovalPending(className.getPackageName())) return null;
         ApkPackage p = get(className.getPackageName());
         return p == null ? null : p.serviceInfo(className.getClassName(), flags);
     }
 
     @Override
     public ActivityInfo getReceiverInfo(ComponentName className, long flags, int userId) {
+        if (isRemovalPending(className.getPackageName())) return null;
         ApkPackage p = get(className.getPackageName());
         return p == null ? null : p.receiverInfo(className.getClassName(), flags);
     }
@@ -265,6 +382,7 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ProviderInfo getProviderInfo(ComponentName className, long flags, int userId) {
+        if (isRemovalPending(className.getPackageName())) return null;
         ApkPackage p = get(className.getPackageName());
         if (p == null) return null;
         for (ProviderInfo info : p.providers(flags)) {
@@ -452,13 +570,43 @@ public final class PackageManagerService extends IPackageManager.Default {
         return new android.content.pm.InstallSourceInfo(null, null, null, null);
     }
 
-    private final PackageInstallerService mInstallerService = new PackageInstallerService();
+    private final PackageInstallerService mInstallerService = new PackageInstallerService(this);
+
+    private java.io.File appMetadata(String packageName, int userId) {
+        if (userId != 0) throw new SecurityException("Only user 0 is supported");
+        if (mPermissions.checkProcessPermission("android.permission.GET_APP_METADATA",
+                android.os.Binder.getCallingPid(), android.os.Binder.getCallingUid())
+                != PackageManager.PERMISSION_GRANTED) throw new SecurityException("App metadata permission required");
+        ApkPackage pkg = get(packageName);
+        if (pkg == null) throw new android.os.ParcelableException(new PackageManager.NameNotFoundException());
+        return new java.io.File(new java.io.File(pkg.apkPath).getParentFile(), InstallSessionMetadata.APP_METADATA);
+    }
+
+    @Override public android.os.ParcelFileDescriptor getAppMetadataFd(String packageName, int userId) {
+        java.io.File file = appMetadata(packageName, userId);
+        if (!file.isFile()) return null;
+        try { return android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY); }
+        catch (java.io.IOException e) { throw new IllegalStateException("App metadata unavailable", e); }
+    }
+
+    @Override public int getAppMetadataSource(String packageName, int userId) {
+        return appMetadata(packageName, userId).isFile() ? 2 /* INSTALLER */ : 0 /* UNKNOWN */;
+    }
+
+    void attachInstaller(ActivityTaskManagerService atm, Installer installer) {
+        mInstallerService.attach(atm, installer);
+    }
     private final android.content.pm.IPackageInstaller mInstaller =
             StandIn.of(android.content.pm.IPackageInstaller.class, mInstallerService).asInterface();
 
     @Override
     public android.content.pm.IPackageInstaller getPackageInstaller() {
         return mInstaller;
+    }
+
+    @Override public void deletePackageAsUser(String packageName, int versionCode,
+            android.content.pm.IPackageDeleteObserver observer, int userId, int flags) {
+        mInstallerService.uninstallLegacy(packageName, versionCode, observer, userId, flags);
     }
 
     @Override

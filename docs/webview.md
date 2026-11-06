@@ -173,6 +173,19 @@ Pages see the https origin: same-origin requests between assets work without
 | Accessibility | the WebView's AccessibilityNodeProvider: WebView2's UI Automation tree as virtual views (click, focus, set text, scroll); UI Automation clients reading the app's window find WebView2's own tree under the WebView's element (ADR 0058) |
 | androidx.webkit (`WebViewCompat`) | Gesher's support library glue (`SupportLib`, ADR 0058): WebMessageListener, document-start scripts, ProxyController, multi-process query, the framework-backed features |
 
+`ALGORITHMIC_DARKENING` supports `WebSettings` and the AndroidX settings boundary.
+The setting defaults to false and enables Chromium's algorithmic darkening only
+for a dark app theme targeting SDK 33 or later. Independently, the view's
+`prefers-color-scheme` follows `isLightTheme` (missing means light). These are
+per-controller CDP controls; they do not rewrite document styles or change a
+shared browser profile. Commands for each control are serialized and coalesced
+until completion. Author dark styles and `color-scheme: only light` remain in
+effect. A rejected CDP command is logged, preserves the existing renderer state,
+and can be retried on the next settings/theme update. This does not implement
+Android's separate Force Dark rendering pipeline. The source-owned boundary and
+actual renderer regression is recorded in
+[the Otzaria WebView validation](research/otzaria-webview-validation-2026-11-06.json).
+
 ### JavaScript interfaces
 
 A host object `gesherBridge` (an `IDispatch` without type information,

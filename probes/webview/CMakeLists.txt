@@ -19,7 +19,7 @@ add_link_options(-static -municode)
 
 include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/webview2_sdk.cmake)
 set(_wv ${CMAKE_CURRENT_LIST_DIR}/../../compat/webview)
-set(_libs ole32 oleaut32 uuid shlwapi user32 gdi32 advapi32 windowscodecs)
+set(_libs ole32 oleaut32 uuid shlwapi user32 gdi32 advapi32 bcrypt windowscodecs)
 
 foreach(_variant static dll)
   if(_variant STREQUAL "static")

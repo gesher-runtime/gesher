@@ -15,6 +15,7 @@
 #include <wincrypt.h>
 #include <shellapi.h>
 #include <jni.h>
+#include "../locale/ui_locale.h"
 
 static BOOL server_process = FALSE;
 
@@ -117,19 +118,23 @@ Java_com_gesher_server_PermissionRequests_nativeConfirm(JNIEnv* env, jclass cls,
   jsize ln = (*env)->GetStringLength(env, label);
   jsize pn = (*env)->GetStringLength(env, permissions);
   if (ln > 1024 || pn > 8192) return JNI_FALSE;
-  SIZE_T length = (SIZE_T)ln + (SIZE_T)pn + 160;
+  enum GesherUiLanguage lang = GesherUiCurrentLanguage();
+  const WCHAR* prefix = GesherUiText(lang, "permission_prefix");
+  const WCHAR* middle = GesherUiText(lang, "permission_middle");
+  SIZE_T length = (SIZE_T)ln + (SIZE_T)pn + wcslen(prefix) + wcslen(middle) + 5;
   WCHAR* text = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, length * sizeof(WCHAR));
   if (text == NULL) return JNI_FALSE;
-  const WCHAR prefix[] = L"Allow the Android application ";
-  const WCHAR middle[] = L" to use these permissions?\n\n";
   SIZE_T at = 0;
-  for (SIZE_T i = 0; i + 1 < sizeof(prefix) / sizeof(prefix[0]); ++i) text[at++] = prefix[i];
+  for (SIZE_T i = 0; prefix[i]; ++i) text[at++] = prefix[i];
+  text[at++] = 0x2068;  // Isolate mixed-direction app identifiers from the sentence.
   (*env)->GetStringRegion(env, label, 0, ln, (jchar*)(text + at)); at += (SIZE_T)ln;
-  for (SIZE_T i = 0; i + 1 < sizeof(middle) / sizeof(middle[0]); ++i) text[at++] = middle[i];
+  text[at++] = 0x2069;
+  for (SIZE_T i = 0; middle[i]; ++i) text[at++] = middle[i];
   (*env)->GetStringRegion(env, permissions, 0, pn, (jchar*)(text + at));
   if ((*env)->ExceptionCheck(env)) { HeapFree(GetProcessHeap(), 0, text); return JNI_FALSE; }
-  int choice = MessageBoxW(NULL, text, L"Gesher permission request",
-                          MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND);
+  int choice = MessageBoxW(NULL, text, GesherUiText(lang, "permission_title"),
+                          MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND
+                          | (GesherUiRtl(lang) ? MB_RTLREADING | MB_RIGHT : 0));
   HeapFree(GetProcessHeap(), 0, text);
   return choice == IDYES ? JNI_TRUE : JNI_FALSE;
 }
@@ -143,23 +148,30 @@ Java_com_gesher_server_AccountManagerService_nativeConfirmToken(JNIEnv* env, jcl
   jsize lengths[3] = {(*env)->GetStringLength(env, package_name),
       (*env)->GetStringLength(env, account_name), (*env)->GetStringLength(env, token_type)};
   if (lengths[0] > 1024 || lengths[1] > 2048 || lengths[2] > 2048) return JNI_FALSE;
-  SIZE_T total = (SIZE_T)lengths[0] + (SIZE_T)lengths[1] + (SIZE_T)lengths[2] + 200;
+  enum GesherUiLanguage lang = GesherUiCurrentLanguage();
+  const WCHAR* parts[3] = {GesherUiText(lang, "account_prefix"),
+                          GesherUiText(lang, "account_name"), GesherUiText(lang, "account_token")};
+  SIZE_T total = (SIZE_T)lengths[0] + (SIZE_T)lengths[1] + (SIZE_T)lengths[2]
+      + wcslen(parts[0]) + wcslen(parts[1]) + wcslen(parts[2]) + 7;
   WCHAR* text = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, total * sizeof(WCHAR));
   if (text == NULL) return JNI_FALSE;
-  const WCHAR* parts[3] = {L"Allow this Android application to access an account token?\n\nApplication: ",
-                          L"\nAccount: ", L"\nToken type: "};
   jstring values[3] = {package_name, account_name, token_type};
   SIZE_T at = 0;
   for (int n = 0; n < 3; ++n) {
     const WCHAR* part = parts[n];
     while (*part != 0) text[at++] = *part++;
+    text[at++] = 0x2068;
     (*env)->GetStringRegion(env, values[n], 0, lengths[n], (jchar*)(text + at));
     at += (SIZE_T)lengths[n];
+    text[at++] = 0x2069;
   }
   if ((*env)->ExceptionCheck(env)) { HeapFree(GetProcessHeap(), 0, text); return JNI_FALSE; }
-  int choice = MessageBoxW(NULL, text, L"Gesher account access",
-                          MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND);
+  int choice = MessageBoxW(NULL, text, GesherUiText(lang, "account_title"),
+                          MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND
+                          | (GesherUiRtl(lang) ? MB_RTLREADING | MB_RIGHT : 0));
   SecureZeroMemory(text, total * sizeof(WCHAR));
   HeapFree(GetProcessHeap(), 0, text);
   return choice == IDYES ? JNI_TRUE : JNI_FALSE;
 }
+
+#include "account_chooser.inc"

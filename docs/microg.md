@@ -7,11 +7,20 @@ checks on application Binder callers. It remains an experimental, single-user
 Windows runtime. Android API checks do not provide an operating-system sandbox
 for arbitrary APK or native code.
 
-The expanded runtime passed 36 offline/integration checks and real FCM delivery
+The initial integration passed 36 offline/integration checks and real FCM delivery
 to a terminated client, including after microG crashed and automatically
-reconnected. These results do not establish a complete Self-Check pass or
-personal Google-account sign-in. See the [experiment and measured evidence](research/microg-windows-experiment-2026-11-05.md#expanded-protected-runtime-validation)
-and the [sanitized validation record](research/microg-integration-validation-2026-11-05.json).
+reconnected. Later trials established manual Google-account sign-in, real Gmail
+use, an original Play Store catalog/download/installation and a user-confirmed
+Gemini chat. These are measured application trials, not a complete Self-Check or
+Google Play Services compatibility claim. See the [initial measured evidence](research/microg-windows-experiment-2026-11-05.md#expanded-protected-runtime-validation),
+the [initial validation record](research/microg-integration-validation-2026-11-05.json)
+and the [Play/Gemini validation record](research/microg-play-gemini-validation-2026-11-06.json).
+The [final qualification](research/microg-final-validation-2026-11-06.json)
+records 70 combined checks, the legacy removal adapter, Hebrew/English UI,
+atomic split-icon publication and real algorithmic-darkening rendering on
+the matching final runtime. At the user's request, all real local app/account
+profiles were reset after the historical trials; their APK installation files
+were retained for manual reinstallation. No new Google sign-in was performed.
 
 ## Install, enable and remove
 
@@ -323,6 +332,176 @@ grant revocation between observer callbacks. All 36 checks passed on the same
 source-built Java runtime used for the final real FCM cases.
 A complete Windows CI/installer pass remains separate from these targeted results.
 
+## Ordinary APK install sessions and declared component processes
+
+Services, activities, providers and broadcasts now select the process declared in
+their manifest. Sibling processes retain the same authenticated package identity
+and assigned UID. Provider installation and publication are restricted to the
+provider's declared process. This corrected the original Play Store's startup
+component-graph cast failure; reaching its login screen did not establish catalog
+or download support.
+
+PackageInstaller supports caller-owned ordinary full-APK sessions. The server
+checks the current installer code identity, bounds staged files, verifies and
+freezes the complete APK set, and reuses the existing Installer signature/update
+checks. Every commit requires a fresh default-No host installation dialog.
+Caller flags and claimed package names cannot supply silent-install authority.
+Stale installer sessions release their quota, and callback registrations use
+Binder identity and death cleanup.
+
+The Android FileBridge protocol uses a small server-only Windows named-pipe JNI
+library. Its actual pipe handles survive Binder transfer. A process-local socket
+descriptor did not. Cancellation uses repeated nonblocking CancelIoEx calls while
+the writer owns descriptor closure, so abandon does not wait for the client's
+descriptor to close.
+
+The [recorded prototype trial](research/microg-package-installer-validation-2026-11-06.json)
+passed 46 offline checks, real two-process APK write/fsync/close/readback, native
+role denials, and 20 retained-descriptor abandon/cleanup cycles. The user then
+manually approved one signed synthetic APK: the real server returned success
+through an authenticated callback and published identical APK bytes. These
+measurements identify the frozen prototype artifacts and predate integration on
+the updated main baseline. The later real Play Store trial is recorded below.
+
+`tests/windows/run-package-installer.ps1` is the noninteractive regression runner.
+It runs the native transport checks and actual Binder stream, cancellation and
+unprivileged-role tests in a fresh disposable device. Its client never commits,
+so CI cannot open an installation consent dialog. Track 52 invokes it through
+the offline microG security runner. The native test executable is a CI fixture
+and is omitted from the installed product.
+
+Sessions accept bounded safe filenames and identify APKs by their parsed contents.
+Associated dex metadata is validated with the framework's DexMetadataHelper;
+unmatched or invalid sidecars fail before consent. Application metadata has a
+bounded PersistableBundle round trip. Installer-supplied checksums are verified
+advisory records and never establish APK trust or replace signature checks.
+V4/fs-verity sidecars remain explicitly unsupported.
+
+Inherited/split-removal installs, APEX, rollback execution, data loaders,
+multi-package sessions, transfers and the raw write(PFD) API remain
+unsupported. Installer-source attribution remains unknown. The bounded rollback
+service reports no available rollback history; it does not advertise rollback
+execution or invent network-usage statistics.
+
+Ordinary installed APKs can also request complete removal for user 0 with flags 0.
+Gesher supplies a fresh default-No host confirmation for each request. This is a
+user-mediated runtime extension: it does not grant Android's `DELETE_PACKAGES`
+permission or give a store silent removal authority. The original caller process,
+caller code, target code and requested version are checked again after approval.
+System addons and authenticators that still own accounts are rejected. Remove
+those accounts through their normal account workflow first.
+
+Removal retires the original installed generation before stopping its processes.
+It revokes client grants and pending work, quarantines code and app-specific data,
+and sends removal events only after durable registry commit. Failed registry writes
+restore staged paths; incomplete recovery blocks subsequent publication. A reinstall
+keeps its allocated UID but receives fresh data and no old client account grants.
+Other providers' accounts and credentials remain intact. See the [removal contract](research/package-uninstall.md)
+for the supported flags, recovery and regression-test scope. Actual Store removal
+is recorded separately from the synthetic tests and remains unverified on the
+final adapter after that requested reset. Original Play uses the legacy
+`PackageManager.deletePackage` route; it now forwards to the same confirmed broker
+instead of an empty package-manager stub.
+
+Changed durable installs invalidate package-info caches and publish package
+lifecycle events after the installer lock is released. Registered observers
+receive PACKAGE_ADDED and update PACKAGE_REPLACED; the updated package also gets
+an explicit MY_PACKAGE_REPLACED. Failure and unchanged APK content do not invent
+a package change. Global events retain the runtime's existing implicit-manifest
+delivery restrictions; full legacy Android app-start-mode eligibility is not
+implemented here.
+
+## Measured original Play Store and Gemini trials
+
+The isolated November 6 trial used original signed Google Play, Google app and
+Gemini APKs with the installed microG account. The Store displayed its actual
+catalog and search, downloaded Markor, and installed version 158. A separate
+package-manager query verified the installed APK and signer; the APK SHA256
+matched the downloaded 11980325-byte file. The installed app opened its own
+first-run tutorial. The user completed Gemini's consent screens manually and
+reported reaching a working chat. A later fresh Store installation of Fossify
+Calculator version 10 and opening it succeeded on the package-completion fix;
+its installed APK, signer and UID mapping were independently checked. No account names, credentials or chat content
+are included in the [sanitized record](research/microg-play-gemini-validation-2026-11-06.json).
+
+The local network blocked the Store's download servers. This trial used an
+explicitly approved Google-only local CONNECT relay through the user's SSH host.
+TLS remained end to end; the relay did not inspect credentials, signed links or
+payloads. This was an experiment-specific route, not a system proxy change or a
+bundled Google endpoint tunnel.
+
+The proprietary Play Store and microG Companion both use `com.android.vending`.
+The Play experiment used a separate profile without Companion. These trials do
+not bundle or redistribute Google's APKs, establish paid purchases or DRM, or
+show that every application works. Their earlier receipts remain historical
+measurements rather than claims about every later artifact.
+
+WebView provider creation is lazy so applications can disable WebView during
+Application initialization. The provider lock still arbitrates actual first use
+against disablement; suffix directories remain isolated and Windows aliases
+fail closed. The exact-launch CLI follows the retained process generation of
+the resolved activity, including named processes, instead of taking a sibling's
+result. The wire format distinguishes an unavailable result from a real
+MIN_VALUE exit; the existing native `-1` unknown-exit ambiguity remains.
+
+A matching framework, application jar, native helpers and complete boot-image
+chain are required. The focused WebView and process tests loaded all five image
+spaces in actual launcher, server and application processes. Replacing only an
+application jar while retaining stale downstream boot images is insufficient.
+One Store launch after updating the runtime timed out before attachment; a warm
+retry succeeded. The trial establishes the measured flows and does not establish
+reliable cold startup.
+
+## Account selection
+
+`AccountManager.newChooseAccountIntent` routes its exact Android platform component
+to a server-owned Windows chooser. The source activity, application thread, Binder
+PID and installed package must match. Account names remain in the trusted dialog
+until the user explicitly selects a row, including when there is just one row.
+Cancel is the default. Source death, finishing or package replacement invalidates
+the request. Filters and explicit authenticator visibility denials remain effective;
+an unset client policy can be offered for manual selection without exposing it in
+ordinary account enumeration.
+
+Selection persists user-managed visibility for the original caller's code identity
+and returns only Android's account-name/type result. It grants no credential scope
+or authenticated status. Add requires an explicit user action and account-type
+choice, uses the installed authenticator's validated activity/session, and returns
+to account selection without granting visibility automatically. Missing native UI,
+invalid responses and unsupported requests cancel instead of synthesizing an account.
+
+An activity starting another package can pass its captured window mode to that
+package's fresh process. Its application thread, PID and package must match its
+activity token. A tokenless Context start instead requires that same process to
+own a front, non-hidden activity that is launching, resuming or resumed.
+Explicit host choices for the target, including headless and hidden,
+take precedence. Inheritance is transient start metadata and does not change the
+host policy map or later background service/provider starts. A process started
+implicitly headless by a background service can install graphics for a new approved
+activity without restarting that service. A typed lifecycle capability rechecks the
+target PID/UID, token, installed code, lifetime and current explicit policy; only
+that activity's roots and popups may appear on the desktop. Unapproved roots remain
+offscreen. Existing headless ViewRoots are preserved; upgrading those roots requires
+a separate relaunch and is not attempted here.
+
+## Ordered broadcasts
+
+Ordered broadcasts keep their initial result, receiver priority and required/excluded
+permissions. Both registered and manifest receivers explicitly acknowledge completion,
+including `goAsync`, before their results reach the next receiver. Abort skips the
+remaining receivers while retaining the final caller callback; `FLAG_RECEIVER_NO_ABORT`
+prevents that skip. The original sender process and installed code receive one final
+callback even when every recipient was filtered out. Dead or replaced sender code
+does not receive a callback intended for its old generation.
+
+Each process has one acknowledged receiver slot shared with ordinary manifest work.
+Independent chains can progress in other processes. Receiver and total deadlines,
+queue/payload limits and process-generation retirement prevent an old timed-out finish
+from consuming another delivery. Mutable sticky and app-op-checked acknowledged
+broadcasts remain explicitly unsupported. The canonical offline regression exercises
+real two-APK framework dispatch, delayed `goAsync`, a separate manifest process and
+the caller's final receiver after garbage collection.
+
 ## Current limits and trust boundary
 
 - Only Android user 0 exists. There are no work profiles or cross-user account,
@@ -335,10 +514,11 @@ A complete Windows CI/installer pass remains separate from these targeted result
   Windows does not supply Android Doze. The expanded runtime has not completed a
   new full visual Self-Check run. Earlier green signature checks and synthetic
   Companion checks must not be presented as a complete current pass.
-- Personal Google sign-in, real microG fused location, Play Integrity, proprietary
-  billing and DRM are unvalidated. FCM still needs network loss/recovery, long
-  idle and multiple independently registered client coverage. The final runtime
-  passed cold delivery and automatic microG crash recovery. An earlier
+- One Google account's manual sign-in and measured application trials do not
+  establish general account compatibility. Real microG fused location, Play
+  Integrity, proprietary billing and DRM remain unvalidated. FCM still needs network loss/recovery, long
+  idle and multiple independently registered client coverage. The earlier FCM
+  trial passed cold delivery and automatic microG crash recovery. An earlier
   publication was not observed in MCS within 40 seconds; a retry on that same
   unchanged connection succeeded. Its cause remains unresolved, so the measured
   passes do not establish reliable long-term delivery.

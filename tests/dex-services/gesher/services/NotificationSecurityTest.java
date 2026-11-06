@@ -168,6 +168,7 @@ public final class NotificationSecurityTest {
             Object process = construct(processType, new Class<?>[]{atmType, int.class, IApplicationThread.class},
                     reopenedAtm, 888896, thread);
             field(processType, "packageName").set(process, pkg);
+            field(processType, "processName").set(process, pkg);
             field(processType, "ready").setBoolean(process, true);
             ((List<Object>)field(atmType, "mProcesses").get(reopenedAtm)).add(process);
             Object broadcasts = field(amType, "mBroadcasts").get(reopenedAm);

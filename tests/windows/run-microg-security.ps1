@@ -1,5 +1,6 @@
 # Offline microG security integration on the actual Windows ART runtime.
-# No Google APK is installed or executed, and no native consent dialog is driven.
+# No Google APK is installed or executed, and no actual user's consent dialog is driven.
+# Native chooser controls use synthetic labels on owned private desktops, never SwitchDesktop.
 # Optional GmsCoreApk is parsed only by offline metadata/policy tests.
 # Example (a complete assembled runtime, with the two test APKs and services-tests.dex):
 #   powershell -File tests/windows/run-microg-security.ps1 -Dir out/windows-x64
@@ -13,6 +14,8 @@ param(
     [string] $DevsvcApk,
     [string] $ProbeApk,
     [string] $SigningFixtures,
+    [string] $ShellIconFixtures,
+    [string] $WebViewApk,
     [string] $GmsCoreApk,
     [switch] $RequireMetadataSuites,
     [string] $EvidenceDir
@@ -23,6 +26,10 @@ if (-not $SigningFixtures) { $SigningFixtures = Join-Path $PSScriptRoot '../dex-
 
 function ExistingPath([string] $Path) { (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path }
 $Dir = ExistingPath $Dir
+if (-not $ShellIconFixtures) { $ShellIconFixtures = $Dir }
+$ShellIconFixtures = ExistingPath $ShellIconFixtures
+if (-not $WebViewApk) { $WebViewApk = Join-Path $Dir 'webapp.apk' }
+$WebViewApk = ExistingPath $WebViewApk
 if ($Dir -notmatch '^[A-Za-z]:\\') { throw 'Dir must be a local Windows runtime directory.' }
 if (-not $ServicesDex) { $ServicesDex = Join-Path $Dir 'services-tests.dex' }
 if (-not $DevsvcApk) { $DevsvcApk = Join-Path $Dir 'devsvc.apk' }
@@ -38,14 +45,14 @@ if ($RequireMetadataSuites -and -not $GmsCoreApk) {
 foreach ($file in 'dalvikvm.exe', 'binderd.exe', 'servicemanager.exe',
         'core-oj.jar', 'core-libart.jar', 'core-icu4j.jar', 'framework.jar',
         'gesher-app.jar', 'framework-res.apk', 'build.prop', 'framework/x86_64/boot.art',
-        'libgesher_account_crypto.so') {
+        'libgesher_account_crypto.so', 'libgesher_install_pipe.so') {
     if (-not (Test-Path -LiteralPath (Join-Path $Dir $file) -PathType Leaf)) {
         throw "Missing runtime input: $file"
     }
 }
 $icu = @(Get-ChildItem -LiteralPath $Dir -Filter 'icudt*l.dat' -File)
 if ($icu.Count -ne 1) { throw 'The runtime must contain exactly one icudt*l.dat.' }
-foreach ($file in 'v2only.apk', 'rotated.apk', 'unsigned.apk',
+foreach ($file in 'v2only.apk', 'rotated.apk', 'unsigned.apk', 'process-metadata.apk', 'checksum-signature.der',
         '../identity-fixtures/old.apk', '../identity-fixtures/rotated-no-data.apk',
         '../identity-fixtures/rotated-no-auth.apk') {
     if (-not (Test-Path -LiteralPath (Join-Path $SigningFixtures $file) -PathType Leaf)) {
@@ -197,10 +204,11 @@ function SetProfile([string] $Root, [string] $Logs) {
     $env:GESHER_BINDER = $null
 }
 
-function Guest([string] $Test, [string[]] $Arguments, [string] $Marker = "$Test all passed", [string] $Label = $Test) {
+function Guest([string] $Test, [string[]] $Arguments, [string] $Marker = "$Test all passed", [string] $Label = $Test, [string] $Uid) {
     $guestRoot = Join-Path $run ("guests/$Label" -replace '[^A-Za-z0-9/.-]', '-')
     SetProfile $guestRoot "$guestRoot/logs"
-    $text = InvokeVm $Label (@('-cp', (AndroidPath $ServicesDex), "gesher.services.$Test") + $Arguments)
+    if ($Uid) { $env:GESHER_UID = $Uid; $env:GESHER_BINDER_UID = $Uid }
+    $text = InvokeVm $Label (@('-cp', (AndroidPath $ServicesDex), 'gesher.services.ServiceFixtureRunner', $Test) + $Arguments)
     RequireOutput $Label $text @($Marker)
 }
 
@@ -294,8 +302,65 @@ try {
         ForEach-Object { AndroidPath "$Dir/$_.jar" }) -join ':'
     $script:vm = @("-Xbootclasspath:$bcp", "-Ximage:$(AndroidPath "$Dir/framework/boot.art")", '-Xint', '-Xusejit:false')
     $fixtures = AndroidPath $SigningFixtures
+    # Separate empty device; actual Binder descriptor transfer and cancellation.
+    # The CI client never commits, so no native installation dialog can appear.
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-package-installer.ps1" `
+        -Dir $Dir -ServicesDex $ServicesDex -SigningFixtures $SigningFixtures -EvidenceDir (Join-Path $EvidenceDir 'installer') -RequireBootImages
+    if ($LASTEXITCODE -ne 0) { throw 'Actual Binder package-installer regression failed.' }
+    Passed 'package installer actual Binder transport and cancellation'
+    foreach ($chooserLocale in 'en-US', 'he-IL') {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-account-chooser-native.ps1" `
+            -RuntimeDir $Dir -OutputRoot (Join-Path $EvidenceDir "chooser-$chooserLocale") -Locales $chooserLocale
+        if ($LASTEXITCODE -ne 0) { throw "Native account chooser regression failed: $chooserLocale" }
+    }
+    Passed 'native account chooser Hebrew/English private-desktop JNI and role integration'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-window-promotion.ps1" `
+        -RuntimeDir $Dir -FixtureDir $Dir -OutputRoot (Join-Path $EvidenceDir 'graphics')
+    if ($LASTEXITCODE -ne 0) { throw 'Actual service-first activity graphics regression failed.' }
+    Passed 'service-first activity graphics and selective visibility on private desktops'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-ordered-broadcast.ps1" `
+        -RuntimeDir $Dir -AppsDir $Dir -OutputRoot (Join-Path $EvidenceDir 'ordered')
+    if ($LASTEXITCODE -ne 0) { throw 'Actual ordered broadcast goAsync/result callback regression failed.' }
+    Passed 'ordered broadcast real goAsync, manifest propagation and retained final callback'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-webview-lifecycle.ps1" `
+        -RuntimeDir $Dir -OutputRoot (Join-Path $EvidenceDir 'webview') -RequireBootImages
+    if ($LASTEXITCODE -ne 0) { throw 'Actual WebView lifecycle regression failed.' }
+    Passed 'WebView lazy provider, disable ordering and isolated suffix state'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-webview-darkening.ps1" `
+        -RuntimeDir $Dir -Apk $WebViewApk -OutputRoot (Join-Path $EvidenceDir 'webview-darkening')
+    if ($LASTEXITCODE -ne 0) { throw 'WebView AndroidX darkening boundary/renderer regression failed.' }
+    Passed 'WebView algorithmic darkening boundary and independent per-view renderer state'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-named-process-launcher.ps1" `
+        -RuntimeDir $Dir -OutputRoot (Join-Path $EvidenceDir 'named-process') -RequireBootImages
+    if ($LASTEXITCODE -ne 0) { throw 'Actual named-process launcher regression failed.' }
+    Passed 'named-process launcher follows requested generation while newer sibling remains alive'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-shell-icons.ps1" `
+        -RuntimeDir $Dir -FixtureDir $ShellIconFixtures -ServicesDex $ServicesDex -OutputRoot (Join-Path $EvidenceDir 'shell-icons')
+    if ($LASTEXITCODE -ne 0) { throw 'APK and split-bundle shell icon regression failed.' }
+    Passed 'APK/APKS/XAPK split icons, complete cache publication and native COM lookup'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-package-install-events-contract.ps1" `
+        -RuntimeDir $Dir -TargetV1 (Join-Path $Dir 'packageevents-target-v1.apk') `
+        -TargetV2 (Join-Path $Dir 'packageevents-target-v2.apk') -ServicesDex $ServicesDex `
+        -OutputRoot (Join-Path $EvidenceDir 'package-events-contract')
+    if ($LASTEXITCODE -ne 0) { throw 'Durable package publication/cache regression failed.' }
+    Passed 'durable package publication, cache invalidation and event ordering'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-package-events.ps1" `
+        -RuntimeDir $Dir -AppsDir $Dir -OutputRoot (Join-Path $EvidenceDir 'package-events') -RequireBootImages
+    if ($LASTEXITCODE -ne 0) { throw 'Actual package lifecycle event regression failed.' }
+    Passed 'package lifecycle notifications and metadata refresh in actual app processes'
     Guest 'SigningTest' @($fixtures)
     Guest 'InstallerSigningTest' @($fixtures)
+    Guest 'PackageInstallerSessionTest' @($fixtures) 'PackageInstallerSessionTest all passed:'
+    Guest 'PackageUninstallTest' @((AndroidPath (Join-Path $Dir 'packageevents-target-v1.apk')),
+        (AndroidPath (Join-Path $Dir 'packageevents-target-v2.apk')),
+        (AndroidPath (Join-Path $SigningFixtures 'v2only.apk'))) 'PackageUninstallTest all passed:' -Uid '1000'
+    Guest 'HostLaunchReceiptTest' @((AndroidPath (Join-Path $Dir 'webviewlifecycle.apk'))) 'HostLaunchReceiptTest all passed:'
+    $processMetadata = AndroidPath (Join-Path $SigningFixtures 'process-metadata.apk')
+    Guest 'ComponentProcessTest' @($processMetadata, 'gesher.test.processmeta.SecondaryService') 'ComponentProcessTest all passed:'
+    Guest 'BroadcastLifecycleTest' @($processMetadata)
+    Guest 'OrderedBroadcastTest' @((AndroidPath $DevsvcApk)) 'OrderedBroadcastTest all passed:'
+    Guest 'DelegatedIntentRetirementTest' @((AndroidPath (Join-Path $Dir 'orderedbroadcast-source.apk')),
+        (AndroidPath (Join-Path $Dir 'orderedbroadcast-target.apk'))) 'DelegatedIntentRetirementTest all passed:' -Uid '1000'
     Guest 'SigningRotationTest' @($fixtures, (AndroidPath (Join-Path $SigningFixtures '../identity-fixtures')))
     Guest 'IdentitySecurityTest' @($fixtures)
     $durableUids = AndroidPath (Join-Path $run 'uid-persistence')
@@ -303,8 +368,29 @@ try {
     Guest 'IdentitySecurityTest' @('uid-read', $durableUids) 'existing UID registry reopened without reassignment' 'uid-read'
     Guest 'AccountSecurityTest' @()
     Guest 'AccountSecurityTest' @('authenticator-client', (AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountSecurityTest all passed' 'authenticator-client-delegation'
+    Guest 'AccountChooserTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountChooserTest all passed:'
+    Guest 'AccountVisibilityNotificationTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountVisibilityNotificationTest all passed:'
+    Guest 'AccountClientRemovalTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountClientRemovalTest all passed:'
+    Guest 'SharedLibraryNamesTest' @() 'SharedLibraryNamesTest all passed:'
+    Guest 'SdkSandboxUnsupportedTest' @() 'SdkSandboxUnsupportedTest all passed:'
+    Guest 'NetworkStatsUnavailableTest' @() 'NetworkStatsUnavailableTest all passed:'
+    Guest 'RollbackUnsupportedTest' @((AndroidPath (Join-Path $SigningFixtures 'unsigned.apk'))) 'RollbackUnsupportedTest all passed:'
+    Guest 'WindowModeInheritanceTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'WindowModeInheritanceTest all passed:'
+    Guest 'ActivityWindowPromotionTest' @((AndroidPath $DevsvcApk)) 'ActivityWindowPromotionTest all passed:' -Uid '1000'
+    $windowRoleUid = $env:GESHER_UID
+    $windowRoleBinderUid = $env:GESHER_BINDER_UID
+    try {
+        $env:GESHER_UID = '12345'; $env:GESHER_BINDER_UID = '12345'
+        $windowRole = InvokeVm 'window-item-client-denied' @('-cp', (AndroidPath $ServicesDex),
+            'gesher.services.ActivityWindowPromotionTest', 'client-denied')
+        RequireOutput 'ordinary client cannot authenticate window lifecycle metadata' $windowRole @(
+            'ActivityWindowPromotionTest client role denied')
+    } finally {
+        $env:GESHER_UID = $windowRoleUid; $env:GESHER_BINDER_UID = $windowRoleBinderUid
+    }
     Guest 'AccountSecurityTest' @('crypto-denied') 'loaded native protect/unprotect reject non-server role without plaintext fallback' 'native-crypto-denied'
     Guest 'NotificationSecurityTest' @((AndroidPath $ProbeApk), (AndroidPath $DevsvcApk))
+    Guest 'NotificationRetirementTest' @((AndroidPath $DevsvcApk)) 'NotificationRetirementTest all passed:' -Uid '1000'
     Guest 'SystemBindingCleanupTest' @((AndroidPath $DevsvcApk))
     Guest 'JobSecurityTest' @((AndroidPath $ProbeApk), (AndroidPath $DevsvcApk))
     Guest 'ContentSecurityTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk))
@@ -319,7 +405,6 @@ try {
         Guest 'MicrogAuthenticatorTest' @((AndroidPath $GmsCoreApk), (AndroidPath $DevsvcApk))
         Guest 'PermissionRequestsTest' $metadata 'async grant/deny, result mapping and replacement race passed'
         Guest 'DispatchSecurityTest' (@($fixtures) + $metadata)
-        Guest 'BroadcastLifecycleTest' $metadata
         Guest 'ProviderSecurityTest' (@($fixtures) + $metadata)
         # MicrogTest above also exercises ServiceRecoveryTest with parsed GmsCore metadata.
     } else {
@@ -423,6 +508,37 @@ try {
         "PASS deny-grant-deny in same process pid=$permissionPid"
     ) '' 30
 
+    # Real native-protected persistence lives in SystemServer, not a standalone
+    # fixture VM. Retire only the synthetic client, then reinstall identical code.
+    $null = Tool 'stop-permission-probe-before-removal' @('am', 'force-stop', $probe)
+    $env:GESHER_BINDER_UID = '2000'
+    $text = InvokeVm 'prepare-client-removal-grants' @('-cp', (AndroidPath $ServicesDex),
+        'gesher.services.AccountClientRemovalProbe', 'prepare')
+    RequireOutput 'real server client-removal grant preparation' $text @('AccountClientRemovalProbe READY_GRANTED uid=')
+    if ($text -notmatch 'AccountClientRemovalProbe READY_GRANTED uid=(\d+)') { throw 'Missing original client UID.' }
+    $removedClientUid = $Matches[1]
+    $env:GESHER_BINDER_UID = $null
+    $null = Activity 'attached-grant-before-client-removal' $probe '.ProbeActivity' @('--ez', 'expect-token', 'true') @(
+        'PASS explicit credential grant authorized an attached client', 'all passed'
+    ) 'all passed'
+    $null = Tool 'stop-probe-before-client-removal' @('am', 'force-stop', $probe)
+    $null = Launcher 'uninstall-synthetic-account-client' @('uninstall', $probe)
+    $null = Launcher 'reinstall-identical-account-client' @('install', (AndroidPath $ProbeApk))
+    UseDevice
+    $env:GESHER_BINDER_UID = '2000'
+    $text = InvokeVm 'client-removal-grants-persisted' @('-cp', (AndroidPath $ServicesDex),
+        'gesher.services.AccountClientRemovalProbe', 'after', $removedClientUid)
+    RequireOutput 'real server client grants retired across identical reinstall' $text @(
+        'AccountClientRemovalProbe PASS_AFTER uid-stable=true visibility-revoked=true enumeration-empty=true provider-intact=true')
+    $env:GESHER_BINDER_UID = $null
+    $record = [IO.File]::ReadAllBytes($sealed)
+    $ascii = [Text.Encoding]::ASCII.GetString($record)
+    if ($record.Length -le 4 -or $ascii.Substring(0, 4) -ne 'GAC2' -or
+            $ascii.Contains('visible-ungranted@example.test') -or $ascii.Contains('fake-visible-ungranted-token')) {
+        throw 'Client capability cleanup did not retain native-protected account storage.'
+    }
+    Passed 'actual SystemServer client removal keeps provider credentials and sealed storage'
+
     $null = RememberDevice
     $null = Launcher 'shutdown-first-system-server' @('shutdown')
     $script:deviceLogs = Join-Path $run 'device-second-boot'
@@ -433,6 +549,13 @@ try {
             $firstState['system_server.start'] -eq $secondState['system_server.start']) {
         throw 'The account restart test did not start a second SystemServer process.'
     }
+    UseDevice
+    $env:GESHER_BINDER_UID = '2000'
+    $text = InvokeVm 'client-removal-grants-after-server-restart' @('-cp', (AndroidPath $ServicesDex),
+        'gesher.services.AccountClientRemovalProbe', 'restart', $removedClientUid)
+    RequireOutput 'native protected restart does not revive removed client grants' $text @(
+        'AccountClientRemovalProbe PASS_RESTART uid-stable=true visibility-revoked=true enumeration-empty=true provider-intact=true')
+    $env:GESHER_BINDER_UID = $null
     $null = Activity 'dpapi-roundtrip-after-server-restart' $owner '.AccountActivity' @('--ez', 'verify-retained-account', 'true') @(
         'account: protected storage survived restart true', 'account: retained account removed true'
     ) 'account: retained account removed'

@@ -103,6 +103,7 @@ public final class JobSecurityTest {
             process=construct(processType,new Class<?>[]{atmType,int.class,IApplicationThread.class},atm,pid,new AppThread());
         } finally { Binder.restoreCallingIdentity(original); }
         field(processType,"packageName").set(process,"com.gesher.microgprobe");
+        field(processType,"processName").set(process,"com.gesher.microgprobe");
         field(processType,"ready").setBoolean(process,true);
         ((List<Object>)field(atmType,"mProcesses").get(atm)).add(process);
         String ns="victim-namespace", own="com.gesher.microgprobe", victim="com.gesher.devsvc";

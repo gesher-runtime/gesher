@@ -16,6 +16,7 @@ import android.os.IBinder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.BooleanSupplier;
 
 /**
  * PendingIntents, lite (PendingIntentController and PendingIntentRecord): the system
@@ -33,11 +34,21 @@ final class PendingIntents {
     private final CallerIdentity mCallers;
     private final java.util.Map<ApkPackage, String> mCodeIdentities = new java.util.WeakHashMap<>();
     private final List<Record> mRecords = new ArrayList<>();
+    private Runnable mBeforeRecordLock; // Server-local race fixture; never a Binder option.
+    private Runnable mBeforeSendDispatch; // Server-local race fixture, outside the records lock.
 
     PendingIntents(ActivityManagerService am, PackageManagerService pm) {
         mAm = am;
         mPm = pm;
         mCallers = am.callers();
+        pm.onPackageRemoval(this::packageRemoved);
+    }
+
+    private void packageRemoved(String name) {
+        synchronized (mRecords) {
+            for (Record record : mRecords) if (name.equals(record.packageName)) record.canceled = true;
+            mRecords.removeIf(record -> name.equals(record.packageName));
+        }
     }
 
     /** A PendingIntent's target in the system server. */
@@ -93,8 +104,9 @@ final class PendingIntents {
 
     IIntentSender get(int type, String packageName, int requestCode, Intent[] intents,
             String[] resolvedTypes, int flags) {
-        mCallers.requirePackage(packageName);
         ApkPackage creator = mPm.get(packageName);
+        mCallers.requirePackage(packageName);
+        if (mPm.isRemovalPending(packageName)) throw new SecurityException("PendingIntent creator is being removed");
         if (creator == null && !(mCallers.isSystem() && "android".equals(packageName))) {
             throw new SecurityException("Unknown PendingIntent creator");
         }
@@ -112,7 +124,12 @@ final class PendingIntents {
         boolean noCreate = (flags & PendingIntent.FLAG_NO_CREATE) != 0;
         boolean cancelCurrent = (flags & PendingIntent.FLAG_CANCEL_CURRENT) != 0;
         boolean updateCurrent = (flags & PendingIntent.FLAG_UPDATE_CURRENT) != 0;
+        Runnable beforeLock = mBeforeRecordLock;
+        if (beforeLock != null) beforeLock.run();
         synchronized (mRecords) {
+            if (mPm.isRemovalPending(packageName) || mPm.get(packageName) != creator) {
+                throw new SecurityException("PendingIntent creator changed before publication");
+            }
             Record existing = null;
             for (Record r : mRecords) {
                 if (!r.canceled && r.sameKey(type, packageName, uid, identity, requestCode,
@@ -171,15 +188,17 @@ final class PendingIntents {
     int send(Record r, Intent fillIn, String resolvedType, String requiredPermission) {
         final Intent intent;
         final String type;
+        final ApkPackage creator;
         synchronized (mRecords) {
             if (r == null || r.canceled || !mRecords.contains(r)) return ActivityManager.START_CANCELED;
             ApkPackage current = mPm.get(r.packageName);
             boolean valid = current == null ? "android".equals(r.packageName)
                     && r.uid == android.os.Process.SYSTEM_UID && "android-system".equals(r.creatorIdentity)
                     : current.uid() == r.uid && r.creatorIdentity.equals(codeIdentity(current));
-            if (!valid) {
+            if (!valid || mPm.isRemovalPending(r.packageName)) {
                 r.canceled = true; mRecords.remove(r); return ActivityManager.START_CANCELED;
             }
+            creator = current;
             intent = new Intent(r.last());
             type = r.resolvedTypes != null ? r.resolvedTypes[r.resolvedTypes.length - 1] : resolvedType;
             // Sending is capability based: a legitimate recipient can consume a
@@ -191,19 +210,27 @@ final class PendingIntents {
         if (fillIn != null && (r.flags & PendingIntent.FLAG_IMMUTABLE) == 0) {
             intent.fillIn(fillIn, 0);
         }
+        // Signing identity permits a future send after a safe update. This invocation
+        // carries only the exact creator generation validated above, including while
+        // queued in another service after transport identity has been cleared.
+        BooleanSupplier lifetime = () -> mPm.get(r.packageName) == creator
+                && !mPm.isRemovalPending(r.packageName);
+        Runnable beforeDispatch = mBeforeSendDispatch;
+        if (beforeDispatch != null) beforeDispatch.run();
+        if (!lifetime.getAsBoolean()) return ActivityManager.START_CANCELED;
         SystemServer.log("send " + r);
         long ident = Binder.clearCallingIdentity();
         try {
             switch (r.type) {
                 case ActivityManager.INTENT_SENDER_BROADCAST:
-                    return mAm.sendBroadcastFor(r.packageName, intent, type, requiredPermission);
+                    return mAm.sendBroadcastFor(r.packageName, intent, type, requiredPermission, lifetime);
                 case ActivityManager.INTENT_SENDER_ACTIVITY:
-                    return mAm.startActivityFor(r.packageName, intent, type);
+                    return mAm.startActivityFor(r.packageName, intent, type, lifetime);
                 case ActivityManager.INTENT_SENDER_SERVICE:
                 case ActivityManager.INTENT_SENDER_FOREGROUND_SERVICE:
                     mAm.startServiceFor(r.packageName, intent, type,
-                            r.type == ActivityManager.INTENT_SENDER_FOREGROUND_SERVICE);
-                    return 0;
+                            r.type == ActivityManager.INTENT_SENDER_FOREGROUND_SERVICE, lifetime);
+                    return lifetime.getAsBoolean() ? 0 : ActivityManager.START_CANCELED;
                 default:
                     return 0;
             }

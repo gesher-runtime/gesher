@@ -1,0 +1,270 @@
+{
+  "date": "2026-11-06",
+  "created_utc": "2026-11-06T13:45:52.282483+00:00",
+  "reviewer": "Independent final_review agent; same ongoing audit",
+  "decision": "approved",
+  "decision_scope": "Bounded experimental single-user PR4 integration, pinned source16 and qualified runtime12. Approval includes the reviewed CI linkage/wiring, atomic split-icon publication and serialized per-view WebView darkening deltas, with the documented limits. It does not assert successful Claude sign-in, a user Otzaria plugin retest, real Store UI removal or post-push CI.",
+  "open_findings": [],
+  "review_method": "Independent source review and receipt/input rehashing. Developer regression executions were performed by the implementation owners; this reviewer did not modify production code or repeat broad tests.",
+  "baseline_main": "a991177deab427baae52345d870825b960c20430",
+  "integration_base": "d3b13cf3d4c882b5ae328aaa7baaf55019e2faea",
+  "source_manifest": {
+    "path": "out/microg-final-source-v16.json",
+    "sha256": "be1da2c34f0f4c580c4e4bd2130bd9d57531c229881cc274d50d377423dfc6bd"
+  },
+  "compiled_source_manifest": {
+    "path": "out/microg-final-source-v16.json",
+    "sha256": "be1da2c34f0f4c580c4e4bd2130bd9d57531c229881cc274d50d377423dfc6bd"
+  },
+  "runtime_manifest": {
+    "path": "out/microg-webview-runtime-inputs-v12.json",
+    "sha256": "6cd570081b3cbddc1220916492e2349fa919ba0e56064eb2df23a11071f78a34"
+  },
+  "native_candidate_map": {
+    "path": "out/webview-darkening-v2/native-tuple-focus.json",
+    "sha256": "ab0f165bb22a80a2af7e0acdccd77a3dfe87f3454eac1c815de659f78ab96f0c"
+  },
+  "artifacts": [
+    {
+      "name": "gesher-app.jar",
+      "sha256": "a2d4920a61f51dbd9764612a00cff00540baea82ed9b6c05263fa07485def989",
+      "bytes": 1106647
+    },
+    {
+      "name": "services-tests.dex",
+      "sha256": "1af4406cc0264f2feeb47865e827ca30544836dc96bb271918e788eb6779ea30",
+      "bytes": 497624
+    },
+    {
+      "name": "framework.jar",
+      "sha256": "127f5bed6b0cded540c3951156ed859d8eb9fe0ea88a68d905b42d2545145fcc",
+      "bytes": 17039974
+    },
+    {
+      "name": "dalvikvm.exe",
+      "sha256": "53d3ba97361cd9ca9c9e13693ae9e4d569692e023ba0919cb88b80b74f9d3225",
+      "bytes": 49210880
+    },
+    {
+      "name": "libgesher_account_crypto.so",
+      "sha256": "633649c5026466b302d29893e112041139f05a2cd3b7a2b7ccc06afd0627860a",
+      "bytes": 612352
+    },
+    {
+      "name": "libgesher_install_pipe.so",
+      "sha256": "e6ec348d55edb0205f22b198c67ca453dd87333bcce6170d9b052255700323f2",
+      "bytes": 584192
+    },
+    {
+      "name": "libgesher_webview_bridge.so",
+      "sha256": "2f28a116af31591993d801c2c6606b96c0398eb682729f5aa75054a0ecfb7d15",
+      "bytes": 2975744
+    },
+    {
+      "name": "binderd.exe",
+      "sha256": "e8ee91abdbc2bddb352a1ef49ac67e40dc02377208d1e56815d3fd10c23ce688",
+      "bytes": 625152
+    },
+    {
+      "name": "servicemanager.exe",
+      "sha256": "5d5a42fe26e6f351ea5bbcffb33edca5c6226a60d69699a15f319bea66b7f89e",
+      "bytes": 2746368
+    },
+    {
+      "name": "gesher-launch.exe",
+      "sha256": "e813032514ce7350aea1a8c9cd4bc61e89e9d6287d0a160ce0ca29af723dda37",
+      "bytes": 641536
+    },
+    {
+      "name": "account_chooser_test.exe",
+      "sha256": "fb7bc1f1111ec9cbc64af36e2bac765e94e27f6e0fa2dd8783ad5be6b4433edd",
+      "bytes": 589824
+    },
+    {
+      "name": "gesher-camera.apk",
+      "sha256": "d313c22779a88a53261adc3bd1eaf7e285e24640461556865798d99e357f3c5f",
+      "bytes": 10315
+    },
+    {
+      "name": "gesher_shellext.dll",
+      "sha256": "ef03cdd708e683c1c94601b1987de57729de16ab319cc12f2bd3edbf8fe55915",
+      "bytes": 588288
+    }
+  ],
+  "verification": {
+    "frozen_source_files_rehashed": 2582,
+    "canonical_production_sources_match_frozen_source": true,
+    "runtime_inputs_rehashed": 282,
+    "matching_boot_files": 15,
+    "required_boot_spaces": 5,
+    "final_receipt_references_rehashed": 206,
+    "native_qualification_references_rehashed": 11,
+    "all_checked_hashes_match": true,
+    "combined_groups_passed": 70,
+    "focused_uninstall_assertions": 115,
+    "direct_and_delegated_retirement_assertions": 230,
+    "native_chooser_modes_english": 8,
+    "native_chooser_modes_hebrew": 8,
+    "combined_receipt": {
+      "path": "out/microg-final-validation-v16.json",
+      "sha256": "b51fa8bf0e2653c44e96af0709b380f09ef91145ab64e52f1034301251ba2fa2"
+    },
+    "native_ui_qualification": {
+      "path": "out/microg-ui-native-v8/qualification-v8.json",
+      "sha256": "b6b22c455f33f7c30ea26659c97a5c0b294c888975847ae71b8bd78d4cd85af6"
+    },
+    "direct_and_delegated_focus": {
+      "path": "out/microg-uninstall/delegated-focus/20261106-134528-501764d067334a39974e2f43866900f2/validation.json",
+      "sha256": "55d0eb1818ca8a6827637b89e6b4f29c973e4528bd555725e6be6c90f229e209"
+    },
+    "uninstall_focus": {
+      "bytes": 6797,
+      "path": "out/microg-uninstall/focused-v8/package-uninstall-05ca1e6bfa424f4e824b7d6322e86798/validation.json",
+      "sha256": "44edd7acd2abc3bc73c68cbf68d9333d9a4e61204c811444ad8cdda451061a5d"
+    },
+    "test_only_changes_after_compilation": [],
+    "final_receipt_reference_entries_rehashed": 211,
+    "icon_assertions": 141,
+    "webview_policy_and_delayed_command_assertions": 36,
+    "webview_actual_boundary_and_renderer_assertions": 17,
+    "main_result": {
+      "path": "out/sec-final-v16/20261106-152858-5ab9d8ec0bc44befbeb674902f329658/result.txt",
+      "sha256": "6c5614b97cc18b68c5eaff4c338c7de66a0a2410fe23d2cda7babd582e21d577"
+    },
+    "native_ui_qualification_scope": "Prior bilingual qualification of the unchanged helper/controller/launcher/VM bytes, also exercised by the final combined run. The shell extension is separately covered by the real icon fixture.",
+    "icon_focus": {
+      "path": "out/sec-final-v16/shell-icons/shell-icons-7bcb959713824564af79f46db9556bba/validation.json",
+      "sha256": "15f1c4738b1b8c8681df368e5e230bf902ae8728d782d0c84c0236e4ad2eb879"
+    },
+    "historical_icon_causal_checkpoint": {
+      "path": "out/microg-icon-integration/final-icon-checkpoint.json",
+      "sha256": "d44a4b799eff418c949a0c437c52b35110c83ad6d83cd75a1b0bc4269d919143"
+    },
+    "webview_independent_source": {
+      "path": "out/webview-darkening-v2/source-inputs.json",
+      "sha256": "d4bc8e1b491085bfe744d0ab5f405afff6eef6c0bb837a5a19a0420e698cd65f"
+    },
+    "webview_actual_renderer": {
+      "path": "out/webview-darkening-v2/renderer/webview-darkening-2ddfe9b9ca94489dae906b62405fd625/validation.json",
+      "sha256": "95bb80890860c200472c2c96cc164717743f64d99c819572b4b2264ad1d109bc"
+    },
+    "webview_host_delayed_effect_policy": {
+      "path": "out/webview-darkening-v1/host-serialized-results.txt",
+      "sha256": "7a37917771d1b8efbe43cd50978e1fa738e40a74ce3928f58008d316e7b2f0e3"
+    }
+  },
+  "reviewed_areas": [
+    "Authenticated caller/code identity, microG trust boundaries and protected account persistence; private unit StoreWriter seam distinguished from genuine SystemServer native persistence.",
+    "Durable installation/removal publication, cache invalidation, version/flag/user fences, fresh default-No consent, legacy deletion observer mapping and protected system/account-provider targets.",
+    "Quarantine recovery, reserved code generations, precommit rollback barriers, UID retention and no-follow cleanup.",
+    "Permanent client account/session, PendingIntent, job, notification, install-session and grant retirement across reinstall; provider credentials preserved.",
+    "Strict original-process authentication/acceptance followed by package-bound queued service starts and nonordered broadcasts; normal caller exit/PID reuse and binding death cleanup.",
+    "Activity and delegated creator publication fences, WebView/process lifecycle and exact launched-process exit receipts.",
+    "Localized native consent/chooser defaults, bounds and role guards; rebuilt native ABI/provenance, bilingual private-desktop evidence and deterministic synthetic diagnostic parsers.",
+    "Bounded APK/APKS/XAPK split-resource icon extraction, temporary-resource closure/cleanup, actual density pixels, malformed/ambiguous archive controls, concurrent atomic ICO/list publication and native bounded queue.",
+    "Real per-view theme/target/allow algorithmic darkening, serialized/coalesced CDP commands, retry/failure behavior, author-style and light-mode opt-out controls, cross-view isolation and actual renderer pixels.",
+    "Standalone WebView probe bcrypt linkage and normal CI offline-security invocation/evidence collection; existing artifact ownership, producer uniqueness and receipt gates retained.",
+    "Final public documentation and prepared PR body, distinguishing historical real workflows, isolated final qualification and pending user application checks."
+  ],
+  "regression_resolution": {
+    "v7_graphics_failure_retained_as_evidence": true,
+    "fix": "Process identity gates authentication and acceptance; accepted queued service starts and nonordered broadcast authority retain original installed code rather than requiring the initiating process to remain alive.",
+    "actual_graphics_positive_and_explicit_headless_passed": true,
+    "ordered_broadcast_sender_liveness_semantics": "Existing behavior retained; no generalized caller-exit claim."
+  },
+  "account_evidence_scopes": {
+    "actualSystemServer": "Actual Binder probe prepares synthetic visibility grants, uninstalls/reinstalls the identical synthetic client through genuine trusted-host control, checks same UID with visibility and enumeration revoked while provider fixture credentials remain intact, verifies native encrypted GAC2 persistence, and repeats after genuine SystemServer restart. It does not directly query the private token/custom-token grant tables.",
+    "identity": "Actual account IPC reinstall fixture is unsigned identical code identity with a new ApkPackage incarnation. Verified same-certificate signed reinstall/removal fencing is separately exercised by PackageUninstallTest.",
+    "inProcessAccountUnit": "AccountClientRemovalTest separately verifies token/custom-token grant purge, serialization, rollback and epochs through an explicitly injected private in-memory StoreWriter. Production default persistence remains guarded native AccountStore.write."
+  },
+  "real_workflow_scope": {
+    "historical_trials": "Original Play catalog/download/install/open and user-confirmed Gemini chat are artifact-attributed historical observations in the linked record.",
+    "real_store_ui_removal_verified": false,
+    "legacy_adapter_qualification": "Synthetic PackageManager entry-point/observer/consent-policy/storage tests, including denial, flags/user/version checks and approved injected decisions.",
+    "user_reset": "Parent reports the user-requested reset of all real profiles/apps/accounts, including the normal installed profile, with APK installation files preserved. This reviewer did not inspect those private data roots.",
+    "post_reset_signin_install_or_real_store_action_performed_by_this_audit": false,
+    "later_user_activity": "User subsequently reopened/reinstalled Claude and Otzaria. New post-reset data is preserved; this audit did not inspect it.",
+    "claude_signin_verified": false,
+    "otzaria_user_plugin_retest": "Pending after deployment; synthetic boundary/renderer success does not establish that workflow.",
+    "user_readiness_instruction": "User explicitly requested PR4 be marked ready when implementation/checks finish without waiting for manual Claude verification."
+  },
+  "limits": [
+    "Historical actual Play catalog/download/install/open and user-confirmed Gemini chat are recorded separately; they do not establish every flow on the final artifact.",
+    "Final real Store UI removal remains unverified.",
+    "No current full visual Self-Check, general GMS parity, billing, DRM, Play Integrity, multi-user or inherited/multi-package installation claim.",
+    "Account-owning authenticators must have their accounts removed before uninstall; unsupported deletion flags fail explicitly.",
+    "A failed post-consent storage/registry commit can retain capability revocations even if app files are restored.",
+    "One earlier Store cold attachment timed out; a warm retry worked. Reliable cold startup remains unestablished.",
+    "Android API checks are not an operating-system sandbox for arbitrary APK/native code.",
+    "Global package lifecycle broadcasts retain the documented implicit-manifest delivery restriction.",
+    "Native splash/installer localization and camera resource claims are limited to recorded build/catalog/ABI/static checks; no new splash UI, installer execution or camera hardware trial is asserted.",
+    "WebView does not implement an Android Force-Dark-in-effect pipeline. Failed CDP updates retain existing renderer state and retry on a later explicit update; no DOM/root-style override is used.",
+    "Claude sign-in and the actual user Otzaria plugin workflow remain unverified. This approval does not wait for those manual checks or claim them as passed."
+  ],
+  "documentation_review": [
+    {
+      "path": "docs/research/microg-final-validation-2026-11-06.json",
+      "sha256": "a0f663674c5a754668f22b5cb9ba1d96d950fa4cca07570cf6f1942dd5f5c237"
+    },
+    {
+      "path": "docs/research/microg-play-gemini-validation-2026-11-06.json",
+      "sha256": "5d74ad73dfffd9be726092a5f8efca729922bbe3493eac34a8c32a9cdd8675f4"
+    },
+    {
+      "path": "docs/microg.md",
+      "sha256": "bce396ab3e9968477f523bfe4f5999f19650a9dfe39bc84c41f40c2093427d5c"
+    },
+    {
+      "path": "docs/research/package-uninstall.md",
+      "sha256": "b01900351661c4bf2a6ae5011d06a29cefb8f2449322e6330d4d206fa3dc2025"
+    },
+    {
+      "path": "docs/ui-language.md",
+      "sha256": "92332e1942cb767bb18b804d4aef24daadef2f78c33f524dbf463ef1e121ad4a"
+    },
+    {
+      "path": "docs/installer.md",
+      "sha256": "d684972de2155c1b1542752fc6c776024ccfdd0db9e9821bb14c34406530c6d3"
+    },
+    {
+      "path": "docs/webview.md",
+      "sha256": "aaabeea026ca9d1aa381cc21ee3133691973b8e543c9c9c7605dc5e46837fcfa"
+    },
+    {
+      "path": "docs/research/otzaria-webview-validation-2026-11-06.json",
+      "sha256": "10d39261f6a37b3ea64d0fa08f72d55ef6cefc5951f779953462255a2b79bfb5"
+    },
+    {
+      "path": "docs/research/claude-signin-2026-11-06.json",
+      "sha256": "55cece360738f6014d1b33d8c6bacef99eaf7254dcd8fffe4e9f204927249922"
+    },
+    {
+      "path": "out/microg-pr4-final-body-v2.md",
+      "sha256": "c58067f9e522030162fac2e8ac7fa5b200acd1844c3a3b1aede8460ff10898bd"
+    }
+  ],
+  "privacy": "Reviewed source, sanitized public records and isolated developer evidence only. No raw user account/token, private Google log, browser, mail or chat data was inspected; no UI/network/profile action was performed by this reviewer.",
+  "remaining_integration_work": "Parent will commit/push existing PR4, monitor its CI and mark it ready under the user instruction. This decision does not assert post-push CI or local deployment already completed. Separate code-only deployment procedures are outside this pinned source/runtime review.",
+  "additional_regressions_resolved": {
+    "icon_publication": "The same real concurrent-writer fixture first exposed the non-atomic REPLACE_EXISTING unlink race. Two same-directory publication sites now use ATOMIC_MOVE, and unchanged assertions pass.",
+    "cdp_command_ordering": "A control now has at most one outstanding CDP command. Desired state coalesces while pending, completion commits the sent state and drains the newest desired state. Deferred-effect tests prove a late old command cannot win; failed unchanged state retries on the next explicit update.",
+    "standalone_probe_linkage": "Both standalone probe variants cross-link after adding the bcrypt dependency already required by shared WebView code; this receipt is a build/link proof, not probe execution."
+  },
+  "ci_review": {
+    "probe_cross_link_receipt": {
+      "path": "out/ci-webview-probes-pr4-bcrypt/validation.json",
+      "sha256": "e309a6fdc07baea169da2a6dcfa01e70af44b8bad6d6a5bbebd3cd2f6b2d2dd8"
+    },
+    "offline_wiring_receipt": {
+      "path": "out/ci-webview-probes-pr4-bcrypt/ci-validation.json",
+      "sha256": "b1f7fd8d637a9a597e3cea87aafc02e68e4c5d74e2ee0762a7227eb1a2f1aa51"
+    },
+    "scope": "Both standalone probes cross-build; YAML/PowerShell/fixtures and unchanged normal job/receipt predicates checked. Existing chooser/webapp suppliers retained, with no duplicate producer. Current source16 includes these bounded changes.",
+    "post_push_checks_completed": false
+  },
+  "public_document_normalization": "Published JSON/guides and this record use UTF-8 without BOM and LF. The frozen source/evidence snapshots retain their original byte hashes; only published documentation/cross-references were normalized after qualification. No production/test source or runtime bytes changed.",
+  "webview_primary_references": [
+    "https://developer.android.com/reference/android/webkit/WebSettings#setAlgorithmicDarkeningAllowed(boolean)",
+    "https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2#calldevtoolsprotocolmethod"
+  ]
+}

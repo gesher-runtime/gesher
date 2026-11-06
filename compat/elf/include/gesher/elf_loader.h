@@ -138,7 +138,7 @@ struct FsRewriteCounts {
   size_t trapped = 0;          // not rewritable: int3 + diagnostic if reached
   size_t decode_errors = 0;    // bytes skipped while decoding code
   size_t bytes_decoded = 0;
-  bool used_unwind_info = false;  // code found through .eh_frame_hdr FDEs
+  bool used_unwind_info = false;  // .eh_frame_hdr supplied ranges or boundary anchors
 };
 FsRewriteCounts FsRewrites(Library* library);
 

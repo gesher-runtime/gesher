@@ -46,7 +46,7 @@ final class PermissionRequests {
         mDecision = decision;
     }
 
-    private static boolean confirm(String packageName, String permissions) {
+    static boolean confirm(String packageName, String permissions) {
         try {
             AccountSecretStore.ensureLoaded();
             return nativeConfirm(packageName, permissions);
@@ -89,12 +89,13 @@ final class PermissionRequests {
                                         != PackageManager.PERMISSION_GRANTED
                                 && !prompt.contains(name)) prompt.add(name);
                     }
-                    boolean allow = !prompt.isEmpty() && mPm.get(captured.packageName) == captured
+                    boolean allow = !prompt.isEmpty() && !mPm.isRemovalPending(captured.packageName)
+                            && mPm.get(captured.packageName) == captured
                             && mDecision.allow(captured.packageName, describe(policy, prompt));
                     // PM.add/remove are synchronized on the PM. Keep identity stable
                     // across the final recheck and the entire grant operation.
                     synchronized (mPm) {
-                        if (mPm.get(captured.packageName) == captured) {
+                        if (!mPm.isRemovalPending(captured.packageName) && mPm.get(captured.packageName) == captured) {
                             if (allow) {
                                 for (String name : prompt) {
                                     if (policy.canRequest(captured.packageName, name)) {

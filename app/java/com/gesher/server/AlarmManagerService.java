@@ -128,6 +128,7 @@ final class AlarmManagerService extends IAlarmManager.Default
     AlarmManagerService(ActivityManagerService am, PackageManagerService pm) {
         mAm = am;
         mPm = pm;
+        pm.onPackageRemoval(this::removeAll);
         DeviceWork.add(this);
         // The clock watch (TIME_SET, TIMEZONE_CHANGED, DATE_CHANGED) from the system server's
         // start; in an app's own process (--single-process) from its first alarm.
@@ -155,6 +156,12 @@ final class AlarmManagerService extends IAlarmManager.Default
     public void set(String callingPackage, int type, long triggerAtTime, long windowLength,
             long interval, int flags, PendingIntent operation, IAlarmListener listener,
             String listenerTag, WorkSource workSource, AlarmManager.AlarmClockInfo alarmClock) {
+        ApkPackage creator = mPm.get(callingPackage);
+        mAm.callers().requirePackage(callingPackage);
+        if (mPm.isRemovalPending(callingPackage) || creator == null
+                && !(mAm.callers().isSystem() && "android".equals(callingPackage))) {
+            throw new SecurityException("Unknown or retiring alarm owner");
+        }
         if (operation == null && listener == null) {
             SystemServer.log("alarm: set from " + callingPackage + " with no operation");
             return;
@@ -166,6 +173,9 @@ final class AlarmManagerService extends IAlarmManager.Default
         Alarm a = new Alarm(callingPackage, type, Math.max(0, triggerAtTime), windowLength,
                 Math.max(0, interval), flags, operation, listener, listenerTag, alarmClock);
         synchronized (this) {
+            if (mPm.isRemovalPending(callingPackage) || mPm.get(callingPackage) != creator) {
+                throw new SecurityException("Alarm owner changed before publication");
+            }
             mAlarms.removeIf(old -> old.matches(operation, listener));
             mAlarms.add(a);
         }
@@ -195,6 +205,7 @@ final class AlarmManagerService extends IAlarmManager.Default
 
     @Override
     public void removeAll(String packageName) {
+        mAm.callers().requireSystemOrPackage(packageName);
         synchronized (this) {
             mAlarms.removeIf(a -> a.packageName != null && a.packageName.equals(packageName));
         }

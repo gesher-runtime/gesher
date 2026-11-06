@@ -119,11 +119,14 @@ informational CI line.
   its final read-execute protection afterwards as before.
 - **Finding the instructions.** A small x86-64 length decoder
   (`compat/elf/x86_decode.cc`: legacy prefixes, REX, the one-byte/0F/0F38/0F3A
-  maps, VEX, EVEX, XOP, 3DNow!) walks the code instruction by instruction over
-  each FDE's `[pc_begin, pc_begin + range)` from `.eh_frame_hdr` (every NDK
-  function has unwind info), else over `SHF_EXECINSTR` sections, else over the
-  executable segments. Decoding from known function starts means a `0x64`
-  byte inside another instruction or in data is never taken for a prefix.
+  maps, VEX, EVEX, XOP, 3DNow!) walks allocated executable sections clipped
+  to file-backed executable segments. FDE starts and ends from `.eh_frame_hdr`
+  partition the scan at additional known instruction boundaries. Unwind
+  coverage can be partial and does not establish that other code is absent.
+  Without section metadata, FDE ranges supply coverage; executable segments
+  are the last fallback when neither kind of metadata is present. Decoding
+  avoids treating a `0x64` byte inside another decoded instruction as a
+  prefix; inline data in executable sections remains a decoder limitation.
   The decoder agreed with `objdump` on every one of 7.2 M instructions of a
   GCC-built binary, and on an AVX-512 OpenBLAS (only `fwait`-merged x87
   mnemonics and data in `.text` differed).

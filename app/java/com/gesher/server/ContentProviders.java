@@ -77,6 +77,7 @@ final class ContentProviders {
     static ProviderInfo declaredProvider(PackageManagerService pm, String authority) {
         ProviderInfo found = null;
         for (ApkPackage pkg : pm.packages()) {
+            if (pm.isRemovalPending(pkg.packageName)) continue;
             for (ProviderInfo info : pkg.providers(PackageManager.GET_META_DATA
                     | PackageManager.GET_SHARED_LIBRARY_FILES)) {
                 if (!hasAuthority(info, authority)) continue;
@@ -128,9 +129,16 @@ final class ContentProviders {
     /** The providers a process of {@code ai}'s package installs at bindApplication. */
     List<ProviderInfo> providersFor(ApplicationInfo ai) {
         ApkPackage p = mPm.get(ai.packageName);
-        return p == null ? List.of()
-                : p.providers(PackageManager.GET_META_DATA
-                        | PackageManager.GET_SHARED_LIBRARY_FILES);
+        if (p == null) return List.of();
+        List<ProviderInfo> result = new ArrayList<>();
+        String processName = mAtm.componentProcess(ai.packageName, ai.processName);
+        for (ProviderInfo info : p.providers(PackageManager.GET_META_DATA
+                | PackageManager.GET_SHARED_LIBRARY_FILES)) {
+            if (processName.equals(mAtm.componentProcess(info.packageName, info.processName))) {
+                result.add(info);
+            }
+        }
+        return result;
     }
 
     /**
@@ -156,6 +164,8 @@ final class ContentProviders {
                     ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(name);
                     if (owner == null || owner.exiting || !declared.packageName.equals(owner.packageName)
                             || !declared.name.equals(published.info.name)
+                            || !mAtm.componentProcess(declared.packageName, declared.processName)
+                                    .equals(mAtm.componentProcess(owner.packageName, owner.processName))
                             || !live.contains(owner)) {
                         mPublished.remove(name); mPublishedBy.remove(name);
                         continue;
@@ -192,8 +202,9 @@ final class ContentProviders {
             // A provider's onCreate can request a sibling before bindApplication has
             // published either. ActivityThread installs a local holder itself; waiting
             // here would wait for the calling thread to finish its own onCreate.
-            // Gesher currently hosts all of a package's components in one process.
-            if (caller != null && declared.packageName.equals(caller.packageName)) {
+            if (caller != null && declared.packageName.equals(caller.packageName)
+                    && mAtm.componentProcess(declared.packageName, declared.processName)
+                            .equals(mAtm.componentProcess(caller.packageName, caller.processName))) {
                 ContentProviderHolder local = new ContentProviderHolder(declared);
                 local.mLocal = true;
                 local.noReleaseNeeded = true;
@@ -203,7 +214,7 @@ final class ContentProviders {
             SystemServer.log("getContentProvider " + name + " from " + callingPackage
                     + ": declared by " + declared.packageName + ", waiting for its process");
             deadline = SystemClock.uptimeMillis() + PUBLISH_TIMEOUT_MS;
-            mAtm.withProcess(declared.packageName, "provider " + name, app -> { });
+            mAtm.withProcess(declared.packageName, declared.processName, "provider " + name, app -> { });
         }
     }
 
@@ -237,7 +248,9 @@ final class ContentProviders {
                     || info.applicationInfo == null || info.applicationInfo.uid != pkg.uid()
                     || !pkg.packageName.equals(info.applicationInfo.packageName)
                     || !java.util.Objects.equals(declared.authority, info.authority)
-                    || declared.authority == null || declared.authority.isEmpty()) {
+                    || declared.authority == null || declared.authority.isEmpty()
+                    || !mAtm.componentProcess(declared.packageName, declared.processName)
+                            .equals(mAtm.componentProcess(app.packageName, app.processName))) {
                 throw new SecurityException("Provider does not match the package declaration");
             }
             for (String authority : declared.authority.split(";")) {

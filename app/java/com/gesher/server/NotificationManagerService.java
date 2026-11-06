@@ -97,6 +97,8 @@ public final class NotificationManagerService extends INotificationManager.Defau
     // Guarded by this. Keys: package/channel id; package/tag/id.
     private final Map<String, NotificationChannel> mChannels = new LinkedHashMap<>();
     private final Map<String, Record> mPosted = new LinkedHashMap<>();
+    private final Object mPublicationLock = new Object();
+    private Runnable mBeforePostPublication; // Server-local race fixture; never a Binder option.
     private final List<Listener> mListeners = new ArrayList<>();
     private final Set<String> mRegisteredAppIds = new HashSet<>();
     private boolean mEventsStarted;
@@ -178,6 +180,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
     private ApkPackage packageFor(String pkg) { return pm() == null ? null : pm().get(pkg); }
 
     private boolean mayPost(String pkg) {
+        if (pm() != null && pm().isRemovalPending(pkg)) return false;
         if (!protectedMode()) return true;
         if ("android".equals(pkg)) return true; // enqueue ownership already restricts this virtual owner.
         PackageManagerService pm = pm();
@@ -266,15 +269,22 @@ public final class NotificationManagerService extends INotificationManager.Defau
     /** Called outside PermissionPolicy's lock so revocation removes existing content. */
     void permissionChanged(String pkg) {
         if (!protectedMode() || mayPost(pkg)) return;
-        synchronized (this) { mPosted.keySet().removeIf(k -> k.startsWith(pkg + "/")); }
-        NotificationStore.deleteAll(pkg);
-        if (mTestToast == null) WindowsHost.clearToasts(AppShell.appUserModelId(pkg));
+        synchronized (mPublicationLock) {
+            if (mayPost(pkg)) return;
+            synchronized (this) { mPosted.keySet().removeIf(k -> k.startsWith(pkg + "/")); }
+            NotificationStore.deleteAll(pkg);
+            if (mTestToast == null) WindowsHost.clearToasts(AppShell.appUserModelId(pkg));
+        }
     }
 
     // --- posting ------------------------------------------------------------------------------
 
     /** Posts a notification (enqueueNotificationWithTag, or a foreground service's). */
     void post(String pkg, String tag, int id, Notification notification) {
+        postFor(packageFor(pkg), pkg, tag, id, notification);
+    }
+
+    void postFor(ApkPackage captured, String pkg, String tag, int id, Notification notification) {
         if (notification == null) return;
         // Foreground-service state lives in ActiveServices; denied posting must not
         // expose its content through toasts, listeners or active-notification queries.
@@ -285,25 +295,30 @@ public final class NotificationManagerService extends INotificationManager.Defau
                 0, notification, UserHandle.SYSTEM, null,
                 System.currentTimeMillis());
         Record r = new Record(sbn, channel);
-        boolean update;
-        synchronized (this) {
-            update = mPosted.put(key(pkg, tag, id), r) != null;
-        }
-        int importance = channel.getImportance();
-        String shown;
-        if (importance == NotificationManager.IMPORTANCE_NONE) {
-            shown = "not shown: its channel is blocked";
-        } else {
-            // Its intents outlive this system server, as its toast does (ADR 0051).
-            if (WindowsHost.inSystemServer()) {
-                NotificationStore.save(am(), sbn.getKey(), pkg, tag, id, notification);
+        Runnable beforePublication = mBeforePostPublication;
+        if (beforePublication != null) beforePublication.run();
+        synchronized (mPublicationLock) {
+            if (packageFor(pkg) != captured || captured == null && !"android".equals(pkg) || !mayPost(pkg)) return;
+            boolean update;
+            synchronized (this) {
+                update = mPosted.put(key(pkg, tag, id), r) != null;
             }
-            int hr = mTestToast == null ? showToast(r, update) : mTestToast.applyAsInt(sbn, update);
-            shown = hr == 0 ? "a toast of " + AppShell.appUserModelId(pkg)
-                    : String.format("no toast (0x%08x)", hr);
+            int importance = channel.getImportance();
+            String shown;
+            if (importance == NotificationManager.IMPORTANCE_NONE) {
+                shown = "not shown: its channel is blocked";
+            } else {
+                // Its intents outlive this system server, as its toast does (ADR 0051).
+                if (WindowsHost.inSystemServer()) {
+                    NotificationStore.save(am(), sbn.getKey(), pkg, tag, id, notification);
+                }
+                int hr = mTestToast == null ? showToast(r, update) : mTestToast.applyAsInt(sbn, update);
+                shown = hr == 0 ? "a toast of " + AppShell.appUserModelId(pkg)
+                        : String.format("no toast (0x%08x)", hr);
+            }
+            SystemServer.log("notification " + id + (update ? " updated" : " posted") + " for "
+                    + pkg + ": channel " + channel.getId() + " (importance " + importance + ", " + shown + ")");
         }
-        SystemServer.log("notification " + id + (update ? " updated" : " posted") + " for "
-                + pkg + ": channel " + channel.getId() + " (importance " + importance + ", " + shown + ")");
         notifyListeners(r, true, 0);
     }
 
@@ -737,6 +752,10 @@ public final class NotificationManagerService extends INotificationManager.Defau
     }
 
     private void notifyListeners(Record r, boolean posted, int reason) {
+        if (posted) synchronized (this) {
+            if (mPosted.get(key(r.sbn.getPackageName(), r.sbn.getTag(), r.sbn.getId())) != r
+                    || !mayPost(r.sbn.getPackageName())) return;
+        }
         if (posted) bindListeners();
         List<INotificationListener> targets = new ArrayList<>();
         synchronized (this) {
@@ -780,9 +799,10 @@ public final class NotificationManagerService extends INotificationManager.Defau
     @Override
     public void enqueueNotificationWithTag(String pkg, String opPkg, String tag, int id,
             Notification notification, int userId) {
+        ApkPackage captured = packageFor(pkg);
         user(userId); own(pkg); own(opPkg);
         if (!callers().isSystem() && !pkg.equals(opPkg)) throw new SecurityException("Invalid notification attribution");
-        post(pkg, tag, id, notification);
+        postFor(captured, pkg, tag, id, notification);
     }
 
     @Override
@@ -824,6 +844,9 @@ public final class NotificationManagerService extends INotificationManager.Defau
      * uninstalled (Installer.uninstall).
      */
     void packageRemoved(String pkg) {
+        synchronized (mPublicationLock) { packageRemovedLocked(pkg); }
+    }
+    private void packageRemovedLocked(String pkg) {
         revokeListenersForPackage(pkg);
         synchronized (this) {
             mPosted.keySet().removeIf(k -> k.startsWith(pkg + "/"));
@@ -1024,6 +1047,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
     @Override
     public void setNotificationListenerAccessGrantedForUser(ComponentName component, int userId,
             boolean granted, boolean userSet) {
+        ApkPackage captured = component == null ? null : packageFor(component.getPackageName());
         system(); user(userId);
         if (component == null || (granted && listenerService(component) == null)) {
             throw new IllegalArgumentException("Not a notification listener service");
@@ -1031,6 +1055,10 @@ public final class NotificationManagerService extends INotificationManager.Defau
         String identity = granted ? codeIdentity(packageFor(component.getPackageName())) : null;
         if (granted && identity == null) throw new SecurityException("Unknown listener code identity");
         synchronized (this) {
+            if (granted && (packageFor(component.getPackageName()) != captured
+                    || pm() != null && pm().isRemovalPending(component.getPackageName()))) {
+                throw new SecurityException("Notification listener changed or is retiring");
+            }
             Object previous = granted ? mListenerGrants.setProperty(component.flattenToString(), identity)
                     : mListenerGrants.remove(component.flattenToString());
             try { Device.write(mListenerFile, mListenerGrants); }

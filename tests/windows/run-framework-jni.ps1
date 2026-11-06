@@ -7,7 +7,8 @@ param(
   [Parameter(Mandatory)][string] $TestDex,
   [Parameter(Mandatory)][string] $OutputDir,
   [string[]] $Classes = @('gesher.FrameworkMemoryTest', 'gesher.FrameworkScryptTest',
-                         'gesher.FrameworkLocalSocketTest', 'gesher.FrameworkCharsetTest')
+                         'gesher.FrameworkLocalSocketTest', 'gesher.FrameworkCharsetTest',
+                         'gesher.FrameworkSQLiteRawStatementTest')
 )
 $ErrorActionPreference = 'Stop'
 function AndroidPath([string] $path) {

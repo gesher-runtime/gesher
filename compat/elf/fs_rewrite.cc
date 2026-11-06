@@ -512,25 +512,35 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
   }
   if (exec.empty()) return true;
 
-  // Where the code is: FDE ranges, else executable sections, else whole
-  // executable segments.
-  std::vector<Region> regions;
-  if (eh_frame_hdr != nullptr && RegionsFromEhFrameHdr(eh_frame_hdr, load_bias, &regions)) {
+  // Unwind coverage can be partial: Android libraries may combine code built
+  // with and without unwind tables. FDEs provide instruction-boundary anchors,
+  // not proof that the rest of an executable section contains no code.
+  std::vector<Region> unwind;
+  std::vector<uint64_t> anchors;
+  if (eh_frame_hdr != nullptr && RegionsFromEhFrameHdr(eh_frame_hdr, load_bias, &unwind)) {
     stats->used_fdes = true;
-  } else {
-    regions.clear();
-    if (ehdr->e_shoff != 0 && ehdr->e_shentsize == sizeof(Elf64_Shdr) &&
-        ehdr->e_shoff + uint64_t{ehdr->e_shnum} * sizeof(Elf64_Shdr) <= file_size) {
-      const auto* shdr = reinterpret_cast<const Elf64_Shdr*>(file + ehdr->e_shoff);
-      for (int i = 0; i < ehdr->e_shnum; ++i) {
-        if (shdr[i].sh_type == SHT_PROGBITS && (shdr[i].sh_flags & SHF_EXECINSTR) &&
-            (shdr[i].sh_flags & SHF_ALLOC) && shdr[i].sh_size > 0) {
-          regions.push_back({shdr[i].sh_addr, shdr[i].sh_addr + shdr[i].sh_size});
-        }
+    for (const Region& r : unwind) {
+      anchors.push_back(r.start);
+      anchors.push_back(r.end);
+    }
+  }
+  // Prefer actual executable sections over PF_X segments, which can also
+  // contain ELF headers and read-only data. Use the old segment fallback only
+  // when neither section metadata nor unwind ranges are available.
+  std::vector<Region> regions;
+  if (ehdr->e_shoff != 0 && ehdr->e_shentsize == sizeof(Elf64_Shdr) &&
+      ehdr->e_shoff <= file_size &&
+      uint64_t{ehdr->e_shnum} * sizeof(Elf64_Shdr) <= file_size - ehdr->e_shoff) {
+    const auto* shdr = reinterpret_cast<const Elf64_Shdr*>(file + ehdr->e_shoff);
+    for (int i = 0; i < ehdr->e_shnum; ++i) {
+      if (shdr[i].sh_type == SHT_PROGBITS && (shdr[i].sh_flags & SHF_EXECINSTR) &&
+          (shdr[i].sh_flags & SHF_ALLOC) && shdr[i].sh_size > 0 &&
+          shdr[i].sh_addr <= UINT64_MAX - shdr[i].sh_size) {
+        regions.push_back({shdr[i].sh_addr, shdr[i].sh_addr + shdr[i].sh_size});
       }
     }
-    if (regions.empty()) regions = exec;
   }
+  if (regions.empty()) regions = unwind.empty() ? exec : unwind;
   // Clip to the executable segments, sort and merge.
   std::vector<Region> code;
   for (const Region& r : regions) {
@@ -541,13 +551,25 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
   }
   std::sort(code.begin(), code.end(),
             [](const Region& a, const Region& b) { return a.start < b.start; });
-  std::vector<Region> merged;
+  std::vector<Region> coverage;
   for (const Region& r : code) {
-    if (!merged.empty() && r.start <= merged.back().end) {
-      merged.back().end = std::max(merged.back().end, r.end);
+    if (!coverage.empty() && r.start <= coverage.back().end) {
+      coverage.back().end = std::max(coverage.back().end, r.end);
     } else {
-      merged.push_back(r);
+      coverage.push_back(r);
     }
+  }
+  std::sort(anchors.begin(), anchors.end());
+  anchors.erase(std::unique(anchors.begin(), anchors.end()), anchors.end());
+  std::vector<Region> merged;
+  for (const Region& r : coverage) {
+    uint64_t start = r.start;
+    for (auto at = std::upper_bound(anchors.begin(), anchors.end(), start);
+         at != anchors.end() && *at < r.end; ++at) {
+      merged.push_back({start, *at});
+      start = *at;
+    }
+    merged.push_back({start, r.end});
   }
 
   int32_t slot = 0;  // the TEB offset of the thread-pointer slot, on demand

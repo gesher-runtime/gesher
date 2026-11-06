@@ -35,6 +35,7 @@ final class UriGrants {
 
     UriGrants(PackageManagerService pm, ActivityTaskManagerService atm) {
         mPm = pm; mAtm = atm; mCallers = new CallerIdentity(pm, atm);
+        pm.onPackageRemoval(this::clear);
     }
 
     static Uri checkedUri(Uri uri, int userId) {

@@ -1,6 +1,6 @@
 # הערכת היתכנות וארכיטקטורה להרצת microG על סביבת הריצה Gesher
 
-> Implementation status (2026-11-05): this document is the original feasibility proposal. See [the runtime integration guide](../microg.md) and [the measured Windows results](microg-windows-experiment-2026-11-05.md). The source integration replaces the prototype patch and placeholder tests; account, permission and proprietary API claims below remain unvalidated.
+> Implementation status (2026-11-06): this document preserves the original feasibility proposal. See [the runtime integration guide](../microg.md), [the initial Windows results](microg-windows-experiment-2026-11-05.md) and [the measured Play/Gemini trial](microg-play-gemini-validation-2026-11-06.json). The source integration replaces the prototype patch and placeholder tests. Compatibility claims in the proposal require their own measured validation.
 
 ## תקציר מנהלים והמלצה ארכיטקטונית
 

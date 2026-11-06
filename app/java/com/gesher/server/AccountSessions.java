@@ -27,11 +27,13 @@ final class AccountSessions {
         final int uid;
         final Account account;
         final long expires;
+        final long ownerEpoch;
         private final Bundle data;
         Pending(String client, int uid, String owner, String ownerCode, String type,
-                Account account, Bundle data, long expires) {
+                Account account, Bundle data, long expires, long ownerEpoch) {
             this.client = client; this.uid = uid; this.owner = owner; this.ownerCode = ownerCode;
             this.type = type; this.account = account; this.data = new Bundle(data); this.expires = expires;
+            this.ownerEpoch = ownerEpoch;
         }
         Bundle data() { return new Bundle(data); }
     }
@@ -41,6 +43,11 @@ final class AccountSessions {
 
     synchronized Bundle issue(String client, int uid, String owner, String ownerCode, String type,
             Account account, Bundle data) {
+        return issue(client, uid, owner, ownerCode, type, account, data, 0);
+    }
+
+    synchronized Bundle issue(String client, int uid, String owner, String ownerCode, String type,
+            Account account, Bundle data, long ownerEpoch) {
         if (client == null || owner == null || ownerCode == null || type == null || data == null) {
             throw new IllegalArgumentException("Incomplete account session identity");
         }
@@ -53,26 +60,42 @@ final class AccountSessions {
             mRandom.nextBytes(entropy);
             handle = Base64.getUrlEncoder().withoutPadding().encodeToString(entropy);
         } while (mPending.containsKey(handle));
-        mPending.put(handle, new Pending(client, uid, owner, ownerCode, type, account, data, now + LIFETIME_MS));
+        mPending.put(handle, new Pending(client, uid, owner, ownerCode, type, account, data,
+                now + LIFETIME_MS, ownerEpoch));
         Bundle result = new Bundle(); result.putString(HANDLE, handle); return result;
     }
 
-    synchronized Pending consume(Bundle publicSession, String client, int uid,
+    void packageRemoved(String packageName) {
+        String prefix = packageName + "\u0000";
+        synchronized (this) {
+            mPending.values().removeIf(p -> packageName.equals(p.owner) || p.client.startsWith(prefix));
+        }
+    }
+
+    Pending consume(Bundle publicSession, String client, int uid,
             Predicate<Pending> currentOwner) {
         if (publicSession == null || publicSession.size() != 1 || !publicSession.containsKey(HANDLE)) {
             throw new SecurityException("Invalid account session envelope");
         }
         String handle = publicSession == null ? null : publicSession.getString(HANDLE);
-        Pending pending = handle == null ? null : mPending.get(handle);
-        // A wrong caller cannot invalidate a valid caller's opaque session.
-        if (pending == null || !pending.client.equals(client) || pending.uid != uid) {
-            throw new SecurityException("Invalid account session");
+        Pending pending;
+        synchronized (this) {
+            pending = handle == null ? null : mPending.get(handle);
+            // A wrong caller cannot invalidate a valid caller's opaque session.
+            if (pending == null || !pending.client.equals(client) || pending.uid != uid) {
+                throw new SecurityException("Invalid account session");
+            }
         }
-        if (pending.expires <= mNow.getAsLong() || !currentOwner.test(pending)) {
-            mPending.remove(handle);
-            throw new SecurityException("Account session expired or its owner changed");
+        // The owner check may take the account-store lock. Never invoke it while
+        // holding this lock: removal holds the store lock before retiring sessions.
+        boolean current = currentOwner.test(pending);
+        synchronized (this) {
+            if (mPending.get(handle) != pending || pending.expires <= mNow.getAsLong() || !current) {
+                if (mPending.get(handle) == pending) mPending.remove(handle);
+                throw new SecurityException("Account session expired or its owner changed");
+            }
+            mPending.remove(handle); // Consume before dispatch, including authenticator failures.
+            return pending;
         }
-        mPending.remove(handle); // Consume before dispatch, including authenticator failures.
-        return pending;
     }
 }

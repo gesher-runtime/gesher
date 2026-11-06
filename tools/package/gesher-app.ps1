@@ -50,6 +50,7 @@ param(
   [Parameter(ValueFromRemainingArguments)] [string[]] $Arguments = @()
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'gesher-ui.ps1')
 $here = $PSScriptRoot
 
 # When started interactively from Explorer (.apk double-click or Start menu shortcut),
@@ -80,7 +81,7 @@ $root = Join-Path $env:LOCALAPPDATA 'Gesher'
 $enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
 $commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy'
 if ($Arguments.Count -eq 0) {
-  Write-Host 'usage: gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--single-process | --system-server]'
+  Write-Host ((Get-GesherText 'usage') + 'gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--single-process | --system-server]')
   Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows]'
   exit 2
 }
@@ -116,7 +117,7 @@ function DeviceProcess($state, [string] $name) {
 # shutdown event, then whatever is left is ended.
 if ($command -eq 'shutdown') {
   $state = DeviceState
-  if (-not $state) { Write-Host 'gesher-app: no Gesher device is running'; exit 0 }
+  if (-not $state) { Write-Host ('gesher-app: ' + (Get-GesherText 'no_device')); exit 0 }
   $server = DeviceProcess $state 'system_server'
   if ($server) {
     try {
@@ -131,12 +132,12 @@ if ($command -eq 'shutdown') {
     if ($p) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
   }
   Remove-Item (Join-Path $root 'data\system\gesher-device'), (Join-Path $root 'data\system\gesher-device.ready') -ErrorAction SilentlyContinue
-  Write-Host "gesher-app: the Gesher device $($state['device']) stopped"
+  Write-Host ('gesher-app: ' + (Get-GesherText 'device_stopped' @($state['device'])))
   exit 0
 }
 
 if ($root.Substring(0, 2) -ne $here.Substring(0, 2)) {
-  throw "$root must be on drive $($here.Substring(0, 2)), with Gesher."
+  throw (Get-GesherText 'same_drive' @($root, $here.Substring(0, 2)))
 }
 $apkFull = $null
 if ($commands -notcontains $command) {
@@ -261,7 +262,7 @@ try {
       -RedirectStandardOutput "$logs/run-binderd.out" -RedirectStandardError "$logs/run-binderd.log"
     # A successful protocol connection to this broker must precede ProcessState.
     & $dalvikvm @dvm com.gesher.server.RuntimeCommands wait-binder $env:GESHER_BINDER $started[0].Id 15000
-    if ($LASTEXITCODE -ne 0) { throw 'gesher-app: binderd did not complete its connection handshake' }
+    if ($LASTEXITCODE -ne 0) { throw ('gesher-app: ' + (Get-GesherText 'binder_failed')) }
     $started += Start-Process (Join-Path $here 'servicemanager.exe') -PassThru -NoNewWindow `
       -RedirectStandardOutput "$logs/run-servicemanager.out" -RedirectStandardError "$logs/run-servicemanager.log"
     $started += Start-Process $dalvikvm -PassThru -NoNewWindow `
@@ -277,7 +278,7 @@ try {
     }
     & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (NoDrive $apkFull)
     $code = $LASTEXITCODE
-    if ($code -ne 0) { Write-Host "gesher-app: the system server's logs are in $logs" }
+    if ($code -ne 0) { Write-Host ('gesher-app: ' + (Get-GesherText 'server_logs' @($logs))) }
   } finally {
     foreach ($p in $started) {
       if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }

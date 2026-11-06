@@ -109,6 +109,7 @@ public final class ContentSecurityTest {
                 as(pkg, () -> {
                     Object record = construct(process, new Class<?>[]{atmType, int.class, IApplicationThread.class}, atm, pid, thread);
                     field(process, "packageName").set(record, pkg);
+                    field(process, "processName").set(record, pkg);
                     field(process, "ready").setBoolean(record, true);
                     ((List<Object>) field(atmType, "mProcesses").get(atm)).add(record);
                 });
