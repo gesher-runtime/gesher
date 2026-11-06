@@ -17,6 +17,7 @@
 
 #include "extra_bionic.h"
 #include "unicode_bionic.h"
+#include "search_bionic.h"
 
 #include <gesher/bionic_shim.h>
 #include <gesher/system_properties.h>
@@ -1661,6 +1662,11 @@ extern "C" int gesher_extra_wprintf();
 extern "C" int gesher_extra_fwprintf();
 
 void RegisterExtra(SymbolTable& t) {
+  E("tsearch", search::Tsearch);
+  E("tfind", search::Tfind);
+  E("tdelete", search::Tdelete);
+  E("twalk", search::Twalk);
+  E("tdestroy", search::Tdestroy);
   // libm.
   t["acosh"] = WRAPS(double (*)(double), ::acosh);
   t["asinh"] = WRAPS(double (*)(double), ::asinh);

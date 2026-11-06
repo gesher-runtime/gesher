@@ -383,6 +383,9 @@ constexpr short kOut = POLLOUT | POLLWRNORM;
 // the writer is gone; files and other devices are always ready. Returns false
 // for a pipe that has nothing yet.
 bool PollFile(pollfd* p) {
+  // The NUL fd reserves a number, but an epoll is readable only when its
+  // interest list has a reportable event. It is never a writable file.
+  if (gesher::PollEpoll(p->fd, p->events, &p->revents)) return p->revents != 0;
   HANDLE h = gesher::HandleFromFd(p->fd);
   if (h == INVALID_HANDLE_VALUE) {
     p->revents = POLLNVAL;
@@ -529,7 +532,7 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
   // the registration woke nobody, so the first round only looks.
   std::optional<WaiterRegistration> registration;
   if (ready == 0 && timeout != 0 &&
-      (waiting_files || (!sockets.empty() && (!eventfds.empty() || interrupt != nullptr)))) {
+      (interrupt != nullptr || waiting_files || (!sockets.empty() && !eventfds.empty()))) {
     registration.emplace(!sockets.empty());
   }
   PollWaiter* waiter = registration ? registration->get() : nullptr;
@@ -557,6 +560,7 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
       if (woken) {
         waiter->pending.store(false);  // a later wake sends again
         ws::DrainWakeSocket(waiter->socket);
+        if (interrupt != nullptr) *interrupted = true;  // rebuild an epoll's interest snapshot
       }
       for (size_t k = 0; k < sockets.size(); ++k) {
         pollfd* p = &fds[socket_index[k]];
@@ -589,6 +593,7 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
       if (handles.size() > MAXIMUM_WAIT_OBJECTS) {
         handles.clear();  // too many to wait for: look every 10 ms
         if (wait_ms < 0 || wait_ms > 10) wait_ms = 10;
+        if (interrupt != nullptr) *interrupted = true;
       }
       if (wait_ms != 0 && handles.empty()) {
         Sleep(wait_ms < 0 ? INFINITE : static_cast<DWORD>(wait_ms));
@@ -599,6 +604,8 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
         if (w == WAIT_FAILED) return FailWithLastError();
         // The auto-reset `interrupt` is consumed by the wait that sees it.
         if (interrupt != nullptr && w == WAIT_OBJECT_0 + n - 1) *interrupted = true;
+        if (interrupt != nullptr && waiter != nullptr &&
+            w == WAIT_OBJECT_0 + n - 2) *interrupted = true;
       }
     }
 
@@ -610,6 +617,8 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
         WaitForSingleObject(interrupt, 0) == WAIT_OBJECT_0) {
       *interrupted = true;
     }
+    if (interrupt != nullptr && waiter != nullptr && !waiter->with_socket &&
+        WaitForSingleObject(waiter->event, 0) == WAIT_OBJECT_0) *interrupted = true;
     if (waiting_files) {
       waiting_files = false;
       for (nfds_t i = 0; i < nfds; ++i) {

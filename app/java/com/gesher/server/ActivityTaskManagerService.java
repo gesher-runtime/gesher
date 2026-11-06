@@ -114,6 +114,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     static volatile java.util.function.Predicate<String> sOpenExternalUrl = WindowsHost::openUrl;
 
+    /** Windows owns the toasts' per-app controls; Android's Settings APK is not installed. */
+    static volatile java.util.function.Predicate<String> sOpenNotificationSettings = WindowsHost::openUrl;
+
     /** STARTED: made visible again without being resumed (StartActivityItem). */
     enum State { INITIALIZING, LAUNCHING, RESUMING, RESUMED, PAUSING, PAUSED, STARTED, STOPPING,
             STOPPED, DESTROYING, DESTROYED }
@@ -583,6 +586,23 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (info == null) {
             if (intent != null) {
                 String action = intent.getAction();
+                // Apps such as Gmail open a channel's settings without first resolving
+                // the intent. With no Settings APK, START_INTENT_NOT_RESOLVED becomes
+                // an uncaught ActivityNotFoundException on their UI thread. Windows
+                // manages Gesher's app toasts, so open its notification controls. Use
+                // a fixed URI: package/channel extras are not shell input. Individual
+                // Android channel controls are not provided by this Windows page.
+                if (intent.getComponent() == null
+                        && (intent.getPackage() == null
+                            || "com.android.settings".equals(intent.getPackage()))
+                        && ("android.settings.APP_NOTIFICATION_SETTINGS".equals(action)
+                            || "android.settings.CHANNEL_NOTIFICATION_SETTINGS".equals(action))) {
+                    boolean opened = sOpenNotificationSettings.test("ms-settings:notifications");
+                    SystemServer.log("startActivity: " + action
+                            + ": Windows notification settings " + (opened ? "opened" : "unavailable"));
+                    return opened ? ActivityManager.START_SUCCESS
+                            : ActivityManager.START_INTENT_NOT_RESOLVED;
+                }
                 if (Intent.ACTION_VIEW.equals(action)) {
                     Uri data = intent.getData();
                     if (data != null) {

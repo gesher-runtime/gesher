@@ -117,13 +117,18 @@ add_library(framework_runtime OBJECT
   ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/attach_standins.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/shared_memory.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/memory_file.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/memory_int_array.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/scrypt.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/local_socket.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/charset_utils.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/tracing_perfetto_stub.cc)
 target_include_directories(framework_runtime PRIVATE
   ${_fwjni} ${_fwjni}/include ${CMAKE_SOURCE_DIR}/compat/framework/include
   ${AOSP_DIR}/frameworks/native/libs/binderthreadstate/include)
 # AndroidCharacter uses ICU4C directly, as the platform build does.
 target_link_libraries(framework_runtime PUBLIC androidfw binder ziparchive nativehelper utils cutils log base
-  icu_headers icuuc)
+  icu_headers icuuc boringssl_crypto)
 # Android.bp's libandroid_runtime warning set, plus what -Wextra and C++20
 # add that Soong's global flags do not report: a deprecated implicit copy
 # (utils/TypeHelpers.h), anonymous enum arithmetic (ResourceTypes.h), and an

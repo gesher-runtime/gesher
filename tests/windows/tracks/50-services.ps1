@@ -152,7 +152,7 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
   'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-  'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, clipboard, connectivity, content, device_identifiers, device_policy, display, dropbox, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_session, mount, notification, package, permissionmgr, phone, power, search, sensitive_content_protection_service, shortcut, telephony.registry, thermalservice, trust, uimode, usagestats, user, vibrator_manager, window',
+  'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, clipboard, connectivity, content, device_identifiers, device_policy, deviceidle, display, dropbox, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_session, mount, notification, package, permissionmgr, phone, power, search, sensitive_content_protection_service, shortcut, telephony.registry, thermalservice, trust, uimode, usagestats, user, vibrator_manager, window',
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 
@@ -713,3 +713,29 @@ if ($state -and -not $left -and $status.Contains('gesher-app: cleaning up the Ge
 if ($state) { foreach ($n in DeviceAlive $state) { Stop-Process -Id ([int]($n -split ' ')[1]) -Force -ErrorAction SilentlyContinue } }
 if ($failed -ne $failedBefore) { DeviceLogs }
 Remove-Item Env:GESHER_APP_WINDOW -ErrorAction SilentlyContinue
+
+# Manager construction and software-service completion contracts need no running
+# device, installed app, UI, or hardware. Keep their state separate from the
+# lifecycle fixtures above and never inherit a Binder device name.
+$serviceContractsData = Join-Path $root 'service-contract-data'
+New-Item -ItemType Directory -Force $serviceContractsData | Out-Null
+$savedContractsData = $env:ANDROID_DATA
+$savedContractsBinder = $env:GESHER_BINDER
+try {
+  $env:ANDROID_DATA = NoDrive $serviceContractsData
+  Remove-Item Env:GESHER_BINDER -ErrorAction SilentlyContinue
+  $dvmContracts = @("-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+    '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"))
+  CheckTimed 'services: deviceidle real managers, all 22 methods, administrative denial' "$Dir/dalvikvm.exe" `
+    ($dvmContracts + 'gesher.services.DeviceIdleContractTest') @('DeviceIdleContractTest all passed') 30
+  CheckTimed 'services: real ContextImpl manager construction and immediate policy rejection' "$Dir/dalvikvm.exe" `
+    ($dvmContracts + 'gesher.services.ManagerConstructionBatchTest') @('ManagerConstructionBatchTest all passed (17 managers)') 30
+  CheckTimed 'services: thermal usage shortcuts and unmanaged device policy contracts' "$Dir/dalvikvm.exe" `
+    ($dvmContracts + 'gesher.services.SoftwareServiceContractTest' +
+      (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures/unsigned.apk'))) @('SoftwareServiceContractTest all passed') 30
+  CheckTimed 'services: existing and future registration callbacks, cancellation and death cleanup' "$Dir/dalvikvm.exe" `
+    ($dvmContracts + 'gesher.services.ServiceRegistrationCallbackTest') @('ServiceRegistrationCallbackTest all passed') 30
+} finally {
+  $env:ANDROID_DATA = $savedContractsData
+  $env:GESHER_BINDER = $savedContractsBinder
+}

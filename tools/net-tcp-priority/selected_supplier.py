@@ -144,7 +144,7 @@ def main():
     parser=argparse.ArgumentParser();parser.add_argument('--manifest',type=Path,required=True);args=parser.parse_args()
     context={k:os.environ[k] for k in CONTEXT}
     assert os.environ.get('GITHUB_ACTIONS')=='true'
-    if os.environ.get('GITHUB_REF') in ('refs/heads/wip/coherent-selected-tcp', 'refs/heads/main'):
+    if os.environ.get('GITHUB_WORKFLOW') == 'ci':
         sys.path.insert(0,str(ROOT/'tools/toolchain'))
         import coherent_tcp_context as coherent
         coherent.context(os.environ,'windows')

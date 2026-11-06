@@ -1,0 +1,61 @@
+{
+  "microg_base_commit": "c576af6b0a13dd75430be0708adbe85edcbacd0a",
+  "stability_head": "78f4ccf790fa4bd53e1b15d0bd9f6ace831cbb70",
+  "scope": "Reviewed integration of the merged stability changes into microG. Excludes ongoing Google/Play prototypes.",
+  "critical_resolved_source_sha256": {
+    "app/build.sh": "1f1660de4776869afa03401ceee404e2c98ad83b19ffc66b16a8e973b1990672",
+    "app/java/android/provider/MediaStore.java": "63fdd708e51a8aaa53841e6b6d4b5de3b290c1ce1c06f2da22e583d621550703",
+    "app/java/com/gesher/server/Services.java": "5faf5c13bd48f366c4afdf5bf10980b51d9726944d13272751fb28f7caf17c6e",
+    "docs/research/aosp-mediastore-contracts-2026-11-05.json": "ce31d00d7ddc085e1498da953d26a7215a41af76470338c6f6172edb2ed51666",
+    "tests/native/libc_test.c": "bd080bfeebbb951fc6ac1425cfb5d03b1ec8b96a386815653df75b15cc78fb76",
+    "app/java/com/gesher/server/GmsSignatureSpoofing.java": "84d8fe72cc78244b5dc11d7437eff5573c2b84a424fcc760d5baeff8de087a59",
+    "tests/windows/tracks/52-microg.ps1": "47e191ae47330f956c167c5eea3ef125cac1cb14d9c53bbdad555e90fdcb5ca8",
+    "tools/package/gesher-app-microg.ps1": "273a531db0ade7b5ff71de0712e5d3057324d0583602bfd096a4fb7ded78c4e0",
+    "docs/research/microg.md": "04bde7df2752a037b49140f2feedca23a43b5070c08882ebcd37618dff2d640a"
+  },
+  "build": "full app and services tests from prepared merged sources",
+  "artifacts": {
+    "gesher-app.jar": "3c5baf6f63bbab0e4c78790e7f847199ad9c851d4e2fdb01858ac97f3ed1766e",
+    "dalvikvm.exe": "6fbc8a815ab3bb5eecd07994dd26e0426c068a38ffce26ee0bf62e73e09cdadf",
+    "services-tests.dex": "90fc8a81a9d0160dcd578ee9f2e6f29a1af9975d4056c9942db6522cb1a5ef5f",
+    "libgesher_webview_bridge.so": "9c51dafefb525dd9916abe1bc8be36bdc993b5d16e3e8fb81fc361abf3b6b29a",
+    "org.apache.http.legacy.jar": "6f2b6187c97c1e658ed443cbed74c9529ed4c984ad7803cc1bf7a8055024295b"
+  },
+  "security_checks": 38,
+  "security_evidence": "security-current-fixtures/20261106-012031-830d17667ecb40b6922abcfdcde043d6",
+  "passing_contract_fixtures": [
+    "ServiceRegistrationCallbackTest",
+    "DeviceIdleContractTest",
+    "ManagerConstructionBatchTest",
+    "SoftwareServiceContractTest",
+    "BluetoothValueContractTest",
+    "NetworkRequestValueContractTest",
+    "NetworkValueContractTest",
+    "MediaStoreContractTest",
+    "FrameworkFixesTest",
+    "NotificationSettingsIntentTest",
+    "BrowserIntentTest"
+  ],
+  "initial_harness_corrections": [
+    "Initial devsvc APK was stale and lacked TestPrivateAuthenticator; rebuilt both fixture APKs from merged sources then all38 passed.",
+    "SoftwareServiceContractTest requires its synthetic APK argument; supplied it, remaining8 fixtures passed. First3 successful fixture outputs retained."
+  ],
+  "limits": [
+    "Native6FBC is the pinned existing experimental artifact, not a clean new native build of the merged sources."
+  ],
+  "main_merge_commit": "a991177deab427baae52345d870825b960c20430",
+  "stability_ci": {
+    "run": "https://github.com/gesher-runtime/gesher/actions/runs/42126153324",
+    "head": "78f4ccf790fa4bd53e1b15d0bd9f6ace831cbb70",
+    "checks": 58,
+    "successful": 52,
+    "intentionally_skipped": 6,
+    "remaining": 0
+  },
+  "base_merge_qa": {
+    "agent": "base_integration_qa",
+    "result": "APPROVE",
+    "blocking_findings": 0,
+    "scope": "Prepared base merge and conflict resolution; all nine critical source and five artifact hashes verified."
+  }
+}

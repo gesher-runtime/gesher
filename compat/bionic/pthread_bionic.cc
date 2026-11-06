@@ -11,6 +11,7 @@
 // All entry points are System V (BIONIC_SYSV), as the .so calls them.
 
 #include "shim_internal.h"
+#include "pthread_cleanup.h"
 
 #include <pthread.h>
 #include <windows.h>
@@ -67,6 +68,7 @@ struct ThreadAtExit {
   void* obj;
 };
 thread_local std::vector<ThreadAtExit>* t_thread_atexit = nullptr;
+thread_local CleanupStack t_cleanups;
 
 // C++ thread_local destructors, last registered first (as bionic).
 void RunThreadAtExit() {
@@ -102,6 +104,7 @@ bool RunKeyRound() {
 }
 
 void RunThreadExit() {
+  t_cleanups.Run();
   RunThreadAtExit();
   for (int pass = 0; pass < kDestructorPasses; ++pass) {
     if (!RunKeyRound()) break;
@@ -174,6 +177,7 @@ thread_local int t_host_exit_rounds = -1;  // -1: not armed on this thread
 
 void HostExitRound(void*) {
   ++t_host_exit_rounds;
+  t_cleanups.Run();
   RunThreadAtExit();
   RunKeyRound();
 }
@@ -446,6 +450,16 @@ int BIONIC_SYSV gesher_bionic_pthread_equal(bionic_pthread_t a, bionic_pthread_t
 void BIONIC_SYSV gesher_bionic_pthread_exit(void* retval) {
   FinishThread(retval);
   ExitThread(0);
+}
+
+void BIONIC_SYSV gesher_bionic___pthread_cleanup_push(
+    CleanupRecord* record, CleanupRoutine routine, void* argument) {
+  t_cleanups.Push(record, routine, argument);
+  ArmHostExit();
+}
+
+void BIONIC_SYSV gesher_bionic___pthread_cleanup_pop(CleanupRecord* record, int execute) {
+  t_cleanups.Pop(record, execute != 0);
 }
 
 int32_t BIONIC_SYSV gesher_bionic_pthread_gettid_np(bionic_pthread_t thread) {
@@ -801,6 +815,8 @@ void RegisterPthread(SymbolTable& t) {
   P(pthread_self);
   P(pthread_equal);
   P(pthread_exit);
+  P(__pthread_cleanup_push);
+  P(__pthread_cleanup_pop);
   P(pthread_gettid_np);
   P(pthread_setname_np);
   P(sched_yield);

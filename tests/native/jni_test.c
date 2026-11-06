@@ -15,11 +15,26 @@
 #include <jni.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 static JavaVM* g_vm;
 static jclass g_class;  // gesher/JniTest, a global reference
 static int failures;
+
+// Deliberately fatal, and called only by the isolated FatalContext fixture.
+// The ELF read needs a raw PC; the host strlen read also needs a PE module
+// and offset. A volatile pointer/function prevents folding away either call.
+JNIEXPORT jlong JNICALL Java_gesher_JniTest_fatalNullRead(JNIEnv* env, jclass cls, jboolean host) {
+  (void)env;
+  (void)cls;
+  volatile uintptr_t address = 0x308;
+  if (host) {
+    size_t (*volatile length)(const char*) = strlen;
+    return (jlong)length((const char*)address);
+  }
+  return *(volatile unsigned char*)address;
+}
 
 static void check(const char* what, int ok) {
   printf("    native: %-52s %s\n", what, ok ? "ok" : "FAIL");

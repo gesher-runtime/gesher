@@ -41,7 +41,17 @@ jobs:
       - name: Strict archive adversarial controls
         run: |
           python3 tools/ci/receipt_identity.py
+          python3 -m unittest discover -s tools/ci -p test_source_identity.py
+          python3 tools/toolchain/test_coherent_tcp_context.py
+          python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
           python3 tools/surface/test-verified-artifact.py
+
+      - name: Compatibility inventory parser tests
+        run: |
+          python3 -m unittest discover -s tools/tests -p 'test_compatibility_*.py'
+          python3 -m unittest discover -s tools/tests -p 'test_*api_inventory.py'
+          python3 -m unittest discover -s tools/tests -p test_java_member_inventory.py
+          python3 -m unittest discover -s tools/tests -p test_audit_services_jni.py
 
   build-framework-assets:
     needs: [artifact-preflight, source-identity]
@@ -1278,7 +1288,18 @@ jobs:
           $code = $LASTEXITCODE
           "### Tests — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
-          Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL|INFO)|failed' >> $env:GITHUB_STEP_SUMMARY
+          # Full diagnostics stay in results.txt/job logs. Source receipts can be
+          # very large; GitHub rejects a step summary above 1 MiB.
+          $summaryBytes = 0
+          $summaryTruncated = $false
+          foreach ($line in Get-Content results.txt | Where-Object { $_ -match '^(PASS|FAIL)  |^[0-9]+ test\(s\) failed$' }) {
+            $entry = if ($line.Length -gt 1200) { $line.Substring(0, 1200) + ' ... (see job log)' } else { $line }
+            $entryBytes = [Text.Encoding]::UTF8.GetByteCount($entry) + 2
+            if ($summaryBytes + $entryBytes -gt 700000) { $summaryTruncated = $true; break }
+            $entry >> $env:GITHUB_STEP_SUMMARY
+            $summaryBytes += $entryBytes
+          }
+          if ($summaryTruncated) { 'Summary shortened; complete results remain in the job log and results.txt.' >> $env:GITHUB_STEP_SUMMARY }
           '```' >> $env:GITHUB_STEP_SUMMARY
           exit $code
 

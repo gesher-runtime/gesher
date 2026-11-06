@@ -36,15 +36,26 @@ static int connected_source(net_handle_t network, const char* host, int port, in
 }
 
 static int result(int fd, int expected_rcode, int expected_id) {
-  if (fd < 0) return 0;
+  if (fd < 0) {
+    printf("Web3 DNS query failed: result=%d errno=%d\n", fd, errno);
+    return 0;
+  }
   struct pollfd pending = {.fd = fd, .events = POLLIN};
-  if (poll(&pending, 1, 15000) != 1) { android_res_cancel(fd); return 0; }
+  int ready = poll(&pending, 1, 15000);
+  if (ready != 1) {
+    printf("Web3 DNS poll failed: result=%d revents=%d errno=%d\n", ready, pending.revents, errno);
+    android_res_cancel(fd);
+    return 0;
+  }
   uint8_t packet[65535];
   int rcode = -1;
   int size = android_res_nresult(fd, &rcode, packet, sizeof(packet));
-  return size >= 12 && rcode == expected_rcode && (packet[2] & 0x80) &&
+  int ok = size >= 12 && rcode == expected_rcode && (packet[2] & 0x80) &&
       (expected_id < 0 || ((int)packet[0] << 8 | packet[1]) == expected_id) &&
       fcntl(fd, F_GETFD) == -1 && errno == EBADF;
+  if (!ok) printf("Web3 DNS result failed: size=%d rcode=%d expected_rcode=%d expected_id=%d revents=%d errno=%d\n",
+                  size, rcode, expected_rcode, expected_id, pending.revents, errno);
+  return ok;
 }
 
 JNIEXPORT jstring JNICALL Java_com_gesher_web3app_NetActivity_nativeNetworkCheck(

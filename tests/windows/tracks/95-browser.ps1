@@ -18,3 +18,8 @@ Check 'services: a browser for apps that look for one (com.gesher.browser: VIEW 
   'BrowserIntentTest: getPackageInfo(com.gesher.browser, GET_SIGNATURES) has its signature; no custom tabs service',
   'BrowserIntentTest: starting VIEW http(s) for com.gesher.browser (package, component, implicit) delegates the URL to Windows',
   'BrowserIntentTest all passed')
+
+Check 'services: app and channel notification settings open Windows controls; unsupported intents and failed launches stay unresolved' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.NotificationSettingsIntentTest
+} @('NotificationSettingsIntentTest all passed')

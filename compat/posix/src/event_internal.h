@@ -8,6 +8,7 @@
 #pragma once
 
 #include <poll.h>
+#include <sys/epoll.h>
 #include <windows.h>
 
 #include <memory>
@@ -22,6 +23,9 @@ std::shared_ptr<EventFd> LookupEventFd(int fd);
 // not null, *wake is a Win32 event that is signaled once one may be (null
 // if none can be).
 short PollEventFd(EventFd& eventfd, short events, HANDLE* wake);
+// True for an epoll descriptor; sample its readable interest list without
+// consuming events or disarming EPOLLONESHOT registrations.
+bool PollEpoll(int fd, short events, short* ready);
 bool IsNonBlocking(EventFd& eventfd);
 void SetNonBlocking(EventFd& eventfd, bool on);
 
@@ -58,5 +62,10 @@ void WakePollers();
 // *interrupted set, when the auto-reset event `interrupt` is signaled.
 // `interrupt` may be null.
 int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted);
+
+// Deterministic readiness-race probe: invoke the per-call observer once after
+// the first interest snapshot, with no graph/descriptor/epoll locks held.
+int EpollWaitWithObserver(int epfd, epoll_event* events, int maxevents, int timeout,
+                          void (*observer)(void*), void* context);
 
 }  // namespace gesher

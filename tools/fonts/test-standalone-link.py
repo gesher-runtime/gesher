@@ -51,6 +51,16 @@ COMMAND = ': && clang++ object.obj -o gesher-exec.exe libminikin.a libhwui.a && 
 
 
 class ActualMapControls(unittest.TestCase):
+    def test_local_verification_does_not_claim_ci_provenance(self):
+        self.assertEqual(proof.execution_metadata(True, {'GITHUB_ACTIONS': 'true', 'GITHUB_SHA': 'ci'}),
+                         {'execution_context': 'local', 'workflow_source': None})
+
+    def test_default_verification_requires_ci_provenance(self):
+        with self.assertRaises(AssertionError):
+            proof.execution_metadata(False, {})
+        self.assertEqual(proof.execution_metadata(False, {'GITHUB_ACTIONS': 'true', 'GITHUB_SHA': 'ci'}),
+                         {'execution_context': 'github-actions', 'workflow_source': 'ci'})
+
     def test_actual_golden_symbols_and_owner(self):
         import hashlib
         self.assertEqual(hashlib.sha256(GOLDEN.encode()).hexdigest(), GOLDEN_SHA256)
@@ -90,6 +100,17 @@ class ActualMapControls(unittest.TestCase):
         argv, archives, objects = proof.link_inputs(COMMAND.replace('libhwui.a', 'libhwui.a libminikin.a'), Path('clang++'), Path.cwd())
         self.assertEqual(archives['libminikin.a'].name, 'libminikin.a')
         self.assertNotIn('python', argv)
+
+    def test_native_windows_ninja_command_wrapper(self):
+        compiler = Path('C:/Tools With Space/clang++.exe')
+        command = (r'C:\WINDOWS\system32\cmd.exe /C "cd . && "C:\Tools With Space\clang++.exe" '
+                   r'object.obj -o gesher-exec.exe libminikin.a libhwui.a && '
+                   r'C:\WINDOWS\system32\cmd.exe /C "cd /D C:\build && python proof.py""')
+        argv, archives, objects = proof.link_inputs(command, compiler, Path.cwd())
+        self.assertEqual(argv[0], 'C:/Tools With Space/clang++.exe')
+        self.assertEqual(archives['libminikin.a'], (Path.cwd() / 'libminikin.a').resolve())
+        self.assertEqual(objects['object.obj'], {(Path.cwd() / 'object.obj').resolve()})
+        self.assertNotIn('proof.py', argv)
 
     def test_link_collisions_response_and_vm(self):
         for addition in (' other/libminikin.a', ' @hidden.rsp', ' libart_runtime.a', ' libart_runtime.a.evil', ' CMakeFiles/framework_runtime.dir/file.obj'):

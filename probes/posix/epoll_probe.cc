@@ -18,6 +18,8 @@
 #include <atomic>
 #include <thread>
 
+#include "../../compat/posix/src/event_internal.h"
+
 static int fails = 0;
 #define CHECK(c)                                                              \
   do {                                                                        \
@@ -37,6 +39,76 @@ static int Add(int ep, int fd, uint32_t events, uint64_t tag) {
   return epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev);
 }
 
+static void check(const char* what, int ok) {
+  if (!ok) printf("FAIL nested epoll: %s\n", what);
+  CHECK(ok);
+}
+#include "../../tests/native/epoll_nested_test.inc"
+
+struct PausedSnapshot {
+  HANDLE sampled = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  HANDLE resume = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  bool resumed = false;
+};
+
+static void PauseSnapshot(void* raw) {
+  auto& pause = *static_cast<PausedSnapshot*>(raw);
+  SetEvent(pause.sampled);
+  pause.resumed = WaitForSingleObject(pause.resume, 5000) == WAIT_OBJECT_0;
+}
+
+static void TestSnapshotWakeup() {
+  int ep = epoll_create1(0), leaf = eventfd(1, EFD_NONBLOCK);
+  PausedSnapshot pause;
+  CHECK(ep >= 0 && leaf >= 0 && pause.sampled != nullptr && pause.resume != nullptr);
+  int result = -2;
+  epoll_event stale = {};
+  std::thread waiter([&] {
+    result = gesher::EpollWaitWithObserver(ep, &stale, 1, 1000, PauseSnapshot, &pause);
+  });
+  CHECK(WaitForSingleObject(pause.sampled, 5000) == WAIT_OBJECT_0);
+  CHECK(Add(ep, leaf, EPOLLIN, 77) == 0);
+  // A second waiter consumes any shared auto-reset topology event. The first
+  // waiter has not entered poll or registered its generic wake channel yet.
+  epoll_event fast = {};
+  CHECK(epoll_wait(ep, &fast, 1, 0) == 1 && fast.data.u64 == 77);
+  SetEvent(pause.resume);
+  waiter.join();
+  CHECK(pause.resumed && result == 1 && stale.data.u64 == 77);
+  CloseHandle(pause.sampled);
+  CloseHandle(pause.resume);
+  close(ep);
+  close(leaf);
+}
+
+static void TestWaiterLifetime() {
+  int ep = epoll_create1(0), leaf = eventfd(1, EFD_NONBLOCK);
+  CHECK(ep >= 0 && leaf >= 0 && Add(ep, leaf, EPOLLIN, 88) == 0);
+  PausedSnapshot pause;
+  int result = -2;
+  epoll_event out = {};
+  std::thread waiter([&] {
+    result = gesher::EpollWaitWithObserver(ep, &out, 1, 1000, PauseSnapshot, &pause);
+  });
+  CHECK(WaitForSingleObject(pause.sampled, 5000) == WAIT_OBJECT_0);
+  CHECK(close(ep) == 0);
+  int replacement = epoll_create1(0);
+  SetEvent(pause.resume);
+  waiter.join();
+  CHECK(pause.resumed && result == 1 && out.data.u64 == 88);
+  CloseHandle(pause.sampled);
+  CloseHandle(pause.resume);
+  close(leaf);
+  // The retained old object's waiter must not become attached to a new epoll
+  // if its CRT descriptor number is reused. Returning/timeout closes channels.
+  CHECK(replacement >= 0 && epoll_wait(replacement, &out, 1, 1) == 0);
+  DWORD before = 0, after = 0;
+  CHECK(GetProcessHandleCount(GetCurrentProcess(), &before) != 0);
+  for (int i = 0; i < 128; ++i) CHECK(epoll_wait(replacement, &out, 1, 0) == 0);
+  CHECK(GetProcessHandleCount(GetCurrentProcess(), &after) != 0 && after == before);
+  close(replacement);
+}
+
 // Writes `value` to the eventfd `fd` after `delay_ms`, from a pthread.
 struct DelayedWrite {
   int fd;
@@ -53,6 +125,9 @@ static void* WriteLater(void* arg) {
 
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0);
+  test_epoll_nested();
+  TestSnapshotWakeup();
+  TestWaiterLifetime();
   uint64_t v = 0;
 
   // eventfd: a counter that reads return and reset.

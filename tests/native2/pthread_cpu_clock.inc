@@ -2,7 +2,14 @@
 // Keep the target alive while sampling it from an otherwise idle caller.
 struct CpuClockWorker {
   std::atomic<int> phase{0};
+  pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+  pthread_cond_t completed = PTHREAD_COND_INITIALIZER;
   uint64_t checksum = 1;
+
+  ~CpuClockWorker() {
+    pthread_cond_destroy(&completed);
+    pthread_mutex_destroy(&mutex);
+  }
 };
 
 int64_t CpuClockNanos(clockid_t clock) {
@@ -18,11 +25,14 @@ void* CpuClockTarget(void* raw) {
   if (state.phase.load() == 4) return nullptr;
   int64_t before = CpuClockNanos(CLOCK_THREAD_CPUTIME_ID);
   int64_t deadline = CpuClockNanos(CLOCK_MONOTONIC) + 10000000000LL;
-  while (CpuClockNanos(CLOCK_MONOTONIC) < deadline &&
+  while (state.phase.load() == 2 && CpuClockNanos(CLOCK_MONOTONIC) < deadline &&
          CpuClockNanos(CLOCK_THREAD_CPUTIME_ID) - before < 100000000) {
     for (unsigned i = 0; i < 10000; ++i) state.checksum = state.checksum * 6364136223846793005ULL + 1;
   }
-  state.phase.store(3);
+  pthread_mutex_lock(&state.mutex);
+  if (state.phase.load() == 2) state.phase.store(3);
+  pthread_cond_signal(&state.completed);
+  pthread_mutex_unlock(&state.mutex);
   while (state.phase.load() == 3) usleep(1000);
   return nullptr;
 }
@@ -45,12 +55,25 @@ Part PthreadCpuClocks() {
   timespec resolution{};
   p.Check(clock_getres(clock, &resolution) == 0 &&
               resolution.tv_sec == 0 && resolution.tv_nsec > 0, "target resolution");
+  // The caller must block rather than repeatedly execute translated polling
+  // code while the target burns CPU. Keep one monotonic deadline across any
+  // spurious wakeups, and retain the strict independent-CPU assertion below.
+  timespec deadline{};
+  clock_gettime(CLOCK_MONOTONIC, &deadline);
+  deadline.tv_sec += 15;
+  pthread_mutex_lock(&state.mutex);
   int64_t target_before = CpuClockNanos(clock);
   int64_t caller_before = CpuClockNanos(CLOCK_THREAD_CPUTIME_ID);
   state.phase.store(2);
-  while (state.phase.load() != 3) usleep(1000);
+  int waited = 0;
+  while (state.phase.load() != 3 && waited == 0) {
+    waited = pthread_cond_timedwait_monotonic_np(&state.completed, &state.mutex, &deadline);
+  }
+  bool completed = waited == 0 && state.phase.load() == 3;
+  pthread_mutex_unlock(&state.mutex);
   int64_t target_delta = CpuClockNanos(clock) - target_before;
   int64_t caller_delta = CpuClockNanos(CLOCK_THREAD_CPUTIME_ID) - caller_before;
+  p.Check(completed, "target completes within monotonic deadline");
   p.Check(target_before >= 0 && target_delta >= 50000000 && caller_delta >= 0 &&
               target_delta > caller_delta, "busy target advances independently of idle caller");
   clockid_t unchanged = 77;

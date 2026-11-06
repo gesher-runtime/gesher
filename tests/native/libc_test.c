@@ -17,6 +17,7 @@
 #include <math.h>
 #include <mntent.h>
 #include <pthread.h>
+#include <search.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +50,8 @@ static void check_str(const char* what, const char* got, const char* want) {
 #if defined(__x86_64__)
 #include "timerfd_syscall_test.inc"
 #endif
+#include "tgnet_event_loop_test.inc"
+#include "epoll_nested_test.inc"
 
 // --- memory and strings -------------------------------------------------------
 
@@ -394,6 +397,9 @@ static void test_qsort(void) {
   check("bsearch", bsearch(&key, v, 7, sizeof(int), compare_ints) != NULL);
 }
 
+#include "search_test.inc"
+#include "pthread_cleanup_test.inc"
+
 // --- pthread ----------------------------------------------------------------------
 
 static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -556,7 +562,11 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_ldar_readonly();
   test_time_math();
   test_qsort();
+  test_search();
   test_pthread();
+  test_pthread_cleanup();
+  test_tgnet_event_loop();
+  test_epoll_nested();
   test_dl();
   if (failures == 0) {
     printf("libc_test: all passed\n");

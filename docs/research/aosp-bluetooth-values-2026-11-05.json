@@ -1,0 +1,79 @@
+{
+  "tag": "android-16.0.0_r4",
+  "license": "Apache-2.0 (headers retained)",
+  "files": [
+    {
+      "local_path": "app/java/android/bluetooth/le/ScanSettings.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/le/ScanSettings.java",
+      "upstream_sha256": "8111f3ce0eca803443ddea550f826ef2158300b515df182de561fb9c2b06f79e",
+      "local_sha256": "18d5442730aa6b1c24ce1923b9b5ac7f5ff3f1f652f39971a3cd5c9f59363610"
+    },
+    {
+      "local_path": "app/java/android/bluetooth/le/ScanFilter.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/le/ScanFilter.java",
+      "upstream_sha256": "aa501408a731149b4f06581b76bfe73bb87562cc0ad34aa02ecc7f3e5b79dec6",
+      "local_sha256": "3b0855e0677a79fb4922e0d2cd8472ffafb4386c70d645a9573338faf6badfc8"
+    },
+    {
+      "local_path": "app/java/android/bluetooth/le/TransportBlockFilter.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/le/TransportBlockFilter.java",
+      "upstream_sha256": "9d7c3f25fc1b1ece98e0366b589c7797d89ded417c6f106d4b88ac86c5dab142",
+      "local_sha256": "9d7c3f25fc1b1ece98e0366b589c7797d89ded417c6f106d4b88ac86c5dab142"
+    },
+    {
+      "local_path": "app/java/android/bluetooth/le/AdvertiseData.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/le/AdvertiseData.java",
+      "upstream_sha256": "0bfe5fefdca628a25e95d000a24f1e8838a28fd5ead371eb0b41557e17d3c661",
+      "local_sha256": "0bfe5fefdca628a25e95d000a24f1e8838a28fd5ead371eb0b41557e17d3c661"
+    },
+    {
+      "local_path": "app/java/android/bluetooth/le/AdvertiseSettings.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/le/AdvertiseSettings.java",
+      "upstream_sha256": "cbcf65104ca0228f688bcf0a92af3236e7e23c486d624f88cd3643690e3073aa",
+      "local_sha256": "cbcf65104ca0228f688bcf0a92af3236e7e23c486d624f88cd3643690e3073aa"
+    },
+    {
+      "local_path": "app/java/android/bluetooth/le/AdvertiseCallback.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/le/AdvertiseCallback.java",
+      "upstream_sha256": "762f16f4046e74ef850c0abb823461a1fc6a4a4b73cfeed18a3de60b6f3cea33",
+      "local_sha256": "762f16f4046e74ef850c0abb823461a1fc6a4a4b73cfeed18a3de60b6f3cea33"
+    },
+    {
+      "local_path": "app/java/android/bluetooth/le/AdvertisingSetParameters.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/le/AdvertisingSetParameters.java",
+      "upstream_sha256": "796975aabd6e8af73789dbba2d7d23fa63dfc32fc74256852497cc06209bc21b",
+      "local_sha256": "6ce41d5698808899959864ef486a4d7ff90e5cccc477ee9cc64865d59da53ea9"
+    },
+    {
+      "local_path": "app/java/android/bluetooth/le/PeriodicAdvertisingParameters.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/le/PeriodicAdvertisingParameters.java",
+      "upstream_sha256": "3238acdabfa590ef0c96784131b4345d45eb7e89fbee28e59590ec6226c4f052",
+      "local_sha256": "3238acdabfa590ef0c96784131b4345d45eb7e89fbee28e59590ec6226c4f052"
+    },
+    {
+      "local_path": "app/java/android/bluetooth/le/PeriodicAdvertisingReport.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/le/PeriodicAdvertisingReport.java",
+      "upstream_sha256": "edf043682886cce403c41abadcf36b8a414a7969a96973b6f7aa6ea9f473b0ef",
+      "local_sha256": "edf043682886cce403c41abadcf36b8a414a7969a96973b6f7aa6ea9f473b0ef"
+    },
+    {
+      "local_path": "app/java/android/bluetooth/BluetoothStatusCodes.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/BluetoothStatusCodes.java",
+      "upstream_sha256": "dbe44875dfea3cf5c293b150f70b65a55aca53e437dfd4603a33c9c46aec3426",
+      "local_sha256": "8b3f5c6e612cd0434780e2c03ad07c73c7fa2530967d84dcb52cece834278b48"
+    },
+    {
+      "local_path": "app/java/android/bluetooth/BluetoothAssignedNumbers.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/BluetoothAssignedNumbers.java",
+      "upstream_sha256": "01e05da4be01ed425b856512542977b423b309770200c699eb136c0395cd1abb",
+      "local_sha256": "01e05da4be01ed425b856512542977b423b309770200c699eb136c0395cd1abb"
+    },
+    {
+      "local_path": "app/java/android/bluetooth/annotations/RequiresBluetoothScanPermission.java",
+      "source_url": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/annotations/RequiresBluetoothScanPermission.java",
+      "upstream_sha256": "f41accd3ecb8296668d85ab7d3b1eb3da99098271f5c53c982202614aefde23f",
+      "local_sha256": "f41accd3ecb8296668d85ab7d3b1eb3da99098271f5c53c982202614aefde23f"
+    }
+  ],
+  "local_source_encoding": "UTF-8 with LF, matching repository .gitattributes"
+}
