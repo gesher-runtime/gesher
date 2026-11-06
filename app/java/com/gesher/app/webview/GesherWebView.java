@@ -95,15 +95,19 @@ public final class GesherWebView {
                 parent = new File(System.getProperty("java.io.tmpdir"));
                 dir = new File(parent, "gesher-webview" + postfix);
             }
+            if (!dir.mkdirs() && !dir.isDirectory()) {
+                throw new IllegalStateException("Cannot create the WebView data directory");
+            }
             try {
-                if (!parent.getCanonicalFile().equals(dir.getCanonicalFile().getParentFile())) {
+                File canonical = dir.getCanonicalFile();
+                if (!parent.getCanonicalFile().equals(canonical.getParentFile())) {
                     throw new IllegalArgumentException("WebView data directory must stay inside its parent");
+                }
+                if (suffix != null && !dir.getName().equals(canonical.getName())) {
+                    throw new IllegalArgumentException("WebView suffix aliases another directory name");
                 }
             } catch (IOException e) {
                 throw new IllegalStateException("Cannot resolve the WebView data directory", e);
-            }
-            if (!dir.mkdirs() && !dir.isDirectory()) {
-                throw new IllegalStateException("Cannot create the WebView data directory");
             }
             String args = System.getenv("GESHER_WEBVIEW_ARGS");
             WebView2Host.configure(dir.getAbsolutePath(), args != null ? args : "");

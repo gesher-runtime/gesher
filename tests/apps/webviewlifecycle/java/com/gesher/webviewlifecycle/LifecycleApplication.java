@@ -16,6 +16,7 @@ public final class LifecycleApplication extends Application {
             String process = Application.getProcessName();
             if (process.endsWith(":suffixA")) WebView.setDataDirectorySuffix("fixtureA");
             else if (process.endsWith(":suffixB")) WebView.setDataDirectorySuffix("fixtureB");
+            else if (process.endsWith(":suffixAlias")) WebView.setDataDirectorySuffix("FIXTUREa");
             else if (!process.contains(":")) {
                 try {
                     WebView.disableWebView();

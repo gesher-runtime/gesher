@@ -67,7 +67,7 @@ $cases=@(
     @{Name='disable-before-use';Classes=@('DisabledActivity');Markers=@('disable-before-use')},
     @{Name='disable-after-use';Classes=@('UsedActivity');Markers=@('disable-after-use')},
     @{Name='concurrent-use-disable';Classes=@('RaceActivity');Markers=@('concurrent-use-disable')},
-    @{Name='suffix-isolation';Classes=@('SuffixAActivity','SuffixBActivity','DefaultActivity');Markers=@('suffix-fixtureA','suffix-fixtureB','suffix-default')},
+    @{Name='suffix-isolation';Classes=@('SuffixAActivity','SuffixBActivity','DefaultActivity','AliasActivity');Markers=@('suffix-fixtureA','suffix-fixtureB','suffix-default','suffix-case-alias')},
     @{Name='invalid-suffix';Classes=@('InvalidSuffixActivity');Markers=@('invalid-suffix')}
 )
 if($OnlyCase){$cases=@($cases|Where-Object{$_.Name -eq $OnlyCase})}

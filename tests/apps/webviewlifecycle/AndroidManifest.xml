@@ -5,6 +5,7 @@
     <activity android:name=".RaceActivity" android:exported="true" android:process=":race" />
     <activity android:name=".SuffixAActivity" android:exported="true" android:process=":suffixA" />
     <activity android:name=".SuffixBActivity" android:exported="true" android:process=":suffixB" />
+    <activity android:name=".AliasActivity" android:exported="true" android:process=":suffixAlias" />
     <activity android:name=".DefaultActivity" android:exported="true" android:process=":default" />
     <activity android:name=".InvalidSuffixActivity" android:exported="true" android:process=":invalid" />
   </application>

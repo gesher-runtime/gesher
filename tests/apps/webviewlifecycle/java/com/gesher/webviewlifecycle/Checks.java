@@ -30,6 +30,11 @@ final class Checks {
         method.setAccessible(true);
         method.invoke(null,activity);
     }
+    static boolean configured() throws Exception {
+        Field field=Class.forName("com.gesher.app.webview.GesherWebView").getDeclaredField("sConfigured");
+        field.setAccessible(true);
+        return field.getBoolean(null);
+    }
     static void disabled(Operation action) throws Exception {
         try { action.run(); throw new AssertionError("Disabled WebView API succeeded"); }
         catch (IllegalStateException expected) {
