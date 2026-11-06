@@ -20,12 +20,16 @@ function Condition($Tree,$Message){
 }
 $producer=Condition $ast 'Producer mismatch'
 foreach($message in @('Producer mismatch','Artifact not unique','Artifact source/run/attempt provenance mismatch')){
- if((Condition $ast $message) -cne (Condition $old $message)){throw "Acceptance predicate changed: $message"}
+ # The API head is distinct from a PR merge checkout. Every other field and
+ # conclusion/digest/count/time constraint remains exactly the reviewed predicate.
+ $expected=(Condition $old $message).Replace('$env:GITHUB_SHA','$ciSource.api_head_sha')
+ if((Condition $ast $message) -cne $expected){throw "Acceptance predicate changed: $message"}
 }
 . (Join-Path $root 'tools/ci/receipt-diagnostics.ps1')
 $env:GITHUB_REPOSITORY='gesher-runtime/gesher';$env:GITHUB_REPOSITORY_ID='1'
 $env:GITHUB_RUN_ID='41101529359';$env:GITHUB_RUN_ATTEMPT='1'
 $env:GITHUB_SHA='f6b15746e1dfac3711c2687f728eafbd48094eba'
+$ciSource=[pscustomobject]@{api_head_sha=$env:GITHUB_SHA;checkout_sha=('a'*40)}
 $env:GITHUB_WORKFLOW='net-tcp-coherent-component'
 $valid=[pscustomobject]@{id=124219437252;name='compile-canonical';workflow_name=$env:GITHUB_WORKFLOW;run_id=41101529359;run_attempt=1;head_sha=$env:GITHUB_SHA;status='completed';conclusion='success';started_at='2026-10-30T17:47:28Z';completed_at='2026-10-30T17:54:42Z'}
 $expectedProducer='compile-canonical'
@@ -63,4 +67,4 @@ if($JobsSnapshot){
  }
  Write-Host 'TCP_RECEIPT_SNAPSHOT actual_later_metadata=PASS historical_live_failure_cause=UNKNOWN replay_is_not_original_live_observation=1'
 }
-Write-Host "TCP_RECEIPT_METADATA_PASS original3predicates=EXACT synthetic_wrong_missing_count_negatives=$negative producer_artifact_counts=0,1,2 retry_logic=NONE native_processes_started=0"
+Write-Host "TCP_RECEIPT_METADATA_PASS original3predicates=EXACT_except_API_head_source synthetic_wrong_missing_count_negatives=$negative producer_artifact_counts=0,1,2 retry_logic=NONE native_processes_started=0"

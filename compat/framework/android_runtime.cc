@@ -69,6 +69,11 @@ int register_android_content_StringBlock(JNIEnv* env);
 int register_android_content_XmlBlock(JNIEnv* env);
 int register_android_os_FileObserver(JNIEnv* env);
 int register_android_os_MessageQueue(JNIEnv* env);
+int register_gesher_MemoryFile(JNIEnv* env);
+int register_gesher_MemoryIntArray(JNIEnv* env);
+int register_gesher_Scrypt(JNIEnv* env);
+int register_gesher_LocalSocketImpl(JNIEnv* env);
+int register_gesher_CharsetUtils(JNIEnv* env);
 int register_android_os_Parcel(JNIEnv* env);
 int register_android_os_ServiceManagerNative(JNIEnv* env);
 int register_android_os_SystemClock(JNIEnv* env);
@@ -457,7 +462,7 @@ static const JNINativeMethod gProcessMethods[] = {
      GESHER_JNI(Process_parseProcLine)},
 };
 
-// --- android.os.Debug (native heap counters) --------------------------------------
+// --- android.os.Debug (native heap and Binder counters) ----------------------------
 // AOSP's android_os_Debug.cpp answers these @CriticalNative methods from
 // bionic's mallinfo(). The host malloc is the UCRT's, over the process heap,
 // so HeapSummary (kernel32, Windows 10) gives the same three numbers: the
@@ -504,10 +509,27 @@ static jlong Debug_getNativeHeapAllocatedSize() { return NativeHeapSummary().all
 
 static jlong Debug_getNativeHeapFreeSize() { return NativeHeapSummary().available; }
 
+// These AOSP functions are already built with android_util_Binder.cpp. They
+// report the real JavaBBinder, BpBinder and JavaDeathRecipient object counts;
+// OsmAnd's diagnostic worker calls them while sampling process memory.
+jint android_os_Debug_getLocalObjectCount(JNIEnv* env, jobject clazz);
+jint android_os_Debug_getProxyObjectCount(JNIEnv* env, jobject clazz);
+jint android_os_Debug_getDeathObjectCount(JNIEnv* env, jobject clazz);
+
+// AOSP reads transaction totals from the kernel's Binder stats file and returns
+// -1 when that file is unavailable. Gesher's broker has no such stats interface.
+// Preserve that unavailable result, rather than reporting invented zero totals.
+static jint Debug_binderTransactionsUnavailable(JNIEnv*, jobject) { return -1; }
+
 static const JNINativeMethod gDebugMethods[] = {
     {"getNativeHeapSize", "()J", GESHER_JNI(Debug_getNativeHeapSize)},
     {"getNativeHeapAllocatedSize", "()J", GESHER_JNI(Debug_getNativeHeapAllocatedSize)},
     {"getNativeHeapFreeSize", "()J", GESHER_JNI(Debug_getNativeHeapFreeSize)},
+    {"getBinderLocalObjectCount", "()I", GESHER_JNI(android_os_Debug_getLocalObjectCount)},
+    {"getBinderProxyObjectCount", "()I", GESHER_JNI(android_os_Debug_getProxyObjectCount)},
+    {"getBinderDeathObjectCount", "()I", GESHER_JNI(android_os_Debug_getDeathObjectCount)},
+    {"getBinderSentTransactions", "()I", GESHER_JNI(Debug_binderTransactionsUnavailable)},
+    {"getBinderReceivedTransactions", "()I", GESHER_JNI(Debug_binderTransactionsUnavailable)},
 };
 
 // --- android.os.PerfettoTrace (Gesher stub) ---------------------------------------
@@ -795,6 +817,11 @@ static const struct {
     {"android_util_jar_StrictJarFile", "android/util/jar/StrictJarFile",
      register_android_util_jar_StrictJarFile},
     {"android_os_MessageQueue", "android/os/MessageQueue", register_android_os_MessageQueue},
+    {"gesher_MemoryFile", "android/os/MemoryFile", register_gesher_MemoryFile},
+    {"gesher_MemoryIntArray", "android/util/MemoryIntArray", register_gesher_MemoryIntArray},
+    {"gesher_Scrypt", "android/security/Scrypt", register_gesher_Scrypt},
+    {"gesher_LocalSocketImpl", "android/net/LocalSocketImpl", register_gesher_LocalSocketImpl},
+    {"gesher_CharsetUtils", "android/util/CharsetUtils", register_gesher_CharsetUtils},
     // FileObserver over gesher-base's inotify (docs/posix.md).
     {"android_os_FileObserver", "android/os/FileObserver", register_android_os_FileObserver},
     {"android_os_Binder", "com/android/internal/os/BinderInternal", ::register_android_os_Binder},

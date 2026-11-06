@@ -51,6 +51,19 @@ public final class RouteInfo implements Parcelable {
         this(destination, gateway, iface, RTN_UNICAST);
     }
 
+    /** @hide Connected route for an interface address, as used by StaticIpConfiguration. */
+    public RouteInfo(LinkAddress destination, InetAddress gateway, String iface) {
+        this(destination == null ? null : new IpPrefix(destination.getAddress(),
+                destination.getPrefixLength()), gateway, iface);
+    }
+
+    /** @hide Host route used when a static gateway is outside the connected subnet. */
+    public static RouteInfo makeHostRoute(InetAddress host, String iface) {
+        if (host == null) return null;
+        return new RouteInfo(new IpPrefix(host, host instanceof Inet4Address ? 32 : 128),
+                null, iface);
+    }
+
     public IpPrefix getDestination() {
         return mDestination;
     }

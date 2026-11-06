@@ -19,6 +19,23 @@ public final class BluetoothAdapter {
         return null;
     }
 
+    /** @hide No LE controller is available on this device. */
+    public boolean isLeEnabled() {
+        return false;
+    }
+
+    /** @hide AOSP address classification, independent of a controller. */
+    public static boolean isAddressRandomStatic(String address) {
+        java.util.Objects.requireNonNull(address);
+        return checkBluetoothAddress(address)
+                && (Integer.parseInt(address.split(":")[0], 16) & 0xC0) == 0xC0;
+    }
+
+    /** No controller can offload transport discovery filtering. */
+    public int getOffloadedTransportDiscoveryDataScanSupported() {
+        return BluetoothStatusCodes.FEATURE_NOT_SUPPORTED;
+    }
+
     public static boolean checkBluetoothAddress(String address) {
         if (address == null || address.length() != 17) return false;
         for (int i = 0; i < 17; i++) {

@@ -26,6 +26,8 @@ public class JniTest {
     static native int callReflected(Method m);
     static native int threadAttach();
     static native int threadExitAttached();
+    // Invoked only by FatalContext in a disposable VM, never by main().
+    static native long fatalNullRead(boolean host);
     static native boolean onLoadRan();
     // Registered by JNI_OnLoad.
     static native int registeredTwice(int x);

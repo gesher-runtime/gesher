@@ -40,8 +40,58 @@ final class DeviceServices {
     private DeviceServices() {
     }
 
-    /** {@code thermalservice}, which PowerManager needs too: no thermal status (Default's 0, none). */
+    /** No Android thermal HAL: no sensors, forecasts, or thermal listener capability. */
     static final class ThermalService extends IThermalService.Default {
+        @Override public android.os.Temperature[] getCurrentTemperatures() {
+            return new android.os.Temperature[0];
+        }
+        @Override public android.os.Temperature[] getCurrentTemperaturesWithType(int type) {
+            return getCurrentTemperatures();
+        }
+        @Override public android.os.CoolingDevice[] getCurrentCoolingDevices() {
+            return new android.os.CoolingDevice[0];
+        }
+        @Override public android.os.CoolingDevice[] getCurrentCoolingDevicesWithType(int type) {
+            return getCurrentCoolingDevices();
+        }
+        @Override public int getCurrentThermalStatus() {
+            return android.os.Temperature.THROTTLING_NONE;
+        }
+        @Override public float getThermalHeadroom(int forecastSeconds) { return Float.NaN; }
+        @Override public float[] getThermalHeadroomThresholds() {
+            // PowerManager indexes every thermal status, including SHUTDOWN.
+            float[] thresholds = new float[android.os.Temperature.THROTTLING_SHUTDOWN + 1];
+            java.util.Arrays.fill(thresholds, Float.NaN);
+            return thresholds;
+        }
+        @Override public boolean registerThermalEventListener(android.os.IThermalEventListener l) {
+            java.util.Objects.requireNonNull(l, "listener");
+            return false;
+        }
+        @Override public boolean registerThermalEventListenerWithType(
+                android.os.IThermalEventListener l, int type) {
+            return registerThermalEventListener(l);
+        }
+        @Override public boolean unregisterThermalEventListener(android.os.IThermalEventListener l) {
+            java.util.Objects.requireNonNull(l, "listener");
+            return false;
+        }
+        @Override public boolean registerThermalStatusListener(android.os.IThermalStatusListener l) {
+            java.util.Objects.requireNonNull(l, "listener");
+            return false;
+        }
+        @Override public boolean unregisterThermalStatusListener(android.os.IThermalStatusListener l) {
+            java.util.Objects.requireNonNull(l, "listener");
+            return false;
+        }
+        @Override public boolean registerThermalHeadroomListener(android.os.IThermalHeadroomListener l) {
+            java.util.Objects.requireNonNull(l, "listener");
+            return false;
+        }
+        @Override public boolean unregisterThermalHeadroomListener(android.os.IThermalHeadroomListener l) {
+            java.util.Objects.requireNonNull(l, "listener");
+            return false;
+        }
     }
 
     /**
@@ -185,17 +235,16 @@ final class DeviceServices {
     }
 
     /**
-     * {@code usagestats}: UsageStatsManager service stand-in. Returns empty collections
-     * and ACTIVE standby bucket so apps querying usage stats proceed without NPE.
+     * {@code usagestats}: no collected usage history or Android app standby.
      */
-    static final class UsageStatsService extends IUsageStatsManager.Default {
+    static final class UsageStatsService extends DesktopUsageStatsService {
+        UsageStatsService(PackageManagerService packages) { super(packages); }
     }
 
     /**
-     * {@code device_policy}: DevicePolicyManager service stand-in. Reports no active admins
-     * and storage encrypted so enterprise/security checks pass cleanly.
+     * {@code device_policy}: no Android administrators; Android encryption is unsupported.
      */
-    static final class DevicePolicyService extends IDevicePolicyManager.Default {
+    static final class DevicePolicyService extends UnmanagedDevicePolicyService {
     }
 
     /**
@@ -267,8 +316,9 @@ final class DeviceServices {
     }
 
     /**
-     * {@code shortcut}: ShortcutManager service stand-in.
+     * {@code shortcut}: explicit absence of an Android shortcut host/publisher.
      */
-    static final class ShortcutService extends IShortcutService.Default {
+    static final class ShortcutService extends DesktopShortcutService {
+        ShortcutService(PackageManagerService packages) { super(packages); }
     }
 }

@@ -50,8 +50,14 @@ target_link_libraries(dalvikvm PRIVATE gesher_native_fonts)
 # initializing ART or registering a Java Typeface map.
 target_link_libraries(gesher-exec PRIVATE gesher_native_fonts)
 target_link_options(gesher-exec PRIVATE "-Wl,-Map=${CMAKE_BINARY_DIR}/gesher-exec.fonts.map")
+option(GESHER_VERIFY_STANDALONE_LOCAL "Verify standalone link locally without CI provenance claims" OFF)
+set(_gesher_font_link_args)
+if(GESHER_VERIFY_STANDALONE_LOCAL)
+  list(APPEND _gesher_font_link_args --local)
+endif()
 add_custom_command(TARGET gesher-exec POST_BUILD
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/fonts/verify-standalone-link.py
+    ${_gesher_font_link_args}
     $<TARGET_FILE:gesher-exec> ${CMAKE_BINARY_DIR}/gesher-exec.fonts.map ${CMAKE_CXX_COMPILER}
   VERBATIM)
 
