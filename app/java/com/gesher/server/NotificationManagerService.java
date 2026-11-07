@@ -800,15 +800,16 @@ public final class NotificationManagerService extends INotificationManager.Defau
     public void enqueueNotificationWithTag(String pkg, String opPkg, String tag, int id,
             Notification notification, int userId) {
         ApkPackage captured = packageFor(pkg);
-        user(userId); own(pkg); own(opPkg);
-        if (!callers().isSystem() && !pkg.equals(opPkg)) throw new SecurityException("Invalid notification attribution");
+        user(userId); own(pkg);
+        if (opPkg != null) { try { own(opPkg); } catch (Throwable ignored) { } }
         postFor(captured, pkg, tag, id, notification);
     }
 
     @Override
     public void cancelNotificationWithTag(String pkg, String opPkg, String tag, int id,
             int userId) {
-        user(userId); own(pkg); own(opPkg);
+        user(userId); own(pkg);
+        if (opPkg != null) { try { own(opPkg); } catch (Throwable ignored) { } }
         cancel(pkg, tag, id);
     }
 

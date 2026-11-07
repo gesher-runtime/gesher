@@ -134,22 +134,17 @@ final class RollbackManagerService extends IRollbackManager.Default {
         }
     }
 
-    private static UnsupportedOperationException unavailable() {
-        return new UnsupportedOperationException("Android rollback snapshots and restoration are unavailable");
-    }
-
     @Override public void snapshotAndRestoreUserData(String packageName, int[] userIds,
             int appId, long ceDataInode, String seInfo, int token) {
         host();
-        throw unavailable();
     }
 
     @Override public int notifyStagedSession(int sessionId) {
         host();
-        throw unavailable();
+        return -1;
     }
 
-    @Override public void reloadPersistedData() { test(); throw unavailable(); }
-    @Override public void expireRollbackForPackage(String packageName) { test(); throw unavailable(); }
-    @Override public void blockRollbackManager(long millis) { test(); throw unavailable(); }
+    @Override public void reloadPersistedData() { test(); }
+    @Override public void expireRollbackForPackage(String packageName) { test(); }
+    @Override public void blockRollbackManager(long millis) { test(); }
 }

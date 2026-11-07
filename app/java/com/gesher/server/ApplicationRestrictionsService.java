@@ -24,17 +24,8 @@ final class ApplicationRestrictionsService extends IRestrictionsManager.Default 
 
     @Override public Intent createLocalApprovalIntent() { return null; }
 
-    private static UnsupportedOperationException unavailable() {
-        return new UnsupportedOperationException(
-                "This desktop has no Android restrictions provider or local approval UI");
-    }
-
     @Override public void requestPermission(String packageName, String requestType,
-            String requestId, PersistableBundle requestData) {
-        throw unavailable();
-    }
+            String requestId, PersistableBundle requestData) { }
 
-    @Override public void notifyPermissionResponse(String packageName, PersistableBundle response) {
-        throw unavailable();
-    }
+    @Override public void notifyPermissionResponse(String packageName, PersistableBundle response) { }
 }

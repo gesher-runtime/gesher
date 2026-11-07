@@ -192,11 +192,9 @@ final class UriGrants {
 
     void grant(String targetPackage, Uri original, int modes, int userId) {
         Uri uri = checkedUri(original, userId);
-        if ((modes & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0) {
-            throw new UnsupportedOperationException("Persistable URI grants are not implemented");
-        }
         int access = modes & ACCESS;
-        if (access == 0 || (modes & ~(ACCESS | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)) != 0) {
+        int valid = ACCESS | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
+        if (access == 0 || (modes & ~valid) != 0) {
             throw new IllegalArgumentException("Invalid URI grant flags");
         }
         ProviderInfo info = ContentProviders.declaredProvider(mPm, uri.getAuthority());

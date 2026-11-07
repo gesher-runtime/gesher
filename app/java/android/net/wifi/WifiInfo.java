@@ -23,12 +23,24 @@ public class WifiInfo implements TransportInfo, Parcelable {
     @Override public long getApplicableRedactions() { return 0; }
     @Override public WifiInfo makeCopy(long redactions) { return new WifiInfo(); }
     @Override public int describeContents() { return 0; }
-    @Override public void writeToParcel(Parcel out, int flags) { throw unsupportedParcel(); }
+    @Override public void writeToParcel(Parcel out, int flags) {
+        out.writeString(getSSID());
+        out.writeString(getBSSID());
+        out.writeString(getMacAddress());
+        out.writeInt(getRssi());
+        out.writeInt(getLinkSpeed());
+        out.writeInt(getNetworkId());
+    }
     public static final Creator<WifiInfo> CREATOR = new Creator<>() {
-        @Override public WifiInfo createFromParcel(Parcel in) { throw unsupportedParcel(); }
+        @Override public WifiInfo createFromParcel(Parcel in) {
+            in.readString();
+            in.readString();
+            in.readString();
+            in.readInt();
+            in.readInt();
+            in.readInt();
+            return new WifiInfo();
+        }
         @Override public WifiInfo[] newArray(int size) { return new WifiInfo[size]; }
     };
-    private static UnsupportedOperationException unsupportedParcel() {
-        return new UnsupportedOperationException("Wi-Fi parcel transport is unavailable on Gesher");
-    }
 }

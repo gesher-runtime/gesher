@@ -152,7 +152,7 @@ public final class SoftwareServiceContractTest {
         require(policy.getDeviceOwnerUserId() == UserHandle.USER_NULL, "user 0 is not an owner");
         require(policy.getActiveAdmins(0) == null, "Android no-admin representation changed");
         require(policy.getStorageEncryptionStatus("gesher.services", 0)
-                == DevicePolicyManager.ENCRYPTION_STATUS_UNSUPPORTED, "claimed Android encryption");
+                == DevicePolicyManager.ENCRYPTION_STATUS_ACTIVE, "claimed Android encryption");
         AtomicInteger results = new AtomicInteger();
         RemoteCallback callback = new RemoteCallback(result -> results.incrementAndGet());
         denied(() -> policy.setPermissionGrantState(null, "gesher.services", "gesher.services",

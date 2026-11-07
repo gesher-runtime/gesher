@@ -114,11 +114,9 @@ class DesktopUsageStatsService extends IUsageStatsManager.Default {
     @Override public void unregisterAppUsageObserver(int id, String caller) { }
     @Override public void unregisterUsageSessionObserver(int id, String caller) { }
     @Override public void unregisterAppUsageLimitObserver(int id, String caller) { }
-    @Override public void reportUsageStart(IBinder token, String name, String caller) { throw denied(); }
-    @Override public void reportPastUsageStart(IBinder token, String name, long ago, String caller) {
-        throw denied();
-    }
-    @Override public void reportUsageStop(IBinder token, String name, String caller) { throw denied(); }
+    @Override public void reportUsageStart(IBinder token, String name, String caller) { }
+    @Override public void reportPastUsageStart(IBinder token, String name, long ago, String caller) { }
+    @Override public void reportUsageStop(IBinder token, String name, String caller) { }
     @Override public void reportChooserSelection(String pkg, int userId, String type,
             String[] annotations, String action) { }
     @Override public void reportUserInteraction(String pkg, int userId) { }

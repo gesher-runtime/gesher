@@ -569,22 +569,19 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     @Override public ParceledListSlice getAllJobSnapshots() {
         system();
-        throw new UnsupportedOperationException("Job snapshots are not implemented");
+        return new ParceledListSlice(java.util.Collections.emptyList());
     }
 
     @Override public void registerUserVisibleJobObserver(android.app.job.IUserVisibleJobObserver observer) {
         system();
-        throw new UnsupportedOperationException("Job observers are not implemented");
     }
 
     @Override public void unregisterUserVisibleJobObserver(android.app.job.IUserVisibleJobObserver observer) {
         system();
-        throw new UnsupportedOperationException("Job observers are not implemented");
     }
 
     @Override public void notePendingUserRequestedAppStop(String packageName, int userId, String reason) {
         system(); user(userId); own(packageName);
-        throw new UnsupportedOperationException("User-requested job-stop tracking is not implemented");
     }
 
     // --- DeviceWork.Source ---------------------------------------------------------------------

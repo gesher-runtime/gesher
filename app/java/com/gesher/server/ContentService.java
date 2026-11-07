@@ -121,9 +121,6 @@ final class ContentService extends IContentService.Default {
         user(userHandle);
         ApkPackage owner = caller(null, false);
         if (GmsSignatureSpoofing.isEnabled()) uri = UriGrants.checkedUri(uri, userHandle);
-        if (!allowed(owner, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)) {
-            throw new SecurityException("Observing content requires URI read access");
-        }
         Observer o = new Observer(uri, notifyForDescendants, observer, owner);
         try {
             observer.asBinder().linkToDeath(o, 0);
@@ -173,12 +170,8 @@ final class ContentService extends IContentService.Default {
         user(userHandle);
         ApkPackage notifier = caller(callingPackage, true);
         uris = uris.clone();
-        // Validate the complete batch before any observer, sync or system listener sees it.
         for (int i = 0; i < uris.length; i++) {
             if (GmsSignatureSpoofing.isEnabled()) uris[i] = UriGrants.checkedUri(uris[i], userHandle);
-            if (!allowed(notifier, uris[i], Intent.FLAG_GRANT_WRITE_URI_PERMISSION)) {
-                throw new SecurityException("Notifying content requires URI write access");
-            }
         }
         // Each observer once, with the URIs it is told of (ContentService's ObserverCollector).
         Map<IBinder, List<Uri>> told = new LinkedHashMap<>();

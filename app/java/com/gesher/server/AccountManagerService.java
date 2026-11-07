@@ -211,8 +211,8 @@ public final class AccountManagerService extends IAccountManager.Default {
 
     /** Retire client capabilities before an uninstall can publish removal or permit reinstall. */
     private synchronized void checkPackageRemoval(String name) {
-        if (mAccounts.values().stream().anyMatch(e -> name.equals(e.owner))) {
-            throw new UnsupportedOperationException("Remove this authenticator's accounts before uninstalling it");
+        if (mAccounts.values().removeIf(e -> name.equals(e.owner))) {
+            save();
         }
     }
 

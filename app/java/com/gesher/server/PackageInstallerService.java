@@ -135,8 +135,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         String owner = owner(pkg, user);
         if (mInstaller == null) throw new UnsupportedOperationException("No persistent package installer");
         if (p == null || p.mode != PackageInstaller.SessionParams.MODE_FULL_INSTALL || p.isMultiPackage
-                || p.isStaged || p.dataLoaderParams != null || p.abiOverride != null
-                || p.volumeUuid != null || p.getEnableRollback()
+                || p.isStaged || p.dataLoaderParams != null
+                || p.volumeUuid != null
                 || (p.installFlags & 0x00020000) != 0) { // AOSP INSTALL_APEX, hidden in framework export.
             throw new UnsupportedOperationException("Only ordinary full APK installs are supported");
         }
@@ -751,7 +751,10 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         }
         @Override public List<String> fetchPackageNames() {
             checkOwner();
-            throw new UnsupportedOperationException("Package names are resolved at commit");
+            if (params != null && params.appPackageName != null) {
+                return Collections.singletonList(params.appPackageName);
+            }
+            return Collections.emptyList();
         }
     }
 }

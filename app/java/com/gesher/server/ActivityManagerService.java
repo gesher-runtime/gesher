@@ -497,9 +497,6 @@ public final class ActivityManagerService extends IActivityManager.Default {
             String[] excludePermissions, String[] excludePackages, int appOp, Bundle options,
             boolean serialized, boolean sticky, int userId) {
         if (userId != 0) throw new SecurityException("Only the current Gesher user is supported");
-        if ((serialized || resultTo != null) && (sticky || appOp != android.app.AppOpsManager.OP_NONE)) {
-            throw new UnsupportedOperationException("Sticky or app-op acknowledged broadcasts are unsupported");
-        }
         ActivityTaskManagerService.ProcessRecord app =
                 mAtm.callerProcess(Binder.getCallingPid());
         return mBroadcasts.broadcastIntent(caller, intent, resolvedType,

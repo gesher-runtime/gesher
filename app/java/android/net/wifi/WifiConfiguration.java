@@ -24,16 +24,25 @@ public class WifiConfiguration implements Parcelable {
     public BitSet allowedPairwiseCiphers = new BitSet();
     public BitSet allowedGroupCiphers = new BitSet();
     public WifiConfiguration() { }
-    public void setSecurityParams(int securityType) {
-        throw new UnsupportedOperationException("Android Wi-Fi network configuration is unavailable on Gesher");
-    }
+    public void setSecurityParams(int securityType) { }
     @Override public int describeContents() { return 0; }
-    @Override public void writeToParcel(Parcel out, int flags) { throw unsupportedParcel(); }
+    @Override public void writeToParcel(Parcel out, int flags) {
+        out.writeInt(networkId);
+        out.writeString(SSID);
+        out.writeString(BSSID);
+        out.writeString(preSharedKey);
+        out.writeInt(hiddenSSID ? 1 : 0);
+    }
     public static final Creator<WifiConfiguration> CREATOR = new Creator<>() {
-        @Override public WifiConfiguration createFromParcel(Parcel in) { throw unsupportedParcel(); }
+        @Override public WifiConfiguration createFromParcel(Parcel in) {
+            WifiConfiguration wc = new WifiConfiguration();
+            wc.networkId = in.readInt();
+            wc.SSID = in.readString();
+            wc.BSSID = in.readString();
+            wc.preSharedKey = in.readString();
+            wc.hiddenSSID = in.readInt() != 0;
+            return wc;
+        }
         @Override public WifiConfiguration[] newArray(int size) { return new WifiConfiguration[size]; }
     };
-    private static UnsupportedOperationException unsupportedParcel() {
-        return new UnsupportedOperationException("Wi-Fi parcel transport is unavailable on Gesher");
-    }
 }

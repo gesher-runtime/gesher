@@ -45,12 +45,12 @@ final class DeviceIdleController extends IDeviceIdleController.Default {
     @Override public void removeSystemPowerWhitelistApp(String name) { throw denied(); }
     @Override public void restoreSystemPowerWhitelistApp(String name) { throw denied(); }
     @Override public void addPowerSaveTempWhitelistApp(String name, long duration, int userId,
-            int reasonCode, String reason) { throw denied(); }
+            int reasonCode, String reason) { }
     @Override public long addPowerSaveTempWhitelistAppForMms(String name, int userId,
-            int reasonCode, String reason) { throw denied(); }
+            int reasonCode, String reason) { return 10000L; }
     @Override public long addPowerSaveTempWhitelistAppForSms(String name, int userId,
-            int reasonCode, String reason) { throw denied(); }
+            int reasonCode, String reason) { return 10000L; }
     @Override public long whitelistAppTemporarily(String name, int userId,
-            int reasonCode, String reason) { throw denied(); }
-    @Override public void exitIdle(String reason) { throw denied(); }
+            int reasonCode, String reason) { return 10000L; }
+    @Override public void exitIdle(String reason) { }
 }

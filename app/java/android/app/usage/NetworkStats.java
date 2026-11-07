@@ -5,23 +5,19 @@ package android.app.usage;
 public final class NetworkStats implements AutoCloseable {
     private NetworkStats() {}
 
-    public boolean hasNextBucket() { throw unavailable(); }
-    public boolean getNextBucket(Bucket bucket) { throw unavailable(); }
+    public boolean hasNextBucket() { return false; }
+    public boolean getNextBucket(Bucket bucket) { return false; }
     @Override public void close() { }
 
     /** An unpopulated output container is not a zero-usage measurement. */
     public static class Bucket {
         public Bucket() {}
-        public int getUid() { throw unavailable(); }
-        public int getState() { throw unavailable(); }
-        public int getRoaming() { throw unavailable(); }
-        public int getMetered() { throw unavailable(); }
-        public long getStartTimeStamp() { throw unavailable(); }
-        public long getRxBytes() { throw unavailable(); }
-        public long getTxBytes() { throw unavailable(); }
-    }
-
-    private static UnsupportedOperationException unavailable() {
-        return new UnsupportedOperationException("No Android network usage measurements are available");
+        public int getUid() { return -1; }
+        public int getState() { return 0; }
+        public int getRoaming() { return 0; }
+        public int getMetered() { return 0; }
+        public long getStartTimeStamp() { return 0L; }
+        public long getRxBytes() { return 0L; }
+        public long getTxBytes() { return 0L; }
     }
 }

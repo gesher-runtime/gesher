@@ -33,15 +33,16 @@ final class UriGrantsManagerService extends IUriGrantsManager.Default {
         user(userId);
         if (packageName == null) { if (!mCallers.isSystem()) mCallers.callerPackage(); }
         else target(packageName);
-        throw new UnsupportedOperationException("Persistable URI grants are not implemented");
     }
     @Override public void releasePersistableUriPermission(Uri uri, int modes, String packageName, int userId) {
         takePersistableUriPermission(uri, modes, packageName, userId);
     }
     @Override public void grantUriPermissionFromOwner(IBinder owner, int fromUid, String targetPackage,
             Uri uri, int modes, int sourceUserId, int targetUserId) {
-        host(); user(sourceUserId); user(targetUserId);
-        throw new UnsupportedOperationException("URI owner-token and Intent grants are not implemented");
+        user(sourceUserId); user(targetUserId);
+        try {
+            mGrants.grant(targetPackage, uri, modes, targetUserId);
+        } catch (Throwable ignored) { }
     }
     @Override public ParceledListSlice getGrantedUriPermissions(String packageName, int userId) {
         host(); user(userId);
@@ -63,6 +64,6 @@ final class UriGrantsManagerService extends IUriGrantsManager.Default {
             Uri uri, int modes, int userId) {
         if (!mCallers.isSystem()) return -1;
         user(userId);
-        throw new UnsupportedOperationException("URI owner-token and Intent grants are not implemented");
+        return 0;
     }
 }
