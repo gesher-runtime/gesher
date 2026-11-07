@@ -532,6 +532,49 @@ static int phdr_callback(struct dl_phdr_info* info, size_t size, void* data) {
 
 int gesher_selftest(void);
 
+static void test_random_state(void) {
+  typedef char* (*init_fn)(unsigned, char*, size_t);
+  typedef char* (*set_fn)(char*);
+  init_fn initialize = (init_fn)dlsym(RTLD_DEFAULT, "initstate");
+  set_fn select_state = (set_fn)dlsym(RTLD_DEFAULT, "setstate");
+  check("initstate/setstate are real exports", initialize != NULL && select_state != NULL);
+  if (initialize == NULL || select_state == NULL) return;
+  uint32_t first[32], second[64];
+  char* original = initialize(1, (char*)first, sizeof(first));
+  check("BSD random known seed-1 sequence", original != NULL
+      && random() == 1804289383L && random() == 846930886L);
+  char* previous = initialize(99, (char*)second, sizeof(second));
+  check("initstate returns previous caller state", previous == (char*)first);
+  random(); random();
+  check("setstate resumes independent sequence", select_state((char*)first) == (char*)second
+      && random() == 1681692777L);
+  check("setstate of current buffer preserves cursor", select_state((char*)first) == (char*)first
+      && random() == 1714636915L);
+  srandom(1);
+  check("srandom reseeds selected state", random() == 1804289383L);
+  errno = 0;
+  check("initstate rejects short buffer", initialize(5, (char*)second, 7) == NULL && errno == EINVAL
+      && random() == 846930886L);
+  uint32_t invalid = 0x7fffffff;
+  errno = 0;
+  check("setstate rejects invalid cursor without mutation", select_state((char*)&invalid) == NULL
+      && errno == EINVAL && random() == 1681692777L);
+  const size_t sizes[] = {8, 32, 64, 128, 256};
+  for (size_t i = 0; i < sizeof(sizes)/sizeof(sizes[0]); ++i) {
+    uint32_t guarded[66];
+    memset(guarded, 0xa5, sizeof(guarded));
+    initialize(7, (char*)&guarded[1], sizes[i]);
+    long sample = random();
+    srandom(7);
+    check("random state size reseeds deterministically", random() == sample);
+    check("random state keeps buffer canaries", guarded[0] == 0xa5a5a5a5u
+        && guarded[1 + sizes[i]/sizeof(uint32_t)] == 0xa5a5a5a5u);
+    // Do not retain the loop's caller-owned stack buffer after its scope ends.
+    select_state(original);
+  }
+  select_state(original);
+}
+
 static void test_dl(void) {
   void* self = dlsym(RTLD_DEFAULT, "gesher_selftest");
   check("dlsym(RTLD_DEFAULT) finds the library's export", self == (void*)gesher_selftest);
@@ -544,6 +587,30 @@ static void test_dl(void) {
                                         strstr(info.dli_fname, "libc_test") != NULL);
   __android_log_print(ANDROID_LOG_INFO, "gesher", "liblog: %s %d", "formatted", 42);
   check("__android_log_print", 1);
+  test_random_state();
+
+  // Apps such as VLC forward a redirected stderr pipe to liblog. Liblog must
+  // retain its original output destination rather than echoing into that pipe.
+  int capture[2] = {-1, -1};
+  int saved = dup(STDERR_FILENO);
+  int ready = saved >= 0 && pipe(capture) == 0;
+  int redirected = ready && dup2(capture[1], STDERR_FILENO) == STDERR_FILENO;
+  int logged = redirected ? __android_log_write(ANDROID_LOG_ERROR, "gesher",
+      "liblog keeps its original sink after app dup2") : -1;
+  int restored = saved >= 0 && dup2(saved, STDERR_FILENO) == STDERR_FILENO;
+  if (saved >= 0) close(saved);
+  if (capture[1] >= 0) close(capture[1]);
+  char echoed[256];
+  ssize_t count = -1;
+  if (capture[0] >= 0) {
+    // Bound this diagnostic even if restoration fails.
+    int flags = fcntl(capture[0], F_GETFL);
+    if (flags >= 0 && fcntl(capture[0], F_SETFL, flags | O_NONBLOCK) == 0) {
+      count = read(capture[0], echoed, sizeof(echoed));
+    }
+    close(capture[0]);
+  }
+  check("liblog bypasses app stderr redirection", redirected && logged > 0 && restored && count == 0);
 }
 
 __attribute__((visibility("default"))) int gesher_selftest(void) {

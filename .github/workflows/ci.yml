@@ -1046,11 +1046,13 @@ jobs:
           if (-not $loaded) { Stop-Process -Id $holder.Id -Force; throw 'The holder process never had gesher_shellext.dll loaded' }
           # Upgrade cleanup covers shortcuts left by either installer language.
           $legacyHelloLinks = @('Gesher Hello.lnk', 'גשר — דוגמה.lnk')
-          foreach ($name in $legacyHelloLinks) {
-            $legacy = $wsh.CreateShortcut((Join-Path $programs $name))
-            $legacy.TargetPath = "$app\gesher.cmd"
-            $legacy.Save()
-          }
+          $legacy = $wsh.CreateShortcut((Join-Path $programs $legacyHelloLinks[0]))
+          $legacy.TargetPath = "$app\gesher.cmd"
+          $legacy.Save()
+          # WScript.Shell.Save uses the runner's ANSI code page for this path.
+          # Copy a valid link with Unicode file APIs to seed the Hebrew name.
+          Copy-Item -LiteralPath (Join-Path $programs $legacyHelloLinks[0]) `
+            -Destination (Join-Path $programs $legacyHelloLinks[1])
           $upgradeSentinel = Join-Path $programs 'gesher-ci-upgrade-sentinel.txt'
           Set-Content $upgradeSentinel 'unrelated Start menu entry'
           $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru

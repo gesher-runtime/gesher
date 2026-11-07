@@ -29,6 +29,7 @@ import android.app.servertransaction.TopResumedActivityChangeItem;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IIntentSender;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
@@ -471,6 +472,48 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     @Override
+    public int startActivityIntentSender(IApplicationThread caller, IIntentSender target,
+            IBinder allowlistToken, Intent fillIn, String resolvedType, IBinder resultTo,
+            String resultWho, int requestCode, int flagsMask, int flagsValues, Bundle options) {
+        final ProcessRecord process;
+        final ActivityRecord source;
+        final ApkPackage callerCode;
+        synchronized (this) {
+            process = callerProcess(Binder.getCallingPid());
+            if (process == null || process.exiting || !process.ready || caller == null
+                    || process.thread == null || !process.thread.asBinder().equals(caller.asBinder())) {
+                throw new SecurityException("IntentSender must come from an attached application thread");
+            }
+            mAm.callers().requirePackage(process.packageName);
+            callerCode = mPm.get(process.packageName);
+            source = resultTo == null ? null : forToken(resultTo);
+            if (callerCode == null || mPm.isRemovalPending(process.packageName)
+                    || resultTo != null && (source == null || source.app != process || source.finishing
+                        || source.state == State.DESTROYED) || requestCode >= 0 && source == null) {
+                throw new SecurityException("IntentSender result must belong to its live caller activity");
+            }
+        }
+        java.util.function.BooleanSupplier callerLive = () -> {
+            synchronized (ActivityTaskManagerService.this) {
+                return mProcesses.contains(process) && !process.exiting
+                        && mPm.get(process.packageName) == callerCode && !mPm.isRemovalPending(process.packageName)
+                        && (source == null || source.app == process && mActivities.contains(source)
+                            && !source.finishing && source.state != State.DESTROYED);
+            }
+        };
+        return mAm.pendingIntents().sendActivity(target, fillIn, resolvedType, (creator, intent, type, creatorLive) -> {
+            // URI grant authority cannot be added through flagsMask, including for
+            // an otherwise immutable capability. The ordinary fill-in policy stays
+            // in PendingIntents alongside one-shot and creator-generation checks.
+            int mask = flagsMask & ~Intent.IMMUTABLE_FLAGS;
+            intent.setFlags((intent.getFlags() & ~mask) | (flagsValues & mask));
+            return startActivityForVerifiedCreator(creator, intent, type,
+                    () -> callerLive.getAsBoolean() && creatorLive.getAsBoolean(),
+                    resultTo, resultWho, requestCode, options);
+        });
+    }
+
+    @Override
     public int startActivityAsUser(IApplicationThread caller, String callingPackage,
             String callingFeatureId, Intent intent, String resolvedType, IBinder resultTo,
             String resultWho, int requestCode, int flags, ProfilerInfo profilerInfo,
@@ -680,6 +723,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
     int startActivityForVerifiedCreator(String packageName, Intent intent, String resolvedType,
             java.util.function.BooleanSupplier lifetime) {
+        return startActivityForVerifiedCreator(packageName, intent, resolvedType, lifetime,
+                null, null, -1, null);
+    }
+
+    private int startActivityForVerifiedCreator(String packageName, Intent intent, String resolvedType,
+            java.util.function.BooleanSupplier lifetime, IBinder resultTo, String resultWho,
+            int requestCode, Bundle options) {
         if (Binder.getCallingPid() != android.os.Process.myPid() || mPm.get(packageName) == null) {
             throw new SecurityException("Only a validated local capability may supply a creator");
         }
@@ -689,8 +739,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         mVerifiedCreator.set(packageName);
         mVerifiedLifetime.set(lifetime);
         try {
-            return start(null, intent, resolvedType, packageName, null, null, -1,
-                    new ActivityRecord[1]);
+            return start(null, intent, resolvedType, packageName, resultTo, resultWho, requestCode,
+                    launchTaskId(options), new ActivityRecord[1]);
         } finally {
             if (previous == null) mVerifiedCreator.remove(); else mVerifiedCreator.set(previous);
             if (oldLifetime == null) mVerifiedLifetime.remove(); else mVerifiedLifetime.set(oldLifetime);
@@ -908,7 +958,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     || callerProcess(originalPid) != originalProcess || originalProcess.exiting)) {
                 throw new SecurityException("Activity caller retired before publication");
             }
-            sourceWindowMode = sourceWindowMode(caller, callingPackage, source, callingPid,
+            // startActivityIntentSender authenticated this result activity before
+            // clearing Binder identity. Creator authority still controls the target;
+            // window visibility follows the live recipient that requested its UI.
+            boolean delegatedResult = internalCreator && source != null;
+            sourceWindowMode = sourceWindowMode(delegatedResult ? source.app.thread : caller,
+                    delegatedResult ? source.info.packageName : callingPackage, source,
+                    delegatedResult ? source.app.pid : callingPid,
                     resultToToken == null, info.packageName,
                     componentProcess(info.packageName, info.processName));
             int taskId = launchTaskId >= 0 && topOf(launchTaskId) != null ? launchTaskId

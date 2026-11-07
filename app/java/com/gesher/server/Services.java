@@ -178,6 +178,40 @@ public final class Services {
         services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
                 new LocationManagerService(pm, am)).asBinder());
         services.put(Context.LOCALE_SERVICE, StandIn.of(android.app.ILocaleManager.class, new LocaleManagerService(am, atm, pm)).asBinder());  // locale track, ADR 0049
+        // Apps on API 34+ expect this manager to exist even when no grammatical
+        // gender is configured. Windows supplies no system-wide preference;
+        // personalization remains explicitly unsupported rather than silently saved.
+        services.put(Context.GRAMMATICAL_INFLECTION_SERVICE, StandIn.of(android.app.IGrammaticalInflectionManager.class,
+                new android.app.IGrammaticalInflectionManager.Default() {
+                    private void user(int userId) {
+                        if (userId != 0) throw new SecurityException("Only grammatical user 0 is supported");
+                    }
+                    private void unspecified(int gender) {
+                        if (gender < 0 || gender > 3) throw new IllegalArgumentException("Unknown grammatical gender");
+                        if (gender != Configuration.GRAMMATICAL_GENDER_NOT_SPECIFIED) {
+                            throw new UnsupportedOperationException("Grammatical gender personalization is unavailable");
+                        }
+                    }
+                    @Override public void setRequestedApplicationGrammaticalGender(String name, int userId, int gender) {
+                        user(userId);
+                        am.callers().requirePackage(name);
+                        if (pm.get(name) == null && !("android".equals(name) && am.callers().isSystem())) {
+                            throw new IllegalArgumentException("Unknown grammatical package");
+                        }
+                        unspecified(gender);
+                    }
+                    @Override public void setSystemWideGrammaticalGender(int gender, int userId) {
+                        user(userId);
+                        if (!am.callers().isSystem()) throw new SecurityException("System grammatical setting requires host authority");
+                        unspecified(gender);
+                    }
+                    @Override public int getSystemGrammaticalGender(android.content.AttributionSource source, int userId) {
+                        user(userId); return Configuration.GRAMMATICAL_GENDER_NOT_SPECIFIED;
+                    }
+                    @Override public int peekSystemGrammaticalGenderByUserId(android.content.AttributionSource source, int userId) {
+                        user(userId); return Configuration.GRAMMATICAL_GENDER_NOT_SPECIFIED;
+                    }
+                }).asBinder());
         services.put(Context.CONNECTIVITY_SERVICE, new ConnectivityService(pm, atm));  // docs/network.md
         // Accounts: a dummy Google account (microG / GMS compat) and apps' own, through
         // their authenticators.

@@ -186,6 +186,21 @@ final class PendingIntents {
     }
 
     int send(Record r, Intent fillIn, String resolvedType, String requiredPermission) {
+        return send(r, fillIn, resolvedType, requiredPermission, null);
+    }
+
+    interface ActivityLaunch {
+        int start(String creator, Intent intent, String resolvedType, BooleanSupplier lifetime);
+    }
+
+    int sendActivity(IIntentSender target, Intent fillIn, String resolvedType, ActivityLaunch launch) {
+        Record r = record(target);
+        if (r == null || r.type != ActivityManager.INTENT_SENDER_ACTIVITY) return ActivityManager.START_CANCELED;
+        return send(r, fillIn, resolvedType, null, launch);
+    }
+
+    private int send(Record r, Intent fillIn, String resolvedType, String requiredPermission,
+            ActivityLaunch activityLaunch) {
         final Intent intent;
         final String type;
         final ApkPackage creator;
@@ -225,6 +240,7 @@ final class PendingIntents {
                 case ActivityManager.INTENT_SENDER_BROADCAST:
                     return mAm.sendBroadcastFor(r.packageName, intent, type, requiredPermission, lifetime);
                 case ActivityManager.INTENT_SENDER_ACTIVITY:
+                    if (activityLaunch != null) return activityLaunch.start(r.packageName, intent, type, lifetime);
                     return mAm.startActivityFor(r.packageName, intent, type, lifetime);
                 case ActivityManager.INTENT_SENDER_SERVICE:
                 case ActivityManager.INTENT_SENDER_FOREGROUND_SERVICE:

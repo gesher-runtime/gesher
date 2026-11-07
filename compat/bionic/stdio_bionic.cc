@@ -673,9 +673,21 @@ char PriorityLetter(int prio) {
   return prio >= 0 && prio <= 8 ? kLetters[prio] : '?';
 }
 
-// One WriteFile per line: stderr is unbuffered, and the CRT would write a
-// formatted line in pieces that other threads' output (Java's System.out on
-// the same file) can land between.
+// Capture the inherited diagnostic destination before an app can redirect fd 2.
+// VLC forwards its stderr pipe to liblog; writing liblog back into that pipe
+// creates feedback and can block both its reader and the app's UI thread.
+// This duplicate lives until process exit, independently of later dup2/close.
+const HANDLE logOutput = [] {
+  HANDLE original = GetStdHandle(STD_ERROR_HANDLE);
+  HANDLE saved = INVALID_HANDLE_VALUE;
+  if (original && original != INVALID_HANDLE_VALUE) {
+    DuplicateHandle(GetCurrentProcess(), original, GetCurrentProcess(), &saved,
+                    0, FALSE, DUPLICATE_SAME_ACCESS);
+  }
+  return saved;
+}();
+
+// One WriteFile per line avoids interleaving the pieces of a formatted line.
 int LogWrite(int prio, const char* tag, const char* text, int buffer = 0, bool filter = true) {
   if (!tag) tag = ::gesher_android_default_log_tag();
   if (filter && !::__android_log_is_loggable_len(prio, tag, tag ? std::strlen(tag) : 0, 2)) return -1;
@@ -686,13 +698,9 @@ int LogWrite(int prio, const char* tag, const char* text, int buffer = 0, bool f
   line += ": ";
   line += text ? text : "";
   line += '\n';
-  std::fflush(stderr);
-  HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
   DWORD written = 0;
-  if (h == nullptr || h == INVALID_HANDLE_VALUE ||
-      !WriteFile(h, line.data(), static_cast<DWORD>(line.size()), &written, nullptr)) {
-    std::fputs(line.c_str(), stderr);
-    std::fflush(stderr);
+  if (logOutput && logOutput != INVALID_HANDLE_VALUE) {
+    WriteFile(logOutput, line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
   }
   return 1;
 }

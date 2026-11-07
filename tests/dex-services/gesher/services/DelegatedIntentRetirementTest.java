@@ -5,6 +5,11 @@ import android.app.ActivityManager;
 import android.app.IApplicationThread;
 import android.app.IServiceConnection;
 import android.app.PendingIntent;
+import android.app.IActivityTaskManager;
+import android.app.ResultInfo;
+import android.app.servertransaction.ActivityResultItem;
+import android.app.servertransaction.ClientTransaction;
+import android.content.IIntentSender;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.IIntentReceiver;
@@ -54,6 +59,8 @@ public final class DelegatedIntentRetirementTest {
         final IBinder binder = new Binder();
         int creates, starts, binds, receivers, exits;
         Runnable onCreate;
+        final java.util.List<ClientTransaction> transactions = new java.util.ArrayList<>();
+        @Override public void scheduleTransaction(ClientTransaction transaction) { transactions.add(transaction); }
         @Override public IBinder asBinder() { return binder; }
         @Override public void scheduleCreateService(IBinder token, ServiceInfo info,
                 CompatibilityInfo compat, int state) {
@@ -249,6 +256,111 @@ public final class DelegatedIntentRetirementTest {
         } finally { Binder.restoreCallingIdentity(original); }
     }
 
+    @SuppressWarnings("unchecked")
+    private static void intentSenderActivity(String[] args, int mode) throws Exception {
+        Harness h = new Harness(args[0], args[1], false, true);
+        int pid = 930001, uid = h.target.uid();
+        AppThread client = new AppThread();
+        long original = Binder.clearCallingIdentity();
+        try {
+            // The capability's creator and its recipient are independent apps.
+            Object parsedActivity = h.creator.parsed.getActivities().get(0);
+            parsedActivity.getClass().getMethod("setExported", boolean.class).invoke(parsedActivity, false);
+            ActivityInfo destination = h.creator.launcherActivity(null);
+            require(destination != null && !destination.exported, "Use an actual non-exported capability target");
+            Object pending = method(h.pendingType, "get", int.class, String.class, int.class,
+                    Intent[].class, String[].class, int.class).invoke(h.pending,
+                    mode == 3 ? ActivityManager.INTENT_SENDER_BROADCAST : ActivityManager.INTENT_SENDER_ACTIVITY,
+                    h.creator.packageName, 17, new Intent[]{new Intent().setComponent(
+                            new ComponentName(h.creator.packageName, destination.name))}, null,
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_ONE_SHOT);
+            Binder.restoreCallingIdentity(((long) uid << 32) | pid);
+            Object app = make(h.processType, new Class<?>[]{h.atmType, int.class, IApplicationThread.class},
+                    h.atm, pid, client);
+            field(h.processType, "packageName").set(app, h.target.packageName);
+            field(h.processType, "processName").set(app, h.target.packageName);
+            field(h.processType, "ready").setBoolean(app, true);
+            field(h.processType, "windowMode").set(app, "hidden");
+            ((List<Object>) field(h.atmType, "mProcesses").get(h.atm)).add(app);
+            // The source record is a planted fixture; only the delegated destination
+            // is resolved from a manifest. No application code is executed.
+            ActivityInfo sourceInfo = new ActivityInfo(destination);
+            sourceInfo.packageName = h.target.packageName;
+            sourceInfo.name = h.target.packageName + ".FixtureSource";
+            sourceInfo.applicationInfo = h.target.applicationInfo(0);
+            field(h.processType, "packageName").set(h.process, h.creator.packageName);
+            field(h.processType, "processName").set(h.process, h.creator.packageName);
+            Class<?> activityType = Class.forName(h.atmType.getName() + "$ActivityRecord");
+            Object source = make(activityType, new Class<?>[]{h.atmType, ActivityInfo.class, Intent.class,
+                    int.class, int.class, String.class, activityType, String.class, int.class},
+                    h.atm, sourceInfo, new Intent().setComponent(new ComponentName(h.target.packageName,
+                            sourceInfo.name)), 41, pid, h.target.packageName, null, null, -1);
+            field(activityType, "app").set(source, app);
+            Class<?> stateType = field(activityType, "state").getType();
+            field(activityType, "state").set(source, Enum.valueOf((Class) stateType, "RESUMED"));
+            List<Object> activities = (List<Object>) field(h.atmType, "mActivities").get(h.atm);
+            activities.add(source);
+            ((List<Object>) field(h.processType, "activities").get(app)).add(source);
+            IBinder token = (IBinder) field(activityType, "token").get(source);
+            IActivityTaskManager api = (IActivityTaskManager) h.atm;
+            if (mode == 4) field(h.atmType, "mBeforeActivityPublication").set(h.atm, (Runnable) () -> {
+                try { method(PackageManagerService.class, "add", ApkPackage.class)
+                        .invoke(h.pm, ApkPackage.parse(args[1])); }
+                catch (Exception failure) { throw new AssertionError(failure); }
+            });
+            try {
+                int result = api.startActivityIntentSender(mode == 1 ? new AppThread() : client,
+                        (IIntentSender) pending, null, new Intent("fixture.cannot.replace.immutable"), null,
+                        mode == 2 ? new Binder() : token, "fixture-result", 73,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION, Intent.FLAG_GRANT_READ_URI_PERMISSION, null);
+                require(mode != 1 && mode != 2, "Forged IntentSender caller/result token was accepted");
+                if (mode >= 3) {
+                    require(result == ActivityManager.START_CANCELED && activities.size() == 1,
+                            "Wrong capability type or retired caller published an activity");
+                    return;
+                }
+                require(result >= ActivityManager.START_SUCCESS && activities.size() == 2,
+                        "IntentSender reported success without launching its activity");
+                Object launched = activities.get(1);
+                require("hidden".equals(field(activityType, "inheritedWindowMode").get(launched))
+                        && h.creator.packageName.equals(field(activityType, "launchedFromPackage").get(launched)),
+                        "Delegated activity lost recipient window mode or creator authority");
+                require(field(activityType, "resultTo").get(launched) == source
+                        && field(activityType, "requestCode").getInt(launched) == 73
+                        && "fixture-result".equals(field(activityType, "resultWho").get(launched)),
+                        "IntentSender lost its authenticated result recipient");
+                Intent launchedIntent = (Intent) field(activityType, "intent").get(launched);
+                require(launchedIntent.getAction() == null
+                        && (launchedIntent.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION) == 0,
+                        "Immutable fill-in or URI-grant authority was altered by the recipient");
+                require(api.startActivityIntentSender(client, (IIntentSender) pending, null,
+                        null, null, token, null, 74, 0, 0, null) == ActivityManager.START_CANCELED,
+                        "One-shot activity capability was reusable");
+                api.getActivityClientController().activityPaused(token);
+                IBinder launchedToken = (IBinder) field(activityType, "token").get(launched);
+                api.getActivityClientController().finishActivity(launchedToken, android.app.Activity.RESULT_OK,
+                        new Intent().putExtra("fixture-result", true), 0);
+                api.getActivityClientController().activityPaused(launchedToken);
+                boolean delivered = false;
+                for (ClientTransaction transaction : client.transactions) {
+                    for (Object item : transaction.getTransactionItems()) {
+                        if (!(item instanceof ActivityResultItem)) continue;
+                        for (ResultInfo resultInfo : (List<ResultInfo>) field(ActivityResultItem.class,
+                                "mResultInfoList").get(item)) {
+                            delivered |= resultInfo.mRequestCode == 73
+                                    && resultInfo.mResultCode == android.app.Activity.RESULT_OK
+                                    && resultInfo.mData.getBooleanExtra("fixture-result", false);
+                        }
+                    }
+                }
+                require(delivered, "Finishing the capability activity did not deliver its actual result");
+            } catch (SecurityException denied) {
+                require(mode == 1 || mode == 2, "Valid delegated activity was denied: " + denied);
+                require(activities.size() == 1, "Rejected caller published an activity");
+            }
+        } finally { Binder.restoreCallingIdentity(original); }
+    }
+
     public static void main(String[] args) throws Exception {
         require(args.length == 2, "Pass ordinary orderedbroadcast source and target APKs");
         System.loadLibrary("android_runtime");
@@ -350,6 +462,7 @@ public final class DelegatedIntentRetirementTest {
         for (int route = 0; route < 3; route++) {
             for (int race = 0; race < 6; race++) directCapture(args, route, race);
         }
+        for (int mode = 0; mode < 5; mode++) intentSenderActivity(args, mode);
         System.out.println("DelegatedIntentRetirementTest all passed: " + checks + " checks");
     }
 }

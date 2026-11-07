@@ -15,6 +15,7 @@ public final class ServiceFixtureRunner {
         // under this test loader. The account-cache fixture owns its own real region.
         boolean ownsBootstrap = args[0].equals("SdkSandboxUnsupportedTest")
                 || args[0].equals("NetworkStatsUnavailableTest")
+                || args[0].equals("GrammaticalInflectionUnavailableTest")
                 || args[0].equals("WifiUnsupportedTest")
                 || args[0].equals("WifiScannerUnsupportedTest")
                 || args[0].equals("AccountVisibilityNotificationTest");
