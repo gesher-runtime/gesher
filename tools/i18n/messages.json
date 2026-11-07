@@ -281,6 +281,146 @@
       "en": "Run with Gesher",
       "he": "הפעלה באמצעות גשר"
     },
+    "setup_microg": {
+      "en": "Install Google Play services support (microG)",
+      "he": "התקנת תמיכה בשירותי Google Play (microG)"
+    },
+    "setup_aurora": {
+      "en": "Install App Store (Aurora Store)",
+      "he": "התקנת חנות אפליקציות (Aurora Store)"
+    },
+    "setup_control_panel": {
+      "en": "Gesher Control Center",
+      "he": "לוח הבקרה של גשר"
+    },
+    "cp_title": {
+      "en": "Gesher Control Center",
+      "he": "לוח הבקרה של גשר"
+    },
+    "cp_subtitle": {
+      "en": "Applications and Google Play Services Management",
+      "he": "ניהול יישומים ושירותי Google Play"
+    },
+    "cp_device_status": {
+      "en": "Gesher Device",
+      "he": "מערכת גשר"
+    },
+    "cp_device_running": {
+      "en": "Device is running",
+      "he": "המערכת פועלת ברקע"
+    },
+    "cp_device_stopped": {
+      "en": "Device is stopped",
+      "he": "המערכת כבויה"
+    },
+    "cp_btn_start": {
+      "en": "Start Device",
+      "he": "הפעל מערכת"
+    },
+    "cp_btn_stop": {
+      "en": "Stop Device",
+      "he": "כבה מערכת"
+    },
+    "cp_microg_title": {
+      "en": "Google Play Services (microG)",
+      "he": "שירותי Google Play (microG)"
+    },
+    "cp_microg_desc": {
+      "en": "Enables Google account login, Push notifications (FCM), and Maps/Location.",
+      "he": "מאפשר התחברות לחשבון גוגל, קבלת התראות Push ושירותי מיקום."
+    },
+    "cp_microg_enabled": {
+      "en": "Google Play services are enabled",
+      "he": "שירותי Google Play מופעלים ופעילים"
+    },
+    "cp_microg_disabled": {
+      "en": "Google Play services are not enabled",
+      "he": "שירותי Google Play אינם מופעלים"
+    },
+    "cp_btn_enable_microg": {
+      "en": "Enable Google Play (1-Click)",
+      "he": "הפעל שירותי Google (הגדרה אוטומטית)"
+    },
+    "cp_btn_disable_microg": {
+      "en": "Disable Google Play",
+      "he": "השבת שירותי Google"
+    },
+    "cp_btn_google_login": {
+      "en": "Sign in to Google Account",
+      "he": "התחבר לחשבון Google"
+    },
+    "cp_btn_microg_settings": {
+      "en": "microG Settings",
+      "he": "הגדרות microG"
+    },
+    "cp_store_title": {
+      "en": "App Store (Aurora Store)",
+      "he": "חנות אפליקציות (Aurora Store)"
+    },
+    "cp_store_desc": {
+      "en": "Download and install Android applications directly without downloading APK files.",
+      "he": "חיפוש והורדת יישומי Android ישירות בלחיצה אחת, ללא צורך בהורדת קובצי APK."
+    },
+    "cp_store_installed": {
+      "en": "App Store is installed",
+      "he": "חנות האפליקציות מותקנת ומוכנה"
+    },
+    "cp_store_not_installed": {
+      "en": "App Store is not installed",
+      "he": "חנות האפליקציות אינה מותקנת"
+    },
+    "cp_btn_install_store": {
+      "en": "Install App Store (1-Click)",
+      "he": "התקן חנות אפליקציות בלחיצה אחת"
+    },
+    "cp_btn_open_store": {
+      "en": "Open App Store",
+      "he": "פתח את חנות האפליקציות"
+    },
+    "cp_apps_title": {
+      "en": "Installed Applications",
+      "he": "אפליקציות מותקנות"
+    },
+    "cp_btn_install_apk": {
+      "en": "Install APK from file…",
+      "he": "התקן אפליקציה מקובץ (APK)…"
+    },
+    "cp_drag_drop_hint": {
+      "en": "Drag and drop APK files here to install",
+      "he": "גרור ושחרר קובצי APK לכאן להתקנה מהירה"
+    },
+    "cp_btn_launch": {
+      "en": "Launch",
+      "he": "הפעל"
+    },
+    "cp_btn_uninstall": {
+      "en": "Uninstall",
+      "he": "הסר"
+    },
+    "cp_uninstall_confirm": {
+      "en": "Are you sure you want to uninstall {0}?",
+      "he": "האם להסיר את היישום {0}?"
+    },
+    "cp_status_ready": {
+      "en": "Ready",
+      "he": "מוכן"
+    },
+    "cp_status_working": {
+      "en": "Working, please wait…",
+      "he": "מעבד, נא להמתין…"
+    },
+    "cp_staging": {
+      "en": "Configuring services…",
+      "he": "מגדיר שירותים…"
+    },
+    "cp_downloading": {
+      "en": "Downloading {0}…",
+      "he": "מוריד את {0}…"
+    },
+    "cp_installing": {
+      "en": "Installing {0}…",
+      "he": "מתקין את {0}…"
+    },
     "files_all": {
       "en": "All files",
       "he": "כל הקבצים"

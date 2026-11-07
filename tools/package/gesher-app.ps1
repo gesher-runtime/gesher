@@ -1,4 +1,4 @@
-﻿# Runs Android apps on the user's Gesher device: binderd, servicemanager and a
+# Runs Android apps on the user's Gesher device: binderd, servicemanager and a
 # system server that every launch shares, installed packages, and app
 # processes the system server starts (docs/services.md, ADR 0026).
 #
@@ -50,8 +50,9 @@ param(
   [Parameter(ValueFromRemainingArguments)] [string[]] $Arguments = @()
 )
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'gesher-ui.ps1')
-$here = $PSScriptRoot
+$scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+. (Join-Path $scriptRoot 'gesher-ui.ps1')
+$here = $scriptRoot
 
 # When started interactively from Explorer (.apk double-click or Start menu shortcut),
 # hide the black console window so only the app UI is shown.
@@ -87,6 +88,11 @@ if ($Arguments.Count -eq 0) {
 }
 $command = $Arguments[0]
 $rest = @($Arguments | Select-Object -Skip 1)
+
+if ($command -in 'control-panel', 'settings', 'dashboard', 'gui') {
+  & (Join-Path $here 'gesher-control-panel.ps1') @rest
+  exit $LASTEXITCODE
+}
 
 # Reads the device's state file (Java properties: key=value, '\' escapes).
 function DeviceState {

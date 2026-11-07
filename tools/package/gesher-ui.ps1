@@ -1,6 +1,7 @@
 # Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 # Dot-sourced by the packaged entry points. Explicit UTF-8 also works in Windows PowerShell 5.
-$script:GesherUiCatalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'ui-messages.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$uiDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { '.' }
+$script:GesherUiCatalog = Get-Content -LiteralPath (Join-Path $uiDir 'ui-messages.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 
 function Get-GesherUiLanguage([string] $Tags) {
   foreach ($tag in ($Tags -split ',')) {

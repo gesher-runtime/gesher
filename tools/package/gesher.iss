@@ -128,6 +128,7 @@ Source: "gesher.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app-microg.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-control-panel.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-ui.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "ui-messages.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "licenses\APKSIG-LICENSE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
@@ -140,8 +141,11 @@ Source: "gesher.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; Windows 11 has its runtime; elsewhere Setup offers to install it (Microsoft's
 ; Evergreen bootstrapper, downloaded; a per-user install without elevation).
 Name: "webview2"; Description: "{cm:setup_webview}"; Check: not WebView2Installed
+Name: "microg"; Description: "{cm:setup_microg}"; Flags: unchecked
+Name: "aurora"; Description: "{cm:setup_aurora}"; Flags: unchecked
 
 [Icons]
+Name: "{autoprograms}\{cm:setup_control_panel}"; Filename: "{app}\gesher-launch.exe"; Parameters: "control-panel"; WorkingDir: "{app}"; IconFilename: "{app}\gesher.ico"
 Name: "{autoprograms}\{cm:setup_hello}"; Filename: "{app}\gesher.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\gesher.ico"
 Name: "{autoprograms}\{cm:setup_readme}"; Filename: "{app}\README.txt"
 
@@ -324,6 +328,18 @@ begin
   Result := Pos(';' + Uppercase(Dir) + ';', ';' + Uppercase(Path) + ';') > 0;
 end;
 
+procedure InstallMicrogAndStore();
+var
+  Code: Integer;
+  Params: String;
+begin
+  Params := '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
+            ExpandConstant('{app}\gesher-app-microg.ps1') + '" -AutoDownload';
+  if WizardIsTaskSelected('aurora') then
+    Params := Params + ' -InstallStore';
+  Exec('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Path, Dir: String;
@@ -332,6 +348,8 @@ begin
   begin
     if WizardIsTaskSelected('webview2') then
       InstallWebView2();
+    if WizardIsTaskSelected('microg') then
+      InstallMicrogAndStore();
     Path := PathEntries();
     Dir := ExpandConstant('{app}');
     if not HasEntry(Path, Dir) then

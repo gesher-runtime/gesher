@@ -1,18 +1,21 @@
-﻿# Stage verified, unmodified microG addons in a Gesher profile. Google Check-in,
+# Stage verified, unmodified microG addons in a Gesher profile. Google Check-in,
 # Cloud Messaging and account setup are controlled by microG's own settings.
 param(
     [string] $GmsCoreApk,
     [string] $CompanionApk,
     [string] $GsfProxyApk,
+    [switch] $AutoDownload,
+    [switch] $InstallStore,
     [string] $ProfileRoot = (Join-Path $env:LOCALAPPDATA 'Gesher'),
     [string] $RuntimeDir = $PSScriptRoot,
     [switch] $Disable,
     [switch] $Remove
 )
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'gesher-ui.ps1')
+$scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+. (Join-Path $scriptRoot 'gesher-ui.ps1')
 $ProfileRoot = [IO.Path]::GetFullPath($ProfileRoot)
-$RuntimeDir = [IO.Path]::GetFullPath($RuntimeDir)
+$RuntimeDir = if ($RuntimeDir) { [IO.Path]::GetFullPath($RuntimeDir) } else { $scriptRoot }
 $marker = Join-Path $ProfileRoot 'microg.enabled'
 $packages = 'com.google.android.gms', 'com.android.vending', 'com.google.android.gsf'
 if ($Disable -and $Remove) { throw (Get-GesherText 'microg_choose') }
@@ -46,6 +49,35 @@ if ($Remove) {
     }
     Write-Host (Get-GesherText 'microg_removed')
     return
+}
+if ($AutoDownload) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $downloadDir = Join-Path $env:TEMP "gesher-microg-downloads"
+    New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
+    if (-not $GmsCoreApk) {
+        $gmsTarget = Join-Path $downloadDir 'com.google.android.gms.apk'
+        if (-not (Test-Path $gmsTarget)) {
+            Write-Host "Downloading official microG Services (GmsCore)..."
+            Invoke-WebRequest -Uri "https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.google.android.gms-252432034.apk" -OutFile $gmsTarget -UseBasicParsing
+        }
+        $GmsCoreApk = $gmsTarget
+    }
+    if (-not $CompanionApk) {
+        $vendingTarget = Join-Path $downloadDir 'com.android.vending.apk'
+        if (-not (Test-Path $vendingTarget)) {
+            Write-Host "Downloading official microG Companion..."
+            Invoke-WebRequest -Uri "https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.android.vending-84022634.apk" -OutFile $vendingTarget -UseBasicParsing
+        }
+        $CompanionApk = $vendingTarget
+    }
+    if (-not $GsfProxyApk) {
+        $gsfTarget = Join-Path $downloadDir 'com.google.android.gsf.apk'
+        if (-not (Test-Path $gsfTarget)) {
+            Write-Host "Downloading official GsfProxy..."
+            Invoke-WebRequest -Uri "https://github.com/microg/GsfProxy/releases/download/v0.1.0/GsfProxy.apk" -OutFile $gsfTarget -UseBasicParsing
+        }
+        $GsfProxyApk = $gsfTarget
+    }
 }
 if (-not $GmsCoreApk) { throw (Get-GesherText 'microg_pass_apk') }
 $entries = @(
@@ -130,6 +162,59 @@ try {
         Move-Item -LiteralPath (Join-Path $slot 'base.apk.new') -Destination (Join-Path $slot 'base.apk') -Force
     }
     Set-Content -LiteralPath $marker -Value 'official-microg-v1' -Encoding ASCII
+
+    # Pre-configure microG settings (Checkin & GCM enabled out of the box)
+    $prefsDir = Join-Path $ProfileRoot 'data/data/com.google.android.gms/shared_prefs'
+    New-Item -ItemType Directory -Force -Path $prefsDir | Out-Null
+
+    $checkinXml = @"
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <boolean name="checkin_enable_service" value="true" />
+</map>
+"@
+    Set-Content -LiteralPath (Join-Path $prefsDir 'checkin.xml') -Value $checkinXml -Encoding UTF8
+
+    $gcmXml = @"
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <boolean name="gcm_enable_mcs_service" value="true" />
+</map>
+"@
+    Set-Content -LiteralPath (Join-Path $prefsDir 'gcm.xml') -Value $gcmXml -Encoding UTF8
+
+    $settingsXml = @"
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <boolean name="checkin_enable_service" value="true" />
+    <boolean name="gcm_enable_mcs_service" value="true" />
+</map>
+"@
+    Set-Content -LiteralPath (Join-Path $prefsDir 'org.microg.gms.settings_preferences.xml') -Value $settingsXml -Encoding UTF8
+
+    # Pre-seed runtime permissions for official microG
+    $permFile = Join-Path $ProfileRoot 'data/system/runtime-permissions'
+    $permLines = @()
+    if (Test-Path -LiteralPath $permFile) {
+        $permLines = @(Get-Content -LiteralPath $permFile | Where-Object { $_ -notmatch '^com\.google\.android\.gms:' })
+    }
+    $signer = '9bd06727e62796c0130eb6dab39b73157451582cbd138e86c468acc395d14165'
+    $permLines += "com.google.android.gms:$signer`:android.permission.ACCESS_FINE_LOCATION=granted"
+    $permLines += "com.google.android.gms:$signer`:android.permission.ACCESS_COARSE_LOCATION=granted"
+    $permLines += "com.google.android.gms:$signer`:android.permission.POST_NOTIFICATIONS=granted"
+    New-Item -ItemType Directory -Force -Path (Split-Path $permFile) | Out-Null
+    Set-Content -LiteralPath $permFile -Value $permLines -Encoding ASCII
+
+    if ($InstallStore) {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $storeTarget = Join-Path $env:TEMP "AuroraStore.apk"
+        if (-not (Test-Path $storeTarget)) {
+            Write-Host "Downloading Aurora Store..."
+            Invoke-WebRequest -Uri "https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk" -OutFile $storeTarget -UseBasicParsing
+        }
+        Write-Host "Installing Aurora Store..."
+        & (Join-Path $RuntimeDir "gesher-app.ps1") install "$storeTarget"
+    }
 } finally {
     foreach ($temp in $staged) {
         if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp }
