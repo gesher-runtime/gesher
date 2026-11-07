@@ -16,8 +16,9 @@ import java.util.Objects;
 
 /**
  * Windows has no Android shortcut host, share-target index, or pinned-item UI.
- * Queries describe that absence; publishing fails explicitly rather than
- * reporting throttling or pretending that a shortcut was created. Pin requests
+ * Queries describe that absence. Dynamic shortcut publishing operations succeed
+ * as no-ops rather than throwing, preserving compatibility with Android apps
+ * and AndroidX ShortcutManagerCompat during activity lifecycle. Pin requests
  * return false, for which Android specifies that no result callback is sent.
  */
 class DesktopShortcutService extends IShortcutService.Default {
@@ -31,11 +32,6 @@ class DesktopShortcutService extends IShortcutService.Default {
         if (mPackages.getPackageInfo(packageName, 0, userId) == null) {
             throw new IllegalArgumentException("Unknown package " + packageName);
         }
-    }
-
-    private static UnsupportedOperationException publishingUnavailable() {
-        return new UnsupportedOperationException("This Windows environment has no Android "
-                + "shortcut publisher or launcher integration");
     }
 
     @Override public boolean isRequestPinItemSupported(int userId, int requestType) { return false; }
@@ -69,16 +65,16 @@ class DesktopShortcutService extends IShortcutService.Default {
         query(pkg, userId); return 0;
     }
     @Override public boolean setDynamicShortcuts(String pkg, ParceledListSlice list, int userId) {
-        query(pkg, userId); throw publishingUnavailable();
+        query(pkg, userId); return true;
     }
     @Override public boolean addDynamicShortcuts(String pkg, ParceledListSlice list, int userId) {
-        query(pkg, userId); throw publishingUnavailable();
+        query(pkg, userId); return true;
     }
     @Override public boolean updateShortcuts(String pkg, ParceledListSlice list, int userId) {
-        query(pkg, userId); throw publishingUnavailable();
+        query(pkg, userId); return true;
     }
     @Override public void pushDynamicShortcut(String pkg, ShortcutInfo info, int userId) {
-        query(pkg, userId); throw publishingUnavailable();
+        query(pkg, userId);
     }
     // No shortcuts have ever been published. Removal is idempotent and cannot
     // mutate another package's data; none of these paths creates a shortcut.

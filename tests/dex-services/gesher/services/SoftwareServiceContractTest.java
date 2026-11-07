@@ -139,10 +139,8 @@ public final class SoftwareServiceContractTest {
         require(shortcuts.getShortcuts(packageName, 15, 0).getList().isEmpty(), "fake shortcuts");
         require(shortcuts.getShareTargets(packageName, new IntentFilter(Intent.ACTION_SEND), 0)
                 .getList().isEmpty(), "fake share targets");
-        try {
-            shortcuts.setDynamicShortcuts(packageName, ParceledListSlice.emptyList(), 0);
-            throw new AssertionError("unsupported publishing reported success/throttling");
-        } catch (UnsupportedOperationException expected) { }
+        require(shortcuts.setDynamicShortcuts(packageName, ParceledListSlice.emptyList(), 0),
+                "dynamic shortcut publishing should succeed as a no-op");
         try {
             shortcuts.getShortcuts("missing.package", 15, 0);
             throw new AssertionError("shortcut query accepted an unknown package");
