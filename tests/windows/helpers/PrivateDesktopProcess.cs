@@ -3,7 +3,8 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 
-// Synthetic fixture processes only. The desktop is never switched or displayed.
+// Owned synthetic fixtures. Private desktops are never switched; callers on
+// the current desktop keep their own windows hidden.
 public static class PrivateDesktopProcess {
   [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct Startup {
     public uint cb; public string reserved, desktop, title;
@@ -31,11 +32,20 @@ public static class PrivateDesktopProcess {
   [DllImport("kernel32.dll")] static extern bool TerminateProcess(IntPtr p,uint code);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
   public static int Run(string command,string cwd,int timeoutMs) {
+    return RunOwned(command,cwd,timeoutMs,true);
+  }
+  public static int RunOnCurrentDesktop(string command,string cwd,int timeoutMs) {
+    return RunOwned(command,cwd,timeoutMs,false);
+  }
+  static int RunOwned(string command,string cwd,int timeoutMs,bool privateDesktop) {
     IntPtr desktop=IntPtr.Zero,job=IntPtr.Zero; ProcessInfo info=new ProcessInfo();
     try {
-      string name="GesherFixture-"+Guid.NewGuid().ToString("N");
-      desktop=CreateDesktopW(name,IntPtr.Zero,IntPtr.Zero,0,0x01ff,IntPtr.Zero);
-      if(desktop==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+      string name=null;
+      if(privateDesktop) {
+        name="GesherFixture-"+Guid.NewGuid().ToString("N");
+        desktop=CreateDesktopW(name,IntPtr.Zero,IntPtr.Zero,0,0x01ff,IntPtr.Zero);
+        if(desktop==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+      }
       job=CreateJobObjectW(IntPtr.Zero,IntPtr.Zero);
       if(job==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
       ExtendedLimits limits=new ExtendedLimits(); limits.basic.flags=0x2000; // Kill owned descendants on close.

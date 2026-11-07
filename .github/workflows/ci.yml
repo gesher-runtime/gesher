@@ -1329,8 +1329,16 @@ jobs:
         with:
           name: microg-security-${{ matrix.os }}
           path: |
-            ${{ runner.temp }}/microg-security/
-            ${{ runner.temp }}/gesher-microg-security/
+            ${{ runner.temp }}/microg-security/**/*.log
+            ${{ runner.temp }}/microg-security/**/*.txt
+            ${{ runner.temp }}/microg-security/**/*.json
+            ${{ runner.temp }}/microg-security/**/*.png
+            ${{ runner.temp }}/microg-security/**/*.dmp
+            ${{ runner.temp }}/gesher-microg-security/**/*.log
+            ${{ runner.temp }}/gesher-microg-security/**/*.txt
+            ${{ runner.temp }}/gesher-microg-security/**/*.json
+            ${{ runner.temp }}/gesher-microg-security/**/*.png
+            ${{ runner.temp }}/gesher-microg-security/**/*.dmp
             microg-security-results.txt
             results.txt
 
