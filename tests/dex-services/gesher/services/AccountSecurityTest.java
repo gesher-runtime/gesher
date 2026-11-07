@@ -377,6 +377,46 @@ public final class AccountSecurityTest {
         System.out.println("AccountSecurityTest: loaded native protect/unprotect reject non-server role without plaintext fallback");
     }
 
+    private static void standinStorage() throws Exception {
+        String previous = System.getenv("ANDROID_DATA");
+        File temporary = Files.createTempDirectory("gesher-standin-accounts-").toFile();
+        File system = new File(temporary, "system");
+        require(system.mkdir(), "Cannot create fixture system directory");
+        File sealed = new File(system, "accounts.sealed"), legacy = new File(system, "accounts");
+        byte[] protectedMarker = {71, 65, 67, 50, 7, 11, 13};
+        byte[] legacyMarker = "count=1\nfixture-only=original\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Files.write(sealed.toPath(), protectedMarker);
+        Files.write(legacy.toPath(), legacyMarker);
+        try {
+            android.system.Os.setenv("ANDROID_DATA", temporary.getAbsolutePath(), true);
+            Class<?> service = Class.forName("com.gesher.server.AccountManagerService");
+            Class<?> pm = Class.forName("com.gesher.server.PackageManagerService");
+            Class<?> am = Class.forName("com.gesher.server.ActivityManagerService");
+            Object packages = pm.getConstructor(java.util.Collection.class).newInstance(Collections.emptyList());
+            Object manager = construct(service, new Class<?>[] {am, pm, boolean.class}, null, packages, false);
+            @SuppressWarnings("unchecked") Map<Account, Object> accounts = (Map<Account, Object>)field(manager, "mAccounts");
+            require(accounts.size() == 1, "Stand-in loaded persisted accounts instead of the synthetic fallback");
+            method(service, "beginMutation").invoke(manager);
+            method(service, "save").invoke(manager);
+            require(java.util.Arrays.equals(Files.readAllBytes(sealed.toPath()), protectedMarker),
+                    "Stand-in overwrote the device's protected account record");
+            require(java.util.Arrays.equals(Files.readAllBytes(legacy.toPath()), legacyMarker),
+                    "Stand-in imported or changed legacy device accounts");
+            try {
+                service.getConstructor(am, pm).newInstance(null, packages);
+                throw new AssertionError("Persistent service accepted an invalid protected account record");
+            } catch (InvocationTargetException expected) {
+                require(expected.getCause() instanceof IllegalStateException, "Unexpected persistent-store rejection");
+            }
+        } finally {
+            if (previous == null) android.system.Os.unsetenv("ANDROID_DATA");
+            else android.system.Os.setenv("ANDROID_DATA", previous, true);
+            Files.delete(sealed.toPath()); Files.delete(legacy.toPath());
+            Files.delete(system.toPath()); Files.delete(temporary.toPath());
+        }
+        System.out.println("AccountSecurityTest: stand-in accounts ignore and preserve device records; persistent service remains fail-closed");
+    }
+
     public static void main(String[] args) throws Exception {
         System.loadLibrary("android_runtime");
         if (args.length > 0 && args[0].equals("grant-probe")) {
@@ -392,6 +432,7 @@ public final class AccountSecurityTest {
         else if (args.length > 0 && args[0].equals("authenticator-client")) authenticatorClient(args);
         else if (args.length > 0 && args[0].equals("remote-denied")) remoteDenied(args);
         else if (args.length > 0 && args[0].equals("crypto-denied")) cryptoDenied();
+        else if (args.length > 0 && args[0].equals("standin-storage")) standinStorage();
         else policy();
         System.out.println("AccountSecurityTest all passed");
     }

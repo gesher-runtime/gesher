@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <set>
 #include <vector>
 
 #include "tls.h"
@@ -512,22 +513,15 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
   }
   if (exec.empty()) return true;
 
-  // Unwind coverage can be partial: Android libraries may combine code built
-  // with and without unwind tables. FDEs provide instruction-boundary anchors,
-  // not proof that the rest of an executable section contains no code.
-  std::vector<Region> unwind;
-  std::vector<uint64_t> anchors;
-  if (eh_frame_hdr != nullptr && RegionsFromEhFrameHdr(eh_frame_hdr, load_bias, &unwind)) {
+  // Unwind coverage can be partial, but executable sections also contain data
+  // (OpenSSL's assembly tables, for example). Never sweep gaps between FDEs as
+  // instructions. Function symbols and direct control-flow edges supply roots
+  // for decoding code without unwind metadata.
+  std::vector<Region> regions, sections;
+  std::vector<uint64_t> roots;
+  if (eh_frame_hdr != nullptr && RegionsFromEhFrameHdr(eh_frame_hdr, load_bias, &regions))
     stats->used_fdes = true;
-    for (const Region& r : unwind) {
-      anchors.push_back(r.start);
-      anchors.push_back(r.end);
-    }
-  }
-  // Prefer actual executable sections over PF_X segments, which can also
-  // contain ELF headers and read-only data. Use the old segment fallback only
-  // when neither section metadata nor unwind ranges are available.
-  std::vector<Region> regions;
+  if (ehdr->e_entry != 0) roots.push_back(ehdr->e_entry);
   if (ehdr->e_shoff != 0 && ehdr->e_shentsize == sizeof(Elf64_Shdr) &&
       ehdr->e_shoff <= file_size &&
       uint64_t{ehdr->e_shnum} * sizeof(Elf64_Shdr) <= file_size - ehdr->e_shoff) {
@@ -536,11 +530,22 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
       if (shdr[i].sh_type == SHT_PROGBITS && (shdr[i].sh_flags & SHF_EXECINSTR) &&
           (shdr[i].sh_flags & SHF_ALLOC) && shdr[i].sh_size > 0 &&
           shdr[i].sh_addr <= UINT64_MAX - shdr[i].sh_size) {
-        regions.push_back({shdr[i].sh_addr, shdr[i].sh_addr + shdr[i].sh_size});
+        sections.push_back({shdr[i].sh_addr, shdr[i].sh_addr + shdr[i].sh_size});
+      }
+      if ((shdr[i].sh_type == SHT_SYMTAB || shdr[i].sh_type == SHT_DYNSYM) &&
+          shdr[i].sh_entsize == sizeof(Elf64_Sym) && shdr[i].sh_offset <= file_size &&
+          shdr[i].sh_size <= file_size - shdr[i].sh_offset) {
+        const auto* symbols = reinterpret_cast<const Elf64_Sym*>(file + shdr[i].sh_offset);
+        for (size_t j = 0; j < shdr[i].sh_size / sizeof(Elf64_Sym); j++) {
+          if (ELF64_ST_TYPE(symbols[j].st_info) == STT_FUNC && symbols[j].st_shndx != SHN_UNDEF)
+            roots.push_back(symbols[j].st_value);
+        }
       }
     }
   }
-  if (regions.empty()) regions = unwind.empty() ? exec : unwind;
+  if (sections.empty()) sections = exec;
+  // Preserve the historical fallback for objects with no usable code metadata.
+  if (regions.empty() && roots.empty()) regions = sections;
   // Clip to the executable segments, sort and merge.
   std::vector<Region> code;
   for (const Region& r : regions) {
@@ -559,17 +564,58 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
       coverage.push_back(r);
     }
   }
-  std::sort(anchors.begin(), anchors.end());
-  anchors.erase(std::unique(anchors.begin(), anchors.end()), anchors.end());
-  std::vector<Region> merged;
+  auto covered = [&](uint64_t address) {
+    auto at = std::upper_bound(coverage.begin(), coverage.end(), address,
+        [](uint64_t value, const Region& r) { return value < r.start; });
+    return at != coverage.begin() && address < std::prev(at)->end;
+  };
+  auto limit = [&](uint64_t address) -> uint64_t {
+    for (const Region& s : sections) for (const Region& e : exec)
+      if (address >= std::max(s.start, e.start) && address < std::min(s.end, e.end))
+        return std::min(s.end, e.end);
+    return address;
+  };
+  auto branch = [&](uint64_t address, const X86Insn& in) {
+    bool relative = !in.vex && ((in.map == 0 &&
+        (in.opcode == 0xE8 || in.opcode == 0xE9 || in.opcode == 0xEB ||
+         (in.opcode >= 0x70 && in.opcode <= 0x7F) || (in.opcode >= 0xE0 && in.opcode <= 0xE3))) ||
+        (in.map == 1 && in.opcode >= 0x80 && in.opcode <= 0x8F));
+    if (!relative || (in.imm_size != 1 && in.imm_size != 4)) return;
+    const uint8_t* immediate = load_bias + address + in.length - in.imm_size;
+    int32_t delta;
+    if (in.imm_size == 1) delta = static_cast<int8_t>(*immediate);
+    else std::memcpy(&delta, immediate, sizeof delta);
+    uint64_t target = address + in.length + delta;
+    if (!covered(target) && limit(target) > target) roots.push_back(target);
+  };
+  // Find references to uncovered code before any instruction bytes change.
   for (const Region& r : coverage) {
-    uint64_t start = r.start;
-    for (auto at = std::upper_bound(anchors.begin(), anchors.end(), start);
-         at != anchors.end() && *at < r.end; ++at) {
-      merged.push_back({start, *at});
-      start = *at;
+    for (uint64_t address = r.start; address < r.end;) {
+      X86Insn in;
+      if (!DecodeX86(load_bias + address, static_cast<size_t>(r.end - address), &in)) { ++address; continue; }
+      branch(address, in);
+      address += in.length;
     }
-    merged.push_back({start, r.end});
+  }
+  std::vector<Region> merged = coverage;
+  std::set<uint64_t> visited;
+  for (size_t next = 0; next < roots.size(); next++) {
+    uint64_t address = roots[next], end = limit(address);
+    while (address < end && !covered(address) && visited.insert(address).second) {
+      X86Insn in;
+      if (!DecodeX86(load_bias + address, static_cast<size_t>(end - address), &in)) break;
+      merged.push_back({address, address + in.length});
+      branch(address, in);
+      // Do not decode inline data after returns, unconditional jumps, padding
+      // traps or indirect jumps. Conditional edges retain their fallthrough.
+      bool stop = !in.vex && ((in.map == 0 &&
+          (in.opcode == 0xC3 || in.opcode == 0xC2 || in.opcode == 0xCB || in.opcode == 0xCA ||
+           in.opcode == 0xE9 || in.opcode == 0xEB || in.opcode == 0xCC ||
+           (in.opcode == 0xFF && (in.reg() & 7) >= 4 && (in.reg() & 7) <= 5))) ||
+          (in.map == 1 && in.opcode == 0x0B));
+      if (stop) break;
+      address += in.length;
+    }
   }
 
   int32_t slot = 0;  // the TEB offset of the thread-pointer slot, on demand

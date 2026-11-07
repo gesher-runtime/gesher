@@ -13,6 +13,12 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 function AndroidPath([string] $path) { (($path -replace '\\','/') -replace '^[A-Za-z]:','') }
 function Existing([string] $path) { (Resolve-Path -LiteralPath $path -ErrorAction Stop).Path }
+function FileSha256([string] $path) {
+    $stream = [IO.File]::OpenRead($path)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try { ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
+    finally { $algorithm.Dispose(); $stream.Dispose() }
+}
 function QuoteArgument([string] $value) {
     $escaped = [regex]::Replace($value, '(\\*)"', '$1$1\"')
     $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
@@ -90,10 +96,10 @@ foreach ($mode in 'inputs','client','select','cancel','add','noadd','timer-cance
 $receipt = [pscustomobject]@{
     Scope='Synthetic JNI/Win32 dialogs on private never-switched desktops; no accounts or app jar loaded'
     Locales=$Locales
-    NativeSha256=(Get-FileHash -LiteralPath $NativeExe -Algorithm SHA256).Hash.ToLowerInvariant()
-    HelperSha256=(Get-FileHash -LiteralPath $HelperPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    ControllerSha256=(Get-FileHash -LiteralPath $TestExe -Algorithm SHA256).Hash.ToLowerInvariant()
-    TestDexSha256=(Get-FileHash -LiteralPath $TestDex -Algorithm SHA256).Hash.ToLowerInvariant()
+    NativeSha256=FileSha256 $NativeExe
+    HelperSha256=FileSha256 $HelperPath
+    ControllerSha256=FileSha256 $TestExe
+    TestDexSha256=FileSha256 $TestDex
     Results=$results
 }
 $receipt | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $run 'validation.json') -Encoding UTF8

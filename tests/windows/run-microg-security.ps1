@@ -367,6 +367,7 @@ try {
     Guest 'IdentitySecurityTest' @('uid-write', $durableUids) 'IdentitySecurityTest all passed' 'uid-write'
     Guest 'IdentitySecurityTest' @('uid-read', $durableUids) 'existing UID registry reopened without reassignment' 'uid-read'
     Guest 'AccountSecurityTest' @()
+    Guest 'AccountSecurityTest' @('standin-storage') 'AccountSecurityTest all passed' 'standin-account-isolation'
     Guest 'AccountSecurityTest' @('authenticator-client', (AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountSecurityTest all passed' 'authenticator-client-delegation'
     Guest 'AccountChooserTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountChooserTest all passed:'
     Guest 'AccountVisibilityNotificationTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountVisibilityNotificationTest all passed:'
@@ -394,7 +395,10 @@ try {
     Guest 'SystemBindingCleanupTest' @((AndroidPath $DevsvcApk))
     Guest 'JobSecurityTest' @((AndroidPath $ProbeApk), (AndroidPath $DevsvcApk))
     Guest 'ContentSecurityTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk))
-    $metadata = if ($GmsCoreApk) { @(AndroidPath $GmsCoreApk) } else { @() }
+    # An if-expression enumerates @() into $null. Adding that to VM arguments
+    # supplies an empty argv entry, which the guest parser treats as an APK path.
+    $metadata = @()
+    if ($GmsCoreApk) { $metadata = @(AndroidPath $GmsCoreApk) }
     Guest 'PermissionsTest' $metadata
     foreach ($mode in '0', '1') {
         $env:GESHER_MICROG_SPOOF = $mode

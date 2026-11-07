@@ -346,9 +346,17 @@ public final class ActivityManagerService extends IActivityManager.Default {
     int sendBroadcastFor(String packageName, Intent intent, String resolvedType,
             String requiredPermission, java.util.function.BooleanSupplier lifetime) {
         if (!lifetime.getAsBoolean()) return ActivityManager.START_CANCELED;
-        return mBroadcasts.broadcastIntent(intent, resolvedType, packageName,
+        // This is server-owned dispatch, including calls made while serving an app's
+        // Binder transaction (locale changes). Authenticate the external call at its
+        // entry point, then dispatch under the server's actual PID and UID.
+        long identity = Binder.clearCallingIdentity();
+        try {
+            return mBroadcasts.broadcastIntent(intent, resolvedType, packageName,
                 android.os.Process.myPid(), requiredPermission == null ? null : new String[]{requiredPermission},
                 null, null, lifetime);
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
     }
 
     int startActivityFor(String packageName, Intent intent, String resolvedType) {

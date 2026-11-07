@@ -183,6 +183,10 @@ public final class AccountManagerService extends IAccountManager.Default {
     });
 
     public AccountManagerService(ActivityManagerService am, PackageManagerService pm) {
+        this(am, pm, true);
+    }
+
+    AccountManagerService(ActivityManagerService am, PackageManagerService pm, boolean persistent) {
         mAm = am;
         mPm = pm;
         mCallers = am != null ? am.callers() : new CallerIdentity(pm, null);
@@ -191,7 +195,8 @@ public final class AccountManagerService extends IAccountManager.Default {
             dummy.password = "dummy_password";
             mAccounts.put(DEFAULT_ACCOUNT, dummy);
         }
-        load();
+        if (persistent) load();
+        else mStoreWriter = values -> { /* Stand-in accounts live only in this process. */ };
         if (am != null) am.setAccountManager(this);
         pm.onPackageRemovalCheck(this::checkPackageRemoval);
         pm.onPackageRemoval(this::packageRemoved);

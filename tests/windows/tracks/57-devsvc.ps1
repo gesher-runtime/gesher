@@ -141,7 +141,7 @@ $problems = @()
 if (-not $receiverPid) { $problems += 'the RTC_WAKEUP alarm''s receiver did not run' }
 elseif ($receiverPid -eq $activityPid) { $problems += "the receiver ran in the activity's process ($activityPid)" }
 if (-not $out.Contains("gesher-app: the process of $devsvcPkg ended")) { $problems += 'the activity''s process did not end first' }
-if (-not $server.Contains("starting a process for $devsvcPkg (broadcast to com.gesher.devsvc.AlarmReceiver)")) { $problems += 'the system server did not start a process for the alarm' }
+if (-not $server.Contains("starting a process for $devsvcPkg (broadcast to $devsvcPkg)")) { $problems += 'the system server did not start a process for the alarm' }
 if (-not $server.Contains('alarm: firing RTC_WAKEUP alarm of com.gesher.devsvc')) { $problems += 'no RTC_WAKEUP alarm fired' }
 DevsvcCheck 'devsvc: alarms: with the app''s process ended, an exact RTC_WAKEUP alarm starts a process for its manifest receiver (PendingIntent broadcast)' $problems ($log + "`n--- system server`n" + $server)
 $problems = @()
@@ -211,7 +211,13 @@ foreach ($want in 'account: authenticator listed true', 'account: authenticator 
 }
 if (-not ($log -match 'account: authenticator adds \S+: true, caller uid true')) { $problems += 'the authenticator did not add the account' }
 if ($log.Contains('account: failed')) { $problems += 'the activity failed' }
-if (-not (Test-Path (Join-Path $root 'data/system/accounts'))) { $problems += 'the accounts were not saved' }
+$sealedAccounts = Join-Path $root 'data/system/accounts.sealed'
+if (-not (Test-Path -LiteralPath $sealedAccounts)) { $problems += 'the protected accounts were not saved' }
+elseif ([IO.File]::ReadAllBytes($sealedAccounts).Length -le 4 -or
+        [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($sealedAccounts), 0, 4) -ne 'GAC2') {
+  $problems += 'the protected account record has no authenticated-store header'
+}
+if (Test-Path (Join-Path $root 'data/system/accounts')) { $problems += 'legacy plaintext account storage was created' }
 if (-not $done) { $problems += 'the activity did not finish its checks' }
 if ($code -ne 0) { $problems += "launch exit $code" }
 DevsvcCheck 'devsvc: accounts: addAccount goes to the app''s authenticator (getAuthenticatorTypes lists it), which adds the account; password and user data read back and are saved; hasFeatures and getAccountsByTypeAndFeatures ask the authenticator; removeAccountExplicitly removes it' $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'accounts' | Out-String))

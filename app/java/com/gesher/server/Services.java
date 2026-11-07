@@ -75,6 +75,15 @@ public final class Services {
 
     /** The services, by name, for the given packages. */
     public static Map<String, IBinder> create(Collection<ApkPackage> packages) {
+        return create(packages, true);
+    }
+
+    /** Stand-in services share no persistent account state with the real device. */
+    public static Map<String, IBinder> createInProcess(Collection<ApkPackage> packages) {
+        return create(packages, false);
+    }
+
+    private static Map<String, IBinder> create(Collection<ApkPackage> packages, boolean persistentAccounts) {
         Map<String, IBinder> services = new LinkedHashMap<>();
         PackageManagerService pm = new PackageManagerService(packages);
         ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
@@ -172,7 +181,7 @@ public final class Services {
         services.put(Context.CONNECTIVITY_SERVICE, new ConnectivityService(pm, atm));  // docs/network.md
         // Accounts: a dummy Google account (microG / GMS compat) and apps' own, through
         // their authenticators.
-        AccountManagerService accounts = new AccountManagerService(am, pm);
+        AccountManagerService accounts = new AccountManagerService(am, pm, persistentAccounts);
         services.put(Context.ACCOUNT_SERVICE, StandIn.of(android.accounts.IAccountManager.class,
                 accounts).asBinder());
         sync.start(accounts::syncableAccounts, accounts::canAccessAccount);

@@ -158,7 +158,7 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
   'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-  'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, dropbox, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_session, mount, notification, package, permissionmgr, phone, power, restrictions, search, sensitive_content_protection_service, shortcut, telephony.registry, thermalservice, trust, uimode, uri_grants, usagestats, user, vibrator_manager, window',
+    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, dropbox, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_session, mount, notification, package, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, telephony.registry, thermalservice, trust, uimode, uri_grants, usagestats, user, vibrator_manager, window',
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 
@@ -366,10 +366,10 @@ $null = CheckSequences 'services: system_server drives components.apk: NewIntent
     "${s}scheduleBindService com.gesher.components/.LocalService", "${s}publishService com.gesher.components/.LocalService",
     "${s}scheduleUnbindService com.gesher.components/.LocalService",
     "${s}notification channel gesher created for com.gesher.components",
-    "${s}notification 7 posted for com.gesher.components: channel gesher, title `"Gesher foreground service`"",
+    "${s}notification 7 posted for com.gesher.components: channel gesher (importance 2, a toast of Gesher.App.com.gesher.components)",
     "${s}registerReceiver from com.gesher.components: com.gesher.components.PING",
     "${s}scheduleReceiver com.gesher.components/com.gesher.components.ManifestReceiver",
-    "${s}settings: system gesher_test = 7", "${s}scheduleExit: process ")
+    "${s}settings: updated system key gesher_test", "${s}scheduleExit: process ")
 )
 foreach ($p in $server, $servicemanager, $binderd) {
   if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
@@ -378,7 +378,7 @@ Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
 $missing = @(
   'system_server: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-  'system_server: registered package, activity, activity_task, window, display, user, input, audio, media_session, content, input_method, notification, uimode, mount',
+  'system_server: registered uri_grants, package, activity, activity_task, window, display, user, restrictions, blob_store, rollback, input, audio, media_session, content, input_method, notification, uimode, mount',
   'system_server: finishing com.gesher.lifecycle/com.gesher.lifecycle.LifecycleActivity (app-request)'
 ) | Where-Object { -not $serverOut.Contains($_) }
 if (-not $missing) {

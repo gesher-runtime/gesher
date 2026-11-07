@@ -9,6 +9,8 @@ extern uintptr_t gap_guard_rax(void);
 extern uintptr_t gap_guard_rcx(void);
 extern uintptr_t gap_guard_r8(void);
 extern int gap_guard_preserves_carry(void);
+extern uintptr_t gap_guard_hidden(void);
+extern const volatile unsigned char gap_fs_like_table[];
 
 __asm__(
     ".text\n"
@@ -23,7 +25,15 @@ __asm__(
     ".size gap_guard_r8,.-gap_guard_r8\n"
     ".global gap_guard_preserves_carry\n.type gap_guard_preserves_carry,@function\n"
     "gap_guard_preserves_carry:\nstc\nmovq %fs:0x28,%rdx\nsetc %al\nmovzbl %al,%eax\nret\n"
-    ".size gap_guard_preserves_carry,.-gap_guard_preserves_carry\n");
+    ".size gap_guard_preserves_carry,.-gap_guard_preserves_carry\n"
+    ".global gap_guard_hidden\n.hidden gap_guard_hidden\n.type gap_guard_hidden,@function\n"
+    "gap_guard_hidden:\nmovq %fs:0x28,%r10\nmovq %r10,%rax\nret\n"
+    ".size gap_guard_hidden,.-gap_guard_hidden\n"
+    // OpenSSL has lookup tables in executable sections. These are data,
+    // even though the bytes also encode a perfectly valid FS instruction.
+    ".p2align 4\n.global gap_fs_like_table\n.type gap_fs_like_table,@object\n"
+    "gap_fs_like_table:\n.byte 0x64,0x48,0x8b,0x04,0x25,0x28,0,0,0,0xc3\n"
+    ".size gap_fs_like_table,.-gap_fs_like_table\n");
 
 __attribute__((noinline)) static uintptr_t covered_guard(void) {
     uintptr_t guard;
@@ -52,6 +62,12 @@ int gesher_selftest(void) {
     check("uncovered RCX", gap_guard_rcx() == guard);
     check("uncovered extended register", gap_guard_r8() == guard);
     check("MOV preserves flags", gap_guard_preserves_carry() == 1);
+    check("hidden uncovered function reached by direct call", gap_guard_hidden() == guard);
+    static const unsigned char expected[] = {0x64,0x48,0x8b,0x04,0x25,0x28,0,0,0,0xc3};
+    int intact = 1;
+    for (unsigned i = 0; i < sizeof expected; ++i)
+        if (gap_fs_like_table[i] != expected[i]) intact = 0;
+    check("FS-like executable data is unchanged", intact);
     pthread_t thread;
     int rc = pthread_create(&thread, NULL, worker, (void*)guard);
     check("thread creation", rc == 0);

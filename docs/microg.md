@@ -7,6 +7,10 @@ checks on application Binder callers. It remains an experimental, single-user
 Windows runtime. Android API checks do not provide an operating-system sandbox
 for arbitrary APK or native code.
 
+Single-process stand-in services keep account changes in memory for that
+process. They neither open nor migrate the device's protected or legacy account
+records. Persistent account storage remains restricted to the system server.
+
 The initial integration passed 36 offline/integration checks and real FCM delivery
 to a terminated client, including after microG crashed and automatically
 reconnected. Later trials established manual Google-account sign-in, real Gmail
