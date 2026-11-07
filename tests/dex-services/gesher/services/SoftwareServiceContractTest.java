@@ -139,10 +139,35 @@ public final class SoftwareServiceContractTest {
         require(shortcuts.getShortcuts(packageName, 15, 0).getList().isEmpty(), "fake shortcuts");
         require(shortcuts.getShareTargets(packageName, new IntentFilter(Intent.ACTION_SEND), 0)
                 .getList().isEmpty(), "fake share targets");
-        try {
-            shortcuts.setDynamicShortcuts(packageName, ParceledListSlice.emptyList(), 0);
-            throw new AssertionError("unsupported publishing reported success/throttling");
-        } catch (UnsupportedOperationException expected) { }
+        require(shortcuts.setDynamicShortcuts(packageName, ParceledListSlice.emptyList(), 0),
+                "dynamic shortcut publishing should succeed as a no-op");
+        ParceledListSlice<ShortcutInfo> published = new ParceledListSlice<>(Collections.singletonList(shortcut));
+        require(shortcuts.setDynamicShortcuts(packageName, published, 0), "nonempty shortcut set threw or failed");
+        require(shortcuts.addDynamicShortcuts(packageName, published, 0), "nonempty shortcut add threw or failed");
+        require(shortcuts.updateShortcuts(packageName, published, 0), "nonempty shortcut update threw or failed");
+        shortcuts.pushDynamicShortcut(packageName, shortcut, 0);
+        require(shortcuts.getShortcuts(packageName, 15, 0).getList().isEmpty()
+                && !shortcuts.isRequestPinItemSupported(0, 1), "no-op publishing invented desktop/pin state");
+        Action[] malformed = {
+                () -> shortcuts.setDynamicShortcuts(packageName, null, 0),
+                () -> shortcuts.addDynamicShortcuts(packageName, null, 0),
+                () -> shortcuts.updateShortcuts(packageName, null, 0),
+                () -> shortcuts.pushDynamicShortcut(packageName, null, 0)};
+        for (Action call : malformed) {
+            try { call.run(); throw new AssertionError("null shortcut payload accepted"); }
+            catch (NullPointerException expected) { }
+        }
+        Action[] unknown = {
+                () -> shortcuts.setDynamicShortcuts("missing.package", published, 0),
+                () -> shortcuts.addDynamicShortcuts(packageName, published, 10),
+                () -> shortcuts.updateShortcuts("missing.package", published, 0),
+                () -> shortcuts.pushDynamicShortcut(packageName, shortcut, 10)};
+        for (Action call : unknown) {
+            try { call.run(); throw new AssertionError("shortcut publication accepted unknown package/user"); }
+            catch (IllegalArgumentException expected) { }
+        }
+        denied(shortcuts::resetThrottling, "shortcut throttling administration");
+        denied(() -> shortcuts.getBackupPayload(0), "shortcut backup administration");
         try {
             shortcuts.getShortcuts("missing.package", 15, 0);
             throw new AssertionError("shortcut query accepted an unknown package");
