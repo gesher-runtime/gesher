@@ -3,9 +3,11 @@
 `tools/package/gesher.iss` (Inno Setup 6) is built and tested by the
 `package` job in `.github/workflows/ci.yml`. It installs per user, without
 administrator rights, into `%LOCALAPPDATA%\Programs\Gesher`, puts `gesher`
-and `gesher-app` on the user's `PATH`, adds Start menu entries, and
-associates `.apk` files with gesher-app. Apps installed with gesher-app get
-Start menu shortcuts of their own ([below](#installed-apps-in-the-start-menu)).
+and `gesher-app` on the user's `PATH`, adds Start menu entries (including the
+Gesher Control Center), offers optional 1-click Google Play services (microG)
+and Aurora Store installation, and associates `.apk`, `.apks` and `.xapk` files
+with gesher-app. Apps installed with gesher-app get Start menu shortcuts of
+their own ([below](#installed-apps-in-the-start-menu)).
 
 Gesher's icon, `tools/package/gesher.ico` (a bridge, drawn by
 `tools/icons/make-icons.py`), is Setup's (`SetupIconFile`), Add/Remove

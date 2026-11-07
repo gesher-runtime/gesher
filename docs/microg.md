@@ -41,6 +41,10 @@ replacing or removing addon files:
 
 ```powershell
 gesher-app shutdown
+# Automatic 1-click download and staging (or select the checkbox in the Windows Installer or Gesher Control Center):
+& "$env:LOCALAPPDATA/Programs/Gesher/gesher-app-microg.ps1" -AutoDownload -InstallStore
+
+# Or specify downloaded official APK files manually:
 & "$env:LOCALAPPDATA/Programs/Gesher/gesher-app-microg.ps1" `
     -GmsCoreApk 'C:/path/to/com.google.android.gms.apk' `
     -CompanionApk 'C:/path/to/com.android.vending.apk' `
