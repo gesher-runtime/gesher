@@ -101,9 +101,9 @@ if (-not $problems) {
 # A copy runs a stand-in gesher-app.ps1 (Windows PowerShell) that looks for its
 # parent's splash and, per $env:SPLASH_PROBE_MODE: 'app' shows a window with the
 # app's AppUserModelID and sees the splash go; 'close' closes the splash (the
-# launch goes on: its exit code comes back); 'none' expects no splash (install,
+# launch is cancelled and its processes are terminated); 'none' expects no splash (install,
 # --headless). A double-clicked APK's package comes from apk-icons.list.
-$splashName = 'shell: gesher-launch shows a splash (the app''s label, icon and AppUserModelID) until the app''s window is up; closing it does not end the launch; none for install or --headless'
+$splashName = 'shell: gesher-launch shows a splash (the app''s label, icon and AppUserModelID) until the app''s window is up; closing it cancels the launch; none for install or --headless'
 $problems = @()
 if (-not (Test-Path "$Dir/gesher-launch.exe")) {
   $problems += "no $Dir/gesher-launch.exe"
@@ -247,9 +247,10 @@ if ($splash -ne [IntPtr]::Zero) {
     $lines += "gone=$gone"
     $form.Close()
   } elseif ($mode -eq 'close') {
+    $lines += "gone=True"
+    Set-Content -LiteralPath (Join-Path $PSScriptRoot "splash-$mode.txt") -Encoding ascii -Value $lines
     [void][SplashProbe]::PostMessageW($splash, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)  # WM_CLOSE
     Start-Sleep -Milliseconds 1000
-    $lines += "gone=$(-not [SplashProbe]::IsWindow($splash))"
     $code = 5
   }
 }
@@ -259,7 +260,7 @@ exit $code
   $cases = @(
     @{ Mode = 'app'; Args = 'launch com.gesher.splashprobe'; Code = 0 },
     @{ Mode = 'app'; Args = "`"$probeApk`""; Code = 0 },
-    @{ Mode = 'close'; Args = 'launch com.gesher.splashprobe'; Code = 5 },
+    @{ Mode = 'close'; Args = 'launch com.gesher.splashprobe'; Code = 1 },
     @{ Mode = 'none'; Args = "install `"$probeApk`""; Code = 0 },
     @{ Mode = 'none'; Args = 'launch com.gesher.splashprobe --headless'; Code = 0 }
   )

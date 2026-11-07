@@ -69,17 +69,17 @@ splash window (class `GesherSplash`) right after it starts `gesher-app.ps1`:
   ID. It looks every 200 ms. It also goes when `gesher-app.ps1` ends (the
   launch failed, or the app ended without a window) and after 2 minutes. If
   it still has the foreground when the app's window is up, it hands it on to
-  that window; it never takes it from the app. Closing it (its X) only closes
-  it: gesher-launch goes on waiting for the launch, and its exit code is
-  still `gesher-app.ps1`'s.
+  that window; it never takes it from the app. Closing it (its X) cancels the
+  launch: gesher-launch terminates the starting processes and exits, so the app
+  does not open.
 
 CI: `tests/windows/tracks/55-shell.ps1` runs a copy of gesher-launch with a
 stand-in `gesher-app.ps1` and a stand-in `%LOCALAPPDATA%` (a shortcut record
 with an escaped label, an icon, an `apk-icons.list` line): `launch <package>`
 and a double-clicked APK show the splash with the label, icon and
 AppUserModelID, it stays while no app window is up and goes once a window with
-the app's AppUserModelID is shown; closing it leaves the launch running (its
-exit code comes back); `install` and `--headless` show none. The package job
+the app's AppUserModelID is shown; closing it cancels the launch; `install` and
+`--headless` show none. The package job
 runs the installed `gesher-launch install uiapp.apk` (no splash) and
 `gesher-launch launch com.gesher.uiapp` with its window shown: the splash,
 with `Gesher UI` and `Gesher.App.com.gesher.uiapp`, is gone within 5 s of the
