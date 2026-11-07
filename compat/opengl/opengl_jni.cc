@@ -92,17 +92,12 @@ std::vector<EGLint> ToEglInt(const EGLAttrib* attribs) {
 extern "C" {
 
 EGLBoolean EGLAPIENTRY eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
-  static auto swap = Angle<decltype(&::eglSwapBuffers)>("eglSwapBuffers");
-  gesher_egl_before_swap(dpy, surface);
-  return swap(dpy, surface);
+  return eglSwapBuffersWithDamageKHR(dpy, surface, nullptr, 0);
 }
 
 EGLBoolean EGLAPIENTRY eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurface surface,
                                                    const EGLint* rects, EGLint n_rects) {
-  static auto swap =
-      Angle<decltype(&::eglSwapBuffersWithDamageEXT)>("eglSwapBuffersWithDamageEXT");
-  gesher_egl_before_swap(dpy, surface);
-  return swap(dpy, surface, rects, n_rects);
+  return eglSwapBuffersWithDamageKHR(dpy, surface, rects, n_rects);
 }
 
 EGLDisplay EGLAPIENTRY eglGetPlatformDisplay(EGLenum platform, void* native_display,

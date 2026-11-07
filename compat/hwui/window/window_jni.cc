@@ -99,6 +99,11 @@ void JNICALL NativeWindow_setClientSize(JNIEnv*, jclass, jlong ptr, jint width, 
   Get(ptr)->window()->SetClientSize(width, height);
 }
 
+void JNICALL NativeWindow_setSurfaceInsets(JNIEnv*, jclass, jlong ptr, jint left, jint top,
+                                           jint right, jint bottom) {
+  Get(ptr)->SetSurfaceInsets(left, top, right, bottom);
+}
+
 void JNICALL NativeWindow_setMinClientSize(JNIEnv*, jclass, jlong ptr, jint width,
                                            jint height) {
   Get(ptr)->window()->SetMinClientSize(width, height);
@@ -306,6 +311,7 @@ const JNINativeMethod kMethods[] = {
     {"nSetClientSize", "(JII)V", reinterpret_cast<void*>(&NativeWindow_setClientSize)},
     {"nSetMinClientSize", "(JII)V", reinterpret_cast<void*>(&NativeWindow_setMinClientSize)},
     {"nTagSurfaceControl", "(JJ)V", reinterpret_cast<void*>(&NativeWindow_tagSurfaceControl)},
+    {"nSetSurfaceInsets", "(JIIII)V", reinterpret_cast<void*>(&NativeWindow_setSurfaceInsets)},
     {"nGetEventFd", "(J)I", reinterpret_cast<void*>(&NativeWindow_getEventFd)},
     {"nPollEvent", "(J[D)I", reinterpret_cast<void*>(&NativeWindow_pollEvent)},
     {"nSetIcon", "(JLjava/lang/String;)Z", reinterpret_cast<void*>(&NativeWindow_setIcon)},

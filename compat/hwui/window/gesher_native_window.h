@@ -43,6 +43,9 @@ int gesher_window_translucent(ANativeWindow* window);
 
 /* The window's client area in pixels (0 x 0 when not a Gesher window). */
 void gesher_window_client_size(ANativeWindow* window, int32_t* width, int32_t* height);
+/* Android buffer extent including surface shadow insets, and whether it has padding. */
+void gesher_window_buffer_size(ANativeWindow* window, int32_t* width, int32_t* height);
+int gesher_window_has_surface_insets(ANativeWindow* window);
 
 /* Presents a frame drawn elsewhere: premultiplied 0xAARRGGBB, rows top-down,
  * width x height (the SkiaGL pipeline's read-back of a translucent popup). */

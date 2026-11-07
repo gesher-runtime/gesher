@@ -586,6 +586,7 @@ public final class WindowSession extends IWindowSession.Stub {
     /** Creates or resizes the window's Win32 window; true when it was created. */
     private boolean ensureNativeWindow(AppWindow w, int width, int height) {
         if (w.nativeWindow != null) {
+            syncSurfaceInsets(w);
             // A window the user resizes keeps the user's size: a relayout computed for an
             // earlier size is followed by the resize still queued (applyResize).
             if (!w.resizable && !w.popup && (w.nativeWindow.getWidth() != width
@@ -606,6 +607,7 @@ public final class WindowSession extends IWindowSession.Stub {
         int[] min = w.resizable ? minimumSize(w.attrs) : null;
         if (min != null) nw.setMinClientSize(min[0], min[1]);
         w.nativeWindow = nw;
+        syncSurfaceInsets(w);
         Looper looper = Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper();
         w.handler = new Handler(looper);
         String icon = appIcon(w.attrs.packageName);
@@ -624,6 +626,14 @@ public final class WindowSession extends IWindowSession.Stub {
             listenForEvents(w);
         }
         return true;
+    }
+
+    private static void syncSurfaceInsets(AppWindow w) {
+        // Popups already expose the complete shadow surface in their owned HWND.
+        // Top-level HWNDs expose only the content frame; crop its shadow padding.
+        Rect in = w.attrs.surfaceInsets;
+        w.nativeWindow.setSurfaceInsets(w.popup ? 0 : in.left, w.popup ? 0 : in.top,
+                w.popup ? 0 : in.right, w.popup ? 0 : in.bottom);
     }
 
     /**

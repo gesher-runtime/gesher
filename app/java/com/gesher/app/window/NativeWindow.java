@@ -133,6 +133,14 @@ public final class NativeWindow implements AutoCloseable {
     nSetClientSize(ptr(), width, height);
   }
 
+  /** Shadow padding around a top-level Android surface; excluded from Win32 client pixels. */
+  public void setSurfaceInsets(int left, int top, int right, int bottom) {
+    if (left < 0 || top < 0 || right < 0 || bottom < 0) {
+      throw new IllegalArgumentException("Negative surface insets");
+    }
+    nSetSurfaceInsets(ptr(), left, top, right, bottom);
+  }
+
   /**
    * The smallest client area (pixels) the user can resize the window to; 0 for no minimum on
    * that axis.
@@ -267,6 +275,7 @@ public final class NativeWindow implements AutoCloseable {
   private static native void nSetTitle(long ptr, String title);
   private static native void nSetResizable(long ptr, boolean resizable);
   private static native void nSetClientSize(long ptr, int width, int height);
+  private static native void nSetSurfaceInsets(long ptr, int left, int top, int right, int bottom);
   private static native void nSetMinClientSize(long ptr, int width, int height);
   private static native void nTagSurfaceControl(long ptr, long surfaceControl);
   private static native int nGetEventFd(long ptr);

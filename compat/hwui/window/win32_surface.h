@@ -35,6 +35,10 @@ class Win32Surface : public android::Surface {
   static Win32Surface* From(ANativeWindow* window);
 
   Window* window() const { return window_; }
+  void SetSurfaceInsets(int left, int top, int right, int bottom);
+  bool HasSurfaceInsets() const;
+  void BufferSize(int* width, int* height) const;
+  void PresentPixels(const uint32_t* argb, int width, int height);
 
   int lock(ANativeWindow_Buffer* out_buffer, ARect* in_out_dirty) override;
   int unlockAndPost() override;
@@ -75,6 +79,7 @@ class Win32Surface : public android::Surface {
   std::vector<android::sp<Buffer>> dequeued_;  // dequeued, not yet queued or cancelled
   int format_ = 1;  // PIXEL_FORMAT_RGBA_8888
   int user_width_ = 0, user_height_ = 0;
+  int inset_left_ = 0, inset_top_ = 0, inset_right_ = 0, inset_bottom_ = 0;
   bool locked_ = false;
   uint64_t frames_ = 0;
   // Debugging (GESHER_WINDOW_DEBUG): frames left to report after a size change.

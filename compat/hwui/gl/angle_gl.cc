@@ -121,7 +121,7 @@ LayeredSurface* LayeredOf(EGLSurface surface) {
 // The pbuffer for the window's size now (made again when it changed).
 EGLSurface LayeredPbuffer(EGLDisplay dpy, LayeredSurface* s) {
   int32_t w = 0, h = 0;
-  gesher_window_client_size(s->window, &w, &h);
+  gesher_window_buffer_size(s->window, &w, &h);
   if (w < 1) w = 1;
   if (h < 1) h = 1;
   if (s->pbuffer != EGL_NO_SURFACE && w == s->width && h == s->height) return s->pbuffer;
@@ -260,8 +260,9 @@ EGLSurface EGLAPIENTRY eglCreatePbufferSurface(EGLDisplay dpy, EGLConfig config,
 EGLSurface EGLAPIENTRY eglCreateWindowSurface(EGLDisplay dpy, EGLConfig config,
                                               EGLNativeWindowType window, const EGLint* attribs) {
   auto* anw = static_cast<ANativeWindow*>(window);
-  if (anw != nullptr && gesher_window_translucent(anw)) {
-    // A translucent popup (a layered window): a pbuffer read back at each swap.
+  if (anw != nullptr && (gesher_window_translucent(anw) || gesher_window_has_surface_insets(anw))) {
+    // Translucent popups and padded top-level surfaces use a read-back pbuffer.
+    // A top-level HWND shows only the content, excluding its Android shadow.
     auto* s = new LayeredSurface();
     s->config = config;
     s->window = anw;

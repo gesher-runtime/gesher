@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <algorithm>
+#include <limits>
 
 #include <system/window.h>
 
@@ -77,13 +79,31 @@ Win32Surface* Win32Surface::From(ANativeWindow* window) {
   return static_cast<Win32Surface*>(getSelf(window));
 }
 
+void Win32Surface::SetSurfaceInsets(int left, int top, int right, int bottom) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  inset_left_ = std::max(0, left); inset_top_ = std::max(0, top);
+  inset_right_ = std::max(0, right); inset_bottom_ = std::max(0, bottom);
+}
+
+bool Win32Surface::HasSurfaceInsets() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return inset_left_ || inset_top_ || inset_right_ || inset_bottom_;
+}
+
+void Win32Surface::BufferSize(int* width, int* height) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  Size(width, height);
+}
+
 void Win32Surface::Size(int* width, int* height) const {
   if (user_width_ > 0 && user_height_ > 0) {
     *width = user_width_;
     *height = user_height_;
   } else {
-    *width = window_->width();
-    *height = window_->height();
+    *width = static_cast<int>(std::min<int64_t>(std::numeric_limits<int>::max(),
+        int64_t{window_->width()} + inset_left_ + inset_right_));
+    *height = static_cast<int>(std::min<int64_t>(std::numeric_limits<int>::max(),
+        int64_t{window_->height()} + inset_top_ + inset_bottom_));
   }
 }
 
@@ -149,10 +169,12 @@ void Win32Surface::Present() {
   uint8_t* dst = window_->Lock(&w, &h, &stride);
   const bool swap = buffer_->format != HAL_PIXEL_FORMAT_BGRA_8888;
   const bool opaque = buffer_->format == HAL_PIXEL_FORMAT_RGBX_8888;
-  int rows = h < buffer_->height ? h : buffer_->height;
-  int cols = w < buffer_->width ? w : buffer_->width;
-  for (int y = 0; y < rows; y++) {
-    const uint32_t* s = &buffer_->pixels[static_cast<size_t>(y) * buffer_->stride];
+  int rows = static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(h,
+      int64_t{buffer_->height} - inset_top_ - inset_bottom_)));
+  int cols = static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(w,
+      int64_t{buffer_->width} - inset_left_ - inset_right_)));
+  for (int y = 0; y < rows && cols > 0; y++) {
+    const uint32_t* s = &buffer_->pixels[static_cast<size_t>(y + inset_top_) * buffer_->stride + inset_left_];
     uint32_t* d = reinterpret_cast<uint32_t*>(dst) + static_cast<size_t>(y) * stride;
     if (!swap) {
       memcpy(d, s, static_cast<size_t>(cols) * 4);
@@ -167,6 +189,25 @@ void Win32Surface::Present() {
   }
   window_->UnlockAndPost();
   frames_++;
+}
+
+void Win32Surface::PresentPixels(const uint32_t* argb, int width, int height) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!(inset_left_ || inset_top_ || inset_right_ || inset_bottom_)) {
+    window_->PresentPixels(argb, width, height);
+    return;
+  }
+  int rows = static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(window_->height(),
+      int64_t{height} - inset_top_ - inset_bottom_)));
+  int cols = static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(window_->width(),
+      int64_t{width} - inset_left_ - inset_right_)));
+  if (!argb || rows == 0 || cols == 0) return;
+  std::vector<uint32_t> cropped(static_cast<size_t>(cols) * rows);
+  for (int y = 0; y < rows; ++y) {
+    memcpy(cropped.data() + static_cast<size_t>(y) * cols,
+        argb + static_cast<size_t>(y + inset_top_) * width + inset_left_, static_cast<size_t>(cols) * 4);
+  }
+  window_->PresentPixels(cropped.data(), cols, rows);
 }
 
 int Win32Surface::dequeueBuffer(ANativeWindowBuffer** buffer, int* fence_fd) {
