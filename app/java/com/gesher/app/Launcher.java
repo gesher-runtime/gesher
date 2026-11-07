@@ -493,6 +493,7 @@ public final class Launcher {
     private static int launch(List<String> args) throws Exception {
         String apk = null;
         String activity = null;
+        String shortcutId = null;
         boolean keepTask = false;
         String proxy = null;
         String windowMode = WindowMode.fromEnvironment(WindowMode.WINDOW);
@@ -501,6 +502,7 @@ public final class Launcher {
             String a = args.get(i);
             switch (a) {
                 case "--activity": activity = args.get(++i); break;
+                case "--shortcut": shortcutId = args.get(++i); break;
                 case "--keep-task": keepTask = true; break;
                 case "--proxy": {
                     proxy = ProxySetting.parse(args.get(++i));
@@ -542,14 +544,30 @@ public final class Launcher {
             log(text("launching", pkg));
         }
 
-        Intent intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        if (activity == null) {
-            intent.setPackage(pkg);
+        Intent intent = null;
+        if (shortcutId != null) {
+            Properties dynProps = AppShell.dynamicShortcutsOf(pkg);
+            String intentUri = dynProps.getProperty(shortcutId + ".intent");
+            if (intentUri != null && !intentUri.isEmpty()) {
+                try {
+                    intent = Intent.parseUri(intentUri, Intent.URI_INTENT_SCHEME);
+                } catch (Throwable t) {
+                    log("failed to parse shortcut intent: " + t);
+                }
+            }
+        }
+        if (intent == null) {
+            intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (activity == null) {
+                intent.setPackage(pkg);
+            } else {
+                String cls = activity.startsWith(".") ? pkg + activity
+                        : activity.indexOf('.') < 0 ? pkg + "." + activity : activity;
+                intent.setComponent(new ComponentName(pkg, cls));
+            }
         } else {
-            String cls = activity.startsWith(".") ? pkg + activity
-                    : activity.indexOf('.') < 0 ? pkg + "." + activity : activity;
-            intent.setComponent(new ComponentName(pkg, cls));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         }
         for (Map.Entry<String, Boolean> e : extras.entrySet()) {
             intent.putExtra(e.getKey(), (boolean) e.getValue());

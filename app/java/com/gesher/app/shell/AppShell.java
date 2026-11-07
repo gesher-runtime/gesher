@@ -7,6 +7,7 @@ package com.gesher.app.shell;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
+import android.content.pm.ShortcutInfo;
 
 import com.android.internal.pm.pkg.component.ParsedActivity;
 import com.android.internal.pm.pkg.component.ParsedIntentInfo;
@@ -21,6 +22,7 @@ import com.gesher.server.Zygote;
 import java.io.File;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.Set;
@@ -214,15 +216,134 @@ public final class AppShell {
      */
     public static void unregisterQuietly(String packageName, Properties shortcut) {
         try {
+            removeAllDynamicShortcuts(packageName);
             removeShortcut(shortcut);
             File dir = shellDir(packageName);
             new File(dir, ICON).delete();
             new File(dir, RECORD).delete();
+            new File(dir, DYNAMIC_RECORD).delete();
             java.nio.file.Files.deleteIfExists(dir.toPath());
             rewriteApkIcons(packageName, null);
         } catch (Throwable t) {
             log("the Start menu shortcut of " + packageName + " was not removed: " + t);
         }
+    }
+
+    // --- dynamic shortcuts ---------------------------------------------------------------
+
+    private static final String DYNAMIC_RECORD = "dynamic-shortcuts.properties";
+
+    /** Dynamic shortcuts recorded for the package, or empty properties. */
+    public static Properties dynamicShortcutsOf(String packageName) {
+        try {
+            Properties p = Device.read(new File(shellDir(packageName), DYNAMIC_RECORD));
+            return p != null ? p : new Properties();
+        } catch (Throwable t) {
+            return new Properties();
+        }
+    }
+
+    /**
+     * Updates or registers Windows Start menu shortcuts for the dynamic shortcuts of an app.
+     */
+    public static void syncDynamicShortcuts(String packageName, List<ShortcutInfo> shortcuts, boolean append) {
+        if ("0".equals(System.getenv(ENV_SHORTCUTS))) return;
+        Properties appRecord = shortcutOf(packageName);
+        if (appRecord == null) return;
+        String appLabel = appRecord.getProperty("label");
+        String iconPath = appRecord.getProperty("icon");
+        String appId = appRecord.getProperty("app_user_model_id");
+        String targetKind = appRecord.getProperty("target");
+        String gesher = installDir();
+        String systemRoot = System.getenv("SystemRoot");
+        if (systemRoot == null || systemRoot.isEmpty()) systemRoot = "C:\\Windows";
+        String psExe = systemRoot + "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+        String psScript = gesher + "\\gesher-app.ps1";
+        String launchExe = gesher + "\\gesher-launch.exe";
+        boolean viaLauncher = "launcher".equals(targetKind) && Shell.exists(launchExe);
+        String target = viaLauncher ? launchExe : Shell.exists(psExe) ? psExe : "powershell.exe";
+        String programs = Shell.programsFolder();
+        if (programs == null) return;
+        String folder = programs + "\\" + FOLDER;
+        if (!Shell.makeDirectories(folder)) return;
+
+        Properties dynProps = dynamicShortcutsOf(packageName);
+        if (!append) {
+            for (String key : dynProps.stringPropertyNames()) {
+                if (key.endsWith(".link")) {
+                    String oldLink = dynProps.getProperty(key);
+                    if (oldLink != null) Shell.removeFile(oldLink);
+                }
+            }
+            dynProps.clear();
+        }
+
+        if (shortcuts != null) {
+            for (ShortcutInfo si : shortcuts) {
+                if (si == null || si.getId() == null) continue;
+                String id = si.getId();
+                CharSequence shortLabel = si.getShortLabel();
+                String label = shortLabel != null ? shortLabel.toString() : id;
+                CharSequence longLabel = si.getLongLabel();
+                String desc = longLabel != null ? longLabel.toString() : label;
+                Intent intent = si.getIntent();
+                if (intent == null && si.getIntents() != null && si.getIntents().length > 0) {
+                    intent = si.getIntents()[si.getIntents().length - 1];
+                }
+                String intentUri = intent != null ? intent.toUri(Intent.URI_INTENT_SCHEME) : "";
+
+                String cleanLabel = label.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+                String link = folder + "\\" + appLabel + " - " + cleanLabel + ".lnk";
+                String arguments = viaLauncher ? "launch " + packageName + " --shortcut \"" + id + "\""
+                        : "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + psScript
+                                + "\" launch " + packageName + " --shortcut \"" + id + "\"";
+                int hr = Shell.createShortcut(link, target, arguments, gesher, iconPath, desc, appId);
+                if (hr == 0) {
+                    dynProps.setProperty(id + ".id", id);
+                    dynProps.setProperty(id + ".label", label);
+                    dynProps.setProperty(id + ".link", link);
+                    dynProps.setProperty(id + ".intent", intentUri);
+                }
+            }
+        }
+        File dir = shellDir(packageName);
+        dir.mkdirs();
+        try {
+            Device.write(new File(dir, DYNAMIC_RECORD), dynProps);
+        } catch (Throwable t) {
+            log("failed to save dynamic shortcuts for " + packageName + ": " + t);
+        }
+    }
+
+    public static void removeDynamicShortcuts(String packageName, List<String> ids) {
+        if (ids == null || ids.isEmpty()) return;
+        Properties dynProps = dynamicShortcutsOf(packageName);
+        for (String id : ids) {
+            String link = dynProps.getProperty(id + ".link");
+            if (link != null) Shell.removeFile(link);
+            dynProps.remove(id + ".id");
+            dynProps.remove(id + ".label");
+            dynProps.remove(id + ".link");
+            dynProps.remove(id + ".intent");
+        }
+        File dir = shellDir(packageName);
+        try {
+            Device.write(new File(dir, DYNAMIC_RECORD), dynProps);
+        } catch (Throwable t) {
+            log("failed to update dynamic shortcuts for " + packageName + ": " + t);
+        }
+    }
+
+    public static void removeAllDynamicShortcuts(String packageName) {
+        Properties dynProps = dynamicShortcutsOf(packageName);
+        for (String key : dynProps.stringPropertyNames()) {
+            if (key.endsWith(".link")) {
+                String link = dynProps.getProperty(key);
+                if (link != null) Shell.removeFile(link);
+            }
+        }
+        File f = new File(shellDir(packageName), DYNAMIC_RECORD);
+        if (f.exists()) f.delete();
     }
 
     // --- URL protocols -------------------------------------------------------------------
