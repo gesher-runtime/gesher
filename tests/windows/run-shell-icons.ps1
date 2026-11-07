@@ -7,6 +7,8 @@ param(
     [Parameter(Mandatory)][string] $OutputRoot
 )
 $ErrorActionPreference='Stop'
+# A pwsh parent may omit this Windows PowerShell host's script modules.
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 Set-StrictMode -Version 2
 $RuntimeDir=(Resolve-Path -LiteralPath $RuntimeDir).Path
 if(-not $FixtureDir){$FixtureDir=$RuntimeDir}

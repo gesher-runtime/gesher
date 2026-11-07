@@ -210,6 +210,13 @@ final class BroadcastController {
             String[] excludePermissions, String[] excludePackages, boolean ordered) {
         Sender origin = sender(callingPackage, callingPid);
         ActivityTaskManagerService.ProcessRecord app = mAtm.callerProcess(callingPid);
+        // The standalone driver has no attached server process. Its local,
+        // unacknowledged sends still pass through the ordinary sender policy.
+        if (!ordered && resultTo == null && app == null
+                && callingPid == Process.myPid() && callingPid == Binder.getCallingPid()) {
+            return broadcastIntent(intent, resolvedType, origin,
+                    requiredPermissions, excludePermissions, excludePackages);
+        }
         if (caller != null && (app == null || app.exiting || app.thread == null
                 || !caller.asBinder().equals(app.thread.asBinder())
                 || callingPid != Binder.getCallingPid() || app.uid != Binder.getCallingUid())) {
