@@ -334,7 +334,11 @@ var
   Params: String;
 begin
   Params := '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
-            ExpandConstant('{app}\gesher-app-microg.ps1') + '" -AutoDownload';
+            ExpandConstant('{app}\gesher-app-microg.ps1') + '"';
+  if WizardIsTaskSelected('microg') then
+    Params := Params + ' -AutoDownload'
+  else
+    Params := Params + ' -StoreOnly';
   if WizardIsTaskSelected('aurora') then
     Params := Params + ' -InstallStore';
   Exec('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code);
@@ -348,7 +352,7 @@ begin
   begin
     if WizardIsTaskSelected('webview2') then
       InstallWebView2();
-    if WizardIsTaskSelected('microg') then
+    if WizardIsTaskSelected('microg') or WizardIsTaskSelected('aurora') then
       InstallMicrogAndStore();
     Path := PathEntries();
     Dir := ExpandConstant('{app}');

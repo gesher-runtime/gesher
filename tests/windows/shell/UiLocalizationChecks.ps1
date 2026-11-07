@@ -19,7 +19,7 @@ if ((Get-GesherText 'microg_missing' @($path)) -ne "קובץ ההרחבה אינ
 if ((Get-GesherText 'starting') -ne 'מפעיל…') { throw 'Hebrew string missing' }
 $script:GesherUiLanguage = 'en'
 if ((Get-GesherText 'starting') -ne 'Starting…') { throw 'English string missing' }
-foreach ($file in 'gesher-ui.ps1', 'gesher-app.ps1', 'gesher-app-microg.ps1') {
+foreach ($file in 'gesher-ui.ps1', 'gesher-app.ps1', 'gesher-app-microg.ps1', 'gesher-control-panel.ps1') {
     $tokens = $null; $parseErrors = $null
     $null = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot "tools/package/$file"), [ref]$tokens, [ref]$parseErrors)
     if ($parseErrors.Count) { throw ($parseErrors | Out-String) }

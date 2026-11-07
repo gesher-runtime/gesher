@@ -488,7 +488,9 @@ jobs:
 
       - name: Verify PowerShell UI translations
         shell: powershell
-        run: tests/windows/shell/UiLocalizationChecks.ps1
+        run: |
+          tests/windows/shell/UiLocalizationChecks.ps1
+          tests/windows/shell/MicrogDefaultsChecks.ps1
 
       - name: Verify and assemble windows-x64 artifact
         shell: pwsh

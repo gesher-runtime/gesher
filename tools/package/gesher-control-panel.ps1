@@ -430,11 +430,11 @@ $btnEnableMicrog.Add_Click({
 })
 
 $btnGoogleLogin.Add_Click({
-    & (Join-Path $here 'gesher-launch.exe') launch com.google.android.gms
+    Start-Process -FilePath (Join-Path $here 'gesher-launch.exe') -ArgumentList 'launch', 'com.google.android.gms' -WindowStyle Hidden
 })
 
 $btnMicrogSettings.Add_Click({
-    & (Join-Path $here 'gesher-launch.exe') launch com.google.android.gms
+    Start-Process -FilePath (Join-Path $here 'gesher-launch.exe') -ArgumentList 'launch', 'com.google.android.gms' -WindowStyle Hidden
 })
 
 $btnDisableMicrog.Add_Click({
@@ -469,7 +469,7 @@ $btnInstallStore.Add_Click({
 })
 
 $btnOpenStore.Add_Click({
-    & (Join-Path $here 'gesher-launch.exe') launch com.aurora.store
+    Start-Process -FilePath (Join-Path $here 'gesher-launch.exe') -ArgumentList 'launch', 'com.aurora.store' -WindowStyle Hidden
 })
 
 # Install APK Button Handler
@@ -516,7 +516,7 @@ $window.Add_Drop({
 # Per-app Launch and Uninstall handlers (invoked via event binding or code behind)
 $script:OnAppLaunch = {
     param($pkg)
-    & (Join-Path $here 'gesher-launch.exe') launch $pkg
+    Start-Process -FilePath (Join-Path $here 'gesher-launch.exe') -ArgumentList 'launch', $pkg -WindowStyle Hidden
 }
 
 $script:OnAppUninstall = {
