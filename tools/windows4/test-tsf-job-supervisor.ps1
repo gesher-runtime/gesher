@@ -62,7 +62,12 @@ try {
   foreach ($case in @('normal','exit23','hang','descendant','race','unknown','orphan','limit','output','terminate-denied','query-denied')) {
     $mode = if ($case -in @('terminate-denied','query-denied')) { 'hang' } else { $case }
     $fault = if ($case -in @('terminate-denied','query-denied')) { $case } else { '' }
-    $r = [TsfJobSupervisor]::Run($worker, $mode, 1500, $fault)
+    # Successful multi-process controls include CLR startup, console census and
+    # file barriers. A loaded runner can complete that protocol just after 1.5s.
+    # Keep timeout/fault controls at 1.5s and the existing 5s assertion ceiling.
+    $mainBudget = if ($case -in @('hang','terminate-denied','query-denied')) { 1500 } else { 3500 }
+    Write-Host "TSF_CONTROL_MAIN_BUDGET case=$case milliseconds=$mainBudget"
+    $r = [TsfJobSupervisor]::Run($worker, $mode, $mainBudget, $fault)
     Write-Host ('TSF_JOB_KERNEL_EVIDENCE ' + ($r | ConvertTo-Json -Depth 6 -Compress))
     if ($case -in @('unknown','orphan')) {
       if ($r.Success -or $r.Reason -cne 'controller-error' -or -not $r.TerminateSucceeded -or -not $r.RootSignaled -or -not $r.JobEmpty -or $r.OwnedHandles -ne $r.ClosedHandles -or $r.Errors.Count -lt 1 -or $r.Errors[0] -notmatch '^Unexpected job identity:') { throw 'Unknown actual child was not rejected and cleaned up' }
