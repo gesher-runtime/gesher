@@ -868,7 +868,8 @@ jobs:
           }
           $sizes = @(Read-Ico "$app\gesher.ico" | ForEach-Object Width)
           foreach ($s in 16, 32, 48, 256) { if ($sizes -notcontains $s) { throw "gesher.ico has no ${s}x$s image ($($sizes -join ', '))" } }
-          if ($wsh.CreateShortcut("$programs\Gesher Hello.lnk").IconLocation -ne "$app\gesher.ico,0") { throw 'The Gesher Hello shortcut lacks Gesher''s icon' }
+          if (Test-Path "$programs\Gesher Hello.lnk") { throw 'Gesher Hello shortcut should not be created' }
+          if ($wsh.CreateShortcut("$programs\Gesher Control Center.lnk").IconLocation -ne "$app\gesher.ico,0") { throw 'The Gesher Control Center shortcut lacks Gesher''s icon' }
           'PASS  installer: .apk files get their icons from Gesher''s icon handler (DefaultIcon %1, gesher_shellext.dll); the Start menu entries get gesher.ico' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # The installed lifecycle.apk, as the shell names its icon (IExtractIcon through
           # SHGetFileInfo): the app's .ico. Reported, not required: a runner's shell may

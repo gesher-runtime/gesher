@@ -5,7 +5,7 @@ Requirements: Windows 10 or 11, x64. Nothing else needs installing.
 
 Running Hello
 -------------
-From the Start menu, open "Gesher Hello". Or, in a new command prompt:
+In a command prompt:
 
     gesher
 

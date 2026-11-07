@@ -2,7 +2,7 @@
 ;   iscc /DBuildDir=<dir with the build output> /DAppVersion=<x.y.z> gesher.iss
 ; Installs per user (no administrator rights) into
 ; %LOCALAPPDATA%\Programs\Gesher, puts `gesher` and `gesher-app` on the user's
-; PATH, adds a Start menu entry that runs the bundled Hello and opens `.apk`
+; PATH, adds Start menu entries and opens `.apk`
 ; files with gesher-app (docs/installer.md). Apps installed with gesher-app get
 ; Start menu shortcuts in {userprograms}\Gesher Apps (com.gesher.app.shell),
 ; which the uninstaller removes.
@@ -146,8 +146,11 @@ Name: "aurora"; Description: "{cm:setup_aurora}"; Flags: unchecked
 
 [Icons]
 Name: "{autoprograms}\{cm:setup_control_panel}"; Filename: "{app}\gesher-launch.exe"; Parameters: "control-panel"; WorkingDir: "{app}"; IconFilename: "{app}\gesher.ico"
-Name: "{autoprograms}\{cm:setup_hello}"; Filename: "{app}\gesher.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\gesher.ico"
 Name: "{autoprograms}\{cm:setup_readme}"; Filename: "{app}\README.txt"
+
+[InstallDelete]
+Type: files; Name: "{autoprograms}\Gesher Hello.lnk"
+Type: files; Name: "{autoprograms}\גשר — דוגמה.lnk"
 
 [Registry]
 ; The `.apk` association, per user (HKCU\Software\Classes). Gesher.Apk opens
@@ -202,6 +205,8 @@ Type: filesandordirs; Name: "{localappdata}\Gesher"
 ; The installed apps' Start menu shortcuts (gesher-app install; their icons are
 ; in the packages' data directories, above).
 ; Every translated Start menu folder is listed by ui-messages.iss.
+Type: files; Name: "{autoprograms}\Gesher Hello.lnk"
+Type: files; Name: "{autoprograms}\גשר — דוגמה.lnk"
 ; Icon handlers an update moved aside (PrepareToInstall) while Explorer had them loaded.
 Type: files; Name: "{app}\gesher_shellext.*.old"
 

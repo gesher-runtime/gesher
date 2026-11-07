@@ -261,10 +261,6 @@
       "en": "Install the Microsoft Edge WebView2 Runtime (Android apps' web views need it)",
       "he": "התקנת Microsoft Edge WebView2 (נדרש להצגת תוכן אינטרנט ביישומי Android)"
     },
-    "setup_hello": {
-      "en": "Gesher Hello",
-      "he": "גשר — דוגמה"
-    },
     "setup_readme": {
       "en": "Gesher README",
       "he": "גשר — מידע והוראות"

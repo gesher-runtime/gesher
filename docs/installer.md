@@ -284,7 +284,7 @@ folder, icon) and its `System.AppUserModel.ID` through the link's
 red at 256 pixels and transparent corners), runs the shortcut's command line
 (`gesher-app: done`), installs components.apk (an adaptive icon: white
 foreground, blue background, masked corners) and checks `Gesher.Apk`'s
-`DefaultIcon` and the Gesher Hello entry's icon. After uninstalling Gesher,
+`DefaultIcon` and the Gesher Control Center entry's icon. After uninstalling Gesher,
 `Gesher Apps` is gone and a file of the job's in the Start menu is still
 there. `tests/windows/tracks/55-shell.ps1` checks the label and the icon of
 lifecycle.apk, components.apk and peer.apk (the framework's default icon) on
