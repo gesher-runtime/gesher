@@ -189,6 +189,7 @@ target_link_libraries(surface_invalidation_test PRIVATE pthread)
 # SurfaceView's surface (compat/media/surface), built with hwui (its headers, Skia).
 target_sources(hwui PRIVATE
   ${_media}/surface/queue_surface.cc
+  ${_media}/surface/reader_surface.cc
   ${_media}/surface/surface_jni.cc
   # The encoders' input surfaces (media3, ADR 0059): QueueSurfaces too.
   ${_media}/video/input_surface.cc)

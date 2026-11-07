@@ -5,6 +5,17 @@ Design: [0042](decisions/0042-media-audio-engine-and-codecs.md). Tests:
 `media_probe.exe` and `tests/apps/mediaapp` (`mediaapp.apk`, built by
 `.github/workflows/media.yml` against the run's framework classes).
 
+RGBA `ImageReader` surfaces accept Canvas, NDK and EGL producers through the
+in-process `QueueSurface`. Swapped frames supply the reader's image queue and
+availability notifications. `Image.getHardwareBuffer()` retains an independent
+CPU snapshot; `Bitmap.wrapHardwareBuffer()` converts it to an immutable software
+bitmap that remains drawable after the image or buffer closes. This supports
+Flutter's platform-view display path without changing the application's APK.
+These snapshots do not implement general HardwareBuffer allocation, Android GPU
+imports, parcel transport or protected content. Other ImageReader formats retain
+the existing direct CameraFrames delivery path. See the
+[Otzaria regression evidence](research/otzaria-imagereader-validation-2026-11-07.json).
+
 ## Pieces
 
 | Piece | Where |
