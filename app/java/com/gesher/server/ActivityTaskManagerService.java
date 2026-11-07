@@ -2239,9 +2239,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             String type = legacy.getString("androidx.credentials.provider.extra.EXTRA_CREDENTIAL_TYPE");
             Bundle content = legacy.getBundle("androidx.credentials.provider.extra.EXTRA_CREDENTIAL_DATA");
             if (type == null || type.isEmpty() || content == null) return data;
+            Bundle converted = new Bundle(content);
+            if ("com.google.android.libraries.identity.googleid.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL".equals(type)) {
+                // This microG producer also serializes the optional picture Uri
+                // as a String. The current googleid consumer reads a Parcelable.
+                String pictureKey = "com.google.android.libraries.identity.googleid.BUNDLE_KEY_PROFILE_PICTURE_URI";
+                Object picture = converted.get(pictureKey);
+                if (picture instanceof String) converted.putParcelable(pictureKey, android.net.Uri.parse((String) picture));
+            }
             Intent normalized = new Intent(data);
             normalized.putExtra(key, new android.credentials.GetCredentialResponse(
-                    new android.credentials.Credential(type, new Bundle(content))));
+                    new android.credentials.Credential(type, converted)));
             return normalized;
         } catch (RuntimeException malformed) { return data; }
     }

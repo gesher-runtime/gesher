@@ -394,6 +394,34 @@ public final class DelegatedIntentRetirementTest {
         Intent malformed = new Intent().putExtra(key, new Bundle());
         require(normalize.invoke(null, "com.google.android.gms", provider, recipient, -1, malformed) == malformed,
                 "Incomplete provider response acquired invented credential fields");
+        String pictureKey = "com.google.android.libraries.identity.googleid.BUNDLE_KEY_PROFILE_PICTURE_URI";
+        String picture = "https://example.invalid/synthetic-profile-picture";
+        content.putString(pictureKey, picture);
+        legacy.putString("androidx.credentials.provider.extra.EXTRA_CREDENTIAL_TYPE",
+                "com.google.android.libraries.identity.googleid.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL");
+        Intent google = (Intent) normalize.invoke(null, "com.google.android.gms", provider, recipient, -1, original);
+        android.os.Parcel wire = android.os.Parcel.obtain();
+        try {
+            google.writeToParcel(wire, 0); wire.setDataPosition(0);
+            Intent decoded = Intent.CREATOR.createFromParcel(wire);
+            Bundle decodedData = decoded.getParcelableExtra(key, android.credentials.GetCredentialResponse.class)
+                    .getCredential().getData();
+            require(android.net.Uri.parse(picture).equals(decodedData.getParcelable(pictureKey, android.net.Uri.class))
+                    && "opaque synthetic provider data".equals(decodedData.getString("fixture-value")),
+                    "Google credential Uri or opaque fields did not survive actual parcel transport");
+            require(content.get(pictureKey) instanceof String && decoded.getIntExtra("unrelated", -1) == 17,
+                    "Picture normalization mutated the source or unrelated intent data");
+        } finally { wire.recycle(); }
+        content.putParcelable(pictureKey, android.net.Uri.parse(picture));
+        Intent typedPicture = (Intent) normalize.invoke(null, "com.google.android.gms", provider, recipient, -1, original);
+        require(android.net.Uri.parse(picture).equals(typedPicture.getParcelableExtra(key,
+                android.credentials.GetCredentialResponse.class).getCredential().getData()
+                .getParcelable(pictureKey, android.net.Uri.class)), "Already typed picture Uri changed");
+        legacy.putString("androidx.credentials.provider.extra.EXTRA_CREDENTIAL_TYPE", "fixture.credential.type");
+        content.putString(pictureKey, picture);
+        Intent otherType = (Intent) normalize.invoke(null, "com.google.android.gms", provider, recipient, -1, original);
+        require(picture.equals(otherType.getParcelableExtra(key, android.credentials.GetCredentialResponse.class)
+                .getCredential().getData().getString(pictureKey)), "Unrelated credential type received Google field conversion");
     }
 
     public static void main(String[] args) throws Exception {
