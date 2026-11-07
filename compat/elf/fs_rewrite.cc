@@ -75,6 +75,32 @@ void PrintBytes(const uint8_t* p, size_t n) {
   for (size_t i = 0; i < n; ++i) std::fprintf(stderr, " %02x", p[i]);
 }
 
+#if defined(__x86_64__)
+// Stripped callbacks can be reachable only through indirect pointers, with no
+// FDE or function symbol. Recover these two exact read-only MOV forms when
+// they actually execute; never scan data tables or modify executable bytes.
+bool RecoverUncoveredMov(EXCEPTION_POINTERS* info, const X86Insn& in, const CodeRange& range) {
+  if (range.stub_area || !in.fs || in.gs || in.vex || in.map != 0 || in.opcode != 0x8B
+      || !(in.rex & 8) || in.opsize || in.addrsize || !in.absolute() || in.disp_size != 4
+      || info->ExceptionRecord->NumberParameters < 2
+      || info->ExceptionRecord->ExceptionInformation[0] != 0) return false;
+  int32_t displacement;
+  std::memcpy(&displacement, reinterpret_cast<const uint8_t*>(info->ContextRecord->Rip) + in.disp_off, 4);
+  if ((displacement != 0 && displacement != kBionicStackGuard)
+      || info->ExceptionRecord->ExceptionInformation[1] != static_cast<uintptr_t>(displacement)) return false;
+  uintptr_t value = displacement == kBionicStackGuard ? reinterpret_cast<uintptr_t>(NtCurrentTeb())
+                                                     : TlsCurrentThreadPointer();
+  if (!value) return false;  // A missing Android TLS block remains an actual fault.
+  CONTEXT* context = info->ContextRecord;
+  DWORD64* registers[] = {&context->Rax, &context->Rcx, &context->Rdx, &context->Rbx,
+      &context->Rsp, &context->Rbp, &context->Rsi, &context->Rdi, &context->R8, &context->R9,
+      &context->R10, &context->R11, &context->R12, &context->R13, &context->R14, &context->R15};
+  *registers[in.reg()] = value;
+  context->Rip += in.length;  // MOV preserves flags and every other register.
+  return true;
+}
+#endif
+
 LONG CALLBACK FsVectoredHandler(EXCEPTION_POINTERS* info) {
   const DWORD code = info->ExceptionRecord->ExceptionCode;
   if (code == EXCEPTION_BREAKPOINT) {
@@ -104,8 +130,8 @@ LONG CALLBACK FsVectoredHandler(EXCEPTION_POINTERS* info) {
     std::abort();
   }
   if (code == EXCEPTION_ACCESS_VIOLATION) {
-    // Diagnostics only: name the cause of a fault in loaded code that comes
-    // from %fs/%gs thread state, then let the fault take its normal course.
+    // Recover bounded MOV reads missed by static code metadata. Other faults
+    // retain their original diagnostic and exception handling.
 #if defined(__x86_64__)
     uintptr_t rip = info->ContextRecord->Rip;
 #elif defined(__aarch64__)
@@ -120,6 +146,9 @@ LONG CALLBACK FsVectoredHandler(EXCEPTION_POINTERS* info) {
     X86Insn in;
     size_t avail = std::min<uintptr_t>(15, r.end - rip);
     bool decoded = DecodeX86(reinterpret_cast<const uint8_t*>(rip), avail, &in);
+#if defined(__x86_64__)
+    if (decoded && RecoverUncoveredMov(info, in, r)) return EXCEPTION_CONTINUE_EXECUTION;
+#endif
     const char* what = nullptr;
     if (decoded && in.fs) {
       what = "an un-rewritten %fs access (Windows keeps no user %fs base)";

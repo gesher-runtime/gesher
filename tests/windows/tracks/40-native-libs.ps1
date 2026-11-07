@@ -77,6 +77,8 @@ Check 'native libs: stack-protected .so with ELF TLS (API 29), threads and a lat
 Check 'native libs: partial unwind covers hidden code and preserves executable data' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/fs_partial_unwind.so")
 } @('partial_unwind: hidden uncovered function reached by direct call PASS',
+    'partial_unwind: hidden uncovered function reached by indirect pointer PASS',
+    'partial_unwind: runtime recovery leaves original code bytes intact PASS',
     'partial_unwind: FS-like executable data is unchanged PASS',
     'partial_unwind: all passed', 'elf_load_test all passed')
 

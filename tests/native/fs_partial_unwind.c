@@ -10,7 +10,13 @@ extern uintptr_t gap_guard_rcx(void);
 extern uintptr_t gap_guard_r8(void);
 extern int gap_guard_preserves_carry(void);
 extern uintptr_t gap_guard_hidden(void);
+extern uintptr_t gap_indirect_guard(void);
+extern uintptr_t gap_indirect_carry(void);
+extern uintptr_t gap_indirect_thread_pointer(void);
 extern const volatile unsigned char gap_fs_like_table[];
+static uintptr_t (*volatile indirect_guard)(void) = gap_indirect_guard;
+static uintptr_t (*volatile indirect_carry)(void) = gap_indirect_carry;
+static uintptr_t (*volatile indirect_thread_pointer)(void) = gap_indirect_thread_pointer;
 
 __asm__(
     ".text\n"
@@ -29,6 +35,15 @@ __asm__(
     ".global gap_guard_hidden\n.hidden gap_guard_hidden\n.type gap_guard_hidden,@function\n"
     "gap_guard_hidden:\nmovq %fs:0x28,%r10\nmovq %r10,%rax\nret\n"
     ".size gap_guard_hidden,.-gap_guard_hidden\n"
+    ".global gap_indirect_guard\n.hidden gap_indirect_guard\n.type gap_indirect_guard,@function\n"
+    "gap_indirect_guard:\nmovq %fs:0x28,%rax\nret\n"
+    ".size gap_indirect_guard,.-gap_indirect_guard\n"
+    ".global gap_indirect_carry\n.hidden gap_indirect_carry\n.type gap_indirect_carry,@function\n"
+    "gap_indirect_carry:\nstc\nmovq %fs:0x28,%r10\nsetc %al\nmovzbl %al,%eax\nret\n"
+    ".size gap_indirect_carry,.-gap_indirect_carry\n"
+    ".global gap_indirect_thread_pointer\n.hidden gap_indirect_thread_pointer\n.type gap_indirect_thread_pointer,@function\n"
+    "gap_indirect_thread_pointer:\nmovq %fs:0,%r8\nmovq %r8,%rax\nret\n"
+    ".size gap_indirect_thread_pointer,.-gap_indirect_thread_pointer\n"
     // OpenSSL has lookup tables in executable sections. These are data,
     // even though the bytes also encode a perfectly valid FS instruction.
     ".p2align 4\n.global gap_fs_like_table\n.type gap_fs_like_table,@object\n"
@@ -52,6 +67,7 @@ static void* worker(void* arg) {
     check("new thread gets its own guard", guard != (uintptr_t)arg);
     check("uncovered RAX on new thread", gap_guard_rax() == guard);
     check("uncovered extended register on new thread", gap_guard_r8() == guard);
+    check("indirect uncovered guard on new thread", indirect_guard() == guard);
     return NULL;
 }
 
@@ -63,6 +79,13 @@ int gesher_selftest(void) {
     check("uncovered extended register", gap_guard_r8() == guard);
     check("MOV preserves flags", gap_guard_preserves_carry() == 1);
     check("hidden uncovered function reached by direct call", gap_guard_hidden() == guard);
+    check("hidden uncovered function reached by indirect pointer", indirect_guard() == guard);
+    check("indirect MOV preserves flags and extended registers", indirect_carry() == 1);
+    uintptr_t thread_pointer;
+    __asm__ volatile("movq %%fs:0,%0" : "=r"(thread_pointer));
+    check("indirect thread pointer uses the actual TLS block", indirect_thread_pointer() == thread_pointer);
+    check("runtime recovery leaves original code bytes intact",
+        *(const volatile unsigned char*)(uintptr_t)indirect_guard == 0x64);
     static const unsigned char expected[] = {0x64,0x48,0x8b,0x04,0x25,0x28,0,0,0,0xc3};
     int intact = 1;
     for (unsigned i = 0; i < sizeof expected; ++i)

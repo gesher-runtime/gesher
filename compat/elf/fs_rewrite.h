@@ -31,6 +31,9 @@
 // direct control-flow edges, including code without an FDE. Gaps can contain
 // assembly data tables and are not swept as instructions. Executable sections
 // (else segments) remain the fallback when no code metadata is available.
+// A faulting 64-bit absolute MOV from fs:0/0x28 in a registered ELF executable
+// range can also be recovered at execution time without modifying code/data.
+// Other faults, unknown displacements and missing TLS retain their failure path.
 // See docs/decisions/0014-native-libs-fs-base.md.
 #pragma once
 
