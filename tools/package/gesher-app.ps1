@@ -1,4 +1,4 @@
-# Runs Android apps on the user's Gesher device: binderd, servicemanager and a
+﻿# Runs Android apps on the user's Gesher device: binderd, servicemanager and a
 # system server that every launch shares, installed packages, and app
 # processes the system server starts (docs/services.md, ADR 0026).
 #
@@ -50,6 +50,7 @@ param(
   [Parameter(ValueFromRemainingArguments)] [string[]] $Arguments = @()
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'gesher-ui.ps1')
 $here = $PSScriptRoot
 
 # When started interactively from Explorer (.apk double-click or Start menu shortcut),
@@ -75,9 +76,12 @@ try {
 } catch { }
 
 $root = Join-Path $env:LOCALAPPDATA 'Gesher'
+# The optional addon installer records an explicit per-profile choice. An explicit
+# environment value (including 0) takes precedence for a single invocation.
+$enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
 $commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy'
 if ($Arguments.Count -eq 0) {
-  Write-Host 'usage: gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--single-process | --system-server]'
+  Write-Host ((Get-GesherText 'usage') + 'gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--single-process | --system-server]')
   Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows]'
   exit 2
 }
@@ -113,7 +117,7 @@ function DeviceProcess($state, [string] $name) {
 # shutdown event, then whatever is left is ended.
 if ($command -eq 'shutdown') {
   $state = DeviceState
-  if (-not $state) { Write-Host 'gesher-app: no Gesher device is running'; exit 0 }
+  if (-not $state) { Write-Host ('gesher-app: ' + (Get-GesherText 'no_device')); exit 0 }
   $server = DeviceProcess $state 'system_server'
   if ($server) {
     try {
@@ -128,12 +132,12 @@ if ($command -eq 'shutdown') {
     if ($p) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
   }
   Remove-Item (Join-Path $root 'data\system\gesher-device'), (Join-Path $root 'data\system\gesher-device.ready') -ErrorAction SilentlyContinue
-  Write-Host "gesher-app: the Gesher device $($state['device']) stopped"
+  Write-Host ('gesher-app: ' + (Get-GesherText 'device_stopped' @($state['device'])))
   exit 0
 }
 
 if ($root.Substring(0, 2) -ne $here.Substring(0, 2)) {
-  throw "$root must be on drive $($here.Substring(0, 2)), with Gesher."
+  throw (Get-GesherText 'same_drive' @($root, $here.Substring(0, 2)))
 }
 $apkFull = $null
 if ($commands -notcontains $command) {
@@ -177,6 +181,15 @@ if (Test-Path (Join-Path $here 'org.apache.http.legacy.jar')) {
   Install (Join-Path $here 'org.apache.http.legacy.jar') (Join-Path $root 'system/framework/org.apache.http.legacy.jar')
   Install (Join-Path $here 'etc/permissions/org.apache.http.legacy.xml') (Join-Path $root 'system/etc/permissions/org.apache.http.legacy.xml')
 }
+if (Test-Path (Join-Path $here 'com.android.location.provider.jar')) {
+  New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null
+  Install (Join-Path $here 'com.android.location.provider.jar') (Join-Path $root 'system/framework/com.android.location.provider.jar')
+  Install (Join-Path $here 'etc/permissions/com.android.location.provider.xml') (Join-Path $root 'system/etc/permissions/com.android.location.provider.xml')
+}
+if (Test-Path (Join-Path $here 'etc/permissions/privapp-permissions-microg.xml')) {
+  New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null
+  Install (Join-Path $here 'etc/permissions/privapp-permissions-microg.xml') (Join-Path $root 'system/etc/permissions/privapp-permissions-microg.xml')
+}
 # The system fonts and fonts.xml (docs/fonts.md), as /system/fonts and /system/etc.
 if (Test-Path (Join-Path $here 'fonts/fonts.xml')) {
   foreach ($d in 'system/fonts', 'system/etc') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
@@ -214,57 +227,65 @@ $bcp = ($jars | ForEach-Object { NoDrive "$here/$_.jar" }) -join ':'
 $dvm = @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$here/framework/boot.art")", '-Xint', '-Xusejit:false')
 $dalvikvm = Join-Path $here 'dalvikvm.exe'
 
-# The device's commands, and launching through it (com.gesher.app.Launcher).
-if ($commands -contains $command) {
-  $launcherArgs = @($command)
-  if ($apkFull) { $launcherArgs += NoDrive $apkFull }
-  & $dalvikvm @dvm com.gesher.app.Launcher @launcherArgs @rest
-  exit $LASTEXITCODE
-}
-if ($rest -notcontains '--single-process' -and $rest -notcontains '--system-server') {
-  & $dalvikvm @dvm com.gesher.app.Launcher launch (NoDrive $apkFull) @rest
-  exit $LASTEXITCODE
-}
-
-# Single process: the app alone, with stand-in services in its own process.
-$DriverArgs = @($rest | Where-Object { $_ -ne '--single-process' })
-if ($DriverArgs -notcontains '--system-server') {
-  & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (NoDrive $apkFull)
-  exit $LASTEXITCODE
-}
-
-# A device of this run only: binderd, servicemanager and the system server with
-# the APK, then the app in this console's process; the three are stopped when it exits.
-$logs = Join-Path $root 'logs'
-New-Item -ItemType Directory -Force $logs | Out-Null
-$env:GESHER_BINDER = "gesher-app-$PID"
-$started = @()
+# Keep the profile choice local to child processes, so disabling the marker in
+# this PowerShell session cannot inherit a previous launcher's automatic opt-in.
+$previousMicrogSpoof = $env:GESHER_MICROG_SPOOF
 try {
-  $started += Start-Process (Join-Path $here 'binderd.exe') -ArgumentList $env:GESHER_BINDER -PassThru -NoNewWindow `
-    -RedirectStandardOutput "$logs/run-binderd.out" -RedirectStandardError "$logs/run-binderd.log"
-  # A successful protocol connection to this broker must precede ProcessState.
-  & $dalvikvm @dvm com.gesher.server.RuntimeCommands wait-binder $env:GESHER_BINDER $started[0].Id 15000
-  if ($LASTEXITCODE -ne 0) { throw 'gesher-app: binderd did not complete its connection handshake' }
-  $started += Start-Process (Join-Path $here 'servicemanager.exe') -PassThru -NoNewWindow `
-    -RedirectStandardOutput "$logs/run-servicemanager.out" -RedirectStandardError "$logs/run-servicemanager.log"
-  $started += Start-Process $dalvikvm -PassThru -NoNewWindow `
-    -ArgumentList ($dvm + 'com.gesher.server.SystemServer', (NoDrive $apkFull)) `
-    -RedirectStandardOutput "$logs/run-system_server.out" -RedirectStandardError "$logs/run-system_server.log"
-  # The app process gets no service manager if it starts before servicemanager is the
-  # context manager: wait until the system server has registered its services (90 s).
-  $server = $started[-1]
-  for ($i = 0; $i -lt 900 -and -not $server.HasExited; $i++) {
-    $text = "$(Get-Content -Raw "$logs/run-system_server.log" -ErrorAction SilentlyContinue)$(Get-Content -Raw "$logs/run-system_server.out" -ErrorAction SilentlyContinue)"
-    if ($text.Contains('with servicemanager')) { break }
-    Start-Sleep -Milliseconds 100
+  if ($enableMicrogForProfile) { $env:GESHER_MICROG_SPOOF = '1' }
+  # The device's commands, and launching through it (com.gesher.app.Launcher).
+  if ($commands -contains $command) {
+    $launcherArgs = @($command)
+    if ($apkFull) { $launcherArgs += NoDrive $apkFull }
+    & $dalvikvm @dvm com.gesher.app.Launcher @launcherArgs @rest
+    exit $LASTEXITCODE
   }
-  & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (NoDrive $apkFull)
-  $code = $LASTEXITCODE
-  if ($code -ne 0) { Write-Host "gesher-app: the system server's logs are in $logs" }
+  if ($rest -notcontains '--single-process' -and $rest -notcontains '--system-server') {
+    & $dalvikvm @dvm com.gesher.app.Launcher launch (NoDrive $apkFull) @rest
+    exit $LASTEXITCODE
+  }
+
+  # Single process: the app alone, with stand-in services in its own process.
+  $DriverArgs = @($rest | Where-Object { $_ -ne '--single-process' })
+  if ($DriverArgs -notcontains '--system-server') {
+    & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (NoDrive $apkFull)
+    exit $LASTEXITCODE
+  }
+
+  # A device of this run only: binderd, servicemanager and the system server with
+  # the APK, then the app in this console's process; the three are stopped when it exits.
+  $logs = Join-Path $root 'logs'
+  New-Item -ItemType Directory -Force $logs | Out-Null
+  $env:GESHER_BINDER = "gesher-app-$PID"
+  $started = @()
+  try {
+    $started += Start-Process (Join-Path $here 'binderd.exe') -ArgumentList $env:GESHER_BINDER -PassThru -NoNewWindow `
+      -RedirectStandardOutput "$logs/run-binderd.out" -RedirectStandardError "$logs/run-binderd.log"
+    # A successful protocol connection to this broker must precede ProcessState.
+    & $dalvikvm @dvm com.gesher.server.RuntimeCommands wait-binder $env:GESHER_BINDER $started[0].Id 15000
+    if ($LASTEXITCODE -ne 0) { throw ('gesher-app: ' + (Get-GesherText 'binder_failed')) }
+    $started += Start-Process (Join-Path $here 'servicemanager.exe') -PassThru -NoNewWindow `
+      -RedirectStandardOutput "$logs/run-servicemanager.out" -RedirectStandardError "$logs/run-servicemanager.log"
+    $started += Start-Process $dalvikvm -PassThru -NoNewWindow `
+      -ArgumentList ($dvm + 'com.gesher.server.SystemServer', (NoDrive $apkFull)) `
+      -RedirectStandardOutput "$logs/run-system_server.out" -RedirectStandardError "$logs/run-system_server.log"
+    # The app process gets no service manager if it starts before servicemanager is the
+    # context manager: wait until the system server has registered its services (90 s).
+    $server = $started[-1]
+    for ($i = 0; $i -lt 900 -and -not $server.HasExited; $i++) {
+      $text = "$(Get-Content -Raw "$logs/run-system_server.log" -ErrorAction SilentlyContinue)$(Get-Content -Raw "$logs/run-system_server.out" -ErrorAction SilentlyContinue)"
+      if ($text.Contains('with servicemanager')) { break }
+      Start-Sleep -Milliseconds 100
+    }
+    & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (NoDrive $apkFull)
+    $code = $LASTEXITCODE
+    if ($code -ne 0) { Write-Host ('gesher-app: ' + (Get-GesherText 'server_logs' @($logs))) }
+  } finally {
+    foreach ($p in $started) {
+      if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    }
+    Remove-Item Env:GESHER_BINDER
+  }
+  exit $code
 } finally {
-  foreach ($p in $started) {
-    if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-  }
-  Remove-Item Env:GESHER_BINDER
+  $env:GESHER_MICROG_SPOOF = $previousMicrogSpoof
 }
-exit $code

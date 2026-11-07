@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.gesher.windowpromotion.source" android:versionCode="1" android:versionName="1">
+  <application android:label="Gesher promotion source" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+    <activity android:name=".BootstrapActivity" android:exported="true" />
+    <activity android:name=".SourceActivity" android:exported="true">
+      <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+    </activity>
+  </application>
+</manifest>

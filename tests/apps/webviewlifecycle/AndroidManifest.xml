@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.gesher.webviewlifecycle" android:versionCode="1" android:versionName="1">
+  <application android:name=".LifecycleApplication" android:label="WebView lifecycle fixture" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+    <activity android:name=".DisabledActivity" android:exported="true" />
+    <activity android:name=".UsedActivity" android:exported="true" android:process=":used" />
+    <activity android:name=".RaceActivity" android:exported="true" android:process=":race" />
+    <activity android:name=".SuffixAActivity" android:exported="true" android:process=":suffixA" />
+    <activity android:name=".SuffixBActivity" android:exported="true" android:process=":suffixB" />
+    <activity android:name=".AliasActivity" android:exported="true" android:process=":suffixAlias" />
+    <activity android:name=".DefaultActivity" android:exported="true" android:process=":default" />
+    <activity android:name=".InvalidSuffixActivity" android:exported="true" android:process=":invalid" />
+  </application>
+</manifest>

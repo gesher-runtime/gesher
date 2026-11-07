@@ -45,6 +45,26 @@ public final class WindowManagerService extends IWindowManager.Default {
         return packageName != null ? sWindowModes.get(packageName) : null;
     }
 
+    /** Resolve one fresh process without converting inherited mode into host policy. */
+    static String resolveWindowMode(String packageName, String sourceMode) {
+        return resolveWindowPolicy(packageName, sourceMode).mode;
+    }
+
+    static final class WindowPolicy {
+        final String mode;
+        final boolean explicit;
+        WindowPolicy(String mode, boolean explicit) { this.mode = mode; this.explicit = explicit; }
+    }
+
+    static WindowPolicy resolveWindowPolicy(String packageName, String sourceMode) {
+        String explicit = windowMode(packageName);
+        if (explicit != null) return new WindowPolicy(explicit, true);
+        String inherited = com.gesher.app.window.WindowMode.parse(sourceMode);
+        return new WindowPolicy(inherited != null ? inherited
+                : com.gesher.app.window.WindowMode.fromEnvironment(
+                        com.gesher.app.window.WindowMode.WINDOW), false);
+    }
+
     private final StandIn<IWindowSession> mSession =
             StandIn.of(IWindowSession.class, new StandInWindowSession());
 

@@ -1,0 +1,134 @@
+{
+  "utc_recorded": "2026-11-05T18:00:42.919533+00:00",
+  "scope": "Host WebView Google-login completion compatibility; manual real Google authorization pending",
+  "artifacts": [
+    {
+      "path": "out/microg-login-validation/runtime/gesher-app.jar",
+      "sha256": "51459aaf32e982ddbf0a607a2b9e103f74c1862a7ba1d5eb784d911c27c92c45"
+    },
+    {
+      "path": "out/microg-login-validation/runtime/libgesher_webview_bridge.so",
+      "sha256": "9c51dafefb525dd9916abe1bc8be36bdc993b5d16e3e8fb81fc361abf3b6b29a"
+    },
+    {
+      "path": "out/microg-login-validation/runtime/dalvikvm.exe",
+      "sha256": "3edbe27954e7b6865fdda88a9df6be93ef2283d86de1e2e4e68267d6727a88c2"
+    },
+    {
+      "path": "out/microg-login-build/googleaccount.apk",
+      "sha256": "6b3e99c357a56ce2541628177c3dcc6851b2f6fc64d1be36cbc32039b931d482"
+    },
+    {
+      "path": "out/provider-agent/bridgecookies/bridgecookies.apk",
+      "sha256": "33d253be9dc857c55a5654c6346c7a8d92a9edf47c18bb9eb389ab75e9cb3964"
+    },
+    {
+      "path": "out/microg-auth-build/services-tests.dex",
+      "sha256": "6b2148108f4317a4b7cf364e9b1320bc61d16a0e729bb8ced3b5a00c9ee34bf5"
+    }
+  ],
+  "native_build": {
+    "utc_recorded": "2026-11-05T17:59:56.3901844Z",
+    "artifact": "out/notification-native/stripped/libgesher_webview_bridge.so",
+    "artifact_sha256": "9c51dafefb525dd9916abe1bc8be36bdc993b5d16e3e8fb81fc361abf3b6b29a",
+    "build": "actual repository cmake/webview.cmake gesher_webview_bridge shared target, isolated Release CMake harness",
+    "webview_sdk": "1.0.4258.31",
+    "source_sha256": {
+      "compat/webview/webview_host.cc": "d5bed8111c714e2de643c5c4168ced5565eff2996796f81705f35f817393ba4f",
+      "compat/webview/webview_host.h": "181742421d20b25fb56d72cd12458ca8e2b1f1728bb9cd7766bd6d03f5d730aa",
+      "compat/webview/webview_jni.cc": "55eb3131fdaae4bf162c536b056a8cefd0c8826b98d21a826432b9fbf24dd429",
+      "compat/webview/webview_bridge.def": "d86561cec306925c6fe8b22ae03e9f6455113e43a602eeb91d4466aa5d5d128d",
+      "cmake/webview.cmake": "41ae0255c307b5f4f680a862bc176066f9406f59884e2d5e23a615e5bb1ee5c0",
+      "tests/native/webview_bridge_test.cc": "be7eba3141f02c5ccaca9c895645106b2eea04445f492143dcc4a397184b5df7"
+    },
+    "exports": [
+      "JNI_OnLoad"
+    ],
+    "checks": [
+      "CMake shared target compiled and linked with -Wall -Werror",
+      "Release -UNDEBUG native test passed: strict UTF8/body limit; private IDispatch payload; fresh bounded tickets; cancellation, TTL, generation and closure guards"
+    ],
+    "renderer_test": "PASS all four actual isolated loopback cases: synchronous HttpOnly cookie/ordered-call bridge with nonce-only browser bodies and replay rejection; nine fragment/history callback cases; dedicated-worker 200 and shared/service-worker 403 with fresh valid tickets; in-flight controller destruction with zero origin POST/body/reserved/private-leak counters.",
+    "google_authentication": "not performed",
+    "personal_data": "not accessed",
+    "architecture": "Java arguments enter native prepared-call storage via IDispatch only. HTTP request body contains only opaque single-use CNG ticket. Closing view parks and defers physical Close until response-consumption finishCall ACK; missing ACK retains inert controller until process exit.",
+    "earlier_rejected_candidates": [
+      "BFA9,7407,FC5584,047534: in-flight controller teardown released original body despite response/scrub/Stop. These candidates must not be installed for personal login."
+    ],
+    "renderer_evidence": "out/provider-agent/final-nonce-validation/20261105-195738-9c467cc9f5004aecba5e43e17b8d07cd"
+  },
+  "offline_security_checks": 37,
+  "security_log": "out/microg-login-validation/security-final.log",
+  "webview_cases": [
+    {
+      "case": "bridge-cookie-worker",
+      "result": "pass",
+      "log": "out/provider-agent/final-nonce-validation/20261105-195738-9c467cc9f5004aecba5e43e17b8d07cd/bridge-cookie-worker.activity.log",
+      "sha256": "f1ddc534c81ac4e02a87eea9ace7e8cfdba5068844cec42a87216adf535f8d40",
+      "assertions": [
+        "bridgecookies: PASS real HttpOnly CookieManager callback read; document.cookie hides it",
+        "bridgecookies: PASS synchronous void/nonvoid ordering on one non-STA Java bridge worker",
+        "bridgecookies: PASS large input/output and Java-exception recovery",
+        "bridgecookies: PASS HTTP request body carries only an opaque nonce while Java receives the private arguments",
+        "bridgecookies: PASS consumed and explicitly cancelled nonces cannot invoke Java again",
+        "bridgecookies: PASS malformed UTF-8, oversized body, wrong method/query and unregistered endpoint fail closed",
+        "bridgecookies: PASS destroyed view endpoint denied without old Java invocation",
+        "bridgecookies: PASS local HTTP origin received zero POST requests, body bytes or reserved bridge requests"
+      ]
+    },
+    {
+      "case": "fragment-history-callbacks",
+      "result": "pass",
+      "log": "out/provider-agent/final-nonce-validation/20261105-195738-9c467cc9f5004aecba5e43e17b8d07cd/fragment-history-callbacks.activity.log",
+      "sha256": "4ea302b7ed56bc52286990c7481933759e026d074380713fef2a42ed1748ca9d",
+      "assertions": [
+        "bridge-navigation: PASS location-hash-close",
+        "bridge-navigation: PASS location-hash-other",
+        "bridge-navigation: PASS pushState-hash",
+        "bridge-navigation: PASS replaceState-hash",
+        "bridge-navigation: PASS remove-hash",
+        "bridge-navigation: PASS pushState-path",
+        "bridge-navigation: PASS pushState-query",
+        "bridge-navigation: PASS pushState-path-and-hash",
+        "bridge-navigation: PASS close-on-another-path",
+        "bridge-navigation: PASS fragment navigation and hash-only history changes finish once without page-start; path/query history changes do not finish"
+      ]
+    },
+    {
+      "case": "worker-bridge-boundaries",
+      "result": "pass",
+      "log": "out/provider-agent/final-nonce-validation/20261105-195738-9c467cc9f5004aecba5e43e17b8d07cd/worker-bridge-boundaries.activity.log",
+      "sha256": "1e5689ab30b67270b159374e40b00de50297b31e1a03dc635ce9032748c4d0fd",
+      "assertions": [
+        "bridgeworkers: PASS dedicated worker delegated POST returns 200 and invokes Java exactly once",
+        "bridgeworkers: PASS shared and service worker POST requests return 403 without Java invocation",
+        "bridgeworkers: PASS HTTP origin received zero POST requests, body bytes or reserved paths"
+      ]
+    },
+    {
+      "case": "inflight-view-destruction",
+      "result": "pass",
+      "log": "out/provider-agent/final-nonce-validation/20261105-195738-9c467cc9f5004aecba5e43e17b8d07cd/inflight-view-destruction.activity.log",
+      "sha256": "d986ca162bb3c60c452af966b0904126656d428eab5f06addb38f91eef7c489b",
+      "assertions": [
+        "bridge-inflight: PASS native host destroyed while Java callback was in flight; late callback returned safely",
+        "bridge-inflight: PASS old endpoint rejected without Java reentry or HTTP origin traffic"
+      ]
+    }
+  ],
+  "profile_policy": "Fresh empty short workspace profile per case; all pages use local loopback synthetic fixtures",
+  "manual_google_client": "Only user buttons can initiate auth or network; fixed HTTPS userinfo verifies 200 + ID + selected email",
+  "personal_google_login": "not performed by agent; user must validate manually",
+  "credentials_cookies_or_tokens_from_user_profile": "not inspected or copied",
+  "fcm": "No new FCM result claimed; earlier measurements retain their original artifact hashes",
+  "limitations": [
+    "Page CSP/synchronous-XHR policy can reject the bridge",
+    "Developer OAuth clients/scopes may be rejected by Google",
+    "Not validation of other Google Sign-In SDK clients, billing, Play Integrity or DRM"
+  ],
+  "development_controls": [
+    "An initial in-flight destruction fixture detected a real reserved POST/body reaching only the loopback fixture server; cancellation hardening must pass before local deployment",
+    "Long nested test profiles failed controller creation before pages; retained in out/provider-agent/final-shared-dll-validation",
+    "New full native baseline also failed controller creation; final candidate uses original working executable plus source-built shared bridge"
+  ]
+}

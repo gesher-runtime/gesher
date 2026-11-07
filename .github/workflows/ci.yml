@@ -53,6 +53,10 @@ jobs:
           python3 -m unittest discover -s tools/tests -p test_java_member_inventory.py
           python3 -m unittest discover -s tools/tests -p test_audit_services_jni.py
 
+      - name: Validate user interface translations
+        run: |
+          python3 tools/i18n/check.py --check
+
   build-framework-assets:
     needs: [artifact-preflight, source-identity]
     runs-on: ubuntu-24.04
@@ -173,6 +177,8 @@ jobs:
           ninja -C out native3_unicode_test
           ninja -C out native3_cpu_clock_test
           ninja -C out
+          # Native fixtures are CI-only; none is installed by gesher.iss.
+          ninja -C out install_pipe_test account_chooser_test window_promotion_test
 
       - name: Build and isolate ordinary Binder host actor under production OFF
         run: |
@@ -207,6 +213,9 @@ jobs:
           mkdir -p dist
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
           cp out/gesher_shellext.dll dist/
+          cp out/libgesher_account_crypto.so dist/
+          cp out/libgesher_install_pipe.so dist/
+          cp out/libgesher_webview_bridge.so dist/
           cp dist-web3-observer/web3_process_waits.exe dist/
           ls -la dist
 
@@ -477,6 +486,10 @@ jobs:
             tools/fonts
             tools/binder
 
+      - name: Verify PowerShell UI translations
+        shell: powershell
+        run: tests/windows/shell/UiLocalizationChecks.ps1
+
       - name: Verify and assemble windows-x64 artifact
         shell: pwsh
         run: |
@@ -544,7 +557,8 @@ jobs:
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y | Out-Null }
+          $hebrew = Join-Path (Split-Path $iscc) 'Languages\Hebrew.isl'
+          if (-not (Test-Path $iscc) -or -not (Test-Path $hebrew)) { choco upgrade innosetup --no-progress -y | Out-Null }
           $version = "0.1.${{ github.run_number }}"
           & $iscc /Qp "/DBuildDir=$PWD\dist" "/DAppVersion=$version" "/O$PWD\installer" tools\package\gesher.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -1300,6 +1314,21 @@ jobs:
           if ($summaryTruncated) { 'Summary shortened; complete results remain in the job log and results.txt.' >> $env:GITHUB_STEP_SUMMARY }
           '```' >> $env:GITHUB_STEP_SUMMARY
           exit $code
+
+      - name: Run offline identity and retirement regressions
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows/run-microg-security.ps1 -Dir dist -EvidenceDir "${{ runner.temp }}/microg-security" | Tee-Object -FilePath microg-security-results.txt
+          exit $LASTEXITCODE
+
+      - name: Upload offline regression evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: microg-security-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/microg-security/
+            microg-security-results.txt
 
   # Extra isolated jobs execute the real regression in the SAME canonical
   # full. Only these jobs download the separately named hook artifact.

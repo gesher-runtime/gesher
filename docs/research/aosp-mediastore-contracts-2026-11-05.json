@@ -4,7 +4,7 @@
   "source_url": "https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/tags/android-16.0.0_r4/apex/framework/java/android/provider/MediaStore.java",
   "upstream_sha256": "7390e74594fda2c5a6f464ff9c1b43ecfccfaa65875b13842ff4163e3ad88cf2",
   "local_path": "app/java/android/provider/MediaStore.java",
-  "local_sha256": "48ec4768e86d3d22e621ba344edfe61752a7d2696bf0460fcf6ac09231b05edb",
+  "local_sha256": "63fdd708e51a8aaa53841e6b6d4b5de3b290c1ce1c06f2da22e583d621550703",
   "scope": "Pinned public constants, metadata columns, Audio collection contracts, Images.Media operations, image/video thumbnail implementations and helpers; selected pure root URI functions. Existing local no-provider policies retained.",
   "adaptations": [
     "Excerpts omit documentation and source-only API annotations; no generated MediaProvider Flags dependency is introduced.",
@@ -12,7 +12,9 @@
     "Public legacy constructors exposed as in the SDK, while thumbnail classes remain extensible.",
     "Selected original Gesher collection URI builders remain, equivalent to the upstream builders for these paths.",
     "MediaProvider permission prompts/cloud media, redaction, scanning and storage backends are not supplied by this change.",
-    "Image insertion returns null when provider insertion fails and treats cleanup as best effort when the provider disappears; bitmap decoding closes its stream on failure and tolerates a null stream after provider death."
+    "Image insertion returns null when provider insertion fails and treats cleanup as best effort when the provider disappears; bitmap decoding closes its stream on failure and tolerates a null stream after provider death.",
+    "Trailing whitespace removed from imported stability source; no executable statements changed."
   ],
-  "local_source_encoding": "UTF-8 with LF, matching repository .gitattributes"
+  "local_source_encoding": "UTF-8 with LF, matching repository .gitattributes",
+  "imported_stability_sha256": "48ec4768e86d3d22e621ba344edfe61752a7d2696bf0460fcf6ac09231b05edb"
 }

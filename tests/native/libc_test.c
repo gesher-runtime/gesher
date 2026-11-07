@@ -47,6 +47,9 @@ static void check_str(const char* what, const char* got, const char* want) {
   }
 }
 
+#if defined(__x86_64__)
+#include "timerfd_syscall_test.inc"
+#endif
 #include "tgnet_event_loop_test.inc"
 #include "epoll_nested_test.inc"
 
@@ -546,6 +549,9 @@ static void test_dl(void) {
 __attribute__((visibility("default"))) int gesher_selftest(void) {
   printf("libc_test: bionic libc through the shim\n");
   test_memory();
+#if defined(__x86_64__)
+  test_timerfd_syscalls();
+#endif
   test_strings();
   test_ctype_table();
   test_urandom_stdio();

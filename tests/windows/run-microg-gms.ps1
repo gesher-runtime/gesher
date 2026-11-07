@@ -19,9 +19,11 @@ $env:ANDROID_TZDATA_ROOT = NoDrive "$root/tzdata"
 
 $bcp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') |
   ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+$bcpApp = $bcp
 
 . "$PSScriptRoot/../helpers/CloseProcessReaders.ps1"
 . "$PSScriptRoot/tracks/50-services.ps1"
+. "$PSScriptRoot/tracks/52-microg.ps1"
 
 Write-Host 'INFO  microg-gms: running 93-microg-gms.ps1 track'
 . "$PSScriptRoot/tracks/93-microg-gms.ps1"

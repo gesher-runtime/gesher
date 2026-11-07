@@ -1,5 +1,7 @@
 package com.gesher.app.webview;
 
+import static com.gesher.app.locale.UiText.text;
+
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
@@ -117,7 +119,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private final Context mContext;
     private final Handler mUi;
     private final GesherWebSettings mSettings;
-    private WebView2Host mHost;
+    private final WebViewDarkening mDarkening;
+    private volatile WebView2Host mHost;
     private boolean mDestroyed;
 
     private volatile WebViewClient mClient = new WebViewClient();
@@ -127,6 +130,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private volatile boolean mInterceptsRequests;
     private final Map<String, Object> mInterfaces = new ConcurrentHashMap<>();
     private final boolean mRequireAnnotation;
+    private final JsBridgeDispatcher mBridgeDispatcher;
+    private final String mBridgeEndpoint = "/.gesher-js-bridge/" + java.util.UUID.randomUUID();
 
     // What WebView2 reported (the WebView's Looper).
     private String mUrl;
@@ -329,8 +334,18 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         Looper looper = Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper();
         mUi = new Handler(looper);
         mRequireAnnotation = mContext.getApplicationInfo().targetSdkVersion >= 17;
+        mBridgeDispatcher = new JsBridgeDispatcher(mInterfaces, mRequireAnnotation);
         GesherWebView.configure(mContext);
         mSettings = new GesherWebSettings(GesherWebView.defaultUserAgent(), this::settingsChanged);
+        mDarkening = new WebViewDarkening((method, parameters, completed) ->
+                devTools(method, parameters, result -> {
+                    boolean success = result != null;
+                    if (success) {
+                        try { success = !new JSONObject(result).has("error"); }
+                        catch (Exception failure) { success = false; }
+                    }
+                    completed.accept(success);
+                }), GesherWebView::log);
     }
 
     // ---- WebViewProvider ----
@@ -350,6 +365,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             GesherWebView.log("no WebView2 for this WebView: " + WebView2Host.runtimeError());
             return;
         }
+        mHost.setBridgeEndpoint(mBridgeEndpoint);
         applySettings();
         updateDocumentScript();
         // <input type=file>: WebChromeClient.onShowFileChooser, else a Windows file dialog.
@@ -374,6 +390,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 || s.getBlockNetworkImage() || !s.getLoadsImagesAutomatically();
         mHost.setSettings(s.getJavaScriptEnabled(), zoom, zoom, sDevTools, intercept,
                 s.getSafeBrowsingEnabled(), s.getUserAgentString());
+        applyDarkening();
         // Text zoom scales the text alone (PageScripts.textZoom), not the page.
         int textZoom = s.getTextZoom() > 0 ? s.getTextZoom() : 100;
         if (textZoom != mTextZoom) {
@@ -398,7 +415,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         }
         script.append(PageScripts.PORTS);
         if (mTextZoom != 100) script.append(PageScripts.textZoom(mTextZoom));
-        script.append(JsBridge.script(mInterfaces, mRequireAnnotation));
+        script.append(JsBridge.script(mInterfaces, mRequireAnnotation, mBridgeEndpoint));
         // androidx.webkit (ADR 0058): WebMessageListeners' objects, then the app's
         // document-start scripts, in the order they were added.
         script.append(PageScripts.ORIGINS);
@@ -468,6 +485,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     public void destroy() {
         if (mDestroyed) return;
         mDestroyed = true;
+        mBridgeDispatcher.close();
         removeListeners();
         mGeolocation.pageGone();
         if (mHost != null) mHost.destroy();
@@ -655,6 +673,17 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             }
             if (callback != null) callback.onReceiveValue(path);
         });
+    }
+
+    private void applyDarkening() {
+        if (mHost == null || mDestroyed) return;
+        android.util.TypedValue value = new android.util.TypedValue();
+        boolean lightTheme = mContext.getTheme() == null
+                || !mContext.getTheme().resolveAttribute(com.android.internal.R.attr.isLightTheme,
+                        value, true)
+                || value.type != android.util.TypedValue.TYPE_INT_BOOLEAN || value.data != 0;
+        mDarkening.apply(lightTheme, mContext.getApplicationInfo().targetSdkVersion,
+                mSettings.isAlgorithmicDarkeningAllowed());
     }
 
     /** A DevTools protocol method; the callback gets its result (JSON) or null, on the UI thread. */
@@ -1527,6 +1556,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
+        settingsChanged();
     }
 
     @Override
@@ -1725,6 +1755,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public void onEvent(int type, long id, int arg, String a, String b, String c, byte[] bytes) {
+        if (type == WebView2Host.EVENT_PAGE_STARTED) mBridgeDispatcher.navigationStarted();
         if (type == WebView2Host.EVENT_PARKED) {
             CountDownLatch parked = mParked;
             if (parked != null) parked.countDown();
@@ -1774,6 +1805,11 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     @Override
     public String onBridgeCall(String object, String method, String argsJson) {
         return JsBridge.call(mInterfaces, mRequireAnnotation, object, method, argsJson);
+    }
+
+    @Override
+    public void onBridgeRequest(long id, String body) {
+        mBridgeDispatcher.submit(mHost, id, body);
     }
 
     // ---- Requests (a worker thread) ----
@@ -1933,8 +1969,14 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             case WebView2Host.EVENT_SOURCE_CHANGED: {
                 String url = FileUrls.fromWebView2(a);
                 if (url != null && !url.isEmpty() && !"about:blank".equals(url)) {
+                    String previous = mUrl;
                     mUrl = url;
                     mClient.doUpdateVisitedHistory(mView, url, false);
+                    // Android also finishes main-frame same-document fragment navigations.
+                    // OAuth clients can use #close without a network NavigationCompleted.
+                    if (arg == 0 && fragmentNavigation(previous, url)) {
+                        mClient.onPageFinished(mView, url);
+                    }
                 }
                 break;
             }
@@ -2053,6 +2095,14 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             default:
                 break;
         }
+    }
+
+    private static boolean fragmentNavigation(String previous, String current) {
+        if (previous == null || previous.equals(current)) return false;
+        int oldFragment = previous.indexOf('#'), newFragment = current.indexOf('#');
+        String oldBase = oldFragment < 0 ? previous : previous.substring(0, oldFragment);
+        String newBase = newFragment < 0 ? current : current.substring(0, newFragment);
+        return oldBase.equals(newBase);
     }
 
     // ---- Windows, messages, files, permissions, authentication (the WebView's Looper) ----
@@ -2312,8 +2362,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             if (patterns.length() > 0) patterns.append(';');
             patterns.append(p);
         }
-        String all = "All files|*.*";
-        return patterns.length() > 0 ? "Accepted files|" + patterns + "\n" + all : all;
+        String all = text("files_all") + "|*.*";
+        return patterns.length() > 0 ? text("files_accepted") + "|" + patterns + "\n" + all : all;
     }
 
     /** COREWEBVIEW2_PERMISSION_KIND. */

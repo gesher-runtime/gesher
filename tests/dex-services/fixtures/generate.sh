@@ -7,7 +7,7 @@
 #
 #   generate.sh <build-tools dir> <framework-res.apk>
 #
-# Needs build-tools' aapt2, zipalign and lib/apksigner.jar, and a JDK's keytool and java.
+# Needs build-tools' aapt2, zipalign and lib/apksigner.jar, a JDK, and openssl.
 set -euo pipefail
 
 bt=$1 framework_res=$2
@@ -31,4 +31,14 @@ apksigner sign --ks "$work/old.p12" --ks-pass $pass --next-signer --ks "$work/ne
 apksigner sign --ks "$work/old.p12" --ks-pass $pass --v1-signing-enabled false \
   --v3-signing-enabled false --out "$here/v2only.apk" "$here/unsigned.apk"
 rm -f "$here"/*.idsig
+# Detached, synthetic installer-advisory checksum signature. Its throwaway signer is
+# deliberately different from the APK signer; it must never establish APK trust.
+printf '\000\000\000\010\000\000\000\040' > "$work/checksums.bin"
+openssl dgst -sha256 -binary "$here/v2only.apk" >> "$work/checksums.bin"
+openssl req -x509 -newkey rsa:2048 -nodes -days 36500 \
+  -subj '/CN=Gesher synthetic checksum signer' -keyout "$work/checksum-key.pem" \
+  -out "$work/checksum-cert.pem" > /dev/null 2>&1
+openssl cms -sign -binary -nosmimecap -noattr -md sha256 -in "$work/checksums.bin" \
+  -signer "$work/checksum-cert.pem" -inkey "$work/checksum-key.pem" -outform DER \
+  -out "$here/checksum-signature.der"
 apksigner verify --print-certs "$here/rotated.apk" | grep 'certificate SHA-256'

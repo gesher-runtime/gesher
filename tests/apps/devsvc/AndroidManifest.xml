@@ -18,6 +18,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />
+    <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
     <application
         android:label="@string/app_name"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
@@ -41,7 +43,34 @@
         <activity android:name=".ZoneActivity" android:exported="true" />
         <activity android:name=".NetJobActivity" android:exported="true" />
         <activity android:name=".AccountActivity" android:exported="true" />
-        <service android:name=".TestAuthenticator" android:exported="true">
+        <activity android:name=".AccountTokenActivity" android:exported="false" />
+        <service android:name=".PrivateAccountService" android:exported="false" />
+        <service android:name=".TestPrivateAuthenticator" android:exported="false">
+            <intent-filter><action android:name="android.accounts.AccountAuthenticator" /></intent-filter>
+            <meta-data android:name="android.accounts.AccountAuthenticator" android:resource="@xml/authenticator_private" />
+            <meta-data android:name="android.accounts.AccountAuthenticator.customTokens" android:value="true" />
+        </service>
+        <service android:name=".TestDisabledAuthenticator" android:exported="false" android:enabled="false">
+            <intent-filter><action android:name="android.accounts.AccountAuthenticator" /></intent-filter>
+            <meta-data android:name="android.accounts.AccountAuthenticator" android:resource="@xml/authenticator_disabled" />
+        </service>
+        <!-- Negative authenticator descriptor fixtures; never requested by AccountActivity. -->
+        <service android:name=".TestUnprotectedAuthenticator" android:exported="true">
+            <intent-filter><action android:name="android.accounts.AccountAuthenticator" /></intent-filter>
+            <meta-data android:name="android.accounts.AccountAuthenticator" android:resource="@xml/authenticator_unprotected" />
+        </service>
+        <service android:name=".TestForgedGoogleAuthenticator" android:exported="false">
+            <intent-filter><action android:name="android.accounts.AccountAuthenticator" /></intent-filter>
+            <meta-data android:name="android.accounts.AccountAuthenticator" android:resource="@xml/authenticator_forged_google" />
+        </service>
+        <service android:name=".TestCustomAuthenticator" android:exported="true"
+            android:permission="android.permission.BIND_ACCOUNT_AUTHENTICATOR">
+            <intent-filter><action android:name="android.accounts.AccountAuthenticator" /></intent-filter>
+            <meta-data android:name="android.accounts.AccountAuthenticator"
+                android:resource="@xml/authenticator_custom" />
+        </service>
+        <service android:name=".TestAuthenticator" android:exported="true"
+            android:permission="android.permission.BIND_ACCOUNT_AUTHENTICATOR">
             <intent-filter>
                 <action android:name="android.accounts.AccountAuthenticator" />
             </intent-filter>
@@ -53,7 +82,13 @@
         <provider
             android:name=".NotesProvider"
             android:authorities="com.gesher.devsvc.notes"
+            android:grantUriPermissions="true"
             android:exported="false" />
+        <service android:name=".TestSyncAdapter" android:exported="true"
+            android:permission="android.permission.BIND_SYNC_ADAPTER">
+            <intent-filter><action android:name="android.content.SyncAdapter" /></intent-filter>
+            <meta-data android:name="android.content.SyncAdapter" android:resource="@xml/sync_adapter" />
+        </service>
         <receiver android:name=".AlarmReceiver" android:exported="false" />
         <receiver android:name=".TimeReceiver" android:exported="false">
             <intent-filter>

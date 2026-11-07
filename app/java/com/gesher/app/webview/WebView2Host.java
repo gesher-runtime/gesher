@@ -1,11 +1,12 @@
 package com.gesher.app.webview;
 
+import java.io.File;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * One WebView2 controller (compat/webview/webview_host.h): the natives of
- * libgesher_webview.so, a builtin library of dalvikvm (compat/webview/webview_jni.cc).
+ * libgesher_webview_bridge.so (compat/webview/webview_jni.cc).
  * Every method posts its work to the process's WebView thread and returns; what WebView2
  * reports comes back on that thread through {@link Client} (docs/webview.md).
  */
@@ -83,18 +84,21 @@ public final class WebView2Host {
 
         /** {"v": value} or {"e": message}. Synchronous. */
         String onBridgeCall(String object, String method, String argsJson);
+
+        /** A reserved, deferred POST. Answer with {@link WebView2Host#respond} off this thread. */
+        void onBridgeRequest(long id, String body);
     }
 
     private static final Object sLock = new Object();
     private static Boolean sLoaded;
     private static String sLoadError;
 
-    /** Loads libgesher_webview.so once; false (and {@link #loadError}) when it is missing. */
+    /** Loads the matching shared bridge once; false when it is missing. */
     public static boolean load() {
         synchronized (sLock) {
             if (sLoaded == null) {
                 try {
-                    System.loadLibrary("gesher_webview");
+                    loadSiblingBridge();
                     sLoaded = true;
                 } catch (UnsatisfiedLinkError e) {
                     sLoaded = false;
@@ -103,6 +107,21 @@ public final class WebView2Host {
             }
             return sLoaded;
         }
+    }
+
+    private static void loadSiblingBridge() {
+        // LoadLibraryEx's DLL_LOAD_DIR requires an absolute path. Locate only the
+        // library shipped with this boot jar, as the protected account bridge does.
+        String boot = System.getProperty("java.boot.class.path", "");
+        for (String entry : boot.split(java.util.regex.Pattern.quote(File.pathSeparator))) {
+            if (entry.replace('\\', '/').endsWith("/gesher-app.jar")) {
+                File library = new File(new File(entry).getParentFile(),
+                        "libgesher_webview_bridge.so");
+                System.load(library.getAbsolutePath());
+                return;
+            }
+        }
+        throw new UnsatisfiedLinkError("Cannot locate the Gesher WebView bridge library");
     }
 
     public static String loadError() {
@@ -118,7 +137,7 @@ public final class WebView2Host {
 
     /** Why there is no runtime ("0x80070002"), or the library's load error. */
     public static String runtimeError() {
-        if (!load()) return "libgesher_webview.so: " + sLoadError;
+        if (!load()) return "libgesher_webview_bridge.so: " + sLoadError;
         String v = nRuntimeVersion();
         return v != null && v.startsWith("!") ? v.substring(1) : null;
     }
@@ -166,7 +185,7 @@ public final class WebView2Host {
         return mHandle == 0;
     }
 
-    public void destroy() {
+    public synchronized void destroy() {
         long h = mHandle;
         mHandle = 0;
         if (h != 0) nDestroy(h);
@@ -312,8 +331,14 @@ public final class WebView2Host {
         if (h != 0) nSetDocumentScript(h, script);
     }
 
+    /** Registers this view's unguessable synchronous Java bridge endpoint. */
+    public void setBridgeEndpoint(String path) {
+        long h = mHandle;
+        if (h != 0) nSetBridgeEndpoint(h, path);
+    }
+
     /** status 0: the request goes to the network as it is. */
-    public void respond(long id, int status, String reason, String headers, byte[] body) {
+    public synchronized void respond(long id, int status, String reason, String headers, byte[] body) {
         long h = mHandle;
         if (h != 0) nRespond(h, id, status, reason, headers, body);
     }
@@ -393,6 +418,10 @@ public final class WebView2Host {
         return mClient.onBridgeCall(object, method, args);
     }
 
+    private void onBridgeRequest(long id, String body) {
+        mClient.onBridgeRequest(id, body);
+    }
+
     private static void onGlobal(int type, long id, int arg, String a) {
         GlobalCallback cb = sGlobal.remove(id);
         if (cb != null) cb.onResult(type, arg, a);
@@ -442,6 +471,7 @@ public final class WebView2Host {
     private static native void nSetBackground(long h, int argb);
     private static native void nExecuteScript(long h, String script, long callbackId);
     private static native void nSetDocumentScript(long h, String script);
+    private static native void nSetBridgeEndpoint(long h, String path);
     private static native void nRespond(long h, long id, int status, String reason,
             String headers, byte[] body);
     private static native void nCompleteDialog(long h, long id, boolean accept, String text);

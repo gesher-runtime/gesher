@@ -1,0 +1,55 @@
+{
+  "date": "2026-11-07",
+  "scope": "ImageReader native producer and retained CPU HardwareBuffer snapshots for original Flutter APKs",
+  "baseline": {
+    "installed_pr_head": "a1bb8b095b698c430de6cfa39a63c7efa1a5ecda",
+    "original_crash": "libGLESv2.dll+0x22af5b after EGL received a reader Surface without a native producer",
+    "reproduced_failure": "ImageReaderEglTest: native reader surface assertion",
+    "subsequent_gap": "After enabling the producer, Flutter onDraw dereferenced the null Image.getHardwareBuffer() result"
+  },
+  "validation": {
+    "baseline": {
+      "log_sha256": "dfe70acfbf5b53b40c540aa478d9cf6f0a2c933b60ed1a093596bb90764a8f8e",
+      "passed": false,
+      "passed_assertions": 3
+    },
+    "hardware-buffer-v2": {
+      "log_sha256": "912e15ee2ff24dacc2f75476817b61a60a63bc4f88e6e6df5f9ed32dc01998fe",
+      "passed": true,
+      "passed_assertions": 48
+    },
+    "warp-reader": {
+      "log_sha256": "0623f124ae2a7ada82ca8fb8fb364a97fb53f8205b3dfd39f4241d8f721e5608",
+      "passed": true,
+      "passed_assertions": 48
+    },
+    "warp-bindings": {
+      "log_sha256": "d6eeb957cce75269eb3542e9b95e5c2cb5029580bebcb2835f9867ce64e487f3",
+      "passed": true,
+      "passed_assertions": 26
+    }
+  },
+  "runtime": {
+    "native_sha256": "4b1af2dc1af2849d649c946147eefabd3932f38d3c5ca9c65a95e78e5fa9f140",
+    "installed_native_sha256": "4b1af2dc1af2849d649c946147eefabd3932f38d3c5ca9c65a95e78e5fa9f140",
+    "same": true,
+    "matching_source_hash_manifest_sha256": "3a019d481b0b69f043aae8f87af18b31e987c7eea4ad505ecade287824868a11",
+    "build_log_sha256": "41a8a8abe838e2504a1fb22ac06b4aaef4f04844863890cf5fc51cc6dd860a26",
+    "method": "Incremental CMake/Ninja native target rebuild with retained dependency-tracked objects and prepared AOSP; no clean-build claim"
+  },
+  "actual_app": {
+    "package": "org.otzaria.otzaria",
+    "apk_modified": false,
+    "plugin": "com.otzaria.kidush-hachodesh",
+    "loaded_visually": true,
+    "interactive_content_visually_observed": true,
+    "user_confirmed_actions_work": true,
+    "user_data_reset": false
+  },
+  "limits": [
+    "CPU snapshots, no general HardwareBuffer allocation, GPU import or parcel support",
+    "This record does not resolve the pre-existing two general Windows CI job failures on a1bb8b09",
+    "No full media or whole-runtime CI pass is claimed for this new source yet"
+  ],
+  "private_data_published": false
+}

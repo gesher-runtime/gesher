@@ -75,6 +75,18 @@ public final class RuntimeCommands {
     private static int pm(String[] args) throws Exception {
         IPackageManager service = IPackageManager.Stub.asInterface(ServiceManager.getService("package"));
         if (service == null) throw new IllegalStateException("the device's package service is unavailable");
+        if (args.length == 4 && (args[1].equals("grant") || args[1].equals("revoke"))) {
+            android.permission.IPermissionManager permissions = android.permission.IPermissionManager
+                    .Stub.asInterface(ServiceManager.getService("permissionmgr"));
+            if (permissions == null) throw new IllegalStateException("permission service unavailable");
+            if (args[1].equals("grant")) {
+                permissions.grantRuntimePermission(args[2], args[3], "default:0", 0);
+            } else {
+                permissions.revokeRuntimePermission(args[2], args[3], "default:0", 0, "host shell");
+            }
+            System.out.println("Permission " + args[1] + " completed for " + args[2]);
+            return 0;
+        }
         if (args.length == 3 && args[1].equals("path")) {
             ApplicationInfo app = service.getApplicationInfo(args[2], 0, 0);
             if (app == null) throw new IllegalArgumentException("unknown package " + args[2]);
@@ -89,7 +101,8 @@ public final class RuntimeCommands {
             for (PackageInfo app : packages) if (app.packageName.contains(filter)) System.out.println("package:" + app.packageName);
             return 0;
         }
-        throw new IllegalArgumentException("pm list packages [FILTER] | pm path PACKAGE");
+        throw new IllegalArgumentException("pm list packages [FILTER] | pm path PACKAGE"
+                + " | pm grant|revoke PACKAGE PERMISSION");
     }
     private static int am(String[] args) throws Exception {
         if (args.length < 2) throw new IllegalArgumentException("am start|force-stop|broadcast");
@@ -123,14 +136,33 @@ public final class RuntimeCommands {
         }
         throw new IllegalArgumentException("am start|force-stop|broadcast");
     }
+    private static int notification(String[] args) throws Exception {
+        if (args.length != 3 || (!args[1].equals("allow-listener")
+                && !args[1].equals("deny-listener"))) {
+            throw new IllegalArgumentException("notification allow-listener|deny-listener PACKAGE/CLASS");
+        }
+        ComponentName component = ComponentName.unflattenFromString(args[2]);
+        if (component == null) throw new IllegalArgumentException("Invalid listener component");
+        android.app.INotificationManager service = android.app.INotificationManager.Stub
+                .asInterface(ServiceManager.getService("notification"));
+        if (service == null) throw new IllegalStateException("Notification service unavailable");
+        service.setNotificationListenerAccessGranted(component, args[1].equals("allow-listener"), true);
+        System.out.println("Notification listener access updated for " + component.getPackageName());
+        return 0;
+    }
+
     public static void main(String[] args) {
         int result = 1;
         try {
             if (System.getenv("GESHER_BINDER") == null) throw new IllegalStateException("no Gesher device namespace");
+            // Host control commands are not Android apps. This must precede opening
+            // Binder; app processes have already opened it with their assigned UID.
+            android.system.Os.setenv("GESHER_BINDER_UID", "2000", true);
             System.loadLibrary("android_runtime");
             if (args.length == 0) throw new IllegalArgumentException("missing tool name");
             if (args[0].equals("pm")) result = pm(args);
             else if (args[0].equals("am")) result = am(args);
+            else if (args[0].equals("notification")) result = notification(args);
             else if (args[0].equals("wait-binder")) {
                 if (args.length != 4) throw new IllegalArgumentException("wait-binder DEVICE PID TIMEOUT_MS");
                 if (!Zygote.waitForBinder(args[1], Integer.parseInt(args[2]), Integer.parseInt(args[3]))) {

@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.gesher.windowpromotion.target" android:versionCode="1" android:versionName="1">
+  <application android:label="Gesher window promotion fixture" android:theme="@android:style/Theme.DeviceDefault.NoActionBar" android:hardwareAccelerated="true">
+    <service android:name=".KeepAliveService" android:exported="true" />
+    <activity android:name=".TargetActivity" android:label="Gesher window promotion fixture" android:exported="true" />
+    <activity android:name=".BackgroundActivity" android:label="Gesher unapproved promotion fixture" android:exported="false" />
+    <receiver android:name=".ControlReceiver" android:exported="true" />
+  </application>
+</manifest>

@@ -1,0 +1,24 @@
+From: Gesher Authors
+Subject: [PATCH] Preserve JNI statement pointers in SQLiteRawStatement helpers
+
+Windows uses LLP64: C++ long is 32 bits, while JNI jlong and native pointers
+are 64 bits. Keep the incoming JNI type through both statement conversions
+so raw statement operations and error handling do not truncate the pointer.
+
+diff --git a/core/jni/android_database_SQLiteRawStatement.cpp b/core/jni/android_database_SQLiteRawStatement.cpp
+--- a/core/jni/android_database_SQLiteRawStatement.cpp
++++ b/core/jni/android_database_SQLiteRawStatement.cpp
+@@ -47,11 +47,11 @@ namespace android {
+ static jbyteArray emptyArray = nullptr;
+ 
+ // Helper functions.
+-static sqlite3 *db(long statementPtr) {
++static sqlite3 *db(jlong statementPtr) {
+     return sqlite3_db_handle(reinterpret_cast<sqlite3_stmt*>(statementPtr));
+ }
+ 
+-static sqlite3_stmt* stmt(long statementPtr) {
++static sqlite3_stmt* stmt(jlong statementPtr) {
+     return reinterpret_cast<sqlite3_stmt*>(statementPtr);
+ }
+ 

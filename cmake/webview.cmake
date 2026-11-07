@@ -19,7 +19,7 @@ target_include_directories(gesher_webview PRIVATE ${_wv})
 target_include_directories(gesher_webview SYSTEM PRIVATE ${WEBVIEW2_INCLUDE_DIRS})
 target_link_libraries(gesher_webview PRIVATE nativehelper gesher_posix)
 target_compile_options(gesher_webview PRIVATE -Wall -Werror -Wno-unused-parameter)
-set(_wv_libs ole32 oleaut32 uuid shlwapi user32 gdi32 advapi32)
+set(_wv_libs ole32 oleaut32 uuid shlwapi user32 gdi32 advapi32 bcrypt)
 if(GESHER_WEBVIEW2_LOADER STREQUAL "static")
   target_sources(gesher_webview PRIVATE ${_wv}/msvc_shims.cc)
   set_source_files_properties(${_wv}/msvc_shims.cc PROPERTIES COMPILE_OPTIONS -fno-emulated-tls)
@@ -29,6 +29,43 @@ endif()
 
 target_sources(dalvikvm PRIVATE $<TARGET_OBJECTS:gesher_webview>)
 target_link_libraries(dalvikvm PRIVATE ${_wv_libs})
+
+# The Java provider loads a distinct PE library name. A builtin of the same
+# basename would shadow a file-based update in Gesher's dlopen implementation.
+# Keep the bridge's Windows COM/CRT dependencies separate from gesher_posix:
+# directory-wide link_libraries(gesher_posix) is for the runtime's AOSP targets.
+add_library(gesher_webview_bridge SHARED ${_wv}/webview_host.cc
+  ${_wv}/webview2_loader.cc ${_wv}/webview_jni.cc ${_wv}/webview_bridge.def)
+set_property(TARGET gesher_webview_bridge PROPERTY LINK_LIBRARIES "")
+target_include_directories(gesher_webview_bridge PRIVATE ${_wv}
+  "${AOSP_DIR}/libnativehelper/include_jni")
+target_include_directories(gesher_webview_bridge SYSTEM PRIVATE ${WEBVIEW2_INCLUDE_DIRS})
+target_compile_definitions(gesher_webview_bridge PRIVATE GESHER_WEBVIEW_SHARED)
+target_compile_options(gesher_webview_bridge PRIVATE -Wall -Werror -Wno-unused-parameter)
+target_link_libraries(gesher_webview_bridge PRIVATE ${_wv_libs} version)
+target_link_options(gesher_webview_bridge PRIVATE -Wl,--exclude-all-symbols)
+if(GESHER_WEBVIEW2_LOADER STREQUAL "static")
+  target_sources(gesher_webview_bridge PRIVATE ${_wv}/msvc_shims.cc)
+  target_compile_definitions(gesher_webview_bridge PRIVATE GESHER_WEBVIEW2_STATIC)
+endif()
+set_target_properties(gesher_webview_bridge PROPERTIES
+  PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "gesher_webview_bridge")
+add_dependencies(dalvikvm gesher_webview_bridge)
+
+# Private helper regression only; no additional runtime hooks or default targets.
+option(GESHER_WEBVIEW_BRIDGE_TESTS "Build native WebView bridge boundary tests" OFF)
+if(GESHER_WEBVIEW_BRIDGE_TESTS)
+  add_executable(webview_bridge_test EXCLUDE_FROM_ALL
+    ${CMAKE_SOURCE_DIR}/tests/native/webview_bridge_test.cc ${_wv}/webview2_loader.cc)
+  target_include_directories(webview_bridge_test PRIVATE ${_wv})
+  target_include_directories(webview_bridge_test SYSTEM PRIVATE ${WEBVIEW2_INCLUDE_DIRS})
+  target_compile_options(webview_bridge_test PRIVATE -Wall -Werror -Wno-unused-parameter -UNDEBUG)
+  target_link_libraries(webview_bridge_test PRIVATE ${_wv_libs})
+  if(GESHER_WEBVIEW2_LOADER STREQUAL "static")
+    target_sources(webview_bridge_test PRIVATE ${_wv}/msvc_shims.cc)
+    target_compile_definitions(webview_bridge_test PRIVATE GESHER_WEBVIEW2_STATIC)
+  endif()
+endif()
 
 # web3 track (ADR 0058): accessibility over UI Automation (libgesher_a11y.so:
 # Android's views for UIA clients, WebView2's UIA tree for a WebView's

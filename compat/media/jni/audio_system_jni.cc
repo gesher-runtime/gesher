@@ -367,6 +367,7 @@ int register_gesher_media(JNIEnv* env);
 }
 // The surfaces hwui draws (compat/media/surface/surface_jni.cc, built with hwui).
 int register_gesher_media_surfaces(JNIEnv* env);
+int register_gesher_reader_buffers(JNIEnv* env);
 
 int android::register_gesher_media(JNIEnv* env) {
   gesher::media::SetVm(env);
@@ -374,5 +375,5 @@ int android::register_gesher_media(JNIEnv* env) {
   gesher::media::RegisterAudioTrack(env);
   gesher::media::RegisterAudioRecord(env);
   register_gesher_media_surfaces(env);
-  return 0;
+  return register_gesher_reader_buffers(env);
 }

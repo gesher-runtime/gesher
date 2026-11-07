@@ -106,9 +106,10 @@ hangs the other for long:
   to 5 s, then the navigation goes ahead). It is asked only when the client
   overrides either `shouldOverrideUrlLoading` and only for navigations the
   page or the user started (not `loadUrl`, `reload`, back/forward).
-- `@JavascriptInterface` methods run on the WebView thread, synchronously with
-  the page's call (Android runs them on its JavaBridge thread, not the UI
-  thread, too).
+- HTTP(S) `@JavascriptInterface` calls remain synchronous for JavaScript, but
+  execute in order on a per-view JavaBridge worker. A deferred reserved request
+  leaves WebView2's STA free to answer synchronous Android cookie APIs. Other
+  schemes retain the legacy WebView-thread transport and its cookie limitation.
 - Requests (`WebResourceRequested`) are deferred and answered from a worker
   pool (`shouldInterceptRequest` runs there, off the UI thread, as on
   Android).
@@ -172,16 +173,64 @@ Pages see the https origin: same-origin requests between assets work without
 | Accessibility | the WebView's AccessibilityNodeProvider: WebView2's UI Automation tree as virtual views (click, focus, set text, scroll); UI Automation clients reading the app's window find WebView2's own tree under the WebView's element (ADR 0058) |
 | androidx.webkit (`WebViewCompat`) | Gesher's support library glue (`SupportLib`, ADR 0058): WebMessageListener, document-start scripts, ProxyController, multi-process query, the framework-backed features |
 
+`ALGORITHMIC_DARKENING` supports `WebSettings` and the AndroidX settings boundary.
+The setting defaults to false and enables Chromium's algorithmic darkening only
+for a dark app theme targeting SDK 33 or later. Independently, the view's
+`prefers-color-scheme` follows `isLightTheme` (missing means light). These are
+per-controller CDP controls; they do not rewrite document styles or change a
+shared browser profile. Commands for each control are serialized and coalesced
+until completion. Author dark styles and `color-scheme: only light` remain in
+effect. A rejected CDP command is logged, preserves the existing renderer state,
+and can be retried on the next settings/theme update. This does not implement
+Android's separate Force Dark rendering pipeline. The source-owned boundary and
+actual renderer regression is recorded in
+[the Otzaria WebView validation](research/otzaria-webview-validation-2026-11-06.json).
+
 ### JavaScript interfaces
 
 A host object `gesherBridge` (an `IDispatch` without type information,
 `Bridge` in webview_host.cc) is added to every page. A document script
 (`JsBridge.script`, `AddScriptToExecuteOnDocumentCreated`, replaced whenever
 interfaces change, so they apply from the next page as on Android) defines
-`window.<name>` with one function per callable method; each calls
-`chrome.webview.hostObjects.sync.gesherBridge.callJava(name, method, argsJson)`
-synchronously and gets `{"v": value}` or `{"e": message}` back (an error is
-thrown). WebView2's sync proxy reads `callJava` as a property and then calls
+`window.<name>` with one function per callable method. For HTTP(S), each checks
+the native `canPost()` capability. A cheap synchronous `prepareCall` host-object
+call stores bounded arguments privately in a per-view native map and returns a
+random, expiring, one-use ticket. It invokes no Java application method. The
+page makes a synchronous same-origin XHR POST to
+`/.gesher-js-bridge/<per-view UUID>`, with only this ticket in its body. Argument
+values never enter an HTTP request, URL or normal request logs, including if the
+browser abandons interception during host failure.
+
+Native interception installs a denial, validates the view and request source,
+consumes the ticket, and defers a valid call to the serialized Java worker.
+The original HTTP request is neutralized before deferral. Replies are bounded JSON with no-store
+and nosniff headers. Stale paths, shared/service-worker requests, malformed
+requests, queue rejection, navigation, destruction and timeouts retain denial; bridge requests cannot
+request ordinary network passthrough. The native runtime must support WebView2's
+modern request-source filters; unsupported runtimes fail before posting data.
+WebView2 classifies dedicated workers with their owning document, so a document
+can delegate its per-view capability to one. Shared and service workers cannot
+dispatch Java calls with it. The wrapper retires its ticket in `finally`,
+including if browser CSP rejects the XHR. Navigation, expiration and destruction
+also retire prepared calls. Native teardown retains a controller until pending
+reply acknowledgments permit closing it; the focused live teardown regression
+checks zero origin requests. No zero-packet guarantee is claimed for arbitrary
+browser/host process crashes; such a request contains only an unusable ticket,
+never the private arguments.
+If a renderer never acknowledges a retiring reply, its inactive parked controller
+is retained until process exit. There is no forced close timer that can reopen
+the measured teardown race.
+
+Browser CSP `connect-src`, synchronous-XHR policy and opaque-origin restrictions
+are preserved. A blocked HTTP(S) bridge throws; it does not retry via another
+origin or the legacy STA transport. The loopback tests do not establish that
+every third-party login page permits this transport.
+
+Other schemes retain
+`chrome.webview.hostObjects.sync.gesherBridge.callJava(name, method, argsJson)`.
+Both transports return `{"v": value}` or `{"e": message}` (an error is thrown),
+with synchronous void/nonvoid ordering. WebView2's sync proxy reads `callJava`
+as a property and then calls
 what it got, so the property get answers an object whose default member makes
 the call. (The method is not called `call`: the proxy is a function, whose
 `.call` is `Function.prototype.call`.) Callable methods are public ones
@@ -190,7 +239,22 @@ lower). Arguments convert from JSON to the method's parameter types
 (String, the primitive types and their boxes); results back to JSON (other
 objects become null).
 
+Same-document primary-frame fragment changes also deliver `onPageFinished`
+without `onPageStarted`, including hash-only `pushState`/`replaceState` and hash
+removal. Path/query history changes update visited history without this extra
+completion. This matches Android WebView's
+[fragment-navigation classification](https://github.com/chromium/chromium/blob/main/content/browser/android/navigation_handle_proxy.cc)
+and lets clients observe completion URLs such as `#close`.
+
 ## The loader
+
+The Java provider loads `libgesher_webview_bridge.so` by absolute path beside its
+boot `gesher-app.jar`. This is a PE DLL built by the `gesher_webview_bridge`
+CMake target, with an explicit `JNI_OnLoad` export and no builtin registration.
+Building `dalvikvm` also builds this required shared dependency, which the normal
+artifact collector and installer ship. There is no search-path or legacy
+fallback when it is missing. The legacy `libgesher_webview.so` builtin remains
+for older providers; it cannot shadow the new distinct library name.
 
 The WebView2 SDK is the NuGet package `Microsoft.Web.WebView2` 1.0.4258.31,
 pinned by SHA-256 in `cmake/webview2_sdk.cmake` and downloaded at configure
@@ -200,8 +264,8 @@ mingw-w64's `eventtoken.h` (the cross build's file system is case-sensitive),
 and its MIDL pragmas silenced; its IIDs are `selectany` definitions in the
 header. COM callbacks are a small template (`com_util.h`, no WRL).
 
-dalvikvm links the SDK's **WebView2LoaderStatic.lib** (MSVC-built COFF
-objects that use Chromium's libc++ with MSVC's name mangling). The few pieces
+The shared bridge and legacy builtin link the SDK's **WebView2LoaderStatic.lib**
+(MSVC-built COFF objects that use Chromium's libc++ with MSVC's name mangling). The few pieces
 of Microsoft's C++ runtime it needs and llvm-mingw lacks are in
 `msvc_shims.cc`: `operator new/delete` variants and `std::nothrow` under
 MSVC's decorated names, libc++'s `__libcpp_verbose_abort`, MSVC's thread-safe

@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="gesher.test.processmeta" android:versionCode="1">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" />
+    <application android:hasCode="false">
+        <receiver android:name=".FirstReceiver" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
+        </receiver>
+        <receiver android:name=".SecondReceiver" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
+        </receiver>
+        <service android:name=".SecondaryService" android:exported="false" android:process=":worker" />
+        <provider android:name=".SecondaryProvider" android:authorities="gesher.test.processmeta.provider" android:exported="false" android:process=":worker" />
+    </application>
+</manifest>

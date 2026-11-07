@@ -99,6 +99,13 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      - name: Verify WebView darkening command ordering policy
+        if: inputs.apk
+        run: |
+          mkdir -p out-darkening-policy
+          javac -d out-darkening-policy app/java/com/gesher/app/webview/WebViewDarkening.java tests/webview-darkening/WebViewDarkeningTest.java
+          java -cp out-darkening-policy com.gesher.app.webview.WebViewDarkeningTest
+
       - name: Strict current framework-classes artifact
         if: inputs.apk
         env:

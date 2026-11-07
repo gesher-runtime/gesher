@@ -3,6 +3,12 @@
 # by run-tests.ps1, whose Check, NoDrive, $Dir, $root, $bcp and $failed these
 # use.
 
+# These synthetic device checks parse English launcher diagnostics. Bilingual UI
+# behavior is covered independently; always restore the invoking test's locale.
+$servicesSavedUiLocale = $env:GESHER_LOCALES
+try {
+$env:GESHER_LOCALES = 'en-US'
+
 # Runs a program with a time limit (binder calls that go wrong tend to wait
 # forever), attempting process-tree termination when the time is up. Returns
 # its output; $LASTEXITCODE is its exit code (-1 on a time-out).
@@ -119,17 +125,27 @@ $servicemanager = Start-Process "$Dir/servicemanager.exe" -PassThru -NoNewWindow
 $bcpServices = (('core-oj', 'core-libart', 'core-icu4j', 'framework') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $dvm = @("-Xbootclasspath:$bcpServices", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"))
+CheckTimed 'binder: CursorWindow inline/shared-memory Parcel data and lifetime' "$Dir/dalvikvm.exe" `
+  ($dvm + 'gesher.services.CursorWindowParcelTest') @('CursorWindowParcelTest all passed')
 $service = Start-Process "$Dir/dalvikvm.exe" -ArgumentList ($dvm + 'gesher.services.BinderTest', 'service') `
   -PassThru -NoNewWindow -RedirectStandardOutput "$logs/service.out" -RedirectStandardError "$logs/service.err"
 $failedBefore = $failed
 CheckTimed 'binder: two dalvikvm processes, ServiceManager, a Binder passed back, death' "$Dir/dalvikvm.exe" `
   ($dvm + 'gesher.services.BinderTest', 'client') @('BinderTest all passed',
     'BinderTest PASS remote SYSPROPS reports, live values, local-only explicit report, ordinary-set silence and callback removal') 240 -Publish
-foreach ($p in $service, $servicemanager, $binderd) {
+$cursorName = "gesher.cursor.tests.$PID"
+$cursorService = Start-Process "$Dir/dalvikvm.exe" `
+  -ArgumentList ($dvm + 'gesher.services.CursorWindowParcelTest', 'service', $cursorName) `
+  -PassThru -WindowStyle Hidden -RedirectStandardOutput "$logs/cursor-service.out" -RedirectStandardError "$logs/cursor-service.err"
+CheckTimed 'binder: CursorWindow types/data and descriptor lifetime across two processes' "$Dir/dalvikvm.exe" `
+  ($dvm + 'gesher.services.CursorWindowParcelTest', 'client', $cursorName) @(
+    'CursorWindowParcelTest: two-process Binder inline/shared-memory cursor transfer preserves types/data and descriptor lifetime',
+    'CursorWindowParcelTest all passed')
+foreach ($p in $cursorService, $service, $servicemanager, $binderd) {
   if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
 }
 if ($failed -ne $failedBefore) {
-  foreach ($f in 'service.out', 'service.err', 'servicemanager.log', 'binderd.log') {
+  foreach ($f in 'service.out', 'service.err', 'cursor-service.out', 'cursor-service.err', 'servicemanager.log', 'binderd.log') {
     Write-Host "--- $f"
     Get-Content "$logs/$f" -ErrorAction SilentlyContinue | Select-Object -Last 80 | Out-Host
   }
@@ -142,7 +158,7 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
   'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-  'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, clipboard, connectivity, content, device_identifiers, device_policy, deviceidle, display, dropbox, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_session, mount, notification, package, permissionmgr, phone, power, search, sensitive_content_protection_service, shortcut, telephony.registry, thermalservice, trust, uimode, usagestats, user, vibrator_manager, window',
+  'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, dropbox, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_session, mount, notification, package, permissionmgr, phone, power, restrictions, search, sensitive_content_protection_service, shortcut, telephony.registry, thermalservice, trust, uimode, uri_grants, usagestats, user, vibrator_manager, window',
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 
@@ -721,11 +737,26 @@ try {
   CheckTimed 'services: real ContextImpl manager construction and immediate policy rejection' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.ManagerConstructionBatchTest') @('ManagerConstructionBatchTest all passed (17 managers)') 30
   CheckTimed 'services: thermal usage shortcuts and unmanaged device policy contracts' "$Dir/dalvikvm.exe" `
-    ($dvmContracts + 'gesher.services.SoftwareServiceContractTest' +
+    ($dvmContracts + 'gesher.services.ServiceFixtureRunner' + 'SoftwareServiceContractTest' +
       (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures/unsigned.apk'))) @('SoftwareServiceContractTest all passed') 30
   CheckTimed 'services: existing and future registration callbacks, cancellation and death cleanup' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.ServiceRegistrationCallbackTest') @('ServiceRegistrationCallbackTest all passed') 30
+  $canonicalChecks = @(
+    @{ Class = 'UserManagerProfilesTest'; Count = 33; Name = 'single-user profile and application restriction contracts' },
+    @{ Class = 'ApplicationRestrictionsTest'; Count = 16; Name = 'unmanaged restrictions queries and explicit unsupported approval' },
+    @{ Class = 'BlobStoreContractTest'; Count = 25; Name = 'empty shared-blob queries, zero quota and unsupported storage' },
+    @{ Class = 'WifiUnsupportedTest'; Count = 33; Name = 'disabled Wi-Fi manager and unsupported controller operations' },
+    @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service' }
+  )
+  foreach ($contract in $canonicalChecks) {
+    CheckTimed "services: $($contract.Name)" "$Dir/dalvikvm.exe" `
+      ($dvmContracts + "gesher.services.$($contract.Class)") @("$($contract.Class) all passed: $($contract.Count)") 30
+  }
 } finally {
   $env:ANDROID_DATA = $savedContractsData
   $env:GESHER_BINDER = $savedContractsBinder
+}
+} finally {
+  if ($null -eq $servicesSavedUiLocale) { Remove-Item Env:GESHER_LOCALES -ErrorAction SilentlyContinue }
+  else { $env:GESHER_LOCALES = $servicesSavedUiLocale }
 }

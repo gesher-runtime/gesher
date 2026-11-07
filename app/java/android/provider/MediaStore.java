@@ -363,7 +363,7 @@ public final class MediaStore {
                 return EXTERNAL_CONTENT_URI;
             }
         }
-    
+
         public interface AlbumColumns {
             public static final String ALBUM_ID = "album_id";
             public static final String ALBUM = "album";
@@ -701,7 +701,7 @@ public final class MediaStore {
                 return contentUri(volumeName, "video", "media", Long.toString(id));
             }
         }
-    
+
         public static class Thumbnails implements BaseColumns {
             public static void cancelThumbnailRequest(ContentResolver cr, long origId) {
                 final Uri uri = ContentUris.withAppendedId(

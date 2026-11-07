@@ -81,3 +81,9 @@ handles 0x..., <locales>)`, `ActivityConfigurationChangeItem (...)`.
   change is only as live as Windows' `GetUserPreferredUILanguages` answer (not
   tested on CI: changing it needs a sign-in); custom separators and date
   patterns not carried over (ADR 0049).
+
+## Gesher interface translations
+
+Gesher's own Hebrew/English interface follows the Windows display languages too.
+See [UI language and translation catalog](ui-language.md) for the user-facing
+surfaces, fallback policy and instructions for adding translations.

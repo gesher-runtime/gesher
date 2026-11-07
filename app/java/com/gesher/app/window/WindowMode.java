@@ -95,6 +95,40 @@ public final class WindowMode {
         return session;
     }
 
+    /** Main-thread lifecycle promotion of one server-approved Activity's new ViewRoots. */
+    public static void prepareActivityWindow(android.os.IBinder token, String mode) {
+        if (token == null || !(WINDOW.equals(mode) || HIDDEN.equals(mode))) {
+            throw new IllegalArgumentException("Invalid activity window mode");
+        }
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            throw new IllegalStateException("Activity window setup must run on the main thread");
+        }
+        // A headless background process has no local surface session. Its newly approved
+        // Activity needs rendering before onCreate, while all unapproved roots stay offscreen.
+        boolean previous = android.view.ThreadedRenderer.sRendererEnabled;
+        try {
+            WindowSession session = WindowSession.get();
+            int existingRoots = session == null ? android.view.WindowManagerGlobal.getInstance()
+                    .getViewRootNames().length : 0;
+            if ("1".equals(System.getenv("GESHER_TRACE_ACTIVITY_MODE"))) {
+                System.out.println("gesher-app: activity-mode client mode=" + mode
+                        + " local-session=" + (session != null) + " existing-roots=" + existingRoots
+                        + " renderer-enabled=" + previous);
+            }
+            if (session == null && existingRoots != 0) {
+                // Existing headless ViewRoots retain the remote no-surface session.
+                // Recreating those roots is a separate operation; never flip their renderer.
+                return;
+            }
+            android.view.ThreadedRenderer.sRendererEnabled = true;
+            if (session == null) session = install(false);
+            session.setActivityVisibility(token, WINDOW.equals(mode));
+        } catch (RuntimeException | Error e) {
+            android.view.ThreadedRenderer.sRendererEnabled = previous;
+            throw e;
+        }
+    }
+
     /**
      * Shows a resumed Activity's window (handleResumeActivity's part). Closing it finishes
      * and destroys the Activity, removes the window, then runs {@code onClosed}.

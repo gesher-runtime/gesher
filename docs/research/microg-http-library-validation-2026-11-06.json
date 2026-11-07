@@ -1,0 +1,102 @@
+{
+  "date": "2026-11-06",
+  "scope": "Regression and actual Gmail acceptance after completing a missing standard runtime artifact; no production implementation changes",
+  "finding": "The experiment runtime had the optional org.apache.http.legacy XML declaration but omitted the JAR. Both official Gmail and microG APK manifests name the optional library. Existing resolver intentionally ignores missing optional JARs.",
+  "production_source_changed": false,
+  "library_source": {
+    "original_path": "out/stability-worktree/out/local-install-20261105/org.apache.http.legacy.jar",
+    "verified_copy": "out/native-http-legacy/org.apache.http.legacy.jar",
+    "sha256": "6f2b6187c97c1e658ed443cbed74c9529ed4c984ad7803cc1bf7a8055024295b",
+    "upstream": "https://android.googlesource.com/platform/external/apache-http/+archive/refs/tags/android-16.0.0_r4.tar.gz",
+    "java_sources": 409,
+    "classes": 449,
+    "source_set": "Android.bp org.apache.http.legacy: src/**/*.java + android/src/**/*.java, no local edits",
+    "build_receipt": "out/stability-worktree/out/local-install-build/http-build-receipt.json"
+  },
+  "runtime_sha256": {
+    "dalvikvm.exe": "6fbc8a815ab3bb5eecd07994dd26e0426c068a38ffce26ee0bf62e73e09cdadf",
+    "gesher-app.jar": "0cc47fe59548652393c4c38009a52f90426286b6fcd8e1e65f53b0b2c3da278d",
+    "framework.jar": "5909839b6c6b3558cc3a9ba1fc8c71def67ca1e7eba5a9a62a7d2c5d03e4d821"
+  },
+  "fixture": {
+    "path": "out/native-http-legacy/services-tests.dex",
+    "sha256": "4fd0b376fcfe63cbc2cfb6480d4582d163cd1e8f9b18ab3ebcb61b8e32be8dda",
+    "canonical_builder": "out/microg-pr-worktree/tests/dex-services/build.sh",
+    "app_compile_classes": "out/microg-compose-clean-build/gesher-app-classes.jar",
+    "app_compile_classes_sha256": "2ebb504ab7fa8ae412dfbc325d53be3f34e848a88c65746647d44475756b45d6",
+    "source_sha256": {
+      "tests/dex-services/gesher/services/HttpLegacyTest.java": "6ec0ac5b7cc2b2e06f0a772a5ca91e9d0ce3c15675cc2f2575f509b1a52ea102",
+      "tests/windows/tracks/94-framework-fixes.ps1": "9da98f89a8b2ee36c1780d3358fc69f1b01abd36e5f8775029c0e039463f6bfa"
+    },
+    "compiled_source_sha256": {
+      "tests/dex-services/gesher/services/HttpLegacyTest.java": "6ec0ac5b7cc2b2e06f0a772a5ca91e9d0ce3c15675cc2f2575f509b1a52ea102",
+      "tests/windows/tracks/94-framework-fixes.ps1": "9da98f89a8b2ee36c1780d3358fc69f1b01abd36e5f8775029c0e039463f6bfa"
+    }
+  },
+  "validation": {
+    "runner_exit": 0,
+    "missing_optional_jar_negative_control": "PASS: isolated expected assertion proves unresolved optional dependency",
+    "jar_present": "PASS: graph resolves to correct system-root jar, implicit SDK policy preserved, classes absent from boot loader, BasicHttpParams/HttpConnectionParams/HttpGet and BasicCookieStore execute successfully",
+    "synthetic_cookie": "add/get/clear, example.invalid, no network",
+    "logs": [
+      "out/native-http-legacy/missing-jar-control.err.log",
+      "out/native-http-legacy/present-jar.out.log",
+      "out/native-http-legacy/present-jar.err.log"
+    ],
+    "diff_check": "PASS"
+  },
+  "experimental_staging": {
+    "jar_previously_absent_in_runtime_and_profile": true,
+    "xml_already_present": true,
+    "runtime_and_profile_jar_sha256": "6f2b6187c97c1e658ed443cbed74c9529ed4c984ad7803cc1bf7a8055024295b",
+    "normal_launcher_copied_library_to_profile": true,
+    "java_native_and_webview_binaries_unchanged": true
+  },
+  "actual_acceptance": {
+    "composer_opened": true,
+    "empty_recipient_field_focused_without_typing": true,
+    "observation_start_utc": "2026-11-05T22:15:59Z",
+    "observation_end_utc": "2026-11-05T22:20:04Z",
+    "observation_interval_seconds": 245,
+    "composer_still_present_at_end": true,
+    "gmail_java_fatal_count_during_new_run": 0,
+    "gmail_process_exit_observed_during_new_run": false,
+    "previous_missing_cookie_class_failure_recurred": false,
+    "subsequent_user_report": "User manually sent a message through the open window and reported success",
+    "agent_entered_message_content_or_sent_mail": false,
+    "recipient_delivery_or_server_protocol_trace_independently_verified": false,
+    "personal_account_names_token_values_or_mail_contents_saved_to_repository": false
+  },
+  "final_qa": {
+    "decision": "APPROVE",
+    "reviewed_snapshot_sha256": "a1ef63f53177638948b7bc1421825f2fd4c6c1bdb496d3a5ab9c730b8156a9cb",
+    "reviewed_parent": "99d5e0cb1edf743e81c58ebf0fa141b2a53d3f38",
+    "reviewed_file_count": 6,
+    "reviewed_files": {
+      "docs/research/microg-compose-validation-2026-11-05.json": "5229501aa0779f2102f34dbc36f49cbfab063b641062f06c7d43904c80d6ce83",
+      "docs/research/microg-gmail-validation-2026-11-05.json": "61856824f23e816823cc697aacb4785f5052e7a4807919507086d00ec2c36d80",
+      "tests/dex-services/gesher/services/HttpLegacyTest.java": "6ec0ac5b7cc2b2e06f0a772a5ca91e9d0ce3c15675cc2f2575f509b1a52ea102",
+      "tests/windows/tracks/94-framework-fixes.ps1": "9da98f89a8b2ee36c1780d3358fc69f1b01abd36e5f8775029c0e039463f6bfa",
+      "docs/research/microg-http-library-validation-2026-11-06.json": "273885e223801cf0d0c9dcb2013fb2d8f22bff8c1a8139c48e935e546f60e5ff",
+      "docs/microg.md": "2d68cb8ab4cd13fae7df29515d4808931f339fa900e6b4d78d9ccb4c28254b07"
+    },
+    "scope": "Tests and documentation only; production implementations unchanged",
+    "findings": "No blocking findings; canonical artifact, missing/present controls, boundary claims, timestamps and source hashes verified",
+    "post_review_change": "Only this approval metadata was finalized after review"
+  },
+  "isolated_regression_boundaries": {
+    "fresh_system_root_and_data": true,
+    "personal_profile_read_or_modified": false,
+    "gmail_launched_or_ui_controlled": false,
+    "google_network": false,
+    "boot_classpath_changed": false
+  },
+  "actual_acceptance_boundaries": {
+    "only_expected_static_library_added_to_experiment": true,
+    "normal_installed_profile_untouched": true,
+    "account_application_or_mail_data_not_copied_or_deleted": true,
+    "agent_did_not_enter_or_send_mail": true,
+    "user_manually_reported_send_success": true,
+    "no_raw_account_tokens_or_mail_contents_published": true
+  }
+}

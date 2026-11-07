@@ -38,7 +38,7 @@ enum Event : int32_t {
   kPageStarted = 3,    // id: navigation id; arg: 1 if the app started it; a: url
   kPageFinished = 4,   // id: HTTP status (0 unknown); arg: -1 success, else
                        // COREWEBVIEW2_WEB_ERROR_STATUS; a: url
-  kSourceChanged = 5,  // a: url
+  kSourceChanged = 5,  // arg: 1 new document, 0 same document; a: url
   kHistory = 6,        // arg: 1 can go back | 2 can go forward
   kTitle = 7,          // a: title
   kContentLoading = 8, // arg: 1 for an error page
@@ -96,6 +96,9 @@ class Listener {
   virtual void OnResourceRequest(int64_t id, const std::wstring& url, const std::wstring& method,
                                  const std::wstring& headers, int32_t context,
                                  bool main_frame) = 0;
+  // A reserved, already denied-by-default POST. Dispatch without blocking the
+  // WebView thread; answer through RespondToRequest. False completes rejection.
+  virtual bool OnBridgeRequest(int64_t id, const std::wstring& body) { return false; }
   // window.<name>.<method>(...) from the page: the result as the bridge
   // script expects it ({"v": value} or {"e": message}). Synchronous, on the
   // WebView thread (Android calls @JavascriptInterface methods off the UI
@@ -148,6 +151,7 @@ class Host {
   void Navigate(const std::wstring& url, const std::wstring& headers,
                 const std::wstring& method = L"GET", std::vector<uint8_t> body = {});
   void NavigateToString(const std::wstring& html);
+  void SetBridgeEndpoint(const std::wstring& path);
   enum Command : int32_t {
     kReload = 1,
     kStop = 2,

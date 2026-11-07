@@ -56,6 +56,9 @@ java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
   --output "$work/dex-framework" $(find "$work/classes-framework" -name '*.class')
 cp "$work/dex-framework/classes.dex" "$out/framework-tests.dex"
 
+# Server-role JNI owner stubs stay in a separate, fixture-only DEX.
+bash "$root/tests/account-chooser-native/build.sh" "$out" "$r8"
+
 # gesher-base's POSIX layer under the framework (tests/dex-posix), compiled
 # against tests/dex-posix-stubs, which are not dexed: framework.jar has them.
 javac --release 11 -d "$work/classes-posix-stubs" $(find "$root/tests/dex-posix-stubs" -name '*.java')
