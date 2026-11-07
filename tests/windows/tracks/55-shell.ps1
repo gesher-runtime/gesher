@@ -247,9 +247,10 @@ if ($splash -ne [IntPtr]::Zero) {
     $lines += "gone=$gone"
     $form.Close()
   } elseif ($mode -eq 'close') {
-    $lines += "gone=True"
+    $lines += "close-hwnd=$($splash.ToInt64())", "worker-pid=$PID",
+      "worker-start=$([Diagnostics.Process]::GetCurrentProcess().StartTime.ToFileTimeUtc())"
     Set-Content -LiteralPath (Join-Path $PSScriptRoot "splash-$mode.txt") -Encoding ascii -Value $lines
-    [void][SplashProbe]::PostMessageW($splash, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)  # WM_CLOSE
+    if (-not [SplashProbe]::PostMessageW($splash, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) { exit 23 }
     Start-Sleep -Milliseconds 1000
     $code = 5
   }
@@ -257,6 +258,15 @@ if ($splash -ne [IntPtr]::Zero) {
 Set-Content -LiteralPath (Join-Path $PSScriptRoot "splash-$mode.txt") -Encoding ascii -Value $lines
 exit $code
 '@
+  if (-not ('SplashLifetimeProbe' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class SplashLifetimeProbe {
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
+}
+'@
+  }
   $cases = @(
     @{ Mode = 'app'; Args = 'launch com.gesher.splashprobe'; Code = 0 },
     @{ Mode = 'app'; Args = "`"$probeApk`""; Code = 0 },
@@ -278,10 +288,26 @@ exit $code
     if (-not $p.WaitForExit(120000)) { $p.Kill($true); $problems += "$($what): did not exit within 120 s"; continue }
     if ($p.ExitCode -ne $case.Code) { $problems += "$($what): exit $($p.ExitCode), not $($case.Code)" }
     $probe = if (Test-Path $probeOut) { @(Get-Content -LiteralPath $probeOut) } else { @() }
+    if ($case.Mode -eq 'close') {
+      # The cancelled child cannot report its own retirement; observe it here.
+      $closing = @($probe | Where-Object { $_ -match '^close-hwnd=\d+$' })
+      $worker = @($probe | Where-Object { $_ -match '^worker-pid=\d+$' })
+      $birth = @($probe | Where-Object { $_ -match '^worker-start=\d+$' })
+      if ($closing.Count -eq 1 -and $worker.Count -eq 1 -and $birth.Count -eq 1) {
+        $handle = [IntPtr][long]$closing[0].Split('=')[1]
+        $child = Get-Process -Id ([int]$worker[0].Split('=')[1]) -ErrorAction SilentlyContinue
+        $retired = -not $child
+        if ($child) {
+          try { $retired = $child.HasExited -or $child.StartTime.ToFileTimeUtc() -ne [long]$birth[0].Split('=')[1] }
+          catch { $retired = $child.HasExited }
+        }
+        $probe += "gone=$(-not [SplashLifetimeProbe]::IsWindow($handle))", "worker-retired=$retired"
+      }
+    }
     Write-Host "$($what): $($probe -join '; ')"
     $want = switch ($case.Mode) {
       'app' { 'splash=True', 'title-ok=True', 'visible=True', 'aumid=Gesher.App.com.gesher.splashprobe', 'early=True', 'set-aumid=0', 'gone=True' }
-      'close' { 'splash=True', 'gone=True' }
+      'close' { 'splash=True', 'gone=True', 'worker-retired=True' }
       'none' { 'splash=False' }
     }
     if ($case.Mode -ne 'none' -and (Test-Path (Join-Path $splashShell 'icon.ico'))) { $want += 'icon=True' }

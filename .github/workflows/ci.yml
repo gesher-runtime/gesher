@@ -1295,6 +1295,12 @@ jobs:
           python tools/web3/host_roles.py verify --dist dist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Run offline identity and retirement regressions
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows/run-microg-security.ps1 -Dir dist -EvidenceDir "${{ runner.temp }}/microg-security" | Tee-Object -FilePath microg-security-results.txt
+          exit $LASTEXITCODE
+
       - name: Run tests
         shell: pwsh
         run: |
@@ -1317,12 +1323,6 @@ jobs:
           '```' >> $env:GITHUB_STEP_SUMMARY
           exit $code
 
-      - name: Run offline identity and retirement regressions
-        shell: pwsh
-        run: |
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows/run-microg-security.ps1 -Dir dist -EvidenceDir "${{ runner.temp }}/microg-security" | Tee-Object -FilePath microg-security-results.txt
-          exit $LASTEXITCODE
-
       - name: Upload offline regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -1330,7 +1330,9 @@ jobs:
           name: microg-security-${{ matrix.os }}
           path: |
             ${{ runner.temp }}/microg-security/
+            ${{ runner.temp }}/gesher-microg-security/
             microg-security-results.txt
+            results.txt
 
   # Extra isolated jobs execute the real regression in the SAME canonical
   # full. Only these jobs download the separately named hook artifact.

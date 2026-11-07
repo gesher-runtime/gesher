@@ -17,6 +17,10 @@ if(-not $Apk){$Apk=Join-Path $RuntimeDir 'webapp.apk'}
 $Apk=(Resolve-Path -LiteralPath $Apk).Path
 $OutputRoot=[IO.Path]::GetFullPath($OutputRoot)
 if($Worker){
+    trap {
+        [IO.File]::WriteAllText((Join-Path $OutputRoot 'worker-error.log'),($_ | Out-String),[Text.Encoding]::UTF8)
+        exit 1
+    }
     $profile=Join-Path $OutputRoot 'profile'
     foreach($part in 'system/framework','data','art','i18n/etc/icu'){
         New-Item -ItemType Directory -Path (Join-Path $profile $part) -Force|Out-Null
@@ -56,11 +60,20 @@ if($Worker){
     $start.UseShellExecute=$false;$start.CreateNoWindow=$true
     $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
     $process=New-Object Diagnostics.Process;$process.StartInfo=$start
+    $stdoutFile=[IO.File]::Create((Join-Path $OutputRoot 'fixture.stdout.log'))
+    $stderrFile=[IO.File]::Create((Join-Path $OutputRoot 'fixture.stderr.log'))
     try{
         $null=$process.Start()
-        $stdout=$process.StandardOutput.ReadToEndAsync();$stderr=$process.StandardError.ReadToEndAsync()
-        if(-not $process.WaitForExit(90000)){$process.Kill();throw 'Darkening fixture VM timed out'}
-        $text=$stdout.GetAwaiter().GetResult()+$stderr.GetAwaiter().GetResult()
+        $stdout=$process.StandardOutput.BaseStream.CopyToAsync($stdoutFile)
+        $stderr=$process.StandardError.BaseStream.CopyToAsync($stderrFile)
+        if(-not $process.WaitForExit(90000)){
+            $process.Kill()
+            [void]$process.WaitForExit(5000)
+            throw 'Darkening fixture VM timed out; partial output retained'
+        }
+        if(-not $stdout.Wait(5000) -or -not $stderr.Wait(5000)){throw 'Darkening fixture output pipes did not close'}
+        $stdoutFile.Dispose();$stderrFile.Dispose()
+        $text=[IO.File]::ReadAllText((Join-Path $OutputRoot 'fixture.stdout.log'))+[IO.File]::ReadAllText((Join-Path $OutputRoot 'fixture.stderr.log'))
         [IO.File]::WriteAllText((Join-Path $OutputRoot 'fixture.log'),$text,[Text.Encoding]::UTF8)
         if($process.ExitCode -ne 0 -or $text.Contains('webdark: FAIL') -or -not $text.Contains('webdark: ALL PASSED ')){
             throw 'Darkening fixture failed; see fixture.log'
@@ -68,7 +81,7 @@ if($Worker){
         if(-not $text.Contains('gesher: boot image loaded: 5 spaces (boot.art boot-core-libart.art boot-core-icu4j.art boot-framework.art boot-gesher-app.art)') -or $text.Contains('imageless')){
             throw 'Matching five-space boot image was not used'
         }
-    }finally{$process.Dispose()}
+    }finally{$stdoutFile.Dispose();$stderrFile.Dispose();$process.Dispose()}
     exit 0
 }
 $run=Join-Path $OutputRoot ('webview-darkening-'+[guid]::NewGuid().ToString('N'))
@@ -81,7 +94,16 @@ $arguments=@('powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',$
 $command=($arguments|ForEach-Object{Q $_})-join ' '
 [IO.File]::WriteAllText((Join-Path $run 'command.txt'),$command,[Text.Encoding]::UTF8)
 $code=[PrivateDesktopProcess]::Run($command,$RuntimeDir,110000)
-if($code -ne 0){throw "Private desktop darkening worker failed exit=$code; see $run"}
+if($code -ne 0){
+    foreach($name in 'worker-error.log','fixture.stdout.log','fixture.stderr.log'){
+        $path=Join-Path $run $name
+        if(Test-Path -LiteralPath $path){
+            Write-Host "WebView failure evidence: $name"
+            Get-Content -LiteralPath $path -Tail 120 | ForEach-Object { Write-Host $_.Substring(0,[Math]::Min($_.Length,2000)) }
+        }
+    }
+    throw "Private desktop darkening worker failed exit=$code; see $run"
+}
 $paths=@((Join-Path $RuntimeDir 'dalvikvm.exe'),(Join-Path $RuntimeDir 'gesher-app.jar'),
     (Join-Path $RuntimeDir 'framework.jar'),(Join-Path $RuntimeDir 'libgesher_webview_bridge.so'),$Apk)+@($images.FullName)
 $hashes=@($paths|ForEach-Object{[pscustomobject]@{path=$_;sha256=(Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant()}})
