@@ -1044,6 +1044,15 @@ jobs:
           }
           if ($holder.HasExited) { throw "The process holding gesher_shellext.dll ended before the update (exit $($holder.ExitCode))" }
           if (-not $loaded) { Stop-Process -Id $holder.Id -Force; throw 'The holder process never had gesher_shellext.dll loaded' }
+          # Upgrade cleanup covers shortcuts left by either installer language.
+          $legacyHelloLinks = @('Gesher Hello.lnk', 'גשר — דוגמה.lnk')
+          foreach ($name in $legacyHelloLinks) {
+            $legacy = $wsh.CreateShortcut((Join-Path $programs $name))
+            $legacy.TargetPath = "$app\gesher.cmd"
+            $legacy.Save()
+          }
+          $upgradeSentinel = Join-Path $programs 'gesher-ci-upgrade-sentinel.txt'
+          Set-Content $upgradeSentinel 'unrelated Start menu entry'
           $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
           $problems = @()
           if ($p.ExitCode -ne 0) { $problems += "Setup exit $($p.ExitCode)" }
@@ -1052,6 +1061,12 @@ jobs:
           if (-not (Get-ChildItem "$app\gesher_shellext.*.old" -ErrorAction SilentlyContinue)) { $problems += 'the loaded copy was not moved aside' }
           Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
           if ($problems) { throw "Updating with the icon handler loaded: $($problems -join '; ')" }
+          foreach ($name in $legacyHelloLinks) {
+            if (Test-Path (Join-Path $programs $name)) { throw "Upgrade left the legacy shortcut: $name" }
+          }
+          if (-not (Test-Path $upgradeSentinel)) { throw 'Upgrade removed an unrelated Start menu entry' }
+          Remove-Item $upgradeSentinel
+          'PASS  installer: upgrade removes English and Hebrew Hello shortcuts and preserves unrelated Start menu entries' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: an update with gesher_shellext.dll loaded in another process leaves that process running (Explorer is not closed) and moves the loaded copy aside' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Something of the Start menu that is not Gesher's, which uninstalling must keep.
           $sentinel = Join-Path $programs 'gesher-ci-sentinel.txt'

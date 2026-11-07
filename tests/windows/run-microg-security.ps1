@@ -68,6 +68,13 @@ $EvidenceDir = [IO.Path]::GetFullPath($EvidenceDir)
 $run = Join-Path $EvidenceDir ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run | Out-Null
 Write-Host "INFO  offline microG security evidence: $run"
+# A fresh runner need not have Android's default /tmp. Keep the fixture root
+# short enough for installed APK/profile paths on Windows, even when EvidenceDir
+# itself is deeply nested. Each Java fixture creates its own unique child here.
+$javaTemporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ('gms-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $javaTemporaryRoot | Out-Null
+[IO.File]::WriteAllText((Join-Path $run 'java-tmp.txt'), $javaTemporaryRoot)
+Write-Host "INFO  Java fixture temporary directory: $javaTemporaryRoot"
 
 $originalLocation = Get-Location
 $environmentNames = @('LOCALAPPDATA', 'APPDATA', 'ANDROID_ROOT', 'ANDROID_DATA',
@@ -145,8 +152,15 @@ function InvokeVm([string] $Label, [string[]] $Arguments, [int] $TimeoutSeconds 
         $errText = $stderr.Result
         [IO.File]::WriteAllText("$base.out.log", $outText)
         [IO.File]::WriteAllText("$base.err.log", $errText)
-        if ($timedOut) { throw "$Label timed out; see $base.*.log" }
-        if ($process.ExitCode -ne 0) { throw "$Label exited $($process.ExitCode); see $base.*.log" }
+        if ($timedOut -or $process.ExitCode -ne 0) {
+            foreach ($text in @($outText, $errText)) {
+                $text -split '\r?\n' | Select-Object -Last 60 | ForEach-Object {
+                    Write-Host ($_.Substring(0, [Math]::Min($_.Length, 2000)))
+                }
+            }
+            if ($timedOut) { throw "$Label timed out; see $base.*.log" }
+            throw "$Label exited $($process.ExitCode); see $base.*.log"
+        }
         return $outText + "`n" + $errText
     } finally { $process.Dispose() }
 }
@@ -208,7 +222,8 @@ function Guest([string] $Test, [string[]] $Arguments, [string] $Marker = "$Test 
     $guestRoot = Join-Path $run ("guests/$Label" -replace '[^A-Za-z0-9/.-]', '-')
     SetProfile $guestRoot "$guestRoot/logs"
     if ($Uid) { $env:GESHER_UID = $Uid; $env:GESHER_BINDER_UID = $Uid }
-    $text = InvokeVm $Label (@('-cp', (AndroidPath $ServicesDex), 'gesher.services.ServiceFixtureRunner', $Test) + $Arguments)
+    $text = InvokeVm $Label (@("-Djava.io.tmpdir=$(AndroidPath $javaTemporaryRoot)",
+        '-cp', (AndroidPath $ServicesDex), 'gesher.services.ServiceFixtureRunner', $Test) + $Arguments)
     RequireOutput $Label $text @($Marker)
 }
 
