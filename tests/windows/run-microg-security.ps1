@@ -391,6 +391,7 @@ try {
     Guest 'SdkSandboxUnsupportedTest' @() 'SdkSandboxUnsupportedTest all passed:'
     Guest 'NetworkStatsUnavailableTest' @() 'NetworkStatsUnavailableTest all passed:'
     Guest 'GrammaticalInflectionUnavailableTest' @() 'GrammaticalInflectionUnavailableTest all passed:'
+    Guest 'WindowIdTest' @() 'WindowIdTest all passed:'
     Guest 'RollbackUnsupportedTest' @((AndroidPath (Join-Path $SigningFixtures 'unsigned.apk'))) 'RollbackUnsupportedTest all passed:'
     Guest 'WindowModeInheritanceTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'WindowModeInheritanceTest all passed:'
     Guest 'ActivityWindowPromotionTest' @((AndroidPath $DevsvcApk)) 'ActivityWindowPromotionTest all passed:' -Uid '1000'

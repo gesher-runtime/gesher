@@ -361,6 +361,41 @@ public final class DelegatedIntentRetirementTest {
         } finally { Binder.restoreCallingIdentity(original); }
     }
 
+    private static void credentialResultFormat() throws Exception {
+        Method normalize = method(Class.forName("com.gesher.server.ActivityTaskManagerService"),
+                "normalizeMicrogCredentialResult", String.class, String.class, String.class, int.class, Intent.class);
+        String provider = "org.microg.gms.auth.credentials.identity.IdentityCredentialChooserActivity";
+        String recipient = "androidx.credentials.playservices.controllers.identityauth.HiddenActivity";
+        String key = "android.service.credentials.extra.GET_CREDENTIAL_RESPONSE";
+        Bundle content = new Bundle(); content.putString("fixture-value", "opaque synthetic provider data");
+        Bundle legacy = new Bundle();
+        legacy.putString("androidx.credentials.provider.extra.EXTRA_CREDENTIAL_TYPE", "fixture.credential.type");
+        legacy.putBundle("androidx.credentials.provider.extra.EXTRA_CREDENTIAL_DATA", content);
+        Intent original = new Intent().putExtra(key, legacy).putExtra("unrelated", 17);
+        Intent result = (Intent) normalize.invoke(null, "com.google.android.gms", provider, recipient,
+                android.app.Activity.RESULT_OK, original);
+        android.credentials.GetCredentialResponse response = result.getParcelableExtra(key,
+                android.credentials.GetCredentialResponse.class);
+        require(response != null && "fixture.credential.type".equals(response.getCredential().getType())
+                && "opaque synthetic provider data".equals(response.getCredential().getData().getString("fixture-value")),
+                "Credential transport changed or invented the provider's opaque data");
+        require(result != original && original.getExtras().get(key) instanceof Bundle
+                && result.getIntExtra("unrelated", -1) == 17, "Credential normalization mutated the source or unrelated extras");
+        require(normalize.invoke(null, "com.example.other", provider, recipient, -1, original) == original,
+                "Unrelated provider received credential conversion");
+        require(normalize.invoke(null, "com.google.android.gms", "other.Activity", recipient, -1, original) == original,
+                "Unrelated activity received credential conversion");
+        require(normalize.invoke(null, "com.google.android.gms", provider, "other.Activity", -1, original) == original,
+                "Unrelated recipient received credential conversion");
+        require(normalize.invoke(null, "com.google.android.gms", provider, recipient, 0, original) == original,
+                "Canceled result received credential conversion");
+        require(normalize.invoke(null, "com.google.android.gms", provider, recipient, -1, result) == result,
+                "Already typed response was converted again");
+        Intent malformed = new Intent().putExtra(key, new Bundle());
+        require(normalize.invoke(null, "com.google.android.gms", provider, recipient, -1, malformed) == malformed,
+                "Incomplete provider response acquired invented credential fields");
+    }
+
     public static void main(String[] args) throws Exception {
         require(args.length == 2, "Pass ordinary orderedbroadcast source and target APKs");
         System.loadLibrary("android_runtime");
@@ -463,6 +498,7 @@ public final class DelegatedIntentRetirementTest {
             for (int race = 0; race < 6; race++) directCapture(args, route, race);
         }
         for (int mode = 0; mode < 5; mode++) intentSenderActivity(args, mode);
+        credentialResultFormat();
         System.out.println("DelegatedIntentRetirementTest all passed: " + checks + " checks");
     }
 }

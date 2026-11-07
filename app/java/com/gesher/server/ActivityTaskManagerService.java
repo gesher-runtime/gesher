@@ -2220,11 +2220,39 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         schedule(r, t, "PauseActivityItem");
     }
 
+    /** Convert microG's legacy result envelope for the framework-aware recipient. */
+    private static Intent normalizeMicrogCredentialResult(String sourcePackage, String sourceActivity,
+            String recipientActivity, int resultCode, Intent data) {
+        // microG's compatibility producer uses the AndroidX Bundle wire format.
+        // Modern AndroidX clients on our API level read the framework Parcelable.
+        // Preserve the provider's actual opaque data; never synthesize credentials.
+        if (resultCode != android.app.Activity.RESULT_OK || data == null
+                || !"com.google.android.gms".equals(sourcePackage)
+                || !"org.microg.gms.auth.credentials.identity.IdentityCredentialChooserActivity".equals(sourceActivity)
+                || !"androidx.credentials.playservices.controllers.identityauth.HiddenActivity".equals(recipientActivity)) return data;
+        final String key = "android.service.credentials.extra.GET_CREDENTIAL_RESPONSE";
+        try {
+            Bundle extras = data.getExtras();
+            Object value = extras == null ? null : extras.get(key);
+            if (!(value instanceof Bundle)) return data;
+            Bundle legacy = (Bundle) value;
+            String type = legacy.getString("androidx.credentials.provider.extra.EXTRA_CREDENTIAL_TYPE");
+            Bundle content = legacy.getBundle("androidx.credentials.provider.extra.EXTRA_CREDENTIAL_DATA");
+            if (type == null || type.isEmpty() || content == null) return data;
+            Intent normalized = new Intent(data);
+            normalized.putExtra(key, new android.credentials.GetCredentialResponse(
+                    new android.credentials.Credential(type, new Bundle(content))));
+            return normalized;
+        } catch (RuntimeException malformed) { return data; }
+    }
+
     /**
      * ActivityRecord.finishIfPossible: a result for the activity that asked for one, then
      * pause, stop and destroy.
      */
     boolean finish(ActivityRecord r, String reason, int resultCode, Intent resultData) {
+        if (r.resultTo != null) resultData = normalizeMicrogCredentialResult(r.info.packageName,
+                r.info.name, r.resultTo.info.name, resultCode, resultData);
         State state;
         synchronized (this) {
             if (r.finishing) return true;

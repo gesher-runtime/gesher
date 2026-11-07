@@ -22,6 +22,7 @@ import android.os.SystemClock;
 import android.util.ArrayMap;
 import android.view.IWindow;
 import android.view.IWindowId;
+import android.view.IWindowFocusObserver;
 import android.view.IWindowSession;
 import android.view.Display;
 import android.view.InputChannel;
@@ -184,9 +185,47 @@ public final class WindowSession extends IWindowSession.Stub {
     /** Where each task's window was last (client area on the screen). Guarded by mWindows. */
     private final android.util.SparseArray<Rect> mTaskScreen = new android.util.SparseArray<>();
 
+    /** Stable identity used by View.getWindowId and AndroidX scene transitions. */
+    private static final class WindowIdentity extends IWindowId.Stub {
+        private final android.os.RemoteCallbackList<IWindowFocusObserver> observers =
+                new android.os.RemoteCallbackList<>();
+        private volatile boolean focused;
+        private boolean retired;
+        @Override public void registerFocusObserver(IWindowFocusObserver observer) {
+            if (observer != null) observers.register(observer);
+        }
+        @Override public void unregisterFocusObserver(IWindowFocusObserver observer) {
+            if (observer != null) observers.unregister(observer);
+        }
+        @Override public boolean isFocused() { return focused; }
+        synchronized void retire(Handler handler) {
+            focus(false, handler);
+            retired = true;
+        }
+        synchronized void focus(boolean value, Handler handler) {
+            if (retired || focused == value) return;
+            focused = value;
+            Runnable notify = () -> {
+                int count = observers.beginBroadcast();
+                try {
+                    for (int i = 0; i < count; i++) {
+                        try {
+                            if (value) observers.getBroadcastItem(i).focusGained(asBinder());
+                            else observers.getBroadcastItem(i).focusLost(asBinder());
+                        } catch (RemoteException ignored) { }
+                    }
+                } finally { observers.finishBroadcast(); }
+            };
+            // Native/group callbacks can hold session locks. Deliver notifications
+            // on the creating window's handler, outside those callbacks.
+            if (handler != null) handler.post(notify); else notify.run();
+        }
+    }
+
     /** One app window: a ViewRootImpl's, keyed by its IWindow's binder. */
     private static final class AppWindow {
         final IWindow client;
+        final WindowIdentity identity = new WindowIdentity();
         final WindowManager.LayoutParams attrs = new WindowManager.LayoutParams();
         int requestedVisibleTypes = WindowInsets.Type.defaultVisible();
         NativeWindow nativeWindow;
@@ -706,6 +745,7 @@ public final class WindowSession extends IWindowSession.Stub {
                 w.handler.post(() -> {
                     if (w.focused != (a != 0)) {
                         w.focused = a != 0;
+                        w.identity.focus(w.focused, w.handler);
                         log("window \"" + w.title() + "\" " + (a != 0 ? "focused" : "unfocused"));
                     }
                     if (a != 0) onActivated(w);
@@ -1801,6 +1841,7 @@ public final class WindowSession extends IWindowSession.Stub {
                     if (v.input != null && v.focusable()
                             && (v.sessionFocus == null || v.sessionFocus != f)) {
                         v.sessionFocus = f;
+                        v.identity.focus(f, v.handler);
                         v.input.inject(WindowInput.EVENT_FOCUS, 0, 0, f ? 1 : 0, 0, 0, 0, 0, 0,
                                 0, 0, 0);
                     }
@@ -1977,6 +2018,7 @@ public final class WindowSession extends IWindowSession.Stub {
             w = mWindows.remove(clientToken);
         }
         if (w != null) {
+            w.identity.retire(w.handler);
             boolean wasShown = w.shown;
             if (!w.popup && w.nativeWindow != null && w.shown) rememberTaskScreen(w);
             closeNativeWindow(w);
@@ -2355,7 +2397,10 @@ public final class WindowSession extends IWindowSession.Stub {
 
     @Override
     public IWindowId getWindowId(IBinder window) {
-        return null;
+        synchronized (mWindows) {
+            AppWindow found = mWindows.get(window);
+            return found == null ? null : found.identity;
+        }
     }
 
     @Override
