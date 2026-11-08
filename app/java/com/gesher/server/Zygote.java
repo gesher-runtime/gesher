@@ -150,11 +150,27 @@ public final class Zygote {
     }
 
     /**
-     * A path for Win32: a drive-less path (ADR 0010: paths on the current drive) gets the
-     * current drive, '/' becomes '\'.
+     * A path for Win32: {@code /mnt/<drive>} selects that drive (ADR 0045), while a
+     * drive-less path gets the runtime's drive (ADR 0010). A UNC share uses
+     * {@code /mnt/unc/<server>/<share>}; '/' becomes '\'.
      */
     public static String windowsPath(String path) {
-        String p = new File(path).getAbsolutePath().replace('/', '\\');
+        // Unix File/Path normalization folds a leading "//" to "/". Recognize
+        // native UNC input before that normalization can turn it into a local path.
+        if (path.startsWith("//") || path.startsWith("\\\\")) path = fromWindowsPath(path);
+        String p = new File(path).getAbsolutePath();
+        String unc = uncWindowsPath(p);
+        if (unc != null) return unc;
+        // Match gesher-base's DrivePath before adding the runtime drive. Otherwise
+        // a Java file on /mnt/c/... becomes D:\mnt\c\... when the VM is on D:.
+        if (p.startsWith("/mnt/") && p.length() >= 6
+                && (p.charAt(5) >= 'A' && p.charAt(5) <= 'Z'
+                        || p.charAt(5) >= 'a' && p.charAt(5) <= 'z')
+                && (p.length() == 6 || p.charAt(6) == '/')) {
+            return Character.toUpperCase(p.charAt(5)) + ":"
+                    + (p.length() == 6 ? "\\" : p.substring(6).replace('/', '\\'));
+        }
+        p = p.replace('/', '\\');
         if (p.startsWith("\\") && !p.startsWith("\\\\")) {
             String exe = exePath();
             if (exe != null && exe.length() > 2 && exe.charAt(1) == ':') {
@@ -167,10 +183,19 @@ public final class Zygote {
     /**
      * A Windows path with a drive letter (a file picker's) as gesher-base's path model reads
      * it (docs/posix.md, gesher-app.ps1's NoDrive): no drive on Gesher's drive,
-     * {@code /mnt/<drive>/...} on another. Other paths are returned with '/' separators.
+     * {@code /mnt/<drive>/...} on another. UNC roots use {@code /mnt/unc/server/share}
+     * so Java normalization preserves them. Device namespaces are not file paths.
      */
     public static String fromWindowsPath(String path) {
         String p = path.replace('\\', '/');
+        if (p.regionMatches(true, 0, "//?/UNC/", 0, 8)) return uncGuestPath(p.substring(8));
+        if (p.startsWith("//?/")) {
+            if (p.length() < 7 || !asciiDrive(p.charAt(4)) || p.charAt(5) != ':' || p.charAt(6) != '/')
+                throw new IllegalArgumentException("Unsupported Windows file namespace: " + path);
+            p = p.substring(4);
+        } else if (p.startsWith("//")) {
+            return uncGuestPath(p.substring(2));
+        }
         if (p.length() >= 2 && p.charAt(1) == ':' && Character.isLetter(p.charAt(0))) {
             String rest = p.substring(2);
             if (!rest.startsWith("/")) rest = "/" + rest;
@@ -180,5 +205,45 @@ public final class Zygote {
             return sameDrive ? rest : "/mnt/" + Character.toLowerCase(p.charAt(0)) + rest;
         }
         return p;
+    }
+
+    private static boolean asciiDrive(char c) {
+        return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z';
+    }
+
+    private static boolean uncRootComponent(String value) {
+        if (value.isEmpty() || value.equals(".") || value.equals("..")) return false;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c < 32 || c == 127 || "/\\:*?\"<>|".indexOf(c) >= 0) return false;
+        }
+        return true;
+    }
+
+    private static void requireUncShare(String body) {
+        int serverEnd = body.indexOf('/');
+        int shareEnd = serverEnd < 0 ? -1 : body.indexOf('/', serverEnd + 1);
+        if (serverEnd < 0 || !uncRootComponent(body.substring(0, serverEnd))
+                || !uncRootComponent(body.substring(serverEnd + 1, shareEnd < 0 ? body.length() : shareEnd))
+                || body.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("UNC path requires a valid server and share: " + body);
+        }
+    }
+
+    private static String uncGuestPath(String body) {
+        requireUncShare(body);
+        return "/mnt/unc/" + body;
+    }
+
+    private static String uncWindowsPath(String path) {
+        String prefix = "/mnt/unc";
+        if (!path.startsWith(prefix) || path.length() > prefix.length()
+                && path.charAt(prefix.length()) != '/' && path.charAt(prefix.length()) != '\\'
+                && path.charAt(prefix.length()) != ':') return null;
+        if (path.length() <= prefix.length() || path.charAt(prefix.length()) != '/')
+            throw new IllegalArgumentException("UNC path requires a server and share: " + path);
+        String body = path.substring(prefix.length() + 1);
+        requireUncShare(body);
+        return "\\\\" + body.replace('/', '\\');
     }
 }

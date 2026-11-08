@@ -357,6 +357,9 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/components/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/splitpackage/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/peer/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
@@ -438,6 +441,7 @@ jobs:
             out/app/lifecycle.apk out/app/components.apk out/app/peer.apk out/app/uiapp.apk out/app/dbapp.apk out/app/devsvc.apk out/app/devices.apk out/app/nodevices.apk out/app/gmsapp.apk dist-framework/
           cp out/framework-res-after/framework-res.apk dist-framework/framework-res-after.apk
           cp out/app/popupapp.apk dist-framework/
+          cp out/app/split-package-fixtures.zip dist-framework/
           cp out/app/gesher-camera.apk dist-framework/
           cp out/app/rtlapp.apk dist-framework/
           cp out/app/imeapp.apk dist-framework/

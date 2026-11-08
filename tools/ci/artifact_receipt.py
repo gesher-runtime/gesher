@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from github_read import get_json
 from receipt_identity import (exact_run, failed_installer_allowed, installer_uploaded,
                               identity_record, job_snapshot, run_snapshot)
 
@@ -31,7 +32,7 @@ if os.environ['GITHUB_EVENT_NAME'] == 'pull_request':
     head_repo = str(event['pull_request']['head']['repo']['id'])
 
 def api(path):
-    return json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/{path}']))
+    return get_json(f'repos/{repo}/{path}')
 
 run = api(f'actions/runs/{run_id}')
 identity_record('run', {'run_id': run_id, 'attempt': attempt, 'source': head,

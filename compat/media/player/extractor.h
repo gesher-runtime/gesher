@@ -47,6 +47,9 @@ struct Sample {
   int64_t time_us = 0;
   bool sync = false;
   int32_t valid_samples = -1;  // Ogg Vorbis: samples of the page's last packet
+  // A closest seek starts decoding at an earlier sync sample; the extractor
+  // identifies the actual presentation timestamp to return separately.
+  int64_t target_time_us = -1;
 };
 
 // AOSP's CMediaTrackReadOptions seek modes.

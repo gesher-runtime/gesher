@@ -79,6 +79,7 @@ final class ContentProviders {
         for (ApkPackage pkg : pm.packages()) {
             if (pm.isRemovalPending(pkg.packageName)) continue;
             for (ProviderInfo info : pkg.providers(PackageManager.GET_META_DATA
+                    | PackageManager.GET_URI_PERMISSION_PATTERNS
                     | PackageManager.GET_SHARED_LIBRARY_FILES)) {
                 if (!hasAuthority(info, authority)) continue;
                 if (found != null && (!found.packageName.equals(info.packageName)

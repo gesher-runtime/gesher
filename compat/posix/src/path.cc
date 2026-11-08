@@ -22,6 +22,7 @@
 #include <shellapi.h>
 #include <gesher/font_paths.h>
 #include <gesher/font_environment.h>
+#include <gesher/unc_paths.h>
 
 #include <string>
 #include <cstdlib>
@@ -317,7 +318,10 @@ static int SystemFontPath(const char* path, std::wstring* windows) {
   if (target.empty()) return -1;
   // Resolve the configured/install path directly, without re-entering this
   // namespace mapping when an explicit root happens to be literal /system.
-  if (!DrivePath(target.c_str(), windows)) *windows = Widen(target.c_str());
+  auto unc = unc_paths::ToWindows(Widen(target.c_str()), windows);
+  if (unc == unc_paths::Match::kInvalid) return -1;
+  if (unc == unc_paths::Match::kUnrelated && !DrivePath(target.c_str(), windows))
+    *windows = Widen(target.c_str());
   Lengthen(windows);
   return 1;
 }
@@ -326,6 +330,15 @@ PathKind MapPath(const char* path, std::wstring* windows) {
   // "//name" is left to Windows as a UNC path; POSIX lets an implementation
   // give a leading "//" its own meaning.
   if (path[0] == '/' && path[1] != '/') {
+    auto unc = unc_paths::ToWindows(Widen(path), windows);
+    if (unc == unc_paths::Match::kInvalid) {
+      windows->clear();
+      return PathKind::kMissing;
+    }
+    if (unc == unc_paths::Match::kMapped) {
+      Lengthen(windows);
+      return PathKind::kFile;
+    }
     PathKind kind = VirtualKind(path, windows);
     if (kind != PathKind::kFile) return kind;
     int font = SystemFontPath(path, windows);
@@ -379,6 +392,8 @@ int CurrentDrive() {
 }
 
 std::string LinuxPath(const wchar_t* windows) {
+  std::wstring unc;
+  if (unc_paths::FromWindows(windows, &unc)) return Narrow(unc.c_str());
   std::wstring path = windows;
   if (path.rfind(L"\\\\?\\UNC\\", 0) == 0) {
     path = L"\\\\" + path.substr(8);

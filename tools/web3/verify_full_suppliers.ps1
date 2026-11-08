@@ -10,13 +10,17 @@ if ($env:GITHUB_EVENT_NAME -ceq 'pull_request') {
 }
 $actual = git rev-parse HEAD
 if ($LASTEXITCODE -ne 0 -or $actual -cne $env:GITHUB_SHA) { throw 'Full checkout SHA mismatch' }
-$run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" | ConvertFrom-Json
+$runJson = python tools/ci/github_read.py "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect exact full workflow run' }
+$run = $runJson | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or $run.id -ne $env:GITHUB_RUN_ID -or $run.run_attempt -ne $env:GITHUB_RUN_ATTEMPT -or
     $run.name -cne 'ci' -or $run.head_sha -cne $expectedHead -or $run.repository.id -ne $env:GITHUB_REPOSITORY_ID -or
     $run.head_repository.id -ne $expectedHeadRepository -or $run.repository.full_name -cne $env:GITHUB_REPOSITORY) {
   throw 'Canonical full event/head/checkout/run/attempt/repository mismatch'
 }
-$jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100" | ConvertFrom-Json
+$jobsJson = python tools/ci/github_read.py "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"
+if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect exact full producer jobs' }
+$jobs = $jobsJson | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or $jobs.total_count -gt 100) { throw 'Cannot inspect exact full producer jobs' }
 foreach ($name in 'build','framework / host-tools','framework / framework','native-libs / native-libs',
                    'arm64 / build','graphics / build','angle / build','boot-image / compile',
@@ -27,7 +31,9 @@ foreach ($name in 'build','framework / host-tools','framework / framework','nati
     throw "Full supplier job identity/success mismatch: $name"
   }
 }
-$inventory = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts?per_page=100" | ConvertFrom-Json
+$inventoryJson = python tools/ci/github_read.py "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts?per_page=100"
+if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect full artifact packages' }
+$inventory = $inventoryJson | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or $inventory.total_count -gt 100) { throw 'Cannot inspect full artifact packages' }
 foreach ($name in 'windows-x64','framework','native-libs','arm64','graphics','angle','boot-image',
                    'webview','exec','media','web3-query-hook') {

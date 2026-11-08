@@ -33,13 +33,13 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
 #include <utility>
-#include <vector>
 
 namespace gesher::bionic {
 
@@ -119,6 +119,7 @@ static_assert(sizeof(BionicDirent) == 280);
 struct ShimDir {
   DIR* host = nullptr;
   int fd = -1;  // owned: from fdopendir, or opened by dirfd
+  int64_t position = 0;  // opaque guest cookie, never narrowed to Windows long
   std::string path;
   BionicDirent entry{};
   std::mutex mutex;
@@ -140,10 +141,11 @@ ShimDir* BIONIC_SYSV Fdopendir(int fd) {
   return d;
 }
 bool Fill(ShimDir* d, BionicDirent* out) {
+  if (d->position == INT64_MAX) return errno = EOVERFLOW, false;
   struct dirent* e = readdir(d->host);
   if (e == nullptr) return false;
   out->d_ino = e->d_ino != 0 ? e->d_ino : static_cast<uint64_t>(e->d_off);
-  out->d_off = e->d_off;
+  out->d_off = ++d->position;
   out->d_reclen = sizeof(BionicDirent);
   out->d_type = e->d_type;
   size_t n = std::strlen(e->d_name);
@@ -158,6 +160,7 @@ BionicDirent* BIONIC_SYSV Readdir(ShimDir* d) {
   return Fill(d, &d->entry) ? &d->entry : nullptr;
 }
 int BIONIC_SYSV ReaddirR(ShimDir* d, BionicDirent* entry, BionicDirent** result) {
+  if (d == nullptr || entry == nullptr || result == nullptr) return kEBADF;
   std::lock_guard<std::mutex> lock(d->mutex);
   int saved = errno;
   errno = 0;
@@ -175,10 +178,28 @@ int BIONIC_SYSV Closedir(ShimDir* d) {
   return 0;
 }
 void BIONIC_SYSV Rewinddir(ShimDir* d) {
+  if (d == nullptr) return;
   std::lock_guard<std::mutex> lock(d->mutex);
   rewinddir(d->host);
+  d->position = 0;
+}
+int64_t BIONIC_SYSV Telldir(ShimDir* d) {
+  if (d == nullptr) return errno = kEBADF, -1;
+  std::lock_guard<std::mutex> lock(d->mutex);
+  return d->position;
+}
+void BIONIC_SYSV Seekdir(ShimDir* d, int64_t location) {
+  if (d == nullptr) { errno = kEBADF; return; }
+  if (location < 0) { errno = kEINVAL; return; }
+  std::lock_guard<std::mutex> lock(d->mutex);
+  if (location == d->position) return;
+  rewinddir(d->host);
+  d->position = 0;
+  BionicDirent entry;
+  while (d->position < location && Fill(d, &entry)) {}
 }
 int BIONIC_SYSV Dirfd(ShimDir* d) {
+  if (d == nullptr) return errno = kEBADF, -1;
   std::lock_guard<std::mutex> lock(d->mutex);
   if (d->fd < 0) d->fd = open(d->path.c_str(), O_RDONLY | kODirectory | O_CLOEXEC);
   return d->fd;
@@ -191,22 +212,58 @@ using SysvDirCompare = int(BIONIC_SYSV*)(const BionicDirent**, const BionicDiren
 int BIONIC_SYSV Alphasort(const BionicDirent** a, const BionicDirent** b) {
   return std::strcmp((*a)->d_name, (*b)->d_name);
 }
-int BIONIC_SYSV Scandir(const char* path, BionicDirent*** list, SysvFilter filter,
-                        SysvDirCompare compare) {
-  ShimDir* d = Opendir(path);
+int ScanDirectory(ShimDir* d, BionicDirent*** list, SysvFilter filter,
+                  SysvDirCompare compare) {
   if (d == nullptr) return -1;
-  std::vector<BionicDirent*> entries;
+  const int saved_errno = errno;
+  // These allocations belong to a C API. In a no-exceptions build, vector
+  // growth terminates the process on OOM instead of returning -1/ENOMEM.
+  BionicDirent** entries = nullptr;
+  size_t count = 0, capacity = 0;
+  int error = 0;
   BionicDirent e;
-  while (Fill(d, &e)) {
+  for (;;) {
+    // A filter may set errno even when it accepts/skips an entry. Only the
+    // directory reader's errno distinguishes a read failure from EOF.
+    errno = 0;
+    if (!Fill(d, &e)) {
+      error = errno;
+      break;
+    }
     if (filter != nullptr && filter(&e) == 0) continue;
+    if (count == INT_MAX) {
+      error = EOVERFLOW;  // scandir returns an int count.
+      break;
+    }
+    if (count == capacity) {
+      size_t next = capacity == 0 ? 32 : capacity * 2;
+      if (next > INT_MAX) next = INT_MAX;
+      auto** grown = static_cast<BionicDirent**>(std::realloc(entries, next * sizeof(*entries)));
+      if (grown == nullptr) {
+        error = kENOMEM;
+        break;
+      }
+      entries = grown;
+      capacity = next;
+    }
     auto* copy = static_cast<BionicDirent*>(std::malloc(sizeof(e)));
+    if (copy == nullptr) {
+      error = kENOMEM;
+      break;
+    }
     *copy = e;
-    entries.push_back(copy);
+    entries[count++] = copy;
   }
   Closedir(d);
+  if (error != 0) {
+    for (size_t i = 0; i < count; ++i) std::free(entries[i]);
+    std::free(entries);
+    errno = error;
+    return -1;  // Leave the caller's output untouched and free the prefix.
+  }
   if (compare != nullptr) {
     // Insertion sort through the System V comparator (lists are short).
-    for (size_t i = 1; i < entries.size(); ++i) {
+    for (size_t i = 1; i < count; ++i) {
       for (size_t j = i; j > 0; --j) {
         const BionicDirent* x = entries[j - 1];
         const BionicDirent* y = entries[j];
@@ -215,10 +272,27 @@ int BIONIC_SYSV Scandir(const char* path, BionicDirent*** list, SysvFilter filte
       }
     }
   }
-  auto** out = static_cast<BionicDirent**>(std::malloc((entries.size() + 1) * sizeof(void*)));
-  for (size_t i = 0; i < entries.size(); ++i) out[i] = entries[i];
-  *list = out;
-  return static_cast<int>(entries.size());
+  *list = entries;
+  errno = saved_errno;
+  return static_cast<int>(count);
+}
+int BIONIC_SYSV Scandir(const char* path, BionicDirent*** list, SysvFilter filter,
+                        SysvDirCompare compare) {
+  return ScanDirectory(Opendir(path), list, filter, compare);
+}
+int BIONIC_SYSV Scandirat(int dirfd, const char* path, BionicDirent*** list,
+                          SysvFilter filter, SysvDirCompare compare) {
+  if (dirfd == kAtFdcwd) return Scandir(path, list, filter, compare);
+  int fd = openat(dirfd, path, O_RDONLY | kODirectory | O_CLOEXEC, 0);
+  if (fd < 0) return -1;
+  ShimDir* d = Fdopendir(fd);
+  if (d == nullptr) {
+    const int error = errno;
+    close(fd);  // fdopendir takes ownership only on success.
+    errno = error;
+    return -1;
+  }
+  return ScanDirectory(d, list, filter, compare);
 }
 
 // --- the *at() calls and other path calls ---------------------------------------
@@ -477,6 +551,7 @@ int64_t BIONIC_SYSV Sysconf(int name) {
     case 0x25: return 65536;   // _SC_ATEXIT_MAX
     case 0x26: return 1024;    // _SC_IOV_MAX
     case 0x27: case 0x28: return 4096;  // _SC_PAGESIZE, _SC_PAGE_SIZE
+    case 0x36: return kSemValueMax;    // _SC_SEM_VALUE_MAX
     case 0x47: case 0x48: return 1024;  // _SC_GETGR_R_SIZE_MAX, _SC_GETPW_R_SIZE_MAX
     case 0x49: return 256;     // _SC_LOGIN_NAME_MAX
     case 0x4a: return 4;       // _SC_THREAD_DESTRUCTOR_ITERATIONS
@@ -697,9 +772,13 @@ void RegisterPosix(SymbolTable& t) {
   E("readdir64_r", ReaddirR);
   E("closedir", Closedir);
   E("rewinddir", Rewinddir);
+  E("telldir", Telldir);
+  E("seekdir", Seekdir);
   E("dirfd", Dirfd);
   E("scandir", Scandir);
   E("scandir64", Scandir);
+  E("scandirat", Scandirat);
+  E("scandirat64", Scandirat);
   E("alphasort", Alphasort);
   E("alphasort64", Alphasort);
   E("openat", Openat);

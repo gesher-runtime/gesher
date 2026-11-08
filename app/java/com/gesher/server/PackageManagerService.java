@@ -21,12 +21,16 @@ import android.content.pm.PermissionGroupInfo;
 import android.content.pm.Signature;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
+import android.content.pm.VersionedPackage;
+
+import com.android.internal.pm.pkg.component.ParsedComponent;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -232,6 +236,30 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     @Override
+    public PackageInfo getPackageInfoVersioned(VersionedPackage versionedPackage,
+            long flags, int userId) {
+        Objects.requireNonNull(versionedPackage);
+        // AOSP uses the version to choose between static shared-library providers.
+        // For ordinary packages (the single installed version Gesher publishes), it
+        // resolves the package name exactly as the String overload does. Returning
+        // Default's null makes ApplicationPackageManager throw NameNotFoundException
+        // even when an application asks about its own installed package.
+        return getPackageInfo(versionedPackage.getPackageName(), flags, userId);
+    }
+
+    @Override
+    public String[] currentToCanonicalPackageNames(String[] names) {
+        // There is no installed-package rename registry. Unknown and unchanged names
+        // retain their positions, as they do on Android; the answer is not null.
+        return names.clone();
+    }
+
+    @Override
+    public String[] canonicalToCurrentPackageNames(String[] names) {
+        return names.clone();
+    }
+
+    @Override
     public ApplicationInfo getApplicationInfo(String packageName, long flags, int userId) {
         if (userId != 0) return null;
         if ("android".equals(packageName)) return platformApplication();
@@ -288,6 +316,21 @@ public final class PackageManagerService extends IPackageManager.Default {
     public ParceledListSlice queryIntentActivities(Intent intent, String resolvedType,
             long flags, int userId) {
         return new ParceledListSlice<>(query(intent, resolvedType, flags));
+    }
+
+    @Override
+    public ParceledListSlice queryIntentActivityOptions(ComponentName caller, Intent[] specifics,
+            String[] specificTypes, Intent intent, String resolvedType, long flags, int userId) {
+        if (userId != 0) return new ParceledListSlice<>(new ArrayList<ResolveInfo>());
+        Map<String, ApkPackage> packages;
+        boolean hostBrowser;
+        synchronized (this) {
+            hostBrowser = !mPackages.containsKey(BrowserPackageSupport.PACKAGE);
+            packages = new LinkedHashMap<>(mPackages);
+            for (String removing : mRemoving.keySet()) packages.remove(removing);
+        }
+        return new ParceledListSlice<>(new ActivityOptionsResolver(packages, hostBrowser).query(
+                caller, specifics, specificTypes, intent, resolvedType, flags));
     }
 
     private List<ResolveInfo> query(Intent intent, String resolvedType, long flags) {
@@ -408,6 +451,32 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     @Override
+    public ParceledListSlice<PackageInfo> getPackagesHoldingPermissions(String[] permissions,
+            long flags, int userId) {
+        Objects.requireNonNull(permissions);
+        List<PackageInfo> result = new ArrayList<>();
+        if (userId != 0) return new ParceledListSlice<>(result);
+        for (ApkPackage pkg : mPackages.values()) {
+            if (isRemovalPending(pkg.packageName)) continue;
+            if ((flags & PackageManager.MATCH_SYSTEM_ONLY) != 0 && !pkg.isSystemAddon()) continue;
+            List<String> held = new ArrayList<>();
+            for (String permission : permissions) {
+                if (mPermissions.granted(permission, pkg.packageName)) held.add(permission);
+            }
+            if (held.isEmpty()) continue;
+            PackageInfo info = installedInfo(pkg, flags);
+            // Without GET_PERMISSIONS Android returns only the matching requested
+            // names, preserving the query's order/duplicates. With it, keep the full
+            // manifest permission inventory and the current grant flags instead.
+            if ((flags & PackageManager.GET_PERMISSIONS) == 0) {
+                info.requestedPermissions = held.toArray(new String[0]);
+            }
+            result.add(info);
+        }
+        return new ParceledListSlice<>(result);
+    }
+
+    @Override
     public ParceledListSlice getInstalledApplications(long flags, int userId) {
         List<ApplicationInfo> result = new ArrayList<>();
         for (ApkPackage p : mPackages.values()) {
@@ -475,6 +544,18 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     @Override
+    public String[] getNamesForUids(int[] uids) {
+        // AOSP distinguishes an absent input from positional unknown UID answers.
+        if (uids == null || uids.length == 0) return null;
+        String[] names = new String[uids.length];
+        for (int i = 0; i < uids.length; i++) {
+            names[i] = uids[i] == android.os.Process.SYSTEM_UID
+                    ? "shared:android.uid.system" : getNameForUid(uids[i]);
+        }
+        return names;
+    }
+
+    @Override
     public String[] getPackagesForUid(int uid) {
         if (uid == android.os.Process.SYSTEM_UID) return new String[] {"android"};
         List<String> result = new ArrayList<>();
@@ -486,6 +567,71 @@ public final class PackageManagerService extends IPackageManager.Default {
     public int getPackageUid(String name, long flags, int userId) {
         ApplicationInfo info = userId == 0 ? getApplicationInfo(name, flags, userId) : null;
         return info == null ? -1 : info.uid;
+    }
+
+    @Override
+    public boolean[] canPackageQuery(String sourcePackageName, String[] targetPackageNames,
+            int userId) {
+        // Keep Android's positional result and nonexistent-user ordering, including
+        // the null-array failure before looking up a user or package.
+        boolean[] result = new boolean[targetPackageNames.length];
+        if (userId != 0) return result;
+        int callingUid = Binder.getCallingUid();
+        if (android.os.UserHandle.getUserId(callingUid) != userId
+                && callingUid != android.os.Process.ROOT_UID
+                && callingUid != android.os.Process.SYSTEM_UID
+                && mPermissions.checkProcessPermission("android.permission.INTERACT_ACROSS_USERS_FULL",
+                        Binder.getCallingPid(), callingUid) != PackageManager.PERMISSION_GRANTED
+                && mPermissions.checkProcessPermission("android.permission.INTERACT_ACROSS_USERS",
+                        Binder.getCallingPid(), callingUid) != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("canPackageQuery requires cross-user permission");
+        }
+        Map<String, ApkPackage> packages;
+        boolean browser, gms, vending;
+        synchronized (this) {
+            packages = new LinkedHashMap<>(mPackages);
+            for (String removing : mRemoving.keySet()) packages.remove(removing);
+            browser = !mPackages.containsKey(BrowserPackageSupport.PACKAGE)
+                    && !mRemoving.containsKey(BrowserPackageSupport.PACKAGE);
+            gms = !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
+                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_GMS);
+            vending = !mPackages.containsKey(GmsPackageSupport.PACKAGE_VENDING)
+                    && !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
+                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
+        }
+        PackageVisibility visibility = new PackageVisibility(packages, browser, gms, vending,
+                this::isProtectedBroadcast);
+        boolean missing = !visibility.contains(sourcePackageName)
+                || !visibility.canSee(callingUid, sourcePackageName);
+        for (String target : targetPackageNames) {
+            if (!missing && (!visibility.contains(target) || !visibility.canSee(callingUid, target))) {
+                missing = true;
+            }
+        }
+        if (missing) {
+            throw new android.os.ParcelableException(new PackageManager.NameNotFoundException(
+                    "Package(s) " + sourcePackageName + " and/or "
+                            + java.util.Arrays.toString(targetPackageNames) + " not found."));
+        }
+        int sourceUid = visibility.uid(sourcePackageName);
+        for (int i = 0; i < result.length; i++) {
+            result[i] = visibility.canSee(sourceUid, targetPackageNames[i]);
+        }
+        return result;
+    }
+
+    @Override
+    public int[] getPackageGids(String packageName, long flags, int userId) {
+        // Gesher assigns package UIDs but no supplementary Linux groups. Null
+        // means an unknown package to ApplicationPackageManager, not "no groups",
+        // and makes even a query about the caller's own installed app throw.
+        if (userId != 0 || isRemovalPending(packageName)) return null;
+        if ("android".equals(packageName)) return new int[0];
+        ApkPackage pkg = get(packageName);
+        if (pkg == null || ((flags & PackageManager.MATCH_SYSTEM_ONLY) != 0 && !pkg.isSystemAddon())) {
+            return null;
+        }
+        return new int[0];
     }
 
     @Override
@@ -616,8 +762,80 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     @Override
-    public ParceledListSlice queryProperty(String propertyName, int componentType) {
-        // Manifest <property> tags are not indexed: none is found.
-        return new ParceledListSlice<>(java.util.Collections.emptyList());
+    public void registerDexModule(String packageName, String dexModulePath,
+            boolean isSharedModule, android.content.pm.IDexModuleRegisterCallback callback) {
+        // Android 16 deliberately does not register/optimize these modules, but
+        // completes the optional callback with failure. An inherited no-op leaves
+        // callers waiting forever. The server's existing worker supplies the
+        // asynchronous boundary, without retaining a client Binder identity or
+        // holding the package monitor while application code runs.
+        if (callback == null) return;
+        mPackageEventExecutor.execute(() -> {
+            try {
+                callback.onDexModuleRegistered(dexModulePath, false,
+                        "registerDexModule call not supported since Android U");
+            } catch (RemoteException | RuntimeException failure) {
+                SystemServer.log("dex module callback unavailable: "
+                        + failure.getClass().getSimpleName());
+            }
+        });
+    }
+
+    @Override
+    public PackageManager.Property getPropertyAsUser(String propertyName,
+            String packageName, String className, int userId) {
+        Objects.requireNonNull(propertyName);
+        Objects.requireNonNull(packageName);
+        if (userId != 0 || isRemovalPending(packageName)) return null;
+        ApkPackage pkg = get(packageName);
+        if (pkg == null) return null;
+        if (className == null) return pkg.parsed.getProperties().get(propertyName);
+        // Match AOSP PackageProperty's component lookup order. A component property
+        // never falls back to a property of the same name on its application.
+        for (int type : new int[] {PackageManager.TYPE_ACTIVITY, PackageManager.TYPE_PROVIDER,
+                PackageManager.TYPE_RECEIVER, PackageManager.TYPE_SERVICE}) {
+            List<? extends ParsedComponent> components = propertyComponents(pkg, type);
+            // AOSP's property index retains repeated declarations; the last matching
+            // class wins within each component family.
+            for (int i = components.size() - 1; i >= 0; i--) {
+                ParsedComponent component = components.get(i);
+                if (className.equals(component.getName())) {
+                    PackageManager.Property property = component.getProperties().get(propertyName);
+                    if (property != null) return property;
+                }
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public ParceledListSlice<PackageManager.Property> queryProperty(String propertyName,
+            int componentType) {
+        Objects.requireNonNull(propertyName);
+        List<PackageManager.Property> result = new ArrayList<>();
+        if (android.os.UserHandle.getCallingUserId() != 0) return new ParceledListSlice<>(result);
+        for (ApkPackage pkg : mPackages.values()) {
+            if (isRemovalPending(pkg.packageName)) continue;
+            if (componentType == PackageManager.TYPE_APPLICATION) {
+                PackageManager.Property property = pkg.parsed.getProperties().get(propertyName);
+                if (property != null) result.add(property);
+            } else {
+                for (ParsedComponent component : propertyComponents(pkg, componentType)) {
+                    PackageManager.Property property = component.getProperties().get(propertyName);
+                    if (property != null) result.add(property);
+                }
+            }
+        }
+        return new ParceledListSlice<>(result);
+    }
+
+    private static List<? extends ParsedComponent> propertyComponents(ApkPackage pkg, int type) {
+        switch (type) {
+            case PackageManager.TYPE_ACTIVITY: return pkg.parsed.getActivities();
+            case PackageManager.TYPE_PROVIDER: return pkg.parsed.getProviders();
+            case PackageManager.TYPE_RECEIVER: return pkg.parsed.getReceivers();
+            case PackageManager.TYPE_SERVICE: return pkg.parsed.getServices();
+            default: return java.util.Collections.emptyList();
+        }
     }
 }

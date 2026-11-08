@@ -164,6 +164,8 @@ void RegisterDevice(int fd, Device device) {
   }
 }
 
+bool DeviceFromFd(int fd, Device* device) { return LookupDevice(fd, device); }
+
 }  // namespace gesher
 
 using gesher::Device;

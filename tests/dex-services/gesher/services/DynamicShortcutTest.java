@@ -72,6 +72,7 @@ public final class DynamicShortcutTest {
         }
         require(args.length==2,"Pass ordinary source and target APK fixtures");
         System.loadLibrary("android_runtime");
+        ZygotePathTest.contracts();
         AssetManager.createSystemAssetsInZygoteLocked(false,System.getenv("ANDROID_ROOT")+"/framework/framework-res.apk");
         android.system.Os.setenv("GESHER_MICROG_SPOOF","1",true);
         android.system.Os.setenv("GESHER_SHORTCUTS","0",true);
@@ -137,7 +138,9 @@ public final class DynamicShortcutTest {
             String link=Zygote.windowsPath(temp.resolve("קיצור בדיקה.lnk").toString());
             int hr=Shell.createShortcut(link,System.getenv("SystemRoot")+"\\System32\\cmd.exe",command,
                     Zygote.windowsPath(temp.toString()),"","synthetic shortcut QA",AppShell.appUserModelId(pkg));
-            require(hr==0 && Shell.exists(link),"actual Unicode ShellLink creation failed");
+            boolean linkExists=Shell.exists(link);
+            require(hr==0 && linkExists,"actual Unicode ShellLink creation failed: HRESULT=0x"
+                    +Integer.toHexString(hr)+", exists="+linkExists+", link="+link+", Java directory="+temp);
             require(Shell.removeFile(link),"owned test ShellLink cleanup failed");
             api.removeAllDynamicShortcuts(pkg,0);
             require(list(api,pkg).isEmpty(),"remove-all failed");

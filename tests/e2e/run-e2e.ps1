@@ -158,14 +158,18 @@ function FrontWindow([string] $log, [IntPtr] $hwnd) {
   return $hwnd
 }
 
-# Captures until two reads a second apart agree (the app settled) or $seconds pass.
+# Captures until two reads a second apart agree on non-blank content (the app settled)
+# or $seconds pass.
 function CaptureSettled([IntPtr] $hwnd, [int] $seconds = 15) {
   $deadline = (Get-Date).AddSeconds($seconds)
   $last = [GesherWin32]::Capture($hwnd)
   do {
     Start-Sleep 1
     $px = [GesherWin32]::Capture($hwnd)
-    if ($null -ne $px -and (PixelDiff $last $px) -eq 0) { return $px }
+    if ($null -ne $px -and (PixelDiff $last $px) -eq 0) {
+      $an = Analyze $px
+      if ($an.Other -ge ($an.Width * $an.Height * 0.005)) { return $px }
+    }
     $last = $px
   } while ((Get-Date) -lt $deadline)
   return $last

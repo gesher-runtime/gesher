@@ -1,0 +1,18 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.splitcontract" split="feature.entry" android:versionCode="1"
+    android:isFeatureSplit="true">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" />
+    <uses-split android:name="feature.core" />
+    <application android:hasCode="true" android:classLoader="dalvik.system.DelegateLastClassLoader">
+        <activity android:name=".FeatureActivity" android:exported="true" android:process=":feature">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <service android:name=".FeatureService" android:exported="false" android:process=":feature" />
+        <provider android:name=".FeatureProvider" android:authorities="com.gesher.splitcontract.items"
+            android:exported="false" android:process=":feature"
+            android:readPermission="com.gesher.splitcontract.READ" />
+    </application>
+</manifest>

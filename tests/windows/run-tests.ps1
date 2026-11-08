@@ -1,6 +1,7 @@
 # Runs on a Windows machine against the CI build output.
 #   pwsh tests/windows/run-tests.ps1 <dir with *.exe, hello.dex, hello.apk>
-param([Parameter(Mandatory)] [string] $Dir, [string] $Web3Observer = '')
+param([Parameter(Mandatory)] [string] $Dir, [string] $Web3Observer = '',
+  [switch] $FrameworkContractsOnly)
 
 $ErrorActionPreference = 'Stop'
 $failed = 0
@@ -190,7 +191,20 @@ if ($code -eq 0 -and -not $missing) {
 # Each line of work keeps its checks in a file of its own (graphics, native
 # libraries, services, ...), run here in this script's scope: Check, RunDex,
 # NoDrive, $root, $bcp and $failed are theirs to use.
-foreach ($t in Get-ChildItem (Join-Path $PSScriptRoot 'tracks') -Filter *.ps1 -ErrorAction SilentlyContinue | Sort-Object Name) {
+$testTracks = if ($FrameworkContractsOnly) {
+  # Keep the existing graphics/font prerequisites: services use the installed
+  # system fonts, and 32-fonts uses GraphicsDex from 30-graphics.
+  foreach ($name in '30-graphics.ps1', '32-fonts.ps1', '50-services.ps1', '94-framework-fixes.ps1') {
+    $requiredTrack = Join-Path (Join-Path $PSScriptRoot 'tracks') $name
+    if (-not (Test-Path -LiteralPath $requiredTrack -PathType Leaf)) {
+      throw "Required framework contract track is missing: $requiredTrack"
+    }
+    Get-Item -LiteralPath $requiredTrack -ErrorAction Stop
+  }
+} else {
+  Get-ChildItem (Join-Path $PSScriptRoot 'tracks') -Filter *.ps1 -ErrorAction SilentlyContinue | Sort-Object Name
+}
+foreach ($t in $testTracks) {
   try {
     . $t.FullName
   } catch {

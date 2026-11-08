@@ -89,6 +89,10 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     void stopServicesForPackage(String packageName) { mServices.stopPackage(packageName); }
 
+    boolean hasForegroundServiceNotification(String packageName, String channelId) {
+        return mServices.hasForegroundServiceNotification(packageName, channelId);
+    }
+
     /** An app process is gone: its services, receivers and providers too. */
     void processDied(ActivityTaskManagerService.ProcessRecord app) {
         mServices.processDied(app);
@@ -270,7 +274,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
         if (userId != 0) throw new SecurityException("Only user 0 is available");
         mCallers.requirePackage(packageName);
         return mPendingIntents.get(type, packageName, requestCode, intents, resolvedTypes,
-                flags);
+                flags, options);
     }
 
     @Override
@@ -280,7 +284,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
         if (userId != 0) throw new SecurityException("Only user 0 is available");
         mCallers.requirePackage(packageName);
         return mPendingIntents.get(type, packageName, requestCode, intents, resolvedTypes,
-                flags);
+                flags, options);
     }
 
     @Override
@@ -332,7 +336,8 @@ public final class ActivityManagerService extends IActivityManager.Default {
     public int sendIntentSender(IApplicationThread caller, IIntentSender target,
             IBinder allowlistToken, int code, Intent intent, String resolvedType,
             IIntentReceiver finishedReceiver, String requiredPermission, Bundle options) {
-        return mPendingIntents.send(mPendingIntents.record(target), intent, resolvedType, requiredPermission);
+        return mPendingIntents.sendWithOptions(mPendingIntents.record(target), intent, resolvedType,
+                requiredPermission, options);
     }
 
     int sendBroadcastFor(String packageName, Intent intent, String resolvedType) {
@@ -365,9 +370,14 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     int startActivityFor(String packageName, Intent intent, String resolvedType,
             java.util.function.BooleanSupplier lifetime) {
+        return startActivityFor(packageName, intent, resolvedType, lifetime, false);
+    }
+
+    int startActivityFor(String packageName, Intent intent, String resolvedType,
+            java.util.function.BooleanSupplier lifetime, boolean shareIdentity) {
         if (!lifetime.getAsBoolean()) return ActivityManager.START_CANCELED;
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        return mAtm.startActivityForVerifiedCreator(packageName, intent, resolvedType, lifetime);
+        return mAtm.startActivityForVerifiedCreator(packageName, intent, resolvedType, lifetime, shareIdentity);
     }
 
     void startServiceFor(String packageName, Intent intent, String resolvedType,

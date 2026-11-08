@@ -2,6 +2,8 @@
 package gesher.services;
 
 import android.app.Notification;
+import android.app.NotificationChannel;
+import android.content.pm.ParceledListSlice;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.os.Bundle;
@@ -93,9 +95,13 @@ public final class NotificationRetirementTest {
             require((Integer)policy.getClass().getMethod("checkPermission", String.class, String.class)
                     .invoke(policy, pkg, "android.permission.POST_NOTIFICATIONS") == PackageManager.PERMISSION_GRANTED,
                     "Actual requested notification permission was not granted");
+            notifications.getMethod("createNotificationChannels", String.class, ParceledListSlice.class)
+                    .invoke(service, pkg, new ParceledListSlice<>(List.of(new NotificationChannel(
+                            "retirement", "Retirement fixture", android.app.NotificationManager.IMPORTANCE_DEFAULT))));
         }
         void post(int id) throws Exception {
             Notification n = new Notification(); n.extras = new Bundle();
+            field(Notification.class, "mChannelId").set(n, "retirement");
             n.extras.putString(Notification.EXTRA_TITLE, "synthetic notification retirement");
             method(notifications, "post", String.class, String.class, int.class, Notification.class)
                     .invoke(service, pkg, null, id, n);

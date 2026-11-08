@@ -233,7 +233,7 @@ public final class GesherAppProcess {
         if (launch != null) {
             Thread launcher = new Thread(() -> {
                 try {
-                    launch(launch, removeTaskWhenIdle);
+                    launch(launch, removeTaskWhenIdle, thread.getApplicationThread());
                 } catch (Throwable t) {
                     launcherFailure[0] = t;
                     System.err.println(TAG + ": the launcher failed: " + t);
@@ -271,9 +271,13 @@ public final class GesherAppProcess {
     }
 
     /** The launcher's part: am start -W, then remove the task. */
-    private static void launch(Intent launch, boolean removeTaskWhenIdle) throws Exception {
+    private static void launch(Intent launch, boolean removeTaskWhenIdle,
+            IApplicationThread caller) throws Exception {
+        String packageName = launch.getComponent() != null
+                ? launch.getComponent().getPackageName() : launch.getPackage();
+        if (packageName == null) throw new IllegalArgumentException("Initial launch requires a package");
         IActivityTaskManager atm = ActivityTaskManager.getService();
-        WaitResult result = atm.startActivityAndWait(null /* caller */, "com.gesher.app",
+        WaitResult result = atm.startActivityAndWait(caller, packageName,
                 null /* callingFeatureId */, launch, null /* resolvedType */,
                 null /* resultTo */, null /* resultWho */, 0 /* requestCode */,
                 0 /* flags */, null /* profilerInfo */, null /* options */, 0 /* userId */);

@@ -28,7 +28,7 @@ import java.io.OutputStream;
  * for it) and sends it.
  */
 final class NotificationStore {
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
 
     /** A notification as stored: its identity and its PendingIntents' records. */
     static final class Stored {
@@ -38,6 +38,7 @@ final class NotificationStore {
         String tag;
         int id;
         int flags;
+        String channelId;
         Intended content;
         Intended[] actions = new Intended[0];
     }
@@ -92,6 +93,7 @@ final class NotificationStore {
         s.tag = tag;
         s.id = id;
         s.flags = n.flags;
+        s.channelId = n.getChannelId() != null ? n.getChannelId() : "miscellaneous";
         s.content = intended(am, n.contentIntent);
         int actions = n.actions != null ? n.actions.length : 0;
         s.actions = new Intended[actions];
@@ -107,6 +109,7 @@ final class NotificationStore {
             p.writeString(s.tag);
             p.writeInt(s.id);
             p.writeInt(s.flags);
+            p.writeString(s.channelId);
             write(p, s.content);
             p.writeInt(s.actions.length);
             for (Intended i : s.actions) write(p, i);
@@ -160,7 +163,10 @@ final class NotificationStore {
 
     /** The stored notification with {@code key} of {@code pkg}, or null. */
     static Stored load(String pkg, String key) {
-        File f = file(pkg, key);
+        return load(pkg, key, file(pkg, key));
+    }
+
+    private static Stored load(String pkg, String key, File f) {
         if (!f.isFile()) return null;
         Parcel p = Parcel.obtain();
         try (InputStream in = new FileInputStream(f)) {
@@ -168,10 +174,10 @@ final class NotificationStore {
             p.unmarshall(data, 0, data.length);
             p.setDataPosition(0);
             int version = p.readInt();
-            if (version != VERSION && !(version == 1 && !GmsSignatureSpoofing.isEnabled())) return null;
+            if (version != VERSION && version != 2 && !(version == 1 && !GmsSignatureSpoofing.isEnabled())) return null;
             Stored s = new Stored();
             s.key = p.readString();
-            if (!key.equals(s.key)) return null;
+            if (s.key == null || key != null && !key.equals(s.key)) return null;
             s.packageName = p.readString();
             if (!pkg.equals(s.packageName)) return null;
             if (version >= 2) s.packageIdentity = p.readString();
@@ -181,6 +187,7 @@ final class NotificationStore {
             s.tag = p.readString();
             s.id = p.readInt();
             s.flags = p.readInt();
+            if (version >= 3) s.channelId = p.readString();
             s.content = read(p, version);
             int actions = p.readInt();
             if (actions < 0 || actions > 128) return null;
@@ -197,6 +204,24 @@ final class NotificationStore {
 
     static void delete(String pkg, String key) {
         file(pkg, key).delete();
+    }
+
+    /** Retained Windows toasts can outlive the system server's in-memory records. */
+    static java.util.List<Stored> deleteChannels(String pkg, java.util.Set<String> channelIds) {
+        java.util.List<Stored> removed = new java.util.ArrayList<>();
+        File[] files = dir(pkg).listFiles((directory, name) -> name.endsWith(".n"));
+        if (files == null) return removed;
+        for (File f : files) {
+            Stored stored = load(pkg, null, f);
+            if (stored != null) {
+                String ch = stored.channelId != null ? stored.channelId : "miscellaneous";
+                if (channelIds.contains(ch)) {
+                    f.delete();
+                    removed.add(stored);
+                }
+            }
+        }
+        return removed;
     }
 
     /** Every stored notification of the package goes (an uninstall). */

@@ -1,0 +1,136 @@
+// Production semaphore/deadline code. Windows address waits and wakes use
+// Linux futexes here; clock reads are real except for the explicit matrix.
+// Sysconf's unneeded GetSystemInfo call has no outputs used by this query;
+// unrelated memory/processor query boundaries abort if unexpectedly reached.
+#include "shim_internal.h"
+
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <dlfcn.h>
+#include <linux/futex.h>
+#include <semaphore.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+using DWORD = uint32_t;
+constexpr DWORD INFINITE = 0xffffffffu;
+struct SYSTEM_INFO {};
+static void GetSystemInfo(SYSTEM_INFO*) {}
+struct MEMORYSTATUSEX { DWORD dwLength; uint64_t ullAvailPhys, ullTotalPhys; };
+static void GlobalMemoryStatusEx(MEMORYSTATUSEX*) { std::abort(); }
+static DWORD GetActiveProcessorCount(unsigned short) { std::abort(); }
+constexpr unsigned short ALL_PROCESSOR_GROUPS = 0xffff;
+static bool WaitOnAddress(void* address, void* compare, size_t size, DWORD milliseconds) {
+  if (size != 4) std::abort();
+  timespec timeout{static_cast<time_t>(milliseconds / 1000),
+                   static_cast<long>((milliseconds % 1000) * 1000000)};
+  int32_t expected;
+  std::memcpy(&expected, compare, sizeof(expected));
+  long result = syscall(SYS_futex, address, FUTEX_WAIT_PRIVATE, expected,
+                        milliseconds == INFINITE ? nullptr : &timeout, nullptr, 0);
+  return result == 0 || errno == EAGAIN;
+}
+static void WakeByAddressSingle(void* address) {
+  syscall(SYS_futex, address, FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
+}
+
+namespace gesher::bionic {
+static bool fixed_clock;
+static LinuxTimespec realtime;
+static int64_t monotonic_ns;
+LinuxTimespec RealtimeNow() {
+  if (fixed_clock) return realtime;
+  timespec now;
+  clock_gettime(CLOCK_REALTIME, &now);
+  return {now.tv_sec, now.tv_nsec};
+}
+int64_t QpcNanos() {
+  if (fixed_clock) return monotonic_ns;
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+void DeliverPendingSignals() {}
+namespace {
+int64_t NowRealtimeNs() {
+  auto now = RealtimeNow();
+  return now.tv_sec * 1000000000 + now.tv_nsec;
+}
+int64_t NowMonotonicNs() { return QpcNanos(); }
+@WORD_IMPLEMENTATION@
+@SEMAPHORE_IMPLEMENTATION@
+@SYSCONF_IMPLEMENTATION@
+}
+@DEADLINE_IMPLEMENTATION@
+
+void RegisterSemaphores(SymbolTable& table) {
+#define E(name, fn) table[name] = reinterpret_cast<void*>(&fn)
+@SEMAPHORE_REGISTRATIONS@
+#undef E
+}
+}
+
+static void* semaphore_symbol(void*, const char* name) {
+  static gesher::bionic::SymbolTable table = [] {
+    gesher::bionic::SymbolTable result;
+    gesher::bionic::RegisterSemaphores(result);
+    return result;
+  }();
+  auto found = table.find(name);
+  return found == table.end() ? nullptr : found->second;
+}
+static int failures;
+static void check(const char* label, int ok) {
+  std::printf("%-72s %s\n", label, ok ? "ok" : "FAIL");
+  if (!ok) ++failures;
+  std::fflush(stdout);
+}
+#define dlsym semaphore_symbol
+#include "semaphore_contract_test.inc"
+#undef dlsym
+
+static void test_deadlines() {
+  using namespace gesher::bionic;
+  fixed_clock = true;
+  realtime = {1000, 250000000};
+  monotonic_ns = 500750000000;
+  const int64_t cap = 0x7ffffffe;
+  for (int monotonic = 0; monotonic < 2; ++monotonic) {
+    LinuxTimespec now = monotonic ? LinuxTimespec{500, 750000000} : realtime;
+    struct Test { LinuxTimespec deadline; int64_t milliseconds; } cases[] = {
+      {now, 0},
+      {{now.tv_sec, now.tv_nsec - 1}, 0},
+      {{now.tv_sec, now.tv_nsec + 1}, 1},
+      {{now.tv_sec, now.tv_nsec + 999999}, 1},
+      {{now.tv_sec, now.tv_nsec + 1000000}, 1},
+      {{now.tv_sec, now.tv_nsec + 1000001}, 2},
+      {{now.tv_sec + 1, now.tv_nsec}, 1000},
+      {{now.tv_sec + cap / 1000, now.tv_nsec + (cap % 1000) * 1000000}, cap},
+      {{now.tv_sec + cap / 1000 + 1, now.tv_nsec}, cap},
+      {{INT64_MAX, 999999999}, cap},
+      {{INT64_MAX / 1000000000 + 10, 0}, cap},
+      {{INT64_MIN, 0}, 0},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+      auto& time = cases[i].deadline;
+      if (time.tv_nsec >= 1000000000) { ++time.tv_sec; time.tv_nsec -= 1000000000; }
+      char label[128];
+      std::snprintf(label, sizeof(label), "deadline: pthread/futex clock=%d case=%zu", monotonic, i);
+      check(label, MillisUntil(&time, monotonic != 0) == cases[i].milliseconds);
+      std::snprintf(label, sizeof(label), "deadline: semaphore/rwlock clock=%d case=%zu", monotonic, i);
+      check(label, MsUntil(&time, monotonic) == (cases[i].milliseconds == 0 ? -1 : cases[i].milliseconds));
+    }
+  }
+  fixed_clock = false;
+}
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  if (std::strcmp(argv[1], "limits") == 0) test_semaphore_limits();
+  else if (std::strcmp(argv[1], "waits") == 0) test_semaphore_waits();
+  else if (std::strcmp(argv[1], "deadlines") == 0) test_deadlines();
+  else return 2;
+  return failures == 0 ? 0 : 1;
+}

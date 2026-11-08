@@ -129,8 +129,10 @@ struct dirent* readdir(DIR* dir) {
     return e;
   }
   if (!dir->have_data) {
-    if (dir->find == INVALID_HANDLE_VALUE || !FindNextFileW(dir->find, &dir->data)) {
-      return nullptr;  // end of directory; errno unchanged
+    if (dir->find == INVALID_HANDLE_VALUE) return nullptr;
+    if (!FindNextFileW(dir->find, &dir->data)) {
+      if (GetLastError() != ERROR_NO_MORE_FILES) gesher::FailWithLastError();
+      return nullptr;  // Only normal EOF leaves errno unchanged.
     }
   }
   dir->have_data = false;

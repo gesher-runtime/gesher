@@ -272,6 +272,11 @@ in a job that ends them with it.
   The same APK again changes nothing; another one updates the package (its
   processes stopped first). `uninstall` removes code, data and entry. `list` asks
   the package manager (`getInstalledPackages`, `getPackageInfo`).
+  Installed APK sets are parsed as a cluster: feature activities, services and
+  providers, manifest split names, resource paths and isolated class-loader
+  dependencies survive installation and registry reload. Split package names,
+  full version codes, signatures and dependencies are checked before replacing
+  a working package. See [split package contracts](../docs/research/package-split-contracts-2026-11-08.md).
 - `launch` installs or updates the APK, then plays the launcher: `startActivityAndWait`
   with the MAIN/LAUNCHER intent from no app process. The system server starts the
   package's process: a dalvikvm with its own runtime options running

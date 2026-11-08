@@ -1,0 +1,156 @@
+From: Gesher Authors
+Subject: [PATCH] Close parser-owned APK assets with each split loader
+
+Closing AssetManager does not close its ApkAssets, because managers can borrow
+shared resources. These parser loaders create private assets and own their
+lifetime. Record each successful creation, including partial loads, and close
+all managers before releasing that ownership. Close unpublished managers when
+configuration fails. This releases Windows file mappings without collection
+before a caller replaces or removes a parsed source APK.
+
+diff --git a/core/java/com/android/internal/pm/split/DefaultSplitAssetLoader.java b/core/java/com/android/internal/pm/split/DefaultSplitAssetLoader.java
+--- a/core/java/com/android/internal/pm/split/DefaultSplitAssetLoader.java
++++ b/core/java/com/android/internal/pm/split/DefaultSplitAssetLoader.java
+@@ -28,6 +28,7 @@
+ import libcore.io.IoUtils;
+
+ import java.io.IOException;
++import java.util.ArrayList;
+
+ /**
+  * Loads the base and split APKs into a single AssetManager.
+@@ -38,6 +39,8 @@
+     private final String[] mSplitApkPaths;
+     private final @ParseFlags int mFlags;
+     private AssetManager mCachedAssetManager;
++    // Only assets created by this loader; AssetManager also contains borrowed system assets.
++    private final ArrayList<ApkAssets> mOwnedApkAssets = new ArrayList<>();
+
+     private ApkAssets mBaseApkAssets;
+
+@@ -47,7 +50,7 @@
+         mFlags = flags;
+     }
+
+-    private static ApkAssets loadApkAssets(String path, @ParseFlags int flags)
++    private ApkAssets loadApkAssets(String path, @ParseFlags int flags)
+             throws IllegalArgumentException {
+         if ((flags & ParsingPackageUtils.PARSE_MUST_BE_APK) != 0
+                 && !ApkLiteParseUtils.isApkPath(path)) {
+@@ -55,7 +58,14 @@
+         }
+
+         try {
+-            return ApkAssets.loadFromPath(path);
++            final ApkAssets assets = ApkAssets.loadFromPath(path);
++            try {
++                mOwnedApkAssets.add(assets);
++                return assets;
++            } catch (RuntimeException | Error e) {
++                assets.close();
++                throw e;
++            }
+         } catch (IOException e) {
+             throw new IllegalArgumentException("Failed to load APK at path " + path, e);
+         }
+@@ -82,9 +92,15 @@
+         }
+
+         AssetManager assets = new AssetManager();
+-        assets.setConfiguration(0, 0, null, new String[0], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+-                0, 0, Build.VERSION.RESOURCES_SDK_INT_FULL);
+-        assets.setApkAssets(apkAssets, false /*invalidateCaches*/);
++        try {
++            assets.setConfiguration(0, 0, null, new String[0], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
++                    0, 0, Build.VERSION.RESOURCES_SDK_INT_FULL);
++            assets.setApkAssets(apkAssets, false /*invalidateCaches*/);
++        } catch (RuntimeException | Error e) {
++            // A failed setup has not published this manager to close().
++            IoUtils.closeQuietly(assets);
++            throw e;
++        }
+
+         mCachedAssetManager = assets;
+         return mCachedAssetManager;
+@@ -103,5 +119,11 @@
+     @Override
+     public void close() throws Exception {
+         IoUtils.closeQuietly(mCachedAssetManager);
++        // All manifest parsers are closed by the caller before the loader. Destroy managers
++        // before their private assets, including assets loaded before a later split failed.
++        for (ApkAssets assets : mOwnedApkAssets) {
++            assets.close();
++        }
++        mOwnedApkAssets.clear();
+     }
+ }
+diff --git a/core/java/com/android/internal/pm/split/SplitAssetDependencyLoader.java b/core/java/com/android/internal/pm/split/SplitAssetDependencyLoader.java
+--- a/core/java/com/android/internal/pm/split/SplitAssetDependencyLoader.java
++++ b/core/java/com/android/internal/pm/split/SplitAssetDependencyLoader.java
+@@ -44,6 +44,8 @@
+     private final @ParseFlags int mFlags;
+     private final ApkAssets[][] mCachedSplitApks;
+     private final AssetManager[] mCachedAssetManagers;
++    // Dependency arrays share assets. Record ownership once, when each asset is created.
++    private final ArrayList<ApkAssets> mOwnedApkAssets = new ArrayList<>();
+
+     public SplitAssetDependencyLoader(PackageLite pkg,
+             SparseArray<int[]> dependencies, @ParseFlags int flags) {
+@@ -64,7 +66,7 @@
+         return mCachedAssetManagers[splitIdx] != null;
+     }
+
+-    private static ApkAssets loadApkAssets(String path, @ParseFlags int flags)
++    private ApkAssets loadApkAssets(String path, @ParseFlags int flags)
+             throws IllegalArgumentException {
+         if ((flags & ParsingPackageUtils.PARSE_MUST_BE_APK) != 0
+                 && !ApkLiteParseUtils.isApkPath(path)) {
+@@ -72,7 +74,14 @@
+         }
+
+         try {
+-            return ApkAssets.loadFromPath(path);
++            final ApkAssets assets = ApkAssets.loadFromPath(path);
++            try {
++                mOwnedApkAssets.add(assets);
++                return assets;
++            } catch (RuntimeException | Error e) {
++                assets.close();
++                throw e;
++            }
+         } catch (IOException e) {
+             throw new IllegalArgumentException("Failed to load APK at path " + path, e);
+         }
+@@ -80,10 +89,16 @@
+
+     private static AssetManager createAssetManagerWithAssets(ApkAssets[] apkAssets) {
+         final AssetManager assets = new AssetManager();
+-        assets.setConfiguration(0, 0, null, new String[0], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+-                0, Build.VERSION.RESOURCES_SDK_INT_FULL);
+-        assets.setApkAssets(apkAssets, false /*invalidateCaches*/);
+-        return assets;
++        try {
++            assets.setConfiguration(0, 0, null, new String[0], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
++                    0, Build.VERSION.RESOURCES_SDK_INT_FULL);
++            assets.setApkAssets(apkAssets, false /*invalidateCaches*/);
++            return assets;
++        } catch (RuntimeException | Error e) {
++            // A failed setup has not published this manager to close().
++            IoUtils.closeQuietly(assets);
++            throw e;
++        }
+     }
+
+     @Override
+@@ -133,5 +148,11 @@
+         for (AssetManager assets : mCachedAssetManagers) {
+             IoUtils.closeQuietly(assets);
+         }
++        // Parent assets occur in several dependency arrays. Close only our creation list,
++        // after every manager, including assets from a partially constructed split.
++        for (ApkAssets assets : mOwnedApkAssets) {
++            assets.close();
++        }
++        mOwnedApkAssets.clear();
+     }
+ }

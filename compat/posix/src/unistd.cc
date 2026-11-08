@@ -8,13 +8,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <windows.h>
+#include <winioctl.h>
+#include <winternl.h>
 #include <gesher/font_environment.h>
 
 #include <atomic>
 #include <string>
 
 #include "internal.h"
+#include "binder_internal.h"
+#include "event_internal.h"
 #include "record_lock_descriptors.h"
 
 namespace {
@@ -306,36 +311,172 @@ int fsync(int fd) {
 }
 int fdatasync(int fd) { return fsync(fd); }
 
-// Note: unlike Linux, these move the file position (Windows has no positioned
-// I/O that leaves it alone on synchronous handles).
-ssize_t pread(int fd, void* buf, size_t count, off_t offset) {
-  HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+// Positioned I/O must not change the shared cursor, including through dup().
+// ReadFile/WriteFile with OVERLAPPED still advance a synchronous FILE_OBJECT's
+// cursor. A duplicate only pins that same object; ReOpenFile creates a separate
+// one without resolving a possibly renamed/replaced pathname.
+class PositionedHandle {
+ public:
+  HANDLE value = INVALID_HANDLE_VALUE;
+  ~PositionedHandle() {
+    if (value != INVALID_HANDLE_VALUE && value != nullptr) CloseHandle(value);
+  }
+};
+
+static int PositionedMode(HANDLE file, DWORD* flags) {
+  using Query = LONG(WINAPI*)(HANDLE, PIO_STATUS_BLOCK, void*, ULONG, FILE_INFORMATION_CLASS);
+  using Error = ULONG(WINAPI*)(LONG);
+  HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  if (!ntdll) return EOPNOTSUPP;
+  auto query = reinterpret_cast<Query>(reinterpret_cast<void*>(GetProcAddress(ntdll, "NtQueryInformationFile")));
+  auto error = reinterpret_cast<Error>(reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlNtStatusToDosError")));
+  if (!query || !error) return EOPNOTSUPP;
+  IO_STATUS_BLOCK status{};
+  FILE_MODE_INFORMATION mode{};
+  LONG result = query(file, &status, &mode, sizeof(mode), FileModeInformation);
+  if (result < 0) return gesher::ErrnoFromWin32(error(result));
+  // The new private object is asynchronous. Keep actual data-integrity and
+  // alignment modes; duplicating DELETE_ON_CLOSE would change deletion lifetime.
+  *flags = FILE_FLAG_OVERLAPPED |
+      ((mode.Mode & FILE_WRITE_THROUGH) ? FILE_FLAG_WRITE_THROUGH : 0) |
+      ((mode.Mode & FILE_NO_INTERMEDIATE_BUFFERING) ? FILE_FLAG_NO_BUFFERING : 0) |
+      ((mode.Mode & FILE_SEQUENTIAL_ONLY) ? FILE_FLAG_SEQUENTIAL_SCAN : 0);
+  return 0;
+}
+
+static int PositionedNullDevice(HANDLE file, bool* is_null) {
+  using Query = LONG(WINAPI*)(HANDLE, PIO_STATUS_BLOCK, void*, ULONG, FS_INFORMATION_CLASS);
+  using Error = ULONG(WINAPI*)(LONG);
+  HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  if (!ntdll) return EOPNOTSUPP;
+  auto query = reinterpret_cast<Query>(reinterpret_cast<void*>(GetProcAddress(ntdll, "NtQueryVolumeInformationFile")));
+  auto error = reinterpret_cast<Error>(reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlNtStatusToDosError")));
+  if (!query || !error) return EOPNOTSUPP;
+  IO_STATUS_BLOCK status{};
+  FILE_FS_DEVICE_INFORMATION device{};
+  LONG result = query(file, &status, &device, sizeof(device), FileFsDeviceInformation);
+  if (result < 0) return gesher::ErrnoFromWin32(error(result));
+  *is_null = device.DeviceType == FILE_DEVICE_NULL;
+  return 0;
+}
+
+static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool writing) {
   if (offset < 0) return errno = EINVAL, -1;
-  OVERLAPPED ov = {};
+  PositionedHandle anchor, positioned, event;
+  DWORD type, access;
+  // Linux's MAX_RW_COUNT for the 4 KiB pages exposed by this Windows backend.
+  const DWORD want = count > 0x7ffff000 ? 0x7ffff000 : static_cast<DWORD>(count);
+  {
+    // Capture the exact object before close/dup2 can recycle its fd or HANDLE.
+    // No descriptor lock is held during the filesystem open or pending I/O.
+    gesher::record_locks::DescriptorGuard descriptor_guard;
+    HANDLE file = gesher::HandleFromFd(fd);
+    if (file == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+    short ready;
+    if (gesher_is_socket(fd) || gesher::IsBinderFd(fd) || gesher::LookupEventFd(fd) ||
+        gesher::PollEpoll(fd, 0, &ready)) return errno = ESPIPE, -1;
+    SetLastError(ERROR_SUCCESS);
+    type = GetFileType(file);
+    if (type == FILE_TYPE_UNKNOWN && GetLastError() != ERROR_SUCCESS) return gesher::FailWithLastError();
+    if (type == FILE_TYPE_PIPE) return errno = ESPIPE, -1;
+    DWORD console_mode;
+    if (type == FILE_TYPE_CHAR && GetConsoleMode(file, &console_mode)) return errno = ESPIPE, -1;
+    uint32_t granted = 0;
+    int error = gesher::record_locks::HandleAccess(file, &granted);
+    if (error) return errno = error, -1;
+    access = writing ? (granted & FILE_WRITE_DATA ? FILE_WRITE_DATA : FILE_APPEND_DATA) : FILE_READ_DATA;
+    // ReOpenFile can request more access than the original. Never use that to
+    // turn O_RDONLY/O_WRONLY/O_PATH descriptors into writable/readable ones.
+    if ((granted & access) == 0) return errno = EBADF, -1;
+    if (count != 0 && buf == nullptr) {
+      // Linux access_ok checks the user address range before dispatch, even
+      // when a backend will not actually dereference the buffer.
+      SYSTEM_INFO system{};
+      GetSystemInfo(&system);
+      if (count - 1 > reinterpret_cast<uintptr_t>(system.lpMaximumApplicationAddress))
+        return errno = EFAULT, -1;
+    }
+    gesher::Device device;
+    if (gesher::DeviceFromFd(fd, &device)) {
+      if (!writing) {
+        // Zero/random reads really fill the caller's memory. Unlike Windows
+        // ReadFile, the virtual device backend does not probe bad pointers.
+        if (count != 0 && buf == nullptr) return errno = EFAULT, -1;
+        return read(fd, buf, want);
+      }
+      // Random writes consume entropy input on Linux, whereas zero writes
+      // discard it. The two logical devices share the same native NUL handle.
+      if (device == gesher::Device::kRandom && count != 0 && buf == nullptr)
+        return errno = EFAULT, -1;
+    }
+    if (!DuplicateHandle(GetCurrentProcess(), file, GetCurrentProcess(), &anchor.value,
+                         0, FALSE, DUPLICATE_SAME_ACCESS)) return gesher::FailWithLastError();
+  }
+  HANDLE file = anchor.value;
+  if (type == FILE_TYPE_DISK) {
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (!GetFileInformationByHandle(file, &information)) return gesher::FailWithLastError();
+    if (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return errno = EISDIR, -1;
+    if (want == 0) return 0;
+    if (buf == nullptr) {
+      // An EOF read consumes no destination memory. Observe the real pinned
+      // file's length, without seeking or resolving its pathname.
+      if (!writing) {
+        LARGE_INTEGER size{};
+        if (!GetFileSizeEx(file, &size)) return gesher::FailWithLastError();
+        if (offset >= size.QuadPart) return 0;
+      }
+      return errno = EFAULT, -1;
+    }
+    DWORD flags;
+    int error = PositionedMode(file, &flags);
+    if (error) return errno = error, -1;
+    positioned.value = ReOpenFile(file, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, flags);
+    if (positioned.value == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+    file = positioned.value;
+  }
+  if (count != 0 && buf == nullptr) {
+    // Only a proven NUL device may discard an unused buffer. A console,
+    // socket, or other character driver is never classified by type alone.
+    if (type == FILE_TYPE_CHAR) {
+      bool is_null = false;
+      int error = PositionedNullDevice(file, &is_null);
+      if (error) return errno = error, -1;
+      if (is_null) return writing ? static_cast<ssize_t>(want) : 0;
+    }
+    return errno = EFAULT, -1;
+  }
+  event.value = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (event.value == nullptr) return gesher::FailWithLastError();
+  OVERLAPPED ov{};
+  ov.hEvent = event.value;
   ov.Offset = static_cast<DWORD>(static_cast<unsigned long long>(offset));
   ov.OffsetHigh = static_cast<DWORD>(static_cast<unsigned long long>(offset) >> 32);
-  DWORD n = 0;
-  DWORD want = count > 0x7fffffff ? 0x7fffffff : static_cast<DWORD>(count);
-  if (!ReadFile(h, buf, want, &n, &ov)) {
-    if (GetLastError() == ERROR_HANDLE_EOF) return 0;
-    return gesher::FailWithLastError();
+  DWORD transferred = 0;
+  BOOL done = writing ? WriteFile(file, buf, want, &transferred, &ov)
+                      : ReadFile(file, buf, want, &transferred, &ov);
+  DWORD error = done ? ERROR_SUCCESS : GetLastError();
+  if (!done && error == ERROR_IO_PENDING) {
+    // Keep the buffer, OVERLAPPED, event and both file objects alive until the
+    // operation has completed. The caller sees synchronous POSIX semantics.
+    done = GetOverlappedResult(file, &ov, &transferred, TRUE);
+    error = done ? ERROR_SUCCESS : GetLastError();
   }
-  return static_cast<ssize_t>(n);
+  if (!done) {
+    if (!writing && error == ERROR_HANDLE_EOF) return 0;
+    if (error == ERROR_NOACCESS || error == ERROR_INVALID_USER_BUFFER) return errno = EFAULT, -1;
+    return errno = gesher::ErrnoFromWin32(error), -1;
+  }
+  if (writing && transferred > 0) gesher::InotifyNoteWrite(anchor.value);
+  return static_cast<ssize_t>(transferred);
+}
+
+ssize_t pread(int fd, void* buf, size_t count, off_t offset) {
+  return PositionedIo(fd, buf, count, offset, false);
 }
 
 ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset) {
-  HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
-  if (offset < 0) return errno = EINVAL, -1;
-  OVERLAPPED ov = {};
-  ov.Offset = static_cast<DWORD>(static_cast<unsigned long long>(offset));
-  ov.OffsetHigh = static_cast<DWORD>(static_cast<unsigned long long>(offset) >> 32);
-  DWORD n = 0;
-  DWORD want = count > 0x7fffffff ? 0x7fffffff : static_cast<DWORD>(count);
-  if (!WriteFile(h, buf, want, &n, &ov)) return gesher::FailWithLastError();
-  if (n > 0) gesher::InotifyNoteWrite(fd);
-  return static_cast<ssize_t>(n);
+  return PositionedIo(fd, const_cast<void*>(buf), count, offset, true);
 }
 
 ssize_t pread64(int fd, void* buf, size_t count, off_t offset) {

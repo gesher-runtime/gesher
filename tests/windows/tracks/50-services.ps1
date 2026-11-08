@@ -127,6 +127,9 @@ $dvm = @("-Xbootclasspath:$bcpServices", "-Ximage:$(NoDrive "$root/system")/fram
   '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"))
 CheckTimed 'binder: CursorWindow inline/shared-memory Parcel data and lifetime' "$Dir/dalvikvm.exe" `
   ($dvm + 'gesher.services.CursorWindowParcelTest') @('CursorWindowParcelTest all passed')
+# The XML sniffer and native apps rely on true cursor-independent reads/writes.
+CheckTimed 'runtime: positioned file I/O preserves cursors, rights and open-file identity' "$Dir/dalvikvm.exe" `
+  ($dvm + 'gesher.services.PositionedIoTest') @('PASS PositionedIoTest') 90 -Publish
 $service = Start-Process "$Dir/dalvikvm.exe" -ArgumentList ($dvm + 'gesher.services.BinderTest', 'service') `
   -PassThru -NoNewWindow -RedirectStandardOutput "$logs/service.out" -RedirectStandardError "$logs/service.err"
 $failedBefore = $failed
@@ -335,7 +338,8 @@ $ok = (CheckSequences 'services: bindService and unbindService, the Binder from 
     "${c}unbindService", "${c}LocalService onUnbind", "${c}LocalService onDestroy")
 ) $appCode) -and $ok
 $ok = (CheckSequences 'services: a foreground service: startForegroundService, its notification to the stand-in notification manager' $appOut @(
-  ,@("${c}step: foreground service", "${c}ForegroundService onCreate", "${c}ForegroundService startForeground(7), channel gesher",
+  ,@("${c}step: foreground service", "${c}ForegroundService onCreate", "${c}ForegroundService notification channel verified",
+    "${c}ForegroundService startForeground(7), channel gesher",
     "${c}ForegroundService stopForeground, stopSelf", "${c}ForegroundService onDestroy")
 ) $appCode) -and $ok
 $ok = (CheckSequences 'services: broadcasts: registerReceiver and sendBroadcast, a manifest receiver for an explicit broadcast' $appOut @(
@@ -357,7 +361,7 @@ Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
 $s = 'system_server: '
 $null = CheckSequences 'services: system_server drives components.apk: NewIntentItem, ActivityResultItem, services, receivers, providers, notifications' $serverOut @(
-  ,@("${s}com.gesher.components parsed by PackageParser2: 4 activities, 3 services, 1 receivers, 1 providers",
+  ,@("${s}com.gesher.components parsed by PackageParser2: 7 activities, 3 services, 1 receivers, 1 providers",
     "${s}publishContentProviders: com.gesher.components.items (com.gesher.components.ItemsProvider)",
     "${s}scheduleTransaction NewIntentItem to com.gesher.components/com.gesher.components.SingleTopActivity",
     "${s}scheduleTransaction ActivityResultItem, ResumeActivityItem to com.gesher.components/com.gesher.components.MainActivity",
@@ -365,8 +369,8 @@ $null = CheckSequences 'services: system_server drives components.apk: NewIntent
     "${s}scheduleStopService com.gesher.components/.CounterService", "${s}stopSelf com.gesher.components/.CounterService (start id 1)",
     "${s}scheduleBindService com.gesher.components/.LocalService", "${s}publishService com.gesher.components/.LocalService",
     "${s}scheduleUnbindService com.gesher.components/.LocalService",
-    "${s}notification channel gesher created for com.gesher.components",
     "${s}notification 7 posted for com.gesher.components: channel gesher (importance 2, a toast of Gesher.App.com.gesher.components)",
+    "${s}notification 7 of com.gesher.components cancelled, its toast removed",
     "${s}registerReceiver from com.gesher.components: com.gesher.components.PING",
     "${s}scheduleReceiver com.gesher.components/com.gesher.components.ManifestReceiver",
     "${s}settings: updated system key gesher_test", "${s}scheduleExit: process ")
@@ -523,7 +527,7 @@ $ok = CheckOrdered 'services: gesher-app install and list: base.apk in data/app/
   'package:com.gesher.lifecycle version 1.0 (1) ',
   '/app/com.gesher.lifecycle-1/base.apk, 1 activities, 0 services, 0 providers',
   'package:com.gesher.peer version 1.0 (1) ',
-  '/app/com.gesher.peer-1/base.apk, 1 activities, 0 services, 1 providers') $code
+  '/app/com.gesher.peer-1/base.apk, 3 activities, 0 services, 2 providers') $code
 if ($ok -and -not ((Test-Path (Join-Path $root 'data/app/com.gesher.peer-1/base.apk')) -and $registry -match "com\.gesher\.lifecycle`t" -and $registry -match "com\.gesher\.peer`t")) {
   Write-Host "FAIL  services: installed files (data/app, packages.list): $registry"
   $failed++
@@ -735,17 +739,20 @@ try {
   CheckTimed 'services: deviceidle real managers, all 22 methods, administrative denial' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.DeviceIdleContractTest') @('DeviceIdleContractTest all passed') 30
   CheckTimed 'services: real ContextImpl manager construction and immediate policy rejection' "$Dir/dalvikvm.exe" `
-    ($dvmContracts + 'gesher.services.ManagerConstructionBatchTest') @('ManagerConstructionBatchTest all passed (17 managers)') 30
+    ($dvmContracts + 'gesher.services.ManagerConstructionBatchTest') @('ManagerConstructionBatchTest all passed (18 managers)') 30
   CheckTimed 'services: thermal usage shortcuts and unmanaged device policy contracts' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.ServiceFixtureRunner' + 'SoftwareServiceContractTest' +
       (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures/unsigned.apk'))) @('SoftwareServiceContractTest all passed') 30
   CheckTimed 'services: existing and future registration callbacks, cancellation and death cleanup' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.ServiceRegistrationCallbackTest') @('ServiceRegistrationCallbackTest all passed') 30
+  CheckTimed 'services: actual storage volumes, capacity, credential state and file allocation' "$Dir/dalvikvm.exe" `
+    ($dvmContracts + 'gesher.services.StorageQueryContractTest') @('StorageQueryContractTest all passed:') 45
   $canonicalChecks = @(
-    @{ Class = 'UserManagerProfilesTest'; Count = 33; Name = 'single-user profile and application restriction contracts' },
+    @{ Class = 'UserManagerProfilesTest'; Count = 49; Name = 'single-user profile, serial, identity and restriction contracts' },
     @{ Class = 'ApplicationRestrictionsTest'; Count = 16; Name = 'unmanaged restrictions queries and explicit unsupported approval' },
     @{ Class = 'BlobStoreContractTest'; Count = 25; Name = 'empty shared-blob queries, zero quota and unsupported storage' },
-    @{ Class = 'WifiUnsupportedTest'; Count = 33; Name = 'disabled Wi-Fi manager and unsupported controller operations' },
+    @{ Class = 'NsdContractTest'; Count = 37; Name = 'DNS-SD request overloads, callback executors and discovery lifecycle' },
+    @{ Class = 'WifiUnsupportedTest'; Count = 42; Name = 'disabled Wi-Fi manager and unsupported controller operations' },
     @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service' }
   )
   foreach ($contract in $canonicalChecks) {

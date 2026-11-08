@@ -23,5 +23,11 @@
             android:name=".NotesProvider"
             android:authorities="com.gesher.peer.notes"
             android:exported="true" />
+        <activity android:name=".CallerContractActivity" android:exported="true"
+            android:launchMode="singleTop" />
+        <activity android:name=".CallerRelayActivity" android:exported="false" />
+        <provider android:name=".CallerContractProvider"
+            android:authorities="com.gesher.peer.caller" android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

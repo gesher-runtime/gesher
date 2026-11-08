@@ -94,23 +94,26 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public boolean finishActivity(IBinder token, int code, Intent data, int finishTask) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        // An already removed managed Activity is already finished. Keep the
+        // standalone driver fallback below for tokens without a managed record.
+        if (r != null && !mAtm.requireActivityOwner(r)) return true;
         // Activity.FINISH_TASK_WITH_ACTIVITY (finishAndRemoveTask, closing the window):
         // the activity and the rest of its task.
         if (r != null && finishTask == 2) {
-            mAtm.finish(r, "app-request", code, data);
-            mAtm.removeTask(r.taskId);
+            if (mAtm.finishFromApp(r, code, data)) mAtm.removeTask(r.taskId);
             return true;
         }
-        if (r != null) return mAtm.finish(r, "app-request", code, data);
+        if (r != null) return mAtm.finishFromApp(r, code, data) || mAtm.isActivityRetired(r);
         com.gesher.app.window.WindowSession session = com.gesher.app.window.WindowSession.get();
-        return session != null && session.finishLocalActivity(token);
+        return session == null || session.finishLocalActivity(token);
     }
 
     @Override
     public boolean navigateUpTo(IBinder token, Intent destIntent, String resolvedType,
             int resultCode, Intent resultData) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        return r != null && mAtm.navigateUpTo(r, destIntent, resolvedType, resultCode,
+        return r != null && mAtm.requireActivityOwner(r)
+                && mAtm.navigateUpTo(r, destIntent, resolvedType, resultCode,
                 resultData);
     }
 
@@ -214,11 +217,34 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public String getLaunchedFromPackage(IBinder token) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        return r != null ? r.launchedFromPackage : null;
+        if (r == null || !mAtm.requireActivityOwner(r)) return null;
+        return r.launchedFromPackage;
     }
 
     @Override
     public int getLaunchedFromUid(IBinder token) {
-        return android.os.Process.myUid();  // every gesher process has the same uid
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        if (r == null || !mAtm.requireActivityOwner(r)) return android.os.Process.INVALID_UID;
+        ActivityCallerState.Snapshot caller = mAtm.callerSnapshot(token, null, true);
+        return caller != null ? caller.uid : android.os.Process.INVALID_UID;
+    }
+
+    @Override
+    public int getActivityCallerUid(IBinder activityToken, IBinder callerToken) {
+        ActivityCallerState.Snapshot caller = mAtm.visibleCaller(activityToken, callerToken, false);
+        return caller == null ? android.os.Process.INVALID_UID : caller.uid;
+    }
+
+    @Override
+    public String getActivityCallerPackage(IBinder activityToken, IBinder callerToken) {
+        ActivityCallerState.Snapshot caller = mAtm.visibleCaller(activityToken, callerToken, false);
+        return caller == null ? null : caller.packageName;
+    }
+
+    @Override
+    public int checkActivityCallerContentUriPermission(IBinder activityToken, IBinder callerToken,
+            android.net.Uri uri, int modeFlags, int userId) {
+        return mAtm.checkActivityCallerContentUriPermission(activityToken, callerToken, uri,
+                modeFlags, userId);
     }
 }

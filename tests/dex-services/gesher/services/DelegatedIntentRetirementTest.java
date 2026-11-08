@@ -274,6 +274,25 @@ public final class DelegatedIntentRetirementTest {
                     h.creator.packageName, 17, new Intent[]{new Intent().setComponent(
                             new ComponentName(h.creator.packageName, destination.name))}, null,
                     PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_ONE_SHOT);
+            // The launched activity belongs to the creator, not to the holder
+            // that sends its capability. Capture its real UID in a distinct
+            // ProcessRecord instead of relabeling a system-created record.
+            int ownerPid = field(h.processType, "pid").getInt(h.process);
+            long ownerIdentity = ((long) h.creator.uid() << 32) | (ownerPid & 0xffffffffL);
+            Binder.restoreCallingIdentity(ownerIdentity);
+            require(Binder.getCallingPid() == ownerPid && Binder.getCallingUid() == h.creator.uid(),
+                    "Native activity-owner Binder identity unavailable");
+            Object owner = make(h.processType,
+                    new Class<?>[]{h.atmType, int.class, IApplicationThread.class}, h.atm, ownerPid, h.thread);
+            field(h.processType, "packageName").set(owner, h.creator.packageName);
+            field(h.processType, "processName").set(owner, method(h.atmType, "componentProcess",
+                    String.class, String.class).invoke(h.atm, h.creator.packageName, destination.processName));
+            field(h.processType, "ready").setBoolean(owner, true);
+            List<Object> processes = (List<Object>) field(h.atmType, "mProcesses").get(h.atm);
+            require(processes.remove(h.process), "Original target process was absent");
+            processes.add(owner);
+            require(field(h.processType, "uid").getInt(owner) == h.creator.uid() && ownerPid != pid,
+                    "Launched owner lost its distinct native process identity");
             Binder.restoreCallingIdentity(((long) uid << 32) | pid);
             Object app = make(h.processType, new Class<?>[]{h.atmType, int.class, IApplicationThread.class},
                     h.atm, pid, client);
@@ -288,8 +307,6 @@ public final class DelegatedIntentRetirementTest {
             sourceInfo.packageName = h.target.packageName;
             sourceInfo.name = h.target.packageName + ".FixtureSource";
             sourceInfo.applicationInfo = h.target.applicationInfo(0);
-            field(h.processType, "packageName").set(h.process, h.creator.packageName);
-            field(h.processType, "processName").set(h.process, h.creator.packageName);
             Class<?> activityType = Class.forName(h.atmType.getName() + "$ActivityRecord");
             Object source = make(activityType, new Class<?>[]{h.atmType, ActivityInfo.class, Intent.class,
                     int.class, int.class, String.class, activityType, String.class, int.class},
@@ -338,9 +355,27 @@ public final class DelegatedIntentRetirementTest {
                         "One-shot activity capability was reusable");
                 api.getActivityClientController().activityPaused(token);
                 IBinder launchedToken = (IBinder) field(activityType, "token").get(launched);
-                api.getActivityClientController().finishActivity(launchedToken, android.app.Activity.RESULT_OK,
-                        new Intent().putExtra("fixture-result", true), 0);
-                api.getActivityClientController().activityPaused(launchedToken);
+                require(field(activityType, "app").get(launched) == owner,
+                        "Delegated target did not attach to its actual owner");
+                int pendingResults = ((List<?>) field(activityType, "pendingResults").get(source)).size();
+                boolean foreignFinishDenied = false;
+                try {
+                    api.getActivityClientController().finishActivity(launchedToken,
+                            android.app.Activity.RESULT_OK, new Intent().putExtra("forged-result", true), 0);
+                } catch (SecurityException expected) { foreignFinishDenied = true; }
+                require(foreignFinishDenied && !field(activityType, "finishing").getBoolean(launched)
+                        && ((List<?>) field(activityType, "pendingResults").get(source)).size() == pendingResults,
+                        "Capability holder could finish another process's activity or publish its result");
+                long holderIdentity = Binder.clearCallingIdentity();
+                try {
+                    Binder.restoreCallingIdentity(ownerIdentity);
+                    require(Binder.getCallingPid() == ownerPid && Binder.getCallingUid() == h.creator.uid(),
+                            "Finishing callback did not use its actual owner identity");
+                    require(api.getActivityClientController().finishActivity(launchedToken,
+                            android.app.Activity.RESULT_OK, new Intent().putExtra("fixture-result", true), 0),
+                            "Actual owner could not finish its delegated activity");
+                    api.getActivityClientController().activityPaused(launchedToken);
+                } finally { Binder.restoreCallingIdentity(holderIdentity); }
                 boolean delivered = false;
                 for (ClientTransaction transaction : client.transactions) {
                     for (Object item : transaction.getTransactionItems()) {

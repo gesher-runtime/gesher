@@ -211,53 +211,59 @@ void JNICALL AR_stop(JNIEnv* env, jobject thiz) {
   TraceRecord(s, "stop", 0, 0);
 }
 
-// Reads `bytes` into `dst`; the Java answer (bytes read, or an error).
-jint ReadInto(JNIEnv* env, jobject thiz, void* dst, size_t bytes, bool blocking) {
+// Reads `bytes` into `dst`; retain a wide byte count until the array adapters
+// convert it to a Java sample count (a short/float array can exceed 2 GiB).
+ssize_t ReadInto(JNIEnv* env, jobject thiz, void* dst, size_t bytes, bool blocking) {
   auto s = GetStream(env, thiz);
   if (s == nullptr) return kJavaInvalidOperation;
   ssize_t n = s->Read(dst, bytes, blocking);
   TraceRecord(s, "read", bytes, n);
-  return n < 0 ? kJavaError : static_cast<jint>(n);
+  return n < 0 ? kJavaError : n;
 }
 
 jint JNICALL AR_readBytes(JNIEnv* env, jobject thiz, jbyteArray data, jint offset, jint size,
                           jboolean blocking) {
   if (data == nullptr) return kJavaBadValue;
-  if (offset < 0 || size < 0 || offset + size > env->GetArrayLength(data)) return kJavaBadValue;
+  if (offset < 0 || size < 0 || offset > env->GetArrayLength(data) - size) return kJavaBadValue;
   jbyte* p = env->GetByteArrayElements(data, nullptr);
   if (p == nullptr) return kJavaBadValue;
-  jint n = ReadInto(env, thiz, p + offset, static_cast<size_t>(size), blocking);
+  ssize_t n = ReadInto(env, thiz, p + offset, static_cast<size_t>(size), blocking);
   env->ReleaseByteArrayElements(data, p, 0);
-  return n;
+  return static_cast<jint>(n);
 }
 
 jint JNICALL AR_readShorts(JNIEnv* env, jobject thiz, jshortArray data, jint offset, jint size,
                            jboolean blocking) {
   if (data == nullptr) return kJavaBadValue;
-  if (offset < 0 || size < 0 || offset + size > env->GetArrayLength(data)) return kJavaBadValue;
+  if (offset < 0 || size < 0 || offset > env->GetArrayLength(data) - size) return kJavaBadValue;
   jshort* p = env->GetShortArrayElements(data, nullptr);
   if (p == nullptr) return kJavaBadValue;
-  jint n = ReadInto(env, thiz, p + offset, static_cast<size_t>(size) * 2, blocking);
+  ssize_t n = ReadInto(env, thiz, p + offset, static_cast<size_t>(size) * 2, blocking);
   env->ReleaseShortArrayElements(data, p, 0);
-  return n < 0 ? n : n / 2;
+  return static_cast<jint>(n < 0 ? n : n / 2);
 }
 
 jint JNICALL AR_readFloats(JNIEnv* env, jobject thiz, jfloatArray data, jint offset, jint size,
                            jboolean blocking) {
   if (data == nullptr) return kJavaBadValue;
-  if (offset < 0 || size < 0 || offset + size > env->GetArrayLength(data)) return kJavaBadValue;
+  if (offset < 0 || size < 0 || offset > env->GetArrayLength(data) - size) return kJavaBadValue;
   jfloat* p = env->GetFloatArrayElements(data, nullptr);
   if (p == nullptr) return kJavaBadValue;
-  jint n = ReadInto(env, thiz, p + offset, static_cast<size_t>(size) * 4, blocking);
+  ssize_t n = ReadInto(env, thiz, p + offset, static_cast<size_t>(size) * 4, blocking);
   env->ReleaseFloatArrayElements(data, p, 0);
-  return n < 0 ? n : n / 4;
+  return static_cast<jint>(n < 0 ? n : n / 4);
 }
 
 jint JNICALL AR_readDirect(JNIEnv* env, jobject thiz, jobject buffer, jint size, jboolean blocking) {
-  void* p = env->GetDirectBufferAddress(buffer);
+  if (buffer == nullptr || size < 0) return kJavaBadValue;
   jlong cap = env->GetDirectBufferCapacity(buffer);
-  if (p == nullptr || cap < size) return kJavaBadValue;
-  return ReadInto(env, thiz, p, static_cast<size_t>(size), blocking);
+  if (cap < 0) return kJavaBadValue;
+  void* p = env->GetDirectBufferAddress(buffer);
+  if (p == nullptr) return kJavaBadValue;
+  // AudioRecord reads from the buffer's start, ignores position/limit, and
+  // clamps an oversized request to its capacity (Android 16's JNI contract).
+  return static_cast<jint>(ReadInto(env, thiz, p,
+                                  static_cast<size_t>(std::min<jlong>(size, cap)), blocking));
 }
 
 jint JNICALL AR_bufferSizeInFrames(JNIEnv* env, jobject thiz) {

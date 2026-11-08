@@ -6,7 +6,8 @@ from pathlib import Path
 COMPILER_SHA='c9b86311ade81d53235c93fafabdf98328d094de344ea9a9038e0dab6695ee9f'
 UPSTREAM_SHA='840583bf5bc9b55e5b1ddb57ff3642af5d4ecaf9040a2c84fa374be3fb6b9259'
 PTHREAD_SHA='dbbbb3a59f5a1077346b69d4dd8ea85eeca9574bfbd2d170eaf91b5fe5b2f88e'
-INPUTS=('cmake/aosp/art_runtime.cmake','compat/art/dalvikvm_main.cc','compat/elf/exec/exec_spawn.cc',
+INPUTS=('cmake/aosp/art_runtime.cmake','compat/art/dalvikvm_main.cc','compat/posix/include/gesher/unc_paths.h',
+ 'compat/elf/exec/exec_spawn.cc',
  'compat/elf/exec/exec_spawn.h','cmake/toolchain-llvm-mingw.cmake','aosp.lock','tools/fonts/core-runtime-manifest.py',
  'tools/fonts/cli-link-evidence.py','tools/fonts/font_records.py','tools/fonts/verify-standalone-link.py')
 FILES=('dalvikvm.exe','gesher-exec.exe','dalvikvm.map','gesher-exec.fonts.map','dalvikvm.imports.txt',

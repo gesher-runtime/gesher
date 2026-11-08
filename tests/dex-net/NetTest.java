@@ -67,7 +67,7 @@ import javax.net.ssl.SSLSocketFactory;
  *
  * <pre>
  *   NetTest local                 sockets, DNS, NIO, HTTP and crypto on this machine
- *   NetTest echo PORT             a TCP and a UDP echo server on 127.0.0.1:PORT (not Java)
+ *   NetTest echo TCP [UDP]        TCP/UDP echo servers on 127.0.0.1 (UDP defaults to TCP port)
  *   NetTest internet              DNS, HTTPS (TLS 1.3, SNI) and bad certificates rejected
  *   NetTest https URL ok|reject   one HTTPS GET, expected to pass or to fail on the certificate
  * </pre>
@@ -102,7 +102,7 @@ public final class NetTest {
                 local();
                 break;
             case "echo":
-                echo(Integer.parseInt(args[1]));
+                echo(Integer.parseInt(args[1]), Integer.parseInt(args.length > 2 ? args[2] : args[1]));
                 break;
             case "internet":
                 internet();
@@ -481,14 +481,14 @@ public final class NetTest {
 
     // --- an echo server that is not Java ------------------------------------------
 
-    private static void echo(int port) throws Exception {
-        check("TCP: echo by a Windows server on 127.0.0.1:" + port,
-                () -> tcpRoundTrip("127.0.0.1", port, 50_000));
-        check("UDP: echo by a Windows server on 127.0.0.1:" + port, () -> {
+    private static void echo(int tcpPort, int udpPort) throws Exception {
+        check("TCP: echo by a Windows server on 127.0.0.1:" + tcpPort,
+                () -> tcpRoundTrip("127.0.0.1", tcpPort, 50_000));
+        check("UDP: echo by a Windows server on 127.0.0.1:" + udpPort, () -> {
             try (DatagramSocket s = new DatagramSocket()) {
                 s.setSoTimeout(5000);
                 byte[] data = "to windows and back".getBytes(StandardCharsets.UTF_8);
-                s.send(new DatagramPacket(data, data.length, InetAddress.getByName("127.0.0.1"), port));
+                s.send(new DatagramPacket(data, data.length, InetAddress.getByName("127.0.0.1"), udpPort));
                 DatagramPacket p = new DatagramPacket(new byte[100], 100);
                 s.receive(p);
                 String got = new String(p.getData(), 0, p.getLength(), StandardCharsets.UTF_8);

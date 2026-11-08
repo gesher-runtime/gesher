@@ -15,6 +15,9 @@
 
 namespace gesher::bionic {
 
+// bionic's semaphore bound, shared by enforcement and _SC_SEM_VALUE_MAX.
+inline constexpr uint32_t kSemValueMax = 0x3fffffff;
+
 // --- the System V va_list -------------------------------------------------
 
 struct SysvVaList {

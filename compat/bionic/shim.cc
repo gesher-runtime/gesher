@@ -96,8 +96,20 @@ bool TakeAligned(void* p, Aligned* out) {
   return true;
 }
 
+bool FindAligned(const void* p, Aligned* out) {
+  if (g_aligned_count.load(std::memory_order_acquire) == 0) return false;
+  std::lock_guard<std::mutex> lock(g_aligned_mutex);
+  auto it = g_aligned.find(const_cast<void*>(p));
+  if (it == g_aligned.end()) return false;
+  *out = it->second;
+  return true;
+}
+
 void* AlignedAlloc(size_t align, size_t size) {
   if (align <= 16) return std::malloc(size ? size : 1);
+  // A wrapped allocation could appear to succeed with less than `size`
+  // bytes. The pointer still has to be aligned inside the full allocation.
+  if (size > SIZE_MAX - align) return errno = kENOMEM, nullptr;
   void* raw = std::malloc(size + align);
   if (raw == nullptr) return nullptr;
   auto p = reinterpret_cast<void*>((reinterpret_cast<uintptr_t>(raw) + align) & ~(align - 1));
@@ -108,7 +120,11 @@ void* AlignedAlloc(size_t align, size_t size) {
 }
 
 void* BIONIC_SYSV Malloc(size_t n) { return std::malloc(n ? n : 1); }
-void* BIONIC_SYSV Calloc(size_t n, size_t m) { return std::calloc(n ? n : 1, m ? m : 1); }
+void* BIONIC_SYSV Calloc(size_t n, size_t m) {
+  // Either zero dimension makes the requested allocation empty. Do not turn
+  // calloc(0, SIZE_MAX) into an enormous allocation by replacing only zero.
+  return n == 0 || m == 0 ? std::calloc(1, 1) : std::calloc(n, m);
+}
 void BIONIC_SYSV Free(void* p) {
   Aligned a;
   if (TakeAligned(p, &a)) {
@@ -118,33 +134,64 @@ void BIONIC_SYSV Free(void* p) {
   }
 }
 void* BIONIC_SYSV Realloc(void* p, size_t n) {
+  if (p == nullptr) return Malloc(n);
+  // Bionic frees a non-null pointer for realloc(p, 0), including memalign's.
+  if (n == 0) {
+    Free(p);
+    return nullptr;
+  }
   Aligned a;
-  if (p != nullptr && TakeAligned(p, &a)) {
-    void* q = std::malloc(n ? n : 1);
-    if (q != nullptr) std::memcpy(q, p, a.size < n ? a.size : n);
-    std::free(a.raw);
+  if (FindAligned(p, &a)) {
+    void* q = std::malloc(n);
+    // A failed realloc leaves both the storage and its ownership record
+    // intact. The caller may keep using it, retry realloc or call free.
+    if (q == nullptr) return nullptr;
+    std::memcpy(q, p, a.size < n ? a.size : n);
+    Free(p);
     return q;
   }
   return std::realloc(p, n);
 }
+void* BIONIC_SYSV Reallocarray(void* p, size_t count, size_t size) {
+  size_t bytes;
+  if (__builtin_mul_overflow(count, size, &bytes)) return errno = kENOMEM, nullptr;
+  return Realloc(p, bytes);
+}
 int BIONIC_SYSV PosixMemalign(void** out, size_t align, size_t size) {
   if (align < sizeof(void*) || (align & (align - 1)) != 0) return kEINVAL;
+  const int saved_errno = errno;
   void* p = AlignedAlloc(align, size);
+  errno = saved_errno;  // POSIX returns its error instead of setting errno.
   if (p == nullptr) return kENOMEM;
   *out = p;
   return 0;
 }
 void* BIONIC_SYSV Memalign(size_t align, size_t size) {
-  if (align == 0 || (align & (align - 1)) != 0) align = 16;
+  // Android accepts zero and rounds other non-powers up, unlike aligned_alloc
+  // and posix_memalign. Reducing them to malloc's alignment can misalign the
+  // storage an Android caller expects (for example, 33 requires 64 bytes).
+  if (align == 0) align = 1;
+  if ((align & (align - 1)) != 0) {
+    // The next power cannot be represented; do not wrap or shift by the word
+    // width and return an apparently successful, under-aligned allocation.
+    if (align > (SIZE_MAX / 2) + 1) return errno = kENOMEM, nullptr;
+    size_t rounded = 1;
+    while (rounded < align) rounded <<= 1;
+    align = rounded;
+  }
+  return AlignedAlloc(align, size);
+}
+void* BIONIC_SYSV AlignedAllocC11(size_t align, size_t size) {
+  // Bionic permits alignments smaller than sizeof(void*), but requires a
+  // nonzero power of two and a size divisible by that alignment.
+  if (align == 0 || (align & (align - 1)) != 0 || size % align != 0)
+    return errno = kEINVAL, nullptr;
   return AlignedAlloc(align, size);
 }
 size_t BIONIC_SYSV MallocUsableSize(const void* p) {
   if (p == nullptr) return 0;
-  if (g_aligned_count.load(std::memory_order_acquire) != 0) {
-    std::lock_guard<std::mutex> lock(g_aligned_mutex);
-    auto it = g_aligned.find(const_cast<void*>(p));
-    if (it != g_aligned.end()) return it->second.size;
-  }
+  Aligned a;
+  if (FindAligned(p, &a)) return a.size;
   return _msize(const_cast<void*>(p));
 }
 
@@ -898,15 +945,17 @@ int BIONIC_SYSV DlIteratePhdr(int (BIONIC_SYSV* cb)(BionicPhdrInfo*, size_t, voi
 }
 
 // syscall(2), for what libc++/libc++abi use it for: futex waits and wakes
-// (static-local guards, std::atomic::wait) and gettid. A variadic call passes
+// (static-local guards, std::atomic::wait), gettid and anonymous files. A variadic call passes
 // the arguments in the same registers as this fixed signature reads.
 int64_t BIONIC_SYSV Syscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
                             int64_t /*a5*/, int64_t /*a6*/) {
   constexpr int64_t kSysGettid = 186, kSysFutex = 202;
-  if (nr == kSysGettid) return GetCurrentThreadId();
+  if (nr == kSysGettid || nr == 178 /* ARM64 gettid */) return GetCurrentThreadId();
+  if (nr == 319 /* x86_64 memfd_create */ || nr == 279 /* ARM64 memfd_create */)
+    return memfd_create(reinterpret_cast<const char*>(a1), static_cast<unsigned>(a2));
   int64_t timerfd_result;
   if (DispatchTimerfdSyscall(nr, a1, a2, a3, a4, &timerfd_result)) return timerfd_result;
-  if (nr != kSysFutex) {
+  if (nr != kSysFutex && nr != 98 /* ARM64 futex */) {
     errno = kENOSYS;
     return -1;
   }
@@ -922,8 +971,12 @@ int64_t BIONIC_SYSV Syscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int6
     DWORD ms = INFINITE;
     if (timeout != nullptr) {
       if (op == kWait) {  // relative
-        int64_t t = timeout->tv_sec * 1000 + (timeout->tv_nsec + 999999) / 1000000;
-        ms = t < 0 ? 0 : t > 0x7ffffffe ? 0x7ffffffe : static_cast<DWORD>(t);
+        if (timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000) {
+          errno = kEINVAL;
+          return -1;
+        }
+        __int128 t = static_cast<__int128>(timeout->tv_sec) * 1000 + (timeout->tv_nsec + 999999) / 1000000;
+        ms = t < 0 ? 0 : (t > 0x7ffffffe ? 0x7ffffffe : static_cast<DWORD>(t));
       } else {  // absolute
         ms = MillisUntil(timeout, !realtime);
       }
@@ -969,16 +1022,16 @@ LinuxTimespec RealtimeNow() {
 }
 
 uint32_t MillisUntil(const LinuxTimespec* abstime, bool monotonic) {
-  int64_t now_ns;
+  __int128 now_ns;
   if (monotonic) {
     now_ns = QpcNanos();
   } else {
     LinuxTimespec now = RealtimeNow();
-    now_ns = now.tv_sec * 1000000000 + now.tv_nsec;
+    now_ns = static_cast<__int128>(now.tv_sec) * 1000000000 + now.tv_nsec;
   }
-  int64_t then_ns = abstime->tv_sec * 1000000000 + abstime->tv_nsec;
+  __int128 then_ns = static_cast<__int128>(abstime->tv_sec) * 1000000000 + abstime->tv_nsec;
   if (then_ns <= now_ns) return 0;
-  int64_t ms = (then_ns - now_ns + 999999) / 1000000;
+  __int128 ms = (then_ns - now_ns + 999999) / 1000000;
   return ms > 0x7ffffffe ? 0x7ffffffe : static_cast<uint32_t>(ms);
 }
 
@@ -990,9 +1043,10 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("free", Free);
   ENTRY("calloc", Calloc);
   ENTRY("realloc", Realloc);
+  ENTRY("reallocarray", Reallocarray);
   ENTRY("posix_memalign", PosixMemalign);
   ENTRY("memalign", Memalign);
-  ENTRY("aligned_alloc", Memalign);
+  ENTRY("aligned_alloc", AlignedAllocC11);
   ENTRY("malloc_usable_size", MallocUsableSize);
   // mem/str.
   SELF(memcpy);

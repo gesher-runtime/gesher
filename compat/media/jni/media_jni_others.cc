@@ -170,6 +170,42 @@ jbyteArray JNICALL MMR_getEmbeddedPicture(JNIEnv* env, jobject thiz, jint) {
   return a;
 }
 
+// FrameDecoder keeps the extractor's first-sample target time for SEEK_CLOSEST
+// and applies the same output predicate before and after decoder EOS. A delayed
+// decoder may produce the entire tail only when drained.
+std::unique_ptr<VideoFrame> DecodeRetrieverFrame(TrackReader* reader, VideoDecoder* decoder,
+                                               int64_t time_us, int option) {
+  const bool closest = option == 3;
+  const SeekMode mode = closest ? SeekMode::kClosest
+      : static_cast<SeekMode>(std::clamp(option, 0, 2));
+  Sample sample;
+  if (reader->Read(&sample, std::max<int64_t>(time_us, 0), mode) != 0) return nullptr;
+  const int64_t target_time = closest
+      ? (sample.target_time_us >= 0 ? sample.target_time_us : std::max<int64_t>(time_us, 0))
+      : -1;
+  auto select = [target_time](std::vector<VideoFrame>& frames) -> std::unique_ptr<VideoFrame> {
+    for (VideoFrame& frame : frames) {
+      if (target_time < 0 || frame.time_us >= target_time) {
+        return std::make_unique<VideoFrame>(std::move(frame));
+      }
+    }
+    return nullptr;
+  };
+  std::vector<VideoFrame> frames;
+  for (int n = 0; n < 600; ++n) {
+    if (!decoder->Decode(sample, &frames)) return nullptr;
+    if (auto chosen = select(frames)) return chosen;
+    frames.clear();
+    const int status = reader->Read(&sample);
+    if (status < 0) return nullptr;
+    if (status > 0) {
+      decoder->Drain(&frames);
+      return select(frames);
+    }
+  }
+  return nullptr;
+}
+
 // _getFrameAtTime(timeUs, option, width, height, params): the frame at (or the
 // sync frame around) timeUs as an ARGB_8888 Bitmap, scaled to fit width x height
 // (keeping its aspect) when both are positive; null without video.
@@ -195,34 +231,7 @@ jobject JNICALL MMR_getFrameAtTime(JNIEnv* env, jobject thiz, jlong time_us, jin
     MEDIA_LOGW("MediaMetadataRetriever: no video frame: %s", error.c_str());
     return nullptr;
   }
-  // OPTION_PREVIOUS_SYNC 0, NEXT_SYNC 1, CLOSEST_SYNC 2, CLOSEST 3.
-  const bool closest = option == 3;
-  SeekMode mode = closest ? SeekMode::kPreviousSync : static_cast<SeekMode>(std::clamp(option, 0, 2));
-  Sample s;
-  int status = reader->Read(&s, std::max<int64_t>(time_us, 0), mode);
-  std::vector<VideoFrame> frames;
-  std::unique_ptr<VideoFrame> chosen;
-  for (int n = 0; n < 600 && chosen == nullptr; n++) {
-    if (status == 0) {
-      if (!decoder->Decode(s, &frames)) break;
-      status = reader->Read(&s);
-    } else {
-      decoder->Drain(&frames);
-      if (frames.empty()) break;
-    }
-    for (VideoFrame& f : frames) {
-      if (!closest || f.time_us + 1000 >= time_us || status != 0) {
-        chosen = std::make_unique<VideoFrame>(std::move(f));
-        break;
-      }
-    }
-    frames.clear();
-    if (status != 0 && chosen == nullptr) {
-      decoder->Drain(&frames);
-      if (!frames.empty()) chosen = std::make_unique<VideoFrame>(std::move(frames.back()));
-      break;
-    }
-  }
+  auto chosen = DecodeRetrieverFrame(reader.get(), decoder.get(), time_us, option);
   if (chosen == nullptr) return nullptr;
   int w = chosen->visible_width(), h = chosen->visible_height();
   if (dst_w > 0 && dst_h > 0 && (dst_w != w || dst_h != h)) {

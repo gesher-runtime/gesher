@@ -5,13 +5,16 @@
 package com.gesher.server;
 
 import android.media.AudioAttributes;
+import android.media.AudioDeviceAttributes;
 import android.media.AudioManager;
 import android.media.AudioPlaybackConfiguration;
+import android.media.AudioRecordingConfiguration;
 import android.media.AudioSystem;
 import android.media.IAudioFocusDispatcher;
 import android.media.IAudioService;
 import android.media.IPlaybackConfigDispatcher;
 import android.media.PlayerBase;
+import android.media.Spatializer;
 import android.media.audiopolicy.AudioVolumeGroup;
 import android.media.audiopolicy.IAudioPolicyCallback;
 import android.os.IBinder;
@@ -20,6 +23,8 @@ import android.util.Log;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * audio: AudioService for the Gesher device (docs/media.md, ADR 0042).
@@ -298,6 +303,53 @@ public final class AudioService extends IAudioService.Default {
         return new ArrayList<>();
     }
 
+    // --- Unavailable Android routing / spatializer capabilities -----------------------------
+
+    @Override
+    public int[] getAvailableCommunicationDeviceIds() {
+        // Windows playback/capture exists, but Android communication-route selection does
+        // not. AudioManager iterates this array without checking for null.
+        return new int[0];
+    }
+
+    @Override
+    public List<AudioDeviceAttributes> getDevicesForAttributes(AudioAttributes attributes) {
+        java.util.Objects.requireNonNull(attributes, "attributes");
+        // No Android product-strategy routing policy is maintained by this service.
+        return new ArrayList<>();
+    }
+
+    @Override
+    public List<AudioDeviceAttributes> getDevicesForAttributesUnprotected(AudioAttributes attributes) {
+        return getDevicesForAttributes(attributes);
+    }
+
+    @Override
+    public int[] getSupportedHeadTrackingModes() {
+        // Spatializer likewise iterates the Binder result even on an unsupported device.
+        return new int[0];
+    }
+
+    @Override
+    public int getActualHeadTrackingMode() {
+        return Spatializer.HEAD_TRACKING_MODE_UNSUPPORTED;
+    }
+
+    @Override
+    public int getDesiredHeadTrackingMode() {
+        return Spatializer.HEAD_TRACKING_MODE_UNSUPPORTED;
+    }
+
+    @Override
+    public List<AudioDeviceAttributes> getSpatializerCompatibleAudioDevices() {
+        return new ArrayList<>();
+    }
+
+    @Override
+    public List<Integer> getSpatializedChannelMasks() {
+        return new ArrayList<>();
+    }
+
     // --- Ringer mode and audio mode --------------------------------------------------------
 
     @Override
@@ -371,6 +423,13 @@ public final class AudioService extends IAudioService.Default {
     }
 
     @Override
+    public List<AudioRecordingConfiguration> getActiveRecordingConfigurations() {
+        // As with playback configurations, no Android recording-session inventory is
+        // maintained yet. The public manager promises a non-null list.
+        return new ArrayList<>();
+    }
+
+    @Override
     public void registerPlaybackCallback(IPlaybackConfigDispatcher pcdb) {
     }
 
@@ -386,91 +445,138 @@ public final class AudioService extends IAudioService.Default {
     // --- Audio focus ------------------------------------------------------------------------
 
     /** A focus holder or waiter, on the stack. */
-    private static final class FocusRequester {
+    private static final class FocusRequester implements IBinder.DeathRecipient {
+        final AudioService owner;
         final String clientId;
         final String packageName;
         final IAudioFocusDispatcher dispatcher;
         final IBinder binder;
-        int gain;
+        final int gain;
+        final int flags;
         /** The loss it was last told of, 0 while it holds focus. */
         int lossReceived;
-        IBinder.DeathRecipient death;
+        /** Guarded by owner's mLock, including death during linkToDeath. */
+        boolean linked, dead, retired;
 
-        FocusRequester(String clientId, String packageName, IAudioFocusDispatcher dispatcher,
-                IBinder binder, int gain) {
+        FocusRequester(AudioService owner, String clientId, String packageName,
+                IAudioFocusDispatcher dispatcher, IBinder binder, int gain, int flags) {
+            this.owner = owner;
             this.clientId = clientId;
             this.packageName = packageName;
             this.dispatcher = dispatcher;
             this.binder = binder;
             this.gain = gain;
+            this.flags = flags;
+        }
+
+        @Override
+        public void binderDied() {
+            owner.focusDied(this);
         }
     }
 
     /** Top of the stack (index 0) holds focus. */
     private final ArrayList<FocusRequester> mFocusStack = new ArrayList<>();
+    private static final int MAX_FOCUS_STACK_SIZE = 100; // MediaFocusControl.MAX_STACK_SIZE
+    // IAudioFocusDispatcher is oneway. Keep committed transition order even for
+    // local dispatchers, without running app callbacks under the mutation lock.
+    private final ExecutorService mFocusCallbacks = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "gesher-audio-focus-callbacks");
+        thread.setDaemon(true);
+        return thread;
+    });
 
-    /** The loss a holder takes when another requests `gain` (MediaFocusControl's rules). */
-    static int lossFor(int gain) {
+    /** FocusRequester.focusLossForGainRequest: losses escalate and never downgrade. */
+    static int lossFor(int gain, int previous) {
         switch (gain) {
             case AudioManager.AUDIOFOCUS_GAIN:
                 return AudioManager.AUDIOFOCUS_LOSS;
+            case AudioManager.AUDIOFOCUS_GAIN_TRANSIENT:
+            case AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE:
+                return previous == AudioManager.AUDIOFOCUS_LOSS ? previous
+                        : AudioManager.AUDIOFOCUS_LOSS_TRANSIENT;
             case AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK:
-                return AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK;
+                return previous == AudioManager.AUDIOFOCUS_NONE
+                        ? AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK : previous;
             default:
-                return AudioManager.AUDIOFOCUS_LOSS_TRANSIENT;
+                return AudioManager.AUDIOFOCUS_NONE;
         }
     }
 
-    private static void dispatch(FocusRequester fr, int change) {
+    /** Called under mLock so submissions follow state-transition order. */
+    private void dispatchLocked(FocusRequester fr, int change) {
         if (fr.dispatcher == null) return;
-        try {
-            fr.dispatcher.dispatchAudioFocusChange(change, fr.clientId);
-        } catch (RemoteException e) {
-            Log.w(TAG, "focus change to " + fr.clientId + " not delivered: " + e);
-        }
+        mFocusCallbacks.execute(() -> {
+            // Wait for the transition that enqueued us to finish publishing.
+            synchronized (mLock) { }
+            try {
+                fr.dispatcher.dispatchAudioFocusChange(change, fr.clientId);
+            } catch (RemoteException | RuntimeException e) {
+                Log.w(TAG, "focus change to " + fr.clientId + " not delivered: " + e);
+            }
+        });
     }
 
     @Override
     public int requestAudioFocus(AudioAttributes aa, int focusReqType, IBinder cb,
             IAudioFocusDispatcher fd, String clientId, String callingPackageName,
             String attributionTag, int flags, IAudioPolicyCallback pcb, int sdk) {
+        if ((flags & AudioManager.AUDIOFOCUS_FLAG_TEST) != 0) {
+            throw new IllegalArgumentException("Invalid test flag");
+        }
+        if (aa == null || cb == null || clientId == null || callingPackageName == null
+                || focusReqType < AudioManager.AUDIOFOCUS_GAIN
+                || focusReqType > AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE) {
+            return AudioManager.AUDIOFOCUS_REQUEST_FAILED;
+        }
+        // No registered external audio policy or telephony focus-lock owner exists.
+        // DELAY_OK and PAUSES_ON_DUCKABLE_LOSS are ordinary request properties;
+        // with no locked owner, DELAY_OK does not delay an otherwise valid grant.
+        if ((flags & ~AudioManager.AUDIOFOCUS_FLAGS_APPS) != 0 || !cb.pingBinder()) {
+            return AudioManager.AUDIOFOCUS_REQUEST_FAILED;
+        }
         synchronized (mLock) {
+            if (mFocusStack.size() > MAX_FOCUS_STACK_SIZE) {
+                return AudioManager.AUDIOFOCUS_REQUEST_FAILED;
+            }
+            FocusRequester incoming = new FocusRequester(this, clientId, callingPackageName,
+                    fd, cb, focusReqType, flags);
+            // Register first. A dead/rejected candidate must not remove an existing
+            // request or dispatch losses. A synchronous local death is also observed.
+            incoming.linked = true;
+            try {
+                cb.linkToDeath(incoming, 0);
+            } catch (RemoteException e) {
+                unlinkLocked(incoming);
+                return AudioManager.AUDIOFOCUS_REQUEST_FAILED;
+            }
+            if (incoming.dead || !cb.isBinderAlive()) {
+                unlinkLocked(incoming);
+                return AudioManager.AUDIOFOCUS_REQUEST_FAILED;
+            }
             FocusRequester top = mFocusStack.isEmpty() ? null : mFocusStack.get(0);
-            if (top != null && top.clientId.equals(clientId)) {
-                top.gain = focusReqType;
+            if (top != null && top.clientId.equals(clientId)
+                    && top.gain == focusReqType && top.flags == flags) {
+                // Android deliberately retains the original dispatcher and Binder
+                // for an unchanged top request, even if this call supplied others.
+                unlinkLocked(incoming);
                 return AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
             }
             removeLocked(clientId);
-            int loss = lossFor(focusReqType);
             // The others lose it: a permanent loss takes them off the stack.
             for (int i = mFocusStack.size() - 1; i >= 0; i--) {
                 FocusRequester fr = mFocusStack.get(i);
-                int worse = fr.lossReceived == 0 ? loss
-                        : (loss == AudioManager.AUDIOFOCUS_LOSS ? loss : fr.lossReceived);
-                if (worse != fr.lossReceived) {
-                    fr.lossReceived = worse;
-                    dispatch(fr, worse);
+                int loss = lossFor(focusReqType, fr.lossReceived);
+                if (loss != fr.lossReceived) {
+                    fr.lossReceived = loss;
+                    dispatchLocked(fr, loss);
                 }
-                if (worse == AudioManager.AUDIOFOCUS_LOSS) {
-                    unlink(fr);
+                if (loss == AudioManager.AUDIOFOCUS_LOSS) {
                     mFocusStack.remove(i);
+                    unlinkLocked(fr);
                 }
             }
-            FocusRequester fr = new FocusRequester(clientId, callingPackageName, fd, cb,
-                    focusReqType);
-            if (cb != null) {
-                fr.death = () -> {
-                    synchronized (mLock) {
-                        abandonLocked(clientId);
-                    }
-                };
-                try {
-                    cb.linkToDeath(fr.death, 0);
-                } catch (RemoteException e) {
-                    return AudioManager.AUDIOFOCUS_REQUEST_FAILED;  // already dead
-                }
-            }
-            mFocusStack.add(0, fr);
+            mFocusStack.add(0, incoming);
             Log.i(TAG, "audio focus " + focusReqType + " to " + callingPackageName + " ("
                     + clientId + ")");
             return AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
@@ -489,40 +595,68 @@ public final class AudioService extends IAudioService.Default {
     @Override
     public void unregisterAudioFocusClient(String clientId) {
         synchronized (mLock) {
-            abandonLocked(clientId);
+            // Unlike abandon/death, AOSP unregister does not signal the next owner.
+            removeLocked(clientId);
         }
     }
 
     private void abandonLocked(String clientId) {
         boolean wasTop = !mFocusStack.isEmpty() && mFocusStack.get(0).clientId.equals(clientId);
         if (!removeLocked(clientId) || !wasTop || mFocusStack.isEmpty()) return;
-        // The next one gets focus back.
+        restoreFocusLocked();
+    }
+
+    private void restoreFocusLocked() {
+        if (mFocusStack.isEmpty()) return;
         FocusRequester next = mFocusStack.get(0);
-        if (next.lossReceived != 0) {
-            next.lossReceived = 0;
-            dispatch(next, next.gain);
-            Log.i(TAG, "audio focus back to " + next.packageName + " (" + next.clientId + ")");
-        }
+        next.lossReceived = AudioManager.AUDIOFOCUS_NONE;
+        dispatchLocked(next, AudioManager.AUDIOFOCUS_GAIN);
+        Log.i(TAG, "audio focus back to " + next.packageName + " (" + next.clientId + ")");
     }
 
     private boolean removeLocked(String clientId) {
         for (int i = 0; i < mFocusStack.size(); i++) {
             FocusRequester fr = mFocusStack.get(i);
             if (fr.clientId.equals(clientId)) {
-                unlink(fr);
                 mFocusStack.remove(i);
+                unlinkLocked(fr);
                 return true;
             }
         }
         return false;
     }
 
-    private static void unlink(FocusRequester fr) {
-        if (fr.binder != null && fr.death != null) {
+    private void focusDied(FocusRequester source) {
+        synchronized (mLock) {
+            source.dead = true;
+            // A retired registration cannot kill a later request reusing its client
+            // ID or token. During registration, only mark death for the caller.
+            if (source.retired || !mFocusStack.contains(source)) return;
+            boolean wasTop = mFocusStack.get(0).binder.equals(source.binder);
+            // AudioManager shares one lifetime Binder among its listeners. Remove
+            // all of them before restoring an owner, so a dead sibling never gains.
+            for (int i = mFocusStack.size() - 1; i >= 0; i--) {
+                FocusRequester fr = mFocusStack.get(i);
+                if (fr.binder.equals(source.binder)) {
+                    fr.dead = true;
+                    mFocusStack.remove(i);
+                    unlinkLocked(fr);
+                }
+            }
+            if (wasTop) restoreFocusLocked();
+        }
+    }
+
+    private static void unlinkLocked(FocusRequester fr) {
+        if (fr.retired) return;
+        fr.retired = true;
+        if (fr.linked) {
+            fr.linked = false;
             try {
-                fr.binder.unlinkToDeath(fr.death, 0);
-            } catch (Exception e) {
-                // Already gone.
+                fr.binder.unlinkToDeath(fr, 0);
+            } catch (RuntimeException e) {
+                // A dead remote Binder may already have removed the recipient.
+                Log.w(TAG, "unlinking audio focus client " + fr.clientId + ": " + e);
             }
         }
     }

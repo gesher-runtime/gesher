@@ -27,8 +27,12 @@ import android.os.IUserManager;
 import android.os.Service;
 import android.os.ServiceManager;
 import android.os.ServiceWithMetadata;
+import android.os.storage.DiskInfo;
 import android.os.storage.IStorageManager;
+import android.os.storage.StorageManager;
 import android.os.storage.StorageVolume;
+import android.os.storage.VolumeInfo;
+import android.os.storage.VolumeRecord;
 import android.view.Display;
 import android.view.DisplayInfo;
 import android.view.IWindowManager;
@@ -136,9 +140,8 @@ public final class Services {
                 StandIn.of(INotificationManager.class, notifications).asBinder());
         services.put(Context.UI_MODE_SERVICE,
                 StandIn.of(IUiModeManager.class, new UiModeService()).asBinder());
-        // mount: one volume, the primary emulated shared storage, as on a device: in
-        // $ANDROID_DATA/media/<user> (Environment.getExternalStorageDirectory and
-        // isExternalStorageManager take the first volume; real apps ask, docs/e2e.md).
+        // mount: the private data volume and its emulated shared view at
+        // $ANDROID_DATA/media/0. Both describe the same host filesystem.
         services.put("mount", StandIn.of(IStorageManager.class, new StorageService()).asBinder());
         // What real apps fetch as they start (docs/e2e.md): without these getSystemService
         // answers null.
@@ -492,24 +495,163 @@ public final class Services {
         }
     }
 
-    /**
-     * mount: StorageManagerService on a device without shared (external) storage: no
-     * volumes, so Context.getExternalFilesDir and getObbDir are null, as with external
-     * storage unmounted (StorageManager.getVolumeList would otherwise get null from its
-     * cache and Environment would fail on it).
-     */
+    /** mount: private app data and one emulated shared volume for the desktop user. */
     public static final class StorageService extends IStorageManager.Default {
+        private static final long DEFAULT_LOW_STORAGE_MAX_BYTES = 500L * 1024 * 1024;
+        private static final long DEFAULT_FULL_STORAGE_BYTES = 1024L * 1024;
+        private final java.io.File mDataDirectory;
+
+        public StorageService() {
+            this(android.os.Environment.getDataDirectory());
+        }
+
+        private StorageService(java.io.File dataDirectory) {
+            mDataDirectory = java.util.Objects.requireNonNull(dataDirectory);
+        }
+
+        private java.io.File mediaRoot() {
+            return new java.io.File(mDataDirectory, "media");
+        }
+
+        private java.io.File sharedDirectory() {
+            java.io.File path = new java.io.File(mediaRoot(), "0");
+            // Creating the emulated view must not recreate a missing data volume.
+            // Failed creation is represented as unmounted by directoryState below.
+            if (mDataDirectory.isDirectory() && !path.isDirectory()) path.mkdirs();
+            return path;
+        }
+
+        private static int directoryState(java.io.File path) {
+            if (!path.isDirectory() || !path.canRead()) return VolumeInfo.STATE_UNMOUNTED;
+            return path.canWrite() ? VolumeInfo.STATE_MOUNTED : VolumeInfo.STATE_MOUNTED_READ_ONLY;
+        }
+
+        @Override
+        public DiskInfo[] getDisks() {
+            // There are no Android-managed physical/adoptable disks. The framework
+            // unconditionally wraps this array with Arrays.asList().
+            return new DiskInfo[0];
+        }
+
+        @Override
+        public VolumeInfo[] getVolumes(int flags) {
+            // The two views refer to the same backing storage. Android also includes
+            // a private internal volume even though it has no DiskInfo or fsUuid.
+            VolumeInfo internal = new VolumeInfo(VolumeInfo.ID_PRIVATE_INTERNAL,
+                    VolumeInfo.TYPE_PRIVATE, null, null);
+            internal.state = directoryState(mDataDirectory);
+            internal.path = mDataDirectory.getAbsolutePath();
+
+            VolumeInfo shared = new VolumeInfo(VolumeInfo.ID_EMULATED_INTERNAL + ";0",
+                    VolumeInfo.TYPE_EMULATED, null, null);
+            shared.mountUserId = 0;
+            shared.mountFlags = VolumeInfo.MOUNT_FLAG_PRIMARY
+                    | VolumeInfo.MOUNT_FLAG_VISIBLE_FOR_READ | VolumeInfo.MOUNT_FLAG_VISIBLE_FOR_WRITE;
+            shared.state = directoryState(sharedDirectory());
+            // VolumeInfo appends the user ID in getPathForUser(); StorageVolume
+            // below contains that final per-user path instead.
+            shared.path = mediaRoot().getAbsolutePath();
+            shared.internalPath = shared.path;
+            return new VolumeInfo[] {internal, shared};
+        }
+
+        @Override
+        public VolumeRecord[] getVolumeRecords(int flags) {
+            // No previously adopted/removable volumes are remembered by this runtime.
+            return new VolumeRecord[0];
+        }
+
+        @Override
+        public boolean isCeStorageUnlocked(int userId) {
+            // The host session already exposes this user's data; no separate Android
+            // key unlock is needed. StrictMode consults this independently of IUserManager.
+            return userId == 0;
+        }
+
+        private static android.os.ParcelableException storageFailure(String message) {
+            return new android.os.ParcelableException(new java.io.IOException(message));
+        }
+
+        private java.io.File allocationPath(String volumeUuid) {
+            if (!java.util.Objects.equals(StorageManager.UUID_PRIVATE_INTERNAL, volumeUuid)) {
+                throw storageFailure("Unknown storage volume " + volumeUuid);
+            }
+            java.io.File path = mDataDirectory;
+            if (directoryState(path) != VolumeInfo.STATE_MOUNTED) {
+                throw storageFailure("Internal storage is unavailable or read-only");
+            }
+            return path;
+        }
+
+        private static void checkAllocationFlags(int flags, String callingPackage) {
+            if ((flags & StorageManager.FLAG_ALLOCATE_AGGRESSIVE) == 0) return;
+            Created created = sLast;
+            if (created == null) {
+                throw new SecurityException("Aggressive allocation requires ALLOCATE_AGGRESSIVE");
+            }
+            CallerIdentity caller = created.am.callers();
+            caller.requirePackage(callingPackage);
+            if (!caller.isSystem() && created.pm.permissions().checkPermission(callingPackage,
+                    android.Manifest.permission.ALLOCATE_AGGRESSIVE)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                throw new SecurityException("Aggressive allocation requires ALLOCATE_AGGRESSIVE");
+            }
+        }
+
+        private static long reservedBytes(java.io.File path, int flags) {
+            if ((flags & StorageManager.FLAG_ALLOCATE_AGGRESSIVE) != 0) {
+                return Math.max(0, SettingsProvider.globalLong(
+                        android.provider.Settings.Global.SYS_STORAGE_FULL_THRESHOLD_BYTES,
+                        DEFAULT_FULL_STORAGE_BYTES));
+            }
+            long percent = Math.max(0, Math.min(100, SettingsProvider.globalLong(
+                    android.provider.Settings.Global.SYS_STORAGE_THRESHOLD_PERCENTAGE,
+                    StorageManager.DEFAULT_STORAGE_THRESHOLD_PERCENT_LOW)));
+            long total = path.getTotalSpace();
+            // Avoid overflowing the multiplication on very large filesystems.
+            long lowBytes = total / 100 * percent + total % 100 * percent / 100;
+            long maxBytes = Math.max(0, SettingsProvider.globalLong(
+                    android.provider.Settings.Global.SYS_STORAGE_THRESHOLD_MAX_BYTES,
+                    DEFAULT_LOW_STORAGE_MAX_BYTES));
+            return Math.min(lowBytes, maxBytes);
+        }
+
+        @Override
+        public long getAllocatableBytes(String volumeUuid, int flags, String callingPackage) {
+            checkAllocationFlags(flags, callingPackage);
+            java.io.File path = allocationPath(volumeUuid);
+            // No Android cache-reclamation/quota backend is present. Only actually
+            // usable host space is offered, retaining Android's low-storage reserve.
+            if ((flags & StorageManager.FLAG_ALLOCATE_CACHE_ONLY) != 0) return 0;
+            return Math.max(0, path.getUsableSpace() - reservedBytes(path, flags));
+        }
+
+        @Override
+        public void allocateBytes(String volumeUuid, long bytes, int flags, String callingPackage) {
+            if (bytes < 0) throw new IllegalArgumentException("Allocation size must not be negative");
+            long available = getAllocatableBytes(volumeUuid,
+                    (flags & ~StorageManager.FLAG_ALLOCATE_CACHE_ONLY)
+                            | StorageManager.FLAG_ALLOCATE_NON_CACHE_ONLY, callingPackage);
+            if (bytes > available) {
+                throw storageFailure("Failed to allocate " + bytes + " because only "
+                        + available + " bytes are allocatable");
+            }
+            // This overload ensures capacity; it does not allocate a particular file
+            // or reserve bytes against other writers (the same distinction as Android).
+            // The framework's FileDescriptor overload performs the file operation
+            // through the native layer.
+        }
+
         @Override
         public StorageVolume[] getVolumeList(int userId, String callingPackage, int flags) {
-            java.io.File path = new java.io.File(android.os.Environment.getDataDirectory(),
-                    "media/" + userId);
-            path.mkdirs();
+            if (userId != 0) return new StorageVolume[0];
+            java.io.File path = sharedDirectory();
             return new StorageVolume[] {new StorageVolume("emulated;" + userId, path, path,
                     "Internal shared storage", true /* primary */, false /* removable */,
                     true /* emulated */, false /* externallyManaged */,
                     false /* allowMassStorage */, 0 /* maxFileSize: no limit */,
-                    android.os.UserHandle.of(userId), null /* uuid */, null /* fsUuid */,
-                    android.os.Environment.MEDIA_MOUNTED)};
+                    android.os.UserHandle.of(userId), StorageManager.UUID_DEFAULT, null /* fsUuid */,
+                    VolumeInfo.getEnvironmentForState(directoryState(path)))};
         }
 
         @Override
@@ -626,6 +768,33 @@ public final class Services {
         public java.util.List<UserInfo> getProfiles(int userId, boolean enabledOnly) {
             return userId == 0 ? java.util.Collections.singletonList(owner())
                     : java.util.Collections.emptyList();
+        }
+
+        @Override
+        public java.util.List<UserInfo> getUsers(boolean excludeDying) {
+            return java.util.Collections.singletonList(owner());
+        }
+
+        @Override
+        public int getUserSerialNumber(int userId) {
+            return userId == 0 ? 0 : -1;
+        }
+
+        @Override
+        public int getUserHandle(int userSerialNumber) {
+            return userSerialNumber == 0 ? 0 : -1;
+        }
+
+        @Override
+        public String getUserName() {
+            return owner().name;
+        }
+
+        @Override
+        public android.os.Bundle getUserRestrictions(int userId) {
+            // The public manager returns this directly; callers read Bundle keys.
+            // An unmanaged user has no restrictions, represented by a fresh Bundle.
+            return new android.os.Bundle();
         }
 
         @Override

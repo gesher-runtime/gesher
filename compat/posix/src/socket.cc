@@ -482,10 +482,13 @@ ssize_t sendto(int fd, const void* buf, size_t len, int flags, const struct sock
   return SendBuffers(fd, &buffer, 1, flags, addr, addrlen);
 }
 
-// Ancillary data (msg_control) is not supported and is ignored.
+// The backend cannot transmit ancillary data. Reject the complete message
+// before sending its payload so the peer cannot observe missing descriptors
+// or credentials after the caller was told that transmission succeeded.
 ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
   msghdr local;
   if (!ws::CopyFromUser(&local, msg, sizeof(local))) return errno = EFAULT, -1;
+  if (local.msg_controllen != 0) return errno = EOPNOTSUPP, -1;
   std::vector<ws::Buffer> buffers;
   if (!ToBuffers(&local, &buffers)) return -1;
   ssize_t result;

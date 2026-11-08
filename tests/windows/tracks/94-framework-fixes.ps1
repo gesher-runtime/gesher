@@ -3,26 +3,11 @@
 # Dot-sourced by run-tests.ps1, using Check, NoDrive, $Dir, $root and $failed
 # from there.
 
-# Runs dalvikvm with a time limit, killing it (and what it started) on time-out.
+# Use track50's shared bounded process and redirected-reader cleanup. Waiting
+# on Task.Result after an expired reader wait can otherwise hang this track
+# when a descendant retains a pipe, even though the VM itself has exited.
 function FixesRun([string[]] $Arguments, [int] $Seconds) {
-  $psi = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
-  foreach ($a in $Arguments) { $psi.ArgumentList.Add($a) }
-  $psi.UseShellExecute = $false
-  $psi.RedirectStandardOutput = $true
-  $psi.RedirectStandardError = $true
-  $p = [Diagnostics.Process]::Start($psi)
-  $stdout = $p.StandardOutput.ReadToEndAsync()
-  $stderr = $p.StandardError.ReadToEndAsync()
-  $timedOut = -not $p.WaitForExit($Seconds * 1000)
-  if ($timedOut) {
-    $p.Kill($true)
-    $p.WaitForExit()
-  }
-  $null = $stdout.Wait(10000), $stderr.Wait(10000)
-  $out = $stdout.Result + $stderr.Result
-  if ($timedOut) { $out += "`n(timed out after $Seconds s)" }
-  $global:LASTEXITCODE = if ($timedOut) { -1 } else { $p.ExitCode }
-  return $out
+  RunTimed "$Dir/dalvikvm.exe" $Arguments $Seconds
 }
 
 Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework') -Force
@@ -30,6 +15,146 @@ Copy-Item "$Dir/build.prop" (Join-Path $root 'system') -Force
 $bcpFixes = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $dvmFixes = @("-Xbootclasspath:$bcpFixes", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
   '-cp', (NoDrive "$Dir/services-tests.dex"))
+
+# Real temporary storage in fresh VMs, including explicit overrides and app cache.
+. "$PSScriptRoot/../temp-directory-contracts.ps1"
+Check 'runtime: real temporary directories, explicit overrides, app cache and I/O errors' {
+  Test-TemporaryDirectoryContracts $Dir $dvmFixes
+} @('TempDirectoryBootstrapTest all passed: 10 fresh VM scenarios')
+
+# The canonical UNC namespace must reach actual files, including the VM's temp default.
+. "$PSScriptRoot/../unc-file-contracts.ps1"
+Check 'runtime: UNC File/NIO operations and temporary storage on a private localhost share' {
+  Test-UncFileContracts $Dir $dvmFixes $root
+} @('UncFileBootstrapTest all passed: real file and temporary-directory I/O; share removed')
+
+# Query through the real PackageManager client and generated Binder parcels, using
+# properties parsed from this build's synthetic components.apk.
+$packageQueryOut = FixesRun ($dvmFixes + 'gesher.services.PackageQueryContractTest' +
+  (NoDrive "$Dir/components.apk")) 90
+$packageQueryCode = $LASTEXITCODE
+Check 'services: package versions, permissions, identities and parsed manifest properties' {
+  $global:LASTEXITCODE = $packageQueryCode
+  $packageQueryOut
+} @('PackageQueryContractTest all passed:')
+
+# Distinct package identities and real manifest visibility rules, through the
+# generated Binder and public manager. Keep the fixture's trusted setup identity
+# local to its fresh VM and restore absent versus empty parent values exactly.
+$visibilitySavedEnvironment = @{}
+foreach ($visibilityName in 'GESHER_UID', 'GESHER_BINDER_UID') {
+  $visibilitySavedEnvironment[$visibilityName] = @{
+    Present = Test-Path "Env:$visibilityName"
+    Value = [Environment]::GetEnvironmentVariable($visibilityName, 'Process')
+  }
+}
+try {
+  $env:GESHER_UID = '1000'
+  $env:GESHER_BINDER_UID = '1000'
+  $packageVisibilityOut = FixesRun ($dvmFixes + 'gesher.services.PackageVisibilityContractTest') 90
+  $packageVisibilityCode = $LASTEXITCODE
+} finally {
+  foreach ($visibilityName in 'GESHER_UID', 'GESHER_BINDER_UID') {
+    $visibilitySaved = $visibilitySavedEnvironment[$visibilityName]
+    if ($visibilitySaved.Present) { Set-Item "Env:$visibilityName" $visibilitySaved.Value }
+    else { Remove-Item "Env:$visibilityName" -ErrorAction SilentlyContinue }
+  }
+}
+Check 'services: actual package visibility, manifest queries and public query exceptions' {
+  $global:LASTEXITCODE = $packageVisibilityCode
+  $packageVisibilityOut
+} @('PackageVisibilityContractTest all passed:')
+
+$activityOptionsOut = FixesRun ($dvmFixes + 'gesher.services.ActivityOptionsContractTest' +
+  (NoDrive "$Dir/components.apk")) 90
+$activityOptionsCode = $LASTEXITCODE
+Check 'services: real activity options, specific intent ordering and manifest filtering' {
+  $global:LASTEXITCODE = $activityOptionsCode
+  $activityOptionsOut
+} @('ActivityOptionsContractTest all passed:')
+
+# A real installed base plus two isolated feature APKs, including an inter-feature
+# dependency. Reject malformed updates before publishing or stopping the old app.
+$splitPackageOut = FixesRun ($dvmFixes + 'gesher.services.SplitPackageContractTest' +
+  (NoDrive "$Dir/split-package-fixtures.zip")) 150
+$splitPackageCode = $LASTEXITCODE
+Check 'services: installed feature manifests, isolated split DEX/resources and failed-update preservation' {
+  $global:LASTEXITCODE = $splitPackageCode
+  $splitPackageOut
+} @('SplitPackageContractTest all passed:')
+
+# Parser loaders own the APK mappings they create. Keep strong references alive
+# across close, then require real source-file truncation without collection.
+$parserAssetsOut = FixesRun ($dvmFixes + 'gesher.services.ParserAssetLifecycleTest' +
+  (NoDrive "$Dir/split-package-fixtures.zip")) 90
+$parserAssetsCode = $LASTEXITCODE
+Check 'framework: parser APK ownership, partial failure cleanup and immediate source rewrite' {
+  $global:LASTEXITCODE = $parserAssetsCode
+  $parserAssetsOut
+} @('ParserAssetLifecycleTest all passed:')
+
+# Channel/group policy is exercised through the real manager and Binder parcels,
+# including durable reload and publication/lifecycle races. The fixture owns a
+# disposable child data directory and needs the trusted service UID for its
+# retained-toast checks.
+$groupsSavedBinderUid = $env:GESHER_BINDER_UID
+try {
+  $env:GESHER_BINDER_UID = '1000'
+  $groupsOut = FixesRun ($dvmFixes + 'gesher.services.NotificationChannelGroupsTest' +
+    (NoDrive "$Dir/devsvc.apk")) 120
+  $groupsCode = $LASTEXITCODE
+} finally {
+  if ($null -eq $groupsSavedBinderUid) { Remove-Item Env:GESHER_BINDER_UID -ErrorAction SilentlyContinue }
+  else { $env:GESHER_BINDER_UID = $groupsSavedBinderUid }
+}
+Check 'services: durable notification groups, real channel policy and lifecycle deletion guards' {
+  $global:LASTEXITCODE = $groupsCode
+  $groupsOut
+} @('NotificationChannelGroupsTest all passed:')
+
+# Real JobService callbacks attach notifications to a running job. Exercise
+# shared ownership, replacement, completion and cancellation through generated
+# Binder transactions, including their retained-notification effects.
+$jobsSavedBinderUid = $env:GESHER_BINDER_UID
+try {
+  $env:GESHER_BINDER_UID = '1000'
+  $jobNotificationsOut = FixesRun ($dvmFixes + 'gesher.services.JobNotificationLifecycleTest' +
+    (NoDrive "$Dir/devsvc.apk")) 120
+  $jobNotificationsCode = $LASTEXITCODE
+} finally {
+  if ($null -eq $jobsSavedBinderUid) { Remove-Item Env:GESHER_BINDER_UID -ErrorAction SilentlyContinue }
+  else { $env:GESHER_BINDER_UID = $jobsSavedBinderUid }
+}
+Check 'services: job notification validation, shared ownership and real completion cleanup' {
+  $global:LASTEXITCODE = $jobNotificationsCode
+  $jobNotificationsOut
+} @('JobNotificationLifecycleTest all passed:')
+
+# Validate focus ownership and callbacks through the production service, generated
+# Binder transactions, and the real AudioManager listener/Handler path.
+$audioFocusOut = FixesRun ($dvmFixes + 'gesher.services.AudioFocusLifecycleTest') 90
+$audioFocusCode = $LASTEXITCODE
+Check 'services: audio focus ownership, loss escalation, token death and public manager callbacks' {
+  $global:LASTEXITCODE = $audioFocusCode
+  $audioFocusOut
+} @('AudioFocusLifecycleTest all passed:')
+
+# The wrapper creates the writable framework cache region. The fixture uses
+# generated AM Binder parcels and production URI/provider authorization state.
+$uriGrantsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'UriGrantContractTest') 90
+$uriGrantsCode = $LASTEXITCODE
+Check 'services: URI delegation, provider patterns, exact identities and scoped revocation' {
+  $global:LASTEXITCODE = $uriGrantsCode
+  $uriGrantsOut
+} @('UriGrantContractTest all passed: 138 checks; binder=true')
+
+# Caller identity and URI snapshots must survive actual ActivityThread delivery,
+# relaunch and results, including a PendingIntent holder cleared by its own send.
+. "$PSScriptRoot/../component-caller-contracts.ps1"
+Check 'services: ComponentCaller identity, URI access, callbacks, relaunch and delegated delivery' {
+  Test-ComponentCallerContracts $Dir $dvmFixes $root
+} @('ComponentCallerBootstrapTest all passed: real Binder and cross-app callbacks; owned device stopped')
 
 # Exercise the MediaStore implementation from the production boot jar.
 $mediaStoreOut = FixesRun ($dvmFixes + 'gesher.services.MediaStoreContractTest') 90
@@ -130,10 +255,14 @@ Check 'services: HandlerThread.quit with tracing off (MessageQueue''s Perfetto c
 # These module value classes are packaged in gesher-app.jar. Run each fixture in
 # its own bounded ART process, preserving its exit status as well as its marker.
 foreach ($fixture in @(
+  @('PowerWakeLockCallbackTest', 'wake lock listener callbacks, real held state and token lifetime'),
+  @('PackageManifestFlagsTest', 'complete parsed manifest flags preserve installed application state'),
+  @('PackageServiceQueriesTest', 'package UID/group queries and Android 16 dex-module completion'),
   @('BluetoothValueContractTest', 'BLE settings, filters, advertisements and parcels without an adapter'),
   @('MediaStoreContractTest', 'media collections, resolver forwarding and unavailable-provider handling'),
   @('NetworkRequestValueContractTest', 'DHCP, L2CAP, DNS-SD and network request filters and parcels'),
-  @('NetworkValueContractTest', 'MAC, static routes, IP and proxy value contracts')
+  @('NetworkValueContractTest', 'MAC, static routes, IP and proxy value contracts'),
+  @('ProxyInfoContractTest', 'nullable proxy snapshots and PAC initialization before a local port exists')
 )) {
   $valueOut = FixesRun ($dvmFixes + "gesher.services.$($fixture[0])") 45
   $valueCode = $LASTEXITCODE

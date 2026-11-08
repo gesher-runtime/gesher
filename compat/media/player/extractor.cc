@@ -146,6 +146,8 @@ class AospTrackReader : public TrackReader {
     AMediaFormat* meta = buf->meta_data(buf->handle);
     int64_t t = 0;
     out->time_us = meta != nullptr && AMediaFormat_getInt64(meta, "timeUs", &t) ? t : 0;
+    out->target_time_us =
+        meta != nullptr && AMediaFormat_getInt64(meta, "target-time", &t) ? t : -1;
     int32_t v = 0;
     out->sync = meta != nullptr && AMediaFormat_getInt32(meta, "is-sync-frame", &v) && v != 0;
     out->valid_samples =

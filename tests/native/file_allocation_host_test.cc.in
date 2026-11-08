@@ -1,0 +1,100 @@
+// The production Windows adapter is included verbatim. Handle queries and CRT
+// size operations below use real Linux files; controlled errors witness error
+// propagation. This is not Windows execution or proof of physical reservation.
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+using HANDLE = int;
+using DWORD = unsigned long;
+constexpr HANDLE INVALID_HANDLE_VALUE = -1;
+constexpr DWORD FILE_TYPE_DISK = 1, FILE_TYPE_PIPE = 3, FILE_TYPE_CHAR = 2;
+constexpr uint32_t FILE_WRITE_DATA = 2;
+static int length_error, growth_error, access_error;
+static unsigned growth_calls;
+[[maybe_unused]] static DWORD GetFileType(HANDLE handle) {
+  struct stat info{};
+  if (fstat(handle, &info) < 0) return 0;
+  return S_ISFIFO(info.st_mode) ? FILE_TYPE_PIPE : S_ISCHR(info.st_mode) ? FILE_TYPE_CHAR : FILE_TYPE_DISK;
+}
+namespace gesher {
+[[maybe_unused]] static HANDLE HandleFromFd(int fd) { return fcntl(fd, F_GETFD) < 0 ? -1 : fd; }
+namespace record_locks {
+struct DescriptorGuard {};
+[[maybe_unused]] static int HandleAccess(HANDLE handle, uint32_t* access) {
+  if (access_error) return access_error;
+  int flags = fcntl(handle, F_GETFL);
+  if (flags < 0) return errno;
+  *access = (flags & O_ACCMODE) == O_RDONLY ? 0 : FILE_WRITE_DATA;
+  return 0;
+}
+}
+}
+static long long _filelengthi64(int fd) {
+  if (length_error) { errno = length_error; return -1; }
+  struct stat info{};
+  return fstat(fd, &info) < 0 ? -1 : info.st_size;
+}
+static int _chsize_s(int fd, long long size) {
+  ++growth_calls;
+  if (growth_error) { errno = growth_error; return growth_error; }
+  return ftruncate(fd, size) < 0 ? errno : 0;
+}
+static int gesher_errno_from_crt(int error) { return error; }
+
+#define posix_fallocate gesher_test_posix_fallocate
+#define fallocate gesher_test_fallocate
+@FILE_ALLOCATION_IMPLEMENTATION@
+
+static int failures;
+static void check(const char* what, bool ok) {
+  std::printf("%-76s %s\n", what, ok ? "ok" : "FAIL");
+  if (!ok) ++failures;
+  std::fflush(stdout);
+}
+#include "file_allocation_contract_test.inc"
+
+static void test_file_allocation_failures() {
+  char path[] = "gesher-allocation-faults-XXXXXX";
+  int fd = mkstemp(path);
+  check("file allocation faults: create fixture", fd >= 0);
+  if (fd < 0) return;
+  const char marker[] = "preserve";
+  check("file allocation faults: initialize bytes", write(fd, marker, sizeof(marker)) == sizeof(marker));
+  for (int fault = 0; fault < 3; ++fault) {
+    access_error = fault == 0 ? EACCES : 0;
+    length_error = fault == 1 ? EIO : 0;
+    growth_error = fault == 2 ? ENOSPC : 0;
+    growth_calls = 0;
+    errno = E2BIG;
+    int expected = fault == 0 ? EACCES : fault == 2 ? ENOSPC : EIO;
+    check("file allocation faults: actual error returned; errno preserved",
+          posix_fallocate(fd, 0, 65536) == expected && errno == E2BIG);
+    check("file allocation faults: no later mutation after failure",
+          growth_calls == (fault == 2 ? 1u : 0u));
+    struct stat info{};
+    char actual[sizeof(marker)];
+    check("file allocation faults: EOF and existing bytes survive",
+          fstat(fd, &info) == 0 && info.st_size == sizeof(marker) &&
+          pread(fd, actual, sizeof(actual), 0) == sizeof(actual) && std::memcmp(actual, marker, sizeof(marker)) == 0);
+  }
+  access_error = length_error = growth_error = 0;
+  close(fd);
+  unlink(path);
+}
+
+int main(int argc, char** argv) {
+  if (argc == 1) test_file_allocation_contracts();
+  else if (std::strcmp(argv[1], "contents") == 0) test_file_allocation_contents();
+  else if (std::strcmp(argv[1], "errors") == 0) test_file_allocation_errors();
+  else if (std::strcmp(argv[1], "overflow") == 0) test_file_allocation_overflow();
+  else if (std::strcmp(argv[1], "faults") == 0) test_file_allocation_failures();
+  else return 2;
+  return failures == 0 ? 0 : 1;
+}

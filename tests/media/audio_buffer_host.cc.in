@@ -1,0 +1,81 @@
+// Real JNI envelope; the Windows engine is an observed, bounded boundary.
+#include <jni.h>
+#include <sys/types.h>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <vector>  // also permits the unchanged pre-repair negative control
+
+constexpr jint kBadValue = -2;
+constexpr jint kJavaBadValue = -2;
+static jint calls;
+static size_t last_size;
+static bool last_blocking;
+static bool inspect_payload;
+static unsigned char last_payload[64];
+
+ssize_t WriteBytes(JNIEnv*, jobject, const void* data, size_t size, bool blocking) {
+  ++calls;
+  last_size = size;
+  last_blocking = blocking;
+  // Only the known-valid test enables inspection. Negative controls can pass
+  // invalid memory and must be observed without dereferencing it.
+  if (inspect_payload && size != 0 && size <= sizeof(last_payload)) {
+    std::memcpy(last_payload, data, size);
+  }
+  return size <= 64 ? static_cast<jint>(size) : -99;
+}
+
+ssize_t ReadInto(JNIEnv*, jobject, void* data, size_t size, bool blocking) {
+  ++calls;
+  last_size = size;
+  last_blocking = blocking;
+  // Invalid huge negative controls must never overwrite the fixture process.
+  if (size > 64) return -99;
+  if (size != 0) std::memset(data, 0x3c, size);
+  return static_cast<jint>(size);
+}
+
+@BUFFER_FUNCTIONS@
+
+extern "C" JNIEXPORT void JNICALL
+Java_AudioBufferContractTest_reset(JNIEnv*, jclass) {
+  calls = 0;
+  last_size = 0;
+  last_blocking = false;
+  inspect_payload = false;
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_AudioBufferContractTest_observed(JNIEnv*, jclass, jint field) {
+  return field == 0 ? calls : field == 1 ? static_cast<jlong>(last_size) : last_blocking;
+}
+extern "C" JNIEXPORT void JNICALL
+Java_AudioBufferContractTest_inspectPayload(JNIEnv*, jclass) {
+  inspect_payload = true;
+}
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_AudioBufferContractTest_payload(JNIEnv* env, jclass) {
+  if (last_size > sizeof(last_payload)) return nullptr;
+  jbyteArray result = env->NewByteArray(static_cast<jsize>(last_size));
+  if (result != nullptr && last_size != 0) {
+    env->SetByteArrayRegion(result, 0, static_cast<jsize>(last_size),
+                           reinterpret_cast<const jbyte*>(last_payload));
+  }
+  return result;
+}
+
+#define GESHER_NATIVE(fn) reinterpret_cast<void*>(fn)
+static const JNINativeMethod methods[] = {
+@NATIVE_REGISTRATIONS@
+};
+
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
+  JNIEnv* env = nullptr;
+  if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
+  jclass cls = env->FindClass("AudioBufferContractTest");
+  if (cls == nullptr) return JNI_ERR;
+  jint result = env->RegisterNatives(cls, methods, sizeof(methods) / sizeof(methods[0]));
+  env->DeleteLocalRef(cls);
+  return result == 0 ? JNI_VERSION_1_6 : JNI_ERR;
+}

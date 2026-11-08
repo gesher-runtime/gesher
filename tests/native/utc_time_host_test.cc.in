@@ -1,0 +1,213 @@
+// Calendar functions are extracted unchanged from time_bionic.cc.
+#define _GNU_SOURCE 1
+#include <barrier>
+#include <cerrno>
+#include <climits>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <ctime>
+#include <thread>
+
+using __time64_t = int64_t;
+// Only --source-ref reaches these facades. They model the documented UCRT
+// 1970..3000 restriction and are not evidence of Windows execution.
+static int _gmtime64_s(struct tm* out, const __time64_t* instant) {
+  if (*instant < 0 || *instant > 32535215999LL) return EINVAL;
+  time_t value = *instant;
+  return ::gmtime_r(&value, out) ? 0 : EINVAL;
+}
+static __time64_t _mkgmtime64(struct tm* input) {
+  if (input->tm_year < 70 || input->tm_year > 1100) return -1;
+  time_t result = ::timegm(input);
+  return result < 0 || result > 32535215999LL ? -1 : result;
+}
+
+#define BIONIC_SYSV
+namespace production {
+@UTC_TYPES@
+@UTC_CONSTANT@
+@UTC_FORWARD@
+@UTC_STATIC@
+@UTC_INVERSE@
+}
+
+static int failures = 0;
+static int assertions = 0;
+static void check(const char* label, int valid) {
+  ++assertions;
+  if (!valid) { ++failures; printf("FAIL %s\n", label); }
+}
+#define UTC_TM production::BionicTm
+#define UTC_TIME int64_t
+#define UTC_GMTIME_R production::GmtimeR
+#define UTC_GMTIME production::Gmtime
+#define UTC_TIMEGM production::Timegm
+#define UTC_DIFFTIME production::Difftime
+#define UTC_NO_ALIASES 1
+#include "utc_time_contract_test.inc"
+
+#ifdef HAVE_PINNED_TZCODE
+extern "C" struct tm* tz_gmtime_r(const time_t*, struct tm*);
+extern "C" time_t tz_timegm(struct tm*);
+#endif
+
+static struct tm host_input(const production::BionicTm& input) {
+  struct tm out {};
+  out.tm_year = input.tm_year; out.tm_mon = input.tm_mon; out.tm_mday = input.tm_mday;
+  out.tm_hour = input.tm_hour; out.tm_min = input.tm_min; out.tm_sec = input.tm_sec;
+  out.tm_wday = input.tm_wday; out.tm_yday = input.tm_yday; out.tm_isdst = input.tm_isdst;
+  out.tm_gmtoff = input.tm_gmtoff; out.tm_zone = input.tm_zone;
+  return out;
+}
+static bool same_fields(const production::BionicTm& a, const struct tm& b) {
+  return a.tm_year == b.tm_year && a.tm_mon == b.tm_mon && a.tm_mday == b.tm_mday &&
+      a.tm_hour == b.tm_hour && a.tm_min == b.tm_min && a.tm_sec == b.tm_sec &&
+      a.tm_wday == b.tm_wday && a.tm_yday == b.tm_yday && a.tm_isdst == b.tm_isdst &&
+      a.tm_gmtoff == b.tm_gmtoff;
+}
+static uint64_t random_state = UINT64_C(0x674c8eb9ad1ff063);
+static uint64_t random_word() {
+  random_state ^= random_state << 13;
+  random_state ^= random_state >> 7;
+  random_state ^= random_state << 17;
+  return random_state;
+}
+
+static void differential(const char* name, struct tm* (*forward)(const time_t*, struct tm*),
+                         time_t (*inverse)(struct tm*), bool pinned) {
+  int forward_results = 0, forward_fields = 0, inverse_results = 0, inverse_fields = 0;
+  for (int i = 0; i < 20000; ++i) {
+    uint64_t bits = random_word();
+    int64_t instant;
+    memcpy(&instant, &bits, sizeof(instant));
+    if (i % 4) instant %= INT64_C(80000000000000000);
+    production::BionicTm actual = utc_input(123, 4, 5, 6, 7, 8);
+    struct tm expected = host_input(actual);
+    time_t value = instant;
+    errno = 0;
+    bool expected_ok = forward(&value, &expected) != nullptr;
+    int expected_errno = errno;
+    errno = 0;
+    bool actual_ok = production::GmtimeR(&instant, &actual) != nullptr;
+    bool result_ok = actual_ok == expected_ok && (actual_ok || errno == expected_errno);
+    bool fields_ok = !actual_ok || same_fields(actual, expected);
+    // Pinned timesub's checked year assignment and gmtsub's name also
+    // determine the observed partial output on overflow. Linux differs.
+    if (pinned && !actual_ok && !expected_ok)
+      fields_ok = same_fields(actual, expected) && actual.tm_zone && expected.tm_zone &&
+                  strcmp(actual.tm_zone, expected.tm_zone) == 0;
+    forward_results += result_ok;
+    forward_fields += fields_ok;
+  }
+  for (int i = 0; i < 10000; ++i) {
+    int32_t year;
+    uint32_t bits = static_cast<uint32_t>(random_word());
+    memcpy(&year, &bits, sizeof(year));
+    auto bounded = [](int range) { return static_cast<int>(random_word() % (2 * range)) - range; };
+    production::BionicTm actual = utc_input(year, bounded(36), bounded(1000),
+                                            bounded(100), bounded(5000), bounded(5000));
+    struct tm expected = host_input(actual);
+    errno = 0;
+    time_t want = inverse(&expected);
+    bool expected_ok = expected.tm_wday >= 0 && expected.tm_wday < 7;
+    errno = EDOM;
+    int64_t got = production::Timegm(&actual);
+    bool actual_ok = actual.tm_wday >= 0 && actual.tm_wday < 7;
+    bool result_ok = actual_ok == expected_ok && got == want;
+    bool fields_ok = !actual_ok || (same_fields(actual, expected) && errno == EDOM);
+    if ((!result_ok || !fields_ok) && inverse_results == i)
+      printf("%s timegm mismatch: year=%d got=%lld want=%lld\n", name, year,
+             (long long)got, (long long)want);
+    inverse_results += result_ok;
+    inverse_fields += fields_ok;
+  }
+  printf("%s differential: gmtime results=%d/20000 fields=%d/20000; timegm results=%d/10000 fields=%d/10000\n",
+         name, forward_results, forward_fields, inverse_results, inverse_fields);
+  check("independent gmtime acceptance and overflow errno matrix", forward_results == 20000);
+  check("independent Gregorian fields matrix", forward_fields == 20000);
+  check("independent normalized timegm timestamps matrix", inverse_results == 10000);
+  check("independent timegm derived fields matrix", inverse_fields == 10000);
+}
+
+static void test_thread_storage() {
+  std::barrier rendezvous(3);
+  production::BionicTm* slots[2] = {};
+  auto worker = [&](int index) {
+    int64_t instant = index == 0 ? -1 : 0;
+    slots[index] = production::Gmtime(&instant);
+    rendezvous.arrive_and_wait();
+    rendezvous.arrive_and_wait();
+  };
+  std::thread a(worker, 0), b(worker, 1);
+  rendezvous.arrive_and_wait();
+  check("gmtime static results are separate across threads",
+        slots[0] && slots[1] && slots[0] != slots[1]);
+  check("concurrent gmtime results keep each thread's date",
+        slots[0] && slots[1] && slots[0]->tm_year == 69 && slots[1]->tm_year == 70);
+  rendezvous.arrive_and_wait();
+  a.join(); b.join();
+}
+
+static void test_difference_matrix() {
+  int valid = 0;
+  for (int i = 0; i < 10000; ++i) {
+    uint64_t bits_a = random_word(), bits_b = random_word();
+    int64_t a, b;
+    memcpy(&a, &bits_a, sizeof(a)); memcpy(&b, &bits_b, sizeof(b));
+    // A wider independent integer type gives the exact difference before
+    // rounding. No signed64 subtraction is evaluated by this oracle.
+    double want = static_cast<double>(static_cast<__int128>(a) - static_cast<__int128>(b));
+    valid += production::Difftime(a, b) == want;
+  }
+  printf("difftime wide-integer differential: %d/10000\n", valid);
+  check("difftime signed64 pairs match exact wider subtraction", valid == 10000);
+}
+
+#ifdef HAVE_PINNED_TZCODE
+static void test_pinned_boundaries() {
+  const int inputs[][6] = {
+    {70, 0, 1, INT_MAX, -60, INT_MAX}, {69, 0, 1, 0, 0, INT_MIN},
+    {70, 0, 1, INT_MAX, 60, -3600}, {INT_MAX, 12, -364, 0, 0, 0},
+    {INT_MIN, -12, 366, 0, 0, 0},
+    {70, 0, 1, INT_MAX, 60, 0}, {70, 0, INT_MAX, 24, 0, 0},
+    {69, 0, 1, 0, INT_MIN, INT_MIN}, {INT_MAX, 11, 45, 0, 0, 0},
+  };
+  for (const auto& f : inputs) {
+    production::BionicTm actual = utc_input(f[0], f[1], f[2], f[3], f[4], f[5]);
+    struct tm expected = host_input(actual);
+    errno = EDOM;
+    time_t want = tz_timegm(&expected);
+    int reference_errno = errno;
+    int64_t got = production::Timegm(&actual);
+    bool okay = actual.tm_wday >= 0 && actual.tm_wday < 7;
+    check("pinned timegm two-attempt carry boundaries agree", got == want && same_fields(actual, expected));
+    if (!okay) check("pinned early overflow preserves errno; Gesher makes EOVERFLOW explicit",
+                     reference_errno == EDOM && errno == EOVERFLOW);
+  }
+  const int endpoints[][6] = {{INT_MAX, 11, 31, 23, 59, 60}, {INT_MIN, 0, 1, 0, 0, -1}};
+  for (const auto& f : endpoints) {
+    production::BionicTm actual = utc_input(f[0], f[1], f[2], f[3], f[4], f[5]);
+    production::BionicTm saved = actual;
+    struct tm reference = host_input(actual);
+    time_t wrapped = tz_timegm(&reference);
+    errno = 0;
+    check("documented tzcode endpoint wrap is rejected without input mutation",
+          wrapped != -1 && reference.tm_year != f[0] && production::Timegm(&actual) == -1 &&
+          errno == EOVERFLOW && memcmp(&saved, &actual, sizeof(saved)) == 0);
+  }
+}
+#endif
+
+int main() {
+  test_utc_time_contracts();
+  test_thread_storage();
+  differential("Linux libc", ::gmtime_r, ::timegm, false);
+#ifdef HAVE_PINNED_TZCODE
+  differential("Pinned Android16 tzcode", tz_gmtime_r, tz_timegm, true);
+  test_pinned_boundaries();
+#endif
+  test_difference_matrix();
+  printf("UTC contracts: %d/%d assertions passed\n", assertions - failures, assertions);
+  return failures ? 1 : 0;
+}

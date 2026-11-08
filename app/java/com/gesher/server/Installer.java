@@ -79,6 +79,20 @@ final class Installer {
         return new File(Device.dataDir(), REGISTRY);
     }
 
+    /** Build installed code paths in the same physical namespace the parser validates. */
+    private static File codeRoot() throws IOException {
+        // On Windows, /mnt/<current-drive>/x and /x name the same directory;
+        // canonicalization also expands host short names and preserves disk casing.
+        // Normalize the configured device root before adding installer-owned names,
+        // rather than relaxing the parser's canonical-path/symlink boundary.
+        File root = new File(new File(Device.dataDir()).getCanonicalFile(), "app");
+        if (Files.exists(root.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                && !Files.isDirectory(root.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            throw new SecurityException("Installed APK root is not a real directory: " + root);
+        }
+        return root;
+    }
+
     private static Map<String, Entry> readRegistry() throws IOException {
         Map<String, Entry> entries = new LinkedHashMap<>();
         File f = registry();
@@ -132,7 +146,7 @@ final class Installer {
         // them (a file still open), or one that did not finish.
         java.util.Set<String> kept = new java.util.HashSet<>();
         for (Entry e : entries.values()) kept.add(new File(e.codePath).getName());
-        File[] dirs = new File(Device.dataDir(), "app").listFiles();
+        File[] dirs = codeRoot().listFiles();
         if (dirs != null) {
             for (File d : dirs) {
                 if (d.isDirectory() && !kept.contains(d.getName())) {
@@ -208,15 +222,17 @@ final class Installer {
     /**
      * Whether the installed splits are {@code splits}, by name and content: installing
      * an .xapk over the same base.apk installed alone adds its splits (its ABI split's
-     * native libraries), so it is not "unchanged". No splits match any installed ones.
+     * native libraries), so it is not "unchanged". Only a standalone base APK may
+     * implicitly keep the installed splits; a full session/archive supplies the set.
      */
-    private static boolean sameSplits(File[] splits, String codePath) throws IOException {
+    private static boolean sameSplits(File[] splits, String codePath, boolean keepUnspecified)
+            throws IOException {
         String[] installed = new File(codePath).list(
                 (dir, name) -> name.startsWith("split_") && name.endsWith(".apk"));
         int count = splits != null ? splits.length : 0;
         // base.apk alone over the same base installed with its splits (an .xapk's)
         // keeps them: without its density split the app misses its drawables.
-        if (count == 0) return true;
+        if (count == 0 && keepUnspecified) return true;
         if ((installed != null ? installed.length : 0) != count) return false;
         for (int i = 0; i < count; i++) {
             String name = splits[i].getName();
@@ -240,7 +256,7 @@ final class Installer {
     }
 
     private static ApkPackage open(Entry e) throws Exception {
-        ApkPackage p = ApkPackage.parse(e.codePath + "/base.apk");
+        ApkPackage p = ApkPackage.parseCodeDirectory(e.codePath);
         if (!p.packageName.equals(e.packageName)) {
             throw new IllegalStateException("base.apk is " + p.packageName);
         }
@@ -275,7 +291,7 @@ final class Installer {
         final File original = source;
         Entry recorded = sessionMetadata == null ? recordedSource(original) : null;
         if (recorded != null) {
-            ApkPackage parsed = ApkPackage.parse(recorded.codePath + "/base.apk");
+            ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
             return unchanged(apk, recorded.packageName, parsed, recorded);
         }
         File tempDir = null;
@@ -346,11 +362,12 @@ final class Installer {
             }
             if (old != null && sameContent(source, new File(old.codePath, "base.apk"))
                     && sameMetadata(metadata, new File(old.codePath, "base.dm"))
-                    && sameSplits(companionSplits(source), old.codePath)
+                    && sameSplits(incomingSplits, old.codePath,
+                            sessionMetadata == null && tempDir == null)
                     && (sessionMetadata == null || sessionMetadata.matches(new File(old.codePath)))
                     && mPm.get(pkg) != null) {
                 recordSource(original, pkg, old.codePath);
-                return unchanged(apk, pkg, parsed, old);
+                return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old);
             }
             int n = 1;
             if (old != null) {
@@ -361,14 +378,19 @@ final class Installer {
                     n = 2;
                 }
             }
-            File code = new File(Device.dataDir(), "app/" + pkg + "-" + n);
+            File appRoot = codeRoot();
+            Files.createDirectories(appRoot.toPath());
+            if (!Files.isDirectory(appRoot.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                throw new SecurityException("Installed APK root is not a real directory: " + appRoot);
+            }
+            File code = new File(appRoot, pkg + "-" + n);
             int occupied = 0;
             while (Files.exists(code.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
                     || PackageRemovalStorage.reserves(code.toPath())) {
                 if (++occupied > 10000 || n == Integer.MAX_VALUE) throw new IOException("No free package code generation");
-                code = new File(Device.dataDir(), "app/" + pkg + "-" + (++n));
+                code = new File(appRoot, pkg + "-" + (++n));
             }
-            code.mkdirs();
+            Files.createDirectory(code.toPath());
             File base = new File(code, "base.apk");
             copy(source, base);
             if (metadata.isFile()) copy(metadata, new File(code, "base.dm"));
@@ -386,7 +408,14 @@ final class Installer {
             if (sessionMetadata != null) sessionMetadata.copyTo(code);
             // Verification must apply to the bytes being published, not a mutable
             // download that could change after its initial parse/verification.
-            ApkPackage staged = ApkPackage.parse(base.getAbsolutePath());
+            ApkPackage staged;
+            try {
+                staged = ApkPackage.parseCodeDirectory(code.getPath());
+            } catch (Exception invalidCluster) {
+                // Malformed/mismatched splits must not stop or replace the working app.
+                deleteTree(code);
+                throw invalidCluster;
+            }
             android.content.pm.Signature[] stagedSigners = staged.verifiedSignatures();
             if (!pkg.equals(staged.packageName) || staged.versionCode() != parsed.versionCode()
                     || !Arrays.equals(newSigners, stagedSigners)
@@ -421,7 +450,7 @@ final class Installer {
             int libs = 0;
             for (String file : apks) libs += NativeLibs.extract(file, libDir, abi);
             // dexopt, as the package manager runs it at install (Dexopt; ADR 0054).
-            Dexopt.onInstall(pkg, code.getPath(), parsed.sharedLibraries);
+            Dexopt.onInstall(pkg, code.getPath(), staged.sharedLibraries);
             long now = System.currentTimeMillis();
             Entry entry = new Entry(pkg, code.getPath(), old != null ? old.firstInstallTime : now,
                     now);
@@ -482,6 +511,12 @@ final class Installer {
      * that code path; null otherwise.
      */
     private Entry recordedSource(File source) {
+        // This cache describes only the base/archive and its .dm file. A base
+        // path can stay unchanged while companions are added or replaced. Such
+        // inputs must reach signature/cluster validation and sameSplits instead
+        // of reusing the previously installed graph from the base-only cache.
+        File[] splits = companionSplits(source);
+        if (splits != null && splits.length != 0) return null;
         try {
             File f = new File(Device.dataDir(), SOURCES);
             if (!f.isFile()) return null;
@@ -495,6 +530,8 @@ final class Installer {
                         || !new File(e.codePath, "base.apk").isFile()) {
                     return null;
                 }
+                File[] installedSplits = companionSplits(new File(e.codePath, "base.apk"));
+                if (installedSplits != null && installedSplits.length != 0) return null;
                 return e;
             }
         } catch (IOException e) {
@@ -661,17 +698,11 @@ final class Installer {
     }
 
     /**
-     * Deletes a tree. The system server may still have the package's APK open (the parser's
-     * assets, closed when collected): it tries again after a collection, and a code
-     * directory left behind is removed at the next start.
+     * Deletes a retired code tree. Parsing releases its private APK mappings before returning.
+     * A generation still held by an app remains eligible for the next startup's cleanup.
      */
     private static void delete(File f) {
-        for (int i = 0; i < 5 && !deleteTree(f); i++) {
-            System.gc();
-            System.runFinalization();
-            android.os.SystemClock.sleep(200);
-        }
-        if (f.exists()) SystemServer.log("cannot delete " + f + " now");
+        if (!deleteTree(f)) SystemServer.log("cannot delete " + f + " now");
     }
 
     private static boolean deleteTree(File f) {

@@ -64,23 +64,30 @@ int64_t NowMonotonicNs() {
   return static_cast<int64_t>((static_cast<__int128>(now.QuadPart) * 1000000000) / freq.QuadPart);
 }
 // Milliseconds until an absolute time on `clock` (0 realtime, else monotonic);
-// -1 if it has passed.
+// -1 if it has passed, capped at a finite Windows wait interval otherwise.
 int64_t MsUntil(const LinuxTimespec* abs, int clock) {
   int64_t now = clock == 0 ? NowRealtimeNs() : NowMonotonicNs();
-  int64_t then = abs->tv_sec * 1000000000 + abs->tv_nsec;
-  if (then <= now) return -1;
-  return (then - now + 999999) / 1000000;
+  // time_t permits dates beyond int64 nanoseconds. Compute before clamping,
+  // so a valid distant deadline cannot wrap into an immediate timeout.
+  __int128 left = static_cast<__int128>(abs->tv_sec) * 1000000000 + abs->tv_nsec - now;
+  if (left <= 0) return -1;
+  __int128 ms = (left + 999999) / 1000000;
+  return static_cast<int64_t>(ms > 0x7ffffffe ? 0x7ffffffe : ms);
 }
 
 // --- POSIX semaphores on bionic's sem_t (16 bytes; word 0 is the count) ---------
 
 int BIONIC_SYSV SemInit(void* s, int, unsigned v) {
+  if (v > kSemValueMax) return errno = kEINVAL, -1;
   Word(s)->store(v);
   return 0;
 }
 int BIONIC_SYSV SemDestroy(void*) { return 0; }
 int BIONIC_SYSV SemPost(void* s) {
-  Word(s)->fetch_add(1);
+  uint32_t value = Word(s)->load();
+  do {
+    if (value == kSemValueMax) return errno = EOVERFLOW, -1;
+  } while (!Word(s)->compare_exchange_weak(value, value + 1));
   WakeByAddressSingle(Word(s));
   return 0;
 }
@@ -568,10 +575,31 @@ int BIONIC_SYSV Tgkill(int, int tid, int sig) {
 }
 int BIONIC_SYSV Tkill(int tid, int sig) { return Tgkill(0, tid, sig); }
 int BIONIC_SYSV Flock(int fd, int op) { return flock(fd, op); }
-// lockf: record locks, like the shim's fcntl ones, are not modelled (granted).
-int BIONIC_SYSV Lockf(int fd, int cmd, int64_t) {
-  if (fcntl(fd, F_GETFD) < 0) return errno = kEBADF, -1;
-  return cmd >= 0 && cmd <= 3 ? 0 : (errno = kEINVAL, -1);
+// lockf shares fcntl's process-owned record locks. The production descriptor
+// path implements nonblocking operations; blocking F_SETLKW is not wired yet.
+int BIONIC_SYSV Lockf(int fd, int cmd, int64_t length) {
+  static_assert(sizeof(off_t) == sizeof(length));
+  struct flock lock{};
+  lock.l_whence = SEEK_CUR;
+  lock.l_len = static_cast<off_t>(length);
+  switch (cmd) {
+    case 0:  // F_ULOCK
+      lock.l_type = F_UNLCK;
+      return fcntl(fd, F_SETLK, &lock);
+    case 1:  // F_LOCK: never report success without acquiring the lock.
+      if (fcntl(fd, F_GETFD, 0) < 0) return -1;
+      return errno = kENOSYS, -1;
+    case 2:  // F_TLOCK
+      lock.l_type = F_WRLCK;
+      return fcntl(fd, F_SETLK, &lock);
+    case 3:  // F_TEST uses a read-lock query, matching bionic's lockf64.
+      lock.l_type = F_RDLCK;
+      if (fcntl(fd, F_GETLK, &lock) < 0) return -1;
+      if (lock.l_type == F_UNLCK || lock.l_pid == getpid()) return 0;
+      return errno = EACCES, -1;
+    default:
+      return errno = kEINVAL, -1;
+  }
 }
 int BIONIC_SYSV PosixFadvise(int fd, int64_t off, int64_t len, int advice) {
   return posix_fadvise(fd, static_cast<off_t>(off), static_cast<off_t>(len), advice);
@@ -590,7 +618,9 @@ int BIONIC_SYSV Getpid() { return static_cast<int>(GetCurrentProcessId()); }
 int BIONIC_SYSV Getpgid(int pid) { return pid == 0 ? Getpid() : pid; }
 int BIONIC_SYSV Setsid() { return Getpid(); }
 int BIONIC_SYSV Getgroups(int size, uint32_t* list) {
+  if (size < 0) return errno = kEINVAL, -1;
   if (size == 0) return 1;
+  if (list == nullptr) return errno = kEFAULT, -1;
   list[0] = static_cast<uint32_t>(getgid());
   return 1;
 }

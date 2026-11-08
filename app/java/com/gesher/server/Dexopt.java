@@ -208,7 +208,7 @@ final class Dexopt {
     static synchronized String compile(String packageName, String codePath, String filter,
             String reason, File profile) {
         try {
-            ApkPackage parsed = ApkPackage.parse(new File(codePath, "base.apk").getPath());
+            ApkPackage parsed = ApkPackage.parseCodeDirectory(codePath);
             if (!parsed.packageName.equals(packageName)) {
                 throw new IOException("compiled APK package name does not match " + packageName);
             }

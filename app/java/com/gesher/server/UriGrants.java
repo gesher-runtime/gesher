@@ -55,7 +55,10 @@ final class UriGrants {
                 throw new SecurityException("Ambiguous URI path");
             }
         }
-        return uri.buildUpon().authority(authority).clearQuery().fragment(null).build();
+        // Android's GrantUri removes an embedded user ID, not the URI's query or
+        // fragment. Those remain part of an exact grant's identity; prefix grants
+        // and revocation deliberately compare path segments instead.
+        return uri.buildUpon().authority(authority).build();
     }
 
     private static boolean matches(Uri granted, boolean prefix, Uri requested) {
@@ -84,19 +87,26 @@ final class UriGrants {
         ProviderInfo info = ContentProviders.declaredProvider(mPm, uri.getAuthority());
         if (info == null) return PackageManager.PERMISSION_DENIED;
         if (target.packageName.equals(info.packageName)) return PackageManager.PERMISSION_GRANTED;
-        return (heldModes(target, uri) & access) == access ? PackageManager.PERMISSION_GRANTED
+        return holdsGrant(target, uri, access, false) ? PackageManager.PERMISSION_GRANTED
                 : PackageManager.PERMISSION_DENIED;
     }
 
-    private int heldModes(ApkPackage target, Uri uri) {
-        int held = 0;
+    private boolean current(ApkPackage pkg) {
+        return pkg != null && mPm.get(pkg.packageName) == pkg
+                && !mPm.isRemovalPending(pkg.packageName);
+    }
+
+    private boolean holdsGrant(ApkPackage target, Uri uri, int modes, boolean requirePrefix) {
         synchronized (this) {
+            if (!current(target)) return false;
             for (Grant grant : mGrants) {
-                if (grant.target == target && mPm.get(grant.owner.packageName) == grant.owner
-                        && matches(grant.uri, grant.prefix, uri)) held |= grant.modes;
+                if (grant.target == target && current(grant.owner)
+                        && (!requirePrefix || grant.prefix)
+                        && matches(grant.uri, grant.prefix, uri)
+                        && (grant.modes & modes) == modes) return true;
             }
         }
-        return held;
+        return false;
     }
 
     int checkFull(Uri original, int pid, int uid, int modes, int userId) {
@@ -119,7 +129,7 @@ final class UriGrants {
         Uri uri;
         try { uri = checkedUri(original, userId); }
         catch (SecurityException invalid) { return false; }
-        if (target == null || mPm.get(target.packageName) != target
+        if (!current(target)
                 || (modes & ACCESS) == 0 || (modes & ~ACCESS) != 0) return false;
         if ("settings".equals(uri.getAuthority())) {
             if ((modes & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0) return true;
@@ -130,8 +140,40 @@ final class UriGrants {
         }
         ProviderInfo info = ContentProviders.declaredProvider(mPm, uri.getAuthority());
         if (info == null) return false;
-        if (target.packageName.equals(info.packageName) || (heldModes(target, uri) & modes) == modes) return true;
+        if (holdsGrant(target, uri, modes, false)) return true;
+        return hasDirectAccess(target, info, uri, modes);
+    }
+
+    /** Android's full check used by ComponentCaller, including advanced mode bits. */
+    boolean canAccessForCaller(ApkPackage target, Uri original, int modes, int userId) {
+        Uri uri;
+        try { uri = checkedUri(original, userId); }
+        catch (SecurityException invalid) { return false; }
+        int access = modes & ACCESS;
+        if (!current(target) || access == 0) return false;
+        // Extra bits do not invalidate direct provider permission. They do affect
+        // explicit grant identity/strength: a plain grant is neither a prefix
+        // capability nor a persistable one. No persistable grants exist here.
+        if ("settings".equals(uri.getAuthority())) return canAccess(target, uri, access, userId);
+        ProviderInfo info = ContentProviders.declaredProvider(mPm, uri.getAuthority());
+        if (info == null) return false;
+        if (hasDirectAccess(target, info, uri, access)) return true;
+        if ((modes & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0) return false;
+        return holdsGrant(target, uri, access,
+                (modes & Intent.FLAG_GRANT_PREFIX_URI_PERMISSION) != 0);
+    }
+
+    /** General provider/path access is distinct from an explicitly held URI grant. */
+    private boolean hasDirectAccess(ApkPackage target, ProviderInfo info, Uri uri, int modes) {
+        if (!current(target) || modes == 0) return false;
+        // The legacy runtime may give unrelated packages the same numeric UID.
+        // Its authenticated package identity must not become provider ownership.
+        if (target.packageName.equals(info.packageName)) return true;
         if (!info.exported) return false;
+        // Such providers require a dynamic provider-side decision. No general
+        // permission can substitute for that missing backend; explicit grants
+        // and the actual provider owner are still handled independently above.
+        if (info.forceUriPermissions) return false;
         String name = target.packageName;
         if ((modes & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0
                 && !directAllowed(name, info, uri, true)) return false;
@@ -161,8 +203,9 @@ final class UriGrants {
     }
 
     synchronized boolean hasAny(ApkPackage target, ProviderInfo info) {
+        if (!current(target)) return false;
         for (Grant grant : mGrants) {
-            if (grant.target == target && mPm.get(grant.owner.packageName) == grant.owner
+            if (grant.target == target && current(grant.owner)
                     && info.packageName.equals(grant.owner.packageName)
                     && ContentProviders.hasAuthority(info, grant.uri.getAuthority())
                     && grant.modes != 0) return true;
@@ -175,8 +218,7 @@ final class UriGrants {
         List<android.content.UriPermission> result = new ArrayList<>();
         if (persistedOnly) return result;
         for (Grant grant : mGrants) {
-            if (mPm.get(grant.owner.packageName) != grant.owner
-                    || mPm.get(grant.target.packageName) != grant.target) continue;
+            if (!current(grant.owner) || !current(grant.target)) continue;
             if (packageName.equals(incoming ? grant.target.packageName : grant.owner.packageName)) {
                 result.add(new android.content.UriPermission(grant.uri, grant.modes,
                         android.content.UriPermission.INVALID_TIME));
@@ -199,59 +241,86 @@ final class UriGrants {
         if (access == 0 || (modes & ~(ACCESS | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)) != 0) {
             throw new IllegalArgumentException("Invalid URI grant flags");
         }
-        ProviderInfo info = ContentProviders.declaredProvider(mPm, uri.getAuthority());
-        ApkPackage owner = info == null ? null : mPm.get(info.packageName);
-        ApkPackage target = mPm.get(targetPackage);
-        if (owner == null || target == null) throw new SecurityException("Unknown URI grant participant");
-        boolean grantable = info.grantUriPermissions;
-        if (!grantable && info.uriPermissionPatterns != null) {
-            for (android.os.PatternMatcher pattern : info.uriPermissionPatterns) {
-                if (pattern.match(uri.getPath())) { grantable = true; break; }
+        boolean system = mCallers.isSystem();
+        String senderName = system ? null : mCallers.callerPackage();
+        if (targetPackage == null) throw new IllegalArgumentException("Missing URI grant target");
+        boolean prefix = (modes & Intent.FLAG_GRANT_PREFIX_URI_PERMISSION) != 0;
+        // Provider metadata and installed generations must come from one snapshot.
+        // Package removal takes this same monitor before retiring capabilities.
+        synchronized (mPm) {
+            ApkPackage sender = system ? null : mPm.get(senderName);
+            if (!system && !current(sender)) {
+                throw new SecurityException("Retiring URI grant sender");
             }
-        }
-        if (!grantable) throw new SecurityException("Provider does not allow URI grants");
-        if (!mCallers.isSystem()) {
-            String sender = mCallers.callerPackage();
-            boolean own = owner.packageName.equals(sender);
-            if (!own && check(uri, mCallers.callerPid(), mCallers.callerUid(), access, 0)
-                    != PackageManager.PERMISSION_GRANTED) {
-                throw new SecurityException("Caller cannot delegate this URI");
+            ProviderInfo info = ContentProviders.declaredProvider(mPm, uri.getAuthority());
+            // Android makes no grant when either endpoint no longer exists.
+            // Caller and argument validation has already run; existing state is
+            // untouched and no missing provider/package is fabricated.
+            if (info == null) return;
+            ApkPackage owner = mPm.get(info.packageName);
+            ApkPackage target = mPm.get(targetPackage);
+            if (target == null) return;
+            if (!current(owner) || !current(target)) {
+                throw new SecurityException("Unknown or retiring URI grant participant");
             }
-            if (!own && (modes & Intent.FLAG_GRANT_PREFIX_URI_PERMISSION) != 0) {
-                int prefixAccess = 0;
-                synchronized (this) {
-                    for (Grant grant : mGrants) {
-                        if (grant.prefix && grant.target == mPm.get(sender)
-                                && mPm.get(grant.owner.packageName) == grant.owner
-                                && matches(grant.uri, true, uri)) prefixAccess |= grant.modes;
+            // No capability is needed or created when the target already has
+            // direct access. Android does this before checking grant patterns,
+            // but advanced grants and dynamic providers must still be checked.
+            if (!prefix && !info.forceUriPermissions
+                    && hasDirectAccess(target, info, uri, access)) return;
+            boolean grantable = info.grantUriPermissions;
+            if (info.uriPermissionPatterns != null && info.uriPermissionPatterns.length != 0) {
+                grantable = false;
+                for (android.os.PatternMatcher pattern : info.uriPermissionPatterns) {
+                    if (pattern != null && pattern.match(uri.getPath())) { grantable = true; break; }
+                }
+            }
+            if (!grantable) throw new SecurityException("Provider does not allow URI grants");
+            boolean direct = system || hasDirectAccess(sender, info, uri, access);
+            synchronized (this) {
+                // An exact grant cannot be promoted into a subtree grant. Keep
+                // the held-grant check and publication atomic with revocation.
+                if (!direct && !holdsGrant(sender, uri, access, prefix)) {
+                    throw new SecurityException("Caller cannot delegate this URI with these modes");
+                }
+                // Modes accumulate only within one GrantUri identity. Combining
+                // unrelated exact/prefix entries would amplify delegated access.
+                for (Grant grant : mGrants) {
+                    if (grant.owner == owner && grant.target == target
+                            && grant.prefix == prefix && grant.uri.equals(uri)) {
+                        grant.modes |= access;
+                        return;
                     }
                 }
-                if ((prefixAccess & access) != access) {
-                    throw new SecurityException("An exact URI grant cannot become a prefix grant");
-                }
+                mGrants.add(new Grant(owner, target, uri, access, prefix));
             }
-        }
-        synchronized (this) {
-            mGrants.add(new Grant(owner, target, uri, access,
-                    (modes & Intent.FLAG_GRANT_PREFIX_URI_PERMISSION) != 0));
         }
     }
 
     void revoke(String targetPackage, Uri original, int modes, int userId) {
         Uri uri = checkedUri(original, userId);
-        ProviderInfo info = ContentProviders.declaredProvider(mPm, uri.getAuthority());
-        if (info == null) throw new SecurityException("Unknown URI authority");
-        if (!mCallers.isSystem() && !info.packageName.equals(mCallers.callerPackage())) {
-            throw new SecurityException("Only the provider owner can revoke delegated access");
-        }
         int access = modes & ACCESS;
-        synchronized (this) {
-            for (Grant grant : mGrants) {
-                if ((targetPackage == null || targetPackage.equals(grant.target.packageName))
-                        && grant.owner.packageName.equals(info.packageName)
-                        && matches(uri, true, grant.uri)) grant.modes &= ~access;
+        boolean system = mCallers.isSystem();
+        String callerName = system ? null : mCallers.callerPackage();
+        synchronized (mPm) {
+            ProviderInfo info = ContentProviders.declaredProvider(mPm, uri.getAuthority());
+            if (info == null) return;
+            ApkPackage owner = mPm.get(info.packageName);
+            ApkPackage caller = system ? null : mPm.get(callerName);
+            boolean all = system || hasDirectAccess(caller, info, uri, access);
+            synchronized (this) {
+                for (Grant grant : mGrants) {
+                    // Since Android L, recipients without general provider access
+                    // may relinquish their own ownerless grants, never another
+                    // recipient's. All grants in this backend are explicit.
+                    if ((all || grant.target == caller)
+                            && (targetPackage == null || targetPackage.equals(grant.target.packageName))
+                            && grant.owner == owner && matches(uri, true, grant.uri)) {
+                        grant.modes &= ~access;
+                    }
+                }
+                mGrants.removeIf(grant -> grant.modes == 0);
             }
-            mGrants.removeIf(grant -> grant.modes == 0);
         }
     }
 }

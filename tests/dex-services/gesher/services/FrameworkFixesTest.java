@@ -223,7 +223,9 @@ public final class FrameworkFixesTest {
         require(calls.contains("onDiscoveryStarted _gesher._tcp"), "discovery did not start: " + calls);
         require(calls.contains("onRegistrationFailed 0"),
                 "registering did not fail with FAILURE_INTERNAL_ERROR: " + calls);
-        require(calls.size() == 2, "unexpected NSD callbacks: " + calls);
+        require(calls.contains("onDiscoveryStopped _gesher._tcp"),
+                "discovery stop did not use its executor: " + calls);
+        require(calls.size() == 3, "unexpected NSD callbacks: " + calls);
         System.out.println("FrameworkFixesTest: android.net.nsd.NsdManager: discovery starts, "
                 + "registration fails through its listener, unregistering does not throw");
     }

@@ -1,0 +1,233 @@
+// Exact production functions are inserted below. Win32 storage calls are
+// modeled with real Linux temporary files; this is not a Windows runtime.
+#include <cerrno>
+#include <cstdarg>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <linux/futex.h>
+#include <linux/memfd.h>
+#include <mutex>
+#include <string>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <unordered_map>
+#include <vector>
+
+#ifndef MFD_NOEXEC_SEAL
+#define MFD_NOEXEC_SEAL 0x0008U
+#endif
+#ifndef MFD_EXEC
+#define MFD_EXEC 0x0010U
+#endif
+using DWORD = uint32_t;
+using SIZE_T = size_t;
+using HANDLE = void*;
+using BOOL = int;
+struct SECURITY_ATTRIBUTES { DWORD nLength; void* lpSecurityDescriptor; BOOL bInheritHandle; };
+static HANDLE const INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(intptr_t{-1});
+static constexpr DWORD MAX_PATH = 260, GENERIC_READ = 1, GENERIC_WRITE = 2, GENERIC_EXECUTE = 4;
+static constexpr DWORD FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4;
+static constexpr DWORD CREATE_ALWAYS = 2, FILE_ATTRIBUTE_TEMPORARY = 0x100, FILE_FLAG_DELETE_ON_CLOSE = 0x400;
+static constexpr int _O_RDWR = O_RDWR, _O_BINARY = 0, _O_NOINHERIT = 0x10000000;
+static constexpr DWORD INFINITE = 0xffffffff, ERROR_TIMEOUT = ETIMEDOUT;
+static DWORD last_error;
+static DWORD GetLastError() { return last_error; }
+static HANDLE GetCurrentProcess() { return reinterpret_cast<HANDLE>(static_cast<intptr_t>(getpid())); }
+static DWORD GetCurrentProcessId() { return static_cast<DWORD>(getpid()); }
+static DWORD GetCurrentThreadId() { return static_cast<DWORD>(gettid()); }
+static int NativeFd(HANDLE handle) { return static_cast<int>(reinterpret_cast<intptr_t>(handle)); }
+static HANDLE NativeHandle(int fd) { return reinterpret_cast<HANDLE>(static_cast<intptr_t>(fd)); }
+enum class Fault { none, temp_path, temp_path_long, temp_name, create, publish };
+static Fault fault = Fault::none;
+struct OpenHandle { std::string path; DWORD access; bool delete_on_close; };
+static std::unordered_map<int, OpenHandle> handles;
+static std::vector<std::string> paths;
+static size_t created_files;
+
+static BOOL ReadProcessMemory(HANDLE, const void* source, void* destination, SIZE_T size, SIZE_T* copied) {
+  // The container blocks even process_vm_readv(self). Inspect real mappings
+  // before reading our own controlled fixture pages; no concurrent mapping
+  // changes occur in this envelope. Windows still exercises its real probe.
+  *copied = 0;
+  FILE* maps = std::fopen("/proc/self/maps", "r");
+  if (!maps) return 0;
+  char line[1024];
+  const uintptr_t address = reinterpret_cast<uintptr_t>(source);
+  bool readable = false;
+  while (std::fgets(line, sizeof(line), maps)) {
+    unsigned long long first, last; char permissions[5];
+    if (std::sscanf(line, "%llx-%llx %4s", &first, &last, permissions) == 3 &&
+        address >= first && address < last && size <= last - address) {
+      readable = permissions[0] == 'r'; break;
+    }
+  }
+  std::fclose(maps);
+  if (!readable) return 0;
+  std::memcpy(destination, source, size);
+  *copied = size;
+  return 1;
+}
+static DWORD GetTempPathW(DWORD capacity, wchar_t* output) {
+  if (fault == Fault::temp_path) { last_error = EACCES; return 0; }
+  if (fault == Fault::temp_path_long) return MAX_PATH + 1;
+  if (capacity < 3) return 3;
+  output[0] = L'.'; output[1] = L'/'; output[2] = 0;
+  return 2;
+}
+static unsigned GetTempFileNameW(const wchar_t*, const wchar_t*, unsigned, wchar_t* output) {
+  if (fault == Fault::temp_name) { last_error = ENOSPC; return 0; }
+  char pattern[] = "./mfd-XXXXXX";
+  int fd = mkstemp(pattern);
+  if (fd < 0) { last_error = errno; return 0; }
+  close(fd);
+  ++created_files;
+  paths.emplace_back(pattern);
+  std::mbstowcs(output, pattern, MAX_PATH);
+  return 1;
+}
+static HANDLE CreateFileW(const wchar_t* path, DWORD access, DWORD share,
+                          SECURITY_ATTRIBUTES* security, DWORD disposition, DWORD attributes, void*) {
+  if (fault == Fault::create) { last_error = EACCES; return INVALID_HANDLE_VALUE; }
+  if ((access & (GENERIC_READ | GENERIC_WRITE)) != (GENERIC_READ | GENERIC_WRITE) ||
+      share != (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE) || disposition != CREATE_ALWAYS) {
+    last_error = EINVAL; return INVALID_HANDLE_VALUE;
+  }
+  char narrow[MAX_PATH]; std::wcstombs(narrow, path, sizeof(narrow));
+  int fd = open(narrow, O_RDWR | O_CREAT | O_TRUNC, 0600);
+  if (fd < 0) { last_error = errno; return INVALID_HANDLE_VALUE; }
+  if (!security || !security->bInheritHandle) fcntl(fd, F_SETFD, FD_CLOEXEC);
+  handles.emplace(fd, OpenHandle{narrow, access, (attributes & FILE_FLAG_DELETE_ON_CLOSE) != 0});
+  return NativeHandle(fd);
+}
+static BOOL DeleteFileW(const wchar_t* path) {
+  char narrow[MAX_PATH]; std::wcstombs(narrow, path, sizeof(narrow));
+  int result = unlink(narrow);
+  last_error = result == 0 ? 0 : errno;  // Cleanup may overwrite the prior failure.
+  return result == 0;
+}
+static BOOL CloseHandle(HANDLE handle) {
+  int fd = NativeFd(handle);
+  auto it = handles.find(fd);
+  if (it == handles.end()) { last_error = EBADF; return 0; }
+  if (it->second.delete_on_close) unlink(it->second.path.c_str());
+  handles.erase(it);
+  return close(fd) == 0;
+}
+static int _open_osfhandle(intptr_t raw, int mode) {
+  int fd = static_cast<int>(raw);
+  if (fault == Fault::publish) return errno = EMFILE, -1;
+  auto it = handles.find(fd);
+  if (it == handles.end()) return errno = EBADF, -1;
+  if ((mode & _O_NOINHERIT) != 0) fcntl(fd, F_SETFD, FD_CLOEXEC);
+  // Linux holds an unlinked file until all descriptors/mappings close. This
+  // preserves storage lifetime but does not prove Win32's deletion timing.
+  if (it->second.delete_on_close) unlink(it->second.path.c_str());
+  handles.erase(it);
+  return fd;
+}
+namespace gesher {
+static int ErrnoFromWin32(DWORD error) { return error == 0 ? EINVAL : static_cast<int>(error); }
+static int FailWithLastError() { return errno = ErrnoFromWin32(GetLastError()), -1; }
+static int CrtResult(int result) { return result; }
+namespace record_locks {
+static std::recursive_mutex descriptor_mutex;
+struct DescriptorGuard { std::lock_guard<std::recursive_mutex> guard{descriptor_mutex}; };
+}
+}
+
+#define memfd_create GesherMemfd
+@MEMFD_BACKEND@
+
+// Uncalled futex/timer functions are explicit boundaries. The production
+// dispatch bodies, their varargs, and memfd backend are copied unchanged.
+static long Futex(volatile int*, int, int, const timespec*, volatile int*, int) { return errno = ENOSYS, -1; }
+#define syscall PosixSyscall
+@POSIX_DISPATCH@
+#undef syscall
+
+struct LinuxTimespec { int64_t tv_sec, tv_nsec; };
+static constexpr int kENOSYS = ENOSYS, kEAGAIN = EAGAIN, kETIMEDOUT = ETIMEDOUT, kEINVAL = EINVAL;
+static DWORD MillisUntil(const LinuxTimespec*, bool) { return 0; }
+static bool DispatchTimerfdSyscall(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t*) { return false; }
+static BOOL WaitOnAddress(void*, void*, size_t, DWORD) { last_error = ERROR_TIMEOUT; return 0; }
+static void WakeByAddressSingle(void*) {}
+static void WakeByAddressAll(void*) {}
+#define BIONIC_SYSV __attribute__((sysv_abi))
+@BIONIC_DISPATCH@
+#undef memfd_create
+
+static bool guest_route;
+static long DispatchFromFixture(long number, ...) {
+  const char* name = nullptr;
+  unsigned flags = 0;
+  if (number == SYS_memfd_create) {
+    va_list ap; va_start(ap, number);
+    name = va_arg(ap, const char*); flags = va_arg(ap, unsigned); va_end(ap);
+  }
+  return guest_route ? Syscall(number, reinterpret_cast<int64_t>(name), flags, 0, 0, 0, 0)
+                     : PosixSyscall(number, name, flags);
+}
+static void* Symbol(void*, const char* name) {
+  return std::strcmp(name, "memfd_create") == 0 ? reinterpret_cast<void*>(&GesherMemfd) : nullptr;
+}
+static int failures, assertions;
+static void check(const char* label, int okay) {
+  ++assertions;
+  if (!okay) ++failures;
+  std::printf("%-76s %s\n", label, okay ? "ok" : "FAIL");
+  std::fflush(stdout);
+}
+#define syscall DispatchFromFixture
+#define dlsym Symbol
+#include "memfd_contract_test.inc"
+#undef syscall
+#undef dlsym
+
+static size_t ExistingPaths() {
+  size_t count = 0;
+  for (const auto& path : paths) if (access(path.c_str(), F_OK) == 0) ++count;
+  return count;
+}
+static void test_faults() {
+  const Fault faults[] = {Fault::temp_path, Fault::temp_path_long, Fault::temp_name, Fault::create, Fault::publish};
+  const int errors[] = {EACCES, ENAMETOOLONG, ENOSPC, EACCES, EMFILE};
+  for (size_t i = 0; i < sizeof(faults) / sizeof(faults[0]); ++i) {
+    fault = faults[i]; errno = 0;
+    int fd = GesherMemfd("fault", 0);
+    check("memfd actual boundary failure keeps its original errno", fd == -1 && errno == errors[i]);
+    check("memfd boundary failure leaves no handle or created pathname", handles.empty() && ExistingPaths() == 0);
+    if (fd >= 0) close(fd);
+    for (const auto& path : paths) unlink(path.c_str());
+  }
+  fault = Fault::none;
+  size_t before = created_files;
+  memfd_reject(GesherMemfd, "unsupported", MFD_ALLOW_SEALING, EOPNOTSUPP,
+               "memfd rejects unsupported policy before file creation");
+  memfd_reject(GesherMemfd, "bad", 0x20U, EINVAL, "memfd rejects unknown flags before file creation");
+  check("memfd invalid requests allocate no native file", created_files == before);
+  errno = 0;
+  check("native unknown syscall remains ENOSYS", PosixSyscall(4000) == -1 && errno == ENOSYS);
+  errno = 0;
+  check("guest unknown syscall remains ENOSYS", Syscall(4000, 0, 0, 0, 0, 0, 0) == -1 && errno == ENOSYS);
+}
+
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  if (std::strcmp(argv[1], "direct") == 0) test_memfd_route(GesherMemfd, "production direct");
+  else if (std::strcmp(argv[1], "posix") == 0) test_memfd_route(memfd_from_syscall, "production POSIX syscall");
+  else if (std::strcmp(argv[1], "guest") == 0) {
+    guest_route = true; test_memfd_route(memfd_from_syscall, "production x86-64 guest syscall");
+  } else if (std::strcmp(argv[1], "faults") == 0) test_faults();
+  else return 2;
+  check("memfd final ownership has no private handles or paths", handles.empty() && ExistingPaths() == 0);
+  for (const auto& path : paths) unlink(path.c_str());
+  std::printf("Memfd host: %d assertions, %d failures\n", assertions, failures);
+  return failures == 0 ? 0 : 1;
+}

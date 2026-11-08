@@ -57,15 +57,18 @@ public class ProxyInfo implements Parcelable {
         mPort = localProxyPort;
         mExclusionList = "";
         mParsedExclusionList = new String[0];
-        mPacFileUrl = pacFileUrl == null ? Uri.EMPTY : pacFileUrl;
+        mPacFileUrl = Objects.requireNonNull(pacFileUrl, "pacFileUrl");
     }
 
     public ProxyInfo(ProxyInfo source) {
-        mHost = source.mHost;
-        mPort = source.mPort;
-        mExclusionList = source.mExclusionList;
-        mParsedExclusionList = source.mParsedExclusionList.clone();
-        mPacFileUrl = source.mPacFileUrl;
+        // Android explicitly accepts a null source to represent no proxy. Keep
+        // Gesher's normalized empty exclusion list so its parcel round trip and
+        // value operations remain valid for this state too.
+        mHost = source == null ? null : source.mHost;
+        mPort = source == null ? 0 : source.mPort;
+        mExclusionList = source == null ? "" : source.mExclusionList;
+        mParsedExclusionList = source == null ? new String[0] : source.mParsedExclusionList.clone();
+        mPacFileUrl = source == null ? Uri.EMPTY : source.mPacFileUrl;
     }
 
     /** @hide */
@@ -100,13 +103,25 @@ public class ProxyInfo implements Parcelable {
 
     public boolean isValid() {
         if (!Uri.EMPTY.equals(mPacFileUrl)) return true;
+        if ((mHost == null || mHost.isEmpty()) && mPort == 0 && mExclusionList.isEmpty()) {
+            return true;
+        }
         return mHost != null && !mHost.isEmpty() && mPort > 0 && mPort <= 65535;
     }
 
     /** @hide */
     public java.net.Proxy makeProxy() {
-        if (mHost == null || !isValid()) return java.net.Proxy.NO_PROXY;
-        return new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(mHost, mPort));
+        // A PAC description is valid before its local proxy receives a port.
+        // Android returns NO_PROXY while that port is -1 rather than throwing
+        // from InetSocketAddress during framework/app initialization.
+        if (mHost != null) {
+            try {
+                return new java.net.Proxy(java.net.Proxy.Type.HTTP,
+                        new InetSocketAddress(mHost, mPort));
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        return java.net.Proxy.NO_PROXY;
     }
 
     @Override

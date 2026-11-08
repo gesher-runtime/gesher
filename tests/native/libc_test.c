@@ -52,6 +52,15 @@ static void check_str(const char* what, const char* got, const char* want) {
 #endif
 #include "tgnet_event_loop_test.inc"
 #include "epoll_nested_test.inc"
+#include "allocation_test.inc"
+#include "system_contract_test.inc"
+#include "socket_control_test.inc"
+#include "directory_contract_test.inc"
+#include "semaphore_contract_test.inc"
+#include "file_allocation_contract_test.inc"
+#include "positioned_io_contract_test.inc"
+#include "memfd_contract_test.inc"
+#include "utc_time_contract_test.inc"
 
 // --- memory and strings -------------------------------------------------------
 
@@ -616,6 +625,15 @@ static void test_dl(void) {
 __attribute__((visibility("default"))) int gesher_selftest(void) {
   printf("libc_test: bionic libc through the shim\n");
   test_memory();
+  test_allocation_contracts();
+  test_system_contracts();
+  test_socket_control_contracts();
+  test_directory_contracts();
+  test_semaphore_contracts();
+  test_file_allocation_contracts();
+  test_positioned_io_contracts();
+  test_memfd_contracts();
+  test_utc_time_contracts();
 #if defined(__x86_64__)
   test_timerfd_syscalls();
 #endif

@@ -26,6 +26,13 @@ public class ForegroundService extends Service {
         NotificationManager nm = getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Gesher",
                 NotificationManager.IMPORTANCE_LOW));
+        NotificationChannel channel = nm.getNotificationChannel(CHANNEL);
+        if (channel == null || !CHANNEL.equals(channel.getId()) || channel.getName() == null
+                || !"Gesher".contentEquals(channel.getName())
+                || channel.getImportance() != NotificationManager.IMPORTANCE_LOW) {
+            throw new IllegalStateException("Notification channel policy was not stored");
+        }
+        Report.line("ForegroundService notification channel verified");
         Notification n = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle("Gesher foreground service")
