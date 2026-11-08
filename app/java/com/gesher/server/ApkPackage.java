@@ -17,6 +17,10 @@ import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
 import android.content.pm.Signature;
 import android.content.pm.SigningDetails;
+import android.content.pm.parsing.ApkLite;
+import android.content.pm.parsing.ApkLiteParseUtils;
+import android.content.pm.parsing.result.ParseResult;
+import android.content.pm.parsing.result.ParseTypeImpl;
 import android.os.Process;
 import android.util.apk.ApkSignatureSchemeV2Verifier;
 import android.util.apk.ApkSignatureSchemeV3Verifier;
@@ -32,6 +36,8 @@ import com.android.internal.pm.pkg.component.ParsedIntentInfo;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -129,13 +135,66 @@ public final class ApkPackage {
         }
     }
 
-    /** Parses {@code apkPath} with PackageParser2. */
+    /** Parses one APK; unrelated files beside an external APK are never part of it. */
     public static ApkPackage parse(String apkPath) throws Exception {
+        return parse(apkPath, new File(apkPath));
+    }
+
+    /**
+     * Parses a complete, installer-owned code generation. PackageParser2's cluster path
+     * merges feature manifests and builds the manifest-named split dependency graph;
+     * merely appending sibling paths to ApplicationInfo cannot load isolated features.
+     */
+    public static ApkPackage parseCodeDirectory(String codePath) throws Exception {
+        File directory = new File(codePath).getAbsoluteFile();
+        File appRoot = new File(new File(Device.dataDir()).getCanonicalFile(), "app");
+        if (!appRoot.equals(directory.getParentFile())
+                || !directory.equals(directory.getCanonicalFile())
+                || !Files.isDirectory(directory.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            throw new SecurityException("Package code is outside the installed APK directory");
+        }
+        File base = new File(directory, "base.apk");
+        ApkLite baseLite = codeApkLite(base);
+        if (baseLite.getSplitName() != null
+                || !directory.getName().matches(java.util.regex.Pattern.quote(baseLite.getPackageName())
+                        + "-[0-9]+")) {
+            throw new IOException("Invalid installed base APK: " + base);
+        }
+        File[] apks = directory.listFiles((dir, name) -> name.endsWith(".apk"));
+        if (apks == null) throw new IOException("Cannot read package code directory: " + directory);
+        for (File file : apks) {
+            if (file.equals(base)) continue;
+            ApkLite split = codeApkLite(file);
+            // Include versionCodeMajor: the framework's cluster-lite check only compares
+            // the low versionCode, whereas an installed set must have one long version.
+            if (!file.getName().startsWith("split_") || split.getSplitName() == null
+                    || !baseLite.getPackageName().equals(split.getPackageName())
+                    || baseLite.getLongVersionCode() != split.getLongVersionCode()) {
+                throw new IOException("Inconsistent installed split APK: " + file);
+            }
+        }
+        return parse(base.getPath(), directory);
+    }
+
+    private static ApkLite codeApkLite(File file) throws IOException {
+        if (!Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("Not a regular installed APK: " + file);
+        }
+        ParseResult<ApkLite> result = ApkLiteParseUtils.parseApkLite(
+                ParseTypeImpl.forParsingWithoutPlatformCompat(), file, 0);
+        if (result.isError()) {
+            throw new IOException("Cannot parse installed APK " + file + ": "
+                    + result.getErrorMessage(), result.getException());
+        }
+        return result.getResult();
+    }
+
+    private static ApkPackage parse(String apkPath, File parseRoot) throws Exception {
         ParsedPackage pkg;
         try (PackageParser2 parser = new PackageParser2(null /* separateProcesses */,
                 null /* displayMetrics: the defaults */, null /* cacher */,
                 new ParserCallback())) {
-            pkg = parser.parsePackage(new File(apkPath), 0 /* flags */, false /* useCaches */);
+            pkg = parser.parsePackage(parseRoot, 0 /* flags */, false /* useCaches */);
         }
         SigningDetails signing = signingDetails(apkPath);
         if (signing != null) {
@@ -659,6 +718,10 @@ public final class ApkPackage {
             // which this parse never reaches; without it views ignore RTL layouts.
             ai.flags |= ApplicationInfo.FLAG_SUPPORTS_RTL;
         }
+        if (parsed.isIsolatedSplitLoading()) {
+            // Like the RTL flag, this is normally derived by PackageImpl.hideAsFinal.
+            ai.privateFlags |= ApplicationInfo.PRIVATE_FLAG_ISOLATED_SPLIT_LOADING;
+        }
         // privateFlagsExt comes from PackageImpl's mBaseAppInfoPrivateFlagsExt, also set only
         // in hideAsFinal (assignDerivedFields2), so it was 0 here: an application's
         // android:enableOnBackInvokedCallback="true" (PRIVATE_FLAG_EXT_ENABLE_ON_BACK_INVOKED_CALLBACK)
@@ -673,24 +736,6 @@ public final class ApkPackage {
         ai.deviceProtectedDataDir = mDataDir;
         ai.nativeLibraryDir = nativeLibraryDir();
         ai.primaryCpuAbi = mPrimaryCpuAbi;
-
-        File parentDir = new File(apkPath).getParentFile();
-        if (parentDir != null && parentDir.isDirectory()) {
-            File[] splits = parentDir.listFiles((dir, name) -> name.startsWith("split_") && name.endsWith(".apk"));
-            if (splits != null && splits.length > 0) {
-                Arrays.sort(splits, (a, b) -> a.getName().compareTo(b.getName()));
-                String[] splitPaths = new String[splits.length];
-                String[] splitNames = new String[splits.length];
-                for (int i = 0; i < splits.length; i++) {
-                    splitPaths[i] = splits[i].getAbsolutePath();
-                    String name = splits[i].getName();
-                    splitNames[i] = name.substring("split_".length(), name.length() - ".apk".length());
-                }
-                ai.splitSourceDirs = splitPaths;
-                ai.splitPublicSourceDirs = splitPaths;
-                ai.splitNames = splitNames;
-            }
-        }
 
         // A long-lived PM record must not publish a cached graph after XML/jar updates.
         // Ordinary packages keep the cheap immutable empty graph path.

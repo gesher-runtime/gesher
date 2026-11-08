@@ -18,6 +18,7 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IDeviceIdentifiersPolicyService;
 import android.os.IThermalService;
+import android.telephony.SubscriptionManager;
 import android.view.ISensitiveContentProtectionManager;
 
 import com.android.internal.app.IAppOpsService;
@@ -284,6 +285,41 @@ final class DeviceServices {
      * and invalid subscription IDs so apps treat the device as having no cellular SIMs.
      */
     static final class SubscriptionService extends ISub.Default {
+        // Generated Default answers 0, which is a valid subscription identifier.
+        // No SIMs are installed here: expose the same absent identifiers as AOSP's
+        // empty subscription database, including the user-specific entry points.
+        @Override public int getDefaultSubId() {
+            return SubscriptionManager.INVALID_SUBSCRIPTION_ID;
+        }
+        @Override public int getDefaultSubIdAsUser(int userId) { return getDefaultSubId(); }
+        @Override public int getDefaultDataSubId() { return getDefaultSubId(); }
+        @Override public int getDefaultVoiceSubId() { return getDefaultSubId(); }
+        @Override public int getDefaultVoiceSubIdAsUser(int userId) { return getDefaultSubId(); }
+        @Override public int getDefaultSmsSubId() { return getDefaultSubId(); }
+        @Override public int getDefaultSmsSubIdAsUser(int userId) { return getDefaultSubId(); }
+        @Override public int getActiveDataSubscriptionId() { return getDefaultSubId(); }
+        @Override public int getPreferredDataSubscriptionId() {
+            // AOSP falls back to the default data subscription without PhoneSwitcher.
+            return getDefaultDataSubId();
+        }
+        @Override public int getSubId(int slotIndex) { return getDefaultSubId(); }
+        @Override public int getSlotIndex(int subId) {
+            return SubscriptionManager.INVALID_SIM_SLOT_INDEX;
+        }
+        @Override public int getPhoneId(int subId) {
+            if (subId == SubscriptionManager.DEFAULT_SUBSCRIPTION_ID) subId = getDefaultSubId();
+            // AOSP retains the default-phone sentinel for a valid but unmapped ID;
+            // it is neither an installed modem index nor an active subscription.
+            return subId > SubscriptionManager.INVALID_SUBSCRIPTION_ID
+                    ? SubscriptionManager.DEFAULT_PHONE_INDEX : SubscriptionManager.INVALID_PHONE_INDEX;
+        }
+        @Override public int getEnabledSubscriptionId(int slotIndex) {
+            if (!SubscriptionManager.isValidSlotIndex(slotIndex)) {
+                throw new IllegalArgumentException("Invalid slot index " + slotIndex);
+            }
+            return getDefaultSubId();
+        }
+        @Override public int[] getActiveSubIdList(boolean visibleOnly) { return new int[0]; }
     }
 
     /**

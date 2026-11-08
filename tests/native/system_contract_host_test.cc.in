@@ -1,0 +1,60 @@
+// Actual production adapters and registrations. The Linux fcntl backend is an
+// independent kernel witness; Windows descriptor integration uses the same
+// fixture through libc_test.c instead of this host envelope.
+#include "shim_internal.h"
+
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+namespace gesher::bionic {
+namespace {
+@SYSTEM_IMPLEMENTATION@
+}
+
+void RegisterSystemContracts(SymbolTable& t) {
+#define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
+@SYSTEM_REGISTRATIONS@
+#undef E
+}
+}
+
+static void* system_symbol(void*, const char* name) {
+  static gesher::bionic::SymbolTable table = [] {
+    gesher::bionic::SymbolTable result;
+    gesher::bionic::RegisterSystemContracts(result);
+    return result;
+  }();
+  auto found = table.find(name);
+  return found == table.end() ? nullptr : found->second;
+}
+
+static auto shim_getgroups = reinterpret_cast<int(BIONIC_SYSV*)(int, uint32_t*)>(
+    system_symbol(nullptr, "getgroups"));
+
+static int failures;
+static void check(const char* label, int ok) {
+  std::printf("%-70s %s\n", label, ok ? "ok" : "FAIL");
+  if (!ok) ++failures;
+  std::fflush(stdout);
+}
+
+#define getgroups shim_getgroups
+#define dlsym system_symbol
+#include "system_contract_test.inc"
+
+int main(int argc, char** argv) {
+  if (!shim_getgroups) {
+    std::fputs("FAIL missing getgroups export\n", stderr);
+    return 1;
+  }
+  if (argc == 1) test_system_contracts();
+  else if (std::strcmp(argv[1], "groups") == 0) test_group_queries();
+  else if (std::strcmp(argv[1], "lockf") == 0) test_lockf_contracts();
+  else return 2;
+  return failures == 0 ? 0 : 1;
+}

@@ -77,7 +77,11 @@ public final class AppIcon {
      * else the launcher activity's, else the framework's default.
      */
     public static AppIcon load(String apk, ApplicationInfo app, ActivityInfo launcher) {
-        return load(new String[] {apk}, app, launcher);
+        String[] splits = app.splitSourceDirs;
+        String[] paths = new String[1 + (splits == null ? 0 : splits.length)];
+        paths[0] = apk;
+        if (splits != null) System.arraycopy(splits, 0, paths, 1, splits.length);
+        return load(paths, app, launcher);
     }
 
     /** Base APK followed by resource splits, including density-specific launcher images. */

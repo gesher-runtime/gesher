@@ -240,7 +240,7 @@ final class Installer {
     }
 
     private static ApkPackage open(Entry e) throws Exception {
-        ApkPackage p = ApkPackage.parse(e.codePath + "/base.apk");
+        ApkPackage p = ApkPackage.parseCodeDirectory(e.codePath);
         if (!p.packageName.equals(e.packageName)) {
             throw new IllegalStateException("base.apk is " + p.packageName);
         }
@@ -275,7 +275,7 @@ final class Installer {
         final File original = source;
         Entry recorded = sessionMetadata == null ? recordedSource(original) : null;
         if (recorded != null) {
-            ApkPackage parsed = ApkPackage.parse(recorded.codePath + "/base.apk");
+            ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
             return unchanged(apk, recorded.packageName, parsed, recorded);
         }
         File tempDir = null;
@@ -350,7 +350,7 @@ final class Installer {
                     && (sessionMetadata == null || sessionMetadata.matches(new File(old.codePath)))
                     && mPm.get(pkg) != null) {
                 recordSource(original, pkg, old.codePath);
-                return unchanged(apk, pkg, parsed, old);
+                return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old);
             }
             int n = 1;
             if (old != null) {
@@ -386,7 +386,14 @@ final class Installer {
             if (sessionMetadata != null) sessionMetadata.copyTo(code);
             // Verification must apply to the bytes being published, not a mutable
             // download that could change after its initial parse/verification.
-            ApkPackage staged = ApkPackage.parse(base.getAbsolutePath());
+            ApkPackage staged;
+            try {
+                staged = ApkPackage.parseCodeDirectory(code.getPath());
+            } catch (Exception invalidCluster) {
+                // Malformed/mismatched splits must not stop or replace the working app.
+                deleteTree(code);
+                throw invalidCluster;
+            }
             android.content.pm.Signature[] stagedSigners = staged.verifiedSignatures();
             if (!pkg.equals(staged.packageName) || staged.versionCode() != parsed.versionCode()
                     || !Arrays.equals(newSigners, stagedSigners)
@@ -421,7 +428,7 @@ final class Installer {
             int libs = 0;
             for (String file : apks) libs += NativeLibs.extract(file, libDir, abi);
             // dexopt, as the package manager runs it at install (Dexopt; ADR 0054).
-            Dexopt.onInstall(pkg, code.getPath(), parsed.sharedLibraries);
+            Dexopt.onInstall(pkg, code.getPath(), staged.sharedLibraries);
             long now = System.currentTimeMillis();
             Entry entry = new Entry(pkg, code.getPath(), old != null ? old.firstInstallTime : now,
                     now);

@@ -161,7 +161,7 @@ public final class AppShell {
             return;  // up to date
         }
 
-        ApkPackage pkg = ApkPackage.parse(codePath + "/base.apk");
+        ApkPackage pkg = ApkPackage.parseCodeDirectory(codePath);
         ActivityInfo launcher = launcherActivity(pkg);
         if (launcher == null) {
             // As a launcher's app list: only apps with a MAIN/LAUNCHER activity.
@@ -529,7 +529,7 @@ public final class AppShell {
                 && UiText.language().equals(old.getProperty("ui_language"))) {
             return;  // up to date
         }
-        Set<String> schemes = customSchemes(ApkPackage.parse(codePath + "/base.apk"));
+        Set<String> schemes = customSchemes(ApkPackage.parseCodeDirectory(codePath));
         String command = viaLauncher
                 ? "\"" + launchExe + "\" view " + packageName + " \"%1\""
                 : "\"" + (Shell.exists(psExe) ? psExe : "powershell.exe")

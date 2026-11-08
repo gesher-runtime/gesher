@@ -1,0 +1,86 @@
+// Generated from the production memory implementation and symbol registrations.
+// The only host adaptation is Windows' _msize -> glibc's malloc_usable_size.
+#include "shim_internal.h"
+
+#include <atomic>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <dlfcn.h>
+#include <malloc.h>
+#include <mutex>
+#include <unordered_map>
+
+static size_t _msize(void* p) { return malloc_usable_size(p); }
+
+namespace gesher::bionic {
+namespace {
+@MEMORY_IMPLEMENTATION@
+}
+
+void RegisterMemory(SymbolTable& t) {
+#define ENTRY(name, ptr) (t[name] = reinterpret_cast<void*>(ptr))
+@MEMORY_REGISTRATIONS@
+#undef ENTRY
+}
+}
+
+static void* memory_symbol(void*, const char* name) {
+  static gesher::bionic::SymbolTable table = [] {
+    gesher::bionic::SymbolTable result;
+    gesher::bionic::RegisterMemory(result);
+    return result;
+  }();
+  auto found = table.find(name);
+  return found == table.end() ? nullptr : found->second;
+}
+
+// Call the actual public symbol table, retaining its System V ABI.
+static auto shim_malloc = reinterpret_cast<void*(BIONIC_SYSV*)(size_t)>(
+    memory_symbol(nullptr, "malloc"));
+static auto shim_calloc = reinterpret_cast<void*(BIONIC_SYSV*)(size_t, size_t)>(
+    memory_symbol(nullptr, "calloc"));
+static auto shim_free = reinterpret_cast<void(BIONIC_SYSV*)(void*)>(
+    memory_symbol(nullptr, "free"));
+static auto shim_realloc = reinterpret_cast<void*(BIONIC_SYSV*)(void*, size_t)>(
+    memory_symbol(nullptr, "realloc"));
+static auto shim_posix_memalign = reinterpret_cast<int(BIONIC_SYSV*)(void**, size_t, size_t)>(
+    memory_symbol(nullptr, "posix_memalign"));
+static auto shim_memalign = reinterpret_cast<void*(BIONIC_SYSV*)(size_t, size_t)>(
+    memory_symbol(nullptr, "memalign"));
+static auto shim_malloc_usable_size = reinterpret_cast<size_t(BIONIC_SYSV*)(const void*)>(
+    memory_symbol(nullptr, "malloc_usable_size"));
+
+static int failures;
+static void check(const char* label, int ok) {
+  std::printf("%-60s %s\n", label, ok ? "ok" : "FAIL");
+  if (!ok) ++failures;
+  std::fflush(stdout);
+}
+
+#define malloc shim_malloc
+#define calloc shim_calloc
+#define free shim_free
+#define realloc shim_realloc
+#define posix_memalign shim_posix_memalign
+#define memalign shim_memalign
+#define malloc_usable_size shim_malloc_usable_size
+#define dlsym memory_symbol
+#include "allocation_test.inc"
+
+int main(int argc, char** argv) {
+  if (!shim_malloc || !shim_calloc || !shim_free || !shim_realloc || !shim_posix_memalign ||
+      !shim_memalign || !shim_malloc_usable_size) {
+    std::fputs("FAIL missing memory export\n", stderr);
+    return 1;
+  }
+  if (argc == 1) test_allocation_contracts();
+  else if (std::strcmp(argv[1], "calloc") == 0) test_calloc_zero_size();
+  else if (std::strcmp(argv[1], "overflow") == 0) test_allocation_overflow();
+  else if (std::strcmp(argv[1], "realloc") == 0) test_realloc_failure();
+  else if (std::strcmp(argv[1], "reallocarray") == 0) test_reallocarray_contract();
+  else if (std::strcmp(argv[1], "zero") == 0) test_realloc_zero_size();
+  else return 2;
+  return failures == 0 ? 0 : 1;
+}

@@ -1,5 +1,10 @@
 # Central compatibility evidence audit
 
+For the current-source crash-contract repairs and their validation limits, see
+the [November 8 Android compatibility audit](research/android-crash-contracts-2026-11-08.md).
+The older inventories below retain their original snapshots; their counts do
+not describe all current failures or establish universal APK compatibility.
+
 `tools/compatibility_audit.py` aggregates technical diagnostics from existing
 Gesher runtime logs without opening apps, connecting to the network or changing
 the logs. It writes deduplicated JSON and Markdown under `out/compat-audit`:

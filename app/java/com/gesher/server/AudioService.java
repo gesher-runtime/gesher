@@ -5,13 +5,16 @@
 package com.gesher.server;
 
 import android.media.AudioAttributes;
+import android.media.AudioDeviceAttributes;
 import android.media.AudioManager;
 import android.media.AudioPlaybackConfiguration;
+import android.media.AudioRecordingConfiguration;
 import android.media.AudioSystem;
 import android.media.IAudioFocusDispatcher;
 import android.media.IAudioService;
 import android.media.IPlaybackConfigDispatcher;
 import android.media.PlayerBase;
+import android.media.Spatializer;
 import android.media.audiopolicy.AudioVolumeGroup;
 import android.media.audiopolicy.IAudioPolicyCallback;
 import android.os.IBinder;
@@ -298,6 +301,53 @@ public final class AudioService extends IAudioService.Default {
         return new ArrayList<>();
     }
 
+    // --- Unavailable Android routing / spatializer capabilities -----------------------------
+
+    @Override
+    public int[] getAvailableCommunicationDeviceIds() {
+        // Windows playback/capture exists, but Android communication-route selection does
+        // not. AudioManager iterates this array without checking for null.
+        return new int[0];
+    }
+
+    @Override
+    public List<AudioDeviceAttributes> getDevicesForAttributes(AudioAttributes attributes) {
+        java.util.Objects.requireNonNull(attributes, "attributes");
+        // No Android product-strategy routing policy is maintained by this service.
+        return new ArrayList<>();
+    }
+
+    @Override
+    public List<AudioDeviceAttributes> getDevicesForAttributesUnprotected(AudioAttributes attributes) {
+        return getDevicesForAttributes(attributes);
+    }
+
+    @Override
+    public int[] getSupportedHeadTrackingModes() {
+        // Spatializer likewise iterates the Binder result even on an unsupported device.
+        return new int[0];
+    }
+
+    @Override
+    public int getActualHeadTrackingMode() {
+        return Spatializer.HEAD_TRACKING_MODE_UNSUPPORTED;
+    }
+
+    @Override
+    public int getDesiredHeadTrackingMode() {
+        return Spatializer.HEAD_TRACKING_MODE_UNSUPPORTED;
+    }
+
+    @Override
+    public List<AudioDeviceAttributes> getSpatializerCompatibleAudioDevices() {
+        return new ArrayList<>();
+    }
+
+    @Override
+    public List<Integer> getSpatializedChannelMasks() {
+        return new ArrayList<>();
+    }
+
     // --- Ringer mode and audio mode --------------------------------------------------------
 
     @Override
@@ -367,6 +417,13 @@ public final class AudioService extends IAudioService.Default {
 
     @Override
     public List<AudioPlaybackConfiguration> getActivePlaybackConfigurations() {
+        return new ArrayList<>();
+    }
+
+    @Override
+    public List<AudioRecordingConfiguration> getActiveRecordingConfigurations() {
+        // As with playback configurations, no Android recording-session inventory is
+        // maintained yet. The public manager promises a non-null list.
         return new ArrayList<>();
     }
 

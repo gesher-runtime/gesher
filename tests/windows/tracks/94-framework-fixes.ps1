@@ -31,6 +31,26 @@ $bcpFixes = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app')
 $dvmFixes = @("-Xbootclasspath:$bcpFixes", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
   '-cp', (NoDrive "$Dir/services-tests.dex"))
 
+# Query through the real PackageManager client and generated Binder parcels, using
+# properties parsed from this build's synthetic components.apk.
+$packageQueryOut = FixesRun ($dvmFixes + 'gesher.services.PackageQueryContractTest' +
+  (NoDrive "$Dir/components.apk")) 90
+$packageQueryCode = $LASTEXITCODE
+Check 'services: versioned package queries, canonical names and parsed manifest properties' {
+  $global:LASTEXITCODE = $packageQueryCode
+  $packageQueryOut
+} @('PackageQueryContractTest all passed:')
+
+# A real installed base plus two isolated feature APKs, including an inter-feature
+# dependency. Reject malformed updates before publishing or stopping the old app.
+$splitPackageOut = FixesRun ($dvmFixes + 'gesher.services.SplitPackageContractTest' +
+  (NoDrive "$Dir/split-package-fixtures.zip")) 150
+$splitPackageCode = $LASTEXITCODE
+Check 'services: installed feature manifests, isolated split DEX/resources and failed-update preservation' {
+  $global:LASTEXITCODE = $splitPackageCode
+  $splitPackageOut
+} @('SplitPackageContractTest all passed:')
+
 # Exercise the MediaStore implementation from the production boot jar.
 $mediaStoreOut = FixesRun ($dvmFixes + 'gesher.services.MediaStoreContractTest') 90
 $mediaStoreCode = $LASTEXITCODE
@@ -133,7 +153,8 @@ foreach ($fixture in @(
   @('BluetoothValueContractTest', 'BLE settings, filters, advertisements and parcels without an adapter'),
   @('MediaStoreContractTest', 'media collections, resolver forwarding and unavailable-provider handling'),
   @('NetworkRequestValueContractTest', 'DHCP, L2CAP, DNS-SD and network request filters and parcels'),
-  @('NetworkValueContractTest', 'MAC, static routes, IP and proxy value contracts')
+  @('NetworkValueContractTest', 'MAC, static routes, IP and proxy value contracts'),
+  @('ProxyInfoContractTest', 'nullable proxy snapshots and PAC initialization before a local port exists')
 )) {
   $valueOut = FixesRun ($dvmFixes + "gesher.services.$($fixture[0])") 45
   $valueCode = $LASTEXITCODE

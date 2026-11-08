@@ -96,8 +96,20 @@ bool TakeAligned(void* p, Aligned* out) {
   return true;
 }
 
+bool FindAligned(const void* p, Aligned* out) {
+  if (g_aligned_count.load(std::memory_order_acquire) == 0) return false;
+  std::lock_guard<std::mutex> lock(g_aligned_mutex);
+  auto it = g_aligned.find(const_cast<void*>(p));
+  if (it == g_aligned.end()) return false;
+  *out = it->second;
+  return true;
+}
+
 void* AlignedAlloc(size_t align, size_t size) {
   if (align <= 16) return std::malloc(size ? size : 1);
+  // A wrapped allocation could appear to succeed with less than `size`
+  // bytes. The pointer still has to be aligned inside the full allocation.
+  if (size > SIZE_MAX - align) return errno = kENOMEM, nullptr;
   void* raw = std::malloc(size + align);
   if (raw == nullptr) return nullptr;
   auto p = reinterpret_cast<void*>((reinterpret_cast<uintptr_t>(raw) + align) & ~(align - 1));
@@ -108,7 +120,11 @@ void* AlignedAlloc(size_t align, size_t size) {
 }
 
 void* BIONIC_SYSV Malloc(size_t n) { return std::malloc(n ? n : 1); }
-void* BIONIC_SYSV Calloc(size_t n, size_t m) { return std::calloc(n ? n : 1, m ? m : 1); }
+void* BIONIC_SYSV Calloc(size_t n, size_t m) {
+  // Either zero dimension makes the requested allocation empty. Do not turn
+  // calloc(0, SIZE_MAX) into an enormous allocation by replacing only zero.
+  return n == 0 || m == 0 ? std::calloc(1, 1) : std::calloc(n, m);
+}
 void BIONIC_SYSV Free(void* p) {
   Aligned a;
   if (TakeAligned(p, &a)) {
@@ -118,18 +134,34 @@ void BIONIC_SYSV Free(void* p) {
   }
 }
 void* BIONIC_SYSV Realloc(void* p, size_t n) {
+  if (p == nullptr) return Malloc(n);
+  // Bionic frees a non-null pointer for realloc(p, 0), including memalign's.
+  if (n == 0) {
+    Free(p);
+    return nullptr;
+  }
   Aligned a;
-  if (p != nullptr && TakeAligned(p, &a)) {
-    void* q = std::malloc(n ? n : 1);
-    if (q != nullptr) std::memcpy(q, p, a.size < n ? a.size : n);
-    std::free(a.raw);
+  if (FindAligned(p, &a)) {
+    void* q = std::malloc(n);
+    // A failed realloc leaves both the storage and its ownership record
+    // intact. The caller may keep using it, retry realloc or call free.
+    if (q == nullptr) return nullptr;
+    std::memcpy(q, p, a.size < n ? a.size : n);
+    Free(p);
     return q;
   }
   return std::realloc(p, n);
 }
+void* BIONIC_SYSV Reallocarray(void* p, size_t count, size_t size) {
+  size_t bytes;
+  if (__builtin_mul_overflow(count, size, &bytes)) return errno = kENOMEM, nullptr;
+  return Realloc(p, bytes);
+}
 int BIONIC_SYSV PosixMemalign(void** out, size_t align, size_t size) {
   if (align < sizeof(void*) || (align & (align - 1)) != 0) return kEINVAL;
+  const int saved_errno = errno;
   void* p = AlignedAlloc(align, size);
+  errno = saved_errno;  // POSIX returns its error instead of setting errno.
   if (p == nullptr) return kENOMEM;
   *out = p;
   return 0;
@@ -140,11 +172,8 @@ void* BIONIC_SYSV Memalign(size_t align, size_t size) {
 }
 size_t BIONIC_SYSV MallocUsableSize(const void* p) {
   if (p == nullptr) return 0;
-  if (g_aligned_count.load(std::memory_order_acquire) != 0) {
-    std::lock_guard<std::mutex> lock(g_aligned_mutex);
-    auto it = g_aligned.find(const_cast<void*>(p));
-    if (it != g_aligned.end()) return it->second.size;
-  }
+  Aligned a;
+  if (FindAligned(p, &a)) return a.size;
   return _msize(const_cast<void*>(p));
 }
 
@@ -990,6 +1019,7 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("free", Free);
   ENTRY("calloc", Calloc);
   ENTRY("realloc", Realloc);
+  ENTRY("reallocarray", Reallocarray);
   ENTRY("posix_memalign", PosixMemalign);
   ENTRY("memalign", Memalign);
   ENTRY("aligned_alloc", Memalign);

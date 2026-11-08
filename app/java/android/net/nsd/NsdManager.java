@@ -6,13 +6,15 @@ package android.net.nsd;
 
 import android.content.Context;
 import android.net.Network;
+import android.net.NetworkRequest;
 import android.os.Handler;
 import android.os.Looper;
 
-import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * NsdManager (network service discovery, DNS-SD over mDNS) with the Connectivity
@@ -90,11 +92,28 @@ public final class NsdManager {
     }
 
     private final Executor mMainExecutor;
-    private final Map<DiscoveryListener, String> mDiscoveries = new HashMap<>();  // -> type
+    // AOSP keys listeners by identity, not by application-defined equals/hashCode.
+    private final Map<DiscoveryListener, Discovery> mDiscoveries = new IdentityHashMap<>();
+
+    private static final class Discovery {
+        final String serviceType;
+        final Executor executor;
+        // Protected by mDiscoveries. Keep the listener reserved until its stop callback.
+        boolean stopPending;
+        boolean stopped;
+
+        Discovery(String serviceType, Executor executor) {
+            this.serviceType = serviceType;
+            this.executor = executor;
+        }
+    }
 
     public NsdManager(Context context) {
-        Handler main = new Handler(Looper.getMainLooper());
-        mMainExecutor = main::post;
+        this(new Handler(Looper.getMainLooper())::post);
+    }
+
+    private NsdManager(Executor mainExecutor) {
+        mMainExecutor = Objects.requireNonNull(mainExecutor);
     }
 
     // --- registering ---------------------------------------------------------------
@@ -114,6 +133,13 @@ public final class NsdManager {
         executor.execute(() -> listener.onRegistrationFailed(info, FAILURE_INTERNAL_ERROR));
     }
 
+    public void registerService(AdvertisingRequest advertisingRequest, Executor executor,
+            RegistrationListener listener) {
+        Objects.requireNonNull(advertisingRequest, "AdvertisingRequest cannot be null");
+        registerService(advertisingRequest.getServiceInfo(), advertisingRequest.getProtocolType(),
+                executor, listener);
+    }
+
     public void unregisterService(RegistrationListener listener) {
         Objects.requireNonNull(listener, "listener cannot be null");
     }
@@ -127,31 +153,83 @@ public final class NsdManager {
 
     public void discoverServices(String serviceType, int protocolType, Network network,
             Executor executor, DiscoveryListener listener) {
+        startDiscovery(serviceType, protocolType, executor, listener);
+    }
+
+    public void discoverServices(DiscoveryRequest discoveryRequest, Executor executor,
+            DiscoveryListener listener) {
+        Objects.requireNonNull(discoveryRequest, "DiscoveryRequest cannot be null");
+        startDiscovery(discoveryRequest.getServiceType(), discoveryRequest.getProtocolType(),
+                executor, listener);
+    }
+
+    public void discoverServices(String serviceType, int protocolType, NetworkRequest networkRequest,
+            Executor executor, DiscoveryListener listener) {
+        Objects.requireNonNull(networkRequest, "NetworkRequest cannot be null");
+        // As with the Network overload, the absent mDNS backend produces no found/lost
+        // events. Do not register a Windows network watcher with nothing to discover.
+        startDiscovery(serviceType, protocolType, executor, listener);
+    }
+
+    private void startDiscovery(String serviceType, int protocolType, Executor executor,
+            DiscoveryListener listener) {
         if (serviceType == null || serviceType.isEmpty()) {
             throw new IllegalArgumentException("Service type cannot be empty");
         }
         checkProtocol(protocolType);
         Objects.requireNonNull(executor, "executor cannot be null");
         Objects.requireNonNull(listener, "listener cannot be null");
+        Discovery discovery = new Discovery(serviceType, executor);
         synchronized (mDiscoveries) {
             if (mDiscoveries.containsKey(listener)) {
                 throw new IllegalArgumentException("listener already in use");
             }
-            mDiscoveries.put(listener, serviceType);
+            mDiscoveries.put(listener, discovery);
         }
-        executor.execute(() -> listener.onDiscoveryStarted(serviceType));
+        try {
+            executor.execute(() -> {
+                synchronized (mDiscoveries) {
+                    // A non-FIFO executor may run the terminal callback first. Never
+                    // resurrect that request, including after this listener is reused.
+                    if (discovery.stopped) return;
+                }
+                listener.onDiscoveryStarted(serviceType);
+            });
+        } catch (RejectedExecutionException e) {
+            synchronized (mDiscoveries) {
+                if (mDiscoveries.get(listener) == discovery) mDiscoveries.remove(listener);
+                discovery.stopped = true;
+            }
+            throw e;
+        }
     }
 
     public void stopServiceDiscovery(DiscoveryListener listener) {
         Objects.requireNonNull(listener, "listener cannot be null");
-        String serviceType;
+        Discovery discovery;
         synchronized (mDiscoveries) {
-            if (!mDiscoveries.containsKey(listener)) {
+            discovery = mDiscoveries.get(listener);
+            if (discovery == null || discovery.stopPending) {
                 throw new IllegalArgumentException("listener not registered");
             }
-            serviceType = mDiscoveries.remove(listener);
+            discovery.stopPending = true;
         }
-        mMainExecutor.execute(() -> listener.onDiscoveryStopped(serviceType));
+        try {
+            discovery.executor.execute(() -> {
+                synchronized (mDiscoveries) {
+                    if (discovery.stopped) return;
+                    discovery.stopped = true;
+                    if (mDiscoveries.get(listener) == discovery) mDiscoveries.remove(listener);
+                }
+                listener.onDiscoveryStopped(discovery.serviceType);
+            });
+        } catch (RejectedExecutionException e) {
+            synchronized (mDiscoveries) {
+                // Submission failed: leave an active request that can be stopped again.
+                if (!discovery.stopped) discovery.stopPending = false;
+            }
+            throw e;
+        }
     }
 
     // --- resolving -----------------------------------------------------------------

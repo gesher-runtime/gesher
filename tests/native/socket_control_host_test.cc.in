@@ -1,0 +1,81 @@
+// The implementation and bionic registrations below are extracted verbatim.
+// Only guarded-copy and Winsock payload transport have host implementations;
+// real Linux socket pairs witness the production path's actual transmission.
+#include "shim_internal.h"
+#include "socket_internal.h"
+
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
+#include <unistd.h>
+#include <vector>
+
+namespace gesher::ws {
+bool CopyFromUser(void* to, const void* from, size_t size) {
+  if (from == nullptr && size != 0) return false;
+  std::memcpy(to, from, size);
+  return true;
+}
+}
+
+namespace socket_contract {
+namespace ws = gesher::ws;
+
+ssize_t SendBuffers(int fd, ws::Buffer* buffers, size_t count, int flags,
+                    const sockaddr* address, socklen_t length) {
+  std::vector<iovec> payload;
+  for (size_t i = 0; i < count; ++i) payload.push_back({buffers[i].data, buffers[i].len});
+  msghdr message{};
+  message.msg_name = const_cast<sockaddr*>(address);
+  message.msg_namelen = length;
+  message.msg_iov = payload.data();
+  message.msg_iovlen = payload.size();
+  return ::sendmsg(fd, &message, flags);
+}
+
+@SOCKET_HELPERS@
+@SENDMSG_IMPLEMENTATION@
+}
+
+#define sendmsg socket_contract::sendmsg
+namespace gesher::bionic {
+namespace {
+@SOCKET_ADAPTERS@
+}
+void RegisterSocketContracts(SymbolTable& t) {
+#define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
+@SOCKET_REGISTRATIONS@
+#undef E
+}
+}
+#undef sendmsg
+
+static void* socket_symbol(void*, const char* name) {
+  static gesher::bionic::SymbolTable table = [] {
+    gesher::bionic::SymbolTable result;
+    gesher::bionic::RegisterSocketContracts(result);
+    return result;
+  }();
+  auto found = table.find(name);
+  return found == table.end() ? nullptr : found->second;
+}
+
+static int failures;
+static void check(const char* label, int ok) {
+  std::printf("%-76s %s\n", label, ok ? "ok" : "FAIL");
+  if (!ok) ++failures;
+  std::fflush(stdout);
+}
+
+#define dlsym socket_symbol
+#include "socket_control_test.inc"
+
+int main() {
+  test_socket_control_contracts();
+  return failures == 0 ? 0 : 1;
+}

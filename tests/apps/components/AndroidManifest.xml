@@ -16,9 +16,12 @@
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <!-- PackageQueryContractTest reads actual parsed properties at each location. -->
+        <property android:name="com.gesher.components.CONTRACT_PROPERTY" android:value="73" />
         <activity
             android:name=".MainActivity"
             android:exported="true">
+            <property android:name="com.gesher.components.CONTRACT_PROPERTY" android:value="activity-value" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -46,16 +49,22 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-        <service android:name=".CounterService" android:exported="false" />
+        <service android:name=".CounterService" android:exported="false">
+            <property android:name="com.gesher.components.CONTRACT_PROPERTY" android:resource="@string/app_name" />
+        </service>
         <service android:name=".LocalService" android:exported="false" />
         <service
             android:name=".ForegroundService"
             android:foregroundServiceType="specialUse"
             android:exported="false" />
-        <receiver android:name=".ManifestReceiver" android:exported="false" />
+        <receiver android:name=".ManifestReceiver" android:exported="false">
+            <property android:name="com.gesher.components.CONTRACT_PROPERTY" android:value="1.5" />
+        </receiver>
         <provider
             android:name=".ItemsProvider"
             android:authorities="com.gesher.components.items"
-            android:exported="false" />
+            android:exported="false">
+            <property android:name="com.gesher.components.CONTRACT_PROPERTY" android:value="true" />
+        </provider>
     </application>
 </manifest>

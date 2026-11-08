@@ -568,10 +568,31 @@ int BIONIC_SYSV Tgkill(int, int tid, int sig) {
 }
 int BIONIC_SYSV Tkill(int tid, int sig) { return Tgkill(0, tid, sig); }
 int BIONIC_SYSV Flock(int fd, int op) { return flock(fd, op); }
-// lockf: record locks, like the shim's fcntl ones, are not modelled (granted).
-int BIONIC_SYSV Lockf(int fd, int cmd, int64_t) {
-  if (fcntl(fd, F_GETFD) < 0) return errno = kEBADF, -1;
-  return cmd >= 0 && cmd <= 3 ? 0 : (errno = kEINVAL, -1);
+// lockf shares fcntl's process-owned record locks. The production descriptor
+// path implements nonblocking operations; blocking F_SETLKW is not wired yet.
+int BIONIC_SYSV Lockf(int fd, int cmd, int64_t length) {
+  static_assert(sizeof(off_t) == sizeof(length));
+  struct flock lock{};
+  lock.l_whence = SEEK_CUR;
+  lock.l_len = static_cast<off_t>(length);
+  switch (cmd) {
+    case 0:  // F_ULOCK
+      lock.l_type = F_UNLCK;
+      return fcntl(fd, F_SETLK, &lock);
+    case 1:  // F_LOCK: never report success without acquiring the lock.
+      if (fcntl(fd, F_GETFD, 0) < 0) return -1;
+      return errno = kENOSYS, -1;
+    case 2:  // F_TLOCK
+      lock.l_type = F_WRLCK;
+      return fcntl(fd, F_SETLK, &lock);
+    case 3:  // F_TEST uses a read-lock query, matching bionic's lockf64.
+      lock.l_type = F_RDLCK;
+      if (fcntl(fd, F_GETLK, &lock) < 0) return -1;
+      if (lock.l_type == F_UNLCK || lock.l_pid == getpid()) return 0;
+      return errno = EACCES, -1;
+    default:
+      return errno = kEINVAL, -1;
+  }
 }
 int BIONIC_SYSV PosixFadvise(int fd, int64_t off, int64_t len, int advice) {
   return posix_fadvise(fd, static_cast<off_t>(off), static_cast<off_t>(len), advice);
@@ -590,7 +611,9 @@ int BIONIC_SYSV Getpid() { return static_cast<int>(GetCurrentProcessId()); }
 int BIONIC_SYSV Getpgid(int pid) { return pid == 0 ? Getpid() : pid; }
 int BIONIC_SYSV Setsid() { return Getpid(); }
 int BIONIC_SYSV Getgroups(int size, uint32_t* list) {
+  if (size < 0) return errno = kEINVAL, -1;
   if (size == 0) return 1;
+  if (list == nullptr) return errno = kEFAULT, -1;
   list[0] = static_cast<uint32_t>(getgid());
   return 1;
 }

@@ -151,7 +151,7 @@ struct mmsghdr {
 };
 
 // Ancillary data is not supported: recvmsg returns msg_controllen == 0 and
-// sendmsg ignores msg_control.
+// sendmsg rejects nonzero msg_controllen with EOPNOTSUPP before sending payload.
 struct cmsghdr {
   size_t cmsg_len;
   int cmsg_level;

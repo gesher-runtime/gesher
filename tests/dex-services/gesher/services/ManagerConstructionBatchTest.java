@@ -10,10 +10,17 @@ import android.content.Context;
 import android.content.pm.IPackageManager;
 import android.content.pm.SystemFeaturesCache;
 import android.content.res.AssetManager;
+import android.media.AudioAttributes;
+import android.media.AudioManager;
+import android.media.Spatializer;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.os.ServiceManager;
+import android.telephony.SubscriptionManager;
+import android.telephony.TelephonyManager;
+
+import com.android.internal.telephony.ISub;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -31,6 +38,11 @@ public final class ManagerConstructionBatchTest {
         AssetManager.createSystemAssetsInZygoteLocked(false,
                 System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
         if (Looper.myLooper() == null) Looper.prepareMainLooper();
+        // This isolated process skips Main.bootstrap's telephony service registry.
+        if (android.telephony.TelephonyFrameworkInitializer.getTelephonyServiceManager() == null) {
+            android.telephony.TelephonyFrameworkInitializer.setTelephonyServiceManager(
+                    new android.os.TelephonyServiceManager());
+        }
         Class<?> services = Class.forName("com.gesher.server.Services");
         @SuppressWarnings("unchecked")
         Map<String, IBinder> created = (Map<String, IBinder>) services
@@ -52,7 +64,8 @@ public final class ManagerConstructionBatchTest {
                 Context.APP_OPS_SERVICE, Context.DEVICE_POLICY_SERVICE, Context.SHORTCUT_SERVICE,
                 Context.USAGE_STATS_SERVICE, Context.DROPBOX_SERVICE, Context.SEARCH_SERVICE,
                 Context.NOTIFICATION_SERVICE, Context.CLIPBOARD_SERVICE, Context.STORAGE_SERVICE,
-                Context.DISPLAY_SERVICE, Context.UI_MODE_SERVICE, Context.AUDIO_SERVICE};
+                Context.DISPLAY_SERVICE, Context.UI_MODE_SERVICE, Context.AUDIO_SERVICE,
+                Context.TELEPHONY_SUBSCRIPTION_SERVICE};
         for (String name : names) {
             Object manager = context.getSystemService(name);
             require(manager != null, name + " constructed null");
@@ -63,6 +76,66 @@ public final class ManagerConstructionBatchTest {
         require(!power.isDeviceIdleMode(), "unexpected Android doze");
         require(power.getThermalHeadroomThresholds().isEmpty(), "invented headroom thresholds");
         require(!power.isIgnoringBatteryOptimizations("missing.package"), "invented exemption");
+        AudioManager audio = context.getSystemService(AudioManager.class);
+        // These are real framework wrappers, not direct calls to a service Default.
+        // Inherited null arrays used to throw inside AudioManager and Spatializer.
+        require(audio.getAvailableCommunicationDevices().isEmpty(),
+                "unimplemented Android communication routing reported selectable devices");
+        require(audio.getAudioDevicesForAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA).build()).isEmpty(),
+                "unimplemented Android routing policy reported attribute routes");
+        require(audio.getActiveRecordingConfigurations().isEmpty(),
+                "untracked recording sessions must produce an empty list");
+        Spatializer spatializer = audio.getSpatializer();
+        require(!spatializer.isAvailable() && !spatializer.isEnabled(),
+                "unimplemented spatializer reported available or enabled");
+        require(spatializer.getSupportedHeadTrackingModes().isEmpty(),
+                "unsupported spatializer reported head-tracking modes");
+        require(spatializer.getCompatibleAudioDevices().isEmpty(),
+                "unsupported spatializer reported compatible devices");
+        require(spatializer.getSpatializedChannelMasks().isEmpty(),
+                "unsupported spatializer reported channel masks");
+        require(spatializer.getHeadTrackingMode() == Spatializer.HEAD_TRACKING_MODE_UNSUPPORTED
+                        && spatializer.getDesiredHeadTrackingMode()
+                                == Spatializer.HEAD_TRACKING_MODE_UNSUPPORTED,
+                "unsupported spatializer reported an active or desired tracking mode");
+        SubscriptionManager subscriptions = context.getSystemService(SubscriptionManager.class);
+        require(!SubscriptionManager.isValidSubscriptionId(SubscriptionManager.getDefaultSubscriptionId())
+                        && !SubscriptionManager.isValidSubscriptionId(
+                                SubscriptionManager.getDefaultDataSubscriptionId())
+                        && !SubscriptionManager.isValidSubscriptionId(
+                                SubscriptionManager.getDefaultVoiceSubscriptionId())
+                        && !SubscriptionManager.isValidSubscriptionId(
+                                SubscriptionManager.getDefaultSmsSubscriptionId())
+                        && !SubscriptionManager.isValidSubscriptionId(
+                                SubscriptionManager.getActiveDataSubscriptionId()),
+                "no-SIM device reported a usable default or active subscription");
+        require(subscriptions.getPreferredDataSubscriptionId()
+                        == SubscriptionManager.INVALID_SUBSCRIPTION_ID,
+                "no PhoneSwitcher reported a preferred data subscription");
+        require(subscriptions.getActiveSubscriptionIdList().length == 0
+                        && subscriptions.getCompleteActiveSubscriptionIdList().length == 0,
+                "no-SIM device reported active subscription IDs");
+        require(SubscriptionManager.getSlotIndex(0) == SubscriptionManager.INVALID_SIM_SLOT_INDEX
+                        && SubscriptionManager.getSlotIndex(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID)
+                                == SubscriptionManager.INVALID_SIM_SLOT_INDEX
+                        && SubscriptionManager.getPhoneId(SubscriptionManager.INVALID_SUBSCRIPTION_ID)
+                                == SubscriptionManager.INVALID_PHONE_INDEX
+                        && SubscriptionManager.getPhoneId(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID)
+                                == SubscriptionManager.INVALID_PHONE_INDEX
+                        && SubscriptionManager.getPhoneId(0) == SubscriptionManager.DEFAULT_PHONE_INDEX,
+                "absent subscription mapping invented a slot or lost Android's phone sentinel");
+        SubscriptionContractTest.verifyService(ISub.Stub.asInterface(created.get("isub")));
+        for (int slot = 0; slot < TelephonyManager.getDefault().getActiveModemCount(); slot++) {
+            require(SubscriptionManager.getSubscriptionId(slot) == SubscriptionManager.INVALID_SUBSCRIPTION_ID
+                            && subscriptions.getEnabledSubscriptionId(slot)
+                                    == SubscriptionManager.INVALID_SUBSCRIPTION_ID,
+                    "empty SIM slot reported an enabled subscription");
+        }
+        try {
+            subscriptions.getEnabledSubscriptionId(SubscriptionManager.INVALID_SIM_SLOT_INDEX);
+            throw new AssertionError("invalid SIM slot was accepted");
+        } catch (IllegalArgumentException expected) { }
         DevicePolicyManager policy = context.getSystemService(DevicePolicyManager.class);
         long begin = System.nanoTime();
         try {

@@ -21,12 +21,16 @@ import android.content.pm.PermissionGroupInfo;
 import android.content.pm.Signature;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
+import android.content.pm.VersionedPackage;
+
+import com.android.internal.pm.pkg.component.ParsedComponent;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -229,6 +233,30 @@ public final class PackageManagerService extends IPackageManager.Default {
             return BrowserPackageSupport.createPackageInfo(flags);
         }
         return null;
+    }
+
+    @Override
+    public PackageInfo getPackageInfoVersioned(VersionedPackage versionedPackage,
+            long flags, int userId) {
+        Objects.requireNonNull(versionedPackage);
+        // AOSP uses the version to choose between static shared-library providers.
+        // For ordinary packages (the single installed version Gesher publishes), it
+        // resolves the package name exactly as the String overload does. Returning
+        // Default's null makes ApplicationPackageManager throw NameNotFoundException
+        // even when an application asks about its own installed package.
+        return getPackageInfo(versionedPackage.getPackageName(), flags, userId);
+    }
+
+    @Override
+    public String[] currentToCanonicalPackageNames(String[] names) {
+        // There is no installed-package rename registry. Unknown and unchanged names
+        // retain their positions, as they do on Android; the answer is not null.
+        return names.clone();
+    }
+
+    @Override
+    public String[] canonicalToCurrentPackageNames(String[] names) {
+        return names.clone();
     }
 
     @Override
@@ -616,8 +644,60 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     @Override
-    public ParceledListSlice queryProperty(String propertyName, int componentType) {
-        // Manifest <property> tags are not indexed: none is found.
-        return new ParceledListSlice<>(java.util.Collections.emptyList());
+    public PackageManager.Property getPropertyAsUser(String propertyName,
+            String packageName, String className, int userId) {
+        Objects.requireNonNull(propertyName);
+        Objects.requireNonNull(packageName);
+        if (userId != 0 || isRemovalPending(packageName)) return null;
+        ApkPackage pkg = get(packageName);
+        if (pkg == null) return null;
+        if (className == null) return pkg.parsed.getProperties().get(propertyName);
+        // Match AOSP PackageProperty's component lookup order. A component property
+        // never falls back to a property of the same name on its application.
+        for (int type : new int[] {PackageManager.TYPE_ACTIVITY, PackageManager.TYPE_PROVIDER,
+                PackageManager.TYPE_RECEIVER, PackageManager.TYPE_SERVICE}) {
+            List<? extends ParsedComponent> components = propertyComponents(pkg, type);
+            // AOSP's property index retains repeated declarations; the last matching
+            // class wins within each component family.
+            for (int i = components.size() - 1; i >= 0; i--) {
+                ParsedComponent component = components.get(i);
+                if (className.equals(component.getName())) {
+                    PackageManager.Property property = component.getProperties().get(propertyName);
+                    if (property != null) return property;
+                }
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public ParceledListSlice<PackageManager.Property> queryProperty(String propertyName,
+            int componentType) {
+        Objects.requireNonNull(propertyName);
+        List<PackageManager.Property> result = new ArrayList<>();
+        if (android.os.UserHandle.getCallingUserId() != 0) return new ParceledListSlice<>(result);
+        for (ApkPackage pkg : mPackages.values()) {
+            if (isRemovalPending(pkg.packageName)) continue;
+            if (componentType == PackageManager.TYPE_APPLICATION) {
+                PackageManager.Property property = pkg.parsed.getProperties().get(propertyName);
+                if (property != null) result.add(property);
+            } else {
+                for (ParsedComponent component : propertyComponents(pkg, componentType)) {
+                    PackageManager.Property property = component.getProperties().get(propertyName);
+                    if (property != null) result.add(property);
+                }
+            }
+        }
+        return new ParceledListSlice<>(result);
+    }
+
+    private static List<? extends ParsedComponent> propertyComponents(ApkPackage pkg, int type) {
+        switch (type) {
+            case PackageManager.TYPE_ACTIVITY: return pkg.parsed.getActivities();
+            case PackageManager.TYPE_PROVIDER: return pkg.parsed.getProviders();
+            case PackageManager.TYPE_RECEIVER: return pkg.parsed.getReceivers();
+            case PackageManager.TYPE_SERVICE: return pkg.parsed.getServices();
+            default: return java.util.Collections.emptyList();
+        }
     }
 }
