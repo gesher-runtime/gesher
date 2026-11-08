@@ -153,7 +153,7 @@ static long Futex(volatile int*, int, int, const timespec*, volatile int*, int) 
 #undef syscall
 
 struct LinuxTimespec { int64_t tv_sec, tv_nsec; };
-static constexpr int kENOSYS = ENOSYS, kEAGAIN = EAGAIN, kETIMEDOUT = ETIMEDOUT;
+static constexpr int kENOSYS = ENOSYS, kEAGAIN = EAGAIN, kETIMEDOUT = ETIMEDOUT, kEINVAL = EINVAL;
 static DWORD MillisUntil(const LinuxTimespec*, bool) { return 0; }
 static bool DispatchTimerfdSyscall(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t*) { return false; }
 static BOOL WaitOnAddress(void*, void*, size_t, DWORD) { last_error = ERROR_TIMEOUT; return 0; }
