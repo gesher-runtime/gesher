@@ -125,6 +125,18 @@ context/public manager path with self/bulk query, typed missing-package,
 null/empty/duplicate, user and removal/reinstallation assertions. Its existing
 marker and all other package/cache/permission/property assertions remain.
 
+## Actual Windows result at `f0d0479f`
+
+Both `PackageVisibilityContractTest` and the complete parsed-APK
+`PackageQueryContractTest` pass on
+[Windows 2022](https://github.com/gesher-runtime/gesher/actions/runs/42460310568/job/128670338505)
+and [Windows 2025](https://github.com/gesher-runtime/gesher/actions/runs/42460310568/job/128670338549),
+source `f0d0479f65f1e33dc7f269f2f7fb670619f6fdce`. This executes the actual
+framework wrapper, native initialization and Binder/Parcel path described above.
+The focused Windows 2022 job passes all 112 outer checks; Windows 2025 still
+fails one separate split-installation source-file rewrite check. A successful
+visibility fixture is not presented as an overall success of that job.
+
 ## Explicit remaining limitations
 
 This predicate has no retained or transient interaction visibility graph,

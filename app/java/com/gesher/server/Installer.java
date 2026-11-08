@@ -698,17 +698,11 @@ final class Installer {
     }
 
     /**
-     * Deletes a tree. The system server may still have the package's APK open (the parser's
-     * assets, closed when collected): it tries again after a collection, and a code
-     * directory left behind is removed at the next start.
+     * Deletes a retired code tree. Parsing releases its private APK mappings before returning.
+     * A generation still held by an app remains eligible for the next startup's cleanup.
      */
     private static void delete(File f) {
-        for (int i = 0; i < 5 && !deleteTree(f); i++) {
-            System.gc();
-            System.runFinalization();
-            android.os.SystemClock.sleep(200);
-        }
-        if (f.exists()) SystemServer.log("cannot delete " + f + " now");
+        if (!deleteTree(f)) SystemServer.log("cannot delete " + f + " now");
     }
 
     private static boolean deleteTree(File f) {

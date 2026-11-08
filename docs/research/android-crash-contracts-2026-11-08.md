@@ -492,10 +492,54 @@ blue/white/red assertions are unchanged.
 The exact production selector and reader wrapper pass **133 host assertions**
 under ASan/UBSan, independently repeated. Published source fails 55 of the same
 133 assertions and its old addition triggers UBSan. The complete JNI translation
-unit compiles with the Windows CI toolchain. Actual repaired decoder/Bitmap
-behavior remains pending the next Windows full run. The
+unit compiles with the Windows CI toolchain. The completed
+[Windows 2025 full job at `d4773067`](https://github.com/gesher-runtime/gesher/actions/runs/42458476541/job/128664979465)
+now passes the real H.264 1.25-second blue-frame assertion and muxer retrieval
+checks. It exposes a separate raw VP8 WebM retrieval failure: the same requested
+position returns red while ordinary playback reaches blue. That failure remains
+under investigation at this checkpoint; the job is not an overall pass. The
 [media report](retriever-frame-followup-2026-11-08.md) records the reference
 sources, negative control and remaining 600-input/thumbnail bounds.
+
+## Runtime checkpoint at `f0d0479f`
+
+Run [42460310568](https://github.com/gesher-runtime/gesher/actions/runs/42460310568)
+executes source `f0d0479f65f1e33dc7f269f2f7fb670619f6fdce`. Its
+[Windows 2022 focused contracts](https://github.com/gesher-runtime/gesher/actions/runs/42460310568/job/128670338505)
+pass all **112 outer checks**, including the thirteen legacy launch paths,
+the protected caller fixture and actual two-app callback/provider helper,
+package queries and new package visibility, split installation, activity
+options, notification persistence, jobs, audio, URI permissions and file/temp
+contracts. The
+[Windows 2025 focused job](https://github.com/gesher-runtime/gesher/actions/runs/42460310568/job/128670338549)
+passes those checks except one split-installation failure: `Files.write` cannot
+truncate the mutable source `base.apk` after repeated parsing, returning
+`FileSystemException: Invalid argument`. This is a failed job, even though
+the preceding revision and the other Windows version passed that operation.
+
+The [package job](https://github.com/gesher-runtime/gesher/actions/runs/42460310568/job/128670338981)
+also passes, including installed system-server launch and its installation,
+upgrade and uninstall checks. Both real-app jobs
+([Windows 2022](https://github.com/gesher-runtime/gesher/actions/runs/42460310568/job/128671048622),
+[Windows 2025](https://github.com/gesher-runtime/gesher/actions/runs/42460310568/job/128671048632))
+pass installation, visible drawing, input response, closing and process-exit
+checks for all ten pinned APKs, as well as the association and shortcut launch
+checks. Those paths do not prove complete behavior within those applications.
+The full runtime jobs were still executing when this checkpoint was recorded;
+the repaired UTC native fixture and H.264 retrieval assertions are not counted
+as new Windows passes here.
+
+Pinned-source inspection isolates a deterministic ownership defect in both
+package-parser split loaders: they create private `ApkAssets`, but close only
+their `AssetManager` objects. The mapping can therefore remain open until
+collection. The native Windows create/truncate path can report a still-mapped
+file as `EINVAL`; its raw Win32 error was not captured in this invocation.
+The follow-up explicitly closes each loader's own APK resources after all its
+managers, including partial-load failures. The original failing `Files.write`
+assertion remains unchanged, and a separate mandatory loader fixture retains
+strong references while requiring closure and immediate source rewriting.
+See the [parser asset lifetime report](parser-assets-lifetime-2026-11-08.md)
+for the exact implementation, negative controls and runtime validation boundary.
 
 ## Public package visibility queries
 
@@ -521,7 +565,8 @@ the original wrapper NullPointerException. A new mandatory Windows fixture uses
 the real Binder/Parcel and framework resource path with constructed manifests.
 The existing parsed-APK public package fixture also tests the new API and now
 requires its unsigned APK's attempted system-addon promotion to be rejected
-without changing metadata. These new Windows checks remain pending. The
+without changing metadata. Both new Windows checks pass in the `f0d0479f`
+focused jobs linked above, including the real Binder and public-wrapper paths. The
 [visibility report](package-visibility-followup-2026-11-08.md) explicitly retains
 dynamic interaction/install-source/overlay visibility and filtering of other
 package query APIs as remaining work.

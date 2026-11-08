@@ -83,6 +83,16 @@ Check 'services: installed feature manifests, isolated split DEX/resources and f
   $splitPackageOut
 } @('SplitPackageContractTest all passed:')
 
+# Parser loaders own the APK mappings they create. Keep strong references alive
+# across close, then require real source-file truncation without collection.
+$parserAssetsOut = FixesRun ($dvmFixes + 'gesher.services.ParserAssetLifecycleTest' +
+  (NoDrive "$Dir/split-package-fixtures.zip")) 90
+$parserAssetsCode = $LASTEXITCODE
+Check 'framework: parser APK ownership, partial failure cleanup and immediate source rewrite' {
+  $global:LASTEXITCODE = $parserAssetsCode
+  $parserAssetsOut
+} @('ParserAssetLifecycleTest all passed:')
+
 # Channel/group policy is exercised through the real manager and Binder parcels,
 # including durable reload and publication/lifecycle races. The fixture owns a
 # disposable child data directory and needs the trusted service UID for its
