@@ -182,6 +182,14 @@ resource initialization, native retained-store format 2/3 reads, real store
 cleanup, listener dispatch outside the lock, and foreground/job lifecycle guards.
 It requires `GESHER_BINDER_UID=1000`, `android_runtime` and framework resources.
 Its success marker is `NotificationChannelGroupsTest all passed:`.
+A final source review corrected the fixture's bootstrap order: it now constructs
+the activity manager and publishes `Services.sLast` before granting the requested
+notification permission. This attaches the real caller identity and lets the
+permission-cache invalidation initialize the writable system shared-memory region.
+Previously the permission grant ran before that attachment and would throw
+`SecurityException` before the assertions. The production permission checks and
+the assertion count are unchanged; the corrected fixture compiled against the
+verified Android inputs, with Windows execution still a separate CI gate.
 `NotificationSecurityTest` and `NotificationRetirementTest` now register genuine
 named channels so their permission/publication assertions do not depend on the
 removed missing-channel fallback. `JobNotificationLifecycleTest` covers the

@@ -271,10 +271,10 @@ public final class NotificationChannelGroupsTest {
             pkg = (String)apkType.getField("packageName").get(owner);
             pm = pmType.getConstructor(Collection.class).newInstance(List.of(owner));
             atm = make(atmType, new Class<?>[]{pmType}, pm);
+            restart();
             Object policy = pmType.getMethod("permissions").invoke(pm);
             policy.getClass().getMethod("grantRuntimePermission", String.class, String.class, String.class, int.class)
                     .invoke(policy, pkg, "android.permission.POST_NOTIFICATIONS", "default:0", 0);
-            restart();
         }
         void restart() throws Exception {
             ToIntBiFunction<StatusBarNotification,Boolean> sink = (n, update) -> { shown.incrementAndGet(); return 0; };
