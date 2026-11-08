@@ -94,25 +94,26 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public boolean finishActivity(IBinder token, int code, Intent data, int finishTask) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        mAtm.requireActivityOwner(r);
+        // An already removed managed Activity is already finished. Keep the
+        // standalone driver fallback below for tokens without a managed record.
+        if (r != null && !mAtm.requireActivityOwner(r)) return true;
         // Activity.FINISH_TASK_WITH_ACTIVITY (finishAndRemoveTask, closing the window):
         // the activity and the rest of its task.
         if (r != null && finishTask == 2) {
-            mAtm.finish(r, "app-request", code, data);
-            mAtm.removeTask(r.taskId);
+            if (mAtm.finishFromApp(r, code, data)) mAtm.removeTask(r.taskId);
             return true;
         }
-        if (r != null) return mAtm.finish(r, "app-request", code, data);
+        if (r != null) return mAtm.finishFromApp(r, code, data) || mAtm.isActivityRetired(r);
         com.gesher.app.window.WindowSession session = com.gesher.app.window.WindowSession.get();
-        return session != null && session.finishLocalActivity(token);
+        return session == null || session.finishLocalActivity(token);
     }
 
     @Override
     public boolean navigateUpTo(IBinder token, Intent destIntent, String resolvedType,
             int resultCode, Intent resultData) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        mAtm.requireActivityOwner(r);
-        return r != null && mAtm.navigateUpTo(r, destIntent, resolvedType, resultCode,
+        return r != null && mAtm.requireActivityOwner(r)
+                && mAtm.navigateUpTo(r, destIntent, resolvedType, resultCode,
                 resultData);
     }
 

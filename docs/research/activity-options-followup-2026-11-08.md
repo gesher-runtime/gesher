@@ -140,6 +140,17 @@ original proxy/Parcel, parsed-manifest, public-overload and exact-result checks.
 The corrected entry point compiles with the actual Android core/framework and
 converts to DEX; its completed Windows result remains a separate CI gate.
 
+That corrected complete ART entry point subsequently **passed on both Windows
+2022 and Windows 2025** at published `7e62479c`:
+[job 128657747836](https://github.com/gesher-runtime/gesher/actions/runs/42456227216/job/128657747836)
+and [job 128657747923](https://github.com/gesher-runtime/gesher/actions/runs/42456227216/job/128657747923).
+Both logs report `PASS  services: real activity options, specific intent ordering
+and manifest filtering`. The runner requires exit zero and the final
+`ActivityOptionsContractTest all passed:` marker, so this establishes completion
+of the parsed-APK, generated AIDL/Parcel and actual public-manager checks in that
+fixture. The overall focused jobs still failed on other contracts; this result
+does not certify a complete Windows test run or all resolver behavior.
+
 ## Material remaining limits
 
 This does not establish complete Android package resolution parity. In particular:

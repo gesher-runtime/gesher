@@ -204,6 +204,61 @@ fixtures compile against the actual Android core and framework with Java 21,
 target 17, and convert to DEX; completion on Windows remains the next runtime
 gate.
 
+### Second focused Windows result and installed-code path repair
+
+Published `7e62479c` completed both focused Windows jobs:
+[Windows 2022](https://github.com/gesher-runtime/gesher/actions/runs/42456227216/job/128657747836)
+and [Windows 2025](https://github.com/gesher-runtime/gesher/actions/runs/42456227216/job/128657747923).
+The activity-options fixture passed completely on both platforms. The package
+query fixture passed context construction and its real native-cache assertions,
+then failed in `ApplicationPackageManager.checkPermission`: its isolated registry
+had not published `permissionmgr`. The split fixture reached its first actual
+staged cluster validation, where strict installed-code containment rejected the
+path before publication. These two package fixtures did not pass in that run.
+
+The query fixture now publishes the existing package manager's real
+`PermissionPolicy` through its generated `IPermissionManager` Binder and counts
+the public permission query's actual Binder transactions. Its service lookup uses
+the production `Services.ServiceManagerStandIn`, including the ordinary missing
+service result for the unimplemented legacy permission service. Pinned Android's
+[`PermissionManager`](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/permission/PermissionManager.java)
+constructor asks for that optional manager;
+[`SystemServiceRegistry`](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/app/SystemServiceRegistry.java)
+handles `ServiceNotFoundException` and leaves it absent.
+No default permission implementation or framework cache bypass is introduced.
+
+The installer path failure exposed a production inconsistency. The native
+`realpath`/`LinuxPath` contract removes the current drive's `/mnt/<drive>` prefix
+and normalizes actual disk spelling; the launcher deliberately uses an explicit
+drive for its temporary-directory default. `Installer` had constructed new code
+generations directly from the uncanonicalized `ANDROID_DATA` value, while
+`ApkPackage.parseCodeDirectory` requires the canonical device root and canonical
+generation path. The installer now constructs and scans its `app` root from the
+canonical configured device root. All newly recorded generation, registry and
+source-cache paths consequently use that same namespace. Existing registry
+paths retain their strict validation. An existing app root must be a real
+directory under `NOFOLLOW_LINKS`; staging uses an atomic directory creation
+instead of following an occupied generation. The parser's containment equality,
+generation naming and no-follow checks remain intact, with path-only diagnostics
+added to rejection errors.
+
+`SplitPackageContractTest` retains its real install, split DEX/resources, signed
+session and failed-update checks. It additionally checks the canonical returned
+generation, registry entry and reloaded code path, plus rejection without changes
+when a file occupies the app root. Its original `Files.createTempDirectory` call
+is unchanged, preserving the actual Windows path-alias regression witness.
+
+The maintained host runner `tools/test_installer_code_root.py` compiles the actual
+modified `Installer` and `ApkPackage`, without filesystem adapters. **12 checks
+passed** using a real root alias, app-root file and symlink, external directory,
+generation symlink, and unchanged target sentinel. Substituting only the published
+`7e62479c` installer fails with `Installer accepted a file as its APK root`.
+This host evidence does not execute APK parsing or prove Windows path conversion.
+The two repaired package fixtures and production sources compile against the real
+Android core/framework at Java target 17; fixture D8 conversion also passed.
+Their complete corrected Windows install/query results remain a subsequent CI
+gate, while the linked completed run supplies the preceding failures.
+
 ## Remaining scope
 
 The subsequently implemented `queryIntentActivityOptions` is described in the

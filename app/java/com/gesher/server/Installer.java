@@ -79,6 +79,20 @@ final class Installer {
         return new File(Device.dataDir(), REGISTRY);
     }
 
+    /** Build installed code paths in the same physical namespace the parser validates. */
+    private static File codeRoot() throws IOException {
+        // On Windows, /mnt/<current-drive>/x and /x name the same directory;
+        // canonicalization also expands host short names and preserves disk casing.
+        // Normalize the configured device root before adding installer-owned names,
+        // rather than relaxing the parser's canonical-path/symlink boundary.
+        File root = new File(new File(Device.dataDir()).getCanonicalFile(), "app");
+        if (Files.exists(root.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                && !Files.isDirectory(root.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            throw new SecurityException("Installed APK root is not a real directory: " + root);
+        }
+        return root;
+    }
+
     private static Map<String, Entry> readRegistry() throws IOException {
         Map<String, Entry> entries = new LinkedHashMap<>();
         File f = registry();
@@ -132,7 +146,7 @@ final class Installer {
         // them (a file still open), or one that did not finish.
         java.util.Set<String> kept = new java.util.HashSet<>();
         for (Entry e : entries.values()) kept.add(new File(e.codePath).getName());
-        File[] dirs = new File(Device.dataDir(), "app").listFiles();
+        File[] dirs = codeRoot().listFiles();
         if (dirs != null) {
             for (File d : dirs) {
                 if (d.isDirectory() && !kept.contains(d.getName())) {
@@ -364,14 +378,19 @@ final class Installer {
                     n = 2;
                 }
             }
-            File code = new File(Device.dataDir(), "app/" + pkg + "-" + n);
+            File appRoot = codeRoot();
+            Files.createDirectories(appRoot.toPath());
+            if (!Files.isDirectory(appRoot.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                throw new SecurityException("Installed APK root is not a real directory: " + appRoot);
+            }
+            File code = new File(appRoot, pkg + "-" + n);
             int occupied = 0;
             while (Files.exists(code.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
                     || PackageRemovalStorage.reserves(code.toPath())) {
                 if (++occupied > 10000 || n == Integer.MAX_VALUE) throw new IOException("No free package code generation");
-                code = new File(Device.dataDir(), "app/" + pkg + "-" + (++n));
+                code = new File(appRoot, pkg + "-" + (++n));
             }
-            code.mkdirs();
+            Files.createDirectory(code.toPath());
             File base = new File(code, "base.apk");
             copy(source, base);
             if (metadata.isFile()) copy(metadata, new File(code, "base.dm"));

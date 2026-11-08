@@ -23,6 +23,8 @@ import com.android.internal.pm.pkg.component.ParsedPermissionImpl;
 import com.android.internal.pm.pkg.component.ParsedProviderImpl;
 import com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -69,6 +71,34 @@ public final class ComponentCallerFixture {
     private static void set(Object target, String name, Object value) throws Exception {
         field(target.getClass(), name).set(target, value);
     }
+    private static Object get(Object target, String name) throws Exception {
+        return field(target.getClass(), name).get(target);
+    }
+    private static Class<?> type(String name) throws ClassNotFoundException {
+        return Class.forName("com.gesher.server." + name);
+    }
+    private static Object construct(String name, Class<?>[] parameters, Object... arguments) throws Exception {
+        var constructor = type(name).getDeclaredConstructor(parameters);
+        constructor.setAccessible(true);
+        try { return constructor.newInstance(arguments); }
+        catch (InvocationTargetException failure) { return rethrow(failure.getCause()); }
+    }
+    private static Object invoke(Class<?> owner, Object target, String name,
+            Class<?>[] parameters, Object... arguments) throws Exception {
+        Method method = owner.getDeclaredMethod(name, parameters); method.setAccessible(true);
+        try { return method.invoke(target, arguments); }
+        catch (InvocationTargetException failure) { return rethrow(failure.getCause()); }
+    }
+    private static Object rethrow(Throwable failure) throws Exception {
+        if (failure instanceof Error error) throw error;
+        if (failure instanceof Exception exception) throw exception;
+        throw new AssertionError(failure);
+    }
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Object state(String name) throws Exception {
+        return Enum.valueOf((Class)type("ActivityTaskManagerService$State"), name);
+    }
+    private static IBinder activityToken(Object activity) throws Exception { return (IBinder)get(activity, "token"); }
     private static IBinder token() {
         if (binder) return new Binder();
         return (IBinder)Proxy.newProxyInstance(IBinder.class.getClassLoader(), new Class<?>[]{IBinder.class},
@@ -107,7 +137,8 @@ public final class ComponentCallerFixture {
         ApkPackage code = (ApkPackage)UNSAFE.allocateInstance(ApkPackage.class);
         set(code, "packageName", name); set(code, "parsed", parsed); set(code, "mUid", uid);
         set(code, "apkPath", "/fixture/" + name + "/base.apk");
-        set(code, "mDataDir", "/fixture/" + name + "/data"); set(code, "sharedLibraries", SharedLibraryGraph.EMPTY);
+        set(code, "mDataDir", "/fixture/" + name + "/data");
+        set(code, "sharedLibraries", field(SharedLibraryGraph.class, "EMPTY").get(null));
         return code;
     }
 
@@ -123,7 +154,7 @@ public final class ComponentCallerFixture {
             ClipData clip = ClipData.newRawUri("URI", clipUri);
             clip.addItem(new ClipData.Item(new Intent().setData(nestedUri)));
             clip.addItem(new ClipData.Item(PRIVATE)); delivered.setClipData(clip);
-            ActivityTaskManagerService.ActivityRecord activity = h.record(CLIENT, h.snapshot(READER, delivered, false));
+            Object activity = h.record(CLIENT, h.snapshot(READER, delivered, false));
             ComponentCaller caller = h.caller(activity);
             check(h.permission(OWNER, caller, ITEM, READ) == PackageManager.PERMISSION_GRANTED, "Sender read permission lost");
             check(h.permission(OWNER, caller, ITEM, WRITE) == PackageManager.PERMISSION_DENIED, "Sender write permission invented");
@@ -153,7 +184,7 @@ public final class ComponentCallerFixture {
             h.as(OWNER, () -> expect(IllegalArgumentException.class, () -> caller.checkContentUriPermission(ABSENT, READ), "Mutated Intent enlarged snapshot"));
 
             ComponentCaller unknownActivity = new ComponentCaller(token(), token());
-            ComponentCaller unknownCaller = new ComponentCaller(activity.token, token());
+            ComponentCaller unknownCaller = new ComponentCaller(activityToken(activity), token());
             h.as(CLIENT, () -> {
                 expect(SecurityException.class, () -> caller.checkContentUriPermission(ITEM, READ), "Querier current permission required");
                 expect(SecurityException.class, () -> unknownActivity.checkContentUriPermission(ITEM, READ), "Permission check before activity lookup");
@@ -166,10 +197,10 @@ public final class ComponentCallerFixture {
             });
             check(h.permission(OWNER, unknownActivity, ITEM, READ) == PackageManager.PERMISSION_DENIED, "Unknown activity granted");
             check(h.permission(OWNER, unknownCaller, ITEM, READ) == PackageManager.PERMISSION_DENIED, "Unknown caller granted");
-            check(h.permission(OWNER, new ComponentCaller(activity.token, null), ITEM, READ) == PackageManager.PERMISSION_DENIED, "Null caller reused initial identity");
+            check(h.permission(OWNER, new ComponentCaller(activityToken(activity), null), ITEM, READ) == PackageManager.PERMISSION_DENIED, "Null caller reused initial identity");
             long identity = Binder.clearCallingIdentity();
             try {
-                Binder.restoreCallingIdentity((-1L << 32) | h.processes.get(CLIENT).pid);
+                Binder.restoreCallingIdentity((-1L << 32) | (int)get(h.processes.get(CLIENT), "pid"));
                 expect(IllegalArgumentException.class, () -> unknownActivity.checkContentUriPermission(ITEM, READ),
                         "Negative querying UID before activity lookup");
                 expect(IllegalArgumentException.class, () -> caller.checkContentUriPermission(ITEM, READ),
@@ -207,10 +238,10 @@ public final class ComponentCallerFixture {
             check(h.permission(OWNER, after, PRIVATE, WRITE) == PackageManager.PERMISSION_DENIED, "Later write grant upgraded old read-only snapshot");
             check(!before.equals(after), "Different delivery identities collapsed");
 
-            ActivityCallerState.Snapshot serverSnapshot;
+            Object serverSnapshot;
             synchronized (h.pm) {
-                serverSnapshot = ActivityCallerState.capture(new ActivityCallerState.Origin(null,
-                        android.os.Process.SYSTEM_UID, "android", true, false), new Intent().setData(ITEM), h.grants);
+                serverSnapshot = h.capture(null, android.os.Process.SYSTEM_UID, "android", true,
+                        false, new Intent().setData(ITEM));
             }
             ComponentCaller server = h.caller(h.record(CLIENT, serverSnapshot));
             check(h.permission(OWNER, server, ITEM, READ | WRITE) == PackageManager.PERMISSION_GRANTED,
@@ -235,7 +266,7 @@ public final class ComponentCallerFixture {
             ComponentCaller shared = h.caller(h.record(CLIENT, h.snapshot(READER, new Intent().setData(ITEM), true)));
             h.as(CLIENT, () -> check(shared.getUid() == h.packages.get(READER).uid() && READER.equals(shared.getPackage()),
                     "Explicit shared identity unavailable"));
-            int oldUid = h.processes.get(READER).uid;
+            int oldUid = (int)get(h.processes.get(READER), "uid");
             ApkPackage replacement = code(READER, 12402, READ_PERMISSION);
             Map<String, ApkPackage> replaced = new LinkedHashMap<>(h.packages); replaced.put(READER, replacement);
             set(h.pm, "mPackages", replaced); set(h.processes.get(READER), "uid", replacement.uid());
@@ -252,13 +283,15 @@ public final class ComponentCallerFixture {
             set(h.pm, "mPackages", new LinkedHashMap<>(h.packages));
             check(h.permission(OWNER, shared, ITEM, READ) == PackageManager.PERMISSION_GRANTED,
                     "Original recipient generation control lost its snapshot");
-            ActivityTaskManagerService.ActivityRecord another = h.record(CLIENT, h.snapshot(OWNER, new Intent().setData(ITEM), true));
-            check(h.permission(OWNER, new ComponentCaller(another.token, activity.initialCallerInfoAccessToken), ITEM, READ)
+            Object another = h.record(CLIENT, h.snapshot(OWNER, new Intent().setData(ITEM), true));
+            check(h.permission(OWNER, new ComponentCaller(activityToken(another), (IBinder)get(activity, "initialCallerInfoAccessToken")), ITEM, READ)
                     == PackageManager.PERMISSION_DENIED, "Caller token escaped its activity");
-            h.activities.remove(activity); activity.state = ActivityTaskManagerService.State.DESTROYED;
+            h.activities.remove(activity); set(activity, "state", state("DESTROYED"));
             check(h.permission(OWNER, caller, ITEM, READ) == PackageManager.PERMISSION_DENIED, "Destroyed activity retained usable token");
             h.as(READER, () -> check(caller.getUid() == android.os.Process.INVALID_UID, "Destroyed activity retained identity"));
-            check(!h.atm.finish(activity, "retired-source-test", 0, null), "Retired source published a new finish result");
+            check(!(boolean)invoke(ActivityTaskManagerService.class, h.atm, "finish",
+                    new Class<?>[]{type("ActivityTaskManagerService$ActivityRecord"), String.class, int.class, Intent.class},
+                    activity, "retired-source-test", 0, null), "Retired source published a new finish result");
 
             ActivityOptions creation = ActivityOptions.makeBasic().setShareIdentityEnabled(true);
             for (Bundle sender : List.of(Bundle.EMPTY, ActivityOptions.makeBasic().toBundle(), falseIdentityBundle())) {
@@ -269,6 +302,8 @@ public final class ComponentCallerFixture {
             }
             Bundle merged = ActivityOptions.makeBasic().toBundle(); merged.putAll(creation.toBundle());
             check(ActivityOptions.fromBundle(merged).isShareIdentityEnabled(), "Sender shareIdentity true lost in normalized merge");
+            retirementContracts();
+            bootstrapContracts();
             return checks;
         } finally { ActivityClient.setActivityClientController(null); }
     }
@@ -277,15 +312,109 @@ public final class ComponentCallerFixture {
         Bundle result = new Bundle(); result.putBoolean("android:activity.shareIdentity", false); return result;
     }
 
+    private static void retirementContracts() throws Exception {
+        for (String retirement : List.of("record", "process", "package")) {
+            for (String operation : List.of("finish", "task", "navigate")) {
+                Harness h = new Harness();
+                Object recipient = h.record(OWNER, h.snapshot(READER, new Intent().setData(ITEM), false));
+                Object source = h.record(CLIENT, h.snapshot(READER, new Intent().setData(ITEM), false));
+                set(source, "resultTo", recipient);
+                // A scheduling boundary only: retire after forToken/the first
+                // liveness check, immediately before real CallerIdentity runs.
+                // No policy method or authentication result is substituted.
+                set(h.atm, "mBeforeActivityOwnerAuthentication", (Runnable)() -> {
+                    try { h.retire(source, retirement); }
+                    catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+                });
+                h.as(CLIENT, () -> {
+                    if (operation.equals("navigate")) {
+                        check(!h.controller.navigateUpTo(activityToken(source), new Intent().setClassName(OWNER,
+                                OWNER + ".Activity"), null, -1, new Intent().setData(ITEM)),
+                                retirement + " retirement must decline navigation");
+                    } else {
+                        check(h.controller.finishActivity(activityToken(source), -1, new Intent().setData(ITEM),
+                                operation.equals("task") ? 2 : 0), retirement + " retirement must already be finished");
+                    }
+                });
+                check(((List<?>)get(recipient, "pendingResults")).isEmpty(), "Retirement published result data");
+                check(!(boolean)get(source, "finishing"), "Retirement started a fresh finish mutation");
+            }
+        }
+        Harness h = new Harness();
+        Object source = h.record(CLIENT, h.snapshot(READER, new Intent().setData(ITEM), false));
+        h.as(OWNER, () -> {
+            expect(SecurityException.class, () -> h.controller.finishActivity(activityToken(source), 0, null, 0),
+                    "Live wrong-owner finish must remain unauthorized");
+            expect(SecurityException.class, () -> h.controller.navigateUpTo(activityToken(source),
+                    new Intent().setClassName(OWNER, OWNER + ".Activity"), null, 0, null),
+                    "Live wrong-owner navigation must remain unauthorized");
+        });
+        check(!(boolean)get(source, "finishing"), "Wrong owner mutated the live activity");
+        set(source, "finishing", true);
+        h.as(CLIENT, () -> check(h.controller.finishActivity(activityToken(source), 0, null, 0),
+                "Live owner could not finish an already-finishing activity"));
+        set(source, "finishing", false);
+        h.retire(source, "package");
+        check(!(boolean)invoke(ActivityTaskManagerService.class, h.atm, "finishFromApp",
+                new Class<?>[]{type("ActivityTaskManagerService$ActivityRecord"), int.class, Intent.class},
+                source, 0, null), "Package retirement after authorization reached finish mutation");
+        check(!(boolean)invoke(ActivityTaskManagerService.class, h.atm, "navigateUpTo",
+                new Class<?>[]{type("ActivityTaskManagerService$ActivityRecord"), Intent.class, String.class, int.class, Intent.class},
+                source, new Intent().setClassName(OWNER, OWNER + ".Activity"), null, 0, null),
+                "Package retirement after authorization reached navigation mutation");
+        check(!(boolean)get(source, "finishing"), "Late package retirement mutated the source");
+    }
+
+    private static void bootstrapContracts() throws Exception {
+        Harness h = new Harness();
+        Object app = UNSAFE.allocateInstance(type("ActivityTaskManagerService$ProcessRecord"));
+        IApplicationThread thread = new AppThread();
+        int pid = 873001, uid = h.packages.get(CLIENT).uid();
+        set(app, "pid", pid); set(app, "uid", uid); set(app, "thread", thread);
+        @SuppressWarnings("unchecked") List<Object> attached = (List<Object>)get(h.atm, "mProcesses");
+        attached.add(app);
+        check(h.bootstrap(app, thread, pid, uid), "Exact live unassigned process not eligible for legacy enrollment");
+        check(!h.bootstrap(null, thread, pid, uid), "Missing process admitted");
+        check(!h.bootstrap(app, null, pid, uid), "Missing application thread admitted");
+        check(!h.bootstrap(app, thread, pid + 1, uid), "Wrong bootstrap PID admitted");
+        check(!h.bootstrap(app, thread, pid, uid + 1), "Wrong bootstrap UID admitted");
+        check(!h.bootstrap(app, new AppThread(), pid, uid), "Different bootstrap Binder thread admitted");
+        attached.remove(app);
+        check(!h.bootstrap(app, thread, pid, uid), "Retired bootstrap process admitted");
+        attached.add(app);
+        for (String name : List.of("packageName", "processName")) {
+            set(app, name, CLIENT);
+            check(!h.bootstrap(app, thread, pid, uid), "Assigned " + name + " admitted for enrollment");
+            set(app, name, null);
+        }
+        for (String name : List.of("exiting", "spawned", "ready")) {
+            set(app, name, true);
+            check(!h.bootstrap(app, thread, pid, uid), name + " process admitted for enrollment");
+            set(app, name, false);
+        }
+        set(app, "startSeq", 1L);
+        check(!h.bootstrap(app, thread, pid, uid), "Existing start generation admitted for enrollment");
+        set(app, "startSeq", 0L);
+        set(app, "thread", null);
+        check(!h.bootstrap(app, thread, pid, uid), "Process without retained thread admitted");
+        set(app, "thread", thread);
+        Class<?> starterType = type("ActivityTaskManagerService$ProcessStarter");
+        set(h.atm, "mStarter", Proxy.newProxyInstance(starterType.getClassLoader(), new Class<?>[]{starterType},
+                (self, method, arguments) -> { throw new AssertionError("Bootstrap predicate must not launch a process"); }));
+        check(!h.bootstrap(app, thread, pid, uid), "Spawner-owned device accepted legacy enrollment");
+        set(h.atm, "mStarter", null);
+        check(h.bootstrap(app, thread, pid, uid), "Restored exact unassigned control rejected");
+    }
+
     private static final class Harness {
         final Map<String, ApkPackage> packages = new LinkedHashMap<>();
-        final Map<String, ActivityTaskManagerService.ProcessRecord> processes = new LinkedHashMap<>();
+        final Map<String, Object> processes = new LinkedHashMap<>();
         final PackageManagerService pm;
         final ActivityTaskManagerService atm;
         final ActivityManagerService am;
-        final UriGrants grants;
+        final Object grants;
         final IActivityClientController controller;
-        final List<ActivityTaskManagerService.ActivityRecord> activities = new ArrayList<>();
+        final List<Object> activities = new ArrayList<>();
 
         Harness() throws Exception {
             packages.put(OWNER, code(OWNER, 12301));
@@ -297,26 +426,29 @@ public final class ComponentCallerFixture {
             // projection, grants, permissions and controller stay real on both runtimes.
             pm = (PackageManagerService)UNSAFE.allocateInstance(PackageManagerService.class);
             set(pm, "mPackages", new LinkedHashMap<>(packages)); set(pm, "mRemoving", new LinkedHashMap<>());
-            set(pm, "mPackageRemoval", new ArrayList<>()); set(pm, "mPermissions", new PermissionPolicy(pm));
+            set(pm, "mPackageRemoval", new ArrayList<>());
+            set(pm, "mPermissions", construct("PermissionPolicy", new Class<?>[]{PackageManagerService.class}, pm));
             atm = (ActivityTaskManagerService)UNSAFE.allocateInstance(ActivityTaskManagerService.class);
             set(atm, "mPm", pm); set(atm, "mActivities", activities);
-            List<ActivityTaskManagerService.ProcessRecord> list = new ArrayList<>(); set(atm, "mProcesses", list);
+            List<Object> list = new ArrayList<>(); set(atm, "mProcesses", list);
             int pid = 872001;
             for (ApkPackage code : packages.values()) {
-                ActivityTaskManagerService.ProcessRecord process =
-                        (ActivityTaskManagerService.ProcessRecord)UNSAFE.allocateInstance(ActivityTaskManagerService.ProcessRecord.class);
+                Object process = UNSAFE.allocateInstance(type("ActivityTaskManagerService$ProcessRecord"));
                 set(process, "pid", pid++); set(process, "uid", code.uid());
                 set(process, "thread", new AppThread()); set(process, "activities", new ArrayList<>());
-                process.packageName = code.packageName; process.processName = code.packageName; process.ready = true;
+                set(process, "packageName", code.packageName); set(process, "processName", code.packageName);
+                set(process, "ready", true);
                 processes.put(code.packageName, process); list.add(process);
             }
-            grants = new UriGrants(pm, atm);
-            ContentProviders providers = (ContentProviders)UNSAFE.allocateInstance(ContentProviders.class);
+            grants = construct("UriGrants", new Class<?>[]{PackageManagerService.class, ActivityTaskManagerService.class}, pm, atm);
+            Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
             set(providers, "mPm", pm); set(providers, "mUriGrants", grants);
             am = (ActivityManagerService)UNSAFE.allocateInstance(ActivityManagerService.class);
             set(am, "mPm", pm); set(am, "mAtm", atm); set(am, "mProviders", providers);
-            set(am, "mCallers", new CallerIdentity(pm, atm)); atm.setActivityManager(am);
-            ActivityClientController implementation = new ActivityClientController(atm);
+            set(am, "mCallers", new CallerIdentity(pm, atm));
+            invoke(ActivityTaskManagerService.class, atm, "setActivityManager", new Class<?>[]{ActivityManagerService.class}, am);
+            ActivityClientController implementation = (ActivityClientController)construct("ActivityClientController",
+                    new Class<?>[]{ActivityTaskManagerService.class}, atm);
             if (binder) {
                 StandIn.setStrict(true);
                 IBinder target = StandIn.of(IActivityClientController.class, implementation).asBinder();
@@ -329,48 +461,83 @@ public final class ComponentCallerFixture {
             ActivityClient.setActivityClientController(controller);
         }
         void as(String name, Operation action) throws Exception {
-            ActivityTaskManagerService.ProcessRecord process = processes.get(name);
+            Object process = processes.get(name);
+            int pid = (int)get(process, "pid"), uid = (int)get(process, "uid");
             long old = Binder.clearCallingIdentity();
             try {
-                Binder.restoreCallingIdentity(((long)process.uid << 32) | process.pid);
-                check(Binder.getCallingPid() == process.pid && Binder.getCallingUid() == process.uid,
+                Binder.restoreCallingIdentity(((long)uid << 32) | pid);
+                check(Binder.getCallingPid() == pid && Binder.getCallingUid() == uid,
                         "Controlled caller identity was not installed");
                 action.run();
             } finally { Binder.restoreCallingIdentity(old); }
         }
-        ActivityCallerState.Snapshot snapshot(String source, Intent intent, boolean share) {
+        Object snapshot(String source, Intent intent, boolean share) throws Exception {
             ApkPackage code = packages.get(source);
             synchronized (pm) {
-                return ActivityCallerState.capture(new ActivityCallerState.Origin(code, code.uid(), source,
-                        false, share), intent, grants);
+                return capture(code, code.uid(), source, false, share, intent);
             }
         }
-        ActivityTaskManagerService.ActivityRecord record(String owner, ActivityCallerState.Snapshot snapshot)
-                throws Exception {
-            ActivityTaskManagerService.ActivityRecord record =
-                    (ActivityTaskManagerService.ActivityRecord)UNSAFE.allocateInstance(ActivityTaskManagerService.ActivityRecord.class);
+        Object capture(ApkPackage code, int uid, String source, boolean system, boolean share, Intent intent) throws Exception {
+            Object origin = construct("ActivityCallerState$Origin", new Class<?>[]{ApkPackage.class,
+                    int.class, String.class, boolean.class, boolean.class}, code, uid, source, system, share);
+            return invoke(type("ActivityCallerState"), null, "capture", new Class<?>[]{type("ActivityCallerState$Origin"),
+                    Intent.class, type("UriGrants")}, origin, intent, grants);
+        }
+        Object record(String owner, Object snapshot) throws Exception {
+            Object record = UNSAFE.allocateInstance(type("ActivityTaskManagerService$ActivityRecord"));
             set(record, "token", token());
-            set(record, "initialCallerInfoAccessToken", token()); set(record, "callerState", new ActivityCallerState());
+            set(record, "initialCallerInfoAccessToken", token());
+            Object callerState = construct("ActivityCallerState", new Class<?>[0]);
+            set(record, "callerState", callerState);
             set(record, "targetCode", packages.get(owner));
             ActivityInfo info = new ActivityInfo(); info.packageName = owner; info.name = owner + ".Activity";
             info.applicationInfo = packages.get(owner).applicationInfo(0);
             set(record, "info", info); set(record, "pendingResults", new ArrayList<>());
-            record.app = processes.get(owner); record.state = ActivityTaskManagerService.State.RESUMED;
-            record.callerState.add(record.initialCallerInfoAccessToken, snapshot);
-            record.app.activities.add(record); activities.add(record);
+            Object app = processes.get(owner);
+            set(record, "app", app); set(record, "state", state("RESUMED"));
+            invoke(type("ActivityCallerState"), callerState, "add",
+                    new Class<?>[]{IBinder.class, type("ActivityCallerState$Snapshot")},
+                    get(record, "initialCallerInfoAccessToken"), snapshot);
+            ((List<Object>)get(app, "activities")).add(record); activities.add(record);
             return record;
         }
-        ComponentCaller caller(ActivityTaskManagerService.ActivityRecord record) {
-            return new ComponentCaller(record.token, record.initialCallerInfoAccessToken);
+        ComponentCaller caller(Object record) throws Exception {
+            return new ComponentCaller(activityToken(record), (IBinder)get(record, "initialCallerInfoAccessToken"));
         }
         int permission(String query, ComponentCaller caller, Uri uri, int modes) throws Exception {
             int[] answer = {-999}; as(query, () -> answer[0] = caller.checkContentUriPermission(uri, modes)); return answer[0];
         }
         void grant(String target, Uri uri, int modes) throws Exception {
-            as(OWNER, () -> am.grantUriPermission(processes.get(OWNER).thread, target, uri, modes, 0));
+            as(OWNER, () -> am.grantUriPermission((IApplicationThread)get(processes.get(OWNER), "thread"), target, uri, modes, 0));
         }
         void revoke(String target, Uri uri, int modes) throws Exception {
-            as(OWNER, () -> am.revokeUriPermission(processes.get(OWNER).thread, target, uri, modes, 0));
+            as(OWNER, () -> am.revokeUriPermission((IApplicationThread)get(processes.get(OWNER), "thread"), target, uri, modes, 0));
+        }
+        boolean bootstrap(Object app, IApplicationThread thread, int pid, int uid) throws Exception {
+            return (boolean)invoke(ActivityTaskManagerService.class, atm, "legacyBootstrapProcess",
+                    new Class<?>[]{type("ActivityTaskManagerService$ProcessRecord"), IApplicationThread.class,
+                            int.class, int.class}, app, thread, pid, uid);
+        }
+        @SuppressWarnings("unchecked")
+        void retire(Object record, String kind) throws ReflectiveOperationException {
+            try {
+                if (kind.equals("package")) {
+                    Map<String, ApkPackage> replacement = new LinkedHashMap<>(packages);
+                    replacement.put(CLIENT, code(CLIENT, 12604));
+                    set(pm, "mPackages", replacement);
+                    return;
+                }
+                synchronized (atm) {
+                    Object process = get(record, "app");
+                    if (kind.equals("process")) {
+                        ((List<Object>)get(atm, "mProcesses")).remove(process);
+                        for (Object activity : new ArrayList<>((List<Object>)get(process, "activities"))) {
+                            activities.remove(activity); set(activity, "state", state("DESTROYED"));
+                        }
+                    } else { activities.remove(record); set(record, "state", state("DESTROYED")); }
+                }
+            } catch (ReflectiveOperationException failure) { throw failure; }
+            catch (Exception failure) { throw new AssertionError("Cannot arrange retirement boundary", failure); }
         }
     }
 }

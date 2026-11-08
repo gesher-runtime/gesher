@@ -16,6 +16,7 @@ def main() -> None:
     for name in ("framework-classes", "core-classes", "app-classes", "apksig", "java-home"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--controller-source-ref", help="Use a prior controller as a negative control")
+    parser.add_argument("--fixture-source-ref", help="Use a prior fixture as a runtime-package negative control")
     args = parser.parse_args()
     cc = shutil.which("cc")
     if not cc:
@@ -39,8 +40,14 @@ def main() -> None:
                                      cwd=ROOT, check=True, capture_output=True)
                 source.write_bytes(old.stdout)
             sources.append(str(source))
-        sources += [str(ROOT / "tests/dex-services/com/gesher/server/ComponentCallerFixture.java"),
-                    str(ROOT / "tests/component-caller/ComponentCallerHost.java")]
+        fixture_relative = "tests/dex-services/com/gesher/server/ComponentCallerFixture.java"
+        fixture = ROOT / fixture_relative
+        if args.fixture_source_ref:
+            fixture = work / "ComponentCallerFixture.java"
+            old = subprocess.run(["git", "show", args.fixture_source_ref + ":" + fixture_relative],
+                                 cwd=ROOT, check=True, capture_output=True)
+            fixture.write_bytes(old.stdout)
+        sources += [str(fixture), str(ROOT / "tests/component-caller/ComponentCallerHost.java")]
         subprocess.run([str(args.java_home / "bin/javac"), "-J-Djava.io.tmpdir=" + str(work),
                         "-encoding", "UTF-8", "-cp", classpath, "-d", str(classes), *sources], check=True)
         env = os.environ.copy(); env["ANDROID_DATA"] = str(work / "data"); env["GESHER_MICROG_SPOOF"] = "1"

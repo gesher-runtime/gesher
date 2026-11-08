@@ -220,6 +220,13 @@ public final class SplitPackageContractTest {
         Method install = method(installerType, "install", String.class);
         String[] result = (String[]) install.invoke(installer, archive.getPath());
         require("installed".equals(result[1]), "Valid cluster was not installed");
+        File installedCode = new File(result[2]);
+        require(installedCode.equals(installedCode.getCanonicalFile())
+                && new File(data.getCanonicalFile(), "app").equals(installedCode.getParentFile()),
+                "Installer retained a host path alias instead of canonical installed code: " + installedCode);
+        require(Files.readAllLines(new File(data, "system/packages.list").toPath()).stream()
+                .anyMatch(line -> line.startsWith(PACKAGE + "\t" + installedCode.getPath() + "\t")),
+                "Registry lost the canonical installed generation");
         ApplicationInfo ai = metadata(pm.get(PACKAGE));
         loadFeature(ai);
         Class<?> notifications = Class.forName("com.gesher.server.NotificationManagerService");
@@ -245,6 +252,8 @@ public final class SplitPackageContractTest {
         metadata(pm.get(PACKAGE));
         List<ApkPackage> reloaded = (List<ApkPackage>) method(installerType, "loadInstalled").invoke(null);
         require(reloaded.size() == 1, "Cluster vanished on registry reload");
+        require(new File(reloaded.get(0).apkPath).getParentFile().equals(installedCode),
+                "Registry reload changed the canonical installed generation");
         loadFeature(metadata(reloaded.get(0)));
         File external = new File(data, "external"); external.mkdirs();
         File externalBase = new File(external, "base.apk"); Files.write(externalBase.toPath(), inputs.get("base"));
@@ -259,7 +268,31 @@ public final class SplitPackageContractTest {
         }
         invalidUpdates(data, inputs, good, pm, installer, install);
         cachedSourceUpdates(data, inputs);
+        codeRootBoundary(data, installerType);
         System.out.println("SplitPackageContractTest all passed: " + checks + " checks");
+    }
+
+    private static void codeRootBoundary(File parent, Class<?> installerType) throws Exception {
+        String original = System.getenv("ANDROID_DATA");
+        File invalid = new File(parent, "file-as-app-root");
+        Files.createDirectories(invalid.toPath());
+        File appRoot = new File(invalid, "app");
+        byte[] marker = new byte[]{11, 37, 59};
+        Files.write(appRoot.toPath(), marker);
+        try {
+            android.system.Os.setenv("ANDROID_DATA", invalid.getPath(), true);
+            try {
+                method(installerType, "loadInstalled").invoke(null);
+                throw new AssertionError("Registry scan accepted a file as its APK root");
+            } catch (InvocationTargetException expected) {
+                require(expected.getCause() instanceof SecurityException,
+                        "Invalid APK root failed for the wrong reason: " + expected.getCause());
+            }
+            require(Arrays.equals(marker, Files.readAllBytes(appRoot.toPath())),
+                    "Rejected APK root was modified");
+        } finally {
+            android.system.Os.setenv("ANDROID_DATA", original, true);
+        }
     }
 
     private static String[] codeGenerations(File data) {

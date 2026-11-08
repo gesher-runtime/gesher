@@ -1,0 +1,317 @@
+// Production AOSP-reader adapter and retriever selection loop, with controlled
+// extractor/decoder boundaries. No Windows codec or JNI/Bitmap execution claim.
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "compat/media/video/video_decoder.h"
+
+struct AMediaFormat {
+  bool has_time = true, has_target = false, has_sync = true, has_valid_samples = false;
+  int64_t time = 0, target = -1;
+  int32_t sync = 0, valid_samples = -1;
+};
+bool AMediaFormat_getInt64(AMediaFormat* format, const char* key, int64_t* out) {
+  if (std::strcmp(key, "timeUs") == 0 && format->has_time) { *out = format->time; return true; }
+  if (std::strcmp(key, "target-time") == 0 && format->has_target) {
+    *out = format->target; return true;
+  }
+  return false;
+}
+bool AMediaFormat_getInt32(AMediaFormat* format, const char* key, int32_t* out) {
+  if (std::strcmp(key, "is-sync-frame") == 0 && format->has_sync) {
+    *out = format->sync; return true;
+  }
+  if (std::strcmp(key, "valid-samples") == 0 && format->has_valid_samples) {
+    *out = format->valid_samples; return true;
+  }
+  return false;
+}
+using media_status_t = int;
+constexpr int AMEDIA_OK = 0;
+constexpr int AMEDIA_ERROR_END_OF_STREAM = -10004;
+struct CMediaBuffer {
+  void* handle;
+  void* (*data)(void*);
+  size_t (*range_offset)(void*);
+  size_t (*range_length)(void*);
+  AMediaFormat* (*meta_data)(void*);
+  void (*release)(void*);
+};
+struct CMediaTrack {
+  void* data;
+  int (*start)(void*, void*);
+  int (*stop)(void*);
+  void (*free)(void*);
+  int (*read)(void*, CMediaBuffer**, uint32_t, int64_t);
+};
+namespace android {
+struct CMediaTrackReadOptions { static constexpr uint32_t SEEK = 8; };
+struct MediaBufferGroup { void* wrap() { return this; } };
+}  // namespace android
+
+namespace gesher::media {
+@TRACK_READER@
+@RETRIEVER_SELECTION@
+}  // namespace gesher::media
+
+namespace {
+using namespace gesher::media;
+int checks = 0, failures = 0;
+void Check(bool value, const std::string& message) {
+  ++checks;
+  if (!value) { ++failures; std::cerr << "FAIL " << message << '\n'; }
+}
+
+struct Input {
+  int64_t time;
+  int64_t target = -1;
+  bool has_target = false;
+  bool has_metadata = true;
+  bool sync = false;
+  uint8_t pixel = 0;
+};
+struct Track {
+  std::vector<Input> inputs;
+  size_t next = 0;
+  int starts = 0, stops = 0, frees = 0, reads = 0, releases = 0;
+  int fail_read = -1;
+  bool start_ok = true;
+  uint32_t first_options = 0;
+  int64_t first_seek = -1;
+  AMediaFormat metadata;
+  bool has_metadata = true;
+  uint8_t payload[4] = {0xaa, 0xbb, 0, 0xcc};
+  CMediaBuffer buffer;
+
+  Track(std::vector<Input> data) : inputs(std::move(data)) {
+    buffer = {this,
+      [](void* p) -> void* { return static_cast<Track*>(p)->payload; },
+      [](void*) -> size_t { return 2; }, [](void*) -> size_t { return 1; },
+      [](void* p) -> AMediaFormat* {
+        auto* t = static_cast<Track*>(p); return t->has_metadata ? &t->metadata : nullptr;
+      },
+      [](void* p) { ++static_cast<Track*>(p)->releases; }};
+  }
+  CMediaTrack* Open() {
+    auto* track = static_cast<CMediaTrack*>(std::malloc(sizeof(CMediaTrack)));
+    if (track == nullptr) std::abort();
+    *track = {this,
+      [](void* p, void*) { auto* t = static_cast<Track*>(p); ++t->starts;
+        return t->start_ok ? AMEDIA_OK : -1; },
+      [](void* p) { ++static_cast<Track*>(p)->stops; return AMEDIA_OK; },
+      [](void* p) { ++static_cast<Track*>(p)->frees; },
+      [](void* p, CMediaBuffer** out, uint32_t options, int64_t seek) {
+        auto* t = static_cast<Track*>(p);
+        if (++t->reads == 1) { t->first_options = options; t->first_seek = seek; }
+        if (t->reads == t->fail_read) return -1;
+        if (t->next == t->inputs.size()) return AMEDIA_ERROR_END_OF_STREAM;
+        const Input& in = t->inputs[t->next++];
+        t->metadata = {};
+        t->metadata.time = in.time;
+        t->metadata.target = in.target;
+        t->metadata.has_target = in.has_target;
+        t->metadata.sync = in.sync;
+        t->has_metadata = in.has_metadata;
+        t->payload[2] = in.pixel;
+        *out = &t->buffer;
+        return AMEDIA_OK;
+      }};
+    return track;
+  }
+};
+
+struct Decoder : VideoDecoder {
+  // batch0 buffers everything until EOS; other values emit each batch in PTS order.
+  explicit Decoder(int size) : batch(size) {}
+  int batch, decodes = 0, drains = 0, fail_decode = -1;
+  bool no_output = false;
+  std::vector<VideoFrame> pending;
+  std::string Name() const override { return "controlled presentation-order decoder"; }
+  bool Decode(const Sample& sample, std::vector<VideoFrame>* out) override {
+    ++decodes;
+    if (decodes == fail_decode) return false;
+    if (no_output) return true;
+    VideoFrame frame;
+    frame.time_us = sample.time_us;
+    frame.width = frame.height = 1;
+    frame.crop_right = frame.crop_bottom = 0;
+    frame.data = sample.data;
+    pending.push_back(std::move(frame));
+    if (batch != 0 && pending.size() >= static_cast<size_t>(batch)) Emit(out);
+    return true;
+  }
+  void Flush() override { pending.clear(); }
+  void Drain(std::vector<VideoFrame>* out) override { ++drains; Emit(out); }
+  void Emit(std::vector<VideoFrame>* out) {
+    for (auto& frame : pending) out->push_back(std::move(frame));
+    pending.clear();
+  }
+};
+
+std::unique_ptr<VideoFrame> Retrieve(Track& track, Decoder& decoder, int64_t time, int option) {
+  AospTrackReader reader(track.Open());
+  return DecodeRetrieverFrame(&reader, &decoder, time, option);
+}
+
+void Metadata() {
+  Track track({{1000000, 1233333, true, true, true, 17},
+               {1033333, -1, false, true, false, 18},
+               {1066666, 0, true, true, false, 19},
+               {1100000, 44, true, false, true, 20}});
+  {
+    AospTrackReader reader(track.Open());
+    TrackReader& source = reader;
+    Sample sample;
+    Check(source.Read(&sample, 1250000, SeekMode::kClosest) == 0, "metadata first sample read");
+    Check(sample.time_us == 1000000 && sample.target_time_us == 1233333,
+          "decode start and closest presentation target remain distinct");
+    Check(sample.data == std::vector<uint8_t>{17} && sample.sync,
+          "sample range and sync metadata survive target propagation");
+    Check(track.first_options == (android::CMediaTrackReadOptions::SEEK | 3u)
+          && track.first_seek == 1250000, "actual reader passes closest seek and exact request");
+    Check(source.Read(&sample) == 0 && sample.target_time_us == -1,
+          "absent next-sample target resets stale metadata");
+    Check(sample.time_us == 1033333 && !sample.sync, "next sample keeps its own PTS and sync flag");
+    Check(source.Read(&sample) == 0 && sample.target_time_us == 0, "zero target is present, not absent");
+    Check(source.Read(&sample) == 0 && sample.target_time_us == -1 && sample.time_us == 0,
+          "missing metadata resets target and timestamp");
+    Check(source.Read(&sample) == 1 && track.releases == 4, "EOF releases all actual sample buffers");
+  }
+  Check(track.starts == 1 && track.stops == 1 && track.frees == 1, "reader lifecycle remains balanced");
+}
+
+std::vector<Input> Tail(int64_t target) {
+  std::vector<Input> frames;
+  for (int n = 0; n < 30; ++n) {
+    const int64_t time = 1000000 + n * 1000000LL / 30;
+    frames.push_back({time, n == 0 ? target : -1, n == 0, true, n == 0 || n == 15,
+                      static_cast<uint8_t>(n < 15 ? 3 : 4)});  // blue then white
+  }
+  return frames;
+}
+
+void Buffering() {
+  for (int batch : {1, 7, 0}) {
+    for (int index : {0, 7, 8, 14, 15, 29}) {
+      const int64_t target = 1000000 + index * 1000000LL / 30;
+      Track track(Tail(target));
+      Decoder decoder(batch);
+      auto frame = Retrieve(track, decoder, 1250000, 3);
+      const std::string label = "closest batch=" + std::to_string(batch) + " index=" + std::to_string(index);
+      Check(frame != nullptr, label + " produces a decoded frame");
+      Check(frame && frame->time_us == target, label + " honors extractor target PTS");
+      Check(frame && frame->data == std::vector<uint8_t>{static_cast<uint8_t>(index < 15 ? 3 : 4)},
+            label + " preserves selected pixel payload");
+      Check(track.first_options == (android::CMediaTrackReadOptions::SEEK | 3u)
+            && track.first_seek == 1250000, label + " uses closest extractor mode");
+      Check(decoder.drains == (batch == 0 || (batch == 7 && index == 29) ? 1 : 0),
+            label + " drains only the buffered tail when needed");
+    }
+  }
+  for (int option : {0, 1, 2}) {
+    for (int batch : {1, 0}) {
+      Track track(Tail(1933333));
+      Decoder decoder(batch);
+      auto frame = Retrieve(track, decoder, 1600000, option);
+      Check(frame && frame->time_us == 1000000 && frame->data == std::vector<uint8_t>{3},
+            "sync option selects the first decoded frame after extractor seek, including drain");
+      Check(track.first_options == (android::CMediaTrackReadOptions::SEEK | static_cast<uint32_t>(option)),
+            "sync option is passed unchanged to extractor");
+    }
+  }
+}
+
+void Boundaries() {
+  {
+    Track track({{1000, 1001, true, true, true, 1}, {1001, 0, true, true, false, 2}});
+    Decoder decoder(1);
+    auto frame = Retrieve(track, decoder, 1001, 3);
+    Check(frame && frame->time_us == 1001 && frame->data[0] == 2,
+          "no one-millisecond early tolerance; retain only first target metadata");
+  }
+  {
+    Track track({{0, 0, true, true, true, 1}, {10, -1, false, true, false, 2}});
+    Decoder decoder(0);
+    auto frame = Retrieve(track, decoder, std::numeric_limits<int64_t>::min(), 3);
+    Check(track.first_seek == 0 && frame && frame->time_us == 0,
+          "negative request uses the initial frame without signed arithmetic overflow");
+  }
+  {
+    constexpr int64_t last = std::numeric_limits<int64_t>::max() - 500;
+    Track track({{last - 1000, last, true, true, true, 1}, {last, -1, false, true, false, 2}});
+    Decoder decoder(1);
+    auto frame = Retrieve(track, decoder, std::numeric_limits<int64_t>::max(), 3);
+    Check(frame && frame->time_us == last, "extractor-selected final frame at extreme request stays exact");
+  }
+  {
+    Track track({{1000000, -1, false, true, true, 3}, {1500000, -1, false, true, true, 4}});
+    Decoder decoder(0);
+    auto frame = Retrieve(track, decoder, 1250000, 3);
+    Check(frame && frame->time_us == 1000000,
+          "missing target metadata matches FrameDecoder first-output fallback");
+  }
+  {
+    Track track({{10, 30, true, true, true, 1}, {20, -1, false, true, false, 2}});
+    Decoder decoder(0);
+    Check(Retrieve(track, decoder, 30, 3) == nullptr,
+          "EOF does not substitute an earlier non-target frame");
+    Check(decoder.drains == 1, "unreached target drains exactly once");
+  }
+  for (int count : {600, 601}) {
+    std::vector<Input> data;
+    for (int n = 0; n < count; ++n) data.push_back({n, count - 1, n == 0, true, n == 0, 1});
+    Track track(std::move(data));
+    Decoder decoder(0);
+    auto frame = Retrieve(track, decoder, count - 1, 3);
+    Check((count == 600) == (frame != nullptr), "original600-input bound remains enforced");
+    Check(decoder.decodes == 600 && decoder.drains == (count == 600 ? 1 : 0),
+          "EOF at the last permitted input still drains without extending the budget");
+  }
+}
+
+void Errors() {
+  {
+    Track track({}); Decoder decoder(0);
+    Check(Retrieve(track, decoder, 0, 3) == nullptr, "empty track has no frame");
+    Check(decoder.decodes == 0 && decoder.drains == 0, "empty input creates no decoder output");
+  }
+  {
+    Track track(Tail(1233333)); track.start_ok = false; Decoder decoder(1);
+    Check(Retrieve(track, decoder, 1250000, 3) == nullptr, "failed track start does not decode");
+    Check(track.reads == 0 && track.stops == 0 && track.frees == 1, "failed start cleanup remains balanced");
+  }
+  for (int fail_at : {1, 2}) {
+    Track track(Tail(1233333)); track.fail_read = fail_at; Decoder decoder(0);
+    Check(Retrieve(track, decoder, 1250000, 3) == nullptr, "read error produces no substituted frame");
+    Check(decoder.drains == 0, "read error is not disguised as clean EOF");
+  }
+  {
+    Track track(Tail(1233333)); Decoder decoder(0); decoder.fail_decode = 2;
+    Check(Retrieve(track, decoder, 1250000, 3) == nullptr, "decode failure produces no substituted frame");
+    Check(decoder.decodes == 2 && decoder.drains == 0, "decode failure stops promptly");
+  }
+  {
+    Track track(Tail(1233333)); Decoder decoder(0); decoder.no_output = true;
+    Check(Retrieve(track, decoder, 1250000, 3) == nullptr && decoder.drains == 1,
+          "no decoded output remains a real no-frame result");
+  }
+}
+}  // namespace
+
+int main() {
+  Metadata();
+  Buffering();
+  Boundaries();
+  Errors();
+  std::cout << "Retriever frame contracts: " << checks - failures << '/' << checks
+            << " passed, " << failures << " failed\n";
+  return failures == 0 ? 0 : 1;
+}

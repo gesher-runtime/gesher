@@ -273,6 +273,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedLifetime = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedPublication = new ThreadLocal<>();
     private Runnable mBeforeActivityPublication; // Server-local retirement race fixture.
+    private Runnable mBeforeActivityOwnerAuthentication; // Server-local late-finish race fixture.
     private Runnable mBeforeShortcutResolution; // Server-local shortcut publisher race fixture.
     private final ThreadLocal<Runnable> mAccountCompletion = new ThreadLocal<>();
     private final Map<IBinder, Object> mAccountChoosers = new HashMap<>();
@@ -869,27 +870,43 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             String callingPackage, IBinder resultToToken, String resultWho, int requestCode,
             int launchTaskId, boolean shareIdentity, ActivityRecord[] started) {
         final int originalPid = Binder.getCallingPid();
+        final int originalUid = Binder.getCallingUid();
         final ProcessRecord originalProcess = callerProcess(originalPid);
         final boolean internalCreator = mVerifiedCreator.get() != null;
         final String originalName = internalCreator ? mVerifiedCreator.get() : callingPackage;
         final ApkPackage originalCallerCode = mPm.get(originalName);
         final java.util.function.BooleanSupplier delegated = mVerifiedLifetime.get();
         final java.util.function.BooleanSupplier publication = mVerifiedPublication.get();
+        if (publication != null && !publication.getAsBoolean()) return ActivityManager.START_CANCELED;
+        // The legacy no-spawner launcher attaches its real app thread before its
+        // first package has been assigned. Enroll that exact process once, through
+        // a launcher request for its own installed UID, not a claimed host identity.
+        final boolean legacyBootstrap = !internalCreator && originalCallerCode != null
+                && originalCallerCode.uid() == originalUid
+                && intent != null && Intent.ACTION_MAIN.equals(intent.getAction())
+                && intent.hasCategory(Intent.CATEGORY_LAUNCHER)
+                && (intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0
+                && resultToToken == null && resultWho == null && requestCode <= 0 && launchTaskId < 0
+                && legacyBootstrapProcess(originalProcess, caller, originalPid, originalUid);
         String verifiedCaller = mVerifiedCreator.get();
         if (verifiedCaller == null && mAm != null && !mAm.callers().isSystem()) {
-            verifiedCaller = mAm.callers().requirePackage(callingPackage);
-            boolean matchingThread = false;
-            synchronized (this) {
-                for (ProcessRecord app : mProcesses) {
-                    if (app.pid == Binder.getCallingPid() && !app.exiting
-                            && verifiedCaller.equals(app.packageName) && caller != null
-                            && app.thread.asBinder().equals(caller.asBinder())) {
-                        matchingThread = true;
-                        break;
+            if (legacyBootstrap) {
+                verifiedCaller = originalCallerCode.packageName;
+            } else {
+                verifiedCaller = mAm.callers().requirePackage(callingPackage);
+                boolean matchingThread = false;
+                synchronized (this) {
+                    for (ProcessRecord app : mProcesses) {
+                        if (app.pid == originalPid && !app.exiting
+                                && verifiedCaller.equals(app.packageName) && caller != null
+                                && app.thread.asBinder().equals(caller.asBinder())) {
+                            matchingThread = true;
+                            break;
+                        }
                     }
                 }
+                if (!matchingThread) throw new SecurityException("Unrecognized activity caller thread");
             }
-            if (!matchingThread) throw new SecurityException("Unrecognized activity caller thread");
         }
         if (intent != null && PackageManager.ACTION_REQUEST_PERMISSIONS.equals(intent.getAction())) {
             return requestPermissions(caller, callingPackage, intent, resultToToken,
@@ -917,8 +934,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ActivityInfo info;
         ApkPackage targetCode;
         synchronized (mPm) {
-            info = resolve(intent, resolvedType, caller != null);
+            info = resolve(intent, resolvedType, caller != null && !legacyBootstrap);
             targetCode = info == null ? null : mPm.get(info.packageName);
+        }
+        if (legacyBootstrap && (info == null || targetCode != originalCallerCode
+                || !originalCallerCode.packageName.equals(info.packageName))) {
+            // An unenrolled process cannot reach external-handler or another
+            // package's paths by pretending those are its own initial launch.
+            throw new SecurityException("Initial launch does not match the attached process package");
         }
         if (info == null) {
             if (intent != null) {
@@ -1012,6 +1035,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 sourceLifetime.getAsBoolean()
                 && (attributedCaller == null || internalCreator || originalProcess != null
                     && callerProcess(originalPid) == originalProcess && !originalProcess.exiting)
+                && (!legacyBootstrap
+                    || legacyBootstrapProcess(originalProcess, caller, originalPid, originalUid))
                 && (publication == null || publication.getAsBoolean());
         Intent launch = new Intent(intent);
         launch.setComponent(new ComponentName(info.packageName, info.name));
@@ -1051,6 +1076,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (attributedCaller != null && !internalCreator && (originalProcess == null
                     || callerProcess(originalPid) != originalProcess || originalProcess.exiting)) {
                 throw new SecurityException("Activity caller retired before publication");
+            }
+            if (legacyBootstrap && (processFor(info.packageName,
+                    componentProcess(info.packageName, info.processName)) != null
+                    || starting(info.packageName, componentProcess(info.packageName, info.processName)))) {
+                return ActivityManager.START_CANCELED;
             }
             // startActivityIntentSender authenticated this result activity before
             // clearing Binder identity. Creator authority still controls the target;
@@ -1111,8 +1141,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         }
                     }
                 }
-                ProcessRecord app = processFor(info.packageName, componentProcess(info.packageName, info.processName));
-                if (app == null) {
+                ProcessRecord app = legacyBootstrap ? originalProcess
+                        : processFor(info.packageName, componentProcess(info.packageName, info.processName));
+                if (legacyBootstrap) {
+                    assignPackage(app, info.packageName, componentProcess(info.packageName, info.processName));
+                    bind = app;
+                } else if (app == null) {
                     app = unassignedProcess(callingPid);
                     if (app != null) {
                         assignPackage(app, info.packageName, componentProcess(info.packageName, info.processName));
@@ -1345,6 +1379,16 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
         }
         return null;
+    }
+
+    /** One-time enrollment of a real self-attached process in the no-spawner mode. */
+    private synchronized boolean legacyBootstrapProcess(ProcessRecord app,
+            IApplicationThread thread, int pid, int uid) {
+        return mStarter == null && app != null && thread != null && app.thread != null
+                && mProcesses.contains(app) && processByPid(pid) == app
+                && app.pid == pid && app.uid == uid && !app.exiting && !app.spawned
+                && !app.ready && app.startSeq == 0 && app.packageName == null && app.processName == null
+                && app.thread.asBinder().equals(thread.asBinder());
     }
 
     /** Binds an attached process to a package without reusing an older start's exit. Guarded by this. */
@@ -2371,6 +2415,15 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * pause, stop and destroy.
      */
     boolean finish(ActivityRecord r, String reason, int resultCode, Intent resultData) {
+        return finish(r, reason, resultCode, resultData, false);
+    }
+
+    boolean finishFromApp(ActivityRecord r, int resultCode, Intent resultData) {
+        return finish(r, "app-request", resultCode, resultData, true);
+    }
+
+    private boolean finish(ActivityRecord r, String reason, int resultCode, Intent resultData,
+            boolean requireCurrentCode) {
         if (r.resultTo != null) resultData = normalizeMicrogCredentialResult(r.info.packageName,
                 r.info.name, r.resultTo.info.name, resultCode, resultData);
         final ActivityCallerState.Snapshot resultCaller;
@@ -2384,7 +2437,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         State state;
         synchronized (this) {
-            if (!mActivities.contains(r) || r.state == State.DESTROYED) return false;
+            if (!mActivities.contains(r) || r.state == State.DESTROYED
+                    || requireCurrentCode && !activityCodeCurrent(r)) return false;
             if (r.finishing) return true;
             r.finishing = true;
             accountActivityFinished(r);
@@ -2435,6 +2489,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     boolean navigateUpTo(ActivityRecord r, Intent destIntent, String resolvedType,
             int resultCode, Intent resultData) {
+        if (isActivityRetired(r)) return false;
         ComponentName dest = destIntent.getComponent();
         if (dest == null) {
             ActivityInfo info = resolve(destIntent, resolvedType, true);
@@ -2444,6 +2499,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         List<ActivityRecord> above = new ArrayList<>();
         ActivityRecord parent = null;
         synchronized (this) {
+            if (isActivityRetired(r)) return false;
             for (int i = mActivities.indexOf(r); i >= 0; i--) {
                 ActivityRecord a = mActivities.get(i);
                 if (a.taskId != r.taskId || a.finishing || a.state == State.DESTROYED) continue;
@@ -2462,13 +2518,25 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             up.setComponent(dest);
             up.removeFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             ActivityRecord[] started = new ActivityRecord[1];
-            int result = start(r.app != null ? r.app.thread : null, up, resolvedType,
-                    r.info.packageName, r.token, null, -1, started);
+            java.util.function.BooleanSupplier previous = mVerifiedPublication.get();
+            mVerifiedPublication.set(() -> !isActivityRetired(r)
+                    && (previous == null || previous.getAsBoolean()));
+            final int result;
+            try {
+                result = start(r.app != null ? r.app.thread : null, up, resolvedType,
+                        r.info.packageName, r.token, null, -1, started);
+            } catch (SecurityException failure) {
+                if (isActivityRetired(r)) return false;
+                throw failure;
+            } finally {
+                if (previous == null) mVerifiedPublication.remove(); else mVerifiedPublication.set(previous);
+            }
             if (result != ActivityManager.START_SUCCESS) return false;
         }
+        if (isActivityRetired(r)) return false;
         for (ActivityRecord a : above) {
             finish(a, "navigateUpTo", a == r ? resultCode : 0 /* RESULT_CANCELED */,
-                    a == r ? resultData : null);
+                    a == r ? resultData : null, a == r);
         }
         return true;
     }
@@ -2546,17 +2614,38 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return null;
     }
 
-    /** An activity's result data must come from its real process, not a claimed package. */
-    void requireActivityOwner(ActivityRecord r) {
-        if (r == null || mAm.callers().isSystem()) return;
-        String name = mAm.callers().callerPackage();
+    boolean isActivityRetired(ActivityRecord r) {
         synchronized (this) {
+            return r == null || !mActivities.contains(r) || r.state == State.DESTROYED
+                    || !activityCodeCurrent(r);
+        }
+    }
+
+    /** Return false for retirement; a live Activity still requires its real owner. */
+    boolean requireActivityOwner(ActivityRecord r) {
+        if (isActivityRetired(r)) return false;
+        Runnable beforeAuthentication = mBeforeActivityOwnerAuthentication;
+        if (beforeAuthentication != null) beforeAuthentication.run();
+        final boolean internal;
+        final String name;
+        try {
+            // Authenticate outside the lifecycle monitor. A process/package may
+            // retire during this step; retirement is not a forged-owner error.
+            internal = mAm.callers().isSystem();
+            name = internal ? null : mAm.callers().callerPackage();
+        } catch (SecurityException failure) {
+            if (isActivityRetired(r)) return false;
+            throw failure;
+        }
+        synchronized (this) {
+            if (isActivityRetired(r)) return false;
+            if (internal) return true;
             ProcessRecord process = callerProcess(Binder.getCallingPid());
-            if (!mActivities.contains(r) || r.state == State.DESTROYED || !activityCodeCurrent(r)
-                    || r.app == null || r.app != process || process.exiting
+            if (r.app == null || r.app != process || process.exiting
                     || !name.equals(r.info.packageName)) {
                 throw new SecurityException("Activity does not belong to the calling process");
             }
+            return true;
         }
     }
 

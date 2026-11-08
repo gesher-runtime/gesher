@@ -15,10 +15,12 @@ import android.hardware.display.IDisplayManager;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.IInterface;
+import android.os.IServiceManager;
 import android.os.Looper;
 import android.os.Parcel;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.permission.IPermissionManager;
 
 import com.android.internal.os.ApplicationSharedMemory;
 import com.gesher.server.Services;
@@ -189,9 +191,34 @@ public final class PackageQueryContractTest {
         // as bindApplication's cache does; no external servicemanager is involved.
         Object display = standInClass.getMethod("of", Class.class, IInterface.class)
                 .invoke(null, IDisplayManager.class, new Services.DisplayManager());
-        ServiceManager.initServiceCache(Map.of("package", wire.asBinder(),
+        Object permissions = standInClass.getMethod("of", Class.class, IInterface.class)
+                .invoke(null, IPermissionManager.class,
+                        pmClass.getMethod("permissions").invoke(service));
+        IBinder permissionTarget = (IBinder) standInClass.getMethod("asBinder").invoke(permissions);
+        AtomicInteger permissionTransactions = new AtomicInteger();
+        IBinder permissionWire = new Binder() {
+            @Override protected boolean onTransact(int code, Parcel request, Parcel reply, int flags)
+                    throws RemoteException {
+                permissionTransactions.incrementAndGet();
+                return permissionTarget.transact(code, request, reply, flags);
+            }
+        };
+        Map<String, IBinder> services = Map.of("package", wire.asBinder(),
                 Context.DISPLAY_SERVICE,
-                (IBinder) standInClass.getMethod("asBinder").invoke(display)));
+                (IBinder) standInClass.getMethod("asBinder").invoke(display),
+                "permissionmgr", permissionWire);
+        // PermissionManager also asks for the optional legacy permission manager.
+        // Use the production in-process service registry so an absent service has
+        // the normal ServiceNotFoundException contract instead of opening /dev/binder.
+        Class<?> serviceManagerClass = Class.forName("com.gesher.server.Services$ServiceManagerStandIn");
+        Constructor<?> registryConstructor = serviceManagerClass.getDeclaredConstructor(Map.class);
+        registryConstructor.setAccessible(true);
+        Object registry = standInClass.getMethod("of", Class.class, IInterface.class)
+                .invoke(null, IServiceManager.class, registryConstructor.newInstance(services));
+        Field serviceManager = ServiceManager.class.getDeclaredField("sServiceManager");
+        serviceManager.setAccessible(true);
+        serviceManager.set(null, standInClass.getMethod("asInterface").invoke(registry));
+        ServiceManager.initServiceCache(services);
         Field field = ActivityThread.class.getDeclaredField("sPackageManager");
         field.setAccessible(true);
         field.set(null, wire);
@@ -252,6 +279,8 @@ public final class PackageQueryContractTest {
         String heldPermission = "android.permission.FOREGROUND_SERVICE";
         require(client.checkPermission(heldPermission, PACKAGE) == PackageManager.PERMISSION_GRANTED,
                 "Fixture's normal permission was not granted");
+        require(permissionTransactions.get() > 0,
+                "Public permission query bypassed the generated PermissionPolicy Binder proxy");
         List<PackageInfo> holders = client.getPackagesHoldingPermissions(
                 new String[]{"fixture.absent.permission", heldPermission}, 0);
         require(holders.size() == 1 && PACKAGE.equals(holders.get(0).packageName)

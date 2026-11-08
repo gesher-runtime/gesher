@@ -375,6 +375,110 @@ checkpoint; host assertions are not represented as cross-process ART proof.
 See the [caller lifecycle report](component-caller-followup-2026-11-08.md) for
 the primary Android references, exact evidence and remaining boundaries.
 
+## Windows feedback on the caller implementation
+
+The focused Windows 2022 and 2025 jobs of
+[run 42456227216](https://github.com/gesher-runtime/gesher/actions/runs/42456227216),
+source `7e62479cb821aad8e203e6be6ec58a52e57d738b`, completed the full framework
+positioned-I/O contract, including the real `Os.memfd_create` route,
+delete-on-close storage and concurrent descriptor operations. The ten ordinary
+temporary-directory scenarios and the actual UNC file/temporary-storage helper
+also passed on both systems. The real activity-options parser/manager fixture
+now passed as well. These are runtime observations, not conclusions from the
+host models.
+
+The same runs exposed four remaining causes; the failed jobs are not counted
+as successes:
+
+- **Legacy process enrollment.** The old no-spawner launcher attached its
+  process before any package was assigned, then claimed `com.gesher.app` with
+  no application-thread Binder. Requiring authenticated caller identity
+  correctly rejected this incomplete protocol, breaking the existing lifecycle
+  and component tests. The launcher now supplies its actual attached thread
+  and target package. The server admits a single initial MAIN/LAUNCHER request
+  only for the exact live, unassigned PID/thread/UID, with no process spawner,
+  matching installed package UID and code generation. Resolution must select
+  that same package before any external-handler path. Publication rechecks
+  the record, then actually assigns and binds that process. Ordinary package
+  authentication remains active; an unassigned process is not promoted to
+  trusted system authority.
+- **Permission-manager fixture setup.** The public package permission query
+  constructs PermissionManager. Its fixture now publishes the actual
+  PermissionPolicy Binder and the existing production in-process service
+  registry, including ordinary not-found behavior for an absent optional
+  legacy service. A transaction counter requires the public permission query
+  to cross the real generated Binder proxy. No permission answer is replaced.
+- **Installer path identity.** A valid temporary device root can contain
+  Windows drive/short-name aliases. Building a generation from that lexical
+  root conflicted with the parser's physical-root containment check. Installer
+  construction and scanning now use the canonical configured root, while
+  preserving exact parser equality, generation-name and NOFOLLOW boundaries.
+  An existing file or symlink cannot become the installed APK root; directory
+  creation errors propagate. Twelve host checks execute the actual production
+  boundary with real files and symlinks, and the Windows split fixture requires
+  canonical returned/registered paths and successful reload. See the
+  [package report](package-followup-2026-11-08.md).
+- **ART runtime-package separation.** The caller fixture shared a Java package
+  name with services, but its DEX class loader was different from the boot
+  loader. ART correctly rejected its package-private constructor access. The
+  fixture now uses reflection for those test setup boundaries, keeping all
+  production access levels unchanged. Its host runner also separates the
+  fixture and production loaders, reproducing the previously missed condition.
+
+The source review additionally found a legitimate late-finish race: a record
+could retire between token lookup and owner authentication, producing a new
+SecurityException. Retired finish/navigation now follow the pinned Android
+results, while a live wrong owner remains rejected. Actual authentication is
+rechecked after concurrent removal, and mutation/result publication rechecks
+the activity generation. Internal server cleanup remains separate from an
+app-requested finish. The [caller report](component-caller-followup-2026-11-08.md)
+records **177 passing checks**: 116 existing caller/URI cases, 45 retirement
+cases and 16 controls over the exact initial-enrollment predicate. Three
+negative controls fail at the original invented grant, cross-loader access
+and retired-finish defects. These host controls do not replace the next real
+legacy launch and cross-app callback runs.
+
+Both full Windows jobs also stopped in the offline identity gate because the
+delegated-intent fixture attempted to finish the creator's activity while still
+using its distinct capability holder's UID/PID. It also relabeled a process
+without updating its constructor-captured identity. The fixture now constructs
+the creator process under that creator's controlled native identity, explicitly
+requires a holder's forged finish to leave state and results unchanged, then
+finishes as the actual owner. Production ownership enforcement is unchanged.
+All original retirement, one-shot and result-delivery checks remain; this
+corrected offline fixture still needs its next Windows execution.
+
+The complete application and all service-test sources again pass Android-core
+javac and D8 after these repairs. The corrected legacy launch, complete
+package/split fixtures and cross-app caller callbacks still require their new
+revision's Windows execution at this checkpoint.
+
+## Media frame selection after decoder drain
+
+The completed full Windows 2025 job of
+[run 42453120565](https://github.com/gesher-runtime/gesher/actions/runs/42453120565/job/128649121895)
+exposed an additional H.264 retriever failure: the 1.25-second blue-frame request
+returned the final white frame. Windows 2022 passed that pixel contract, and
+both systems decoded the ordinary MediaCodec stream successfully. Source review
+and controlled buffering reproduce a retriever path that selected the last
+drained frame without applying the requested presentation time. The exact
+Media Foundation buffering schedule of the failed invocation was not traced.
+
+The retriever now preserves the actual AOSP extractor's first-sample target
+metadata, requests its closest-frame seek mode, and uses the same timestamp
+selection for ordinary and drained decoder output. It also distinguishes read
+errors from EOF and removes an overflowing timestamp addition. The selected
+frame's real pixels still supply the Android Bitmap; the existing Windows
+blue/white/red assertions are unchanged.
+
+The exact production selector and reader wrapper pass **133 host assertions**
+under ASan/UBSan, independently repeated. Published source fails 55 of the same
+133 assertions and its old addition triggers UBSan. The complete JNI translation
+unit compiles with the Windows CI toolchain. Actual repaired decoder/Bitmap
+behavior remains pending the next Windows full run. The
+[media report](retriever-frame-followup-2026-11-08.md) records the reference
+sources, negative control and remaining 600-input/thumbnail bounds.
+
 ## Material compatibility work still open
 
 These current-source limits are separate from the repaired defects:

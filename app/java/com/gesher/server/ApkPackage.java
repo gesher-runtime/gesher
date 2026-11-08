@@ -149,10 +149,12 @@ public final class ApkPackage {
     public static ApkPackage parseCodeDirectory(String codePath) throws Exception {
         File directory = new File(codePath).getAbsoluteFile();
         File appRoot = new File(new File(Device.dataDir()).getCanonicalFile(), "app");
+        File canonicalDirectory = directory.getCanonicalFile();
         if (!appRoot.equals(directory.getParentFile())
-                || !directory.equals(directory.getCanonicalFile())
+                || !directory.equals(canonicalDirectory)
                 || !Files.isDirectory(directory.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-            throw new SecurityException("Package code is outside the installed APK directory");
+            throw new SecurityException("Package code is outside the installed APK directory: "
+                    + directory + "; canonical=" + canonicalDirectory + "; expected parent=" + appRoot);
         }
         File base = new File(directory, "base.apk");
         ApkLite baseLite = codeApkLite(base);
