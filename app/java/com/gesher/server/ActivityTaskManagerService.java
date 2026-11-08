@@ -263,6 +263,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedLifetime = new ThreadLocal<>();
     private Runnable mBeforeActivityPublication; // Server-local retirement race fixture.
+    private Runnable mBeforeShortcutResolution; // Server-local shortcut publisher race fixture.
     private final ThreadLocal<Runnable> mAccountCompletion = new ThreadLocal<>();
     private final Map<IBinder, Object> mAccountChoosers = new HashMap<>();
     private AccountManagerService mAccounts;
@@ -569,12 +570,37 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return waitForStarted(code, started[0]);
     }
 
+    /** Read the stored capability on the server and retain its publisher through resolution. */
+    GesherService.LaunchResult startShortcutForHost(String pkg, String key) {
+        if (mAm == null || !mAm.callers().isSystem()) throw new SecurityException("Host shortcut launch required");
+        final ApkPackage owner = mPm.get(pkg);
+        if (owner == null || mPm.isRemovalPending(pkg)) throw new SecurityException("Shortcut publisher unavailable");
+        Intent intent = com.gesher.app.shell.AppShell.dynamicShortcutIntent(pkg, key, owner.codeIdentity());
+        java.util.function.BooleanSupplier previous = mVerifiedLifetime.get();
+        String previousCreator = mVerifiedCreator.get();
+        long identity = Binder.clearCallingIdentity();
+        mVerifiedCreator.set(pkg);
+        mVerifiedLifetime.set(() -> mPm.get(pkg) == owner && !mPm.isRemovalPending(pkg)
+                && (previous == null || previous.getAsBoolean()));
+        try {
+            Runnable before = mBeforeShortcutResolution;
+            if (before != null) before.run();
+            return startActivityForHost(intent);
+        }
+        finally {
+            if (previous == null) mVerifiedLifetime.remove(); else mVerifiedLifetime.set(previous);
+            if (previousCreator == null) mVerifiedCreator.remove(); else mVerifiedCreator.set(previousCreator);
+            Binder.restoreCallingIdentity(identity);
+        }
+    }
+
     /** The host launcher receives authority for this actual launch, never a claimed process name. */
     GesherService.LaunchResult startActivityForHost(Intent intent) {
         if (mAm == null || !mAm.callers().isSystem()) throw new SecurityException("Host launch required");
         if (intent == null) throw new IllegalArgumentException("Missing launch intent");
         ActivityRecord[] started = new ActivityRecord[1];
-        int code = start(null, new Intent(intent), intent.getType(), "com.gesher.launcher",
+        String creator = mVerifiedCreator.get();
+        int code = start(null, new Intent(intent), intent.getType(), creator == null ? "com.gesher.launcher" : creator,
                 null, null, 0, -1, started);
         ActivityRecord record = started[0];
         WaitResult result = waitForStarted(code, record);

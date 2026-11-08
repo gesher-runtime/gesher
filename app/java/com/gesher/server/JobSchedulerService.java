@@ -574,17 +574,14 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     @Override public void registerUserVisibleJobObserver(android.app.job.IUserVisibleJobObserver observer) {
         system();
-        throw new UnsupportedOperationException("Job observers are not implemented");
     }
 
     @Override public void unregisterUserVisibleJobObserver(android.app.job.IUserVisibleJobObserver observer) {
         system();
-        throw new UnsupportedOperationException("Job observers are not implemented");
     }
 
     @Override public void notePendingUserRequestedAppStop(String packageName, int userId, String reason) {
         system(); user(userId); own(packageName);
-        throw new UnsupportedOperationException("User-requested job-stop tracking is not implemented");
     }
 
     // --- DeviceWork.Source ---------------------------------------------------------------------

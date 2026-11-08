@@ -51,6 +51,8 @@ import java.util.Set;
  * does for its registration token.
  */
 public final class ApkPackage {
+    /** Publisher identity used for persistent app capabilities across safe updates. */
+    public String codeIdentity() { return NotificationManagerService.codeIdentity(this); }
     /** Flags for a PackageInfo with everything: every component, meta-data, permissions. */
     public static final long ALL = PackageManager.GET_ACTIVITIES
             | PackageManager.GET_RECEIVERS | PackageManager.GET_SERVICES

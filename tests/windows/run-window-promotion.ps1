@@ -6,7 +6,7 @@ param(
     [Parameter(Mandatory)][string] $OutputRoot,
     [string] $Controller,
     [switch] $Worker,
-    [ValidateSet('positive','explicit-headless')][string] $Mode = 'positive'
+    [ValidateSet('positive','explicit-headless','empty-bridge')][string] $Mode = 'positive'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
@@ -69,6 +69,28 @@ if ($Worker) {
         }
         if (-not $state.ContainsKey('device')) { throw 'No synthetic device namespace' }
         $env:GESHER_BINDER = $state['device']
+        if ($Mode -eq 'empty-bridge') {
+            $bridgeArgs = $base + @('-cp',$app,'com.gesher.app.Launcher','launch',
+                'com.gesher.windowpromotion.target','--activity','.BridgeActivity','--window')
+            $bridgeLauncher = Start-Process -FilePath (Join-Path $RuntimeDir 'dalvikvm.exe') `
+                -ArgumentList (($bridgeArgs | ForEach-Object { Q $_ }) -join ' ') -WindowStyle Hidden -PassThru `
+                -RedirectStandardOutput (Join-Path $OutputRoot 'bridge-launch.out.log') `
+                -RedirectStandardError (Join-Path $OutputRoot 'bridge-launch.err.log')
+            $targetLog = Join-Path $logs 'com.gesher.windowpromotion.target.log'
+            $text = WaitMarker $targetLog 'bridge: frame-pass pid='
+            $match = [regex]::Match($text,'bridge: frame-pass pid=([0-9]+)')
+            if (-not $match.Success) { throw 'No bridge process ID' }
+            $bridgePid = $match.Groups[1].Value
+            [IO.File]::WriteAllText((Join-Path $OutputRoot 'state.txt'), "CHECK $bridgePid", [Text.Encoding]::ASCII)
+            $null = WaitMarker (Join-Path $OutputRoot 'controller-pass.txt') 'PASS'
+            $null = Vm 'reveal-bridge-content' @('-cp',$app,'com.gesher.server.RuntimeCommands','am','broadcast','-n',
+                'com.gesher.windowpromotion.target/com.gesher.windowpromotion.target.ControlReceiver')
+            $null = WaitMarker $targetLog "bridge: content-added pid=$bridgePid"
+            [IO.File]::WriteAllText((Join-Path $OutputRoot 'state.txt'), "CONTENT $bridgePid", [Text.Encoding]::ASCII)
+            $null = WaitMarker (Join-Path $OutputRoot 'controller-pass.txt') 'CONTENT_PASS'
+            Write-Host 'Empty transparent bridge stays hidden; real dialog pixels and later Activity content are visible'
+            exit 0
+        }
         $null = Launch 'install-source' @('install',(A (Join-Path $FixtureDir 'windowpromotion-source.apk')))
         if ($Mode -eq 'explicit-headless') { $null = Control 'explicit-headless' }
         $null = Launch 'bootstrap-service' @('launch','com.gesher.windowpromotion.source','--activity','.BootstrapActivity','--headless')
@@ -115,7 +137,7 @@ $Controller = (Resolve-Path -LiteralPath $Controller).Path
 $run = Join-Path $OutputRoot ('promotion-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run -Force | Out-Null
 $results = @()
-foreach ($modeName in 'positive','explicit-headless') {
+foreach ($modeName in 'positive','explicit-headless','empty-bridge') {
     $dir = Join-Path $run $modeName
     $profile = Join-Path $dir 'profile/Gesher'
     foreach ($part in 'system/framework','system/etc','data','art','i18n/etc/icu') { New-Item -ItemType Directory -Path (Join-Path $profile $part) -Force | Out-Null }
@@ -165,6 +187,6 @@ foreach ($modeName in 'positive','explicit-headless') {
         Write-Host "PASS  window promotion $modeName"
     } finally { $process.Dispose() }
 }
-[pscustomobject]@{scope='Two synthetic APKs; fresh profiles; private never-switched desktops; same service PID, presented pixels, window bounds and explicit-headless control';results=$results} |
+[pscustomobject]@{scope='Synthetic APKs; fresh profiles; private never-switched desktops; service-first promotion, explicit-headless control, empty transparent bridge suppression and later real content visibility';results=$results} |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $run 'validation.json') -Encoding UTF8
-Write-Host 'WindowPromotion all 2 modes passed'
+Write-Host 'WindowPromotion all 3 modes passed'

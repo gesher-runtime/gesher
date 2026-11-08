@@ -493,6 +493,7 @@ public final class Launcher {
     private static int launch(List<String> args) throws Exception {
         String apk = null;
         String activity = null;
+        String shortcutId = null;
         boolean keepTask = false;
         String proxy = null;
         String windowMode = WindowMode.fromEnvironment(WindowMode.WINDOW);
@@ -501,6 +502,7 @@ public final class Launcher {
             String a = args.get(i);
             switch (a) {
                 case "--activity": activity = args.get(++i); break;
+                case "--shortcut": shortcutId = args.get(++i); break;
                 case "--keep-task": keepTask = true; break;
                 case "--proxy": {
                     proxy = ProxySetting.parse(args.get(++i));
@@ -524,6 +526,7 @@ public final class Launcher {
             }
         }
         if (apk == null) return usage();
+        if (shortcutId != null && (activity != null || !extras.isEmpty())) return usage();
         Properties state = ensureDevice(true);
         GesherService.Client gesher = gesher();
         // An APK is installed or updated first; a package name (a Start menu shortcut's
@@ -542,14 +545,25 @@ public final class Launcher {
             log(text("launching", pkg));
         }
 
-        Intent intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        if (activity == null) {
-            intent.setPackage(pkg);
+        Intent intent = null;
+        if (shortcutId != null) {
+            IPackageManager shortcutPm = IPackageManager.Stub.asInterface(ServiceManager.getService("package"));
+            PackageInfo publisher = shortcutPm.getPackageInfo(pkg, 0L, 0);
+            String identity = com.gesher.server.ApkPackage.parse(publisher.applicationInfo.sourceDir).codeIdentity();
+            intent = AppShell.dynamicShortcutIntent(pkg, shortcutId, identity);
+        }
+        if (intent == null) {
+            intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (activity == null) {
+                intent.setPackage(pkg);
+            } else {
+                String cls = activity.startsWith(".") ? pkg + activity
+                        : activity.indexOf('.') < 0 ? pkg + "." + activity : activity;
+                intent.setComponent(new ComponentName(pkg, cls));
+            }
         } else {
-            String cls = activity.startsWith(".") ? pkg + activity
-                    : activity.indexOf('.') < 0 ? pkg + "." + activity : activity;
-            intent.setComponent(new ComponentName(pkg, cls));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         }
         for (Map.Entry<String, Boolean> e : extras.entrySet()) {
             intent.putExtra(e.getKey(), (boolean) e.getValue());
@@ -571,9 +585,10 @@ public final class Launcher {
         Tail tail = new Tail(Device.packageLog(pkg));
         tail.start();
         try {
-            log(text("start_intent", intent.toShortString(false, true, true, false)));
+            if (shortcutId == null) log(text("start_intent", intent.toShortString(false, true, true, false)));
             IActivityTaskManager atm = ActivityTaskManager.getService();
-            GesherService.LaunchResult launch = gesher.startActivityAndWait(intent);
+            GesherService.LaunchResult launch = shortcutId == null ? gesher.startActivityAndWait(intent)
+                    : gesher.startShortcutAndWait(pkg, shortcutId);
             WaitResult result = launch.result;
             log(text("start_result", result.result,
                     result.who != null ? result.who.flattenToShortString() : text("no_activity"),

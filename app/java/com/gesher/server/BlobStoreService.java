@@ -20,11 +20,11 @@ import java.util.Objects;
 /**
  * Explicit absence of an Android shared-blob storage backend. Apps can enumerate
  * their empty leases and discover zero quota; no session, descriptor or lease is
- * fabricated. Storage and mutation requests fail rather than reporting success.
+ * fabricated. Storage requests fail; cleanup of absent leases is idempotent.
  */
 public final class BlobStoreService extends IBlobStoreManager.Default {
-    private static UnsupportedOperationException unavailable() {
-        return new UnsupportedOperationException("Android shared-blob storage is unavailable");
+    private static SecurityException unavailable() {
+        return new SecurityException("Android shared-blob storage is unavailable");
     }
 
     @Override public List<BlobHandle> getLeasedBlobs(String packageName) {
@@ -40,7 +40,7 @@ public final class BlobStoreService extends IBlobStoreManager.Default {
     @Override public LeaseInfo getLeaseInfo(BlobHandle handle, String packageName) {
         // The public API requires SecurityException for an absent/inaccessible
         // blob; null would imply an accessible blob with no active caller lease.
-        throw new SecurityException("Blob is unavailable");
+        throw unavailable();
     }
 
     @Override public void waitForIdle(RemoteCallback callback) {
@@ -60,14 +60,14 @@ public final class BlobStoreService extends IBlobStoreManager.Default {
         throw unavailable();
     }
 
-    @Override public void abandonSession(long id, String packageName) { throw unavailable(); }
+    @Override public void abandonSession(long id, String packageName) { }
 
     @Override public void acquireLease(BlobHandle handle, int descriptionResId,
             CharSequence description, long timeoutMillis, String packageName) {
         throw unavailable();
     }
 
-    @Override public void releaseLease(BlobHandle handle, String packageName) { throw unavailable(); }
-    @Override public void releaseAllLeases(String packageName) { throw unavailable(); }
+    @Override public void releaseLease(BlobHandle handle, String packageName) { }
+    @Override public void releaseAllLeases(String packageName) { }
     @Override public void deleteBlob(long id) { throw unavailable(); }
 }

@@ -36,6 +36,7 @@ public final class GesherService extends Binder {
     static final int PROXY = IBinder.FIRST_CALL_TRANSACTION + 7;
     /** A host launch with an exact, retained process-generation exit receipt. */
     static final int START_ACTIVITY = IBinder.FIRST_CALL_TRANSACTION + 8;
+    static final int START_SHORTCUT = IBinder.FIRST_CALL_TRANSACTION + 9;
 
     static final String EXIT_DESCRIPTOR = "com.gesher.ILaunchExit";
     static final int EXIT_STATUS = IBinder.FIRST_CALL_TRANSACTION;
@@ -86,6 +87,9 @@ public final class GesherService extends Binder {
         default LaunchResult startActivityAndWait(Intent intent) throws Exception {
             throw new UnsupportedOperationException("Generation-bound host launch unavailable");
         }
+        default LaunchResult startShortcutAndWait(String pkg, String key) throws Exception {
+            throw new UnsupportedOperationException("Publisher-bound shortcut launch unavailable");
+        }
         /** A call came: the device is not idle. */
         void touch();
         /** A click on a toast of {@code appId} with the toast's {@code arguments}. */
@@ -105,7 +109,7 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > START_ACTIVITY) {
+        if (code < INSTALL || code > START_SHORTCUT) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
@@ -168,6 +172,14 @@ public final class GesherService extends Binder {
                     reply.writeTypedObject(result.result, 0);
                     reply.writeInt(result.taskId);
                     reply.writeStrongBinder(result.exitReceipt);
+                    return true;
+                }
+                case START_SHORTCUT: {
+                    String pkg = data.readString(), key = data.readString();
+                    data.enforceNoDataAvail();
+                    LaunchResult result = mDevice.startShortcutAndWait(pkg, key);
+                    reply.writeNoException(); reply.writeTypedObject(result.result, 0);
+                    reply.writeInt(result.taskId); reply.writeStrongBinder(result.exitReceipt);
                     return true;
                 }
                 default:
@@ -328,6 +340,19 @@ public final class GesherService extends Binder {
                 data.recycle();
                 reply.recycle();
             }
+        }
+
+        /** The server re-resolves the stored shortcut and pins its actual publisher. */
+        public LaunchResult startShortcutAndWait(String pkg, String key) throws RemoteException {
+            Parcel data = Parcel.obtain(), reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR); data.writeString(pkg); data.writeString(key);
+                if (!mBinder.transact(START_SHORTCUT, data, reply, 0)) throw new RemoteException("Publisher-bound shortcut launch unavailable");
+                reply.readException();
+                WaitResult result = reply.readTypedObject(WaitResult.CREATOR);
+                int taskId = reply.readInt(); IBinder receipt = reply.readStrongBinder();
+                reply.enforceNoDataAvail(); return new LaunchResult(result, taskId, receipt);
+            } finally { data.recycle(); reply.recycle(); }
         }
 
         /** Reads only the status of the process generation captured by a host launch. */

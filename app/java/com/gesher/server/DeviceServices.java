@@ -316,9 +316,11 @@ final class DeviceServices {
     }
 
     /**
-     * {@code shortcut}: explicit absence of an Android shortcut host/publisher.
+     * {@code shortcut}: package-owned dynamic shortcuts with Windows shell integration;
+     * Android pin/share-target hosts remain unavailable.
      */
     static final class ShortcutService extends DesktopShortcutService {
         ShortcutService(PackageManagerService packages) { super(packages); }
+        ShortcutService(PackageManagerService packages, CallerIdentity callers) { super(packages, callers); }
     }
 }
