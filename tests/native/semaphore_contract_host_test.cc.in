@@ -1,5 +1,7 @@
 // Production semaphore/deadline code. Windows address waits and wakes use
 // Linux futexes here; clock reads are real except for the explicit matrix.
+// Sysconf's unneeded GetSystemInfo call has no outputs used by this query;
+// unrelated memory/processor query boundaries abort if unexpectedly reached.
 #include "shim_internal.h"
 
 #include <atomic>
@@ -16,6 +18,12 @@
 
 using DWORD = uint32_t;
 constexpr DWORD INFINITE = 0xffffffffu;
+struct SYSTEM_INFO {};
+static void GetSystemInfo(SYSTEM_INFO*) {}
+struct MEMORYSTATUSEX { DWORD dwLength; uint64_t ullAvailPhys, ullTotalPhys; };
+static void GlobalMemoryStatusEx(MEMORYSTATUSEX*) { std::abort(); }
+static DWORD GetActiveProcessorCount(unsigned short) { std::abort(); }
+constexpr unsigned short ALL_PROCESSOR_GROUPS = 0xffff;
 static bool WaitOnAddress(void* address, void* compare, size_t size, DWORD milliseconds) {
   if (size != 4) std::abort();
   timespec timeout{static_cast<time_t>(milliseconds / 1000),
@@ -54,6 +62,7 @@ int64_t NowRealtimeNs() {
 int64_t NowMonotonicNs() { return QpcNanos(); }
 @WORD_IMPLEMENTATION@
 @SEMAPHORE_IMPLEMENTATION@
+@SYSCONF_IMPLEMENTATION@
 }
 @DEADLINE_IMPLEMENTATION@
 

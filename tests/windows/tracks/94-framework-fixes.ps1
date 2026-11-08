@@ -41,6 +41,14 @@ Check 'services: package versions, permissions, identities and parsed manifest p
   $packageQueryOut
 } @('PackageQueryContractTest all passed:')
 
+$activityOptionsOut = FixesRun ($dvmFixes + 'gesher.services.ActivityOptionsContractTest' +
+  (NoDrive "$Dir/components.apk")) 90
+$activityOptionsCode = $LASTEXITCODE
+Check 'services: real activity options, specific intent ordering and manifest filtering' {
+  $global:LASTEXITCODE = $activityOptionsCode
+  $activityOptionsOut
+} @('ActivityOptionsContractTest all passed:')
+
 # A real installed base plus two isolated feature APKs, including an inter-feature
 # dependency. Reject malformed updates before publishing or stopping the old app.
 $splitPackageOut = FixesRun ($dvmFixes + 'gesher.services.SplitPackageContractTest' +
@@ -187,6 +195,7 @@ Check 'services: HandlerThread.quit with tracing off (MessageQueue''s Perfetto c
 # These module value classes are packaged in gesher-app.jar. Run each fixture in
 # its own bounded ART process, preserving its exit status as well as its marker.
 foreach ($fixture in @(
+  @('PowerWakeLockCallbackTest', 'wake lock listener callbacks, real held state and token lifetime'),
   @('PackageManifestFlagsTest', 'complete parsed manifest flags preserve installed application state'),
   @('PackageServiceQueriesTest', 'package UID/group queries and Android 16 dex-module completion'),
   @('BluetoothValueContractTest', 'BLE settings, filters, advertisements and parcels without an adapter'),

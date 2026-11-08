@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test actual semaphore/deadline code with Linux futexes and controlled clocks.
+"""Test actual semaphore/sysconf/deadline code with Linux futexes and controlled clocks.
 
 Production code and public registrations are copied verbatim. This envelope
 does not exercise Windows WaitOnAddress, signal delivery or cross-process
@@ -27,27 +27,35 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=ROOT / "compat/bionic/extra_sys_bionic.cc")
     parser.add_argument("--shim-source", type=Path, default=ROOT / "compat/bionic/shim.cc")
+    parser.add_argument("--posix-source", type=Path, default=ROOT / "compat/bionic/posix_bionic.cc")
     parser.add_argument("--cxx", default=os.environ.get("CXX", "c++"))
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
     source = args.source.read_text(encoding="utf-8")
     shim = args.shim_source.read_text(encoding="utf-8")
+    posix = args.posix_source.read_text(encoding="utf-8")
     implementation = section(source, "int64_t MsUntil(", "// --- scheduling")
     word = section(source, "std::atomic<uint32_t>* Word(", "int64_t NowRealtimeNs(")
     deadline = section(shim, "uint32_t MillisUntil(", "void BIONIC_SYSV GcovStub(")
+    sysconf = section(posix, "int64_t BIONIC_SYSV Sysconf(", "int BIONIC_SYSV GetNprocs(")
     registrations = re.findall(r'^  E\("sem_[A-Za-z_]+", [A-Za-z_][A-Za-z0-9_]*\);$', source, re.M)
     if len(registrations) != 12:
         raise ValueError("public semaphore registration count changed")
+    sysconf_registration = re.findall(r'^  E\("sysconf", Sysconf\);$', posix, re.M)
+    if len(sysconf_registration) != 1:
+        raise ValueError("public sysconf registration changed")
     template = (ROOT / "tests/native/semaphore_contract_host_test.cc.in").read_text(encoding="utf-8")
     for marker, value in (("@WORD_IMPLEMENTATION@", word),
                           ("@SEMAPHORE_IMPLEMENTATION@", implementation),
+                          ("@SYSCONF_IMPLEMENTATION@", sysconf),
                           ("@DEADLINE_IMPLEMENTATION@", deadline),
-                          ("@SEMAPHORE_REGISTRATIONS@", "\n".join(registrations))):
+                          ("@SEMAPHORE_REGISTRATIONS@", "\n".join(registrations + sysconf_registration))):
         if template.count(marker) != 1:
             raise ValueError("missing or ambiguous template marker: " + marker)
         template = template.replace(marker, value)
     print("Production semaphore source SHA256 " + hashlib.sha256(source.encode()).hexdigest(), flush=True)
     print("Production deadline source SHA256 " + hashlib.sha256(shim.encode()).hexdigest(), flush=True)
+    print("Production sysconf source SHA256 " + hashlib.sha256(posix.encode()).hexdigest(), flush=True)
     with tempfile.TemporaryDirectory(prefix="gesher-semaphores-") as temporary:
         folder = Path(temporary)
         generated = folder / "semaphore_test.cc"

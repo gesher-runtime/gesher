@@ -1,21 +1,29 @@
 // Public Android semaphore contracts, shared with the ELF libc suite.
 #include <dlfcn.h>
 #include <errno.h>
+#include <limits.h>
 #include <pthread.h>
 #include <semaphore.h>
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+
+#if defined(__BIONIC__) && _SC_SEM_VALUE_MAX != 0x36
+#error "Android semaphore sysconf selector changed"
+#endif
 
 typedef int (*sem_init_fn)(sem_t*, int, unsigned);
 typedef int (*sem_action_fn)(sem_t*);
 typedef int (*sem_value_fn)(sem_t*, int*);
 typedef int (*sem_timed_fn)(sem_t*, const struct timespec*);
+typedef int64_t (*semaphore_sysconf_fn)(int);
 struct semaphore_api {
   sem_init_fn init;
   sem_action_fn post, wait, trywait, destroy;
   sem_value_fn value;
   sem_timed_fn timed, monotonic;
+  semaphore_sysconf_fn sysconf;
 };
 static struct semaphore_api get_semaphore_api(void) {
   struct semaphore_api api;
@@ -27,11 +35,12 @@ static struct semaphore_api get_semaphore_api(void) {
   api.value = (sem_value_fn)dlsym(RTLD_DEFAULT, "sem_getvalue");
   api.timed = (sem_timed_fn)dlsym(RTLD_DEFAULT, "sem_timedwait");
   api.monotonic = (sem_timed_fn)dlsym(RTLD_DEFAULT, "sem_timedwait_monotonic_np");
+  api.sysconf = (semaphore_sysconf_fn)dlsym(RTLD_DEFAULT, "sysconf");
   return api;
 }
 static int semaphore_api_ready(struct semaphore_api api) {
   int ready = api.init && api.post && api.wait && api.trywait && api.destroy && api.value &&
-              api.timed && api.monotonic;
+              api.timed && api.monotonic && api.sysconf;
   check("semaphore: public exports", ready);
   return ready;
 }
@@ -55,7 +64,15 @@ static void* semaphore_post_worker(void* context) {
 static void test_semaphore_limits(void) {
   struct semaphore_api api = get_semaphore_api();
   if (!semaphore_api_ready(api)) return;
-  const unsigned android_max = 0x3fffffff;
+  // Android's selector is 0x36, not the host libc's _SC_SEM_VALUE_MAX number.
+  errno = EDOM;
+  int64_t reported_max = api.sysconf(0x36);
+  check("semaphore: sysconf reports Android SEM_VALUE_MAX", reported_max == 0x3fffffff);
+  check("semaphore: successful sysconf preserves errno", errno == EDOM);
+  errno = 0;
+  check("semaphore: invalid sysconf selector remains EINVAL", api.sysconf(INT_MAX) == -1 && errno == EINVAL);
+  if (reported_max != 0x3fffffff) return;
+  const unsigned android_max = (unsigned)reported_max;
   sem_t semaphore;
   unsigned char previous[sizeof(semaphore)];
   memset(&semaphore, 0xa5, sizeof(semaphore));

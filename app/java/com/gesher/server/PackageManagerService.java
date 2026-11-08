@@ -318,6 +318,21 @@ public final class PackageManagerService extends IPackageManager.Default {
         return new ParceledListSlice<>(query(intent, resolvedType, flags));
     }
 
+    @Override
+    public ParceledListSlice queryIntentActivityOptions(ComponentName caller, Intent[] specifics,
+            String[] specificTypes, Intent intent, String resolvedType, long flags, int userId) {
+        if (userId != 0) return new ParceledListSlice<>(new ArrayList<ResolveInfo>());
+        Map<String, ApkPackage> packages;
+        boolean hostBrowser;
+        synchronized (this) {
+            hostBrowser = !mPackages.containsKey(BrowserPackageSupport.PACKAGE);
+            packages = new LinkedHashMap<>(mPackages);
+            for (String removing : mRemoving.keySet()) packages.remove(removing);
+        }
+        return new ParceledListSlice<>(new ActivityOptionsResolver(packages, hostBrowser).query(
+                caller, specifics, specificTypes, intent, resolvedType, flags));
+    }
+
     private List<ResolveInfo> query(Intent intent, String resolvedType, long flags) {
         List<ResolveInfo> result = new ArrayList<>();
         for (ApkPackage p : mPackages.values()) {

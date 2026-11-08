@@ -77,8 +77,6 @@ int64_t MsUntil(const LinuxTimespec* abs, int clock) {
 
 // --- POSIX semaphores on bionic's sem_t (16 bytes; word 0 is the count) ---------
 
-constexpr uint32_t kSemValueMax = 0x3fffffff;  // bionic's SEM_VALUE_MAX.
-
 int BIONIC_SYSV SemInit(void* s, int, unsigned v) {
   if (v > kSemValueMax) return errno = kEINVAL, -1;
   Word(s)->store(v);

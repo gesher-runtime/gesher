@@ -108,8 +108,8 @@ of an unsupported operation is not counted as implementation of that feature.
 | Native file growth | Invalid/overflowing ranges and read-only descriptors could report successful allocation; POSIX errno behavior was incorrect. | Checked ranges, actual handle rights, descriptor lifetime and error propagation around existing CRT file growth. Sparse/range physical reservation and concurrent-resize parity remain explicitly unimplemented. [File allocation report](file-allocation-contracts-2026-11-08.md). |
 
 The added native directory, semaphore/deadline and file-operation harnesses
-pass 72, 73 and 40 assertions. Together with the rerun 116 original native
-assertions, that is **301 native host assertions**, with the same ASan/UBSan
+pass 72, 76 and 40 assertions. Together with the rerun 116 original native
+assertions, that is **304 native host assertions**, with the same ASan/UBSan
 and LeakSanitizer boundary described above. The separate real-JVM JNI test
 passes **72 audio-buffer assertions** under checked JNI and UBSan.
 
@@ -142,6 +142,42 @@ The source preservation gate remains exact outside the reviewed file-allocation
 function and pins that complete changed file independently. Cross-compilation
 does not establish linking, Windows execution, or translated guest execution.
 
+## Further implementations while CI runs
+
+Work continued from published commit
+`79567dadaacefd15983e9230bfd80290d6cd52f9` while its runtime gates ran:
+
+- **Activity options:** `queryIntentActivityOptions` now resolves actual installed
+  components, supplies specific indices and manifest labels/icons, applies
+  supported query flags and Android's combination/deduplication order. The
+  maintained host fixture passes **107 checks**, with a separate 600-request
+  differential check of the pinned combination algorithm. Chooser/preference
+  and broader visibility-policy limits remain explicit in the
+  [activity-options report](activity-options-followup-2026-11-08.md).
+- **Wake-lock listeners:** Acquisition, replacement, release and token death
+  now notify the actual current listener asynchronously. Death registration and
+  retirement are tied to the held record; failed native requests can be retried.
+  The production-service host fixture passes **98 assertions**; the real public
+  manager/Binder fixture is registered for Windows. See the
+  [power report](power-wake-lock-followup-2026-11-08.md).
+- **Semaphore limit queries:** The exported `sysconf` now reports the same
+  Android maximum enforced by `sem_init`/`sem_post`, from one shared constant.
+  Three additional production-function checks bring that harness to **76**,
+  already included in the native total above. See the
+  [sysconf report](semaphore-sysconf-followup-2026-11-08.md).
+
+The full application and service-test sources compiled and dexed together again
+after these implementations. The first published follow-up's CI run
+[42444051868](https://github.com/gesher-runtime/gesher/actions/runs/42444051868)
+completed its builds, but its failed runtime/package consumers stopped during
+GitHub job-inventory requests with HTTP 502/504 or HTTP/2 stream cancellation.
+They did not reach the new runtime fixtures. The shared GET transport now makes
+bounded retries for those exact transient failures while retaining every receipt
+identity and digest predicate. **15 transport/acceptance tests** and the existing
+**5 source-identity tests** pass; see the
+[CI transport report](github-read-transport-followup-2026-11-08.md). New-revision
+runtime execution is still required and cannot be inferred from this repair.
+
 ## Material compatibility work still open
 
 These current-source limits are separate from the repaired defects:
@@ -165,10 +201,11 @@ These current-source limits are separate from the repaired defects:
   Native sparse/range preallocation and concurrent file-resize guarantees are
   also incomplete. Returning an error, an empty quota, or logical file growth
   is not presented as implementation of those operations.
-- **Broader package APIs.** `queryIntentActivityOptions` still needs actual
-  specific-intent resolution, ordering/deduplication and caller filtering.
-  Multiuser package state and Android's complete package-visibility policy
-  are outside the implemented owner-user model.
+- **Broader package policy.** Android's preferred-activity/chooser backend,
+  full caller/target compatibility policy, multiuser package state and complete
+  package visibility remain outside the implemented owner-user model. The new
+  activity-options implementation selects a real candidate for ambiguous
+  implicit specifics rather than claiming an implemented system chooser.
 - **Remaining notification/job policy.** Old retained notification records from
   store versions 1 and 2 have no channel ID, so selective channel deletion cannot
   identify them after restart. Distinct user-stop/background-restriction job

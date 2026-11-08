@@ -548,6 +548,7 @@ int64_t BIONIC_SYSV Sysconf(int name) {
     case 0x25: return 65536;   // _SC_ATEXIT_MAX
     case 0x26: return 1024;    // _SC_IOV_MAX
     case 0x27: case 0x28: return 4096;  // _SC_PAGESIZE, _SC_PAGE_SIZE
+    case 0x36: return kSemValueMax;    // _SC_SEM_VALUE_MAX
     case 0x47: case 0x48: return 1024;  // _SC_GETGR_R_SIZE_MAX, _SC_GETPW_R_SIZE_MAX
     case 0x49: return 256;     // _SC_LOGIN_NAME_MAX
     case 0x4a: return 4;       // _SC_THREAD_DESTRUCTOR_ITERATIONS
