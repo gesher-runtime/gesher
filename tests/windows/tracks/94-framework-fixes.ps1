@@ -31,6 +31,18 @@ $bcpFixes = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app')
 $dvmFixes = @("-Xbootclasspath:$bcpFixes", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
   '-cp', (NoDrive "$Dir/services-tests.dex"))
 
+# Real temporary storage in fresh VMs, including explicit overrides and app cache.
+. "$PSScriptRoot/../temp-directory-contracts.ps1"
+Check 'runtime: real temporary directories, explicit overrides, app cache and I/O errors' {
+  Test-TemporaryDirectoryContracts $Dir $dvmFixes
+} @('TempDirectoryBootstrapTest all passed: 10 fresh VM scenarios')
+
+# The canonical UNC namespace must reach actual files, including the VM's temp default.
+. "$PSScriptRoot/../unc-file-contracts.ps1"
+Check 'runtime: UNC File/NIO operations and temporary storage on a private localhost share' {
+  Test-UncFileContracts $Dir $dvmFixes $root
+} @('UncFileBootstrapTest all passed: real file and temporary-directory I/O; share removed')
+
 # Query through the real PackageManager client and generated Binder parcels, using
 # properties parsed from this build's synthetic components.apk.
 $packageQueryOut = FixesRun ($dvmFixes + 'gesher.services.PackageQueryContractTest' +

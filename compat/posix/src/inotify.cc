@@ -404,7 +404,11 @@ void Inotify::Run() {
 
 void InotifyNoteWrite(int fd) {
   if (g_live_count.load(std::memory_order_relaxed) == 0) return;
-  HANDLE h = HandleFromFd(fd);
+  InotifyNoteWrite(HandleFromFd(fd));
+}
+
+void InotifyNoteWrite(HANDLE h) {
+  if (g_live_count.load(std::memory_order_relaxed) == 0) return;
   if (h == INVALID_HANDLE_VALUE || GetFileType(h) != FILE_TYPE_DISK) return;
   std::wstring full(32768, L' ');
   DWORD n = GetFinalPathNameByHandleW(h, full.data(), 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);

@@ -24,8 +24,12 @@ import android.os.RemoteException;
 import android.service.notification.StatusBarNotification;
 import android.service.notification.INotificationListener;
 import android.service.notification.NotificationRankingUpdate;
+import android.util.AtomicFile;
+import android.util.Xml;
+import com.android.modules.utils.TypedXmlPullParser;
 import com.gesher.server.NotificationManagerService;
 import java.io.File;
+import java.io.FileInputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -33,6 +37,7 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.time.InstantSource;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -41,6 +46,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.ToIntBiFunction;
+import org.xmlpull.v1.XmlPullParser;
 
 /** Real framework manager -> AIDL Parcel -> service, plus policy persistence and publication races. */
 public final class NotificationChannelGroupsTest {
@@ -520,6 +526,39 @@ public final class NotificationChannelGroupsTest {
     }
 
     public static int checks() { return checks; }
+
+    /** Actual Windows/ART file I/O; the host diagnostic deliberately uses text XML. */
+    private static void binaryPolicy(Fixture fixture) throws Exception {
+        require(Xml.ENABLE_BINARY_DEFAULT && Xml.ENABLE_RESOLVE_OPTIMIZATIONS,
+                "Binary policy regression requires the real binary XML and positioned-read paths");
+        AtomicFile policy = new AtomicFile(new File(System.getenv("ANDROID_DATA"),
+                "system/notification-channels/" + fixture.pkg + ".xml"));
+        byte[] magic = new byte[4];
+        try (FileInputStream input = policy.openRead()) {
+            require(android.system.Os.pread(input.getFD(), magic, 0, magic.length, 0) == magic.length,
+                    "Cannot read the persisted notification policy header");
+            require(Arrays.equals(magic, new byte[]{'A', 'B', 'X', 0}),
+                    "Notification policy was not persisted in binary XML format");
+            require(input.getChannel().position() == 0,
+                    "Positioned XML header sniff consumed the sequential file offset");
+            input.getChannel().position(7);
+            require(android.system.Os.pread(input.getFD(), magic, 0, magic.length, 0) == magic.length,
+                    "Cannot sniff the policy header with a nonzero sequential offset");
+            require(input.getChannel().position() == 7,
+                    "Positioned XML header sniff changed a nonzero sequential file offset");
+            input.getChannel().position(0);
+            TypedXmlPullParser parser = Xml.resolvePullParser(input);
+            int event;
+            do { event = parser.next(); } while (event != XmlPullParser.START_TAG
+                    && event != XmlPullParser.END_DOCUMENT);
+            require(event == XmlPullParser.START_TAG && "notification-channels".equals(parser.getName()),
+                    "Raw FileInputStream binary XML resolution lost the policy root");
+            require(parser.getAttributeInt(null, "version", -1) == 1
+                    && fixture.pkg.equals(parser.getAttributeValue(null, "package")),
+                    "Binary XML resolution changed the persisted policy identity");
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         require(args.length == 1, "Pass the devsvc APK requesting notification permission");
         require("1000".equals(System.getenv("GESHER_BINDER_UID")), "System-UID fixture needed for real retained notification state");
@@ -534,6 +573,7 @@ public final class NotificationChannelGroupsTest {
         try {
             Fixture f = new Fixture(args[0]);
             contracts(f.nm, f.wire, f.service, f.pkg);
+            binaryPolicy(f);
             legacyRouting(f);
             blockedChannels(f);
             f.restart(); persistence(f.nm, f.service, f.pkg);

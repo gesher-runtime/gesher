@@ -1,0 +1,18 @@
+diff --git a/ojluni/src/main/java/java/lang/System.java b/ojluni/src/main/java/java/lang/System.java
+--- a/ojluni/src/main/java/java/lang/System.java
++++ b/ojluni/src/main/java/java/lang/System.java
+@@ -1130,7 +1130,13 @@ public final class System {
+         // We check first if the property has not been set already: note that it
+         // can only be set from the command line through the '-Djava.io.tmpdir=' option.
+         if (!unchangeableProps.containsKey("java.io.tmpdir")) {
+-            p.put("java.io.tmpdir", "/tmp");
++            // Gesher's Windows entry supplies the host temporary path in TMPDIR.
++            // Keep this a changeable default: ActivityThread replaces it with
++            // the application's cache directory. A -D option still wins above.
++            // Named getenv is already used during System initialization and
++            // goes directly to Libcore.os, without a ProcessEnvironment map.
++            String tmpdir = getenv("TMPDIR");
++            p.put("java.io.tmpdir", tmpdir == null ? "/tmp" : tmpdir);
+         }
+ 
+         // Android has always had an empty "user.home" (see docs for getProperty).

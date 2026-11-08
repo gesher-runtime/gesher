@@ -3,6 +3,7 @@ package gesher.services;
 
 import com.gesher.server.Zygote;
 import java.io.File;
+import java.nio.file.Paths;
 
 /** Java-to-Win32 path identity; actual ShellLink creation remains in DynamicShortcutTest. */
 public final class ZygotePathTest {
@@ -13,6 +14,12 @@ public final class ZygotePathTest {
             throw new AssertionError(label + ": expected " + expected + ", got " + actual);
         }
         checks++;
+    }
+
+    private static void rejects(Runnable operation, String label) {
+        try { operation.run(); }
+        catch (IllegalArgumentException expected) { checks++; return; }
+        throw new AssertionError(label);
     }
 
     public static void contracts() {
@@ -55,6 +62,30 @@ public final class ZygotePathTest {
         String relative = new File("relative path/קיצור.lnk").getAbsolutePath();
         equal(Zygote.windowsPath(relative), Zygote.windowsPath("relative path/קיצור.lnk"),
                 "Relative path resolves before Windows conversion");
+        String unc = "\\\\Server Name\\Share Name\\תיקייה 😀\\file.txt";
+        String uncGuest = "/mnt/unc/Server Name/Share Name/תיקייה 😀/file.txt";
+        equal(uncGuest, Zygote.fromWindowsPath(unc), "UNC guest namespace");
+        equal(uncGuest, new File(uncGuest).getAbsolutePath(), "Java File preserves UNC identity");
+        equal(uncGuest, Paths.get(uncGuest).normalize().toString(), "Java Path preserves UNC identity");
+        equal(unc, Zygote.windowsPath(uncGuest), "UNC native path round trip");
+        equal(unc, Zygote.windowsPath(unc), "Raw native UNC recognized before Java normalization");
+        equal(unc, Zygote.windowsPath(unc.replace('\\', '/')), "Raw slash UNC recognized before Java normalization");
+        equal(uncGuest, Zygote.fromWindowsPath("\\\\?\\UNC\\" + unc.substring(2)), "Extended UNC path");
+        equal(uncGuest, Zygote.fromWindowsPath("\\\\?\\unc\\" + unc.substring(2)), "Extended UNC prefix case");
+        equal("\\\\localhost\\C$", Zygote.windowsPath("/mnt/unc/localhost/C$/"), "UNC share root");
+        equal(Zygote.fromWindowsPath(other + suffix), Zygote.fromWindowsPath("\\\\?\\" + other + suffix),
+                "Extended drive remains a drive path");
+        equal(drive + "\\mnt\\uncx\\file", Zygote.windowsPath("/mnt/uncx/file"), "UNC prefix boundary");
+        for (String invalid : new String[]{"/mnt/unc", "/mnt/unc/server", "/mnt/unc/./share",
+                "/mnt/unc/server/..", "/mnt/unc/?/UNC/share", "/mnt/unc/server/share:stream",
+                "/mnt/unc\\server\\share", "/mnt/unc:stream"}) {
+            rejects(() -> Zygote.windowsPath(invalid), "Malformed UNC namespace accepted: " + invalid);
+        }
+        for (String invalid : new String[]{"\\\\server", "\\\\server\\", "\\\\.\\pipe\\name",
+                "\\\\?\\GLOBALROOT\\Device\\Volume\\file", "\\\\?\\Volume{123}\\file",
+                "\\\\?\\UNC\\server", "\\\\?\\C:relative"}) {
+            rejects(() -> Zygote.fromWindowsPath(invalid), "Unsupported native namespace accepted: " + invalid);
+        }
         System.out.println("ZygotePathTest all passed: " + checks + " checks");
     }
 

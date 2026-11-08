@@ -217,6 +217,57 @@ jobs and their offline identity/retirement checks continue unchanged.
 The selected leg provides earlier runtime feedback for these contracts. It does
 not replace the complete suite or establish coverage of the omitted tracks.
 
+## Repairs driven by actual Windows execution
+
+The early framework-contract jobs on both Windows versions, source
+`8af8d702bef18a7a6caead597595542b3aa41183`, run
+[42450333175](https://github.com/gesher-runtime/gesher/actions/runs/42450333175),
+exposed seven failures before the longer full suite finished. These were traced
+to their actual runtime or fixture causes; none is accepted as a passing test.
+
+| Observed failure | Repair and required evidence |
+| --- | --- |
+| Reloading real notification policy produced `Unexpected magic 1032ffff`. | The common `pread`/`pwrite` implementation now uses an independently opened file object, preserves the shared sequential cursor, enforces original access rights, and retains handles/buffers through asynchronous completion. The raw binary XML sniffer, service restart, unlinked files, delete-on-close files and concurrent aliases are all mandatory Windows assertions. See the [positioned-I/O report](positioned-io-followup-2026-11-08.md). |
+| Four package/activity/split/URI fixtures could not create a temporary directory because the boot runtime selected nonexistent `/tmp`. Production XAPK installation and APK icon extraction use the same API. | Initialize the actual Windows temporary path before ART, expose it as libcore's changeable `java.io.tmpdir` default, retain explicit VM/environment overrides and the application's later cache selection. Real file operations determine existence/access failures. A stable UNC namespace avoids Java collapsing a network path's double slash. Ten fresh-VM scenarios require real create/write/read/delete and failure behavior, with a separate actual-SMB file/temp check. See the [temporary-directory report](temp-directory-followup-2026-11-08.md) and [UNC report](unc-path-followup-2026-11-08.md). |
+| The foreground-service assertion expected a deleted diagnostic message. | The APK now queries the actual stored channel and verifies its ID, name and importance. The harness retains the real posted-toast assertion and also requires the actual cancellation/removal event. No production log is invented to satisfy the test. |
+| The Wi-Fi fixture completed 42 checks successfully, while its runner still expected 33. | Require the current exact 42-check success marker and the original zero exit status. The fixture's behavior and assertions are unchanged. |
+
+The full Windows suites additionally exposed two independent test defects:
+
+- **Optimized-away allocator calls.** The actual `native-libs` artifact
+  `13605117526`, source `8af8d7`, was downloaded and its archive digest verified
+  (`sha256:94c37acc2d6d130502bf3e07102ab3418fbfb3623157da5df5e5dd00b7dfbd86`).
+  Disassembly of `libc_test.so` shows the compiler removing allocation calls and
+  producing unconditional failure branches or removing `errno` observations.
+  For example, the overflow `calloc` check at `0x7444` stores zero in `errno`
+  then prints failure without a `calloc` call. The shared regression now invokes
+  volatile function-pointer slots initialized from the actual public imports.
+  All original assertions and control flow remain; library optimization stays
+  enabled. The production allocation implementation is unchanged. Its existing
+  **35 host assertions** still pass under ASan/UBSan; independent `-O2` IR
+  inspection retains all five import slots and the real indirect calls.
+- **Different TCP/UDP port availability.** Full Windows 2022 job
+  [128635404241](https://github.com/gesher-runtime/gesher/actions/runs/42448689136/job/128635404241)
+  failed while a .NET UDP fixture tried to bind the ephemeral port already
+  selected for TCP. The two real listeners now each ask Windows for an available
+  port, and the Java fixture receives the corresponding ports independently.
+  The same 50,000-byte TCP and UDP payload checks remain. Both listeners are
+  cleaned up even if setup fails. A real local Java/socket run verifies the new
+  argument routing; Windows execution remains required.
+
+Before this repair batch, the existing public AudioManager focus, wake-lock
+listener, job-notification lifecycle, package manifest/query helper, storage and
+user-profile fixtures already passed on both early Windows jobs. Package APK
+integration, split installation, URI Binder checks and persisted channel reload
+were blocked or failed as described above and are not included in that claim.
+The two full E2E jobs on source `8af8d7` also completed successfully; their launch,
+frame/input and cleanup scope is separate from API completeness.
+
+This section records the pre-publication checkpoint. New runtime assertions
+require the repaired revision's own CI, with the original full suites and
+source/artifact receipt checks still enforced. Historical independently pinned
+component certificates are not rewritten to make the new source appear old.
+
 ## Material compatibility work still open
 
 These current-source limits are separate from the repaired defects:

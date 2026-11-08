@@ -55,7 +55,11 @@ public final class DocumentPickerTest {
         String root = (String) from.invoke(null, other + ":");
         require(("/mnt/" + other + "/").equals(root), "a drive root became " + root);
         String plain = (String) from.invoke(null, "\\\\server\\share\\f.txt");
-        require("//server/share/f.txt".equals(plain), "a UNC path became " + plain);
+        require("/mnt/unc/server/share/f.txt".equals(plain), "a UNC path became " + plain);
+        require(plain.equals(new java.io.File(plain).getAbsolutePath()),
+                "Java File changed the picked UNC identity");
+        require(plain.equals(java.nio.file.Paths.get(plain).normalize().toString()),
+                "Java Path normalization changed the picked UNC identity");
         System.out.println("DocumentPickerTest: fromWindowsPath maps the own drive to /, "
                 + "another to /mnt/<drive>");
     }

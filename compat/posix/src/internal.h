@@ -38,6 +38,8 @@ HANDLE HandleFromFd(int fd);
 // updates the directory entry, often at close (inotify.cc, ADR 0057). Cheap
 // when no inotify instance exists.
 void InotifyNoteWrite(int fd);
+// An already pinned file object, for I/O that can outlive close/reuse of fd.
+void InotifyNoteWrite(HANDLE file);
 
 // The bottom of the current thread's stack that Windows keeps for itself:
 // the lowest page, never committed, and the stack guarantee above it (two

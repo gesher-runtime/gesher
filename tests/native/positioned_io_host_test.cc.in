@@ -1,0 +1,279 @@
+// Production adapter below; real Linux files model the Win32 handle boundary.
+// Reopen/delete behavior on Windows is proved only by the native/ART fixtures.
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstdint>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <atomic>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <thread>
+
+#define WINAPI
+using DWORD = uint32_t;
+using ULONG = uint32_t;
+using LONG = int32_t;
+using BOOL = int;
+using HMODULE = void*;
+struct HostHandle { int fd = -1; bool event = false, owned = false, async = false; };
+using HANDLE = HostHandle*;
+#define INVALID_HANDLE_VALUE reinterpret_cast<HANDLE>(static_cast<intptr_t>(-1))
+constexpr BOOL TRUE = 1, FALSE = 0;
+constexpr DWORD ERROR_SUCCESS = 0, ERROR_HANDLE_EOF = 38, ERROR_IO_PENDING = 997,
+    ERROR_NOACCESS = 998, ERROR_INVALID_USER_BUFFER = 1784, ERROR_ACCESS_DENIED = 5;
+constexpr DWORD FILE_TYPE_DISK = 1, FILE_TYPE_CHAR = 2, FILE_TYPE_PIPE = 3, FILE_TYPE_UNKNOWN = 0;
+constexpr DWORD FILE_READ_DATA = 1, FILE_WRITE_DATA = 2, FILE_APPEND_DATA = 4;
+constexpr DWORD FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4;
+constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 16, FILE_WRITE_THROUGH = 2,
+    FILE_NO_INTERMEDIATE_BUFFERING = 8, FILE_SEQUENTIAL_ONLY = 4;
+constexpr DWORD FILE_FLAG_OVERLAPPED = 0x40000000, FILE_FLAG_WRITE_THROUGH = 0x80000000,
+    FILE_FLAG_NO_BUFFERING = 0x20000000, FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000;
+constexpr DWORD DUPLICATE_SAME_ACCESS = 2;
+struct IO_STATUS_BLOCK { uintptr_t unused[2]; };
+using PIO_STATUS_BLOCK = IO_STATUS_BLOCK*;
+struct FILE_MODE_INFORMATION { ULONG Mode; };
+enum FILE_INFORMATION_CLASS { FileModeInformation = 16 };
+struct BY_HANDLE_FILE_INFORMATION { DWORD dwFileAttributes; };
+struct OVERLAPPED { DWORD Offset = 0, OffsetHigh = 0; HANDLE hEvent = nullptr; DWORD result = 0, error = 0; };
+static thread_local DWORD last_error;
+static thread_local int guard_depth;
+static std::recursive_mutex descriptors;
+static std::mutex handles_mutex;
+static std::map<int, HostHandle> handles;
+static std::atomic<int> live_handles{0};
+static int access_error, duplicate_error, query_error, reopen_error, event_error, io_error, completion_error;
+static bool pending;
+static DWORD test_mode, last_reopen_access, last_reopen_flags;
+static unsigned waits, notifications;
+static ino_t notified_inode;
+static std::function<void()> after_pin;
+
+[[maybe_unused]] static void SetLastError(DWORD error) { last_error = error; }
+static DWORD GetLastError() { return last_error; }
+static HANDLE GetCurrentProcess() { return nullptr; }
+static HANDLE Owned(int fd, bool event = false, bool async = false) {
+  auto handle = new HostHandle{fd, event, true, async}; ++live_handles; return handle;
+}
+static BOOL CloseHandle(HANDLE handle) {
+  if (!handle || handle == INVALID_HANDLE_VALUE || !handle->owned) std::abort();
+  if (!handle->event) close(handle->fd);
+  delete handle; --live_handles; return TRUE;
+}
+static BOOL DuplicateHandle(HANDLE, HANDLE input, HANDLE, HANDLE* output, DWORD, BOOL inherit, DWORD flags) {
+  if (!guard_depth || inherit || flags != DUPLICATE_SAME_ACCESS) std::abort();
+  if (duplicate_error) { SetLastError(duplicate_error); return FALSE; }
+  int fd = dup(input->fd);
+  if (fd < 0) { SetLastError(errno); return FALSE; }
+  *output = Owned(fd); return TRUE;
+}
+static DWORD GetFileType(HANDLE handle) {
+  struct stat info{};
+  if (fstat(handle->fd, &info)) { SetLastError(errno); return FILE_TYPE_UNKNOWN; }
+  return S_ISFIFO(info.st_mode) ? FILE_TYPE_PIPE : S_ISCHR(info.st_mode) ? FILE_TYPE_CHAR : FILE_TYPE_DISK;
+}
+static BOOL GetConsoleMode(HANDLE, DWORD*) { return FALSE; }
+static BOOL GetFileInformationByHandle(HANDLE handle, BY_HANDLE_FILE_INFORMATION* info) {
+  struct stat statbuf{};
+  if (fstat(handle->fd, &statbuf)) { SetLastError(errno); return FALSE; }
+  info->dwFileAttributes = S_ISDIR(statbuf.st_mode) ? FILE_ATTRIBUTE_DIRECTORY : 0;
+  return TRUE;
+}
+static LONG QueryMode(HANDLE, PIO_STATUS_BLOCK, void* output, ULONG size, FILE_INFORMATION_CLASS kind) {
+  if (size != sizeof(FILE_MODE_INFORMATION) || kind != FileModeInformation) std::abort();
+  if (query_error) return -query_error;
+  static_cast<FILE_MODE_INFORMATION*>(output)->Mode = test_mode; return 0;
+}
+static ULONG StatusError(LONG error) { return static_cast<ULONG>(-error); }
+static HMODULE GetModuleHandleW(const wchar_t*) { return reinterpret_cast<void*>(1); }
+static void* GetProcAddress(HMODULE, const char* name) {
+  return std::strcmp(name, "NtQueryInformationFile") == 0
+      ? reinterpret_cast<void*>(QueryMode) : reinterpret_cast<void*>(StatusError);
+}
+static HANDLE ReOpenFile(HANDLE handle, DWORD access, DWORD sharing, DWORD flags) {
+  if (guard_depth || sharing != (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)) std::abort();
+  if (after_pin) { auto hook = std::move(after_pin); after_pin = {}; hook(); }
+  last_reopen_access = access; last_reopen_flags = flags;
+  if (reopen_error) { SetLastError(reopen_error); return INVALID_HANDLE_VALUE; }
+  char path[80]; std::snprintf(path, sizeof(path), "/proc/self/fd/%d", handle->fd);
+  int mode = (access & (FILE_WRITE_DATA | FILE_APPEND_DATA)) ? O_WRONLY : O_RDONLY;
+  int fd = open(path, mode | O_CLOEXEC);
+  if (fd < 0) { SetLastError(errno); return INVALID_HANDLE_VALUE; }
+  return Owned(fd, false, (flags & FILE_FLAG_OVERLAPPED) != 0);
+}
+static HANDLE CreateEventW(void*, BOOL manual, BOOL initial, const wchar_t*) {
+  if (!manual || initial || guard_depth) std::abort();
+  if (event_error) { SetLastError(event_error); return nullptr; }
+  return Owned(-1, true);
+}
+static BOOL FileIo(HANDLE handle, void* bytes, DWORD count, DWORD* transferred, OVERLAPPED* ov, bool write_op) {
+  if (io_error) { SetLastError(io_error); return FALSE; }
+  off_t offset = static_cast<off_t>((static_cast<uint64_t>(ov->OffsetHigh) << 32) | ov->Offset);
+  ssize_t actual;
+  if (GetFileType(handle) == FILE_TYPE_CHAR || GetFileType(handle) == FILE_TYPE_PIPE) {
+    // Windows ignores OVERLAPPED offsets on nonseekable handles.
+    actual = write_op ? write(handle->fd, bytes, count) : read(handle->fd, bytes, count);
+  } else if (handle->async) {
+    actual = syscall(write_op ? SYS_pwrite64 : SYS_pread64, handle->fd, bytes, count, offset);
+  } else {
+    // Reproduce the exact synchronous Win32 defect in the old production code.
+    actual = lseek(handle->fd, offset, SEEK_SET) < 0 ? -1
+        : write_op ? write(handle->fd, bytes, count) : read(handle->fd, bytes, count);
+  }
+  if (actual < 0) { SetLastError(errno); return FALSE; }
+  ov->result = static_cast<DWORD>(actual);
+  ov->error = actual == 0 && count && !write_op && GetFileType(handle) == FILE_TYPE_DISK ? ERROR_HANDLE_EOF : 0;
+  if (pending) { SetLastError(ERROR_IO_PENDING); return FALSE; }
+  if (ov->error) { SetLastError(ov->error); return FALSE; }
+  *transferred = ov->result; return TRUE;
+}
+static BOOL ReadFile(HANDLE handle, void* bytes, DWORD count, DWORD* transferred, OVERLAPPED* ov) {
+  return FileIo(handle, bytes, count, transferred, ov, false);
+}
+static BOOL WriteFile(HANDLE handle, const void* bytes, DWORD count, DWORD* transferred, OVERLAPPED* ov) {
+  return FileIo(handle, const_cast<void*>(bytes), count, transferred, ov, true);
+}
+static BOOL GetOverlappedResult(HANDLE handle, OVERLAPPED* ov, DWORD* transferred, BOOL wait) {
+  if (!wait || !handle->owned || !ov->hEvent || !ov->hEvent->event || guard_depth) std::abort();
+  ++waits;
+  DWORD error = completion_error ? completion_error : ov->error;
+  if (error) { SetLastError(error); return FALSE; }
+  *transferred = ov->result; return TRUE;
+}
+namespace gesher {
+static int ErrnoFromWin32(DWORD error) { return error == ERROR_ACCESS_DENIED ? EACCES : static_cast<int>(error); }
+static int FailWithLastError() { errno = ErrnoFromWin32(GetLastError()); return -1; }
+static HANDLE HandleFromFd(int fd) {
+  if (fcntl(fd, F_GETFD) < 0) return INVALID_HANDLE_VALUE;
+  std::lock_guard<std::mutex> lock(handles_mutex);
+  return &handles.try_emplace(fd, HostHandle{fd, false, false, false}).first->second;
+}
+static bool IsBinderFd(int) { return false; }
+static bool LookupEventFd(int) { return false; }
+static bool PollEpoll(int, short, short*) { return false; }
+static void InotifyNoteWrite(HANDLE handle) {
+  struct stat info{}; if (fstat(handle->fd, &info) == 0) notified_inode = info.st_ino;
+  ++notifications;
+}
+[[maybe_unused]] static void InotifyNoteWrite(int fd) { InotifyNoteWrite(HandleFromFd(fd)); }
+namespace record_locks {
+struct DescriptorGuard {
+  DescriptorGuard() { descriptors.lock(); ++guard_depth; }
+  ~DescriptorGuard() { --guard_depth; descriptors.unlock(); }
+};
+static int HandleAccess(HANDLE handle, uint32_t* access) {
+  if (access_error) return access_error;
+  int flags = fcntl(handle->fd, F_GETFL);
+  if (flags < 0) return errno;
+  *access = (flags & O_PATH) ? 0 : (flags & O_ACCMODE) == O_RDONLY ? FILE_READ_DATA
+      : (flags & O_ACCMODE) == O_WRONLY ? FILE_WRITE_DATA : FILE_READ_DATA | FILE_WRITE_DATA;
+  return 0;
+}
+}
+}
+static int gesher_is_socket(int fd) { struct stat info{}; return fstat(fd, &info) == 0 && S_ISSOCK(info.st_mode); }
+static int gesher_is_device_fd(int fd) {
+  struct stat info{}; return fstat(fd, &info) == 0 && S_ISCHR(info.st_mode) && info.st_rdev != 259; // Linux /dev/null
+}
+#define pread tested_pread
+#define pwrite tested_pwrite
+#define pread64 tested_pread64
+#define pwrite64 tested_pwrite64
+@POSITIONED_IO_IMPLEMENTATION@
+
+static int failures;
+static void check(const char* what, bool ok) {
+  std::printf("%-76s %s\n", what, ok ? "ok" : "FAIL");
+  if (!ok) ++failures;
+  std::fflush(stdout);
+}
+#include "positioned_io_contract_test.inc"
+
+static void faults() {
+  char path[] = "positioned-faults-XXXXXX";
+  int fd = mkstemp(path); check("positioned faults: fixture", fd >= 0);
+  if (fd < 0) return;
+  check("positioned faults: initial payload and cursor", write(fd, "original", 8) == 8 && lseek(fd, 3, SEEK_SET) == 3);
+  char byte = 0;
+  int* controls[] = {&access_error, &duplicate_error, &query_error, &reopen_error, &event_error, &io_error, &completion_error};
+  for (int* control : controls) {
+    *control = control == &access_error ? EACCES : ERROR_ACCESS_DENIED; pending = control == &completion_error;
+    check("positioned faults: return actual failing boundary", pread(fd, &byte, 1, 0) == -1 && errno == EACCES);
+    check("positioned faults: no cursor change or handle leak", lseek(fd, 0, SEEK_CUR) == 3 && live_handles == 0);
+    *control = 0; pending = false;
+  }
+  pending = true; waits = 0;
+  check("positioned pending: wait for read completion", pread(fd, &byte, 1, 0) == 1 && byte == 'o' && waits == 1);
+  check("positioned pending: wait for write completion", pwrite(fd, "x", 1, 0) == 1 && waits == 2);
+  check("positioned pending: EOF completion", pread(fd, &byte, 1, 500) == 0 && waits == 3);
+  check("positioned pending: lifetime and shared cursor", live_handles == 0 && lseek(fd, 0, SEEK_CUR) == 3);
+  pending = false;
+  test_mode = FILE_WRITE_THROUGH | FILE_NO_INTERMEDIATE_BUFFERING | FILE_SEQUENTIAL_ONLY;
+  check("positioned modes: actual query succeeds", pwrite(fd, "o", 1, 0) == 1);
+  check("positioned modes: preserve integrity/alignment without wider rights",
+        last_reopen_flags == (FILE_FLAG_OVERLAPPED | FILE_FLAG_WRITE_THROUGH | FILE_FLAG_NO_BUFFERING | FILE_FLAG_SEQUENTIAL_SCAN)
+        && last_reopen_access == FILE_WRITE_DATA);
+  test_mode = 0;
+  io_error = ERROR_NOACCESS;
+  check("positioned faults: bad user buffer maps EFAULT", pread(fd, &byte, 1, 0) == -1 && errno == EFAULT);
+  io_error = 0;
+  struct stat original{}; fstat(fd, &original);
+  after_pin = [fd, &path] {
+    gesher::record_locks::DescriptorGuard guard;
+    close(fd);
+    int replacement = open("positioned-replacement", O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (replacement != fd) { dup2(replacement, fd); close(replacement); }
+    if (write(fd, "replacement", 11) != 11) std::abort();
+    unlink(path);
+  };
+  check("positioned lifetime: in-flight write survives fd reuse", pwrite(fd, "z", 1, 0) == 1);
+  check("positioned lifetime: notification retains old file identity", notified_inode == original.st_ino);
+  lseek(fd, 0, SEEK_SET);
+  check("positioned lifetime: replacement fd is untouched", read(fd, &byte, 1) == 1 && byte == 'r');
+  check("positioned lifetime: private handles released", live_handles == 0);
+  close(fd); unlink("positioned-replacement");
+}
+
+static void concurrent() {
+  char path[] = "positioned-concurrent-XXXXXX";
+  int fd = mkstemp(path); check("positioned concurrency: fixture", fd >= 0); if (fd < 0) return;
+  unsigned char bytes[4096]; for (unsigned i = 0; i < sizeof(bytes); ++i) bytes[i] = static_cast<unsigned char>(i % 251);
+  check("positioned concurrency: initial payload and cursor", write(fd, bytes, sizeof(bytes)) == sizeof(bytes) && lseek(fd, 0, SEEK_SET) == 0);
+  int alias = dup(fd);
+  std::atomic<bool> start{false}, good{true};
+  std::thread thread([&] {
+    while (!start.load()) std::this_thread::yield();
+    for (unsigned i = 0; i < 512; ++i) {
+      unsigned char byte;
+      if (pread(alias, &byte, 1, 3000) != 1 || byte != bytes[3000] || pwrite(alias, "q", 1, 3500) != 1) good = false;
+    }
+  });
+  start = true;
+  for (unsigned i = 0; i < 512; ++i) {
+    unsigned char byte;
+    if (read(fd, &byte, 1) != 1 || byte != bytes[i]) good = false;
+    std::this_thread::yield();
+  }
+  thread.join();
+  check("positioned concurrency: real ordinary reads preserve order", good);
+  check("positioned concurrency: shared final cursor", lseek(fd, 0, SEEK_CUR) == 512 && lseek(alias, 0, SEEK_CUR) == 512);
+  check("positioned concurrency: all private handles close", live_handles == 0);
+  close(alias); close(fd); unlink(path);
+}
+
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  if (std::strcmp(argv[1], "public") == 0) test_positioned_io_contracts();
+  else if (std::strcmp(argv[1], "faults") == 0) faults();
+  else if (std::strcmp(argv[1], "concurrent") == 0) concurrent();
+  else return 2;
+  check("positioned I/O: no private handle leaks", live_handles == 0);
+  return failures ? 1 : 0;
+}

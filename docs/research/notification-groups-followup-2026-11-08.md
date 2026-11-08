@@ -195,6 +195,33 @@ named channels so their permission/publication assertions do not depend on the
 removed missing-channel fallback. `JobNotificationLifecycleTest` covers the
 separate job policy behavior.
 
+### Windows binary XML failure and regression
+
+The [first focused Windows 2022 job](https://github.com/gesher-runtime/gesher/actions/runs/42450333175/job/128639822652)
+reached the group fixture's restart check and failed to reload persisted policy:
+the binary parser reported `Unexpected magic 1032ffff`, followed by a missing
+group at the persistence assertion. The earlier permission-attachment failure
+was no longer present.
+
+The service uses the standard `AtomicFile.openRead()` and
+`Xml.resolvePullParser(FileInputStream)` path. The pinned framework sniffs the
+four-byte `ABX\0` header with `Os.pread()` before giving the same stream to its
+binary parser. Gesher's native `pread` moved the synchronous Windows file
+position, so the parser started after the header. The notification serializer,
+parser selection and binary format are unchanged; the repair belongs in native
+positioned I/O.
+
+The Windows fixture now adds eight assertions against its actual persisted
+policy: binary mode and header, positioned reads preserving both zero and
+nonzero sequential offsets, and the real raw-file XML resolver reading the
+policy root and identity. Its existing restart/group/channel assertions remain.
+The updated fixture compiled against the verified Android framework/core module;
+the separate host diagnostic still passes **88 assertions** using its documented
+text-XML native boundary. That host result does not execute the eight new native
+binary-file assertions; their result must come from a subsequent Windows run.
+
+Source: [Android 16 Xml: positioned header sniff and binary parser selection](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/util/Xml.java).
+
 The complete application and all service fixtures compiled and dexed against the
 verified framework and Android core module in this audit. **The Windows/ART
 fixtures have not executed locally.** Host results do not establish real Binder

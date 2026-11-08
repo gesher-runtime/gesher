@@ -71,10 +71,16 @@ if ($bundled -gt 100 -and $files.Count -ge $bundled -and (Test-Path (Join-Path $
 
 # TCP and UDP echo servers that are not Java: .NET's, on another thread of this script.
 $tcp = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
-$tcp.Start()
-$echoPort = $tcp.LocalEndpoint.Port
-$udp = [Net.Sockets.UdpClient]::new([Net.IPEndPoint]::new([Net.IPAddress]::Loopback, $echoPort))
-$echoJobs = @(
+$udp = $null
+$echoJobs = @()
+try {
+  $tcp.Start()
+  $tcpEchoPort = $tcp.LocalEndpoint.Port
+  # TCP and UDP have independent bind/exclusion namespaces. Ask each real
+  # server for its own available port; a free TCP port may be denied to UDP.
+  $udp = [Net.Sockets.UdpClient]::new([Net.IPEndPoint]::new([Net.IPAddress]::Loopback, 0))
+  $udpEchoPort = $udp.Client.LocalEndPoint.Port
+  $echoJobs = @(
   Start-ThreadJob -ArgumentList $tcp -ScriptBlock {
     param($listener)
     while ($true) {
@@ -94,10 +100,10 @@ $echoJobs = @(
       $null = $client.Send($data, $data.Length, $from)
     }
   })
-try {
-  $null = NetDex "TCP and UDP echo by .NET servers on 127.0.0.1:$echoPort" @('echo', "$echoPort") 120
+  $null = NetDex "TCP and UDP echo by .NET servers on 127.0.0.1 (TCP $tcpEchoPort, UDP $udpEchoPort)" @('echo', "$tcpEchoPort", "$udpEchoPort") 120
 } finally {
-  $tcp.Stop(); $udp.Close()
+  $tcp.Stop()
+  if ($null -ne $udp) { $udp.Close() }
   $echoJobs | Stop-Job -PassThru | Remove-Job -Force
 }
 

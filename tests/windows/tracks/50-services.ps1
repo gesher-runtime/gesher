@@ -127,6 +127,9 @@ $dvm = @("-Xbootclasspath:$bcpServices", "-Ximage:$(NoDrive "$root/system")/fram
   '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"))
 CheckTimed 'binder: CursorWindow inline/shared-memory Parcel data and lifetime' "$Dir/dalvikvm.exe" `
   ($dvm + 'gesher.services.CursorWindowParcelTest') @('CursorWindowParcelTest all passed')
+# The XML sniffer and native apps rely on true cursor-independent reads/writes.
+CheckTimed 'runtime: positioned file I/O preserves cursors, rights and open-file identity' "$Dir/dalvikvm.exe" `
+  ($dvm + 'gesher.services.PositionedIoTest') @('PASS PositionedIoTest') 90 -Publish
 $service = Start-Process "$Dir/dalvikvm.exe" -ArgumentList ($dvm + 'gesher.services.BinderTest', 'service') `
   -PassThru -NoNewWindow -RedirectStandardOutput "$logs/service.out" -RedirectStandardError "$logs/service.err"
 $failedBefore = $failed
@@ -335,7 +338,8 @@ $ok = (CheckSequences 'services: bindService and unbindService, the Binder from 
     "${c}unbindService", "${c}LocalService onUnbind", "${c}LocalService onDestroy")
 ) $appCode) -and $ok
 $ok = (CheckSequences 'services: a foreground service: startForegroundService, its notification to the stand-in notification manager' $appOut @(
-  ,@("${c}step: foreground service", "${c}ForegroundService onCreate", "${c}ForegroundService startForeground(7), channel gesher",
+  ,@("${c}step: foreground service", "${c}ForegroundService onCreate", "${c}ForegroundService notification channel verified",
+    "${c}ForegroundService startForeground(7), channel gesher",
     "${c}ForegroundService stopForeground, stopSelf", "${c}ForegroundService onDestroy")
 ) $appCode) -and $ok
 $ok = (CheckSequences 'services: broadcasts: registerReceiver and sendBroadcast, a manifest receiver for an explicit broadcast' $appOut @(
@@ -365,8 +369,8 @@ $null = CheckSequences 'services: system_server drives components.apk: NewIntent
     "${s}scheduleStopService com.gesher.components/.CounterService", "${s}stopSelf com.gesher.components/.CounterService (start id 1)",
     "${s}scheduleBindService com.gesher.components/.LocalService", "${s}publishService com.gesher.components/.LocalService",
     "${s}scheduleUnbindService com.gesher.components/.LocalService",
-    "${s}notification channel gesher created for com.gesher.components",
     "${s}notification 7 posted for com.gesher.components: channel gesher (importance 2, a toast of Gesher.App.com.gesher.components)",
+    "${s}notification 7 of com.gesher.components cancelled, its toast removed",
     "${s}registerReceiver from com.gesher.components: com.gesher.components.PING",
     "${s}scheduleReceiver com.gesher.components/com.gesher.components.ManifestReceiver",
     "${s}settings: updated system key gesher_test", "${s}scheduleExit: process ")
@@ -748,7 +752,7 @@ try {
     @{ Class = 'ApplicationRestrictionsTest'; Count = 16; Name = 'unmanaged restrictions queries and explicit unsupported approval' },
     @{ Class = 'BlobStoreContractTest'; Count = 25; Name = 'empty shared-blob queries, zero quota and unsupported storage' },
     @{ Class = 'NsdContractTest'; Count = 37; Name = 'DNS-SD request overloads, callback executors and discovery lifecycle' },
-    @{ Class = 'WifiUnsupportedTest'; Count = 33; Name = 'disabled Wi-Fi manager and unsupported controller operations' },
+    @{ Class = 'WifiUnsupportedTest'; Count = 42; Name = 'disabled Wi-Fi manager and unsupported controller operations' },
     @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service' }
   )
   foreach ($contract in $canonicalChecks) {
