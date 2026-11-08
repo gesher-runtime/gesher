@@ -256,14 +256,55 @@ generation symlink, and unchanged target sentinel. Substituting only the publish
 This host evidence does not execute APK parsing or prove Windows path conversion.
 The two repaired package fixtures and production sources compile against the real
 Android core/framework at Java target 17; fixture D8 conversion also passed.
-Their complete corrected Windows install/query results remain a subsequent CI
-gate, while the linked completed run supplies the preceding failures.
+Their complete corrected Windows results are recorded below; the linked earlier
+run supplies the preceding failures.
+
+### Third focused Windows result and unsigned-addon fixture correction
+
+Published `d4773067` passed the complete split-package fixture on both
+[Windows 2022](https://github.com/gesher-runtime/gesher/actions/runs/42458476541/job/128664979462)
+and [Windows 2025](https://github.com/gesher-runtime/gesher/actions/runs/42458476541/job/128664979362).
+That is actual Windows/ART evidence for install/update, canonical returned and
+reloaded code paths, split code/resources, signed session completion and the
+preserved failed-update checks. The activity-options fixture also passed on both.
+
+The query fixture passed the newly registered permission service and its public
+permission queries, then correctly failed when its old test setup tried to call
+`setSystemAddon(true)` on the deliberately unsigned `components.apk`.
+`ApkPackage` rejected that promotion with `SecurityException: Unverified system
+addon`. This was an invalid fixture assumption, not permission to relax the
+production signing gate.
+
+The fixture now requires that rejection and verifies unchanged addon/system
+metadata and continued exclusion from both `MATCH_SYSTEM_ONLY` queries. The
+actual platform package remains the positive system-only GID case. Positive
+addon-state projection in the earlier host tests is constructed-policy evidence,
+not a claim that an unsigned APK became a trusted installed addon. Production
+signing verification is unchanged. Complete runtime passage of the corrected
+query fixture is still pending the next Windows run.
+
+The same revision's
+[installed-package job](https://github.com/gesher-runtime/gesher/actions/runs/42458476541/job/128664979395)
+passed supplier verification, installed boot images/fonts, managed installation
+and launch, dex optimization, shortcuts, URL/icon checks and shutdown. It then
+failed the separate installed `lifecycle.apk --system-server` launch: the app
+exited 1 through `Parcel.readException`/`startActivityAndWait`, and the server
+logged an attached process waiting for an activity start before it died. The
+workflow prints only the final 12 client lines, omitting the exception header.
+The identical unassigned self-attachment path is evidence consistent with the
+nonprotected configured-starter enrollment defect described in the
+[caller follow-up](component-caller-followup-2026-11-08.md); the underlying
+exception message is not observable in this truncated log. That correction and
+the ordinary package gate still require a new runtime result. No receipt or
+source-identity gate is relaxed in response to this failure.
 
 ## Remaining scope
 
 The subsequently implemented `queryIntentActivityOptions` is described in the
 [activity-options follow-up](activity-options-followup-2026-11-08.md), including
-its remaining resolver-choice and visibility limits. This package follow-up
-does not implement Android multiuser package state, package visibility policy,
+its remaining resolver-choice and visibility limits. A subsequent
+[package-visibility follow-up](package-visibility-followup-2026-11-08.md) implements
+the static `canPackageQuery` operation and documents its dynamic visibility and
+global filtering gaps. This package follow-up does not implement Android multiuser package state,
 supplementary-group assignment, or every service behind the newly preserved
 manifest flags.

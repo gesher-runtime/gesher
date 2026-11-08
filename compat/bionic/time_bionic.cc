@@ -2,8 +2,9 @@
 //
 // bionic's LP64 struct tm is the nine ints the CRT has, then `long
 // tm_gmtoff` and `const char* tm_zone` (56 bytes); time_t is 64-bit. The
-// conversions use the CRT's 64-bit time functions (local time is Windows'
-// time zone, or $TZ as the CRT reads it). strftime is written out for the C
+// UTC conversions use the proleptic Gregorian calendar, including dates
+// before 1970. Local time uses the CRT (Windows' time zone, or $TZ as the
+// CRT reads it). strftime is written out for the C
 // locale with every conversion bionic's has (C99/POSIX plus %k %l %P %s %+
 // and the '-', '_', '0', '^', '#' flags), since the CRT's treats an unknown
 // one as an invalid parameter. strftime_l (libc++'s time_put) is the same.
@@ -104,13 +105,70 @@ struct tm ToCrt(const BionicTm* in) {
   return t;
 }
 
+// Floor division is needed for the years and seconds before the epoch. All
+// divisors here are positive; unlike negating the dividend this also works
+// for INT64_MIN.
+int64_t UtcFloorDiv(int64_t value, int64_t divisor) {
+  return value / divisor - (value % divisor < 0);
+}
+
+struct UtcDate {
+  int64_t year;
+  int month;  // January = 0.
+  int day;
+};
+
+// March-based 400-year eras have exactly 146097 days. Keeping the leap day
+// at the end of the era makes both directions work for negative years too.
+UtcDate UtcDateFromDays(int64_t days) {
+  int64_t shifted = days + 719468;
+  int64_t era = UtcFloorDiv(shifted, 146097);
+  int64_t day_of_era = shifted - era * 146097;
+  int64_t year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36524 -
+                         day_of_era / 146096) / 365;
+  int64_t year = era * 400 + year_of_era;
+  int day_of_year = static_cast<int>(day_of_era -
+      (365 * year_of_era + year_of_era / 4 - year_of_era / 100));
+  int march_month = (5 * day_of_year + 2) / 153;
+  int day = day_of_year - (153 * march_month + 2) / 5 + 1;
+  int month = march_month + (march_month < 10 ? 2 : -10);
+  return {year + (month < 2), month, day};
+}
+
+int64_t UtcMonthStart(int64_t year, int month) {
+  year -= month < 2;
+  int64_t era = UtcFloorDiv(year, 400);
+  int64_t year_of_era = year - era * 400;
+  int march_month = month + (month < 2 ? 10 : -2);
+  int64_t day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 +
+                       (153 * march_month + 2) / 5;
+  return era * 146097 + day_of_era - 719468;
+}
+
 BionicTm* BIONIC_SYSV GmtimeR(const int64_t* t, BionicTm* out) {
-  struct tm crt;
-  __time64_t v = *t;
-  if (_gmtime64_s(&crt, &v) != 0) return errno = 75 /* EOVERFLOW */, nullptr;
-  FromCrt(crt, out);
-  out->tm_gmtoff = 0;
+  int64_t days = *t / 86400;
+  int64_t seconds = *t % 86400;
+  if (seconds < 0) {
+    seconds += 86400;
+    --days;
+  }
+  UtcDate date = UtcDateFromDays(days);
   out->tm_zone = kUtc;
+  // Like bionic's checked conversion, reject only a year that cannot be
+  // represented by struct tm, not the CRT's narrower 1970..3000 range.
+  if (__builtin_sub_overflow(date.year, int64_t{1900}, &out->tm_year))
+    return errno = 75 /* EOVERFLOW */, nullptr;
+  out->tm_sec = static_cast<int32_t>(seconds % 60);
+  out->tm_min = static_cast<int32_t>(seconds / 60 % 60);
+  out->tm_hour = static_cast<int32_t>(seconds / 3600);
+  out->tm_mday = date.day;
+  out->tm_mon = date.month;
+  out->tm_wday = static_cast<int32_t>((days + 4) % 7);
+  if (out->tm_wday < 0) out->tm_wday += 7;
+  out->tm_yday = static_cast<int32_t>(days - UtcMonthStart(date.year, 0));
+  out->tm_isdst = 0;
+  out->pad = 0;
+  out->tm_gmtoff = 0;
   return out;
 }
 
@@ -138,15 +196,63 @@ int64_t BIONIC_SYSV Mktime(BionicTm* tm) {
   LocaltimeR(&result, tm);
   return result;
 }
-int64_t BIONIC_SYSV Timegm(BionicTm* tm) {
-  struct tm crt = ToCrt(tm);
-  __time64_t t = _mkgmtime64(&crt);
-  if (t == -1) return errno = 75, -1;
-  int64_t result = t;
-  GmtimeR(&result, tm);
-  return result;
+bool UtcNormalizeField(int64_t* larger, int64_t* smaller, int base) {
+  int64_t carry = UtcFloorDiv(*smaller, base);
+  *smaller -= carry * base;
+  *larger += carry;
+  // Bionic checks the int-sized minute, hour and day carries separately;
+  // accepting a later cancellation would change which inputs it accepts.
+  return INT32_MIN <= *larger && *larger <= INT32_MAX;
 }
-double BIONIC_SYSV Difftime(int64_t a, int64_t b) { return static_cast<double>(a - b); }
+
+bool UtcTimegmAttempt(const BionicTm* in, bool normalize_seconds,
+                     int64_t* result, BionicTm* normalized) {
+  int64_t second = in->tm_sec;
+  int64_t minute = in->tm_min;
+  int64_t hour = in->tm_hour;
+  int64_t day = in->tm_mday;
+  if (normalize_seconds && !UtcNormalizeField(&minute, &second, 60)) return false;
+  if (!UtcNormalizeField(&hour, &minute, 60) ||
+      !UtcNormalizeField(&day, &hour, 24)) return false;
+  int64_t month_carry = UtcFloorDiv(in->tm_mon, 12);
+  int month = static_cast<int>(in->tm_mon - month_carry * 12);
+  // Android LP64's int_fast32_t year accumulator is 64 bits, including on
+  // our Windows host where the native int_fast32_t is only 32 bits.
+  int64_t year = int64_t{in->tm_year} + month_carry + 1900;
+  int64_t days = UtcMonthStart(year, month) + day - 1;
+  UtcDate date = UtcDateFromDays(days);
+  if (date.year - 1900 < INT32_MIN || date.year - 1900 > INT32_MAX) return false;
+  // tzcode first saves out-of-range seconds, then retries with them carried
+  // into minutes. Before 1970 its first attempt subtracts 59 from the saved
+  // int seconds; retain that overflow boundary without overflowing here.
+  if ((second < 0 || second >= 60) && date.year < 1970 &&
+      second < int64_t{INT32_MIN} + 59) return false;
+  // With a representable tm_year, this magnitude is below 7e16 seconds,
+  // even after adding any int-sized seconds: all arithmetic fits int64_t.
+  *result = days * 86400 + hour * 3600 + minute * 60 + second;
+  return GmtimeR(result, normalized) != nullptr;
+}
+
+int64_t BIONIC_SYSV Timegm(BionicTm* tm) {
+  int saved_errno = errno;
+  int64_t result;
+  BionicTm normalized {};
+  if (!UtcTimegmAttempt(tm, false, &result, &normalized) &&
+      !UtcTimegmAttempt(tm, true, &result, &normalized))
+    return errno = 75 /* EOVERFLOW */, -1;
+  // Commit only a fully representable result. In particular a failed final
+  // year check must not feed a wrapped year into the second attempt.
+  *tm = normalized;
+  errno = saved_errno;
+  return result;  // -1 itself is the valid instant just before the epoch.
+}
+
+double BIONIC_SYSV Difftime(int64_t a, int64_t b) {
+  // Subtract before conversion to retain adjacent large instants, but use
+  // an unsigned magnitude so the distance between signed extremes is safe.
+  if (a >= b) return static_cast<double>(static_cast<uint64_t>(a) - static_cast<uint64_t>(b));
+  return -static_cast<double>(static_cast<uint64_t>(b) - static_cast<uint64_t>(a));
+}
 
 // --- strftime ------------------------------------------------------------------
 

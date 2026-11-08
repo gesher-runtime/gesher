@@ -312,6 +312,13 @@ public final class ComponentCallerFixture {
         Bundle result = new Bundle(); result.putBoolean("android:activity.shareIdentity", false); return result;
     }
 
+    /** Run in a fresh VM with the actual nonprotected environment configuration. */
+    public static int runBootstrap(boolean realBinder) throws Exception {
+        binder = realBinder; checks = 0;
+        try { bootstrapContracts(); return checks; }
+        finally { ActivityClient.setActivityClientController(null); }
+    }
+
     private static void retirementContracts() throws Exception {
         for (String retirement : List.of("record", "process", "package")) {
             for (String operation : List.of("finish", "task", "navigate")) {
@@ -401,7 +408,10 @@ public final class ComponentCallerFixture {
         Class<?> starterType = type("ActivityTaskManagerService$ProcessStarter");
         set(h.atm, "mStarter", Proxy.newProxyInstance(starterType.getClassLoader(), new Class<?>[]{starterType},
                 (self, method, arguments) -> { throw new AssertionError("Bootstrap predicate must not launch a process"); }));
-        check(!h.bootstrap(app, thread, pid, uid), "Spawner-owned device accepted legacy enrollment");
+        boolean protectedMode = GmsSignatureSpoofing.isEnabled();
+        check(h.bootstrap(app, thread, pid, uid) == !protectedMode,
+                protectedMode ? "Protected spawner-owned device accepted legacy enrollment"
+                        : "Nonprotected self-attachment rejected merely because a starter exists");
         set(h.atm, "mStarter", null);
         check(h.bootstrap(app, thread, pid, uid), "Restored exact unassigned control rejected");
     }

@@ -2,6 +2,10 @@
 public final class ComponentCallerHost {
     public static void main(String[] args) throws Throwable {
         System.load(args[0]);
+        boolean bootstrapOnly = args.length == 2 && "bootstrap-only".equals(args[1]);
+        if (com.gesher.server.GmsSignatureSpoofing.isEnabled() == bootstrapOnly) {
+            throw new AssertionError("Host must use the real protected/nonprotected environment for this mode");
+        }
         String fixtureName = "com.gesher.server.ComponentCallerFixture";
         // ART loads services-tests.dex separately from the boot services. Matching
         // package names are not runtime package access: reproduce that boundary.
@@ -23,9 +27,10 @@ public final class ComponentCallerHost {
                 throw new AssertionError("Fixture must not share the production runtime package");
             }
             int checks;
-            try { checks = (int)fixture.getMethod("run", boolean.class).invoke(null, false); }
+            try { checks = (int)fixture.getMethod(bootstrapOnly ? "runBootstrap" : "run", boolean.class).invoke(null, false); }
             catch (java.lang.reflect.InvocationTargetException failure) { throw failure.getCause(); }
-            System.out.println("ComponentCaller host all passed: " + checks + " checks");
+            System.out.println((bootstrapOnly ? "ComponentCaller bootstrap host all passed: "
+                    : "ComponentCaller host all passed: ") + checks + " checks");
             System.out.println("Separate fixture/service class loaders; real public caller/controller/provider policy; constructed manifest/process state and controlled native identity. No ART, Binder transport or actual Activity callback claim.");
         }
     }

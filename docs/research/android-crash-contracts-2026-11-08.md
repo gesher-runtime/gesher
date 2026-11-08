@@ -390,14 +390,17 @@ host models.
 The same runs exposed four remaining causes; the failed jobs are not counted
 as successes:
 
-- **Legacy process enrollment.** The old no-spawner launcher attached its
+- **Legacy process enrollment.** The old self-launcher attached its
   process before any package was assigned, then claimed `com.gesher.app` with
   no application-thread Binder. Requiring authenticated caller identity
   correctly rejected this incomplete protocol, breaking the existing lifecycle
   and component tests. The launcher now supplies its actual attached thread
   and target package. The server admits a single initial MAIN/LAUNCHER request
-  only for the exact live, unassigned PID/thread/UID, with no process spawner,
-  matching installed package UID and code generation. Resolution must select
+  only for the exact live, unassigned PID/thread/UID in a mode that already
+  permits self-attachment, with matching installed package UID and code
+  generation. The existing nonprotected mode permits self-attachment even when
+  an on-demand starter is available; the protected mode with a starter still
+  requires a verified server start sequence. Resolution must select
   that same package before any external-handler path. Publication rechecks
   the record, then actually assigns and binds that process. Ordinary package
   authentication remains active; an unassigned process is not promoted to
@@ -432,10 +435,13 @@ results, while a live wrong owner remains rejected. Actual authentication is
 rechecked after concurrent removal, and mutation/result publication rechecks
 the activity generation. Internal server cleanup remains separate from an
 app-requested finish. The [caller report](component-caller-followup-2026-11-08.md)
-records **177 passing checks**: 116 existing caller/URI cases, 45 retirement
-cases and 16 controls over the exact initial-enrollment predicate. Three
+records **193 passing host checks**: 116 existing caller/URI cases, 45 retirement
+cases and 32 controls over the exact initial-enrollment predicate across two
+fresh VMs with the real protected/nonprotected environment settings. Three
 negative controls fail at the original invented grant, cross-loader access
-and retired-finish defects. These host controls do not replace the next real
+and retired-finish defects. An additional published-source control fails the
+nonprotected self-attachment case when a process starter is available. These
+host controls do not replace the next real
 legacy launch and cross-app callback runs.
 
 Both full Windows jobs also stopped in the offline identity gate because the
@@ -445,13 +451,25 @@ without updating its constructor-captured identity. The fixture now constructs
 the creator process under that creator's controlled native identity, explicitly
 requires a holder's forged finish to leave state and results unchanged, then
 finishes as the actual owner. Production ownership enforcement is unchanged.
-All original retirement, one-shot and result-delivery checks remain; this
-corrected offline fixture still needs its next Windows execution.
+All original retirement, one-shot and result-delivery checks remain. At
+`d4773067`, both full Windows jobs completed the offline identity/retirement
+step successfully and advanced to the full runtime suite; those full suites
+were still running at this checkpoint.
 
 The complete application and all service-test sources again pass Android-core
-javac and D8 after these repairs. The corrected legacy launch, complete
-package/split fixtures and cross-app caller callbacks still require their new
-revision's Windows execution at this checkpoint.
+javac and D8 after these repairs. The subsequent Windows 2022 and 2025 focused jobs for
+`d4773067a02a418759a2638f277effe84b9987cc`
+([Windows 2022](https://github.com/gesher-runtime/gesher/actions/runs/42458476541/job/128664979462),
+[Windows 2025](https://github.com/gesher-runtime/gesher/actions/runs/42458476541/job/128664979362))
+both passed the complete split installation/DEX/resource fixture and the protected
+caller fixture plus its actual two-app lifecycle/provider/cleanup helper. These
+are real Windows/ART observations. ActivityOptions, notification persistence,
+jobs, audio focus, explicit URI grants, positioned I/O and temporary/UNC storage
+also passed. Each job still failed overall: thirteen legacy launch checks exposed
+the overly narrow no-starter predicate, and the package query fixture attempted
+to promote its unverified ordinary APK to a system addon. The subsequent
+nonprotected-starter correction has local positive/negative controls; its next
+Windows execution and the package fixture's remaining checks are still pending.
 
 ## Media frame selection after decoder drain
 
@@ -478,6 +496,60 @@ unit compiles with the Windows CI toolchain. Actual repaired decoder/Bitmap
 behavior remains pending the next Windows full run. The
 [media report](retriever-frame-followup-2026-11-08.md) records the reference
 sources, negative control and remaining 600-input/thumbnail bounds.
+
+## Public package visibility queries
+
+A subsequent inventory review reproduced a direct public API crash:
+`IPackageManager.Default.canPackageQuery` returned null, and the real
+`ApplicationPackageManager` single-target wrapper indexed that array. The new
+service method evaluates a coherent installed/removal snapshot. It preserves
+target order and duplicates, validates the caller's visibility of both source
+and targets, and returns Android's typed missing-package exception through the
+generated Binder path.
+
+The static policy uses actual UIDs and parsed target SDK, query-all declarations,
+package/Intent/provider queries, exported component filters, library dependencies
+and permission definers. Source and target packages sharing a real UID contribute
+their declarations to that UID's visibility edges. Force-queryable system state
+requires actual addon status and framework policy; an ordinary APK cannot acquire
+it through its own flag. Removal or replacement changes subsequent answers.
+
+The actual modified service and public wrapper pass **80 host checks** in two
+fresh VMs, including distinct protected UIDs and legacy shared UID behavior;
+root independently repeated them. Substituting the published service reproduces
+the original wrapper NullPointerException. A new mandatory Windows fixture uses
+the real Binder/Parcel and framework resource path with constructed manifests.
+The existing parsed-APK public package fixture also tests the new API and now
+requires its unsigned APK's attempted system-addon promotion to be rejected
+without changing metadata. These new Windows checks remain pending. The
+[visibility report](package-visibility-followup-2026-11-08.md) explicitly retains
+dynamic interaction/install-source/overlay visibility and filtering of other
+package query APIs as remaining work.
+
+## UTC dates outside the Windows CRT range
+
+The native UTC wrappers used Windows CRT conversions limited to 1970 through
+3000. A valid Android timestamp such as `-1` could therefore return null; the
+inverse wrapper also confused that valid instant with an error. The UTC path
+now performs signed Gregorian calendar conversion and Android's checked field
+normalization, fills the actual derived calendar fields, and rejects a year
+that cannot fit the Android structure. `difftime` uses unsigned magnitude
+arithmetic so far-apart valid timestamps do not cause signed overflow and nearby
+large timestamps retain their difference.
+
+The production implementation passes **130 sanitized host assertions**, or
+**149** with hash-verified pinned Android tzcode as an additional oracle. Each
+calendar oracle contributes 20,000 forward and 10,000 inverse comparisons;
+another 10,000 differences use exact wider arithmetic. Independent review
+repeated the 149-check run. Complete Windows x86-64 and ARM64 translation-unit
+compilation passes. The existing Android ELF test gains 125 public-call checks,
+including the 64-bit aliases, for its normal Windows execution.
+
+The [UTC report](utc-time-followup-2026-11-08.md) records the old-source control,
+its explicitly modeled CRT boundary, and deliberate corrections to incidental
+errno and endpoint-wrap behavior found in the pinned reference. Actual new
+Windows ELF execution is pending. Local timezone conversion, `mktime` and the
+existing local `%s` formatter still have their separate CRT limitations.
 
 ## Material compatibility work still open
 

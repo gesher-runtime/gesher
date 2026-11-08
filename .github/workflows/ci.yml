@@ -65,6 +65,7 @@ jobs:
           python3 tools/test_positioned_io_contracts.py --sanitize
           python3 tools/test_memfd_contracts.py --sanitize
           python3 tools/test_retriever_frame_contracts.py --sanitize
+          python3 tools/test_utc_time_contracts.py --sanitize
 
       - name: Temporary directory and UNC namespace contracts
         run: |

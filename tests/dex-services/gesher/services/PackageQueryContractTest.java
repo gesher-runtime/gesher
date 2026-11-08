@@ -60,6 +60,11 @@ public final class PackageQueryContractTest {
         catch (PackageManager.NameNotFoundException expected) { ++checks; }
     }
 
+    private static void nullInput(Call call, String message) throws Exception {
+        try { call.run(); throw new AssertionError(message); }
+        catch (NullPointerException expected) { ++checks; }
+    }
+
     private static Method method(Class<?> type, String name, Class<?>... params) throws Exception {
         Method method = type.getDeclaredMethod(name, params);
         method.setAccessible(true);
@@ -230,6 +235,31 @@ public final class PackageQueryContractTest {
                 && "android.app.ApplicationPackageManager".equals(client.getClass().getName()),
                 "Fixture did not construct the real context, display and public package manager");
 
+        int beforeVisibility = transactions.get();
+        require(client.canPackageQuery(PACKAGE, PACKAGE),
+                "Public self-package visibility query crashed or returned false");
+        require(transactions.get() == beforeVisibility + 1,
+                "Public visibility query bypassed the generated package Binder proxy");
+        require(Arrays.equals(client.canPackageQuery(PACKAGE,
+                new String[]{"android", PACKAGE, "android", PACKAGE}),
+                new boolean[]{true, true, true, true}),
+                "Bulk visibility query lost installed identities, duplicate positions or array shape");
+        require(client.canPackageQuery(PACKAGE, new String[0]).length == 0,
+                "Empty visibility query returned null");
+        missing(() -> client.canPackageQuery("fixture.not.installed", PACKAGE),
+                "Missing visibility source did not produce public NameNotFoundException");
+        missing(() -> client.canPackageQuery(PACKAGE, "fixture.not.installed"),
+                "Missing visibility target did not produce public NameNotFoundException");
+        missing(() -> client.canPackageQuery("fixture.not.installed", new String[0]),
+                "Empty visibility query bypassed source validation");
+        missing(() -> client.canPackageQuery(PACKAGE, new String[]{PACKAGE, null}),
+                "Null bulk target did not preserve the typed package lookup failure");
+        nullInput(() -> client.canPackageQuery(null, PACKAGE), "Public null visibility source accepted");
+        nullInput(() -> client.canPackageQuery(PACKAGE, (String)null), "Public null visibility target accepted");
+        nullInput(() -> client.canPackageQuery(PACKAGE, (String[])null), "Public null visibility array accepted");
+        require(Arrays.equals(wire.canPackageQuery(null, new String[]{null, "fixture.absent"}, 10),
+                new boolean[2]), "Absent-user visibility query did not preserve result shape and ordering");
+
         int flags = PackageManager.GET_ACTIVITIES | PackageManager.MATCH_DIRECT_BOOT_AWARE
                 | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
         PackageManager.invalidatePackageInfoCache();
@@ -313,19 +343,24 @@ public final class PackageQueryContractTest {
         require(client.getPackageGids("android", PackageManager.MATCH_SYSTEM_ONLY).length == 0,
                 "System-only group query excluded the platform package");
         Method addon = method(apkClass, "setSystemAddon", boolean.class);
-        addon.invoke(apk, true);
         try {
-            require(client.getPackageGids(PACKAGE, PackageManager.MATCH_SYSTEM_ONLY).length == 0,
-                    "System-only group query excluded an installed system addon");
-            holders = client.getPackagesHoldingPermissions(new String[]{heldPermission},
-                    PackageManager.MATCH_SYSTEM_ONLY);
-            require(holders.size() == 1 && PACKAGE.equals(holders.get(0).packageName)
-                            && (holders.get(0).applicationInfo.flags
-                                    & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0,
-                    "System-only permission query omitted the addon or lost system metadata");
-        } finally {
-            addon.invoke(apk, false);
+            // components.apk is deliberately unsigned. It must not become a trusted
+            // system addon merely to exercise a metadata-query positive branch.
+            addon.invoke(apk, true);
+            throw new AssertionError("Unverified APK acquired system-addon status");
+        } catch (java.lang.reflect.InvocationTargetException rejected) {
+            require(rejected.getCause() instanceof SecurityException,
+                    "Unsigned addon promotion failed for an unrelated reason");
         }
+        require(!((Boolean)apkClass.getMethod("isSystemAddon").invoke(apk))
+                        && (client.getApplicationInfo(PACKAGE, 0).flags
+                                & android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0,
+                "Rejected addon promotion changed installed system metadata");
+        missing(() -> client.getPackageGids(PACKAGE, PackageManager.MATCH_SYSTEM_ONLY),
+                "Rejected addon promotion changed the system-only group query");
+        require(client.getPackagesHoldingPermissions(new String[]{heldPermission},
+                        PackageManager.MATCH_SYSTEM_ONLY).isEmpty(),
+                "Rejected addon promotion changed the system-only permission query");
         dexRegistration(wire, service, apkFile.getPath());
 
         String[] names = {PACKAGE, "fixture.not.installed", PACKAGE};
@@ -371,6 +406,8 @@ public final class PackageQueryContractTest {
                 "Manifest property query escaped the single-user package scope");
 
         method(pmClass, "beginPackageRemoval", apkClass).invoke(service, apk);
+        missing(() -> client.canPackageQuery(PACKAGE, "android"), "Retiring package remained a visibility source");
+        missing(() -> client.canPackageQuery("android", PACKAGE), "Retiring package remained a visibility target");
         missing(() -> client.getPackageGids(PACKAGE), "Retiring package kept a group inventory");
         require(wire.getPropertyAsUser(PROPERTY, PACKAGE, null, 0) == null
                 && client.queryApplicationProperty(PROPERTY).isEmpty(),
@@ -380,6 +417,7 @@ public final class PackageQueryContractTest {
         method(pmClass, "endPackageRemoval", apkClass).invoke(service, apk);
         property(client.getProperty(PROPERTY, PACKAGE), null, PackageManager.TYPE_APPLICATION);
         method(pmClass, "remove", String.class).invoke(service, PACKAGE);
+        missing(() -> client.canPackageQuery(PACKAGE, PACKAGE), "Removed package retained visibility metadata");
         missing(() -> client.getPackageInfo(PACKAGE, flags),
                 "Removed package survived in the public framework package-info cache");
         missing(() -> client.getPackageGids(PACKAGE), "Removed package kept a group inventory");
@@ -389,6 +427,7 @@ public final class PackageQueryContractTest {
         missing(() -> client.getProperty(PROPERTY, PACKAGE), "Removed property was cached as installed");
         require(client.queryApplicationProperty(PROPERTY).isEmpty(), "Removed package remained in property index");
         method(pmClass, "add", apkClass).invoke(service, apk);
+        require(client.canPackageQuery(PACKAGE, PACKAGE), "Reinstalled package visibility was not republished");
         packageInfo(client.getPackageInfo(PACKAGE, flags), expected, true);
         property(client.getProperty(PROPERTY, PACKAGE), null, PackageManager.TYPE_APPLICATION);
         // PackageImpl.addActivity retains duplicate manifest declarations. AOSP's

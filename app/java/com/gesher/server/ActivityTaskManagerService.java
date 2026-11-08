@@ -878,7 +878,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final java.util.function.BooleanSupplier delegated = mVerifiedLifetime.get();
         final java.util.function.BooleanSupplier publication = mVerifiedPublication.get();
         if (publication != null && !publication.getAsBoolean()) return ActivityManager.START_CANCELED;
-        // The legacy no-spawner launcher attaches its real app thread before its
+        // The legacy self-launcher attaches its real app thread before its
         // first package has been assigned. Enroll that exact process once, through
         // a launcher request for its own installed UID, not a claimed host identity.
         final boolean legacyBootstrap = !internalCreator && originalCallerCode != null
@@ -1381,10 +1381,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return null;
     }
 
-    /** One-time enrollment of a real self-attached process in the no-spawner mode. */
+    /** One-time enrollment in a mode that already permits real self-attachment. */
     private synchronized boolean legacyBootstrapProcess(ProcessRecord app,
             IApplicationThread thread, int pid, int uid) {
-        return mStarter == null && app != null && thread != null && app.thread != null
+        // Match attachApplication's startSeq==0 admission: a configured starter
+        // may coexist with legacy self-launches in the nonprotected mode. The
+        // protected spawner-owned device still requires a verified start sequence.
+        return (mStarter == null || !GmsSignatureSpoofing.isEnabled())
+                && app != null && thread != null && app.thread != null
                 && mProcesses.contains(app) && processByPid(pid) == app
                 && app.pid == pid && app.uid == uid && !app.exiting && !app.spawned
                 && !app.ready && app.startSeq == 0 && app.packageName == null && app.processName == null

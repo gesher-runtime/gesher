@@ -38,6 +38,33 @@ Check 'services: package versions, permissions, identities and parsed manifest p
   $packageQueryOut
 } @('PackageQueryContractTest all passed:')
 
+# Distinct package identities and real manifest visibility rules, through the
+# generated Binder and public manager. Keep the fixture's trusted setup identity
+# local to its fresh VM and restore absent versus empty parent values exactly.
+$visibilitySavedEnvironment = @{}
+foreach ($visibilityName in 'GESHER_UID', 'GESHER_BINDER_UID') {
+  $visibilitySavedEnvironment[$visibilityName] = @{
+    Present = Test-Path "Env:$visibilityName"
+    Value = [Environment]::GetEnvironmentVariable($visibilityName, 'Process')
+  }
+}
+try {
+  $env:GESHER_UID = '1000'
+  $env:GESHER_BINDER_UID = '1000'
+  $packageVisibilityOut = FixesRun ($dvmFixes + 'gesher.services.PackageVisibilityContractTest') 90
+  $packageVisibilityCode = $LASTEXITCODE
+} finally {
+  foreach ($visibilityName in 'GESHER_UID', 'GESHER_BINDER_UID') {
+    $visibilitySaved = $visibilitySavedEnvironment[$visibilityName]
+    if ($visibilitySaved.Present) { Set-Item "Env:$visibilityName" $visibilitySaved.Value }
+    else { Remove-Item "Env:$visibilityName" -ErrorAction SilentlyContinue }
+  }
+}
+Check 'services: actual package visibility, manifest queries and public query exceptions' {
+  $global:LASTEXITCODE = $packageVisibilityCode
+  $packageVisibilityOut
+} @('PackageVisibilityContractTest all passed:')
+
 $activityOptionsOut = FixesRun ($dvmFixes + 'gesher.services.ActivityOptionsContractTest' +
   (NoDrive "$Dir/components.apk")) 90
 $activityOptionsCode = $LASTEXITCODE

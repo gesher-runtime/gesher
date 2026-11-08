@@ -570,6 +570,57 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     @Override
+    public boolean[] canPackageQuery(String sourcePackageName, String[] targetPackageNames,
+            int userId) {
+        // Keep Android's positional result and nonexistent-user ordering, including
+        // the null-array failure before looking up a user or package.
+        boolean[] result = new boolean[targetPackageNames.length];
+        if (userId != 0) return result;
+        int callingUid = Binder.getCallingUid();
+        if (android.os.UserHandle.getUserId(callingUid) != userId
+                && callingUid != android.os.Process.ROOT_UID
+                && callingUid != android.os.Process.SYSTEM_UID
+                && mPermissions.checkProcessPermission("android.permission.INTERACT_ACROSS_USERS_FULL",
+                        Binder.getCallingPid(), callingUid) != PackageManager.PERMISSION_GRANTED
+                && mPermissions.checkProcessPermission("android.permission.INTERACT_ACROSS_USERS",
+                        Binder.getCallingPid(), callingUid) != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("canPackageQuery requires cross-user permission");
+        }
+        Map<String, ApkPackage> packages;
+        boolean browser, gms, vending;
+        synchronized (this) {
+            packages = new LinkedHashMap<>(mPackages);
+            for (String removing : mRemoving.keySet()) packages.remove(removing);
+            browser = !mPackages.containsKey(BrowserPackageSupport.PACKAGE)
+                    && !mRemoving.containsKey(BrowserPackageSupport.PACKAGE);
+            gms = !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
+                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_GMS);
+            vending = !mPackages.containsKey(GmsPackageSupport.PACKAGE_VENDING)
+                    && !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
+                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
+        }
+        PackageVisibility visibility = new PackageVisibility(packages, browser, gms, vending,
+                this::isProtectedBroadcast);
+        boolean missing = !visibility.contains(sourcePackageName)
+                || !visibility.canSee(callingUid, sourcePackageName);
+        for (String target : targetPackageNames) {
+            if (!missing && (!visibility.contains(target) || !visibility.canSee(callingUid, target))) {
+                missing = true;
+            }
+        }
+        if (missing) {
+            throw new android.os.ParcelableException(new PackageManager.NameNotFoundException(
+                    "Package(s) " + sourcePackageName + " and/or "
+                            + java.util.Arrays.toString(targetPackageNames) + " not found."));
+        }
+        int sourceUid = visibility.uid(sourcePackageName);
+        for (int i = 0; i < result.length; i++) {
+            result[i] = visibility.canSee(sourceUid, targetPackageNames[i]);
+        }
+        return result;
+    }
+
+    @Override
     public int[] getPackageGids(String packageName, long flags, int userId) {
         // Gesher assigns package UIDs but no supplementary Linux groups. Null
         // means an unknown package to ApplicationPackageManager, not "no groups",

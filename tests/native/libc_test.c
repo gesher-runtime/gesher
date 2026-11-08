@@ -60,6 +60,7 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "file_allocation_contract_test.inc"
 #include "positioned_io_contract_test.inc"
 #include "memfd_contract_test.inc"
+#include "utc_time_contract_test.inc"
 
 // --- memory and strings -------------------------------------------------------
 
@@ -632,6 +633,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_file_allocation_contracts();
   test_positioned_io_contracts();
   test_memfd_contracts();
+  test_utc_time_contracts();
 #if defined(__x86_64__)
   test_timerfd_syscalls();
 #endif
