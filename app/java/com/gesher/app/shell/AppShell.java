@@ -11,6 +11,9 @@ import android.content.pm.ActivityInfo;
 import com.android.internal.pm.pkg.component.ParsedActivity;
 import com.android.internal.pm.pkg.component.ParsedIntentInfo;
 import com.gesher.app.Main;
+import static com.gesher.app.locale.UiText.text;
+import com.gesher.app.locale.UiText;
+import com.gesher.app.locale.UiMessages;
 import com.gesher.server.ApkPackage;
 import com.gesher.server.Device;
 import com.gesher.server.Zygote;
@@ -44,7 +47,7 @@ import java.util.Set;
  */
 public final class AppShell {
     /** The Start menu folder of the apps, under the user's Programs folder. */
-    public static final String FOLDER = "Gesher Apps";
+    public static final String FOLDER = text("apps_folder");
     /**
      * The AppUserModelID an app process sets for itself (SetCurrentProcessExplicitAppUserModelID,
      * {@link #applyProcessAppUserModelId}): the system server puts it in the environment of the
@@ -151,7 +154,8 @@ public final class AppShell {
         String oldLink = old != null ? old.getProperty("link") : null;
         String oldTarget = old != null ? old.getProperty("target") : null;
         if (!changed && oldLink != null && codePath.equals(old.getProperty("code"))
-                && Shell.exists(oldLink) && kind.equals(oldTarget)) {
+                && Shell.exists(oldLink) && kind.equals(oldTarget)
+                && UiText.language().equals(old.getProperty("ui_language"))) {
             return;  // up to date
         }
 
@@ -182,12 +186,12 @@ public final class AppShell {
                 : "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + psScript
                         + "\" launch " + packageName;
         int hr = Shell.createShortcut(link, target, arguments, gesher, iconPath,
-                icon.label + " (" + packageName + "), an Android app on Gesher", id);
+                text("run_app", icon.label + " (" + packageName + ")"), id);
         if (hr != 0) {
             throw new IllegalStateException(String.format("saving %s failed: HRESULT 0x%08x",
                     link, hr));
         }
-        if (oldLink != null && !oldLink.equalsIgnoreCase(link)) Shell.removeFile(oldLink);
+        if (oldLink != null && !oldLink.equalsIgnoreCase(link)) removeShortcut(old);
         Properties record = new Properties();
         record.setProperty("package", packageName);
         record.setProperty("link", link);
@@ -196,6 +200,7 @@ public final class AppShell {
         record.setProperty("code", codePath);
         record.setProperty("app_user_model_id", id);
         record.setProperty("target", kind);
+        record.setProperty("ui_language", UiText.language());
         dir.mkdirs();
         Device.write(new File(dir, RECORD), record);
         log("Start menu shortcut " + link + ": " + icon.label + ", AppUserModelID " + id
@@ -299,7 +304,8 @@ public final class AppShell {
         String kind = viaLauncher ? "launcher" : "powershell";
         Properties old = urlProtocolsOf(packageName);
         if (!changed && old != null && codePath.equals(old.getProperty("code"))
-                && kind.equals(old.getProperty("target"))) {
+                && kind.equals(old.getProperty("target"))
+                && UiText.language().equals(old.getProperty("ui_language"))) {
             return;  // up to date
         }
         Set<String> schemes = customSchemes(ApkPackage.parse(codePath + "/base.apk"));
@@ -313,7 +319,7 @@ public final class AppShell {
         Set<String> registered = new LinkedHashSet<>();
         for (String scheme : schemes) {
             int hr = Shell.registerUrlProtocol(scheme, packageName,
-                    "URL:" + scheme + " (" + packageName + ", an Android app on Gesher)",
+                    text("url_protocol", scheme, packageName),
                     command, icon);
             if (hr == 0) {
                 registered.add(scheme);
@@ -341,6 +347,7 @@ public final class AppShell {
         record.setProperty("code", codePath);
         record.setProperty("target", kind);
         record.setProperty("schemes", String.join(",", registered));
+        record.setProperty("ui_language", UiText.language());
         File dir = shellDir(packageName);
         dir.mkdirs();
         Device.write(new File(dir, PROTOCOLS), record);
@@ -406,7 +413,8 @@ public final class AppShell {
     private static final long APK_ICON_CACHE_GRACE_MS = 10 * 60_000L;
 
     /**
-     * {@code gesher-app apk-icon APK}, what the icon handler runs for an APK file it has no
+     * {@code gesher-app apk-icon APK}, also accepting APKS/XAPK bundles, what the icon
+     * handler runs for a file it has no
      * icon of (gesher_shellext.dll, in the background, at most twice at once): draws the
      * app's icon as {@link #registerQuietly} does, without installing the app, into
      * {@code <data>/system/apk-icons/<size>-<time>.ico}, records the file in the list, and
@@ -425,10 +433,10 @@ public final class AppShell {
         String iconPath = null;
         String packageName = "-";
         String what;
-        try {
-            ApkPackage pkg = ApkPackage.parse(apk.getAbsolutePath());
+        try (IconApks inputs = IconApks.open(apk)) {
+            ApkPackage pkg = ApkPackage.parse(inputs.base);
             packageName = pkg.packageName;
-            AppIcon icon = AppIcon.load(pkg.apkPath, pkg.applicationInfo(0),
+            AppIcon icon = AppIcon.load(inputs.paths, pkg.applicationInfo(0),
                     launcherActivity(pkg));
             if (icon.hasImages()) {
                 File ico = new File(new File(Device.dataDir(), APK_ICON_CACHE),
@@ -517,9 +525,18 @@ public final class AppShell {
             if (added != null) lines.add(added);
             while (lines.size() > APK_ICONS_KEPT) lines.remove(0);
             list.getParentFile().mkdirs();
-            // Written in place: a reader that meets it half written shows Gesher's icon once.
-            java.nio.file.Files.write(list.toPath(), lines,
-                    java.nio.charset.StandardCharsets.UTF_8);
+            // Explorer reads without this mutex. Publish a complete list so a reader
+            // cannot mistake a partial write for a missing icon and cache the fallback.
+            File tmp = File.createTempFile("apk-icons-", ".tmp", list.getParentFile());
+            try {
+                java.nio.file.Files.write(tmp.toPath(), lines,
+                        java.nio.charset.StandardCharsets.UTF_8);
+                java.nio.file.Files.move(tmp.toPath(), list.toPath(),
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } finally {
+                tmp.delete();
+            }
             // The drawn icons no line names any more (not one being drawn now: they are
             // written before their line).
             File[] drawn = cache.listFiles();
@@ -563,8 +580,14 @@ public final class AppShell {
                     : "cannot remove the Start menu shortcut " + link);
         }
         int slash = link.lastIndexOf('\\');
-        if (slash > 0 && link.substring(0, slash).endsWith("\\" + FOLDER)) {
-            Shell.removeEmptyDirectory(link.substring(0, slash));
+        if (slash > 0) {
+            String parent = link.substring(0, slash);
+            for (String language : UiMessages.supportedLanguages()) {
+                if (parent.endsWith("\\" + UiMessages.text("apps_folder", language))) {
+                    Shell.removeEmptyDirectory(parent);
+                    break;
+                }
+            }
         }
     }
 
@@ -592,7 +615,7 @@ public final class AppShell {
         while (name.endsWith(".") || name.endsWith(" ")) {
             name = name.substring(0, name.length() - 1);
         }
-        if (name.isEmpty()) return "Android app";
+        if (name.isEmpty()) return text("android_app");
         String base = name.contains(".") ? name.substring(0, name.indexOf('.')) : name;
         if (base.toUpperCase(Locale.ROOT).matches("CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9]")) {
             name = name + "_";

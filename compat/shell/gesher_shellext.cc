@@ -128,7 +128,7 @@ bool RecordedIcon(unsigned long long size, unsigned long long millis, wchar_t* o
 constexpr UINT kPathChars = MAX_PATH * 4;
 // Files waiting to be drawn, and the files asked for in this process (a hash of
 // path, size and time each); while either is full no more are asked for.
-constexpr int kQueued = 16;
+constexpr int kQueued = 256;
 constexpr int kSeen = 1024;
 // A file written this recently may still be being written (milliseconds).
 constexpr unsigned long long kSettleMs = 3000;

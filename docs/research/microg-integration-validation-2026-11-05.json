@@ -1,0 +1,167 @@
+{
+  "schema": 1,
+  "date": "2026-11-05",
+  "platform": "Windows x86_64, actual ART",
+  "artifacts": {
+    "gesher-app.jar": "765456f5f2f2e91fd5c35f0ba7d23a365f02ca7ab1295b645cade6bb65764596",
+    "services-tests.dex": "b9f3cdb77ac6c06419f262a8a0689ed46cd60f1f418c1716bd7ed558fdaee776",
+    "devsvc.apk": "87d77d92bf045c8be5926436846f9b6784aa13df071019494d32e60b84de20d1",
+    "microgprobe.apk": "4e114290680ef3e57c2c4a6260813628d1dcc5ab7f1a0d7a6c0486a016176c13",
+    "com.android.location.provider.jar": "2c701526a49387c21b7a71a0c061070400beda62be730f66b33cfbf2222b11ee"
+  },
+  "credential_bridge_sha256": "59bee712e151d177c145379f42dda1edf1916a6354e3042fc3a42bb8937c6a30",
+  "build_scope": {
+    "java_from_clean_isolated_source": true,
+    "java_overlay": false,
+    "credential_bridge_rebuilt": true,
+    "other_native_art_binaries_reused": true,
+    "full_cmake_installer_build_run_locally": false
+  },
+  "offline_security": {
+    "result": "PASS",
+    "count": 36,
+    "checks": [
+      "SigningTest",
+      "InstallerSigningTest",
+      "SigningRotationTest",
+      "IdentitySecurityTest",
+      "uid-write",
+      "uid-read",
+      "AccountSecurityTest",
+      "native-crypto-denied",
+      "NotificationSecurityTest",
+      "SystemBindingCleanupTest",
+      "JobSecurityTest",
+      "ContentSecurityTest",
+      "PermissionsTest",
+      "microg-opt-in-0",
+      "microg-opt-in-1",
+      "PermissionRequestsTest",
+      "DispatchSecurityTest",
+      "BroadcastLifecycleTest",
+      "ProviderSecurityTest",
+      "only offline fixture APKs installed",
+      "real-account-authenticator",
+      "actual SystemServer sealed account storage without fixture plaintext",
+      "prepare-attached-probe",
+      "unattached Binder account access denied",
+      "real Binder forged attach and permission mutation denied",
+      "attached-unprivileged-probe",
+      "owner-state-intact",
+      "explicit host credential grant",
+      "attached-explicit-token-grant",
+      "explicit host credential revoke",
+      "attached-probe-after-revoke",
+      "permission-cache-initial-denial",
+      "permission-cache-grant-observed",
+      "permission-cache-revoke-same-process",
+      "dpapi-roundtrip-after-server-restart",
+      "offline microG security integration complete"
+    ],
+    "google_apk_executed": false,
+    "google_network_required": false
+  },
+  "official_addon_preflight": {
+    "result": "PASS",
+    "packages": [
+      "com.google.android.gms",
+      "com.android.vending",
+      "com.google.android.gsf"
+    ]
+  },
+  "cold_fcm": {
+    "case": "frozen-cold",
+    "message_id": "8dFMHhK4LrOI",
+    "published_at_utc": "2026-11-05T02:29:11.239494+00:00",
+    "personal_google_account": false,
+    "client_running_before_publish": false,
+    "priority": "default",
+    "source_jar_sha256": "765456f5f2f2e91fd5c35f0ba7d23a365f02ca7ab1295b645cade6bb65764596",
+    "result": "PASS",
+    "proof": [
+      {
+        "source": "microg_mcs",
+        "local_log_time": "11-05 04:29:13.682",
+        "pid": 28136,
+        "message_id": "8dFMHhK4LrOI"
+      },
+      {
+        "source": "ntfy_firebase",
+        "local_log_time": "11-05 04:29:14.705",
+        "pid": 9860,
+        "message_id": "8dFMHhK4LrOI"
+      },
+      {
+        "source": "ntfy_notification",
+        "local_log_time": "11-05 04:29:14.721",
+        "pid": 9860,
+        "message_id": "8dFMHhK4LrOI"
+      }
+    ]
+  },
+  "microg_crash_recovery": {
+    "old_gms_pid": 28136,
+    "captured_at": "2026-11-05T04:29:49.1879879+02:00",
+    "new_gms_pid": 18588,
+    "reconnected": true,
+    "system_server_pid": 33884,
+    "new_pid_verified_against_status_and_mcs_receipt": true
+  },
+  "post_crash_cold_fcm": {
+    "case": "frozen-crash",
+    "message_id": "werouUALwaPw",
+    "published_at_utc": "2026-11-05T02:29:51.269653+00:00",
+    "personal_google_account": false,
+    "client_running_before_publish": false,
+    "priority": "default",
+    "source_jar_sha256": "765456f5f2f2e91fd5c35f0ba7d23a365f02ca7ab1295b645cade6bb65764596",
+    "result": "PASS",
+    "proof": [
+      {
+        "source": "microg_mcs",
+        "local_log_time": "11-05 04:29:52.394",
+        "pid": 18588,
+        "message_id": "werouUALwaPw"
+      },
+      {
+        "source": "ntfy_firebase",
+        "local_log_time": "11-05 04:29:53.222",
+        "pid": 31920,
+        "message_id": "werouUALwaPw"
+      },
+      {
+        "source": "ntfy_notification",
+        "local_log_time": "11-05 04:29:53.234",
+        "pid": 31920,
+        "message_id": "werouUALwaPw"
+      }
+    ]
+  },
+  "earlier_unresolved_delivery": {
+    "message_id": "M2X7ncstZR1i",
+    "published_at_utc": "2026-11-05T02:19:57.496250+00:00",
+    "source_jar_sha256": "3cf02f7bbbbf838a0f2f31ead2c6abfa0e004b4d6d22162c49431303c2d550db",
+    "observed_sources_within_40_seconds": [],
+    "followup": "MCS heartbeat acknowledged; no duplicate GMS process. Same unchanged channel later delivered the normal-priority retry. Cause of missing publication not established.",
+    "retry_message_id": "ZzO9iI8Lj0dK",
+    "retry_result": "PASS"
+  },
+  "self_check": {
+    "activity_launched": true,
+    "new_visual_pass_established": false,
+    "capture_errors": [
+      "IGraphicsCaptureItemInterop.CreateForMonitor: 0x80070057",
+      "GetCursorPos: access denied 0x80070005"
+    ]
+  },
+  "personal_google_account_used": false,
+  "test_device_stopped": true,
+  "not_validated": [
+    "personal Google sign-in",
+    "real fused location",
+    "network-loss recovery",
+    "long-idle soak",
+    "multiple independent FCM clients",
+    "Play Integrity, proprietary billing and DRM"
+  ]
+}

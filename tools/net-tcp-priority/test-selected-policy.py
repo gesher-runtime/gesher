@@ -6,13 +6,17 @@ BASE='657fb27a63c8171d540d6890ad47aa5fba5d26b2'
 # fd.cc gained reviewed nested-epoll readiness and waiter wakeups. Keep those
 # exact bytes pinned independently; the four TCP/socket files retain BASE.
 FD_BASE='0aafccec6d7c2cfdd88d73e721a3e1ce523edf2b'
+# Only the successful protocol fixture's startup budget changed. Pin its exact
+# reviewed bytes separately; controller, worker and execution gates retain BASE.
+CONTROL_BASE='c62c0ea4f88447c64608851ecf661f630e259442'
 def old(path):return subprocess.check_output(['git','-C',str(ROOT),'show',BASE+':'+path])
 def check():
  paths=subprocess.check_output(['git','-C',str(ROOT),'diff','1745e99d7f2849ba81784545e07d60cb2b7800c3^','1745e99d7f2849ba81784545e07d60cb2b7800c3','--name-only'],text=True).splitlines()
  paths+=['.github/workflows/net-tcp-coherent-component.yml','tests/net-tcp-priority/contract.cc','tests/net-tcp-priority/native_udp_control.cc','tests/native2/net_udp_trunc.cpp','tests/native2/net_udp_fault_observer.c','tools/net-tcp-priority/qualified/TsfJobSupervisor.cs','tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfJobWorker.cs','tools/windows4/test-tsf-job-supervisor.ps1','tools/ci/receipt-diagnostics.ps1','tools/net-tcp-priority/import-policy.json','tools/net-tcp-priority/import_policy.py','tools/net-tcp-priority/build-guests.py','tools/net-tcp-priority/prepare-ndk.py']
  for path in paths:
-  expected=(subprocess.check_output(['git','-C',str(ROOT),'show',FD_BASE+':'+path])
-            if path=='compat/posix/src/fd.cc' else old(path))
+  epoch=(FD_BASE if path=='compat/posix/src/fd.cc' else
+         CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
+  expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
   assert (ROOT/path).read_bytes()==expected,path
  before=old('tools/net-tcp-priority/run-component.ps1').decode();after=(ROOT/'tools/net-tcp-priority/run-component.ps1').read_text(encoding='utf-8')
  marker='function RequireDiagnosticRetirement';assert after[after.index(marker):]==before[before.index(marker):],'Actual controller/guarded-copy/census/cancel/HOST/bothABI execution gates changed'

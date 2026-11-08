@@ -2,9 +2,9 @@
 //
 // - android.media.ImageReader and its SurfaceImage: Gesher's own natives (the
 //   framework's need libgui's BufferItemConsumer). A reader is a queue of
-//   images in process memory; its Surface is a plain Java Surface that only
-//   this file knows belongs to it (in-process consumers only: the camera, and
-//   anything else that writes through CameraFrames).
+//   images in process memory. RGBA readers also expose a native QueueSurface
+//   so Canvas, NDK and EGL producers can publish images, including Flutter's
+//   platform-view render targets. CameraFrames retains its direct YUV/JPEG path.
 // - android.hardware.camera2.utils.SurfaceUtils: a reader's size and format,
 //   or a window surface's through its ANativeWindow.
 // - com.gesher.server.CameraFrames (gesher-app.jar): the camera service hands
@@ -24,10 +24,12 @@
 #include <algorithm>
 #include <deque>
 #include <mutex>
+#include <memory>
 #include <vector>
 
 #include "core_jni_helpers.h"
 #include "camera_trace.h"
+#include "../media/surface/reader_surface.h"
 
 // libandroid_runtime's host ANativeWindow_fromSurface and the ANativeWindow
 // functions dalvikvm defines (docs/graphics.md, docs/native-libs.md).
@@ -78,6 +80,7 @@ struct Image {
   int width = 0, height = 0;
   int64_t timestampNs = 0;
   int dataSpace = 0;
+  int halFormat = 0;
 };
 
 struct Reader {
@@ -89,9 +92,11 @@ struct Reader {
   std::deque<Image*> pending;
   int acquired = 0;
   bool closed = false;
+  std::shared_ptr<gesher::media::ReaderSurface> producer;
 };
 
 struct {
+  JavaVM* vm;
   jclass readerClass;
   jfieldID readerContext;
   jmethodID postEvent;
@@ -103,23 +108,25 @@ struct {
 } gIr;
 
 std::mutex gReadersMutex;
-std::vector<Reader*> gReaders;
+std::vector<std::shared_ptr<Reader>> gReaders;
 
 // The reader whose Surface `surface` is, or null.
-Reader* ReaderForSurface(JNIEnv* env, jobject surface) {
+std::shared_ptr<Reader> ReaderForSurface(JNIEnv* env, jobject surface) {
   if (surface == nullptr) return nullptr;
   std::lock_guard<std::mutex> lock(gReadersMutex);
-  for (Reader* r : gReaders) {
+  for (auto& r : gReaders) {
     if (r->surface != nullptr && env->IsSameObject(r->surface, surface)) return r;
   }
   return nullptr;
 }
 
-Reader* ReaderOf(JNIEnv* env, jobject thiz) {
-  return reinterpret_cast<Reader*>(env->GetLongField(thiz, gIr.readerContext));
+std::shared_ptr<Reader> ReaderOf(JNIEnv* env, jobject thiz) {
+  auto* holder = reinterpret_cast<std::shared_ptr<Reader>*>(env->GetLongField(thiz, gIr.readerContext));
+  return holder != nullptr ? *holder : nullptr;
 }
 
 void ImageReader_classInit(JNIEnv* env, jclass clazz) {
+  env->GetJavaVM(&gIr.vm);
   gIr.readerClass = MakeGlobalRefOrDie(env, clazz);
   gIr.readerContext = GetFieldIDOrDie(env, clazz, "mNativeContext", "J");
   gIr.postEvent = GetStaticMethodIDOrDie(env, clazz, "postEventFromNative",
@@ -138,9 +145,49 @@ void ImageReader_classInit(JNIEnv* env, jclass clazz) {
   gIr.surfaceCtor = GetMethodIDOrDie(env, gIr.surfaceClass, "<init>", "()V");
 }
 
+void EnqueueImage(JNIEnv* env, const std::shared_ptr<Reader>& r, Image* image) {
+  jobject weak;
+  {
+    std::lock_guard<std::mutex> lock(r->mutex);
+    if (r->closed) { delete image; return; }
+    while (static_cast<int>(r->pending.size()) >= r->maxImages) {
+      delete r->pending.front();
+      r->pending.pop_front();
+    }
+    r->pending.push_back(image);
+    weak = env->NewLocalRef(r->weakSelf);
+  }
+  env->CallStaticVoidMethod(gIr.readerClass, gIr.postEvent, weak);
+  env->DeleteLocalRef(weak);
+}
+
+void QueueRgba(const std::weak_ptr<Reader>& owner, const uint32_t* pixels,
+               int width, int height, int64_t timestamp) {
+  auto r = owner.lock();
+  if (r == nullptr) return;
+  JNIEnv* env = nullptr;
+  bool attached = gIr.vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_EDETACHED;
+  if (attached && gIr.vm->AttachCurrentThreadAsDaemon(&env, nullptr) != JNI_OK) return;
+  if (env == nullptr) return;
+  auto* image = new Image();
+  image->width = r->width;
+  image->height = r->height;
+  image->timestampNs = timestamp;
+  image->dataSpace = r->dataSpace;
+  image->halFormat = r->halFormat;
+  image->data.resize(static_cast<size_t>(r->width) * r->height * 4);
+  auto* output = reinterpret_cast<uint32_t*>(image->data.data());
+  for (int y = 0; y < r->height; y++)
+    for (int x = 0; x < r->width; x++)
+      output[static_cast<size_t>(y) * r->width + x] = pixels[static_cast<size_t>(y * height / r->height) * width + x * width / r->width];
+  image->planes.push_back({0, image->data.size(), r->width * 4, 4});
+  EnqueueImage(env, r, image);
+  if (attached) gIr.vm->DetachCurrentThread();
+}
+
 void ImageReader_init(JNIEnv* env, jobject thiz, jobject weakSelf, jint w, jint h, jint maxImages,
                       jlong usage, jint halFormat, jint dataSpace) {
-  Reader* r = new Reader();
+  auto r = std::make_shared<Reader>();
   r->weakSelf = env->NewGlobalRef(weakSelf);
   r->width = w;
   r->height = h;
@@ -148,10 +195,16 @@ void ImageReader_init(JNIEnv* env, jobject thiz, jobject weakSelf, jint w, jint 
   r->halFormat = halFormat;
   r->dataSpace = dataSpace;
   r->usage = usage;
-  ScopedLocalRef<jobject> surface(env, env->NewObject(gIr.surfaceClass, gIr.surfaceCtor));
+  if (halFormat == kHalRgba8888) {
+    r->producer = gesher::media::MakeReaderSurface(w, h,
+        [weak = std::weak_ptr<Reader>(r)](const uint32_t* pixels, int width, int height, int64_t timestamp) {
+          QueueRgba(weak, pixels, width, height, timestamp);
+        });
+  }
+  ScopedLocalRef<jobject> surface(env, r->producer != nullptr ? r->producer->JavaSurface(env)
+      : env->NewObject(gIr.surfaceClass, gIr.surfaceCtor));
   if (surface.get() == nullptr) {
     env->DeleteGlobalRef(r->weakSelf);
-    delete r;
     return;
   }
   r->surface = env->NewGlobalRef(surface.get());
@@ -159,18 +212,20 @@ void ImageReader_init(JNIEnv* env, jobject thiz, jobject weakSelf, jint w, jint 
     std::lock_guard<std::mutex> lock(gReadersMutex);
     gReaders.push_back(r);
   }
-  env->SetLongField(thiz, gIr.readerContext, reinterpret_cast<jlong>(r));
+  env->SetLongField(thiz, gIr.readerContext, reinterpret_cast<jlong>(new std::shared_ptr<Reader>(r)));
 }
 
 void ImageReader_close(JNIEnv* env, jobject thiz) {
-  Reader* r = ReaderOf(env, thiz);
+  auto r = ReaderOf(env, thiz);
   if (r == nullptr) return;
+  auto* holder = reinterpret_cast<std::shared_ptr<Reader>*>(env->GetLongField(thiz, gIr.readerContext));
   env->SetLongField(thiz, gIr.readerContext, 0);
+  delete holder;
   {
     std::lock_guard<std::mutex> lock(gReadersMutex);
     gReaders.erase(std::remove(gReaders.begin(), gReaders.end(), r), gReaders.end());
   }
-  bool gone;
+  if (r->producer != nullptr) r->producer->Close();
   {
     std::lock_guard<std::mutex> lock(r->mutex);
     for (Image* i : r->pending) delete i;
@@ -179,26 +234,20 @@ void ImageReader_close(JNIEnv* env, jobject thiz) {
     env->DeleteGlobalRef(r->weakSelf);
     env->DeleteGlobalRef(r->surface);
     r->weakSelf = r->surface = nullptr;
-    gone = r->acquired <= 0;
   }
-  // Images still acquired keep the reader until the last is released.
-  if (gone) delete r;
 }
 
 Image* ImageOf(JNIEnv* env, jobject image) {
   return reinterpret_cast<Image*>(env->GetLongField(image, gIr.imageBuffer));
 }
 
-void ReleaseImage(Reader* r, Image* i) {
+void ReleaseImage(const std::shared_ptr<Reader>& r, Image* i) {
   delete i;
   if (r == nullptr) return;
-  bool gone;
   {
     std::lock_guard<std::mutex> lock(r->mutex);
     r->acquired--;
-    gone = r->closed && r->acquired <= 0;
   }
-  if (gone) delete r;
 }
 
 void ImageReader_releaseImage(JNIEnv* env, jobject thiz, jobject image) {
@@ -209,7 +258,7 @@ void ImageReader_releaseImage(JNIEnv* env, jobject thiz, jobject image) {
 }
 
 jint ImageReader_imageSetup(JNIEnv* env, jobject thiz, jobject image) {
-  Reader* r = ReaderOf(env, thiz);
+  auto r = ReaderOf(env, thiz);
   if (r == nullptr) {
     jniThrowException(env, "java/lang/IllegalStateException",
                       "ImageReader is not initialized or was already closed");
@@ -233,7 +282,7 @@ jint ImageReader_imageSetup(JNIEnv* env, jobject thiz, jobject image) {
 }
 
 jobject ImageReader_getSurface(JNIEnv* env, jobject thiz) {
-  Reader* r = ReaderOf(env, thiz);
+  auto r = ReaderOf(env, thiz);
   return r != nullptr ? env->NewLocalRef(r->surface) : nullptr;
 }
 
@@ -292,7 +341,11 @@ jint Image_getFormat(JNIEnv*, jobject, jint readerFormat) { return readerFormat;
 
 jint Image_getFenceFd(JNIEnv*, jobject) { return -1; }
 
-jobject Image_getHardwareBuffer(JNIEnv*, jobject) { return nullptr; }
+jobject Image_getHardwareBuffer(JNIEnv* env, jobject thiz) {
+  Image* image = ImageOf(env, thiz);
+  if (image == nullptr || image->halFormat != kHalRgba8888) return nullptr;
+  return gesher::media::ReaderHardwareBuffer(env, image->data.data(), image->width, image->height);
+}
 
 // --- frames into a reader ----------------------------------------------------------------
 
@@ -337,11 +390,12 @@ void Nv12ToRgba(const uint8_t* src, int w, int h, uint8_t* dst, int stride, int 
 }
 
 // One frame into a reader: false when the reader cannot take this format.
-bool QueueFrame(JNIEnv* env, Reader* r, const uint8_t* nv12, int w, int h, int64_t ts,
+bool QueueFrame(JNIEnv* env, const std::shared_ptr<Reader>& r, const uint8_t* nv12, int w, int h, int64_t ts,
                 const uint8_t* jpeg, size_t jpegSize) {
   Image* i = new Image();
   i->timestampNs = ts;
   i->dataSpace = r->dataSpace;
+  i->halFormat = r->halFormat;
   i->width = r->width;
   i->height = r->height;
   int tw = r->width, th = r->height;
@@ -368,23 +422,7 @@ bool QueueFrame(JNIEnv* env, Reader* r, const uint8_t* nv12, int w, int h, int64
     i->planes.push_back({ySize, cSize, cw, 1});
     i->planes.push_back({ySize + cSize, cSize, cw, 1});
   }
-  jobject weak;
-  {
-    std::lock_guard<std::mutex> lock(r->mutex);
-    if (r->closed) {
-      delete i;
-      return true;
-    }
-    // A consumer that falls behind loses its oldest frames, not the newest.
-    while (static_cast<int>(r->pending.size()) >= r->maxImages) {
-      delete r->pending.front();
-      r->pending.pop_front();
-    }
-    r->pending.push_back(i);
-    weak = env->NewLocalRef(r->weakSelf);
-  }
-  env->CallStaticVoidMethod(gIr.readerClass, gIr.postEvent, weak);
-  env->DeleteLocalRef(weak);
+  EnqueueImage(env, r, i);
   return true;
 }
 
@@ -405,7 +443,7 @@ jint CameraFrames_deliver(JNIEnv* env, jclass, jobject surface, jbyteArray nv12,
   jbyte* jpegBytes = jpeg != nullptr ? env->GetByteArrayElements(jpeg, nullptr) : nullptr;
   trace.Step(1);
   jint result = 1;
-  Reader* r = ReaderForSurface(env, surface);
+  auto r = ReaderForSurface(env, surface);
   trace.Step(2);
   if (r != nullptr) {
     result = QueueFrame(env, r, reinterpret_cast<uint8_t*>(frame), w, h, ts,
@@ -479,7 +517,7 @@ jboolean CameraFrames_isReader(JNIEnv* env, jclass, jobject surface) {
 // --- SurfaceUtils ----------------------------------------------------------------------
 
 jint SurfaceUtils_detectSurfaceType(JNIEnv* env, jclass, jobject surface) {
-  if (Reader* r = ReaderForSurface(env, surface)) return r->halFormat;
+  if (auto r = ReaderForSurface(env, surface)) return r->halFormat;
   ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
   if (window == nullptr) return kBadValue;
   int format = ANativeWindow_getFormat(window);
@@ -488,13 +526,13 @@ jint SurfaceUtils_detectSurfaceType(JNIEnv* env, jclass, jobject surface) {
 }
 
 jint SurfaceUtils_detectSurfaceDataspace(JNIEnv* env, jclass, jobject surface) {
-  if (Reader* r = ReaderForSurface(env, surface)) return r->dataSpace;
+  if (auto r = ReaderForSurface(env, surface)) return r->dataSpace;
   return 0;
 }
 
 jint SurfaceUtils_detectSurfaceDimens(JNIEnv* env, jclass, jobject surface, jintArray dimens) {
   jint wh[2] = {0, 0};
-  if (Reader* r = ReaderForSurface(env, surface)) {
+  if (auto r = ReaderForSurface(env, surface)) {
     wh[0] = r->width;
     wh[1] = r->height;
   } else if (ANativeWindow* window = ANativeWindow_fromSurface(env, surface)) {
@@ -510,12 +548,12 @@ jint SurfaceUtils_detectSurfaceDimens(JNIEnv* env, jclass, jobject surface, jint
 }
 
 jlong SurfaceUtils_detectSurfaceUsageFlags(JNIEnv* env, jclass, jobject surface) {
-  if (Reader* r = ReaderForSurface(env, surface)) return r->usage;
+  if (auto r = ReaderForSurface(env, surface)) return r->usage;
   return kUsagePreview;
 }
 
 jlong SurfaceUtils_getSurfaceId(JNIEnv* env, jclass, jobject surface) {
-  if (Reader* r = ReaderForSurface(env, surface)) return reinterpret_cast<jlong>(r);
+  if (auto r = ReaderForSurface(env, surface)) return reinterpret_cast<jlong>(r.get());
   ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
   if (window == nullptr) return 0;
   ANativeWindow_release(window);

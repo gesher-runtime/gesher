@@ -1,0 +1,180 @@
+{
+  "date": "2026-11-06",
+  "scope": "Final bounded experimental single-user microG, Hebrew/English UI, split icon extraction and WebView algorithmic darkening; real application workflow claims remain separately attributed",
+  "baseline_main": "a991177deab427baae52345d870825b960c20430",
+  "integration_base": "d3b13cf3d4c882b5ae328aaa7baaf55019e2faea",
+  "source_manifest_sha256": "be1da2c34f0f4c580c4e4bd2130bd9d57531c229881cc274d50d377423dfc6bd",
+  "source_files_rehashed": 2582,
+  "compiled_source_manifest_sha256": "be1da2c34f0f4c580c4e4bd2130bd9d57531c229881cc274d50d377423dfc6bd",
+  "test_only_changes_after_compilation": [],
+  "runtime_manifest_sha256": "6cd570081b3cbddc1220916492e2349fa919ba0e56064eb2df23a11071f78a34",
+  "runtime_inputs_rehashed": 282,
+  "matching_boot_files": 15,
+  "required_boot_spaces": 5,
+  "artifacts": [
+    {
+      "name": "gesher-app.jar",
+      "sha256": "a2d4920a61f51dbd9764612a00cff00540baea82ed9b6c05263fa07485def989",
+      "bytes": 1106647
+    },
+    {
+      "name": "services-tests.dex",
+      "sha256": "1af4406cc0264f2feeb47865e827ca30544836dc96bb271918e788eb6779ea30",
+      "bytes": 497624
+    },
+    {
+      "name": "framework.jar",
+      "sha256": "127f5bed6b0cded540c3951156ed859d8eb9fe0ea88a68d905b42d2545145fcc",
+      "bytes": 17039974
+    },
+    {
+      "name": "dalvikvm.exe",
+      "sha256": "53d3ba97361cd9ca9c9e13693ae9e4d569692e023ba0919cb88b80b74f9d3225",
+      "bytes": 49210880
+    },
+    {
+      "name": "libgesher_account_crypto.so",
+      "sha256": "633649c5026466b302d29893e112041139f05a2cd3b7a2b7ccc06afd0627860a",
+      "bytes": 612352
+    },
+    {
+      "name": "libgesher_install_pipe.so",
+      "sha256": "e6ec348d55edb0205f22b198c67ca453dd87333bcce6170d9b052255700323f2",
+      "bytes": 584192
+    },
+    {
+      "name": "libgesher_webview_bridge.so",
+      "sha256": "2f28a116af31591993d801c2c6606b96c0398eb682729f5aa75054a0ecfb7d15",
+      "bytes": 2975744
+    },
+    {
+      "name": "binderd.exe",
+      "sha256": "e8ee91abdbc2bddb352a1ef49ac67e40dc02377208d1e56815d3fd10c23ce688",
+      "bytes": 625152
+    },
+    {
+      "name": "servicemanager.exe",
+      "sha256": "5d5a42fe26e6f351ea5bbcffb33edca5c6226a60d69699a15f319bea66b7f89e",
+      "bytes": 2746368
+    },
+    {
+      "name": "gesher-launch.exe",
+      "sha256": "e813032514ce7350aea1a8c9cd4bc61e89e9d6287d0a160ce0ca29af723dda37",
+      "bytes": 641536
+    },
+    {
+      "name": "account_chooser_test.exe",
+      "sha256": "fb7bc1f1111ec9cbc64af36e2bac765e94e27f6e0fa2dd8783ad5be6b4433edd",
+      "bytes": 589824
+    },
+    {
+      "name": "gesher-camera.apk",
+      "sha256": "d313c22779a88a53261adc3bd1eaf7e285e24640461556865798d99e357f3c5f",
+      "bytes": 10315
+    },
+    {
+      "name": "gesher_shellext.dll",
+      "sha256": "ef03cdd708e683c1c94601b1987de57729de16ab319cc12f2bd3edbf8fe55915",
+      "bytes": 588288
+    }
+  ],
+  "checks": {
+    "combined": 70,
+    "uninstall_contract": 115,
+    "direct_and_delegated_retirement": 230,
+    "native_chooser_modes_english": 8,
+    "native_chooser_modes_hebrew": 8,
+    "icons": 141,
+    "webview_policy_and_delayed_commands": 36,
+    "webview_actual_boundary_and_renderer": 17
+  },
+  "verification_receipts": {
+    "combined_sha256": "b51fa8bf0e2653c44e96af0709b380f09ef91145ab64e52f1034301251ba2fa2",
+    "native_ui_qualification_sha256": "b6b22c455f33f7c30ea26659c97a5c0b294c888975847ae71b8bd78d4cd85af6",
+    "direct_and_delegated_sha256": "55d0eb1818ca8a6827637b89e6b4f29c973e4528bd555725e6be6c90f229e209",
+    "camera_resources_sha256": "dd60b8b0a8fafa5914353181701c70d125246a2a14feb7df81bc017f3bcc909c",
+    "historical_icon_checkpoint_sha256": "d44a4b799eff418c949a0c437c52b35110c83ad6d83cd75a1b0bc4269d919143",
+    "webview_renderer_sha256": "95bb80890860c200472c2c96cc164717743f64d99c819572b4b2264ad1d109bc"
+  },
+  "account_evidence_scopes": {
+    "actualSystemServer": "Actual Binder probe prepares synthetic visibility grants, uninstalls/reinstalls the identical synthetic client through genuine trusted-host control, checks same UID with visibility and enumeration revoked while provider fixture credentials remain intact, verifies native encrypted GAC2 persistence, and repeats after genuine SystemServer restart. It does not directly query the private token/custom-token grant tables.",
+    "identity": "Actual account IPC reinstall fixture is unsigned identical code identity with a new ApkPackage incarnation. Verified same-certificate signed reinstall/removal fencing is separately exercised by PackageUninstallTest.",
+    "inProcessAccountUnit": "AccountClientRemovalTest separately verifies token/custom-token grant purge, serialization, rollback and epochs through an explicitly injected private in-memory StoreWriter. Production default persistence remains guarded native AccountStore.write."
+  },
+  "removal": {
+    "policy": "Application-facing uninstall is a generic Gesher user-mediated extension: fresh default-No host approval per operation, original caller process/code and current target/version fences, flags0/user0 and ordinary persistent targets only. No fabricated DELETE_PACKAGES grant or Google allowlist. Addon/system targets and authenticators owning active accounts remain rejected. Durable quarantine/registry recovery, no-follow cleanup and permanent capability retirement prevent old-data or authority resurrection.",
+    "legacy_route": "Original Store public APK reflects ApplicationPackageManager.deletePackage(String,IPackageDeleteObserver,int), which forwards to IPackageManager.deletePackageAsUser. Adapter now shares the same host-consent/version/user/flag/storage pipeline and maps legacy callbacks.",
+    "actual_store_ui_removal_verified": false,
+    "actual_store_ui_removal_note": "The original Store remained Removing before the legacy adapter. User then explicitly requested all real profiles/accounts/apps reset, so the final adapter was tested with isolated synthetic packages rather than a new personal sign-in or real Store action."
+  },
+  "accepted_work_lifetime": "Original native caller process and installed code remain pinned through authentication and acceptance. Accepted queued service starts and nonordered broadcasts survive normal caller exit and PID reuse; uninstall/reinstall retires the captured code incarnation. Binding death cleanup and existing ordered-broadcast sender liveness semantics remain effective.",
+  "regression_fixed": {
+    "v7_failure": "Actual service-first graphics test exposed an overstrict process lifetime after accepted startService.",
+    "v8_result": "Original positive graphics test and explicit-headless control pass with corrected acceptance/queued-work predicates."
+  },
+  "localization": {
+    "languages": [
+      "en",
+      "he"
+    ],
+    "selection": "Windows display-language preference order, legacy iw alias, English fallback, with explicit GESHER_LOCALES test override",
+    "coverage": [
+      "Java launcher and shell UI",
+      "PowerShell launcher/addon setup",
+      "native permission/token consent and account chooser",
+      "native launch splash",
+      "installer/uninstaller labels",
+      "camera Hebrew resources and RTL manifest"
+    ],
+    "native_dialog_default": "Cancel/No stays the default; localized labels do not grant permissions",
+    "launcher_scope": "Source/build/catalog/ABI validation; no new splash UI or camera hardware trial claimed"
+  },
+  "user_requested_reset": {
+    "all_real_profiles_apps_accounts_reset": true,
+    "normal_installed_profile_included": true,
+    "apk_installation_files_preserved": true,
+    "private_data_published": false,
+    "later_user_activity": "User subsequently reopened/reinstalled Claude and Otzaria; new post-reset data is preserved.",
+    "assistant_performed_new_signin": false
+  },
+  "limits": [
+    "Historical actual Play catalog/download/install/open and user-confirmed Gemini chat are recorded separately; they do not establish every flow on the final artifact.",
+    "Final real Store UI removal remains unverified.",
+    "No current full visual Self-Check, general GMS parity, billing, DRM, Play Integrity, multi-user or inherited/multi-package installation claim.",
+    "Account-owning authenticators must have their accounts removed before uninstall; unsupported deletion flags fail explicitly.",
+    "A failed post-consent storage/registry commit can retain capability revocations even if app files are restored.",
+    "One earlier Store cold attachment timed out; a warm retry worked. Reliable cold startup remains unestablished.",
+    "Android API checks are not an operating-system sandbox for arbitrary APK/native code."
+  ],
+  "independent_qa_record": "microg-final-qa-2026-11-06.json",
+  "historical_initial_qualification": {
+    "source_manifest_sha256": "8f134ea39527fcaff9e27f705fddebdc0aed89b4886d3ba95aef78e44d7cc6de",
+    "runtime_manifest_sha256": "ae645f1d3af3e3e789079f8a7d03ef4c656fc291bb08d97b2d57179a0c070386",
+    "combined_checks": 68,
+    "combined_receipt_sha256": "d7baa468e5ebd852ef44d5265a31c28c78e5c23d09f48db1881429c2b05ff335"
+  },
+  "icons": "Bounded APK/APKS/XAPK split-resource extraction without installation, real pixel checks, cleanup and concurrent atomic ICO/list publication; native icon handler bounded queue256.",
+  "webview": {
+    "record": "otzaria-webview-validation-2026-11-06.json",
+    "record_sha256": "10d39261f6a37b3ea64d0fa08f72d55ef6cefc5951f779953462255a2b79bfb5",
+    "behavior": "Actual theme/target-aware per-view algorithmic darkening through serialized/coalesced CDP controls; no document-root style mutation",
+    "actual_user_plugin_retest": "Pending after deployment; not inferred from synthetic pixels"
+  },
+  "claude": {
+    "record": "claude-signin-2026-11-06.json",
+    "record_sha256": "55cece360738f6014d1b33d8c6bacef99eaf7254dcd8fffe4e9f204927249922",
+    "signin_verified": false,
+    "note": "Two distinct user error screens; only the detailed Play dialog was traced to the attestation-refusal presenter. User explicitly requested no wait for manual Claude verification."
+  },
+  "post_qualification_ci_only_changes": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "52add01f557f7376e36e7066d6dcf1a50822c6c9b145437c7522aabc33b89cdd"
+    },
+    {
+      "path": "probes/webview/CMakeLists.txt",
+      "sha256": "8cea0e694c767a4e21a6fa0ba935d3c50d7b87560c5f572726d5a752b0719ba6"
+    }
+  ],
+  "ci_wiring_validation_sha256": "b1f7fd8d637a9a597e3cea87aafc02e68e4c5d74e2ee0762a7227eb1a2f1aa51"
+}

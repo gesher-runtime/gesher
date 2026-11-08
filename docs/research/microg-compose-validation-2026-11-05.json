@@ -1,0 +1,64 @@
+{
+  "scope": "Reuse the prior MediaStore client contracts to fix Gmail new-message startup",
+  "status": "MediaStore linkage fixed; sustained composer and user-reported send acceptance followed completion of the standard Apache shared library",
+  "observed_at_utc": "2026-11-05T21:48:43.528329+00:00",
+  "prior_failure": {
+    "runtime_java_sha256": "e63e3abbfd2caaed1b93af858f90cb1eb299efbfda6a79afde3de7d58820a453",
+    "public_error": "NoSuchMethodError: android.provider.MediaStore.getPickImagesMaxLimit()I",
+    "process_exit": 1
+  },
+  "reuse": {
+    "first_implementation_commit": "3bdce7826945e131384230db46a4b45be6d0ad8f",
+    "selected_source_commit": "81af15341c467f22675086fb2eb3b5bc72631775",
+    "stability_pr": "https://github.com/gesher-runtime/gesher/pull/5",
+    "origin_main_verified_at_time": "5f6b3444699de6c4a88e239de0ef67c6a9bbfbee",
+    "main_is_already_ancestor_of_microg_branch": true,
+    "whole_stability_branch_merged": false,
+    "mediastore_sha256": "63fdd708e51a8aaa53841e6b6d4b5de3b290c1ce1c06f2da22e583d621550703",
+    "contract_test_sha256": "9f2fa8ea6aa5782e1e46cf7a4fcc8fa9e3b27afa4940fa89b161fc022d27e314",
+    "imported_stability_sha256": "48ec4768e86d3d22e621ba344edfe61752a7d2696bf0460fcf6ac09231b05edb",
+    "source_delta_from_stability": "Trailing whitespace only; no executable statements changed"
+  },
+  "runtime_sha256": {
+    "gesher-app.jar": "0cc47fe59548652393c4c38009a52f90426286b6fcd8e1e65f53b0b2c3da278d",
+    "dalvikvm.exe": "6fbc8a815ab3bb5eecd07994dd26e0426c068a38ffce26ee0bf62e73e09cdadf",
+    "libgesher_webview_bridge.so": "9c51dafefb525dd9916abe1bc8be36bdc993b5d16e3e8fb81fc361abf3b6b29a",
+    "services-tests.dex": "78ad5cff158a23da335944c1ad464a60a84ce7744ac7cba3fa6838c4805766ef"
+  },
+  "checks": {
+    "production_boot_class_mediastore_contracts": "28 PASS; tests dex contains only tests, not a shadow MediaStore implementation",
+    "mediastore_evidence": "out/microg-compose-validation/mediastore.out.log",
+    "offline_account_security": "38 PASS",
+    "security_evidence": "out/microg-compose-validation/security/20261105-234426-defc9dab9f8e4189afe723836edab67c",
+    "actual_loopback_webview": "4 PASS",
+    "webview_evidence": "out/native-compose-webview/evidence/20261105-234502-d4e16cdbb80749c29aff2ceb1e674fa1",
+    "actual_gmail": "Composer initially opened after the MediaStore fix, but a later contacts task still failed without BasicCookieStore. The linked artifact-completion record covers the subsequent sustained run.",
+    "google_network_used_by_regressions": false
+  },
+  "build": {
+    "compile_only_app_api_jar": "gesher-app-classes.jar",
+    "test_builder_option": "--app-classes",
+    "ci_consumer_wired": true,
+    "compile_only_archive_added_to_runtime_distribution": false,
+    "equivalent_rebuild_jar_sha256": "0cc47fe59548652393c4c38009a52f90426286b6fcd8e1e65f53b0b2c3da278d"
+  },
+  "boundaries": {
+    "typed_by_agent_into_recipient_subject_or_body": false,
+    "individual_email_opened": false,
+    "raw_account_names_tokens_or_mail_contents_published": false,
+    "native_provenance": "Same broader cached81af native control plus Cursor/timerfd fixes; not a clean isolated-PR native build",
+    "mail_sent_by_agent": false,
+    "send_success_reported_by_user": true
+  },
+  "final_qa": {
+    "decision": "APPROVE",
+    "reviewed_snapshot_sha256": "92f1557a769b2bcc00cec88d6bb826f2170093d9a9bb741a1f2f2f15a87cf0dc",
+    "record": "microg-gmail-final-qa-2026-11-06.json"
+  },
+  "shared_library_follow_up": "microg-http-library-validation-2026-11-06.json",
+  "later_discovered_failure": {
+    "class": "org.apache.http.impl.client.BasicCookieStore",
+    "cause": "Expected library JAR omitted from experimental runtime while its XML declaration was present",
+    "production_classloader_change_required": false
+  }
+}

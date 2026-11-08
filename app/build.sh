@@ -17,6 +17,7 @@
 set -euo pipefail
 
 R8_VERSION=9.5.26
+APKSIG_VERSION=8.13.0
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=$(mkdir -p "$1" && cd "$1" && pwd)
 shift
@@ -32,6 +33,8 @@ if [[ -z $framework ]]; then
   echo "usage: app/build.sh <out-dir> --framework-classes <dir|jar> [--core-classes <dir>]" >&2
   exit 2
 fi
+framework=$(cd "$(dirname "$framework")" && pwd)/$(basename "$framework")
+if [[ -n $core ]]; then core=$(cd "$core" && pwd); fi
 
 # Java on Windows takes Windows paths and ';'-separated lists.
 if [[ $(uname -s) == MINGW* || $(uname -s) == MSYS* ]]; then
@@ -50,6 +53,15 @@ if [[ ! -f $r8 ]]; then
   curl -fsSL -o "$r8" \
     "https://dl.google.com/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar"
 fi
+apksig=${APKSIG_JAR:-$work/apksig.jar}
+if [[ ! -f $apksig ]]; then
+  curl -fsSL -o "$apksig" \
+    "https://dl.google.com/android/maven2/com/android/tools/build/apksig/$APKSIG_VERSION/apksig-$APKSIG_VERSION.jar"
+fi
+apksig=$(cd "$(dirname "$apksig")" && pwd)/$(basename "$apksig")
+driverCp=$(native "$framework")
+if [[ $(uname -s) == MINGW* || $(uname -s) == MSYS* ]]; then driverCp+=";"; else driverCp+=":"; fi
+driverCp+=$(native "$apksig")
 
 # No-op initializers and placeholders for classes framework.jar compiles against but
 # does not contain (see app/README.md). They depend on nothing.
@@ -78,8 +90,10 @@ fi
 java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp" "$(native "$root/app/gen/StubGen.java")" \
   "$(native "$work/gen")" com.gesher.server.stub \
   android.permission.IPermissionChecker \
-  android.app.IActivityManager android.app.IActivityTaskManager \
-  android.app.IActivityClientController android.content.pm.IPackageManager android.content.pm.IPackageInstaller \
+  android.app.IActivityManager android.app.IActivityTaskManager android.app.IUriGrantsManager \
+  android.app.IActivityClientController android.content.pm.IPackageManager android.content.pm.IPackageInstaller android.content.pm.IPackageInstallerSession \
+  android.content.IRestrictionsManager android.app.blob.IBlobStoreManager android.os.IDeviceIdentifiersPolicyService \
+  android.content.rollback.IRollbackManager \
   android.view.IWindowManager android.view.IWindowSession \
   android.hardware.display.IDisplayManager android.os.IUserManager   com.android.internal.view.IInputMethodManager \
   android.app.INotificationManager android.app.IUiModeManager android.hardware.input.IInputManager \
@@ -87,7 +101,7 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   android.media.session.ISessionManager android.media.session.ISession android.media.session.ISessionController \
   android.os.IPowerManager android.os.IDeviceIdleController android.os.IThermalService android.app.IAlarmManager android.content.IClipboard \
   com.android.internal.app.IAppOpsService com.android.internal.appwidget.IAppWidgetService \
-  android.app.ISearchManager android.app.ILocaleManager android.app.job.IJobScheduler android.os.IBatteryPropertiesRegistrar com.android.internal.app.IBatteryStats android.location.ILocationManager android.os.IVibratorManagerService \
+  android.app.ISearchManager android.app.ILocaleManager android.app.IGrammaticalInflectionManager android.app.job.IJobScheduler android.os.IBatteryPropertiesRegistrar com.android.internal.app.IBatteryStats android.location.ILocationManager android.os.IVibratorManagerService \
   android.accounts.IAccountManager \
   com.android.internal.os.IDropBoxManagerService \
   android.app.usage.IUsageStatsManager \
@@ -98,6 +112,7 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   com.android.internal.telephony.ITelephonyRegistry \
   android.app.trust.ITrustManager \
   android.content.pm.IShortcutService \
+  android.content.pm.ICrossProfileApps \
   android.view.ISensitiveContentProtectionManager \
   android.permission.IPermissionManager
 # The framework's app-compat changes (@ChangeId fields), for bindApplication's
@@ -118,7 +133,7 @@ find "$root/app/java" "$work/gen" -name '*.java' -not -path "$root/app/java/com/
   > "$work/sources.txt"
 native_list "$work/sources.txt"
 javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \
-  -cp "$(native "$framework")" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
+  -cp "$driverCp" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
 
 # framework-location (frameworks/base/location/java: LocationManager, ILocationManager...):
 # on a device its own jar on the boot class path, which framework.jar is compiled against
@@ -131,7 +146,7 @@ if [[ -f $framework && -d $loc ]]; then
   # A jar of the framework's classes: the location packages out of it.
   fwloc=$work/fwloc
   mkdir -p "$fwloc"
-  (cd "$fwloc" && unzip -q -o "$(native "$framework")" 'android/location/*' 'android/location/*/*' 'com/android/internal/location/*' 'com/android/internal/location/*/*' || true)
+  (cd "$fwloc" && unzip -q -o "$framework" 'android/location/*' 'android/location/*/*' 'com/android/internal/location/*' 'com/android/internal/location/*/*' || true)
 fi
 if [[ -d $fwloc && -d $loc ]]; then
   while IFS= read -r c; do
@@ -155,7 +170,7 @@ fi
 # framework build compiles tagsoup's sources (compile only); its classes join gesher-app.jar.
 mkdir -p "$work/ext"
 if [[ -f $framework ]]; then
-  (cd "$work/ext" && unzip -q -o "$(native "$framework")" 'org/ccil/cowan/tagsoup/*' || true)
+  (cd "$work/ext" && unzip -q -o "$framework" 'org/ccil/cowan/tagsoup/*' || true)
 elif [[ -d $framework/org/ccil/cowan/tagsoup ]]; then
   mkdir -p "$work/ext/org/ccil/cowan"
   cp -R "$framework/org/ccil/cowan/tagsoup" "$work/ext/org/ccil/cowan/"
@@ -166,15 +181,44 @@ if [[ $tagsoup -eq 0 ]]; then
 fi
 echo "ext (tagsoup): $tagsoup classes into gesher-app.jar"
 
-# One dex for all, into a jar.
-# Preserve those same class inputs for compiling tests of API classes supplied by
-# gesher-app rather than the base framework. This JVM archive is compile-only;
-# installer/CI distribution packaging continues to name its DEX artifacts explicitly.
+# Official Apache-2.0 apksig implementation; exclude any apksigner CLI in a supplied
+# SDK apksigner.jar. The runtime uses only the APK verifier library.
+mkdir -p "$work/apksig"
+(cd "$work/apksig" && unzip -q -o "$apksig")
+
+# Compile-only API overlay for tests of classes supplied by gesher-app.
+# Distribution packaging names the runtime DEX archives explicitly.
 jar --create --file "$(native "$out/gesher-app-classes.jar")" --no-manifest \
   -C "$(native "$work/classes")" . -C "$(native "$work/compat")" . \
   -C "$(native "$work/location")" . -C "$(native "$work/ext")" .
-( cd "$work" && find classes compat location ext -name '*.class' ) > "$work/dex.txt"
+
+# One dex for all, into a jar.
+( cd "$work" && find classes compat location ext apksig/com/android/apksig -name '*.class' ) > "$work/dex.txt"
 (cd "$work" && java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
   --output "$(native "$out/gesher-app.jar")" @dex.txt)
 cp "$root/app/build.prop" "$out/build.prop"
 echo "gesher-app written to $out"
+
+# The genuine AOSP shared library required by the unmodified GmsCore APK. It is
+# loaded through <uses-library>, never appended to the boot class path.
+provider=$aosp/frameworks/base/location/lib/java
+if [[ -d $provider ]]; then
+  mkdir -p "$work/provider" "$out/etc/permissions"
+  providerAnnotations=${ANDROIDX_ANNOTATION_JAR:-$work/annotation-jvm.jar}
+  if [[ ! -f $providerAnnotations ]]; then
+    curl -fsSL -o "$providerAnnotations" \
+      https://dl.google.com/android/maven2/androidx/annotation/annotation-jvm/1.9.1/annotation-jvm-1.9.1.jar
+  fi
+  providerCp=$(native "$framework")
+  if [[ $(uname -s) == MINGW* || $(uname -s) == MSYS* ]]; then providerCp+=";"; else providerCp+=":"; fi
+  providerCp+=$(native "$providerAnnotations")
+  find "$provider" -name '*.java' > "$work/provider.txt"
+  native_list "$work/provider.txt"
+  javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \
+    -cp "$providerCp" -d "$(native "$work/provider")" @"$(native "$work/provider.txt")"
+  (cd "$work/provider" && find . -name '*.class') > "$work/provider-dex.txt"
+  (cd "$work/provider" && java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
+    --output "$(native "$out/com.android.location.provider.jar")" @"$(native "$work/provider-dex.txt")")
+  cp "$root/tools/package/etc/permissions/com.android.location.provider.xml" "$out/etc/permissions/"
+  echo "com.android.location.provider written to $out"
+fi

@@ -28,12 +28,13 @@ import java.io.OutputStream;
  * for it) and sends it.
  */
 final class NotificationStore {
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     /** A notification as stored: its identity and its PendingIntents' records. */
     static final class Stored {
         String key;
         String packageName;
+        String packageIdentity;
         String tag;
         int id;
         int flags;
@@ -45,6 +46,8 @@ final class NotificationStore {
     static final class Intended {
         int type;
         String packageName;
+        String creatorIdentity;
+        int uid;
         int requestCode;
         int flags;
         Intent[] intents;
@@ -69,6 +72,8 @@ final class NotificationStore {
         Intended i = new Intended();
         i.type = r.type;
         i.packageName = r.packageName;
+        i.creatorIdentity = r.creatorIdentity;
+        i.uid = r.uid;
         i.requestCode = r.requestCode;
         i.flags = r.flags;
         i.intents = r.intents;
@@ -82,6 +87,8 @@ final class NotificationStore {
         Stored s = new Stored();
         s.key = key;
         s.packageName = pkg;
+        s.packageIdentity = Services.sLast == null ? null
+                : NotificationManagerService.codeIdentity(Services.sLast.pm.get(pkg));
         s.tag = tag;
         s.id = id;
         s.flags = n.flags;
@@ -96,6 +103,7 @@ final class NotificationStore {
             p.writeInt(VERSION);
             p.writeString(s.key);
             p.writeString(s.packageName);
+            p.writeString(s.packageIdentity);
             p.writeString(s.tag);
             p.writeInt(s.id);
             p.writeInt(s.flags);
@@ -122,6 +130,8 @@ final class NotificationStore {
         p.writeInt(1);
         p.writeInt(i.type);
         p.writeString(i.packageName);
+        p.writeString(i.creatorIdentity);
+        p.writeInt(i.uid);
         p.writeInt(i.requestCode);
         p.writeInt(i.flags);
         p.writeInt(i.intents.length);
@@ -129,14 +139,19 @@ final class NotificationStore {
         p.writeStringArray(i.resolvedTypes);
     }
 
-    private static Intended read(Parcel p) {
+    private static Intended read(Parcel p, int version) {
         if (p.readInt() == 0) return null;
         Intended i = new Intended();
         i.type = p.readInt();
         i.packageName = p.readString();
+        if (version >= 2) {
+            i.creatorIdentity = p.readString();
+            i.uid = p.readInt();
+        }
         i.requestCode = p.readInt();
         i.flags = p.readInt();
         int n = p.readInt();
+        if (n < 1 || n > 128) throw new IllegalArgumentException("Invalid stored intent count");
         i.intents = new Intent[n];
         for (int k = 0; k < n; k++) i.intents[k] = Intent.CREATOR.createFromParcel(p);
         i.resolvedTypes = p.createStringArray();
@@ -152,18 +167,25 @@ final class NotificationStore {
             byte[] data = in.readAllBytes();
             p.unmarshall(data, 0, data.length);
             p.setDataPosition(0);
-            if (p.readInt() != VERSION) return null;
+            int version = p.readInt();
+            if (version != VERSION && !(version == 1 && !GmsSignatureSpoofing.isEnabled())) return null;
             Stored s = new Stored();
             s.key = p.readString();
             if (!key.equals(s.key)) return null;
             s.packageName = p.readString();
+            if (!pkg.equals(s.packageName)) return null;
+            if (version >= 2) s.packageIdentity = p.readString();
+            if (GmsSignatureSpoofing.isEnabled() && (s.packageIdentity == null || Services.sLast == null
+                    || !s.packageIdentity.equals(NotificationManagerService.codeIdentity(
+                            Services.sLast.pm.get(s.packageName))))) return null;
             s.tag = p.readString();
             s.id = p.readInt();
             s.flags = p.readInt();
-            s.content = read(p);
+            s.content = read(p, version);
             int actions = p.readInt();
+            if (actions < 0 || actions > 128) return null;
             s.actions = new Intended[actions];
-            for (int i = 0; i < actions; i++) s.actions[i] = read(p);
+            for (int i = 0; i < actions; i++) s.actions[i] = read(p, version);
             return s;
         } catch (Throwable t) {
             SystemServer.log("notification: " + f + " not read: " + t);
@@ -194,10 +216,21 @@ final class NotificationStore {
 
     /** Sends a stored PendingIntent, made again as its creator would ask for it. */
     static int send(ActivityManagerService am, Intended i) {
+        if (GmsSignatureSpoofing.isEnabled()) {
+            PackageManagerService pm = Services.sLast == null ? null : Services.sLast.pm;
+            ApkPackage creator = pm == null ? null : pm.get(i.packageName);
+            boolean systemCreator = "android".equals(i.packageName)
+                    && i.uid == android.os.Process.SYSTEM_UID && "android-system".equals(i.creatorIdentity);
+            if (!systemCreator && (creator == null || creator.uid() != i.uid
+                    || i.creatorIdentity == null || !i.creatorIdentity.equals(
+                            NotificationManagerService.codeIdentity(creator)))) return -1;
+        }
         IIntentSender sender = am.pendingIntents().get(i.type, i.packageName, i.requestCode,
                 i.intents, i.resolvedTypes,
                 i.flags & ~(PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_CANCEL_CURRENT));
         PendingIntents.Record r = am.pendingIntents().record(sender);
+        if (GmsSignatureSpoofing.isEnabled() && (r == null || r.uid != i.uid
+                || i.creatorIdentity == null || !i.creatorIdentity.equals(r.creatorIdentity))) return -1;
         return am.pendingIntents().send(r, null, null);
     }
 }

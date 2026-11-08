@@ -60,6 +60,7 @@ public final class SupportLib {
         "GET_WEB_CHROME_CLIENT", "WEB_MESSAGE_LISTENER", "DOCUMENT_START_SCRIPT",
         "DOCUMENT_START_SCRIPT:1", "PROXY_OVERRIDE", "PROXY_OVERRIDE:3",
         "MULTI_PROCESS_QUERY", "GET_VARIATIONS_HEADER", "WEB_MESSAGE_ARRAY_BUFFER",
+        "ALGORITHMIC_DARKENING",
     };
 
     /** What androidx.webkit's WebViewGlueCommunicator gets (SupportLibReflectionUtil). */
@@ -492,6 +493,14 @@ public final class SupportLib {
 
         public boolean getSafeBrowsingEnabled() {
             return mSettings.getSafeBrowsingEnabled();
+        }
+
+        public void setAlgorithmicDarkeningAllowed(boolean allow) {
+            mSettings.setAlgorithmicDarkeningAllowed(allow);
+        }
+
+        public boolean isAlgorithmicDarkeningAllowed() {
+            return mSettings.isAlgorithmicDarkeningAllowed();
         }
 
         public void setDisabledActionModeMenuItems(int items) {

@@ -1,0 +1,59 @@
+From: Gesher Authors
+Subject: [PATCH] Lazily initialize the host WebView provider under the framework lock
+
+Keep provider registration distinct from first use so app startup can disable
+WebView or select a process data directory. The existing Android APK provider
+path is unchanged. Host suffixes must remain safe Windows directory components.
+
+diff --git a/core/java/android/webkit/WebViewFactory.java b/core/java/android/webkit/WebViewFactory.java
+--- a/core/java/android/webkit/WebViewFactory.java
++++ b/core/java/android/webkit/WebViewFactory.java
+@@ -67,6 +67,9 @@
+     // same provider.
+     @UnsupportedAppUsage
+     private static WebViewFactoryProvider sProviderInstance;
++    // A host can register its provider without initializing WebView before app startup.
++    // Guarded by sProviderLock, just like the instance and disabled state.
++    private static java.util.function.Supplier<WebViewFactoryProvider> sProviderFactory;
+     private static final Object sProviderLock = new Object();
+     @UnsupportedAppUsage
+     private static PackageInfo sPackageInfo;
+@@ -242,6 +245,20 @@
+                 throw new IllegalArgumentException("Suffix " + suffix
+                                                    + " contains a path separator");
+             }
++            if (sProviderFactory != null) {
++                // Host providers use this as one Windows directory component.
++                if (suffix.length() > 243 || suffix.equals(".") || suffix.equals("..")
++                        || suffix.endsWith(".") || suffix.endsWith(" ")) {
++                    throw new IllegalArgumentException("Invalid WebView data directory suffix");
++                }
++                for (int i = 0; i < suffix.length(); i++) {
++                    char c = suffix.charAt(i);
++                    if (c < 32 || "<>:\"/\\|?*".indexOf(c) >= 0) {
++                        throw new IllegalArgumentException(
++                                "Invalid WebView data directory suffix");
++                    }
++                }
++            }
+             sDataDirectorySuffix = suffix;
+         }
+     }
+@@ -336,6 +353,17 @@
+             // For now the main purpose of this function (and the factory abstraction) is to keep
+             // us honest and minimize usage of WebView internals when binding the proxy.
+             if (sProviderInstance != null) return sProviderInstance;
++
++            if (sProviderFactory != null) {
++                if (sWebViewDisabled) {
++                    throw new IllegalStateException(
++                            "WebView.disableWebView() was called: WebView is disabled");
++                }
++                sTimestamps.mWebViewLoadStart = SystemClock.uptimeMillis();
++                sProviderInstance = java.util.Objects.requireNonNull(
++                        sProviderFactory.get(), "Host WebView provider factory returned null");
++                return sProviderInstance;
++            }
+ 
+             sTimestamps.mWebViewLoadStart = SystemClock.uptimeMillis();
+             final int appId = UserHandle.getAppId(android.os.Process.myUid());

@@ -1,0 +1,130 @@
+{
+  "date": "2026-11-06",
+  "scope": "Original signed Google apps in an isolated Windows microG profile; bounded measured application trials, not general GMS certification",
+  "main_baseline": "a991177deab427baae52345d870825b960c20430",
+  "integration_base": "d3b13cf3d4c882b5ae328aaa7baaf55019e2faea",
+  "framework_build": {
+    "source": "237d8964ff1f41d2e2ccba79ba7be0998371c2be",
+    "run": "https://github.com/gesher-runtime/gesher/actions/runs/42166131291",
+    "framework_sha256": "127f5bed6b0cded540c3951156ed859d8eb9fe0ea88a68d905b42d2545145fcc",
+    "full_framework_class_descriptors": 34764,
+    "original_descriptor_set_preserved": true
+  },
+  "measured_working_candidate": {
+    "app_sha256": "ea685babd19179aa0f7198562f013d23bc6702d30cd586669c2a021a6fa20261",
+    "services_dex_sha256": "5110af1a6db62aca441549111164ddf136f02bd8c45b5d43fa0a4fa979f7be50",
+    "source_manifest_sha256": "0b6a666db1286ef76952509a16f5767d763b0b3f9a0e0637f7b7dd5b54f2b50f",
+    "runtime_receipt_sha256": "bc5ec947738aeaec192ea334fc75df927f2de4d2e97f40b04ec56d30aa9d24dd",
+    "matching_boot_files": 15,
+    "native_tuple_receipt_sha256": "e93bebd400afb8b99cdfbbe3bb339584f8c81227f7919b7188493ba3e82ea689"
+  },
+  "original_apks": {
+    "com.android.vending": {
+      "version": "45.3.21-31 [0] [PR] 736181551",
+      "version_code": 84532130,
+      "sha256": "1d4ac0d5eaf5bc3ec170354abe727f1500e9964dcbf560aeb40fc1f81cd0bbcc"
+    },
+    "com.google.android.googlequicksearchbox": {
+      "version": "16.9.50.ve.x86_64",
+      "version_code": 301482860,
+      "sha256": "31091b8db68930648fa10cc115bfedeb1816ec145a08924fb1e857864eb96a0e"
+    },
+    "com.google.android.apps.bard": {
+      "version": "1.0.995038376",
+      "version_code": 345,
+      "apk_count": 33,
+      "base_apk_sha256": "793fdf8cdaf56729b9f63b1a3895b4a2c0284c38adbb2f638bf727ef491ff9be"
+    }
+  },
+  "actual_trials": {
+    "play_catalog_search_and_details": true,
+    "play_real_apk_download": {
+      "package": "net.gsantner.markor",
+      "bytes": 11980325,
+      "sha256": "50958409a8124ee812df517ed0f72499bb8f98403a45cf20e1d7e2d09e24a0e5"
+    },
+    "installed_package": {
+      "markor_present": "true",
+      "markor_version_code": "158",
+      "markor_enabled": "true",
+      "uid_mapping_matches": "true",
+      "verified_signer_count": "1",
+      "public_apk_signer_sha256": "57d106d0cfa8763442b3645ef2741c38bb820bd56fd4612bf40a23b6d998be5e",
+      "public_installed_apk_sha256": "50958409a8124ee812df517ed0f72499bb8f98403a45cf20e1d7e2d09e24a0e5"
+    },
+    "installed_app_launch": "Real app displayed its first-run tutorial",
+    "gemini": "User manually completed consent, reached chat and explicitly confirmed it works; no chat contents captured",
+    "functional_receipt_sha256": "1ceb6fcf19b487cb924dfe6325943456452511541b0748a0d5d92fc150658fa3",
+    "fossify_calculator": {
+      "package": "org.fossify.math",
+      "public_package_metadata": {
+        "calculator_present": "true",
+        "calculator_version_code": "10",
+        "calculator_enabled": "true",
+        "uid_mapping_matches": "true",
+        "verified_signer_count": "1",
+        "public_apk_signer_sha256": "affdb124d3f4720c2f98dbca9eacba0514fba4306e20a2786c861c3c0d6ff292",
+        "public_installed_apk_sha256": "623e35a503237e41e715424baecb9d6ac952612a4512a4067891e56a8303e8c3"
+      },
+      "user_confirmed_real_store_install_and_open": true,
+      "functional_receipt_sha256": "359f75a5dd242d77bf885d586492b3a95b099c657b5d6ac4827fbdbb80f868af"
+    }
+  },
+  "network": {
+    "scope": "Experiment only, explicitly user-authorized Google-only CONNECT relay through existing SSH host",
+    "tls": "End to end, no relay TLS termination or payload/header/credential logging",
+    "global_windows_proxy_changed": false
+  },
+  "working_candidate_verification": {
+    "broad_checks_passed": 56,
+    "broad_receipt_sha256": "631962a325f5028096d8f6eeb1ed8a15fc5e540fde241e79d98d98056f4a9777",
+    "focused_receipt_sha256": "bdf3e539dc7badc61b66281dc9a2839365fc230163eb4a7d7620627599842a71",
+    "package_installer_focused_checks": 105,
+    "host_launch_receipt_checks": 31,
+    "webview_groups": 5,
+    "fresh_webview_app_processes": 8,
+    "real_named_process_cases": [
+      0,
+      17,
+      -2147483648
+    ],
+    "boot_requirement": "All five image spaces verified in actual launcher/server/application processes"
+  },
+  "limits": [
+    "This working-candidate measurement predates the later package-completion delta; it is not a claim that every future artifact passed these checks.",
+    "No full current visual Self-Check result, general Google app compatibility, paid billing, DRM, Play Integrity or fused-location claim.",
+    "Manual sign-in and one user-confirmed Gemini chat are bounded trials; no account names, tokens, personal logs or chat contents are published.",
+    "Existing native exitCode -1 unknown-result ambiguity remains; actual MIN_VALUE exit is verified separately.",
+    "Native/API trust boundary is the Windows user, not an operating-system sandbox for arbitrary APK code.",
+    "A post-update Store cold attachment timed out137; warm retry succeeded. Reliable cold startup remains unestablished."
+  ],
+  "completion_candidate": {
+    "app_sha256": "f91e71654cbd4958d4182c34f6c5403b0744dfb26ab684097614211a7558c1bf",
+    "framework_sha256": "127f5bed6b0cded540c3951156ed859d8eb9fe0ea88a68d905b42d2545145fcc",
+    "source_manifest_sha256": "1ec37f9cc390902a36300c3a6f021e8daec3f76da2acf0cb9c4c13942eb924bd",
+    "runtime_receipt_sha256": "a6fcf44a64436806ad125bebd12af2efe548aabd9959cbf8c0bfd6ca965cceda",
+    "matching_boot_files": 15,
+    "actual_profile_activation_receipt_sha256": "a46293709aab11b135f2cb292aba94adf5a41fd6ed37b6010d1da00000111fdc"
+  },
+  "completion_delta_verification": {
+    "focused_checks": 52,
+    "focused_receipt_sha256": "ff8a4cb8e7845b63213dacb9fe0272d6d74e41cbe6e4f7fddc7b5fc075869659",
+    "fresh_separate_process_positive_sha256": "e8a9161f6269c353414c417ba4a6238742bbaf29cdeec265cd205e45d88cdb28",
+    "causal_earlier_runtime_negative_sha256": "ee13b8a32c154220ea95609d91b45c4be4b51e1113ecbfafcbd5997b81abde3a",
+    "actual_cold_first_install_passed": true,
+    "caches_enabled": true
+  },
+  "cold_start_measurement": {
+    "attempt": "20261106-094818",
+    "result": "Store attachment timed out and process exited137, with no Java fatal or missing-API marker observed",
+    "retry": "20261106-095149",
+    "retry_result": "Store displayed catalog/search, installed Calculator and user opened it",
+    "cause": "Unresolved; this result does not establish reliable cold startup"
+  },
+  "final_integration": {
+    "record": "microg-final-validation-2026-11-06.json",
+    "record_sha256": "a0f663674c5a754668f22b5cb9ba1d96d950fa4cca07570cf6f1942dd5f5c237",
+    "combined_checks": 70,
+    "note": "Historical actual-app trials retain their original artifacts. Final source adds legacy removal, Hebrew/English UI, atomic split icons and algorithmic darkening. All real profiles were reset at the user request; later user-installed apps/data are preserved."
+  }
+}

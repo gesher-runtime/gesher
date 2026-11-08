@@ -1,0 +1,41 @@
+{
+  "date": "2026-11-06",
+  "scope": "Bounded diagnosis of two distinct Claude sign-in screens; no successful sign-in claim",
+  "public_apk": {
+    "package": "com.anthropic.claude",
+    "version": "1.261102.19",
+    "base_sha256": "322d19ee818d75b59f0c4f06b836854a08377b709dff363d0e0e49f957673a09"
+  },
+  "screens": {
+    "google_toast": "Generic Google sign-in failure; its specific cause was not established.",
+    "play_store_dialog": "Exact public resource 0x7f140f7b. Claude selects this remedy for its missing_client_attestation refusal and a cached Play Integrity failure. It is distinct from the generic Google toast."
+  },
+  "public_code_trace": {
+    "refusal": "jca.P / missing_client_attestation -> uct.g -> ij10.a",
+    "remedy": "uct.b -> jj10.OPEN_PLAY_STORE",
+    "api": "Classic Play Integrity request, Play Core 1.6.0; BIND_INTEGRITY_SERVICE",
+    "grouped_codes": {
+      "-1": "API_NOT_AVAILABLE",
+      "-4": "PLAY_STORE_ACCOUNT_NOT_FOUND",
+      "-9": "CANNOT_BIND_TO_SERVICE",
+      "-14": "PLAY_STORE_VERSION_OUTDATED"
+    },
+    "flows": "Google and email/magic-link paths can use the same attestation-refusal presenter. This does not prove the separate Google toast has the same cause.",
+    "actual_code_selected": "Not established from the screenshots or allowlisted log counters."
+  },
+  "local_configuration_observation": {
+    "normal_installed_runtime_was_still_old": true,
+    "claude_present_after_user_reset": true,
+    "real_play_package_in_installed_registry": false,
+    "official_microg_addon_apk_present": false,
+    "account_reads": 0,
+    "configuration_mutations": 0
+  },
+  "public_static_evidence_sha256": "41f26c6a09442c81d1dd213d0a2e6efbd93751dbea82c490f158f50111a9d2e2",
+  "official_error_reference": "https://developer.android.com/google/play/integrity/reference/com/google/android/play/core/integrity/model/IntegrityErrorCode",
+  "limits": [
+    "Updating the runtime or adding a Google account has not been demonstrated to resolve Claude client attestation.",
+    "Gesher does not claim Play Integrity compatibility or fabricate attestation results.",
+    "No account identifiers, credentials, tokens, signed requests or private log contents are included."
+  ]
+}

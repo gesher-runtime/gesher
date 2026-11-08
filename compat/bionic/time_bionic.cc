@@ -575,6 +575,26 @@ int BIONIC_SYSV TimerfdSettime(int fd, int flags, const LinuxItimerspec* new_val
 
 }  // namespace
 
+bool DispatchTimerfdSyscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
+                           int64_t* result) {
+  // Linux x86-64 syscall table: timerfd_create=283, settime=286, gettime=287.
+  // Keep the existing LP64 timespec layout, validation, errno and timer lifecycle.
+  switch (nr) {
+    case 283:
+      *result = TimerfdCreate(static_cast<int>(a1), static_cast<int>(a2));
+      return true;
+    case 286:
+      *result = TimerfdSettime(static_cast<int>(a1), static_cast<int>(a2),
+          reinterpret_cast<const LinuxItimerspec*>(a3), reinterpret_cast<LinuxItimerspec*>(a4));
+      return true;
+    case 287:
+      *result = TimerfdGettime(static_cast<int>(a1), reinterpret_cast<LinuxItimerspec*>(a2));
+      return true;
+    default:
+      return false;
+  }
+}
+
 void RegisterTime(SymbolTable& t) {
   Tzset();
 #define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)

@@ -74,6 +74,14 @@ Check 'native libs: stack-protected .so with ELF TLS (API 29), threads and a lat
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/fs_test29.so") (NoDrive "$Dir")
 } @('fs_test: all passed', 'elf_load_test all passed')
 
+Check 'native libs: partial unwind covers hidden code and preserves executable data' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/fs_partial_unwind.so")
+} @('partial_unwind: hidden uncovered function reached by direct call PASS',
+    'partial_unwind: hidden uncovered function reached by indirect pointer PASS',
+    'partial_unwind: runtime recovery leaves original code bytes intact PASS',
+    'partial_unwind: FS-like executable data is unchanged PASS',
+    'partial_unwind: all passed', 'elf_load_test all passed')
+
 # Step 4, the JNI path: dalvikvm runs gesher.JniTest (tests/native/java), whose
 # System.load of jni_test.so goes through ART's host libnativeloader path to
 # gesher-base's dlopen, the ELF loader and the JNI bridge

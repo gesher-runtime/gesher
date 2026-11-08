@@ -31,6 +31,14 @@ $bcpFixes = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app')
 $dvmFixes = @("-Xbootclasspath:$bcpFixes", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
   '-cp', (NoDrive "$Dir/services-tests.dex"))
 
+# Exercise the MediaStore implementation from the production boot jar.
+$mediaStoreOut = FixesRun ($dvmFixes + 'gesher.services.MediaStoreContractTest') 90
+$mediaStoreCode = $LASTEXITCODE
+Check 'services: MediaStore picker/collection contracts and missing-provider handling' {
+  $global:LASTEXITCODE = $mediaStoreCode
+  $mediaStoreOut
+} @('MediaStoreContractTest all passed: 28')
+
 # The document picker (ACTION_OPEN_DOCUMENT / _TREE, ActivityTaskManagerService)
 # shows the Windows dialog on a thread of its own: startActivity returns while it
 # is up, not when the user closes it (the app's UI froze meanwhile); the picked
@@ -159,6 +167,11 @@ Check 'services: BasicHttpParams (Gmail''s account setup) loads from org.apache.
   $global:LASTEXITCODE = $httpCode
   $httpOut
 } @('HttpLegacyTest: BasicHttpParams, HttpConnectionParams and HttpGet load from the jar, not the boot class path',
+  'HttpLegacyTest all passed')
+Check 'services: BasicCookieStore (Gmail''s contacts client) loads and works from org.apache.http.legacy.jar' {
+  $global:LASTEXITCODE = $httpCode
+  $httpOut
+} @('HttpLegacyTest: BasicCookieStore loads from the shared jar and stores and clears a synthetic cookie',
   'HttpLegacyTest all passed')
 
 # An installed APK's signers (ApkPackage), which apps read for their own: WhatsApp's

@@ -84,4 +84,6 @@ Remove-Item Env:GESHER_HWUI_RENDERER
 $env:GESHER_EGL_DEVICE = 'warp'
 GraphicsDex 'OpenGL ES for Java apps: EGL10 and GLES20 draw a frame (pbuffer, Win32 window, SurfaceTexture), GL10, GLUtils, EGL14' `
   GlBindingsTest @()
+GraphicsDex 'ImageReader native surface: EGL pixels, Canvas notification, queue overflow and close lifetime' `
+  ImageReaderEglTest @()
 Remove-Item Env:GESHER_EGL_DEVICE

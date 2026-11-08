@@ -17,6 +17,7 @@ import android.content.pm.ParceledListSlice;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
 import android.os.Bundle;
+import android.os.Binder;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.os.UserHandle;
@@ -36,6 +37,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Properties;
 
 /**
  * {@code notification}: NotificationManagerService, with Windows toasts (devsvc track,
@@ -54,7 +56,7 @@ import java.util.Set;
  * action's intent.
  *
  * <p>Notification listeners, basics: the NotificationListenerServices of installed packages
- * (BIND_NOTIFICATION_LISTENER_SERVICE; every one is allowed) are bound while notifications
+ * (BIND_NOTIFICATION_LISTENER_SERVICE; explicit special access in protected mode) are bound while notifications
  * are posted, and get onListenerConnected, onNotificationPosted and onNotificationRemoved
  * with a ranking of the active notifications; getActiveNotifications answers them.
  */
@@ -81,27 +83,47 @@ public final class NotificationManagerService extends INotificationManager.Defau
 
     /** A notification listener: ManagedServiceInfo. */
     private final class Listener {
-        final ComponentName component;  // null for registerListener's
+        final ComponentName component;
+        final String identity;
         INotificationListener listener;
         android.app.IServiceConnection connection;
 
         Listener(ComponentName component) {
             this.component = component;
+            this.identity = component == null ? null : codeIdentity(packageFor(component.getPackageName()));
         }
     }
 
     // Guarded by this. Keys: package/channel id; package/tag/id.
     private final Map<String, NotificationChannel> mChannels = new LinkedHashMap<>();
     private final Map<String, Record> mPosted = new LinkedHashMap<>();
+    private final Object mPublicationLock = new Object();
+    private Runnable mBeforePostPublication; // Server-local race fixture; never a Binder option.
     private final List<Listener> mListeners = new ArrayList<>();
     private final Set<String> mRegisteredAppIds = new HashSet<>();
     private boolean mEventsStarted;
     private boolean mListenersBound;
+    private final PackageManagerService mPackageManager;
+    private final ActivityManagerService mActivityManager;
+    private final java.util.function.ToIntBiFunction<StatusBarNotification, Boolean> mTestToast;
+    private final File mListenerFile = new File(Device.dataDir(), "system/notification-listeners");
+    private final Properties mListenerGrants = new Properties();
 
     /** The service Services.create made last (for the job scheduler's job notifications). */
     static volatile NotificationManagerService sLast;
 
     public NotificationManagerService() {
+        this(null, null, null);
+    }
+
+    /** Server-local injection for tests; never exposed through Binder. */
+    NotificationManagerService(PackageManagerService pm, ActivityManagerService am,
+            java.util.function.ToIntBiFunction<StatusBarNotification, Boolean> testToast) {
+        mPackageManager = pm;
+        mActivityManager = am;
+        mTestToast = testToast;
+        Properties loaded = Device.read(mListenerFile);
+        if (loaded != null) mListenerGrants.putAll(loaded);
         sLast = this;
     }
 
@@ -116,48 +138,187 @@ public final class NotificationManagerService extends INotificationManager.Defau
         return t;
     }
 
-    private static ActivityManagerService am() {
+    private ActivityManagerService am() {
+        if (mActivityManager != null) return mActivityManager;
         Services.Created c = Services.sLast;
         return c != null ? c.am : null;
     }
 
-    private static PackageManagerService pm() {
+    private PackageManagerService pm() {
+        if (mPackageManager != null) return mPackageManager;
         Services.Created c = Services.sLast;
         return c != null ? c.pm : null;
+    }
+
+    private boolean protectedMode() { return GmsSignatureSpoofing.isEnabled(); }
+
+    private CallerIdentity callers() {
+        ActivityManagerService am = am();
+        return am != null ? am.callers() : new CallerIdentity(pm(), null);
+    }
+
+    private void user(int userId) {
+        if (userId != 0 && !(userId == UserHandle.USER_ALL && callers().isSystem())) {
+            throw new SecurityException("Only user 0 is supported");
+        }
+    }
+
+    private void own(String pkg) {
+        if (pkg == null) throw new SecurityException("Missing notification owner");
+        callers().requireSystemOrPackage(pkg);
+        if (packageFor(pkg) == null && !(callers().isSystem() && "android".equals(pkg))) {
+            throw new SecurityException("Unknown notification owner");
+        }
+    }
+
+    private void system() {
+        if (!callers().isSystem()) {
+            throw new SecurityException("Notification administration requires the host shell");
+        }
+    }
+
+    private ApkPackage packageFor(String pkg) { return pm() == null ? null : pm().get(pkg); }
+
+    private boolean mayPost(String pkg) {
+        if (pm() != null && pm().isRemovalPending(pkg)) return false;
+        if (!protectedMode()) return true;
+        if ("android".equals(pkg)) return true; // enqueue ownership already restricts this virtual owner.
+        PackageManagerService pm = pm();
+        return pm != null && pm.permissions().checkPermission(pkg,
+                android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** A verified signer survives safe updates; unsigned developer code is exact-code-bound. */
+    static String codeIdentity(ApkPackage pkg) {
+        if (pkg == null) return null;
+        android.content.pm.Signature[] signers = pkg.verifiedSignatures();
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            if (signers != null) {
+                for (android.content.pm.Signature signer : signers) {
+                    byte[] bytes = signer.toByteArray();
+                    digest.update(java.nio.ByteBuffer.allocate(4).putInt(bytes.length).array());
+                    digest.update(bytes);
+                }
+            } else {
+                List<File> files = new ArrayList<>();
+                files.add(new File(pkg.apkPath));
+                File parent = new File(pkg.apkPath).getParentFile();
+                File[] splits = parent == null ? null : parent.listFiles(
+                        f -> f.getName().startsWith("split_") && f.getName().endsWith(".apk"));
+                if (splits != null) {
+                    java.util.Arrays.sort(splits, java.util.Comparator.comparing(File::getName));
+                    java.util.Collections.addAll(files, splits);
+                }
+                files.sort(java.util.Comparator.comparing(File::getName));
+                byte[] buffer = new byte[65536];
+                for (File file : files) {
+                    byte[] name = file.getName().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    digest.update(java.nio.ByteBuffer.allocate(4).putInt(name.length).array());
+                    digest.update(name);
+                    digest.update(java.nio.ByteBuffer.allocate(8).putLong(file.length()).array());
+                    try (java.io.InputStream input = new java.io.FileInputStream(file)) {
+                        for (int n; (n = input.read(buffer)) >= 0;) if (n > 0) digest.update(buffer, 0, n);
+                    }
+                }
+            }
+            StringBuilder hex = new StringBuilder();
+            for (byte b : digest.digest()) hex.append(String.format(java.util.Locale.ROOT, "%02x", b & 255));
+            return (signers == null ? "apk:" : "cert:") + hex;
+        } catch (Exception | LinkageError e) { return null; }
+    }
+
+    private ServiceInfo listenerService(ComponentName component) {
+        if (component == null || pm() == null) return null;
+        for (ResolveInfo info : pm().services(new Intent(NotificationListenerService.SERVICE_INTERFACE)
+                .setComponent(component), null, PackageManager.GET_META_DATA)) {
+            ServiceInfo service = info.serviceInfo;
+            if (service != null && component.getPackageName().equals(service.packageName)
+                    && component.getClassName().equals(service.name)
+                    && android.Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE.equals(service.permission)) {
+                return service;
+            }
+        }
+        return null;
+    }
+
+    private synchronized boolean listenerAllowed(ComponentName component) {
+        if (!protectedMode()) return true;
+        if (component == null || listenerService(component) == null) return false;
+        String identity = codeIdentity(packageFor(component.getPackageName()));
+        return identity != null && identity.equals(mListenerGrants.getProperty(component.flattenToString()));
+    }
+
+    private Listener listenerAccess(INotificationListener token) {
+        if (!protectedMode()) return null;
+        if (token == null) throw new SecurityException("Missing listener token");
+        synchronized (this) {
+            for (Listener listener : mListeners) {
+                if (listener.listener != null && listener.listener.asBinder().equals(token.asBinder())
+                        && listenerAllowed(listener.component)
+                        && java.util.Objects.equals(listener.identity,
+                                codeIdentity(packageFor(listener.component.getPackageName())))) {
+                    own(listener.component.getPackageName());
+                    return listener;
+                }
+            }
+        }
+        throw new SecurityException("Unregistered or revoked notification listener");
+    }
+
+    /** Called outside PermissionPolicy's lock so revocation removes existing content. */
+    void permissionChanged(String pkg) {
+        if (!protectedMode() || mayPost(pkg)) return;
+        synchronized (mPublicationLock) {
+            if (mayPost(pkg)) return;
+            synchronized (this) { mPosted.keySet().removeIf(k -> k.startsWith(pkg + "/")); }
+            NotificationStore.deleteAll(pkg);
+            if (mTestToast == null) WindowsHost.clearToasts(AppShell.appUserModelId(pkg));
+        }
     }
 
     // --- posting ------------------------------------------------------------------------------
 
     /** Posts a notification (enqueueNotificationWithTag, or a foreground service's). */
     void post(String pkg, String tag, int id, Notification notification) {
+        postFor(packageFor(pkg), pkg, tag, id, notification);
+    }
+
+    void postFor(ApkPackage captured, String pkg, String tag, int id, Notification notification) {
         if (notification == null) return;
+        // Foreground-service state lives in ActiveServices; denied posting must not
+        // expose its content through toasts, listeners or active-notification queries.
+        if (!mayPost(pkg)) { permissionChanged(pkg); return; }
         NotificationChannel channel = channelFor(pkg, notification.getChannelId());
         StatusBarNotification sbn = new StatusBarNotification(pkg, pkg, id, tag,
-                android.os.Process.myUid(), 0, notification, UserHandle.SYSTEM, null,
+                packageFor(pkg) == null ? android.os.Process.SYSTEM_UID : packageFor(pkg).uid(),
+                0, notification, UserHandle.SYSTEM, null,
                 System.currentTimeMillis());
         Record r = new Record(sbn, channel);
-        boolean update;
-        synchronized (this) {
-            update = mPosted.put(key(pkg, tag, id), r) != null;
-        }
-        CharSequence title = notification.extras != null
-                ? notification.extras.getCharSequence(Notification.EXTRA_TITLE) : null;
-        int importance = channel.getImportance();
-        String shown;
-        if (importance == NotificationManager.IMPORTANCE_NONE) {
-            shown = "not shown: its channel is blocked";
-        } else {
-            // Its intents outlive this system server, as its toast does (ADR 0051).
-            if (WindowsHost.inSystemServer()) {
-                NotificationStore.save(am(), sbn.getKey(), pkg, tag, id, notification);
+        Runnable beforePublication = mBeforePostPublication;
+        if (beforePublication != null) beforePublication.run();
+        synchronized (mPublicationLock) {
+            if (packageFor(pkg) != captured || captured == null && !"android".equals(pkg) || !mayPost(pkg)) return;
+            boolean update;
+            synchronized (this) {
+                update = mPosted.put(key(pkg, tag, id), r) != null;
             }
-            int hr = showToast(r, update);
-            shown = hr == 0 ? "a toast of " + AppShell.appUserModelId(pkg)
-                    : String.format("no toast (0x%08x)", hr);
+            int importance = channel.getImportance();
+            String shown;
+            if (importance == NotificationManager.IMPORTANCE_NONE) {
+                shown = "not shown: its channel is blocked";
+            } else {
+                // Its intents outlive this system server, as its toast does (ADR 0051).
+                if (WindowsHost.inSystemServer()) {
+                    NotificationStore.save(am(), sbn.getKey(), pkg, tag, id, notification);
+                }
+                int hr = mTestToast == null ? showToast(r, update) : mTestToast.applyAsInt(sbn, update);
+                shown = hr == 0 ? "a toast of " + AppShell.appUserModelId(pkg)
+                        : String.format("no toast (0x%08x)", hr);
+            }
+            SystemServer.log("notification " + id + (update ? " updated" : " posted") + " for "
+                    + pkg + ": channel " + channel.getId() + " (importance " + importance + ", " + shown + ")");
         }
-        SystemServer.log("notification " + id + (update ? " updated" : " posted") + " for "
-                + pkg + ": channel " + channel.getId() + ", title \"" + title
-                + "\" (importance " + importance + ", " + shown + ")");
         notifyListeners(r, true, 0);
     }
 
@@ -170,15 +331,16 @@ public final class NotificationManagerService extends INotificationManager.Defau
         synchronized (this) {
             r = mPosted.remove(key(pkg, tag, id));
         }
-        String sbnKey = new StatusBarNotification(pkg, pkg, id, tag, android.os.Process.myUid(),
+        String sbnKey = new StatusBarNotification(pkg, pkg, id, tag,
+                packageFor(pkg) == null ? android.os.Process.SYSTEM_UID : packageFor(pkg).uid(),
                 0, new Notification(), UserHandle.SYSTEM, null, 0).getKey();
         if (r == null) {
             // Posted by an earlier run of the device: its toast may still be in Windows'
             // notification center.
             if (NotificationStore.load(pkg, sbnKey) != null) {
                 NotificationStore.delete(pkg, sbnKey);
-                int hr = WindowsHost.removeToast(AppShell.appUserModelId(pkg),
-                        toastTag(tag, id), TOAST_GROUP);
+                int hr = mTestToast == null ? WindowsHost.removeToast(AppShell.appUserModelId(pkg),
+                        toastTag(tag, id), TOAST_GROUP) : 0;
                 SystemServer.log("notification " + id + " of " + pkg + " (an earlier run's)"
                         + " cancelled" + (hr == 0 ? ", its toast removed"
                                 : String.format(" (toast: 0x%08x)", hr)));
@@ -186,8 +348,8 @@ public final class NotificationManagerService extends INotificationManager.Defau
             return;
         }
         NotificationStore.delete(pkg, r.sbn.getKey());
-        int hr = WindowsHost.cancelNotificationBridge(AppShell.appUserModelId(pkg), toastTag(tag, id),
-                TOAST_GROUP, id);
+        int hr = mTestToast == null ? WindowsHost.cancelNotificationBridge(AppShell.appUserModelId(pkg), toastTag(tag, id),
+                TOAST_GROUP, id) : 0;
         SystemServer.log("notification " + id + " of " + pkg + " cancelled"
                 + (hr == 0 ? ", its toast removed" : String.format(" (toast: 0x%08x)", hr)));
         notifyListeners(r, false, reason);
@@ -484,19 +646,25 @@ public final class NotificationManagerService extends INotificationManager.Defau
                     si.permission)) {
                 continue;
             }
-            bindListener(new ComponentName(si.packageName, si.name));
+            ComponentName component = new ComponentName(si.packageName, si.name);
+            if (listenerAllowed(component)) bindListener(component);
         }
     }
 
     private void bindListener(ComponentName component) {
         ActivityManagerService am = am();
-        if (am == null) return;
+        if (am == null || !listenerAllowed(component)) return;
+        synchronized (this) {
+            for (Listener existing : mListeners) if (component.equals(existing.component)) return;
+        }
         Listener l = new Listener(component);
         l.connection = new android.app.IServiceConnection.Stub() {
             @Override
             public void connected(ComponentName name, IBinder service,
                     android.app.IBinderSession session, boolean dead) {
                 if (service == null) return;
+                if (!listenerAllowed(component) || !java.util.Objects.equals(l.identity,
+                        codeIdentity(packageFor(component.getPackageName())))) return;
                 INotificationListener listener = INotificationListener.Stub.asInterface(service);
                 synchronized (NotificationManagerService.this) {
                     l.listener = listener;
@@ -515,12 +683,15 @@ public final class NotificationManagerService extends INotificationManager.Defau
         }
         Intent intent = new Intent(NotificationListenerService.SERVICE_INTERFACE)
                 .setComponent(component);
+        long identity = Binder.clearCallingIdentity();
         try {
             am.bindService(null, null, intent, null, l.connection, Context.BIND_AUTO_CREATE,
                     "android", 0);
             SystemServer.log("notification: binding listener " + component.flattenToShortString());
         } catch (Throwable t) {
             SystemServer.log("notification: binding " + component + " failed: " + t);
+        } finally {
+            Binder.restoreCallingIdentity(identity);
         }
     }
 
@@ -532,16 +703,19 @@ public final class NotificationManagerService extends INotificationManager.Defau
             mListenersBound = false;
             for (int i = mListeners.size() - 1; i >= 0; i--) {
                 Listener l = mListeners.get(i);
-                if (l.component != null) {
+                if (l.connection != null) {
                     unbind.add(l);
                     mListeners.remove(i);
                 }
             }
         }
         ActivityManagerService am = am();
+        long identity = Binder.clearCallingIdentity();
+        try {
         for (Listener l : unbind) {
             if (am != null) am.unbindService(l.connection);
         }
+        } finally { Binder.restoreCallingIdentity(identity); }
     }
 
     private static final class NoCompletion extends IDispatchCompletionListener.Stub {
@@ -555,6 +729,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
         synchronized (this) {
             int rank = 0;
             for (Record r : mPosted.values()) {
+                if (!mayPost(r.sbn.getPackageName())) continue;
                 NotificationListenerService.Ranking ranking = new NotificationListenerService.Ranking();
                 ranking.populate(r.sbn.getKey(), rank++, true /* matchesInterruptionFilter */,
                         NotificationListenerService.Ranking.VISIBILITY_NO_OVERRIDE,
@@ -577,11 +752,19 @@ public final class NotificationManagerService extends INotificationManager.Defau
     }
 
     private void notifyListeners(Record r, boolean posted, int reason) {
+        if (posted) synchronized (this) {
+            if (mPosted.get(key(r.sbn.getPackageName(), r.sbn.getTag(), r.sbn.getId())) != r
+                    || !mayPost(r.sbn.getPackageName())) return;
+        }
         if (posted) bindListeners();
         List<INotificationListener> targets = new ArrayList<>();
         synchronized (this) {
             for (Listener l : mListeners) {
-                if (l.listener != null) targets.add(l.listener);
+                if (l.listener != null && (!protectedMode() || (listenerAllowed(l.component)
+                        && java.util.Objects.equals(l.identity,
+                                codeIdentity(packageFor(l.component.getPackageName())))))) {
+                    targets.add(l.listener);
+                }
             }
         }
         if (!targets.isEmpty()) {
@@ -605,7 +788,8 @@ public final class NotificationManagerService extends INotificationManager.Defau
     private synchronized List<StatusBarNotification> active(String pkg) {
         List<StatusBarNotification> result = new ArrayList<>();
         for (Record r : mPosted.values()) {
-            if (pkg == null || pkg.equals(r.sbn.getPackageName())) result.add(r.sbn);
+            if ((pkg == null || pkg.equals(r.sbn.getPackageName()))
+                    && mayPost(r.sbn.getPackageName())) result.add(r.sbn);
         }
         return result;
     }
@@ -615,17 +799,22 @@ public final class NotificationManagerService extends INotificationManager.Defau
     @Override
     public void enqueueNotificationWithTag(String pkg, String opPkg, String tag, int id,
             Notification notification, int userId) {
-        post(pkg, tag, id, notification);
+        ApkPackage captured = packageFor(pkg);
+        user(userId); own(pkg); own(opPkg);
+        if (!callers().isSystem() && !pkg.equals(opPkg)) throw new SecurityException("Invalid notification attribution");
+        postFor(captured, pkg, tag, id, notification);
     }
 
     @Override
     public void cancelNotificationWithTag(String pkg, String opPkg, String tag, int id,
             int userId) {
+        user(userId); own(pkg); own(opPkg);
         cancel(pkg, tag, id);
     }
 
     @Override
     public void cancelAllNotifications(String pkg, int userId) {
+        user(userId); own(pkg);
         List<Record> removed = new ArrayList<>();
         synchronized (this) {
             mPosted.entrySet().removeIf(e -> {
@@ -641,7 +830,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
         String appId = AppShell.appUserModelId(pkg);
         for (Record r : removed) {
             NotificationStore.delete(pkg, r.sbn.getKey());
-            WindowsHost.removeToast(appId, toastTag(r.sbn.getTag(), r.sbn.getId()), TOAST_GROUP);
+            if (mTestToast == null) WindowsHost.removeToast(appId, toastTag(r.sbn.getTag(), r.sbn.getId()), TOAST_GROUP);
         }
         SystemServer.log("notification: all of " + pkg + " cancelled (" + removed.size() + ")");
         for (Record r : removed) {
@@ -655,13 +844,17 @@ public final class NotificationManagerService extends INotificationManager.Defau
      * uninstalled (Installer.uninstall).
      */
     void packageRemoved(String pkg) {
+        synchronized (mPublicationLock) { packageRemovedLocked(pkg); }
+    }
+    private void packageRemovedLocked(String pkg) {
+        revokeListenersForPackage(pkg);
         synchronized (this) {
             mPosted.keySet().removeIf(k -> k.startsWith(pkg + "/"));
             mChannels.keySet().removeIf(k -> k.startsWith(pkg + "/"));
         }
         String appId = AppShell.appUserModelId(pkg);
-        int cleared = WindowsHost.clearToasts(appId);
-        int unregistered = WindowsHost.unregisterAppId(appId);
+        int cleared = mTestToast == null ? WindowsHost.clearToasts(appId) : 0;
+        int unregistered = mTestToast == null ? WindowsHost.unregisterAppId(appId) : 0;
         NotificationStore.deleteAll(pkg);
         synchronized (this) {
             mRegisteredAppIds.remove(appId);
@@ -672,12 +865,14 @@ public final class NotificationManagerService extends INotificationManager.Defau
 
     @Override
     public ParceledListSlice getAppActiveNotifications(String callingPkg, int userId) {
+        user(userId); own(callingPkg);
         return new ParceledListSlice<>(active(callingPkg));
     }
 
     @Override
     public StatusBarNotification[] getActiveNotifications(String callingPkg) {
-        return active(null).toArray(new StatusBarNotification[0]);
+        own(callingPkg);
+        return active(callers().isSystem() ? null : callingPkg).toArray(new StatusBarNotification[0]);
     }
 
     @Override
@@ -689,6 +884,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
     @Override
     public ParceledListSlice getActiveNotificationsFromListener(INotificationListener token,
             String[] keys, int trim) {
+        listenerAccess(token);
         List<StatusBarNotification> all = active(null);
         if (keys != null) {
             List<String> wanted = java.util.Arrays.asList(keys);
@@ -700,9 +896,18 @@ public final class NotificationManagerService extends INotificationManager.Defau
     @Override
     public void registerListener(INotificationListener listener, ComponentName component,
             int userid) {
-        Listener l = new Listener(null);
+        user(userid);
+        if (listener == null) throw new SecurityException("Missing listener Binder");
+        if (component != null) own(component.getPackageName());
+        if (protectedMode()) {
+            if (component == null) throw new SecurityException("Missing listener component");
+            if (!listenerAllowed(component)) throw new SecurityException("Notification listener access denied");
+        }
+        Listener l = new Listener(component);
         l.listener = listener;
         synchronized (this) {
+            mListeners.removeIf(existing -> existing.listener != null
+                    && existing.listener.asBinder().equals(listener.asBinder()));
             mListeners.add(l);
         }
         try {
@@ -714,14 +919,18 @@ public final class NotificationManagerService extends INotificationManager.Defau
 
     @Override
     public void unregisterListener(INotificationListener listener, int userid) {
+        user(userid); listenerAccess(listener);
         synchronized (this) {
             mListeners.removeIf(l -> l.listener != null
-                    && l.listener.asBinder() == listener.asBinder());
+                    && l.listener.asBinder().equals(listener.asBinder()));
         }
     }
 
     @Override
     public void requestBindListener(ComponentName component) {
+        if (component == null) throw new IllegalArgumentException("Missing listener component");
+        own(component.getPackageName());
+        if (!listenerAllowed(component)) throw new SecurityException("Notification listener access denied");
         synchronized (this) {
             for (Listener l : mListeners) {
                 if (component.equals(l.component)) return;
@@ -733,11 +942,13 @@ public final class NotificationManagerService extends INotificationManager.Defau
     @Override
     public void cancelNotificationFromListener(INotificationListener token, String pkg,
             String tag, int id) {
+        listenerAccess(token);
         cancel(pkg, tag, id, NotificationListenerService.REASON_CANCEL);
     }
 
     @Override
     public void cancelNotificationsFromListener(INotificationListener token, String[] keys) {
+        listenerAccess(token);
         List<Record> matched = new ArrayList<>();
         synchronized (this) {
             for (Record r : mPosted.values()) {
@@ -754,16 +965,22 @@ public final class NotificationManagerService extends INotificationManager.Defau
 
     @Override
     public boolean areNotificationsEnabled(String pkg) {
-        return true;
+        own(pkg);
+        permissionChanged(pkg);
+        return mayPost(pkg);
     }
 
     @Override
     public boolean areNotificationsEnabledForPackage(String pkg, int uid) {
-        return true;
+        own(pkg);
+        ApkPackage installed = packageFor(pkg);
+        if (installed == null || installed.uid() != uid) return false;
+        return areNotificationsEnabled(pkg);
     }
 
     @Override
     public void createNotificationChannels(String pkg, ParceledListSlice channelsList) {
+        own(pkg);
         List<?> channels = channelsList.getList();
         synchronized (this) {
             for (Object o : channels) {
@@ -781,6 +998,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
     @Override
     public NotificationChannel getNotificationChannel(String callingPkg, int userId,
             String pkg, String channelId) {
+        user(userId); own(callingPkg); own(pkg);
         synchronized (this) {
             return mChannels.get(pkg + "/" + channelId);
         }
@@ -789,6 +1007,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
     @Override
     public ParceledListSlice getNotificationChannels(String callingPkg, String targetPkg,
             int userId) {
+        user(userId); own(callingPkg); own(targetPkg);
         List<NotificationChannel> result = new ArrayList<>();
         synchronized (this) {
             for (Map.Entry<String, NotificationChannel> e : mChannels.entrySet()) {
@@ -800,8 +1019,199 @@ public final class NotificationManagerService extends INotificationManager.Defau
 
     @Override
     public void deleteNotificationChannel(String pkg, String channelId) {
+        own(pkg);
         synchronized (this) {
             mChannels.remove(pkg + "/" + channelId);
         }
+    }
+
+    @Override
+    public boolean isNotificationListenerAccessGranted(ComponentName component) {
+        if (component == null) return false;
+        own(component.getPackageName());
+        return listenerAllowed(component);
+    }
+
+    @Override
+    public boolean isNotificationListenerAccessGrantedForUser(ComponentName component, int userId) {
+        user(userId);
+        return isNotificationListenerAccessGranted(component);
+    }
+
+    @Override
+    public void setNotificationListenerAccessGranted(ComponentName component, boolean granted,
+            boolean userSet) {
+        setNotificationListenerAccessGrantedForUser(component, 0, granted, userSet);
+    }
+
+    @Override
+    public void setNotificationListenerAccessGrantedForUser(ComponentName component, int userId,
+            boolean granted, boolean userSet) {
+        ApkPackage captured = component == null ? null : packageFor(component.getPackageName());
+        system(); user(userId);
+        if (component == null || (granted && listenerService(component) == null)) {
+            throw new IllegalArgumentException("Not a notification listener service");
+        }
+        String identity = granted ? codeIdentity(packageFor(component.getPackageName())) : null;
+        if (granted && identity == null) throw new SecurityException("Unknown listener code identity");
+        synchronized (this) {
+            if (granted && (packageFor(component.getPackageName()) != captured
+                    || pm() != null && pm().isRemovalPending(component.getPackageName()))) {
+                throw new SecurityException("Notification listener changed or is retiring");
+            }
+            Object previous = granted ? mListenerGrants.setProperty(component.flattenToString(), identity)
+                    : mListenerGrants.remove(component.flattenToString());
+            try { Device.write(mListenerFile, mListenerGrants); }
+            catch (java.io.IOException failure) {
+                if (previous == null) mListenerGrants.remove(component.flattenToString());
+                else mListenerGrants.put(component.flattenToString(), previous);
+                throw new IllegalStateException("Could not persist notification listener decision", failure);
+            }
+        }
+        if (granted) {
+            // An explicit host decision can enable a new listener after the initial scan.
+            synchronized (this) { if (mPosted.isEmpty()) return; }
+            bindListener(component);
+        } else {
+            removeListeners(component);
+        }
+    }
+
+    private void removeListeners(ComponentName component) {
+        List<Listener> removed = new ArrayList<>();
+        synchronized (this) {
+            mListeners.removeIf(listener -> {
+                if (!component.equals(listener.component)) return false;
+                removed.add(listener); return true;
+            });
+        }
+        ActivityManagerService am = am();
+        long identity = Binder.clearCallingIdentity();
+        try {
+            for (Listener listener : removed) {
+                if (listener.connection != null && am != null) am.unbindService(listener.connection);
+            }
+        } finally { Binder.restoreCallingIdentity(identity); }
+    }
+
+    private void revokeListenersForPackage(String pkg) {
+        List<ComponentName> removed = new ArrayList<>();
+        synchronized (this) {
+            Properties before = new Properties(); before.putAll(mListenerGrants);
+            for (Object key : new ArrayList<>(mListenerGrants.keySet())) {
+                ComponentName component = ComponentName.unflattenFromString(key.toString());
+                if (component != null && pkg.equals(component.getPackageName())) {
+                    mListenerGrants.remove(key); removed.add(component);
+                }
+            }
+            try { Device.write(mListenerFile, mListenerGrants); }
+            catch (java.io.IOException failure) {
+                mListenerGrants.clear(); mListenerGrants.putAll(before);
+                throw new IllegalStateException("Could not revoke notification listener access", failure);
+            }
+            for (Listener listener : mListeners) {
+                if (listener.component != null && pkg.equals(listener.component.getPackageName())
+                        && !removed.contains(listener.component)) removed.add(listener.component);
+            }
+        }
+        for (ComponentName component : removed) removeListeners(component);
+    }
+
+    @Override
+    public List<ComponentName> getEnabledNotificationListeners(int userId) {
+        system(); user(userId);
+        List<ComponentName> result = new ArrayList<>();
+        synchronized (this) {
+            for (Object key : mListenerGrants.keySet()) {
+                ComponentName component = ComponentName.unflattenFromString(key.toString());
+                if (listenerAllowed(component)) result.add(component);
+            }
+        }
+        return result;
+    }
+
+    @Override
+    public List<String> getEnabledNotificationListenerPackages() {
+        List<String> result = new ArrayList<>();
+        for (ComponentName component : getEnabledNotificationListeners(0)) {
+            if (!result.contains(component.getPackageName())) result.add(component.getPackageName());
+        }
+        return result;
+    }
+
+    @Override
+    public boolean hasEnabledNotificationListener(String pkg, int userId) {
+        user(userId); own(pkg);
+        if (!protectedMode()) return true;
+        synchronized (this) {
+            for (Object key : mListenerGrants.keySet()) {
+                ComponentName component = ComponentName.unflattenFromString(key.toString());
+                if (component != null && pkg.equals(component.getPackageName()) && listenerAllowed(component)) return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public void requestUnbindListener(INotificationListener listener) {
+        Listener registered = listenerAccess(listener);
+        if (registered != null) removeListeners(registered.component);
+        else unregisterListener(listener, 0);
+    }
+
+    @Override
+    public void requestUnbindListenerComponent(ComponentName component) {
+        if (component == null) throw new IllegalArgumentException("Missing listener component");
+        own(component.getPackageName());
+        removeListeners(component);
+    }
+
+    @Override
+    public boolean canNotifyAsPackage(String callingPkg, String targetPkg, int userId) {
+        user(userId); own(callingPkg);
+        return callers().isSystem() || callingPkg.equals(targetPkg);
+    }
+
+    @Override
+    public void createNotificationChannelsForPackage(String pkg, int uid, ParceledListSlice channels) {
+        system(); createNotificationChannels(pkg, channels);
+    }
+
+    @Override
+    public void updateNotificationChannelForPackage(String pkg, int uid, NotificationChannel channel) {
+        system(); createNotificationChannels(pkg, new ParceledListSlice<>(List.of(channel)));
+    }
+
+    @Override
+    public NotificationChannel getNotificationChannelForPackage(String pkg, int uid, String channelId,
+            String conversationId, boolean includeDeleted) {
+        own(pkg); return getNotificationChannel(pkg, 0, pkg, channelId);
+    }
+
+    @Override
+    public ParceledListSlice getNotificationChannelsForPackage(String pkg, int uid, boolean includeDeleted) {
+        own(pkg); return getNotificationChannels(pkg, pkg, 0);
+    }
+
+    @Override
+    public void setNotificationsEnabledForPackage(String pkg, int uid, boolean enabled) {
+        system(); own(pkg);
+        ApkPackage installed = packageFor(pkg);
+        if (installed == null || installed.uid() != uid) throw new SecurityException("Wrong package UID");
+        if (enabled) pm().permissions().grantRuntimePermission(pkg,
+                android.Manifest.permission.POST_NOTIFICATIONS, "default:0", 0);
+        else pm().permissions().revokeRuntimePermission(pkg,
+                android.Manifest.permission.POST_NOTIFICATIONS, "default:0", 0, "host notification settings");
+    }
+
+    @Override
+    public void setNotificationsEnabledWithImportanceLockForPackage(String pkg, int uid, boolean enabled) {
+        setNotificationsEnabledForPackage(pkg, uid, enabled);
+    }
+
+    @Override
+    public int getPackageImportance(String pkg) {
+        return areNotificationsEnabled(pkg) ? NotificationManager.IMPORTANCE_DEFAULT
+                : NotificationManager.IMPORTANCE_NONE;
     }
 }

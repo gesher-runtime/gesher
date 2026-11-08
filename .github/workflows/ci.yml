@@ -53,6 +53,10 @@ jobs:
           python3 -m unittest discover -s tools/tests -p test_java_member_inventory.py
           python3 -m unittest discover -s tools/tests -p test_audit_services_jni.py
 
+      - name: Validate user interface translations
+        run: |
+          python3 tools/i18n/check.py --check
+
   build-framework-assets:
     needs: [artifact-preflight, source-identity]
     runs-on: ubuntu-24.04
@@ -173,6 +177,8 @@ jobs:
           ninja -C out native3_unicode_test
           ninja -C out native3_cpu_clock_test
           ninja -C out
+          # Native fixtures are CI-only; none is installed by gesher.iss.
+          ninja -C out install_pipe_test account_chooser_test window_promotion_test
 
       - name: Build and isolate ordinary Binder host actor under production OFF
         run: |
@@ -207,6 +213,9 @@ jobs:
           mkdir -p dist
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
           cp out/gesher_shellext.dll dist/
+          cp out/libgesher_account_crypto.so dist/
+          cp out/libgesher_install_pipe.so dist/
+          cp out/libgesher_webview_bridge.so dist/
           cp dist-web3-observer/web3_process_waits.exe dist/
           ls -la dist
 
@@ -477,6 +486,12 @@ jobs:
             tools/fonts
             tools/binder
 
+      - name: Verify PowerShell UI translations
+        shell: powershell
+        run: |
+          tests/windows/shell/UiLocalizationChecks.ps1
+          tests/windows/shell/MicrogDefaultsChecks.ps1
+
       - name: Verify and assemble windows-x64 artifact
         shell: pwsh
         run: |
@@ -544,7 +559,8 @@ jobs:
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y | Out-Null }
+          $hebrew = Join-Path (Split-Path $iscc) 'Languages\Hebrew.isl'
+          if (-not (Test-Path $iscc) -or -not (Test-Path $hebrew)) { choco upgrade innosetup --no-progress -y | Out-Null }
           $version = "0.1.${{ github.run_number }}"
           & $iscc /Qp "/DBuildDir=$PWD\dist" "/DAppVersion=$version" "/O$PWD\installer" tools\package\gesher.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -852,7 +868,8 @@ jobs:
           }
           $sizes = @(Read-Ico "$app\gesher.ico" | ForEach-Object Width)
           foreach ($s in 16, 32, 48, 256) { if ($sizes -notcontains $s) { throw "gesher.ico has no ${s}x$s image ($($sizes -join ', '))" } }
-          if ($wsh.CreateShortcut("$programs\Gesher Hello.lnk").IconLocation -ne "$app\gesher.ico,0") { throw 'The Gesher Hello shortcut lacks Gesher''s icon' }
+          if (Test-Path "$programs\Gesher Hello.lnk") { throw 'Gesher Hello shortcut should not be created' }
+          if ($wsh.CreateShortcut("$programs\Gesher Control Center.lnk").IconLocation -ne "$app\gesher.ico,0") { throw 'The Gesher Control Center shortcut lacks Gesher''s icon' }
           'PASS  installer: .apk files get their icons from Gesher''s icon handler (DefaultIcon %1, gesher_shellext.dll); the Start menu entries get gesher.ico' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # The installed lifecycle.apk, as the shell names its icon (IExtractIcon through
           # SHGetFileInfo): the app's .ico. Reported, not required: a runner's shell may
@@ -1027,6 +1044,17 @@ jobs:
           }
           if ($holder.HasExited) { throw "The process holding gesher_shellext.dll ended before the update (exit $($holder.ExitCode))" }
           if (-not $loaded) { Stop-Process -Id $holder.Id -Force; throw 'The holder process never had gesher_shellext.dll loaded' }
+          # Upgrade cleanup covers shortcuts left by either installer language.
+          $legacyHelloLinks = @('Gesher Hello.lnk', 'גשר — דוגמה.lnk')
+          $legacy = $wsh.CreateShortcut((Join-Path $programs $legacyHelloLinks[0]))
+          $legacy.TargetPath = "$app\gesher.cmd"
+          $legacy.Save()
+          # WScript.Shell.Save uses the runner's ANSI code page for this path.
+          # Copy a valid link with Unicode file APIs to seed the Hebrew name.
+          Copy-Item -LiteralPath (Join-Path $programs $legacyHelloLinks[0]) `
+            -Destination (Join-Path $programs $legacyHelloLinks[1])
+          $upgradeSentinel = Join-Path $programs 'gesher-ci-upgrade-sentinel.txt'
+          Set-Content $upgradeSentinel 'unrelated Start menu entry'
           $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
           $problems = @()
           if ($p.ExitCode -ne 0) { $problems += "Setup exit $($p.ExitCode)" }
@@ -1035,6 +1063,12 @@ jobs:
           if (-not (Get-ChildItem "$app\gesher_shellext.*.old" -ErrorAction SilentlyContinue)) { $problems += 'the loaded copy was not moved aside' }
           Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
           if ($problems) { throw "Updating with the icon handler loaded: $($problems -join '; ')" }
+          foreach ($name in $legacyHelloLinks) {
+            if (Test-Path (Join-Path $programs $name)) { throw "Upgrade left the legacy shortcut: $name" }
+          }
+          if (-not (Test-Path $upgradeSentinel)) { throw 'Upgrade removed an unrelated Start menu entry' }
+          Remove-Item $upgradeSentinel
+          'PASS  installer: upgrade removes English and Hebrew Hello shortcuts and preserves unrelated Start menu entries' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: an update with gesher_shellext.dll loaded in another process leaves that process running (Explorer is not closed) and moves the loaded copy aside' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Something of the Start menu that is not Gesher's, which uninstalling must keep.
           $sentinel = Join-Path $programs 'gesher-ci-sentinel.txt'
@@ -1279,6 +1313,12 @@ jobs:
           python tools/web3/host_roles.py verify --dist dist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Run offline identity and retirement regressions
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows/run-microg-security.ps1 -Dir dist -EvidenceDir "${{ runner.temp }}/microg-security" | Tee-Object -FilePath microg-security-results.txt
+          exit $LASTEXITCODE
+
       - name: Run tests
         shell: pwsh
         run: |
@@ -1300,6 +1340,25 @@ jobs:
           if ($summaryTruncated) { 'Summary shortened; complete results remain in the job log and results.txt.' >> $env:GITHUB_STEP_SUMMARY }
           '```' >> $env:GITHUB_STEP_SUMMARY
           exit $code
+
+      - name: Upload offline regression evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: microg-security-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/microg-security/**/*.log
+            ${{ runner.temp }}/microg-security/**/*.txt
+            ${{ runner.temp }}/microg-security/**/*.json
+            ${{ runner.temp }}/microg-security/**/*.png
+            ${{ runner.temp }}/microg-security/**/*.dmp
+            ${{ runner.temp }}/gesher-microg-security/**/*.log
+            ${{ runner.temp }}/gesher-microg-security/**/*.txt
+            ${{ runner.temp }}/gesher-microg-security/**/*.json
+            ${{ runner.temp }}/gesher-microg-security/**/*.png
+            ${{ runner.temp }}/gesher-microg-security/**/*.dmp
+            microg-security-results.txt
+            results.txt
 
   # Extra isolated jobs execute the real regression in the SAME canonical
   # full. Only these jobs download the separately named hook artifact.

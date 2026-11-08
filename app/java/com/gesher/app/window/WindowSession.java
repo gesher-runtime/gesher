@@ -22,6 +22,7 @@ import android.os.SystemClock;
 import android.util.ArrayMap;
 import android.view.IWindow;
 import android.view.IWindowId;
+import android.view.IWindowFocusObserver;
 import android.view.IWindowSession;
 import android.view.Display;
 import android.view.InputChannel;
@@ -171,6 +172,8 @@ public final class WindowSession extends IWindowSession.Stub {
     private static WindowSession sInstance;
 
     private final boolean mShow;
+    /** Lifecycle-approved activity tokens; unapproved roots keep the process default. */
+    private final java.util.Map<IBinder, Boolean> mActivityVisibility = new java.util.WeakHashMap<>();
     private final WindowLayout mLayout = new WindowLayout();
     private final ArrayMap<IBinder, AppWindow> mWindows = new ArrayMap<>();
     private volatile CloseHandler mCloseHandler = WindowSession::finishActivity;
@@ -182,9 +185,47 @@ public final class WindowSession extends IWindowSession.Stub {
     /** Where each task's window was last (client area on the screen). Guarded by mWindows. */
     private final android.util.SparseArray<Rect> mTaskScreen = new android.util.SparseArray<>();
 
+    /** Stable identity used by View.getWindowId and AndroidX scene transitions. */
+    private static final class WindowIdentity extends IWindowId.Stub {
+        private final android.os.RemoteCallbackList<IWindowFocusObserver> observers =
+                new android.os.RemoteCallbackList<>();
+        private volatile boolean focused;
+        private boolean retired;
+        @Override public void registerFocusObserver(IWindowFocusObserver observer) {
+            if (observer != null) observers.register(observer);
+        }
+        @Override public void unregisterFocusObserver(IWindowFocusObserver observer) {
+            if (observer != null) observers.unregister(observer);
+        }
+        @Override public boolean isFocused() { return focused; }
+        synchronized void retire(Handler handler) {
+            focus(false, handler);
+            retired = true;
+        }
+        synchronized void focus(boolean value, Handler handler) {
+            if (retired || focused == value) return;
+            focused = value;
+            Runnable notify = () -> {
+                int count = observers.beginBroadcast();
+                try {
+                    for (int i = 0; i < count; i++) {
+                        try {
+                            if (value) observers.getBroadcastItem(i).focusGained(asBinder());
+                            else observers.getBroadcastItem(i).focusLost(asBinder());
+                        } catch (RemoteException ignored) { }
+                    }
+                } finally { observers.finishBroadcast(); }
+            };
+            // Native/group callbacks can hold session locks. Deliver notifications
+            // on the creating window's handler, outside those callbacks.
+            if (handler != null) handler.post(notify); else notify.run();
+        }
+    }
+
     /** One app window: a ViewRootImpl's, keyed by its IWindow's binder. */
     private static final class AppWindow {
         final IWindow client;
+        final WindowIdentity identity = new WindowIdentity();
         final WindowManager.LayoutParams attrs = new WindowManager.LayoutParams();
         int requestedVisibleTypes = WindowInsets.Type.defaultVisible();
         NativeWindow nativeWindow;
@@ -311,6 +352,40 @@ public final class WindowSession extends IWindowSession.Stub {
     /** The installed session, or null. */
     public static synchronized WindowSession get() {
         return sInstance;
+    }
+
+    public void setActivityVisibility(IBinder token, boolean shown) {
+        if (token == null) throw new IllegalArgumentException("Missing activity token");
+        synchronized (mWindows) { mActivityVisibility.put(token, shown); }
+    }
+
+    public void revokeActivityVisibility(IBinder token) {
+        if (token == null) return;
+        List<AppWindow> hide = new ArrayList<>();
+        synchronized (mWindows) {
+            mActivityVisibility.remove(token);
+            if (!mShow) for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow w = mWindows.valueAt(i);
+                for (AppWindow at = w; at != null; at = at.parent) {
+                    if (token.equals(at.attrs.token)) {
+                        if (w.shown && w.nativeWindow != null) hide.add(w);
+                        break;
+                    }
+                }
+            }
+        }
+        for (AppWindow w : hide) hideWindow(w);
+    }
+
+    /** The nearest approved activity also governs its attached dialogs/popups. */
+    private boolean shownOnDesktop(AppWindow window) {
+        synchronized (mWindows) {
+            for (AppWindow at = window; at != null; at = at.parent) {
+                Boolean approved = mActivityVisibility.get(at.attrs.token);
+                if (approved != null) return approved;
+            }
+            return mShow;
+        }
     }
 
     public void setCloseHandler(CloseHandler handler) {
@@ -511,6 +586,7 @@ public final class WindowSession extends IWindowSession.Stub {
     /** Creates or resizes the window's Win32 window; true when it was created. */
     private boolean ensureNativeWindow(AppWindow w, int width, int height) {
         if (w.nativeWindow != null) {
+            syncSurfaceInsets(w);
             // A window the user resizes keeps the user's size: a relayout computed for an
             // earlier size is followed by the resize still queued (applyResize).
             if (!w.resizable && !w.popup && (w.nativeWindow.getWidth() != width
@@ -531,6 +607,7 @@ public final class WindowSession extends IWindowSession.Stub {
         int[] min = w.resizable ? minimumSize(w.attrs) : null;
         if (min != null) nw.setMinClientSize(min[0], min[1]);
         w.nativeWindow = nw;
+        syncSurfaceInsets(w);
         Looper looper = Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper();
         w.handler = new Handler(looper);
         String icon = appIcon(w.attrs.packageName);
@@ -549,6 +626,14 @@ public final class WindowSession extends IWindowSession.Stub {
             listenForEvents(w);
         }
         return true;
+    }
+
+    private static void syncSurfaceInsets(AppWindow w) {
+        // Popups already expose the complete shadow surface in their owned HWND.
+        // Top-level HWNDs expose only the content frame; crop its shadow padding.
+        Rect in = w.attrs.surfaceInsets;
+        w.nativeWindow.setSurfaceInsets(w.popup ? 0 : in.left, w.popup ? 0 : in.top,
+                w.popup ? 0 : in.right, w.popup ? 0 : in.bottom);
     }
 
     /**
@@ -670,6 +755,7 @@ public final class WindowSession extends IWindowSession.Stub {
                 w.handler.post(() -> {
                     if (w.focused != (a != 0)) {
                         w.focused = a != 0;
+                        w.identity.focus(w.focused, w.handler);
                         log("window \"" + w.title() + "\" " + (a != 0 ? "focused" : "unfocused"));
                     }
                     if (a != 0) onActivated(w);
@@ -1517,7 +1603,7 @@ public final class WindowSession extends IWindowSession.Stub {
             // WM_SIZE: the window lays out at the task's size (applyResize).
             w.nativeWindow.setClientSize(at.width(), at.height());
         }
-        if (mShow) w.nativeWindow.setScreenPosition(at.left, at.top);
+        if (shownOnDesktop(w)) w.nativeWindow.setScreenPosition(at.left, at.top);
         log("window \"" + w.title() + "\" takes task " + w.taskId + "'s place "
                 + at.toShortString());
     }
@@ -1609,10 +1695,10 @@ public final class WindowSession extends IWindowSession.Stub {
         NativeWindow nw = w.nativeWindow;
         if (w.popup) {
             AppWindow root = root(w);
-            if (root != w && root.nativeWindow != null || mShow) {
+            if (root != w && root.nativeWindow != null || shownOnDesktop(w)) {
                 // In its app window (off the desktop when that is); never activated when
                 // windows are hidden.
-                nw.showPopup(mShow && w.focusable());
+                nw.showPopup(shownOnDesktop(w) && w.focusable());
             } else {
                 nw.showOffscreen();
             }
@@ -1623,7 +1709,7 @@ public final class WindowSession extends IWindowSession.Stub {
             return;
         }
         placeInTask(w);
-        if (mShow) {
+        if (shownOnDesktop(w)) {
             nw.show();
         } else {
             nw.showOffscreen();
@@ -1758,13 +1844,14 @@ public final class WindowSession extends IWindowSession.Stub {
                         outside.toArray(new NativeWindow[0]));
                 desc.append(i == 0 ? "" : ", ").append('"').append(v.title()).append('"');
             }
-            if (!mShow) {
+            if (!shownOnDesktop(root)) {
                 // Hidden windows are never activated: the session gives the focus.
                 for (AppWindow v : group) {
                     boolean f = v == keys;
                     if (v.input != null && v.focusable()
                             && (v.sessionFocus == null || v.sessionFocus != f)) {
                         v.sessionFocus = f;
+                        v.identity.focus(f, v.handler);
                         v.input.inject(WindowInput.EVENT_FOCUS, 0, 0, f ? 1 : 0, 0, 0, 0, 0, 0,
                                 0, 0, 0);
                     }
@@ -1787,7 +1874,7 @@ public final class WindowSession extends IWindowSession.Stub {
      * as clicking an app window behind its dialog does on Windows.
      */
     private void onActivated(AppWindow w) {
-        if (!mShow) return;
+        if (!shownOnDesktop(w)) return;
         AppWindow root = root(w);
         AppWindow keys = null;
         synchronized (mWindows) {
@@ -1941,6 +2028,7 @@ public final class WindowSession extends IWindowSession.Stub {
             w = mWindows.remove(clientToken);
         }
         if (w != null) {
+            w.identity.retire(w.handler);
             boolean wasShown = w.shown;
             if (!w.popup && w.nativeWindow != null && w.shown) rememberTaskScreen(w);
             closeNativeWindow(w);
@@ -2085,7 +2173,7 @@ public final class WindowSession extends IWindowSession.Stub {
             log("window \"" + w.title() + "\" " + w.nativeWindow.getWidth() + "x"
                     + w.nativeWindow.getHeight() + ": first frame drawn ("
                     + w.nativeWindow.getFramesPresented() + " presented), "
-                    + (mShow ? "shown" : "hidden") + ", hwnd 0x"
+                    + (shownOnDesktop(w) ? "shown" : "hidden") + ", hwnd 0x"
                     + Long.toHexString(w.nativeWindow.getHwnd()));
             if (System.getenv("GESHER_WINDOW_DEBUG") != null) {
                 // PrintWindow sends messages to child windows, including WebView2, whose
@@ -2319,7 +2407,10 @@ public final class WindowSession extends IWindowSession.Stub {
 
     @Override
     public IWindowId getWindowId(IBinder window) {
-        return null;
+        synchronized (mWindows) {
+            AppWindow found = mWindows.get(window);
+            return found == null ? null : found.identity;
+        }
     }
 
     @Override

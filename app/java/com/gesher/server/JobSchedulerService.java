@@ -65,17 +65,22 @@ final class JobSchedulerService extends IJobScheduler.Default
     /** How often waiting constraints (network, charging, idle) are looked at again. */
     private static final long CONSTRAINT_POLL_MS = 30_000;
     private static final int MAX_RUNNING = 4;
+    private static final int PERSIST_VERSION = 0x474a4232; // GJB2: code-bound records.
 
     private final ActivityManagerService mAm;
     private final ActivityTaskManagerService mAtm;
     private final PackageManagerService mPm;
+    private final CallerIdentity mCallers;
     private final double mTimeScale;
 
     /** A scheduled job: JobStatus. */
     private final class Job {
         final String packageName;
+        final long removalEpoch;
         final String namespace;
         final JobInfo info;
+        final int ownerUid;
+        final String ownerIdentity;
         long earliest;          // elapsedRealtime; 0: none
         long latest;            // elapsedRealtime; Long.MAX_VALUE: none
         int failures;
@@ -91,8 +96,12 @@ final class JobSchedulerService extends IJobScheduler.Default
 
         Job(String packageName, String namespace, JobInfo info) {
             this.packageName = packageName;
+            removalEpoch = mRemovalEpochs.getOrDefault(packageName, 0L);
             this.namespace = namespace;
             this.info = info;
+            ApkPackage owner = mPm.get(packageName);
+            ownerUid = owner == null ? -1 : owner.uid();
+            ownerIdentity = NotificationManagerService.codeIdentity(owner);
         }
 
         boolean same(String pkg, String ns, int id) {
@@ -158,6 +167,9 @@ final class JobSchedulerService extends IJobScheduler.Default
         }
 
         void started(IBinder binder) {
+            // A binding may finish after an APK replacement. Do not hand the old
+            // JobParameters/extras/work to the newly installed service code.
+            if (!current(job)) { finish(this, false, "its owner changed while binding"); return; }
             synchronized (JobSchedulerService.this) {
                 if (done || service != null) return;
                 service = IJobService.Stub.asInterface(binder);
@@ -176,6 +188,7 @@ final class JobSchedulerService extends IJobScheduler.Default
             }
             SystemServer.log("jobscheduler: startJob " + job);
             try {
+                if (!current(job)) { finish(this, false, "its owner changed before dispatch"); return; }
                 service.startJob(params);
             } catch (RemoteException e) {
                 finish(this, true, "startJob failed: " + e);
@@ -189,22 +202,27 @@ final class JobSchedulerService extends IJobScheduler.Default
 
         @Override
         public void acknowledgeStartMessage(int jobId, boolean ongoing) {
+            callback(jobId);
             if (!ongoing) finish(this, false, "onStartJob returned false");
         }
 
         @Override
         public void acknowledgeStopMessage(int jobId, boolean reschedule) {
+            callback(jobId);
             finish(this, reschedule, "stopped (onStopJob: reschedule " + reschedule + ")");
         }
 
         @Override
         public void jobFinished(int jobId, boolean reschedule) {
+            callback(jobId);
             finish(this, reschedule, "jobFinished (reschedule " + reschedule + ")");
         }
 
         @Override
         public JobWorkItem dequeueWork(int jobId) {
+            callback(jobId);
             synchronized (JobSchedulerService.this) {
+                if (done) return null;
                 JobWorkItem w = job.work.poll();
                 if (w == null) return null;
                 w.bumpDeliveryCount();
@@ -215,49 +233,71 @@ final class JobSchedulerService extends IJobScheduler.Default
 
         @Override
         public boolean completeWork(int jobId, int workId) {
+            callback(jobId);
             synchronized (JobSchedulerService.this) {
+                if (done) return false;
                 return job.delivered.remove(workId) != null;
             }
         }
 
         @Override
         public void handleAbandonedJob(int jobId) {
+            callback(jobId);
             finish(this, false, "abandoned");
         }
 
         @Override
         public void acknowledgeGetTransferredDownloadBytesMessage(int jobId, int workId,
                 long transferredBytes) {
+            callback(jobId);
         }
 
         @Override
         public void acknowledgeGetTransferredUploadBytesMessage(int jobId, int workId,
                 long transferredBytes) {
+            callback(jobId);
         }
 
         @Override
         public void updateEstimatedNetworkBytes(int jobId, JobWorkItem item,
                 long downloadBytes, long uploadBytes) {
+            callback(jobId);
         }
 
         @Override
         public void updateTransferredNetworkBytes(int jobId, JobWorkItem item,
                 long transferredDownloadBytes, long transferredUploadBytes) {
+            callback(jobId);
         }
 
         @Override
         public void setNotification(int jobId, int notificationId,
                 android.app.Notification notification, int jobEndNotificationPolicy) {
+            ApkPackage captured = mPm.get(job.packageName);
+            callback(jobId);
+            synchronized (JobSchedulerService.this) { if (done) return; }
             // User-initiated jobs' notifications: posted as the app's.
             NotificationManagerService n = NotificationManagerService.sLast;
             if (n != null && notification != null) {
-                n.post(job.packageName, null, notificationId, notification);
+                n.postFor(captured, job.packageName, null, notificationId, notification);
+            }
+        }
+
+        private void callback(int jobId) {
+            // Completed tokens expose no work and every callback is a no-op. A
+            // duplicate completion may arrive after the app was marked exiting.
+            synchronized (JobSchedulerService.this) { if (done) return; }
+            mCallers.requireSystemOrPackage(job.packageName);
+            if (jobId != job.info.getId() || !current(job)) {
+                throw new SecurityException("Job callback owner or job ID changed");
             }
         }
     }
 
     // Guarded by this.
     private final List<Job> mJobs = new ArrayList<>();
+    private final Map<String, Long> mRemovalEpochs = new java.util.concurrent.ConcurrentHashMap<>();
+    private Runnable mBeforePersist; // Server-local race fixture; never a Binder option.
     private int mRunning;
     private Thread mThread;
 
@@ -266,6 +306,8 @@ final class JobSchedulerService extends IJobScheduler.Default
         mAm = am;
         mAtm = atm;
         mPm = pm;
+        mCallers = new CallerIdentity(pm, atm);
+        pm.onPackageRemoval(this::packageRemoved);
         double scale = 1;
         String s = System.getenv("GESHER_JOBS_TIME_SCALE");
         if (s != null) {
@@ -306,20 +348,35 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     @Override
     public int schedule(String namespace, JobInfo job) {
-        return enqueue(namespace, job, null);
+        return scheduleInternal(namespace, job, null);
     }
 
     @Override
     public int scheduleAsPackage(String namespace, JobInfo job, String packageName, int userId,
             String tag) {
-        return enqueue(namespace, job, null);
+        system(); user(userId);
+        // Cross-package source attribution is not implemented. Never reinterpret
+        // a claimed source package as authority to execute another app's service.
+        if (job == null || job.getService() == null || packageName == null
+                || !packageName.equals(job.getService().getPackageName())) {
+            throw new SecurityException("Job attribution must match its service owner");
+        }
+        return scheduleInternal(namespace, job, null);
     }
 
     @Override
     public int enqueue(String namespace, JobInfo info, JobWorkItem work) {
-        start();
+        if (work == null) throw new IllegalArgumentException("Missing job work item");
+        return scheduleInternal(namespace, info, work);
+    }
+
+    private int scheduleInternal(String namespace, JobInfo info, JobWorkItem work) {
+        if (info == null || info.getService() == null) throw new IllegalArgumentException("Missing job service");
         ComponentName service = info.getService();
-        ServiceInfo si = mPm.getServiceInfo(service, 0, 0);
+        String pkg = service.getPackageName();
+        ApkPackage capturedOwner = mPm.get(pkg);
+        own(pkg);
+        ServiceInfo si = checkedService(pkg, info);
         if (si == null) {
             throw new IllegalArgumentException("No such service " + service);
         }
@@ -327,10 +384,20 @@ final class JobSchedulerService extends IJobScheduler.Default
             throw new IllegalArgumentException("Scheduled service " + service
                     + " does not require android.permission.BIND_JOB_SERVICE permission");
         }
-        String pkg = service.getPackageName();
+        if (GmsSignatureSpoofing.isEnabled() && info.isPersisted()
+                && mPm.permissions().checkPermission(pkg, android.Manifest.permission.RECEIVE_BOOT_COMPLETED)
+                        != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Persisted jobs require RECEIVE_BOOT_COMPLETED");
+        }
+        if (GmsSignatureSpoofing.isEnabled() && info.isUserInitiated()
+                && !userInitiatedPermission(pkg)) throw new SecurityException("User-initiated job permission denied");
+        start();
         Run stop = null;
         Job job;
         synchronized (this) {
+            if (capturedOwner == null || mPm.get(pkg) != capturedOwner || mPm.isRemovalPending(pkg)) {
+                throw new SecurityException("Job owner changed before publication");
+            }
             Job old = find(pkg, namespace, info.getId());
             if (work != null && old != null && old.info.equals(info)) {
                 // enqueue onto the same job: its work queue grows.
@@ -415,6 +482,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         Map<String, List<JobInfo>> byNamespace = new HashMap<>();
         synchronized (this) {
             for (Job j : mJobs) {
+                if (!current(j)) continue;
                 if (pkg != null && !j.packageName.equals(pkg)) continue;
                 byNamespace.computeIfAbsent(j.namespace, k -> new ArrayList<>()).add(j.info);
             }
@@ -432,6 +500,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         List<JobInfo> result = new ArrayList<>();
         synchronized (this) {
             for (Job j : mJobs) {
+                if (!current(j)) continue;
                 if ((pkg == null || j.packageName.equals(pkg))
                         && Objects.equals(j.namespace, namespace)) {
                     result.add(j.info);
@@ -443,17 +512,19 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     @Override
     public JobInfo getPendingJob(String namespace, int jobId) {
+        String pkg = callerPackage();
         synchronized (this) {
-            Job j = find(callerPackage(), namespace, jobId);
+            Job j = find(pkg, namespace, jobId);
             return j != null ? j.info : null;
         }
     }
 
     @Override
     public int getPendingJobReason(String namespace, int jobId) {
+        String pkg = callerPackage();
         Job j;
         synchronized (this) {
-            j = find(callerPackage(), namespace, jobId);
+            j = find(pkg, namespace, jobId);
             if (j == null) return JobScheduler.PENDING_JOB_REASON_UNDEFINED;
             if (j.run != null) return JobScheduler.PENDING_JOB_REASON_EXECUTING;
         }
@@ -467,23 +538,53 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     @Override
     public boolean canRunUserInitiatedJobs(String packageName) {
-        return true;
+        own(packageName);
+        return userInitiatedPermission(packageName);
     }
 
     @Override
     public boolean hasRunUserInitiatedJobsPermission(String packageName, int userId) {
-        return true;
+        user(userId); own(packageName);
+        return userInitiatedPermission(packageName);
     }
 
     @Override
     public List<JobInfo> getStartedJobs() {
+        system();
         List<JobInfo> result = new ArrayList<>();
         synchronized (this) {
             for (Job j : mJobs) {
-                if (j.run != null) result.add(j.info);
+                if (j.run != null && current(j)) result.add(j.info);
             }
         }
         return result;
+    }
+
+    @Override public List<android.app.job.PendingJobReasonsInfo> getPendingJobReasonsHistory(
+            String namespace, int jobId) {
+        callerPackage();
+        // Historical reasons are not retained. An empty history exposes no other jobs.
+        return java.util.Collections.emptyList();
+    }
+
+    @Override public ParceledListSlice getAllJobSnapshots() {
+        system();
+        throw new UnsupportedOperationException("Job snapshots are not implemented");
+    }
+
+    @Override public void registerUserVisibleJobObserver(android.app.job.IUserVisibleJobObserver observer) {
+        system();
+        throw new UnsupportedOperationException("Job observers are not implemented");
+    }
+
+    @Override public void unregisterUserVisibleJobObserver(android.app.job.IUserVisibleJobObserver observer) {
+        system();
+        throw new UnsupportedOperationException("Job observers are not implemented");
+    }
+
+    @Override public void notePendingUserRequestedAppStop(String packageName, int userId, String reason) {
+        system(); user(userId); own(packageName);
+        throw new UnsupportedOperationException("User-requested job-stop tracking is not implemented");
     }
 
     // --- DeviceWork.Source ---------------------------------------------------------------------
@@ -506,13 +607,48 @@ final class JobSchedulerService extends IJobScheduler.Default
     // --- scheduling ---------------------------------------------------------------------------
 
     private String callerPackage() {
-        ActivityTaskManagerService.ProcessRecord p = mAtm.callerProcess(Binder.getCallingPid());
-        return p != null ? p.packageName : null;  // a process that is not an app's: all
+        return mCallers.isSystem() ? null : mCallers.callerPackage();
+    }
+
+    private void system() {
+        if (!mCallers.isSystem()) throw new SecurityException("Job administration requires the host shell");
+    }
+
+    private static void user(int userId) {
+        if (userId != 0) throw new SecurityException("Only user 0 is available");
+    }
+
+    private void own(String pkg) {
+        if (pkg == null || mPm.get(pkg) == null) throw new SecurityException("Unknown job owner");
+        mCallers.requireSystemOrPackage(pkg);
+    }
+
+    private boolean userInitiatedPermission(String pkg) {
+        return !GmsSignatureSpoofing.isEnabled() || mPm.permissions().checkPermission(pkg,
+                "android.permission.RUN_USER_INITIATED_JOBS") == android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+
+    private ServiceInfo checkedService(String pkg, JobInfo info) {
+        ComponentName component = info.getService();
+        if (component == null || !pkg.equals(component.getPackageName())) return null;
+        ServiceInfo si = mPm.getServiceInfo(component, 0, 0);
+        return si != null && pkg.equals(si.packageName) && component.getClassName().equals(si.name)
+                ? si : null;
+    }
+
+    private boolean current(Job job) {
+        ApkPackage owner = mPm.get(job.packageName);
+        ServiceInfo service = checkedService(job.packageName, job.info);
+        return owner != null && !mPm.isRemovalPending(job.packageName)
+                && job.removalEpoch == mRemovalEpochs.getOrDefault(job.packageName, 0L)
+                && owner.uid() == job.ownerUid && job.ownerIdentity != null
+                && job.ownerIdentity.equals(NotificationManagerService.codeIdentity(owner))
+                && service != null && android.Manifest.permission.BIND_JOB_SERVICE.equals(service.permission);
     }
 
     private Job find(String pkg, String namespace, int id) {
         for (Job j : mJobs) {
-            if (j.same(pkg, namespace, id)) return j;
+            if (j.same(pkg, namespace, id) && current(j)) return j;
         }
         return null;
     }
@@ -734,6 +870,7 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     private void bind(Run run) {
         Job j = run.job;
+        if (!current(j)) { finish(run, false, "its installed owner changed"); return; }
         Intent intent = new Intent().setComponent(j.info.getService());
         SystemServer.log("jobscheduler: running " + j);
         int result;
@@ -791,7 +928,8 @@ final class JobSchedulerService extends IJobScheduler.Default
             j.delivered.clear();
             long now = SystemClock.elapsedRealtime();
             boolean inList = mJobs.contains(j);
-            if (!inList) {
+            if (!inList || !current(j)) {
+                mJobs.remove(j);
                 keep = false;
             } else if (reschedule) {
                 j.failures++;
@@ -831,11 +969,14 @@ final class JobSchedulerService extends IJobScheduler.Default
                 // not linked
             }
         }
+        // The verified Run owns a system-created binding. A job callback arrives
+        // under the app's Binder identity; it cannot directly unbind that connection.
+        long identity = Binder.clearCallingIdentity();
         try {
             mAm.unbindService(run.connection);
         } catch (Throwable t) {
             // not bound
-        }
+        } finally { Binder.restoreCallingIdentity(identity); }
         if (!keep) unpersist(j);
     }
 
@@ -877,12 +1018,25 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     /** Writes a persisted job (package, namespace and the JobInfo's Parcel). */
     private void persist(Job j) {
+        Runnable beforePersist = mBeforePersist;
+        if (beforePersist != null) beforePersist.run();
+        synchronized (this) { persistLocked(j); }
+    }
+
+    private void persistLocked(Job j) {
+        ApkPackage owner = mPm.get(j.packageName);
+        if (!mJobs.contains(j) || mPm.isRemovalPending(j.packageName) || owner == null
+                || j.removalEpoch != mRemovalEpochs.getOrDefault(j.packageName, 0L)
+                || owner.uid() != j.ownerUid || !Objects.equals(j.ownerIdentity, NotificationManagerService.codeIdentity(owner))) return;
         if (!j.info.isPersisted()) return;
         Parcel p = Parcel.obtain();
         try {
+            p.writeInt(PERSIST_VERSION);
             p.writeString(j.packageName);
             p.writeString(j.namespace);
             j.info.writeToParcel(p, 0);
+            p.writeInt(j.ownerUid);
+            p.writeString(j.ownerIdentity);
             File f = persistFile(j);
             f.getParentFile().mkdirs();
             try (OutputStream out = new FileOutputStream(f)) {
@@ -895,8 +1049,30 @@ final class JobSchedulerService extends IJobScheduler.Default
         }
     }
 
-    private void unpersist(Job j) {
+    private synchronized void unpersist(Job j) {
+        if (j.removalEpoch != mRemovalEpochs.getOrDefault(j.packageName, 0L)) return;
+        for (Job current : mJobs) {
+            if (current != j && current.same(j.packageName, j.namespace, j.info.getId())) return;
+        }
         if (j.info.isPersisted()) persistFile(j).delete();
+    }
+
+    private void packageRemoved(String name) {
+        List<Job> cancelled = new ArrayList<>();
+        synchronized (this) {
+            mRemovalEpochs.put(name, mRemovalEpochs.getOrDefault(name, 0L) + 1);
+            for (Job job : mJobs) if (name.equals(job.packageName)) cancelled.add(job);
+            mJobs.removeAll(cancelled);
+            File[] persisted = persistDir().listFiles();
+            if (persisted != null) for (File file : persisted) {
+                if (!file.getName().startsWith(name + "-") || !file.getName().endsWith(".job")) continue;
+                try { java.nio.file.Files.deleteIfExists(file.toPath()); }
+                catch (java.io.IOException failed) {
+                    throw new IllegalStateException("Could not revoke persisted package jobs", failed);
+                }
+            }
+        }
+        cancelled(cancelled, "package removed");
     }
 
     private List<Job> loadPersisted() {
@@ -910,6 +1086,11 @@ final class JobSchedulerService extends IJobScheduler.Default
                 byte[] data = in.readAllBytes();
                 p.unmarshall(data, 0, data.length);
                 p.setDataPosition(0);
+                boolean bound = p.readInt() == PERSIST_VERSION;
+                if (!bound) {
+                    if (GmsSignatureSpoofing.isEnabled()) { f.delete(); continue; }
+                    p.setDataPosition(0); // Deliberate legacy opt-out compatibility.
+                }
                 String pkg = p.readString();
                 String namespace = p.readString();
                 JobInfo info = JobInfo.CREATOR.createFromParcel(p);
@@ -918,6 +1099,13 @@ final class JobSchedulerService extends IJobScheduler.Default
                     continue;
                 }
                 Job j = new Job(pkg, namespace, info);
+                if ((bound && (p.readInt() != j.ownerUid
+                        || !Objects.equals(p.readString(), j.ownerIdentity))) || !current(j)
+                        || (GmsSignatureSpoofing.isEnabled() && mPm.permissions().checkPermission(pkg,
+                                android.Manifest.permission.RECEIVE_BOOT_COMPLETED)
+                                    != android.content.pm.PackageManager.PERMISSION_GRANTED)) {
+                    f.delete(); continue;
+                }
                 timesForNew(j);
                 jobs.add(j);
             } catch (Throwable t) {

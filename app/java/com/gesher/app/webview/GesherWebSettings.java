@@ -85,6 +85,19 @@ final class GesherWebSettings extends WebSettings {
     private boolean mOffscreenPreRaster = false;
     private boolean mSafeBrowsingEnabled = true;
     private int mDisabledActionModeMenuItems = 0;
+    private boolean mAlgorithmicDarkeningAllowed;
+
+    @Override
+    public synchronized void setAlgorithmicDarkeningAllowed(boolean allow) {
+        if (mAlgorithmicDarkeningAllowed == allow) return;
+        mAlgorithmicDarkeningAllowed = allow;
+        changed();
+    }
+
+    @Override
+    public synchronized boolean isAlgorithmicDarkeningAllowed() {
+        return mAlgorithmicDarkeningAllowed;
+    }
 
     @Override
     public synchronized void setNavDump(boolean enabled) {

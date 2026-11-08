@@ -337,6 +337,11 @@ placeholders for them (they need framework types): `android.net.TrafficStats`
 (`handleBindApplication` calls `init`; no traffic accounting),
 `android.app.sdksandbox.sandboxactivity.SdkSandboxActivityAuthority` and
 `ActivityContextInfo` (no intent starts an SDK sandbox activity),
+`android.app.sdksandbox.SdkSandboxManager` (only the static capability query:
+disabled, with no named/typed service or SDK execution APIs),
+`android.app.usage.NetworkStatsManager` and its result types (a named/typed
+wrapper whose summary queries report unavailable accounting through the
+documented `RemoteException`; no host traffic or zero-usage samples),
 `android.util.StatsEvent`/`StatsLog` (no statsd: events are dropped), and
 `android.health.connect.HealthConnectManager` (`AppOpsManager.permissionToOp` asks it
 whether a permission is a health permission: none is). Apps reach one more:

@@ -1,0 +1,3 @@
+LIBRARY gesher_webview_bridge
+EXPORTS
+  JNI_OnLoad

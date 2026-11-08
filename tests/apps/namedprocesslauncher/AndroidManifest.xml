@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.gesher.namedprocesslauncher" android:versionCode="1" android:versionName="1">
+  <application android:label="Named process launcher fixture" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+    <service android:name=".SiblingService" android:exported="false" />
+    <activity android:name=".ExitZeroActivity" android:process=":worker" android:exported="true" />
+    <activity android:name=".Exit17Activity" android:process=":worker" android:exported="true" />
+    <activity android:name=".ExitMinActivity" android:process=":worker" android:exported="true" />
+  </application>
+</manifest>

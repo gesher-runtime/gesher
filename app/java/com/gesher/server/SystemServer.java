@@ -11,6 +11,7 @@ import android.os.ServiceManager;
 import android.os.SystemClock;
 
 import com.gesher.app.Main;
+import static com.gesher.app.locale.UiText.text;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -138,9 +139,42 @@ public final class SystemServer {
                 log("installed: " + p.describe());
             }
         }
+        if (GmsSignatureSpoofing.isEnabled()) {
+            // Deliberately only these addon slots, not arbitrary files in priv-app.
+            for (String name : MicrogAddons.PACKAGES) {
+                File apk = new File(androidRoot, "priv-app/" + name + "/base.apk");
+                if (!apk.isFile()) continue;
+                ApkPackage p = MicrogAddons.load(apk, name);
+                for (ApkPackage installed : packages) {
+                    if (!name.equals(installed.packageName)) continue;
+                    if (!GmsSignatureSpoofing.verifyAddonApk(name, installed.apkPath)) {
+                        throw new SecurityException("Untrusted installed microG addon override: " + name);
+                    }
+                    // As an updated system app: preserve a valid newer user-installed
+                    // release and its privileges, with the staged APK as fallback.
+                    if (installed.versionCode() >= p.versionCode()) {
+                        installed.setSystemAddon(true);
+                        p = installed;
+                    }
+                }
+                packages.removeIf(old -> name.equals(old.packageName));
+                new File(p.dataDir()).mkdirs();
+                packages.add(p);
+                log("microg addon: " + p.describe());
+            }
+        }
         for (String apk : apks) {
             ApkPackage p = ApkPackage.parse(apk);
+            for (ApkPackage previous : packages) {
+                if (previous.packageName.equals(p.packageName) && previous.isSystemAddon()) {
+                    if (!GmsSignatureSpoofing.verifyAddonApk(p.packageName, apk)) {
+                        throw new SecurityException("Untrusted microG addon override: " + p.packageName);
+                    }
+                    p.setSystemAddon(true);
+                }
+            }
             new File(p.dataDir()).mkdirs();
+            packages.removeIf(old -> p.packageName.equals(old.packageName));
             packages.add(p);
             log(p.describe());
         }
@@ -148,11 +182,14 @@ public final class SystemServer {
         // The services, published with servicemanager.
         Map<String, IBinder> services = Services.create(packages);
         Services.Created created = Services.sLast;
+        // Host installation can precede the first application bind. Initialize the
+        // server's writable region and real package-cache nonce before publishing APIs.
+        created.am.invalidatePermissionCaches();
         // Providers answering other processes ask the permission checker.
         services.put("permission_checker", StandIn.of(
                 android.permission.IPermissionChecker.class,
                 new Services.PermissionChecker()).asBinder());
-        startAppProcessesOnDemand(created.atm);
+        startAppProcessesOnDemand(created.atm, created.pm);
         PersistentDevice device = null;
         if (persistent) {
             device = new PersistentDevice(created, Installer.create(created.pm, created.atm),
@@ -172,6 +209,17 @@ public final class SystemServer {
         // 31 (BinderInternal.setMaxThreads); here a few.
         startBinderThreads(TAG, 7);
         if (device != null) device.start();
+        if (persistent && GmsSignatureSpoofing.isEnabled()) {
+            ApkPackage gms = created.pm.get(GmsPackageSupport.PACKAGE_GMS);
+            if (gms != null && gms.hasVerifiedMicrogSigner()) {
+                // Let microG restore its own enabled services after a device restart.
+                // Its settings decide whether Check-in / Cloud Messaging is enabled.
+                android.content.Intent boot = new android.content.Intent(
+                        android.content.Intent.ACTION_BOOT_COMPLETED).setPackage(gms.packageName);
+                created.am.broadcastIntentWithFeature(null, null, boot, null, null, 0, null,
+                        null, null, null, null, -1, null, false, false, 0);
+            }
+        }
 
         // This thread serves binder calls from now on, as system_server's main thread
         // ends in Looper.loop() and its binder threads in joinThreadPool.
@@ -183,7 +231,8 @@ public final class SystemServer {
      * android.app.GesherAppProcess for the package, its output appended to the package's
      * log.
      */
-    private static void startAppProcessesOnDemand(ActivityTaskManagerService atm) {
+    private static void startAppProcessesOnDemand(ActivityTaskManagerService atm,
+            PackageManagerService pm) {
         final String vm;
         try {
             // With the JIT and its profile saver, as Android's app processes (ADR 0054).
@@ -194,21 +243,36 @@ public final class SystemServer {
             return;
         }
         final String binder = System.getenv("GESHER_BINDER");
-        atm.setProcessStarter((packageName, startSeq, targetSdk) -> {
+        atm.setProcessStarter(new ActivityTaskManagerService.ProcessStarter() {
+            @Override public int start(String packageName, long startSeq, int targetSdk) throws Exception {
+                return start(packageName, packageName, startSeq, targetSdk);
+            }
+            @Override public int start(String packageName, String processName, long startSeq,
+                    int targetSdk) throws Exception {
+                return start(packageName, processName, startSeq, targetSdk,
+                        WindowManagerService.resolveWindowMode(packageName, null));
+            }
+            @Override public int start(String packageName, String processName, long startSeq,
+                    int targetSdk, String windowMode) throws Exception {
             File logFile = Device.packageLog(packageName);
             logFile.getParentFile().mkdirs();
+            ApkPackage pkg = pm.get(packageName);
+            if (pkg == null) throw new IllegalStateException("Unknown package " + packageName);
+            String uid = String.valueOf(pkg.uid());
             List<String> env = new java.util.ArrayList<>(List.of("GESHER_BINDER=" + binder,
+                    "GESHER_UID=" + uid,
+                    "GESHER_BINDER_UID=" + uid,
                     "GESHER_LOG_FILE=" + logFile.getPath() + ".logcat",
                     // The package's AppUserModelID, its Start menu shortcut's (shell track).
                     com.gesher.app.shell.AppShell.ENV_APP_USER_MODEL_ID + "="
                             + com.gesher.app.shell.AppShell.appUserModelId(packageName),
                     // The display the server describes, which the app's windows are on.
                     "GESHER_DISPLAY=" + com.gesher.app.DeviceProfile.describe()));
-            // Its windows (graphics track, ADR 0029): what the launcher asked for.
-            String windowMode = WindowManagerService.windowMode(packageName);
-            if (windowMode != null) {
-                env.add(com.gesher.app.window.WindowMode.ENV + "=" + windowMode);
+            // ATM captured this exact mode with its pending process, before spawning.
+            if (com.gesher.app.window.WindowMode.parse(windowMode) == null) {
+                throw new IllegalArgumentException("Missing resolved app window mode");
             }
+            env.add(com.gesher.app.window.WindowMode.ENV + "=" + windowMode);
             // Android's INTERNET permission: no inet sockets without it (docs/network.md).
             String inet = ConnectivityService.internetEnvironment(packageName);
             if (inet != null) env.add(inet);
@@ -217,6 +281,7 @@ public final class SystemServer {
             return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
                     String.valueOf(targetSdk))), env, logFile.getPath(), false);
+            }
         });
     }
 
@@ -320,16 +385,18 @@ public final class SystemServer {
         }
 
         @Override
+        public GesherService.LaunchResult startActivityAndWait(android.content.Intent intent) {
+            return mServices.atm.startActivityForHost(intent);
+        }
+
+        @Override
         public String status() {
             StringBuilder sb = new StringBuilder();
-            sb.append("device ").append(System.getenv("GESHER_BINDER"))
-                    .append(", system server pid ").append(Process.myPid())
-                    .append(", up ").append((System.currentTimeMillis() - mStarted) / 1000)
-                    .append(" s, ").append(mServices.pm.packages().size())
-                    .append(" packages");
+            sb.append(text("device_status", System.getenv("GESHER_BINDER"), Process.myPid(),
+                    (System.currentTimeMillis() - mStarted) / 1000, mServices.pm.packages().size()));
             for (ActivityTaskManagerService.ProcessRecord p : mServices.atm.processes()) {
                 sb.append("\n  ").append(p).append(p.activities.isEmpty() ? ""
-                        : ", " + p.activities.size() + " activities");
+                        : text("activities_count", p.activities.size()));
             }
             return sb.toString();
         }

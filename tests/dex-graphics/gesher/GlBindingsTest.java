@@ -68,6 +68,7 @@ public final class GlBindingsTest {
     pbuffer(egl, display, config);
     gl10(egl, display);
     window(egl, display, config);
+    windowInsets(egl, display, config);
     surfaceTexture(egl, display, config);
     egl.eglTerminate(display);
     finish();
@@ -243,6 +244,53 @@ public final class GlBindingsTest {
     egl.eglDestroyContext(display, context);
     surface.release();
     window.close();
+  }
+
+  private static void windowInsets(EGL10 egl, EGLDisplay display, EGLConfig config) {
+    int w = 160, h = 96, left = 7, top = 11, right = 13, bottom = 17;
+    NativeWindow window = NativeWindow.create("Gesher padded GL window", w, h);
+    window.setSurfaceInsets(left, top, right, bottom);
+    Surface surface = window.getSurface();
+    EGLContext context = context(egl, display, config, 2);
+    EGLSurface target = egl.eglCreateWindowSurface(display, config, surface, null);
+    try {
+      boolean current = target != EGL10.EGL_NO_SURFACE && egl.eglMakeCurrent(display, target, target, context);
+      check(current, "EGL10 surface insets: padded top-level surface is current");
+      if (!current) return;
+      int[] width = new int[1], height = new int[1];
+      egl.eglQuerySurface(display, target, EGL10.EGL_WIDTH, width);
+      egl.eglQuerySurface(display, target, EGL10.EGL_HEIGHT, height);
+      check(width[0] == w + left + right && height[0] == h + top + bottom,
+          "EGL10 surface insets: framebuffer includes Android shadow padding (" + width[0] + "x" + height[0] + ")");
+      GLES20.glViewport(0, 0, width[0], height[0]);
+      GLES20.glDisable(GLES20.GL_SCISSOR_TEST);
+      GLES20.glClearColor(1, 0, 1, 1); GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+      GLES20.glEnable(GLES20.GL_SCISSOR_TEST);
+      GLES20.glScissor(left, bottom, w, h);
+      GLES20.glClearColor(0, 1, 0, 1); GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+      GLES20.glScissor(left, bottom + h - 2, 2, 2);
+      GLES20.glClearColor(1, 0, 0, 1); GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+      GLES20.glScissor(left + w - 2, bottom + h - 2, 2, 2);
+      GLES20.glClearColor(0, 0, 1, 1); GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+      GLES20.glScissor(left, bottom, 2, 2);
+      GLES20.glClearColor(1, 1, 0, 1); GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+      GLES20.glScissor(left + w - 2, bottom, 2, 2);
+      GLES20.glClearColor(0, 1, 1, 1); GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+      GLES20.glDisable(GLES20.GL_SCISSOR_TEST);
+      check(egl.eglSwapBuffers(display, target) && GLES20.glGetError() == GLES20.GL_NO_ERROR,
+          "EGL10 surface insets: padded frame swaps successfully");
+      int[] pixels = window.readBackBuffer();
+      check(pixels != null && pixels[0] == w && pixels[1] == h
+              && pixels[2] == Color.RED && pixels[2 + w - 1] == Color.BLUE
+              && pixels[2 + (h - 1) * w] == Color.YELLOW
+              && pixels[2 + h * w - 1] == Color.CYAN && pixels[2 + (h / 2) * w + w / 2] == Color.GREEN,
+          "EGL10 surface insets: four content corners reach the client without shift or clipping");
+    } finally {
+      egl.eglMakeCurrent(display, EGL10.EGL_NO_SURFACE, EGL10.EGL_NO_SURFACE, EGL10.EGL_NO_CONTEXT);
+      if (target != EGL10.EGL_NO_SURFACE) egl.eglDestroySurface(display, target);
+      egl.eglDestroyContext(display, context);
+      surface.release(); window.close();
+    }
   }
 
   // --- window surfaces on a SurfaceTexture (a SurfaceView's surface) -------------------------

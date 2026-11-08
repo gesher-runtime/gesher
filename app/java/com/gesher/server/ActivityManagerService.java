@@ -48,6 +48,9 @@ import java.util.List;
  */
 public final class ActivityManagerService extends IActivityManager.Default {
     private final ActivityTaskManagerService mAtm;
+    private final CallerIdentity mCallers;
+    private final PackageManagerService mPm;
+    private final PermissionPolicy mPermissions;
     private final ActiveServices mServices;
     private final BroadcastController mBroadcasts;
     private final ContentProviders mProviders;
@@ -57,12 +60,34 @@ public final class ActivityManagerService extends IActivityManager.Default {
     ActivityManagerService(ActivityTaskManagerService atm, PackageManagerService pm,
             NotificationManagerService notifications) {
         mAtm = atm;
+        mPm = pm;
+        mCallers = new CallerIdentity(pm, atm);
+        mPermissions = pm.permissions();
+        mPermissions.attach(mCallers);
         mServices = new ActiveServices(atm, pm, notifications);
         mBroadcasts = new BroadcastController(atm, pm);
         mProviders = new ContentProviders(pm, atm);
-        mPendingIntents = new PendingIntents(this);
+        mPendingIntents = new PendingIntents(this, pm);
         atm.setActivityManager(this);
     }
+
+    CallerIdentity callers() { return mCallers; }
+
+    void setAccountManager(AccountManagerService accounts) { mAtm.setAccountManager(accounts); }
+
+    void invalidatePermissionCaches() {
+        if (!String.valueOf(android.os.Process.SYSTEM_UID).equals(System.getenv("GESHER_BINDER_UID"))) {
+            // In-process compatibility services share the app's read-only region;
+            // they must not replace ActivityThread's singleton with a system region.
+            android.app.PropertyInvalidatedCache.disableForCurrentProcess("getPermissionRequestState");
+            return;
+        }
+        try { sharedMemory(); }
+        catch (IOException e) { throw new IllegalStateException("Permission cache shared memory unavailable", e); }
+        PackageManager.invalidatePackageInfoCache();
+    }
+
+    void stopServicesForPackage(String packageName) { mServices.stopPackage(packageName); }
 
     /** An app process is gone: its services, receivers and providers too. */
     void processDied(ActivityTaskManagerService.ProcessRecord app) {
@@ -81,10 +106,10 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     /**
      * Whether something keeps the process although it has no activity: a service of it,
-     * or a provider of it that a process of another package uses.
+     * a manifest receiver waiting/executing, or a provider another package uses.
      */
     boolean keepsAlive(ActivityTaskManagerService.ProcessRecord app) {
-        return mServices.hasServices(app) || mProviders.hasClients(app);
+        return mServices.hasServices(app) || mBroadcasts.hasReceivers(app) || mProviders.hasClients(app);
     }
 
     @Override
@@ -94,9 +119,10 @@ public final class ActivityManagerService extends IActivityManager.Default {
         for (ActivityTaskManagerService.ProcessRecord p : mAtm.processes()) {
             if (p.packageName == null) continue;
             android.app.ActivityManager.RunningAppProcessInfo info =
-                    new android.app.ActivityManager.RunningAppProcessInfo(p.packageName, p.pid,
+                    new android.app.ActivityManager.RunningAppProcessInfo(p.processName, p.pid,
                             new String[] {p.packageName});
-            info.uid = android.os.Process.myUid();
+            ApkPackage installed = mPm.get(p.packageName);
+            info.uid = installed == null ? -1 : installed.uid();
             info.importance = !p.activities.isEmpty()
                     ? android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
                     : mServices.hasServices(p)
@@ -112,14 +138,24 @@ public final class ActivityManagerService extends IActivityManager.Default {
     @Override
     public ContentProviderHolder getContentProvider(IApplicationThread caller,
             String callingPackage, String name, int userId, boolean stable) {
-        return mProviders.getContentProvider(mAtm.callerProcess(Binder.getCallingPid()),
-                callingPackage, name);
+        if (userId != 0) throw new SecurityException("Only user 0 is available");
+        ActivityTaskManagerService.ProcessRecord app = mAtm.callerProcess(Binder.getCallingPid());
+        if (!mCallers.isSystem()) {
+            mCallers.requirePackage(callingPackage);
+            if (app == null || caller == null || !caller.asBinder().equals(app.thread.asBinder())) {
+                throw new SecurityException("Provider request requires its own application thread");
+            }
+        }
+        return mProviders.getContentProvider(app, callingPackage, name);
     }
 
     @Override
     public ContentProviderHolder getContentProviderExternal(String name, int userId,
             IBinder token, String tag) {
-        return mProviders.getContentProvider(null, tag, name);
+        if (userId != 0 || !mCallers.isSystem()) {
+            throw new SecurityException("External provider access is restricted to the host");
+        }
+        return mProviders.getContentProvider(null, null, name);
     }
 
     /**
@@ -130,9 +166,19 @@ public final class ActivityManagerService extends IActivityManager.Default {
      */
     @Override
     public void getMimeTypeFilterAsync(Uri uri, int userId, RemoteCallback resultCallback) {
+        if (resultCallback == null) return;
+        if (userId != 0) { resultCallback.sendResult(Bundle.EMPTY); return; }
         String authority = uri != null ? uri.getAuthority() : null;
-        ContentProviderHolder holder = authority != null
-                ? mProviders.getContentProvider(null, "*getmimetype*", authority) : null;
+        ContentProviderHolder holder = null;
+        try {
+            boolean system = mCallers.isSystem();
+            String actual = system ? null : mCallers.callerPackage();
+            if (authority != null) holder = mProviders.getContentProvider(
+                    mAtm.callerProcess(Binder.getCallingPid()), actual, authority);
+        } catch (SecurityException denied) {
+            // This is an asynchronous result API. A denial must still complete the
+            // callback, not strand ContentResolver waiting for its timeout.
+        }
         if (holder != null && holder.provider != null) {
             try {
                 holder.provider.getTypeAnonymousAsync(uri, resultCallback);
@@ -149,7 +195,56 @@ public final class ActivityManagerService extends IActivityManager.Default {
             List<ContentProviderHolder> providers) {
         ActivityTaskManagerService.ProcessRecord app =
                 mAtm.callerProcess(Binder.getCallingPid());
-        if (app != null) mProviders.publishContentProviders(app, providers);
+        if (app == null || caller == null || !caller.asBinder().equals(app.thread.asBinder())) {
+            throw new SecurityException("Provider publication requires its own application thread");
+        }
+        mProviders.publishContentProviders(app, providers);
+    }
+
+    @Override
+    public int checkUriPermission(Uri uri, int pid, int uid, int modeFlags, int userId, IBinder callerToken) {
+        return mProviders.uriGrants().check(uri, pid, uid, modeFlags, userId);
+    }
+
+    @Override
+    public int[] checkUriPermissions(List<Uri> uris, int pid, int uid, int modeFlags,
+            int userId, IBinder callerToken) {
+        if (uris == null || uris.size() > 1024) throw new IllegalArgumentException("Invalid URI list");
+        int[] results = new int[uris.size()];
+        for (int i = 0; i < results.length; i++) {
+            results[i] = checkUriPermission(uris.get(i), pid, uid, modeFlags, userId, callerToken);
+        }
+        return results;
+    }
+
+    @Override
+    public int checkContentUriPermissionFull(Uri uri, int pid, int uid, int modeFlags, int userId) {
+        return mProviders.uriGrants().checkFull(uri, pid, uid, modeFlags, userId);
+    }
+
+    private void requireUriCaller(IApplicationThread caller) {
+        if (mCallers.isSystem()) return;
+        mCallers.callerPackage();
+        ActivityTaskManagerService.ProcessRecord app = mAtm.callerProcess(Binder.getCallingPid());
+        if (app == null || caller == null || !caller.asBinder().equals(app.thread.asBinder())) {
+            throw new SecurityException("URI grant requires its own application thread");
+        }
+    }
+
+    UriGrants uriGrants() { return mProviders.uriGrants(); }
+
+    @Override
+    public void grantUriPermission(IApplicationThread caller, String targetPackage,
+            Uri uri, int modeFlags, int userId) {
+        requireUriCaller(caller);
+        mProviders.uriGrants().grant(targetPackage, uri, modeFlags, userId);
+    }
+
+    @Override
+    public void revokeUriPermission(IApplicationThread caller, String targetPackage,
+            Uri uri, int modeFlags, int userId) {
+        requireUriCaller(caller);
+        mProviders.uriGrants().revoke(targetPackage, uri, modeFlags, userId);
     }
 
     @Override
@@ -172,6 +267,8 @@ public final class ActivityManagerService extends IActivityManager.Default {
     public IIntentSender getIntentSenderWithFeature(int type, String packageName,
             String featureId, IBinder token, String resultWho, int requestCode, Intent[] intents,
             String[] resolvedTypes, int flags, Bundle options, int userId) {
+        if (userId != 0) throw new SecurityException("Only user 0 is available");
+        mCallers.requirePackage(packageName);
         return mPendingIntents.get(type, packageName, requestCode, intents, resolvedTypes,
                 flags);
     }
@@ -180,6 +277,8 @@ public final class ActivityManagerService extends IActivityManager.Default {
     public IIntentSender getIntentSender(int type, String packageName, IBinder token,
             String resultWho, int requestCode, Intent[] intents, String[] resolvedTypes,
             int flags, Bundle options, int userId) {
+        if (userId != 0) throw new SecurityException("Only user 0 is available");
+        mCallers.requirePackage(packageName);
         return mPendingIntents.get(type, packageName, requestCode, intents, resolvedTypes,
                 flags);
     }
@@ -208,6 +307,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
     @Override
     public Intent getIntentForIntentSender(IIntentSender sender) {
         PendingIntents.Record r = mPendingIntents.record(sender);
+        if (r != null) mPendingIntents.requireCreator(r);
         return r != null ? new Intent(r.last()) : null;
     }
 
@@ -232,23 +332,53 @@ public final class ActivityManagerService extends IActivityManager.Default {
     public int sendIntentSender(IApplicationThread caller, IIntentSender target,
             IBinder allowlistToken, int code, Intent intent, String resolvedType,
             IIntentReceiver finishedReceiver, String requiredPermission, Bundle options) {
-        return mPendingIntents.send(mPendingIntents.record(target), intent, resolvedType);
+        return mPendingIntents.send(mPendingIntents.record(target), intent, resolvedType, requiredPermission);
     }
 
     int sendBroadcastFor(String packageName, Intent intent, String resolvedType) {
-        return mBroadcasts.broadcastIntent(intent, resolvedType, packageName,
-                android.os.Process.myPid());
+        return sendBroadcastFor(packageName, intent, resolvedType, null);
+    }
+
+    int sendBroadcastFor(String packageName, Intent intent, String resolvedType, String requiredPermission) {
+        return sendBroadcastFor(packageName, intent, resolvedType, requiredPermission, () -> true);
+    }
+
+    int sendBroadcastFor(String packageName, Intent intent, String resolvedType,
+            String requiredPermission, java.util.function.BooleanSupplier lifetime) {
+        if (!lifetime.getAsBoolean()) return ActivityManager.START_CANCELED;
+        // This is server-owned dispatch, including calls made while serving an app's
+        // Binder transaction (locale changes). Authenticate the external call at its
+        // entry point, then dispatch under the server's actual PID and UID.
+        long identity = Binder.clearCallingIdentity();
+        try {
+            return mBroadcasts.broadcastIntent(intent, resolvedType, packageName,
+                android.os.Process.myPid(), requiredPermission == null ? null : new String[]{requiredPermission},
+                null, null, lifetime);
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
     }
 
     int startActivityFor(String packageName, Intent intent, String resolvedType) {
+        return startActivityFor(packageName, intent, resolvedType, () -> true);
+    }
+
+    int startActivityFor(String packageName, Intent intent, String resolvedType,
+            java.util.function.BooleanSupplier lifetime) {
+        if (!lifetime.getAsBoolean()) return ActivityManager.START_CANCELED;
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        return mAtm.startActivity(null, packageName, null, intent, resolvedType, null, null, -1,
-                0, null, null);
+        return mAtm.startActivityForVerifiedCreator(packageName, intent, resolvedType, lifetime);
     }
 
     void startServiceFor(String packageName, Intent intent, String resolvedType,
             boolean foreground) {
-        mServices.startService(null, intent, resolvedType, foreground, packageName);
+        startServiceFor(packageName, intent, resolvedType, foreground, () -> true);
+    }
+
+    void startServiceFor(String packageName, Intent intent, String resolvedType,
+            boolean foreground, java.util.function.BooleanSupplier lifetime) {
+        if (!lifetime.getAsBoolean()) return;
+        mServices.startService(null, intent, resolvedType, foreground, packageName, lifetime);
     }
 
     // --- services (ActiveServices) -------------------------------------------------------
@@ -337,7 +467,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
             String callingFeatureId, String receiverId, IIntentReceiver receiver,
             IntentFilter filter, String requiredPermission, int userId, int flags) {
         return mBroadcasts.registerReceiver(caller, callerPackage, receiver, filter,
-                Binder.getCallingPid());
+                Binder.getCallingPid(), requiredPermission, flags);
     }
 
     @Override
@@ -345,7 +475,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
             IIntentReceiver receiver, IntentFilter filter, String requiredPermission,
             int userId, int flags) {
         return mBroadcasts.registerReceiver(caller, callerPackage, receiver, filter,
-                Binder.getCallingPid());
+                Binder.getCallingPid(), requiredPermission, flags);
     }
 
     @Override
@@ -356,6 +486,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
     @Override
     public void forceStopPackage(String packageName, int userId) {
         if (userId != 0) throw new IllegalArgumentException("only user 0 is available");
+        mCallers.requireSystemOrPackage(packageName);
         mAtm.forceStopPackage(packageName);
     }
 
@@ -365,10 +496,16 @@ public final class ActivityManagerService extends IActivityManager.Default {
             String resultData, Bundle map, String[] requiredPermissions,
             String[] excludePermissions, String[] excludePackages, int appOp, Bundle options,
             boolean serialized, boolean sticky, int userId) {
+        if (userId != 0) throw new SecurityException("Only the current Gesher user is supported");
+        if ((serialized || resultTo != null) && (sticky || appOp != android.app.AppOpsManager.OP_NONE)) {
+            throw new UnsupportedOperationException("Sticky or app-op acknowledged broadcasts are unsupported");
+        }
         ActivityTaskManagerService.ProcessRecord app =
                 mAtm.callerProcess(Binder.getCallingPid());
-        return mBroadcasts.broadcastIntent(intent, resolvedType,
-                app != null ? app.packageName : null, Binder.getCallingPid());
+        return mBroadcasts.broadcastIntent(caller, intent, resolvedType,
+                app != null ? app.packageName : null, Binder.getCallingPid(),
+                resultTo, resultCode, resultData, map,
+                requiredPermissions, excludePermissions, excludePackages, serialized);
     }
 
     @Override
@@ -385,18 +522,16 @@ public final class ActivityManagerService extends IActivityManager.Default {
     public void finishReceiver(IBinder who, int resultCode, String resultData, Bundle map,
             boolean abortBroadcast, int flags) {
         mBroadcasts.finishReceiver(who, resultCode, resultData, map, abortBroadcast, flags);
-        // A process started for the broadcast may have nothing else to do.
-        mAtm.maybeExit(mAtm.callerProcess(Binder.getCallingPid()));
     }
 
     @Override
     public int checkPermission(String permission, int pid, int uid) {
-        return PackageManager.PERMISSION_GRANTED;
+        return mPermissions.checkProcessPermission(permission, pid, uid);
     }
 
     @Override
     public int checkPermissionForDevice(String permission, int pid, int uid, int deviceId) {
-        return PackageManager.PERMISSION_GRANTED;
+        return mPermissions.checkProcessPermission(permission, pid, uid);
     }
 
     @Override
@@ -473,6 +608,11 @@ public final class ActivityManagerService extends IActivityManager.Default {
      * here with no system features (the headless device declares none).
      */
     private synchronized ApplicationSharedMemory sharedMemory() throws IOException {
+        boolean system = String.valueOf(android.os.Process.SYSTEM_UID)
+                .equals(System.getenv("GESHER_BINDER_UID"));
+        if (mSharedMemory == null && system && ApplicationSharedMemory.sInstance != null) {
+            mSharedMemory = ApplicationSharedMemory.sInstance;
+        }
         if (mSharedMemory == null) {
             ApplicationSharedMemory m = ApplicationSharedMemory.create();
             // SystemServer writes PackageManagerService's features: the device's
@@ -482,6 +622,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
                     .getSdkFeatureVersions());
             // WindowManagerService keeps the animator duration scale there: 1.
             m.setCurrentAnimatorScale(1f);
+            if (system) ApplicationSharedMemory.setInstance(m);
             mSharedMemory = m;
         }
         return mSharedMemory;

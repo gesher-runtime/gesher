@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <set>
 #include <vector>
 
 #include "tls.h"
@@ -74,6 +75,32 @@ void PrintBytes(const uint8_t* p, size_t n) {
   for (size_t i = 0; i < n; ++i) std::fprintf(stderr, " %02x", p[i]);
 }
 
+#if defined(__x86_64__)
+// Stripped callbacks can be reachable only through indirect pointers, with no
+// FDE or function symbol. Recover these two exact read-only MOV forms when
+// they actually execute; never scan data tables or modify executable bytes.
+bool RecoverUncoveredMov(EXCEPTION_POINTERS* info, const X86Insn& in, const CodeRange& range) {
+  if (range.stub_area || !in.fs || in.gs || in.vex || in.map != 0 || in.opcode != 0x8B
+      || !(in.rex & 8) || in.opsize || in.addrsize || !in.absolute() || in.disp_size != 4
+      || info->ExceptionRecord->NumberParameters < 2
+      || info->ExceptionRecord->ExceptionInformation[0] != 0) return false;
+  int32_t displacement;
+  std::memcpy(&displacement, reinterpret_cast<const uint8_t*>(info->ContextRecord->Rip) + in.disp_off, 4);
+  if ((displacement != 0 && displacement != kBionicStackGuard)
+      || info->ExceptionRecord->ExceptionInformation[1] != static_cast<uintptr_t>(displacement)) return false;
+  uintptr_t value = displacement == kBionicStackGuard ? reinterpret_cast<uintptr_t>(NtCurrentTeb())
+                                                     : TlsCurrentThreadPointer();
+  if (!value) return false;  // A missing Android TLS block remains an actual fault.
+  CONTEXT* context = info->ContextRecord;
+  DWORD64* registers[] = {&context->Rax, &context->Rcx, &context->Rdx, &context->Rbx,
+      &context->Rsp, &context->Rbp, &context->Rsi, &context->Rdi, &context->R8, &context->R9,
+      &context->R10, &context->R11, &context->R12, &context->R13, &context->R14, &context->R15};
+  *registers[in.reg()] = value;
+  context->Rip += in.length;  // MOV preserves flags and every other register.
+  return true;
+}
+#endif
+
 LONG CALLBACK FsVectoredHandler(EXCEPTION_POINTERS* info) {
   const DWORD code = info->ExceptionRecord->ExceptionCode;
   if (code == EXCEPTION_BREAKPOINT) {
@@ -103,8 +130,8 @@ LONG CALLBACK FsVectoredHandler(EXCEPTION_POINTERS* info) {
     std::abort();
   }
   if (code == EXCEPTION_ACCESS_VIOLATION) {
-    // Diagnostics only: name the cause of a fault in loaded code that comes
-    // from %fs/%gs thread state, then let the fault take its normal course.
+    // Recover bounded MOV reads missed by static code metadata. Other faults
+    // retain their original diagnostic and exception handling.
 #if defined(__x86_64__)
     uintptr_t rip = info->ContextRecord->Rip;
 #elif defined(__aarch64__)
@@ -119,6 +146,9 @@ LONG CALLBACK FsVectoredHandler(EXCEPTION_POINTERS* info) {
     X86Insn in;
     size_t avail = std::min<uintptr_t>(15, r.end - rip);
     bool decoded = DecodeX86(reinterpret_cast<const uint8_t*>(rip), avail, &in);
+#if defined(__x86_64__)
+    if (decoded && RecoverUncoveredMov(info, in, r)) return EXCEPTION_CONTINUE_EXECUTION;
+#endif
     const char* what = nullptr;
     if (decoded && in.fs) {
       what = "an un-rewritten %fs access (Windows keeps no user %fs base)";
@@ -512,25 +542,39 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
   }
   if (exec.empty()) return true;
 
-  // Where the code is: FDE ranges, else executable sections, else whole
-  // executable segments.
-  std::vector<Region> regions;
-  if (eh_frame_hdr != nullptr && RegionsFromEhFrameHdr(eh_frame_hdr, load_bias, &regions)) {
+  // Unwind coverage can be partial, but executable sections also contain data
+  // (OpenSSL's assembly tables, for example). Never sweep gaps between FDEs as
+  // instructions. Function symbols and direct control-flow edges supply roots
+  // for decoding code without unwind metadata.
+  std::vector<Region> regions, sections;
+  std::vector<uint64_t> roots;
+  if (eh_frame_hdr != nullptr && RegionsFromEhFrameHdr(eh_frame_hdr, load_bias, &regions))
     stats->used_fdes = true;
-  } else {
-    regions.clear();
-    if (ehdr->e_shoff != 0 && ehdr->e_shentsize == sizeof(Elf64_Shdr) &&
-        ehdr->e_shoff + uint64_t{ehdr->e_shnum} * sizeof(Elf64_Shdr) <= file_size) {
-      const auto* shdr = reinterpret_cast<const Elf64_Shdr*>(file + ehdr->e_shoff);
-      for (int i = 0; i < ehdr->e_shnum; ++i) {
-        if (shdr[i].sh_type == SHT_PROGBITS && (shdr[i].sh_flags & SHF_EXECINSTR) &&
-            (shdr[i].sh_flags & SHF_ALLOC) && shdr[i].sh_size > 0) {
-          regions.push_back({shdr[i].sh_addr, shdr[i].sh_addr + shdr[i].sh_size});
+  if (ehdr->e_entry != 0) roots.push_back(ehdr->e_entry);
+  if (ehdr->e_shoff != 0 && ehdr->e_shentsize == sizeof(Elf64_Shdr) &&
+      ehdr->e_shoff <= file_size &&
+      uint64_t{ehdr->e_shnum} * sizeof(Elf64_Shdr) <= file_size - ehdr->e_shoff) {
+    const auto* shdr = reinterpret_cast<const Elf64_Shdr*>(file + ehdr->e_shoff);
+    for (int i = 0; i < ehdr->e_shnum; ++i) {
+      if (shdr[i].sh_type == SHT_PROGBITS && (shdr[i].sh_flags & SHF_EXECINSTR) &&
+          (shdr[i].sh_flags & SHF_ALLOC) && shdr[i].sh_size > 0 &&
+          shdr[i].sh_addr <= UINT64_MAX - shdr[i].sh_size) {
+        sections.push_back({shdr[i].sh_addr, shdr[i].sh_addr + shdr[i].sh_size});
+      }
+      if ((shdr[i].sh_type == SHT_SYMTAB || shdr[i].sh_type == SHT_DYNSYM) &&
+          shdr[i].sh_entsize == sizeof(Elf64_Sym) && shdr[i].sh_offset <= file_size &&
+          shdr[i].sh_size <= file_size - shdr[i].sh_offset) {
+        const auto* symbols = reinterpret_cast<const Elf64_Sym*>(file + shdr[i].sh_offset);
+        for (size_t j = 0; j < shdr[i].sh_size / sizeof(Elf64_Sym); j++) {
+          if (ELF64_ST_TYPE(symbols[j].st_info) == STT_FUNC && symbols[j].st_shndx != SHN_UNDEF)
+            roots.push_back(symbols[j].st_value);
         }
       }
     }
-    if (regions.empty()) regions = exec;
   }
+  if (sections.empty()) sections = exec;
+  // Preserve the historical fallback for objects with no usable code metadata.
+  if (regions.empty() && roots.empty()) regions = sections;
   // Clip to the executable segments, sort and merge.
   std::vector<Region> code;
   for (const Region& r : regions) {
@@ -541,12 +585,65 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
   }
   std::sort(code.begin(), code.end(),
             [](const Region& a, const Region& b) { return a.start < b.start; });
-  std::vector<Region> merged;
+  std::vector<Region> coverage;
   for (const Region& r : code) {
-    if (!merged.empty() && r.start <= merged.back().end) {
-      merged.back().end = std::max(merged.back().end, r.end);
+    if (!coverage.empty() && r.start <= coverage.back().end) {
+      coverage.back().end = std::max(coverage.back().end, r.end);
     } else {
-      merged.push_back(r);
+      coverage.push_back(r);
+    }
+  }
+  auto covered = [&](uint64_t address) {
+    auto at = std::upper_bound(coverage.begin(), coverage.end(), address,
+        [](uint64_t value, const Region& r) { return value < r.start; });
+    return at != coverage.begin() && address < std::prev(at)->end;
+  };
+  auto limit = [&](uint64_t address) -> uint64_t {
+    for (const Region& s : sections) for (const Region& e : exec)
+      if (address >= std::max(s.start, e.start) && address < std::min(s.end, e.end))
+        return std::min(s.end, e.end);
+    return address;
+  };
+  auto branch = [&](uint64_t address, const X86Insn& in) {
+    bool relative = !in.vex && ((in.map == 0 &&
+        (in.opcode == 0xE8 || in.opcode == 0xE9 || in.opcode == 0xEB ||
+         (in.opcode >= 0x70 && in.opcode <= 0x7F) || (in.opcode >= 0xE0 && in.opcode <= 0xE3))) ||
+        (in.map == 1 && in.opcode >= 0x80 && in.opcode <= 0x8F));
+    if (!relative || (in.imm_size != 1 && in.imm_size != 4)) return;
+    const uint8_t* immediate = load_bias + address + in.length - in.imm_size;
+    int32_t delta;
+    if (in.imm_size == 1) delta = static_cast<int8_t>(*immediate);
+    else std::memcpy(&delta, immediate, sizeof delta);
+    uint64_t target = address + in.length + delta;
+    if (!covered(target) && limit(target) > target) roots.push_back(target);
+  };
+  // Find references to uncovered code before any instruction bytes change.
+  for (const Region& r : coverage) {
+    for (uint64_t address = r.start; address < r.end;) {
+      X86Insn in;
+      if (!DecodeX86(load_bias + address, static_cast<size_t>(r.end - address), &in)) { ++address; continue; }
+      branch(address, in);
+      address += in.length;
+    }
+  }
+  std::vector<Region> merged = coverage;
+  std::set<uint64_t> visited;
+  for (size_t next = 0; next < roots.size(); next++) {
+    uint64_t address = roots[next], end = limit(address);
+    while (address < end && !covered(address) && visited.insert(address).second) {
+      X86Insn in;
+      if (!DecodeX86(load_bias + address, static_cast<size_t>(end - address), &in)) break;
+      merged.push_back({address, address + in.length});
+      branch(address, in);
+      // Do not decode inline data after returns, unconditional jumps, padding
+      // traps or indirect jumps. Conditional edges retain their fallthrough.
+      bool stop = !in.vex && ((in.map == 0 &&
+          (in.opcode == 0xC3 || in.opcode == 0xC2 || in.opcode == 0xCB || in.opcode == 0xCA ||
+           in.opcode == 0xE9 || in.opcode == 0xEB || in.opcode == 0xCC ||
+           (in.opcode == 0xFF && (in.reg() & 7) >= 4 && (in.reg() & 7) <= 5))) ||
+          (in.map == 1 && in.opcode == 0x0B));
+      if (stop) break;
+      address += in.length;
     }
   }
 

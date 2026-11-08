@@ -3,9 +3,11 @@
 `tools/package/gesher.iss` (Inno Setup 6) is built and tested by the
 `package` job in `.github/workflows/ci.yml`. It installs per user, without
 administrator rights, into `%LOCALAPPDATA%\Programs\Gesher`, puts `gesher`
-and `gesher-app` on the user's `PATH`, adds Start menu entries, and
-associates `.apk` files with gesher-app. Apps installed with gesher-app get
-Start menu shortcuts of their own ([below](#installed-apps-in-the-start-menu)).
+and `gesher-app` on the user's `PATH`, adds Start menu entries (including the
+Gesher Control Center), offers optional 1-click Google Play services (microG)
+and Aurora Store installation, and associates `.apk`, `.apks` and `.xapk` files
+with gesher-app. Apps installed with gesher-app get Start menu shortcuts of
+their own ([below](#installed-apps-in-the-start-menu)).
 
 Gesher's icon, `tools/package/gesher.ico` (a bridge, drawn by
 `tools/icons/make-icons.py`), is Setup's (`SetupIconFile`), Add/Remove
@@ -69,23 +71,23 @@ splash window (class `GesherSplash`) right after it starts `gesher-app.ps1`:
   ID. It looks every 200 ms. It also goes when `gesher-app.ps1` ends (the
   launch failed, or the app ended without a window) and after 2 minutes. If
   it still has the foreground when the app's window is up, it hands it on to
-  that window; it never takes it from the app. Closing it (its X) only closes
-  it: gesher-launch goes on waiting for the launch, and its exit code is
-  still `gesher-app.ps1`'s.
+  that window; it never takes it from the app. Closing it (its X) cancels the
+  launch: gesher-launch terminates the starting processes and exits, so the app
+  does not open.
 
 CI: `tests/windows/tracks/55-shell.ps1` runs a copy of gesher-launch with a
 stand-in `gesher-app.ps1` and a stand-in `%LOCALAPPDATA%` (a shortcut record
 with an escaped label, an icon, an `apk-icons.list` line): `launch <package>`
 and a double-clicked APK show the splash with the label, icon and
 AppUserModelID, it stays while no app window is up and goes once a window with
-the app's AppUserModelID is shown; closing it leaves the launch running (its
-exit code comes back); `install` and `--headless` show none. The package job
+the app's AppUserModelID is shown; closing it cancels the launch; `install` and
+`--headless` show none. The package job
 runs the installed `gesher-launch install uiapp.apk` (no splash) and
 `gesher-launch launch com.gesher.uiapp` with its window shown: the splash,
 with `Gesher UI` and `Gesher.App.com.gesher.uiapp`, is gone within 5 s of the
 app's `GesherWindow` being visible.
 
-Each `.apk` file's icon comes from `gesher_shellext.dll`
+Each `.apk`, `.apks` and `.xapk` file's icon comes from `gesher_shellext.dll`
 (`compat/shell/gesher_shellext.cc`), loaded by Explorer: its app's icon. It
 parses no APK: it looks the file (its size and last write time) up in
 `%LOCALAPPDATA%\Gesher\data\system\apk-icons.list`, which `gesher-app install`
@@ -94,7 +96,11 @@ icon at first, while the handler runs `gesher-launch.exe apk-icon "<file>"` in
 the background (no window; once per file, at most two at once, not for an empty
 file or one still being written). That command draws the app's icon without
 installing it into `data\system\apk-icons\<size>-<time>.ico`, records it, and
-Explorer shows it.
+Explorer shows it. Bundles are read in a temporary directory without installing
+the app: the base APK supplies package metadata and the resource splits supply
+the density-specific images. The cache key remains that of the original bundle.
+Temporary icon files have unique names, and complete icon lists are published by
+replacement so concurrent requests do not expose partially written cache data.
 
 Opening an APK this way runs it the way `gesher-app my.apk` does: it is
 installed (or updated) on the user's Gesher device and its launcher Activity
@@ -278,7 +284,7 @@ folder, icon) and its `System.AppUserModel.ID` through the link's
 red at 256 pixels and transparent corners), runs the shortcut's command line
 (`gesher-app: done`), installs components.apk (an adaptive icon: white
 foreground, blue background, masked corners) and checks `Gesher.Apk`'s
-`DefaultIcon` and the Gesher Hello entry's icon. After uninstalling Gesher,
+`DefaultIcon` and the Gesher Control Center entry's icon. After uninstalling Gesher,
 `Gesher Apps` is gone and a file of the job's in the Start menu is still
 there. `tests/windows/tracks/55-shell.ps1` checks the label and the icon of
 lifecycle.apk, components.apk and peer.apk (the framework's default icon) on

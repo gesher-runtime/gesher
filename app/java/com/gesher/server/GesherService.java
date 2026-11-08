@@ -9,6 +9,8 @@ import android.os.IBinder;
 import android.os.Parcel;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.app.WaitResult;
+import android.content.Intent;
 
 /**
  * {@code gesher}: what the launcher asks of the device that Android asks of other services
@@ -32,6 +34,45 @@ public final class GesherService extends Binder {
     static final int TOAST_ACTIVATED = IBinder.FIRST_CALL_TRANSACTION + 6;
     /** The proxy of a package's next process (com.gesher.net.ProxySetting.setForLaunch). */
     static final int PROXY = IBinder.FIRST_CALL_TRANSACTION + 7;
+    /** A host launch with an exact, retained process-generation exit receipt. */
+    static final int START_ACTIVITY = IBinder.FIRST_CALL_TRANSACTION + 8;
+
+    static final String EXIT_DESCRIPTOR = "com.gesher.ILaunchExit";
+    static final int EXIT_STATUS = IBinder.FIRST_CALL_TRANSACTION;
+    public static final int EXIT_STARTING = 0;
+    public static final int EXIT_RUNNING = 1;
+    public static final int EXIT_FINISHED = 2;
+    public static final int EXIT_UNAVAILABLE = 3;
+
+    /** The resolved launch; the receipt belongs to its actual process generation. */
+    public static final class LaunchResult {
+        public final WaitResult result;
+        public final int taskId;
+        public final IBinder exitReceipt;
+
+        public LaunchResult(WaitResult result, int taskId, IBinder exitReceipt) {
+            this.result = java.util.Objects.requireNonNull(result);
+            this.taskId = taskId;
+            this.exitReceipt = exitReceipt;
+        }
+    }
+
+    /** Unknown status is distinct from every possible 32-bit Windows exit code. */
+    public static final class LaunchExit {
+        public final int state;
+        public final boolean hasExitCode;
+        public final int exitCode;
+
+        LaunchExit(int state, boolean hasExitCode, int exitCode) {
+            if (state < EXIT_STARTING || state > EXIT_UNAVAILABLE
+                    || hasExitCode != (state == EXIT_FINISHED)) {
+                throw new IllegalStateException("Invalid launch exit receipt status");
+            }
+            this.state = state;
+            this.hasExitCode = hasExitCode;
+            this.exitCode = exitCode;
+        }
+    }
 
     /** What the service does; the system server implements it. */
     interface Device {
@@ -41,6 +82,10 @@ public final class GesherService extends Binder {
         void shutdown(String reason);
         /** The exit code of the package's last process, or Integer.MIN_VALUE. */
         int lastExitCode(String packageName);
+        /** Uses the normal activity-start checks and binds its resolved process generation. */
+        default LaunchResult startActivityAndWait(Intent intent) throws Exception {
+            throw new UnsupportedOperationException("Generation-bound host launch unavailable");
+        }
         /** A call came: the device is not idle. */
         void touch();
         /** A click on a toast of {@code appId} with the toast's {@code arguments}. */
@@ -48,19 +93,26 @@ public final class GesherService extends Binder {
     }
 
     private final Device mDevice;
+    private final CallerIdentity mCallers;
 
     GesherService(Device device) {
         super(DESCRIPTOR);
         mDevice = device;
+        Services.Created created = Services.sLast;
+        mCallers = created == null ? null : new CallerIdentity(created.pm, created.atm);
     }
 
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > PROXY) {
+        if (code < INSTALL || code > START_ACTIVITY) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
+        if (mCallers == null ? Binder.getCallingPid() != android.os.Process.myPid()
+                : !mCallers.isSystem()) {
+            throw new SecurityException("The Gesher control service is restricted to the host shell");
+        }
         mDevice.touch();
         try {
             switch (code) {
@@ -105,6 +157,17 @@ public final class GesherService extends Binder {
                     String pkg = data.readString();
                     com.gesher.net.ProxySetting.setForLaunch(pkg, data.readString());
                     reply.writeNoException();
+                    return true;
+                }
+                case START_ACTIVITY: {
+                    Intent intent = data.readTypedObject(Intent.CREATOR);
+                    data.enforceNoDataAvail();
+                    if (intent == null) throw new IllegalArgumentException("Missing launch intent");
+                    LaunchResult result = mDevice.startActivityAndWait(intent);
+                    reply.writeNoException();
+                    reply.writeTypedObject(result.result, 0);
+                    reply.writeInt(result.taskId);
+                    reply.writeStrongBinder(result.exitReceipt);
                     return true;
                 }
                 default:
@@ -241,6 +304,47 @@ public final class GesherService extends Binder {
             try {
                 return reply.readInt();
             } finally {
+                reply.recycle();
+            }
+        }
+
+        /** Starts through the host control service without a package-wide exit lookup. */
+        public LaunchResult startActivityAndWait(Intent intent) throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeTypedObject(java.util.Objects.requireNonNull(intent), 0);
+                if (!mBinder.transact(START_ACTIVITY, data, reply, 0)) {
+                    throw new RemoteException("Gesher device does not support generation-bound launches");
+                }
+                reply.readException();
+                WaitResult result = reply.readTypedObject(WaitResult.CREATOR);
+                int taskId = reply.readInt();
+                IBinder receipt = reply.readStrongBinder();
+                reply.enforceNoDataAvail();
+                return new LaunchResult(result, taskId, receipt);
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        /** Reads only the status of the process generation captured by a host launch. */
+        public LaunchExit launchExit(IBinder receipt) throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(EXIT_DESCRIPTOR);
+                if (!java.util.Objects.requireNonNull(receipt).transact(EXIT_STATUS, data, reply, 0)) {
+                    throw new RemoteException("Launch exit receipt is unavailable");
+                }
+                reply.readException();
+                LaunchExit result = new LaunchExit(reply.readInt(), reply.readBoolean(), reply.readInt());
+                reply.enforceNoDataAvail();
+                return result;
+            } finally {
+                data.recycle();
                 reply.recycle();
             }
         }

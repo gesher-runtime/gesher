@@ -8,6 +8,11 @@
 # and a PAC script. Dot-sourced by run-tests.ps1: Check, NoDrive, $Dir, $root and $failed
 # are its.
 param([string] $Web3RuntimeExe = (Join-Path $Dir 'dalvikvm.exe'))
+# The teardown PID parser consumes English launcher diagnostics. Keep this
+# synthetic track deterministic without changing the invoking user's UI locale.
+$web3SavedUiLocale = $env:GESHER_LOCALES
+try {
+$env:GESHER_LOCALES = 'en-US'
 $Web3RuntimeExe = (Resolve-Path -LiteralPath $Web3RuntimeExe -ErrorAction Stop).Path
 . "$PSScriptRoot/../webview/Runtime.ps1"
 . "$PSScriptRoot/../web3/Web3Servers.ps1"
@@ -422,3 +427,7 @@ try {
 }
 ([GesherWeb3Servers]::Log -split "`n" | Select-Object -First 40 | ForEach-Object { "INFO  web3 servers: $_" }) | Out-Host
 if ($failed -eq $web3FailedBefore) { Write-Host 'INFO  web3: every check passed' }
+} finally {
+  if ($null -eq $web3SavedUiLocale) { Remove-Item Env:GESHER_LOCALES -ErrorAction SilentlyContinue }
+  else { $env:GESHER_LOCALES = $web3SavedUiLocale }
+}

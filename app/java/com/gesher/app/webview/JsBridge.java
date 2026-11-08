@@ -18,13 +18,14 @@ import java.util.TreeSet;
 /**
  * WebView.addJavascriptInterface over WebView2 (docs/webview.md, "JavaScript
  * interfaces"). A script run in every new document defines window.<name> with one
- * function per method; each calls callJava on the host object {@code gesherBridge} (an IDispatch,
- * compat/webview/webview_host.cc) synchronously with the interface's and the method's
- * names and the arguments as JSON, and the answer comes back as JSON: {"v": value} or
+ * function per method. HTTP(S) documents synchronously POST to a reserved same-origin
+ * endpoint intercepted by WebView2; a serialized Java worker answers while the native
+ * STA remains free to service cookie and other WebView calls. Other schemes retain the
+ * legacy IDispatch transport. The answer comes back as JSON: {"v": value} or
  * {"e": message}, which the function throws. Only public methods annotated
  * {@code @JavascriptInterface} are callable (all public methods for apps targeting API
- * 16 and lower, as on Android); they run on the WebView thread, not the UI thread, as
- * Android runs them on its JavaBridge thread.
+ * 16 and lower, as on Android). HTTP(S) calls run on a JavaBridge thread, not the UI or
+ * WebView2 thread. Browser CSP and synchronous-XHR restrictions still apply.
  */
 final class JsBridge {
     private static final String TAG = "gesher-webview";
@@ -33,7 +34,8 @@ final class JsBridge {
     }
 
     /** The document script for these interfaces (empty when there are none). */
-    static String script(Map<String, Object> interfaces, boolean requireAnnotation) {
+    static String script(Map<String, Object> interfaces, boolean requireAnnotation,
+            String endpoint) {
         JSONObject defs = new JSONObject();
         try {
             for (Map.Entry<String, Object> e : interfaces.entrySet()) {
@@ -50,11 +52,27 @@ final class JsBridge {
         if (defs.length() == 0) return "";
         return "(function(){\n"
                 + "var defs = " + defs + ";\n"
+                + "var endpoint = " + JSONObject.quote(endpoint) + ";\n"
+                + "var XHR = window.XMLHttpRequest;\n"
                 + "var bridge = null;\n"
                 + "function invoke(name, m, args) {\n"
                 + "  if (!bridge) bridge = chrome.webview.hostObjects.sync.gesherBridge;\n"
-                + "  var r = JSON.parse(bridge.callJava(name, m,"
-                + " JSON.stringify(Array.prototype.slice.call(args))));\n"
+                + "  var a = Array.prototype.slice.call(args), r;\n"
+                + "  if (location.protocol === 'https:' || location.protocol === 'http:') {\n"
+                + "    if (!bridge.canPost()) throw new Error('Java bridge transport unavailable');\n"
+                + "    var ticket = bridge.prepareCall(name, m, JSON.stringify(a));\n"
+                + "    if (typeof ticket !== 'string' || !ticket) throw new Error('Java bridge request rejected');\n"
+                + "    try {\n"
+                + "      var request = new XHR();\n"
+                + "      request.open('POST', location.origin + endpoint, false);\n"
+                + "      request.setRequestHeader('Content-Type', 'text/plain; charset=UTF-8');\n"
+                + "      request.send(ticket);\n"
+                + "      if (request.status !== 200) throw new Error('Java bridge request failed');\n"
+                + "      r = JSON.parse(request.responseText);\n"
+                + "    } finally { bridge.finishCall(ticket); }\n"
+                + "  } else {\n"
+                + "    r = JSON.parse(bridge.callJava(name, m, JSON.stringify(a)));\n"
+                + "  }\n"
                 + "  if (r.hasOwnProperty('e')) throw new Error(r.e);\n"
                 + "  return r.v === null ? (r.u ? undefined : null) : r.v;\n"
                 + "}\n"
@@ -116,7 +134,9 @@ final class JsBridge {
             m.setAccessible(true);
             result = m.invoke(target, values);
         } catch (InvocationTargetException e) {
-            Log.e(TAG, "a JavaScript interface method threw", e.getCause());
+            // Interface arguments and exception messages can contain login credentials.
+            Log.e(TAG, "JavaScript interface method threw "
+                    + e.getCause().getClass().getSimpleName());
             return error("Java exception was raised during method invocation");
         } catch (ReflectiveOperationException | IllegalArgumentException e) {
             return error(String.valueOf(e));

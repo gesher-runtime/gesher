@@ -27,10 +27,14 @@
 // replay) becomes an int3 that, if reached, prints what and where and aborts;
 // the load reports it on stderr.
 //
-// Code is found by decoding instruction by instruction over the object's FDE
-// ranges (.eh_frame_hdr), so bytes inside other instructions or data are not
-// mistaken for %fs prefixes; objects without unwind tables are swept over their
-// executable sections. See docs/decisions/0014-native-libs-fs-base.md.
+// Code is decoded over FDE ranges and code reached from function symbols and
+// direct control-flow edges, including code without an FDE. Gaps can contain
+// assembly data tables and are not swept as instructions. Executable sections
+// (else segments) remain the fallback when no code metadata is available.
+// A faulting 64-bit absolute MOV from fs:0/0x28 in a registered ELF executable
+// range can also be recovered at execution time without modifying code/data.
+// Other faults, unknown displacements and missing TLS retain their failure path.
+// See docs/decisions/0014-native-libs-fs-base.md.
 #pragma once
 
 #include <stddef.h>
@@ -47,7 +51,7 @@ struct FsRewriteStats {
   size_t trapped = 0;       // cannot be rewritten: int3 + diagnostic
   size_t bytes_decoded = 0;
   size_t decode_errors = 0; // bytes skipped because they did not decode
-  bool used_fdes = false;   // regions came from .eh_frame_hdr
+  bool used_fdes = false;   // .eh_frame_hdr supplied code ranges
 };
 
 // Rewrites the %fs accesses in a loaded object's executable segments. `file`

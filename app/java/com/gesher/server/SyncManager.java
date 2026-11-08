@@ -133,6 +133,16 @@ final class SyncManager {
     private final PackageManagerService mPm;
     private final File mFile = new File(Device.dataDir(), "system/sync.properties");
     private volatile Supplier<Account[]> mAccounts = () -> new Account[0];
+    private volatile java.util.function.BiPredicate<Account, String> mAccountAccess = (a, p) -> false;
+
+    private boolean callerCanAccess(Account account) {
+        return mAm.callers().isSystem() || account != null
+                && mAccountAccess.test(account, mAm.callers().callerPackage());
+    }
+
+    private void requireAccountAccess(Account account) {
+        if (!callerCanAccess(account)) throw new SecurityException("Sync account is not visible to caller");
+    }
     private final ScheduledExecutorService mTimer = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "sync");
         t.setDaemon(true);
@@ -165,13 +175,26 @@ final class SyncManager {
         load();
     }
 
+    ActivityManagerService activityManager() { return mAm; }
+    PackageManagerService packageManager() { return mPm; }
+
+    private void requireSyncSettingsWrite() {
+        if (!GmsSignatureSpoofing.isEnabled() || mAm.callers().isSystem()) return;
+        String pkg = mAm.callers().callerPackage();
+        if (mPm.permissions().checkPermission(pkg, "android.permission.WRITE_SYNC_SETTINGS")
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Changing sync settings requires WRITE_SYNC_SETTINGS");
+        }
+    }
+
     /**
      * The accounts to sync (AccountManagerService's, once it is up), the periodic syncs, and
      * a sync of every account's authorities soon after, as Android's SyncManager syncs them
      * when the device starts (its accounts updated).
      */
-    void start(Supplier<Account[]> accounts) {
+    void start(Supplier<Account[]> accounts, java.util.function.BiPredicate<Account, String> access) {
         mAccounts = accounts;
+        mAccountAccess = access;
         synchronized (this) {
             for (String name : mSettings.stringPropertyNames()) {
                 if (name.startsWith("periodic.")) schedulePeriodic(name, false);
@@ -188,6 +211,7 @@ final class SyncManager {
     }
 
     void setMasterSyncAutomatically(boolean flag) {
+        requireSyncSettingsWrite();
         synchronized (this) {
             mSettings.setProperty("master", Boolean.toString(flag));
             save();
@@ -196,11 +220,14 @@ final class SyncManager {
     }
 
     synchronized boolean getSyncAutomatically(Account account, String authority) {
+        if (!callerCanAccess(account)) return false;
         if (account == null || authority == null) return false;
         return !"false".equals(mSettings.getProperty("auto." + id(account, authority)));
     }
 
     void setSyncAutomatically(Account account, String authority, boolean sync) {
+        requireSyncSettingsWrite();
+        if (account != null) requireAccountAccess(account);
         if (account == null || authority == null) return;
         synchronized (this) {
             mSettings.setProperty("auto." + id(account, authority), Boolean.toString(sync));
@@ -211,6 +238,7 @@ final class SyncManager {
     }
 
     int getIsSyncable(Account account, String authority) {
+        if (!callerCanAccess(account)) return 0;
         if (account == null || authority == null) return 0;
         String v;
         synchronized (this) {
@@ -227,6 +255,8 @@ final class SyncManager {
     }
 
     void setIsSyncable(Account account, String authority, int syncable) {
+        requireSyncSettingsWrite();
+        if (account != null) requireAccountAccess(account);
         if (account == null || authority == null) return;
         synchronized (this) {
             mSettings.setProperty("syncable." + id(account, authority),
@@ -338,6 +368,11 @@ final class SyncManager {
      * {@code SYNC_EXTRAS_MANUAL} (or {@code ignoreSettings}) only where automatic sync is on.
      */
     void requestSync(Account account, String authority, Bundle extras, boolean upload) {
+        requestSync(account, authority, extras, upload, null);
+    }
+
+    private void requestSync(Account account, String authority, Bundle extras, boolean upload, ApkPackage notifier) {
+        if (notifier != null && mPm.get(notifier.packageName) != notifier) return;
         Bundle e = extras != null ? new Bundle(extras) : new Bundle();
         if (upload) e.putBoolean(ContentResolver.SYNC_EXTRAS_UPLOAD, true);
         boolean manual = e.getBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, false)
@@ -345,7 +380,7 @@ final class SyncManager {
         if (!upload) {
             SystemServer.log(TAG + "requested: "
                     + (authority != null ? authority : "every authority") + " of "
-                    + (account != null ? account.name : "every account")
+                    + (account != null ? "account type " + account.type : "visible accounts")
                     + (manual ? ", manual" : ""));
         }
         for (Adapter a : adapters()) {
@@ -353,6 +388,8 @@ final class SyncManager {
             if (upload && !a.supportsUploading) continue;
             for (Account acc : accounts(a.accountType)) {
                 if (account != null && !account.equals(acc)) continue;
+                if (notifier != null && !mAccountAccess.test(acc, notifier.packageName)) continue;
+                if (!callerCanAccess(acc) || !mAccountAccess.test(acc, a.service.getPackageName())) continue;
                 if (getIsSyncable(acc, a.authority) == 0) continue;
                 if (!manual && (!getMasterSyncAutomatically()
                         || !getSyncAutomatically(acc, a.authority))) {
@@ -373,25 +410,31 @@ final class SyncManager {
     }
 
     /** After a provider's change notified to the network: an upload sync of its authority. */
-    void localChange(String authority) {
+    void localChange(android.net.Uri uri, ApkPackage notifier) {
+        String authority = uri.getAuthority();
         if (authority == null) return;
+        String key = uri + "|" + (notifier == null ? "android" : notifier.packageName + "@" + System.identityHashCode(notifier));
         synchronized (this) {
-            if (mUploads.containsKey(authority)) return;  // one batches them
-            mUploads.put(authority, mTimer.schedule(() -> {
+            if (mUploads.containsKey(key)) return;
+            mUploads.put(key, mTimer.schedule(() -> {
                 synchronized (SyncManager.this) {
-                    mUploads.remove(authority);
+                    mUploads.remove(key);
                 }
-                requestSync(null, authority, new Bundle(), true);
+                if (notifier != null && !mAm.uriGrants().canAccess(notifier, uri,
+                        android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION, 0)) return;
+                requestSync(null, authority, new Bundle(), true, notifier);
             }, UPLOAD_DELAY_MS, TimeUnit.MILLISECONDS));
         }
     }
 
     void cancelSync(Account account, String authority) {
+        if (account != null) requireAccountAccess(account);
         List<Active> cancel = new ArrayList<>();
         synchronized (this) {
-            mPending.entrySet().removeIf(en -> matches((Object[]) en.getValue(), account, authority));
+            mPending.entrySet().removeIf(en -> callerCanAccess((Account) ((Object[]) en.getValue())[1])
+                    && matches((Object[]) en.getValue(), account, authority));
             for (Active a : mActive.values()) {
-                if ((account == null || account.equals(a.account))
+                if (callerCanAccess(a.account) && (account == null || account.equals(a.account))
                         && (authority == null || authority.equals(a.adapter.authority))) {
                     cancel.add(a);
                 }
@@ -424,6 +467,7 @@ final class SyncManager {
     }
 
     private void enqueue(Adapter a, Account account, Bundle extras) {
+        if (!mAccountAccess.test(account, a.service.getPackageName())) return;
         String key = key(a, account);
         synchronized (this) {
             Object[] pending = mPending.get(key);
@@ -458,7 +502,10 @@ final class SyncManager {
     }
 
     private void bind(Active a) {
-        SystemServer.log(TAG + "syncing " + a.adapter.authority + " of " + a.account.name
+        if (!mAccountAccess.test(a.account, a.adapter.service.getPackageName())) {
+            finished(a, "account access revoked"); return;
+        }
+        SystemServer.log(TAG + "syncing " + a.adapter.authority + " for account type " + a.account.type
                 + " (" + a.adapter.service.flattenToShortString() + ")"
                 + (a.extras.getBoolean(ContentResolver.SYNC_EXTRAS_UPLOAD) ? ", upload" : ""));
         a.connection = new IServiceConnection.Stub() {
@@ -471,6 +518,9 @@ final class SyncManager {
                     a.binder = ISyncAdapter.Stub.asInterface(binder);
                 }
                 try {
+                    if (!mAccountAccess.test(a.account, a.adapter.service.getPackageName())) {
+                        finished(a, "account access revoked"); return;
+                    }
                     a.binder.startSync(a, a.adapter.authority, a.account, a.extras);
                 } catch (RemoteException | RuntimeException e) {
                     finished(a, "the adapter failed: " + e);
@@ -522,13 +572,16 @@ final class SyncManager {
             a.done = true;
             if (mActive.get(a.key) == a) mActive.remove(a.key);
         }
-        SystemServer.log(TAG + a.adapter.authority + " of " + a.account.name + ": " + how
+        SystemServer.log(TAG + a.adapter.authority + " for account type " + a.account.type + ": " + how
                 + " in " + (System.currentTimeMillis() - a.start) + " ms");
+        // Active was checked/completed above. Its binding belongs to the system,
+        // while onFinished can still carry the sync adapter's Binder identity.
+        long identity = Binder.clearCallingIdentity();
         try {
             if (a.connection != null) mAm.unbindService(a.connection);
         } catch (Throwable t) {
             // not bound
-        }
+        } finally { Binder.restoreCallingIdentity(identity); }
         changed(ContentResolver.SYNC_OBSERVER_TYPE_ACTIVE);
         mTimer.execute(this::run);  // a request while it ran
     }
@@ -536,6 +589,8 @@ final class SyncManager {
     // --- periodic syncs ------------------------------------------------------------------
 
     void addPeriodicSync(Account account, String authority, Bundle extras, long seconds) {
+        requireSyncSettingsWrite();
+        if (account != null) requireAccountAccess(account);
         if (account == null || authority == null) return;
         // Android's minimum period is an hour's quarter.
         long period = Math.max(seconds, 15 * 60);
@@ -550,6 +605,8 @@ final class SyncManager {
     }
 
     void removePeriodicSync(Account account, String authority, Bundle extras) {
+        requireSyncSettingsWrite();
+        if (account != null) requireAccountAccess(account);
         if (account == null || authority == null) return;
         String name = "periodic." + id(account, authority) + "|" + extrasKey(extras);
         synchronized (this) {
@@ -561,6 +618,7 @@ final class SyncManager {
     }
 
     List<PeriodicSync> getPeriodicSyncs(Account account, String authority) {
+        if (!callerCanAccess(account)) return java.util.Collections.emptyList();
         List<PeriodicSync> result = new ArrayList<>();
         if (account == null || authority == null) return result;
         String prefix = "periodic." + id(account, authority) + "|";
@@ -633,7 +691,7 @@ final class SyncManager {
 
     synchronized boolean isSyncActive(Account account, String authority) {
         for (Active a : mActive.values()) {
-            if ((account == null || account.equals(a.account))
+            if (callerCanAccess(a.account) && (account == null || account.equals(a.account))
                     && (authority == null || authority.equals(a.adapter.authority))) {
                 return true;
             }
@@ -643,7 +701,7 @@ final class SyncManager {
 
     synchronized boolean isSyncPending(Account account, String authority) {
         for (Object[] p : mPending.values()) {
-            if (matches(p, account, authority)) return true;
+            if (callerCanAccess((Account) p[1]) && matches(p, account, authority)) return true;
         }
         return false;
     }
@@ -652,7 +710,7 @@ final class SyncManager {
         List<SyncInfo> result = new ArrayList<>();
         int i = 0;
         for (Active a : mActive.values()) {
-            result.add(new SyncInfo(i++, a.account, a.adapter.authority, a.start));
+            if (callerCanAccess(a.account)) result.add(new SyncInfo(i++, a.account, a.adapter.authority, a.start));
         }
         return result;
     }

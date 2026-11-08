@@ -396,19 +396,96 @@ int BIONIC_SYSV Getpid() { return static_cast<int>(GetCurrentProcessId()); }
 int BIONIC_SYSV Gettid() { return static_cast<int>(GetCurrentThreadId()); }
 int BIONIC_SYSV Getpagesize() { return 4096; }
 
-// rand/random: the CRT's rand is 15 bits; random() promises 31.
-uint32_t g_random_state = 1;
+// BSD random state layout used by Android: one header word followed by the
+// selected degree's state words. Access through memcpy also accepts byte buffers
+// without imposing the host's alignment/aliasing rules on guest memory.
+// Reference: AOSP bionic/libc/upstream-netbsd/common/lib/libc/stdlib/random.c.
+struct RandomState {
+  char initial[128]{};
+  char* bytes = initial;
+  int type = 3, front = 3, rear = 0;
+  static constexpr int degree[] = {0, 7, 15, 31, 63};
+  static constexpr int separation[] = {0, 3, 1, 3, 1};
+  uint32_t Load(int word) const {
+    uint32_t value;
+    std::memcpy(&value, bytes + word * sizeof(value), sizeof(value));
+    return value;
+  }
+  void Store(int word, uint32_t value) {
+    std::memcpy(bytes + word * sizeof(value), &value, sizeof(value));
+  }
+  void Save() { Store(0, static_cast<uint32_t>(5 * rear + type)); }
+  uint32_t Next() {
+    if (type == 0) {
+      uint32_t value = (Load(1) * 1103515245u + 12345u) & 0x7fffffffu;
+      Store(1, value);
+      return value;
+    }
+    uint32_t value = Load(front + 1) + Load(rear + 1);
+    Store(front + 1, value);
+    front = (front + 1) % degree[type];
+    rear = (rear + 1) % degree[type];
+    return value >> 1;
+  }
+  void Seed(unsigned seed) {
+    Store(1, seed);
+    if (type != 0) {
+      for (int i = 1; i < degree[type]; ++i) {
+        int64_t previous = static_cast<int32_t>(Load(i));
+        int64_t next = 16807 * (previous % 127773) - 2836 * (previous / 127773);
+        if (next <= 0) next += 0x7fffffff;
+        Store(i + 1, static_cast<uint32_t>(next));
+      }
+      front = separation[type];
+      rear = 0;
+      for (int i = 0; i < 10 * degree[type]; ++i) Next();
+    } else {
+      front = rear = 0;
+    }
+    Save();
+  }
+  RandomState() { Seed(1); }
+};
+RandomState& CurrentRandom() { static RandomState state; return state; }
 std::mutex g_random_mutex;
 int64_t BIONIC_SYSV Random() {
   std::lock_guard<std::mutex> lock(g_random_mutex);
-  g_random_state = g_random_state * 1103515245u + 12345u;
-  uint32_t a = g_random_state;
-  g_random_state = g_random_state * 1103515245u + 12345u;
-  return static_cast<int64_t>(((a >> 16) << 15) ^ (g_random_state >> 16)) & 0x7fffffff;
+  return CurrentRandom().Next();
 }
 void BIONIC_SYSV Srandom(unsigned seed) {
   std::lock_guard<std::mutex> lock(g_random_mutex);
-  g_random_state = seed;
+  CurrentRandom().Seed(seed);
+}
+char* BIONIC_SYSV Initstate(unsigned seed, char* bytes, size_t size) {
+  if (bytes == nullptr || size < 8) { errno = EINVAL; return nullptr; }
+  std::lock_guard<std::mutex> lock(g_random_mutex);
+  auto& state = CurrentRandom();
+  state.Save();
+  char* previous = state.bytes;
+  state.bytes = bytes;
+  state.type = size < 32 ? 0 : size < 64 ? 1 : size < 128 ? 2 : size < 256 ? 3 : 4;
+  state.Seed(seed);
+  return previous;
+}
+char* BIONIC_SYSV Setstate(char* bytes) {
+  if (bytes == nullptr) { errno = EINVAL; return nullptr; }
+  std::lock_guard<std::mutex> lock(g_random_mutex);
+  auto& state = CurrentRandom();
+  state.Save();
+  uint32_t header;
+  std::memcpy(&header, bytes, sizeof(header));
+  int type = header % 5;
+  uint32_t rear = header / 5;
+  if ((type == 0 && rear != 0) || (type != 0 && rear >= static_cast<uint32_t>(RandomState::degree[type]))) {
+    errno = EINVAL;
+    return nullptr;
+  }
+  char* previous = state.bytes;
+  state.bytes = bytes;
+  state.type = type;
+  state.rear = rear;
+  state.front = type == 0 ? 0 : (rear + RandomState::separation[type]) % RandomState::degree[type];
+  return previous;
 }
 int BIONIC_SYSV Rand() { return static_cast<int>(Random()); }
 void BIONIC_SYSV ArcRandomBuf(void* buf, size_t n) {
@@ -827,6 +904,8 @@ int64_t BIONIC_SYSV Syscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int6
                             int64_t /*a5*/, int64_t /*a6*/) {
   constexpr int64_t kSysGettid = 186, kSysFutex = 202;
   if (nr == kSysGettid) return GetCurrentThreadId();
+  int64_t timerfd_result;
+  if (DispatchTimerfdSyscall(nr, a1, a2, a3, a4, &timerfd_result)) return timerfd_result;
   if (nr != kSysFutex) {
     errno = kENOSYS;
     return -1;
@@ -1012,6 +1091,8 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("srand", Srandom);
   ENTRY("random", Random);
   ENTRY("srandom", Srandom);
+  ENTRY("initstate", Initstate);
+  ENTRY("setstate", Setstate);
   ENTRY("lrand48", Random);
   ENTRY("srand48", Srandom);
   ENTRY("arc4random", ArcRandom);

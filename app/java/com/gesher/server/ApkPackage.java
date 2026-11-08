@@ -73,11 +73,21 @@ public final class ApkPackage {
     private String mNativeLibraryDir;  // null: <data dir>/lib
     private String mPrimaryCpuAbi;     // null: no native code (NativeLibs.abiFor)
     private final boolean mHasCode;
+    private Boolean mVerifiedMicrogSigner;
+    private final int mUid;
+    private boolean mSystemAddon;
+    private boolean mSigningIdentityChecked;
+    private Signature[] mVerifiedSignatures;
+    private com.android.apksig.SigningCertificateLineage mVerifiedLineage;
 
     private ApkPackage(String apkPath, ParsedPackage parsed) throws IOException {
         this.apkPath = apkPath;
         this.parsed = parsed;
         this.packageName = parsed.getPackageName();
+        if ("android".equals(packageName)) {
+            throw new SecurityException("The platform package name is reserved");
+        }
+        mUid = PackageUids.uidFor(packageName);
         // Resolve the newly parsed APK, including before an install replaces the old one.
         sharedLibraries = SharedLibraryRegistry.resolve(parsed);
         mHasCode = parsed.isDeclaredHavingCode() && hasDex(apkPath);
@@ -231,6 +241,165 @@ public final class ApkPackage {
         return parsed.getLongVersionCode();
     }
 
+    public int uid() { return mUid; }
+    void setSystemAddon(boolean enabled) {
+        if (enabled) {
+            Signature[] verified = verifiedSignatures();
+            if (verified == null) throw new SecurityException("Unverified system addon");
+            // The pinned GSF proxy uses v1 only; the compatibility v2/v3 collector
+            // above cannot supply its real package signature. Never substitute it.
+            if (parsed.getSigningDetails() == null
+                    || parsed.getSigningDetails() == SigningDetails.UNKNOWN) {
+                parsed.setSigningDetails(new SigningDetails(verified,
+                        SigningDetails.SignatureSchemeVersion.JAR, null, null));
+            }
+        }
+        mSystemAddon = enabled;
+    }
+    public boolean isSystemAddon() { return mSystemAddon; }
+
+    /** Current APK signers after full content verification, never the spoofed identity. */
+    public synchronized Signature[] verifiedSignatures() {
+        if (!mSigningIdentityChecked) {
+            mSigningIdentityChecked = true;
+            VerifiedIdentity identity = verifyIdentity(apkPath);
+            if (identity != null) {
+                mVerifiedSignatures = identity.signatures;
+                mVerifiedLineage = identity.lineage;
+            }
+        }
+        return mVerifiedSignatures == null ? null : mVerifiedSignatures.clone();
+    }
+
+    public static Signature[] verifySignatures(String path) {
+        VerifiedIdentity identity = verifyIdentity(path);
+        return identity == null ? null : identity.signatures.clone();
+    }
+
+    private static final class VerifiedIdentity {
+        final Signature[] signatures;
+        final com.android.apksig.SigningCertificateLineage lineage;
+        VerifiedIdentity(Signature[] signatures, com.android.apksig.SigningCertificateLineage lineage) {
+            this.signatures = signatures;
+            this.lineage = lineage;
+        }
+    }
+
+    private static VerifiedIdentity verifyIdentity(String path) {
+        try {
+            com.android.apksig.ApkVerifier.Result result = new com.android.apksig.ApkVerifier
+                    .Builder(new File(path)).setMinCheckedPlatformVersion(36)
+                    .setMaxCheckedPlatformVersion(36).build().verify();
+            if (result.isVerified() && !result.getSignerCertificates().isEmpty()) {
+                Signature[] signatures = new Signature[result.getSignerCertificates().size()];
+                for (int i = 0; i < signatures.length; i++) {
+                    signatures[i] = new Signature(result.getSignerCertificates().get(i).getEncoded());
+                }
+                Arrays.sort(signatures, java.util.Comparator.comparing(Signature::toCharsString));
+                // Only lineage returned by the successful full APK verifier is trusted.
+                // The compatibility parser's unsafe certificate/proof collection is not.
+                return new VerifiedIdentity(signatures, result.getSigningCertificateLineage());
+            }
+        } catch (Exception | LinkageError failure) {
+            SystemServer.log("APK signing identity verification failed: "
+                    + failure.getClass().getSimpleName());
+        }
+        return null;
+    }
+
+    public boolean hasVerifiedSigningIdentity() { return verifiedSignatures() != null; }
+
+    public String verifiedSignerSha256() {
+        Signature[] signatures = verifiedSignatures();
+        if (signatures == null || signatures.length != 1) return null;
+        return certificateSha256(signatures[0].toByteArray());
+    }
+
+    private static String certificateSha256(byte[] certificate) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(certificate);
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : digest) {
+                hex.append(Character.forDigit((b >>> 4) & 15, 16));
+                hex.append(Character.forDigit(b & 15, 16));
+            }
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new AssertionError(impossible);
+        }
+    }
+
+    public boolean signaturesMatch(ApkPackage other) {
+        Signature[] current = verifiedSignatures();
+        Signature[] theirs = other == null ? null : other.verifiedSignatures();
+        return current != null && theirs != null && Arrays.equals(current, theirs);
+    }
+
+    /**
+     * Installation continuity is broader than cross-package signature permission
+     * equality: a verified forward key rotation may retain the predecessor's data.
+     * Rollback, unrelated keys and multi-signer set changes remain rejected.
+     */
+    public boolean updateContinuityFrom(ApkPackage previous) {
+        if (previous == null || !packageName.equals(previous.packageName)) return false;
+        Signature[] current = verifiedSignatures();
+        Signature[] before = previous.verifiedSignatures();
+        if (current == null || before == null) return false;
+        if (Arrays.equals(current, before)) return true;
+        if (current.length != 1 || before.length != 1) return false;
+        com.android.apksig.SigningCertificateLineage lineage;
+        synchronized (this) { lineage = mVerifiedLineage; }
+        if (lineage == null) return false;
+        try {
+            List<X509Certificate> certificates = lineage.getCertificatesInLineage();
+            if (certificates.size() < 2 || !current[0].equals(new Signature(
+                    certificates.get(certificates.size() - 1).getEncoded()))) return false;
+            for (int i = 0; i + 1 < certificates.size(); i++) {
+                X509Certificate ancestor = certificates.get(i);
+                if (before[0].equals(new Signature(ancestor.getEncoded()))) {
+                    return lineage.getSignerCapabilities(ancestor).hasInstalledData();
+                }
+            }
+        } catch (Exception failure) {
+            return false;
+        }
+        return false;
+    }
+
+    /** Oldest verified AUTH-retained ancestor; current-key fingerprints stay separate. */
+    public String verifiedAuthSignerSha256() {
+        Signature[] current = verifiedSignatures();
+        if (current == null || current.length != 1) return null;
+        com.android.apksig.SigningCertificateLineage lineage;
+        synchronized (this) { lineage = mVerifiedLineage; }
+        if (lineage != null) {
+            try {
+                List<X509Certificate> certificates = lineage.getCertificatesInLineage();
+                if (!certificates.isEmpty() && current[0].equals(new Signature(
+                        certificates.get(certificates.size() - 1).getEncoded()))) {
+                    for (int i = 0; i + 1 < certificates.size(); i++) {
+                        X509Certificate ancestor = certificates.get(i);
+                        if (lineage.getSignerCapabilities(ancestor).hasAuth()) {
+                            return certificateSha256(ancestor.getEncoded());
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+                // A valid current key does not inherit any unproven AUTH capability.
+            }
+        }
+        return certificateSha256(current[0].toByteArray());
+    }
+
+    /** Full APK integrity verification, separate from our compatibility cert collection. */
+    synchronized boolean hasVerifiedMicrogSigner() {
+        if (mVerifiedMicrogSigner == null) {
+            mVerifiedMicrogSigner = GmsSignatureSpoofing.verifyOfficialApk(apkPath);
+        }
+        return mVerifiedMicrogSigner;
+    }
+
     /** The PackageInfo PackageManager.getPackageInfo answers for these flags. */
     public PackageInfo packageInfo(long flags) {
         if ((flags & DIRECT_BOOT) == 0) {
@@ -247,7 +416,7 @@ public final class ApkPackage {
         }
         pi.firstInstallTime = mInstallTime;
         pi.lastUpdateTime = mUpdateTime;
-        return pi;
+        return GmsSignatureSpoofing.maybeSpoofPackageInfo(this, pi, flags);
     }
 
     public ApplicationInfo applicationInfo(long flags) {
@@ -472,9 +641,13 @@ public final class ApkPackage {
         if (ai.processName == null) {
             ai.processName = packageName;
         }
-        ai.uid = Process.myUid();  // every gesher process has the same uid
+        ai.uid = mUid;
         ai.enabled = true;
         ai.flags |= ApplicationInfo.FLAG_INSTALLED;
+        if (mSystemAddon) {
+            ai.flags |= ApplicationInfo.FLAG_SYSTEM;
+            ai.privateFlags |= ApplicationInfo.PRIVATE_FLAG_PRIVILEGED;
+        }
         if (mHasCode) {
             // As installed packages carry it: LoadedApk loads code only with it.
             ai.flags |= ApplicationInfo.FLAG_HAS_CODE;

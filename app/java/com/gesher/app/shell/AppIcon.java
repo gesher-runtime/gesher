@@ -77,7 +77,20 @@ public final class AppIcon {
      * else the launcher activity's, else the framework's default.
      */
     public static AppIcon load(String apk, ApplicationInfo app, ActivityInfo launcher) {
-        Resources res = resources(apk);
+        return load(new String[] {apk}, app, launcher);
+    }
+
+    /** Base APK followed by resource splits, including density-specific launcher images. */
+    public static AppIcon load(String[] apks, ApplicationInfo app, ActivityInfo launcher) {
+        Resources res = resources(apks);
+        try {
+            return load(res, app, launcher);
+        } finally {
+            res.getAssets().close();
+        }
+    }
+
+    private static AppIcon load(Resources res, ApplicationInfo app, ActivityInfo launcher) {
         String label = label(res, app, launcher);
         int icon = app.icon != 0 ? app.icon : launcher != null ? launcher.icon : 0;
         StringBuilder source = new StringBuilder();
@@ -106,10 +119,13 @@ public final class AppIcon {
     }
 
     /** The app's resources with the system's, for the default locale at xxxhdpi. */
-    private static Resources resources(String apk) {
+    private static Resources resources(String[] apks) {
         AssetManager assets = new AssetManager();
-        if (assets.addAssetPath(apk) == 0) {
-            throw new IllegalStateException("cannot read the resources of " + apk);
+        for (String apk : apks) {
+            if (assets.addAssetPath(apk) == 0) {
+                assets.close();
+                throw new IllegalStateException("cannot read the resources of " + apk);
+            }
         }
         DisplayMetrics metrics = new DisplayMetrics();
         metrics.setToDefaults();
@@ -376,13 +392,16 @@ public final class AppIcon {
     public void writeIco(File file) throws IOException {
         byte[] ico = ico();
         file.getParentFile().mkdirs();
-        File tmp = new File(file.getPath() + ".tmp");
-        try (OutputStream out = new FileOutputStream(tmp)) {
-            out.write(ico);
-        }
-        if (!tmp.renameTo(file)) {
-            file.delete();
-            if (!tmp.renameTo(file)) throw new IOException("cannot write " + file);
+        File tmp = File.createTempFile("icon-", ".tmp", file.getParentFile());
+        try {
+            try (OutputStream out = new FileOutputStream(tmp)) {
+                out.write(ico);
+            }
+            java.nio.file.Files.move(tmp.toPath(), file.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            tmp.delete();
         }
     }
 

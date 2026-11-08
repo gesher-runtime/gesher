@@ -20,8 +20,8 @@
 // label and icon, with its AppUserModelID (it groups with the app on the
 // taskbar). It closes once a visible window with the app's AppUserModelID is up
 // (the app's: compat/hwui/window sets it on each top-level window), when
-// gesher-app.ps1 ends, or after two minutes. Closing it does not cancel the
-// launch. GESHER_SPLASH=0 turns it off.
+// gesher-app.ps1 ends, or after two minutes. Closing it (its X) cancels the
+// launch and ends its processes. GESHER_SPLASH=0 turns it off.
 //
 // Its exit code is gesher-app.ps1's. Standard handles it was given (a redirected
 // output, as CI reads it) are passed on.
@@ -36,6 +36,8 @@
 #include <propidl.h>
 #include <propsys.h>
 #include <shellapi.h>
+#include <tlhelp32.h>
+#include "../locale/ui_locale.h"
 
 #include <algorithm>
 #include <cstring>
@@ -282,7 +284,8 @@ bool SplashFor(const std::wstring& here, Splash* splash) {
     // gesher-app.ps1's other commands show no window of an app; anything else is an APK.
     static const wchar_t* const kCommands[] = {L"install", L"uninstall", L"view", L"list",
                                                L"status", L"start", L"shutdown",
-                                               L"toast-activated", L"apk-icon", L"proxy"};
+                                               L"toast-activated", L"apk-icon", L"proxy",
+                                               L"control-panel", L"settings", L"dashboard", L"gui"};
     for (const wchar_t* command : kCommands) {
       if (Lower(args[0]) == command) return false;
     }
@@ -328,7 +331,7 @@ bool SplashFor(const std::wstring& here, Splash* splash) {
   }
   if (splash->icon.empty() && !apk_icon.empty() && IsFile(apk_icon)) splash->icon = apk_icon;
   if (splash->icon.empty()) splash->icon = here + L"\\gesher.ico";
-  if (splash->label.empty()) splash->label = L"Gesher";
+  if (splash->label.empty()) splash->label = GesherUiText(GesherUiCurrentLanguage(), "brand");
   return true;
 }
 
@@ -412,6 +415,30 @@ BOOL CALLBACK CollectVisible(HWND hwnd, LPARAM lparam) {
   return TRUE;
 }
 
+void TerminateProcessTree(DWORD pid) {
+  if (pid == 0) return;
+  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snap != INVALID_HANDLE_VALUE) {
+    PROCESSENTRY32W pe = {};
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snap, &pe)) {
+      do {
+        if (pe.th32ParentProcessID == pid) {
+          TerminateProcessTree(pe.th32ProcessID);
+        }
+      } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+  }
+  HANDLE proc = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+  if (proc != nullptr) {
+    TerminateProcess(proc, 1);
+    CloseHandle(proc);
+  }
+}
+
+bool g_cancelled = false;
+
 LRESULT CALLBACK SplashProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
   if (msg == WM_PAINT && g_splash != nullptr) {
     PAINTSTRUCT ps;
@@ -434,12 +461,18 @@ LRESULT CALLBACK SplashProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     SelectObject(dc, g_splash->text_font);
     SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
     RECT status = {16, label.bottom + 8, w - 16, label.bottom + 40};
-    DrawTextW(dc, L"Starting\u2026", -1, &status, DT_CENTER | DT_SINGLELINE | DT_NOPREFIX);
+    const auto language = GesherUiCurrentLanguage();
+    DrawTextW(dc, GesherUiText(language, "starting"), -1, &status,
+              DT_CENTER | DT_SINGLELINE | DT_NOPREFIX | (GesherUiRtl(language) ? DT_RTLREADING : 0));
     SelectObject(dc, old);
     EndPaint(hwnd, &ps);
     return 0;
   }
-  // WM_CLOSE (its X) destroys the splash only: the launch goes on.
+  if (msg == WM_CLOSE) {
+    g_cancelled = true;
+    DestroyWindow(hwnd);
+    return 0;
+  }
   return DefWindowProcW(hwnd, msg, wparam, lparam);
 }
 
@@ -491,7 +524,8 @@ HWND ShowSplash(Splash* splash) {
                                   DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
   g_splash = splash;
 
-  HWND hwnd = CreateWindowExW(0, kSplashClass, splash->label.c_str(), style, x, y, ww, wh, nullptr,
+  const DWORD ex_style = GesherUiRtl(GesherUiCurrentLanguage()) ? WS_EX_RTLREADING : 0;
+  HWND hwnd = CreateWindowExW(ex_style, kSplashClass, splash->label.c_str(), style, x, y, ww, wh, nullptr,
                               nullptr, instance, nullptr);
   if (hwnd == nullptr) return nullptr;
   // Before it is shown: its taskbar button is the app's (the shortcut's icon).
@@ -515,10 +549,10 @@ void FreeSplash(Splash* splash) {
 }
 
 // Shows the splash until the app's window is up, `process` ends, the user
-// closes it or the timeout; then waits for `process` as before.
-void SplashWhileStarting(const std::wstring& here, HANDLE process) {
+// closes it or the timeout. Returns true if the user cancelled the launch.
+bool SplashWhileStarting(const std::wstring& here, HANDLE process, DWORD pid) {
   Splash splash;
-  if (!SplashFor(here, &splash)) return;
+  if (!SplashFor(here, &splash)) return false;
   HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
   std::vector<HWND> before;
   if (splash.app_id.empty()) EnumWindows(CollectVisible, reinterpret_cast<LPARAM>(&before));
@@ -536,7 +570,7 @@ void SplashWhileStarting(const std::wstring& here, HANDLE process) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
       }
-      if (r == WAIT_OBJECT_0 || !IsWindow(hwnd)) break;
+      if (r == WAIT_OBJECT_0 || !IsWindow(hwnd) || g_cancelled) break;
       now = GetTickCount64();
       if (now < next) continue;
       next = now + kSplashPollMs;
@@ -553,6 +587,20 @@ void SplashWhileStarting(const std::wstring& here, HANDLE process) {
   }
   FreeSplash(&splash);
   if (SUCCEEDED(com)) CoUninitialize();
+
+  if (g_cancelled) {
+    TerminateProcessTree(pid);
+    if (!splash.app_id.empty()) {
+      HWND app = nullptr;
+      while ((app = FindWindowExW(nullptr, app, nullptr, nullptr)) != nullptr) {
+        if (WindowAppUserModelId(app) == splash.app_id) {
+          PostMessageW(app, WM_CLOSE, 0, 0);
+        }
+      }
+    }
+    return true;
+  }
+  return false;
 }
 
 }  // namespace
@@ -593,9 +641,25 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                       inherit ? TRUE : FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
     return 1;
   }
+  HANDLE job = CreateJobObjectW(nullptr, nullptr);
+  if (job != nullptr) {
+    AssignProcessToJobObject(job, pi.hProcess);
+  }
   CloseHandle(pi.hThread);
   // The splash comes up while powershell starts (the launch is never delayed by it).
-  SplashWhileStarting(here, pi.hProcess);
+  bool cancelled = SplashWhileStarting(here, pi.hProcess, pi.dwProcessId);
+  if (cancelled) {
+    if (job != nullptr) {
+      TerminateJobObject(job, 1);
+      CloseHandle(job);
+    }
+    WaitForSingleObject(pi.hProcess, 1000);
+    CloseHandle(pi.hProcess);
+    return 1;
+  }
+  if (job != nullptr) {
+    CloseHandle(job);
+  }
   WaitForSingleObject(pi.hProcess, INFINITE);
   DWORD code = 1;
   GetExitCodeProcess(pi.hProcess, &code);

@@ -243,6 +243,46 @@ public final class GraphicsTest {
     check(at(back, 5, 5) == Color.BLACK && at(back, 30, 30) == Color.RED,
         "Surface.lockCanvas(dirty): a partial redraw");
 
+    // An elevated top-level DecorView draws its content inside shadow padding.
+    // Windows owns the external shadow, so client pixels must exclude that padding.
+    window.setSurfaceInsets(7, 11, 13, 17);
+    canvas = surface.lockCanvas(null);
+    check(canvas.getWidth() == w + 20 && canvas.getHeight() == h + 28,
+        "Surface insets: Android buffer includes asymmetric shadow padding");
+    canvas.drawColor(Color.MAGENTA);
+    paint.setAntiAlias(false);
+    paint.setColor(Color.GREEN); canvas.drawRect(7, 11, 7 + w, 11 + h, paint);
+    paint.setColor(Color.RED); canvas.drawRect(7, 11, 9, 13, paint);
+    paint.setColor(Color.BLUE); canvas.drawRect(5 + w, 11, 7 + w, 13, paint);
+    paint.setColor(Color.YELLOW); canvas.drawRect(7, 9 + h, 9, 11 + h, paint);
+    paint.setColor(Color.CYAN); canvas.drawRect(5 + w, 9 + h, 7 + w, 11 + h, paint);
+    surface.unlockCanvasAndPost(canvas);
+    back = window.readBackBuffer();
+    check(back[0] == w && back[1] == h && at(back, 0, 0) == Color.RED
+            && at(back, w - 1, 0) == Color.BLUE && at(back, 0, h - 1) == Color.YELLOW
+            && at(back, w - 1, h - 1) == Color.CYAN && at(back, w / 2, h / 2) == Color.GREEN,
+        "Surface insets: all four content corners reach client pixels without shift or clipping");
+    canvas = surface.lockCanvas(new Rect(7, 11, 10, 14));
+    canvas.drawColor(Color.BLACK);
+    surface.unlockCanvasAndPost(canvas);
+    back = window.readBackBuffer();
+    check(at(back, 0, 0) == Color.BLACK && at(back, w - 1, h - 1) == Color.CYAN,
+        "Surface insets: partial redraw keeps the other content edges");
+    window.setClientSize(w + 20, h + 10);
+    canvas = surface.lockCanvas(null);
+    check(canvas.getWidth() == w + 40 && canvas.getHeight() == h + 38,
+        "Surface insets: resized buffers retain shadow padding");
+    canvas.drawColor(Color.GREEN);
+    surface.unlockCanvasAndPost(canvas);
+    window.setSurfaceInsets(0, 0, 0, 0);
+    canvas = surface.lockCanvas(null);
+    check(canvas.getWidth() == w + 20 && canvas.getHeight() == h + 10,
+        "Surface insets: clearing padding restores the ordinary client buffer");
+    canvas.drawColor(Color.YELLOW); surface.unlockCanvasAndPost(canvas);
+    back = window.readBackBuffer();
+    check(at(back, back[0] - 1, back[1] - 1) == Color.YELLOW,
+        "Surface insets: cleared padding does not leave a cropped edge");
+
     surface.release();
     window.close();
   }
