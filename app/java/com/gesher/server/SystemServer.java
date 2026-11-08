@@ -388,6 +388,9 @@ public final class SystemServer {
         public GesherService.LaunchResult startActivityAndWait(android.content.Intent intent) {
             return mServices.atm.startActivityForHost(intent);
         }
+        @Override public GesherService.LaunchResult startShortcutAndWait(String pkg, String key) {
+            return mServices.atm.startShortcutForHost(pkg, key);
+        }
 
         @Override
         public String status() {

@@ -7,6 +7,7 @@ package com.gesher.app.shell;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
+import android.content.pm.ShortcutInfo;
 
 import com.android.internal.pm.pkg.component.ParsedActivity;
 import com.android.internal.pm.pkg.component.ParsedIntentInfo;
@@ -21,6 +22,7 @@ import com.gesher.server.Zygote;
 import java.io.File;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.Set;
@@ -214,16 +216,235 @@ public final class AppShell {
      */
     public static void unregisterQuietly(String packageName, Properties shortcut) {
         try {
+            try { removeAllDynamicShortcuts(packageName); }
+            catch (RuntimeException failure) { log("dynamic shortcut cleanup needs retry for " + packageName); }
             removeShortcut(shortcut);
             File dir = shellDir(packageName);
             new File(dir, ICON).delete();
             new File(dir, RECORD).delete();
+            new File(dir, DYNAMIC_RECORD).delete();
             java.nio.file.Files.deleteIfExists(dir.toPath());
             rewriteApkIcons(packageName, null);
         } catch (Throwable t) {
             log("the Start menu shortcut of " + packageName + " was not removed: " + t);
         }
     }
+
+    // --- dynamic shortcuts ---------------------------------------------------------------
+
+    private static final String DYNAMIC_RECORD = "dynamic-shortcuts.properties";
+
+    private static void dynamicPackage(String pkg) {
+        if (pkg == null || !pkg.matches("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*")) {
+            throw new IllegalArgumentException("Invalid shortcut package");
+        }
+    }
+
+    /** Fixed-width opaque keys keep arbitrary app IDs out of Windows command lines. */
+    public static String dynamicKey(String pkg, String id) {
+        dynamicPackage(pkg); java.util.Objects.requireNonNull(id, "shortcutId");
+        try {
+            byte[] bytes = java.security.MessageDigest.getInstance("SHA-256").digest(
+                    (pkg + "\u0000" + id).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder result = new StringBuilder();
+            for (byte b : bytes) result.append(String.format(Locale.ROOT, "%02x", b & 255));
+            return result.toString();
+        } catch (java.security.NoSuchAlgorithmException e) { throw new AssertionError(e); }
+    }
+
+    private static File dynamicFile(String pkg) {
+        return new File(Device.dataDir(), "system/dynamic-shortcuts/" + dynamicKey(pkg, "") + ".properties");
+    }
+
+    public static synchronized Properties dynamicShortcutsOf(String pkg) {
+        File file = dynamicFile(pkg);
+        if (file.length() > 2097152) return new Properties();
+        try { Properties value = Device.read(file); return value == null ? new Properties() : value; }
+        catch (Exception malformed) { return new Properties(); }
+    }
+
+    /** Shortcut launch authority stays within the publishing package; host URI grants are never inherited. */
+    public static Intent dynamicIntent(String pkg, Intent source) {
+        dynamicPackage(pkg); java.util.Objects.requireNonNull(source, "shortcut intent");
+        if (source.getSelector() != null || source.getClipData() != null || Intent.ACTION_CHOOSER.equals(source.getAction())
+                || (source.getPackage() != null && !pkg.equals(source.getPackage()))
+                || (source.getComponent() != null && !pkg.equals(source.getComponent().getPackageName()))) {
+            throw new SecurityException("Shortcut intent leaves its publisher package");
+        }
+        Intent result = new Intent(source);
+        result.setPackage(pkg);
+        result.setFlags(result.getFlags() & ~Intent.IMMUTABLE_FLAGS);
+        return result;
+    }
+
+    private static ShortcutInfo readDynamic(String pkg, String key, Properties values) {
+        if (!key.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("Invalid shortcut key");
+        String id = values.getProperty(key + ".id");
+        String encoded = values.getProperty(key + ".payload");
+        if (id == null || !key.equals(dynamicKey(pkg, id)) || encoded == null || encoded.length() > 350000) return null;
+        android.os.Parcel parcel = android.os.Parcel.obtain();
+        try {
+            byte[] bytes = java.util.Base64.getDecoder().decode(encoded);
+            parcel.unmarshall(bytes, 0, bytes.length); parcel.setDataPosition(0);
+            ShortcutInfo info = ShortcutInfo.CREATOR.createFromParcel(parcel);
+            if (!pkg.equals(info.getPackage()) || !id.equals(info.getId()) || info.getUserId() != 0) return null;
+            for (Intent intent : info.getIntents()) dynamicIntent(pkg, intent);
+            return info;
+        } finally { parcel.recycle(); }
+    }
+
+    public static synchronized List<ShortcutInfo> loadDynamicShortcuts(String pkg, String identity) {
+        Properties values = dynamicShortcutsOf(pkg);
+        List<ShortcutInfo> result = new java.util.ArrayList<>();
+        if (identity == null || !identity.equals(values.getProperty("publisher"))) return result;
+        for (String name : values.stringPropertyNames()) if (name.matches("[0-9a-f]{64}\\.id")) {
+            try {
+                ShortcutInfo info = readDynamic(pkg, name.substring(0, name.length() - 3), values);
+                if (info != null) result.add(info);
+            } catch (RuntimeException malformed) { return new java.util.ArrayList<>(); }
+        }
+        result.sort(java.util.Comparator.comparingInt(ShortcutInfo::getRank).thenComparing(ShortcutInfo::getId));
+        return result;
+    }
+
+    public static synchronized Intent dynamicShortcutIntent(String pkg, String key, String identity) {
+        Properties values = dynamicShortcutsOf(pkg);
+        if (identity == null || !identity.equals(values.getProperty("publisher"))) throw new SecurityException("Shortcut publisher changed");
+        ShortcutInfo info = readDynamic(pkg, key, values);
+        if (info == null || !info.isEnabled()) throw new IllegalArgumentException("Shortcut is missing or disabled");
+        return dynamicIntent(pkg, info.getIntent());
+    }
+
+    private static String dynamicLabel(String value) {
+        String clean = value.replaceAll("[\\p{Cntrl}\\\\/:*?\"<>|]", "_").trim();
+        if (clean.isEmpty()) clean = "Shortcut";
+        return clean.length() > 48 ? clean.substring(0, 48) : clean;
+    }
+
+    private static String dynamicFolder() {
+        String programs = Shell.programsFolder();
+        return programs == null ? null : programs + "\\" + FOLDER;
+    }
+
+    public static String dynamicArguments(String pkg, String id) {
+        return "launch " + pkg + " --shortcut " + dynamicKey(pkg, id);
+    }
+
+    /** Only an immediate child carrying this publisher/ID's hash is owned by this API. */
+    public static boolean ownedDynamicLink(String pkg, String id, String path) {
+        String programs = Shell.programsFolder();
+        if (programs == null || path == null) return false;
+        String normalized = path.replace('/', '\\');
+        String prefix = null;
+        for (String language : new String[]{"en", "he"}) {
+            String candidate = (programs + "\\" + UiMessages.text("apps_folder", language)).replace('/', '\\') + "\\";
+            if (normalized.regionMatches(true, 0, candidate, 0, candidate.length())) { prefix = candidate; break; }
+        }
+        if (prefix == null) return false;
+        String file = normalized.substring(prefix.length());
+        return !file.contains("\\") && !file.contains(":") && file.endsWith(" [" + dynamicKey(pkg, id).substring(0, 32) + "].lnk");
+    }
+
+    private static boolean removeDynamicLink(String pkg, String id, String path) {
+        return !ownedDynamicLink(pkg, id, path) || Shell.removeFile(path);
+    }
+    private static boolean sameDynamicLink(String first, String second) {
+        return first == null ? second == null : second != null && first.replace('/', '\\').equalsIgnoreCase(second.replace('/', '\\'));
+    }
+
+    public static synchronized boolean syncDynamicShortcuts(String pkg, List<ShortcutInfo> shortcuts, String identity) {
+        if (identity == null || shortcuts == null || shortcuts.size() > 15) throw new IllegalArgumentException("Invalid shortcut snapshot");
+        Properties previous = dynamicShortcutsOf(pkg), next = new Properties();
+        next.setProperty("publisher", identity);
+        next.setProperty("package", pkg);
+        int encodedBytes = 0;
+        for (ShortcutInfo info : shortcuts) {
+            String key = dynamicKey(pkg, info.getId());
+            for (Intent intent : info.getIntents()) dynamicIntent(pkg, intent);
+            android.os.Parcel parcel = android.os.Parcel.obtain();
+            try {
+                info.writeToParcel(parcel, 0);
+                if (parcel.hasFileDescriptors()) throw new IllegalArgumentException("Shortcut has file descriptors");
+                byte[] bytes = parcel.marshall();
+                if (bytes.length > 262144) throw new IllegalArgumentException("Shortcut is too large");
+                encodedBytes += bytes.length;
+                if (encodedBytes > 1048576) throw new IllegalArgumentException("Shortcut snapshot is too large");
+                next.setProperty(key + ".id", info.getId());
+                next.setProperty(key + ".payload", java.util.Base64.getEncoder().encodeToString(bytes));
+            } finally { parcel.recycle(); }
+        }
+        java.util.Map<String,String> created = new java.util.LinkedHashMap<>();
+        try {
+            Properties app = shortcutOf(pkg);
+            String gesher = installDir(), script = gesher + "\\gesher-app.ps1";
+            boolean shellEnabled = !"0".equals(System.getenv(ENV_SHORTCUTS)) && Shell.exists(script);
+            if (shellEnabled) {
+                String folder = dynamicFolder();
+                if (folder == null || !Shell.makeDirectories(folder)) return false;
+                String system = System.getenv("SystemRoot"); if (system == null) system = "C:\\Windows";
+                String launch = gesher + "\\gesher-launch.exe";
+                boolean viaLauncher = Shell.exists(launch);
+                String target = viaLauncher ? launch : system + "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+                String label = app == null ? pkg : app.getProperty("label", pkg);
+                String icon = app == null ? "" : app.getProperty("icon", "");
+                for (ShortcutInfo info : shortcuts) if (info.isEnabled()) {
+                    String key = dynamicKey(pkg, info.getId());
+                    String link = folder + "\\" + dynamicLabel(label) + " - " + dynamicLabel(info.getShortLabel().toString()) + " [" + key.substring(0, 32) + "].lnk";
+                    String args = dynamicArguments(pkg, info.getId());
+                    if (!viaLauncher) args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + script + "\" " + args;
+                    String description = info.getLongLabel() == null ? info.getShortLabel().toString() : info.getLongLabel().toString();
+                    if (Shell.createShortcut(link, target, args, gesher, icon, description, appUserModelId(pkg)) != 0) throw new java.io.IOException("Shortcut creation failed");
+                    created.put(info.getId(), link); next.setProperty(key + ".link", link);
+                }
+            }
+            File file = dynamicFile(pkg);
+            if (!file.getParentFile().isDirectory() && !file.getParentFile().mkdirs()) throw new java.io.IOException("Shortcut state directory unavailable");
+            Device.write(file, next);
+        } catch (Exception failure) {
+            for (java.util.Map.Entry<String,String> entry : created.entrySet()) {
+                String key = dynamicKey(pkg, entry.getKey());
+                if (!sameDynamicLink(entry.getValue(), previous.getProperty(key + ".link"))) removeDynamicLink(pkg, entry.getKey(), entry.getValue());
+            }
+            return false;
+        }
+        // Keep failed cleanup records for retry; launch lookup still requires a payload.
+        for (String name : previous.stringPropertyNames()) if (name.endsWith(".link")) {
+            String prefix = name.substring(0, name.length() - 5), id = previous.getProperty(prefix + ".id");
+            String key = prefix.startsWith("retired.") ? prefix.substring(8) : prefix;
+            String link = previous.getProperty(name);
+            if (id != null && key.equals(dynamicKey(pkg, id)) && !sameDynamicLink(link, next.getProperty(key + ".link"))
+                    && !removeDynamicLink(pkg, id, link)) {
+                next.setProperty("retired." + key + ".id", id);
+                next.setProperty("retired." + key + ".link", link);
+            }
+        }
+        try { Device.write(dynamicFile(pkg), next); } catch (java.io.IOException ignored) { }
+        return true;
+    }
+
+    public static synchronized void removeAllDynamicShortcuts(String pkg) {
+        Properties values = dynamicShortcutsOf(pkg);
+        // Revoke launch lookup before shell cleanup: a busy .lnk must never
+        // preserve a callable capability after package removal.
+        Properties retired = new Properties();
+        for (String name : values.stringPropertyNames()) if (name.endsWith(".id") || name.endsWith(".link")) {
+            retired.setProperty(name, values.getProperty(name));
+        }
+        File file = dynamicFile(pkg);
+        if (file.exists()) {
+            try { Device.write(file, retired); }
+            catch (java.io.IOException failure) { throw new IllegalStateException("Cannot retire dynamic shortcut state", failure); }
+        }
+        boolean removed = true;
+        for (String name : values.stringPropertyNames()) if (name.endsWith(".link")) {
+            String prefix = name.substring(0, name.length() - 5);
+            String id = values.getProperty(prefix + ".id");
+            if (id != null) removed &= removeDynamicLink(pkg, id, values.getProperty(name));
+        }
+        if (!removed) { log("dynamic shortcut shell cleanup needs retry for " + pkg); return; }
+        if (file.exists() && !file.delete()) throw new IllegalStateException("Dynamic shortcut state cleanup failed");
+    }
+
 
     // --- URL protocols -------------------------------------------------------------------
 

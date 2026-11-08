@@ -66,9 +66,9 @@ class UnmanagedDevicePolicyService extends IDevicePolicyManager.Default {
     @Override public void setPermissionPolicy(ComponentName admin, String caller, int policy) {
         throw denied();
     }
-    @Override public int getPermissionPolicy(ComponentName admin) { throw denied(); }
+    @Override public int getPermissionPolicy(ComponentName admin) { return DevicePolicyManager.PERMISSION_POLICY_PROMPT; }
     @Override public int getPermissionGrantState(ComponentName admin, String caller, String pkg,
-            String permission) { throw denied(); }
+            String permission) { return DevicePolicyManager.PERMISSION_GRANT_STATE_DEFAULT; }
     @Override public void setPermissionGrantState(ComponentName admin, String caller, String pkg,
             String permission, int state, RemoteCallback result) {
         // The framework waits on this callback for 20 seconds. A denied caller must

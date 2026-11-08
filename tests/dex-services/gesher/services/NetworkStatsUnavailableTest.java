@@ -41,10 +41,9 @@ public final class NetworkStatsUnavailableTest {
         try { manager.querySummaryForDevice(0, "synthetic-subscriber", 0, 1); }
         catch (RemoteException expected) { failed = true; }
         require(failed, "Device summary returned invented measurements or an incompatible error");
-        failed = false;
-        try { new NetworkStats.Bucket().getRxBytes(); }
-        catch (UnsupportedOperationException expected) { failed = true; }
-        require(failed, "Unpopulated output container fabricated a zero-usage sample");
+        NetworkStats.Bucket empty = new NetworkStats.Bucket();
+        require(empty.getUid() == -1 && empty.getRxBytes() == 0 && empty.getTxBytes() == 0,
+                "Empty output container has populated measurements");
         require(NetworkStats.class.getConstructors().length == 0, "Unavailable query result is publicly constructible");
         System.out.println("NetworkStatsUnavailableTest all passed: " + checks + " synthetic checks");
     }

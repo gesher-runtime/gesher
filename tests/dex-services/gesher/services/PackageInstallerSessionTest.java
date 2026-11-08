@@ -150,6 +150,7 @@ public final class PackageInstallerSessionTest {
         caller.set("android"); allow.set(true);
         int id = create(service, "android", pkg);
         final IPackageInstallerSession naming = service.openSession(id);
+        require(naming.fetchPackageNames().isEmpty(), "Session treated an unverified package hint as parsed APK identity");
         for (String bad : new String[]{"NUL", "con.apk", "aux.dm", "a.", "../file", "a/b", "C:file"}) {
             rejected(() -> naming.openWrite(bad, 0, 1), IllegalArgumentException.class);
         }
@@ -158,6 +159,7 @@ public final class PackageInstallerSessionTest {
         rejected(() -> naming.openWrite("base.apk.idsig", 0, 1), UnsupportedOperationException.class);
         rejected(() -> naming.openWrite("base.dm", 0, 64L * 1024 * 1024 + 1), IllegalArgumentException.class);
         stage(service, id, apk, "0"); // Public API permits arbitrary names with no .apk extension.
+        require(naming.fetchPackageNames().equals(Collections.singletonList(pkg)), "Session did not parse the staged APK with an arbitrary filename");
         require(Arrays.asList(naming.getNames()).contains("0"), "Arbitrary APK filename disappeared");
         rejected(() -> naming.openWrite("0.digests", 0, 1), IllegalArgumentException.class);
         stageBytes(service, id, "Case", new byte[0]);

@@ -1,7 +1,4 @@
-/*
- * Copyright (C) 2026 The Gesher Authors
- * SPDX-License-Identifier: Apache-2.0
- */
+/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
 package com.gesher.server;
 
 import android.content.Intent;
@@ -10,94 +7,147 @@ import android.content.IntentSender;
 import android.content.pm.IShortcutService;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.ShortcutInfo;
-
+import com.gesher.app.shell.AppShell;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
-/**
- * Windows has no Android shortcut host, share-target index, or pinned-item UI.
- * Queries describe that absence. Dynamic shortcut publishing operations succeed
- * as no-ops rather than throwing, preserving compatibility with Android apps
- * and AndroidX ShortcutManagerCompat during activity lifecycle. Pin requests
- * return false, for which Android specifies that no result callback is sent.
- */
+/** Package-authenticated dynamic shortcuts, persisted with their publisher identity. */
 class DesktopShortcutService extends IShortcutService.Default {
+    private static final int MAX_SHORTCUTS = 15;
     private final PackageManagerService mPackages;
+    private final CallerIdentity mCallers;
 
-    DesktopShortcutService(PackageManagerService packages) { mPackages = packages; }
-
-    private void query(String packageName, int userId) {
-        if (userId != 0) throw new IllegalArgumentException("Unknown user " + userId);
-        Objects.requireNonNull(packageName, "packageName");
-        if (mPackages.getPackageInfo(packageName, 0, userId) == null) {
-            throw new IllegalArgumentException("Unknown package " + packageName);
-        }
+    DesktopShortcutService(PackageManagerService packages) { this(packages, new CallerIdentity(packages, null)); }
+    DesktopShortcutService(PackageManagerService packages, CallerIdentity callers) {
+        mPackages = packages; mCallers = callers;
+        packages.onPackageRemoval(this::retire);
     }
-
-    @Override public boolean isRequestPinItemSupported(int userId, int requestType) { return false; }
-    @Override public boolean requestPinShortcut(String pkg, ShortcutInfo info,
-            IntentSender result, int userId) {
-        query(pkg, userId); Objects.requireNonNull(info, "shortcut"); return false;
+    private synchronized void retire(String pkg) { AppShell.removeAllDynamicShortcuts(pkg); }
+    private ApkPackage query(String pkg, int userId) {
+        if (userId != 0) throw new IllegalArgumentException("Unknown shortcut user");
+        Objects.requireNonNull(pkg, "packageName");
+        mCallers.requirePackage(pkg);
+        ApkPackage installed = mPackages.get(pkg);
+        if (installed == null) throw new IllegalArgumentException("Unknown shortcut package");
+        if (mPackages.isRemovalPending(pkg)) throw new SecurityException("Shortcut publisher is being removed");
+        return installed;
+    }
+    private LinkedHashMap<String,ShortcutInfo> load(ApkPackage pkg) {
+        LinkedHashMap<String,ShortcutInfo> result = new LinkedHashMap<>();
+        for (ShortcutInfo info : AppShell.loadDynamicShortcuts(pkg.packageName, pkg.codeIdentity())) result.put(info.getId(), info);
+        return result;
+    }
+    private ShortcutInfo validated(String pkg, ShortcutInfo source) {
+        Objects.requireNonNull(source, "shortcut");
+        if (!pkg.equals(source.getPackage()) || source.getUserId() != 0) throw new SecurityException("Shortcut publisher mismatch");
+        if (source.getId() == null || source.getId().isEmpty() || source.getId().length() > 1024
+                || source.getShortLabel() == null || source.getShortLabel().length() == 0) throw new IllegalArgumentException("Shortcut requires an ID and label");
+        if (source.getActivity() != null && !pkg.equals(source.getActivity().getPackageName())) throw new SecurityException("Shortcut activity belongs to another package");
+        Intent[] intents = source.getIntents();
+        if (intents == null || intents.length == 0) throw new IllegalArgumentException("Shortcut requires an intent");
+        for (int i = 0; i < intents.length; i++) intents[i] = AppShell.dynamicIntent(pkg, intents[i]);
+        ShortcutInfo copy = source.clone(ShortcutInfo.CLONE_REMOVE_FOR_CREATOR);
+        copy.replaceFlags(ShortcutInfo.FLAG_DYNAMIC);
+        copy.setIntents(intents);
+        return copy;
+    }
+    private List<ShortcutInfo> validated(String pkg, ParceledListSlice values) {
+        Objects.requireNonNull(values, "shortcuts");
+        List<?> list = Objects.requireNonNull(values.getList(), "shortcut list");
+        if (list.size() > MAX_SHORTCUTS) throw new IllegalArgumentException("Too many dynamic shortcuts");
+        List<ShortcutInfo> result = new ArrayList<>();
+        for (Object value : list) {
+            if (!(value instanceof ShortcutInfo)) throw new IllegalArgumentException("Invalid shortcut entry");
+            result.add(validated(pkg, (ShortcutInfo)value));
+        }
+        return result;
+    }
+    private boolean publish(ApkPackage owner, Map<String,ShortcutInfo> snapshot) {
+        if (snapshot.size() > MAX_SHORTCUTS) throw new IllegalArgumentException("Too many dynamic shortcuts");
+        if (mPackages.get(owner.packageName) != owner || mPackages.isRemovalPending(owner.packageName)) throw new SecurityException("Shortcut publisher changed");
+        boolean stored = AppShell.syncDynamicShortcuts(owner.packageName, new ArrayList<>(snapshot.values()), owner.codeIdentity());
+        if (mPackages.get(owner.packageName) != owner || mPackages.isRemovalPending(owner.packageName)) {
+            AppShell.removeAllDynamicShortcuts(owner.packageName);
+            throw new SecurityException("Shortcut publisher changed while publishing");
+        }
+        return stored;
+    }
+    @Override public boolean isRequestPinItemSupported(int userId, int type) { return false; }
+    @Override public boolean requestPinShortcut(String pkg, ShortcutInfo info, IntentSender result, int userId) {
+        query(pkg,userId); Objects.requireNonNull(info,"shortcut"); return false;
     }
     @Override public Intent createShortcutResultIntent(String pkg, ShortcutInfo info, int userId) {
-        query(pkg, userId); Objects.requireNonNull(info, "shortcut"); return null;
+        query(pkg,userId); Objects.requireNonNull(info,"shortcut"); return null;
     }
-    @Override public ParceledListSlice getShortcuts(String pkg, int flags, int userId) {
-        query(pkg, userId); return ParceledListSlice.emptyList();
+    @Override public synchronized ParceledListSlice getShortcuts(String pkg, int flags, int userId) {
+        ApkPackage owner = query(pkg,userId);
+        return new ParceledListSlice<>((flags & 1) == 0 ? new ArrayList<ShortcutInfo>() : new ArrayList<>(load(owner).values()));
     }
     @Override public ParceledListSlice getShareTargets(String pkg, IntentFilter filter, int userId) {
-        query(pkg, userId); Objects.requireNonNull(filter, "filter");
-        return ParceledListSlice.emptyList();
+        query(pkg,userId); Objects.requireNonNull(filter,"filter"); return ParceledListSlice.emptyList();
     }
-    @Override public boolean hasShareTargets(String caller, String packageName, int userId) {
-        query(caller, userId); return false;
+    @Override public boolean hasShareTargets(String caller,String pkg,int userId) { query(caller,userId); return false; }
+    @Override public int getMaxShortcutCountPerActivity(String pkg,int userId) { query(pkg,userId); return MAX_SHORTCUTS; }
+    @Override public int getRemainingCallCount(String pkg,int userId) { query(pkg,userId); return Integer.MAX_VALUE; }
+    @Override public long getRateLimitResetTime(String pkg,int userId) { query(pkg,userId); return 0; }
+    @Override public int getIconMaxDimensions(String pkg,int userId) { query(pkg,userId); return 256; }
+    @Override public synchronized boolean setDynamicShortcuts(String pkg,ParceledListSlice values,int userId) {
+        ApkPackage owner=query(pkg,userId); LinkedHashMap<String,ShortcutInfo> next=new LinkedHashMap<>();
+        for (ShortcutInfo info:validated(pkg,values)) next.put(info.getId(),info);
+        return publish(owner,next);
     }
-    @Override public int getMaxShortcutCountPerActivity(String pkg, int userId) {
-        query(pkg, userId); return 0;
+    @Override public synchronized boolean addDynamicShortcuts(String pkg,ParceledListSlice values,int userId) {
+        ApkPackage owner=query(pkg,userId); List<ShortcutInfo> incoming=validated(pkg,values);
+        LinkedHashMap<String,ShortcutInfo> next=load(owner);
+        for (ShortcutInfo info:incoming) next.put(info.getId(),info);
+        return publish(owner,next);
     }
-    @Override public int getRemainingCallCount(String pkg, int userId) {
-        query(pkg, userId); return 0;
+    @Override public synchronized boolean updateShortcuts(String pkg,ParceledListSlice values,int userId) {
+        ApkPackage owner=query(pkg,userId); List<ShortcutInfo> incoming=validated(pkg,values);
+        LinkedHashMap<String,ShortcutInfo> next=load(owner);
+        for (ShortcutInfo info:incoming) if(next.containsKey(info.getId())) {
+            if(!next.get(info.getId()).isEnabled()) info.addFlags(ShortcutInfo.FLAG_DISABLED);
+            next.put(info.getId(),info);
+        }
+        return publish(owner,next);
     }
-    @Override public long getRateLimitResetTime(String pkg, int userId) {
-        query(pkg, userId); return 0;
+    @Override public synchronized void pushDynamicShortcut(String pkg,ShortcutInfo info,int userId) {
+        ApkPackage owner=query(pkg,userId); ShortcutInfo copy=validated(pkg,info);
+        LinkedHashMap<String,ShortcutInfo> next=load(owner); next.put(copy.getId(),copy);
+        if(next.size()>MAX_SHORTCUTS) {
+            String victim=null; int rank=Integer.MIN_VALUE;
+            for(ShortcutInfo candidate:next.values()) if(!candidate.getId().equals(copy.getId()) && candidate.getRank()>rank) { victim=candidate.getId();rank=candidate.getRank(); }
+            next.remove(victim);
+        }
+        if(!publish(owner,next)) throw new IllegalStateException("Dynamic shortcut publication failed");
     }
-    @Override public int getIconMaxDimensions(String pkg, int userId) {
-        query(pkg, userId); return 0;
+    @Override public synchronized void removeDynamicShortcuts(String pkg,List<String> ids,int userId) {
+        ApkPackage owner=query(pkg,userId); Objects.requireNonNull(ids,"shortcutIds");
+        LinkedHashMap<String,ShortcutInfo> next=load(owner);
+        for(String id:ids) next.remove(Objects.requireNonNull(id,"shortcutId"));
+        if(!publish(owner,next)) throw new IllegalStateException("Dynamic shortcut removal failed");
     }
-    @Override public boolean setDynamicShortcuts(String pkg, ParceledListSlice list, int userId) {
-        query(pkg, userId); Objects.requireNonNull(list, "shortcuts"); return true;
+    @Override public synchronized void removeAllDynamicShortcuts(String pkg,int userId) {
+        query(pkg,userId); AppShell.removeAllDynamicShortcuts(pkg);
     }
-    @Override public boolean addDynamicShortcuts(String pkg, ParceledListSlice list, int userId) {
-        query(pkg, userId); Objects.requireNonNull(list, "shortcuts"); return true;
+    @Override public void removeLongLivedShortcuts(String pkg,List<String> ids,int userId) { removeDynamicShortcuts(pkg,ids,userId); }
+    private synchronized void enabled(String pkg,List<String> ids,int userId,boolean value) {
+        ApkPackage owner=query(pkg,userId); Objects.requireNonNull(ids,"shortcutIds");
+        LinkedHashMap<String,ShortcutInfo> next=load(owner);
+        for(String id:ids) { ShortcutInfo info=next.get(Objects.requireNonNull(id,"shortcutId")); if(info!=null) {
+            if(value) info.clearFlags(ShortcutInfo.FLAG_DISABLED); else info.addFlags(ShortcutInfo.FLAG_DISABLED);
+        }}
+        if(!publish(owner,next)) throw new IllegalStateException("Dynamic shortcut state update failed");
     }
-    @Override public boolean updateShortcuts(String pkg, ParceledListSlice list, int userId) {
-        query(pkg, userId); Objects.requireNonNull(list, "shortcuts"); return true;
-    }
-    @Override public void pushDynamicShortcut(String pkg, ShortcutInfo info, int userId) {
-        query(pkg, userId); Objects.requireNonNull(info, "shortcut");
-    }
-    // No shortcuts have ever been published. Removal is idempotent and cannot
-    // mutate another package's data; none of these paths creates a shortcut.
-    @Override public void removeDynamicShortcuts(String pkg, List<String> ids, int userId) {
-        query(pkg, userId); Objects.requireNonNull(ids, "shortcutIds");
-    }
-    @Override public void removeAllDynamicShortcuts(String pkg, int userId) { query(pkg, userId); }
-    @Override public void removeLongLivedShortcuts(String pkg, List<String> ids, int userId) {
-        query(pkg, userId); Objects.requireNonNull(ids, "shortcutIds");
-    }
-    @Override public void disableShortcuts(String pkg, List<String> ids, CharSequence message,
-            int messageId, int userId) { query(pkg, userId); Objects.requireNonNull(ids, "shortcutIds"); }
-    @Override public void enableShortcuts(String pkg, List<String> ids, int userId) {
-        query(pkg, userId); Objects.requireNonNull(ids, "shortcutIds");
-    }
-    @Override public void reportShortcutUsed(String pkg, String id, int userId) {
-        query(pkg, userId); Objects.requireNonNull(id, "shortcutId");
-    }
-    private static SecurityException administrationDenied() {
-        return new SecurityException("Shortcut administration requires a trusted system caller");
-    }
+    @Override public void disableShortcuts(String pkg,List<String> ids,CharSequence message,int messageId,int userId) { enabled(pkg,ids,userId,false); }
+    @Override public void enableShortcuts(String pkg,List<String> ids,int userId) { enabled(pkg,ids,userId,true); }
+    @Override public void reportShortcutUsed(String pkg,String id,int userId) { query(pkg,userId);Objects.requireNonNull(id,"shortcutId"); }
+    private static SecurityException administrationDenied() { return new SecurityException("Shortcut administration requires host authority"); }
     @Override public void resetThrottling() { throw administrationDenied(); }
-    @Override public void onApplicationActive(String pkg, int userId) { throw administrationDenied(); }
+    @Override public void onApplicationActive(String pkg,int userId) { throw administrationDenied(); }
     @Override public byte[] getBackupPayload(int userId) { throw administrationDenied(); }
-    @Override public void applyRestore(byte[] payload, int userId) { throw administrationDenied(); }
+    @Override public void applyRestore(byte[] payload,int userId) { throw administrationDenied(); }
 }

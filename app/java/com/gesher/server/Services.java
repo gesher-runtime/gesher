@@ -252,7 +252,7 @@ public final class Services {
                 new DeviceServices.TrustService()).asBinder());
         services.put(Context.SHORTCUT_SERVICE, StandIn.of(
                 android.content.pm.IShortcutService.class,
-                new DeviceServices.ShortcutService(pm)).asBinder());
+                new DeviceServices.ShortcutService(pm, am.callers())).asBinder());
         services.put("sensitive_content_protection_service", StandIn.of(
                 android.view.ISensitiveContentProtectionManager.class,
                 new DeviceServices.SensitiveContentProtectionService()).asBinder());

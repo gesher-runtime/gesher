@@ -349,6 +349,10 @@ try {
         -RuntimeDir $Dir -OutputRoot (Join-Path $EvidenceDir 'named-process') -RequireBootImages
     if ($LASTEXITCODE -ne 0) { throw 'Actual named-process launcher regression failed.' }
     Passed 'named-process launcher follows requested generation while newer sibling remains alive'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-dynamic-shortcuts.ps1" `
+        -RuntimeDir $Dir -OutputRoot (Join-Path $EvidenceDir 'dynamic-shortcuts') -RequireBootImages
+    if ($LASTEXITCODE -ne 0) { throw 'Actual dynamic shortcut launcher regression failed.' }
+    Passed 'dynamic shortcut publication, opaque CLI arguments and publisher-bound launch'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-shell-icons.ps1" `
         -RuntimeDir $Dir -FixtureDir $ShellIconFixtures -ServicesDex $ServicesDex -OutputRoot (Join-Path $EvidenceDir 'shell-icons')
     if ($LASTEXITCODE -ne 0) { throw 'APK and split-bundle shell icon regression failed.' }
@@ -392,6 +396,8 @@ try {
     Guest 'NetworkStatsUnavailableTest' @() 'NetworkStatsUnavailableTest all passed:'
     Guest 'GrammaticalInflectionUnavailableTest' @() 'GrammaticalInflectionUnavailableTest all passed:'
     Guest 'WindowIdTest' @() 'WindowIdTest all passed:'
+    Guest 'DynamicShortcutTest' @((AndroidPath (Join-Path $Dir 'orderedbroadcast-source.apk')),
+        (AndroidPath (Join-Path $Dir 'orderedbroadcast-target.apk'))) 'DynamicShortcutTest all passed:' -Uid '1000'
     Guest 'RollbackUnsupportedTest' @((AndroidPath (Join-Path $SigningFixtures 'unsigned.apk'))) 'RollbackUnsupportedTest all passed:'
     Guest 'WindowModeInheritanceTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'WindowModeInheritanceTest all passed:'
     Guest 'ActivityWindowPromotionTest' @((AndroidPath $DevsvcApk)) 'ActivityWindowPromotionTest all passed:' -Uid '1000'

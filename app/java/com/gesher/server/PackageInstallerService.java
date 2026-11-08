@@ -751,7 +751,14 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         }
         @Override public List<String> fetchPackageNames() {
             checkOwner();
-            throw new UnsupportedOperationException("Package names are resolved at commit");
+            java.util.LinkedHashSet<String> packages = new java.util.LinkedHashSet<>();
+            File[] files = stage.listFiles();
+            if (files != null) for (File file : files) {
+                if (!file.isFile() || Files.isSymbolicLink(file.toPath())) continue;
+                try { packages.add(ApkPackage.parse(file.getPath()).packageName); }
+                catch (Exception incomplete) { /* A still-open staged APK has no resolved package yet. */ }
+            }
+            return new ArrayList<>(packages);
         }
     }
 }

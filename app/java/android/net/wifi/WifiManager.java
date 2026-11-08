@@ -57,22 +57,70 @@ public class WifiManager {
     public MulticastLock createMulticastLock(String tag) { return new MulticastLock(); }
 
     public class WifiLock {
+        private boolean mHeld;
+        private boolean mRefCounted = true;
+        private int mRefCount;
+
         private WifiLock() { }
-        public void setReferenceCounted(boolean value) { }
-        public boolean isHeld() { return false; }
-        public void acquire() { throw unsupportedLock(); }
-        public void release() { throw unsupportedLock(); }
+        public synchronized void setReferenceCounted(boolean value) {
+            if (mRefCounted != value) { mRefCounted = value; mRefCount = mHeld ? 1 : 0; }
+        }
+        public synchronized boolean isHeld() { return mHeld; }
+        public synchronized void acquire() {
+            if (mRefCounted) {
+                if (mRefCount == Integer.MAX_VALUE) throw new IllegalStateException("Wi-Fi lock count overflow");
+                mRefCount++;
+                mHeld = true;
+            } else {
+                mRefCount = 1;
+                mHeld = true;
+            }
+        }
+        public synchronized void release() {
+            if (mRefCounted) {
+                if (mRefCount == 0) throw new RuntimeException("Wi-Fi lock under-locked");
+                if (--mRefCount <= 0) {
+                    mRefCount = 0;
+                    mHeld = false;
+                }
+            } else {
+                mRefCount = 0;
+                mHeld = false;
+            }
+        }
     }
 
     public class MulticastLock {
-        private MulticastLock() { }
-        public void setReferenceCounted(boolean value) { }
-        public boolean isHeld() { return false; }
-        public void acquire() { throw unsupportedLock(); }
-        public void release() { throw unsupportedLock(); }
-    }
+        private boolean mHeld;
+        private boolean mRefCounted = true;
+        private int mRefCount;
 
-    private static UnsupportedOperationException unsupportedLock() {
-        return new UnsupportedOperationException("Android Wi-Fi locks are unavailable on Gesher");
+        private MulticastLock() { }
+        public synchronized void setReferenceCounted(boolean value) {
+            if (mRefCounted != value) { mRefCounted = value; mRefCount = mHeld ? 1 : 0; }
+        }
+        public synchronized boolean isHeld() { return mHeld; }
+        public synchronized void acquire() {
+            if (mRefCounted) {
+                if (mRefCount == Integer.MAX_VALUE) throw new IllegalStateException("Multicast lock count overflow");
+                mRefCount++;
+                mHeld = true;
+            } else {
+                mRefCount = 1;
+                mHeld = true;
+            }
+        }
+        public synchronized void release() {
+            if (mRefCounted) {
+                if (mRefCount == 0) throw new RuntimeException("Multicast lock under-locked");
+                if (--mRefCount <= 0) {
+                    mRefCount = 0;
+                    mHeld = false;
+                }
+            } else {
+                mRefCount = 0;
+                mHeld = false;
+            }
+        }
     }
 }

@@ -146,8 +146,10 @@ public final class SoftwareServiceContractTest {
         require(shortcuts.addDynamicShortcuts(packageName, published, 0), "nonempty shortcut add threw or failed");
         require(shortcuts.updateShortcuts(packageName, published, 0), "nonempty shortcut update threw or failed");
         shortcuts.pushDynamicShortcut(packageName, shortcut, 0);
-        require(shortcuts.getShortcuts(packageName, 15, 0).getList().isEmpty()
-                && !shortcuts.isRequestPinItemSupported(0, 1), "no-op publishing invented desktop/pin state");
+        require(shortcuts.getShortcuts(packageName, 15, 0).getList().size() == 1
+                && !shortcuts.isRequestPinItemSupported(0, 1), "dynamic shortcut state or pin capability is wrong");
+        shortcuts.removeAllDynamicShortcuts(packageName, 0);
+        require(shortcuts.getShortcuts(packageName, 15, 0).getList().isEmpty(), "dynamic shortcuts were not removed");
         Action[] malformed = {
                 () -> shortcuts.setDynamicShortcuts(packageName, null, 0),
                 () -> shortcuts.addDynamicShortcuts(packageName, null, 0),
