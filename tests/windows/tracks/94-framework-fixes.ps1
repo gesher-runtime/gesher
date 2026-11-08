@@ -96,6 +96,25 @@ Check 'services: job notification validation, shared ownership and real completi
   $jobNotificationsOut
 } @('JobNotificationLifecycleTest all passed:')
 
+# Validate focus ownership and callbacks through the production service, generated
+# Binder transactions, and the real AudioManager listener/Handler path.
+$audioFocusOut = FixesRun ($dvmFixes + 'gesher.services.AudioFocusLifecycleTest') 90
+$audioFocusCode = $LASTEXITCODE
+Check 'services: audio focus ownership, loss escalation, token death and public manager callbacks' {
+  $global:LASTEXITCODE = $audioFocusCode
+  $audioFocusOut
+} @('AudioFocusLifecycleTest all passed:')
+
+# The wrapper creates the writable framework cache region. The fixture uses
+# generated AM Binder parcels and production URI/provider authorization state.
+$uriGrantsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'UriGrantContractTest') 90
+$uriGrantsCode = $LASTEXITCODE
+Check 'services: URI delegation, provider patterns, exact identities and scoped revocation' {
+  $global:LASTEXITCODE = $uriGrantsCode
+  $uriGrantsOut
+} @('UriGrantContractTest all passed: 138 checks; binder=true')
+
 # Exercise the MediaStore implementation from the production boot jar.
 $mediaStoreOut = FixesRun ($dvmFixes + 'gesher.services.MediaStoreContractTest') 90
 $mediaStoreCode = $LASTEXITCODE

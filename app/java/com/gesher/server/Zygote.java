@@ -150,11 +150,21 @@ public final class Zygote {
     }
 
     /**
-     * A path for Win32: a drive-less path (ADR 0010: paths on the current drive) gets the
-     * current drive, '/' becomes '\'.
+     * A path for Win32: {@code /mnt/<drive>} selects that drive (ADR 0045), while a
+     * drive-less path gets the runtime's drive (ADR 0010). '/' becomes '\'.
      */
     public static String windowsPath(String path) {
-        String p = new File(path).getAbsolutePath().replace('/', '\\');
+        String p = new File(path).getAbsolutePath();
+        // Match gesher-base's DrivePath before adding the runtime drive. Otherwise
+        // a Java file on /mnt/c/... becomes D:\mnt\c\... when the VM is on D:.
+        if (p.startsWith("/mnt/") && p.length() >= 6
+                && (p.charAt(5) >= 'A' && p.charAt(5) <= 'Z'
+                        || p.charAt(5) >= 'a' && p.charAt(5) <= 'z')
+                && (p.length() == 6 || p.charAt(6) == '/')) {
+            return Character.toUpperCase(p.charAt(5)) + ":"
+                    + (p.length() == 6 ? "\\" : p.substring(6).replace('/', '\\'));
+        }
+        p = p.replace('/', '\\');
         if (p.startsWith("\\") && !p.startsWith("\\\\")) {
             String exe = exePath();
             if (exe != null && exe.length() > 2 && exe.charAt(1) == ':') {

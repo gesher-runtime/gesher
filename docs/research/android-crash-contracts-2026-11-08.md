@@ -178,6 +178,31 @@ identity and digest predicate. **15 transport/acceptance tests** and the existin
 [CI transport report](github-read-transport-followup-2026-11-08.md). New-revision
 runtime execution is still required and cannot be inferred from this repair.
 
+## Final lifecycle and Windows integration follow-up
+
+Inspection continued from published source
+`6c0e1976456e6214763c7bddf58229eb3d4f3f66` while its Windows tests ran.
+
+| Area | Confirmed failure | Implemented behavior and evidence |
+| --- | --- | --- |
+| Audio focus | A rejected new death registration could destroy the previous focus owner. Reacquisition retained obsolete callback/lifetime state, late death notifications could remove a replacement, and duck-to-transient escalation and regain values were wrong. | Register before mutation; retain or replace complete records according to pinned gain/flag rules; retire exact generations and shared dead tokens; apply real loss/restore transitions; deliver ordered callbacks outside the lock. **206 production/framework host assertions** pass, and the old source fails on lost ownership after a rejected request. [Audio focus report](audio-focus-followup-2026-11-08.md). |
+| Explicit URI grants | Direct provider/path permission could not be delegated; exact URI identity discarded query/fragment; parsed grant patterns were lost; unrelated grant identities could combine modes; recipients could not relinquish their own grants. | Use actual provider and permission state, preserve exact URI identity, enforce parsed grant patterns and per-identity modes, merge only identical grants, revoke the authorized recipients/modes, and fence package generations. **138 host assertions** pass, with six behavioral negative controls. Constructed AOSP package models are not an APK-parser or provider-file-I/O test. [URI grant report](uri-grants-followup-2026-11-08.md). |
+| Cross-drive Windows paths | Both main Windows jobs failed real Unicode ShellLink creation: a Java directory on C: was converted to a different path on D:, the runtime's drive. | Match the native `/mnt/<drive>` mapping before separator conversion and preserve ordinary-path boundaries. **23 production Java assertions** pass; the old source reproduces the exact wrong-drive destination. The mandatory Windows shortcut test retains real creation, existence and deletion checks. [Path report](zygote-path-followup-2026-11-08.md). |
+
+These bring the follow-up Java host total to **851 assertions**
+(`484 + 206 + 138 + 23`). This is a count of executed assertions, not an API
+coverage percentage or proof of arbitrary-APK compatibility. The Windows
+fixtures additionally exercise the actual generated audio/AM Binder parcels
+and public audio manager; local host probes do not establish those paths.
+
+Run [42446512495](https://github.com/gesher-runtime/gesher/actions/runs/42446512495)
+passed the artifact transport/identity steps that previously failed, the full
+framework/application/native builds, packaging and the dedicated Binder/web
+regressions. Its two main Windows jobs then stopped at the real shortcut
+assertion above, before the new framework-contract track. That failure is not
+reported as a transient network error or a completed service-test pass. The
+final revision requires its own Windows run after the path repair.
+
 ## Material compatibility work still open
 
 These current-source limits are separate from the repaired defects:
@@ -206,6 +231,11 @@ These current-source limits are separate from the repaired defects:
   package visibility remain outside the implemented owner-user model. The new
   activity-options implementation selects a real candidate for ambiguous
   implicit specifics rather than claiming an implemented system chooser.
+- **Activity-scoped URI capabilities.** The explicit grant implementation does
+  not create automatic Intent/ClipData grants, persistable permissions, or
+  per-delivery `ComponentCaller` permission records. Activity launch identity
+  and inherited caller-permission defaults still require that lifecycle work;
+  an ownerless grant record cannot substitute for it.
 - **Remaining notification/job policy.** Old retained notification records from
   store versions 1 and 2 have no channel ID, so selective channel deletion cannot
   identify them after restart. Distinct user-stop/background-restriction job
