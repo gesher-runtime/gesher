@@ -950,11 +950,12 @@ int BIONIC_SYSV DlIteratePhdr(int (BIONIC_SYSV* cb)(BionicPhdrInfo*, size_t, voi
 int64_t BIONIC_SYSV Syscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
                             int64_t /*a5*/, int64_t /*a6*/) {
   constexpr int64_t kSysGettid = 186, kSysFutex = 202;
-  if (nr == kSysGettid) return GetCurrentThreadId();
-  if (nr == 319) return memfd_create(reinterpret_cast<const char*>(a1), static_cast<unsigned>(a2));
+  if (nr == kSysGettid || nr == 178 /* ARM64 gettid */) return GetCurrentThreadId();
+  if (nr == 319 /* x86_64 memfd_create */ || nr == 279 /* ARM64 memfd_create */)
+    return memfd_create(reinterpret_cast<const char*>(a1), static_cast<unsigned>(a2));
   int64_t timerfd_result;
   if (DispatchTimerfdSyscall(nr, a1, a2, a3, a4, &timerfd_result)) return timerfd_result;
-  if (nr != kSysFutex) {
+  if (nr != kSysFutex && nr != 98 /* ARM64 futex */) {
     errno = kENOSYS;
     return -1;
   }
@@ -970,8 +971,12 @@ int64_t BIONIC_SYSV Syscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int6
     DWORD ms = INFINITE;
     if (timeout != nullptr) {
       if (op == kWait) {  // relative
-        int64_t t = timeout->tv_sec * 1000 + (timeout->tv_nsec + 999999) / 1000000;
-        ms = t < 0 ? 0 : t > 0x7ffffffe ? 0x7ffffffe : static_cast<DWORD>(t);
+        if (timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000) {
+          errno = kEINVAL;
+          return -1;
+        }
+        __int128 t = static_cast<__int128>(timeout->tv_sec) * 1000 + (timeout->tv_nsec + 999999) / 1000000;
+        ms = t < 0 ? 0 : (t > 0x7ffffffe ? 0x7ffffffe : static_cast<DWORD>(t));
       } else {  // absolute
         ms = MillisUntil(timeout, !realtime);
       }

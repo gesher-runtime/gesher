@@ -93,7 +93,7 @@ final class NotificationStore {
         s.tag = tag;
         s.id = id;
         s.flags = n.flags;
-        s.channelId = n.getChannelId();
+        s.channelId = n.getChannelId() != null ? n.getChannelId() : "miscellaneous";
         s.content = intended(am, n.contentIntent);
         int actions = n.actions != null ? n.actions.length : 0;
         s.actions = new Intended[actions];
@@ -213,9 +213,12 @@ final class NotificationStore {
         if (files == null) return removed;
         for (File f : files) {
             Stored stored = load(pkg, null, f);
-            if (stored != null && stored.channelId != null && channelIds.contains(stored.channelId)) {
-                f.delete();
-                removed.add(stored);
+            if (stored != null) {
+                String ch = stored.channelId != null ? stored.channelId : "miscellaneous";
+                if (channelIds.contains(ch)) {
+                    f.delete();
+                    removed.add(stored);
+                }
             }
         }
         return removed;

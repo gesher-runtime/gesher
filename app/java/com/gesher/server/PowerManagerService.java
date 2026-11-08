@@ -176,7 +176,7 @@ final class PowerManagerService extends IPowerManager.Default implements Windows
         // The pinned Notifier's two-attributed-source path updates accounting
         // without listener transitions. Attribution itself is not power state.
         if (oldSource != null && source != null && monitored(oldFlags) && monitored(flags)) return;
-        if (sameCallback(oldCallback, callback)) notifyCallback(oldCallback, false);
+        if (oldCallback != null && !sameCallback(oldCallback, callback)) notifyCallback(oldCallback, false);
         notifyCallback(callback, true);
     }
 

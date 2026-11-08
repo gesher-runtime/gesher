@@ -216,14 +216,17 @@ public final class ActivityClientController extends IActivityClientController.De
 
     @Override
     public String getLaunchedFromPackage(IBinder token) {
-        ActivityCallerState.Snapshot caller = mAtm.visibleCaller(token, null, true);
-        return caller == null ? null : caller.packageName;
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        if (r == null || !mAtm.requireActivityOwner(r)) return null;
+        return r.launchedFromPackage;
     }
 
     @Override
     public int getLaunchedFromUid(IBinder token) {
-        ActivityCallerState.Snapshot caller = mAtm.visibleCaller(token, null, true);
-        return caller == null ? android.os.Process.INVALID_UID : caller.uid;
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        if (r == null || !mAtm.requireActivityOwner(r)) return android.os.Process.INVALID_UID;
+        ActivityCallerState.Snapshot caller = mAtm.callerSnapshot(token, null, true);
+        return caller != null ? caller.uid : android.os.Process.INVALID_UID;
     }
 
     @Override

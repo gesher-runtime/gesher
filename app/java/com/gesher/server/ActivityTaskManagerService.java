@@ -2653,7 +2653,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
     }
 
-    private ActivityCallerState.Snapshot callerSnapshot(IBinder activityToken,
+    ActivityCallerState.Snapshot callerSnapshot(IBinder activityToken,
             IBinder callerToken, boolean initial) {
         synchronized (this) {
             ActivityRecord record = forToken(activityToken);

@@ -84,7 +84,7 @@ final class ActivityCallerState {
         }
     }
 
-    private final Map<IBinder, Snapshot> callers = new WeakHashMap<>();
+    private final Map<IBinder, Snapshot> callers = new HashMap<>();
 
     synchronized void add(IBinder token, Snapshot snapshot) {
         callers.put(Objects.requireNonNull(token), Objects.requireNonNull(snapshot));

@@ -160,6 +160,7 @@ BionicDirent* BIONIC_SYSV Readdir(ShimDir* d) {
   return Fill(d, &d->entry) ? &d->entry : nullptr;
 }
 int BIONIC_SYSV ReaddirR(ShimDir* d, BionicDirent* entry, BionicDirent** result) {
+  if (d == nullptr || entry == nullptr || result == nullptr) return kEBADF;
   std::lock_guard<std::mutex> lock(d->mutex);
   int saved = errno;
   errno = 0;
@@ -177,6 +178,7 @@ int BIONIC_SYSV Closedir(ShimDir* d) {
   return 0;
 }
 void BIONIC_SYSV Rewinddir(ShimDir* d) {
+  if (d == nullptr) return;
   std::lock_guard<std::mutex> lock(d->mutex);
   rewinddir(d->host);
   d->position = 0;
@@ -197,6 +199,7 @@ void BIONIC_SYSV Seekdir(ShimDir* d, int64_t location) {
   while (d->position < location && Fill(d, &entry)) {}
 }
 int BIONIC_SYSV Dirfd(ShimDir* d) {
+  if (d == nullptr) return errno = kEBADF, -1;
   std::lock_guard<std::mutex> lock(d->mutex);
   if (d->fd < 0) d->fd = open(d->path.c_str(), O_RDONLY | kODirectory | O_CLOEXEC);
   return d->fd;

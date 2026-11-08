@@ -610,7 +610,7 @@ public final class AudioService extends IAudioService.Default {
         if (mFocusStack.isEmpty()) return;
         FocusRequester next = mFocusStack.get(0);
         next.lossReceived = AudioManager.AUDIOFOCUS_NONE;
-        dispatchLocked(next, AudioManager.AUDIOFOCUS_GAIN);
+        dispatchLocked(next, next.gain);
         Log.i(TAG, "audio focus back to " + next.packageName + " (" + next.clientId + ")");
     }
 

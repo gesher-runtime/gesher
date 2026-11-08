@@ -180,7 +180,7 @@ std::unique_ptr<VideoFrame> DecodeRetrieverFrame(TrackReader* reader, VideoDecod
       : static_cast<SeekMode>(std::clamp(option, 0, 2));
   Sample sample;
   if (reader->Read(&sample, std::max<int64_t>(time_us, 0), mode) != 0) return nullptr;
-  const int64_t target_time = closest ? sample.target_time_us : -1;
+  const int64_t target_time = closest ? (sample.target_time_us >= 0 ? sample.target_time_us : time_us) : -1;
   auto select = [target_time](std::vector<VideoFrame>& frames) -> std::unique_ptr<VideoFrame> {
     for (VideoFrame& frame : frames) {
       if (target_time < 0 || frame.time_us >= target_time) {
@@ -198,7 +198,9 @@ std::unique_ptr<VideoFrame> DecodeRetrieverFrame(TrackReader* reader, VideoDecod
     if (status < 0) return nullptr;
     if (status > 0) {
       decoder->Drain(&frames);
-      return select(frames);
+      if (auto chosen = select(frames)) return chosen;
+      if (closest && !frames.empty()) return std::make_unique<VideoFrame>(std::move(frames.back()));
+      return nullptr;
     }
   }
   return nullptr;
