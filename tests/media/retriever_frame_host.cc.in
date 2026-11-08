@@ -255,8 +255,8 @@ void Boundaries() {
     Track track({{1000000, -1, false, true, true, 3}, {1500000, -1, false, true, true, 4}});
     Decoder decoder(0);
     auto frame = Retrieve(track, decoder, 1250000, 3);
-    Check(frame && frame->time_us == 1000000,
-          "missing target metadata matches FrameDecoder first-output fallback");
+    Check(frame && frame->time_us == 1500000,
+          "missing target metadata falls back to requested timestamp");
   }
   {
     Track track({{10, 30, true, true, true, 1}, {20, -1, false, true, false, 2}});

@@ -34,9 +34,9 @@ The reference is the repository's pinned `android-16.0.0_r4` framework:
 
 1. [VideoFrameDecoder in FrameDecoder.cpp](https://android.googlesource.com/platform/frameworks/av/+/android-16.0.0_r4/media/libstagefright/FrameDecoder.cpp)
    passes the requested seek mode to the extractor. For `SEEK_CLOSEST`, it retains
-   the first input sample's target timestamp, then accepts the first decoded
-   presentation timestamp at or beyond that target. An absent target accepts the
-   first output. This output rule applies when delayed frames emerge at EOS too.
+   the first input sample's target timestamp (falling back to the requested timestamp
+   when absent), then accepts the first decoded presentation timestamp at or beyond
+   that target. This output rule applies when delayed frames emerge at EOS too.
 2. [MPEG4Extractor.cpp](https://android.googlesource.com/platform/frameworks/av/+/android-16.0.0_r4/media/module/extractors/mp4/MPEG4Extractor.cpp)
    identifies the closest presentation sample, starts decoding at an earlier sync
    sample, and supplies the desired presentation time separately. The timestamp
