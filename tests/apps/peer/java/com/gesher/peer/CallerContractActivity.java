@@ -25,6 +25,7 @@ public final class CallerContractActivity extends Activity {
     private static PendingIntent creatorShared, senderShared;
     private static int checks;
     private int phase;
+    private boolean recreated;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private static void check(boolean okay, String reason) {
@@ -69,6 +70,7 @@ public final class CallerContractActivity extends Activity {
             check(initial.equals(getInitialCaller()), "Relaunch replaced initial caller token");
             historical(initial, READ, PackageManager.PERMISSION_DENIED, "Relaunch upgraded historical denial");
             historical(ordinary, READ, PackageManager.PERMISSION_GRANTED, "Relaunch lost retained delivery token");
+            recreated = true;
         }
     }
     @Override protected void onSaveInstanceState(Bundle state) {
@@ -80,7 +82,10 @@ public final class CallerContractActivity extends Activity {
         if (phase == 1) {
             phase = 11; // Do not start another relay when returning to this activity.
             startActivity(new Intent().setClassName(SOURCE, SOURCE + ".CallerRelayActivity"));
-        } else if (phase == 2) {
+        } else if (phase == 2 && recreated) {
+            // NewIntentItem may resume the old instance before its posted
+            // recreate executes. Advance only after the new onCreate verified
+            // saved phase 2 and both retained caller tokens.
             phase = 3;
             // CLEAR_TOP finishes this separate holder Activity before the
             // accepted callback reaches us. Its retirement cannot cancel it.
