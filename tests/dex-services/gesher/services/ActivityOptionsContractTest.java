@@ -13,6 +13,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.ResolveInfo;
 import android.content.res.AssetManager;
+import android.hardware.display.IDisplayManager;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.IBinder;
@@ -21,7 +22,9 @@ import android.os.Looper;
 import android.os.Parcel;
 import android.os.PatternMatcher;
 import android.os.RemoteException;
+import android.os.ServiceManager;
 
+import com.android.internal.os.ApplicationSharedMemory;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.android.internal.pm.pkg.component.ParsedActivityImpl;
 import com.android.internal.pm.pkg.component.ParsedIntentInfoImpl;
@@ -29,6 +32,7 @@ import com.gesher.server.ApkPackage;
 import com.gesher.server.BrowserPackageSupport;
 import com.gesher.server.PackageManagerService;
 import com.gesher.server.SharedLibraryGraph;
+import com.gesher.server.Services;
 
 import java.io.File;
 import java.lang.reflect.Constructor;
@@ -365,12 +369,23 @@ public final class ActivityOptionsContractTest {
             @Override protected boolean onTransact(int code, Parcel request, Parcel reply, int flags)
                     throws RemoteException { return target.transact(code, request, reply, flags); }
         });
+        // Use the same production display Binder that supports a real ContextImpl
+        // in an application. The fixture exercises local AIDL Parcels, so publish
+        // that dependency in the framework cache before any ServiceManager lookup.
+        Object display = standInClass.getMethod("of", Class.class, IInterface.class)
+                .invoke(null, IDisplayManager.class, new Services.DisplayManager());
+        ServiceManager.initServiceCache(Map.of("package", wire.asBinder(),
+                Context.DISPLAY_SERVICE,
+                (IBinder) standInClass.getMethod("asBinder").invoke(display)));
         Field field = ActivityThread.class.getDeclaredField("sPackageManager");
         field.setAccessible(true); field.set(null, wire);
         Constructor<ActivityThread> constructor = ActivityThread.class.getDeclaredConstructor();
         constructor.setAccessible(true);
         Context context = constructor.newInstance().getSystemContext();
         PackageManager client = context.getPackageManager();
+        check(context.getDisplay() != null
+                && "android.app.ApplicationPackageManager".equals(client.getClass().getName()),
+                "Fixture did not construct the real context, display and public package manager");
         String pkg = "com.gesher.components";
         Intent launcher = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(pkg);
         Intent secondary = explicit(pkg, pkg + ".SecondActivity");
@@ -397,6 +412,9 @@ public final class ActivityOptionsContractTest {
     public static void main(String[] args) throws Exception {
         check(args.length == 1, "Pass the actual components.apk fixture");
         System.loadLibrary("android_runtime");
+        ApplicationSharedMemory.setInstance(ApplicationSharedMemory.create());
+        check(ApplicationSharedMemory.getInstance().isMutable(),
+                "Activity-options fixture did not acquire writable native cache memory");
         AssetManager.createSystemAssetsInZygoteLocked(false,
                 System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
         if (Looper.myLooper() == null) Looper.prepareMainLooper();

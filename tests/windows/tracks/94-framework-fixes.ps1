@@ -3,26 +3,11 @@
 # Dot-sourced by run-tests.ps1, using Check, NoDrive, $Dir, $root and $failed
 # from there.
 
-# Runs dalvikvm with a time limit, killing it (and what it started) on time-out.
+# Use track50's shared bounded process and redirected-reader cleanup. Waiting
+# on Task.Result after an expired reader wait can otherwise hang this track
+# when a descendant retains a pipe, even though the VM itself has exited.
 function FixesRun([string[]] $Arguments, [int] $Seconds) {
-  $psi = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
-  foreach ($a in $Arguments) { $psi.ArgumentList.Add($a) }
-  $psi.UseShellExecute = $false
-  $psi.RedirectStandardOutput = $true
-  $psi.RedirectStandardError = $true
-  $p = [Diagnostics.Process]::Start($psi)
-  $stdout = $p.StandardOutput.ReadToEndAsync()
-  $stderr = $p.StandardError.ReadToEndAsync()
-  $timedOut = -not $p.WaitForExit($Seconds * 1000)
-  if ($timedOut) {
-    $p.Kill($true)
-    $p.WaitForExit()
-  }
-  $null = $stdout.Wait(10000), $stderr.Wait(10000)
-  $out = $stdout.Result + $stderr.Result
-  if ($timedOut) { $out += "`n(timed out after $Seconds s)" }
-  $global:LASTEXITCODE = if ($timedOut) { -1 } else { $p.ExitCode }
-  return $out
+  RunTimed "$Dir/dalvikvm.exe" $Arguments $Seconds
 }
 
 Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework') -Force
@@ -126,6 +111,13 @@ Check 'services: URI delegation, provider patterns, exact identities and scoped 
   $global:LASTEXITCODE = $uriGrantsCode
   $uriGrantsOut
 } @('UriGrantContractTest all passed: 138 checks; binder=true')
+
+# Caller identity and URI snapshots must survive actual ActivityThread delivery,
+# relaunch and results, including a PendingIntent holder cleared by its own send.
+. "$PSScriptRoot/../component-caller-contracts.ps1"
+Check 'services: ComponentCaller identity, URI access, callbacks, relaunch and delegated delivery' {
+  Test-ComponentCallerContracts $Dir $dvmFixes $root
+} @('ComponentCallerBootstrapTest all passed: real Binder and cross-app callbacks; owned device stopped')
 
 # Exercise the MediaStore implementation from the production boot jar.
 $mediaStoreOut = FixesRun ($dvmFixes + 'gesher.services.MediaStoreContractTest') 90

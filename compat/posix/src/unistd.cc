@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <windows.h>
+#include <winioctl.h>
 #include <winternl.h>
 #include <gesher/font_environment.h>
 
@@ -343,11 +344,28 @@ static int PositionedMode(HANDLE file, DWORD* flags) {
   return 0;
 }
 
+static int PositionedNullDevice(HANDLE file, bool* is_null) {
+  using Query = LONG(WINAPI*)(HANDLE, PIO_STATUS_BLOCK, void*, ULONG, FS_INFORMATION_CLASS);
+  using Error = ULONG(WINAPI*)(LONG);
+  HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  if (!ntdll) return EOPNOTSUPP;
+  auto query = reinterpret_cast<Query>(reinterpret_cast<void*>(GetProcAddress(ntdll, "NtQueryVolumeInformationFile")));
+  auto error = reinterpret_cast<Error>(reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlNtStatusToDosError")));
+  if (!query || !error) return EOPNOTSUPP;
+  IO_STATUS_BLOCK status{};
+  FILE_FS_DEVICE_INFORMATION device{};
+  LONG result = query(file, &status, &device, sizeof(device), FileFsDeviceInformation);
+  if (result < 0) return gesher::ErrnoFromWin32(error(result));
+  *is_null = device.DeviceType == FILE_DEVICE_NULL;
+  return 0;
+}
+
 static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool writing) {
   if (offset < 0) return errno = EINVAL, -1;
   PositionedHandle anchor, positioned, event;
   DWORD type, access;
-  const DWORD want = count > 0x7fffffff ? 0x7fffffff : static_cast<DWORD>(count);
+  // Linux's MAX_RW_COUNT for the 4 KiB pages exposed by this Windows backend.
+  const DWORD want = count > 0x7ffff000 ? 0x7ffff000 : static_cast<DWORD>(count);
   {
     // Capture the exact object before close/dup2 can recycle its fd or HANDLE.
     // No descriptor lock is held during the filesystem open or pending I/O.
@@ -370,8 +388,27 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool 
     // ReOpenFile can request more access than the original. Never use that to
     // turn O_RDONLY/O_WRONLY/O_PATH descriptors into writable/readable ones.
     if ((granted & access) == 0) return errno = EBADF, -1;
-    if (count != 0 && buf == nullptr) return errno = EFAULT, -1;
-    if (!writing && gesher_is_device_fd(fd)) return read(fd, buf, want);
+    if (count != 0 && buf == nullptr) {
+      // Linux access_ok checks the user address range before dispatch, even
+      // when a backend will not actually dereference the buffer.
+      SYSTEM_INFO system{};
+      GetSystemInfo(&system);
+      if (count - 1 > reinterpret_cast<uintptr_t>(system.lpMaximumApplicationAddress))
+        return errno = EFAULT, -1;
+    }
+    gesher::Device device;
+    if (gesher::DeviceFromFd(fd, &device)) {
+      if (!writing) {
+        // Zero/random reads really fill the caller's memory. Unlike Windows
+        // ReadFile, the virtual device backend does not probe bad pointers.
+        if (count != 0 && buf == nullptr) return errno = EFAULT, -1;
+        return read(fd, buf, want);
+      }
+      // Random writes consume entropy input on Linux, whereas zero writes
+      // discard it. The two logical devices share the same native NUL handle.
+      if (device == gesher::Device::kRandom && count != 0 && buf == nullptr)
+        return errno = EFAULT, -1;
+    }
     if (!DuplicateHandle(GetCurrentProcess(), file, GetCurrentProcess(), &anchor.value,
                          0, FALSE, DUPLICATE_SAME_ACCESS)) return gesher::FailWithLastError();
   }
@@ -381,12 +418,33 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool 
     if (!GetFileInformationByHandle(file, &information)) return gesher::FailWithLastError();
     if (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return errno = EISDIR, -1;
     if (want == 0) return 0;
+    if (buf == nullptr) {
+      // An EOF read consumes no destination memory. Observe the real pinned
+      // file's length, without seeking or resolving its pathname.
+      if (!writing) {
+        LARGE_INTEGER size{};
+        if (!GetFileSizeEx(file, &size)) return gesher::FailWithLastError();
+        if (offset >= size.QuadPart) return 0;
+      }
+      return errno = EFAULT, -1;
+    }
     DWORD flags;
     int error = PositionedMode(file, &flags);
     if (error) return errno = error, -1;
     positioned.value = ReOpenFile(file, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, flags);
     if (positioned.value == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
     file = positioned.value;
+  }
+  if (count != 0 && buf == nullptr) {
+    // Only a proven NUL device may discard an unused buffer. A console,
+    // socket, or other character driver is never classified by type alone.
+    if (type == FILE_TYPE_CHAR) {
+      bool is_null = false;
+      int error = PositionedNullDevice(file, &is_null);
+      if (error) return errno = error, -1;
+      if (is_null) return writing ? static_cast<ssize_t>(want) : 0;
+    }
+    return errno = EFAULT, -1;
   }
   event.value = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (event.value == nullptr) return gesher::FailWithLastError();

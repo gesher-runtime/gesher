@@ -69,7 +69,7 @@ def main() -> int:
             env["ASAN_OPTIONS"] = "allocator_may_return_null=1:" + env.get("ASAN_OPTIONS", "")
             env["UBSAN_OPTIONS"] = "halt_on_error=1:" + env.get("UBSAN_OPTIONS", "")
         failed = []
-        for case in ("calloc", "overflow", "realloc", "reallocarray", "zero"):
+        for case in ("calloc", "overflow", "memalign", "aligned-alloc", "realloc", "reallocarray", "zero"):
             result = subprocess.run([str(executable), case], env=env, text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
             print(result.stdout, end="", flush=True)

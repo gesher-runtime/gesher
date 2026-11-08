@@ -62,6 +62,14 @@ jobs:
           python3 tools/test_bionic_directory_contracts.py --sanitize
           python3 tools/test_bionic_semaphore_contracts.py --sanitize
           python3 tools/test_file_allocation_contracts.py --sanitize
+          python3 tools/test_positioned_io_contracts.py --sanitize
+          python3 tools/test_memfd_contracts.py --sanitize
+
+      - name: Temporary directory and UNC namespace contracts
+        run: |
+          python3 tools/test_temp_directory.py
+          c++ -std=c++17 -Wall -Wextra -Werror tests/paths/unc_paths_test.cc -o "$RUNNER_TEMP/gesher-unc-paths"
+          "$RUNNER_TEMP/gesher-unc-paths"
 
       - uses: actions/setup-java@v4
         with:

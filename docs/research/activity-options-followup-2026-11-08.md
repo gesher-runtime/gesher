@@ -120,6 +120,26 @@ An independent final compilation of the frozen service, helper and complete
 AIDL/public-manager fixture passed using JDK 21 and the actual Android core at
 target 17. `git diff --check` also passed.
 
+### Focused Windows bootstrap correction
+
+On published `223d4b3b`, the actual ART invocation in
+[Windows 2022 job 128649121906](https://github.com/gesher-runtime/gesher/actions/runs/42453120565/job/128649121906)
+printed `ActivityOptionsContractTest framework passed: 108 checks`. That count
+includes its main-entry argument assertion. It then failed before the public
+manager queries: constructing the real `ContextImpl` tried to obtain a display
+from an uninitialized external service manager (`/dev/binder` was absent in this
+isolated local-Parcel VM). This proves the framework phase ran on Windows; it
+does not establish completion of the AIDL/public-manager phase.
+
+The fixture now publishes the production `Services.DisplayManager` Binder and
+its existing package Binder into `ServiceManager`'s cache before context
+construction. It also creates a real writable `ApplicationSharedMemory` region
+for framework cache state. It explicitly checks that a real display and the
+framework `ApplicationPackageManager` were constructed, then retains all
+original proxy/Parcel, parsed-manifest, public-overload and exact-result checks.
+The corrected entry point compiles with the actual Android core/framework and
+converts to DEX; its completed Windows result remains a separate CI gate.
+
 ## Material remaining limits
 
 This does not establish complete Android package resolution parity. In particular:

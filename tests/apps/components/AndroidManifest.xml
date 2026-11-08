@@ -28,6 +28,10 @@
             </intent-filter>
         </activity>
         <activity android:name=".SecondActivity" android:exported="false" />
+        <!-- Real cross-process ComponentCaller lifecycle/URI capability contract. -->
+        <activity android:name=".CallerContractActivity" android:exported="true" />
+        <activity android:name=".CallerRelayActivity" android:exported="true" />
+        <activity android:name=".CallerResultActivity" android:exported="true" />
         <!-- Uses another package's activity and provider (tests/apps/peer); the launcher
              starts it explicitly. Its BROWSABLE custom scheme (as an OAuth redirect's) makes
              gesher-app install register the URL protocol gesher-components (the package

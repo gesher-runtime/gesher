@@ -10,6 +10,7 @@
 //     requested count (callers only test for errors).
 
 #include <sys/syscall.h>
+#include <sys/mman.h>
 
 #include <errno.h>
 #include <limits.h>
@@ -96,6 +97,12 @@ extern "C" long syscall(long number, ...) {
   va_start(args, number);
   long result;
   switch (number) {
+    case SYS_memfd_create: {
+      const char* name = va_arg(args, const char*);
+      unsigned int flags = va_arg(args, unsigned int);
+      result = memfd_create(name, flags);
+      break;
+    }
     case SYS_futex: {
       auto addr = va_arg(args, volatile int*);
       int op = va_arg(args, int);

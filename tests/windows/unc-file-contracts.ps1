@@ -44,7 +44,13 @@ function Test-UncFileContracts([string] $Dir, [string[]] $VmArguments, [string] 
     # same real network share. There is no alternate local path for this VM.
     $tempName = 'Temp קבצים 😀'
     $null = [IO.Directory]::CreateDirectory((Join-Path $owned $tempName))
-    [Environment]::SetEnvironmentVariable('TMPDIR', $null, 'Process')
+    # PowerShell 7.5 converts a null string method argument to an empty value;
+    # .NET 9 preserves that as an explicit environment override. Remove the
+    # entry through the provider so the child really selects its Windows path.
+    Remove-Item -LiteralPath Env:TMPDIR -ErrorAction SilentlyContinue
+    if ($null -ne [Environment]::GetEnvironmentVariable('TMPDIR', 'Process')) {
+      throw 'UNC temporary-directory fixture did not remove the TMPDIR override'
+    }
     [Environment]::SetEnvironmentVariable('TMP', "$unc\$tempName", 'Process')
     [Environment]::SetEnvironmentVariable('TEMP', "$unc\$tempName", 'Process')
     $guestTemp = '/mnt/unc/localhost/' + $shareName + '/' + $tempName
@@ -62,7 +68,19 @@ function Test-UncFileContracts([string] $Dir, [string[]] $VmArguments, [string] 
     $output.Add([string]$_)
   } finally {
     foreach ($name in @('TMPDIR', 'TMP', 'TEMP')) {
-      [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+      try {
+        if ($null -eq $savedEnvironment[$name]) {
+          Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+        } else {
+          [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+        }
+        if (-not [object]::Equals([Environment]::GetEnvironmentVariable($name, 'Process'), $savedEnvironment[$name])) {
+          throw "Environment entry $name was not restored exactly"
+        }
+      } catch {
+        $failed = $true
+        $output.Add('UNC environment restoration failed: ' + [string]$_)
+      }
     }
     try {
       if ($shareCreated) {

@@ -59,12 +59,18 @@ final class PendingIntents {
         final int flags;
         final int uid;
         final String creatorIdentity;
+        final boolean shareIdentity;
         Intent[] intents;
         String[] resolvedTypes;
         volatile boolean canceled;
 
         Record(int type, String packageName, int requestCode, Intent[] intents,
                 String[] resolvedTypes, int flags, int uid, String creatorIdentity) {
+            this(type, packageName, requestCode, intents, resolvedTypes, flags, uid, creatorIdentity, false);
+        }
+
+        Record(int type, String packageName, int requestCode, Intent[] intents,
+                String[] resolvedTypes, int flags, int uid, String creatorIdentity, boolean shareIdentity) {
             this.type = type;
             this.packageName = packageName;
             this.requestCode = requestCode;
@@ -73,6 +79,7 @@ final class PendingIntents {
             this.flags = flags;
             this.uid = uid;
             this.creatorIdentity = creatorIdentity;
+            this.shareIdentity = shareIdentity;
         }
 
         boolean sameKey(int type, String packageName, int uid, String identity,
@@ -92,7 +99,7 @@ final class PendingIntents {
         @Override
         public void send(int code, Intent fillIn, String resolvedType, IBinder allowlistToken,
                 IIntentReceiver finishedReceiver, String requiredPermission, Bundle options) {
-            PendingIntents.this.send(this, fillIn, resolvedType, requiredPermission);
+            PendingIntents.this.sendWithOptions(this, fillIn, resolvedType, requiredPermission, options);
         }
 
         @Override
@@ -104,6 +111,11 @@ final class PendingIntents {
 
     IIntentSender get(int type, String packageName, int requestCode, Intent[] intents,
             String[] resolvedTypes, int flags) {
+        return get(type, packageName, requestCode, intents, resolvedTypes, flags, null);
+    }
+
+    IIntentSender get(int type, String packageName, int requestCode, Intent[] intents,
+            String[] resolvedTypes, int flags, Bundle options) {
         ApkPackage creator = mPm.get(packageName);
         mCallers.requirePackage(packageName);
         if (mPm.isRemovalPending(packageName)) throw new SecurityException("PendingIntent creator is being removed");
@@ -152,7 +164,8 @@ final class PendingIntents {
             }
             if (noCreate) return null;
             Record r = new Record(type, packageName, requestCode, copies,
-                    resolvedTypes == null ? null : resolvedTypes.clone(), flags, uid, identity);
+                    resolvedTypes == null ? null : resolvedTypes.clone(), flags, uid, identity,
+                    sharesIdentity(options));
             mRecords.add(r);
             return r;
         }
@@ -186,24 +199,32 @@ final class PendingIntents {
     }
 
     int send(Record r, Intent fillIn, String resolvedType, String requiredPermission) {
-        return send(r, fillIn, resolvedType, requiredPermission, null);
+        return send(r, fillIn, resolvedType, requiredPermission, null, null);
+    }
+
+    int sendWithOptions(Record r, Intent fillIn, String resolvedType, String requiredPermission,
+            Bundle options) {
+        return send(r, fillIn, resolvedType, requiredPermission, null, options);
     }
 
     interface ActivityLaunch {
-        int start(String creator, Intent intent, String resolvedType, BooleanSupplier lifetime);
+        int start(String creator, Intent intent, String resolvedType, BooleanSupplier lifetime,
+                boolean shareIdentity);
     }
 
-    int sendActivity(IIntentSender target, Intent fillIn, String resolvedType, ActivityLaunch launch) {
+    int sendActivity(IIntentSender target, Intent fillIn, String resolvedType, Bundle options,
+            ActivityLaunch launch) {
         Record r = record(target);
         if (r == null || r.type != ActivityManager.INTENT_SENDER_ACTIVITY) return ActivityManager.START_CANCELED;
-        return send(r, fillIn, resolvedType, null, launch);
+        return send(r, fillIn, resolvedType, null, launch, options);
     }
 
     private int send(Record r, Intent fillIn, String resolvedType, String requiredPermission,
-            ActivityLaunch activityLaunch) {
+            ActivityLaunch activityLaunch, Bundle options) {
         final Intent intent;
         final String type;
         final ApkPackage creator;
+        final boolean shareIdentity;
         synchronized (mRecords) {
             if (r == null || r.canceled || !mRecords.contains(r)) return ActivityManager.START_CANCELED;
             ApkPackage current = mPm.get(r.packageName);
@@ -214,6 +235,12 @@ final class PendingIntents {
                 r.canceled = true; mRecords.remove(r); return ActivityManager.START_CANCELED;
             }
             creator = current;
+            // SafeActivityOptions merges the creator and sender bundles. The
+            // public ActivityOptions serializer only emits shareIdentity when
+            // true, so either request enables it; updating extras does not
+            // replace the original creation options. The creator remains the
+            // authenticated identity, even when another app sends the token.
+            shareIdentity = r.shareIdentity || sharesIdentity(options);
             intent = new Intent(r.last());
             type = r.resolvedTypes != null ? r.resolvedTypes[r.resolvedTypes.length - 1] : resolvedType;
             // Sending is capability based: a legitimate recipient can consume a
@@ -240,8 +267,9 @@ final class PendingIntents {
                 case ActivityManager.INTENT_SENDER_BROADCAST:
                     return mAm.sendBroadcastFor(r.packageName, intent, type, requiredPermission, lifetime);
                 case ActivityManager.INTENT_SENDER_ACTIVITY:
-                    if (activityLaunch != null) return activityLaunch.start(r.packageName, intent, type, lifetime);
-                    return mAm.startActivityFor(r.packageName, intent, type, lifetime);
+                    if (activityLaunch != null) return activityLaunch.start(r.packageName, intent, type,
+                            lifetime, shareIdentity);
+                    return mAm.startActivityFor(r.packageName, intent, type, lifetime, shareIdentity);
                 case ActivityManager.INTENT_SENDER_SERVICE:
                 case ActivityManager.INTENT_SENDER_FOREGROUND_SERVICE:
                     mAm.startServiceFor(r.packageName, intent, type,
@@ -253,6 +281,10 @@ final class PendingIntents {
         } finally {
             Binder.restoreCallingIdentity(ident);
         }
+    }
+
+    private static boolean sharesIdentity(Bundle options) {
+        return options != null && android.app.ActivityOptions.fromBundle(options).isShareIdentityEnabled();
     }
 
     private String codeIdentity(ApkPackage pkg) {

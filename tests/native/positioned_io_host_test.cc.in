@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <atomic>
@@ -37,10 +38,15 @@ constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 16, FILE_WRITE_THROUGH = 2,
 constexpr DWORD FILE_FLAG_OVERLAPPED = 0x40000000, FILE_FLAG_WRITE_THROUGH = 0x80000000,
     FILE_FLAG_NO_BUFFERING = 0x20000000, FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000;
 constexpr DWORD DUPLICATE_SAME_ACCESS = 2;
+constexpr DWORD FILE_DEVICE_NULL = 0x15;
 struct IO_STATUS_BLOCK { uintptr_t unused[2]; };
 using PIO_STATUS_BLOCK = IO_STATUS_BLOCK*;
 struct FILE_MODE_INFORMATION { ULONG Mode; };
 enum FILE_INFORMATION_CLASS { FileModeInformation = 16 };
+enum FS_INFORMATION_CLASS { FileFsDeviceInformation = 4 };
+struct FILE_FS_DEVICE_INFORMATION { DWORD DeviceType, Characteristics; };
+struct LARGE_INTEGER { int64_t QuadPart; };
+struct SYSTEM_INFO { void* lpMaximumApplicationAddress; };
 struct BY_HANDLE_FILE_INFORMATION { DWORD dwFileAttributes; };
 struct OVERLAPPED { DWORD Offset = 0, OffsetHigh = 0; HANDLE hEvent = nullptr; DWORD result = 0, error = 0; };
 static thread_local DWORD last_error;
@@ -50,6 +56,8 @@ static std::mutex handles_mutex;
 static std::map<int, HostHandle> handles;
 static std::atomic<int> live_handles{0};
 static int access_error, duplicate_error, query_error, reopen_error, event_error, io_error, completion_error;
+static int size_error, volume_error;
+static DWORD test_device_type = FILE_DEVICE_NULL;
 static bool pending;
 static DWORD test_mode, last_reopen_access, last_reopen_flags;
 static unsigned waits, notifications;
@@ -80,11 +88,20 @@ static DWORD GetFileType(HANDLE handle) {
   return S_ISFIFO(info.st_mode) ? FILE_TYPE_PIPE : S_ISCHR(info.st_mode) ? FILE_TYPE_CHAR : FILE_TYPE_DISK;
 }
 static BOOL GetConsoleMode(HANDLE, DWORD*) { return FALSE; }
+static void GetSystemInfo(SYSTEM_INFO* info) {
+  info->lpMaximumApplicationAddress = reinterpret_cast<void*>(static_cast<uintptr_t>(0x7fffffffffff));
+}
 static BOOL GetFileInformationByHandle(HANDLE handle, BY_HANDLE_FILE_INFORMATION* info) {
   struct stat statbuf{};
   if (fstat(handle->fd, &statbuf)) { SetLastError(errno); return FALSE; }
   info->dwFileAttributes = S_ISDIR(statbuf.st_mode) ? FILE_ATTRIBUTE_DIRECTORY : 0;
   return TRUE;
+}
+static BOOL GetFileSizeEx(HANDLE handle, LARGE_INTEGER* size) {
+  if (size_error) { SetLastError(size_error); return FALSE; }
+  struct stat info{};
+  if (fstat(handle->fd, &info)) { SetLastError(errno); return FALSE; }
+  size->QuadPart = info.st_size; return TRUE;
 }
 static LONG QueryMode(HANDLE, PIO_STATUS_BLOCK, void* output, ULONG size, FILE_INFORMATION_CLASS kind) {
   if (size != sizeof(FILE_MODE_INFORMATION) || kind != FileModeInformation) std::abort();
@@ -92,10 +109,18 @@ static LONG QueryMode(HANDLE, PIO_STATUS_BLOCK, void* output, ULONG size, FILE_I
   static_cast<FILE_MODE_INFORMATION*>(output)->Mode = test_mode; return 0;
 }
 static ULONG StatusError(LONG error) { return static_cast<ULONG>(-error); }
+static LONG QueryDevice(HANDLE handle, PIO_STATUS_BLOCK, void* output, ULONG size, FS_INFORMATION_CLASS kind) {
+  if (size != sizeof(FILE_FS_DEVICE_INFORMATION) || kind != FileFsDeviceInformation || GetFileType(handle) != FILE_TYPE_CHAR)
+    std::abort();
+  if (volume_error) return -volume_error;
+  static_cast<FILE_FS_DEVICE_INFORMATION*>(output)->DeviceType = test_device_type;
+  return 0;
+}
 static HMODULE GetModuleHandleW(const wchar_t*) { return reinterpret_cast<void*>(1); }
 static void* GetProcAddress(HMODULE, const char* name) {
-  return std::strcmp(name, "NtQueryInformationFile") == 0
-      ? reinterpret_cast<void*>(QueryMode) : reinterpret_cast<void*>(StatusError);
+  if (std::strcmp(name, "NtQueryInformationFile") == 0) return reinterpret_cast<void*>(QueryMode);
+  if (std::strcmp(name, "NtQueryVolumeInformationFile") == 0) return reinterpret_cast<void*>(QueryDevice);
+  return reinterpret_cast<void*>(StatusError);
 }
 static HANDLE ReOpenFile(HANDLE handle, DWORD access, DWORD sharing, DWORD flags) {
   if (guard_depth || sharing != (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)) std::abort();
@@ -148,7 +173,19 @@ static BOOL GetOverlappedResult(HANDLE handle, OVERLAPPED* ov, DWORD* transferre
   *transferred = ov->result; return TRUE;
 }
 namespace gesher {
-static int ErrnoFromWin32(DWORD error) { return error == ERROR_ACCESS_DENIED ? EACCES : static_cast<int>(error); }
+enum class Device { kZero, kRandom };
+static bool DeviceFromFd(int fd, Device* device) {
+  struct stat info{};
+  if (fstat(fd, &info) || !S_ISCHR(info.st_mode)) return false;
+  if (info.st_rdev == makedev(1, 5)) { *device = Device::kZero; return true; }
+  if (info.st_rdev == makedev(1, 8) || info.st_rdev == makedev(1, 9)) { *device = Device::kRandom; return true; }
+  return false;
+}
+static int ErrnoFromWin32(DWORD error) {
+  // The production mapper never turns a failure path into success, including
+  // an unexpected ERROR_SUCCESS from a failed boundary call.
+  return error == ERROR_ACCESS_DENIED ? EACCES : error == ERROR_SUCCESS ? EINVAL : static_cast<int>(error);
+}
 static int FailWithLastError() { errno = ErrnoFromWin32(GetLastError()); return -1; }
 static HANDLE HandleFromFd(int fd) {
   if (fcntl(fd, F_GETFD) < 0) return INVALID_HANDLE_VALUE;
@@ -180,7 +217,7 @@ static int HandleAccess(HANDLE handle, uint32_t* access) {
 }
 static int gesher_is_socket(int fd) { struct stat info{}; return fstat(fd, &info) == 0 && S_ISSOCK(info.st_mode); }
 static int gesher_is_device_fd(int fd) {
-  struct stat info{}; return fstat(fd, &info) == 0 && S_ISCHR(info.st_mode) && info.st_rdev != 259; // Linux /dev/null
+  gesher::Device device; return gesher::DeviceFromFd(fd, &device);
 }
 #define pread tested_pread
 #define pwrite tested_pwrite
@@ -268,11 +305,37 @@ static void concurrent() {
   close(alias); close(fd); unlink(path);
 }
 
+static void null_faults() {
+  char path[] = "positioned-null-faults-XXXXXX";
+  int fd = mkstemp(path);
+  check("positioned null faults: fixture", fd >= 0);
+  if (fd < 0) return;
+  check("positioned null faults: ordinary cursor", lseek(fd, 7, SEEK_SET) == 7);
+  size_error = ERROR_ACCESS_DENIED;
+  check("positioned null faults: EOF query failure stays failure", pread(fd, nullptr, 1, 0) == -1 && errno == EACCES);
+  check("positioned null faults: EOF query failure preserves state", lseek(fd, 0, SEEK_CUR) == 7 && live_handles == 0);
+  size_error = 0;
+  int nullfd = open("/dev/null", O_RDWR);
+  check("positioned null faults: native null fixture", nullfd >= 0);
+  if (nullfd >= 0) {
+    volume_error = ERROR_ACCESS_DENIED;
+    check("positioned null faults: device query error stays failure", pwrite(nullfd, nullptr, 1, 0) == -1 && errno == EACCES);
+    volume_error = 0; test_device_type = 0;
+    check("positioned null faults: arbitrary character type is not NUL", pread(nullfd, nullptr, 1, 0) == -1 && errno == EFAULT);
+    check("positioned null faults: unknown device never accepts discarded write", pwrite(nullfd, nullptr, 1, 0) == -1 && errno == EFAULT);
+    test_device_type = FILE_DEVICE_NULL;
+    check("positioned null faults: device failure paths close pins", live_handles == 0);
+    close(nullfd);
+  }
+  close(fd); unlink(path);
+}
+
 int main(int argc, char** argv) {
   if (argc != 2) return 2;
   if (std::strcmp(argv[1], "public") == 0) test_positioned_io_contracts();
   else if (std::strcmp(argv[1], "faults") == 0) faults();
   else if (std::strcmp(argv[1], "concurrent") == 0) concurrent();
+  else if (std::strcmp(argv[1], "null-faults") == 0) null_faults();
   else return 2;
   check("positioned I/O: no private handle leaks", live_handles == 0);
   return failures ? 1 : 0;

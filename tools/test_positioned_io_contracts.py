@@ -48,7 +48,7 @@ def main():
         if args.sanitize:
             environment["UBSAN_OPTIONS"] = "halt_on_error=1:" + environment.get("UBSAN_OPTIONS", "")
         failed = []
-        for case in ("public", "faults", "concurrent"):
+        for case in ("public", "faults", "concurrent", "null-faults"):
             result = subprocess.run([str(executable), case], cwd=folder, env=environment,
                                     capture_output=True, text=True, timeout=45)
             print(result.stdout, end="", flush=True)

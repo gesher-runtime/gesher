@@ -158,6 +158,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** An activity: what ActivityRecord and its Task keep. */
     final class ActivityRecord {
         final IBinder token;
+        final IBinder initialCallerInfoAccessToken = new Binder("Initial activity caller");
+        final ActivityCallerState callerState = new ActivityCallerState();
         final ActivityInfo info;
         final ApkPackage targetCode;
         java.util.function.BooleanSupplier sourceLifetime;
@@ -221,8 +223,15 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ActivityRecord(ActivityInfo info, Intent intent, int taskId, int launchedFromPid,
                 String launchedFromPackage, ActivityRecord resultTo, String resultWho,
                 int requestCode) {
+            this(info, intent, taskId, launchedFromPid, launchedFromPackage, resultTo,
+                    resultWho, requestCode, mPm.get(info.packageName));
+        }
+
+        ActivityRecord(ActivityInfo info, Intent intent, int taskId, int launchedFromPid,
+                String launchedFromPackage, ActivityRecord resultTo, String resultWho,
+                int requestCode, ApkPackage targetCode) {
             this.info = info;
-            this.targetCode = mPm.get(info.packageName);
+            this.targetCode = targetCode;
             this.intent = intent;
             this.taskId = taskId;
             this.launchedFromPid = launchedFromPid;
@@ -262,6 +271,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private final PermissionRequests mPermissionRequests;
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedLifetime = new ThreadLocal<>();
+    private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedPublication = new ThreadLocal<>();
     private Runnable mBeforeActivityPublication; // Server-local retirement race fixture.
     private Runnable mBeforeShortcutResolution; // Server-local shortcut publisher race fixture.
     private final ThreadLocal<Runnable> mAccountCompletion = new ThreadLocal<>();
@@ -502,15 +512,16 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                             && !source.finishing && source.state != State.DESTROYED);
             }
         };
-        return mAm.pendingIntents().sendActivity(target, fillIn, resolvedType, (creator, intent, type, creatorLive) -> {
+        return mAm.pendingIntents().sendActivity(target, fillIn, resolvedType, options,
+                (creator, intent, type, creatorLive, shareIdentity) -> {
             // URI grant authority cannot be added through flagsMask, including for
             // an otherwise immutable capability. The ordinary fill-in policy stays
             // in PendingIntents alongside one-shot and creator-generation checks.
             int mask = flagsMask & ~Intent.IMMUTABLE_FLAGS;
             intent.setFlags((intent.getFlags() & ~mask) | (flagsValues & mask));
             return startActivityForVerifiedCreator(creator, intent, type,
-                    () -> callerLive.getAsBoolean() && creatorLive.getAsBoolean(),
-                    resultTo, resultWho, requestCode, options);
+                    creatorLive, resultTo, resultWho, requestCode,
+                    activityOptions(options, shareIdentity), callerLive);
         });
     }
 
@@ -521,7 +532,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             Bundle options, int userId) {
         ActivityRecord[] started = new ActivityRecord[1];
         return start(caller, intent, resolvedType, callingPackage, resultTo, resultWho,
-                requestCode, launchTaskId(options), started);
+                requestCode, launchTaskId(options), shareIdentity(options), started);
     }
 
     /** ActivityOptions.setLaunchTaskId of a start's options, or -1. */
@@ -532,6 +543,16 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         } catch (RuntimeException e) {
             return -1;
         }
+    }
+
+    private static boolean shareIdentity(Bundle options) {
+        return options != null && android.app.ActivityOptions.fromBundle(options).isShareIdentityEnabled();
+    }
+
+    private static Bundle activityOptions(Bundle options, boolean shareIdentity) {
+        android.app.ActivityOptions parsed = options == null
+                ? android.app.ActivityOptions.makeBasic() : android.app.ActivityOptions.fromBundle(options);
+        return parsed.setShareIdentityEnabled(shareIdentity).toBundle();
     }
 
     /**
@@ -556,7 +577,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         ActivityRecord[] started = new ActivityRecord[1];
         return start(caller, intent, resolvedTypes != null ? resolvedTypes[last] : null,
-                callingPackage, resultTo, null, -1, started);
+                callingPackage, resultTo, null, -1, launchTaskId(options), shareIdentity(options), started);
     }
 
     @Override
@@ -566,7 +587,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             Bundle options, int userId) {
         ActivityRecord[] started = new ActivityRecord[1];
         int code = start(caller, intent, resolvedType, callingPackage, resultTo,
-                resultWho, requestCode, launchTaskId(options), started);
+                resultWho, requestCode, launchTaskId(options), shareIdentity(options), started);
         return waitForStarted(code, started[0]);
     }
 
@@ -749,27 +770,46 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
     int startActivityForVerifiedCreator(String packageName, Intent intent, String resolvedType,
             java.util.function.BooleanSupplier lifetime) {
+        return startActivityForVerifiedCreator(packageName, intent, resolvedType, lifetime, false);
+    }
+
+    int startActivityForVerifiedCreator(String packageName, Intent intent, String resolvedType,
+            java.util.function.BooleanSupplier lifetime, boolean shareIdentity) {
         return startActivityForVerifiedCreator(packageName, intent, resolvedType, lifetime,
-                null, null, -1, null);
+                null, null, -1, activityOptions(null, shareIdentity));
     }
 
     private int startActivityForVerifiedCreator(String packageName, Intent intent, String resolvedType,
             java.util.function.BooleanSupplier lifetime, IBinder resultTo, String resultWho,
             int requestCode, Bundle options) {
-        if (Binder.getCallingPid() != android.os.Process.myPid() || mPm.get(packageName) == null) {
+        return startActivityForVerifiedCreator(packageName, intent, resolvedType, lifetime,
+                resultTo, resultWho, requestCode, options, null);
+    }
+
+    private int startActivityForVerifiedCreator(String packageName, Intent intent, String resolvedType,
+            java.util.function.BooleanSupplier lifetime, IBinder resultTo, String resultWho,
+            int requestCode, Bundle options, java.util.function.BooleanSupplier publication) {
+        if (Binder.getCallingPid() != android.os.Process.myPid()
+                || mPm.get(packageName) == null && !"android".equals(packageName)) {
             throw new SecurityException("Only a validated local capability may supply a creator");
         }
         if (lifetime == null || !lifetime.getAsBoolean()) throw new SecurityException("Delegated creator retired");
+        if (publication != null && !publication.getAsBoolean()) {
+            throw new SecurityException("IntentSender holder retired before acceptance");
+        }
         String previous = mVerifiedCreator.get();
         java.util.function.BooleanSupplier oldLifetime = mVerifiedLifetime.get();
+        java.util.function.BooleanSupplier oldPublication = mVerifiedPublication.get();
         mVerifiedCreator.set(packageName);
         mVerifiedLifetime.set(lifetime);
+        mVerifiedPublication.set(publication);
         try {
             return start(null, intent, resolvedType, packageName, resultTo, resultWho, requestCode,
-                    launchTaskId(options), new ActivityRecord[1]);
+                    launchTaskId(options), shareIdentity(options), new ActivityRecord[1]);
         } finally {
             if (previous == null) mVerifiedCreator.remove(); else mVerifiedCreator.set(previous);
             if (oldLifetime == null) mVerifiedLifetime.remove(); else mVerifiedLifetime.set(oldLifetime);
+            if (oldPublication == null) mVerifiedPublication.remove(); else mVerifiedPublication.set(oldPublication);
         }
     }
 
@@ -821,15 +861,22 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private int start(IApplicationThread caller, Intent intent, String resolvedType,
             String callingPackage, IBinder resultToToken, String resultWho, int requestCode,
             int launchTaskId, ActivityRecord[] started) {
+        return start(caller, intent, resolvedType, callingPackage, resultToToken, resultWho,
+                requestCode, launchTaskId, false, started);
+    }
+
+    private int start(IApplicationThread caller, Intent intent, String resolvedType,
+            String callingPackage, IBinder resultToToken, String resultWho, int requestCode,
+            int launchTaskId, boolean shareIdentity, ActivityRecord[] started) {
         final int originalPid = Binder.getCallingPid();
         final ProcessRecord originalProcess = callerProcess(originalPid);
         final boolean internalCreator = mVerifiedCreator.get() != null;
         final String originalName = internalCreator ? mVerifiedCreator.get() : callingPackage;
         final ApkPackage originalCallerCode = mPm.get(originalName);
         final java.util.function.BooleanSupplier delegated = mVerifiedLifetime.get();
+        final java.util.function.BooleanSupplier publication = mVerifiedPublication.get();
         String verifiedCaller = mVerifiedCreator.get();
-        if (verifiedCaller == null && GmsSignatureSpoofing.isEnabled()
-                && mAm != null && !mAm.callers().isSystem()) {
+        if (verifiedCaller == null && mAm != null && !mAm.callers().isSystem()) {
             verifiedCaller = mAm.callers().requirePackage(callingPackage);
             boolean matchingThread = false;
             synchronized (this) {
@@ -861,7 +908,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 target.addFlags(intent.getFlags());
                 SystemServer.log("startActivity: chooser, starting its target " + target);
                 return start(caller, target, target.getType(), callingPackage, resultToToken,
-                        resultWho, requestCode, launchTaskId, started);
+                        resultWho, requestCode, launchTaskId, shareIdentity, started);
             }
         }
         // Starts from apps resolve implicit intents to filters with CATEGORY_DEFAULT, as
@@ -952,12 +999,33 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
         }
         final String attributedCaller = verifiedCaller;
-        final java.util.function.BooleanSupplier sourceCurrent = () ->
-                (attributedCaller == null || originalCallerCode != null
+        final boolean systemCreator = internalCreator && "android".equals(attributedCaller)
+                && originalCallerCode == null;
+        final java.util.function.BooleanSupplier sourceLifetime = () ->
+                (attributedCaller == null || systemCreator || originalCallerCode != null
                     && mPm.get(attributedCaller) == originalCallerCode && !mPm.isRemovalPending(attributedCaller))
                 && (delegated == null || delegated.getAsBoolean());
+        // A normal app must still be the authenticated process when its request is
+        // accepted. Once accepted, its exit does not cancel a queued target launch;
+        // the retained lifetime is the package/delegated capability generation.
+        final java.util.function.BooleanSupplier sourceCurrent = () ->
+                sourceLifetime.getAsBoolean()
+                && (attributedCaller == null || internalCreator || originalProcess != null
+                    && callerProcess(originalPid) == originalProcess && !originalProcess.exiting)
+                && (publication == null || publication.getAsBoolean());
         Intent launch = new Intent(intent);
         launch.setComponent(new ComponentName(info.packageName, info.name));
+        final ActivityCallerState.Snapshot callerSnapshot;
+        synchronized (mPm) {
+            if (!sourceCurrent.getAsBoolean()) return ActivityManager.START_CANCELED;
+            if (mAm == null) throw new IllegalStateException("Activity caller permission service unavailable");
+            ActivityCallerState.Origin origin = attributedCaller == null || systemCreator
+                    ? new ActivityCallerState.Origin(null, systemCreator ? android.os.Process.SYSTEM_UID
+                            : Binder.getCallingUid(), systemCreator ? "android" : null, true, shareIdentity)
+                    : new ActivityCallerState.Origin(originalCallerCode, originalCallerCode.uid(),
+                            attributedCaller, false, shareIdentity);
+            callerSnapshot = ActivityCallerState.capture(origin, launch, mAm.uriGrants());
+        }
         int callingPid = Binder.getCallingPid();
         int launchFlags = intent.getFlags();
         ActivityRecord source = resultToToken != null ? forToken(resultToToken) : null;
@@ -1022,8 +1090,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             } else {
                 ActivityRecord resultRecord = requestCode >= 0 ? source : null;
                 r = new ActivityRecord(info, launch, taskId, callingPid, callingPackage,
-                        resultRecord, resultWho, requestCode);
-                r.sourceLifetime = sourceCurrent;
+                        resultRecord, resultWho, requestCode, targetCode);
+                r.callerState.add(r.initialCallerInfoAccessToken, callerSnapshot);
+                r.sourceLifetime = sourceLifetime;
                 r.accountCompletion = mAccountCompletion.get();
                 r.inheritedWindowMode = sourceWindowMode;
                 r.translucent = translucent;
@@ -1080,7 +1149,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             for (ActivityRecord a : clearTop) {
                 finish(a, "clear-top", android.app.Activity.RESULT_CANCELED, null);
             }
-            deliverNewIntent(deliverTo, launch, callingPackage, sourceCurrent);
+            // The authenticated request was accepted above. CLEAR_TOP may itself
+            // finish the sender/IntentSender holder; that must not erase this
+            // delivery. Creator code/capability and target generations remain live.
+            deliverNewIntent(deliverTo, launch, callingPackage, sourceLifetime, callerSnapshot);
             return ActivityManager.START_DELIVERED_TO_TOP;
         }
         started[0] = r;
@@ -1925,7 +1997,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 null /* sceneTransitionInfo */, true /* isForward */, null /* profilerInfo */,
                 new Binder() /* assistToken */, mClient.asInterface(),
                 new Binder() /* shareableActivityToken */, false /* launchedFromBubble */,
-                null /* taskFragmentToken */, new Binder() /* initialCallerInfoAccessToken */,
+                null /* taskFragmentToken */, r.initialCallerInfoAccessToken,
                 windowInfo, Display.DEFAULT_DISPLAY));
         t.addTransactionItem(new ResumeActivityItem(r.token, true /* isForward */,
                 false /* shouldSendCompatFakeFocus */));
@@ -2198,15 +2270,18 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     private void deliverNewIntent(ActivityRecord r, Intent intent, String referrer,
-            java.util.function.BooleanSupplier sourceCurrent) {
+            java.util.function.BooleanSupplier sourceCurrent, ActivityCallerState.Snapshot snapshot) {
         boolean resumed;
+        IBinder callerToken = new Binder("New intent caller");
         synchronized (this) {
-            if (!mActivities.contains(r) || !activityCodeCurrent(r) || !sourceCurrent.getAsBoolean()) return;
+            if (!mActivities.contains(r) || r.finishing || r.state == State.DESTROYED
+                    || !activityCodeCurrent(r) || !sourceCurrent.getAsBoolean()) return;
+            r.callerState.add(callerToken, snapshot);
             resumed = r.state == State.RESUMED || r.state == State.LAUNCHING
                     || r.state == State.RESUMING;
         }
         List<ReferrerIntent> intents = new ArrayList<>();
-        intents.add(new ReferrerIntent(intent, referrer));
+        intents.add(new ReferrerIntent(intent, referrer, callerToken));
         ClientTransaction t = new ClientTransaction(r.app.thread);
         t.addTransactionItem(new NewIntentItem(r.token, intents, resumed));
         schedule(r, t, "NewIntentItem");
@@ -2215,9 +2290,20 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private void deliverResult(ActivityRecord r, String resultWho, int requestCode,
             int resultCode, Intent resultData) {
         if (r == null) return;
-        ResultInfo info = new ResultInfo(resultWho, requestCode, resultCode, resultData);
+        // Only server-owned permission/account/document callbacks enter here.
+        // Their worker thread is not the app that originally requested the UI.
+        final ActivityCallerState.Snapshot snapshot;
+        synchronized (mPm) {
+            snapshot = ActivityCallerState.capture(new ActivityCallerState.Origin(null,
+                    android.os.Process.myUid(), "android", true, false), resultData, mAm.uriGrants());
+        }
+        IBinder callerToken = new Binder("Server activity result caller");
+        ResultInfo info = new ResultInfo(resultWho, requestCode, resultCode, resultData, callerToken);
         boolean resumed;
         synchronized (this) {
+            if (!mActivities.contains(r) || r.finishing || r.state == State.DESTROYED
+                    || !activityCodeCurrent(r)) return;
+            r.callerState.add(callerToken, snapshot);
             resumed = (r.state == State.RESUMED || r.state == State.LAUNCHING || r.state == State.RESUMING);
             if (!resumed) {
                 r.pendingResults.add(info);
@@ -2287,8 +2373,18 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     boolean finish(ActivityRecord r, String reason, int resultCode, Intent resultData) {
         if (r.resultTo != null) resultData = normalizeMicrogCredentialResult(r.info.packageName,
                 r.info.name, r.resultTo.info.name, resultCode, resultData);
+        final ActivityCallerState.Snapshot resultCaller;
+        synchronized (mPm) {
+            // Compute before taking the lifecycle monitor. URI grants and provider
+            // permissions have their own locks; result delivery must not invert them.
+            resultCaller = r.resultTo == null || !activityCodeCurrent(r) ? null
+                    : ActivityCallerState.capture(new ActivityCallerState.Origin(r.targetCode,
+                            r.info.applicationInfo.uid, r.info.packageName, false, false),
+                            resultData, mAm.uriGrants());
+        }
         State state;
         synchronized (this) {
+            if (!mActivities.contains(r) || r.state == State.DESTROYED) return false;
             if (r.finishing) return true;
             r.finishing = true;
             accountActivityFinished(r);
@@ -2296,10 +2392,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             // The activity below may ask for another orientation (it gets the configuration
             // as it resumes).
             updateRotationLocked(r.taskId);
-            if (r.resultTo != null && r.resultTo.state != State.DESTROYED
-                    && !r.resultTo.finishing) {
+            if (resultCaller != null && activityCodeCurrent(r) && r.resultTo != null
+                    && mActivities.contains(r.resultTo) && activityCodeCurrent(r.resultTo)
+                    && r.resultTo.state != State.DESTROYED && !r.resultTo.finishing) {
+                IBinder callerToken = new Binder("Activity result caller");
+                r.resultTo.callerState.add(callerToken, resultCaller);
                 r.resultTo.pendingResults.add(new ResultInfo(r.resultWho, r.requestCode,
-                        resultCode, resultData));
+                        resultCode, resultData, callerToken));
             }
         }
         SystemServer.log("finishing " + r.name() + " (" + reason + ")"
@@ -2445,6 +2544,56 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
         }
         return null;
+    }
+
+    /** An activity's result data must come from its real process, not a claimed package. */
+    void requireActivityOwner(ActivityRecord r) {
+        if (r == null || mAm.callers().isSystem()) return;
+        String name = mAm.callers().callerPackage();
+        synchronized (this) {
+            ProcessRecord process = callerProcess(Binder.getCallingPid());
+            if (!mActivities.contains(r) || r.state == State.DESTROYED || !activityCodeCurrent(r)
+                    || r.app == null || r.app != process || process.exiting
+                    || !name.equals(r.info.packageName)) {
+                throw new SecurityException("Activity does not belong to the calling process");
+            }
+        }
+    }
+
+    private ActivityCallerState.Snapshot callerSnapshot(IBinder activityToken,
+            IBinder callerToken, boolean initial) {
+        synchronized (this) {
+            ActivityRecord record = forToken(activityToken);
+            if (record == null || record.state == State.DESTROYED || !activityCodeCurrent(record)) return null;
+            return record.callerState.get(initial ? record.initialCallerInfoAccessToken : callerToken);
+        }
+    }
+
+    ActivityCallerState.Snapshot visibleCaller(IBinder activityToken, IBinder callerToken,
+            boolean initial) {
+        boolean internal = mAm.callers().isSystem();
+        String name = internal ? null : mAm.callers().callerPackage();
+        ActivityCallerState.Snapshot snapshot = callerSnapshot(activityToken, callerToken, initial);
+        return snapshot != null && snapshot.visibleTo(name, Binder.getCallingUid(), internal) ? snapshot : null;
+    }
+
+    int checkActivityCallerContentUriPermission(IBinder activityToken, IBinder callerToken,
+            Uri uri, int modeFlags, int userId) {
+        if (Binder.getCallingUid() < 0) throw new IllegalArgumentException("Caller UID must not be negative");
+        ActivityCallerState.validateQuery(uri, modeFlags, userId);
+        // As UGM's full check: validate arguments and the current querying app's
+        // access before looking up either the activity or its historical caller.
+        boolean access = mAm.callers().isSystem();
+        if (!access) {
+            String name = mAm.callers().callerPackage();
+            synchronized (mPm) {
+                access = mAm.uriGrants().canAccessForCaller(mPm.get(name), uri, modeFlags, userId);
+            }
+        }
+        if (!access) throw new SecurityException("The querying app cannot access this content URI");
+        ActivityCallerState.Snapshot snapshot = callerSnapshot(activityToken, callerToken, false);
+        return snapshot != null && snapshot.allows(uri, modeFlags, userId)
+                ? PackageManager.PERMISSION_GRANTED : PackageManager.PERMISSION_DENIED;
     }
 
     /** Whether the activity is the top of its task (and so visible once resumed). */

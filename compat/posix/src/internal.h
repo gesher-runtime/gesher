@@ -129,6 +129,8 @@ int CloseUnpublishedDuplicate(int fd);
 
 // Character devices Windows lacks: a CRT fd on NUL whose reads fd.cc serves.
 enum class Device { kZero, kRandom };
+// Exact logical device behind a NUL-backed fd; false for ordinary NUL handles.
+bool DeviceFromFd(int fd, Device* device);
 // Takes over `fd`, which must be open on NUL.
 void RegisterDevice(int fd, Device device);
 

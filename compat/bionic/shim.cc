@@ -167,7 +167,25 @@ int BIONIC_SYSV PosixMemalign(void** out, size_t align, size_t size) {
   return 0;
 }
 void* BIONIC_SYSV Memalign(size_t align, size_t size) {
-  if (align == 0 || (align & (align - 1)) != 0) align = 16;
+  // Android accepts zero and rounds other non-powers up, unlike aligned_alloc
+  // and posix_memalign. Reducing them to malloc's alignment can misalign the
+  // storage an Android caller expects (for example, 33 requires 64 bytes).
+  if (align == 0) align = 1;
+  if ((align & (align - 1)) != 0) {
+    // The next power cannot be represented; do not wrap or shift by the word
+    // width and return an apparently successful, under-aligned allocation.
+    if (align > (SIZE_MAX / 2) + 1) return errno = kENOMEM, nullptr;
+    size_t rounded = 1;
+    while (rounded < align) rounded <<= 1;
+    align = rounded;
+  }
+  return AlignedAlloc(align, size);
+}
+void* BIONIC_SYSV AlignedAllocC11(size_t align, size_t size) {
+  // Bionic permits alignments smaller than sizeof(void*), but requires a
+  // nonzero power of two and a size divisible by that alignment.
+  if (align == 0 || (align & (align - 1)) != 0 || size % align != 0)
+    return errno = kEINVAL, nullptr;
   return AlignedAlloc(align, size);
 }
 size_t BIONIC_SYSV MallocUsableSize(const void* p) {
@@ -927,12 +945,13 @@ int BIONIC_SYSV DlIteratePhdr(int (BIONIC_SYSV* cb)(BionicPhdrInfo*, size_t, voi
 }
 
 // syscall(2), for what libc++/libc++abi use it for: futex waits and wakes
-// (static-local guards, std::atomic::wait) and gettid. A variadic call passes
+// (static-local guards, std::atomic::wait), gettid and anonymous files. A variadic call passes
 // the arguments in the same registers as this fixed signature reads.
 int64_t BIONIC_SYSV Syscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
                             int64_t /*a5*/, int64_t /*a6*/) {
   constexpr int64_t kSysGettid = 186, kSysFutex = 202;
   if (nr == kSysGettid) return GetCurrentThreadId();
+  if (nr == 319) return memfd_create(reinterpret_cast<const char*>(a1), static_cast<unsigned>(a2));
   int64_t timerfd_result;
   if (DispatchTimerfdSyscall(nr, a1, a2, a3, a4, &timerfd_result)) return timerfd_result;
   if (nr != kSysFutex) {
@@ -1022,7 +1041,7 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("reallocarray", Reallocarray);
   ENTRY("posix_memalign", PosixMemalign);
   ENTRY("memalign", Memalign);
-  ENTRY("aligned_alloc", Memalign);
+  ENTRY("aligned_alloc", AlignedAllocC11);
   ENTRY("malloc_usable_size", MallocUsableSize);
   // mem/str.
   SELF(memcpy);

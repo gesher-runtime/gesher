@@ -1,5 +1,5 @@
 // Production namespace conversion only; actual SMB I/O is a Windows fixture.
-#include <gesher/unc_paths.h>
+#include "../../compat/posix/include/gesher/unc_paths.h"
 #include <cstdio>
 #include <stdexcept>
 #include <string>

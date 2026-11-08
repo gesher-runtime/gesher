@@ -17,6 +17,7 @@ import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.os.Looper;
 import android.util.DisplayMetrics;
+import com.android.internal.os.ApplicationSharedMemory;
 import com.gesher.server.ApkPackage;
 import com.gesher.server.PackageManagerService;
 import java.io.File;
@@ -182,6 +183,12 @@ public final class SplitPackageContractTest {
     public static void main(String[] args) throws Exception {
         require(args.length == 1, "Pass split-package-fixtures.zip");
         System.loadLibrary("android_runtime");
+        // Installer publishes PackageManager cache nonces on every actual update.
+        // This isolated server VM needs the same writable native region that
+        // SystemServer establishes before it accepts the first installation.
+        ApplicationSharedMemory.setInstance(ApplicationSharedMemory.create());
+        require(ApplicationSharedMemory.getInstance().isMutable(),
+                "Split installer fixture did not acquire writable native cache memory");
         AssetManager.createSystemAssetsInZygoteLocked(false,
                 System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
         if (Looper.myLooper() == null) Looper.prepareMainLooper();

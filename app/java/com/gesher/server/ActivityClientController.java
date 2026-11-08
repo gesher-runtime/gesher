@@ -94,6 +94,7 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public boolean finishActivity(IBinder token, int code, Intent data, int finishTask) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        mAtm.requireActivityOwner(r);
         // Activity.FINISH_TASK_WITH_ACTIVITY (finishAndRemoveTask, closing the window):
         // the activity and the rest of its task.
         if (r != null && finishTask == 2) {
@@ -110,6 +111,7 @@ public final class ActivityClientController extends IActivityClientController.De
     public boolean navigateUpTo(IBinder token, Intent destIntent, String resolvedType,
             int resultCode, Intent resultData) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        mAtm.requireActivityOwner(r);
         return r != null && mAtm.navigateUpTo(r, destIntent, resolvedType, resultCode,
                 resultData);
     }
@@ -213,12 +215,32 @@ public final class ActivityClientController extends IActivityClientController.De
 
     @Override
     public String getLaunchedFromPackage(IBinder token) {
-        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        return r != null ? r.launchedFromPackage : null;
+        ActivityCallerState.Snapshot caller = mAtm.visibleCaller(token, null, true);
+        return caller == null ? null : caller.packageName;
     }
 
     @Override
     public int getLaunchedFromUid(IBinder token) {
-        return android.os.Process.myUid();  // every gesher process has the same uid
+        ActivityCallerState.Snapshot caller = mAtm.visibleCaller(token, null, true);
+        return caller == null ? android.os.Process.INVALID_UID : caller.uid;
+    }
+
+    @Override
+    public int getActivityCallerUid(IBinder activityToken, IBinder callerToken) {
+        ActivityCallerState.Snapshot caller = mAtm.visibleCaller(activityToken, callerToken, false);
+        return caller == null ? android.os.Process.INVALID_UID : caller.uid;
+    }
+
+    @Override
+    public String getActivityCallerPackage(IBinder activityToken, IBinder callerToken) {
+        ActivityCallerState.Snapshot caller = mAtm.visibleCaller(activityToken, callerToken, false);
+        return caller == null ? null : caller.packageName;
+    }
+
+    @Override
+    public int checkActivityCallerContentUriPermission(IBinder activityToken, IBinder callerToken,
+            android.net.Uri uri, int modeFlags, int userId) {
+        return mAtm.checkActivityCallerContentUriPermission(activityToken, callerToken, uri,
+                modeFlags, userId);
     }
 }

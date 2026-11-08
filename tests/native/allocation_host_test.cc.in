@@ -78,6 +78,8 @@ int main(int argc, char** argv) {
   if (argc == 1) test_allocation_contracts();
   else if (std::strcmp(argv[1], "calloc") == 0) test_calloc_zero_size();
   else if (std::strcmp(argv[1], "overflow") == 0) test_allocation_overflow();
+  else if (std::strcmp(argv[1], "memalign") == 0) test_memalign_rounding();
+  else if (std::strcmp(argv[1], "aligned-alloc") == 0) test_aligned_alloc_contract();
   else if (std::strcmp(argv[1], "realloc") == 0) test_realloc_failure();
   else if (std::strcmp(argv[1], "reallocarray") == 0) test_reallocarray_contract();
   else if (std::strcmp(argv[1], "zero") == 0) test_realloc_zero_size();

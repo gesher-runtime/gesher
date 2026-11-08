@@ -53,6 +53,9 @@ handle overload; ordinary write behavior is otherwise unchanged.
 
 ## Executable evidence before Windows publication
 
+This table records the first repair's original 74-assertion checkpoint. The
+subsequent null-buffer checks and their results are recorded separately below.
+
 | Check | Result and boundary |
 | --- | --- |
 | Production adapter over real Linux files | 74 assertions pass, including shared offsets, aliases, EOF, zero length, access failures, pipes/directories/devices, rename/unlink identity, pending completion, seven injected failure boundaries, no private handle leaks, close/reuse and concurrent ordinary reads. This is an explicit Win32 boundary model, not Windows execution. |
@@ -83,6 +86,72 @@ default temporary filesystem is full. On a container that blocks LeakSanitizer
 thread enumeration, use `ASAN_OPTIONS=detect_leaks=0` for the first command and
 retain that limitation in the result record.
 
+## Follow-up: unused null buffers and error ordering
+
+The first repair, published in `223d4b3b6a4947bd3c1b3c679d95fc944b4d956a`,
+rejected every nonzero-length null buffer before asking the file backend.
+Actual Linux calls show that this rejects several supported operations: a
+directory read reports `EISDIR`, an empty-file or EOF read returns zero without
+using the destination, and `/dev/null` reads and writes and `/dev/zero` writes
+do not use the supplied buffer. Conversely, zero/random reads and random
+writes require memory and reject a null buffer with `EFAULT`. The pinned
+Android 16 bionic exports delegate to the kernel's positioned-I/O syscalls;
+these are native public-call contracts, not Java buffer-validation behavior.
+
+The common adapter now checks a pinned regular file's directory status before
+rejecting the buffer and observes its real length for an EOF read. Native
+query failures remain failures. For character devices, only a successful
+`NtQueryVolumeInformationFile(FileFsDeviceInformation)` result identifying
+`FILE_DEVICE_NULL` permits an unused null buffer; arbitrary character handles
+are not treated as NUL. The existing logical zero/random registry is queried
+through the two-line `DeviceFromFd` wrapper, so random's NUL carrier does not
+accidentally acquire zero's discard semantics. A null user range beyond the
+actual host address limit still fails before backend dispatch. Successful
+discard writes retain Linux's `MAX_RW_COUNT`, `0x7ffff000` for the 4 KiB pages
+exposed by this backend.
+
+The logical-device read remains inside `DescriptorGuard`: it takes the
+existing registry mutex only for lookup, then performs `memset` or
+`BCryptGenRandom` without descriptor replacement, callbacks, or record-lock
+waits. Close and duplication already acquire the descriptor guard before that
+same registry mutex. This keeps the selected logical device alive without a
+new lock-order cycle.
+
+| Follow-up check | Result and boundary |
+| --- | --- |
+| Current production adapter, default GCC `c++`, ASan and UBSan | All 110 assertions pass across four groups: the previous 74 plus 26 public-call checks and ten query-failure/type/lifetime checks. |
+| Exact published `223d4b` negative control | All 110 assertions execute; 11 fail and 99 pass. Failures include unused EOF/NUL/zero buffers, directory error precedence, and actual query-error propagation. No compiler failure is counted as a regression result. |
+| Independent Linux kernel reference | All 65 shared public-call assertions pass without the production adapter or Win32 model. |
+| Complete Windows implementation compilation | `unistd.cc` and `fd.cc` compile with the exact CI LLVM-MinGW toolchain and strict warnings for both x86-64 and ARM64. |
+| Narrow descriptor source-preservation update | The complete `fd.cc` SHA-256 is `7e2fed5465160602f7f01f29c5d93c4d3d04ec6c9139eaf5e54e205317305d4d`. Removing exactly the reviewed `DeviceFromFd` wrapper reproduces every byte of the prior pinned file. The selected TCP gate retains all other predicates. |
+
+Reproduce this additional negative control with:
+
+```sh
+python3 tools/test_positioned_io_contracts.py \
+  --source-ref 223d4b3b6a4947bd3c1b3c679d95fc944b4d956a
+```
+
+It must fail. The positive and Linux-reference commands above now execute the
+expanded checks. Calls that intentionally pass null buffers use volatile
+public-function-pointer slots, retaining the real imported calls under the
+native fixture's optimization settings.
+
+**The additional Windows NUL classification still requires actual runtime
+verification.** The shared x86-64/translated-ARM64 ELF fixture must pass the
+real NUL and zero-device cases through `NtQueryVolumeInformationFile`; the host
+model cannot establish that behavior. These cases are mandatory, without
+skips or a fallback classification. Java `Os` validates null buffers before
+JNI, so the added null-buffer evidence comes from the native fixture rather
+than `PositionedIoTest`.
+
+This is a null-buffer correction, not proof that every invalid non-null
+pointer is safely probed. The existing virtual zero/random read backends still
+write directly through `memset` or the RNG API. Positive-length random writes
+also still use the NUL carrier and **do not mix entropy into the RNG**; this
+patch preserves the error for a missing input buffer without claiming that
+the current random-write backend implements Linux's entropy-input behavior.
+
 ## Required actual runtime checks and remaining limits
 
 `PositionedIoTest` runs real Android `Os` calls through libcore JNI and the common
@@ -99,6 +168,16 @@ imports and 64-bit aliases in the existing x86-64 and translated ARM64
 particular, Linux's `/proc/self/fd` boundary model does not prove NTFS's reopening
 behavior after unlink or with delete-on-close. These cases are required in the
 actual runtime fixture and are not skipped or converted to expected success.
+
+At the subsequent published `223d4b` checkpoint, both Windows 2022 and 2025
+focused jobs passed the actual binary notification-policy reload and reached
+the positioned-I/O fixture's `Os.memfd_create` call after its regular-file,
+shared-cursor, rights, rename, unlink and pipe assertions. That call exposed a
+separate missing syscall route (`ENOSYS`), so the complete positioned fixture
+had not yet passed. The [memfd routing follow-up](memfd-syscall-followup-2026-11-08.md)
+records the failure and repair; the original runtime assertion remains.
+The additional null-buffer ELF assertions above are also awaiting their first
+Windows execution.
 
 There is a real backend boundary for externally adopted handles whose sharing
 mode forbids another open, or whose post-open permission/deletion state causes
@@ -122,3 +201,5 @@ access by reopening.
 - [Microsoft explanation of duplicate handles and file objects](https://devblogs.microsoft.com/oldnewthing/20140711-00/?p=523): duplicates share the file object and its cursor; reopening creates a separate file object.
 - [Microsoft `FILE_MODE_INFORMATION`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_mode_information) and [NtQueryInformationFile](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntqueryinformationfile): actual file modes and the mode query.
 - [Linux man-pages `pread`/`pwrite`](https://man7.org/linux/man-pages/man2/pread.2.html): unchanged current offset, errors, and Linux's documented `O_APPEND` behavior.
+- [Pinned Android 16 bionic syscall declarations](https://android.googlesource.com/platform/bionic/+/android-16.0.0_r4/libc/SYSCALLS.TXT) and [Android 16 common-kernel `read_write.c`](https://android.googlesource.com/kernel/common/+/refs/tags/android16-6.12-2025-06_r1/fs/read_write.c): negative-offset and nonseekable ordering, access checks, bounded transfer sizes, and dispatch to the actual file backend.
+- [Microsoft `NtQueryVolumeInformationFile`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntqueryvolumeinformationfile), [`FILE_FS_DEVICE_INFORMATION`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_file_fs_device_information), and [device-type definitions](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/specifying-device-types): the supported device-information query and exact `FILE_DEVICE_NULL` classification.

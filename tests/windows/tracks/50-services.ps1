@@ -361,7 +361,7 @@ Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
 $s = 'system_server: '
 $null = CheckSequences 'services: system_server drives components.apk: NewIntentItem, ActivityResultItem, services, receivers, providers, notifications' $serverOut @(
-  ,@("${s}com.gesher.components parsed by PackageParser2: 4 activities, 3 services, 1 receivers, 1 providers",
+  ,@("${s}com.gesher.components parsed by PackageParser2: 7 activities, 3 services, 1 receivers, 1 providers",
     "${s}publishContentProviders: com.gesher.components.items (com.gesher.components.ItemsProvider)",
     "${s}scheduleTransaction NewIntentItem to com.gesher.components/com.gesher.components.SingleTopActivity",
     "${s}scheduleTransaction ActivityResultItem, ResumeActivityItem to com.gesher.components/com.gesher.components.MainActivity",
@@ -527,7 +527,7 @@ $ok = CheckOrdered 'services: gesher-app install and list: base.apk in data/app/
   'package:com.gesher.lifecycle version 1.0 (1) ',
   '/app/com.gesher.lifecycle-1/base.apk, 1 activities, 0 services, 0 providers',
   'package:com.gesher.peer version 1.0 (1) ',
-  '/app/com.gesher.peer-1/base.apk, 1 activities, 0 services, 1 providers') $code
+  '/app/com.gesher.peer-1/base.apk, 3 activities, 0 services, 2 providers') $code
 if ($ok -and -not ((Test-Path (Join-Path $root 'data/app/com.gesher.peer-1/base.apk')) -and $registry -match "com\.gesher\.lifecycle`t" -and $registry -match "com\.gesher\.peer`t")) {
   Write-Host "FAIL  services: installed files (data/app, packages.list): $registry"
   $failed++

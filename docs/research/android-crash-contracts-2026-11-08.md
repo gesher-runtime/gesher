@@ -268,6 +268,113 @@ require the repaired revision's own CI, with the original full suites and
 source/artifact receipt checks still enforced. Historical independently pinned
 component certificates are not rewritten to make the new source appear old.
 
+## Additional native contract follow-up
+
+Before closing the round, a further native pass against published `223d4b3b`
+found two additional behavioral differences. Android's permissive `memalign`
+rounds a non-power alignment upward; Gesher reduced it to 16, which could return
+under-aligned storage. The separate C11 `aligned_alloc` export also incorrectly
+used that permissive entry. Both now use their actual Android argument contracts
+and the existing real allocation/free backend. **79 production-shim assertions**
+pass under ASan/UBSan; the exact published source fails the two new groups while
+passing the original five. See the [allocation report](native-allocation-contracts-2026-11-08.md).
+
+The positioned-I/O follow-up also preserves Linux's unused-buffer and error
+ordering: an empty-file or null-device read need not write a destination,
+directories report `EISDIR`, and zero/null device writes can discard input while
+random-device writes require it. These are checks on actual file/device state,
+not a blanket acceptance of bad pointers. The production-slice host harness now
+passes **110 assertions**, and the independent Linux kernel reference passes
+**65**; the exact `223d4b3b` slice fails 11 new checks. Actual Windows NUL-device
+classification is still a mandatory runtime check. See the
+[positioned-I/O report](positioned-io-followup-2026-11-08.md).
+
+The small descriptor-registry lookup required by that repair is the only new
+`fd.cc` code. The active TCP preservation gate pins the complete reviewed file
+and independently requires removing that exact wrapper to reproduce every byte
+of its prior baseline. Missing, modified, duplicated and unrelated-source
+mutations were all rejected without changing repository files. Historical
+certificates, TCP behavior, supplier identity and receipt gates remain intact.
+Main CI preflight now also runs the positioned-I/O sanitizer harness, the
+100-check temporary-directory entry fixture and the 82-check UNC mapping
+fixture. They supplement the mandatory Windows file/API checks.
+
+Both focused Windows jobs for `223d4b3b` then reached the unchanged framework
+`Os.memfd_create` assertion and failed with `ENOSYS`. The real storage backend
+existed, but the common and x86-64 guest raw-syscall routes were absent. Both
+now reach that backend. Its bounded repair validates names and flags, preserves
+actual descriptor inheritance, requests executable mapping access, and cleans
+up a created temporary file after a failed open. **193 production-source host
+assertions** pass under ASan/UBSan; the exact published negative control fails
+57 of its 121 executed assertions. Ten independent Linux checks and strict
+complete-source Windows x86-64/ARM64 compilation also pass. Enforced seals,
+huge pages and a no-execute seal remain absent; those requests are explicitly
+rejected. See the [memfd report](memfd-syscall-followup-2026-11-08.md).
+
+The active TCP gate pins the complete reviewed `system.cc` and independently
+compares every byte outside the allocation and memfd function bodies against
+its baseline. Five additional nonmutating negative controls reject altered
+function bodies, unrelated `fcntl` behavior, an extra include and a changed
+suffix. The preflight also runs the memfd sanitizer harness. These changes do
+not relax supplier or artifact identity checks.
+
+## Actual Windows checkpoint after the native and temporary-path repair
+
+Run [42453120565](https://github.com/gesher-runtime/gesher/actions/runs/42453120565),
+source `223d4b3b6a4947bd3c1b3c679d95fc944b4d956a`, confirms both Windows versions
+pass the real notification-policy binary reload, ten local temporary-directory
+VM scenarios, the 21 UNC file/NIO assertions, explicit URI Binder contracts,
+public audio-focus callbacks and job-notification lifecycle. The two E2E jobs
+also pass. These observations do not turn either focused job into a success:
+each still reports exactly five failures at this checkpoint.
+
+One is the real missing memfd route above. Three package/activity/split fixture
+failures were blocked before their intended assertions by missing process
+bootstrap: the actual system context needs a display service, and package
+caches require writable native `ApplicationSharedMemory`. Their fixture setup
+now provides the actual production display Binder and native shared memory,
+retaining the real manager, generated AIDL/Parcel and cache-invalidation paths.
+No cache is disabled. The remaining UNC temporary-default failure came from
+PowerShell retaining an empty `TMPDIR` when asked to set it to null; the native
+runtime correctly preserved that explicit override. The helper now removes an
+absent variable through the environment provider and restores absent versus
+empty state exactly. The new Windows runs must verify all five repairs.
+
+The framework track now uses the existing bounded process-and-reader cleanup
+helper; it no longer waits indefinitely on a redirected stream inherited by a
+descendant after the primary VM exits. Exit codes, time limits and required
+success markers remain enforced.
+
+## Managed Activity caller identity and historical URI permissions
+
+Managed activities now retain a stable initial caller token and separate
+immutable caller records for each delivered Intent and result. The record
+captures the authenticated package generation, UID, identity-sharing choice
+and actual read/write permissions at delivery. It collects data, single or
+multiple `EXTRA_STREAM` values, and nested ClipData Intents. Current URI grants
+and historical caller access remain distinct, so revocation cannot rewrite an
+old caller's snapshot. Queries validate the querying app's actual provider
+access before returning the historical result.
+
+The same records pass through real `ReferrerIntent`, `ResultInfo` and launch
+transactions, including activity recreation. PendingIntent attribution uses
+the verified creator and the normalized creator/sender sharing options. A
+request's accepted lifetime retains the creator capability and code generation;
+the holder being finished by that request's own `CLEAR_TOP` cannot silently
+cancel the queued callback. Target generations and authenticated publication
+are still checked.
+
+The production controller/policy host fixture passes **116 assertions**, with
+constructed installed/process state and explicit native boundary adapters.
+The prior controller fails the write-permission negative control. Separate
+components and peer APKs compile through javac, D8, aapt2 and zipalign and are
+mandatory in both focused and full Windows runs. They exercise actual initial,
+new-Intent, recreation, result and cross-package PendingIntent callbacks, plus
+real provider descriptor contents. Their Windows execution is pending at this
+checkpoint; host assertions are not represented as cross-process ART proof.
+See the [caller lifecycle report](component-caller-followup-2026-11-08.md) for
+the primary Android references, exact evidence and remaining boundaries.
+
 ## Material compatibility work still open
 
 These current-source limits are separate from the repaired defects:
@@ -296,11 +403,17 @@ These current-source limits are separate from the repaired defects:
   package visibility remain outside the implemented owner-user model. The new
   activity-options implementation selects a real candidate for ambiguous
   implicit specifics rather than claiming an implemented system chooser.
-- **Activity-scoped URI capabilities.** The explicit grant implementation does
-  not create automatic Intent/ClipData grants, persistable permissions, or
-  per-delivery `ComponentCaller` permission records. Activity launch identity
-  and inherited caller-permission defaults still require that lifecycle work;
-  an ownerless grant record cannot substitute for it.
+- **Further activity and URI policy.** The managed-activity caller records do
+  not implement automatic Intent/ClipData grants, persistable permissions,
+  persisted task restoration, full task-affinity selection or dynamically
+  delegated provider authorization. The standalone `GesherAppDriver` does not
+  own a managed ActivityRecord and still lacks that caller lifecycle. Existing
+  explicit grants and per-delivery snapshots do not substitute for these
+  separate backends.
+- **Further descriptor policy.** General file-status flag changes, enforced
+  file seals and random-device entropy mixing remain incomplete. A supported
+  memfd backed by a real temporary file does not establish Linux shmem
+  accounting, all mount-policy independence or unsupported sealing behavior.
 - **Remaining notification/job policy.** Old retained notification records from
   store versions 1 and 2 have no channel ID, so selective channel deletion cannot
   identify them after restart. Distinct user-stop/background-restriction job

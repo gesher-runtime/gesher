@@ -171,12 +171,44 @@ These ART fixtures require the Windows runtime and are not reported here as
 locally executed. A successful fixture build or host method test does not replace
 that runtime gate.
 
+### First focused Windows result and fixture bootstrap correction
+
+The focused Windows 2022 job for published `223d4b3b` reached these real
+fixtures and exposed missing setup in their isolated test VMs:
+[job 128649121906](https://github.com/gesher-runtime/gesher/actions/runs/42453120565/job/128649121906).
+`PackageQueryContractTest` failed while constructing `ContextImpl`: its display
+lookup reached the external service manager before the fixture had registered a
+display service. `SplitPackageContractTest` performed real APK dex optimization,
+then the first installed-package publication failed with
+`unable to assign nonce handle: system_server/package_info_cache` because the VM
+had not created its writable framework shared-memory region. Neither was a
+successful complete package runtime test.
+
+The fixtures now establish those actual prerequisites before the relevant work.
+The query fixture registers the production `Services.DisplayManager` Binder and
+its existing package Binder in `ServiceManager`'s cache before constructing the
+real context. Both fixtures allocate and initialize native
+[`ApplicationSharedMemory`](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/com/android/internal/os/ApplicationSharedMemory.java)
+before package-cache use. This matches the relevant production order:
+`SystemServer` initializes the writable region before publishing installation
+APIs, while application startup supplies service Bindings before context use.
+The generated AIDL proxies, public `ApplicationPackageManager`, real installer,
+signed sessions and all previous assertions remain exercised.
+
+The query fixture also counts actual package Binder transactions: the first
+public query reaches the service, the repeated query uses the framework cache,
+and invalidating its native nonce forces a fresh service query. Removal and
+re-addition must invalidate a previously cached package result too. No cache is
+disabled or switched to a test-mode nonce. The three related package/activity
+fixtures compile against the actual Android core and framework with Java 21,
+target 17, and convert to DEX; completion on Windows remains the next runtime
+gate.
+
 ## Remaining scope
 
-`queryIntentActivityOptions` remains unimplemented. Its pinned
-[ResolveIntentHelper](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/services/core/java/com/android/server/pm/ResolveIntentHelper.java)
-contract includes specific-intent resolution, ordering, deduplication, caller
-exclusion and filter flags; returning a generic empty list would conceal that
-missing behavior. This follow-up also does not implement Android multiuser package
-state, package visibility policy, supplementary-group assignment, or every service
-behind the newly preserved manifest flags.
+The subsequently implemented `queryIntentActivityOptions` is described in the
+[activity-options follow-up](activity-options-followup-2026-11-08.md), including
+its remaining resolver-choice and visibility limits. This package follow-up
+does not implement Android multiuser package state, package visibility policy,
+supplementary-group assignment, or every service behind the newly preserved
+manifest flags.

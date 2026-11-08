@@ -11,12 +11,17 @@ import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.Property;
 import android.content.pm.VersionedPackage;
 import android.content.res.AssetManager;
+import android.hardware.display.IDisplayManager;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.IInterface;
 import android.os.Looper;
 import android.os.Parcel;
 import android.os.RemoteException;
+import android.os.ServiceManager;
+
+import com.android.internal.os.ApplicationSharedMemory;
+import com.gesher.server.Services;
 
 import java.io.File;
 import java.lang.reflect.Constructor;
@@ -28,6 +33,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
@@ -142,6 +148,11 @@ public final class PackageQueryContractTest {
     public static void main(String[] args) throws Exception {
         require(args.length == 1, "Pass the current components.apk fixture");
         System.loadLibrary("android_runtime");
+        // This VM owns the server side of package-cache invalidation, just as
+        // SystemServer does before publishing installation and query services.
+        ApplicationSharedMemory.setInstance(ApplicationSharedMemory.create());
+        require(ApplicationSharedMemory.getInstance().isMutable(),
+                "Package fixture did not acquire writable native cache memory");
         AssetManager.createSystemAssetsInZygoteLocked(false,
                 System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
         if (Looper.myLooper() == null) Looper.prepareMainLooper();
@@ -165,12 +176,22 @@ public final class PackageQueryContractTest {
         IBinder target = (IBinder) standInClass.getMethod("asBinder").invoke(standIn);
         // No attached local interface: exercise the generated proxy/stub and both
         // Parcel directions, without needing a shared external Binder device.
+        AtomicInteger transactions = new AtomicInteger();
         IPackageManager wire = IPackageManager.Stub.asInterface(new Binder() {
             @Override protected boolean onTransact(int code, Parcel request, Parcel reply, int flags)
                     throws RemoteException {
+                transactions.incrementAndGet();
                 return target.transact(code, request, reply, flags);
             }
         });
+        // ContextImpl obtains its display through the real framework manager.
+        // Publish the production display service before constructing that context,
+        // as bindApplication's cache does; no external servicemanager is involved.
+        Object display = standInClass.getMethod("of", Class.class, IInterface.class)
+                .invoke(null, IDisplayManager.class, new Services.DisplayManager());
+        ServiceManager.initServiceCache(Map.of("package", wire.asBinder(),
+                Context.DISPLAY_SERVICE,
+                (IBinder) standInClass.getMethod("asBinder").invoke(display)));
         Field field = ActivityThread.class.getDeclaredField("sPackageManager");
         field.setAccessible(true);
         field.set(null, wire);
@@ -178,10 +199,24 @@ public final class PackageQueryContractTest {
         constructor.setAccessible(true);
         Context context = constructor.newInstance().getSystemContext();
         PackageManager client = context.getPackageManager();
+        require(context.getDisplay() != null
+                && "android.app.ApplicationPackageManager".equals(client.getClass().getName()),
+                "Fixture did not construct the real context, display and public package manager");
 
         int flags = PackageManager.GET_ACTIVITIES | PackageManager.MATCH_DIRECT_BOOT_AWARE
                 | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+        PackageManager.invalidatePackageInfoCache();
+        int beforeQuery = transactions.get();
         PackageInfo expected = client.getPackageInfo(PACKAGE, flags);
+        require(transactions.get() == beforeQuery + 1,
+                "First public package query did not cross its generated Binder proxy");
+        packageInfo(client.getPackageInfo(PACKAGE, flags), expected, true);
+        require(transactions.get() == beforeQuery + 1,
+                "Initialized native nonce did not permit a real framework cache hit");
+        PackageManager.invalidatePackageInfoCache();
+        packageInfo(client.getPackageInfo(PACKAGE, flags), expected, true);
+        require(transactions.get() == beforeQuery + 2,
+                "Native cache invalidation did not force a fresh Binder query");
         packageInfo(client.getPackageInfo(new VersionedPackage(PACKAGE,
                 PackageManager.VERSION_CODE_HIGHEST), flags), expected, true);
         packageInfo(client.getPackageInfo(new VersionedPackage(PACKAGE,
@@ -316,6 +351,8 @@ public final class PackageQueryContractTest {
         method(pmClass, "endPackageRemoval", apkClass).invoke(service, apk);
         property(client.getProperty(PROPERTY, PACKAGE), null, PackageManager.TYPE_APPLICATION);
         method(pmClass, "remove", String.class).invoke(service, PACKAGE);
+        missing(() -> client.getPackageInfo(PACKAGE, flags),
+                "Removed package survived in the public framework package-info cache");
         missing(() -> client.getPackageGids(PACKAGE), "Removed package kept a group inventory");
         require(Arrays.equals(client.getNamesForUids(new int[]{uid}), new String[]{null})
                 && client.getPackagesHoldingPermissions(new String[]{heldPermission}, 0).isEmpty(),
@@ -323,6 +360,7 @@ public final class PackageQueryContractTest {
         missing(() -> client.getProperty(PROPERTY, PACKAGE), "Removed property was cached as installed");
         require(client.queryApplicationProperty(PROPERTY).isEmpty(), "Removed package remained in property index");
         method(pmClass, "add", apkClass).invoke(service, apk);
+        packageInfo(client.getPackageInfo(PACKAGE, flags), expected, true);
         property(client.getProperty(PROPERTY, PACKAGE), null, PackageManager.TYPE_APPLICATION);
         // PackageImpl.addActivity retains duplicate manifest declarations. AOSP's
         // property index answers the last matching declaration, while bulk queries

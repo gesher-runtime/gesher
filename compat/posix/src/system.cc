@@ -540,16 +540,50 @@ ssize_t splice(int, off_t*, int, off_t*, size_t, unsigned int) { return errno = 
 // --- memfd -------------------------------------------------------------------
 
 int memfd_create(const char* name, unsigned int flags) {
-  (void)name;
-  wchar_t dir[MAX_PATH], path[MAX_PATH];
-  if (GetTempPathW(MAX_PATH, dir) == 0 || GetTempFileNameW(dir, L"mfd", 0, path) == 0) {
-    return gesher::FailWithLastError();
+  constexpr unsigned known = MFD_CLOEXEC | MFD_ALLOW_SEALING | MFD_HUGETLB |
+                             MFD_NOEXEC_SEAL | MFD_EXEC;
+  // Huge-page size encodings are valid only with HUGETLB, even though this
+  // backend cannot supply huge pages. Reject invalid flags before the name.
+  const unsigned huge_size = (flags & MFD_HUGETLB) ? (0x3fu << 26) : 0;
+  if ((flags & ~(known | huge_size)) != 0 ||
+      ((flags & MFD_NOEXEC_SEAL) != 0 && (flags & MFD_EXEC) != 0))
+    return errno = EINVAL, -1;
+  // Linux permits at most 249 name bytes (NAME_MAX minus "memfd:"). Probe
+  // bounded bytes without dereferencing an untrusted native caller pointer.
+  if (name == nullptr) return errno = EFAULT, -1;
+  const uintptr_t address = reinterpret_cast<uintptr_t>(name);
+  for (size_t i = 0; i < 250; ++i) {
+    char byte;
+    SIZE_T copied = 0;
+    if (address > UINTPTR_MAX - i ||
+        !ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address + i),
+                           &byte, 1, &copied) || copied != 1)
+      return errno = EFAULT, -1;
+    if (byte == '\0') break;
+    if (i == 249) return errno = EINVAL, -1;
   }
-  HANDLE h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE,
-                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+  // A delete-on-close file supplies storage, not enforceable Linux seals or
+  // huge pages. Do not report those capabilities merely because a file opens.
+  if ((flags & (MFD_ALLOW_SEALING | MFD_HUGETLB | MFD_NOEXEC_SEAL)) != 0)
+    return errno = EOPNOTSUPP, -1;
+  wchar_t dir[MAX_PATH], path[MAX_PATH];
+  DWORD length = GetTempPathW(MAX_PATH, dir);
+  if (length == 0) return gesher::FailWithLastError();
+  if (length >= MAX_PATH) return errno = ENAMETOOLONG, -1;
+  if (GetTempFileNameW(dir, L"mfd", 0, path) == 0) return gesher::FailWithLastError();
+  SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, (flags & MFD_CLOEXEC) == 0};
+  // The supported default policy is executable, as is explicit MFD_EXEC.
+  HANDLE h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &inherit,
                          CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
                          nullptr);
-  if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  if (h == INVALID_HANDLE_VALUE) {
+    // GetTempFileNameW already created a file. A failed open owns no handle
+    // whose close could remove it, so clean up that real file explicitly.
+    DWORD error = GetLastError();
+    DeleteFileW(path);
+    return errno = gesher::ErrnoFromWin32(error), -1;
+  }
   gesher::record_locks::DescriptorGuard descriptor_guard;
   int fd = gesher::CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h),
                            _O_RDWR | _O_BINARY | ((flags & MFD_CLOEXEC) != 0 ? _O_NOINHERIT : 0)));

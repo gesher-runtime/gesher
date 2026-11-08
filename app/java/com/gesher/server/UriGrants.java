@@ -144,6 +144,25 @@ final class UriGrants {
         return hasDirectAccess(target, info, uri, modes);
     }
 
+    /** Android's full check used by ComponentCaller, including advanced mode bits. */
+    boolean canAccessForCaller(ApkPackage target, Uri original, int modes, int userId) {
+        Uri uri;
+        try { uri = checkedUri(original, userId); }
+        catch (SecurityException invalid) { return false; }
+        int access = modes & ACCESS;
+        if (!current(target) || access == 0) return false;
+        // Extra bits do not invalidate direct provider permission. They do affect
+        // explicit grant identity/strength: a plain grant is neither a prefix
+        // capability nor a persistable one. No persistable grants exist here.
+        if ("settings".equals(uri.getAuthority())) return canAccess(target, uri, access, userId);
+        ProviderInfo info = ContentProviders.declaredProvider(mPm, uri.getAuthority());
+        if (info == null) return false;
+        if (hasDirectAccess(target, info, uri, access)) return true;
+        if ((modes & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0) return false;
+        return holdsGrant(target, uri, access,
+                (modes & Intent.FLAG_GRANT_PREFIX_URI_PERMISSION) != 0);
+    }
+
     /** General provider/path access is distinct from an explicitly held URI grant. */
     private boolean hasDirectAccess(ApkPackage target, ProviderInfo info, Uri uri, int modes) {
         if (!current(target) || modes == 0) return false;
