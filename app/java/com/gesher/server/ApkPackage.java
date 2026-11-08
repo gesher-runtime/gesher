@@ -42,6 +42,7 @@ import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -162,16 +163,27 @@ public final class ApkPackage {
         }
         File[] apks = directory.listFiles((dir, name) -> name.endsWith(".apk"));
         if (apks == null) throw new IOException("Cannot read package code directory: " + directory);
+        Set<String> requiredTypes = new HashSet<>();
+        Set<String> splitTypes = new HashSet<>();
         for (File file : apks) {
-            if (file.equals(base)) continue;
-            ApkLite split = codeApkLite(file);
+            boolean isBase = file.equals(base);
+            ApkLite split = isBase ? baseLite : codeApkLite(file);
             // Include versionCodeMajor: the framework's cluster-lite check only compares
             // the low versionCode, whereas an installed set must have one long version.
-            if (!file.getName().startsWith("split_") || split.getSplitName() == null
+            if (!isBase && (!file.getName().startsWith("split_") || split.getSplitName() == null
                     || !baseLite.getPackageName().equals(split.getPackageName())
-                    || baseLite.getLongVersionCode() != split.getLongVersionCode()) {
+                    || baseLite.getLongVersionCode() != split.getLongVersionCode())) {
                 throw new IOException("Inconsistent installed split APK: " + file);
             }
+            if (split.getRequiredSplitTypes() != null) requiredTypes.addAll(split.getRequiredSplitTypes());
+            if (split.getSplitTypes() != null) splitTypes.addAll(split.getSplitTypes());
+        }
+        // PackageInstallerSession enforces this before publishing a full APK set;
+        // PackageParser2's cluster parser alone does not validate required split types.
+        if (baseLite.isSplitRequired() && (apks.length <= 1 || !splitTypes.containsAll(requiredTypes))) {
+            throw new android.content.pm.PackageParser.PackageParserException(
+                    PackageManager.INSTALL_FAILED_MISSING_SPLIT,
+                    "INSTALL_FAILED_MISSING_SPLIT: " + baseLite.getPackageName());
         }
         return parse(base.getPath(), directory);
     }
@@ -704,6 +716,14 @@ public final class ApkPackage {
         }
         ai.uid = mUid;
         ai.enabled = true;
+        // PackageParser2 returns a ParsedPackage, before PackageImpl.hideAsFinal
+        // fills its cached ApplicationInfo flags. Derive all manifest flags using
+        // the same AOSP helpers; restoring individual flags leaves heap, network,
+        // native-library and storage policy absent from ordinary app initialization.
+        // Keep the installed/state flags generated above and our actual-DEX gate.
+        ai.flags = (ai.flags | AppInfoUtils.appInfoFlags(parsed))
+                & ~ApplicationInfo.FLAG_HAS_CODE;
+        ai.privateFlags |= AppInfoUtils.appInfoPrivateFlags(parsed);
         ai.flags |= ApplicationInfo.FLAG_INSTALLED;
         if (mSystemAddon) {
             ai.flags |= ApplicationInfo.FLAG_SYSTEM;
@@ -712,15 +732,6 @@ public final class ApkPackage {
         if (mHasCode) {
             // As installed packages carry it: LoadedApk loads code only with it.
             ai.flags |= ApplicationInfo.FLAG_HAS_CODE;
-        }
-        if (parsed.isRtlSupported()) {
-            // android:supportsRtl (rtl track): the flag PackageImpl derives in hideAsFinal,
-            // which this parse never reaches; without it views ignore RTL layouts.
-            ai.flags |= ApplicationInfo.FLAG_SUPPORTS_RTL;
-        }
-        if (parsed.isIsolatedSplitLoading()) {
-            // Like the RTL flag, this is normally derived by PackageImpl.hideAsFinal.
-            ai.privateFlags |= ApplicationInfo.PRIVATE_FLAG_ISOLATED_SPLIT_LOADING;
         }
         // privateFlagsExt comes from PackageImpl's mBaseAppInfoPrivateFlagsExt, also set only
         // in hideAsFinal (assignDerivedFields2), so it was 0 here: an application's

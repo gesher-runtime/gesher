@@ -7,6 +7,7 @@ package com.gesher.server;
 import android.app.INotificationManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
+import android.app.NotificationChannelGroup;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.ComponentName;
@@ -27,15 +28,26 @@ import android.service.notification.NotificationListenerService;
 import android.service.notification.NotificationRankingUpdate;
 import android.service.notification.NotificationStats;
 import android.service.notification.StatusBarNotification;
+import android.util.AtomicFile;
+import android.util.Xml;
+
+import com.android.internal.notification.NotificationChannelGroupsHelper;
+import com.android.modules.utils.TypedXmlPullParser;
+import com.android.modules.utils.TypedXmlSerializer;
+import org.xmlpull.v1.XmlPullParser;
 
 import com.gesher.app.shell.AppShell;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.Properties;
 
@@ -65,15 +77,19 @@ public final class NotificationManagerService extends INotificationManager.Defau
     /** The toasts' group: one per app id, so the tag alone tells them apart. */
     private static final String TOAST_GROUP = "android";
     private static final String DEFAULT_CHANNEL = NotificationChannel.DEFAULT_CHANNEL_ID;
+    private static final int CHANNEL_LIMIT = 5000;
+    private static final int GROUP_LIMIT = 6000;
 
     /** A posted notification: NotificationRecord. */
     private static final class Record {
         final StatusBarNotification sbn;
         final NotificationChannel channel;
+        final int importance;
 
-        Record(StatusBarNotification sbn, NotificationChannel channel) {
+        Record(StatusBarNotification sbn, NotificationChannel channel, int importance) {
             this.sbn = sbn;
             this.channel = channel;
+            this.importance = importance;
         }
 
         Notification n() {
@@ -94,10 +110,15 @@ public final class NotificationManagerService extends INotificationManager.Defau
         }
     }
 
-    // Guarded by this. Keys: package/channel id; package/tag/id.
+    // Guarded by this. Published channel/group objects are never modified in place.
+    // Deleted channels remain as tombstones, as in Android's PreferencesHelper.
     private final Map<String, NotificationChannel> mChannels = new LinkedHashMap<>();
+    private final Map<String, NotificationChannelGroup> mChannelGroups = new LinkedHashMap<>();
+    private final Set<String> mLoadedChannelPackages = new HashSet<>();
     private final Map<String, Record> mPosted = new LinkedHashMap<>();
     private final Object mPublicationLock = new Object();
+    private JobSchedulerService mJobScheduler; // Guarded by mPublicationLock.
+    private final ThreadLocal<List<Runnable>> mDeferredListenerChanges = new ThreadLocal<>();
     private Runnable mBeforePostPublication; // Server-local race fixture; never a Binder option.
     private final List<Listener> mListeners = new ArrayList<>();
     private final Set<String> mRegisteredAppIds = new HashSet<>();
@@ -289,21 +310,40 @@ public final class NotificationManagerService extends INotificationManager.Defau
         // Foreground-service state lives in ActiveServices; denied posting must not
         // expose its content through toasts, listeners or active-notification queries.
         if (!mayPost(pkg)) { permissionChanged(pkg); return; }
-        NotificationChannel channel = channelFor(pkg, notification.getChannelId());
+        final String channelKey = channelKey(pkg, notification.getChannelId());
+        final NotificationChannel capturedChannel;
+        final NotificationChannel channel;
+        synchronized (this) {
+            loadChannelsLocked(pkg);
+            capturedChannel = mChannels.get(channelKey);
+            if (capturedChannel == null || capturedChannel.isDeleted()) {
+                SystemServer.log("notification: no channel " + notification.getChannelId() + " for " + pkg);
+                return;
+            }
+            channel = capturedChannel;
+        }
         StatusBarNotification sbn = new StatusBarNotification(pkg, pkg, id, tag,
                 packageFor(pkg) == null ? android.os.Process.SYSTEM_UID : packageFor(pkg).uid(),
                 0, notification, UserHandle.SYSTEM, null,
                 System.currentTimeMillis());
-        Record r = new Record(sbn, channel);
+        Record r = new Record(sbn, channel, notificationImportance(channel, notification,
+                captured != null && captured.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.O));
         Runnable beforePublication = mBeforePostPublication;
         if (beforePublication != null) beforePublication.run();
         synchronized (mPublicationLock) {
             if (packageFor(pkg) != captured || captured == null && !"android".equals(pkg) || !mayPost(pkg)) return;
             boolean update;
             synchronized (this) {
+                // Group/channel deletion and recreation must not authorize a post
+                // that captured a previous channel generation before publication.
+                if (mChannels.get(channelKey) != capturedChannel) return;
+                NotificationChannelGroup group = channel.getGroup() == null ? null
+                        : mChannelGroups.get(pkg + "/" + channel.getGroup());
+                if ((r.importance == NotificationManager.IMPORTANCE_NONE || group != null && group.isBlocked())
+                        && !notification.isMediaNotification()) return;
                 update = mPosted.put(key(pkg, tag, id), r) != null;
             }
-            int importance = channel.getImportance();
+            int importance = r.importance;
             String shown;
             if (importance == NotificationManager.IMPORTANCE_NONE) {
                 shown = "not shown: its channel is blocked";
@@ -324,6 +364,51 @@ public final class NotificationManagerService extends INotificationManager.Defau
 
     void cancel(String pkg, String tag, int id) {
         cancel(pkg, tag, id, NotificationListenerService.REASON_APP_CANCEL);
+    }
+
+    /** The final UIJ association ended while its notification remains visible. */
+    void removeUserInitiatedJobFlag(String pkg, int id) {
+        Record record;
+        synchronized (mPublicationLock) {
+            synchronized (this) {
+                record = mPosted.get(key(pkg, null, id));
+                if (record == null || (record.n().flags & Notification.FLAG_USER_INITIATED_JOB) == 0) return;
+                record.n().flags &= ~Notification.FLAG_USER_INITIATED_JOB;
+            }
+            if (WindowsHost.inSystemServer()) {
+                NotificationStore.save(am(), record.sbn.getKey(), pkg, null, id, record.n());
+            }
+        }
+        notifyListeners(record, true, 0);
+    }
+
+    private static int notificationImportance(NotificationChannel channel, Notification notification, boolean legacy) {
+        int importance = channel.getImportance();
+        if (!legacy || !DEFAULT_CHANNEL.equals(channel.getId())
+                || importance != NotificationManager.IMPORTANCE_UNSPECIFIED && channel.hasUserSetImportance()) return importance;
+        if ((notification.flags & Notification.FLAG_HIGH_PRIORITY) != 0) notification.priority = Notification.PRIORITY_MAX;
+        notification.priority = Math.max(Notification.PRIORITY_MIN, Math.min(Notification.PRIORITY_MAX, notification.priority));
+        importance = notification.priority == Notification.PRIORITY_MIN ? NotificationManager.IMPORTANCE_MIN
+                : notification.priority == Notification.PRIORITY_LOW ? NotificationManager.IMPORTANCE_LOW
+                : notification.priority >= Notification.PRIORITY_HIGH ? NotificationManager.IMPORTANCE_HIGH
+                : NotificationManager.IMPORTANCE_DEFAULT;
+        boolean sound = (channel.getUserLockedFields() & NotificationChannel.USER_LOCKED_SOUND) == 0
+                ? (notification.defaults & Notification.DEFAULT_SOUND) != 0 || notification.sound != null
+                : channel.getSound() != null;
+        boolean vibration = channel.shouldVibrate();
+        if ((channel.getUserLockedFields() & NotificationChannel.USER_LOCKED_VIBRATION) == 0) {
+            vibration = (notification.defaults & Notification.DEFAULT_VIBRATE) != 0;
+            if (!vibration && notification.vibrate != null) {
+                try {
+                    vibration = android.os.VibrationEffect.createWaveform(notification.vibrate,
+                            (notification.flags & Notification.FLAG_INSISTENT) != 0 ? 0 : -1) != null;
+                } catch (IllegalArgumentException invalidPattern) { vibration = false; }
+            }
+        }
+        if (sound || vibration) importance = Math.max(importance, NotificationManager.IMPORTANCE_DEFAULT);
+        else importance = Math.min(importance, NotificationManager.IMPORTANCE_LOW);
+        if (notification.fullScreenIntent != null) importance = NotificationManager.IMPORTANCE_HIGH;
+        return importance;
     }
 
     private void cancel(String pkg, String tag, int id, int reason) {
@@ -355,15 +440,28 @@ public final class NotificationManagerService extends INotificationManager.Defau
         notifyListeners(r, false, reason);
     }
 
-    private NotificationChannel channelFor(String pkg, String channelId) {
-        synchronized (this) {
-            NotificationChannel c = mChannels.get(pkg + "/" + channelId);
-            if (c != null) return c;
+    private static String channelKey(String pkg, String id) {
+        return pkg + "/" + (id != null ? id : DEFAULT_CHANNEL);
+    }
+
+    /** Trusted service/job association changes use the same order as channel deletion. */
+    void withChannelLifecycle(Runnable action) {
+        if (mDeferredListenerChanges.get() != null) {
+            synchronized (mPublicationLock) { action.run(); }
+            return;
         }
-        // No such channel (Android drops the notification of an app targeting O or later;
-        // here it is shown with the default importance, logged).
-        return new NotificationChannel(channelId != null ? channelId : DEFAULT_CHANNEL,
-                "Default", NotificationManager.IMPORTANCE_DEFAULT);
+        List<Runnable> callbacks = new ArrayList<>();
+        mDeferredListenerChanges.set(callbacks);
+        try {
+            synchronized (mPublicationLock) { action.run(); }
+        } finally {
+            mDeferredListenerChanges.remove();
+            for (Runnable callback : callbacks) callback.run();
+        }
+    }
+
+    void attachJobScheduler(JobSchedulerService jobs) {
+        synchronized (mPublicationLock) { mJobScheduler = jobs; }
     }
 
     private int showToast(Record r, boolean update) {
@@ -373,7 +471,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
         File icon = registerAppId(pkg, appId);
         Notification n = r.n();
         File large = NotificationIcons.largeIcon(pkg, r.sbn.getKey(), n.getLargeIcon());
-        int importance = r.channel.getImportance();
+        int importance = r.importance;
         boolean quiet = importance == NotificationManager.IMPORTANCE_MIN
                 || importance == NotificationManager.IMPORTANCE_LOW;
         boolean suppressPopup = quiet
@@ -733,8 +831,8 @@ public final class NotificationManagerService extends INotificationManager.Defau
                 NotificationListenerService.Ranking ranking = new NotificationListenerService.Ranking();
                 ranking.populate(r.sbn.getKey(), rank++, true /* matchesInterruptionFilter */,
                         NotificationListenerService.Ranking.VISIBILITY_NO_OVERRIDE,
-                        0 /* suppressedVisualEffects */, r.channel.getImportance(),
-                        null /* explanation */, null /* overrideGroupKey */, r.channel,
+                        0 /* suppressedVisualEffects */, r.importance,
+                        null /* explanation */, null /* overrideGroupKey */, copyChannel(r.channel),
                         null /* overridePeople */, null /* snoozeCriteria */,
                         true /* showBadge */, 0 /* userSentiment */, false /* hidden */,
                         0 /* lastAudiblyAlertedMs */, false /* noisy */,
@@ -752,6 +850,11 @@ public final class NotificationManagerService extends INotificationManager.Defau
     }
 
     private void notifyListeners(Record r, boolean posted, int reason) {
+        List<Runnable> deferred = mDeferredListenerChanges.get();
+        if (deferred != null) {
+            deferred.add(() -> notifyListeners(r, posted, reason));
+            return;
+        }
         if (posted) synchronized (this) {
             if (mPosted.get(key(r.sbn.getPackageName(), r.sbn.getTag(), r.sbn.getId())) != r
                     || !mayPost(r.sbn.getPackageName())) return;
@@ -847,11 +950,21 @@ public final class NotificationManagerService extends INotificationManager.Defau
         synchronized (mPublicationLock) { packageRemovedLocked(pkg); }
     }
     private void packageRemovedLocked(String pkg) {
-        revokeListenersForPackage(pkg);
         synchronized (this) {
+            AtomicFile file = channelFile(pkg);
+            file.delete();
+            for (String suffix : new String[]{"", ".new", ".bak"}) {
+                if (new File(file.getBaseFile().getPath() + suffix).exists()) {
+                    throw new IllegalStateException("Cannot remove notification channel state for " + pkg);
+                }
+            }
             mPosted.keySet().removeIf(k -> k.startsWith(pkg + "/"));
             mChannels.keySet().removeIf(k -> k.startsWith(pkg + "/"));
+            mChannelGroups.keySet().removeIf(k -> k.startsWith(pkg + "/"));
+            mLoadedChannelPackages.add(pkg);
         }
+        revokeListenersForPackage(pkg);
+        invalidateChannelCaches(true, true);
         String appId = AppShell.appUserModelId(pkg);
         int cleared = mTestToast == null ? WindowsHost.clearToasts(appId) : 0;
         int unregistered = mTestToast == null ? WindowsHost.unregisterAppId(appId) : 0;
@@ -978,20 +1091,244 @@ public final class NotificationManagerService extends INotificationManager.Defau
         return areNotificationsEnabled(pkg);
     }
 
+    private static AtomicFile channelFile(String pkg) {
+        return new AtomicFile(new File(Device.dataDir(), "system/notification-channels/" + pkg + ".xml"));
+    }
+
+    /** Framework XML preserves channel policy, including deleted-channel tombstones. */
+    private void loadChannelsLocked(String pkg) {
+        if (mLoadedChannelPackages.contains(pkg)) {
+            updateDefaultChannelLocked(pkg);
+            return;
+        }
+        Map<String, NotificationChannel> channels = new LinkedHashMap<>();
+        Map<String, NotificationChannelGroup> groups = new LinkedHashMap<>();
+        try (FileInputStream input = channelFile(pkg).openRead()) {
+            TypedXmlPullParser parser = Xml.resolvePullParser(input);
+            int event;
+            do { event = parser.next(); } while (event != XmlPullParser.START_TAG
+                    && event != XmlPullParser.END_DOCUMENT);
+            ApkPackage installed = packageFor(pkg);
+            int uid = installed == null ? android.os.Process.SYSTEM_UID : installed.uid();
+            if (event != XmlPullParser.START_TAG || !"notification-channels".equals(parser.getName())
+                    || parser.getAttributeInt(null, "version", -1) != 1
+                    || !pkg.equals(parser.getAttributeValue(null, "package"))
+                    || parser.getAttributeInt(null, "uid", -1) != uid) {
+                throw new IOException("Wrong notification channel state owner or version");
+            }
+            while ((event = parser.next()) != XmlPullParser.END_DOCUMENT) {
+                if (event != XmlPullParser.START_TAG || parser.getDepth() != 2) continue;
+                String id = parser.getAttributeValue(null, "id");
+                String name = parser.getAttributeValue(null, "name");
+                if (id == null || name == null || name.isEmpty()) throw new IOException("Invalid channel header");
+                if ("channelGroup".equals(parser.getName())) {
+                    if (groups.size() >= GROUP_LIMIT) throw new IOException("Too many channel groups");
+                    NotificationChannelGroup group = new NotificationChannelGroup(id, name);
+                    group.populateFromXml(parser);
+                    group.lockFields(parser.getAttributeInt(null, "locked", 0));
+                    groups.put(id, group);
+                } else if ("channel".equals(parser.getName())) {
+                    if (channels.size() >= CHANNEL_LIMIT) throw new IOException("Too many channels");
+                    int importance = parser.getAttributeInt(null, "importance", NotificationManager.IMPORTANCE_UNSPECIFIED);
+                    if (importance < NotificationManager.IMPORTANCE_NONE
+                            && !(DEFAULT_CHANNEL.equals(id) && importance == NotificationManager.IMPORTANCE_UNSPECIFIED)
+                            || importance > NotificationManager.IMPORTANCE_MAX) throw new IOException("Invalid channel importance");
+                    NotificationChannel channel = new NotificationChannel(id, name, importance);
+                    channel.populateFromXml(parser);
+                    // PreferencesHelper expires deleted channel policy after 30 days.
+                    if (!channel.isDeleted() || channel.getDeletedTimeMs()
+                            > System.currentTimeMillis() - java.util.concurrent.TimeUnit.DAYS.toMillis(30)) {
+                        channels.put(id, channel);
+                    }
+                }
+            }
+            putChannelStateLocked(pkg, channels, groups);
+        } catch (java.io.FileNotFoundException absent) {
+            // A package that has never created channels has no policy file.
+        } catch (IOException | org.xmlpull.v1.XmlPullParserException | RuntimeException invalid) {
+            SystemServer.log("notification: cannot load channels for " + pkg + ": " + invalid);
+        }
+        mLoadedChannelPackages.add(pkg);
+        updateDefaultChannelLocked(pkg);
+    }
+
+    private void updateDefaultChannelLocked(String pkg) {
+        ApkPackage installed = packageFor(pkg);
+        boolean legacy = installed != null && !pm().isRemovalPending(pkg)
+                && installed.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.O;
+        String key = channelKey(pkg, DEFAULT_CHANNEL);
+        NotificationChannel existing = mChannels.get(key);
+        if (legacy == (existing != null)) return;
+        Map<String, NotificationChannel> channels = channelsLocked(pkg);
+        if (legacy) {
+            NotificationChannel channel = new NotificationChannel(DEFAULT_CHANNEL,
+                    android.content.res.Resources.getSystem().getString(com.android.internal.R.string.default_notification_channel_label),
+                    NotificationManager.IMPORTANCE_UNSPECIFIED);
+            channels.put(DEFAULT_CHANNEL, channel);
+        } else {
+            channels.remove(DEFAULT_CHANNEL);
+        }
+        commitChannelStateLocked(pkg, channels, groupsLocked(pkg));
+        invalidateChannelCaches(true, false);
+    }
+
+    private Map<String, NotificationChannel> channelsLocked(String pkg) {
+        Map<String, NotificationChannel> result = new LinkedHashMap<>();
+        for (Map.Entry<String, NotificationChannel> entry : mChannels.entrySet()) {
+            if (entry.getKey().startsWith(pkg + "/")) result.put(entry.getValue().getId(), entry.getValue());
+        }
+        return result;
+    }
+
+    private Map<String, NotificationChannelGroup> groupsLocked(String pkg) {
+        Map<String, NotificationChannelGroup> result = new LinkedHashMap<>();
+        for (Map.Entry<String, NotificationChannelGroup> entry : mChannelGroups.entrySet()) {
+            if (entry.getKey().startsWith(pkg + "/")) result.put(entry.getValue().getId(), entry.getValue());
+        }
+        return result;
+    }
+
+    private void putChannelStateLocked(String pkg, Map<String, NotificationChannel> channels,
+            Map<String, NotificationChannelGroup> groups) {
+        mChannels.keySet().removeIf(k -> k.startsWith(pkg + "/"));
+        mChannelGroups.keySet().removeIf(k -> k.startsWith(pkg + "/"));
+        for (NotificationChannel channel : channels.values()) mChannels.put(channelKey(pkg, channel.getId()), channel);
+        for (NotificationChannelGroup group : groups.values()) mChannelGroups.put(pkg + "/" + group.getId(), group);
+    }
+
+    /** Save a complete candidate before exposing it; failed writes leave the old maps intact. */
+    private void commitChannelStateLocked(String pkg, Map<String, NotificationChannel> channels,
+            Map<String, NotificationChannelGroup> groups) {
+        if (channels.equals(channelsLocked(pkg)) && groups.equals(groupsLocked(pkg))) return;
+        AtomicFile file = channelFile(pkg);
+        FileOutputStream output = null;
+        try {
+            output = file.startWrite();
+            TypedXmlSerializer xml = Xml.resolveSerializer(output);
+            xml.startDocument(null, true);
+            xml.startTag(null, "notification-channels");
+            xml.attributeInt(null, "version", 1);
+            xml.attribute(null, "package", pkg);
+            ApkPackage installed = packageFor(pkg);
+            xml.attributeInt(null, "uid", installed == null ? android.os.Process.SYSTEM_UID : installed.uid());
+            for (NotificationChannelGroup group : groups.values()) group.writeXml(xml);
+            for (NotificationChannel channel : channels.values()) channel.writeXml(xml);
+            xml.endTag(null, "notification-channels");
+            xml.endDocument();
+            xml.flush();
+            output.getFD().sync();
+            file.finishWrite(output);
+            if (new File(file.getBaseFile().getPath() + ".new").exists()) {
+                // AtomicFile logs a failed rename instead of throwing. Do not
+                // publish an in-memory policy that was not committed to disk.
+                throw new IOException("Atomic notification channel commit failed");
+            }
+            output = null;
+        } catch (IOException | RuntimeException error) {
+            if (output != null) file.failWrite(output);
+            throw new IllegalStateException("Cannot save notification channels for " + pkg, error);
+        }
+        putChannelStateLocked(pkg, channels, groups);
+    }
+
+    private static void invalidateChannelCaches(boolean channels, boolean groups) {
+        if (android.app.Flags.nmBinderPerfCacheChannels()) {
+            if (channels) NotificationManager.invalidateNotificationChannelCache();
+            if (groups) NotificationManager.invalidateNotificationChannelGroupCache();
+        }
+    }
+
+    private static NotificationChannel copyChannel(NotificationChannel channel) {
+        NotificationChannel copy = channel.copy();
+        // copy() normalizes a null effect by clearing its pattern. Android's
+        // pattern setter can retain an invalid pattern with a null effect.
+        long[] pattern = channel.getVibrationPattern();
+        android.os.VibrationEffect effect = channel.getVibrationEffect();
+        if (pattern != null) copy.setVibrationPattern(pattern.clone());
+        if (android.app.Flags.notificationChannelVibrationEffectApi() && effect != null) {
+            if (effect instanceof android.os.VibrationEffect.Composed composed) {
+                effect = new android.os.VibrationEffect.Composed(composed.getSegments(), composed.getRepeatIndex());
+            } else if (effect instanceof android.os.VibrationEffect.VendorEffect vendor) {
+                effect = new android.os.VibrationEffect.VendorEffect(vendor.getVendorData().deepCopy(),
+                        vendor.getEffectStrength(), vendor.getScale(), vendor.getAdaptiveScale());
+            }
+            copy.setVibrationEffect(effect);
+        }
+        copy.enableVibration(channel.shouldVibrate());
+        return copy;
+    }
+
+    private static NotificationChannelGroup copyGroup(NotificationChannelGroup group) {
+        NotificationChannelGroup copy = new NotificationChannelGroup(group.getId(), group.getName());
+        copy.setDescription(group.getDescription());
+        copy.setBlocked(group.isBlocked());
+        copy.lockFields(group.getUserLockedFields());
+        for (NotificationChannel channel : group.getChannels()) copy.addChannel(copyChannel(channel));
+        return copy;
+    }
+
+    private void channelOwnerCurrent(String pkg, ApkPackage captured) {
+        if (packageFor(pkg) != captured || pm() != null && pm().isRemovalPending(pkg)) {
+            throw new SecurityException("Notification owner is being removed");
+        }
+    }
+
     @Override
     public void createNotificationChannels(String pkg, ParceledListSlice channelsList) {
         own(pkg);
-        List<?> channels = channelsList.getList();
-        synchronized (this) {
-            for (Object o : channels) {
-                NotificationChannel c = (NotificationChannel) o;
-                mChannels.put(pkg + "/" + c.getId(), c);
+        ApkPackage captured = packageFor(pkg);
+        Objects.requireNonNull(channelsList);
+        synchronized (mPublicationLock) {
+            channelOwnerCurrent(pkg, captured);
+            synchronized (this) {
+                loadChannelsLocked(pkg);
+                Map<String, NotificationChannel> channels = channelsLocked(pkg);
+                Map<String, NotificationChannelGroup> groups = groupsLocked(pkg);
+                for (Object value : channelsList.getList()) {
+                    NotificationChannel requested = Objects.requireNonNull((NotificationChannel) value);
+                    Objects.requireNonNull(requested.getId());
+                    if (requested.getName() == null || requested.getName().length() == 0
+                            || requested.getImportance() < NotificationManager.IMPORTANCE_NONE
+                            || requested.getImportance() > NotificationManager.IMPORTANCE_MAX) {
+                        throw new IllegalArgumentException("Invalid notification channel name or importance");
+                    }
+                    if (DEFAULT_CHANNEL.equals(requested.getId())) throw new IllegalArgumentException("Reserved channel id");
+                    if (requested.getGroup() != null && !groups.containsKey(requested.getGroup())) {
+                        throw new IllegalArgumentException("NotificationChannelGroup doesn't exist");
+                    }
+                    NotificationChannel old = channels.get(requested.getId());
+                    NotificationChannel channel;
+                    if (old == null) {
+                        if (channels.size() >= CHANNEL_LIMIT) throw new IllegalStateException("Too many notification channels");
+                        if (requested.getParentChannelId() != null && !channels.containsKey(requested.getParentChannelId())) {
+                            throw new IllegalArgumentException("Conversation channel requires a preexisting parent");
+                        }
+                        channel = copyChannel(requested);
+                        channel.unlockFields(channel.getUserLockedFields());
+                        channel.setBypassDnd(false);
+                        channel.setLockscreenVisibility(NotificationListenerService.Ranking.VISIBILITY_NO_OVERRIDE);
+                        channel.setAllowBubbles(NotificationChannel.DEFAULT_ALLOW_BUBBLE);
+                        channel.setImportantConversation(false);
+                        channel.setOriginalImportance(channel.getImportance());
+                    } else {
+                        // Android allows metadata updates and an importance downgrade;
+                        // recreating a channel cannot reset its user policy or move it.
+                        channel = copyChannel(old);
+                        channel.setName(requested.getName().toString());
+                        channel.setDescription(requested.getDescription());
+                        channel.setBlockable(requested.isBlockable());
+                        if (old.getGroup() == null && requested.getGroup() != null) channel.setGroup(requested.getGroup());
+                        if (old.getUserLockedFields() == 0 && requested.getImportance() < old.getImportance()) {
+                            channel.setImportance(requested.getImportance());
+                        }
+                    }
+                    channel.setDeleted(false);
+                    channel.setDeletedTimeMs(-1);
+                    channels.put(channel.getId(), channel.equals(old) ? old : channel);
+                }
+                commitChannelStateLocked(pkg, channels, groups);
             }
-        }
-        for (Object o : channels) {
-            NotificationChannel c = (NotificationChannel) o;
-            SystemServer.log("notification channel " + c.getId() + " created for " + pkg
-                    + " (importance " + c.getImportance() + ")");
+            invalidateChannelCaches(true, false);
         }
     }
 
@@ -1000,7 +1337,9 @@ public final class NotificationManagerService extends INotificationManager.Defau
             String pkg, String channelId) {
         user(userId); own(callingPkg); own(pkg);
         synchronized (this) {
-            return mChannels.get(pkg + "/" + channelId);
+            loadChannelsLocked(pkg);
+            NotificationChannel channel = mChannels.get(channelKey(pkg, channelId));
+            return channel == null || channel.isDeleted() ? null : copyChannel(channel);
         }
     }
 
@@ -1010,8 +1349,9 @@ public final class NotificationManagerService extends INotificationManager.Defau
         user(userId); own(callingPkg); own(targetPkg);
         List<NotificationChannel> result = new ArrayList<>();
         synchronized (this) {
+            loadChannelsLocked(targetPkg);
             for (Map.Entry<String, NotificationChannel> e : mChannels.entrySet()) {
-                if (e.getKey().startsWith(targetPkg + "/")) result.add(e.getValue());
+                if (e.getKey().startsWith(targetPkg + "/") && !e.getValue().isDeleted()) result.add(copyChannel(e.getValue()));
             }
         }
         return new ParceledListSlice<>(result);
@@ -1020,9 +1360,179 @@ public final class NotificationManagerService extends INotificationManager.Defau
     @Override
     public void deleteNotificationChannel(String pkg, String channelId) {
         own(pkg);
-        synchronized (this) {
-            mChannels.remove(pkg + "/" + channelId);
+        if (DEFAULT_CHANNEL.equals(channelId)) throw new IllegalArgumentException("Cannot delete default channel");
+        ApkPackage captured = packageFor(pkg);
+        List<Record> removed;
+        synchronized (mPublicationLock) {
+            channelOwnerCurrent(pkg, captured);
+            enforceChannelNotInUse(pkg, channelId);
+            synchronized (this) {
+                loadChannelsLocked(pkg);
+                Map<String, NotificationChannel> channels = channelsLocked(pkg);
+                NotificationChannel channel = channels.get(channelId);
+                if (channel != null && !channel.isDeleted()) {
+                    NotificationChannel deleted = copyChannel(channel);
+                    deleted.setDeleted(true);
+                    deleted.setDeletedTimeMs(System.currentTimeMillis());
+                    channels.put(channelId, deleted);
+                    commitChannelStateLocked(pkg, channels, groupsLocked(pkg));
+                }
+                removed = removeChannelNotificationsLocked(pkg, java.util.Collections.singleton(channelId));
+            }
+            invalidateChannelCaches(true, false);
+            removeChannelToasts(removed);
+            removeRetainedChannelToasts(pkg, java.util.Collections.singleton(channelId));
         }
+        notifyChannelRemoved(removed);
+    }
+
+    @Override
+    public void createNotificationChannelGroups(String pkg, ParceledListSlice groupsList) {
+        own(pkg);
+        ApkPackage captured = packageFor(pkg);
+        Objects.requireNonNull(groupsList);
+        synchronized (mPublicationLock) {
+            channelOwnerCurrent(pkg, captured);
+            synchronized (this) {
+                loadChannelsLocked(pkg);
+                Map<String, NotificationChannelGroup> groups = groupsLocked(pkg);
+                for (Object value : groupsList.getList()) {
+                    NotificationChannelGroup requested = Objects.requireNonNull((NotificationChannelGroup) value);
+                    Objects.requireNonNull(requested.getId());
+                    if (requested.getName() == null || requested.getName().length() == 0) {
+                        throw new IllegalArgumentException("Notification channel group name is empty");
+                    }
+                    NotificationChannelGroup old = groups.get(requested.getId());
+                    if (old == null && groups.size() >= GROUP_LIMIT) throw new IllegalStateException("Too many notification channel groups");
+                    // Only metadata is app-writable. Never accept an app-supplied
+                    // blocked policy, user-lock fields or embedded member channels.
+                    NotificationChannelGroup group = new NotificationChannelGroup(requested.getId(), requested.getName().toString());
+                    group.setDescription(requested.getDescription());
+                    if (old != null) {
+                        group.setBlocked(old.isBlocked());
+                        group.lockFields(old.getUserLockedFields());
+                    }
+                    groups.put(group.getId(), group);
+                }
+                commitChannelStateLocked(pkg, channelsLocked(pkg), groups);
+            }
+            invalidateChannelCaches(false, true);
+        }
+    }
+
+    @Override
+    public NotificationChannelGroup getNotificationChannelGroup(String pkg, String groupId) {
+        own(pkg);
+        if (groupId == null) return null;
+        synchronized (this) {
+            loadChannelsLocked(pkg);
+            NotificationChannelGroup group = NotificationChannelGroupsHelper.getGroupWithChannels(
+                    groupId, channelsLocked(pkg).values(), groupsLocked(pkg), false);
+            return group == null ? null : copyGroup(group);
+        }
+    }
+
+    @Override
+    public ParceledListSlice<NotificationChannelGroup> getNotificationChannelGroups(String pkg) {
+        own(pkg);
+        synchronized (this) {
+            loadChannelsLocked(pkg);
+            List<NotificationChannelGroup> result = new ArrayList<>();
+            for (NotificationChannelGroup group : NotificationChannelGroupsHelper.getGroupsWithChannels(
+                    channelsLocked(pkg).values(), groupsLocked(pkg), NotificationChannelGroupsHelper.Params.forAllGroups())) {
+                result.add(copyGroup(group));
+            }
+            return new ParceledListSlice<>(result);
+        }
+    }
+
+    @Override
+    public ParceledListSlice<NotificationChannelGroup> getNotificationChannelGroupsWithoutChannels(String pkg) {
+        own(pkg);
+        synchronized (this) {
+            loadChannelsLocked(pkg);
+            List<NotificationChannelGroup> result = new ArrayList<>();
+            for (NotificationChannelGroup group : groupsLocked(pkg).values()) result.add(copyGroup(group));
+            return new ParceledListSlice<>(result);
+        }
+    }
+
+    @Override
+    public void deleteNotificationChannelGroup(String pkg, String groupId) {
+        own(pkg);
+        if (groupId == null || groupId.isEmpty()) return;
+        ApkPackage captured = packageFor(pkg);
+        List<Record> removed;
+        synchronized (mPublicationLock) {
+            channelOwnerCurrent(pkg, captured);
+            Map<String, NotificationChannel> channels;
+            Map<String, NotificationChannelGroup> groups;
+            Set<String> memberIds = new HashSet<>();
+            synchronized (this) {
+                loadChannelsLocked(pkg);
+                groups = groupsLocked(pkg);
+                if (groups.remove(groupId) == null) return;
+                channels = channelsLocked(pkg);
+                for (NotificationChannel channel : channels.values()) {
+                    if (groupId.equals(channel.getGroup()) && !channel.isDeleted()) memberIds.add(channel.getId());
+                }
+            }
+            // Every member is checked before any channel/group or notification changes.
+            for (String id : memberIds) enforceChannelNotInUse(pkg, id);
+            synchronized (this) {
+                for (String id : memberIds) {
+                    NotificationChannel deleted = copyChannel(channels.get(id));
+                    deleted.setDeleted(true);
+                    deleted.setDeletedTimeMs(System.currentTimeMillis());
+                    channels.put(id, deleted);
+                }
+                commitChannelStateLocked(pkg, channels, groups);
+                removed = removeChannelNotificationsLocked(pkg, memberIds);
+            }
+            invalidateChannelCaches(!memberIds.isEmpty(), true);
+            removeChannelToasts(removed);
+            removeRetainedChannelToasts(pkg, memberIds);
+        }
+        notifyChannelRemoved(removed);
+    }
+
+    private void enforceChannelNotInUse(String pkg, String id) {
+        ActivityManagerService activity = am();
+        if (activity != null && activity.hasForegroundServiceNotification(pkg, id)
+                || mJobScheduler != null && mJobScheduler.hasUserInitiatedJobNotification(pkg, id)) {
+            throw new SecurityException("Cannot delete notification channel " + id + " while it is used by an active service or job");
+        }
+    }
+
+    private List<Record> removeChannelNotificationsLocked(String pkg, Set<String> channels) {
+        List<Record> removed = new ArrayList<>();
+        mPosted.entrySet().removeIf(entry -> {
+            Record record = entry.getValue();
+            if (!pkg.equals(record.sbn.getPackageName()) || !channels.contains(record.channel.getId())) return false;
+            removed.add(record);
+            return true;
+        });
+        return removed;
+    }
+
+    private void removeChannelToasts(List<Record> removed) {
+        for (Record record : removed) {
+            String pkg = record.sbn.getPackageName();
+            NotificationStore.delete(pkg, record.sbn.getKey());
+            if (mTestToast == null) WindowsHost.cancelNotificationBridge(AppShell.appUserModelId(pkg),
+                    toastTag(record.sbn.getTag(), record.sbn.getId()), TOAST_GROUP, record.sbn.getId());
+        }
+    }
+
+    private void removeRetainedChannelToasts(String pkg, Set<String> channelIds) {
+        for (NotificationStore.Stored stored : NotificationStore.deleteChannels(pkg, channelIds)) {
+            if (mTestToast == null) WindowsHost.cancelNotificationBridge(AppShell.appUserModelId(pkg),
+                    toastTag(stored.tag, stored.id), TOAST_GROUP, stored.id);
+        }
+    }
+
+    private void notifyChannelRemoved(List<Record> removed) {
+        for (Record record : removed) notifyListeners(record, false, NotificationListenerService.REASON_CHANNEL_REMOVED);
     }
 
     @Override
@@ -1179,7 +1689,58 @@ public final class NotificationManagerService extends INotificationManager.Defau
 
     @Override
     public void updateNotificationChannelForPackage(String pkg, int uid, NotificationChannel channel) {
-        system(); createNotificationChannels(pkg, new ParceledListSlice<>(List.of(channel)));
+        system(); own(pkg);
+        Objects.requireNonNull(channel); Objects.requireNonNull(channel.getId());
+        ApkPackage captured = packageFor(pkg);
+        if (uid != (captured == null ? android.os.Process.SYSTEM_UID : captured.uid())) {
+            throw new SecurityException("Wrong notification channel owner UID");
+        }
+        List<Record> removed = new ArrayList<>();
+        synchronized (mPublicationLock) {
+            channelOwnerCurrent(pkg, captured);
+            synchronized (this) {
+                loadChannelsLocked(pkg);
+                Map<String, NotificationChannel> channels = channelsLocked(pkg);
+                NotificationChannel old = channels.get(channel.getId());
+                if (old == null || old.isDeleted()) throw new IllegalArgumentException("Channel does not exist");
+                NotificationChannel updated = copyChannel(channel);
+                if (updated.getLockscreenVisibility() == Notification.VISIBILITY_PUBLIC) {
+                    updated.setLockscreenVisibility(NotificationListenerService.Ranking.VISIBILITY_NO_OVERRIDE);
+                }
+                updated.lockFields(old.getUserLockedFields());
+                lockChannelChanges(old, updated);
+                if (old.isImportanceLockedByCriticalDeviceFunction()
+                        && !(old.isBlockable() || old.getImportance() == NotificationManager.IMPORTANCE_NONE)) {
+                    updated.setImportance(old.getImportance());
+                }
+                channels.put(updated.getId(), updated.equals(old) ? old : updated);
+                commitChannelStateLocked(pkg, channels, groupsLocked(pkg));
+                if (channel.getImportance() == NotificationManager.IMPORTANCE_NONE) {
+                    removed = removeChannelNotificationsLocked(pkg, java.util.Collections.singleton(updated.getId()));
+                }
+            }
+            invalidateChannelCaches(true, false);
+            removeChannelToasts(removed);
+            if (channel.getImportance() == NotificationManager.IMPORTANCE_NONE) {
+                removeRetainedChannelToasts(pkg, java.util.Collections.singleton(channel.getId()));
+            }
+        }
+        for (Record record : removed) notifyListeners(record, false, NotificationListenerService.REASON_CHANNEL_BANNED);
+    }
+
+    private static void lockChannelChanges(NotificationChannel old, NotificationChannel updated) {
+        if (old.canBypassDnd() != updated.canBypassDnd()) updated.lockFields(NotificationChannel.USER_LOCKED_PRIORITY);
+        if (old.getLockscreenVisibility() != updated.getLockscreenVisibility()) updated.lockFields(NotificationChannel.USER_LOCKED_VISIBILITY);
+        if (old.getImportance() != updated.getImportance()) updated.lockFields(NotificationChannel.USER_LOCKED_IMPORTANCE);
+        if (old.shouldShowLights() != updated.shouldShowLights() || old.getLightColor() != updated.getLightColor()) {
+            updated.lockFields(NotificationChannel.USER_LOCKED_LIGHTS);
+        }
+        if (!Objects.equals(old.getSound(), updated.getSound())) updated.lockFields(NotificationChannel.USER_LOCKED_SOUND);
+        if (!java.util.Arrays.equals(old.getVibrationPattern(), updated.getVibrationPattern())
+                || !Objects.equals(old.getVibrationEffect(), updated.getVibrationEffect())
+                || old.shouldVibrate() != updated.shouldVibrate()) updated.lockFields(NotificationChannel.USER_LOCKED_VIBRATION);
+        if (old.canShowBadge() != updated.canShowBadge()) updated.lockFields(NotificationChannel.USER_LOCKED_SHOW_BADGE);
+        if (old.getAllowBubbles() != updated.getAllowBubbles()) updated.lockFields(NotificationChannel.USER_LOCKED_ALLOW_BUBBLE);
     }
 
     @Override

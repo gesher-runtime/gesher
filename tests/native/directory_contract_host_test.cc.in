@@ -1,0 +1,225 @@
+// Production directory adapters with real Linux directories. Allocation and
+// reader failures are injected at the host boundary, not into copied logic.
+#include "shim_internal.h"
+
+#include <cerrno>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <dirent.h>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <mutex>
+#include <string>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <utility>
+#include <vector>
+
+namespace {
+bool allocations_armed;
+int fail_allocation = -1;
+int allocation_calls;
+void* owned[512];
+size_t owned_count;
+int fail_read_after = -1;
+int reads;
+int closes;
+bool fail_fd_path;
+
+void track(void* pointer) {
+  if (pointer == nullptr || !allocations_armed) return;
+  if (owned_count == sizeof(owned) / sizeof(owned[0])) std::abort();
+  owned[owned_count++] = pointer;
+}
+void untrack(void* pointer) {
+  for (size_t i = 0; i < owned_count; ++i) {
+    if (owned[i] == pointer) {
+      owned[i] = owned[--owned_count];
+      break;
+    }
+  }
+}
+bool allocation_fails() {
+  if (!allocations_armed) return false;
+  if (allocation_calls++ != fail_allocation) return false;
+  errno = ENOMEM;
+  return true;
+}
+}
+
+extern "C" void* __real_malloc(size_t);
+extern "C" void* __real_realloc(void*, size_t);
+extern "C" void __real_free(void*);
+extern "C" dirent* __real_readdir(DIR*);
+extern "C" int __real_closedir(DIR*);
+extern "C" void* __wrap_malloc(size_t n) {
+  if (allocation_fails()) return nullptr;
+  void* pointer = __real_malloc(n);
+  track(pointer);
+  return pointer;
+}
+extern "C" void* __wrap_realloc(void* old, size_t n) {
+  if (allocation_fails()) return nullptr;
+  void* pointer = __real_realloc(old, n);
+  if (pointer != nullptr) {
+    untrack(old);
+    track(pointer);
+  }
+  return pointer;
+}
+extern "C" void __wrap_free(void* pointer) {
+  untrack(pointer);
+  __real_free(pointer);
+}
+extern "C" dirent* __wrap_readdir(DIR* dir) {
+  if (fail_read_after >= 0 && reads++ >= fail_read_after) return errno = EIO, nullptr;
+  return __real_readdir(dir);
+}
+extern "C" int __wrap_closedir(DIR* dir) {
+  ++closes;
+  int result = __real_closedir(dir);
+  errno = EBUSY;  // Cleanup must not replace the operation's real error.
+  return result;
+}
+
+namespace gesher::bionic {
+namespace {
+constexpr int kAtFdcwd = -100;
+constexpr int kODirectory = O_DIRECTORY;
+bool PathOfFd(int fd, std::string* out) {
+  if (fail_fd_path) return errno = EIO, false;
+  char proc[64], path[4096];
+  std::snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
+  ssize_t length = readlink(proc, path, sizeof(path));
+  if (length < 0) return false;
+  out->assign(path, static_cast<size_t>(length));
+  return true;
+}
+@DIRECTORY_IMPLEMENTATION@
+}
+
+void RegisterDirectories(SymbolTable& table) {
+#define E(name, fn) table[name] = reinterpret_cast<void*>(&fn)
+@DIRECTORY_REGISTRATIONS@
+#undef E
+}
+}
+
+static void* directory_symbol(void*, const char* name) {
+  static gesher::bionic::SymbolTable table = [] {
+    gesher::bionic::SymbolTable result;
+    gesher::bionic::RegisterDirectories(result);
+    return result;
+  }();
+  auto found = table.find(name);
+  return found == table.end() ? nullptr : found->second;
+}
+static int failures;
+static void check(const char* label, int ok) {
+  std::printf("%-72s %s\n", label, ok ? "ok" : "FAIL");
+  if (!ok) ++failures;
+  std::fflush(stdout);
+}
+
+#define dlsym directory_symbol
+#include "directory_contract_test.inc"
+#undef dlsym
+
+static int descriptor_count() {
+  DIR* dir = ::opendir("/proc/self/fd");
+  if (!dir) return -1;
+  int result = 0;
+  while (::readdir(dir)) ++result;
+  ::closedir(dir);
+  return result;
+}
+
+static void test_directory_failures(const char* mode) {
+  auto scan = reinterpret_cast<directory_scan_fn>(directory_symbol(nullptr, "scandir"));
+  auto scanat = reinterpret_cast<directory_scanat_fn>(directory_symbol(nullptr, "scandirat"));
+  char path[] = "gesher-fault-directory-XXXXXX";
+  if (!scan || !mkdtemp(path)) { check("directory fault fixture", false); return; }
+  for (int i = 0; i < 40; ++i) {
+    char name[128];
+    std::snprintf(name, sizeof(name), "%s/item-%02d", path, i);
+    int fd = ::open(name, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    if (fd < 0) std::abort();
+    ::close(fd);
+  }
+  const int baseline_fds = descriptor_count();
+  struct dirent* sentinel_entry = nullptr;
+  struct dirent** sentinel = &sentinel_entry;
+  if (std::strcmp(mode, "allocations") == 0) {
+    struct dirent** entries = nullptr;
+    allocation_calls = 0;
+    allocations_armed = true;
+    int count = scan(path, &entries, directory_filter, nullptr);
+    allocations_armed = false;
+    const int total_calls = allocation_calls;
+    check("directory: baseline spans list growth", count == 40 && total_calls > 40);
+    directory_free_list(entries, count);
+    check("directory: caller can free all result allocations", owned_count == 0);
+    for (int failure = 0; failure < total_calls; ++failure) {
+      entries = sentinel;
+      allocation_calls = 0;
+      fail_allocation = failure;
+      const int close_before = closes;
+      allocations_armed = true;
+      count = scan(path, &entries, directory_filter, nullptr);
+      const int error = errno;
+      allocations_armed = false;
+      char label[128];
+      std::snprintf(label, sizeof(label), "directory: allocation failure %d frees prefix, preserves output", failure);
+      check(label, count == -1 && error == ENOMEM && entries == sentinel &&
+                   owned_count == 0 && closes == close_before + 1);
+      if (count >= 0 && entries != sentinel) directory_free_list(entries, count);
+    }
+    fail_allocation = -1;
+  } else if (std::strcmp(mode, "reader") == 0) {
+    for (int after : {0, 5, 30}) {
+      reads = 0;
+      fail_read_after = after;
+      struct dirent** entries = sentinel;
+      const int close_before = closes;
+      allocations_armed = true;
+      int count = scan(path, &entries, nullptr, nullptr);
+      const int error = errno;
+      allocations_armed = false;
+      check("directory: read error frees prefix and preserves original EIO",
+            count == -1 && error == EIO && entries == sentinel && owned_count == 0 &&
+            closes == close_before + 1);
+      if (count >= 0 && entries != sentinel) directory_free_list(entries, count);
+    }
+    fail_read_after = -1;
+  } else if (std::strcmp(mode, "fdopen") == 0) {
+    check("directory: scandirat export for failure ownership", scanat != nullptr);
+    if (scanat) {
+      int parent = ::open(".", O_RDONLY | O_DIRECTORY);
+      struct dirent** entries = sentinel;
+      fail_fd_path = true;
+      errno = 0;
+      int count = scanat(parent, path, &entries, nullptr, nullptr);
+      const int error = errno;
+      fail_fd_path = false;
+      check("directory: fdopendir failure returns original error", count == -1 && error == EIO && entries == sentinel);
+      check("directory: failed fdopendir closes new fd, retains parent", descriptor_count() == baseline_fds + 1 && fcntl(parent, F_GETFD, 0) >= 0);
+      ::close(parent);
+    }
+  }
+  check("directory: no leaked directory descriptors", descriptor_count() == baseline_fds);
+  for (int i = 0; i < 40; ++i) {
+    char name[128];
+    std::snprintf(name, sizeof(name), "%s/item-%02d", path, i);
+    ::unlink(name);
+  }
+  ::rmdir(path);
+}
+
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  if (std::strcmp(argv[1], "public") == 0) test_directory_contracts();
+  else test_directory_failures(argv[1]);
+  return failures == 0 ? 0 : 1;
+}

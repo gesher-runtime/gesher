@@ -64,23 +64,32 @@ int64_t NowMonotonicNs() {
   return static_cast<int64_t>((static_cast<__int128>(now.QuadPart) * 1000000000) / freq.QuadPart);
 }
 // Milliseconds until an absolute time on `clock` (0 realtime, else monotonic);
-// -1 if it has passed.
+// -1 if it has passed, capped at a finite Windows wait interval otherwise.
 int64_t MsUntil(const LinuxTimespec* abs, int clock) {
   int64_t now = clock == 0 ? NowRealtimeNs() : NowMonotonicNs();
-  int64_t then = abs->tv_sec * 1000000000 + abs->tv_nsec;
-  if (then <= now) return -1;
-  return (then - now + 999999) / 1000000;
+  // time_t permits dates beyond int64 nanoseconds. Compute before clamping,
+  // so a valid distant deadline cannot wrap into an immediate timeout.
+  __int128 left = static_cast<__int128>(abs->tv_sec) * 1000000000 + abs->tv_nsec - now;
+  if (left <= 0) return -1;
+  __int128 ms = (left + 999999) / 1000000;
+  return static_cast<int64_t>(ms > 0x7ffffffe ? 0x7ffffffe : ms);
 }
 
 // --- POSIX semaphores on bionic's sem_t (16 bytes; word 0 is the count) ---------
 
+constexpr uint32_t kSemValueMax = 0x3fffffff;  // bionic's SEM_VALUE_MAX.
+
 int BIONIC_SYSV SemInit(void* s, int, unsigned v) {
+  if (v > kSemValueMax) return errno = kEINVAL, -1;
   Word(s)->store(v);
   return 0;
 }
 int BIONIC_SYSV SemDestroy(void*) { return 0; }
 int BIONIC_SYSV SemPost(void* s) {
-  Word(s)->fetch_add(1);
+  uint32_t value = Word(s)->load();
+  do {
+    if (value == kSemValueMax) return errno = EOVERFLOW, -1;
+  } while (!Word(s)->compare_exchange_weak(value, value + 1));
   WakeByAddressSingle(Word(s));
   return 0;
 }

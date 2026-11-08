@@ -57,6 +57,25 @@ for part in base core entry; do
   classpath+="$separator$(native "$work/$part/classes")"
   ((package_id+=1))
 done
+# Required split types are an install-session contract, beyond manifest-name
+# dependencies. Keep valid and absent-type companions available to the test.
+sed 's/android:isolatedSplits="true"/android:isolatedSplits="true" android:isSplitRequired="true" android:requiredSplitTypes="requiredcore"/' \
+  "$here/base/AndroidManifest.xml" > "$work/base-required.xml"
+"$aapt2" link -o "$(native "$work/fixtures/base-required.apk")" -I "$(native "$framework_res")" \
+  --manifest "$(native "$work/base-required.xml")" --package-id 127 "$(native "$work/base/res.zip")"
+(cd "$work/base/dex" && jar -u -M -f "$(native "$work/fixtures/base-required.apk")" classes.dex)
+sed 's/android:isFeatureSplit="true"/android:isFeatureSplit="true" android:splitTypes="requiredcore"/' \
+  "$here/core/AndroidManifest.xml" > "$work/core-typed.xml"
+"$aapt2" link -o "$(native "$work/fixtures/core-typed.apk")" -I "$(native "$framework_res")" \
+  --manifest "$(native "$work/core-typed.xml")" --package-id 128 "$(native "$work/core/res.zip")"
+(cd "$work/core/dex" && jar -u -M -f "$(native "$work/fixtures/core-typed.apk")" classes.dex)
+# A valid same-version replacement for an already installed feature. Changing
+# only this split beside an unchanged base must still invalidate the source cache.
+sed 's/android:versionCode="1"/android:versionCode="1" android:revisionCode="7"/' \
+  "$here/entry/AndroidManifest.xml" > "$work/entry-revised.xml"
+"$aapt2" link -o "$(native "$work/fixtures/entry-revised.apk")" -I "$(native "$framework_res")" \
+  --manifest "$(native "$work/entry-revised.xml")" --package-id 129 "$(native "$work/entry/res.zip")"
+(cd "$work/entry/dex" && jar -u -M -f "$(native "$work/fixtures/entry-revised.apk")" classes.dex)
 # Same low version, different long version: a cluster-lite-only comparison misses this.
 sed 's/android:versionCode="1"/android:versionCode="1" android:versionCodeMajor="1"/' \
   "$here/core/AndroidManifest.xml" > "$work/core-major.xml"
@@ -71,5 +90,14 @@ for apk in "$work/fixtures/"*.apk; do
   "$zipalign" -f -p 4 "$(native "$apk")" "$(native "$work/aligned.apk")"
   mv "$work/aligned.apk" "$apk"
 done
+# The real PackageInstaller session path requires a verified signer. A separate
+# signed incomplete base reaches required-split validation and its status callback.
+keytool -genkeypair -keystore "$(native "$work/key.p12")" -storetype PKCS12 \
+  -storepass fixture-only -alias fixture -keyalg RSA -keysize 2048 -validity 36500 \
+  -dname 'CN=Gesher split package fixture' > /dev/null 2>&1
+java -jar "$(native "$BUILD_TOOLS_DIR/lib/apksigner.jar")" sign \
+  --ks "$(native "$work/key.p12")" --ks-pass pass:fixture-only \
+  --out "$(native "$work/fixtures/base-required-signed.apk")" \
+  "$(native "$work/fixtures/base-required.apk")"
 (cd "$work/fixtures" && jar -c -M -f "$(native "$out/split-package-fixtures.zip")" .)
 echo "split-package-fixtures.zip written to $out"

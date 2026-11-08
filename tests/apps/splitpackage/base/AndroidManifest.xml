@@ -3,5 +3,10 @@
     android:isolatedSplits="true">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" />
     <permission android:name="com.gesher.splitcontract.READ" android:protectionLevel="signature" />
-    <application android:label="Split contract" android:hasCode="true" />
+    <application android:label="Split contract" android:hasCode="true"
+        android:debuggable="true" android:largeHeap="true" android:usesCleartextTraffic="true"
+        android:hardwareAccelerated="true" android:extractNativeLibs="true" android:supportsRtl="true"
+        android:directBootAware="true" android:defaultToDeviceProtectedStorage="true"
+        android:resizeableActivity="false" android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true" />
 </manifest>

@@ -208,15 +208,17 @@ final class Installer {
     /**
      * Whether the installed splits are {@code splits}, by name and content: installing
      * an .xapk over the same base.apk installed alone adds its splits (its ABI split's
-     * native libraries), so it is not "unchanged". No splits match any installed ones.
+     * native libraries), so it is not "unchanged". Only a standalone base APK may
+     * implicitly keep the installed splits; a full session/archive supplies the set.
      */
-    private static boolean sameSplits(File[] splits, String codePath) throws IOException {
+    private static boolean sameSplits(File[] splits, String codePath, boolean keepUnspecified)
+            throws IOException {
         String[] installed = new File(codePath).list(
                 (dir, name) -> name.startsWith("split_") && name.endsWith(".apk"));
         int count = splits != null ? splits.length : 0;
         // base.apk alone over the same base installed with its splits (an .xapk's)
         // keeps them: without its density split the app misses its drawables.
-        if (count == 0) return true;
+        if (count == 0 && keepUnspecified) return true;
         if ((installed != null ? installed.length : 0) != count) return false;
         for (int i = 0; i < count; i++) {
             String name = splits[i].getName();
@@ -346,7 +348,8 @@ final class Installer {
             }
             if (old != null && sameContent(source, new File(old.codePath, "base.apk"))
                     && sameMetadata(metadata, new File(old.codePath, "base.dm"))
-                    && sameSplits(companionSplits(source), old.codePath)
+                    && sameSplits(incomingSplits, old.codePath,
+                            sessionMetadata == null && tempDir == null)
                     && (sessionMetadata == null || sessionMetadata.matches(new File(old.codePath)))
                     && mPm.get(pkg) != null) {
                 recordSource(original, pkg, old.codePath);
@@ -489,6 +492,12 @@ final class Installer {
      * that code path; null otherwise.
      */
     private Entry recordedSource(File source) {
+        // This cache describes only the base/archive and its .dm file. A base
+        // path can stay unchanged while companions are added or replaced. Such
+        // inputs must reach signature/cluster validation and sameSplits instead
+        // of reusing the previously installed graph from the base-only cache.
+        File[] splits = companionSplits(source);
+        if (splits != null && splits.length != 0) return null;
         try {
             File f = new File(Device.dataDir(), SOURCES);
             if (!f.isFile()) return null;
@@ -502,6 +511,8 @@ final class Installer {
                         || !new File(e.codePath, "base.apk").isFile()) {
                     return null;
                 }
+                File[] installedSplits = companionSplits(new File(e.codePath, "base.apk"));
+                if (installedSplits != null && installedSplits.length != 0) return null;
                 return e;
             }
         } catch (IOException e) {

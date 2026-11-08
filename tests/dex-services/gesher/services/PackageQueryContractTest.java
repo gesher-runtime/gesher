@@ -5,6 +5,7 @@ import android.app.ActivityThread;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.pm.IPackageManager;
+import android.content.pm.IDexModuleRegisterCallback;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.Property;
@@ -27,6 +28,11 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Real manifest -> production service -> AIDL Parcel -> ApplicationPackageManager contracts. */
 public final class PackageQueryContractTest {
@@ -90,6 +96,49 @@ public final class PackageQueryContractTest {
                 : actual.activities == null, "Versioned query did not preserve GET_ACTIVITIES");
     }
 
+    private static void dexRegistration(IPackageManager wire, IPackageManager service, String path)
+            throws Exception {
+        CountDownLatch callbackDone = new CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+        AtomicReference<String> failure = new AtomicReference<>();
+        Thread caller = Thread.currentThread();
+        IDexModuleRegisterCallback.Stub target = new IDexModuleRegisterCallback.Stub() {
+            @Override public void onDexModuleRegistered(String actualPath, boolean success, String message) {
+                calls.incrementAndGet();
+                try {
+                    if (!path.equals(actualPath) || success
+                            || !"registerDexModule call not supported since Android U".equals(message)) {
+                        failure.set("Callback lost request identity or reported unsupported registration as success");
+                    } else if (Thread.currentThread() == caller || Thread.holdsLock(service)) {
+                        failure.set("Callback ran inline or held the package monitor");
+                    } else if (Binder.getCallingUid() != android.os.Process.myUid()
+                            || wire.getPackageGids(PACKAGE, 0, 0).length != 0) {
+                        failure.set("Callback identity or reentrant package query failed");
+                    }
+                } catch (Exception error) {
+                    failure.set(error.toString());
+                } finally {
+                    callbackDone.countDown();
+                }
+            }
+        };
+        // Force the callback through its generated AIDL proxy/stub too.
+        IDexModuleRegisterCallback callback = IDexModuleRegisterCallback.Stub.asInterface(new Binder() {
+            @Override protected boolean onTransact(int code, Parcel request, Parcel reply, int flags)
+                    throws RemoteException {
+                return target.asBinder().transact(code, request, reply, flags);
+            }
+        });
+        wire.registerDexModule(PACKAGE, path, true, callback);
+        require(callbackDone.await(5, TimeUnit.SECONDS), "DEX registration callback never completed");
+        CountDownLatch drained = new CountDownLatch(1);
+        Field executor = service.getClass().getDeclaredField("mPackageEventExecutor");
+        executor.setAccessible(true);
+        ((Executor) executor.get(service)).execute(drained::countDown);
+        require(drained.await(5, TimeUnit.SECONDS) && calls.get() == 1 && failure.get() == null,
+                "DEX callback contract failed: " + failure.get());
+    }
+
     public static void main(String[] args) throws Exception {
         require(args.length == 1, "Pass the current components.apk fixture");
         System.loadLibrary("android_runtime");
@@ -146,6 +195,75 @@ public final class PackageQueryContractTest {
                 PackageManager.VERSION_CODE_HIGHEST), 0, 10) == null,
                 "Versioned query escaped the single-user package scope");
 
+        require(client.getPackageGids(PACKAGE).length == 0
+                && client.getPackageGids(PACKAGE, 0).length == 0
+                && client.getPackageGids(PACKAGE, PackageManager.PackageInfoFlags.of(0)).length == 0,
+                "Installed package's absent supplementary groups became NameNotFoundException");
+        require(client.getPackageGids("android").length == 0,
+                "The platform package became unknown to supplementary-group queries");
+        missing(() -> client.getPackageGids("fixture.not.installed"),
+                "Unknown package acquired a supplementary-group inventory");
+        require(wire.getPackageGids(PACKAGE, 0, 10) == null,
+                "Supplementary-group query escaped the single-user package scope");
+
+        int uid = expected.applicationInfo.uid;
+        require(Arrays.equals(client.getNamesForUids(new int[]{uid, -1,
+                android.os.Process.SYSTEM_UID, uid}),
+                new String[]{PACKAGE, null, "shared:android.uid.system", PACKAGE}),
+                "Bulk UID names lost installed, unknown, shared-system or duplicate positions");
+        require(client.getNamesForUids(new int[0]) == null
+                && wire.getNamesForUids(null) == null,
+                "Bulk UID names changed Android's absent-input contract");
+        String heldPermission = "android.permission.FOREGROUND_SERVICE";
+        require(client.checkPermission(heldPermission, PACKAGE) == PackageManager.PERMISSION_GRANTED,
+                "Fixture's normal permission was not granted");
+        List<PackageInfo> holders = client.getPackagesHoldingPermissions(
+                new String[]{"fixture.absent.permission", heldPermission}, 0);
+        require(holders.size() == 1 && PACKAGE.equals(holders.get(0).packageName)
+                && Arrays.equals(holders.get(0).requestedPermissions, new String[]{heldPermission})
+                && holders.get(0).requestedPermissionsFlags == null,
+                "Permission-holder query lost the matching subset or fabricated grant metadata");
+        holders = client.getPackagesHoldingPermissions(new String[]{heldPermission},
+                PackageManager.PackageInfoFlags.of(PackageManager.GET_PERMISSIONS | flags));
+        require(holders.size() == 1 && holders.get(0).requestedPermissions.length == 2
+                && Arrays.asList(holders.get(0).requestedPermissions).contains(
+                        "android.permission.FOREGROUND_SERVICE_SPECIAL_USE")
+                && holders.get(0).requestedPermissionsFlags.length == 2
+                && (holders.get(0).requestedPermissionsFlags[0] & PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0
+                && holders.get(0).activities != null,
+                "GET_PERMISSIONS did not retain complete manifest/grant/component metadata");
+        holders = client.getPackagesHoldingPermissions(new String[]{heldPermission,
+                "fixture.absent.permission", heldPermission}, 0);
+        require(holders.size() == 1 && Arrays.equals(holders.get(0).requestedPermissions,
+                new String[]{heldPermission, heldPermission}),
+                "Matching permission names lost the caller's order or duplicates");
+        require(client.getPackagesHoldingPermissions(new String[]{"fixture.absent.permission"}, 0).isEmpty()
+                && client.getPackagesHoldingPermissions(new String[0], 0).isEmpty()
+                && wire.getPackagesHoldingPermissions(new String[]{heldPermission}, 0, 10).getList().isEmpty(),
+                "Empty, ungranted or cross-user permission queries acquired a package");
+        require(client.getPackagesHoldingPermissions(new String[]{heldPermission},
+                        PackageManager.MATCH_SYSTEM_ONLY).isEmpty(),
+                "System-only permission query included an ordinary package");
+        missing(() -> client.getPackageGids(PACKAGE, PackageManager.MATCH_SYSTEM_ONLY),
+                "System-only group query included an ordinary package");
+        require(client.getPackageGids("android", PackageManager.MATCH_SYSTEM_ONLY).length == 0,
+                "System-only group query excluded the platform package");
+        Method addon = method(apkClass, "setSystemAddon", boolean.class);
+        addon.invoke(apk, true);
+        try {
+            require(client.getPackageGids(PACKAGE, PackageManager.MATCH_SYSTEM_ONLY).length == 0,
+                    "System-only group query excluded an installed system addon");
+            holders = client.getPackagesHoldingPermissions(new String[]{heldPermission},
+                    PackageManager.MATCH_SYSTEM_ONLY);
+            require(holders.size() == 1 && PACKAGE.equals(holders.get(0).packageName)
+                            && (holders.get(0).applicationInfo.flags
+                                    & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0,
+                    "System-only permission query omitted the addon or lost system metadata");
+        } finally {
+            addon.invoke(apk, false);
+        }
+        dexRegistration(wire, service, apkFile.getPath());
+
         String[] names = {PACKAGE, "fixture.not.installed", PACKAGE};
         require(Arrays.equals(names, client.currentToCanonicalPackageNames(names)),
                 "Current-name mapping lost unknown, duplicate or positional entries");
@@ -189,12 +307,19 @@ public final class PackageQueryContractTest {
                 "Manifest property query escaped the single-user package scope");
 
         method(pmClass, "beginPackageRemoval", apkClass).invoke(service, apk);
+        missing(() -> client.getPackageGids(PACKAGE), "Retiring package kept a group inventory");
         require(wire.getPropertyAsUser(PROPERTY, PACKAGE, null, 0) == null
                 && client.queryApplicationProperty(PROPERTY).isEmpty(),
                 "Retiring package continued publishing properties");
+        require(client.getPackagesHoldingPermissions(new String[]{heldPermission}, 0).isEmpty(),
+                "Retiring package continued publishing permission ownership");
         method(pmClass, "endPackageRemoval", apkClass).invoke(service, apk);
         property(client.getProperty(PROPERTY, PACKAGE), null, PackageManager.TYPE_APPLICATION);
         method(pmClass, "remove", String.class).invoke(service, PACKAGE);
+        missing(() -> client.getPackageGids(PACKAGE), "Removed package kept a group inventory");
+        require(Arrays.equals(client.getNamesForUids(new int[]{uid}), new String[]{null})
+                && client.getPackagesHoldingPermissions(new String[]{heldPermission}, 0).isEmpty(),
+                "Removed package retained its UID name or permission ownership");
         missing(() -> client.getProperty(PROPERTY, PACKAGE), "Removed property was cached as installed");
         require(client.queryApplicationProperty(PROPERTY).isEmpty(), "Removed package remained in property index");
         method(pmClass, "add", apkClass).invoke(service, apk);

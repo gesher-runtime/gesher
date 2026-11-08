@@ -10,6 +10,10 @@ FD_BASE='0aafccec6d7c2cfdd88d73e721a3e1ce523edf2b'
 # published checkpoint independently; all other socket bytes and supplier
 # inputs remain exact. Use the published commit, not local recovery history.
 SOCKET_BASE='d5ad9aa318583ae3c3cca2d062ee964680e99e32'
+# The file-allocation repair changes only posix_fallocate and its limits header.
+# Pin the complete reviewed file bytes, then independently retain every byte
+# outside that exact function. TCP/fcntl/vector-I/O suppliers stay at BASE.
+SYSTEM_SHA256='f5248a6fe4d4c2e6b4a766b567624a9fc406e1848d871e43ec5c7b04d9f0952c'
 # Only the successful protocol fixture's startup budget changed. Pin its exact
 # reviewed bytes separately; controller, worker and execution gates retain BASE.
 CONTROL_BASE='c62c0ea4f88447c64608851ecf661f630e259442'
@@ -22,7 +26,14 @@ def check():
          SOCKET_BASE if path=='compat/posix/src/socket.cc' else
          CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
   expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
-  assert (ROOT/path).read_bytes()==expected,path
+  actual=(ROOT/path).read_bytes()
+  if path=='compat/posix/src/system.cc':
+   start=b'int posix_fallocate(';end=b'\nint fallocate('
+   assert expected.count(start)==actual.count(start)==1 and expected.count(end)==actual.count(end)==1,path
+   assert actual[:actual.index(start)]==expected[:expected.index(start)].replace(b'#include <string>\n',b'#include <string>\n#include <limits>\n',1),path
+   assert actual[actual.index(end):]==expected[expected.index(end):],path
+   assert hashlib.sha256(actual).hexdigest()==SYSTEM_SHA256,path
+  else:assert actual==expected,path
  before=old('tools/net-tcp-priority/run-component.ps1').decode();after=(ROOT/'tools/net-tcp-priority/run-component.ps1').read_text(encoding='utf-8')
  marker='function RequireDiagnosticRetirement';assert after[after.index(marker):]==before[before.index(marker):],'Actual controller/guarded-copy/census/cancel/HOST/bothABI execution gates changed'
  raw=old('.github/workflows/net-tcp-coherent-component.yml').decode()
@@ -33,5 +44,5 @@ def check():
  assert pin['ordered_patch_sha256']=={'minimum-detached-retirement.patch':'ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad','minimum-noattach-join.patch':'c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96'}
  for name,digest in pin['ordered_patch_sha256'].items():assert hashlib.sha256((ROOT/'tools/host-pthread-authority'/name).read_bytes()).hexdigest()==digest
  for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
- print('TCP_SELECTED_POLICY_PASS original_product3 reviewed_nested_epoll_fd reviewed_sendmsg_control canonical_Recv originalworkflow originalfixtures controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
+ print('TCP_SELECTED_POLICY_PASS original_product3 reviewed_nested_epoll_fd reviewed_sendmsg_control reviewed_file_allocation_only canonical_Recv originalworkflow originalfixtures controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
 if __name__=='__main__':check()

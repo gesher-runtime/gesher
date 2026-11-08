@@ -36,7 +36,7 @@ $dvmFixes = @("-Xbootclasspath:$bcpFixes", "-Ximage:$(NoDrive "$root/system")/fr
 $packageQueryOut = FixesRun ($dvmFixes + 'gesher.services.PackageQueryContractTest' +
   (NoDrive "$Dir/components.apk")) 90
 $packageQueryCode = $LASTEXITCODE
-Check 'services: versioned package queries, canonical names and parsed manifest properties' {
+Check 'services: package versions, permissions, identities and parsed manifest properties' {
   $global:LASTEXITCODE = $packageQueryCode
   $packageQueryOut
 } @('PackageQueryContractTest all passed:')
@@ -50,6 +50,43 @@ Check 'services: installed feature manifests, isolated split DEX/resources and f
   $global:LASTEXITCODE = $splitPackageCode
   $splitPackageOut
 } @('SplitPackageContractTest all passed:')
+
+# Channel/group policy is exercised through the real manager and Binder parcels,
+# including durable reload and publication/lifecycle races. The fixture owns a
+# disposable child data directory and needs the trusted service UID for its
+# retained-toast checks.
+$groupsSavedBinderUid = $env:GESHER_BINDER_UID
+try {
+  $env:GESHER_BINDER_UID = '1000'
+  $groupsOut = FixesRun ($dvmFixes + 'gesher.services.NotificationChannelGroupsTest' +
+    (NoDrive "$Dir/devsvc.apk")) 120
+  $groupsCode = $LASTEXITCODE
+} finally {
+  if ($null -eq $groupsSavedBinderUid) { Remove-Item Env:GESHER_BINDER_UID -ErrorAction SilentlyContinue }
+  else { $env:GESHER_BINDER_UID = $groupsSavedBinderUid }
+}
+Check 'services: durable notification groups, real channel policy and lifecycle deletion guards' {
+  $global:LASTEXITCODE = $groupsCode
+  $groupsOut
+} @('NotificationChannelGroupsTest all passed:')
+
+# Real JobService callbacks attach notifications to a running job. Exercise
+# shared ownership, replacement, completion and cancellation through generated
+# Binder transactions, including their retained-notification effects.
+$jobsSavedBinderUid = $env:GESHER_BINDER_UID
+try {
+  $env:GESHER_BINDER_UID = '1000'
+  $jobNotificationsOut = FixesRun ($dvmFixes + 'gesher.services.JobNotificationLifecycleTest' +
+    (NoDrive "$Dir/devsvc.apk")) 120
+  $jobNotificationsCode = $LASTEXITCODE
+} finally {
+  if ($null -eq $jobsSavedBinderUid) { Remove-Item Env:GESHER_BINDER_UID -ErrorAction SilentlyContinue }
+  else { $env:GESHER_BINDER_UID = $jobsSavedBinderUid }
+}
+Check 'services: job notification validation, shared ownership and real completion cleanup' {
+  $global:LASTEXITCODE = $jobNotificationsCode
+  $jobNotificationsOut
+} @('JobNotificationLifecycleTest all passed:')
 
 # Exercise the MediaStore implementation from the production boot jar.
 $mediaStoreOut = FixesRun ($dvmFixes + 'gesher.services.MediaStoreContractTest') 90
@@ -150,6 +187,8 @@ Check 'services: HandlerThread.quit with tracing off (MessageQueue''s Perfetto c
 # These module value classes are packaged in gesher-app.jar. Run each fixture in
 # its own bounded ART process, preserving its exit status as well as its marker.
 foreach ($fixture in @(
+  @('PackageManifestFlagsTest', 'complete parsed manifest flags preserve installed application state'),
+  @('PackageServiceQueriesTest', 'package UID/group queries and Android 16 dex-module completion'),
   @('BluetoothValueContractTest', 'BLE settings, filters, advertisements and parcels without an adapter'),
   @('MediaStoreContractTest', 'media collections, resolver forwarding and unavailable-provider handling'),
   @('NetworkRequestValueContractTest', 'DHCP, L2CAP, DNS-SD and network request filters and parcels'),

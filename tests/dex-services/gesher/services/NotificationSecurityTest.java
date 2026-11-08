@@ -232,6 +232,10 @@ public final class NotificationSecurityTest {
         Method grant=policy.getClass().getMethod("grantRuntimePermission",String.class,String.class,String.class,int.class);
         Method revoke=policy.getClass().getMethod("revokeRuntimePermission",String.class,String.class,String.class,int.class,String.class);
         Notification n=new Notification(); n.extras=new Bundle();
+        notifications.getMethod("createNotificationChannels", String.class, ParceledListSlice.class)
+                .invoke(service, pkg, new ParceledListSlice<>(List.of(new android.app.NotificationChannel(
+                        "security", "Security fixture", android.app.NotificationManager.IMPORTANCE_DEFAULT))));
+        field(Notification.class,"mChannelId").set(n,"security");
         n.extras.putString(Notification.EXTRA_TITLE,"non-personal notification fixture");
         revoke.invoke(policy,pkg,permission,"default:0",0,"test initial denial");
         require(!(boolean)enabled.invoke(service,pkg),"denied POST reported enabled");

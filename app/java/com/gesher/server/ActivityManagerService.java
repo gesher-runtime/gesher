@@ -89,6 +89,10 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     void stopServicesForPackage(String packageName) { mServices.stopPackage(packageName); }
 
+    boolean hasForegroundServiceNotification(String packageName, String channelId) {
+        return mServices.hasForegroundServiceNotification(packageName, channelId);
+    }
+
     /** An app process is gone: its services, receivers and providers too. */
     void processDied(ActivityTaskManagerService.ProcessRecord app) {
         mServices.processDied(app);

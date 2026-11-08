@@ -44,8 +44,7 @@ public final class UserManagerProfilesTest {
                 && (user.flags & UserInfo.FLAG_SYSTEM) != 0;
     }
 
-    public static void main(String[] args) throws Exception {
-        System.loadLibrary("android_runtime");
+    private static void profiles() throws Exception {
         Services.UserManager service = new Services.UserManager();
         UserManager framework = new UserManager(context(), service);
 
@@ -95,6 +94,40 @@ public final class UserManagerProfilesTest {
         check(service.getApplicationRestrictionsForUser("com.gesher.synthetic", 0).isEmpty()
                 && service.getApplicationRestrictionsForUser("com.gesher.synthetic", 10).isEmpty(),
                 "no restrictions or metadata are disclosed for unknown users");
+
+        android.os.Bundle userRestrictions = framework.getUserRestrictions(UserHandle.SYSTEM);
+        check(userRestrictions != null && userRestrictions.isEmpty(),
+                "public user restrictions query returned null instead of an empty Bundle");
+        check(!userRestrictions.getBoolean(UserManager.DISALLOW_INSTALL_APPS, false),
+                "unmanaged user acquired an installation restriction");
+        userRestrictions.putBoolean(UserManager.DISALLOW_INSTALL_APPS, true);
+        check(framework.getUserRestrictions(UserHandle.SYSTEM).isEmpty(),
+                "user restrictions are shared mutable state");
+        check("Owner".equals(framework.getUserName()), "known desktop user has a null/wrong name");
+        check(ownerHandles(framework.getUserHandles(false))
+                        && ownerHandles(framework.getUserHandles(true)),
+                "full user inventory omitted the desktop owner");
+        long[] serials = framework.getSerialNumbersOfUsers(false);
+        check(serials.length == 1 && serials[0] == 0, "owner serial missing from user inventory");
+        check(framework.getSerialNumberForUser(UserHandle.SYSTEM) == 0
+                        && UserHandle.SYSTEM.equals(framework.getUserForSerialNumber(0)),
+                "owner serial/user mapping is inconsistent");
+        for (int unknown : new int[] {-1, 1, 10, Integer.MAX_VALUE}) {
+            check(service.getUserSerialNumber(unknown) == -1
+                            && service.getUserHandle(unknown) == -1,
+                    "unknown user or serial mapped to the owner");
+            check(framework.getSerialNumberForUser(UserHandle.of(unknown)) == -1
+                            && framework.getUserForSerialNumber(unknown) == null,
+                    "public serial query reported an absent user as present");
+        }
+        UserInfo changedUser = service.getUsers(false).get(0);
+        changedUser.id = 10;
+        check(owner(service.getUsers(false).get(0)), "user inventory is shared mutable state");
+    }
+
+    public static void main(String[] args) throws Exception {
+        System.loadLibrary("android_runtime");
+        profiles();
         System.out.println("UserManagerProfilesTest all passed: " + checks);
     }
 }

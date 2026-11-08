@@ -998,16 +998,16 @@ LinuxTimespec RealtimeNow() {
 }
 
 uint32_t MillisUntil(const LinuxTimespec* abstime, bool monotonic) {
-  int64_t now_ns;
+  __int128 now_ns;
   if (monotonic) {
     now_ns = QpcNanos();
   } else {
     LinuxTimespec now = RealtimeNow();
-    now_ns = now.tv_sec * 1000000000 + now.tv_nsec;
+    now_ns = static_cast<__int128>(now.tv_sec) * 1000000000 + now.tv_nsec;
   }
-  int64_t then_ns = abstime->tv_sec * 1000000000 + abstime->tv_nsec;
+  __int128 then_ns = static_cast<__int128>(abstime->tv_sec) * 1000000000 + abstime->tv_nsec;
   if (then_ns <= now_ns) return 0;
-  int64_t ms = (then_ns - now_ns + 999999) / 1000000;
+  __int128 ms = (then_ns - now_ns + 999999) / 1000000;
   return ms > 0x7ffffffe ? 0x7ffffffe : static_cast<uint32_t>(ms);
 }
 

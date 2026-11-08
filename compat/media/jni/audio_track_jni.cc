@@ -13,7 +13,6 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <vector>
 
 #include "../audio/engine.h"
 #include "../audio/log.h"
@@ -206,50 +205,60 @@ void JNICALL AudioTrack_flush(JNIEnv* env, jobject thiz) {
   if (auto t = GetTrackOrThrow(env, thiz, "flush()")) t->Flush();
 }
 
-jint WriteBytes(JNIEnv* env, jobject thiz, const void* data, size_t bytes, bool blocking) {
+ssize_t WriteBytes(JNIEnv* env, jobject thiz, const void* data, size_t bytes, bool blocking) {
   auto t = GetTrack(env, thiz);
   if (t == nullptr) {
     jniThrow(env, "java/lang/IllegalStateException", "Unable to retrieve AudioTrack pointer for write()");
     return kInvalidOperation;
   }
-  ssize_t n = t->Write(data, bytes, blocking);
-  return static_cast<jint>(n);
+  // Short/float arrays can contain more than INT_MAX bytes. Keep the native
+  // count wide until the caller converts bytes back to Java sample counts.
+  return t->Write(data, bytes, blocking);
 }
 
 jint JNICALL AudioTrack_writeByte(JNIEnv* env, jobject thiz, jbyteArray data, jint offset, jint size,
                                   jint /*format*/, jboolean blocking) {
   if (data == nullptr || size < 0 || offset < 0) return kBadValue;
-  std::vector<uint8_t> buf(static_cast<size_t>(size));
-  env->GetByteArrayRegion(data, offset, size, reinterpret_cast<jbyte*>(buf.data()));
-  if (env->ExceptionCheck()) return kBadValue;
-  return WriteBytes(env, thiz, buf.data(), buf.size(), blocking);
+  if (offset > env->GetArrayLength(data) - size) return kBadValue;
+  // Let the VM manage array access and its allocation failure. A separate
+  // native vector can terminate the process on OOM across the JNI boundary.
+  jbyte* bytes = env->GetByteArrayElements(data, nullptr);
+  if (bytes == nullptr) return kBadValue;
+  ssize_t n = WriteBytes(env, thiz, bytes + offset, static_cast<size_t>(size), blocking);
+  env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+  return static_cast<jint>(n);
 }
 
 jint JNICALL AudioTrack_writeShort(JNIEnv* env, jobject thiz, jshortArray data, jint offset, jint size,
                                    jint /*format*/, jboolean blocking) {
   if (data == nullptr || size < 0 || offset < 0) return kBadValue;
-  std::vector<jshort> buf(static_cast<size_t>(size));
-  env->GetShortArrayRegion(data, offset, size, buf.data());
-  if (env->ExceptionCheck()) return kBadValue;
-  jint n = WriteBytes(env, thiz, buf.data(), buf.size() * 2, blocking);
-  return n > 0 ? n / 2 : n;
+  if (offset > env->GetArrayLength(data) - size) return kBadValue;
+  jshort* samples = env->GetShortArrayElements(data, nullptr);
+  if (samples == nullptr) return kBadValue;
+  ssize_t n = WriteBytes(env, thiz, samples + offset, static_cast<size_t>(size) * sizeof(*samples), blocking);
+  env->ReleaseShortArrayElements(data, samples, JNI_ABORT);
+  return static_cast<jint>(n > 0 ? n / 2 : n);
 }
 
 jint JNICALL AudioTrack_writeFloat(JNIEnv* env, jobject thiz, jfloatArray data, jint offset, jint size,
                                    jint /*format*/, jboolean blocking) {
   if (data == nullptr || size < 0 || offset < 0) return kBadValue;
-  std::vector<jfloat> buf(static_cast<size_t>(size));
-  env->GetFloatArrayRegion(data, offset, size, buf.data());
-  if (env->ExceptionCheck()) return kBadValue;
-  jint n = WriteBytes(env, thiz, buf.data(), buf.size() * 4, blocking);
-  return n > 0 ? n / 4 : n;
+  if (offset > env->GetArrayLength(data) - size) return kBadValue;
+  jfloat* samples = env->GetFloatArrayElements(data, nullptr);
+  if (samples == nullptr) return kBadValue;
+  ssize_t n = WriteBytes(env, thiz, samples + offset, static_cast<size_t>(size) * sizeof(*samples), blocking);
+  env->ReleaseFloatArrayElements(data, samples, JNI_ABORT);
+  return static_cast<jint>(n > 0 ? n / 4 : n);
 }
 
 jint JNICALL AudioTrack_writeNativeBytes(JNIEnv* env, jobject thiz, jobject buffer, jint position,
                                          jint size, jint /*format*/, jboolean blocking) {
+  if (buffer == nullptr || size < 0 || position < 0) return kBadValue;
+  jlong cap = env->GetDirectBufferCapacity(buffer);
+  if (cap < 0 || position > cap || size > cap - position) return kBadValue;
   auto* base = static_cast<uint8_t*>(env->GetDirectBufferAddress(buffer));
-  if (base == nullptr || size < 0 || position < 0) return kBadValue;
-  return WriteBytes(env, thiz, base + position, static_cast<size_t>(size), blocking);
+  if (base == nullptr) return kBadValue;
+  return static_cast<jint>(WriteBytes(env, thiz, base + position, static_cast<size_t>(size), blocking));
 }
 
 jint JNICALL AudioTrack_reloadStatic(JNIEnv* env, jobject thiz) {

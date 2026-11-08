@@ -46,6 +46,22 @@ final class SettingsProvider extends ContentProvider {
     /** The provider of this process (the system server's), for {@link #putSystem}. */
     private static volatile SettingsProvider sInstance;
 
+    /** Server-local numeric global setting, with the same malformed-value fallback as Settings. */
+    static long globalLong(String name, long defaultValue) {
+        SettingsProvider provider = sInstance;
+        if (provider == null) return defaultValue;
+        String value;
+        synchronized (provider) {
+            value = provider.mTables.get(GLOBAL).get(name);
+        }
+        if (value == null) return defaultValue;
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException invalid) {
+            return defaultValue;
+        }
+    }
+
     /**
      * Sets a Settings.System value from the system server (locale track: TIME_12_24 when
      * Windows' time format changes; ADR 0049).
@@ -66,7 +82,6 @@ final class SettingsProvider extends ContentProvider {
     SettingsProvider(PackageManagerService pm, ActivityTaskManagerService atm) {
         mPm = pm;
         mCallers = pm == null ? null : new CallerIdentity(pm, atm);
-        sInstance = this;
         for (String table : new String[] {SYSTEM, SECURE, GLOBAL}) {
             mTables.put(table, new HashMap<>());
         }
@@ -128,6 +143,8 @@ final class SettingsProvider extends ContentProvider {
         // ContentProvider.attachInfo, without a Context (the transport's call() needs only
         // the authority).
         attachInfo(null, mInfo);
+        // Publish only after all tables are available to server-local readers.
+        sInstance = this;
     }
 
     /** What getContentProvider answers for {@code settings}. */

@@ -86,6 +86,62 @@ LeakSanitizer because this environment cannot inspect the required process
 state. They are not Windows execution, cross-ABI proof or a leak-check result.
 The lightweight CI gate runs all three sanitizer harnesses before the larger build.
 
+## Follow-up of the open PR
+
+A second pass starts from PR #8 head
+`3843241968edfd124d3b9596c0e6381f45f5c381`. It traces public framework callers,
+actual service state, installer generations, native exports and data transfer
+through the implemented backends. Successful empty queries are counted as
+correct only where the runtime's actual inventory is empty. Explicit refusal
+of an unsupported operation is not counted as implementation of that feature.
+
+| Area | Additional confirmed defect | Implemented follow-up |
+| --- | --- | --- |
+| Directory APIs | Public `scandirat`, `scandirat64`, `telldir` and `seekdir` exports were absent; scanning could dereference failed allocations or return a partial list after a read error. | Actual descriptor-relative scans and stream-position restoration; checked allocation/cleanup and real enumeration-error propagation. [Native follow-up](native-followup-2026-11-08.md). |
+| Synchronization | Semaphore counts could exceed Android's maximum; distant absolute deadlines overflowed signed nanoseconds. | Atomic bounded posting and wide deadline arithmetic, including concurrent posters and actual waits. [Native follow-up](native-followup-2026-11-08.md). |
+| Audio transfers | Valid oversized direct-record requests were rejected; array arithmetic could overflow; extra playback vectors could abort across JNI on allocation failure. | Capacity-clamped capture, checked JNI buffer ranges, VM-managed playback array access, preserved payload/copy-back behavior, and wide byte counts until sample conversion. [Audio buffer report](audio-buffer-contracts-2026-11-08.md). |
+| Installed package behavior | Derived manifest policy flags were lost; the base-only cache hid changed splits; full installs inherited omitted optional splits; required split/type validation was absent. | Project all parsed flags, execute real changed-cluster validation/replacement, distinguish raw-base reuse from full replacement, and preserve the active generation on invalid required sets. [Package follow-up](package-followup-2026-11-08.md). |
+| Package queries/completion | Existing packages appeared absent to group queries; bulk identities/permission holders inherited defaults; deprecated dex-module requests never completed. | Queries read actual package/permission state. Dex registration follows Android 16's deliberately disabled operation and its asynchronous failure callback; no dex-registration backend is claimed. [Package follow-up](package-followup-2026-11-08.md). |
+| Storage/user state | Storage inventory and user bundles/names were null; unknown serials mapped to the owner; CE-lock state contradicted the unlocked session; allocation requests could claim success without checking capacity. | Real filesystem-backed volume/path/state/capacity queries and existing owner-user metadata; measured capacity checks with actual settings/reserves and permissions. [Service follow-up](java-services-followup-2026-11-08.md). |
+| Notification channels and groups | Group APIs inherited defaults, channel policy disappeared on restart, missing modern channels were fabricated, and deletion did not coordinate active notifications or running services/jobs. | Persistent channel/group state, real queries and membership, policy-preserving updates, manager-cache invalidation, blocked-channel enforcement and coordinated removal of live/retained notifications. [Notification follow-up](notification-groups-followup-2026-11-08.md). |
+| Job notifications | `setNotification` ignored the end policy and shared ownership; completing jobs could leave notifications and UIJ flags behind. | Validate and track actual run associations, preserve shared notifications, apply the final association's REMOVE/DETACH policy, and update retained state when the last UIJ flag is removed. [Job lifecycle report](job-notification-followup-2026-11-08.md). |
+| Native file growth | Invalid/overflowing ranges and read-only descriptors could report successful allocation; POSIX errno behavior was incorrect. | Checked ranges, actual handle rights, descriptor lifetime and error propagation around existing CRT file growth. Sparse/range physical reservation and concurrent-resize parity remain explicitly unimplemented. [File allocation report](file-allocation-contracts-2026-11-08.md). |
+
+The added native directory, semaphore/deadline and file-operation harnesses
+pass 72, 73 and 40 assertions. Together with the rerun 116 original native
+assertions, that is **301 native host assertions**, with the same ASan/UBSan
+and LeakSanitizer boundary described above. The separate real-JVM JNI test
+passes **72 audio-buffer assertions** under checked JNI and UBSan.
+
+New Java host evidence includes **75 manifest-flag**, **22 package identity/
+callback**, **45 storage** and **49 user-manager** assertions against actual
+production/framework classes. Their focused reports describe constructor and
+native-boundary envelopes rather than treating those probes as ART runs.
+The notification host fixture passes **88 assertions**, including actual manager
+queries, durable XML reload, failed saves, blocked-post removal, user policy,
+cache invalidation and publication races. The original PR head fails at the
+public create-group/get-group operation. Its native initialization envelope is
+explicit; host success is not Binder, retained Parcel-store or Windows UI proof.
+The split builder now creates **nine real APK fixtures**, including revised,
+required and type-providing splits; all pass build and alignment checks. The
+signed required-base fixture also passes signature verification. Its real
+PackageInstaller session checks the public incompatible-install status and
+preservation of the active generation; execution of that fixture requires ART.
+
+The complete combined application and service-test sources pass Java compilation
+and D8 generation, including the real AIDL notification-group and job-lifecycle
+fixtures now registered in the Windows suite. These remain compile-only local
+results; the host probes do not execute the Binder transport or Windows ART.
+
+The five changed POSIX/bionic translation units also compile as complete
+Windows x86-64 and native Windows ARM64 objects, and both changed media JNI
+units compile as Windows x86-64 objects. These checks use the exact CI
+llvm-mingw release `20261006`, archive SHA-256
+`5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4`.
+The source preservation gate remains exact outside the reviewed file-allocation
+function and pins that complete changed file independently. Cross-compilation
+does not establish linking, Windows execution, or translated guest execution.
+
 ## Material compatibility work still open
 
 These current-source limits are separate from the repaired defects:
@@ -104,6 +160,20 @@ These current-source limits are separate from the repaired defects:
   still explicitly treats `EPOLLET` as level-triggered. Socket ancillary-data
   transport, including SCM_RIGHTS, is not implemented. Blocking record-lock
   waits remain a separate backend obligation.
+- **Storage backends.** OBB image mounting, per-UID cache accounting/quotas,
+  safe live-app cache deletion and ordered free-space reclamation remain absent.
+  Native sparse/range preallocation and concurrent file-resize guarantees are
+  also incomplete. Returning an error, an empty quota, or logical file growth
+  is not presented as implementation of those operations.
+- **Broader package APIs.** `queryIntentActivityOptions` still needs actual
+  specific-intent resolution, ordering/deduplication and caller filtering.
+  Multiuser package state and Android's complete package-visibility policy
+  are outside the implemented owner-user model.
+- **Remaining notification/job policy.** Old retained notification records from
+  store versions 1 and 2 have no channel ID, so selective channel deletion cannot
+  identify them after restart. Distinct user-stop/background-restriction job
+  reasons, full UIJ scheduling/quota policy and broader Android notification
+  policy remain outside the implemented normal association lifecycle.
 - **Native exports and ABI behavior.** The platform soname table is conditional
   on implemented probe symbols. A named library or successful symbol lookup
   does not establish every export, layout, callback or ownership contract.

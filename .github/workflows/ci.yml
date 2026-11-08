@@ -53,11 +53,22 @@ jobs:
           python3 -m unittest discover -s tools/tests -p test_java_member_inventory.py
           python3 -m unittest discover -s tools/tests -p test_audit_services_jni.py
 
-      - name: Native allocation, file-lock and socket-control contracts
+      - name: Native allocation, directory, semaphore, file-lock and socket-control contracts
         run: |
           python3 tools/test_bionic_allocations.py --sanitize
           python3 tools/test_bionic_system_contracts.py --sanitize
           python3 tools/test_socket_control_contract.py --sanitize
+          python3 tools/test_bionic_directory_contracts.py --sanitize
+          python3 tools/test_bionic_semaphore_contracts.py --sanitize
+          python3 tools/test_file_allocation_contracts.py --sanitize
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Audio JNI buffer contracts with checked JNI and UBSan
+        run: python3 tools/test_audio_buffer_contracts.py
 
       - name: Validate user interface translations
         run: |

@@ -55,6 +55,9 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "allocation_test.inc"
 #include "system_contract_test.inc"
 #include "socket_control_test.inc"
+#include "directory_contract_test.inc"
+#include "semaphore_contract_test.inc"
+#include "file_allocation_contract_test.inc"
 
 // --- memory and strings -------------------------------------------------------
 
@@ -622,6 +625,9 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_allocation_contracts();
   test_system_contracts();
   test_socket_control_contracts();
+  test_directory_contracts();
+  test_semaphore_contracts();
+  test_file_allocation_contracts();
 #if defined(__x86_64__)
   test_timerfd_syscalls();
 #endif

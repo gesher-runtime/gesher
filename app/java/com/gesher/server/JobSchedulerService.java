@@ -5,12 +5,15 @@
 package com.gesher.server;
 
 import android.app.IServiceConnection;
+import android.app.Notification;
+import android.app.NotificationChannel;
 import android.app.job.IJobCallback;
 import android.app.job.IJobScheduler;
 import android.app.job.IJobService;
 import android.app.job.JobInfo;
 import android.app.job.JobParameters;
 import android.app.job.JobScheduler;
+import android.app.job.JobService;
 import android.app.job.JobWorkItem;
 import android.content.ComponentName;
 import android.content.Context;
@@ -31,9 +34,11 @@ import java.io.OutputStream;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * {@code jobscheduler}: JobSchedulerService on Windows (devsvc track, docs/services.md
@@ -71,6 +76,7 @@ final class JobSchedulerService extends IJobScheduler.Default
     private final ActivityTaskManagerService mAtm;
     private final PackageManagerService mPm;
     private final CallerIdentity mCallers;
+    private final NotificationManagerService mNotifications;
     private final double mTimeScale;
 
     /** A scheduled job: JobStatus. */
@@ -125,6 +131,9 @@ final class JobSchedulerService extends IJobScheduler.Default
         JobParameters params;
         boolean stopping;
         boolean done;
+        int notificationId;
+        String notificationChannelId;
+        int notificationEndPolicy;
         final IServiceConnection connection = new IServiceConnection.Stub() {
             @Override
             public void connected(ComponentName name, IBinder binder,
@@ -272,15 +281,43 @@ final class JobSchedulerService extends IJobScheduler.Default
 
         @Override
         public void setNotification(int jobId, int notificationId,
-                android.app.Notification notification, int jobEndNotificationPolicy) {
+                Notification notification, int jobEndNotificationPolicy) {
             ApkPackage captured = mPm.get(job.packageName);
             callback(jobId);
             synchronized (JobSchedulerService.this) { if (done) return; }
-            // User-initiated jobs' notifications: posted as the app's.
-            NotificationManagerService n = NotificationManagerService.sLast;
-            if (n != null && notification != null) {
-                n.postFor(captured, job.packageName, null, notificationId, notification);
+            Objects.requireNonNull(notification, "notification");
+            Notification posted = notification.clone();
+            if (posted.getSmallIcon() == null) throw new IllegalArgumentException("small icon required");
+            if (jobEndNotificationPolicy != JobService.JOB_END_NOTIFICATION_POLICY_DETACH
+                    && jobEndNotificationPolicy != JobService.JOB_END_NOTIFICATION_POLICY_REMOVE) {
+                throw new IllegalArgumentException("invalid job end notification policy");
             }
+            if (mNotifications == null) throw new IllegalStateException("Notification service unavailable");
+            mNotifications.withChannelLifecycle(() -> {
+                synchronized (JobSchedulerService.this) {
+                    if (done || !current(job) || mPm.get(job.packageName) != captured) return;
+                }
+                NotificationChannel channel = mNotifications.getNotificationChannel(
+                        job.packageName, 0, job.packageName, posted.getChannelId());
+                if (channel == null) throw new IllegalArgumentException("invalid notification channel");
+                boolean changedId;
+                synchronized (JobSchedulerService.this) {
+                    changedId = mNotificationRuns.contains(this) && this.notificationId != notificationId;
+                }
+                if (changedId) releaseNotification(this);
+                synchronized (JobSchedulerService.this) {
+                    this.notificationId = notificationId;
+                    notificationChannelId = channel.getId();
+                    notificationEndPolicy = jobEndNotificationPolicy;
+                    mNotificationRuns.add(this);
+                    // UIJ status belongs to the active jobs, not caller-supplied flags.
+                    posted.flags &= ~Notification.FLAG_USER_INITIATED_JOB;
+                    if (notificationHasUijLocked(job.packageName, notificationId)) {
+                        posted.flags |= Notification.FLAG_USER_INITIATED_JOB;
+                    }
+                }
+                mNotifications.postFor(captured, job.packageName, null, notificationId, posted);
+            });
         }
 
         private void callback(int jobId) {
@@ -296,6 +333,9 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     // Guarded by this.
     private final List<Job> mJobs = new ArrayList<>();
+    // Associations survive removal from the scheduled-job list until each Run
+    // actually completes; canceled/rescheduled services may still be stopping.
+    private final Set<Run> mNotificationRuns = new HashSet<>();
     private final Map<String, Long> mRemovalEpochs = new java.util.concurrent.ConcurrentHashMap<>();
     private Runnable mBeforePersist; // Server-local race fixture; never a Binder option.
     private int mRunning;
@@ -307,6 +347,8 @@ final class JobSchedulerService extends IJobScheduler.Default
         mAtm = atm;
         mPm = pm;
         mCallers = new CallerIdentity(pm, atm);
+        mNotifications = NotificationManagerService.sLast;
+        if (mNotifications != null) mNotifications.attachJobScheduler(this);
         pm.onPackageRemoval(this::packageRemoved);
         double scale = 1;
         String s = System.getenv("GESHER_JOBS_TIME_SCALE");
@@ -323,6 +365,50 @@ final class JobSchedulerService extends IJobScheduler.Default
         ContentService.addChangeListener(this::contentChanged);
         // Persisted jobs run again from the system server's start.
         if (WindowsHost.inSystemServer()) start();
+    }
+
+    synchronized boolean hasUserInitiatedJobNotification(String pkg, String channelId) {
+        for (Run run : mNotificationRuns) {
+            if (!run.done && run.job.packageName.equals(pkg) && run.job.info.isUserInitiated()
+                    && current(run.job) && Objects.equals(run.notificationChannelId, channelId)) return true;
+        }
+        return false;
+    }
+
+    /** Guarded by this; notification IDs are scoped to a package and user 0. */
+    private boolean notificationHasUijLocked(String pkg, int notificationId) {
+        for (Run run : mNotificationRuns) {
+            if (!run.done && run.job.packageName.equals(pkg) && run.notificationId == notificationId
+                    && run.job.info.isUserInitiated() && current(run.job)) return true;
+        }
+        return false;
+    }
+
+    /** Called under the notification lifecycle fence, never with the job monitor held. */
+    private void releaseNotification(Run run) {
+        String pkg = run.job.packageName;
+        int id;
+        boolean remove, stripUij, ownerCurrent;
+        synchronized (this) {
+            if (!mNotificationRuns.remove(run)) return;
+            id = run.notificationId;
+            boolean associated = false;
+            for (Run other : mNotificationRuns) {
+                if (!other.done && other.job.packageName.equals(pkg) && other.notificationId == id
+                        && current(other.job)) { associated = true; break; }
+            }
+            // The final associated job's policy wins. An earlier REMOVE cannot
+            // cancel a notification still used by another ordinary or UIJ run.
+            remove = !associated && run.notificationEndPolicy == JobService.JOB_END_NOTIFICATION_POLICY_REMOVE;
+            stripUij = !notificationHasUijLocked(pkg, id);
+            ownerCurrent = current(run.job);
+            run.notificationChannelId = null;
+        }
+        // Delayed callbacks from a removed/replaced owner cannot mutate a new
+        // package's notifications after the package-removal epoch advances.
+        if (!ownerCurrent) return;
+        if (remove) mNotifications.cancel(pkg, null, id);
+        else if (stripUij) mNotifications.removeUserInitiatedJobFlag(pkg, id);
     }
 
     private long scaled(long ms) {
@@ -911,52 +997,72 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     /** The run is over: unbind, then reschedule (periodic, backoff) or drop the job. */
     private void finish(Run run, boolean reschedule, String why) {
+        int[] transition = {-1};
+        Runnable complete = () -> {
+            transition[0] = finishState(run, reschedule);
+            if (transition[0] >= 0) releaseNotification(run);
+        };
+        try {
+            if (mNotifications == null) complete.run();
+            else mNotifications.withChannelLifecycle(complete);
+        } finally {
+            // Notification storage/listener failures must not strand a completed
+            // service binding or skip the existing persisted-job cleanup.
+            if (transition[0] >= 0) finishBinding(run, transition[0] != 0, why);
+        }
+    }
+
+    /** -1 for an already completed callback; otherwise whether the job remains scheduled. */
+    private synchronized int finishState(Run run, boolean reschedule) {
         Job j = run.job;
         boolean keep;
-        synchronized (this) {
-            if (run.done) return;
-            run.done = true;
-            if (j.run == run) {
-                j.run = null;
-                mRunning--;
-            }
-            // Delivered work not completed goes back to the queue.
-            for (JobWorkItem w : j.delivered.values()) j.work.addFirst(w);
-            j.delivered.clear();
-            long now = SystemClock.elapsedRealtime();
-            boolean inList = mJobs.contains(j);
-            if (!inList || !current(j)) {
-                mJobs.remove(j);
-                keep = false;
-            } else if (reschedule) {
-                j.failures++;
-                long backoff = scaled(j.info.getInitialBackoffMillis());
-                long delay = j.info.getBackoffPolicy() == JobInfo.BACKOFF_POLICY_LINEAR
-                        ? backoff * j.failures
-                        : backoff * (1L << Math.min(30, j.failures - 1));
-                delay = Math.min(delay, scaled(JobInfo.MAX_BACKOFF_DELAY_MILLIS));
-                j.earliest = now + delay;
-                if (!j.info.isPeriodic()) j.latest = Long.MAX_VALUE;
-                keep = true;
-            } else if (j.info.isPeriodic()) {
-                // JobSchedulerService.getRescheduleJobForPeriodic: the next window after
-                // the one it ran in.
-                long period = scaled(j.info.getIntervalMillis());
-                long flex = Math.min(period, scaled(j.info.getFlexMillis()));
-                long latest = Math.max(j.latest, now) + period;
-                if (j.latest < now) latest = now + period;
-                j.latest = latest;
-                j.earliest = latest - flex;
-                j.failures = 0;
-                keep = true;
-            } else if (!j.work.isEmpty()) {
-                keep = true;  // enqueued work left: run again
-            } else {
-                mJobs.remove(j);
-                keep = false;
-            }
-            notifyAll();
+        if (run.done) return -1;
+        run.done = true;
+        if (j.run == run) {
+            j.run = null;
+            mRunning--;
         }
+        // Delivered work not completed goes back to the queue.
+        for (JobWorkItem w : j.delivered.values()) j.work.addFirst(w);
+        j.delivered.clear();
+        long now = SystemClock.elapsedRealtime();
+        boolean inList = mJobs.contains(j);
+        if (!inList || !current(j)) {
+            mJobs.remove(j);
+            keep = false;
+        } else if (reschedule) {
+            j.failures++;
+            long backoff = scaled(j.info.getInitialBackoffMillis());
+            long delay = j.info.getBackoffPolicy() == JobInfo.BACKOFF_POLICY_LINEAR
+                    ? backoff * j.failures
+                    : backoff * (1L << Math.min(30, j.failures - 1));
+            delay = Math.min(delay, scaled(JobInfo.MAX_BACKOFF_DELAY_MILLIS));
+            j.earliest = now + delay;
+            if (!j.info.isPeriodic()) j.latest = Long.MAX_VALUE;
+            keep = true;
+        } else if (j.info.isPeriodic()) {
+            // JobSchedulerService.getRescheduleJobForPeriodic: the next window after
+            // the one it ran in.
+            long period = scaled(j.info.getIntervalMillis());
+            long flex = Math.min(period, scaled(j.info.getFlexMillis()));
+            long latest = Math.max(j.latest, now) + period;
+            if (j.latest < now) latest = now + period;
+            j.latest = latest;
+            j.earliest = latest - flex;
+            j.failures = 0;
+            keep = true;
+        } else if (!j.work.isEmpty()) {
+            keep = true;  // enqueued work left: run again
+        } else {
+            mJobs.remove(j);
+            keep = false;
+        }
+        notifyAll();
+        return keep ? 1 : 0;
+    }
+
+    private void finishBinding(Run run, boolean keep, String why) {
+        Job j = run.job;
         SystemServer.log("jobscheduler: " + j + " finished: " + why
                 + (keep ? "; next" + describeTimes(j) : ""));
         if (run.service != null) {

@@ -668,6 +668,11 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 status = PackageInstaller.STATUS_SUCCESS; message = "Installed";
             } catch (SecurityException e) {
                 status = PackageInstaller.STATUS_FAILURE_BLOCKED; message = "Package identity or consent changed";
+            } catch (android.content.pm.PackageParser.PackageParserException e) {
+                // Validation failures retain Android's public status category; a
+                // missing required split is incompatible, not a storage failure.
+                status = android.content.pm.PackageManager.installStatusToPublicStatus(e.error);
+                message = e.getMessage();
             } catch (IOException e) {
                 status = PackageInstaller.STATUS_FAILURE_STORAGE; message = "Installation storage failure";
             } catch (Exception e) {

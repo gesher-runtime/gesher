@@ -28,6 +28,7 @@
 #include <psapi.h>
 
 #include <string>
+#include <limits>
 #include <vector>
 
 #include "binder_internal.h"
@@ -380,13 +381,40 @@ int flock(int fd, int operation) {
 int posix_fadvise(int, off_t, off_t, int) { return 0; }
 
 int posix_fallocate(int fd, off_t offset, off_t len) {
-  long long size = _filelengthi64(fd);
-  if (size < 0) return EBADF;
-  if (offset + len > size) {
-    int result = _chsize_s(fd, offset + len);
-    if (result != 0) return gesher_errno_from_crt(result);
-  }
-  return 0;
+  // Unlike fallocate, POSIX returns the error number and leaves errno alone.
+  const int saved_errno = errno;
+  const int result = [&]() -> int {
+    if (offset < 0 || len <= 0) return EINVAL;
+    if (len > std::numeric_limits<off_t>::max() - offset) return EFBIG;
+    const off_t end = offset + len;
+
+    // Keep the descriptor's actual file object stable through inspection and
+    // growth. F_GETFL's generic fallback is not evidence of write access.
+    gesher::record_locks::DescriptorGuard descriptor_guard;
+    HANDLE handle = gesher::HandleFromFd(fd);
+    if (handle == INVALID_HANDLE_VALUE) return EBADF;
+    uint32_t access = 0;
+    int error = gesher::record_locks::HandleAccess(handle, &access);
+    if (error) return error;
+    if ((access & FILE_WRITE_DATA) == 0) return EBADF;
+    const DWORD kind = GetFileType(handle);
+    if (kind == FILE_TYPE_PIPE) return ESPIPE;
+    if (kind != FILE_TYPE_DISK) return ENODEV;
+
+    const long long size = _filelengthi64(fd);
+    if (size < 0) return gesher_errno_from_crt(errno);
+    if (end > size) {
+      // Retain the existing CRT zero-filled extension path. This is not a
+      // range-preallocation backend for sparse files. In particular, replacing
+      // it with absolute FileAllocationInfo/EOF assignments would also risk
+      // truncating concurrent writers after a stale size query.
+      error = _chsize_s(fd, end);
+      if (error) return gesher_errno_from_crt(error);
+    }
+    return 0;
+  }();
+  errno = saved_errno;
+  return result;
 }
 
 int fallocate(int fd, int mode, off_t offset, off_t len) {

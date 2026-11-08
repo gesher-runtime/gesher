@@ -100,6 +100,7 @@ final class ActiveServices {
         boolean startRequested;
         int lastStartId;
         int foregroundId;
+        String foregroundChannelId;
         int startResult = Service.START_STICKY_COMPATIBILITY;
         Intent lastStartIntent;
         BooleanSupplier startLifetime = () -> true;
@@ -510,6 +511,12 @@ final class ActiveServices {
 
     void setServiceForeground(ComponentName className, IBinder token, int id,
             Notification notification, int flags, int foregroundServiceType) {
+        mNotifications.withChannelLifecycle(() -> setServiceForegroundLocked(className, token,
+                id, notification, flags, foregroundServiceType));
+    }
+
+    private void setServiceForegroundLocked(ComponentName className, IBinder token, int id,
+            Notification notification, int flags, int foregroundServiceType) {
         ServiceRecord r;
         int previous;
         ApkPackage captured;
@@ -518,8 +525,10 @@ final class ActiveServices {
             if (r == null) return;
             captured = mPm.get(r.info.packageName);
             requireServiceOwner(r);
+            if (id != 0 && notification == null) throw new IllegalArgumentException("Missing foreground notification");
             previous = r.foregroundId;
             r.foregroundId = id;
+            r.foregroundChannelId = id == 0 ? null : notification.getChannelId();
         }
         if (id != 0) {
             // FOREGROUND_SERVICE_TYPE_MANIFEST (startForeground(id, notification)): the
@@ -545,6 +554,15 @@ final class ActiveServices {
             if (r != null) requireServiceOwner(r);
             return r != null && r.foregroundId != 0 ? r.info.getForegroundServiceType() : 0;
         }
+    }
+
+    synchronized boolean hasForegroundServiceNotification(String pkg, String channelId) {
+        for (ServiceRecord record : mServices.values()) {
+            if (record.foregroundId != 0 && record.info.packageName.equals(pkg)
+                    && java.util.Objects.equals(record.foregroundChannelId, channelId)
+                    && serviceCurrent(record)) return true;
+        }
+        return false;
     }
 
     IBinder peekService(Intent service, String resolvedType) {
@@ -743,6 +761,7 @@ final class ActiveServices {
                 if (r.foregroundId != 0) {
                     mNotifications.cancel(r.info.packageName, null, r.foregroundId);
                     r.foregroundId = 0;
+                    r.foregroundChannelId = null;
                 }
                 r.app = null;
                 r.created = false;

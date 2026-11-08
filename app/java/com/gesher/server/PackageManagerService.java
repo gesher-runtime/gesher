@@ -436,6 +436,32 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     @Override
+    public ParceledListSlice<PackageInfo> getPackagesHoldingPermissions(String[] permissions,
+            long flags, int userId) {
+        Objects.requireNonNull(permissions);
+        List<PackageInfo> result = new ArrayList<>();
+        if (userId != 0) return new ParceledListSlice<>(result);
+        for (ApkPackage pkg : mPackages.values()) {
+            if (isRemovalPending(pkg.packageName)) continue;
+            if ((flags & PackageManager.MATCH_SYSTEM_ONLY) != 0 && !pkg.isSystemAddon()) continue;
+            List<String> held = new ArrayList<>();
+            for (String permission : permissions) {
+                if (mPermissions.granted(permission, pkg.packageName)) held.add(permission);
+            }
+            if (held.isEmpty()) continue;
+            PackageInfo info = installedInfo(pkg, flags);
+            // Without GET_PERMISSIONS Android returns only the matching requested
+            // names, preserving the query's order/duplicates. With it, keep the full
+            // manifest permission inventory and the current grant flags instead.
+            if ((flags & PackageManager.GET_PERMISSIONS) == 0) {
+                info.requestedPermissions = held.toArray(new String[0]);
+            }
+            result.add(info);
+        }
+        return new ParceledListSlice<>(result);
+    }
+
+    @Override
     public ParceledListSlice getInstalledApplications(long flags, int userId) {
         List<ApplicationInfo> result = new ArrayList<>();
         for (ApkPackage p : mPackages.values()) {
@@ -503,6 +529,18 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     @Override
+    public String[] getNamesForUids(int[] uids) {
+        // AOSP distinguishes an absent input from positional unknown UID answers.
+        if (uids == null || uids.length == 0) return null;
+        String[] names = new String[uids.length];
+        for (int i = 0; i < uids.length; i++) {
+            names[i] = uids[i] == android.os.Process.SYSTEM_UID
+                    ? "shared:android.uid.system" : getNameForUid(uids[i]);
+        }
+        return names;
+    }
+
+    @Override
     public String[] getPackagesForUid(int uid) {
         if (uid == android.os.Process.SYSTEM_UID) return new String[] {"android"};
         List<String> result = new ArrayList<>();
@@ -514,6 +552,20 @@ public final class PackageManagerService extends IPackageManager.Default {
     public int getPackageUid(String name, long flags, int userId) {
         ApplicationInfo info = userId == 0 ? getApplicationInfo(name, flags, userId) : null;
         return info == null ? -1 : info.uid;
+    }
+
+    @Override
+    public int[] getPackageGids(String packageName, long flags, int userId) {
+        // Gesher assigns package UIDs but no supplementary Linux groups. Null
+        // means an unknown package to ApplicationPackageManager, not "no groups",
+        // and makes even a query about the caller's own installed app throw.
+        if (userId != 0 || isRemovalPending(packageName)) return null;
+        if ("android".equals(packageName)) return new int[0];
+        ApkPackage pkg = get(packageName);
+        if (pkg == null || ((flags & PackageManager.MATCH_SYSTEM_ONLY) != 0 && !pkg.isSystemAddon())) {
+            return null;
+        }
+        return new int[0];
     }
 
     @Override
@@ -641,6 +693,26 @@ public final class PackageManagerService extends IPackageManager.Default {
     public void notifyDexLoad(String loadingPackageName,
             java.util.Map<String, String> classLoaderContextMap, String loaderIsa) {
         // No dexopt to schedule.
+    }
+
+    @Override
+    public void registerDexModule(String packageName, String dexModulePath,
+            boolean isSharedModule, android.content.pm.IDexModuleRegisterCallback callback) {
+        // Android 16 deliberately does not register/optimize these modules, but
+        // completes the optional callback with failure. An inherited no-op leaves
+        // callers waiting forever. The server's existing worker supplies the
+        // asynchronous boundary, without retaining a client Binder identity or
+        // holding the package monitor while application code runs.
+        if (callback == null) return;
+        mPackageEventExecutor.execute(() -> {
+            try {
+                callback.onDexModuleRegistered(dexModulePath, false,
+                        "registerDexModule call not supported since Android U");
+            } catch (RemoteException | RuntimeException failure) {
+                SystemServer.log("dex module callback unavailable: "
+                        + failure.getClass().getSimpleName());
+            }
+        });
     }
 
     @Override
