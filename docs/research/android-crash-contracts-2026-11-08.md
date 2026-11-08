@@ -203,6 +203,20 @@ assertion above, before the new framework-contract track. That failure is not
 reported as a transient network error or a completed service-test pass. The
 final revision requires its own Windows run after the path repair.
 
+## Earlier Windows contract feedback
+
+The additional `framework-contracts` matrix leg runs on both Windows versions
+using the same current-source artifact verification and assembly as the normal
+test leg. It retains the runner's initial VM/framework/lifecycle checks, then
+runs the existing graphics and font prerequisites (`30-graphics`, `32-fonts`),
+the actual service suite (`50-services`) and framework contracts
+(`94-framework-fixes`). Every selected script is required to exist, and its
+original assertions and exit handling remain active. The normal full Windows
+jobs and their offline identity/retirement checks continue unchanged.
+
+The selected leg provides earlier runtime feedback for these contracts. It does
+not replace the complete suite or establish coverage of the omitted tracks.
+
 ## Material compatibility work still open
 
 These current-source limits are separate from the repaired defects:
