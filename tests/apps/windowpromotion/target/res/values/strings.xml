@@ -1,1 +1,9 @@
-<resources><string name="app_name">Gesher window promotion fixture</string></resources>
+<resources>
+  <string name="app_name">Gesher window promotion fixture</string>
+  <style name="EmptyBridge" parent="android:style/Theme.Material.Light.Dialog.NoActionBar">
+    <item name="android:windowIsTranslucent">true</item>
+    <item name="android:windowBackground">@android:color/transparent</item>
+    <item name="android:windowNoTitle">true</item>
+    <item name="android:backgroundDimEnabled">false</item>
+  </style>
+</resources>

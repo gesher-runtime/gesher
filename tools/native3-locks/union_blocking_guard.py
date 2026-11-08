@@ -23,7 +23,8 @@ def main():
                     'tests/dex-services/gesher/services/GrammaticalInflectionUnavailableTest.java',
                         'tests/dex-services/gesher/services/WindowIdTest.java',
                         'tests/dex-services/gesher/services/DynamicShortcutTest.java',
-                        'tests/windows/run-dynamic-shortcuts.ps1'])
+                        'tests/windows/run-dynamic-shortcuts.ps1',
+                        'tests/apps/windowpromotion/target/java/com/gesher/windowpromotion/target/BridgeActivity.java'])
     allowed.update(['.github/workflows/native2.yml', 'tests/native2/fonts_standalone.c', 'tests/windows/tracks/46-native3.ps1', 'compat/bionic/extra_bionic.cc', 'compat/bionic/jni.cmake', 'compat/bionic/native_fonts.cc', 'compat/posix/src/path.cc', 'compat/posix/include/gesher/font_paths.h', 'tools/fonts/verify-standalone-link.py', 'tools/fonts/test-standalone-link.py'])
     allowed.update(['.github/workflows/native3-locks-blocking.yml', '.github/workflows/native3-locks-commands.yml', 'tools/ci/artifact_receipt.py', 'tools/ci/receipt_identity.py', 'tools/ci/receipt-diagnostics.ps1', 'tools/windows4/run-tsf-component.ps1', 'tools/windows4/run-tsf-union.ps1', '.github/workflows/services-geocoder-worker-component.yml', 'tools/windows4/test-tsf-job-supervisor.ps1'])
     # Explicit current coherent source envelope; immutable full guard pins every leaf.

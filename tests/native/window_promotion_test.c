@@ -10,21 +10,24 @@
 #include <stdio.h>
 #include <wchar.h>
 
-typedef struct { DWORD pid; int visible; int matching; RECT bounds; } Search;
+typedef struct { DWORD pid; int visible; int matching; RECT bounds; BOOL bridge; } Search;
 static BOOL CALLBACK FindWindowForPid(HWND window, LPARAM parameter) {
   Search* search = (Search*)parameter;
   DWORD pid = 0;
   GetWindowThreadProcessId(window, &pid);
   if (pid != search->pid) return TRUE;
   WCHAR title[128];
-  if (!GetWindowTextW(window, title, 128)
-      || (wcscmp(title, L"Gesher window promotion fixture") && wcscmp(title, L"Gesher unapproved promotion fixture"))) return TRUE;
+  if (!GetWindowTextW(window, title, 128)) return TRUE;
+  if (search->bridge) {
+    if (wcscmp(title, L"Gesher empty bridge fixture") && wcscmp(title, L"Gesher bridge dialog fixture")) return TRUE;
+  } else if (wcscmp(title, L"Gesher window promotion fixture") && wcscmp(title, L"Gesher unapproved promotion fixture")) return TRUE;
   ++search->matching;
   RECT bounds, client, screen = {GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), 0, 0}, overlap;
   screen.right = screen.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
   screen.bottom = screen.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
   if (IsWindowVisible(window) && GetWindowRect(window, &bounds) && GetClientRect(window, &client)
-      && client.right >= 80 && client.bottom >= 80 && IntersectRect(&overlap, &bounds, &screen)) {
+      && client.right >= (search->bridge ? 1 : 80) && client.bottom >= (search->bridge ? 1 : 80)
+      && IntersectRect(&overlap, &bounds, &screen)) {
     ++search->visible;
     search->bounds = bounds;
   }
@@ -55,7 +58,8 @@ int wmain(int argc, WCHAR** argv) {
 #define CHECK(value) do { if (!(value)) { fprintf(stderr, "window promotion controller failed line %d, Win32 %lu\n", __LINE__, GetLastError()); goto cleanup; } ++checks; } while (0)
   CHECK(argc == 6);
   BOOL positive = wcscmp(argv[5], L"positive") == 0;
-  CHECK(positive || wcscmp(argv[5], L"explicit-headless") == 0);
+  BOOL bridge = wcscmp(argv[5], L"empty-bridge") == 0;
+  CHECK(positive || bridge || wcscmp(argv[5], L"explicit-headless") == 0);
   commandBytes = ReadSmall(argv[1], 65536);
   CHECK(commandBytes != NULL);
   WCHAR* command = (WCHAR*)commandBytes;
@@ -97,19 +101,20 @@ int wmain(int argc, WCHAR** argv) {
   CHECK(target != NULL);
   BOOL belongs = FALSE;
   CHECK(IsProcessInJob(target, job, &belongs) && belongs);
-  Search search = {targetPid, 0, 0, {0}};
-  deadline = GetTickCount64() + (positive ? 10000 : 2500);
+  Search search = {targetPid, 0, 0, {0}, bridge};
+  deadline = GetTickCount64() + ((positive || bridge) ? 10000 : 2500);
   do {
     search.visible = search.matching = 0;
     CHECK(EnumDesktopWindows(desktop, FindWindowForPid, (LPARAM)&search));
     CHECK(WaitForSingleObject(target, 0) == WAIT_TIMEOUT);
-    if (positive && search.visible > 0) break;
-    if (!positive) CHECK(search.visible == 0);
+    if ((positive || bridge) && search.visible > 0) break;
+    if (!positive && !bridge) CHECK(search.visible == 0);
     Sleep(25);
   } while (GetTickCount64() < deadline);
   printf("window promotion observed: visible=%d matching=%d targetJob=true\n", search.visible, search.matching);
   fflush(stdout);
-  CHECK(positive ? search.visible == 1 : search.visible == 0);
+  CHECK(positive || bridge ? search.visible == 1 : search.visible == 0);
+  if (bridge) CHECK(search.matching == 2);
   HANDLE result = CreateFileW(argv[4], GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
   CHECK(result != INVALID_HANDLE_VALUE);
   const char pass[] = "PASS\n";
@@ -117,6 +122,36 @@ int wmain(int argc, WCHAR** argv) {
   BOOL wrote = WriteFile(result, pass, sizeof(pass)-1, &written, NULL);
   CloseHandle(result);
   CHECK(wrote && written == sizeof(pass)-1);
+  if (bridge) {
+    BOOL contentReady = FALSE;
+    deadline = GetTickCount64() + 25000;
+    do {
+      char* state = ReadSmall(argv[3], 128);
+      if (state != NULL) {
+        unsigned long number = 0;
+        contentReady = sscanf(state, "CONTENT %lu", &number) == 1 && (DWORD)number == targetPid;
+        HeapFree(GetProcessHeap(), 0, state);
+      }
+      if (contentReady || WaitForSingleObject(process.hProcess, 0) == WAIT_OBJECT_0) break;
+      Sleep(20);
+    } while (GetTickCount64() < deadline);
+    CHECK(contentReady);
+    deadline = GetTickCount64() + 10000;
+    do {
+      search.visible = search.matching = 0;
+      CHECK(EnumDesktopWindows(desktop, FindWindowForPid, (LPARAM)&search));
+      CHECK(WaitForSingleObject(target, 0) == WAIT_TIMEOUT);
+      if (search.visible == 2) break;
+      Sleep(25);
+    } while (GetTickCount64() < deadline);
+    CHECK(search.visible == 2 && search.matching == 2);
+    result = CreateFileW(argv[4], FILE_APPEND_DATA, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    CHECK(result != INVALID_HANDLE_VALUE);
+    const char contentPass[] = "CONTENT_PASS\n";
+    wrote = WriteFile(result, contentPass, sizeof(contentPass)-1, &written, NULL);
+    CloseHandle(result);
+    CHECK(wrote && written == sizeof(contentPass)-1);
+  }
   if (positive) {
     BOOL phaseReady = FALSE;
     deadline = GetTickCount64() + 35000;
@@ -153,7 +188,7 @@ int wmain(int argc, WCHAR** argv) {
   DWORD code = 1;
   CHECK(GetExitCodeProcess(process.hProcess, &code) && code == 0);
   printf("window_promotion_test all passed: mode=%s checks=%d visible=%d matching=%d bounds=%ld,%ld,%ld,%ld\n",
-      positive ? "positive" : "explicit-headless", checks, search.visible, search.matching,
+      bridge ? "empty-bridge" : positive ? "positive" : "explicit-headless", checks, search.visible, search.matching,
       search.bounds.left, search.bounds.top, search.bounds.right, search.bounds.bottom);
   ok = TRUE;
 cleanup:

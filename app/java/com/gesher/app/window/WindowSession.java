@@ -701,7 +701,7 @@ public final class WindowSession extends IWindowSession.Stub {
         }
         // Focusable windows start focused (a window shown off the desktop is never
         // activated); a toast, a tooltip or a PopupWindow that is not focusable never is.
-        o.initialFocus = w.focusable();
+        o.initialFocus = w.focusable() && !emptyTransparentActivity(w);
         if (o.initialFocus) w.sessionFocus = Boolean.TRUE;
         final IBinder key = w.client.asBinder();
         o.listener = (type, a, b) -> onWindowEvent(key, type, a, b);
@@ -1693,6 +1693,15 @@ public final class WindowSession extends IWindowSession.Stub {
     /** Shows a window once drawn (finishDrawing, or relayout making it visible again). */
     private void showWindow(AppWindow w) {
         NativeWindow nw = w.nativeWindow;
+        if (emptyTransparentActivity(w)) {
+            // Routing Activities often show a Dialog from onCreate without adding
+            // Activity content. Their transparent DecorView can measure only a
+            // few pixels high. It still needs a surface/lifecycle, but presenting
+            // it as an independent desktop window produces an empty title bar.
+            // Recheck on each draw: adding real content must show it normally.
+            if (w.shown) hideWindow(w);
+            return;
+        }
         if (w.popup) {
             AppWindow root = root(w);
             if (root != w && root.nativeWindow != null || shownOnDesktop(w)) {
@@ -1719,6 +1728,22 @@ public final class WindowSession extends IWindowSession.Stub {
             mActiveRoot = w;
         }
         updateGroup(w);
+    }
+
+    private static boolean emptyTransparentActivity(AppWindow w) {
+        if (w.attrs.type != WindowManager.LayoutParams.TYPE_BASE_APPLICATION) return false;
+        android.app.Activity a = activity(w.attrs.token);
+        if (a == null || a.getWindow() == null) return false;
+        android.view.Window window = a.getWindow();
+        if (!window.getWindowStyle().getBoolean(
+                com.android.internal.R.styleable.Window_windowIsTranslucent, false)
+                || window.hasFeature(android.view.Window.FEATURE_ACTION_BAR)) return false;
+        View decor = window.peekDecorView();
+        if (decor == null || (decor.getBackground() != null
+                && decor.getBackground().getOpacity() != android.graphics.PixelFormat.TRANSPARENT)) return false;
+        View content = decor.findViewById(android.R.id.content);
+        return content instanceof android.view.ViewGroup
+                && ((android.view.ViewGroup) content).getChildCount() == 0;
     }
 
     private void hideWindow(AppWindow w) {

@@ -201,7 +201,8 @@ def main():
                         'tests/dex-services/gesher/services/GrammaticalInflectionUnavailableTest.java',
                         'tests/dex-services/gesher/services/WindowIdTest.java',
                         'tests/dex-services/gesher/services/DynamicShortcutTest.java',
-                        'tests/windows/run-dynamic-shortcuts.ps1'])
+                        'tests/windows/run-dynamic-shortcuts.ps1',
+                        'tests/apps/windowpromotion/target/java/com/gesher/windowpromotion/target/BridgeActivity.java'])
         allowed.update(['tests/native3-locks/command_oracle.py', 'tests/native3-locks/command_worker.cc', 'tests/native3-locks/stdio_sink_oracle.py', 'tests/native3-locks/test_command_cleanup.py', 'tools/native3-locks/StdioSinkSupervisor.cs'])
         allowed.update(MERGED_DNS_SOURCE)
         allowed.update(MEDIA4_PINS)

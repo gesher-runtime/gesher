@@ -67,7 +67,37 @@ The native executable is unchanged from the fully green PR 4 artifact.
 ## App verification boundaries
 
 VLC's internal file picker was confirmed working by the user before this
-follow-up. Claude sign-in, Gmail startup and Gemini's connection error remain
-separate unresolved application observations. Passing the synthetic shortcut
-and compatibility regressions does not establish that those application
-flows now work.
+follow-up. Claude sign-in and Gmail startup remain unresolved application
+observations. Gemini subsequently worked when the user retried through the
+explicitly authorized Google-only SSH CONNECT relay. The same runtime failed
+through the local TCP-only relay, so this points to a local network-path
+difference; the exact network/filtering cause is unproven. That per-launch
+configuration is a local diagnostic and is not packaged as a product fix.
+
+## Follow-up: empty routing Activity windows
+
+The actual microG sign-in flow exposed a separate desktop-presentation defect:
+an empty transparent routing Activity acquired its own native title bar only
+32 pixels high alongside the real sign-in dialog. Transparent Activity decor
+can have theme padding even when its content frame has no children.
+
+WindowSession now retains that window's surface and Activity lifecycle while
+withholding desktop presentation and initial focus. This applies only to a
+base Activity window with a translucent theme, no action bar, a transparent
+decor background and an empty content frame. Dialog windows and Activities
+with content keep their existing behavior. The condition is rechecked before
+showing, so adding actual content to the Activity reveals it normally.
+
+The expanded private-desktop window-promotion fixture reproduces a dialog
+shown from onCreate before its empty Activity's first frame. On the old runtime
+the native controller observes two visible windows, including a 32-pixel base
+window, and fails. On the corrected runtime it observes only the real dialog;
+after adding Activity content, both windows are visible. It also checks actual
+presented synthetic pixels. The existing service-first and explicit-headless
+cases continue to pass. No account content is used or captured by the fixture.
+The final rebuilt Java/five-space image tuple passed all 71 offline integration
+checks and GraphicsTest, including the surface-padding/cropping regressions.
+
+This removes the empty extra window. The sign-in card itself is a microG
+BottomSheetDialog, intentionally anchored to the bottom of its Android view;
+this change does not force application content into a different layout.

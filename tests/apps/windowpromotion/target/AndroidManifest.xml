@@ -3,6 +3,7 @@
     <service android:name=".KeepAliveService" android:exported="true" />
     <activity android:name=".TargetActivity" android:label="Gesher window promotion fixture" android:exported="true" />
     <activity android:name=".BackgroundActivity" android:label="Gesher unapproved promotion fixture" android:exported="false" />
+    <activity android:name=".BridgeActivity" android:theme="@style/EmptyBridge" android:exported="true" />
     <receiver android:name=".ControlReceiver" android:exported="true" />
   </application>
 </manifest>
