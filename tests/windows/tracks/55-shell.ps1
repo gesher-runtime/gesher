@@ -395,6 +395,30 @@ namespace GesherShellExtProbe {
         Release(factory);
       }
     }
+
+    [DllImport("kernel32.dll")]
+    static extern bool FreeLibrary(IntPtr module);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr GetModuleHandleW(string name);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    delegate int CanUnloadFn();
+
+    // DllCanUnloadNow's answer, and whether the DLL is still mapped after a
+    // FreeLibrary of the caller's own reference: Explorer must never lose it
+    // under a thread still running in it.
+    public static string Pinned(string dll) {
+      IntPtr module = LoadLibraryW(dll);
+      if (module == IntPtr.Zero) throw new Exception("LoadLibrary " + dll + ": " + Marshal.GetLastWin32Error());
+      IntPtr entry = GetProcAddress(module, "DllCanUnloadNow");
+      if (entry == IntPtr.Zero) throw new Exception("no DllCanUnloadNow");
+      int hr = Marshal.GetDelegateForFunctionPointer<CanUnloadFn>(entry)();
+      // Every reference this process holds (IconOf's LoadLibraryW calls were
+      // never freed): an unpinned DLL is unmapped by the last one, a pinned one
+      // ignores them all.
+      for (int i = 0; i < 64; i++) FreeLibrary(module);
+      bool mapped = GetModuleHandleW(System.IO.Path.GetFileName(dll)) != IntPtr.Zero;
+      return "DllCanUnloadNow=" + hr + ";mapped=" + mapped;
+    }
   }
 }
 '@
@@ -431,6 +455,11 @@ namespace GesherShellExtProbe {
     if ($icon -ne $appIco) { $problems += "the copy's icon is '$icon', not $appIco" }
     $icon = [GesherShellExtProbe.Handler]::IconOf($dll, $empty, [ref]$flags)
     if ($icon -ne (Join-Path $extDir 'gesher.ico')) { $problems += "the empty file's icon is '$icon', not gesher.ico next to the DLL" }
+    # Never unloaded: an object's destructor lowers the count before its Release
+    # returns, so DllCanUnloadNow's S_OK could let COM unmap the DLL under an
+    # Explorer thread still in it (it crashed Explorer). Must stay mapped, last.
+    $pin = [GesherShellExtProbe.Handler]::Pinned($dll)
+    if ($pin -ne 'DllCanUnloadNow=1;mapped=True') { $problems += "the DLL can be unloaded ($pin), not DllCanUnloadNow=1 (S_FALSE) and still mapped" }
   } catch {
     $problems += "$_"
   } finally {
