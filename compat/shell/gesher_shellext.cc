@@ -78,6 +78,7 @@ unsigned long long ParseUnsigned(const char*& p, const char* end) {
 
 // The .ico recorded for a file of `size` bytes last written at `millis`.
 bool RecordedIcon(unsigned long long size, unsigned long long millis, wchar_t* out, UINT cch) {
+  if (cch < 2) return false;
   wchar_t list[MAX_PATH];
   DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", list, MAX_PATH);
   if (n == 0 || n + 40 >= MAX_PATH) return false;
@@ -287,9 +288,9 @@ void DrawIcon(const IconRequest& r) {
   CloseHandle(slots[1]);
 }
 
-// The background thread: draws the queued requests, then ends. It holds a
-// reference to this DLL (`module`) while it runs.
-DWORD WINAPI Worker(LPVOID module) {
+// The background thread: draws the queued requests, then ends. The DLL is
+// pinned (DllMain), so it is still mapped whenever this runs or returns.
+DWORD WINAPI Worker(LPVOID) {
   for (;;) {
     IconRequest r;
     EnterCriticalSection(&g_queue_lock);
@@ -304,7 +305,6 @@ DWORD WINAPI Worker(LPVOID module) {
     LeaveCriticalSection(&g_queue_lock);
     DrawIcon(r);
   }
-  FreeLibraryAndExitThread(static_cast<HMODULE>(module), 0);
   return 0;
 }
 
@@ -319,17 +319,11 @@ void RequestIcon(const wchar_t* path, unsigned long long size, unsigned long lon
   if (!seen && g_seen_count < kSeen && g_queue_count < kQueued) {
     bool running = g_worker_running;
     if (!running) {
-      HMODULE pinned = nullptr;
-      if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-                             reinterpret_cast<LPCWSTR>(&g_module), &pinned)) {
-        HANDLE thread = CreateThread(nullptr, 0, Worker, pinned, 0, nullptr);
-        if (thread != nullptr) {
-          CloseHandle(thread);
-          running = true;
-          g_worker_running = true;
-        } else {
-          FreeLibrary(pinned);
-        }
+      HANDLE thread = CreateThread(nullptr, 0, Worker, nullptr, 0, nullptr);
+      if (thread != nullptr) {
+        CloseHandle(thread);
+        running = true;
+        g_worker_running = true;
       }
     }
     if (running) {
@@ -458,6 +452,16 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     g_module = instance;
     InitializeCriticalSection(&g_queue_lock);
     DisableThreadLibraryCalls(instance);
+    // Never unloaded from this process. Explorer calls this handler from many
+    // threads, and an object's destructor lowers g_objects before its Release
+    // has returned: a DllCanUnloadNow answering S_OK in between let COM unmap
+    // the DLL under a thread still running in it, a call into unmapped code
+    // that crashed Explorer (0xc0000005 in gesher_shellext.dll_unloaded, or a
+    // Control Flow Guard fail-fast, 0xc0000409). A loaded DLL can still be
+    // renamed, which is how the installer replaces it (MoveShellExtAside).
+    HMODULE pinned = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                       reinterpret_cast<LPCWSTR>(&DllMain), &pinned);
   }
   return TRUE;
 }
@@ -469,6 +473,7 @@ STDAPI DllGetClassObject(REFCLSID clsid, REFIID riid, void** ppv) {
   return g_factory.QueryInterface(riid, ppv);
 }
 
-STDAPI DllCanUnloadNow() { return g_objects == 0 && g_locks == 0 ? S_OK : S_FALSE; }
+// Never: see DllMain. (g_objects and g_locks are kept for debugging.)
+STDAPI DllCanUnloadNow() { return S_FALSE; }
 
 }  // extern "C"
