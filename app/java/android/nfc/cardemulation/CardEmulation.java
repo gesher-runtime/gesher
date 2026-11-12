@@ -27,7 +27,8 @@ public final class CardEmulation {
     private CardEmulation() {}
 
     public static synchronized CardEmulation getInstance(NfcAdapter adapter) {
-        return sInstance;
+        if (adapter == null) throw new NullPointerException("NfcAdapter is null");
+        throw new UnsupportedOperationException("NFC card emulation is unavailable");
     }
 
     public boolean isDefaultServiceForCategory(ComponentName service, String category) {
