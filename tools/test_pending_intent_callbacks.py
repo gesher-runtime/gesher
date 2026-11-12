@@ -23,7 +23,7 @@ def main() -> None:
     parser.add_argument('--app-classes', type=Path, required=True)
     parser.add_argument('--apksig-jar', type=Path, required=True)
     parser.add_argument('--source-ref', help='Compile older production classes as a negative control')
-    parser.add_argument('--case', choices=('all', 'identity', 'fill', 'update', 'cancel', 'completion', 'public', 'clipboard'), default='all')
+    parser.add_argument('--case', choices=('all', 'identity', 'fill', 'update', 'cancel', 'completion', 'public', 'clipboard', 'content'), default='all')
     args = parser.parse_args()
     cc = shutil.which('cc')
     if not cc: parser.error('A C compiler is required for the declared native boundaries')
@@ -36,7 +36,7 @@ def main() -> None:
                         '-I' + str(args.java_home / 'include'), '-I' + str(args.java_home / 'include/linux'),
                         str(ROOT / 'tests/pending-intent/framework_host.c'), '-o', str(library)], check=True)
         sources = []
-        for name in ('PendingIntents', 'ActivityManagerService', 'BroadcastController', 'ClipboardService'):
+        for name in ('PendingIntents', 'ActivityManagerService', 'BroadcastController', 'ClipboardService', 'ContentService'):
             relative = 'app/java/com/gesher/server/' + name + '.java'
             source = ROOT / relative
             if args.source_ref:
@@ -47,6 +47,7 @@ def main() -> None:
         sources.extend(str(ROOT / p) for p in (
             'tests/dex-services/gesher/services/PendingIntentContractTest.java',
             'tests/dex-services/gesher/services/ClipboardCallbackTest.java',
+            'tests/dex-services/gesher/services/ContentObserverLifecycleTest.java',
             'tests/dex-services/gesher/services/PowerWakeLockCallbackTest.java',
             'tests/pending-intent/CallbackContractsHost.java'))
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-encoding', 'UTF-8',
@@ -58,12 +59,14 @@ def main() -> None:
             shutil.copy2(source, cleaner / source.name)
         environment = os.environ.copy(); environment['GESHER_MICROG_SPOOF'] = '1'
         environment.pop('GESHER_BINDER_UID', None)
-        cases = (args.case, 'clipboard') if args.case == 'all' else (args.case,)
+        cases = (args.case, 'clipboard', 'content') if args.case == 'all' else (args.case,)
         for case in cases:
+            case_environment = environment.copy()
+            if case == 'content': case_environment.pop('GESHER_MICROG_SPOOF', None)
             subprocess.run([str(args.java_home / 'bin/java'), '-XX:-UsePerfData',
                             '-XX:+UnlockDiagnosticVMOptions', '-XX:-BytecodeVerificationRemote',
                             '--patch-module', 'jdk.unsupported=' + str(work / 'cleaner'),
                             '-cp', str(classes) + os.pathsep + classpath,
-                            'CallbackContractsHost', str(library), case], env=environment, check=True, timeout=90)
+                            'CallbackContractsHost', str(library), case], env=case_environment, check=True, timeout=90)
 
 if __name__ == '__main__': main()
