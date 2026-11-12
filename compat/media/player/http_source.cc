@@ -14,6 +14,7 @@
 #include <cerrno>
 #include <cstring>
 #include <list>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -114,14 +115,18 @@ class HttpSource : public DataSource {
   ssize_t ReadAt(int64_t offset, void* data, size_t size) override {
     if (offset < 0) return -EINVAL;
     if (!EnsureFirst()) return -EIO;
+    size = std::min(size, static_cast<size_t>(std::numeric_limits<ssize_t>::max()));
     uint8_t* out = static_cast<uint8_t*>(data);
     size_t done = 0;
     while (done < size) {
       if (cancelled_) return -EINTR;
+      if (done > static_cast<uint64_t>(std::numeric_limits<int64_t>::max() - offset)) {
+        return done > 0 ? static_cast<ssize_t>(done) : -EOVERFLOW;
+      }
       int64_t pos = offset + static_cast<int64_t>(done);
       if (size_ >= 0 && pos >= size_) break;
       int64_t base = whole_ ? 0 : pos - pos % static_cast<int64_t>(kChunk);
-      const std::vector<uint8_t>* chunk = nullptr;
+      Chunk chunk;
       {
         std::lock_guard<std::mutex> lock(mu_);
         chunk = Find(base);
@@ -154,21 +159,28 @@ class HttpSource : public DataSource {
   void Cancel() override { cancelled_ = true; }
 
  private:
+  // Readers retain immutable bytes after releasing mu_; an unrelated read
+  // can then evict an LRU entry without invalidating the reader's copy.
+  using Chunk = std::shared_ptr<const std::vector<uint8_t>>;
+
   // The cached chunk at `base`, most recently used first; mu_ held.
-  const std::vector<uint8_t>* Find(int64_t base) {
+  Chunk Find(int64_t base) {
     for (auto it = chunks_.begin(); it != chunks_.end(); ++it) {
       if (it->first == base) {
         chunks_.splice(chunks_.begin(), chunks_, it);
-        return &chunks_.front().second;
+        return chunks_.front().second;
       }
     }
     return nullptr;
   }
 
-  const std::vector<uint8_t>* Keep(int64_t base, std::vector<uint8_t> bytes) {
-    chunks_.emplace_front(base, std::move(bytes));
+  Chunk Keep(int64_t base, std::vector<uint8_t> bytes) {
+    // Concurrent misses can fetch the same range. Keep the first published
+    // bytes and one cache entry, as a cache hit would have done.
+    if (Chunk present = Find(base)) return present;
+    chunks_.emplace_front(base, std::make_shared<const std::vector<uint8_t>>(std::move(bytes)));
     while (chunks_.size() > kChunksKept && !whole_) chunks_.pop_back();
-    return &chunks_.front().second;
+    return chunks_.front().second;
   }
 
   bool Fetch(int64_t base, std::vector<uint8_t>* out, std::string* error) {
@@ -182,8 +194,10 @@ class HttpSource : public DataSource {
     std::wstring headers;
     for (const auto& [k, v] : headers_) headers += Wide(k) + L": " + Wide(v) + L"\r\n";
     if (!whole_) {
+      const int64_t last = base + std::min(static_cast<int64_t>(kChunk) - 1,
+                                          std::numeric_limits<int64_t>::max() - base);
       headers += L"Range: bytes=" + std::to_wstring(base) + L"-" +
-                 std::to_wstring(base + static_cast<int64_t>(kChunk) - 1) + L"\r\n";
+                 std::to_wstring(last) + L"\r\n";
     }
     if (!WinHttpSendRequest(req.h, headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
                             static_cast<DWORD>(-1L), WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
@@ -200,6 +214,12 @@ class HttpSource : public DataSource {
     }
     if (status != 200 && status != 206) {
       *error = url_ + ": HTTP " + std::to_string(status);
+      return false;
+    }
+    if (base > 0 && status != 206) {
+      // A server may ignore Range and return the complete resource. Its
+      // first byte is not the requested offset; never cache it at that base.
+      *error = url_ + ": server ignored nonzero byte range";
       return false;
     }
     if (status == 206) {
@@ -258,7 +278,7 @@ class HttpSource : public DataSource {
   std::atomic<bool> first_done_{false};
   bool first_ok_ = false;
   std::mutex mu_;
-  std::list<std::pair<int64_t, std::vector<uint8_t>>> chunks_;
+  std::list<std::pair<int64_t, Chunk>> chunks_;
 };
 
 }  // namespace
