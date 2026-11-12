@@ -42,6 +42,21 @@ Check 'services: concurrent clipboard callbacks and native Windows clipboard upd
   $clipboardCallbacksOut
 } @('ClipboardCallbackTest all passed:')
 
+$contentObserverOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ContentObserverLifecycleTest') 90
+$contentObserverCode = $LASTEXITCODE
+Check 'services: content observer publication, retirement and callback isolation' {
+  $global:LASTEXITCODE = $contentObserverCode
+  $contentObserverOut
+} @('ContentObserverLifecycleTest all passed:')
+
+$mediaRequestsOut = FixesRun ($dvmFixes + 'gesher.services.MediaStoreRequestContractTest') 90
+$mediaRequestsCode = $LASTEXITCODE
+Check 'framework: MediaStore request forwarding, provider errors and SDK callback descriptors' {
+  $global:LASTEXITCODE = $mediaRequestsCode
+  $mediaRequestsOut
+} @('MediaStoreRequestContractTest all passed:')
+
 # Public media/graphics APIs exercise the actual Windows extractor, JPEG codec,
 # mapped storage and JNI registration, beyond the production-source host probes.
 $mediaDataOut = FixesRun ($dvmFixes + 'gesher.services.MediaDataContractTest') 90

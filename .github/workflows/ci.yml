@@ -67,11 +67,14 @@ jobs:
           python3 tools/test_retriever_frame_contracts.py --sanitize
           python3 tools/test_utc_time_contracts.py --sanitize
 
-      - name: Native TLS, wait, DNS, finalizer and media lifecycle contracts
+      - name: Native TLS, wait, DNS, clock, affinity, finalizer and media lifecycle contracts
         run: |
           python3 tools/test_bionic_key_contracts.py --sanitize
           python3 tools/test_bionic_wait_contracts.py --sanitize
           python3 tools/test_bionic_dns_contracts.py --sanitize
+          python3 tools/test_ordinary_os_contracts.py --sanitize
+          python3 tools/test_sendfile_contracts.py --sanitize
+          python3 tools/test_freopen_mode_contracts.py --sanitize
           python3 tools/test_elf_finalizers.py --sanitize
           python3 tools/test_media_api_contracts.py --sanitize
 

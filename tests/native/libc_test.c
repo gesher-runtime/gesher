@@ -69,6 +69,8 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "poll_timeout_contract_test.inc"
 #include "addrinfo_contract_test.inc"
 #include "ordinary_os_contract_test.inc"
+#include "sendfile_contract_test.inc"
+#include "freopen_mode_contract_test.inc"
 
 // --- memory and strings -------------------------------------------------------
 
@@ -646,6 +648,8 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_poll_timeout_contracts();
   test_addrinfo_contracts();
   test_ordinary_os_contracts();
+  test_sendfile_contracts();
+  test_freopen_mode_contracts();
 #if defined(__x86_64__)
   test_timerfd_syscalls();
 #endif

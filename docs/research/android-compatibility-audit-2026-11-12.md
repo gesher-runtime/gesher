@@ -88,6 +88,36 @@ Some absent APIs describe unavailable optional hardware; others are ordinary
 software entry points that an app may resolve during startup. Supplying every
 signature with a null/no-op body would not satisfy the latter contracts.
 
+### Additional public-API review during CI
+
+A second pass traced 23 absent declarations in MediaStore, ConnectivityManager
+and WifiLock against the pinned module sources. It adds **11 exact SDK 36
+declarations** in this PR; the inventory above remains the reproducible baseline,
+not a new measurement of the repaired boot DEX:
+
+| Facade | Added declarations | Contract and boundary |
+| --- | --- | --- |
+| `MediaStore` | `createWriteRequest`, `createDeleteRequest`, `createTrashRequest`, `createFavoriteRequest` | Preserve URI order, construct the pinned ClipData/ContentValues envelope, and return the provider's PendingIntent. The provider owns approval and execution. |
+| `MediaStore` | `markIsFavoriteStatus`, `isCurrentSystemGallery`, `isCurrentCloudMediaProviderAuthority`, `isSupportedCloudMediaProviderAuthority`, `notifyCloudMediaChangedEvent` | Forward the exact provider method, arguments and Bundle types; preserve permission denial, missing-provider and malformed-result behavior. |
+| `ConnectivityManager` | `setNetworkPreference(int)` | The deprecated pinned Android method also performs no action. This does not change routing. |
+| `ConnectivityManager.NetworkCallback` | `onReserved(NetworkCapabilities)` | Restore the empty overridable base callback. This does not implement `reserveNetwork`. |
+
+The call-site fixture is compiled separately against the public SDK, then run
+against production classes and a controlled provider through the real
+ContentResolver. The old implementation fails with `NoSuchMethodError`; the
+replacement passes 208 assertions. Its resolver context targets API 36; the
+standalone host fixture does not set ART's process-wide target SDK or establish
+a working system MediaProvider installation.
+
+The other 12 reviewed declarations need more backend work: eight MediaStore
+methods for AppOps-based management, document/media conversion, redaction and
+cloud descriptor opening; ConnectivityManager keepalive, reservation and
+watchlist methods; and held WifiLock WorkSource attribution. Returning an
+unredacted original URI or manufacturing an approval token would not implement
+these contracts. No references to the 23 declarations were found in the
+examined baseline framework/app compile JARs; the demonstrated linkage failures
+are SDK-compiled app calls, not proven internal framework call sites.
+
 ### Service and JNI inspection queue
 
 The baseline source/framework scan found 69 service implementation classes,
@@ -113,9 +143,14 @@ identified by `generated_at_utc` on November 12 and the baseline Git SHA.
 | PendingIntent cancellation | Listener registration reported success without retaining a listener. | Store and retire actual per-record callbacks, dispatch cancellation outside record locks, isolate callback failures, and retain generation/authorization checks. |
 | PendingIntent identity and mutation | Resolved MIME type and retained creation flags were missing from identity; fill-in rules were ignored; UPDATE_CURRENT replaced the original final Intent's non-key flags. | Strip only lookup/control flags, preserve MIME identity and fill-in decisions, and update extras/preceding stack entries while retaining the final Intent's original flags. This does not implement multi-activity launch or activity-result senders. |
 | Clipboard listeners | Nested or concurrent notification invoked `RemoteCallbackList.beginBroadcast()` while an earlier broadcast remained active. | Snapshot under synchronization, finish the broadcast, then deliver callbacks outside the lock. Actual framework tests reproduce the old reentrant failure. |
+| Content observer lifecycle | Death could arrive before a registration was published, leaving a dead observer retained. Independent QA also reproduced stale death/RemoteException cleanup removing a replacement registration and Binder equality callbacks running inside the registry lock. | Track retirement before publication and on removal; bind cleanup to the exact registration, use canonical Binder identity, preserve first-seen delivery order, and unlink/deliver outside the registry lock. Existing owner and URI authorization checks remain. Local callback exceptions no longer suppress unrelated listeners. |
 | pthread TLS keys | Deleting/reusing a key exposed another generation's thread value and could call a new destructor on a stale object. | Track generations in global slots and thread values; validate under the key lock, invoke destructors outside it, retain four-round cleanup behavior and retire exhausted generations without wraparound. |
 | poll/select time budgets | Duration multiplication overflowed, invalid times were accepted, and select discarded the remaining budget. | Validate split seconds/nanoseconds, use monotonic elapsed budgets and repeated finite wait slices, preserve descriptor interests and the remaining select timeval. Signal-mask atomicity remains outside this repair. |
 | getaddrinfo allocation failure | Failure while converting a later address returned a successful partial list. | Transactional conversion: release the prefix and backend list, return Android's memory error and leave the output null. Fault-injection tests cover each allocation and all wrapper routes. |
+| clock_nanosleep | Negative and huge durations reached an incorrect Windows wait or signed overflow, long waits returned after one bounded slice, and unknown clock IDs silently succeeded. | Validate clocks and intervals, retain deadlines in 128-bit arithmetic, repeat finite waits, recheck absolute wall-clock deadlines, preserve errno and report interrupted relative remainders through the existing signal adapter. Unsupported clock backends return an error. |
+| CPU affinity masks | Host `sched_getaffinity` wrote whole words beyond short caller allocations; the guest version silently accepted truncated masks. | Validate nonzero whole-word capacity and null pointers before writing; fill only within the declared size. This does not add per-thread affinity or processor-group topology support. |
+| sendfile progress | With a null offset, the host consumed a whole input block before knowing whether the output accepted it. A blocked socket returned EAGAIN after consuming 65,536 input bytes; a partial write returned 8,064 while consuming 65,536. | Use positioned input reads and commit the input cursor or explicit offset only for bytes written. Stop zero-progress writes; retain earlier progress on later errors. The compound operation does not serialize concurrent users of a shared descriptor. |
+| freopen mode translation | Host mode parsing discarded exclusive creation before `_wfreopen`, turning `wx` into destructive `wb`. The guest's `e` to `N` translation was then discarded by the host Linux-mode parser. | Pass the original guest mode into the host mapper and preserve exclusive `w`/`w+` creation and no-inherit flags in the final CRT mode. Let the CRT perform the exclusive open atomically; retain existing stream/descriptor retirement transactions. |
 | ELF finalizers | The host close route called ARM64 guest finalizer addresses as host code; recursive close could execute callbacks twice. | Dispatch through the translator for ARM64, claim close once while preserving global symbol visibility until callbacks finish, run the reverse finalizer array before DT_FINI and ignore null/-1 sentinels. Existing native/translated fixtures now check actual destructor order and repeat close. |
 | Native APK library filenames | ZIP's forward-slash test did not account for Windows backslashes, device names and forbidden filename syntax. | Validate all selected direct library entries before writing any output. Ordinary Unicode names remain supported; invalid Windows names are rejected without overwriting earlier destination files. This is not full Android filename virtualization. |
 | AAudio arguments/timeouts | Null/negative transfers reached backend buffer arithmetic; large deadlines overflowed. | Return pinned public error codes, handle zero transfers without backend access and saturate positive deadlines safely. Existing playback/capture NDK fixtures exercise exported argument contracts. |
@@ -132,8 +167,25 @@ Primary Android references include pinned
 [linker finalization](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/linker/linker_soinfo.cpp),
 [AAudio](https://android.googlesource.com/platform/frameworks/av/+/refs/tags/android-16.0.0_r4/media/libaaudio/src/core/AAudioAudio.cpp)
 and [NuMediaExtractor](https://android.googlesource.com/platform/frameworks/av/+/refs/tags/android-16.0.0_r4/media/libstagefright/NuMediaExtractor.cpp).
+The second pass also uses pinned
+[MediaStore](https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/tags/android-16.0.0_r4/apex/framework/java/android/provider/MediaStore.java),
+[ConnectivityManager](https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/framework/src/android/net/ConnectivityManager.java),
+[ContentService](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/content/ContentService.java),
+[clock_nanosleep](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/bionic/clock_nanosleep.cpp)
+and [sched_getaffinity](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/bionic/sched_getaffinity.cpp).
+File/stream references include pinned
+[Android stdio](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/stdio/stdio.cpp),
+[mode parsing](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/upstream-openbsd/lib/libc/stdio/flags.c)
+and the Linux man-pages project's
+[sendfile contract](https://kernel.googlesource.com/pub/scm/docs/man-pages/man-pages/+/52b7bab3a44fb5d2d464fa8acd6beee3b62269aa/man/man2/sendfile.2).
+The content observer tests establish specific Gesher regressions; modern AOSP's
+RemoteException cleanup policy and native Binder scheduling are not identical
+to this implementation.
 Windows filename validation follows Microsoft's
 [file naming rules](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file).
+The stdio mapping uses the CRT's documented
+[`freopen` exclusive-create mode](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/freopen-wfreopen)
+and [`N` no-inherit mode](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/fopen-wfopen).
 
 ## Validation and reproduction
 
@@ -144,16 +196,20 @@ not a release runtime or a replacement for the full CI source build.
 
 | Maintained check | Local evidence / role |
 | --- | --- |
-| `tools/test_pending_intent_callbacks.py` | 82 PendingIntent and 11 clipboard assertions against actual production/framework classes, including permission/creator fences. The declared host adapter replaces only native boundaries; it is not a Windows Binder/clipboard run. |
+| `tools/test_pending_intent_callbacks.py` | 82 PendingIntent, 11 clipboard and 31 content observer assertions against actual production/framework classes, including permission/creator fences and deterministic death/replacement races. The declared host adapter replaces only native boundaries; it is not a Windows Binder/clipboard run. The content case isolates the real observer registry from SyncManager/process construction. |
+| `tools/test_media_store_requests.py` | 208 assertions, separately SDK-compiled call sites, exact provider envelopes, return values, exceptions and release behavior. A controlled IContentProvider is the declared boundary; no substitute approval token is created by production code. |
 | `tools/test_bionic_key_contracts.py` | Production key/destructor functions, cross-thread reuse, callback mutation, cleanup order, host TLS exit model and generation exhaustion. |
 | `tools/test_bionic_wait_contracts.py` | Production public aliases, invalid times, actual ready descriptors, controlled huge durations and multiple finite wait slices. |
 | `tools/test_bionic_dns_contracts.py` | Production ABI conversion and allocation-failure cleanup, with backend/prefix ownership checks. |
+| `tools/test_ordinary_os_contracts.py` | 179 assertions over production clock and host/guest affinity functions under controlled Windows boundaries and ASan/UBSan, plus 40 in an independent Linux C reference. Covers complete/adjusted deadlines, interruption and extreme durations, 1–1,025 processors and short/dynamic mask capacities. The public C fixture is included in both guest libc paths for Windows execution. |
+| `tools/test_sendfile_contracts.py` | 167 ASan/UBSan assertions over the extracted production adapter, real local files and nonblocking socket payloads, and controlled partial/error/zero-write boundaries; 33 in an independent Linux reference. Shared public contracts cover cursor/offset and exact payload preservation through the guest entry point. |
+| `tools/test_freopen_mode_contracts.py` | 329 assertions for each extracted host and guest route, including CRT and descriptor-transaction boundary observations, plus 160 in an independent Linux public fixture. Shared guest contracts check existing-file preservation, exclusive creation, binary bytes, stream retirement and close-on-exec modes. The host CRT model does not replace Windows execution. |
 | `tools/test_elf_finalizers.py` | Eleven production-close/global-lookup assertions, including reentry, concurrent claims and an observing translator boundary. Actual ARM64 execution belongs to the existing Windows translated fixture. |
 | `tools/test_media_api_contracts.py` | 266 production-source assertions: AAudio 37, extractor ownership 17, YUV admission 32 and raw JPEG row/padding values 180, under ASan/UBSan. The observer does not substitute for real codecs. |
 | `tools/test_native_library_paths.py` | 96 assertions using real ZIPs, ordinary/Unicode libraries, ABI selection, invalid names (including console devices and padded device stems) and existing-file preservation. |
 | `tools/test_webview_paths.py` | 26 checked-JNI assertions over the production native entry point and real Java path mapper. Executable location is adapted to a fixed D: host envelope. |
-| `tests/native/libc_test.c` and trivial ELF fixtures | Shared public contracts compiled for x86-64 and ARM64, executed through the actual Windows guest ABI/translator. |
-| `tests/windows/tracks/94-framework-fixes.ps1` | Public PendingIntent and clipboard paths, actual WAV/JPEG processing, Bitmap/SharedMemory transport, native extraction and registered WebView path conversion in fresh ART VMs. |
+| `tests/native/libc_test.c` and trivial ELF fixtures | Shared public contracts wired into the existing x86-64 and ARM64 guest builds and Windows ABI/translator runners. Final-head compilation and execution must be confirmed by CI; these are not local Windows results. |
+| `tests/windows/tracks/94-framework-fixes.ps1` | Public PendingIntent, clipboard, content observer and MediaStore paths, actual WAV/JPEG processing, Bitmap/SharedMemory transport, native extraction and registered WebView path conversion in fresh ART VMs. The existing `ContentSecurityTest` remains a separate required gate. |
 
 Independent media QA additionally built the pinned Android 16 libjpeg-turbo
 portable implementation with ASan and executed the actual encoder. Both NV21
@@ -176,6 +232,22 @@ repair; all ten suites passed. The existing checked-JNI audio-buffer suite
 also passed. Mandatory Windows build and runtime gates remain enabled;
 their status must be read from the PR's exact head run, not inferred from the
 green baseline run or from host fixture results.
+
+The first PR CI attempt exposed NDK clang's `nonnull` diagnostic in deliberate
+invalid-buffer tests. The tests now obtain the null buffer at runtime through a
+volatile pointer, retaining the invalid-input checks and the compiler's normal
+warning policy. Production buffer validation and CI acceptance gates are not
+relaxed.
+Independent native QA also caught the GNU feature macro required by the NDK's
+affinity declarations; the shared libc fixture now enables those declarations
+before including any system header. Host-only compilation had hidden that
+guest-build difference.
+File QA also corrected the order of `sendfile` range validation: the original
+count and offset range must be checked before applying the per-call transfer
+cap. Exact old-source controls expose the previous cursor loss, zero-write
+loop and signed-offset overflow. The three new public C fixtures also compile
+and run together against Linux, passing 233 checks without helper collisions
+or cross-fixture state failures.
 
 To reproduce the static inventory, run the following commands **from a checkout
 of baseline `2bc86c0ae067b43a74bf76c5010a52b4564e81e5`**, with the collected
@@ -206,12 +278,12 @@ Individual boot-JAR hashes and generator hashes are in the inventory.
 
 | Priority / family | Remaining gap | Evidence needed for a complete implementation |
 | --- | --- | --- |
-| Startup/linkage | The exact 924 absent boot classes and 557 members above; module/provider availability must be resolved per feature. | Actual provider/class-loader placement, exact descriptors, values/exceptions and callback tests. |
+| Startup/linkage | The baseline's exact 924 absent boot classes and 557 members above; this PR supplies 11 of those declarations. Module/provider availability must be resolved per feature. | A fresh inventory of the final built boot path, actual provider/class-loader placement, exact descriptors, values/exceptions and callback tests. |
 | Native architecture | 32-bit ARM/x86 APK native libraries remain unsupported; native Windows ARM64 TLS/variadic bridging differs from the translated x64 path and has substantial unfinished implementation. | Separate ABI fixtures, per-thread TLS allocation/publication, variadic calls and real device/runner execution. |
 | Native loader | ELF ranges/dynamic structures need comprehensive bounded validation; namespace/version/FD-offset loading and reference-counted unloading remain incomplete. | A malformed/truncated corpus, dependency/namespace fixtures and real unload/reload ownership tests. This patch changes finalizer dispatch only. |
 | Activity semantics | PendingIntent multi-activity stacks, activity-result senders and feature/token/result identity remain incomplete; canceled-token metadata still uses active-record lookup. | Real ActivityThread/task-stack/result delivery with separate capability and metadata lifetime. |
-| Callback/state services | Inherited Default methods can omit asynchronous completion. Content observer registration has a death/publication race; Settings state/notifications need broader persistence and observer work. | Per-method Android contract review and race-aware public manager/Binder fixtures. |
-| OS behavior | Atomic ppoll/pselect signal masks, asynchronous signals, process-shared synchronization, cancellation/scheduling/affinity, clock_nanosleep extremes and some host filesystem semantics remain incomplete. | Full host/guest call-path tests, invalid/huge durations, cancellation and Windows handle-lifetime checks. |
+| Callback/state services | Inherited Default methods can omit asynchronous completion. Settings state/notifications and observer integration with real processes and sync backends need broader work. | Per-method Android contract review and race-aware public manager/Binder fixtures. |
+| OS behavior | Atomic ppoll/pselect signal masks, asynchronous signals, process-shared synchronization, cancellation/scheduling, real affinity restrictions, unsupported sleep clocks and some host filesystem semantics remain incomplete. Existing MONOTONIC and BOOTTIME both use QPC, whose suspend-time semantics differ from Linux MONOTONIC. `sendfile` does not serialize shared-cursor users; `freopen(NULL, ...)` mode changes and Android's append-exclusive `ax/a+x` modes remain outside the bounded stdio repair. | Full host/guest call-path tests, suspend/clock changes, cancellation and Windows handle-lifetime checks. The new sleep/mask checks do not establish complete Linux scheduler emulation. |
 | Epoll and Unix transport | Edge-trigger/nested/descriptor-alias semantics and SCM_RIGHTS remain limited. Unsupported ancillary sends are rejected; that does not implement descriptor transport. Blocking record locks remain explicitly unsupported. | Real socket/descriptor lifecycle and blocking/interruption tests on Windows. |
 | Native platform families | NDK media surface, Vulkan, DRM, camera2 NDK and other native modules have separate missing exports/backends. | Current NDK symbol inventory plus actual execution; historical missing-symbol totals are not reused as fresh measurements here. |
 | Media lifecycle/hardware | AAudio active-callback policy, disconnection/error callbacks, route/builder policies, concurrent extractor release and unusual device/codecs need further work. | Real ring/payload, unplug, concurrent release and camera/audio device tests. |

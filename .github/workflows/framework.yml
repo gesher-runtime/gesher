@@ -434,12 +434,35 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/web3app/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod  # web3 (ADR 0058)
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/gmsapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
 
-      - name: Service callback and WebView path contracts against the built framework
+      - name: Cache public SDK 36 API reference
+        id: sdk-contract-reference
+        uses: actions/cache@v4
+        with:
+          path: work/sdk-36/android.jar
+          key: sdk-public-api-36-r02-d9eb9da824d9
+
+      - name: Fetch public SDK 36 API reference
+        if: steps.sdk-contract-reference.outputs.cache-hit != 'true'
         run: |
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 \
+            -o "$RUNNER_TEMP/platform-36_r02.zip" \
+            https://dl.google.com/android/repository/platform-36_r02.zip
+          printf '%s  %s\n' 37607369a28c5b640b3a7998868d45898ebcb777565a0e85f9acf36f29631d2e \
+            "$RUNNER_TEMP/platform-36_r02.zip" | sha256sum --check
+          mkdir -p work/sdk-36
+          unzip -p "$RUNNER_TEMP/platform-36_r02.zip" android-36/android.jar > work/sdk-36/android.jar
+
+      - name: Service callback, public SDK and WebView contracts against the built framework
+        run: |
+          printf '%s  %s\n' d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a \
+            work/sdk-36/android.jar | sha256sum --check
           python3 tools/test_pending_intent_callbacks.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar \
             --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
+          python3 tools/test_media_store_requests.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
           python3 tools/test_webview_paths.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
