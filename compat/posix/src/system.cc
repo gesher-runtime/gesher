@@ -184,9 +184,19 @@ int sched_getcpu(void) { return static_cast<int>(GetCurrentProcessorNumber()); }
 int sched_setaffinity(pid_t, size_t, const cpu_set_t*) { return 0; }
 
 int sched_getaffinity(pid_t, size_t size, cpu_set_t* set) {
-  memset(set, 0, size);
+  // The Linux kernel accepts whole-word masks only, and a short mask must
+  // fail before it is modified. CPU_SET would write a full word even when
+  // the caller supplied only one byte (or only room for an earlier word).
+  constexpr size_t word = sizeof(set->__bits[0]);
+  if (size == 0 || size % word != 0) return errno = EINVAL, -1;
   DWORD cpus = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-  for (DWORD i = 0; i < cpus && i < CPU_SETSIZE; ++i) CPU_SET(i, set);
+  if (cpus == 0) return gesher::FailWithLastError();
+  size_t required = ((static_cast<size_t>(cpus) + 63) / 64) * word;
+  if (size < required) return errno = EINVAL, -1;
+  if (set == nullptr) return errno = EFAULT, -1;
+  memset(set, 0, size);
+  auto* bytes = reinterpret_cast<unsigned char*>(set);
+  for (DWORD i = 0; i < cpus; ++i) bytes[i / 8] |= static_cast<unsigned char>(1u << (i % 8));
   return 0;
 }
 
