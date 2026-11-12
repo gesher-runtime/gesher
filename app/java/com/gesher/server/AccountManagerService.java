@@ -419,10 +419,26 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (e == null || !owns(c, e)) throw new SecurityException("Account belongs to its authenticator");
     }
 
+    private static boolean isLegacyKey(String packageName) {
+        return AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE.equals(packageName)
+                || AccountManager.PACKAGE_NAME_KEY_LEGACY_NOT_VISIBLE.equals(packageName);
+    }
+
     private int visibility(Caller c, Entry e) {
         if (e == null) return AccountManager.VISIBILITY_NOT_VISIBLE;
         if (owns(c, e)) return AccountManager.VISIBILITY_VISIBLE;
+        // Legacy keys describe policy categories, not grants to every client. Until
+        // Android's permission/target-SDK eligibility policy is implemented here,
+        // retain the existing explicit, code-identity-scoped visibility policy.
         return e.visibility.getOrDefault(c.key(), AccountManager.VISIBILITY_NOT_VISIBLE);
+    }
+
+    private static int legacyVisibility(Entry e, String key) {
+        int value = e.visibility.getOrDefault(key, AccountManager.VISIBILITY_UNDEFINED);
+        if (value != AccountManager.VISIBILITY_UNDEFINED) return value;
+        return AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE.equals(key)
+                ? AccountManager.VISIBILITY_USER_MANAGED_VISIBLE
+                : AccountManager.VISIBILITY_USER_MANAGED_NOT_VISIBLE;
     }
 
     private boolean visible(Caller c, Account account, Entry e) {
@@ -437,6 +453,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private String targetKey(String packageName) {
+        if (isLegacyKey(packageName)) return packageName;
         String code = packageIdentity(packageName);
         if (code == null) throw new SecurityException("Unknown account client package");
         return packageName + "\u0000" + code;
@@ -517,6 +534,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         Caller c = caller(null); Entry e = mAccounts.get(account);
         if (e == null) return AccountManager.VISIBILITY_NOT_VISIBLE;
         if (!owns(c, e) && !packageName.equals(c.name)) throw new SecurityException("Account client mismatch");
+        if (isLegacyKey(packageName)) return legacyVisibility(e, packageName);
         return visibility(targetCaller(packageName), e);
     }
 
@@ -528,6 +546,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         for (Map.Entry<String, Integer> item : e.visibility.entrySet()) {
             int split = item.getKey().indexOf('\u0000');
             if (split > 0) result.put(item.getKey().substring(0, split), item.getValue());
+            else if (isLegacyKey(item.getKey())) result.put(item.getKey(), item.getValue());
         }
         return result;
     }
@@ -545,6 +564,13 @@ public final class AccountManagerService extends IAccountManager.Default {
         Entry e = mAccounts.get(account); requireOwner(caller(null), e);
         validateVisibility(value);
         String key = targetKey(packageName);
+        if (isLegacyKey(packageName)) {
+            beginMutation();
+            e.visibility.put(key, value);
+            save();
+            invalidateAccountListCache();
+            return true;
+        }
         Caller target = targetCaller(packageName);
         Integer previous = e.visibility.get(key);
         int previousEffective = visibility(target, e);

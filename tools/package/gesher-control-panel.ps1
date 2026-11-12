@@ -1,8 +1,15 @@
-# Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+﻿# Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 # Gesher Control Center (לוח הבקרה של גשר) - GUI Dashboard for apps and Google Play services.
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing
+
+# Set explicit AppUserModelID so Windows taskbar groups under Gesher instead of PowerShell host
+try {
+    $code = '[DllImport("shell32.dll", CharSet=CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string appID);'
+    $type = Add-Type -MemberDefinition $code -Name "Win32ShellGroup" -Namespace "Gesher" -PassThru
+    $type::SetCurrentProcessExplicitAppUserModelID("Gesher.ControlPanel")
+} catch { }
 
 $here = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Resolve-Path (Join-Path $PWD 'tools/package')).Path }
 . (Join-Path $here 'gesher-ui.ps1')

@@ -16,6 +16,8 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include <limits>
+
 #include "internal.h"
 
 namespace {
@@ -278,29 +280,57 @@ ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
 
 // --- sendfile -----------------------------------------------------------------------
 
-// Copied through a buffer with read and write, so out_fd may be a socket.
-// With an offset, in_fd's file position is left unchanged, as on Linux.
+// Copy through positioned reads and ordinary writes, so out_fd may be a socket.
+// Reading ahead must not consume input that a short/failed write never sends.
+// Commit the input cursor (or caller's explicit offset) after each positive write.
+// This compound operation does not serialize other users of a shared descriptor.
 ssize_t sendfile(int out_fd, int in_fd, off_t* offset, size_t count) {
+  // Linux validates the original signed count/range before MAX_RW_COUNT.
+  if (count > static_cast<size_t>(std::numeric_limits<off_t>::max())) {
+    return errno = EINVAL, -1;
+  }
+  if (count == 0) return 0;
+  auto seek_input = [in_fd](off_t position, int whence) {
+    off_t result = lseek(in_fd, position, whence);
+    // lseek is the CRT's 64-bit entry under _FILE_OFFSET_BITS=64. Do not
+    // narrow its result through the int-sized CrtResult helper.
+    if (result < 0) errno = gesher_errno_from_crt(errno);
+    return result;
+  };
+  off_t position = offset != nullptr ? *offset : seek_input(0, SEEK_CUR);
+  if (position < 0) {
+    if (offset != nullptr) errno = EINVAL;
+    return -1;
+  }
+  if (position > std::numeric_limits<off_t>::max() - static_cast<off_t>(count)) {
+    return errno = EINVAL, -1;
+  }
+  if (count > 0x7ffff000) count = 0x7ffff000;
   char buffer[64 * 1024];
   size_t total = 0;
   while (total < count) {
     size_t chunk = count - total < sizeof(buffer) ? count - total : sizeof(buffer);
-    ssize_t n = offset != nullptr ? pread(in_fd, buffer, chunk, *offset)
-                                  : read(in_fd, buffer, static_cast<unsigned>(chunk));
+    ssize_t n = pread(in_fd, buffer, chunk, position);
     if (n < 0) return total > 0 ? static_cast<ssize_t>(total) : -1;
     if (n == 0) break;
     ssize_t written = 0;
     while (written < n) {
       int w = write(out_fd, buffer + written, static_cast<unsigned>(n - written));
-      if (w < 0) {
-        if (offset != nullptr) *offset += written;
-        total += static_cast<size_t>(written);
+      if (w <= 0) {
+        if (w == 0) errno = EIO;  // A zero write makes no progress; never spin.
         return total > 0 ? static_cast<ssize_t>(total) : -1;
       }
       written += w;
+      position += w;
+      total += static_cast<size_t>(w);
+      if (offset != nullptr) {
+        *offset = position;
+      } else if (seek_input(position, SEEK_SET) < 0) {
+        // The output already owns these bytes; report that progress even if
+        // another actor closed/reused the input descriptor before the seek.
+        return static_cast<ssize_t>(total);
+      }
     }
-    if (offset != nullptr) *offset += n;
-    total += static_cast<size_t>(n);
     if (static_cast<size_t>(n) < chunk) break;
   }
   return static_cast<ssize_t>(total);

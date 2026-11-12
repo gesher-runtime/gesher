@@ -1,0 +1,300 @@
+{
+  "schema": 1,
+  "purpose": "Exact built-boot-path verification of the 11 public SDK declarations repaired in this PR; static presence is not behavioral conformance.",
+  "baseline_sha": "2bc86c0ae067b43a74bf76c5010a52b4564e81e5",
+  "head_sha": "3225df8b787ecbd0403a3af8e0f7154472f94694",
+  "checkout_sha": "9f26a29f1d00d9e4eeaf8b23af211ea79a00a074",
+  "run_id": 43299058201,
+  "run_url": "https://github.com/gesher-runtime/gesher/actions/runs/43299058201",
+  "sdk_api_level": 36,
+  "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+  "artifacts": [
+    {
+      "id": 13980558121,
+      "name": "framework",
+      "bytes": 60574836,
+      "digest": "sha256:aaf4e2f00311ec60fdad2349844849f887bab81e437016d6c0bc6ffc05698675"
+    },
+    {
+      "id": 13979824658,
+      "name": "framework-assets",
+      "bytes": 19468647,
+      "digest": "sha256:9b10ab2dc6e71edca1a757357555381e53d7f79f02198999e4ffa1ac0a151ab2"
+    }
+  ],
+  "boot_jars": [
+    {
+      "name": "core-oj.jar",
+      "bytes": 2251570,
+      "sha256": "b4b3022980c97203f90436986941f83367c72be0e93436eb84c5884685456425"
+    },
+    {
+      "name": "core-libart.jar",
+      "bytes": 1181347,
+      "sha256": "bb3a67c03f82979924e6717f4bf5a2f3b8994374dce0a2a684797c3cf511b442"
+    },
+    {
+      "name": "core-icu4j.jar",
+      "bytes": 1211358,
+      "sha256": "31d102825403172ac91218630212538005a57394990566a148e6e0e2b27936ef"
+    },
+    {
+      "name": "framework.jar",
+      "bytes": 17040072,
+      "sha256": "3049108058f2dcaa187de53f41cee3e94d95314a203ffc2f028bf2dc3e26f656"
+    },
+    {
+      "name": "gesher-app.jar",
+      "bytes": 1153310,
+      "sha256": "6c28941e712bac68e9336aac29308885c02f359fbab81004e6532cca1dcd3cc1"
+    }
+  ],
+  "generators": [
+    {
+      "path": "tools/java_api_inventory.py",
+      "sha256": "0d66695c9b4689858abba61d0a127e9cefbe68ab2d426a03ecabd001fd62ca83"
+    },
+    {
+      "path": "tools/java_member_inventory.py",
+      "sha256": "290d6fe66049e90d6f29495b038b4f9365c0be89105d94a76c27fa9ca76a5475"
+    }
+  ],
+  "class_counts": {
+    "sdk": 6227,
+    "present": 5303,
+    "absent": 924
+  },
+  "member_counts": {
+    "absent_from_present_class": 546,
+    "declaring_class_absent": 7516,
+    "exact_descriptor_possible_flag_mismatch": 502,
+    "exact_descriptor_present": 82066
+  },
+  "changed_rows": [
+    {
+      "class": "android.net.ConnectivityManager",
+      "kind": "method",
+      "name": "setNetworkPreference",
+      "descriptor": "(I)V",
+      "before": {
+        "other_descriptor_declarations_with_same_name": 0,
+        "status": "absent_from_present_class"
+      },
+      "after": {
+        "actual_access_flags": [
+          1
+        ],
+        "location": "declared",
+        "resolved_owners": [
+          "android.net.ConnectivityManager"
+        ],
+        "status": "exact_descriptor_present"
+      }
+    },
+    {
+      "class": "android.net.ConnectivityManager$NetworkCallback",
+      "kind": "method",
+      "name": "onReserved",
+      "descriptor": "(Landroid/net/NetworkCapabilities;)V",
+      "before": {
+        "other_descriptor_declarations_with_same_name": 0,
+        "status": "absent_from_present_class"
+      },
+      "after": {
+        "actual_access_flags": [
+          1
+        ],
+        "location": "declared",
+        "resolved_owners": [
+          "android.net.ConnectivityManager$NetworkCallback"
+        ],
+        "status": "exact_descriptor_present"
+      }
+    },
+    {
+      "class": "android.provider.MediaStore",
+      "kind": "method",
+      "name": "createDeleteRequest",
+      "descriptor": "(Landroid/content/ContentResolver;Ljava/util/Collection;)Landroid/app/PendingIntent;",
+      "before": {
+        "other_descriptor_declarations_with_same_name": 0,
+        "status": "absent_from_present_class"
+      },
+      "after": {
+        "actual_access_flags": [
+          9
+        ],
+        "location": "declared",
+        "resolved_owners": [
+          "android.provider.MediaStore"
+        ],
+        "status": "exact_descriptor_present"
+      }
+    },
+    {
+      "class": "android.provider.MediaStore",
+      "kind": "method",
+      "name": "createFavoriteRequest",
+      "descriptor": "(Landroid/content/ContentResolver;Ljava/util/Collection;Z)Landroid/app/PendingIntent;",
+      "before": {
+        "other_descriptor_declarations_with_same_name": 0,
+        "status": "absent_from_present_class"
+      },
+      "after": {
+        "actual_access_flags": [
+          9
+        ],
+        "location": "declared",
+        "resolved_owners": [
+          "android.provider.MediaStore"
+        ],
+        "status": "exact_descriptor_present"
+      }
+    },
+    {
+      "class": "android.provider.MediaStore",
+      "kind": "method",
+      "name": "createTrashRequest",
+      "descriptor": "(Landroid/content/ContentResolver;Ljava/util/Collection;Z)Landroid/app/PendingIntent;",
+      "before": {
+        "other_descriptor_declarations_with_same_name": 0,
+        "status": "absent_from_present_class"
+      },
+      "after": {
+        "actual_access_flags": [
+          9
+        ],
+        "location": "declared",
+        "resolved_owners": [
+          "android.provider.MediaStore"
+        ],
+        "status": "exact_descriptor_present"
+      }
+    },
+    {
+      "class": "android.provider.MediaStore",
+      "kind": "method",
+      "name": "createWriteRequest",
+      "descriptor": "(Landroid/content/ContentResolver;Ljava/util/Collection;)Landroid/app/PendingIntent;",
+      "before": {
+        "other_descriptor_declarations_with_same_name": 0,
+        "status": "absent_from_present_class"
+      },
+      "after": {
+        "actual_access_flags": [
+          9
+        ],
+        "location": "declared",
+        "resolved_owners": [
+          "android.provider.MediaStore"
+        ],
+        "status": "exact_descriptor_present"
+      }
+    },
+    {
+      "class": "android.provider.MediaStore",
+      "kind": "method",
+      "name": "isCurrentCloudMediaProviderAuthority",
+      "descriptor": "(Landroid/content/ContentResolver;Ljava/lang/String;)Z",
+      "before": {
+        "other_descriptor_declarations_with_same_name": 0,
+        "status": "absent_from_present_class"
+      },
+      "after": {
+        "actual_access_flags": [
+          9
+        ],
+        "location": "declared",
+        "resolved_owners": [
+          "android.provider.MediaStore"
+        ],
+        "status": "exact_descriptor_present"
+      }
+    },
+    {
+      "class": "android.provider.MediaStore",
+      "kind": "method",
+      "name": "isCurrentSystemGallery",
+      "descriptor": "(Landroid/content/ContentResolver;ILjava/lang/String;)Z",
+      "before": {
+        "other_descriptor_declarations_with_same_name": 0,
+        "status": "absent_from_present_class"
+      },
+      "after": {
+        "actual_access_flags": [
+          9
+        ],
+        "location": "declared",
+        "resolved_owners": [
+          "android.provider.MediaStore"
+        ],
+        "status": "exact_descriptor_present"
+      }
+    },
+    {
+      "class": "android.provider.MediaStore",
+      "kind": "method",
+      "name": "isSupportedCloudMediaProviderAuthority",
+      "descriptor": "(Landroid/content/ContentResolver;Ljava/lang/String;)Z",
+      "before": {
+        "other_descriptor_declarations_with_same_name": 0,
+        "status": "absent_from_present_class"
+      },
+      "after": {
+        "actual_access_flags": [
+          9
+        ],
+        "location": "declared",
+        "resolved_owners": [
+          "android.provider.MediaStore"
+        ],
+        "status": "exact_descriptor_present"
+      }
+    },
+    {
+      "class": "android.provider.MediaStore",
+      "kind": "method",
+      "name": "markIsFavoriteStatus",
+      "descriptor": "(Landroid/content/ContentResolver;Ljava/util/Collection;Z)V",
+      "before": {
+        "other_descriptor_declarations_with_same_name": 0,
+        "status": "absent_from_present_class"
+      },
+      "after": {
+        "actual_access_flags": [
+          9
+        ],
+        "location": "declared",
+        "resolved_owners": [
+          "android.provider.MediaStore"
+        ],
+        "status": "exact_descriptor_present"
+      }
+    },
+    {
+      "class": "android.provider.MediaStore",
+      "kind": "method",
+      "name": "notifyCloudMediaChangedEvent",
+      "descriptor": "(Landroid/content/ContentResolver;Ljava/lang/String;Ljava/lang/String;)V",
+      "before": {
+        "other_descriptor_declarations_with_same_name": 0,
+        "status": "absent_from_present_class"
+      },
+      "after": {
+        "actual_access_flags": [
+          9
+        ],
+        "location": "declared",
+        "resolved_owners": [
+          "android.provider.MediaStore"
+        ],
+        "status": "exact_descriptor_present"
+      }
+    }
+  ],
+  "limits": [
+    "Only the five selected boot JARs are inventoried; optional APK/module/uses-library providers are not globally assessed.",
+    "This records the named built head, before the later scheduler and filesystem-space follow-up. Final CI status belongs to the final PR head.",
+    "The original baseline inventory remains unchanged."
+  ]
+}

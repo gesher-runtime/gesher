@@ -199,6 +199,19 @@ public final class JobNotificationLifecycleTest {
         ordinary.post(201, forged, REMOVE); f.visible(201, false);
         String removedKey = f.active(201).getKey(); ordinary.finish(); f.removed(201, removedKey);
 
+        JobHandle drained = f.run(713, false);
+        drained.post(202, f.notification("jobs-a"), REMOVE); f.visible(202, false);
+        removedKey = f.active(202).getKey();
+        JobParameters workParameters = new JobParameters(drained.callback.asBinder(),
+                "notification-contract", drained.id, android.os.PersistableBundle.EMPTY,
+                android.os.Bundle.EMPTY, null, 0, false, false, false, null, null, null);
+        require(workParameters.dequeueWork() == null, "An exhausted work queue returned a work item");
+        f.removed(202, removedKey);
+        require(f.associations() == 0 && field(f.schedulerType, "mRunning").getInt(f.scheduler) == 0,
+                "Automatic work completion retained its notification or running slot");
+        require(workParameters.dequeueWork() == null && f.associations() == 0,
+                "Repeated drain reactivated a finished notification association");
+
         JobHandle first = f.run(703, true), last = f.run(704, true);
         first.post(301, f.notification("jobs-a"), REMOVE);
         last.post(301, f.notification("jobs-a"), DETACH);

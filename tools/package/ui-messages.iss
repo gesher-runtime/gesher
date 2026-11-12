@@ -8,6 +8,8 @@ en.setup_run=Run with Gesher
 en.setup_microg=Install Google Play services support (microG)
 en.setup_aurora=Install App Store (Aurora Store)
 en.setup_control_panel=Gesher Control Center
+en.setup_installing_webview2=Installing Microsoft Edge WebView2...
+en.setup_configuring_microg=Setting up Google Play services and applications...
 he.setup_webview=התקנת Microsoft Edge WebView2 (נדרש להצגת תוכן אינטרנט ביישומי Android)
 he.setup_readme=גשר — מידע והוראות
 he.setup_apk=יישום Android (גשר)
@@ -16,6 +18,8 @@ he.setup_run=הפעלה באמצעות גשר
 he.setup_microg=התקנת תמיכה בשירותי Google Play (microG)
 he.setup_aurora=התקנת חנות אפליקציות (Aurora Store)
 he.setup_control_panel=לוח הבקרה של גשר
+he.setup_installing_webview2=מתקין את Microsoft Edge WebView2...
+he.setup_configuring_microg=מגדיר שירותי Google Play ויישומים...
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{userprograms}\Gesher Apps"

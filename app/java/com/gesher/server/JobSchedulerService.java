@@ -230,14 +230,34 @@ final class JobSchedulerService extends IJobScheduler.Default
         @Override
         public JobWorkItem dequeueWork(int jobId) {
             callback(jobId);
-            synchronized (JobSchedulerService.this) {
-                if (done) return null;
-                JobWorkItem w = job.work.poll();
-                if (w == null) return null;
-                w.bumpDeliveryCount();
-                job.delivered.put(w.getWorkId(), w);
-                return w;
+            JobWorkItem[] result = {null};
+            int[] transition = {-1};
+            Runnable dequeue = () -> {
+                synchronized (JobSchedulerService.this) {
+                    if (done || stopping) return;
+                    JobWorkItem work = job.work.poll();
+                    if (work != null) {
+                        work.bumpDeliveryCount();
+                        job.delivered.put(work.getWorkId(), work);
+                        result[0] = work;
+                    } else if (job.delivered.isEmpty()) {
+                        // Enqueue uses this same monitor. Retire an exhausted run
+                        // before another enqueue can attach to its old callback.
+                        transition[0] = finishState(this, false);
+                    }
+                }
+                if (transition[0] >= 0) releaseNotification(this);
+            };
+            try {
+                // Match finish/channel deletion's lifecycle -> scheduler lock order.
+                if (mNotifications == null) dequeue.run();
+                else mNotifications.withChannelLifecycle(dequeue);
+            } finally {
+                if (transition[0] >= 0) {
+                    finishBinding(this, transition[0] != 0, "last work dequeued");
+                }
             }
+            return result[0];
         }
 
         @Override

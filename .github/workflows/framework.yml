@@ -340,6 +340,9 @@ jobs:
       # gesher-app's driver and its test APK compile against the framework's
       # classes, so they are built here, next to them.
       - name: Build gesher-app and lifecycle.apk
+        env:
+          # Retain this exact build dependency for the framework host contracts.
+          APKSIG_JAR: ${{ runner.temp }}/gesher-apksig.jar
         run: |
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
@@ -431,35 +434,52 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/web3app/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod  # web3 (ADR 0058)
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/gmsapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
 
-      - name: Cache the independent SDK 36 API contract
+      - name: Cache public SDK 36 API reference
+        id: sdk-contract-reference
         uses: actions/cache@v4
         with:
-          path: work/followup-sdk-36
-          key: followup-sdk-36-r02-d9eb9da824d9e247
+          path: work/sdk-36/android.jar
+          key: sdk-public-api-36-r02-d9eb9da824d9
 
-      - name: Fetch and verify SDK 36 API classes
+      - name: Fetch public SDK 36 API reference
+        if: steps.sdk-contract-reference.outputs.cache-hit != 'true'
         run: |
-          set -euo pipefail
-          mkdir -p work/followup-sdk-36
-          if [[ ! -f work/followup-sdk-36/android.jar ]]; then
-            curl -fsSL -o "$RUNNER_TEMP/followup-platform36.zip" \
-              https://dl.google.com/android/repository/platform-36_r02.zip
-            echo "37607369a28c5b640b3a7998868d45898ebcb777565a0e85f9acf36f29631d2e  $RUNNER_TEMP/followup-platform36.zip" | sha256sum -c -
-            unzip -p "$RUNNER_TEMP/followup-platform36.zip" android-36/android.jar > work/followup-sdk-36/android.jar
-          fi
-          echo 'd9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a  work/followup-sdk-36/android.jar' | sha256sum -c -
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 \
+            -o "$RUNNER_TEMP/platform-36_r02.zip" \
+            https://dl.google.com/android/repository/platform-36_r02.zip
+          printf '%s  %s\n' 37607369a28c5b640b3a7998868d45898ebcb777565a0e85f9acf36f29631d2e \
+            "$RUNNER_TEMP/platform-36_r02.zip" | sha256sum --check
+          mkdir -p work/sdk-36
+          unzip -p "$RUNNER_TEMP/platform-36_r02.zip" android-36/android.jar > work/sdk-36/android.jar
+
+      - name: Service callback, public SDK and WebView contracts against the built framework
+        run: |
+          printf '%s  %s\n' d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a \
+            work/sdk-36/android.jar | sha256sum --check
+          python3 tools/test_pending_intent_callbacks.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
+          python3 tools/test_scheduler_work_contracts.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
+          python3 tools/test_media_store_requests.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+          python3 tools/test_webview_paths.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
 
       - name: SDK linkage and framework partial-update contracts
         run: |
           set -euo pipefail
           args=(--framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar --java-home "$JAVA_HOME")
-          python3 tools/test_network_stats_bucket.py --sdk-jar work/followup-sdk-36/android.jar --java-home "$JAVA_HOME"
+          python3 tools/test_network_stats_bucket.py --sdk-jar work/sdk-36/android.jar --java-home "$JAVA_HOME"
           python3 tools/test_network_request_clear.py "${args[@]}"
           python3 tools/test_shortcut_updates.py "${args[@]}"
-          curl -fsSL -o "$RUNNER_TEMP/followup-apksig.jar" \
-            https://dl.google.com/android/maven2/com/android/tools/build/apksig/8.13.0/apksig-8.13.0.jar
-          python3 tools/test_location_registrations.py "${args[@]}" --apksig-jar "$RUNNER_TEMP/followup-apksig.jar"
+          python3 tools/test_location_registrations.py "${args[@]}" --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
 
       - name: Collect framework artifacts
         run: |

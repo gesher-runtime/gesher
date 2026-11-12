@@ -54,7 +54,7 @@ final class BroadcastController {
     private final PackageManagerService mPm;
     private final CallerIdentity mCallers;
     private Runnable mBeforeSenderAuthentication; // Server-local direct-caller race fixture.
-    private static final long RECEIVER_TIMEOUT_MS = 60_000;
+    private static final long RECEIVER_TIMEOUT_MS = 180_000;
     private static final int MAX_ORDERED = 16, MAX_ORDERED_PER_SENDER = 4, MAX_ORDERED_TARGETS = 128;
     private static final long MAX_ORDERED_MILLIS = 5 * 60_000;
     private final long mReceiverTimeoutMillis;
@@ -229,6 +229,24 @@ final class BroadcastController {
             return broadcastIntent(intent, resolvedType, origin,
                     requiredPermissions, excludePermissions, excludePackages);
         }
+        return broadcastAcknowledged(intent, resolvedType, origin, app, resultTo, resultCode,
+                resultData, resultExtras, requiredPermissions, excludePermissions, excludePackages, ordered);
+    }
+
+    /** The creator was verified before clearing transport identity in PendingIntents. */
+    int broadcastIntentForPendingIntent(Intent intent, String resolvedType, String packageName,
+            String requiredPermission, BooleanSupplier lifetime, int code, IIntentReceiver finishedReceiver) {
+        if (!lifetime.getAsBoolean()) return ActivityManager.START_CANCELED;
+        Sender origin = sender(packageName, Process.myPid(), lifetime);
+        return broadcastAcknowledged(intent, resolvedType, origin, null, finishedReceiver, code,
+                null, null, requiredPermission == null ? null : new String[]{requiredPermission},
+                null, null, true);
+    }
+
+    private int broadcastAcknowledged(Intent intent, String resolvedType, Sender origin,
+            ActivityTaskManagerService.ProcessRecord app, IIntentReceiver resultTo, int resultCode,
+            String resultData, Bundle resultExtras, String[] requiredPermissions,
+            String[] excludePermissions, String[] excludePackages, boolean ordered) {
         if (intent == null) throw new IllegalArgumentException("Missing broadcast intent");
         Intent snapshot = new Intent(intent);
         validateBroadcastSender(origin, snapshot);

@@ -20,9 +20,18 @@ statvfs/sendfile/stdio, MediaStore/connectivity and other repairs. Its refreshed
 head was `8d52fdca8241447ac4d0a83795a450aa92c45391`. PR
 [#10](https://github.com/gesher-runtime/gesher/pull/10), refreshed at
 `165bcbcd7489a247d1f86a9e941121c17b8a9a1c`, owns account/GMS, NFC and domain
-verification work and includes #11 at that snapshot. This branch does not copy
-their feature implementations. Shared source/workflow files receive separate
-changes; merging must retain both sets of tests.
+verification work and includes #11 at that snapshot. The initial follow-up at
+`fb297ea1f08dab9f971c48f82a51868f756b98cf` was developed separately. The review
+branch now incorporates that #10 head, including #11, so CI can exercise the
+complete combination before the ordered main-branch merges. The shared
+framework workflow retains both suites and reuses the same hash-verified SDK
+and app-build signing-library inputs.
+
+The measurements below and the accompanying JSON retain their original
+baseline and isolated follow-up candidate. They are not recalculated counts
+for the combined tree; in particular, #10's NFC additions are outside the
+reported availability delta. Fresh full app and services-test Java/D8 builds
+validate the combined sources separately.
 
 The long-path change here repairs the runtime's relative-path conversion.
 PR #11's newer statvfs test constructs its fixture with absolute paths. Those are

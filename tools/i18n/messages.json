@@ -289,6 +289,14 @@
       "en": "Gesher Control Center",
       "he": "לוח הבקרה של גשר"
     },
+    "setup_installing_webview2": {
+      "en": "Installing Microsoft Edge WebView2...",
+      "he": "מתקין את Microsoft Edge WebView2..."
+    },
+    "setup_configuring_microg": {
+      "en": "Setting up Google Play services and applications...",
+      "he": "מגדיר שירותי Google Play ויישומים..."
+    },
     "cp_title": {
       "en": "Gesher Control Center",
       "he": "לוח הבקרה של גשר"

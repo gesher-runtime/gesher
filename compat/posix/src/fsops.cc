@@ -680,6 +680,11 @@ FILE* freopen(const char* path, const char* mode, FILE* stream) {
       return fail_reopen(EACCES);
   }
   std::wstring wmode(crt_mode, crt_mode + strlen(crt_mode));
+  // Keep creation/inheritance decisions in the CRT's atomic open. Dropping
+  // 'x' here turns an exclusive reopen into a destructive truncation; an
+  // existence check before reopening would still race another creator.
+  if (mode[0] == 'w' && (flags & O_EXCL) != 0) wmode += L'x';
+  if ((flags & O_CLOEXEC) != 0) wmode += L'N';
   FILE* result = _wfreopen(windows.c_str(), wmode.c_str(), stream);
   int saved = result == nullptr ? gesher_errno_from_crt(errno) : errno;
   if (result == nullptr && saved == ENOENT && HasNonDirectoryParent(windows)) saved = ENOTDIR;

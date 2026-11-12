@@ -119,6 +119,7 @@ struct Library {
   uint8_t* load_bias = nullptr;  // base - first PT_LOAD p_vaddr
   size_t map_size = 0;       // total reserved span
   bool is_closed = false;
+  bool is_closing = false;  // finalizers claimed, still visible until they finish
   bool is_aarch64 = false;   // EM_AARCH64: translated guest code (ADR 0047)
 
   // Dynamic section data (pointers into the mapping).
@@ -1315,12 +1316,32 @@ Library* Find(const char* name) {
 const char* Soname(Library* library) { return library ? library->soname.c_str() : ""; }
 
 void Close(Library* library) {
-  if (library == nullptr || library->is_closed) return;
-  for (size_t i = library->fini_array_count; i-- > 0;) {
-    if (library->fini_array[i]) library->fini_array[i]();
+  if (library == nullptr) return;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (library->is_closed || library->is_closing) return;
+    // Finalizers may re-enter dlclose. Claim this object before calling them,
+    // keeping its symbols visible until they finish. Never keep the loader
+    // lock while running application code.
+    library->is_closing = true;
   }
-  if (library->fini_func) library->fini_func();
-  library->is_closed = true;
+  auto finish = [library](void (SYSV* function)()) {
+    if (function == nullptr || function == reinterpret_cast<void (SYSV*)()>(-1)) return;
+    if (library->is_aarch64) {
+      gesher::arm64::Call(reinterpret_cast<void*>(function), nullptr, 0);
+    } else {
+      function();
+    }
+  };
+  for (size_t i = library->fini_array_count; i-- > 0;) {
+    finish(library->fini_array[i]);
+  }
+  finish(library->fini_func);
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    library->is_closed = true;
+    library->is_closing = false;
+  }
 }
 
 bool SetupThreadTls() { return TlsSetupThread(); }

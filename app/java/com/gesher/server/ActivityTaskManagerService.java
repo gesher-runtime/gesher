@@ -1132,6 +1132,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 // resumed (multi-resume: each visible task's top activity is resumed).
                 ActivityRecord front = front(r);
                 mActivities.add(r);
+                updateIdle();
                 focusTaskLocked(taskId);
                 // Its orientation may turn the task's display (windows3 track).
                 if (updateRotationLocked(taskId)) {
@@ -1558,17 +1559,28 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
     }
 
-    /** Notes since when no process runs or starts. Guarded by this. */
+    /** Notes since when only ready background GMS processes remain. Guarded by this. */
     private void updateIdle() {
-        if (mProcesses.isEmpty() && mStarting.isEmpty()) {
+        // Work waiting on a live bind/start is covered by !ready and mStarting.
+        // Orphaned queued work after process death must not prevent shutdown forever.
+        boolean hasActiveUserProcess = !mActivities.isEmpty();
+        for (ProcessRecord p : mProcesses) {
+            if (!GmsPackageSupport.PACKAGE_GMS.equals(p.packageName) || !p.ready
+                    || !p.activities.isEmpty()) {
+                hasActiveUserProcess = true;
+                break;
+            }
+        }
+        if (!hasActiveUserProcess && mStarting.isEmpty()) {
             if (mIdleSince == 0) mIdleSince = SystemClock.uptimeMillis();
         } else {
             mIdleSince = 0;
         }
     }
 
-    /** Since when (uptimeMillis) no app process runs or starts; 0 while some do. */
+    /** Since when only background GMS remains; 0 during app activity or startup. */
     synchronized long idleSince() {
+        updateIdle();
         return mIdleSince;
     }
 
@@ -1715,6 +1727,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         r.app = app;
         if (r.launchGeneration == null) r.launchGeneration = app.exitGeneration;
         app.activities.add(r);
+        updateIdle();
     }
 
     // --- processes (from ActivityManagerService) ---------------------------------------
@@ -1831,6 +1844,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     mPendingWork.remove(i--);
                 }
             }
+            updateIdle();
         }
         SystemServer.log("finishAttachApplication: " + app);
         for (ActivityRecord r : launch) realStartActivity(r);
@@ -1860,6 +1874,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             app = processFor(packageName, processName);
             if (app == null || !app.ready) {
                 mPendingWork.add(new PendingWork(packageName, processName, work));
+                updateIdle();
                 SystemServer.log("waiting for a process of " + packageName);
             }
         }
@@ -2597,6 +2612,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 // process is told to exit, unless something else keeps it.
                 if (r.app.activities.isEmpty() && r.finishing) check = r.app;
             }
+            updateIdle();
             if (r == mTopResumed) mTopResumed = null;
             if (topOf(r.taskId) == null) {
                 mTaskOrder.remove(Integer.valueOf(r.taskId));

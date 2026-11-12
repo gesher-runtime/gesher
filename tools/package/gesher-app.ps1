@@ -80,7 +80,7 @@ $root = Join-Path $env:LOCALAPPDATA 'Gesher'
 # The optional addon installer records an explicit per-profile choice. An explicit
 # environment value (including 0) takes precedence for a single invocation.
 $enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
-$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy'
+$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy', 'sync-shortcuts'
 if ($Arguments.Count -eq 0) {
   Write-Host ((Get-GesherText 'usage') + 'gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--single-process | --system-server]')
   Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows]'

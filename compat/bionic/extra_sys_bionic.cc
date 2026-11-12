@@ -162,9 +162,15 @@ int ProcessorCount() {
   return n == 0 ? 1 : static_cast<int>(n);
 }
 int BIONIC_SYSV SchedGetaffinity(int, size_t size, uint8_t* set) {
+  // Linux requires a whole-word mask large enough for every reported CPU.
+  // Reject short masks before touching them, including the size-zero case.
+  constexpr size_t word = sizeof(uint64_t);
+  if (size == 0 || size % word != 0) return errno = kEINVAL, -1;
+  int n = ProcessorCount();
+  size_t required = ((static_cast<size_t>(n) + 63) / 64) * word;
+  if (size < required) return errno = kEINVAL, -1;
   if (set == nullptr) return errno = kEFAULT, -1;
   std::memset(set, 0, size);
-  int n = ProcessorCount();
   for (int i = 0; i < n && static_cast<size_t>(i / 8) < size; ++i) set[i / 8] |= static_cast<uint8_t>(1u << (i % 8));
   return 0;
 }
@@ -449,20 +455,56 @@ int BIONIC_SYSV Futimes(int fd, const LinuxTimeval* tv) {
 
 // clock_nanosleep returns the error number (not -1/errno).
 int BIONIC_SYSV ClockNanosleep(int clock, int flags, const LinuxTimespec* req, LinuxTimespec* rem) {
-  if (req == nullptr || req->tv_nsec < 0 || req->tv_nsec >= 1000000000) return kEINVAL;
-  if (clock == 3) return kEINVAL;  // CLOCK_THREAD_CPUTIME_ID
-  int64_t ms;
-  if ((flags & 1) != 0) {  // TIMER_ABSTIME
-    ms = MsUntil(req, clock == 0 || clock == 5 ? 0 : 1);
-    if (ms < 0) return 0;
-  } else {
-    ms = req->tv_sec * 1000 + (req->tv_nsec + 999999) / 1000000;
+  struct RestoreErrno {
+    int saved;
+    ~RestoreErrno() { errno = saved; }
+  } restore_errno{errno};
+  switch (clock) {
+    case 0: case 1: case 7:  // REALTIME, MONOTONIC, BOOTTIME
+      break;
+    case 2:  // PROCESS_CPUTIME: elapsed-time sleeps cannot implement CPU time.
+    case 4: case 5: case 6:  // RAW/COARSE clocks cannot be used for Linux sleeps.
+    case 8: case 9: case 11:  // Alarm clocks and TAI have no Windows backend here.
+      return kEOPNOTSUPP;
+    default:  // Includes CLOCK_THREAD_CPUTIME_ID, as in bionic's wrapper.
+      return kEINVAL;
   }
-  DeliverPendingSignals();
-  Sleep(static_cast<DWORD>(ms > 0x7ffffffe ? 0x7ffffffe : ms));
-  DeliverPendingSignals();
-  if (rem != nullptr && (flags & 1) == 0) *rem = {0, 0};
-  return 0;
+  if (req == nullptr) return kEFAULT;
+  if (req->tv_sec < 0 || req->tv_nsec < 0 || req->tv_nsec >= 1000000000) return kEINVAL;
+
+  const bool absolute = (flags & 1) != 0;  // TIMER_ABSTIME; other Linux flag bits are ignored.
+  const bool realtime_absolute = absolute && clock == 0;
+  auto now = [realtime_absolute]() -> __int128 {
+    if (realtime_absolute) {
+      LinuxTimespec value = RealtimeNow();
+      return static_cast<__int128>(value.tv_sec) * 1000000000 + value.tv_nsec;
+    }
+    // Keep the same QPC basis as clock_gettime's MONOTONIC and BOOTTIME.
+    // Relative REALTIME sleeps also use an elapsed-time budget, not wall time.
+    return NowMonotonicNs();
+  };
+  const __int128 requested = static_cast<__int128>(req->tv_sec) * 1000000000 + req->tv_nsec;
+  const __int128 deadline = absolute ? requested : now() + requested;
+  for (;;) {
+    __int128 left = deadline - now();
+    if (left <= 0) return 0;
+    __int128 milliseconds = (left + 999999) / 1000000;
+    if (milliseconds > 0x7ffffffe) milliseconds = 0x7ffffffe;
+    // Recheck wall-clock adjustments and BOOTTIME after system resume instead
+    // of leaving a long relative Windows wait unaware of the new clock value.
+    if ((realtime_absolute || clock == 7) && milliseconds > 1000) milliseconds = 1000;
+    if (InterruptibleSleep(static_cast<uint32_t>(milliseconds), nullptr)) {
+      if (!absolute && rem != nullptr) {
+        left = deadline - now();
+        if (left < 0) left = 0;
+        *rem = {static_cast<int64_t>(left / 1000000000),
+                static_cast<int64_t>(left % 1000000000)};
+      }
+      return kEINTR;
+    }
+    // A wait slice (or an early Windows wake) never completes the full request
+    // until the selected clock reaches its deadline.
+  }
 }
 int BIONIC_SYSV ClockGetcpuclockid(int pid, int* clock) {
   if (pid != 0 && pid != static_cast<int>(GetCurrentProcessId())) return kESRCH;

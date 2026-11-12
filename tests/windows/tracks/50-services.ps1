@@ -1,4 +1,4 @@
-# Binder across processes and the framework's system services
+﻿# Binder across processes and the framework's system services
 # (docs/services.md, docs/decisions/0015-services-binder-ipc.md). Dot-sourced
 # by run-tests.ps1, whose Check, NoDrive, $Dir, $root, $bcp and $failed these
 # use.
@@ -161,7 +161,7 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
   'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, dropbox, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_session, mount, notification, package, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, telephony.registry, thermalservice, trust, uimode, uri_grants, usagestats, user, vibrator_manager, window',
+    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, domain_verification, dropbox, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_session, mount, notification, package, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, telephony.registry, thermalservice, trust, uimode, uri_grants, usagestats, user, vibrator_manager, window',
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 

@@ -58,6 +58,44 @@ bool Failed(JNIEnv* env) {
   return env->ExceptionCheck() == JNI_TRUE;
 }
 
+// SharedMemory owns a descriptor independently of its mapped ByteBuffer. Retire
+// both even when a Java operation throws, preserving the first exception.
+struct SharedMemoryMapping {
+  JNIEnv* env;
+  jobject memory;
+  jobject buffer = nullptr;
+
+  void Close() {
+    jthrowable failure = env->ExceptionOccurred();
+    if (failure != nullptr) env->ExceptionClear();
+    auto retain_failure = [&] {
+      jthrowable next = env->ExceptionOccurred();
+      if (next == nullptr) return;
+      env->ExceptionClear();
+      if (failure == nullptr) failure = next;
+      else env->DeleteLocalRef(next);
+    };
+    if (buffer != nullptr) {
+      env->CallStaticVoidMethod(g.shared_memory, g.sm_unmap, buffer);
+      retain_failure();
+      env->DeleteLocalRef(buffer);
+      buffer = nullptr;
+    }
+    if (memory != nullptr) {
+      env->CallVoidMethod(memory, g.sm_close);
+      retain_failure();
+      env->DeleteLocalRef(memory);
+      memory = nullptr;
+    }
+    if (failure != nullptr) {
+      env->Throw(failure);
+      env->DeleteLocalRef(failure);
+    }
+  }
+
+  ~SharedMemoryMapping() { Close(); }
+};
+
 // Whether `parcel` may carry file descriptors (pushAllowFds answers the old value).
 bool AllowsFds(JNIEnv* env, jobject parcel) {
   jboolean old = env->CallBooleanMethod(parcel, g.push_allow_fds, JNI_FALSE);
@@ -86,26 +124,28 @@ uint64_t NextParcelId() {
 // exception) if that fails.
 bool WriteSharedMemory(JNIEnv* env, jobject parcel, const void* pixels, size_t size) {
   jstring name = env->NewStringUTF("bitmap");
+  if (name == nullptr) return false;
   jobject sm = env->CallStaticObjectMethod(g.shared_memory, g.sm_create, name,
                                            static_cast<jint>(size));
   env->DeleteLocalRef(name);
   if (Failed(env) || sm == nullptr) return false;
-  jobject buffer = env->CallObjectMethod(sm, g.sm_map_read_write);
-  if (Failed(env) || buffer == nullptr) return false;
-  void* address = env->GetDirectBufferAddress(buffer);
-  if (address != nullptr) memcpy(address, pixels, size);
-  env->CallStaticVoidMethod(g.shared_memory, g.sm_unmap, buffer);
-  env->DeleteLocalRef(buffer);
-  if (address == nullptr) {
+  SharedMemoryMapping mapping{env, sm};
+  mapping.buffer = env->CallObjectMethod(sm, g.sm_map_read_write);
+  if (Failed(env)) return false;
+  void* address = mapping.buffer == nullptr ? nullptr : env->GetDirectBufferAddress(mapping.buffer);
+  jlong capacity = mapping.buffer == nullptr ? -1 : env->GetDirectBufferCapacity(mapping.buffer);
+  if (address == nullptr || capacity < 0 || static_cast<uint64_t>(capacity) < size) {
     jniThrowRuntimeException(env, "Could not map the bitmap's shared memory");
     return false;
   }
+  memcpy(address, pixels, size);
   env->CallVoidMethod(parcel, g.write_int, kBlobSharedMemory);
+  if (Failed(env)) return false;
   env->CallVoidMethod(parcel, g.write_int, static_cast<jint>(size));
+  if (Failed(env)) return false;
   env->CallVoidMethod(sm, g.sm_write_to_parcel, parcel, 0);
   // The parcel holds its own duplicate of the descriptor.
-  env->CallVoidMethod(sm, g.sm_close);
-  env->DeleteLocalRef(sm);
+  mapping.Close();
   return !Failed(env);
 }
 
@@ -208,24 +248,29 @@ jobject JNICALL Bitmap_createFromParcel(JNIEnv* env, jobject, jobject parcel) {
     env->DeleteLocalRef(bytes);
   } else if (blob == kBlobSharedMemory) {
     const int32_t size = read_int();
+    if (Failed(env)) return nullptr;
+    if (size < 0 || static_cast<size_t>(size) < allocation) {
+      ThrowBadParcelable(env, "Bitmap_createFromParcel: bad shared memory size");
+      return nullptr;
+    }
     jobject sm = env->CallObjectMethod(g.sm_creator, g.creator_create, parcel);
     if (Failed(env)) return nullptr;
-    if (sm == nullptr || size < 0 || static_cast<size_t>(size) < allocation) {
+    if (sm == nullptr) {
       ThrowBadParcelable(env, "Bitmap_createFromParcel: bad shared memory");
       return nullptr;
     }
-    jobject buffer = env->CallObjectMethod(sm, g.sm_map_read_only);
-    if (Failed(env) || buffer == nullptr) return nullptr;
-    const void* address = env->GetDirectBufferAddress(buffer);
-    if (address != nullptr) memcpy(native->pixels(), address, allocation);
-    env->CallStaticVoidMethod(g.shared_memory, g.sm_unmap, buffer);
-    env->CallVoidMethod(sm, g.sm_close);
-    env->DeleteLocalRef(buffer);
-    env->DeleteLocalRef(sm);
-    if (address == nullptr) {
-      jniThrowRuntimeException(env, "Could not map the bitmap's shared memory");
+    SharedMemoryMapping mapping{env, sm};
+    mapping.buffer = env->CallObjectMethod(sm, g.sm_map_read_only);
+    if (Failed(env)) return nullptr;
+    const void* address = mapping.buffer == nullptr ? nullptr : env->GetDirectBufferAddress(mapping.buffer);
+    jlong capacity = mapping.buffer == nullptr ? -1 : env->GetDirectBufferCapacity(mapping.buffer);
+    if (address == nullptr || capacity < 0 || static_cast<uint64_t>(capacity) < allocation) {
+      ThrowBadParcelable(env, "Bitmap_createFromParcel: shared memory mapping is too short");
       return nullptr;
     }
+    memcpy(native->pixels(), address, allocation);
+    mapping.Close();
+    if (Failed(env)) return nullptr;
   } else {
     ThrowBadParcelable(env, "Bitmap_createFromParcel: unknown blob type");
     return nullptr;

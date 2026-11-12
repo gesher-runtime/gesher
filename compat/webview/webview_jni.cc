@@ -269,17 +269,23 @@ void JNICALL WebView2Host_showFileDialog(JNIEnv* env, jclass, jlong h, jlong cb,
   Get(h)->ShowFileDialog(cb, multiple == JNI_TRUE, Str(env, title), Str(env, filters));
 }
 
-// A Java path (drive-less: /a/b is \a\b on the current drive, ADR 0010) as a
-// full Windows path.
+// Use the same drive/UNC namespace as package launch and shell integration.
+// The file chooser can supply a native Windows path or a Java guest path.
 jstring JNICALL WebView2Host_windowsPath(JNIEnv* env, jclass, jstring path) {
-  std::wstring p = Str(env, path);
-  for (wchar_t& ch : p) {
-    if (ch == L'/') ch = L'\\';
-  }
-  wchar_t full[MAX_PATH * 2];
-  DWORD n = GetFullPathNameW(p.c_str(), MAX_PATH * 2, full, nullptr);
-  if (n > 0 && n < MAX_PATH * 2) p.assign(full, n);
-  return JStr(env, p);
+  jclass zygote = env->FindClass("com/gesher/server/Zygote");
+  if (zygote == nullptr) return nullptr;
+  jmethodID to_guest = env->GetStaticMethodID(zygote, "fromWindowsPath",
+                                             "(Ljava/lang/String;)Ljava/lang/String;");
+  if (to_guest == nullptr) { env->DeleteLocalRef(zygote); return nullptr; }
+  jmethodID to_windows = env->GetStaticMethodID(zygote, "windowsPath",
+                                               "(Ljava/lang/String;)Ljava/lang/String;");
+  if (to_windows == nullptr) { env->DeleteLocalRef(zygote); return nullptr; }
+  jobject guest = env->CallStaticObjectMethod(zygote, to_guest, path);
+  if (env->ExceptionCheck()) { env->DeleteLocalRef(zygote); return nullptr; }
+  auto result = static_cast<jstring>(env->CallStaticObjectMethod(zygote, to_windows, guest));
+  env->DeleteLocalRef(guest);
+  env->DeleteLocalRef(zygote);
+  return result;
 }
 
 void JNICALL WebView2Host_navigateToString(JNIEnv* env, jclass, jlong h, jstring html) {

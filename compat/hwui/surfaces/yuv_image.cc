@@ -73,15 +73,23 @@ void TermDestination(j_compress_ptr cinfo) {
   d->stream->flush();
 }
 
+// jpeg_write_raw_data consumes whole DCT blocks, including the final partial
+// block in each component. Pad temporary rows by repeating their last sample.
+size_t JpegRowBytes(int width) {
+  return (static_cast<size_t>(width) + DCTSIZE - 1) / DCTSIZE * DCTSIZE;
+}
+
 // NV21 rows [row, row + 16) into raw planes (16 Y rows, 8 Cb and 8 Cr rows).
 void Nv21Rows(const uint8_t* y_plane, const uint8_t* vu_plane, const int* strides, int row,
               int width, int height, std::vector<uint8_t>* y_rows, std::vector<uint8_t>* u_rows,
               std::vector<uint8_t>* v_rows, JSAMPROW* y, JSAMPROW* cb, JSAMPROW* cr) {
   const int half = (width + 1) / 2;
+  const size_t y_stride = JpegRowBytes(width), uv_stride = JpegRowBytes(half);
   for (int i = 0; i < 16; i++) {
     int r = row + i < height ? row + i : height - 1;
-    uint8_t* dst = y_rows->data() + static_cast<size_t>(i) * width;
+    uint8_t* dst = y_rows->data() + static_cast<size_t>(i) * y_stride;
     memcpy(dst, y_plane + static_cast<size_t>(r) * strides[0], static_cast<size_t>(width));
+    std::fill(dst + width, dst + y_stride, dst[width - 1]);
     y[i] = dst;
   }
   for (int i = 0; i < 8; i++) {
@@ -89,12 +97,14 @@ void Nv21Rows(const uint8_t* y_plane, const uint8_t* vu_plane, const int* stride
     int last = (height + 1) / 2 - 1;
     if (r > last) r = last;
     const uint8_t* vu = vu_plane + static_cast<size_t>(r) * strides[1];
-    uint8_t* u = u_rows->data() + static_cast<size_t>(i) * half;
-    uint8_t* v = v_rows->data() + static_cast<size_t>(i) * half;
+    uint8_t* u = u_rows->data() + static_cast<size_t>(i) * uv_stride;
+    uint8_t* v = v_rows->data() + static_cast<size_t>(i) * uv_stride;
     for (int x = 0; x < half; x++) {
       v[x] = vu[2 * x];
       u[x] = vu[2 * x + 1];
     }
+    std::fill(u + half, u + uv_stride, u[half - 1]);
+    std::fill(v + half, v + uv_stride, v[half - 1]);
     cb[i] = u;
     cr[i] = v;
   }
@@ -105,18 +115,22 @@ void Yuy2Rows(const uint8_t* yuv, const int* strides, int row, int width, int he
               std::vector<uint8_t>* y_rows, std::vector<uint8_t>* u_rows,
               std::vector<uint8_t>* v_rows, JSAMPROW* y, JSAMPROW* cb, JSAMPROW* cr) {
   const int half = (width + 1) / 2;
+  const size_t y_stride = JpegRowBytes(width), uv_stride = JpegRowBytes(half);
   for (int i = 0; i < 16; i++) {
     int r = row + i < height ? row + i : height - 1;
     const uint8_t* s = yuv + static_cast<size_t>(r) * strides[0];
-    uint8_t* yd = y_rows->data() + static_cast<size_t>(i) * width;
-    uint8_t* u = u_rows->data() + static_cast<size_t>(i) * half;
-    uint8_t* v = v_rows->data() + static_cast<size_t>(i) * half;
+    uint8_t* yd = y_rows->data() + static_cast<size_t>(i) * y_stride;
+    uint8_t* u = u_rows->data() + static_cast<size_t>(i) * uv_stride;
+    uint8_t* v = v_rows->data() + static_cast<size_t>(i) * uv_stride;
     for (int x = 0; x < half; x++) {
       yd[2 * x] = s[4 * x];
       if (2 * x + 1 < width) yd[2 * x + 1] = s[4 * x + 2];
       u[x] = s[4 * x + 1];
       v[x] = s[4 * x + 3];
     }
+    std::fill(yd + width, yd + y_stride, yd[width - 1]);
+    std::fill(u + half, u + uv_stride, u[half - 1]);
+    std::fill(v + half, v + uv_stride, v[half - 1]);
     y[i] = yd;
     cb[i] = u;
     cr[i] = v;
@@ -136,9 +150,9 @@ bool Encode(SkWStream* stream, const uint8_t* yuv, int format, int width, int he
   err.pub.error_exit = ErrorExit;
   // Allocated before setjmp, freed after (the vectors outlive a longjmp).
   const int half = (width + 1) / 2;
-  std::vector<uint8_t> y_rows(static_cast<size_t>(16) * width);
-  std::vector<uint8_t> u_rows(static_cast<size_t>(16) * half);
-  std::vector<uint8_t> v_rows(static_cast<size_t>(16) * half);
+  std::vector<uint8_t> y_rows(16 * JpegRowBytes(width));
+  std::vector<uint8_t> u_rows(16 * JpegRowBytes(half));
+  std::vector<uint8_t> v_rows(16 * JpegRowBytes(half));
   if (setjmp(err.jmp)) {
     jpeg_destroy_compress(&cinfo);
     return false;
@@ -180,32 +194,47 @@ bool Encode(SkWStream* stream, const uint8_t* yuv, int format, int width, int he
   return true;
 }
 
+// Only the used bytes of the last row are required. A crop's offset already
+// includes its left edge, so requiring one complete final stride rejects valid
+// right-hand crops which reach the bottom of the source image.
+bool PlaneFits(jsize length, int offset, int stride, int rows, int64_t row_bytes) {
+  if (offset < 0 || stride <= 0 || rows <= 0 || row_bytes <= 0 || row_bytes > stride) return false;
+  const int64_t end = int64_t{offset} + int64_t{rows - 1} * stride + row_bytes;
+  return end <= length;
+}
+
 jboolean JNICALL YuvImage_compressToJpeg(JNIEnv* env, jclass, jbyteArray in_yuv, jint format,
                                          jint width, jint height, jintArray offsets,
                                          jintArray strides, jint quality, jobject jstream,
                                          jbyteArray jstorage) {
   if (format != kNv21 && format != kYuy2) return JNI_FALSE;
-  if (width <= 0 || height <= 0 || offsets == nullptr || strides == nullptr) return JNI_FALSE;
+  if (width <= 0 || height <= 0 || in_yuv == nullptr || offsets == nullptr || strides == nullptr) {
+    return JNI_FALSE;
+  }
   if (env->GetArrayLength(offsets) < (format == kNv21 ? 2 : 1) ||
       env->GetArrayLength(strides) < (format == kNv21 ? 2 : 1)) {
     return JNI_FALSE;
   }
   int off[2] = {0, 0}, str[2] = {0, 0};
   env->GetIntArrayRegion(offsets, 0, format == kNv21 ? 2 : 1, off);
+  if (env->ExceptionCheck()) return JNI_FALSE;
   env->GetIntArrayRegion(strides, 0, format == kNv21 ? 2 : 1, str);
+  if (env->ExceptionCheck()) return JNI_FALSE;
   // The data must cover the rows the strides and offsets name.
   const jsize length = env->GetArrayLength(in_yuv);
-  int64_t need = format == kNv21
-                     ? std::max<int64_t>(off[0] + int64_t{str[0]} * height,
-                                         off[1] + int64_t{str[1]} * ((height + 1) / 2))
-                     : off[0] + int64_t{str[0]} * height;
-  if (need > length) {
+  const int64_t chroma_width = (int64_t{width} + 1) / 2;
+  const bool fits = format == kNv21
+      ? PlaneFits(length, off[0], str[0], height, width)
+          && PlaneFits(length, off[1], str[1], height / 2 + height % 2, chroma_width * 2)
+      : PlaneFits(length, off[0], str[0], height, chroma_width * 4);
+  if (!fits) {
     jniThrowException(env, "java/lang/IllegalArgumentException", "YUV data too short");
     return JNI_FALSE;
   }
   std::unique_ptr<SkWStream> stream(CreateJavaOutputStreamAdaptor(env, jstream, jstorage));
   if (stream == nullptr) return JNI_FALSE;
   jbyte* yuv = env->GetByteArrayElements(in_yuv, nullptr);
+  if (yuv == nullptr) return JNI_FALSE;
   bool ok = Encode(stream.get(), reinterpret_cast<const uint8_t*>(yuv), format, width, height,
                    off, str, quality);
   env->ReleaseByteArrayElements(in_yuv, yuv, JNI_ABORT);
