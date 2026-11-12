@@ -192,6 +192,9 @@ jobs:
           "$cc" -shared -fPIC -O2 \
             -Wl,-soname,libc_test.so \
             -o dist-arm64/libc_test_arm64.so tests/native/libc_test.c -llog -ldl -lm
+          "$cc" -shared -fPIC -O2 -Wall -Wextra -Werror \
+            -Wl,-soname,libfilesystem_contract.so \
+            -o dist-arm64/filesystem_contract_arm64.so tests/native/filesystem_contract_guest.c
           # The guest-ABI checks: ELF TLS (TLSDESC), setjmp, struct stat and
           # epoll_event, syscall numbers, auxv, atomics, va_list, host pointers;
           # and the perf kernel (docs/arm64.md).

@@ -67,6 +67,9 @@ jobs:
           # pthread through the shim. No stack protector and no thread_local,
           # so it does not touch %fs (ADR 0014).
           "$cc" -shared -fPIC -O2 -fno-stack-protector             -Wl,-soname,libc_test.so             -o dist-native/libc_test.so tests/native/libc_test.c -llog -ldl -lm
+          "$cc" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror \
+            -Wl,-soname,libfilesystem_contract.so \
+            -o dist-native/filesystem_contract.so tests/native/filesystem_contract_guest.c
           # Step 3: libraries built the way the NDK builds app code by default,
           # with the stack protector (%fs:0x28) and thread-locals: emulated at
           # API 26, ELF TLS (general-dynamic, local-dynamic, initial-exec) at

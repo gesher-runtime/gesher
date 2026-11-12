@@ -129,6 +129,11 @@ target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)
 add_executable(posix_probe probes/posix/posix_probe.cc)
 target_compile_options(posix_probe PRIVATE -Wall -Wextra -Werror)
 
+# The same metadata contract runs through host POSIX and both guest ABI shims.
+add_executable(filesystem_metadata_host_test tests/native/filesystem_metadata_host_test.cc)
+target_compile_options(filesystem_metadata_host_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(filesystem_metadata_host_test PRIVATE gesher_posix)
+
 # libutils' Looper over gesher-base's epoll and eventfd, RefBase, String8;
 # also run in CI on Windows.
 add_executable(libutils_probe probes/system/libutils_probe.cc)

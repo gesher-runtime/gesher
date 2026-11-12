@@ -185,6 +185,28 @@ target_include_directories(surface_invalidation_test PRIVATE "${CMAKE_SOURCE_DIR
 target_compile_options(surface_invalidation_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(surface_invalidation_test PRIVATE pthread)
 
+# Complete production sources over actual Windows file, HTTP and buffer APIs.
+# These default targets are collected with the other out/*.exe CI artifacts.
+add_executable(media_source_contract_test
+  "${CMAKE_SOURCE_DIR}/tests/media/source_contract_test.cc" ${_media}/player/data_source.cc)
+target_include_directories(media_source_contract_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_options(media_source_contract_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(media_source_contract_test PRIVATE gesher_posix)
+
+add_executable(media_http_source_contract_test
+  "${CMAKE_SOURCE_DIR}/tests/media/http_source_contract_test.cc" ${_media}/player/http_source.cc)
+target_include_directories(media_http_source_contract_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_definitions(media_http_source_contract_test PRIVATE GESHER_MEDIA_STANDALONE)
+target_compile_options(media_http_source_contract_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(media_http_source_contract_test PRIVATE gesher_posix winhttp pthread)
+
+add_executable(media_surface_timestamp_contract_test
+  "${CMAKE_SOURCE_DIR}/tests/media/surface_timestamp_contract_test.cc" ${_media}/surface/queue_surface.cc)
+target_include_directories(media_surface_timestamp_contract_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_options(media_surface_timestamp_contract_test PRIVATE -Wall -Werror)
+target_link_libraries(media_surface_timestamp_contract_test PRIVATE hostgraphics)
+gesher_graphics_cxx(media_surface_timestamp_contract_test)
+
 # The surfaces hwui draws (stage 2, ADR 0051): SurfaceTexture and TextureView's layer,
 # SurfaceView's surface (compat/media/surface), built with hwui (its headers, Skia).
 target_sources(hwui PRIVATE
