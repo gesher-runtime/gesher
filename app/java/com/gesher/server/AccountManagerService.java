@@ -456,7 +456,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     private String targetKey(String packageName) {
         if (isLegacyKey(packageName)) return packageName;
         String code = packageIdentity(packageName);
-        if (code == null) return packageName;
+        if (code == null) throw new SecurityException("Unknown account client package");
         return packageName + "\u0000" + code;
     }
 
@@ -482,8 +482,7 @@ public final class AccountManagerService extends IAccountManager.Default {
             return captureCaller(name, name, false, -1, -1);
         }
         ApkPackage target = mPm.get(name);
-        String code = packageIdentity(name);
-        return captureCaller(name, code != null ? code : "", false, target == null ? -1 : target.uid(), -1);
+        return captureCaller(name, packageIdentity(name), false, target == null ? -1 : target.uid(), -1);
     }
 
     @Override
@@ -503,7 +502,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (authenticator == null || !authenticator.service.getPackageName().equals(c.name)
                 || !callerUnchanged(c)) throw new SecurityException("Account client mismatch");
         Caller target = targetCaller(packageName);
-        if (target.code == null || target.code.isEmpty()) return new Account[0];
+        if (target.code == null) throw new SecurityException("Unknown account client package");
         List<Account> result = new ArrayList<>();
         for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
             Account account = item.getKey(); Entry entry = item.getValue();

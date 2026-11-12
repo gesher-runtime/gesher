@@ -277,28 +277,49 @@ begin
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  DownloadsNeeded: Integer;
 begin
   Result := True;
   if CurPageID = wpReady then
   begin
     DownloadPage.Clear;
-    if WizardIsTaskSelected('webview2') then
+    DownloadsNeeded := 0;
+    if WizardIsTaskSelected('webview2') and not FileExists(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe')) then
+    begin
       DownloadPage.Add('https://go.microsoft.com/fwlink/p/?LinkId=2124703',
         'MicrosoftEdgeWebview2Setup.exe', '');
+      DownloadsNeeded := DownloadsNeeded + 1;
+    end;
     if WizardIsTaskSelected('microg') then
     begin
-      DownloadPage.Add('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.google.android.gms-252432034.apk',
-        'com.google.android.gms.apk', '');
-      DownloadPage.Add('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.android.vending-84022634.apk',
-        'com.android.vending.apk', '');
-      DownloadPage.Add('https://github.com/microg/GsfProxy/releases/download/v0.1.0/GsfProxy.apk',
-        'com.google.android.gsf.apk', '');
+      if not FileExists(ExpandConstant('{tmp}\com.google.android.gms.apk')) then
+      begin
+        DownloadPage.Add('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.google.android.gms-252432034.apk',
+          'com.google.android.gms.apk', '');
+        DownloadsNeeded := DownloadsNeeded + 1;
+      end;
+      if not FileExists(ExpandConstant('{tmp}\com.android.vending.apk')) then
+      begin
+        DownloadPage.Add('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.android.vending-84022634.apk',
+          'com.android.vending.apk', '');
+        DownloadsNeeded := DownloadsNeeded + 1;
+      end;
+      if not FileExists(ExpandConstant('{tmp}\com.google.android.gsf.apk')) then
+      begin
+        DownloadPage.Add('https://github.com/microg/GsfProxy/releases/download/v0.1.0/GsfProxy.apk',
+          'com.google.android.gsf.apk', '');
+        DownloadsNeeded := DownloadsNeeded + 1;
+      end;
     end;
-    if WizardIsTaskSelected('aurora') then
+    if WizardIsTaskSelected('aurora') and not FileExists(ExpandConstant('{tmp}\AuroraStore.apk')) then
+    begin
       DownloadPage.Add('https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk',
         'AuroraStore.apk', '');
+      DownloadsNeeded := DownloadsNeeded + 1;
+    end;
 
-    if DownloadPage.Count > 0 then
+    if DownloadsNeeded > 0 then
     begin
       DownloadPage.Show;
       try
