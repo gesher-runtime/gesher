@@ -245,6 +245,21 @@ static int filesystem_metadata_contracts(void) {
   MetadataCheck(utimensat(fd, "", first, AT_EMPTY_PATH) == 0, "AT_EMPTY_PATH updates ordinary fd");
   MetadataTimes(file, 1, first[1].tv_sec, "empty-path ordinary fd time");
   MetadataCheck(utimensat(childfd, "", second, AT_EMPTY_PATH) == 0, "AT_EMPTY_PATH updates directory fd");
+  {
+    char renamed_directory[4096];
+    MetadataJoin(renamed_directory, sizeof(renamed_directory), root, "renamed-directory");
+    int moved = rename(directory, renamed_directory) == 0;
+    MetadataCheck(moved, "rename directory while its descriptor remains open");
+    if (moved) {
+      MetadataCheck(mkdir(directory, 0700) == 0, "replace original directory pathname");
+      MetadataCheck(utimensat(AT_FDCWD, directory, second, 0) == 0, "timestamp replacement directory by path");
+      MetadataCheck(MetadataFutimens(childfd, first) == 0, "timestamp renamed directory through held descriptor");
+      MetadataTimes(renamed_directory, 1, first[1].tv_sec, "held descriptor updates renamed directory");
+      MetadataTimes(directory, 1, second[1].tv_sec, "held descriptor leaves pathname replacement untouched");
+      MetadataCheck(rmdir(directory) == 0, "remove owned directory pathname replacement");
+      MetadataCheck(rename(renamed_directory, directory) == 0, "restore held directory pathname");
+    }
+  }
   MetadataCheck(utimensat(dirfd, "קובץ.txt", second, 0) == 0, "directory-relative Unicode timestamp");
   errno = 0;
   MetadataCheck(utimensat(fd, "child", first, 0) == -1 && errno == ENOTDIR, "ordinary fd cannot resolve relative child");

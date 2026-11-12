@@ -19,6 +19,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <windows.h>
+#include <winternl.h>
 #include <shellapi.h>
 #include <gesher/font_paths.h>
 #include <gesher/font_environment.h>
@@ -589,10 +590,33 @@ int SetTimes(HANDLE h, const struct timespec times[2]) {
 int SetHandleTimes(HANDLE h, const struct timespec times[2]) {
   if (!ValidTimeNanoseconds(times)) return -1;
   if (GetFileType(h) != FILE_TYPE_DISK) return 0;  // non-disk metadata is not modelled
-  HANDLE writable = ReOpenFile(h, FILE_WRITE_ATTRIBUTES,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                               FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
-  if (writable == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  // ReOpenFile can reject directory objects even with backup semantics. An
+  // empty native name reopens the object identified by h, including a directory
+  // reparse point, without resolving a name that could have been renamed/replaced.
+  using Open = LONG(WINAPI*)(HANDLE*, ACCESS_MASK, POBJECT_ATTRIBUTES,
+                             PIO_STATUS_BLOCK, ULONG, ULONG);
+  using Error = ULONG(WINAPI*)(LONG);
+  HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  if (!ntdll) return errno = EOPNOTSUPP, -1;
+  auto open = reinterpret_cast<Open>(reinterpret_cast<void*>(GetProcAddress(ntdll, "NtOpenFile")));
+  auto error = reinterpret_cast<Error>(reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlNtStatusToDosError")));
+  if (!open || !error) return errno = EOPNOTSUPP, -1;
+  wchar_t empty = L'\0';
+  UNICODE_STRING name{0, sizeof(empty), &empty};
+  OBJECT_ATTRIBUTES attributes{};
+  attributes.Length = sizeof(attributes);
+  attributes.RootDirectory = h;
+  attributes.ObjectName = &name;
+  IO_STATUS_BLOCK io{};
+  HANDLE writable = INVALID_HANDLE_VALUE;
+  LONG status = open(&writable, FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &attributes, &io,
+                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                     FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT |
+                         FILE_SYNCHRONOUS_IO_NONALERT);
+  if (status < 0) {
+    SetLastError(error(status));
+    return gesher::FailWithLastError();
+  }
   const int result = SetTimes(writable, times);
   CloseTimeHandle(writable);
   return result;

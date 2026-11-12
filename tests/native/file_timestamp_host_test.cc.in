@@ -23,6 +23,11 @@ static void Check(bool value, const char* name) {
 namespace host {
 using DWORD = uint32_t;
 using BOOL = int;
+using LONG = int32_t;
+using ULONG = uint32_t;
+using ACCESS_MASK = uint32_t;
+using HMODULE = void*;
+#define WINAPI
 // Android and Win32 both use 64-bit seconds, but Win32 long/nanoseconds is 32-bit.
 struct timespec { int64_t tv_sec; int32_t tv_nsec; };
 struct timeval { int64_t tv_sec; int32_t tv_usec; };
@@ -30,18 +35,33 @@ struct FILETIME { DWORD dwLowDateTime, dwHighDateTime; };
 struct Node { bool directory, link, disk; int target; uint64_t access, modified; };
 struct Handle { int node; bool owned, live; DWORD access; };
 using HANDLE = Handle*;
+struct UNICODE_STRING { uint16_t Length, MaximumLength; wchar_t* Buffer; };
+struct OBJECT_ATTRIBUTES {
+  ULONG Length;
+  HANDLE RootDirectory;
+  UNICODE_STRING* ObjectName;
+  ULONG Attributes;
+  void* SecurityDescriptor;
+  void* SecurityQualityOfService;
+};
+using POBJECT_ATTRIBUTES = OBJECT_ATTRIBUTES*;
+struct IO_STATUS_BLOCK { LONG Status; uintptr_t Information; };
+using PIO_STATUS_BLOCK = IO_STATUS_BLOCK*;
 static constexpr HANDLE INVALID_HANDLE_VALUE = nullptr;
 static constexpr DWORD FILE_WRITE_ATTRIBUTES = 0x100, FILE_SHARE_READ = 1,
     FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4, OPEN_EXISTING = 3,
     FILE_FLAG_BACKUP_SEMANTICS = 0x02000000, FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000,
-    FILE_TYPE_DISK = 1;
+    FILE_TYPE_DISK = 1, SYNCHRONIZE = 0x00100000,
+    FILE_OPEN_FOR_BACKUP_INTENT = 0x4000, FILE_OPEN_REPARSE_POINT = 0x00200000,
+    FILE_SYNCHRONOUS_IO_NONALERT = 0x20;
 static constexpr uint64_t kNow = 134000000001234567ULL;
 static std::array<Node, 6> nodes;
 static std::list<Handle> handles;
 static std::array<HANDLE, 4> descriptors;
 static DWORD last_error, create_flags, reopen_flags, create_access;
-static int opens, reopens, closes, borrowed_closes, writes, resolves, mapped;
+static int opens, reopens, native_reopens, closes, borrowed_closes, writes, resolves, mapped;
 static int fail_create, fail_reopen, fail_write;
+static bool missing_module, missing_open, missing_status_error;
 
 static HANDLE NewHandle(int node, bool owned, DWORD access) {
   handles.push_back({node, owned, true, access}); return &handles.back();
@@ -54,8 +74,9 @@ static void Reset() {
   descriptors = {NewHandle(0, false, 0), NewHandle(3, false, 0),
                  NewHandle(5, false, 0), NewHandle(1, false, 0)};
   last_error = create_flags = reopen_flags = create_access = 0;
-  opens = reopens = closes = borrowed_closes = writes = resolves = mapped = 0;
+  opens = reopens = native_reopens = closes = borrowed_closes = writes = resolves = mapped = 0;
   fail_create = fail_reopen = fail_write = 0;
+  missing_module = missing_open = missing_status_error = false;
   errno = 0;
 }
 static DWORD GetLastError() { return last_error; }
@@ -98,12 +119,42 @@ static HANDLE ReOpenFile(HANDLE handle, DWORD access, DWORD share, DWORD flags) 
   Check(share == (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), "fd shares read/write/delete");
   if (fail_reopen) { last_error = fail_reopen; return INVALID_HANDLE_VALUE; }
   int node = handle->node;
-  if (nodes[node].directory && !(flags & FILE_FLAG_BACKUP_SEMANTICS)) {
+  // Actual Windows runners reject directory ReOpenFile requests even when the
+  // backup flag is present. Preserve that observed boundary in old-source tests.
+  if (nodes[node].directory) {
     last_error = EACCES; return INVALID_HANDLE_VALUE;
   }
   if (nodes[node].link && !(flags & FILE_FLAG_OPEN_REPARSE_POINT)) node = nodes[node].target;
   if (node < 0) { last_error = ENOENT; return INVALID_HANDLE_VALUE; }
   return NewHandle(node, true, access);
+}
+static LONG NtOpenFile(HANDLE* output, ACCESS_MASK access, POBJECT_ATTRIBUTES attributes,
+                        PIO_STATUS_BLOCK io, ULONG share, ULONG options) {
+  ++reopens; ++native_reopens; reopen_flags = options;
+  HANDLE handle = attributes->RootDirectory;
+  Check(handle && handle->live, "native reopen retains the borrowed object");
+  Check(attributes->Length == sizeof(*attributes) && attributes->Attributes == 0 &&
+        attributes->SecurityDescriptor == nullptr && attributes->SecurityQualityOfService == nullptr,
+        "native object attributes are initialized without privilege overrides");
+  Check(attributes->ObjectName && attributes->ObjectName->Length == 0 &&
+        attributes->ObjectName->Buffer && *attributes->ObjectName->Buffer == L'\0',
+        "empty native name reopens the held object without pathname lookup");
+  Check(access == (FILE_WRITE_ATTRIBUTES | SYNCHRONIZE), "native reopen requests timestamp and synchronization rights");
+  Check(share == (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), "native reopen shares read/write/delete");
+  Check(options == (FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT),
+        "native reopen is synchronous and retains directory/reparse identity");
+  if (fail_reopen) return io->Status = -1000 - fail_reopen;
+  *output = NewHandle(handle->node, true, access);
+  return io->Status = 0;
+}
+static ULONG RtlNtStatusToDosError(LONG status) { return -status - 1000; }
+static HMODULE GetModuleHandleW(const wchar_t*) { return missing_module ? nullptr : reinterpret_cast<HMODULE>(1); }
+static void (*GetProcAddress(HMODULE, const char* name))() {
+  if (std::strcmp(name, "NtOpenFile") == 0 && !missing_open)
+    return reinterpret_cast<void(*)()>(NtOpenFile);
+  if (std::strcmp(name, "RtlNtStatusToDosError") == 0 && !missing_status_error)
+    return reinterpret_cast<void(*)()>(RtlNtStatusToDosError);
+  return nullptr;
 }
 static DWORD GetFileType(HANDLE handle) { return nodes[handle->node].disk ? FILE_TYPE_DISK : 3; }
 static uint64_t Ticks(const FILETIME& value) {
@@ -115,7 +166,8 @@ static void GetSystemTimePreciseAsFileTime(FILETIME* value) {
 static BOOL SetFileTime(HANDLE handle, const FILETIME* created, const FILETIME* access, const FILETIME* modified) {
   ++writes;
   Check(created == nullptr, "creation time remains unchanged");
-  Check(handle->access == FILE_WRITE_ATTRIBUTES, "timestamp write owns requested access");
+  Check(handle->access == FILE_WRITE_ATTRIBUTES || handle->access == (FILE_WRITE_ATTRIBUTES | SYNCHRONIZE),
+        "timestamp write owns requested access");
   if (fail_write) { last_error = fail_write; return 0; }
   if (access && Ticks(*access) != 0) nodes[handle->node].access = Ticks(*access);
   if (modified && Ticks(*modified) != 0) nodes[handle->node].modified = Ticks(*modified);
@@ -307,8 +359,9 @@ static void NoFollow() {
   Reset(); timeval tv[2] = {{10, 123456}, {20, 987654}};
   Check(lutimes("link", tv) == 0 && nodes[1].modified == Expected(20, 987654000) && nodes[0].modified == 222,
         "lutimes preserves nofollow and microseconds");
-  Reset(); Check(utimensat(AT_FDCWD, "dirlink", ordinary, AT_SYMLINK_NOFOLLOW) == 0 && nodes[3].modified == 888,
-                 "directory symlink target unchanged");
+  Reset(); Check(utimensat(AT_FDCWD, "dirlink", ordinary, AT_SYMLINK_NOFOLLOW) == 0 &&
+                 nodes[4].modified == Expected(1700000001, 987654321) && nodes[3].modified == 888,
+                 "directory symlink changes its own time and preserves target");
 }
 
 static void Ordering() {
@@ -349,7 +402,8 @@ static void Descriptors() {
   using host::futimens;
   Reset(); Check(futimens(10, ordinary) == 0 && descriptors[0]->live, "read-only fd timestamp preserves borrowed handle");
   Check(borrowed_closes == 0 && reopens == closes, "only reopened fd handle closes");
-  Reset(); Check(futimens(11, ordinary) == 0 && (reopen_flags & FILE_FLAG_BACKUP_SEMANTICS), "directory reopen has backup flag");
+  Reset(); Check(futimens(11, ordinary) == 0 && native_reopens == 1 &&
+                 (reopen_flags & FILE_OPEN_FOR_BACKUP_INTENT), "directory metadata uses native backup reopen");
   Reset(); Check(utimensat(10, "", ordinary, AT_EMPTY_PATH) == 0, "empty path names ordinary fd");
   Check(nodes[0].modified == Expected(1700000001, 987654321), "empty path updates fd object");
   Reset(); Check(utimensat(AT_FDCWD, "", ordinary, AT_EMPTY_PATH) == 0 && nodes[3].modified == Expected(1700000001, 987654321),
@@ -361,11 +415,28 @@ static void Descriptors() {
   Reset(); Check(futimens(12, invalid) == -1 && errno == EINVAL, "non-disk fd still validates nanoseconds");
   Check(futimens(-1, invalid) == -1 && errno == EBADF, "bad fd precedes nanoseconds");
   Reset(); fail_reopen = EACCES;
-  Check(futimens(10, ordinary) == -1 && errno == EACCES && closes == 0 && descriptors[0]->live,
-        "failed reopen retains borrowed fd and errno");
+  Check(futimens(10, ordinary) == -1 && errno == EACCES && GetLastError() == EACCES &&
+        closes == 0 && descriptors[0]->live, "failed reopen maps native status and retains borrowed fd");
+  Reset(); fail_reopen = EACCES;
+  Check(futimens(11, ordinary) == -1 && errno == EACCES && GetLastError() == EACCES &&
+        closes == 0 && writes == 0 && descriptors[1]->live,
+        "denied directory metadata preserves access checks and borrowed handle");
+  Reset(); missing_module = true;
+  Check(futimens(11, ordinary) == -1 && errno == EOPNOTSUPP && reopens == 0 &&
+        closes == 0 && descriptors[1]->live, "missing native module cannot consume directory handle");
+  Reset(); missing_open = true;
+  Check(futimens(11, ordinary) == -1 && errno == EOPNOTSUPP && reopens == 0 && writes == 0,
+        "missing native reopen is explicit and does not write");
+  Reset(); missing_status_error = true;
+  Check(futimens(11, ordinary) == -1 && errno == EOPNOTSUPP && reopens == 0 && writes == 0,
+        "missing native status conversion is explicit and does not write");
   Reset(); fail_write = EIO;
   Check(futimens(10, ordinary) == -1 && errno == EIO && closes == 1 && borrowed_closes == 0 && GetLastError() == EIO,
         "fd write failure retains errno and last error through cleanup");
+  Reset(); fail_write = EIO;
+  Check(futimens(11, ordinary) == -1 && errno == EIO && closes == 1 &&
+        borrowed_closes == 0 && descriptors[1]->live && GetLastError() == EIO,
+        "directory write failure closes only the native temporary handle");
   Reset(); fail_write = EIO;
   Check(utimensat(AT_FDCWD, "file", ordinary, 0) == -1 && errno == EIO && opens + reopens == closes && GetLastError() == EIO,
         "path write failure closes all owned handles and retains diagnosis");

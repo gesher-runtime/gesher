@@ -172,6 +172,17 @@ because of the managed executor's inspection limitation; CI retains its normal
 sanitizer environment. Actual CI status and exact head are reported in the PR,
 separately from these local results.
 
+The first actual Windows 2022/2025 runs exposed a gap in the timestamp adapter:
+`ReOpenFile` rejected directory and directory-symlink metadata handles with
+`EACCES` in the host and both guest ABIs, although the initial Linux boundary
+model accepted them. Timestamp reopening now uses `NtOpenFile` with an empty
+name rooted at the borrowed handle, preserving the held object across rename
+and pathname replacement. The model now reproduces the observed directory
+rejection; the preceding source fails eight checks against it. Independent
+sanitizer validation passes 519 checks, and the real filesystem fixture passes
+133 checks, including nine new held-directory identity checks. The same
+assertions remain required on both Windows images and all three ABI paths.
+
 ## Remaining material work
 
 | Area | Remaining contract / evidence needed |
@@ -198,4 +209,5 @@ owned by #11.
 - [ShortcutService](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/pm/ShortcutService.java), [ShortcutInfo](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/core/java/android/content/pm/ShortcutInfo.java) and [LocationManagerService](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/location/LocationManagerService.java).
 - [Bionic futimens](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/bionic/futimens.cpp), [timeval wrappers](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/bionic/sys_time.cpp) and [Linux v6.6 ordering](https://github.com/torvalds/linux/blob/v6.6/fs/utimes.c).
 - [CreateFileW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew), [ReOpenFile](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-reopenfile), [SetFileTime](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfiletime), [FILETIME](https://learn.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-filetime) and [native rename](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information).
+- [NtOpenFile](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntopenfile), [native file access/options](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile) and [Go's empty-name handle reopening](https://go.googlesource.com/go.git/+/59ea07ba27f521de41bbfab78a6a12f71c2fb17c/src/internal/syscall/windows/at_windows.go).
 - [AOSP FileSource](https://android.googlesource.com/platform/frameworks/av/+/refs/tags/android-16.0.0_r4/media/libdatasource/FileSource.cpp), [MediaHTTPConnection](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/media/java/android/media/MediaHTTPConnection.java), [Surface](https://android.googlesource.com/platform/frameworks/native/+/refs/tags/android-16.0.0_r4/libs/gui/Surface.cpp) and [native window contract](https://android.googlesource.com/platform/frameworks/native/+/refs/tags/android-16.0.0_r4/libs/nativewindow/include/system/window.h).
