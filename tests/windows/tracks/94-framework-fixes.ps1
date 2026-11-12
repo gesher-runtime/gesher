@@ -50,6 +50,14 @@ Check 'services: content observer publication, retirement and callback isolation
   $contentObserverOut
 } @('ContentObserverLifecycleTest all passed:')
 
+$schedulerWorkOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'SchedulerWorkContractTest') 90
+$schedulerWorkCode = $LASTEXITCODE
+Check 'services: queued job completion, stopping work and alarm-clock replacement' {
+  $global:LASTEXITCODE = $schedulerWorkCode
+  $schedulerWorkOut
+} @('SchedulerWorkContractTest all passed:')
+
 $mediaRequestsOut = FixesRun ($dvmFixes + 'gesher.services.MediaStoreRequestContractTest') 90
 $mediaRequestsCode = $LASTEXITCODE
 Check 'framework: MediaStore request forwarding, provider errors and SDK callback descriptors' {

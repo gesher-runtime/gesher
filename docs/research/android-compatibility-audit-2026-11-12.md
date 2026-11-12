@@ -93,7 +93,7 @@ signature with a null/no-op body would not satisfy the latter contracts.
 A second pass traced 23 absent declarations in MediaStore, ConnectivityManager
 and WifiLock against the pinned module sources. It adds **11 exact SDK 36
 declarations** in this PR; the inventory above remains the reproducible baseline,
-not a new measurement of the repaired boot DEX:
+with a separate built-artifact verification below:
 
 | Facade | Added declarations | Contract and boundary |
 | --- | --- | --- |
@@ -117,6 +117,24 @@ unredacted original URI or manufacturing an approval token would not implement
 these contracts. No references to the 23 declarations were found in the
 examined baseline framework/app compile JARs; the demonstrated linkage failures
 are SDK-compiled app calls, not proven internal framework call sites.
+
+### Built-artifact verification of the added APIs
+
+A fresh scan of all five boot JARs produced by CI run
+[43299058201](https://github.com/gesher-runtime/gesher/actions/runs/43299058201)
+at PR head `3225df8b787ecbd0403a3af8e0f7154472f94694`, checkout
+`9f26a29f1d00d9e4eeaf8b23af211ea79a00a074`, found **546** absent members
+on present classes, down from **557**. Comparing all 90,630 declaration rows
+identified exactly the 11 additions listed above, each changing from absent
+to an exact descriptor. Class absence remains **924**, possible flag mismatches
+remain **502**, and declarations on absent classes remain **7,516**.
+
+The [verification record](android-api-verification-2026-11-12.json) records
+the actual artifact IDs, archive digests, individual boot-JAR hashes, unchanged
+parser hashes and all 11 changed descriptors. Both archives came from that
+same run and were checked against GitHub's recorded SHA-256 values. This is
+a measurement of the named built head, before the subsequent scheduler and
+filesystem-space follow-up; the final PR's CI status is tracked separately.
 
 ### Service and JNI inspection queue
 
@@ -144,11 +162,14 @@ identified by `generated_at_utc` on November 12 and the baseline Git SHA.
 | PendingIntent identity and mutation | Resolved MIME type and retained creation flags were missing from identity; fill-in rules were ignored; UPDATE_CURRENT replaced the original final Intent's non-key flags. | Strip only lookup/control flags, preserve MIME identity and fill-in decisions, and update extras/preceding stack entries while retaining the final Intent's original flags. This does not implement multi-activity launch or activity-result senders. |
 | Clipboard listeners | Nested or concurrent notification invoked `RemoteCallbackList.beginBroadcast()` while an earlier broadcast remained active. | Snapshot under synchronization, finish the broadcast, then deliver callbacks outside the lock. Actual framework tests reproduce the old reentrant failure. |
 | Content observer lifecycle | Death could arrive before a registration was published, leaving a dead observer retained. Independent QA also reproduced stale death/RemoteException cleanup removing a replacement registration and Binder equality callbacks running inside the registry lock. | Track retirement before publication and on removal; bind cleanup to the exact registration, use canonical Binder identity, preserve first-seen delivery order, and unlink/deliver outside the registry lock. Existing owner and URI authorization checks remain. Local callback exceptions no longer suppress unrelated listeners. |
+| Queued job completion | `dequeueWork()` returned null for an exhausted queue without retiring the run; stopping runs could still take more work. A serial worker could exit while its slot and service binding remained active. | Poll or retire the empty run atomically with enqueue under the scheduler monitor, inside the existing notification lifecycle fence. Retain in-flight work, stop delivery during stopping, release notification ownership and clean up the binding exactly once. |
+| Alarm-clock replacement | Replacing the next alarm clock with an ordinary alarm using the same PendingIntent changed the public result without sending the next-clock notification. | Recompute next-clock state after every successful set, with notification delivery outside the alarm monitor; unchanged state does not generate an extra broadcast. |
 | pthread TLS keys | Deleting/reusing a key exposed another generation's thread value and could call a new destructor on a stale object. | Track generations in global slots and thread values; validate under the key lock, invoke destructors outside it, retain four-round cleanup behavior and retire exhausted generations without wraparound. |
 | poll/select time budgets | Duration multiplication overflowed, invalid times were accepted, and select discarded the remaining budget. | Validate split seconds/nanoseconds, use monotonic elapsed budgets and repeated finite wait slices, preserve descriptor interests and the remaining select timeval. Signal-mask atomicity remains outside this repair. |
 | getaddrinfo allocation failure | Failure while converting a later address returned a successful partial list. | Transactional conversion: release the prefix and backend list, return Android's memory error and leave the output null. Fault-injection tests cover each allocation and all wrapper routes. |
 | clock_nanosleep | Negative and huge durations reached an incorrect Windows wait or signed overflow, long waits returned after one bounded slice, and unknown clock IDs silently succeeded. | Validate clocks and intervals, retain deadlines in 128-bit arithmetic, repeat finite waits, recheck absolute wall-clock deadlines, preserve errno and report interrupted relative remainders through the existing signal adapter. Unsupported clock backends return an error. |
 | CPU affinity masks | Host `sched_getaffinity` wrote whole words beyond short caller allocations; the guest version silently accepted truncated masks. | Validate nonzero whole-word capacity and null pointers before writing; fill only within the declared size. This does not add per-thread affinity or processor-group topology support. |
+| Filesystem-space queries | `statvfs`/`fstatvfs` passed regular-file paths to a Windows directory-only query, bypassed `/mnt/<drive>` mapping, and treated a required long-path buffer size as a successful read. | Map disk paths, resolve the actual file handle to its volume root, and query that directory. Resize final-path buffers with checked results, retain valid extended UNC prefixes, stop absolute-path fallback at the drive/share root, reject mapper-missing paths, and preserve borrowed FD ownership. Known virtual-filesystem statistics remain an approximation. |
 | sendfile progress | With a null offset, the host consumed a whole input block before knowing whether the output accepted it. A blocked socket returned EAGAIN after consuming 65,536 input bytes; a partial write returned 8,064 while consuming 65,536. | Use positioned input reads and commit the input cursor or explicit offset only for bytes written. Stop zero-progress writes; retain earlier progress on later errors. The compound operation does not serialize concurrent users of a shared descriptor. |
 | freopen mode translation | Host mode parsing discarded exclusive creation before `_wfreopen`, turning `wx` into destructive `wb`. The guest's `e` to `N` translation was then discarded by the host Linux-mode parser. | Pass the original guest mode into the host mapper and preserve exclusive `w`/`w+` creation and no-inherit flags in the final CRT mode. Let the CRT perform the exclusive open atomically; retain existing stream/descriptor retirement transactions. |
 | ELF finalizers | The host close route called ARM64 guest finalizer addresses as host code; recursive close could execute callbacks twice. | Dispatch through the translator for ARM64, claim close once while preserving global symbol visibility until callbacks finish, run the reverse finalizer array before DT_FINI and ignore null/-1 sentinels. Existing native/translated fixtures now check actual destructor order and repeat close. |
@@ -173,6 +194,10 @@ The second pass also uses pinned
 [ContentService](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/content/ContentService.java),
 [clock_nanosleep](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/bionic/clock_nanosleep.cpp)
 and [sched_getaffinity](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/bionic/sched_getaffinity.cpp).
+The continued scheduling review follows pinned
+[JobServiceContext](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/apex/jobscheduler/service/java/com/android/server/job/JobServiceContext.java),
+[JobParameters](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/apex/jobscheduler/framework/java/android/app/job/JobParameters.java)
+and [AlarmManagerService](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/apex/jobscheduler/service/java/com/android/server/alarm/AlarmManagerService.java).
 File/stream references include pinned
 [Android stdio](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/stdio/stdio.cpp),
 [mode parsing](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/upstream-openbsd/lib/libc/stdio/flags.c)
@@ -186,6 +211,12 @@ Windows filename validation follows Microsoft's
 The stdio mapping uses the CRT's documented
 [`freopen` exclusive-create mode](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/freopen-wfreopen)
 and [`N` no-inherit mode](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/fopen-wfopen).
+Filesystem-space mapping follows Microsoft's documented
+[directory requirement](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getdiskfreespaceexw),
+[volume-root selection](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getvolumepathnamew)
+and [final-path buffer contract](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew),
+alongside Android's pinned
+[statvfs implementation](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/bionic/sys_statvfs.cpp).
 
 ## Validation and reproduction
 
@@ -197,11 +228,13 @@ not a release runtime or a replacement for the full CI source build.
 | Maintained check | Local evidence / role |
 | --- | --- |
 | `tools/test_pending_intent_callbacks.py` | 82 PendingIntent, 11 clipboard and 31 content observer assertions against actual production/framework classes, including permission/creator fences and deterministic death/replacement races. The declared host adapter replaces only native boundaries; it is not a Windows Binder/clipboard run. The content case isolates the real observer registry from SyncManager/process construction. |
+| `tools/test_scheduler_work_contracts.py` | 73 assertions over actual JobSchedulerImpl, JobParameters, AlarmManager and production service methods, including in-flight work, stopping, enqueue at drain, binding/slot cleanup, caller identity restoration and next-clock notifications. Package/process metadata is constructed and dispatch is manual; the host identity, clock and Parcel boundaries do not establish Windows transport or timer behavior. The same fixture uses generated Binder/Parcel calls on Windows, and the existing JobNotificationLifecycleTest checks removal of a genuinely posted notification on empty-work completion. |
 | `tools/test_media_store_requests.py` | 208 assertions, separately SDK-compiled call sites, exact provider envelopes, return values, exceptions and release behavior. A controlled IContentProvider is the declared boundary; no substitute approval token is created by production code. |
 | `tools/test_bionic_key_contracts.py` | Production key/destructor functions, cross-thread reuse, callback mutation, cleanup order, host TLS exit model and generation exhaustion. |
 | `tools/test_bionic_wait_contracts.py` | Production public aliases, invalid times, actual ready descriptors, controlled huge durations and multiple finite wait slices. |
 | `tools/test_bionic_dns_contracts.py` | Production ABI conversion and allocation-failure cleanup, with backend/prefix ownership checks. |
 | `tools/test_ordinary_os_contracts.py` | 179 assertions over production clock and host/guest affinity functions under controlled Windows boundaries and ASan/UBSan, plus 40 in an independent Linux C reference. Covers complete/adjusted deadlines, interruption and extreme durations, 1–1,025 processors and short/dynamic mask capacities. The public C fixture is included in both guest libc paths for Windows execution. |
+| `tools/test_statvfs_contracts.py` | 647 ASan/UBSan assertions over extracted production host functions and guest aliases with observed Windows path/handle/volume boundaries; 71 checks in a separate real Linux fixture. Real Windows POSIX probes compare ordinary, Unicode, long and mapped-drive paths with an independent native directory query. Both guest architectures include the shared public four-name fixture. The host model does not prove real UNC permissions or Windows integration. |
 | `tools/test_sendfile_contracts.py` | 168 ASan/UBSan assertions over the extracted production adapter, real local files and nonblocking socket payloads, and controlled partial/error/zero-write boundaries; 33 in an independent Linux reference. Shared public contracts cover cursor/offset and exact payload preservation through the guest entry point. |
 | `tools/test_freopen_mode_contracts.py` | 329 assertions for each extracted host and guest route, including CRT and descriptor-transaction boundary observations, plus 160 in an independent Linux public fixture. Shared guest contracts check existing-file preservation, exclusive creation, binary bytes, stream retirement and close-on-exec modes. The host CRT model does not replace Windows execution. |
 | `tools/test_elf_finalizers.py` | Eleven production-close/global-lookup assertions, including reentry, concurrent claims and an observing translator boundary. Actual ARM64 execution belongs to the existing Windows translated fixture. |
@@ -245,8 +278,8 @@ guest-build difference.
 File QA also corrected the order of `sendfile` range validation: the original
 count and offset range must be checked before applying the per-call transfer
 cap. Exact old-source controls expose the previous cursor loss, zero-write
-loop and signed-offset overflow. The three new public C fixtures also compile
-and run together against Linux, passing 233 checks without helper collisions
+loop and signed-offset overflow. The four new public C fixtures also compile
+and run together against Linux, passing 304 checks without helper collisions
 or cross-fixture state failures.
 The subsequent CI preflight exposed a reference-fixture assumption: Linux also
 bounds `sendfile` by the filesystem's maximum offset, so a representable range
@@ -254,9 +287,9 @@ near `INT64_MAX` need not be a valid real-file request. The public transfer-cap
 check now uses ordinary EOF, while the signed-limit arithmetic check uses an
 explicit injected-EOF boundary. Invalid-range and payload regressions remain.
 The existing TCP supplier preservation check also needed the reviewed affinity
-function and its full-file SHA-256 recorded alongside its previous scoped
-repairs. Every other source byte, supplier input, controller and DAG remains
-checked against the same pinned baseline.
+function, later filesystem-space region and full-file SHA-256 recorded alongside
+its previous scoped repairs. Every other source byte, supplier input, controller
+and DAG remains checked against the same pinned baseline.
 The stdio reference also requires a libc with the relevant upstream fixes.
 Ubuntu 24.04's glibc 2.39 reproduced sticky close-on-exec flags and leaked FILE
 objects after failed reopen, in both the declared CRT adapter and the separate
@@ -297,12 +330,14 @@ Individual boot-JAR hashes and generator hashes are in the inventory.
 
 | Priority / family | Remaining gap | Evidence needed for a complete implementation |
 | --- | --- | --- |
-| Startup/linkage | The baseline's exact 924 absent boot classes and 557 members above; this PR supplies 11 of those declarations. Module/provider availability must be resolved per feature. | A fresh inventory of the final built boot path, actual provider/class-loader placement, exact descriptors, values/exceptions and callback tests. |
+| Startup/linkage | The named built-artifact verification still finds 924 absent boot classes and 546 members after the 11 added declarations. Module/provider availability must be resolved per feature. | Repeat the inventory as the built boot path changes; verify actual provider/class-loader placement, exact descriptors, values/exceptions and callbacks. |
 | Native architecture | 32-bit ARM/x86 APK native libraries remain unsupported; native Windows ARM64 TLS/variadic bridging differs from the translated x64 path and has substantial unfinished implementation. | Separate ABI fixtures, per-thread TLS allocation/publication, variadic calls and real device/runner execution. |
 | Native loader | ELF ranges/dynamic structures need comprehensive bounded validation; namespace/version/FD-offset loading and reference-counted unloading remain incomplete. | A malformed/truncated corpus, dependency/namespace fixtures and real unload/reload ownership tests. This patch changes finalizer dispatch only. |
 | Activity semantics | PendingIntent multi-activity stacks, activity-result senders and feature/token/result identity remain incomplete; canceled-token metadata still uses active-record lookup. | Real ActivityThread/task-stack/result delivery with separate capability and metadata lifetime. |
 | Callback/state services | Inherited Default methods can omit asynchronous completion. Settings state/notifications and observer integration with real processes and sync backends need broader work. | Per-method Android contract review and race-aware public manager/Binder fixtures. |
+| Scheduling policy | Completed-token `completeWork` does not model AOSP's 15-second grace period after an unsuccessful stop; pending-reason history is empty, and alarm idle/quota/suspend policies need broader coverage. The current repair addresses queued-work completion and next-clock notification only. | Track stop reason and callback age, test public late completion and active invalid work IDs, and exercise real timer/suspend and constraint histories. |
 | OS behavior | Atomic ppoll/pselect signal masks, asynchronous signals, process-shared synchronization, cancellation/scheduling, real affinity restrictions, unsupported sleep clocks and some host filesystem semantics remain incomplete. Existing MONOTONIC and BOOTTIME both use QPC, whose suspend-time semantics differ from Linux MONOTONIC. `sendfile` does not serialize shared-cursor users; `freopen(NULL, ...)` mode changes and Android's append-exclusive `ax/a+x` modes remain outside the bounded stdio repair. | Full host/guest call-path tests, suspend/clock changes, cancellation and Windows handle-lifetime checks. The new sleep/mask checks do not establish complete Linux scheduler emulation. |
+| File metadata | Filesystem statistics still use synthetic 4,096-byte units and incomplete inode/flag metadata; virtual filesystems and the separate guest `statfs` volume-metadata workaround need more work. Host `utimensat` ignores `AT_SYMLINK_NOFOLLOW`, and `lutimes` uses the target-following path. | Test real volume geometry/quotas and namespace metadata, and distinct file/link timestamps through both host and guest calls. The filesystem-space repair does not implement symlink timestamp semantics. |
 | Epoll and Unix transport | Edge-trigger/nested/descriptor-alias semantics and SCM_RIGHTS remain limited. Unsupported ancillary sends are rejected; that does not implement descriptor transport. Blocking record locks remain explicitly unsupported. | Real socket/descriptor lifecycle and blocking/interruption tests on Windows. |
 | Native platform families | NDK media surface, Vulkan, DRM, camera2 NDK and other native modules have separate missing exports/backends. | Current NDK symbol inventory plus actual execution; historical missing-symbol totals are not reused as fresh measurements here. |
 | Media lifecycle/hardware | AAudio active-callback policy, disconnection/error callbacks, route/builder policies, concurrent extractor release and unusual device/codecs need further work. | Real ring/payload, unplug, concurrent release and camera/audio device tests. |
