@@ -341,9 +341,15 @@ jobs:
       # classes, so they are built here, next to them.
       - name: Build gesher-app and lifecycle.apk
         env:
+          # Reuse one verified compiler across all app and fixture builders.
+          R8_JAR: ${{ runner.temp }}/gesher-r8.jar
           # Retain this exact build dependency for the framework host contracts.
           APKSIG_JAR: ${{ runner.temp }}/gesher-apksig.jar
         run: |
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$R8_JAR.download" \
+            https://dl.google.com/android/maven2/com/android/tools/r8/9.5.26/r8-9.5.26.jar
+          printf '%s  %s\n' 3502f087388ce95bbf5254555927f09385dc2636873964d0bd53f3eaf4fb49ad "$R8_JAR.download" | sha256sum --check --strict
+          mv "$R8_JAR.download" "$R8_JAR"
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
           tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
