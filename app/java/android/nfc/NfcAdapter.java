@@ -52,22 +52,20 @@ public final class NfcAdapter {
         android.net.Uri[] createBeamUris(NfcEvent event);
     }
 
-    private static final NfcAdapter sAdapter = new NfcAdapter();
-
     private NfcAdapter() {}
 
     /**
-     * Standard Android returns null if NFC is not supported.
-     * Returning a disabled singleton adapter allows callers that chain
-     * methods (e.g. CardEmulation.getInstance(getDefaultAdapter(context))) to proceed
-     * without NullPointerException while still reporting isEnabled() == false.
+     * Gesher does not expose NFC hardware. Android's no-hardware contract is
+     * a null adapter, not a disabled but otherwise usable adapter instance.
+     * Applications use this distinction to decide whether NFC is supported.
      */
     public static NfcAdapter getDefaultAdapter(Context context) {
-        return sAdapter;
+        return null;
     }
 
+    @Deprecated
     public static NfcAdapter getDefaultAdapter() {
-        return sAdapter;
+        return null;
     }
 
     public boolean isEnabled() {
