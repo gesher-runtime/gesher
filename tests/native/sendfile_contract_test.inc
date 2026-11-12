@@ -218,10 +218,12 @@ static void test_sendfile_contracts(void) {
             result == -1 && errno == EINVAL && offset == invalid[i].start &&
             lseek(input, 0, SEEK_CUR) == 17);
     }
-    offset = INT64_MAX - 0x7ffff000;
-    check("sendfile representable exact-cap EOF succeeds",
+    // Linux also limits offsets by each filesystem's s_maxbytes. Use ordinary
+    // EOF here; the signed-limit boundary is covered with a controlled backend.
+    offset = (off_t)length;
+    check("sendfile exact-cap request at ordinary EOF succeeds",
           sendfile_contract_call(output, input, &offset, 0x7ffff000) == 0 &&
-          offset == INT64_MAX - 0x7ffff000);
+          offset == (off_t)length && lseek(input, 0, SEEK_CUR) == 17);
     offset = 0;
     check("sendfile valid signed-maximum count retains available progress",
           lseek(output, 0, SEEK_SET) == 0 &&

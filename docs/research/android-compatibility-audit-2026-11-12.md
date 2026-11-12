@@ -202,7 +202,7 @@ not a release runtime or a replacement for the full CI source build.
 | `tools/test_bionic_wait_contracts.py` | Production public aliases, invalid times, actual ready descriptors, controlled huge durations and multiple finite wait slices. |
 | `tools/test_bionic_dns_contracts.py` | Production ABI conversion and allocation-failure cleanup, with backend/prefix ownership checks. |
 | `tools/test_ordinary_os_contracts.py` | 179 assertions over production clock and host/guest affinity functions under controlled Windows boundaries and ASan/UBSan, plus 40 in an independent Linux C reference. Covers complete/adjusted deadlines, interruption and extreme durations, 1–1,025 processors and short/dynamic mask capacities. The public C fixture is included in both guest libc paths for Windows execution. |
-| `tools/test_sendfile_contracts.py` | 167 ASan/UBSan assertions over the extracted production adapter, real local files and nonblocking socket payloads, and controlled partial/error/zero-write boundaries; 33 in an independent Linux reference. Shared public contracts cover cursor/offset and exact payload preservation through the guest entry point. |
+| `tools/test_sendfile_contracts.py` | 168 ASan/UBSan assertions over the extracted production adapter, real local files and nonblocking socket payloads, and controlled partial/error/zero-write boundaries; 33 in an independent Linux reference. Shared public contracts cover cursor/offset and exact payload preservation through the guest entry point. |
 | `tools/test_freopen_mode_contracts.py` | 329 assertions for each extracted host and guest route, including CRT and descriptor-transaction boundary observations, plus 160 in an independent Linux public fixture. Shared guest contracts check existing-file preservation, exclusive creation, binary bytes, stream retirement and close-on-exec modes. The host CRT model does not replace Windows execution. |
 | `tools/test_elf_finalizers.py` | Eleven production-close/global-lookup assertions, including reentry, concurrent claims and an observing translator boundary. Actual ARM64 execution belongs to the existing Windows translated fixture. |
 | `tools/test_media_api_contracts.py` | 266 production-source assertions: AAudio 37, extractor ownership 17, YUV admission 32 and raw JPEG row/padding values 180, under ASan/UBSan. The observer does not substitute for real codecs. |
@@ -248,6 +248,15 @@ cap. Exact old-source controls expose the previous cursor loss, zero-write
 loop and signed-offset overflow. The three new public C fixtures also compile
 and run together against Linux, passing 233 checks without helper collisions
 or cross-fixture state failures.
+The subsequent CI preflight exposed a reference-fixture assumption: Linux also
+bounds `sendfile` by the filesystem's maximum offset, so a representable range
+near `INT64_MAX` need not be a valid real-file request. The public transfer-cap
+check now uses ordinary EOF, while the signed-limit arithmetic check uses an
+explicit injected-EOF boundary. Invalid-range and payload regressions remain.
+The existing TCP supplier preservation check also needed the reviewed affinity
+function and its full-file SHA-256 recorded alongside its previous scoped
+repairs. Every other source byte, supplier input, controller and DAG remains
+checked against the same pinned baseline.
 
 To reproduce the static inventory, run the following commands **from a checkout
 of baseline `2bc86c0ae067b43a74bf76c5010a52b4564e81e5`**, with the collected

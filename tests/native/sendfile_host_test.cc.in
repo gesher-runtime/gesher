@@ -18,26 +18,29 @@ static unsigned read_calls, write_calls, commit_calls;
 static unsigned read_error_call, commit_error_call, zero_from_call;
 static int read_error = EIO, commit_error = EBADF, query_error;
 static std::vector<int> write_plan;
-static bool synthetic;
+static bool synthetic, synthetic_eof;
 static off_t synthetic_cursor;
 static size_t synthetic_written;
 static void reset_boundaries() {
   read_calls = write_calls = commit_calls = 0;
   read_error_call = commit_error_call = zero_from_call = 0;
   read_error = EIO; commit_error = EBADF; query_error = 0;
-  write_plan.clear(); synthetic = false; synthetic_cursor = 0; synthetic_written = 0;
+  write_plan.clear(); synthetic = synthetic_eof = false; synthetic_cursor = 0; synthetic_written = 0;
 }
 [[maybe_unused]] static int gesher_errno_from_crt(int error) {
   return error == 132 ? EOVERFLOW : error;
 }
 static ssize_t boundary_pread(int fd, void* buffer, size_t count, off_t offset) {
   if (++read_calls == read_error_call) return errno = read_error, -1;
-  if (synthetic) return static_cast<ssize_t>(count);
+  if (synthetic) return synthetic_eof ? 0 : static_cast<ssize_t>(count);
   return ::pread(fd, buffer, count, offset);
 }
 [[maybe_unused]] static ssize_t boundary_read(int fd, void* buffer, unsigned count) {
   if (++read_calls == read_error_call) return errno = read_error, -1;
-  if (synthetic) { synthetic_cursor += count; return count; }
+  if (synthetic) {
+    if (synthetic_eof) return 0;
+    synthetic_cursor += count; return count;
+  }
   return ::read(fd, buffer, count);
 }
 static int boundary_write(int fd, const void* buffer, unsigned count) {
@@ -295,6 +298,12 @@ static void large_tests() {
   check("valid large count is capped at Linux MAX_RW_COUNT",
         result == 0x7ffff000 && synthetic_written == 0x7ffff000 &&
         synthetic_cursor == high + 0x7ffff000);
+  reset_boundaries(); synthetic = synthetic_eof = true; synthetic_cursor = 27;
+  offset = INT64_MAX - 0x7ffff000;
+  result = guest_sendfile(1, 2, &offset, 0x7ffff000);
+  check("exact signed-limit range accepts EOF without moving either source position",
+        result == 0 && offset == INT64_MAX - 0x7ffff000 && synthetic_cursor == 27 &&
+        read_calls == 1 && write_calls == 0 && commit_calls == 0);
   reset_boundaries(); synthetic = true; offset = INT64_MAX;
   errno = 0;
   result = guest_sendfile(1, 2, &offset, 1);

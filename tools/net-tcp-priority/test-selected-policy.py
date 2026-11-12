@@ -15,10 +15,12 @@ FD_SHA256='7e2fed5465160602f7f01f29c5d93c4d3d04ec6c9139eaf5e54e205317305d4d'
 # published checkpoint independently; all other socket bytes and supplier
 # inputs remain exact. Use the published commit, not local recovery history.
 SOCKET_BASE='d5ad9aa318583ae3c3cca2d062ee964680e99e32'
-# The reviewed file repairs change only posix_fallocate, its limits header and
-# memfd_create. Pin the complete reviewed file, then independently retain every
-# byte outside those exact functions. TCP/fcntl/vector-I/O suppliers stay at BASE.
-SYSTEM_SHA256='e1368c02fcec5f3626722ef57b1f917b88d9c481cb29fbd8e20e4a3f6b6f3b5d'
+# The reviewed file repairs change only sched_getaffinity capacity validation,
+# posix_fallocate, its limits header and memfd_create. Pin the complete reviewed
+# file, then independently retain every byte outside those exact functions.
+# TCP/fcntl/vector-I/O suppliers stay at BASE. Affinity behavior is covered by
+# tools/test_ordinary_os_contracts.py and both public Windows ELF fixtures.
+SYSTEM_SHA256='68ef35304e9e29484098e51243e28017972c029a9e7947e559cea082cb02f43f'
 # Only the successful protocol fixture's startup budget changed. Pin its exact
 # reviewed bytes separately; controller, worker and execution gates retain BASE.
 CONTROL_BASE='c62c0ea4f88447c64608851ecf661f630e259442'
@@ -39,7 +41,8 @@ def check():
   elif path=='compat/posix/src/system.cc':
    expected=expected.replace(b'#include <string>\n',b'#include <string>\n#include <limits>\n',1)
    actual_cursor=expected_cursor=0
-   for start,end in [(b'int posix_fallocate(',b'\nint fallocate('),
+   for start,end in [(b'int sched_getaffinity(',b'\nint unshare('),
+                     (b'int posix_fallocate(',b'\nint fallocate('),
                      (b'int memfd_create(',b'\n// --- strsignal,')]:
     assert expected.count(start)==actual.count(start)==1 and expected.count(end)==actual.count(end)==1,path
     actual_start=actual.index(start);expected_start=expected.index(start)
@@ -59,5 +62,5 @@ def check():
  assert pin['ordered_patch_sha256']=={'minimum-detached-retirement.patch':'ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad','minimum-noattach-join.patch':'c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96'}
  for name,digest in pin['ordered_patch_sha256'].items():assert hashlib.sha256((ROOT/'tools/host-pthread-authority'/name).read_bytes()).hexdigest()==digest
  for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
- print('TCP_SELECTED_POLICY_PASS original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_only reviewed_sendmsg_control reviewed_file_allocation_and_memfd_only canonical_Recv originalworkflow originalfixtures controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
+ print('TCP_SELECTED_POLICY_PASS original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_only reviewed_sendmsg_control reviewed_affinity_file_allocation_and_memfd_only canonical_Recv originalworkflow originalfixtures controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
 if __name__=='__main__':check()
