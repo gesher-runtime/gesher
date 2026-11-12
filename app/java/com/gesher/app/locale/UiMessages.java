@@ -99,6 +99,8 @@ public final class UiMessages {
             case "setup_microg": value = lang.equals("he") ? "\u05d4\u05ea\u05e7\u05e0\u05ea \u05ea\u05de\u05d9\u05db\u05d4 \u05d1\u05e9\u05d9\u05e8\u05d5\u05ea\u05d9 Google Play (microG)" : "Install Google Play services support (microG)"; break;
             case "setup_aurora": value = lang.equals("he") ? "\u05d4\u05ea\u05e7\u05e0\u05ea \u05d7\u05e0\u05d5\u05ea \u05d0\u05e4\u05dc\u05d9\u05e7\u05e6\u05d9\u05d5\u05ea (Aurora Store)" : "Install App Store (Aurora Store)"; break;
             case "setup_control_panel": value = lang.equals("he") ? "\u05dc\u05d5\u05d7 \u05d4\u05d1\u05e7\u05e8\u05d4 \u05e9\u05dc \u05d2\u05e9\u05e8" : "Gesher Control Center"; break;
+            case "setup_installing_webview2": value = lang.equals("he") ? "\u05de\u05ea\u05e7\u05d9\u05df \u05d0\u05ea Microsoft Edge WebView2..." : "Installing Microsoft Edge WebView2..."; break;
+            case "setup_configuring_microg": value = lang.equals("he") ? "\u05de\u05d2\u05d3\u05d9\u05e8 \u05e9\u05d9\u05e8\u05d5\u05ea\u05d9 Google Play \u05d5\u05d9\u05d9\u05e9\u05d5\u05de\u05d9\u05dd..." : "Setting up Google Play services and applications..."; break;
             case "cp_title": value = lang.equals("he") ? "\u05dc\u05d5\u05d7 \u05d4\u05d1\u05e7\u05e8\u05d4 \u05e9\u05dc \u05d2\u05e9\u05e8" : "Gesher Control Center"; break;
             case "cp_subtitle": value = lang.equals("he") ? "\u05e0\u05d9\u05d4\u05d5\u05dc \u05d9\u05d9\u05e9\u05d5\u05de\u05d9\u05dd \u05d5\u05e9\u05d9\u05e8\u05d5\u05ea\u05d9 Google Play" : "Applications and Google Play Services Management"; break;
             case "cp_device_status": value = lang.equals("he") ? "\u05de\u05e2\u05e8\u05db\u05ea \u05d2\u05e9\u05e8" : "Gesher Device"; break;

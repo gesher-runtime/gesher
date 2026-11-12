@@ -263,20 +263,83 @@ begin
     Result := (Version <> '') and (Version <> '0.0.0.0');
 end;
 
+var
+  DownloadPage: TDownloadWizardPage;
+
+function OnDownloadProgress(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean;
+begin
+  Result := True;
+end;
+
+procedure InitializeWizard();
+begin
+  DownloadPage := CreateDownloadPage(SetupMessage(msgWizardPreparing), SetupMessage(msgPreparingDesc), @OnDownloadProgress);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if CurPageID = wpReady then
+  begin
+    DownloadPage.Clear;
+    if WizardIsTaskSelected('webview2') then
+      DownloadPage.Add('https://go.microsoft.com/fwlink/p/?LinkId=2124703',
+        'MicrosoftEdgeWebview2Setup.exe', '');
+    if WizardIsTaskSelected('microg') then
+    begin
+      DownloadPage.Add('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.google.android.gms-252432034.apk',
+        'com.google.android.gms.apk', '');
+      DownloadPage.Add('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.android.vending-84022634.apk',
+        'com.android.vending.apk', '');
+      DownloadPage.Add('https://github.com/microg/GsfProxy/releases/download/v0.1.0/GsfProxy.apk',
+        'com.google.android.gsf.apk', '');
+    end;
+    if WizardIsTaskSelected('aurora') then
+      DownloadPage.Add('https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk',
+        'AuroraStore.apk', '');
+
+    if DownloadPage.Count > 0 then
+    begin
+      DownloadPage.Show;
+      try
+        try
+          DownloadPage.Download;
+          Result := True;
+        except
+          if DownloadPage.AbortedByUser then
+            Log('Download cancelled by user.')
+          else
+            SuppressibleMsgBox(AddPeriod(GetExceptionMessage), mbCriticalError, MB_OK, IDOK);
+          Result := False;
+        end;
+      finally
+        DownloadPage.Hide;
+      end;
+    end;
+  end;
+end;
+
 // The WebView2 task: Microsoft's bootstrapper installs the Evergreen runtime.
 procedure InstallWebView2();
 var
   Code: Integer;
+  InstallerPath: String;
 begin
-  try
-    DownloadTemporaryFile('https://go.microsoft.com/fwlink/p/?LinkId=2124703',
-      'MicrosoftEdgeWebview2Setup.exe', '', nil);
-    if not Exec(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe'), '/silent /install', '',
-                SW_HIDE, ewWaitUntilTerminated, Code) then
-      Log('WebView2 bootstrapper did not start');
-  except
-    Log('WebView2 Runtime download failed: ' + GetExceptionMessage);
+  InstallerPath := ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe');
+  if not FileExists(InstallerPath) then
+  begin
+    try
+      DownloadTemporaryFile('https://go.microsoft.com/fwlink/p/?LinkId=2124703',
+        'MicrosoftEdgeWebview2Setup.exe', '', nil);
+    except
+      Log('WebView2 Runtime download failed: ' + GetExceptionMessage);
+      Exit;
+    end;
   end;
+  WizardForm.StatusLabel.Caption := CustomMessage('setup_installing_webview2');
+  if not Exec(InstallerPath, '/silent /install', '',
+              SW_HIDE, ewWaitUntilTerminated, Code) then
+    Log('WebView2 bootstrapper did not start');
 end;
 
 // The icon handler an earlier version installed, which Explorer (and any program
@@ -336,16 +399,32 @@ end;
 procedure InstallMicrogAndStore();
 var
   Code: Integer;
-  Params: String;
+  Params, TmpDir: String;
 begin
+  TmpDir := ExpandConstant('{tmp}');
   Params := '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
             ExpandConstant('{app}\gesher-app-microg.ps1') + '"';
   if WizardIsTaskSelected('microg') then
-    Params := Params + ' -AutoDownload'
+  begin
+    if FileExists(TmpDir + '\com.google.android.gms.apk') then
+      Params := Params + ' -GmsCoreApk "' + TmpDir + '\com.google.android.gms.apk"' +
+                         ' -CompanionApk "' + TmpDir + '\com.android.vending.apk"' +
+                         ' -GsfProxyApk "' + TmpDir + '\com.google.android.gsf.apk"'
+    else
+      Params := Params + ' -AutoDownload';
+  end
   else
     Params := Params + ' -StoreOnly';
+
   if WizardIsTaskSelected('aurora') then
-    Params := Params + ' -InstallStore';
+  begin
+    if FileExists(TmpDir + '\AuroraStore.apk') then
+      Params := Params + ' -InstallStore -StoreApk "' + TmpDir + '\AuroraStore.apk"'
+    else
+      Params := Params + ' -InstallStore';
+  end;
+
+  WizardForm.StatusLabel.Caption := CustomMessage('setup_configuring_microg');
   Exec('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
