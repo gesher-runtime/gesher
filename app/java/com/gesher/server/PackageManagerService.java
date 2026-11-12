@@ -148,10 +148,17 @@ public final class PackageManagerService extends IPackageManager.Default {
     void packageInstalled(ApkPackage pkg, boolean replacing, Object publicationLock) {
         final String name = pkg.packageName;
         final int uid = pkg.uid();
+        final String codePath = new java.io.File(pkg.apkPath).getParentFile().getPath();
         mPackageEventExecutor.execute(() -> {
             // A session also holds the installer monitor around its final consent/code
             // checks. Do not call application Binders until that outer lock is released.
             synchronized (publicationLock) { }
+            try {
+                com.gesher.app.shell.AppShell.registerQuietly(name, codePath, replacing);
+                com.gesher.app.shell.AppShell.registerUrlProtocolsQuietly(name, codePath, replacing);
+            } catch (Throwable t) {
+                // Ignore shell registration failures
+            }
             Intent added = new Intent(Intent.ACTION_PACKAGE_ADDED, Uri.fromParts("package", name, null))
                     .putExtra(Intent.EXTRA_UID, uid)
                     .putExtra(Intent.EXTRA_REPLACING, replacing);

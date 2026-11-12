@@ -177,6 +177,7 @@ public final class Launcher {
                 log(gesher().status());
                 return 0;
             }
+            case "sync-shortcuts": return syncShortcuts();
             case "shutdown": return shutdown();
             case "toast-activated": return toastActivated();
             case "apk-icon": {
@@ -442,6 +443,27 @@ public final class Launcher {
         return 0;
     }
 
+    private static int syncShortcuts() throws Exception {
+        ensureDevice(true);
+        gesher();
+        IPackageManager pm = IPackageManager.Stub.asInterface(
+                ServiceManager.getService("package"));
+        @SuppressWarnings("unchecked")
+        List<PackageInfo> packages = pm.getInstalledPackages(0, 0).getList();
+        int count = 0;
+        for (PackageInfo p : packages) {
+            if (p.applicationInfo != null && p.applicationInfo.sourceDir != null) {
+                String codePath = new File(p.applicationInfo.sourceDir).getParent();
+                String targetPath = codePath != null ? codePath : p.applicationInfo.sourceDir;
+                AppShell.registerQuietly(p.packageName, targetPath, false);
+                AppShell.registerUrlProtocolsQuietly(p.packageName, targetPath, false);
+                count++;
+            }
+        }
+        log("synced " + count + " shortcuts");
+        return 0;
+    }
+
     private static int count(Object[] a) {
         return a == null ? 0 : a.length;
     }
@@ -538,9 +560,16 @@ public final class Launcher {
             pkg = apk;
             IPackageManager pm = IPackageManager.Stub.asInterface(
                     ServiceManager.getService("package"));
-            if (pm.getPackageInfo(pkg, 0L, 0) == null) {
+            PackageInfo pinfo = pm.getPackageInfo(pkg, 0L, 0);
+            if (pinfo == null) {
                 log(text("not_installed_hint", pkg));
                 return 1;
+            }
+            if (pinfo.applicationInfo != null && pinfo.applicationInfo.sourceDir != null) {
+                String codePath = new File(pinfo.applicationInfo.sourceDir).getParent();
+                String targetPath = codePath != null ? codePath : pinfo.applicationInfo.sourceDir;
+                AppShell.registerQuietly(pkg, targetPath, false);
+                AppShell.registerUrlProtocolsQuietly(pkg, targetPath, false);
             }
             log(text("launching", pkg));
         }
