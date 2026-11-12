@@ -1,0 +1,110 @@
+// The mode parsers and reopen bodies below come from the production files.
+// Native Windows path/CRT/record-lock boundaries are explicitly adapted here.
+// The CRT adapter translates only N -> e before calling real Linux freopen;
+// it does not infer exclusive creation or inheritance from the requested mode.
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <fcntl.h>
+#include <unistd.h>
+
+static int failures;
+static int checks;
+static void check(const char* name, int ok) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL: %s\n", name); }
+}
+
+static int stream_depth;
+static int transactions;
+static int completions;
+static int crt_calls;
+struct StreamLock {
+  explicit StreamLock(FILE*) { ++stream_depth; }
+  ~StreamLock() { --stream_depth; }
+};
+enum class PathKind { kFile, kNull, kMissing };
+namespace gesher {
+PathKind MapPath(const char* path, std::wstring* out) {
+  *out = std::wstring(path, path + std::strlen(path));
+  return PathKind::kFile;
+}
+namespace record_locks {
+class ClosingDescriptor {
+ public:
+  explicit ClosingDescriptor(int) {
+    check("freopen descriptor transaction starts inside its stream lock", stream_depth == 1);
+    ++transactions;
+  }
+  int Error() const { return 0; }
+  int Finish(bool) {
+    check("freopen descriptor transaction completes once inside its stream lock",
+          !finished_ && stream_depth == 1);
+    finished_ = true;
+    ++completions;
+    return 0;
+  }
+  ~ClosingDescriptor() { check("freopen completes descriptor transaction", finished_); }
+ private:
+  bool finished_ = false;
+};
+}  // namespace record_locks
+}  // namespace gesher
+
+static int _fileno(FILE* stream) { return fileno(stream); }
+static int _fclose_nolock(FILE* stream) { return std::fclose(stream); }
+static int gesher_errno_from_crt(int error) { return error; }
+static bool HasNonDirectoryParent(const std::wstring&) { return false; }
+static FILE* _wfreopen(const wchar_t* path, const wchar_t* mode, FILE* stream) {
+  ++crt_calls;
+  check("freopen keeps the CRT reopen inside its stream transaction", stream_depth == 1);
+  std::wstring wide_path(path), wide_mode(mode);
+  std::string narrow_path(wide_path.begin(), wide_path.end());
+  std::string linux_mode(wide_mode.begin(), wide_mode.end());
+  for (char& option : linux_mode) if (option == 'N') option = 'e';
+  return std::freopen(narrow_path.c_str(), linux_mode.c_str(), stream);
+}
+
+namespace host {
+@HOST_PARSE_MODE@
+@HOST_FREOPEN@
+}  // namespace host
+
+namespace guest {
+#define BIONIC_SYSV
+constexpr int kEINVAL = EINVAL;
+static FILE* F(void* stream) { return static_cast<FILE*>(stream); }
+static FILE* HostFreopen(const char* path, const char* mode, FILE* stream) {
+  return host::freopen(path, mode, stream);
+}
+@GUEST_CRT_MODE@
+@GUEST_FREOPEN@
+}  // namespace guest
+
+static FILE* GuestReopen(const char* path, const char* mode, FILE* stream) {
+  return guest::Freopen(path, mode, stream);
+}
+static FILE* (*reopen_call)(const char*, const char*, FILE*);
+static FILE* (*reopen64_call)(const char*, const char*, FILE*);
+#define FREOPEN_CONTRACT_CALL reopen_call
+#define FREOPEN64_CONTRACT_CALL reopen64_call
+#include "freopen_mode_contract_test.inc"
+
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  if (std::strcmp(argv[1], "host") == 0) {
+    reopen_call = host::freopen;
+    reopen64_call = host::freopen64;
+  } else if (std::strcmp(argv[1], "guest") == 0) {
+    reopen_call = reopen64_call = GuestReopen;
+  } else {
+    return 2;
+  }
+  test_freopen_mode_contracts();
+  check("freopen leaves no stream lock or descriptor transaction active",
+        stream_depth == 0 && transactions == completions && completions == crt_calls);
+  std::printf("freopen %s: %d checks, %d failures\n", argv[1], checks, failures);
+  return failures ? 1 : 0;
+}

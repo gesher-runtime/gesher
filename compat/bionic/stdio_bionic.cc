@@ -419,7 +419,9 @@ FILE* BIONIC_SYSV Fdopen(int fd, const char* mode) {
 FILE* BIONIC_SYSV Freopen(const char* path, const char* mode, void* f) {
   std::string m = CrtMode(mode);
   if (m.empty()) return errno = kEINVAL, nullptr;
-  return std::freopen(path, m.c_str(), F(f));
+  // gesher-base's freopen consumes Linux modes and maps them for the CRT.
+  // Passing CrtMode's 'N' would lose Android's 'e' before that mapping.
+  return std::freopen(path, mode, F(f));
 }
 int BIONIC_SYSV Fgetpos(void* f, int64_t* pos) {
   int64_t p = _ftelli64(F(f));
