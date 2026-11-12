@@ -460,7 +460,7 @@ public final class Launcher {
                 count++;
             }
         }
-        log("synced " + count + " shortcuts");
+        log("processed " + count + " packages for shortcut synchronization");
         return 0;
     }
 

@@ -99,7 +99,8 @@ public final class CompatChangesGen {
                 + "; " + sSourceChangeIds + " in sources (" + sUnresolved + " unresolved), "
                 + VERSION_CODES.size() + " version codes");
         if (changes.isEmpty()) {
-            System.err.println("CompatChangesGen: no @ChangeId field found in " + classes + " (ignoring)");
+            System.err.println("CompatChangesGen: no @ChangeId field found in " + classes);
+            System.exit(1);
         }
     }
 

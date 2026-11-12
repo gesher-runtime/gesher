@@ -88,11 +88,13 @@ function Install-AuroraStore {
         Write-Host "Installing Aurora Store..."
         & (Join-Path $RuntimeDir "gesher-app.ps1") install "$storeTarget"
     }
-if ($StoreOnly -or ($InstallStore -and -not $AutoDownload -and -not $GmsCoreApk)) { Install-AuroraStore; return }
 if ($Disable -and $Remove) { throw (Get-GesherText 'microg_choose') }
-if (($Disable -or $Remove) -and ($GmsCoreApk -or $CompanionApk -or $GsfProxyApk)) {
+if (($Disable -or $Remove) -and ($GmsCoreApk -or $CompanionApk -or $GsfProxyApk -or
+        $StoreApk -or $AutoDownload -or $InstallStore -or $StoreOnly)) {
     throw (Get-GesherText 'microg_no_files')
 }
+if ($StoreOnly -or ($InstallStore -and -not $AutoDownload -and -not $GmsCoreApk -and
+        -not $CompanionApk -and -not $GsfProxyApk)) { Install-AuroraStore; return }
 if ($Disable) {
     if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker }
     Write-Host (Get-GesherText 'microg_disabled')

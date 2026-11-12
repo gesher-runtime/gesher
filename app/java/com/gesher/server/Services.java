@@ -261,7 +261,7 @@ public final class Services {
                 new DeviceServices.SensitiveContentProtectionService()).asBinder());
         services.put(Context.DOMAIN_VERIFICATION_SERVICE, StandIn.of(
                 android.content.pm.verify.domain.IDomainVerificationManager.class,
-                new DeviceServices.DomainVerificationService()).asBinder());
+                new DeviceServices.DomainVerificationService(pm)).asBinder());
         // Activity.requestPermissions asks it each permission's request state; without it
         // getSystemService(PermissionManager.class) is null and the request throws
         // NullPointerException (WhatsApp's phone number screen).

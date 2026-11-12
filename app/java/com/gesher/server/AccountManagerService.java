@@ -427,19 +427,18 @@ public final class AccountManagerService extends IAccountManager.Default {
     private int visibility(Caller c, Entry e) {
         if (e == null) return AccountManager.VISIBILITY_NOT_VISIBLE;
         if (owns(c, e)) return AccountManager.VISIBILITY_VISIBLE;
-        if (c != null && e.visibility.containsKey(c.key())) {
-            return e.visibility.get(c.key());
-        }
-        // Do not fall back to an unscoped package-name grant. Such an entry
-        // could outlive an uninstall and expose accounts to different code
-        // installed later under the same package name.
-        if (e.visibility.containsKey(AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE)) {
-            return e.visibility.get(AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE);
-        }
-        if (e.visibility.containsKey(AccountManager.PACKAGE_NAME_KEY_LEGACY_NOT_VISIBLE)) {
-            return e.visibility.get(AccountManager.PACKAGE_NAME_KEY_LEGACY_NOT_VISIBLE);
-        }
-        return AccountManager.VISIBILITY_NOT_VISIBLE;
+        // Legacy keys describe policy categories, not grants to every client. Until
+        // Android's permission/target-SDK eligibility policy is implemented here,
+        // retain the existing explicit, code-identity-scoped visibility policy.
+        return e.visibility.getOrDefault(c.key(), AccountManager.VISIBILITY_NOT_VISIBLE);
+    }
+
+    private static int legacyVisibility(Entry e, String key) {
+        int value = e.visibility.getOrDefault(key, AccountManager.VISIBILITY_UNDEFINED);
+        if (value != AccountManager.VISIBILITY_UNDEFINED) return value;
+        return AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE.equals(key)
+                ? AccountManager.VISIBILITY_USER_MANAGED_VISIBLE
+                : AccountManager.VISIBILITY_USER_MANAGED_NOT_VISIBLE;
     }
 
     private boolean visible(Caller c, Account account, Entry e) {
@@ -478,9 +477,6 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private synchronized Caller targetCaller(String name) {
-        if (isLegacyKey(name)) {
-            return captureCaller(name, name, false, -1, -1);
-        }
         ApkPackage target = mPm.get(name);
         return captureCaller(name, packageIdentity(name), false, target == null ? -1 : target.uid(), -1);
     }
@@ -538,6 +534,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         Caller c = caller(null); Entry e = mAccounts.get(account);
         if (e == null) return AccountManager.VISIBILITY_NOT_VISIBLE;
         if (!owns(c, e) && !packageName.equals(c.name)) throw new SecurityException("Account client mismatch");
+        if (isLegacyKey(packageName)) return legacyVisibility(e, packageName);
         return visibility(targetCaller(packageName), e);
     }
 
@@ -548,8 +545,8 @@ public final class AccountManagerService extends IAccountManager.Default {
         result.put(e.owner, AccountManager.VISIBILITY_VISIBLE);
         for (Map.Entry<String, Integer> item : e.visibility.entrySet()) {
             int split = item.getKey().indexOf('\u0000');
-            String name = split > 0 ? item.getKey().substring(0, split) : item.getKey();
-            if (!isLegacyKey(name)) result.put(name, item.getValue());
+            if (split > 0) result.put(item.getKey().substring(0, split), item.getValue());
+            else if (isLegacyKey(item.getKey())) result.put(item.getKey(), item.getValue());
         }
         return result;
     }
@@ -567,6 +564,13 @@ public final class AccountManagerService extends IAccountManager.Default {
         Entry e = mAccounts.get(account); requireOwner(caller(null), e);
         validateVisibility(value);
         String key = targetKey(packageName);
+        if (isLegacyKey(packageName)) {
+            beginMutation();
+            e.visibility.put(key, value);
+            save();
+            invalidateAccountListCache();
+            return true;
+        }
         Caller target = targetCaller(packageName);
         Integer previous = e.visibility.get(key);
         int previousEffective = visibility(target, e);
