@@ -151,9 +151,9 @@ void QueueSurface::Publish() {
         d[x] = opaque ? (p | 0xff000000u) : p;
       }
     }
-    f->timestamp_ns = timestamp_ns_ != 0 ? timestamp_ns_ : systemTime(SYSTEM_TIME_MONOTONIC);
+    f->timestamp_ns = timestamp_ns_ == NATIVE_WINDOW_TIMESTAMP_AUTO
+                          ? systemTime(SYSTEM_TIME_MONOTONIC) : timestamp_ns_;
     f->number = ++frames_;
-    timestamp_ns_ = 0;
     latest_ = std::move(f);
     listener = listener_;
   }

@@ -20,6 +20,7 @@
 #include <utils/Timers.h>  // nsecs_t, which hostgraphics' Surface.h uses unincluded
 #include <gui/Surface.h>
 #include <ui/ANativeObjectBase.h>
+#include <system/window.h>
 
 namespace gesher::media {
 
@@ -78,7 +79,7 @@ class QueueSurface : public android::Surface {
   int format_ = 1;  // PIXEL_FORMAT_RGBA_8888
   int user_width_ = 0, user_height_ = 0;
   int default_width_ = 1, default_height_ = 1;
-  int64_t timestamp_ns_ = 0;
+  int64_t timestamp_ns_ = NATIVE_WINDOW_TIMESTAMP_AUTO;
   bool locked_ = false;
   bool abandoned_ = false;
   std::shared_ptr<const SurfaceFrame> latest_;
