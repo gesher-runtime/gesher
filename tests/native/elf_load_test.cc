@@ -162,6 +162,18 @@ int main(int argc, char** argv) {
   // A missing symbol returns null, not a crash.
   Check("missing symbol returns null", elf::Lookup(lib, "gesher_nonexistent") == nullptr);
 
+  auto observe_fini = reinterpret_cast<void (SYSV*)(int*)>(elf::Lookup(lib, "gesher_observe_fini"));
+  Check("finalizer observation export found", observe_fini != nullptr);
+  if (observe_fini) {
+    int fini_order = -1;
+    observe_fini(&fini_order);
+    Check("finalizers have not run before Close", fini_order == 0);
+    elf::Close(lib);
+    Check("finalizers run in reverse order", fini_order == 21);
+    elf::Close(lib);
+    Check("repeated Close does not repeat finalizers", fini_order == 21);
+  }
+
   if (failures == 0) {
     std::printf("\nelf_load_test all passed\n");
   } else {

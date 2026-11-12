@@ -274,6 +274,8 @@ int NiFlagsIn(int f) {
   return out;
 }
 
+void BIONIC_SYSV Freeaddrinfo(BionicAddrinfo* a);
+
 int GetaddrinfoOnInterface(const char* node, const char* service, const BionicAddrinfo* hints,
                           BionicAddrinfo** res, uint32_t index) {
   if (res == nullptr) return EaiOut(EAI_FAIL);
@@ -293,10 +295,17 @@ int GetaddrinfoOnInterface(const char* node, const char* service, const BionicAd
   BionicAddrinfo* head = nullptr;
   BionicAddrinfo** tail = &head;
   for (addrinfo* a = list; a != nullptr; a = a->ai_next) {
-    size_t name_len = a->ai_canonname != nullptr ? std::strlen(a->ai_canonname) + 1 : 0;
-    size_t size = sizeof(BionicAddrinfo) + a->ai_addrlen + name_len;
+    size_t size = sizeof(BionicAddrinfo);
+    if (a->ai_addrlen > SIZE_MAX - size) { rc = EAI_MEMORY; break; }
+    size += a->ai_addrlen;
+    size_t name_len = a->ai_canonname != nullptr ? std::strlen(a->ai_canonname) : 0;
+    if (a->ai_canonname != nullptr) {
+      if (name_len >= SIZE_MAX - size) { rc = EAI_MEMORY; break; }
+      ++name_len;
+    }
+    size += name_len;
     auto* b = static_cast<BionicAddrinfo*>(std::calloc(1, size));
-    if (b == nullptr) break;
+    if (b == nullptr) { rc = EAI_MEMORY; break; }
     b->ai_flags = AiFlagsOut(a->ai_flags);
     b->ai_family = a->ai_family;
     b->ai_socktype = a->ai_socktype;
@@ -315,7 +324,10 @@ int GetaddrinfoOnInterface(const char* node, const char* service, const BionicAd
     tail = &b->ai_next;
   }
   freeaddrinfo(list);
-  if (head == nullptr) return 6;  // EAI_MEMORY
+  if (rc != 0 || head == nullptr) {
+    Freeaddrinfo(head);
+    return EaiOut(EAI_MEMORY);
+  }
   *res = head;
   return 0;
 }
@@ -442,19 +454,74 @@ const in6_addr g_in6addr_loopback = IN6ADDR_LOOPBACK_INIT;
 
 // --- poll, select ------------------------------------------------------------
 
+using PollClock = std::chrono::steady_clock;
+
 int BIONIC_SYSV Poll(pollfd* fds, uint64_t n, int timeout) {
   DeliverPendingSignals();
   return poll(fds, static_cast<nfds_t>(n), timeout);
 }
 
-int TimeoutMillis(const LinuxTimespec* ts) {
-  if (ts == nullptr) return -1;
-  int64_t ms = ts->tv_sec * 1000 + (ts->tv_nsec + 999999) / 1000000;
-  return ms < 0 ? 0 : ms > 0x7fffffff ? 0x7fffffff : static_cast<int>(ms);
+bool ValidPollTimeout(const LinuxTimespec* ts) {
+  return ts == nullptr || (ts->tv_sec >= 0 && ts->tv_nsec >= 0 && ts->tv_nsec < 1000000000);
+}
+
+// Keep seconds and nanoseconds separate: even a valid relative timeout can
+// exceed both chrono's duration range and poll's signed millisecond range.
+// Rebase after every bounded wait so long waits consume one monotonic budget.
+class PollTimeout {
+ public:
+  explicit PollTimeout(const LinuxTimespec* ts)
+      : infinite_(ts == nullptr), left_(ts != nullptr ? *ts : LinuxTimespec{}),
+        previous_(PollClock::now()) {}
+
+  LinuxTimespec Remaining() {
+    if (infinite_) return {};
+    auto now = PollClock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(now - previous_).count();
+    previous_ = now;
+    if (elapsed <= 0) return left_;
+    int64_t seconds = elapsed / 1000000000;
+    int64_t nanos = elapsed % 1000000000;
+    if (seconds > left_.tv_sec || (seconds == left_.tv_sec && nanos >= left_.tv_nsec)) {
+      left_ = {};
+    } else {
+      left_.tv_sec -= seconds;
+      left_.tv_nsec -= nanos;
+      if (left_.tv_nsec < 0) --left_.tv_sec, left_.tv_nsec += 1000000000;
+    }
+    return left_;
+  }
+
+  int Milliseconds() {
+    if (infinite_) return -1;
+    LinuxTimespec left = Remaining();
+    if (left.tv_sec > 0x7fffffff / 1000) return 0x7fffffff;
+    int64_t millis = left.tv_sec * 1000 + (left.tv_nsec + 999999) / 1000000;
+    return millis > 0x7fffffff ? 0x7fffffff : static_cast<int>(millis);
+  }
+
+  bool Expired() {
+    LinuxTimespec left = Remaining();
+    return !infinite_ && left.tv_sec == 0 && left.tv_nsec == 0;
+  }
+
+ private:
+  bool infinite_;
+  LinuxTimespec left_;
+  PollClock::time_point previous_;
+};
+
+int PollWithTimeout(pollfd* fds, uint64_t n, PollTimeout* timeout) {
+  for (;;) {
+    int rc = Poll(fds, n, timeout->Milliseconds());
+    if (rc != 0 || timeout->Expired()) return rc;
+  }
 }
 
 int BIONIC_SYSV Ppoll(pollfd* fds, uint64_t n, const LinuxTimespec* ts, const void* /*sigmask*/) {
-  return Poll(fds, n, TimeoutMillis(ts));
+  if (!ValidPollTimeout(ts)) return errno = kEINVAL, -1;
+  PollTimeout timeout(ts);
+  return PollWithTimeout(fds, n, &timeout);
 }
 
 // bionic's fd_set: 1024 bits in 64-bit words.
@@ -467,7 +534,7 @@ bool FdIsSet(const BionicFdSet* s, int fd) {
   return s != nullptr && (s->bits[fd / 64] >> (fd % 64) & 1) != 0;
 }
 
-int SelectImpl(int nfds, BionicFdSet* r, BionicFdSet* w, BionicFdSet* e, int timeout) {
+int SelectImpl(int nfds, BionicFdSet* r, BionicFdSet* w, BionicFdSet* e, PollTimeout* timeout) {
   if (nfds < 0 || nfds > kFdSetSize) return errno = kEINVAL, -1;
   std::vector<pollfd> fds;
   for (int fd = 0; fd < nfds; ++fd) {
@@ -477,14 +544,16 @@ int SelectImpl(int nfds, BionicFdSet* r, BionicFdSet* w, BionicFdSet* e, int tim
     if (FdIsSet(e, fd)) events |= POLLPRI;
     if (events != 0) fds.push_back({fd, events, 0});
   }
-  int rc = Poll(fds.data(), fds.size(), timeout);
+  int rc = PollWithTimeout(fds.data(), fds.size(), timeout);
   if (rc < 0) return -1;
+  for (const pollfd& p : fds) {
+    if (p.revents & POLLNVAL) return errno = 9 /* EBADF */, -1;
+  }
   for (BionicFdSet* s : {r, w, e}) {
     if (s != nullptr) std::memset(s, 0, sizeof(*s));
   }
   int count = 0;
   for (const pollfd& p : fds) {
-    if (p.revents & POLLNVAL) return errno = 9 /* EBADF */, -1;
     auto set = [&](BionicFdSet* s) {
       s->bits[p.fd / 64] |= uint64_t{1} << (p.fd % 64);
       ++count;
@@ -498,18 +567,24 @@ int SelectImpl(int nfds, BionicFdSet* r, BionicFdSet* w, BionicFdSet* e, int tim
 
 int BIONIC_SYSV Select(int nfds, BionicFdSet* r, BionicFdSet* w, BionicFdSet* e,
                        BionicTimeval* tv) {
-  int timeout = -1;
+  LinuxTimespec ts{};
   if (tv != nullptr) {
-    int64_t ms = tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000;
-    timeout = ms < 0 ? 0 : ms > 0x7fffffff ? 0x7fffffff : static_cast<int>(ms);
+    if (tv->tv_sec < 0 || tv->tv_usec < 0 || tv->tv_usec >= 1000000) return errno = kEINVAL, -1;
+    ts = {tv->tv_sec, tv->tv_usec * 1000};
   }
-  int rc = SelectImpl(nfds, r, w, e, timeout);
-  if (tv != nullptr && rc >= 0) *tv = {0, 0};  // Linux updates the remaining time
+  PollTimeout timeout(tv != nullptr ? &ts : nullptr);
+  int rc = SelectImpl(nfds, r, w, e, &timeout);
+  if (tv != nullptr && rc >= 0) {
+    LinuxTimespec left = timeout.Remaining();
+    *tv = {left.tv_sec, left.tv_nsec / 1000};
+  }
   return rc;
 }
 int BIONIC_SYSV Pselect(int nfds, BionicFdSet* r, BionicFdSet* w, BionicFdSet* e,
                         const LinuxTimespec* ts, const void* /*sigmask*/) {
-  return SelectImpl(nfds, r, w, e, TimeoutMillis(ts));
+  if (!ValidPollTimeout(ts)) return errno = kEINVAL, -1;
+  PollTimeout timeout(ts);
+  return SelectImpl(nfds, r, w, e, &timeout);
 }
 
 [[noreturn]] void FdSetOverflow(int fd) {

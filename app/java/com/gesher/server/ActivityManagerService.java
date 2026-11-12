@@ -305,8 +305,13 @@ public final class ActivityManagerService extends IActivityManager.Default {
     @Override
     public boolean registerIntentSenderCancelListenerEx(IIntentSender sender,
             com.android.internal.os.IResultReceiver receiver) {
-        PendingIntents.Record r = mPendingIntents.record(sender);
-        return r != null && !r.canceled;
+        return mPendingIntents.registerCancelListener(sender, receiver);
+    }
+
+    @Override
+    public void unregisterIntentSenderCancelListener(IIntentSender sender,
+            com.android.internal.os.IResultReceiver receiver) {
+        mPendingIntents.unregisterCancelListener(sender, receiver);
     }
 
     @Override
@@ -337,8 +342,8 @@ public final class ActivityManagerService extends IActivityManager.Default {
     public int sendIntentSender(IApplicationThread caller, IIntentSender target,
             IBinder allowlistToken, int code, Intent intent, String resolvedType,
             IIntentReceiver finishedReceiver, String requiredPermission, Bundle options) {
-        return mPendingIntents.sendWithOptions(mPendingIntents.record(target), intent, resolvedType,
-                requiredPermission, options);
+        return mPendingIntents.sendWithOptions(mPendingIntents.record(target), code, intent, resolvedType,
+                finishedReceiver, requiredPermission, options);
     }
 
     int sendBroadcastFor(String packageName, Intent intent, String resolvedType) {
@@ -351,12 +356,22 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     int sendBroadcastFor(String packageName, Intent intent, String resolvedType,
             String requiredPermission, java.util.function.BooleanSupplier lifetime) {
+        return sendBroadcastFor(packageName, intent, resolvedType, requiredPermission, lifetime, 0, null);
+    }
+
+    int sendBroadcastFor(String packageName, Intent intent, String resolvedType,
+            String requiredPermission, java.util.function.BooleanSupplier lifetime,
+            int code, IIntentReceiver finishedReceiver) {
         if (!lifetime.getAsBoolean()) return ActivityManager.START_CANCELED;
         // This is server-owned dispatch, including calls made while serving an app's
         // Binder transaction (locale changes). Authenticate the external call at its
         // entry point, then dispatch under the server's actual PID and UID.
         long identity = Binder.clearCallingIdentity();
         try {
+            if (finishedReceiver != null) {
+                return mBroadcasts.broadcastIntentForPendingIntent(intent, resolvedType,
+                        packageName, requiredPermission, lifetime, code, finishedReceiver);
+            }
             return mBroadcasts.broadcastIntent(intent, resolvedType, packageName,
                 android.os.Process.myPid(), requiredPermission == null ? null : new String[]{requiredPermission},
                 null, null, lifetime);

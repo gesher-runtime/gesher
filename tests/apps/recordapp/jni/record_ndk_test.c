@@ -9,6 +9,7 @@
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -126,6 +127,19 @@ JNIEXPORT jstring JNICALL Java_com_gesher_recordapp_RecordActivity_aaudioInputRe
   if (r != AAUDIO_OK) {
     snprintf(msg, sizeof msg, "open %s", AAudio_convertResultToText(r));
     return (*env)->NewStringUTF(env, msg);
+  }
+  int16_t empty[2] = {0};
+  // Supply a runtime null for the negative contract, keeping ordinary NDK
+  // nonnull call diagnostics enabled for the rest of the fixture.
+  void* volatile missing_data = NULL;
+  if (AAudioStream_read(s, missing_data, 1, 0) != AAUDIO_ERROR_NULL
+      || AAudioStream_read(s, missing_data, 0, 0) != AAUDIO_ERROR_NULL
+      || AAudioStream_read(s, empty, -1, 0) != AAUDIO_ERROR_ILLEGAL_ARGUMENT
+      || AAudioStream_read(s, empty, INT32_MIN, 0) != AAUDIO_ERROR_ILLEGAL_ARGUMENT
+      || AAudioStream_read(s, empty, 0, INT64_MAX) != 0
+      || AAudioStream_getFramesRead(s) != 0) {
+    AAudioStream_close(s);
+    return (*env)->NewStringUTF(env, "AAudio read argument contract failed");
   }
   const int want = 44100;
   int16_t* pcm = (int16_t*)calloc((size_t)want * 2, sizeof(int16_t));

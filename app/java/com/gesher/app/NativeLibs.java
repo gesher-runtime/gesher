@@ -9,7 +9,10 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
 import java.util.Enumeration;
+import java.util.List;
+import java.util.Locale;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -107,6 +110,7 @@ public final class NativeLibs {
         int count = 0;
         byte[] buffer = new byte[64 * 1024];
         try (ZipFile zip = new ZipFile(apk)) {
+            List<ZipEntry> libraries = new ArrayList<>();
             for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
                 ZipEntry entry = e.nextElement();
                 String name = entry.getName();
@@ -114,7 +118,13 @@ public final class NativeLibs {
                         || name.indexOf('/', prefix.length()) >= 0) {
                     continue;
                 }
-                File out = new File(dir, name.substring(prefix.length()));
+                validateWindowsLeaf(name.substring(prefix.length()));
+                libraries.add(entry);
+            }
+            // Validate the complete selected set before opening any destination.
+            // ZIP uses '/', but Windows also interprets '\\' and ':' as path syntax.
+            for (ZipEntry entry : libraries) {
+                File out = new File(dir, entry.getName().substring(prefix.length()));
                 out.getParentFile().mkdirs();
                 try (InputStream in = zip.getInputStream(entry);
                         OutputStream os = new FileOutputStream(out)) {
@@ -126,5 +136,26 @@ public final class NativeLibs {
             }
         }
         return count;
+    }
+
+    private static void validateWindowsLeaf(String name) throws IOException {
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (c < 32 || "<>:\"/\\|?*".indexOf(c) >= 0) {
+                throw new IOException("Native library name is not a Windows file name");
+            }
+        }
+        // Keep DOS device stems out of extraction, including their console aliases
+        // and ASCII spaces before an extension (e.g. NUL .so).
+        int stemEnd = name.indexOf('.');
+        while (stemEnd > 0 && name.charAt(stemEnd - 1) == ' ') stemEnd--;
+        String stem = name.substring(0, stemEnd).toUpperCase(Locale.ROOT);
+        if (stem.equals("CON") || stem.equals("PRN") || stem.equals("AUX")
+                || stem.equals("NUL") || stem.equals("CONIN$") || stem.equals("CONOUT$")
+                || (stem.length() == 4
+                && (stem.startsWith("COM") || stem.startsWith("LPT"))
+                && "123456789\u00b9\u00b2\u00b3".indexOf(stem.charAt(3)) >= 0)) {
+            throw new IOException("Native library name denotes a Windows device");
+        }
     }
 }

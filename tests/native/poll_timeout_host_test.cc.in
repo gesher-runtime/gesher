@@ -1,0 +1,218 @@
+// Production adapters; only the native clock and poll transport have test
+// adapters. Public cases use real host pipes and the real monotonic clock.
+#include "shim_internal.h"
+
+#include <cerrno>
+#include <chrono>
+#include <climits>
+#include <cstdio>
+#include <cstring>
+#include <dlfcn.h>
+#include <poll.h>
+#include <vector>
+
+static int failures;
+static void check(const char* label, bool ok) {
+  std::printf("%-78s %s\n", label, ok ? "ok" : "FAIL");
+  if (!ok) ++failures;
+  std::fflush(stdout);
+}
+namespace wait_transport {
+struct Step { int milliseconds; int64_t elapsed_ns; int result; short events; int error = 0; };
+static bool controlled;
+static int64_t now_ns;
+static std::vector<Step> steps;
+static size_t current;
+static std::vector<pollfd> interests;
+static bool matched;
+static int signals;
+static void start(std::initializer_list<Step> plan, std::initializer_list<pollfd> wanted = {}) {
+  controlled = true;
+  now_ns = 1000000000;
+  steps = plan;
+  interests = wanted;
+  current = 0;
+  matched = true;
+  signals = 0;
+}
+struct Clock {
+  using time_point = std::chrono::steady_clock::time_point;
+  static time_point now() {
+    return controlled ? time_point(std::chrono::nanoseconds(now_ns)) : std::chrono::steady_clock::now();
+  }
+};
+static int poll(pollfd* fds, nfds_t count, int milliseconds) {
+  if (!controlled) return ::poll(fds, count, milliseconds);
+  if (current >= steps.size()) { matched = false; errno = ETIMEDOUT; return -1; }
+  Step step = steps[current++];
+  matched &= milliseconds == step.milliseconds && count == interests.size();
+  for (size_t i = 0; i < count; ++i) {
+    if (i < interests.size()) matched &= fds[i].fd == interests[i].fd && fds[i].events == interests[i].events;
+    fds[i].revents = step.result > 0 ? step.events : 0;
+  }
+  now_ns += step.elapsed_ns;
+  if (step.result < 0) errno = step.error;
+  return step.result;
+}
+static bool complete() { return matched && current == steps.size() && signals == static_cast<int>(current); }
+}
+
+namespace gesher::bionic {
+void DeliverPendingSignals() { ++wait_transport::signals; }
+namespace {
+using PollClock = wait_transport::Clock;
+@TIMEVAL@
+#define poll wait_transport::poll
+@WAIT_IMPLEMENTATION@
+#undef poll
+}
+void RegisterWaitContracts(SymbolTable& t) {
+#define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
+@WAIT_REGISTRATIONS@
+#undef E
+}
+}
+static void* wait_symbol(void*, const char* name) {
+  static gesher::bionic::SymbolTable table = [] {
+    gesher::bionic::SymbolTable result;
+    gesher::bionic::RegisterWaitContracts(result);
+    return result;
+  }();
+  auto found = table.find(name);
+  return found == table.end() ? nullptr : found->second;
+}
+#define dlsym wait_symbol
+#include "poll_timeout_contract_test.inc"
+#undef dlsym
+
+using namespace wait_transport;
+static wait_select_fn select_api() { return reinterpret_cast<wait_select_fn>(wait_symbol(nullptr, "select")); }
+static wait_pselect_fn pselect_api(const char* name) { return reinterpret_cast<wait_pselect_fn>(wait_symbol(nullptr, name)); }
+static constexpr int cap = INT_MAX;
+static constexpr int64_t cap_ns = int64_t{cap} * 1000000;
+static void test_boundaries() {
+  struct Boundary { wait_timespec duration; int milliseconds; } cases[] = {
+    {{0, 0}, 0}, {{0, 1}, 1}, {{0, 999999}, 1}, {{0, 1000000}, 1}, {{0, 1000001}, 2},
+    {{2147483, 646000000}, cap - 1}, {{2147483, 647000000}, cap},
+    {{2147483, 647000001}, cap}, {{2147484, 0}, cap}, {{INT64_MAX, 999999999}, cap},
+  };
+  for (const char* name : wait_ppoll_names) {
+    for (const auto& c : cases) {
+      start({{c.milliseconds, 0, 1, POLLIN}}, {{7, POLLIN, 0}});
+      pollfd fd{7, POLLIN, 0};
+      wait_timespec duration = c.duration;
+      char label[128];
+      std::snprintf(label, sizeof(label), "%s: seconds=%lld nanos=%lld conversion", name,
+                    static_cast<long long>(duration.tv_sec), static_cast<long long>(duration.tv_nsec));
+      int rc = wait_call_ppoll(name, &fd, 1, &duration, nullptr);
+      check(label, rc == 1 && fd.revents == POLLIN && complete() &&
+            std::memcmp(&duration, &c.duration, sizeof(duration)) == 0);
+    }
+  }
+  for (const char* name : wait_pselect_names) {
+    for (const auto& c : cases) {
+      start({{c.milliseconds, 0, 1, POLLIN}}, {{7, POLLIN, 0}});
+      wait_fd_set read_set{};
+      wait_set(&read_set, 7);
+      wait_timespec duration = c.duration;
+      int rc = pselect_api(name)(8, &read_set, nullptr, nullptr, &duration, nullptr);
+      check("pselect: rounding and extreme seconds remain bounded", rc == 1 && wait_isset(&read_set, 7) && complete() &&
+            std::memcmp(&duration, &c.duration, sizeof(duration)) == 0);
+    }
+  }
+  const wait_timeval timevals[] = {{0, 0}, {0, 1}, {0, 1000}, {0, 1001},
+                                  {2147483, 647000}, {2147483, 647001}, {INT64_MAX, 999999}};
+  const int milliseconds[] = {0, 1, 1, 2, cap, cap, cap};
+  for (size_t i = 0; i < sizeof(timevals) / sizeof(timevals[0]); ++i) {
+    start({{milliseconds[i], 0, 1, POLLIN}}, {{7, POLLIN, 0}});
+    wait_fd_set read_set{};
+    wait_set(&read_set, 7);
+    wait_timeval duration = timevals[i];
+    int rc = select_api()(8, &read_set, nullptr, nullptr, &duration);
+    check("select: safe timeval conversion preserves immediate-ready budget", rc == 1 && complete() &&
+          std::memcmp(&duration, &timevals[i], sizeof(duration)) == 0);
+  }
+}
+static void test_budgets() {
+  for (const char* name : wait_ppoll_names) {
+    start({{cap, cap_ns, 0, 0}, {1353, 1353000000, 0, 0}}, {{7, POLLIN, 0}});
+    pollfd fd{7, POLLIN, 0};
+    wait_timespec duration{2147485, 0}, before = duration;
+    int rc = wait_call_ppoll(name, &fd, 1, &duration, nullptr);
+    check("ppoll: long duration waits through both slices", rc == 0 && complete() && fd.revents == 0 &&
+          std::memcmp(&duration, &before, sizeof(duration)) == 0);
+  }
+  for (const char* name : wait_pselect_names) {
+    start({{cap, cap_ns, 0, 0}, {1353, 1353000000, 0, 0}}, {{7, static_cast<short>(POLLIN | POLLOUT), 0}});
+    wait_fd_set read_set{}, write_set{};
+    wait_set(&read_set, 7); wait_set(&write_set, 7);
+    wait_timespec duration{2147485, 0}, before = duration;
+    int rc = pselect_api(name)(8, &read_set, &write_set, nullptr, &duration, nullptr);
+    check("pselect: interests survive slices and const timeout is retained",
+          rc == 0 && complete() && !wait_isset(&read_set, 7) && !wait_isset(&write_set, 7) &&
+          std::memcmp(&duration, &before, sizeof(duration)) == 0);
+  }
+  start({{cap, cap_ns, 0, 0}, {1353, 200000000, 1, static_cast<short>(POLLIN | POLLOUT)}},
+        {{7, static_cast<short>(POLLIN | POLLOUT), 0}});
+  wait_fd_set read_set{}, write_set{};
+  wait_set(&read_set, 7); wait_set(&write_set, 7);
+  wait_timeval duration{2147485, 0};
+  int rc = select_api()(8, &read_set, &write_set, nullptr, &duration);
+  check("select: long wait preserves interests and subtracts elapsed budget", rc == 2 && complete() &&
+        wait_isset(&read_set, 7) && wait_isset(&write_set, 7) && duration.tv_sec == 1 && duration.tv_usec == 153000);
+  start({{cap, cap_ns, 0, 0}, {cap, 123456000, 1, POLLIN}}, {{7, POLLIN, 0}});
+  read_set = {}; wait_set(&read_set, 7);
+  duration = {INT64_MAX, 999999};
+  rc = select_api()(8, &read_set, nullptr, nullptr, &duration);
+  check("select: INT64_MAX-second budget does not overflow or truncate", rc == 1 && complete() &&
+        duration.tv_sec == INT64_MAX - 2147483 && duration.tv_usec == 229543);
+  start({{20, 2000000, 0, 0}, {18, 18000000, 0, 0}});
+  wait_timespec short_wait{0, 20000000};
+  check("ppoll: early empty slice consumes only elapsed time",
+        wait_call_ppoll("ppoll", nullptr, 0, &short_wait, nullptr) == 0 && complete());
+  start({{1, 2000000, 0, 0}});
+  duration = {0, 1};
+  check("select: scheduler overshoot clamps remaining time at zero",
+        select_api()(0, nullptr, nullptr, nullptr, &duration) == 0 && complete() &&
+        duration.tv_sec == 0 && duration.tv_usec == 0);
+}
+static void test_errors() {
+  start({{cap, cap_ns, 0, 0}, {1353, 1000000, -1, 0, EINTR}}, {{7, POLLIN, 0}});
+  pollfd fd{7, POLLIN, 0};
+  wait_timespec timeout{2147485, 0}, original = timeout;
+  errno = 0;
+  int rc = wait_call_ppoll("ppoll", &fd, 1, &timeout, nullptr);
+  check("ppoll: transport error ends long wait without changing const input", rc == -1 && errno == EINTR &&
+        complete() && std::memcmp(&timeout, &original, sizeof(timeout)) == 0);
+  start({{1000, 1000000, -1, 0, EINTR}}, {{7, POLLIN, 0}});
+  wait_fd_set read_set{}; wait_set(&read_set, 7);
+  wait_fd_set before = read_set;
+  wait_timeval duration{1, 0};
+  errno = 0;
+  rc = select_api()(8, &read_set, nullptr, nullptr, &duration);
+  check("select: transport errors preserve descriptor sets and timeval", rc == -1 && errno == EINTR && complete() &&
+        std::memcmp(&before, &read_set, sizeof(before)) == 0 && duration.tv_sec == 1 && duration.tv_usec == 0);
+  for (const char* name : wait_ppoll_names) {
+    start({{-1, 0, 1, POLLIN}}, {{7, POLLIN, 0}});
+    fd = {7, POLLIN, 0};
+    check("ppoll: null timeout remains infinite", wait_call_ppoll(name, &fd, 1, nullptr, nullptr) == 1 && complete());
+  }
+  for (const char* name : wait_pselect_names) {
+    start({{-1, 0, 1, POLLIN}}, {{7, POLLIN, 0}});
+    read_set = {}; wait_set(&read_set, 7);
+    check("pselect: null timeout remains infinite",
+          pselect_api(name)(8, &read_set, nullptr, nullptr, nullptr, nullptr) == 1 && complete());
+  }
+  start({{-1, 0, 1, POLLIN}}, {{7, POLLIN, 0}});
+  read_set = {}; wait_set(&read_set, 7);
+  check("select: null timeout remains infinite", select_api()(8, &read_set, nullptr, nullptr, nullptr) == 1 && complete());
+}
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  if (std::strcmp(argv[1], "public") == 0) test_poll_timeout_contracts();
+  else if (std::strcmp(argv[1], "boundaries") == 0) test_boundaries();
+  else if (std::strcmp(argv[1], "budgets") == 0) test_budgets();
+  else if (std::strcmp(argv[1], "errors") == 0) test_errors();
+  else return 2;
+  return failures == 0 ? 0 : 1;
+}

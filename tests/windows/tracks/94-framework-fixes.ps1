@@ -16,6 +16,85 @@ $bcpFixes = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app')
 $dvmFixes = @("-Xbootclasspath:$bcpFixes", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
   '-cp', (NoDrive "$Dir/services-tests.dex"))
 
+# Constructed package/permission state uses the same explicit test capability as
+# the existing synthetic service fixtures. Keep it local to this fresh VM.
+$pendingSpoofPresent = Test-Path Env:GESHER_MICROG_SPOOF
+$pendingSpoofValue = [Environment]::GetEnvironmentVariable('GESHER_MICROG_SPOOF', 'Process')
+try {
+  $env:GESHER_MICROG_SPOOF = '1'
+  $pendingCallbacksOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+    'PendingIntentContractTest') 90
+  $pendingCallbacksCode = $LASTEXITCODE
+} finally {
+  if ($pendingSpoofPresent) { Set-Item Env:GESHER_MICROG_SPOOF $pendingSpoofValue }
+  else { Remove-Item Env:GESHER_MICROG_SPOOF -ErrorAction SilentlyContinue }
+}
+Check 'services: PendingIntent identity, fill-in, updates and completion/cancellation callbacks' {
+  $global:LASTEXITCODE = $pendingCallbacksCode
+  $pendingCallbacksOut
+} @('PendingIntentContractTest all passed:')
+
+$clipboardCallbacksOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ClipboardCallbackTest') 90
+$clipboardCallbacksCode = $LASTEXITCODE
+Check 'services: concurrent clipboard callbacks and native Windows clipboard updates' {
+  $global:LASTEXITCODE = $clipboardCallbacksCode
+  $clipboardCallbacksOut
+} @('ClipboardCallbackTest all passed:')
+
+$contentObserverOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ContentObserverLifecycleTest') 90
+$contentObserverCode = $LASTEXITCODE
+Check 'services: content observer publication, retirement and callback isolation' {
+  $global:LASTEXITCODE = $contentObserverCode
+  $contentObserverOut
+} @('ContentObserverLifecycleTest all passed:')
+
+$schedulerWorkOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'SchedulerWorkContractTest') 90
+$schedulerWorkCode = $LASTEXITCODE
+Check 'services: queued job completion, stopping work and alarm-clock replacement' {
+  $global:LASTEXITCODE = $schedulerWorkCode
+  $schedulerWorkOut
+} @('SchedulerWorkContractTest all passed:')
+
+$mediaRequestsOut = FixesRun ($dvmFixes + 'gesher.services.MediaStoreRequestContractTest') 90
+$mediaRequestsCode = $LASTEXITCODE
+Check 'framework: MediaStore request forwarding, provider errors and SDK callback descriptors' {
+  $global:LASTEXITCODE = $mediaRequestsCode
+  $mediaRequestsOut
+} @('MediaStoreRequestContractTest all passed:')
+
+# Public media/graphics APIs exercise the actual Windows extractor, JPEG codec,
+# mapped storage and JNI registration, beyond the production-source host probes.
+$mediaDataOut = FixesRun ($dvmFixes + 'gesher.services.MediaDataContractTest') 90
+$mediaDataCode = $LASTEXITCODE
+Check 'media: extractor source ownership and cropped YUV JPEG pixels' {
+  $global:LASTEXITCODE = $mediaDataCode
+  $mediaDataOut
+} @('MediaDataContractTest all passed:')
+
+$bitmapCapacityOut = FixesRun ($dvmFixes + 'gesher.services.BitmapParcelCapacityTest') 90
+$bitmapCapacityCode = $LASTEXITCODE
+Check 'graphics: Bitmap Parcel pixels and actual SharedMemory capacity' {
+  $global:LASTEXITCODE = $bitmapCapacityCode
+  $bitmapCapacityOut
+} @('BitmapParcelCapacityTest all passed:')
+
+$nativePathsOut = FixesRun ($dvmFixes + 'gesher.services.NativeLibraryPathsTest') 90
+$nativePathsCode = $LASTEXITCODE
+Check 'installer: native library filenames and failed extraction preservation' {
+  $global:LASTEXITCODE = $nativePathsCode
+  $nativePathsOut
+} @('NativeLibraryPathsTest all passed:')
+
+$webviewPathsOut = FixesRun ($dvmFixes + 'gesher.services.WebViewUploadPathsTest') 90
+$webviewPathsCode = $LASTEXITCODE
+Check 'webview: upload paths share the drive and UNC namespace' {
+  $global:LASTEXITCODE = $webviewPathsCode
+  $webviewPathsOut
+} @('WebViewUploadPathsTest all passed:')
+
 # Real temporary storage in fresh VMs, including explicit overrides and app cache.
 . "$PSScriptRoot/../temp-directory-contracts.ps1"
 Check 'runtime: real temporary directories, explicit overrides, app cache and I/O errors' {

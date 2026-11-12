@@ -87,6 +87,7 @@ int main(int argc, char** argv) {
   using PerfFn = uint64_t(SYSV_FN*)(uint32_t);
   using ReprotectFn = int(SYSV_FN*)(void*);
   using HookFn = int(SYSV_FN*)(void*);
+  using ObserveFiniFn = void(SYSV_FN*)(int*);
 
   if (auto selftest = Entry<SelftestFn>(lib, "gesher_selftest")) {
     // The first search directory doubles as a scratch directory.
@@ -135,6 +136,17 @@ int main(int argc, char** argv) {
       Check("constructor ran", ctor() == 1);
       Check("gesher_answer() == 42", answer() == 42);
       Check("gesher_add(40, 2) == 42", add(40, 2) == 42);
+    }
+    auto observe_fini = Entry<ObserveFiniFn>(lib, "gesher_observe_fini");
+    Check("translated finalizer observation export found", observe_fini != nullptr);
+    if (observe_fini) {
+      int fini_order = -1;
+      observe_fini(&fini_order);
+      Check("translated finalizers have not run before Close", fini_order == 0);
+      elf::Close(lib);
+      Check("translated finalizers run in reverse order", fini_order == 21);
+      elf::Close(lib);
+      Check("repeated Close does not repeat translated finalizers", fini_order == 21);
     }
   }
 

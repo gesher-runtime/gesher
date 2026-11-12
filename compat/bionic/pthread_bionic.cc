@@ -61,7 +61,11 @@ constexpr int kDestructorPasses = 4;  // PTHREAD_DESTRUCTOR_ITERATIONS
 std::mutex g_keys_mutex;
 void (BIONIC_SYSV* g_key_dtors[kKeysMax])(void*) = {};
 bool g_key_used[kKeysMax] = {};
+// A reused key slot must not expose another generation's thread-local value.
+// Retire a slot at UINT64_MAX rather than letting its generation wrap.
+uint64_t g_key_generations[kKeysMax] = {};
 thread_local void* t_key_values[kKeysMax] = {};
+thread_local uint64_t t_key_generations[kKeysMax] = {};
 
 struct ThreadAtExit {
   void (BIONIC_SYSV* dtor)(void*);
@@ -92,9 +96,12 @@ bool RunKeyRound() {
     void (BIONIC_SYSV* dtor)(void*) = nullptr;
     {
       std::lock_guard<std::mutex> lock(g_keys_mutex);
-      if (g_key_used[k]) dtor = g_key_dtors[k];
+      if (g_key_used[k] && t_key_generations[k] == g_key_generations[k]) {
+        dtor = g_key_dtors[k];
+      }
     }
     t_key_values[k] = nullptr;
+    t_key_generations[k] = 0;
     if (dtor != nullptr) {
       dtor(value);
       any = true;
@@ -691,7 +698,8 @@ int BIONIC_SYSV gesher_bionic_pthread_key_create(bionic_pthread_key_t* key,
                                                 void (BIONIC_SYSV* dtor)(void*)) {
   std::lock_guard<std::mutex> lock(g_keys_mutex);
   for (int i = 0; i < kKeysMax; ++i) {
-    if (!g_key_used[i]) {
+    if (!g_key_used[i] && g_key_generations[i] != UINT64_MAX) {
+      ++g_key_generations[i];
       g_key_used[i] = true;
       g_key_dtors[i] = dtor;
       *key = i;
@@ -704,6 +712,7 @@ int BIONIC_SYSV gesher_bionic_pthread_key_create(bionic_pthread_key_t* key,
 int BIONIC_SYSV gesher_bionic_pthread_key_delete(bionic_pthread_key_t key) {
   if (key < 0 || key >= kKeysMax) return kEINVAL;
   std::lock_guard<std::mutex> lock(g_keys_mutex);
+  if (!g_key_used[key]) return kEINVAL;
   g_key_used[key] = false;
   g_key_dtors[key] = nullptr;
   return 0;
@@ -711,12 +720,23 @@ int BIONIC_SYSV gesher_bionic_pthread_key_delete(bionic_pthread_key_t key) {
 
 void* BIONIC_SYSV gesher_bionic_pthread_getspecific(bionic_pthread_key_t key) {
   if (key < 0 || key >= kKeysMax) return nullptr;
+  std::lock_guard<std::mutex> lock(g_keys_mutex);
+  if (!g_key_used[key] || t_key_generations[key] != g_key_generations[key]) {
+    t_key_values[key] = nullptr;
+    t_key_generations[key] = 0;
+    return nullptr;
+  }
   return t_key_values[key];
 }
 
 int BIONIC_SYSV gesher_bionic_pthread_setspecific(bionic_pthread_key_t key, const void* value) {
   if (key < 0 || key >= kKeysMax) return kEINVAL;
-  t_key_values[key] = const_cast<void*>(value);
+  {
+    std::lock_guard<std::mutex> lock(g_keys_mutex);
+    if (!g_key_used[key]) return kEINVAL;
+    t_key_values[key] = const_cast<void*>(value);
+    t_key_generations[key] = g_key_generations[key];
+  }
   if (value != nullptr) ArmHostExit();
   return 0;
 }

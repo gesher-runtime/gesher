@@ -17,6 +17,8 @@
 /* Local provider-unavailable policy and adaptations: Copyright (C) 2026 Gesher Authors. */
 package android.provider;
 
+import android.app.PendingIntent;
+import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.ContentValues;
@@ -24,6 +26,7 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.ImageDecoder;
+import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.text.TextUtils;
 import android.util.ArrayMap;
@@ -42,8 +45,11 @@ import android.os.ParcelFileDescriptor;
 import android.util.Size;
 
 import java.io.File;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -199,6 +205,101 @@ public final class MediaStore {
 
     public static String restoreFileFromTrash(ContentResolver resolver, String path, String volume) {
         return null;
+    }
+
+    /* Android 16 MediaProvider call protocol. These methods only construct requests;
+     * the resolver/provider owns authorization, approval and completion. In particular,
+     * an absent provider retains ContentResolver's ordinary unknown-authority failure. */
+    private static PendingIntent createRequest(ContentResolver resolver, String method,
+            Collection<Uri> uris, ContentValues values) {
+        Objects.requireNonNull(resolver);
+        Objects.requireNonNull(uris);
+
+        final Iterator<Uri> it = uris.iterator();
+        final ClipData clipData = ClipData.newRawUri(null, it.next());
+        while (it.hasNext()) {
+            clipData.addItem(new ClipData.Item(it.next()));
+        }
+
+        final Bundle extras = new Bundle();
+        extras.putParcelable("clip_data", clipData);
+        extras.putParcelable("content_values", values);
+        return resolver.call(AUTHORITY, method, null, extras).getParcelable("result");
+    }
+
+    public static PendingIntent createWriteRequest(ContentResolver resolver, Collection<Uri> uris) {
+        return createRequest(resolver, "create_write_request", uris, null);
+    }
+
+    public static PendingIntent createDeleteRequest(ContentResolver resolver, Collection<Uri> uris) {
+        return createRequest(resolver, "create_delete_request", uris, null);
+    }
+
+    public static PendingIntent createTrashRequest(ContentResolver resolver, Collection<Uri> uris,
+            boolean value) {
+        final ContentValues values = new ContentValues();
+        values.put(MediaColumns.IS_TRASHED, value ? 1 : 0);
+        return createRequest(resolver, "create_trash_request", uris, values);
+    }
+
+    public static PendingIntent createFavoriteRequest(ContentResolver resolver, Collection<Uri> uris,
+            boolean value) {
+        final ContentValues values = new ContentValues();
+        values.put(MediaColumns.IS_FAVORITE, value ? 1 : 0);
+        return createRequest(resolver, "create_favorite_request", uris, values);
+    }
+
+    public static void markIsFavoriteStatus(ContentResolver resolver, Collection<Uri> uris,
+            boolean areFavorites) {
+        Objects.requireNonNull(resolver);
+        Objects.requireNonNull(uris);
+
+        final Iterator<Uri> it = uris.iterator();
+        final ClipData clipData = ClipData.newRawUri(null, it.next());
+        while (it.hasNext()) {
+            clipData.addItem(new ClipData.Item(it.next()));
+        }
+
+        final Bundle extras = new Bundle();
+        extras.putParcelable("clip_data", clipData);
+        extras.putBoolean(MediaColumns.IS_FAVORITE, areFavorites);
+        resolver.call(AUTHORITY, "mark_media_as_favorite", null, extras);
+    }
+
+    public static boolean isCurrentSystemGallery(ContentResolver resolver, int uid,
+            String packageName) {
+        final Bundle in = new Bundle();
+        in.putInt("is_system_gallery_uid", uid);
+        final Bundle out = resolver.call(AUTHORITY, "is_system_gallery", packageName, in);
+        return out.getBoolean("is_system_gallery_response");
+    }
+
+    public static boolean isCurrentCloudMediaProviderAuthority(ContentResolver resolver,
+            String authority) {
+        return callForCloudProvider(resolver, "is_current_cloud_provider", authority, null);
+    }
+
+    public static boolean isSupportedCloudMediaProviderAuthority(ContentResolver resolver,
+            String authority) {
+        return callForCloudProvider(resolver, "is_supported_cloud_provider", authority, null);
+    }
+
+    public static void notifyCloudMediaChangedEvent(ContentResolver resolver, String authority,
+            String currentMediaCollectionId) {
+        final Bundle extras = new Bundle();
+        extras.putString("android.provider.extra.MEDIA_COLLECTION_ID", currentMediaCollectionId);
+        if (!callForCloudProvider(resolver, "notify_cloud_media_changed_event", authority, extras)) {
+            throw new SecurityException("Failed to notify cloud media changed event");
+        }
+    }
+
+    private static boolean callForCloudProvider(ContentResolver resolver, String method,
+            String callingAuthority, Bundle extras) {
+        Objects.requireNonNull(resolver);
+        Objects.requireNonNull(method);
+        Objects.requireNonNull(callingAuthority);
+        final Bundle out = resolver.call(AUTHORITY, method, callingAuthority, extras);
+        return out.getBoolean("cloud_provider_result");
     }
 
     static Uri contentUri(String volumeName, String... path) {
