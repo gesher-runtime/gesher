@@ -67,6 +67,14 @@ jobs:
           python3 tools/test_retriever_frame_contracts.py --sanitize
           python3 tools/test_utc_time_contracts.py --sanitize
 
+      - name: Native TLS, wait, DNS, finalizer and media lifecycle contracts
+        run: |
+          python3 tools/test_bionic_key_contracts.py --sanitize
+          python3 tools/test_bionic_wait_contracts.py --sanitize
+          python3 tools/test_bionic_dns_contracts.py --sanitize
+          python3 tools/test_elf_finalizers.py --sanitize
+          python3 tools/test_media_api_contracts.py --sanitize
+
       - name: Temporary directory and UNC namespace contracts
         run: |
           python3 tools/test_temp_directory.py
@@ -80,6 +88,9 @@ jobs:
 
       - name: Audio JNI buffer contracts with checked JNI and UBSan
         run: python3 tools/test_audio_buffer_contracts.py
+
+      - name: APK native library filename contracts
+        run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
 
       - name: Validate user interface translations
         run: |

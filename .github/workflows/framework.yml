@@ -340,6 +340,9 @@ jobs:
       # gesher-app's driver and its test APK compile against the framework's
       # classes, so they are built here, next to them.
       - name: Build gesher-app and lifecycle.apk
+        env:
+          # Retain this exact build dependency for the framework host contracts.
+          APKSIG_JAR: ${{ runner.temp }}/gesher-apksig.jar
         run: |
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
@@ -430,6 +433,16 @@ jobs:
           done
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/web3app/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod  # web3 (ADR 0058)
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/gmsapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
+
+      - name: Service callback and WebView path contracts against the built framework
+        run: |
+          python3 tools/test_pending_intent_callbacks.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
+          python3 tools/test_webview_paths.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
 
       - name: Collect framework artifacts
         run: |
