@@ -115,17 +115,20 @@ final class ClipboardService extends IClipboard.Default implements WindowsHost.L
     }
 
     private void notifyListeners() {
-        int n = mListeners.beginBroadcast();
-        try {
-            for (int i = 0; i < n; i++) {
-                try {
-                    mListeners.getBroadcastItem(i).dispatchPrimaryClipChanged();
-                } catch (RemoteException e) {
-                    // gone
-                }
+        java.util.List<IOnPrimaryClipChangedListener> targets = new java.util.ArrayList<>();
+        synchronized (mListeners) {
+            int n = mListeners.beginBroadcast();
+            try {
+                for (int i = 0; i < n; i++) targets.add(mListeners.getBroadcastItem(i));
+            } finally { mListeners.finishBroadcast(); }
+        }
+        // Finish the RemoteCallbackList snapshot before calling application code:
+        // local listeners may reenter, and another Binder/Windows thread may notify.
+        for (IOnPrimaryClipChangedListener target : targets) {
+            try { target.dispatchPrimaryClipChanged(); }
+            catch (RemoteException | RuntimeException failed) {
+                SystemServer.log("clipboard listener unavailable: " + failed.getClass().getSimpleName());
             }
-        } finally {
-            mListeners.finishBroadcast();
         }
     }
 

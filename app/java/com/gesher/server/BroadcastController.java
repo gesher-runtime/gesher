@@ -229,6 +229,24 @@ final class BroadcastController {
             return broadcastIntent(intent, resolvedType, origin,
                     requiredPermissions, excludePermissions, excludePackages);
         }
+        return broadcastAcknowledged(intent, resolvedType, origin, app, resultTo, resultCode,
+                resultData, resultExtras, requiredPermissions, excludePermissions, excludePackages, ordered);
+    }
+
+    /** The creator was verified before clearing transport identity in PendingIntents. */
+    int broadcastIntentForPendingIntent(Intent intent, String resolvedType, String packageName,
+            String requiredPermission, BooleanSupplier lifetime, int code, IIntentReceiver finishedReceiver) {
+        if (!lifetime.getAsBoolean()) return ActivityManager.START_CANCELED;
+        Sender origin = sender(packageName, Process.myPid(), lifetime);
+        return broadcastAcknowledged(intent, resolvedType, origin, null, finishedReceiver, code,
+                null, null, requiredPermission == null ? null : new String[]{requiredPermission},
+                null, null, true);
+    }
+
+    private int broadcastAcknowledged(Intent intent, String resolvedType, Sender origin,
+            ActivityTaskManagerService.ProcessRecord app, IIntentReceiver resultTo, int resultCode,
+            String resultData, Bundle resultExtras, String[] requiredPermissions,
+            String[] excludePermissions, String[] excludePackages, boolean ordered) {
         if (intent == null) throw new IllegalArgumentException("Missing broadcast intent");
         Intent snapshot = new Intent(intent);
         validateBroadcastSender(origin, snapshot);

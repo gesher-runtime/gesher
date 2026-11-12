@@ -12,10 +12,16 @@ import android.content.Intent;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.RemoteCallbackList;
+import android.os.RemoteException;
+
+import com.android.internal.os.IResultReceiver;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -34,6 +40,11 @@ final class PendingIntents {
     private final CallerIdentity mCallers;
     private final java.util.Map<ApkPackage, String> mCodeIdentities = new java.util.WeakHashMap<>();
     private final List<Record> mRecords = new ArrayList<>();
+    private final ExecutorService mCancelCallbacks = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "pending-intent-cancel");
+        thread.setDaemon(true);
+        return thread;
+    });
     private Runnable mBeforeRecordLock; // Server-local race fixture; never a Binder option.
     private Runnable mBeforeSendDispatch; // Server-local race fixture, outside the records lock.
 
@@ -45,10 +56,13 @@ final class PendingIntents {
     }
 
     private void packageRemoved(String name) {
+        List<RemoteCallbackList<IResultReceiver>> callbacks = new ArrayList<>();
         synchronized (mRecords) {
-            for (Record record : mRecords) if (name.equals(record.packageName)) record.canceled = true;
-            mRecords.removeIf(record -> name.equals(record.packageName));
+            for (Record record : new ArrayList<>(mRecords)) {
+                if (name.equals(record.packageName)) callbacks.add(cancelLocked(record));
+            }
         }
+        for (RemoteCallbackList<IResultReceiver> listeners : callbacks) dispatchCancelled(listeners);
     }
 
     /** A PendingIntent's target in the system server. */
@@ -63,6 +77,8 @@ final class PendingIntents {
         Intent[] intents;
         String[] resolvedTypes;
         volatile boolean canceled;
+        // Guarded by mRecords; detached exactly once when this record is retired.
+        RemoteCallbackList<IResultReceiver> cancelListeners;
 
         Record(int type, String packageName, int requestCode, Intent[] intents,
                 String[] resolvedTypes, int flags, int uid, String creatorIdentity) {
@@ -83,12 +99,10 @@ final class PendingIntents {
         }
 
         boolean sameKey(int type, String packageName, int uid, String identity,
-                int requestCode, Intent intent, int flags) {
+                int requestCode, Intent intent, String resolvedType, int flags) {
             return this.type == type && Objects.equals(this.packageName, packageName)
                     && this.uid == uid && creatorIdentity.equals(identity)
-                    && (this.flags & (PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_IMMUTABLE
-                            | PendingIntent.FLAG_MUTABLE)) == (flags & (PendingIntent.FLAG_ONE_SHOT
-                                    | PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_MUTABLE))
+                    && this.flags == flags && Objects.equals(lastResolvedType(), resolvedType)
                     && this.requestCode == requestCode && last().filterEquals(intent);
         }
 
@@ -96,10 +110,15 @@ final class PendingIntents {
             return intents[intents.length - 1];
         }
 
+        String lastResolvedType() {
+            return resolvedTypes == null ? null : resolvedTypes[resolvedTypes.length - 1];
+        }
+
         @Override
         public void send(int code, Intent fillIn, String resolvedType, IBinder allowlistToken,
                 IIntentReceiver finishedReceiver, String requiredPermission, Bundle options) {
-            PendingIntents.this.sendWithOptions(this, fillIn, resolvedType, requiredPermission, options);
+            PendingIntents.this.sendWithOptions(this, code, fillIn, resolvedType,
+                    finishedReceiver, requiredPermission, options);
         }
 
         @Override
@@ -136,8 +155,13 @@ final class PendingIntents {
         boolean noCreate = (flags & PendingIntent.FLAG_NO_CREATE) != 0;
         boolean cancelCurrent = (flags & PendingIntent.FLAG_CANCEL_CURRENT) != 0;
         boolean updateCurrent = (flags & PendingIntent.FLAG_UPDATE_CURRENT) != 0;
+        flags &= ~(PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_CANCEL_CURRENT
+                | PendingIntent.FLAG_UPDATE_CURRENT);
+        boolean shareIdentity = sharesIdentity(options);
         Runnable beforeLock = mBeforeRecordLock;
         if (beforeLock != null) beforeLock.run();
+        RemoteCallbackList<IResultReceiver> callbacks = null;
+        Record result;
         synchronized (mRecords) {
             if (mPm.isRemovalPending(packageName) || mPm.get(packageName) != creator) {
                 throw new SecurityException("PendingIntent creator changed before publication");
@@ -145,30 +169,39 @@ final class PendingIntents {
             Record existing = null;
             for (Record r : mRecords) {
                 if (!r.canceled && r.sameKey(type, packageName, uid, identity, requestCode,
-                        copies[copies.length - 1], flags)) {
+                        copies[copies.length - 1], resolvedTypes == null ? null
+                                : resolvedTypes[resolvedTypes.length - 1], flags)) {
                     existing = r;
                     break;
                 }
             }
             if (existing != null) {
                 if (cancelCurrent) {
-                    existing.canceled = true;
-                    mRecords.remove(existing);
+                    callbacks = cancelLocked(existing);
                 } else {
                     if (updateCurrent) {
+                        // The key's final intent retains flags and other non-extra
+                        // state; only the preceding activity stack is replaced.
+                        Intent last = existing.last();
+                        last.replaceExtras(copies[copies.length - 1]);
+                        copies[copies.length - 1] = last;
                         existing.intents = copies;
                         existing.resolvedTypes = resolvedTypes == null ? null : resolvedTypes.clone();
                     }
                     return existing;
                 }
             }
-            if (noCreate) return null;
-            Record r = new Record(type, packageName, requestCode, copies,
-                    resolvedTypes == null ? null : resolvedTypes.clone(), flags, uid, identity,
-                    sharesIdentity(options));
-            mRecords.add(r);
-            return r;
+            if (noCreate) {
+                result = existing;
+            } else {
+                result = new Record(type, packageName, requestCode, copies,
+                        resolvedTypes == null ? null : resolvedTypes.clone(), flags, uid, identity,
+                        shareIdentity);
+                mRecords.add(result);
+            }
         }
+        dispatchCancelled(callbacks);
+        return result;
     }
 
     Record record(IIntentSender sender) {
@@ -180,10 +213,58 @@ final class PendingIntents {
         Record r = record(sender);
         if (r == null) return;
         requireCreator(r);
+        RemoteCallbackList<IResultReceiver> callbacks;
         synchronized (mRecords) {
-            r.canceled = true;
-            mRecords.remove(r);
+            callbacks = cancelLocked(r);
         }
+        dispatchCancelled(callbacks);
+    }
+
+    boolean registerCancelListener(IIntentSender sender, IResultReceiver receiver) {
+        synchronized (mRecords) {
+            Record r = record(sender);
+            if (r == null || r.canceled) return false;
+            if (r.cancelListeners == null) r.cancelListeners = new RemoteCallbackList<>();
+            r.cancelListeners.register(receiver);
+            return true;
+        }
+    }
+
+    void unregisterCancelListener(IIntentSender sender, IResultReceiver receiver) {
+        synchronized (mRecords) {
+            Record r = record(sender);
+            if (r != null && r.cancelListeners != null) r.cancelListeners.unregister(receiver);
+        }
+    }
+
+    /** Guarded by mRecords. A replacement token can never inherit these listeners. */
+    private RemoteCallbackList<IResultReceiver> cancelLocked(Record r) {
+        if (r.canceled) return null;
+        r.canceled = true;
+        mRecords.remove(r);
+        RemoteCallbackList<IResultReceiver> callbacks = r.cancelListeners;
+        r.cancelListeners = null;
+        return callbacks;
+    }
+
+    private void dispatchCancelled(RemoteCallbackList<IResultReceiver> callbacks) {
+        if (callbacks == null) return;
+        mCancelCallbacks.execute(() -> {
+            List<IResultReceiver> targets = new ArrayList<>();
+            try {
+                int count = callbacks.beginBroadcast();
+                try {
+                    for (int i = 0; i < count; i++) targets.add(callbacks.getBroadcastItem(i));
+                } finally { callbacks.finishBroadcast(); }
+            } finally { callbacks.kill(); }
+            for (IResultReceiver target : targets) {
+                try { target.send(android.app.Activity.RESULT_CANCELED, null); }
+                catch (RemoteException | RuntimeException failed) {
+                    SystemServer.log("PendingIntent cancellation listener unavailable: "
+                            + failed.getClass().getSimpleName());
+                }
+            }
+        });
     }
 
     void requireCreator(Record r) {
@@ -199,12 +280,17 @@ final class PendingIntents {
     }
 
     int send(Record r, Intent fillIn, String resolvedType, String requiredPermission) {
-        return send(r, fillIn, resolvedType, requiredPermission, null, null);
+        return send(r, 0, fillIn, resolvedType, null, requiredPermission, null, null);
     }
 
     int sendWithOptions(Record r, Intent fillIn, String resolvedType, String requiredPermission,
             Bundle options) {
-        return send(r, fillIn, resolvedType, requiredPermission, null, options);
+        return sendWithOptions(r, 0, fillIn, resolvedType, null, requiredPermission, options);
+    }
+
+    int sendWithOptions(Record r, int code, Intent fillIn, String resolvedType,
+            IIntentReceiver finishedReceiver, String requiredPermission, Bundle options) {
+        return send(r, code, fillIn, resolvedType, finishedReceiver, requiredPermission, null, options);
     }
 
     interface ActivityLaunch {
@@ -216,15 +302,17 @@ final class PendingIntents {
             ActivityLaunch launch) {
         Record r = record(target);
         if (r == null || r.type != ActivityManager.INTENT_SENDER_ACTIVITY) return ActivityManager.START_CANCELED;
-        return send(r, fillIn, resolvedType, null, launch, options);
+        return send(r, 0, fillIn, resolvedType, null, null, launch, options);
     }
 
-    private int send(Record r, Intent fillIn, String resolvedType, String requiredPermission,
+    private int send(Record r, int code, Intent fillIn, String resolvedType,
+            IIntentReceiver finishedReceiver, String requiredPermission,
             ActivityLaunch activityLaunch, Bundle options) {
         final Intent intent;
-        final String type;
+        final String creatorType;
         final ApkPackage creator;
         final boolean shareIdentity;
+        RemoteCallbackList<IResultReceiver> callbacks = null;
         synchronized (mRecords) {
             if (r == null || r.canceled || !mRecords.contains(r)) return ActivityManager.START_CANCELED;
             ApkPackage current = mPm.get(r.packageName);
@@ -232,25 +320,34 @@ final class PendingIntents {
                     && r.uid == android.os.Process.SYSTEM_UID && "android-system".equals(r.creatorIdentity)
                     : current.uid() == r.uid && r.creatorIdentity.equals(codeIdentity(current));
             if (!valid || mPm.isRemovalPending(r.packageName)) {
-                r.canceled = true; mRecords.remove(r); return ActivityManager.START_CANCELED;
-            }
-            creator = current;
-            // SafeActivityOptions merges the creator and sender bundles. The
-            // public ActivityOptions serializer only emits shareIdentity when
-            // true, so either request enables it; updating extras does not
-            // replace the original creation options. The creator remains the
-            // authenticated identity, even when another app sends the token.
-            shareIdentity = r.shareIdentity || sharesIdentity(options);
-            intent = new Intent(r.last());
-            type = r.resolvedTypes != null ? r.resolvedTypes[r.resolvedTypes.length - 1] : resolvedType;
-            // Sending is capability based: a legitimate recipient can consume a
-            // one-shot record, but cannot separately cancel or update its creator's PI.
-            if ((r.flags & PendingIntent.FLAG_ONE_SHOT) != 0) {
-                r.canceled = true; mRecords.remove(r);
+                callbacks = cancelLocked(r);
+                creator = null;
+                intent = null;
+                creatorType = null;
+                shareIdentity = false;
+            } else {
+                creator = current;
+                // SafeActivityOptions merges the creator and sender bundles. The
+                // public ActivityOptions serializer only emits shareIdentity when
+                // true, so either request enables it; updating extras does not
+                // replace the original creation options. The creator remains the
+                // authenticated identity, even when another app sends the token.
+                shareIdentity = r.shareIdentity || sharesIdentity(options);
+                intent = new Intent(r.last());
+                creatorType = r.lastResolvedType();
+                // Sending is capability based: a legitimate recipient can consume a
+                // one-shot record, but cannot separately cancel or update its creator's PI.
+                if ((r.flags & PendingIntent.FLAG_ONE_SHOT) != 0) {
+                    callbacks = cancelLocked(r);
+                }
             }
         }
+        dispatchCancelled(callbacks);
+        if (intent == null) return ActivityManager.START_CANCELED;
+        String type = creatorType;
         if (fillIn != null && (r.flags & PendingIntent.FLAG_IMMUTABLE) == 0) {
-            intent.fillIn(fillIn, 0);
+            int changes = intent.fillIn(fillIn, r.flags);
+            if ((changes & Intent.FILL_IN_DATA) != 0) type = resolvedType;
         }
         // Signing identity permits a future send after a safe update. This invocation
         // carries only the exact creator generation validated above, including while
@@ -263,21 +360,35 @@ final class PendingIntents {
         SystemServer.log("send " + r);
         long ident = Binder.clearCallingIdentity();
         try {
+            int result;
             switch (r.type) {
                 case ActivityManager.INTENT_SENDER_BROADCAST:
-                    return mAm.sendBroadcastFor(r.packageName, intent, type, requiredPermission, lifetime);
+                    // The acknowledged queue owns completion, including an empty
+                    // receiver set. One-shot retirement does not revoke this send.
+                    return mAm.sendBroadcastFor(r.packageName, intent, type, requiredPermission,
+                            lifetime, code, finishedReceiver);
                 case ActivityManager.INTENT_SENDER_ACTIVITY:
-                    if (activityLaunch != null) return activityLaunch.start(r.packageName, intent, type,
-                            lifetime, shareIdentity);
-                    return mAm.startActivityFor(r.packageName, intent, type, lifetime, shareIdentity);
+                    result = activityLaunch != null
+                            ? activityLaunch.start(r.packageName, intent, type, lifetime, shareIdentity)
+                            : mAm.startActivityFor(r.packageName, intent, type, lifetime, shareIdentity);
+                    break;
                 case ActivityManager.INTENT_SENDER_SERVICE:
                 case ActivityManager.INTENT_SENDER_FOREGROUND_SERVICE:
                     mAm.startServiceFor(r.packageName, intent, type,
                             r.type == ActivityManager.INTENT_SENDER_FOREGROUND_SERVICE, lifetime);
-                    return lifetime.getAsBoolean() ? 0 : ActivityManager.START_CANCELED;
+                    result = lifetime.getAsBoolean() ? 0 : ActivityManager.START_CANCELED;
+                    break;
                 default:
-                    return 0;
+                    result = 0;
             }
+            if (finishedReceiver != null && result != ActivityManager.START_CANCELED) {
+                try { finishedReceiver.performReceive(new Intent(intent), 0, null, null, false, false, 0); }
+                catch (RemoteException | RuntimeException failed) {
+                    SystemServer.log("PendingIntent completion listener unavailable: "
+                            + failed.getClass().getSimpleName());
+                }
+            }
+            return result;
         } finally {
             Binder.restoreCallingIdentity(ident);
         }
