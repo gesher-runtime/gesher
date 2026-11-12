@@ -1,0 +1,105 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Production crop admission; the JPEG encoder is an observing boundary here.
+// MediaDataContractTest separately decodes actual JPEG pixels on Windows.
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <memory>
+#include <string>
+#include <vector>
+
+#define JNICALL
+using jint = int;
+using jsize = int;
+using jbyte = signed char;
+using jboolean = unsigned char;
+using jclass = void*;
+using jobject = void*;
+using jintArray = std::vector<int>*;
+using jbyteArray = std::vector<jbyte>*;
+constexpr jboolean JNI_FALSE = 0;
+constexpr jboolean JNI_TRUE = 1;
+constexpr int JNI_ABORT = 2;
+constexpr int kNv21 = 0x11;
+constexpr int kYuy2 = 0x14;
+
+struct JNIEnv {
+  std::string exception;
+  int acquired = 0;
+  int released = 0;
+  template<class T> jsize GetArrayLength(std::vector<T>* array) {
+    return static_cast<jsize>(array->size());
+  }
+  void GetIntArrayRegion(jintArray array, int start, int size, int* out) {
+    std::copy_n(array->data() + start, size, out);
+  }
+  bool ExceptionCheck() { return !exception.empty(); }
+  jbyte* GetByteArrayElements(jbyteArray array, void*) { ++acquired; return array->data(); }
+  void ReleaseByteArrayElements(jbyteArray, jbyte*, int) { ++released; }
+};
+void jniThrowException(JNIEnv* env, const char* type, const char*) { env->exception = type; }
+
+struct SkWStream {};
+SkWStream* CreateJavaOutputStreamAdaptor(JNIEnv*, jobject, jbyteArray) { return new SkWStream; }
+int encoded = 0;
+int first_y = -1;
+int last_y = -1;
+bool Encode(SkWStream*, const uint8_t* data, int format, int width, int height,
+            const int* offsets, const int* strides, int) {
+  ++encoded;
+  const int bytes_per_pixel = format == kNv21 ? 1 : 2;
+  first_y = data[offsets[0]];
+  last_y = data[offsets[0] + (height - 1) * strides[0] + (width - 1) * bytes_per_pixel];
+  return true;
+}
+
+@PRODUCTION_IMPLEMENTATION@
+
+int checks = 0;
+int failures = 0;
+void Check(bool condition, const char* name) {
+  ++checks;
+  if (!condition) { ++failures; std::fprintf(stderr, "FAIL %s\n", name); }
+}
+
+void Crop(int format, int stride, int left, int top, bool trim_padding) {
+  constexpr int width = 64, height = 32;
+  const int bytes_per_pixel = format == kNv21 ? 1 : 2;
+  int length = format == kNv21 ? stride * height * 3 / 2 : stride * height;
+  if (trim_padding) {
+    length = format == kNv21 ? stride * height + (height / 2 - 1) * stride + width
+                             : (height - 1) * stride + width * 2;
+  }
+  std::vector<jbyte> image(length, 0);
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) image[y * stride + x * bytes_per_pixel] = (y + x) % 120;
+  }
+  std::vector<int> offsets{top * stride + left * bytes_per_pixel};
+  std::vector<int> strides{stride};
+  if (format == kNv21) {
+    offsets.push_back(stride * height + (top / 2) * stride + left);
+    strides.push_back(stride);
+  }
+  JNIEnv env;
+  encoded = 0;
+  const bool result = YuvImage_compressToJpeg(&env, nullptr, &image, format,
+      width - left, height - top, &offsets, &strides, 90, nullptr, nullptr) == JNI_TRUE;
+  Check(result && env.exception.empty(), "valid YUV crop is accepted");
+  Check(encoded == 1, "valid crop reaches encoder once");
+  Check(first_y == (top + left) % 120 && last_y == (height - 1 + width - 1) % 120,
+        "encoder receives the original crop offsets and strides");
+  Check(env.acquired == 1 && env.released == 1, "input array is released after encoding");
+}
+
+int main() {
+  for (int format : {kNv21, kYuy2}) {
+    const int stride = format == kNv21 ? 64 : 128;
+    Crop(format, stride, 0, 0, false);
+    Crop(format, stride, 32, 0, false);
+    Crop(format, stride, 32, 8, false);
+    Crop(format, stride + 16, 32, 8, true);
+  }
+  std::printf("YUV crop contracts: %d checks, %d failures\n", checks, failures);
+  return failures == 0 ? 0 : 1;
+}

@@ -9,6 +9,7 @@
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -126,6 +127,16 @@ JNIEXPORT jstring JNICALL Java_com_gesher_recordapp_RecordActivity_aaudioInputRe
   if (r != AAUDIO_OK) {
     snprintf(msg, sizeof msg, "open %s", AAudio_convertResultToText(r));
     return (*env)->NewStringUTF(env, msg);
+  }
+  int16_t empty[2] = {0};
+  if (AAudioStream_read(s, NULL, 1, 0) != AAUDIO_ERROR_NULL
+      || AAudioStream_read(s, NULL, 0, 0) != AAUDIO_ERROR_NULL
+      || AAudioStream_read(s, empty, -1, 0) != AAUDIO_ERROR_ILLEGAL_ARGUMENT
+      || AAudioStream_read(s, empty, INT32_MIN, 0) != AAUDIO_ERROR_ILLEGAL_ARGUMENT
+      || AAudioStream_read(s, empty, 0, INT64_MAX) != 0
+      || AAudioStream_getFramesRead(s) != 0) {
+    AAudioStream_close(s);
+    return (*env)->NewStringUTF(env, "AAudio read argument contract failed");
   }
   const int want = 44100;
   int16_t* pcm = (int16_t*)calloc((size_t)want * 2, sizeof(int16_t));

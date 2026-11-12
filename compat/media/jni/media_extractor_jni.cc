@@ -176,22 +176,36 @@ Format TrackFormatForJava(Extractor* ex, size_t index) {
   return f;
 }
 
-void Open(JNIEnv* env, jobject thiz, std::unique_ptr<DataSource> source, const std::string& error) {
+JniExtractor* GetForDataSource(JNIEnv* env, jobject thiz) {
   JniExtractor* e = Get(env, thiz);
+  if (e != nullptr && e->extractor != nullptr) {
+    // NuMediaExtractor accepts one successful setDataSource per instance.
+    // Selected readers belong to that extractor and retain its source adapter.
+    jniThrow(env, "java/io/IOException", "Data source is already set.");
+    return nullptr;
+  }
+  return e;
+}
+
+void Open(JNIEnv* env, jobject thiz, std::unique_ptr<DataSource> source, const std::string& error) {
+  JniExtractor* e = GetForDataSource(env, thiz);
   if (e == nullptr) return;
   std::string err = error;
-  if (source != nullptr) {
-    e->source = std::move(source);
-    e->extractor = Extractor::Open(e->source, &err);
-  }
-  if (e->extractor == nullptr) {
+  std::shared_ptr<DataSource> owner = std::move(source);
+  std::unique_ptr<Extractor> extractor;
+  if (owner != nullptr) extractor = Extractor::Open(owner, &err);
+  if (extractor == nullptr) {
     MEDIA_LOGE("MediaExtractor: %s", err.c_str());
     jniThrow(env, "java/io/IOException", "Failed to instantiate extractor.");
+    return;
   }
+  e->source = std::move(owner);
+  e->extractor = std::move(extractor);
 }
 
 void JNICALL ME_setDataSourcePath(JNIEnv* env, jobject thiz, jobject, jstring path, jobjectArray keys,
                                   jobjectArray values) {
+  if (GetForDataSource(env, thiz) == nullptr) return;
   std::string p = Utf8(env, path);
   std::map<std::string, std::string> headers;
   if (keys != nullptr && values != nullptr) {
@@ -213,6 +227,7 @@ void JNICALL ME_setDataSourceFD(JNIEnv* env, jobject thiz, jobject fileDescripto
     jniThrow(env, "java/lang/IllegalArgumentException", nullptr);
     return;
   }
+  if (GetForDataSource(env, thiz) == nullptr) return;
   jclass fdc = env->FindClass("java/io/FileDescriptor");
   jint fd = env->GetIntField(fileDescriptor, env->GetFieldID(fdc, "descriptor", "I"));
   std::string error;

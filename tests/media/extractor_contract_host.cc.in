@@ -1,0 +1,86 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Production extractor setup, with a deterministic extractor factory.
+#include <cstdio>
+#include <memory>
+#include <string>
+#include <vector>
+
+struct JNIEnv { std::string exception; };
+using jobject = void*;
+void jniThrow(JNIEnv* env, const char* type, const char*) { env->exception = type; }
+#define MEDIA_LOGE(...) ((void)0)
+
+int sources_alive = 0;
+int extractors_opened = 0;
+struct DataSource {
+  explicit DataSource(bool readable = true) : readable(readable) { ++sources_alive; }
+  ~DataSource() { --sources_alive; }
+  bool readable;
+};
+struct Extractor {
+  explicit Extractor(std::shared_ptr<DataSource> source) : source(std::move(source)) {}
+  std::shared_ptr<DataSource> source;
+  static std::unique_ptr<Extractor> Open(std::shared_ptr<DataSource> source, std::string*) {
+    ++extractors_opened;
+    return source->readable ? std::make_unique<Extractor>(std::move(source)) : nullptr;
+  }
+};
+struct JniExtractor {
+  std::shared_ptr<DataSource> source;
+  std::unique_ptr<Extractor> extractor;
+  std::vector<int> selected;
+};
+JniExtractor* Get(JNIEnv* env, jobject object) {
+  if (object == nullptr) jniThrow(env, "java/lang/IllegalStateException", nullptr);
+  return static_cast<JniExtractor*>(object);
+}
+
+@PRODUCTION_IMPLEMENTATION@
+
+int checks = 0;
+int failures = 0;
+void Check(bool condition, const char* name) {
+  ++checks;
+  if (!condition) { ++failures; std::fprintf(stderr, "FAIL %s\n", name); }
+}
+int main() {
+  JNIEnv env;
+  {
+    JniExtractor e;
+    Open(&env, &e, std::make_unique<DataSource>(), "");
+    Check(env.exception.empty() && e.extractor != nullptr, "first setup succeeds");
+    auto* source = e.source.get();
+    auto* extractor = e.extractor.get();
+    e.selected = {0, 3};
+    const int attempts = extractors_opened;
+    for (bool readable : {true, false}) {
+      env.exception.clear();
+      Open(&env, &e, std::make_unique<DataSource>(readable), "");
+      Check(env.exception == "java/io/IOException", "second setup is rejected");
+      Check(e.source.get() == source && e.extractor.get() == extractor,
+            "first data-source ownership remains unchanged");
+      Check(e.selected == std::vector<int>({0, 3}), "selected tracks remain unchanged");
+      Check(extractors_opened == attempts, "second setup never opens another extractor");
+      Check(sources_alive == 1, "unused candidate source is closed");
+    }
+    env.exception.clear();
+    Open(&env, &e, nullptr, "missing file");
+    Check(env.exception == "java/io/IOException" && e.source.get() == source,
+          "failed second source cannot reset an open extractor");
+  }
+  Check(sources_alive == 0, "release closes the first source");
+  {
+    JniExtractor e;
+    env.exception.clear();
+    Open(&env, &e, std::make_unique<DataSource>(false), "unsupported file");
+    Check(env.exception == "java/io/IOException" && e.extractor == nullptr,
+          "failed first setup reports IOException");
+    Check(e.source == nullptr && sources_alive == 0, "failed first source is closed");
+    env.exception.clear();
+    Open(&env, &e, std::make_unique<DataSource>(), "");
+    Check(env.exception.empty() && e.extractor != nullptr, "retry after first failure succeeds");
+  }
+  Check(sources_alive == 0, "final release closes source");
+  std::printf("Extractor setup contracts: %d checks, %d failures\n", checks, failures);
+  return failures == 0 ? 0 : 1;
+}

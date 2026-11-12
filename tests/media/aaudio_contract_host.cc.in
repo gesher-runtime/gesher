@@ -1,0 +1,160 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Production stream I/O, with only the PCM backend and monotonic clock adapted.
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <limits>
+#include <thread>
+#include <vector>
+#include <sys/types.h>
+
+#define SYSV
+using aaudio_result_t = int32_t;
+constexpr int32_t kOk = 0;
+constexpr int32_t kErrorIllegalArgument = -898;
+constexpr int32_t kErrorInternal = -896;
+constexpr int32_t kErrorInvalidState = -895;
+constexpr int32_t kErrorNull = -886;
+constexpr int32_t kErrorTimeout = -885;
+
+int64_t clock_now = 123000000;
+int clock_calls = 0;
+std::atomic<int32_t>* state_to_change = nullptr;
+int change_after = 0;
+int64_t Now() {
+  if (state_to_change != nullptr && ++clock_calls >= change_after) *state_to_change = 4;
+  const int64_t result = clock_now;
+  clock_now += 1000000;
+  return result;
+}
+
+struct Backend {
+  int calls = 0;
+  int waits = 0;
+  size_t max_transfer = 8;
+  size_t position = 0;
+  bool error = false;
+  bool unavailable = false;
+  bool invalid_request = false;
+  std::vector<uint8_t> bytes;
+  ssize_t Write(const void* data, size_t size, bool) {
+    ++calls;
+    if (data == nullptr || size > 64) { invalid_request = true; return 0; }
+    if (error) return -1;
+    if (unavailable) return 0;
+    const size_t count = std::min(size, max_transfer);
+    const auto* p = static_cast<const uint8_t*>(data);
+    bytes.insert(bytes.end(), p, p + count);
+    return static_cast<ssize_t>(count);
+  }
+  ssize_t Read(void* data, size_t size, bool) {
+    ++calls;
+    if (data == nullptr || size > 64) { invalid_request = true; return 0; }
+    if (error) return -1;
+    if (unavailable) return 0;
+    const size_t count = std::min({size, max_transfer, bytes.size() - position});
+    if (count != 0) memcpy(data, bytes.data() + position, count);
+    position += count;
+    return static_cast<ssize_t>(count);
+  }
+  bool WaitForData(size_t, int milliseconds) {
+    ++waits;
+    clock_now += int64_t{milliseconds} * 1000000;
+    return true;
+  }
+};
+
+struct AAudioStream {
+  struct { void* data_cb = nullptr; } b;
+  Backend* track = nullptr;
+  Backend* capture = nullptr;
+  size_t frame_size = 4;
+  int32_t burst = 2;
+  std::atomic<int32_t> state{2};
+  std::atomic<int64_t> written{0};
+};
+void TraceInput(AAudioStream*, const char*, int32_t, int32_t) {}
+
+@PRODUCTION_IMPLEMENTATION@
+
+int checks = 0;
+int failures = 0;
+void Check(bool condition, const char* name) {
+  ++checks;
+  if (!condition) { ++failures; std::fprintf(stderr, "FAIL %s\n", name); }
+}
+
+int main() {
+  uint8_t pcm[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+  Backend output;
+  AAudioStream writer;
+  writer.track = &output;
+  for (int frames : {0, 1, -1}) {
+    Check(Write(&writer, nullptr, frames, 0) == kErrorNull, "null write buffer");
+    Check(Read(&writer, nullptr, frames, 0) == kErrorNull, "null read buffer");
+  }
+  for (int frames : {-1, std::numeric_limits<int32_t>::min()}) {
+    Check(Write(&writer, pcm, frames, 0) == kErrorIllegalArgument, "negative write count");
+    Check(Read(&writer, pcm, frames, 0) == kErrorIllegalArgument, "negative read count before direction");
+  }
+  Check(Write(&writer, pcm, 0, INT64_MAX) == 0, "zero write");
+  Check(Read(&writer, pcm, 0, INT64_MAX) == 0, "zero read before direction");
+  Check(output.calls == 0, "rejected and empty requests do not reach backend");
+  Check(!output.invalid_request, "backend receives only ordinary buffer requests");
+
+  // Preserve the current callback-stream ownership rule, while validating null
+  // buffers first as the public Android wrapper does.
+  writer.b.data_cb = &writer;
+  Check(Write(&writer, pcm, 1, 0) == kErrorInvalidState, "callback stream is not a writer");
+  Check(Write(&writer, nullptr, 1, 0) == kErrorNull, "null buffer precedes callback state");
+  writer.b.data_cb = nullptr;
+  Check(Read(&writer, pcm, 1, 0) == kErrorInvalidState, "output stream is not a reader");
+  Check(Write(nullptr, pcm, 1, 0) == kErrorNull, "null write stream");
+  Check(Read(nullptr, pcm, 1, 0) == kErrorNull, "null read stream");
+
+  Check(Write(&writer, pcm, 4, 0) == 2, "nonblocking partial write reports frames");
+  Check(output.bytes == std::vector<uint8_t>(pcm, pcm + 8), "nonblocking PCM payload");
+  output.bytes.clear(); output.calls = 0;
+  Check(Write(&writer, pcm, 4, INT64_MAX) == 4, "large timeout permits complete write");
+  Check(output.calls == 2 && output.bytes == std::vector<uint8_t>(pcm, pcm + 16),
+        "partial writes continue at the next frame");
+  Check(writer.written == 6, "written-frame accounting");
+  output.unavailable = true;
+  const int calls_before = output.calls;
+  Check(Write(&writer, pcm, 1, -1) == 0 && output.calls == calls_before + 1,
+        "negative duration stays nonblocking");
+  output.error = true; output.unavailable = false;
+  Check(Write(&writer, pcm, 1, 0) == kErrorInternal, "write engine error");
+
+  Backend input;
+  input.bytes.assign(pcm, pcm + 16);
+  AAudioStream reader;
+  reader.capture = &input;
+  uint8_t received[16] = {};
+  Check(Read(&reader, received, 4, INT64_MAX) == 4, "large timeout permits complete read");
+  Check(input.calls == 2 && input.waits == 1 && std::memcmp(received, pcm, 16) == 0,
+        "partial reads preserve frame position and PCM bytes");
+  Check(Read(&reader, received, -1, 0) == kErrorIllegalArgument, "negative input frame count");
+  Check(Write(&reader, pcm, 0, 0) == 0, "zero output request before direction");
+  Check(Write(&reader, pcm, 1, 0) == kErrorInvalidState, "input stream is not a writer");
+  input.error = true;
+  Check(Read(&reader, received, 1, 0) == kErrorInternal, "read engine error");
+
+  int32_t next = -1;
+  Check(WaitForStateChange(&reader, 4, &next, INT64_MAX) == kOk && next == 2,
+        "already changed state accepts large duration");
+  Check(WaitForStateChange(&reader, 2, &next, 0) == kErrorTimeout && next == 2,
+        "zero state-change duration");
+  Check(WaitForStateChange(&reader, 2, &next, std::numeric_limits<int64_t>::min()) == kErrorTimeout,
+        "negative state-change duration");
+  state_to_change = &reader.state; clock_calls = 0; change_after = 3;
+  Check(WaitForStateChange(&reader, 2, &next, INT64_MAX) == kOk && next == 4,
+        "large state-change timeout waits for transition");
+  state_to_change = nullptr;
+  Check(WaitForStateChange(nullptr, 2, &next, 0) == kErrorNull, "null state-change stream");
+  std::printf("AAudio contracts: %d checks, %d failures\n", checks, failures);
+  return failures == 0 ? 0 : 1;
+}

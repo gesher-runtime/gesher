@@ -1,0 +1,99 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Production raw JPEG row preparation. The consumer requires whole DCT blocks.
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <vector>
+
+constexpr int DCTSIZE = 8;
+using JSAMPROW = uint8_t*;
+
+@PRODUCTION_IMPLEMENTATION@
+
+int checks = 0;
+int failures = 0;
+void Check(bool condition, const char* name) {
+  ++checks;
+  if (!condition) { ++failures; std::fprintf(stderr, "FAIL %s\n", name); }
+}
+
+uint8_t Luma(int row, int column) { return 16 + (row * 7 + column * 3) % 219; }
+uint8_t Cb(int row, int column) { return 64 + (row * 5 + column * 11) % 127; }
+uint8_t Cr(int row, int column) { return 64 + (row * 13 + column * 7) % 127; }
+
+void Rows(bool nv21, int width, int height) {
+  const int half = width / 2;
+  const int strides[2] = {width * (nv21 ? 1 : 2) + 16, width + 16};
+  const int chroma_rows = nv21 ? (height + 1) / 2 : height;
+  std::vector<uint8_t> source(strides[0] * height + (nv21 ? strides[1] * chroma_rows : 0), 0);
+  for (int row = 0; row < height; ++row) {
+    for (int x = 0; x < width; x += 2) {
+      if (nv21) {
+        source[row * strides[0] + x] = Luma(row, x);
+        source[row * strides[0] + x + 1] = Luma(row, x + 1);
+      } else {
+        const int pos = row * strides[0] + x * 2;
+        source[pos] = Luma(row, x);
+        source[pos + 1] = Cb(row, x / 2);
+        source[pos + 2] = Luma(row, x + 1);
+        source[pos + 3] = Cr(row, x / 2);
+      }
+    }
+  }
+  if (nv21) {
+    for (int row = 0; row < chroma_rows; ++row) {
+      for (int x = 0; x < half; ++x) {
+        const int pos = strides[0] * height + row * strides[1] + x * 2;
+        source[pos] = Cr(row, x);
+        source[pos + 1] = Cb(row, x);
+      }
+    }
+  }
+
+  // Sizes required by libjpeg's raw-data interface, independently of the
+  // implementation's allocations. Every sample in the final DCT block is read.
+  const int y_columns = ((width + 7) / 8) * 8;
+  const int uv_columns = ((half + 7) / 8) * 8;
+  for (int row = 0; row < height; row += 16) {
+    std::vector<uint8_t> y_storage(16 * y_columns, 0xea);
+    std::vector<uint8_t> u_storage(16 * uv_columns, 0xea);
+    std::vector<uint8_t> v_storage(16 * uv_columns, 0xea);
+    JSAMPROW y[16], cb[16], cr[16];
+    if (nv21) {
+      Nv21Rows(source.data(), source.data() + strides[0] * height, strides, row,
+               width, height, &y_storage, &u_storage, &v_storage, y, cb, cr);
+    } else {
+      Yuy2Rows(source.data(), strides, row, width, height,
+               &y_storage, &u_storage, &v_storage, y, cb, cr);
+    }
+    bool good_y = true, good_cb = true, good_cr = true;
+    for (int i = 0; i < 16; ++i) {
+      for (int x = 0; x < y_columns; ++x) {
+        good_y &= y[i][x] == Luma(std::min(row + i, height - 1), std::min(x, width - 1));
+      }
+    }
+    for (int i = 0; i < (nv21 ? 8 : 16); ++i) {
+      const int chroma_row = std::min((nv21 ? row / 2 : row) + i, chroma_rows - 1);
+      for (int x = 0; x < uv_columns; ++x) {
+        const int column = std::min(x, half - 1);
+        good_cb &= cb[i][x] == Cb(chroma_row, column);
+        good_cr &= cr[i][x] == Cr(chroma_row, column);
+      }
+    }
+    Check(good_y, "luma samples and right/bottom padding match source edge");
+    Check(good_cb, "Cb samples and right/bottom padding match source edge");
+    Check(good_cr, "Cr samples and right/bottom padding match source edge");
+  }
+}
+
+int main() {
+  for (bool nv21 : {true, false}) {
+    for (int width : {2, 14, 24, 30, 32}) {
+      for (int height : {2, 10, 16, 24}) Rows(nv21, width, height);
+      if (!nv21) Rows(false, width, 23);  // YUY2 permits odd crop heights.
+    }
+  }
+  std::printf("YUV raw rows: %d checks, %d failures\n", checks, failures);
+  return failures == 0 ? 0 : 1;
+}

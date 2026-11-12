@@ -8,6 +8,7 @@
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -94,6 +95,20 @@ JNIEXPORT jstring JNICALL Java_com_gesher_mediaapp_MediaActivity_aaudioWriteTone
     return (*env)->NewStringUTF(env, msg);
   }
   static int16_t pcm[22050 * 4];
+  // Public transfer validation must finish before touching the audio ring.
+  aaudio_stream_state_t state = AAUDIO_STREAM_STATE_UNINITIALIZED;
+  if (AAudioStream_write(s, NULL, 1, 0) != AAUDIO_ERROR_NULL
+      || AAudioStream_write(s, NULL, 0, 0) != AAUDIO_ERROR_NULL
+      || AAudioStream_write(s, pcm, -1, 0) != AAUDIO_ERROR_ILLEGAL_ARGUMENT
+      || AAudioStream_write(s, pcm, INT32_MIN, 0) != AAUDIO_ERROR_ILLEGAL_ARGUMENT
+      || AAudioStream_write(s, pcm, 0, INT64_MAX) != 0
+      || AAudioStream_getFramesWritten(s) != 0
+      || AAudioStream_waitForStateChange(s, AAUDIO_STREAM_STATE_STARTED, &state,
+                                         INT64_MAX) != AAUDIO_OK
+      || state != AAUDIO_STREAM_STATE_OPEN) {
+    AAudioStream_close(s);
+    return (*env)->NewStringUTF(env, "AAudio write argument/state contract failed");
+  }
   for (int32_t i = 0; i < frames; i++) pcm[i] = (int16_t)(16383 * sin(2 * M_PI * hz * i / 22050.0));
   int32_t done = 0;
   while (done < frames) {
