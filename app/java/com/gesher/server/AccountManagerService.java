@@ -430,9 +430,9 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (c != null && e.visibility.containsKey(c.key())) {
             return e.visibility.get(c.key());
         }
-        if (c != null && e.visibility.containsKey(c.name)) {
-            return e.visibility.get(c.name);
-        }
+        // Do not fall back to an unscoped package-name grant. Such an entry
+        // could outlive an uninstall and expose accounts to different code
+        // installed later under the same package name.
         if (e.visibility.containsKey(AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE)) {
             return e.visibility.get(AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE);
         }
