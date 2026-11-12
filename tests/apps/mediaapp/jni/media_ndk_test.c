@@ -97,8 +97,11 @@ JNIEXPORT jstring JNICALL Java_com_gesher_mediaapp_MediaActivity_aaudioWriteTone
   static int16_t pcm[22050 * 4];
   // Public transfer validation must finish before touching the audio ring.
   aaudio_stream_state_t state = AAUDIO_STREAM_STATE_UNINITIALIZED;
-  if (AAudioStream_write(s, NULL, 1, 0) != AAUDIO_ERROR_NULL
-      || AAudioStream_write(s, NULL, 0, 0) != AAUDIO_ERROR_NULL
+  // Exercise runtime argument validation while retaining the NDK's compile-time
+  // nonnull diagnostics for ordinary calls in this fixture.
+  const void* volatile missing_data = NULL;
+  if (AAudioStream_write(s, missing_data, 1, 0) != AAUDIO_ERROR_NULL
+      || AAudioStream_write(s, missing_data, 0, 0) != AAUDIO_ERROR_NULL
       || AAudioStream_write(s, pcm, -1, 0) != AAUDIO_ERROR_ILLEGAL_ARGUMENT
       || AAudioStream_write(s, pcm, INT32_MIN, 0) != AAUDIO_ERROR_ILLEGAL_ARGUMENT
       || AAudioStream_write(s, pcm, 0, INT64_MAX) != 0

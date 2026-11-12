@@ -129,8 +129,11 @@ JNIEXPORT jstring JNICALL Java_com_gesher_recordapp_RecordActivity_aaudioInputRe
     return (*env)->NewStringUTF(env, msg);
   }
   int16_t empty[2] = {0};
-  if (AAudioStream_read(s, NULL, 1, 0) != AAUDIO_ERROR_NULL
-      || AAudioStream_read(s, NULL, 0, 0) != AAUDIO_ERROR_NULL
+  // Supply a runtime null for the negative contract, keeping ordinary NDK
+  // nonnull call diagnostics enabled for the rest of the fixture.
+  void* volatile missing_data = NULL;
+  if (AAudioStream_read(s, missing_data, 1, 0) != AAUDIO_ERROR_NULL
+      || AAudioStream_read(s, missing_data, 0, 0) != AAUDIO_ERROR_NULL
       || AAudioStream_read(s, empty, -1, 0) != AAUDIO_ERROR_ILLEGAL_ARGUMENT
       || AAudioStream_read(s, empty, INT32_MIN, 0) != AAUDIO_ERROR_ILLEGAL_ARGUMENT
       || AAudioStream_read(s, empty, 0, INT64_MAX) != 0
