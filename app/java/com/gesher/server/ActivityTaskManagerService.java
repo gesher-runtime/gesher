@@ -1560,7 +1560,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /** Notes since when no process runs or starts. Guarded by this. */
     private void updateIdle() {
-        if (mProcesses.isEmpty() && mStarting.isEmpty()) {
+        boolean hasActiveUserProcess = false;
+        for (ProcessRecord p : mProcesses) {
+            if (!GmsPackageSupport.PACKAGE_GMS.equals(p.packageName)) {
+                hasActiveUserProcess = true;
+                break;
+            }
+        }
+        if (!hasActiveUserProcess && mStarting.isEmpty()) {
             if (mIdleSince == 0) mIdleSince = SystemClock.uptimeMillis();
         } else {
             mIdleSince = 0;

@@ -352,6 +352,14 @@ final class DeviceServices {
     }
 
     /**
+     * {@code domain_verification}: DomainVerificationManager stand-in. Answers like a device
+     * with no domain verification records, preventing NullPointerException on app startup.
+     */
+    static final class DomainVerificationService
+            extends android.content.pm.verify.domain.IDomainVerificationManager.Default {
+    }
+
+    /**
      * {@code shortcut}: package-owned dynamic shortcuts with Windows shell integration;
      * Android pin/share-target hosts remain unavailable.
      */

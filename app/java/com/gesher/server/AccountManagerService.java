@@ -419,10 +419,27 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (e == null || !owns(c, e)) throw new SecurityException("Account belongs to its authenticator");
     }
 
+    private static boolean isLegacyKey(String packageName) {
+        return AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE.equals(packageName)
+                || AccountManager.PACKAGE_NAME_KEY_LEGACY_NOT_VISIBLE.equals(packageName);
+    }
+
     private int visibility(Caller c, Entry e) {
         if (e == null) return AccountManager.VISIBILITY_NOT_VISIBLE;
         if (owns(c, e)) return AccountManager.VISIBILITY_VISIBLE;
-        return e.visibility.getOrDefault(c.key(), AccountManager.VISIBILITY_NOT_VISIBLE);
+        if (c != null && e.visibility.containsKey(c.key())) {
+            return e.visibility.get(c.key());
+        }
+        if (c != null && e.visibility.containsKey(c.name)) {
+            return e.visibility.get(c.name);
+        }
+        if (e.visibility.containsKey(AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE)) {
+            return e.visibility.get(AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE);
+        }
+        if (e.visibility.containsKey(AccountManager.PACKAGE_NAME_KEY_LEGACY_NOT_VISIBLE)) {
+            return e.visibility.get(AccountManager.PACKAGE_NAME_KEY_LEGACY_NOT_VISIBLE);
+        }
+        return AccountManager.VISIBILITY_NOT_VISIBLE;
     }
 
     private boolean visible(Caller c, Account account, Entry e) {
@@ -437,8 +454,9 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private String targetKey(String packageName) {
+        if (isLegacyKey(packageName)) return packageName;
         String code = packageIdentity(packageName);
-        if (code == null) throw new SecurityException("Unknown account client package");
+        if (code == null) return packageName;
         return packageName + "\u0000" + code;
     }
 
@@ -460,8 +478,12 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private synchronized Caller targetCaller(String name) {
+        if (isLegacyKey(name)) {
+            return captureCaller(name, name, false, -1, -1);
+        }
         ApkPackage target = mPm.get(name);
-        return captureCaller(name, packageIdentity(name), false, target == null ? -1 : target.uid(), -1);
+        String code = packageIdentity(name);
+        return captureCaller(name, code != null ? code : "", false, target == null ? -1 : target.uid(), -1);
     }
 
     @Override
@@ -481,7 +503,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (authenticator == null || !authenticator.service.getPackageName().equals(c.name)
                 || !callerUnchanged(c)) throw new SecurityException("Account client mismatch");
         Caller target = targetCaller(packageName);
-        if (target.code == null) throw new SecurityException("Unknown account client package");
+        if (target.code == null || target.code.isEmpty()) return new Account[0];
         List<Account> result = new ArrayList<>();
         for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
             Account account = item.getKey(); Entry entry = item.getValue();
@@ -527,7 +549,8 @@ public final class AccountManagerService extends IAccountManager.Default {
         result.put(e.owner, AccountManager.VISIBILITY_VISIBLE);
         for (Map.Entry<String, Integer> item : e.visibility.entrySet()) {
             int split = item.getKey().indexOf('\u0000');
-            if (split > 0) result.put(item.getKey().substring(0, split), item.getValue());
+            String name = split > 0 ? item.getKey().substring(0, split) : item.getKey();
+            if (!isLegacyKey(name)) result.put(name, item.getValue());
         }
         return result;
     }
