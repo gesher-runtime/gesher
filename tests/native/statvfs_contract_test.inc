@@ -91,20 +91,52 @@ static void test_statvfs_contracts(void) {
   errno = 0;
   check("statvfs64 missing relative path reports ENOENT", statvfs64(absent, &missing64) == -1 && errno == ENOENT);
 
+  // Construct the deep fixture from an absolute root. The existing Windows
+  // mkdir mapper decides whether to add an extended-path prefix from the
+  // supplied path's length: a short relative name can cross the Win32 limit
+  // only after the current directory is prepended. That unrelated setup gap
+  // must not prevent the statvfs assertions below from running.
+  char working_directory[1024], absolute_directory[1024];
+  int have_cwd = getcwd(working_directory, sizeof(working_directory)) != NULL;
+  check("resolve absolute root for long filesystem statistics paths", have_cwd);
+  size_t cwd_length = have_cwd ? strlen(working_directory) : 0;
+  const char* separator = cwd_length != 0 && working_directory[cwd_length - 1] == '/' ? "" : "/";
+  int absolute_length = have_cwd ? snprintf(absolute_directory, sizeof(absolute_directory),
+                                           "%s%s%s", working_directory, separator, directory) : -1;
+  int have_root = absolute_length > 0 && (size_t)absolute_length < sizeof(absolute_directory);
+  check("absolute filesystem statistics root fits the fixture buffer", have_root);
+  if (!have_root) {
+    check("remove filesystem statistics root directory", rmdir(directory) == 0);
+    return;
+  }
+
   char nested[8][1024];
-  const char* parent = directory;
+  const char* parent = absolute_directory;
   int levels = 0;
   for (int i = 0; i < 8; ++i) {
-    snprintf(nested[i], sizeof(nested[i]), "%s/ordinary-long-directory-%02d-\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d", parent, i);
-    if (mkdir(nested[i], 0700) != 0) break;
+    int length = snprintf(nested[i], sizeof(nested[i]),
+                          "%s/ordinary-long-directory-%02d-0123456789", parent, i);
+    if (length < 0 || (size_t)length >= sizeof(nested[i])) {
+      fprintf(stderr, "statvfs fixture path overflow at level %d\n", i + 1);
+      break;
+    }
+    if (mkdir(nested[i], 0700) != 0) {
+      fprintf(stderr, "statvfs fixture mkdir failed at level %d: errno=%d\n", i + 1, errno);
+      break;
+    }
     parent = nested[i];
     ++levels;
   }
-  check("create directory path longer than Windows MAX_PATH", levels == 8 && strlen(parent) > 260);
+  // Only this suffix is counted. It is all ASCII, so its bytes are also UTF-16
+  // code units; neither Unicode in the working directory nor the drive prefix
+  // can make this merely a long UTF-8 spelling of a short Win32 path.
+  check("create directory path longer than Windows MAX_PATH",
+        levels == 8 && strlen(parent) - (size_t)absolute_length > 260);
   if (levels == 8) {
     statvfs_check_path(parent, &expected, 1);
-    snprintf(file, sizeof(file), "%s/file.txt", parent);
-    fd = open(file, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    int file_length = snprintf(file, sizeof(file), "%s/file.txt", parent);
+    fd = file_length > 0 && (size_t)file_length < sizeof(file)
+             ? open(file, O_CREAT | O_EXCL | O_WRONLY, 0600) : -1;
     check("create ordinary file below the long path", fd >= 0);
     if (fd >= 0) {
       check("write payload below the long path", write(fd, "abcdefgh", 8) == 8);
