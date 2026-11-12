@@ -1,0 +1,319 @@
+// Exact production sendfile and bionic registration/bridge bodies are inserted
+// by test_sendfile_contracts.py. Only I/O boundaries are controllable.
+#include "shim_internal.h"
+#include <algorithm>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
+#include <limits>
+#include <sys/sendfile.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
+
+static unsigned read_calls, write_calls, commit_calls;
+static unsigned read_error_call, commit_error_call, zero_from_call;
+static int read_error = EIO, commit_error = EBADF, query_error;
+static std::vector<int> write_plan;
+static bool synthetic;
+static off_t synthetic_cursor;
+static size_t synthetic_written;
+static void reset_boundaries() {
+  read_calls = write_calls = commit_calls = 0;
+  read_error_call = commit_error_call = zero_from_call = 0;
+  read_error = EIO; commit_error = EBADF; query_error = 0;
+  write_plan.clear(); synthetic = false; synthetic_cursor = 0; synthetic_written = 0;
+}
+[[maybe_unused]] static int gesher_errno_from_crt(int error) {
+  return error == 132 ? EOVERFLOW : error;
+}
+static ssize_t boundary_pread(int fd, void* buffer, size_t count, off_t offset) {
+  if (++read_calls == read_error_call) return errno = read_error, -1;
+  if (synthetic) return static_cast<ssize_t>(count);
+  return ::pread(fd, buffer, count, offset);
+}
+[[maybe_unused]] static ssize_t boundary_read(int fd, void* buffer, unsigned count) {
+  if (++read_calls == read_error_call) return errno = read_error, -1;
+  if (synthetic) { synthetic_cursor += count; return count; }
+  return ::read(fd, buffer, count);
+}
+static int boundary_write(int fd, const void* buffer, unsigned count) {
+  unsigned index = write_calls++;
+  if (zero_from_call != 0 && write_calls >= zero_from_call) {
+    if (write_calls > zero_from_call + 8) {
+      std::fputs("FAIL zero-write retry loop\n", stderr); std::exit(78);
+    }
+    return 0;
+  }
+  if (index < write_plan.size()) {
+    int planned = write_plan[index];
+    if (planned < 0) return errno = -planned, -1;
+    count = std::min(count, static_cast<unsigned>(planned));
+  }
+  if (synthetic) { synthetic_written += count; return static_cast<int>(count); }
+  return static_cast<int>(::write(fd, buffer, count));
+}
+[[maybe_unused]] static off_t boundary_lseek(int fd, off_t offset, int whence) {
+  if (whence == SEEK_CUR && query_error != 0) return errno = query_error, -1;
+  if (whence == SEEK_SET && ++commit_calls == commit_error_call)
+    return errno = commit_error, -1;
+  if (synthetic) {
+    if (whence == SEEK_SET) synthetic_cursor = offset;
+    return synthetic_cursor;
+  }
+  return ::lseek(fd, offset, whence);
+}
+namespace production {
+#define sendfile host_sendfile
+#define pread boundary_pread
+#define read boundary_read
+#define write boundary_write
+#define lseek boundary_lseek
+@SENDFILE_IMPLEMENTATION@
+#undef sendfile
+#undef pread
+#undef read
+#undef write
+#undef lseek
+}
+namespace gesher::bionic {
+namespace {
+#define sendfile ::production::host_sendfile
+@BIONIC_BRIDGE@
+#undef sendfile
+}
+void RegisterSendfileContracts(SymbolTable& t) {
+#define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
+@BIONIC_REGISTRATIONS@
+#undef E
+}
+}
+static gesher::bionic::SymbolTable symbols;
+using Bridge = int64_t (BIONIC_SYSV *)(int, int, int64_t*, size_t);
+static ssize_t guest_sendfile(int out, int in, off_t* offset, size_t count) {
+  static_assert(sizeof(off_t) == sizeof(int64_t));
+  return reinterpret_cast<Bridge>(symbols.at("sendfile"))(
+      out, in, reinterpret_cast<int64_t*>(offset), count);
+}
+using Operation = ssize_t (*)(int, int, off_t*, size_t);
+static int assertions, failures;
+static void check(const char* name, bool ok) {
+  ++assertions;
+  if (!ok) { ++failures; std::printf("FAIL %s\n", name); }
+}
+#define SENDFILE_CONTRACT_CALL guest_sendfile
+#include "sendfile_contract_test.inc"
+
+struct Fixture {
+  FILE* input = std::tmpfile();
+  FILE* output = std::tmpfile();
+  std::vector<unsigned char> payload;
+  explicit Fixture(size_t count = 200123) : payload(count) {
+    if (input == nullptr || output == nullptr) std::abort();
+    for (size_t i = 0; i < payload.size(); ++i)
+      payload[i] = static_cast<unsigned char>((i * 37u + (i >> 8) * 13u + (i >> 16) * 83u) & 255);
+    if (!sendfile_contract_fill(in(), payload.data(), payload.size())) std::abort();
+    if (::lseek(in(), 0, SEEK_SET) != 0) std::abort();
+  }
+  ~Fixture() { std::fclose(input); std::fclose(output); }
+  int in() const { return ::fileno(input); }
+  int out() const { return ::fileno(output); }
+};
+static void drain_socket(int fd, std::vector<unsigned char>& result) {
+  unsigned char buffer[8192];
+  for (unsigned guard = 0; guard < 2048; ++guard) {
+    ssize_t got = ::read(fd, buffer, sizeof(buffer));
+    if (got > 0) { result.insert(result.end(), buffer, buffer + got); continue; }
+    if (got < 0 && errno == EINTR) continue;
+    if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
+    check("socket drain reaches only a nonblocking boundary", false); return;
+  }
+  check("socket drain is bounded", false);
+}
+static void socket_tests() {
+  for (Operation operation : {production::host_sendfile, guest_sendfile}) {
+    for (bool explicit_offset : {false, true}) {
+      for (bool initially_full : {false, true}) {
+        reset_boundaries(); Fixture f;
+        int sockets[2];
+        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) std::abort();
+        int capacity = 4096;
+        if (::setsockopt(sockets[0], SOL_SOCKET, SO_SNDBUF, &capacity, sizeof(capacity)) != 0 ||
+            ::fcntl(sockets[0], F_SETFL, O_NONBLOCK) != 0 ||
+            ::fcntl(sockets[1], F_SETFL, O_NONBLOCK) != 0) std::abort();
+        off_t start = explicit_offset ? 23 : 17;
+        off_t offset = start;
+        ::lseek(f.in(), explicit_offset ? 7 : start, SEEK_SET);
+        if (initially_full) {
+          unsigned char padding[4096] = {};
+          size_t filled = 0;
+          for (unsigned guard = 0; guard < 2048; ++guard) {
+            ssize_t wrote = ::write(sockets[0], padding, sizeof(padding));
+            if (wrote > 0) { filled += static_cast<size_t>(wrote); continue; }
+            check("fill reaches EAGAIN", wrote < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
+            break;
+          }
+          errno = 0;
+          ssize_t result = operation(sockets[0], f.in(), explicit_offset ? &offset : nullptr, 65536);
+          check("blocked socket reports EAGAIN", result == -1 && (errno == EAGAIN || errno == EWOULDBLOCK));
+          check("blocked socket consumes no input", offset == start &&
+                ::lseek(f.in(), 0, SEEK_CUR) == (explicit_offset ? 7 : start));
+          std::vector<unsigned char> padding_read;
+          drain_socket(sockets[1], padding_read);
+          check("blocked socket transmits no payload", padding_read.size() == filled);
+        }
+        size_t wanted = f.payload.size() - static_cast<size_t>(start) - 11;
+        size_t total = 0; unsigned calls = 0;
+        bool positions_ok = true;
+        std::vector<unsigned char> received;
+        while (total < wanted && calls < 1000) {
+          ++calls;
+          ssize_t result = operation(sockets[0], f.in(), explicit_offset ? &offset : nullptr, wanted - total);
+          if (result > 0) total += static_cast<size_t>(result);
+          else if (result == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) break;
+          positions_ok = positions_ok && ::lseek(f.in(), 0, SEEK_CUR) ==
+              (explicit_offset ? 7 : start + static_cast<off_t>(total));
+          if (explicit_offset) positions_ok = positions_ok && offset == start + static_cast<off_t>(total);
+          drain_socket(sockets[1], received);
+        }
+        drain_socket(sockets[1], received);
+        check("nonblocking transfer requires partial-write retries", calls > 1);
+        check("nonblocking transfer finishes within retry bound", total == wanted && calls < 1000);
+        check("every retry preserves committed source position", positions_ok);
+        check("partial retries deliver all payload bytes exactly once in order",
+              received.size() == wanted && std::equal(received.begin(), received.end(), f.payload.begin() + start));
+        ::close(sockets[0]); ::close(sockets[1]);
+      }
+    }
+  }
+}
+
+static void fault_tests() {
+  for (Operation operation : {production::host_sendfile, guest_sendfile}) {
+    for (bool explicit_offset : {false, true}) {
+      for (int mode = 0; mode < 3; ++mode) {
+        reset_boundaries(); Fixture f;
+        const off_t start = 13;
+        off_t offset = start;
+        ::lseek(f.in(), explicit_offset ? 7 : start, SEEK_SET);
+        size_t committed;
+        int expected_error;
+        if (mode == 0) {
+          write_plan = {7, -EAGAIN}; committed = 7; expected_error = EAGAIN;
+        } else if (mode == 1) {
+          read_error_call = 2; committed = 65536; expected_error = EIO;
+        } else {
+          write_plan = {65536, 7, -ENOSPC}; committed = 65543; expected_error = ENOSPC;
+        }
+        errno = 0;
+        ssize_t result = operation(f.out(), f.in(), explicit_offset ? &offset : nullptr, 131072);
+        check("failure after progress returns exactly committed bytes",
+              result == static_cast<ssize_t>(committed) && errno == expected_error);
+        check("failure after progress preserves implicit or explicit source position",
+              ::lseek(f.in(), 0, SEEK_CUR) == (explicit_offset ? 7 : start + static_cast<off_t>(committed)) &&
+              (!explicit_offset || offset == start + static_cast<off_t>(committed)));
+        check("failure after progress writes exactly the committed payload prefix",
+              ::lseek(f.out(), 0, SEEK_CUR) == static_cast<off_t>(committed) &&
+              sendfile_contract_contents(f.out(), 0, f.payload.data() + start, committed));
+        reset_boundaries();
+        result = operation(f.out(), f.in(), explicit_offset ? &offset : nullptr, 131072 - committed);
+        check("retry after error completes remaining bytes", result == static_cast<ssize_t>(131072 - committed));
+        check("retry after read or write error has no payload holes or duplicates",
+              sendfile_contract_contents(f.out(), 0, f.payload.data() + start, 131072));
+      }
+    }
+  }
+  reset_boundaries(); Fixture f;
+  ::lseek(f.in(), 13, SEEK_SET);
+  write_plan = {7}; commit_error_call = 1; commit_error = 132;
+  errno = 0;
+  ssize_t result = guest_sendfile(f.out(), f.in(), nullptr, 31);
+  check("failed cursor commit reports bytes already owned by output", result == 7 && errno == EOVERFLOW);
+  check("failed cursor commit does not repeat output write", write_calls == 1 && commit_calls == 1 &&
+        ::lseek(f.in(), 0, SEEK_CUR) == 13 && ::lseek(f.out(), 0, SEEK_CUR) == 7 &&
+        sendfile_contract_contents(f.out(), 0, f.payload.data() + 13, 7));
+  reset_boundaries(); query_error = 132; errno = 0;
+  result = guest_sendfile(f.out(), f.in(), nullptr, 31);
+  check("CRT query error is translated before any data movement",
+        result == -1 && errno == EOVERFLOW && read_calls == 0 && write_calls == 0);
+}
+
+static void zero_write_tests() {
+  for (bool explicit_offset : {false, true}) {
+    for (bool prior_progress : {false, true}) {
+      reset_boundaries(); Fixture f;
+      off_t offset = 13;
+      ::lseek(f.in(), explicit_offset ? 7 : 13, SEEK_SET);
+      if (prior_progress) write_plan = {7};
+      zero_from_call = prior_progress ? 2 : 1;
+      errno = 0;
+      ssize_t result = guest_sendfile(f.out(), f.in(), explicit_offset ? &offset : nullptr, 31);
+      size_t committed = prior_progress ? 7 : 0;
+      check("zero write terminates with EIO and actual prior progress",
+            result == (prior_progress ? 7 : -1) && errno == EIO &&
+            write_calls == (prior_progress ? 2u : 1u));
+      check("zero write advances no additional input",
+            ::lseek(f.in(), 0, SEEK_CUR) == (explicit_offset ? 7 : 13 + static_cast<off_t>(committed)) &&
+            (!explicit_offset || offset == 13 + static_cast<off_t>(committed)));
+      check("zero write leaves exactly committed output",
+            ::lseek(f.out(), 0, SEEK_CUR) == static_cast<off_t>(committed) &&
+            sendfile_contract_contents(f.out(), 0, f.payload.data() + 13, committed));
+    }
+  }
+}
+
+static void large_tests() {
+  reset_boundaries(); Fixture f(127);
+  const off_t high = (static_cast<off_t>(1) << 33) + 13;
+  // Host-only sparse data: the shared Windows fixture uses high EOF positions.
+  check("host sparse source writes above four GiB",
+        ::pwrite(f.in(), f.payload.data(), f.payload.size(), high) == static_cast<ssize_t>(f.payload.size()));
+  ::lseek(f.in(), high, SEEK_SET);
+  ssize_t result = guest_sendfile(f.out(), f.in(), nullptr, 31);
+  check("implicit high-offset data does not truncate source position",
+        result == 31 && ::lseek(f.in(), 0, SEEK_CUR) == high + 31 &&
+        sendfile_contract_contents(f.out(), 0, f.payload.data(), 31));
+  off_t offset = high + 31;
+  ::lseek(f.in(), high + 99, SEEK_SET);
+  result = guest_sendfile(f.out(), f.in(), &offset, 31);
+  check("explicit high-offset data preserves the actual input cursor",
+        result == 31 && offset == high + 62 && ::lseek(f.in(), 0, SEEK_CUR) == high + 99 &&
+        sendfile_contract_contents(f.out(), 31, f.payload.data() + 31, 31));
+
+  reset_boundaries(); Fixture small(16);
+  offset = 0; ::lseek(small.in(), 7, SEEK_SET);
+  result = guest_sendfile(small.out(), small.in(), &offset, static_cast<size_t>(INT64_MAX));
+  check("valid maximum signed count copies only existing bytes",
+        result == 16 && offset == 16 && ::lseek(small.in(), 0, SEEK_CUR) == 7 &&
+        sendfile_contract_contents(small.out(), 0, small.payload.data(), 16));
+
+  reset_boundaries(); synthetic = true; synthetic_cursor = high;
+  result = guest_sendfile(1, 2, nullptr, 0x7ffff001);
+  check("valid large count is capped at Linux MAX_RW_COUNT",
+        result == 0x7ffff000 && synthetic_written == 0x7ffff000 &&
+        synthetic_cursor == high + 0x7ffff000);
+  reset_boundaries(); synthetic = true; offset = INT64_MAX;
+  errno = 0;
+  result = guest_sendfile(1, 2, &offset, 1);
+  check("overflowing explicit range fails before any I/O",
+        result == -1 && errno == EINVAL && offset == INT64_MAX && read_calls == 0 && write_calls == 0);
+  reset_boundaries();
+}
+
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  gesher::bionic::RegisterSendfileContracts(symbols);
+  check("sendfile and sendfile64 use the same real bionic bridge",
+        symbols.at("sendfile") == symbols.at("sendfile64"));
+  if (std::strcmp(argv[1], "public") == 0) { reset_boundaries(); test_sendfile_contracts(); }
+  else if (std::strcmp(argv[1], "sockets") == 0) socket_tests();
+  else if (std::strcmp(argv[1], "faults") == 0) fault_tests();
+  else if (std::strcmp(argv[1], "zero-write") == 0) zero_write_tests();
+  else if (std::strcmp(argv[1], "large") == 0) large_tests();
+  else return 2;
+  std::printf("%s: %d assertions, %d failures\n", argv[1], assertions, failures);
+  return failures ? 1 : 0;
+}
