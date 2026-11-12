@@ -329,6 +329,11 @@ public class ConnectivityManager {
         return TYPE_NONE;
     }
 
+    /** Android removed this legacy preference; the pinned platform also does nothing. */
+    @Deprecated
+    public void setNetworkPreference(int preference) {
+    }
+
     /** Metered when the active network costs (or there is none), as ConnectivityService. */
     public boolean isActiveNetworkMetered() {
         WindowsNetworks.Net n = snapshot().defaultNetwork();
@@ -756,6 +761,10 @@ public class ConnectivityManager {
         }
 
         public void onUnavailable() {
+        }
+
+        /** Empty base hook, as on Android; this does not create a network reservation. */
+        public void onReserved(NetworkCapabilities networkCapabilities) {
         }
 
         public void onCapabilitiesChanged(Network network,
