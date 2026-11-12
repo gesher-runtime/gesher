@@ -360,9 +360,7 @@ int PosixDelete(const char* path, bool directory) {
 int BIONIC_SYSV Unlink(const char* path) { return PosixDelete(path, false); }
 int BIONIC_SYSV Rmdir(const char* path) { return PosixDelete(path, true); }
 int BIONIC_SYSV Remove(const char* path) {
-  struct stat st {};
-  if (path != nullptr && stat(path, &st) == 0 && S_ISDIR(st.st_mode)) return Rmdir(path);
-  return Unlink(path);
+  return remove(path);
 }
 int BIONIC_SYSV Unlinkat(int dirfd, const char* path, int flags) {
   std::string p;
@@ -375,29 +373,19 @@ int BIONIC_SYSV Mkdirat(int dirfd, const char* path, uint32_t mode) {
   return mkdir(p.c_str(), static_cast<mode_t>(mode));
 }
 int BIONIC_SYSV Renameat(int olddir, const char* oldpath, int newdir, const char* newpath) {
-  std::string a, b;
-  if (!AtPath(olddir, oldpath, &a) || !AtPath(newdir, newpath, &b)) return -1;
-  // Linux replaces an existing target; the CRT's rename does not.
-  std::wstring wa = Wide(a), wb = Wide(b);
-  if (MoveFileExW(wa.c_str(), wb.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
-    return 0;
-  }
-  return std::rename(a.c_str(), b.c_str());
+  return renameat(olddir, oldpath, newdir, newpath);
 }
-int BIONIC_SYSV Rename(const char* a, const char* b) { return Renameat(kAtFdcwd, a, kAtFdcwd, b); }
+int BIONIC_SYSV Rename(const char* a, const char* b) { return rename(a, b); }
 int BIONIC_SYSV Faccessat(int dirfd, const char* path, int mode, int) {
   std::string p;
   if (!AtPath(dirfd, path, &p)) return -1;
   return access(p.c_str(), mode);
 }
 int BIONIC_SYSV Chmod(const char* path, uint32_t mode) {
-  // The CRT models only the owner's write bit (read-only files).
-  return _chmod(path, (mode & 0200) != 0 ? (_S_IREAD | _S_IWRITE) : _S_IREAD) == 0 ? 0 : -1;
+  return chmod(path, static_cast<int>(mode));
 }
-int BIONIC_SYSV Fchmodat(int dirfd, const char* path, uint32_t mode, int) {
-  std::string p;
-  if (!AtPath(dirfd, path, &p)) return -1;
-  return Chmod(p.c_str(), mode);
+int BIONIC_SYSV Fchmodat(int dirfd, const char* path, uint32_t mode, int flags) {
+  return fchmodat(dirfd, path, static_cast<mode_t>(mode), flags);
 }
 int BIONIC_SYSV Fchmod(int fd, uint32_t mode) { return fchmod(fd, static_cast<mode_t>(mode)); }
 int BIONIC_SYSV Chown(const char* path, uint32_t uid, uint32_t gid) { return chown(path, uid, gid); }
@@ -412,17 +400,17 @@ bool NarrowTimes(const LinuxTimespec* in, struct timespec out[2]) {
   if (in == nullptr) return false;
   for (int i = 0; i < 2; ++i) {
     out[i].tv_sec = static_cast<time_t>(in[i].tv_sec);
-    out[i].tv_nsec = static_cast<long>(in[i].tv_nsec);
+    const int64_t ns = in[i].tv_nsec;
+    // Windows long is 32 bits. Preserve invalid full-width Android input as
+    // invalid, without moving EINVAL ahead of the host's path/fd lookup.
+    out[i].tv_nsec = ((ns >= 0 && ns < 1000000000) || ns == UTIME_NOW || ns == UTIME_OMIT)
+                         ? static_cast<long>(ns) : -1;
   }
   return true;
 }
 int BIONIC_SYSV Utimensat(int dirfd, const char* path, const LinuxTimespec* times, int flags) {
   struct timespec ts[2];
-  bool have = NarrowTimes(times, ts);
-  if (path == nullptr) return futimens(dirfd, have ? ts : nullptr);
-  std::string p;
-  if (!AtPath(dirfd, path, &p)) return -1;
-  return utimensat(kAtFdcwd, p.c_str(), have ? ts : nullptr, flags);
+  return utimensat(dirfd, path, NarrowTimes(times, ts) ? ts : nullptr, flags);
 }
 int BIONIC_SYSV Futimens(int fd, const LinuxTimespec* times) {
   struct timespec ts[2];
