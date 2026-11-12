@@ -257,6 +257,16 @@ The existing TCP supplier preservation check also needed the reviewed affinity
 function and its full-file SHA-256 recorded alongside its previous scoped
 repairs. Every other source byte, supplier input, controller and DAG remains
 checked against the same pinned baseline.
+The stdio reference also requires a libc with the relevant upstream fixes.
+Ubuntu 24.04's glibc 2.39 reproduced sticky close-on-exec flags and leaked FILE
+objects after failed reopen, in both the declared CRT adapter and the separate
+Linux reference. GNU lists both issues, 32134 and 32140, as fixed in
+[glibc 2.41](https://sourceware.org/pipermail/libc-announce/2025/000045.html).
+CI therefore runs this unchanged suite through
+`tools/ci/test-freopen-reference.sh` in the official Debian trixie image pinned
+by digest, with glibc 2.41 or newer verified before execution. All assertions
+and ASan/UBSan/LeakSanitizer remain enabled. Other preflight suites and the real
+Windows CRT fixtures retain their existing environments.
 
 To reproduce the static inventory, run the following commands **from a checkout
 of baseline `2bc86c0ae067b43a74bf76c5010a52b4564e81e5`**, with the collected

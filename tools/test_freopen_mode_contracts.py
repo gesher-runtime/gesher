@@ -6,6 +6,10 @@ boundaries and maps the CRT's N option to Linux e; real libc performs the open,
 exclusive-create decision, descriptor closure, byte I/O and inheritance flags.
 The same C fixture also runs independently on Linux and in Android ELF tests.
 This host test does not establish real Windows CRT or record-lock integration.
+
+The Linux backend requires glibc 2.41 or newer for the CLOEXEC-reset and
+failed-reopen allocation fixes (glibc bugs 32134 and 32140). CI runs this suite
+unchanged through tools/ci/test-freopen-reference.sh in a pinned Debian image.
 """
 import argparse
 import hashlib
