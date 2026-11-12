@@ -60,6 +60,7 @@ public final class NfcAdapter {
      * Applications use this distinction to decide whether NFC is supported.
      */
     public static NfcAdapter getDefaultAdapter(Context context) {
+        if (context == null) throw new IllegalArgumentException("context cannot be null");
         return null;
     }
 
