@@ -1,0 +1,236 @@
+// Production conversion and cleanup, with allocation-failure accounting and
+// synthetic backend lists. Numeric public cases use real host getaddrinfo.
+#include "shim_internal.h"
+
+#include <array>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <dlfcn.h>
+#include <netdb.h>
+#include <netinet/in.h>
+
+static int failures;
+static void check(const char* label, bool ok) {
+  std::printf("%-78s %s\n", label, ok ? "ok" : "FAIL");
+  if (!ok) ++failures;
+  std::fflush(stdout);
+}
+namespace dns_transport {
+static bool accounting;
+static int fail_at, allocation_calls, guest_frees;
+static std::array<void*, 8> allocations{};
+static std::array<size_t, 8> allocation_sizes{};
+enum class Mode { Real, Rows, Error, Empty };
+static Mode mode = Mode::Real;
+struct BackendRow { addrinfo info; sockaddr_storage address; char name[32]; };
+static std::array<BackendRow, 3> rows;
+static int backend_calls, backend_frees;
+static uint32_t last_index;
+static addrinfo last_hints;
+static bool had_hints;
+static void reset(int failure) {
+  accounting = true;
+  fail_at = failure;
+  allocation_calls = guest_frees = backend_calls = backend_frees = 0;
+  allocations = {};
+  allocation_sizes = {};
+  mode = Mode::Rows;
+  rows = {};
+  for (size_t i = 0; i < rows.size(); ++i) {
+    BackendRow& row = rows[i];
+    row.info.ai_flags = AI_NUMERICHOST | (i == 1 ? 0 : AI_CANONNAME);
+    row.info.ai_family = i == 1 ? AF_INET6 : AF_INET;
+    row.info.ai_socktype = i == 1 ? SOCK_DGRAM : SOCK_STREAM;
+    row.info.ai_protocol = i == 1 ? IPPROTO_UDP : IPPROTO_TCP;
+    row.info.ai_addrlen = i == 1 ? sizeof(sockaddr_in6) : sizeof(sockaddr_in);
+    row.info.ai_addr = reinterpret_cast<sockaddr*>(&row.address);
+    row.info.ai_addr->sa_family = row.info.ai_family;
+    if (i == 1) {
+      auto* a = reinterpret_cast<sockaddr_in6*>(&row.address);
+      a->sin6_port = htons(81);
+      a->sin6_addr.s6_addr[15] = 1;
+      a->sin6_scope_id = 12;
+    } else {
+      auto* a = reinterpret_cast<sockaddr_in*>(&row.address);
+      a->sin_port = htons(80 + i);
+      a->sin_addr.s_addr = htonl(0x7f000001 + i);
+      row.info.ai_canonname = row.name;
+      if (i == 0) std::strcpy(row.name, "numeric.example");
+    }
+    row.info.ai_next = i + 1 < rows.size() ? &rows[i + 1].info : nullptr;
+  }
+}
+static int lookup(const char* node, const char* service, const addrinfo* hints, uint32_t index, addrinfo** result) {
+  ++backend_calls;
+  last_index = index;
+  had_hints = hints != nullptr;
+  last_hints = hints != nullptr ? *hints : addrinfo{};
+  if (mode == Mode::Real) return ::getaddrinfo(node, service, hints, result);
+  *result = nullptr;
+  if (mode == Mode::Error) return EAI_AGAIN;
+  if (mode == Mode::Rows) *result = &rows[0].info;
+  return 0;
+}
+static void release(addrinfo* list) {
+  ++backend_frees;
+  if (mode == Mode::Real) { ::freeaddrinfo(list); return; }
+  check("getaddrinfo: backend list released exactly once", backend_frees == 1 &&
+        list == (mode == Mode::Rows ? &rows[0].info : nullptr));
+  // Conversion must own copies of address and canonical-name bytes.
+  for (auto& row : rows) {
+    std::memset(&row.address, 0xab, sizeof(row.address));
+    std::memset(row.name, '?', sizeof(row.name));
+  }
+}
+}
+extern "C" void* __real_calloc(size_t, size_t);
+extern "C" void __real_free(void*);
+extern "C" void* __wrap_calloc(size_t count, size_t size) {
+  using namespace dns_transport;
+  if (!accounting) return __real_calloc(count, size);
+  ++allocation_calls;
+  if (allocation_calls == fail_at) return nullptr;
+  void* result = __real_calloc(count, size);
+  if (allocation_calls <= static_cast<int>(allocations.size())) {
+    allocations[allocation_calls - 1] = result;
+    allocation_sizes[allocation_calls - 1] = count * size;
+  }
+  return result;
+}
+extern "C" void __wrap_free(void* pointer) {
+  using namespace dns_transport;
+  if (accounting && pointer != nullptr) {
+    for (auto& allocation : allocations) {
+      if (allocation == pointer) { allocation = nullptr; ++guest_frees; break; }
+    }
+  }
+  __real_free(pointer);
+}
+
+namespace gesher::bionic {
+namespace {
+@DNS_TYPES_AND_FLAGS@
+@DNS_FREE@
+#define gesher_getaddrinfo_interface dns_transport::lookup
+#define freeaddrinfo dns_transport::release
+@DNS_CONVERTER@
+@DNS_NETWORK_INDEX@
+@DNS_NETWORK_WRAPPER@
+#undef freeaddrinfo
+#undef gesher_getaddrinfo_interface
+}
+void RegisterDnsContracts(SymbolTable& t) {
+#define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
+@DNS_REGISTRATIONS@
+#undef E
+}
+}
+static void* dns_symbol(void*, const char* name) {
+  static gesher::bionic::SymbolTable table = [] {
+    gesher::bionic::SymbolTable result;
+    gesher::bionic::RegisterDnsContracts(result);
+    return result;
+  }();
+  auto found = table.find(name);
+  return found == table.end() ? nullptr : found->second;
+}
+#define dlsym dns_symbol
+#include "addrinfo_contract_test.inc"
+#undef dlsym
+
+using namespace dns_transport;
+static int query(int route, const addrinfo_contract_row* hints, addrinfo_contract_row** result) {
+  if (route == 0) {
+    auto function = reinterpret_cast<addrinfo_contract_get_fn>(dns_symbol(nullptr, "getaddrinfo"));
+    return function("127.0.0.1", "80", hints, result);
+  }
+  auto function = reinterpret_cast<addrinfo_contract_network_fn>(dns_symbol(nullptr, "android_getaddrinfofornetwork"));
+  uint64_t handle = route == 1 ? 0 : (uint64_t{112} << 32) | 0xcafed00d;
+  return function(handle, "127.0.0.1", "80", hints, result);
+}
+static void release_guest(addrinfo_contract_row* result) {
+  reinterpret_cast<addrinfo_contract_free_fn>(dns_symbol(nullptr, "freeaddrinfo"))(result);
+}
+static bool complete_copy(addrinfo_contract_row* result) {
+  for (size_t i = 0; i < rows.size(); ++i) {
+    if (result == nullptr) return false;
+    if (result->family != (i == 1 ? AF_INET6 : AF_INET) || result->socktype != (i == 1 ? SOCK_DGRAM : SOCK_STREAM) ||
+        result->protocol != (i == 1 ? IPPROTO_UDP : IPPROTO_TCP) || result->flags != (i == 1 ? 0x4 : 0x6) ||
+        result->address_length != (i == 1 ? sizeof(sockaddr_in6) : sizeof(sockaddr_in)) ||
+        reinterpret_cast<uintptr_t>(result->address) % alignof(sockaddr_in6) != 0 ||
+        reinterpret_cast<char*>(result->address) != reinterpret_cast<char*>(result + 1)) return false;
+    size_t expected_size = sizeof(*result) + result->address_length;
+    if (i == 1) {
+      const auto* address = reinterpret_cast<sockaddr_in6*>(result->address);
+      if (result->canonical_name != nullptr || address->sin6_family != AF_INET6 || ntohs(address->sin6_port) != 81 ||
+          address->sin6_addr.s6_addr[15] != 1 || address->sin6_scope_id != 12) return false;
+    } else {
+      const auto* address = reinterpret_cast<sockaddr_in*>(result->address);
+      const char* expected_name = i == 0 ? "numeric.example" : "";
+      expected_size += std::strlen(expected_name) + 1;
+      if (address->sin_family != AF_INET || ntohs(address->sin_port) != 80 + i ||
+          ntohl(address->sin_addr.s_addr) != 0x7f000001 + i || result->canonical_name == nullptr ||
+          std::strcmp(result->canonical_name, expected_name) != 0 ||
+          result->canonical_name != reinterpret_cast<char*>(result->address) + result->address_length) return false;
+    }
+    if (allocation_sizes[i] != expected_size) return false;
+    result = result->next;
+  }
+  return result == nullptr;
+}
+static void test_allocations() {
+  addrinfo_contract_row hints{};
+  hints.flags = 0x4 | 0x8 | 0x2;
+  hints.family = AF_UNSPEC;
+  for (int route = 0; route < 3; ++route) {
+    for (int failure = 0; failure <= 3; ++failure) {
+      reset(failure);
+      auto* result = reinterpret_cast<addrinfo_contract_row*>(uintptr_t{1});
+      int rc = query(route, &hints, &result);
+      char label[128];
+      std::snprintf(label, sizeof(label), "getaddrinfo: route=%d failure=%d is all-or-error", route, failure);
+      if (failure == 0) {
+        check(label, rc == 0 && allocation_calls == 3 && guest_frees == 0 && complete_copy(result));
+        release_guest(result);
+        check("getaddrinfo: successful list frees every guest node", guest_frees == 3);
+      } else {
+        check(label, rc == 6 && result == nullptr && allocation_calls == failure && guest_frees == failure - 1);
+        // Baseline partial-success controls are still cleaned up by the test.
+        if (result != reinterpret_cast<addrinfo_contract_row*>(uintptr_t{1})) release_guest(result);
+      }
+      check("getaddrinfo: backend routing/flags preserved", backend_calls == 1 && backend_frees == 1 &&
+            last_index == (route == 2 ? 12u : UINT32_MAX) && had_hints &&
+            last_hints.ai_flags == (AI_NUMERICHOST | AI_NUMERICSERV | AI_CANONNAME));
+      bool no_guest_nodes = true;
+      for (void* pointer : allocations) no_guest_nodes &= pointer == nullptr;
+      check("getaddrinfo: no guest allocation remains owned", no_guest_nodes);
+      accounting = false;
+    }
+  }
+}
+static void test_backend_errors() {
+  for (int route = 0; route < 3; ++route) {
+    reset(0);
+    mode = Mode::Error;
+    auto* result = reinterpret_cast<addrinfo_contract_row*>(uintptr_t{1});
+    check("getaddrinfo: backend errors preserve EAI translation and null output",
+          query(route, nullptr, &result) == 2 && result == nullptr && backend_calls == 1 &&
+          backend_frees == 0 && allocation_calls == 0 && !had_hints);
+    reset(0);
+    mode = Mode::Empty;
+    result = reinterpret_cast<addrinfo_contract_row*>(uintptr_t{1});
+    check("getaddrinfo: empty successful backend list retains prior error contract",
+          query(route, nullptr, &result) == 6 && result == nullptr && backend_frees == 1 && allocation_calls == 0);
+    accounting = false;
+  }
+}
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  if (std::strcmp(argv[1], "public") == 0) test_addrinfo_contracts();
+  else if (std::strcmp(argv[1], "allocation") == 0) test_allocations();
+  else if (std::strcmp(argv[1], "backend_errors") == 0) test_backend_errors();
+  else return 2;
+  return failures == 0 ? 0 : 1;
+}
