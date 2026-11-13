@@ -40,8 +40,8 @@ device's `system_server.log`:
   no reference left is dropped. Only the client's own process (or the system)
   may change its connection. Server-local acquisitions (getType,
   `getContentProviderExternal`) stay uncounted.
-- **An idle reaper ends cached processes.** Every minute the system server
-  of a persistent device looks at the processes it spawned that have no
+- **An idle reaper ends cached processes.** Every min(60 s, idle time / 4)
+  the system server of a persistent device looks at the processes it spawned that have no
   activity and no pending work, and ends (`scheduleExit`, the same path as
   `maybeExit`) one that is not in use
   (`ActivityManagerService.inUse`) and was not used for
@@ -53,7 +53,16 @@ device's `system_server.log`:
   and a client that released its providers do not count. Use is stamped on
   the process (`ProcessRecord.lastActive`) when work is dispatched to it,
   when something in it ends (`maybeExit`), on provider acquisitions and
-  reference changes, and whenever a sweep finds it in use.
+  reference changes, on a bind to one of its services, and whenever a sweep
+  finds it in use; a stamp only moves forward. Once it decided, the reaper
+  marks the process exiting (nothing new is handed to it), then checks again
+  that no service is in use and, under the providers' lock, that no client
+  acquired a provider before it unpublishes them; if either changed, it
+  clears exiting and keeps the process. A start or a binding that still
+  reached it (a bind that connected to its published Binder after the second
+  check) is recovered by a new process when it dies (`ActiveServices.processDied`
+  restarts a reaped process's started or auto-create-bound services; any other
+  intentional exit still suppresses restarts).
 - **Only microG's main and `:persistent` processes are persistent**
   (`ActivityManagerService.isPersistent`): the main process hosts the
   accounts, location and the chimera provider every client asks for, and
@@ -70,9 +79,21 @@ device's `system_server.log`:
 ## Consequences
 - A process ends only when no other process could notice: no live binding
   from another process, no held provider reference (a client never gets a
-  DeadObjectException for a stable reference it holds). It may still race a
-  new request in the moment it is told to exit, as with `maybeExit`; the
-  request then starts a new process.
+  DeadObjectException for a stable reference it holds). A request that races
+  the exit is either seen by the second check (the process is kept) or
+  recovered by a new process (above). While a backed-out process is briefly
+  marked exiting, a call it makes in that instant is refused as from an
+  unknown process.
+- Holders handed out to the host or uncounted (`getContentProviderExternal`,
+  getType's server-local lookup, the system server's own callers) take no
+  reference: such a user does not keep the provider's process from being
+  reaped, and the next call from it after a reap finds a dead Binder
+  (it asks again and gets the new process).
+- A Binder obtained from a service that only its own process binds (passed
+  on to another process through a callback or an intent, not through
+  bindService) is not a use the server sees: the reaper may end that process
+  under the holder, which then gets a DeadObjectException, as on Android
+  when the low-memory killer ends a cached process.
 - The Play Store and DroidGuard start again when needed, a few seconds each
   time instead of not at all; 10 minutes of idleness keeps the frequent ones
   (DroidGuard during an integrity check burst) warm.

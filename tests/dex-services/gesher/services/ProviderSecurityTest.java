@@ -183,7 +183,14 @@ public final class ProviderSecurityTest {
         ContentProviderHolder stable = (ContentProviderHolder) counted.invoke(providers,
                 senderProcess, senderName, authority, true, true);
         require(stable.connection == unstable.connection, "one client got two connections to one provider");
-        remove.invoke(providers, stable.connection, false);  // the duplicate holder (installProvider race)
+        // installProvider lost a race: a second stable holder, released at once.
+        ContentProviderHolder duplicate = (ContentProviderHolder) counted.invoke(providers,
+                senderProcess, senderName, authority, true, true);
+        require(duplicate.connection == stable.connection, "a duplicate holder got its own connection");
+        remove.invoke(providers, duplicate.connection, true);
+        require((Boolean) inUse.invoke(providers, ownerProcess), "a held stable reference was dropped");
+        // The unstable reference released while a stable one is held: refContentProvider(0, -1).
+        require((Boolean) ref.invoke(providers, stable.connection, 0, -1), "a live connection reported dead");
         require((Boolean) inUse.invoke(providers, ownerProcess), "a held stable reference was dropped");
         // releaseProvider of the last stable reference: stable to one unstable, then removal.
         require((Boolean) ref.invoke(providers, stable.connection, -1, 1), "a live connection reported dead");
