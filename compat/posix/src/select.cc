@@ -3,15 +3,26 @@
 // descriptor that is not open fails the call with EBADF, the sets hold only
 // the ready descriptors on return, and the result counts set bits.
 #include <errno.h>
+#include <limits.h>
 #include <poll.h>
 #include <sys/select.h>
 #include <windows.h>
 
+#include <limits>
 #include <vector>
+
+#include "internal.h"
 
 namespace {
 
-int SelectMs(int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds, int timeout_ms) {
+// Nanoseconds in a wide signed type retain all accepted timespec ranges and
+// cannot overflow when adding the host's monotonic clock to the duration.
+using WideTime = __int128;
+
+WideTime NowNs() { return static_cast<WideTime>(gesher::MonotonicMicros()) * 1000; }
+
+int SelectUntil(int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds,
+                bool finite, WideTime deadline) {
   if (nfds < 0 || nfds > FD_SETSIZE) return errno = EINVAL, -1;
   std::vector<pollfd> fds;
   for (int fd = 0; fd < nfds; ++fd) {
@@ -21,13 +32,22 @@ int SelectMs(int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds, int
     if (exceptfds != nullptr && FD_ISSET(fd, exceptfds)) events |= POLLPRI;
     if (events != 0) fds.push_back({fd, events, 0});
   }
-  if (fds.empty()) {
-    // select(0, ...) is a sleep.
-    Sleep(timeout_ms < 0 ? INFINITE : static_cast<DWORD>(timeout_ms));
-    return 0;
+  for (;;) {
+    int timeout_ms = -1;
+    if (finite) {
+      const WideTime remaining = deadline - NowNs();
+      const WideTime milliseconds = remaining > 0 ? (remaining + 999999) / 1000000 : 0;
+      timeout_ms = milliseconds > INT_MAX ? INT_MAX : static_cast<int>(milliseconds);
+    }
+    // poll also handles an empty interest set. Keep the same absolute deadline
+    // through bounded slices and through an early Windows scheduler wakeup.
+    int ready = poll(fds.data(), fds.size(), timeout_ms);
+    if (ready < 0) return -1;
+    if (ready > 0 || (finite && NowNs() >= deadline)) break;
   }
-  int ready = poll(fds.data(), fds.size(), timeout_ms);
-  if (ready < 0) return -1;
+  // With no requested descriptors, preserve the existing treatment of bits
+  // outside nfds. They are not part of this wait's result sets.
+  if (fds.empty()) return 0;
   for (const pollfd& p : fds) {
     if ((p.revents & POLLNVAL) != 0) return errno = EBADF, -1;
   }
@@ -56,24 +76,35 @@ int SelectMs(int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds, int
   return count;
 }
 
-int ToMs(long long sec, long long nsec) {
-  long long total = sec * 1000 + (nsec + 999999) / 1000000;  // round up
-  return total > 0x7FFFFFFF ? 0x7FFFFFFF : static_cast<int>(total);
-}
-
 }  // namespace
 
 extern "C" int select(int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds,
                       struct timeval* timeout) {
-  int ms = -1;
-  if (timeout != nullptr) {
-    if (timeout->tv_sec < 0 || timeout->tv_usec < 0) return errno = EINVAL, -1;
-    ms = ToMs(timeout->tv_sec, static_cast<long long>(timeout->tv_usec) * 1000);
+  if (timeout != nullptr && (timeout->tv_sec < 0 || timeout->tv_usec < 0)) {
+    return errno = EINVAL, -1;
   }
-  int result = SelectMs(nfds, readfds, writefds, exceptfds, ms);
-  // Linux leaves the time not slept in *timeout; callers that loop rely on it
-  // reaching zero, which a completed wait gives.
-  if (result == 0 && timeout != nullptr) timeout->tv_sec = timeout->tv_usec = 0;
+  const bool finite = timeout != nullptr;
+  const WideTime duration = finite
+      ? static_cast<WideTime>(timeout->tv_sec) * 1000000000 +
+        static_cast<WideTime>(timeout->tv_usec) * 1000 : 0;
+  const WideTime deadline = finite ? NowNs() + duration : 0;
+  int result = SelectUntil(nfds, readfds, writefds, exceptfds, finite, deadline);
+  // Linux reports the residual budget after readiness and interrupted/error
+  // waits too. Keep the error from poll/descriptor validation unchanged.
+  const int saved_errno = errno;
+  if (finite) {
+    WideTime remaining = deadline - NowNs();
+    if (remaining < 0) remaining = 0;
+    WideTime seconds = remaining / 1000000000;
+    const WideTime max_seconds = std::numeric_limits<decltype(timeout->tv_sec)>::max();
+    if (seconds > max_seconds) seconds = max_seconds;
+    // timeval on Windows has 32-bit longs. Its accepted non-normalized usec
+    // input can extend past LONG_MAX seconds; retain that representable form
+    // instead of narrowing a normalized seconds field to a negative value.
+    timeout->tv_sec = static_cast<decltype(timeout->tv_sec)>(seconds);
+    timeout->tv_usec = static_cast<decltype(timeout->tv_usec)>((remaining - seconds * 1000000000) / 1000);
+  }
+  errno = saved_errno;
   return result;
 }
 
@@ -81,12 +112,13 @@ extern "C" int select(int nfds, fd_set* readfds, fd_set* writefds, fd_set* excep
 // has nothing to change while waiting.
 extern "C" int pselect(int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds,
                        const struct timespec* timeout, const sigset_t*) {
-  int ms = -1;
-  if (timeout != nullptr) {
-    if (timeout->tv_sec < 0 || timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000) {
-      return errno = EINVAL, -1;
-    }
-    ms = ToMs(timeout->tv_sec, timeout->tv_nsec);
+  if (timeout != nullptr &&
+      (timeout->tv_sec < 0 || timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000)) {
+    return errno = EINVAL, -1;
   }
-  return SelectMs(nfds, readfds, writefds, exceptfds, ms);
+  const bool finite = timeout != nullptr;
+  const WideTime duration = finite
+      ? static_cast<WideTime>(timeout->tv_sec) * 1000000000 + timeout->tv_nsec : 0;
+  const WideTime deadline = finite ? NowNs() + duration : 0;
+  return SelectUntil(nfds, readfds, writefds, exceptfds, finite, deadline);
 }
