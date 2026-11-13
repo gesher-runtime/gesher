@@ -36,27 +36,54 @@ struct Lock {
   }
   ~Lock() { if (held) ReleaseMutex(mutex); }
 };
+// GESHER_LOG_FILE, with '/' as '\\'.
+bool LogVariable(std::wstring* value) {
+  wchar_t buffer[1024];
+  DWORD length = GetEnvironmentVariableW(L"GESHER_LOG_FILE", buffer, 1024);
+  if (length && length < 1024) {
+    value->assign(buffer, length);
+  } else if (length >= 1024 && length < 32768) {
+    value->resize(length);
+    length = GetEnvironmentVariableW(L"GESHER_LOG_FILE", value->data(), length);
+    if (!length || length >= value->size()) return false;
+    value->resize(length);
+  } else {
+    return false;
+  }
+  std::replace(value->begin(), value->end(), L'/', L'\\');
+  return true;
+}
+// Whether GetFullPathNameW's result for |path| is independent of the current
+// directory (and so may be cached with the variable's value).
+bool Absolute(const std::wstring& path) {
+  return (path.size() >= 3 && path[1] == L':' && path[2] == L'\\') ||
+         (path.size() >= 2 && path[0] == L'\\' && path[1] == L'\\');
+}
+bool FullPath(const std::wstring& path, std::wstring* absolute) {
+  wchar_t full[32768];
+  DWORD length = GetFullPathNameW(path.c_str(), 32768, full, nullptr);
+  if (!length || length >= 32768) return false;
+  absolute->assign(full, length);
+  return true;
+}
 struct File {
   Handle mutex, file;
   bool Open(std::string* error) {
-    wchar_t environment[32768];
-    DWORD length = GetEnvironmentVariableW(L"GESHER_LOG_FILE", environment, 32768);
-    if (!length || length >= 32768) { if (error) *error = "GESHER_LOG_FILE is unset or invalid"; return false; }
-    std::wstring path(environment, length);
-    std::replace(path.begin(), path.end(), L'/', L'\\');
-    wchar_t absolute[32768];
-    length = GetFullPathNameW(path.c_str(), 32768, absolute, nullptr);
-    if (!length || length >= 32768) { if (error) *error = "invalid log path"; return false; }
+    std::wstring variable, absolute;
+    if (!LogVariable(&variable)) { if (error) *error = "GESHER_LOG_FILE is unset or invalid"; return false; }
+    if (!FullPath(variable, &absolute)) { if (error) *error = "invalid log path"; return false; }
+    return Open(absolute, error);
+  }
+  bool Open(const std::wstring& absolute, std::string* error) {
     uint64_t hash = 14695981039346656037ULL;
-    for (DWORD i = 0; i < length; ++i) {
-      wchar_t c = absolute[i];
+    for (wchar_t c : absolute) {
       if (c >= L'A' && c <= L'Z') c += L'a' - L'A';
       hash = (hash ^ static_cast<uint16_t>(c)) * 1099511628211ULL;
     }
     wchar_t name[64];
     std::swprintf(name, 64, L"Local\\gesher-log-%016llx", static_cast<unsigned long long>(hash));
     mutex.value = CreateMutexW(nullptr, FALSE, name);
-    file.value = CreateFileW(absolute, GENERIC_READ | GENERIC_WRITE,
+    file.value = CreateFileW(absolute.c_str(), GENERIC_READ | GENERIC_WRITE,
                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
                              FILE_ATTRIBUTE_NORMAL, nullptr);
     if (!mutex.value || file.value == INVALID_HANDLE_VALUE) {
@@ -66,14 +93,29 @@ struct File {
     return true;
   }
 };
+// Record runs for every log line of every thread, so each process keeps its
+// log's mutex and file open instead of opening both per line. The
+// cross-process guarantees are unchanged: every writer and reader still takes
+// the named mutex, and under it a writer reads the file's current size (other
+// processes append to and truncate the same file) and writes at that offset.
+// Changing GESHER_LOG_FILE (Main sets it in-process) reopens. The handles are
+// never closed: logging continues through static destruction.
+struct Cache {
+  SRWLOCK lock = SRWLOCK_INIT;
+  std::wstring variable, path;  // GESHER_LOG_FILE and its absolute path
+  File* file = nullptr;
+};
+Cache& Cached() {
+  static Cache* cache = new Cache;
+  return *cache;
+}
 bool Truncate(HANDLE file) {
   LARGE_INTEGER start{};
   return SetFilePointerEx(file, start, nullptr, FILE_BEGIN) && SetEndOfFile(file);
 }
+// The priority a persistent property, or else its transient one, sets.
 int PropertyPriority(const std::string& persistent, const std::string& transient) {
-  std::string value;
-  properties::Get(persistent, &value);
-  if (value.empty()) properties::Get(transient, &value);
+  const std::string& value = persistent.empty() ? transient : persistent;
   if (value.empty()) return -1;
   if (_stricmp(value.c_str(), "false") == 0) return 8;
   // Android accepts the first priority letter, case-insensitively.
@@ -94,44 +136,75 @@ char PriorityLetter(int priority) {
   return priority >= 0 && priority <= 8 ? letters[priority] : '?';
 }
 bool IsLoggable(int priority, const char* tag, size_t length, int fallback, int minimum) {
-  int property = -1;
+  // One property lookup per log line, for the tag's and the global settings.
+  std::string names[4] = {"persist.log.tag", "log.tag"}, values[4];
+  size_t count = 2;
   if (tag && length) {
     std::string name(tag, length);
-    property = PropertyPriority("persist.log.tag." + name, "log.tag." + name);
+    names[2] = "persist.log.tag." + name;
+    names[3] = "log.tag." + name;
+    count = 4;
   }
-  if (property < 0) property = PropertyPriority("persist.log.tag", "log.tag");
+  properties::GetAll(names, values, count);
+  int property = count == 4 ? PropertyPriority(values[2], values[3]) : -1;
+  if (property < 0) property = PropertyPriority(values[0], values[1]);
   constexpr int kAndroidLogDefault = 1;  // android_LogPriority's default sentinel
   int threshold = property >= 0 ? property : minimum != kAndroidLogDefault ? minimum : fallback;
   if (property >= 0 && minimum != kAndroidLogDefault) threshold = std::min(property, minimum);
   return priority >= threshold;
 }
 void Record(int buffer, int priority, const char* tag, const char* text) {
-  File file;
-  if (!file.Open(nullptr)) return;
-  Lock lock(file.mutex.value);
-  if (!lock.held) return;
-  Entry entry;
-  FILETIME time;
-  GetSystemTimePreciseAsFileTime(&time);
-  entry.timestamp = (static_cast<uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
-  entry.pid = GetCurrentProcessId();
-  entry.tid = GetCurrentThreadId();
-  entry.priority = priority;
-  entry.buffer = buffer;
-  entry.tag = tag ? std::string(tag).substr(0, 4096) : "";
-  entry.text = text ? std::string(text).substr(0, 4096) : "";
-  Header header{kMagic, static_cast<uint32_t>(sizeof(Header) + entry.tag.size() + entry.text.size()),
-                entry.timestamp, entry.pid, entry.tid, priority, buffer,
-                static_cast<uint32_t>(entry.tag.size()), static_cast<uint32_t>(entry.text.size())};
-  std::string data(reinterpret_cast<const char*>(&header), sizeof(header));
-  data += entry.tag;
-  data += entry.text;
-  LARGE_INTEGER size{}, end{};
-  if (!GetFileSizeEx(file.file.value, &size)) return;
-  if (size.QuadPart + static_cast<int64_t>(data.size()) > kLimit && !Truncate(file.file.value)) return;
-  if (!SetFilePointerEx(file.file.value, end, nullptr, FILE_END)) return;
-  DWORD written = 0;
-  WriteFile(file.file.value, data.data(), static_cast<DWORD>(data.size()), &written, nullptr);
+  std::wstring variable;
+  if (!LogVariable(&variable)) return;
+  size_t tag_size = tag ? strnlen(tag, 4096) : 0, text_size = text ? strnlen(text, 4096) : 0;
+  Header header{kMagic, static_cast<uint32_t>(sizeof(Header) + tag_size + text_size), 0,
+                GetCurrentProcessId(), GetCurrentThreadId(), priority, buffer,
+                static_cast<uint32_t>(tag_size), static_cast<uint32_t>(text_size)};
+  std::string data;
+  data.reserve(header.size);
+  data.append(reinterpret_cast<const char*>(&header), sizeof(header));
+  if (tag_size) data.append(tag, tag_size);
+  if (text_size) data.append(text, text_size);
+  Cache& cache = Cached();
+  AcquireSRWLockExclusive(&cache.lock);
+  if (!cache.file || cache.variable != variable || !Absolute(variable)) {
+    std::wstring path;
+    if (!FullPath(variable, &path)) { ReleaseSRWLockExclusive(&cache.lock); return; }
+    if (!cache.file || cache.path != path) {
+      auto* file = new File;
+      if (!file->Open(path, nullptr)) {
+        delete file;
+        ReleaseSRWLockExclusive(&cache.lock);
+        return;
+      }
+      delete cache.file;
+      cache.file = file;
+      cache.path = std::move(path);
+    }
+    cache.variable = std::move(variable);
+  }
+  HANDLE handle = cache.file->file.value;
+  {
+    Lock lock(cache.file->mutex.value);
+    LARGE_INTEGER size{};
+    if (lock.held && GetFileSizeEx(handle, &size)) {
+      bool fits = size.QuadPart + static_cast<int64_t>(data.size()) <= kLimit;
+      if (!fits && Truncate(handle)) size.QuadPart = 0;
+      if (fits || size.QuadPart == 0) {
+        // Stamped under the lock, so the file's records stay in time order.
+        FILETIME time;
+        GetSystemTimePreciseAsFileTime(&time);
+        header.timestamp = (static_cast<uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
+        std::memcpy(data.data(), &header, sizeof(header));
+        OVERLAPPED at{};
+        at.Offset = static_cast<DWORD>(size.QuadPart);
+        at.OffsetHigh = static_cast<DWORD>(static_cast<uint64_t>(size.QuadPart) >> 32);
+        DWORD written = 0;
+        WriteFile(handle, data.data(), static_cast<DWORD>(data.size()), &written, &at);
+      }
+    }
+  }
+  ReleaseSRWLockExclusive(&cache.lock);
 }
 bool Read(std::vector<Entry>* entries, std::string* error) {
   File file;
