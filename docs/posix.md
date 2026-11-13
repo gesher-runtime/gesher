@@ -15,6 +15,7 @@ Phase 1 items closed by the posix track (branch `wip/posix`). Design:
 | Time zones | `src/windows_zones.cc`, `gen_windows_zones.py`, `compat/libcore/collect-tzdata.sh` | `/etc/timezone` = Windows' zone as an IANA id (CLDR windowsZones from the pinned ICU, by the user's region), which libcore's `TimeZone.getDefault()` reads; the tzdata module's files from `system/timezone` in `dist/tzdata` and the installer (`ANDROID_TZDATA_ROOT`) |
 | inotify | `src/inotify.cc`, `<sys/inotify.h>` | over `ReadDirectoryChangesExW`, an fd that `poll`/`epoll` wait on; libopenjdk's `LinuxWatchService.c` (`WatchService`) and libandroid_runtime's FileObserver natives are linked in |
 | Processes | `src/process.cc`, `src/misc.cc` | `getppid`; `kill` to other processes (signal mailbox), `SIGKILL`/`SIGSTOP`/`SIGCONT` to any; `$GESHER_UID`; `getrlimit`/`setrlimit`/`prlimit`/`getrusage`; `prctl(PR_SET_NAME)` names the Windows thread too |
+| Thread names | `src/pthread.cc`, `<pthread.h>` | `pthread_setname_np`/`pthread_getname_np` with Linux's limits (15 bytes, `ERANGE`; an unnamed thread has the process's name) as the Windows thread description, which debuggers, profilers and `/proc/self/task/<tid>/comm` show; winpthreads' own fails with `ESRCH` for detached threads (all of ART's), which logged a warning for every thread ART started |
 | libcap | `src/libcap.cc` | `cap_get_proc`, `cap_set_proc`, ... with empty sets (ART's tests use them) |
 
 ## Tests
@@ -27,6 +28,7 @@ Phase 1 items closed by the posix track (branch `wip/posix`). Design:
   `/proc/self`, `/etc/timezone`, inotify (create, write, close-write, moves
   with one cookie, attrib, delete, directories, a watched file, oneshot,
   rm_watch, the watched directory deleted, in an epoll, a blocking read), and
+  thread names (a detached thread, `ERANGE`, `prctl`, `/proc/self/task/<tid>/comm`),
   processes (getppid, `GESHER_UID`, SIGUSR1 to a child in `sigwait`, SIGTERM
   default and ignored, SIGSTOP/SIGCONT, SIGKILL, ESRCH), rlimits, libcap.
 - `tests/dex-libcore/TimeZoneTest.java`: the default zone, the tzdata

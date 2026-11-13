@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <ftw.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -20,6 +21,7 @@
 #include <sys/capability.h>
 #include <sys/epoll.h>
 #include <sys/inotify.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -323,6 +325,64 @@ static void OtherDrive() {
   CHECK(getcwd(now, sizeof(now)) != nullptr && strcmp(now, cwd) == 0);
   CHECK(unlink((dir + "/x.txt").c_str()) == 0 && rmdir(dir.c_str()) == 0);
   printf("INFO /mnt/%c: checked\n", drive);
+}
+
+// --- thread names ---------------------------------------------------------------------
+
+// The Windows thread description of the calling thread, as UTF-8.
+static std::string Description() {
+  PWSTR text = nullptr;
+  std::string result;
+  if (SUCCEEDED(GetThreadDescription(GetCurrentThread(), &text)) && text != nullptr) {
+    char utf8[256] = {};
+    WideCharToMultiByte(CP_UTF8, 0, text, -1, utf8, sizeof(utf8), nullptr, nullptr);
+    result = utf8;
+    LocalFree(text);
+  }
+  return result;
+}
+
+static void* NameDetachedThread(void* done) {
+  // ART's threads are detached; winpthreads alone fails these with ESRCH.
+  char name[16] = {};
+  CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 &&
+        strcmp(name, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d") == 0);
+  CHECK(pthread_setname_np(pthread_self(), "ReferenceQueueD") == 0);
+  CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 &&
+        strcmp(name, "ReferenceQueueD") == 0);
+  CHECK(Description() == "ReferenceQueueD");
+  std::string comm = "/proc/self/task/" + std::to_string(GetCurrentThreadId()) + "/comm";
+  CHECK(ReadAll(comm.c_str()) == "ReferenceQueueD\n");
+  CHECK(pthread_setname_np(pthread_self(), "sixteen-bytes-xx") == ERANGE);
+  CHECK(pthread_getname_np(pthread_self(), name, 15) == ERANGE);
+  CHECK(prctl(PR_SET_NAME, "a-name-longer-than-fifteen") == 0);
+  CHECK(prctl(PR_GET_NAME, name) == 0 && strcmp(name, "a-name-longer-t") == 0);
+  CHECK(Description() == "a-name-longer-t");
+  CHECK(pthread_setname_np(pthread_self(), "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d") == 0);  // Hebrew
+  CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 &&
+        strcmp(name, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d") == 0);
+  SetEvent(static_cast<HANDLE>(done));
+  return nullptr;
+}
+
+static void ThreadNames() {
+  HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  pthread_t thread;
+  CHECK(pthread_create(&thread, &attr, NameDetachedThread, done) == 0);
+  pthread_attr_destroy(&attr);
+  CHECK(WaitForSingleObject(done, 30000) == WAIT_OBJECT_0);
+  CloseHandle(done);
+  // A joinable thread can be named by another thread.
+  pthread_t joinable;
+  CHECK(pthread_create(&joinable, nullptr, [](void*) -> void* { Sleep(200); return nullptr; },
+                       nullptr) == 0);
+  char name[16] = {};
+  CHECK(pthread_setname_np(joinable, "joinable") == 0);
+  CHECK(pthread_getname_np(joinable, name, sizeof(name)) == 0 && strcmp(name, "joinable") == 0);
+  CHECK(pthread_join(joinable, nullptr) == 0);
 }
 
 // --- /proc and /etc/timezone -------------------------------------------------------------
@@ -696,6 +756,8 @@ int main(int argc, char** argv) {
   OtherDrive();
   fprintf(stderr, "-- %s\n", "Proc");
   Proc(dir);
+  fprintf(stderr, "-- %s\n", "ThreadNames");
+  ThreadNames();
   fprintf(stderr, "-- %s\n", "Inotify");
   Inotify(dir);
   fprintf(stderr, "-- %s\n", "Processes");

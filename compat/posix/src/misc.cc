@@ -121,17 +121,10 @@ int prctl(int option, ...) {
       // Linux keeps the first 15 bytes.
       char name[16];
       snprintf(name, sizeof(name), "%s", va_arg(args, const char*));
+      // Also Windows' own thread name, which /proc/self/task/<tid>/comm
+      // (procfs.cc) and debuggers read (pthread.cc).
       int error = pthread_setname_np(pthread_self(), name);
       result = error == 0 ? 0 : (errno = error, -1);
-      // Also Windows' own thread name, which /proc/self/task/<tid>/comm
-      // (procfs.cc) and debuggers read (Windows 10 1607 and later).
-      using SetThreadDescriptionFn = HRESULT(WINAPI*)(HANDLE, PCWSTR);
-      static auto set_description = reinterpret_cast<SetThreadDescriptionFn>(
-          reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"),
-                                                 "SetThreadDescription")));
-      if (result == 0 && set_description != nullptr) {
-        set_description(GetCurrentThread(), gesher::Widen(name).c_str());
-      }
       break;
     }
     case PR_GET_NAME: {

@@ -545,22 +545,23 @@ int BIONIC_SYSV Sysinfo(void* out) {
 
 // --- Linux system calls as functions ------------------------------------------------
 
-thread_local char t_thread_name[16];
 int BIONIC_SYSV Prctl(int option, uint64_t a2, uint64_t, uint64_t, uint64_t) {
   switch (option) {
     case 15: {  // PR_SET_NAME
       const char* name = reinterpret_cast<const char*>(a2);
       if (name == nullptr) return errno = kEFAULT, -1;
-      std::snprintf(t_thread_name, sizeof(t_thread_name), "%s", name);
+      char truncated[16];  // Linux keeps the first 15 bytes
+      std::snprintf(truncated, sizeof(truncated), "%s", name);
       wchar_t w[16];
-      if (MultiByteToWideChar(CP_UTF8, 0, t_thread_name, -1, w, 16) > 0) {
+      if (MultiByteToWideChar(CP_UTF8, 0, truncated, -1, w, 16) > 0) {
         SetThreadDescription(GetCurrentThread(), w);
       }
       return 0;
     }
     case 16:  // PR_GET_NAME
       if (a2 == 0) return errno = kEFAULT, -1;
-      std::memcpy(reinterpret_cast<char*>(a2), t_thread_name, sizeof(t_thread_name));
+      // The thread's description, which pthread_setname_np also sets.
+      PthreadGetnameNp(PthreadSelfId(), reinterpret_cast<char*>(a2), 16);
       return 0;
     case 3:   // PR_GET_DUMPABLE
       return 1;

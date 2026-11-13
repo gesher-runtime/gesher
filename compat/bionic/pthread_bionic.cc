@@ -476,7 +476,20 @@ int32_t BIONIC_SYSV gesher_bionic_pthread_gettid_np(bionic_pthread_t thread) {
   return it == g_threads.end() ? -1 : it->second->tid;
 }
 
-int BIONIC_SYSV gesher_bionic_pthread_setname_np(bionic_pthread_t, const char*) { return 0; }
+// bionic's limits: 15 bytes and the NUL, ERANGE beyond. The name is the Windows
+// thread description, which debuggers, /proc/self/task/<tid>/comm and
+// pthread_getname_np/PR_GET_NAME (extra_sys_bionic.cc) read.
+int BIONIC_SYSV gesher_bionic_pthread_setname_np(bionic_pthread_t thread, const char* name) {
+  if (name == nullptr) return kEINVAL;
+  if (std::strlen(name) >= 16) return kERANGE;
+  wchar_t wide[16];
+  if (MultiByteToWideChar(CP_UTF8, 0, name, -1, wide, 16) <= 0) return kEINVAL;
+  if (thread == SelfId()) return SUCCEEDED(SetThreadDescription(GetCurrentThread(), wide)) ? 0 : kESRCH;
+  std::lock_guard<std::mutex> lock(g_threads_mutex);
+  auto found = g_threads.find(thread);
+  if (found == g_threads.end() || found->second->handle == nullptr) return kESRCH;
+  return SUCCEEDED(SetThreadDescription(found->second->handle, wide)) ? 0 : kESRCH;
+}
 int BIONIC_SYSV gesher_bionic_sched_yield(void) {
   SwitchToThread();
   return 0;
