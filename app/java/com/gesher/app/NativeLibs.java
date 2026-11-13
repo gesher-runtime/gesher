@@ -9,6 +9,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
@@ -126,12 +128,17 @@ public final class NativeLibs {
             for (ZipEntry entry : libraries) {
                 File out = new File(dir, entry.getName().substring(prefix.length()));
                 out.getParentFile().mkdirs();
+                // Write beside it and rename over it: a running process maps its
+                // libraries from these files, and Windows refuses to truncate a
+                // mapped file, but replaces it by rename.
+                File part = new File(out.getPath() + ".part");
                 try (InputStream in = zip.getInputStream(entry);
-                        OutputStream os = new FileOutputStream(out)) {
+                        OutputStream os = new FileOutputStream(part)) {
                     for (int n; (n = in.read(buffer)) > 0; ) {
                         os.write(buffer, 0, n);
                     }
                 }
+                Files.move(part.toPath(), out.toPath(), StandardCopyOption.REPLACE_EXISTING);
                 count++;
             }
         }
