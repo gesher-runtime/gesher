@@ -120,7 +120,11 @@ std::string ProcessComm() {
   size_t dot = name.rfind(L'.');
   if (dot != std::wstring::npos) name.resize(dot);
   std::string comm = Narrow(name.c_str());
-  return comm.substr(0, 15);
+  size_t end = std::min<size_t>(comm.size(), 15);
+  if (end < comm.size()) {
+    while (end && (static_cast<unsigned char>(comm[end]) & 0xc0) == 0x80) --end;
+  }
+  return comm.substr(0, end);
 }
 
 // A thread's name (prctl(PR_SET_NAME) sets it, misc.cc), or the process's.
@@ -130,7 +134,7 @@ std::string ThreadComm(DWORD tid) {
       reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetThreadDescription")));
   std::string comm;
   HANDLE h = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, tid);
-  if (h != nullptr && get != nullptr) {
+  if (h != nullptr && GetProcessIdOfThread(h) == GetCurrentProcessId() && get != nullptr) {
     PWSTR description = nullptr;
     if (SUCCEEDED(get(h, &description)) && description != nullptr) {
       comm = Narrow(description);
@@ -139,7 +143,11 @@ std::string ThreadComm(DWORD tid) {
   }
   if (h != nullptr) CloseHandle(h);
   if (comm.empty()) comm = ProcessComm();
-  return comm.substr(0, 15);
+  size_t end = std::min<size_t>(comm.size(), 15);
+  if (end < comm.size()) {
+    while (end && (static_cast<unsigned char>(comm[end]) & 0xc0) == 0x80) --end;
+  }
+  return comm.substr(0, end);
 }
 
 unsigned long long Ticks(FILETIME t) {  // 100 ns units to USER_HZ (100) ticks

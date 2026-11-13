@@ -43,6 +43,17 @@ int gesher_pthread_key_delete(pthread_key_t key);
 #define pthread_key_create gesher_pthread_key_create
 #define pthread_key_delete gesher_pthread_key_delete
 
+// Thread names with Linux's semantics (at most 15 bytes, ERANGE beyond; a
+// getname buffer of at least 16), kept as the Windows thread description that
+// debuggers, profilers and /proc/self/task/<tid>/comm read. winpthreads keeps
+// its own copy and fails with ESRCH for detached threads, which ART's are.
+int gesher_pthread_setname_np(pthread_t thread, const char* name);
+int gesher_pthread_getname_np(pthread_t thread, char* name, size_t len);
+#undef pthread_setname_np
+#undef pthread_getname_np
+#define pthread_setname_np gesher_pthread_setname_np
+#define pthread_getname_np gesher_pthread_getname_np
+
 // A signal sent to a thread is pending for the process, where sigwait takes
 // it (see signal.cc); winpthreads' pthread_kill only checks the thread.
 int gesher_pthread_kill(pthread_t thread, int sig);

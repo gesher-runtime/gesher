@@ -11,7 +11,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <ftw.h>
+#include <locale.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -19,7 +21,10 @@
 #include <string.h>
 #include <sys/capability.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <sys/inotify.h>
+#include <sys/mman.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -74,6 +79,51 @@ static bool Exists(const std::string& path) {
 
 static int RemoveTree(const char* path, const struct stat*, int flag, struct FTW*) {
   return flag == FTW_DP ? rmdir(path) : unlink(path);
+}
+
+// --- descriptor controls ---------------------------------------------------------------
+
+// Use the public two-argument getters alongside real integer setters and
+// duplication, through the host POSIX library that ART uses.
+static void DescriptorControls() {
+  int fd = memfd_create("posix-fcntl", MFD_CLOEXEC);
+  CHECK(fd >= 0);
+  if (fd >= 0) {
+    CHECK(fcntl(fd, F_GETFD) == FD_CLOEXEC);
+    CHECK(fcntl(fd, F_GETFL) == O_RDWR);
+    CHECK(fcntl(fd, F_GET_SEALS) >= 0);
+    CHECK(fcntl(fd, F_SETFD, 0) == 0 && fcntl(fd, F_GETFD) == 0);
+    CHECK(fcntl(fd, F_SETFD, FD_CLOEXEC) == 0 &&
+          fcntl(fd, F_GETFD) == FD_CLOEXEC);
+    CHECK(write(fd, "ok", 2) == 2 && lseek(fd, 0, SEEK_SET) == 0);
+    int plain = fcntl(fd, F_DUPFD, 32);
+    int cloexec = fcntl(fd, F_DUPFD_CLOEXEC, 32);
+    CHECK(plain >= 32 && plain != fd);
+    CHECK(cloexec >= 32 && cloexec != fd && cloexec != plain);
+    CHECK(close(fd) == 0);
+    if (plain >= 0) {
+      char bytes[2] = {};
+      CHECK(fcntl(plain, F_GETFD) == 0);
+      CHECK(read(plain, bytes, sizeof(bytes)) == static_cast<ssize_t>(sizeof(bytes)) &&
+            memcmp(bytes, "ok", sizeof(bytes)) == 0);
+      CHECK(close(plain) == 0);
+    }
+    if (cloexec >= 0) {
+      CHECK(fcntl(cloexec, F_GETFD) == FD_CLOEXEC);
+      CHECK(close(cloexec) == 0);
+    }
+  }
+
+  int event = eventfd(0, EFD_CLOEXEC);
+  CHECK(event >= 0);
+  if (event >= 0) {
+    CHECK(fcntl(event, F_GETFL) == O_RDWR);
+    CHECK(fcntl(event, F_SETFL, O_NONBLOCK) == 0);
+    CHECK(fcntl(event, F_GETFL) == (O_RDWR | O_NONBLOCK));
+    CHECK(fcntl(event, F_SETFL, 0) == 0);
+    CHECK(fcntl(event, F_GETFL) == O_RDWR);
+    CHECK(close(event) == 0);
+  }
 }
 
 // --- paths ---------------------------------------------------------------------------
@@ -323,6 +373,149 @@ static void OtherDrive() {
   CHECK(getcwd(now, sizeof(now)) != nullptr && strcmp(now, cwd) == 0);
   CHECK(unlink((dir + "/x.txt").c_str()) == 0 && rmdir(dir.c_str()) == 0);
   printf("INFO /mnt/%c: checked\n", drive);
+}
+
+// --- thread names ---------------------------------------------------------------------
+
+// The Windows thread description of the calling thread, as UTF-8.
+static std::string Description() {
+  PWSTR text = nullptr;
+  std::string result;
+  if (SUCCEEDED(GetThreadDescription(GetCurrentThread(), &text)) && text != nullptr) {
+    char utf8[256] = {};
+    WideCharToMultiByte(CP_UTF8, 0, text, -1, utf8, sizeof(utf8), nullptr, nullptr);
+    result = utf8;
+    LocalFree(text);
+  }
+  return result;
+}
+
+static void* NameDetachedThread(void* done) {
+  // ART's threads are detached; winpthreads alone fails these with ESRCH.
+  char name[16] = {};
+  CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 &&
+        strcmp(name, "posix_probe") == 0);  // unnamed: the process's name, as on Linux
+  CHECK(pthread_setname_np(pthread_self(), "ReferenceQueueD") == 0);
+  CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 &&
+        strcmp(name, "ReferenceQueueD") == 0);
+  CHECK(Description() == "ReferenceQueueD");
+  std::string comm = "/proc/self/task/" + std::to_string(GetCurrentThreadId()) + "/comm";
+  CHECK(ReadAll(comm.c_str()) == "ReferenceQueueD\n");
+  CHECK(pthread_setname_np(pthread_self(), "sixteen-bytes-xx") == ERANGE);
+  CHECK(pthread_getname_np(pthread_self(), name, 15) == ERANGE);
+  CHECK(prctl(PR_SET_NAME, "a-name-longer-than-fifteen") == 0);
+  CHECK(prctl(PR_GET_NAME, name) == 0 && strcmp(name, "a-name-longer-t") == 0);
+  CHECK(Description() == "a-name-longer-t");
+  CHECK(pthread_setname_np(pthread_self(), "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d") == 0);  // Hebrew
+  CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 &&
+        strcmp(name, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d") == 0);
+  // A longer description (set by other code) is cut on a character boundary:
+  // seven 2-byte letters, not 15 bytes ending in half a letter.
+  SetThreadDescription(GetCurrentThread(), L"שלוםשלוםש");
+  CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 && strlen(name) == 14 &&
+        strcmp(name, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\xd7\xa9\xd7\x9c\xd7\x95") == 0);
+  CHECK(ReadAll(comm.c_str()) == "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\xd7\xa9\xd7\x9c\xd7\x95\n");
+  CHECK(prctl(PR_SET_NAME, "12345678901234\xd7\xa9") == 0);
+  CHECK(prctl(PR_GET_NAME, name) == 0 && strcmp(name, "12345678901234") == 0);
+  CHECK(Description() == "12345678901234");
+  CHECK(prctl(PR_SET_NAME, static_cast<const char*>(nullptr)) == -1 && errno == EFAULT);
+  CHECK(pthread_setname_np(pthread_self(), "") == 0);
+  CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 && name[0] == 0);
+  CHECK(Description().empty());
+  CHECK(SetEvent(static_cast<HANDLE>(done)) != 0);
+  return nullptr;
+}
+
+// A live peer with event barriers: no timing assumption about scheduler speed.
+struct NamePeer {
+  HANDLE ready, read, done, release;
+  DWORD tid = 0;
+  char name[16]{};
+  std::string description, locale;
+  int result = -1;
+  bool cleared = false;
+};
+static void NameWait(HANDLE event) {
+  if (!event || WaitForSingleObject(event, 30000) != WAIT_OBJECT_0) {
+    fprintf(stderr, "FAIL thread-name event/timeout\n");
+    ExitProcess(1);  // never free state still reachable by a timed-out worker
+  }
+}
+static void* NamedPeer(void* argument) {
+  auto* peer = static_cast<NamePeer*>(argument);
+  peer->tid = GetCurrentThreadId();
+  SetEvent(peer->ready);
+  NameWait(peer->read);
+  peer->result = pthread_getname_np(pthread_self(), peer->name, sizeof(peer->name));
+  peer->description = Description();
+  const char* locale = setlocale(LC_CTYPE, nullptr);
+  peer->locale = locale ? locale : "<error>";
+  SetEvent(peer->done);
+  NameWait(peer->release);
+  peer->cleared = pthread_getname_np(pthread_self(), peer->name, sizeof(peer->name)) == 0 &&
+                  peer->name[0] == 0 && Description().empty();
+  return nullptr;
+}
+static void ThreadNames() {
+  HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!done) { CHECK(false); return; }
+  pthread_attr_t attr;
+  if (pthread_attr_init(&attr) != 0) { CHECK(false); CloseHandle(done); return; }
+  CHECK(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0);
+  pthread_t thread;
+  int created = pthread_create(&thread, &attr, NameDetachedThread, done);
+  CHECK(pthread_attr_destroy(&attr) == 0);
+  if (created != 0) { CHECK(false); CloseHandle(done); return; }
+  NameWait(done);
+  CloseHandle(done);
+
+  NamePeer peer{};
+  peer.ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  peer.read = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  peer.done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  peer.release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!peer.ready || !peer.read || !peer.done || !peer.release) {
+    fprintf(stderr, "FAIL thread-name event creation\n");
+    ExitProcess(1);
+  }
+  pthread_t joinable;
+  if (pthread_create(&joinable, nullptr, NamedPeer, &peer) != 0) {
+    fprintf(stderr, "FAIL thread-name peer creation\n");
+    ExitProcess(1);
+  }
+  NameWait(peer.ready);
+  char name[16]{};
+  CHECK(pthread_setname_np(joinable, "joinable") == 0);
+  CHECK(pthread_getname_np(joinable, name, sizeof(name)) == 0 && strcmp(name, "joinable") == 0);
+  std::string comm = "/proc/self/task/" + std::to_string(peer.tid) + "/comm";
+  CHECK(ReadAll(comm.c_str()) == "joinable\n");
+
+  // The default C locale must not corrupt cross-thread UTF-8 descriptions.
+  const char* locale = setlocale(LC_CTYPE, nullptr);
+  std::string before = locale ? locale : "<error>";
+  int mode = _configthreadlocale(0);
+  const char* supplementary = "bridge-\xf0\x9f\x8c\x89";
+  CHECK(pthread_setname_np(joinable, supplementary) == 0);
+  CHECK(ReadAll(comm.c_str()) == std::string(supplementary) + "\n");
+  const char* unicode = "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d";
+  CHECK(pthread_setname_np(joinable, unicode) == 0);
+  CHECK(_configthreadlocale(0) == mode);
+  locale = setlocale(LC_CTYPE, nullptr);
+  CHECK(locale != nullptr && before == locale);
+  CHECK(pthread_getname_np(joinable, name, sizeof(name)) == 0 && strcmp(name, unicode) == 0);
+  CHECK(ReadAll(comm.c_str()) == std::string(unicode) + "\n");
+  CHECK(SetEvent(peer.read) != 0);
+  NameWait(peer.done);
+  CHECK(peer.result == 0 && strcmp(peer.name, unicode) == 0);
+  CHECK(peer.description == unicode && peer.locale == before);
+  CHECK(pthread_setname_np(joinable, "") == 0);
+  CHECK(SetEvent(peer.release) != 0);
+  CHECK(pthread_join(joinable, nullptr) == 0);
+  CHECK(peer.cleared);
+  CloseHandle(peer.ready);
+  CloseHandle(peer.read);
+  CloseHandle(peer.done);
+  CloseHandle(peer.release);
 }
 
 // --- /proc and /etc/timezone -------------------------------------------------------------
@@ -690,12 +883,16 @@ int main(int argc, char** argv) {
   CHECK(getcwd(cwd, sizeof(cwd)) != nullptr);
   std::string dir = std::string(cwd) + "/posix-probe-" + std::to_string(GetCurrentProcessId());
   CHECK(mkdir(dir.c_str(), 0755) == 0);
+  fprintf(stderr, "-- %s\n", "DescriptorControls");
+  DescriptorControls();
   fprintf(stderr, "-- %s\n", "Paths");
   Paths(dir);
   fprintf(stderr, "-- %s\n", "OtherDrive");
   OtherDrive();
   fprintf(stderr, "-- %s\n", "Proc");
   Proc(dir);
+  fprintf(stderr, "-- %s\n", "ThreadNames");
+  ThreadNames();
   fprintf(stderr, "-- %s\n", "Inotify");
   Inotify(dir);
   fprintf(stderr, "-- %s\n", "Processes");

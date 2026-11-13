@@ -167,6 +167,8 @@ void DeliverPendingSignals();
 
 // bionic's pthread_t of the calling thread (pthread_bionic.cc).
 uint64_t PthreadSelfId();
+int PthreadSetName(uint64_t thread, const char* name);
+int PthreadGetName(uint64_t thread, char* name, size_t size);
 int PthreadCpuClock(uint64_t thread, int* clock_id);
 int ReadPthreadCpuClock(int clock_id, int64_t* nanos);
 

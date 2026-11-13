@@ -11,6 +11,7 @@
 #include <input/Input.h>
 
 #include "gesher_window.h"
+#include "key_history.h"
 
 namespace gesher {
 namespace input {
@@ -68,8 +69,8 @@ int32_t KeyCodeFromVirtualKey(int32_t vk, int32_t scan);
 // Windows scan code (set 1, 0x100 for E0-prefixed keys) to the Linux key code
 // Android reports as KeyEvent.getScanCode(); 0 if unknown.
 int32_t LinuxScanCode(int32_t scan);
-// WindowEvent::modifiers (1 shift, 2 ctrl, 4 alt, 8 caps lock) to Android
-// meta state (META_*_ON with the left-hand bits).
+// WindowModifier bits to Android META_*_ON. Generic-only legacy input
+// retains its left-side fallback; explicit sides remain distinct.
 int32_t MetaState(int32_t modifiers);
 
 class Translator {
@@ -109,9 +110,7 @@ class Translator {
   float last_x_ = 0, last_y_ = 0;  // window pixels
   int64_t mouse_down_time_ = 0;
   // Keys.
-  int32_t last_key_ = -1;  // the key a repeat repeats
-  int32_t repeat_ = 0;
-  int64_t key_down_time_ = 0;
+  KeyHistory key_history_;
   // Touch.
   std::vector<Touch> touches_;  // by Android id
   int32_t touch_tool_ = 1;      // the gesture's first contact: 1 finger, 2 pen

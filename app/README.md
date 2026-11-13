@@ -11,7 +11,7 @@ on Android's own runtime and framework.jar instead of a JVM and hoststubgen.
 
 ```
 dalvikvm -Xbootclasspath:core-oj.jar:core-libart.jar:core-icu4j.jar:framework.jar:gesher-app.jar \
-  -Xint -Xusejit:false com.gesher.app.Main [options] app.apk
+  -Xusejit:false com.gesher.app.Main [options] app.apk
 ```
 
 Options: `--build-prop FILE` (default `$ANDROID_ROOT/build.prop`),
@@ -262,8 +262,20 @@ own, and `com.gesher.server.SystemServer --persistent`. Later commands find it
 (`$ANDROID_DATA/system/gesher-device`, under a named mutex) and use it; one
 whose system server is gone is cleaned up and replaced. It stops on
 `shutdown` or after `$GESHER_IDLE_TIMEOUT` seconds (default 600) with no app
-process; the system server keeps binderd, servicemanager and the app processes
-in a job that ends them with it.
+in use; the system server keeps binderd, servicemanager and the app processes
+in a job that ends them with it. An app is in use while it has an activity
+(also a stopped one) or runs a foreground service (a navigation or music app).
+A process whose activities are gone is cached, as on Android: it stays for a
+fast relaunch but does not hold the device, also when it runs a started
+background service or is bound by the system; GMS's background processes do not hold it.
+A process being started (for a job, an alarm or a broadcast) delays the
+shutdown until it has attached but does not restart the idle clock. Alarms
+and jobs due within the timeout keep an idle device for at most one more
+timeout; after that only work due now or in flight does, so an app that
+reschedules itself every few seconds (telemetry) cannot keep it forever.
+Alarm delivery holds are bounded to five minutes and end on completion or
+listener death. Queued or active manifest/acknowledged broadcasts retain their
+existing bounded delivery holds; these deliveries do not restart the idle clock.
 
 - `install` copies the APK into `$ANDROID_DATA/app/<package>-<n>/base.apk`
   (`lib/x86_64` extracted next to it), lists it in

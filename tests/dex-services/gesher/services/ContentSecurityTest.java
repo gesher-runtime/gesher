@@ -159,7 +159,13 @@ public final class ContentSecurityTest {
             require(map("mUploads").isEmpty(), "Delayed upload callback did not run");
             ((ScheduledExecutorService) field(syncType, "mTimer").get(sync)).submit(() -> {}).get(3, TimeUnit.SECONDS);
         }
-        void noSync() throws Exception { require(map("mPending").isEmpty() && map("mActive").isEmpty(), "Unauthorized request queued or started a hidden account sync"); }
+        void noSync() throws Exception {
+            synchronized (sync) {
+                require(((List<?>) field(syncType, "mPending").get(sync)).isEmpty()
+                        && map("mActive").isEmpty(),
+                        "Unauthorized request queued or started a hidden account sync");
+            }
+        }
         void finishVisibleSync() throws Exception {
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
             while ((map("mActive").isEmpty() || bindings.get() <= completedBindings)
@@ -170,6 +176,7 @@ public final class ContentSecurityTest {
             Object active = map("mActive").values().iterator().next();
             require(visible.equals(field(active.getClass(), "account").get(active)), "Hidden account reached the adapter");
             ((ISyncContext) active).onFinished(new SyncResult());
+            ((ScheduledExecutorService) field(syncType, "mTimer").get(sync)).submit(() -> {}).get(3, TimeUnit.SECONDS);
             noSync();
         }
     }

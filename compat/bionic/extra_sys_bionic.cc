@@ -212,17 +212,7 @@ int BIONIC_SYSV PthreadAttrSetstack(bionic_pthread_attr_t* a, void* base, size_t
   return 0;
 }
 int BIONIC_SYSV PthreadGetnameNp(uint64_t thread, char* buf, size_t size) {
-  if (buf == nullptr || size == 0) return kERANGE;
-  buf[0] = 0;
-  if (thread == PthreadSelfId()) {
-    PWSTR name = nullptr;
-    if (SUCCEEDED(GetThreadDescription(GetCurrentThread(), &name)) && name != nullptr) {
-      WideCharToMultiByte(CP_UTF8, 0, name, -1, buf, static_cast<int>(size), nullptr, nullptr);
-      buf[size - 1] = 0;
-      LocalFree(name);
-    }
-  }
-  return 0;
+  return PthreadGetName(thread, buf, size);
 }
 int BIONIC_SYSV PthreadGetcpuclockid(uint64_t thread, int* clock) {
   return PthreadCpuClock(thread, clock);
@@ -545,23 +535,24 @@ int BIONIC_SYSV Sysinfo(void* out) {
 
 // --- Linux system calls as functions ------------------------------------------------
 
-thread_local char t_thread_name[16];
 int BIONIC_SYSV Prctl(int option, uint64_t a2, uint64_t, uint64_t, uint64_t) {
   switch (option) {
     case 15: {  // PR_SET_NAME
       const char* name = reinterpret_cast<const char*>(a2);
       if (name == nullptr) return errno = kEFAULT, -1;
-      std::snprintf(t_thread_name, sizeof(t_thread_name), "%s", name);
-      wchar_t w[16];
-      if (MultiByteToWideChar(CP_UTF8, 0, t_thread_name, -1, w, 16) > 0) {
-        SetThreadDescription(GetCurrentThread(), w);
-      }
-      return 0;
+      size_t length = strnlen(name, 15);
+      while (length && (static_cast<unsigned char>(name[length]) & 0xc0) == 0x80) --length;
+      char truncated[16];
+      std::memcpy(truncated, name, length);
+      truncated[length] = 0;
+      int error = PthreadSetName(PthreadSelfId(), truncated);
+      return error == 0 ? 0 : (errno = error, -1);
     }
-    case 16:  // PR_GET_NAME
+    case 16: {  // PR_GET_NAME
       if (a2 == 0) return errno = kEFAULT, -1;
-      std::memcpy(reinterpret_cast<char*>(a2), t_thread_name, sizeof(t_thread_name));
-      return 0;
+      int error = PthreadGetName(PthreadSelfId(), reinterpret_cast<char*>(a2), 16);
+      return error == 0 ? 0 : (errno = error, -1);
+    }
     case 3:   // PR_GET_DUMPABLE
       return 1;
     case 4:   // PR_SET_DUMPABLE

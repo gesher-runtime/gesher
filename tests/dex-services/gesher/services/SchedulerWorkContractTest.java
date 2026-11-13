@@ -4,6 +4,8 @@ package gesher.services;
 import android.app.ActivityManager;
 import android.app.AlarmManager;
 import android.app.IActivityManager;
+import android.app.IAlarmCompleteListener;
+import android.app.IAlarmListener;
 import android.app.IAlarmManager;
 import android.app.IApplicationThread;
 import android.app.JobSchedulerImpl;
@@ -32,6 +34,7 @@ import android.os.IInterface;
 import android.os.Parcel;
 import android.os.PersistableBundle;
 import android.os.RemoteException;
+import android.os.SystemClock;
 import android.service.notification.StatusBarNotification;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.android.internal.pm.pkg.component.ParsedServiceImpl;
@@ -40,7 +43,9 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -128,6 +133,7 @@ public final class SchedulerWorkContractTest {
         final boolean wire;
         final Object pm, atm, services, scheduler, alarms, notifications, broadcasts;
         final Object previousNotifications;
+        final List<Object> previousWorkSources;
         final IActivityManager am;
         final Class<?> jobType = type("JobSchedulerService$Job"), runType = type("JobSchedulerService$Run");
         final AppThread thread = new AppThread();
@@ -145,6 +151,7 @@ public final class SchedulerWorkContractTest {
         };
         @SuppressWarnings("unchecked") Harness(boolean wire) throws Exception {
             this.wire = wire;
+            previousWorkSources = new ArrayList<>((List<Object>) field(type("DeviceWork"), "sSources").get(null));
             PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(PACKAGE, "/fixture/" + PACKAGE + "/base.apk");
             ParsedServiceImpl service = new ParsedServiceImpl();
             service.setName(PACKAGE + ".WorkService"); service.setPackageName(PACKAGE);
@@ -167,6 +174,13 @@ public final class SchedulerWorkContractTest {
             am = (IActivityManager) UNSAFE.allocateInstance(amType);
             Object callers = make(callersType, new Class<?>[]{pmType, atmType}, pm, atm);
             set(am, "mPm", pm); set(am, "mAtm", atm); set(am, "mCallers", callers);
+            // Empty provider metadata lets the real post-broadcast process retirement
+            // run without initializing unrelated settings/locale services on the host.
+            Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            set(providers, "mClients", new HashMap<>());
+            set(providers, "mPublished", new HashMap<>());
+            set(providers, "mPublishedBy", new HashMap<>());
+            set(am, "mProviders", providers);
             Object permissions = invoke(pm, "permissions", new Class<?>[0]);
             set(am, "mPermissions", permissions); invoke(permissions, "attach", new Class<?>[]{callersType}, callers);
             Object catalog = get(permissions, "mCatalog"); set(catalog, "mLoaded", true); set(catalog, "mFrameworkRead", true);
@@ -242,6 +256,7 @@ public final class SchedulerWorkContractTest {
                     null, PendingIntent.FLAG_IMMUTABLE, null, 0));
         }
         @Override public void close() throws Exception {
+            ((List<?>) field(type("DeviceWork"), "sSources").get(null)).retainAll(previousWorkSources);
             field(type("NotificationManagerService"), "sLast").set(null, previousNotifications);
             ((java.util.concurrent.ExecutorService) get(broadcasts, "mTimeouts")).shutdownNow();
             ((java.util.concurrent.ExecutorService) get(services, "mRestarts")).shutdownNow();
@@ -365,11 +380,204 @@ public final class SchedulerWorkContractTest {
             check(h.alarmChanges.get() == 5, "Ordinary replacement emitted a spurious clock notification");
         }
     }
+    /** Local listener/DeathRecipient boundaries; real delivery ownership and completion code. */
+    private static final class HeldAlarm extends IAlarmListener.Stub {
+        final Object monitor;
+        final List<IAlarmCompleteListener> completions = new ArrayList<>();
+        final List<IBinder.DeathRecipient> deaths = new ArrayList<>();
+        int links, unlinks;
+        boolean completeImmediately, fail, dieDuringLink;
+        Runnable duringLink;
+        HeldAlarm(Object monitor) { this.monitor = monitor; }
+        @Override public void doAlarm(IAlarmCompleteListener completion) throws RemoteException {
+            check(!Thread.holdsLock(monitor), "Alarm listener ran under its service monitor");
+            completions.add(completion);
+            if (fail) throw new RemoteException("fixture listener failure");
+            if (completeImmediately) completion.alarmComplete(asBinder());
+        }
+        @Override public void linkToDeath(IBinder.DeathRecipient recipient, int flags) {
+            check(!Thread.holdsLock(monitor), "Listener death registration ran under the alarm monitor");
+            deaths.add(recipient); links++;
+            if (duringLink != null) duringLink.run();
+            if (dieDuringLink) recipient.binderDied();
+        }
+        @Override public boolean unlinkToDeath(IBinder.DeathRecipient recipient, int flags) {
+            check(!Thread.holdsLock(monitor), "Listener death cleanup ran under the alarm monitor");
+            if (deaths.remove(recipient)) { unlinks++; return true; }
+            return false;
+        }
+        void complete(int index) throws RemoteException { completions.get(index).alarmComplete(asBinder()); }
+        void die() { for (IBinder.DeathRecipient recipient : new ArrayList<>(deaths)) recipient.binderDied(); }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Object takeAlarm(Harness h) throws Exception {
+        List<Object> due;
+        synchronized (h.alarms) {
+            due = (List<Object>) invoke(h.alarms, "takeDueAlarmsLocked",
+                    new Class<?>[]{long.class, long.class}, SystemClock.elapsedRealtime(), System.currentTimeMillis());
+        }
+        check(due.size() == 1, "Expected exactly one due alarm reservation");
+        check((Long) invoke(h.alarms, "nextDueElapsed", new Class<?>[0]) == 0,
+                "Removing a due alarm left a gap before its in-flight hold");
+        return due.get(0);
+    }
+    private static Object listenerAlarm(Harness h, HeldAlarm listener, long interval) throws Exception {
+        ((IAlarmManager) h.alarms).set(PACKAGE, AlarmManager.ELAPSED_REALTIME, 0, 0, interval,
+                0, null, listener, "idle-lifetime", null, null);
+        return takeAlarm(h);
+    }
+    private static void dispatchAlarm(Harness h, Object token) throws Exception {
+        invoke(h.alarms, "deliver", new Class<?>[]{type("AlarmManagerService$Delivery")}, token);
+    }
+    private static int alarmHolds(Harness h) throws Exception {
+        return ((List<?>) get(h.alarms, "mDelivering")).size();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void delivery(boolean wire) throws Exception {
+        try (Harness h = new Harness(wire)) {
+            HeldAlarm listener = new HeldAlarm(h.alarms);
+            Object first = listenerAlarm(h, listener, 60_000);
+            dispatchAlarm(h, first);
+            check(alarmHolds(h) == 1 && listener.completions.size() == 1,
+                    "Asynchronous listener lost its delivery hold");
+            listener.completions.get(0).alarmComplete(new Binder());
+            check(alarmHolds(h) == 1, "Wrong listener binder released an active alarm");
+            listener.complete(0);
+            check(alarmHolds(h) == 0 && listener.unlinks == 1, "Completed listener retained its hold/death link");
+            // Advance only the scheduled record, as the manual timer boundary does for jobs.
+            set(get(first, "alarm"), "when", 0L);
+            Object second = takeAlarm(h);
+            dispatchAlarm(h, second);
+            listener.complete(0);
+            check(alarmHolds(h) == 1, "An old completion released a newer repeating delivery");
+            ((IAlarmManager) h.alarms).remove(null, listener);
+            check(alarmHolds(h) == 1, "Cancelling future repeats released the active delivery");
+            listener.complete(1);
+            listener.complete(1);
+            check(alarmHolds(h) == 0 && listener.unlinks == 2 && listener.deaths.isEmpty(),
+                    "Duplicate completion repeated cleanup or leaked a death link");
+        }
+        try (Harness h = new Harness(wire)) {
+            HeldAlarm listener = new HeldAlarm(h.alarms);
+            listener.completeImmediately = true;
+            dispatchAlarm(h, listenerAlarm(h, listener, 0));
+            check(alarmHolds(h) == 0 && listener.unlinks == 1, "Synchronous listener completion was lost");
+        }
+        try (Harness h = new Harness(wire)) {
+            HeldAlarm listener = new HeldAlarm(h.alarms);
+            dispatchAlarm(h, listenerAlarm(h, listener, 0));
+            listener.die();
+            check(alarmHolds(h) == 0 && listener.deaths.isEmpty(), "Dead listener kept the device alive");
+        }
+        try (Harness h = new Harness(wire)) {
+            HeldAlarm listener = new HeldAlarm(h.alarms);
+            listener.dieDuringLink = true;
+            dispatchAlarm(h, listenerAlarm(h, listener, 0));
+            check(alarmHolds(h) == 0 && listener.completions.isEmpty() && listener.unlinks == 1,
+                    "Death during registration dispatched or leaked a listener");
+        }
+        try (Harness h = new Harness(wire)) {
+            HeldAlarm listener = new HeldAlarm(h.alarms);
+            listener.fail = true;
+            dispatchAlarm(h, listenerAlarm(h, listener, 0));
+            check(alarmHolds(h) == 0 && listener.unlinks == 1, "Failed listener retained its hold/death link");
+        }
+        try (Harness h = new Harness(wire)) {
+            HeldAlarm listener = new HeldAlarm(h.alarms);
+            Object token = listenerAlarm(h, listener, 0);
+            dispatchAlarm(h, token);
+            set(token, "deadline", 0L); // Deterministic elapsed-time expiry; no wall-clock sleep.
+            check((Long) invoke(h.alarms, "nextDueElapsed", new Class<?>[0]) == Long.MAX_VALUE
+                    && alarmHolds(h) == 0 && listener.unlinks == 1, "Expired listener retained its hold/death link");
+            listener.complete(0);
+            check(alarmHolds(h) == 0 && listener.unlinks == 1, "Late completion repeated timeout cleanup");
+            Object beforeLink = listenerAlarm(h, listener, 0);
+            set(beforeLink, "deadline", 0L);
+            invoke(h.alarms, "nextDueElapsed", new Class<?>[0]);
+            dispatchAlarm(h, beforeLink);
+            check(listener.links == 1 && listener.completions.size() == 1,
+                    "Expired reservation registered or dispatched a listener");
+        }
+        try (Harness h = new Harness(wire)) {
+            HeldAlarm listener = new HeldAlarm(h.alarms);
+            Object token = listenerAlarm(h, listener, 0);
+            listener.duringLink = () -> {
+                try { set(token, "deadline", 0L); invoke(h.alarms, "nextDueElapsed", new Class<?>[0]); }
+                catch (Exception failure) { throw new AssertionError(failure); }
+            };
+            dispatchAlarm(h, token);
+            check(alarmHolds(h) == 0 && listener.completions.isEmpty() && listener.unlinks == 1,
+                    "Expiry during registration dispatched or leaked a listener");
+        }
+        for (boolean expireAlarm : new boolean[]{false, true}) try (Harness h = new Harness(wire)) {
+            AtomicInteger received = new AtomicInteger();
+            IIntentReceiver receiver = new IIntentReceiver.Stub() {
+                @Override public void performReceive(Intent intent, int code, String data,
+                        Bundle extras, boolean ordered, boolean sticky, int user) {
+                    check(!Thread.holdsLock(h.alarms), "Alarm broadcast ran under the alarm monitor");
+                    received.incrementAndGet(); // Retain the acknowledged receiver, like goAsync().
+                }
+            };
+            invoke(h.broadcasts, "registerReceiver", new Class<?>[]{IApplicationThread.class, String.class,
+                    IIntentReceiver.class, IntentFilter.class, int.class, String.class, int.class},
+                    h.thread, PACKAGE, receiver, new IntentFilter("gesher.scheduler.ALARM"),
+                    PID, null, Context.RECEIVER_EXPORTED);
+            Object process = ((List<?>) get(h.atm, "mProcesses")).get(0);
+            ((List<?>) get(process, "activities")).clear();
+            long idle = (Long) invoke(h.atm, "idleSince", new Class<?>[0]);
+            check(idle != 0, "Background receiver fixture did not enter the device idle state");
+            PendingIntent operation = h.operation(71);
+            h.alarmManager.setExact(AlarmManager.ELAPSED_REALTIME, 0, operation);
+            Object delivery = takeAlarm(h);
+            dispatchAlarm(h, delivery);
+            check(received.get() == 1 && alarmHolds(h) == 1,
+                    "PendingIntent alarm released before acknowledged receiver completion");
+            check((Long) invoke(h.broadcasts, "nextDueElapsed", new Class<?>[0]) == 0,
+                    "Active acknowledged broadcast did not hold the idle device");
+            check((Long) invoke(h.atm, "idleSince", new Class<?>[0]) == idle,
+                    "Transient broadcast delivery restarted the activity idle clock");
+            if (expireAlarm) {
+                set(delivery, "deadline", 0L);
+                invoke(h.alarms, "nextDueElapsed", new Class<?>[0]);
+                check(alarmHolds(h) == 0, "Alarm delivery did not expire during its acknowledged broadcast");
+                Method dueWithin = type("DeviceWork").getMethod("dueWithin", long.class);
+                check((Boolean) dueWithin.invoke(null, 0L),
+                        "Broadcast ownership was not registered with DeviceWork after its alarm hold expired");
+            }
+            long identity = Binder.clearCallingIdentity();
+            try {
+                Binder.restoreCallingIdentity(((long) UID << 32) | PID);
+                h.am.finishReceiver(h.thread.asBinder(), 0, null, null, false, 0);
+            } finally { Binder.restoreCallingIdentity(identity); }
+            check(alarmHolds(h) == 0 && (Long) invoke(h.broadcasts, "nextDueElapsed", new Class<?>[0]) == Long.MAX_VALUE,
+                    "Receiver completion retained alarm or broadcast idle holds");
+            check((Long) invoke(h.atm, "idleSince", new Class<?>[0]) == idle,
+                    "Finishing a transient broadcast restarted the activity idle clock");
+            check(!(Boolean) type("DeviceWork").getMethod("dueWithin", long.class).invoke(null, 0L),
+                    "Finished broadcast left a registered DeviceWork hold");
+        }
+        try (Harness h = new Harness(wire)) {
+            PendingIntent operation = h.operation(72); // No matching receiver: completion is synchronous.
+            h.alarmManager.setExact(AlarmManager.ELAPSED_REALTIME, 0, operation);
+            dispatchAlarm(h, takeAlarm(h));
+            check(alarmHolds(h) == 0, "Empty PendingIntent receiver set retained its alarm hold");
+            PendingIntent cancelled = h.operation(73);
+            h.alarmManager.setExact(AlarmManager.ELAPSED_REALTIME, 0, cancelled);
+            Object token = takeAlarm(h);
+            h.am.cancelIntentSender(cancelled.getTarget());
+            dispatchAlarm(h, token);
+            check(alarmHolds(h) == 0, "Cancelled PendingIntent retained its alarm hold");
+        }
+    }
+
     public static void contracts(String selected, boolean wire) throws Exception {
         if (selected.equals("all") || selected.equals("drain")) drain(wire);
         if (selected.equals("all") || selected.equals("stopping")) stopping(wire);
         if (selected.equals("all") || selected.equals("race")) enqueueAtDrain(wire);
         if (selected.equals("all") || selected.equals("alarms")) alarms(wire);
+        if (selected.equals("all") || selected.equals("delivery")) delivery(wire);
     }
     public static void main(String[] args) throws Exception {
         System.loadLibrary("android_runtime");

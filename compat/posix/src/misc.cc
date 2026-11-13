@@ -118,20 +118,19 @@ int prctl(int option, ...) {
   int result;
   switch (option) {
     case PR_SET_NAME: {
-      // Linux keeps the first 15 bytes.
+      const char* input = va_arg(args, const char*);
+      if (input == nullptr) { result = -1; errno = EFAULT; break; }
+      // The Windows description is Unicode: do not leave a partial UTF-8
+      // character at the 15-byte Linux limit.
+      size_t length = strnlen(input, 15);
+      while (length && (static_cast<unsigned char>(input[length]) & 0xc0) == 0x80) --length;
       char name[16];
-      snprintf(name, sizeof(name), "%s", va_arg(args, const char*));
+      memcpy(name, input, length);
+      name[length] = 0;
+      // Also Windows' own thread name, which /proc/self/task/<tid>/comm
+      // (procfs.cc) and debuggers read (pthread.cc).
       int error = pthread_setname_np(pthread_self(), name);
       result = error == 0 ? 0 : (errno = error, -1);
-      // Also Windows' own thread name, which /proc/self/task/<tid>/comm
-      // (procfs.cc) and debuggers read (Windows 10 1607 and later).
-      using SetThreadDescriptionFn = HRESULT(WINAPI*)(HANDLE, PCWSTR);
-      static auto set_description = reinterpret_cast<SetThreadDescriptionFn>(
-          reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"),
-                                                 "SetThreadDescription")));
-      if (result == 0 && set_description != nullptr) {
-        set_description(GetCurrentThread(), gesher::Widen(name).c_str());
-      }
       break;
     }
     case PR_GET_NAME: {

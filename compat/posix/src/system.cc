@@ -382,8 +382,8 @@ int waitid(idtype_t, id_t, siginfo_t*, int) { return errno = ECHILD, -1; }
 int fcntl(int fd, int cmd, ...) {
   static_assert(sizeof(struct flock) == sizeof(gesher::record_locks::LinuxFlock));
   static_assert(offsetof(struct flock, l_start) == 8 && offsetof(struct flock, l_pid) == 24);
-  // Win64 long is32bits. Consume Linux lock pointers BEFORE entering the
-  // unchanged integer-command varargs path.
+  // Win64 integer operands are 32 bits; lock operands retain pointer width.
+  // Consume lock pointers before the integer-command varargs path.
   if (cmd == F_GETLK || cmd == F_SETLK || cmd == F_OFD_GETLK || cmd == F_OFD_SETLK) {
     va_list pointers;
     va_start(pointers, cmd);
@@ -393,10 +393,15 @@ int fcntl(int fd, int cmd, ...) {
   }
   HANDLE h = gesher::HandleFromFd(fd);
   if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
-  va_list args;
-  va_start(args, cmd);
-  long arg = va_arg(args, long);
-  va_end(args);
+  int arg = 0;
+  // Getter commands have no third argument; other supported commands take an int.
+  if (cmd == F_SETFD || cmd == F_SETFL || cmd == F_DUPFD ||
+      cmd == F_DUPFD_CLOEXEC || cmd == F_ADD_SEALS) {
+    va_list args;
+    va_start(args, cmd);
+    arg = va_arg(args, int);
+    va_end(args);
+  }
   gesher::SocketFd state;
   if (gesher::LookupSocket(fd, &state)) {
     switch (cmd) {

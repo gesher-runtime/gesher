@@ -20,6 +20,8 @@ struct WaitTimeout { int64_t seconds; int64_t nanoseconds; };
 // session. Calling this before spawning a child publishes the session name.
 bool Initialize();
 bool Get(const std::string& name, std::string* value, uint32_t* serial = nullptr);
+// Get for |count| names with one area lookup (an unset name gives "").
+void GetAll(const std::string* names, std::string* values, size_t count);
 bool Set(const std::string& name, const std::string& value);
 Snapshot List();
 uint32_t AreaSerial();

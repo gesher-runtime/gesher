@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -241,7 +242,7 @@ bionic_pthread_t SelfId() {
     ReapCpuClocks();
     HANDLE retained = nullptr;
     DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &retained,
-                    THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0);
+                    THREAD_QUERY_LIMITED_INFORMATION | THREAD_SET_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0);
     // A null entry records resource exhaustion without confusing this valid
     // pthread identity with an unknown one. Acquisition then returns EAGAIN.
     g_external_threads.emplace(t_self, retained);
@@ -476,7 +477,12 @@ int32_t BIONIC_SYSV gesher_bionic_pthread_gettid_np(bionic_pthread_t thread) {
   return it == g_threads.end() ? -1 : it->second->tid;
 }
 
-int BIONIC_SYSV gesher_bionic_pthread_setname_np(bionic_pthread_t, const char*) { return 0; }
+// bionic's limits: 15 bytes and the NUL, ERANGE beyond. The name is the Windows
+// thread description, which debuggers, /proc/self/task/<tid>/comm and
+// pthread_getname_np/PR_GET_NAME (extra_sys_bionic.cc) read.
+int BIONIC_SYSV gesher_bionic_pthread_setname_np(bionic_pthread_t thread, const char* name) {
+  return PthreadSetName(thread, name);
+}
 int BIONIC_SYSV gesher_bionic_sched_yield(void) {
   SwitchToThread();
   return 0;
@@ -756,6 +762,61 @@ int BIONIC_SYSV gesher_bionic_register_atfork(void*, void*, void*, void*) { retu
 }  // extern "C"
 
 uint64_t PthreadSelfId() { return SelfId(); }
+
+namespace {
+// g_threads_mutex protects the retained objects through Get/SetThreadDescription.
+// No thread ID is reopened and no borrowed handle escapes this critical section.
+HANDLE NameTarget(uint64_t thread, uint64_t self) {
+  HANDLE target = nullptr;
+  if (thread == self) target = GetCurrentThread();
+  else {
+    auto found = g_threads.find(thread);
+    if (found != g_threads.end()) target = found->second->handle;
+    auto external = g_external_threads.find(thread);
+    if (external != g_external_threads.end()) target = external->second;
+  }
+  if (!target || GetProcessIdOfThread(target) != GetCurrentProcessId() ||
+      WaitForSingleObject(target, 0) != WAIT_TIMEOUT) return nullptr;
+  return target;
+}
+}
+int PthreadSetName(uint64_t thread, const char* name) {
+  if (name == nullptr) return kEINVAL;
+  if (std::strlen(name) >= 16) return kERANGE;
+  wchar_t wide[16];
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, wide, 16) <= 0) return kEINVAL;
+  uint64_t self = SelfId();
+  std::lock_guard<std::mutex> lock(g_threads_mutex);
+  ReapCpuClocks();
+  HANDLE target = NameTarget(thread, self);
+  if (!target) return kESRCH;
+  return SUCCEEDED(SetThreadDescription(target, wide)) ? 0 : kESRCH;
+}
+int PthreadGetName(uint64_t thread, char* name, size_t size) {
+  if (name == nullptr) return kEINVAL;
+  if (size < 16) return kERANGE;
+  uint64_t self = SelfId();
+  std::lock_guard<std::mutex> lock(g_threads_mutex);
+  ReapCpuClocks();
+  HANDLE target = NameTarget(thread, self);
+  if (!target) return kESRCH;
+  PWSTR description = nullptr;
+  if (FAILED(GetThreadDescription(target, &description))) return kESRCH;
+  int count = description ? WideCharToMultiByte(CP_UTF8, 0, description, -1, nullptr, 0, nullptr, nullptr) : 1;
+  std::string text(count > 0 ? count : 0, '\0');
+  bool converted = count > 0 && (!description ||
+      WideCharToMultiByte(CP_UTF8, 0, description, -1, text.data(), count, nullptr, nullptr) == count);
+  if (description) LocalFree(description);
+  if (!converted) return kEINVAL;
+  text.resize(static_cast<size_t>(count - 1));
+  size_t length = text.size() < 15 ? text.size() : 15;
+  if (length < text.size()) {
+    while (length && (static_cast<unsigned char>(text[length]) & 0xc0) == 0x80) --length;
+  }
+  std::memcpy(name, text.data(), length);
+  name[length] = 0;
+  return 0;
+}
 
 int PthreadCpuClock(uint64_t thread, int* clock_id) {
   if (clock_id == nullptr) return kEINVAL;

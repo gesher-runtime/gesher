@@ -3,12 +3,16 @@
 #include <pthread.h>
 
 #include <errno.h>
+#include <locale.h>
 #include <time.h>
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstring>
 #include <mutex>
+#include <string>
 #include <utility>
 
 #include "internal.h"
@@ -16,6 +20,8 @@
 // The real winpthreads calls; <pthread.h> routes everyone else here.
 #undef pthread_key_create
 #undef pthread_key_delete
+#undef pthread_setname_np
+#undef pthread_getname_np
 
 namespace {
 
@@ -39,6 +45,31 @@ constexpr auto MakeTrampolines(std::integer_sequence<int, I...>) {
   return std::array<void (*)(void*), sizeof...(I)>{&Trampoline<I>...};
 }
 constexpr auto kTrampolines = MakeTrampolines(std::make_integer_sequence<int, kSlots>());
+
+thread_local bool self_named = false;
+constexpr size_t kTaskCommLen = 16;  // Linux's TASK_COMM_LEN, with the NUL
+
+// The first |limit| bytes of UTF-8 |text| at most, not splitting a character.
+size_t Utf8Prefix(const std::string& text, size_t limit) {
+  if (text.size() <= limit) return text.size();
+  size_t end = limit;
+  while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) --end;
+  return end;
+}
+
+// Fallback for an unnamed detached thread, whose name winpthreads cannot
+// read. This is the executable's basename; thread creation/inherited Linux
+// comm names are outside this adapter.
+std::string ProcessName() {
+  wchar_t path[MAX_PATH];
+  DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
+  std::wstring name(path, n < MAX_PATH ? n : 0);
+  size_t slash = name.find_last_of(L"\\/");
+  if (slash != std::wstring::npos) name = name.substr(slash + 1);
+  size_t dot = name.rfind(L'.');
+  if (dot != std::wstring::npos) name.resize(dot);
+  return gesher::Narrow(name.c_str());
+}
 
 }  // namespace
 
@@ -68,6 +99,64 @@ int gesher_pthread_key_delete(pthread_key_t key) {
       break;
     }
   }
+  return 0;
+}
+
+int gesher_pthread_setname_np(pthread_t thread, const char* name) {
+  if (name == nullptr) return EINVAL;
+  if (std::strlen(name) >= kTaskCommLen) return ERANGE;
+  // Keep cross-thread ownership with winpthreads; never borrow a native handle
+  // that join/detach can close. Its mbsrtowcs conversion uses the caller's CRT
+  // locale, so scope UTF-8 to this thread and restore both locale and mode.
+  if (!pthread_equal(thread, pthread_self())) {
+    int previous_mode = _configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
+    if (previous_mode == -1) return EINVAL;
+    // Arm restoration before copying the locale string: that allocation can
+    // fail in an exception-enabled build. LC_CTYPE is still
+    // unchanged then, so restoring only the mode closes that exceptional path.
+    struct LocaleMode {
+      int previous;
+      ~LocaleMode() { if (previous != -1) _configthreadlocale(previous); }
+      bool Restore() {
+        int value = previous;
+        previous = -1;
+        return _configthreadlocale(value) != -1;
+      }
+    } mode{previous_mode};
+    const char* current = setlocale(LC_CTYPE, nullptr);
+    std::string saved = current ? current : "";
+    if (!current || !setlocale(LC_CTYPE, ".UTF8")) {
+      mode.Restore();
+      return EINVAL;
+    }
+    int result = pthread_setname_np(thread, name);
+    bool restored = setlocale(LC_CTYPE, saved.c_str()) != nullptr;
+    restored = mode.Restore() && restored;
+    return result != 0 ? result : restored ? 0 : EINVAL;
+  }
+  int cached = pthread_setname_np(thread, name);  // ESRCH is expected for detached threads
+  if (cached != 0 && cached != ESRCH) return cached;
+  std::wstring wide = gesher::Widen(name);
+  if (FAILED(SetThreadDescription(GetCurrentThread(), wide.c_str()))) return ESRCH;
+  self_named = true;
+  return 0;
+}
+
+int gesher_pthread_getname_np(pthread_t thread, char* name, size_t len) {
+  if (name == nullptr || len < kTaskCommLen) return ERANGE;
+  if (!pthread_equal(thread, pthread_self())) return pthread_getname_np(thread, name, len);
+  PWSTR description = nullptr;
+  if (FAILED(GetThreadDescription(GetCurrentThread(), &description))) return ESRCH;
+  std::string text = description != nullptr ? gesher::Narrow(description) : std::string();
+  if (description != nullptr) LocalFree(description);
+  if (text.empty() && !self_named) {
+    // An explicitly empty name is valid. For a joinable thread, winpthreads'
+    // successful empty read is authoritative too (including a peer's rename).
+    char cached[kTaskCommLen]{};
+    if (pthread_getname_np(thread, cached, sizeof(cached)) != 0) text = ProcessName();
+  }
+  text.resize(Utf8Prefix(text, kTaskCommLen - 1));
+  std::memcpy(name, text.c_str(), text.size() + 1);
   return 0;
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the writev source exception cannot admit unrelated supplier changes."""
+"""Verify reviewed writev/fcntl repairs cannot admit unrelated supplier changes."""
 import contextlib
 import hashlib
 import importlib.util
@@ -45,4 +45,18 @@ rejected('ambiguous writev boundary', original + b'\n// ssize_t writev(\n', True
 rejected('unreviewed bytes inside writev',
          original.replace(b'  if (int error = gesher::EventObjectWriteError',
                           b'  // unreviewed change\n  if (int error = gesher::EventObjectWriteError', 1))
-print('vector source policy: positive source and four negative controls passed')
+rejected('fcntl getter operand consumption even with a new full-file hash',
+         original.replace(b'  if (cmd == F_SETFD || cmd == F_SETFL || cmd == F_DUPFD ||\n',
+                          b'  if (cmd == F_GETFD || cmd == F_SETFD || cmd == F_SETFL || cmd == F_DUPFD ||\n', 1), True)
+rejected('fcntl integer operand ABI change even with a new full-file hash',
+         original.replace(b'    arg = va_arg(args, int);\n',
+                          b'    arg = va_arg(args, long);\n', 1), True)
+rejected('fcntl lock-pointer ABI change even with a new full-file hash',
+         original.replace(b'    struct flock* argument = va_arg(pointers, struct flock*);\n',
+                          b'    struct flock* argument = reinterpret_cast<struct flock*>(va_arg(pointers, long));\n', 1), True)
+rejected('fcntl socket descriptor flags edit even with a new full-file hash',
+         original.replace(b'        return FD_CLOEXEC;  // sockets are never inherited (winsock.cc)\n',
+                          b'        return 0;  // sockets are never inherited (winsock.cc)\n', 1), True)
+rejected('duplicate reviewed fcntl preamble even with a new full-file hash',
+         original + b'\n' + policy.FCNTL_REPLACEMENTS[1][1], True)
+print('vector/fcntl source policy: positive source and nine negative controls passed')

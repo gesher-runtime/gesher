@@ -14,10 +14,14 @@
 // Prints "bionic_key_exit_test all passed".
 
 #include <pthread.h>
+#include <gesher/bionic_shim.h>
 #include <windows.h>
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <cwchar>
+#include <string>
 
 #if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))  // BIONIC_SYSV (compat/bionic/abi_types.h)
@@ -31,6 +35,8 @@ int SYSV gesher_bionic_pthread_setspecific(int32_t key, const void* value);
 int SYSV gesher_bionic_pthread_create(uint64_t* thread, const void* attr,
                                       void* (SYSV* start)(void*), void* arg);
 int SYSV gesher_bionic_pthread_join(uint64_t thread, void** retval);
+int SYSV gesher_bionic_pthread_detach(uint64_t thread);
+uint64_t SYSV gesher_bionic_pthread_self();
 int SYSV gesher_bionic_cxa_thread_atexit_impl(void (SYSV* dtor)(void*), void* obj, void* dso);
 }
 
@@ -122,9 +128,108 @@ void Report(const char* kind, const State& s) {
   std::fflush(stdout);
 }
 
+// Exercise the actual exported bionic adapters, with a live target at every
+// cross-thread call. Native completion is observed before freeing its state.
+using SetName = int (SYSV*)(uint64_t, const char*);
+using GetName = int (SYSV*)(uint64_t, char*, size_t);
+using Prctl = int (SYSV*)(int, uint64_t, uint64_t, uint64_t, uint64_t);
+SetName set_name;
+GetName get_name;
+Prctl prctl_name;
+const char* kUnicodeName = "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d";
+void NameCheck(bool result, const char* label) {
+  if (!result) { ++failures; std::printf("FAIL bionic names: %s\n", label); }
+}
+void NameRequire(bool result, const char* label) {
+  if (!result) { std::fprintf(stderr, "FAIL bionic names: %s\n", label); ExitProcess(1); }
+}
+void NameWait(HANDLE event) {
+  NameRequire(event && WaitForSingleObject(event, 30000) == WAIT_OBJECT_0, "event/completion timeout");
+}
+struct NameState {
+  HANDLE ready = nullptr, read = nullptr, done = nullptr, release = nullptr, native = nullptr;
+  uint64_t id = 0;
+  bool matched = false;
+};
+void NamingThread(NameState* state) {
+  state->id = gesher_bionic_pthread_self();
+  NameRequire(DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                              &state->native, SYNCHRONIZE, FALSE, 0) != 0, "retain own thread");
+  NameRequire(SetEvent(state->ready) != 0, "signal ready");
+  NameWait(state->read);
+  char name[16]{};
+  PWSTR description = nullptr;
+  state->matched = get_name(state->id, name, sizeof(name)) == 0 &&
+                   std::strcmp(name, kUnicodeName) == 0 &&
+                   SUCCEEDED(GetThreadDescription(GetCurrentThread(), &description)) &&
+                   description && std::wcscmp(description, L"\x05e9\x05dc\x05d5\x05dd") == 0;
+  if (description) LocalFree(description);
+  NameRequire(SUCCEEDED(SetThreadDescription(GetCurrentThread(), L"\x05e9\x05dc\x05d5\x05dd\x05e9\x05dc\x05d5\x05dd\x05e9")),
+              "set long native description");
+  NameRequire(SetEvent(state->done) != 0, "signal description");
+  NameWait(state->release);
+}
+void* SYSV BionicNamingThread(void* state) { NamingThread(static_cast<NameState*>(state)); return nullptr; }
+void* HostNamingThread(void* state) { NamingThread(static_cast<NameState*>(state)); return nullptr; }
+DWORD WINAPI WindowsNamingThread(void* state) { NamingThread(static_cast<NameState*>(state)); return 0; }
+void CheckNamingPeer(int kind) {
+  NameState state;
+  state.ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  state.read = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  state.done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  state.release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  NameRequire(state.ready && state.read && state.done && state.release, "create barriers");
+  uint64_t bt = 0;
+  pthread_t ht{};
+  HANDLE wt = nullptr;
+  if (kind <= 1) NameRequire(gesher_bionic_pthread_create(&bt, nullptr, BionicNamingThread, &state) == 0, "bionic create");
+  else if (kind == 2) NameRequire(pthread_create(&ht, nullptr, HostNamingThread, &state) == 0, "host create");
+  else { wt = CreateThread(nullptr, 0, WindowsNamingThread, &state, 0, nullptr); NameRequire(wt != nullptr, "Windows create"); }
+  NameWait(state.ready);
+  if (kind == 1) NameRequire(gesher_bionic_pthread_detach(bt) == 0, "detach live target");
+  char name[16]{};
+  NameCheck(set_name(state.id, kUnicodeName) == 0, "cross-thread UTF-8 setter");
+  NameCheck(get_name(state.id, name, sizeof(name)) == 0 && std::strcmp(name, kUnicodeName) == 0,
+            "cross-thread getter");
+  NameCheck(get_name(state.id, name, 15) == 34, "short buffer ERANGE");
+  NameCheck(set_name(state.id, "sixteen-bytes-xx") == 34, "long name ERANGE");
+  NameRequire(SetEvent(state.read) != 0, "release reader");
+  NameWait(state.done);
+  NameCheck(state.matched, "target self getter and Windows description agree");
+  NameCheck(get_name(state.id, name, sizeof(name)) == 0 &&
+            std::strcmp(name, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\xd7\xa9\xd7\x9c\xd7\x95") == 0,
+            "long UTF-8 description stops at a character boundary");
+  NameRequire(SetEvent(state.release) != 0, "release target");
+  NameWait(state.native);
+  if (kind == 0) NameRequire(gesher_bionic_pthread_join(bt, nullptr) == 0, "bionic join");
+  if (kind == 2) NameRequire(pthread_join(ht, nullptr) == 0, "host join");
+  if (wt) CloseHandle(wt);
+  CloseHandle(state.native);
+  CloseHandle(state.ready); CloseHandle(state.read); CloseHandle(state.done); CloseHandle(state.release);
+}
+void ThreadNames() {
+  set_name = reinterpret_cast<SetName>(gesher::bionic::LookupBionicSymbol("pthread_setname_np"));
+  get_name = reinterpret_cast<GetName>(gesher::bionic::LookupBionicSymbol("pthread_getname_np"));
+  prctl_name = reinterpret_cast<Prctl>(gesher::bionic::LookupBionicSymbol("prctl"));
+  NameRequire(set_name && get_name && prctl_name, "exported adapters");
+  uint64_t self = gesher_bionic_pthread_self();
+  char name[16]{};
+  NameCheck(set_name(self, "bionic-name") == 0, "self set");
+  NameCheck(get_name(self, name, sizeof(name)) == 0 && std::strcmp(name, "bionic-name") == 0, "self get");
+  NameCheck(get_name(UINT64_MAX, name, sizeof(name)) == 3, "unknown identity ESRCH");
+  NameCheck(set_name(UINT64_MAX, "unknown") == 3, "unknown setter ESRCH");
+  NameCheck(prctl_name(15, reinterpret_cast<uint64_t>("12345678901234\xd7\xa9"), 0, 0, 0) == 0,
+            "prctl truncates UTF-8 safely");
+  NameCheck(prctl_name(16, reinterpret_cast<uint64_t>(name), 0, 0, 0) == 0 &&
+            std::strcmp(name, "12345678901234") == 0, "prctl shares the name");
+  NameCheck(prctl_name(15, 0, 0, 0, 0) == -1, "prctl rejects null");
+  for (int kind = 0; kind != 4; ++kind) CheckNamingPeer(kind);
+}
+
 }  // namespace
 
 int main() {
+  ThreadNames();
   if (pthread_key_create(&art_key, ArtExit) != 0 ||
       gesher_bionic_pthread_key_create(&detach_key, Detach) != 0 ||
       gesher_bionic_pthread_key_create(&again_key, Again) != 0) {

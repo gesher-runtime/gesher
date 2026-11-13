@@ -101,11 +101,24 @@ jobs:
           python3 tools/test_audio_state_contracts.py --sanitize
           python3 tools/test_surface_geometry_contracts.py --sanitize
 
+      - name: Physical keys, sensor flushes, directory walks and futex contracts
+        run: |
+          python3 tools/test_input_key_contracts.py --sanitize
+          python3 tools/test_sensor_flush_contracts.py --sanitize
+          python3 tools/test_traversal_contracts.py --sanitize
+          python3 tools/test_futex_contracts.py --sanitize
+          python3 tools/test_futex_contracts.py --linux-reference
+          CXX='c++ -fsanitize=thread -fno-omit-frame-pointer' \
+            python3 tools/test_futex_contracts.py --group guest --group concurrency
+
       - name: Temporary directory and UNC namespace contracts
         run: |
           python3 tools/test_temp_directory.py
           c++ -std=c++17 -Wall -Wextra -Werror tests/paths/unc_paths_test.cc -o "$RUNNER_TEMP/gesher-unc-paths"
           "$RUNNER_TEMP/gesher-unc-paths"
+
+      - name: Anonymous mapping zeroing and protection contracts
+        run: python3 tools/test_mman_zeroing_mappings.py --sanitize
 
       - name: Filesystem metadata and media source ownership contracts
         run: |
@@ -125,6 +138,9 @@ jobs:
 
       - name: Audio JNI buffer contracts with checked JNI and UBSan
         run: python3 tools/test_audio_buffer_contracts.py
+
+      - name: Settings context bootstrap and deferred construction contracts
+        run: python3 tools/test_settings_context_bootstrap.py --java-home "$JAVA_HOME"
 
       - name: APK native library filename contracts
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
@@ -289,6 +305,7 @@ jobs:
           mkdir -p dist
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
           cp out/gesher_shellext.dll dist/
+          cp out/futex_test_module.dll dist/
           cp out/libgesher_account_crypto.so dist/
           cp out/libgesher_install_pipe.so dist/
           cp out/libgesher_webview_bridge.so dist/
@@ -567,6 +584,7 @@ jobs:
         run: |
           tests/windows/shell/UiLocalizationChecks.ps1
           tests/windows/shell/MicrogDefaultsChecks.ps1
+          tests/windows/shell/ControlPanelRefreshChecks.ps1
 
       - name: Verify and assemble windows-x64 artifact
         shell: pwsh
@@ -713,8 +731,11 @@ jobs:
           # lifecycle.apk runs headless (no window; its task is removed once it
           # is idle); uiapp.apk's window is checked below.
           $env:GESHER_APP_WINDOW = 'headless'
+          # The device's processes log how they execute (checked below, ADR 0081).
+          $env:GESHER_LOG_EXECUTION = '1'
           $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
           $code = $LASTEXITCODE
+          Remove-Item Env:GESHER_LOG_EXECUTION
           Write-Host "gesher-app lifecycle.apk (exit $code):"
           Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
           if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
@@ -736,6 +757,15 @@ jobs:
             throw 'The installed Gesher device did not compile lifecycle.apk at install'
           }
           "PASS  installer: the installed device compiles lifecycle.apk at install ($(($dexopt.Line -replace '^.*dexopt: ', 'dexopt: ').Trim()))" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The installed options (gesher-app.ps1): the launcher and the system server it
+          # started run nterp and the boot image's AOT code, not the switch interpreter (ADR 0081).
+          $serverLog = Get-Content -Raw "$env:LOCALAPPDATA\Gesher\logs\system_server.log" -ErrorAction SilentlyContinue
+          if ($out -notmatch 'gesher: execution: nterp' -or $out -match 'gesher: execution: switch interpreter' -or
+              $serverLog -notmatch 'gesher: execution: nterp' -or $serverLog -match 'gesher: execution: switch interpreter') {
+            ($serverLog -split "`n" | Select-String 'gesher: execution|boot image') | Out-Host
+            throw 'The installed launcher or system server does not run nterp (-Xint in the installed options?)'
+          }
+          'PASS  installer: the installed launcher and system server run nterp and AOT code (gesher: execution: nterp)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Installed apps as Windows apps (docs/installer.md): the first launch
           # made the app's Start menu shortcut, and its process set the
           # package's AppUserModelID.
@@ -1106,6 +1136,81 @@ jobs:
             throw "gesher-launch's splash: $($problems -join '; ')"
           }
           'PASS  installer: gesher-launch launch com.gesher.uiapp shows a splash (GesherSplash: the app''s label, icon and AppUserModelID) until the app''s window is up; gesher-launch install shows none' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The Start menu's launch (no standard handles: nobody reads the output) does not
+          # keep a launch chain for the app's lifetime: gesher-launch sets
+          # GESHER_LAUNCH_DETACH=1, the launcher returns once the activity has started, and
+          # gesher-launch (once the app's window is up), powershell and the launcher's
+          # dalvikvm end while the app runs; closing its window still ends it. The device
+          # is stopped first, so this launch starts it: the device must not inherit
+          # GESHER_LAUNCH_DETACH (read back from the system server's environment block).
+          if (-not ('GesherProcessEnvironment' -as [type])) {
+            Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class GesherProcessEnvironment {
+            [StructLayout(LayoutKind.Sequential)] struct BasicInformation { public IntPtr ExitStatus, Peb, Affinity, Priority, Pid, Parent; }
+            [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr h, int cls, ref BasicInformation info, int size, out int length);
+            [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+            [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+            [DllImport("kernel32.dll", SetLastError = true)] static extern bool ReadProcessMemory(IntPtr h, IntPtr at, byte[] buffer, IntPtr size, out IntPtr read);
+            static long Read64(IntPtr h, long at) {
+              var b = new byte[8]; IntPtr n;
+              if (!ReadProcessMemory(h, (IntPtr)at, b, (IntPtr)8, out n)) throw new InvalidOperationException("ReadProcessMemory " + Marshal.GetLastWin32Error());
+              return BitConverter.ToInt64(b, 0);
+            }
+            // A 64-bit process's environment block (x64 PEB -> RTL_USER_PROCESS_PARAMETERS).
+            public static string[] Of(int pid) {
+              IntPtr h = OpenProcess(0x0410, false, pid);  // PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
+              if (h == IntPtr.Zero) throw new InvalidOperationException("OpenProcess " + Marshal.GetLastWin32Error());
+              try {
+                var info = new BasicInformation(); int length;
+                int status = NtQueryInformationProcess(h, 0, ref info, Marshal.SizeOf(info), out length);
+                if (status != 0) throw new InvalidOperationException("NtQueryInformationProcess 0x" + status.ToString("x8"));
+                long parameters = Read64(h, (long)info.Peb + 0x20);
+                long environment = Read64(h, parameters + 0x80);
+                long size = Read64(h, parameters + 0x3F0);
+                if (size <= 0 || size > (1 << 24)) throw new InvalidOperationException("environment size " + size);
+                var block = new byte[size]; IntPtr read;
+                if (!ReadProcessMemory(h, (IntPtr)environment, block, (IntPtr)size, out read)) throw new InvalidOperationException("ReadProcessMemory " + Marshal.GetLastWin32Error());
+                return System.Text.Encoding.Unicode.GetString(block, 0, (int)read).Split(new[] { '\0' }, StringSplitOptions.RemoveEmptyEntries);
+              } finally { CloseHandle(h); }
+            }
+          }
+          '@
+          }
+          $problems = @()
+          $out = & "$app\gesher-app.cmd" shutdown 2>&1 | Out-String
+          if ((DevicePids).Count -ne 0) { Write-Host $out; throw 'gesher-app shutdown left the device running' }
+          $savedWindow = $env:GESHER_APP_WINDOW
+          $env:GESHER_APP_WINDOW = 'window'
+          try {
+            $p = Start-Process "$app\gesher-launch.exe" -ArgumentList 'launch', 'com.gesher.uiapp' -PassThru
+          } finally { $env:GESHER_APP_WINDOW = $savedWindow }
+          if (-not $p.WaitForExit(400000)) { $p.Kill($true); $problems += 'the detached gesher-launch did not exit within 400 s' }
+          elseif ($p.ExitCode -ne 0) { $problems += "the detached gesher-launch exited with $($p.ExitCode)" }
+          $w = @([GesherSplashCi]::Find('GesherWindow', 0) | Where-Object { [GesherWin32]::AppUserModelId($_) -eq 'Gesher.App.com.gesher.uiapp' })
+          if ($w.Count -eq 0) { $problems += 'the app''s window is not up once gesher-launch has exited' }
+          if (@([GesherSplashCi]::Find('GesherSplash', 0)).Count -gt 0) { $problems += 'a splash is still up' }
+          Start-Sleep 2
+          $chain = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'com\.gesher\.app\.Launcher launch com\.gesher\.uiapp' })
+          if ($chain) { $problems += "a launcher still runs: $(($chain | ForEach-Object { "$($_.Name) $($_.ProcessId)" }) -join ', ')" }
+          # The device this launch started, which outlives it.
+          $running = DevicePids
+          if ($running.Count -ne 3) { $problems += "the device the detached launch started does not run: $running" }
+          $serverPid = [int]((Get-Content $device | Where-Object { $_ -match '^system_server=\d+$' }) -replace '^system_server=', '')
+          try {
+            $serverEnv = [GesherProcessEnvironment]::Of($serverPid)
+            if (-not ($serverEnv | Where-Object { $_ -like 'GESHER_BINDER=*' })) { $problems += "the system server's environment as read has no GESHER_BINDER ($($serverEnv.Count) variables)" }
+            if ($serverEnv | Where-Object { $_ -like 'GESHER_LAUNCH_DETACH=*' }) { $problems += 'the system server inherited GESHER_LAUNCH_DETACH' }
+          } catch { $problems += "the system server's environment: $_" }
+          if ($w.Count -gt 0) {
+            [void][GesherWin32]::PostMessageW($w[0], 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)  # WM_CLOSE
+            $closed = $false
+            for ($i = 0; $i -lt 300 -and -not $closed; $i++) { Start-Sleep -Milliseconds 100; $closed = -not [GesherWin32]::IsWindow($w[0]) }
+            if (-not $closed) { $problems += 'the app''s window did not close' }
+          }
+          if ($problems) { throw "gesher-launch without output handles: $($problems -join '; ')" }
+          'PASS  installer: gesher-launch launch with no output handles (the Start menu''s) ends once the app''s window is up; no launcher, powershell or gesher-launch stays for the app''s lifetime; the device it started has no GESHER_LAUNCH_DETACH' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # An update while a program has the .apk icon handler loaded (Explorer always
           # has): Setup must not close that program (it took the desktop away), and
           # the update must still succeed: the loaded copy is moved aside.

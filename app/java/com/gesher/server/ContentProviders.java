@@ -32,9 +32,17 @@ import java.util.Set;
  * <li>A provider of a package with no process: {@code getContentProvider} starts the
  *     process ({@link ActivityTaskManagerService#withProcess}) and waits until it publishes
  *     the provider, as ContentProviderHelper waits for a provider being launched.
- * <li>The processes of other packages that got a process's provider are its clients
- *     (ContentProviderConnection): while it has any, nothing ends it; when the last one is
- *     gone, it may exit ({@link ActivityTaskManagerService#maybeExit}).
+ * <li>The processes of other packages that got a process's provider are its clients:
+ *     while it has any, nothing ends it; when the last one is gone, it may exit
+ *     ({@link ActivityTaskManagerService#maybeExit}).
+ * <li>Each client process also holds a reference-counted connection to each provider it
+ *     acquired (ContentProviderConnection, {@link Connection}): ActivityThread counts its
+ *     stable and unstable references, tells {@code refContentProvider} when either kind
+ *     appears or goes, and {@code removeContentProvider} once it released the last one
+ *     (one second later, CONTENT_PROVIDER_RETAIN_TIME). A provider process whose
+ *     connections all have no references left is in no client's use
+ *     ({@link #hasActiveClients}): the idle reaper may end it (ADR 0082), and the next
+ *     acquisition starts it again.
  * <li>{@code settings} is the system server's own stand-in ({@link SettingsProvider}),
  *     so that Settings.System, Secure and Global answer.
  * </ul>
@@ -56,6 +64,37 @@ final class ContentProviders {
     /** The processes (of other packages) using each process's providers. */
     private final Map<ActivityTaskManagerService.ProcessRecord,
             Set<ActivityTaskManagerService.ProcessRecord>> mClients = new HashMap<>();
+    /** The reference-counted connections, by their Binder (ContentProviderHolder.connection). */
+    private final Map<IBinder, Connection> mConnections = new HashMap<>();
+
+    /**
+     * ContentProviderConnection: one client process's references to one published
+     * provider. The client gets it as {@code ContentProviderHolder.connection} and names it
+     * in refContentProvider and removeContentProvider.
+     */
+    static final class Connection extends Binder {
+        final ActivityTaskManagerService.ProcessRecord owner;
+        final ActivityTaskManagerService.ProcessRecord client;
+        final IBinder provider;
+        final String authority;
+        int stable;
+        int unstable;
+
+        Connection(ActivityTaskManagerService.ProcessRecord owner,
+                ActivityTaskManagerService.ProcessRecord client, IBinder provider, String authority) {
+            super("ContentProviderConnection");
+            this.owner = owner;
+            this.client = client;
+            this.provider = provider;
+            this.authority = authority;
+        }
+
+        @Override
+        public String toString() {
+            return authority + " for " + client + " (stable " + stable + ", unstable "
+                    + unstable + ")";
+        }
+    }
 
     ContentProviders(PackageManagerService pm, ActivityTaskManagerService atm) {
         mPm = pm;
@@ -148,6 +187,17 @@ final class ContentProviders {
      */
     ContentProviderHolder getContentProvider(ActivityTaskManagerService.ProcessRecord caller,
             String callingPackage, String name) {
+        return getContentProvider(caller, callingPackage, name, false, false);
+    }
+
+    /**
+     * {@link #getContentProvider(ActivityTaskManagerService.ProcessRecord, String, String)}
+     * for an app's ActivityThread: with {@code counted}, a holder of another process's
+     * provider carries a reference-counted {@link Connection} (one more stable or unstable
+     * reference) that the client releases; otherwise it needs no release.
+     */
+    ContentProviderHolder getContentProvider(ActivityTaskManagerService.ProcessRecord caller,
+            String callingPackage, String name, boolean stable, boolean counted) {
         String actualPackage = callerPackage(caller, callingPackage);
         if (SettingsProvider.AUTHORITY.equals(name)) {
             return mSettings.holder();
@@ -160,10 +210,13 @@ final class ContentProviders {
             enforceAccess(actualPackage, declared);
             Set<ActivityTaskManagerService.ProcessRecord> live = new HashSet<>(mAtm.processes());
             synchronized (this) {
+                if (caller != null && (caller.exiting || caller.dead)) {
+                    throw new SecurityException("Content provider caller retired before acquisition");
+                }
                 ContentProviderHolder published = mPublished.get(name);
                 if (published != null) {
                     ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(name);
-                    if (owner == null || owner.exiting || !declared.packageName.equals(owner.packageName)
+                    if (owner == null || owner.exiting || owner.dead || !declared.packageName.equals(owner.packageName)
                             || !declared.name.equals(published.info.name)
                             || !mAtm.componentProcess(declared.packageName, declared.processName)
                                     .equals(mAtm.componentProcess(owner.packageName, owner.processName))
@@ -181,6 +234,14 @@ final class ContentProviders {
                     ContentProviderHolder h = new ContentProviderHolder(new ProviderInfo(declared));
                     h.provider = published.provider;
                     h.noReleaseNeeded = true;
+                    if (counted && caller != null && owner != null && caller != owner) {
+                        Connection c = connectionLocked(owner, caller,
+                                published.provider.asBinder(), name);
+                        if (stable) c.stable++; else c.unstable++;
+                        h.connection = c;
+                        h.noReleaseNeeded = false;
+                        owner.markActive(SystemClock.uptimeMillis());
+                    }
                     return h;
                 }
                 if (deadline != 0) {
@@ -270,6 +331,7 @@ final class ContentProviders {
         }
         Set<ActivityTaskManagerService.ProcessRecord> live = new HashSet<>(mAtm.processes());
         synchronized (this) {
+            if (app.exiting || app.dead) throw new SecurityException("Provider publisher retired before publication");
             // Validate the entire batch before mutating any authority mapping.
             for (ContentProviderHolder h : checked) {
                 for (String authority : h.info.authority.split(";")) {
@@ -294,14 +356,101 @@ final class ContentProviders {
         }
     }
 
+    /** The client's connection to the provider, made on its first acquisition. Locked. */
+    private Connection connectionLocked(ActivityTaskManagerService.ProcessRecord owner,
+            ActivityTaskManagerService.ProcessRecord client, IBinder provider, String authority) {
+        for (Connection c : mConnections.values()) {
+            if (c.client == client && c.provider == provider && c.owner == owner) return c;
+        }
+        Connection c = new Connection(owner, client, provider, authority);
+        mConnections.put(c, c);
+        return c;
+    }
+
+    /** The connection, if it is the calling client's (or the caller is the system). Locked. */
+    private Connection callerConnectionLocked(IBinder connection, boolean system, int pid, int uid) {
+        Connection c = connection == null ? null : mConnections.get(connection);
+        if (c == null) return null;
+        if (!system && (c.client.pid != pid || c.client.uid != uid || c.client.exiting || c.client.dead)) {
+            throw new SecurityException("Provider connection belongs to another process");
+        }
+        return c;
+    }
+
+    /**
+     * ActivityThread changes its counts: a first stable or unstable reference, or the last
+     * one of a kind gone (stable to unstable while the removal is pending). Returns whether
+     * the connection still stands.
+     */
     boolean refContentProvider(IBinder connection, int stable, int unstable) {
-        return true;  // connections are counted per client process, not per reference
+        // isSystem resolves the caller through ATM. Never acquire ATM under this monitor.
+        int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
+        boolean system = mCallers.isSystem();
+        synchronized (this) {
+            Connection c = callerConnectionLocked(connection, system, pid, uid);
+            if (c == null) return false;
+            if (c.stable + stable < 0 || c.unstable + unstable < 0) {
+                SystemServer.log("refContentProvider " + c + ": counts would go below zero ("
+                        + stable + ", " + unstable + "); kept at zero");
+            }
+            c.stable = Math.max(0, c.stable + stable);
+            c.unstable = Math.max(0, c.unstable + unstable);
+            c.owner.markActive(SystemClock.uptimeMillis());
+            return !c.owner.exiting && !c.owner.dead;
+        }
+    }
+
+    /**
+     * ActivityThread released its last reference of a kind (completeRemoveProvider), or a
+     * duplicate holder it did not need (installProvider lost a race): once the connection
+     * has no reference left, it is gone.
+     */
+    void removeContentProvider(IBinder connection, boolean stable) {
+        int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
+        boolean system = mCallers.isSystem();
+        synchronized (this) {
+            Connection c = callerConnectionLocked(connection, system, pid, uid);
+            if (c == null) return;
+            if (stable ? c.stable == 0 : c.unstable == 0) {
+                SystemServer.log("removeContentProvider " + c + ": no "
+                        + (stable ? "stable" : "unstable") + " reference to remove");
+            }
+            if (stable) c.stable = Math.max(0, c.stable - 1);
+            else c.unstable = Math.max(0, c.unstable - 1);
+            c.owner.markActive(SystemClock.uptimeMillis());
+            if (c.stable == 0 && c.unstable == 0) mConnections.remove(c);
+        }
     }
 
     /** Whether processes of other packages use the process's providers. */
     synchronized boolean hasClients(ActivityTaskManagerService.ProcessRecord app) {
         Set<ActivityTaskManagerService.ProcessRecord> clients = mClients.get(app);
         return clients != null && !clients.isEmpty();
+    }
+
+    /**
+     * Whether a live client still holds a stable or unstable reference to one of the
+     * process's providers: then ending the process would break a client (a stable
+     * reference's DeadObjectException).
+     */
+    synchronized boolean hasActiveClients(ActivityTaskManagerService.ProcessRecord app) {
+        for (Connection c : mConnections.values()) {
+            if (c.owner == app && !c.client.exiting && (c.stable > 0 || c.unstable > 0)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Commit an idle exit under the provider lock, while the caller holds ATM and the
+     * service/broadcast admission locks. An acquisition either keeps the process or sees
+     * its committed exit; no temporary exiting flag can discard a still-live publisher.
+     */
+    synchronized boolean retireUnused(ActivityTaskManagerService.ProcessRecord app, long expectedActive) {
+        if (app.exiting || app.dead || app.lastActive != expectedActive || hasActiveClients(app)) return false;
+        app.reaped = true;
+        app.exiting = true;
+        unpublish(app);
+        return true;
     }
 
     /** The process is exiting: its providers are not handed out any more. */
@@ -321,6 +470,7 @@ final class ContentProviders {
             ActivityTaskManagerService.ProcessRecord app) {
         unpublish(app);
         mClients.remove(app);
+        mConnections.values().removeIf(c -> c.client == app || c.owner == app);
         List<ActivityTaskManagerService.ProcessRecord> unused = new ArrayList<>();
         for (Map.Entry<ActivityTaskManagerService.ProcessRecord,
                 Set<ActivityTaskManagerService.ProcessRecord>> e : mClients.entrySet()) {

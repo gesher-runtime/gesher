@@ -5,9 +5,9 @@ Check 'exec3: binder startup waits for a protocol connection with bounded failur
   & "$Dir/exec3_binder_ready_probe.exe"
 } @('exec3 binder readiness: 10 checks, 0 failed')
 
-Check 'exec3: host property callbacks and boot mapping survive scratch data roots' {
+Check 'exec3: host property callbacks, cached refresh and structured log file lifetimes' {
   & "$Dir/exec3_property_host_probe.exe"
-} @('exec3 property host: 10 checks, 0 failed')
+} @('exec3 property host: 12 checks, 0 failed')
 
 Check 'exec3: local-exec FS rewrite preserves registers, flags, SIMD and thread isolation' {
   & "$Dir/exec3_tls_probe.exe"

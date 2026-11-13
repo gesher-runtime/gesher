@@ -130,7 +130,8 @@ function SensorsTestCheck([string] $Mode, [string] $Out, [int] $Code) {
       "${sn}registerListener(accelerometer) true, first event Gesher Test Accelerometer 0.00,0.00,9.81 accuracy 3",
       "${sn}accelerometer events keep coming: 4 more", "${sn}flush: flush Gesher Test Accelerometer",
       "${sn}after unregisterListener (nothing within 500 ms)",
-      "${sn}light event Gesher Test Light Sensor 250.00,0.00,0.00 accuracy 3", "${sn}done")) $Code $Mode
+      "${sn}light event Gesher Test Light Sensor 250.00,0.00,0.00 accuracy 3",
+      "${sn}flush backlog: 128 accepted pairs, overflow rejected, 256 completions", "${sn}done")) $Code $Mode
 }
 
 $cm = 'devices: camera: '

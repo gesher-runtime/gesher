@@ -699,6 +699,9 @@ int LogWrite(int prio, const char* tag, const char* text, int buffer = 0, bool f
   line += tag ? tag : "";
   line += ": ";
   line += text ? text : "";
+  // A message's own final newline ends its last line, as logcat prints it
+  // (glog-style native loggers end every message with one): no blank line.
+  if (line.back() == '\n') line.pop_back();
   line += '\n';
   DWORD written = 0;
   if (logOutput && logOutput != INVALID_HANDLE_VALUE) {
