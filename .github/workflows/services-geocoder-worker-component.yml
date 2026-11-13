@@ -39,7 +39,7 @@ jobs:
             'tests/windows/helpers/run-geocoder-winrt-component.ps1' = '1277bcc858c9c52eb8b24476831aadb286831418'
             # The reviewed sensor flush backlog assertion strengthens this shared
             # track; its geocoder implementation and the other nine pins are unchanged.
-            'tests/windows/tracks/58-devices.ps1' = '92796f14b883328bc9e9bd6c5f783e02d4fa667d'
+            'tests/windows/tracks/58-devices.ps1' = '78766844b282cc4828ad9b4e531d1f7fe8ed1e2b'
           }
           foreach ($path in $expected.Keys) {
             $actual = git hash-object $path

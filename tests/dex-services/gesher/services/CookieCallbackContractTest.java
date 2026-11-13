@@ -100,8 +100,16 @@ public final class CookieCallbackContractTest {
         System.loadLibrary("android_runtime");
         Class<?> host = Class.forName("com.gesher.app.webview.WebView2Host");
         check(Boolean.TRUE.equals(host.getMethod("load").invoke(null)), "WebView2 bridge missing");
-        host.getMethod("configure", String.class, String.class).invoke(null, args[0], "");
-        contracts(true);
+        java.lang.reflect.Method shutdown = host.getMethod("shutdownIdle", long.class);
+        try (AutoCloseable backend = () -> {
+            check(Boolean.TRUE.equals(shutdown.invoke(null, 15000L)),
+                    "idle WebView2 shutdown did not complete");
+            check(Boolean.TRUE.equals(shutdown.invoke(null, 15000L)),
+                    "repeated WebView2 shutdown did not complete");
+        }) {
+            host.getMethod("configure", String.class, String.class).invoke(null, args[0], "");
+            contracts(true);
+        }
         System.out.println("CookieCallbackContractTest all passed: " + checks
                 + " checks; real HandlerThreads and native WebView2 callbacks");
     }
