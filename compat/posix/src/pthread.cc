@@ -109,17 +109,29 @@ int gesher_pthread_setname_np(pthread_t thread, const char* name) {
   // that join/detach can close. Its mbsrtowcs conversion uses the caller's CRT
   // locale, so scope UTF-8 to this thread and restore both locale and mode.
   if (!pthread_equal(thread, pthread_self())) {
-    int mode = _configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
-    if (mode == -1) return EINVAL;
+    int previous_mode = _configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
+    if (previous_mode == -1) return EINVAL;
+    // Arm restoration before copying the locale string: that allocation can
+    // fail in an exception-enabled build. LC_CTYPE is still
+    // unchanged then, so restoring only the mode closes that exceptional path.
+    struct LocaleMode {
+      int previous;
+      ~LocaleMode() { if (previous != -1) _configthreadlocale(previous); }
+      bool Restore() {
+        int value = previous;
+        previous = -1;
+        return _configthreadlocale(value) != -1;
+      }
+    } mode{previous_mode};
     const char* current = setlocale(LC_CTYPE, nullptr);
     std::string saved = current ? current : "";
     if (!current || !setlocale(LC_CTYPE, ".UTF8")) {
-      _configthreadlocale(mode);
+      mode.Restore();
       return EINVAL;
     }
     int result = pthread_setname_np(thread, name);
     bool restored = setlocale(LC_CTYPE, saved.c_str()) != nullptr;
-    restored = _configthreadlocale(mode) != -1 && restored;
+    restored = mode.Restore() && restored;
     return result != 0 ? result : restored ? 0 : EINVAL;
   }
   int cached = pthread_setname_np(thread, name);  // ESRCH is expected for detached threads

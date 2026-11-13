@@ -585,7 +585,7 @@ int BIONIC_SYSV Fcntl(int fd, int cmd, uint64_t arg) {
     case 7: case 38:  // Mandatory waiter/targeted-signal integration remains unfinished.
       return errno = ENOSYS, -1;
     default:
-      return fcntl(fd, cmd, static_cast<long>(arg));
+      return fcntl(fd, cmd, static_cast<int>(arg));
   }
 }
 int BIONIC_SYSV Ioctl(int fd, uint64_t request, void* arg) {

@@ -21,7 +21,9 @@
 #include <string.h>
 #include <sys/capability.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <sys/inotify.h>
+#include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -77,6 +79,51 @@ static bool Exists(const std::string& path) {
 
 static int RemoveTree(const char* path, const struct stat*, int flag, struct FTW*) {
   return flag == FTW_DP ? rmdir(path) : unlink(path);
+}
+
+// --- descriptor controls ---------------------------------------------------------------
+
+// Use the public two-argument getters alongside real integer setters and
+// duplication, through the host POSIX library that ART uses.
+static void DescriptorControls() {
+  int fd = memfd_create("posix-fcntl", MFD_CLOEXEC);
+  CHECK(fd >= 0);
+  if (fd >= 0) {
+    CHECK(fcntl(fd, F_GETFD) == FD_CLOEXEC);
+    CHECK(fcntl(fd, F_GETFL) == O_RDWR);
+    CHECK(fcntl(fd, F_GET_SEALS) >= 0);
+    CHECK(fcntl(fd, F_SETFD, 0) == 0 && fcntl(fd, F_GETFD) == 0);
+    CHECK(fcntl(fd, F_SETFD, FD_CLOEXEC) == 0 &&
+          fcntl(fd, F_GETFD) == FD_CLOEXEC);
+    CHECK(write(fd, "ok", 2) == 2 && lseek(fd, 0, SEEK_SET) == 0);
+    int plain = fcntl(fd, F_DUPFD, 32);
+    int cloexec = fcntl(fd, F_DUPFD_CLOEXEC, 32);
+    CHECK(plain >= 32 && plain != fd);
+    CHECK(cloexec >= 32 && cloexec != fd && cloexec != plain);
+    CHECK(close(fd) == 0);
+    if (plain >= 0) {
+      char bytes[2] = {};
+      CHECK(fcntl(plain, F_GETFD) == 0);
+      CHECK(read(plain, bytes, sizeof(bytes)) == static_cast<ssize_t>(sizeof(bytes)) &&
+            memcmp(bytes, "ok", sizeof(bytes)) == 0);
+      CHECK(close(plain) == 0);
+    }
+    if (cloexec >= 0) {
+      CHECK(fcntl(cloexec, F_GETFD) == FD_CLOEXEC);
+      CHECK(close(cloexec) == 0);
+    }
+  }
+
+  int event = eventfd(0, EFD_CLOEXEC);
+  CHECK(event >= 0);
+  if (event >= 0) {
+    CHECK(fcntl(event, F_GETFL) == O_RDWR);
+    CHECK(fcntl(event, F_SETFL, O_NONBLOCK) == 0);
+    CHECK(fcntl(event, F_GETFL) == (O_RDWR | O_NONBLOCK));
+    CHECK(fcntl(event, F_SETFL, 0) == 0);
+    CHECK(fcntl(event, F_GETFL) == O_RDWR);
+    CHECK(close(event) == 0);
+  }
 }
 
 // --- paths ---------------------------------------------------------------------------
@@ -836,6 +883,8 @@ int main(int argc, char** argv) {
   CHECK(getcwd(cwd, sizeof(cwd)) != nullptr);
   std::string dir = std::string(cwd) + "/posix-probe-" + std::to_string(GetCurrentProcessId());
   CHECK(mkdir(dir.c_str(), 0755) == 0);
+  fprintf(stderr, "-- %s\n", "DescriptorControls");
+  DescriptorControls();
   fprintf(stderr, "-- %s\n", "Paths");
   Paths(dir);
   fprintf(stderr, "-- %s\n", "OtherDrive");
