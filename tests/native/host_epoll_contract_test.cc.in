@@ -1,0 +1,90 @@
+// Production Epoll state/delivery over real Linux eventfds and poll. Registry,
+// topology wake handles and ctl are declared host adapters, not Windows evidence.
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <cstdio>
+#include <fcntl.h>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <poll.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <unistd.h>
+#include <vector>
+using HANDLE = void*;
+using ULONGLONG = unsigned long long;
+static void SetEvent(HANDLE) {}
+static constexpr intptr_t INVALID_HANDLE_VALUE = -1;
+namespace gesher {
+@EPOLL_STATE@
+@EPOLL_CONVERSION@
+static std::mutex registry_lock;
+static std::map<int, std::shared_ptr<Epoll>> registry;
+static std::shared_ptr<Epoll> LookupEpoll(int fd) {
+  std::lock_guard<std::mutex> lock(registry_lock);
+  auto it = registry.find(fd);
+  return it == registry.end() ? nullptr : it->second;
+}
+static intptr_t HandleFromFd(int fd) { return fcntl(fd, F_GETFD) < 0 ? -1 : fd; }
+static ULONGLONG MonotonicMicros() {
+  timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
+  return ULONGLONG(now.tv_sec) * 1000000 + now.tv_nsec / 1000;
+}
+static ULONGLONG DeadlineAfter(int timeout) { return timeout < 0 ? ~0ULL : MonotonicMicros() + ULONGLONG(timeout) * 1000; }
+static int MillisUntil(ULONGLONG deadline) { auto now = MonotonicMicros(); return now >= deadline ? 0 : int((deadline - now + 999) / 1000); }
+struct EpollWaiter { explicit EpollWaiter(std::shared_ptr<Epoll>) {} HANDLE changed() { return this; } };
+static int FailWithLastError() { return errno = ENOMEM, -1; }
+static int PollFds(pollfd* fds, nfds_t count, int timeout, HANDLE, bool* interrupted) {
+  *interrupted = false; return ::poll(fds, count, timeout);
+}
+}
+using gesher::Epoll;
+@EPOLL_WAIT@
+static int adapted_epoll_wait(int fd, epoll_event* events, int count, int timeout) {
+  return EpollWaitImpl(fd, events, count, timeout, nullptr, nullptr);
+}
+static int adapted_epoll_create1(int) {
+  int fd = ::eventfd(0, EFD_NONBLOCK);
+  std::lock_guard<std::mutex> lock(gesher::registry_lock);
+  gesher::registry[fd] = std::make_shared<Epoll>();
+  return fd;
+}
+static int adapted_epoll_ctl(int fd, int operation, int item, epoll_event* event) {
+  auto ep = gesher::LookupEpoll(fd);
+  std::lock_guard<std::mutex> lock(ep->mutex);
+  if (operation == EPOLL_CTL_DEL) ep->entries.erase(item);
+  else ep->entries[item] = {event->events, event->data, ep->next_id++, true, {}};
+  return 0;
+}
+static int adapted_dup(int fd) {
+  int alias = ::dup(fd);
+  auto ep = gesher::LookupEpoll(fd);
+  if (ep) { std::lock_guard<std::mutex> lock(gesher::registry_lock); gesher::registry[alias] = ep; }
+  return alias;
+}
+static int adapted_close(int fd) {
+  { std::lock_guard<std::mutex> lock(gesher::registry_lock); gesher::registry.erase(fd); }
+  return ::close(fd);
+}
+static int failed, checked;
+static void check(const char* label, int passed) {
+  ++checked; if (!passed) { ++failed; std::printf("FAIL %s\n", label); }
+}
+#define epoll_create1 adapted_epoll_create1
+#define epoll_ctl adapted_epoll_ctl
+#define epoll_wait adapted_epoll_wait
+#define dup adapted_dup
+#define close adapted_close
+#include "event_loop_contract_test.inc"
+#undef epoll_create1
+#undef epoll_ctl
+#undef epoll_wait
+#undef dup
+#undef close
+int main() {
+  test_epoll_fairness_contract();
+  std::printf("production epoll fairness: %d checks, %d failures\n", checked, failed);
+  return failed != 0;
+}
