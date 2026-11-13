@@ -64,6 +64,8 @@ class Sink {
  public:
   virtual ~Sink() = default;
   virtual void OnEvent(int handle, const Reading& reading, int64_t timestampNs) = 0;
+  // Enqueue completions as one transaction; no Java callback runs here.
+  virtual int OnFlush(const std::vector<int>& handles) = 0;
 };
 
 // Starts sampling `handle` for `sink` every `periodUs` (at least the sensor's
@@ -71,6 +73,9 @@ class Sink {
 // negative errno (no such sensor).
 int Enable(Sink* sink, int handle, int periodUs);
 int Disable(Sink* sink, int handle);
+// Orders completions after samples already produced and snapshots the enabled
+// sensors under the sampler lock. A full completion queue returns -EAGAIN.
+int Flush(Sink* sink);
 // Removes every subscription of `sink`; after it returns, no OnEvent call
 // for it runs or will run.
 void DisableAll(Sink* sink);
