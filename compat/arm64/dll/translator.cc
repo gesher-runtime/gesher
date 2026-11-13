@@ -971,6 +971,7 @@ class Env final : public A64::UserCallbacks {
 // a code cache's resident pages. GESHER_ARM64_ENV_POOL=<n> (0 disables).
 std::mutex g_env_pool_mutex;
 std::vector<Env*> g_env_pool;
+std::atomic<uint64_t> g_envs_created{0}, g_envs_reused{0};  // for the profiler
 
 size_t EnvPoolLimit() {
   static const size_t limit = [] {
@@ -1007,7 +1008,12 @@ Env* ThreadEnv() {
         g_env_pool.pop_back();
       }
     }
-    if (env == nullptr) env = new Env();
+    if (env == nullptr) {
+      env = new Env();
+      g_envs_created.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      g_envs_reused.fetch_add(1, std::memory_order_relaxed);
+    }
     env->Attach();
     t_env.reset(env);
     t_env_raw = env;
@@ -1438,8 +1444,18 @@ DWORD WINAPI ProfilerThread(void*) {
       st.rips = {};
     }
     lock.unlock();
-    std::fprintf(stderr, "gesher arm64 profile: %zu guest threads, %zu Jits\n", threads,
-                 LiveProcessorIds());
+    size_t pooled;
+    {
+      std::lock_guard<std::mutex> pool_lock(g_env_pool_mutex);
+      pooled = g_env_pool.size();
+    }
+    std::fprintf(stderr,
+                 "gesher arm64 profile: %zu guest threads, %zu Jits; Envs created %llu, reused "
+                 "%llu, pooled %zu\n",
+                 threads, LiveProcessorIds(),
+                 static_cast<unsigned long long>(g_envs_created.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_envs_reused.load(std::memory_order_relaxed)),
+                 pooled);
     for (Hot& h : hot) {
       auto rate = [&](uint64_t n) {
         return static_cast<unsigned long long>(static_cast<double>(n) / seconds);
