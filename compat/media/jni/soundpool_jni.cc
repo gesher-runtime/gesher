@@ -155,9 +155,13 @@ class Pool {
     for (auto& s : streams_) {
       if (pause && !s.paused) {
         s.track->Pause();
+        s.paused = true;
         s.auto_paused = true;
-      } else if (!pause && s.auto_paused) {
-        s.track->Start();
+      } else if (!pause) {
+        if (s.auto_paused && s.paused) {
+          s.track->Start();
+          s.paused = false;
+        }
         s.auto_paused = false;
       }
     }
@@ -285,8 +289,10 @@ jint JNICALL SP_play(JNIEnv* env, jobject thiz, jint sound, jfloat left, jfloat 
 void JNICALL SP_pause(JNIEnv* env, jobject thiz, jint id) {
   if (Pool* pool = GetPool(env, thiz)) {
     pool->With(id, [](Stream& s) {
-      s.track->Pause();
-      s.paused = true;
+      if (!s.paused) {
+        s.track->Pause();
+        s.paused = true;
+      }
     });
   }
 }
@@ -294,8 +300,11 @@ void JNICALL SP_pause(JNIEnv* env, jobject thiz, jint id) {
 void JNICALL SP_resume(JNIEnv* env, jobject thiz, jint id) {
   if (Pool* pool = GetPool(env, thiz)) {
     pool->With(id, [](Stream& s) {
-      s.track->Start();
-      s.paused = false;
+      if (s.paused) {
+        s.track->Start();
+        s.paused = false;
+        s.auto_paused = false;
+      }
     });
   }
 }

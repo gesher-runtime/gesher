@@ -468,15 +468,22 @@ int Track::Start() {
 
 void Track::Pause() {
   std::lock_guard<std::mutex> lock(mu_);
-  if (state_ == State::kPlaying || state_ == State::kStopping) state_ = State::kPaused;
+  if (state_ == State::kPlaying || state_ == State::kStopping) {
+    state_ = State::kPaused;
+    ++write_interrupt_;
+  }
   room_.notify_all();
 }
 
 void Track::Stop() {
   std::lock_guard<std::mutex> lock(mu_);
+  if (state_ != State::kPlaying && state_ != State::kPaused) return;
+  ++write_interrupt_;
   if (params_.is_static) {
     state_ = State::kStopped;
     static_pos_ = 0;
+    loop_start_ = loop_end_ = 0;
+    loop_count_ = 0;
     position_base_ = played_;  // position 0
     rs_->Reset();
   } else if (state_ == State::kPlaying) {
@@ -499,6 +506,10 @@ void Track::Flush() {
   read_ = written_;
   rs_->Reset();
   position_base_ = played_;
+  marker_ = 0;
+  marker_reached_ = false;
+  update_period_ = 0;
+  next_update_ = 0;
   if (state_ == State::kStopping) state_ = State::kStopped;
   room_.notify_all();
 }
@@ -526,18 +537,17 @@ ssize_t Track::Write(const void* data, size_t bytes, bool blocking) {
     return static_cast<ssize_t>(n * frame_size_);
   }
   size_t done = 0;
+  const uint64_t interrupt = write_interrupt_;
   while (done < frames) {
+    if (released_ || write_interrupt_ != interrupt || state_ == State::kStopping) break;
     size_t limit = std::min(buffer_frames_, params_.capacity_frames);
     size_t queued = static_cast<size_t>(written_ - read_);
     size_t room = queued < limit ? limit - queued : 0;
     if (room == 0) {
-      if (!blocking || released_) break;
-      // Blocking writes wait while the track plays (or is stopped: data written
-      // before play() fills the buffer, then waits for it).
-      room_.wait_for(lock, std::chrono::milliseconds(100));
-      if (released_ || state_ == State::kPaused) {
-        if (released_) break;
-      }
+      // Android makes writes nonblocking while stopped/paused. Priming before
+      // play() may fill the buffer, but must not wait for a mixer that is idle.
+      if (!blocking || state_ != State::kPlaying) break;
+      room_.wait(lock);
       continue;
     }
     size_t n = std::min(room, frames - done);
@@ -551,7 +561,6 @@ ssize_t Track::Write(const void* data, size_t bytes, bool blocking) {
     }
     written_ += n;
     done += n;
-    if (state_ == State::kStopping) drained_ = false;
   }
   return static_cast<ssize_t>(done * frame_size_);
 }
@@ -719,6 +728,7 @@ void Track::Release() {
   {
     std::lock_guard<std::mutex> lock(mu_);
     released_ = true;
+    ++write_interrupt_;
     state_ = State::kStopped;
     room_.notify_all();
   }
@@ -747,10 +757,10 @@ size_t Track::ReadSource(float* dst, size_t frames, bool* ended) {
     return done;
   }
   while (done < frames) {
-    bool looping = loop_count_ != 0 && loop_end_ > loop_start_ && static_pos_ < loop_end_;
+    bool looping = loop_count_ != 0 && loop_end_ > loop_start_ && static_pos_ <= loop_end_;
     size_t end = looping ? loop_end_ : static_frames_;
     if (static_pos_ >= end) {
-      if (looping || (loop_count_ != 0 && loop_end_ > loop_start_ && static_pos_ == loop_end_)) {
+      if (looping) {
         static_pos_ = loop_start_;
         if (loop_count_ > 0) loop_count_--;
         continue;

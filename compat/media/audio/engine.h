@@ -174,6 +174,8 @@ class Track : public std::enable_shared_from_this<Track> {
   State state_ = State::kStopped;
   bool released_ = false;
   bool drained_ = false;  // kStopping: all played
+  // A writer must observe pause/stop even if start() runs before it reacquires mu_.
+  uint64_t write_interrupt_ = 0;
 
   // Streaming ring, or static data.
   std::vector<uint8_t> data_;

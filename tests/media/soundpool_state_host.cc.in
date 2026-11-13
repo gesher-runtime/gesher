@@ -1,0 +1,83 @@
+// Production Pool control bodies; JNI lookup and Track side effects are observed boundaries.
+#include <atomic>
+#include <cstdio>
+#include <memory>
+#include <mutex>
+#include <vector>
+#define JNICALL
+using JNIEnv = int;
+using jobject = void*;
+using jint = int;
+struct Track {
+  int pauses = 0, starts = 0;
+  void Pause() { ++pauses; }
+  void Start() { ++starts; }
+};
+@STREAM@
+class Pool {
+ public:
+  std::mutex mu_;
+  std::vector<Stream> streams_;
+  template<class F> void With(int id, F fn) {
+    std::lock_guard<std::mutex> lock(mu_);
+    for (auto& stream : streams_) if (stream.id == id) fn(stream);
+  }
+@AUTO_PAUSE@
+};
+Pool* GetPool(JNIEnv*, jobject self) { return static_cast<Pool*>(self); }
+@CONTROLS@
+namespace {
+int checks = 0, failures = 0;
+void Check(bool ok, const char* reason) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL SoundPool state: %s\n", reason); }
+}
+void Scenario(int scenario) {
+  Pool pool;
+  auto track = std::make_shared<Track>();
+  pool.streams_.push_back({7, 1, 0, track, std::make_shared<std::atomic<bool>>(false), 1, 1});
+  auto& stream = pool.streams_[0];
+  if (scenario == 0) {
+    SP_pause(nullptr, &pool, 7);
+    pool.AutoPause(true);
+    pool.AutoPause(false);
+    Check(track->starts == 0 && stream.paused && !stream.auto_paused,
+          "manual pause before autoPause remains paused");
+  } else if (scenario == 1) {
+    pool.AutoPause(true);
+    Check(stream.paused && stream.auto_paused, "autoPause owns a real paused state");
+    pool.AutoPause(true);
+    Check(track->pauses == 1, "repeated autoPause has no duplicate pause");
+    pool.AutoPause(false);
+    Check(track->starts == 1 && !stream.paused && !stream.auto_paused,
+          "autoResume consumes auto-pause ownership");
+    pool.AutoPause(false);
+    Check(track->starts == 1, "repeated autoResume is inert");
+  } else if (scenario == 2) {
+    pool.AutoPause(true);
+    SP_pause(nullptr, &pool, 7);
+    pool.AutoPause(false);
+    Check(track->starts == 1 && !stream.paused && !stream.auto_paused,
+          "Android retains existing auto-pause ownership across redundant pause");
+  } else if (scenario == 3) {
+    pool.AutoPause(true);
+    SP_resume(nullptr, &pool, 7);
+    Check(!stream.paused && !stream.auto_paused, "explicit resume consumes auto-pause ownership");
+    SP_pause(nullptr, &pool, 7);
+    pool.AutoPause(false);
+    Check(track->starts == 1 && stream.paused && !stream.auto_paused,
+          "autoResume cannot revive a later explicit pause");
+  } else {
+    SP_resume(nullptr, &pool, 7);
+    Check(track->starts == 0, "explicit resume of playing stream is inert");
+    SP_pause(nullptr, &pool, 999);
+    pool.AutoPause(false);
+    Check(track->pauses == 0 && track->starts == 0, "unknown stream and unowned resume are inert");
+  }
+}
+}
+int main() {
+  for (int i = 0; i < 5; ++i) Scenario(i);
+  std::printf("SoundPool state contracts: %d checks, %d failures\n", checks, failures);
+  return failures != 0;
+}
