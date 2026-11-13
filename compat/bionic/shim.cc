@@ -726,6 +726,8 @@ int BIONIC_SYSV Fstat(int fd, struct stat* st) {
 
 // File tree walk (<ftw.h>). The callback from the .so is System V and expects
 // bionic's LP64 struct stat (tv_nsec 64-bit), adapted from gesher-base's nftw.
+using SysvFtwFn = int (BIONIC_SYSV*)(const char*, const struct stat*, int);
+thread_local SysvFtwFn g_ftw_fn = nullptr;
 using SysvNftwFn = int (BIONIC_SYSV*)(const char*, const struct stat*, int, struct FTW*);
 thread_local SysvNftwFn g_nftw_fn = nullptr;
 
@@ -734,6 +736,20 @@ static int NftwThunk(const char* path, const struct stat* sb, int type, struct F
   struct stat copy = *sb;
   FixStat(&copy);
   return g_nftw_fn(path, &copy, type, ftw);
+}
+
+static int FtwThunk(const char* path, const struct stat* sb, int type) {
+  struct stat copy = *sb;
+  FixStat(&copy);
+  return g_ftw_fn(path, &copy, type);
+}
+int BIONIC_SYSV Ftw(const char* dir, SysvFtwFn fn, int nopenfd) {
+  if (!dir || !fn) return errno = EINVAL, -1;
+  auto saved = g_ftw_fn;
+  g_ftw_fn = fn;
+  int r = ::ftw(dir, FtwThunk, nopenfd);
+  g_ftw_fn = saved;
+  return r;
 }
 
 int BIONIC_SYSV Nftw(const char* dir, SysvNftwFn fn, int nopenfd, int flags) {
@@ -1185,6 +1201,8 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("lstat64", Lstat);
   ENTRY("fstat", Fstat);
   ENTRY("fstat64", Fstat);
+  ENTRY("ftw", Ftw);
+  ENTRY("ftw64", Ftw);
   ENTRY("nftw", Nftw);
   ENTRY("nftw64", Nftw);
   ENTRY("mmap", Mmap);
