@@ -1363,7 +1363,7 @@ DWORD WINAPI ProfilerThread(void*) {
     Sleep(10);
     const ULONGLONG now = GetTickCount64();
     const bool report = now - period_start >= period;
-    std::lock_guard<std::mutex> lock(g_envs_mutex);  // an exiting thread waits in Detach
+    std::unique_lock<std::mutex> lock(g_envs_mutex);  // an exiting thread waits in Detach
     for (auto it = states.begin(); it != states.end();) {
       if (std::find(g_envs.begin(), g_envs.end(), it->first) == g_envs.end()) {
         it = states.erase(it);
@@ -1404,10 +1404,19 @@ DWORD WINAPI ProfilerThread(void*) {
       if (have_ctx) CountSample(st.rips, ctx.Rip);
     }
     if (!report) continue;
+    // Taken under the lock, printed after it: describing an address may wait
+    // for the loader, whose holder may be a thread waiting for g_envs_mutex.
+    struct Hot {
+      DWORD tid;
+      double cpu;
+      uint64_t delta[8];
+      uint64_t last_syscall;
+      ProfileState st;
+    };
+    std::vector<Hot> hot;
     const double seconds = static_cast<double>(now - period_start) / 1000.0;
     period_start = now;
-    std::fprintf(stderr, "gesher arm64 profile: %zu guest threads, %zu Jits\n", g_envs.size(),
-                 LiveProcessorIds());
+    const size_t threads = g_envs.size();
     for (Env* env : g_envs) {
       auto it = states.find(env);
       if (it == states.end()) continue;
@@ -1416,25 +1425,9 @@ DWORD WINAPI ProfilerThread(void*) {
       ReadCounters(env, c);
       const double cpu = static_cast<double>(st.user - st.period_user) / 1e5 / seconds;  // %
       if (cpu >= 25.0 && st.samples != 0) {
-        auto rate = [&](int i) {
-          return static_cast<unsigned long long>(static_cast<double>(c[i] - st.base[i]) / seconds);
-        };
-        const unsigned long long refused =
-            (c[1] - st.base[1]) > (c[2] - st.base[2])
-                ? static_cast<unsigned long long>(static_cast<double>((c[1] - st.base[1]) - (c[2] - st.base[2])) / seconds)
-                : 0;
-        const uint64_t nr = env->last_syscall_.load(std::memory_order_relaxed);
-        std::fprintf(stderr,
-                     "  tid %lu: cpu %.0f%%; per second: host calls %llu, raw syscalls %llu (last "
-                     "%lld), exclusive loads %llu, stores %llu (CAS failed %llu, monitor refused "
-                     "%llu), hints %llu, WFE waits %llu, Run() %llu; samples %u (guest %u, host "
-                     "call %u)\n",
-                     env->tid_, cpu, rate(0), rate(4), nr == ~uint64_t{0} ? -1LL : static_cast<long long>(nr),
-                     rate(1), rate(2), rate(3), refused, rate(5), rate(6), rate(7), st.samples,
-                     st.in_guest, st.in_host);
-        PrintTop("guest pc  ", st.pcs, st.samples, 6);
-        PrintTop("host call ", st.host_fns, st.samples, 4);
-        PrintTop("host rip  ", st.rips, st.samples, 4);
+        Hot h{env->tid_, cpu, {}, env->last_syscall_.load(std::memory_order_relaxed), st};
+        for (int i = 0; i < 8; ++i) h.delta[i] = c[i] - st.base[i];
+        hot.push_back(h);
       }
       st.period_user = st.user;
       std::memcpy(st.base, c, sizeof(c));
@@ -1442,6 +1435,28 @@ DWORD WINAPI ProfilerThread(void*) {
       st.pcs = {};
       st.host_fns = {};
       st.rips = {};
+    }
+    lock.unlock();
+    std::fprintf(stderr, "gesher arm64 profile: %zu guest threads, %zu Jits\n", threads,
+                 LiveProcessorIds());
+    for (Hot& h : hot) {
+      auto rate = [&](uint64_t n) {
+        return static_cast<unsigned long long>(static_cast<double>(n) / seconds);
+      };
+      const uint64_t refused = h.delta[1] > h.delta[2] ? h.delta[1] - h.delta[2] : 0;
+      std::fprintf(stderr,
+                   "  tid %lu: cpu %.0f%%; per second: host calls %llu, raw syscalls %llu (last "
+                   "%lld), exclusive loads %llu, stores %llu (CAS failed %llu, monitor refused "
+                   "%llu), hints %llu, WFE waits %llu, Run() %llu; samples %u (guest %u, host "
+                   "call %u)\n",
+                   h.tid, h.cpu, rate(h.delta[0]), rate(h.delta[4]),
+                   h.last_syscall == ~uint64_t{0} ? -1LL : static_cast<long long>(h.last_syscall),
+                   rate(h.delta[1]), rate(h.delta[2]), rate(h.delta[3]), rate(refused),
+                   rate(h.delta[5]), rate(h.delta[6]), rate(h.delta[7]), h.st.samples,
+                   h.st.in_guest, h.st.in_host);
+      PrintTop("guest pc  ", h.st.pcs, h.st.samples, 6);
+      PrintTop("host call ", h.st.host_fns, h.st.samples, 4);
+      PrintTop("host rip  ", h.st.rips, h.st.samples, 4);
     }
     std::fflush(stderr);
   }
