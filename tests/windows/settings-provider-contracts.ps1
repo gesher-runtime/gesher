@@ -1,5 +1,5 @@
 # Two actual ART processes, separate Binder UIDs, and the production provider transport.
-# Caller supplies RunTimed, NoDrive and the ordinary framework/app VM classpath.
+# Caller supplies RunTimed and the ordinary framework/app VM classpath.
 function Test-SettingsProviderTransport([string] $Dir, [string[]] $VmArguments, [string] $FixtureRoot) {
   $output = [Collections.Generic.List[string]]::new()
   $owned = [Collections.Generic.List[object]]::new()
@@ -8,6 +8,12 @@ function Test-SettingsProviderTransport([string] $Dir, [string[]] $VmArguments, 
   $names = @('ANDROID_DATA', 'GESHER_BINDER', 'GESHER_ROLE', 'GESHER_BINDER_UID', 'GESHER_UID', 'GESHER_MICROG_SPOOF')
   $saved = @{}
   foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+  # Keep the temporary directory's drive when the VM's classpath is on another drive.
+  function SettingsGuestPath([string] $WindowsPath) {
+    $full = [IO.Path]::GetFullPath($WindowsPath)
+    if ($full -notmatch '^([A-Za-z]):[\\/]') { throw "Settings fixture path is not a local drive path: $full" }
+    return '/mnt/' + $Matches[1].ToLowerInvariant() + ($full.Substring(2) -replace '\\', '/')
+  }
   function Start-SettingsProcess([string] $Name, [string] $Exe, [string[]] $Arguments) {
     $info = [Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $Exe
@@ -32,7 +38,7 @@ function Test-SettingsProviderTransport([string] $Dir, [string[]] $VmArguments, 
     $fixture = Join-Path $FixtureRoot ('settings-transport-' + [Guid]::NewGuid().ToString('N'))
     $null = [IO.Directory]::CreateDirectory((Join-Path $fixture 'data'))
     $ready = Join-Path $fixture 'ready'
-    $env:ANDROID_DATA = NoDrive (Join-Path $fixture 'data')
+    $env:ANDROID_DATA = SettingsGuestPath (Join-Path $fixture 'data')
     $env:GESHER_BINDER = 'settings-' + [Guid]::NewGuid().ToString('N')
     $env:GESHER_BINDER_UID = '1000'
     $env:GESHER_UID = '1000'
@@ -41,7 +47,7 @@ function Test-SettingsProviderTransport([string] $Dir, [string[]] $VmArguments, 
     $null = Start-SettingsProcess 'binderd' "$Dir/binderd.exe" @($env:GESHER_BINDER)
     $null = Start-SettingsProcess 'servicemanager' "$Dir/servicemanager.exe" @()
     $server = Start-SettingsProcess 'settings-server' "$Dir/dalvikvm.exe" `
-      ($VmArguments + 'gesher.services.SettingsProviderRemoteTest' + 'server' + (NoDrive $ready))
+      ($VmArguments + 'gesher.services.SettingsProviderRemoteTest' + 'server' + (SettingsGuestPath $ready))
     $deadline = [DateTime]::UtcNow.AddSeconds(45)
     while (-not (Test-Path -LiteralPath $ready -PathType Leaf)) {
       if ($server.HasExited) { throw "Settings transport server exited before readiness: $($server.ExitCode)" }
