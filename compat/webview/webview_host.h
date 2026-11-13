@@ -6,6 +6,7 @@
 // WebView of the process lives on one thread of its own, "the WebView
 // thread", started with the first one. Every Host method may be called from
 // any thread: it posts the work to the WebView thread, in order, and returns.
+// ShutdownIdle additionally waits for orderly closure and thread termination.
 // What WebView2 reports comes back on the WebView thread through the Host's
 // Listener (the JNI side hands it on to the app's Looper).
 //
@@ -136,8 +137,16 @@ class Host {
   // created yet); false when it exists already: they apply to the next one.
   static bool SetProxyArguments(const std::wstring& args);
 
+  // Close admission, drain accepted work, release WebView2 and COM on their
+  // owner thread, then join within timeout_ms (1..0xfffffffe). Results:
+  // 0 refused before closure (invalid, owner thread, or a Host exists/is pending),
+  // 1 joined successfully, 2 closing but timed out (retry safe), 3 joined with
+  // cleanup failure. Nonzero results permanently reject new work. The optional
+  // hook runs after CoUninitialize on the exiting thread; false fails cleanup.
+  static int ShutdownIdle(uint32_t timeout_ms, bool (*thread_exit)() = nullptr);
+
   // A new WebView. The listener is called on the WebView thread until
-  // OnDestroyed.
+  // OnDestroyed. Null means admission failed; the caller retains the listener.
   static Host* Create(Listener* listener, const HostOptions& options);
 
   void Destroy();  // the Host goes; OnDestroyed follows on the WebView thread
@@ -249,7 +258,8 @@ class Host {
                       const std::wstring& filters);
 
   // Cookies and browsing data (any WebView's profile: they share one). The
-  // result comes to the global callback.
+  // result comes to the global callback. False rejects admission and does not
+  // call the callback; true admits the request, including its eventual failure.
   using GlobalCallback = void (*)(int32_t type, int64_t id, int32_t arg, const std::wstring& a);
   static void SetGlobalCallback(GlobalCallback callback);
   struct Cookie {
@@ -257,12 +267,12 @@ class Host {
     double expires = -1;  // seconds since 1970; -1: a session cookie
     bool secure = false, http_only = false;
   };
-  static void SetCookie(const std::wstring& url, const Cookie& cookie, int64_t callback_id);
-  static void GetCookies(const std::wstring& url, int64_t callback_id);
+  static bool SetCookie(const std::wstring& url, const Cookie& cookie, int64_t callback_id);
+  static bool GetCookies(const std::wstring& url, int64_t callback_id);
   // which: 1 all cookies, 2 session cookies.
-  static void DeleteCookies(int32_t which, int64_t callback_id);
+  static bool DeleteCookies(int32_t which, int64_t callback_id);
   // COREWEBVIEW2_BROWSING_DATA_KINDS.
-  static void ClearBrowsingData(int32_t kinds, int64_t callback_id);
+  static bool ClearBrowsingData(int32_t kinds, int64_t callback_id);
 
   // For the WebView thread (webview_host.cc).
   struct Impl;
