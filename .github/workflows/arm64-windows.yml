@@ -85,6 +85,7 @@ jobs:
             mman_probe \
             epoll_probe \
             posix_probe \
+            timerfd_windows_test \
             gesher_elf \
             gesher_bionic \
             gesher_posix \
@@ -100,6 +101,7 @@ jobs:
             out-arm64/mman_probe.exe
             out-arm64/epoll_probe.exe
             out-arm64/posix_probe.exe
+            out-arm64/timerfd_windows_test.exe
             out-arm64/arm64_elf_test.exe
           )
           for b in "${binaries[@]}"; do

@@ -237,6 +237,16 @@ jobs:
           echo "--- libc_test_arm64.so ---"; "$ro" -d dist-arm64/libc_test_arm64.so | grep -E 'NEEDED|SONAME'
           ls -la dist-arm64
 
+      - name: Android directory traversal and futex guest contracts
+        run: |
+          cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+          "$cc" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror \
+            -Wl,-soname,libtraversal_contract.so \
+            -o dist-arm64/traversal_contract_arm64.so tests/native/traversal_contract.c
+          "$cc" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror \
+            -Wl,-soname,libfutex_contract.so \
+            -o dist-arm64/futex_contract_arm64.so tests/native/futex_contract.c
+
       - name: Cache d8
         id: r8
         uses: actions/cache@v4

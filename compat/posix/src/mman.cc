@@ -1256,6 +1256,12 @@ int madvise(void* addr, size_t length, int advice) {
     case MADV_DONTNEED:
     case MADV_FREE:
     case MADV_REMOVE: {
+      // Decommit is a temporary physical state, not a logical PROT_NONE map.
+      // Keep mprotect/mremap/MAP_FIXED from observing or replacing that state
+      // before the recommit restores the mapping's protection. Ordinary loads
+      // still use the lock-free fault retry above while the range is zeroed.
+      State& s = state();
+      std::lock_guard<std::mutex> registry_guard(s.lock);
       // Linux semantics for private anonymous memory: the range reads back as
       // zeros. Decommit + recommit gives exactly that.
       bool ok = ForEachRun(addr, length, [](uint8_t* p, size_t n, const MEMORY_BASIC_INFORMATION& info) {

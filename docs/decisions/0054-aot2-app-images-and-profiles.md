@@ -39,9 +39,11 @@ frameworks/base/boot.
   - App processes run with the JIT and `-Xjitsaveprofilinginfo` instead of
     the device's `-Xint -Xusejit:false` (`dalvik.vm.usejit`,
     `dalvik.vm.usejitprofiles`, default true; `GESHER_APP_EXECUTION=interpret`
-    keeps the old options). The framework registers the app's code path with
-    ART (LoadedApk.registerAppInfoToArt), whose profile saver writes the
-    current profile.
+    keeps the old options; since ADR 0081 the device's own processes run
+    nterp and AOT code without the JIT, and `interpret` adds `-Xint`). The
+    framework registers the app's code path with ART
+    (LoadedApk.registerAppInfoToArt), whose profile saver writes the current
+    profile.
   - Background dexopt: a system server thread waits until no app process has
     run or started for `gesher.dexopt.idle-ms` (default 2 s; Android waits for
     an idle, charging device), then, for each package whose current profile

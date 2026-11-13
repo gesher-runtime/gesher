@@ -107,6 +107,16 @@ jobs:
             echo "$so: $n instruction(s) using %fs"
           done
 
+      - name: Android directory traversal and futex guest contracts
+        run: |
+          cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${ANDROID_API}-clang"
+          "$cc" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror \
+            -Wl,-soname,libtraversal_contract.so \
+            -o dist-native/traversal_contract.so tests/native/traversal_contract.c
+          "$cc" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror \
+            -Wl,-soname,libfutex_contract.so \
+            -o dist-native/futex_contract.so tests/native/futex_contract.c
+
       - name: Cache d8
         id: r8
         uses: actions/cache@v4

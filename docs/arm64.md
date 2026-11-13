@@ -58,6 +58,48 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
   `GESHER_ARM64_FASTMEM=0` turns it off. Exclusives go through the CAS
   callbacks.
 
+- **Exclusive monitor**: every live Jit (one per guest thread and nesting
+  depth) has its own processor id in dynarmic's global monitor, from a free
+  list (lowest id first; the monitor is sized for 4096 and its
+  store-exclusive scan, patched, covers only the ids in use). Ids used to be a
+  counter modulo 64: with more guest threads than that (WhatsApp has 100+)
+  two Jits shared an id, and dynarmic keeps one reservation and one saved
+  LDXR value per id, so a store-exclusive could succeed against the other
+  thread's value and an update was lost (a corrupt lock word or counter; the
+  smoke test's 128-thread LL/SC count lost 40-55% of its increments).
+
+- **Hints**: WFE waits for an event instead of being a no-op that turned a
+  WFE spin-wait into a busy loop. An event is the thread's event register
+  (SEVL, or a SEV since its last WFE) or its Jit's reservation in the
+  monitor being clear (no LDXR before the WFE, or another thread's successful
+  store-exclusive to the granule cleared it): WFE then returns at once. For
+  the first ~1 ms of a wait it polls for one with pauses and yields; after
+  that it blocks on the reservation granule's bucket (a 64-entry hashed
+  table), which store-exclusives to that granule and SEV wake. A plain-store
+  release (STLR) cannot wake it, so such a block lasts one timer tick
+  (WaitOnAddress's 1 ms timeout is 1-16 ms at the default timer resolution).
+  YIELD is a pause.
+  `MRS CNTPCT_EL0` reads QPC with CNTFRQ_EL0 at its frequency (it read 0).
+  If that frequency exceeds CNTFRQ_EL0's 32 bits, both use a 1 GHz scale;
+  conversion uses a 128-bit intermediate so long-running hosts do not overflow.
+
+- **Thread reuse**: the Env of an exited guest thread (its Jits with their
+  translated code, guest stack and TLS block) is pooled, at most 8
+  (`GESHER_ARM64_ENV_POOL=<n>`, 0 disables), and taken by the next new guest
+  thread with a fresh TLS block and an empty stack. A parked Env's guest
+  stack (8 MiB, committed) is decommitted below its guard pages and committed
+  again on reuse (a failed commit frees the Env and makes a new one), so a
+  pooled Env keeps only its code caches' commit.
+
+- **Profiling**: `GESHER_ARM64_PROFILE=<ms>` samples every busy guest thread
+  each 10 ms and reports, every `<ms>`, the live guest threads, Jits and Env
+  creations/reuses, then each thread above a quarter of a core: guest -> host calls, raw syscalls (and the last number), exclusive
+  loads/stores, store CAS failures and monitor refusals, hint instructions,
+  WFE waits, `Run()` entries, and the hottest guest PCs (object+offset),
+  host functions and host RIPs. `GESHER_ARM64_PROFILE_PC=1` also turns off
+  block linking so the sampled PC is the current block's, not the last
+  dispatched one (slower).
+
 - **ABI selection**: `NativeLibs.abiFor` picks x86_64, else arm64-v8a; the
   installer extracts to `lib/arm64` and sets `primaryCpuAbi`; gesher-app logs
   the ABI; System.loadLibrary of an arm64 object logs
@@ -81,10 +123,15 @@ clang (clang 23):
   `template<class VT, VT...> class`.
 
 `compat/arm64/dll/patch-dynarmic-fpsr.py` then patches pinned dynarmic
-sources (each file hash-checked against the pin): the FPSR corrections, and
-two memory ones (ADR 0080) - the A64 fast dispatch table has 64Ki entries
-(1 MiB per Jit instead of 16 MiB, all of which was resident), and each Jit's
-code cache commits 4 MiB up front instead of 16 MiB.
+sources (each file hash-checked against the pin): the FPSR corrections,
+memory ones (ADR 0080) - the A64 fast dispatch table has 64Ki entries
+(1 MiB per Jit instead of 16 MiB) and holds each descriptor's complement, so
+the empty entry is zero: the table is its own VirtualAlloc, never filled
+(clearing it decommits it) and only the entries a Jit uses become resident;
+each Jit's code cache commits 4 MiB up front instead of 16 MiB; the constant
+pool is no longer memset (fresh committed pages are zero; code space is
+cleared only once reused after the prelude; it keeps its 2 MiB, now
+commit-only until used) - and the exclusive monitor's `SetActiveProcessorCount` (above).
 
 Boost headers (interval containers) are needed to build dynarmic; the workflow
 fetches a pinned Boost. The DLL links the CRT and libunwind statically, so it

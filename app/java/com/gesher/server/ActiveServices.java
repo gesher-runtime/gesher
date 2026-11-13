@@ -713,6 +713,14 @@ final class ActiveServices {
         return false;
     }
 
+    /** Whether a service in the process is in the foreground (startForeground). */
+    synchronized boolean hasForegroundService(ActivityTaskManagerService.ProcessRecord app) {
+        for (ServiceRecord r : mServices.values()) {
+            if (r.app == app && r.foregroundId != 0) return true;
+        }
+        return false;
+    }
+
     /** Explicit force-stop/uninstall also cancels a service waiting for its retry timer. */
     void stopPackage(String packageName) {
         List<ServiceRecord> stopped = new ArrayList<>();

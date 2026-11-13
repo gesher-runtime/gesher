@@ -134,6 +134,10 @@ add_executable(filesystem_metadata_host_test tests/native/filesystem_metadata_ho
 target_compile_options(filesystem_metadata_host_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(filesystem_metadata_host_test PRIVATE gesher_posix)
 
+add_executable(timerfd_windows_test tests/native/timerfd_windows_test.cc)
+target_compile_options(timerfd_windows_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(timerfd_windows_test PRIVATE gesher_posix)
+
 # libutils' Looper over gesher-base's epoll and eventfd, RefBase, String8;
 # also run in CI on Windows.
 add_executable(libutils_probe probes/system/libutils_probe.cc)
@@ -199,6 +203,30 @@ target_link_libraries(pthread_cpu_clock_target_test PRIVATE gesher_bionic gesher
 add_executable(bionic_key_exit_test tests/native/bionic_key_exit_test.cc)
 target_compile_options(bionic_key_exit_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(bionic_key_exit_test PRIVATE gesher_bionic gesher_elf)
+
+add_executable(traversal_test tests/native/traversal_test.cc)
+target_compile_options(traversal_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(traversal_test PRIVATE gesher_posix)
+
+add_executable(futex_test tests/native/futex_test.cc)
+target_compile_options(futex_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(futex_test PRIVATE gesher_posix)
+
+add_library(futex_test_module SHARED tests/native/futex_test_module.cc)
+set_target_properties(futex_test_module PROPERTIES PREFIX "")
+target_compile_options(futex_test_module PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(futex_test_module PRIVATE gesher_posix)
+
+add_executable(futex_bridge_test tests/native/futex_bridge_test.cc)
+target_compile_options(futex_bridge_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(futex_bridge_test PRIVATE gesher_bionic gesher_elf futex_test_module)
+
+add_executable(futex_owner_link_test tests/native/futex_owner_link_test.cc)
+target_compile_options(futex_owner_link_test PRIVATE -Wall -Wextra -Werror)
+# Replace the inherited directory link_libraries list: the import library must
+# precede the POSIX archive, or the executable's direct reference hides the bug.
+set_target_properties(futex_owner_link_test PROPERTIES
+  LINK_LIBRARIES "futex_test_module;gesher_posix")
 
 # The same source calls actual Linux fcntl in the independent reference job.
 # This Windows target links the actual common POSIX fd/stdio/lock code.
