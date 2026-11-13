@@ -262,6 +262,30 @@ checks and strengthened device-work accounting during cancellation retirement.
 Persisted Android retry/history,
 periodic-key migration, JobScheduler/network policy and quotas remain separate.
 
+#### Second PR review: settings changes during queued sync work
+
+Review of published head `0dd231339b24363368a531a26ee3760f72f294ea` found two
+additional admission defects. A retry could bind after master sync, its authority's
+automatic sync, or its syncable state had been disabled during backoff. Manual
+requests also failed to acquire Android's ignore-backoff flag, so an explicit
+request could remain behind an earlier automatic retry.
+
+Admission now reads current settings before binding and again before starting an
+adapter whose connection arrived later. Rejected work releases its binding and
+does not retry. Manual flags are normalized on the manager's copy of the request;
+the initial manual attempt bypasses backoff, while a failed attempt still loses
+ignore-backoff and waits normally. Explicit `syncable=0` remains authoritative.
+
+The final shared fixture passes **346 host checks**. Its new public-request cases
+use the real package resolver and assert that the constructed adapter is found.
+Three compiling controls fail their intended behavioral assertions: the published
+head starts a retry after master sync is disabled; removing only manual-flag
+normalization blocks the manual request; removing only the connected-adapter
+policy check starts work after policy changes during binding. The complete app
+and service fixture were freshly compiled through javac/D8. These host and build
+results require fresh Windows CI before merge; the earlier 319-check receipt is
+historical evidence for its recorded source.
+
 ### Cookie callbacks: return to the calling Looper
 
 [GesherCookieManager](../../app/java/com/gesher/app/webview/GesherCookieManager.java)

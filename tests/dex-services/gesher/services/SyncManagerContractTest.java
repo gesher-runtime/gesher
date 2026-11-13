@@ -36,6 +36,7 @@ import android.net.Uri;
 import android.service.notification.StatusBarNotification;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.android.internal.pm.pkg.component.ParsedServiceImpl;
+import com.android.internal.pm.pkg.component.ParsedIntentInfoImpl;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -45,6 +46,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
+import java.util.Properties;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -60,6 +62,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiPredicate;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import java.util.function.ToIntBiFunction;
 import sun.misc.Unsafe;
 
@@ -165,6 +168,7 @@ public final class SyncManagerContractTest {
         int cancelled, unbound;
         IBinder suppliedAdapter;
         volatile CountDownLatch blockCreate, createEntered, blockStart, startEntered;
+        Runnable duringCreate;
         final ISyncAdapter endpoint = new ISyncAdapter.Stub() {
             @Override public void onUnsyncableAccount(ISyncAdapterUnsyncableAccountCallback callback) { }
             @Override public void startSync(ISyncContext context, String authority, Account account, Bundle extras) {
@@ -189,6 +193,7 @@ public final class SyncManagerContractTest {
                     try { if (!blockCreate.await(5, TimeUnit.SECONDS)) throw new AssertionError("Held bind callback timed out"); }
                     catch (InterruptedException failure) { throw new AssertionError(failure); }
                 }
+                if (duringCreate != null) duringCreate.run();
             }
             @Override public void scheduleBindService(IBinder token, IBinder bindToken, Intent intent, boolean rebind, int state, long sequence) {
                 IBinder published = suppliedAdapter == null ? endpoint.asBinder() : suppliedAdapter;
@@ -204,6 +209,10 @@ public final class SyncManagerContractTest {
             PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(PACKAGE, "/fixture/" + PACKAGE + "/base.apk");
             ParsedServiceImpl service = new ParsedServiceImpl();
             service.setName(PACKAGE + ".Adapter"); service.setPackageName(PACKAGE); service.setProcessName(PACKAGE); service.setEnabled(true);
+            ParsedIntentInfoImpl filter = new ParsedIntentInfoImpl();
+            filter.getIntentFilter().addAction("android.content.SyncAdapter"); service.addIntent(filter);
+            Bundle metadata = new Bundle(); metadata.putInt("android.content.SyncAdapter", 1);
+            service.setMetaData(metadata);
             parsed.addService(service); parsed.setEnabled(true); parsed.setTargetSdkVersion(36); parsed.hideAsFinal();
             Object owner = UNSAFE.allocateInstance(type("ApkPackage"));
             set(owner, "packageName", PACKAGE); set(owner, "mUid", UID); set(owner, "parsed", parsed);
@@ -240,7 +249,12 @@ public final class SyncManagerContractTest {
             }
             sync = manager;
             set(sync, "mAccountAccess", (BiPredicate<Account, String>) (account, pkg) -> true);
+            set(sync, "mAccounts", (Supplier<Account[]>) () -> new Account[]{ONE, TWO});
             adapter = adapter(AUTHORITY, TYPE, parallel);
+            // Supply parsed adapter XML at the existing package-metadata boundary.
+            ((Map<ComponentName, Object[]>) get(sync, "mParsed")).put(
+                    new ComponentName(PACKAGE, PACKAGE + ".Adapter"),
+                    new Object[]{"/fixture/" + PACKAGE + "/base.apk", adapter});
         }
         Object adapter(String authority, String type, boolean parallel) throws Exception {
             return make(adapterType, new Class<?>[]{String.class, String.class, ComponentName.class,
@@ -252,6 +266,15 @@ public final class SyncManagerContractTest {
             invoke(sync, "enqueue", new Class<?>[]{adapterType, Account.class, Bundle.class}, adapter, account, extras);
         }
         void cancel(Account account, String authority) throws Exception { invoke(sync, "cancelSync", new Class<?>[]{Account.class, String.class}, account, authority); }
+        void setting(String name, String value) throws Exception {
+            synchronized (sync) { ((Properties) get(sync, "mSettings")).setProperty(name, value); }
+        }
+        void request(Bundle extras) throws Exception {
+            check(((List<?>) invoke(sync, "adapters", new Class<?>[0])).size() == 1,
+                    "Request fixture must resolve the actual sync adapter");
+            invoke(sync, "requestSync", new Class<?>[]{Account.class, String.class, Bundle.class, boolean.class},
+                    ONE, AUTHORITY, extras, false);
+        }
         int pending() throws Exception { Object p = get(sync, "mPending"); return p instanceof Map<?, ?> map ? map.size() : ((Collection<?>) p).size(); }
         int active() throws Exception { return ((Map<?, ?>) get(sync, "mActive")).size(); }
         int bindings() throws Exception { return ((Map<?, ?>) get(services, "mConnections")).size(); }
@@ -300,6 +323,48 @@ public final class SyncManagerContractTest {
             h.enqueue(h.adapter(AUTHORITY, "a", false), new Account("b/c", "a"), extras("left"));
             h.enqueue(h.adapter(AUTHORITY, "a/b", false), new Account("c", "a/b"), extras("right")); h.timer.drain();
             check(h.starts.size() == 2, "Delimiter-containing endpoint identities aliased");
+        }
+        for (String setting : new String[]{"master", "auto." + TYPE + "/one/" + AUTHORITY,
+                "syncable." + TYPE + "/one/" + AUTHORITY}) {
+            try (Harness h = new Harness(false, wire)) {
+                h.enqueue(ONE, extras("retry-policy")); h.timer.drain(); h.finish(0, result("soft"));
+                h.setting(setting, setting.startsWith("syncable.") ? "0" : "false");
+                h.advance(60000);
+                check(h.starts.size() == 1, "Due retry ignored changed sync policy: " + setting);
+                check(h.active() == 0 && h.pending() == 0 && h.bindings() == 0,
+                        "Rejected retry retained work or binding: " + setting);
+            }
+        }
+        try (Harness h = new Harness(false, wire)) {
+            h.duringCreate = () -> {
+                try { h.setting("master", "false"); }
+                catch (Exception failure) { throw new AssertionError(failure); }
+            };
+            h.enqueue(ONE, extras("policy-during-bind")); h.timer.drain();
+            check(h.starts.isEmpty() && h.active() == 0 && h.bindings() == 0,
+                    "Policy changed during binding still started adapter or leaked its connection");
+        }
+        try (Harness h = new Harness(false, wire)) {
+            h.enqueue(ONE, extras("backoff")); h.timer.drain(); h.finish(0, result("soft"));
+            h.setting("master", "false");
+            Bundle manual = extras("manual"); manual.putBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, true);
+            h.request(manual); h.timer.drain();
+            check(h.starts.size() == 2 && "manual".equals(h.starts.get(1).extras.getString("tag")),
+                    "Manual request did not bypass existing backoff and disabled master sync");
+            check(!manual.containsKey(ContentResolver.SYNC_EXTRAS_IGNORE_BACKOFF)
+                    && !manual.containsKey(ContentResolver.SYNC_EXTRAS_IGNORE_SETTINGS),
+                    "Manual normalization mutated caller extras");
+            h.finish(1, result("soft"));
+            check(h.starts.size() == 2, "Manual failure retried without backoff");
+            h.advance(60000);
+            check(h.starts.size() == 3 && "manual".equals(h.starts.get(2).extras.getString("tag")),
+                    "Manual retry lost ignore-settings or resumed rejected automatic work");
+        }
+        try (Harness h = new Harness(false, wire)) {
+            h.setting("syncable." + TYPE + "/one/" + AUTHORITY, "0");
+            Bundle manual = extras("unsyncable"); manual.putBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, true);
+            h.request(manual); h.timer.drain();
+            check(h.starts.isEmpty() && h.pending() == 0, "Manual request bypassed explicit unsyncable state");
         }
     }
 

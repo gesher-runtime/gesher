@@ -426,6 +426,10 @@ final class SyncManager {
         if (notifier != null && mPm.get(notifier.packageName) != notifier) return;
         Bundle e = extras != null ? new Bundle(extras) : new Bundle();
         if (upload) e.putBoolean(ContentResolver.SYNC_EXTRAS_UPLOAD, true);
+        if (e.getBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, false)) {
+            e.putBoolean(ContentResolver.SYNC_EXTRAS_IGNORE_BACKOFF, true);
+            e.putBoolean(ContentResolver.SYNC_EXTRAS_IGNORE_SETTINGS, true);
+        }
         boolean manual = e.getBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, false)
                 || e.getBoolean(ContentResolver.SYNC_EXTRAS_IGNORE_SETTINGS, false);
         if (!upload) {
@@ -441,11 +445,7 @@ final class SyncManager {
                 if (account != null && !account.equals(acc)) continue;
                 if (notifier != null && !mAccountAccess.test(acc, notifier.packageName)) continue;
                 if (!callerCanAccess(acc) || !mAccountAccess.test(acc, a.service.getPackageName())) continue;
-                if (getIsSyncable(acc, a.authority) == 0) continue;
-                if (!manual && (!getMasterSyncAutomatically()
-                        || !getSyncAutomatically(acc, a.authority))) {
-                    continue;
-                }
+                if (!settingsPermit(acc, a.authority, e)) continue;
                 enqueue(a, acc, e);
             }
         }
@@ -589,8 +589,22 @@ final class SyncManager {
         synchronized (this) { return active.done || active.cancelled; }
     }
 
+    /** Recheck queued work: settings can change while it waits for an adapter or backoff. */
+    private synchronized boolean settingsPermit(Account account, String authority, Bundle extras) {
+        String endpoint = id(account, authority);
+        int syncable = 1; // Every admitted operation already has a discovered adapter.
+        try { syncable = Integer.parseInt(mSettings.getProperty("syncable." + endpoint, "1")); }
+        catch (NumberFormatException ignored) { }
+        if (syncable == 0) return false;
+        if (extras.getBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, false)
+                || extras.getBoolean(ContentResolver.SYNC_EXTRAS_IGNORE_SETTINGS, false)) return true;
+        return !"false".equals(mSettings.getProperty("master"))
+                && !"false".equals(mSettings.getProperty("auto." + endpoint));
+    }
+
     private void bind(Active active) {
-        if (stopped(active) || !mAccountAccess.test(active.account, active.adapter.service.getPackageName())) {
+        if (stopped(active) || !settingsPermit(active.account, active.adapter.authority, active.extras)
+                || !mAccountAccess.test(active.account, active.adapter.service.getPackageName())) {
             cancelActive(active, "cancelled before binding"); return;
         }
         active.connection = new IServiceConnection.Stub() {
@@ -620,8 +634,9 @@ final class SyncManager {
         if (stopped(active)) { cancelActive(active, "retired connection"); return; }
         if (dead || binder == null) { failed(active, "adapter disconnected"); return; }
         if (active.binder != null) return;
-        if (!mAccountAccess.test(active.account, active.adapter.service.getPackageName())) {
-            cancelActive(active, "account access revoked"); return;
+        if (!settingsPermit(active.account, active.adapter.authority, active.extras)
+                || !mAccountAccess.test(active.account, active.adapter.service.getPackageName())) {
+            cancelActive(active, "sync policy or account access changed"); return;
         }
         active.binder = ISyncAdapter.Stub.asInterface(binder);
         try { active.binder.startSync(active, active.adapter.authority, active.account, active.extras); }
