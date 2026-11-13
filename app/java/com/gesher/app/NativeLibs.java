@@ -130,15 +130,23 @@ public final class NativeLibs {
                 out.getParentFile().mkdirs();
                 // Write beside it and rename over it: a running process maps its
                 // libraries from these files, and Windows refuses to truncate a
-                // mapped file, but replaces it by rename.
-                File part = new File(out.getPath() + ".part");
-                try (InputStream in = zip.getInputStream(entry);
-                        OutputStream os = new FileOutputStream(part)) {
-                    for (int n; (n = in.read(buffer)) > 0; ) {
-                        os.write(buffer, 0, n);
+                // mapped file, but replaces it by rename. A name of its own, so
+                // concurrent extractions do not share one; ATOMIC_MOVE is a plain
+                // rename() (REPLACE_EXISTING would unlink the target first).
+                File part = File.createTempFile(out.getName(), ".part", out.getParentFile());
+                boolean moved = false;
+                try {
+                    try (InputStream in = zip.getInputStream(entry);
+                            OutputStream os = new FileOutputStream(part)) {
+                        for (int n; (n = in.read(buffer)) > 0; ) {
+                            os.write(buffer, 0, n);
+                        }
                     }
+                    Files.move(part.toPath(), out.toPath(), StandardCopyOption.ATOMIC_MOVE);
+                    moved = true;
+                } finally {
+                    if (!moved) part.delete();
                 }
-                Files.move(part.toPath(), out.toPath(), StandardCopyOption.REPLACE_EXISTING);
                 count++;
             }
         }
