@@ -78,8 +78,18 @@ jobs:
           python3 tools/test_elf_finalizers.py --sanitize
           python3 tools/test_media_api_contracts.py --sanitize
 
+      - name: Timer, DNS and media lifetime contracts
+        run: |
+          python3 tools/test_timerfd_contracts.py --sanitize
+          python3 tools/test_input_surface_callbacks.py --sanitize
+          python3 tools/test_codec_lifecycle_contracts.py --sanitize
+          python3 tools/test_dns_query_lifecycle.py --sanitize
+
       - name: Freopen contracts against the pinned glibc reference
         run: bash tools/ci/test-freopen-reference.sh
+
+      - name: MediaPlayer PCM priming and playback lifecycle contracts
+        run: python3 tools/test_media_player_priming.py --sanitize
 
       - name: Host event loop, audio state and surface geometry contracts
         run: |
@@ -91,11 +101,24 @@ jobs:
           python3 tools/test_audio_state_contracts.py --sanitize
           python3 tools/test_surface_geometry_contracts.py --sanitize
 
+      - name: Physical keys, sensor flushes, directory walks and futex contracts
+        run: |
+          python3 tools/test_input_key_contracts.py --sanitize
+          python3 tools/test_sensor_flush_contracts.py --sanitize
+          python3 tools/test_traversal_contracts.py --sanitize
+          python3 tools/test_futex_contracts.py --sanitize
+          python3 tools/test_futex_contracts.py --linux-reference
+          CXX='c++ -fsanitize=thread -fno-omit-frame-pointer' \
+            python3 tools/test_futex_contracts.py --group guest --group concurrency
+
       - name: Temporary directory and UNC namespace contracts
         run: |
           python3 tools/test_temp_directory.py
           c++ -std=c++17 -Wall -Wextra -Werror tests/paths/unc_paths_test.cc -o "$RUNNER_TEMP/gesher-unc-paths"
           "$RUNNER_TEMP/gesher-unc-paths"
+
+      - name: Anonymous mapping zeroing and protection contracts
+        run: python3 tools/test_mman_zeroing_mappings.py --sanitize
 
       - name: Filesystem metadata and media source ownership contracts
         run: |
@@ -115,6 +138,9 @@ jobs:
 
       - name: Audio JNI buffer contracts with checked JNI and UBSan
         run: python3 tools/test_audio_buffer_contracts.py
+
+      - name: Settings context bootstrap and deferred construction contracts
+        run: python3 tools/test_settings_context_bootstrap.py --java-home "$JAVA_HOME"
 
       - name: APK native library filename contracts
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
@@ -279,6 +305,7 @@ jobs:
           mkdir -p dist
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
           cp out/gesher_shellext.dll dist/
+          cp out/futex_test_module.dll dist/
           cp out/libgesher_account_crypto.so dist/
           cp out/libgesher_install_pipe.so dist/
           cp out/libgesher_webview_bridge.so dist/
@@ -557,6 +584,7 @@ jobs:
         run: |
           tests/windows/shell/UiLocalizationChecks.ps1
           tests/windows/shell/MicrogDefaultsChecks.ps1
+          tests/windows/shell/ControlPanelRefreshChecks.ps1
 
       - name: Verify and assemble windows-x64 artifact
         shell: pwsh
@@ -703,8 +731,11 @@ jobs:
           # lifecycle.apk runs headless (no window; its task is removed once it
           # is idle); uiapp.apk's window is checked below.
           $env:GESHER_APP_WINDOW = 'headless'
+          # The device's processes log how they execute (checked below, ADR 0081).
+          $env:GESHER_LOG_EXECUTION = '1'
           $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
           $code = $LASTEXITCODE
+          Remove-Item Env:GESHER_LOG_EXECUTION
           Write-Host "gesher-app lifecycle.apk (exit $code):"
           Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
           if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
@@ -726,6 +757,15 @@ jobs:
             throw 'The installed Gesher device did not compile lifecycle.apk at install'
           }
           "PASS  installer: the installed device compiles lifecycle.apk at install ($(($dexopt.Line -replace '^.*dexopt: ', 'dexopt: ').Trim()))" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The installed options (gesher-app.ps1): the launcher and the system server it
+          # started run nterp and the boot image's AOT code, not the switch interpreter (ADR 0081).
+          $serverLog = Get-Content -Raw "$env:LOCALAPPDATA\Gesher\logs\system_server.log" -ErrorAction SilentlyContinue
+          if ($out -notmatch 'gesher: execution: nterp' -or $out -match 'gesher: execution: switch interpreter' -or
+              $serverLog -notmatch 'gesher: execution: nterp' -or $serverLog -match 'gesher: execution: switch interpreter') {
+            ($serverLog -split "`n" | Select-String 'gesher: execution|boot image') | Out-Host
+            throw 'The installed launcher or system server does not run nterp (-Xint in the installed options?)'
+          }
+          'PASS  installer: the installed launcher and system server run nterp and AOT code (gesher: execution: nterp)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Installed apps as Windows apps (docs/installer.md): the first launch
           # made the app's Start menu shortcut, and its process set the
           # package's AppUserModelID.
@@ -1434,6 +1474,17 @@ jobs:
           if ($summaryTruncated) { 'Summary shortened; complete results remain in the job log and framework-contracts-results.txt.' >> $env:GITHUB_STEP_SUMMARY }
           '```' >> $env:GITHUB_STEP_SUMMARY
           exit $code
+
+      - name: Upload media output captures
+        uses: actions/upload-artifact@v4
+        if: ${{ always() && matrix.suite == 'full' }}
+        with:
+          name: media-output-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/gesher-media/**/*.wav
+            ${{ runner.temp }}/gesher-media/**/*.txt
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload offline regression evidence
         uses: actions/upload-artifact@v4

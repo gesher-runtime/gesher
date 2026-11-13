@@ -21,11 +21,12 @@ class QueueInputSurface : public InputSurface {
     QueueSurface* raw = surface_.get();
     std::shared_ptr<State> state = state_;
     surface_->SetListener([raw, state] {
-      InputFrameCallback cb;
-      {
-        std::lock_guard<std::mutex> lock(state->mu);
-        cb = state->cb;
-      }
+      // Keep admission and the invocation in the same critical section. The
+      // consumers capture their own `this`, so clearing the stored callback
+      // alone must not let Abandon return while a copied callback is running.
+      // QueueSurface calls us after dropping its queue mutex.
+      std::lock_guard<std::recursive_mutex> lock(state->mu);
+      InputFrameCallback cb = state->cb;
       if (!cb) return;
       std::shared_ptr<const SurfaceFrame> f = raw->Latest();
       if (f == nullptr || f->pixels.empty()) return;
@@ -41,20 +42,26 @@ class QueueInputSurface : public InputSurface {
   }
 
   void SetCallback(InputFrameCallback cb) override {
-    std::lock_guard<std::mutex> lock(state_->mu);
-    state_->cb = std::move(cb);
+    std::lock_guard<std::recursive_mutex> lock(state_->mu);
+    if (!state_->abandoned) state_->cb = std::move(cb);
   }
 
   uint64_t frames() const override { return surface_->frames(); }
 
   void Abandon() override {
-    SetCallback(nullptr);
+    std::lock_guard<std::recursive_mutex> lock(state_->mu);
+    state_->abandoned = true;
+    state_->cb = nullptr;
     surface_->Abandon();
   }
 
  private:
   struct State {
-    std::mutex mu;
+    // A callback may replace itself or abandon its input. A recursive mutex
+    // permits that on the producer thread while still waiting for callbacks
+    // on every other thread. The local callback copy keeps its captures alive.
+    std::recursive_mutex mu;
+    bool abandoned = false;
     InputFrameCallback cb;
   };
   std::shared_ptr<State> state_ = std::make_shared<State>();

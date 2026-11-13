@@ -40,7 +40,8 @@ if(Test-Path -LiteralPath (Join-Path $RuntimeDir 'fonts/fonts.xml')){
     Get-ChildItem -LiteralPath (Join-Path $RuntimeDir 'fonts') -File -Filter '*.ttf'|Copy-Item -Destination (Join-Path $profile 'system/fonts')
 }
 $bcp=(@('core-oj.jar','core-libart.jar','core-icu4j.jar','framework.jar','gesher-app.jar')|ForEach-Object{A (Join-Path $RuntimeDir $_)})-join ':'
-$vm=@("-Xbootclasspath:$bcp","-Ximage:$(A (Join-Path $RuntimeDir 'framework/boot.art'))",'-Xint','-Xusejit:false','com.gesher.app.Launcher')
+# The installed device's options (tools/package/gesher-app.ps1): nterp and AOT code, no -Xint (ADR 0081).
+$vm=@("-Xbootclasspath:$bcp","-Ximage:$(A (Join-Path $RuntimeDir 'framework/boot.art'))",'-Xusejit:false','com.gesher.app.Launcher')
 $expectedBoot='gesher: boot image loaded: 5 spaces (boot.art boot-core-libart.art boot-core-icu4j.art boot-framework.art boot-gesher-app.art)'
 function Launcher([string]$label,[string[]]$arguments,[int]$timeout=30000){
     $start=New-Object Diagnostics.ProcessStartInfo
@@ -61,6 +62,8 @@ function Launcher([string]$label,[string[]]$arguments,[int]$timeout=30000){
     $start.EnvironmentVariables['GESHER_LOCALES']='en-US'
     $start.EnvironmentVariables['GESHER_SHORTCUTS']='0';$start.EnvironmentVariables['GESHER_IP_GEOLOCATION']='0'
     $start.EnvironmentVariables['GESHER_APP_WINDOW']='headless';$start.EnvironmentVariables['GESHER_IDLE_TIMEOUT']='3600'
+    $start.EnvironmentVariables['GESHER_LOG_EXECUTION']='1'
+    foreach($name in 'GESHER_ART_INTERPRET_ONLY','GESHER_ART_NO_AOT'){$start.EnvironmentVariables.Remove($name)}
     foreach($name in 'GESHER_BINDER','GESHER_BINDER_UID','GESHER_UID','GESHER_REQUIRE_BOOT_IMAGE'){$start.EnvironmentVariables.Remove($name)}
     if($script:device){$start.EnvironmentVariables['GESHER_BINDER']=$script:device}
     if($RequireBootImages){$start.EnvironmentVariables['GESHER_REQUIRE_BOOT_IMAGE']='1'}
@@ -113,6 +116,13 @@ try{
         $results+=[pscustomobject]@{name=$case.name;osCode=$case.code;cliExitCode=$result.exitCode;cliFinished=$result.finished;liveSibling=$true;expectedBaselineFailure=[bool]$ExpectBaselineFailure}
         Write-Host "PASS named-process CLI $($case.name) baseline=$ExpectBaselineFailure"
     }
+    # The launcher and the system server it started run nterp, not the switch interpreter (ADR 0081).
+    $serverLog=ReadLog (Join-Path $logs 'system_server.log')
+    if(-not $install.text.Contains('gesher: execution: nterp') -or $install.text.Contains('gesher: execution: switch interpreter') -or
+       -not $serverLog.Contains('gesher: execution: nterp') -or $serverLog.Contains('gesher: execution: switch interpreter')){
+        throw 'The launcher or the system server does not run nterp'
+    }
+    Write-Host 'PASS named-process device: the launcher and the system server run nterp and AOT code (gesher: execution: nterp)'
     if($RequireBootImages){
         Get-ChildItem -LiteralPath $logs -File|Where-Object{$_.Extension -eq '.log' -and ($_.Name -eq 'system_server.log' -or $_.Name.StartsWith('com.gesher.namedprocesslauncher'))}|ForEach-Object{
             if(-not (ReadLog $_.FullName).Contains($expectedBoot)){throw 'Child did not load complete images'}

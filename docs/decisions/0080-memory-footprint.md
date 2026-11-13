@@ -49,7 +49,11 @@ far more working set than their Java heap explains. Measured per allocation
   clears card-table ranges while mutators run). The range is published while
   decommitted, an epoch counts publishes and withdrawals, and the vectored
   handler (`fault_signals.cc`) retries an access violation once the page is
-  back. Accesses from kernel mode (a syscall's buffer) in that window still
+  back. The advice holds the existing mapping registry mutex through the
+  physical release and recommit, so `mprotect`, `mremap` and `MAP_FIXED` cannot
+  mistake that temporary reservation for a logical `PROT_NONE` mapping or
+  replace it before its original protection is restored. The fault retry does
+  not acquire that mutex. Accesses from kernel mode (a syscall's buffer) in that window still
   fail with EFAULT; ART does not do I/O on the memory it zeroes. A failed
   recommit (the system commit limit) is retried, then reported.
 - **ART** (`patches/art/0780-windows-memory-footprint.patch`):
@@ -90,6 +94,15 @@ All apps stayed up; the system server ran 58 GCs and Waze 7 in that window.
 `probes/posix/mman_probe` checks the reservations (section 6), and a stress
 test of madvise racing reads, writes and locked RMWs from other threads (up
 to 80 zeroing threads, tens of millions of accesses) runs without a fault.
+
+Independent PR QA added `tools/test_mman_zeroing_mappings.py`: exact production
+`mprotect`, `madvise`, zeroing tracker and retry functions run against a one-page
+Win32 seam paused between decommit and recommit. The previous revision returns
+success from `mprotect(PROT_NONE)` during that gap, then leaves the page RW;
+serializing mapping operations preserves the requested protection. This host
+test is required by artifact preflight. Section 7 of the real Windows
+`mman_probe` also checks competing protection changes and concurrent atomic
+accesses through the actual mapping and vectored-exception implementations.
 
 ## Consequences
 - A SIGSEGV in a PROT_NONE mapping reports SEGV_MAPERR (the pages are

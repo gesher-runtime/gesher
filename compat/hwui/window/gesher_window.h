@@ -13,6 +13,8 @@
 
 #include <stdint.h>
 
+#include "input_modifiers.h"
+
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -66,7 +68,7 @@ struct WindowEvent {
   int32_t key = 0;
   int32_t scan = 0;
   int32_t repeat = 0;
-  int32_t modifiers = 0;  // 1 shift, 2 ctrl, 4 alt, 8 caps lock
+  int32_t modifiers = 0;  // WindowModifier bits (input_modifiers.h)
   float delta = 0;
   uint32_t ch = 0;
   int32_t width = 0, height = 0;

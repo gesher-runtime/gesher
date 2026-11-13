@@ -29,6 +29,9 @@ function MediaSounds([string] $wav) {
 # order: frequency within 2%, duration within 60 ms, level within 15%.
 function CheckSounds([string] $Name, [string] $wav, [object[]] $expected) {
   $a = MediaSounds $wav
+  if ($wav) {
+    Set-Content -LiteralPath ($wav + '.analysis.txt') -Value $a.Text -Encoding utf8
+  }
   $sounds = $a.Sounds
   $problems = @()
   if ($sounds.Count -ne $expected.Count) { $problems += "$($sounds.Count) sounds, not $($expected.Count)" }
@@ -120,6 +123,7 @@ if (Test-Path "$Dir/mediaapp.apk") {
     -Xint '-Xusejit:false' com.gesher.app.Main (NoDrive "$Dir/mediaapp.apk") 2>&1 | Out-String
   $mediaExit = $LASTEXITCODE
   Remove-Item Env:GESHER_AUDIO_CAPTURE, Env:GESHER_MEDIA_TRACE_PREPARE
+  Set-Content -LiteralPath (Join-Path $mediaTmp 'mediaapp-output.txt') -Value $mediaOut -Encoding utf8
   foreach ($trace in @($mediaOut -split "`n" | Where-Object { $_ -match 'player prepare trace:' } | Select-Object -First 16)) {
     Write-Host "INFO  media prepare: $($trace.Trim())"
   }

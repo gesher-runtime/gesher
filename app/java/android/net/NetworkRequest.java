@@ -137,11 +137,23 @@ public class NetworkRequest implements Parcelable {
         }
 
         public Builder setNetworkSpecifier(String networkSpecifier) {
-            return setNetworkSpecifier(networkSpecifier == null ? null
-                    : new StringNetworkSpecifier(networkSpecifier));
+            try {
+                return setNetworkSpecifier(new TelephonyNetworkSpecifier.Builder()
+                        .setSubscriptionId(Integer.parseInt(networkSpecifier)).build());
+            } catch (NumberFormatException e) {
+                if (networkSpecifier == null || networkSpecifier.isEmpty()) {
+                    return setNetworkSpecifier((NetworkSpecifier) null);
+                }
+                return setNetworkSpecifier(mCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_TEST)
+                        ? new TestNetworkSpecifier(networkSpecifier)
+                        : new EthernetNetworkSpecifier(networkSpecifier));
+            }
         }
 
         public Builder setNetworkSpecifier(NetworkSpecifier networkSpecifier) {
+            if (networkSpecifier instanceof MatchAllNetworkSpecifier) {
+                throw new IllegalArgumentException("A MatchAllNetworkSpecifier is not permitted");
+            }
             mCapabilities.setNetworkSpecifier(networkSpecifier);
             return this;
         }
