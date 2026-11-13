@@ -383,9 +383,12 @@ bool Initialize() {
 }
 namespace {
 // The area, its values current (LocalMutex is held). Every log line reads a
-// few properties (log.tag.*): Publish stores the new generation after the
-// values, under the area's mutex, so while the area still has the generation
-// this process decoded, its copy is current without the cross-process mutex.
+// few properties (log.tag.*). Without the cross-process mutex, this reads only
+// the header's 32-bit generation (one aligned load) and never the shared
+// values: when it equals the generation this process last decoded under the
+// mutex, the process's own decoded copy (area->values) is returned, which is
+// what a locked read would have seen before any Set still in progress. A
+// different generation takes the mutex and decodes again.
 Area* Refreshed() {
   Area* area = Current();
   if (!area) return nullptr;
