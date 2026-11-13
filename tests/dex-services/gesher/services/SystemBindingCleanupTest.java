@@ -111,6 +111,12 @@ public final class SystemBindingCleanupTest {
             }
             throw new AssertionError("An app directly unbound the system-owned connection");
         }
+        /** The idle reaper, as if the process (spawned by the server) had been idle long. */
+        void reapNow() throws Exception {
+            field(processType, "spawned").setBoolean(app, true);
+            field(processType, "lastActive").setLong(app, 0L);
+            method(atmType, "reapIdleProcesses", long.class).invoke(atm, 1L);
+        }
         void cleaned() throws Exception {
             require(Binder.getCallingPid() == appPid && Binder.getCallingUid() == appUid,
                     "Internal cleanup failed to restore the app's Binder identity");
@@ -140,6 +146,8 @@ public final class SystemBindingCleanupTest {
         // Use the production job bind path, not a test-specific connection registry.
         method(schedulerType, "bind", runType).invoke(scheduler, run);
         require(h.connectionCount() == 1 && h.thread.created == 1, "Job did not establish a real system binding");
+        h.reapNow();
+        require(h.thread.exits == 0, "The idle reaper ended a process whose service a running job binds");
         long original = Binder.clearCallingIdentity();
         try {
             h.asApp();
@@ -186,6 +194,34 @@ public final class SystemBindingCleanupTest {
         System.out.println("SystemBindingCleanupTest: adapter cannot directly unbind system connection; onFinished releases it and restores caller identity");
     }
 
+    /**
+     * A service bound only by its own process does not keep the process in use: maybeExit
+     * keeps it (hasServices), the idle reaper ends it (a cached process, as OomAdjuster
+     * ignores a binding to oneself).
+     */
+    private static void selfBinding(Object apk) throws Exception {
+        Harness h = new Harness(apk);
+        IServiceConnection connection = new IServiceConnection.Stub() {
+            @Override public void connected(ComponentName name, IBinder binder,
+                    android.app.IBinderSession session, boolean dead) { }
+        };
+        long original = Binder.clearCallingIdentity();
+        try {
+            h.asApp();
+            require(h.am.bindService(h.thread, null, new Intent().setComponent(h.component), null,
+                    connection, Context.BIND_AUTO_CREATE, h.owner, 0) == 1, "Self binding failed");
+        } finally { Binder.restoreCallingIdentity(original); }
+        require(h.thread.created == 1 && h.connectionCount() == 1, "Self binding did not create the service");
+        method(h.atmType, "maybeExit", h.processType).invoke(h.atm, h.app);
+        require(h.thread.exits == 0, "maybeExit ended a process with a running service");
+        field(h.processType, "spawned").setBoolean(h.app, true);
+        method(h.atmType, "reapIdleProcesses", long.class).invoke(h.atm, 3_600_000L);
+        require(h.thread.exits == 0, "The idle reaper ended a recently used process");
+        h.reapNow();
+        require(h.thread.exits == 1, "The idle reaper kept a process only its own binding uses");
+        System.out.println("SystemBindingCleanupTest: the idle reaper ends a process kept only by its own binding");
+    }
+
     public static void main(String[] args) throws Exception {
         require(args.length == 1, "Pass the local devsvc.apk fixture (metadata only)");
         System.loadLibrary("android_runtime");
@@ -196,6 +232,7 @@ public final class SystemBindingCleanupTest {
         Object apk = Class.forName("com.gesher.server.ApkPackage").getMethod("parse", String.class).invoke(null, args[0]);
         job(apk);
         sync(apk);
+        selfBinding(apk);
         System.out.println("SystemBindingCleanupTest all passed");
     }
 }

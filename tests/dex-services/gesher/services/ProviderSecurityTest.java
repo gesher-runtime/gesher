@@ -167,6 +167,37 @@ public final class ProviderSecurityTest {
         ContentProviderHolder acquired = (ContentProviderHolder) get.invoke(providers, senderProcess, senderName, authority);
         require(acquired != null && acquired.provider != null && !acquired.info.exported,
                 "URI-granted holder lost trusted private-provider metadata");
+        require(acquired.noReleaseNeeded && acquired.connection == null,
+                "a server-local acquisition asked for a release");
+        // ActivityThread's reference counting (ContentProviderConnection).
+        Method counted = method(cpType, "getContentProvider", processType, String.class,
+                String.class, boolean.class, boolean.class);
+        Method inUse = method(cpType, "hasActiveClients", processType);
+        Method ref = method(cpType, "refContentProvider", IBinder.class, int.class, int.class);
+        Method remove = method(cpType, "removeContentProvider", IBinder.class, boolean.class);
+        ContentProviderHolder unstable = (ContentProviderHolder) counted.invoke(providers,
+                senderProcess, senderName, authority, false, true);
+        require(unstable.connection != null && !unstable.noReleaseNeeded,
+                "a client's holder carries no connection to release");
+        require((Boolean) inUse.invoke(providers, ownerProcess), "an unstable reference left the provider unused");
+        ContentProviderHolder stable = (ContentProviderHolder) counted.invoke(providers,
+                senderProcess, senderName, authority, true, true);
+        require(stable.connection == unstable.connection, "one client got two connections to one provider");
+        remove.invoke(providers, stable.connection, false);  // the duplicate holder (installProvider race)
+        require((Boolean) inUse.invoke(providers, ownerProcess), "a held stable reference was dropped");
+        // releaseProvider of the last stable reference: stable to one unstable, then removal.
+        require((Boolean) ref.invoke(providers, stable.connection, -1, 1), "a live connection reported dead");
+        require((Boolean) inUse.invoke(providers, ownerProcess), "a pending removal left the provider unused");
+        remove.invoke(providers, stable.connection, false);
+        require(!(Boolean) inUse.invoke(providers, ownerProcess), "a released provider stayed in use");
+        require(!(Boolean) ref.invoke(providers, stable.connection, 0, 1), "a removed connection was revived");
+        ContentProviderHolder again = (ContentProviderHolder) counted.invoke(providers,
+                senderProcess, senderName, authority, false, true);
+        require(again.connection != null && again.connection != stable.connection
+                && (Boolean) inUse.invoke(providers, ownerProcess), "a new acquisition after removal was not counted");
+        method(cpType, "processDied", processType).invoke(providers, senderProcess);
+        require(!(Boolean) inUse.invoke(providers, ownerProcess), "a dead client kept its references");
+        System.out.println("ProviderSecurityTest: stable/unstable provider connection reference counting passed");
         revoke.invoke(grants, senderName, uri, read, 0);
         require((Integer) check.invoke(grants, uri, 31702, senderUid, read, 0) == PackageManager.PERMISSION_DENIED,
                 "URI revoke did not remove read access");

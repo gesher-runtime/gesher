@@ -138,6 +138,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean exiting;
         boolean spawned;     // started by this server (startProcess), not by itself
         long startSeq;       // distinguishes a late exit from a newer process of this package
+        /** When something last used it (uptime): the idle reaper's clock. */
+        volatile long lastActive = SystemClock.uptimeMillis();
         ProcessExitStatus.Generation exitGeneration;
         /** The configuration it was given last (bindApplication, ConfigurationChangeItem). */
         Configuration config;
@@ -1600,6 +1602,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     void maybeExit(ProcessRecord app) {
         if (app == null) return;
+        // Work in it just ended: the idle reaper counts from now.
+        app.lastActive = SystemClock.uptimeMillis();
         synchronized (this) {
             if (app.exiting || !app.ready || !app.activities.isEmpty()) return;
             for (PendingWork w : mPendingWork) {
@@ -1619,6 +1623,64 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             app.thread.scheduleExit();
         } catch (RemoteException e) {
             SystemServer.log("scheduleExit: " + e);
+        }
+    }
+
+    private boolean hasPendingWorkLocked(ProcessRecord app) {
+        for (PendingWork w : mPendingWork) {
+            if (w.packageName.equals(app.packageName) && w.processName.equals(app.processName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The idle reaper: what OomAdjuster and the low-memory killer do to cached processes
+     * (ADR 0081). {@link #maybeExit} ends a process as soon as nothing keeps it; but a
+     * process can be kept by something that is no use to anybody (a service bound only by
+     * its own process, a provider whose clients released it, a GMS sibling process). This
+     * ends the processes this server started that are cached, with no activity, no work
+     * waiting, nothing in use ({@link ActivityManagerService#inUse}) and not persistent
+     * ({@link ActivityManagerService#isPersistent}), once nothing used them for
+     * {@code idleMs}. Whatever needs one again (a service bind, a provider acquisition, a
+     * broadcast) starts a new process.
+     */
+    void reapIdleProcesses(long idleMs) {
+        long now = SystemClock.uptimeMillis();
+        List<ProcessRecord> candidates = new ArrayList<>();
+        synchronized (this) {
+            for (ProcessRecord p : mProcesses) {
+                if (p.exiting || !p.ready || !p.spawned || p.packageName == null) continue;
+                if (!p.activities.isEmpty() || hasPendingWorkLocked(p)) {
+                    p.lastActive = now;
+                    continue;
+                }
+                candidates.add(p);
+            }
+        }
+        for (ProcessRecord p : candidates) {
+            if (mAm.isPersistent(p)) continue;
+            if (mAm.inUse(p)) {
+                p.lastActive = now;
+                continue;
+            }
+            long idle = now - p.lastActive;
+            if (idle < idleMs) continue;
+            synchronized (this) {
+                // Something may have used it meanwhile (lastActive moved), or ended it.
+                if (p.exiting || !mProcesses.contains(p) || !p.activities.isEmpty()
+                        || hasPendingWorkLocked(p) || now - p.lastActive < idleMs) continue;
+                p.exiting = true;
+            }
+            mAm.processExiting(p);
+            SystemServer.log("reaping: " + p + " is cached (no activity, nothing in use) and"
+                    + " was idle for " + (idle / 1000) + " s");
+            try {
+                p.thread.scheduleExit();
+            } catch (RemoteException e) {
+                SystemServer.log("reaping: " + e);
+            }
         }
     }
 
@@ -1881,6 +1943,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (app == null) {
             startProcess(packageName, processName, reason);
         } else if (app.ready) {
+            app.lastActive = SystemClock.uptimeMillis();
             work.accept(app);
         }
     }

@@ -713,6 +713,28 @@ final class ActiveServices {
         return false;
     }
 
+    /**
+     * Whether a service of the process is in use, as OomAdjuster ranks a service process
+     * above a cached one: a service still being brought up or with a restart pending, a
+     * started (or foreground) service, or one bound by another process or by the system
+     * (JobScheduler, sync). A binding from the process itself does not count ("binding to
+     * oneself is not interesting"): such a process is cached and may be reaped.
+     */
+    synchronized boolean inUse(ActivityTaskManagerService.ProcessRecord app) {
+        IBinder self = app.thread != null ? app.thread.asBinder() : null;
+        for (ServiceRecord r : mServices.values()) {
+            if (r.app != app) continue;
+            if (!r.created || r.restart != null || r.startRequested || !r.pendingStarts.isEmpty()
+                    || r.foregroundId != 0) return true;
+            for (IntentBindRecord b : r.bindings.values()) {
+                for (ConnectionRecord c : b.connections) {
+                    if (c.caller == null || !c.caller.equals(self)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /** Explicit force-stop/uninstall also cancels a service waiting for its retry timer. */
     void stopPackage(String packageName) {
         List<ServiceRecord> stopped = new ArrayList<>();
