@@ -1,9 +1,12 @@
 /* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
 package gesher.services;
 
+import android.content.Context;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioTrack;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.util.Collection;
 import java.util.List;
@@ -17,12 +20,14 @@ import java.util.function.IntSupplier;
 /** Actual Windows ART/JNI/engine contract. Run with GESHER_AUDIO=null; no endpoint is required. */
 public final class AudioStateContractTest {
     private static int checks;
+    private static Context context;
     private static void check(boolean value, String reason) {
         if (!value) throw new AssertionError(reason);
         checks++;
     }
     private static AudioTrack track(boolean isStatic, boolean floats) {
         return new AudioTrack.Builder()
+                .setContext(context)
                 .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
                 .setAudioFormat(new AudioFormat.Builder().setSampleRate(8000)
@@ -186,6 +191,19 @@ public final class AudioStateContractTest {
         Class<?> services = Class.forName("com.gesher.server.Services");
         Object registry = services.getMethod("create", Collection.class).invoke(null, List.of());
         services.getMethod("installInProcess", Map.class).invoke(null, registry);
+        // A standalone DEX has no installed Application from which AudioTrack can infer
+        // attribution. Use the same real system Context as the other framework fixtures;
+        // all playback calls still compile against and use the public SDK.
+        Class<?> threadType = Class.forName("android.app.ActivityThread");
+        Constructor<?> constructor = threadType.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        Object thread = constructor.newInstance();
+        Method create = Class.forName("android.app.ContextImpl")
+                .getDeclaredMethod("createSystemContext", threadType);
+        create.setAccessible(true);
+        context = (Context) create.invoke(null, thread);
+        check(context.getAttributionSource() != null, "Real context supplies playback attribution");
+        check(context.getDeviceId() == Context.DEVICE_ID_DEFAULT, "Default playback device");
         priming();
         interrupts();
         stopPriming();
