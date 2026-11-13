@@ -52,10 +52,20 @@ index 35f42f0..5c2e0de 100644
    // page-table move.
    static constexpr size_t kLinearAllocPoolSize = 1 * GB;
 diff --git a/runtime/gc/collector/mark_compact.cc b/runtime/gc/collector/mark_compact.cc
-index c93b4ea..02411e4 100644
+index c93b4ea..3ad357e 100644
 --- a/runtime/gc/collector/mark_compact.cc
 +++ b/runtime/gc/collector/mark_compact.cc
-@@ -4376,6 +4376,17 @@ void MarkCompact::CompactionPause() {
+@@ -4235,6 +4235,9 @@ void MarkCompact::CompactionPause() {
+     // involves fetching object size.
+     // TODO: We can reduce the time spent on this in a pause by performing one
+     // round of this concurrently prior to the pause.
++#if defined(_WIN32)
++    pre_compact_end_ = bump_pointer_space_->End();
++#endif
+     UpdateMovingSpaceBlackAllocations();
+     // Iterate over the allocation_stack_, for every object in the non-moving
+     // space:
+@@ -4376,6 +4379,17 @@ void MarkCompact::CompactionPause() {
    // fallback mode
    if (uffd_ == kFallbackMode) {
      CompactMovingSpace<kFallbackMode>(nullptr);
@@ -73,7 +83,7 @@ index c93b4ea..02411e4 100644
  
      int32_t freed_bytes = black_objs_slide_diff_;
      bump_pointer_space_->RecordFree(freed_objects_, freed_bytes);
-@@ -4431,6 +4442,23 @@ void MarkCompact::KernelPreparation() {
+@@ -4431,6 +4445,25 @@ void MarkCompact::KernelPreparation() {
      RegisterUffd(moving_space_begin, moving_space_size);
    }
  
@@ -81,10 +91,12 @@ index c93b4ea..02411e4 100644
 +  if (uffd_ == kFallbackMode) {
 +    // Gesher: Windows cannot move pages, so mremap copies them, and copying
 +    // the whole capacity touched every page of both spaces (hundreds of MB of
-+    // working set) on each GC. Objects lie in [Begin, End) only: move those,
-+    // and zero the rest of the moving space as the move would have.
-+    size_t used = RoundUp(static_cast<size_t>(bump_pointer_space_->End() - moving_space_begin),
-+                          gPageSize);
++    // working set) on each GC. Objects lie below the pre-compact end only
++    // (End() is already the post-compact end here): move those, and zero the
++    // rest of the moving space as the move would have.
++    DCHECK(pre_compact_end_ != nullptr);
++    size_t used = RoundUp(static_cast<size_t>(pre_compact_end_ - moving_space_begin), gPageSize);
++    used = std::min(used, moving_space_size);
 +    if (used > 0) {
 +      KernelPrepareRangeForUffd(moving_space_begin, from_space_begin_, used);
 +    }
@@ -97,3 +109,19 @@ index c93b4ea..02411e4 100644
    KernelPrepareRangeForUffd(moving_space_begin, from_space_begin_, moving_space_size);
  
    if (IsValidFd(uffd_)) {
+diff --git a/runtime/gc/collector/mark_compact.h b/runtime/gc/collector/mark_compact.h
+index 7c89fc5..1cbb5af 100644
+--- a/runtime/gc/collector/mark_compact.h
++++ b/runtime/gc/collector/mark_compact.h
+@@ -1056,6 +1056,11 @@ class MarkCompact final : public GarbageCollector {
+   void* prev_black_dense_end_;
+   void* prev_black_allocations_begin_;
+   void* prev_moving_space_end_at_compaction_;
++#if defined(_WIN32)
++  // Gesher: the moving space's end before UpdateMovingSpaceBlackAllocations()
++  // sets it to the post-compact end: compaction reads from-space up to here.
++  uint8_t* pre_compact_end_ = nullptr;
++#endif
+   bool prev_gc_young_;
+   bool prev_gc_performed_compaction_;
+   // Timestamp when the read-barrier is enabled
