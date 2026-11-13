@@ -132,6 +132,8 @@ public final class CodecLifecycleContractTest {
     }
 
     public static void main(String[] args) throws Exception {
+        // Standalone ART callers need the framework natives used by MediaCodec's Trace calls.
+        System.loadLibrary("android_runtime");
         ordinaryLifecycle();
         retireBlockedCall(false, true);
         retireBlockedCall(true, true);

@@ -235,8 +235,11 @@ wake pending input/output waits. Old dequeue/flush operations cannot consume or
 reset a restarted codec's buffers. The unsynchronized `thread.joinable()` flush
 predicate is removed. AOSP MediaCodec loads `media_jni` itself and permits a
 synchronous constructor without a current/main Looper; its public fixture needs
-no fabricated Context. Native callbacks enqueue Handler messages rather than
-invoking application callbacks inline on the worker.
+no fabricated Context. The standalone ART entrypoint also loads `android_runtime`
+before calling MediaCodec: its Java dequeue methods use `Trace`, whose natives
+are registered by that library. Normal app startup already performs this load.
+Native callbacks enqueue Handler messages rather than invoking application
+callbacks inline on the worker.
 
 ## Local validation and independent QA
 
@@ -288,6 +291,13 @@ requires Codec's `native=true` marker, plus real `timerfd_windows_test.exe` and
 Existing guest fixtures now cover timer syscalls for both x86-64 and translated
 ARM64. Exact published-head run links/outcomes are recorded in the PR after CI
 execution; local tests do not establish those results.
+
+The first Windows run of this branch exposed the fixture's missing Trace-native
+bootstrap before its first dequeue assertion. The standalone entrypoint was
+corrected to load `android_runtime`, matching normal app startup. Network,
+WebMessagePort, timerfd and QueueSurface lifecycle gates already passed on both
+Windows versions in that run. The complete suite is rerun at the corrected head;
+the initial failed run is not presented as final success.
 
 ## Remaining work
 
