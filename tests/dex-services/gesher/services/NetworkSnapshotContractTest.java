@@ -238,6 +238,13 @@ public final class NetworkSnapshotContractTest {
         check(first.hashCode() == addressMetadata.hashCode(), "Address metadata does not change equal snapshot hash");
         check(!first.getLinkAddresses().get(0).equals(addressMetadata.getLinkAddresses().get(0)),
                 "LinkAddress itself still distinguishes prefix/flags/scope");
+        // AOSP calls its address helper with (target, this). Distinct prefixes can
+        // repeat an IP in getAddresses(); preserve the pinned asymmetric edge case.
+        LinkProperties duplicateIps = new LinkProperties(), distinctIps = new LinkProperties();
+        duplicateIps.setLinkAddresses(List.of(address("192.0.2.1", 24), address("192.0.2.1", 16)));
+        distinctIps.setLinkAddresses(List.of(address("192.0.2.1", 24), address("192.0.2.2", 24)));
+        check(duplicateIps.equals(distinctIps), "Pinned address comparison uses target contains receiver");
+        check(!distinctIps.equals(duplicateIps), "Pinned duplicate-address comparison direction is retained");
         check(first.equals(first) && !first.equals(null) && !first.equals("other"), "Equality basic contract");
         for (int i = 0; i < 13; i++) {
             LinkProperties changed = copy(first);

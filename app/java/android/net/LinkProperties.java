@@ -374,7 +374,9 @@ public final class LinkProperties implements Parcelable {
         return Objects.equals(mIfaceName, lp.mIfaceName)
                 // Android's LinkProperties equality compares IP addresses here;
                 // LinkAddress's own equality additionally includes prefix/flags/scope.
-                && sameElements(getAddresses(), lp.getAddresses()) && sameElements(mDnses, lp.mDnses)
+                // Its helper receives (target, this). Preserve that direction even
+                // for duplicate IPs with different prefixes, where AOSP is asymmetric.
+                && sameElements(lp.getAddresses(), getAddresses()) && sameElements(mDnses, lp.mDnses)
                 && sameElements(mValidatedPrivateDnses, lp.mValidatedPrivateDnses)
                 && mUsePrivateDns == lp.mUsePrivateDns
                 && Objects.equals(mPrivateDnsServerName, lp.mPrivateDnsServerName)
