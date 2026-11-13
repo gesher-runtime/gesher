@@ -7,8 +7,9 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * One WebView2 controller (compat/webview/webview_host.h): the natives of
  * libgesher_webview_bridge.so (compat/webview/webview_jni.cc).
- * Every method posts its work to the process's WebView thread and returns; what WebView2
- * reports comes back on that thread through {@link Client} (docs/webview.md).
+ * Work is posted to the process's WebView thread; what WebView2 reports comes back on
+ * that thread through {@link Client} (docs/webview.md). {@link #shutdownIdle} waits for
+ * the thread to release its native resources and terminate.
  */
 public final class WebView2Host {
     /** Event types, as webview_host.h's {@code Event}. */
@@ -92,6 +93,8 @@ public final class WebView2Host {
     private static final Object sLock = new Object();
     private static Boolean sLoaded;
     private static String sLoadError;
+    private static boolean sClosing;
+    private static boolean sClosed;
 
     /** Loads the matching shared bridge once; false when it is missing. */
     public static boolean load() {
@@ -169,8 +172,12 @@ public final class WebView2Host {
 
     /** A new host, parked (hidden) until {@link #setBounds} gives it a parent window. */
     public static WebView2Host create(Client client, double scale, int background) {
-        if (!load()) return null;
-        WebView2Host host = new WebView2Host(client);
+        WebView2Host host;
+        synchronized (sLock) {
+            if (sClosing || sClosed || !load()) return null;
+            host = new WebView2Host(client);
+        }
+        // Native admission is authoritative if shutdown races this submission.
         host.mHandle = nCreate(host, 0, scale, background);
         return host.mHandle != 0 ? host : null;
     }
@@ -370,33 +377,72 @@ public final class WebView2Host {
         return id;
     }
 
-    /** Returns false when WebView2 is unavailable (the callback is not called). */
+    private interface GlobalSubmission {
+        boolean submit(long callbackId);
+    }
+
+    private static boolean submitGlobal(GlobalCallback callback, GlobalSubmission submission) {
+        long id;
+        synchronized (sLock) {
+            if (sClosing || sClosed || !load()) return false;
+            id = register(callback);
+        }
+        // Startup may wait; native admission rejects a concurrent closure.
+        boolean accepted = false;
+        try {
+            accepted = submission.submit(id);
+            return accepted;
+        } finally {
+            if (!accepted) sGlobal.remove(id);
+        }
+    }
+
+    /** Returns false when unavailable or closing; a rejected callback is not called. */
     public static boolean setCookie(String url, String name, String value, String domain,
             String path, double expires, boolean secure, boolean httpOnly,
             GlobalCallback callback) {
-        if (!load()) return false;
-        nSetCookie(url, name, value, domain, path, expires, secure, httpOnly,
-                register(callback));
-        return true;
+        return submitGlobal(callback, id -> nSetCookie(url, name, value, domain, path,
+                expires, secure, httpOnly, id));
     }
 
     public static boolean getCookies(String url, GlobalCallback callback) {
-        if (!load()) return false;
-        nGetCookies(url, register(callback));
-        return true;
+        return submitGlobal(callback, id -> nGetCookies(url, id));
     }
 
     /** which: 1 all, 2 session cookies. */
     public static boolean deleteCookies(int which, GlobalCallback callback) {
-        if (!load()) return false;
-        nDeleteCookies(which, register(callback));
-        return true;
+        return submitGlobal(callback, id -> nDeleteCookies(which, id));
     }
 
     public static boolean clearBrowsingData(int kinds, GlobalCallback callback) {
-        if (!load()) return false;
-        nClearBrowsingData(kinds, register(callback));
-        return true;
+        return submitGlobal(callback, id -> nClearBrowsingData(kinds, id));
+    }
+
+    /**
+     * Closes an idle backend and waits at most timeoutMillis (1..0xfffffffe) for its
+     * native thread to terminate. Live or pending hosts, an invalid timeout, the owner
+     * thread and concurrent shutdown calls are refused without starting closure.
+     * Once closure starts, new hosts and global requests remain rejected, including
+     * after a timeout. A later call can finish waiting; repeated completed shutdowns
+     * succeed. False reports refusal, timeout or a native cleanup failure.
+     */
+    public static boolean shutdownIdle(long timeoutMillis) {
+        if (timeoutMillis <= 0 || timeoutMillis > 0xfffffffeL) return false;
+        synchronized (sLock) {
+            if (sClosing || !load()) return false;
+            sClosing = true;
+        }
+        // An exceptional native exit must not reopen admission after possible closure.
+        int result = 2;
+        try {
+            result = nShutdownIdle(timeoutMillis);
+            return result == 1;
+        } finally {
+            synchronized (sLock) {
+                if (result != 0) sClosed = true;
+                sClosing = false;
+            }
+        }
     }
 
     // ---- Called by the natives, on the WebView thread ----
@@ -436,6 +482,7 @@ public final class WebView2Host {
     private static native String nLoaderKind();
     private static native void nConfigure(String userData, String args);
     private static native boolean nSetProxyArguments(String args);
+    private static native int nShutdownIdle(long timeoutMillis);
     private static native long nCreate(WebView2Host peer, long parent, double scale,
             int background);
     private static native void nDestroy(long h);
@@ -476,9 +523,9 @@ public final class WebView2Host {
             String headers, byte[] body);
     private static native void nCompleteDialog(long h, long id, boolean accept, String text);
     private static native void nCapturePreview(long h, long callbackId);
-    private static native void nSetCookie(String url, String name, String value, String domain,
+    private static native boolean nSetCookie(String url, String name, String value, String domain,
             String path, double expires, boolean secure, boolean httpOnly, long callbackId);
-    private static native void nGetCookies(String url, long callbackId);
-    private static native void nDeleteCookies(int which, long callbackId);
-    private static native void nClearBrowsingData(int kinds, long callbackId);
+    private static native boolean nGetCookies(String url, long callbackId);
+    private static native boolean nDeleteCookies(int which, long callbackId);
+    private static native boolean nClearBrowsingData(int kinds, long callbackId);
 }

@@ -45,6 +45,15 @@ JNIEnv* Env() {
   return env;
 }
 
+// Host calls this on the WebView thread after its final COM cleanup.
+bool DetachWebViewThread() {
+  if (g_vm == nullptr) return false;
+  JNIEnv* env = nullptr;
+  jint status = g_vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+  if (status == JNI_EDETACHED) return true;
+  return status == JNI_OK && g_vm->DetachCurrentThread() == JNI_OK;
+}
+
 std::wstring Str(JNIEnv* env, jstring s) {
   if (s == nullptr) return std::wstring();
   jsize n = env->GetStringLength(s);
@@ -190,13 +199,21 @@ jboolean JNICALL WebView2Host_setProxyArguments(JNIEnv* env, jclass, jstring arg
   return Host::SetProxyArguments(Str(env, args)) ? JNI_TRUE : JNI_FALSE;
 }
 
+jint JNICALL WebView2Host_shutdownIdle(JNIEnv*, jclass, jlong timeout_ms) {
+  if (timeout_ms <= 0 || timeout_ms > 0xfffffffeLL) return 0;
+  return Host::ShutdownIdle(static_cast<uint32_t>(timeout_ms), &DetachWebViewThread);
+}
+
 jlong JNICALL WebView2Host_create(JNIEnv* env, jclass, jobject peer, jlong parent, jdouble scale,
                                   jint background) {
   HostOptions options;
   options.parent = Hwnd(parent);
   options.scale = scale > 0 ? scale : 1.0;
   options.background = static_cast<uint32_t>(background);
-  return reinterpret_cast<jlong>(Host::Create(new JavaListener(env, peer), options));
+  auto* listener = new JavaListener(env, peer);
+  Host* host = Host::Create(listener, options);
+  if (host == nullptr) listener->OnDestroyed();
+  return reinterpret_cast<jlong>(host);
 }
 
 void JNICALL WebView2Host_destroy(JNIEnv*, jclass, jlong h) { Get(h)->Destroy(); }
@@ -380,7 +397,7 @@ void JNICALL WebView2Host_capturePreview(JNIEnv*, jclass, jlong h, jlong cb) {
   Get(h)->CapturePreview(cb);
 }
 
-void JNICALL WebView2Host_setCookie(JNIEnv* env, jclass, jstring url, jstring name, jstring value,
+jboolean JNICALL WebView2Host_setCookie(JNIEnv* env, jclass, jstring url, jstring name, jstring value,
                                     jstring domain, jstring path, jdouble expires,
                                     jboolean secure, jboolean http_only, jlong cb) {
   Host::Cookie c;
@@ -391,19 +408,19 @@ void JNICALL WebView2Host_setCookie(JNIEnv* env, jclass, jstring url, jstring na
   c.expires = expires;
   c.secure = secure == JNI_TRUE;
   c.http_only = http_only == JNI_TRUE;
-  Host::SetCookie(Str(env, url), c, cb);
+  return Host::SetCookie(Str(env, url), c, cb) ? JNI_TRUE : JNI_FALSE;
 }
 
-void JNICALL WebView2Host_getCookies(JNIEnv* env, jclass, jstring url, jlong cb) {
-  Host::GetCookies(Str(env, url), cb);
+jboolean JNICALL WebView2Host_getCookies(JNIEnv* env, jclass, jstring url, jlong cb) {
+  return Host::GetCookies(Str(env, url), cb) ? JNI_TRUE : JNI_FALSE;
 }
 
-void JNICALL WebView2Host_deleteCookies(JNIEnv*, jclass, jint which, jlong cb) {
-  Host::DeleteCookies(which, cb);
+jboolean JNICALL WebView2Host_deleteCookies(JNIEnv*, jclass, jint which, jlong cb) {
+  return Host::DeleteCookies(which, cb) ? JNI_TRUE : JNI_FALSE;
 }
 
-void JNICALL WebView2Host_clearBrowsingData(JNIEnv*, jclass, jint kinds, jlong cb) {
-  Host::ClearBrowsingData(kinds, cb);
+jboolean JNICALL WebView2Host_clearBrowsingData(JNIEnv*, jclass, jint kinds, jlong cb) {
+  return Host::ClearBrowsingData(kinds, cb) ? JNI_TRUE : JNI_FALSE;
 }
 
 const JNINativeMethod kMethods[] = {
@@ -413,6 +430,7 @@ const JNINativeMethod kMethods[] = {
      reinterpret_cast<void*>(&WebView2Host_configure)},
     {"nSetProxyArguments", "(Ljava/lang/String;)Z",
      reinterpret_cast<void*>(&WebView2Host_setProxyArguments)},
+    {"nShutdownIdle", "(J)I", reinterpret_cast<void*>(&WebView2Host_shutdownIdle)},
     {"nCreate", "(Lcom/gesher/app/webview/WebView2Host;JDI)J",
      reinterpret_cast<void*>(&WebView2Host_create)},
     {"nDestroy", "(J)V", reinterpret_cast<void*>(&WebView2Host_destroy)},
@@ -459,11 +477,11 @@ const JNINativeMethod kMethods[] = {
     {"nCapturePreview", "(JJ)V", reinterpret_cast<void*>(&WebView2Host_capturePreview)},
     {"nSetCookie",
      "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;"
-     "Ljava/lang/String;DZZJ)V",
+     "Ljava/lang/String;DZZJ)Z",
      reinterpret_cast<void*>(&WebView2Host_setCookie)},
-    {"nGetCookies", "(Ljava/lang/String;J)V", reinterpret_cast<void*>(&WebView2Host_getCookies)},
-    {"nDeleteCookies", "(IJ)V", reinterpret_cast<void*>(&WebView2Host_deleteCookies)},
-    {"nClearBrowsingData", "(IJ)V", reinterpret_cast<void*>(&WebView2Host_clearBrowsingData)},
+    {"nGetCookies", "(Ljava/lang/String;J)Z", reinterpret_cast<void*>(&WebView2Host_getCookies)},
+    {"nDeleteCookies", "(IJ)Z", reinterpret_cast<void*>(&WebView2Host_deleteCookies)},
+    {"nClearBrowsingData", "(IJ)Z", reinterpret_cast<void*>(&WebView2Host_clearBrowsingData)},
 };
 
 }  // namespace
