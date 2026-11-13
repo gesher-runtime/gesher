@@ -284,6 +284,51 @@ public final class SystemBindingCleanupTest {
         System.out.println("SystemBindingCleanupTest: registered broadcasts refresh live process activity and reject retired targets");
     }
 
+    /** Pending work becomes recent use before readiness removes its queue reservation. */
+    private static void pendingAttachActivity(Object apk) throws Exception {
+        Harness h = new Harness(apk);
+        Field ready = field(h.processType, "ready");
+        Field lastActive = field(h.processType, "lastActive");
+        Field exiting = field(h.processType, "exiting");
+        ready.setBoolean(h.app, false);
+        field(h.processType, "spawned").setBoolean(h.app, true);
+        Object providers = field(h.amType, "mProviders").get(h.am);
+        Object broadcasts = field(h.amType, "mBroadcasts").get(h.am);
+        List<?> pending = (List<?>) field(h.atmType, "mPendingWork").get(h.atm);
+        final long idleMs = 3_600_000L;
+        java.util.concurrent.atomic.AtomicInteger deliveries =
+                new java.util.concurrent.atomic.AtomicInteger();
+        java.util.function.Consumer<Object> work = process -> {
+            require(process == h.app && !Thread.holdsLock(h.services)
+                            && !Thread.holdsLock(broadcasts) && !Thread.holdsLock(h.atm)
+                            && !Thread.holdsLock(providers),
+                    "Pending attach callback used the wrong process or ran under a controller lock");
+            try {
+                require(pending.isEmpty(), "Pending callback was not removed before dispatch");
+                // Interleave a real sweep after the queue reservation is gone, before
+                // the callback establishes a service record or other lasting work.
+                method(h.atmType, "reapIdleProcesses", long.class).invoke(h.atm, idleMs);
+                require(!exiting.getBoolean(h.app) && h.thread.exits == 0,
+                        "The idle reaper retired a process while attached work was admitted");
+            } catch (Exception failure) {
+                throw new AssertionError("Pending attach activity regression", failure);
+            }
+            deliveries.incrementAndGet();
+        };
+        method(h.atmType, "withProcess", String.class, String.class, String.class,
+                java.util.function.Consumer.class).invoke(h.atm, h.owner, h.owner,
+                        "pending attach activity regression", work);
+        require(deliveries.get() == 0 && pending.size() == 1,
+                "Unready process work was not retained for attachment");
+        // Model a slow bindApplication without sleeps or requiring a long host uptime.
+        lastActive.setLong(h.app, android.os.SystemClock.uptimeMillis() - idleMs - 1);
+        long beforeAttach = android.os.SystemClock.uptimeMillis();
+        method(h.atmType, "finishAttachApplication", int.class).invoke(h.atm, h.appPid);
+        require(deliveries.get() == 1 && lastActive.getLong(h.app) >= beforeAttach,
+                "Queued work did not receive a fresh attachment activity stamp");
+        System.out.println("SystemBindingCleanupTest: queued attach work receives idle grace before dispatch");
+    }
+
     /** Concurrent uses must retain the newest stamp regardless of write order. */
     private static void activityClock(Object apk) throws Exception {
         Harness h = new Harness(apk);
@@ -337,6 +382,7 @@ public final class SystemBindingCleanupTest {
         sync(apk);
         selfBinding(apk);
         registeredBroadcast(apk);
+        pendingAttachActivity(apk);
         activityClock(apk);
         System.out.println("SystemBindingCleanupTest all passed");
     }

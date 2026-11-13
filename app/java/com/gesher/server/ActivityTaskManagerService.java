@@ -1917,6 +1917,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             app = processByPid(pid);
             if (app == null) return;
+            app.markActive(SystemClock.uptimeMillis());
             app.ready = true;
             for (ActivityRecord r : app.activities) {
                 if (r.state == State.INITIALIZING && r.waitingFor == null) launch.add(r);
