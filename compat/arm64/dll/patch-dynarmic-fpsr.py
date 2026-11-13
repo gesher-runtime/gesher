@@ -315,6 +315,8 @@ MONITOR_H_NEW = """    void ClearProcessor(size_t processor_id);
     /// a store-exclusive clears the matching reservations among those. Slots
     /// leaving the range are unmarked. For callback (non-inline) exclusives.
     void SetActiveProcessorCount(size_t count);
+    /// Read a reservation under the same lock as ReadAndMark/CheckAndClear.
+    VAddr GetProcessorReservation(size_t processor_id);
 """
 MONITOR_H_FIELD_OLD = """    std::vector<Vector> exclusive_values;
 """
@@ -354,6 +356,13 @@ void ExclusiveMonitor::SetActiveProcessorCount(size_t count) {
     }
     active_processor_count = count;
     Unlock();
+}
+
+VAddr ExclusiveMonitor::GetProcessorReservation(size_t processor_id) {
+    Lock();
+    const VAddr address = exclusive_addresses[processor_id];
+    Unlock();
+    return address;
 }
 """
 MONITOR_REPLACEMENTS = [(MONITOR_SCAN_OLD, MONITOR_SCAN_NEW)]

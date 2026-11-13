@@ -19,6 +19,7 @@
 //    with an Android-style "Fatal signal" report (never a hang).
 
 #include "translator.h"
+#include "guest_counter.h"
 #include <gesher/arm64_va_list.h>
 
 #include <windows.h>
@@ -41,7 +42,6 @@
 #include "dynarmic/interface/A64/a64.h"
 #include "dynarmic/interface/A64/config.h"
 #include "dynarmic/interface/exclusive_monitor.h"
-#include "dynarmic/backend/x64/exclusive_monitor_friend.h"
 
 namespace A64 = Dynarmic::A64;
 
@@ -316,7 +316,7 @@ void SignalEvent() {  // SEV: every PE's event register
   }
 }
 
-// The QPC counter as CNTPCT_EL0 (CNTFRQ_EL0 is set to its frequency).
+// QPC timing for WFE and the guest counter; guest_counter.h preserves its ABI.
 uint64_t QpcFrequency() {
   static const uint64_t f = [] {
     LARGE_INTEGER v;
@@ -581,7 +581,7 @@ class Env final : public A64::UserCallbacks {
       }
       conf.unsafe_optimizations = false;
       conf.wall_clock_cntpct = true;
-      if (QpcFrequency() <= 0xFFFFFFFFu) conf.cntfrq_el0 = static_cast<uint32_t>(QpcFrequency());
+      conf.cntfrq_el0 = GuestCounterFrequency(QpcFrequency());
       // Fastmem: the guest shares the host address space, so a guest access
       // is generated inline as a host access at [0 + vaddr] (all 64 bits),
       // not a callback. A fault there is a guest fault (the vectored handler
@@ -752,21 +752,23 @@ class Env final : public A64::UserCallbacks {
 
   void AddTicks(std::uint64_t) override {}
   std::uint64_t GetTicksRemaining() override { return static_cast<uint64_t>(-1) / 2; }
-  // MRS CNTPCT_EL0: a real, monotonic count at CNTFRQ_EL0 (it was always 0, so
-  // a guest waiting for it to advance spun forever).
-  std::uint64_t GetCNTPCT() override { return QpcNow(); }
+  // MRS CNTPCT_EL0: a real, monotonic count at the advertised CNTFRQ_EL0.
+  // Scale only when the host QPC frequency does not fit that 32-bit register.
+  std::uint64_t GetCNTPCT() override {
+    return GuestCounterValue(QpcNow(), QpcFrequency());
+  }
 
   // WFE (see WFE / SEV above). Returns when there is an event, or after a
   // bounded poll or block: the guest re-checks its condition after every WFE,
   // as it must on hardware.
   void WaitForEvent(uint64_t pc) {
-    const volatile uint64_t* slot = Dynarmic::GetExclusiveMonitorAddressPointer(
-        &Monitor(), ids_[depth_ > 0 ? depth_ - 1 : 0]);
+    const size_t id = ids_[depth_ > 0 ? depth_ - 1 : 0];
     auto event = [&](uint64_t reserved, uint64_t sevs) {
-      return *slot != reserved || g_sev_count.load(std::memory_order_seq_cst) != sevs;
+      return Monitor().GetProcessorReservation(id) != reserved ||
+             g_sev_count.load(std::memory_order_seq_cst) != sevs;
     };
     const uint64_t sevs = g_sev_count.load(std::memory_order_seq_cst);
-    const uint64_t reserved = *slot;
+    const uint64_t reserved = Monitor().GetProcessorReservation(id);
     if (event_ || sevs != seen_sevs_ || reserved == kNoReservation) {
       event_ = false;
       seen_sevs_ = sevs;

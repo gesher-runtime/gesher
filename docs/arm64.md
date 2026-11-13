@@ -80,6 +80,8 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
   (WaitOnAddress's 1 ms timeout is 1-16 ms at the default timer resolution).
   YIELD is a pause.
   `MRS CNTPCT_EL0` reads QPC with CNTFRQ_EL0 at its frequency (it read 0).
+  If that frequency exceeds CNTFRQ_EL0's 32 bits, both use a 1 GHz scale;
+  conversion uses a 128-bit intermediate so long-running hosts do not overflow.
 
 - **Thread reuse**: the Env of an exited guest thread (its Jits with their
   translated code, guest stack and TLS block) is pooled, at most 8
