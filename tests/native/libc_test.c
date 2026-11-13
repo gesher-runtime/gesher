@@ -51,9 +51,7 @@ static void check_str(const char* what, const char* got, const char* want) {
   }
 }
 
-#if defined(__x86_64__)
 #include "timerfd_syscall_test.inc"
-#endif
 #include "tgnet_event_loop_test.inc"
 #include "epoll_nested_test.inc"
 #include "allocation_test.inc"
@@ -652,9 +650,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_sendfile_contracts();
   test_freopen_mode_contracts();
   test_statvfs_contracts();
-#if defined(__x86_64__)
   test_timerfd_syscalls();
-#endif
   test_strings();
   test_ctype_table();
   test_urandom_stdio();
