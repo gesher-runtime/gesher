@@ -33,6 +33,10 @@ Full design: [docs/architecture.md](docs/architecture.md).
 
 ## Compatibility
 
+The [lifecycle contract audit](docs/research/android-lifecycle-contracts-2026-11-13.md)
+maps the runtime, records a fresh SDK inventory, and repairs network callbacks,
+message-port ownership, timers and media lifetimes with independent QA.
+
 Android compatibility is partial. Apps can still fail on missing module APIs,
 native imports or backend behavior. The
 [current compatibility audit](docs/research/android-compatibility-audit-2026-11-12.md)

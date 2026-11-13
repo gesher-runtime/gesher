@@ -223,6 +223,7 @@ add_executable(media_input_surface_callback_test
 target_include_directories(media_input_surface_callback_test PRIVATE
   "${CMAKE_SOURCE_DIR}" "${AOSP_DIR}/libnativehelper/include_jni"
   "${AOSP_DIR}/frameworks/base/core/jni/include")
+# Only the fixture throws a callback exception to check capture cleanup.
 target_compile_options(media_input_surface_callback_test PRIVATE
   -Wall -Wextra -Werror -Wno-unused-parameter -fexceptions)
 target_link_libraries(media_input_surface_callback_test PRIVATE hostgraphics pthread)
