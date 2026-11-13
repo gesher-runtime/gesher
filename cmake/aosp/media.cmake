@@ -207,6 +207,13 @@ target_compile_options(media_surface_timestamp_contract_test PRIVATE -Wall -Werr
 target_link_libraries(media_surface_timestamp_contract_test PRIVATE hostgraphics)
 gesher_graphics_cxx(media_surface_timestamp_contract_test)
 
+add_executable(media_surface_geometry_contract_test
+  "${CMAKE_SOURCE_DIR}/tests/media/surface_geometry_contract_test.cc" ${_media}/surface/queue_surface.cc)
+target_include_directories(media_surface_geometry_contract_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_options(media_surface_geometry_contract_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(media_surface_geometry_contract_test PRIVATE hostgraphics gesher_window_surface)
+gesher_graphics_cxx(media_surface_geometry_contract_test)
+
 # The surfaces hwui draws (stage 2, ADR 0051): SurfaceTexture and TextureView's layer,
 # SurfaceView's surface (compat/media/surface), built with hwui (its headers, Skia).
 target_sources(hwui PRIVATE
