@@ -21,6 +21,7 @@ namespace gesher::webview {
 namespace {
 
 constexpr UINT kRunTask = WM_APP + 1;
+constexpr UINT kShutdownTask = WM_APP + 2;
 constexpr wchar_t kTaskClass[] = L"GesherWebViewTasks";
 constexpr wchar_t kContainerClass[] = L"GesherWebView";
 constexpr wchar_t kParkingClass[] = L"GesherWebViewParking";
@@ -30,13 +31,87 @@ constexpr ULONGLONG kBridgeTimeoutMs = 30'000;
 
 // --- The WebView thread ---------------------------------------------------
 
-std::once_flag g_thread_once;
-HWND g_task_window = nullptr;  // a message-only window: posted tasks
-HWND g_parking = nullptr;      // a hidden top-level window: parked containers
+// Never hold this mutex while dispatching callbacks, releasing COM or waiting.
+std::mutex g_lifecycle_mutex;
+enum class ThreadPhase { kRunning, kClosing, kJoined };
+ThreadPhase g_thread_phase = ThreadPhase::kRunning;
+HANDLE g_thread = nullptr;
+HANDLE g_ready = nullptr;
+DWORD g_thread_id = 0;
+HWND g_task_window = nullptr;  // published under g_lifecycle_mutex
+HWND g_parking = nullptr;     // owned by the WebView STA
+HWINEVENTHOOK g_location_hook = nullptr;
+size_t g_public_hosts = 0;
+size_t g_global_operations = 0;
+bool g_cleanup_started = false;
+bool g_cleanup_queued = false;
+bool g_shutdown_ok = false;
+bool g_thread_ready = false;
+bool g_owner_cleanup_ok = false;  // only the WebView STA writes this
+ATOM g_task_class = 0, g_container_class = 0, g_parking_class = 0;
+bool (*g_thread_exit)() = nullptr;
+
+void TryShutdown();
+
+// The caller retains ownership until after unlocking on every rejection.
+bool QueueTaskLocked(std::function<void()>* task) {
+  return g_task_window != nullptr &&
+      PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(task));
+}
+
+void WakeShutdown() {
+  std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+  if (g_thread_phase == ThreadPhase::kClosing && !g_cleanup_started && !g_cleanup_queued &&
+      g_task_window != nullptr && PostMessageW(g_task_window, kShutdownTask, 0, 0)) {
+    g_cleanup_queued = true;
+  }
+}
+
+// This lease survives Destroy until the last environment/controller callback
+// releases Impl. Declared before Impl's COM fields, it is destroyed after them.
+struct PublicHostLease {
+  bool admitted = false;
+  ~PublicHostLease() {
+    if (!admitted) return;
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    --g_public_hosts;
+  }
+};
+
+struct GlobalOperation {
+  bool admitted = false;
+  ~GlobalOperation() {
+    if (!admitted) return;
+    bool wake = false;
+    {
+      std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+      --g_global_operations;
+      wake = g_thread_phase == ThreadPhase::kClosing && g_global_operations == 0;
+    }
+    // Defer teardown until the callback's local COM objects and Invoke frame unwind.
+    if (wake) WakeShutdown();
+  }
+};
+using GlobalWork = std::shared_ptr<GlobalOperation>;
+
+// Owned and consumed on the STA. A retained SDK handler keeps only empty state
+// after completion, so closing does not depend on when the SDK releases it.
+struct GlobalCompletion {
+  explicit GlobalCompletion(const GlobalWork& work) : operation(work) {}
+  GlobalWork operation;
+};
 
 void ReportGlobal(int32_t type, int64_t id, int32_t arg, const std::wstring& a);
 
 LRESULT CALLBACK TaskProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+  if (msg == kShutdownTask) {
+    {
+      std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+      g_cleanup_queued = false;
+    }
+    TryShutdown();
+    return 0;
+  }
   if (msg == kRunTask) {
     auto* fn = reinterpret_cast<std::function<void()>*>(lparam);
     (*fn)();
@@ -63,48 +138,149 @@ LRESULT CALLBACK ContainerProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
 void CALLBACK OnLocationChange(HWINEVENTHOOK, DWORD, HWND hwnd, LONG object, LONG child, DWORD,
                                DWORD);
 
-DWORD WINAPI ThreadMain(void* ready) {
-  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+bool DestroyThreadWindows() {
+  bool ok = true;
+  if (g_location_hook != nullptr) {
+    if (!UnhookWinEvent(g_location_hook)) ok = false;
+    g_location_hook = nullptr;
+  }
+  if (g_parking != nullptr) {
+    if (!DestroyWindow(g_parking)) ok = false;
+    g_parking = nullptr;
+  }
+  HWND tasks;
+  {
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    tasks = g_task_window;
+    g_task_window = nullptr;
+  }
+  if (tasks != nullptr && !DestroyWindow(tasks)) ok = false;
   HINSTANCE instance = GetModuleHandleW(nullptr);
-  WNDCLASSEXW wc = {};
-  wc.cbSize = sizeof(wc);
-  wc.hInstance = instance;
-  wc.lpfnWndProc = TaskProc;
-  wc.lpszClassName = kTaskClass;
-  RegisterClassExW(&wc);
-  wc.lpfnWndProc = ContainerProc;
-  wc.lpszClassName = kContainerClass;
-  wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));  // IDC_ARROW
-  RegisterClassExW(&wc);
-  wc.lpfnWndProc = DefWindowProcW;
-  wc.lpszClassName = kParkingClass;
-  RegisterClassExW(&wc);
-  g_task_window = CreateWindowExW(0, kTaskClass, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
-                                  instance, nullptr);
-  g_parking = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kParkingClass,
-                              L"Gesher WebView (parked)", WS_POPUP | WS_CLIPCHILDREN, -32000,
-                              -32000, 64, 64, nullptr, nullptr, instance, nullptr);
-  // The app windows' moves (for NotifyParentWindowPositionChanged): out of
-  // context, so they come through this thread's message loop.
-  SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr,
-                  OnLocationChange, GetCurrentProcessId(), 0, WINEVENT_OUTOFCONTEXT);
+  if (g_parking_class && !UnregisterClassW(kParkingClass, instance)) ok = false;
+  if (g_container_class && !UnregisterClassW(kContainerClass, instance)) ok = false;
+  if (g_task_class && !UnregisterClassW(kTaskClass, instance)) ok = false;
+  return ok;
+}
+
+DWORD WINAPI ThreadMain(void* ready) {
+  HRESULT apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  HWND tasks = nullptr;
+  if (SUCCEEDED(apartment)) {
+    HINSTANCE instance = GetModuleHandleW(nullptr);
+    WNDCLASSEXW wc = {};
+    wc.cbSize = sizeof(wc);
+    wc.hInstance = instance;
+    wc.lpfnWndProc = TaskProc;
+    wc.lpszClassName = kTaskClass;
+    g_task_class = RegisterClassExW(&wc);
+    wc.lpfnWndProc = ContainerProc;
+    wc.lpszClassName = kContainerClass;
+    wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));  // IDC_ARROW
+    g_container_class = RegisterClassExW(&wc);
+    wc.lpfnWndProc = DefWindowProcW;
+    wc.lpszClassName = kParkingClass;
+    g_parking_class = RegisterClassExW(&wc);
+    tasks = CreateWindowExW(0, kTaskClass, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
+                            instance, nullptr);
+    g_parking = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kParkingClass,
+                                L"Gesher WebView (parked)", WS_POPUP | WS_CLIPCHILDREN, -32000,
+                                -32000, 64, 64, nullptr, nullptr, instance, nullptr);
+    g_location_hook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE,
+        nullptr, OnLocationChange, GetCurrentProcessId(), 0, WINEVENT_OUTOFCONTEXT);
+  }
+  bool ready_ok = SUCCEEDED(apartment) && tasks != nullptr && g_parking != nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    g_task_window = tasks;
+    g_thread_ready = ready_ok;
+  }
   SetEvent(static_cast<HANDLE>(ready));
-  MSG msg;
-  while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-    TranslateMessage(&msg);
-    DispatchMessageW(&msg);
+  if (ready_ok) {
+    // Shutdown may have begun while startup was creating its windows.
+    WakeShutdown();
+    MSG msg;
+    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+    }
+  }
+  bool ok = DestroyThreadWindows() && g_owner_cleanup_ok;
+  if (SUCCEEDED(apartment)) CoUninitialize();
+  bool (*thread_exit)();
+  {
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    thread_exit = g_thread_exit;
+  }
+  // CoUninitialize may dispatch final COM callbacks; detach JNI after it.
+  if (thread_exit != nullptr && !thread_exit()) ok = false;
+  {
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    g_shutdown_ok = ok;
+    g_thread_ready = false;
   }
   return 0;
 }
 
-void EnsureThread() {
-  std::call_once(g_thread_once, [] {
-    HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    HANDLE thread = CreateThread(nullptr, 0, ThreadMain, ready, 0, nullptr);
-    WaitForSingleObject(ready, INFINITE);
-    CloseHandle(ready);
-    if (thread != nullptr) CloseHandle(thread);
-  });
+bool EnsureThread() {
+  HANDLE ready = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    if (g_thread_phase != ThreadPhase::kRunning) return false;
+    if (g_thread == nullptr) {
+      g_ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+      if (g_ready == nullptr) return false;
+      g_thread = CreateThread(nullptr, 0, ThreadMain, g_ready, 0, &g_thread_id);
+      if (g_thread == nullptr) {
+        CloseHandle(g_ready);
+        g_ready = nullptr;
+        return false;
+      }
+    }
+    // Each waiter owns its handle. A concurrent terminal join may close the
+    // globals, but neither this wait nor the thread's SetEvent loses ownership.
+    if (!DuplicateHandle(GetCurrentProcess(), g_ready, GetCurrentProcess(), &ready,
+                         0, FALSE, DUPLICATE_SAME_ACCESS)) return false;
+  }
+  DWORD wait = WaitForSingleObject(ready, INFINITE);
+  CloseHandle(ready);
+  std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+  return wait == WAIT_OBJECT_0 && g_thread_phase == ThreadPhase::kRunning && g_thread_ready;
+}
+
+bool TryPost(std::function<void()> fn) {
+  if (!EnsureThread()) return false;
+  auto task = std::make_unique<std::function<void()>>(std::move(fn));
+  bool accepted = false;
+  {
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    accepted = g_thread_phase == ThreadPhase::kRunning && g_thread_ready &&
+        QueueTaskLocked(task.get());
+    if (accepted) task.release();
+  }
+  return accepted;
+}
+
+bool PostGlobal(std::function<void(const GlobalWork&)> fn) {
+  if (!EnsureThread()) return false;
+  auto operation = std::make_shared<GlobalOperation>();
+  auto task = std::make_unique<std::function<void()>>(
+      [operation, fn = std::move(fn)] { fn(operation); });
+  bool accepted = false;
+  {
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    if (g_thread_phase == ThreadPhase::kRunning && g_thread_ready) {
+      operation->admitted = true;
+      ++g_global_operations;
+      accepted = QueueTaskLocked(task.get());
+      if (accepted) task.release();
+      else {
+        operation->admitted = false;
+        --g_global_operations;
+      }
+    }
+  }
+  // In particular, rejected tasks/captures are not destroyed under the mutex.
+  return accepted;
 }
 
 bool StartsWith(const std::wstring& s, const std::wstring& prefix) {
@@ -260,6 +436,7 @@ void WithEnvironment(std::function<void(ICoreWebView2Environment*, HRESULT)> fn)
 // --- A WebView ---------------------------------------------------------------
 
 struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
+  std::shared_ptr<PublicHostLease> admission;
   Listener* listener = nullptr;
   HostOptions options;
   HWND container = nullptr;
@@ -380,7 +557,7 @@ std::set<Impl*> g_live;  // the WebView thread's: hosts with a controller
 // A logically destroyed view waits for JavaScript to consume its denied XHR
 // response before physically closing its controller. No Java arguments are in XHR.
 std::map<Impl*, std::shared_ptr<Impl>> g_retiring;
-void FinishDestroy(const std::shared_ptr<Impl>& impl);
+bool FinishDestroy(const std::shared_ptr<Impl>& impl);
 std::shared_ptr<Impl> g_service;  // a hidden host for cookies and data, when no WebView exists
 
 // This path is reserved on every origin, including absent/stale capabilities.
@@ -1642,9 +1819,7 @@ void WithCookieManager(int64_t callback_id,
 // --- Host ------------------------------------------------------------------
 
 void PostToWebViewThread(std::function<void()> fn) {
-  EnsureThread();
-  auto* task = new std::function<void()>(std::move(fn));
-  if (!PostMessageW(g_task_window, kRunTask, 0, reinterpret_cast<LPARAM>(task))) delete task;
+  TryPost(std::move(fn));
 }
 
 void Host::Configure(const std::wstring& user_data_folder, const std::wstring& browser_args) {
@@ -1685,17 +1860,36 @@ std::wstring Host::RuntimeVersion(HRESULT* hr) {
 }
 
 Host* Host::Create(Listener* listener, const HostOptions& options) {
+  if (!EnsureThread()) return nullptr;
   auto impl = std::make_shared<Impl>();
+  impl->admission = std::make_shared<PublicHostLease>();
   impl->listener = listener;
   impl->options = options;
-  PostToWebViewThread([impl] { Start(impl); });
-  return new Host(impl);
+  std::unique_ptr<Host> host(new Host(impl));
+  auto task = std::make_unique<std::function<void()>>([impl] { Start(impl); });
+  bool accepted = false;
+  {
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    if (g_thread_phase == ThreadPhase::kRunning && g_thread_ready) {
+      impl->admission->admitted = true;
+      ++g_public_hosts;
+      accepted = QueueTaskLocked(task.get());
+      if (accepted) task.release();
+      else {
+        impl->admission->admitted = false;
+        --g_public_hosts;
+      }
+    }
+  }
+  return accepted ? host.release() : nullptr;
 }
 
 namespace {
 
-void FinishDestroy(const std::shared_ptr<Impl>& impl) {
-    if (impl->destroyed || !impl->bridge_acknowledgments.empty()) return;
+bool FinishDestroy(const std::shared_ptr<Impl>& impl) {
+    if (impl->destroyed) return true;
+    if (!impl->bridge_acknowledgments.empty()) return false;
+    bool ok = true;
     impl->destroyed = true;
     // Bridge deferrals have been denied while the controller was still alive;
     // JavaScript consumed their responses and acknowledged them before this close.
@@ -1719,21 +1913,92 @@ void FinishDestroy(const std::shared_ptr<Impl>& impl) {
     impl->deferred.clear();
     impl->find.Reset();
     g_live.erase(impl.get());
-    if (impl->controller) impl->controller->Close();
+    if (impl->controller && FAILED(impl->controller->Close())) ok = false;
     impl->receivers.clear();
     impl->controller.Reset();
     impl->webview.Reset();
+    impl->env.Reset();
     impl->published_container.store(nullptr);
-    if (impl->container != nullptr) DestroyWindow(impl->container);
+    if (impl->container != nullptr && !DestroyWindow(impl->container)) ok = false;
     impl->container = nullptr;
     impl->pending.clear();
     Listener* listener = impl->listener;
     impl->listener = nullptr;
     if (listener != nullptr) listener->OnDestroyed();
     g_retiring.erase(impl.get());
+    return ok;
+}
+
+void TryShutdown() {
+  // Only the owner STA inspects these registries. Pending public creations also
+  // retain their admission lease until the last callback has released Impl.
+  if (g_controller_busy || !g_controller_queue.empty() || g_env_state == EnvState::kCreating ||
+      !g_env_waiting.empty() || !g_live.empty() || !g_retiring.empty()) return;
+  if (g_service && !g_service->bridge_acknowledgments.empty()) return;
+  {
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    if (g_thread_phase != ThreadPhase::kClosing || g_cleanup_started ||
+        g_global_operations != 0 || g_public_hosts != 0) return;
+    g_cleanup_started = true;
+  }
+  bool ok = true;
+  if (g_service) {
+    g_service->closing = true;
+    g_service->bridge_guarded = false;
+    CancelBridgeRequests(g_service.get());
+    ok = FinishDestroy(g_service);
+    g_service.reset();
+  }
+  g_env.Reset();
+  g_global_callback = nullptr;
+  g_owner_cleanup_ok = ok;
+  PostQuitMessage(0);
 }
 
 }  // namespace
+
+int Host::ShutdownIdle(uint32_t timeout_ms, bool (*thread_exit)()) {
+  if (timeout_ms == 0 || timeout_ms == INFINITE) return 0;
+  ULONGLONG started = GetTickCount64();
+  HANDLE thread = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    if (g_thread != nullptr && GetCurrentThreadId() == g_thread_id &&
+        WaitForSingleObject(g_thread, 0) == WAIT_TIMEOUT) return 0;
+    if (g_thread_phase == ThreadPhase::kJoined) return g_shutdown_ok ? 1 : 3;
+    if (g_thread_phase == ThreadPhase::kRunning && g_public_hosts != 0) return 0;
+    if (g_thread == nullptr) {
+      g_thread_phase = ThreadPhase::kJoined;
+      g_shutdown_ok = true;
+      return 1;
+    }
+    if (!DuplicateHandle(GetCurrentProcess(), g_thread, GetCurrentProcess(), &thread,
+                         0, FALSE, DUPLICATE_SAME_ACCESS)) {
+      return g_thread_phase == ThreadPhase::kRunning ? 0 : 2;
+    }
+    if (g_thread_phase == ThreadPhase::kRunning) {
+      g_thread_phase = ThreadPhase::kClosing;
+      g_thread_exit = thread_exit;
+    }
+  }
+  WakeShutdown();
+  ULONGLONG elapsed = GetTickCount64() - started;
+  DWORD remaining = elapsed >= timeout_ms ? 0 : timeout_ms - static_cast<DWORD>(elapsed);
+  DWORD wait = WaitForSingleObject(thread, remaining);
+  CloseHandle(thread);
+  if (wait != WAIT_OBJECT_0) return 2;
+  std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+  if (g_thread_phase != ThreadPhase::kJoined) {
+    // Waiters own duplicates; startup waiters own duplicate ready events.
+    CloseHandle(g_thread);
+    CloseHandle(g_ready);
+    g_thread = nullptr;
+    g_ready = nullptr;
+    g_thread_id = 0;
+    g_thread_phase = ThreadPhase::kJoined;
+  }
+  return g_shutdown_ok ? 1 : 3;
+}
 
 void Host::Destroy() {
   std::shared_ptr<Impl> impl = std::move(impl_);
@@ -2359,10 +2624,11 @@ void Host::ShowFileDialog(int64_t callback_id, bool multiple, const std::wstring
 
 void Host::SetGlobalCallback(GlobalCallback callback) { g_global_callback = callback; }
 
-void Host::SetCookie(const std::wstring& url, const Cookie& cookie, int64_t callback_id) {
+bool Host::SetCookie(const std::wstring& url, const Cookie& cookie, int64_t callback_id) {
   (void)url;
-  PostToWebViewThread([cookie, callback_id] {
-    WithCookieManager(callback_id, [cookie, callback_id](ICoreWebView2CookieManager* cookies) {
+  return PostGlobal([cookie, callback_id](const GlobalWork& operation) {
+    WithCookieManager(callback_id, [operation, cookie, callback_id](ICoreWebView2CookieManager* cookies) {
+      (void)operation;
       Com<ICoreWebView2Cookie> c;
       HRESULT hr = cookies->CreateCookie(cookie.name.c_str(), cookie.value.c_str(),
                                          cookie.domain.c_str(), cookie.path.c_str(), c.Put());
@@ -2377,13 +2643,16 @@ void Host::SetCookie(const std::wstring& url, const Cookie& cookie, int64_t call
   });
 }
 
-void Host::GetCookies(const std::wstring& url, int64_t callback_id) {
-  PostToWebViewThread([url, callback_id] {
-    WithCookieManager(callback_id, [url, callback_id](ICoreWebView2CookieManager* cookies) {
+bool Host::GetCookies(const std::wstring& url, int64_t callback_id) {
+  return PostGlobal([url, callback_id](const GlobalWork& operation) {
+    WithCookieManager(callback_id, [operation, url, callback_id](ICoreWebView2CookieManager* cookies) {
+      auto pending = std::make_shared<GlobalCompletion>(operation);
       HRESULT hr = cookies->GetCookies(
           url.c_str(),
           GESHER_CALLBACK(ICoreWebView2GetCookiesCompletedHandler,
-                          [callback_id](HRESULT error, ICoreWebView2CookieList* list) -> HRESULT {
+                          [pending, callback_id](HRESULT error, ICoreWebView2CookieList* list) -> HRESULT {
+                            GlobalWork work = std::move(pending->operation);
+                            if (!work) return S_OK;
                             std::wstring out;
                             UINT32 count = 0;
                             if (SUCCEEDED(error) && list != nullptr) list->get_Count(&count);
@@ -2401,25 +2670,39 @@ void Host::GetCookies(const std::wstring& url, int64_t callback_id) {
                             return S_OK;
                           })
               .get());
-      if (FAILED(hr)) ReportGlobal(kGlobalCookies, callback_id, static_cast<int32_t>(hr), L"");
+      if (FAILED(hr)) {
+        GlobalWork work = std::move(pending->operation);
+        if (work) ReportGlobal(kGlobalCookies, callback_id, static_cast<int32_t>(hr), L"");
+      }
     });
   });
 }
 
-void Host::DeleteCookies(int32_t which, int64_t callback_id) {
-  PostToWebViewThread([which, callback_id] {
-    WithCookieManager(callback_id, [which, callback_id](ICoreWebView2CookieManager* cookies) {
+bool Host::DeleteCookies(int32_t which, int64_t callback_id) {
+  return PostGlobal([which, callback_id](const GlobalWork& operation) {
+    WithCookieManager(callback_id, [operation, which, callback_id](ICoreWebView2CookieManager* cookies) {
+      (void)operation;
       if (which != 2) {
         HRESULT hr = cookies->DeleteAllCookies();
         ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(hr), L"");
         return;
       }
-      Com<ICoreWebView2CookieManager> manager(cookies);
+      // Release the retained COM manager before the final operation lease.
+      struct SessionCookies {
+        GlobalWork operation;
+        Com<ICoreWebView2CookieManager> manager;
+      };
+      auto pending = std::make_shared<SessionCookies>();
+      pending->operation = operation;
+      pending->manager = Com<ICoreWebView2CookieManager>(cookies);
       HRESULT hr = cookies->GetCookies(
           L"",
           GESHER_CALLBACK(ICoreWebView2GetCookiesCompletedHandler,
-                          [manager, callback_id](HRESULT error,
+                          [pending, callback_id](HRESULT error,
                                                  ICoreWebView2CookieList* list) -> HRESULT {
+                            GlobalWork work = std::move(pending->operation);
+                            if (!work) return S_OK;
+                            Com<ICoreWebView2CookieManager> manager = std::move(pending->manager);
                             UINT32 count = 0;
                             if (SUCCEEDED(error) && list != nullptr) list->get_Count(&count);
                             for (UINT32 i = 0; i < count; ++i) {
@@ -2430,18 +2713,26 @@ void Host::DeleteCookies(int32_t which, int64_t callback_id) {
                                 manager->DeleteCookie(c.get());
                               }
                             }
+                            manager.Reset();
                             ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(error), L"");
                             return S_OK;
                           })
               .get());
-      if (FAILED(hr)) ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(hr), L"");
+      if (FAILED(hr)) {
+        GlobalWork work = std::move(pending->operation);
+        if (work) {
+          Com<ICoreWebView2CookieManager> manager = std::move(pending->manager);
+          manager.Reset();
+          ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(hr), L"");
+        }
+      }
     });
   });
 }
 
-void Host::ClearBrowsingData(int32_t kinds, int64_t callback_id) {
-  PostToWebViewThread([kinds, callback_id] {
-    WithCoreWebView([kinds, callback_id](ICoreWebView2* wv) {
+bool Host::ClearBrowsingData(int32_t kinds, int64_t callback_id) {
+  return PostGlobal([kinds, callback_id](const GlobalWork& operation) {
+    WithCoreWebView([operation, kinds, callback_id](ICoreWebView2* wv) {
       Com<ICoreWebView2> holder(wv);
       Com<ICoreWebView2_13> wv13;
       Com<ICoreWebView2Profile> profile;
@@ -2451,15 +2742,21 @@ void Host::ClearBrowsingData(int32_t kinds, int64_t callback_id) {
         ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(E_NOINTERFACE), L"");
         return;
       }
+      auto pending = std::make_shared<GlobalCompletion>(operation);
       HRESULT hr = profile2->ClearBrowsingData(
           static_cast<COREWEBVIEW2_BROWSING_DATA_KINDS>(kinds),
           GESHER_CALLBACK(ICoreWebView2ClearBrowsingDataCompletedHandler,
-                          [callback_id](HRESULT error) -> HRESULT {
+                          [pending, callback_id](HRESULT error) -> HRESULT {
+                            GlobalWork work = std::move(pending->operation);
+                            if (!work) return S_OK;
                             ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(error), L"");
                             return S_OK;
                           })
               .get());
-      if (FAILED(hr)) ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(hr), L"");
+      if (FAILED(hr)) {
+        GlobalWork work = std::move(pending->operation);
+        if (work) ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(hr), L"");
+      }
     });
   });
 }
