@@ -660,6 +660,12 @@ final class BroadcastController {
         mCallers = new CallerIdentity(pm, atm);
         mReceiverTimeoutMillis = timeoutMillis;
         mTimeouts.setRemoveOnCancelPolicy(true);
+        DeviceWork.add(this::nextDueElapsed);
+    }
+
+    /** Bounded receiver reservations hold shutdown without restarting the idle clock. */
+    private synchronized long nextDueElapsed() {
+        return mManifest.isEmpty() && mOrdered.isEmpty() ? Long.MAX_VALUE : 0;
     }
 
     Intent registerReceiver(IApplicationThread caller, String callerPackage,
@@ -808,6 +814,12 @@ final class BroadcastController {
         Map<String, List<ManifestDelivery>> batches = new LinkedHashMap<>();
         synchronized (this) {
             if (!sender.acceptance.getAsBoolean()) return ActivityManager.START_CANCELED;
+            registered.removeIf(rl -> mRegistered.get(rl.receiver.asBinder()) != rl || rl.app.exiting
+                    || mAtm.callerProcess(rl.app.pid) != rl.app || mTimedOut.contains(rl.app));
+            // These callbacks use assumeDelivered, so no finishReceiver keeps them in
+            // hasReceivers. Admission still refreshes their normal cached-process grace.
+            long now = SystemClock.uptimeMillis();
+            for (ReceiverList rl : registered) rl.app.markActive(now);
             // Reserve the whole batch before registered callbacks or withProcess can run
             // synchronously. finishReceiver for a fast first receiver must see the rest.
             for (ManifestDelivery delivery : manifest) {

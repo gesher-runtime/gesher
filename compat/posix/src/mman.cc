@@ -639,15 +639,22 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
   }
 
   // The mapping object, executable views from a handle that may execute.
-  // (A private mapping of a file that cannot be reopened so is copied.)
+  // (A private mapping of a file that cannot be reopened so is copied.) A
+  // private mapping without PROT_EXEC gets an executable section too when the
+  // file allows it, so mprotect can add PROT_EXEC later, as on Linux (packers
+  // and protectors mprotect a whole library RWX); else a plain one.
   size_t in_view = in_file;
   HANDLE mapping = nullptr;
   ULONG view_protection = 0;
   HANDLE reopened = nullptr;
-  if (in_view != 0 && exec) {
+  bool exec_section = false;
+  if (in_view != 0 && (exec || !shared)) {
     reopened = ReOpenFile(file, GENERIC_READ | GENERIC_EXECUTE | (shared && write ? GENERIC_WRITE : 0),
                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
-    if (reopened == INVALID_HANDLE_VALUE) {
+    exec_section = reopened != INVALID_HANDLE_VALUE;
+    if (reopened == INVALID_HANDLE_VALUE && !exec) {
+      reopened = nullptr;  // a plain copy-on-write section
+    } else if (reopened == INVALID_HANDLE_VALUE) {
       reopened = nullptr;
       if (shared) {
         errno = EACCES;
@@ -666,7 +673,7 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
                       : (exec ? PAGE_EXECUTE_READ : PAGE_READONLY);
       view_protection = section;
     } else {
-      section = exec ? PAGE_EXECUTE_WRITECOPY : PAGE_WRITECOPY;
+      section = exec_section ? PAGE_EXECUTE_WRITECOPY : PAGE_WRITECOPY;
       view_protection = section;
     }
     mapping = CreateFileMappingW(source, nullptr, section, 0, 0, nullptr);
@@ -710,7 +717,17 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
       VirtualFree(reinterpret_cast<void*>(result), in_view, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
       SplitEntry(s, hole, result + in_view);
     }
-    if (!MapViewInto(mapping, result, in_view, begin, view_protection)) {
+    // A private view that is not writable is mapped so: mapped copy-on-write
+    // it is charged to commit in full until the VirtualProtect below gives
+    // that back (a native library's code, an oat file). An executable
+    // section's view is mapped executable (read-execute, or execute-copy-on-
+    // write if writable): a view first mapped without execute can never get
+    // it, and the VirtualProtect below lowers it to `prot`.
+    ULONG initial = view_protection;
+    if (!shared && !write && (prot & (PROT_READ | PROT_EXEC)) != 0) {
+      initial = exec_section ? PAGE_EXECUTE_READ : PAGE_READONLY;
+    }
+    if (!MapViewInto(mapping, result, in_view, begin, initial)) {
       TRACE("MapViewOfFile3 at %p (0x%zx bytes, offset 0x%llx) failed: %lu\n",
             reinterpret_cast<void*>(result), in_view, static_cast<unsigned long long>(begin),
             GetLastError());
@@ -733,7 +750,7 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
     DWORD protection = PageProtection(prot);
     if (!shared) protection = CopyOnWrite(protection);
     DWORD old;
-    if (protection != view_protection &&
+    if (protection != initial &&
         !VirtualProtect(reinterpret_cast<void*>(result), in_view, protection, &old)) {
       return fail(EACCES);
     }
@@ -1195,12 +1212,19 @@ int mprotect(void* addr, size_t length, int prot) {
   InvalidateSharedAliases(s, reinterpret_cast<uintptr_t>(addr), length);
   const DWORD protection = PageProtection(prot);
   const bool ok = ForEachRun(addr, length, [&](uint8_t* p, size_t n, const MEMORY_BASIC_INFORMATION& info) {
-    // Copy-on-write views stay copy-on-write when made writable.
+    // Copy-on-write views stay copy-on-write when made writable. A private
+    // view mapped read-only (GroupFile) has a read-only AllocationProtect:
+    // the registry says it is private.
     DWORD want = protection;
-    if (info.Type == MEM_MAPPED &&
-        (info.AllocationProtect == PAGE_WRITECOPY ||
-         info.AllocationProtect == PAGE_EXECUTE_WRITECOPY)) {
-      want = CopyOnWrite(want);
+    if (info.Type == MEM_MAPPED) {
+      bool private_view = info.AllocationProtect == PAGE_WRITECOPY ||
+                          info.AllocationProtect == PAGE_EXECUTE_WRITECOPY;
+      if (!private_view) {
+        auto region = FindRegion(s, reinterpret_cast<uintptr_t>(p));
+        private_view = region != s.regions.end() && region->second.kind == Kind::kView &&
+                       !region->second.shared;
+      }
+      if (private_view) want = CopyOnWrite(want);
     }
     // Reserved, not committed: PROT_NONE anonymous memory of ours
     // (AnonymousCommit), or a thread stack's pages below its committed part.
@@ -1232,6 +1256,12 @@ int madvise(void* addr, size_t length, int advice) {
     case MADV_DONTNEED:
     case MADV_FREE:
     case MADV_REMOVE: {
+      // Decommit is a temporary physical state, not a logical PROT_NONE map.
+      // Keep mprotect/mremap/MAP_FIXED from observing or replacing that state
+      // before the recommit restores the mapping's protection. Ordinary loads
+      // still use the lock-free fault retry above while the range is zeroed.
+      State& s = state();
+      std::lock_guard<std::mutex> registry_guard(s.lock);
       // Linux semantics for private anonymous memory: the range reads back as
       // zeros. Decommit + recommit gives exactly that.
       bool ok = ForEachRun(addr, length, [](uint8_t* p, size_t n, const MEMORY_BASIC_INFORMATION& info) {

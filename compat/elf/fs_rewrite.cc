@@ -4,6 +4,7 @@
 
 #include <elf.h>
 
+#include <sys/mman.h>
 #include <windows.h>
 
 #include <algorithm>
@@ -694,6 +695,26 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
     site[0] = 0xCC;  // int3
   };
 
+  // The segments are file-backed views mapped read-execute (elf_loader.cc,
+  // MapSegments): only the pages that get patched become writable (copy-on-
+  // write, so they alone turn private); the loader's final mprotect makes
+  // them read-execute again.
+  std::set<uintptr_t> writable_pages;
+  auto make_writable = [&](uint8_t* site, size_t n) -> bool {
+    constexpr uintptr_t kPage = 0x1000;
+    const uintptr_t first = reinterpret_cast<uintptr_t>(site) & ~(kPage - 1);
+    const uintptr_t last = (reinterpret_cast<uintptr_t>(site) + n - 1) & ~(kPage - 1);
+    for (uintptr_t page = first; page <= last; page += kPage) {
+      if (writable_pages.count(page) != 0) continue;
+      if (mprotect(reinterpret_cast<void*>(page), kPage, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+        if (error) *error = std::string(name) + ": cannot make code writable for the %fs rewrite";
+        return false;
+      }
+      writable_pages.insert(page);
+    }
+    return true;
+  };
+
   auto unsupported = [&](uint8_t* site, const X86Insn& in, const char* reason) {
     std::fprintf(stderr,
                  "gesher elf: %s+0x%llx: %%fs access not rewritten (%s); it aborts if reached\n",
@@ -720,6 +741,8 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
       if (in.map == 0 && in.opcode == 0x8D) continue;  // lea ignores the segment
       if (in.map == 1 && !in.vex && (in.opcode >= 0x18 && in.opcode <= 0x1F)) continue;  // hints/nop
       if (in.map == 1 && !in.vex && in.opcode == 0x0D) continue;  // prefetchw
+      // Every path below changes the instruction's bytes.
+      if (!make_writable(site, in.length)) return false;
       if (in.gs) {
         unsupported(site, in, "both %fs and %gs prefixes");
         continue;

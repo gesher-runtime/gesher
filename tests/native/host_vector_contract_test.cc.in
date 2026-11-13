@@ -11,6 +11,7 @@
 #include <sys/inotify.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/timerfd.h>
 #include <sys/uio.h>
 #include <unistd.h>
 #include <vector>
@@ -22,7 +23,14 @@ using HANDLE = intptr_t;
 #define IOV_MAX 1024
 #endif
 namespace gesher {
-struct EventFd { int native; };
+struct EventFd {
+  // Retain the kernel description independently of the first public fd, just
+  // as a production registry object survives closing one of its aliases.
+  EventFd(int fd, bool only_read = false) : native(::dup(fd)), read_only(only_read) {}
+  ~EventFd() { ::close(native); }
+  int native;
+  bool read_only;
+};
 struct Inotify {};
 struct Epoll {};
 struct Object { std::shared_ptr<EventFd> eventfd; std::shared_ptr<Epoll> epoll; std::shared_ptr<Inotify> inotify; };
@@ -83,7 +91,7 @@ namespace {
 #undef write
 static int adapted_eventfd(unsigned value, int flags) {
   int fd = ::eventfd(value, flags);
-  if (fd >= 0) gesher::objects[fd] = {std::make_shared<gesher::EventFd>(gesher::EventFd{fd}), {}, {}};
+  if (fd >= 0) gesher::objects[fd] = {std::make_shared<gesher::EventFd>(fd), {}, {}};
   return fd;
 }
 static int adapted_epoll_create1(int flags) {
@@ -94,6 +102,14 @@ static int adapted_epoll_create1(int flags) {
 static int adapted_inotify_init1(int flags) {
   int fd = ::inotify_init1(flags);
   if (fd >= 0) gesher::objects[fd] = {{}, {}, std::make_shared<gesher::Inotify>()};
+  return fd;
+}
+static int adapted_timerfd_create() {
+  int fd = ::timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+  // NewReadiness supplies this immutable bit for the production timer registry.
+  // A Linux timer's O_RDWR descriptor also reproduces the writable NUL handle
+  // used by Windows: native access rights alone cannot reject an empty vector.
+  if (fd >= 0) gesher::objects[fd] = {std::make_shared<gesher::EventFd>(fd, true), {}, {}};
   return fd;
 }
 static int adapted_dup(int fd) { int alias = ::dup(fd); if (alias >= 0 && gesher::objects.count(fd)) gesher::objects[alias] = gesher::objects[fd]; return alias; }
@@ -117,6 +133,32 @@ static void check(const char* label, int passed) { ++checked; if (!passed) { ++f
 #undef write
 int main() {
   test_writev_event_contract();
+  int timer = adapted_timerfd_create();
+  check("routing timer created", timer >= 0);
+  if (timer >= 0) {
+    uint64_t tick = 1;
+    iovec zeros[] = {{nullptr, 0}, {nullptr, 0}}, payload[] = {{&tick, sizeof(tick)}};
+    auto check_timer = [&](int fd) {
+      errno = 0;
+      check("timer empty vector rejected", routed_writev(fd, nullptr, 0) == -1 && errno == EINVAL);
+      errno = 0;
+      check("timer zero-length vector rejected", routed_writev(fd, zeros, 1) == -1 && errno == EINVAL);
+      errno = 0;
+      check("timer all-zero vectors rejected", routed_writev(fd, zeros, 2) == -1 && errno == EINVAL);
+      errno = 0;
+      check("timer payload vector rejected", routed_writev(fd, payload, 1) == -1 && errno == EINVAL);
+      errno = 0;
+      check("rejected vectors leave timer unreadable", ::read(fd, &tick, sizeof(tick)) == -1 && errno == EAGAIN);
+    };
+    check_timer(timer);
+    int alias = adapted_dup(timer);
+    check("routing timer alias created", alias >= 0);
+    adapted_close(timer);
+    if (alias >= 0) {
+      check_timer(alias);
+      adapted_close(alias);
+    }
+  }
   int pipefd[2]; check("routing pipe", pipe(pipefd) == 0);
   char a[] = "a", b[] = "b", bytes[2]; iovec iov[] = {{a, 1}, {b, 1}};
   int before_notes = gesher::notified, before_wake = gesher::woke;

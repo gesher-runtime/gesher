@@ -615,9 +615,12 @@ public final class AppShell {
     public static void rememberApkQuietly(String packageName, File apk) {
         try {
             File ico = new File(shellDir(packageName), ICON);
-            if (!ico.isFile()) return;  // no icon of its own: Gesher's, as any other APK
+            // Keep the installed package identity even when it uses Gesher's icon:
+            // a first-launch splash needs that identity after installation completes.
+            String iconPath = ico.isFile() ? Zygote.windowsPath(ico.getPath())
+                    : installDir() + "\\gesher.ico";
             String line = apk.length() + "\t" + apk.lastModified() + "\t"
-                    + Zygote.windowsPath(ico.getPath()) + "\t" + packageName;
+                    + iconPath + "\t" + packageName;
             rewriteApkIcons(null, line);
             Shell.notifyChanged(Zygote.windowsPath(apk.getAbsolutePath()));
         } catch (Throwable t) {
