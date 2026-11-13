@@ -136,3 +136,14 @@ framework and E2E gates, and the extended ARM64 build before PR 14 is merged.
 Its merge tree must match the tested candidate. This review does not establish
 universal APK compatibility, complete Android API coverage, physical device
 qualification or native ARM64 runtime execution.
+
+## Subsequent full-runtime finding
+
+The first combined full CI run `43405125966` passed Windows 2022 but exposed
+one Windows 2025 AAC output-tone failure. Independent analysis reproduced a
+MediaPlayer startup starvation condition with the actual Track and unchanged
+audio analyzer. The bounded priming repair, historical waveform limitation,
+Android reference and added capture retention are documented in
+[the MediaPlayer startup note](media-player-startup-priming-2026-11-13.md).
+The earlier source and focused-test receipts above do not replace the required
+fresh full CI and independent review for that additional repair.
