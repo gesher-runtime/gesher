@@ -381,12 +381,35 @@ bool Initialize() {
   std::lock_guard lock(LocalMutex());
   return Current() != nullptr;
 }
+namespace {
+// The area, its values current (LocalMutex is held). Every log line reads a
+// few properties (log.tag.*): Publish stores the new generation after the
+// values, under the area's mutex, so while the area still has the generation
+// this process decoded, its copy is current without the cross-process mutex.
+Area* Refreshed() {
+  Area* area = Current();
+  if (!area) return nullptr;
+  const auto* header = static_cast<const Header*>(area->view);
+  if (__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE) != area->cached_generation) {
+    MutexLock lock(area->mutex.value);
+    if (!lock.held || !Refresh(area)) return nullptr;
+  }
+  return area;
+}
+}  // namespace
+
+void GetAll(const std::string* names, std::string* values, size_t count) {
+  std::lock_guard local(LocalMutex());
+  Area* area = Refreshed();
+  for (size_t i = 0; i < count; ++i) {
+    auto found = area ? area->values.find(names[i]) : Snapshot::iterator{};
+    values[i] = area && found != area->values.end() ? found->second.text : std::string();
+  }
+}
 bool Get(const std::string& name, std::string* value, uint32_t* serial) {
   std::lock_guard local(LocalMutex());
-  Area* area = Current();
+  Area* area = Refreshed();
   if (!area) return false;
-  MutexLock lock(area->mutex.value);
-  if (!lock.held || !Refresh(area)) return false;
   auto found = area->values.find(name);
   if (found == area->values.end()) return false;
   if (value) *value = found->second.text;
