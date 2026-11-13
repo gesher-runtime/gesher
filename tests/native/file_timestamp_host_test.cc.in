@@ -1,0 +1,503 @@
+// The marked regions are inserted from unchanged production source. Only the
+// Win32/filesystem boundaries and LLP64 field layout are adapted for this host.
+#include <array>
+#include <algorithm>
+#include <cerrno>
+#include <climits>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
+#include <limits>
+#include <list>
+#include <string>
+#include <sys/stat.h>
+
+static int checks, failures;
+static void Check(bool value, const char* name) {
+  ++checks;
+  if (!value) { ++failures; std::fprintf(stderr, "FAIL %s (errno=%d)\n", name, errno); }
+}
+
+namespace host {
+using DWORD = uint32_t;
+using BOOL = int;
+using LONG = int32_t;
+using ULONG = uint32_t;
+using ACCESS_MASK = uint32_t;
+using HMODULE = void*;
+#define WINAPI
+// Android and Win32 both use 64-bit seconds, but Win32 long/nanoseconds is 32-bit.
+struct timespec { int64_t tv_sec; int32_t tv_nsec; };
+struct timeval { int64_t tv_sec; int32_t tv_usec; };
+struct FILETIME { DWORD dwLowDateTime, dwHighDateTime; };
+struct Node { bool directory, link, disk; int target; uint64_t access, modified; };
+struct Handle { int node; bool owned, live; DWORD access; };
+using HANDLE = Handle*;
+struct UNICODE_STRING { uint16_t Length, MaximumLength; wchar_t* Buffer; };
+struct OBJECT_ATTRIBUTES {
+  ULONG Length;
+  HANDLE RootDirectory;
+  UNICODE_STRING* ObjectName;
+  ULONG Attributes;
+  void* SecurityDescriptor;
+  void* SecurityQualityOfService;
+};
+using POBJECT_ATTRIBUTES = OBJECT_ATTRIBUTES*;
+struct IO_STATUS_BLOCK { LONG Status; uintptr_t Information; };
+using PIO_STATUS_BLOCK = IO_STATUS_BLOCK*;
+static constexpr HANDLE INVALID_HANDLE_VALUE = nullptr;
+static constexpr DWORD FILE_WRITE_ATTRIBUTES = 0x100, FILE_SHARE_READ = 1,
+    FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4, OPEN_EXISTING = 3,
+    FILE_FLAG_BACKUP_SEMANTICS = 0x02000000, FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000,
+    FILE_TYPE_DISK = 1, SYNCHRONIZE = 0x00100000,
+    FILE_OPEN_FOR_BACKUP_INTENT = 0x4000, FILE_OPEN_REPARSE_POINT = 0x00200000,
+    FILE_SYNCHRONOUS_IO_NONALERT = 0x20;
+static constexpr uint64_t kNow = 134000000001234567ULL;
+static std::array<Node, 6> nodes;
+static std::list<Handle> handles;
+static std::array<HANDLE, 4> descriptors;
+static DWORD last_error, create_flags, reopen_flags, create_access;
+static int opens, reopens, native_reopens, closes, borrowed_closes, writes, resolves, mapped;
+static int fail_create, fail_reopen, fail_write;
+static bool missing_module, missing_open, missing_status_error;
+
+static HANDLE NewHandle(int node, bool owned, DWORD access) {
+  handles.push_back({node, owned, true, access}); return &handles.back();
+}
+static void Reset() {
+  nodes = {{{false, false, true, -1, 111, 222}, {false, true, true, 0, 333, 444},
+            {false, true, true, -1, 555, 666}, {true, false, true, -1, 777, 888},
+            {true, true, true, 3, 999, 1111}, {false, false, false, -1, 0, 0}}};
+  handles.clear();
+  descriptors = {NewHandle(0, false, 0), NewHandle(3, false, 0),
+                 NewHandle(5, false, 0), NewHandle(1, false, 0)};
+  last_error = create_flags = reopen_flags = create_access = 0;
+  opens = reopens = native_reopens = closes = borrowed_closes = writes = resolves = mapped = 0;
+  fail_create = fail_reopen = fail_write = 0;
+  missing_module = missing_open = missing_status_error = false;
+  errno = 0;
+}
+static DWORD GetLastError() { return last_error; }
+static void SetLastError(DWORD value) { last_error = value; }
+static BOOL CloseHandle(HANDLE handle) {
+  Check(handle && handle->live, "close valid live handle");
+  if (!handle || !handle->live) return 0;
+  if (!handle->owned) ++borrowed_closes;
+  handle->live = false; ++closes;
+  // Cleanup must not replace a previously diagnosed POSIX/Windows failure.
+  errno = EINTR; last_error = 999;
+  return 1;
+}
+static int NodeAt(const std::wstring& path) {
+  if (path == L"file" || path == L"dir/file" || path == L"mapped-file") return 0;
+  if (path == L"link") return 1;
+  if (path == L"dangling") return 2;
+  if (path == L"dir" || path == L"dir/" || path == L".") return 3;
+  if (path == L"dirlink") return 4;
+  return -1;
+}
+static HANDLE CreateFileW(const wchar_t* path, DWORD access, DWORD share, void*,
+                          DWORD disposition, DWORD flags, void*) {
+  ++opens; create_flags = flags; create_access = access;
+  Check(share == (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), "path shares read/write/delete");
+  Check(disposition == OPEN_EXISTING, "timestamp opens existing only");
+  if (fail_create) { last_error = fail_create; return INVALID_HANDLE_VALUE; }
+  int node = NodeAt(path);
+  if (node >= 0 && nodes[node].link && !(flags & FILE_FLAG_OPEN_REPARSE_POINT)) node = nodes[node].target;
+  if (node < 0) { last_error = ENOENT; return INVALID_HANDLE_VALUE; }
+  if (nodes[node].directory && !(flags & FILE_FLAG_BACKUP_SEMANTICS)) {
+    last_error = EACCES; return INVALID_HANDLE_VALUE;
+  }
+  return NewHandle(node, true, access);
+}
+static HANDLE ReOpenFile(HANDLE handle, DWORD access, DWORD share, DWORD flags) {
+  ++reopens; reopen_flags = flags;
+  Check(handle && handle->live, "reopen retains original identity");
+  Check(access == FILE_WRITE_ATTRIBUTES, "reopen asks only for timestamp rights");
+  Check(share == (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), "fd shares read/write/delete");
+  if (fail_reopen) { last_error = fail_reopen; return INVALID_HANDLE_VALUE; }
+  int node = handle->node;
+  // Actual Windows runners reject directory ReOpenFile requests even when the
+  // backup flag is present. Preserve that observed boundary in old-source tests.
+  if (nodes[node].directory) {
+    last_error = EACCES; return INVALID_HANDLE_VALUE;
+  }
+  if (nodes[node].link && !(flags & FILE_FLAG_OPEN_REPARSE_POINT)) node = nodes[node].target;
+  if (node < 0) { last_error = ENOENT; return INVALID_HANDLE_VALUE; }
+  return NewHandle(node, true, access);
+}
+static LONG NtOpenFile(HANDLE* output, ACCESS_MASK access, POBJECT_ATTRIBUTES attributes,
+                        PIO_STATUS_BLOCK io, ULONG share, ULONG options) {
+  ++reopens; ++native_reopens; reopen_flags = options;
+  HANDLE handle = attributes->RootDirectory;
+  Check(handle && handle->live, "native reopen retains the borrowed object");
+  Check(attributes->Length == sizeof(*attributes) && attributes->Attributes == 0 &&
+        attributes->SecurityDescriptor == nullptr && attributes->SecurityQualityOfService == nullptr,
+        "native object attributes are initialized without privilege overrides");
+  Check(attributes->ObjectName && attributes->ObjectName->Length == 0 &&
+        attributes->ObjectName->Buffer && *attributes->ObjectName->Buffer == L'\0',
+        "empty native name reopens the held object without pathname lookup");
+  Check(access == (FILE_WRITE_ATTRIBUTES | SYNCHRONIZE), "native reopen requests timestamp and synchronization rights");
+  Check(share == (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), "native reopen shares read/write/delete");
+  Check(options == (FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT),
+        "native reopen is synchronous and retains directory/reparse identity");
+  if (fail_reopen) return io->Status = -1000 - fail_reopen;
+  *output = NewHandle(handle->node, true, access);
+  return io->Status = 0;
+}
+static ULONG RtlNtStatusToDosError(LONG status) { return -status - 1000; }
+static HMODULE GetModuleHandleW(const wchar_t*) { return missing_module ? nullptr : reinterpret_cast<HMODULE>(1); }
+static void (*GetProcAddress(HMODULE, const char* name))() {
+  if (std::strcmp(name, "NtOpenFile") == 0 && !missing_open)
+    return reinterpret_cast<void(*)()>(NtOpenFile);
+  if (std::strcmp(name, "RtlNtStatusToDosError") == 0 && !missing_status_error)
+    return reinterpret_cast<void(*)()>(RtlNtStatusToDosError);
+  return nullptr;
+}
+static DWORD GetFileType(HANDLE handle) { return nodes[handle->node].disk ? FILE_TYPE_DISK : 3; }
+static uint64_t Ticks(const FILETIME& value) {
+  return (static_cast<uint64_t>(value.dwHighDateTime) << 32) | value.dwLowDateTime;
+}
+static void GetSystemTimePreciseAsFileTime(FILETIME* value) {
+  *value = {static_cast<DWORD>(kNow), static_cast<DWORD>(kNow >> 32)};
+}
+static BOOL SetFileTime(HANDLE handle, const FILETIME* created, const FILETIME* access, const FILETIME* modified) {
+  ++writes;
+  Check(created == nullptr, "creation time remains unchanged");
+  Check(handle->access == FILE_WRITE_ATTRIBUTES || handle->access == (FILE_WRITE_ATTRIBUTES | SYNCHRONIZE),
+        "timestamp write owns requested access");
+  if (fail_write) { last_error = fail_write; return 0; }
+  if (access && Ticks(*access) != 0) nodes[handle->node].access = Ticks(*access);
+  if (modified && Ticks(*modified) != 0) nodes[handle->node].modified = Ticks(*modified);
+  return 1;
+}
+
+namespace gesher {
+enum class PathKind { kFile, kMissing, kVirtual };
+static int FailWithLastError() { errno = static_cast<int>(last_error); return -1; }
+static HANDLE HandleFromFd(int fd) {
+  return fd >= 10 && fd <= 13 && descriptors[fd - 10]->live ? descriptors[fd - 10] : INVALID_HANDLE_VALUE;
+}
+static bool ResolveAt(int fd, const char* path, std::string* result) {
+  ++resolves;
+  if (!path) return errno = EFAULT, false;
+  if (fd == AT_FDCWD || path[0] == '/') { *result = path; return true; }
+  HANDLE handle = HandleFromFd(fd);
+  if (!handle) return errno = EBADF, false;
+  if (!nodes[handle->node].directory) return errno = ENOTDIR, false;
+  *result = "dir/" + std::string(path); return true;
+}
+static PathKind MapPath(const char* path, std::wstring* result) {
+  ++mapped;
+  if (std::strcmp(path, "/dev/missing") == 0) return PathKind::kMissing;
+  if (std::strcmp(path, "/proc/self/status") == 0) return PathKind::kVirtual;
+  if (std::strcmp(path, "/mnt/c/תיקיה/file") == 0) { *result = L"mapped-file"; return PathKind::kFile; }
+  result->assign(path, path + std::strlen(path)); return PathKind::kFile;
+}
+}  // namespace gesher
+using gesher::PathKind;
+int futimens(int fd, const struct timespec times[2]);
+@HOST_TIMESTAMPS@
+}  // namespace host
+
+namespace guest {
+#define BIONIC_SYSV
+using host::timespec;
+struct LinuxTimespec { int64_t tv_sec, tv_nsec; };
+static constexpr int kAtFdcwd = AT_FDCWD;
+static bool AtPath(int fd, const char* path, std::string* result) {
+  return host::gesher::ResolveAt(fd, path, result);
+}
+using host::utimensat;
+using host::futimens;
+@GUEST_TIMESTAMPS@
+}  // namespace guest
+
+namespace filesystem {
+static constexpr int kAtFdcwd = AT_FDCWD;
+static std::string operation, first_path, second_path;
+static int first_fd, second_fd, retained_flags, return_value;
+static uint32_t retained_mode;
+static int Seen(const char* op, const char* a, const char* b = nullptr) {
+  operation = op; first_path = a ? a : "<null>"; second_path = b ? b : "<null>";
+  errno = EACCES; return return_value;
+}
+static int remove(const char* path) { return Seen("remove", path); }
+static int rename(const char* a, const char* b) { return Seen("rename", a, b); }
+static int renameat(int oldfd, const char* a, int newfd, const char* b) {
+  first_fd = oldfd; second_fd = newfd; return Seen("renameat", a, b);
+}
+static int chmod(const char* path, int mode) { retained_mode = static_cast<uint32_t>(mode); return Seen("chmod", path); }
+static int fchmodat(int fd, const char* path, mode_t mode, int flags) {
+  first_fd = fd; retained_mode = mode; retained_flags = flags; return Seen("fchmodat", path);
+}
+// Old-source controls: adapters for the superseded CRT/pre-resolution route.
+static int _chmod(const char* path, int) { return Seen("CRT chmod", path); }
+static constexpr int _S_IREAD = 0400, _S_IWRITE = 0200;
+struct stat { mode_t st_mode; };
+static int stat(const char*, struct stat* out) { out->st_mode = S_IFDIR; return 0; }
+static int Unlink(const char* path) { return Seen("unlink", path); }
+static int Rmdir(const char* path) { return Seen("rmdir", path); }
+static bool AtPath(int, const char* path, std::string* out) { *out = path ? path : "<null>"; return true; }
+static std::wstring Wide(const std::string& text) { return std::wstring(text.begin(), text.end()); }
+static constexpr unsigned MOVEFILE_REPLACE_EXISTING = 1, MOVEFILE_COPY_ALLOWED = 2;
+static int MoveFileExW(const wchar_t*, const wchar_t*, unsigned flags) {
+  operation = "MoveFileExW"; retained_flags = static_cast<int>(flags); return 1;
+}
+@GUEST_FILESYSTEM@
+}  // namespace filesystem
+
+namespace lengthening {
+using DWORD = uint32_t;
+static constexpr size_t MAX_PATH = 260;
+static std::wstring full_path;
+static int calls;
+static bool query_failure, grew;
+static DWORD GetFullPathNameW(const wchar_t*, DWORD capacity, wchar_t* output, void*) {
+  ++calls;
+  if (query_failure) return 0;
+  if (capacity == 0) return static_cast<DWORD>(full_path.size() + 1);
+  if (grew) return capacity + 10;
+  Check(capacity > full_path.size(), "full path buffer includes terminator");
+  std::copy(full_path.begin(), full_path.end(), output);
+  output[full_path.size()] = 0;
+  return static_cast<DWORD>(full_path.size());
+}
+@LENGTHEN@
+static void Run() {
+  calls = 0; query_failure = grew = false;
+  full_path = L"C:\\" + std::wstring(240, L'a') + L"\\relative-name";
+  std::wstring path = L"relative-name";
+  Lengthen(&path);
+  Check(path == L"\\\\?\\" + full_path, "short relative name with long absolute path gets extended syntax");
+  Check(calls == 2, "relative conversion sizes and reads final path");
+  calls = 0; path = L"C:relative-name";
+  Lengthen(&path);
+  Check(path == L"\\\\?\\" + full_path && calls == 2, "drive-relative path also resolves current-directory prefix");
+  calls = 0; path = L"\\\\?\\C:\\already-extended";
+  Lengthen(&path);
+  Check(path == L"\\\\?\\C:\\already-extended" && calls == 0, "existing extended syntax preserved");
+  calls = 0; path = L"C:\\short";
+  Lengthen(&path);
+  Check(path == L"C:\\short" && calls == 0, "short drive-absolute path retains fast path");
+  calls = 0; path = L"\\\\server\\share\\short";
+  Lengthen(&path);
+  Check(path == L"\\\\server\\share\\short" && calls == 0, "short UNC path retains fast path");
+  calls = 0; full_path = L"C:\\short\\file"; path = L"file";
+  Lengthen(&path);
+  Check(path == L"file" && calls == 1, "short fully resolved relative name stays ordinary");
+  calls = 0; full_path = L"\\\\server\\share\\" + std::wstring(250, L'a'); path = L"relative";
+  Lengthen(&path);
+  Check(path == L"\\\\?\\UNC\\" + full_path.substr(2), "relative path on long UNC current directory uses UNC prefix");
+  calls = 0; query_failure = true; path = L"unchanged";
+  Lengthen(&path);
+  Check(path == L"unchanged", "path resolution failure preserves original path");
+  query_failure = false; grew = true; path = L"unchanged";
+  Lengthen(&path);
+  Check(path == L"unchanged", "growth beyond sized buffer is not accepted as a path");
+}
+}  // namespace lengthening
+
+static host::timespec ordinary[2] = {{1700000000, 123456789}, {1700000001, 987654321}};
+static uint64_t Expected(int64_t seconds, int32_t ns) {
+  return static_cast<uint64_t>(static_cast<__int128>(seconds) * 10000000 + 116444736000000000LL + ns / 100);
+}
+static void Conversion() {
+  using namespace host;
+  using host::timespec;
+  using host::timeval;
+  using host::utimensat;
+  using host::futimens;
+  for (const int64_t sec : {-1LL, 0LL, 2147483648LL, 4102444800LL}) {
+    Reset(); timespec times[2] = {{sec, 123456789}, {sec + 1, 987654321}};
+    Check(utimensat(AT_FDCWD, "file", times, 0) == 0, "ordinary/signed/post-2038 timestamp succeeds");
+    Check(nodes[0].access == Expected(sec, 123456789) && nodes[0].modified == Expected(sec + 1, 987654321),
+          "FILETIME seconds and 100ns truncation are exact");
+    Check(borrowed_closes == 0 && opens + reopens == closes, "all temporary timestamp handles close");
+  }
+  for (const timespec value : {timespec{LLONG_MAX, 0}, timespec{LLONG_MIN, 0},
+                              timespec{-11644473600LL, 0}, timespec{-11644473600LL, 99},
+                              timespec{-11644473601LL, 999999999}}) {
+    Reset(); timespec times[2] = {value, {1, 0}};
+    Check(utimensat(AT_FDCWD, "file", times, 0) == -1 && errno == EOVERFLOW,
+          "unrepresentable/sentinel timestamp rejected without signed overflow");
+    Check(writes == 0 && nodes[0].access == 111, "invalid time does not partially update");
+  }
+  Reset(); timespec first_tick[2] = {{-11644473600LL, 100}, {0, UTIME_OMIT}};
+  Check(utimensat(AT_FDCWD, "file", first_tick, 0) == 0 && nodes[0].access == 1 && nodes[0].modified == 222,
+        "first representable non-sentinel FILETIME");
+  Reset(); timespec max_tick[2] = {{910692730085LL, 477580799}, {0, UTIME_OMIT}};
+  Check(utimensat(AT_FDCWD, "file", max_tick, 0) == 0 && nodes[0].access == LLONG_MAX,
+        "largest supported signed NT timestamp");
+  max_tick[0].tv_nsec = 477580800;
+  Check(utimensat(AT_FDCWD, "file", max_tick, 0) == -1 && errno == EOVERFLOW,
+        "one 100ns tick past supported range rejected");
+  Reset(); timespec omitted[2] = {{LLONG_MAX, UTIME_NOW}, {LLONG_MIN, UTIME_OMIT}};
+  Check(utimensat(AT_FDCWD, "file", omitted, 0) == 0 && nodes[0].access == kNow && nodes[0].modified == 222,
+        "NOW and OMIT ignore seconds");
+  Reset(); Check(utimensat(AT_FDCWD, "file", nullptr, 0) == 0 && nodes[0].access == kNow && nodes[0].modified == kNow,
+                 "null timestamps use the same current snapshot");
+}
+
+static void NoFollow() {
+  using namespace host;
+  using host::timespec;
+  using host::timeval;
+  using host::utimensat;
+  using host::futimens;
+  Reset(); Check(utimensat(AT_FDCWD, "link", ordinary, AT_SYMLINK_NOFOLLOW) == 0, "nofollow succeeds");
+  Check(nodes[0].modified == 222 && nodes[1].modified == Expected(1700000001, 987654321), "nofollow changes only link");
+  Check((create_flags & FILE_FLAG_OPEN_REPARSE_POINT) && (reopen_flags & FILE_FLAG_OPEN_REPARSE_POINT),
+        "path and writable handle retain nofollow");
+  Reset(); Check(utimensat(AT_FDCWD, "link", ordinary, 0) == 0, "follow succeeds");
+  Check(nodes[1].modified == 444 && nodes[0].modified == Expected(1700000001, 987654321), "follow changes only target");
+  Reset(); Check(utimensat(AT_FDCWD, "dangling", ordinary, AT_SYMLINK_NOFOLLOW) == 0, "dangling nofollow succeeds");
+  Check(nodes[2].modified == Expected(1700000001, 987654321), "dangling link updated");
+  Reset(); Check(utimensat(AT_FDCWD, "dangling", ordinary, 0) == -1 && errno == ENOENT, "follow dangling is missing");
+  Reset(); timeval tv[2] = {{10, 123456}, {20, 987654}};
+  Check(lutimes("link", tv) == 0 && nodes[1].modified == Expected(20, 987654000) && nodes[0].modified == 222,
+        "lutimes preserves nofollow and microseconds");
+  Reset(); Check(utimensat(AT_FDCWD, "dirlink", ordinary, AT_SYMLINK_NOFOLLOW) == 0 &&
+                 nodes[4].modified == Expected(1700000001, 987654321) && nodes[3].modified == 888,
+                 "directory symlink changes its own time and preserves target");
+}
+
+static void Ordering() {
+  using namespace host;
+  using host::timespec;
+  using host::timeval;
+  using host::utimensat;
+  using host::futimens;
+  Reset(); timespec omit[2] = {{LLONG_MAX, UTIME_OMIT}, {LLONG_MIN, UTIME_OMIT}};
+  Check(utimensat(-1, "missing", omit, 0x40000000) == 0, "both OMIT bypass fd/path/flags");
+  Check(utimensat(AT_FDCWD, nullptr, omit, 0x40000000) == 0 && futimens(-1, omit) == 0, "both OMIT bypass null and bad fd");
+  Check(opens + reopens + resolves + mapped + writes == 0, "both OMIT does no backend work");
+  timespec invalid[2] = {{0, -1}, {0, 0}};
+  Reset(); Check(utimensat(AT_FDCWD, "missing", invalid, 0) == -1 && errno == ENOENT, "missing path precedes bad nsec");
+  Reset(); Check(utimensat(AT_FDCWD, "file", invalid, 0) == -1 && errno == EINVAL, "existing path rejects bad nsec");
+  Check(reopens == 0 && writes == 0, "nsec validated before writable reopen");
+  Reset(); Check(utimensat(AT_FDCWD, "missing", invalid, 0x4000) == -1 && errno == EINVAL && opens == 0,
+                 "unknown flags precede lookup");
+  Check(utimensat(AT_FDCWD, nullptr, ordinary, 0) == -1 && errno == EFAULT, "null AT_FDCWD rejected");
+  Check(utimensat(10, nullptr, ordinary, AT_EMPTY_PATH) == -1 && errno == EINVAL, "null fd route rejects all flags");
+  Check(utimensat(11, "", ordinary, 0) == -1 && errno == ENOENT, "empty directory path needs flag");
+  Check(utimensat(10, "", ordinary, 0) == -1 && errno == ENOENT, "empty file path needs flag before fd kind");
+  Check(utimensat(-1, "", ordinary, 0) == -1 && errno == ENOENT, "empty invalid fd still needs flag");
+  Check(utimensat(10, "child", ordinary, 0) == -1 && errno == ENOTDIR, "relative ordinary fd rejected");
+  timeval invalid_us[2] = {{0, 1000000}, {0, 0}};
+  Check(utimes("missing", invalid_us) == -1 && errno == EINVAL, "timeval invalid before path");
+  Check(lutimes("missing", invalid_us) == -1 && errno == EINVAL, "lutimes invalid microseconds before path");
+  Reset(); timespec second_invalid[2] = {{1, 0}, {1, 1000000000}};
+  Check(utimensat(AT_FDCWD, "file", second_invalid, 0) == -1 && errno == EINVAL && writes == 0,
+        "invalid second timestamp cannot update first");
+}
+
+static void Descriptors() {
+  using namespace host;
+  using host::timespec;
+  using host::timeval;
+  using host::utimensat;
+  using host::futimens;
+  Reset(); Check(futimens(10, ordinary) == 0 && descriptors[0]->live, "read-only fd timestamp preserves borrowed handle");
+  Check(borrowed_closes == 0 && reopens == closes, "only reopened fd handle closes");
+  Reset(); Check(futimens(11, ordinary) == 0 && native_reopens == 1 &&
+                 (reopen_flags & FILE_OPEN_FOR_BACKUP_INTENT), "directory metadata uses native backup reopen");
+  Reset(); Check(utimensat(10, "", ordinary, AT_EMPTY_PATH) == 0, "empty path names ordinary fd");
+  Check(nodes[0].modified == Expected(1700000001, 987654321), "empty path updates fd object");
+  Reset(); Check(utimensat(AT_FDCWD, "", ordinary, AT_EMPTY_PATH) == 0 && nodes[3].modified == Expected(1700000001, 987654321),
+                 "empty AT_FDCWD means current directory");
+  Reset(); Check(utimensat(11, "file", ordinary, 0) == 0, "directory relative timestamp");
+  Reset(); Check(utimensat(AT_FDCWD, "/mnt/c/תיקיה/file", ordinary, 0) == 0 && mapped == 1,
+                 "mapped Unicode path reaches shared path adapter");
+  timespec invalid[2] = {{0, -1}, {0, 0}};
+  Reset(); Check(futimens(12, invalid) == -1 && errno == EINVAL, "non-disk fd still validates nanoseconds");
+  Check(futimens(-1, invalid) == -1 && errno == EBADF, "bad fd precedes nanoseconds");
+  Reset(); fail_reopen = EACCES;
+  Check(futimens(10, ordinary) == -1 && errno == EACCES && GetLastError() == EACCES &&
+        closes == 0 && descriptors[0]->live, "failed reopen maps native status and retains borrowed fd");
+  Reset(); fail_reopen = EACCES;
+  Check(futimens(11, ordinary) == -1 && errno == EACCES && GetLastError() == EACCES &&
+        closes == 0 && writes == 0 && descriptors[1]->live,
+        "denied directory metadata preserves access checks and borrowed handle");
+  Reset(); missing_module = true;
+  Check(futimens(11, ordinary) == -1 && errno == EOPNOTSUPP && reopens == 0 &&
+        closes == 0 && descriptors[1]->live, "missing native module cannot consume directory handle");
+  Reset(); missing_open = true;
+  Check(futimens(11, ordinary) == -1 && errno == EOPNOTSUPP && reopens == 0 && writes == 0,
+        "missing native reopen is explicit and does not write");
+  Reset(); missing_status_error = true;
+  Check(futimens(11, ordinary) == -1 && errno == EOPNOTSUPP && reopens == 0 && writes == 0,
+        "missing native status conversion is explicit and does not write");
+  Reset(); fail_write = EIO;
+  Check(futimens(10, ordinary) == -1 && errno == EIO && closes == 1 && borrowed_closes == 0 && GetLastError() == EIO,
+        "fd write failure retains errno and last error through cleanup");
+  Reset(); fail_write = EIO;
+  Check(futimens(11, ordinary) == -1 && errno == EIO && closes == 1 &&
+        borrowed_closes == 0 && descriptors[1]->live && GetLastError() == EIO,
+        "directory write failure closes only the native temporary handle");
+  Reset(); fail_write = EIO;
+  Check(utimensat(AT_FDCWD, "file", ordinary, 0) == -1 && errno == EIO && opens + reopens == closes && GetLastError() == EIO,
+        "path write failure closes all owned handles and retains diagnosis");
+}
+
+static void Guest() {
+  using guest::LinuxTimespec;
+  const int64_t invalid_ns[] = {INT64_MIN, -1, 1000000000LL, INT64_C(1) << 32,
+                              (INT64_C(1) << 32) + UTIME_OMIT, (INT64_C(1) << 32) + UTIME_NOW, INT64_MAX};
+  for (int64_t ns : invalid_ns) {
+    host::Reset(); LinuxTimespec times[2] = {{0, ns}, {0, UTIME_OMIT}};
+    Check(guest::Utimensat(AT_FDCWD, "file", times, 0) == -1 && errno == EINVAL, "guest invalid full-width nsec remains invalid");
+    Check(host::writes == 0, "invalid guest timestamp cannot reach update");
+    Check(guest::Utimensat(AT_FDCWD, "missing", times, 0) == -1 && errno == ENOENT, "guest validation preserves lookup order");
+    Check(guest::Futimens(10, times) == -1 && errno == EINVAL, "guest fd invalid nsec");
+  }
+  host::Reset(); LinuxTimespec omit[2] = {{INT64_MAX, UTIME_OMIT}, {INT64_MIN, UTIME_OMIT}};
+  Check(guest::Utimensat(-1, "missing", omit, 0x4000) == 0 && host::resolves == 0, "guest delegates both OMIT without resolving");
+  LinuxTimespec ordinary_guest[2] = {{1700000000, 123456789}, {1700000001, 987654321}};
+  Check(guest::Utimensat(10, "", ordinary_guest, AT_EMPTY_PATH) == 0, "guest retains fd empty-path identity");
+  Check(guest::Utimensat(10, nullptr, ordinary_guest, AT_SYMLINK_NOFOLLOW) == -1 && errno == EINVAL,
+        "guest retains null-path flags");
+  Check(guest::Utimensat(AT_FDCWD, "link", ordinary_guest, AT_SYMLINK_NOFOLLOW) == 0 &&
+        host::nodes[1].modified == Expected(1700000001, 987654321), "guest nofollow routes to link");
+  host::Reset(); Check(guest::Futimens(11, nullptr) == 0, "guest null times directory route");
+}
+
+static void Delegation() {
+  using namespace filesystem;
+  const char* path = "/mnt/c/קובץ ארוך";
+  return_value = -1; operation.clear();
+  Check(Chmod(path, 0100640) == -1 && operation == "chmod" && first_path == path && retained_mode == 0100640 && errno == EACCES,
+        "guest chmod preserves UTF-8 path, full mode and host errno");
+  operation.clear();
+  Check(Fchmodat(73, "relative", 0600, AT_SYMLINK_NOFOLLOW | 0x4000) == -1 && operation == "fchmodat" && first_fd == 73 &&
+        first_path == "relative" && retained_flags == (AT_SYMLINK_NOFOLLOW | 0x4000) && retained_mode == 0600,
+        "guest fchmodat retains fd, flags and relative name");
+  operation.clear(); return_value = 0;
+  Check(Remove("directory-symlink") == 0 && operation == "remove" && first_path == "directory-symlink",
+        "guest remove uses host nofollow classification");
+  operation.clear(); return_value = -1;
+  Check(Rename(path, "/mnt/d/target") == -1 && operation == "rename" && first_path == path && second_path == "/mnt/d/target",
+        "guest rename never enables cross-volume copying");
+  operation.clear();
+  Check(Renameat(73, "old", 74, "new") == -1 && operation == "renameat" && first_fd == 73 && second_fd == 74 &&
+        first_path == "old" && second_path == "new", "guest renameat preserves both descriptor-relative paths");
+  operation.clear();
+  Check(Remove(nullptr) == -1 && operation == "remove" && first_path == "<null>", "guest remove delegates null validation");
+}
+
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  const std::string group = argv[1];
+  if (group == "conversion") Conversion();
+  else if (group == "nofollow") NoFollow();
+  else if (group == "ordering") Ordering();
+  else if (group == "descriptors") Descriptors();
+  else if (group == "guest") Guest();
+  else if (group == "delegation") Delegation();
+  else if (group == "lengthen") lengthening::Run();
+  else return 2;
+  std::printf("filesystem %s: %d checks, %d failures\n", group.c_str(), checks, failures);
+  return failures ? 1 : 0;
+}

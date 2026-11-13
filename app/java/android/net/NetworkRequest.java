@@ -122,7 +122,7 @@ public class NetworkRequest implements Parcelable {
         }
 
         public Builder clearCapabilities() {
-            for (int c : mCapabilities.getCapabilities()) mCapabilities.removeCapability(c);
+            mCapabilities.clearAll();
             return this;
         }
 

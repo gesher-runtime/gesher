@@ -1,0 +1,94 @@
+// Exact production Publish and timestamp-dispatch case. Only the surrounding
+// Surface/buffer type and monotonic clock are host adapters; Windows runs the
+// complete QueueSurface fixture separately.
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <cstdarg>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <vector>
+
+constexpr int64_t NATIVE_WINDOW_TIMESTAMP_AUTO = std::numeric_limits<int64_t>::min();
+constexpr int SYSTEM_TIME_MONOTONIC = 1;
+constexpr int HAL_PIXEL_FORMAT_RGBX_8888 = 2, HAL_PIXEL_FORMAT_BGRA_8888 = 5;
+constexpr int NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP = 4;
+int64_t clock_value = 1000;
+int64_t systemTime(int) { return clock_value; }
+int checks = 0, failures = 0;
+void Check(bool ok, const char* reason) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL surface host: %s\n", reason); }
+}
+struct SurfaceFrame {
+  int width = 0, height = 0;
+  std::vector<uint32_t> pixels;
+  int64_t timestamp_ns = 0;
+  uint64_t number = 0;
+};
+class QueueSurface {
+ public:
+  struct Buffer {
+    int width = 2, height = 1, stride = 2, format = 1;
+    std::vector<uint32_t> pixels{0xff123456, 0xffabcdef};
+  };
+  std::mutex mutex_;
+  std::shared_ptr<Buffer> buffer_ = std::make_shared<Buffer>();
+  @TIMESTAMP_MEMBER@
+  bool abandoned_ = false;
+  uint64_t frames_ = 0;
+  std::shared_ptr<const SurfaceFrame> latest_;
+  std::function<void()> listener_;
+  void Publish();
+  int Set(int operation, ...) {
+    va_list args;
+    va_start(args, operation);
+    const int result = Dispatch(operation, args);
+    va_end(args);
+    return result;
+  }
+  int Dispatch(int operation, va_list args) {
+    switch (operation) {
+      @TIMESTAMP_DISPATCH@
+      default: return -1;
+    }
+  }
+};
+@PUBLISH@
+
+int main() {
+  QueueSurface surface;
+  int callbacks = 0;
+  surface.listener_ = [&] { ++callbacks; Check(surface.latest_ != nullptr, "listener observes published frame"); };
+  surface.Publish();
+  Check(surface.latest_->timestamp_ns == 1000, "default auto timestamp");
+  Check(surface.Set(NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP, int64_t{0}) == 0, "zero setter dispatch");
+  surface.Publish();
+  Check(surface.latest_->timestamp_ns == 0, "explicit zero remains zero");
+  clock_value = 2000;
+  surface.Publish();
+  Check(surface.latest_->timestamp_ns == 0, "zero timestamp persists");
+  Check(surface.Set(NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP, int64_t{12345}) == 0, "positive setter dispatch");
+  surface.Publish();
+  auto previous = surface.latest_;
+  Check(previous->timestamp_ns == 12345, "explicit positive timestamp");
+  surface.Publish();
+  Check(surface.latest_->timestamp_ns == 12345 && previous->timestamp_ns == 12345,
+        "persistent timestamp and immutable published frame");
+  Check(surface.Set(NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP, NATIVE_WINDOW_TIMESTAMP_AUTO) == 0,
+        "auto sentinel dispatch");
+  surface.Publish();
+  Check(surface.latest_->timestamp_ns == 2000, "sentinel replaced by current clock");
+  clock_value = 3000;
+  surface.Publish();
+  Check(surface.latest_->timestamp_ns == 3000, "auto remains auto for later frames");
+  Check(callbacks == 7 && surface.frames_ == 7, "one frame and notification per publish");
+  Check(surface.latest_->pixels == surface.buffer_->pixels, "pixel publication unchanged");
+  surface.abandoned_ = true;
+  surface.Publish();
+  Check(callbacks == 7, "abandon prevents publication");
+  std::printf("surface timestamp host contracts: %d checks, %d failures\n", checks, failures);
+  return failures != 0;
+}

@@ -124,9 +124,38 @@ std::wstring NtPath(const std::wstring& windows) {
 constexpr unsigned kRenameNoReplace = 1;  // RENAME_NOREPLACE
 [[maybe_unused]] constexpr unsigned kRenameExchange = 2;  // RENAME_EXCHANGE (rejected below)
 
-// rename with Linux's semantics: the new name is replaced atomically, also
-// while it is open; a directory replaces an empty directory; renaming a name
-// onto another name of the same file does nothing.
+// Windows cannot rename across volumes. Check an existing destination directory
+// before the same-volume empty-directory replacement below can remove it. Keep
+// inspection failures nondestructive as well; path spelling/drive letters alone
+// cannot identify a volume when mount points or mapped paths are involved.
+int CheckDirectoryRenameVolume(const BY_HANDLE_FILE_INFORMATION& source,
+                               const std::wstring& target) {
+  HANDLE destination = CreateFileW(target.c_str(), FILE_READ_ATTRIBUTES,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                                    nullptr);
+  if (destination == INVALID_HANDLE_VALUE) {
+    gesher::FailWithLastError();
+    return errno;
+  }
+  BY_HANDLE_FILE_INFORMATION info;
+  int error = 0;
+  if (!GetFileInformationByHandle(destination, &info)) {
+    gesher::FailWithLastError();
+    error = errno;
+  } else if (source.dwVolumeSerialNumber != info.dwVolumeSerialNumber) {
+    error = EXDEV;
+  } else if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+             gesher::IsSymlinkHandle(destination)) {
+    error = ENOTDIR;  // destination changed since its initial attributes query
+  }
+  CloseHandle(destination);
+  return error;
+}
+
+// File replacement uses Windows' atomic POSIX rename, including open targets.
+// Directory replacement retains the existing remove-then-rename approximation;
+// it is not atomic. Renaming onto another name of the same file does nothing.
 int Rename(const char* oldpath, const char* newpath, unsigned flags) {
   if ((flags & ~kRenameNoReplace) != 0) return errno = EINVAL, -1;  // RENAME_EXCHANGE, WHITEOUT
   std::wstring from, to;
@@ -172,10 +201,13 @@ int Rename(const char* oldpath, const char* newpath, unsigned flags) {
         b[a.size()] == L'\\') {
       error = EINVAL;
     } else if (to_dir) {
-      if (!IsEmptyDirectory(to)) {
-        error = ENOTEMPTY;
-      } else if (gesher::PosixDelete(to, true) != 0) {
-        error = errno;  // Windows replaces no directory: the empty one goes first
+      error = CheckDirectoryRenameVolume(info, to);
+      if (error == 0) {
+        if (!IsEmptyDirectory(to)) {
+          error = ENOTEMPTY;
+        } else if (gesher::PosixDelete(to, true) != 0) {
+          error = errno;  // Windows replaces no directory: the empty one goes first
+        }
       }
     }
   }

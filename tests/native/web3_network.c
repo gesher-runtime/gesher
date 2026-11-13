@@ -50,11 +50,17 @@ static int result(int fd, int expected_rcode, int expected_id) {
   uint8_t packet[65535];
   int rcode = -1;
   int size = android_res_nresult(fd, &rcode, packet, sizeof(packet));
-  int ok = size >= 12 && rcode == expected_rcode && (packet[2] & 0x80) &&
-      (expected_id < 0 || ((int)packet[0] << 8 | packet[1]) == expected_id) &&
-      fcntl(fd, F_GETFD) == -1 && errno == EBADF;
-  if (!ok) printf("Web3 DNS result failed: size=%d rcode=%d expected_rcode=%d expected_id=%d revents=%d errno=%d\n",
-                  size, rcode, expected_rcode, expected_id, pending.revents, errno);
+  int packet_ok = size >= 12 && rcode == expected_rcode && (packet[2] & 0x80) &&
+      (expected_id < 0 || ((int)packet[0] << 8 | packet[1]) == expected_id);
+  int descriptor_flags = 0, descriptor_errno = 0;
+  if (packet_ok) {
+    descriptor_flags = fcntl(fd, F_GETFD);
+    descriptor_errno = errno;
+  }
+  int ok = packet_ok && descriptor_flags == -1 && descriptor_errno == EBADF;
+  if (!ok) printf("Web3 DNS result failed: fd=%d size=%d rcode=%d expected_rcode=%d expected_id=%d revents=%d packet_flags=%d descriptor_checked=%d descriptor_flags=%d descriptor_errno=%d errno=%d\n",
+                  fd, size, rcode, expected_rcode, expected_id, pending.revents,
+                  size >= 3 ? packet[2] : -1, packet_ok, descriptor_flags, descriptor_errno, errno);
   return ok;
 }
 
@@ -117,7 +123,14 @@ JNIEXPORT jstring JNICALL Java_com_gesher_web3app_NetActivity_nativeNetworkCheck
   ok = fd >= 0;
   if (!ok) goto done;
   android_res_cancel(fd);
-  ok = fcntl(fd, F_GETFD) == -1 && errno == EBADF;
+  int cancelled_flags = fcntl(fd, F_GETFD);
+  int cancelled_errno = errno;
+  ok = cancelled_flags == -1 && cancelled_errno == EBADF;
+  if (!ok) {
+    printf("Web3 DNS cancellation failed: fd=%d descriptor_flags=%d descriptor_errno=%d\n",
+           fd, cancelled_flags, cancelled_errno);
+    errno = cancelled_errno;
+  }
   fd = -1;
   if (!ok) goto done;
   stage = "invalid query flags/network";

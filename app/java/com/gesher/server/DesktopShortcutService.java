@@ -41,27 +41,34 @@ class DesktopShortcutService extends IShortcutService.Default {
         return result;
     }
     private ShortcutInfo validated(String pkg, ShortcutInfo source) {
+        return validated(pkg, source, false);
+    }
+    private ShortcutInfo validated(String pkg, ShortcutInfo source, boolean forUpdate) {
         Objects.requireNonNull(source, "shortcut");
         if (!pkg.equals(source.getPackage()) || source.getUserId() != 0) throw new SecurityException("Shortcut publisher mismatch");
-        if (source.getId() == null || source.getId().isEmpty() || source.getId().length() > 1024
-                || source.getShortLabel() == null || source.getShortLabel().length() == 0) throw new IllegalArgumentException("Shortcut requires an ID and label");
+        if (source.getId() == null || source.getId().isEmpty() || source.getId().length() > 1024) throw new IllegalArgumentException("Shortcut requires an ID");
+        if ((!forUpdate && source.getShortLabel() == null)
+                || (source.getShortLabel() != null && source.getShortLabel().length() == 0)) throw new IllegalArgumentException("Shortcut requires a label");
         if (source.getActivity() != null && !pkg.equals(source.getActivity().getPackageName())) throw new SecurityException("Shortcut activity belongs to another package");
         Intent[] intents = source.getIntents();
-        if (intents == null || intents.length == 0) throw new IllegalArgumentException("Shortcut requires an intent");
-        for (int i = 0; i < intents.length; i++) intents[i] = AppShell.dynamicIntent(pkg, intents[i]);
+        if ((!forUpdate && intents == null) || (intents != null && intents.length == 0)) throw new IllegalArgumentException("Shortcut requires an intent");
+        if (intents != null) for (int i = 0; i < intents.length; i++) intents[i] = AppShell.dynamicIntent(pkg, intents[i]);
         ShortcutInfo copy = source.clone(ShortcutInfo.CLONE_REMOVE_FOR_CREATOR);
         copy.replaceFlags(ShortcutInfo.FLAG_DYNAMIC);
-        copy.setIntents(intents);
+        if (intents != null) copy.setIntents(intents);
         return copy;
     }
     private List<ShortcutInfo> validated(String pkg, ParceledListSlice values) {
+        return validated(pkg, values, false);
+    }
+    private List<ShortcutInfo> validated(String pkg, ParceledListSlice values, boolean forUpdate) {
         Objects.requireNonNull(values, "shortcuts");
         List<?> list = Objects.requireNonNull(values.getList(), "shortcut list");
         if (list.size() > MAX_SHORTCUTS) throw new IllegalArgumentException("Too many dynamic shortcuts");
         List<ShortcutInfo> result = new ArrayList<>();
         for (Object value : list) {
             if (!(value instanceof ShortcutInfo)) throw new IllegalArgumentException("Invalid shortcut entry");
-            result.add(validated(pkg, (ShortcutInfo)value));
+            result.add(validated(pkg, (ShortcutInfo)value, forUpdate));
         }
         return result;
     }
@@ -106,11 +113,16 @@ class DesktopShortcutService extends IShortcutService.Default {
         return publish(owner,next);
     }
     @Override public synchronized boolean updateShortcuts(String pkg,ParceledListSlice values,int userId) {
-        ApkPackage owner=query(pkg,userId); List<ShortcutInfo> incoming=validated(pkg,values);
+        ApkPackage owner=query(pkg,userId); List<ShortcutInfo> incoming=validated(pkg,values,true);
         LinkedHashMap<String,ShortcutInfo> next=load(owner);
-        for (ShortcutInfo info:incoming) if(next.containsKey(info.getId())) {
-            if(!next.get(info.getId()).isEnabled()) info.addFlags(ShortcutInfo.FLAG_DISABLED);
-            next.put(info.getId(),info);
+        for (ShortcutInfo info:incoming) {
+            ShortcutInfo target=next.get(info.getId());
+            if(target!=null) {
+                // The loaded snapshot is detached from stored state. Android's
+                // merge preserves omitted fields, unset ranks and stored flags.
+                target.copyNonNullFieldsFrom(info);
+                target.setTimestamp(System.currentTimeMillis());
+            }
         }
         return publish(owner,next);
     }

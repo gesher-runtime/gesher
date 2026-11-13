@@ -89,6 +89,7 @@ public final class DynamicShortcutTest {
         long original=Binder.clearCallingIdentity();
         try {
             Binder.restoreCallingIdentity(((long)owner.uid()<<32)|910001);
+            checks += ShortcutUpdateContractTest.contracts(api, pkg);
             denied(()->api.setDynamicShortcuts(other.packageName,new ParceledListSlice<>(Collections.singletonList(info(other.packageName,"foreign","foreign"))),0));
             require(api.setDynamicShortcuts(pkg,new ParceledListSlice<>(Collections.singletonList(first)),0),"valid snapshot failed");
             require(list(api,pkg).size()==1 && list(api,pkg).get(0).isDynamic(),"dynamic state missing");

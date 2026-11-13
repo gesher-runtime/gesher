@@ -40,6 +40,10 @@ records concrete crash-contract repairs, regression coverage and substantial
 remaining work; a successful build or symbol lookup alone does not prove that
 an arbitrary APK will run correctly.
 
+The [compatibility follow-up](docs/research/android-compatibility-followup-2026-11-13.md)
+adds a repository map, exhaustive SDK gap lists, and focused service, filesystem
+and media repairs with independent regression controls and Windows gates.
+
 ## Principles
 
 - **No VM, no emulator.** One Windows process per app.

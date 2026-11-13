@@ -60,6 +60,7 @@ struct ANativeWindow_Buffer {
 };
 extern "C" {
 ANativeWindow* ANativeWindow_fromSurface(JNIEnv* env, jobject surface);
+void ANativeWindow_acquire(ANativeWindow* window);
 void ANativeWindow_release(ANativeWindow* window);
 int32_t ANativeWindow_setBuffersGeometry(ANativeWindow* window, int32_t w, int32_t h, int32_t format);
 int32_t ANativeWindow_lock(ANativeWindow* window, ANativeWindow_Buffer* buffer, ARect* bounds);
@@ -593,7 +594,8 @@ class Codec {
 
   bool ReleaseOutput(int index, bool render, int64_t /*time_ns*/, std::string* error) {
     std::shared_ptr<VideoFrame> frame;
-    ANativeWindow* window = nullptr;
+    std::unique_ptr<ANativeWindow, decltype(&ANativeWindow_release)> window(
+        nullptr, ANativeWindow_release);
     int64_t time_us = 0;
     std::shared_ptr<GlobalRef> reader;
     {
@@ -606,12 +608,17 @@ class Codec {
       s.client = false;
       frame = std::move(s.frame);
       time_us = s.time_us;
-      window = render ? window_ : nullptr;
+      if (render && window_ != nullptr) {
+        // SetSurface can release the codec's reference once mu_ is unlocked.
+        // Hold a separate reference for the complete render operation.
+        ANativeWindow_acquire(window_);
+        window.reset(window_);
+      }
       if (render) reader = reader_;
       cv_.notify_all();
     }
     if (window != nullptr && frame != nullptr) {
-      RenderFrame(window, *frame);
+      RenderFrame(window.get(), *frame);
       if (frame_rendered_) PostFrameRendered(time_us);
     } else if (reader != nullptr && frame != nullptr) {
       DeliverToReader(reader->get(), *frame, time_us);

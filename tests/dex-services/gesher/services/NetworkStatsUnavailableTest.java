@@ -42,8 +42,9 @@ public final class NetworkStatsUnavailableTest {
         catch (RemoteException expected) { failed = true; }
         require(failed, "Device summary returned invented measurements or an incompatible error");
         NetworkStats.Bucket empty = new NetworkStats.Bucket();
-        require(empty.getUid() == -1 && empty.getRxBytes() == 0 && empty.getTxBytes() == 0,
-                "Empty output container has populated measurements");
+        require(empty.getUid() == 0 && empty.getRxBytes() == 0 && empty.getTxBytes() == 0,
+                "Empty output container differs from Android's zero-initialized fields");
+        NetworkStatsBucketContractTest.run();
         require(NetworkStats.class.getConstructors().length == 0, "Unavailable query result is publicly constructible");
         System.out.println("NetworkStatsUnavailableTest all passed: " + checks + " synthetic checks");
     }

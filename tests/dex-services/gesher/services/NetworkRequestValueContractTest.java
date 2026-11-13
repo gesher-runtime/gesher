@@ -39,6 +39,7 @@ public final class NetworkRequestValueContractTest {
     }
     public static void main(String[] args) {
         System.loadLibrary("android_runtime");
+        checks += NetworkRequestClearContractTest.contracts();
         DhcpInfo dhcp = new DhcpInfo();
         dhcp.ipAddress = 0x040200c0; dhcp.gateway = 0x010200c0;
         dhcp.netmask = 0x00ffffff; dhcp.dns1 = 0x350200c0;

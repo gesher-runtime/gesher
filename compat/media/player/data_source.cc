@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <limits>
 
 namespace gesher::media {
 namespace {
@@ -22,8 +23,13 @@ class FdSource : public DataSource {
     if (offset < 0) return -EINVAL;
     if (length_ >= 0) {
       if (offset >= length_) return 0;
-      size = static_cast<size_t>(std::min<int64_t>(static_cast<int64_t>(size), length_ - offset));
+      const uint64_t available = static_cast<uint64_t>(length_ - offset);
+      if (size > available) size = static_cast<size_t>(available);
     }
+    // A failed size query leaves an unbounded source. Its caller-supplied
+    // offset must still fit the physical file offset before we add the base.
+    if (offset > std::numeric_limits<int64_t>::max() - offset_) return -EOVERFLOW;
+    size = std::min(size, static_cast<size_t>(std::numeric_limits<ssize_t>::max()));
     ssize_t n = pread(fd_, data, size, static_cast<off_t>(offset_ + offset));
     return n < 0 ? -errno : n;
   }
@@ -68,9 +74,10 @@ std::unique_ptr<DataSource> OpenFdSource(int fd, int64_t offset, int64_t length,
   }
   int64_t total = FdLength(copy);
   if (offset < 0) offset = 0;
+  if (length >= 0) length = std::min(length, std::numeric_limits<int64_t>::max() - offset);
   if (total >= 0) {
     if (offset > total) offset = total;
-    if (length < 0 || offset + length > total) length = total - offset;
+    if (length < 0 || length > total - offset) length = total - offset;
   }
   return std::make_unique<FdSource>(copy, offset, length);
 }

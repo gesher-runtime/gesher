@@ -19,12 +19,14 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <windows.h>
+#include <winternl.h>
 #include <shellapi.h>
 #include <gesher/font_paths.h>
 #include <gesher/font_environment.h>
 #include <gesher/unc_paths.h>
 
 #include <string>
+#include <limits>
 #include <cstdlib>
 #include <string_view>
 #include <vector>
@@ -113,9 +115,17 @@ bool DrivePath(const char* path, std::wstring* windows) {
 // Paths from MAX_PATH on need the \\?\ form, which takes only full paths
 // with backslashes. (CreateDirectoryW stops 12 characters short of it.)
 void Lengthen(std::wstring* path) {
-  if (path->size() < MAX_PATH - 12 || path->rfind(L"\\\\?\\", 0) == 0) return;
+  if (path->rfind(L"\\\\?\\", 0) == 0) return;
+  const bool drive_absolute = path->size() >= 3 &&
+      (((*path)[0] >= L'A' && (*path)[0] <= L'Z') || ((*path)[0] >= L'a' && (*path)[0] <= L'z')) &&
+      (*path)[1] == L':' && ((*path)[2] == L'\\' || (*path)[2] == L'/');
+  const bool unc_absolute = path->rfind(L"\\\\", 0) == 0 || path->rfind(L"//", 0) == 0;
+  if (path->size() < MAX_PATH - 12 && (drive_absolute || unc_absolute)) return;
+  // A short relative name can already cross MAX_PATH once its current-directory
+  // prefix is included. Resolve its size before deciding that ordinary syntax is
+  // sufficient; waiting for the relative string itself to grow is too late.
   DWORD n = GetFullPathNameW(path->c_str(), 0, nullptr, nullptr);
-  if (n == 0) return;
+  if (n == 0 || (path->size() < MAX_PATH - 12 && n <= MAX_PATH - 12)) return;
   std::wstring full(n, L'\0');
   n = GetFullPathNameW(path->c_str(), n, full.data(), nullptr);
   if (n == 0 || n >= full.size()) return;
@@ -521,10 +531,34 @@ namespace {
 // 100 ns intervals between 1601-01-01 and 1970-01-01.
 constexpr long long kEpochDifference = 116444736000000000LL;
 
+bool BothTimesOmitted(const struct timespec times[2]) {
+  return times != nullptr && times[0].tv_nsec == UTIME_OMIT && times[1].tv_nsec == UTIME_OMIT;
+}
+
+bool ValidTimeNanoseconds(const struct timespec times[2]) {
+  if (times == nullptr) return true;
+  for (int i = 0; i < 2; ++i) {
+    auto ns = times[i].tv_nsec;
+    if (ns != UTIME_NOW && ns != UTIME_OMIT && (ns < 0 || ns >= 1000000000)) {
+      return errno = EINVAL, false;
+    }
+  }
+  return true;
+}
+
+void CloseTimeHandle(HANDLE h) {
+  const int error = errno;
+  const DWORD last = GetLastError();
+  CloseHandle(h);
+  SetLastError(last);
+  errno = error;
+}
+
 // Sets access and modification times (times[0], times[1]) as utimensat
 // does: null means now, as do UTIME_NOW entries; UTIME_OMIT leaves one as
 // it is. The handle needs FILE_WRITE_ATTRIBUTES.
 int SetTimes(HANDLE h, const struct timespec times[2]) {
+  if (!ValidTimeNanoseconds(times)) return -1;
   FILETIME now;
   GetSystemTimePreciseAsFileTime(&now);
   FILETIME values[2];
@@ -536,16 +570,56 @@ int SetTimes(HANDLE h, const struct timespec times[2]) {
     } else if (times[i].tv_nsec == UTIME_OMIT) {
       set[i] = nullptr;
     } else {
-      if (times[i].tv_nsec < 0 || times[i].tv_nsec >= 1000000000) return errno = EINVAL, -1;
-      long long t = static_cast<long long>(times[i].tv_sec) * 10000000 +
-                    times[i].tv_nsec / 100 + kEpochDifference;
-      if (t < 0) return errno = EINVAL, -1;  // before 1601
-      values[i].dwLowDateTime = static_cast<DWORD>(t);
-      values[i].dwHighDateTime = static_cast<DWORD>(static_cast<unsigned long long>(t) >> 32);
+      const __int128 ticks = static_cast<__int128>(times[i].tv_sec) * 10000000 +
+                             times[i].tv_nsec / 100 + kEpochDifference;
+      // Win32's zero FILETIME means "leave unchanged", not the 1601 epoch.
+      // Keep within the signed NT absolute-time range used by our stat layer,
+      // rather than wrapping into a no-change/suppression sentinel.
+      if (ticks <= 0 || ticks > std::numeric_limits<long long>::max()) return errno = EOVERFLOW, -1;
+      const auto value = static_cast<unsigned long long>(ticks);
+      values[i].dwLowDateTime = static_cast<DWORD>(value);
+      values[i].dwHighDateTime = static_cast<DWORD>(value >> 32);
       set[i] = &values[i];
     }
   }
   return SetFileTime(h, nullptr, set[0], set[1]) ? 0 : gesher::FailWithLastError();
+}
+
+// The borrowed handle identifies the object even after a rename/unlink. Validate
+// after lookup, but before requesting write access, as Linux's vfs_utimes does.
+int SetHandleTimes(HANDLE h, const struct timespec times[2]) {
+  if (!ValidTimeNanoseconds(times)) return -1;
+  if (GetFileType(h) != FILE_TYPE_DISK) return 0;  // non-disk metadata is not modelled
+  // ReOpenFile can reject directory objects even with backup semantics. An
+  // empty native name reopens the object identified by h, including a directory
+  // reparse point, without resolving a name that could have been renamed/replaced.
+  using Open = LONG(WINAPI*)(HANDLE*, ACCESS_MASK, POBJECT_ATTRIBUTES,
+                             PIO_STATUS_BLOCK, ULONG, ULONG);
+  using Error = ULONG(WINAPI*)(LONG);
+  HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  if (!ntdll) return errno = EOPNOTSUPP, -1;
+  auto open = reinterpret_cast<Open>(reinterpret_cast<void*>(GetProcAddress(ntdll, "NtOpenFile")));
+  auto error = reinterpret_cast<Error>(reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlNtStatusToDosError")));
+  if (!open || !error) return errno = EOPNOTSUPP, -1;
+  wchar_t empty = L'\0';
+  UNICODE_STRING name{0, sizeof(empty), &empty};
+  OBJECT_ATTRIBUTES attributes{};
+  attributes.Length = sizeof(attributes);
+  attributes.RootDirectory = h;
+  attributes.ObjectName = &name;
+  IO_STATUS_BLOCK io{};
+  HANDLE writable = INVALID_HANDLE_VALUE;
+  LONG status = open(&writable, FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, &attributes, &io,
+                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                     FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT |
+                         FILE_SYNCHRONOUS_IO_NONALERT);
+  if (status < 0) {
+    SetLastError(error(status));
+    return gesher::FailWithLastError();
+  }
+  const int result = SetTimes(writable, times);
+  CloseTimeHandle(writable);
+  return result;
 }
 
 bool ToTimespecs(const struct timeval tv[2], struct timespec ts[2]) {
@@ -559,24 +633,34 @@ bool ToTimespecs(const struct timeval tv[2], struct timespec ts[2]) {
 
 }  // namespace
 
-// Symbolic links are followed even with AT_SYMLINK_NOFOLLOW, as by lstat
-// (stat.cc).
-int utimensat(int dirfd, const char* path, const struct timespec times[2], int) {
-  if (path == nullptr) return futimens(dirfd, times);  // Linux: the fd itself
+int utimensat(int dirfd, const char* path, const struct timespec times[2], int flags) {
+  // Linux returns before inspecting flags, fd or path for this exact no-op.
+  if (BothTimesOmitted(times)) return 0;
+  if (path == nullptr && dirfd != AT_FDCWD) {
+    if (flags != 0) return errno = EINVAL, -1;
+    return futimens(dirfd, times);
+  }
+  if ((flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) != 0) return errno = EINVAL, -1;
+  if (path == nullptr) return errno = EFAULT, -1;
+  if (path[0] == '\0') {
+    if ((flags & AT_EMPTY_PATH) == 0) return errno = ENOENT, -1;
+    if (dirfd != AT_FDCWD) return futimens(dirfd, times);
+    path = ".";
+  }
   std::string resolved;
   if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
   if (resolved.empty()) return errno = ENOENT, -1;
   std::wstring windows;
   switch (gesher::MapPath(resolved.c_str(), &windows)) {
     case PathKind::kFile: {
-      HANDLE h = CreateFileW(windows.c_str(), FILE_WRITE_ATTRIBUTES,
+      HANDLE h = CreateFileW(windows.c_str(), 0,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                             OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+                             OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS |
+                                 ((flags & AT_SYMLINK_NOFOLLOW) != 0 ? FILE_FLAG_OPEN_REPARSE_POINT : 0),
+                             nullptr);
       if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
-      int result = SetTimes(h, times);
-      DWORD error = GetLastError();
-      CloseHandle(h);
-      SetLastError(error);
+      const int result = SetHandleTimes(h, times);
+      CloseTimeHandle(h);
       return result;
     }
     case PathKind::kMissing:
@@ -589,15 +673,10 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int) 
 // Linux lets the owner set times through any fd, a read-only one included,
 // so this works on a second handle with the access it needs.
 int futimens(int fd, const struct timespec times[2]) {
+  if (BothTimesOmitted(times)) return 0;
   HANDLE h = gesher::HandleFromFd(fd);
   if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
-  if (GetFileType(h) != FILE_TYPE_DISK) return 0;  // pipes, sockets, devices
-  HANDLE writable = ReOpenFile(h, FILE_WRITE_ATTRIBUTES,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
-  if (writable == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
-  int result = SetTimes(writable, times);
-  CloseHandle(writable);
-  return result;
+  return SetHandleTimes(h, times);
 }
 
 int utimes(const char* path, const struct timeval tv[2]) {
@@ -606,7 +685,11 @@ int utimes(const char* path, const struct timeval tv[2]) {
   return utimensat(AT_FDCWD, path, tv != nullptr ? ts : nullptr, 0);
 }
 
-int lutimes(const char* path, const struct timeval tv[2]) { return utimes(path, tv); }
+int lutimes(const char* path, const struct timeval tv[2]) {
+  struct timespec ts[2];
+  if (tv != nullptr && !ToTimespecs(tv, ts)) return -1;
+  return utimensat(AT_FDCWD, path, tv != nullptr ? ts : nullptr, AT_SYMLINK_NOFOLLOW);
+}
 
 int futimes(int fd, const struct timeval tv[2]) {
   struct timespec ts[2];

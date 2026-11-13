@@ -87,6 +87,17 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror tests/paths/unc_paths_test.cc -o "$RUNNER_TEMP/gesher-unc-paths"
           "$RUNNER_TEMP/gesher-unc-paths"
 
+      - name: Filesystem metadata and media source ownership contracts
+        run: |
+          python3 tools/test_file_timestamp_contracts.py --sanitize
+          python3 tools/test_directory_rename_contracts.py --sanitize
+          python3 tools/test_media_source_contracts.py --sanitize
+          python3 tools/test_media_http_contracts.py --sanitize
+          python3 tools/test_media_surface_contracts.py --sanitize
+          cc -std=gnu11 -O1 -Wall -Wextra -Werror -DGESHER_FILESYSTEM_REFERENCE_MAIN \
+            tests/native/filesystem_contract_guest.c -o "$RUNNER_TEMP/filesystem-metadata-reference"
+          "$RUNNER_TEMP/filesystem-metadata-reference"
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

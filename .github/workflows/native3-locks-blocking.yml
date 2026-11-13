@@ -63,7 +63,7 @@ jobs:
           set -euo pipefail
           cmake -S . -B out -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
             -DLLVM_MINGW="$GITHUB_WORKSPACE/toolchain/$LLVM_MINGW_NAME"
-          ninja -C out native3_lock_command_worker native3_lock_duplicate_test native3_lock_blocking_worker binderd
+          ninja -C out native3_lock_command_worker native3_lock_duplicate_test native3_lock_blocking_worker binderd filesystem_metadata_host_test
           toolchain/$LLVM_MINGW_NAME/bin/llvm-nm --defined-only out/libgesher_posix.a > fixture/production-symbols.txt
           toolchain/$LLVM_MINGW_NAME/bin/llvm-nm --defined-only out/CMakeFiles/native3_lock_blocking_worker.dir/compat/posix/src/record_lock_registry.cc.obj > fixture/fixture-symbols.txt
           python3 - <<'PY'
@@ -72,7 +72,7 @@ jobs:
           assert 'wait_test_hooks' in Path('fixture/fixture-symbols.txt').read_text()
           print('BLOCKING_HOOK_ISOLATION production=absent fixture_object=present activation=compile-only')
           PY
-          for target in native3_lock_command_worker native3_lock_duplicate_test native3_lock_blocking_worker binderd; do
+          for target in native3_lock_command_worker native3_lock_duplicate_test native3_lock_blocking_worker binderd filesystem_metadata_host_test; do
             cp "out/$target.exe" fixture/
             toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj --coff-imports "fixture/$target.exe" > "fixture/$target.imports.txt"
           done
@@ -91,7 +91,7 @@ jobs:
                      'api-ms-win-crt-environment-l1-1-0.dll', 'api-ms-win-crt-filesystem-l1-1-0.dll',
                      'api-ms-win-crt-time-l1-1-0.dll', 'api-ms-win-crt-process-l1-1-0.dll',
                      'api-ms-win-crt-utility-l1-1-0.dll'}
-          for target in ('native3_lock_command_worker', 'native3_lock_duplicate_test', 'native3_lock_blocking_worker', 'binderd'):
+          for target in ('native3_lock_command_worker', 'native3_lock_duplicate_test', 'native3_lock_blocking_worker', 'binderd', 'filesystem_metadata_host_test'):
               names = re.findall(r'^\s*Name:\s*(\S+)', Path(f'fixture/{target}.imports.txt').read_text(), re.MULTILINE)
               assert names, ('Missing actual PE imports', target)
               assert not (set(name.casefold() for name in names) - allowed), (target, names)
@@ -169,6 +169,7 @@ jobs:
               "$($manifest.run)" -ne $env:GITHUB_RUN_ID -or "$($manifest.attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
               $manifest.source -ne $env:GITHUB_SHA -or $manifest.toolchain_sha256 -ne $env:LLVM_MINGW_SHA256) { throw 'Manifest producer mismatch' }
           $expectedOutputs = @('linux-reference.json', 'native3_lock_command_worker.exe', 'native3_lock_duplicate_test.exe', 'binderd.exe', 'native3_lock_command_worker.imports.txt', 'native3_lock_duplicate_test.imports.txt', 'binderd.imports.txt', 'native3_lock_blocking_worker.exe', 'native3_lock_blocking_worker.imports.txt', 'blocking-linux.json', 'production-symbols.txt', 'fixture-symbols.txt')
+          $expectedOutputs += @('filesystem_metadata_host_test.exe', 'filesystem_metadata_host_test.imports.txt')
           if (@($manifest.files.PSObject.Properties).Count -eq 0 -or
               @(Compare-Object $expectedOutputs @($manifest.outputs.PSObject.Properties.Name)).Count -ne 0) { throw 'Incomplete source/output manifest' }
           foreach ($file in $manifest.files.PSObject.Properties) {
@@ -179,6 +180,62 @@ jobs:
             Write-Host "ACTUAL_COMMAND_OUTPUT name=$($file.Name) sha256=$($file.Value) source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT"
           }
           Write-Host "VERIFIED_COMMAND_PRODUCER source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT artifact=$($artifact.id) digest=$($artifact.digest) exe=$($manifest.outputs.'native3_lock_command_worker.exe') reference=$($manifest.outputs.'linux-reference.json')"
+      - name: Actual Windows filesystem metadata before the full runtime build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Reuse the full suite's public contract against the exact common
+          # POSIX library, including directory/symlink handles and two volumes.
+          $saved = @{}
+          foreach ($name in 'TEMP', 'GESHER_METADATA_OTHER_VOLUME') {
+            $saved[$name] = @{
+              Present = Test-Path "Env:$name"
+              Value = [Environment]::GetEnvironmentVariable($name, 'Process')
+            }
+          }
+          $owned = Join-Path $env:RUNNER_TEMP ('filesystem-metadata-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $owned | Out-Null
+          $stdout = Join-Path $env:RUNNER_TEMP ('filesystem-metadata-' + [guid]::NewGuid().ToString('N') + '.stdout.txt')
+          $stderr = Join-Path $env:RUNNER_TEMP ('filesystem-metadata-' + [guid]::NewGuid().ToString('N') + '.stderr.txt')
+          $process = $null
+          try {
+            $env:TEMP = $owned
+            $env:GESHER_METADATA_OTHER_VOLUME = if ([IO.Path]::GetPathRoot($owned) -ieq 'C:\') {
+              'D:\'
+            } else { Join-Path $env:SystemRoot 'Temp' }
+            if (-not (Test-Path -LiteralPath $env:GESHER_METADATA_OTHER_VOLUME -PathType Container)) {
+              throw 'Filesystem metadata requires an available second volume'
+            }
+            $process = Start-Process -FilePath (Resolve-Path command-fixture/filesystem_metadata_host_test.exe).Path `
+              -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            if (-not $process.WaitForExit(90000)) { throw 'Filesystem metadata exceeded its 90-second bound' }
+            $process.Refresh()
+            if ($process.ExitCode -ne 0) { throw "Filesystem metadata exit=$($process.ExitCode)" }
+            if (-not (Select-String -LiteralPath $stdout -Pattern '^filesystem metadata contracts: [1-9][0-9]* checks, 0 failures$' -Quiet)) {
+              throw 'Missing successful filesystem metadata completion'
+            }
+            if (-not (Select-String -LiteralPath $stdout -Pattern '^filesystem metadata: cross-volume rename and renameat exercised$' -Quiet)) {
+              throw 'Missing actual cross-volume filesystem coverage'
+            }
+          } finally {
+            try {
+              if ($null -ne $process) {
+                if (-not $process.HasExited) {
+                  $process.Kill($true)
+                  if (-not $process.WaitForExit(5000)) { throw 'Owned filesystem metadata process did not stop' }
+                }
+                $process.Dispose()
+              }
+            } finally {
+              foreach ($name in $saved.Keys) {
+                if ($saved[$name].Present) { Set-Item "Env:$name" $saved[$name].Value }
+                else { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+              }
+              if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
+              if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+              Remove-Item -LiteralPath $owned -Recurse -Force -ErrorAction Stop
+            }
+          }
       - name: Actual finite blocking controls against actual Linux reference
         shell: pwsh
         run: |

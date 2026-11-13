@@ -37,6 +37,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -467,6 +468,11 @@ public final class LocationManagerService extends ILocationManager.Default {
         ILocationListener listener;
         PendingIntent pendingIntent;
         ILocationCallback current;
+        IBinder clientBinder;
+        /** Retirement may precede publication when linkToDeath reports death inline. */
+        volatile boolean retired;
+        /** Protected by mLock; unlinking itself happens outside the registry lock. */
+        boolean deathLinked;
         int maxUpdates;
         int updates;
         long expiresAt = Long.MAX_VALUE;
@@ -484,8 +490,10 @@ public final class LocationManagerService extends ILocationManager.Default {
             }
         }
 
-        boolean sameClient(ILocationListener l) {
-            return listener != null && l != null && listener.asBinder() == l.asBinder();
+        boolean replaces(Registration other) {
+            return provider.equals(other.provider) && clientBinder == other.clientBinder
+                    && ((listener != null && other.listener != null)
+                        || (pendingIntent != null && other.pendingIntent != null));
         }
 
         @Override
@@ -495,6 +503,7 @@ public final class LocationManagerService extends ILocationManager.Default {
 
         /** Delivers {@code location} if the request wants it now; false once it is done. */
         boolean deliver(Location location) {
+            if (retired) return false;
             int granted = grantedLocationLevel(packageName, false);
             if (granted == PERMISSION_NONE) return false;
             long now = SystemClock.elapsedRealtime();
@@ -531,6 +540,7 @@ public final class LocationManagerService extends ILocationManager.Default {
         }
 
         void providerEnabledChanged(boolean enabled) {
+            if (retired) return;
             try {
                 if (listener != null) {
                     listener.onProviderEnabledChanged(provider, enabled);
@@ -550,34 +560,61 @@ public final class LocationManagerService extends ILocationManager.Default {
         target.send(0, fillIn, null, null, null, null, null);
     }
 
-    private void add(Registration r) {
-        synchronized (mLock) {
-            mRegistrations.add(r);
-        }
+    private boolean add(Registration r) {
         if (r.listener != null) {
             try {
-                r.listener.asBinder().linkToDeath(r, 0);
+                r.clientBinder.linkToDeath(r, 0);
             } catch (RemoteException e) {
                 remove(r);
-                return;
+                return false;
             }
         }
+        List<Registration> replaced = new ArrayList<>();
+        boolean published;
+        synchronized (mLock) {
+            r.deathLinked = r.listener != null;
+            published = !r.retired;
+            if (published) {
+                for (Iterator<Registration> it = mRegistrations.iterator(); it.hasNext();) {
+                    Registration previous = it.next();
+                    if (r.replaces(previous)) {
+                        previous.retired = true;
+                        it.remove();
+                        replaced.add(previous);
+                    }
+                }
+                mRegistrations.add(r);
+            }
+        }
+        if (!published) unlink(r);
+        for (Registration previous : replaced) unlink(previous);
         updatePolling();
+        return published;
+    }
+
+    private void unlink(Registration r) {
+        boolean linked;
+        synchronized (mLock) {
+            linked = r.deathLinked;
+            r.deathLinked = false;
+        }
+        if (linked) {
+            try {
+                r.clientBinder.unlinkToDeath(r, 0);
+            } catch (RuntimeException e) {
+                // Already dead or no longer linked.
+            }
+        }
     }
 
     private boolean remove(Registration r) {
         boolean removed;
         synchronized (mLock) {
+            r.retired = true;
             removed = mRegistrations.remove(r);
         }
+        unlink(r);
         if (removed) {
-            if (r.listener != null) {
-                try {
-                    r.listener.asBinder().unlinkToDeath(r, 0);
-                } catch (RuntimeException e) {
-                    // not linked
-                }
-            }
             updatePolling();
         }
         return removed;
@@ -589,10 +626,13 @@ public final class LocationManagerService extends ILocationManager.Default {
             String listenerId) {
         int level = enforceLocationPermission(packageName);
         checkProvider(provider);
-        unregisterLocationListener(listener);
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(listener, "listener");
+        IBinder client = Objects.requireNonNull(listener.asBinder(), "listener binder");
         Registration r = new Registration(provider, request, packageName, level);
         r.listener = listener;
-        add(r);
+        r.clientBinder = client;
+        if (!add(r)) return;
         log("registerLocationListener " + provider + " for " + packageName + ": interval "
                 + request.getIntervalMillis() + " ms");
         if (!isEnabled(provider)) r.providerEnabledChanged(false);
@@ -600,16 +640,23 @@ public final class LocationManagerService extends ILocationManager.Default {
 
     @Override
     public void unregisterLocationListener(ILocationListener listener) {
+        IBinder client = listener == null ? null : listener.asBinder();
         List<Registration> gone = new ArrayList<>();
         synchronized (mLock) {
-            for (Registration r : mRegistrations) {
-                if (r.sameClient(listener)) gone.add(r);
+            for (Iterator<Registration> it = mRegistrations.iterator(); it.hasNext();) {
+                Registration r = it.next();
+                if (r.listener != null && r.clientBinder == client) {
+                    r.retired = true;
+                    it.remove();
+                    gone.add(r);
+                }
             }
         }
         for (Registration r : gone) {
-            remove(r);
+            unlink(r);
             log("unregisterLocationListener " + r.provider + " for " + r.packageName);
         }
+        if (!gone.isEmpty()) updatePolling();
     }
 
     @Override
@@ -617,9 +664,12 @@ public final class LocationManagerService extends ILocationManager.Default {
             PendingIntent pendingIntent, String packageName, String attributionTag) {
         int level = enforceLocationPermission(packageName);
         checkProvider(provider);
-        unregisterLocationPendingIntent(pendingIntent);
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(pendingIntent, "pendingIntent");
+        IBinder client = Objects.requireNonNull(pendingIntent.getTarget().asBinder(), "pending intent binder");
         Registration r = new Registration(provider, request, packageName, level);
         r.pendingIntent = pendingIntent;
+        r.clientBinder = client;
         add(r);
         log("registerLocationPendingIntent " + provider + " for " + packageName);
         if (!isEnabled(provider)) r.providerEnabledChanged(false);
@@ -627,16 +677,23 @@ public final class LocationManagerService extends ILocationManager.Default {
 
     @Override
     public void unregisterLocationPendingIntent(PendingIntent pendingIntent) {
+        IBinder client = pendingIntent == null ? null : pendingIntent.getTarget().asBinder();
         List<Registration> gone = new ArrayList<>();
         synchronized (mLock) {
-            for (Registration r : mRegistrations) {
-                if (r.pendingIntent != null && r.pendingIntent.equals(pendingIntent)) gone.add(r);
+            for (Iterator<Registration> it = mRegistrations.iterator(); it.hasNext();) {
+                Registration r = it.next();
+                if (r.pendingIntent != null && r.clientBinder == client) {
+                    r.retired = true;
+                    it.remove();
+                    gone.add(r);
+                }
             }
         }
         for (Registration r : gone) {
-            remove(r);
+            unlink(r);
             log("unregisterLocationPendingIntent " + r.provider + " for " + r.packageName);
         }
+        if (!gone.isEmpty()) updatePolling();
     }
 
     @Override

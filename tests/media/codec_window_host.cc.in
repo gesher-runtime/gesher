@@ -1,0 +1,133 @@
+// Exact production SetSurface/SetSurfaceLocked/ReleaseOutput methods with
+// observable native-window/JNI boundaries. Logical windows stay in fixture
+// storage after refcount zero; controls never access freed memory.
+#include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+
+int checks = 0, failures = 0;
+void Check(bool ok, const char* reason) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL codec window: %s\n", reason); }
+}
+struct ANativeWindow { int references = 0, acquisitions = 0, releases = 0; bool retired = false; };
+struct JavaSurface { ANativeWindow* window = nullptr; bool reader = false; };
+struct JNIEnv {};
+using jobject = JavaSurface*;
+void ANativeWindow_acquire(ANativeWindow* window) {
+  Check(!window->retired, "acquire a live window");
+  ++window->references; ++window->acquisitions;
+}
+void ANativeWindow_release(ANativeWindow* window) {
+  Check(window->references > 0, "release an owned window");
+  ++window->releases;
+  if (--window->references == 0) window->retired = true;
+}
+ANativeWindow* ANativeWindow_fromSurface(JNIEnv*, jobject surface) {
+  if (surface->window != nullptr) ANativeWindow_acquire(surface->window);
+  return surface->window;
+}
+bool IsReaderSurface(JNIEnv*, jobject surface) { return surface->reader; }
+struct GlobalRef {
+  jobject value;
+  GlobalRef(JNIEnv*, jobject object) : value(object) {}
+  jobject get() const { return value; }
+};
+struct VideoFrame { int id = 7; };
+std::function<void(ANativeWindow*)> on_render;
+int rendered = 0, delivered = 0;
+bool RenderFrame(ANativeWindow* window, const VideoFrame& frame) {
+  Check(!window->retired && frame.id == 7, "render receives live window and frame");
+  ++rendered;
+  if (on_render) on_render(window);
+  Check(!window->retired, "window remains live until rendering ends");
+  return false;  // Failure also releases the render's reference.
+}
+std::function<void()> on_deliver;
+void DeliverToReader(jobject, const VideoFrame&, int64_t) { ++delivered; if (on_deliver) on_deliver(); }
+constexpr int kSlots = 2;
+struct Slot { bool client = false; std::shared_ptr<VideoFrame> frame; int64_t time_us = 0; };
+class Codec {
+ public:
+  std::mutex mu_;
+  std::condition_variable cv_;
+  Slot outputs_[kSlots];
+  ANativeWindow* window_ = nullptr;
+  std::shared_ptr<GlobalRef> reader_;
+  std::atomic<bool> frame_rendered_{true};
+  int events = 0;
+  int64_t last_time = -1;
+  ~Codec() { if (window_ != nullptr) ANativeWindow_release(window_); }
+  void PostFrameRendered(int64_t time) { ++events; last_time = time; }
+  @SET_SURFACE@
+  @RELEASE_OUTPUT@
+  void Prepare(bool frame = true) {
+    outputs_[0].client = true;
+    outputs_[0].frame = frame ? std::make_shared<VideoFrame>() : nullptr;
+    outputs_[0].time_us = 42;
+  }
+};
+
+int main() {
+  ANativeWindow old_window, new_window;
+  JavaSurface first{&old_window}, second{&new_window};
+  std::string error;
+  {
+    Codec codec;
+    codec.SetSurface(nullptr, &first);
+    Check(old_window.references == 1, "codec initially owns one reference");
+    codec.Prepare();
+    on_render = [&](ANativeWindow* selected) {
+      Check(selected == &old_window && old_window.references == 2,
+            "render owns a reference before releasing codec lock");
+      codec.SetSurface(nullptr, &second);
+      Check(!old_window.retired && old_window.references == 1 && new_window.references == 1,
+            "surface replacement leaves render's old window alive");
+    };
+    Check(codec.ReleaseOutput(0, true, 0, &error), "rendered release succeeds");
+    Check(old_window.retired && old_window.references == 0 && old_window.acquisitions == 2
+              && old_window.releases == 2, "render reference releases exactly once after swap");
+    Check(codec.events == 1 && codec.last_time == 42 && rendered == 1, "frame event preserved");
+    const int acquired = new_window.acquisitions, released = new_window.releases;
+    Check(!codec.ReleaseOutput(0, true, 0, &error), "same output slot cannot be released twice");
+    Check(!codec.ReleaseOutput(-1, true, 0, &error), "invalid output index rejected");
+    Check(new_window.acquisitions == acquired && new_window.releases == released,
+          "invalid output never borrows a window");
+    codec.Prepare();
+    Check(codec.ReleaseOutput(0, false, 0, &error), "discarded output succeeds");
+    Check(new_window.acquisitions == acquired && new_window.releases == released && rendered == 1,
+          "discard neither renders nor takes references");
+    codec.Prepare(false);
+    Check(codec.ReleaseOutput(0, true, 0, &error) && new_window.references == 1,
+          "empty output balances its optional render reference");
+    on_render = {};
+    codec.Prepare();
+    codec.frame_rendered_ = false;
+    Check(codec.ReleaseOutput(0, true, 0, &error) && new_window.references == 1 && codec.events == 1,
+          "failed renderer still releases and disabled callback remains disabled");
+  }
+  Check(new_window.retired && new_window.references == 0
+            && new_window.acquisitions == new_window.releases, "remaining codec owner retires normally");
+  {
+    Codec codec;
+    JavaSurface reader{nullptr, true};
+    codec.SetSurface(nullptr, &reader);
+    std::weak_ptr<GlobalRef> weak = codec.reader_;
+    on_deliver = [&] {
+      codec.SetSurface(nullptr, nullptr);
+      Check(!weak.expired(), "reader owner is retained across a surface swap");
+    };
+    codec.Prepare();
+    Check(codec.ReleaseOutput(0, true, 0, &error) && delivered == 1,
+          "reader surface delivery preserved");
+    Check(weak.expired() && codec.events == 1, "reader temporary retires after delivery");
+    on_deliver = {};
+  }
+  std::printf("codec window ownership contracts: %d checks, %d failures\n", checks, failures);
+  return failures != 0;
+}
