@@ -104,7 +104,7 @@ class Playback : public std::enable_shared_from_this<Playback> {
       seek_notify_ = false;
     }
     playing_ = true;
-    if (track_ != nullptr) track_->Start();
+    StartTrackIfReadyLocked();
     if (!clock_running_) {
       clock_anchor_ = std::chrono::steady_clock::now();
       clock_running_ = true;
@@ -149,7 +149,7 @@ class Playback : public std::enable_shared_from_this<Playback> {
       last_us_ = WallClockLocked();
       return last_us_;
     }
-    int64_t played = track_ != nullptr ? track_->Position() : 0;
+    int64_t played = PlayedFramesLocked();
     if (segments_.empty() || rate_ == 0) return base_us_;
     const Segment* seg = &segments_.front();
     for (const Segment& s : segments_) {
@@ -295,6 +295,14 @@ class Playback : public std::enable_shared_from_this<Playback> {
     return us;
   }
 
+  // The timestamp exposes the same position origin as the public playback
+  // head without its 32-bit wrap, including the fresh origin after a flush.
+  int64_t PlayedFramesLocked() {
+    int64_t frames = 0, time_ns = 0;
+    if (track_ == nullptr || !track_->Timestamp(&frames, &time_ns)) return 0;
+    return std::max<int64_t>(0, frames);
+  }
+
   // With mu_ held: video restarts at `us` (a seek, a loop); `exact` drops the
   // frames before it (SEEK_CLOSEST), else the sync frame before it is shown.
   void VideoSeekLocked(int64_t us, bool exact) {
@@ -414,7 +422,8 @@ class Playback : public std::enable_shared_from_this<Playback> {
           continue;
         }
         // Past the audio's end (a longer video), frames follow one another at once.
-        if (decoder_ != nullptr && track_ != nullptr && track_->stopped()) break;
+        // A stopped track that is still being primed has not reached its end.
+        if (decoder_ != nullptr && track_ != nullptr && audio_draining_ && track_->stopped()) break;
         int64_t now = MediaUsLocked();
         int64_t ahead = f.time_us - now;
         if (ahead <= 2000) {
@@ -484,6 +493,25 @@ class Playback : public std::enable_shared_from_this<Playback> {
     }
   }
 
+  // With mu_ held: fill the first ring before admitting the mixer. Android's
+  // downstream AudioTrack has a minimum-fill gate; this engine's generic
+  // Track starts consuming immediately, so the player's decoder must prime it.
+  // A short source at EOS is the force-ready exception. A normal pause/resume
+  // retains readiness; a seek resets it after flushing the old PCM.
+  void StartTrackIfReadyLocked(bool force = false) {
+    if (track_ == nullptr || !playing_ || quit_ || seek_us_ >= 0) return;
+    // A longer video's tail may still be running after audio has drained.
+    // Restarting that stopped track would reset its already presented head.
+    if (audio_draining_ && audio_primed_ && track_->stopped()) return;
+    if (!audio_primed_) {
+      if (!force && track_->Queued() < track_->buffer_size_frames()) return;
+      audio_primed_ = true;
+    }
+    track_->Start();
+    // Resume a paused EOF drain with its bounded stop boundary.
+    if (audio_draining_) track_->Stop();
+  }
+
   // The track for the decoder's output, created at the first start.
   bool EnsureTrack() {
     std::lock_guard<std::mutex> lock(mu_);
@@ -507,7 +535,6 @@ class Playback : public std::enable_shared_from_this<Playback> {
     frame_size_ = BytesPerSample(info.format) * info.channels;
     track_->SetVolume(left_, right_);
     track_->SetSpeed(speed_);
-    if (playing_) track_->Start();
     return true;
   }
 
@@ -516,19 +543,22 @@ class Playback : public std::enable_shared_from_this<Playback> {
   bool WritePcm(const std::vector<uint8_t>& pcm) {
     size_t done = 0;
     while (done < pcm.size()) {
-      std::shared_ptr<Track> t;
-      {
-        std::unique_lock<std::mutex> lock(mu_);
-        if (quit_ || seek_us_ >= 0) return false;
-        t = track_;
-      }
-      ssize_t n = t->Write(pcm.data() + done, pcm.size() - done, false);
+      std::unique_lock<std::mutex> lock(mu_);
+      if (quit_ || seek_us_ >= 0) return false;
+      // Nonblocking: serialize start admission with pause, seek and shutdown,
+      // retaining inactive writes that prime the ring.
+      ssize_t n = track_->Write(pcm.data() + done, pcm.size() - done, false);
       if (n < 0) return false;
       done += static_cast<size_t>(n);
       written_ += n / static_cast<ssize_t>(frame_size_);
+      // Start before waiting for the remainder of a packet larger than the ring.
+      StartTrackIfReadyLocked();
       if (done < pcm.size()) {
-        std::unique_lock<std::mutex> lock(mu_);
-        cv_.wait_for(lock, std::chrono::milliseconds(5));
+        if (!playing_) {
+          cv_.wait(lock, [this] { return playing_ || quit_ || seek_us_ >= 0; });
+        } else {
+          cv_.wait_for(lock, std::chrono::milliseconds(5));
+        }
       }
     }
     return true;
@@ -542,19 +572,13 @@ class Playback : public std::enable_shared_from_this<Playback> {
     *status = reader_->Read(first, us, m);
     *have_first = *status == 0;
     decoder_->Flush(us);
-    std::shared_ptr<Track> t;
-    bool playing;
-    {
-      std::lock_guard<std::mutex> lock(mu_);
-      t = track_;
-      playing = playing_;
-    }
-    if (t != nullptr) {
-      t->Pause();
-      t->Flush();
-      if (playing) t->Start();
-    }
     std::lock_guard<std::mutex> lock(mu_);
+    if (track_ != nullptr) {
+      track_->Pause();
+      track_->Flush();
+    }
+    audio_primed_ = false;
+    audio_draining_ = false;
     written_ = 0;
     segments_.clear();
     int64_t start = *have_first ? first->time_us : us;
@@ -643,9 +667,21 @@ class Playback : public std::enable_shared_from_this<Playback> {
       decoder_->Drain(&pcm);
       if (!WritePcm(pcm)) continue;
       bool loop;
+      std::shared_ptr<Track> t;
       {
-        std::lock_guard<std::mutex> lock(mu_);
+        std::unique_lock<std::mutex> lock(mu_);
+        // Stopping an inactive/paused track would discard a short source or
+        // leave it undrained. Admit force-ready start and stop atomically.
+        cv_.wait(lock, [this] { return playing_ || quit_ || seek_us_ >= 0; });
+        if (quit_ || seek_us_ >= 0) continue;
         loop = loop_;
+        if (loop) {
+          audio_draining_ = false;
+        } else {
+          audio_draining_ = true;
+          StartTrackIfReadyLocked(true);
+          t = track_;
+        }
       }
       if (loop) {
         // Around again, without stopping the track: the position restarts at
@@ -655,25 +691,29 @@ class Playback : public std::enable_shared_from_this<Playback> {
         eos = status != 0;
         decoder_->Flush(0);
         std::lock_guard<std::mutex> lock(mu_);
-        segments_.push_back({written_, 0});
-        while (segments_.size() > 8) segments_.pop_front();
+        // A decoder may produce no PCM for a loop. Keep only the latest
+        // mapping at an equal frame boundary, so empty loops add no history.
+        if (!segments_.empty() && segments_.back().start_frame == written_) {
+          segments_.back() = {written_, 0};
+        } else {
+          segments_.push_back({written_, 0});
+        }
+        // Priming can queue many short loops before the first frame plays.
+        // Retain the active segment and every still-queued transition, rather
+        // than discarding a fixed number and assigning a future loop's clock.
+        const int64_t played = PlayedFramesLocked();
+        while (segments_.size() > 1 && segments_[1].start_frame <= played) segments_.pop_front();
         if (video_decoder_ != nullptr) VideoSeekLocked(0, false);
         continue;
       }
-      std::shared_ptr<Track> t;
-      {
-        std::lock_guard<std::mutex> lock(mu_);
-        t = track_;
-      }
-      t->Stop();
       bool interrupted = false;
       for (;;) {
         std::unique_lock<std::mutex> lock(mu_);
-        if (t->stopped() && (video_decoder_ == nullptr || video_done_)) break;
         if (quit_ || seek_us_ >= 0 || loop_) {
           interrupted = true;
           break;
         }
+        if (t->stopped() && (video_decoder_ == nullptr || video_done_)) break;
         cv_.wait_for(lock, std::chrono::milliseconds(10));
       }
       if (interrupted) {
@@ -684,7 +724,6 @@ class Playback : public std::enable_shared_from_this<Playback> {
           looping = loop_ && seek_us_ < 0 && !quit_;
           if (looping) seek_us_ = 0, seek_mode_ = 0, seek_notify_ = false;
         }
-        t->Start();
         continue;
       }
       {
@@ -717,6 +756,8 @@ class Playback : public std::enable_shared_from_this<Playback> {
   std::unique_ptr<TrackReader> reader_;
   std::unique_ptr<AudioDecoder> decoder_;
   std::shared_ptr<Track> track_;
+  bool audio_primed_ = false;  // retained across ordinary pause/resume and loops
+  bool audio_draining_ = false;  // EOF has admitted a bounded audio drain
   // Video.
   std::thread video_thread_;
   std::unique_ptr<TrackReader> video_reader_;

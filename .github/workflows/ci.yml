@@ -78,8 +78,18 @@ jobs:
           python3 tools/test_elf_finalizers.py --sanitize
           python3 tools/test_media_api_contracts.py --sanitize
 
+      - name: Timer, DNS and media lifetime contracts
+        run: |
+          python3 tools/test_timerfd_contracts.py --sanitize
+          python3 tools/test_input_surface_callbacks.py --sanitize
+          python3 tools/test_codec_lifecycle_contracts.py --sanitize
+          python3 tools/test_dns_query_lifecycle.py --sanitize
+
       - name: Freopen contracts against the pinned glibc reference
         run: bash tools/ci/test-freopen-reference.sh
+
+      - name: MediaPlayer PCM priming and playback lifecycle contracts
+        run: python3 tools/test_media_player_priming.py --sanitize
 
       - name: Host event loop, audio state and surface geometry contracts
         run: |
@@ -1434,6 +1444,17 @@ jobs:
           if ($summaryTruncated) { 'Summary shortened; complete results remain in the job log and framework-contracts-results.txt.' >> $env:GITHUB_STEP_SUMMARY }
           '```' >> $env:GITHUB_STEP_SUMMARY
           exit $code
+
+      - name: Upload media output captures
+        uses: actions/upload-artifact@v4
+        if: ${{ always() && matrix.suite == 'full' }}
+        with:
+          name: media-output-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/gesher-media/**/*.wav
+            ${{ runner.temp }}/gesher-media/**/*.txt
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload offline regression evidence
         uses: actions/upload-artifact@v4

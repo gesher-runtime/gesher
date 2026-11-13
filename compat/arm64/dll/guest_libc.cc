@@ -337,6 +337,7 @@ const SyscallMap kSyscalls[] = {
     {64, "write", 'l'},       {65, "readv", 'l'},        {66, "writev", 'l'},
     {67, "pread64", 'l'},     {68, "pwrite64", 'l'},     {78, "readlinkat", 'l'},
     {82, "fsync", 'i'},       {83, "fdatasync", 'i'},    {94, "_exit", 'i'},
+    {85, "timerfd_create", 'i'}, {86, "timerfd_settime", 'i'}, {87, "timerfd_gettime", 'i'},
     {101, "nanosleep", 'i'},  {113, "clock_gettime", 'i'}, {114, "clock_getres", 'i'},
     {124, "sched_yield", 'i'}, {123, "sched_getaffinity", 'i'}, {129, "kill", 'i'},
     {131, "tgkill", 'i'},     {160, "uname", 'i'},       {163, "getrlimit", 'i'},

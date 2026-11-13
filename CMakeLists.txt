@@ -134,6 +134,10 @@ add_executable(filesystem_metadata_host_test tests/native/filesystem_metadata_ho
 target_compile_options(filesystem_metadata_host_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(filesystem_metadata_host_test PRIVATE gesher_posix)
 
+add_executable(timerfd_windows_test tests/native/timerfd_windows_test.cc)
+target_compile_options(timerfd_windows_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(timerfd_windows_test PRIVATE gesher_posix)
+
 # libutils' Looper over gesher-base's epoll and eventfd, RefBase, String8;
 # also run in CI on Windows.
 add_executable(libutils_probe probes/system/libutils_probe.cc)

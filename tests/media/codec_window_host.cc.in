@@ -54,7 +54,9 @@ constexpr int kSlots = 2;
 struct Slot { bool client = false; std::shared_ptr<VideoFrame> frame; int64_t time_us = 0; };
 class Codec {
  public:
+  std::mutex lifecycle_mu_;
   std::mutex mu_;
+  bool released_ = false;
   std::condition_variable cv_;
   Slot outputs_[kSlots];
   ANativeWindow* window_ = nullptr;

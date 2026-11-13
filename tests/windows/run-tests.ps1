@@ -201,6 +201,7 @@ $testTracks = if ($FrameworkContractsOnly) {
     }
     Get-Item -LiteralPath $requiredTrack -ErrorAction Stop
   }
+  Get-Item -LiteralPath (Join-Path $PSScriptRoot 'tracks/97-lifecycle-contracts.ps1') -ErrorAction Stop
 } else {
   Get-ChildItem (Join-Path $PSScriptRoot 'tracks') -Filter *.ps1 -ErrorAction SilentlyContinue | Sort-Object Name
 }

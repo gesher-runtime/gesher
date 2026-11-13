@@ -146,12 +146,22 @@ public final class NetworkCapabilities implements Parcelable {
 
     /** @hide */
     public NetworkCapabilities addCapability(int capability) {
+        if (!isValidCapability(capability)) {
+            android.util.Log.e("NetworkCapabilities",
+                    "addCapability is called with invalid capability: " + capability);
+            return this;
+        }
         mCapabilities |= 1L << capability;
         return this;
     }
 
     /** @hide */
     public NetworkCapabilities removeCapability(int capability) {
+        if (!isValidCapability(capability)) {
+            android.util.Log.e("NetworkCapabilities",
+                    "removeCapability is called with invalid capability: " + capability);
+            return this;
+        }
         mCapabilities &= ~(1L << capability);
         return this;
     }
@@ -162,7 +172,12 @@ public final class NetworkCapabilities implements Parcelable {
     }
 
     public boolean hasCapability(int capability) {
-        return capability >= 0 && capability < 64 && (mCapabilities & (1L << capability)) != 0;
+        return isValidCapability(capability) && (mCapabilities & (1L << capability)) != 0;
+    }
+
+    private static boolean isValidCapability(int capability) {
+        return capability >= NET_CAPABILITY_MMS
+                && capability <= NET_CAPABILITY_NOT_BANDWIDTH_CONSTRAINED;
     }
 
     public int[] getCapabilities() {
@@ -171,19 +186,33 @@ public final class NetworkCapabilities implements Parcelable {
 
     /** @hide */
     public NetworkCapabilities addTransportType(int transportType) {
+        checkValidTransportType(transportType);
         mTransports |= 1L << transportType;
+        setNetworkSpecifier(mNetworkSpecifier);
         return this;
     }
 
     /** @hide */
     public NetworkCapabilities removeTransportType(int transportType) {
+        checkValidTransportType(transportType);
         mTransports &= ~(1L << transportType);
+        setNetworkSpecifier(mNetworkSpecifier);
         return this;
     }
 
     public boolean hasTransport(int transportType) {
-        return transportType >= 0 && transportType < 64
+        return isValidTransportType(transportType)
                 && (mTransports & (1L << transportType)) != 0;
+    }
+
+    private static boolean isValidTransportType(int transportType) {
+        return transportType >= TRANSPORT_CELLULAR && transportType <= TRANSPORT_SATELLITE;
+    }
+
+    private static void checkValidTransportType(int transportType) {
+        if (!isValidTransportType(transportType)) {
+            throw new IllegalArgumentException("Invalid TransportType " + transportType);
+        }
     }
 
     public int[] getTransportTypes() {
@@ -191,11 +220,12 @@ public final class NetworkCapabilities implements Parcelable {
     }
 
     public int[] getEnterpriseIds() {
-        return new int[0];
+        return hasCapability(NET_CAPABILITY_ENTERPRISE)
+                ? new int[] { NET_ENTERPRISE_ID_1 } : new int[0];
     }
 
     public boolean hasEnterpriseId(int enterpriseId) {
-        return false;
+        return enterpriseId == NET_ENTERPRISE_ID_1 && hasCapability(NET_CAPABILITY_ENTERPRISE);
     }
 
     /** @hide */
@@ -220,6 +250,13 @@ public final class NetworkCapabilities implements Parcelable {
 
     /** @hide */
     public NetworkCapabilities setNetworkSpecifier(NetworkSpecifier specifier) {
+        long nonTestTransports = mTransports & ~(1L << TRANSPORT_TEST);
+        if (specifier != null && mTransports != (1L << TRANSPORT_TEST)
+                && Long.bitCount(nonTestTransports) != 1
+                && nonTestTransports != ((1L << TRANSPORT_CELLULAR) | (1L << TRANSPORT_SATELLITE))) {
+            throw new IllegalStateException("Must have a single non-test transport specified to "
+                    + "use setNetworkSpecifier");
+        }
         mNetworkSpecifier = specifier;
         return this;
     }
