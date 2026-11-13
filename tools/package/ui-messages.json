@@ -452,6 +452,10 @@
       "en": "done",
       "he": "הסתיים"
     },
+    "detached": {
+      "en": "{0} is running; the launcher does not wait for it (its output: {1})",
+      "he": "היישום {0} פועל; המפעיל אינו ממתין לו (הפלט שלו: {1})"
+    },
     "server_unexpected": {
       "en": "failed: the system server ended unexpectedly",
       "he": "הפעולה נכשלה: שרת המערכת נסגר באופן בלתי צפוי"
