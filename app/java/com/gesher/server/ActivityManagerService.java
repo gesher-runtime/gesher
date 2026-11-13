@@ -131,6 +131,14 @@ public final class ActivityManagerService extends IActivityManager.Default {
     }
 
     /**
+     * The reaper ends {@code app} (already exiting): its providers stop being handed out,
+     * unless a client acquired one meanwhile (false, nothing changed).
+     */
+    boolean retireUnusedProviders(ActivityTaskManagerService.ProcessRecord app) {
+        return mProviders.retireUnused(app);
+    }
+
+    /**
      * Whether something uses the process now, for the idle reaper
      * ({@link ActivityTaskManagerService#reapIdleProcesses}): a service in use (started,
      * bound by another process or the system), a broadcast for it, or a provider reference

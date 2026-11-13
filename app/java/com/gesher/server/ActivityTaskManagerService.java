@@ -135,11 +135,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         String windowMode;
         boolean windowModeExplicit;
         boolean ready;       // finishAttachApplication came
-        boolean exiting;
+        /** Told to exit (or dying): no longer handed out. Read without the lock (providers). */
+        volatile boolean exiting;
+        /** Ended by the idle reaper: its services bound by others start again (ActiveServices). */
+        volatile boolean reaped;
         boolean spawned;     // started by this server (startProcess), not by itself
         long startSeq;       // distinguishes a late exit from a newer process of this package
         /** When something last used it (uptime): the idle reaper's clock. */
         volatile long lastActive = SystemClock.uptimeMillis();
+
+        /** Used at {@code time}, unless a later use is already noted. */
+        void markActive(long time) {
+            if (time > lastActive) lastActive = time;
+        }
         ProcessExitStatus.Generation exitGeneration;
         /** The configuration it was given last (bindApplication, ConfigurationChangeItem). */
         Configuration config;
@@ -1653,7 +1661,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             for (ProcessRecord p : mProcesses) {
                 if (p.exiting || !p.ready || !p.spawned || p.packageName == null) continue;
                 if (!p.activities.isEmpty() || hasPendingWorkLocked(p)) {
-                    p.lastActive = now;
+                    p.markActive(now);
                     continue;
                 }
                 candidates.add(p);
@@ -1662,7 +1670,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         for (ProcessRecord p : candidates) {
             if (mAm.isPersistent(p)) continue;
             if (mAm.inUse(p)) {
-                p.lastActive = now;
+                p.markActive(now);
                 continue;
             }
             long idle = now - p.lastActive;
@@ -1673,6 +1681,18 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         || hasPendingWorkLocked(p) || now - p.lastActive < idleMs) continue;
                 p.exiting = true;
             }
+            // A bind that connected to its published service, or a provider acquisition,
+            // may have come since the check: once exiting, nothing new reaches it, so check
+            // again (the providers atomically with their unpublication) and back out if so.
+            if (mAm.inUse(p) || !mAm.retireUnusedProviders(p)) {
+                synchronized (this) {
+                    p.exiting = false;
+                    p.markActive(SystemClock.uptimeMillis());
+                }
+                SystemServer.log("reaping: " + p + " was used meanwhile; kept");
+                continue;
+            }
+            p.reaped = true;
             mAm.processExiting(p);
             SystemServer.log("reaping: " + p + " is cached (no activity, nothing in use) and"
                     + " was idle for " + (idle / 1000) + " s");

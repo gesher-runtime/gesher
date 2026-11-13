@@ -237,7 +237,7 @@ final class ContentProviders {
                         if (stable) c.stable++; else c.unstable++;
                         h.connection = c;
                         h.noReleaseNeeded = false;
-                        owner.lastActive = SystemClock.uptimeMillis();
+                        owner.markActive(SystemClock.uptimeMillis());
                     }
                     return h;
                 }
@@ -381,9 +381,13 @@ final class ContentProviders {
     synchronized boolean refContentProvider(IBinder connection, int stable, int unstable) {
         Connection c = callerConnectionLocked(connection);
         if (c == null) return false;
+        if (c.stable + stable < 0 || c.unstable + unstable < 0) {
+            SystemServer.log("refContentProvider " + c + ": counts would go below zero ("
+                    + stable + ", " + unstable + "); kept at zero");
+        }
         c.stable = Math.max(0, c.stable + stable);
         c.unstable = Math.max(0, c.unstable + unstable);
-        c.owner.lastActive = SystemClock.uptimeMillis();
+        c.owner.markActive(SystemClock.uptimeMillis());
         return !c.owner.exiting;
     }
 
@@ -395,9 +399,13 @@ final class ContentProviders {
     synchronized void removeContentProvider(IBinder connection, boolean stable) {
         Connection c = callerConnectionLocked(connection);
         if (c == null) return;
+        if (stable ? c.stable == 0 : c.unstable == 0) {
+            SystemServer.log("removeContentProvider " + c + ": no "
+                    + (stable ? "stable" : "unstable") + " reference to remove");
+        }
         if (stable) c.stable = Math.max(0, c.stable - 1);
         else c.unstable = Math.max(0, c.unstable - 1);
-        c.owner.lastActive = SystemClock.uptimeMillis();
+        c.owner.markActive(SystemClock.uptimeMillis());
         if (c.stable == 0 && c.unstable == 0) mConnections.remove(c);
     }
 
@@ -417,6 +425,19 @@ final class ContentProviders {
             if (c.owner == app && !c.client.exiting && (c.stable > 0 || c.unstable > 0)) return true;
         }
         return false;
+    }
+
+    /**
+     * The idle reaper ends the process (already {@code exiting}): unless a client holds a
+     * reference (acquired before it was exiting; false, nothing changed), its providers are
+     * no longer handed out. Under this lock, as getContentProvider counts its holders and
+     * checks {@code exiting}, so no counted holder of the process is handed out after this
+     * returns true.
+     */
+    synchronized boolean retireUnused(ActivityTaskManagerService.ProcessRecord app) {
+        if (hasActiveClients(app)) return false;
+        unpublish(app);
+        return true;
     }
 
     /** The process is exiting: its providers are not handed out any more. */

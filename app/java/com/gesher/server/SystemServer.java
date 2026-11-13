@@ -316,8 +316,8 @@ public final class SystemServer {
         private static final long CACHED_PROCESS_IDLE_S = 600;
 
         /**
-         * Ends cached app processes nothing used for a while (ADR 0082): every minute, those
-         * idle for {@code GESHER_CACHED_PROCESS_IDLE_S} seconds (600; 0 never ends them).
+         * Ends cached app processes nothing used for a while (ADR 0082): every
+         * min(60 s, idle time / 4), those idle for {@code GESHER_CACHED_PROCESS_IDLE_S} seconds (600; 0 never ends them).
          */
         private void startIdleReaper() {
             long idleS = CACHED_PROCESS_IDLE_S;

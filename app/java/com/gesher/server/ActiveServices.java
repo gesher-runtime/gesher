@@ -396,6 +396,8 @@ final class ActiveServices {
             b.connections.add(c);
             mConnections.computeIfAbsent(connection.asBinder(), k -> new ArrayList<>()).add(c);
             if (b.received) published = b.binder;
+            // A new client: the idle reaper must not take this as an unused process.
+            if (r.app != null) r.app.markActive(SystemClock.uptimeMillis());
         }
         SystemServer.log("bindService " + r + " from " + callingPackage + " (flags 0x"
                 + Long.toHexString(flags) + ")");
@@ -796,7 +798,13 @@ final class ActiveServices {
                 boolean started = r.startRequested && (r.startResult != Service.START_NOT_STICKY
                         || !r.pendingStarts.isEmpty());
                 if (!started) r.startRequested = false;
-                if (!app.exiting && serviceCurrent(r) && (started || r.hasAutoCreateConnections())) {
+                // An intentional exit ends the service for good. But the idle reaper ends
+                // only a process nothing used (no started service, no binding from another
+                // process): a start or a binding (to its published Binder) that came in the
+                // moment it was told to exit is recovered, by a new process.
+                boolean recover = (!app.exiting || app.reaped)
+                        && (started || r.hasAutoCreateConnections());
+                if (serviceCurrent(r) && recover) {
                     if (r.startRequested && r.pendingStarts.isEmpty() && started) {
                         Intent redelivery = r.startResult == Service.START_REDELIVER_INTENT
                                 && r.lastStartIntent != null ? new Intent(r.lastStartIntent) : null;
