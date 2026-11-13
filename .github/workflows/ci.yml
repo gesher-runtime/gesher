@@ -1100,8 +1100,47 @@ jobs:
           # keep a launch chain for the app's lifetime: gesher-launch sets
           # GESHER_LAUNCH_DETACH=1, the launcher returns once the activity has started, and
           # gesher-launch (once the app's window is up), powershell and the launcher's
-          # dalvikvm end while the app runs; closing its window still ends it.
+          # dalvikvm end while the app runs; closing its window still ends it. The device
+          # is stopped first, so this launch starts it: the device must not inherit
+          # GESHER_LAUNCH_DETACH (read back from the system server's environment block).
+          if (-not ('GesherProcessEnvironment' -as [type])) {
+            Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class GesherProcessEnvironment {
+            [StructLayout(LayoutKind.Sequential)] struct BasicInformation { public IntPtr ExitStatus, Peb, Affinity, Priority, Pid, Parent; }
+            [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr h, int cls, ref BasicInformation info, int size, out int length);
+            [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+            [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+            [DllImport("kernel32.dll", SetLastError = true)] static extern bool ReadProcessMemory(IntPtr h, IntPtr at, byte[] buffer, IntPtr size, out IntPtr read);
+            static long Read64(IntPtr h, long at) {
+              var b = new byte[8]; IntPtr n;
+              if (!ReadProcessMemory(h, (IntPtr)at, b, (IntPtr)8, out n)) throw new InvalidOperationException("ReadProcessMemory " + Marshal.GetLastWin32Error());
+              return BitConverter.ToInt64(b, 0);
+            }
+            // A 64-bit process's environment block (x64 PEB -> RTL_USER_PROCESS_PARAMETERS).
+            public static string[] Of(int pid) {
+              IntPtr h = OpenProcess(0x0410, false, pid);  // PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
+              if (h == IntPtr.Zero) throw new InvalidOperationException("OpenProcess " + Marshal.GetLastWin32Error());
+              try {
+                var info = new BasicInformation(); int length;
+                int status = NtQueryInformationProcess(h, 0, ref info, Marshal.SizeOf(info), out length);
+                if (status != 0) throw new InvalidOperationException("NtQueryInformationProcess 0x" + status.ToString("x8"));
+                long parameters = Read64(h, (long)info.Peb + 0x20);
+                long environment = Read64(h, parameters + 0x80);
+                long size = Read64(h, parameters + 0x3F0);
+                if (size <= 0 || size > (1 << 24)) throw new InvalidOperationException("environment size " + size);
+                var block = new byte[size]; IntPtr read;
+                if (!ReadProcessMemory(h, (IntPtr)environment, block, (IntPtr)size, out read)) throw new InvalidOperationException("ReadProcessMemory " + Marshal.GetLastWin32Error());
+                return System.Text.Encoding.Unicode.GetString(block, 0, (int)read).Split(new[] { '\0' }, StringSplitOptions.RemoveEmptyEntries);
+              } finally { CloseHandle(h); }
+            }
+          }
+          '@
+          }
           $problems = @()
+          $out = & "$app\gesher-app.cmd" shutdown 2>&1 | Out-String
+          if ((DevicePids).Count -ne 0) { Write-Host $out; throw 'gesher-app shutdown left the device running' }
           $savedWindow = $env:GESHER_APP_WINDOW
           $env:GESHER_APP_WINDOW = 'window'
           try {
@@ -1115,6 +1154,15 @@ jobs:
           Start-Sleep 2
           $chain = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'com\.gesher\.app\.Launcher launch com\.gesher\.uiapp' })
           if ($chain) { $problems += "a launcher still runs: $(($chain | ForEach-Object { "$($_.Name) $($_.ProcessId)" }) -join ', ')" }
+          # The device this launch started, which outlives it.
+          $running = DevicePids
+          if ($running.Count -ne 3) { $problems += "the device the detached launch started does not run: $running" }
+          $serverPid = [int]((Get-Content $device | Where-Object { $_ -match '^system_server=\d+$' }) -replace '^system_server=', '')
+          try {
+            $serverEnv = [GesherProcessEnvironment]::Of($serverPid)
+            if (-not ($serverEnv | Where-Object { $_ -like 'GESHER_BINDER=*' })) { $problems += "the system server's environment as read has no GESHER_BINDER ($($serverEnv.Count) variables)" }
+            if ($serverEnv | Where-Object { $_ -like 'GESHER_LAUNCH_DETACH=*' }) { $problems += 'the system server inherited GESHER_LAUNCH_DETACH' }
+          } catch { $problems += "the system server's environment: $_" }
           if ($w.Count -gt 0) {
             [void][GesherWin32]::PostMessageW($w[0], 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)  # WM_CLOSE
             $closed = $false
@@ -1122,7 +1170,7 @@ jobs:
             if (-not $closed) { $problems += 'the app''s window did not close' }
           }
           if ($problems) { throw "gesher-launch without output handles: $($problems -join '; ')" }
-          'PASS  installer: gesher-launch launch with no output handles (the Start menu''s) ends once the app''s window is up; no launcher, powershell or gesher-launch stays for the app''s lifetime' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          'PASS  installer: gesher-launch launch with no output handles (the Start menu''s) ends once the app''s window is up; no launcher, powershell or gesher-launch stays for the app''s lifetime; the device it started has no GESHER_LAUNCH_DETACH' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # An update while a program has the .apk icon handler loaded (Explorer always
           # has): Setup must not close that program (it took the desktop away), and
           # the update must still succeed: the loaded copy is moved aside.
