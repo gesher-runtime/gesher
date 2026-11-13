@@ -77,8 +77,17 @@ Behaviour, in short (details in the classes' comments and ADR 0038):
   Between PBT_APMSUSPEND and the resume only _WAKEUP alarms fire; the others
   that came due fire on resume.
 - With no Gesher device running nothing fires; scheduled work due within the
-  idle timeout keeps the device running; persisted jobs come back at the next
-  start.
+  idle timeout keeps an idle device running for at most one more timeout
+  (after that only work due now or in flight does, so an app that
+  reschedules itself every few seconds cannot keep it forever); persisted jobs
+  come back at the next start.
+- Alarm delivery owns a hold from due-list removal through listener completion
+  or PendingIntent completion, capped at five minutes from reservation. Listener
+  death also releases it. A broadcast PendingIntent completes after its receiver
+  chain; a service/activity PendingIntent completes at admission, after which the
+  usual activity/foreground-service idle policy applies. Queued or active
+  manifest/acknowledged broadcasts retain their bounded delivery holds. These
+  holds preserve the original idle clock, including across repeated alarms.
 - Jobs: latency, deadline, periodic windows (interval, flex), backoff,
   network (a NetworkRequest against ConnectivityManager's networks; the network
   in JobParameters)/charging/battery-not-low/idle constraints, content URI
@@ -359,7 +368,8 @@ no service, nothing was ever enabled and nothing read an app's views. Now:
   servicemanager in a kill-on-close job (app processes, its children, join
   it); it stops on its named shutdown event (`gesher-app shutdown`, also from
   PowerShell without a runtime), on `GESHER_IDLE_TIMEOUT` seconds (default
-  600) without an app process or launcher call, or with the job when killed.
+  600) without an app in use (an activity or a foreground service; cached
+  processes do not count) or launcher call, or with the job when killed.
 - Packages: `Installer` (`app/<package>-<n>/base.apk`, `lib/x86_64`,
   `data/<package>`, `system/packages.list`, loaded at start; same APK:
   unchanged; another: an update after stopping the package; uninstall;

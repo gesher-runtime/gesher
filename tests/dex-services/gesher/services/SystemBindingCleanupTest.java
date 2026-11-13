@@ -27,6 +27,8 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /** Real service-owner guard and internal job/sync completion cleanup; APK metadata only. */
 public final class SystemBindingCleanupTest {
@@ -172,26 +174,35 @@ public final class SystemBindingCleanupTest {
         Class<?> syncType = Class.forName("com.gesher.server.SyncManager");
         Class<?> adapterType = Class.forName(syncType.getName() + "$Adapter");
         Class<?> activeType = Class.forName(syncType.getName() + "$Active");
+        Class<?> keyType = Class.forName(syncType.getName() + "$WorkKey");
         Object sync = construct(syncType, new Class<?>[]{h.amType, h.pmType}, h.am, h.pm);
         Object adapter = construct(adapterType, new Class<?>[]{String.class, String.class, ComponentName.class,
                 boolean.class, boolean.class, boolean.class, boolean.class, String.class},
                 "fixture.authority", "fixture.account.type", h.component, true, true, true, false, null);
-        Object active = construct(activeType, new Class<?>[]{syncType, String.class, adapterType, Account.class, Bundle.class},
-                sync, "fixture-key", adapter, new Account("fixture@example.test", "fixture.account.type"), new Bundle());
+        Account account = new Account("fixture@example.test", "fixture.account.type");
+        Object key = construct(keyType, new Class<?>[]{adapterType, Account.class}, adapter, account);
+        Object active = construct(activeType, new Class<?>[]{syncType, keyType, adapterType, Account.class, Bundle.class},
+                sync, key, adapter, account, new Bundle());
         IServiceConnection connection = new IServiceConnection.Stub() {
             @Override public void connected(ComponentName name, IBinder binder,
                     android.app.IBinderSession session, boolean dead) { }
         };
         field(activeType, "connection").set(active, connection);
-        ((Map<String, Object>) field(syncType, "mActive").get(sync)).put("fixture-key", active);
+        synchronized (sync) {
+            ((Map<Object, Object>) field(syncType, "mActive").get(sync)).put(key, active);
+        }
         h.bind(connection);
+        field(activeType, "bound").setBoolean(active, true);
+        ScheduledExecutorService timer = (ScheduledExecutorService) field(syncType, "mTimer").get(sync);
         long original = Binder.clearCallingIdentity();
         try {
             h.asApp();
             h.directAppUnbindDenied(connection);
             ((ISyncContext) active).onFinished(new SyncResult());
+            timer.submit(() -> {}).get(3, TimeUnit.SECONDS);
             h.cleaned();
             ((ISyncContext) active).onFinished(new SyncResult());
+            timer.submit(() -> {}).get(3, TimeUnit.SECONDS);
             require(h.thread.stopped == 1 && ((Map<?, ?>) field(syncType, "mActive").get(sync)).isEmpty(),
                     "Duplicate sync completion changed a finished binding");
         } finally { Binder.restoreCallingIdentity(original); }

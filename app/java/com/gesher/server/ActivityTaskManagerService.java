@@ -192,6 +192,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final String resultWho;
         final int requestCode;
         final long startTime = SystemClock.uptimeMillis();
+        // Record construction is guarded by the task-manager monitor. Clock ticks
+        // can be shared by several activities and do not establish launch order.
+        final long startOrder = mNextActivityOrder++;
+        boolean launchFailed;
         ProcessRecord app;
         ProcessExitStatus.Generation launchGeneration;
         /** What TaskInfo calls the task's WindowContainerToken; nothing stands behind it. */
@@ -300,6 +304,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private AccountManagerService mAccounts;
     private AccountChooser.Dialog mAccountDialog; // server-local synthetic fixture injection
     private int mNextTaskId = 1;
+    private long mNextActivityOrder = 1;
     /** Tasks moved to the back (their window minimized): none of their activities is visible. */
     private final java.util.Set<Integer> mHiddenTasks = new java.util.HashSet<>();
     /** Tasks the user resized (resizeTask): their size in pixels; others are the display's. */
@@ -691,8 +696,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         long deadline = SystemClock.uptimeMillis() + WAIT_TIMEOUT_MS;
         synchronized (this) {
             // ActivityTaskSupervisor.waitActivityVisibleOrLaunched: until the launch is
-            // complete (here: the activity is idle), or it went away.
-            while (!r.idle && r.state != State.DESTROYED) {
+            // complete (here: the activity is idle), or it went away. A trampoline (a
+            // launcher activity that starts the app's real one and stays below it,
+            // stopped, never idle) completes the launch with that activity: one started
+            // after it in its task that is idle (Android's launch transition ends when
+            // the task's windows are drawn).
+            while (!r.idle && r.state != State.DESTROYED && idleAbove(r) == null) {
                 long left = deadline - SystemClock.uptimeMillis();
                 if (left <= 0) {
                     result.timeout = true;
@@ -705,9 +714,26 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     break;
                 }
             }
+            // A rejected native start or unexpected pre-idle process death is
+            // different from an activity deliberately finishing in onCreate.
+            if (r.launchFailed && !r.idle && idleAbove(r) == null) {
+                result.result = ActivityManager.START_CANCELED;
+            }
         }
         result.totalTime = SystemClock.uptimeMillis() - r.startTime;
         return result;
+    }
+
+    /** An activity started after {@code r} in its task that is idle, or null. Guarded by this. */
+    private ActivityRecord idleAbove(ActivityRecord r) {
+        for (int i = mActivities.size() - 1; i >= 0; i--) {
+            ActivityRecord a = mActivities.get(i);
+            if (a != r && a.taskId == r.taskId && a.idle && a.state != State.DESTROYED
+                    && a.startOrder > r.startOrder) {
+                return a;
+            }
+        }
+        return null;
     }
 
     @Override
@@ -1567,6 +1593,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 ActivityRecord r = mActivities.get(i);
                 if (r.app == null && r.info.packageName.equals(pending.packageName)
                         && componentProcess(r.info.packageName, r.info.processName).equals(pending.processName)) {
+                    r.launchFailed = true;
                     r.state = State.DESTROYED;
                     accountActivityFinished(r);
                     mActivities.remove(i);
@@ -1579,29 +1606,81 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
     }
 
-    /** Notes since when only ready background GMS processes remain. Guarded by this. */
-    private void updateIdle() {
-        // Work waiting on a live bind/start is covered by !ready and mStarting.
-        // Orphaned queued work after process death must not prevent shutdown forever.
-        boolean hasActiveUserProcess = !mActivities.isEmpty();
+    /** Whether some activity exists (launching, shown or stopped). Guarded by this. */
+    private boolean hasActivityLocked() {
+        if (!mActivities.isEmpty()) return true;
         for (ProcessRecord p : mProcesses) {
-            if (!GmsPackageSupport.PACKAGE_GMS.equals(p.packageName) || !p.ready
-                    || !p.activities.isEmpty()) {
-                hasActiveUserProcess = true;
-                break;
-            }
+            if (!p.activities.isEmpty()) return true;
         }
-        if (!hasActiveUserProcess && mStarting.isEmpty()) {
-            if (mIdleSince == 0) mIdleSince = SystemClock.uptimeMillis();
-        } else {
+        return false;
+    }
+
+    /** A process is being started or has not attached yet. Guarded by this. */
+    private boolean startingLocked() {
+        if (!mStarting.isEmpty()) return true;
+        for (ProcessRecord p : mProcesses) {
+            if (!p.ready) return true;
+        }
+        return false;
+    }
+
+    /**
+     * An activity restarts the idle clock; without one it runs (from the activity's end).
+     * Whether a background process keeps the device busy is asked by {@link #idleSince}.
+     * Guarded by this.
+     */
+    private void updateIdle() {
+        if (hasActivityLocked()) {
             mIdleSince = 0;
+        } else if (mIdleSince == 0) {
+            mIdleSince = SystemClock.uptimeMillis();
         }
     }
 
-    /** Since when only background GMS remains; 0 during app activity or startup. */
-    synchronized long idleSince() {
-        updateIdle();
-        return mIdleSince;
+    /**
+     * Since when the device is idle (for its idle shutdown); 0 while it is busy.
+     *
+     * <p>Busy: some activity exists, or an app process (GMS's aside, as before) is perceptible
+     * to the user without one: it runs a foreground service
+     * ({@link ActivityManagerService#keepsDeviceBusy}). Both restart the idle clock. An app
+     * process with neither is cached, as Android ranks a process whose activities are gone:
+     * it is kept (for a fast relaunch) but does not hold the device, also when it runs a
+     * started background service or is bound by the system or by another cached process
+     * (a binding from a busy client keeps the device anyway). A process being started (for a
+     * job, an alarm, a broadcast) holds the device until it has attached (0 is returned) but
+     * does not restart the clock, so a cached app woken every few seconds by its own
+     * background work does not keep the device forever.
+     */
+    long idleSince() {
+        List<ProcessRecord> background = new ArrayList<>();
+        synchronized (this) {
+            updateIdle();
+            if (mIdleSince == 0) return 0;
+            for (ProcessRecord p : mProcesses) {
+                if (p.ready && !p.exiting) background.add(p);
+            }
+        }
+        // Outside the lock, as maybeExit asks keepsAlive: the services take their own.
+        boolean busy = false;
+        ActivityManagerService am = mAm;
+        if (am != null) {
+            for (ProcessRecord p : background) {
+                if (am.keepsDeviceBusy(p)) {
+                    busy = true;
+                    break;
+                }
+            }
+        }
+        synchronized (this) {
+            if (busy) mIdleSince = 0;
+            else updateIdle();
+            if (mIdleSince == 0 || startingLocked()) return 0;
+            // One that attached meanwhile is asked about at the next call.
+            for (ProcessRecord p : mProcesses) {
+                if (!p.exiting && !background.contains(p)) return 0;
+            }
+            return mIdleSince;
+        }
     }
 
     /** The exit code of the package's last process, or null if none ended (or unknown). */
@@ -2007,6 +2086,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (!mProcesses.remove(app)) return;
             app.dead = true;
             for (ActivityRecord r : app.activities) {
+                if (!r.finishing && !r.idle) r.launchFailed = true;
                 r.state = State.DESTROYED;
                 accountActivityFinished(r);
                 mActivities.remove(r);

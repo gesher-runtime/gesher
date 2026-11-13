@@ -44,6 +44,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/system.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/system_properties.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/thread_register.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/timerfd.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/unistd.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/users.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/windows_zones.cc
@@ -68,6 +69,9 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_crash_reporter_anchor)
 # Every process keeps a signal mailbox for kill() from other processes
 # (src/process.cc), which nothing calls either.
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_signal_mailbox_anchor)
+# DLL callers resolve the futex queue in the executable. Force a private anchor:
+# an import library can satisfy the public owner symbol without extracting it.
+target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_futex_owner_anchor_v1)
 # posix_memalign() memory goes to free()/realloc() (src/memalign.cc).
 target_link_options(gesher_posix INTERFACE -Wl,--wrap=free -Wl,--wrap=realloc)
 target_include_directories(gesher_posix BEFORE PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)

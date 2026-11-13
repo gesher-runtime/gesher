@@ -118,6 +118,16 @@ public final class ActivityManagerService extends IActivityManager.Default {
     }
 
     /**
+     * Whether the app process keeps the device from its idle shutdown without an activity
+     * (ActivityTaskManagerService.idleSince): it runs a foreground service, as a navigation
+     * or music app does. GMS's processes never do (they serve the apps).
+     */
+    boolean keepsDeviceBusy(ActivityTaskManagerService.ProcessRecord app) {
+        if (app == null || GmsPackageSupport.PACKAGE_GMS.equals(app.packageName)) return false;
+        return mServices.hasForegroundService(app);
+    }
+
+    /**
      * Whether the process runs for good, never reaped when idle: microG's main process
      * (its accounts, location, the chimera provider every client asks for) and its
      * {@code :persistent} process (Cloud Messaging's MCS connection, check-in). Its other

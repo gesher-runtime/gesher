@@ -1,0 +1,116 @@
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
+#include <cstdio>
+#include <cstring>
+#include <deque>
+#include <future>
+#include <mutex>
+#include <thread>
+#include <vector>
+@BUFFER@
+using namespace gesher::devices::sensors;
+using namespace std::chrono_literals;
+int checks=0,failures=0;
+void check(bool ok,const char* name) { ++checks;if(!ok){++failures;std::printf("FAIL %s\n",name);} }
+void bufferTests() {
+ TestBuffer buffer;
+ Reading r;
+ for(int i=0;i<256;++i) check(buffer.PushData({1,false,r,i}),"initial samples accepted");
+ check(buffer.Flush({1,2}),"two-sensor flush admitted");
+ for(int i=0;i<1024;++i) buffer.PushData({1,false,r,1000+i});
+ auto events=buffer.Take();
+ check(events.size()==256,"queue remains bounded under sample backlog");
+ check(std::count_if(events.begin(),events.end(),[](const auto&e){return e.flush;})==2,"accepted markers survive backlog");
+ check(events.size()>=2&&events[0].flush&&events[0].handle==1&&events[1].flush&&events[1].handle==2,"marker order precedes later samples");
+ for(int i=0;i<255;++i)check(buffer.Flush({1}),"single completion admission");
+ check(!buffer.Flush({1,2}),"multi-sensor admission rejects partial capacity");
+ events=buffer.Take();
+ check(events.size()==255,"rejected flush changes no queued marker");
+ check(std::all_of(events.begin(),events.end(),[](const auto&e){return e.flush&&e.handle==1;}),"previous markers preserved exactly");
+ for(int i=0;i<128;++i)check(buffer.Flush({1,2}),"paired completions fill capacity");
+ check(!buffer.Flush({1}),"full control queue reports backpressure");
+ check(!buffer.PushData({2,false,r,3000}),"sample never displaces full control queue");
+ events=buffer.Take();
+ check(events.size()==256,"all accepted controls retained");
+ for(int i=0;i<256&&i<static_cast<int>(events.size());++i)
+   check(events[i].flush&&events[i].handle==1+i%2,"every paired marker appears once in order");
+ check(buffer.Flush({}),"empty snapshot does not consume capacity");
+ check(buffer.Take().empty(),"empty snapshot has no markers");
+ buffer.PushData({1,false,r,10});buffer.Flush({1,2});buffer.PushData({2,false,r,20});
+ events=buffer.Take();
+ check(events.size()==4&&!events[0].flush&&events[0].timestampNs==10&&events[1].flush&&
+   events[2].flush&&!events[3].flush&&events[3].timestampNs==20,"sample flush sample ordering");
+}
+#if @NEW_SAMPLER@
+namespace android {
+int64_t elapsedRealtimeNano() {
+ return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+}
+namespace gesher::devices::sensors {
+class BlockSource : public Source {
+ public:
+ std::promise<void> entered;
+ std::shared_future<void> release;
+ std::atomic<bool> first{true};
+ explicit BlockSource(std::shared_future<void> done):release(done){}
+ bool Read(Reading* r) override {
+   if(first.exchange(false)){entered.set_value();release.wait();}
+   r->values[0]=42;return true;
+ }
+};
+std::vector<Sensor> sensors;
+const std::vector<Sensor>& List(){return sensors;}
+@SAMPLER@
+}
+class TestSink : public Sink {
+ public:
+ std::mutex mutex;
+ EventBuffer buffer;
+ void OnEvent(int h,const Reading&r,int64_t t) override {
+   std::lock_guard<std::mutex> lock(mutex);buffer.PushData({h,false,r,t});
+ }
+ int OnFlush(const std::vector<int>& handles) override {
+   std::lock_guard<std::mutex> lock(mutex);return buffer.Flush(handles)?0:-EAGAIN;
+ }
+ std::deque<Event> Take(){std::lock_guard<std::mutex>lock(mutex);return buffer.Take();}
+};
+void samplerTests() {
+ std::promise<void> release;
+ auto source=std::make_shared<BlockSource>(release.get_future().share());
+ Sensor one;one.handle=1;one.source=source;one.minDelayUs=1000000;
+ Sensor two=one;two.handle=2;
+ sensors={one,two};
+ auto& sampler=Sampler::Get();TestSink sink,other;
+ check(sampler.Enable(&sink,999,1000000)==-EINVAL,"unknown sensor rejected");
+ check(sampler.Enable(&sink,1,1000000)==0,"subscription accepted");
+ check(source->entered.get_future().wait_for(2s)==std::future_status::ready,"sample entered read boundary");
+ std::promise<void> attempting;
+ auto flush=std::async(std::launch::async,[&]{attempting.set_value();return sampler.Flush(&sink);});
+ attempting.get_future().wait();
+ check(flush.wait_for(20ms)==std::future_status::timeout,"flush waits for in-flight sample enqueue");
+ release.set_value();
+ if(flush.wait_for(2s)!=std::future_status::ready){std::puts("FAIL flush did not finish");std::_Exit(1);}
+ check(flush.get()==0,"flush completes after read");
+ auto events=sink.Take();
+ check(events.size()>=2&&!events[0].flush&&events[1].flush,"sampler queues sample before flush");
+ check(sampler.Enable(&sink,1,1000000)==0,"period update does not duplicate subscription");
+ check(sampler.Enable(&sink,2,1000000)==0,"second sensor enabled");
+ check(sampler.Enable(&other,1,1000000)==0,"separate sink enabled");
+ sink.Take();sampler.Flush(&sink);events=sink.Take();
+ check(std::count_if(events.begin(),events.end(),[](const auto&e){return e.flush;})==2,"flush snapshots own unique subscriptions");
+ sampler.Disable(&sink,2);sink.Take();sampler.Flush(&sink);events=sink.Take();
+ check(std::count_if(events.begin(),events.end(),[](const auto&e){return e.flush;})==1,"disabled sensor absent from flush");
+ sampler.DisableAll(&sink);sink.Take();sampler.Flush(&sink);
+ check(sink.Take().empty(),"retired sink has no subscriptions or callbacks");
+ sampler.DisableAll(&other);
+}
+#endif
+int main(){bufferTests();
+#if @NEW_SAMPLER@
+ samplerTests();
+#endif
+ std::printf("sensor flush contracts: %d checks, %d failures\n",checks,failures);return failures?1:0;}

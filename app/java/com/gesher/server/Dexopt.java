@@ -111,12 +111,14 @@ final class Dexopt {
      * An app process's runtime options, from the system server's ({@code vm}: its
      * executable and options): the JIT and its profile saver, as AndroidRuntime starts an
      * app's runtime ({@code dalvik.vm.usejit}, {@code dalvik.vm.usejitprofiles}, both true
-     * by default), instead of the device's interpreter-only options. {@code
-     * GESHER_APP_EXECUTION=interpret} keeps the device's options.
+     * by default), instead of the device's options (nterp and the boot image's AOT code,
+     * no JIT). {@code dalvik.vm.usejit=false} keeps the device's options; {@code
+     * GESHER_APP_EXECUTION=interpret} runs app processes on the switch interpreter only
+     * ({@code -Xint}, as every Gesher process ran before ADR 0033).
      */
     static String appVmOptions(String vm) {
-        if ("interpret".equals(System.getenv("GESHER_APP_EXECUTION"))
-                || !SystemProperties.getBoolean("dalvik.vm.usejit", true)) {
+        boolean interpret = "interpret".equals(System.getenv("GESHER_APP_EXECUTION"));
+        if (!interpret && !SystemProperties.getBoolean("dalvik.vm.usejit", true)) {
             return vm;
         }
         List<String> args = splitCommandLine(vm);
@@ -126,6 +128,12 @@ final class Dexopt {
             if (i > 0 && (a.equals("-Xint") || a.startsWith("-Xusejit:"))) continue;
             if (sb.length() > 0) sb.append(' ');
             sb.append(Zygote.quote(a));
+        }
+        if (interpret) {
+            sb.append(" -Xint -Xusejit:false");
+            SystemServer.log("app processes run on the switch interpreter only"
+                    + " (GESHER_APP_EXECUTION=interpret)");
+            return sb.toString();
         }
         sb.append(" -Xusejit:true");
         if (SystemProperties.getBoolean("dalvik.vm.usejitprofiles", true)) {
@@ -329,7 +337,8 @@ final class Dexopt {
     private static Thread sBackground;
 
     /**
-     * BackgroundDexOptService: every few seconds, once no app process has run or started for
+     * BackgroundDexOptService: every few seconds, once the device has been idle (no app in
+     * use, ActivityTaskManagerService.idleSince) and no app process has been starting for
      * {@code gesher.dexopt.idle-ms} (default 2000), the packages whose current profile has
      * new data are compiled with their merged profile (pm.dexopt.bg-dexopt).
      */

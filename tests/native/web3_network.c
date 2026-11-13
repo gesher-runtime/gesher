@@ -2,7 +2,6 @@
 #include <android/multinetwork.h>
 #include <arpa/inet.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <jni.h>
 #include <netdb.h>
 #include <poll.h>
@@ -35,6 +34,21 @@ static int connected_source(net_handle_t network, const char* host, int port, in
   return ok;
 }
 
+// These NDK calls consume the query descriptor. Retire our local ownership
+// immediately; another app thread may reuse its number before the call returns.
+static int consume_result(int* fd, int* rcode, uint8_t* answer, size_t capacity) {
+  int size = android_res_nresult(*fd, rcode, answer, capacity);
+  *fd = -1;
+  return size;
+}
+
+static void cancel_query(int* fd) {
+  if (*fd >= 0) {
+    android_res_cancel(*fd);
+    *fd = -1;
+  }
+}
+
 static int result(int fd, int expected_rcode, int expected_id) {
   if (fd < 0) {
     printf("Web3 DNS query failed: result=%d errno=%d\n", fd, errno);
@@ -44,23 +58,18 @@ static int result(int fd, int expected_rcode, int expected_id) {
   int ready = poll(&pending, 1, 15000);
   if (ready != 1) {
     printf("Web3 DNS poll failed: result=%d revents=%d errno=%d\n", ready, pending.revents, errno);
-    android_res_cancel(fd);
+    cancel_query(&fd);
     return 0;
   }
   uint8_t packet[65535];
   int rcode = -1;
-  int size = android_res_nresult(fd, &rcode, packet, sizeof(packet));
-  int packet_ok = size >= 12 && rcode == expected_rcode && (packet[2] & 0x80) &&
+  int query_fd = fd;  // Diagnostic value only, never used for a later syscall.
+  int size = consume_result(&fd, &rcode, packet, sizeof(packet));
+  int ok = size >= 12 && rcode == expected_rcode && (packet[2] & 0x80) &&
       (expected_id < 0 || ((int)packet[0] << 8 | packet[1]) == expected_id);
-  int descriptor_flags = 0, descriptor_errno = 0;
-  if (packet_ok) {
-    descriptor_flags = fcntl(fd, F_GETFD);
-    descriptor_errno = errno;
-  }
-  int ok = packet_ok && descriptor_flags == -1 && descriptor_errno == EBADF;
-  if (!ok) printf("Web3 DNS result failed: fd=%d size=%d rcode=%d expected_rcode=%d expected_id=%d revents=%d packet_flags=%d descriptor_checked=%d descriptor_flags=%d descriptor_errno=%d errno=%d\n",
-                  fd, size, rcode, expected_rcode, expected_id, pending.revents,
-                  size >= 3 ? packet[2] : -1, packet_ok, descriptor_flags, descriptor_errno, errno);
+  if (!ok) printf("Web3 DNS result failed: fd=%d size=%d rcode=%d expected_rcode=%d expected_id=%d revents=%d packet_flags=%d errno=%d\n",
+                  query_fd, size, rcode, expected_rcode, expected_id, pending.revents,
+                  size >= 3 ? packet[2] : -1, errno);
   return ok;
 }
 
@@ -95,7 +104,7 @@ JNIEXPORT jstring JNICALL Java_com_gesher_web3app_NetActivity_nativeNetworkCheck
   ok = android_getaddrinfofornetwork(missing, "example.com", NULL, &hints, &addresses) == EAI_SYSTEM;
   if (addresses) { freeaddrinfo(addresses); addresses = NULL; }
   if (!ok) goto done;
-  stage = "pollable DNS query/result/close";
+  stage = "pollable DNS query/result";
   ok = result(android_res_nquery(network, "example.com", 1, 1,
               ANDROID_RESOLV_NO_CACHE_LOOKUP), 0, -1);
   if (!ok) goto done;
@@ -107,38 +116,28 @@ JNIEXPORT jstring JNICALL Java_com_gesher_web3app_NetActivity_nativeNetworkCheck
   stage = "raw DNS NXDOMAIN";
   ok = result(android_res_nquery(network, "gesher-web3-no-such-name.invalid", 1, 1, 0), 3, -1);
   if (!ok) goto done;
-  stage = "small DNS result buffer closes descriptor without changing rcode";
+  stage = "small DNS result buffer preserves rcode";
   fd = android_res_nquery(network, "example.com", 1, 1, 0);
   ok = fd >= 0;
   if (!ok) goto done;
   struct pollfd short_result = {.fd = fd, .events = POLLIN};
   int rcode = 77;
   uint8_t small[1];
-  ok = poll(&short_result, 1, 15000) == 1 &&
-      android_res_nresult(fd, &rcode, small, sizeof(small)) == -EMSGSIZE && rcode == 77;
-  fd = -1;
+  ok = poll(&short_result, 1, 15000) == 1;
+  if (!ok) goto done;  // The query remains owned and must be cancelled below.
+  ok = consume_result(&fd, &rcode, small, sizeof(small)) == -EMSGSIZE && rcode == 77;
   if (!ok) goto done;
-  stage = "DNS cancellation/descriptor close";
+  stage = "DNS cancellation";
   fd = android_res_nquery(network, "example.com", 1, 1, 0);
   ok = fd >= 0;
   if (!ok) goto done;
-  android_res_cancel(fd);
-  int cancelled_flags = fcntl(fd, F_GETFD);
-  int cancelled_errno = errno;
-  ok = cancelled_flags == -1 && cancelled_errno == EBADF;
-  if (!ok) {
-    printf("Web3 DNS cancellation failed: fd=%d descriptor_flags=%d descriptor_errno=%d\n",
-           fd, cancelled_flags, cancelled_errno);
-    errno = cancelled_errno;
-  }
-  fd = -1;
-  if (!ok) goto done;
+  cancel_query(&fd);
   stage = "invalid query flags/network";
   ok = android_res_nquery(network, "example.com", 1, 1, 8) == -EINVAL &&
       android_res_nquery(missing, "example.com", 1, 1, 0) == -ENONET;
 done:
   failure_errno = errno;
-  if (fd >= 0) android_res_cancel(fd);
+  cancel_query(&fd);
   android_setprocnetwork(NETWORK_UNSPECIFIED);
   (*env)->ReleaseStringUTFChars(env, address, host);
   char message[256];

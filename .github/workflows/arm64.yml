@@ -186,6 +186,14 @@ jobs:
           "$cc" -shared -fPIC -O2 -fno-stack-protector -nostdlib \
             -Wl,-soname,libtrivial.so -Wl,--hash-style=both \
             -o dist-arm64/trivial_arm64.so tests/native/trivial.c
+          # The same valid TEXTREL object under the translated ABI; a missing
+          # dynamic TEXTREL tag fails the producer before artifacts are uploaded.
+          "$cc" -shared -fPIC -O2 -fno-stack-protector -nostdlib \
+            -Wall -Wextra -Werror -Wl,-soname,libtextrel.so -Wl,--hash-style=both \
+            -Wl,-z,notext -o dist-arm64/textrel_arm64.so tests/native/textrel.c
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
+            -d dist-arm64/textrel_arm64.so > "$RUNNER_TEMP/textrel-arm64.dynamic"
+          grep -F '(TEXTREL)' "$RUNNER_TEMP/textrel-arm64.dynamic"
           # Step 2 (guest): bionic libc/libm/libdl/liblog/pthread through the
           # shim, over the guest->host trampolines (the NDK's default stack
           # protector: its guard is a TLS slot on arm64).
@@ -228,6 +236,16 @@ jobs:
           echo "--- trivial_arm64.so ---"; "$ro" -h dist-arm64/trivial_arm64.so | grep -E 'Machine|Type'
           echo "--- libc_test_arm64.so ---"; "$ro" -d dist-arm64/libc_test_arm64.so | grep -E 'NEEDED|SONAME'
           ls -la dist-arm64
+
+      - name: Android directory traversal and futex guest contracts
+        run: |
+          cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+          "$cc" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror \
+            -Wl,-soname,libtraversal_contract.so \
+            -o dist-arm64/traversal_contract_arm64.so tests/native/traversal_contract.c
+          "$cc" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror \
+            -Wl,-soname,libfutex_contract.so \
+            -o dist-arm64/futex_contract_arm64.so tests/native/futex_contract.c
 
       - name: Cache d8
         id: r8

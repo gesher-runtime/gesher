@@ -371,11 +371,11 @@ public final class SystemServer {
                         long since = mServices.atm.idleSince();
                         long now = SystemClock.uptimeMillis();
                         // Scheduled alarms and jobs due within the timeout keep the
-                        // device (devsvc, DeviceWork).
+                        // device for at most one more timeout (devsvc, DeviceWork).
                         if (since != 0 && now - since >= mIdleTimeoutMs
                                 && now - mLastCall >= mIdleTimeoutMs
-                                && !DeviceWork.dueWithin(mIdleTimeoutMs)) {
-                            shutdown("idle: no app process for " + (mIdleTimeoutMs / 1000)
+                                && !DeviceWork.keepsIdleDevice(now - since, mIdleTimeoutMs)) {
+                            shutdown("idle: no app in use for " + (mIdleTimeoutMs / 1000)
                                     + " s");
                             return;
                         }

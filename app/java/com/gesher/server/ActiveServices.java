@@ -715,6 +715,14 @@ final class ActiveServices {
         return false;
     }
 
+    /** Whether a service in the process is in the foreground (startForeground). */
+    synchronized boolean hasForegroundService(ActivityTaskManagerService.ProcessRecord app) {
+        for (ServiceRecord r : mServices.values()) {
+            if (r.app == app && r.foregroundId != 0) return true;
+        }
+        return false;
+    }
+
     /**
      * Whether a service of the process is in use, as OomAdjuster ranks a service process
      * above a cached one: a service still being brought up or with a restart pending, a

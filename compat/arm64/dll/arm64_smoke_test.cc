@@ -8,9 +8,11 @@
 // Prints "arm64_smoke_test all passed" and exits 0 on success. No NDK or AOSP.
 
 #include <gesher/arm64_translator.h>
+#include "guest_counter.h"
 
 #include <windows.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -23,6 +25,15 @@ int failures = 0;
 void Check(const char* what, bool ok, const char* detail = "") {
   std::printf("%-52s %s%s%s\n", what, ok ? "ok" : "FAIL", *detail ? "  " : "", detail);
   if (!ok) ++failures;
+}
+
+// Resource failure or a stuck guest must fail the standalone smoke executable,
+// including arm64.yml's direct invocation, rather than leave it waiting forever.
+void RequireHarness(bool ok, const char* what) {
+  if (ok) return;
+  std::fprintf(stderr, "FAIL  arm64 smoke harness: %s\n", what);
+  std::fflush(stderr);
+  ExitProcess(1);
 }
 
 // A host function the guest calls: System V, two integer arguments.
@@ -140,6 +151,50 @@ int main(int argc, char** argv) {
     return 3;
   }
 
+  // Exercise the same arithmetic used by the DLL at the 32-bit frequency
+  // boundary and with products that overflow 64 bits, even on a low-rate host.
+  using gesher_arm64::GuestCounterFrequency;
+  using gesher_arm64::GuestCounterValue;
+  Check("ordinary QPC frequency and ticks remain direct",
+        GuestCounterFrequency(10000000) == 10000000 &&
+        GuestCounterValue(UINT64_MAX, 10000000) == UINT64_MAX);
+  Check("largest representable QPC frequency remains direct",
+        GuestCounterFrequency(0xffffffffULL) == 0xffffffffu &&
+        GuestCounterValue(UINT64_MAX, 0xffffffffULL) == UINT64_MAX);
+  Check("wide QPC frequency has a representable 1 GHz rate",
+        GuestCounterFrequency(0x100000000ULL) == 1000000000u);
+  Check("wide QPC conversion floors fractions consistently",
+        GuestCounterValue(0xffffffffULL, 0x100000000ULL) == 999999999ULL &&
+        GuestCounterValue(0x100000000ULL, 0x100000000ULL) == 1000000000ULL &&
+        GuestCounterValue(0x100000001ULL, 0x100000000ULL) == 1000000000ULL);
+  Check("wide QPC multiplication does not overflow",
+        GuestCounterValue(UINT64_MAX, 0x100000000ULL) == 4294967295999999999ULL);
+  Check("full-width QPC numerator and denominator stay exact",
+        GuestCounterValue(UINT64_MAX, UINT64_MAX) == 1000000000ULL &&
+        GuestCounterValue(UINT64_MAX - 1, UINT64_MAX) == 999999999ULL);
+  Check("wide QPC zero and integral seconds are exact",
+        GuestCounterValue(0, 5000000000ULL) == 0 &&
+        GuestCounterValue(15000000000ULL, 5000000000ULL) == 3000000000ULL);
+  {
+    uint32_t frequency_code[] = {0xD53BE000u, kRet};  // mrs x0, cntfrq_el0
+    uint32_t counter_code[] = {0xD53BE020u, kRet};    // mrs x0, cntpct_el0
+    void* frequency_fn = GuestPage(frequency_code, 2);
+    void* counter_fn = GuestPage(counter_code, 2);
+    api->add_code(frequency_fn, sizeof(frequency_code), "counter_frequency");
+    api->add_code(counter_fn, sizeof(counter_code), "counter_value");
+    LARGE_INTEGER frequency, before, after;
+    RequireHarness(QueryPerformanceFrequency(&frequency) != 0, "read QPC frequency");
+    const uint64_t host_frequency = static_cast<uint64_t>(frequency.QuadPart);
+    Check("CNTFRQ advertises the guest counter's actual rate",
+          api->call(frequency_fn, nullptr, 0) == GuestCounterFrequency(host_frequency));
+    RequireHarness(QueryPerformanceCounter(&before) != 0, "read QPC lower bound");
+    uint64_t counter = api->call(counter_fn, nullptr, 0);
+    RequireHarness(QueryPerformanceCounter(&after) != 0, "read QPC upper bound");
+    Check("CNTPCT is within the sampled advertised-clock bounds",
+          counter >= GuestCounterValue(static_cast<uint64_t>(before.QuadPart), host_frequency) &&
+          counter <= GuestCounterValue(static_cast<uint64_t>(after.QuadPart), host_frequency));
+  }
+
   // 1. host -> guest: a guest function returning 42.
   {
     uint32_t code[] = {MovzX(0, 42), kRet};
@@ -253,10 +308,101 @@ int main(int argc, char** argv) {
       return 0;
     };
     HANDLE th[4];
-    for (HANDLE& h : th) h = CreateThread(nullptr, 0, worker, nullptr, 0, nullptr);
-    WaitForMultipleObjects(4, th, TRUE, 60000);
+    for (HANDLE& h : th) {
+      h = CreateThread(nullptr, 0, worker, nullptr, 0, nullptr);
+      RequireHarness(h != nullptr, "create LL/SC worker");
+    }
+    RequireHarness(WaitForMultipleObjects(4, th, TRUE, 60000) == WAIT_OBJECT_0,
+                   "LL/SC workers completed within 60 seconds");
     for (HANDLE h : th) CloseHandle(h);
     Check("4 threads x 100000 guest LL/SC increments == 400000", counter == 400000);
+
+    // 8. More guest threads than the monitor once had processor ids for (64):
+    //    each thread's Jit must still have its own reservation and saved LDXR
+    //    value. Two threads sharing an id overwrote each other's, and a
+    //    store-exclusive then succeeded with the other thread's stale value:
+    //    increments were lost.
+    static uint32_t many = 0;
+    static uint32_t warmup = 0;
+    static std::atomic<int> ready{0};
+    static HANDLE start = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    RequireHarness(start != nullptr, "create simultaneous LL/SC start event");
+    auto many_worker = [](void*) -> DWORD {
+      uint64_t warm[2] = {reinterpret_cast<uint64_t>(&warmup), 1};
+      s_api->call(s_fn, warm, 2);  // this thread's Jit exists: all start together
+      ready.fetch_add(1);
+      RequireHarness(WaitForSingleObject(start, 120000) == WAIT_OBJECT_0,
+                     "simultaneous LL/SC start was signalled within 120 seconds");
+      uint64_t args[2] = {reinterpret_cast<uint64_t>(&many), 1000};
+      s_api->call(s_fn, args, 2);
+      return 0;
+    };
+    constexpr int kMany = 128;
+    HANDLE mth[kMany];
+    for (HANDLE& h : mth) {
+      h = CreateThread(nullptr, 0, many_worker, nullptr, 0, nullptr);
+      RequireHarness(h != nullptr, "create one of 128 LL/SC workers");
+    }
+    const ULONGLONG ready_deadline = GetTickCount64() + 120000;
+    while (ready.load() < kMany) {
+      RequireHarness(GetTickCount64() < ready_deadline, "128 LL/SC workers became ready within 120 seconds");
+      Sleep(1);
+    }
+    RequireHarness(SetEvent(start) != 0, "release simultaneous LL/SC workers");
+    for (int i = 0; i < kMany; i += MAXIMUM_WAIT_OBJECTS) {
+      int n = kMany - i < MAXIMUM_WAIT_OBJECTS ? kMany - i : MAXIMUM_WAIT_OBJECTS;
+      RequireHarness(WaitForMultipleObjects(n, mth + i, TRUE, 120000) == WAIT_OBJECT_0,
+                     "128 LL/SC workers completed within their join deadline");
+    }
+    for (HANDLE h : mth) CloseHandle(h);
+    CloseHandle(start);
+    std::printf("INFO  %d threads x 1000 LL/SC increments: %u\n", kMany, many);
+    Check("128 threads x 1000 guest LL/SC increments == 128000", many == kMany * 1000);
+  }
+
+  // 9. A WFE spin-wait (LDAXR; CBNZ; WFE; B) ends when another thread stores
+  //    to the word with a plain store (no event: WFE's bounded wait), and
+  //    sleeps rather than spins meanwhile.
+  //   L: ldaxr w1,[x0]; cbnz w1,done; wfe; b L; done: mov w0,w1; ret
+  {
+    uint32_t code[] = {0x885FFC01u, 0x35000061u, 0xD503205Fu, 0x17FFFFFDu, 0x2A0103E0u, kRet};
+    void* fn = GuestPage(code, 6);
+    api->add_code(fn, sizeof(code), "wfe_wait");
+    static volatile uint32_t flag = 0;
+    HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    RequireHarness(done != nullptr, "create WFE completion event");
+    HANDLE setter = CreateThread(
+        nullptr, 0,
+        [](void* done_event) -> DWORD {
+          Sleep(300);
+          flag = 7;
+          RequireHarness(WaitForSingleObject(static_cast<HANDLE>(done_event), 5000) == WAIT_OBJECT_0,
+                         "WFE guest returned within 5 seconds of release");
+          return 0;
+        },
+        done, 0, nullptr);
+    RequireHarness(setter != nullptr, "create WFE setter/watchdog");
+    FILETIME c, e, k0, u0, k1, u1;
+    RequireHarness(GetThreadTimes(GetCurrentThread(), &c, &e, &k0, &u0) != 0,
+                   "read WFE starting CPU time");
+    auto t0 = std::chrono::steady_clock::now();
+    uint64_t args[1] = {reinterpret_cast<uint64_t>(&flag)};
+    uint64_t r = api->call(fn, args, 1);
+    double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    RequireHarness(GetThreadTimes(GetCurrentThread(), &c, &e, &k1, &u1) != 0,
+                   "read WFE ending CPU time");
+    RequireHarness(SetEvent(done) != 0, "signal WFE completion");
+    auto ticks = [](const FILETIME& f) {
+      return (static_cast<uint64_t>(f.dwHighDateTime) << 32) | f.dwLowDateTime;
+    };
+    double cpu_ms = static_cast<double>(ticks(u1) - ticks(u0) + ticks(k1) - ticks(k0)) / 1e4;
+    RequireHarness(WaitForSingleObject(setter, 5000) == WAIT_OBJECT_0,
+                   "WFE setter/watchdog completed within 5 seconds");
+    CloseHandle(setter);
+    CloseHandle(done);
+    std::printf("INFO  WFE wait: %.0f ms elapsed, %.0f ms CPU\n", ms, cpu_ms);
+    Check("WFE spin-wait ends on a plain store (returns 7)", r == 7 && ms < 5000);
+    Check("WFE spin-wait mostly sleeps (CPU < half the wait)", cpu_ms < ms / 2);
   }
 
   std::printf("\n");
