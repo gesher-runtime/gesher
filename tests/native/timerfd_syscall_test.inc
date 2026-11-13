@@ -13,11 +13,13 @@
 #endif
 #include <unistd.h>
 
-#if defined(__x86_64__)
+// The Windows fixture calls typed APIs through its own fixed dispatch numbers;
+// these syscall table assertions apply to the real Linux/Android guest ABIs.
+#if !defined(GESHER_TIMERFD_HOST) && defined(__x86_64__)
 _Static_assert(SYS_timerfd_create == 283 && SYS_timerfd_settime == 286 && SYS_timerfd_gettime == 287,
                "Unexpected Linux x86-64 syscall table");
 #endif
-#if defined(__aarch64__)
+#if !defined(GESHER_TIMERFD_HOST) && defined(__aarch64__)
 _Static_assert(SYS_timerfd_create == 85 && SYS_timerfd_settime == 86 && SYS_timerfd_gettime == 87,
                "Unexpected Linux ARM64 syscall table");
 #endif
@@ -27,7 +29,7 @@ static void test_timerfd_vector_write_errors(int fd) {
     struct iovec zeros[] = { {0, 0}, {0, 0} };
     struct iovec payload = { &injected, sizeof(injected) };
     errno = 0;
-    check("timer rejects empty writev", writev(fd, 0, 0) == -1 && errno == EINVAL);
+    check("timer rejects empty writev", writev(fd, zeros, 0) == -1 && errno == EINVAL);
     errno = 0;
     check("timer rejects zero-length writev", writev(fd, zeros, 1) == -1 && errno == EINVAL);
     errno = 0;
