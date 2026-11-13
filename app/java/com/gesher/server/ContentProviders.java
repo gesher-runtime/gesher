@@ -41,7 +41,7 @@ import java.util.Set;
  *     appears or goes, and {@code removeContentProvider} once it released the last one
  *     (one second later, CONTENT_PROVIDER_RETAIN_TIME). A provider process whose
  *     connections all have no references left is in no client's use
- *     ({@link #hasActiveClients}): the idle reaper may end it (ADR 0081), and the next
+ *     ({@link #hasActiveClients}): the idle reaper may end it (ADR 0082), and the next
  *     acquisition starts it again.
  * <li>{@code settings} is the system server's own stand-in ({@link SettingsProvider}),
  *     so that Settings.System, Secure and Global answer.

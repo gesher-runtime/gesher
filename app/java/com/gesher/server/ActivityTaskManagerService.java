@@ -1637,7 +1637,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /**
      * The idle reaper: what OomAdjuster and the low-memory killer do to cached processes
-     * (ADR 0081). {@link #maybeExit} ends a process as soon as nothing keeps it; but a
+     * (ADR 0082). {@link #maybeExit} ends a process as soon as nothing keeps it; but a
      * process can be kept by something that is no use to anybody (a service bound only by
      * its own process, a provider whose clients released it, a GMS sibling process). This
      * ends the processes this server started that are cached, with no activity, no work

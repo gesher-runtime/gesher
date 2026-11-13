@@ -1,4 +1,4 @@
-# 0081 — Cached app processes: provider reference counts and an idle reaper
+# 0082 — Cached app processes: provider reference counts and an idle reaper
 
 **Status:** accepted, 2026-11-13. Extends ADR 0024 (services in the app
 process) and ADR 0080 (memory footprint).
