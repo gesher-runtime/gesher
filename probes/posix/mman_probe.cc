@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
+#include <psapi.h>
 
 #include <vector>
 
@@ -51,6 +52,21 @@ DWORD Protection(const void* p) {
   MEMORY_BASIC_INFORMATION info;
   VirtualQuery(p, &info, sizeof(info));
   return info.Protect;
+}
+
+DWORD State(const void* p) {
+  MEMORY_BASIC_INFORMATION info;
+  VirtualQuery(p, &info, sizeof(info));
+  return info.State;
+}
+
+// The process's commit charge.
+size_t Commit() {
+  PROCESS_MEMORY_COUNTERS_EX counters = {};
+  counters.cb = sizeof(counters);
+  GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                       sizeof(counters));
+  return counters.PrivateUsage;
 }
 
 bool Readable(const void* p) {
@@ -161,6 +177,43 @@ int main() {
                                                 r + 12 * kPage));
   Check("mremap into the reservation", moved == r + 12 * kPage && moved[kPage] == 5 && !Readable(m));
   Check("munmap of the reservation", munmap(r, 16 * kPage) == 0 && !Readable(r + 2 * kPage));
+
+  // 6. PROT_NONE anonymous memory is reserved, not committed: ART reserves
+  // gigabytes that way, which cost commit charge when they were committed.
+  const size_t before = Commit();
+  uint8_t* big = static_cast<uint8_t*>(mmap(nullptr, size_t{1} << 30, PROT_NONE,
+                                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+  Check("a 1 GiB PROT_NONE mapping", big != MAP_FAILED && State(big) == MEM_RESERVE);
+  Check("... charges no commit", Commit() < before + (size_t{16} << 20));
+  Check("mprotect of two pages commits them, zero-filled",
+        mprotect(big + 8 * kPage, 2 * kPage, PROT_READ | PROT_WRITE) == 0 &&
+        State(big + 8 * kPage) == MEM_COMMIT && big[8 * kPage] == 0 && big[9 * kPage] == 0 &&
+        State(big + 10 * kPage) == MEM_RESERVE && State(big + 7 * kPage) == MEM_RESERVE);
+  big[8 * kPage] = 11;
+  Check("PROT_NONE over reserved and committed pages",
+        mprotect(big, 16 * kPage, PROT_NONE) == 0 && State(big) == MEM_RESERVE &&
+        !Readable(big + 8 * kPage));
+  Check("... keeps what was written", mprotect(big + 8 * kPage, kPage, PROT_READ) == 0 &&
+                                         big[8 * kPage] == 11);
+  // A mixed source moves like ART's from-space: written pages copied, PROT_NONE
+  // pages still reserved at the destination, and the source reads as zeros.
+  uint8_t* to = static_cast<uint8_t*>(mremap(big, 16 * kPage, 16 * kPage,
+                                             MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP,
+                                             big + 64 * kPage));
+  Check("mremap of reserved and committed pages", to == big + 64 * kPage &&
+        to[8 * kPage] == 11 && State(to) == MEM_RESERVE && State(to + 15 * kPage) == MEM_RESERVE &&
+        Protection(to + 8 * kPage) == PAGE_READONLY);
+  Check("... the source stays, zeroed", big[8 * kPage] == 0 && State(big) == MEM_RESERVE);
+  uint8_t* written = static_cast<uint8_t*>(mmap(big + 128 * kPage, 256 * kPage, PROT_READ | PROT_WRITE,
+                                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0));
+  memset(written, 1, 256 * kPage);
+  uint8_t* none = static_cast<uint8_t*>(mmap(written, 256 * kPage, PROT_NONE,
+                                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0));
+  Check("MAP_FIXED PROT_NONE over written pages gives their commit back",
+        none == written && State(written) == MEM_RESERVE && State(written + 255 * kPage) == MEM_RESERVE);
+  Check("madvise(MADV_DONTNEED) of reserved pages", madvise(big, 64 * kPage, MADV_DONTNEED) == 0);
+  Check("munmap of the 1 GiB mapping", munmap(big, size_t{1} << 30) == 0 &&
+        State(big) == MEM_FREE && Commit() < before + (size_t{16} << 20));
 
   _close(fd);
   printf(failures == 0 ? "mman probe: all passed\n" : "mman probe: %d failed\n", failures);

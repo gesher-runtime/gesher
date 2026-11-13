@@ -20,6 +20,9 @@
 //    the instruction is retried. ART's protected pages at the bottom of the
 //    stack are committed (no access) by mprotect (mman.cc), so a probe that
 //    reaches them is not mistaken for growth; nothing below them is grown.
+//    Likewise, an access that raced madvise(MADV_DONTNEED) of private pages
+//    (decommitted and committed again, mman.cc) is retried once they are
+//    back, as Linux would have read zeros there.
 //
 // 2. Signals. EXCEPTION_ACCESS_VIOLATION becomes SIGSEGV (EXCEPTION_ILLEGAL_
 //    INSTRUCTION SIGILL, integer divide by zero and overflow SIGFPE) for the
@@ -317,6 +320,10 @@ LONG CALLBACK Dispatch(EXCEPTION_POINTERS* info) {
       if (rec->NumberParameters < 2) return EXCEPTION_CONTINUE_SEARCH;
       if (GrowStack(rec->ExceptionInformation[1])) {
         Trace(rec, info->ContextRecord, "stack grown");
+        return EXCEPTION_CONTINUE_EXECUTION;
+      }
+      if (gesher::RetryAfterMadvise(rec->ExceptionInformation[1], rec->ExceptionInformation[0])) {
+        Trace(rec, info->ContextRecord, "retried after madvise");
         return EXCEPTION_CONTINUE_EXECUTION;
       }
       signo = SIGSEGV;
