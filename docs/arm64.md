@@ -77,11 +77,13 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
 - **Thread reuse**: the Env of an exited guest thread (its Jits with their
   translated code, guest stack and TLS block) is pooled, at most 8
   (`GESHER_ARM64_ENV_POOL=<n>`, 0 disables), and taken by the next new guest
-  thread with a fresh TLS block and an empty stack.
+  thread with a fresh TLS block and an empty stack (a parked Env's stack pages
+  are reset out of the working set). Each pooled Env keeps its commit (8 MiB
+  guest stack, code caches).
 
 - **Profiling**: `GESHER_ARM64_PROFILE=<ms>` samples every busy guest thread
-  each 10 ms and reports, every `<ms>`, each thread above a quarter of a
-  core: guest -> host calls, raw syscalls (and the last number), exclusive
+  each 10 ms and reports, every `<ms>`, the live guest threads, Jits and Env
+  creations/reuses, then each thread above a quarter of a core: guest -> host calls, raw syscalls (and the last number), exclusive
   loads/stores, store CAS failures and monitor refusals, hint instructions,
   WFE waits, `Run()` entries, and the hottest guest PCs (object+offset),
   host functions and host RIPs. `GESHER_ARM64_PROFILE_PC=1` also turns off
