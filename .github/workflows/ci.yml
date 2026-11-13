@@ -97,6 +97,9 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror tests/paths/unc_paths_test.cc -o "$RUNNER_TEMP/gesher-unc-paths"
           "$RUNNER_TEMP/gesher-unc-paths"
 
+      - name: Anonymous mapping zeroing and protection contracts
+        run: python3 tools/test_mman_zeroing_mappings.py --sanitize
+
       - name: Filesystem metadata and media source ownership contracts
         run: |
           python3 tools/test_file_timestamp_contracts.py --sanitize
