@@ -1,5 +1,5 @@
-// gesher-base: eventfd, epoll and inotify fds (epoll.cc,
-// inotify.cc), and the poll loop they
+// gesher-base: eventfd, epoll, inotify and timerfd (epoll.cc,
+// inotify.cc, timerfd.cc), and the poll loop they
 // share with poll() (fd.cc).
 //
 // Like a socket's, an eventfd's or epoll's fd is a CRT fd open on NUL that
@@ -30,7 +30,7 @@ bool IsNonBlocking(EventFd& eventfd);
 void SetNonBlocking(EventFd& eventfd, bool on);
 
 // The fd.cc overrides call these for every fd; each returns false, doing
-// nothing, if fd is neither an eventfd nor an epoll fd.
+// nothing, if fd does not belong to this virtual-descriptor registry.
 bool ReadEventObject(int fd, void* buf, unsigned int count, int* result);
 bool WriteEventObject(int fd, const void* buf, unsigned int count, int* result);
 // Drops fd's reference to its object; the caller closes the CRT fd.
@@ -46,6 +46,13 @@ void SetReadable(EventFd& readiness, bool readable);
 int RegisterInotify(std::shared_ptr<Inotify> inotify, std::shared_ptr<EventFd> readiness);
 int ReadInotify(Inotify& inotify, void* buf, unsigned int count);
 std::shared_ptr<Inotify> LookupInotify(int fd);
+
+// timerfd has its own expiration counter and read contract. Its readiness is
+// read-only, and descriptor duplication retains the same timer owner.
+struct TimerFd;
+int RegisterTimerFd(std::shared_ptr<TimerFd> timer, std::shared_ptr<EventFd> readiness);
+std::shared_ptr<TimerFd> LookupTimerFd(int fd);
+int ReadTimerFd(TimerFd& timer, void* buf, unsigned int count);
 
 // Takes a closed (or replaced) fd number out of every epoll interest list.
 void ForgetEpollEntries(int fd);
