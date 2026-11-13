@@ -3,6 +3,7 @@
 
 The public fixture compiles against the official SDK. Host execution replaces
 only Handler/Looper scheduling and the WebView2 host with declared adapters;
+the provider's unrelated destroy dependencies are no-op boundary adapters.
 WebMessage, payload encoding, port ownership and provider methods are real.
 The same public fixture runs with real Handler/Looper in the Windows ART gate.
 """
@@ -49,7 +50,7 @@ def main() -> None:
     parser.add_argument("--core-classes", required=True, type=Path)
     parser.add_argument("--sdk-jar", required=True, type=Path)
     parser.add_argument("--source-ref")
-    parser.add_argument("--case", choices=("all", "public", "page"), default="all")
+    parser.add_argument("--case", choices=("all", "public", "page", "ownership"), default="all")
     args = parser.parse_args()
     java, javac = (str(args.java_home / "bin" / name) for name in ("java", "javac"))
     classpath = os.pathsep.join(str(p.resolve()) for p in (args.framework_classes, args.core_classes))
@@ -77,6 +78,9 @@ def main() -> None:
         start = provider.index("    public void postMessageToMainFrame(")
         end = provider.index("    @Override\n    public WebSettings getSettings()", start)
         methods = provider[start:end]
+        destroy_start = provider.index("    public void destroy() {")
+        destroy_end = provider.index("    @Override\n    public void setNetworkAvailable(", destroy_start)
+        methods += provider[destroy_start:destroy_end]
         adapter = '''package com.gesher.app.webview;
 import android.webkit.WebMessage;
 import android.webkit.WebMessagePort;
@@ -85,21 +89,35 @@ import org.json.JSONObject;
 import org.json.JSONArray;
 final class WebView2Host {
     final java.util.List<String> sent = new java.util.ArrayList<>();
-    void postWebMessage(String message) { sent.add(message); }
+    java.util.function.Consumer<String> afterSend;
+    boolean destroyed;
+    void postWebMessage(String message) {
+        sent.add(message);
+        if (afterSend != null) afterSend.accept(message);
+    }
+    void destroy() { destroyed = true; }
 }
+final class CleanupBoundary { void close() {} void pageGone() {} }
 final class FileUrls { static String toWebView2(String url) { return url; } }
 final class GesherWebViewProvider {
     final java.util.Map<String,GesherWebMessagePort> mPagePorts = new java.util.LinkedHashMap<>();
-    final WebView2Host mHost = new WebView2Host();
+    volatile WebView2Host mHost = new WebView2Host();
+    boolean mDestroyed;
+    final CleanupBoundary mBridgeDispatcher = new CleanupBoundary();
+    final CleanupBoundary mGeolocation = new CleanupBoundary();
+    void removeListeners() {}
 ''' + methods + "\n}\n"
         path = package / "GesherWebViewProvider.java"; path.write_text(adapter); inputs.append(str(path))
         inputs.append(str(ROOT / "tests/webmessage/PagePortBoundaryTest.java"))
+        inputs.append(str(ROOT / "tests/webmessage/UndeliveredPortOwnershipTest.java"))
         subprocess.run([javac, "-encoding", "UTF-8", "-cp", classpath, "-d", str(classes), *inputs], check=True)
         runtime = os.pathsep.join((str(public), str(classes), classpath))
         if args.case in ("all", "public"):
             subprocess.run([java, "-cp", runtime, "gesher.services.WebMessagePortContractTest", "--host"], check=True, timeout=45)
         if args.case in ("all", "page"):
             subprocess.run([java, "-cp", runtime, "com.gesher.app.webview.PagePortBoundaryTest"], check=True, timeout=30)
+        if args.case in ("all", "ownership"):
+            subprocess.run([java, "-cp", runtime, "com.gesher.app.webview.UndeliveredPortOwnershipTest"], check=True, timeout=30)
 
 
 if __name__ == "__main__":

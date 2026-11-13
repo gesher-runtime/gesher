@@ -483,13 +483,18 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public void destroy() {
-        if (mDestroyed) return;
-        mDestroyed = true;
+        WebView2Host host;
+        synchronized (mPagePorts) {
+            if (mDestroyed) return;
+            mDestroyed = true;
+            host = mHost;
+            mHost = null;
+        }
+        retirePagePorts();
         mBridgeDispatcher.close();
         removeListeners();
         mGeolocation.pageGone();
-        if (mHost != null) mHost.destroy();
-        mHost = null;
+        if (host != null) host.destroy();
     }
 
     @Override
@@ -1131,20 +1136,25 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
      */
     @Override
     public void postMessageToMainFrame(WebMessage message, Uri targetOrigin) {
-        if (message == null || mHost == null) return;
+        if (message == null) return;
         String origin = targetOrigin == null || Uri.EMPTY.equals(targetOrigin)
                 || "*".equals(targetOrigin.toString()) ? "*" : webView2Origin(targetOrigin);
-        try {
-            JSONObject m = new JSONObject();
-            m.put("gesher", "post");
-            WebMessagePayload.write(m, message);
-            m.put("origin", origin);
-            m.put("ports", transfer(message.getPorts()));
-            mHost.postWebMessage(m.toString());
-            flushTransferredPorts(message.getPorts());
-        } catch (org.json.JSONException e) {
-            throw new IllegalStateException(e);
+        WebMessagePort[] ports = message.getPorts();
+        if (ports != null) ports = ports.clone();
+        synchronized (mPagePorts) {
+            if (mHost == null || mDestroyed) return;
+            try {
+                JSONObject m = new JSONObject();
+                m.put("gesher", "post");
+                WebMessagePayload.write(m, message);
+                m.put("origin", origin);
+                m.put("ports", transfer(ports));
+                mHost.postWebMessage(m.toString());
+            } catch (org.json.JSONException e) {
+                throw new IllegalStateException(e);
+            }
         }
+        flushTransferredPorts(ports);
     }
 
     /** "scheme://host[:port]" as the page sees it (file: pages are FileUrls' origin). */
@@ -1172,27 +1182,55 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     /** The app posts to the end that is in the page (GesherWebMessagePort). */
     void postToPagePort(GesherWebMessagePort port, WebMessage message) {
-        WebView2Host host = mHost;
-        if (host == null) return;
-        try {
-            JSONObject m = new JSONObject();
-            m.put("gesher", "port");
-            m.put("id", port.mId);
-            WebMessagePayload.write(m, message);
-            m.put("ports", transfer(message.getPorts()));
-            host.postWebMessage(m.toString());
-            flushTransferredPorts(message.getPorts());
-        } catch (org.json.JSONException e) {
-            throw new IllegalStateException(e);
+        boolean sent = false;
+        WebMessagePort[] ports = message.getPorts();
+        if (ports != null) ports = ports.clone();
+        // Serialize admission with page close/navigation/destruction. The port
+        // graph lock is only used by the ownership checks and transfer itself;
+        // no backend call holds it. A flush snapshot is not proof of liveness.
+        synchronized (mPagePorts) {
+            WebView2Host host = mHost;
+            if (host != null && !mDestroyed && mPagePorts.get(port.mId) == port
+                    && port.isOwnedByPage(this)) {
+                try {
+                    JSONObject m = new JSONObject();
+                    m.put("gesher", "port");
+                    m.put("id", port.mId);
+                    WebMessagePayload.write(m, message);
+                    m.put("ports", transfer(ports));
+                    host.postWebMessage(m.toString());
+                    sent = true;
+                } catch (org.json.JSONException e) {
+                    throw new IllegalStateException(e);
+                }
+            }
         }
+        if (sent) flushTransferredPorts(ports);
+        else GesherWebMessagePort.discardMessage(message);
     }
 
     void closePagePort(GesherWebMessagePort port) {
-        mPagePorts.remove(port.mId);
-        WebView2Host host = mHost;
-        if (host != null) {
-            host.postWebMessage("{\"gesher\":\"close\",\"id\":" + JSONObject.quote(port.mId) + "}");
+        boolean removed;
+        synchronized (mPagePorts) {
+            removed = mPagePorts.remove(port.mId, port);
         }
+        port.pageGone();
+        synchronized (mPagePorts) {
+            WebView2Host host = mHost;
+            if (removed && host != null && !mDestroyed) {
+                host.postWebMessage("{\"gesher\":\"close\",\"id\":" + JSONObject.quote(port.mId) + "}");
+            }
+        }
+    }
+
+    /** Remove the old page's registry before disposing its queued ownership. */
+    private void retirePagePorts() {
+        GesherWebMessagePort[] ports;
+        synchronized (mPagePorts) {
+            ports = mPagePorts.values().toArray(new GesherWebMessagePort[0]);
+            mPagePorts.clear();
+        }
+        for (GesherWebMessagePort port : ports) port.pageGone();
     }
 
     @Override
@@ -1926,8 +1964,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 String url = FileUrls.fromWebView2(a);
                 mUrl = url;
                 // The ports the page had are gone with it.
-                for (GesherWebMessagePort p : mPagePorts.values()) p.pageGone();
-                mPagePorts.clear();
+                retirePagePorts();
                 mGeolocation.pageGone();
                 for (MessageListener l : mMessageListeners.values()) l.replyProxies.clear();
                 setProgress(10);
