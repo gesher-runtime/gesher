@@ -43,3 +43,11 @@ The local NetworkCapabilities parcel layout remains local: new fields are
 appended to its existing format and both reader and writer change together.
 These assertions do not establish whole-AOSP parcel interoperability or
 cross-version IPC with an older Gesher process.
+
+EthernetNetworkSpecifier and TestNetworkSpecifier now supply the pinned complete
+value implementations needed by NetworkRequest's legacy string conversion. Their
+upstream and local bytes are identical; receipts are in
+`docs/research/aosp-network-builder-values-2026-11-13.json`. The
+[request and callback contract report](../../../../docs/research/network-request-lifecycle-contracts-2026-11-13.md)
+records validation, transport/specifier rules, implicit enterprise IDs, callback
+retirement and the explicit host-versus-Windows execution boundaries.
