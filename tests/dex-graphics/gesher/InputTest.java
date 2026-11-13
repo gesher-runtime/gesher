@@ -502,8 +502,8 @@ public final class InputTest {
     try {
       receiver.done = new CountDownLatch(1);
       receiver.last = event -> event instanceof KeyEvent
-          && ((KeyEvent) event).getKeyCode() == KeyEvent.KEYCODE_F12
-          && ((KeyEvent) event).getAction() == KeyEvent.ACTION_UP;
+          && ((KeyEvent) event).getKeyCode() == KeyEvent.KEYCODE_A
+          && ((KeyEvent) event).getAction() == KeyEvent.ACTION_DOWN;
       boolean posted = WindowInput.postMessage(hwnd, WM_KEYDOWN, 0x10, 0x002A0001L)
           && WindowInput.postMessage(hwnd, WM_KEYDOWN, 0x10, 0x00360001L)
           && WindowInput.postMessage(hwnd, WM_KEYUP, 0x10, 0xC02A0001L)
@@ -517,7 +517,16 @@ public final class InputTest {
           && WindowInput.postMessage(hwnd, WM_KEYUP, 'W', 0xC0110001L)
           && WindowInput.postMessage(hwnd, WM_KEYUP, 0x11, 0xC11D0001L)
           && WindowInput.postMessage(hwnd, WM_KEYDOWN, 'A', 0x001E0001L);
+      check(posted && receiver.done.await(10, TimeUnit.SECONDS),
+          "key contracts: initial chord key delivered");
+      // The event timestamp path caps message age at one second. Wait for A
+      // to reach the receiver before posting B so a stalled window thread
+      // cannot collapse both down times to the same millisecond.
       Thread.sleep(40);
+      receiver.done = new CountDownLatch(1);
+      receiver.last = event -> event instanceof KeyEvent
+          && ((KeyEvent) event).getKeyCode() == KeyEvent.KEYCODE_F12
+          && ((KeyEvent) event).getAction() == KeyEvent.ACTION_UP;
       posted &= WindowInput.postMessage(hwnd, WM_KEYDOWN, 'B', 0x00300001L);
       Thread.sleep(40);
       posted &= WindowInput.postMessage(hwnd, WM_KEYDOWN, 'A', 0x401E0001L)

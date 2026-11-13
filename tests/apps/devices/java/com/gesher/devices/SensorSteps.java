@@ -150,6 +150,19 @@ final class SensorSteps {
             if (accelerometer != 128 || illuminance != 128) {
                 throw new AssertionError("flush counts " + accelerometer + "/" + illuminance);
             }
+            // The 256th callback may wake this thread before handleEvent has
+            // finished its batch. Wait on the callback Looper before checking
+            // that the rejected request added no extra completion markers.
+            CountDownLatch drained = new CountDownLatch(1);
+            if (!mHandler.post(drained::countDown) || !drained.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("sensor backlog did not finish dispatching");
+            }
+            String extra;
+            while ((extra = mEvents.poll()) != null) {
+                if (extra.startsWith("flush ")) {
+                    throw new AssertionError("unexpected extra completion " + extra);
+                }
+            }
             Report.line("sensors: flush backlog: 128 accepted pairs, overflow rejected, 256 completions");
         } finally {
             release.countDown();
