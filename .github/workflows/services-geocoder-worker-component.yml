@@ -37,7 +37,9 @@ jobs:
             'tests/windows/helpers/geocoder-compiler-host.ps1' = '43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f'
             'tests/windows/helpers/geocoder-compile.ps1' = '90fceedc449a2ec11dfa80809e05163c89bcf2fa'
             'tests/windows/helpers/run-geocoder-winrt-component.ps1' = '1277bcc858c9c52eb8b24476831aadb286831418'
-            'tests/windows/tracks/58-devices.ps1' = 'b16da67c5a2286f73cda9a9162295a931cabd40e'
+            # The reviewed sensor flush backlog assertion strengthens this shared
+            # track; its geocoder implementation and the other nine pins are unchanged.
+            'tests/windows/tracks/58-devices.ps1' = '78766844b282cc4828ad9b4e531d1f7fe8ed1e2b'
           }
           foreach ($path in $expected.Keys) {
             $actual = git hash-object $path

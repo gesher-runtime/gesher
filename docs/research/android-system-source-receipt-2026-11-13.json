@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "repository": "gesher-runtime/gesher",
+  "account": "palmoni5",
+  "branch": "palmoni5/android-services-sync-input-contracts-20261113",
+  "baseline": "b9a94530c6bf91f7a14913e3ef284dd76bdf28bf",
+  "scope": "Source snapshots published before final report completion; later report-only commits are not recursively included.",
+  "method": "Local commits were published through the authenticated GitHub connector. Commit identities differ; each returned remote tree SHA was checked for exact equality with the complete local Git tree before advancing the branch. The table preserves the local revisions recorded by build/inventory tools and their accessible published equivalents.",
+  "snapshots": [
+    {
+      "local": "8a1f7d6c771e0a8d570a8e4907a71b01dbfd8ac0",
+      "remote": "67b2bb99e81fbb1138c74344dc8dedadd4ef502c",
+      "tree": "bf39bf16334d52abb267c20b684c868d3e245366",
+      "url": "https://github.com/gesher-runtime/gesher/commit/67b2bb99e81fbb1138c74344dc8dedadd4ef502c"
+    },
+    {
+      "local": "63fab450abc83025709aab945976ab002dc9d1ad",
+      "remote": "3201781939e848b4ae224a326862d60d2bb424b5",
+      "tree": "965d69c7a32bde1c835b47252b30bd82fff8fc9c",
+      "url": "https://github.com/gesher-runtime/gesher/commit/3201781939e848b4ae224a326862d60d2bb424b5"
+    },
+    {
+      "local": "5725a3fede0754e0ed3eb06991786e88ae4ebd1c",
+      "remote": "a63ee3662b89a285aadfeb072120ce19ecd77ddd",
+      "tree": "daa6e65ec7b6c811305fdad5380014a68d3035e6",
+      "url": "https://github.com/gesher-runtime/gesher/commit/a63ee3662b89a285aadfeb072120ce19ecd77ddd"
+    },
+    {
+      "local": "34cc6b9da6ec78074ee3c0b26ce8b205f361335c",
+      "remote": "8e73345a689eafa53759afacdff3c21975d42df7",
+      "tree": "8abb5f9504e6c0efb51d10517f17701f06cdbe32",
+      "url": "https://github.com/gesher-runtime/gesher/commit/8e73345a689eafa53759afacdff3c21975d42df7"
+    },
+    {
+      "local": "dee3ffe0ac88922ba3a029f07e4a41a887260b77",
+      "remote": "a4a1946e50c195a2817f1d980bfc254c8824529b",
+      "tree": "9859418e6d1e5ee3420bf807af8f6023e8cfcba8",
+      "url": "https://github.com/gesher-runtime/gesher/commit/a4a1946e50c195a2817f1d980bfc254c8824529b"
+    },
+    {
+      "local": "8ac9ff1b00b3e4d57481d6bbb17d184b98256268",
+      "remote": "37e8202e1379fc4dab95086b3dc3dac0b55c76a7",
+      "tree": "ac93b39526af247277747fec17c961e126b92ad9",
+      "url": "https://github.com/gesher-runtime/gesher/commit/37e8202e1379fc4dab95086b3dc3dac0b55c76a7"
+    },
+    {
+      "local": "54cf07f055ad23ab8f5d3e8d2065dc37675eb2f5",
+      "remote": "6cc911a57ef05f544d2ae5dc92188d9a04a98429",
+      "tree": "347a6e823f25bb63e504c530f25dc26e1ddfdb03",
+      "url": "https://github.com/gesher-runtime/gesher/commit/6cc911a57ef05f544d2ae5dc92188d9a04a98429"
+    },
+    {
+      "local": "1a96541e65e362376c14f43c3f7d1e9a78596853",
+      "remote": "6ca2399dcd257903b163f8c92a53a9bed8f3e98e",
+      "tree": "9d72b0b279fe4f9f84e5ffd501f359b3098e599f",
+      "url": "https://github.com/gesher-runtime/gesher/commit/6ca2399dcd257903b163f8c92a53a9bed8f3e98e"
+    },
+    {
+      "local": "456ab254c0c4e34a745e26549660efa5bc2c519e",
+      "remote": "30ec0b498d6cdd1892a271afe00edf4ed0fc6e36",
+      "tree": "554249bb0145ffbdeb696f128789edf80ddd5b4f",
+      "url": "https://github.com/gesher-runtime/gesher/commit/30ec0b498d6cdd1892a271afe00edf4ed0fc6e36"
+    },
+    {
+      "local": "8b2e4fef15cb8be2fc518c641ec67a1c2d81bd96",
+      "remote": "f0ab6cbf4d314fd2309badd800d0086bd322eff8",
+      "tree": "abc55fa824ac1060d45b40ce2593fd609d7b5f81",
+      "url": "https://github.com/gesher-runtime/gesher/commit/f0ab6cbf4d314fd2309badd800d0086bd322eff8"
+    },
+    {
+      "local": "e408b6f7274643297b3d48456df959dde4df71f5",
+      "remote": "ff2830c6c5edd0516d94551ad6e2442fa1c3c0ce",
+      "tree": "c1e32a9699321970ab399138867753e7f82492d4",
+      "url": "https://github.com/gesher-runtime/gesher/commit/ff2830c6c5edd0516d94551ad6e2442fa1c3c0ce"
+    },
+    {
+      "local": "402dee91927ae5538636b7c498bffd87c67cb585",
+      "remote": "a071489b2ec71ab1aa13c762721fe18027db27ec",
+      "tree": "010fdbfc3d7bea0cd96cc6c8c05b4c057c6fac18",
+      "url": "https://github.com/gesher-runtime/gesher/commit/a071489b2ec71ab1aa13c762721fe18027db27ec"
+    },
+    {
+      "local": "362b6b6559fbfc4f5dbf35a3543a328e913e90c0",
+      "remote": "b7d8f0a5fb7386db2786bce044609ae9330df3b7",
+      "tree": "87c50034c36423d72d4b03e94a4fca78638299b2",
+      "url": "https://github.com/gesher-runtime/gesher/commit/b7d8f0a5fb7386db2786bce044609ae9330df3b7"
+    },
+    {
+      "local": "10c06096b0d6e376bcaf0fe565c8224ecc67c1b6",
+      "remote": "cb8ee933828af42f64cc5bb945232f4f579c8dee",
+      "tree": "c3e6ee6613a1ba1c0f176dd6cc20afdab3173223",
+      "url": "https://github.com/gesher-runtime/gesher/commit/cb8ee933828af42f64cc5bb945232f4f579c8dee"
+    },
+    {
+      "local": "c1fd53a2a6b8778867700eede61c15684b989735",
+      "remote": "b6cd3b3c27e15b051f770226ead45e519fedd3dd",
+      "tree": "a0b051136fcb77d36fbf0539dad1b1b2e3f4885c",
+      "url": "https://github.com/gesher-runtime/gesher/commit/b6cd3b3c27e15b051f770226ead45e519fedd3dd"
+    }
+  ]
+}

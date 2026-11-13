@@ -199,6 +199,45 @@ int GESHER_SYSV GuestFstatat(int dirfd, const char* path, A64Stat* st, int flags
   return r;
 }
 
+// Traversal callbacks have the same stat-layout difference as stat().
+struct GuestFtwInfo { int base, level; };
+using GuestFtwFn = int(GESHER_SYSV*)(const char*, const A64Stat*, int);
+using GuestNftwFn = int(GESHER_SYSV*)(const char*, const A64Stat*, int, GuestFtwInfo*);
+using HostFtwCallback = int(GESHER_SYSV*)(const char*, const X64Stat*, int);
+using HostNftwCallback = int(GESHER_SYSV*)(const char*, const X64Stat*, int, GuestFtwInfo*);
+void* g_ftw = nullptr;
+void* g_nftw = nullptr;
+thread_local GuestFtwFn g_ftw_callback = nullptr;
+thread_local GuestNftwFn g_nftw_callback = nullptr;
+int GESHER_SYSV GuestFtwCallback(const char* path, const X64Stat* host, int type) {
+  A64Stat guest;
+  ToGuest(*host, &guest);
+  return g_ftw_callback(path, &guest, type);
+}
+int GESHER_SYSV GuestNftwCallback(const char* path, const X64Stat* host, int type, GuestFtwInfo* info) {
+  A64Stat guest;
+  ToGuest(*host, &guest);
+  return g_nftw_callback(path, &guest, type, info);
+}
+int GESHER_SYSV GuestFtw(const char* path, GuestFtwFn fn, int nfds) {
+  if (!path || !fn) { SetErrno(22); return -1; }
+  auto saved = g_ftw_callback;
+  g_ftw_callback = fn;
+  int result = reinterpret_cast<int(GESHER_SYSV*)(const char*, HostFtwCallback, int)>(g_ftw)(
+      path, GuestFtwCallback, nfds);
+  g_ftw_callback = saved;
+  return result;
+}
+int GESHER_SYSV GuestNftw(const char* path, GuestNftwFn fn, int nfds, int flags) {
+  if (!path || !fn) { SetErrno(22); return -1; }
+  auto saved = g_nftw_callback;
+  g_nftw_callback = fn;
+  int result = reinterpret_cast<int(GESHER_SYSV*)(const char*, HostNftwCallback, int, int)>(g_nftw)(
+      path, GuestNftwCallback, nfds, flags);
+  g_nftw_callback = saved;
+  return result;
+}
+
 // --- struct epoll_event ------------------------------------------------------
 struct __attribute__((packed)) X64EpollEvent {
   uint32_t events;
@@ -645,6 +684,11 @@ void InitGuestLibc() {
   if (g_lstat) Override("lstat", reinterpret_cast<void*>(&GuestLstat)), Override("lstat64", reinterpret_cast<void*>(&GuestLstat));
   if (g_fstat) Override("fstat", reinterpret_cast<void*>(&GuestFstat)), Override("fstat64", reinterpret_cast<void*>(&GuestFstat));
   if (g_fstatat) Override("fstatat", reinterpret_cast<void*>(&GuestFstatat)), Override("fstatat64", reinterpret_cast<void*>(&GuestFstatat));
+
+  g_ftw = Host("ftw");
+  g_nftw = Host("nftw");
+  if (g_ftw) for (const char* name : {"ftw", "ftw64"}) Override(name, reinterpret_cast<void*>(&GuestFtw));
+  if (g_nftw) for (const char* name : {"nftw", "nftw64"}) Override(name, reinterpret_cast<void*>(&GuestNftw));
 
   g_epoll_ctl = Host("epoll_ctl");
   g_epoll_wait = Host("epoll_wait");

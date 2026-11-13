@@ -300,10 +300,10 @@ def main():
          'family': 'Vibrator/haptic hardware',
          'risk': 'No Android vibrator hardware; absence should be explicit rather than presented as a crash-fix gap.',
          'evidence': anchor('app/java/com/gesher/server/Services.java', '// A device without a vibrator')},
-        {'id': 'settings-persistence', 'status': 'intentional_default', 'priority': 2,
+        {'id': 'settings-persistence', 'status': 'partial_implementation', 'priority': 2,
          'family': 'SettingsProvider persistence and generations',
-         'risk': 'Values are in-memory until server exit; no generation tracking. This differs from Android persistent settings.',
-         'evidence': anchor('app/java/com/gesher/server/SettingsProvider.java', 'Values put are kept until the system')},
+         'risk': 'Provider rows are durable, but Android generation tracking, per-user state and restore metadata remain incomplete.',
+         'evidence': anchor('app/java/com/gesher/server/SettingsProvider.java', 'No generation tracking')},
         {'id': 'jni-fallback-tables', 'status': 'intentional_default', 'priority': 2,
          'family': 'Generated device/attach native fallbacks',
          'risk': 'Many zero/noop entries exist but later real registrations replace some; registration order must be resolved before claiming an active native gap.',
@@ -328,7 +328,7 @@ def main():
         if finding.get('classes'):
             finding['inherited_default_methods'] = sum(c['inherited_default_count'] for c in classes if c['class'] in finding['classes'])
 
-    result = {'schema_version': 1, 'date': '2026-11-05', 'aosp_tag': 'android-16.0.0_r4',
+    result = {'schema_version': 1, 'date': datetime.datetime.now(datetime.timezone.utc).date().isoformat(), 'aosp_tag': 'android-16.0.0_r4',
               'scope': 'JNI registration/stand-ins; app/java Binder Default services; direct Services/SystemServer registry keys. No user apps started.',
               'framework_jar': {'path': str(args.framework_jar.resolve()), 'sha256': hashlib.sha256(args.framework_jar.read_bytes()).hexdigest()},
               'framework_input_kind': 'Existing Java .class compile input; not the installed DEX JAR and not a new framework build receipt.',

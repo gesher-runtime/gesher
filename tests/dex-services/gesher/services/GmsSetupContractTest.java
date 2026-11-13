@@ -131,7 +131,14 @@ public final class GmsSetupContractTest {
         Object user = make(processType, new Class<?>[] {atmType, int.class, IApplicationThread.class},
                 atm, 124, new IApplicationThread.Default());
         set(user, "packageName", "fixture.app"); set(user, "ready", true); processes.add(user);
-        check((long) idleSince.invoke(atm) == 0, "Ordinary app process counted as idle");
+        check((long) idleSince.invoke(atm) == since,
+                "Cached app process restarted the idle timer");
+        // The cached process may idle, but opening its activity must still protect it.
+        List<Object> userActivities = (List<Object>) get(user, "activities");
+        userActivities.add(activity);
+        check((long) idleSince.invoke(atm) == 0, "Ordinary app activity counted as idle");
+        userActivities.clear();
+        check((long) idleSince.invoke(atm) > 0, "Closed app activity prevented idle shutdown");
         processes.remove(user);
         check((long) idleSince.invoke(atm) > 0, "Background-only transition stayed busy");
         activities.add(activity);

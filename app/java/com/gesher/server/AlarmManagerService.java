@@ -10,7 +10,9 @@ import android.app.IAlarmCompleteListener;
 import android.app.IAlarmListener;
 import android.app.IAlarmManager;
 import android.app.PendingIntent;
+import android.content.IIntentReceiver;
 import android.content.Intent;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.os.SystemClock;
@@ -19,6 +21,7 @@ import android.os.WorkSource;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.TimeZone;
 
 /**
@@ -51,6 +54,8 @@ final class AlarmManagerService extends IAlarmManager.Default
     private static final int CHECK_MS = 60_000;
     /** A wall clock jump against the monotonic clock beyond this is a TIME_SET. */
     private static final long TIME_SET_SLACK_MS = 2_000;
+    /** Maximum delivery hold from reservation, including an acknowledged broadcast chain. */
+    private static final long DELIVERY_TIMEOUT_MS = 5 * 60_000;
 
     private final ActivityManagerService mAm;
     private final PackageManagerService mPm;
@@ -114,6 +119,24 @@ final class AlarmManagerService extends IAlarmManager.Default
 
     // Guarded by this.
     private final List<Alarm> mAlarms = new ArrayList<>();
+    private final List<Delivery> mDelivering = new ArrayList<>();
+
+    /** Ownership of one firing, independent of replacement or the next repeating firing. */
+    private final class Delivery implements IBinder.DeathRecipient {
+        final Alarm alarm;
+        final IBinder listener;
+        final long deadline;
+        boolean deathLinked; // Guarded by AlarmManagerService.this.
+
+        Delivery(Alarm alarm, long now) {
+            this.alarm = alarm;
+            listener = alarm.operation == null ? alarm.listener.asBinder() : null;
+            deadline = now + DELIVERY_TIMEOUT_MS;
+        }
+
+        @Override public void binderDied() { finishDelivery(this); }
+    }
+
     private Thread mThread;
     private long mClockOffset;    // currentTimeMillis - elapsedRealtime, as last seen
     private String mWindowsZone;  // Windows' time zone key name, as last seen
@@ -254,12 +277,81 @@ final class AlarmManagerService extends IAlarmManager.Default
     // --- DeviceWork.Source ------------------------------------------------------------------
 
     @Override
-    public synchronized long nextDueElapsed() {
-        long nowElapsed = SystemClock.elapsedRealtime();
-        long nowRtc = System.currentTimeMillis();
-        long next = Long.MAX_VALUE;
-        for (Alarm a : mAlarms) next = Math.min(next, a.elapsed(nowElapsed, nowRtc));
-        return next;
+    public long nextDueElapsed() {
+        expireDeliveries();
+        synchronized (this) {
+            if (!mDelivering.isEmpty()) return 0;
+            long nowElapsed = SystemClock.elapsedRealtime();
+            long nowRtc = System.currentTimeMillis();
+            long next = Long.MAX_VALUE;
+            for (Alarm a : mAlarms) next = Math.min(next, a.elapsed(nowElapsed, nowRtc));
+            return next;
+        }
+    }
+
+    /** The due-list removal and its in-flight hold form one transition under this monitor. */
+    private List<Delivery> takeDueAlarmsLocked(long nowElapsed, long nowRtc) {
+        List<Delivery> due = new ArrayList<>();
+        for (int i = 0; i < mAlarms.size(); i++) {
+            Alarm a = mAlarms.get(i);
+            long at = a.elapsed(nowElapsed, nowRtc);
+            if (at > nowElapsed || (mSuspended && !a.wakeup())) continue;
+            a.count = 1;
+            if (a.interval > 0) {
+                long periods = (nowElapsed - at) / a.interval;
+                a.count += (int) Math.min(Integer.MAX_VALUE - 1, periods);
+                a.when += (periods + 1) * a.interval;
+            } else {
+                mAlarms.remove(i--);
+            }
+            Delivery delivery = new Delivery(a, nowElapsed);
+            mDelivering.add(delivery);
+            due.add(delivery);
+        }
+        return due;
+    }
+
+    private void finishDelivery(Delivery delivery) {
+        boolean linked;
+        synchronized (this) {
+            mDelivering.remove(delivery);
+            linked = delivery.deathLinked;
+            delivery.deathLinked = false;
+        }
+        if (linked) unlinkDelivery(delivery);
+    }
+
+    private static void unlinkDelivery(Delivery delivery) {
+        try { delivery.listener.unlinkToDeath(delivery, 0); }
+        catch (NoSuchElementException ignored) { } // The Binder death path may already have retired it.
+    }
+
+    private void expireDeliveries() {
+        List<Delivery> expired = new ArrayList<>();
+        synchronized (this) {
+            long now = SystemClock.elapsedRealtime();
+            for (java.util.Iterator<Delivery> it = mDelivering.iterator(); it.hasNext();) {
+                Delivery delivery = it.next();
+                if (now >= delivery.deadline) {
+                    it.remove();
+                    expired.add(delivery);
+                }
+            }
+        }
+        for (Delivery delivery : expired) finishDelivery(delivery);
+    }
+
+    /** A synchronous death/completion during link must not leave a death recipient behind. */
+    private boolean linkDelivery(Delivery delivery) throws RemoteException {
+        delivery.listener.linkToDeath(delivery, 0);
+        synchronized (this) {
+            if (mDelivering.contains(delivery)) {
+                delivery.deathLinked = true;
+                return true;
+            }
+        }
+        unlinkDelivery(delivery);
+        return false;
     }
 
     // --- the alarm thread ---------------------------------------------------------------------
@@ -298,6 +390,7 @@ final class AlarmManagerService extends IAlarmManager.Default
     private void run() {
         while (true) {
             try {
+                expireDeliveries();
                 checkClocks();
                 synchronized (this) {
                     if (mSuspended && SystemClock.uptimeMillis() - mSuspendedAt > SUSPEND_GIVE_UP_MS) {
@@ -305,28 +398,13 @@ final class AlarmManagerService extends IAlarmManager.Default
                         SystemServer.log("alarm: no resume came after the suspend: alarms as usual");
                     }
                 }
-                List<Alarm> due = new ArrayList<>();
+                List<Delivery> due;
                 long nextRtc;
                 boolean wakeup = false;
                 synchronized (this) {
                     long nowElapsed = SystemClock.elapsedRealtime();
                     long nowRtc = System.currentTimeMillis();
-                    for (int i = 0; i < mAlarms.size(); i++) {
-                        Alarm a = mAlarms.get(i);
-                        long at = a.elapsed(nowElapsed, nowRtc);
-                        if (at > nowElapsed || (mSuspended && !a.wakeup())) continue;
-                        a.count = 1;
-                        if (a.interval > 0) {
-                            // Missed periods count, and the next one is in the future.
-                            long late = nowElapsed - at;
-                            long periods = late / a.interval;
-                            a.count += (int) Math.min(Integer.MAX_VALUE - 1, periods);
-                            a.when += (periods + 1) * a.interval;
-                        } else {
-                            mAlarms.remove(i--);
-                        }
-                        due.add(a);
-                    }
+                    due = takeDueAlarmsLocked(nowElapsed, nowRtc);
                     long nextElapsed = Long.MAX_VALUE;
                     for (Alarm a : mAlarms) {
                         if (mSuspended && !a.wakeup()) continue;  // after the resume
@@ -347,9 +425,9 @@ final class AlarmManagerService extends IAlarmManager.Default
                 }
                 if (!due.isEmpty()) {
                     boolean clocks = false;
-                    for (Alarm a : due) {
-                        deliver(a);
-                        clocks |= a.alarmClock != null && a.interval == 0;
+                    for (Delivery delivery : due) {
+                        deliver(delivery);
+                        clocks |= delivery.alarm.alarmClock != null && delivery.alarm.interval == 0;
                     }
                     if (clocks) alarmClocksChanged();
                     continue;  // delivering took time: look again
@@ -367,19 +445,30 @@ final class AlarmManagerService extends IAlarmManager.Default
         }
     }
 
-    private void deliver(Alarm a) {
+    private void deliver(Delivery delivery) {
+        synchronized (this) {
+            if (!mDelivering.contains(delivery)) return;
+        }
+        Alarm a = delivery.alarm;
         SystemServer.log("alarm: firing " + a + (a.count > 1 ? " (" + a.count + " periods)" : ""));
         if (a.operation != null) {
             Intent fillIn = new Intent().putExtra(Intent.EXTRA_ALARM_COUNT, a.count);
             int result;
             try {
                 result = mAm.sendIntentSender(null, a.operation.getTarget(), null, 0, fillIn,
-                        null, null, null, null);
+                        null, new IIntentReceiver.Stub() {
+                            @Override public void performReceive(Intent intent, int code, String data,
+                                    Bundle extras, boolean ordered, boolean sticky, int user) {
+                                finishDelivery(delivery);
+                            }
+                        }, null, null);
             } catch (Throwable t) {
+                finishDelivery(delivery);
                 SystemServer.log("alarm: sending " + a.operation + " failed: " + t);
                 return;
             }
             if (result == ActivityManager.START_CANCELED) {
+                finishDelivery(delivery);
                 // The PendingIntent was cancelled: so is the alarm (AlarmManagerService
                 // removes alarms whose operation is cancelled).
                 SystemServer.log("alarm: " + a.operation + " was cancelled; alarm removed");
@@ -389,12 +478,15 @@ final class AlarmManagerService extends IAlarmManager.Default
             }
         } else {
             try {
+                if (!linkDelivery(delivery)) return;
                 a.listener.doAlarm(new IAlarmCompleteListener.Stub() {
                     @Override
                     public void alarmComplete(IBinder who) {
+                        if (delivery.listener.equals(who)) finishDelivery(delivery);
                     }
                 });
-            } catch (RemoteException e) {
+            } catch (RemoteException | RuntimeException e) {
+                finishDelivery(delivery);
                 // The app's process is gone, and its listener with it.
                 SystemServer.log("alarm: the listener of " + a.packageName + " is gone; alarm"
                         + " removed");

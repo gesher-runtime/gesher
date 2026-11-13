@@ -205,6 +205,10 @@ $testTracks = if ($FrameworkContractsOnly) {
 } else {
   Get-ChildItem (Join-Path $PSScriptRoot 'tracks') -Filter *.ps1 -ErrorAction SilentlyContinue | Sort-Object Name
 }
+if ($FrameworkContractsOnly) {
+  $systemContractTrack = Join-Path $PSScriptRoot 'tracks/98-system-contracts.ps1'
+  $testTracks += Get-Item -LiteralPath $systemContractTrack -ErrorAction Stop
+}
 foreach ($t in $testTracks) {
   try {
     . $t.FullName

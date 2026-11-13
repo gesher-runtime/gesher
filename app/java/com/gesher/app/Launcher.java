@@ -49,10 +49,14 @@ import java.util.Properties;
  *   Launcher [--build-prop FILE] [--framework-res FILE] COMMAND
  *     launch APK|PACKAGE [--activity CLASS] [--ez KEY true|false]...
  *            [--proxy host:port|direct|windows]
- *            [--window | --hidden-window | --headless [--keep-task]]
+ *            [--window | --hidden-window | --headless [--keep-task]] [--detach | --wait]
  *                       install or update the APK, start its launcher activity through the
  *                       system server (am start -W) and show the app's output until the
- *                       app's process ends. Its windows are Win32 windows (--window, the
+ *                       app's process ends (--wait, the default). --detach: return once the
+ *                       activity has started (its first frame drawn, idle), exit code 0, and
+ *                       leave the app running: what gesher-launch asks for
+ *                       ($GESHER_LAUNCH_DETACH=1) when nobody reads the output (a Start menu
+ *                       shortcut, a double-clicked .apk). Its windows are Win32 windows (--window, the
  *                       default, or $GESHER_APP_WINDOW): the app runs until they are
  *                       closed. --hidden-window: the same, never shown (tests read them
  *                       back). --headless: no windows; once the activity is idle its task
@@ -80,7 +84,8 @@ import java.util.Properties;
  * Every command but shutdown, status and apk-icon starts the device if it does not run: binderd,
  * servicemanager and the system server ({@code --persistent}), detached (no console
  * window: they outlive the console), with a binder device of their own; it stops when shut
- * down, or after {@code $GESHER_IDLE_TIMEOUT} seconds (default 600) with no app process.
+ * down, or after {@code $GESHER_IDLE_TIMEOUT} seconds (default 600) with no app in use (an
+ * activity or a foreground service; ActivityTaskManagerService.idleSince).
  * Launchers find it through {@link Device}'s state file, under a mutex, and clean up after
  * a device whose system server is gone.
  */
@@ -88,6 +93,13 @@ public final class Launcher {
     static final String TAG = "gesher-app";
     /** How long a launcher waits for a starting system server's services. */
     private static final long READY_TIMEOUT_MS = 300_000;
+    /**
+     * Set by gesher-launch (compat/shell/gesher_launch.cc) when it has no output handles to
+     * pass on: {@code launch} returns once the activity has started (as {@code --detach}).
+     */
+    static final String DETACH_ENV = "GESHER_LAUNCH_DETACH";
+    /** {@link #DETACH_ENV} as this process got it (it is not handed on to the device). */
+    private static boolean sDetachRequested;
 
     private Launcher() {
     }
@@ -101,6 +113,10 @@ public final class Launcher {
         try {
             // The trusted host launcher is the shell, not an Android application.
             android.system.Os.setenv("GESHER_BINDER_UID", "2000", true);
+            // gesher-launch's request is this launcher's only: a device this launcher
+            // starts must not inherit it.
+            sDetachRequested = "1".equals(System.getenv(DETACH_ENV));
+            if (sDetachRequested) android.system.Os.unsetenv(DETACH_ENV);
             code = run(args);
         } catch (Throwable t) {
             System.out.flush();
@@ -246,7 +262,7 @@ public final class Launcher {
     private static int usage() {
         System.err.println(text("usage") + "gesher-app launch APK|PACKAGE [--activity CLASS] [--ez KEY"
                 + " true|false]... [--proxy host:port|direct|windows]"
-                + " [--window | --hidden-window | --headless [--keep-task]]"
+                + " [--window | --hidden-window | --headless [--keep-task]] [--detach | --wait]"
                 + " | proxy [[PACKAGE] host:port|direct|windows] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
                 + " | shutdown | apk-icon APK");
         return 2;
@@ -517,6 +533,7 @@ public final class Launcher {
         String activity = null;
         String shortcutId = null;
         boolean keepTask = false;
+        boolean detach = sDetachRequested;
         String proxy = null;
         String windowMode = WindowMode.fromEnvironment(WindowMode.WINDOW);
         Map<String, Boolean> extras = new LinkedHashMap<>();
@@ -526,6 +543,8 @@ public final class Launcher {
                 case "--activity": activity = args.get(++i); break;
                 case "--shortcut": shortcutId = args.get(++i); break;
                 case "--keep-task": keepTask = true; break;
+                case "--detach": detach = true; break;
+                case "--wait": detach = false; break;
                 case "--proxy": {
                     proxy = ProxySetting.parse(args.get(++i));
                     if (proxy == null) {
@@ -610,9 +629,10 @@ public final class Launcher {
                     ? text("next_process") : ""));
         }
 
-        // The app's output: its process appends to the package's log.
+        // The app's output: its process appends to the package's log (not copied when
+        // nobody reads it: detached).
         Tail tail = new Tail(Device.packageLog(pkg));
-        tail.start();
+        if (!detach) tail.start();
         try {
             if (shortcutId == null) log(text("start_intent", intent.toShortString(false, true, true, false)));
             IActivityTaskManager atm = ActivityTaskManager.getService();
@@ -622,7 +642,8 @@ public final class Launcher {
             log(text("start_result", result.result,
                     result.who != null ? result.who.flattenToShortString() : text("no_activity"),
                     result.timeout ? text("timed_out") : "") + ", " + result.totalTime + " ms");
-            if (!ActivityManager.isStartResultSuccessful(result.result)) {
+            if (!ActivityManager.isStartResultSuccessful(result.result)
+                    || (detach && result.timeout)) {
                 throw new IllegalStateException(text("start_failed", intent));
             }
             if (launch.exitReceipt == null || launch.taskId < 0) {
@@ -632,6 +653,15 @@ public final class Launcher {
                 log(text("remove_task", launch.taskId,
                         result.who != null ? result.who.flattenToShortString() : pkg));
                 atm.removeTask(launch.taskId);
+            }
+            if (detach) {
+                // The activity is up (startActivityAndWait waited until it is idle: it
+                // has drawn its first frame). The app's process belongs to the device
+                // (its system server started it and follows it), not to this launcher:
+                // nothing here keeps it, and the device's idle timeout counts app
+                // processes only.
+                log(text("detached", pkg, Device.packageLog(pkg)));
+                return 0;
             }
             // Follow only this resolved launch's retained process generation. Another
             // package sibling or a newer same-name process must not supply its result.

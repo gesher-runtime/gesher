@@ -9,6 +9,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
@@ -126,11 +128,24 @@ public final class NativeLibs {
             for (ZipEntry entry : libraries) {
                 File out = new File(dir, entry.getName().substring(prefix.length()));
                 out.getParentFile().mkdirs();
-                try (InputStream in = zip.getInputStream(entry);
-                        OutputStream os = new FileOutputStream(out)) {
-                    for (int n; (n = in.read(buffer)) > 0; ) {
-                        os.write(buffer, 0, n);
+                // Write beside it and rename over it: a running process maps its
+                // libraries from these files, and Windows refuses to truncate a
+                // mapped file, but replaces it by rename. A name of its own, so
+                // concurrent extractions do not share one; ATOMIC_MOVE is a plain
+                // rename() (REPLACE_EXISTING would unlink the target first).
+                File part = File.createTempFile(out.getName(), ".part", out.getParentFile());
+                boolean moved = false;
+                try {
+                    try (InputStream in = zip.getInputStream(entry);
+                            OutputStream os = new FileOutputStream(part)) {
+                        for (int n; (n = in.read(buffer)) > 0; ) {
+                            os.write(buffer, 0, n);
+                        }
                     }
+                    Files.move(part.toPath(), out.toPath(), StandardCopyOption.ATOMIC_MOVE);
+                    moved = true;
+                } finally {
+                    if (!moved) part.delete();
                 }
                 count++;
             }

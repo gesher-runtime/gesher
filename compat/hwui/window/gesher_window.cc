@@ -37,16 +37,6 @@ std::wstring Widen(const std::string& s) {
   return w;
 }
 
-// The modifier bit (WindowEvent::modifiers) of a virtual key, or 0.
-int ModifierOfKey(uintptr_t vk) {
-  switch (vk) {
-    case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT: return 1;
-    case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL: return 2;
-    case VK_MENU: case VK_LMENU: case VK_RMENU: return 4;
-    default: return 0;
-  }
-}
-
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
   // What the user's click or key starts often shows a window of another
   // process: a picker or a browser the system server opens (startActivity),
@@ -336,12 +326,9 @@ void Window::Minimize() {
 }
 
 int Window::Modifiers() const {
-  int m = held_modifiers_;
-  if (GetKeyState(VK_SHIFT) & 0x8000) m |= 1;
-  if (GetKeyState(VK_CONTROL) & 0x8000) m |= 2;
-  if (GetKeyState(VK_MENU) & 0x8000) m |= 4;
-  if (GetKeyState(VK_CAPITAL) & 1) m |= 8;
-  return m;
+  // Posted messages do not update Windows' keyboard state. Retain each
+  // physical modifier separately so releasing one side preserves the other.
+  return NormalizeModifiers(held_modifiers_ | ReadModifiers(GetKeyState));
 }
 
 Window* Window::Create(const std::string& title_utf8, int width, int height,
@@ -1026,7 +1013,8 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
     case WM_KEYUP:
     case WM_SYSKEYUP: {
       bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
-      if (int bit = ModifierOfKey(wparam)) {
+      if (int bit = ModifierForVirtualKey(static_cast<int32_t>(wparam),
+                                          static_cast<int32_t>((lparam >> 16) & 0x1ff))) {
         held_modifiers_ = down ? (held_modifiers_ | bit) : (held_modifiers_ & ~bit);
       }
       e.type = down ? WindowEvent::kKeyDown : WindowEvent::kKeyUp;
