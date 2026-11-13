@@ -44,8 +44,9 @@ public final class RouteInfo implements Parcelable {
         }
         if (gateway == null) {
             try {
+                // Resolve mapped IPv6 prefixes consistently with the family check below.
                 gateway = InetAddress.getByAddress(
-                        new byte[destination.getRawAddress().length]);
+                        new byte[destination.isIPv4() ? 4 : 16]);
             } catch (UnknownHostException e) {
                 throw new IllegalStateException(e);
             }

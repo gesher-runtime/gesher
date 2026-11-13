@@ -74,9 +74,9 @@ void Check(bool ok, const char* reason) {
   if (!ok) { ++failures; std::fprintf(stderr, "FAIL audio state: %s\n", reason); }
 }
 Engine engine;
-std::shared_ptr<Track> NewTrack(bool is_static = false) {
+std::shared_ptr<Track> NewTrack(bool is_static = false, size_t capacity = 4) {
   TrackParams params;
-  params.capacity_frames = 4;
+  params.capacity_frames = capacity;
   params.channels = 1;
   params.is_static = is_static;
   return std::shared_ptr<Track>(new Track(&engine, params));
@@ -128,7 +128,7 @@ void Interrupts() {
           "interruption does not consume uncommitted payload");
     if (action == 1) {
       Check(track->state() == Track::State::kStopping, "streaming stop preserves drain state");
-      Check(track->Write(payload, 2, false) == 0, "new write does not extend a stopping drain");
+      Check(track->Write(payload, 2, false) == 0, "full stopping ring has no available room");
     }
   }
   for (bool stop : {false, true}) {
@@ -161,6 +161,89 @@ void PlaybackProgress() {
   for (size_t i = 0; i < 4; ++i) Check(std::fabs(read[i] - payload[i] / 32768.0f) < 1e-8f,
                                       "mixer preserves frame ordering");
   Check(!std::memcmp(track->data_.data(), payload + 4, 8), "ring wrap contains later payload");
+}
+void StopPriming() {
+  const int16_t before[2] = {1000, 2000};
+  const int16_t after[2] = {3000, 4000};
+  auto track = NewTrack();
+  Check(track->Write(before, sizeof before, false) == sizeof before, "prime first playback");
+  track->Start();
+  track->Stop();
+  auto result = std::async(std::launch::async, [&] { return track->Write(after, sizeof after, true); });
+  Check(Finish(track, result, "post-stop priming returns without waiting for the drain") == sizeof after,
+        "post-stop write accepts available room");
+  Check(track->room_.waits.load() == 0 && track->Queued() == 4,
+        "old and newly primed frames share capacity without an inactive wait");
+  track->Stop();
+  float old_mix[8] = {};
+  track->MixInto(old_mix, 8, track->sample_rate(), 1);
+  Check(track->stopped() && track->Queued() == 2 && track->Position() == 2,
+        "stop drains only its original boundary, preserving new priming");
+  for (size_t i = 0; i < 8; ++i) {
+    const float expected = i < 2 ? before[i] / 32768.0f : 0.0f;
+    Check(std::fabs(old_mix[i] - expected) < 1e-8f, "old drain excludes next playback payload");
+  }
+  track->Stop();
+  Check(track->Queued() == 2, "repeated stopped stop retains primed data");
+  track->Start();
+  float new_mix[2] = {};
+  track->MixInto(new_mix, 2, track->sample_rate(), 1);
+  Check(track->Queued() == 0 && track->Position() == 2,
+        "restart consumes primed data with a fresh playback position");
+  for (size_t i = 0; i < 2; ++i)
+    Check(std::fabs(new_mix[i] - after[i] / 32768.0f) < 1e-8f, "restart preserves primed frame order");
+
+  for (bool flush : {false, true}) {
+    auto reset = NewTrack();
+    reset->Write(before, sizeof before, false);
+    reset->Start();
+    reset->Stop();
+    reset->Write(after, sizeof after, false);
+    if (flush) reset->Flush();
+    else { reset->Pause(); reset->Stop(); }
+    Check(reset->stopped() && reset->Queued() == 0, "inactive reset drops both sides of the drain boundary");
+    Check(reset->Write(after, sizeof after, false) == sizeof after, "reset permits fresh priming");
+    reset->Start();
+    float mix[2] = {};
+    reset->MixInto(mix, 2, reset->sample_rate(), 1);
+    for (size_t i = 0; i < 2; ++i)
+      Check(std::fabs(mix[i] - after[i] / 32768.0f) < 1e-8f, "reset retires the stale stop boundary");
+  }
+}
+void RestartStopTail() {
+  int16_t payload[64];
+  for (size_t i = 0; i < 64; ++i) payload[i] = static_cast<int16_t>(1000 + 53 * i);
+  for (bool pause : {false, true}) {
+    auto track = NewTrack(false, 64);
+    auto reference = NewTrack(false, 64);
+    track->SetSampleRate(24000);
+    reference->SetSampleRate(24000);
+    track->Write(payload, 32 * sizeof(int16_t), false);
+    track->Start();
+    track->Stop();
+    Check(track->Write(payload + 32, 32 * sizeof(int16_t), false) == 32 * sizeof(int16_t),
+          "non-unity drain accepts next playback payload");
+    reference->Write(payload, sizeof payload, false);
+    reference->Start();
+    for (size_t tick = 0; tick < 128 && track->rs_->real_end < 0 && !track->stopped(); ++tick) {
+      float actual = 0, expected = 0;
+      track->MixInto(&actual, 1, 48000, 1);
+      reference->MixInto(&expected, 1, 48000, 1);
+    }
+    Check(track->rs_->real_end >= 0 && !track->stopped(), "resampler reaches an unfinished stop tail");
+    Check(track->Queued() == 32 && track->Position() == reference->Position(),
+          "stop tail preserves next payload and current source phase");
+    if (pause) track->Pause();
+    track->Start();
+    float actual[32] = {}, expected[32] = {};
+    track->MixInto(actual, 32, 48000, 1);
+    reference->MixInto(expected, 32, 48000, 1);
+    for (size_t i = 0; i < 32; ++i)
+      Check(std::fabs(actual[i] - expected[i]) < 1e-7f,
+            "restart replaces synthetic tail padding and preserves real filter history");
+    Check(track->Queued() == 0 && track->Position() == reference->Position(),
+          "resumed tail consumes new data without resetting its source position");
+  }
 }
 void ResetState() {
   auto streaming = NewTrack();
@@ -221,6 +304,8 @@ int main() {
   InitialStates();
   Interrupts();
   PlaybackProgress();
+  StopPriming();
+  RestartStopTail();
   ResetState();
   std::printf("audio state contracts: %d checks, %d failures\n", checks, failures);
   return failures != 0;

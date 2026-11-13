@@ -115,6 +115,56 @@ cleanup:
   if (ep >= 0) close(ep);
 }
 
+#if !defined(__ANDROID__) && !defined(__BIONIC__)
+/* Android's NDK has no pthread_cancel API. These cancellation cases run in
+ * the Linux reference and actual Windows POSIX host; ordinary vector cases
+ * below also run unchanged in both Android guest ABIs. */
+struct loop_cancel_write_contract {
+  int fd;
+  int count;
+  int entered;
+  int returned;
+};
+
+static void* loop_cancel_write_contract_run(void* raw) {
+  struct loop_cancel_write_contract* state = (struct loop_cancel_write_contract*)raw;
+  if (pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL) != 0 ||
+      pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL) != 0 ||
+      pthread_cancel(pthread_self()) != 0) return NULL;
+  /* Self-cancellation is pending in deferred mode. Record that execution
+   * reached writev, so cancellation during setup cannot satisfy this test. */
+  struct iovec empty[2] = {{NULL, 0}, {NULL, 0}};
+  state->entered = 1;
+  (void)writev(state->fd, empty, state->count);
+  state->returned = 1;
+  return NULL;
+}
+
+static void test_empty_writev_cancellation_contract(void) {
+  /* Keep cancellation evidence independent of the uncanceled empty-write
+   * cases: a broken older source may already have queued a phantom datagram. */
+  int pair[2];
+  int opened = socketpair(AF_UNIX, SOCK_DGRAM, 0, pair) == 0;
+  check("writev cancellation datagram pair", opened);
+  if (!opened) return;
+  for (int count = 0; count <= 2; count += 2) {
+    struct loop_cancel_write_contract state = {pair[0], count, 0, 0};
+    pthread_t worker;
+    void* result = NULL;
+    int created = pthread_create(&worker, NULL, loop_cancel_write_contract_run, &state) == 0;
+    int joined = created && pthread_join(worker, &result) == 0;
+    check(count == 0 ? "writev zero-count socket vector delivers pending cancellation"
+                     : "writev all-zero socket vector delivers pending cancellation",
+          joined && result == PTHREAD_CANCELED && state.entered && !state.returned);
+    struct pollfd available = {pair[1], POLLIN, 0};
+    check(count == 0 ? "writev canceled zero-count vector creates no datagram"
+                     : "writev canceled all-zero vector creates no datagram",
+          poll(&available, 1, 0) == 0);
+  }
+  close(pair[0]); close(pair[1]);
+}
+#endif
+
 static void test_writev_event_contract(void) {
   int fd = eventfd(0, EFD_NONBLOCK);
   check("writev eventfd creation", fd >= 0);
@@ -178,6 +228,9 @@ static void test_writev_event_contract(void) {
       close(pair[0]); close(pair[1]);
     }
   }
+#if !defined(__ANDROID__) && !defined(__BIONIC__)
+  test_empty_writev_cancellation_contract();
+#endif
   {
     char path[] = "gesher-vector-watch-XXXXXX";
     int file = mkstemp(path), notify = inotify_init1(IN_NONBLOCK);

@@ -8,7 +8,9 @@ Three investigation agents mapped Java/services, POSIX/bionic/ELF and
 media/graphics/device boundaries. Separate implementers made the selected
 repairs, followed by independent Java, native, media and integration reviewers.
 QA found two additional regressions in the proposed changes; both were repaired
-before publication. This is a repository-wide map and focused behavioral audit,
+before the initial publication. The subsequent PR review found and repaired
+three further cases, recorded below. This is a repository-wide map and focused
+behavioral audit,
 not a line-by-line proof or a claim of arbitrary-APK parity.
 
 The [machine-readable inventory](android-compatibility-deep-audit-2026-11-13.json)
@@ -39,6 +41,13 @@ framework inputs were reused from verified run
 The JSON records their actual hashes, the candidate Java source-tree identity
 and separate baseline/candidate JAR hashes. Local inventory inputs are not
 represented as a fresh full-platform build receipt.
+
+The structural inventory is the measured snapshot published at
+`ed772d71ad2e0b3d28f6a6030a427a6fbce99064`, whose `app/java` tree is
+`55ce45497453a0165658f7e17585afd107866d03`. The PR-review repairs below change
+behavior and fixtures without adding SDK declarations. The recorded source
+tree and JAR hashes remain attached to that original measurement; they are not
+receipts for a rebuilt follow-up JAR.
 
 ## Repository map
 
@@ -145,7 +154,10 @@ the existing held handle's granted write access, guarded against descriptor
 replacement, without performing artificial I/O. Shared fixtures cover empty
 vectors and the absence of a phantom zero-length UDP datagram.
 
-## Validation and execution boundaries
+## Initial-publication validation and execution boundaries
+
+The following table records the original published snapshot at `ed772d71`.
+Updated review evidence is recorded separately below.
 
 | Evidence | Result and meaning |
 | --- | --- |
@@ -165,6 +177,43 @@ boundaries. Only LeakSanitizer is disabled locally because this executor cannot
 perform its process inspection; the override is not embedded in CI. No host
 test supplies a fake Parcel. Network/IP local Parcelable round trips do not
 establish Android wire-layout or persisted cross-version interoperability.
+
+### Repairs from the independent PR review
+
+The review reproduced three further regressions against `ed772d71`, then used
+separate reviewers to verify the repairs:
+
+- **Mapped route prefixes:** an `IpPrefix` can retain 16 mapped-IPv6 bytes while
+  resolving to an IPv4 address. An omitted gateway now follows that resolved
+  family, matching the existing family validation. Explicit mismatches remain
+  rejected; the native Parcel gate also checks the mapped prefix and gateway.
+- **Empty vector cancellation:** the no-I/O `writev` path now delivers pending
+  pthread cancellation before acquiring any descriptor guard or owning object.
+  Shared host checks cover zero-count and all-zero vectors and ensure neither
+  creates a datagram. Android/Bionic builds retain all ordinary vector cases
+  without calling their unavailable `pthread_cancel` API.
+- **Stop and prime audio:** streaming stop freezes the existing source boundary,
+  while later writes may fill available ring space for the next start. Repeated
+  stop preserves that boundary; flush and paused stop discard it with the queue.
+  Restart during an unfinished resampler tail removes synthetic end padding
+  while retaining real history and phase, including pause followed by start.
+  Interrupted older writers still observe the existing generation counter.
+
+| Follow-up evidence | Result |
+| --- | --- |
+| SDK network caller | 175 host assertions pass. The updated fixture rejects the original `ed772d71` mapped-route constructor at the intended family mismatch. |
+| Native production host models | 95 sanitizer checks pass: epoll 15, vector 52, select 28. The updated vector fixture against `ed772d71` fails exactly the two pending-cancellation assertions. |
+| Shared native fixture | 66 real Linux checks pass; an Android-guard build retains and passes all 61 ordinary checks. |
+| Audio and SoundPool | 162 + 10 sanitizer assertions pass. The updated audio fixture against `ed772d71` compiles and fails 55 stop-priming/resume assertions. |
+| Media regression coverage | Surface geometry 158, media API 266, timestamps 20 and codec-window ownership 31 assertions remain green. |
+| Additional audio boundary checks | Real host JVM/JNI audio-buffer tests pass 72 UBSan assertions. A control retaining only synthetic tail padding fails exactly 42 resumed-sample assertions. |
+| Public audio caller | Updated stop/prime/play checks compile against SDK36 alone and execute through the existing Windows ART/JNI gate. Immediate and delayed restart are bounded. |
+| Independent integration checks | All 81 inventory source hashes and original measurement identities verified; 31 parser tests, 69 embedded Bash blocks, workflow YAML and actual PowerShell syntax pass. |
+
+The deterministic audio fixture checks exact old/new sample ordering, capacity,
+completed drain, repeated stop, inactive reset and resumed non-unity-rate filter
+output against uninterrupted playback. This host evidence still requires the
+published follow-up's actual Windows gates below before merge.
 
 Required actual executions on the published head:
 

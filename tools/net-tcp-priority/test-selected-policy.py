@@ -25,7 +25,7 @@ SOCKET_BASE='d5ad9aa318583ae3c3cca2d062ee964680e99e32'
 # shared Windows host/guest event-loop fixture. Affinity behavior is covered by
 # tools/test_ordinary_os_contracts.py; filesystem statistics by
 # tools/test_statvfs_contracts.py, the Windows POSIX probe and both ELF fixtures.
-SYSTEM_SHA256='ab62716e6ede42621c90fc50b43141158b8833c66ca646932d72b3c381d12a4a'
+SYSTEM_SHA256='531117e612ce18e2bfade3e61d0ed97a2e309e207f95c0c68cc9f988a4af7792'
 # Only the successful protocol fixture's startup budget changed. Pin its exact
 # reviewed bytes separately; controller, worker and execution gates retain BASE.
 CONTROL_BASE='c62c0ea4f88447c64608851ecf661f630e259442'

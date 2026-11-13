@@ -96,7 +96,7 @@ class Track : public std::enable_shared_from_this<Track> {
   // Playback control, as android::AudioTrack's.
   int Start();
   void Pause();
-  // Streaming: plays what was written, then stops (kStopping until then).
+  // Streaming: drains the data present at stop; later writes prime the next start.
   // Static: stops at once and rewinds.
   void Stop();
   // Streaming, stopped or paused: drops what was not played; position 0.
@@ -181,6 +181,7 @@ class Track : public std::enable_shared_from_this<Track> {
   std::vector<uint8_t> data_;
   uint64_t written_ = 0;      // streaming: frames ever written
   uint64_t read_ = 0;         // streaming: frames ever taken by the resampler
+  uint64_t stop_end_ = 0;     // kStopping: frozen source limit for this drain
   size_t buffer_frames_ = 0;  // streaming: setBufferSizeInFrames' limit
   size_t static_frames_ = 0;  // static: frames loaded
   size_t static_pos_ = 0;     // static: next frame to take

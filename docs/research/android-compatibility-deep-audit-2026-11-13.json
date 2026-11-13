@@ -36,6 +36,8 @@
       "tools": 317
     }
   },
+  "candidate_inventory_commit": "ed772d71ad2e0b3d28f6a6030a427a6fbce99064",
+  "candidate_inventory_scope": "Original published structural measurement. Subsequent PR-review behavior and fixture repairs add no SDK declarations; these source and JAR hashes remain receipts for the original measurement, not a rebuilt follow-up JAR.",
   "candidate_java_tree": "55ce45497453a0165658f7e17585afd107866d03",
   "compile_input_provenance": {
     "workflow_run": 43302471272,
@@ -2597,7 +2599,7 @@
     "Presence does not assess code bodies, native registration, values/constants, exceptions, annotations, permissions, services or behavior.",
     "Descriptor type absence concerns selected boot inputs only. APK/module/uses-library providers and desugaring are not assessed.",
     "Supplied boot order uses first definition. Runtime class-loader ordering was not executed or independently proved.",
-    "No runtime private member names, arbitrary strings, absolute input paths or bytecode bodies are written to the report.",
+    "The SDK member generator omits runtime private member names, arbitrary strings, absolute input paths and bytecode bodies. The consolidated service/JNI provenance separately records its original source path keys.",
     "The 7325 SDK declarations on absent classes are represented by the complete absent-class list, not duplicated individually.",
     "Presence, absent classes, inherited defaults, JNI references and modifier flags are different review queues; none counts demonstrated application crashes.",
     "Package/module or shared-library installation may supply a class outside this selected boot path.",

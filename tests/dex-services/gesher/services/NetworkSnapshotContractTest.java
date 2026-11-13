@@ -13,6 +13,7 @@ import android.os.Parcel;
 import android.os.Parcelable;
 import java.lang.reflect.InvocationTargetException;
 import java.net.Inet4Address;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -54,6 +55,14 @@ public final class NetworkSnapshotContractTest {
 
     private static IpPrefix prefix(String address, int length) throws Exception {
         return new IpPrefix(ip(address), length);
+    }
+
+    private static IpPrefix mappedIpv4Prefix() throws Exception {
+        byte[] bytes = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (byte)0xff, (byte)0xff,
+                (byte)192, 0, 2, 4};
+        // Preserve the mapped IPv6 bytes at construction; IpPrefix.getAddress()
+        // subsequently resolves the mapped address to Inet4Address, as on Android.
+        return new IpPrefix(Inet6Address.getByAddress(null, bytes, 0), 120);
     }
 
     private static LinkAddress address(String text, int prefix) throws Exception {
@@ -184,6 +193,19 @@ public final class NetworkSnapshotContractTest {
                 RouteInfo.RTN_UNICAST), "Route address family mismatch rejected");
         expect(IllegalArgumentException.class, () -> route(destination, null, null, 999),
                 "Unknown route type rejected");
+
+        IpPrefix mappedPrefix = mappedIpv4Prefix();
+        check(mappedPrefix.getRawAddress().length == 16
+                && mappedPrefix.getAddress() instanceof Inet4Address,
+                "Mapped prefix retains IPv6 bytes with an IPv4 address family");
+        RouteInfo mapped = route(mappedPrefix, null, "eth0", RouteInfo.RTN_UNICAST, 1460);
+        check(mapped.getGateway() instanceof Inet4Address && mapped.getGateway().isAnyLocalAddress()
+                && !mapped.hasGateway(), "Mapped prefix uses the IPv4 unspecified gateway");
+        check(mapped.getDestination().equals(mappedPrefix) && "eth0".equals(mapped.getInterface())
+                && mapped.getType() == RouteInfo.RTN_UNICAST && mtu(mapped) == 1460,
+                "Mapped route preserves prefix, interface, type and MTU");
+        expect(IllegalArgumentException.class, () -> route(mappedPrefix, ip("2001:db8::1"),
+                "eth0", RouteInfo.RTN_UNICAST), "Mapped prefix still rejects an IPv6 gateway");
     }
 
     private static LinkProperties populated(boolean reversed) throws Exception {
@@ -359,6 +381,12 @@ public final class NetworkSnapshotContractTest {
         check(linkAddress.equals(roundTrip(linkAddress, LinkAddress.CREATOR)), "Address flags/scope parcel");
         RouteInfo route = route(prefix("192.0.2.0", 24), ip("192.0.2.1"), "eth1", RouteInfo.RTN_THROW, 1492);
         check(route.equals(roundTrip(route, RouteInfo.CREATOR)), "Route type/MTU parcel");
+        RouteInfo mapped = route(mappedIpv4Prefix(), null, "eth2", RouteInfo.RTN_THROW, 1460);
+        RouteInfo mappedCopy = roundTrip(mapped, RouteInfo.CREATOR);
+        check(mapped.equals(mappedCopy) && mappedCopy.getDestination().getRawAddress().length == 16
+                && mappedCopy.getGateway() instanceof Inet4Address
+                && mappedCopy.getGateway().isAnyLocalAddress(),
+                "Mapped route retains raw prefix, IPv4 gateway and route data through Parcel");
         Parcelable.Creator<WifiConfiguration> creator = (Parcelable.Creator<WifiConfiguration>)
                 WifiConfiguration.class.getField("CREATOR").get(null);
         for (int mode = 0; mode < 4; mode++) {

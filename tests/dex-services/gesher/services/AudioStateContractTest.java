@@ -124,6 +124,31 @@ public final class AudioStateContractTest {
             }
         }
     }
+    private static void stopPriming() throws Exception {
+        for (boolean waitForDrain : new boolean[]{false, true}) {
+            AudioTrack track = track(false, false);
+            try {
+                int capacity = track.getBufferSizeInFrames();
+                check(capacity >= 4 && capacity <= 1_000_000, "Bounded stop-priming capacity");
+                short[] before = new short[capacity / 4];
+                short[] after = new short[capacity / 2];
+                check(track.write(before, 0, before.length, AudioTrack.WRITE_NON_BLOCKING) == before.length,
+                        "Prime data for the first playback");
+                track.play();
+                track.stop();
+                check(writeBounded(track, () -> track.write(after, 0, after.length,
+                        AudioTrack.WRITE_BLOCKING)) == after.length,
+                        "Stop permits priming available space for the next playback");
+                if (waitForDrain) Thread.sleep(500);
+                track.play();
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+                while (track.getPlaybackHeadPosition() < after.length && System.nanoTime() < deadline)
+                    Thread.sleep(10);
+                check(track.getPlaybackHeadPosition() >= after.length,
+                        "Restart actually plays the newly primed data");
+            } finally { track.release(); }
+        }
+    }
     private static void resets() throws Exception {
         AudioTrack streaming = track(false, false);
         try {
@@ -163,6 +188,7 @@ public final class AudioStateContractTest {
         services.getMethod("installInProcess", Map.class).invoke(null, registry);
         priming();
         interrupts();
+        stopPriming();
         resets();
         System.out.println("AudioStateContractTest all passed: " + checks + " checks");
     }

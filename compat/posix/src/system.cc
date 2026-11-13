@@ -600,6 +600,9 @@ ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
   bool empty = true;
   for (int i = 0; i < iovcnt; ++i) empty = empty && iov[i].iov_len == 0;
   if (empty) {
+    // Preserve the socket path's cancellation point without issuing I/O.
+    // Cancellation must not retain a descriptor guard or any owning object.
+    pthread_testcancel();
     // Linux checks write access even when no bytes will be transferred. The
     // generic F_GETFL fallback reports O_RDWR, so inspect the held handle's
     // actual access without issuing an artificial zero-byte write (which can
