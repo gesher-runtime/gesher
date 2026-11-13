@@ -1,0 +1,19 @@
+diff --git a/libartbase/base/zip_archive.cc b/libartbase/base/zip_archive.cc
+index f90a92d..4d09b95 100644
+--- a/libartbase/base/zip_archive.cc
++++ b/libartbase/base/zip_archive.cc
+@@ -207,12 +207,13 @@ MemMap ZipEntry::MapDirectlyOrExtract(const char* zip_filename,
+ }
+ 
+ static void SetCloseOnExec(int fd) {
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)
+   // Exec is not supported on Windows.
+   UNUSED(fd);
+   PLOG(ERROR) << "SetCloseOnExec is not supported on Windows.";
+ #else
+   // This dance is more portable than Linux's O_CLOEXEC open(2) flag.
++  // (Gesher: gesher-base's fcntl keeps FD_CLOEXEC as the handle's inheritance.)
+   int flags = fcntl(fd, F_GETFD);
+   if (flags == -1) {
+     PLOG(WARNING) << "fcntl(" << fd << ", F_GETFD) failed";
