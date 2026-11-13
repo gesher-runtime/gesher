@@ -506,6 +506,12 @@ class Env final : public A64::UserCallbacks {
   // middle of guest code (a Jit still marked running).
   bool Reusable() const { return depth_ == 0; }
 
+  // Going into the pool: the stack's contents are dead, so its pages leave
+  // the working set (they stay committed; a later touch reads zero or stale).
+  void Park() {
+    VirtualAlloc(stack_base_ + kGuardSize, kStackSize - kGuardSize, MEM_RESET, PAGE_READWRITE);
+  }
+
   // One Jit per nesting depth: dynarmic's Run() is not reentrant, so a
   // guest->host->guest chain (a host callback that is guest code — a qsort
   // comparator, a JNI call back into a guest native) runs the inner guest on
@@ -989,6 +995,7 @@ struct EnvRelease {
     if (env->Reusable()) {
       std::lock_guard<std::mutex> lock(g_env_pool_mutex);
       if (g_env_pool.size() < EnvPoolLimit()) {
+        env->Park();
         g_env_pool.push_back(env);
         return;
       }
