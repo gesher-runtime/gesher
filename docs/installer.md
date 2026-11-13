@@ -52,7 +52,8 @@ console) and the launcher's `dalvikvm.exe` end instead of staying, about
 185 MB of working set and 800 MB of commit, for each open app. The app's process
 is the device's (its system server started it); the device's idle timeout
 counts app processes only. `gesher-app ... --detach` asks for the same from a
-console, `--wait` for the waiting launch whatever the variable says.
+console, `--wait` for the waiting launch whatever the variable says (gesher-launch's
+splash follows these arguments too).
 
 ### The splash window
 
@@ -84,12 +85,12 @@ splash window (class `GesherSplash`) right after it starts `gesher-app.ps1`:
   ID. It looks every 200 ms. It also goes when `gesher-app.ps1` ends (the
   launch failed, or the app ended without a window; a detached launch's
   `gesher-app.ps1` ends once the activity has started with exit code 0, and the
-  splash then waits for the window up to 20 s more) and after 2 minutes. If
+  splash then waits for the window up to 60 s more) and after 2 minutes. If
   it still has the foreground when the app's window is up, it hands it on to
   that window; it never takes it from the app. Closing it (its X) cancels the
   launch: gesher-launch terminates the starting processes and exits, so the app
-  does not open (after a detached launcher has ended, the app's windows are
-  closed as they come, for up to 10 s).
+  does not open (after a detached launcher has ended, the device stays and the
+  app's visible windows, never a splash, are closed as they come for 10 s).
 
 CI: `tests/windows/tracks/55-shell.ps1` runs a copy of gesher-launch with a
 stand-in `gesher-app.ps1` and a stand-in `%LOCALAPPDATA%` (a shortcut record

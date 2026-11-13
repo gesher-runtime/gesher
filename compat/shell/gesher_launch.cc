@@ -31,7 +31,8 @@
 // once the activity has started, so that gesher-launch, powershell, its console
 // and the launcher's dalvikvm all end instead of staying for the app's lifetime.
 // The app's process belongs to the device. The splash then stays until the
-// app's window is up (at most kSplashAfterDetachMs more).
+// app's window is up (at most kSplashAfterDetachMs more). --detach and --wait
+// in the arguments (gesher-app's) override the variable, for the splash too.
 
 // The project defines NOGDI for AOSP code; the splash paints with GDI.
 // CommandLineToArgvW and the property store need what WIN32_LEAN_AND_MEAN
@@ -80,7 +81,9 @@ constexpr ULONGLONG kSplashPollMs = 200;
 // A detached launch's gesher-app.ps1 ends once the activity has started: how much
 // longer the splash waits for its window, and, if the user closed the splash after
 // that, how long it looks for the app's windows to close them.
-constexpr ULONGLONG kSplashAfterDetachMs = 20000;
+// (Generous: a trampoline activity, or an app's first run, can take long to show
+// its window after the first activity is idle.)
+constexpr ULONGLONG kSplashAfterDetachMs = 60000;
 constexpr ULONGLONG kCancelAfterDetachMs = 10000;
 // The environment variable that asks com.gesher.app.Launcher not to wait (Launcher.DETACH_ENV).
 constexpr wchar_t kDetachEnv[] = L"GESHER_LAUNCH_DETACH";
@@ -562,18 +565,20 @@ void FreeSplash(Splash* splash) {
   if (splash->text_font != nullptr) DeleteObject(splash->text_font);
 }
 
-// Posts WM_CLOSE to the visible top-level windows with this AppUserModelID
-// (closing an app's window finishes its activity). Returns how many.
-int CloseAppWindows(const std::wstring& app_id) {
-  int closed = 0;
+// Posts WM_CLOSE to the app's visible top-level windows (this AppUserModelID; never
+// a splash, which another launch of the app may show) not in *done, and adds them
+// to it (closing an app's window finishes its activity).
+void CloseAppWindows(const std::wstring& app_id, std::vector<HWND>* done) {
   HWND app = nullptr;
   while ((app = FindWindowExW(nullptr, app, nullptr, nullptr)) != nullptr) {
-    if (WindowAppUserModelId(app) == app_id) {
-      PostMessageW(app, WM_CLOSE, 0, 0);
-      ++closed;
-    }
+    if (!IsWindowVisible(app)) continue;
+    if (std::find(done->begin(), done->end(), app) != done->end()) continue;
+    wchar_t name[64];
+    if (GetClassNameW(app, name, 64) > 0 && std::wcscmp(name, kSplashClass) == 0) continue;
+    if (WindowAppUserModelId(app) != app_id) continue;
+    PostMessageW(app, WM_CLOSE, 0, 0);
+    done->push_back(app);
   }
-  return closed;
 }
 
 // Shows the splash until the app's window is up, `process` ends, the user
@@ -636,14 +641,24 @@ bool SplashWhileStarting(const std::wstring& here, HANDLE process, DWORD pid, bo
   FreeSplash(&splash);
 
   if (g_cancelled) {
+    // A detached launcher may have ended (the activity started) after the loop last
+    // looked: its pid is then no longer the launch's, and its job may hold the device.
+    DWORD code = 1;
+    if (!exited && detached && WaitForSingleObject(process, 0) == WAIT_OBJECT_0 &&
+        GetExitCodeProcess(process, &code) && code == 0) {
+      exited = true;
+    }
+    std::vector<HWND> closed;
     if (!exited) {
       TerminateProcessTree(pid);
-      if (!splash.app_id.empty()) CloseAppWindows(splash.app_id);
+      if (!splash.app_id.empty()) CloseAppWindows(splash.app_id, &closed);
     } else if (!splash.app_id.empty()) {
-      // The activity started and the launcher is gone: its window is on its way (or
-      // up); it is closed when it comes.
+      // The activity started and the launcher is gone: its windows are on their way
+      // (or up); each is closed when it comes, for kCancelAfterDetachMs.
       const ULONGLONG deadline = GetTickCount64() + kCancelAfterDetachMs;
-      while (CloseAppWindows(splash.app_id) == 0 && GetTickCount64() < deadline) {
+      for (;;) {
+        CloseAppWindows(splash.app_id, &closed);
+        if (GetTickCount64() >= deadline) break;
         Sleep(static_cast<DWORD>(kSplashPollMs));
       }
     }
@@ -690,7 +705,20 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   // Nobody reads the output: the launcher does not wait for the app (powershell
   // inherits this environment). A caller's own setting is left as it is.
   if (!inherit && Env(kDetachEnv).empty()) SetEnvironmentVariableW(kDetachEnv, L"1");
-  const bool detached = Env(kDetachEnv) == L"1";
+  // The splash's view of it: gesher-app's own --detach / --wait (the launcher's
+  // last one wins) over the environment.
+  bool detached = Env(kDetachEnv) == L"1";
+  {
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv != nullptr) {
+      for (int i = 1; i < argc; ++i) {
+        if (std::wcscmp(argv[i], L"--detach") == 0) detached = true;
+        if (std::wcscmp(argv[i], L"--wait") == 0) detached = false;
+      }
+      LocalFree(argv);
+    }
+  }
   PROCESS_INFORMATION pi = {};
   std::wstring mutable_command = command;
   if (!CreateProcessW(powershell.c_str(), mutable_command.data(), nullptr, nullptr,
