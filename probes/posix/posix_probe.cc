@@ -361,6 +361,11 @@ static void* NameDetachedThread(void* done) {
   CHECK(pthread_setname_np(pthread_self(), "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d") == 0);  // Hebrew
   CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 &&
         strcmp(name, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d") == 0);
+  // A longer description (set by other code) is cut on a character boundary:
+  // seven 2-byte letters, not 15 bytes ending in half a letter.
+  SetThreadDescription(GetCurrentThread(), L"שלוםשלוםש");
+  CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 && strlen(name) == 14 &&
+        strcmp(name, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\xd7\xa9\xd7\x9c\xd7\x95") == 0);
   SetEvent(static_cast<HANDLE>(done));
   return nullptr;
 }

@@ -47,11 +47,12 @@ constexpr auto kTrampolines = MakeTrampolines(std::make_integer_sequence<int, kS
 
 constexpr size_t kTaskCommLen = 16;  // Linux's TASK_COMM_LEN, with the NUL
 
-// The Windows thread of |thread|, or null when winpthreads no longer has its
-// handle (a detached thread other than the caller).
-HANDLE ThreadHandle(pthread_t thread) {
-  if (pthread_equal(thread, pthread_self())) return GetCurrentThread();
-  return static_cast<HANDLE>(pthread_gethandle(thread));
+// The first |limit| bytes of UTF-8 |text| at most, not splitting a character.
+size_t Utf8Prefix(const std::string& text, size_t limit) {
+  if (text.size() <= limit) return text.size();
+  size_t end = limit;
+  while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) --end;
+  return end;
 }
 
 // A thread that never named itself has its process's name, as on Linux,
@@ -102,22 +103,25 @@ int gesher_pthread_key_delete(pthread_key_t key) {
 int gesher_pthread_setname_np(pthread_t thread, const char* name) {
   if (name == nullptr) return EINVAL;
   if (std::strlen(name) >= kTaskCommLen) return ERANGE;
-  HANDLE handle = ThreadHandle(thread);
-  if (handle == nullptr) return pthread_setname_np(thread, name);
+  // Another thread is winpthreads' to look up under its own lock: its handle
+  // could be closed by a concurrent join or detach. winpthreads keeps its
+  // copy of the name for that case, and fails with ESRCH once a thread is
+  // detached, so only a thread's own name reaches its description.
+  if (!pthread_equal(thread, pthread_self())) return pthread_setname_np(thread, name);
+  pthread_setname_np(thread, name);  // the copy other threads read; ESRCH if detached
   std::wstring wide = gesher::Widen(name);
-  return SUCCEEDED(SetThreadDescription(handle, wide.c_str())) ? 0 : ESRCH;
+  return SUCCEEDED(SetThreadDescription(GetCurrentThread(), wide.c_str())) ? 0 : ESRCH;
 }
 
 int gesher_pthread_getname_np(pthread_t thread, char* name, size_t len) {
   if (name == nullptr || len < kTaskCommLen) return ERANGE;
-  HANDLE handle = ThreadHandle(thread);
-  if (handle == nullptr) return pthread_getname_np(thread, name, len);
+  if (!pthread_equal(thread, pthread_self())) return pthread_getname_np(thread, name, len);
   PWSTR description = nullptr;
-  if (FAILED(GetThreadDescription(handle, &description))) return ESRCH;
+  if (FAILED(GetThreadDescription(GetCurrentThread(), &description))) return ESRCH;
   std::string text = description != nullptr ? gesher::Narrow(description) : std::string();
   if (description != nullptr) LocalFree(description);
   if (text.empty()) text = ProcessName();
-  text.resize(std::min(text.size(), kTaskCommLen - 1));
+  text.resize(Utf8Prefix(text, kTaskCommLen - 1));
   std::memcpy(name, text.c_str(), text.size() + 1);
   return 0;
 }

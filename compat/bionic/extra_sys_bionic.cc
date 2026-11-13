@@ -217,9 +217,18 @@ int BIONIC_SYSV PthreadGetnameNp(uint64_t thread, char* buf, size_t size) {
   if (thread == PthreadSelfId()) {
     PWSTR name = nullptr;
     if (SUCCEEDED(GetThreadDescription(GetCurrentThread(), &name)) && name != nullptr) {
-      WideCharToMultiByte(CP_UTF8, 0, name, -1, buf, static_cast<int>(size), nullptr, nullptr);
-      buf[size - 1] = 0;
+      // A description can be longer than a thread name (another component
+      // set it): keep at most 15 bytes and the buffer, on a character boundary.
+      int n = WideCharToMultiByte(CP_UTF8, 0, name, -1, nullptr, 0, nullptr, nullptr);
+      std::string text(n > 0 ? n - 1 : 0, 'x');
+      if (n > 0) WideCharToMultiByte(CP_UTF8, 0, name, -1, text.data(), n, nullptr, nullptr);
       LocalFree(name);
+      size_t end = std::min<size_t>(text.size(), std::min<size_t>(size - 1, 15));
+      if (end < text.size()) {
+        while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) --end;
+      }
+      std::memcpy(buf, text.data(), end);
+      buf[end] = 0;
     }
   }
   return 0;
