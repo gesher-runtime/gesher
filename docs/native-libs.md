@@ -31,9 +31,17 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
 - **The ELF loader** (`compat/elf/`, `gesher/elf_loader.h`). For an ET_DYN
   x86-64 object it:
   - maps the `PT_LOAD` segments into a single reservation through
-    gesher-base's `mmap`, copying their contents and setting each segment's
-    protection with `mprotect` (file-backed fixed mappings would need
-    placeholder mappings on Windows, which gesher-base does not do yet);
+    gesher-base's `mmap`, as bionic's linker does: each segment is a
+    `MAP_PRIVATE | MAP_FIXED` view of the file (placeholder mappings, ADR
+    0036), code and read-only data mapped with their final protection (shared
+    with the file and every process that loads it, not charged to commit),
+    writable data copy-on-write, `.bss` anonymous zero pages. Pages that a
+    text relocation or the `%fs` rewrite patches are made writable
+    (copy-on-write) one at a time and become private; `mprotect` sets each
+    segment's final protection after relocation. A segment whose file offset
+    and address are not congruent modulo the page size, an object loaded from
+    memory, segments sharing a page, or mmap without placeholders fall back to
+    copying the contents into anonymous memory;
   - parses `PT_DYNAMIC`: symbol and string tables, GNU and SysV hashes,
     `RELA`/`JMPREL`/`RELR` relocations, init/fini arrays, `PT_TLS`;
   - applies relocations — `R_X86_64_RELATIVE`/`RELATIVE64`, `RELR`,
@@ -692,10 +700,13 @@ see "After that" for what is left._
 - **`va_start` in a `sysv_abi` function** (to forward `printf`): not allowed
   on Windows targets; the assembly trampolines in `stdio_bionic.cc` replace
   it.
-- **File-backed fixed segment mappings** for `PT_LOAD`: avoided; the loader
-  reserves one anonymous range and copies segment contents, since file-backed
-  `MAP_FIXED` over a reservation needs placeholder mappings gesher-base does not
-  have yet.
+- **File-backed fixed segment mappings** for `PT_LOAD`: done (ADR 0080).
+  Until then the loader copied every segment into anonymous memory, so each
+  library was private, resident and charged to commit in full (libwaze.so: a
+  67 MB private region per Waze process). A mapped library file cannot be
+  truncated or rewritten in place while a process maps it (Windows refuses
+  writes that change a mapped file's size); deleting or renaming it works
+  (POSIX semantics), which is what the installer does on update.
 
 ### How to work on this
 
