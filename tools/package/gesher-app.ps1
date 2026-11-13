@@ -39,7 +39,8 @@
 #
 # The first launch starts the device detached (no console window: it outlives
 # this console); later launches use it. It stops with `gesher-app shutdown`,
-# or after GESHER_IDLE_TIMEOUT seconds (default 600) without an app process.
+# or after GESHER_IDLE_TIMEOUT seconds (default 600) without an app in use (an
+# activity or a foreground service; closed apps' cached processes do not count).
 # Installed packages are in %LOCALAPPDATA%\Gesher\data\app, the logs in
 # %LOCALAPPDATA%\Gesher\logs (<package>.log has an app's output).
 #
