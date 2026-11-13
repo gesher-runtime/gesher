@@ -118,9 +118,15 @@ int prctl(int option, ...) {
   int result;
   switch (option) {
     case PR_SET_NAME: {
-      // Linux keeps the first 15 bytes.
+      const char* input = va_arg(args, const char*);
+      if (input == nullptr) { result = -1; errno = EFAULT; break; }
+      // The Windows description is Unicode: do not leave a partial UTF-8
+      // character at the 15-byte Linux limit.
+      size_t length = strnlen(input, 15);
+      while (length && (static_cast<unsigned char>(input[length]) & 0xc0) == 0x80) --length;
       char name[16];
-      snprintf(name, sizeof(name), "%s", va_arg(args, const char*));
+      memcpy(name, input, length);
+      name[length] = 0;
       // Also Windows' own thread name, which /proc/self/task/<tid>/comm
       // (procfs.cc) and debuggers read (pthread.cc).
       int error = pthread_setname_np(pthread_self(), name);

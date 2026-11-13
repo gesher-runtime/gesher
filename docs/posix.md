@@ -15,8 +15,40 @@ Phase 1 items closed by the posix track (branch `wip/posix`). Design:
 | Time zones | `src/windows_zones.cc`, `gen_windows_zones.py`, `compat/libcore/collect-tzdata.sh` | `/etc/timezone` = Windows' zone as an IANA id (CLDR windowsZones from the pinned ICU, by the user's region), which libcore's `TimeZone.getDefault()` reads; the tzdata module's files from `system/timezone` in `dist/tzdata` and the installer (`ANDROID_TZDATA_ROOT`) |
 | inotify | `src/inotify.cc`, `<sys/inotify.h>` | over `ReadDirectoryChangesExW`, an fd that `poll`/`epoll` wait on; libopenjdk's `LinuxWatchService.c` (`WatchService`) and libandroid_runtime's FileObserver natives are linked in |
 | Processes | `src/process.cc`, `src/misc.cc` | `getppid`; `kill` to other processes (signal mailbox), `SIGKILL`/`SIGSTOP`/`SIGCONT` to any; `$GESHER_UID`; `getrlimit`/`setrlimit`/`prlimit`/`getrusage`; `prctl(PR_SET_NAME)` names the Windows thread too |
-| Thread names | `src/pthread.cc`, `<pthread.h>` | `pthread_setname_np`/`pthread_getname_np` with Linux's limits (15 bytes, `ERANGE`; an unnamed thread has the process's name) as the Windows thread description, which debuggers, profilers and `/proc/self/task/<tid>/comm` show; winpthreads' own fails with `ESRCH` for detached threads (all of ART's), which logged a warning for every thread ART started |
+| Thread names | `src/pthread.cc`, `<pthread.h>` | `pthread_setname_np`/`pthread_getname_np` enforce the 15-byte limit and a 16-byte read buffer; the calling thread's name is its Windows description, including detached ART threads. Cross-thread host setters use winpthreads with a scoped UTF-8 caller locale. `/proc/self/task/<tid>/comm` truncates descriptions on a UTF-8 boundary. |
 | libcap | `src/libcap.cc` | `cap_get_proc`, `cap_set_proc`, ... with empty sets (ART's tests use them) |
+
+## Structured logging and thread names
+
+Structured logging caches the absolute destination and its named mutex. Each
+writer, reader and clear operation acquires that mutex before opening the data
+file, then closes the data handle before unlocking. The handle denies delete
+sharing during that operation. There is no data handle retained by an idle
+writer, so ordinary Windows deletion and recreation do not wait for another
+process to log again. Rotation and replacement cannot redirect a cached writer
+to an old file, and accepted extended paths have no additional 2048-character
+name-query limit.
+
+The property lookup uses one local snapshot for the tag and global settings.
+An unchanged atomically read generation reuses that snapshot; a changed
+generation takes the shared area's mutex before decoding. Writers publish the
+generation atomically after the payload and metadata. Log writes remain best
+effort, with rollback attempted after an incomplete append; they do not promise
+a durable disk flush on each line.
+
+Benchmarks from an implementation that retained data handles do not describe
+this implementation. Performance must be measured again with these file
+lifetimes and the required Windows regression suites.
+
+Host thread IDs and ownership remain winpthreads' responsibility. The adapter
+never borrows another thread's native handle. A cross-thread name conversion
+temporarily selects UTF-8 only for the calling thread, restoring its locale
+and locale mode afterward. The bionic adapter uses its own retained thread
+objects under the same registry lock used for retirement; both get/set-name
+and prctl share that implementation. UTF-8 descriptions and PR_SET_NAME
+truncation stop before a partial character at the 15-byte limit. An unnamed
+detached host thread falls back to the executable name; full Linux comm-name
+inheritance at thread creation is not implemented here.
 
 ## Tests
 
@@ -28,9 +60,20 @@ Phase 1 items closed by the posix track (branch `wip/posix`). Design:
   `/proc/self`, `/etc/timezone`, inotify (create, write, close-write, moves
   with one cookie, attrib, delete, directories, a watched file, oneshot,
   rm_watch, the watched directory deleted, in an epoll, a blocking read), and
-  thread names (a detached thread, `ERANGE`, `prctl`, `/proc/self/task/<tid>/comm`),
+  thread names (detached and event-synchronized joinable threads, cross-thread
+  UTF-8 under the caller's original locale, empty names, `ERANGE`, `prctl`,
+  `/proc/self/task/<tid>/comm`),
   processes (getppid, `GESHER_UID`, SIGUSR1 to a child in `sigwait`, SIGTERM
   default and ignored, SIGSTOP/SIGCONT, SIGKILL, ESRCH), rlimits, libcap.
+- `tests/exec/property-host-probe.cc` (mandatory exec3 track): a warmed property
+  cache observes another process's value and serial, including batched missing
+  names; two writers delete and recreate a log while one stays alive and idle;
+  rotation/replacement, cross-process clear, 16 MiB rollover and a log path
+  longer than 2200 characters retain complete records.
+- `tests/native/bionic_key_exit_test.cc` (mandatory native-libs track) also
+  exercises the registered pthread/prctl name adapters on joinable and detached
+  bionic threads, host pthreads and Windows threads, including remote getters,
+  invalid identities and UTF-8 boundaries.
 - `tests/dex-libcore/TimeZoneTest.java`: the default zone, the tzdata
   module's data loaded, and `java.util.TimeZone`, `java.time` and
   `android.icu` agreeing; `21-posix.ps1` sets Windows' zone to

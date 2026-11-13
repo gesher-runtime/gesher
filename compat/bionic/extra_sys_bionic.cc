@@ -212,26 +212,7 @@ int BIONIC_SYSV PthreadAttrSetstack(bionic_pthread_attr_t* a, void* base, size_t
   return 0;
 }
 int BIONIC_SYSV PthreadGetnameNp(uint64_t thread, char* buf, size_t size) {
-  if (buf == nullptr || size == 0) return kERANGE;
-  buf[0] = 0;
-  if (thread == PthreadSelfId()) {
-    PWSTR name = nullptr;
-    if (SUCCEEDED(GetThreadDescription(GetCurrentThread(), &name)) && name != nullptr) {
-      // A description can be longer than a thread name (another component
-      // set it): keep at most 15 bytes and the buffer, on a character boundary.
-      int n = WideCharToMultiByte(CP_UTF8, 0, name, -1, nullptr, 0, nullptr, nullptr);
-      std::string text(n > 0 ? n - 1 : 0, 'x');
-      if (n > 0) WideCharToMultiByte(CP_UTF8, 0, name, -1, text.data(), n, nullptr, nullptr);
-      LocalFree(name);
-      size_t end = std::min<size_t>(text.size(), std::min<size_t>(size - 1, 15));
-      if (end < text.size()) {
-        while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) --end;
-      }
-      std::memcpy(buf, text.data(), end);
-      buf[end] = 0;
-    }
-  }
-  return 0;
+  return PthreadGetName(thread, buf, size);
 }
 int BIONIC_SYSV PthreadGetcpuclockid(uint64_t thread, int* clock) {
   return PthreadCpuClock(thread, clock);
@@ -559,19 +540,19 @@ int BIONIC_SYSV Prctl(int option, uint64_t a2, uint64_t, uint64_t, uint64_t) {
     case 15: {  // PR_SET_NAME
       const char* name = reinterpret_cast<const char*>(a2);
       if (name == nullptr) return errno = kEFAULT, -1;
-      char truncated[16];  // Linux keeps the first 15 bytes
-      std::snprintf(truncated, sizeof(truncated), "%s", name);
-      wchar_t w[16];
-      if (MultiByteToWideChar(CP_UTF8, 0, truncated, -1, w, 16) > 0) {
-        SetThreadDescription(GetCurrentThread(), w);
-      }
-      return 0;
+      size_t length = strnlen(name, 15);
+      while (length && (static_cast<unsigned char>(name[length]) & 0xc0) == 0x80) --length;
+      char truncated[16];
+      std::memcpy(truncated, name, length);
+      truncated[length] = 0;
+      int error = PthreadSetName(PthreadSelfId(), truncated);
+      return error == 0 ? 0 : (errno = error, -1);
     }
-    case 16:  // PR_GET_NAME
+    case 16: {  // PR_GET_NAME
       if (a2 == 0) return errno = kEFAULT, -1;
-      // The thread's description, which pthread_setname_np also sets.
-      PthreadGetnameNp(PthreadSelfId(), reinterpret_cast<char*>(a2), 16);
-      return 0;
+      int error = PthreadGetName(PthreadSelfId(), reinterpret_cast<char*>(a2), 16);
+      return error == 0 ? 0 : (errno = error, -1);
+    }
     case 3:   // PR_GET_DUMPABLE
       return 1;
     case 4:   // PR_SET_DUMPABLE

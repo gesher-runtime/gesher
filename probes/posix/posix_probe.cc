@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <ftw.h>
+#include <locale.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -366,28 +367,108 @@ static void* NameDetachedThread(void* done) {
   SetThreadDescription(GetCurrentThread(), L"שלוםשלוםש");
   CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 && strlen(name) == 14 &&
         strcmp(name, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\xd7\xa9\xd7\x9c\xd7\x95") == 0);
-  SetEvent(static_cast<HANDLE>(done));
+  CHECK(ReadAll(comm.c_str()) == "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\xd7\xa9\xd7\x9c\xd7\x95\n");
+  CHECK(prctl(PR_SET_NAME, "12345678901234\xd7\xa9") == 0);
+  CHECK(prctl(PR_GET_NAME, name) == 0 && strcmp(name, "12345678901234") == 0);
+  CHECK(Description() == "12345678901234");
+  CHECK(prctl(PR_SET_NAME, static_cast<const char*>(nullptr)) == -1 && errno == EFAULT);
+  CHECK(pthread_setname_np(pthread_self(), "") == 0);
+  CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 && name[0] == 0);
+  CHECK(Description().empty());
+  CHECK(SetEvent(static_cast<HANDLE>(done)) != 0);
   return nullptr;
 }
 
+// A live peer with event barriers: no timing assumption about scheduler speed.
+struct NamePeer {
+  HANDLE ready, read, done, release;
+  DWORD tid = 0;
+  char name[16]{};
+  std::string description, locale;
+  int result = -1;
+  bool cleared = false;
+};
+static void NameWait(HANDLE event) {
+  if (!event || WaitForSingleObject(event, 30000) != WAIT_OBJECT_0) {
+    fprintf(stderr, "FAIL thread-name event/timeout\n");
+    ExitProcess(1);  // never free state still reachable by a timed-out worker
+  }
+}
+static void* NamedPeer(void* argument) {
+  auto* peer = static_cast<NamePeer*>(argument);
+  peer->tid = GetCurrentThreadId();
+  SetEvent(peer->ready);
+  NameWait(peer->read);
+  peer->result = pthread_getname_np(pthread_self(), peer->name, sizeof(peer->name));
+  peer->description = Description();
+  const char* locale = setlocale(LC_CTYPE, nullptr);
+  peer->locale = locale ? locale : "<error>";
+  SetEvent(peer->done);
+  NameWait(peer->release);
+  peer->cleared = pthread_getname_np(pthread_self(), peer->name, sizeof(peer->name)) == 0 &&
+                  peer->name[0] == 0 && Description().empty();
+  return nullptr;
+}
 static void ThreadNames() {
   HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!done) { CHECK(false); return; }
   pthread_attr_t attr;
-  pthread_attr_init(&attr);
-  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  if (pthread_attr_init(&attr) != 0) { CHECK(false); CloseHandle(done); return; }
+  CHECK(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0);
   pthread_t thread;
-  CHECK(pthread_create(&thread, &attr, NameDetachedThread, done) == 0);
-  pthread_attr_destroy(&attr);
-  CHECK(WaitForSingleObject(done, 30000) == WAIT_OBJECT_0);
+  int created = pthread_create(&thread, &attr, NameDetachedThread, done);
+  CHECK(pthread_attr_destroy(&attr) == 0);
+  if (created != 0) { CHECK(false); CloseHandle(done); return; }
+  NameWait(done);
   CloseHandle(done);
-  // A joinable thread can be named by another thread.
+
+  NamePeer peer{};
+  peer.ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  peer.read = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  peer.done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  peer.release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!peer.ready || !peer.read || !peer.done || !peer.release) {
+    fprintf(stderr, "FAIL thread-name event creation\n");
+    ExitProcess(1);
+  }
   pthread_t joinable;
-  CHECK(pthread_create(&joinable, nullptr, [](void*) -> void* { Sleep(200); return nullptr; },
-                       nullptr) == 0);
-  char name[16] = {};
+  if (pthread_create(&joinable, nullptr, NamedPeer, &peer) != 0) {
+    fprintf(stderr, "FAIL thread-name peer creation\n");
+    ExitProcess(1);
+  }
+  NameWait(peer.ready);
+  char name[16]{};
   CHECK(pthread_setname_np(joinable, "joinable") == 0);
   CHECK(pthread_getname_np(joinable, name, sizeof(name)) == 0 && strcmp(name, "joinable") == 0);
+  std::string comm = "/proc/self/task/" + std::to_string(peer.tid) + "/comm";
+  CHECK(ReadAll(comm.c_str()) == "joinable\n");
+
+  // The default C locale must not corrupt cross-thread UTF-8 descriptions.
+  const char* locale = setlocale(LC_CTYPE, nullptr);
+  std::string before = locale ? locale : "<error>";
+  int mode = _configthreadlocale(0);
+  const char* supplementary = "bridge-\xf0\x9f\x8c\x89";
+  CHECK(pthread_setname_np(joinable, supplementary) == 0);
+  CHECK(ReadAll(comm.c_str()) == std::string(supplementary) + "\n");
+  const char* unicode = "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d";
+  CHECK(pthread_setname_np(joinable, unicode) == 0);
+  CHECK(_configthreadlocale(0) == mode);
+  locale = setlocale(LC_CTYPE, nullptr);
+  CHECK(locale != nullptr && before == locale);
+  CHECK(pthread_getname_np(joinable, name, sizeof(name)) == 0 && strcmp(name, unicode) == 0);
+  CHECK(ReadAll(comm.c_str()) == std::string(unicode) + "\n");
+  CHECK(SetEvent(peer.read) != 0);
+  NameWait(peer.done);
+  CHECK(peer.result == 0 && strcmp(peer.name, unicode) == 0);
+  CHECK(peer.description == unicode && peer.locale == before);
+  CHECK(pthread_setname_np(joinable, "") == 0);
+  CHECK(SetEvent(peer.release) != 0);
   CHECK(pthread_join(joinable, nullptr) == 0);
+  CHECK(peer.cleared);
+  CloseHandle(peer.ready);
+  CloseHandle(peer.read);
+  CloseHandle(peer.done);
+  CloseHandle(peer.release);
 }
 
 // --- /proc and /etc/timezone -------------------------------------------------------------

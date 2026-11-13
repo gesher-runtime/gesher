@@ -252,20 +252,26 @@ Snapshot Initial() {
 bool Refresh(Area* area) {
   const auto* header = static_cast<Header*>(area->view);
   if (header->magic != kMagic || header->version != kVersion || header->used > kCapacity - sizeof(Header)) return false;
-  if (header->generation == area->cached_generation) return true;
+  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
+  if (generation == area->cached_generation) return true;
   std::string data(static_cast<const char*>(area->view) + sizeof(Header), header->used);
   if (!Decode(data, &area->values)) return false;
-  area->cached_generation = header->generation;
+  area->cached_generation = generation;
   return true;
 }
 bool Publish(Area* area, Snapshot values) {
   std::string data = Encode(values);
   if (data.size() > kCapacity - sizeof(Header)) return false;
   auto* header = static_cast<Header*>(area->view);
-  uint32_t generation = header->generation + 1;
+  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_RELAXED) + 1;
   if (!generation) generation = 1;
   std::memcpy(static_cast<char*>(area->view) + sizeof(Header), data.data(), data.size());
-  *header = {kMagic, kVersion, generation, static_cast<uint32_t>(data.size())};
+  header->magic = kMagic;
+  header->version = kVersion;
+  header->used = static_cast<uint32_t>(data.size());
+  // The unlocked fast path reads this field atomically. Publish it last,
+  // without a whole-header store overlapping the independently read word.
+  __atomic_store_n(&header->generation, generation, __ATOMIC_RELEASE);
   area->values = std::move(values);
   area->cached_generation = generation;
   return true;
