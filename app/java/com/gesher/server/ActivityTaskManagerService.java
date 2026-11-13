@@ -172,6 +172,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final String resultWho;
         final int requestCode;
         final long startTime = SystemClock.uptimeMillis();
+        // Record construction is guarded by the task-manager monitor. Clock ticks
+        // can be shared by several activities and do not establish launch order.
+        final long startOrder = mNextActivityOrder++;
+        boolean launchFailed;
         ProcessRecord app;
         ProcessExitStatus.Generation launchGeneration;
         /** What TaskInfo calls the task's WindowContainerToken; nothing stands behind it. */
@@ -280,6 +284,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private AccountManagerService mAccounts;
     private AccountChooser.Dialog mAccountDialog; // server-local synthetic fixture injection
     private int mNextTaskId = 1;
+    private long mNextActivityOrder = 1;
     /** Tasks moved to the back (their window minimized): none of their activities is visible. */
     private final java.util.Set<Integer> mHiddenTasks = new java.util.HashSet<>();
     /** Tasks the user resized (resizeTask): their size in pixels; others are the display's. */
@@ -689,6 +694,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     break;
                 }
             }
+            // A rejected native start or unexpected pre-idle process death is
+            // different from an activity deliberately finishing in onCreate.
+            if (r.launchFailed && !r.idle && idleAbove(r) == null) {
+                result.result = ActivityManager.START_CANCELED;
+            }
         }
         result.totalTime = SystemClock.uptimeMillis() - r.startTime;
         return result;
@@ -699,7 +709,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         for (int i = mActivities.size() - 1; i >= 0; i--) {
             ActivityRecord a = mActivities.get(i);
             if (a != r && a.taskId == r.taskId && a.idle && a.state != State.DESTROYED
-                    && a.startTime >= r.startTime) {
+                    && a.startOrder > r.startOrder) {
                 return a;
             }
         }
@@ -1563,6 +1573,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 ActivityRecord r = mActivities.get(i);
                 if (r.app == null && r.info.packageName.equals(pending.packageName)
                         && componentProcess(r.info.packageName, r.info.processName).equals(pending.processName)) {
+                    r.launchFailed = true;
                     r.state = State.DESTROYED;
                     accountActivityFinished(r);
                     mActivities.remove(i);
@@ -1933,6 +1944,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             if (!mProcesses.remove(app)) return;
             for (ActivityRecord r : app.activities) {
+                if (!r.finishing && !r.idle) r.launchFailed = true;
                 r.state = State.DESTROYED;
                 accountActivityFinished(r);
                 mActivities.remove(r);

@@ -641,7 +641,8 @@ public final class Launcher {
             log(text("start_result", result.result,
                     result.who != null ? result.who.flattenToShortString() : text("no_activity"),
                     result.timeout ? text("timed_out") : "") + ", " + result.totalTime + " ms");
-            if (!ActivityManager.isStartResultSuccessful(result.result)) {
+            if (!ActivityManager.isStartResultSuccessful(result.result)
+                    || (detach && result.timeout)) {
                 throw new IllegalStateException(text("start_failed", intent));
             }
             if (launch.exitReceipt == null || launch.taskId < 0) {

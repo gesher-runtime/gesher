@@ -117,7 +117,10 @@ if (-not (Test-Path "$Dir/gesher-launch.exe")) {
   Set-Content -LiteralPath (Join-Path $splashShell 'shortcut.properties') -Encoding ascii -Value @(
     '#Gesher device', 'package=com.gesher.splashprobe', 'label=Splash Probe \u00e9', 'app_user_model_id=Gesher.App.com.gesher.splashprobe')
   $splashIco = Join-Path $shellOut 'lifecycle.ico'  # drawn above
-  if (Test-Path $splashIco) { Copy-Item $splashIco (Join-Path $splashShell 'icon.ico') -Force }
+  if (Test-Path $splashIco) {
+    Copy-Item $splashIco (Join-Path $splashShell 'icon.ico') -Force
+    Copy-Item $splashIco (Join-Path $splashDir 'gesher.ico') -Force
+  }
   $probeApk = Join-Path $splashDir 'probe.apk'
   Set-Content -LiteralPath $probeApk -Value 'not an APK: the stand-in never reads it'
   $apkItem = Get-Item -LiteralPath $probeApk
@@ -256,6 +259,15 @@ if ($splash -ne [IntPtr]::Zero) {
   } elseif ($mode -in 'late', 'late-cancel') {
     # A detached launcher: it ends (exit 0) once the activity has started, before
     # the app's window is up; splash-child.ps1 shows that window later.
+    if ($env:SPLASH_PROBE_APK) {
+      # First installation learns the real package even when it uses the generic icon.
+      $installedApk = Get-Item -LiteralPath $env:SPLASH_PROBE_APK
+      $installedMillis = [DateTimeOffset]::new($installedApk.LastWriteTimeUtc).ToUnixTimeMilliseconds()
+      $record = "$($installedApk.Length)`t$installedMillis`t$(Join-Path $PSScriptRoot 'gesher.ico')`tcom.gesher.splashprobe"
+      [IO.File]::WriteAllText((Join-Path $env:LOCALAPPDATA 'Gesher\data\system\apk-icons.list'),
+        $record + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+      $lines += 'installed-package=com.gesher.splashprobe'
+    }
     Set-Content -LiteralPath (Join-Path $PSScriptRoot "splash-$mode.txt") -Encoding ascii -Value $lines
     Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
       (Join-Path $PSScriptRoot 'splash-child.ps1'), $mode, $splash.ToInt64()
@@ -382,7 +394,9 @@ public static class SplashLifetimeProbe {
     @{ Mode = 'none'; Args = "install `"$probeApk`""; Code = 0 },
     @{ Mode = 'none'; Args = 'launch com.gesher.splashprobe --headless'; Code = 0 },
     @{ Mode = 'late'; Args = 'launch com.gesher.splashprobe'; Code = 0; Detach = $true },
-    @{ Mode = 'late-cancel'; Args = 'launch com.gesher.splashprobe'; Code = 1; Detach = $true }
+    @{ Mode = 'late'; Args = 'launch com.gesher.splashprobe --ez --wait true'; Code = 0; Detach = $true },
+    @{ Mode = 'late-cancel'; Args = 'launch com.gesher.splashprobe'; Code = 1; Detach = $true },
+    @{ Mode = 'late-cancel'; Args = "`"$probeApk`""; Code = 1; Detach = $true; InitialUnknown = $true }
   )
   foreach ($case in $cases) {
     $probeOut = Join-Path $splashDir "splash-$($case.Mode).txt"
@@ -392,7 +406,11 @@ public static class SplashLifetimeProbe {
     $psi.WorkingDirectory = $splashDir
     $psi.EnvironmentVariables['LOCALAPPDATA'] = $splashData
     $psi.EnvironmentVariables['SPLASH_PROBE_MODE'] = $case.Mode
-    foreach ($v in 'GESHER_APP_WINDOW', 'GESHER_SPLASH', 'GESHER_DISPLAY', 'GESHER_LAUNCH_DETACH') { $psi.EnvironmentVariables.Remove($v) }
+    foreach ($v in 'GESHER_APP_WINDOW', 'GESHER_SPLASH', 'GESHER_DISPLAY', 'GESHER_LAUNCH_DETACH', 'SPLASH_PROBE_APK') { $psi.EnvironmentVariables.Remove($v) }
+    if ($case.InitialUnknown) {
+      Remove-Item (Join-Path $splashData 'Gesher\data\system\apk-icons.list') -ErrorAction SilentlyContinue
+      $psi.EnvironmentVariables['SPLASH_PROBE_APK'] = $probeApk
+    }
     # A detached launch (as with no output handles: the Start menu's).
     if ($case.Detach) { $psi.EnvironmentVariables['GESHER_LAUNCH_DETACH'] = '1' }
     $p = [Diagnostics.Process]::Start($psi)
@@ -429,6 +447,7 @@ public static class SplashLifetimeProbe {
       'late-cancel' { 'splash=True', 'splash-after-exit=True', 'app-closed=2/2', 'other-splash-kept=True', 'child-done=True' }
       'none' { 'splash=False' }
     }
+    if ($case.InitialUnknown) { $want += 'installed-package=com.gesher.splashprobe' }
     if ($case.Mode -ne 'none' -and (Test-Path (Join-Path $splashShell 'icon.ico'))) { $want += 'icon=True' }
     foreach ($w in $want) { if ($probe -notcontains $w) { $problems += "$($what): no '$w' ($($probe -join '; '))" } }
   }

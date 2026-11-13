@@ -648,6 +648,12 @@ bool SplashWhileStarting(const std::wstring& here, HANDLE process, DWORD pid, bo
         GetExitCodeProcess(process, &code) && code == 0) {
       exited = true;
     }
+    if (exited && splash.app_id.empty()) {
+      // A first installation may not have had an APK record when the splash
+      // opened. Successful Launcher.install records its actual package first.
+      Splash installed;
+      if (SplashFor(here, &installed)) splash.app_id = installed.app_id;
+    }
     std::vector<HWND> closed;
     if (!exited) {
       TerminateProcessTree(pid);
@@ -715,6 +721,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
       for (int i = 1; i < argc; ++i) {
         if (std::wcscmp(argv[i], L"--detach") == 0) detached = true;
         if (std::wcscmp(argv[i], L"--wait") == 0) detached = false;
+        // Launcher consumes option values before looking for the next option.
+        // An extra/shortcut named "--wait" must not change splash ownership.
+        if (std::wcscmp(argv[i], L"--ez") == 0) i += 2;
+        else if (std::wcscmp(argv[i], L"--activity") == 0 ||
+                 std::wcscmp(argv[i], L"--proxy") == 0 ||
+                 std::wcscmp(argv[i], L"--shortcut") == 0) ++i;
       }
       LocalFree(argv);
     }
