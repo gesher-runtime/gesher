@@ -44,6 +44,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/system.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/system_properties.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/thread_register.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/timerfd.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/unistd.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/users.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/windows_zones.cc

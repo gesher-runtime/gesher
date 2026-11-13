@@ -1,0 +1,761 @@
+// Full production Playback and Track methods, driven through deterministic
+// reader/decoder, renderer, event-delivery and mixer attachment boundaries.
+// No Windows codec, WASAPI endpoint or JNI VM runs in this host fixture.
+@AUDIO_IMPLEMENTATION@
+
+#include <map>
+#include <limits>
+
+class PlayerConditionVariable {
+ public:
+  void notify_all() { cv_.notify_all(); }
+  unsigned Waits(std::thread::id id) {
+    std::lock_guard<std::mutex> lock(mu_);
+    return waits_[id];
+  }
+  template<class Predicate>
+  void wait(std::unique_lock<std::mutex>& lock, Predicate predicate) {
+    while (!predicate()) {
+      Observe();
+      cv_.wait(lock);
+    }
+  }
+  template<class Rep, class Period>
+  std::cv_status wait_for(std::unique_lock<std::mutex>& lock,
+                          const std::chrono::duration<Rep, Period>& duration) {
+    Observe();
+    return cv_.wait_for(lock, duration);
+  }
+ private:
+  void Observe() {
+    std::lock_guard<std::mutex> lock(mu_);
+    ++waits_[std::this_thread::get_id()];
+  }
+  std::mutex mu_;
+  std::map<std::thread::id, unsigned> waits_;
+  std::condition_variable cv_;
+};
+
+namespace player_fixture {
+class Gate {
+ public:
+  void Arm() {
+    std::lock_guard<std::mutex> lock(mu_);
+    armed_ = true;
+    entered_ = released_ = false;
+  }
+  void Enter() {
+    std::unique_lock<std::mutex> lock(mu_);
+    if (!armed_) return;
+    entered_ = true;
+    cv_.notify_all();
+    cv_.wait(lock, [this] { return released_; });
+  }
+  bool Reached() {
+    std::lock_guard<std::mutex> lock(mu_);
+    return entered_;
+  }
+  void Release() {
+    std::lock_guard<std::mutex> lock(mu_);
+    released_ = true;
+    cv_.notify_all();
+  }
+ private:
+  std::mutex mu_;
+  std::condition_variable cv_;
+  bool armed_ = false, entered_ = false, released_ = false;
+};
+struct Plan {
+  uint32_t rate = 44100;
+  size_t frames = 35280, packet = 1024;
+  bool audio = true, video = false;
+  std::vector<int64_t> video_pts{0, 100000, 900000};
+  std::atomic<size_t> gate_frame{1024};
+  std::atomic<unsigned> gate_min_seek{0};
+  unsigned zero_decode_loops = 0;
+  std::atomic<int64_t> render_gate_pts{-1};
+  std::atomic<bool> canceled{false};
+  std::atomic<unsigned> seeks{0}, flushes{0};
+  Gate read_gate, eos_gate, seek_gate, render_gate;
+  void Cancel() {
+    canceled = true;
+    read_gate.Release();
+    eos_gate.Release();
+    seek_gate.Release();
+    render_gate.Release();
+  }
+};
+}  // namespace player_fixture
+
+struct ANativeWindow {
+  explicit ANativeWindow(std::shared_ptr<player_fixture::Plan> p) : plan(std::move(p)) {}
+  std::shared_ptr<player_fixture::Plan> plan;
+  std::atomic<int> references{0};
+  std::mutex mu;
+  std::vector<int64_t> presented;
+  size_t Frames() {
+    std::lock_guard<std::mutex> lock(mu);
+    return presented.size();
+  }
+  size_t PositiveFrames() {
+    std::lock_guard<std::mutex> lock(mu);
+    return static_cast<size_t>(std::count_if(presented.begin(), presented.end(),
+                                            [](int64_t pts) { return pts > 0; }));
+  }
+};
+void ANativeWindow_acquire(ANativeWindow* w) { ++w->references; }
+void ANativeWindow_release(ANativeWindow* w) { --w->references; }
+
+#define MEDIA_LOGE(...) ((void)0)
+#define MEDIA_LOGW(...) ((void)0)
+#define MEDIA_LOGI(...) ((void)0)
+
+namespace gesher::media {
+@PLAYER_EVENTS@
+
+class DataSource {
+ public:
+  explicit DataSource(std::shared_ptr<player_fixture::Plan> p) : plan(std::move(p)) {}
+  std::string Uri() const { return "controlled://pcm"; }
+  bool IsNetwork() const { return false; }
+  void Cancel() { plan->Cancel(); }
+  std::shared_ptr<player_fixture::Plan> plan;
+};
+struct Sample {
+  std::vector<uint8_t> data;
+  int64_t time_us = 0;
+  unsigned generation = 0;
+};
+enum class SeekMode { kPreviousSync, kNextSync, kClosestSync, kClosest };
+struct Format {
+  std::shared_ptr<player_fixture::Plan> plan;
+  bool video = false;
+  std::string Mime() const { return video ? "video/controlled" : "audio/controlled"; }
+  bool GetInt32(const char*, int32_t* out) const { *out = 2; return true; }
+  bool GetInt64(const char*, int64_t* out) const {
+    *out = video ? plan->video_pts.back() : static_cast<int64_t>(plan->frames) * 1000000 / plan->rate;
+    return true;
+  }
+};
+class TrackReader {
+ public:
+  TrackReader(std::shared_ptr<player_fixture::Plan> p, bool video)
+      : plan_(std::move(p)), video_(video) {}
+  int Read(Sample* sample, int64_t seek = -1, SeekMode = SeekMode::kPreviousSync) {
+    if (seek >= 0) {
+      if (!video_) {
+        plan_->seek_gate.Enter();
+        generation_ = ++plan_->seeks;
+        cursor_ = static_cast<size_t>(seek * plan_->rate / 1000000);
+      } else {
+        cursor_ = static_cast<size_t>(std::lower_bound(plan_->video_pts.begin(),
+                    plan_->video_pts.end(), seek) - plan_->video_pts.begin());
+      }
+    }
+    if (video_) {
+      if (plan_->canceled) return -1;
+      if (cursor_ == plan_->video_pts.size()) return 1;
+      sample->data = {1};
+      sample->time_us = plan_->video_pts[cursor_++];
+      return 0;
+    }
+    if (cursor_ >= plan_->gate_frame && generation_ >= plan_->gate_min_seek) plan_->read_gate.Enter();
+    if (plan_->canceled) return -1;
+    if (cursor_ >= plan_->frames) {
+      plan_->eos_gate.Enter();
+      return plan_->canceled ? -1 : 1;
+    }
+    const size_t count = std::min(plan_->packet, plan_->frames - cursor_);
+    sample->time_us = static_cast<int64_t>(cursor_) * 1000000 / plan_->rate;
+    sample->generation = generation_;
+    sample->data.resize(count * 4);
+    for (size_t i = 0; i < count; ++i) {
+      const int16_t value = static_cast<int16_t>(std::lrint(
+          16384 * std::sin(2 * 3.14159265358979323846 * 587 * (cursor_ + i) / plan_->rate)));
+      std::memcpy(sample->data.data() + i * 4, &value, 2);
+      std::memcpy(sample->data.data() + i * 4 + 2, &value, 2);
+    }
+    cursor_ += count;
+    return 0;
+  }
+ private:
+  std::shared_ptr<player_fixture::Plan> plan_;
+  bool video_;
+  size_t cursor_ = 0;
+  unsigned generation_ = 0;
+};
+class Extractor {
+ public:
+  explicit Extractor(std::shared_ptr<player_fixture::Plan> p) : plan_(std::move(p)) {}
+  static std::unique_ptr<Extractor> Open(const std::shared_ptr<DataSource>& source, std::string*) {
+    return std::make_unique<Extractor>(source->plan);
+  }
+  size_t TrackCount() const { return plan_->audio + plan_->video; }
+  Format TrackFormat(size_t i) const { return {plan_, plan_->video && i == 0}; }
+  Format FileFormat() const { return {plan_, plan_->video}; }
+  std::unique_ptr<TrackReader> OpenTrack(size_t i) const {
+    return std::make_unique<TrackReader>(plan_, plan_->video && i == 0);
+  }
+  std::string Name() const { return "controlled"; }
+ private:
+  std::shared_ptr<player_fixture::Plan> plan_;
+};
+struct PcmInfo { uint32_t rate, channels; PcmFormat format; };
+class AudioDecoder {
+ public:
+  explicit AudioDecoder(std::shared_ptr<player_fixture::Plan> p) : plan_(std::move(p)) {}
+  static std::unique_ptr<AudioDecoder> Create(const Format& f, std::string*) {
+    return std::make_unique<AudioDecoder>(f.plan);
+  }
+  PcmInfo info() const { return {plan_->rate, 2, PcmFormat::kS16}; }
+  bool Decode(const Sample& sample, std::vector<uint8_t>* out) {
+    if (sample.generation > 0 && sample.generation <= plan_->zero_decode_loops) out->clear();
+    else *out = sample.data;
+    return true;
+  }
+  void Drain(std::vector<uint8_t>* out) { out->clear(); }
+  void Flush(int64_t) { ++plan_->flushes; }
+ private:
+  std::shared_ptr<player_fixture::Plan> plan_;
+};
+struct VideoFrame { std::vector<uint8_t> data; int64_t time_us = 0; };
+class VideoDecoder {
+ public:
+  static std::unique_ptr<VideoDecoder> Create(const Format&, std::string*) {
+    return std::make_unique<VideoDecoder>();
+  }
+  std::string Name() const { return "controlled"; }
+  bool Decode(const Sample& sample, std::vector<VideoFrame>* out) {
+    out->push_back({sample.data, sample.time_us});
+    return true;
+  }
+  void Drain(std::vector<VideoFrame>*) {}
+  void Flush() {}
+};
+void RenderFrame(ANativeWindow* window, const VideoFrame& frame) {
+  if (frame.time_us == window->plan->render_gate_pts) window->plan->render_gate.Enter();
+  std::lock_guard<std::mutex> lock(window->mu);
+  window->presented.push_back(frame.time_us);
+}
+class Player {
+ public:
+  void Notify(int what, int, int) {
+    std::lock_guard<std::mutex> lock(mu_);
+    ++events_[what];
+  }
+  unsigned Count(int what) {
+    std::lock_guard<std::mutex> lock(mu_);
+    return events_[what];
+  }
+ private:
+  std::mutex mu_;
+  std::map<int, unsigned> events_;
+};
+class PrepareTrace {
+ public:
+  explicit PrepareTrace(const char*) {}
+  void Step(const char*) {}
+  void Complete() {}
+};
+Engine playback_engine;
+std::shared_ptr<Track> CreateTrack(const TrackParams& params, std::string*) {
+  return std::shared_ptr<Track>(new Track(&playback_engine, params));
+}
+void RaiseAudioThreadPriority(bool) {}
+
+@PLAYBACK@
+}  // namespace gesher::media
+
+namespace player_test {
+using namespace gesher::media;
+using namespace std::chrono_literals;
+using player_fixture::Plan;
+int checks = 0, failures = 0;
+void Check(bool ok, const char* reason) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL player priming: %s\n", reason); }
+}
+template<class Predicate>
+bool Wait(Predicate predicate, const char* reason) {
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (!predicate() && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(1ms);
+  const bool ready = predicate();
+  Check(ready, reason);
+  return ready;
+}
+struct Fixture {
+  explicit Fixture(std::shared_ptr<Plan> p, ANativeWindow* window = nullptr)
+      : plan(std::move(p)), source(std::make_shared<DataSource>(plan)),
+        playback(std::make_shared<Playback>(&owner, source)) {
+    if (window) playback->SetWindow(window);
+    playback->Begin();
+    Wait([&] { return owner.Count(kMediaPrepared) != 0; }, "production Run prepares source");
+  }
+  ~Fixture() { playback->Shutdown(); }
+  std::shared_ptr<Track> TrackHandle() {
+    std::lock_guard<std::mutex> lock(playback->mu_);
+    return playback->track_;
+  }
+  std::shared_ptr<Track> Start() {
+    playback->Start();
+    Wait([&] { return TrackHandle() != nullptr; }, "production Run creates Track after start");
+    return TrackHandle();
+  }
+  bool VideoDone() {
+    std::lock_guard<std::mutex> lock(playback->mu_);
+    return playback->video_done_;
+  }
+  std::shared_ptr<Plan> plan;
+  std::shared_ptr<DataSource> source;
+  Player owner;
+  std::shared_ptr<Playback> playback;
+};
+void Mix(const std::shared_ptr<Track>& track, std::vector<int16_t>* capture = nullptr) {
+  float block[48 * 2] = {};
+  track->MixInto(block, 48, 48000, 2);
+  if (capture) {
+    for (float value : block) capture->push_back(static_cast<int16_t>(
+        std::lrint(std::clamp(value, -1.0f, 1.0f) * 32767)));
+  }
+}
+bool Pump(Fixture& f, unsigned completions = 1, std::vector<int16_t>* capture = nullptr) {
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  auto track = f.TrackHandle();
+  // Once the explicit startup stall ends, permit producer scheduling before
+  // simulating more device time. A virtual mixer must not outrun the real CPU.
+  while (f.owner.Count(kMediaPlaybackComplete) < completions &&
+         std::chrono::steady_clock::now() < deadline) {
+    const auto state = track->state();
+    if (state == Track::State::kStopping ||
+        (state == Track::State::kPlaying && track->Queued() >= 1024)) {
+      Mix(track, capture);
+    } else {
+      std::this_thread::sleep_for(1ms);
+    }
+  }
+  const bool complete = f.owner.Count(kMediaPlaybackComplete) == completions;
+  Check(complete, "bounded production EOS drain completes exactly once");
+  Check(f.owner.Count(kMediaError) == 0, "production playback reports no media error");
+  return complete;
+}
+size_t InteriorZeros(const std::vector<int16_t>& pcm) {
+  size_t first = 0, last = pcm.size() / 2;
+  while (first < last && pcm[first * 2] == 0) ++first;
+  while (last > first && pcm[(last - 1) * 2] == 0) --last;
+  size_t longest = 0, consecutive = 0;
+  for (size_t i = first; i < last; ++i) {
+    consecutive = pcm[i * 2] == 0 ? consecutive + 1 : 0;
+    longest = std::max(longest, consecutive);
+  }
+  return longest;
+}
+void Startup(const char* output) {
+  auto plan = std::make_shared<Plan>();
+  plan->read_gate.Arm();
+  Fixture f(plan);
+  auto track = f.Start();
+  if (!Wait([&] { return plan->read_gate.Reached(); }, "reader blocks after one AAC-sized packet")) return;
+  Check(track->Queued() == 1024, "first packet is present before startup stall");
+  Check(track->stopped(), "partial first packet does not admit playback");
+  std::vector<int16_t> pcm;
+  for (int tick = 0; tick < 44; ++tick) Mix(track, &pcm);
+  Check(track->Position() == 0 && f.playback->PositionUs() == 0,
+        "audio clock remains zero throughout the controlled 44 ms decoder stall");
+  plan->read_gate.Release();
+  Pump(f, 1, &pcm);
+  Check(track->Position() == plan->frames, "primed Track played counter equals the input frame count");
+  Check(track->underrun_count() == 0, "startup schedule creates no real Track underrun");
+  const size_t zeros = InteriorZeros(pcm);
+  Check(zeros <= 1, "mixer output has no interior startup silence");
+  std::printf("startup: played %u, underruns %u, longest interior silence %zu frames\n",
+              track->Position(), track->underrun_count(), zeros);
+  FILE* file = std::fopen(output, "wb");
+  Check(file != nullptr, "startup mixer capture opens");
+  if (file) {
+    Check(std::fwrite(pcm.data(), sizeof(int16_t), pcm.size(), file) == pcm.size(),
+          "startup mixer capture is complete");
+    std::fclose(file);
+  }
+}
+
+void ShortAndLarge() {
+  for (size_t frames : {size_t{0}, size_t{1024}, size_t{30000}}) {
+    auto plan = std::make_shared<Plan>();
+    plan->frames = frames;
+    plan->packet = std::max<size_t>(1, frames);
+    Fixture f(plan);
+    auto track = f.Start();
+    if (frames > track->buffer_size_frames()) {
+      Wait([&] { return track->state() == Track::State::kPlaying; },
+           "a PCM packet larger than the ring starts before its remainder waits");
+    }
+    Pump(f);
+    Check(track->Position() == frames, "empty, short and oversized sources have equal input and played counts");
+    Check(track->stopped(), "empty, short and oversized sources finish stopped");
+  }
+}
+
+void PausedEos() {
+  auto plan = std::make_shared<Plan>();
+  plan->frames = 1024;
+  plan->eos_gate.Arm();
+  Fixture f(plan);
+  auto track = f.Start();
+  if (!Wait([&] { return plan->eos_gate.Reached(); }, "reader reaches gated short-source EOF")) return;
+  f.playback->Pause();
+  const auto id = f.playback->thread_.get_id();
+  const unsigned waits = f.playback->cv_.Waits(id);
+  plan->eos_gate.Release();
+  if (!Wait([&] { return f.playback->cv_.Waits(id) > waits || f.owner.Count(kMediaPlaybackComplete); },
+            "EOF worker reaches its pause admission decision")) return;
+  Check(f.owner.Count(kMediaPlaybackComplete) == 0, "paused EOF is not prematurely complete");
+  Check(track->Queued() == 1024, "paused EOF preserves its entire short clip");
+  if (f.owner.Count(kMediaPlaybackComplete)) return;  // old-source cleanup stays bounded
+  f.playback->Start();
+  if (!Wait([&] { return track->state() == Track::State::kStopping; },
+            "resuming a partial EOF starts a bounded real Track drain")) return;
+  Mix(track);
+  f.playback->Pause();
+  const uint32_t before = track->Position();
+  for (int i = 0; i < 5; ++i) Mix(track);
+  Check(track->Position() == before, "paused EOF drain freezes the played head");
+  f.playback->Start();
+  Check(track->state() == Track::State::kStopping,
+        "resuming an interrupted drain restores Track Stop after Track Start");
+  if (track->state() != Track::State::kStopping) return;
+  Pump(f);
+  Check(track->Position() == 1024, "paused and resumed drain ends at its original source boundary");
+}
+
+void PausedPrefillAndReplay() {
+  auto plan = std::make_shared<Plan>();
+  plan->packet = 14000;
+  plan->gate_frame = 0;
+  plan->read_gate.Arm();
+  Fixture f(plan);
+  auto track = f.Start();
+  if (!Wait([&] { return plan->read_gate.Reached(); }, "first decoded packet is held before prefill")) return;
+  f.playback->Pause();
+  plan->read_gate.Release();
+  if (!Wait([&] { return track->Queued() == track->buffer_size_frames(); },
+            "in-flight oversized PCM fills the ring while paused")) return;
+  Check(track->stopped(), "paused prefill cannot admit a full ring to the mixer");
+  Mix(track);
+  Check(track->Position() == 0, "paused prefill presents no audio");
+  // Keep the producer at its next read after the in-flight packet finishes,
+  // so it cannot race this test by refilling the just-consumed ring.
+  plan->gate_frame = 14000;
+  plan->read_gate.Arm();
+  f.playback->Start();
+  Check(track->state() == Track::State::kPlaying, "resume admits the already full ring");
+  for (int i = 0; i < 80; ++i) Mix(track);
+  if (!Wait([&] { return plan->read_gate.Reached(); }, "ordinary pause case holds producer beyond its first packet")) return;
+  f.playback->Pause();
+  const uint32_t before = track->Position();
+  Check(before > 0, "ordinary pause follows actual audio presentation");
+  Check(track->Queued() < track->buffer_size_frames(), "ordinary resume has less than a full ring");
+  f.playback->Start();
+  Check(track->state() == Track::State::kPlaying && track->Position() == before,
+        "ordinary pause/resume preserves readiness and position");
+  plan->read_gate.Release();
+  if (!Pump(f)) return;
+  plan->packet = 1024;  // worker is now waiting at production completion
+  plan->gate_frame = 1024;
+  plan->read_gate.Arm();
+  f.playback->Start();
+  if (!Wait([&] { return plan->read_gate.Reached(); }, "replay returns to first-packet gate")) return;
+  Check(track->Position() == 0 && track->state() != Track::State::kPlaying,
+        "replay flushes the old head and requires new priming");
+  for (int i = 0; i < 10; ++i) Mix(track);
+  Check(track->Position() == 0, "replay cannot consume its partial first packet");
+  plan->read_gate.Release();
+  Pump(f, 2);
+  Check(track->Position() == plan->frames, "replay played counter equals one new source's frame count");
+}
+
+void SeekAndCancel() {
+  auto plan = std::make_shared<Plan>();
+  plan->read_gate.Arm();
+  Fixture f(plan);
+  auto track = f.Start();
+  if (!Wait([&] { return plan->read_gate.Reached(); }, "seek case holds first startup packet")) return;
+  plan->seek_gate.Arm();
+  f.playback->Seek(200000, 3);
+  plan->read_gate.Release();
+  if (!Wait([&] { return plan->seek_gate.Reached(); }, "production DoSeek reaches reader boundary")) return;
+  f.playback->Pause();
+  plan->seek_gate.Release();
+  if (!Wait([&] { return f.owner.Count(kMediaSeekComplete) == 1; }, "paused asynchronous seek completes")) return;
+  Check(track->state() != Track::State::kPlaying && track->Queued() == 0,
+        "Pause during seek prevents stale-playing Track Start and flushes old PCM");
+  Check(f.playback->PositionUs() == 200000, "paused seek reports target before new audio plays");
+  plan->gate_frame = 8820 + 1024;
+  plan->read_gate.Arm();
+  f.playback->Start();
+  if (!Wait([&] { return plan->read_gate.Reached(); }, "post-seek decoder holds the second packet")) return;
+  for (int i = 0; i < 10; ++i) Mix(track);
+  Check(track->Position() == 0 && f.playback->PositionUs() == 200000,
+        "post-seek partial priming preserves the new clock origin");
+  auto shutdown = std::async(std::launch::async, [&] { f.playback->Shutdown(); });
+  const bool done = shutdown.wait_for(2s) == std::future_status::ready;
+  Check(done, "shutdown cancels a blocked prefill reader and joins both workers");
+  if (!done) std::abort();
+  shutdown.get();
+  Check(f.owner.Count(kMediaPlaybackComplete) == 0, "canceled prefill does not signal completion");
+  std::lock_guard<std::mutex> lock(track->mu_);
+  Check(track->released_, "shutdown releases the real engine Track");
+}
+
+void ShortLoopsAndWideClock() {
+  auto plan = std::make_shared<Plan>();
+  plan->frames = plan->packet = 882;  // twenty milliseconds, >8 loops per ring
+  Fixture f(plan);
+  f.playback->SetLooping(true);
+  auto track = f.Start();
+  if (!Wait([&] { return track->Queued() == track->buffer_size_frames(); },
+            "short seamless loops fill the entire initial ring")) return;
+  Check(plan->seeks > 8, "startup queues more than eight real loop transitions");
+  Check(f.playback->PositionUs() == 0, "short-loop priming retains the segment covering frame zero");
+  for (int i = 0; i < 30; ++i) Mix(track);
+  const int64_t position = f.playback->PositionUs();
+  Check(position >= 0 && position < 20000, "short-loop media position stays within the active loop");
+  f.playback->SetLooping(false);
+  if (!Pump(f)) return;
+  f.playback->Pause();
+  constexpr uint64_t wrap = uint64_t{1} << 32;
+  {
+    std::lock_guard<std::mutex> lock(f.playback->mu_);
+    std::lock_guard<std::mutex> track_lock(track->mu_);
+    f.playback->completed_ = false;
+    track->played_ = wrap + 100;
+    track->position_base_ = 0;
+    track->played_time_ns_ = 1;
+    f.playback->segments_ = {{0, 0}, {static_cast<int64_t>(wrap - 500), 0}};
+  }
+  Check(f.playback->PositionUs() == 600 * 1000000 / 44100,
+        "media clock uses the real 64-bit timestamp beyond public Position wrap");
+  f.playback->Seek(10000, 3);
+  if (!Wait([&] { return f.owner.Count(kMediaSeekComplete) == 1; }, "wide-head case seeks through production DoSeek")) return;
+  int64_t frames = -1, time_ns = 0;
+  Check(track->Timestamp(&frames, &time_ns) && frames == 0 && f.playback->PositionUs() == 10000,
+        "real Track flush already resets Timestamp origin without an extra player subtraction");
+}
+
+void EmptyLoopHistory() {
+  auto plan = std::make_shared<Plan>();
+  plan->frames = plan->packet = 882;
+  plan->zero_decode_loops = 64;
+  plan->gate_frame = 0;
+  plan->gate_min_seek = 65;
+  plan->read_gate.Arm();
+  Fixture f(plan);
+  f.playback->SetLooping(true);
+  auto track = f.Start();
+  if (!Wait([&] { return plan->read_gate.Reached(); }, "sixty-four zero-output decoder loops reach next source boundary")) return;
+  Check(track->Queued() == 882, "zero-output loops add no queued PCM");
+  {
+    std::lock_guard<std::mutex> lock(f.playback->mu_);
+    Check(f.playback->segments_.size() == 2,
+          "same-frame future loop transitions coalesce without losing the active segment");
+  }
+  Check(f.playback->PositionUs() == 0, "empty loops cannot assign a future boundary to current audio");
+  f.playback->SetLooping(false);
+  plan->read_gate.Release();
+  Pump(f);
+  Check(track->Position() == 1764, "short force-ready EOS played count equals the two nonempty input loops");
+}
+
+void RetireLoopsBeyondWrap() {
+  auto plan = std::make_shared<Plan>();
+  plan->frames = plan->packet = 882;
+  plan->gate_frame = 0;
+  plan->gate_min_seek = 1;
+  plan->read_gate.Arm();
+  Fixture f(plan);
+  f.playback->SetLooping(true);
+  auto track = f.Start();
+  if (!Wait([&] { return plan->read_gate.Reached(); }, "loop worker stops before adding its next segment")) return;
+  f.playback->Pause();
+  constexpr uint64_t wrap = uint64_t{1} << 32;
+  // Seed the existing counters at a large, coherent relative-frame boundary;
+  // no four-billion-frame wall-time run is needed to test actual retirement.
+  {
+    std::lock_guard<std::mutex> lock(f.playback->mu_);
+    std::lock_guard<std::mutex> track_lock(track->mu_);
+    track->played_ = wrap + 100;
+    track->position_base_ = 0;
+    track->played_time_ns_ = 1;
+    f.playback->written_ = static_cast<int64_t>(wrap + 882);
+    f.playback->segments_ = {{0, 0}, {static_cast<int64_t>(wrap - 1500), 0},
+                           {static_cast<int64_t>(wrap - 500), 0},
+                           {static_cast<int64_t>(wrap + 400), 0}};
+  }
+  const auto id = f.playback->thread_.get_id();
+  const unsigned waits = f.playback->cv_.Waits(id);
+  plan->read_gate.Release();
+  if (!Wait([&] { return f.playback->cv_.Waits(id) > waits; },
+            "production loop transition retires history and returns to paused wait")) return;
+  {
+    std::lock_guard<std::mutex> lock(f.playback->mu_);
+    Check(f.playback->segments_.size() == 3 &&
+              f.playback->segments_.front().start_frame == static_cast<int64_t>(wrap - 500) &&
+              f.playback->segments_.back().start_frame == static_cast<int64_t>(wrap + 882),
+          "actual loop retirement beyond 32-bit wrap retains only active and queued boundaries");
+  }
+  Check(f.playback->PositionUs() == 600 * 1000000 / 44100,
+        "retiring wide loop history preserves the active media time");
+}
+
+void CancelBlockedPacket() {
+  for (bool paused : {false, true}) {
+    auto plan = std::make_shared<Plan>();
+    plan->frames = plan->packet = 30000;
+    plan->gate_frame = 0;
+    plan->read_gate.Arm();
+    Fixture f(plan);
+    auto track = f.Start();
+    if (!Wait([&] { return plan->read_gate.Reached(); }, "large packet reaches prefill reader gate")) continue;
+    if (paused) f.playback->Pause();
+    const auto id = f.playback->thread_.get_id();
+    const unsigned waits = f.playback->cv_.Waits(id);
+    plan->read_gate.Release();
+    if (!Wait([&] { return track->Queued() == track->buffer_size_frames() &&
+                          f.playback->cv_.Waits(id) > waits; },
+              "oversized PCM enters actual WritePcm room wait")) continue;
+    auto shutdown = std::async(std::launch::async, [&] { f.playback->Shutdown(); });
+    const bool done = shutdown.wait_for(2s) == std::future_status::ready;
+    Check(done, "shutdown interrupts both active and paused WritePcm prefill waits");
+    if (!done) std::abort();
+    shutdown.get();
+    Check(f.owner.Count(kMediaPlaybackComplete) == 0, "interrupted large packet does not complete playback");
+  }
+}
+
+void SeekAtAdmissionBoundaries() {
+  for (int phase = 0; phase < 3; ++phase) {
+    auto plan = std::make_shared<Plan>();
+    plan->frames = phase == 0 ? 30000 : 1024;
+    plan->packet = plan->frames;
+    if (phase == 1) plan->eos_gate.Arm();
+    Fixture f(plan);
+    auto track = f.Start();
+    if (phase == 0) {
+      const auto id = f.playback->thread_.get_id();
+      if (!Wait([&] { return track->Queued() == track->buffer_size_frames() &&
+                            f.playback->cv_.Waits(id) != 0; },
+                "seek interrupts a packet awaiting full-ring space")) continue;
+    } else if (phase == 1) {
+      if (!Wait([&] { return plan->eos_gate.Reached(); }, "seek is posted before partial EOS admission")) continue;
+    } else {
+      if (!Wait([&] { return track->state() == Track::State::kStopping; },
+                "seek interrupts an already admitted EOF drain")) continue;
+    }
+    f.playback->Pause();
+    plan->seek_gate.Arm();
+    f.playback->Seek(0, 0);
+    plan->eos_gate.Release();
+    if (!Wait([&] { return plan->seek_gate.Reached(); }, "pending seek exits the production write or drain wait")) continue;
+    const uint32_t before = track->Position();
+    f.playback->Start();
+    for (int tick = 0; tick < 5; ++tick) Mix(track);
+    Check(track->Position() == before && track->state() != Track::State::kPlaying,
+          "Start during pending seek cannot re-admit stale PCM at write, EOS or drain boundaries");
+    f.playback->Pause();
+    plan->seek_gate.Release();
+    if (!Wait([&] { return f.owner.Count(kMediaSeekComplete) == 1; }, "boundary seek completes while paused")) continue;
+    Check(track->Position() == 0 && track->Queued() == 0 &&
+              f.owner.Count(kMediaPlaybackComplete) == 0,
+          "boundary seek flushes old audio without a completion event");
+  }
+}
+
+void VideoAdmissionAndTail() {
+  auto plan = std::make_shared<Plan>();
+  plan->video = true;
+  plan->read_gate.Arm();
+  ANativeWindow window(plan);
+  Fixture f(plan, &window);
+  auto track = f.Start();
+  if (!Wait([&] { return plan->read_gate.Reached() && window.Frames() > 0; },
+            "audio startup packet and first video preview are available")) return;
+  const auto id = f.playback->video_thread_.get_id();
+  unsigned waits = f.playback->cv_.Waits(id);
+  if (!Wait([&] { return f.playback->cv_.Waits(id) > waits || f.VideoDone(); },
+            "actual VideoRun reaches its next positive-PTS admission decision")) return;
+  Check(window.PositiveFrames() == 0 && !f.VideoDone(),
+        "unprimed stopped audio does not fast-forward subsequent video frames");
+  f.playback->Pause();
+  plan->seek_gate.Arm();
+  f.playback->Seek(0, 0);
+  plan->read_gate.Release();
+  if (!Wait([&] { return plan->seek_gate.Reached(); }, "A/V seek reaches the controlled reader")) return;
+  plan->seek_gate.Release();
+  if (!Wait([&] { return f.owner.Count(kMediaSeekComplete) == 1; }, "A/V seek resets both production workers")) return;
+  plan->read_gate.Arm();
+  f.playback->Start();
+  if (!Wait([&] { return plan->read_gate.Reached(); }, "A/V restart waits with a partial post-seek packet")) return;
+  waits = f.playback->cv_.Waits(id);
+  if (!Wait([&] { return f.playback->cv_.Waits(id) > waits || f.VideoDone(); },
+            "actual VideoRun waits again on the post-seek audio clock")) return;
+  Check(track->Position() == 0 && window.PositiveFrames() == 0 && !f.VideoDone(),
+        "post-seek priming keeps positive-PTS video behind the fresh audio clock");
+  plan->read_gate.Release();
+  Pump(f);
+  Check(window.PositiveFrames() == 2, "video advances with audio and completes its longer tail");
+  f.playback->Shutdown();
+  Check(window.references == 0, "A/V shutdown releases all window references");
+}
+
+void PausedVideoTail() {
+  auto plan = std::make_shared<Plan>();
+  plan->frames = 1024;
+  plan->video = true;
+  plan->render_gate_pts = 100000;
+  plan->render_gate.Arm();
+  ANativeWindow window(plan);
+  Fixture f(plan, &window);
+  auto track = f.Start();
+  if (!Wait([&] { return track->state() == Track::State::kStopping; }, "short A/V clip force-starts at EOS")) return;
+  for (int tick = 0; tick < 100 && !track->stopped(); ++tick) Mix(track);
+  Check(track->stopped() && track->Position() == 1024, "short audio physically drains before longer video");
+  if (!Wait([&] { return plan->render_gate.Reached(); }, "production VideoRun admits longer video tail after drain")) return;
+  f.playback->Pause();
+  f.playback->Start();
+  Check(track->stopped() && track->Position() == 1024,
+        "resuming longer video tail does not restart or reset fully drained audio");
+  plan->render_gate.Release();
+  Wait([&] { return f.owner.Count(kMediaPlaybackComplete) == 1; }, "short-audio longer-video clip completes after tail resume");
+}
+
+void VideoOnly() {
+  auto plan = std::make_shared<Plan>();
+  plan->audio = false;
+  plan->video = true;
+  plan->video_pts = {0, 10000};
+  ANativeWindow window(plan);
+  Fixture f(plan, &window);
+  f.playback->Start();
+  Wait([&] { return f.owner.Count(kMediaPlaybackComplete) == 1; }, "video-only production wall clock completes playback");
+  Check(f.TrackHandle() == nullptr && window.PositiveFrames() == 1,
+        "video-only playback needs no audio Track or priming");
+}
+}  // namespace player_test
+
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  player_test::Startup(argv[1]);
+  player_test::ShortAndLarge();
+  player_test::PausedEos();
+  player_test::PausedPrefillAndReplay();
+  player_test::SeekAndCancel();
+  player_test::ShortLoopsAndWideClock();
+  player_test::EmptyLoopHistory();
+  player_test::RetireLoopsBeyondWrap();
+  player_test::CancelBlockedPacket();
+  player_test::SeekAtAdmissionBoundaries();
+  player_test::VideoAdmissionAndTail();
+  player_test::PausedVideoTail();
+  player_test::VideoOnly();
+  std::printf("player priming: %d checks, %d failures\n", player_test::checks, player_test::failures);
+  return player_test::failures ? 1 : 0;
+}

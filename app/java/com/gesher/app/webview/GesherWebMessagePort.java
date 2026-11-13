@@ -7,30 +7,34 @@ import android.webkit.WebMessagePort;
 
 import java.security.SecureRandom;
 import java.util.ArrayDeque;
+import java.util.IdentityHashMap;
 
-/**
- * One end of a WebView.createWebMessageChannel() pair (docs/webview.md, "Messages"). While
- * both ends are the app's, a message posted to one is delivered to the other's callback.
- * An end sent to a page (WebView.postWebMessage) lives on there as a MessageChannel's
- * port1 (PageScripts.PORTS): what the app posts to the end it kept reaches that port in the
- * page, and what the page posts to it reaches the kept end's callback.
- */
+/** One endpoint of a local or WebView2-backed message channel. */
 final class GesherWebMessagePort extends WebMessagePort {
     private static final SecureRandom sRandom = new SecureRandom();
+    // A transfer can rewire both ends of the same channel. Validate and move all
+    // endpoints atomically, without locking application port arrays in any order.
+    private static final Object sLock = new Object();
 
-    /** The id of this end in the page (when it is sent to one). */
     final String mId;
     private GesherWebMessagePort mPeer;
-    /** The WebView whose page holds this end, or null. */
     private GesherWebViewProvider mPage;
+    private boolean mPageReady;
+    private boolean mPageFlushing;
     private boolean mClosed;
     private boolean mTransferred;
+    private boolean mStarted;
     private WebMessageCallback mCallback;
     private Handler mHandler;
+    private boolean mDeliveryScheduled;
     private final ArrayDeque<WebMessage> mQueue = new ArrayDeque<>();
 
+    private GesherWebMessagePort(String id) {
+        mId = id;
+    }
+
     private GesherWebMessagePort() {
-        mId = Long.toHexString(sRandom.nextLong()) + Long.toHexString(sRandom.nextLong());
+        this(Long.toHexString(sRandom.nextLong()) + Long.toHexString(sRandom.nextLong()));
     }
 
     static WebMessagePort[] pair() {
@@ -41,95 +45,271 @@ final class GesherWebMessagePort extends WebMessagePort {
         return new WebMessagePort[] {a, b};
     }
 
-    /** This end goes to the page of {@code page} (postWebMessage's ports). */
-    synchronized void transferTo(GesherWebViewProvider page) {
+    private void requireUsable() {
         if (mClosed || mTransferred) {
             throw new IllegalStateException("Port is already closed or transferred");
         }
-        mTransferred = true;
-        mPage = page;
     }
 
-    /** The page this end was sent to navigated away: it is gone. */
-    synchronized void pageGone() {
-        mClosed = true;
-        mPage = null;
+    /** Validate the complete list before transferring any endpoint. sLock is held. */
+    private static GesherWebMessagePort[] transferable(WebMessagePort[] ports,
+                                                       GesherWebMessagePort source) {
+        if (ports == null) return null;
+        GesherWebMessagePort[] result = new GesherWebMessagePort[ports.length];
+        IdentityHashMap<GesherWebMessagePort, Boolean> seen = new IdentityHashMap<>();
+        for (int i = 0; i < ports.length; i++) {
+            if (!(ports[i] instanceof GesherWebMessagePort)) {
+                throw new IllegalArgumentException("not a port of this WebView");
+            }
+            GesherWebMessagePort port = (GesherWebMessagePort) ports[i];
+            port.requireUsable();
+            if (port == source) throw new IllegalStateException("Source port cannot be transferred");
+            if (port.mStarted) throw new IllegalStateException("Port is already started");
+            if (seen.put(port, Boolean.TRUE) != null) {
+                throw new IllegalStateException("Port is listed more than once");
+            }
+            result[i] = port;
+        }
+        return result;
     }
 
-    /** The end that was sent to the page receives a message from the page. */
+    /** Transfer a complete list to a page; the caller registers it before flushing. */
+    static GesherWebMessagePort[] transferToPage(WebMessagePort[] ports,
+                                                GesherWebViewProvider page) {
+        synchronized (sLock) {
+            GesherWebMessagePort[] result = transferable(ports, null);
+            if (result == null) return new GesherWebMessagePort[0];
+            for (GesherWebMessagePort port : result) {
+                port.mTransferred = true;
+                port.mPage = page;
+            }
+            return result;
+        }
+    }
+
+    /** Transfer the endpoint, not the Java wrapper that has just been detached. */
+    private static WebMessage localMessage(WebMessage message, GesherWebMessagePort[] ports) {
+        if (ports == null) return message;
+        WebMessagePort[] received = new WebMessagePort[ports.length];
+        for (int i = 0; i < ports.length; i++) {
+            GesherWebMessagePort old = ports[i];
+            GesherWebMessagePort next = new GesherWebMessagePort(old.mId);
+            next.mPeer = old.mPeer;
+            if (next.mPeer != null) next.mPeer.mPeer = next;
+            next.mQueue.addAll(old.mQueue);
+            old.mQueue.clear();
+            old.mPeer = null;
+            old.mTransferred = true;
+            received[i] = next;
+        }
+        return WebMessagePayload.binary(message)
+                ? new WebMessagePayload(WebMessagePayload.bytes(message), received)
+                : new WebMessage(message.getData(), received);
+    }
+
+    /**
+     * Undelivered messages own their freshly transferred endpoints. Retire that
+     * ownership graph iteratively: a queued transfer can itself own queued
+     * transfers, including cycles. Never follow an ordinary entangled peer or a
+     * wrapper whose ownership has already moved to another recipient.
+     */
+    private static final class Retirement {
+        private final ArrayDeque<WebMessage> messages = new ArrayDeque<>();
+        private final IdentityHashMap<GesherWebMessagePort, Boolean> seen = new IdentityHashMap<>();
+        private final IdentityHashMap<GesherWebMessagePort, GesherWebViewProvider> pages =
+                new IdentityHashMap<>();
+
+        private boolean closeOne(GesherWebMessagePort port) {
+            if (seen.put(port, Boolean.TRUE) != null || port.mClosed) return false;
+            port.mClosed = true;
+            port.mPage = null;
+            port.mPageReady = false;
+            port.mCallback = null;
+            port.mHandler = null;
+            port.mDeliveryScheduled = false;
+            messages.addAll(port.mQueue);
+            port.mQueue.clear();
+            return true;
+        }
+
+        void close(GesherWebMessagePort port, boolean closePagePeer) {
+            if (!closeOne(port) || !closePagePeer) return;
+            GesherWebMessagePort peer = port.mPeer;
+            if (peer != null && !peer.mClosed && peer.mPage != null) {
+                pages.put(peer, peer.mPage);
+                closeOne(peer);
+            }
+        }
+
+        void discard(WebMessage message) {
+            messages.add(message);
+        }
+
+        void drain() {
+            while (!messages.isEmpty()) {
+                WebMessagePort[] ports = messages.remove().getPorts();
+                if (ports == null) continue;
+                for (WebMessagePort value : ports) {
+                    if (!(value instanceof GesherWebMessagePort)) continue;
+                    GesherWebMessagePort port = (GesherWebMessagePort) value;
+                    if (!port.mTransferred) close(port, true);
+                }
+            }
+        }
+
+        /** Provider/backend calls must never run under the endpoint graph lock. */
+        void finish() {
+            for (java.util.Map.Entry<GesherWebMessagePort, GesherWebViewProvider> entry
+                    : pages.entrySet()) {
+                entry.getValue().closePagePort(entry.getKey());
+            }
+        }
+    }
+
+    /** The message has already consumed its sender's transfer list. */
+    static void discardMessage(WebMessage message) {
+        Retirement retirement = new Retirement();
+        synchronized (sLock) {
+            retirement.discard(message);
+            retirement.drain();
+        }
+        retirement.finish();
+    }
+
+    boolean isOwnedByPage(GesherWebViewProvider page) {
+        synchronized (sLock) {
+            return !mClosed && mPage == page;
+        }
+    }
+
+    /** Called after the page receives the message that creates its new ports. */
+    void flushToPage() {
+        synchronized (sLock) {
+            if (mClosed || mPage == null) return;
+            mPageReady = true;
+            if (mPageFlushing || mQueue.isEmpty()) return;
+            mPageFlushing = true;
+        }
+        // One sender drains this endpoint. Concurrent or reentrant posts join
+        // the same queue, including while the page's creation is being sent.
+        // Never call the backend while holding the endpoint graph lock.
+        try {
+            for (;;) {
+                GesherWebViewProvider page;
+                WebMessage message;
+                synchronized (sLock) {
+                    if (mClosed || mPage == null || mQueue.isEmpty()) {
+                        mPageFlushing = false;
+                        return;
+                    }
+                    page = mPage;
+                    message = mQueue.remove();
+                }
+                page.postToPagePort(this, message);
+            }
+        } catch (RuntimeException | Error failure) {
+            synchronized (sLock) {
+                mPageFlushing = false;
+            }
+            throw failure;
+        }
+    }
+
+    void pageGone() {
+        Retirement retirement = new Retirement();
+        synchronized (sLock) {
+            retirement.close(this, false);
+            retirement.drain();
+        }
+        retirement.finish();
+    }
+
     void fromPage(WebMessage message) {
         GesherWebMessagePort peer;
-        synchronized (this) {
-            if (mClosed) return;
+        GesherWebViewProvider page = null;
+        Retirement retirement = new Retirement();
+        synchronized (sLock) {
             peer = mPeer;
+            if (mClosed || mPage == null || peer == null) retirement.discard(message);
+            else page = peer.receiveLocked(message, retirement);
+            retirement.drain();
         }
-        if (peer != null) peer.receive(message);
+        retirement.finish();
+        // Android permits transferring both endpoints. The peer can route the
+        // peer through a different page instead of waiting for a Java callback.
+        if (page != null) peer.flushToPage();
     }
 
     @Override
     public void postMessage(WebMessage message) {
         GesherWebMessagePort peer;
-        synchronized (this) {
-            if (mClosed || mTransferred) {
-                throw new IllegalStateException("Port is already closed or transferred");
-            }
+        GesherWebViewProvider page = null;
+        Retirement retirement = new Retirement();
+        synchronized (sLock) {
+            requireUsable();
+            if (message == null) throw new NullPointerException("message");
+            GesherWebMessagePort[] ports = transferable(message.getPorts(), this);
+            mStarted = true;
             peer = mPeer;
-        }
-        if (peer == null || message == null) return;
-        GesherWebViewProvider page = peer.page();
-        if (page != null) {
-            page.postToPagePort(peer, message);
-        } else {
-            WebMessagePort[] ports = message.getPorts();
+            boolean doomed = false;
             if (ports != null) {
-                for (WebMessagePort p : ports) {
-                    if (p instanceof GesherWebMessagePort) {
-                        synchronized (p) {
-                            ((GesherWebMessagePort) p).mTransferred = true;
-                        }
-                    }
-                }
+                for (GesherWebMessagePort port : ports) if (port == peer) doomed = true;
             }
-            peer.receive(message);
+            // Serialization consumes transfers even when there is no recipient,
+            // or when the recipient is itself in the transfer list (HTML's
+            // message-port-post-message steps 4-6).
+            message = localMessage(message, ports);
+            if (peer == null || doomed) retirement.discard(message);
+            else page = peer.receiveLocked(message, retirement);
+            retirement.drain();
         }
+        retirement.finish();
+        if (page != null) peer.flushToPage();
     }
 
-    private synchronized GesherWebViewProvider page() {
-        return mClosed ? null : mPage;
+    /** sLock keeps recipient selection, ownership moves and queue insertion atomic. */
+    private GesherWebViewProvider receiveLocked(WebMessage message, Retirement retirement) {
+        if (mClosed || (mTransferred && mPage == null)) {
+            retirement.discard(message);
+            return null;
+        }
+        mQueue.add(message);
+        if (mPage != null) return mPageReady ? mPage : null;
+        scheduleDelivery();
+        return null;
     }
 
-    private void receive(WebMessage message) {
+    /** sLock is held. Handler queues the task; application callbacks run outside it. */
+    private void scheduleDelivery() {
+        if (mDeliveryScheduled || mClosed || mCallback == null || mQueue.isEmpty()) return;
+        Handler handler = mHandler != null ? mHandler : new Handler(Looper.getMainLooper());
+        mDeliveryScheduled = true;
+        if (!handler.post(this::deliverNext)) mDeliveryScheduled = false;
+    }
+
+    private void deliverNext() {
         WebMessageCallback callback;
-        Handler handler;
-        synchronized (this) {
-            if (mClosed) return;
-            if (mCallback == null) {
-                mQueue.add(message);
-                return;
-            }
+        WebMessage message;
+        synchronized (sLock) {
+            mDeliveryScheduled = false;
+            if (mClosed || mTransferred || mCallback == null || mQueue.isEmpty()) return;
             callback = mCallback;
-            handler = mHandler;
+            message = mQueue.remove();
+            scheduleDelivery();
         }
-        deliver(callback, handler, message);
-    }
-
-    private void deliver(WebMessageCallback callback, Handler handler, WebMessage message) {
-        Handler h = handler != null ? handler : new Handler(Looper.getMainLooper());
-        h.post(() -> callback.onMessage(this, message));
+        callback.onMessage(this, message);
     }
 
     @Override
     public void close() {
-        GesherWebViewProvider page;
-        GesherWebMessagePort peer;
-        synchronized (this) {
+        Retirement retirement = new Retirement();
+        synchronized (sLock) {
             if (mTransferred) throw new IllegalStateException("Port is already transferred");
             if (mClosed) return;
-            mClosed = true;
-            peer = mPeer;
+            retirement.close(this, true);
+            retirement.drain();
         }
-        page = peer != null ? peer.page() : null;
-        if (page != null) page.closePagePort(peer);
+        retirement.finish();
     }
 
     @Override
@@ -139,14 +319,12 @@ final class GesherWebMessagePort extends WebMessagePort {
 
     @Override
     public void setWebMessageCallback(WebMessageCallback callback, Handler handler) {
-        ArrayDeque<WebMessage> queued;
-        synchronized (this) {
+        synchronized (sLock) {
+            requireUsable();
+            mStarted = true;
             mCallback = callback;
             mHandler = handler;
-            if (callback == null || mQueue.isEmpty()) return;
-            queued = new ArrayDeque<>(mQueue);
-            mQueue.clear();
+            scheduleDelivery();
         }
-        for (WebMessage m : queued) deliver(callback, handler, m);
     }
 }

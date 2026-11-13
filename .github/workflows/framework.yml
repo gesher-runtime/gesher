@@ -497,6 +497,21 @@ jobs:
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
 
+      - name: Network registration and message port lifecycle contracts
+        run: |
+          python3 tools/test_network_builder_contracts.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+          python3 tools/test_connectivity_callback_contracts.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+          python3 tools/test_webmessage_ports.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod
+          "$JAVA_HOME/bin/javac" -cp work/sdk-36/android.jar \
+            -d "$RUNNER_TEMP/codec-lifecycle-sdk" \
+            tests/dex-services/gesher/services/CodecLifecycleContractTest.java
+
       - name: SDK linkage and framework partial-update contracts
         run: |
           set -euo pipefail
