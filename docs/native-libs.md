@@ -703,10 +703,11 @@ see "After that" for what is left._
 - **File-backed fixed segment mappings** for `PT_LOAD`: done (ADR 0080).
   Until then the loader copied every segment into anonymous memory, so each
   library was private, resident and charged to commit in full (libwaze.so: a
-  67 MB private region per Waze process). A mapped library file cannot be
-  truncated or rewritten in place while a process maps it (Windows refuses
-  writes that change a mapped file's size); deleting or renaming it works
-  (POSIX semantics), which is what the installer does on update.
+  67 MB private region per Waze process). While a process maps a library,
+  its file cannot be truncated (`ERROR_USER_MAPPED_FILE`, so opening it with
+  `O_TRUNC` to rewrite it fails) and writes to it in place reach the running
+  code, as on Linux; renaming or deleting it works (POSIX semantics), and the
+  installer stops the package and writes a new code directory on update.
 
 ### How to work on this
 
