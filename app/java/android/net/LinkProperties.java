@@ -60,6 +60,9 @@ public final class LinkProperties implements Parcelable {
 
     public void setInterfaceName(String iface) {
         mIfaceName = iface;
+        for (int i = 0; i < mRoutes.size(); i++) {
+            mRoutes.set(i, routeWithInterface(mRoutes.get(i)));
+        }
     }
 
     public String getInterfaceName() {
@@ -149,6 +152,24 @@ public final class LinkProperties implements Parcelable {
         return Collections.unmodifiableList(new ArrayList<>(mValidatedPrivateDnses));
     }
 
+    /** @hide */
+    public boolean addValidatedPrivateDnsServer(InetAddress dnsServer) {
+        if (dnsServer == null || mValidatedPrivateDnses.contains(dnsServer)) return false;
+        mValidatedPrivateDnses.add(dnsServer);
+        return true;
+    }
+
+    /** @hide */
+    public boolean removeValidatedPrivateDnsServer(InetAddress dnsServer) {
+        return mValidatedPrivateDnses.remove(dnsServer);
+    }
+
+    /** @hide */
+    public void setValidatedPrivateDnsServers(Collection<InetAddress> dnsServers) {
+        mValidatedPrivateDnses.clear();
+        for (InetAddress dnsServer : dnsServers) addValidatedPrivateDnsServer(dnsServer);
+    }
+
     public void setDomains(String domains) {
         mDomains = domains;
     }
@@ -165,15 +186,36 @@ public final class LinkProperties implements Parcelable {
         return mMtu;
     }
 
+    private RouteInfo routeWithInterface(RouteInfo route) {
+        return new RouteInfo(route.getDestination(), route.getGateway(), mIfaceName,
+                route.getType(), route.getMtu());
+    }
+
     public boolean addRoute(RouteInfo route) {
-        if (route == null || mRoutes.contains(route)) return false;
+        String routeIface = route.getInterface();
+        if (routeIface != null && !routeIface.equals(mIfaceName)) {
+            throw new IllegalArgumentException("Route interface " + routeIface
+                    + " does not match " + mIfaceName);
+        }
+        route = routeWithInterface(route);
+        for (int i = 0; i < mRoutes.size(); i++) {
+            RouteInfo current = mRoutes.get(i);
+            // Type and MTU are route properties, not part of Android's route key.
+            if (current.getDestination().equals(route.getDestination())
+                    && current.getGateway().equals(route.getGateway())
+                    && Objects.equals(current.getInterface(), route.getInterface())) {
+                if (current.equals(route)) return false;
+                mRoutes.set(i, route);
+                return true;
+            }
+        }
         mRoutes.add(route);
         return true;
     }
 
     /** @hide */
     public boolean removeRoute(RouteInfo route) {
-        return mRoutes.remove(route);
+        return Objects.equals(mIfaceName, route.getInterface()) && mRoutes.remove(route);
     }
 
     public List<RouteInfo> getRoutes() {
@@ -198,6 +240,9 @@ public final class LinkProperties implements Parcelable {
     }
 
     public void setNat64Prefix(IpPrefix prefix) {
+        if (prefix != null && prefix.getPrefixLength() != 96) {
+            throw new IllegalArgumentException("Only /96 NAT64 prefixes are supported");
+        }
         mNat64Prefix = prefix;
     }
 
@@ -327,18 +372,31 @@ public final class LinkProperties implements Parcelable {
         if (!(o instanceof LinkProperties)) return false;
         LinkProperties lp = (LinkProperties) o;
         return Objects.equals(mIfaceName, lp.mIfaceName)
-                && mLinkAddresses.equals(lp.mLinkAddresses) && mDnses.equals(lp.mDnses)
+                // Android's LinkProperties equality compares IP addresses here;
+                // LinkAddress's own equality additionally includes prefix/flags/scope.
+                && sameElements(getAddresses(), lp.getAddresses()) && sameElements(mDnses, lp.mDnses)
+                && sameElements(mValidatedPrivateDnses, lp.mValidatedPrivateDnses)
                 && mUsePrivateDns == lp.mUsePrivateDns
                 && Objects.equals(mPrivateDnsServerName, lp.mPrivateDnsServerName)
-                && Objects.equals(mDomains, lp.mDomains) && mRoutes.equals(lp.mRoutes)
+                && Objects.equals(mDomains, lp.mDomains) && sameElements(mRoutes, lp.mRoutes)
                 && Objects.equals(mHttpProxy, lp.mHttpProxy) && mMtu == lp.mMtu
-                && Objects.equals(mNat64Prefix, lp.mNat64Prefix);
+                && Objects.equals(mNat64Prefix, lp.mNat64Prefix)
+                && Objects.equals(mDhcpServerAddress, lp.mDhcpServerAddress)
+                && mWakeOnLanSupported == lp.mWakeOnLanSupported;
+    }
+
+    private static boolean sameElements(Collection<?> first, Collection<?> second) {
+        return first.size() == second.size() && first.containsAll(second);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(mIfaceName, mLinkAddresses, mDnses, mDomains, mRoutes, mHttpProxy,
-                mMtu);
+        // These collections are sets for equality. Counts, as in AOSP, keep hashes
+        // independent of their insertion order while allowing unequal values to collide.
+        return Objects.hash(mIfaceName, mLinkAddresses.size(), mDnses.size(),
+                mValidatedPrivateDnses.size(), mUsePrivateDns, mPrivateDnsServerName,
+                mDomains, mRoutes.size(), mHttpProxy, mMtu, mNat64Prefix,
+                mDhcpServerAddress, mWakeOnLanSupported);
     }
 
     @Override
@@ -376,6 +434,7 @@ public final class LinkProperties implements Parcelable {
         if (mHttpProxy != null) mHttpProxy.writeToParcel(dest, flags);
         dest.writeBoolean(mNat64Prefix != null);
         if (mNat64Prefix != null) mNat64Prefix.writeToParcel(dest, flags);
+        dest.writeByteArray(mDhcpServerAddress == null ? null : mDhcpServerAddress.getAddress());
         dest.writeBoolean(mWakeOnLanSupported);
     }
 
@@ -396,6 +455,14 @@ public final class LinkProperties implements Parcelable {
             lp.mMtu = in.readInt();
             if (in.readBoolean()) lp.mHttpProxy = ProxyInfo.CREATOR.createFromParcel(in);
             if (in.readBoolean()) lp.mNat64Prefix = IpPrefix.CREATOR.createFromParcel(in);
+            byte[] dhcpAddress = in.createByteArray();
+            if (dhcpAddress != null) {
+                try {
+                    lp.mDhcpServerAddress = (Inet4Address) InetAddress.getByAddress(dhcpAddress);
+                } catch (UnknownHostException e) {
+                    throw new IllegalArgumentException(e);
+                }
+            }
             lp.mWakeOnLanSupported = in.readBoolean();
             return lp;
         }

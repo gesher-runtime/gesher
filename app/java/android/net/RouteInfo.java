@@ -25,11 +25,21 @@ public final class RouteInfo implements Parcelable {
     private final InetAddress mGateway;
     private final String mInterface;
     private final int mType;
+    private final int mMtu;
 
     /** @hide */
     public RouteInfo(IpPrefix destination, InetAddress gateway, String iface, int type) {
+        this(destination, gateway, iface, type, 0);
+    }
+
+    /** @hide */
+    public RouteInfo(IpPrefix destination, InetAddress gateway, String iface, int type, int mtu) {
+        if (type != RTN_UNICAST && type != RTN_UNREACHABLE && type != RTN_THROW) {
+            throw new IllegalArgumentException("Unknown route type " + type);
+        }
         if (destination == null) {
-            boolean v4 = gateway == null || gateway instanceof Inet4Address;
+            if (gateway == null) throw new IllegalArgumentException("Destination and gateway are null");
+            boolean v4 = gateway instanceof Inet4Address;
             destination = new IpPrefix(new byte[v4 ? 4 : 16], 0);
         }
         if (gateway == null) {
@@ -40,10 +50,14 @@ public final class RouteInfo implements Parcelable {
                 throw new IllegalStateException(e);
             }
         }
+        if (destination.isIPv4() != (gateway instanceof Inet4Address)) {
+            throw new IllegalArgumentException("Address family mismatch in RouteInfo constructor");
+        }
         mDestination = destination;
         mGateway = gateway;
         mInterface = iface;
         mType = type;
+        mMtu = mtu;
     }
 
     /** @hide */
@@ -81,7 +95,7 @@ public final class RouteInfo implements Parcelable {
     }
 
     public int getMtu() {
-        return 0;
+        return mMtu;
     }
 
     public boolean isDefaultRoute() {
@@ -120,12 +134,12 @@ public final class RouteInfo implements Parcelable {
         if (!(o instanceof RouteInfo)) return false;
         RouteInfo r = (RouteInfo) o;
         return mDestination.equals(r.mDestination) && mGateway.equals(r.mGateway)
-                && Objects.equals(mInterface, r.mInterface) && mType == r.mType;
+                && Objects.equals(mInterface, r.mInterface) && mType == r.mType && mMtu == r.mMtu;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(mDestination, mGateway, mInterface, mType);
+        return Objects.hash(mDestination, mGateway, mInterface, mType, mMtu);
     }
 
     @Override
@@ -139,6 +153,7 @@ public final class RouteInfo implements Parcelable {
         dest.writeByteArray(mGateway.getAddress());
         dest.writeString(mInterface);
         dest.writeInt(mType);
+        dest.writeInt(mMtu);
     }
 
     public static final Creator<RouteInfo> CREATOR = new Creator<RouteInfo>() {
@@ -147,7 +162,7 @@ public final class RouteInfo implements Parcelable {
             IpPrefix destination = IpPrefix.CREATOR.createFromParcel(in);
             try {
                 InetAddress gateway = InetAddress.getByAddress(in.createByteArray());
-                return new RouteInfo(destination, gateway, in.readString(), in.readInt());
+                return new RouteInfo(destination, gateway, in.readString(), in.readInt(), in.readInt());
             } catch (UnknownHostException e) {
                 throw new IllegalArgumentException(e);
             }
