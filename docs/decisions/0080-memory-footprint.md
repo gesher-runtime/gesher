@@ -65,7 +65,11 @@ far more working set than their Java heap explains. Measured per allocation
 - **dynarmic** (`compat/arm64/dll/patch-dynarmic-fpsr.py`, hash-checked like
   the FPSR corrections): the A64 fast dispatch table has 64Ki entries (1 MiB,
   A32's size), and the code cache commits 4 MiB up front (dynarmic already
-  commits 1 MiB ahead before compiling each block).
+  commits 1 MiB ahead before compiling each block). Neither is written up
+  front any more: the dispatch table holds descriptor complements (empty =
+  zero) in its own lazily committed pages, and the constant pool (1/16th of
+  the cache) is not memset (fresh committed pages are zero). Exited guest
+  threads' Envs are pooled for new threads (docs/arm64.md).
 
 ## Measurement
 An isolated device (its own install copy and `LOCALAPPDATA`), the same three
