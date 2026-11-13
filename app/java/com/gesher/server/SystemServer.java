@@ -206,8 +206,8 @@ public final class SystemServer {
         // scheduleTransaction) while their main threads call it (attachApplication,
         // activityPaused), and startActivityAndWait and getContentProvider hold a thread
         // until an activity is idle or a provider is published. system_server runs up to
-        // 31 (BinderInternal.setMaxThreads); here a few.
-        startBinderThreads(TAG, 7);
+        // 31 (BinderInternal.setMaxThreads).
+        startBinderThreads(TAG, 31);
         if (device != null) device.start();
         if (persistent && GmsSignatureSpoofing.isEnabled()) {
             ApkPackage gms = created.pm.get(GmsPackageSupport.PACKAGE_GMS);

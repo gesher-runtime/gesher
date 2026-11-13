@@ -13,10 +13,16 @@ import android.app.usage.IUsageStatsManager;
 import android.content.ComponentName;
 import android.content.pm.IShortcutService;
 import android.content.pm.ParceledListSlice;
+import android.content.pm.verify.domain.DomainOwner;
+import android.content.pm.verify.domain.DomainSet;
+import android.content.pm.verify.domain.DomainVerificationInfo;
+import android.content.pm.verify.domain.DomainVerificationManager;
+import android.content.pm.verify.domain.DomainVerificationUserState;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IDeviceIdentifiersPolicyService;
+import android.os.ServiceSpecificException;
 import android.os.IThermalService;
 import android.telephony.SubscriptionManager;
 import android.view.ISensitiveContentProtectionManager;
@@ -349,6 +355,103 @@ final class DeviceServices {
      */
     static final class SensitiveContentProtectionService
             extends ISensitiveContentProtectionManager.Default {
+    }
+
+    /**
+     * No attached domain-verification records or verifier backend. Preserve the Android 16
+     * empty-record contracts, including non-null containers and failed writes to absent IDs.
+     */
+    static final class DomainVerificationService
+            extends android.content.pm.verify.domain.IDomainVerificationManager.Default {
+        private final PackageManagerService mPackages;
+
+        DomainVerificationService(PackageManagerService packages) {
+            mPackages = java.util.Objects.requireNonNull(packages);
+        }
+
+        private static void requireUser(int userId) {
+            if (userId != 0) throw new IllegalArgumentException("Only user 0 is supported");
+        }
+
+        private static ServiceSpecificException unavailable(String packageName) {
+            return new ServiceSpecificException(
+                    DomainVerificationManager.INTERNAL_ERROR_NAME_NOT_FOUND, packageName);
+        }
+
+        private void requirePackage(String packageName) {
+            java.util.Objects.requireNonNull(packageName, "packageName");
+            if (!mPackages.isPackageAvailable(packageName, 0)
+                    || mPackages.isRemovalPending(packageName)) throw unavailable(packageName);
+        }
+
+        @Override public java.util.List<String> queryValidVerificationPackageNames() {
+            return new java.util.ArrayList<>();
+        }
+
+        @Override public DomainVerificationInfo getDomainVerificationInfo(String packageName) {
+            requirePackage(packageName);
+            return null;
+        }
+
+        @Override public DomainVerificationUserState getDomainVerificationUserState(
+                String packageName, int userId) {
+            requireUser(userId);
+            requirePackage(packageName);
+            return null;
+        }
+
+        @Override public java.util.List<DomainOwner> getOwnersForDomain(String domain, int userId) {
+            java.util.Objects.requireNonNull(domain, "domain");
+            requireUser(userId);
+            // Invalid host names also have no owners, as the public manager documents.
+            return new java.util.ArrayList<>();
+        }
+
+        private static void validateDomainSet(String domainSetId, DomainSet domains) {
+            // Mirror the AOSP Binder adapter before looking up the absent record. An
+            // unknown ID wins over empty-domain validation in its service implementation.
+            java.util.UUID.fromString(java.util.Objects.requireNonNull(domainSetId, "domainSetId"));
+            java.util.Objects.requireNonNull(domains, "domains");
+        }
+
+        @Override public int setDomainVerificationStatus(String domainSetId, DomainSet domains,
+                int state) {
+            validateDomainSet(domainSetId, domains);
+            if (state != DomainVerificationInfo.STATE_SUCCESS
+                    && state < DomainVerificationInfo.STATE_FIRST_VERIFIER_DEFINED) {
+                throw new IllegalArgumentException("Caller is not allowed to set state code " + state);
+            }
+            return DomainVerificationManager.ERROR_DOMAIN_SET_ID_INVALID;
+        }
+
+        @Override public int setDomainVerificationUserSelection(String domainSetId, DomainSet domains,
+                boolean enabled, int userId) {
+            validateDomainSet(domainSetId, domains);
+            requireUser(userId);
+            return DomainVerificationManager.ERROR_DOMAIN_SET_ID_INVALID;
+        }
+
+        @Override public void setDomainVerificationLinkHandlingAllowed(String packageName,
+                boolean allowed, int userId) {
+            java.util.Objects.requireNonNull(packageName, "packageName");
+            requireUser(userId);
+            // AOSP cannot update user preferences without an attached domain record.
+            throw unavailable(packageName);
+        }
+
+        @Override public void setUriRelativeFilterGroups(String packageName, Bundle groups) {
+            java.util.Objects.requireNonNull(packageName, "packageName");
+            java.util.Objects.requireNonNull(groups, "groups");
+            // Android treats an empty update as a no-op, even without a record.
+            if (!groups.isEmpty()) throw unavailable(packageName);
+        }
+
+        @Override public Bundle getUriRelativeFilterGroups(String packageName,
+                java.util.List<String> domains) {
+            java.util.Objects.requireNonNull(packageName, "packageName");
+            java.util.Objects.requireNonNull(domains, "domains");
+            return new Bundle();
+        }
     }
 
     /**

@@ -113,6 +113,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
      * a manifest receiver waiting/executing, or a provider another package uses.
      */
     boolean keepsAlive(ActivityTaskManagerService.ProcessRecord app) {
+        if (app != null && GmsPackageSupport.PACKAGE_GMS.equals(app.packageName)) return true;
         return mServices.hasServices(app) || mBroadcasts.hasReceivers(app) || mProviders.hasClients(app);
     }
 

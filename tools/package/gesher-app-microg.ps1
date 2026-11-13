@@ -4,6 +4,7 @@ param(
     [string] $GmsCoreApk,
     [string] $CompanionApk,
     [string] $GsfProxyApk,
+    [string] $StoreApk,
     [switch] $AutoDownload,
     [switch] $InstallStore,
     [switch] $StoreOnly,
@@ -74,19 +75,26 @@ function Initialize-MicrogDefaults([string] $ProfileRoot) {
 }
 function Install-AuroraStore {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        $storeTarget = Join-Path $env:TEMP "AuroraStore.apk"
-        if (-not (Test-Path $storeTarget)) {
-            Write-Host "Downloading Aurora Store..."
-            Invoke-WebRequest -Uri "https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk" -OutFile $storeTarget -UseBasicParsing
+        $storeTarget = if ($StoreApk -and (Test-Path -LiteralPath $StoreApk)) {
+            $StoreApk
+        } else {
+            $tmp = Join-Path $env:TEMP "AuroraStore.apk"
+            if (-not (Test-Path $tmp)) {
+                Write-Host "Downloading Aurora Store..."
+                Invoke-WebRequest -Uri "https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk" -OutFile $tmp -UseBasicParsing
+            }
+            $tmp
         }
         Write-Host "Installing Aurora Store..."
         & (Join-Path $RuntimeDir "gesher-app.ps1") install "$storeTarget"
     }
-if ($StoreOnly) { Install-AuroraStore; return }
 if ($Disable -and $Remove) { throw (Get-GesherText 'microg_choose') }
-if (($Disable -or $Remove) -and ($GmsCoreApk -or $CompanionApk -or $GsfProxyApk)) {
+if (($Disable -or $Remove) -and ($GmsCoreApk -or $CompanionApk -or $GsfProxyApk -or
+        $StoreApk -or $AutoDownload -or $InstallStore -or $StoreOnly)) {
     throw (Get-GesherText 'microg_no_files')
 }
+if ($StoreOnly -or ($InstallStore -and -not $AutoDownload -and -not $GmsCoreApk -and
+        -not $CompanionApk -and -not $GsfProxyApk)) { Install-AuroraStore; return }
 if ($Disable) {
     if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker }
     Write-Host (Get-GesherText 'microg_disabled')

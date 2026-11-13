@@ -54,7 +54,7 @@ final class BroadcastController {
     private final PackageManagerService mPm;
     private final CallerIdentity mCallers;
     private Runnable mBeforeSenderAuthentication; // Server-local direct-caller race fixture.
-    private static final long RECEIVER_TIMEOUT_MS = 60_000;
+    private static final long RECEIVER_TIMEOUT_MS = 180_000;
     private static final int MAX_ORDERED = 16, MAX_ORDERED_PER_SENDER = 4, MAX_ORDERED_TARGETS = 128;
     private static final long MAX_ORDERED_MILLIS = 5 * 60_000;
     private final long mReceiverTimeoutMillis;

@@ -114,7 +114,8 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   android.content.pm.IShortcutService \
   android.content.pm.ICrossProfileApps \
   android.view.ISensitiveContentProtectionManager \
-  android.permission.IPermissionManager
+  android.permission.IPermissionManager \
+  android.content.pm.verify.domain.IDomainVerificationManager
 # The framework's app-compat changes (@ChangeId fields), for bindApplication's
 # disabledCompatChanges (com.gesher.server.CompatChanges, docs/e2e.md). The annotations
 # have SOURCE retention: they are read from frameworks/base's sources (what the
@@ -142,13 +143,21 @@ javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-optio
 mkdir -p "$work/location"
 loc=$aosp/frameworks/base/location/java
 fwloc=$framework
-if [[ -f $framework && -d $loc ]]; then
-  # A jar of the framework's classes: the location packages out of it.
+if [[ -f $framework ]]; then
   fwloc=$work/fwloc
   mkdir -p "$fwloc"
   (cd "$fwloc" && unzip -q -o "$framework" 'android/location/*' 'android/location/*/*' 'com/android/internal/location/*' 'com/android/internal/location/*/*' || true)
 fi
-if [[ -d $fwloc && -d $loc ]]; then
+if [[ -d "$fwloc/android/location" ]]; then
+  mkdir -p "$work/location/android"
+  cp -R "$fwloc/android/location" "$work/location/android/"
+  if [[ -d "$fwloc/com/android/internal/location" ]]; then
+    mkdir -p "$work/location/com/android/internal"
+    cp -R "$fwloc/com/android/internal/location" "$work/location/com/android/internal/"
+  fi
+  rm -rf "$work/compat/android/location"
+  echo "framework-location: $(find "$work/location" -name '*.class' | wc -l) classes into gesher-app.jar"
+elif [[ -d $fwloc && -d $loc ]]; then
   while IFS= read -r c; do
     for f in "$fwloc/$c.class" "$fwloc/$c"\$*.class; do
       if [[ -f $f ]]; then

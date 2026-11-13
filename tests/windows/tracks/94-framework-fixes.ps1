@@ -1,4 +1,4 @@
-# Regression checks of app-visible fixes in gesher-app's services and boot class
+﻿# Regression checks of app-visible fixes in gesher-app's services and boot class
 # path, run from services-tests.dex (tests/dex-services) with the interpreter.
 # Dot-sourced by run-tests.ps1, using Check, NoDrive, $Dir, $root and $failed
 # from there.
@@ -334,6 +334,9 @@ Check 'services: HandlerThread.quit with tracing off (MessageQueue''s Perfetto c
 # These module value classes are packaged in gesher-app.jar. Run each fixture in
 # its own bounded ART process, preserving its exit status as well as its marker.
 foreach ($fixture in @(
+  @('DomainVerificationContractTest', 'domain verification empty records and honest mutation results'),
+  @('GmsSetupContractTest', 'GMS foreground idle accounting and reserved account visibility policy'),
+  @('NdefDataContractTest', 'NDEF bytes, helpers, malformed input and native Parcel round trips'),
   @('PowerWakeLockCallbackTest', 'wake lock listener callbacks, real held state and token lifetime'),
   @('PackageManifestFlagsTest', 'complete parsed manifest flags preserve installed application state'),
   @('PackageServiceQueriesTest', 'package UID/group queries and Android 16 dex-module completion'),
