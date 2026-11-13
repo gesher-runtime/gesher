@@ -130,6 +130,44 @@ int main() {
   Check("a private write does not reach the file", check != MAP_FAILED && check[0] == 6);
   munmap(check, kPage);
 
+  // 2b. Segments mapped without PROT_EXEC can get it later, as on Linux
+  // (packers and protectors mprotect a whole library RWX).
+  uint8_t* ro_seg = static_cast<uint8_t*>(mmap(r + 12 * kPage, 2 * kPage, PROT_READ,
+                                               MAP_PRIVATE | MAP_FIXED, fd, 0));
+  Check("a read-only segment: a view", ro_seg == r + 12 * kPage && Type(ro_seg) == MEM_MAPPED &&
+                                           Protection(ro_seg) == PAGE_READONLY && ro_seg[0] == 1);
+  Check("... mprotect R|X", mprotect(ro_seg, 2 * kPage, PROT_READ | PROT_EXEC) == 0 &&
+                                Protection(ro_seg) == PAGE_EXECUTE_READ);
+  bool ro_rwx = mprotect(ro_seg, kPage, PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+  if (ro_rwx) ro_seg[0] = 77;
+  Check("... mprotect RWX, written privately",
+        ro_rwx && Protection(ro_seg) == PAGE_EXECUTE_READWRITE && ro_seg[kPage] == 2);
+  bool rw_rwx = mprotect(r + 5 * kPage, 2 * kPage, PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+  if (rw_rwx) r[6 * kPage] = 55;
+  Check("the writable segment: mprotect RWX", rw_rwx && r[5 * kPage] == 99 && r[6 * kPage] == 55);
+  Check("mprotect RWX across segments and back",
+        mprotect(r + 2 * kPage, 5 * kPage, PROT_READ | PROT_WRITE | PROT_EXEC) == 0 &&
+            mprotect(r + 2 * kPage, 3 * kPage, PROT_READ | PROT_EXEC) == 0 &&
+            mprotect(ro_seg, 2 * kPage, PROT_READ) == 0 && ro_seg[0] == 77 &&
+            Protection(ro_seg) == PAGE_READONLY && Protection(r + 2 * kPage) == PAGE_EXECUTE_READ);
+  munmap(ro_seg, 2 * kPage);
+  mmap(r + 12 * kPage, 2 * kPage, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+  {
+    // A read-only private view charges no commit, and can still become RWX.
+    wchar_t big_path[MAX_PATH];
+    const size_t big = size_t{64} << 20;
+    const int big_fd = TempFile(big, big_path);
+    const size_t before_view = Commit();
+    uint8_t* bv = static_cast<uint8_t*>(mmap(nullptr, big, PROT_READ, MAP_PRIVATE, big_fd, 0));
+    Check("a 64 MiB read-only private view", bv != MAP_FAILED && bv[kPage] == 2);
+    Check("... charges no commit", Commit() < before_view + (size_t{8} << 20));
+    bool bv_rwx = bv != MAP_FAILED && mprotect(bv, kPage, PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+    if (bv_rwx) bv[0] = 9;
+    Check("... mprotect RWX of a page of it", bv_rwx && bv[0] == 9);
+    if (bv != MAP_FAILED) munmap(bv, big);
+    close(big_fd);
+  }
+
   // 3. MAP_FIXED over the middle of a view that was written: what stays of
   // the view keeps its contents and protections.
   uint8_t* v = static_cast<uint8_t*>(mmap(nullptr, 6 * kPage, PROT_READ | PROT_WRITE,
