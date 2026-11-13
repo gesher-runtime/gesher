@@ -977,6 +977,9 @@ struct ZeroingRange {
 };
 constexpr size_t kZeroingSlots = 64;
 ZeroingRange g_zeroing[kZeroingSlots];
+// Bumped after a range is published and again after it is withdrawn, so the
+// handler can tell that a zeroing started or ended while it looked.
+std::atomic<uint64_t> g_zeroing_epoch{0};
 
 class Zeroing {
  public:
@@ -988,6 +991,7 @@ class Zeroing {
         if (r.begin.compare_exchange_strong(free, 1, std::memory_order_acq_rel)) {
           r.end.store(begin + n, std::memory_order_relaxed);
           r.begin.store(begin, std::memory_order_release);
+          g_zeroing_epoch.fetch_add(1, std::memory_order_seq_cst);
           slot_ = &r;
           return;
         }
@@ -998,6 +1002,7 @@ class Zeroing {
   ~Zeroing() {
     slot_->end.store(0, std::memory_order_relaxed);
     slot_->begin.store(0, std::memory_order_release);
+    g_zeroing_epoch.fetch_add(1, std::memory_order_seq_cst);
   }
   Zeroing(const Zeroing&) = delete;
   Zeroing& operator=(const Zeroing&) = delete;
@@ -1016,10 +1021,19 @@ bool BeingZeroed(uintptr_t addr) {
 
 // Private pages [p, p + n) of one run, committed with `protection`, as zero
 // pages again.
+// The recommit charges commit again; if another process took it meanwhile
+// (the system commit limit), it is retried for a while: pages left
+// decommitted would be an access violation nothing can retry.
 bool ZeroPrivate(uint8_t* p, size_t n, DWORD protection) {
   Zeroing zeroing(p, n);
   VirtualFree(p, n, MEM_DECOMMIT);
-  return VirtualAlloc(p, n, MEM_COMMIT, protection) != nullptr;
+  for (int attempt = 0; attempt < 200; ++attempt) {
+    if (VirtualAlloc(p, n, MEM_COMMIT, protection) != nullptr) return true;
+    Sleep(attempt < 10 ? 1 : 50);
+  }
+  fprintf(stderr, "gesher-mmap: recommitting %p (0x%zx bytes) after madvise failed: %lu\n",
+          static_cast<void*>(p), n, GetLastError());
+  return false;
 }
 
 }  // namespace
@@ -1047,14 +1061,17 @@ bool RetryAfterMadvise(uintptr_t addr, ULONG_PTR access) {
         return false;
     }
   };
-  // In flight: wait for the recommit. Not in flight (any more): the fault
-  // was a race only if the page is there now. ZeroPrivate recommits before
-  // it unpublishes, so the second look sees what the first one missed.
-  while (BeingZeroed(addr)) {
+  // In flight: wait for the recommit. Not in flight: the fault was a race
+  // only if the page is there now - unless a zeroing started or ended while
+  // we looked (the epoch moved: the page may have been recommitted and
+  // decommitted again by the next madvise), then look again.
+  for (;;) {
+    const uint64_t epoch = g_zeroing_epoch.load(std::memory_order_seq_cst);
+    const bool busy = BeingZeroed(addr);
     if (allowed()) return true;
+    if (!busy && g_zeroing_epoch.load(std::memory_order_seq_cst) == epoch) return false;
     SwitchToThread();
   }
-  return allowed();
 }
 
 }  // namespace gesher

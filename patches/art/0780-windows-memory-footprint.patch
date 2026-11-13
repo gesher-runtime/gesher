@@ -1,5 +1,5 @@
 diff --git a/libartbase/base/mem_map.cc b/libartbase/base/mem_map.cc
-index 58ab4ad..028c812 100644
+index 58ab4ad..fabc70b 100644
 --- a/libartbase/base/mem_map.cc
 +++ b/libartbase/base/mem_map.cc
 @@ -1305,7 +1305,7 @@ void ZeroMemory(void* address, size_t length, bool release_eagerly) {
@@ -11,6 +11,16 @@ index 58ab4ad..028c812 100644
    UNUSED(release_eagerly);
    LOG(WARNING) << "ZeroMemory does not madvise on Windows.";
    RawClearMemory(mem_begin, mem_end);
+@@ -1345,7 +1345,8 @@ void ZeroMemory(void* address, size_t length, bool release_eagerly) {
+ #else
+   UNUSED(release_eagerly);
+ #endif  // __linux__
+-  bool res = madvise(page_begin, page_end - page_begin, MADV_DONTNEED);
++  // Gesher: int, so that the check can fire (it zeroes through madvise).
++  int res = madvise(page_begin, page_end - page_begin, MADV_DONTNEED);
+   CHECK_NE(res, -1) << "madvise failed";
+ #endif  // _WIN32
+ }
 diff --git a/libartbase/base/mem_map.h b/libartbase/base/mem_map.h
 index b726e98..89d4cd9 100644
 --- a/libartbase/base/mem_map.h
