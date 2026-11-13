@@ -458,6 +458,12 @@ jobs:
           mkdir -p work/sdk-36
           unzip -p "$RUNNER_TEMP/platform-36_r02.zip" android-36/android.jar > work/sdk-36/android.jar
 
+      - name: Cookie callback caller Looper contracts
+        run: |
+          python3 tools/test_cookie_callbacks.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
       - name: Service callback, public SDK and WebView contracts against the built framework
         run: |
           printf '%s  %s\n' d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a \
