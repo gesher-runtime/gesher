@@ -97,7 +97,7 @@ final class GesherWebViewProvider {
         subprocess.run([javac, "-encoding", "UTF-8", "-cp", classpath, "-d", str(classes), *inputs], check=True)
         runtime = os.pathsep.join((str(public), str(classes), classpath))
         if args.case in ("all", "public"):
-            subprocess.run([java, "-cp", runtime, "gesher.services.WebMessagePortContractTest"], check=True, timeout=45)
+            subprocess.run([java, "-cp", runtime, "gesher.services.WebMessagePortContractTest", "--host"], check=True, timeout=45)
         if args.case in ("all", "page"):
             subprocess.run([java, "-cp", runtime, "com.gesher.app.webview.PagePortBoundaryTest"], check=True, timeout=30)
 

@@ -138,6 +138,7 @@ public final class WebMessagePortContractTest {
         }
     }
     public static void main(String[] args) throws Exception {
+        if (args.length == 0 || !args[0].equals("--host")) System.loadLibrary("android_runtime");
         HandlerThread thread = new HandlerThread("webmessage-contracts"); thread.start();
         handler = new Handler(thread.getLooper());
         try {

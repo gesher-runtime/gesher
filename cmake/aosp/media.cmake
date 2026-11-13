@@ -215,3 +215,15 @@ target_sources(hwui PRIVATE
   ${_media}/surface/surface_jni.cc
   # The encoders' input surfaces (media3, ADR 0059): QueueSurfaces too.
   ${_media}/video/input_surface.cc)
+
+# Run actual input-surface producer/consumer callback teardown on Windows.
+add_executable(media_input_surface_callback_test
+  "${CMAKE_SOURCE_DIR}/tests/media/input_surface_callback_test.cc"
+  ${_media}/video/input_surface.cc ${_media}/surface/queue_surface.cc)
+target_include_directories(media_input_surface_callback_test PRIVATE
+  "${CMAKE_SOURCE_DIR}" "${AOSP_DIR}/libnativehelper/include_jni"
+  "${AOSP_DIR}/frameworks/base/core/jni/include")
+target_compile_options(media_input_surface_callback_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter -fexceptions)
+target_link_libraries(media_input_surface_callback_test PRIVATE hostgraphics pthread)
+gesher_graphics_cxx(media_input_surface_callback_test)

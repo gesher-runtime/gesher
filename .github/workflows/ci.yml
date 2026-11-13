@@ -78,6 +78,12 @@ jobs:
           python3 tools/test_elf_finalizers.py --sanitize
           python3 tools/test_media_api_contracts.py --sanitize
 
+      - name: Timer descriptor and media receiver lifetime contracts
+        run: |
+          python3 tools/test_timerfd_contracts.py --sanitize
+          python3 tools/test_input_surface_callbacks.py --sanitize
+          python3 tools/test_codec_lifecycle_contracts.py --sanitize
+
       - name: Freopen contracts against the pinned glibc reference
         run: bash tools/ci/test-freopen-reference.sh
 
