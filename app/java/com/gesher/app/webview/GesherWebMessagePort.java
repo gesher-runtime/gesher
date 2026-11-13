@@ -19,6 +19,8 @@ final class GesherWebMessagePort extends WebMessagePort {
     final String mId;
     private GesherWebMessagePort mPeer;
     private GesherWebViewProvider mPage;
+    private boolean mPageReady;
+    private boolean mPageFlushing;
     private boolean mClosed;
     private boolean mTransferred;
     private boolean mStarted;
@@ -121,6 +123,7 @@ final class GesherWebMessagePort extends WebMessagePort {
             if (seen.put(port, Boolean.TRUE) != null || port.mClosed) return false;
             port.mClosed = true;
             port.mPage = null;
+            port.mPageReady = false;
             port.mCallback = null;
             port.mHandler = null;
             port.mDeliveryScheduled = false;
@@ -181,15 +184,35 @@ final class GesherWebMessagePort extends WebMessagePort {
 
     /** Called after the page receives the message that creates its new ports. */
     void flushToPage() {
-        ArrayDeque<WebMessage> queued;
-        GesherWebViewProvider page;
         synchronized (sLock) {
-            if (mClosed || mPage == null || mQueue.isEmpty()) return;
-            page = mPage;
-            queued = new ArrayDeque<>(mQueue);
-            mQueue.clear();
+            if (mClosed || mPage == null) return;
+            mPageReady = true;
+            if (mPageFlushing || mQueue.isEmpty()) return;
+            mPageFlushing = true;
         }
-        for (WebMessage message : queued) page.postToPagePort(this, message);
+        // One sender drains this endpoint. Concurrent or reentrant posts join
+        // the same queue, including while the page's creation is being sent.
+        // Never call the backend while holding the endpoint graph lock.
+        try {
+            for (;;) {
+                GesherWebViewProvider page;
+                WebMessage message;
+                synchronized (sLock) {
+                    if (mClosed || mPage == null || mQueue.isEmpty()) {
+                        mPageFlushing = false;
+                        return;
+                    }
+                    page = mPage;
+                    message = mQueue.remove();
+                }
+                page.postToPagePort(this, message);
+            }
+        } catch (RuntimeException | Error failure) {
+            synchronized (sLock) {
+                mPageFlushing = false;
+            }
+            throw failure;
+        }
     }
 
     void pageGone() {
@@ -214,7 +237,7 @@ final class GesherWebMessagePort extends WebMessagePort {
         retirement.finish();
         // Android permits transferring both endpoints. The peer can route the
         // peer through a different page instead of waiting for a Java callback.
-        if (page != null) page.postToPagePort(peer, message);
+        if (page != null) peer.flushToPage();
     }
 
     @Override
@@ -241,7 +264,7 @@ final class GesherWebMessagePort extends WebMessagePort {
             retirement.drain();
         }
         retirement.finish();
-        if (page != null) page.postToPagePort(peer, message);
+        if (page != null) peer.flushToPage();
     }
 
     /** sLock keeps recipient selection, ownership moves and queue insertion atomic. */
@@ -250,8 +273,8 @@ final class GesherWebMessagePort extends WebMessagePort {
             retirement.discard(message);
             return null;
         }
-        if (mPage != null) return mPage;
         mQueue.add(message);
+        if (mPage != null) return mPageReady ? mPage : null;
         scheduleDelivery();
         return null;
     }

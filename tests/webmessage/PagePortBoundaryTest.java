@@ -33,6 +33,34 @@ public final class PagePortBoundaryTest {
         pair[0].close();
         check(page.mPagePorts.isEmpty(), "app close releases page registry");
     }
+    private static void pageQueueKeepsOrderDuringAdmission() throws Exception {
+        WebMessagePort[] pair = GesherWebMessagePort.pair();
+        pair[0].postMessage(new WebMessage("queued one"));
+        pair[0].postMessage(new WebMessage("queued two"));
+        GesherWebViewProvider page = new GesherWebViewProvider();
+        page.mHost.afterSend = text -> {
+            try {
+                JSONObject event = new JSONObject(text);
+                if ("post".equals(event.getString("gesher"))) {
+                    pair[0].postMessage(new WebMessage("during creation"));
+                } else if ("queued one".equals(event.optString("data"))) {
+                    pair[0].postMessage(new WebMessage("during flush"));
+                }
+            } catch (Exception failure) { throw new AssertionError(failure); }
+        };
+        page.postMessageToMainFrame(new WebMessage("create", new WebMessagePort[]{pair[1]}), null);
+        String[] expected = {"queued one", "queued two", "during creation", "during flush"};
+        check(page.mHost.sent.size() == expected.length + 1,
+                "page admission drains every queued and reentrant message exactly once");
+        for (int i = 0; i < expected.length && i + 1 < page.mHost.sent.size(); i++) {
+            check(expected[i].equals(new JSONObject(page.mHost.sent.get(i + 1)).getString("data")),
+                    "page admission preserves FIFO position " + i);
+        }
+        pair[0].close();
+        check(page.mPagePorts.isEmpty(), "ordered page drain still releases endpoint ownership");
+        page.destroy();
+    }
+
     private static void validation() throws Exception {
         WebMessagePort[] good = GesherWebMessagePort.pair(), used = GesherWebMessagePort.pair();
         used[0].postMessage(new WebMessage("started"));
@@ -80,6 +108,7 @@ public final class PagePortBoundaryTest {
     }
     public static void main(String[] args) {
         runCase("queue",PagePortBoundaryTest::queuedBeforePage);
+        runCase("admission FIFO",PagePortBoundaryTest::pageQueueKeepsOrderDuringAdmission);
         runCase("validation",PagePortBoundaryTest::validation);
         runCase("both",PagePortBoundaryTest::bothOnPage);
         runCase("nested",PagePortBoundaryTest::nestedQueuedTransfer);
