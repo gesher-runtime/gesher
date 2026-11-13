@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cwchar>
 #include <limits>
+#include <memory>
 
 namespace gesher::logging {
 namespace {
@@ -83,27 +84,53 @@ struct File {
     wchar_t name[64];
     std::swprintf(name, 64, L"Local\\gesher-log-%016llx", static_cast<unsigned long long>(hash));
     mutex.value = CreateMutexW(nullptr, FALSE, name);
+    // FILE_SHARE_DELETE: a process keeps its log open (Record), and the log
+    // must stay deletable and renameable meanwhile (Current notices).
     file.value = CreateFileW(absolute.c_str(), GENERIC_READ | GENERIC_WRITE,
-                             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
-                             FILE_ATTRIBUTE_NORMAL, nullptr);
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                             OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (!mutex.value || file.value == INVALID_HANDLE_VALUE) {
       if (error) *error = "cannot open the structured log (Windows error " + std::to_string(GetLastError()) + ")";
       return false;
     }
+    return Name(file.value, &name_at_open);
+  }
+  // The file's name on its volume now (renames change it; a POSIX delete
+  // moves it under \$Extend\$Deleted).
+  static bool Name(HANDLE handle, std::wstring* name) {
+    alignas(FILE_NAME_INFO) char buffer[sizeof(FILE_NAME_INFO) + 2048 * sizeof(wchar_t)];
+    auto* info = reinterpret_cast<FILE_NAME_INFO*>(buffer);
+    if (!GetFileInformationByHandleEx(handle, FileNameInfo, info, sizeof(buffer))) return false;
+    name->assign(info->FileName, info->FileNameLength / sizeof(wchar_t));
     return true;
   }
+  // Whether the open file is still the one at the log's path: not deleted
+  // (or about to be) and not renamed away. Called under the log's mutex.
+  bool Current() const {
+    FILE_STANDARD_INFO standard;
+    if (!GetFileInformationByHandleEx(file.value, FileStandardInfo, &standard, sizeof(standard)) ||
+        standard.DeletePending) return false;
+    std::wstring now;
+    return Name(file.value, &now) && now == name_at_open;
+  }
+  std::wstring name_at_open;
 };
 // Record runs for every log line of every thread, so each process keeps its
 // log's mutex and file open instead of opening both per line. The
 // cross-process guarantees are unchanged: every writer and reader still takes
 // the named mutex, and under it a writer reads the file's current size (other
 // processes append to and truncate the same file) and writes at that offset.
-// Changing GESHER_LOG_FILE (Main sets it in-process) reopens. The handles are
-// never closed: logging continues through static destruction.
+// Changing GESHER_LOG_FILE (Main sets it in-process) reopens, and so does the
+// file being deleted or renamed away (File::Current). The cache's lock is only
+// held to copy or replace the shared File, never across the named mutex's
+// wait, so a thread that dies while logging (at process exit, in DLL detach)
+// cannot block the others: the mutex is then abandoned, which Lock accepts.
+// The cache itself is never destroyed: logging continues through static
+// destruction.
 struct Cache {
   SRWLOCK lock = SRWLOCK_INIT;
   std::wstring variable, path;  // GESHER_LOG_FILE and its absolute path
-  File* file = nullptr;
+  std::shared_ptr<File> file;
 };
 Cache& Cached() {
   static Cache* cache = new Cache;
@@ -166,45 +193,60 @@ void Record(int buffer, int priority, const char* tag, const char* text) {
   if (tag_size) data.append(tag, tag_size);
   if (text_size) data.append(text, text_size);
   Cache& cache = Cached();
-  AcquireSRWLockExclusive(&cache.lock);
-  if (!cache.file || cache.variable != variable || !Absolute(variable)) {
-    std::wstring path;
-    if (!FullPath(variable, &path)) { ReleaseSRWLockExclusive(&cache.lock); return; }
-    if (!cache.file || cache.path != path) {
-      auto* file = new File;
-      if (!file->Open(path, nullptr)) {
-        delete file;
+  // At most two attempts: the cached file, and a fresh one if it went stale.
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    std::shared_ptr<File> file;
+    AcquireSRWLockShared(&cache.lock);
+    if (cache.file && cache.variable == variable && Absolute(variable)) file = cache.file;
+    ReleaseSRWLockShared(&cache.lock);
+    if (!file) {
+      std::wstring path;
+      if (!FullPath(variable, &path)) return;
+      AcquireSRWLockExclusive(&cache.lock);
+      if (cache.file && cache.path == path) {
+        file = cache.file;
+        cache.variable = variable;
+      }
+      ReleaseSRWLockExclusive(&cache.lock);
+      if (!file) {
+        file = std::make_shared<File>();
+        if (!file->Open(path, nullptr)) return;
+        AcquireSRWLockExclusive(&cache.lock);
+        cache.file = file;
+        cache.path = std::move(path);
+        cache.variable = variable;
         ReleaseSRWLockExclusive(&cache.lock);
-        return;
       }
-      delete cache.file;
-      cache.file = file;
-      cache.path = std::move(path);
     }
-    cache.variable = std::move(variable);
-  }
-  HANDLE handle = cache.file->file.value;
-  {
-    Lock lock(cache.file->mutex.value);
+    HANDLE handle = file->file.value;
+    Lock lock(file->mutex.value);
+    if (!lock.held) return;
+    if (!file->Current()) {
+      // Deleted or renamed away: forget it (its handles close with the last
+      // user) and write to the file now at the path.
+      AcquireSRWLockExclusive(&cache.lock);
+      if (cache.file == file) cache.file.reset();
+      ReleaseSRWLockExclusive(&cache.lock);
+      continue;
+    }
     LARGE_INTEGER size{};
-    if (lock.held && GetFileSizeEx(handle, &size)) {
-      bool fits = size.QuadPart + static_cast<int64_t>(data.size()) <= kLimit;
-      if (!fits && Truncate(handle)) size.QuadPart = 0;
-      if (fits || size.QuadPart == 0) {
-        // Stamped under the lock, so the file's records stay in time order.
-        FILETIME time;
-        GetSystemTimePreciseAsFileTime(&time);
-        header.timestamp = (static_cast<uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
-        std::memcpy(data.data(), &header, sizeof(header));
-        OVERLAPPED at{};
-        at.Offset = static_cast<DWORD>(size.QuadPart);
-        at.OffsetHigh = static_cast<DWORD>(static_cast<uint64_t>(size.QuadPart) >> 32);
-        DWORD written = 0;
-        WriteFile(handle, data.data(), static_cast<DWORD>(data.size()), &written, &at);
-      }
+    if (!GetFileSizeEx(handle, &size)) return;
+    bool fits = size.QuadPart + static_cast<int64_t>(data.size()) <= kLimit;
+    if (!fits && Truncate(handle)) size.QuadPart = 0;
+    if (fits || size.QuadPart == 0) {
+      // Stamped under the lock, so the file's records stay in time order.
+      FILETIME time;
+      GetSystemTimePreciseAsFileTime(&time);
+      header.timestamp = (static_cast<uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
+      std::memcpy(data.data(), &header, sizeof(header));
+      OVERLAPPED at{};
+      at.Offset = static_cast<DWORD>(size.QuadPart);
+      at.OffsetHigh = static_cast<DWORD>(static_cast<uint64_t>(size.QuadPart) >> 32);
+      DWORD written = 0;
+      WriteFile(handle, data.data(), static_cast<DWORD>(data.size()), &written, &at);
     }
+    return;
   }
-  ReleaseSRWLockExclusive(&cache.lock);
 }
 bool Read(std::vector<Entry>* entries, std::string* error) {
   File file;
