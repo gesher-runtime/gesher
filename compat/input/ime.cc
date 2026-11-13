@@ -14,6 +14,7 @@
 #include <unordered_set>
 
 #include "ime.h"
+#include "../hwui/window/input_modifiers.h"
 #include "thread_watch.h"
 #include "touch_keyboard.h"
 #include "text_service.h"
@@ -50,12 +51,7 @@ LRESULT CALLBACK ImeProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 
 // The thread's modifiers as TranslateMessage saw them (gesher::WindowEvent's bits).
 int32_t KeyModifiers() {
-  int32_t m = 0;
-  if (GetKeyState(VK_SHIFT) & 0x8000) m |= 1;
-  if (GetKeyState(VK_CONTROL) & 0x8000) m |= 2;
-  if (GetKeyState(VK_MENU) & 0x8000) m |= 4;
-  if (GetKeyState(VK_CAPITAL) & 1) m |= 8;
-  return m;
+  return ReadModifiers(GetKeyState);
 }
 
 std::u16string ReadString(HIMC imc, DWORD index) {
@@ -278,7 +274,7 @@ struct ImeWindow::Impl {
     const int32_t modifiers = KeyModifiers();
     const TextInputState s = State();
     if (s.active) {
-      if (s.enter_action != 0 && vk == VK_RETURN && (modifiers & 7) == 0) {
+      if (s.enter_action != 0 && vk == VK_RETURN && !HasShortcutModifier(modifiers)) {
         consumed.insert(vk);
         if ((lparam & (1 << 30)) == 0) {  // not a repeat
           TextEvent e;

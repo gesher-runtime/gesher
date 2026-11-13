@@ -692,7 +692,7 @@ for ($i = 0; $i -lt 90 -and $state; $i++) {
   Start-Sleep 1
 }
 if ($state -and -not $left -and -not (Test-Path $stateFile) -and
-    (Get-Content (Join-Path $deviceLogs 'system_server.log') -Raw).Contains('shutting down: idle: no app process for 20 s')) {
+    (Get-Content (Join-Path $deviceLogs 'system_server.log') -Raw).Contains('shutting down: idle: no app in use for 20 s')) {
   Write-Host 'PASS  services: an idle device stops by itself (GESHER_IDLE_TIMEOUT)'
 } else {
   Write-Host "FAIL  services: an idle device stops by itself (still running: $($left -join ', '))"
@@ -738,6 +738,8 @@ try {
     '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"))
   CheckTimed 'services: deviceidle real managers, all 22 methods, administrative denial' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.DeviceIdleContractTest') @('DeviceIdleContractTest all passed') 30
+  CheckTimed 'services: idle shutdown: cached processes and self-rescheduling jobs do not hold the device, activities and foreground services do' "$Dir/dalvikvm.exe" `
+    ($dvmContracts + 'gesher.services.ServiceFixtureRunner' + 'DeviceIdleShutdownTest') @('DeviceIdleShutdownTest all passed: 10') 30
   CheckTimed 'services: real ContextImpl manager construction and immediate policy rejection' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.ManagerConstructionBatchTest') @('ManagerConstructionBatchTest all passed (18 managers)') 30
   CheckTimed 'services: thermal usage shortcuts and unmanaged device policy contracts' "$Dir/dalvikvm.exe" `

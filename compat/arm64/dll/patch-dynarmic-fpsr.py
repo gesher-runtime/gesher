@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Hash-check pinned x64 compiler and scalar ARM FZ status corrections.
+"""Hash-check pinned x64 compiler and scalar ARM FZ status corrections,
+and two memory corrections (A64 fast dispatch table, code cache commit).
 
 Only source rewriting/hashing runs locally. Compilation and all native
 execution belong to CI. Preserve the original dynarmic 0BSD source/license.
@@ -138,6 +139,31 @@ EMITTER_REPLACEMENTS = [(THREE_OP, INPUT_HELPER + THREE_OP),
                         (DN_ARITHMETIC_END, DN_STATUS_END),
                         (NORMAL_ARITHMETIC_END, NORMAL_STATUS_END)]
 
+# Each A64 Jit (one per guest thread, plus one per nested guest call) holds a
+# fast dispatch table that dynarmic clears on creation, so all of it is in the
+# working set: 16 MiB per thread at the pinned size, hundreds of MB for an app
+# with many native threads. A32's size (64Ki entries, 1 MiB) keeps the lookup.
+DISPATCH = "src/dynarmic/backend/x64/a64_emit_x64.h"
+DISPATCH_SHA256 = "3ab331c1bf170deec2370d3d1b1277e88e4ccd37e6affabd755e1887d2767109"
+DISPATCH_MARKER = "Gesher memory: A64 fast dispatch table of 64Ki entries."
+DISPATCH_OLD = """    static constexpr u64 fast_dispatch_table_mask = 0xFFFFF0;
+    static constexpr size_t fast_dispatch_table_size = 0x100000;"""
+DISPATCH_NEW = """    // Gesher memory: A64 fast dispatch table of 64Ki entries. The pinned 1Mi
+    // entries (16 MiB, all cleared on creation) were resident per Jit.
+    static constexpr u64 fast_dispatch_table_mask = 0xFFFF0;
+    static constexpr size_t fast_dispatch_table_size = 0x10000;"""
+DISPATCH_REPLACEMENTS = [(DISPATCH_OLD, DISPATCH_NEW)]
+
+# Each Jit's code cache also committed 16 MiB up front; dynarmic commits more
+# (1 MiB ahead) before compiling each block anyway, so commit 4 MiB to start.
+CODE = "src/dynarmic/backend/x64/block_of_code.cpp"
+CODE_SHA256 = "978bca9c0d112b602bc99f5a5762d17350615dd6d5a9c4220054b98f679ccfd5"
+CODE_MARKER = "Gesher memory: commit the code cache as it fills."
+CODE_OLD = "constexpr size_t PRELUDE_COMMIT_SIZE = 16 * 1024 * 1024;"
+CODE_NEW = """// Gesher memory: commit the code cache as it fills.
+constexpr size_t PRELUDE_COMMIT_SIZE = 4 * 1024 * 1024;"""
+CODE_REPLACEMENTS = [(CODE_OLD, CODE_NEW)]
+
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
@@ -148,6 +174,10 @@ def transform(data, relative=RELATIVE):
         marker, original_sha, replacements = MARKER, ORIGINAL_SHA256, REPLACEMENTS
     elif relative == EMITTER:
         marker, original_sha, replacements = EMITTER_MARKER, EMITTER_SHA256, EMITTER_REPLACEMENTS
+    elif relative == DISPATCH:
+        marker, original_sha, replacements = DISPATCH_MARKER, DISPATCH_SHA256, DISPATCH_REPLACEMENTS
+    elif relative == CODE:
+        marker, original_sha, replacements = CODE_MARKER, CODE_SHA256, CODE_REPLACEMENTS
     else:
         raise ValueError("unknown pinned source")
     text = data.decode("utf-8")
@@ -187,7 +217,8 @@ def main():
         return
     if not args.source_root:
         parser.error("source_root is required")
-    for relative, original_sha in [(RELATIVE, ORIGINAL_SHA256), (EMITTER, EMITTER_SHA256)]:
+    for relative, original_sha in [(RELATIVE, ORIGINAL_SHA256), (EMITTER, EMITTER_SHA256),
+                                   (DISPATCH, DISPATCH_SHA256), (CODE, CODE_SHA256)]:
         path = Path(args.source_root) / relative
         data = path.read_bytes()
         patched = transform(data, relative)

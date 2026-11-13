@@ -2,6 +2,7 @@
 #pragma once
 
 #include <errno.h>
+#include <stdint.h>
 #include <windows.h>
 
 #include <string>
@@ -48,6 +49,15 @@ void InotifyNoteWrite(HANDLE file);
 // pthread_attr_getguardsize reports it, so ART puts its protected region
 // right above it (fault_signals.cc, docs/decisions/0036).
 size_t StackBottomReserve();
+
+// An access violation at `addr` (access: 0 read, 1 write, 8 execute, as in
+// EXCEPTION_RECORD) that only raced madvise(MADV_DONTNEED): mman.cc gives
+// private pages back and commits them again, zero-filled, and another
+// thread's access between the two faults where Linux would have read zeros.
+// Waits until no madvise of that page is in flight; true when the page now
+// allows the access, so the faulting instruction can be retried
+// (fault_signals.cc).
+bool RetryAfterMadvise(uintptr_t addr, ULONG_PTR access);
 
 // Microseconds on a monotonic clock (QueryPerformanceCounter). Timeouts keep
 // their deadline on it: GetTickCount64 moves in 15.6 ms steps, and a wait

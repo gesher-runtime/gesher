@@ -4,6 +4,8 @@
 Use --source-ref with --case drain/stopping/race/alarms for separate negative
 controls. The same Java fixture runs generated Binder/Parcel calls on Windows;
 this host path uses local service calls and the declared existing native adapter.
+The delivery case also exercises bounded alarm/broadcast ownership, with local
+listener death notifications and manual timer boundaries on both platforms.
 """
 from __future__ import annotations
 import argparse
@@ -23,7 +25,7 @@ def main() -> None:
     parser.add_argument('--app-classes', type=Path, required=True)
     parser.add_argument('--apksig-jar', type=Path, required=True)
     parser.add_argument('--source-ref', help='Compile older production classes as a negative control')
-    parser.add_argument('--case', choices=('all', 'drain', 'stopping', 'race', 'alarms'), default='all')
+    parser.add_argument('--case', choices=('all', 'drain', 'stopping', 'race', 'alarms', 'delivery'), default='all')
     args = parser.parse_args()
     cc = shutil.which('cc')
     if not cc:
@@ -39,7 +41,7 @@ def main() -> None:
                         '-I' + str(args.java_home / 'include'), '-I' + str(args.java_home / 'include/linux'),
                         str(ROOT / 'tests/scheduler/framework_host.c'), '-o', str(library)], check=True)
         sources = []
-        for name in ('JobSchedulerService', 'AlarmManagerService'):
+        for name in ('JobSchedulerService', 'AlarmManagerService', 'BroadcastController', 'DeviceWork'):
             relative = 'app/java/com/gesher/server/' + name + '.java'
             source = ROOT / relative
             if args.source_ref:

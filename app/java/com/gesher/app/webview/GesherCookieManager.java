@@ -22,10 +22,17 @@ final class GesherCookieManager extends CookieManager {
     private volatile boolean mAccept = true;
     private volatile boolean mFileScheme;
 
-    private static void post(ValueCallback<Boolean> callback, boolean value) {
-        if (callback == null) return;
-        Looper looper = Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper();
-        new Handler(looper).post(() -> callback.onReceiveValue(value));
+    private static Handler callbackHandler(ValueCallback<Boolean> callback) {
+        if (callback == null) return null;
+        Looper looper = Looper.myLooper();
+        if (looper == null) {
+            throw new IllegalStateException("Cookie callbacks require a Looper on the calling thread");
+        }
+        return new Handler(looper);
+    }
+
+    private static void post(Handler handler, ValueCallback<Boolean> callback, boolean value) {
+        if (handler != null) handler.post(() -> callback.onReceiveValue(value));
     }
 
     @Override
@@ -55,17 +62,19 @@ final class GesherCookieManager extends CookieManager {
 
     @Override
     public void setCookie(String url, String value, ValueCallback<Boolean> callback) {
+        // Capture before entering the WebView thread, including validation/failure paths.
+        Handler handler = callbackHandler(callback);
         Uri uri = url != null ? Uri.parse(url) : null;
         String host = uri != null ? uri.getHost() : null;
         List<HttpCookie> cookies;
         try {
             cookies = HttpCookie.parse("Set-Cookie: " + value);
         } catch (IllegalArgumentException e) {
-            post(callback, false);
+            post(handler, callback, false);
             return;
         }
         if (cookies.isEmpty() || host == null) {
-            post(callback, false);
+            post(handler, callback, false);
             return;
         }
         HttpCookie c = cookies.get(0);
@@ -75,8 +84,8 @@ final class GesherCookieManager extends CookieManager {
                 ? System.currentTimeMillis() / 1000.0 + c.getMaxAge() : -1;
         boolean secure = c.getSecure();
         boolean ok = WebView2Host.setCookie(url, c.getName(), c.getValue(), domain, path, expires,
-                secure, c.isHttpOnly(), (type, hr, s) -> post(callback, hr >= 0));
-        if (!ok) post(callback, false);
+                secure, c.isHttpOnly(), (type, hr, s) -> post(handler, callback, hr >= 0));
+        if (!ok) post(handler, callback, false);
     }
 
     @Override
@@ -110,8 +119,9 @@ final class GesherCookieManager extends CookieManager {
 
     @Override
     public void removeSessionCookies(ValueCallback<Boolean> callback) {
-        if (!WebView2Host.deleteCookies(2, (type, hr, s) -> post(callback, hr >= 0))) {
-            post(callback, false);
+        Handler handler = callbackHandler(callback);
+        if (!WebView2Host.deleteCookies(2, (type, hr, s) -> post(handler, callback, hr >= 0))) {
+            post(handler, callback, false);
         }
     }
 
@@ -122,8 +132,9 @@ final class GesherCookieManager extends CookieManager {
 
     @Override
     public void removeAllCookies(ValueCallback<Boolean> callback) {
-        if (!WebView2Host.deleteCookies(1, (type, hr, s) -> post(callback, hr >= 0))) {
-            post(callback, false);
+        Handler handler = callbackHandler(callback);
+        if (!WebView2Host.deleteCookies(1, (type, hr, s) -> post(handler, callback, hr >= 0))) {
+            post(handler, callback, false);
         }
     }
 
