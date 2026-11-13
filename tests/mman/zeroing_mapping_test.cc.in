@@ -94,7 +94,7 @@ int GetCurrentProcess() { return 1; }
 void PrefetchVirtualMemory(int, int, WIN32_MEMORY_RANGE_ENTRY*, int) {}
 
 enum class Kind { kAnon, kView, kHole };
-struct Region { size_t size = kPage; Kind kind = Kind::kAnon; };
+struct Region { size_t size = kPage; Kind kind = Kind::kAnon; bool shared = false; };
 struct State { std::mutex lock; std::map<uintptr_t, Region> regions; };
 State& state() { static State s; return s; }
 void InvalidateSharedAliases(State&, uintptr_t, size_t) {}
