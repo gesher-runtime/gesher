@@ -199,7 +199,7 @@ try {
         Copy-Item -LiteralPath $entry.Source -Destination $temp -Force
         $staged += $temp
         $arguments = @("-Xbootclasspath:$bcp", "-Ximage:$(AndroidPath (Join-Path $RuntimeDir 'framework/boot.art'))",
-            '-Xint', '-Xusejit:false', 'com.gesher.server.MicrogAddons',
+            '-Xusejit:false', 'com.gesher.server.MicrogAddons',
             'verify', $entry.Package, (AndroidPath $temp))
         $psi = [Diagnostics.ProcessStartInfo]::new($dalvikvm)
         $psi.Arguments = ($arguments | ForEach-Object { '"' + $_ + '"' }) -join ' '

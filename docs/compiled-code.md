@@ -59,7 +59,10 @@ TEB. This brings the three faster execution modes to Windows. The design is
   compiled code`) and, at `System.exit`, how its own methods ran (`gesher: app
   methods at exit: ... with AOT code, ... entered the interpreter or the JIT`).
 - `GESHER_APP_EXECUTION=interpret` (in the device's environment) — app
-  processes keep the device's interpreter-only options (before ADR 0054).
+  processes run the switch interpreter only (`-Xint`), without the JIT.
+- The device's own processes (the launcher, the system server, `pm`/`am`)
+  run nterp and the boot image's AOT code without the JIT (ADR 0081);
+  `GESHER_ART_INTERPRET_ONLY=1` puts them back on the switch interpreter.
 
 ## Status
 Verified in CI (`tests/windows/tracks/70-codegen.ps1`, run-tests.ps1 sets

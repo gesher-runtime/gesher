@@ -231,7 +231,7 @@ public final class AccountSecurityTest {
                 true, true, true, false, null);
         method(sync, "enqueue", adapter, Account.class, Bundle.class)
                 .invoke(syncManager, foreignAdapter, account, new Bundle());
-        require(((Map<?, ?>) field(syncManager, "mPending")).isEmpty()
+        require(((List<?>) field(syncManager, "mPending")).isEmpty()
                 && ((Map<?, ?>) field(syncManager, "mActive")).isEmpty(),
                 "An unauthorized adapter received an account sync");
         System.out.println("AccountSecurityTest: unauthorized sync adapter cannot queue or receive an account");

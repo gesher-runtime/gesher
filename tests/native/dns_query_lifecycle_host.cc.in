@@ -1,0 +1,395 @@
+// Exact production DNS methods with seeded queries and real local socketpairs.
+// No unrelated fd allocation is permitted between consuming a query and the
+// isolated F_GETFD observation. App callers instead face deliberate fd reuse.
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <future>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+#include <cstdint>
+#include <cerrno>
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+static int checks = 0, failures = 0;
+static void Check(bool condition, const std::string& label) {
+  ++checks;
+  if (!condition) {
+    ++failures;
+    std::printf("FAIL %s\n", label.c_str());
+  }
+}
+
+static void Pair(int descriptors[2]) {
+  if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, descriptors) != 0) {
+    std::perror("socketpair setup");
+    std::exit(2);
+  }
+}
+
+@QUERY_STATE@
+
+@TRANSFER@
+
+static int observed_fd = -1, close_count = 0, other_close_count = 0;
+static int ObserveClose(int fd) {
+  if (fd == observed_fd) ++close_count;
+  else ++other_close_count;
+  return ::close(fd);
+}
+
+// Observation is the only production syscall seam and delegates to real close.
+#define close ObserveClose
+@NRESULT@
+
+@CANCEL@
+#undef close
+
+struct Closed {
+  int flags;
+  int error;
+};
+
+static Closed Snapshot(int fd) {
+  errno = 0;
+  int flags = fcntl(fd, F_GETFD);
+  return {flags, errno};
+}
+
+struct Seed {
+  int reader, writer;
+  std::shared_ptr<Query> query = std::make_shared<Query>();
+  explicit Seed(bool complete = true) {
+    int pair[2];
+    Pair(pair);
+    reader = pair[0];
+    writer = pair[1];
+    query->writer = writer;
+    query->error = 0;
+    query->answer = {0x12, 0x34, 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0, 4, 3, 2, 1};
+    g_queries.emplace(reader, query);
+    if (complete) {
+      uint8_t byte = 1;
+      if (send(writer, &byte, 1, 0) != 1) std::exit(2);
+    }
+  }
+  ~Seed() {
+    // Also retire deliberate failing controls so sanitizer cleanup is meaningful.
+    g_queries.erase(reader);
+    if (reader >= 0) ::close(reader);
+    if (writer >= 0) ::close(writer);
+  }
+};
+
+static void Observe(int fd) {
+  observed_fd = fd;
+  close_count = other_close_count = 0;
+}
+
+static void Retired(Seed& seed, Closed closed, const char* label) {
+  Check(close_count == 1, std::string(label) + ": exactly one query descriptor close");
+  Check(closed.flags == -1 && closed.error == EBADF,
+        std::string(label) + ": descriptor closed before return");
+  Check(other_close_count == 0, std::string(label) + ": no unrelated descriptor close");
+  Check(g_queries.find(seed.reader) == g_queries.end(), std::string(label) + ": registration retired");
+  if (seed.writer >= 0) {
+    Check(fcntl(seed.writer, F_GETFD) >= 0, std::string(label) + ": worker writer remains owned");
+  }
+  // A failing close-omission control still owns this descriptor.
+  if (closed.flags >= 0) ::close(seed.reader);
+  seed.reader = -1;
+}
+
+static void ResultCase(const char* name, int expected, int worker_error = 0,
+                       size_t answer_size = 16, size_t capacity = 32,
+                       bool null_rcode = false, bool null_answer = false, bool eof = false,
+                       int reply_rcode = 0) {
+  Seed seed(!eof && !null_rcode && !null_answer);
+  seed.query->error = worker_error;
+  seed.query->answer.resize(answer_size, 0x5a);
+  if (answer_size >= 4) seed.query->answer[3] = static_cast<uint8_t>(0x80 | reply_rcode);
+  if (eof) {
+    ::close(seed.writer);
+    seed.writer = -1;
+  }
+  uint8_t output[32];
+  std::memset(output, 0x6d, sizeof(output));
+  int rcode = 77;
+  Observe(seed.reader);
+  int actual = gesher_res_nresult(seed.reader, null_rcode ? nullptr : &rcode,
+                                 null_answer ? nullptr : output, capacity);
+  Closed closed = Snapshot(seed.reader);  // Before assertions, printing or allocation.
+  Check(actual == expected, std::string(name) + ": result code");
+  if (expected >= 0) {
+    Check(rcode == reply_rcode, std::string(name) + ": resolver rcode");
+    Check(std::memcmp(output, seed.query->answer.data(), answer_size) == 0,
+          std::string(name) + ": exact response bytes");
+    Check(output[answer_size] == 0x6d, std::string(name) + ": output tail untouched");
+  } else {
+    Check(rcode == 77, std::string(name) + ": error leaves rcode untouched");
+    bool untouched = true;
+    for (uint8_t byte : output) untouched &= byte == 0x6d;
+    Check(untouched, std::string(name) + ": error leaves answer untouched");
+  }
+  Retired(seed, closed, "result");
+}
+
+static void ResultSuccess() { ResultCase("success", 16); }
+
+static void CancelBasic() {
+  Seed seed(false);
+  Observe(seed.reader);
+  gesher_res_cancel(seed.reader);
+  Closed closed = Snapshot(seed.reader);
+  Check(seed.query->cancelled, "cancel: marks the retained query cancelled");
+  Retired(seed, closed, "cancel");
+}
+
+static void CancelActive() {
+  Seed seed(false);
+  int active[2];
+  Pair(active);
+  seed.query->active = active[0];
+  std::promise<ssize_t> finished;
+  auto result = finished.get_future();
+  std::thread waiter([&] {
+    uint8_t byte;
+    finished.set_value(recv(active[0], &byte, 1, 0));
+  });
+  Observe(seed.reader);
+  gesher_res_cancel(seed.reader);
+  Closed closed = Snapshot(seed.reader);
+  bool ready = result.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+  Check(ready, "cancel: active receive is interrupted");
+  if (!ready) shutdown(active[1], SHUT_RDWR);  // Wake via the fixture-owned peer if cancellation fails.
+  waiter.join();
+  Check(result.get() == 0, "cancel: active endpoint reaches EOF");
+  Check(fcntl(active[0], F_GETFD) >= 0, "cancel: active descriptor remains worker-owned");
+  Check(seed.query->cancelled, "cancel: active query marked cancelled");
+  Retired(seed, closed, "cancel");
+  ::close(active[0]);
+  ::close(active[1]);
+}
+
+static void UnknownPreserved() {
+  Seed seed(false);
+  g_queries.erase(seed.reader);
+  Observe(seed.reader);
+  int rcode = 77;
+  uint8_t output[16];
+  std::memset(output, 0x6d, sizeof(output));
+  Check(gesher_res_nresult(seed.reader, &rcode, output, sizeof(output)) == -EBADF,
+        "unknown: non-query descriptor rejected");
+  gesher_res_cancel(seed.reader);
+  Check(close_count == 0 && other_close_count == 0, "unknown: non-query descriptor not closed");
+  Check(fcntl(seed.reader, F_GETFD) >= 0, "unknown: ordinary descriptor stays live");
+  Check(rcode == 77 && output[0] == 0x6d, "unknown: outputs untouched");
+  Check(!seed.query->cancelled, "unknown: unrelated query not cancelled");
+}
+
+static void ReplacementPreserved() {
+  int ordinary[2];
+  Pair(ordinary);
+  Seed seed(false);
+  const int number = seed.reader;
+  Observe(number);
+  gesher_res_cancel(number);
+  Closed closed = Snapshot(number);
+  Retired(seed, closed, "cancel");
+  if (closed.flags != -1 || closed.error != EBADF) {
+    ::close(ordinary[0]);
+    ::close(ordinary[1]);
+    return;
+  }
+  Check(dup2(ordinary[0], number) == number, "reuse: own a new ordinary descriptor at the old number");
+  int rcode = 77;
+  uint8_t output[16];
+  Observe(number);
+  Check(gesher_res_nresult(number, &rcode, output, sizeof(output)) == -EBADF,
+        "reuse: new non-query descriptor rejected");
+  gesher_res_cancel(number);
+  Check(close_count == 0, "reuse: rejected calls preserve the replacement");
+  Check(fcntl(number, F_GETFD) >= 0, "reuse: replacement remains live");
+  ::close(number);
+  ::close(ordinary[0]);
+  ::close(ordinary[1]);
+}
+
+static int reuse_source = -1;
+static bool force_poll_timeout = false;
+static void ReuseConsumedNumber(int fd) {
+  Closed closed = Snapshot(fd);  // Prove close before dup2 can hide a missing close.
+  Check(closed.flags == -1 && closed.error == EBADF, "app: production closed query before forced reuse");
+  if (closed.flags == -1 && closed.error == EBADF) {
+    Check(dup2(reuse_source, fd) == fd, "app: immediate numeric reuse succeeds");
+  }
+}
+
+static int android_res_nresult(int fd, int* rcode, uint8_t* answer, size_t capacity) {
+  int size = gesher_res_nresult(fd, rcode, answer, capacity);
+  ReuseConsumedNumber(fd);
+  return size;
+}
+
+static void android_res_cancel(int fd) {
+  gesher_res_cancel(fd);
+  ReuseConsumedNumber(fd);
+}
+
+static int AppPoll(pollfd* fds, nfds_t count, int timeout) {
+  if (force_poll_timeout) return 0;
+  return ::poll(fds, count, timeout);
+}
+
+#define poll AppPoll
+// These exact C callers use implicit zero initialization for omitted fields.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+@APP_CONSUMERS@
+
+@APP_RESULT@
+
+static int AppSmall(int* owner) {
+  int fd = *owner;
+  int ok = 1;
+@APP_SMALL@
+  goto done;
+done:
+  *owner = fd;
+  return ok;
+}
+
+static int AppCancellation(int* owner) {
+  int fd = *owner;
+  int ok = 1;
+@APP_CANCELLATION@
+  goto done;
+done:
+  *owner = fd;
+  return ok;
+}
+
+static void AppCleanup(int* owner) {
+  int fd = *owner;
+@APP_CLEANUP@
+  *owner = fd;
+}
+#undef poll
+#pragma GCC diagnostic pop
+
+struct Ordinary {
+  int pair[2];
+  Ordinary() {
+    Pair(pair);
+    reuse_source = pair[0];
+  }
+  ~Ordinary() {
+    ::close(pair[0]);
+    ::close(pair[1]);
+    reuse_source = -1;
+  }
+  void CheckReplacement(int fd) {
+    Check(fcntl(fd, F_GETFD) >= 0, "app: replacement is still owned");
+    uint8_t sent = 0x5c, received = 0;
+    Check(send(fd, &sent, 1, 0) == 1, "app: replacement can send");
+    pollfd pending{pair[1], POLLIN, 0};
+    bool ready = ::poll(&pending, 1, 1000) == 1;
+    Check(ready, "app: replacement peer is readable");
+    if (ready) Check(recv(pair[1], &received, 1, 0) == 1 && received == sent,
+                     "app: replacement data intact");
+  }
+};
+
+static void AppResultCase(const char* name, bool expected, int expected_rcode = 0,
+                          int expected_id = 0x1234, int actual_rcode = 0,
+                          bool response = true, size_t answer_size = 16) {
+  Ordinary ordinary;  // Allocate the replacement source before the DNS query.
+  Seed seed;
+  seed.query->answer.resize(answer_size);
+  if (answer_size >= 4) {
+    seed.query->answer[2] = response ? 0x81 : 1;
+    seed.query->answer[3] = static_cast<uint8_t>(actual_rcode);
+  }
+  Observe(seed.reader);
+  bool actual = result(seed.reader, expected_rcode, expected_id) != 0;
+  Check(actual == expected, std::string("app: ") + name);
+  Check(close_count == 1, "app: result consumed once");
+  Check(g_queries.find(seed.reader) == g_queries.end(), "app: result retired its registration");
+  ordinary.CheckReplacement(seed.reader);
+}
+
+static void AppCancel() {
+  Ordinary ordinary;
+  Seed seed(false);
+  int owner = seed.reader;
+  Observe(owner);
+  Check(AppCancellation(&owner) == 1, "app: cancellation accepts immediate reuse");
+  Check(owner == -1, "app: cancellation retires local ownership");
+  Check(close_count == 1 && seed.query->cancelled, "app: cancellation consumes once");
+  Check(g_queries.find(seed.reader) == g_queries.end(), "app: cancellation retires registration");
+  ordinary.CheckReplacement(seed.reader);
+}
+
+static void AppShort(bool timeout) {
+  Ordinary ordinary;
+  Seed seed(!timeout);
+  int owner = seed.reader;
+  Observe(owner);
+  force_poll_timeout = timeout;
+  int actual = AppSmall(&owner);
+  force_poll_timeout = false;
+  if (timeout) {
+    Check(actual == 0, "app: failed short-result poll is rejected");
+    Check(owner == seed.reader, "app: failed poll retains query ownership");
+    Check(close_count == 0 && g_queries.find(seed.reader) != g_queries.end(),
+          "app: failed poll has not consumed the query");
+    AppCleanup(&owner);  // Exact done-path ownership cleanup from the app fixture.
+    Check(close_count == 1 && seed.query->cancelled, "app: failed poll cancels its query");
+  } else {
+    Check(actual == 1, "app: short result keeps EMSGSIZE and unchanged rcode checks");
+    Check(owner == -1 && close_count == 1, "app: short result consumed once");
+  }
+  Check(g_queries.find(seed.reader) == g_queries.end(), "app: short-result registration retired");
+  ordinary.CheckReplacement(seed.reader);
+}
+
+int main(int argc, char** argv) {
+  const std::string selected = argc > 1 ? argv[1] : "ownership";
+  if (selected == "ownership" || selected == "result-success") ResultSuccess();
+  if (selected == "ownership") {
+    ResultCase("NXDOMAIN", 16, 0, 16, 32, false, false, false, 3);
+    ResultCase("short buffer", -EMSGSIZE, 0, 16, 1);
+    ResultCase("null rcode", -EINVAL, 0, 16, 32, true);
+    ResultCase("null answer", -EINVAL, 0, 16, 32, false, true);
+    ResultCase("backend error", -ETIMEDOUT, -ETIMEDOUT);
+    ResultCase("completion EOF", -EIO, 0, 16, 32, false, false, true);
+    ResultCase("short packet", -EBADMSG, 0, 11);
+    ResultCase("oversize packet", -EBADMSG, 0, 65536);
+    CancelActive();
+    UnknownPreserved();
+    ReplacementPreserved();
+  }
+  if (selected == "ownership" || selected == "cancel-basic") CancelBasic();
+  if (selected == "app") {
+    AppResultCase("valid result accepts immediate reuse", true);
+    AppResultCase("NXDOMAIN remains checked", true, 3, -1, 3);
+    AppResultCase("wrong request ID rejected", false, 0, 0x4321);
+    AppResultCase("wrong rcode rejected", false, 3);
+    AppResultCase("missing response bit rejected", false, 0, 0x1234, 0, false);
+    AppResultCase("short packet rejected", false, 0, 0x1234, 0, true, 11);
+    AppCancel();
+    AppShort(false);
+    AppShort(true);
+  }
+  Check(g_queries.empty(), "fixture: no registered query remains");
+  std::printf("dns query %s: %d checks, %d failures\n", selected.c_str(), checks, failures);
+  return failures ? 1 : 0;
+}

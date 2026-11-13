@@ -84,7 +84,8 @@ import java.util.Properties;
  * Every command but shutdown, status and apk-icon starts the device if it does not run: binderd,
  * servicemanager and the system server ({@code --persistent}), detached (no console
  * window: they outlive the console), with a binder device of their own; it stops when shut
- * down, or after {@code $GESHER_IDLE_TIMEOUT} seconds (default 600) with no app process.
+ * down, or after {@code $GESHER_IDLE_TIMEOUT} seconds (default 600) with no app in use (an
+ * activity or a foreground service; ActivityTaskManagerService.idleSince).
  * Launchers find it through {@link Device}'s state file, under a mutex, and clean up after
  * a device whose system server is gone.
  */
