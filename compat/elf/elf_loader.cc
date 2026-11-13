@@ -1290,8 +1290,13 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, int fd, 
   lib->name = name;
   lib->is_aarch64 = aarch64;
   lib->stub_unresolved = options.stub_unresolved_functions;
+  // An object that fails before it is registered goes away with its mapping.
+  auto discard = [](Library* l) {
+    if (l->base != nullptr) munmap(l->base, l->map_size);
+    delete l;
+  };
   if (!MapSegments(lib, data, size, fd, error)) {
-    delete lib;
+    discard(lib);
     return nullptr;
   }
   ParseDynamic(lib, data);
@@ -1301,7 +1306,7 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, int fd, 
   if (!aarch64 && options.main_executable && lib->has_interp && lib->tls.present) {
     if (lib->text_relocations || !TlsAssignModule(&lib->tls, true)) {
       Fail(error, std::string(name) + ": incompatible executable local-exec TLS layout or text relocations");
-      delete lib;
+      discard(lib);
       return nullptr;
     }
     executable_tls_size = static_cast<size_t>(-lib->tls.tp_offset);
@@ -1314,7 +1319,7 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, int fd, 
                            executable_tls_size)) {
       // A main TLS module is already registered; keep its backing object
       // alive just as later relocation failures keep registered libraries.
-      if (lib->tls.module_id == 0) delete lib;
+      if (lib->tls.module_id == 0) discard(lib);
       return nullptr;
     }
   }
