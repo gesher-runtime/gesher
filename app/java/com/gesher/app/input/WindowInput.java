@@ -50,6 +50,17 @@ public final class WindowInput implements AutoCloseable {
   public static final int MODIFIER_CTRL = 2;
   public static final int MODIFIER_ALT = 4;
   public static final int MODIFIER_CAPS_LOCK = 8;
+  public static final int MODIFIER_META = 16;
+  public static final int MODIFIER_NUM_LOCK = 32;
+  public static final int MODIFIER_SCROLL_LOCK = 64;
+  public static final int MODIFIER_SHIFT_LEFT = 1 << 8;
+  public static final int MODIFIER_SHIFT_RIGHT = 1 << 9;
+  public static final int MODIFIER_CTRL_LEFT = 1 << 10;
+  public static final int MODIFIER_CTRL_RIGHT = 1 << 11;
+  public static final int MODIFIER_ALT_LEFT = 1 << 12;
+  public static final int MODIFIER_ALT_RIGHT = 1 << 13;
+  public static final int MODIFIER_META_LEFT = 1 << 14;
+  public static final int MODIFIER_META_RIGHT = 1 << 15;
 
   /** {@link TextListener}'s kinds (compat/input/text_input.h's TextEvent). */
   public static final int TEXT_COMMIT = 1;

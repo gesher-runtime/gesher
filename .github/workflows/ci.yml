@@ -101,6 +101,16 @@ jobs:
           python3 tools/test_audio_state_contracts.py --sanitize
           python3 tools/test_surface_geometry_contracts.py --sanitize
 
+      - name: Physical keys, sensor flushes, directory walks and futex contracts
+        run: |
+          python3 tools/test_input_key_contracts.py --sanitize
+          python3 tools/test_sensor_flush_contracts.py --sanitize
+          python3 tools/test_traversal_contracts.py --sanitize
+          python3 tools/test_futex_contracts.py --sanitize
+          python3 tools/test_futex_contracts.py --linux-reference
+          CXX='c++ -fsanitize=thread -fno-omit-frame-pointer' \
+            python3 tools/test_futex_contracts.py --group guest --group concurrency
+
       - name: Temporary directory and UNC namespace contracts
         run: |
           python3 tools/test_temp_directory.py
@@ -125,6 +135,9 @@ jobs:
 
       - name: Audio JNI buffer contracts with checked JNI and UBSan
         run: python3 tools/test_audio_buffer_contracts.py
+
+      - name: Settings context bootstrap and deferred construction contracts
+        run: python3 tools/test_settings_context_bootstrap.py --java-home "$JAVA_HOME"
 
       - name: APK native library filename contracts
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
@@ -289,6 +302,7 @@ jobs:
           mkdir -p dist
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
           cp out/gesher_shellext.dll dist/
+          cp out/futex_test_module.dll dist/
           cp out/libgesher_account_crypto.so dist/
           cp out/libgesher_install_pipe.so dist/
           cp out/libgesher_webview_bridge.so dist/
