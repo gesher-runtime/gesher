@@ -196,7 +196,7 @@ public final class ProviderSecurityTest {
         for (ProviderInfo info : declarations) {
             if (!info.exported && info.grantUriPermissions) { privateProvider = info; break; }
         }
-        require(privateProvider != null, "Official GmsCore lacks a private URI-grant provider fixture");
+        require(privateProvider != null, "Owner APK lacks a private URI-grant provider fixture");
         final ProviderInfo provider = privateProvider;
         final String authority = provider.authority.split(";")[0];
         Class<?> pmType = Class.forName("com.gesher.server.PackageManagerService");
