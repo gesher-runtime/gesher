@@ -68,6 +68,64 @@ public final class HostLaunchReceiptTest {
         final Binder binder=new Binder();@Override public IBinder asBinder(){return binder;}
     }
     @SuppressWarnings({"unchecked","rawtypes"})
+    private static void launchReadiness(Object tasks, Class<?> atm, Class<?> recordType,
+            ActivityInfo info) throws Exception {
+        Class<?>[] signature = {atm, ActivityInfo.class, Intent.class, int.class,
+                int.class, String.class, recordType, String.class, int.class};
+        Intent intent = new Intent().setComponent(new ComponentName(info.packageName, info.name));
+        Object older = make(recordType, signature, tasks, info, new Intent(intent),
+                700, Binder.getCallingPid(), "com.gesher.launcher", null, null, -1);
+        Object pending = make(recordType, signature, tasks, info, new Intent(intent),
+                700, Binder.getCallingPid(), "com.gesher.launcher", null, null, -1);
+        Object newer = make(recordType, signature, tasks, info, new Intent(intent),
+                700, Binder.getCallingPid(), "com.gesher.launcher", null, null, -1);
+        Object foreign = make(recordType, signature, tasks, info, new Intent(intent),
+                701, Binder.getCallingPid(), "com.gesher.launcher", null, null, -1);
+        Class<?> state = Class.forName(atm.getName()+"$State");
+        for (Object record : new Object[]{older,pending,newer,foreign}) {
+            // Real activities can share a coarse Windows clock tick.
+            set(record,"startTime",100L);
+            set(record,"state",Enum.valueOf((Class)state,"RESUMED"));
+        }
+        set(older,"idle",true);set(foreign,"idle",true);
+        List<Object> records=(List<Object>)get(tasks,"mActivities");
+        Method above=method(atm,"idleAbove",recordType);
+        Method waitForStart=method(atm,"waitForStarted",int.class,recordType);
+        synchronized(tasks) {
+            records.addAll(Arrays.asList(older,pending,newer,foreign));
+            try {
+                require(above.invoke(tasks,pending)==null,
+                        "Older same-tick or foreign-task idle activity completed a new launch");
+                set(newer,"idle",true);
+                require(above.invoke(tasks,pending)==newer,
+                        "A later idle activity in the same task did not complete its trampoline");
+                set(newer,"state",Enum.valueOf((Class)state,"DESTROYED"));
+                require(above.invoke(tasks,pending)==null,"Destroyed successor completed a launch");
+                records.remove(pending);
+                set(pending,"state",Enum.valueOf((Class)state,"DESTROYED"));
+                set(pending,"launchFailed",true);
+                set(newer,"state",Enum.valueOf((Class)state,"RESUMED"));
+                require(above.invoke(tasks,pending)==newer,
+                        "Removing the original record lost the later task activity's order");
+                WaitResult ready=(WaitResult)waitForStart.invoke(tasks,ActivityManager.START_SUCCESS,pending);
+                require(ready.result==ActivityManager.START_SUCCESS && !ready.timeout,
+                        "An already-idle successor was replaced by the original process failure");
+                set(newer,"state",Enum.valueOf((Class)state,"DESTROYED"));
+                WaitResult failed=(WaitResult)waitForStart.invoke(tasks,ActivityManager.START_SUCCESS,pending);
+                require(failed.result==ActivityManager.START_CANCELED && !failed.timeout,
+                        "Failed pre-idle launch was reported as a successful start");
+                set(pending,"launchFailed",false);set(pending,"finishing",true);
+                WaitResult finished=(WaitResult)waitForStart.invoke(tasks,ActivityManager.START_SUCCESS,pending);
+                require(finished.result==ActivityManager.START_SUCCESS && !finished.timeout,
+                        "Deliberate finish-onCreate changed the existing start result");
+                set(pending,"launchFailed",true);set(pending,"idle",true);
+                WaitResult wasReady=(WaitResult)waitForStart.invoke(tasks,ActivityManager.START_SUCCESS,pending);
+                require(wasReady.result==ActivityManager.START_SUCCESS,
+                        "A completed activity's earlier idle report was discarded");
+            } finally { records.removeAll(Arrays.asList(older,pending,newer,foreign)); }
+        }
+    }
+    @SuppressWarnings({"unchecked","rawtypes"})
     public static void main(String[] args)throws Exception {
         require(args.length==1,"Pass the synthetic webviewlifecycle APK");
         System.loadLibrary("android_runtime");generations();
@@ -114,10 +172,14 @@ public final class HostLaunchReceiptTest {
         int[] unavailable=receipt(failed.exitReceipt);
         require(failed.taskId==taskId.get() && failed.result.who.equals(intent.getComponent()),"Task/component receipt was guessed");
         require(unavailable[0]==3 && unavailable[1]==0,"Failed pre-attach creation invented an exit code");
+        require(failed.result.result==ActivityManager.START_CANCELED && !failed.result.timeout,
+                "Failed native creation was reported as a successful detached start");
         GesherService.LaunchResult fast=(GesherService.LaunchResult)launch.invoke(tasks,intent);
         int[] exit=receipt(fast.exitReceipt);
         require(exit[0]==2 && exit[1]==1 && exit[2]==23,"Fast requested exit was replaced by a newer success");
         require(fast.taskId==taskId.get(),"Receipt selected a sibling task");
+        require(fast.result.result==ActivityManager.START_CANCELED,
+                "Fast pre-attach failure was reported as a successful detached start");
         GesherService.LaunchResult missing=(GesherService.LaunchResult)launch.invoke(tasks,
                 new Intent().setComponent(new ComponentName(pkg,pkg+".MissingActivity")));
         require(missing.taskId==-1 && receipt(missing.exitReceipt)[0]==3 && starts.get()==2,"Unresolved launch invented authority");
@@ -143,6 +205,7 @@ public final class HostLaunchReceiptTest {
                 new Intent(intent).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),null,null,null,0,0,null,options.toBundle(),0);
         require(reused.result==ActivityManager.START_DELIVERED_TO_TOP && reused.who.equals(intent.getComponent())
                 && get(record,"launchGeneration")==captured.get() && starts.get()==3,"Reused activity lost its actual record/generation");
-        System.out.println("HostLaunchReceiptTest all passed: "+checks+" generation, exact route, fast exit and reuse checks");
+        launchReadiness(tasks,atm,recordType,info);
+        System.out.println("HostLaunchReceiptTest all passed: "+checks+" generation, exact route, fast exit, reuse and launch readiness checks");
     }
 }

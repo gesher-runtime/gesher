@@ -117,7 +117,10 @@ if (-not (Test-Path "$Dir/gesher-launch.exe")) {
   Set-Content -LiteralPath (Join-Path $splashShell 'shortcut.properties') -Encoding ascii -Value @(
     '#Gesher device', 'package=com.gesher.splashprobe', 'label=Splash Probe \u00e9', 'app_user_model_id=Gesher.App.com.gesher.splashprobe')
   $splashIco = Join-Path $shellOut 'lifecycle.ico'  # drawn above
-  if (Test-Path $splashIco) { Copy-Item $splashIco (Join-Path $splashShell 'icon.ico') -Force }
+  if (Test-Path $splashIco) {
+    Copy-Item $splashIco (Join-Path $splashShell 'icon.ico') -Force
+    Copy-Item $splashIco (Join-Path $splashDir 'gesher.ico') -Force
+  }
   $probeApk = Join-Path $splashDir 'probe.apk'
   Set-Content -LiteralPath $probeApk -Value 'not an APK: the stand-in never reads it'
   $apkItem = Get-Item -LiteralPath $probeApk
@@ -253,10 +256,127 @@ if ($splash -ne [IntPtr]::Zero) {
     if (-not [SplashProbe]::PostMessageW($splash, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) { exit 23 }
     Start-Sleep -Milliseconds 1000
     $code = 5
+  } elseif ($mode -in 'late', 'late-cancel') {
+    # A detached launcher: it ends (exit 0) once the activity has started, before
+    # the app's window is up; splash-child.ps1 shows that window later.
+    if ($env:SPLASH_PROBE_APK) {
+      # First installation learns the real package even when it uses the generic icon.
+      $installedApk = Get-Item -LiteralPath $env:SPLASH_PROBE_APK
+      $installedMillis = [DateTimeOffset]::new($installedApk.LastWriteTimeUtc).ToUnixTimeMilliseconds()
+      $record = "$($installedApk.Length)`t$installedMillis`t$(Join-Path $PSScriptRoot 'gesher.ico')`tcom.gesher.splashprobe"
+      [IO.File]::WriteAllText((Join-Path $env:LOCALAPPDATA 'Gesher\data\system\apk-icons.list'),
+        $record + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+      $lines += 'installed-package=com.gesher.splashprobe'
+    }
+    Set-Content -LiteralPath (Join-Path $PSScriptRoot "splash-$mode.txt") -Encoding ascii -Value $lines
+    Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+      (Join-Path $PSScriptRoot 'splash-child.ps1'), $mode, $splash.ToInt64()
+    exit 0
   }
 }
 Set-Content -LiteralPath (Join-Path $PSScriptRoot "splash-$mode.txt") -Encoding ascii -Value $lines
 exit $code
+'@
+  # The app's window after a detached launcher ended: 'late' shows it 3 s later and
+  # sees the splash, still up, go; 'late-cancel' closes the splash first, then shows
+  # a window of the app, another 2 s later, and one of class GesherSplash with the
+  # app's AppUserModelID (another launch's splash): gesher-launch closes the app's
+  # windows as they come and leaves the other splash alone.
+  Set-Content -LiteralPath (Join-Path $splashDir 'splash-child.ps1') -Encoding utf8 -Value @'
+param([string] $mode, [long] $splashHandle)
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class SplashChild {
+  [StructLayout(LayoutKind.Sequential, Pack = 4)] struct PropertyKey { public Guid FormatId; public uint PropertyId; }
+  [StructLayout(LayoutKind.Sequential)] struct PropVariant { public ushort vt; public ushort r1, r2, r3; public IntPtr p; public IntPtr p2; }
+  [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IPropertyStore {
+    [PreserveSig] int GetCount(out uint count);
+    [PreserveSig] int GetAt(uint index, out PropertyKey key);
+    [PreserveSig] int GetValue(ref PropertyKey key, out PropVariant value);
+    [PreserveSig] int SetValue(ref PropertyKey key, ref PropVariant value);
+    [PreserveSig] int Commit();
+  }
+  [DllImport("shell32.dll")] static extern int SHGetPropertyStoreForWindow(IntPtr hwnd, ref Guid iid,
+      [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
+  [DllImport("ole32.dll")] static extern int PropVariantClear(ref PropVariant value);
+  [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int cmd);
+  delegate IntPtr WndProc(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct WndClass {
+    public uint style; public WndProc proc; public int c1, c2; public IntPtr inst, icon, cursor, bg; public string menu, cls; }
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern ushort RegisterClassW(ref WndClass wc);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateWindowExW(int ex, string cls, string title,
+      uint style, int x, int y, int w, int h, IntPtr parent, IntPtr menu, IntPtr inst, IntPtr param);
+  [DllImport("user32.dll")] static extern IntPtr DefWindowProcW(IntPtr h, uint m, IntPtr w, IntPtr l);
+  static WndProc def = DefWindowProcW;
+  public static int SetAppUserModelId(IntPtr hwnd, string id) {
+    Guid iid = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
+    IPropertyStore store;
+    int hr = SHGetPropertyStoreForWindow(hwnd, ref iid, out store);
+    if (hr != 0) return hr;
+    try {
+      var key = new PropertyKey { FormatId = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), PropertyId = 5 };
+      var value = new PropVariant { vt = 31, p = Marshal.StringToCoTaskMemUni(id) };
+      hr = store.SetValue(ref key, ref value);
+      if (hr == 0) hr = store.Commit();
+      PropVariantClear(ref value);
+      return hr;
+    } finally {
+      Marshal.ReleaseComObject(store);
+    }
+  }
+  // A visible window of class GesherSplash, as another launch's splash.
+  public static IntPtr OtherSplash() {
+    var wc = new WndClass { proc = def, cls = "GesherSplash" };
+    RegisterClassW(ref wc);
+    return CreateWindowExW(0, "GesherSplash", "another launch", 0x10CF0000, 0, 0, 200, 200, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+  }
+}
+"@
+$id = 'Gesher.App.com.gesher.splashprobe'
+$splash = [IntPtr]$splashHandle
+$lines = @()
+function Show-App {
+  $form = New-Object System.Windows.Forms.Form
+  $form.Text = 'Splash probe app'
+  $null = $form.Handle
+  $script:lines += "set-aumid=$([SplashChild]::SetAppUserModelId($form.Handle, $id))"
+  $form.Show()
+  [void][SplashChild]::ShowWindow($form.Handle, 5)  # started with SW_HIDE
+  return $form
+}
+$other = [IntPtr]::Zero
+if ($mode -eq 'late-cancel') {
+  Start-Sleep -Milliseconds 800
+  $lines += "splash-after-exit=$([SplashChild]::IsWindow($splash))"
+  [void][SplashChild]::PostMessageW($splash, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+  Start-Sleep -Milliseconds 1500
+  $other = [SplashChild]::OtherSplash()
+  [void][SplashChild]::SetAppUserModelId($other, $id)
+} else {
+  Start-Sleep 3
+  $lines += "splash-after-exit=$([SplashChild]::IsWindow($splash))"
+}
+$forms = @(Show-App)
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$gone = $false
+while ($sw.Elapsed.TotalSeconds -lt 12) {
+  [System.Windows.Forms.Application]::DoEvents()
+  if (-not $gone -and $sw.Elapsed.TotalSeconds -lt 5) { $gone = -not [SplashChild]::IsWindow($splash) }
+  if ($mode -eq 'late' -and $gone) { break }
+  if ($mode -eq 'late-cancel' -and $forms.Count -eq 1 -and $sw.Elapsed.TotalSeconds -ge 2) { $forms += Show-App }
+  Start-Sleep -Milliseconds 50
+}
+if ($mode -eq 'late') { $lines += "gone=$gone" }
+$closed = @($forms | Where-Object { $_.IsDisposed -or -not $_.Visible }).Count
+$lines += "app-closed=$closed/$($forms.Count)"
+if ($other -ne [IntPtr]::Zero) { $lines += "other-splash-kept=$([SplashChild]::IsWindow($other))" }
+foreach ($form in $forms) { if (-not $form.IsDisposed) { $form.Close() } }
+Add-Content -LiteralPath (Join-Path $PSScriptRoot "splash-$mode.txt") -Encoding ascii -Value ($lines + 'child-done=True')
 '@
   if (-not ('SplashLifetimeProbe' -as [type])) {
     Add-Type -TypeDefinition @'
@@ -272,7 +392,11 @@ public static class SplashLifetimeProbe {
     @{ Mode = 'app'; Args = "`"$probeApk`""; Code = 0 },
     @{ Mode = 'close'; Args = 'launch com.gesher.splashprobe'; Code = 1 },
     @{ Mode = 'none'; Args = "install `"$probeApk`""; Code = 0 },
-    @{ Mode = 'none'; Args = 'launch com.gesher.splashprobe --headless'; Code = 0 }
+    @{ Mode = 'none'; Args = 'launch com.gesher.splashprobe --headless'; Code = 0 },
+    @{ Mode = 'late'; Args = 'launch com.gesher.splashprobe'; Code = 0; Detach = $true },
+    @{ Mode = 'late'; Args = 'launch com.gesher.splashprobe --ez --wait true'; Code = 0; Detach = $true },
+    @{ Mode = 'late-cancel'; Args = 'launch com.gesher.splashprobe'; Code = 1; Detach = $true },
+    @{ Mode = 'late-cancel'; Args = "`"$probeApk`""; Code = 1; Detach = $true; InitialUnknown = $true }
   )
   foreach ($case in $cases) {
     $probeOut = Join-Path $splashDir "splash-$($case.Mode).txt"
@@ -282,11 +406,22 @@ public static class SplashLifetimeProbe {
     $psi.WorkingDirectory = $splashDir
     $psi.EnvironmentVariables['LOCALAPPDATA'] = $splashData
     $psi.EnvironmentVariables['SPLASH_PROBE_MODE'] = $case.Mode
-    foreach ($v in 'GESHER_APP_WINDOW', 'GESHER_SPLASH', 'GESHER_DISPLAY') { $psi.EnvironmentVariables.Remove($v) }
+    foreach ($v in 'GESHER_APP_WINDOW', 'GESHER_SPLASH', 'GESHER_DISPLAY', 'GESHER_LAUNCH_DETACH', 'SPLASH_PROBE_APK') { $psi.EnvironmentVariables.Remove($v) }
+    if ($case.InitialUnknown) {
+      Remove-Item (Join-Path $splashData 'Gesher\data\system\apk-icons.list') -ErrorAction SilentlyContinue
+      $psi.EnvironmentVariables['SPLASH_PROBE_APK'] = $probeApk
+    }
+    # A detached launch (as with no output handles: the Start menu's).
+    if ($case.Detach) { $psi.EnvironmentVariables['GESHER_LAUNCH_DETACH'] = '1' }
     $p = [Diagnostics.Process]::Start($psi)
     $what = "gesher-launch $($case.Args) ($($case.Mode))"
     if (-not $p.WaitForExit(120000)) { $p.Kill($true); $problems += "$($what): did not exit within 120 s"; continue }
     if ($p.ExitCode -ne $case.Code) { $problems += "$($what): exit $($p.ExitCode), not $($case.Code)" }
+    # The child that shows the app's window reports last.
+    for ($i = 0; $case.Detach -and $i -lt 300; $i++) {
+      if ((Test-Path $probeOut) -and (Get-Content -LiteralPath $probeOut) -contains 'child-done=True') { break }
+      Start-Sleep -Milliseconds 100
+    }
     $probe = if (Test-Path $probeOut) { @(Get-Content -LiteralPath $probeOut) } else { @() }
     if ($case.Mode -eq 'close') {
       # The cancelled child cannot report its own retirement; observe it here.
@@ -308,8 +443,11 @@ public static class SplashLifetimeProbe {
     $want = switch ($case.Mode) {
       'app' { 'splash=True', 'title-ok=True', 'visible=True', 'aumid=Gesher.App.com.gesher.splashprobe', 'early=True', 'set-aumid=0', 'gone=True' }
       'close' { 'splash=True', 'gone=True', 'worker-retired=True' }
+      'late' { 'splash=True', 'splash-after-exit=True', 'set-aumid=0', 'gone=True', 'app-closed=0/1', 'child-done=True' }
+      'late-cancel' { 'splash=True', 'splash-after-exit=True', 'app-closed=2/2', 'other-splash-kept=True', 'child-done=True' }
       'none' { 'splash=False' }
     }
+    if ($case.InitialUnknown) { $want += 'installed-package=com.gesher.splashprobe' }
     if ($case.Mode -ne 'none' -and (Test-Path (Join-Path $splashShell 'icon.ico'))) { $want += 'icon=True' }
     foreach ($w in $want) { if ($probe -notcontains $w) { $problems += "$($what): no '$w' ($($probe -join '; '))" } }
   }

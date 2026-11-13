@@ -1,0 +1,137 @@
+diff --git a/libartbase/base/mem_map.cc b/libartbase/base/mem_map.cc
+index 58ab4ad..fabc70b 100644
+--- a/libartbase/base/mem_map.cc
++++ b/libartbase/base/mem_map.cc
+@@ -1305,7 +1305,7 @@ void ZeroMemory(void* address, size_t length, bool release_eagerly) {
+   DCHECK_LE(mem_begin, page_begin);
+   DCHECK_LE(page_begin, page_end);
+   DCHECK_LE(page_end, mem_end);
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)  // Gesher: gesher-base's madvise zeroes
+   UNUSED(release_eagerly);
+   LOG(WARNING) << "ZeroMemory does not madvise on Windows.";
+   RawClearMemory(mem_begin, mem_end);
+@@ -1345,7 +1345,8 @@ void ZeroMemory(void* address, size_t length, bool release_eagerly) {
+ #else
+   UNUSED(release_eagerly);
+ #endif  // __linux__
+-  bool res = madvise(page_begin, page_end - page_begin, MADV_DONTNEED);
++  // Gesher: int, so that the check can fire (it zeroes through madvise).
++  int res = madvise(page_begin, page_end - page_begin, MADV_DONTNEED);
+   CHECK_NE(res, -1) << "madvise failed";
+ #endif  // _WIN32
+ }
+diff --git a/libartbase/base/mem_map.h b/libartbase/base/mem_map.h
+index b726e98..89d4cd9 100644
+--- a/libartbase/base/mem_map.h
++++ b/libartbase/base/mem_map.h
+@@ -47,7 +47,15 @@ namespace art {
+ static constexpr bool kMadviseZeroes = true;
+ #define HAVE_MREMAP_SYSCALL true
+ #else
++#if defined(GESHER)
++// Gesher: gesher-base's madvise(MADV_DONTNEED) gives private anonymous pages
++// back and they read as zeros, as on Linux. Without it every release of GC
++// memory (bitmaps, card table, freed large objects, ...) was a memset that
++// kept all of those pages in the working set.
++static constexpr bool kMadviseZeroes = true;
++#else
+ static constexpr bool kMadviseZeroes = false;
++#endif
+ // We cannot ever perform MemMap::ReplaceWith on non-linux hosts since the syscall is not
+ // present.
+ #define HAVE_MREMAP_SYSCALL false
+diff --git a/runtime/base/gc_visited_arena_pool.h b/runtime/base/gc_visited_arena_pool.h
+index 35f42f0..5c2e0de 100644
+--- a/runtime/base/gc_visited_arena_pool.h
++++ b/runtime/base/gc_visited_arena_pool.h
+@@ -129,7 +129,14 @@ class TrackedArena final : public Arena {
+ // range to avoid multiple calls to mremapped/mprotected syscalls.
+ class GcVisitedArenaPool final : public ArenaPool {
+  public:
+-#if (defined(__LP64__) || defined(_WIN64))
++#if defined(_WIN64)
++  // Gesher: Windows commits a read-write mapping up front and has no mremap
++  // page-table move to optimize for, so a 1GB map was a gigabyte of commit
++  // charge per process for a few MB of ArtMethods. Use the 32-bit size; more
++  // maps are added as needed.
++  static constexpr size_t kLinearAllocPoolSize = 32 * MB;
++  static constexpr size_t kLow4GBLinearAllocPoolSize = 32 * MB;
++#elif defined(__LP64__)
+   // Use a size in multiples of 1GB as that can utilize the optimized mremap
+   // page-table move.
+   static constexpr size_t kLinearAllocPoolSize = 1 * GB;
+diff --git a/runtime/gc/collector/mark_compact.cc b/runtime/gc/collector/mark_compact.cc
+index c93b4ea..3ad357e 100644
+--- a/runtime/gc/collector/mark_compact.cc
++++ b/runtime/gc/collector/mark_compact.cc
+@@ -4235,6 +4235,9 @@ void MarkCompact::CompactionPause() {
+     // involves fetching object size.
+     // TODO: We can reduce the time spent on this in a pause by performing one
+     // round of this concurrently prior to the pause.
++#if defined(_WIN32)
++    pre_compact_end_ = bump_pointer_space_->End();
++#endif
+     UpdateMovingSpaceBlackAllocations();
+     // Iterate over the allocation_stack_, for every object in the non-moving
+     // space:
+@@ -4376,6 +4379,17 @@ void MarkCompact::CompactionPause() {
+   // fallback mode
+   if (uffd_ == kFallbackMode) {
+     CompactMovingSpace<kFallbackMode>(nullptr);
++#if defined(_WIN32)
++    // Gesher: CompactionPhase, which releases the from-space after compacting
++    // (nothing reads it afterwards), runs only with userfaultfd. Give its
++    // pages back here: a fresh PROT_NONE mapping is reserved address space
++    // only, as it was before the first GC, and the next KernelPreparation
++    // maps it again.
++    void* from_space = mmap(from_space_begin_, from_space_map_.Size(), PROT_NONE,
++                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
++    CHECK_EQ(from_space, static_cast<void*>(from_space_begin_))
++        << "releasing the from-space failed: " << strerror(errno);
++#endif
+ 
+     int32_t freed_bytes = black_objs_slide_diff_;
+     bump_pointer_space_->RecordFree(freed_objects_, freed_bytes);
+@@ -4431,6 +4445,25 @@ void MarkCompact::KernelPreparation() {
+     RegisterUffd(moving_space_begin, moving_space_size);
+   }
+ 
++#if defined(_WIN32)
++  if (uffd_ == kFallbackMode) {
++    // Gesher: Windows cannot move pages, so mremap copies them, and copying
++    // the whole capacity touched every page of both spaces (hundreds of MB of
++    // working set) on each GC. Objects lie below the pre-compact end only
++    // (End() is already the post-compact end here): move those, and zero the
++    // rest of the moving space as the move would have.
++    DCHECK(pre_compact_end_ != nullptr);
++    size_t used = RoundUp(static_cast<size_t>(pre_compact_end_ - moving_space_begin), gPageSize);
++    used = std::min(used, moving_space_size);
++    if (used > 0) {
++      KernelPrepareRangeForUffd(moving_space_begin, from_space_begin_, used);
++    }
++    if (used < moving_space_size) {
++      ZeroAndReleaseMemory(moving_space_begin + used, moving_space_size - used);
++    }
++    return;
++  }
++#endif
+   KernelPrepareRangeForUffd(moving_space_begin, from_space_begin_, moving_space_size);
+ 
+   if (IsValidFd(uffd_)) {
+diff --git a/runtime/gc/collector/mark_compact.h b/runtime/gc/collector/mark_compact.h
+index 7c89fc5..1cbb5af 100644
+--- a/runtime/gc/collector/mark_compact.h
++++ b/runtime/gc/collector/mark_compact.h
+@@ -1056,6 +1056,11 @@ class MarkCompact final : public GarbageCollector {
+   void* prev_black_dense_end_;
+   void* prev_black_allocations_begin_;
+   void* prev_moving_space_end_at_compaction_;
++#if defined(_WIN32)
++  // Gesher: the moving space's end before UpdateMovingSpaceBlackAllocations()
++  // sets it to the post-compact end: compaction reads from-space up to here.
++  uint8_t* pre_compact_end_ = nullptr;
++#endif
+   bool prev_gc_young_;
+   bool prev_gc_performed_compaction_;
+   // Timestamp when the read-barrier is enabled

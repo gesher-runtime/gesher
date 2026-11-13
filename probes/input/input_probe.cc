@@ -179,6 +179,47 @@ void TestTranslation() {
         "Delete, Backspace)");
 }
 
+void TestKeyContracts() {
+  check(MetaState(gesher::kModifierCtrlRight) == (AMETA_CTRL_ON | AMETA_CTRL_RIGHT_ON) &&
+        MetaState(gesher::kModifierShiftRight) == (AMETA_SHIFT_ON | AMETA_SHIFT_RIGHT_ON) &&
+        MetaState(gesher::kModifierMetaRight) == (AMETA_META_ON | AMETA_META_RIGHT_ON),
+        "translate: right-side modifiers remain right-side Android meta bits");
+  check(MetaState(gesher::kModifierCapsLock | gesher::kModifierNumLock |
+                  gesher::kModifierScrollLock) ==
+          (AMETA_CAPS_LOCK_ON | AMETA_NUM_LOCK_ON | AMETA_SCROLL_LOCK_ON),
+        "translate: all lock modifiers reach Android");
+  Translator t(TranslateOptions{});
+  std::vector<AndroidEvent> out;
+  auto key = [&](int vk, int scan, bool down, bool repeat, int64_t time) {
+    WindowEvent e;
+    e.type = down ? WindowEvent::kKeyDown : WindowEvent::kKeyUp;
+    e.key = vk; e.scan = scan; e.repeat = repeat;
+    t.Translate(e, time, &out);
+    return out.back();
+  };
+  key('A', 30, true, false, 100);
+  key('B', 48, true, false, 200);
+  auto aRepeat = key('A', 30, true, true, 300);
+  auto bUp = key('B', 48, false, false, 400);
+  auto aUp = key('A', 30, false, false, 500);
+  check(aRepeat.down_time == 100 && aRepeat.repeat_count == 1 &&
+        bUp.down_time == 200 && aUp.down_time == 100,
+        "translate: chord keys retain independent repeat and down times");
+  key('A', 30, true, false, 600);
+  auto remap = key('Q', 30, true, true, 700);
+  auto release = key('Q', 30, false, false, 800);
+  check(remap.key_code == AKEYCODE_A && release.key_code == AKEYCODE_A &&
+        release.down_time == 600, "translate: physical release retains original key mapping");
+  key('A', 30, true, false, 900);
+  WindowEvent focus;
+  focus.type = WindowEvent::kFocus;
+  focus.button = 0;
+  t.Translate(focus, 950, &out);
+  auto fresh = key('A', 30, true, true, 1000);
+  check(fresh.down_time == 1000 && fresh.repeat_count == 0,
+        "translate: focus loss clears key history");
+}
+
 void TestKeyMap() {
   std::unique_ptr<android::KeyCharacterMap> map = LoadGenericKeyCharacterMap();
   check(map != nullptr && map->getKeyboardType() == android::KeyCharacterMap::KeyboardType::FULL &&
@@ -434,6 +475,7 @@ void TestChannel() {
 
 int main() {
   TestTranslation();
+  TestKeyContracts();
   TestKeyMap();
   TestChannel();
   if (failures == 0) std::printf("all passed\n");
