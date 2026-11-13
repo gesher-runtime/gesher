@@ -348,6 +348,15 @@ class Sampler {
                 subs_.end());
   }
 
+  int Flush(Sink* sink) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<int> handles;
+    for (const Subscription& s : subs_) {
+      if (s.sink == sink) handles.push_back(s.handle);
+    }
+    return sink->OnFlush(handles);
+  }
+
  private:
   static const Sensor* Find(int handle) {
     for (const Sensor& s : List()) {
@@ -405,6 +414,8 @@ int Enable(Sink* sink, int handle, int periodUs) {
 }
 
 int Disable(Sink* sink, int handle) { return Sampler::Get().Disable(sink, handle); }
+
+int Flush(Sink* sink) { return Sampler::Get().Flush(sink); }
 
 void DisableAll(Sink* sink) { Sampler::Get().DisableAll(sink); }
 

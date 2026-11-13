@@ -154,11 +154,27 @@ int32_t LinuxScanCode(int32_t scan) {
 }
 
 int32_t MetaState(int32_t modifiers) {
+  const int32_t m = NormalizeModifiers(modifiers);
   int32_t meta = 0;
-  if (modifiers & 1) meta |= AMETA_SHIFT_ON | AMETA_SHIFT_LEFT_ON;
-  if (modifiers & 2) meta |= AMETA_CTRL_ON | AMETA_CTRL_LEFT_ON;
-  if (modifiers & 4) meta |= AMETA_ALT_ON | AMETA_ALT_LEFT_ON;
-  if (modifiers & 8) meta |= AMETA_CAPS_LOCK_ON;
+  auto sides = [&](int generic, int left, int right, int aGeneric, int aLeft, int aRight) {
+    if (m & generic) {
+      meta |= aGeneric;
+      if (m & left) meta |= aLeft;
+      if (m & right) meta |= aRight;
+      if (!(m & (left | right))) meta |= aLeft;  // legacy generic-only injection
+    }
+  };
+  sides(kModifierShift, kModifierShiftLeft, kModifierShiftRight,
+        AMETA_SHIFT_ON, AMETA_SHIFT_LEFT_ON, AMETA_SHIFT_RIGHT_ON);
+  sides(kModifierCtrl, kModifierCtrlLeft, kModifierCtrlRight,
+        AMETA_CTRL_ON, AMETA_CTRL_LEFT_ON, AMETA_CTRL_RIGHT_ON);
+  sides(kModifierAlt, kModifierAltLeft, kModifierAltRight,
+        AMETA_ALT_ON, AMETA_ALT_LEFT_ON, AMETA_ALT_RIGHT_ON);
+  sides(kModifierMeta, kModifierMetaLeft, kModifierMetaRight,
+        AMETA_META_ON, AMETA_META_LEFT_ON, AMETA_META_RIGHT_ON);
+  if (m & kModifierCapsLock) meta |= AMETA_CAPS_LOCK_ON;
+  if (m & kModifierNumLock) meta |= AMETA_NUM_LOCK_ON;
+  if (m & kModifierScrollLock) meta |= AMETA_SCROLL_LOCK_ON;
   return meta;
 }
 
@@ -215,6 +231,7 @@ void Translator::Translate(const WindowEvent& event, int64_t now_ns,
       AndroidEvent e;
       e.kind = AndroidEvent::kFocus;
       e.has_focus = event.button != 0;
+      if (!e.has_focus) key_history_.Reset();
       e.event_time = now_ns;
       out->push_back(e);
       break;
@@ -364,25 +381,13 @@ void Translator::Key(const WindowEvent& event, int64_t t, std::vector<AndroidEve
   e.scan_code = LinuxScanCode(event.scan);
   e.meta_state = MetaState(event.modifiers);
   e.event_time = t;
-  if (event.type == WindowEvent::kKeyDown) {
-    e.action = AKEY_EVENT_ACTION_DOWN;
-    if (event.repeat != 0 && event.key == last_key_) {
-      repeat_++;
-    } else {
-      repeat_ = 0;
-      key_down_time_ = t;
-    }
-    last_key_ = event.key;
-    e.repeat_count = repeat_;
-    e.down_time = key_down_time_;
-  } else {
-    e.action = AKEY_EVENT_ACTION_UP;
-    e.down_time = event.key == last_key_ ? key_down_time_ : t;
-    if (event.key == last_key_) {
-      last_key_ = -1;
-      repeat_ = 0;
-    }
-  }
+  const bool down = event.type == WindowEvent::kKeyDown;
+  const auto press = key_history_.Update(event.key, event.scan, e.key_code,
+                                         down, t);
+  e.action = down ? AKEY_EVENT_ACTION_DOWN : AKEY_EVENT_ACTION_UP;
+  e.key_code = press.key_code;
+  e.down_time = press.down_time;
+  e.repeat_count = press.repeat_count;
   out->push_back(e);
 }
 

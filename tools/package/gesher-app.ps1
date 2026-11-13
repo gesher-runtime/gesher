@@ -39,7 +39,8 @@
 #
 # The first launch starts the device detached (no console window: it outlives
 # this console); later launches use it. It stops with `gesher-app shutdown`,
-# or after GESHER_IDLE_TIMEOUT seconds (default 600) without an app process.
+# or after GESHER_IDLE_TIMEOUT seconds (default 600) without an app in use (an
+# activity or a foreground service; closed apps' cached processes do not count).
 # Installed packages are in %LOCALAPPDATA%\Gesher\data\app, the logs in
 # %LOCALAPPDATA%\Gesher\logs (<package>.log has an app's output).
 #
@@ -230,7 +231,9 @@ $env:ANDROID_TZDATA_ROOT = NoDrive "$here/tzdata"  # in place (docs/posix.md)
 $jars = 'core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app'
 $bcp = ($jars | ForEach-Object { NoDrive "$here/$_.jar" }) -join ':'
 # The boot image (docs/boot-image.md) is installed next to the jars, in framework\x86_64.
-$dvm = @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$here/framework/boot.art")", '-Xint', '-Xusejit:false')
+# The device's own processes (this launcher, the system server it starts) run nterp and
+# the boot image's AOT code without the JIT; app processes add the JIT (ADR 0081, 0054).
+$dvm = @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$here/framework/boot.art")", '-Xusejit:false')
 $dalvikvm = Join-Path $here 'dalvikvm.exe'
 
 # Keep the profile choice local to child processes, so disabling the marker in
