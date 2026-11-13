@@ -710,7 +710,15 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
       VirtualFree(reinterpret_cast<void*>(result), in_view, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
       SplitEntry(s, hole, result + in_view);
     }
-    if (!MapViewInto(mapping, result, in_view, begin, view_protection)) {
+    // A private view that is not writable is mapped so: mapped copy-on-write
+    // it is charged to commit in full until the VirtualProtect below gives
+    // that back (a native library's code, an oat file). Read-execute keeps an
+    // executable section's view able to become writable copy-on-write later.
+    ULONG initial = view_protection;
+    if (!shared && !write && (prot & (PROT_READ | PROT_EXEC)) != 0) {
+      initial = exec ? PAGE_EXECUTE_READ : PAGE_READONLY;
+    }
+    if (!MapViewInto(mapping, result, in_view, begin, initial)) {
       TRACE("MapViewOfFile3 at %p (0x%zx bytes, offset 0x%llx) failed: %lu\n",
             reinterpret_cast<void*>(result), in_view, static_cast<unsigned long long>(begin),
             GetLastError());
@@ -733,7 +741,7 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
     DWORD protection = PageProtection(prot);
     if (!shared) protection = CopyOnWrite(protection);
     DWORD old;
-    if (protection != view_protection &&
+    if (protection != initial &&
         !VirtualProtect(reinterpret_cast<void*>(result), in_view, protection, &old)) {
       return fail(EACCES);
     }
@@ -1195,12 +1203,19 @@ int mprotect(void* addr, size_t length, int prot) {
   InvalidateSharedAliases(s, reinterpret_cast<uintptr_t>(addr), length);
   const DWORD protection = PageProtection(prot);
   const bool ok = ForEachRun(addr, length, [&](uint8_t* p, size_t n, const MEMORY_BASIC_INFORMATION& info) {
-    // Copy-on-write views stay copy-on-write when made writable.
+    // Copy-on-write views stay copy-on-write when made writable. A private
+    // view mapped read-only (GroupFile) has a read-only AllocationProtect:
+    // the registry says it is private.
     DWORD want = protection;
-    if (info.Type == MEM_MAPPED &&
-        (info.AllocationProtect == PAGE_WRITECOPY ||
-         info.AllocationProtect == PAGE_EXECUTE_WRITECOPY)) {
-      want = CopyOnWrite(want);
+    if (info.Type == MEM_MAPPED) {
+      bool private_view = info.AllocationProtect == PAGE_WRITECOPY ||
+                          info.AllocationProtect == PAGE_EXECUTE_WRITECOPY;
+      if (!private_view) {
+        auto region = FindRegion(s, reinterpret_cast<uintptr_t>(p));
+        private_view = region != s.regions.end() && region->second.kind == Kind::kView &&
+                       !region->second.shared;
+      }
+      if (private_view) want = CopyOnWrite(want);
     }
     // Reserved, not committed: PROT_NONE anonymous memory of ours
     // (AnonymousCommit), or a thread stack's pages below its committed part.
