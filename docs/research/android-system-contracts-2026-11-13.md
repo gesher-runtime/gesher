@@ -57,7 +57,9 @@ tree `ce176eb9b104cad7ad761ab7791c41e49eb82e42`. A mixed futex smoke test agains
 the prospective PR #14 shim passed 164 assertions. With the complete PR #15
 application freshly built, the Sync fixture passed 319 host assertions and a
 separate idle-policy probe passed 11 additional checks, including active work
-after ten idle timeouts and bounded grace for a future retry. These are source,
+after ten idle timeouts and bounded grace for a future retry. The
+[portable probe and reproduction instructions](../../tests/sync/README.md)
+load every production class from the fully built combination. These are source,
 host and cross-compilation results. The published PR's current-head Actions
 checks and description record actual Windows qualification; this report does
 not substitute an earlier run or a local host model for that result.

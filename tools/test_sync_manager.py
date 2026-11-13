@@ -4,6 +4,8 @@
 Use --source-ref with --case admission/clock/results/cancellation for separate negative
 controls. The same Java fixture runs generated Binder/Parcel calls on Windows;
 this host path uses local service calls and the declared existing native adapter.
+--idle-policy-probe uses production classes only from --app-classes, which must be
+the full application built after combining this change with PR15's idle policy.
 """
 from __future__ import annotations
 import argparse
@@ -22,9 +24,14 @@ def main() -> None:
     parser.add_argument('--core-classes', type=Path, required=True)
     parser.add_argument('--app-classes', type=Path, required=True)
     parser.add_argument('--apksig-jar', type=Path, required=True)
-    parser.add_argument('--source-ref', help='Compile older production classes as a negative control')
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument('--source-ref', help='Compile older production classes as a negative control')
+    source.add_argument('--idle-policy-probe', action='store_true',
+                        help='Probe the full PR15 combination supplied through --app-classes')
     parser.add_argument('--case', choices=('all', 'admission', 'clock', 'results', 'cancellation'), default='all')
     args = parser.parse_args()
+    if args.idle_policy_probe and args.case != 'all':
+        parser.error('--idle-policy-probe requires --case all')
     cc = shutil.which('cc')
     if not cc:
         parser.error('A C compiler is required for the declared native boundaries')
@@ -39,7 +46,9 @@ def main() -> None:
                         '-I' + str(args.java_home / 'include'), '-I' + str(args.java_home / 'include/linux'),
                         str(ROOT / 'tests/sync/framework_host.c'), '-o', str(library)], check=True)
         sources = []
-        for name in ('SyncManager',):
+        # The explicit coexistence probe must use the complete supplied merged app,
+        # without substituting current or baseline production classes over its jar.
+        for name in (() if args.idle_policy_probe else ('SyncManager',)):
             relative = 'app/java/com/gesher/server/' + name + '.java'
             source = ROOT / relative
             if args.source_ref:
@@ -48,9 +57,10 @@ def main() -> None:
                 source = work / (name + '.java')
                 source.write_bytes(before.stdout)
             sources.append(str(source))
+        main_class = 'SyncIdlePr15Probe' if args.idle_policy_probe else 'SyncManagerHost'
         sources.extend(str(ROOT / p) for p in (
             'tests/dex-services/gesher/services/SyncManagerContractTest.java',
-            'tests/sync/SyncManagerHost.java'))
+            'tests/sync/' + main_class + '.java'))
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-encoding', 'UTF-8',
                         '-cp', classpath, '-d', str(classes), *sources], check=True)
         cleaner = work / 'cleaner' / 'sun' / 'misc'
@@ -65,7 +75,7 @@ def main() -> None:
                         '-XX:+UnlockDiagnosticVMOptions', '-XX:-BytecodeVerificationRemote',
                         '--patch-module', 'jdk.unsupported=' + str(work / 'cleaner'),
                         '-cp', str(classes) + os.pathsep + classpath,
-                        'SyncManagerHost', str(library), args.case],
+                        main_class, str(library), args.case],
                        env=environment, check=True, timeout=90)
 
 if __name__ == '__main__':
