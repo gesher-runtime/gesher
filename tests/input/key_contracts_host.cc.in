@@ -1,0 +1,124 @@
+#include <cstdint>
+#include <cstdio>
+#include <vector>
+#include "input_modifiers.h"
+#include "key_history.h"
+using namespace gesher;
+using namespace gesher::input;
+constexpr int AMETA_SHIFT_ON=1, AMETA_ALT_ON=2, AMETA_SHIFT_LEFT_ON=64,
+ AMETA_SHIFT_RIGHT_ON=128, AMETA_ALT_LEFT_ON=16, AMETA_ALT_RIGHT_ON=32,
+ AMETA_CTRL_ON=4096, AMETA_CTRL_LEFT_ON=8192, AMETA_CTRL_RIGHT_ON=16384,
+ AMETA_META_ON=65536, AMETA_META_LEFT_ON=131072, AMETA_META_RIGHT_ON=262144,
+ AMETA_CAPS_LOCK_ON=1048576, AMETA_NUM_LOCK_ON=2097152, AMETA_SCROLL_LOCK_ON=4194304;
+constexpr int VK_SHIFT=0x10, VK_CONTROL=0x11, VK_MENU=0x12, VK_CAPITAL=0x14,
+ VK_LSHIFT=0xa0, VK_RSHIFT=0xa1, VK_LCONTROL=0xa2, VK_RCONTROL=0xa3,
+ VK_LMENU=0xa4, VK_RMENU=0xa5;
+constexpr int kKeyboardDeviceId=-1, AINPUT_SOURCE_KEYBOARD=0x101,
+ AKEY_EVENT_FLAG_FROM_SYSTEM=8, AKEY_EVENT_ACTION_DOWN=0, AKEY_EVENT_ACTION_UP=1;
+short physical[256]{};
+short GetKeyState(int key) { return physical[key]; }
+@LEGACY_MODIFIER@
+class Window {
+ public:
+ int held_modifiers_=0;
+ int Modifiers() const;
+ void Produce(int wparam,int scan,bool down) {
+   const int64_t lparam=static_cast<int64_t>(scan)<<16;
+   (void)lparam;
+@PRODUCER@
+ }
+};
+@MODIFIERS@
+@IME@
+@META@
+bool EditorAction(int modifiers) { return @GUARD@; }
+struct WindowEvent {
+ enum { kMouseDown=1,kMouseUp=2,kMouseMove=3,kWheel=4,kKeyDown=5,kKeyUp=6,
+ kFocus=9,kTouchDown=11,kTouchMove=12,kTouchUp=13,kTouchCancel=14,kMouseLeave=15,kOutside=17 };
+ int type=kKeyDown,key=0,scan=0,modifiers=0,repeat=0,button=0;
+};
+struct AndroidEvent {
+ enum { kKey,kFocus };
+ bool has_focus=false;
+ int kind=0,device_id=0,source=0,flags=0,key_code=0,scan_code=0,meta_state=0,action=0,repeat_count=0;
+ int64_t event_time=0,down_time=0;
+};
+// Keymap lookup is the boundary; it returns distinct mappings for one scan.
+int KeyCodeFromVirtualKey(int vk,int) { return vk+1000; }
+int LinuxScanCode(int scan) { return scan; }
+class Translator {
+ public:
+ void Key(const WindowEvent&,int64_t,std::vector<AndroidEvent>*);
+ void Translate(const WindowEvent&,int64_t,std::vector<AndroidEvent>*);
+ void Mouse(const WindowEvent&,int64_t,std::vector<AndroidEvent>*) {}
+ void TouchEvent(const WindowEvent&,int64_t,std::vector<AndroidEvent>*) {}
+ void Outside(const WindowEvent&,int64_t,std::vector<AndroidEvent>*) {}
+ void LoseFocus() { WindowEvent e;e.type=WindowEvent::kFocus;std::vector<AndroidEvent> out;Translate(e,0,&out); }
+@FIELDS@
+};
+@KEY@
+@TRANSLATE@
+int checks=0,failures=0;
+void check(bool ok,const char* name) { ++checks;if(!ok){++failures;std::printf("FAIL %s\n",name);} }
+int main() {
+ const int bits[][4]={{kModifierShift,kModifierShiftLeft,kModifierShiftRight,AMETA_SHIFT_ON},
+ {kModifierCtrl,kModifierCtrlLeft,kModifierCtrlRight,AMETA_CTRL_ON},
+ {kModifierAlt,kModifierAltLeft,kModifierAltRight,AMETA_ALT_ON},
+ {kModifierMeta,kModifierMetaLeft,kModifierMetaRight,AMETA_META_ON}};
+ const int sides[][2]={{AMETA_SHIFT_LEFT_ON,AMETA_SHIFT_RIGHT_ON},
+ {AMETA_CTRL_LEFT_ON,AMETA_CTRL_RIGHT_ON},{AMETA_ALT_LEFT_ON,AMETA_ALT_RIGHT_ON},
+ {AMETA_META_LEFT_ON,AMETA_META_RIGHT_ON}};
+ const int vks[][2]={{0xa0,0xa1},{0xa2,0xa3},{0xa4,0xa5},{0x5b,0x5c}};
+ for(int i=0;i<4;++i) {
+   check(MetaState(bits[i][0])==(bits[i][3]|sides[i][0]),"legacy generic modifier");
+   check(MetaState(bits[i][2])==(bits[i][3]|sides[i][1]),"right-only modifier");
+   check(MetaState(bits[i][1]|bits[i][2])==(bits[i][3]|sides[i][0]|sides[i][1]),"both sides modifier");
+   Window w;w.Produce(vks[i][0],0,true);w.Produce(vks[i][1],0,true);
+   check((w.Modifiers()&(bits[i][1]|bits[i][2]))==(bits[i][1]|bits[i][2]),"producer both sides");
+   w.Produce(vks[i][0],0,false);
+   check((w.Modifiers()&(bits[i][0]|bits[i][1]|bits[i][2]))==(bits[i][0]|bits[i][2]),"releasing left retains right");
+   w.Produce(vks[i][1],0,false);check(w.Modifiers()==0,"release remaining side");
+   physical[vks[i][1]]=static_cast<short>(0x8000);
+   check((KeyModifiers()&(bits[i][0]|bits[i][1]|bits[i][2]))==(bits[i][0]|bits[i][2]),"IME reads right side");
+   physical[vks[i][1]]=0;
+ }
+ Window generic;generic.Produce(0x10,0x36,true);generic.Produce(0x11,0x11d,true);generic.Produce(0x12,0x138,true);
+ check((generic.Modifiers()&(kModifierShiftRight|kModifierCtrlRight|kModifierAltRight))==
+ (kModifierShiftRight|kModifierCtrlRight|kModifierAltRight),"generic VK scan resolves side");
+ physical[0x14]=physical[0x90]=physical[0x91]=1;
+ check(MetaState(KeyModifiers())==(AMETA_CAPS_LOCK_ON|AMETA_NUM_LOCK_ON|AMETA_SCROLL_LOCK_ON),"all toggle locks");
+ physical[0x14]=physical[0x90]=physical[0x91]=0;
+ check(EditorAction(0),"unmodified Enter is editor action");
+ check(!EditorAction(kModifierMeta),"Meta Enter is not editor action");
+ check(!EditorAction(kModifierCtrl),"Ctrl Enter is not editor action");
+ check(EditorAction(kModifierCapsLock|kModifierNumLock),"locks do not suppress editor action");
+ Translator t;std::vector<AndroidEvent> out;
+ auto key=[&](int vk,int scan,bool down,bool repeat,int64_t time){
+   WindowEvent e;e.key=vk;e.scan=scan;e.type=down?5:6;e.repeat=repeat;t.Translate(e,time,&out);return out.back();
+ };
+ key('A',30,true,false,100);key('B',48,true,false,200);
+ check(key('A',30,true,true,300).down_time==100,"chord repeat keeps A downTime");
+ check(out.back().repeat_count==1,"chord repeat A count");
+ key('B',48,true,true,400);check(out.back().down_time==200&&out.back().repeat_count==1,"independent B repeat");
+ key('A',30,true,true,500);check(out.back().repeat_count==2,"A repeat survives B repeat");
+ check(key('B',48,false,false,600).down_time==200,"B release retains own time");
+ check(key('A',30,false,false,700).down_time==100,"A release retains own time");
+ check(key('C',46,false,false,800).down_time==800,"unmatched up gets current time");
+ key(0x11,0x1d,true,false,900);key(0x11,0x11d,true,false,1000);
+ check(key(0x11,0x1d,false,false,1100).down_time==900,"same VK distinct scans");
+ check(key(0x11,0x11d,false,false,1200).down_time==1000,"right control separate time");
+ key('A',30,true,false,1300);
+ check(key('Q',30,true,true,1400).key_code=='A'+1000,"repeat keeps original mapping");
+ check(key('Q',30,false,false,1500).key_code=='A'+1000,"release keeps original mapping");
+ key('A',30,true,false,1550);
+ check(key('Q',30,true,false,1560).key_code=='A'+1000,"held key ignores a changed repeat flag mapping");
+ check(out.back().down_time==1550&&out.back().repeat_count==1,"held identity retains down time without repeat flag");
+ key('Q',30,false,false,1570);
+ key('A',30,true,false,1600);t.LoseFocus();
+ check(key('A',30,true,true,1700).down_time==1700&&out.back().repeat_count==0,"focus loss resets held keys");
+ key('A',0,true,false,1800);key('B',0,true,false,1900);
+ check(key('A',0,false,false,2000).down_time==1800,"scanless keys remain distinct");
+ for(int scan=-1;scan<=513;++scan)key('A',scan,true,false,2100+scan);
+ check(key(-1,-1,false,false,3000).down_time==3000,"invalid identity stays bounded");
+ std::printf("input contracts: %d checks, %d failures\n",checks,failures);return failures?1:0;
+}

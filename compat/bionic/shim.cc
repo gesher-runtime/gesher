@@ -27,6 +27,8 @@
 #include <malloc.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <linux/futex.h>
 #include <ftw.h>
 #include <unistd.h>
 
@@ -726,6 +728,8 @@ int BIONIC_SYSV Fstat(int fd, struct stat* st) {
 
 // File tree walk (<ftw.h>). The callback from the .so is System V and expects
 // bionic's LP64 struct stat (tv_nsec 64-bit), adapted from gesher-base's nftw.
+using SysvFtwFn = int (BIONIC_SYSV*)(const char*, const struct stat*, int);
+thread_local SysvFtwFn g_ftw_fn = nullptr;
 using SysvNftwFn = int (BIONIC_SYSV*)(const char*, const struct stat*, int, struct FTW*);
 thread_local SysvNftwFn g_nftw_fn = nullptr;
 
@@ -734,6 +738,20 @@ static int NftwThunk(const char* path, const struct stat* sb, int type, struct F
   struct stat copy = *sb;
   FixStat(&copy);
   return g_nftw_fn(path, &copy, type, ftw);
+}
+
+static int FtwThunk(const char* path, const struct stat* sb, int type) {
+  struct stat copy = *sb;
+  FixStat(&copy);
+  return g_ftw_fn(path, &copy, type);
+}
+int BIONIC_SYSV Ftw(const char* dir, SysvFtwFn fn, int nopenfd) {
+  if (!dir || !fn) return errno = EINVAL, -1;
+  auto saved = g_ftw_fn;
+  g_ftw_fn = fn;
+  int r = ::ftw(dir, FtwThunk, nopenfd);
+  g_ftw_fn = saved;
+  return r;
 }
 
 int BIONIC_SYSV Nftw(const char* dir, SysvNftwFn fn, int nopenfd, int flags) {
@@ -948,7 +966,7 @@ int BIONIC_SYSV DlIteratePhdr(int (BIONIC_SYSV* cb)(BionicPhdrInfo*, size_t, voi
 // (static-local guards, std::atomic::wait), gettid and anonymous files. A variadic call passes
 // the arguments in the same registers as this fixed signature reads.
 int64_t BIONIC_SYSV Syscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
-                            int64_t /*a5*/, int64_t /*a6*/) {
+                            int64_t a5, int64_t a6) {
   constexpr int64_t kSysGettid = 186, kSysFutex = 202;
   if (nr == kSysGettid || nr == 178 /* ARM64 gettid */) return GetCurrentThreadId();
   if (nr == 319 /* x86_64 memfd_create */ || nr == 279 /* ARM64 memfd_create */)
@@ -959,49 +977,23 @@ int64_t BIONIC_SYSV Syscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int6
     errno = kENOSYS;
     return -1;
   }
-  // futex(uaddr, op, val, timeout): FUTEX_PRIVATE_FLAG (128) changes nothing
-  // here; FUTEX_CLOCK_REALTIME (256) picks the clock of a *_BITSET timeout.
-  auto* addr = reinterpret_cast<volatile int32_t*>(a1);
-  int op = static_cast<int>(a2) & ~(128 | 256);
-  bool realtime = (a2 & 256) != 0;
-  auto* timeout = reinterpret_cast<const LinuxTimespec*>(a4);
-  constexpr int kWait = 0, kWake = 1, kWaitBitset = 9, kWakeBitset = 10;
-  if (op == kWait || op == kWaitBitset) {
-    int32_t expect = static_cast<int32_t>(a3);
-    DWORD ms = INFINITE;
-    if (timeout != nullptr) {
-      if (op == kWait) {  // relative
-        if (timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000) {
-          errno = kEINVAL;
-          return -1;
-        }
-        __int128 t = static_cast<__int128>(timeout->tv_sec) * 1000 + (timeout->tv_nsec + 999999) / 1000000;
-        ms = t < 0 ? 0 : (t > 0x7ffffffe ? 0x7ffffffe : static_cast<DWORD>(t));
-      } else {  // absolute
-        ms = MillisUntil(timeout, !realtime);
-      }
-    }
-    if (*addr != expect) {
-      errno = kEAGAIN;
-      return -1;
-    }
-    if (!WaitOnAddress(const_cast<int32_t*>(addr), &expect, sizeof(expect), ms) &&
-        GetLastError() == ERROR_TIMEOUT) {
-      errno = kETIMEDOUT;
-      return -1;
-    }
-    return 0;
+  int op = static_cast<int>(a2);
+  int command = op & FUTEX_CMD_MASK;
+  const timespec* host_timeout = reinterpret_cast<const timespec*>(a4);
+  timespec converted{};
+  if ((command == FUTEX_WAIT || command == FUTEX_WAIT_BITSET) && a4 != 0) {
+    auto* guest = reinterpret_cast<const LinuxTimespec*>(a4);
+    // Validate while nanoseconds are still 64-bit; narrowing first accepts
+    // values such as 2^32 and changes Android's error/expected-value ordering.
+    if (guest->tv_sec < 0 || guest->tv_nsec < 0 || guest->tv_nsec >= 1000000000)
+      return errno = kEINVAL, -1;
+    converted.tv_sec = guest->tv_sec;
+    converted.tv_nsec = static_cast<long>(guest->tv_nsec);
+    host_timeout = &converted;
   }
-  if (op == kWake || op == kWakeBitset) {
-    if (a3 == 1) {
-      WakeByAddressSingle(const_cast<int32_t*>(addr));
-    } else {
-      WakeByAddressAll(const_cast<int32_t*>(addr));
-    }
-    return 0;
-  }
-  errno = kENOSYS;
-  return -1;
+  return ::syscall(SYS_futex, reinterpret_cast<volatile int*>(a1), op,
+                   static_cast<int>(a3), host_timeout,
+                   reinterpret_cast<volatile int*>(a5), static_cast<int>(a6));
 }
 
 void ReportUnresolved(const char* name) {
@@ -1185,6 +1177,8 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("lstat64", Lstat);
   ENTRY("fstat", Fstat);
   ENTRY("fstat64", Fstat);
+  ENTRY("ftw", Ftw);
+  ENTRY("ftw64", Ftw);
   ENTRY("nftw", Nftw);
   ENTRY("nftw64", Nftw);
   ENTRY("mmap", Mmap);

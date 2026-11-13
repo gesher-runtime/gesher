@@ -1,0 +1,20 @@
+{
+  "tag": "android-16.0.0_r4",
+  "repository": "https://android.googlesource.com/platform/packages/modules/Connectivity",
+  "files": [
+    {
+      "upstream_path": "framework-t/src/android/net/EthernetNetworkSpecifier.java",
+      "local_path": "app/java/android/net/EthernetNetworkSpecifier.java",
+      "upstream_sha256": "53524467edab00cb4267c2d6758f4738e57240c4b31ad827eb045827f7e3c935",
+      "local_sha256": "53524467edab00cb4267c2d6758f4738e57240c4b31ad827eb045827f7e3c935",
+      "adaptations": []
+    },
+    {
+      "upstream_path": "framework/src/android/net/TestNetworkSpecifier.java",
+      "local_path": "app/java/android/net/TestNetworkSpecifier.java",
+      "upstream_sha256": "0c880fc2bd8ef41194d557824a8799b9b430f7a8f32107d157a8b4e3112bd1cb",
+      "local_sha256": "0c880fc2bd8ef41194d557824a8799b9b430f7a8f32107d157a8b4e3112bd1cb",
+      "adaptations": []
+    }
+  ]
+}

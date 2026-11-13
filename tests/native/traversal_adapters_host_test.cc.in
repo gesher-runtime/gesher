@@ -1,0 +1,58 @@
+#include <cassert>
+#include <cerrno>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <cstdio>
+#include <ftw.h>
+#include <initializer_list>
+#define BIONIC_SYSV
+#define GESHER_SYSV
+namespace x64 {
+@X64_STAT_FIX@
+@X64_TRAVERSAL@
+}
+namespace a64 {
+void SetErrno(int value) { errno = value; }
+@ARM64_STAT_TRAVERSAL@
+}
+static int failures, checks;
+static void check(const char* label, bool ok) {
+  ++checks; if (!ok) { ++failures; printf("FAIL traversal adapter: %s\n", label); }
+}
+static int arm_calls, inner_calls;
+static a64::X64Stat sample{13,17,19,0100640,23,29,0,31,37,4096,41,43,47,53,59,61,67,{0,0,0}};
+static int host_ftw(const char* p, a64::HostFtwCallback cb, int nfds) {
+  check("ftw fd budget forwarded", nfds == 3); return cb(p, &sample, FTW_F);
+}
+static int host_nftw(const char* p, a64::HostNftwCallback cb, int nfds, int flags) {
+  check("nftw flags and fd budget forwarded", nfds == 5 && flags == 8);
+  a64::GuestFtwInfo info{2,7}; return cb(p, &sample, FTW_F, &info);
+}
+static void check_stat(const a64::A64Stat* s) {
+  check("ARM64 dev/ino/nlink/mode", s->st_dev == 13 && s->st_ino == 17 && s->st_nlink == 19 && s->st_mode == 0100640);
+  check("ARM64 uid/gid/rdev/size", s->st_uid == 23 && s->st_gid == 29 && s->st_rdev == 31 && s->st_size == 37);
+  check("ARM64 block fields", s->st_blksize == 4096 && s->st_blocks == 41);
+  check("ARM64 full-width timestamp fields", s->atime == 43 && s->atime_ns == 47 && s->mtime == 53 && s->mtime_ns == 59 && s->ctime == 61 && s->ctime_ns == 67);
+  check("ARM64 ABI padding cleared", s->pad1 == 0 && s->pad2 == 0 && s->unused4 == 0 && s->unused5 == 0);
+}
+static int arm_inner(const char* p, const a64::A64Stat* s, int t) {
+  check("nested ftw path/type", !strcmp(p,"inner") && t == FTW_F); check_stat(s); ++inner_calls; return 31;
+}
+static int arm_outer(const char* p, const a64::A64Stat* s, int t) {
+  check("outer ftw path/type", !strcmp(p,"outer") && t == FTW_F); check_stat(s); ++arm_calls;
+  if (arm_calls == 1) check("nested ftw forwards result", a64::GuestFtw("inner", arm_inner, 3) == 31);
+  return 23;
+}
+static int arm_nftw(const char* p, const a64::A64Stat* s, int t, a64::GuestFtwInfo* i) {
+  check("nftw info layout", i->base == 2 && i->level == 7 && t == FTW_F && !strcmp(p,"nftw")); check_stat(s); return 41;
+}
+int main() {
+  a64::g_ftw = reinterpret_cast<void*>(&host_ftw); a64::g_nftw = reinterpret_cast<void*>(&host_nftw);
+  check("ftw callback return", a64::GuestFtw("outer", arm_outer, 3) == 23);
+  check("second ftw callback after nested walk", a64::GuestFtw("outer", arm_outer, 3) == 23 && arm_calls == 2 && inner_calls == 1);
+  check("nftw callback return", a64::GuestNftw("nftw", arm_nftw, 5, 8) == 41);
+  errno = 0; check("ftw null callback rejected", a64::GuestFtw("p", nullptr, 1) == -1 && errno == EINVAL);
+  errno = 0; check("nftw null callback rejected", a64::GuestNftw("p", nullptr, 1, 0) == -1 && errno == EINVAL);
+  printf("traversal adapters: %d checks, %d failures\n", checks, failures); return failures;
+}
