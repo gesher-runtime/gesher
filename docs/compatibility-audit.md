@@ -1,5 +1,10 @@
 # Central compatibility evidence audit
 
+For the reconstructed system-contract work, full source-tree map and fresh SDK/service/JNI
+inventories, see the [November 13 Android system-contract audit](research/android-system-contracts-2026-11-13.md).
+It separates rebuilt-code evidence, remaining API gaps and pending Windows qualification
+from older snapshots.
+
 For the current-source crash-contract repairs and their validation limits, see
 the [November 13 deep Android compatibility audit](research/android-compatibility-deep-audit-2026-11-13.md).
 The older inventories below retain their original snapshots; their counts do

@@ -6,6 +6,7 @@
 // BaseEventQueue.dispatchSensorEvent on its own thread.
 
 #include <android_runtime/AndroidRuntime.h>
+#include <errno.h>
 #include <jni.h>
 #include <nativehelper/JNIHelp.h>
 #include <nativehelper/scoped_local_ref.h>
@@ -21,6 +22,7 @@
 #include "android_os_MessageQueue.h"
 #include "core_jni_helpers.h"
 #include "sensors.h"
+#include "sensor_event_buffer.h"
 
 namespace android {
 
@@ -139,12 +141,7 @@ jint SystemSensorManager_setOperationParameter(JNIEnv*, jclass, jlong, jint, jin
 
 // --- event queues ----------------------------------------------------------------------
 
-struct Event {
-  int handle;
-  bool flush;
-  hub::Reading reading;
-  int64_t timestampNs;
-};
+using Event = hub::Event;
 
 class Queue : public LooperCallback, public hub::Sink {
  public:
@@ -176,22 +173,24 @@ class Queue : public LooperCallback, public hub::Sink {
 
   // The sampling thread.
   void OnEvent(int handle, const hub::Reading& reading, int64_t timestampNs) override {
-    Push({handle, false, reading, timestampNs});
-  }
-
-  void Flush(const std::vector<int>& handles) {
-    for (int h : handles) Push({h, true, hub::Reading(), 0});
-  }
-
-  std::vector<int> enabled;
-
- private:
-  void Push(const Event& e) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (events_.size() >= 256) events_.pop_front();  // a slow consumer drops the oldest
-      events_.push_back(e);
+      if (!events_.PushData({handle, false, reading, timestampNs})) return;
     }
+    Wake();
+  }
+
+  int OnFlush(const std::vector<int>& handles) override {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!events_.Flush(handles)) return -EAGAIN;
+    }
+    Wake();
+    return 0;
+  }
+
+ private:
+  void Wake() {
     uint64_t one = 1;
     if (write(fd_, &one, sizeof(one)) < 0) {
       // The counter is full or the queue is gone: the Looper is awake anyway.
@@ -206,7 +205,7 @@ class Queue : public LooperCallback, public hub::Sink {
     std::deque<Event> events;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      events.swap(events_);
+      events = events_.Take();
     }
     JNIEnv* env = AndroidRuntime::getJNIEnv();
     ScopedLocalRef<jobject> queue(env, env->CallObjectMethod(weak_, gWeakGet));
@@ -234,7 +233,7 @@ class Queue : public LooperCallback, public hub::Sink {
   sp<Looper> looper_;
   int fd_ = -1;
   std::mutex mutex_;
-  std::deque<Event> events_;
+  hub::EventBuffer events_;
 };
 
 jlong BaseEventQueue_init(JNIEnv* env, jclass, jlong, jobject weak, jobject messageQueue, jstring,
@@ -262,18 +261,11 @@ jlong BaseEventQueue_init(JNIEnv* env, jclass, jlong, jobject weak, jobject mess
 Queue* QueueOf(jlong eventQ) { return reinterpret_cast<Queue*>(eventQ); }
 
 jint BaseEventQueue_enable(JNIEnv*, jclass, jlong eventQ, jint handle, jint rateUs, jint) {
-  Queue* q = QueueOf(eventQ);
-  int r = hub::Enable(q, handle, rateUs);
-  if (r == 0 && std::find(q->enabled.begin(), q->enabled.end(), handle) == q->enabled.end()) {
-    q->enabled.push_back(handle);
-  }
-  return r;
+  return hub::Enable(QueueOf(eventQ), handle, rateUs);
 }
 
 jint BaseEventQueue_disable(JNIEnv*, jclass, jlong eventQ, jint handle) {
-  Queue* q = QueueOf(eventQ);
-  q->enabled.erase(std::remove(q->enabled.begin(), q->enabled.end(), handle), q->enabled.end());
-  return hub::Disable(q, handle);
+  return hub::Disable(QueueOf(eventQ), handle);
 }
 
 void BaseEventQueue_destroy(JNIEnv*, jclass, jlong eventQ) {
@@ -283,9 +275,7 @@ void BaseEventQueue_destroy(JNIEnv*, jclass, jlong eventQ) {
 }
 
 jint BaseEventQueue_flush(JNIEnv*, jclass, jlong eventQ) {
-  Queue* q = QueueOf(eventQ);
-  q->Flush(q->enabled);
-  return 0;
+  return hub::Flush(QueueOf(eventQ));
 }
 
 jint BaseEventQueue_inject(JNIEnv*, jclass, jlong, jint, jfloatArray, jint, jlong) {

@@ -14,6 +14,7 @@ public final class ServiceFixtureRunner {
         // loader and never mutate the package registry. Do not pre-load their JNI library
         // under this test loader. The account-cache fixture owns its own real region.
         boolean ownsBootstrap = args[0].equals("SdkSandboxUnsupportedTest")
+                || args[0].equals("SettingsBootstrapContractTest")
                 || args[0].equals("NetworkStatsUnavailableTest")
                 || args[0].equals("GrammaticalInflectionUnavailableTest")
                 || args[0].equals("WifiUnsupportedTest")

@@ -1,0 +1,188 @@
+// Production mprotect/madvise, zeroing tracker and fault retry. The only model
+// here is a one-page Win32 allocation and a scheduled decommit/recommit gap.
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <map>
+#include <mutex>
+#include <thread>
+
+namespace {
+using DWORD = unsigned long;
+using ULONG_PTR = uintptr_t;
+constexpr DWORD PAGE_NOACCESS = 1, PAGE_READONLY = 2, PAGE_READWRITE = 4,
+    PAGE_WRITECOPY = 8, PAGE_EXECUTE = 16, PAGE_EXECUTE_READ = 32,
+    PAGE_EXECUTE_READWRITE = 64, PAGE_EXECUTE_WRITECOPY = 128, PAGE_GUARD = 256;
+constexpr DWORD MEM_COMMIT = 0x1000, MEM_RESERVE = 0x2000, MEM_DECOMMIT = 0x4000,
+    MEM_PRIVATE = 0x20000, MEM_MAPPED = 0x40000;
+constexpr int PROT_NONE = 0, PROT_READ = 1, PROT_WRITE = 2, PROT_EXEC = 4;
+constexpr int MADV_DONTNEED = 4, MADV_FREE = 8, MADV_REMOVE = 9, MADV_WILLNEED = 3;
+constexpr size_t kPage = 4096;
+alignas(kPage) uint8_t bytes[kPage];
+struct MEMORY_BASIC_INFORMATION {
+  void* BaseAddress = bytes;
+  size_t RegionSize = kPage;
+  DWORD State = MEM_COMMIT;
+  DWORD Protect = PAGE_READWRITE;
+  DWORD AllocationProtect = PAGE_READWRITE;
+  DWORD Type = MEM_PRIVATE;
+};
+struct WIN32_MEMORY_RANGE_ENTRY { void* address; size_t length; };
+MEMORY_BASIC_INFORMATION page;
+std::mutex page_lock;
+std::mutex pause_lock;
+std::condition_variable pause_cv;
+bool pause_decommit = false, decommitted = false, resume_commit = false;
+int failures = 0, assertions = 0;
+
+void Check(const char* label, bool ok) {
+  ++assertions;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL %s\n", label); }
+}
+
+size_t VirtualQuery(const void*, MEMORY_BASIC_INFORMATION* info, size_t) {
+  std::lock_guard<std::mutex> guard(page_lock);
+  *info = page;
+  return sizeof(*info);
+}
+
+bool VirtualFree(void*, size_t, DWORD type) {
+  Check("zeroing uses decommit", type == MEM_DECOMMIT);
+  {
+    std::lock_guard<std::mutex> guard(page_lock);
+    page.State = MEM_RESERVE;
+    page.Protect = 0;
+  }
+  std::unique_lock<std::mutex> pause(pause_lock);
+  if (pause_decommit) {
+    decommitted = true;
+    pause_cv.notify_all();
+    if (!pause_cv.wait_for(pause, std::chrono::seconds(5), [] { return resume_commit; }))
+      std::terminate();
+  }
+  return true;
+}
+
+void* VirtualAlloc(void* address, size_t, DWORD type, DWORD protection) {
+  Check("zeroing uses commit", type == MEM_COMMIT);
+  std::lock_guard<std::mutex> guard(page_lock);
+  if (page.State != MEM_COMMIT) {
+    page.State = MEM_COMMIT;
+    page.Protect = protection;
+    std::memset(bytes, 0, kPage);
+  }
+  return address;
+}
+
+bool VirtualProtect(void*, size_t, DWORD protection, DWORD* previous) {
+  std::lock_guard<std::mutex> guard(page_lock);
+  if (page.State != MEM_COMMIT) return false;
+  *previous = page.Protect;
+  page.Protect = protection;
+  return true;
+}
+
+void SwitchToThread() { std::this_thread::yield(); }
+void Sleep(int milliseconds) { std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds)); }
+DWORD GetLastError() { return 0; }
+int GetCurrentProcess() { return 1; }
+void PrefetchVirtualMemory(int, int, WIN32_MEMORY_RANGE_ENTRY*, int) {}
+
+enum class Kind { kAnon, kView, kHole };
+struct Region { size_t size = kPage; Kind kind = Kind::kAnon; };
+struct State { std::mutex lock; std::map<uintptr_t, Region> regions; };
+State& state() { static State s; return s; }
+void InvalidateSharedAliases(State&, uintptr_t, size_t) {}
+DWORD CopyOnWrite(DWORD protection) { return protection; }
+#define TRACE(...) ((void)0)
+
+@PRODUCTION@
+
+void Prepare() {
+  page = MEMORY_BASIC_INFORMATION{};
+  std::memset(bytes, 0x5a, kPage);
+  state().regions[reinterpret_cast<uintptr_t>(bytes)] = Region{};
+  std::lock_guard<std::mutex> guard(pause_lock);
+  pause_decommit = true;
+  decommitted = false;
+  resume_commit = false;
+}
+
+void AwaitDecommit() {
+  std::unique_lock<std::mutex> pause(pause_lock);
+  if (!pause_cv.wait_for(pause, std::chrono::seconds(5), [] { return decommitted; }))
+    std::terminate();
+}
+
+void ResumeCommit() {
+  std::lock_guard<std::mutex> pause(pause_lock);
+  resume_commit = true;
+  pause_cv.notify_all();
+}
+
+void ConcurrentProtection() {
+  Prepare();
+  int advice_result = -1, protect_result = -1;
+  std::thread zeroer([&] { advice_result = madvise(bytes, kPage, MADV_DONTNEED); });
+  AwaitDecommit();
+
+  // If the candidate allows mapping changes in the physical reservation gap,
+  // run mprotect to completion there. A serialized candidate must finish its
+  // advice first; do not force that candidate into an impossible interleave.
+  if (state().lock.try_lock()) {
+    state().lock.unlock();
+    protect_result = mprotect(bytes, kPage, PROT_NONE);
+    ResumeCommit();
+    zeroer.join();
+  } else {
+    std::thread protector([&] { protect_result = mprotect(bytes, kPage, PROT_NONE); });
+    ResumeCommit();
+    zeroer.join();
+    protector.join();
+  }
+  Check("advice succeeds", advice_result == 0);
+  Check("concurrent mprotect succeeds", protect_result == 0);
+  MEMORY_BASIC_INFORMATION info;
+  VirtualQuery(bytes, &info, sizeof(info));
+  Check("PROT_NONE survives concurrent madvise", info.State == MEM_RESERVE ||
+                                                 info.Protect == PAGE_NOACCESS);
+  Check("genuine protected access is not retried", !RetryAfterMadvise(reinterpret_cast<uintptr_t>(bytes), 1));
+  Check("restoring read access succeeds", mprotect(bytes, kPage, PROT_READ) == 0);
+  Check("advice still zeros the page", std::all_of(bytes, bytes + kPage, [](uint8_t b) { return b == 0; }));
+}
+
+void ConcurrentAccess() {
+  Prepare();
+  int advice_result = -1;
+  std::atomic<bool> entered{false}, finished{false};
+  bool retry_result = false;
+  std::thread zeroer([&] { advice_result = madvise(bytes, kPage, MADV_DONTNEED); });
+  AwaitDecommit();
+  std::thread accessor([&] {
+    entered.store(true);
+    retry_result = RetryAfterMadvise(reinterpret_cast<uintptr_t>(bytes), 1);
+    finished.store(true);
+  });
+  while (!entered.load()) std::this_thread::yield();
+  Check("access cannot finish while the page remains decommitted", !finished.load());
+  ResumeCommit();
+  zeroer.join();
+  accessor.join();
+  Check("advice with a waiting accessor succeeds", advice_result == 0);
+  Check("access is retried after recommit", retry_result);
+  Check("all zeroing slots retired", !BeingZeroed(reinterpret_cast<uintptr_t>(bytes)));
+  Check("invalid access kind is not retried", !RetryAfterMadvise(reinterpret_cast<uintptr_t>(bytes), 3));
+}
+}  // namespace
+
+int main() {
+  ConcurrentProtection();
+  ConcurrentAccess();
+  std::printf("mman zeroing mapping contracts: %d assertions, %d failures\n", assertions, failures);
+  return failures == 0 ? 0 : 1;
+}
