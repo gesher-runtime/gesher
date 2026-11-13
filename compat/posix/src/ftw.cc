@@ -22,11 +22,20 @@ struct WalkState {
   std::string original_directory;
   dev_t root_device = 0;
   std::vector<std::pair<dev_t, ino_t>> ancestors;
+  int original_directory_fd = -1;
+  bool RestoreInitialDirectory() {
+    // Gesher's getcwd omits the current drive. A physical walk can follow a
+    // command-line link onto another volume, where that same text would name
+    // a different directory. Resolve every access path from the owned initial
+    // directory handle before changing cwd for the callback.
+    return !change_directory || fchdir(original_directory_fd) == 0;
+  }
   int Call(const std::string& path, const std::string& parent, const struct stat& sb,
            int type, int level) {
     // FTS_LOGICAL implies FTS_NOCHDIR in Android. Physical postorder callbacks
     // run in the parent directory, just like preorder callbacks.
-    if (change_directory && chdir(parent.c_str()) != 0) return -1;
+    if (!RestoreInitialDirectory()) return -1;
+    if (change_directory && level != 0 && chdir(parent.c_str()) != 0) return -1;
     size_t slash = path.find_last_of('/');
     int base = path == "/" || slash == std::string::npos ? 0 : static_cast<int>(slash + 1);
     struct FTW info = {base, level};
@@ -35,6 +44,7 @@ struct WalkState {
   }
   int Walk(const std::string& path, const std::string& access_path,
            const std::string& parent, int level) {
+    if (!RestoreInitialDirectory()) return -1;
     struct stat sb{};
     // Android uses FTS_COMFOLLOW even for FTW_PHYS.
     bool follow = (flags & FTW_PHYS) == 0 || level == 0;
@@ -102,6 +112,7 @@ int WalkTree(const char* directory, NftwFn nftw_fn, FtwFn ftw_fn, int nfds, int 
     free(cwd);
     saved_cwd = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (saved_cwd < 0) return -1;
+    walk.original_directory_fd = saved_cwd;
     bool absolute = path.front() == '/' || path.front() == '\\' ||
                     (path.size() > 1 && path[1] == ':');
     if (!absolute) access_path = walk.original_directory + "/" + path;

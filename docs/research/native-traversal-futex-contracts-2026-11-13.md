@@ -40,7 +40,7 @@ all timestamps, identity fields, block fields and zeroed padding.
 
 Fresh validation:
 
-- **447** shared traversal assertions pass with ASan/UBSan, including all sixteen
+- **485** shared traversal assertions pass with ASan/UBSan, including all sixteen
   POSIX flag combinations and an actual second filesystem.
 - **34** extracted production adapter assertions pass with ASan/UBSan.
 - The original baseline compiles and fails the behavioral regression fixture.
@@ -59,6 +59,17 @@ only its own temporary directories and links.
 The implementation remains a path-based walk, not a complete replacement for
 Android's FTS engine. Concurrent rename/replacement identity, process-wide cwd
 interactions and every allocation-failure path are not qualified by these tests.
+
+Independent review found a Windows-specific directory-identity error in the
+first restored implementation. Gesher's `getcwd()` intentionally omits the
+current drive, so a physical `FTW_CHDIR` walk onto another volume could resolve
+later siblings or its root's postorder callback against the wrong volume. The
+walker now restores its owned initial directory handle before resolving each
+access path and before selecting a callback's parent directory. The shared
+fixture covers direct second-volume roots and command-line links to them, with
+two sibling files and both preorder and postorder callbacks. The updated fixture
+passes the host filesystem gate and compiles for both Android guest ABIs;
+execution of the Windows drive-change cases remains an explicit CI gate.
 
 ## Futex ownership and selection
 
@@ -144,3 +155,26 @@ Fresh host and cross-compilation results do not establish successful execution
 on Windows. The final PR's mandatory Windows gates must verify the real Win32
 transport, separate PE ownership, filesystem behavior and translated guest
 callbacks on the published head.
+
+## Independent integration review
+
+The reviewer reran the ASan/UBSan traversal and futex suites, the 316-assertion
+ThreadSanitizer groups, and the 232-assertion Linux syscall reference. A negative
+control using the original production traversal compiled and failed 68 checks
+in the pre-review fixture; the original futex production source compiled and
+failed 10 of 18 validation checks. The mixed host/guest futex group also passed
+164 assertions using the bionic shim from the clean prospective merge with
+PR #14 at `6c8ca61c4d7024c63ca6019aed6b3c58d13827a9`.
+
+A reduced CMake project used the actual product compile options,
+`compat/posix/posix.cmake`, and the new native target declarations. It compiled
+the complete POSIX library and linked `traversal_test.exe`, `futex_test.exe`,
+`futex_test_module.dll`, and `futex_owner_link_test.exe`, using pinned Android 16
+Binder UAPI and ICU timezone inputs. The generated owner-probe link command
+places the DLL import library before the POSIX archive and forces the private
+anchor. PE inspection confirms the executable owner export, no owner import,
+and no anchor export. Replaying that exact generated link command with the old
+public-symbol force option instead imports the owner and leaves no executable
+owner export, even with the complete POSIX library. This is actual CMake
+compile/link evidence; it is not a
+complete application build or Windows execution result.

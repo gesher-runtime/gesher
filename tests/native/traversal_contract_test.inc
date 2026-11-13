@@ -111,16 +111,41 @@ static int traversal_run(void) {
   const char* second = getenv("GESHER_TRAVERSAL_SECOND_ROOT");
   traversal_check("second-volume fixture is configured", second != NULL);
   if (second) {
-    char external[1024], external_file[1100], cross[1024], cross_file[1024];
+    char external[1024], external_file[1100], external_other[1100], cross[1024], cross_file[1024];
     snprintf(external, sizeof(external), "%s/gesher-traversal-volume-XXXXXX", second);
     traversal_check("create owned second-volume directory", mkdtemp(external) != NULL);
     struct stat external_stat;
     traversal_check("fixture actually spans devices", stat(external, &external_stat) == 0 && external_stat.st_dev != root_stat.st_dev);
     snprintf(external_file, sizeof(external_file), "%s/leaf", external);
+    snprintf(external_other, sizeof(external_other), "%s/other", external);
     snprintf(cross, sizeof(cross), "%s/cross", root); snprintf(cross_file, sizeof(cross_file), "%s/cross/leaf", root);
     fd = open(external_file, O_CREAT | O_WRONLY | O_TRUNC, 0600);
     traversal_check("create second-volume leaf", fd >= 0); if (fd >= 0) close(fd);
+    fd = open(external_other, O_CREAT | O_WRONLY | O_TRUNC, 0600);
+    traversal_check("create second-volume sibling", fd >= 0); if (fd >= 0) close(fd);
     traversal_check("create volume boundary link", symlink(external, cross) == 0);
+    // getcwd() on Gesher omits the current drive. Both a direct second-volume
+    // root and a command-line link must keep resolving their original paths
+    // after a child callback changes the current Windows drive.
+    const char* starts[] = {external, cross};
+    for (unsigned start = 0; start < sizeof(starts) / sizeof(starts[0]); ++start) {
+      for (int depth = 0; depth < 2; ++depth) {
+        char first_child[1100], next_child[1100];
+        snprintf(first_child, sizeof(first_child), "%s/leaf", starts[start]);
+        snprintf(next_child, sizeof(next_child), "%s/other", starts[start]);
+        traversal_count = 0;
+        traversal_check("physical second-volume CHDIR walk succeeds", TRAVERSAL_NFTW(starts[start], traversal_record, 1, FTW_PHYS | FTW_CHDIR | (depth ? FTW_DEPTH : 0)) == 0);
+        int ri = traversal_find(starts[start]), fi = traversal_find(first_child), oi = traversal_find(next_child);
+        traversal_check("second-volume CHDIR visits both siblings", traversal_count == 3 && ri >= 0 && fi >= 0 && oi >= 0);
+        if (ri >= 0 && fi >= 0 && oi >= 0) {
+          traversal_check("second-volume root callback uses initial directory", traversal_same(&traversal_rows[ri].cwd, &original));
+          traversal_check("second-volume siblings retain file type", traversal_rows[fi].type == FTW_F && traversal_rows[oi].type == FTW_F);
+          traversal_check("second-volume child callback uses its parent", traversal_same(&traversal_rows[fi].cwd, &external_stat) && traversal_same(&traversal_rows[oi].cwd, &external_stat));
+        }
+        struct stat restored;
+        traversal_check("second-volume CHDIR restores initial directory", stat(".", &restored) == 0 && traversal_same(&restored, &original));
+      }
+    }
     for (int depth = 0; depth < 2; ++depth) {
       traversal_count = 0;
       traversal_check("FTW_MOUNT traversal succeeds", TRAVERSAL_NFTW(root, traversal_record, 1, FTW_MOUNT | (depth ? FTW_DEPTH : 0)) == 0);
@@ -130,7 +155,7 @@ static int traversal_run(void) {
     }
     traversal_count = 0;
     traversal_check("without mount flag, linked volume is traversed", TRAVERSAL_NFTW(root, traversal_record, 1, 0) == 0 && traversal_find(cross_file) >= 0);
-    unlink(cross); unlink(external_file); rmdir(external);
+    unlink(cross); unlink(external_file); unlink(external_other); rmdir(external);
   }
   unlink(command); unlink(up); unlink(alias); unlink(bad); unlink(loop); unlink(leaf); unlink(file); rmdir(sub); rmdir(root);
   printf("traversal_contract: %d checks, %d failures\n", traversal_checks, traversal_failures);
