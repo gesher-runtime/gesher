@@ -3,6 +3,15 @@
 Date: 2026-11-13. Baseline: [`b9a94530c6bf91f7a14913e3ef284dd76bdf28bf`](https://github.com/gesher-runtime/gesher/commit/b9a94530c6bf91f7a14913e3ef284dd76bdf28bf).
 Account for this work: **palmoni5**.
 
+Local build/inventory revisions and their published equivalents are preserved in
+the [source publication receipt](android-system-source-receipt-2026-11-13.json).
+Publication through the authenticated account creates new commit identities;
+each complete Git tree was verified identical before advancing the branch.
+In particular, local inventory candidate `402dee91` is publicly accessible as
+[`a071489b`](https://github.com/gesher-runtime/gesher/commit/a071489b2ec71ab1aa13c762721fe18027db27ec),
+and local source `c1fd53a2` with the completed native/Sync QA corrections as
+[`b6cd3b3c`](https://github.com/gesher-runtime/gesher/commit/b6cd3b3c27e15b051f770226ead45e519fedd3dd).
+
 The fresh baseline and reconstructed candidate inventories find **910 public SDK
 classes absent from the selected boot path**, **548 public/protected member
 descriptors absent from classes that are present**, and **502 possible modifier
@@ -41,13 +50,17 @@ The following open work was inspected to avoid duplicating implementation:
 | [#14](https://github.com/gesher-runtime/gesher/pull/14) | `6c8ca61c4d7024c63ca6019aed6b3c58d13827a9` | Network builders/callbacks, WebMessagePort, timerfd and codec/surface lifecycle. Cookie, futex and traversal changes must coexist with that implementation and test wiring. |
 | [#15](https://github.com/gesher-runtime/gesher/pull/15) | `d2e11ea48580e46cba48156aafa8308476e39813` | Device idle/shutdown accounting. An active sync must explicitly contribute device work; merely binding a background service is insufficient under that policy. |
 
-<!-- FINAL_VALIDATION: update after final QA and published-head CI. -->
-A non-mutating merge-tree check of reconstructed source `402dee91` together with
-both inspected PR heads completed without conflicts, producing tree
-`b5efe33cf32231cc3802db483d5a0445322ed65b`. This is source coexistence evidence
-for that intermediate head, not execution evidence or the final published-head
-CI result. Independent services/native QA and real Windows qualification are
-pending at this report's preparation point.
+Independent service, native, Cookie, input and sensor reviews completed. A
+non-mutating merge-tree check of source `c1fd53a2`, including their corrections,
+together with both inspected PR heads completed without conflicts, producing
+tree `ce176eb9b104cad7ad761ab7791c41e49eb82e42`. A mixed futex smoke test against
+the prospective PR #14 shim passed 164 assertions. With the complete PR #15
+application freshly built, the Sync fixture passed 319 host assertions and a
+separate idle-policy probe passed 11 additional checks, including active work
+after ten idle timeouts and bounded grace for a future retry. These are source,
+host and cross-compilation results. The published PR's current-head Actions
+checks and description record actual Windows qualification; this report does
+not substitute an earlier run or a local host model for that result.
 
 The reference is official Android SDK 36 and the repository's pinned AOSP
 [`android-16.0.0_r4`](../../aosp.lock). The local `frameworks/base` checkout
@@ -89,7 +102,9 @@ gesher-app.jar SHA-256 is
 Candidate `402dee91927ae5538636b7c498bffd87c67cb585`, including Sync, passed
 javac/D8 and location-provider builds; its application JAR SHA-256 is
 `106fb138b851f1adbc64e8af119c6d19c7c674b45045e0f07dec239c4e7e389a`.
-A later QA change requires separately identified final-head validation.
+The later native correction does not change these Java inputs. The final Sync
+QA fixture was rebuilt through javac/D8 after adding cancellation-retirement
+assertions. The complete graphics fixture build also passed.
 
 Verified toolchain inputs:
 
@@ -237,10 +252,12 @@ A `DeviceWork.Source` advertises active sync as due now, preserving work under
 PR #15's idle policy independently of generic background-service grace.
 
 The [contract fixture](../../tests/dex-services/gesher/services/SyncManagerContractTest.java)
-uses actual production admission/result code, controlled clocks, reentrant
-cancellation and real AbstractThreadedSyncAdapter workers. Windows adds generated
-AIDL/Parcel dispatch. Independent services QA is required before upgrading these
-fresh author results to final validation. Persisted Android retry/history,
+uses actual production admission/result code, controlled clocks and reentrant
+cancellation. Its Windows mode adds generated AIDL/Parcel dispatch and real
+AbstractThreadedSyncAdapter workers/provider clients; the host mode does not
+execute that additional worker path. Independent services QA passed 319 host
+checks and strengthened device-work accounting during cancellation retirement.
+Persisted Android retry/history,
 periodic-key migration, JobScheduler/network policy and quotas remain separate.
 
 ### Cookie callbacks: return to the calling Looper
@@ -308,6 +325,12 @@ details follow pinned Android
 and [fts.c](https://android.googlesource.com/platform/bionic/+/android-16.0.0_r4/libc/bionic/fts.c),
 whose behavior differs from assumptions based only on glibc.
 
+Independent QA found that Gesher's drive-stripping `getcwd()` could misresolve
+access paths after a Windows cross-volume `FTW_CHDIR`. The walk now restores
+its owned initial directory before resolving an access path or callback parent.
+Direct second-volume roots and links to them exercise preorder/postorder,
+multiple siblings, callback directory identity and initial-directory restoration.
+
 The bionic shim now exposes `ftw`/`ftw64` alongside `nftw`/`nftw64`, preserves
 nested callback state and converts the x86-64 stat callback payload to the ARM64
 guest structure. The mount fixture requires an actual second filesystem, not a
@@ -345,19 +368,22 @@ CTS case or a supported-app count.
 
 | Gate | Fresh result available | Boundary |
 | --- | --- | --- |
-| Settings | 61 host checks; six baseline controls compile then fail intended query/CRUD/call/persistence/limit/observer expectations | Actual provider/store with declared host boundary; ordinary-UID remote transport needs Windows |
-| Sync | 315 author-run checks | Production admission/clocks/results/cancellation, actual adapter workers; independent review and Windows AIDL path pending |
+| Settings | 61 independently rerun host checks; six baseline controls compile then fail intended query/CRUD/call/persistence/limit/observer expectations | Actual provider/store with declared host boundary; ordinary-UID remote transport needs Windows |
+| Sync | 319 independently rerun host checks; four baseline controls compile then fail intended assertions | Production admission/clocks/results/cancellation; Windows adds AIDL and actual adapter workers |
+| Sync with PR #15 | Full combined application and service fixtures build; 319 Sync checks plus 11 idle-policy checks pass | Actual merged service/activity registry and DeviceWork policy, with declared host JNI boundaries |
 | Cookie | 86 asynchronous + 86 immediate + 90 unavailable-backend checks | Actual framework Looper; controlled WebView2 completion. Independently rerun |
 | Keyboard | 50 ASan/UBSan checks; baseline compiles and fails 38 expectations | Extracted production path with controlled Win32 state, independently rerun |
 | Sensors | 920 ASan/UBSan checks; baseline compiles and fails eight checks | Actual buffer/sampler with controlled source, independently rerun |
-| Traversal | 447 ASan/UBSan walk assertions plus 34 adapter assertions | Real host filesystem and second filesystem; native independent QA pending |
-| Futex | 396 ASan/UBSan, 316 ThreadSanitizer, 232 real-Linux-reference assertions | Supported public/mixed-route/concurrency contracts; native independent QA pending |
+| Traversal | 485 ASan/UBSan walk assertions plus 34 adapter assertions | Independently rerun; real host filesystem and second filesystem |
+| Futex | 396 ASan/UBSan, 316 ThreadSanitizer, 232 real-Linux-reference assertions | Independently rerun supported public/mixed-route/concurrency contracts |
+| Futex with PR #14 | 164 mixed guest/host ASan/UBSan assertions | Prospective merged bionic syscall adapter; Windows transport remains separate |
 | Futex negative control | Baseline production compiles, then fails ten of 18 validation assertions | Fixture sensitivity without relying on compilation failure |
-| Native cross-compilation | Changed production units/native fixtures compile under pinned LLVM-MinGW; both guest ABIs compile under NDK r27c API26 | Compile/link evidence; focused owner probe stubs unrelated memfd dependency |
-| Java builds | Baseline and candidate `402dee91` application/service builds pass javac/D8; location-provider build passes | Verified reused platform inputs; any subsequent QA change needs its own validation |
-| Inventory tooling | 34 existing class/member/service scanner unit tests pass | Parser/classification checks, not runtime compatibility |
+| Native cross-compilation | Changed production units/native fixtures compile under pinned LLVM-MinGW; both guest ABIs compile under NDK r27c API26 | Compile/link evidence, distinct from Windows execution |
+| Actual POSIX CMake/PE link | Complete POSIX library and native traversal/futex/module/owner targets build with actual product flags/target declarations; module import library precedes POSIX archive | EXE exports owner without importing it; private anchor is not exported. Replaying with the old public-symbol option reproduces the missing EXE owner |
+| Java builds | Baseline/candidate application, service and graphics fixtures pass javac/D8; location provider passes; final Sync QA fixture rebuild passes | Verified reused platform inputs; production app bytes remain those recorded for `402dee91` |
+| Inventory tooling | 52 existing compatibility/class/member/service scanner unit tests pass | Parser/classification checks, not runtime compatibility |
 | CI configuration | Changed PowerShell scripts parse; four YAML files and 90 plain Bash blocks pass syntax checks | Syntax only, not workflow execution |
-| Published-head Windows CI | Pending | Real Binder/CursorWindow, WebView2, Win32 input/sensors, separate PE ownership, second volume and ARM64 callbacks |
+| Published-head Windows CI | Read the PR's current-head Actions result and linked evidence | Real Binder/CursorWindow, WebView2, Win32 input/sensors, separate PE ownership, second volume and ARM64 callbacks |
 
 Local ASan/UBSan used `ASAN_OPTIONS=detect_leaks=0` because this environment runs
 under ptrace and LeakSanitizer refuses that mode. Committed runners do not carry
@@ -373,6 +399,13 @@ raises baseline NullPointerException for a nonnull callback without a Looper.
 The new code explicitly checks that contract before effects. Final PR evidence
 must identify the tested head and its own native/framework/ARM64 workflow runs;
 an intermediate host pass or another PR's green run is insufficient.
+
+Independent integration review found no additional blocker in CMake, artifact
+packaging, failure propagation or the compact inventories. Keyboard track33
+and sensor track58 run in the full Windows suite. Track98's Settings, Sync,
+Cookie, traversal and futex routes run in both the full and framework-contract
+suites. Test executables and the test DLL are excluded from the installer by
+its explicit file list.
 
 ## Remaining priorities and source evidence
 
