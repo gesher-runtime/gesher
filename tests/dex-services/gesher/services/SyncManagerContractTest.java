@@ -476,10 +476,14 @@ public final class SyncManagerContractTest {
                 Thread cancel = new Thread(() -> { try { h.cancel(ONE, AUTHORITY); } catch (Throwable error) { failure.set(error); } finally { returned.countDown(); } });
                 cancel.setDaemon(true); cancel.start();
                 check(returned.await(1, TimeUnit.SECONDS), "Cancellation waited for external callback");
+                check(com.gesher.server.DeviceWork.dueWithin(0),
+                        "Cancellation released device idle protection before the held callback retired");
             } finally { release.countDown(); worker.join(3000); }
             check(!worker.isAlive() && failure.get() == null, "Callback/cancellation did not finish: " + failure.get());
             h.timer.drain();
             check(h.active() == 0 && h.pending() == 0 && h.bindings() == 0, "Cancellation leaked late binding");
+            check(!com.gesher.server.DeviceWork.dueWithin(0),
+                    "Retired cancellation retained device idle protection");
             check(h.starts.size() == (duringStart ? 1 : 0), "Retired operation started after cancellation");
             if (duringStart) {
                 h.starts.get(0).context.onFinished(result("soft")); h.timer.drain();
