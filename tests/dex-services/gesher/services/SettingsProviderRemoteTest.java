@@ -34,9 +34,9 @@ public final class SettingsProviderRemoteTest {
     private static int checks;
     private static synchronized void check(boolean result, String why) { if (!result) throw new AssertionError(why); checks++; }
     private static void server(String readyFile) throws Exception {
-        check(Process.myUid() == Process.SYSTEM_UID, "Server must run as the system UID");
         String root = System.getenv("ANDROID_ROOT");
         Main.bootstrap("settings-contract", root + "/build.prop", root + "/framework/framework-res.apk");
+        check(Process.myUid() == Process.SYSTEM_UID, "Server must run as the system UID");
         Map<String, IBinder> services = Services.create(Collections.emptyList());
         for (Map.Entry<String, IBinder> service : services.entrySet()) ServiceManager.addService(service.getKey(), service.getValue());
         IActivityManager am = IActivityManager.Stub.asInterface(services.get("activity"));
@@ -99,7 +99,8 @@ public final class SettingsProviderRemoteTest {
     }
     public static void main(String[] args) throws Exception {
         if (args.length > 0 && args[0].equals("server")) {
-            System.loadLibrary("android_runtime"); server(args[1]);
+            // Main.bootstrap owns the server JNI library in the framework class loader.
+            server(args[1]);
         } else client();
     }
 }

@@ -14,7 +14,9 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.PrintStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -112,6 +114,20 @@ public final class SettingsProviderContractTest {
         try (Cursor c = p.query(item("nullable"), null, null, null, null)) { check(c.getCount() == 0, "Deleted row absent"); }
         p.call("PUT_system", "literal-null", value("null"));
         check(read(p, "literal-null") == null, "Android literal null normalization");
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        PrintStream original = System.out;
+        long before;
+        try (PrintStream log = new PrintStream(captured, true, "UTF-8")) {
+            System.setOut(log);
+            p.call("PUT_system", "contract-log", value("7"));
+            before = rowId(p, "contract-log");
+            p.call("PUT_system", "contract-log", value("7"));
+        } finally { System.setOut(original); }
+        check("7".equals(read(p, "contract-log")) && rowId(p, "contract-log") == before,
+                "Repeated accepted PUT preserves its value and generation");
+        check(captured.toString("UTF-8").lines().filter(
+                line -> line.equals("system_server: settings: updated system key contract-log")).count() == 2,
+                "Accepted PUT diagnostic includes unchanged durable values");
     }
     private static void persistence(File file) throws Exception {
         ContentProvider p = provider(file);
@@ -131,7 +147,13 @@ public final class SettingsProviderContractTest {
         check(loaded.call("GET_global", "device_name", null).getString("value") == null, "Deleted default remains deleted");
         File blocker = new File(file.getParentFile(), "not-a-directory"); Files.write(blocker.toPath(), new byte[]{1});
         ContentProvider broken = provider(new File(blocker, "settings.bin"));
-        rejects(IllegalStateException.class, () -> broken.call("PUT_system", "failed", value("not-committed")));
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        PrintStream original = System.out;
+        try (PrintStream log = new PrintStream(captured, true, "UTF-8")) {
+            System.setOut(log);
+            rejects(IllegalStateException.class, () -> broken.call("PUT_system", "failed", value("not-committed")));
+        } finally { System.setOut(original); }
+        check(!captured.toString("UTF-8").contains("settings: updated"), "Failed persistence must not report an accepted PUT");
         check(read(broken, "failed") == null, "Failed persistence rolls back insertion");
         String old = read(broken, "font_scale");
         rejects(IllegalStateException.class, () -> broken.call("PUT_system", "font_scale", value("9")));
