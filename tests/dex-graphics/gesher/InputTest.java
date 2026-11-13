@@ -53,6 +53,7 @@ public final class InputTest {
       keyCharacterMap();
       senderAndReceiver();
       window();
+      keyContracts();
     } catch (Throwable t) {
       // Looper threads would keep the VM alive.
       t.printStackTrace();
@@ -487,6 +488,98 @@ public final class InputTest {
     pair[1].dispose();
     thread.quitSafely();
     window.close();
+  }
+
+  /** Actual Win32 producer and channel coverage for sided keys and chords. */
+  private static void keyContracts() throws Exception {
+    NativeWindow window = NativeWindow.create("Gesher key contracts", 320, 240);
+    long hwnd = window.getHwnd();
+    InputChannel[] pair = InputChannel.openInputChannelPair("key contract channel");
+    HandlerThread thread = new HandlerThread("key contract receiver");
+    thread.start();
+    Receiver receiver = new Receiver(pair[1], thread.getLooper());
+    WindowInput input = WindowInput.attach(hwnd, pair[0], new WindowInput.Options());
+    try {
+      receiver.done = new CountDownLatch(1);
+      receiver.last = event -> event instanceof KeyEvent
+          && ((KeyEvent) event).getKeyCode() == KeyEvent.KEYCODE_F12
+          && ((KeyEvent) event).getAction() == KeyEvent.ACTION_UP;
+      boolean posted = WindowInput.postMessage(hwnd, WM_KEYDOWN, 0x10, 0x002A0001L)
+          && WindowInput.postMessage(hwnd, WM_KEYDOWN, 0x10, 0x00360001L)
+          && WindowInput.postMessage(hwnd, WM_KEYUP, 0x10, 0xC02A0001L)
+          && WindowInput.postMessage(hwnd, WM_KEYDOWN, 'Q', 0x00100001L)
+          && WindowInput.postMessage(hwnd, WM_KEYUP, 'Q', 0xC0100001L)
+          && WindowInput.postMessage(hwnd, WM_KEYUP, 0x10, 0xC0360001L)
+          && WindowInput.postMessage(hwnd, WM_KEYDOWN, 0x11, 0x001D0001L)
+          && WindowInput.postMessage(hwnd, WM_KEYDOWN, 0x11, 0x011D0001L)
+          && WindowInput.postMessage(hwnd, WM_KEYUP, 0x11, 0xC01D0001L)
+          && WindowInput.postMessage(hwnd, WM_KEYDOWN, 'W', 0x00110001L)
+          && WindowInput.postMessage(hwnd, WM_KEYUP, 'W', 0xC0110001L)
+          && WindowInput.postMessage(hwnd, WM_KEYUP, 0x11, 0xC11D0001L)
+          && WindowInput.postMessage(hwnd, WM_KEYDOWN, 'A', 0x001E0001L);
+      Thread.sleep(40);
+      posted &= WindowInput.postMessage(hwnd, WM_KEYDOWN, 'B', 0x00300001L);
+      Thread.sleep(40);
+      posted &= WindowInput.postMessage(hwnd, WM_KEYDOWN, 'A', 0x401E0001L)
+          && WindowInput.postMessage(hwnd, WM_KEYUP, 'B', 0xC0300001L)
+          && WindowInput.postMessage(hwnd, WM_KEYUP, 'A', 0xC01E0001L)
+          && WindowInput.postMessage(hwnd, WM_KEYDOWN, 'A', 0x001E0001L)
+          && WindowInput.postMessage(hwnd, WM_KEYDOWN, 'Q', 0x401E0001L)
+          && WindowInput.postMessage(hwnd, WM_KEYUP, 'Q', 0xC01E0001L)
+          && WindowInput.postMessage(hwnd, WM_KEYDOWN, 0x7B, 0x00580001L)
+          && WindowInput.postMessage(hwnd, WM_KEYUP, 0x7B, 0xC0580001L);
+      check(posted && receiver.done.await(10, TimeUnit.SECONDS), "key contracts: Win32 sequence delivered");
+      List<KeyEvent> a = new ArrayList<>(), b = new ArrayList<>();
+      KeyEvent q = null, w = null;
+      for (InputEvent event : receiver.snapshot()) {
+        if (!(event instanceof KeyEvent)) continue;
+        KeyEvent key = (KeyEvent) event;
+        if (key.getScanCode() == 30) a.add(key);
+        if (key.getKeyCode() == KeyEvent.KEYCODE_B) b.add(key);
+        if (key.getKeyCode() == KeyEvent.KEYCODE_Q && key.getAction() == KeyEvent.ACTION_DOWN) q = key;
+        if (key.getKeyCode() == KeyEvent.KEYCODE_W && key.getAction() == KeyEvent.ACTION_DOWN) w = key;
+      }
+      check(q != null && q.hasModifiers(KeyEvent.META_SHIFT_RIGHT_ON),
+          "key contracts: releasing left Shift preserves right Shift");
+      check(w != null && w.hasModifiers(KeyEvent.META_CTRL_RIGHT_ON),
+          "key contracts: releasing left Ctrl preserves right Ctrl");
+      check(a.size() == 6 && b.size() == 2 && a.get(1).getRepeatCount() == 1
+              && a.get(1).getDownTime() == a.get(0).getDownTime()
+              && a.get(2).getDownTime() == a.get(0).getDownTime()
+              && b.get(1).getDownTime() == b.get(0).getDownTime()
+              && b.get(0).getDownTime() > a.get(0).getDownTime(),
+          "key contracts: chord repeats and releases retain separate down times");
+      check(a.size() == 6 && a.get(4).getKeyCode() == KeyEvent.KEYCODE_A
+              && a.get(5).getKeyCode() == KeyEvent.KEYCODE_A
+              && a.get(5).getDownTime() == a.get(3).getDownTime(),
+          "key contracts: mapping changes retain the initial key through release");
+
+      receiver.done = new CountDownLatch(1);
+      receiver.last = event -> event instanceof KeyEvent
+          && ((KeyEvent) event).getKeyCode() == KeyEvent.KEYCODE_Y
+          && ((KeyEvent) event).getAction() == KeyEvent.ACTION_UP;
+      int locks = WindowInput.MODIFIER_CAPS_LOCK | WindowInput.MODIFIER_NUM_LOCK
+          | WindowInput.MODIFIER_SCROLL_LOCK | WindowInput.MODIFIER_META_RIGHT;
+      input.inject(WindowInput.EVENT_KEY_DOWN, 0, 0, 0, 'Y', 0x15, 0, locks, 0, 0, 0, 0);
+      input.inject(WindowInput.EVENT_KEY_UP, 0, 0, 0, 'Y', 0x15, 0, locks, 0, 0, 0, 0);
+      check(receiver.done.await(10, TimeUnit.SECONDS), "key contracts: lock/meta events delivered");
+      KeyEvent y = null;
+      for (InputEvent event : receiver.snapshot()) {
+        if (event instanceof KeyEvent && ((KeyEvent) event).getKeyCode() == KeyEvent.KEYCODE_Y) {
+          y = (KeyEvent) event;
+        }
+      }
+      check(y != null && y.isCapsLockOn() && y.isNumLockOn() && y.isScrollLockOn()
+              && (y.getMetaState() & KeyEvent.META_META_RIGHT_ON) != 0
+              && (y.getMetaState() & KeyEvent.META_META_LEFT_ON) == 0,
+          "key contracts: lock toggles and right Meta reach Android");
+    } finally {
+      input.close();
+      onThread(thread, receiver::dispose);
+      pair[0].dispose(); pair[1].dispose();
+      thread.quitSafely();
+      window.close();
+    }
   }
 
   private static void check(boolean ok, String what) {
