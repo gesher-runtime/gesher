@@ -671,8 +671,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         long deadline = SystemClock.uptimeMillis() + WAIT_TIMEOUT_MS;
         synchronized (this) {
             // ActivityTaskSupervisor.waitActivityVisibleOrLaunched: until the launch is
-            // complete (here: the activity is idle), or it went away.
-            while (!r.idle && r.state != State.DESTROYED) {
+            // complete (here: the activity is idle), or it went away. A trampoline (a
+            // launcher activity that starts the app's real one and stays below it,
+            // stopped, never idle) completes the launch with that activity: one started
+            // after it in its task that is idle (Android's launch transition ends when
+            // the task's windows are drawn).
+            while (!r.idle && r.state != State.DESTROYED && idleAbove(r) == null) {
                 long left = deadline - SystemClock.uptimeMillis();
                 if (left <= 0) {
                     result.timeout = true;
@@ -688,6 +692,18 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         result.totalTime = SystemClock.uptimeMillis() - r.startTime;
         return result;
+    }
+
+    /** An activity started after {@code r} in its task that is idle, or null. Guarded by this. */
+    private ActivityRecord idleAbove(ActivityRecord r) {
+        for (int i = mActivities.size() - 1; i >= 0; i--) {
+            ActivityRecord a = mActivities.get(i);
+            if (a != r && a.taskId == r.taskId && a.idle && a.state != State.DESTROYED
+                    && a.startTime >= r.startTime) {
+                return a;
+            }
+        }
+        return null;
     }
 
     @Override
