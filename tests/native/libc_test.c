@@ -8,6 +8,10 @@
 // result with printf (itself a check of the shim's variadic bridge) and
 // returns the number of failures.
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+
 #include <android/log.h>
 #include <dirent.h>
 #include <dlfcn.h>
@@ -61,6 +65,13 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "positioned_io_contract_test.inc"
 #include "memfd_contract_test.inc"
 #include "utc_time_contract_test.inc"
+#include "pthread_key_contract_test.inc"
+#include "poll_timeout_contract_test.inc"
+#include "addrinfo_contract_test.inc"
+#include "ordinary_os_contract_test.inc"
+#include "sendfile_contract_test.inc"
+#include "freopen_mode_contract_test.inc"
+#include "statvfs_contract_test.inc"
 
 // --- memory and strings -------------------------------------------------------
 
@@ -634,6 +645,13 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_positioned_io_contracts();
   test_memfd_contracts();
   test_utc_time_contracts();
+  test_pthread_key_contracts();
+  test_poll_timeout_contracts();
+  test_addrinfo_contracts();
+  test_ordinary_os_contracts();
+  test_sendfile_contracts();
+  test_freopen_mode_contracts();
+  test_statvfs_contracts();
 #if defined(__x86_64__)
   test_timerfd_syscalls();
 #endif

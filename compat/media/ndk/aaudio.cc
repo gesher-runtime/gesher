@@ -395,18 +395,29 @@ aaudio_result_t SYSV RequestStop(AAudioStream* s) {
 }
 int32_t SYSV GetState(AAudioStream* s) { return s != nullptr ? s->state.load() : kStateUninitialized; }
 
+// A timeout is a duration, including values close to INT64_MAX. Do not let
+// adding the monotonic clock turn a long wait into an already-expired one.
+int64_t StreamDeadline(int64_t timeout_ns) {
+  const int64_t now = Now();
+  if (timeout_ns <= 0) return now;
+  return now > INT64_MAX - timeout_ns ? INT64_MAX : now + timeout_ns;
+}
+
 aaudio_result_t SYSV WaitForStateChange(AAudioStream* s, int32_t input, int32_t* next, int64_t timeout_ns) {
   if (s == nullptr) return kErrorNull;
-  int64_t end = Now() + timeout_ns;
+  const int64_t end = StreamDeadline(timeout_ns);
   while (s->state == input && Now() < end) std::this_thread::sleep_for(std::chrono::milliseconds(1));
   if (next != nullptr) *next = s->state;
   return s->state == input ? kErrorTimeout : kOk;
 }
 
 int32_t SYSV Write(AAudioStream* s, const void* data, int32_t frames, int64_t timeout_ns) {
-  if (s == nullptr) return kErrorNull;
-  if (s->b.data_cb != nullptr || s->track == nullptr) return kErrorInvalidState;
-  int64_t end = Now() + timeout_ns;
+  if (s == nullptr || data == nullptr) return kErrorNull;
+  if (s->b.data_cb != nullptr) return kErrorInvalidState;
+  if (frames < 0) return kErrorIllegalArgument;
+  if (frames == 0) return 0;
+  if (s->track == nullptr) return kErrorInvalidState;
+  const int64_t end = StreamDeadline(timeout_ns);
   const uint8_t* p = static_cast<const uint8_t*>(data);
   int32_t done = 0;
   for (;;) {
@@ -423,9 +434,10 @@ int32_t SYSV Write(AAudioStream* s, const void* data, int32_t frames, int64_t ti
 
 int32_t SYSV Read(AAudioStream* s, void* data, int32_t frames, int64_t timeout_ns) {
   if (s == nullptr || data == nullptr) return kErrorNull;
+  if (frames < 0) return kErrorIllegalArgument;
+  if (frames == 0) return 0;
   if (s->capture == nullptr || s->b.data_cb != nullptr) return kErrorInvalidState;
-  if (frames <= 0) return 0;
-  const int64_t end = Now() + timeout_ns;
+  const int64_t end = StreamDeadline(timeout_ns);
   uint8_t* p = static_cast<uint8_t*>(data);
   int32_t done = 0;
   for (;;) {

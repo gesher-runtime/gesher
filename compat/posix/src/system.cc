@@ -107,38 +107,146 @@ int uname(struct utsname* buf) {
 
 // --- statvfs -----------------------------------------------------------------
 
+namespace {
+
+// Keep the final Win32 namespace intact: in particular, \\?\UNC\ is not a
+// drive prefix that can be removed. A handle also follows a file symlink or
+// directory junction to the volume containing the actual file.
+int StatvfsHandle(HANDLE h, struct statvfs* buf) {
+  constexpr DWORD flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
+  DWORD needed = GetFinalPathNameByHandleW(h, nullptr, 0, flags);
+  if (needed == 0) return gesher::FailWithLastError();
+  std::wstring path;
+  for (;;) {
+    if (needed > 32768) return errno = ENAMETOOLONG, -1;
+    path.resize(needed);
+    DWORD length = GetFinalPathNameByHandleW(h, path.data(), needed, flags);
+    if (length == 0) return gesher::FailWithLastError();
+    if (length < needed) {
+      path.resize(length);
+      break;
+    }
+    // A rename between the size query and the read can lengthen the path.
+    needed = length == needed ? needed + 1 : length;
+  }
+  // A root is no longer than the full path plus a trailing separator.
+  std::wstring root(path.size() + 2, L'\0');
+  if (!GetVolumePathNameW(path.c_str(), root.data(), static_cast<DWORD>(root.size())))
+    return gesher::FailWithLastError();
+  ULARGE_INTEGER avail, total, free;
+  if (!GetDiskFreeSpaceExW(root.c_str(), &avail, &total, &free))
+    return gesher::FailWithLastError();
+  FillStatvfs(avail, total, free, buf);
+  return 0;
+}
+
+bool FullFilesystemPath(const std::wstring& input, std::wstring* path) {
+  DWORD needed = GetFullPathNameW(input.c_str(), 0, nullptr, nullptr);
+  if (needed == 0) return gesher::FailWithLastError(), false;
+  for (;;) {
+    if (needed > 32768) return errno = ENAMETOOLONG, false;
+    path->resize(needed);
+    DWORD length = GetFullPathNameW(input.c_str(), needed, path->data(), nullptr);
+    if (length == 0) return gesher::FailWithLastError(), false;
+    if (length < needed) {
+      path->resize(length);
+      return true;
+    }
+    needed = length == needed ? needed + 1 : length;
+  }
+}
+
+// The nearest-existing-ancestor fallback must stop at the drive/share root;
+// turning D:\ into D: would select that drive's current directory instead.
+bool ParentFilesystemPath(std::wstring* path) {
+  size_t root;
+  bool extended_unc = path->size() >= 8 && path->rfind(L"\\\\?\\", 0) == 0 &&
+                      ((*path)[4] == L'U' || (*path)[4] == L'u') &&
+                      ((*path)[5] == L'N' || (*path)[5] == L'n') &&
+                      ((*path)[6] == L'C' || (*path)[6] == L'c') && (*path)[7] == L'\\';
+  size_t network = extended_unc ? 8 :
+                   path->rfind(L"\\\\", 0) == 0 &&
+                   path->rfind(L"\\\\?\\", 0) != 0 &&
+                   path->rfind(L"\\\\.\\", 0) != 0 ? 2 : 0;
+  if (network != 0) {
+    size_t server = path->find(L'\\', network);
+    size_t share = server == std::wstring::npos ? server : path->find(L'\\', server + 1);
+    root = share == std::wstring::npos ? path->size() : share + 1;
+  } else {
+    size_t prefix = path->rfind(L"\\\\?\\", 0) == 0 ||
+                    path->rfind(L"\\\\.\\", 0) == 0 ? 4 : 0;
+    size_t slash = path->find(L'\\', prefix);
+    root = slash == std::wstring::npos ? path->size() : slash + 1;
+  }
+  size_t end = path->size();
+  while (end > root && (*path)[end - 1] == L'\\') --end;
+  if (end <= root) return false;
+  if (end < path->size()) {
+    path->resize(end);
+  } else {
+    size_t slash = path->rfind(L'\\', end - 1);
+    path->resize(slash < root ? root : slash);
+  }
+  return true;
+}
+
+}  // namespace
+
 // Android's own directories (`/data`: SQLiteGlobal's default page size is
 // StatFs("/data")'s block size; `/system`) are not on the disk (ADR 0010): an
 // absolute path that does not exist answers for the volume it would be on, its
 // nearest existing ancestor's.
 int statvfs(const char* path, struct statvfs* buf) {
-  ULARGE_INTEGER avail, total, free;
-  std::wstring w = gesher::Widen(path);
-  while (!GetDiskFreeSpaceExW(w.c_str(), &avail, &total, &free)) {
+  if (path == nullptr || buf == nullptr) return errno = EFAULT, -1;
+  if (*path == '\0') return errno = ENOENT, -1;
+  std::wstring mapped;
+  gesher::PathKind kind = gesher::MapPath(path, &mapped);
+  if (kind == gesher::PathKind::kMissing) return errno = ENOENT, -1;
+  if (kind != gesher::PathKind::kFile) {
+    // Retain the existing backing-volume approximation for virtual paths.
+    // This repair does not supply procfs/device filesystem statistics.
+    mapped = gesher::Widen(path);
+  }
+  for (wchar_t& c : mapped) if (c == L'/') c = L'\\';
+  std::wstring windows;
+  if (!FullFilesystemPath(mapped, &windows)) return -1;
+  const bool allow_ancestor = path[0] == '/' || path[0] == '\\';
+  bool ancestor = false;
+  for (;;) {
+    HANDLE h = CreateFileW(windows.c_str(), 0,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+      int result;
+      BY_HANDLE_FILE_INFORMATION info;
+      if (ancestor && !GetFileInformationByHandle(h, &info)) {
+        result = gesher::FailWithLastError();
+      } else if (ancestor && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+        errno = ENOTDIR;
+        result = -1;
+      } else {
+        result = StatvfsHandle(h, buf);
+      }
+      int saved_errno = errno;
+      CloseHandle(h);
+      errno = saved_errno;
+      return result;
+    }
     DWORD error = GetLastError();
-    size_t slash = w.find_last_of(L"/\\");
     bool missing = error == ERROR_PATH_NOT_FOUND || error == ERROR_FILE_NOT_FOUND;
-    if (!missing || (path[0] != '/' && path[0] != '\\') || slash == std::wstring::npos ||
-        w.size() <= 1) {
+    if (!missing || !allow_ancestor || !ParentFilesystemPath(&windows)) {
       SetLastError(error);
       return gesher::FailWithLastError();
     }
-    w.resize(slash == 0 ? 1 : slash);
+    ancestor = true;
   }
-  FillStatvfs(avail, total, free, buf);
-  return 0;
 }
 
 int fstatvfs(int fd, struct statvfs* buf) {
-  wchar_t path[MAX_PATH];
+  if (buf == nullptr) return errno = EFAULT, -1;
   HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE || GetFinalPathNameByHandleW(h, path, MAX_PATH, 0) == 0) {
-    return errno = EBADF, -1;
-  }
-  ULARGE_INTEGER avail, total, free;
-  if (!GetDiskFreeSpaceExW(path, &avail, &total, &free)) return gesher::FailWithLastError();
-  FillStatvfs(avail, total, free, buf);
-  return 0;
+  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  return StatvfsHandle(h, buf);
 }
 
 // --- mount -------------------------------------------------------------------
@@ -184,9 +292,19 @@ int sched_getcpu(void) { return static_cast<int>(GetCurrentProcessorNumber()); }
 int sched_setaffinity(pid_t, size_t, const cpu_set_t*) { return 0; }
 
 int sched_getaffinity(pid_t, size_t size, cpu_set_t* set) {
-  memset(set, 0, size);
+  // The Linux kernel accepts whole-word masks only, and a short mask must
+  // fail before it is modified. CPU_SET would write a full word even when
+  // the caller supplied only one byte (or only room for an earlier word).
+  constexpr size_t word = sizeof(set->__bits[0]);
+  if (size == 0 || size % word != 0) return errno = EINVAL, -1;
   DWORD cpus = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-  for (DWORD i = 0; i < cpus && i < CPU_SETSIZE; ++i) CPU_SET(i, set);
+  if (cpus == 0) return gesher::FailWithLastError();
+  size_t required = ((static_cast<size_t>(cpus) + 63) / 64) * word;
+  if (size < required) return errno = EINVAL, -1;
+  if (set == nullptr) return errno = EFAULT, -1;
+  memset(set, 0, size);
+  auto* bytes = reinterpret_cast<unsigned char*>(set);
+  for (DWORD i = 0; i < cpus; ++i) bytes[i / 8] |= static_cast<unsigned char>(1u << (i % 8));
   return 0;
 }
 

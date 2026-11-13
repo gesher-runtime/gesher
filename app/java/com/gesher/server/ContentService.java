@@ -23,7 +23,7 @@ import android.os.IBinder;
 import android.os.RemoteException;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -48,18 +48,29 @@ final class ContentService extends IContentService.Default {
         final Uri uri;
         final boolean descendants;
         final IContentObserver observer;
+        final IBinder binder;
         final ApkPackage owner;
+        boolean retired;  // guarded by mObservers, including before publication
 
         Observer(Uri uri, boolean descendants, IContentObserver observer, ApkPackage owner) {
             this.uri = uri;
             this.descendants = descendants;
             this.observer = observer;
+            this.binder = observer.asBinder();
             this.owner = owner;
         }
 
         @Override
         public void binderDied() {
-            removeObserver(observer);
+            List<Observer> removed;
+            synchronized (mObservers) {
+                if (retired) return;
+                // Death may arrive after linkToDeath succeeds but before the
+                // registering thread publishes this entry in mObservers.
+                retired = true;
+                removed = removeObserversLocked(binder);
+            }
+            for (Observer entry : removed) unlink(entry);
         }
     }
 
@@ -126,42 +137,62 @@ final class ContentService extends IContentService.Default {
         }
         Observer o = new Observer(uri, notifyForDescendants, observer, owner);
         try {
-            observer.asBinder().linkToDeath(o, 0);
+            o.binder.linkToDeath(o, 0);
         } catch (RemoteException e) {
             return;  // already gone
         }
+        boolean retained;
         synchronized (mObservers) {
-            mObservers.add(o);
+            retained = !o.retired;
+            if (retained) mObservers.add(o);
         }
+        if (!retained) unlink(o);
     }
 
     @Override
     public void unregisterContentObserver(IContentObserver observer) {
         if (observer == null) return;
         ApkPackage owner = caller(null, false);
+        IBinder binder = observer.asBinder();
+        List<Observer> removed;
         synchronized (mObservers) {
             for (Observer o : mObservers) {
-                if (o.observer.asBinder().equals(observer.asBinder()) && owner != null && o.owner != owner) {
+                if (o.binder == binder && owner != null && o.owner != owner) {
                     throw new SecurityException("Cannot unregister another content observer");
                 }
             }
+            removed = removeObserversLocked(binder);
         }
-        removeObserver(observer);
+        for (Observer entry : removed) unlink(entry);
     }
 
-    private void removeObserver(IContentObserver observer) {
+    private void removeObserver(Observer observer) {
+        List<Observer> removed;
         synchronized (mObservers) {
-            for (int i = mObservers.size() - 1; i >= 0; i--) {
-                Observer o = mObservers.get(i);
-                if (o.observer.asBinder() == observer.asBinder()) {
-                    mObservers.remove(i);
-                    try {
-                        o.observer.asBinder().unlinkToDeath(o, 0);
-                    } catch (Throwable t) {
-                        // not linked
-                    }
-                }
+            // A snapshotted callback can fail after this entry was replaced.
+            if (observer.retired) return;
+            removed = removeObserversLocked(observer.binder);
+        }
+        for (Observer entry : removed) unlink(entry);
+    }
+
+    private List<Observer> removeObserversLocked(IBinder binder) {
+        List<Observer> removed = new ArrayList<>();
+        for (int i = mObservers.size() - 1; i >= 0; i--) {
+            Observer entry = mObservers.get(i);
+            if (entry.binder == binder) {
+                entry.retired = true;
+                removed.add(mObservers.remove(i));
             }
+        }
+        return removed;
+    }
+
+    private void unlink(Observer entry) {
+        try {
+            entry.binder.unlinkToDeath(entry, 0);
+        } catch (Throwable ignored) {
+            // A death notification can already have retired the native link.
         }
     }
 
@@ -181,39 +212,48 @@ final class ContentService extends IContentService.Default {
             }
         }
         // Each observer once, with the URIs it is told of (ContentService's ObserverCollector).
-        Map<IBinder, List<Uri>> told = new LinkedHashMap<>();
-        Map<IBinder, Observer> whom = new LinkedHashMap<>();
+        IBinder notifyingObserver = observer == null ? null : observer.asBinder();
+        Map<IBinder, List<Uri>> told = new IdentityHashMap<>();
+        // Preserve first-seen delivery order without calling Binder hashCode or
+        // equals implementations while the observer registry is locked.
+        List<Observer> whom = new ArrayList<>();
         synchronized (mObservers) {
             for (Uri uri : uris) {
                 for (Observer o : mObservers) {
                     if (!matches(o, uri, flags)) continue;
                     if (!allowed(o.owner, o.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             || !allowed(o.owner, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)) continue;
-                    boolean self = observer != null
-                            && o.observer.asBinder() == observer.asBinder();
+                    boolean self = notifyingObserver != null && o.binder == notifyingObserver;
                     if (self && !observerWantsSelfNotifications) continue;
-                    IBinder b = o.observer.asBinder();
-                    told.computeIfAbsent(b, k -> new ArrayList<>()).add(uri);
-                    whom.putIfAbsent(b, o);
+                    List<Uri> changes = told.get(o.binder);
+                    if (changes == null) {
+                        changes = new ArrayList<>();
+                        told.put(o.binder, changes);
+                        whom.add(o);
+                    }
+                    changes.add(uri);
                 }
             }
         }
-        for (Map.Entry<IBinder, List<Uri>> e : told.entrySet()) {
-            Observer o = whom.get(e.getKey());
+        for (Observer o : whom) {
             // Earlier observer callbacks can revoke a grant or replace another
             // observer's installed code. Recheck at delivery, after those callbacks.
             List<Uri> authorized = new ArrayList<>();
-            for (Uri uri : e.getValue()) {
+            for (Uri uri : told.get(o.binder)) {
                 if (allowed(o.owner, o.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         && allowed(o.owner, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)) authorized.add(uri);
             }
             if (authorized.isEmpty()) continue;
-            boolean self = observer != null && e.getKey() == observer.asBinder();
+            boolean self = notifyingObserver != null && o.binder == notifyingObserver;
             try {
                 o.observer.onChangeEtc(self, authorized.toArray(new Uri[0]), flags,
                         userHandle < 0 ? 0 : userHandle);
             } catch (RemoteException ex) {
-                removeObserver(o.observer);
+                removeObserver(o);
+            } catch (RuntimeException ex) {
+                // A local observer runs on this thread. Its exception must not
+                // suppress other observers, sync scheduling or system listeners.
+                SystemServer.log("content: an observer callback failed: " + ex);
             }
         }
         if ((flags & ContentResolver.NOTIFY_SYNC_TO_NETWORK) != 0) {

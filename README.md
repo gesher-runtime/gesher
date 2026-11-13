@@ -35,7 +35,7 @@ Full design: [docs/architecture.md](docs/architecture.md).
 
 Android compatibility is partial. Apps can still fail on missing module APIs,
 native imports or backend behavior. The
-[current compatibility audit](docs/research/android-crash-contracts-2026-11-08.md)
+[current compatibility audit](docs/research/android-compatibility-audit-2026-11-12.md)
 records concrete crash-contract repairs, regression coverage and substantial
 remaining work; a successful build or symbol lookup alone does not prove that
 an arbitrary APK will run correctly.

@@ -1,0 +1,204 @@
+// Real production key state and exit logic. Host pthreads supply only the
+// external TLS notification boundary; Windows thread creation is not exercised.
+#include "shim_internal.h"
+#include "pthread_cleanup.h"
+
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <dlfcn.h>
+#include <mutex>
+#include <pthread.h>
+#include <thread>
+#include <vector>
+
+namespace gesher::bionic {
+namespace {
+@KEY_STATE_AND_EXIT@
+struct ThreadRecord {};
+thread_local ThreadRecord* t_record = nullptr;
+@KEY_HOST_EXIT@
+}
+extern "C" {
+@KEY_API@
+}
+void RegisterKeyContracts(SymbolTable& t) {
+#define P(name) t[#name] = reinterpret_cast<void*>(&gesher_bionic_##name)
+@KEY_REGISTRATIONS@
+#undef P
+}
+}
+
+static int failures;
+static void check(const char* label, bool ok) {
+  std::printf("%-78s %s\n", label, ok ? "ok" : "FAIL");
+  if (!ok) ++failures;
+  std::fflush(stdout);
+}
+static void* key_symbol(void*, const char* name) {
+  static gesher::bionic::SymbolTable table = [] {
+    gesher::bionic::SymbolTable result;
+    gesher::bionic::RegisterKeyContracts(result);
+    return result;
+  }();
+  auto found = table.find(name);
+  return found == table.end() ? nullptr : found->second;
+}
+#define dlsym key_symbol
+#include "pthread_key_contract_test.inc"
+#undef dlsym
+
+using namespace gesher::bionic;
+struct Mutation {
+  int32_t first = -1, second = -1, replacement = -1;
+  bool assign = false, fresh = false;
+  int result = 0, first_calls = 0, old_calls = 0, new_calls = 0;
+};
+static void NewMutation(void* p) { ++static_cast<Mutation*>(p)->new_calls; }
+static void OldMutation(void* p) { ++static_cast<Mutation*>(p)->old_calls; }
+static void MutateOther(void* p) {
+  auto* m = static_cast<Mutation*>(p);
+  ++m->first_calls;
+  m->result |= gesher_bionic_pthread_key_delete(m->second);
+  m->result |= gesher_bionic_pthread_key_create(&m->replacement, NewMutation);
+  if (m->assign) {
+    m->fresh = gesher_bionic_pthread_getspecific(m->replacement) == nullptr;
+    m->result |= gesher_bionic_pthread_setspecific(m->replacement, m);
+  }
+}
+static void MutateSelf(void* p) {
+  auto* m = static_cast<Mutation*>(p);
+  ++m->first_calls;
+  m->result |= gesher_bionic_pthread_key_delete(m->first);
+  m->result |= gesher_bionic_pthread_key_create(&m->replacement, NewMutation);
+  m->fresh = gesher_bionic_pthread_getspecific(m->replacement) == nullptr;
+  m->result |= gesher_bionic_pthread_setspecific(m->replacement, m);
+}
+static void test_mutations() {
+  ThreadRecord record;
+  t_record = &record;
+  for (bool assign : {false, true}) {
+    Mutation m;
+    m.assign = assign;
+    gesher_bionic_pthread_key_create(&m.first, MutateOther);
+    gesher_bionic_pthread_key_create(&m.second, OldMutation);
+    gesher_bionic_pthread_setspecific(m.first, &m);
+    gesher_bionic_pthread_setspecific(m.second, &m);
+    RunThreadExit();
+    check(assign ? "pthread keys: callback may assign the replacement generation"
+                 : "pthread keys: callback reuse skips later obsolete values",
+          m.result == 0 && m.replacement == m.second && m.first_calls == 1 &&
+          m.old_calls == 0 && m.new_calls == (assign ? 1 : 0) && (!assign || m.fresh));
+    gesher_bionic_pthread_key_delete(m.first);
+    gesher_bionic_pthread_key_delete(m.replacement);
+  }
+  Mutation self;
+  gesher_bionic_pthread_key_create(&self.first, MutateSelf);
+  gesher_bionic_pthread_setspecific(self.first, &self);
+  RunThreadExit();
+  check("pthread keys: destructor may delete/recreate itself without deadlock",
+        self.result == 0 && self.replacement == self.first && self.fresh &&
+        self.first_calls == 1 && self.new_calls == 1);
+  gesher_bionic_pthread_key_delete(self.replacement);
+  t_record = nullptr;
+}
+
+struct ExitState {
+  int32_t key = -1;
+  int rounds = 0;
+  std::vector<int> order;
+  bool cleared_before_callback = true;
+};
+static void RecordCleanup(void* p) { static_cast<ExitState*>(p)->order.push_back(1); }
+static void RecordCpp(void* p) { static_cast<ExitState*>(p)->order.push_back(2); }
+static void Reinsert(void* p) {
+  auto* s = static_cast<ExitState*>(p);
+  s->cleared_before_callback &= gesher_bionic_pthread_getspecific(s->key) == nullptr;
+  s->order.push_back(3);
+  ++s->rounds;
+  gesher_bionic_pthread_setspecific(s->key, s);
+}
+static void test_exit_order() {
+  ThreadRecord record;
+  t_record = &record;
+  ExitState state;
+  CleanupRecord cleanup;
+  t_cleanups.Push(&cleanup, RecordCleanup, &state);
+  gesher_bionic_cxa_thread_atexit_impl(RecordCpp, &state, nullptr);
+  gesher_bionic_pthread_key_create(&state.key, Reinsert);
+  gesher_bionic_pthread_setspecific(state.key, &state);
+  RunThreadExit();
+  check("pthread keys: cleanup/C++ TLS/key order and four reinsertion rounds",
+        state.cleared_before_callback && state.rounds == 4 &&
+        state.order == std::vector<int>({1, 2, 3, 3, 3, 3}));
+  gesher_bionic_pthread_key_delete(state.key);
+  t_record = nullptr;
+}
+
+struct HostExitState {
+  pthread_key_t art_key{};
+  int32_t detach_key = -1;
+  int art_calls = 0;
+  bool detached = false, cpp_before_detach = false;
+  ExitState rounds;
+};
+static void ArtExit(void* p) {
+  auto* s = static_cast<HostExitState*>(p);
+  if (++s->art_calls == 1) pthread_setspecific(s->art_key, s);
+}
+static void Detach(void* p) {
+  auto* s = static_cast<HostExitState*>(p);
+  s->detached = true;
+  pthread_setspecific(s->art_key, nullptr);
+}
+static void HostCpp(void* p) {
+  auto* s = static_cast<HostExitState*>(p);
+  s->cpp_before_detach = !s->detached;
+}
+static void test_host_exit() {
+  HostExitState state;
+  pthread_key_create(&state.art_key, ArtExit);
+  gesher_bionic_pthread_key_create(&state.detach_key, Detach);
+  gesher_bionic_pthread_key_create(&state.rounds.key, Reinsert);
+  std::thread worker([&] {
+    pthread_setspecific(state.art_key, &state);
+    gesher_bionic_pthread_setspecific(state.detach_key, &state);
+    gesher_bionic_pthread_setspecific(state.rounds.key, &state.rounds);
+    gesher_bionic_cxa_thread_atexit_impl(HostCpp, &state, nullptr);
+  });
+  worker.join();
+  check("pthread keys: host exit detaches before a second ART callback",
+        state.art_calls == 1 && state.detached && state.cpp_before_detach);
+  check("pthread keys: host exit retains four callback rounds",
+        state.rounds.rounds == 4 && state.rounds.cleared_before_callback);
+  pthread_key_delete(state.art_key);
+  gesher_bionic_pthread_key_delete(state.detach_key);
+  gesher_bionic_pthread_key_delete(state.rounds.key);
+}
+
+static void test_generation_limit() {
+#ifdef HAVE_KEY_GENERATIONS
+  for (int i = 0; i < kKeysMax; ++i) g_key_generations[i] = UINT64_MAX;
+  g_key_generations[0] = UINT64_MAX - 1;
+  int32_t key = -1, next = -1;
+  check("pthread keys: last generation is usable",
+        gesher_bionic_pthread_key_create(&key, nullptr) == 0 && key == 0 &&
+        g_key_generations[0] == UINT64_MAX);
+  check("pthread keys: exhausted generation retires without wrap",
+        gesher_bionic_pthread_key_delete(key) == 0 &&
+        gesher_bionic_pthread_key_create(&next, nullptr) == kEAGAIN && next == -1 &&
+        g_key_generations[0] == UINT64_MAX);
+#else
+  std::puts("SKIP generation boundary: baseline has no generation state");
+#endif
+}
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  if (std::strcmp(argv[1], "public") == 0) test_pthread_key_contracts();
+  else if (std::strcmp(argv[1], "mutations") == 0) test_mutations();
+  else if (std::strcmp(argv[1], "exit_order") == 0) test_exit_order();
+  else if (std::strcmp(argv[1], "host_exit") == 0) test_host_exit();
+  else if (std::strcmp(argv[1], "generation_limit") == 0) test_generation_limit();
+  else return 2;
+  return failures == 0 ? 0 : 1;
+}

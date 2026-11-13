@@ -184,15 +184,15 @@ public final class DispatchSecurityTest {
         Object controller = field(amType, "mPendingIntents").get(am);
         Class<?> recordType = capability.getClass();
         Method same = method(recordType, "sameKey", int.class, String.class, int.class,
-                String.class, int.class, Intent.class, int.class);
+                String.class, int.class, Intent.class, String.class, int.class);
         int uid = field(recordType, "uid").getInt(capability);
         String identity = (String) field(recordType, "creatorIdentity").get(capability);
         require((Boolean) same.invoke(capability, ActivityManager.INTENT_SENDER_BROADCAST,
-                senderPackage, uid, identity, 731, pending, PendingIntent.FLAG_IMMUTABLE), "Own PI key did not match");
+                senderPackage, uid, identity, 731, pending, null, PendingIntent.FLAG_IMMUTABLE), "Own PI key did not match");
         require(!(Boolean) same.invoke(capability, ActivityManager.INTENT_SENDER_BROADCAST,
-                senderPackage, uid + 1, identity, 731, pending, PendingIntent.FLAG_IMMUTABLE), "PI key ignored UID");
+                senderPackage, uid + 1, identity, 731, pending, null, PendingIntent.FLAG_IMMUTABLE), "PI key ignored UID");
         require(!(Boolean) same.invoke(capability, ActivityManager.INTENT_SENDER_BROADCAST,
-                senderPackage, uid, identity, 731, pending, PendingIntent.FLAG_MUTABLE), "PI key ignored mutability");
+                senderPackage, uid, identity, 731, pending, null, PendingIntent.FLAG_MUTABLE), "PI key ignored mutability");
         Object replacement = parse.invoke(null, new File(args[0], "rotated.apk").getPath());
         method(pmType, "add", apk).invoke(pm, replacement);
         Method send = method(controller.getClass(), "send", recordType, Intent.class, String.class);

@@ -22,6 +22,7 @@
 #include <sys/inotify.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 #include <windows.h>
 
@@ -77,11 +78,55 @@ static int RemoveTree(const char* path, const struct stat*, int flag, struct FTW
 
 // --- paths ---------------------------------------------------------------------------
 
+// Compare the public adapters with an independently supplied native directory
+// on the same volume. Free space can change between queries; total capacity is
+// stable. OtherDrive supplies TEMP's native path rather than the current drive.
+static void FilesystemSpace(const std::string& path, const wchar_t* native_directory) {
+  ULARGE_INTEGER avail, total, free_bytes;
+  bool native_ok = GetDiskFreeSpaceExW(native_directory, &avail, &total, &free_bytes);
+  CHECK(native_ok);
+  struct statvfs by_path{}, by_fd{};
+  int path_result = statvfs(path.c_str(), &by_path);
+  CHECK(path_result == 0 && by_path.f_bsize > 0 && by_path.f_frsize > 0);
+  CHECK(native_ok && path_result == 0 && by_path.f_frsize > 0 &&
+        by_path.f_blocks == total.QuadPart / by_path.f_frsize);
+  int fd = open(path.c_str(), O_RDONLY);
+  CHECK(fd >= 0);
+  if (fd >= 0) {
+    int fd_result = fstatvfs(fd, &by_fd);
+    CHECK(fd_result == 0 && by_fd.f_bsize == by_path.f_bsize &&
+          by_fd.f_frsize == by_path.f_frsize && by_fd.f_blocks == by_path.f_blocks);
+    CHECK(close(fd) == 0);
+  }
+}
+
 static void Paths(const std::string& dir) {
+  wchar_t native_directory[32768];
+  DWORD native_length = GetCurrentDirectoryW(32768, native_directory);
+  CHECK(native_length > 0 && native_length < 32768);
+  if (native_length == 0 || native_length >= 32768) return;
+  FilesystemSpace(dir, native_directory);
+  struct statvfs unavailable;
+  memset(&unavailable, 0xa5, sizeof(unavailable));
+  struct statvfs unchanged = unavailable;
+  errno = 0;
+  CHECK(fstatvfs(-1, &unavailable) == -1 && errno == EBADF &&
+        memcmp(&unavailable, &unchanged, sizeof(unavailable)) == 0);
+  std::string missing = "posix-probe-" + std::to_string(GetCurrentProcessId()) + "/not-created/space";
+  errno = 0;
+  CHECK(statvfs(missing.c_str(), &unavailable) == -1 && errno == ENOENT &&
+        memcmp(&unavailable, &unchanged, sizeof(unavailable)) == 0);
+  errno = 0;
+  CHECK(statvfs("/mnt/unc/server", &unavailable) == -1 && errno == ENOENT &&
+        memcmp(&unavailable, &unchanged, sizeof(unavailable)) == 0);
+  struct statvfs data{};
+  CHECK(statvfs("/data", &data) == 0 && data.f_bsize > 0 && data.f_blocks > 0);
+
   // A Hebrew name, and a path past MAX_PATH.
   std::string hebrew = dir + "/\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d.txt";  // shalom
   CHECK(PutFile(hebrew, "hello"));
   CHECK(FileContent(hebrew) == "hello");
+  FilesystemSpace(hebrew, native_directory);
   DIR* d = opendir(dir.c_str());
   bool found = false;
   while (d != nullptr) {
@@ -107,6 +152,8 @@ static void Paths(const std::string& dir) {
   std::string deep_file = deep + "/file.txt";
   CHECK(PutFile(deep_file, "deep"));
   CHECK(FileContent(deep_file) == "deep");
+  FilesystemSpace(deep, native_directory);
+  FilesystemSpace(deep_file, native_directory);
   struct stat st;
   CHECK(stat(deep_file.c_str(), &st) == 0 && st.st_size == 4);
   char* real = realpath(deep_file.c_str(), nullptr);
@@ -219,6 +266,7 @@ static void Paths(const std::string& dir) {
   CHECK(getcwd(cwd, sizeof(cwd)) != nullptr);
   CHECK(chdir(dir.c_str()) == 0);
   CHECK(FileContent("b.txt") == "A");
+  FilesystemSpace("b.txt", native_directory);
   int dfd = open(cwd, O_RDONLY | O_DIRECTORY);
   CHECK(dfd >= 0 && fchdir(dfd) == 0);
   close(dfd);
@@ -242,6 +290,10 @@ static void OtherDrive() {
     std::string self = std::string("/mnt/") + static_cast<char>('a' + current - 1) + cwd;
     struct stat a, b;
     CHECK(stat(self.c_str(), &a) == 0 && stat(cwd, &b) == 0 && a.st_ino == b.st_ino);
+    wchar_t native_directory[32768];
+    DWORD length = GetCurrentDirectoryW(32768, native_directory);
+    CHECK(length > 0 && length < 32768);
+    if (length > 0 && length < 32768) FilesystemSpace(self, native_directory);
     return;
   }
   char drive = static_cast<char>(towlower(letter));
@@ -254,6 +306,8 @@ static void OtherDrive() {
   CHECK(mkdir(dir.c_str(), 0755) == 0);
   CHECK(PutFile(dir + "/x.txt", "other drive"));
   CHECK(FileContent(dir + "/x.txt") == "other drive");
+  FilesystemSpace(dir, temp);
+  FilesystemSpace(dir + "/x.txt", temp);
   char* real = realpath((dir + "/x.txt").c_str(), nullptr);
   CHECK(real != nullptr && strncmp(real, "/mnt/", 5) == 0 && real[5] == drive &&
         strchr(real, ':') == nullptr);

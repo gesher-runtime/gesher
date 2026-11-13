@@ -1,0 +1,317 @@
+// Verbatim production clock and affinity adapters. Only the Windows clock,
+// processor-count, and signal-wait boundaries are replaced. The shared public
+// fixture also runs unchanged against Linux and, after integration, Android ELF.
+#include "shim_internal.h"
+
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <initializer_list>
+#include <sched.h>
+#include <time.h>
+#include <vector>
+
+using DWORD = uint32_t;
+struct LARGE_INTEGER { int64_t QuadPart; };
+constexpr unsigned short ALL_PROCESSOR_GROUPS = 0xffff;
+static DWORD processor_count = 64;
+static DWORD GetActiveProcessorCount(unsigned short) { return processor_count; }
+namespace gesher {
+int FailWithLastError() { errno = EIO; return -1; }
+}
+static bool controlled_clock;
+static int64_t monotonic_ns;
+static __int128 realtime_ns;
+struct WaitAction { int64_t advance_ns; int64_t wall_change_ns; bool interrupted; };
+static std::vector<WaitAction> actions;
+static std::vector<uint32_t> waits;
+static bool QueryPerformanceFrequency(LARGE_INTEGER* value) {
+  value->QuadPart = 1000000000;
+  return true;
+}
+static bool QueryPerformanceCounter(LARGE_INTEGER* value) {
+  value->QuadPart = controlled_clock ? monotonic_ns :
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+  return true;
+}
+
+namespace gesher::bionic {
+LinuxTimespec RealtimeNow() {
+  if (controlled_clock) {
+    return {static_cast<int64_t>(realtime_ns / 1000000000),
+            static_cast<int64_t>(realtime_ns % 1000000000)};
+  }
+  timespec now;
+  if (::clock_gettime(CLOCK_REALTIME, &now) != 0) std::abort();
+  return {now.tv_sec, now.tv_nsec};
+}
+bool InterruptibleSleep(uint32_t milliseconds, uint32_t* left_ms) {
+  if (!controlled_clock) {
+    timespec request{milliseconds / 1000, static_cast<long>(milliseconds % 1000) * 1000000};
+    timespec remain{};
+    int result = ::nanosleep(&request, &remain);
+    if (left_ms != nullptr)
+      *left_ms = static_cast<uint32_t>(remain.tv_sec * 1000 + remain.tv_nsec / 1000000);
+    return result == -1 && errno == EINTR;
+  }
+  size_t index = waits.size();
+  if (index >= 16) { std::fputs("FAIL runaway controlled wait\n", stderr); std::abort(); }
+  waits.push_back(milliseconds);
+  WaitAction action = index < actions.size() ? actions[index] :
+      WaitAction{static_cast<int64_t>(milliseconds) * 1000000, 0, false};
+  monotonic_ns += action.advance_ns;
+  realtime_ns += action.advance_ns + static_cast<__int128>(action.wall_change_ns);
+  if (left_ms != nullptr) *left_ms = 0;
+  errno = ERANGE;  // Witness Android's errno-restoring wrapper.
+  return action.interrupted;
+}
+// Kept for --source baseline rejection: the old function used raw Sleep.
+[[maybe_unused]] static void Sleep(DWORD milliseconds) { InterruptibleSleep(milliseconds, nullptr); }
+void DeliverPendingSignals() {}
+namespace {
+@CLOCK_HELPERS@
+// The adjacent helper is needed only when verifying the unmodified baseline.
+[[maybe_unused]] static auto baseline_deadline_helper = &MsUntil;
+@CLOCK_IMPLEMENTATION@
+@GUEST_AFFINITY_IMPLEMENTATION@
+}
+void RegisterOrdinaryOs(SymbolTable& t) {
+#define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
+@PUBLIC_REGISTRATIONS@
+#undef E
+}
+}
+
+namespace host_affinity {
+#undef CPU_SETSIZE
+#undef CPU_SET
+@HOST_AFFINITY_TYPES@
+@HOST_CPU_SET@
+@HOST_AFFINITY_IMPLEMENTATION@
+#undef CPU_SET
+}
+
+static void* ordinary_symbol(const char* name) {
+  static gesher::bionic::SymbolTable table = [] {
+    gesher::bionic::SymbolTable result;
+    gesher::bionic::RegisterOrdinaryOs(result);
+    return result;
+  }();
+  auto found = table.find(name);
+  return found == table.end() ? nullptr : found->second;
+}
+static auto sleep_entry = reinterpret_cast<int(BIONIC_SYSV*)(
+    int, int, const gesher::bionic::LinuxTimespec*, gesher::bionic::LinuxTimespec*)>(
+        ordinary_symbol("clock_nanosleep"));
+static auto affinity_entry = reinterpret_cast<int(BIONIC_SYSV*)(int, size_t, uint8_t*)>(
+    ordinary_symbol("sched_getaffinity"));
+static int public_clock_sleep(clockid_t clock, int flags, const timespec* request, timespec* remain) {
+  static_assert(sizeof(timespec) == sizeof(gesher::bionic::LinuxTimespec));
+  return sleep_entry(clock, flags, reinterpret_cast<const gesher::bionic::LinuxTimespec*>(request),
+                     reinterpret_cast<gesher::bionic::LinuxTimespec*>(remain));
+}
+static int public_affinity(pid_t pid, size_t size, cpu_set_t* set) {
+  return affinity_entry(pid, size, reinterpret_cast<uint8_t*>(set));
+}
+static int failures;
+static void check(const char* label, int ok) {
+  std::printf("%-88s %s\n", label, ok ? "ok" : "FAIL");
+  if (!ok) ++failures;
+  std::fflush(stdout);
+}
+#define ORDINARY_CLOCK_NANOSLEEP public_clock_sleep
+#define ORDINARY_SCHED_GETAFFINITY public_affinity
+#include "ordinary_os_contract_test.inc"
+
+static void reset_clock() {
+  controlled_clock = true;
+  monotonic_ns = 10000000000LL;
+  realtime_ns = static_cast<__int128>(1000) * 1000000000;
+  actions.clear();
+  waits.clear();
+  errno = EDOM;
+}
+static void test_clock_validation() {
+  reset_clock();
+  test_clock_sleep_inputs();
+  const int unsupported[] = {2, 4, 5, 6, 8, 9, 11};
+  timespec zero{};
+  for (int clock : unsupported) {
+    errno = EDOM;
+    int result = public_clock_sleep(clock, 0, &zero, nullptr);
+    check("known clock without a sleep backend returns EOPNOTSUPP without changing errno",
+          result == EOPNOTSUPP && errno == EDOM);
+  }
+  check("validation and zero waits never enter Windows wait", waits.empty());
+}
+static void test_clock_budgets() {
+  timespec request{0, 5000000}, remain{111, 222};
+  reset_clock();
+  actions.push_back({2000000, 0, false});
+  int result = public_clock_sleep(1, 0, &request, nullptr);
+  check("early wake is retried until the precise deadline",
+        result == 0 && waits == std::vector<uint32_t>({5, 3}) && monotonic_ns == 10005000000LL);
+  check("a successful wait restores errno after the wait boundary changes it", errno == EDOM);
+
+  for (int absolute : {0, 1}) {
+    reset_clock();
+    request = {4294968 + (absolute ? 10 : 0), 1000000};
+    result = public_clock_sleep(1, absolute, &request, &remain);
+    check("long relative/absolute duration retains all finite wait slices",
+          result == 0 && waits == std::vector<uint32_t>({2147483646u, 2147483646u, 709u}) &&
+          monotonic_ns == 4294978001000000LL);
+  }
+  for (int direction : {-1, 1}) {
+    reset_clock();
+    request = {2, 0};
+    actions.push_back({500000000, direction * 3600000000000LL, false});
+    result = public_clock_sleep(0, 0, &request, nullptr);
+    check("relative REALTIME waits ignore forward/backward wall-clock changes",
+          result == 0 && monotonic_ns == 12000000000LL &&
+          waits == std::vector<uint32_t>({2000, 1500}));
+  }
+  reset_clock();
+  request = {1002, 0};
+  actions.push_back({500000000, 5000000000LL, false});
+  result = public_clock_sleep(0, 1, &request, &remain);
+  check("absolute REALTIME notices a forward adjustment on a bounded recheck",
+        result == 0 && waits == std::vector<uint32_t>({1000}) && monotonic_ns == 10500000000LL);
+  reset_clock();
+  actions.push_back({500000000, -1000000000LL, false});
+  result = public_clock_sleep(0, 1, &request, &remain);
+  check("absolute REALTIME extends the wait when wall time moves backward",
+        result == 0 && realtime_ns == static_cast<__int128>(1002) * 1000000000 &&
+        monotonic_ns == 13000000000LL);
+  reset_clock();
+  request = {2, 0};
+  actions.push_back({10000000000LL, 0, false});
+  result = public_clock_sleep(7, 0, &request, nullptr);
+  check("BOOTTIME checks the elapsed clock promptly after a resume-like jump",
+        result == 0 && waits == std::vector<uint32_t>({1000}));
+  for (int clock : {0, 1, 7}) {
+    reset_clock();
+    request = {0, 0};
+    result = public_clock_sleep(clock, 1, &request, &remain);
+    check("expired absolute deadline performs no wait and preserves remainder",
+          result == 0 && waits.empty() && remain.tv_sec == 111 && remain.tv_nsec == 222);
+  }
+}
+static void test_clock_interruption() {
+  timespec remain{111, 222}, request{10, 500000000};
+  reset_clock();
+  actions.push_back({3250000000LL, 0, true});
+  int result = public_clock_sleep(1, 0, &request, &remain);
+  check("relative interruption uses the full deadline for the normalized remainder",
+        result == EINTR && errno == EDOM && remain.tv_sec == 7 && remain.tv_nsec == 250000000);
+  reset_clock();
+  request = {20, 500000000}; remain = {111, 222};
+  actions.push_back({3250000000LL, 0, true});
+  result = public_clock_sleep(1, 1, &request, &remain);
+  check("absolute interruption preserves remainder and errno",
+        result == EINTR && errno == EDOM && remain.tv_sec == 111 && remain.tv_nsec == 222);
+  reset_clock();
+  request = {10, 500000000};
+  actions.push_back({3250000000LL, 0, true});
+  result = public_clock_sleep(1, 0, &request, &request);
+  check("relative request/remainder alias is safe", result == EINTR &&
+        request.tv_sec == 7 && request.tv_nsec == 250000000);
+
+  for (int64_t seconds : {INT64_MAX / 1000 + 1, INT64_MAX}) {
+    reset_clock();
+    request = {seconds, 999999999};
+    actions.push_back({1000, 0, true});
+    result = public_clock_sleep(1, 0, &request, &remain);
+    check("full signed time_t duration is preserved without millisecond overflow",
+          result == EINTR && errno == EDOM && waits == std::vector<uint32_t>({2147483646u}) &&
+          remain.tv_sec == seconds && remain.tv_nsec == 999998999);
+  }
+  for (int clock : {0, 1, 7}) {
+    reset_clock();
+    request = {INT64_MAX, 999999999}; remain = {111, 222};
+    actions.push_back({0, 0, true});
+    result = public_clock_sleep(clock, 1, &request, &remain);
+    check("distant absolute deadline stays finite and interruptible",
+          result == EINTR && errno == EDOM && waits.size() == 1 &&
+          waits[0] != UINT32_MAX && remain.tv_sec == 111 && remain.tv_nsec == 222);
+  }
+  reset_clock();
+  request = {1, 0};
+  actions.push_back({2000000000LL, 0, true});
+  result = public_clock_sleep(1, 0, &request, &remain);
+  check("signal delivery that consumes remaining time returns zero normalized remainder",
+        result == EINTR && remain.tv_sec == 0 && remain.tv_nsec == 0);
+}
+
+static int affinity_call(bool host, size_t size, unsigned char* storage) {
+  return host ? host_affinity::sched_getaffinity(0, size,
+                  reinterpret_cast<host_affinity::cpu_set_t*>(storage)) :
+                affinity_entry(0, size, storage);
+}
+static void test_affinity_boundaries() {
+  for (bool host : {false, true}) {
+    for (DWORD cpus : {1u, 64u, 65u, 1024u, 1025u}) {
+      processor_count = cpus;
+      for (size_t size : {size_t{0}, size_t{1}, size_t{7}, size_t{8}, size_t{9},
+                         size_t{16}, size_t{127}, size_t{128}, size_t{136}}) {
+        std::vector<unsigned char> storage(size + 16, 0xa5);
+        auto before = storage;
+        errno = 0;
+        int result = affinity_call(host, size, storage.data());
+        size_t required = ((static_cast<size_t>(cpus) + 63) / 64) * 8;
+        bool valid = size != 0 && size % 8 == 0 && size >= required;
+        if (!valid) {
+          check("host/guest short mask returns EINVAL without changing any byte",
+                result == -1 && errno == EINVAL && storage == before);
+        } else {
+          unsigned count = 0;
+          for (size_t i = 0; i < size; ++i) count += __builtin_popcount(storage[i]);
+          bool guard = std::all_of(storage.begin() + size, storage.end(),
+                                   [](unsigned char value) { return value == 0xa5; });
+          check("host/guest complete mask contains every reported CPU and keeps tail canary",
+                result == 0 && count == cpus && guard);
+        }
+      }
+    }
+    processor_count = 1;
+    errno = 0;
+    check("host/guest size-zero null preserves pinned EINVAL priority",
+          affinity_call(host, 0, nullptr) == -1 && errno == EINVAL);
+    errno = 0;
+    check("host/guest correctly sized null returns EFAULT",
+          affinity_call(host, 8, nullptr) == -1 && errno == EFAULT);
+    for (size_t size : {size_t{1}, size_t{8}}) {
+      processor_count = size == 1 ? 1 : 65;
+      void* raw = std::malloc(size);
+      if (raw == nullptr) std::abort();
+      std::memset(raw, 0xa5, size);
+      errno = 0;
+      check("exact small heap allocation is rejected without an ASan overrun",
+            affinity_call(host, size, static_cast<unsigned char*>(raw)) == -1 && errno == EINVAL);
+      std::free(raw);
+    }
+  }
+  processor_count = 0;
+  host_affinity::cpu_set_t storage;
+  std::memset(&storage, 0xa5, sizeof(storage));
+  auto before = storage;
+  errno = 0;
+  check("host processor-count failure returns its error before touching the mask",
+        host_affinity::sched_getaffinity(0, sizeof(storage), &storage) == -1 &&
+        errno == EIO && std::memcmp(&storage, &before, sizeof(storage)) == 0);
+}
+
+int main(int argc, char** argv) {
+  if (argc != 2 || sleep_entry == nullptr || affinity_entry == nullptr) return 2;
+  if (std::strcmp(argv[1], "public") == 0) test_ordinary_os_contracts();
+  else if (std::strcmp(argv[1], "clock-validation") == 0) test_clock_validation();
+  else if (std::strcmp(argv[1], "clock-budgets") == 0) test_clock_budgets();
+  else if (std::strcmp(argv[1], "clock-interruption") == 0) test_clock_interruption();
+  else if (std::strcmp(argv[1], "affinity") == 0) test_affinity_boundaries();
+  else return 2;
+  return failures == 0 ? 0 : 1;
+}

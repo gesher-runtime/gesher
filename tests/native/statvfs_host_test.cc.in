@@ -1,0 +1,436 @@
+// Production adapters and registrations are inserted verbatim. Windows path
+// and handle APIs below are explicit observed boundaries, not a Windows run.
+#include "shim_internal.h"
+
+#include <algorithm>
+#include <cerrno>
+#include <codecvt>
+#include <cstdio>
+#include <cstring>
+#include <cwchar>
+#include <locale>
+#include <map>
+#include <string>
+#include <vector>
+
+using DWORD = uint32_t;
+using HANDLE = void*;
+static HANDLE const INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(intptr_t(-1));
+constexpr DWORD MAX_PATH = 260;
+constexpr DWORD FILE_NAME_NORMALIZED = 0, VOLUME_NAME_DOS = 0;
+constexpr DWORD FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4;
+constexpr DWORD OPEN_EXISTING = 3, FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 0x10;
+constexpr DWORD ERROR_FILE_NOT_FOUND = 2, ERROR_PATH_NOT_FOUND = 3;
+constexpr DWORD ERROR_ACCESS_DENIED = 5, ERROR_INVALID_HANDLE = 6;
+constexpr DWORD ERROR_FILENAME_EXCED_RANGE = 206, ERROR_DIRECTORY = 267;
+struct ULARGE_INTEGER { uint64_t QuadPart; };
+struct BY_HANDLE_FILE_INFORMATION { DWORD dwFileAttributes; };
+struct Entry { std::wstring final_path, root; bool directory; };
+struct OpenHandle { Entry* entry; bool borrowed; };
+struct Volume { uint64_t avail, total, free; };
+
+static std::map<std::wstring, Entry> entries;
+static std::map<std::wstring, Volume> volumes;
+static std::map<HANDLE, OpenHandle> handles;
+static std::map<int, HANDLE> descriptors;
+static std::map<std::wstring, DWORD> open_errors;
+static std::vector<std::wstring> opened_paths, volume_paths, disk_paths;
+static std::vector<std::string> mapped_paths;
+static DWORD last_error, final_error, full_error, volume_error, disk_error, info_error;
+static uintptr_t next_handle;
+static int closes, open_successes;
+static bool wrong_open_contract, closed_borrowed, short_final_size, short_full_size;
+static int failures, assertions;
+static const char* route_name = "host";
+
+static void check(const char* name, bool ok) {
+  std::printf("[%s] %-84s %s\n", route_name, name, ok ? "ok" : "FAIL");
+  ++assertions;
+  if (!ok) ++failures;
+}
+static DWORD GetLastError() { return last_error; }
+static void SetLastError(DWORD value) { last_error = value; }
+static std::wstring widen(const char* input) {
+  if (input == nullptr) return {};
+  return std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>>().from_bytes(input);
+}
+static std::wstring full_name(std::wstring input) {
+  for (wchar_t& c : input) if (c == L'/') c = L'\\';
+  if (input.rfind(L"\\\\", 0) == 0 || (input.size() >= 2 && input[1] == L':')) return input;
+  if (!input.empty() && input[0] == L'\\') return L"C:" + input;
+  if (input == L".") return L"C:\\work";
+  return L"C:\\work\\" + input;
+}
+static DWORD copy_path(const std::wstring& value, wchar_t* output, DWORD size) {
+  if (size <= value.size()) {
+    // Insufficient-buffer contents are unspecified. Empty is permitted and
+    // makes the old adapter's failure deterministic without guessing contents.
+    if (output != nullptr && size != 0) output[0] = L'\0';
+    return static_cast<DWORD>(value.size() + 1);
+  }
+  std::wmemcpy(output, value.c_str(), value.size() + 1);
+  return static_cast<DWORD>(value.size());
+}
+[[maybe_unused]] static DWORD GetFullPathNameW(const wchar_t* input, DWORD size, wchar_t* output, wchar_t**) {
+  if (full_error != 0) { last_error = full_error; return 0; }
+  if (size == 0 && short_full_size) { short_full_size = false; return 4; }
+  return copy_path(full_name(input), output, size);
+}
+[[maybe_unused]] static HANDLE CreateFileW(const wchar_t* input, DWORD access, DWORD sharing, void*,
+                                          DWORD disposition, DWORD flags, HANDLE) {
+  std::wstring path(input);
+  opened_paths.push_back(path);
+  wrong_open_contract |= access != 0 || sharing != (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE) ||
+                         disposition != OPEN_EXISTING || flags != FILE_FLAG_BACKUP_SEMANTICS;
+  auto failure = open_errors.find(path);
+  if (failure != open_errors.end()) { last_error = failure->second; return INVALID_HANDLE_VALUE; }
+  auto found = entries.find(path);
+  if (found == entries.end()) { last_error = ERROR_PATH_NOT_FOUND; return INVALID_HANDLE_VALUE; }
+  HANDLE handle = reinterpret_cast<HANDLE>(++next_handle);
+  handles.emplace(handle, OpenHandle{&found->second, false});
+  ++open_successes;
+  return handle;
+}
+[[maybe_unused]] static bool CloseHandle(HANDLE handle) {
+  auto found = handles.find(handle);
+  if (found == handles.end()) { last_error = ERROR_INVALID_HANDLE; return false; }
+  closed_borrowed |= found->second.borrowed;
+  handles.erase(found);
+  ++closes;
+  last_error = ERROR_ACCESS_DENIED;
+  errno = EIO;  // Cleanup must not replace a query failure's errno.
+  return true;
+}
+[[maybe_unused]] static bool GetFileInformationByHandle(HANDLE handle, BY_HANDLE_FILE_INFORMATION* info) {
+  if (info_error != 0) { last_error = info_error; return false; }
+  auto found = handles.find(handle);
+  if (found == handles.end()) { last_error = ERROR_INVALID_HANDLE; return false; }
+  info->dwFileAttributes = found->second.entry->directory ? FILE_ATTRIBUTE_DIRECTORY : 0;
+  return true;
+}
+static DWORD GetFinalPathNameByHandleW(HANDLE handle, wchar_t* output, DWORD size, DWORD) {
+  if (final_error != 0) { last_error = final_error; return 0; }
+  auto found = handles.find(handle);
+  if (found == handles.end()) { last_error = ERROR_INVALID_HANDLE; return 0; }
+  if (size == 0 && short_final_size) { short_final_size = false; return 4; }
+  return copy_path(found->second.entry->final_path, output, size);
+}
+[[maybe_unused]] static bool GetVolumePathNameW(const wchar_t* input, wchar_t* output, DWORD size) {
+  volume_paths.emplace_back(input);
+  if (volume_error != 0) { last_error = volume_error; return false; }
+  for (const auto& item : entries) {
+    if (item.second.final_path == input) {
+      if (size <= item.second.root.size()) { last_error = ERROR_FILENAME_EXCED_RANGE; return false; }
+      std::wmemcpy(output, item.second.root.c_str(), item.second.root.size() + 1);
+      return true;
+    }
+  }
+  last_error = ERROR_PATH_NOT_FOUND;
+  return false;
+}
+static bool GetDiskFreeSpaceExW(const wchar_t* input, ULARGE_INTEGER* avail,
+                                ULARGE_INTEGER* total, ULARGE_INTEGER* free_bytes) {
+  std::wstring path(input);
+  disk_paths.push_back(path);
+  if (disk_error != 0) { last_error = disk_error; return false; }
+  auto volume = volumes.find(path);
+  if (volume == volumes.end()) {
+    auto entry = entries.find(full_name(path));
+    if (entry == entries.end()) { last_error = ERROR_PATH_NOT_FOUND; return false; }
+    if (!entry->second.directory) { last_error = ERROR_DIRECTORY; return false; }
+    volume = volumes.find(entry->second.root);
+  }
+  if (volume == volumes.end()) { last_error = ERROR_PATH_NOT_FOUND; return false; }
+  avail->QuadPart = volume->second.avail;
+  total->QuadPart = volume->second.total;
+  free_bytes->QuadPart = volume->second.free;
+  return true;
+}
+namespace gesher {
+enum class PathKind { kFile, kVirtual, kMissing };
+static std::wstring Widen(const char* input) { return widen(input); }
+[[maybe_unused]] static PathKind MapPath(const char* input, std::wstring* output) {
+  mapped_paths.emplace_back(input);
+  std::string path(input);
+  if (path == "/mnt/unc/server" || path == "/sys/not-present") {
+    output->clear(); return PathKind::kMissing;
+  }
+  if (path.rfind("/proc/", 0) == 0) { *output = widen(input + 1); return PathKind::kVirtual; }
+  if (path.rfind("/mnt/unc/", 0) == 0) {
+    *output = L"\\\\" + widen(input + 9);
+  } else if (path.rfind("/mnt/", 0) == 0 && path.size() >= 6) {
+    wchar_t letter = static_cast<wchar_t>(path[5] - 'a' + 'A');
+    *output = std::wstring(1, letter) + L":" + (path.size() == 6 ? L"\\" : widen(input + 6));
+  } else {
+    *output = widen(input);
+  }
+  return PathKind::kFile;
+}
+static int FailWithLastError() {
+  switch (last_error) {
+    case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: errno = ENOENT; break;
+    case ERROR_ACCESS_DENIED: errno = EACCES; break;
+    case ERROR_INVALID_HANDLE: errno = EBADF; break;
+    case ERROR_DIRECTORY: errno = ENOTDIR; break;
+    case ERROR_FILENAME_EXCED_RANGE: errno = ENAMETOOLONG; break;
+    default: errno = EINVAL;
+  }
+  return -1;
+}
+static HANDLE HandleFromFd(int fd) {
+  auto found = descriptors.find(fd);
+  return found == descriptors.end() ? INVALID_HANDLE_VALUE : found->second;
+}
+}
+
+namespace host_statistics {
+@HOST_TYPES@
+@FILL_IMPLEMENTATION@
+@HOST_IMPLEMENTATION@
+}
+namespace gesher::bionic {
+using host_statistics::statvfs;
+using host_statistics::fstatvfs;
+namespace {
+@GUEST_IMPLEMENTATION@
+}
+static void RegisterFilesystemStatistics(SymbolTable& table) {
+#define E(name, fn) table[name] = reinterpret_cast<void*>(&fn)
+@PUBLIC_REGISTRATIONS@
+#undef E
+}
+}
+using HostStats = struct host_statistics::statvfs;
+using GuestStats = gesher::bionic::BionicStatvfs;
+struct Route { const char* name; const char* path_symbol; const char* fd_symbol; };
+static const Route routes[] = {{"host", nullptr, nullptr},
+                              {"guest", "statvfs", "fstatvfs"},
+                              {"guest64", "statvfs64", "fstatvfs64"}};
+static gesher::bionic::SymbolTable symbols;
+
+static int path_call(const Route& route, const char* path, HostStats* out) {
+  if (route.path_symbol == nullptr) return host_statistics::statvfs(path, out);
+  GuestStats result;
+  std::memset(&result, 0xa5, sizeof(result));
+  using Function = int(BIONIC_SYSV*)(const char*, GuestStats*);
+  auto function = reinterpret_cast<Function>(symbols.at(route.path_symbol));
+  int status = function(path, &result);
+  check("guest reserved words remain initialized", std::all_of(std::begin(result.reserved),
+        std::end(result.reserved), [](uint32_t value) { return value == 0; }));
+  *out = result.base;
+  return status;
+}
+static int fd_call(const Route& route, int fd, HostStats* out) {
+  if (route.fd_symbol == nullptr) return host_statistics::fstatvfs(fd, out);
+  GuestStats result;
+  std::memset(&result, 0xa5, sizeof(result));
+  using Function = int(BIONIC_SYSV*)(int, GuestStats*);
+  auto function = reinterpret_cast<Function>(symbols.at(route.fd_symbol));
+  int status = function(fd, &result);
+  check("guest descriptor reserved words remain initialized", std::all_of(std::begin(result.reserved),
+        std::end(result.reserved), [](uint32_t value) { return value == 0; }));
+  *out = result.base;
+  return status;
+}
+static void add_entry(const std::wstring& path, const std::wstring& final_path,
+                       const std::wstring& root, bool directory) {
+  entries.emplace(path, Entry{final_path, root, directory});
+}
+static void borrow(int fd, const std::wstring& path) {
+  HANDLE handle = reinterpret_cast<HANDLE>(++next_handle);
+  handles.emplace(handle, OpenHandle{&entries.at(path), true});
+  descriptors.emplace(fd, handle);
+}
+static void reset() {
+  entries.clear(); volumes.clear(); handles.clear(); descriptors.clear(); open_errors.clear();
+  opened_paths.clear(); volume_paths.clear(); disk_paths.clear(); mapped_paths.clear();
+  last_error = final_error = full_error = volume_error = disk_error = info_error = 0;
+  closes = open_successes = 0;
+  next_handle = 100;
+  wrong_open_contract = closed_borrowed = short_final_size = short_full_size = false;
+  const std::wstring c = L"\\\\?\\C:\\", d = L"\\\\?\\D:\\", unc = L"\\\\?\\UNC\\server\\share\\";
+  volumes[c] = {UINT64_C(90000000000), UINT64_C(120000000000), UINT64_C(100000000000)};
+  volumes[d] = {UINT64_C(11000000000), UINT64_C(20000000000), UINT64_C(12000000000)};
+  volumes[unc] = {UINT64_C(21000000000), UINT64_C(80000000000), UINT64_C(22000000000)};
+  add_entry(L"C:\\", c, c, true);
+  add_entry(L"D:\\", d, d, true);
+  add_entry(L"C:\\work", c + L"work", c, true);
+  add_entry(L"C:\\work\\folder", c + L"work\\folder", c, true);
+  add_entry(L"C:\\work\\ordinary.txt", c + L"work\\ordinary.txt", c, false);
+  add_entry(L"D:\\photos", d + L"photos", d, true);
+  add_entry(L"D:\\photos\\ordinary.txt", d + L"photos\\ordinary.txt", d, false);
+  add_entry(L"D:\\photos\\שלום.txt", d + L"photos\\שלום.txt", d, false);
+  add_entry(L"C:\\work\\junction", d + L"photos", d, true);
+  add_entry(L"C:\\work\\file-link", d + L"photos\\ordinary.txt", d, false);
+  add_entry(L"\\\\server\\share\\", unc, unc, true);
+  add_entry(unc, unc, unc, true);
+  add_entry(L"\\\\?\\uNc\\server\\share\\", unc, unc, true);
+  add_entry(L"\\\\server\\share\\ordinary.txt", unc + L"ordinary.txt", unc, false);
+  add_entry(unc + L"ordinary.txt", unc + L"ordinary.txt", unc, false);
+  borrow(7, L"C:\\work\\ordinary.txt");
+  borrow(8, L"C:\\work\\folder");
+  borrow(9, L"\\\\server\\share\\ordinary.txt");
+}
+static bool matches(const HostStats& value, const std::wstring& root) {
+  const Volume& expected = volumes.at(root);
+  return value.f_bsize == 4096 && value.f_frsize == 4096 && value.f_namemax == 255 &&
+         value.f_blocks == expected.total / 4096 && value.f_bfree == expected.free / 4096 &&
+         value.f_bavail == expected.avail / 4096;
+}
+static void lifetime() {
+  check("all opened path metadata handles close", open_successes == closes);
+  check("existing descriptor handles remain borrowed", !closed_borrowed);
+  check("metadata opens use minimal access and share read/write/delete", !wrong_open_contract);
+}
+static void ordinary(const Route& route) {
+  for (const char* path : {"ordinary.txt", "folder", "C:\\", "/work/ordinary.txt"}) {
+    reset(); HostStats out{};
+    int result = path_call(route, path, &out);
+    check("ordinary file/directory/root path reports its containing volume",
+          result == 0 && matches(out, L"\\\\?\\C:\\"));
+    check("disk-space API receives a directory volume root", disk_paths == std::vector<std::wstring>{L"\\\\?\\C:\\"});
+    lifetime();
+  }
+  for (int fd : {7, 8, 9}) {
+    reset(); HostStats out{};
+    int result = fd_call(route, fd, &out);
+    check("regular, directory and UNC descriptors report their containing volume",
+          result == 0 && matches(out, fd == 9 ? L"\\\\?\\UNC\\server\\share\\" : L"\\\\?\\C:\\"));
+    check("fstatvfs opens no replacement pathname handle", opened_paths.empty());
+    lifetime();
+  }
+  reset();
+  std::wstring long_name = L"C:\\work\\";
+  for (int i = 0; i < 14; ++i) long_name += L"ordinary-long-directory-שלום\\";
+  long_name += L"file.txt";
+  const std::wstring c = L"\\\\?\\C:\\";
+  add_entry(long_name, L"\\\\?\\" + long_name, c, false);
+  borrow(10, long_name);
+  HostStats out{};
+  short_final_size = true;
+  int result = fd_call(route, 10, &out);
+  check("long final path retries an insufficient size query", result == 0 && matches(out, c));
+  check("long final path reaches volume lookup intact", !volume_paths.empty() && volume_paths.back() == L"\\\\?\\" + long_name);
+  std::string utf8 = std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>>().to_bytes(long_name);
+  short_full_size = true;
+  result = path_call(route, utf8.c_str(), &out);
+  check("long Unicode path survives full-path buffer growth", result == 0 && matches(out, c));
+  lifetime();
+}
+static void namespaces(const Route& route) {
+  struct Case { const char* path; const wchar_t* root; };
+  const Case cases[] = {
+    {"/mnt/c/work/ordinary.txt", L"\\\\?\\C:\\"},
+    {"/mnt/d/photos/ordinary.txt", L"\\\\?\\D:\\"},
+    {"/mnt/d/photos/שלום.txt", L"\\\\?\\D:\\"},
+    {"/mnt/unc/server/share/ordinary.txt", L"\\\\?\\UNC\\server\\share\\"},
+    {"\\\\server\\share\\ordinary.txt", L"\\\\?\\UNC\\server\\share\\"},
+    {"\\\\?\\UNC\\server\\share\\ordinary.txt", L"\\\\?\\UNC\\server\\share\\"},
+    {"/work/file-link", L"\\\\?\\D:\\"},
+    {"/work/junction", L"\\\\?\\D:\\"},
+  };
+  for (const Case& item : cases) {
+    reset(); HostStats out{};
+    int result = path_call(route, item.path, &out);
+    check("drive/UNC/link path selects the mapped file's actual volume", result == 0 && matches(out, item.root));
+    check("path API uses the shared namespace mapper", mapped_paths == std::vector<std::string>{item.path});
+    check("volume root is passed without stripping an extended namespace",
+          disk_paths == std::vector<std::wstring>{item.root});
+    lifetime();
+  }
+}
+
+static void fallback(const Route& route) {
+  struct Case { const char* path; const wchar_t* last; const wchar_t* root; };
+  const Case cases[] = {
+    {"/data/cache", L"C:\\", L"\\\\?\\C:\\"},
+    {"/mnt/d/not-present/child", L"D:\\", L"\\\\?\\D:\\"},
+    {"/mnt/unc/server/share/not-present/child", L"\\\\server\\share\\", L"\\\\?\\UNC\\server\\share\\"},
+    {"\\\\?\\UNC\\server\\share\\not-present", L"\\\\?\\UNC\\server\\share\\", L"\\\\?\\UNC\\server\\share\\"},
+    {"\\\\?\\uNc\\server\\share\\not-present", L"\\\\?\\uNc\\server\\share\\", L"\\\\?\\UNC\\server\\share\\"},
+    {"/work/junction/not-present", L"C:\\work\\junction", L"\\\\?\\D:\\"},
+    {"/proc/not-present", L"C:\\", L"\\\\?\\C:\\"},
+  };
+  for (const Case& item : cases) {
+    reset(); HostStats out{};
+    int result = path_call(route, item.path, &out);
+    check("missing absolute path retains nearest existing directory fallback",
+          result == 0 && matches(out, item.root));
+    check("ancestor fallback retains drive/share/junction boundary",
+          !opened_paths.empty() && opened_paths.back() == item.last);
+    lifetime();
+  }
+  for (const char* path : {"not-present/file", "/mnt/q/not-present", "/mnt/unc/server/absent/child",
+                           "\\\\?\\uNc\\server\\absent\\child"}) {
+    reset(); HostStats out{};
+    int result = path_call(route, path, &out);
+    check("missing relative path or unavailable volume reports ENOENT", result == -1 && errno == ENOENT);
+    check("failed ancestor lookup never queries an unrelated volume", disk_paths.empty());
+    check("fallback never opens a drive-relative path or UNC server",
+          std::find(opened_paths.begin(), opened_paths.end(), L"Q:") == opened_paths.end() &&
+          std::find(opened_paths.begin(), opened_paths.end(), L"\\\\server") == opened_paths.end() &&
+          std::find(opened_paths.begin(), opened_paths.end(), L"\\\\?\\uNc\\server") == opened_paths.end());
+    lifetime();
+  }
+  for (const char* path : {"/work/ordinary.txt/child", "/work/ordinary.txt/"}) {
+    reset(); HostStats out{};
+    int result = path_call(route, path, &out);
+    check("a regular-file ancestor reports ENOTDIR", result == -1 && errno == ENOTDIR);
+    check("regular-file ancestor does not report a guessed filesystem", disk_paths.empty());
+    lifetime();
+  }
+}
+static void errors(const Route& route) {
+  reset(); HostStats out{};
+  check("invalid descriptor reports EBADF", fd_call(route, -1, &out) == -1 && errno == EBADF);
+  check("invalid descriptor performs no filesystem query", disk_paths.empty() && opened_paths.empty());
+  for (DWORD* error : {&final_error, &volume_error, &disk_error}) {
+    reset(); *error = ERROR_ACCESS_DENIED;
+    int result = path_call(route, "ordinary.txt", &out);
+    check("query failure keeps errno across metadata-handle cleanup", result == -1 && errno == EACCES);
+    lifetime();
+  }
+  reset(); info_error = ERROR_ACCESS_DENIED;
+  check("ancestor metadata failure retains errno", path_call(route, "/data", &out) == -1 && errno == EACCES);
+  lifetime();
+  reset(); open_errors[L"C:\\locked\\file"] = ERROR_ACCESS_DENIED;
+  check("access failure is not converted to an ancestor success", path_call(route, "/locked/file", &out) == -1 && errno == EACCES);
+  check("access failure stops before the parent", opened_paths == std::vector<std::wstring>{L"C:\\locked\\file"});
+  lifetime();
+  for (const char* path : {"/mnt/unc/server", "/sys/not-present"}) {
+    reset();
+    check("mapper-rejected name reports ENOENT", path_call(route, path, &out) == -1 && errno == ENOENT);
+    check("mapper-rejected name never reaches host file or volume lookup", opened_paths.empty() && disk_paths.empty());
+  }
+  if (route.path_symbol == nullptr) {
+    for (int scenario = 0; scenario < 4; ++scenario) {
+      reset();
+      std::memset(&out, 0xa5, sizeof(out));
+      HostStats before = out;
+      int result;
+      if (scenario == 0) result = host_statistics::fstatvfs(-1, &out);
+      else {
+        if (scenario == 2) final_error = ERROR_ACCESS_DENIED;
+        if (scenario == 3) disk_error = ERROR_ACCESS_DENIED;
+        result = host_statistics::statvfs(scenario == 1 ? "not-created" : "ordinary.txt", &out);
+      }
+      check("host failure leaves the caller's output unchanged", result == -1 && std::memcmp(&out, &before, sizeof(out)) == 0);
+      lifetime();
+    }
+  }
+}
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  gesher::bionic::RegisterFilesystemStatistics(symbols);
+  for (const Route& route : routes) {
+    route_name = route.name;
+    if (std::strcmp(argv[1], "ordinary") == 0) ordinary(route);
+    else if (std::strcmp(argv[1], "namespaces") == 0) namespaces(route);
+    else if (std::strcmp(argv[1], "fallback") == 0) fallback(route);
+    else if (std::strcmp(argv[1], "errors") == 0) errors(route);
+    else return 2;
+  }
+  std::printf("statvfs: %d assertions, %d failures\n", assertions, failures);
+  return failures ? 1 : 0;
+}

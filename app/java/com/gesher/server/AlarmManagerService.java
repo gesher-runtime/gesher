@@ -180,7 +180,8 @@ final class AlarmManagerService extends IAlarmManager.Default
             mAlarms.add(a);
         }
         SystemServer.log("alarm: set " + a + " in " + inMs(a) + " ms");
-        if (alarmClock != null) alarmClocksChanged();
+        // An ordinary alarm may have replaced the current alarm clock.
+        alarmClocksChanged();
         WindowsHost.alarmKick();
     }
 
