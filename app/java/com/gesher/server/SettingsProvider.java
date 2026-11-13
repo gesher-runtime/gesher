@@ -203,6 +203,8 @@ final class SettingsProvider extends ContentProvider {
         if (method.equals("PUT_" + table)) {
             enforceWrite(table);
             put(table, arg, extras == null ? null : extras.getString("value"), false);
+            // Retain the accepted-PUT diagnostic even when a durable value is unchanged.
+            if (SettingsStore.validKey(arg)) SystemServer.log("settings: updated " + table + " key " + arg);
             return null;
         }
         if (method.equals("DELETE_" + table)) {

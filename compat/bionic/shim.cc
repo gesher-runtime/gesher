@@ -733,17 +733,36 @@ thread_local SysvFtwFn g_ftw_fn = nullptr;
 using SysvNftwFn = int (BIONIC_SYSV*)(const char*, const struct stat*, int, struct FTW*);
 thread_local SysvNftwFn g_nftw_fn = nullptr;
 
+static int BionicFtwType(int type) {
+  // Android's ftw.h numbers these differently from gesher-base/glibc.
+  switch (type) {
+    case FTW_DP: return 3;
+    case FTW_NS: return 4;
+    case FTW_SL: return 5;
+    default: return type;
+  }
+}
+
+static int HostNftwFlags(int flags) {
+  // Both Android ABIs use DEPTH=4 and CHDIR=8. Other bits retain their
+  // values, including unknown bits which the host walker ignores.
+  constexpr int kBionicDepth = 4, kBionicChdir = 8;
+  return (flags & ~(kBionicDepth | kBionicChdir)) |
+         ((flags & kBionicDepth) ? FTW_DEPTH : 0) |
+         ((flags & kBionicChdir) ? FTW_CHDIR : 0);
+}
+
 static int NftwThunk(const char* path, const struct stat* sb, int type, struct FTW* ftw) {
   if (!g_nftw_fn) return -1;
   struct stat copy = *sb;
   FixStat(&copy);
-  return g_nftw_fn(path, &copy, type, ftw);
+  return g_nftw_fn(path, &copy, BionicFtwType(type), ftw);
 }
 
 static int FtwThunk(const char* path, const struct stat* sb, int type) {
   struct stat copy = *sb;
   FixStat(&copy);
-  return g_ftw_fn(path, &copy, type);
+  return g_ftw_fn(path, &copy, BionicFtwType(type));
 }
 int BIONIC_SYSV Ftw(const char* dir, SysvFtwFn fn, int nopenfd) {
   if (!dir || !fn) return errno = EINVAL, -1;
@@ -761,7 +780,7 @@ int BIONIC_SYSV Nftw(const char* dir, SysvNftwFn fn, int nopenfd, int flags) {
   }
   auto saved = g_nftw_fn;
   g_nftw_fn = fn;
-  int r = ::nftw(dir, NftwThunk, nopenfd, flags);
+  int r = ::nftw(dir, NftwThunk, nopenfd, HostNftwFlags(flags));
   g_nftw_fn = saved;
   return r;
 }

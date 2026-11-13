@@ -20,8 +20,10 @@ struct WalkState {
   int flags;
   bool change_directory;
   std::string original_directory;
-  dev_t root_device = 0;
-  std::vector<std::pair<dev_t, ino_t>> ancestors;
+  // MinGW's ino_t is only 16 bits; Gesher's stat keeps the full NTFS file ID.
+  // Truncating an ancestor's identity prevents a later cycle from matching it.
+  decltype(stat::st_dev) root_device = 0;
+  std::vector<std::pair<decltype(stat::st_dev), decltype(stat::st_ino)>> ancestors;
   int original_directory_fd = -1;
   bool RestoreInitialDirectory() {
     // Gesher's getcwd omits the current drive. A physical walk can follow a

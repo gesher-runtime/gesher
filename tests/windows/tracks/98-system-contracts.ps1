@@ -63,6 +63,19 @@ try {
   $env:GESHER_UID = '1000'
   $env:GESHER_BINDER_UID = '1000'
   $env:GESHER_MICROG_SPOOF = '0'
+  $settingsBootstrapBinder = [Environment]::GetEnvironmentVariable('GESHER_BINDER', 'Process')
+  try {
+    Remove-Item -LiteralPath Env:GESHER_BINDER -ErrorAction SilentlyContinue
+    $settingsBootstrapOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'SettingsBootstrapContractTest') 90
+    $settingsBootstrapCode = $LASTEXITCODE
+    Check 'services: Settings context bootstrap without Binder and deferred worker transport' {
+      $global:LASTEXITCODE = $settingsBootstrapCode
+      $settingsBootstrapOut
+    } @('SettingsBootstrapContractTest all passed:', 'bootstrap without Binder, worker transport')
+  } finally {
+    if ($null -eq $settingsBootstrapBinder) { Remove-Item -LiteralPath Env:GESHER_BINDER -ErrorAction SilentlyContinue }
+    else { [Environment]::SetEnvironmentVariable('GESHER_BINDER', $settingsBootstrapBinder, 'Process') }
+  }
   $settingsContractOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'SettingsProviderContractTest') 90
   $settingsContractCode = $LASTEXITCODE
   Check 'services: durable Settings CRUD, nullable rows, errors and observer contracts' {
