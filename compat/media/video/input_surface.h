@@ -23,10 +23,14 @@ class InputSurface {
   virtual ~InputSurface() = default;
   // A new android.view.Surface (a local reference) over this input.
   virtual jobject NewJavaSurface(JNIEnv* env) = 0;
+  // Replace after any current callback on another thread has returned. A
+  // callback may replace itself; its current invocation still owns its captures.
   virtual void SetCallback(InputFrameCallback cb) = 0;
   // Frames queued so far.
   virtual uint64_t frames() const = 0;
-  // No producer may draw any more.
+  // No producer may draw any more. Waits for any callback on another thread;
+  // a callback may abandon its own input and then finish its current invocation.
+  // Callback replacement after abandonment cannot reactivate the input.
   virtual void Abandon() = 0;
 };
 

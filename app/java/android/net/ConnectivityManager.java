@@ -19,6 +19,7 @@ import com.gesher.net.WindowsProxy;
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -104,7 +105,7 @@ public class ConnectivityManager {
     /** The latest snapshot while a listener keeps it current; null otherwise. */
     private static WindowsNetworks.Snapshot sCurrent;
     private static Listener sListener;
-    private static final Map<NetworkCallback, CallbackRecord> sCallbacks = new LinkedHashMap<>();
+    private static final Map<NetworkCallback, CallbackRecord> sCallbacks = new IdentityHashMap<>();
     private static Handler sConnectivityHandler;
 
     private static IConnectivity service() {
@@ -147,6 +148,12 @@ public class ConnectivityManager {
 
     /** Receives the service's snapshots while callbacks are registered. */
     private static final class Listener extends IConnectivity.IListener.Stub {
+        final IConnectivity service;
+
+        Listener(IConnectivity service) {
+            this.service = service;
+        }
+
         @Override
         public void onSnapshot(String text) {
             WindowsNetworks.Snapshot s = WindowsNetworks.parse(text);
@@ -554,24 +561,36 @@ public class ConnectivityManager {
 
     public void unregisterNetworkCallback(NetworkCallback networkCallback) {
         if (networkCallback == null) throw new IllegalArgumentException("null NetworkCallback");
-        CallbackRecord r;
+        Listener retiredListener;
         synchronized (sLock) {
-            r = sCallbacks.remove(networkCallback);
+            CallbackRecord r = sCallbacks.get(networkCallback);
             if (r == null) {
+                if (networkCallback.mWasRegistered) return;
                 throw new IllegalArgumentException("NetworkCallback was not registered");
             }
-            r.active = false;
-            if (sCallbacks.isEmpty() && sListener != null) {
-                Listener l = sListener;
-                sListener = null;
-                sCurrent = null;
-                IConnectivity service = sService;
-                try {
-                    if (service != null) service.removeListener(l);
-                } catch (RemoteException e) {
-                    // The service is gone, and its listeners with it.
-                }
-            }
+            retiredListener = retireLocked(r);
+        }
+        removeListener(retiredListener);
+    }
+
+    /** Claim this exact registration under sLock, before allowing callback reuse. */
+    private static Listener retireLocked(CallbackRecord r) {
+        sCallbacks.remove(r.callback);
+        r.active = false;
+        if (!sCallbacks.isEmpty()) return null;
+        Listener retiredListener = sListener;
+        sListener = null;
+        sCurrent = null;
+        return retiredListener;
+    }
+
+    /** Remote teardown must not hold sLock or remove a replacement listener. */
+    private static void removeListener(Listener retiredListener) {
+        if (retiredListener == null) return;
+        try {
+            retiredListener.service.removeListener(retiredListener);
+        } catch (RemoteException e) {
+            // The service is gone, and its listeners with it.
         }
     }
 
@@ -592,7 +611,7 @@ public class ConnectivityManager {
                 throw new IllegalArgumentException("NetworkCallback was already registered");
             }
             if (service != null && sListener == null) {
-                Listener l = new Listener();
+                Listener l = new Listener(service);
                 try {
                     // Checks ACCESS_NETWORK_STATE: a SecurityException leaves nothing registered.
                     sCurrent = WindowsNetworks.parse(service.getSnapshot());
@@ -604,23 +623,20 @@ public class ConnectivityManager {
                 sListener = l;
             }
             sCallbacks.put(cb, r);
+            cb.mWasRegistered = true;
             first = sCurrent != null ? sCurrent : NO_NETWORK;
             r.post(first);  // before any later snapshot the listener posts
         }
         if (timeoutMs > 0) {
             r.handler.postDelayed(() -> {
-                boolean unavailable;
+                Listener retiredListener;
                 synchronized (sLock) {
-                    unavailable = r.active && r.current.isEmpty() && !r.everAvailable;
+                    if (sCallbacks.get(cb) != r || !r.active
+                            || !r.current.isEmpty() || r.everAvailable) return;
+                    retiredListener = retireLocked(r);
                 }
-                if (unavailable) {
-                    try {
-                        unregisterNetworkCallback(cb);
-                    } catch (IllegalArgumentException e) {
-                        return;
-                    }
-                    cb.onUnavailable();
-                }
+                removeListener(retiredListener);
+                cb.onUnavailable();
             }, timeoutMs);
         }
     }
@@ -726,6 +742,9 @@ public class ConnectivityManager {
     public static class NetworkCallback {
         public static final int FLAG_NONE = 0;
         public static final int FLAG_INCLUDE_LOCATION_INFO = 1;
+
+        /** Guarded by sLock; retained by the callback, not a global history collection. */
+        private boolean mWasRegistered;
 
         public NetworkCallback() {
         }

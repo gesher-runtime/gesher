@@ -18,17 +18,54 @@ $root = Join-Path $env:LOCALAPPDATA 'Gesher'
 $isHe = ($script:GesherUiLanguage -eq 'he')
 $flowDirection = if ($isHe) { 'RightToLeft' } else { 'LeftToRight' }
 
+# What the dashboard currently shows ($null = never drawn) and the live-refresh bookkeeping.
+# Hashtables are mutated in place so event handlers never need to assign script-scope variables.
+$script:IsBusy = $false
+$script:ViewState = @{ Device = $null; Microg = $null; Store = $null; AppsSignature = $null; AppFiles = @() }
+$script:LiveState = @{ Stamp = $null; AppsStamp = $null; PendingSince = $null; Tick = 0 }
+
 # Helper to query device running state
 function Get-DeviceStatus {
+    # The ready file can outlive a crashed device, so the recorded system_server PID must be alive.
     $ready = Join-Path $root 'data/system/gesher-device.ready'
     if (Test-Path -LiteralPath $ready) {
+        $text = $null
+        try { $text = [string](Get-Content -LiteralPath $ready -Raw -ErrorAction Stop) } catch {
+            # The device is rewriting the file; keep the last state shown rather than flicker.
+            return [bool]$script:ViewState.Device
+        }
         $serverId = 0
-        if ([int]::TryParse((Get-Content -LiteralPath $ready -Raw).Trim(), [ref] $serverId)) {
+        if ([int]::TryParse($text.Trim(), [ref] $serverId)) {
             $p = Get-Process -Id $serverId -ErrorAction SilentlyContinue
             if ($p) { return $true }
         }
     }
     return $false
+}
+
+# Cheap change detection: length and write time of the files the dashboard derives its state from.
+# Polled on the UI thread instead of FileSystemWatcher, so no event crosses threads or runspaces and
+# no directory handle is held open inside the device's data directory.
+function Get-FileStamp([string] $path) {
+    try {
+        $info = [System.IO.FileInfo]::new($path)
+        if ($info.Exists) { return "$($info.Length):$($info.LastWriteTimeUtc.Ticks)" }
+    } catch { }
+    return '-'
+}
+
+function Get-StateStamp {
+    return (@(
+        Get-FileStamp (Join-Path $root 'data/system/gesher-device.ready')
+        Get-FileStamp (Join-Path $root 'data/system/packages.list')
+        Get-FileStamp (Join-Path $root 'microg.enabled')
+        Get-FileStamp (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk')
+    ) -join '|')
+}
+
+# Shortcut labels and icons are written after packages.list, so they are tracked separately.
+function Get-AppFilesStamp {
+    return (@($script:ViewState.AppFiles | ForEach-Object { Get-FileStamp $_ }) -join '|')
 }
 
 # Helper to query microG enabled state
@@ -318,6 +355,9 @@ $statusMessage = $window.FindName('StatusMessage')
 $activityBar = $window.FindName('ActivityBar')
 
 function Set-Busy([bool] $busy, [string] $msg = '') {
+    # While an action runs (including its nested MessageBox loops) live refresh stays out of the way;
+    # every action ends with a full Refresh-Dashboard before it clears the busy state.
+    $script:IsBusy = $busy
     if ($busy) {
         $activityBar.Visibility = [System.Windows.Visibility]::Visible
         $activityBar.IsIndeterminate = $true
@@ -329,9 +369,10 @@ function Set-Busy([bool] $busy, [string] $msg = '') {
     }
 }
 
-function Refresh-Dashboard {
-    # 1. Device status
-    $deviceRunning = Get-DeviceStatus
+# Each Update-* part redraws its controls only when the state it shows actually changed.
+function Update-DeviceView([bool] $deviceRunning) {
+    if ($script:ViewState.Device -eq $deviceRunning) { return }
+    $script:ViewState.Device = $deviceRunning
     if ($deviceRunning) {
         $deviceIndicator.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#12B76A')
         $deviceStatusText.Text = Get-GesherText 'cp_device_running'
@@ -341,9 +382,11 @@ function Refresh-Dashboard {
         $deviceStatusText.Text = Get-GesherText 'cp_device_stopped'
         $btnToggleDevice.Content = Get-GesherText 'cp_btn_start'
     }
+}
 
-    # 2. microG status
-    $microgEnabled = Get-MicrogStatus
+function Update-MicrogView([bool] $microgEnabled) {
+    if ($script:ViewState.Microg -eq $microgEnabled) { return }
+    $script:ViewState.Microg = $microgEnabled
     if ($microgEnabled) {
         $microgBadge.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#ECFDF3')
         $microgBadgeText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#027A48')
@@ -361,10 +404,12 @@ function Refresh-Dashboard {
         $btnMicrogSettings.Visibility = [System.Windows.Visibility]::Collapsed
         $btnDisableMicrog.Visibility = [System.Windows.Visibility]::Collapsed
     }
+}
 
-    # 3. Aurora Store status
-    $installed = Get-InstalledApps
-    $hasStore = ($installed | Where-Object { $_.Package -eq 'com.aurora.store' }) -ne $null
+function Update-StoreView($installed) {
+    $hasStore = [bool]($installed | Where-Object { $_.Package -eq 'com.aurora.store' })
+    if ($script:ViewState.Store -eq $hasStore) { return }
+    $script:ViewState.Store = $hasStore
     if ($hasStore) {
         $storeBadge.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#ECFDF3')
         $storeBadgeText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#027A48')
@@ -378,8 +423,23 @@ function Refresh-Dashboard {
         $btnInstallStore.Visibility = [System.Windows.Visibility]::Visible
         $btnOpenStore.Visibility = [System.Windows.Visibility]::Collapsed
     }
+}
 
-    # 4. Applications List
+# Rebuilds the list (and reloads icons) only when packages, labels, icon paths or icon files changed,
+# so a refresh with nothing new neither flickers nor resets the scroll position.
+function Update-AppsView($installed) {
+    $appFiles = [System.Collections.Generic.List[string]]::new()
+    $signature = @(foreach ($app in $installed) {
+        $shell = Join-Path $root "data/data/$($app.Package)/gesher-shell"
+        $appFiles.Add((Join-Path $shell 'shortcut.properties'))
+        $appFiles.Add((Join-Path $shell 'icon.ico'))
+        if ($app.IconPath) { $appFiles.Add([string]$app.IconPath) }
+        "$($app.Package)`t$($app.Label)`t$($app.IconPath)`t$(if ($app.IconPath) { Get-FileStamp $app.IconPath })"
+    }) -join "`n"
+    $script:ViewState.AppFiles = $appFiles.ToArray()
+    if ($script:ViewState.AppsSignature -ceq $signature) { return }
+    $script:ViewState.AppsSignature = $signature
+
     $items = [System.Collections.Generic.List[PSObject]]::new()
     $defaultIco = if (Test-Path -LiteralPath $icoFile) { $icoFile } else { $null }
     foreach ($app in $installed) {
@@ -405,6 +465,64 @@ function Refresh-Dashboard {
     $appsList.ItemsSource = $items
 }
 
+# Full re-evaluation; used at load, after every panel action and when live refresh sees a change.
+function Refresh-Dashboard {
+    # Stamps are taken before reading so a change made during the read is still noticed next tick.
+    $stateStamp = Get-StateStamp
+    $appsStamp = Get-AppFilesStamp
+    # A transient read/render failure must leave a retry pending even when the files have
+    # stopped changing. Commit the observed stamps only after the whole refresh succeeds.
+    if (-not $script:LiveState.PendingSince) { $script:LiveState.PendingSince = [DateTime]::UtcNow }
+    Update-DeviceView (Get-DeviceStatus)
+    Update-MicrogView (Get-MicrogStatus)
+    $installed = Get-InstalledApps
+    Update-StoreView $installed
+    Update-AppsView $installed
+    $script:LiveState.Stamp = $stateStamp
+    $script:LiveState.AppsStamp = $appsStamp
+    $script:LiveState.PendingSince = $null
+}
+
+# Always release the action guard: a transient refresh failure is retried by the timer.
+function Complete-DashboardAction {
+    try { Refresh-Dashboard } finally { Set-Busy $false }
+}
+
+# Live refresh, driven by one DispatcherTimer on the UI thread (500 ms):
+# - every tick: compare the state-file stamp; a change is applied once it has been stable for one
+#   tick (>= 400 ms debounce), so a burst of writes from install/start/stop causes one refresh;
+# - every 4th tick (2 s): re-check the system_server PID (a crash leaves the ready file behind)
+#   and the per-app shortcut/icon files, which are written after packages.list;
+# - nothing happens while an action is busy; the action's own final refresh covers that period.
+$script:LiveRefreshIntervalMs = 500
+$script:LiveRefreshDebounceMs = 400
+$script:LiveRefreshSlowEvery = 4
+
+function Invoke-LiveRefreshTick {
+    $live = $script:LiveState
+    $live.Tick++
+    if ($script:IsBusy) { return }
+    $now = [DateTime]::UtcNow
+    $stamp = Get-StateStamp
+    if ($stamp -ne $live.Stamp) {
+        $live.Stamp = $stamp
+        $live.PendingSince = $now
+        return
+    }
+    if (($live.Tick % $script:LiveRefreshSlowEvery) -eq 0) {
+        Update-DeviceView (Get-DeviceStatus)
+        $appsStamp = Get-AppFilesStamp
+        if ($appsStamp -ne $live.AppsStamp) {
+            $live.AppsStamp = $appsStamp
+            if (-not $live.PendingSince) { $live.PendingSince = $now }
+            return
+        }
+    }
+    if ($live.PendingSince -and ($now - $live.PendingSince).TotalMilliseconds -ge $script:LiveRefreshDebounceMs) {
+        Refresh-Dashboard
+    }
+}
+
 # Toggle device handler
 $btnToggleDevice.Add_Click({
     Set-Busy $true
@@ -415,8 +533,7 @@ $btnToggleDevice.Add_Click({
             & (Join-Path $here 'gesher-app.ps1') start
         }
     } finally {
-        Refresh-Dashboard
-        Set-Busy $false
+        Complete-DashboardAction
     }
 })
 
@@ -431,8 +548,7 @@ $btnEnableMicrog.Add_Click({
     } catch {
         [System.Windows.MessageBox]::Show($_.Exception.Message, "Gesher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     } finally {
-        Refresh-Dashboard
-        Set-Busy $false
+        Complete-DashboardAction
     }
 })
 
@@ -451,8 +567,7 @@ $btnDisableMicrog.Add_Click({
         & (Join-Path $here 'gesher-app-microg.ps1') -Disable
         & (Join-Path $here 'gesher-app.ps1') start
     } finally {
-        Refresh-Dashboard
-        Set-Busy $false
+        Complete-DashboardAction
     }
 })
 
@@ -470,8 +585,7 @@ $btnInstallStore.Add_Click({
     } catch {
         [System.Windows.MessageBox]::Show($_.Exception.Message, "Gesher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     } finally {
-        Refresh-Dashboard
-        Set-Busy $false
+        Complete-DashboardAction
     }
 })
 
@@ -492,8 +606,7 @@ $btnInstallApk.Add_Click({
         } catch {
             [System.Windows.MessageBox]::Show($_.Exception.Message, "Gesher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
         } finally {
-            Refresh-Dashboard
-            Set-Busy $false
+            Complete-DashboardAction
         }
     }
 })
@@ -503,20 +616,22 @@ $window.Add_Drop({
     param($sender, $e)
     if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
         $files = $e.Data.GetData([System.Windows.DataFormats]::FileDrop)
-        foreach ($file in $files) {
-            $ext = [System.IO.Path]::GetExtension($file).ToLower()
-            if ($ext -in '.apk', '.apks', '.xapk') {
-                Set-Busy $true (Get-GesherText 'cp_installing' @([System.IO.Path]::GetFileName($file)))
-                $window.Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
-                try {
-                    & (Join-Path $here 'gesher-app.ps1') install "$file"
-                } catch {
-                    [System.Windows.MessageBox]::Show($_.Exception.Message, "Gesher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+        try {
+            foreach ($file in $files) {
+                $ext = [System.IO.Path]::GetExtension($file).ToLower()
+                if ($ext -in '.apk', '.apks', '.xapk') {
+                    Set-Busy $true (Get-GesherText 'cp_installing' @([System.IO.Path]::GetFileName($file)))
+                    $window.Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
+                    try {
+                        & (Join-Path $here 'gesher-app.ps1') install "$file"
+                    } catch {
+                        [System.Windows.MessageBox]::Show($_.Exception.Message, "Gesher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+                    }
                 }
             }
+        } finally {
+            Complete-DashboardAction
         }
-        Refresh-Dashboard
-        Set-Busy $false
     }
 })
 
@@ -539,8 +654,7 @@ $script:OnAppUninstall = {
         try {
             & (Join-Path $here 'gesher-app.ps1') uninstall $pkg
         } finally {
-            Refresh-Dashboard
-            Set-Busy $false
+            Complete-DashboardAction
         }
     }
 }
@@ -559,6 +673,22 @@ $appsList.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windo
     }
 })
 
+# Live refresh: reflect devices started/stopped, apps installed and microG toggled outside the panel.
+# Handler failures (e.g. a file mid-rewrite) are dropped; the next tick or activation retries.
+$script:LiveTimer = [System.Windows.Threading.DispatcherTimer]::new()
+$script:LiveTimer.Interval = [TimeSpan]::FromMilliseconds($script:LiveRefreshIntervalMs)
+$script:LiveTimer.Add_Tick({
+    try { Invoke-LiveRefreshTick } catch { }
+})
+$window.Add_Activated({
+    try { if (-not $script:IsBusy) { Refresh-Dashboard } } catch { }
+})
+$window.Add_Closed({
+    $script:LiveTimer.Stop()
+})
+
 # Initial load
 Refresh-Dashboard
+$script:LiveTimer.Start()
 $window.ShowDialog() | Out-Null
+$script:LiveTimer.Stop()

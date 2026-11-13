@@ -337,7 +337,8 @@ final class Dexopt {
     private static Thread sBackground;
 
     /**
-     * BackgroundDexOptService: every few seconds, once no app process has run or started for
+     * BackgroundDexOptService: every few seconds, once the device has been idle (no app in
+     * use, ActivityTaskManagerService.idleSince) and no app process has been starting for
      * {@code gesher.dexopt.idle-ms} (default 2000), the packages whose current profile has
      * new data are compiled with their merged profile (pm.dexopt.bg-dexopt).
      */
