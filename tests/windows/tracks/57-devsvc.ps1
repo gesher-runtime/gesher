@@ -141,7 +141,7 @@ $problems = @()
 if (-not $receiverPid) { $problems += 'the RTC_WAKEUP alarm''s receiver did not run' }
 elseif ($receiverPid -eq $activityPid) { $problems += "the receiver ran in the activity's process ($activityPid)" }
 if (-not $out.Contains("gesher-app: the process of $devsvcPkg ended")) { $problems += 'the activity''s process did not end first' }
-if (-not $server.Contains("starting a process for $devsvcPkg (broadcast to $devsvcPkg)")) { $problems += 'the system server did not start a process for the alarm' }
+if (-not $server.Contains("starting a process for $devsvcPkg (acknowledged broadcast to $devsvcPkg)")) { $problems += 'the system server did not start a process for the alarm' }
 if (-not $server.Contains('alarm: firing RTC_WAKEUP alarm of com.gesher.devsvc')) { $problems += 'no RTC_WAKEUP alarm fired' }
 DevsvcCheck 'devsvc: alarms: with the app''s process ended, an exact RTC_WAKEUP alarm starts a process for its manifest receiver (PendingIntent broadcast)' $problems ($log + "`n--- system server`n" + $server)
 $problems = @()
