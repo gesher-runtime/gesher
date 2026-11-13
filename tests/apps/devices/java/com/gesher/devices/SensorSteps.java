@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -100,7 +101,60 @@ final class SensorSteps {
         } else {
             Report.line("sensors: no light sensor");
         }
+        Sensor testAccel = null, testLight = null;
+        for (Sensor sensor : all) {
+            if (sensor.getName().equals("Gesher Test Accelerometer")) testAccel = sensor;
+            if (sensor.getName().equals("Gesher Test Light Sensor")) testLight = sensor;
+        }
+        if (testAccel != null && testLight != null) flushBacklog(testAccel, testLight);
         Report.line("sensors: done");
         mThread.quitSafely();
     }
+    private void flushBacklog(Sensor accel, Sensor light) throws Exception {
+        CountDownLatch blocked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            if (!mSm.registerListener(mListener, accel, 10000, mHandler)
+                    || !mSm.registerListener(mListener, light, 10000, mHandler)) {
+                throw new AssertionError("cannot register backlog sensors");
+            }
+            mHandler.post(() -> {
+                blocked.countDown();
+                try {
+                    if (!release.await(10, TimeUnit.SECONDS)) {
+                        throw new AssertionError("sensor backlog gate timed out");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(e);
+                }
+            });
+            if (!blocked.await(5, TimeUnit.SECONDS)) throw new AssertionError("no Looper gate");
+            mEvents.clear();
+            for (int i = 0; i < 128; i++) {
+                if (!mSm.flush(mListener)) throw new AssertionError("early flush rejection " + i);
+            }
+            if (mSm.flush(mListener)) throw new AssertionError("overflow flush was accepted");
+            // Samples continue while the Looper is blocked; accepted completions
+            // must remain queued despite the bounded buffer reaching capacity.
+            Thread.sleep(100);
+            release.countDown();
+            int accelerometer = 0, illuminance = 0;
+            long end = android.os.SystemClock.elapsedRealtime() + 10000;
+            while (accelerometer + illuminance < 256
+                    && android.os.SystemClock.elapsedRealtime() < end) {
+                String event = mEvents.poll(100, TimeUnit.MILLISECONDS);
+                if (("flush " + accel.getName()).equals(event)) accelerometer++;
+                if (("flush " + light.getName()).equals(event)) illuminance++;
+            }
+            if (accelerometer != 128 || illuminance != 128) {
+                throw new AssertionError("flush counts " + accelerometer + "/" + illuminance);
+            }
+            Report.line("sensors: flush backlog: 128 accepted pairs, overflow rejected, 256 completions");
+        } finally {
+            release.countDown();
+            mSm.unregisterListener(mListener);
+        }
+    }
+
 }
