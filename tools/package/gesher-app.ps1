@@ -230,7 +230,9 @@ $env:ANDROID_TZDATA_ROOT = NoDrive "$here/tzdata"  # in place (docs/posix.md)
 $jars = 'core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app'
 $bcp = ($jars | ForEach-Object { NoDrive "$here/$_.jar" }) -join ':'
 # The boot image (docs/boot-image.md) is installed next to the jars, in framework\x86_64.
-$dvm = @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$here/framework/boot.art")", '-Xint', '-Xusejit:false')
+# The device's own processes (this launcher, the system server it starts) run nterp and
+# the boot image's AOT code without the JIT; app processes add the JIT (ADR 0081, 0054).
+$dvm = @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$here/framework/boot.art")", '-Xusejit:false')
 $dalvikvm = Join-Path $here 'dalvikvm.exe'
 
 # Keep the profile choice local to child processes, so disabling the marker in

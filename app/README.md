@@ -11,7 +11,7 @@ on Android's own runtime and framework.jar instead of a JVM and hoststubgen.
 
 ```
 dalvikvm -Xbootclasspath:core-oj.jar:core-libart.jar:core-icu4j.jar:framework.jar:gesher-app.jar \
-  -Xint -Xusejit:false com.gesher.app.Main [options] app.apk
+  -Xusejit:false com.gesher.app.Main [options] app.apk
 ```
 
 Options: `--build-prop FILE` (default `$ANDROID_ROOT/build.prop`),
