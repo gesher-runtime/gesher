@@ -331,7 +331,7 @@ public final class SystemServer {
             }
             if (idleS <= 0) return;
             log("cached app processes end after " + idleS + " s unused");
-            final long idleMs = idleS * 1000;
+            final long idleMs = idleS > Long.MAX_VALUE / 1000 ? Long.MAX_VALUE : idleS * 1000;
             Thread reaper = new Thread(() -> {
                 while (true) {
                     SystemClock.sleep(Math.min(60_000, Math.max(1000, idleMs / 4)));

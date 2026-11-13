@@ -737,6 +737,22 @@ final class ActiveServices {
         return false;
     }
 
+    /**
+     * Discard a committed cached exit's unused/self-bound services before admitting a
+     * new client. The service monitor also guards the reaper's final inUse check, so a
+     * real new binding either prevented the exit or gets a fresh service record.
+     */
+    synchronized void retireCachedServices(ActivityTaskManagerService.ProcessRecord app) {
+        if (!app.exiting || !app.reaped || inUse(app)) {
+            throw new IllegalStateException("Cannot retire services of a process still in use");
+        }
+        mServices.values().removeIf(r -> r.app == app);
+        mConnections.entrySet().removeIf(e -> {
+            e.getValue().removeIf(c -> c.binding.service.app == app);
+            return e.getValue().isEmpty();
+        });
+    }
+
     /** Explicit force-stop/uninstall also cancels a service waiting for its retry timer. */
     void stopPackage(String packageName) {
         List<ServiceRecord> stopped = new ArrayList<>();
@@ -798,10 +814,9 @@ final class ActiveServices {
                 boolean started = r.startRequested && (r.startResult != Service.START_NOT_STICKY
                         || !r.pendingStarts.isEmpty());
                 if (!started) r.startRequested = false;
-                // An intentional exit ends the service for good. But the idle reaper ends
-                // only a process nothing used (no started service, no binding from another
-                // process): a start or a binding (to its published Binder) that came in the
-                // moment it was told to exit is recovered, by a new process.
+                // Intentional force-stop suppresses recovery. Cached retirement removes
+                // unused/self-bound records at commit; if active work still survives here,
+                // its process may be restarted just as after an ordinary process death.
                 boolean recover = (!app.exiting || app.reaped)
                         && (started || r.hasAutoCreateConnections());
                 if (serviceCurrent(r) && recover) {

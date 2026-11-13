@@ -58,6 +58,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.function.Consumer;
 
 /**
@@ -110,6 +111,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** How long startActivityAndWait waits for the activity to be idle. */
     private static final long WAIT_TIMEOUT_MS = 300_000;
 
+    private static final AtomicLongFieldUpdater<ProcessRecord> LAST_ACTIVE =
+            AtomicLongFieldUpdater.newUpdater(ProcessRecord.class, "lastActive");
+
     /**
      * Opens a URL no activity of the device handles (http, https, mailto) with Windows'
      * handler (WindowsHost.openUrl): the user's default browser or mail app. The tests
@@ -137,6 +141,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean ready;       // finishAttachApplication came
         /** Told to exit (or dying): no longer handed out. Read without the lock (providers). */
         volatile boolean exiting;
+        /** Removed by physical-death cleanup; checked by provider admission after authentication. */
+        volatile boolean dead;
         /** Ended by the idle reaper: its services bound by others start again (ActiveServices). */
         volatile boolean reaped;
         boolean spawned;     // started by this server (startProcess), not by itself
@@ -146,7 +152,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
         /** Used at {@code time}, unless a later use is already noted. */
         void markActive(long time) {
-            if (time > lastActive) lastActive = time;
+            long observed = lastActive;
+            while (time > observed) {
+                if (LAST_ACTIVE.compareAndSet(this, observed, time)) return;
+                observed = lastActive;
+            }
         }
         ProcessExitStatus.Generation exitGeneration;
         /** The configuration it was given last (bindApplication, ConfigurationChangeItem). */
@@ -1611,7 +1621,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     void maybeExit(ProcessRecord app) {
         if (app == null) return;
         // Work in it just ended: the idle reaper counts from now.
-        app.lastActive = SystemClock.uptimeMillis();
+        app.markActive(SystemClock.uptimeMillis());
         synchronized (this) {
             if (app.exiting || !app.ready || !app.activities.isEmpty()) return;
             for (PendingWork w : mPendingWork) {
@@ -1641,6 +1651,15 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
         }
         return false;
+    }
+
+    /** Final validation while service and broadcast admission are frozen by AM. */
+    synchronized boolean commitIdleReap(ProcessRecord app, long now, long idleMs) {
+        if (app.exiting || !app.ready || !app.spawned || !mProcesses.contains(app)
+                || !app.activities.isEmpty() || hasPendingWorkLocked(app)) return false;
+        long active = app.lastActive;
+        if (now - active < idleMs) return false;
+        return mAm.retireUnusedProviders(app, active);
     }
 
     /**
@@ -1675,24 +1694,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             long idle = now - p.lastActive;
             if (idle < idleMs) continue;
-            synchronized (this) {
-                // Something may have used it meanwhile (lastActive moved), or ended it.
-                if (p.exiting || !mProcesses.contains(p) || !p.activities.isEmpty()
-                        || hasPendingWorkLocked(p) || now - p.lastActive < idleMs) continue;
-                p.exiting = true;
-            }
-            // A bind that connected to its published service, or a provider acquisition,
-            // may have come since the check: once exiting, nothing new reaches it, so check
-            // again (the providers atomically with their unpublication) and back out if so.
-            if (mAm.inUse(p) || !mAm.retireUnusedProviders(p)) {
-                synchronized (this) {
-                    p.exiting = false;
-                    p.markActive(SystemClock.uptimeMillis());
-                }
-                SystemServer.log("reaping: " + p + " was used meanwhile; kept");
-                continue;
-            }
-            p.reaped = true;
+            if (!mAm.commitIdleReap(p, now, idleMs)) continue;
             mAm.processExiting(p);
             SystemServer.log("reaping: " + p + " is cached (no activity, nothing in use) and"
                     + " was idle for " + (idle / 1000) + " s");
@@ -1951,19 +1953,22 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             Consumer<ProcessRecord> work) {
         String processName = componentProcess(packageName, declaredProcess);
         ProcessRecord app;
+        boolean dispatchNow;
         synchronized (this) {
             if (mPm.isRemovalPending(packageName)) return;
             app = processFor(packageName, processName);
-            if (app == null || !app.ready) {
+            dispatchNow = app != null && app.ready;
+            if (!dispatchNow) {
                 mPendingWork.add(new PendingWork(packageName, processName, work));
                 updateIdle();
                 SystemServer.log("waiting for a process of " + packageName);
+            } else {
+                app.markActive(SystemClock.uptimeMillis());
             }
         }
         if (app == null) {
             startProcess(packageName, processName, reason);
-        } else if (app.ready) {
-            app.lastActive = SystemClock.uptimeMillis();
+        } else if (dispatchNow) {
             work.accept(app);
         }
     }
@@ -1999,6 +2004,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private void processDied(ProcessRecord app) {
         synchronized (this) {
             if (!mProcesses.remove(app)) return;
+            app.dead = true;
             for (ActivityRecord r : app.activities) {
                 r.state = State.DESTROYED;
                 accountActivityFinished(r);

@@ -130,12 +130,26 @@ public final class ActivityManagerService extends IActivityManager.Default {
                         || (GmsPackageSupport.PACKAGE_GMS + ":persistent").equals(app.processName));
     }
 
+    /** Commit provider retirement only if no acquisition or newer use won the race. */
+    boolean retireUnusedProviders(ActivityTaskManagerService.ProcessRecord app, long expectedActive) {
+        return mProviders.retireUnused(app, expectedActive);
+    }
+
     /**
-     * The reaper ends {@code app} (already exiting): its providers stop being handed out,
-     * unless a client acquired one meanwhile (false, nothing changed).
+     * Freeze service and broadcast admission before ATM/provider retirement. Both
+     * controllers already enter ATM; neither calls the other while holding its lock.
+     * No application callback runs here. New service clients cannot attach to the
+     * exiting process's old published Binder after this commit.
      */
-    boolean retireUnusedProviders(ActivityTaskManagerService.ProcessRecord app) {
-        return mProviders.retireUnused(app);
+    boolean commitIdleReap(ActivityTaskManagerService.ProcessRecord app, long now, long idleMs) {
+        synchronized (mServices) {
+            if (mServices.inUse(app)) return false;
+            synchronized (mBroadcasts) {
+                if (mBroadcasts.hasReceivers(app) || !mAtm.commitIdleReap(app, now, idleMs)) return false;
+                mServices.retireCachedServices(app);
+                return true;
+            }
+        }
     }
 
     /**

@@ -38,14 +38,22 @@ device's `system_server.log`:
   switch while a removal is pending) and, one second after its last release
   (CONTENT_PROVIDER_RETAIN_TIME), `removeContentProvider`; a connection with
   no reference left is dropped. Only the client's own process (or the system)
-  may change its connection. Server-local acquisitions (getType,
-  `getContentProviderExternal`) stay uncounted.
+  may change its connection. Caller authentication is captured before the
+  providers' monitor; token mutation checks the client's PID, UID and live
+  process generation inside that monitor. A physical-death marker prevents
+  a lookup authenticated before death from recreating connections after
+  cleanup, without changing the intentional-exit service restart policy.
+  Server-local acquisitions (getType, `getContentProviderExternal`) stay
+  uncounted.
 - **An idle reaper ends cached processes.** Every min(60 s, idle time / 4)
   the system server of a persistent device looks at the processes it spawned that have no
   activity and no pending work, and ends (`scheduleExit`, the same path as
   `maybeExit`) one that is not in use
   (`ActivityManagerService.inUse`) and was not used for
   `GESHER_CACHED_PROCESS_IDLE_S` seconds (600 by default; 0 turns it off).
+  Positive values too large to convert to milliseconds saturate at
+  `Long.MAX_VALUE`, preserving a long idle timeout instead of wrapping
+  to an immediate exit.
   In use means: a service still being brought up, with a restart pending,
   started or foreground, or bound by another process or by the system (a
   running job, a sync); a broadcast in flight for it; or a client holding a
@@ -53,16 +61,25 @@ device's `system_server.log`:
   and a client that released its providers do not count. Use is stamped on
   the process (`ProcessRecord.lastActive`) when work is dispatched to it,
   when something in it ends (`maybeExit`), on provider acquisitions and
-  reference changes, on a bind to one of its services, and whenever a sweep
-  finds it in use; a stamp only moves forward. Once it decided, the reaper
-  marks the process exiting (nothing new is handed to it), then checks again
-  that no service is in use and, under the providers' lock, that no client
-  acquired a provider before it unpublishes them; if either changed, it
-  clears exiting and keeps the process. A start or a binding that still
-  reached it (a bind that connected to its published Binder after the second
-  check) is recovered by a new process when it dies (`ActiveServices.processDied`
-  restarts a reaped process's started or auto-create-bound services; any other
-  intentional exit still suppresses restarts).
+  reference changes, on a bind to one of its services, on an admitted
+  registered broadcast, and whenever a sweep finds it in use; an atomic
+  maximum makes concurrent stamps move only forward. Ready-process work is
+  stamped and its dispatch decision is captured under ATM.
+  The final retirement acquires the monitors in this order:
+  ActiveServices, BroadcastController, ATM, ContentProviders. It rechecks
+  service and receiver admission, process/activity/pending-work ownership,
+  the idle stamp, and provider references before committing the exit flags
+  and removing the published providers. A failed check never exposes an
+  exiting flag. Before releasing service admission, it also removes the
+  retired process's unused/self-bound service records and connections.
+  A real binding admitted first therefore prevents retirement; one admitted
+  afterwards gets a fresh record and cannot receive the old published
+  Binder. Old process death cleanup cannot remove that replacement record.
+  The nested section contains checks, flags and registry changes only;
+  `scheduleExit` and other application callbacks run after all monitors are
+  released. Unordered registered callbacks use `assumeDelivered` and have
+  no completion acknowledgement; admission refreshes their normal idle
+  grace instead of retaining an unbounded receiver record.
 - **Only microG's main and `:persistent` processes are persistent**
   (`ActivityManagerService.isPersistent`): the main process hosts the
   accounts, location and the chimera provider every client asks for, and
@@ -77,13 +94,12 @@ device's `system_server.log`:
   process to publish), a broadcast.
 
 ## Consequences
-- A process ends only when no other process could notice: no live binding
-  from another process, no held provider reference (a client never gets a
-  DeadObjectException for a stable reference it holds). A request that races
-  the exit is either seen by the second check (the process is kept) or
-  recovered by a new process (above). While a backed-out process is briefly
-  marked exiting, a call it makes in that instant is refused as from an
-  unknown process.
+- The idle reaper does not commit an exit while a tracked external/system
+  binding, started service, pending receiver or held provider reference
+  keeps the process in use. A request racing admission either prevents the
+  commit or sees the committed exit and targets a replacement as applicable.
+  Failed retirement leaves the live process and its provider publication
+  intact; there is no temporary exiting state.
 - Holders handed out to the host or uncounted (`getContentProviderExternal`,
   getType's server-local lookup, the system server's own callers) take no
   reference: such a user does not keep the provider's process from being
@@ -105,12 +121,22 @@ device's `system_server.log`:
   its bound service cached), a cached-process LRU by memory pressure.
 
 ## Verification
-- `ProviderSecurityTest` (connection counts: unstable, stable, the duplicate
-  holder's removal, stable-to-unstable, removal, a new connection after it,
-  client death) and `SystemBindingCleanupTest` (the reaper keeps a process a
-  running job binds, ends one only its own binding keeps, not before its idle
-  time) pass on the Windows runtime.
-- A microG device (official GmsCore, GsfProxy, the Play Store; no account):
+- `ProviderSecurityTest` covers unstable/stable counts, duplicate holder
+  removal, stable-to-unstable conversion, removal/reacquisition and client
+  death. Added regressions cover PID/UID token ownership, live and stale-stamp
+  retirement, the ATM/provider authentication lock order, and a lookup
+  delayed across actual process-death cleanup.
+- `SystemBindingCleanupTest` covers a running job's system binding, cached
+  self-bindings, the idle grace, a same-service bind during the exit callback,
+  old-generation cleanup after that bind, registered-broadcast admission,
+  and concurrent activity stamps. Its exit callback checks that none of
+  the four controller monitors is held.
+- The revised code and tests require the PR's Windows CI result. The review
+  prepared these regressions from source; it did not run the Windows runtime
+  or reproduce the device observations below.
+- The original PR author reported the initial reference-count/reaper tests
+  passing and the following microG device run (official GmsCore, GsfProxy,
+  the Play Store; no account):
   Waze launched and closed, the Play Store launched and closed (DroidGuard
   starts in `.unstable`), Waze launched again. Before, `.unstable` stayed for
   the rest of the 26-minute run (427 MB working set, 3 GB commit on the

@@ -210,10 +210,13 @@ final class ContentProviders {
             enforceAccess(actualPackage, declared);
             Set<ActivityTaskManagerService.ProcessRecord> live = new HashSet<>(mAtm.processes());
             synchronized (this) {
+                if (caller != null && (caller.exiting || caller.dead)) {
+                    throw new SecurityException("Content provider caller retired before acquisition");
+                }
                 ContentProviderHolder published = mPublished.get(name);
                 if (published != null) {
                     ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(name);
-                    if (owner == null || owner.exiting || !declared.packageName.equals(owner.packageName)
+                    if (owner == null || owner.exiting || owner.dead || !declared.packageName.equals(owner.packageName)
                             || !declared.name.equals(published.info.name)
                             || !mAtm.componentProcess(declared.packageName, declared.processName)
                                     .equals(mAtm.componentProcess(owner.packageName, owner.processName))
@@ -328,6 +331,7 @@ final class ContentProviders {
         }
         Set<ActivityTaskManagerService.ProcessRecord> live = new HashSet<>(mAtm.processes());
         synchronized (this) {
+            if (app.exiting || app.dead) throw new SecurityException("Provider publisher retired before publication");
             // Validate the entire batch before mutating any authority mapping.
             for (ContentProviderHolder h : checked) {
                 for (String authority : h.info.authority.split(";")) {
@@ -364,10 +368,10 @@ final class ContentProviders {
     }
 
     /** The connection, if it is the calling client's (or the caller is the system). Locked. */
-    private Connection callerConnectionLocked(IBinder connection) {
+    private Connection callerConnectionLocked(IBinder connection, boolean system, int pid, int uid) {
         Connection c = connection == null ? null : mConnections.get(connection);
         if (c == null) return null;
-        if (!mCallers.isSystem() && c.client.pid != Binder.getCallingPid()) {
+        if (!system && (c.client.pid != pid || c.client.uid != uid || c.client.exiting || c.client.dead)) {
             throw new SecurityException("Provider connection belongs to another process");
         }
         return c;
@@ -378,17 +382,22 @@ final class ContentProviders {
      * one of a kind gone (stable to unstable while the removal is pending). Returns whether
      * the connection still stands.
      */
-    synchronized boolean refContentProvider(IBinder connection, int stable, int unstable) {
-        Connection c = callerConnectionLocked(connection);
-        if (c == null) return false;
-        if (c.stable + stable < 0 || c.unstable + unstable < 0) {
-            SystemServer.log("refContentProvider " + c + ": counts would go below zero ("
-                    + stable + ", " + unstable + "); kept at zero");
+    boolean refContentProvider(IBinder connection, int stable, int unstable) {
+        // isSystem resolves the caller through ATM. Never acquire ATM under this monitor.
+        int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
+        boolean system = mCallers.isSystem();
+        synchronized (this) {
+            Connection c = callerConnectionLocked(connection, system, pid, uid);
+            if (c == null) return false;
+            if (c.stable + stable < 0 || c.unstable + unstable < 0) {
+                SystemServer.log("refContentProvider " + c + ": counts would go below zero ("
+                        + stable + ", " + unstable + "); kept at zero");
+            }
+            c.stable = Math.max(0, c.stable + stable);
+            c.unstable = Math.max(0, c.unstable + unstable);
+            c.owner.markActive(SystemClock.uptimeMillis());
+            return !c.owner.exiting && !c.owner.dead;
         }
-        c.stable = Math.max(0, c.stable + stable);
-        c.unstable = Math.max(0, c.unstable + unstable);
-        c.owner.markActive(SystemClock.uptimeMillis());
-        return !c.owner.exiting;
     }
 
     /**
@@ -396,17 +405,21 @@ final class ContentProviders {
      * duplicate holder it did not need (installProvider lost a race): once the connection
      * has no reference left, it is gone.
      */
-    synchronized void removeContentProvider(IBinder connection, boolean stable) {
-        Connection c = callerConnectionLocked(connection);
-        if (c == null) return;
-        if (stable ? c.stable == 0 : c.unstable == 0) {
-            SystemServer.log("removeContentProvider " + c + ": no "
-                    + (stable ? "stable" : "unstable") + " reference to remove");
+    void removeContentProvider(IBinder connection, boolean stable) {
+        int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
+        boolean system = mCallers.isSystem();
+        synchronized (this) {
+            Connection c = callerConnectionLocked(connection, system, pid, uid);
+            if (c == null) return;
+            if (stable ? c.stable == 0 : c.unstable == 0) {
+                SystemServer.log("removeContentProvider " + c + ": no "
+                        + (stable ? "stable" : "unstable") + " reference to remove");
+            }
+            if (stable) c.stable = Math.max(0, c.stable - 1);
+            else c.unstable = Math.max(0, c.unstable - 1);
+            c.owner.markActive(SystemClock.uptimeMillis());
+            if (c.stable == 0 && c.unstable == 0) mConnections.remove(c);
         }
-        if (stable) c.stable = Math.max(0, c.stable - 1);
-        else c.unstable = Math.max(0, c.unstable - 1);
-        c.owner.markActive(SystemClock.uptimeMillis());
-        if (c.stable == 0 && c.unstable == 0) mConnections.remove(c);
     }
 
     /** Whether processes of other packages use the process's providers. */
@@ -428,14 +441,14 @@ final class ContentProviders {
     }
 
     /**
-     * The idle reaper ends the process (already {@code exiting}): unless a client holds a
-     * reference (acquired before it was exiting; false, nothing changed), its providers are
-     * no longer handed out. Under this lock, as getContentProvider counts its holders and
-     * checks {@code exiting}, so no counted holder of the process is handed out after this
-     * returns true.
+     * Commit an idle exit under the provider lock, while the caller holds ATM and the
+     * service/broadcast admission locks. An acquisition either keeps the process or sees
+     * its committed exit; no temporary exiting flag can discard a still-live publisher.
      */
-    synchronized boolean retireUnused(ActivityTaskManagerService.ProcessRecord app) {
-        if (hasActiveClients(app)) return false;
+    synchronized boolean retireUnused(ActivityTaskManagerService.ProcessRecord app, long expectedActive) {
+        if (app.exiting || app.dead || app.lastActive != expectedActive || hasActiveClients(app)) return false;
+        app.reaped = true;
+        app.exiting = true;
         unpublish(app);
         return true;
     }

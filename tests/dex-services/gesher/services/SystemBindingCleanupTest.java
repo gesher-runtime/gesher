@@ -46,11 +46,15 @@ public final class SystemBindingCleanupTest {
     private static final class AppThread extends IApplicationThread.Default {
         final Binder binder = new Binder();
         int created, stopped, exits;
+        Runnable onExit;
         @Override public IBinder asBinder() { return binder; }
         @Override public void scheduleCreateService(IBinder token, ServiceInfo info,
                 CompatibilityInfo compatibility, int processState) { created++; }
         @Override public void scheduleStopService(IBinder token) { stopped++; }
-        @Override public void scheduleExit() { exits++; }
+        @Override public void scheduleExit() {
+            exits++;
+            if (onExit != null) onExit.run();
+        }
     }
 
     private static final class Harness {
@@ -217,9 +221,108 @@ public final class SystemBindingCleanupTest {
         field(h.processType, "spawned").setBoolean(h.app, true);
         method(h.atmType, "reapIdleProcesses", long.class).invoke(h.atm, 3_600_000L);
         require(h.thread.exits == 0, "The idle reaper ended a recently used process");
+        Map<?, ?> records = (Map<?, ?>) field(h.services.getClass(), "mServices").get(h.services);
+        Object oldService = records.get(h.component);
+        Object providers = field(h.amType, "mProviders").get(h.am);
+        Object broadcasts = field(h.amType, "mBroadcasts").get(h.am);
+        IServiceConnection newcomer = new IServiceConnection.Stub() {
+            @Override public void connected(ComponentName name, IBinder binder,
+                    android.app.IBinderSession session, boolean dead) { }
+        };
+        h.thread.onExit = () -> {
+            require(!Thread.holdsLock(h.services) && !Thread.holdsLock(broadcasts)
+                            && !Thread.holdsLock(h.atm) && !Thread.holdsLock(providers),
+                    "The reaper invoked application code while controller locks were held");
+            try {
+                require(records.isEmpty() && h.connectionCount() == 0,
+                        "A committed cached exit still exposed its old self-bound service");
+                require(h.am.bindService(null, null, new Intent().setComponent(h.component), null,
+                        newcomer, Context.BIND_AUTO_CREATE, "android", 0) == 1,
+                        "A binding admitted after retirement was lost");
+            } catch (Exception failure) { throw new AssertionError("Late service binding failed", failure); }
+        };
         h.reapNow();
         require(h.thread.exits == 1, "The idle reaper kept a process only its own binding uses");
-        System.out.println("SystemBindingCleanupTest: the idle reaper ends a process kept only by its own binding");
+        Object replacementService = records.get(h.component);
+        require(replacementService != null && replacementService != oldService && h.connectionCount() == 1
+                        && field(replacementService.getClass(), "app").get(replacementService) != h.app
+                        && h.thread.created == 1,
+                "A new client was attached to the exiting process's old service");
+        method(h.services.getClass(), "processDied", h.processType).invoke(h.services, h.app);
+        require(records.get(h.component) == replacementService && h.connectionCount() == 1,
+                "Old process cleanup erased a replacement service's binding");
+        System.out.println("SystemBindingCleanupTest: cached exit retires self-bindings; late binding targets replacement and survives old cleanup");
+    }
+
+    /** Unordered registered callbacks have no finishReceiver, but still count as recent use. */
+    private static void registeredBroadcast(Object apk) throws Exception {
+        Harness h = new Harness(apk);
+        android.content.IIntentReceiver receiver = new android.content.IIntentReceiver.Default() {
+            private final Binder binder = new Binder();
+            @Override public IBinder asBinder() { return binder; }
+        };
+        String action = "gesher.services.IDLE_REAPER_REGISTERED";
+        long original = Binder.clearCallingIdentity();
+        try {
+            h.asApp();
+            h.am.registerReceiver(h.thread, h.owner, receiver, new android.content.IntentFilter(action),
+                    null, 0, Context.RECEIVER_NOT_EXPORTED);
+        } finally { Binder.restoreCallingIdentity(original); }
+        Field lastActive = field(h.processType, "lastActive");
+        field(h.processType, "spawned").setBoolean(h.app, true);
+        lastActive.setLong(h.app, 0);
+        h.am.broadcastIntent(null, new Intent(action).setPackage(h.owner), null, null,
+                0, null, null, null, android.app.AppOpsManager.OP_NONE, null, false, false, 0);
+        require(lastActive.getLong(h.app) > 0, "Registered receiver admission did not refresh process activity");
+        method(h.atmType, "reapIdleProcesses", long.class).invoke(h.atm, 3_600_000L);
+        require(h.thread.exits == 0, "The reaper ignored an admitted registered receiver's idle grace");
+        field(h.processType, "exiting").setBoolean(h.app, true);
+        lastActive.setLong(h.app, 0);
+        h.am.broadcastIntent(null, new Intent(action).setPackage(h.owner), null, null,
+                0, null, null, null, android.app.AppOpsManager.OP_NONE, null, false, false, 0);
+        require(lastActive.getLong(h.app) == 0, "Registered receiver admission selected a retired process");
+        System.out.println("SystemBindingCleanupTest: registered broadcasts refresh live process activity and reject retired targets");
+    }
+
+    /** Concurrent uses must retain the newest stamp regardless of write order. */
+    private static void activityClock(Object apk) throws Exception {
+        Harness h = new Harness(apk);
+        Method markActive = method(h.processType, "markActive", long.class);
+        Field lastActive = field(h.processType, "lastActive");
+        java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(3);
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Thread[] workers = new Thread[2];
+        for (int i = 0; i < workers.length; i++) {
+            final long time = i + 1;
+            workers[i] = new Thread(() -> {
+                try {
+                    for (int round = 0; round < 512; round++) {
+                        barrier.await(3, java.util.concurrent.TimeUnit.SECONDS);
+                        markActive.invoke(h.app, time);
+                        barrier.await(3, java.util.concurrent.TimeUnit.SECONDS);
+                    }
+                } catch (Throwable problem) { failure.compareAndSet(null, problem); }
+            }, "process-activity-clock-" + time);
+            workers[i].setDaemon(true);
+            workers[i].start();
+        }
+        try {
+            for (int round = 0; round < 512; round++) {
+                lastActive.setLong(h.app, 0);
+                barrier.await(3, java.util.concurrent.TimeUnit.SECONDS);
+                barrier.await(3, java.util.concurrent.TimeUnit.SECONDS);
+                require(lastActive.getLong(h.app) == 2, "Concurrent activity moved the process clock backward");
+            }
+            markActive.invoke(h.app, 1L);
+            require(lastActive.getLong(h.app) == 2, "An older activity moved the process clock backward");
+        } finally {
+            for (Thread worker : workers) worker.interrupt();
+            for (Thread worker : workers) worker.join(3_000);
+        }
+        if (failure.get() != null) throw new AssertionError("Concurrent activity clock failed", failure.get());
+        require(!workers[0].isAlive() && !workers[1].isAlive(), "Activity clock workers did not finish");
+        System.out.println("SystemBindingCleanupTest: concurrent and older activity stamps remain monotonic");
     }
 
     public static void main(String[] args) throws Exception {
@@ -233,6 +336,8 @@ public final class SystemBindingCleanupTest {
         job(apk);
         sync(apk);
         selfBinding(apk);
+        registeredBroadcast(apk);
+        activityClock(apk);
         System.out.println("SystemBindingCleanupTest all passed");
     }
 }
