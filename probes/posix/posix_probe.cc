@@ -346,7 +346,7 @@ static void* NameDetachedThread(void* done) {
   // ART's threads are detached; winpthreads alone fails these with ESRCH.
   char name[16] = {};
   CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 &&
-        strcmp(name, "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d") == 0);
+        strcmp(name, "posix_probe") == 0);  // unnamed: the process's name, as on Linux
   CHECK(pthread_setname_np(pthread_self(), "ReferenceQueueD") == 0);
   CHECK(pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 &&
         strcmp(name, "ReferenceQueueD") == 0);
