@@ -62,8 +62,9 @@ class Win32Surface : public android::Surface {
  private:
   class Buffer;
 
-  // The size buffers have now: the user dimensions when set, else the window's.
+  // Producer request, then user default, then the window's dimensions.
   void Size(int* width, int* height) const;
+  void ConsumerSize(int* width, int* height) const;
   // With mutex_ held: a buffer of the current size and format.
   void EnsureBuffer();
   // With mutex_ held: the dequeued buffer `buffer`, no longer dequeued, or null.
@@ -78,9 +79,11 @@ class Win32Surface : public android::Surface {
   android::sp<Buffer> buffer_;
   std::vector<android::sp<Buffer>> dequeued_;  // dequeued, not yet queued or cancelled
   int format_ = 1;  // PIXEL_FORMAT_RGBA_8888
+  int requested_width_ = 0, requested_height_ = 0;
   int user_width_ = 0, user_height_ = 0;
   int inset_left_ = 0, inset_top_ = 0, inset_right_ = 0, inset_bottom_ = 0;
   bool locked_ = false;
+  bool buffer_contents_valid_ = false;
   uint64_t frames_ = 0;
   // Debugging (GESHER_WINDOW_DEBUG): frames left to report after a size change.
   int report_frames_ = 0;
