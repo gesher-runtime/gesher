@@ -468,6 +468,7 @@ class Env final : public A64::UserCallbacks {
       }
     }
     used_before_ = true;
+    tls_pointer_ = reinterpret_cast<uint64_t>(tls_block_);  // a guest MSR TPIDR_EL0 may have moved it
     stack_cur_ = stack_top_;
     depth_ = 0;
     fpcr_ = fpsr_ = 0;
