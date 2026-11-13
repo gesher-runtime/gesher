@@ -16,6 +16,8 @@
 #include <vector>
 static constexpr intptr_t INVALID_HANDLE_VALUE = -1;
 static constexpr int FILE_TYPE_PIPE = 3;
+static constexpr uint32_t FILE_WRITE_DATA = 2;
+using HANDLE = intptr_t;
 #ifndef IOV_MAX
 #define IOV_MAX 1024
 #endif
@@ -38,6 +40,17 @@ static bool LookupSocket(int fd, SocketFd* state) {
 }
 static intptr_t HandleFromFd(int fd) { return fcntl(fd, F_GETFD) < 0 ? -1 : fd; }
 static int CrtResult(int value) { return value; }
+namespace record_locks {
+// The native Windows boundary queries the held handle's GrantedAccess with
+// NtQueryObject. Linux's real descriptor access mode supplies that boundary.
+struct DescriptorGuard { [[maybe_unused]] DescriptorGuard() {} };
+static int HandleAccess(HANDLE handle, uint32_t* access) {
+  int flags = ::fcntl(static_cast<int>(handle), F_GETFL);
+  if (flags < 0) return errno;
+  *access = (flags & O_ACCMODE) == O_RDONLY ? 0 : FILE_WRITE_DATA;
+  return 0;
+}
+}
 static int notified, woke;
 static void InotifyNoteWrite(int) { ++notified; }
 static bool HasPollWaiters() { return true; }
@@ -109,6 +122,10 @@ int main() {
   int before_notes = gesher::notified, before_wake = gesher::woke;
   check("vector pipe payload", routed_writev(pipefd[1], iov, 2) == 2 && ::read(pipefd[0], bytes, 2) == 2 && bytes[0] == 'a' && bytes[1] == 'b');
   check("vector pipe preserves notifications", gesher::notified == before_notes + 2 && gesher::woke == before_wake + 2);
+  iovec empty[] = {{nullptr, 0}, {nullptr, 0}};
+  before_notes = gesher::notified; before_wake = gesher::woke;
+  check("zero vector does not fabricate write bookkeeping", routed_writev(pipefd[1], empty, 2) == 0 &&
+        gesher::notified == before_notes && gesher::woke == before_wake);
   ::close(pipefd[0]); ::close(pipefd[1]);
   char path[] = "/tmp/gesher-writev-XXXXXX"; int fd = mkstemp(path);
   check("routing regular file", fd >= 0);

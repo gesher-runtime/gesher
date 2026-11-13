@@ -134,6 +134,7 @@ static void test_writev_event_contract(void) {
   errno = 0;
   check("writev does not concatenate short event elements", writev(fd, vector, 2) == -1 && errno == EINVAL);
   vector[0].iov_len = vector[1].iov_len = 0;
+  check("writev zero-count event vector is a no-op", writev(fd, vector, 0) == 0);
   check("writev all-zero event vector is a no-op", writev(fd, vector, 2) == 0);
   vector[1].iov_len = 8;
   errno = 0;
@@ -169,6 +170,11 @@ static void test_writev_event_contract(void) {
     if (opened) {
       check("writev socket stays one gather call", writev(pair[0], out, 2) == 5 &&
             read(pair[1], bytes, sizeof(bytes)) == 5 && memcmp(bytes, "abcde", 5) == 0);
+      struct iovec empty[2] = {{NULL, 0}, {NULL, 0}};
+      check("writev empty socket vectors transfer no data", writev(pair[0], empty, 0) == 0 &&
+            writev(pair[0], empty, 2) == 0);
+      struct pollfd available = {pair[1], POLLIN, 0};
+      check("writev empty socket vectors create no datagram", poll(&available, 1, 0) == 0);
       close(pair[0]); close(pair[1]);
     }
   }
@@ -189,6 +195,38 @@ static void test_writev_event_contract(void) {
     }
     if (notify >= 0) close(notify);
     if (file >= 0) { close(file); unlink(path); }
+  }
+  {
+    char path[] = "gesher-vector-access-XXXXXX";
+    int file = mkstemp(path), readonly = file >= 0 ? open(path, O_RDONLY) : -1;
+    check("writev empty regular file setup", file >= 0 && readonly >= 0);
+    if (file >= 0 && readonly >= 0) {
+      struct iovec empty[2] = {{NULL, 0}, {NULL, 0}};
+      for (int count = 0; count <= 2; count += 2) {
+        errno = 0;
+        check("writev empty read-only regular file is EBADF", writev(readonly, empty, count) == -1 && errno == EBADF);
+        check("writev empty writable regular file is a no-op", writev(file, empty, count) == 0);
+      }
+      check("writev empty regular file retains position and size", lseek(file, 0, SEEK_CUR) == 0 && lseek(file, 0, SEEK_END) == 0);
+    }
+    if (readonly >= 0) close(readonly);
+    if (file >= 0) { close(file); unlink(path); }
+  }
+  {
+    int pair[2];
+    int opened = pipe(pair) == 0;
+    check("writev empty pipe setup", opened);
+    if (opened) {
+      struct iovec empty[2] = {{NULL, 0}, {NULL, 0}};
+      for (int count = 0; count <= 2; count += 2) {
+        errno = 0;
+        check("writev empty pipe read end is EBADF", writev(pair[0], empty, count) == -1 && errno == EBADF);
+        check("writev empty pipe write end is a no-op", writev(pair[1], empty, count) == 0);
+      }
+      struct pollfd available = {pair[0], POLLIN, 0};
+      check("writev empty pipe remains unreadable", poll(&available, 1, 0) == 0);
+      close(pair[0]); close(pair[1]);
+    }
   }
 }
 
