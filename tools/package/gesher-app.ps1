@@ -12,6 +12,10 @@
 #                                      idle the launcher closes its task
 #                                      ($GESHER_APP_WINDOW=headless: the default)
 #   gesher-app my.apk --headless --keep-task  ... and let it run until it finishes
+#   gesher-app my.apk --detach         ... and return once the activity has started:
+#                                      the app keeps running ($GESHER_LAUNCH_DETACH=1,
+#                                      what gesher-launch sets for a Start menu shortcut
+#                                      or a double-clicked .apk; --wait: the default)
 #   gesher-app my.apk --activity .Other [--ez KEY true|false]...
 #   gesher-app install my.apk          install or update the package (and its
 #                                      Start menu shortcut, Gesher Apps\<label>)
@@ -56,8 +60,10 @@ $here = $scriptRoot
 
 # When started interactively from Explorer (.apk double-click or Start menu shortcut),
 # hide the black console window so only the app UI is shown.
+# (gesher-launch, which sets GESHER_LAUNCH_DETACH, starts it with no console window:
+# not looked up then, a launch is not delayed by it.)
 try {
-  if (-not [Console]::IsOutputRedirected -and -not [Console]::IsErrorRedirected) {
+  if ($env:GESHER_LAUNCH_DETACH -ne '1' -and -not [Console]::IsOutputRedirected -and -not [Console]::IsErrorRedirected) {
     $parentPid = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId
     $p = Get-Process -Id $parentPid -ErrorAction SilentlyContinue
     $fromExplorer = ($p -and $p.ProcessName -ieq 'explorer')
@@ -82,7 +88,7 @@ $root = Join-Path $env:LOCALAPPDATA 'Gesher'
 $enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
 $commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy', 'sync-shortcuts'
 if ($Arguments.Count -eq 0) {
-  Write-Host ((Get-GesherText 'usage') + 'gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--single-process | --system-server]')
+  Write-Host ((Get-GesherText 'usage') + 'gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--detach | --wait] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--single-process | --system-server]')
   Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows]'
   exit 2
 }
