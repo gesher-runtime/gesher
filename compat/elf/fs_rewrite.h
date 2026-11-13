@@ -56,8 +56,10 @@ struct FsRewriteStats {
 
 // Rewrites the %fs accesses in a loaded object's executable segments. `file`
 // is the object's file image (for program and section headers); the segments
-// at `load_bias` must still be writable. Returns false (and sets *error) only
-// on a hard failure (no TLS slot, out of memory).
+// at `load_bias` must be mapped readable. The pages it patches are made
+// writable (copy-on-write) here; the loader sets the final protection after.
+// Returns false (and sets *error) only on a hard failure (no TLS slot, out of
+// memory, a page that cannot be made writable).
 // executable_tls_size is nonzero only for an already-assigned compatible
 // main executable, whose linker-resolved negative offsets occupy the first
 // static TLS block. Libraries retain their existing rewrite rules.

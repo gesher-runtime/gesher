@@ -11,7 +11,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
+#include <psapi.h>
 
+#include <atomic>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -53,9 +56,76 @@ DWORD Protection(const void* p) {
   return info.Protect;
 }
 
+DWORD State(const void* p) {
+  MEMORY_BASIC_INFORMATION info;
+  VirtualQuery(p, &info, sizeof(info));
+  return info.State;
+}
+
+// The process's commit charge.
+size_t Commit() {
+  PROCESS_MEMORY_COUNTERS_EX counters = {};
+  counters.cb = sizeof(counters);
+  GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                       sizeof(counters));
+  return counters.PrivateUsage;
+}
+
 bool Readable(const void* p) {
   DWORD protection = Protection(p);
   return protection != PAGE_NOACCESS && protection != 0 && (protection & PAGE_GUARD) == 0;
+}
+
+void ConcurrentZeroing() {
+  uint8_t* p = static_cast<uint8_t*>(mmap(nullptr, kPage, PROT_READ | PROT_WRITE,
+                                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+  Check("concurrent zeroing mapping", p != MAP_FAILED);
+  if (p == MAP_FAILED) return;
+
+  // A reserved page during madvise is still logically RW. mprotect must not
+  // mistake that transient state for a completed PROT_NONE reservation and
+  // let the recommit silently restore RW permissions after it returns.
+  std::atomic<bool> go{false};
+  std::atomic<int> advice_failures{0};
+  std::thread zeroer([&] {
+    while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+    for (int i = 0; i < 4096; ++i) {
+      if (madvise(p, kPage, MADV_DONTNEED) != 0) ++advice_failures;
+    }
+  });
+  go.store(true, std::memory_order_release);
+  int protection_failures = 0;
+  for (int i = 0; i < 4096; ++i) {
+    if (mprotect(p, kPage, PROT_NONE) != 0) ++protection_failures;
+    MEMORY_BASIC_INFORMATION info;
+    VirtualQuery(p, &info, sizeof(info));
+    if (info.State == MEM_COMMIT && info.Protect != PAGE_NOACCESS) ++protection_failures;
+    if (mprotect(p, kPage, PROT_READ | PROT_WRITE) != 0) ++protection_failures;
+  }
+  zeroer.join();
+  Check("mprotect PROT_NONE survives concurrent madvise", protection_failures == 0);
+  Check("concurrent mapping changes preserve successful advice", advice_failures.load() == 0);
+
+  // Exercise the real vectored-handler retry as a different thread performs
+  // atomic accesses while the same page is decommitted/recommitted. No page
+  // protection changes run concurrently in this phase.
+  std::atomic<bool> entered{false}, stop{false};
+  std::atomic<unsigned> accesses{0};
+  std::thread accessor([&] {
+    entered.store(true, std::memory_order_release);
+    do {
+      InterlockedExchangeAdd(reinterpret_cast<volatile LONG*>(p), 1);
+      ++accesses;
+    } while (!stop.load(std::memory_order_acquire));
+  });
+  while (!entered.load(std::memory_order_acquire)) std::this_thread::yield();
+  for (int i = 0; i < 1024; ++i) {
+    if (madvise(p, kPage, MADV_DONTNEED) != 0) ++advice_failures;
+  }
+  stop.store(true, std::memory_order_release);
+  accessor.join();
+  Check("concurrent atomic accesses survive madvise", accesses.load() > 0 && advice_failures.load() == 0);
+  Check("concurrent zeroing mapping is released", munmap(p, kPage) == 0);
 }
 
 }  // namespace
@@ -114,6 +184,44 @@ int main() {
   Check("a private write does not reach the file", check != MAP_FAILED && check[0] == 6);
   munmap(check, kPage);
 
+  // 2b. Segments mapped without PROT_EXEC can get it later, as on Linux
+  // (packers and protectors mprotect a whole library RWX).
+  uint8_t* ro_seg = static_cast<uint8_t*>(mmap(r + 12 * kPage, 2 * kPage, PROT_READ,
+                                               MAP_PRIVATE | MAP_FIXED, fd, 0));
+  Check("a read-only segment: a view", ro_seg == r + 12 * kPage && Type(ro_seg) == MEM_MAPPED &&
+                                           Protection(ro_seg) == PAGE_READONLY && ro_seg[0] == 1);
+  Check("... mprotect R|X", mprotect(ro_seg, 2 * kPage, PROT_READ | PROT_EXEC) == 0 &&
+                                Protection(ro_seg) == PAGE_EXECUTE_READ);
+  bool ro_rwx = mprotect(ro_seg, kPage, PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+  if (ro_rwx) ro_seg[0] = 77;
+  Check("... mprotect RWX, written privately",
+        ro_rwx && Protection(ro_seg) == PAGE_EXECUTE_READWRITE && ro_seg[kPage] == 2);
+  bool rw_rwx = mprotect(r + 5 * kPage, 2 * kPage, PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+  if (rw_rwx) r[6 * kPage] = 55;
+  Check("the writable segment: mprotect RWX", rw_rwx && r[5 * kPage] == 99 && r[6 * kPage] == 55);
+  Check("mprotect RWX across segments and back",
+        mprotect(r + 2 * kPage, 5 * kPage, PROT_READ | PROT_WRITE | PROT_EXEC) == 0 &&
+            mprotect(r + 2 * kPage, 3 * kPage, PROT_READ | PROT_EXEC) == 0 &&
+            mprotect(ro_seg, 2 * kPage, PROT_READ) == 0 && ro_seg[0] == 77 &&
+            Protection(ro_seg) == PAGE_READONLY && Protection(r + 2 * kPage) == PAGE_EXECUTE_READ);
+  munmap(ro_seg, 2 * kPage);
+  mmap(r + 12 * kPage, 2 * kPage, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+  {
+    // A read-only private view charges no commit, and can still become RWX.
+    wchar_t big_path[MAX_PATH];
+    const size_t big = size_t{64} << 20;
+    const int big_fd = TempFile(big, big_path);
+    const size_t before_view = Commit();
+    uint8_t* bv = static_cast<uint8_t*>(mmap(nullptr, big, PROT_READ, MAP_PRIVATE, big_fd, 0));
+    Check("a 64 MiB read-only private view", bv != MAP_FAILED && bv[kPage] == 2);
+    Check("... charges no commit", Commit() < before_view + (size_t{8} << 20));
+    bool bv_rwx = bv != MAP_FAILED && mprotect(bv, kPage, PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+    if (bv_rwx) bv[0] = 9;
+    Check("... mprotect RWX of a page of it", bv_rwx && bv[0] == 9);
+    if (bv != MAP_FAILED) munmap(bv, big);
+    close(big_fd);
+  }
+
   // 3. MAP_FIXED over the middle of a view that was written: what stays of
   // the view keeps its contents and protections.
   uint8_t* v = static_cast<uint8_t*>(mmap(nullptr, 6 * kPage, PROT_READ | PROT_WRITE,
@@ -161,6 +269,46 @@ int main() {
                                                 r + 12 * kPage));
   Check("mremap into the reservation", moved == r + 12 * kPage && moved[kPage] == 5 && !Readable(m));
   Check("munmap of the reservation", munmap(r, 16 * kPage) == 0 && !Readable(r + 2 * kPage));
+
+  // 6. PROT_NONE anonymous memory is reserved, not committed: ART reserves
+  // gigabytes that way, which cost commit charge when they were committed.
+  const size_t before = Commit();
+  uint8_t* big = static_cast<uint8_t*>(mmap(nullptr, size_t{1} << 30, PROT_NONE,
+                                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+  Check("a 1 GiB PROT_NONE mapping", big != MAP_FAILED && State(big) == MEM_RESERVE);
+  Check("... charges no commit", Commit() < before + (size_t{16} << 20));
+  Check("mprotect of two pages commits them, zero-filled",
+        mprotect(big + 8 * kPage, 2 * kPage, PROT_READ | PROT_WRITE) == 0 &&
+        State(big + 8 * kPage) == MEM_COMMIT && big[8 * kPage] == 0 && big[9 * kPage] == 0 &&
+        State(big + 10 * kPage) == MEM_RESERVE && State(big + 7 * kPage) == MEM_RESERVE);
+  big[8 * kPage] = 11;
+  Check("PROT_NONE over reserved and committed pages",
+        mprotect(big, 16 * kPage, PROT_NONE) == 0 && State(big) == MEM_RESERVE &&
+        !Readable(big + 8 * kPage));
+  Check("... keeps what was written", mprotect(big + 8 * kPage, kPage, PROT_READ) == 0 &&
+                                         big[8 * kPage] == 11);
+  // A mixed source moves like ART's from-space: written pages copied, PROT_NONE
+  // pages still reserved at the destination, and the source reads as zeros.
+  uint8_t* to = static_cast<uint8_t*>(mremap(big, 16 * kPage, 16 * kPage,
+                                             MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP,
+                                             big + 64 * kPage));
+  Check("mremap of reserved and committed pages", to == big + 64 * kPage &&
+        to[8 * kPage] == 11 && State(to) == MEM_RESERVE && State(to + 15 * kPage) == MEM_RESERVE &&
+        Protection(to + 8 * kPage) == PAGE_READONLY);
+  Check("... the source stays, zeroed", big[8 * kPage] == 0 && State(big) == MEM_RESERVE);
+  uint8_t* written = static_cast<uint8_t*>(mmap(big + 128 * kPage, 256 * kPage, PROT_READ | PROT_WRITE,
+                                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0));
+  memset(written, 1, 256 * kPage);
+  uint8_t* none = static_cast<uint8_t*>(mmap(written, 256 * kPage, PROT_NONE,
+                                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0));
+  Check("MAP_FIXED PROT_NONE over written pages gives their commit back",
+        none == written && State(written) == MEM_RESERVE && State(written + 255 * kPage) == MEM_RESERVE);
+  Check("madvise(MADV_DONTNEED) of reserved pages", madvise(big, 64 * kPage, MADV_DONTNEED) == 0);
+  Check("munmap of the 1 GiB mapping", munmap(big, size_t{1} << 30) == 0 &&
+        State(big) == MEM_FREE && Commit() < before + (size_t{16} << 20));
+
+  // 7. Protection changes and ordinary accesses during physical page release.
+  ConcurrentZeroing();
 
   _close(fd);
   printf(failures == 0 ? "mman probe: all passed\n" : "mman probe: %d failed\n", failures);

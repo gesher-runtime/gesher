@@ -50,11 +50,13 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <vector>
 
 #include "binder_internal.h"
+#include "internal.h"
 
 // Dedicated failure object only; normal production route is fixed Win32.
 #ifdef GESHER_FILE_MREMAP_FAILURE_TEST
@@ -177,6 +179,17 @@ DWORD PageProtection(int prot) {
     case PROT_READ | PROT_EXEC: return PAGE_EXECUTE_READ;
     default: return PAGE_EXECUTE_READWRITE;
   }
+}
+
+// The allocation type for anonymous memory with `prot`. Linux backs anonymous
+// memory lazily, so ART reserves address space with large PROT_NONE mappings
+// (the CMC from-space, LinearAlloc shadow maps, aligned-map slack) that cost
+// nothing there. Committing them on Windows charged gigabytes of commit per
+// process, so PROT_NONE anonymous pages are reserved only: nothing can touch
+// them, and mprotect commits them when they become accessible.
+DWORD AnonymousCommit(int prot) {
+  return (prot & (PROT_READ | PROT_WRITE | PROT_EXEC)) == PROT_NONE ? MEM_RESERVE
+                                                                  : MEM_RESERVE | MEM_COMMIT;
 }
 
 // What a private (copy-on-write) view's pages take for `protection`.
@@ -532,10 +545,11 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
   return first;
 }
 
-// Fills the hole `it` with anonymous zero pages.
+// Fills the hole `it` with anonymous zero pages. PROT_NONE pages are only
+// reserved (see AnonymousCommit).
 bool FillAnonymous(std::map<uintptr_t, Region>::iterator it, int prot) {
   if (Placeholders().alloc2(GetCurrentProcess(), reinterpret_cast<void*>(it->first),
-                            it->second.size, MEM_RESERVE | MEM_COMMIT | MEM_REPLACE_PLACEHOLDER,
+                            it->second.size, AnonymousCommit(prot) | MEM_REPLACE_PLACEHOLDER,
                             PageProtection(prot), nullptr, 0) == nullptr) {
     return false;
   }
@@ -625,15 +639,22 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
   }
 
   // The mapping object, executable views from a handle that may execute.
-  // (A private mapping of a file that cannot be reopened so is copied.)
+  // (A private mapping of a file that cannot be reopened so is copied.) A
+  // private mapping without PROT_EXEC gets an executable section too when the
+  // file allows it, so mprotect can add PROT_EXEC later, as on Linux (packers
+  // and protectors mprotect a whole library RWX); else a plain one.
   size_t in_view = in_file;
   HANDLE mapping = nullptr;
   ULONG view_protection = 0;
   HANDLE reopened = nullptr;
-  if (in_view != 0 && exec) {
+  bool exec_section = false;
+  if (in_view != 0 && (exec || !shared)) {
     reopened = ReOpenFile(file, GENERIC_READ | GENERIC_EXECUTE | (shared && write ? GENERIC_WRITE : 0),
                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
-    if (reopened == INVALID_HANDLE_VALUE) {
+    exec_section = reopened != INVALID_HANDLE_VALUE;
+    if (reopened == INVALID_HANDLE_VALUE && !exec) {
+      reopened = nullptr;  // a plain copy-on-write section
+    } else if (reopened == INVALID_HANDLE_VALUE) {
       reopened = nullptr;
       if (shared) {
         errno = EACCES;
@@ -652,7 +673,7 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
                       : (exec ? PAGE_EXECUTE_READ : PAGE_READONLY);
       view_protection = section;
     } else {
-      section = exec ? PAGE_EXECUTE_WRITECOPY : PAGE_WRITECOPY;
+      section = exec_section ? PAGE_EXECUTE_WRITECOPY : PAGE_WRITECOPY;
       view_protection = section;
     }
     mapping = CreateFileMappingW(source, nullptr, section, 0, 0, nullptr);
@@ -696,7 +717,17 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
       VirtualFree(reinterpret_cast<void*>(result), in_view, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
       SplitEntry(s, hole, result + in_view);
     }
-    if (!MapViewInto(mapping, result, in_view, begin, view_protection)) {
+    // A private view that is not writable is mapped so: mapped copy-on-write
+    // it is charged to commit in full until the VirtualProtect below gives
+    // that back (a native library's code, an oat file). An executable
+    // section's view is mapped executable (read-execute, or execute-copy-on-
+    // write if writable): a view first mapped without execute can never get
+    // it, and the VirtualProtect below lowers it to `prot`.
+    ULONG initial = view_protection;
+    if (!shared && !write && (prot & (PROT_READ | PROT_EXEC)) != 0) {
+      initial = exec_section ? PAGE_EXECUTE_READ : PAGE_READONLY;
+    }
+    if (!MapViewInto(mapping, result, in_view, begin, initial)) {
       TRACE("MapViewOfFile3 at %p (0x%zx bytes, offset 0x%llx) failed: %lu\n",
             reinterpret_cast<void*>(result), in_view, static_cast<unsigned long long>(begin),
             GetLastError());
@@ -719,7 +750,7 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
     DWORD protection = PageProtection(prot);
     if (!shared) protection = CopyOnWrite(protection);
     DWORD old;
-    if (protection != view_protection &&
+    if (protection != initial &&
         !VirtualProtect(reinterpret_cast<void*>(result), in_view, protection, &old)) {
       return fail(EACCES);
     }
@@ -769,7 +800,8 @@ void* MapAnonymous(State& s, void* start, size_t len, int prot, int flags) {
     if (it != s.regions.end() && it->second.kind == Kind::kAnon &&
         addr + len <= it->first + it->second.size) {
       VirtualFree(start, len, MEM_DECOMMIT);
-      if (VirtualAlloc(start, len, MEM_COMMIT, protection) == nullptr) {
+      if ((AnonymousCommit(prot) & MEM_COMMIT) != 0 &&
+          VirtualAlloc(start, len, MEM_COMMIT, protection) == nullptr) {
         errno = ENOMEM;
         return MAP_FAILED;
       }
@@ -786,14 +818,14 @@ void* MapAnonymous(State& s, void* start, size_t len, int prot, int flags) {
 
   void* result = nullptr;
   if (start != nullptr) {
-    result = VirtualAlloc(start, len, MEM_RESERVE | MEM_COMMIT, protection);
+    result = VirtualAlloc(start, len, AnonymousCommit(prot), protection);
     if (result == nullptr && fixed) {
       errno = (flags & MAP_FIXED_NOREPLACE) != 0 ? EEXIST : EINVAL;
       return MAP_FAILED;
     }
   }
   if (result == nullptr) {
-    result = VirtualAlloc(nullptr, len, MEM_RESERVE | MEM_COMMIT, protection);
+    result = VirtualAlloc(nullptr, len, AnonymousCommit(prot), protection);
   }
   if (result == nullptr) {
     errno = ENOMEM;
@@ -948,7 +980,118 @@ bool ForEachRun(void* addr, size_t len, Fn fn) {
   return true;
 }
 
+// --- zeroing private pages ----------------------------------------------------
+
+// madvise(MADV_DONTNEED) of private pages decommits and recommits them, which
+// leaves a moment in which they are not there at all: another thread touching
+// them then (ART clears card table and bitmap ranges while mutators run) faults
+// where Linux would have read zeros. Each such range is published here for as
+// long as it is decommitted; the fault handler waits for it and retries
+// (RetryAfterMadvise).
+struct ZeroingRange {
+  std::atomic<uintptr_t> begin{0};
+  std::atomic<uintptr_t> end{0};
+};
+constexpr size_t kZeroingSlots = 64;
+ZeroingRange g_zeroing[kZeroingSlots];
+// Bumped after a range is published and again after it is withdrawn, so the
+// handler can tell that a zeroing started or ended while it looked.
+std::atomic<uint64_t> g_zeroing_epoch{0};
+
+class Zeroing {
+ public:
+  Zeroing(void* p, size_t n) {
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(p);
+    for (;;) {
+      for (ZeroingRange& r : g_zeroing) {
+        uintptr_t free = 0;
+        if (r.begin.compare_exchange_strong(free, 1, std::memory_order_acq_rel)) {
+          r.end.store(begin + n, std::memory_order_relaxed);
+          r.begin.store(begin, std::memory_order_release);
+          g_zeroing_epoch.fetch_add(1, std::memory_order_seq_cst);
+          slot_ = &r;
+          return;
+        }
+      }
+      SwitchToThread();
+    }
+  }
+  ~Zeroing() {
+    slot_->end.store(0, std::memory_order_relaxed);
+    slot_->begin.store(0, std::memory_order_release);
+    g_zeroing_epoch.fetch_add(1, std::memory_order_seq_cst);
+  }
+  Zeroing(const Zeroing&) = delete;
+  Zeroing& operator=(const Zeroing&) = delete;
+
+ private:
+  ZeroingRange* slot_ = nullptr;
+};
+
+bool BeingZeroed(uintptr_t addr) {
+  for (ZeroingRange& r : g_zeroing) {
+    const uintptr_t begin = r.begin.load(std::memory_order_acquire);
+    if (begin != 0 && begin <= addr && addr < r.end.load(std::memory_order_relaxed)) return true;
+  }
+  return false;
+}
+
+// Private pages [p, p + n) of one run, committed with `protection`, as zero
+// pages again.
+// The recommit charges commit again; if another process took it meanwhile
+// (the system commit limit), it is retried for a while: pages left
+// decommitted would be an access violation nothing can retry.
+bool ZeroPrivate(uint8_t* p, size_t n, DWORD protection) {
+  Zeroing zeroing(p, n);
+  VirtualFree(p, n, MEM_DECOMMIT);
+  for (int attempt = 0; attempt < 200; ++attempt) {
+    if (VirtualAlloc(p, n, MEM_COMMIT, protection) != nullptr) return true;
+    Sleep(attempt < 10 ? 1 : 50);
+  }
+  fprintf(stderr, "gesher-mmap: recommitting %p (0x%zx bytes) after madvise failed: %lu\n",
+          static_cast<void*>(p), n, GetLastError());
+  return false;
+}
+
 }  // namespace
+
+namespace gesher {
+
+bool RetryAfterMadvise(uintptr_t addr, ULONG_PTR access) {
+  auto allowed = [&] {
+    MEMORY_BASIC_INFORMATION info;
+    if (VirtualQuery(reinterpret_cast<void*>(addr), &info, sizeof(info)) == 0 ||
+        info.State != MEM_COMMIT || (info.Protect & PAGE_GUARD) != 0) {
+      return false;
+    }
+    const DWORD p = info.Protect & 0xff;
+    switch (access) {
+      case 0:
+        return p != PAGE_NOACCESS && p != PAGE_EXECUTE;
+      case 1:
+        return p == PAGE_READWRITE || p == PAGE_WRITECOPY || p == PAGE_EXECUTE_READWRITE ||
+               p == PAGE_EXECUTE_WRITECOPY;
+      case 8:
+        return p == PAGE_EXECUTE || p == PAGE_EXECUTE_READ || p == PAGE_EXECUTE_READWRITE ||
+               p == PAGE_EXECUTE_WRITECOPY;
+      default:
+        return false;
+    }
+  };
+  // In flight: wait for the recommit. Not in flight: the fault was a race
+  // only if the page is there now - unless a zeroing started or ended while
+  // we looked (the epoch moved: the page may have been recommitted and
+  // decommitted again by the next madvise), then look again.
+  for (;;) {
+    const uint64_t epoch = g_zeroing_epoch.load(std::memory_order_seq_cst);
+    const bool busy = BeingZeroed(addr);
+    if (allowed()) return true;
+    if (!busy && g_zeroing_epoch.load(std::memory_order_seq_cst) == epoch) return false;
+    SwitchToThread();
+  }
+}
+
+}  // namespace gesher
 
 extern "C" {
 
@@ -1069,19 +1212,36 @@ int mprotect(void* addr, size_t length, int prot) {
   InvalidateSharedAliases(s, reinterpret_cast<uintptr_t>(addr), length);
   const DWORD protection = PageProtection(prot);
   const bool ok = ForEachRun(addr, length, [&](uint8_t* p, size_t n, const MEMORY_BASIC_INFORMATION& info) {
-    // Copy-on-write views stay copy-on-write when made writable.
+    // Copy-on-write views stay copy-on-write when made writable. A private
+    // view mapped read-only (GroupFile) has a read-only AllocationProtect:
+    // the registry says it is private.
     DWORD want = protection;
-    if (info.Type == MEM_MAPPED &&
-        (info.AllocationProtect == PAGE_WRITECOPY ||
-         info.AllocationProtect == PAGE_EXECUTE_WRITECOPY)) {
-      want = CopyOnWrite(want);
+    if (info.Type == MEM_MAPPED) {
+      bool private_view = info.AllocationProtect == PAGE_WRITECOPY ||
+                          info.AllocationProtect == PAGE_EXECUTE_WRITECOPY;
+      if (!private_view) {
+        auto region = FindRegion(s, reinterpret_cast<uintptr_t>(p));
+        private_view = region != s.regions.end() && region->second.kind == Kind::kView &&
+                       !region->second.shared;
+      }
+      if (private_view) want = CopyOnWrite(want);
+    }
+    // Reserved, not committed: PROT_NONE anonymous memory of ours
+    // (AnonymousCommit), or a thread stack's pages below its committed part.
+    // Ours already fault on any access, so PROT_NONE keeps them reserved; any
+    // other protection commits them (zero-filled, as they read on Linux). A
+    // stack's pages are committed even for PROT_NONE: ART protects the bottom
+    // of each stack for its implicit stack overflow checks, and GrowStack
+    // (fault_signals.cc) stops at committed pages.
+    if (info.State == MEM_RESERVE) {
+      if (want == PAGE_NOACCESS) {
+        auto region = FindRegion(s, reinterpret_cast<uintptr_t>(p));
+        if (region != s.regions.end() && region->second.kind == Kind::kAnon) return true;
+      }
+      return VirtualAlloc(p, n, MEM_COMMIT, want) != nullptr;
     }
     DWORD old;
-    if (VirtualProtect(p, n, want, &old)) return true;
-    // Reserved, not committed: a thread stack's pages below its committed
-    // part (mmap always commits). ART protects the bottom of each stack for
-    // its implicit stack overflow checks (fault_signals.cc).
-    return info.State == MEM_RESERVE && VirtualAlloc(p, n, MEM_COMMIT, want) != nullptr;
+    return VirtualProtect(p, n, want, &old) != 0;
   });
   if (!ok) {
     errno = EACCES;
@@ -1096,12 +1256,17 @@ int madvise(void* addr, size_t length, int advice) {
     case MADV_DONTNEED:
     case MADV_FREE:
     case MADV_REMOVE: {
+      // Decommit is a temporary physical state, not a logical PROT_NONE map.
+      // Keep mprotect/mremap/MAP_FIXED from observing or replacing that state
+      // before the recommit restores the mapping's protection. Ordinary loads
+      // still use the lock-free fault retry above while the range is zeroed.
+      State& s = state();
+      std::lock_guard<std::mutex> registry_guard(s.lock);
       // Linux semantics for private anonymous memory: the range reads back as
       // zeros. Decommit + recommit gives exactly that.
       bool ok = ForEachRun(addr, length, [](uint8_t* p, size_t n, const MEMORY_BASIC_INFORMATION& info) {
         if (info.Type == MEM_PRIVATE && info.State == MEM_COMMIT) {
-          VirtualFree(p, n, MEM_DECOMMIT);
-          return VirtualAlloc(p, n, MEM_COMMIT, info.Protect) != nullptr;
+          return ZeroPrivate(p, n, info.Protect);
         }
         if (info.Type == MEM_MAPPED && (info.Protect & (PAGE_READWRITE | PAGE_WRITECOPY |
                                                         PAGE_EXECUTE_READWRITE |
@@ -1263,8 +1428,15 @@ void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...
     size_t run = std::min(copy_size - done,
                           static_cast<size_t>(static_cast<uint8_t*>(info.BaseAddress) +
                                               info.RegionSize - (from + done)));
-    DWORD protection = info.Protect & ~(PAGE_GUARD | PAGE_NOCACHE | PAGE_WRITECOMBINE);
     DWORD old_protection;
+    if (info.State == MEM_RESERVE) {
+      // PROT_NONE pages that were never committed (AnonymousCommit): the
+      // destination's become the same.
+      VirtualFree(to + done, run, MEM_DECOMMIT);
+      done += run;
+      continue;
+    }
+    DWORD protection = info.Protect & ~(PAGE_GUARD | PAGE_NOCACHE | PAGE_WRITECOMBINE);
     bool readable = protection != PAGE_NOACCESS;
     if (!readable) VirtualProtect(from + done, run, PAGE_READONLY, &old_protection);
     memcpy(to + done, from + done, run);
@@ -1281,8 +1453,7 @@ void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...
       size_t run = std::min(old_size - done,
                             static_cast<size_t>(static_cast<uint8_t*>(info.BaseAddress) +
                                                 info.RegionSize - (from + done)));
-      VirtualFree(from + done, run, MEM_DECOMMIT);
-      VirtualAlloc(from + done, run, MEM_COMMIT, info.Protect);
+      if (info.State == MEM_COMMIT) ZeroPrivate(from + done, run, info.Protect);
       done += run;
     }
   } else {

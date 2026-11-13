@@ -346,6 +346,8 @@ public final class Main {
         }
         AssetManager.createSystemAssetsInZygoteLocked(false, frameworkRes);
 
+        android.app.GesherSettingsContext.prepare();
+
         // 5. android.webkit.WebView on WebView2 (docs/webview.md): Gesher's
         //    WebViewFactoryProvider, set before any app code runs.
         com.gesher.app.webview.GesherWebView.install();

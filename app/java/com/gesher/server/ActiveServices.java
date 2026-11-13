@@ -396,6 +396,8 @@ final class ActiveServices {
             b.connections.add(c);
             mConnections.computeIfAbsent(connection.asBinder(), k -> new ArrayList<>()).add(c);
             if (b.received) published = b.binder;
+            // A new client: the idle reaper must not take this as an unused process.
+            if (r.app != null) r.app.markActive(SystemClock.uptimeMillis());
         }
         SystemServer.log("bindService " + r + " from " + callingPackage + " (flags 0x"
                 + Long.toHexString(flags) + ")");
@@ -713,6 +715,52 @@ final class ActiveServices {
         return false;
     }
 
+    /** Whether a service in the process is in the foreground (startForeground). */
+    synchronized boolean hasForegroundService(ActivityTaskManagerService.ProcessRecord app) {
+        for (ServiceRecord r : mServices.values()) {
+            if (r.app == app && r.foregroundId != 0) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Whether a service of the process is in use, as OomAdjuster ranks a service process
+     * above a cached one: a service still being brought up or with a restart pending, a
+     * started (or foreground) service, or one bound by another process or by the system
+     * (JobScheduler, sync). A binding from the process itself does not count ("binding to
+     * oneself is not interesting"): such a process is cached and may be reaped.
+     */
+    synchronized boolean inUse(ActivityTaskManagerService.ProcessRecord app) {
+        IBinder self = app.thread != null ? app.thread.asBinder() : null;
+        for (ServiceRecord r : mServices.values()) {
+            if (r.app != app) continue;
+            if (!r.created || r.restart != null || r.startRequested || !r.pendingStarts.isEmpty()
+                    || r.foregroundId != 0) return true;
+            for (IntentBindRecord b : r.bindings.values()) {
+                for (ConnectionRecord c : b.connections) {
+                    if (c.caller == null || !c.caller.equals(self)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Discard a committed cached exit's unused/self-bound services before admitting a
+     * new client. The service monitor also guards the reaper's final inUse check, so a
+     * real new binding either prevented the exit or gets a fresh service record.
+     */
+    synchronized void retireCachedServices(ActivityTaskManagerService.ProcessRecord app) {
+        if (!app.exiting || !app.reaped || inUse(app)) {
+            throw new IllegalStateException("Cannot retire services of a process still in use");
+        }
+        mServices.values().removeIf(r -> r.app == app);
+        mConnections.entrySet().removeIf(e -> {
+            e.getValue().removeIf(c -> c.binding.service.app == app);
+            return e.getValue().isEmpty();
+        });
+    }
+
     /** Explicit force-stop/uninstall also cancels a service waiting for its retry timer. */
     void stopPackage(String packageName) {
         List<ServiceRecord> stopped = new ArrayList<>();
@@ -774,7 +822,12 @@ final class ActiveServices {
                 boolean started = r.startRequested && (r.startResult != Service.START_NOT_STICKY
                         || !r.pendingStarts.isEmpty());
                 if (!started) r.startRequested = false;
-                if (!app.exiting && serviceCurrent(r) && (started || r.hasAutoCreateConnections())) {
+                // Intentional force-stop suppresses recovery. Cached retirement removes
+                // unused/self-bound records at commit; if active work still survives here,
+                // its process may be restarted just as after an ordinary process death.
+                boolean recover = (!app.exiting || app.reaped)
+                        && (started || r.hasAutoCreateConnections());
+                if (serviceCurrent(r) && recover) {
                     if (r.startRequested && r.pendingStarts.isEmpty() && started) {
                         Intent redelivery = r.startResult == Service.START_REDELIVER_INTENT
                                 && r.lastStartIntent != null ? new Intent(r.lastStartIntent) : null;

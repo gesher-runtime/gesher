@@ -128,6 +128,16 @@ public final class IconBundleTest {
             leaf = leaf.substring(leaf.lastIndexOf('/') + 1);
             check(color(new File(Device.dataDir(), "system/apk-icons/" + leaf)) == red, "published cached pixels");
         }
+        // A first launch must remember its installed identity even without a drawn icon.
+        String installedPackage = ApkPackage.parse(full.getAbsolutePath()).packageName;
+        check(!new File(Device.dataDir(), "data/" + installedPackage + "/gesher-shell/icon.ico").exists(),
+                "fixture has no installed app icon");
+        AppShell.rememberApkQuietly(installedPackage, full);
+        String installedKey = full.length() + "\t" + full.lastModified() + "\t";
+        String[] installedRow = Files.readAllLines(new File(Device.dataDir(), "system/apk-icons.list").toPath())
+                .stream().filter(x -> x.startsWith(installedKey)).findFirst().orElseThrow().split("\t", -1);
+        check(installedRow.length == 4 && installedRow[2].endsWith("\\gesher.ico")
+                && installedPackage.equals(installedRow[3]), "generic icon keeps actual installed package identity");
         check(!new File(Device.dataDir(), "system/packages.list").exists(), "no package installation registry");
         check(!Device.stateFile().exists(), "no device/server started");
         File bad = new File(output, "bad.apks");

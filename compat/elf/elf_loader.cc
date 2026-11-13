@@ -10,11 +10,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <io.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -24,6 +27,10 @@
 
 #include "fs_rewrite.h"
 #include "tls.h"
+
+// Whether gesher-base's mmap is placeholder-based (compat/posix/src/mman.cc):
+// MAP_FIXED file views inside a reservation, executable file views.
+extern "C" int gesher_mmap_placeholders(void);
 
 // DT_RELR's entry type; this elf.h predates it.
 using Elf64_Relr = uint64_t;
@@ -183,6 +190,15 @@ struct Library {
 
   // LoadOptions::stub_unresolved_functions for this load.
   bool stub_unresolved = true;
+
+  // Load time only: what of the mapping is writable now (page-rounded
+  // [start, end) ranges), and the pages of read-only segments made writable
+  // since (EnsureWritable). The final protections come from the program
+  // headers (ProtectSegments).
+  std::vector<std::pair<uintptr_t, uintptr_t>> writable;
+  std::set<uintptr_t> made_writable;
+  const Elf64_Phdr* file_phdr = nullptr;  // the program headers in the file image
+  uint16_t file_phnum = 0;
 
   std::vector<std::string> needed;
   std::vector<Library*> dependencies;
@@ -450,31 +466,62 @@ void Fail(std::string* error, const std::string& msg) {
   if (error) *error = msg;
 }
 
-// Reads the whole file into `buf`.
-bool ReadFile(const char* path, std::vector<uint8_t>* buf, std::string* error) {
-  int fd = open(path, O_RDONLY);
-  if (fd < 0) {
+// An object's file, open for mapping its segments, and a read-only view of
+// all of it (program and section headers, the %fs rewrite's metadata). The
+// view is the file's page cache: nothing of it is copied or charged to commit,
+// and it is unmapped once the object is loaded.
+struct FileImage {
+  int fd = -1;
+  const uint8_t* data = nullptr;
+  size_t size = 0;
+  void* view = nullptr;
+  std::vector<uint8_t> copy;  // when the file cannot be viewed
+
+  FileImage() = default;
+  FileImage(const FileImage&) = delete;
+  FileImage& operator=(const FileImage&) = delete;
+  ~FileImage() {
+    if (view != nullptr) UnmapViewOfFile(view);
+    if (fd >= 0) close(fd);
+  }
+};
+
+bool OpenImage(const char* path, FileImage* image, std::string* error) {
+  image->fd = open(path, O_RDONLY);
+  if (image->fd < 0) {
     Fail(error, std::string("cannot open ") + path);
     return false;
   }
   struct stat st {};
-  if (fstat(fd, &st) != 0 || st.st_size <= 0) {
-    close(fd);
+  if (fstat(image->fd, &st) != 0 || st.st_size <= 0) {
     Fail(error, std::string("cannot stat ") + path);
     return false;
   }
-  buf->resize(static_cast<size_t>(st.st_size));
+  image->size = static_cast<size_t>(st.st_size);
+  HANDLE file = reinterpret_cast<HANDLE>(_get_osfhandle(image->fd));
+  if (file != INVALID_HANDLE_VALUE) {
+    if (HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr)) {
+      image->view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+      CloseHandle(mapping);  // the view keeps the section
+    }
+  }
+  if (image->view != nullptr) {
+    image->data = static_cast<const uint8_t*>(image->view);
+    return true;
+  }
+  // Not viewable (not a disk file?): read it.
+  image->copy.resize(image->size);
   size_t off = 0;
-  while (off < buf->size()) {
-    ssize_t n = pread(fd, buf->data() + off, buf->size() - off, static_cast<off_t>(off));
+  while (off < image->size) {
+    ssize_t n = pread(image->fd, image->copy.data() + off, image->size - off,
+                      static_cast<off_t>(off));
     if (n <= 0) {
-      close(fd);
       Fail(error, std::string("short read on ") + path);
       return false;
     }
     off += static_cast<size_t>(n);
   }
-  close(fd);
+  image->data = image->copy.data();
   return true;
 }
 
@@ -486,33 +533,128 @@ int ProtFor(uint32_t p_flags) {
   return prot;
 }
 
-// Maps the PT_LOAD segments of `data` into a fresh reservation. Fills base,
-// load_bias, map_size. Returns false on error.
-bool MapSegments(Library* lib, const uint8_t* data, std::string* error) {
-  const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
-  const auto* phdr = reinterpret_cast<const Elf64_Phdr*>(data + ehdr->e_phoff);
+// The protection a segment is mapped with before relocation, which is its
+// final one (ProtectSegments): a guest aarch64 object's code is never
+// host-executable, the translator reads it (ADR 0047).
+int LoadProt(const Library* lib, uint32_t p_flags) {
+  int prot = ProtFor(p_flags);
+#if !defined(__aarch64__)
+  if (lib->is_aarch64 && (prot & PROT_EXEC)) prot = (prot & ~PROT_EXEC) | PROT_READ;
+#else
+  (void)lib;
+#endif
+  return prot;
+}
 
-  // Span of all PT_LOAD segments.
+// Makes [addr, addr + n) of the mapping writable: pages of a read-only
+// segment that a relocation (DT_TEXTREL) or .bss zeroing writes. Copy-on-
+// write, so only such pages stop being the file's shared ones;
+// ProtectSegments sets the final protection afterwards.
+bool MakeWritable(Library* lib, uintptr_t addr, size_t n) {
+  const auto base = reinterpret_cast<uintptr_t>(lib->base);
+  const auto bias = reinterpret_cast<uintptr_t>(lib->load_bias);
+  for (uintptr_t page = PageDown(addr); page < addr + n; page += kPageSize) {
+    if (page < base || page >= base + lib->map_size) continue;  // not ours: as before
+    if (lib->made_writable.count(page) != 0) continue;
+    int prot = PROT_READ | PROT_WRITE;
+    for (uint16_t i = 0; i < lib->file_phnum; ++i) {
+      const Elf64_Phdr& ph = lib->file_phdr[i];
+      if (ph.p_type == PT_LOAD && page >= bias + PageDown(ph.p_vaddr) &&
+          page < bias + PageUp(ph.p_vaddr + ph.p_memsz)) {
+        prot |= LoadProt(lib, ph.p_flags);  // code stays executable (IFUNC resolvers)
+      }
+    }
+    if (mprotect(reinterpret_cast<void*>(page), kPageSize, prot) != 0) return false;
+    lib->made_writable.insert(page);
+  }
+  return true;
+}
+
+inline bool EnsureWritable(Library* lib, const void* where, size_t n) {
+  const auto a = reinterpret_cast<uintptr_t>(where);
+  for (const auto& r : lib->writable) {
+    if (a >= r.first && a + n <= r.second) return true;
+  }
+  return MakeWritable(lib, a, n);
+}
+
+// Maps the PT_LOAD segments of the object into a fresh reservation. Fills
+// base, load_bias, map_size. Returns false on error.
+//
+// With the file open (`fd`) and placeholder-based mmap, each segment is a
+// private view of the file (MAP_PRIVATE | MAP_FIXED into the reservation, as
+// bionic's linker maps them): code and read-only data stay the file's shared,
+// demand-paged pages, which every process loading the object shares and
+// nothing charges to commit; writable data is copy-on-write, private where
+// written (relocations); .bss is anonymous zero pages. A segment whose file
+// offset and address differ modulo the page size is copied into anonymous
+// pages instead, and so is every segment of an object loaded from memory, or
+// without placeholders, or whose segments share a page.
+bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd, std::string* error) {
+  const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
+  if (ehdr->e_phoff > size || ehdr->e_phnum * sizeof(Elf64_Phdr) > size - ehdr->e_phoff) {
+    Fail(error, "program headers outside the file");
+    return false;
+  }
+  const auto* phdr = reinterpret_cast<const Elf64_Phdr*>(data + ehdr->e_phoff);
+  lib->file_phdr = phdr;
+  lib->file_phnum = ehdr->e_phnum;
+
+  // Span of all PT_LOAD segments, and whether their pages overlap (two
+  // segments on one page cannot be two views).
   uint64_t min_vaddr = UINT64_MAX, max_vaddr = 0;
+  bool can_view = fd >= 0 && gesher_mmap_placeholders() != 0;
+  std::vector<std::pair<uint64_t, uint64_t>> pages;
   for (int i = 0; i < ehdr->e_phnum; ++i) {
     if (phdr[i].p_type != PT_LOAD) continue;
+    if (phdr[i].p_filesz > phdr[i].p_memsz || phdr[i].p_offset > size ||
+        phdr[i].p_filesz > size - phdr[i].p_offset) {
+      Fail(error, "a PT_LOAD segment outside the file");
+      return false;
+    }
     min_vaddr = std::min(min_vaddr, phdr[i].p_vaddr);
     max_vaddr = std::max(max_vaddr, phdr[i].p_vaddr + phdr[i].p_memsz);
+    pages.emplace_back(PageDown(phdr[i].p_vaddr), PageUp(phdr[i].p_vaddr + phdr[i].p_memsz));
   }
   if (min_vaddr == UINT64_MAX) {
     Fail(error, "no PT_LOAD segments");
     return false;
   }
+  std::sort(pages.begin(), pages.end());
+  for (size_t i = 1; i < pages.size(); ++i) {
+    if (pages[i].first < pages[i - 1].second) can_view = false;
+  }
   min_vaddr = PageDown(min_vaddr);
   max_vaddr = PageUp(max_vaddr);
   lib->map_size = max_vaddr - min_vaddr;
 
-  // Reserve the whole range as anonymous RW, then fill and protect each
-  // segment. File-backed fixed mappings need placeholder mappings on Windows
-  // (not implemented); copying the contents avoids that and costs a test .so
-  // nothing to speak of.
-  void* reservation = mmap(nullptr, lib->map_size, PROT_READ | PROT_WRITE,
-                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (!can_view) {
+    // Copied: the whole range anonymous RW, filled, protected after
+    // relocation.
+    void* reservation = mmap(nullptr, lib->map_size, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (reservation == MAP_FAILED) {
+      Fail(error, "mmap reservation failed");
+      return false;
+    }
+    lib->base = static_cast<uint8_t*>(reservation);
+    lib->load_bias = lib->base - min_vaddr;
+    lib->writable.emplace_back(reinterpret_cast<uintptr_t>(lib->base),
+                               reinterpret_cast<uintptr_t>(lib->base) + lib->map_size);
+    for (int i = 0; i < ehdr->e_phnum; ++i) {
+      if (phdr[i].p_type != PT_LOAD) continue;
+      uint8_t* seg = lib->load_bias + phdr[i].p_vaddr;
+      if (phdr[i].p_filesz > 0) {
+        std::memcpy(seg, data + phdr[i].p_offset, phdr[i].p_filesz);
+      }
+      // .bss (p_memsz > p_filesz) stays zero from the anonymous mapping.
+    }
+    return true;
+  }
+
+  // The reservation: inaccessible and uncommitted; the segments replace parts
+  // of it, and the gaps between them stay so.
+  void* reservation = mmap(nullptr, lib->map_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (reservation == MAP_FAILED) {
     Fail(error, "mmap reservation failed");
     return false;
@@ -520,13 +662,66 @@ bool MapSegments(Library* lib, const uint8_t* data, std::string* error) {
   lib->base = static_cast<uint8_t*>(reservation);
   lib->load_bias = lib->base - min_vaddr;
 
+  size_t viewed = 0, copied = 0;
   for (int i = 0; i < ehdr->e_phnum; ++i) {
-    if (phdr[i].p_type != PT_LOAD) continue;
-    uint8_t* seg = lib->load_bias + phdr[i].p_vaddr;
-    if (phdr[i].p_filesz > 0) {
-      std::memcpy(seg, data + phdr[i].p_offset, phdr[i].p_filesz);
+    const Elf64_Phdr& ph = phdr[i];
+    if (ph.p_type != PT_LOAD) continue;
+    const int prot = LoadProt(lib, ph.p_flags);
+    uint8_t* seg_page = lib->load_bias + PageDown(ph.p_vaddr);
+    uint8_t* seg_end = lib->load_bias + PageUp(ph.p_vaddr + ph.p_memsz);
+    uint8_t* file_end = lib->load_bias + ph.p_vaddr + ph.p_filesz;  // end of the file's bytes
+    uint8_t* file_page_end = lib->load_bias + PageUp(ph.p_vaddr + ph.p_filesz);
+    if (prot & PROT_WRITE) {
+      lib->writable.emplace_back(reinterpret_cast<uintptr_t>(seg_page),
+                                 reinterpret_cast<uintptr_t>(seg_end));
     }
-    // .bss (p_memsz > p_filesz) stays zero from the anonymous mapping.
+    if (ph.p_filesz > 0) {
+      const size_t len = static_cast<size_t>(file_page_end - seg_page);
+      bool mapped = false;
+      if (ph.p_vaddr % kPageSize == ph.p_offset % kPageSize) {
+        mapped = mmap(seg_page, len, prot, MAP_PRIVATE | MAP_FIXED, fd,
+                      static_cast<off_t>(PageDown(ph.p_offset))) == seg_page;
+      }
+      if (mapped) {
+        viewed += len;
+      } else {
+        // Not mappable at this address: the file's bytes copied into
+        // anonymous pages, as for an object in memory.
+        if (mmap(seg_page, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+                 -1, 0) != seg_page) {
+          Fail(error, "mapping a segment failed");
+          return false;
+        }
+        std::memcpy(lib->load_bias + ph.p_vaddr, data + ph.p_offset, ph.p_filesz);
+        if (prot != (PROT_READ | PROT_WRITE) && mprotect(seg_page, len, prot) != 0) {
+          Fail(error, "mprotect of a segment failed");
+          return false;
+        }
+        copied += len;
+      }
+      // .bss that starts inside the last file page: the file's bytes after
+      // p_filesz on that page (the next segment's) read as zeros.
+      if (ph.p_memsz > ph.p_filesz && file_end < file_page_end) {
+        uint8_t* zero_end = std::min(file_page_end, lib->load_bias + ph.p_vaddr + ph.p_memsz);
+        if (!EnsureWritable(lib, file_end, static_cast<size_t>(zero_end - file_end))) {
+          Fail(error, "cannot zero the start of a segment's .bss");
+          return false;
+        }
+        std::memset(file_end, 0, static_cast<size_t>(zero_end - file_end));
+      }
+    }
+    // The rest of .bss: anonymous zero pages.
+    uint8_t* anon_start = ph.p_filesz > 0 ? file_page_end : seg_page;
+    if (seg_end > anon_start &&
+        mmap(anon_start, static_cast<size_t>(seg_end - anon_start), prot,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != anon_start) {
+      Fail(error, "mapping a segment's .bss failed");
+      return false;
+    }
+  }
+  if (copied != 0) {
+    std::fprintf(stderr, "gesher elf: %s: 0x%zx bytes of segments mapped, 0x%zx copied\n",
+                 lib->name.c_str(), viewed, copied);
   }
   return true;
 }
@@ -541,11 +736,7 @@ bool ProtectSegments(Library* lib, const uint8_t* data, std::string* error) {
     if (phdr[i].p_type != PT_LOAD) continue;
     uint8_t* start = lib->load_bias + PageDown(phdr[i].p_vaddr);
     size_t len = PageUp(phdr[i].p_vaddr + phdr[i].p_memsz) - PageDown(phdr[i].p_vaddr);
-    int prot = ProtFor(phdr[i].p_flags);
-#if !defined(__aarch64__)
-    if (lib->is_aarch64 && (prot & PROT_EXEC)) prot = (prot & ~PROT_EXEC) | PROT_READ;
-#endif
-    if (mprotect(start, len, prot) != 0) {
+    if (mprotect(start, len, LoadProt(lib, phdr[i].p_flags)) != 0) {
       Fail(error, "mprotect of a segment failed");
       return false;
     }
@@ -674,6 +865,10 @@ bool ApplyRela(Library* lib, const Elf64_Rela& r, std::string* error) {
   uint32_t type = ELF64_R_TYPE(r.r_info);
   uint32_t sym_index = ELF64_R_SYM(r.r_info);
   uint64_t* where = reinterpret_cast<uint64_t*>(lib->load_bias + r.r_offset);
+  if (!EnsureWritable(lib, where, sizeof(*where))) {
+    Fail(error, lib->name + ": cannot make a relocated page writable");
+    return false;
+  }
 
   auto resolve = [&](ResolvedSymbol* rs) -> bool {
     const Elf64_Sym* sym = &lib->symtab[sym_index];
@@ -789,6 +984,11 @@ bool ApplyRelaAarch64(Library* lib, const Elf64_Rela& r, std::string* error) {
   uint32_t type = ELF64_R_TYPE(r.r_info);
   uint32_t sym_index = ELF64_R_SYM(r.r_info);
   uint64_t* where = reinterpret_cast<uint64_t*>(lib->load_bias + r.r_offset);
+  if (!EnsureWritable(lib, where,
+                      type == R_AARCH64_TLSDESC ? 2 * sizeof(*where) : sizeof(*where))) {
+    Fail(error, lib->name + ": cannot make a relocated page writable");
+    return false;
+  }
 
   auto resolve_value = [&](bool as_function, uint64_t* out) -> bool {
     const Elf64_Sym* sym = &lib->symtab[sym_index];
@@ -893,20 +1093,29 @@ bool ApplyRelaAarch64(Library* lib, const Elf64_Rela& r, std::string* error) {
   return true;
 }
 
-bool ApplyRelr(Library* lib) {
+bool ApplyRelr(Library* lib, std::string* error) {
   // DT_RELR: a compact encoding of R_X86_64_RELATIVE relocations.
   uint64_t* where = nullptr;
+  auto writable = [&](uint64_t* w) {
+    if (EnsureWritable(lib, w, sizeof(*w))) return true;
+    Fail(error, lib->name + ": cannot make a relocated page writable");
+    return false;
+  };
   for (size_t i = 0; i < lib->relr_count; ++i) {
     Elf64_Relr entry = lib->relr[i];
     if ((entry & 1) == 0) {
       where = reinterpret_cast<uint64_t*>(lib->load_bias + entry);
+      if (!writable(where)) return false;
       *where += reinterpret_cast<uint64_t>(lib->load_bias);
       ++where;
     } else {
       // A bitmap of the next 63 words.
       uint64_t bits = entry >> 1;
       for (uint64_t* w = where; bits != 0; bits >>= 1, ++w) {
-        if (bits & 1) *w += reinterpret_cast<uint64_t>(lib->load_bias);
+        if (bits & 1) {
+          if (!writable(w)) return false;
+          *w += reinterpret_cast<uint64_t>(lib->load_bias);
+        }
       }
       where += 63;
     }
@@ -982,7 +1191,8 @@ bool DecodeAndroidRela(const uint8_t* p, size_t size, std::vector<Elf64_Rela>* o
 }
 
 bool Relocate(Library* lib, std::string* error) {
-  if (lib->relr) ApplyRelr(lib);  // DT_RELR is arch-neutral (load-bias add)
+  // DT_RELR is arch-neutral (load-bias add).
+  if (lib->relr && !ApplyRelr(lib, error)) return false;
   std::vector<Elf64_Rela> packed;
   if (lib->android_rela != nullptr &&
       !DecodeAndroidRela(lib->android_rela, lib->android_rela_size, &packed, error)) {
@@ -1052,7 +1262,9 @@ void RunInit(Library* lib) {
 // shimmed. Returns false on a hard error.
 bool ResolveNeeded(Library* lib, const LoadOptions& options, std::string* error);
 
-Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::string* error,
+// `fd` is the object's open file, whose view `data` is (its segments are
+// mapped from it), or -1 for an object in memory (they are copied).
+Library* LoadCommon(const char* name, const uint8_t* data, size_t size, int fd, std::string* error,
                     const LoadOptions& options) {
   if (size < sizeof(Elf64_Ehdr)) {
     Fail(error, std::string(name) + ": too small to be ELF");
@@ -1078,8 +1290,13 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
   lib->name = name;
   lib->is_aarch64 = aarch64;
   lib->stub_unresolved = options.stub_unresolved_functions;
-  if (!MapSegments(lib, data, error)) {
-    delete lib;
+  // An object that fails before it is registered goes away with its mapping.
+  auto discard = [](Library* l) {
+    if (l->base != nullptr) munmap(l->base, l->map_size);
+    delete l;
+  };
+  if (!MapSegments(lib, data, size, fd, error)) {
+    discard(lib);
     return nullptr;
   }
   ParseDynamic(lib, data);
@@ -1089,7 +1306,7 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
   if (!aarch64 && options.main_executable && lib->has_interp && lib->tls.present) {
     if (lib->text_relocations || !TlsAssignModule(&lib->tls, true)) {
       Fail(error, std::string(name) + ": incompatible executable local-exec TLS layout or text relocations");
-      delete lib;
+      discard(lib);
       return nullptr;
     }
     executable_tls_size = static_cast<size_t>(-lib->tls.tp_offset);
@@ -1102,7 +1319,7 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
                            executable_tls_size)) {
       // A main TLS module is already registered; keep its backing object
       // alive just as later relocation failures keep registered libraries.
-      if (lib->tls.module_id == 0) delete lib;
+      if (lib->tls.module_id == 0) discard(lib);
       return nullptr;
     }
   }
@@ -1149,6 +1366,11 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
   if (!ProtectSegments(lib, data, error)) {
     return nullptr;
   }
+  // Load-time state; file_phdr points into the file image, which goes away.
+  lib->writable = {};
+  lib->made_writable.clear();
+  lib->file_phdr = nullptr;
+  lib->file_phnum = 0;
   RunInit(lib);
   return lib;
 }
@@ -1173,11 +1395,12 @@ bool ResolveNeeded(Library* lib, const LoadOptions& options, std::string* error)
       }
     }
     if (!found.empty()) {
-      std::vector<uint8_t> buf;
-      if (!ReadFile(found.c_str(), &buf, error)) return false;
+      FileImage image;
+      if (!OpenImage(found.c_str(), &image, error)) return false;
       LoadOptions dependency_options = options;
       dependency_options.main_executable = false;
-      Library* dep = LoadCommon(soname.c_str(), buf.data(), buf.size(), error, dependency_options);
+      Library* dep = LoadCommon(soname.c_str(), image.data, image.size, image.fd, error,
+                                dependency_options);
       if (dep == nullptr) return false;
       lib->dependencies.push_back(dep);
       continue;
@@ -1263,8 +1486,6 @@ void SetBionicResolver(SymbolResolver resolver) {
 }
 
 Library* Load(const char* path, std::string* error, const LoadOptions& options) {
-  std::vector<uint8_t> buf;
-  if (!ReadFile(path, &buf, error)) return nullptr;
   // Name the object by its file base name.
   const char* slash = std::strrchr(path, '/');
   const char* bslash = std::strrchr(path, '\\');
@@ -1274,7 +1495,9 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
     std::lock_guard<std::mutex> lock(g_mutex);
     if (Library* existing = FindLocked(name)) return existing;
   }
-  return LoadCommon(name.c_str(), buf.data(), buf.size(), error, options);
+  FileImage image;
+  if (!OpenImage(path, &image, error)) return nullptr;
+  return LoadCommon(name.c_str(), image.data, image.size, image.fd, error, options);
 }
 
 Library* LoadFromMemory(const char* name, const void* data, size_t size, std::string* error,
@@ -1283,7 +1506,7 @@ Library* LoadFromMemory(const char* name, const void* data, size_t size, std::st
     std::lock_guard<std::mutex> lock(g_mutex);
     if (Library* existing = FindLocked(name)) return existing;
   }
-  return LoadCommon(name, static_cast<const uint8_t*>(data), size, error, options);
+  return LoadCommon(name, static_cast<const uint8_t*>(data), size, -1, error, options);
 }
 
 void* Lookup(Library* library, const char* name) {

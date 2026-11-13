@@ -312,6 +312,40 @@ public final class SystemServer {
             mIdleTimeoutMs = idleTimeoutS * 1000;
         }
 
+        /** How long a cached app process may stay unused before it is ended, by default. */
+        private static final long CACHED_PROCESS_IDLE_S = 600;
+
+        /**
+         * Ends cached app processes nothing used for a while (ADR 0082): every
+         * min(60 s, idle time / 4), those idle for {@code GESHER_CACHED_PROCESS_IDLE_S} seconds (600; 0 never ends them).
+         */
+        private void startIdleReaper() {
+            long idleS = CACHED_PROCESS_IDLE_S;
+            String s = System.getenv("GESHER_CACHED_PROCESS_IDLE_S");
+            if (s != null) {
+                try {
+                    idleS = Long.parseLong(s.trim());
+                } catch (NumberFormatException e) {
+                    log("GESHER_CACHED_PROCESS_IDLE_S is not a number: " + s);
+                }
+            }
+            if (idleS <= 0) return;
+            log("cached app processes end after " + idleS + " s unused");
+            final long idleMs = idleS > Long.MAX_VALUE / 1000 ? Long.MAX_VALUE : idleS * 1000;
+            Thread reaper = new Thread(() -> {
+                while (true) {
+                    SystemClock.sleep(Math.min(60_000, Math.max(1000, idleMs / 4)));
+                    try {
+                        mServices.atm.reapIdleProcesses(idleMs);
+                    } catch (Throwable t) {
+                        log("idle reaper: " + t);
+                    }
+                }
+            }, "process-reaper");
+            reaper.setDaemon(true);
+            reaper.start();
+        }
+
         void start() throws Exception {
             // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
             CameraApp.sync(mInstaller, mServices.pm);
@@ -337,11 +371,11 @@ public final class SystemServer {
                         long since = mServices.atm.idleSince();
                         long now = SystemClock.uptimeMillis();
                         // Scheduled alarms and jobs due within the timeout keep the
-                        // device (devsvc, DeviceWork).
+                        // device for at most one more timeout (devsvc, DeviceWork).
                         if (since != 0 && now - since >= mIdleTimeoutMs
                                 && now - mLastCall >= mIdleTimeoutMs
-                                && !DeviceWork.dueWithin(mIdleTimeoutMs)) {
-                            shutdown("idle: no app process for " + (mIdleTimeoutMs / 1000)
+                                && !DeviceWork.keepsIdleDevice(now - since, mIdleTimeoutMs)) {
+                            shutdown("idle: no app in use for " + (mIdleTimeoutMs / 1000)
                                     + " s");
                             return;
                         }
@@ -350,6 +384,7 @@ public final class SystemServer {
                 idle.setDaemon(true);
                 idle.start();
             }
+            startIdleReaper();
             // Clicks on the apps' toasts, also those of earlier runs (hwsvc2, ADR 0051).
             NotificationManagerService notifications = NotificationManagerService.sLast;
             if (notifications != null) notifications.startActivator();

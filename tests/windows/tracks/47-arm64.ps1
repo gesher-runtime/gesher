@@ -70,6 +70,12 @@ Check 'arm64: loader runs a self-contained arm64-v8a .so' {
   A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/trivial_arm64.so"))
 } @('arm64_elf_test all passed')
 
+# Read-only relocations are applied before guest constructors execute. This
+# goes through the bounded guest runner and cannot pass with a missing fixture.
+Check 'arm64: TEXTREL pages relocate before guest constructors and selftest' {
+  A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/textrel_arm64.so"))
+} @('gesher_selftest() == 0', 'arm64_elf_test all passed')
+
 # Step 2 (guest libc): an arm64-v8a .so built against bionic's libc/libm/libdl/
 # liblog/pthread; its imports are bound to guest trampolines that call the host
 # shim across AAPCS64 <-> System V. Runs the library's own checks.
