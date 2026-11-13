@@ -22,11 +22,41 @@ def main():
         d = Path(d)
         (d / 'ftw.h').write_text((ROOT / 'compat/posix/include/ftw.h').read_text())
         (d / 'test.cc').write_text('''#define _GNU_SOURCE 1
+// MinGW retains a 16-bit ino_t even though Gesher's stat has a 64-bit inode.
+// Load the real headers first, then model that typedef width in the exact walker.
+#include <ftw.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <string>
+#include <utility>
+#include <vector>
+#ifdef TEST_NARROW_INO_T
+using traversal_mingw_ino_t = unsigned short;
+static int traversal_wide_stat(const char* path, struct stat* out) {
+  int result = stat(path, out);
+  if (result == 0) out->st_ino |= 1ULL << 48;
+  return result;
+}
+static int traversal_wide_lstat(const char* path, struct stat* out) {
+  int result = lstat(path, out);
+  if (result == 0) out->st_ino |= 1ULL << 48;
+  return result;
+}
+#define ino_t traversal_mingw_ino_t
+#define stat(...) traversal_wide_stat(__VA_ARGS__)
+#define lstat(...) traversal_wide_lstat(__VA_ARGS__)
+#endif
 #define nftw gesher_test_nftw
 #define ftw gesher_test_ftw
 ''' + source + '''
 #undef nftw
 #undef ftw
+#undef ino_t
 #define TRAVERSAL_NFTW gesher_test_nftw
 #define TRAVERSAL_FTW gesher_test_ftw
 #include "traversal_contract_test.inc"
@@ -35,11 +65,13 @@ int main() { return traversal_run(); }
         cmd = shlex.split(a.cxx) + ['-std=c++20', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
               '-fno-exceptions', '-I', str(d), '-I', str(ROOT / 'tests/native'), str(d / 'test.cc'), '-o', str(d / 'test')]
         if a.sanitize: cmd += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
-        subprocess.run(cmd, check=True, timeout=120)
         env = os.environ.copy()
         env['GESHER_TRAVERSAL_SECOND_ROOT'] = str(Path(a.second_root).resolve())
-        result = subprocess.run([str(d / 'test')], cwd=d, env=env, timeout=30).returncode
-        if result: return result
+        for extra in ([], ['-DTEST_NARROW_INO_T']):
+            print('traversal inode model:', 'MinGW 16-bit typedef / 64-bit file IDs' if extra else 'host', flush=True)
+            subprocess.run(cmd + extra, check=True, timeout=120)
+            result = subprocess.run([str(d / 'test')], cwd=d, env=env, timeout=30).returncode
+            if result: return result
         shim = (ROOT / 'compat/bionic/shim.cc').read_text()
         arm = (ROOT / 'compat/arm64/dll/guest_libc.cc').read_text()
         def section(text, start, end):

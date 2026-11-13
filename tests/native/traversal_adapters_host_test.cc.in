@@ -20,21 +20,86 @@ static int failures, checks;
 static void check(const char* label, bool ok) {
   ++checks; if (!ok) { ++failures; printf("FAIL traversal adapter: %s\n", label); }
 }
-static int arm_calls, inner_calls;
-static a64::X64Stat sample{13,17,19,0100640,23,29,0,31,37,4096,41,43,47,53,59,61,67,{0,0,0}};
+// These are Android NDK ftw.h values, deliberately independent of host ftw.h.
+static const struct { int host, android; } callback_types[] = {
+  {FTW_F, 0}, {FTW_D, 1}, {FTW_DNR, 2}, {FTW_DP, 3},
+  {FTW_NS, 4}, {FTW_SL, 5}, {FTW_SLN, 6}
+};
+static const int host_flags_for_android[16] = {
+  0, FTW_PHYS, FTW_MOUNT, FTW_PHYS | FTW_MOUNT,
+  FTW_DEPTH, FTW_DEPTH | FTW_PHYS, FTW_DEPTH | FTW_MOUNT, FTW_DEPTH | FTW_PHYS | FTW_MOUNT,
+  FTW_CHDIR, FTW_CHDIR | FTW_PHYS, FTW_CHDIR | FTW_MOUNT, FTW_CHDIR | FTW_PHYS | FTW_MOUNT,
+  FTW_DEPTH | FTW_CHDIR, FTW_DEPTH | FTW_CHDIR | FTW_PHYS,
+  FTW_DEPTH | FTW_CHDIR | FTW_MOUNT, FTW_DEPTH | FTW_CHDIR | FTW_PHYS | FTW_MOUNT
+};
+static int arm_calls, inner_calls, x64_calls, x64_inner_calls;
+static int host_type, android_type, expected_flags;
+static const unsigned long long sample_ino = 0x1000000000011ULL;
+static struct stat sample;
+// Drive the extracted x86-64 production adapter with every host callback type
+// and check every Android flag combination before invoking the real thunk.
+extern "C" int ftw(const char* p, int (*cb)(const char*, const struct stat*, int), int nfds) {
+  check("ftw fd budget forwarded", nfds == 3); return cb(p, &sample, host_type);
+}
+extern "C" int nftw(const char* p, int (*cb)(const char*, const struct stat*, int, struct FTW*),
+                    int nfds, int flags) {
+  check("Android nftw flags translated for host", nfds == 5 && flags == expected_flags);
+  struct FTW info{2,7}; return cb(p, &sample, host_type, &info);
+}
+// The ARM64 layer calls the same x86-64 bionic adapter in production. Keep the
+// callbacks correctly typed here while marshalling its x86-64 stat wire layout.
+static thread_local a64::HostFtwCallback arm_host_ftw_callback;
+static thread_local a64::HostNftwCallback arm_host_nftw_callback;
+static a64::X64Stat to_wire(const struct stat* s) {
+  a64::X64Stat wire;
+  static_assert(sizeof(wire) == sizeof(*s));
+  std::memcpy(&wire, s, sizeof(wire));
+  return wire;
+}
+static int arm_ftw_wire(const char* p, const struct stat* s, int t) {
+  auto wire = to_wire(s); return arm_host_ftw_callback(p, &wire, t);
+}
+static int arm_nftw_wire(const char* p, const struct stat* s, int t, struct FTW* info) {
+  auto wire = to_wire(s); a64::GuestFtwInfo guest{info->base, info->level};
+  return arm_host_nftw_callback(p, &wire, t, &guest);
+}
 static int host_ftw(const char* p, a64::HostFtwCallback cb, int nfds) {
-  check("ftw fd budget forwarded", nfds == 3); return cb(p, &sample, FTW_F);
+  auto saved = arm_host_ftw_callback; arm_host_ftw_callback = cb;
+  int result = x64::Ftw(p, arm_ftw_wire, nfds);
+  arm_host_ftw_callback = saved; return result;
 }
 static int host_nftw(const char* p, a64::HostNftwCallback cb, int nfds, int flags) {
-  check("nftw flags and fd budget forwarded", nfds == 5 && flags == 8);
-  a64::GuestFtwInfo info{2,7}; return cb(p, &sample, FTW_F, &info);
+  auto saved = arm_host_nftw_callback; arm_host_nftw_callback = cb;
+  int result = x64::Nftw(p, arm_nftw_wire, nfds, flags);
+  arm_host_nftw_callback = saved; return result;
 }
 static void check_stat(const a64::A64Stat* s) {
-  check("ARM64 dev/ino/nlink/mode", s->st_dev == 13 && s->st_ino == 17 && s->st_nlink == 19 && s->st_mode == 0100640);
+  check("ARM64 dev/ino/nlink/mode", s->st_dev == 13 && s->st_ino == sample_ino && s->st_nlink == 19 && s->st_mode == 0100640);
   check("ARM64 uid/gid/rdev/size", s->st_uid == 23 && s->st_gid == 29 && s->st_rdev == 31 && s->st_size == 37);
   check("ARM64 block fields", s->st_blksize == 4096 && s->st_blocks == 41);
   check("ARM64 full-width timestamp fields", s->atime == 43 && s->atime_ns == 47 && s->mtime == 53 && s->mtime_ns == 59 && s->ctime == 61 && s->ctime_ns == 67);
   check("ARM64 ABI padding cleared", s->pad1 == 0 && s->pad2 == 0 && s->unused4 == 0 && s->unused5 == 0);
+}
+static void check_x64_stat(const struct stat* s) {
+  check("x86-64 stat fields and full-width inode", s->st_dev == 13 && s->st_ino == sample_ino
+      && s->st_nlink == 19 && s->st_mode == 0100640 && s->st_uid == 23 && s->st_gid == 29
+      && s->st_rdev == 31 && s->st_size == 37 && s->st_blksize == 4096 && s->st_blocks == 41);
+  check("x86-64 timestamp fields", s->st_atim.tv_sec == 43 && s->st_atim.tv_nsec == 47
+      && s->st_mtim.tv_sec == 53 && s->st_mtim.tv_nsec == 59
+      && s->st_ctim.tv_sec == 61 && s->st_ctim.tv_nsec == 67);
+}
+static int x64_ftw(const char* p, const struct stat* s, int t) {
+  check("x86-64 ftw Android type", !strcmp(p, "ftw") && t == android_type);
+  check_x64_stat(s); return 37;
+}
+static int arm_ftw(const char* p, const a64::A64Stat* s, int t) {
+  check("ARM64 ftw Android type", !strcmp(p, "ftw") && t == android_type);
+  check_stat(s); return 37;
+}
+static int x64_nftw(const char* p, const struct stat* s, int t, struct FTW* info) {
+  check("x86-64 nftw Android type and info", !strcmp(p, "nftw") && t == android_type
+      && info->base == 2 && info->level == 7);
+  check_x64_stat(s); return 41;
 }
 static int arm_inner(const char* p, const a64::A64Stat* s, int t) {
   check("nested ftw path/type", !strcmp(p,"inner") && t == FTW_F); check_stat(s); ++inner_calls; return 31;
@@ -45,12 +110,42 @@ static int arm_outer(const char* p, const a64::A64Stat* s, int t) {
   return 23;
 }
 static int arm_nftw(const char* p, const a64::A64Stat* s, int t, a64::GuestFtwInfo* i) {
-  check("nftw info layout", i->base == 2 && i->level == 7 && t == FTW_F && !strcmp(p,"nftw")); check_stat(s); return 41;
+  check("ARM64 nftw Android type and info", i->base == 2 && i->level == 7 && t == android_type && !strcmp(p,"nftw")); check_stat(s); return 41;
+}
+static int x64_inner(const char* p, const struct stat* s, int t) {
+  check("nested x86-64 ftw path/type", !strcmp(p,"inner") && t == 0);
+  check_x64_stat(s); ++x64_inner_calls; return 31;
+}
+static int x64_outer(const char* p, const struct stat* s, int t) {
+  check("outer x86-64 ftw path/type", !strcmp(p,"outer") && t == 0);
+  check_x64_stat(s); ++x64_calls;
+  if (x64_calls == 1) check("nested x86-64 ftw forwards result", x64::Ftw("inner", x64_inner, 3) == 31);
+  return 23;
 }
 int main() {
+  sample.st_dev = 13; sample.st_ino = sample_ino; sample.st_nlink = 19; sample.st_mode = 0100640;
+  sample.st_uid = 23; sample.st_gid = 29; sample.st_rdev = 31; sample.st_size = 37;
+  sample.st_blksize = 4096; sample.st_blocks = 41;
+  sample.st_atim = {43,47}; sample.st_mtim = {53,59}; sample.st_ctim = {61,67};
   a64::g_ftw = reinterpret_cast<void*>(&host_ftw); a64::g_nftw = reinterpret_cast<void*>(&host_nftw);
+  for (const auto& types : callback_types) {
+    host_type = types.host; android_type = types.android;
+    check("x86-64 ftw callback return", x64::Ftw("ftw", x64_ftw, 3) == 37);
+    check("ARM64 ftw callback return", a64::GuestFtw("ftw", arm_ftw, 3) == 37);
+    for (int flags = 0; flags != 16; ++flags) {
+      for (int unknown : {0, 0x100000}) {
+        expected_flags = host_flags_for_android[flags] | unknown;
+        check("x86-64 nftw callback return", x64::Nftw("nftw", x64_nftw, 5, flags | unknown) == 41);
+        check("ARM64 nftw callback return", a64::GuestNftw("nftw", arm_nftw, 5, flags | unknown) == 41);
+      }
+    }
+  }
+  host_type = FTW_F; android_type = 0;
+  check("x86-64 ftw callback return", x64::Ftw("outer", x64_outer, 3) == 23);
+  check("x86-64 callback state after nested walk", x64::Ftw("outer", x64_outer, 3) == 23 && x64_calls == 2 && x64_inner_calls == 1);
   check("ftw callback return", a64::GuestFtw("outer", arm_outer, 3) == 23);
   check("second ftw callback after nested walk", a64::GuestFtw("outer", arm_outer, 3) == 23 && arm_calls == 2 && inner_calls == 1);
+  expected_flags = FTW_CHDIR;
   check("nftw callback return", a64::GuestNftw("nftw", arm_nftw, 5, 8) == 41);
   errno = 0; check("ftw null callback rejected", a64::GuestFtw("p", nullptr, 1) == -1 && errno == EINVAL);
   errno = 0; check("nftw null callback rejected", a64::GuestNftw("p", nullptr, 1, 0) == -1 && errno == EINVAL);
