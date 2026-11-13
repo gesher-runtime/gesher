@@ -299,6 +299,17 @@ WebMessagePort, timerfd and QueueSurface lifecycle gates already passed on both
 Windows versions in that run. The complete suite is rerun at the corrected head;
 the initial failed run is not presented as final success.
 
+The complete Windows suite also exposed a race-prone assertion in the existing
+raw-DNS app fixture: a valid result was followed by a check of the consumed
+numeric descriptor. The [DNS ownership follow-up](dns-query-descriptor-lifecycle-2026-11-13.md)
+replaces that observation with isolated checks of the exact production
+result/cancel methods, preserves the real app/proxy paths, and fixes cleanup
+after a failed poll. Its 103 production and 85 caller checks pass with
+ASan/UBSan; compiled close-omission and preceding-source controls fail their
+intended contracts. This test correction does not change the runtime or SDK
+inventory inputs above. Final Windows results remain tied to the published
+head in the PR.
+
 ## Remaining work
 
 These are source-confirmed differences or explicitly unqualified boundaries,
