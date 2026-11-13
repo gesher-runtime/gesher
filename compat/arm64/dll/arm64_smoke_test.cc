@@ -11,6 +11,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -257,6 +258,37 @@ int main(int argc, char** argv) {
     WaitForMultipleObjects(4, th, TRUE, 60000);
     for (HANDLE h : th) CloseHandle(h);
     Check("4 threads x 100000 guest LL/SC increments == 400000", counter == 400000);
+
+    // 8. More guest threads than the monitor once had processor ids for (64):
+    //    each thread's Jit must still have its own reservation and saved LDXR
+    //    value. Two threads sharing an id overwrote each other's, and a
+    //    store-exclusive then succeeded with the other thread's stale value:
+    //    increments were lost.
+    static uint32_t many = 0;
+    static uint32_t warmup = 0;
+    static std::atomic<int> ready{0};
+    static HANDLE start = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    auto many_worker = [](void*) -> DWORD {
+      uint64_t warm[2] = {reinterpret_cast<uint64_t>(&warmup), 1};
+      s_api->call(s_fn, warm, 2);  // this thread's Jit exists: all start together
+      ready.fetch_add(1);
+      WaitForSingleObject(start, INFINITE);
+      uint64_t args[2] = {reinterpret_cast<uint64_t>(&many), 1000};
+      s_api->call(s_fn, args, 2);
+      return 0;
+    };
+    constexpr int kMany = 128;
+    HANDLE mth[kMany];
+    for (HANDLE& h : mth) h = CreateThread(nullptr, 0, many_worker, nullptr, 0, nullptr);
+    while (ready.load() < kMany) Sleep(1);
+    SetEvent(start);
+    for (int i = 0; i < kMany; i += MAXIMUM_WAIT_OBJECTS) {
+      int n = kMany - i < MAXIMUM_WAIT_OBJECTS ? kMany - i : MAXIMUM_WAIT_OBJECTS;
+      WaitForMultipleObjects(n, mth + i, TRUE, 120000);
+    }
+    for (HANDLE h : mth) CloseHandle(h);
+    std::printf("INFO  %d threads x 1000 LL/SC increments: %u\n", kMany, many);
+    Check("128 threads x 1000 guest LL/SC increments == 128000", many == kMany * 1000);
   }
 
   std::printf("\n");

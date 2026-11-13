@@ -24,11 +24,13 @@
 #include <windows.h>
 #include <xmmintrin.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <cfenv>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -199,10 +201,127 @@ void ApiTlsPublish(int64_t offset, const void* image, size_t image_size, size_t 
   }
 }
 
+// --- the exclusive monitor and its processor ids ------------------------------
+// Every live Jit (one per guest thread and nesting depth) has its own processor
+// id. They used to be a counter modulo 64: an app with more guest threads than
+// that (WhatsApp has 100+) had Jits sharing an id, and dynarmic keeps ONE
+// reservation and ONE saved LDXR value per id. Two threads sharing an id that
+// LDXR the same word (a contended lock, a reference count) overwrite each
+// other's saved value, and the store-exclusive then compares memory with the
+// OTHER thread's value: it succeeds with a result computed from a stale read,
+// an update is lost, and a lock word or counter is corrupt for good (a thread
+// spinning on it forever). Ids now come from a free list (the lowest free one,
+// so the monitor's store-exclusive scan, patched to cover only the ids in use,
+// stays short) and go back when the Jit is destroyed.
+constexpr size_t kMaxProcessors = 4096;
+
 Dynarmic::ExclusiveMonitor& Monitor() {
-  static Dynarmic::ExclusiveMonitor m{64};
+  static Dynarmic::ExclusiveMonitor m{kMaxProcessors};
   return m;
 }
+
+std::mutex g_ids_mutex;
+std::vector<bool> g_ids_used;
+size_t g_ids_active = 0;  // the monitor scans [0, g_ids_active)
+
+size_t AcquireProcessorId() {
+  std::lock_guard<std::mutex> lock(g_ids_mutex);
+  size_t id = 0;
+  while (id < g_ids_used.size() && g_ids_used[id]) ++id;
+  if (id == g_ids_used.size()) {
+    if (id >= kMaxProcessors) {
+      GuestCrash(kSigSys, 1, "SYS_SECCOMP", 0, "more than 4096 live guest threads/Jits");
+    }
+    g_ids_used.push_back(false);
+  }
+  g_ids_used[id] = true;
+  if (id + 1 > g_ids_active) {
+    g_ids_active = id + 1;
+    Monitor().SetActiveProcessorCount(g_ids_active);
+  }
+  return id;
+}
+
+void ReleaseProcessorId(size_t id) {
+  Monitor().ClearProcessor(id);  // no stale reservation for the id's next owner
+  std::lock_guard<std::mutex> lock(g_ids_mutex);
+  g_ids_used[id] = false;
+  size_t active = g_ids_active;
+  while (active > 0 && !g_ids_used[active - 1]) --active;
+  if (active != g_ids_active) {
+    g_ids_active = active;
+    Monitor().SetActiveProcessorCount(active);
+  }
+}
+
+size_t LiveProcessorIds() {
+  std::lock_guard<std::mutex> lock(g_ids_mutex);
+  size_t n = 0;
+  for (bool used : g_ids_used) n += used ? 1 : 0;
+  return n;
+}
+
+// --- WFE / SEV -----------------------------------------------------------------
+// dynarmic raises the hint instructions to ExceptionRaised (our A64 build's
+// translation options hook them). On hardware, WFE sleeps until an event: a
+// SEV, the local monitor being cleared (another core's store to the reserved
+// line), or Linux's event stream (every 100 us); a WFE spin-wait costs no CPU.
+// As a no-op it burned a whole core for as long as the wait lasted. Here: a
+// per-thread event register (SEVL, or a SEV since the last WFE), a global SEV
+// epoch that SEV and every successful store-exclusive advance while someone
+// waits, and a bounded wait on it (a plain-store release cannot wake a waiter,
+// so the wait is at most 1 ms after a few cheap yields).
+std::atomic<uint64_t> g_sev_epoch{0};
+std::atomic<int> g_wfe_waiters{0};
+
+void SignalEvent() {
+  g_sev_epoch.fetch_add(1, std::memory_order_acq_rel);
+  WakeByAddressAll(&g_sev_epoch);
+}
+
+// The QPC counter as CNTPCT_EL0 (CNTFRQ_EL0 is set to its frequency).
+uint64_t QpcFrequency() {
+  static const uint64_t f = [] {
+    LARGE_INTEGER v;
+    QueryPerformanceFrequency(&v);
+    return static_cast<uint64_t>(v.QuadPart);
+  }();
+  return f;
+}
+uint64_t QpcNow() {
+  LARGE_INTEGER v;
+  QueryPerformanceCounter(&v);
+  return static_cast<uint64_t>(v.QuadPart);
+}
+
+// --- diagnostics: GESHER_ARM64_PROFILE ----------------------------------------
+// GESHER_ARM64_PROFILE=<ms> (e.g. 5000) starts a sampler: every 10 ms it
+// samples each guest thread that is using CPU (its guest PC, or the host
+// function it is in), and every <ms> it reports each thread that used more
+// than a quarter of a core: its counters (guest -> host calls, raw syscalls,
+// exclusive loads/stores and failed store CASes, hint instructions, Run()
+// re-entries) and its hottest guest PCs and host functions.
+// GESHER_ARM64_PROFILE_PC=1 also turns off block linking, so the sampled guest
+// PC is the current block's (slower; the default PC is the last dispatch).
+int ProfilePeriodMs() {
+  static const int period = [] {
+    char v[16] = {};
+    DWORD n = GetEnvironmentVariableA("GESHER_ARM64_PROFILE", v, sizeof(v));
+    if (n == 0 || n >= sizeof(v)) return 0;
+    int ms = std::atoi(v);
+    return ms <= 0 ? 0 : (ms < 500 ? 500 : ms);
+  }();
+  return period;
+}
+bool ProfilePreciseEnabled() {
+  static const bool on = [] {
+    char v[4] = {};
+    return ProfilePeriodMs() > 0 &&
+           GetEnvironmentVariableA("GESHER_ARM64_PROFILE_PC", v, sizeof(v)) > 0 && v[0] == '1';
+  }();
+  return on;
+}
+void StartProfiler();
 
 // The return stub: guest code `SVC #0xFFFF` the host sets as X30 before
 // entering the guest; when the guest returns there, Run() stops.
@@ -294,22 +413,28 @@ bool HostExecutableUncached(uintptr_t addr) {
          p == PAGE_EXECUTE_WRITECOPY;
 }
 
+// Per-thread counters: written only by the owning thread (a plain increment),
+// read by the profiler.
+struct Counter {
+  std::atomic<uint64_t> v{0};
+  void Bump() { v.store(v.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed); }
+  uint64_t Get() const { return v.load(std::memory_order_relaxed); }
+};
+struct ThreadCounters {
+  Counter host_calls, syscalls, excl_reads, excl_writes, excl_cas_failed, hints, waits, runs;
+};
+
+class Env;
+std::mutex g_envs_mutex;
+std::vector<Env*> g_envs;  // every Env with a live thread (for the profiler)
+
 class Env final : public A64::UserCallbacks {
  public:
   Env() {
-    // This thread's guest TLS block (its thread pointer), with the images of
-    // the modules loaded so far.
+    // This thread's guest TLS block (its thread pointer); Attach() fills it.
     tls_block_ = static_cast<uint8_t*>(
         VirtualAlloc(nullptr, kTlsBlockSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
     tls_pointer_ = reinterpret_cast<uint64_t>(tls_block_);
-    {
-      std::lock_guard<std::mutex> lock(g_tls_mutex);
-      g_tls_blocks.push_back(tls_block_);
-      for (const TlsImage& ti : g_tls_images) {
-        std::memset(tls_block_ + ti.offset, 0, ti.total_size);
-        if (ti.image) std::memcpy(tls_block_ + ti.offset, ti.image, ti.image_size);
-      }
-    }
     // A private guest stack for this thread, with a no-access guard page at
     // its low end (a guest stack overflow faults there and is reported).
     stack_base_ = static_cast<uint8_t*>(
@@ -321,20 +446,64 @@ class Env final : public A64::UserCallbacks {
   }
 
   ~Env() override {
-    {
-      std::lock_guard<std::mutex> lock(g_tls_mutex);
-      for (size_t i = 0; i < g_tls_blocks.size(); ++i) {
-        if (g_tls_blocks[i] == tls_block_) {
-          g_tls_blocks.erase(g_tls_blocks.begin() + i);
-          break;
-        }
-      }
-    }
-    if (t_env_raw == this) t_env_raw = nullptr;
     jits_.clear();
+    for (size_t id : ids_) ReleaseProcessorId(id);
     VirtualFree(tls_block_, 0, MEM_RELEASE);
     VirtualFree(stack_base_, 0, MEM_RELEASE);
   }
+
+  // The calling thread takes this Env (new, or one an exited thread left in
+  // the pool): a fresh guest TLS block with the images of the modules loaded
+  // so far, an empty guest stack, the default FP state.
+  void Attach() {
+    {
+      std::lock_guard<std::mutex> lock(g_tls_mutex);
+      // A pooled block holds its last thread's TLS: clear the TCB and every
+      // module's area (all of [0, g_tls_offset)); a new block is zero anyway.
+      if (used_before_) std::memset(tls_block_, 0, g_tls_offset);
+      g_tls_blocks.push_back(tls_block_);
+      for (const TlsImage& ti : g_tls_images) {
+        std::memset(tls_block_ + ti.offset, 0, ti.total_size);
+        if (ti.image) std::memcpy(tls_block_ + ti.offset, ti.image, ti.image_size);
+      }
+    }
+    used_before_ = true;
+    stack_cur_ = stack_top_;
+    depth_ = 0;
+    fpcr_ = fpsr_ = 0;
+    event_ = false;
+    wfe_streak_ = 0;
+    tid_ = GetCurrentThreadId();
+    if (ProfilePeriodMs() > 0) {
+      DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &thread_, 0,
+                      FALSE, DUPLICATE_SAME_ACCESS);
+      std::lock_guard<std::mutex> lock(g_envs_mutex);
+      g_envs.push_back(this);
+    }
+  }
+
+  // The thread is exiting. Afterwards the Env may be pooled for another thread.
+  void Detach() {
+    if (thread_ != nullptr) {
+      {
+        std::lock_guard<std::mutex> lock(g_envs_mutex);  // not while being sampled
+        std::erase(g_envs, this);
+      }
+      CloseHandle(thread_);
+      thread_ = nullptr;
+    }
+    {
+      std::lock_guard<std::mutex> lock(g_tls_mutex);
+      std::erase(g_tls_blocks, tls_block_);
+    }
+    if (t_env_raw == this) t_env_raw = nullptr;
+    for (auto& jit : jits_) jit->ClearExclusiveState();
+    for (size_t id : ids_) Monitor().ClearProcessor(id);
+  }
+
+  // Whether another thread may reuse this Env: not if its thread left in the
+  // middle of guest code (a Jit still marked running).
+  bool Reusable() const { return depth_ == 0; }
 
   // One Jit per nesting depth: dynarmic's Run() is not reentrant, so a
   // guest->host->guest chain (a host callback that is guest code — a qsort
@@ -346,12 +515,23 @@ class Env final : public A64::UserCallbacks {
       conf.callbacks = this;
       conf.tpidr_el0 = &tls_pointer_;
       conf.tpidrro_el0 = &tls_pointer_;
-      conf.processor_id = next_id_.fetch_add(1) & 63;
+      const size_t id = AcquireProcessorId();
+      ids_.push_back(id);
+      conf.processor_id = id;
       conf.global_monitor = &Monitor();
+      // Exclusives stay callbacks (the default): the monitor's inline form
+      // would scan all kMaxProcessors slots, not the ids in use.
+      conf.fastmem_exclusive_access = false;
       conf.enable_cycle_counting = false;
       conf.optimizations = Dynarmic::all_safe_optimizations;
+      if (ProfilePreciseEnabled()) {
+        conf.optimizations &= ~(Dynarmic::OptimizationFlag::BlockLinking |
+                                Dynarmic::OptimizationFlag::ReturnStackBuffer |
+                                Dynarmic::OptimizationFlag::FastDispatch);
+      }
       conf.unsafe_optimizations = false;
       conf.wall_clock_cntpct = true;
+      if (QpcFrequency() <= 0xFFFFFFFFu) conf.cntfrq_el0 = static_cast<uint32_t>(QpcFrequency());
       // Fastmem: the guest shares the host address space, so a guest access
       // is generated inline as a host access at [0 + vaddr] (all 64 bits),
       // not a callback. A fault there is a guest fault (the vectored handler
@@ -395,11 +575,12 @@ class Env final : public A64::UserCallbacks {
     std::memcpy(&v, reinterpret_cast<void*>(a), 4);
     return v;
   }
-  std::uint8_t MemoryRead8(uint64_t a) override { return *reinterpret_cast<volatile uint8_t*>(a); }
-  std::uint16_t MemoryRead16(uint64_t a) override { uint16_t v; std::memcpy(&v, reinterpret_cast<void*>(a), 2); return v; }
-  std::uint32_t MemoryRead32(uint64_t a) override { uint32_t v; std::memcpy(&v, reinterpret_cast<void*>(a), 4); return v; }
-  std::uint64_t MemoryRead64(uint64_t a) override { uint64_t v; std::memcpy(&v, reinterpret_cast<void*>(a), 8); return v; }
-  A64::Vector MemoryRead128(uint64_t a) override { A64::Vector v; std::memcpy(&v, reinterpret_cast<void*>(a), 16); return v; }
+  // With fastmem, only exclusive loads (LDXR/LDAXR/LDXP) come here.
+  std::uint8_t MemoryRead8(uint64_t a) override { counters_.excl_reads.Bump(); return *reinterpret_cast<volatile uint8_t*>(a); }
+  std::uint16_t MemoryRead16(uint64_t a) override { counters_.excl_reads.Bump(); uint16_t v; std::memcpy(&v, reinterpret_cast<void*>(a), 2); return v; }
+  std::uint32_t MemoryRead32(uint64_t a) override { counters_.excl_reads.Bump(); uint32_t v; std::memcpy(&v, reinterpret_cast<void*>(a), 4); return v; }
+  std::uint64_t MemoryRead64(uint64_t a) override { counters_.excl_reads.Bump(); uint64_t v; std::memcpy(&v, reinterpret_cast<void*>(a), 8); return v; }
+  A64::Vector MemoryRead128(uint64_t a) override { counters_.excl_reads.Bump(); A64::Vector v; std::memcpy(&v, reinterpret_cast<void*>(a), 16); return v; }
   void MemoryWrite8(uint64_t a, std::uint8_t v) override { *reinterpret_cast<volatile uint8_t*>(a) = v; }
   void MemoryWrite16(uint64_t a, std::uint16_t v) override { std::memcpy(reinterpret_cast<void*>(a), &v, 2); }
   void MemoryWrite32(uint64_t a, std::uint32_t v) override { std::memcpy(reinterpret_cast<void*>(a), &v, 4); }
@@ -410,10 +591,23 @@ class Env final : public A64::UserCallbacks {
   // reservation and hands the store here with the value LDXR read; a host
   // compare-and-swap makes it atomic against every other thread. (The
   // defaults return false, which made every guest LL/SC loop spin forever.)
+  // (These run under the monitor's lock; a store-exclusive the monitor refuses
+  // never gets here: excl_reads - excl_writes counts those.)
   template <typename T>
-  static bool Cas(uint64_t a, T value, T expected) {
-    return __atomic_compare_exchange_n(reinterpret_cast<T*>(a), &expected, value, false,
-                                       __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+  bool Cas(uint64_t a, T value, T expected) {
+    counters_.excl_writes.Bump();
+    bool ok = __atomic_compare_exchange_n(reinterpret_cast<T*>(a), &expected, value, false,
+                                          __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    StoreExclusiveDone(ok);
+    return ok;
+  }
+  void StoreExclusiveDone(bool ok) {
+    if (!ok) {
+      counters_.excl_cas_failed.Bump();
+    } else if (g_wfe_waiters.load(std::memory_order_relaxed) != 0) {
+      // A store-exclusive clears other cores' monitors: an event for WFE.
+      SignalEvent();
+    }
   }
   bool MemoryWriteExclusive8(uint64_t a, std::uint8_t v, std::uint8_t e) override { return Cas(a, v, e); }
   bool MemoryWriteExclusive16(uint64_t a, std::uint16_t v, std::uint16_t e) override { return Cas(a, v, e); }
@@ -421,10 +615,13 @@ class Env final : public A64::UserCallbacks {
   bool MemoryWriteExclusive64(uint64_t a, std::uint64_t v, std::uint64_t e) override { return Cas(a, v, e); }
   bool MemoryWriteExclusive128(uint64_t a, A64::Vector v, A64::Vector e) override {
     using U128 = unsigned __int128;
+    counters_.excl_writes.Bump();
     U128 expected = (static_cast<U128>(e[1]) << 64) | e[0];
     U128 value = (static_cast<U128>(v[1]) << 64) | v[0];
-    return __atomic_compare_exchange_n(reinterpret_cast<U128*>(a), &expected, value, false,
-                                       __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);  // cmpxchg16b
+    bool ok = __atomic_compare_exchange_n(reinterpret_cast<U128*>(a), &expected, value, false,
+                                          __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);  // cmpxchg16b
+    StoreExclusiveDone(ok);
+    return ok;
   }
 
   void InterpreterFallback(uint64_t pc, size_t) override {
@@ -474,12 +671,25 @@ class Env final : public A64::UserCallbacks {
       }
       case A64::Exception::Breakpoint:
         GuestCrash(kSigTrap, 1, "TRAP_BRKPT", pc, "BRK (__builtin_trap)");
+      // Hints: carry on at pc + 4 (see WFE / SEV above).
       case A64::Exception::WaitForInterrupt:
       case A64::Exception::WaitForEvent:
+        counters_.hints.Bump();
+        WaitForEvent();
+        return;
       case A64::Exception::SendEvent:
+        counters_.hints.Bump();
+        event_ = true;  // SEV sets every PE's event register, this one's too
+        SignalEvent();
+        return;
       case A64::Exception::SendEventLocal:
+        counters_.hints.Bump();
+        event_ = true;
+        return;
       case A64::Exception::Yield:
-        return;  // hints: carry on at pc + 4
+        counters_.hints.Bump();
+        YieldProcessor();
+        return;
       default: {
         uint32_t insn = 0;
         if (InGuestCode(pc)) std::memcpy(&insn, reinterpret_cast<void*>(pc), 4);
@@ -493,7 +703,38 @@ class Env final : public A64::UserCallbacks {
 
   void AddTicks(std::uint64_t) override {}
   std::uint64_t GetTicksRemaining() override { return static_cast<uint64_t>(-1) / 2; }
-  std::uint64_t GetCNTPCT() override { return 0; }
+  // MRS CNTPCT_EL0: a real, monotonic count at CNTFRQ_EL0 (it was always 0, so
+  // a guest waiting for it to advance spun forever).
+  std::uint64_t GetCNTPCT() override { return QpcNow(); }
+
+  // WFE: return at once if the event register is set (clearing it); else
+  // wait for a SEV epoch change: a few yields first, then up to 1 ms per WFE
+  // once the thread keeps waiting (the guest re-checks its condition after
+  // every WFE, as it must on hardware).
+  void WaitForEvent() {
+    const uint64_t epoch = g_sev_epoch.load(std::memory_order_acquire);
+    if (event_ || epoch != seen_epoch_) {  // SEVL, or an event since the last WFE
+      event_ = false;
+      seen_epoch_ = epoch;
+      return;
+    }
+    const uint64_t now = QpcNow();
+    if (now - last_wfe_ > QpcFrequency() / 500) wfe_streak_ = 0;  // a new wait (> 2 ms apart)
+    last_wfe_ = now;
+    if (++wfe_streak_ <= 16) {
+      if (!SwitchToThread()) YieldProcessor();
+      return;
+    }
+    counters_.waits.Bump();
+    g_wfe_waiters.fetch_add(1, std::memory_order_acq_rel);
+    uint64_t compare = epoch;
+    if (g_sev_epoch.load(std::memory_order_acquire) == epoch) {
+      WaitOnAddress(&g_sev_epoch, &compare, sizeof(compare), 1);
+    }
+    g_wfe_waiters.fetch_sub(1, std::memory_order_acq_rel);
+    seen_epoch_ = g_sev_epoch.load(std::memory_order_acquire);  // woken: consumed
+    last_wfe_ = QpcNow();
+  }
 
   // Runs guest `fn` on this thread with X0..X7 = gpr, V0..V7 = xmm and
   // `nstack` words of stack arguments, on the Jit for the current nesting
@@ -596,7 +837,10 @@ class Env final : public A64::UserCallbacks {
       jit->ClearHalt(Dynarmic::HaltReason::UserDefined1 | Dynarmic::HaltReason::UserDefined2);
       int saved_running = t_guest_running;
       t_guest_running = 1;
+      counters_.runs.Bump();
+      A64::Jit* saved_jit = running_jit_.exchange(jit, std::memory_order_relaxed);
       jit->Run();
+      running_jit_.store(saved_jit, std::memory_order_relaxed);
       t_guest_running = saved_running;
       // SVC saves its following PC; NoExecuteFault saves X30. Returning from
       // Run restores host MXCSR before executing arbitrary native host code.
@@ -606,6 +850,8 @@ class Env final : public A64::UserCallbacks {
         HostFenvScope host_fenv;
         uint64_t args[6];
         for (int i = 0; i < 6; ++i) args[i] = jit->GetRegister(i);
+        counters_.syscalls.Bump();
+        last_syscall_.store(jit->GetRegister(8), std::memory_order_relaxed);
         int64_t result = GuestRawSyscall(jit->GetRegister(8), args);
         jit->SetRegister(0, static_cast<uint64_t>(result));
       } else if (pending.fn != nullptr) {
@@ -672,10 +918,13 @@ class Env final : public A64::UserCallbacks {
     uint64_t saved_host_caller = host_caller_;
     host_fn_ = fn;
     host_caller_ = jit->GetRegister(30);
+    counters_.host_calls.Bump();
+    void* saved_sampled_fn = sampled_host_fn_.exchange(fn, std::memory_order_relaxed);
     int saved_running = t_guest_running;
     t_guest_running = 0;
     uint64_t rax = gesher_call_host_sysv(&call);
     t_guest_running = saved_running;
+    sampled_host_fn_.store(saved_sampled_fn, std::memory_order_relaxed);
     host_fn_ = saved_host_fn;
     host_caller_ = saved_host_caller;
     stack_cur_ = saved_stack_cur;
@@ -698,16 +947,70 @@ class Env final : public A64::UserCallbacks {
   uint64_t last_x1_ = 0;
   void* host_fn_ = nullptr;    // the host function of the innermost guest -> host call
   uint64_t host_caller_ = 0;   // its guest return address (X30)
-  static std::atomic<size_t> next_id_;
+  std::vector<size_t> ids_;    // jits_[i]'s exclusive monitor processor id
+  bool used_before_ = false;   // a thread has had it (its TLS block is not fresh)
+  bool event_ = false;         // the WFE event register (SEVL / SEV)
+  uint64_t seen_epoch_ = 0;    // the SEV epoch this thread's last WFE consumed
+  uint64_t last_wfe_ = 0;
+  uint32_t wfe_streak_ = 0;
+
+ public:
+  // For the profiler (another thread reads these while this one runs).
+  ThreadCounters counters_;
+  std::atomic<A64::Jit*> running_jit_{nullptr};  // the Jit in Run(), if any
+  std::atomic<void*> sampled_host_fn_{nullptr};  // the host function called from guest code
+  std::atomic<uint64_t> last_syscall_{~uint64_t{0}};
+  HANDLE thread_ = nullptr;  // only while profiling
+  DWORD tid_ = 0;
 };
 
-std::atomic<size_t> Env::next_id_{0};
-thread_local std::unique_ptr<Env> t_env;
+// Envs of exited threads, for new threads to reuse: their Jits keep the code
+// they translated (thread pools run the same guest code thread after thread),
+// their stacks and TLS blocks are allocated already. A few only: each holds
+// a code cache's resident pages. GESHER_ARM64_ENV_POOL=<n> (0 disables).
+std::mutex g_env_pool_mutex;
+std::vector<Env*> g_env_pool;
+
+size_t EnvPoolLimit() {
+  static const size_t limit = [] {
+    char v[8] = {};
+    DWORD n = GetEnvironmentVariableA("GESHER_ARM64_ENV_POOL", v, sizeof(v));
+    if (n == 0 || n >= sizeof(v)) return size_t{8};
+    return static_cast<size_t>(std::atoi(v));
+  }();
+  return limit;
+}
+
+struct EnvRelease {
+  void operator()(Env* env) const {
+    env->Detach();
+    if (env->Reusable()) {
+      std::lock_guard<std::mutex> lock(g_env_pool_mutex);
+      if (g_env_pool.size() < EnvPoolLimit()) {
+        g_env_pool.push_back(env);
+        return;
+      }
+    }
+    delete env;
+  }
+};
+thread_local std::unique_ptr<Env, EnvRelease> t_env;
 
 Env* ThreadEnv() {
   if (!t_env) {
-    t_env = std::make_unique<Env>();
-    t_env_raw = t_env.get();
+    Env* env = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(g_env_pool_mutex);
+      if (!g_env_pool.empty()) {
+        env = g_env_pool.back();
+        g_env_pool.pop_back();
+      }
+    }
+    if (env == nullptr) env = new Env();
+    env->Attach();
+    t_env.reset(env);
+    t_env_raw = env;
+    if (ProfilePeriodMs() > 0) StartProfiler();
   }
   return t_env.get();
 }
@@ -995,6 +1298,163 @@ void PrintWhere(const char* label, uint64_t addr) {
   } else {
     std::fprintf(stderr, "%s0x%llx\n", label, static_cast<unsigned long long>(addr));
   }
+}
+
+// --- the profiler (GESHER_ARM64_PROFILE) ----------------------------------------
+struct ProfileSlot {
+  uint64_t key = 0;
+  uint32_t count = 0;
+};
+template <size_t N>
+void CountSample(std::array<ProfileSlot, N>& slots, uint64_t key) {
+  ProfileSlot* least = &slots[0];
+  for (ProfileSlot& s : slots) {
+    if (s.count != 0 && s.key == key) {
+      ++s.count;
+      return;
+    }
+    if (s.count < least->count) least = &s;
+  }
+  // Space-saving: the least counted slot takes the new key.
+  least->key = key;
+  ++least->count;
+}
+template <size_t N>
+void PrintTop(const char* what, std::array<ProfileSlot, N>& slots, uint32_t samples, size_t top) {
+  std::array<ProfileSlot, N> sorted = slots;
+  std::sort(sorted.begin(), sorted.end(),
+            [](const ProfileSlot& a, const ProfileSlot& b) { return a.count > b.count; });
+  for (size_t i = 0; i < top && i < N && sorted[i].count != 0; ++i) {
+    char label[64];
+    std::snprintf(label, sizeof(label), "      %3u%% %s ", sorted[i].count * 100 / samples, what);
+    PrintWhere(label, sorted[i].key);
+  }
+}
+
+struct ProfileState {
+  uint64_t user = 0;           // the thread's user time at the last tick (100 ns)
+  uint64_t period_user = 0;    // ... at the start of the report period
+  ULONGLONG busy_until = 0;    // sample on ticks until then (user time moved)
+  uint64_t base[8] = {};       // the counters at the start of the period
+  uint32_t samples = 0, in_guest = 0, in_host = 0;
+  std::array<ProfileSlot, 16> pcs{};
+  std::array<ProfileSlot, 8> host_fns{};
+  std::array<ProfileSlot, 8> rips{};
+};
+
+void ReadCounters(Env* env, uint64_t out[8]) {
+  const ThreadCounters& c = env->counters_;
+  const Counter* all[8] = {&c.host_calls, &c.excl_reads, &c.excl_writes, &c.excl_cas_failed,
+                           &c.syscalls,   &c.hints,      &c.waits,       &c.runs};
+  for (int i = 0; i < 8; ++i) out[i] = all[i]->Get();
+}
+
+uint64_t UserTime(HANDLE thread) {
+  FILETIME c, e, k, u;
+  if (!GetThreadTimes(thread, &c, &e, &k, &u)) return 0;
+  return (static_cast<uint64_t>(u.dwHighDateTime) << 32) | u.dwLowDateTime;
+}
+
+DWORD WINAPI ProfilerThread(void*) {
+  std::unordered_map<Env*, ProfileState> states;
+  const ULONGLONG period = static_cast<ULONGLONG>(ProfilePeriodMs());
+  ULONGLONG period_start = GetTickCount64();
+  for (;;) {
+    Sleep(10);
+    const ULONGLONG now = GetTickCount64();
+    const bool report = now - period_start >= period;
+    std::lock_guard<std::mutex> lock(g_envs_mutex);  // an exiting thread waits in Detach
+    for (auto it = states.begin(); it != states.end();) {
+      if (std::find(g_envs.begin(), g_envs.end(), it->first) == g_envs.end()) {
+        it = states.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    for (Env* env : g_envs) {
+      if (env->thread_ == nullptr) continue;
+      bool fresh = states.find(env) == states.end();
+      ProfileState& st = states[env];  // allocate before suspending anything
+      const uint64_t user = UserTime(env->thread_);
+      if (fresh) {
+        st.user = st.period_user = user;
+        ReadCounters(env, st.base);
+        continue;
+      }
+      if (user != st.user) st.busy_until = now + 50;  // times move in ~15 ms steps
+      st.user = user;
+      if (now > st.busy_until) continue;
+      // No allocation, lock or I/O while the thread is suspended.
+      if (SuspendThread(env->thread_) == static_cast<DWORD>(-1)) continue;
+      CONTEXT ctx;
+      ctx.ContextFlags = CONTEXT_CONTROL;
+      const bool have_ctx = GetThreadContext(env->thread_, &ctx) != 0;
+      A64::Jit* jit = env->running_jit_.load(std::memory_order_relaxed);
+      const uint64_t pc = jit != nullptr ? jit->GetPC() : 0;
+      void* host_fn = env->sampled_host_fn_.load(std::memory_order_relaxed);
+      ResumeThread(env->thread_);
+      ++st.samples;
+      if (jit != nullptr) {
+        ++st.in_guest;
+        CountSample(st.pcs, pc);
+      } else if (host_fn != nullptr) {
+        ++st.in_host;
+        CountSample(st.host_fns, reinterpret_cast<uint64_t>(host_fn));
+      }
+      if (have_ctx) CountSample(st.rips, ctx.Rip);
+    }
+    if (!report) continue;
+    const double seconds = static_cast<double>(now - period_start) / 1000.0;
+    period_start = now;
+    std::fprintf(stderr, "gesher arm64 profile: %zu guest threads, %zu Jits\n", g_envs.size(),
+                 LiveProcessorIds());
+    for (Env* env : g_envs) {
+      auto it = states.find(env);
+      if (it == states.end()) continue;
+      ProfileState& st = it->second;
+      uint64_t c[8];
+      ReadCounters(env, c);
+      const double cpu = static_cast<double>(st.user - st.period_user) / 1e5 / seconds;  // %
+      if (cpu >= 25.0 && st.samples != 0) {
+        auto rate = [&](int i) {
+          return static_cast<unsigned long long>(static_cast<double>(c[i] - st.base[i]) / seconds);
+        };
+        const unsigned long long refused =
+            (c[1] - st.base[1]) > (c[2] - st.base[2])
+                ? static_cast<unsigned long long>(static_cast<double>((c[1] - st.base[1]) - (c[2] - st.base[2])) / seconds)
+                : 0;
+        const uint64_t nr = env->last_syscall_.load(std::memory_order_relaxed);
+        std::fprintf(stderr,
+                     "  tid %lu: cpu %.0f%%; per second: host calls %llu, raw syscalls %llu (last "
+                     "%lld), exclusive loads %llu, stores %llu (CAS failed %llu, monitor refused "
+                     "%llu), hints %llu, WFE waits %llu, Run() %llu; samples %u (guest %u, host "
+                     "call %u)\n",
+                     env->tid_, cpu, rate(0), rate(4), nr == ~uint64_t{0} ? -1LL : static_cast<long long>(nr),
+                     rate(1), rate(2), rate(3), refused, rate(5), rate(6), rate(7), st.samples,
+                     st.in_guest, st.in_host);
+        PrintTop("guest pc  ", st.pcs, st.samples, 6);
+        PrintTop("host call ", st.host_fns, st.samples, 4);
+        PrintTop("host rip  ", st.rips, st.samples, 4);
+      }
+      st.period_user = st.user;
+      std::memcpy(st.base, c, sizeof(c));
+      st.samples = st.in_guest = st.in_host = 0;
+      st.pcs = {};
+      st.host_fns = {};
+      st.rips = {};
+    }
+    std::fflush(stderr);
+  }
+}
+
+void StartProfiler() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    HANDLE h = CreateThread(nullptr, 0, ProfilerThread, nullptr, 0, nullptr);
+    if (h != nullptr) CloseHandle(h);
+    std::fprintf(stderr, "gesher arm64: profiling guest threads every %d ms\n", ProfilePeriodMs());
+    std::fflush(stderr);
+  });
 }
 
 // A fault in host code during a guest -> host call: ART's fatal-signal report
