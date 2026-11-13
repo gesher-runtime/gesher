@@ -210,7 +210,10 @@ gesher_graphics_cxx(media_surface_timestamp_contract_test)
 add_executable(media_surface_geometry_contract_test
   "${CMAKE_SOURCE_DIR}/tests/media/surface_geometry_contract_test.cc" ${_media}/surface/queue_surface.cc)
 target_include_directories(media_surface_geometry_contract_test PRIVATE "${CMAKE_SOURCE_DIR}")
-target_compile_options(media_surface_geometry_contract_test PRIVATE -Wall -Wextra -Werror)
+# Pinned hostgraphics inline adapters retain unused signature parameters, as
+# in window_probe. Keep all other extra warnings and warnings-as-errors enabled.
+target_compile_options(media_surface_geometry_contract_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter)
 target_link_libraries(media_surface_geometry_contract_test PRIVATE hostgraphics gesher_window_surface)
 gesher_graphics_cxx(media_surface_geometry_contract_test)
 
