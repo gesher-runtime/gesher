@@ -83,6 +83,17 @@ try {
     $settingsContractOut
   } @('Settings provider contracts passed:')
 
+  # Use devsvc's private URI-grant provider without optional GmsCore metadata.
+  $providerContractOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+    'ProviderSecurityTest' + (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures')) +
+    (NoDrive "$Dir/devsvc.apk")) 120
+  $providerContractCode = $LASTEXITCODE
+  Check 'services: provider reference ownership, lock order and atomic retirement' {
+    $global:LASTEXITCODE = $providerContractCode
+    $providerContractOut
+  } @('ProviderSecurityTest: provider counts, connection ownership, lock order and atomic retirement passed',
+    'ProviderSecurityTest all passed')
+
   # Constructed package metadata uses the existing synthetic-fixture capability.
   $env:GESHER_MICROG_SPOOF = '1'
   $syncContractOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'SyncManagerContractTest') 120
