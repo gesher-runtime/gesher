@@ -80,6 +80,12 @@ clang (clang 23):
   `std::integer_sequence` on this clang; rewritten as
   `template<class VT, VT...> class`.
 
+`compat/arm64/dll/patch-dynarmic-fpsr.py` then patches pinned dynarmic
+sources (each file hash-checked against the pin): the FPSR corrections, and
+two memory ones (ADR 0080) - the A64 fast dispatch table has 64Ki entries
+(1 MiB per Jit instead of 16 MiB, all of which was resident), and each Jit's
+code cache commits 4 MiB up front instead of 16 MiB.
+
 Boost headers (interval containers) are needed to build dynarmic; the workflow
 fetches a pinned Boost. The DLL links the CRT and libunwind statically, so it
 ships as a single file next to dalvikvm. Its license notice is installed as
