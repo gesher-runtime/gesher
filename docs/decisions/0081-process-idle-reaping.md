@@ -82,3 +82,19 @@ device's `system_server.log`:
   but changes the immediate exit the services track asserts; not done.
 - Not done: Android's importance propagation (a cached client does not make
   its bound service cached), a cached-process LRU by memory pressure.
+
+## Verification
+- `ProviderSecurityTest` (connection counts: unstable, stable, the duplicate
+  holder's removal, stable-to-unstable, removal, a new connection after it,
+  client death) and `SystemBindingCleanupTest` (the reaper keeps a process a
+  running job binds, ends one only its own binding keeps, not before its idle
+  time) pass on the Windows runtime.
+- A microG device (official GmsCore, GsfProxy, the Play Store; no account):
+  Waze launched and closed, the Play Store launched and closed (DroidGuard
+  starts in `.unstable`), Waze launched again. Before, `.unstable` stayed for
+  the rest of the 26-minute run (427 MB working set, 3 GB commit on the
+  pre-0080 runtime used). With `GESHER_CACHED_PROCESS_IDLE_S=180`, it was
+  reaped 215 s after its last use, started again by DroidGuard's next bind
+  when the Play Store was opened again, and reaped again; GMS main and
+  `:persistent` stayed; no DeadObjectException or provider error in any log,
+  the same provider lookups failing as before.
