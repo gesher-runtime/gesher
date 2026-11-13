@@ -513,10 +513,13 @@ class Env final : public A64::UserCallbacks {
     wait_pc_ = 0;
     tid_ = GetCurrentThreadId();
     if (ProfilePeriodMs() > 0) {
-      DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &thread_, 0,
-                      FALSE, DUPLICATE_SAME_ACCESS);
-      std::lock_guard<std::mutex> lock(g_envs_mutex);
-      g_envs.push_back(this);
+      // Publish only a live profiling handle: Detach removes exactly these
+      // entries before closing the handle or returning the Env to the pool.
+      if (DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &thread_, 0,
+                          FALSE, DUPLICATE_SAME_ACCESS)) {
+        std::lock_guard<std::mutex> lock(g_envs_mutex);
+        g_envs.push_back(this);
+      }
     }
   }
 
