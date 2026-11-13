@@ -54,6 +54,7 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "timerfd_syscall_test.inc"
 #include "tgnet_event_loop_test.inc"
 #include "epoll_nested_test.inc"
+#include "event_loop_contract_test.inc"
 #include "allocation_test.inc"
 #include "system_contract_test.inc"
 #include "socket_control_test.inc"
@@ -666,6 +667,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_pthread_cleanup();
   test_tgnet_event_loop();
   test_epoll_nested();
+  test_event_loop_contracts();
   test_dl();
   if (failures == 0) {
     printf("libc_test: all passed\n");

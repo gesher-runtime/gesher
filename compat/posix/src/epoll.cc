@@ -91,6 +91,9 @@ struct Epoll {
   std::mutex mutex;
   std::map<int, Entry> entries;
   uint64_t next_id = 1;
+  // Shared by all aliases and waiters. A descriptor number survives removal
+  // without retaining an invalidated iterator or a stale Entry generation.
+  int last_ready_fd = -1;
   std::vector<HANDLE> waiters;  // each handle's lifetime is protected by mutex
 
   void NotifyLocked() {
@@ -349,9 +352,16 @@ bool ReadEventObject(int fd, void* buf, unsigned int count, int* result) {
 bool WriteEventObject(int fd, const void* buf, unsigned int count, int* result) {
   Object object;
   if (!Lookup(fd, &object)) return false;
-  *result = object.eventfd && !object.inotify ? WriteEventFd(*object.eventfd, buf, count)
-                                              : (errno = EINVAL, -1);
+  *result = object.inotify ? (errno = EBADF, -1)
+            : object.eventfd ? WriteEventFd(*object.eventfd, buf, count)
+                             : (errno = EINVAL, -1);
   return true;
+}
+
+int EventObjectWriteError(int fd) {
+  Object object;
+  if (!Lookup(fd, &object)) return 0;
+  return object.inotify ? EBADF : object.eventfd ? 0 : EINVAL;
 }
 
 bool ForgetEventObject(int fd) {
@@ -567,7 +577,15 @@ static int EpollWaitImpl(int epfd, struct epoll_event* events, int maxevents, in
     int count = 0;
     if (ready > 0) {
       std::lock_guard<std::mutex> lock(ep->mutex);
-      for (size_t i = 0; i < fds.size() && count < maxevents; ++i) {
+      // A continuously ready low-numbered fd must not starve the rest when
+      // the caller's output buffer is smaller than the ready set. Consult the
+      // current cursor under the delivery lock, including another waiter's
+      // progress since this snapshot was taken.
+      auto next = std::upper_bound(fds.begin(), fds.end(), ep->last_ready_fd,
+                                  [](int fd, const pollfd& p) { return fd < p.fd; });
+      size_t i = static_cast<size_t>(next - fds.begin());
+      for (size_t scanned = 0; scanned < fds.size() && count < maxevents; ++scanned, ++i) {
+        if (i == fds.size()) i = 0;
         if (fds[i].revents == 0) continue;
         auto it = ep->entries.find(fds[i].fd);
         // Gone, replaced or fired (EPOLLONESHOT) since the list was taken.
@@ -583,6 +601,7 @@ static int EpollWaitImpl(int epfd, struct epoll_event* events, int maxevents, in
         events[count].events = r;
         events[count].data = it->second.data;
         ++count;
+        ep->last_ready_fd = fds[i].fd;
         if ((it->second.events & EPOLLONESHOT) != 0) it->second.armed = false;
       }
     }

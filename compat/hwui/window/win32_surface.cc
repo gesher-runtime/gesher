@@ -96,15 +96,22 @@ void Win32Surface::BufferSize(int* width, int* height) const {
 }
 
 void Win32Surface::Size(int* width, int* height) const {
-  if (user_width_ > 0 && user_height_ > 0) {
+  if (requested_width_ > 0 && requested_height_ > 0) {
+    *width = requested_width_;
+    *height = requested_height_;
+  } else if (user_width_ > 0 && user_height_ > 0) {
     *width = user_width_;
     *height = user_height_;
   } else {
-    *width = static_cast<int>(std::min<int64_t>(std::numeric_limits<int>::max(),
-        int64_t{window_->width()} + inset_left_ + inset_right_));
-    *height = static_cast<int>(std::min<int64_t>(std::numeric_limits<int>::max(),
-        int64_t{window_->height()} + inset_top_ + inset_bottom_));
+    ConsumerSize(width, height);
   }
+}
+
+void Win32Surface::ConsumerSize(int* width, int* height) const {
+  *width = static_cast<int>(std::min<int64_t>(std::numeric_limits<int>::max(),
+      int64_t{window_->width()} + inset_left_ + inset_right_));
+  *height = static_cast<int>(std::min<int64_t>(std::numeric_limits<int>::max(),
+      int64_t{window_->height()} + inset_top_ + inset_bottom_));
 }
 
 void Win32Surface::EnsureBuffer() {
@@ -112,9 +119,10 @@ void Win32Surface::EnsureBuffer() {
   Size(&w, &h);
   if (w < 1) w = 1;
   if (h < 1) h = 1;
-  if (buffer_ == nullptr || buffer_->width != w || buffer_->height != h) {
+  if (buffer_ == nullptr || buffer_->width != w || buffer_->height != h ||
+      buffer_->format != format_) {
     android::sp<Buffer> fresh = android::sp<Buffer>::make(w, h, format_);
-    if (buffer_ != nullptr) {
+    if (buffer_ != nullptr && buffer_->format == format_) {
       // Keep what overlaps: the next frame may redraw only its dirty part.
       for (int y = 0; y < h && y < buffer_->height; y++) {
         memcpy(&fresh->pixels[static_cast<size_t>(y) * w],
@@ -123,15 +131,13 @@ void Win32Surface::EnsureBuffer() {
       }
     }
     buffer_ = fresh;
+    buffer_contents_valid_ = false;
   }
-  buffer_->format = format_;
 }
 
 int Win32Surface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (locked_) return -EINVAL;
-  int old_w = buffer_ != nullptr ? buffer_->width : 0;
-  int old_h = buffer_ != nullptr ? buffer_->height : 0;
   EnsureBuffer();
   locked_ = true;
   out->width = buffer_->width;
@@ -141,12 +147,15 @@ int Win32Surface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
   out->bits = buffer_->pixels.data();
   memset(out->reserved, 0, sizeof out->reserved);
   if (dirty != nullptr) {
-    // A new size invalidates everything; otherwise the buffer still holds the
-    // last frame and only the dirty part needs drawing (an empty rectangle
-    // means all of it, as in libgui).
-    bool empty = dirty->left >= dirty->right || dirty->top >= dirty->bottom;
-    if (empty || old_w != buffer_->width || old_h != buffer_->height) {
+    // Only a previous frame with the same dimensions and format permits copyback.
+    if (!buffer_contents_valid_) {
       *dirty = {0, 0, buffer_->width, buffer_->height};
+    } else {
+      dirty->left = std::max(0, dirty->left);
+      dirty->top = std::max(0, dirty->top);
+      dirty->right = std::min(buffer_->width, dirty->right);
+      dirty->bottom = std::min(buffer_->height, dirty->bottom);
+      if (dirty->left >= dirty->right || dirty->top >= dirty->bottom) *dirty = {0, 0, 0, 0};
     }
   }
   return 0;
@@ -165,6 +174,7 @@ int Win32Surface::unlockAndPost() {
 void Win32Surface::Present() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (buffer_ == nullptr) return;
+  buffer_contents_valid_ = true;
   int w, h, stride;
   uint8_t* dst = window_->Lock(&w, &h, &stride);
   const bool swap = buffer_->format != HAL_PIXEL_FORMAT_BGRA_8888;
@@ -311,20 +321,26 @@ int Win32Surface::setSwapInterval(int) {
 }
 
 int Win32Surface::query(int what, int* value) const {
+  std::lock_guard<std::mutex> lock(mutex_);
   int w, h;
   switch (what) {
     case NATIVE_WINDOW_WIDTH:
-    case NATIVE_WINDOW_DEFAULT_WIDTH:
-      Size(&w, &h);
+      ConsumerSize(&w, &h);
       *value = w;
       return 0;
+    case NATIVE_WINDOW_DEFAULT_WIDTH:
+      ConsumerSize(&w, &h);
+      *value = user_width_ > 0 ? user_width_ : w;
+      return 0;
     case NATIVE_WINDOW_HEIGHT:
-    case NATIVE_WINDOW_DEFAULT_HEIGHT:
-      Size(&w, &h);
+      ConsumerSize(&w, &h);
       *value = h;
       return 0;
+    case NATIVE_WINDOW_DEFAULT_HEIGHT:
+      ConsumerSize(&w, &h);
+      *value = user_height_ > 0 ? user_height_ : h;
+      return 0;
     case NATIVE_WINDOW_FORMAT: {
-      std::lock_guard<std::mutex> lock(mutex_);
       *value = format_;
       return 0;
     }
@@ -371,19 +387,28 @@ int Win32Surface::perform(int operation, va_list args) {
     case NATIVE_WINDOW_SET_BUFFERS_DIMENSIONS: {
       int w = va_arg(args, int);
       int h = va_arg(args, int);
+      if (w < 0 || h < 0 || ((w == 0) != (h == 0))) return -EINVAL;
       std::lock_guard<std::mutex> lock(mutex_);
-      user_width_ = w;
-      user_height_ = h;
+      if (operation == NATIVE_WINDOW_SET_BUFFERS_USER_DIMENSIONS) {
+        user_width_ = w;
+        user_height_ = h;
+      } else {
+        requested_width_ = w;
+        requested_height_ = h;
+      }
       return 0;
     }
     case NATIVE_WINDOW_SET_BUFFERS_GEOMETRY: {
       int w = va_arg(args, int);
       int h = va_arg(args, int);
       int format = va_arg(args, int);
+      if (w < 0 || h < 0 || ((w == 0) != (h == 0))) return -EINVAL;
       std::lock_guard<std::mutex> lock(mutex_);
-      user_width_ = w;
-      user_height_ = h;
-      if (format != 0 && BytesPerPixel(format) != 0) format_ = format;
+      requested_width_ = w;
+      requested_height_ = h;
+      if (format == 0) format = HAL_PIXEL_FORMAT_RGBA_8888;
+      if (BytesPerPixel(format) == 0) return -EINVAL;
+      format_ = format;
       return 0;
     }
     case NATIVE_WINDOW_GET_REFRESH_CYCLE_DURATION:

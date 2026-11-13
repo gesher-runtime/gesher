@@ -1,0 +1,312 @@
+// Engine attachment/output clock and CV scheduling boundaries; all Track methods are production.
+#include <sys/types.h>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <deque>
+#include <functional>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+#include <time.h>
+
+class ObservedConditionVariable {
+ public:
+  std::atomic<unsigned> waits{0};
+  std::function<void()> before_reacquire;
+  void notify_all() { cv_.notify_all(); }
+  void wait(std::unique_lock<std::mutex>& lock) {
+    ++waits;
+    if (Hook(lock)) return;
+    cv_.wait(lock);
+  }
+  template<class Rep, class Period>
+  std::cv_status wait_for(std::unique_lock<std::mutex>& lock,
+                          const std::chrono::duration<Rep, Period>& duration) {
+    ++waits;
+    if (Hook(lock)) return std::cv_status::no_timeout;
+    return cv_.wait_for(lock, duration);
+  }
+  template<class Rep, class Period, class Predicate>
+  bool wait_for(std::unique_lock<std::mutex>& lock,
+                const std::chrono::duration<Rep, Period>& duration, Predicate predicate) {
+    return cv_.wait_for(lock, duration, predicate);
+  }
+ private:
+  bool Hook(std::unique_lock<std::mutex>& lock) {
+    if (!before_reacquire) return false;
+    auto hook = std::move(before_reacquire);
+    lock.unlock();
+    hook();
+    lock.lock();
+    return true;
+  }
+  std::condition_variable cv_;
+};
+
+@HEADER@
+@PRIMITIVES@
+// The mixer is driven explicitly by the test, with no OS endpoint or background thread.
+class Engine {
+ public:
+  void Remove(Track*) {}
+  uint32_t out_rate() const { return 48000; }
+  uint32_t latency_frames() const { return 0; }
+};
+void PostEvent(std::function<void()> event) { event(); }
+@TRACK@
+
+namespace {
+using namespace gesher::media;
+using namespace std::chrono_literals;
+int checks = 0, failures = 0;
+void Check(bool ok, const char* reason) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL audio state: %s\n", reason); }
+}
+Engine engine;
+std::shared_ptr<Track> NewTrack(bool is_static = false, size_t capacity = 4) {
+  TrackParams params;
+  params.capacity_frames = capacity;
+  params.channels = 1;
+  params.is_static = is_static;
+  return std::shared_ptr<Track>(new Track(&engine, params));
+}
+ssize_t Finish(std::shared_ptr<Track> track, std::future<ssize_t>& result, const char* reason) {
+  bool completed = result.wait_for(500ms) == std::future_status::ready;
+  Check(completed, reason);
+  if (!completed) track->Release();  // bounded cleanup also works on the unmodified source
+  if (result.wait_for(500ms) != std::future_status::ready) std::abort();
+  return result.get();
+}
+void WaitUntilBlocked(std::shared_ptr<Track> track, std::future<ssize_t>& result) {
+  const auto deadline = std::chrono::steady_clock::now() + 500ms;
+  while (track->room_.waits.load() == 0 && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::yield();
+  Check(track->room_.waits.load() != 0, "active writer entered a real wait");
+  Check(result.wait_for(20ms) == std::future_status::timeout, "active full buffer blocks");
+}
+void InitialStates() {
+  const int16_t payload[8] = {11, 22, 33, 44, 55, 66, 77, 88};
+  for (bool paused : {false, true}) {
+    auto track = NewTrack();
+    if (paused) { track->Start(); track->Pause(); }
+    auto result = std::async(std::launch::async, [&] { return track->Write(payload, sizeof payload, true); });
+    Check(Finish(track, result, "inactive priming returns without playback") == 8,
+          "inactive priming commits exactly one buffer");
+    Check(track->Queued() == 4 && !std::memcmp(track->data_.data(), payload, 8),
+          "inactive priming preserves committed payload");
+    Check(track->room_.waits.load() == 0, "stopped or paused priming never waits");
+  }
+  auto track = NewTrack();
+  Check(track->Write(payload, sizeof payload, false) == 8, "nonblocking write remains short");
+  auto result = std::async(std::launch::async, [&] { return track->Write(payload, 2, true); });
+  Check(Finish(track, result, "full stopped write returns") == 0, "full stopped write has zero progress");
+}
+void Interrupts() {
+  const int16_t payload[8] = {11, 22, 33, 44, 55, 66, 77, 88};
+  for (int action = 0; action < 3; ++action) {
+    auto track = NewTrack();
+    track->Start();
+    auto result = std::async(std::launch::async, [&] { return track->Write(payload, sizeof payload, true); });
+    WaitUntilBlocked(track, result);
+    if (action == 0) track->Pause();
+    if (action == 1) track->Stop();
+    if (action == 2) track->Release();
+    Check(Finish(track, result, "state transition interrupts an active writer") == 8,
+          "interruption returns prior whole-frame progress");
+    Check(track->Queued() == 4 && !std::memcmp(track->data_.data(), payload, 8),
+          "interruption does not consume uncommitted payload");
+    if (action == 1) {
+      Check(track->state() == Track::State::kStopping, "streaming stop preserves drain state");
+      Check(track->Write(payload, 2, false) == 0, "full stopping ring has no available room");
+    }
+  }
+  for (bool stop : {false, true}) {
+    auto track = NewTrack();
+    track->Start();
+    track->room_.before_reacquire = [&] {
+      if (stop) track->Stop(); else track->Pause();
+      track->Start();
+    };
+    auto result = std::async(std::launch::async, [&] { return track->Write(payload, sizeof payload, true); });
+    Check(Finish(track, result, "pause/stop followed by start cannot hide interruption") == 8,
+          "restarted writer still returns original progress");
+    Check(track->state() == Track::State::kPlaying, "interruption does not cancel restart");
+  }
+}
+void PlaybackProgress() {
+  auto track = NewTrack();
+  const int16_t payload[8] = {11, 22, 33, 44, 55, 66, 77, 88};
+  track->Start();
+  auto result = std::async(std::launch::async, [&] { return track->Write(payload, sizeof payload, true); });
+  WaitUntilBlocked(track, result);
+  float read[4];
+  bool ended = false;
+  {
+    std::lock_guard<std::mutex> lock(track->mu_);
+    Check(track->ReadSource(read, 4, &ended) == 4 && !ended, "mixer makes room with committed frames");
+  }
+  Check(Finish(track, result, "playing writer proceeds after mixer frees room") == sizeof payload,
+        "playing blocking write transfers all frames");
+  for (size_t i = 0; i < 4; ++i) Check(std::fabs(read[i] - payload[i] / 32768.0f) < 1e-8f,
+                                      "mixer preserves frame ordering");
+  Check(!std::memcmp(track->data_.data(), payload + 4, 8), "ring wrap contains later payload");
+}
+void StopPriming() {
+  const int16_t before[2] = {1000, 2000};
+  const int16_t after[2] = {3000, 4000};
+  auto track = NewTrack();
+  Check(track->Write(before, sizeof before, false) == sizeof before, "prime first playback");
+  track->Start();
+  track->Stop();
+  auto result = std::async(std::launch::async, [&] { return track->Write(after, sizeof after, true); });
+  Check(Finish(track, result, "post-stop priming returns without waiting for the drain") == sizeof after,
+        "post-stop write accepts available room");
+  Check(track->room_.waits.load() == 0 && track->Queued() == 4,
+        "old and newly primed frames share capacity without an inactive wait");
+  track->Stop();
+  float old_mix[8] = {};
+  track->MixInto(old_mix, 8, track->sample_rate(), 1);
+  Check(track->stopped() && track->Queued() == 2 && track->Position() == 2,
+        "stop drains only its original boundary, preserving new priming");
+  for (size_t i = 0; i < 8; ++i) {
+    const float expected = i < 2 ? before[i] / 32768.0f : 0.0f;
+    Check(std::fabs(old_mix[i] - expected) < 1e-8f, "old drain excludes next playback payload");
+  }
+  track->Stop();
+  Check(track->Queued() == 2, "repeated stopped stop retains primed data");
+  track->Start();
+  float new_mix[2] = {};
+  track->MixInto(new_mix, 2, track->sample_rate(), 1);
+  Check(track->Queued() == 0 && track->Position() == 2,
+        "restart consumes primed data with a fresh playback position");
+  for (size_t i = 0; i < 2; ++i)
+    Check(std::fabs(new_mix[i] - after[i] / 32768.0f) < 1e-8f, "restart preserves primed frame order");
+
+  for (bool flush : {false, true}) {
+    auto reset = NewTrack();
+    reset->Write(before, sizeof before, false);
+    reset->Start();
+    reset->Stop();
+    reset->Write(after, sizeof after, false);
+    if (flush) reset->Flush();
+    else { reset->Pause(); reset->Stop(); }
+    Check(reset->stopped() && reset->Queued() == 0, "inactive reset drops both sides of the drain boundary");
+    Check(reset->Write(after, sizeof after, false) == sizeof after, "reset permits fresh priming");
+    reset->Start();
+    float mix[2] = {};
+    reset->MixInto(mix, 2, reset->sample_rate(), 1);
+    for (size_t i = 0; i < 2; ++i)
+      Check(std::fabs(mix[i] - after[i] / 32768.0f) < 1e-8f, "reset retires the stale stop boundary");
+  }
+}
+void RestartStopTail() {
+  int16_t payload[64];
+  for (size_t i = 0; i < 64; ++i) payload[i] = static_cast<int16_t>(1000 + 53 * i);
+  for (bool pause : {false, true}) {
+    auto track = NewTrack(false, 64);
+    auto reference = NewTrack(false, 64);
+    track->SetSampleRate(24000);
+    reference->SetSampleRate(24000);
+    track->Write(payload, 32 * sizeof(int16_t), false);
+    track->Start();
+    track->Stop();
+    Check(track->Write(payload + 32, 32 * sizeof(int16_t), false) == 32 * sizeof(int16_t),
+          "non-unity drain accepts next playback payload");
+    reference->Write(payload, sizeof payload, false);
+    reference->Start();
+    for (size_t tick = 0; tick < 128 && track->rs_->real_end < 0 && !track->stopped(); ++tick) {
+      float actual = 0, expected = 0;
+      track->MixInto(&actual, 1, 48000, 1);
+      reference->MixInto(&expected, 1, 48000, 1);
+    }
+    Check(track->rs_->real_end >= 0 && !track->stopped(), "resampler reaches an unfinished stop tail");
+    Check(track->Queued() == 32 && track->Position() == reference->Position(),
+          "stop tail preserves next payload and current source phase");
+    if (pause) track->Pause();
+    track->Start();
+    float actual[32] = {}, expected[32] = {};
+    track->MixInto(actual, 32, 48000, 1);
+    reference->MixInto(expected, 32, 48000, 1);
+    for (size_t i = 0; i < 32; ++i)
+      Check(std::fabs(actual[i] - expected[i]) < 1e-7f,
+            "restart replaces synthetic tail padding and preserves real filter history");
+    Check(track->Queued() == 0 && track->Position() == reference->Position(),
+          "resumed tail consumes new data without resetting its source position");
+  }
+}
+void ResetState() {
+  auto streaming = NewTrack();
+  streaming->SetMarker(11);
+  streaming->SetUpdatePeriod(7);
+  streaming->Start();
+  streaming->Flush();
+  Check(streaming->marker() == 11 && streaming->update_period() == 7, "playing flush remains a no-op");
+  streaming->Pause();
+  streaming->Flush();
+  Check(streaming->marker() == 0 && streaming->update_period() == 0,
+        "streaming flush clears old marker and periodic notifications");
+  streaming->SetMarker(13);
+  streaming->SetUpdatePeriod(9);
+  streaming->Start();
+  streaming->Stop();
+  Check(streaming->marker() == 13 && streaming->update_period() == 9,
+        "streaming stop retains legacy notification state");
+
+  auto fixed = NewTrack(true);
+  const int16_t payload[4] = {100, 200, 300, 400};
+  Check(fixed->Write(payload, sizeof payload, true) == sizeof payload, "static write never waits");
+  fixed->SetMarker(3);
+  fixed->SetUpdatePeriod(2);
+  Check(fixed->SetLoop(1, 4, 2) == kOk, "static loop setup");
+  fixed->Flush();
+  Check(fixed->marker() == 3 && fixed->update_period() == 2, "static flush remains a no-op");
+  fixed->Start();
+  fixed->Stop();
+  Check(fixed->Position() == 0, "static stop rewinds position");
+  fixed->Start();
+  float read[8];
+  bool ended = false;
+  {
+    std::lock_guard<std::mutex> lock(fixed->mu_);
+    Check(fixed->ReadSource(read, 8, &ended) == 4 && ended,
+          "static stop clears loop so replay ends once");
+  }
+  for (size_t i = 0; i < 4; ++i) Check(std::fabs(read[i] - payload[i] / 32768.0f) < 1e-8f,
+                                      "static replay begins at first original frame");
+
+  auto partial = NewTrack(true);
+  partial->Write(payload, sizeof payload, false);
+  partial->SetLoop(1, 3, 2);
+  partial->Start();
+  float looped[12] = {};
+  {
+    std::lock_guard<std::mutex> lock(partial->mu_);
+    Check(partial->ReadSource(looped, 12, &ended) == 8 && ended,
+          "loop ending before the sample end repeats before playing its suffix");
+  }
+  const int16_t expected[8] = {100, 200, 300, 200, 300, 200, 300, 400};
+  for (size_t i = 0; i < 8; ++i) Check(std::fabs(looped[i] - expected[i] / 32768.0f) < 1e-8f,
+                                      "partial static loop retains exact sample order");
+}
+}
+int main() {
+  InitialStates();
+  Interrupts();
+  PlaybackProgress();
+  StopPriming();
+  RestartStopTail();
+  ResetState();
+  std::printf("audio state contracts: %d checks, %d failures\n", checks, failures);
+  return failures != 0;
+}

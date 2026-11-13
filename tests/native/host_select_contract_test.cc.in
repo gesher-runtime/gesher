@@ -1,0 +1,118 @@
+// Every production select function, with controlled monotonic/poll/Sleep
+// boundaries. Real short-duration public calls are in the shared OS fixture.
+#include <cerrno>
+#include <climits>
+#include <cstdio>
+#include <cstring>
+#include <initializer_list>
+#include <limits>
+#include <poll.h>
+#include <sys/select.h>
+#include <time.h>
+#include <vector>
+using DWORD = unsigned long;
+static constexpr DWORD INFINITE = 0xffffffffUL;
+struct Slice { int milliseconds; unsigned long long elapsed_us; int result; short events; int error = 0; };
+static std::vector<Slice> slices;
+static size_t position;
+static unsigned long long now_us;
+static int failed, checked;
+static bool shape;
+static size_t expected_count;
+static void check(const char* label, int passed) { ++checked; if (!passed) { ++failed; std::printf("FAIL %s\n", label); } }
+static void start(std::initializer_list<Slice> planned, size_t count = 1) {
+  slices = planned; position = 0; now_us = 1000000; shape = true; expected_count = count;
+}
+static int adapted_poll(pollfd* fds, nfds_t count, int milliseconds) {
+  if (position >= slices.size()) { shape = false; return errno = EIO, -1; }
+  Slice expected = slices[position++];
+  shape = shape && expected.milliseconds == milliseconds && count == expected_count;
+  if (count > 0) {
+    shape = shape && fds[0].fd == 7 && fds[0].events == (POLLIN | POLLOUT);
+    for (nfds_t i = 0; i < count; ++i) fds[i].revents = expected.events;
+  }
+  now_us += expected.elapsed_us;
+  if (expected.result < 0) errno = expected.error;
+  return expected.result;
+}
+static void Sleep(DWORD milliseconds) { (void)adapted_poll(nullptr, 0, milliseconds == INFINITE ? -1 : int(milliseconds)); }
+namespace gesher { static unsigned long long MonotonicMicros() { return now_us; } }
+struct host_timeval { int tv_sec; int tv_usec; };
+#define timeval host_timeval
+#define select production_select
+#define pselect production_pselect
+#define poll adapted_poll
+@SELECT_SOURCE@
+#undef poll
+#undef pselect
+#undef select
+static bool complete() { return shape && position == slices.size(); }
+static void sets(fd_set* r, fd_set* w) { FD_ZERO(r); FD_ZERO(w); FD_SET(7, r); FD_SET(7, w); }
+static void boundaries() {
+  struct Boundary { timespec value; int expected; } cases[] = {
+    {{0,0},0}, {{0,1},1}, {{0,999999},1}, {{0,1000000},1}, {{0,1000001},2},
+    {{2147483,646000000}, INT_MAX-1}, {{2147483,647000000}, INT_MAX},
+    {{2147483,647000001}, INT_MAX}, {{2147484,0}, INT_MAX}, {{LLONG_MAX,999999999},INT_MAX}
+  };
+  for (auto c : cases) {
+    start({{c.expected, 0, 1, short(POLLIN | POLLOUT)}});
+    fd_set r, w; sets(&r, &w); timespec original = c.value;
+    check("pselect bounded conversion/unchanged timespec", production_pselect(8, &r, &w, nullptr, &c.value, nullptr) == 2 &&
+          FD_ISSET(7, &r) && FD_ISSET(7, &w) && complete() && std::memcmp(&c.value, &original, sizeof(original)) == 0);
+  }
+}
+static void budgets() {
+  for (bool empty : {false, true}) {
+    start({{INT_MAX, 2147483647000ULL, 0, 0}, {1353, 1353000, 0, 0}}, empty ? 0 : 1);
+    fd_set r, w; sets(&r, &w); timeval duration{2147485,0};
+    check("select retains budget over capped slices", production_select(empty ? 0 : 8, &r, &w, nullptr, &duration) == 0 &&
+          duration.tv_sec == 0 && duration.tv_usec == 0 && complete() &&
+          bool(FD_ISSET(7, &r)) == empty && bool(FD_ISSET(7, &w)) == empty);
+    start({{40, 15000, 0, 0}, {25, 25000, 0, 0}}, empty ? 0 : 1);
+    sets(&r, &w); duration = {0,40000};
+    check("select retries early timer wakeup", production_select(empty ? 0 : 8, &r, &w, nullptr, &duration) == 0 &&
+          duration.tv_sec == 0 && duration.tv_usec == 0 && complete());
+  }
+  start({{1000, 123456, 1, short(POLLIN | POLLOUT)}});
+  fd_set r,w; sets(&r,&w); timeval duration{1,0};
+  check("select readiness updates remaining timeval", production_select(8,&r,&w,nullptr,&duration) == 2 &&
+        duration.tv_sec == 0 && duration.tv_usec == 876544 && complete());
+  start({{INT_MAX, 2147483647000ULL, 0, 0}, {1353, 3000, 1, POLLIN}});
+  sets(&r,&w); duration = {2147485,0};
+  check("select capped slice preserves later interest", production_select(8,&r,&w,nullptr,&duration) == 1 &&
+        FD_ISSET(7,&r) && !FD_ISSET(7,&w) && duration.tv_sec == 1 && duration.tv_usec == 350000 && complete());
+  start({{1,1000,0,0}},0); duration = {0,1};
+  check("select submillisecond rounds up without negative residual", production_select(0,nullptr,nullptr,nullptr,&duration) == 0 &&
+        duration.tv_sec == 0 && duration.tv_usec == 0 && complete());
+  start({{INT_MAX,1000,1,POLLIN}}); sets(&r,&w); duration = {INT_MAX,INT_MAX};
+  check("select retains maximum non-normalized Windows timeval", production_select(8,&r,&w,nullptr,&duration) == 1 &&
+        duration.tv_sec == INT_MAX && duration.tv_usec == INT_MAX - 1000 && complete());
+  start({{-1,1000,1,POLLIN}}); sets(&r,&w);
+  check("select infinite wait remains infinite", production_select(8,&r,&w,nullptr,nullptr) == 1 && complete());
+}
+static void errors() {
+  for (int error : {EIO,EINTR}) {
+    start({{1000,23000,-1,0,error}}); fd_set r,w; sets(&r,&w); timeval timeout{1,0};
+    errno = 0;
+    check("select poll failure preserves error and sets", production_select(8,&r,&w,nullptr,&timeout) == -1 &&
+          errno == error && FD_ISSET(7,&r) && FD_ISSET(7,&w) && timeout.tv_sec == 0 && timeout.tv_usec == 977000 && complete());
+  }
+  start({{1000,0,1,POLLNVAL}}); fd_set r,w; sets(&r,&w); timeval timeout{1,0}; errno=0;
+  check("select rejects invalid descriptor", production_select(8,&r,&w,nullptr,&timeout) == -1 && errno == EBADF &&
+        FD_ISSET(7,&r) && FD_ISSET(7,&w) && complete());
+  for (timeval bad : {timeval{-1,0},timeval{0,-1}}) {
+    start({}); errno=0;
+    check("select validates before wait", production_select(0,nullptr,nullptr,nullptr,&bad) == -1 && errno == EINVAL && complete());
+  }
+  for (timespec bad : {timespec{-1,0},timespec{0,-1},timespec{0,1000000000}}) {
+    start({}); errno=0;
+    check("pselect validates before wait", production_pselect(0,nullptr,nullptr,nullptr,&bad,nullptr) == -1 && errno == EINVAL && complete());
+  }
+  start({}); timeout={1,0}; errno=0;
+  check("select nfds validation", production_select(-1,nullptr,nullptr,nullptr,&timeout) == -1 && errno == EINVAL && complete());
+}
+int main() {
+  boundaries(); budgets(); errors();
+  std::printf("production host select: %d checks, %d failures\n",checked,failed);
+  return failed != 0;
+}

@@ -1,7 +1,7 @@
 # Central compatibility evidence audit
 
 For the current-source crash-contract repairs and their validation limits, see
-the [November 8 Android compatibility audit](research/android-crash-contracts-2026-11-08.md).
+the [November 13 deep Android compatibility audit](research/android-compatibility-deep-audit-2026-11-13.md).
 The older inventories below retain their original snapshots; their counts do
 not describe all current failures or establish universal APK compatibility.
 

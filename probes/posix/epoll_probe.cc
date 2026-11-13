@@ -44,6 +44,7 @@ static void check(const char* what, int ok) {
   CHECK(ok);
 }
 #include "../../tests/native/epoll_nested_test.inc"
+#include "../../tests/native/event_loop_contract_test.inc"
 
 struct PausedSnapshot {
   HANDLE sampled = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -126,6 +127,7 @@ static void* WriteLater(void* arg) {
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0);
   test_epoll_nested();
+  test_event_loop_contracts();
   TestSnapshotWakeup();
   TestWaiterLifetime();
   uint64_t v = 0;
