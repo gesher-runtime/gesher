@@ -703,8 +703,11 @@ jobs:
           # lifecycle.apk runs headless (no window; its task is removed once it
           # is idle); uiapp.apk's window is checked below.
           $env:GESHER_APP_WINDOW = 'headless'
+          # The device's processes log how they execute (checked below, ADR 0081).
+          $env:GESHER_LOG_EXECUTION = '1'
           $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
           $code = $LASTEXITCODE
+          Remove-Item Env:GESHER_LOG_EXECUTION
           Write-Host "gesher-app lifecycle.apk (exit $code):"
           Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
           if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
@@ -726,6 +729,15 @@ jobs:
             throw 'The installed Gesher device did not compile lifecycle.apk at install'
           }
           "PASS  installer: the installed device compiles lifecycle.apk at install ($(($dexopt.Line -replace '^.*dexopt: ', 'dexopt: ').Trim()))" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The installed options (gesher-app.ps1): the launcher and the system server it
+          # started run nterp and the boot image's AOT code, not the switch interpreter (ADR 0081).
+          $serverLog = Get-Content -Raw "$env:LOCALAPPDATA\Gesher\logs\system_server.log" -ErrorAction SilentlyContinue
+          if ($out -notmatch 'gesher: execution: nterp' -or $out -match 'gesher: execution: switch interpreter' -or
+              $serverLog -notmatch 'gesher: execution: nterp' -or $serverLog -match 'gesher: execution: switch interpreter') {
+            ($serverLog -split "`n" | Select-String 'gesher: execution|boot image') | Out-Host
+            throw 'The installed launcher or system server does not run nterp (-Xint in the installed options?)'
+          }
+          'PASS  installer: the installed launcher and system server run nterp and AOT code (gesher: execution: nterp)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Installed apps as Windows apps (docs/installer.md): the first launch
           # made the app's Start menu shortcut, and its process set the
           # package's AppUserModelID.

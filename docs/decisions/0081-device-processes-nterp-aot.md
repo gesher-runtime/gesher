@@ -40,6 +40,14 @@ On a user's device, binder calls into the system server were slow
   processes, since the device's options are no longer interpret-only.
   `GESHER_ART_INTERPRET_ONLY=1` still puts every process, the device's
   included, on the switch interpreter.
+- `dalvik.vm.usejit=false` no longer means interpreted apps: app processes
+  then take the device's options, nterp and AOT code without the JIT (as on
+  Android). Only `GESHER_APP_EXECUTION=interpret` interprets them.
+- Coverage: the package job (ci.yml) and
+  `tests/windows/run-named-process-launcher.ps1` (run by
+  run-microg-security.ps1) start their devices with the installed options and
+  `GESHER_LOG_EXECUTION=1`, and require `gesher: execution: nterp` from the
+  launcher and the system server.
 
 ## Measurement
 An isolated device (ADR 0080's harness, its own install copy and
@@ -77,5 +85,4 @@ is a shared file view of the oat files the processes already map.
 - `gesher-app --single-process` and `--system-server` runs, which use the
   same options for the app, run it on nterp instead of the switch
   interpreter.
-- CI tests keep passing `-Xint` on their own command lines; only the package
-  job and e2e run the installed options.
+- The other CI device tests keep passing `-Xint` on their own command lines.
