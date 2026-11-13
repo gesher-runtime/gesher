@@ -1,0 +1,138 @@
+// Actual production vector + scalar + virtual-object dispatch. Real Linux file,
+// pipe, socket and eventfd operations stand at the declared Windows OS boundary.
+#include <cerrno>
+#include <cstdio>
+#include <fcntl.h>
+#include <map>
+#include <memory>
+#include <pthread.h>
+#include <sys/eventfd.h>
+#include <sys/epoll.h>
+#include <sys/inotify.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/uio.h>
+#include <unistd.h>
+#include <vector>
+static constexpr intptr_t INVALID_HANDLE_VALUE = -1;
+static constexpr int FILE_TYPE_PIPE = 3;
+static constexpr uint32_t FILE_WRITE_DATA = 2;
+using HANDLE = intptr_t;
+#ifndef IOV_MAX
+#define IOV_MAX 1024
+#endif
+namespace gesher {
+struct EventFd { int native; };
+struct Inotify {};
+struct Epoll {};
+struct Object { std::shared_ptr<EventFd> eventfd; std::shared_ptr<Epoll> epoll; std::shared_ptr<Inotify> inotify; };
+static std::map<int, Object> objects;
+static bool Lookup(int fd, Object* object) {
+  auto it = objects.find(fd); if (it == objects.end()) return false; *object = it->second; return true;
+}
+static int WriteEventFd(EventFd& object, const void* bytes, unsigned count) { return ::write(object.native, bytes, count); }
+@VIRTUAL_WRITE@
+struct SocketFd { int socket; std::shared_ptr<int> description; };
+static bool LookupSocket(int fd, SocketFd* state) {
+  int type; socklen_t length = sizeof(type);
+  if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &length) != 0) return false;
+  *state = {fd, {}}; return true;
+}
+static intptr_t HandleFromFd(int fd) { return fcntl(fd, F_GETFD) < 0 ? -1 : fd; }
+static int CrtResult(int value) { return value; }
+namespace record_locks {
+// The native Windows boundary queries the held handle's GrantedAccess with
+// NtQueryObject. Linux's real descriptor access mode supplies that boundary.
+struct DescriptorGuard { [[maybe_unused]] DescriptorGuard() {} };
+static int HandleAccess(HANDLE handle, uint32_t* access) {
+  int flags = ::fcntl(static_cast<int>(handle), F_GETFL);
+  if (flags < 0) return errno;
+  *access = (flags & O_ACCMODE) == O_RDONLY ? 0 : FILE_WRITE_DATA;
+  return 0;
+}
+}
+static int notified, woke;
+static void InotifyNoteWrite(int) { ++notified; }
+static bool HasPollWaiters() { return true; }
+static void WakePollers() { ++woke; }
+namespace ws {
+struct Buffer { void* data; size_t size; };
+static ssize_t SendOwned(int fd, Buffer* buffers, size_t count, int flags, void*, const std::shared_ptr<int>&) {
+  std::vector<iovec> iov; for (size_t i = 0; i < count; ++i) iov.push_back({buffers[i].data, buffers[i].size});
+  msghdr msg{}; msg.msg_iov = iov.data(); msg.msg_iovlen = iov.size(); return ::sendmsg(fd, &msg, flags);
+}
+static ssize_t RecvOwned(int, Buffer*, size_t, int, void*, const std::shared_ptr<int>&) { return -1; }
+}
+}
+static int GetFileType(intptr_t fd) { struct stat info{}; return fstat(int(fd), &info) == 0 && S_ISFIFO(info.st_mode) ? FILE_TYPE_PIPE : 1; }
+// Virtual Windows descriptors reserve a CRT NUL fd. An erroneous direct CRT
+// call must reproduce that successful discard instead of writing the eventfd.
+static int _write(int fd, const void* bytes, unsigned count) {
+  if (gesher::objects.count(fd)) return int(count);
+  return ::write(fd, bytes, count);
+}
+using gesher::SocketFd;
+#define write routed_write
+@SCALAR_WRITE@
+namespace {
+@VECTOR_HELPERS@
+}
+#define writev routed_writev
+@WRITEV@
+#undef writev
+#undef write
+static int adapted_eventfd(unsigned value, int flags) {
+  int fd = ::eventfd(value, flags);
+  if (fd >= 0) gesher::objects[fd] = {std::make_shared<gesher::EventFd>(gesher::EventFd{fd}), {}, {}};
+  return fd;
+}
+static int adapted_epoll_create1(int flags) {
+  int fd = ::epoll_create1(flags);
+  if (fd >= 0) gesher::objects[fd] = {{}, std::make_shared<gesher::Epoll>(), {}};
+  return fd;
+}
+static int adapted_inotify_init1(int flags) {
+  int fd = ::inotify_init1(flags);
+  if (fd >= 0) gesher::objects[fd] = {{}, {}, std::make_shared<gesher::Inotify>()};
+  return fd;
+}
+static int adapted_dup(int fd) { int alias = ::dup(fd); if (alias >= 0 && gesher::objects.count(fd)) gesher::objects[alias] = gesher::objects[fd]; return alias; }
+static int adapted_close(int fd) { gesher::objects.erase(fd); return ::close(fd); }
+static int failed, checked;
+static void check(const char* label, int passed) { ++checked; if (!passed) { ++failed; std::printf("FAIL %s\n", label); } }
+#define eventfd adapted_eventfd
+#define epoll_create1 adapted_epoll_create1
+#define inotify_init1 adapted_inotify_init1
+#define dup adapted_dup
+#define close adapted_close
+#define writev routed_writev
+#define write routed_write
+#include "event_loop_contract_test.inc"
+#undef eventfd
+#undef epoll_create1
+#undef inotify_init1
+#undef dup
+#undef close
+#undef writev
+#undef write
+int main() {
+  test_writev_event_contract();
+  int pipefd[2]; check("routing pipe", pipe(pipefd) == 0);
+  char a[] = "a", b[] = "b", bytes[2]; iovec iov[] = {{a, 1}, {b, 1}};
+  int before_notes = gesher::notified, before_wake = gesher::woke;
+  check("vector pipe payload", routed_writev(pipefd[1], iov, 2) == 2 && ::read(pipefd[0], bytes, 2) == 2 && bytes[0] == 'a' && bytes[1] == 'b');
+  check("vector pipe preserves notifications", gesher::notified == before_notes + 2 && gesher::woke == before_wake + 2);
+  iovec empty[] = {{nullptr, 0}, {nullptr, 0}};
+  before_notes = gesher::notified; before_wake = gesher::woke;
+  check("zero vector does not fabricate write bookkeeping", routed_writev(pipefd[1], empty, 2) == 0 &&
+        gesher::notified == before_notes && gesher::woke == before_wake);
+  ::close(pipefd[0]); ::close(pipefd[1]);
+  char path[] = "/tmp/gesher-writev-XXXXXX"; int fd = mkstemp(path);
+  check("routing regular file", fd >= 0);
+  before_notes = gesher::notified; before_wake = gesher::woke;
+  check("vector file payload", routed_writev(fd, iov, 2) == 2 && ::pread(fd, bytes, 2, 0) == 2 && bytes[0] == 'a' && bytes[1] == 'b');
+  check("vector file preserves notification only", gesher::notified == before_notes + 2 && gesher::woke == before_wake);
+  ::close(fd); ::unlink(path);
+  std::printf("production vector routing: %d checks, %d failures\n", checked, failed);
+  return failed != 0;
+}

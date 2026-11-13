@@ -1,0 +1,127 @@
+// Android object/dispatch and Win32 Window adapters only. Complete surfaces follow below.
+#include <algorithm>
+#include <cerrno>
+#include <cstdarg>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <vector>
+
+@CONSTANTS@
+constexpr int ANDROID_NATIVE_WINDOW_MAGIC = 0x574e444f;
+constexpr int HAL_PIXEL_FORMAT_RGBA_8888 = 1, HAL_PIXEL_FORMAT_RGBX_8888 = 2;
+constexpr int HAL_PIXEL_FORMAT_BGRA_8888 = 5, SYSTEM_TIME_MONOTONIC = 1;
+constexpr int64_t NATIVE_WINDOW_TIMESTAMP_AUTO = INT64_MIN;
+int64_t systemTime(int) { return 12345678; }
+struct ARect { int left, top, right, bottom; };
+struct ANativeWindow_Buffer {
+  int width = 0, height = 0, stride = 0, format = 0;
+  void* bits = nullptr;
+  uint32_t reserved[6] = {};
+};
+struct ANativeWindowBuffer {
+  int width = 0, height = 0, stride = 0, format = 0;
+  int usage_deprecated = 0, layerCount = 0;
+  void* reserved[4] = {};
+  void* handle = nullptr;
+  uint64_t usage = 0;
+};
+struct ANativeWindow {
+  struct { int magic = ANDROID_NATIVE_WINDOW_MAGIC; } common;
+  float xdpi = 0, ydpi = 0;
+  int minSwapInterval = 0, maxSwapInterval = 0;
+  int (*setSwapInterval)(ANativeWindow*, int) = nullptr;
+  int (*queueBuffer)(ANativeWindow*, ANativeWindowBuffer*, int) = nullptr;
+  int (*cancelBuffer)(ANativeWindow*, ANativeWindowBuffer*, int) = nullptr;
+  int (*dequeueBuffer)(ANativeWindow*, ANativeWindowBuffer**, int*) = nullptr;
+  int (*query)(const ANativeWindow*, int, int*) = nullptr;
+  int (*perform)(ANativeWindow*, int, ...) = nullptr;
+  void *dequeueBuffer_DEPRECATED = nullptr, *lockBuffer_DEPRECATED = nullptr;
+  void *queueBuffer_DEPRECATED = nullptr, *cancelBuffer_DEPRECATED = nullptr;
+};
+namespace android {
+class RefBase {};
+template<class Base, class Self, class Ref> class ANativeObjectBase : public Base {};
+template<class T> class sp {
+ public:
+  sp() = default;
+  sp(std::nullptr_t) {}
+  template<class... A> static sp make(A&&... args) {
+    sp result;
+    result.ptr_ = std::make_shared<T>(std::forward<A>(args)...);
+    return result;
+  }
+  T* get() const { return ptr_.get(); }
+  T* operator->() const { return get(); }
+  bool operator==(std::nullptr_t) const { return !ptr_; }
+  bool operator!=(std::nullptr_t) const { return bool(ptr_); }
+  bool operator!=(const sp& other) const { return ptr_ != other.ptr_; }
+ private:
+  std::shared_ptr<T> ptr_;
+};
+class Surface : public ANativeWindow {
+ public:
+  explicit Surface(std::nullptr_t) {
+    ANativeWindow::perform = Perform;
+    ANativeWindow::query = [](const ANativeWindow* window, int what, int* value) {
+      return static_cast<const Surface*>(window)->query(what, value);
+    };
+    ANativeWindow::dequeueBuffer = [](ANativeWindow* window, ANativeWindowBuffer** out, int* fence) {
+      return getSelf(window)->dequeueBuffer(out, fence);
+    };
+  }
+  virtual ~Surface() = default;
+  static int Perform(ANativeWindow* window, int operation, ...) {
+    va_list args;
+    va_start(args, operation);
+    int result = getSelf(window)->perform(operation, args);
+    va_end(args);
+    return result;
+  }
+  static Surface* getSelf(ANativeWindow* window) { return static_cast<Surface*>(window); }
+  virtual int lock(ANativeWindow_Buffer*, ARect*) = 0;
+  virtual int unlockAndPost() = 0;
+  virtual int query(int, int*) const = 0;
+  virtual int dequeueBuffer(ANativeWindowBuffer**, int*) = 0;
+  virtual int cancelBuffer(ANativeWindowBuffer*, int) = 0;
+  virtual int queueBuffer(ANativeWindowBuffer*, int) = 0;
+  virtual int perform(int, va_list) = 0;
+  virtual int setSwapInterval(int) = 0;
+};
+}
+namespace gesher {
+class Window {
+ public:
+  Window(int w, int h) : w_(w), h_(h), pixels_(static_cast<size_t>(w) * h) {}
+  int width() const { return w_; }
+  int height() const { return h_; }
+  uint8_t* Lock(int* w, int* h, int* stride) {
+    *w = w_; *h = h_; *stride = w_;
+    return reinterpret_cast<uint8_t*>(pixels_.data());
+  }
+  void UnlockAndPost() {}
+  void PresentPixels(const uint32_t*, int, int) {}
+  void ReadBackBuffer(std::vector<uint32_t>* dst, int* w, int* h) {
+    *dst = pixels_; *w = w_; *h = h_;
+  }
+ private:
+  int w_, h_;
+  std::vector<uint32_t> pixels_;
+};
+}
+@PRODUCTION@
+@ASSERTIONS@
+int main() {
+  auto queue = android::sp<gesher::media::QueueSurface>::make(4, 6);
+  surface_contract::Run(queue.get(), 4, 6);
+  auto window = android::sp<gesher::Win32Surface>::make(new gesher::Window(4, 6));
+  surface_contract::Run(window.get(), 4, 6);
+  std::printf("surface geometry contracts: %d checks, %d failures\n",
+              surface_contract::checks, surface_contract::failures);
+  return surface_contract::failures != 0;
+}

@@ -593,10 +593,36 @@ ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
 
 ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
   if (BadVector(fd, iovcnt)) return -1;
+  if (int error = gesher::EventObjectWriteError(fd)) return errno = error, -1;
+  // A zero-total vector performs no device operation (eventfd rejects a
+  // zero-byte scalar write). Preserve each vector boundary otherwise: Linux's
+  // legacy .write fallback, including eventfd, writes one element at a time.
+  bool empty = true;
+  for (int i = 0; i < iovcnt; ++i) empty = empty && iov[i].iov_len == 0;
+  if (empty) {
+    // Preserve the socket path's cancellation point without issuing I/O.
+    // Cancellation must not retain a descriptor guard or any owning object.
+    pthread_testcancel();
+    // Linux checks write access even when no bytes will be transferred. The
+    // generic F_GETFL fallback reports O_RDWR, so inspect the held handle's
+    // actual access without issuing an artificial zero-byte write (which can
+    // create a socket datagram or fail on an otherwise writable eventfd).
+    gesher::record_locks::DescriptorGuard descriptor_guard;
+    HANDLE handle = gesher::HandleFromFd(fd);
+    if (handle == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+    uint32_t access = 0;
+    if (int error = gesher::record_locks::HandleAccess(handle, &access)) {
+      return errno = error, -1;
+    }
+    if ((access & FILE_WRITE_DATA) == 0) return errno = EBADF, -1;
+    return 0;
+  }
   ssize_t total = 0;
   if (SocketIo(fd, iov, iovcnt, true, &total)) return total;
   for (int i = 0; i < iovcnt; ++i) {
-    int n = gesher::CrtResult(_write(fd, iov[i].iov_base, static_cast<unsigned>(iov[i].iov_len)));
+    // fd.cc owns virtual event descriptors and file/pipe notification. Their
+    // reserved CRT descriptor may be NUL and cannot perform the actual write.
+    int n = write(fd, iov[i].iov_base, static_cast<unsigned>(iov[i].iov_len));
     if (n < 0) return total > 0 ? total : -1;
     total += n;
     if (static_cast<size_t>(n) < iov[i].iov_len) break;

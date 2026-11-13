@@ -81,6 +81,16 @@ jobs:
       - name: Freopen contracts against the pinned glibc reference
         run: bash tools/ci/test-freopen-reference.sh
 
+      - name: Host event loop, audio state and surface geometry contracts
+        run: |
+          python3 tools/test_host_event_loop_contracts.py --sanitize
+          python3 tools/net-tcp-priority/test-vector-policy.py
+          cc -std=gnu11 -Wall -Wextra -Werror -pthread \
+            tests/native/event_loop_reference.c -o "$RUNNER_TEMP/event-loop-reference"
+          "$RUNNER_TEMP/event-loop-reference"
+          python3 tools/test_audio_state_contracts.py --sanitize
+          python3 tools/test_surface_geometry_contracts.py --sanitize
+
       - name: Temporary directory and UNC namespace contracts
         run: |
           python3 tools/test_temp_directory.py

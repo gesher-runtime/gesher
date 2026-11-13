@@ -5,6 +5,8 @@
 #include <stdarg.h>
 #include <string.h>
 
+#include <algorithm>
+
 #include <system/window.h>
 
 namespace gesher::media {
@@ -81,7 +83,10 @@ void QueueSurface::Abandon() {
 }
 
 void QueueSurface::Size(int* width, int* height) const {
-  if (user_width_ > 0 && user_height_ > 0) {
+  if (requested_width_ > 0 && requested_height_ > 0) {
+    *width = requested_width_;
+    *height = requested_height_;
+  } else if (user_width_ > 0 && user_height_ > 0) {
     *width = user_width_;
     *height = user_height_;
   } else {
@@ -93,10 +98,11 @@ void QueueSurface::Size(int* width, int* height) const {
 void QueueSurface::EnsureBuffer() {
   int w, h;
   Size(&w, &h);
-  if (buffer_ == nullptr || buffer_->width != w || buffer_->height != h) {
+  if (buffer_ == nullptr || buffer_->width != w || buffer_->height != h ||
+      buffer_->format != format_) {
     buffer_ = android::sp<Buffer>::make(w, h, format_);
+    buffer_contents_valid_ = false;
   }
-  buffer_->format = format_;
 }
 
 int QueueSurface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
@@ -110,9 +116,18 @@ int QueueSurface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
   out->format = buffer_->format;
   out->bits = buffer_->pixels.data();
   memset(out->reserved, 0, sizeof out->reserved);
-  // The buffer keeps the last frame: only the dirty part needs drawing.
-  if (dirty != nullptr && (dirty->left >= dirty->right || dirty->top >= dirty->bottom)) {
-    *dirty = {0, 0, buffer_->width, buffer_->height};
+  if (dirty != nullptr) {
+    // A new size/format has no previous frame to copy back. Otherwise preserve
+    // the existing pixels outside the caller's damage, clipped to this buffer.
+    if (!buffer_contents_valid_) {
+      *dirty = {0, 0, buffer_->width, buffer_->height};
+    } else {
+      dirty->left = std::max(0, dirty->left);
+      dirty->top = std::max(0, dirty->top);
+      dirty->right = std::min(buffer_->width, dirty->right);
+      dirty->bottom = std::min(buffer_->height, dirty->bottom);
+      if (dirty->left >= dirty->right || dirty->top >= dirty->bottom) *dirty = {0, 0, 0, 0};
+    }
   }
   return 0;
 }
@@ -132,6 +147,7 @@ void QueueSurface::Publish() {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (buffer_ == nullptr || abandoned_) return;
+    buffer_contents_valid_ = true;
     auto f = std::make_shared<SurfaceFrame>();
     f->width = buffer_->width;
     f->height = buffer_->height;
@@ -202,17 +218,18 @@ int QueueSurface::setSwapInterval(int) {
 
 int QueueSurface::query(int what, int* value) const {
   std::lock_guard<std::mutex> lock(mutex_);
-  int w, h;
   switch (what) {
     case NATIVE_WINDOW_WIDTH:
+      *value = default_width_;
+      return 0;
     case NATIVE_WINDOW_DEFAULT_WIDTH:
-      Size(&w, &h);
-      *value = w;
+      *value = user_width_ > 0 ? user_width_ : default_width_;
       return 0;
     case NATIVE_WINDOW_HEIGHT:
+      *value = default_height_;
+      return 0;
     case NATIVE_WINDOW_DEFAULT_HEIGHT:
-      Size(&w, &h);
-      *value = h;
+      *value = user_height_ > 0 ? user_height_ : default_height_;
       return 0;
     case NATIVE_WINDOW_FORMAT:
       *value = format_;
@@ -262,22 +279,30 @@ int QueueSurface::perform(int operation, va_list args) {
     case NATIVE_WINDOW_SET_BUFFERS_DIMENSIONS: {
       int w = va_arg(args, int);
       int h = va_arg(args, int);
+      if (w < 0 || h < 0 || ((w == 0) != (h == 0))) return -EINVAL;
       std::lock_guard<std::mutex> lock(mutex_);
-      user_width_ = w;
-      user_height_ = h;
+      if (operation == NATIVE_WINDOW_SET_BUFFERS_USER_DIMENSIONS) {
+        user_width_ = w;
+        user_height_ = h;
+      } else {
+        requested_width_ = w;
+        requested_height_ = h;
+      }
       return 0;
     }
     case NATIVE_WINDOW_SET_BUFFERS_GEOMETRY: {
       int w = va_arg(args, int);
       int h = va_arg(args, int);
       int format = va_arg(args, int);
+      if (w < 0 || h < 0 || ((w == 0) != (h == 0))) return -EINVAL;
       std::lock_guard<std::mutex> lock(mutex_);
-      user_width_ = w;
-      user_height_ = h;
-      if (format == HAL_PIXEL_FORMAT_RGBA_8888 || format == HAL_PIXEL_FORMAT_RGBX_8888 ||
-          format == HAL_PIXEL_FORMAT_BGRA_8888) {
-        format_ = format;
-      }
+      // The legacy dispatch sets producer dimensions before setting format.
+      requested_width_ = w;
+      requested_height_ = h;
+      if (format == 0) format = HAL_PIXEL_FORMAT_RGBA_8888;
+      if (format != HAL_PIXEL_FORMAT_RGBA_8888 && format != HAL_PIXEL_FORMAT_RGBX_8888 &&
+          format != HAL_PIXEL_FORMAT_BGRA_8888) return -EINVAL;
+      format_ = format;
       return 0;
     }
     case NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP: {

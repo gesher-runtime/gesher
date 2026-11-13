@@ -38,6 +38,7 @@ class QueueSurface {
   std::shared_ptr<Buffer> buffer_ = std::make_shared<Buffer>();
   @TIMESTAMP_MEMBER@
   bool abandoned_ = false;
+  bool buffer_contents_valid_ = false;
   uint64_t frames_ = 0;
   std::shared_ptr<const SurfaceFrame> latest_;
   std::function<void()> listener_;

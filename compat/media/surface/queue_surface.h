@@ -77,10 +77,12 @@ class QueueSurface : public android::Surface {
   android::sp<Buffer> buffer_;
   std::vector<android::sp<Buffer>> dequeued_;
   int format_ = 1;  // PIXEL_FORMAT_RGBA_8888
+  int requested_width_ = 0, requested_height_ = 0;
   int user_width_ = 0, user_height_ = 0;
   int default_width_ = 1, default_height_ = 1;
   int64_t timestamp_ns_ = NATIVE_WINDOW_TIMESTAMP_AUTO;
   bool locked_ = false;
+  bool buffer_contents_valid_ = false;
   bool abandoned_ = false;
   std::shared_ptr<const SurfaceFrame> latest_;
   uint64_t frames_ = 0;

@@ -23,8 +23,12 @@ public class LinkAddress implements Parcelable {
     /** @hide */
     public static final long LIFETIME_PERMANENT = Long.MAX_VALUE;
 
-    private static final int IFA_F_PERMANENT = 0x80;
+    private static final int IFA_F_OPTIMISTIC = 0x04;
+    private static final int IFA_F_DADFAILED = 0x08;
+    private static final int IFA_F_DEPRECATED = 0x20;
+    private static final int IFA_F_TENTATIVE = 0x40;
     private static final int RT_SCOPE_UNIVERSE = 0;
+    private static final int RT_SCOPE_SITE = 200;
     private static final int RT_SCOPE_LINK = 253;
     private static final int RT_SCOPE_HOST = 254;
 
@@ -35,7 +39,7 @@ public class LinkAddress implements Parcelable {
 
     /** @hide */
     public LinkAddress(InetAddress address, int prefixLength, int flags, int scope) {
-        if (address == null || prefixLength < 0
+        if (address == null || address.isMulticastAddress() || prefixLength < 0
                 || prefixLength > (address instanceof Inet4Address ? 32 : 128)) {
             throw new IllegalArgumentException("Bad LinkAddress " + address + "/" + prefixLength);
         }
@@ -47,7 +51,9 @@ public class LinkAddress implements Parcelable {
 
     /** @hide */
     public LinkAddress(InetAddress address, int prefixLength) {
-        this(address, prefixLength, IFA_F_PERMANENT, scopeForAddress(address));
+        // Let the common constructor reject null with Android's IllegalArgumentException.
+        this(address, prefixLength, 0,
+                address == null ? RT_SCOPE_UNIVERSE : scopeForAddress(address));
     }
 
     /** @hide */
@@ -57,8 +63,10 @@ public class LinkAddress implements Parcelable {
     }
 
     private static int scopeForAddress(InetAddress address) {
-        if (address.isLoopbackAddress()) return RT_SCOPE_HOST;
-        if (address.isLinkLocalAddress()) return RT_SCOPE_LINK;
+        if (address.isAnyLocalAddress()) return RT_SCOPE_HOST;
+        if (address.isLoopbackAddress() || address.isLinkLocalAddress()) return RT_SCOPE_LINK;
+        // Private IPv4 addresses have global scope; IPv6 site-local addresses do not.
+        if (!(address instanceof Inet4Address) && address.isSiteLocalAddress()) return RT_SCOPE_SITE;
         return RT_SCOPE_UNIVERSE;
     }
 
@@ -103,7 +111,16 @@ public class LinkAddress implements Parcelable {
 
     /** @hide */
     public boolean isGlobalPreferred() {
-        return mScope == RT_SCOPE_UNIVERSE && !mAddress.isSiteLocalAddress();
+        boolean ipv6Ula = mAddress instanceof Inet6Address
+                && (mAddress.getAddress()[0] & 0xfe) == 0xfc;
+        return mScope == RT_SCOPE_UNIVERSE && !ipv6Ula && isPreferred();
+    }
+
+    /** @hide */
+    public boolean isPreferred() {
+        int flags = getFlags();
+        return (flags & (IFA_F_DADFAILED | IFA_F_DEPRECATED)) == 0
+                && ((flags & IFA_F_TENTATIVE) == 0 || (flags & IFA_F_OPTIMISTIC) != 0);
     }
 
     @Override
