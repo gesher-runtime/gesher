@@ -361,7 +361,8 @@ bool WriteEventObject(int fd, const void* buf, unsigned int count, int* result) 
 int EventObjectWriteError(int fd) {
   Object object;
   if (!Lookup(fd, &object)) return 0;
-  return object.inotify ? EBADF : object.eventfd ? 0 : EINVAL;
+  if (object.inotify) return EBADF;
+  return object.eventfd && !object.eventfd->read_only ? 0 : EINVAL;
 }
 
 bool ForgetEventObject(int fd) {

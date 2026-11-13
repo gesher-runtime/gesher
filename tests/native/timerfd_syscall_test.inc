@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/uio.h>
 #if !defined(GESHER_TIMERFD_HOST)
 #include <sys/syscall.h>
 #include <sys/timerfd.h>
@@ -21,6 +22,20 @@ _Static_assert(SYS_timerfd_create == 85 && SYS_timerfd_settime == 86 && SYS_time
                "Unexpected Linux ARM64 syscall table");
 #endif
 
+static void test_timerfd_vector_write_errors(int fd) {
+    uint64_t injected = 1;
+    struct iovec zeros[] = { {0, 0}, {0, 0} };
+    struct iovec payload = { &injected, sizeof(injected) };
+    errno = 0;
+    check("timer rejects empty writev", writev(fd, 0, 0) == -1 && errno == EINVAL);
+    errno = 0;
+    check("timer rejects zero-length writev", writev(fd, zeros, 1) == -1 && errno == EINVAL);
+    errno = 0;
+    check("timer rejects all-zero writev", writev(fd, zeros, 2) == -1 && errno == EINVAL);
+    errno = 0;
+    check("timer rejects payload writev", writev(fd, &payload, 1) == -1 && errno == EINVAL);
+}
+
 static void test_timerfd_syscalls(void) {
     // This exact syscall/clock/flag combination triggered Cronet's fatal CHECK.
     int fd = (int) syscall(SYS_timerfd_create, CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
@@ -29,6 +44,7 @@ static void test_timerfd_syscalls(void) {
     uint64_t count = 0;
     errno = 0;
     check("unarmed nonblocking read returns EAGAIN", read(fd, &count, sizeof(count)) == -1 && errno == EAGAIN);
+    test_timerfd_vector_write_errors(fd);
     struct itimerspec current, previous;
     memset(&current, 0x5a, sizeof(current));
     check("numeric gettime starts disarmed", syscall(SYS_timerfd_gettime, fd, &current) == 0
@@ -93,6 +109,7 @@ static void test_timerfd_syscalls(void) {
     check("unarmed timer never advertises writable readiness", poll(&pending, 1, 0) == 0 && pending.revents == 0);
     errno = 0; count = 1;
     check("timer does not accept injected expirations", write(alias, &count, sizeof(count)) == -1 && errno == EINVAL);
+    test_timerfd_vector_write_errors(alias);
     errno = 0;
     check("short timer read is EINVAL", read(alias, &count, 7) == -1 && errno == EINVAL);
 
@@ -136,6 +153,7 @@ static void test_timerfd_syscalls(void) {
     check("second timer created", another >= 0);
     if (another >= 0) {
         check("dup2 replaces timer with shared timer", dup2(alias, another) == another);
+        test_timerfd_vector_write_errors(another);
         arm.it_interval.tv_sec = 3;
         check("dup2 timer alias accepts setting", syscall(SYS_timerfd_settime, another, 0, &arm, 0) == 0);
         check("dup2 source sees alias interval", syscall(SYS_timerfd_gettime, alias, &current) == 0 && current.it_interval.tv_sec == 3);

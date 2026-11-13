@@ -34,7 +34,8 @@ void SetNonBlocking(EventFd& eventfd, bool on);
 bool ReadEventObject(int fd, void* buf, unsigned int count, int* result);
 bool WriteEventObject(int fd, const void* buf, unsigned int count, int* result);
 // Vector writes validate descriptor write support before the zero-total fast
-// path. Zero for eventfd/non-event descriptors, EBADF for inotify, EINVAL for epoll.
+// path. Zero for writable eventfd/non-event descriptors, EBADF for inotify,
+// EINVAL for epoll and read-only timer readiness.
 int EventObjectWriteError(int fd);
 // Drops fd's reference to its object; the caller closes the CRT fd.
 bool ForgetEventObject(int fd);
