@@ -1096,6 +1096,33 @@ jobs:
             throw "gesher-launch's splash: $($problems -join '; ')"
           }
           'PASS  installer: gesher-launch launch com.gesher.uiapp shows a splash (GesherSplash: the app''s label, icon and AppUserModelID) until the app''s window is up; gesher-launch install shows none' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The Start menu's launch (no standard handles: nobody reads the output) does not
+          # keep a launch chain for the app's lifetime: gesher-launch sets
+          # GESHER_LAUNCH_DETACH=1, the launcher returns once the activity has started, and
+          # gesher-launch (once the app's window is up), powershell and the launcher's
+          # dalvikvm end while the app runs; closing its window still ends it.
+          $problems = @()
+          $savedWindow = $env:GESHER_APP_WINDOW
+          $env:GESHER_APP_WINDOW = 'window'
+          try {
+            $p = Start-Process "$app\gesher-launch.exe" -ArgumentList 'launch', 'com.gesher.uiapp' -PassThru
+          } finally { $env:GESHER_APP_WINDOW = $savedWindow }
+          if (-not $p.WaitForExit(400000)) { $p.Kill($true); $problems += 'the detached gesher-launch did not exit within 400 s' }
+          elseif ($p.ExitCode -ne 0) { $problems += "the detached gesher-launch exited with $($p.ExitCode)" }
+          $w = @([GesherSplashCi]::Find('GesherWindow', 0) | Where-Object { [GesherWin32]::AppUserModelId($_) -eq 'Gesher.App.com.gesher.uiapp' })
+          if ($w.Count -eq 0) { $problems += 'the app''s window is not up once gesher-launch has exited' }
+          if (@([GesherSplashCi]::Find('GesherSplash', 0)).Count -gt 0) { $problems += 'a splash is still up' }
+          Start-Sleep 2
+          $chain = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'com\.gesher\.app\.Launcher launch com\.gesher\.uiapp' })
+          if ($chain) { $problems += "a launcher still runs: $(($chain | ForEach-Object { "$($_.Name) $($_.ProcessId)" }) -join ', ')" }
+          if ($w.Count -gt 0) {
+            [void][GesherWin32]::PostMessageW($w[0], 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)  # WM_CLOSE
+            $closed = $false
+            for ($i = 0; $i -lt 300 -and -not $closed; $i++) { Start-Sleep -Milliseconds 100; $closed = -not [GesherWin32]::IsWindow($w[0]) }
+            if (-not $closed) { $problems += 'the app''s window did not close' }
+          }
+          if ($problems) { throw "gesher-launch without output handles: $($problems -join '; ')" }
+          'PASS  installer: gesher-launch launch with no output handles (the Start menu''s) ends once the app''s window is up; no launcher, powershell or gesher-launch stays for the app''s lifetime' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # An update while a program has the .apk icon handler loaded (Explorer always
           # has): Setup must not close that program (it took the desktop away), and
           # the update must still succeed: the loaded copy is moved aside.

@@ -20,11 +20,18 @@
 // label and icon, with its AppUserModelID (it groups with the app on the
 // taskbar). It closes once a visible window with the app's AppUserModelID is up
 // (the app's: compat/hwui/window sets it on each top-level window), when
-// gesher-app.ps1 ends, or after two minutes. Closing it (its X) cancels the
-// launch and ends its processes. GESHER_SPLASH=0 turns it off.
+// gesher-app.ps1 ends (with an error), or after two minutes. Closing it (its X)
+// cancels the launch and ends its processes. GESHER_SPLASH=0 turns it off.
 //
 // Its exit code is gesher-app.ps1's. Standard handles it was given (a redirected
-// output, as CI reads it) are passed on.
+// output, as CI reads it) are passed on, and then the launch waits, as on a
+// console, until the app's process ends (its output streamed). Without them (a
+// Start menu shortcut, a double-clicked .apk: nobody reads the output or the
+// exit code) it sets GESHER_LAUNCH_DETACH=1: com.gesher.app.Launcher returns
+// once the activity has started, so that gesher-launch, powershell, its console
+// and the launcher's dalvikvm all end instead of staying for the app's lifetime.
+// The app's process belongs to the device. The splash then stays until the
+// app's window is up (at most kSplashAfterDetachMs more).
 
 // The project defines NOGDI for AOSP code; the splash paints with GDI.
 // CommandLineToArgvW and the property store need what WIN32_LEAN_AND_MEAN
@@ -70,6 +77,13 @@ constexpr wchar_t kSplashClass[] = L"GesherSplash";
 // How long the splash waits for the app's window at most, and how often it looks.
 constexpr ULONGLONG kSplashTimeoutMs = 120000;
 constexpr ULONGLONG kSplashPollMs = 200;
+// A detached launch's gesher-app.ps1 ends once the activity has started: how much
+// longer the splash waits for its window, and, if the user closed the splash after
+// that, how long it looks for the app's windows to close them.
+constexpr ULONGLONG kSplashAfterDetachMs = 20000;
+constexpr ULONGLONG kCancelAfterDetachMs = 10000;
+// The environment variable that asks com.gesher.app.Launcher not to wait (Launcher.DETACH_ENV).
+constexpr wchar_t kDetachEnv[] = L"GESHER_LAUNCH_DETACH";
 // An app window's size when GESHER_DISPLAY gives none (WindowMode.DEFAULT_DISPLAY).
 constexpr int kDefaultWidth = 400, kDefaultHeight = 800;
 constexpr int kIconSize = 128;
@@ -548,9 +562,30 @@ void FreeSplash(Splash* splash) {
   if (splash->text_font != nullptr) DeleteObject(splash->text_font);
 }
 
+// Posts WM_CLOSE to the visible top-level windows with this AppUserModelID
+// (closing an app's window finishes its activity). Returns how many.
+int CloseAppWindows(const std::wstring& app_id) {
+  int closed = 0;
+  HWND app = nullptr;
+  while ((app = FindWindowExW(nullptr, app, nullptr, nullptr)) != nullptr) {
+    if (WindowAppUserModelId(app) == app_id) {
+      PostMessageW(app, WM_CLOSE, 0, 0);
+      ++closed;
+    }
+  }
+  return closed;
+}
+
 // Shows the splash until the app's window is up, `process` ends, the user
-// closes it or the timeout. Returns true if the user cancelled the launch.
-bool SplashWhileStarting(const std::wstring& here, HANDLE process, DWORD pid) {
+// closes it or the timeout. With `detached` (the launcher returns once the
+// activity has started), `process` ending with exit code 0 does not end it: it
+// waits for the window kSplashAfterDetachMs more. Returns true if the user
+// cancelled the launch; *started then says whether the launcher had already
+// started the activity and ended (its processes are not to be terminated: the
+// app's windows are closed).
+bool SplashWhileStarting(const std::wstring& here, HANDLE process, DWORD pid, bool detached,
+                         bool* started) {
+  *started = false;
   Splash splash;
   if (!SplashFor(here, &splash)) return false;
   HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
@@ -558,19 +593,31 @@ bool SplashWhileStarting(const std::wstring& here, HANDLE process, DWORD pid) {
   if (splash.app_id.empty()) EnumWindows(CollectVisible, reinterpret_cast<LPARAM>(&before));
   // The app already has its window (it runs): no splash.
   HWND hwnd = AppWindow(nullptr, splash.app_id, before) == nullptr ? ShowSplash(&splash) : nullptr;
+  // The launcher ended, having started the activity (detached): its pid is no
+  // longer the launch's.
+  bool exited = false;
   if (hwnd != nullptr) {
     const ULONGLONG start = GetTickCount64();
     ULONGLONG next = start + kSplashPollMs;
+    ULONGLONG exited_at = 0;
     for (;;) {
       ULONGLONG now = GetTickCount64();
       DWORD wait = now >= next ? 0 : static_cast<DWORD>(next - now);
-      DWORD r = MsgWaitForMultipleObjects(1, &process, FALSE, wait, QS_ALLINPUT);
+      DWORD r = exited ? MsgWaitForMultipleObjects(0, nullptr, FALSE, wait, QS_ALLINPUT)
+                       : MsgWaitForMultipleObjects(1, &process, FALSE, wait, QS_ALLINPUT);
       MSG msg;
       while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
       }
-      if (r == WAIT_OBJECT_0 || !IsWindow(hwnd) || g_cancelled) break;
+      if (!exited && r == WAIT_OBJECT_0) {
+        DWORD code = 1;
+        if (!detached || !GetExitCodeProcess(process, &code) || code != 0) break;
+        exited = true;
+        exited_at = GetTickCount64();
+        next = exited_at;  // look for the window now
+      }
+      if (!IsWindow(hwnd) || g_cancelled) break;
       now = GetTickCount64();
       if (now < next) continue;
       next = now + kSplashPollMs;
@@ -582,24 +629,29 @@ bool SplashWhileStarting(const std::wstring& here, HANDLE process, DWORD pid) {
         break;
       }
       if (now - start >= kSplashTimeoutMs) break;
+      if (exited && now - exited_at >= kSplashAfterDetachMs) break;
     }
     if (IsWindow(hwnd)) DestroyWindow(hwnd);
   }
   FreeSplash(&splash);
-  if (SUCCEEDED(com)) CoUninitialize();
 
   if (g_cancelled) {
-    TerminateProcessTree(pid);
-    if (!splash.app_id.empty()) {
-      HWND app = nullptr;
-      while ((app = FindWindowExW(nullptr, app, nullptr, nullptr)) != nullptr) {
-        if (WindowAppUserModelId(app) == splash.app_id) {
-          PostMessageW(app, WM_CLOSE, 0, 0);
-        }
+    if (!exited) {
+      TerminateProcessTree(pid);
+      if (!splash.app_id.empty()) CloseAppWindows(splash.app_id);
+    } else if (!splash.app_id.empty()) {
+      // The activity started and the launcher is gone: its window is on its way (or
+      // up); it is closed when it comes.
+      const ULONGLONG deadline = GetTickCount64() + kCancelAfterDetachMs;
+      while (CloseAppWindows(splash.app_id) == 0 && GetTickCount64() < deadline) {
+        Sleep(static_cast<DWORD>(kSplashPollMs));
       }
     }
+    if (SUCCEEDED(com)) CoUninitialize();
+    *started = exited;
     return true;
   }
+  if (SUCCEEDED(com)) CoUninitialize();
   return false;
 }
 
@@ -635,6 +687,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     si.hStdOutput = out;
     si.hStdError = err;
   }
+  // Nobody reads the output: the launcher does not wait for the app (powershell
+  // inherits this environment). A caller's own setting is left as it is.
+  if (!inherit && Env(kDetachEnv).empty()) SetEnvironmentVariableW(kDetachEnv, L"1");
+  const bool detached = Env(kDetachEnv) == L"1";
   PROCESS_INFORMATION pi = {};
   std::wstring mutable_command = command;
   if (!CreateProcessW(powershell.c_str(), mutable_command.data(), nullptr, nullptr,
@@ -647,10 +703,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   }
   CloseHandle(pi.hThread);
   // The splash comes up while powershell starts (the launch is never delayed by it).
-  bool cancelled = SplashWhileStarting(here, pi.hProcess, pi.dwProcessId);
+  bool started = false;
+  bool cancelled = SplashWhileStarting(here, pi.hProcess, pi.dwProcessId, detached, &started);
   if (cancelled) {
+    // The job also holds a device this launch started (its processes cannot break
+    // away): once the activity has started, the device and the app stay; the
+    // app's windows were closed.
     if (job != nullptr) {
-      TerminateJobObject(job, 1);
+      if (!started) TerminateJobObject(job, 1);
       CloseHandle(job);
     }
     WaitForSingleObject(pi.hProcess, 1000);
