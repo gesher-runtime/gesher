@@ -486,6 +486,9 @@ jobs:
           python3 tools/test_network_request_clear.py "${args[@]}"
           python3 tools/test_shortcut_updates.py "${args[@]}"
           python3 tools/test_location_registrations.py "${args[@]}" --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
+          python3 tools/test_wifi_data_contracts.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod
 
       - name: Collect framework artifacts
         run: |

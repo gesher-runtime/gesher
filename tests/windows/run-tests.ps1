@@ -194,7 +194,7 @@ if ($code -eq 0 -and -not $missing) {
 $testTracks = if ($FrameworkContractsOnly) {
   # Keep the existing graphics/font prerequisites: services use the installed
   # system fonts, and 32-fonts uses GraphicsDex from 30-graphics.
-  foreach ($name in '30-graphics.ps1', '32-fonts.ps1', '50-services.ps1', '94-framework-fixes.ps1', '95-compatibility-followup.ps1') {
+  foreach ($name in '30-graphics.ps1', '32-fonts.ps1', '50-services.ps1', '94-framework-fixes.ps1', '95-compatibility-followup.ps1', '96-deep-compatibility.ps1') {
     $requiredTrack = Join-Path (Join-Path $PSScriptRoot 'tracks') $name
     if (-not (Test-Path -LiteralPath $requiredTrack -PathType Leaf)) {
       throw "Required framework contract track is missing: $requiredTrack"
