@@ -28,6 +28,7 @@ import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.os.SystemClock;
 import android.util.DisplayMetrics;
 
 import org.xmlpull.v1.XmlPullParser;
@@ -51,6 +52,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
+import java.util.function.LongSupplier;
 
 /**
  * ContentService's sync side (docs/services.md, "Sync"): apps' sync adapters (services for
@@ -101,17 +103,18 @@ final class SyncManager {
 
     /** A running sync: its adapter's binding and its ISyncContext. */
     private final class Active extends ISyncContext.Stub {
-        final String key;
+        final WorkKey key;
         final Adapter adapter;
         final Account account;
         final Bundle extras;
-        final long start = System.currentTimeMillis();
+        final long start = mElapsed.getAsLong();
         volatile long heartbeat = start;
         volatile ISyncAdapter binder;
         IServiceConnection connection;
-        boolean done;  // guarded by SyncManager.this
+        boolean done, cancelled;  // guarded by SyncManager.this
+        boolean bound; // lifecycle executor only; successful bind owns exactly one unbind
 
-        Active(String key, Adapter adapter, Account account, Bundle extras) {
+        Active(WorkKey key, Adapter adapter, Account account, Bundle extras) {
             this.key = key;
             this.adapter = adapter;
             this.account = account;
@@ -120,12 +123,12 @@ final class SyncManager {
 
         @Override
         public void sendHeartbeat() {
-            heartbeat = System.currentTimeMillis();
+            heartbeat = mElapsed.getAsLong();
         }
 
         @Override
         public void onFinished(SyncResult result) {
-            finished(this, result == null ? "done" : result.toDebugString());
+            mTimer.execute(() -> finished(this, result, "finished"));
         }
     }
 
@@ -143,19 +146,62 @@ final class SyncManager {
     private void requireAccountAccess(Account account) {
         if (!callerCanAccess(account)) throw new SecurityException("Sync account is not visible to caller");
     }
-    private final ScheduledExecutorService mTimer = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread t = new Thread(r, "sync");
-        t.setDaemon(true);
-        return t;
-    });
+    private final LongSupplier mElapsed, mWall;
+    private final ScheduledExecutorService mTimer;
+    private final DeviceWork.Source mWorkSource = this::nextDueElapsed;
+    private static ScheduledExecutorService timer() {
+        return Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "sync"); t.setDaemon(true); return t;
+        });
+    }
+
+    /** Transient identity must not alias account names/types containing delimiters. */
+    private static final class Endpoint {
+        final Account account;
+        final String authority;
+        Endpoint(Account account, String authority) { this.account = account; this.authority = authority; }
+        @Override public boolean equals(Object other) {
+            return other instanceof Endpoint e && account.equals(e.account) && authority.equals(e.authority);
+        }
+        @Override public int hashCode() { return Objects.hash(account, authority); }
+    }
+    private static final class WorkKey {
+        final ComponentName service;
+        final Endpoint endpoint;
+        WorkKey(Adapter adapter, Account account) {
+            service = adapter.service; endpoint = new Endpoint(account, adapter.authority);
+        }
+        @Override public boolean equals(Object other) {
+            return other instanceof WorkKey k && service.equals(k.service) && endpoint.equals(k.endpoint);
+        }
+        @Override public int hashCode() { return Objects.hash(service, endpoint); }
+    }
+    private static final class Pending {
+        final Adapter adapter;
+        final Account account;
+        final WorkKey key;
+        final Bundle extras;
+        final boolean independent;
+        final long earliest;
+        Pending(Adapter adapter, Account account, Bundle extras, long earliest, boolean independent) {
+            this.adapter = adapter; this.account = account; this.extras = new Bundle(extras);
+            this.key = new WorkKey(adapter, account); this.earliest = earliest; this.independent = independent;
+        }
+    }
+    private static final class Backoff {
+        final long until, delay;
+        Backoff(long until, long delay) { this.until = until; this.delay = delay; }
+    }
     private final List<Observer> mObservers = new CopyOnWriteArrayList<>();
     /** Parsed adapters by service, with the APK they were read from. */
     private final Map<ComponentName, Object[]> mParsed = new HashMap<>();  // guarded by itself
     // Guarded by this.
     private final Properties mSettings = new Properties();
-    private final Map<String, Active> mActive = new LinkedHashMap<>();
-    /** Waiting syncs: their extras (merged), by key. */
-    private final Map<String, Object[]> mPending = new LinkedHashMap<>();
+    private final Map<WorkKey, Active> mActive = new LinkedHashMap<>();
+    private final List<Pending> mPending = new ArrayList<>();
+    private final Map<Endpoint, Backoff> mBackoff = new HashMap<>();
+    private final Map<Endpoint, Long> mDelayUntil = new HashMap<>();
+    private ScheduledFuture<?> mWake;
     private final Map<String, ScheduledFuture<?>> mPeriodic = new HashMap<>();
     private final Map<String, ScheduledFuture<?>> mUploads = new HashMap<>();
 
@@ -170,9 +216,14 @@ final class SyncManager {
     }
 
     SyncManager(ActivityManagerService am, PackageManagerService pm) {
-        mAm = am;
-        mPm = pm;
+        this(am, pm, SystemClock::elapsedRealtime, System::currentTimeMillis, timer());
+    }
+
+    SyncManager(ActivityManagerService am, PackageManagerService pm, LongSupplier elapsed,
+            LongSupplier wall, ScheduledExecutorService executor) {
+        mAm = am; mPm = pm; mElapsed = elapsed; mWall = wall; mTimer = executor;
         load();
+        DeviceWork.add(mWorkSource);
     }
 
     ActivityManagerService activityManager() { return mAm; }
@@ -431,159 +482,229 @@ final class SyncManager {
         if (account != null) requireAccountAccess(account);
         List<Active> cancel = new ArrayList<>();
         synchronized (this) {
-            mPending.entrySet().removeIf(en -> callerCanAccess((Account) ((Object[]) en.getValue())[1])
-                    && matches((Object[]) en.getValue(), account, authority));
-            for (Active a : mActive.values()) {
-                if (callerCanAccess(a.account) && (account == null || account.equals(a.account))
-                        && (authority == null || authority.equals(a.adapter.authority))) {
-                    cancel.add(a);
+            mPending.removeIf(p -> callerCanAccess(p.account) && matches(p.account,
+                    p.adapter.authority, account, authority));
+            mBackoff.keySet().removeIf(e -> callerCanAccess(e.account)
+                    && matches(e.account, e.authority, account, authority));
+            for (Active active : mActive.values()) {
+                if (callerCanAccess(active.account) && matches(active.account,
+                        active.adapter.authority, account, authority)) {
+                    // Atomic with pending removal: a completion cannot promote a retry
+                    // between the cancellation request and its lifecycle retirement.
+                    active.cancelled = true;
+                    cancel.add(active);
                 }
             }
         }
-        for (Active a : cancel) {
-            ISyncAdapter binder = a.binder;
-            try {
-                if (binder != null) binder.cancelSync(a);
-            } catch (RemoteException e) {
-                // gone
-            }
-            finished(a, "cancelled");
-        }
+        // Never wait for a bind/start call or an adapter's cancellation callback.
+        // The serial lane records any late successful binding before releasing it.
+        for (Active active : cancel) mTimer.execute(() -> cancelActive(active, "cancelled"));
         changed(ContentResolver.SYNC_OBSERVER_TYPE_PENDING);
+        mTimer.execute(this::run);
     }
 
-    private static boolean matches(Object[] pending, Account account, String authority) {
-        Adapter a = (Adapter) pending[0];
-        return (account == null || account.equals(pending[1]))
-                && (authority == null || authority.equals(a.authority));
-    }
-
-    private static String key(Adapter a, Account account) {
-        return a.service.flattenToShortString() + "/" + id(account, a.authority);
+    private static boolean matches(Account actual, String provider, Account account, String authority) {
+        return (account == null || account.equals(actual)) && (authority == null || authority.equals(provider));
     }
 
     private static String id(Account account, String authority) {
+        // Persisted settings/periodic-key migration is separate from transient admission.
         return account.type + "/" + account.name + "/" + authority;
     }
 
-    private void enqueue(Adapter a, Account account, Bundle extras) {
-        if (!mAccountAccess.test(account, a.service.getPackageName())) return;
-        String key = key(a, account);
+    private void enqueue(Adapter adapter, Account account, Bundle extras) {
+        if (!mAccountAccess.test(account, adapter.service.getPackageName())) return;
+        Pending pending = new Pending(adapter, account, extras, 0, false);
         synchronized (this) {
-            Object[] pending = mPending.get(key);
-            if (pending != null) {
-                ((Bundle) pending[2]).putAll(extras);
-            } else {
-                mPending.put(key, new Object[] {a, account, new Bundle(extras)});
+            Pending existing = null;
+            for (Pending p : mPending) {
+                if (!p.independent && p.key.equals(pending.key)) { existing = p; break; }
             }
+            if (existing == null) mPending.add(pending);
+            else existing.extras.putAll(extras);
         }
         changed(ContentResolver.SYNC_OBSERVER_TYPE_PENDING);
         mTimer.execute(this::run);
     }
 
-    /** Starts the pending syncs whose account and authority are not syncing. */
+    private boolean conflicts(Pending pending) {
+        for (Active running : mActive.values()) {
+            if (running.account.type.equals(pending.account.type)
+                    && running.adapter.authority.equals(pending.adapter.authority)
+                    && (!running.adapter.parallel || running.account.name.equals(pending.account.name))) return true;
+        }
+        return false;
+    }
+
+    private static long add(long now, long delay) {
+        return delay > 0 && now > Long.MAX_VALUE - delay ? Long.MAX_VALUE : now + Math.max(0, delay);
+    }
+
+    private long due(Pending pending) {
+        long due = pending.earliest;
+        if (!pending.extras.getBoolean(ContentResolver.SYNC_EXTRAS_IGNORE_BACKOFF, false)) {
+            Backoff backoff = mBackoff.get(pending.key.endpoint);
+            if (backoff != null) due = Math.max(due, backoff.until);
+            due = Math.max(due, mDelayUntil.getOrDefault(pending.key.endpoint, 0L));
+        }
+        return due;
+    }
+
+    /** Active syncs are due now even when the device's general background grace expires. */
+    private synchronized long nextDueElapsed() {
+        if (!mActive.isEmpty()) return 0;
+        long next = Long.MAX_VALUE, now = mElapsed.getAsLong();
+        for (Pending p : mPending) next = Math.min(next, due(p));
+        for (ScheduledFuture<?> future : mPeriodic.values()) {
+            if (!future.isDone()) next = Math.min(next, add(now, future.getDelay(TimeUnit.MILLISECONDS)));
+        }
+        for (ScheduledFuture<?> future : mUploads.values()) {
+            if (!future.isDone()) next = Math.min(next, add(now, future.getDelay(TimeUnit.MILLISECONDS)));
+        }
+        return next;
+    }
+
+    /** Called on the serial lifecycle lane; no external callback runs under this monitor. */
     private void run() {
         List<Active> start = new ArrayList<>();
         synchronized (this) {
-            for (java.util.Iterator<Map.Entry<String, Object[]>> it = mPending.entrySet().iterator();
-                    it.hasNext(); ) {
-                Map.Entry<String, Object[]> en = it.next();
-                if (mActive.containsKey(en.getKey())) continue;
-                Object[] p = en.getValue();
-                Active a = new Active(en.getKey(), (Adapter) p[0], (Account) p[1], (Bundle) p[2]);
-                mActive.put(en.getKey(), a);
-                start.add(a);
-                it.remove();
+            if (mWake != null) { mWake.cancel(false); mWake = null; }
+            long now = mElapsed.getAsLong(), wake = Long.MAX_VALUE;
+            for (java.util.Iterator<Pending> it = mPending.iterator(); it.hasNext();) {
+                Pending p = it.next();
+                if (mActive.containsKey(p.key) || conflicts(p)) continue;
+                long due = due(p);
+                if (due > now) { wake = Math.min(wake, due); continue; }
+                Active a = new Active(p.key, p.adapter, p.account, p.extras);
+                mActive.put(p.key, a); start.add(a); it.remove();
             }
+            if (wake != Long.MAX_VALUE) mWake = mTimer.schedule(this::run, wake - now, TimeUnit.MILLISECONDS);
         }
         if (start.isEmpty()) return;
         changed(ContentResolver.SYNC_OBSERVER_TYPE_PENDING | ContentResolver.SYNC_OBSERVER_TYPE_ACTIVE);
-        for (Active a : start) bind(a);
+        for (Active active : start) bind(active);
     }
 
-    private void bind(Active a) {
-        if (!mAccountAccess.test(a.account, a.adapter.service.getPackageName())) {
-            finished(a, "account access revoked"); return;
+    private boolean stopped(Active active) {
+        synchronized (this) { return active.done || active.cancelled; }
+    }
+
+    private void bind(Active active) {
+        if (stopped(active) || !mAccountAccess.test(active.account, active.adapter.service.getPackageName())) {
+            cancelActive(active, "cancelled before binding"); return;
         }
-        SystemServer.log(TAG + "syncing " + a.adapter.authority + " for account type " + a.account.type
-                + " (" + a.adapter.service.flattenToShortString() + ")"
-                + (a.extras.getBoolean(ContentResolver.SYNC_EXTRAS_UPLOAD) ? ", upload" : ""));
-        a.connection = new IServiceConnection.Stub() {
-            @Override
-            public void connected(ComponentName name, IBinder binder,
+        active.connection = new IServiceConnection.Stub() {
+            @Override public void connected(ComponentName name, IBinder binder,
                     android.app.IBinderSession session, boolean dead) {
-                if (binder == null) return;
-                synchronized (SyncManager.this) {
-                    if (a.done || a.binder != null) return;
-                    a.binder = ISyncAdapter.Stub.asInterface(binder);
-                }
-                try {
-                    if (!mAccountAccess.test(a.account, a.adapter.service.getPackageName())) {
-                        finished(a, "account access revoked"); return;
-                    }
-                    a.binder.startSync(a, a.adapter.authority, a.account, a.extras);
-                } catch (RemoteException | RuntimeException e) {
-                    finished(a, "the adapter failed: " + e);
-                }
+                // A synchronous bind callback must not run startSync before bind's
+                // successful return establishes ownership of this exact connection.
+                mTimer.execute(() -> connectedAdapter(active, binder, dead));
             }
         };
-        int bound;
-        long token = Binder.clearCallingIdentity();
+        int bound = 0;
+        long identity = Binder.clearCallingIdentity();
         try {
             bound = mAm.bindService(null, null, new Intent("android.content.SyncAdapter")
-                    .setComponent(a.adapter.service), null, a.connection,
+                    .setComponent(active.adapter.service), null, active.connection,
                     Context.BIND_AUTO_CREATE, "android", 0);
-        } catch (Throwable t) {
-            SystemServer.log(TAG + "binding " + a.adapter.service.flattenToShortString()
-                    + " failed: " + t);
-            bound = 0;
-        } finally {
-            Binder.restoreCallingIdentity(token);
-        }
-        if (bound == 0) {
-            finished(a, "the adapter could not be bound");
-            return;
-        }
-        watch(a);
+        } catch (RuntimeException failure) {
+            SystemServer.log(TAG + "adapter binding failed: " + failure);
+        } finally { Binder.restoreCallingIdentity(identity); }
+        active.bound = bound > 0;
+        if (stopped(active)) { cancelActive(active, "cancelled during binding"); return; }
+        if (!active.bound) { failed(active, "adapter could not be bound"); return; }
+        watch(active);
     }
 
-    private void watch(Active a) {
+    private void connectedAdapter(Active active, IBinder binder, boolean dead) {
+        if (stopped(active)) { cancelActive(active, "retired connection"); return; }
+        if (dead || binder == null) { failed(active, "adapter disconnected"); return; }
+        if (active.binder != null) return;
+        if (!mAccountAccess.test(active.account, active.adapter.service.getPackageName())) {
+            cancelActive(active, "account access revoked"); return;
+        }
+        active.binder = ISyncAdapter.Stub.asInterface(binder);
+        try { active.binder.startSync(active, active.adapter.authority, active.account, active.extras); }
+        catch (RemoteException | RuntimeException failure) { failed(active, "adapter start failed: " + failure); }
+    }
+
+    private void failed(Active active, String why) {
+        SyncResult result = new SyncResult(); result.stats.numIoExceptions = 1;
+        finished(active, result, why);
+    }
+
+    private void watch(Active active) {
         mTimer.schedule(() -> {
-            synchronized (this) {
-                if (a.done) return;
-            }
-            if (System.currentTimeMillis() - a.heartbeat >= SYNC_TIMEOUT_MS) {
-                ISyncAdapter binder = a.binder;
-                try {
-                    if (binder != null) binder.cancelSync(a);
-                } catch (RemoteException e) {
-                    // gone
-                }
-                finished(a, "timed out");
-            } else {
-                watch(a);
-            }
+            if (stopped(active)) return;
+            if (mElapsed.getAsLong() - active.heartbeat >= SYNC_TIMEOUT_MS) cancelActive(active, "timed out");
+            else watch(active);
         }, SYNC_TIMEOUT_MS, TimeUnit.MILLISECONDS);
     }
 
-    private void finished(Active a, String how) {
-        synchronized (this) {
-            if (a.done) return;
-            a.done = true;
-            if (mActive.get(a.key) == a) mActive.remove(a.key);
+    private void cancelActive(Active active, String why) {
+        synchronized (this) { if (active.done) return; }
+        if (active.binder != null) {
+            try { active.binder.cancelSync(active); }
+            catch (RemoteException | RuntimeException ignored) { }
         }
-        SystemServer.log(TAG + a.adapter.authority + " for account type " + a.account.type + ": " + how
-                + " in " + (System.currentTimeMillis() - a.start) + " ms");
-        // Active was checked/completed above. Its binding belongs to the system,
-        // while onFinished can still carry the sync adapter's Binder identity.
+        finished(active, null, why);
+    }
+
+    private void releaseBinding(Active active) {
+        if (!active.bound) return;
+        active.bound = false;
         long identity = Binder.clearCallingIdentity();
-        try {
-            if (a.connection != null) mAm.unbindService(a.connection);
-        } catch (Throwable t) {
-            // not bound
-        } finally { Binder.restoreCallingIdentity(identity); }
-        changed(ContentResolver.SYNC_OBSERVER_TYPE_ACTIVE);
-        mTimer.execute(this::run);  // a request while it ran
+        try { mAm.unbindService(active.connection); }
+        catch (RuntimeException failure) { SystemServer.log(TAG + "adapter unbind failed: " + failure); }
+        finally { Binder.restoreCallingIdentity(identity); }
+    }
+
+    private void finished(Active active, SyncResult result, String how) {
+        synchronized (this) {
+            if (active.done) return;
+            active.done = true;
+            if (mActive.get(active.key) == active) mActive.remove(active.key);
+            if (!active.cancelled && result != null) {
+                Endpoint endpoint = active.key.endpoint;
+                long now = mElapsed.getAsLong();
+                if (result.hasError()) {
+                    Backoff previous = mBackoff.get(endpoint);
+                    if (previous == null || now >= previous.until) {
+                        long delay = previous == null
+                                ? java.util.concurrent.ThreadLocalRandom.current().nextLong(30000, 33000)
+                                : Math.min(3600000, previous.delay * 2);
+                        mBackoff.put(endpoint, new Backoff(add(now, delay), delay));
+                    }
+                    Bundle retry = new Bundle(active.extras);
+                    retry.remove(ContentResolver.SYNC_EXTRAS_IGNORE_BACKOFF);
+                    boolean reschedule;
+                    long earliest = 0;
+                    if (retry.getBoolean(ContentResolver.SYNC_EXTRAS_DO_NOT_RETRY) && !result.syncAlreadyInProgress) {
+                        reschedule = false;
+                    } else if (retry.getBoolean(ContentResolver.SYNC_EXTRAS_UPLOAD) && !result.syncAlreadyInProgress) {
+                        retry.remove(ContentResolver.SYNC_EXTRAS_UPLOAD); reschedule = true;
+                    } else if (result.tooManyRetries) reschedule = false;
+                    else if (result.madeSomeProgress()) reschedule = true;
+                    else if (result.syncAlreadyInProgress) { reschedule = true; earliest = add(now, 10000); }
+                    else reschedule = result.hasSoftError();
+                    if (reschedule) mPending.add(new Pending(active.adapter, active.account, retry, earliest, true));
+                } else mBackoff.remove(endpoint);
+                long until = result.delayUntil <= 0 ? 0 : result.delayUntil > Long.MAX_VALUE / 1000
+                        ? Long.MAX_VALUE : result.delayUntil * 1000;
+                long wall = mWall.getAsLong();
+                if (until > wall) mDelayUntil.put(endpoint, add(now, until - wall));
+                else mDelayUntil.remove(endpoint);
+                if (result.fullSyncRequested) {
+                    // A fresh full request must not inherit retry/upload/do-not-retry extras.
+                    mPending.add(new Pending(active.adapter, active.account, new Bundle(), 0, true));
+                }
+            }
+        }
+        releaseBinding(active);
+        SystemServer.log(TAG + active.adapter.authority + ": " + how + " in "
+                + (mElapsed.getAsLong() - active.start) + " ms");
+        changed(ContentResolver.SYNC_OBSERVER_TYPE_ACTIVE | ContentResolver.SYNC_OBSERVER_TYPE_PENDING);
+        mTimer.execute(this::run);
     }
 
     // --- periodic syncs ------------------------------------------------------------------
@@ -700,8 +821,8 @@ final class SyncManager {
     }
 
     synchronized boolean isSyncPending(Account account, String authority) {
-        for (Object[] p : mPending.values()) {
-            if (callerCanAccess((Account) p[1]) && matches(p, account, authority)) return true;
+        for (Pending p : mPending) {
+            if (callerCanAccess(p.account) && matches(p.account, p.adapter.authority, account, authority)) return true;
         }
         return false;
     }
