@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Work the device has scheduled (alarms, jobs) that keeps a persistent Gesher device from
+ * Scheduled or in-flight work (alarms, jobs, broadcasts) that keeps a persistent Gesher device from
  * stopping when idle (devsvc track, ADR 0038): the device's idle timeout ends it only when
  * no app was in use for the timeout and nothing scheduled is due within it (for at most one
  * more timeout, {@link #keepsIdleDevice}). What is due
@@ -21,9 +21,9 @@ public final class DeviceWork {
     private DeviceWork() {
     }
 
-    /** A scheduler with work ahead. */
+    /** A scheduler or bounded delivery owner with work ahead or in flight. */
     public interface Source {
-        /** When ({@link SystemClock#elapsedRealtime}) its next work is due; Long.MAX_VALUE: none. */
+        /** Next due elapsed time; zero: work in flight; Long.MAX_VALUE: none. */
         long nextDueElapsed();
     }
 
@@ -47,9 +47,13 @@ public final class DeviceWork {
 
     /** Whether some scheduled work is due within {@code windowMs} from now. */
     public static boolean dueWithin(long windowMs) {
-        long limit = SystemClock.elapsedRealtime() + windowMs;
         for (Source s : sSources) {
-            if (s.nextDueElapsed() <= limit) return true;
+            long due = s.nextDueElapsed();
+            // A source can wait for its scheduler lock and then report "now" for
+            // running work. Compare against a time sampled after that query, especially
+            // when the background grace has ended and windowMs is zero.
+            long limit = SystemClock.elapsedRealtime() + windowMs;
+            if (due != Long.MAX_VALUE && due <= limit) return true;
         }
         return false;
     }

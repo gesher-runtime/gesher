@@ -468,14 +468,24 @@ function Update-AppsView($installed) {
 # Full re-evaluation; used at load, after every panel action and when live refresh sees a change.
 function Refresh-Dashboard {
     # Stamps are taken before reading so a change made during the read is still noticed next tick.
-    $script:LiveState.Stamp = Get-StateStamp
-    $script:LiveState.PendingSince = $null
+    $stateStamp = Get-StateStamp
+    $appsStamp = Get-AppFilesStamp
+    # A transient read/render failure must leave a retry pending even when the files have
+    # stopped changing. Commit the observed stamps only after the whole refresh succeeds.
+    if (-not $script:LiveState.PendingSince) { $script:LiveState.PendingSince = [DateTime]::UtcNow }
     Update-DeviceView (Get-DeviceStatus)
     Update-MicrogView (Get-MicrogStatus)
     $installed = Get-InstalledApps
     Update-StoreView $installed
     Update-AppsView $installed
-    $script:LiveState.AppsStamp = Get-AppFilesStamp
+    $script:LiveState.Stamp = $stateStamp
+    $script:LiveState.AppsStamp = $appsStamp
+    $script:LiveState.PendingSince = $null
+}
+
+# Always release the action guard: a transient refresh failure is retried by the timer.
+function Complete-DashboardAction {
+    try { Refresh-Dashboard } finally { Set-Busy $false }
 }
 
 # Live refresh, driven by one DispatcherTimer on the UI thread (500 ms):
@@ -523,8 +533,7 @@ $btnToggleDevice.Add_Click({
             & (Join-Path $here 'gesher-app.ps1') start
         }
     } finally {
-        Refresh-Dashboard
-        Set-Busy $false
+        Complete-DashboardAction
     }
 })
 
@@ -539,8 +548,7 @@ $btnEnableMicrog.Add_Click({
     } catch {
         [System.Windows.MessageBox]::Show($_.Exception.Message, "Gesher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     } finally {
-        Refresh-Dashboard
-        Set-Busy $false
+        Complete-DashboardAction
     }
 })
 
@@ -559,8 +567,7 @@ $btnDisableMicrog.Add_Click({
         & (Join-Path $here 'gesher-app-microg.ps1') -Disable
         & (Join-Path $here 'gesher-app.ps1') start
     } finally {
-        Refresh-Dashboard
-        Set-Busy $false
+        Complete-DashboardAction
     }
 })
 
@@ -578,8 +585,7 @@ $btnInstallStore.Add_Click({
     } catch {
         [System.Windows.MessageBox]::Show($_.Exception.Message, "Gesher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     } finally {
-        Refresh-Dashboard
-        Set-Busy $false
+        Complete-DashboardAction
     }
 })
 
@@ -600,8 +606,7 @@ $btnInstallApk.Add_Click({
         } catch {
             [System.Windows.MessageBox]::Show($_.Exception.Message, "Gesher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
         } finally {
-            Refresh-Dashboard
-            Set-Busy $false
+            Complete-DashboardAction
         }
     }
 })
@@ -611,20 +616,22 @@ $window.Add_Drop({
     param($sender, $e)
     if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
         $files = $e.Data.GetData([System.Windows.DataFormats]::FileDrop)
-        foreach ($file in $files) {
-            $ext = [System.IO.Path]::GetExtension($file).ToLower()
-            if ($ext -in '.apk', '.apks', '.xapk') {
-                Set-Busy $true (Get-GesherText 'cp_installing' @([System.IO.Path]::GetFileName($file)))
-                $window.Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
-                try {
-                    & (Join-Path $here 'gesher-app.ps1') install "$file"
-                } catch {
-                    [System.Windows.MessageBox]::Show($_.Exception.Message, "Gesher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+        try {
+            foreach ($file in $files) {
+                $ext = [System.IO.Path]::GetExtension($file).ToLower()
+                if ($ext -in '.apk', '.apks', '.xapk') {
+                    Set-Busy $true (Get-GesherText 'cp_installing' @([System.IO.Path]::GetFileName($file)))
+                    $window.Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
+                    try {
+                        & (Join-Path $here 'gesher-app.ps1') install "$file"
+                    } catch {
+                        [System.Windows.MessageBox]::Show($_.Exception.Message, "Gesher", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+                    }
                 }
             }
+        } finally {
+            Complete-DashboardAction
         }
-        Refresh-Dashboard
-        Set-Busy $false
     }
 })
 
@@ -647,8 +654,7 @@ $script:OnAppUninstall = {
         try {
             & (Join-Path $here 'gesher-app.ps1') uninstall $pkg
         } finally {
-            Refresh-Dashboard
-            Set-Busy $false
+            Complete-DashboardAction
         }
     }
 }

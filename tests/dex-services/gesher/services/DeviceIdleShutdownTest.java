@@ -173,10 +173,23 @@ public final class DeviceIdleShutdownTest {
         List<Object> sources = (List<Object>) field(work, "sSources").get(null);
         sources.clear();
         long[] due = {Long.MAX_VALUE};
+        boolean[] sampleCurrentAfterDelay = {false};
         Object telemetry = Proxy.newProxyInstance(source.getClassLoader(), new Class<?>[]{source},
-                (proxy, method, a) -> method.getName().equals("nextDueElapsed") ? (Object) due[0]
-                        : method.getName().equals("hashCode") ? (Object) System.identityHashCode(proxy)
-                        : method.getName().equals("equals") ? (Object) (proxy == a[0]) : "telemetry");
+                (proxy, method, a) -> {
+                    if (method.getName().equals("nextDueElapsed")) {
+                        if (sampleCurrentAfterDelay[0]) {
+                            // A synchronized scheduler may wait for its lock before returning
+                            // "now" for active work. Cross a clock tick inside the source query.
+                            long entered = SystemClock.elapsedRealtime();
+                            do { Thread.sleep(1); }
+                            while (SystemClock.elapsedRealtime() <= entered);
+                            return SystemClock.elapsedRealtime();
+                        }
+                        return due[0];
+                    }
+                    return method.getName().equals("hashCode") ? System.identityHashCode(proxy)
+                            : method.getName().equals("equals") ? proxy == a[0] : "telemetry";
+                });
         Method add = work.getDeclaredMethod("add", source);
         add.setAccessible(true);
         add.invoke(null, telemetry);
@@ -197,6 +210,15 @@ public final class DeviceIdleShutdownTest {
                 "a running job did not keep the device");
         due[0] = SystemClock.elapsedRealtime() + 2 * timeout;
         require(!(Boolean) keeps.invoke(null, timeout, timeout), "work due after the timeout kept the device");
+        sources.clear();
+        checks++;
+
+        // JobScheduler reports active work using its current clock, not
+        // the older time at which DeviceWork began looking through scheduler sources.
+        add.invoke(null, telemetry);
+        sampleCurrentAfterDelay[0] = true;
+        require((Boolean) keeps.invoke(null, 10 * timeout, timeout),
+                "running work observed after a scheduler delay did not keep the device");
         sources.clear();
         checks++;
 

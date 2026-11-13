@@ -557,6 +557,7 @@ jobs:
         run: |
           tests/windows/shell/UiLocalizationChecks.ps1
           tests/windows/shell/MicrogDefaultsChecks.ps1
+          tests/windows/shell/ControlPanelRefreshChecks.ps1
 
       - name: Verify and assemble windows-x64 artifact
         shell: pwsh

@@ -739,7 +739,7 @@ try {
   CheckTimed 'services: deviceidle real managers, all 22 methods, administrative denial' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.DeviceIdleContractTest') @('DeviceIdleContractTest all passed') 30
   CheckTimed 'services: idle shutdown: cached processes and self-rescheduling jobs do not hold the device, activities and foreground services do' "$Dir/dalvikvm.exe" `
-    ($dvmContracts + 'gesher.services.ServiceFixtureRunner' + 'DeviceIdleShutdownTest') @('DeviceIdleShutdownTest all passed: 9') 30
+    ($dvmContracts + 'gesher.services.ServiceFixtureRunner' + 'DeviceIdleShutdownTest') @('DeviceIdleShutdownTest all passed: 10') 30
   CheckTimed 'services: real ContextImpl manager construction and immediate policy rejection' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.ManagerConstructionBatchTest') @('ManagerConstructionBatchTest all passed (18 managers)') 30
   CheckTimed 'services: thermal usage shortcuts and unmanaged device policy contracts' "$Dir/dalvikvm.exe" `

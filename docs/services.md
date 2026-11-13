@@ -78,9 +78,16 @@ Behaviour, in short (details in the classes' comments and ADR 0038):
   that came due fire on resume.
 - With no Gesher device running nothing fires; scheduled work due within the
   idle timeout keeps an idle device running for at most one more timeout
-  (after that only a running job or an alarm due now does, so an app that
+  (after that only work due now or in flight does, so an app that
   reschedules itself every few seconds cannot keep it forever); persisted jobs
   come back at the next start.
+- Alarm delivery owns a hold from due-list removal through listener completion
+  or PendingIntent completion, capped at five minutes from reservation. Listener
+  death also releases it. A broadcast PendingIntent completes after its receiver
+  chain; a service/activity PendingIntent completes at admission, after which the
+  usual activity/foreground-service idle policy applies. Queued or active
+  manifest/acknowledged broadcasts retain their bounded delivery holds. These
+  holds preserve the original idle clock, including across repeated alarms.
 - Jobs: latency, deadline, periodic windows (interval, flex), backoff,
   network (a NetworkRequest against ConnectivityManager's networks; the network
   in JobParameters)/charging/battery-not-low/idle constraints, content URI

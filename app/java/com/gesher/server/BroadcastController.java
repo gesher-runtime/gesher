@@ -660,6 +660,12 @@ final class BroadcastController {
         mCallers = new CallerIdentity(pm, atm);
         mReceiverTimeoutMillis = timeoutMillis;
         mTimeouts.setRemoveOnCancelPolicy(true);
+        DeviceWork.add(this::nextDueElapsed);
+    }
+
+    /** Bounded receiver reservations hold shutdown without restarting the idle clock. */
+    private synchronized long nextDueElapsed() {
+        return mManifest.isEmpty() && mOrdered.isEmpty() ? Long.MAX_VALUE : 0;
     }
 
     Intent registerReceiver(IApplicationThread caller, String callerPackage,
