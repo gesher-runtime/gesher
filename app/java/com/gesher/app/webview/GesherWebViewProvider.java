@@ -1141,6 +1141,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             m.put("origin", origin);
             m.put("ports", transfer(message.getPorts()));
             mHost.postWebMessage(m.toString());
+            flushTransferredPorts(message.getPorts());
         } catch (org.json.JSONException e) {
             throw new IllegalStateException(e);
         }
@@ -1157,16 +1158,16 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private JSONArray transfer(WebMessagePort[] ports) {
         JSONArray ids = new JSONArray();
         if (ports == null) return ids;
-        for (WebMessagePort p : ports) {
-            if (!(p instanceof GesherWebMessagePort)) {
-                throw new IllegalArgumentException("not a port of this WebView");
-            }
-            GesherWebMessagePort port = (GesherWebMessagePort) p;
-            port.transferTo(this);
+        for (GesherWebMessagePort port : GesherWebMessagePort.transferToPage(ports, this)) {
             mPagePorts.put(port.mId, port);
             ids.put(port.mId);
         }
         return ids;
+    }
+
+    private static void flushTransferredPorts(WebMessagePort[] ports) {
+        if (ports == null) return;
+        for (WebMessagePort port : ports) ((GesherWebMessagePort) port).flushToPage();
     }
 
     /** The app posts to the end that is in the page (GesherWebMessagePort). */
@@ -1180,6 +1181,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             WebMessagePayload.write(m, message);
             m.put("ports", transfer(message.getPorts()));
             host.postWebMessage(m.toString());
+            flushTransferredPorts(message.getPorts());
         } catch (org.json.JSONException e) {
             throw new IllegalStateException(e);
         }
