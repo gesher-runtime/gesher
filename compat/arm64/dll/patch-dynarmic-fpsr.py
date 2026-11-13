@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hash-check pinned x64 compiler and scalar ARM FZ status corrections,
 memory corrections (A64 fast dispatch table, code cache commit, constant
-pool) and the exclusive monitor's scan of the processor ids in use.
+pool clearing) and the exclusive monitor's scan of the processor ids in use.
 
 Only source rewriting/hashing runs locally. Compilation and all native
 execution belong to CI. Preserve the original dynarmic 0BSD source/license.
@@ -246,11 +246,9 @@ constexpr size_t PRELUDE_COMMIT_SIZE = 4 * 1024 * 1024;"""
 # The constant pool (2 MiB of code space, before the prelude) was cleared by
 # AllocateFromCodeSpace although fresh committed pages are already zero: all
 # of it became resident. Before the prelude, code space is only ever handed
-# out above the insertion point, never written: clear only after it. A nested
-# Jit's smaller cache gets a proportionally smaller pool (1/16th; the
-# outermost Jit's 32 MiB cache keeps the pinned 2 MiB).
-CODE_POOL_OLD = """        , constant_pool(*this, CONSTANT_POOL_SIZE)"""
-CODE_POOL_NEW = """        , constant_pool(*this, std::min<size_t>(CONSTANT_POOL_SIZE, total_code_size / 16))"""
+# out above the insertion point, never written: clear only after it. (The
+# pool keeps its pinned 2 MiB: it is never reset, overflowing it is a release
+# assert, and its untouched pages now cost commit only.)
 CODE_MEMSET_OLD = """    size_ += alloc_size;
     memset(ret, 0, alloc_size);
     return ret;"""
@@ -275,10 +273,15 @@ void ZeroPages(void* pointer, size_t size) {
 #ifdef _WIN32
     // Decommitted pages read back as zero once committed again, and stay out
     // of the working set until touched.
-    if (!VirtualFree(pointer, size, MEM_DECOMMIT) ||
-        VirtualAlloc(pointer, size, MEM_COMMIT, PAGE_READWRITE) == nullptr) {
+    // If the decommit fails the pages are still there: clear them. If the
+    // commit after it fails they are gone, and the dispatcher would fault on
+    // them: stop here with a message instead.
+    if (!VirtualFree(pointer, size, MEM_DECOMMIT)) {
         std::memset(pointer, 0, size);
+        return;
     }
+    ASSERT_MSG(VirtualAlloc(pointer, size, MEM_COMMIT, PAGE_READWRITE) != nullptr,
+               "cannot recommit the fast dispatch table");
 #else
     if (madvise(pointer, size, MADV_DONTNEED) != 0) std::memset(pointer, 0, size);
 #endif
@@ -294,8 +297,8 @@ void FreeZeroPages(void* pointer, size_t size) {
 }
 
 void BlockOfCode::EnsurePatchLocationSize(CodePtr begin, size_t size) {"""
-CODE_REPLACEMENTS = [(CODE_OLD, CODE_NEW), (CODE_POOL_OLD, CODE_POOL_NEW),
-                     (CODE_MEMSET_OLD, CODE_MEMSET_NEW), (CODE_PAGES_OLD, CODE_PAGES_NEW)]
+CODE_REPLACEMENTS = [(CODE_OLD, CODE_NEW), (CODE_MEMSET_OLD, CODE_MEMSET_NEW),
+                     (CODE_PAGES_OLD, CODE_PAGES_NEW)]
 
 # Exclusive monitor: the translator gives every live Jit its own processor id
 # (two threads sharing one overwrote each other's reservation and saved LDXR

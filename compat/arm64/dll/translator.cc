@@ -41,6 +41,7 @@
 #include "dynarmic/interface/A64/a64.h"
 #include "dynarmic/interface/A64/config.h"
 #include "dynarmic/interface/exclusive_monitor.h"
+#include "dynarmic/backend/x64/exclusive_monitor_friend.h"
 
 namespace A64 = Dynarmic::A64;
 
@@ -264,19 +265,55 @@ size_t LiveProcessorIds() {
 // --- WFE / SEV -----------------------------------------------------------------
 // dynarmic raises the hint instructions to ExceptionRaised (our A64 build's
 // translation options hook them). On hardware, WFE sleeps until an event: a
-// SEV, the local monitor being cleared (another core's store to the reserved
-// line), or Linux's event stream (every 100 us); a WFE spin-wait costs no CPU.
-// As a no-op it burned a whole core for as long as the wait lasted. Here: a
-// per-thread event register (SEVL, or a SEV since the last WFE), a global SEV
-// epoch that SEV and every successful store-exclusive advance while someone
-// waits, and a bounded wait on it (a plain-store release cannot wake a waiter,
-// so the wait is at most 1 ms after a few cheap yields).
-std::atomic<uint64_t> g_sev_epoch{0};
-std::atomic<int> g_wfe_waiters{0};
+// SEV, the PE's exclusive monitor being cleared (another core's store to the
+// reserved granule), or Linux's event stream (every 100 us); a WFE spin-wait
+// costs no CPU. As a no-op it burned a whole core for as long as the wait
+// lasted. Here (Env::WaitForEvent):
+//  - an event is: the thread's event register (SEVL; a SEV since its last
+//    WFE), or its Jit's reservation in the global monitor being clear (no
+//    LDXR before the WFE, or another thread's successful store-exclusive to
+//    the granule cleared it). Then WFE returns at once.
+//  - otherwise, for the first ~1 ms of a wait (consecutive WFEs at one PC), it
+//    polls for an event with pauses and yields; after that it blocks on the
+//    reservation granule's bucket of a small hashed table, which a
+//    successful store-exclusive to that granule and SEV wake. A plain-store
+//    release (STLR) cannot wake it: that block ends on the WaitOnAddress
+//    timeout, one timer tick (1-16 ms at the default timer resolution).
+constexpr uint64_t kNoReservation = 0xDEAD'DEAD'DEAD'DEADull;  // dynarmic's INVALID_EXCLUSIVE_ADDRESS
+struct WfeBucket {
+  std::atomic<uint64_t> epoch{0};
+  std::atomic<int> waiters{0};
+  char pad[64 - sizeof(std::atomic<uint64_t>) - sizeof(std::atomic<int>)];
+};
+WfeBucket g_wfe_buckets[64];
+std::atomic<int> g_wfe_waiters{0};    // in all buckets
+std::atomic<uint64_t> g_sev_count{0};  // SEVs so far
 
-void SignalEvent() {
-  g_sev_epoch.fetch_add(1, std::memory_order_acq_rel);
-  WakeByAddressAll(&g_sev_epoch);
+WfeBucket& BucketFor(uint64_t address) { return g_wfe_buckets[(address >> 6) & 63]; }
+
+void WakeBucket(WfeBucket& b) {
+  b.epoch.fetch_add(1, std::memory_order_seq_cst);
+  WakeByAddressAll(&b.epoch);
+}
+
+// A successful store-exclusive to `address` (under the monitor's lock, after
+// it cleared the reservations on it): wake the WFE waiters of its granule.
+// The fence pairs with the waiter's increment before it re-checks its
+// reservation, so neither side misses the other. Waking happens only when
+// someone waits on that granule's bucket, so the lock is rarely held longer.
+void StoreExclusiveEvent(uint64_t address) {
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+  if (g_wfe_waiters.load(std::memory_order_relaxed) == 0) return;
+  WfeBucket& b = BucketFor(address);
+  if (b.waiters.load(std::memory_order_relaxed) != 0) WakeBucket(b);
+}
+
+void SignalEvent() {  // SEV: every PE's event register
+  g_sev_count.fetch_add(1, std::memory_order_seq_cst);
+  if (g_wfe_waiters.load(std::memory_order_seq_cst) == 0) return;
+  for (WfeBucket& b : g_wfe_buckets) {
+    if (b.waiters.load(std::memory_order_relaxed) != 0) WakeBucket(b);
+  }
 }
 
 // The QPC counter as CNTPCT_EL0 (CNTFRQ_EL0 is set to its frequency).
@@ -473,7 +510,7 @@ class Env final : public A64::UserCallbacks {
     depth_ = 0;
     fpcr_ = fpsr_ = 0;
     event_ = false;
-    wfe_streak_ = 0;
+    wait_pc_ = 0;
     tid_ = GetCurrentThreadId();
     if (ProfilePeriodMs() > 0) {
       DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &thread_, 0,
@@ -506,10 +543,16 @@ class Env final : public A64::UserCallbacks {
   // middle of guest code (a Jit still marked running).
   bool Reusable() const { return depth_ == 0; }
 
-  // Going into the pool: the stack's contents are dead, so its pages leave
-  // the working set (they stay committed; a later touch reads zero or stale).
+  // Going into the pool: the stack's contents are dead, so its pages are
+  // decommitted (out of the working set and the commit charge; the no-access
+  // guard pages at its low end stay as they are). Unpark() commits them again
+  // for the next thread; false if the system cannot (the Env is then freed).
   void Park() {
-    VirtualAlloc(stack_base_ + kGuardSize, kStackSize - kGuardSize, MEM_RESET, PAGE_READWRITE);
+    VirtualFree(stack_base_ + kGuardSize, kStackSize - kGuardSize, MEM_DECOMMIT);
+  }
+  bool Unpark() {
+    return VirtualAlloc(stack_base_ + kGuardSize, kStackSize - kGuardSize, MEM_COMMIT,
+                        PAGE_READWRITE) != nullptr;
   }
 
   // One Jit per nesting depth: dynarmic's Run() is not reentrant, so a
@@ -605,15 +648,14 @@ class Env final : public A64::UserCallbacks {
     counters_.excl_writes.Bump();
     bool ok = __atomic_compare_exchange_n(reinterpret_cast<T*>(a), &expected, value, false,
                                           __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-    StoreExclusiveDone(ok);
+    StoreExclusiveDone(ok, a);
     return ok;
   }
-  void StoreExclusiveDone(bool ok) {
+  void StoreExclusiveDone(bool ok, uint64_t a) {
     if (!ok) {
       counters_.excl_cas_failed.Bump();
-    } else if (g_wfe_waiters.load(std::memory_order_relaxed) != 0) {
-      // A store-exclusive clears other cores' monitors: an event for WFE.
-      SignalEvent();
+    } else {
+      StoreExclusiveEvent(a);  // it cleared other PEs' monitors: an event for WFE
     }
   }
   bool MemoryWriteExclusive8(uint64_t a, std::uint8_t v, std::uint8_t e) override { return Cas(a, v, e); }
@@ -627,7 +669,7 @@ class Env final : public A64::UserCallbacks {
     U128 value = (static_cast<U128>(v[1]) << 64) | v[0];
     bool ok = __atomic_compare_exchange_n(reinterpret_cast<U128*>(a), &expected, value, false,
                                           __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);  // cmpxchg16b
-    StoreExclusiveDone(ok);
+    StoreExclusiveDone(ok, a);
     return ok;
   }
 
@@ -682,7 +724,7 @@ class Env final : public A64::UserCallbacks {
       case A64::Exception::WaitForInterrupt:
       case A64::Exception::WaitForEvent:
         counters_.hints.Bump();
-        WaitForEvent();
+        WaitForEvent(pc);
         return;
       case A64::Exception::SendEvent:
         counters_.hints.Bump();
@@ -714,32 +756,46 @@ class Env final : public A64::UserCallbacks {
   // a guest waiting for it to advance spun forever).
   std::uint64_t GetCNTPCT() override { return QpcNow(); }
 
-  // WFE: return at once if the event register is set (clearing it); else
-  // wait for a SEV epoch change: a few yields first, then up to 1 ms per WFE
-  // once the thread keeps waiting (the guest re-checks its condition after
-  // every WFE, as it must on hardware).
-  void WaitForEvent() {
-    const uint64_t epoch = g_sev_epoch.load(std::memory_order_acquire);
-    if (event_ || epoch != seen_epoch_) {  // SEVL, or an event since the last WFE
+  // WFE (see WFE / SEV above). Returns when there is an event, or after a
+  // bounded poll or block: the guest re-checks its condition after every WFE,
+  // as it must on hardware.
+  void WaitForEvent(uint64_t pc) {
+    const volatile uint64_t* slot = Dynarmic::GetExclusiveMonitorAddressPointer(
+        &Monitor(), ids_[depth_ > 0 ? depth_ - 1 : 0]);
+    auto event = [&](uint64_t reserved, uint64_t sevs) {
+      return *slot != reserved || g_sev_count.load(std::memory_order_seq_cst) != sevs;
+    };
+    const uint64_t sevs = g_sev_count.load(std::memory_order_seq_cst);
+    const uint64_t reserved = *slot;
+    if (event_ || sevs != seen_sevs_ || reserved == kNoReservation) {
       event_ = false;
-      seen_epoch_ = epoch;
+      seen_sevs_ = sevs;
+      wait_pc_ = 0;  // the wait (if any) is over
       return;
     }
     const uint64_t now = QpcNow();
-    if (now - last_wfe_ > QpcFrequency() / 500) wfe_streak_ = 0;  // a new wait (> 2 ms apart)
+    // A new wait: another WFE, or this one after a gap (the guest did more).
+    if (pc != wait_pc_ || now - last_wfe_ > QpcFrequency() / 500) {
+      wait_pc_ = pc;
+      wait_start_ = now;
+    }
     last_wfe_ = now;
-    if (++wfe_streak_ <= 16) {
-      if (!SwitchToThread()) YieldProcessor();
+    if (now - wait_start_ < QpcFrequency() / 1000) {  // the first ~1 ms: poll
+      for (int i = 0; i < 64; ++i) {
+        if (event(reserved, sevs)) return;
+        YieldProcessor();
+      }
+      SwitchToThread();
       return;
     }
     counters_.waits.Bump();
-    g_wfe_waiters.fetch_add(1, std::memory_order_acq_rel);
-    uint64_t compare = epoch;
-    if (g_sev_epoch.load(std::memory_order_acquire) == epoch) {
-      WaitOnAddress(&g_sev_epoch, &compare, sizeof(compare), 1);
-    }
-    g_wfe_waiters.fetch_sub(1, std::memory_order_acq_rel);
-    seen_epoch_ = g_sev_epoch.load(std::memory_order_acquire);  // woken: consumed
+    WfeBucket& b = BucketFor(reserved);
+    g_wfe_waiters.fetch_add(1, std::memory_order_seq_cst);
+    b.waiters.fetch_add(1, std::memory_order_seq_cst);
+    uint64_t compare = b.epoch.load(std::memory_order_seq_cst);
+    if (!event(reserved, sevs)) WaitOnAddress(&b.epoch, &compare, sizeof(compare), 1);
+    b.waiters.fetch_sub(1, std::memory_order_seq_cst);
+    g_wfe_waiters.fetch_sub(1, std::memory_order_seq_cst);
     last_wfe_ = QpcNow();
   }
 
@@ -957,9 +1013,10 @@ class Env final : public A64::UserCallbacks {
   std::vector<size_t> ids_;    // jits_[i]'s exclusive monitor processor id
   bool used_before_ = false;   // a thread has had it (its TLS block is not fresh)
   bool event_ = false;         // the WFE event register (SEVL / SEV)
-  uint64_t seen_epoch_ = 0;    // the SEV epoch this thread's last WFE consumed
+  uint64_t seen_sevs_ = 0;     // the SEV count this thread's last WFE consumed
+  uint64_t wait_pc_ = 0;       // the WFE of the current wait, 0 if none
+  uint64_t wait_start_ = 0;    // when that wait began (QPC)
   uint64_t last_wfe_ = 0;
-  uint32_t wfe_streak_ = 0;
 
  public:
   // For the profiler (another thread reads these while this one runs).
@@ -984,7 +1041,8 @@ size_t EnvPoolLimit() {
     char v[8] = {};
     DWORD n = GetEnvironmentVariableA("GESHER_ARM64_ENV_POOL", v, sizeof(v));
     if (n == 0 || n >= sizeof(v)) return size_t{8};
-    return static_cast<size_t>(std::atoi(v));
+    const int limit = std::atoi(v);
+    return static_cast<size_t>(limit < 0 ? 0 : limit > 64 ? 64 : limit);
   }();
   return limit;
 }
@@ -1014,6 +1072,10 @@ Env* ThreadEnv() {
         env = g_env_pool.back();
         g_env_pool.pop_back();
       }
+    }
+    if (env != nullptr && !env->Unpark()) {
+      delete env;
+      env = nullptr;
     }
     if (env == nullptr) {
       env = new Env();
@@ -1346,6 +1408,7 @@ void PrintTop(const char* what, std::array<ProfileSlot, N>& slots, uint32_t samp
 }
 
 struct ProfileState {
+  DWORD tid = 0;               // the thread these numbers are about
   uint64_t user = 0;           // the thread's user time at the last tick (100 ns)
   uint64_t period_user = 0;    // ... at the start of the report period
   ULONGLONG busy_until = 0;    // sample on ticks until then (user time moved)
@@ -1389,6 +1452,11 @@ DWORD WINAPI ProfilerThread(void*) {
       if (env->thread_ == nullptr) continue;
       bool fresh = states.find(env) == states.end();
       ProfileState& st = states[env];  // allocate before suspending anything
+      if (!fresh && st.tid != env->tid_) {  // a pooled Env, now another thread's
+        st = ProfileState{};
+        fresh = true;
+      }
+      st.tid = env->tid_;
       const uint64_t user = UserTime(env->thread_);
       if (fresh) {
         st.user = st.period_user = user;

@@ -291,6 +291,41 @@ int main(int argc, char** argv) {
     Check("128 threads x 1000 guest LL/SC increments == 128000", many == kMany * 1000);
   }
 
+  // 9. A WFE spin-wait (LDAXR; CBNZ; WFE; B) ends when another thread stores
+  //    to the word with a plain store (no event: WFE's bounded wait), and
+  //    sleeps rather than spins meanwhile.
+  //   L: ldaxr w1,[x0]; cbnz w1,done; wfe; b L; done: mov w0,w1; ret
+  {
+    uint32_t code[] = {0x885FFC01u, 0x35000061u, 0xD503205Fu, 0x17FFFFFDu, 0x2A0103E0u, kRet};
+    void* fn = GuestPage(code, 6);
+    api->add_code(fn, sizeof(code), "wfe_wait");
+    static volatile uint32_t flag = 0;
+    HANDLE setter = CreateThread(
+        nullptr, 0,
+        [](void*) -> DWORD {
+          Sleep(300);
+          flag = 7;
+          return 0;
+        },
+        nullptr, 0, nullptr);
+    FILETIME c, e, k0, u0, k1, u1;
+    GetThreadTimes(GetCurrentThread(), &c, &e, &k0, &u0);
+    auto t0 = std::chrono::steady_clock::now();
+    uint64_t args[1] = {reinterpret_cast<uint64_t>(&flag)};
+    uint64_t r = api->call(fn, args, 1);
+    double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    GetThreadTimes(GetCurrentThread(), &c, &e, &k1, &u1);
+    auto ticks = [](const FILETIME& f) {
+      return (static_cast<uint64_t>(f.dwHighDateTime) << 32) | f.dwLowDateTime;
+    };
+    double cpu_ms = static_cast<double>(ticks(u1) - ticks(u0) + ticks(k1) - ticks(k0)) / 1e4;
+    WaitForSingleObject(setter, INFINITE);
+    CloseHandle(setter);
+    std::printf("INFO  WFE wait: %.0f ms elapsed, %.0f ms CPU\n", ms, cpu_ms);
+    Check("WFE spin-wait ends on a plain store (returns 7)", r == 7 && ms < 5000);
+    Check("WFE spin-wait mostly sleeps (CPU < half the wait)", cpu_ms < ms / 2);
+  }
+
   std::printf("\n");
   if (failures == 0) {
     std::printf("arm64_smoke_test all passed\n");
