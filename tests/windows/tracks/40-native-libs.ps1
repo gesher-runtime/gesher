@@ -23,6 +23,12 @@ Check 'ELF loader: load a trivial .so and call it' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/trivial.so")
 } @('elf_load_test all passed')
 
+# textrel.so contains dynamic relocations into a read-only pointer table.
+# Its constructor and selftest both require the relocated pointers to work.
+Check 'ELF loader: TEXTREL pages relocate before constructors and selftest' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/textrel.so")
+} @('gesher_selftest() reports no failures', 'elf_load_test all passed')
+
 # A thread that runs loaded code has its stack committed (compat/elf/tls.cc,
 # CommitStack): code built for Linux allocates large frames without probing
 # (libonnxruntime.so's `sub $0x119c0,%rsp`), and with %rsp past the guard page

@@ -63,6 +63,14 @@ jobs:
           "$cc" -shared -fPIC -O2 -fno-stack-protector -nostdlib \
             -Wl,-soname,libtrivial.so -Wl,--hash-style=both \
             -o dist-native/trivial.so tests/native/trivial.c
+          # A real read-only relocation, including constructor access to its
+          # relocated pointer table. Fail if the linker silently removes TEXTREL.
+          "$cc" -shared -fPIC -O2 -fno-stack-protector -nostdlib \
+            -Wall -Wextra -Werror -Wl,-soname,libtextrel.so -Wl,--hash-style=both \
+            -Wl,-z,notext -o dist-native/textrel.so tests/native/textrel.c
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
+            -d dist-native/textrel.so > "$RUNNER_TEMP/textrel-native.dynamic"
+          grep -F '(TEXTREL)' "$RUNNER_TEMP/textrel-native.dynamic"
           # Step 2: a library using bionic's libc, libm, libdl, liblog and
           # pthread through the shim. No stack protector and no thread_local,
           # so it does not touch %fs (ADR 0014).
