@@ -360,15 +360,41 @@ class Codec {
   Codec(JNIEnv* env, jobject thiz, const CodecEntry& entry)
       : entry_(entry), self_(std::make_shared<WeakRef>(env, thiz)) {}
   ~Codec() {
-    StopWorker();
-    if (input_surface_ != nullptr) input_surface_->Abandon();
+    Release();
     if (window_ != nullptr) ANativeWindow_release(window_);
+  }
+
+  void Release() {
+    // An admitted JNI call can still hold this Codec. Retire and wake its
+    // blocking calls now, rather than deferring shutdown to the last owner.
+    std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      if (released_) return;
+      released_ = true;
+      configured_ = false;
+    }
+    StopLocked();
+    if (input_surface_ != nullptr) input_surface_->Abandon();
+    ANativeWindow* window;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      window = window_;
+      window_ = nullptr;
+      reader_.reset();
+    }
+    if (window != nullptr) ANativeWindow_release(window);
   }
 
   const CodecEntry& entry() const { return entry_; }
 
   bool Configure(JNIEnv* env, Format format, jobject surface, std::string* error) {
+    std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
     std::lock_guard<std::mutex> lock(mu_);
+    if (released_) {
+      *error = "configure() after release()";
+      return false;
+    }
     std::string mime = format.Mime();
     if (!mime.empty() && mime != entry_.mime) {
       *error = "format " + mime + " for " + entry_.name;
@@ -397,7 +423,9 @@ class Codec {
   }
 
   void SetSurface(JNIEnv* env, jobject surface) {
+    std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
     std::lock_guard<std::mutex> lock(mu_);
+    if (released_) return;
     SetSurfaceLocked(env, surface);
   }
 
@@ -416,12 +444,13 @@ class Codec {
   // --- Encoders: the input Surface, the end of its stream, parameters.
 
   jobject CreateInputSurface(JNIEnv* env, std::string* error) {
+    std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
     std::lock_guard<std::mutex> lock(mu_);
     if (!entry_.encoder || !entry_.video) {
       *error = "createInputSurface() is for video encoders";
       return nullptr;
     }
-    if (!configured_ || started_) {
+    if (released_ || !configured_ || started_) {
       *error = "createInputSurface() must be called after configure() and before start()";
       return nullptr;
     }
@@ -436,7 +465,7 @@ class Codec {
 
   bool SignalEndOfInputStream(std::string* error) {
     std::lock_guard<std::mutex> lock(mu_);
-    if (input_surface_ == nullptr) {
+    if (released_ || input_surface_ == nullptr) {
       *error = "signalEndOfInputStream() without an input surface";
       return false;
     }
@@ -447,19 +476,22 @@ class Codec {
 
   void RequestSyncFrame() {
     std::lock_guard<std::mutex> lock(mu_);
+    if (released_) return;
     force_key_ = true;
   }
 
   void SetAsync(bool async) {
     std::lock_guard<std::mutex> lock(mu_);
+    if (released_) return;
     async_ = async;
   }
 
   void EnableFrameRendered(bool enable) { frame_rendered_ = enable; }
 
   bool Start(std::string* error) {
+    std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
     std::unique_lock<std::mutex> lock(mu_);
-    if (!configured_) {
+    if (released_ || !configured_) {
       *error = "start() before configure()";
       return false;
     }
@@ -468,6 +500,7 @@ class Codec {
     started_ = true;
     if (!worker_.joinable()) {
       quit_ = false;
+      worker_running_ = true;
       worker_ = std::thread([this] { Run(); });
     }
     if (async_ && input_surface_ == nullptr) {
@@ -483,9 +516,15 @@ class Codec {
   }
 
   void Stop() {
+    std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
+    StopLocked();
+  }
+
+  // Start, stop, reset and release serialize worker ownership with
+  // lifecycle_mu_. Blocking dequeues/flushes never take that mutex.
+  void StopLocked() {
     StopWorker();
     std::lock_guard<std::mutex> lock(mu_);
-    started_ = false;
     video_enc_.reset();
     audio_enc_.reset();
     surface_frames_.clear();
@@ -504,21 +543,30 @@ class Codec {
     output_known_ = false;
     format_pending_ = false;
     config_.clear();
+    flush_requested_ = false;
+    flushed_ = false;
   }
 
   void Reset() {
-    Stop();
+    std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
+    StopLocked();
     std::lock_guard<std::mutex> lock(mu_);
     configured_ = false;
   }
 
   void Flush() {
     std::unique_lock<std::mutex> lock(mu_);
+    if (released_ || !started_ || !worker_running_) return;
+    const uint64_t generation = ++wait_generation_;
     // The worker finishes the sample it is decoding, then flushes.
     flush_requested_ = true;
     work_.clear();
     cv_.notify_all();
-    done_cv_.wait(lock, [this] { return !flush_requested_ || !worker_.joinable(); });
+    done_cv_.notify_all();
+    done_cv_.wait(lock, [this, generation] {
+      return generation != wait_generation_ || quit_ || !worker_running_ || !flush_requested_;
+    });
+    if (generation != wait_generation_ || quit_ || !started_ || released_) return;
     ready_.clear();
     for (Slot& s : inputs_) s.client = false;
     for (Slot& s : outputs_) {
@@ -531,6 +579,7 @@ class Codec {
 
   int DequeueInput(int64_t timeout_us) {
     std::unique_lock<std::mutex> lock(mu_);
+    const uint64_t generation = wait_generation_;
     if (input_surface_ != nullptr) return kInfoTryAgainLater;  // the input is the Surface
     auto free_slot = [this] {
       for (int i = 0; i < kSlots; i++) {
@@ -539,20 +588,24 @@ class Codec {
       return -1;
     };
     int i = -1;
-    auto ready = [&] { return quit_ || !started_ || (i = free_slot()) >= 0; };
+    auto ready = [&] {
+      return generation != wait_generation_ || quit_ || !started_ || (i = free_slot()) >= 0;
+    };
     if (timeout_us < 0) {
       cv_.wait(lock, ready);
     } else {
       cv_.wait_for(lock, std::chrono::microseconds(timeout_us), ready);
     }
-    if (i < 0) return kInfoTryAgainLater;
+    if (generation != wait_generation_ || quit_ || !started_ || released_ || i < 0) {
+      return kInfoTryAgainLater;
+    }
     inputs_[i].client = true;
     return i;
   }
 
   bool QueueInput(int index, int offset, int size, int64_t time_us, int flags, std::string* error) {
     std::lock_guard<std::mutex> lock(mu_);
-    if (index < 0 || index >= kSlots || !inputs_[index].client) {
+    if (released_ || !started_ || index < 0 || index >= kSlots || !inputs_[index].client) {
       *error = "invalid input buffer index " + std::to_string(index);
       return false;
     }
@@ -573,12 +626,17 @@ class Codec {
 
   int DequeueOutput(JNIEnv* env, jobject info, int64_t timeout_us) {
     std::unique_lock<std::mutex> lock(mu_);
-    auto ready = [this] { return quit_ || !started_ || format_pending_ || !ready_.empty() || failed_; };
+    const uint64_t generation = wait_generation_;
+    auto ready = [this, generation] {
+      return generation != wait_generation_ || quit_ || !started_ || format_pending_ ||
+             !ready_.empty() || failed_;
+    };
     if (timeout_us < 0) {
       cv_.wait(lock, ready);
     } else {
       cv_.wait_for(lock, std::chrono::microseconds(timeout_us), ready);
     }
+    if (generation != wait_generation_ || quit_ || !started_ || released_) return kInfoTryAgainLater;
     if (format_pending_) {
       format_pending_ = false;
       return kInfoOutputFormatChanged;
@@ -761,13 +819,17 @@ class Codec {
   void StopWorker() {
     {
       std::lock_guard<std::mutex> lock(mu_);
+      started_ = false;
       quit_ = true;
+      ++wait_generation_;
       cv_.notify_all();
       done_cv_.notify_all();
     }
     if (worker_.joinable()) worker_.join();
     std::lock_guard<std::mutex> lock(mu_);
-    quit_ = false;
+    worker_running_ = false;
+    flush_requested_ = false;
+    done_cv_.notify_all();
   }
 
   // With mu_ held: posts an event to Java (from any thread).
@@ -1338,9 +1400,13 @@ class Codec {
 
   CodecEntry entry_;
   std::shared_ptr<WeakRef> self_;
+  std::mutex lifecycle_mu_;
   std::mutex mu_;
   std::condition_variable cv_, done_cv_;
   std::thread worker_;
+  bool worker_running_ = false;
+  bool released_ = false;
+  uint64_t wait_generation_ = 0;
   bool quit_ = false;
   bool configured_ = false, started_ = false, flushed_ = false, async_ = false;
   bool flush_requested_ = false;
@@ -1376,8 +1442,18 @@ class Codec {
   int64_t last_out_us_ = 0;
 };
 
-Codec* GetCodec(JNIEnv* env, jobject thiz, bool throw_if_null = true) {
-  auto* c = reinterpret_cast<Codec*>(env->GetLongField(thiz, gJ.context));
+// Protect the Java field and its heap holder only. Never stop a worker, wait
+// for a callback, or invoke Java while holding this context mutex.
+std::mutex gCodecContextLock;
+using CodecOwner = std::shared_ptr<Codec>;
+
+CodecOwner GetCodec(JNIEnv* env, jobject thiz, bool throw_if_null = true) {
+  CodecOwner c;
+  {
+    std::lock_guard<std::mutex> lock(gCodecContextLock);
+    auto* holder = reinterpret_cast<CodecOwner*>(env->GetLongField(thiz, gJ.context));
+    if (holder != nullptr) c = *holder;
+  }
   if (c == nullptr && throw_if_null) jniThrow(env, "java/lang/IllegalStateException", nullptr);
   return c;
 }
@@ -1443,26 +1519,34 @@ void JNICALL MC_setup(JNIEnv* env, jobject thiz, jstring name, jboolean name_is_
     }
     return;
   }
-  env->SetLongField(thiz, gJ.context, reinterpret_cast<jlong>(new Codec(env, thiz, *entry)));
+  auto holder = std::make_unique<CodecOwner>(std::make_shared<Codec>(env, thiz, *entry));
+  {
+    std::lock_guard<std::mutex> lock(gCodecContextLock);
+    env->SetLongField(thiz, gJ.context, reinterpret_cast<jlong>(holder.release()));
+  }
 }
 
 void JNICALL MC_release(JNIEnv* env, jobject thiz) {
-  auto* c = GetCodec(env, thiz, false);
-  env->SetLongField(thiz, gJ.context, 0);
-  delete c;
+  std::unique_ptr<CodecOwner> holder;
+  {
+    std::lock_guard<std::mutex> lock(gCodecContextLock);
+    holder.reset(reinterpret_cast<CodecOwner*>(env->GetLongField(thiz, gJ.context)));
+    env->SetLongField(thiz, gJ.context, 0);
+  }
+  if (holder != nullptr && *holder != nullptr) (*holder)->Release();
 }
 
 void JNICALL MC_reset(JNIEnv* env, jobject thiz) {
-  if (Codec* c = GetCodec(env, thiz)) c->Reset();
+  if (auto c = GetCodec(env, thiz)) c->Reset();
 }
 
 void JNICALL MC_setCallback(JNIEnv* env, jobject thiz, jobject cb) {
-  if (Codec* c = GetCodec(env, thiz)) c->SetAsync(cb != nullptr);
+  if (auto c = GetCodec(env, thiz)) c->SetAsync(cb != nullptr);
 }
 
 void JNICALL MC_configure(JNIEnv* env, jobject thiz, jobjectArray keys, jobjectArray values,
                           jobject surface, jobject crypto, jobject, jint flags) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   if (c == nullptr) return;
   if (crypto != nullptr) {
     ThrowCodecException(env, -1, "MediaCrypto (DRM) is not supported on Gesher");
@@ -1480,27 +1564,27 @@ void JNICALL MC_configure(JNIEnv* env, jobject thiz, jobjectArray keys, jobjectA
 }
 
 void JNICALL MC_setSurface(JNIEnv* env, jobject thiz, jobject surface) {
-  if (Codec* c = GetCodec(env, thiz)) c->SetSurface(env, surface);
+  if (auto c = GetCodec(env, thiz)) c->SetSurface(env, surface);
 }
 
 void JNICALL MC_start(JNIEnv* env, jobject thiz) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   if (c == nullptr) return;
   std::string error;
   if (!c->Start(&error)) jniThrow(env, "java/lang/IllegalStateException", error.c_str());
 }
 
 void JNICALL MC_stop(JNIEnv* env, jobject thiz) {
-  if (Codec* c = GetCodec(env, thiz)) c->Stop();
+  if (auto c = GetCodec(env, thiz)) c->Stop();
 }
 
 void JNICALL MC_flush(JNIEnv* env, jobject thiz) {
-  if (Codec* c = GetCodec(env, thiz)) c->Flush();
+  if (auto c = GetCodec(env, thiz)) c->Flush();
 }
 
 void JNICALL MC_queueInputBuffer(JNIEnv* env, jobject thiz, jint index, jint offset, jint size,
                                  jlong time_us, jint flags) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   if (c == nullptr) return;
   std::string error;
   if (!c->QueueInput(index, offset, size, time_us, flags, &error)) {
@@ -1509,18 +1593,18 @@ void JNICALL MC_queueInputBuffer(JNIEnv* env, jobject thiz, jint index, jint off
 }
 
 jint JNICALL MC_dequeueInputBuffer(JNIEnv* env, jobject thiz, jlong timeout_us) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   return c != nullptr ? c->DequeueInput(timeout_us) : kInfoTryAgainLater;
 }
 
 jint JNICALL MC_dequeueOutputBuffer(JNIEnv* env, jobject thiz, jobject info, jlong timeout_us) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   return c != nullptr ? c->DequeueOutput(env, info, timeout_us) : kInfoTryAgainLater;
 }
 
 void JNICALL MC_releaseOutputBuffer(JNIEnv* env, jobject thiz, jint index, jboolean render,
                                     jboolean, jlong time_ns) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   if (c == nullptr) return;
   std::string error;
   if (!c->ReleaseOutput(index, render, time_ns, &error)) {
@@ -1529,14 +1613,14 @@ void JNICALL MC_releaseOutputBuffer(JNIEnv* env, jobject thiz, jint index, jbool
 }
 
 void JNICALL MC_signalEndOfInputStream(JNIEnv* env, jobject thiz) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   if (c == nullptr) return;
   std::string error;
   if (!c->SignalEndOfInputStream(&error)) jniThrow(env, "java/lang/IllegalStateException", error.c_str());
 }
 
 jobject JNICALL MC_createInputSurface(JNIEnv* env, jobject thiz) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   if (c == nullptr) return nullptr;
   std::string error;
   jobject s = c->CreateInputSurface(env, &error);
@@ -1545,23 +1629,23 @@ jobject JNICALL MC_createInputSurface(JNIEnv* env, jobject thiz) {
 }
 
 jobject JNICALL MC_getFormatNative(JNIEnv* env, jobject thiz, jboolean input) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   if (c == nullptr) return nullptr;
   return input ? c->InputFormatMap(env) : c->OutputFormatMap(env);
 }
 
 jobject JNICALL MC_getOutputFormatNative(JNIEnv* env, jobject thiz, jint) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   return c != nullptr ? c->OutputFormatMap(env) : nullptr;
 }
 
 jobjectArray JNICALL MC_getBuffers(JNIEnv* env, jobject thiz, jboolean input) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   return c != nullptr ? c->Buffers(env, input) : nullptr;
 }
 
 jobject JNICALL MC_getBuffer(JNIEnv* env, jobject thiz, jboolean input, jint index) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   if (c == nullptr) return nullptr;
   if (!input) return c->OutputBuffer(env, index);
   jobject b = c->InputBuffer(env, index);
@@ -1569,18 +1653,18 @@ jobject JNICALL MC_getBuffer(JNIEnv* env, jobject thiz, jboolean input, jint ind
 }
 
 jobject JNICALL MC_getImage(JNIEnv* env, jobject thiz, jboolean input, jint index) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   if (c == nullptr) return nullptr;
   return c->OutputImage(env, index, input);
 }
 
 jstring JNICALL MC_getCanonicalName(JNIEnv* env, jobject thiz) {
-  Codec* c = GetCodec(env, thiz);
+  auto c = GetCodec(env, thiz);
   return c != nullptr ? env->NewStringUTF(c->entry().name.c_str()) : nullptr;
 }
 
 void JNICALL MC_setParameters(JNIEnv* env, jobject thiz, jobjectArray keys, jobjectArray) {
-  Codec* c = GetCodec(env, thiz, false);
+  auto c = GetCodec(env, thiz, false);
   if (c == nullptr || keys == nullptr) return;
   for (jsize i = 0; i < env->GetArrayLength(keys); i++) {
     auto k = static_cast<jstring>(env->GetObjectArrayElement(keys, i));
@@ -1591,7 +1675,7 @@ void JNICALL MC_setParameters(JNIEnv* env, jobject thiz, jobjectArray keys, jobj
 void JNICALL MC_setVideoScalingMode(JNIEnv*, jobject, jint) {}
 
 void JNICALL MC_enableOnFrameRenderedListener(JNIEnv* env, jobject thiz, jboolean enable) {
-  if (Codec* c = GetCodec(env, thiz)) c->EnableFrameRendered(enable);
+  if (auto c = GetCodec(env, thiz)) c->EnableFrameRendered(enable);
 }
 
 jobject JNICALL MC_getMetrics(JNIEnv* env, jobject) {

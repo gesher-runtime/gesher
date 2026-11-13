@@ -1,0 +1,280 @@
+// Exact production lifecycle/dequeue methods. The decoder and JNI info sink
+// are boundaries; controlled CV scheduling permits a waiter to reacquire only
+// after stop/start has completed, just as a descheduled thread can do normally.
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <deque>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+using namespace std::chrono_literals;
+std::atomic<int> checks{0}, failures{0};
+void Check(bool ok, const char* why) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL codec waits: %s\n", why); }
+}
+struct Signal {
+  std::mutex mu;
+  std::condition_variable cv;
+  bool value = false;
+  void Set() { std::lock_guard<std::mutex> lock(mu); value = true; cv.notify_all(); }
+  bool Wait(std::chrono::milliseconds limit = 5s) {
+    std::unique_lock<std::mutex> lock(mu);
+    return cv.wait_for(lock, limit, [&] { return value; });
+  }
+};
+void Require(Signal& signal, const char* why) {
+  if (!signal.Wait()) { Check(false, why); std::fflush(stderr); std::_Exit(2); }
+}
+struct WaitGate { Signal waiting, woken, resume; bool pause = true; };
+thread_local WaitGate* gate = nullptr;
+class ControlledCondition {
+ public:
+  void notify_all() { cv_.notify_all(); }
+  template<class Predicate> void wait(std::unique_lock<std::mutex>& lock, Predicate ready) {
+    while (!ready()) {
+      if (gate) gate->waiting.Set();
+      cv_.wait(lock);
+      Pause(lock);
+    }
+  }
+  template<class Duration, class Predicate>
+  void wait_for(std::unique_lock<std::mutex>& lock, Duration duration, Predicate ready) {
+    auto end = std::chrono::steady_clock::now() + duration;
+    while (!ready()) {
+      if (gate) gate->waiting.Set();
+      bool timeout = cv_.wait_until(lock, end) == std::cv_status::timeout;
+      Pause(lock);
+      if (timeout) break;
+    }
+  }
+ private:
+  void Pause(std::unique_lock<std::mutex>& lock) {
+    if (!gate || !gate->pause) return;
+    lock.unlock();
+    gate->woken.Set();
+    Require(gate->resume, "waiting call may reacquire after lifecycle transition");
+    lock.lock();
+  }
+  std::condition_variable cv_;
+};
+
+constexpr int kSlots = 2, kInfoTryAgainLater = -1, kInfoOutputFormatChanged = -2;
+constexpr int kCbInputAvailable = 1;
+using jlong = int64_t;
+struct Info { int index_calls = 0; };
+using jobject = Info*;
+struct JNIEnv { void CallVoidMethod(jobject info, int, int, int, jlong, int) { ++info->index_calls; } };
+struct { int buffer_info_set = 1; } gJ;
+struct ANativeWindow { int releases = 0; };
+void ANativeWindow_release(ANativeWindow* window) { ++window->releases; }
+struct FakeInput { int abandonments = 0; void Abandon() { ++abandonments; } };
+struct Slot {
+  bool client = false;
+  int size = 0, flags = 0;
+  int64_t time_us = 0;
+  std::shared_ptr<int> frame;
+};
+class Codec {
+ public:
+  @DESTRUCTOR@
+  @RELEASE@
+  @START@
+  @STOP@
+  @STOP_LOCKED@
+  @RESET@
+  @FLUSH@
+  @DEQUEUE_INPUT@
+  @DEQUEUE_OUTPUT@
+  @STOP_WORKER@
+  bool InWork(int index) const {
+    return std::find(work_.begin(), work_.end(), index) != work_.end();
+  }
+  void PostLocked(int, int, jobject) { ++posted_; }
+  void Run() {
+    std::unique_lock<std::mutex> lock(mu_);
+    for (;;) {
+      cv_.wait(lock, [&] { return quit_ || (flush_requested_ && !stall_flush_); });
+      if (quit_) return;
+      flush_requested_ = false;
+      done_cv_.notify_all();
+    }
+  }
+  std::mutex lifecycle_mu_, mu_;
+  ControlledCondition cv_, done_cv_;
+  std::thread worker_;
+  bool quit_ = false, worker_running_ = false, released_ = false;
+  uint64_t wait_generation_ = 0;
+  bool configured_ = true, started_ = false, flushed_ = false, async_ = false;
+  bool flush_requested_ = false, failed_ = false, stall_flush_ = false;
+  bool surface_eos_ = false, enc_eos_sent_ = false, output_known_ = false, format_pending_ = false;
+  int posted_ = 0;
+  Slot inputs_[kSlots], outputs_[kSlots];
+  std::unique_ptr<int> video_enc_, audio_enc_, video_, audio_;
+  std::unique_ptr<FakeInput> input_surface_;
+  std::deque<int> surface_frames_, csd_, work_, ready_, config_;
+  ANativeWindow* window_ = nullptr;
+  std::shared_ptr<int> reader_;
+};
+
+void Start(Codec& codec) {
+  std::string error;
+  Check(codec.Start(&error), "configured receiver starts");
+}
+
+void RestartedDequeue(bool input) {
+  Codec codec;
+  Start(codec);
+  {
+    std::lock_guard<std::mutex> lock(codec.mu_);
+    for (auto& slot : codec.inputs_) slot.client = true;
+  }
+  WaitGate paused;
+  Signal finished;
+  std::atomic<int> result{-99};
+  JNIEnv env; Info info;
+  std::thread waiting([&] {
+    gate = &paused;
+    result = input ? codec.DequeueInput(-1) : codec.DequeueOutput(&env, &info, -1);
+    gate = nullptr;
+    finished.Set();
+  });
+  Require(paused.waiting, "dequeue waits for an ordinary unavailable buffer");
+  codec.Stop();
+  Require(paused.woken, "stop wakes the old dequeue");
+  Start(codec);
+  {
+    std::lock_guard<std::mutex> lock(codec.mu_);
+    codec.ready_.push_back(0);
+    codec.inputs_[0].client = false;
+  }
+  paused.resume.Set();
+  Require(finished, "old dequeue completes after immediate restart");
+  waiting.join();
+  Check(result == kInfoTryAgainLater, "old dequeue cannot consume a restarted codec's buffer");
+  {
+    std::lock_guard<std::mutex> lock(codec.mu_);
+    Check(input ? !codec.inputs_[0].client : !codec.outputs_[0].client,
+          "old dequeue does not take ownership from the new generation");
+  }
+  Check(info.index_calls == 0, "interrupted output dequeue does not publish a buffer info");
+}
+
+void RestartedFlush() {
+  Codec codec;
+  codec.stall_flush_ = true;
+  Start(codec);
+  WaitGate paused;
+  Signal finished;
+  std::thread waiting([&] {
+    gate = &paused;
+    codec.Flush();
+    gate = nullptr;
+    finished.Set();
+  });
+  Require(paused.waiting, "flush waits for the controlled decoder boundary");
+  codec.Stop();
+  Require(paused.woken, "stop interrupts the previous flush");
+  Start(codec);
+  {
+    std::lock_guard<std::mutex> lock(codec.mu_);
+    // The new decoder generation has completed its work before the old
+    // flush caller is permitted to reacquire the mutex.
+    codec.flush_requested_ = false;
+    codec.ready_.push_back(0);
+    codec.outputs_[0].client = true;
+    codec.inputs_[0].client = true;
+    codec.async_ = true;
+    codec.done_cv_.notify_all();
+  }
+  paused.resume.Set();
+  Require(finished, "interrupted flush returns after immediate restart");
+  waiting.join();
+  std::lock_guard<std::mutex> lock(codec.mu_);
+  Check(!codec.ready_.empty() && codec.outputs_[0].client && codec.inputs_[0].client,
+        "previous flush cannot clear the restarted codec's slots");
+  Check(!codec.flushed_, "previous flush cannot pause the restarted async codec");
+}
+
+#if HAS_RELEASE
+void ReleasedWait(int operation) {
+  Codec codec;
+  codec.stall_flush_ = true;
+  Start(codec);
+  for (auto& slot : codec.inputs_) slot.client = true;
+  WaitGate paused;
+  paused.pause = false;
+  Signal finished;
+  std::atomic<int> result{-99};
+  JNIEnv env; Info info;
+  std::thread waiting([&] {
+    gate = &paused;
+    if (operation == 0) result = codec.DequeueInput(-1);
+    if (operation == 1) result = codec.DequeueOutput(&env, &info, -1);
+    if (operation == 2) { codec.Flush(); result = kInfoTryAgainLater; }
+    gate = nullptr;
+    finished.Set();
+  });
+  Require(paused.waiting, "admitted receiver operation is blocked");
+  codec.Release();
+  Require(finished, "release completes an admitted blocking call before receiver destruction");
+  waiting.join();
+  Check(result == kInfoTryAgainLater, "release interrupts without delivering a new buffer");
+  std::string error;
+  Check(!codec.Start(&error), "an admitted caller cannot restart a released receiver");
+  codec.Release();
+  Check(!codec.worker_.joinable(), "repeated release cannot recreate or rejoin a worker");
+}
+
+void ReleaseResources() {
+  Codec codec;
+  ANativeWindow window;
+  codec.window_ = &window;
+  codec.reader_ = std::make_shared<int>(1);
+  std::weak_ptr<int> reader = codec.reader_;
+  codec.input_surface_ = std::make_unique<FakeInput>();
+  codec.Release();
+  Check(window.releases == 1 && codec.window_ == nullptr, "release drops output window immediately");
+  Check(reader.expired(), "release drops its reader reference");
+  Check(codec.input_surface_->abandonments == 1, "release retires the input callback boundary");
+  codec.Release();
+  Check(window.releases == 1 && codec.input_surface_->abandonments == 1,
+        "repeated release does not retire resources twice");
+}
+#endif
+
+void OrdinaryLifecycle() {
+  Codec codec;
+  Start(codec);
+  Check(codec.DequeueInput(0) == 0, "normal input slot still dequeues");
+  codec.Flush();
+  Check(codec.DequeueInput(0) == 0, "completed flush makes input slots reusable");
+  codec.Stop();
+  Check(codec.DequeueInput(0) == kInfoTryAgainLater, "stopped receiver cannot give a buffer");
+  Start(codec);
+  codec.Reset();
+  std::string error;
+  Check(!codec.Start(&error), "reset requires new configuration");
+}
+
+int main() {
+  OrdinaryLifecycle();
+  RestartedDequeue(true);
+  RestartedDequeue(false);
+  RestartedFlush();
+#if HAS_RELEASE
+  for (int operation = 0; operation != 3; ++operation) ReleasedWait(operation);
+  ReleaseResources();
+#endif
+  std::printf("codec wait contracts: %d checks, %d failures\n", checks.load(), failures.load());
+  return failures != 0;
+}

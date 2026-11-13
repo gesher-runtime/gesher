@@ -1,0 +1,163 @@
+// Exact production JNI setup/lookup/release with observable logical Codec/JNI
+// boundaries. Tests never call an object after its destructor has run.
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+
+using namespace std::chrono_literals;
+std::atomic<int> checks{0}, failures{0};
+void Check(bool ok, const char* reason) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL codec receiver: %s\n", reason); }
+}
+struct Signal {
+  std::mutex mu;
+  std::condition_variable cv;
+  bool value = false;
+  void Set() { std::lock_guard<std::mutex> lock(mu); value = true; cv.notify_all(); }
+  bool Wait(std::chrono::milliseconds limit = 5s) {
+    std::unique_lock<std::mutex> lock(mu);
+    return cv.wait_for(lock, limit, [&] { return value; });
+  }
+};
+void Require(Signal& signal, const char* why) {
+  if (!signal.Wait()) { Check(false, why); std::fflush(stderr); std::_Exit(2); }
+}
+struct JavaCodec { std::atomic<int64_t> context{0}; };
+using jobject = JavaCodec*;
+using jstring = const char*;
+using jlong = int64_t;
+using jint = int;
+using jboolean = bool;
+#define JNICALL
+struct { int context = 0; } gJ;
+std::mutex gCodecContextLock;
+thread_local bool hold_lookup = false;
+Signal lookup_entered, lookup_continue;
+struct JNIEnv {
+  std::atomic<int> exceptions{0};
+  jlong GetLongField(jobject object, int) {
+    jlong result = object->context.load();
+    if (hold_lookup) {
+      lookup_entered.Set();
+      Require(lookup_continue, "lookup boundary released");
+    }
+    return result;
+  }
+  void SetLongField(jobject object, int, jlong value) { object->context = value; }
+};
+void jniThrow(JNIEnv* env, const char*, const char*) {
+  // try_lock in another thread avoids recursive try_lock on a mutex owned by
+  // this same thread, which std::mutex does not permit.
+  bool outside = false;
+  std::thread witness([&] {
+    outside = gCodecContextLock.try_lock();
+    if (outside) gCodecContextLock.unlock();
+  });
+  witness.join();
+  Check(outside, "throwing a Java exception does not hold the context lock");
+  ++env->exceptions;
+}
+std::string Utf8(JNIEnv*, jstring name) { return name; }
+struct CodecEntry {};
+const CodecEntry* FindByType(const std::string&, bool) { static CodecEntry entry; return &entry; }
+const CodecEntry* FindByName(const std::string&) { static CodecEntry entry; return &entry; }
+
+class Codec {
+ public:
+  static inline std::atomic<int> live{0}, retired{0}, destroyed{0};
+  Codec(JNIEnv*, jobject, const CodecEntry&) { ++live; }
+  ~Codec() { Release(); --live; ++destroyed; }
+  void Release() {
+    if (released.exchange(true)) return;
+    bool outside = false;
+    std::thread witness([&] {
+      outside = gCodecContextLock.try_lock();
+      if (outside) gCodecContextLock.unlock();
+    });
+    witness.join();
+    Check(outside, "worker retirement does not hold the context lock");
+    ++retired;
+  }
+ private:
+  std::atomic<bool> released{false};
+};
+using CodecOwner = std::shared_ptr<Codec>;
+@GET_CODEC@
+@SETUP@
+@RELEASE@
+
+template<class T> void Drop(T*& owner) { owner = nullptr; }
+template<class T> void Drop(std::shared_ptr<T>& owner) { owner.reset(); }
+
+void AdmittedOwner() {
+  JNIEnv env;
+  JavaCodec object;
+  MC_setup(&env, &object, "audio/raw", true, false, 0, 0);
+  Check(object.context != 0 && Codec::live == 1, "setup publishes one receiver");
+  auto admitted = GetCodec(&env, &object);
+  Check(admitted != nullptr, "lookup admits a receiver owner");
+  const int retired = Codec::retired, destroyed = Codec::destroyed;
+  MC_release(&env, &object);
+  Check(object.context == 0, "release detaches the Java context");
+  Check(Codec::retired == retired + 1, "release retires work before the admitted call returns");
+  Check(Codec::destroyed == destroyed && Codec::live == 1,
+        "admitted call retains its receiver through retirement");
+  Check(GetCodec(&env, &object, false) == nullptr && env.exceptions == 0,
+        "optional lookup after release returns no receiver");
+  Check(GetCodec(&env, &object) == nullptr && env.exceptions == 1,
+        "ordinary lookup after release throws once");
+  MC_release(&env, &object);
+  Check(Codec::retired == retired + 1, "repeated release does not retire twice");
+  Drop(admitted);
+  Check(Codec::live == 0 && Codec::destroyed == destroyed + 1,
+        "receiver is destroyed exactly once after its admitted owner returns");
+}
+
+void LookupDetachOrdering() {
+  JNIEnv env;
+  JavaCodec object;
+  MC_setup(&env, &object, "audio/raw", true, false, 0, 0);
+  Signal detached, detach_started, owner_copied, release_owner;
+  const int destroyed = Codec::destroyed;
+  std::thread lookup([&] {
+    hold_lookup = true;
+    auto owner = GetCodec(&env, &object);
+    hold_lookup = false;
+    Check(owner != nullptr, "already admitted lookup obtains the receiver");
+    owner_copied.Set();
+    Require(release_owner, "admitted owner may return");
+    Drop(owner);
+  });
+  Require(lookup_entered, "lookup reached the field boundary");
+  std::thread detach([&] {
+    detach_started.Set();
+    MC_release(&env, &object);
+    detached.Set();
+  });
+  Require(detach_started, "release thread started");
+  Check(!detached.Wait(100ms), "context detachment waits for the in-progress owner copy");
+  lookup_continue.Set();
+  Require(owner_copied, "lookup copied the owner");
+  Require(detached, "detachment completes after owner publication");
+  Check(Codec::destroyed == destroyed, "detachment leaves the admitted receiver alive");
+  release_owner.Set();
+  lookup.join();
+  detach.join();
+  Check(Codec::destroyed == destroyed + 1 && Codec::live == 0,
+        "racing lookup and detach balance receiver lifetime");
+}
+
+int main() {
+  AdmittedOwner();
+  LookupDetachOrdering();
+  std::printf("codec receiver contracts: %d checks, %d failures\n", checks.load(), failures.load());
+  return failures != 0;
+}
