@@ -218,8 +218,70 @@ int gesher_selftest(void) {
     regfree(&re);
     char message[64];
     check("regcomp bad pattern", regcomp(&re, "(", REG_EXTENDED) != 0);
-    check("unsupported REG_NEWLINE is rejected explicitly",
-          regcomp(&re, "^x$", REG_EXTENDED | REG_NEWLINE) == REG_INVARG);
+    check("REG_NEWLINE matches line anchors",
+          regcomp(&re, "^x$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nx\nb", 0, NULL, 0) == 0 &&
+              regexec(&re, "a\nx\nb", 0, NULL, REG_NOTBOL | REG_NOTEOL) == 0);
+    regfree(&re);
+    check("REG_NEWLINE matches trailing empty line with offset",
+          regcomp(&re, "^$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\n", 1, m, 0) == 0 && m[0].rm_so == 2 && m[0].rm_eo == 2);
+    regfree(&re);
+    check("REG_NEWLINE excludes newline from dot and negated class",
+          regcomp(&re, "a.b", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 0, NULL, 0) == REG_NOMATCH);
+    regfree(&re);
+    check("REG_NEWLINE excludes newline from negated bracket",
+          regcomp(&re, "a[^x]b", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 0, NULL, 0) == REG_NOMATCH &&
+              regexec(&re, "ayb", 0, NULL, 0) == 0);
+    regfree(&re);
+    check("REG_NEWLINE positive space and cntrl classes match newline",
+          regcomp(&re, "a[[:space:]]b", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+    regfree(&re);
+    check("REG_NEWLINE positive cntrl class matches newline",
+          regcomp(&re, "a[[:cntrl:]]b", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+    regfree(&re);
+    m[0].rm_so = 2;
+    m[0].rm_eo = 3;
+    check("REG_NEWLINE REG_STARTEND + REG_NOTBOL honors preceding newline",
+          regcomp(&re, "^x$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nx", 1, m, REG_STARTEND | REG_NOTBOL) == 0 &&
+              m[0].rm_so == 2 && m[0].rm_eo == 3);
+    regfree(&re);
+    check("REG_NEWLINE internal EOL anchor matches before LF",
+          regcomp(&re, "a$\nb", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+    regfree(&re);
+    check("REG_NEWLINE internal BOL anchor matches after LF",
+          regcomp(&re, "a\n^b", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+    regfree(&re);
+    check("REG_NEWLINE both internal anchors match across LF",
+          regcomp(&re, "^a$\n^b$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+    regfree(&re);
+    check("REG_NEWLINE escaped literal LF matches across lines",
+          regcomp(&re, "^a\\\nb$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+    regfree(&re);
+    check("POSIX leftmost-longest submatch preference",
+          regcomp(&re, "(foo|foobar)(bar|)", REG_EXTENDED) == 0 &&
+              regexec(&re, "foobar", 3, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 6 &&
+              m[1].rm_so == 0 && m[1].rm_eo == 6 && m[2].rm_so == 6 && m[2].rm_eo == 6);
+    regfree(&re);
+    check("REG_NEWLINE extended accepts escaped ordinary slash and escaped bracket",
+          regcomp(&re, "^\\|[0-9]{2}\\/[0-9]{5}\\^$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "|11/11111^", 0, NULL, 0) == 0 &&
+              regexec(&re, "|11x11111^", 0, NULL, 0) == REG_NOMATCH);
+    regfree(&re);
+    check("escaped bracket stays literal with escaped slash",
+          regcomp(&re, "a\\[b\\/c\\]", REG_EXTENDED) == 0 &&
+              regexec(&re, "a[b/c]", 0, NULL, 0) == 0 &&
+              regexec(&re, "ab", 0, NULL, 0) == REG_NOMATCH);
+    regfree(&re);
     check("regerror", regerror(REG_NOMATCH, &re, message, sizeof(message)) > 1 &&
                           message[0] != '\0');
 

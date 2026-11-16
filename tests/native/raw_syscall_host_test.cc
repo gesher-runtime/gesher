@@ -3,8 +3,10 @@
 #include "shim_internal.h"
 #include <gesher/elf_loader.h>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace {
 int failures;
@@ -97,7 +99,116 @@ int main() {
   match = {-1, 3};
   Check("negative range rejected", execute(&re, "x42y", 1, &match, 4) == 16);
   free_regex(&re);
-  Check("unsupported newline mode rejected", compile(&re, "^x$", 1 | 8) == 16);
+  Check("REG_NEWLINE matches per-line anchors",
+        compile(&re, "^x$", 1 | 8) == 0 && execute(&re, "a\nx\nb", 0, nullptr, 0) == 0 &&
+            execute(&re, "a\nx\nb", 0, nullptr, 1 | 2) == 0);
+  free_regex(&re);
+  Check("REG_NEWLINE matches trailing empty line and respects offsets",
+        compile(&re, "^$", 1 | 8) == 0 &&
+            execute(&re, "a\n", 1, &match, 0) == 0 && match.begin == 2 && match.end == 2);
+  free_regex(&re);
+  Check("REG_NEWLINE excludes newline from dot and negated class",
+        compile(&re, "a.b", 1 | 8) == 0 && execute(&re, "a\nb", 0, nullptr, 0) != 0 &&
+            execute(&re, "axb", 0, nullptr, 0) == 0);
+  free_regex(&re);
+  Check("REG_NEWLINE excludes newline from negated bracket expressions",
+        compile(&re, "a[^x]b", 1 | 8) == 0 && execute(&re, "a\nb", 0, nullptr, 0) != 0 &&
+            execute(&re, "ayb", 0, nullptr, 0) == 0);
+  free_regex(&re);
+  Check("REG_NEWLINE negated bracket with trailing dash still excludes newline",
+        compile(&re, "a[^a-]b", 1 | 8) == 0 && execute(&re, "a\nb", 0, nullptr, 0) != 0 &&
+            execute(&re, "a-b", 0, nullptr, 0) != 0 && execute(&re, "axb", 0, nullptr, 0) == 0);
+  free_regex(&re);
+  Check("REG_NEWLINE positive character classes still match newline",
+        compile(&re, "a[[:space:]]b", 1 | 8) == 0 &&
+            ((match = {0, 0}), execute(&re, "a\nb", 1, &match, 0) == 0) &&
+            match.begin == 0 && match.end == 3);
+  free_regex(&re);
+  Check("REG_NEWLINE positive cntrl class matches newline",
+        compile(&re, "a[[:cntrl:]]b", 1 | 8) == 0 &&
+            ((match = {0, 0}), execute(&re, "a\nb", 1, &match, 0) == 0) &&
+            match.begin == 0 && match.end == 3);
+  free_regex(&re);
+  Check("REG_NEWLINE anchored multiline positive class matches",
+        compile(&re, "^a[[:space:]]b$", 1 | 8) == 0 &&
+            ((match = {0, 0}), execute(&re, "z\na\nb\nw", 1, &match, 0) == 0) &&
+            match.begin == 2 && match.end == 5);
+  free_regex(&re);
+  Check("REG_NEWLINE with REG_STARTEND keeps offsets relative to base",
+        compile(&re, "^cd$", 1 | 8) == 0 &&
+            ((match = {1, 6}), execute(&re, "ab\ncd\n", 1, &match, 4) == 0) &&
+            match.begin == 3 && match.end == 5);
+  free_regex(&re);
+  Check("REG_NEWLINE with REG_STARTEND and REG_NOTBOL honors preceding newline",
+        compile(&re, "^x$", 1 | 8) == 0 &&
+            ((match = {2, 3}), execute(&re, "a\nx", 1, &match, 1 | 4) == 0) &&
+            match.begin == 2 && match.end == 3);
+  free_regex(&re);
+  Check("REG_NEWLINE with REG_NOTBOL without preceding newline rejects start",
+        compile(&re, "^x$", 1 | 8) == 0 && execute(&re, "x\ny", 0, nullptr, 1) != 0);
+  free_regex(&re);
+  Check("REG_NEWLINE extended handles escaped ordinary slash and escaped bracket",
+        compile(&re, "^\\|[0-9]{2}\\/[0-9]{5}\\^$", 1 | 8) == 0 &&
+            execute(&re, "|11/11111^", 0, nullptr, 0) == 0 &&
+            execute(&re, "|11x11111^", 0, nullptr, 0) != 0);
+  free_regex(&re);
+  Check("escaped bracket stays literal outside character class",
+        compile(&re, "a\\[b\\/c\\]", 1) == 0 && execute(&re, "a[b/c]", 0, nullptr, 0) == 0 &&
+            execute(&re, "ab", 0, nullptr, 0) != 0);
+  free_regex(&re);
+  Check("REG_NEWLINE matches literal newline in pattern",
+        compile(&re, "a\nb", 1 | 8) == 0 && execute(&re, "a\nb", 0, nullptr, 0) == 0);
+  free_regex(&re);
+  for (const char* pat : {"a$\nb", "a\n^b", "^a$\n^b$", "^a\\\nb$"}) {
+    match = {0, 0};
+    Check("REG_NEWLINE internal newline anchor/escaped LF matches",
+          compile(&re, pat, 1 | 8) == 0 && execute(&re, "a\nb", 1, &match, 0) == 0 &&
+              match.begin == 0 && match.end == 3);
+    free_regex(&re);
+  }
+  Match sub[3]{};
+  Check("POSIX leftmost-longest captures (a|ab)(b|bc)",
+        compile(&re, "(a|ab)(b|bc)", 1) == 0 && execute(&re, "abc", 3, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 3 && sub[1].begin == 0 && sub[1].end == 1 &&
+            sub[2].begin == 1 && sub[2].end == 3);
+  free_regex(&re);
+  Check("POSIX leftmost-longest captures (foo|foobar)(bar|)",
+        compile(&re, "(foo|foobar)(bar|)", 1) == 0 && execute(&re, "foobar", 3, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 6 && sub[1].begin == 0 && sub[1].end == 6 &&
+            sub[2].begin == 6 && sub[2].end == 6);
+  free_regex(&re);
+  Check("BRE backreference matches repeated group",
+        compile(&re, "\\(ab\\)\\1", 0) == 0 && execute(&re, "xxababzz", 2, sub, 0) == 0 &&
+            sub[0].begin == 2 && sub[0].end == 6 && sub[1].begin == 2 && sub[1].end == 4);
+  free_regex(&re);
+  {
+    Regex re_space{};
+    Regex re_alpha{};
+    bool compiled = compile(&re_space, "^a[[:space:]]b$", 1 | 8) == 0 &&
+                    compile(&re_alpha, "^[[:alpha:]]+$", 1 | 8) == 0;
+    bool scaling_ok = compiled;
+    for (int lines : {100, 200, 400, 800}) {
+      std::string in_x, in_d;
+      in_x.reserve(static_cast<size_t>(lines) * 2);
+      in_d.reserve(static_cast<size_t>(lines) * 4);
+      for (int i = 0; i < lines; ++i) {
+        in_x += "x\n";
+        in_d += "123\n";
+      }
+      auto t0 = std::chrono::steady_clock::now();
+      bool miss = execute(&re_space, in_x.c_str(), 1, &match, 0) != 0 &&
+                  execute(&re_alpha, in_d.c_str(), 1, &match, 0) != 0;
+      auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - t0)
+                       .count();
+      scaling_ok = scaling_ok && miss && dt_ms < 500;
+    }
+    Check("REG_NEWLINE multiline scaling stays bounded", scaling_ok);
+    if (compiled) {
+      free_regex(&re_space);
+      free_regex(&re_alpha);
+    }
+  }
   Check("REG_PEND needs an end pointer", compile(&re, "x", 32) == 16);
   std::printf("raw syscall contracts: %d failures\n", failures);
   return failures != 0;
