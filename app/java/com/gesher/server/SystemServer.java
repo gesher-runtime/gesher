@@ -278,6 +278,14 @@ public final class SystemServer {
             if (inet != null) env.add(inet);
             // Gesher's own proxy for the package, over Windows' (docs/network.md).
             env.addAll(com.gesher.net.ProxySetting.environment(packageName));
+            // Provide a stationary tabletop accelerometer (gravity on Z) and office light
+            // sensor for real apps so orientation and document/check angle checks succeed
+            // on PCs without physical sensors.
+            if (System.getenv("GESHER_SENSOR_TEST") == null
+                    && !"com.gesher.devices".equals(packageName)
+                    && !"com.gesher.nodevices".equals(packageName)) {
+                env.add("GESHER_SENSOR_TEST=1");
+            }
             return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
                     String.valueOf(targetSdk))), env, logFile.getPath(), false);

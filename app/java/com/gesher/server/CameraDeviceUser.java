@@ -638,7 +638,19 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         m.set(CaptureResult.SENSOR_FRAME_DURATION, CameraService.FRAME_DURATION_NS);
         m.set(CaptureResult.REQUEST_PIPELINE_DEPTH, (byte) 1);
         m.set(CaptureResult.CONTROL_AE_STATE, CameraMetadata.CONTROL_AE_STATE_CONVERGED);
-        m.set(CaptureResult.CONTROL_AF_STATE, CameraMetadata.CONTROL_AF_STATE_INACTIVE);
+        Integer afMode = settings.get(CaptureRequest.CONTROL_AF_MODE);
+        Integer afTrigger = settings.get(CaptureRequest.CONTROL_AF_TRIGGER);
+        int afState = CameraMetadata.CONTROL_AF_STATE_INACTIVE;
+        if (afTrigger != null && afTrigger == CameraMetadata.CONTROL_AF_TRIGGER_START) {
+            afState = CameraMetadata.CONTROL_AF_STATE_FOCUSED_LOCKED;
+        } else if (afMode != null && (afMode == CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                || afMode == CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO)) {
+            afState = CameraMetadata.CONTROL_AF_STATE_PASSIVE_FOCUSED;
+        } else if (afMode != null && (afMode == CameraMetadata.CONTROL_AF_MODE_AUTO
+                || afMode == CameraMetadata.CONTROL_AF_MODE_MACRO)) {
+            afState = CameraMetadata.CONTROL_AF_STATE_FOCUSED_LOCKED;
+        }
+        m.set(CaptureResult.CONTROL_AF_STATE, afState);
         m.set(CaptureResult.CONTROL_AWB_STATE, CameraMetadata.CONTROL_AWB_STATE_CONVERGED);
         m.set(CaptureResult.FLASH_STATE, CameraMetadata.FLASH_STATE_UNAVAILABLE);
         m.set(CaptureResult.LENS_STATE, CameraMetadata.LENS_STATE_STATIONARY);

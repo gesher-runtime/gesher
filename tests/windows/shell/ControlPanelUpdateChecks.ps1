@@ -132,7 +132,7 @@ function Start-GesherUpdateInstaller($Download, $InstallDirectory, [Threading.Ca
 }
 '@
     [IO.File]::WriteAllText((Join-Path $here 'gesher-update.ps1'), $fixtureHelper, [Text.UTF8Encoding]::new($true))
-    foreach ($name in 'updateVersionText', 'updateStatusText', 'automaticUpdateChecks', 'btnCheckUpdate', 'btnInstallUpdate', 'btnCancelUpdate', 'btnUpdateNotes', 'btnReopenPanel', 'updateProgress', 'btnToggleDevice', 'servicesCards', 'applicationsSection') {
+    foreach ($name in 'updateVersionText', 'updateStatusText', 'automaticUpdateChecks', 'btnCheckUpdate', 'btnInstallUpdate', 'btnCancelUpdate', 'btnUpdateNotes', 'btnReopenPanel', 'updateProgress', 'btnToggleDevice', 'servicesCards', 'cameraCard', 'applicationsSection') {
         Set-Variable -Scope Script -Name $name -Value (New-FixtureControl)
     }
     $script:window = [pscustomobject]@{ AllowDrop = $true; IsActive = $true }
@@ -244,7 +244,7 @@ try {
     $download = $script:UpdateState.Download
     $script:ApproveInstall = $true
     Start-PanelUpdateInstallation
-    Assert-Update ($script:IsBusy -and -not $servicesCards.IsEnabled -and -not $applicationsSection.IsEnabled -and -not $window.AllowDrop) 'Setup did not guard conflicting dashboard actions'
+    Assert-Update ($script:IsBusy -and -not $servicesCards.IsEnabled -and -not $cameraCard.IsEnabled -and -not $applicationsSection.IsEnabled -and -not $window.AllowDrop) 'Setup did not guard conflicting dashboard actions'
     Assert-Update ($script:UpdateState.Worker.Operation -eq 'Install' -and $script:UpdateState.StatusKey -ne 'cp_update_installed_success') 'Installer validation was synchronous or prematurely claimed success'
     Drain-Worker
     Assert-Update ($script:UpdateState.Installer -is [Diagnostics.Process] -and $script:IsBusy) 'Installer process was not retained for exit monitoring'
@@ -323,7 +323,7 @@ try {
                         updateVersionText = 'UpdateVersionText'; updateStatusText = 'UpdateStatusText'; automaticUpdateChecks = 'AutomaticUpdateChecks'
                         btnCheckUpdate = 'BtnCheckUpdate'; btnInstallUpdate = 'BtnInstallUpdate'; btnCancelUpdate = 'BtnCancelUpdate'
                         btnUpdateNotes = 'BtnUpdateNotes'; btnReopenPanel = 'BtnReopenPanel'; updateProgress = 'UpdateProgress'
-                        btnToggleDevice = 'BtnToggleDevice'; servicesCards = 'ServicesCards'; applicationsSection = 'ApplicationsSection'
+                        btnToggleDevice = 'BtnToggleDevice'; servicesCards = 'ServicesCards'; cameraCard = 'CameraCard'; applicationsSection = 'ApplicationsSection'
                         panelScroll = 'PanelScroll'; panelLayout = 'PanelLayout'
                     }
                     foreach ($entry in $names.GetEnumerator()) { Set-Variable -Scope Script -Name $entry.Key -Value ($window.FindName($entry.Value)) }

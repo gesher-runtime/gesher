@@ -1,4 +1,4 @@
-param([string] $PanelPath = (Join-Path $PSScriptRoot '../../../tools/package/gesher-control-panel.ps1'))
+﻿param([string] $PanelPath = (Join-Path $PSScriptRoot '../../../tools/package/gesher-control-panel.ps1'))
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
@@ -97,6 +97,7 @@ $btnToggleDevice = [Windows.Controls.Button]::new()
 $btnInstallUpdate = [Windows.Controls.Button]::new()
 $btnReopenPanel = [Windows.Controls.Button]::new()
 $servicesCards = [Windows.Controls.StackPanel]::new()
+$cameraCard = [Windows.Controls.Border]::new()
 $applicationsSection = [Windows.Controls.GroupBox]::new()
 try {
     # The real panel loads its UI helper before starting an action. Warm that
@@ -166,14 +167,14 @@ exit $cfg.MicrogExit
     $worker = $script:ActionState.Worker
     Assert-Action ($worker -and -not $worker.Handle.IsCompleted) 'Start waited for the blocking helper'
     Assert-Action ($script:IsBusy -and -not $btnToggleDevice.IsEnabled -and -not $servicesCards.IsEnabled -and
-        -not $applicationsSection.IsEnabled -and -not $window.AllowDrop -and -not $btnInstallUpdate.IsEnabled) 'Mutation controls remained enabled'
+        -not $cameraCard.IsEnabled -and -not $applicationsSection.IsEnabled -and -not $window.AllowDrop -and -not $btnInstallUpdate.IsEnabled) 'Mutation controls remained enabled'
     Assert-Action (-not (Start-PanelAction 'Device' @{ Command = 'shutdown' })) 'Concurrent mutation was admitted'
     Assert-Action (-not (Test-PanelActionClose)) 'Close abandoned an active mutation'
     Assert-Action ($statusMessage.Text -eq (Get-GesherText 'cp_action_finish')) 'Deferred close did not explain itself'
     Drain-Action
     Assert-Action ($script:PumpTicks -ge 3) 'WPF dispatcher did not keep ticking during helper execution'
     Assert-Action ($worker.Disposed -and -not $script:ActionState.Worker -and -not $script:IsBusy) 'Completed worker was retained or busy state stuck'
-    Assert-Action ($btnToggleDevice.IsEnabled -and $servicesCards.IsEnabled -and $applicationsSection.IsEnabled -and $window.AllowDrop) 'Controls did not recover after completion'
+    Assert-Action ($btnToggleDevice.IsEnabled -and $servicesCards.IsEnabled -and $cameraCard.IsEnabled -and $applicationsSection.IsEnabled -and $window.AllowDrop) 'Controls did not recover after completion'
     Assert-Action ($script:Refreshes -eq 1 -and $script:Messages.Count -eq 0) "Successful action did not complete once (refreshes=$script:Refreshes errors=$($script:Messages | ConvertTo-Json -Compress))"
     Complete-PanelAction
     Assert-Action ($script:Refreshes -eq 1) 'Completion executed twice'

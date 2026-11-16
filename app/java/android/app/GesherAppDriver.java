@@ -89,12 +89,10 @@ public final class GesherAppDriver {
         ConfigurationController configController = new ConfigurationController(thread);
         set(ActivityThread.class, thread, "mConfigurationController", configController);
 
-        // System features: ActivityThread reads them early from ApplicationSharedMemory,
-        // which ActivityManagerService fills from PackageManagerService. The headless
-        // device declares none (hasSystemFeature answers false for each SDK feature).
+        // In a persistent device ActivityThread reads these from ApplicationSharedMemory.
         if (!SystemFeaturesCache.hasInstance()) {
             SystemFeaturesCache.setInstance(
-                    new SystemFeaturesCache(new ArrayMap<String, FeatureInfo>()));
+                    com.gesher.server.PackageManagerService.systemFeaturesCache());
         }
 
         // Process state ActivityManagerService would have sent in bindApplication.

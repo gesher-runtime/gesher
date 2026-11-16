@@ -119,3 +119,44 @@ function Get-GesherText([string] $Key, [object[]] $Values = @()) {
   })
   return $result
 }
+
+function Save-GesherCameraBmp([string] $SourcePath, [string] $DestPath) {
+  Add-Type -AssemblyName PresentationCore, WindowsBase
+  $uri = [Uri]::new((Resolve-Path -LiteralPath $SourcePath).Path)
+  $decoder = [System.Windows.Media.Imaging.BitmapDecoder]::Create(
+    $uri,
+    [System.Windows.Media.Imaging.BitmapCreateOptions]::None,
+    [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad)
+  if (-not $decoder.Frames -or $decoder.Frames.Count -lt 1) {
+    throw "Unsupported or empty image: $SourcePath"
+  }
+  $frame = $decoder.Frames[0]
+  [System.Windows.Media.Imaging.BitmapSource] $src = $frame
+  $orient = 1
+  try {
+    $meta = $frame.Metadata -as [System.Windows.Media.Imaging.BitmapMetadata]
+    if ($meta -ne $null) {
+      if ($meta.ContainsQuery('/app1/ifd/{ushort=274}')) {
+        $orient = [int]$meta.GetQuery('/app1/ifd/{ushort=274}')
+      } elseif ($meta.ContainsQuery('System.Photo.Orientation')) {
+        $orient = [int]$meta.GetQuery('System.Photo.Orientation')
+      }
+    }
+  } catch { }
+  $angle = switch ($orient) { 3 { 180 } 6 { 90 } 8 { 270 } default { 0 } }
+  $maxSide = 2400.0
+  $scale = [Math]::Min(1.0, $maxSide / [Math]::Max($src.PixelWidth, $src.PixelHeight))
+  if ($angle -ne 0 -or $scale -lt 0.999) {
+    $tg = [System.Windows.Media.TransformGroup]::new()
+    if ($scale -lt 0.999) { $tg.Children.Add([System.Windows.Media.ScaleTransform]::new($scale, $scale)) }
+    if ($angle -ne 0) { $tg.Children.Add([System.Windows.Media.RotateTransform]::new($angle)) }
+    $src = [System.Windows.Media.Imaging.TransformedBitmap]::new($src, $tg)
+  }
+  $bgr24 = [System.Windows.Media.Imaging.FormatConvertedBitmap]::new($src, [System.Windows.Media.PixelFormats]::Bgr24, $null, 0)
+  $encoder = [System.Windows.Media.Imaging.BmpBitmapEncoder]::new()
+  $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($bgr24))
+  $tmp = "$DestPath.tmp"
+  $fs = [System.IO.File]::Create($tmp)
+  try { $encoder.Save($fs) } finally { $fs.Dispose() }
+  Move-Item -LiteralPath $tmp -Destination $DestPath -Force
+}

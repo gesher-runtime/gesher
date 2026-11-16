@@ -78,6 +78,10 @@
       "en": "Gesher Camera",
       "he": "מצלמת גשר"
     },
+    "camera_selection_restart": {
+      "en": "Close your Android apps and run gesher-app shutdown for the camera change to take effect.",
+      "he": "כדי להחיל את בחירת המצלמה, סגור את יישומי Android והפעל gesher-app shutdown."
+    },
     "camera_take": {
       "en": "Take photo",
       "he": "צילום תמונה"
@@ -761,6 +765,70 @@
     "cp_update_reopen_failed": {
       "en": "The update is installed. Close and reopen the control center from the Start menu.",
       "he": "העדכון מותקן. סגור את לוח הבקרה ופתח אותו מחדש מתפריט התחל."
+    },
+    "cp_camera_title": {
+      "en": "Camera and Check / Document Image Feed",
+      "he": "מצלמה והזנת תמונה מקובץ (צ'קים ומסמכים)"
+    },
+    "cp_camera_desc": {
+      "en": "Feed a sharp check or document image from Windows into the rear camera. Switch images anytime (e.g. front then back of a check) without closing the app.",
+      "he": "הזנת תמונה חדה של צ'ק או מסמך מהמחשב למצלמה האחורית. ניתן להחליף תמונה בזמן אמת (למשל צד קדמי ואז אחורי) בלי לסגור את האפליקציה."
+    },
+    "cp_camera_live": {
+      "en": "Active: live Windows camera",
+      "he": "מצב פעיל: מצלמת מחשב חיה"
+    },
+    "cp_camera_file": {
+      "en": "Active image: \u2068{0}\u2069 (rotation {1}\u00b0, zoom {2}%, {3})",
+      "he": "מוזן מקובץ: \u2068{0}\u2069 (סיבוב {1}\u00b0, זום {2}%, {3})"
+    },
+    "cp_camera_border_on": {
+      "en": "with dark border",
+      "he": "עם מסגרת כהה"
+    },
+    "cp_camera_border_off": {
+      "en": "full frame",
+      "he": "מסך מלא"
+    },
+    "cp_camera_preview_tip": {
+      "en": "Keep the check upright, centered, filling most of the box with the number line at the bottom.",
+      "he": "ודאו שהצ'ק ישר, ממלא את המסגרת ושורת המספרים בתחתית."
+    },
+    "cp_btn_camera_choose": {
+      "en": "Choose image...",
+      "he": "בחר תמונה למצלמה..."
+    },
+    "cp_btn_camera_rotate": {
+      "en": "Rotate 90\u00b0",
+      "he": "סובב 90\u00b0"
+    },
+    "cp_btn_camera_zoom_in": {
+      "en": "Zoom +",
+      "he": "הגדל זום +"
+    },
+    "cp_btn_camera_zoom_out": {
+      "en": "Zoom -",
+      "he": "הקטן זום -"
+    },
+    "cp_btn_camera_border": {
+      "en": "Dark border / full",
+      "he": "מסגרת כהה / מלא"
+    },
+    "cp_btn_camera_clear": {
+      "en": "Back to live camera",
+      "he": "חזור למצלמה חיה"
+    },
+    "cp_camera_loaded": {
+      "en": "Camera now feeding image: \u2068{0}\u2069",
+      "he": "המצלמה מזרימה כעת את התמונה: \u2068{0}\u2069"
+    },
+    "cp_camera_cleared": {
+      "en": "Camera returned to live Windows feed.",
+      "he": "המצלמה חזרה לשידור החי מהמחשב."
+    },
+    "cp_camera_load_failed": {
+      "en": "Could not load camera image: \u2068{0}\u2069",
+      "he": "לא ניתן לטעון את תמונת המצלמה: \u2068{0}\u2069"
     }
   }
 }

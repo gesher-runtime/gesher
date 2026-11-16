@@ -31,6 +31,11 @@
 #                                      `windows`: Windows' settings again (docs/network.md)
 #   gesher-app list                    the installed packages
 #   gesher-app status                  the device's processes
+#   gesher-app cameras                 list Windows cameras and their frame sizes
+#   gesher-app cameras rear CAMERA_ID  use a Windows camera as the rear camera
+#   gesher-app cameras reset           restore the default camera mapping
+#   gesher-app camera-image [PATH | rotate DEGREES | border on|off | clear]
+#                                      feed a Windows image file into the rear camera
 #   gesher-app shutdown                stop the device
 #   gesher-app toast-activated         (COM runs it: Gesher's toast activator) a click
 #                                      on an app's toast, given to the device (ADR 0051)
@@ -87,10 +92,12 @@ $root = Join-Path $env:LOCALAPPDATA 'Gesher'
 # The optional addon installer records an explicit per-profile choice. An explicit
 # environment value (including 0) takes precedence for a single invocation.
 $enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
-$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy', 'sync-shortcuts'
+$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy', 'sync-shortcuts', 'cameras', 'camera-image'
 if ($Arguments.Count -eq 0) {
   Write-Host ((Get-GesherText 'usage') + 'gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--detach | --wait | --single-process | --system-server]')
   Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows]'
+  Write-Host '       gesher-app cameras [rear CAMERA_ID | reset]'
+  Write-Host '       gesher-app camera-image [PATH | rotate 0|90|180|270 | border on|off | clear]'
   exit 2
 }
 $command = $Arguments[0]
@@ -246,6 +253,8 @@ $dalvikvm = Join-Path $here 'dalvikvm.exe'
 # Keep the profile choice local to child processes, so disabling the marker in
 # this PowerShell session cannot inherit a previous launcher's automatic opt-in.
 $previousMicrogSpoof = $env:GESHER_MICROG_SPOOF
+$previousRearCamera = $env:GESHER_CAMERA_REAR_ID
+$rearCameraFile = if ($root) { Join-Path $root 'camera-rear' } else { $null }
 # The Windows environment is Unicode, but the VM's narrow CRT environment is not.
 # Pass the caller-owned diagnostic path through wide argv instead, after the main
 # class so it is not inherited with the device's VM options.
@@ -255,6 +264,78 @@ if ($previousLaunchError) { $launchErrorArguments = @('--launch-error-file', $pr
 try {
   Remove-Item Env:GESHER_LAUNCH_ERROR_FILE -ErrorAction SilentlyContinue
   if ($enableMicrogForProfile) { $env:GESHER_MICROG_SPOOF = '1' }
+  if (-not $previousRearCamera -and $rearCameraFile) {
+    try { $env:GESHER_CAMERA_REAR_ID = [IO.File]::ReadAllText($rearCameraFile) }
+    catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { }
+  }
+  if ($command -eq 'cameras') {
+    & $dalvikvm @dvm com.gesher.server.CameraSelection (NoDrive $rearCameraFile) @rest
+    $code = $LASTEXITCODE
+    if ($code -eq 0 -and $rest.Count -gt 0) {
+      $state = DeviceState
+      if ($state -and (DeviceProcess $state 'system_server')) {
+        Write-Host (Get-GesherText 'camera_selection_restart')
+      }
+    }
+    exit $code
+  }
+  if ($command -eq 'camera-image') {
+    $dataDir = Join-Path $root 'data'
+    $imgFile = Join-Path $dataDir 'camera-image.img'
+    $metaFile = Join-Path $dataDir 'camera-image.meta'
+    New-Item -ItemType Directory -Force $dataDir | Out-Null
+    $meta = @{ rotation = 0; border = $true; zoom = 100; name = '' }
+    if (Test-Path -LiteralPath $metaFile) {
+      foreach ($line in Get-Content -LiteralPath $metaFile -Encoding UTF8) {
+        if ($line -match '^rotation=(\d+)$') { $meta.rotation = ([int]$Matches[1]) % 360 }
+        elseif ($line -match '^border=(.+)$') { $meta.border = ($Matches[1].Trim() -ne '0' -and $Matches[1].Trim() -ine 'false') }
+        elseif ($line -match '^zoom=(\d+)$') { $meta.zoom = [Math]::Min(250, [Math]::Max(100, [int]$Matches[1])) }
+        elseif ($line -match '^name=(.*)$') { $meta.name = $Matches[1].Trim() }
+      }
+    }
+    $sub = if ($rest.Count -gt 0) { $rest[0] } else { '' }
+    if ($sub -in 'clear', 'live', 'reset') {
+      Remove-Item -LiteralPath $imgFile, $metaFile -Force -ErrorAction SilentlyContinue
+      Write-Host (Get-GesherText 'cp_camera_cleared')
+      exit 0
+    }
+    if ($sub -eq 'rotate') {
+      if ($rest.Count -lt 2) { throw 'Usage: gesher-app camera-image rotate <0|90|180|270>' }
+      $deg = (([int]$rest[1]) % 360 + 360) % 360
+      if ($deg -notin 0, 90, 180, 270) { throw 'Rotation must be 0, 90, 180 or 270' }
+      $meta.rotation = $deg
+    } elseif ($sub -eq 'zoom') {
+      if ($rest.Count -lt 2) { throw 'Usage: gesher-app camera-image zoom <100..250|in|out|reset>' }
+      $zArg = $rest[1]
+      if ($zArg -eq 'in') { $meta.zoom = [Math]::Min(250, $meta.zoom + 20) }
+      elseif ($zArg -eq 'out') { $meta.zoom = [Math]::Max(100, $meta.zoom - 20) }
+      elseif ($zArg -eq 'reset') { $meta.zoom = 100 }
+      else { $meta.zoom = [Math]::Min(250, [Math]::Max(100, [int]$zArg)) }
+    } elseif ($sub -eq 'border') {
+      if ($rest.Count -lt 2) { throw 'Usage: gesher-app camera-image border <on|off>' }
+      $meta.border = ($rest[1] -in '1', 'on', 'true')
+    } elseif ($sub -ne '') {
+      $src = (Resolve-Path -LiteralPath $sub).Path
+      if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { throw "Image file not found: $sub" }
+      Save-GesherCameraBmp $src $imgFile
+      $meta.zoom = 100
+      $meta.name = [IO.Path]::GetFileName($src)
+    } else {
+      if (Test-Path -LiteralPath $imgFile) {
+        $label = if ($meta.name) { $meta.name } else { 'camera-image.img' }
+        $bText = Get-GesherText $(if ($meta.border) { 'cp_camera_border_on' } else { 'cp_camera_border_off' })
+        Write-Host (Get-GesherText 'cp_camera_file' @($label, $meta.rotation, $meta.zoom, $bText))
+      } else {
+        Write-Host (Get-GesherText 'cp_camera_live')
+      }
+      exit 0
+    }
+    $borderVal = if ($meta.border) { '1' } else { '0' }
+    [IO.File]::WriteAllLines($metaFile, @("rotation=$($meta.rotation)", "border=$borderVal", "zoom=$($meta.zoom)", "name=$($meta.name)"), [Text.UTF8Encoding]::new($false))
+    $shown = if ($meta.name) { $meta.name } else { 'camera-image.img' }
+    Write-Host (Get-GesherText 'cp_camera_loaded' @($shown))
+    exit 0
+  }
   # The device's commands, and launching through it (com.gesher.app.Launcher).
   if ($commands -contains $command) {
     $launcherArgs = @($command)
@@ -311,6 +392,7 @@ try {
   exit $code
 } finally {
   $env:GESHER_MICROG_SPOOF = $previousMicrogSpoof
+  $env:GESHER_CAMERA_REAR_ID = $previousRearCamera
   if ($null -eq $previousLaunchError) { Remove-Item Env:GESHER_LAUNCH_ERROR_FILE -ErrorAction SilentlyContinue }
   else { $env:GESHER_LAUNCH_ERROR_FILE = $previousLaunchError }
 }

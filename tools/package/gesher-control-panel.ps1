@@ -42,7 +42,7 @@ $flowDirection = if ($isHe) { 'RightToLeft' } else { 'LeftToRight' }
 # Hashtables are mutated in place so event handlers never need to assign script-scope variables.
 $script:IsBusy = $false
 $script:ActionState = @{ Worker = $null; Completing = $false; Closed = $false }
-$script:ViewState = @{ Device = $null; Microg = $null; Store = $null; AppsSignature = $null; AppFiles = @(); Icons = @{} }
+$script:ViewState = @{ Device = $null; Microg = $null; Store = $null; AppsSignature = $null; AppFiles = @(); Icons = @{}; CameraSignature = $null }
 $script:LiveState = @{ Stamp = $null; AppsStamp = $null; PendingSince = $null; Tick = 0 }
 
 # Helper to query device running state
@@ -81,6 +81,8 @@ function Get-StateStamp {
         Get-FileStamp (Join-Path $root 'data/system/packages.list')
         Get-FileStamp (Join-Path $root 'microg.enabled')
         Get-FileStamp (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk')
+        Get-FileStamp (Join-Path $root 'data/camera-image.img')
+        Get-FileStamp (Join-Path $root 'data/camera-image.meta')
     ) -join '|')
 }
 
@@ -144,7 +146,7 @@ function Get-InstalledApps {
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="$(Get-GesherText 'cp_title')"
-        Width="920" Height="820" MinWidth="800" MinHeight="600"
+        Width="920" Height="880" MinWidth="800" MinHeight="600"
         WindowStartupLocation="CenterScreen"
         FlowDirection="$flowDirection"
         FontFamily="Segoe UI, Tahoma, Arial"
@@ -202,8 +204,9 @@ function Get-InstalledApps {
     </Window.Resources>
     <ScrollViewer Name="PanelScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <!-- Bound the first measure too, before SizeChanged adjusts the viewport. -->
-    <Grid Name="PanelLayout" Margin="24" MinHeight="640" Height="640">
+    <Grid Name="PanelLayout" Margin="24" MinHeight="820" Height="820">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -283,8 +286,48 @@ function Get-InstalledApps {
             </Border>
         </Grid>
 
+        <!-- Camera & Check/Document Image Feed -->
+        <Border Name="CameraCard" Grid.Row="2" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="18,14" Margin="0,0,0,16">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Margin="0,0,14,0">
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="$(Get-GesherText 'cp_camera_title')" FontSize="15" FontWeight="Bold" Foreground="#101828"/>
+                        <Border Grid.Column="1" Name="CameraBadge" CornerRadius="12" Padding="8,2" Background="#F2F4F7">
+                            <TextBlock Name="CameraBadgeText" Text="$(Get-GesherText 'cp_camera_live')" FontSize="11" FontWeight="SemiBold" Foreground="#475467"/>
+                        </Border>
+                    </Grid>
+                    <TextBlock Text="$(Get-GesherText 'cp_camera_desc')" TextWrapping="Wrap" FontSize="12" Foreground="#667085"/>
+                    <StackPanel Name="CameraPreviewPanel" Orientation="Horizontal" Margin="0,10,0,0" Visibility="Collapsed">
+                        <Border Name="CameraPreviewFrame" FlowDirection="LeftToRight" Width="224" Height="126" Background="#181818" CornerRadius="6" BorderBrush="#D0D5DD" BorderThickness="1" ClipToBounds="True">
+                            <Grid>
+                                <Image Name="CameraPreviewImage" Width="224" Height="126" Stretch="Fill" RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <Border Width="197" Height="111" BorderBrush="#70FFFFFF" BorderThickness="1" CornerRadius="4" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                            </Grid>
+                        </Border>
+                        <TextBlock Text="$(Get-GesherText 'cp_camera_preview_tip')" TextWrapping="Wrap" MaxWidth="230" FontSize="11" Foreground="#475467" VerticalAlignment="Center" Margin="12,0,12,0"/>
+                    </StackPanel>
+                </StackPanel>
+                <WrapPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" MaxWidth="360">
+                    <Button Name="BtnChooseCameraImage" Style="{StaticResource PrimaryButton}" Content="$(Get-GesherText 'cp_btn_camera_choose')" Margin="0,0,8,6"/>
+                    <Button Name="BtnRotateCameraImage" Content="$(Get-GesherText 'cp_btn_camera_rotate')" Margin="0,0,8,6" IsEnabled="False"/>
+                    <Button Name="BtnZoomInCameraImage" Content="$(Get-GesherText 'cp_btn_camera_zoom_in')" Margin="0,0,8,6" IsEnabled="False"/>
+                    <Button Name="BtnZoomOutCameraImage" Content="$(Get-GesherText 'cp_btn_camera_zoom_out')" Margin="0,0,8,6" IsEnabled="False"/>
+                    <Button Name="BtnToggleCameraBorder" Content="$(Get-GesherText 'cp_btn_camera_border')" Margin="0,0,8,6" IsEnabled="False"/>
+                    <Button Name="BtnClearCameraImage" Style="{StaticResource DangerButton}" Content="$(Get-GesherText 'cp_btn_camera_clear')" Margin="0,0,0,6" IsEnabled="False"/>
+                </WrapPanel>
+            </Grid>
+        </Border>
+
         <!-- Runtime updates: network work never runs on the WPF dispatcher. -->
-        <Border Grid.Row="2" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="18,14" Margin="0,0,0,16">
+        <Border Grid.Row="3" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="18,14" Margin="0,0,0,16">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -310,7 +353,7 @@ function Get-InstalledApps {
         </Border>
 
         <!-- Installed Applications Section -->
-        <Border Name="ApplicationsSection" Grid.Row="3" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="20">
+        <Border Name="ApplicationsSection" Grid.Row="4" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="20">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -373,7 +416,7 @@ function Get-InstalledApps {
         </Border>
 
         <!-- Status & Progress Footer -->
-        <Border Grid.Row="4" Margin="0,12,0,0">
+        <Border Grid.Row="5" Margin="0,12,0,0">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -445,11 +488,23 @@ $btnReopenPanel = $window.FindName('BtnReopenPanel')
 $updateProgress = $window.FindName('UpdateProgress')
 $panelScroll = $window.FindName('PanelScroll')
 $panelLayout = $window.FindName('PanelLayout')
+$cameraCard = $window.FindName('CameraCard')
+$cameraBadge = $window.FindName('CameraBadge')
+$cameraBadgeText = $window.FindName('CameraBadgeText')
+$cameraPreviewPanel = $window.FindName('CameraPreviewPanel')
+$cameraPreviewImage = $window.FindName('CameraPreviewImage')
+$btnChooseCameraImage = $window.FindName('BtnChooseCameraImage')
+$btnRotateCameraImage = $window.FindName('BtnRotateCameraImage')
+$btnZoomInCameraImage = $window.FindName('BtnZoomInCameraImage')
+$btnZoomOutCameraImage = $window.FindName('BtnZoomOutCameraImage')
+$btnToggleCameraBorder = $window.FindName('BtnToggleCameraBorder')
+$btnClearCameraImage = $window.FindName('BtnClearCameraImage')
 
 function Update-PanelWindowLayout {
     # A short or scaled display can scroll the complete dashboard. Its app list
     # keeps a useful viewport rather than being squeezed behind the update card.
-    $panelLayout.Height = [Math]::Max(640, $panelScroll.ActualHeight - 48)
+    $minLayoutHeight = if ($cameraPreviewPanel -and $cameraPreviewPanel.Visibility -eq [System.Windows.Visibility]::Visible) { 960 } else { 820 }
+    $panelLayout.Height = [Math]::Max($minLayoutHeight, $panelScroll.ActualHeight - 48)
 }
 
 function Set-Busy([bool] $busy, [string] $msg = '') {
@@ -458,6 +513,7 @@ function Set-Busy([bool] $busy, [string] $msg = '') {
     $script:IsBusy = $busy
     $btnToggleDevice.IsEnabled = -not $busy
     $servicesCards.IsEnabled = -not $busy
+    if ($cameraCard) { $cameraCard.IsEnabled = -not $busy }
     $applicationsSection.IsEnabled = -not $busy
     $window.AllowDrop = -not $busy
     $btnInstallUpdate.IsEnabled = -not $busy
@@ -596,6 +652,138 @@ function Update-AppsView($installed) {
 }
 
 # Full re-evaluation; used at load, after every panel action and when live refresh sees a change.
+function Get-CameraImageState {
+    $dataDir = Join-Path $root 'data'
+    $imgFile = Join-Path $dataDir 'camera-image.img'
+    $metaFile = Join-Path $dataDir 'camera-image.meta'
+    $active = Test-Path -LiteralPath $imgFile -PathType Leaf
+    $meta = @{ Active = $active; Rotation = 0; Border = $true; Zoom = 100; Name = ''; Stamp = '' }
+    if ($active) {
+        $meta.Stamp = (Get-Item -LiteralPath $imgFile).LastWriteTimeUtc.Ticks.ToString()
+        if (Test-Path -LiteralPath $metaFile -PathType Leaf) {
+            try {
+                foreach ($line in Get-Content -LiteralPath $metaFile -Encoding UTF8) {
+                    if ($line -match '^rotation=(\d+)$') { $meta.Rotation = ([int]$Matches[1]) % 360 }
+                    elseif ($line -match '^border=(.+)$') { $meta.Border = ($Matches[1].Trim() -ne '0' -and $Matches[1].Trim() -ine 'false') }
+                    elseif ($line -match '^zoom=(\d+)$') { $meta.Zoom = [Math]::Min(250, [Math]::Max(100, [int]$Matches[1])) }
+                    elseif ($line -match '^name=(.*)$') { $meta.Name = $Matches[1].Trim() }
+                }
+            } catch { }
+        }
+    }
+    return $meta
+}
+
+function Save-CameraImageMeta($meta) {
+    $dataDir = Join-Path $root 'data'
+    New-Item -ItemType Directory -Force $dataDir | Out-Null
+    $metaFile = Join-Path $dataDir 'camera-image.meta'
+    $borderVal = if ($meta.Border) { '1' } else { '0' }
+    $zoomVal = if ($meta.Zoom) { [Math]::Min(250, [Math]::Max(100, [int]$meta.Zoom)) } else { 100 }
+    [IO.File]::WriteAllLines($metaFile, @("rotation=$($meta.Rotation)", "border=$borderVal", "zoom=$zoomVal", "name=$($meta.Name)"), [Text.UTF8Encoding]::new($false))
+}
+
+function Update-CameraPreviewBitmap($state) {
+    $imgFile = Join-Path (Join-Path $root 'data') 'camera-image.img'
+    if (-not $state.Active -or -not (Test-Path -LiteralPath $imgFile -PathType Leaf)) {
+        $cameraPreviewImage.Source = $null
+        $cameraPreviewPanel.Visibility = [System.Windows.Visibility]::Collapsed
+        return
+    }
+    try {
+        $bytes = [IO.File]::ReadAllBytes($imgFile)
+        $ms = [IO.MemoryStream]::new($bytes)
+        try {
+            $bmp = [System.Windows.Media.Imaging.BitmapFrame]::Create(
+                $ms,
+                [System.Windows.Media.Imaging.BitmapCreateOptions]::None,
+                [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad)
+        } finally {
+            $ms.Dispose()
+        }
+        [System.Windows.Media.Imaging.BitmapSource] $src = $bmp
+        if ($state.Rotation -ne 0) {
+            $rt = [System.Windows.Media.RotateTransform]::new($state.Rotation)
+            $src = [System.Windows.Media.Imaging.TransformedBitmap]::new($src, $rt)
+        }
+        $tw = 224.0; $th = 126.0
+        $marginFrac = if ($state.Border) { 0.06 } else { 0.0 }
+        $boxX = $tw * $marginFrac; $boxY = $th * $marginFrac
+        $boxW = $tw - 2.0 * $boxX; $boxH = $th - 2.0 * $boxY
+        $scale = [Math]::Min($boxW / $src.PixelWidth, $boxH / $src.PixelHeight) * ($state.Zoom / 100.0)
+        $drawW = $src.PixelWidth * $scale
+        $drawH = $src.PixelHeight * $scale
+        $drawX = ($tw - $drawW) * 0.5
+        $drawY = ($th - $drawH) * 0.5
+
+        $dv = [System.Windows.Media.DrawingVisual]::new()
+        $dc = $dv.RenderOpen()
+        try {
+            $bg = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.Color]::FromRgb(24, 24, 24))
+            $dc.DrawRectangle($bg, $null, [System.Windows.Rect]::new(0, 0, $tw, $th))
+            $dc.PushClip([System.Windows.Media.RectangleGeometry]::new([System.Windows.Rect]::new($boxX, $boxY, $boxW, $boxH)))
+            $dc.DrawImage($src, [System.Windows.Rect]::new($drawX, $drawY, $drawW, $drawH))
+            $dc.Pop()
+        } finally {
+            $dc.Close()
+        }
+        $rtb = [System.Windows.Media.Imaging.RenderTargetBitmap]::new(224, 126, 96, 96, [System.Windows.Media.PixelFormats]::Pbgra32)
+        $rtb.Render($dv)
+        $rtb.Freeze()
+        $cameraPreviewImage.Source = $rtb
+        $cameraPreviewPanel.Visibility = [System.Windows.Visibility]::Visible
+    } catch {
+        $cameraPreviewImage.Source = $null
+        $cameraPreviewPanel.Visibility = [System.Windows.Visibility]::Collapsed
+    }
+}
+
+function Update-CameraImageView {
+    $state = Get-CameraImageState
+    $sig = "$($state.Active)|$($state.Stamp)|$($state.Rotation)|$($state.Border)|$($state.Zoom)|$($state.Name)"
+    if ($script:ViewState.CameraSignature -eq $sig) { return }
+    $script:ViewState.CameraSignature = $sig
+    if ($state.Active) {
+        $label = if ($state.Name) { $state.Name } else { 'camera-image.img' }
+        $bText = Get-GesherText $(if ($state.Border) { 'cp_camera_border_on' } else { 'cp_camera_border_off' })
+        $cameraBadge.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#EFF8FF')
+        $cameraBadgeText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#175CD3')
+        $cameraBadgeText.Text = Get-GesherText 'cp_camera_file' @($label, $state.Rotation, $state.Zoom, $bText)
+        $btnRotateCameraImage.IsEnabled = $true
+        $btnZoomInCameraImage.IsEnabled = $state.Zoom -lt 250
+        $btnZoomOutCameraImage.IsEnabled = $state.Zoom -gt 100
+        $btnToggleCameraBorder.IsEnabled = $true
+        $btnClearCameraImage.IsEnabled = $true
+    } else {
+        $cameraBadge.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#F2F4F7')
+        $cameraBadgeText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#475467')
+        $cameraBadgeText.Text = Get-GesherText 'cp_camera_live'
+        $btnRotateCameraImage.IsEnabled = $false
+        $btnZoomInCameraImage.IsEnabled = $false
+        $btnZoomOutCameraImage.IsEnabled = $false
+        $btnToggleCameraBorder.IsEnabled = $false
+        $btnClearCameraImage.IsEnabled = $false
+    }
+    Update-CameraPreviewBitmap $state
+}
+
+function Set-CameraImageFromFile([string] $filePath) {
+    try {
+        $dataDir = Join-Path $root 'data'
+        New-Item -ItemType Directory -Force $dataDir | Out-Null
+        $imgFile = Join-Path $dataDir 'camera-image.img'
+        Save-GesherCameraBmp $filePath $imgFile
+        $cur = Get-CameraImageState
+        $cur.Zoom = 100
+        $cur.Name = [IO.Path]::GetFileName($filePath)
+        Save-CameraImageMeta $cur
+        Update-CameraImageView
+        $statusMessage.Text = Get-GesherText 'cp_camera_loaded' @($cur.Name)
+    } catch {
+        $statusMessage.Text = Get-GesherText 'cp_camera_load_failed' @($_.Exception.Message)
+    }
+}
+
 function Refresh-Dashboard {
     # Stamps are taken before reading so a change made during the read is still noticed next tick.
     $stateStamp = Get-StateStamp
@@ -605,6 +793,7 @@ function Refresh-Dashboard {
     if (-not $script:LiveState.PendingSince) { $script:LiveState.PendingSince = [DateTime]::UtcNow }
     Update-DeviceView (Get-DeviceStatus)
     Update-MicrogView (Get-MicrogStatus)
+    Update-CameraImageView
     $installed = Get-InstalledApps
     Update-StoreView $installed
     Update-AppsView $installed
@@ -975,6 +1164,7 @@ function Complete-PanelUpdateWorker([switch] $Wait) {
 function Set-PanelInstallationBusy([bool] $busy) {
     $btnToggleDevice.IsEnabled = -not $busy
     $servicesCards.IsEnabled = -not $busy
+    if ($cameraCard) { $cameraCard.IsEnabled = -not $busy }
     $applicationsSection.IsEnabled = -not $busy
     $window.AllowDrop = -not $busy
     if ($busy) { Set-Busy $true (Get-GesherText 'cp_update_installing') }
@@ -1775,6 +1965,59 @@ $btnInstallApk.Add_Click({
 })
 
 # Drag & Drop Handler
+$btnChooseCameraImage.Add_Click({
+    if ($script:IsBusy) { return }
+    $ofd = [Microsoft.Win32.OpenFileDialog]::new()
+    $ofd.Filter = "Images (*.jpg;*.jpeg;*.png;*.webp;*.bmp)|*.jpg;*.jpeg;*.png;*.webp;*.bmp|All Files (*.*)|*.*"
+    if ($ofd.ShowDialog() -eq $true) {
+        Set-CameraImageFromFile $ofd.FileName
+    }
+})
+
+$btnRotateCameraImage.Add_Click({
+    if ($script:IsBusy) { return }
+    $cur = Get-CameraImageState
+    if (-not $cur.Active) { return }
+    $cur.Rotation = ($cur.Rotation + 90) % 360
+    Save-CameraImageMeta $cur
+    Update-CameraImageView
+})
+
+$btnZoomInCameraImage.Add_Click({
+    if ($script:IsBusy) { return }
+    $cur = Get-CameraImageState
+    if (-not $cur.Active) { return }
+    $cur.Zoom = [Math]::Min(250, $cur.Zoom + 20)
+    Save-CameraImageMeta $cur
+    Update-CameraImageView
+})
+
+$btnZoomOutCameraImage.Add_Click({
+    if ($script:IsBusy) { return }
+    $cur = Get-CameraImageState
+    if (-not $cur.Active) { return }
+    $cur.Zoom = [Math]::Max(100, $cur.Zoom - 20)
+    Save-CameraImageMeta $cur
+    Update-CameraImageView
+})
+
+$btnToggleCameraBorder.Add_Click({
+    if ($script:IsBusy) { return }
+    $cur = Get-CameraImageState
+    if (-not $cur.Active) { return }
+    $cur.Border = -not $cur.Border
+    Save-CameraImageMeta $cur
+    Update-CameraImageView
+})
+
+$btnClearCameraImage.Add_Click({
+    if ($script:IsBusy) { return }
+    $dataDir = Join-Path $root 'data'
+    Remove-Item -LiteralPath (Join-Path $dataDir 'camera-image.img'), (Join-Path $dataDir 'camera-image.meta') -Force -ErrorAction SilentlyContinue
+    Update-CameraImageView
+    $statusMessage.Text = Get-GesherText 'cp_camera_cleared'
+})
+
 $window.Add_Drop({
     param($sender, $e)
     if ($script:IsBusy) { return }
@@ -1783,6 +2026,11 @@ $window.Add_Drop({
         $packages = @($files | Where-Object { [IO.Path]::GetExtension($_).ToLowerInvariant() -in '.apk', '.apks', '.xapk' })
         if ($packages.Count) {
             [void](Start-PanelAction 'Install' @{ Files = $packages } (Get-GesherText 'cp_installing' @([IO.Path]::GetFileName($packages[0]))))
+            return
+        }
+        $images = @($files | Where-Object { [IO.Path]::GetExtension($_).ToLowerInvariant() -in '.jpg', '.jpeg', '.png', '.webp', '.bmp' })
+        if ($images.Count) {
+            Set-CameraImageFromFile $images[0]
         }
     }
 })

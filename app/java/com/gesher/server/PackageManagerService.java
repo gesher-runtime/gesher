@@ -651,16 +651,43 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (String name : new String[] {PackageManager.FEATURE_APP_WIDGETS,
                 PackageManager.FEATURE_TOUCHSCREEN,
                 PackageManager.FEATURE_FAKETOUCH, PackageManager.FEATURE_SCREEN_PORTRAIT,
-                PackageManager.FEATURE_SCREEN_LANDSCAPE}) {
-            android.content.pm.FeatureInfo f = new android.content.pm.FeatureInfo();
-            f.name = name;
-            FEATURES.put(name, f);
+                PackageManager.FEATURE_SCREEN_LANDSCAPE,
+                PackageManager.FEATURE_SENSOR_ACCELEROMETER,
+                PackageManager.FEATURE_SENSOR_LIGHT}) {
+            addFeature(FEATURES, name);
         }
         try {
             addBluetoothFeatures(FEATURES, WindowsBluetooth.adapter(0));
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no radio to report.
         }
+        addCameraFeatures(WindowsCamera.devices());
+    }
+
+    private static void addFeature(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features, String name) {
+        android.content.pm.FeatureInfo f = new android.content.pm.FeatureInfo();
+        f.name = name;
+        features.put(name, f);
+    }
+
+    private static void addCameraFeatures(List<WindowsCamera.Device> cameras) {
+        if (cameras.isEmpty()) return;
+        addFeature(FEATURES, PackageManager.FEATURE_CAMERA_ANY);
+        for (WindowsCamera.Device camera : cameras) {
+            if (camera.isRearFacing()) {
+                addFeature(FEATURES, PackageManager.FEATURE_CAMERA);
+                if (!camera.test) {
+                    addFeature(FEATURES, PackageManager.FEATURE_CAMERA_AUTOFOCUS);
+                }
+            } else {
+                addFeature(FEATURES, PackageManager.FEATURE_CAMERA_FRONT);
+            }
+        }
+    }
+
+    public static android.content.pm.SystemFeaturesCache systemFeaturesCache() {
+        return new android.content.pm.SystemFeaturesCache(FEATURES);
     }
 
     /** The Bluetooth features of {@code adapter} (none without a radio). */
@@ -671,9 +698,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         names.add(PackageManager.FEATURE_BLUETOOTH);
         if (adapter.le()) names.add(PackageManager.FEATURE_BLUETOOTH_LE);
         for (String name : names) {
-            android.content.pm.FeatureInfo f = new android.content.pm.FeatureInfo();
-            f.name = name;
-            features.put(name, f);
+            addFeature(features, name);
         }
     }
 

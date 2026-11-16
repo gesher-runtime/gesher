@@ -42,6 +42,7 @@ function Get-MicrogStatus { $false }
 function Update-DeviceView([bool] $running) { $script:ShownDevice = $running }
 function Update-MicrogView([bool] $enabled) { }
 function Update-StoreView($installed) { }
+function Update-CameraImageView { }
 function Get-InstalledApps {
     $script:Reads++
     if ($script:FailRead) { $script:FailRead = $false; throw 'Transient package read failure' }
