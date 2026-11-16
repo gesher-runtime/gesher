@@ -140,11 +140,13 @@ Android section header table past EOF, which Android's linker rejects).
   are not emulated (-ENOSYS).
 - `ptrace` (a process nobody traces) and `regcomp`/`regexec` (over
   `std::regex`'s POSIX grammars) are now in the shim; Ijiami imports them.
-  Regex compilation supports basic/extended syntax, `REG_ICASE`, `REG_NOSUB`
-  and `REG_PEND`; `REG_STARTEND` honors bounded, non-terminated byte sequences.
-  `REG_NEWLINE` and other unsupported compilation flags return `REG_INVARG`
-  instead of silently using different matching rules. A complete newline-aware
-  POSIX engine remains future work.
+  Regex compilation supports basic/extended syntax, `REG_ICASE`, `REG_NOSUB`,
+  `REG_NEWLINE` (for patterns without literal newlines, searched per
+  `\n`-delimited line), and `REG_PEND`, and normalizes BSD/Bionic redundant
+  escapes of ordinary punctuation (such as `\/`) outside `[...]` brackets;
+  `REG_STARTEND` honors bounded, non-terminated byte sequences. Unsupported
+  compilation flags return `REG_INVARG` instead of silently using different
+  matching rules.
 - Copies of shared mappings publish their changes at msync, munmap,
   mprotect and replacement, not continuously to another copy of the file.
 - Soundcore 3.9.7 now gets past its native libraries: both unpack, its

@@ -218,8 +218,29 @@ int gesher_selftest(void) {
     regfree(&re);
     char message[64];
     check("regcomp bad pattern", regcomp(&re, "(", REG_EXTENDED) != 0);
-    check("unsupported REG_NEWLINE is rejected explicitly",
-          regcomp(&re, "^x$", REG_EXTENDED | REG_NEWLINE) == REG_INVARG);
+    check("REG_NEWLINE matches line anchors",
+          regcomp(&re, "^x$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nx\nb", 0, NULL, 0) == 0 &&
+              regexec(&re, "a\nx\nb", 0, NULL, REG_NOTBOL | REG_NOTEOL) == 0);
+    regfree(&re);
+    check("REG_NEWLINE matches trailing empty line with offset",
+          regcomp(&re, "^$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\n", 1, m, 0) == 0 && m[0].rm_so == 2 && m[0].rm_eo == 2);
+    regfree(&re);
+    check("REG_NEWLINE excludes newline from dot",
+          regcomp(&re, "a.b", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 0, NULL, 0) == REG_NOMATCH);
+    regfree(&re);
+    check("REG_NEWLINE extended accepts escaped ordinary slash and escaped bracket",
+          regcomp(&re, "^\\|[0-9]{2}\\/[0-9]{5}\\^$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "|11/11111^", 0, NULL, 0) == 0 &&
+              regexec(&re, "|11x11111^", 0, NULL, 0) == REG_NOMATCH);
+    regfree(&re);
+    check("escaped bracket stays literal with escaped slash",
+          regcomp(&re, "a\\[b\\/c\\]", REG_EXTENDED) == 0 &&
+              regexec(&re, "a[b/c]", 0, NULL, 0) == 0 &&
+              regexec(&re, "ab", 0, NULL, 0) == REG_NOMATCH);
+    regfree(&re);
     check("regerror", regerror(REG_NOMATCH, &re, message, sizeof(message)) > 1 &&
                           message[0] != '\0');
 

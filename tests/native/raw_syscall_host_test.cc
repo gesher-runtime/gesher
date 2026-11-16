@@ -97,7 +97,32 @@ int main() {
   match = {-1, 3};
   Check("negative range rejected", execute(&re, "x42y", 1, &match, 4) == 16);
   free_regex(&re);
-  Check("unsupported newline mode rejected", compile(&re, "^x$", 1 | 8) == 16);
+  Check("REG_NEWLINE matches per-line anchors",
+        compile(&re, "^x$", 1 | 8) == 0 && execute(&re, "a\nx\nb", 0, nullptr, 0) == 0 &&
+            execute(&re, "a\nx\nb", 0, nullptr, 1 | 2) == 0);
+  free_regex(&re);
+  Check("REG_NEWLINE matches trailing empty line and respects offsets",
+        compile(&re, "^$", 1 | 8) == 0 &&
+            execute(&re, "a\n", 1, &match, 0) == 0 && match.begin == 2 && match.end == 2);
+  free_regex(&re);
+  Check("REG_NEWLINE excludes newline from dot and negated class",
+        compile(&re, "a.b", 1 | 8) == 0 && execute(&re, "a\nb", 0, nullptr, 0) != 0);
+  free_regex(&re);
+  Check("REG_NEWLINE with REG_STARTEND keeps offsets relative to base",
+        compile(&re, "^cd$", 1 | 8) == 0 &&
+            ((match = {1, 6}), execute(&re, "ab\ncd\n", 1, &match, 4) == 0) &&
+            match.begin == 3 && match.end == 5);
+  free_regex(&re);
+  Check("REG_NEWLINE extended handles escaped ordinary slash and escaped bracket",
+        compile(&re, "^\\|[0-9]{2}\\/[0-9]{5}\\^$", 1 | 8) == 0 &&
+            execute(&re, "|11/11111^", 0, nullptr, 0) == 0 &&
+            execute(&re, "|11x11111^", 0, nullptr, 0) != 0);
+  free_regex(&re);
+  Check("escaped bracket stays literal outside character class",
+        compile(&re, "a\\[b\\/c\\]", 1) == 0 && execute(&re, "a[b/c]", 0, nullptr, 0) == 0 &&
+            execute(&re, "ab", 0, nullptr, 0) != 0);
+  free_regex(&re);
+  Check("REG_NEWLINE rejects literal newline in pattern", compile(&re, "a\nb", 1 | 8) == 16);
   Check("REG_PEND needs an end pointer", compile(&re, "x", 32) == 16);
   std::printf("raw syscall contracts: %d failures\n", failures);
   return failures != 0;

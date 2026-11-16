@@ -29,6 +29,7 @@
 #include <errno.h>
 #include <string.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <regex>
@@ -193,14 +194,69 @@ struct BionicRegmatch {
 };
 
 constexpr int32_t kRegMagic = 0xf265;
-constexpr int kRegExtended = 1, kRegIcase = 2, kRegNosub = 4, kRegPend = 32;
+constexpr int kRegExtended = 1, kRegIcase = 2, kRegNosub = 4, kRegNewline = 8, kRegPend = 32;
 constexpr int kRegNotbol = 1, kRegNoteol = 2, kRegStartend = 4;
 constexpr int kRegNomatch = 1, kRegBadpat = 2, kRegEspace = 12, kRegInvarg = 16;
 
 struct CompiledRegex {
   std::regex re;
   bool nosub;
+  bool newline;
 };
+
+// BSD/bionic POSIX regcomp treats `\c` for an ordinary non-special punctuation
+// character (such as `\/` or `\-` outside `[...]`) as literal `c`, whereas
+// libc++'s std::regex throws error_escape. Strip only redundant escapes outside
+// POSIX bracket expressions while leaving regex metacharacters and `[...]` intact.
+std::string NormalizePosixPattern(const std::string& pattern, bool extended) {
+  std::string out;
+  out.reserve(pattern.size());
+  const size_t n = pattern.size();
+  size_t i = 0;
+  auto is_special_escape = [extended](char c) {
+    if (c == '<' || c == '>') return true;
+    if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) return true;
+    const char* specials = extended ? "^.[$()|*+?{\\" : "^.[$*\\(){}";
+    return std::strchr(specials, c) != nullptr;
+  };
+  while (i < n) {
+    if (pattern[i] == '[') {
+      out.push_back('[');
+      ++i;
+      if (i < n && pattern[i] == '^') out.push_back(pattern[i++]);
+      if (i < n && pattern[i] == ']') out.push_back(pattern[i++]);
+      while (i < n) {
+        if (pattern[i] == '[' && i + 1 < n &&
+            (pattern[i + 1] == ':' || pattern[i + 1] == '.' || pattern[i + 1] == '=')) {
+          const char kind = pattern[i + 1];
+          size_t end_class = i + 2;
+          while (end_class + 1 < n &&
+                 !(pattern[end_class] == kind && pattern[end_class + 1] == ']')) {
+            ++end_class;
+          }
+          if (end_class + 1 < n) {
+            out.append(pattern, i, end_class + 2 - i);
+            i = end_class + 2;
+            continue;
+          }
+        }
+        const char ch = pattern[i++];
+        out.push_back(ch);
+        if (ch == ']') break;
+      }
+      continue;
+    }
+    if (pattern[i] == '\\' && i + 1 < n) {
+      const char next = pattern[i + 1];
+      if (is_special_escape(next)) out.push_back('\\');
+      out.push_back(next);
+      i += 2;
+      continue;
+    }
+    out.push_back(pattern[i++]);
+  }
+  return out;
+}
 
 int RegexError(std::regex_constants::error_type code) {
   using namespace std::regex_constants;
@@ -224,23 +280,26 @@ int RegexError(std::regex_constants::error_type code) {
 
 int BIONIC_SYSV Regcomp(BionicRegex* preg, const char* pattern, int cflags) {
   if (preg == nullptr || pattern == nullptr) return kRegInvarg;
-  // std::regex's POSIX grammars cannot express REG_NEWLINE's internal line
-  // anchors. Reject unsupported modes instead of reporting a compiled regex
-  // that silently uses different matching rules.
-  constexpr int supported = kRegExtended | kRegIcase | kRegNosub | kRegPend;
+  // POSIX REG_NEWLINE excludes '\n' from `.` and `[^...]` and lets `^`/`$`
+  // anchor around internal '\n' bytes. Reject patterns that contain a literal
+  // '\n' with REG_NEWLINE instead of silently matching across lines.
+  constexpr int supported = kRegExtended | kRegIcase | kRegNosub | kRegNewline | kRegPend;
   if ((cflags & ~supported) != 0 ||
       ((cflags & kRegPend) != 0 &&
        (preg->re_endp == nullptr || reinterpret_cast<uintptr_t>(preg->re_endp) <
                                      reinterpret_cast<uintptr_t>(pattern)))) return kRegInvarg;
-  std::regex::flag_type flags =
-      (cflags & kRegExtended) != 0 ? std::regex::extended : std::regex::basic;
+  const bool extended = (cflags & kRegExtended) != 0;
+  const bool newline = (cflags & kRegNewline) != 0;
+  std::regex::flag_type flags = extended ? std::regex::extended : std::regex::basic;
   if ((cflags & kRegIcase) != 0) flags |= std::regex::icase;
   if ((cflags & kRegNosub) != 0) flags |= std::regex::nosubs;
   try {
-    std::string text = (cflags & kRegPend) != 0 && preg->re_endp != nullptr
-                           ? std::string(pattern, preg->re_endp)
-                           : std::string(pattern);
-    auto* compiled = new CompiledRegex{std::regex(text, flags), (cflags & kRegNosub) != 0};
+    std::string raw = (cflags & kRegPend) != 0 && preg->re_endp != nullptr
+                          ? std::string(pattern, preg->re_endp)
+                          : std::string(pattern);
+    if (newline && raw.find('\n') != std::string::npos) return kRegInvarg;
+    std::string text = NormalizePosixPattern(raw, extended);
+    auto* compiled = new CompiledRegex{std::regex(text, flags), (cflags & kRegNosub) != 0, newline};
     preg->re_magic = kRegMagic;
     preg->re_nsub = compiled->re.mark_count();
     preg->re_g = compiled;
@@ -273,9 +332,27 @@ int BIONIC_SYSV Regexec(const BionicRegex* preg, const char* string, size_t nmat
   if ((eflags & kRegNotbol) != 0) mflags |= std::regex_constants::match_not_bol;
   if ((eflags & kRegNoteol) != 0) mflags |= std::regex_constants::match_not_eol;
   std::cmatch m;
-  bool found;
+  bool found = false;
   try {
-    found = std::regex_search(begin, end, m, compiled->re, mflags);
+    if (!compiled->newline) {
+      found = std::regex_search(begin, end, m, compiled->re, mflags);
+    } else {
+      const char* cur = begin;
+      while (true) {
+        const char* nl = std::find(cur, end, '\n');
+        auto line_flags = std::regex_constants::match_default;
+        if (cur == begin && (eflags & kRegNotbol) != 0)
+          line_flags |= std::regex_constants::match_not_bol;
+        if (nl == end && (eflags & kRegNoteol) != 0)
+          line_flags |= std::regex_constants::match_not_eol;
+        if (std::regex_search(cur, nl, m, compiled->re, line_flags)) {
+          found = true;
+          break;
+        }
+        if (nl == end) break;
+        cur = nl + 1;
+      }
+    }
   } catch (...) {
     return kRegEspace;
   }
