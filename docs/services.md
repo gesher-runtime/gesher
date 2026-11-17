@@ -331,6 +331,28 @@ the shared view's media on the host files. Component enabled states, memory info
 state and provider intent queries answer as Android (ADR 0087). Tests:
 tests/dex-services `SettingsIntentsTest` (tests/windows/tracks/95-browser.ps1).
 
+## Activity usage history
+
+The managed system server records confirmed activity resume, pause and stop transitions.
+Teardown closes any still-open activity interval. Package aggregates count overlapping
+activities only once per package, and paused activities continue to count toward visible
+time until stopped. Filtered event queries use an inclusive start and an exclusive end.
+Daily, weekly, monthly and yearly summaries use fixed-width UTC buckets and select the
+buckets that overlap the request.
+
+The history serves at most 30 days and 12,000 recent transitions. A background writer
+atomically checkpoints updates at 30-second intervals and shutdown flushes pending work.
+After interruption the latest committed checkpoint closes the previous broker lifetime,
+so broker downtime contributes no usage. Uninstall clears the affected package's data
+before its name can be installed again. The single-process launcher provides empty
+usage history and never reads the managed device's usage file.
+
+An authenticated app can query its own events. Global queries require effective
+`PACKAGE_USAGE_STATS` or a trusted control-plane caller. Gesher has no Usage Access
+permission UI yet. The activity history does not add Android Doze, app standby,
+usage-limit observers, foreground-service usage, or configuration and screen-state
+telemetry.
+
 ## Status and next steps
 
 ### Done and verified

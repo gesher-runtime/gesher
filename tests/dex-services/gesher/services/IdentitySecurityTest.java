@@ -74,11 +74,16 @@ public final class IdentitySecurityTest {
         IActivityManager am = IActivityManager.Stub.asInterface(ServiceManager.getService("activity"));
         android.permission.IPermissionManager permissions = android.permission.IPermissionManager
                 .Stub.asInterface(ServiceManager.getService("permissionmgr"));
-        require(am != null && permissions != null, "The test device services are unavailable");
+        android.app.usage.IUsageStatsManager usage = android.app.usage.IUsageStatsManager.Stub
+                .asInterface(ServiceManager.getService("usagestats"));
+        require(am != null && permissions != null && usage != null,
+                "The test device services are unavailable");
         denied(() -> am.attachApplication(new ThreadStub(), Long.MAX_VALUE), "start sequence");
         // Granting another package's permission is a privileged mutation. It must
         // reject this unknown PID before looking up any claimed package identity.
         denied(() -> permissions.grantRuntimePermission(packageName, permission, "default:0", 0), "");
+        denied(() -> usage.queryEventsForPackage(0, Long.MAX_VALUE, packageName), "");
+        denied(() -> usage.queryEvents(0, Long.MAX_VALUE, packageName), "");
         System.out.println("IdentitySecurityTest: real Binder rejects forged attachment and unattached permission mutation");
     }
 
