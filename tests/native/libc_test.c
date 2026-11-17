@@ -215,6 +215,13 @@ static void test_scan_many_arguments(void) {
                      &consumed);
   int ordered = 1;
   for (int i = 0; i < 32; ++i) ordered &= values[i] == i + 1;
+  if (count != 36 || !ordered || strcmp(letters, "ab") != 0 || wide != 7000000000L ||
+      first != 1.25L || last != 2.5L || consumed != (int)sizeof(input) - 2) {
+    printf("SCAN_MANY count=%d ordered=%d letters_ok=%d wide_ok=%d\n", count, ordered,
+           strcmp(letters, "ab") == 0, wide == 7000000000L);
+    printf("SCAN_MANY first_ok=%d last_ok=%d consumed=%d expected=%d\n",
+           first == 1.25L, last == 2.5L, consumed, (int)sizeof(input) - 2);
+  }
   check("sscanf assigns more than 24 mixed destinations",
         count == 36 && ordered && strcmp(letters, "ab") == 0 && wide == 7000000000L &&
             first == 1.25L && last == 2.5L && consumed == (int)sizeof(input) - 2);
@@ -235,7 +242,9 @@ static void test_scan_many_arguments(void) {
   // distinguish a genuine matching failure from an argument-limit error.
   const char partial[] =
       "1.25 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 !";
-  int wrote = fputs(partial, stream) >= 0 && fseek(stream, 0, SEEK_SET) == 0;
+  int write_result = fputs(partial, stream);
+  int seek_result = fseek(stream, 0, SEEK_SET);
+  int wrote = write_result >= 0 && seek_result == 0;
   memset(values, 0, sizeof(values));
   first = 0;
   last = 4.5L;
@@ -245,9 +254,17 @@ static void test_scan_many_arguments(void) {
                 : -1;
   ordered = 1;
   for (int i = 0; i < 32; ++i) ordered &= values[i] == (i < 25 ? i + 1 : 0);
+  int next = fgetc(stream);
+  if (count != 26 || !ordered || first != 1.25L || last != 4.5L || consumed != -1 ||
+      next != '!') {
+    printf("SCAN_PARTIAL write=%d seek=%d count=%d ordered=%d\n",
+           write_result, seek_result, count, ordered);
+    printf("SCAN_PARTIAL first_ok=%d last_ok=%d consumed=%d next=%d\n",
+           first == 1.25L, last == 4.5L, consumed, next);
+  }
   check("vfscanf preserves partial assignments and the next unmatched byte",
         count == 26 && ordered && first == 1.25L && last == 4.5L && consumed == -1 &&
-            fgetc(stream) == '!');
+            next == '!');
   fclose(stream);
   unlink(path);
 }
