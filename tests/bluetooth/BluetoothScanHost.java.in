@@ -55,6 +55,74 @@ public final class BluetoothScanHost {
         scanner.cleanup();
         Handler.drain();
         SystemClock.now = 100;
+        BluetoothHost.scanAllowed = true;
+        BluetoothHost.radioOn = true;
+        BluetoothHost.permissionChecks = 0;
+    }
+    private static boolean callbackStart(ScanSettings settings, Callback callback) {
+        try {
+            scanner.startScan(null, settings, callback);
+            return true;
+        } catch (SecurityException denied) {
+            return false;
+        }
+    }
+    private static int intentStart(ScanSettings settings, PendingIntent intent) {
+        try {
+            return scanner.startScan(null, settings, intent);
+        } catch (SecurityException denied) {
+            return Integer.MIN_VALUE;
+        }
+    }
+    private static void permissionPrecedence() throws Exception {
+        ScanSettings unsupported = new ScanSettings(ScanSettings.CALLBACK_TYPE_FIRST_MATCH, 0);
+        ScanSettings supported = new ScanSettings(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
+        BluetoothHost.scanAllowed = false;
+        Callback rejected = new Callback();
+        check(callbackStart(unsupported, rejected) && rejected.errors == 0,
+                "unsupported callback settings are checked before scan permission");
+        Handler.drain();
+        check(rejected.errors == 1 && rejected.lastError == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED
+                && client(rejected) == null, "permission-denied unsupported callback is rejected once without registration");
+        PendingIntent intent = new PendingIntent();
+        check(intentStart(unsupported, intent) == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED
+                && intent.attempts == 0 && client(intent) == null,
+                "unsupported PendingIntent settings fail without checking permission or sending");
+        check(BluetoothHost.permissionChecks == 0, "unsupported settings never enter scan permission enforcement");
+
+        BluetoothHost.radioOn = false;
+        Callback off = new Callback();
+        check(callbackStart(unsupported, off) && off.errors == 0,
+                "radio-off callback failure is posted before settings and permission checks");
+        Handler.drain();
+        check(off.errors == 1 && off.lastError == ScanCallback.SCAN_FAILED_INTERNAL_ERROR
+                && client(off) == null, "radio-off callback receives INTERNAL_ERROR once without registration");
+        check(intentStart(unsupported, intent) == ScanCallback.SCAN_FAILED_INTERNAL_ERROR
+                && intent.attempts == 0 && client(intent) == null && BluetoothHost.permissionChecks == 0,
+                "radio-off PendingIntent returns INTERNAL_ERROR before settings and permission checks");
+
+        BluetoothHost.radioOn = true;
+        Callback denied = new Callback();
+        check(!callbackStart(supported, denied) && client(denied) == null,
+                "admitted callback still throws SecurityException before registration without permission");
+        check(intentStart(supported, intent) == Integer.MIN_VALUE && client(intent) == null,
+                "admitted PendingIntent still throws SecurityException before registration without permission");
+        Handler.drain();
+        check(denied.errors == 0 && intent.attempts == 0 && BluetoothHost.permissionChecks == 2,
+                "permission denial does not also post an error or send an intent");
+
+        BluetoothHost.scanAllowed = true;
+        Callback duplicate = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
+        Object original = client(duplicate);
+        BluetoothHost.scanAllowed = false;
+        int before = BluetoothHost.permissionChecks;
+        check(callbackStart(unsupported, duplicate) && client(duplicate) == original,
+                "duplicate callback preserves its registration after scan permission is revoked");
+        Handler.drain();
+        check(duplicate.errors == 1 && duplicate.lastError == ScanCallback.SCAN_FAILED_ALREADY_STARTED
+                && BluetoothHost.permissionChecks == before,
+                "duplicate callback fails before new settings and scan permission checks");
+        reset();
     }
     private static void unsupported(ScanSettings settings, String name) throws Exception {
         Callback callback = new Callback();
@@ -84,9 +152,18 @@ public final class BluetoothScanHost {
         reset();
     }
     public static void main(String[] args) throws Exception {
+        Callback cold = new Callback();
+        scanner.startScan(null, new ScanSettings(ScanSettings.CALLBACK_TYPE_FIRST_MATCH, 0), cold);
+        check(client(cold) == null && field(BluetoothLeScanner.class, "sThread").get(null) == null,
+                "rejected first request does not create a client or native watcher thread");
+        Handler.drain();
+        check(cold.errors == 1 && cold.lastError == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED,
+                "first rejected request still dispatches its failure");
+        reset();
         // The complete production scanner runs through its public API. A sentinel
         // replaces only the native watcher thread; no host radio is fabricated.
         field(BluetoothLeScanner.class, "sThread").set(null, Thread.currentThread());
+        permissionPrecedence();
         Callback all = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
         for (int i = 0; i < 4096; i++) deliver("device-" + i);
         Handler.drain();
@@ -146,6 +223,10 @@ public final class BluetoothScanHost {
                 "PendingIntent rejection leaves its token available for a supported retry");
         check(scanner.startScan(null, null, intent) == ScanCallback.NO_ERROR && client(intent) != null,
                 "null PendingIntent settings select the supported immediate default");
+        Object activeIntent = client(intent);
+        check(scanner.startScan(null, new ScanSettings(ScanSettings.CALLBACK_TYPE_FIRST_MATCH, 0), intent)
+                == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED && client(intent) == activeIntent,
+                "unsupported replacement preserves an already active PendingIntent registration");
         deliver("pending-result");
         check(intent.attempts == 0, "successful PendingIntent reports are scheduled on the callback queue");
         Handler.drain();
@@ -233,9 +314,14 @@ class BluetoothDevice {
     static BluetoothDevice createFromHost(String address, int type) { return new BluetoothDevice(address, type); }
 }
 class BluetoothHost {
-    static void enforceScan(Context context) {}
+    static boolean scanAllowed = true, radioOn = true;
+    static int permissionChecks;
+    static void enforceScan(Context context) {
+        permissionChecks++;
+        if (!scanAllowed) throw new SecurityException("BLUETOOTH_SCAN");
+    }
     static boolean mayReceiveScanResults(Context context) { return true; }
-    static boolean on() { return true; }
+    static boolean on() { return radioOn; }
     static Context context(Context context) { return context; }
     static BluetoothDevice device(String address, int type, Context context) { return new BluetoothDevice(address, type); }
     static void sawLe(String address, String name) {}

@@ -1,6 +1,6 @@
 name: automerge
 
-# Merges a PR labelled `automerge` once CI is green on its current head.
+# Squash-merges a PR labelled `automerge` once CI is green on its current head.
 # Rules live in .github/scripts/automerge.js. This workflow only ever runs the
 # default branch's copy of that script; it never checks out PR code.
 
@@ -17,8 +17,8 @@ on:
 
 permissions:
   contents: write       # merge
-  pull-requests: write  # read PRs, remove label, comment
-  issues: write         # label events and comments go through the issues API
+  pull-requests: write  # read PRs, submit/dismiss bot approval reviews
+  issues: write         # remove labels; read events and legacy opening receipts
   actions: write        # read workflow runs, dispatch ci.yml after merge
   checks: read
   statuses: read

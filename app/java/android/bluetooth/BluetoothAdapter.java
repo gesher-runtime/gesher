@@ -265,8 +265,7 @@ public final class BluetoothAdapter {
 
     /** Whether the controller provides on-chip scan batching, not app-process batching. */
     public boolean isOffloadedScanBatchingSupported() {
-        // BluetoothLeScanner implements report delays in the app's process.
-        // That does not provide the controller offload promised by this API.
+        // The Windows advertisement watcher does not expose controller batching.
         return false;
     }
 

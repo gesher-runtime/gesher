@@ -263,7 +263,7 @@ public final class BluetoothHostTest {
         step("service policy: BLUETOOTH cannot switch the radio, API 31+ needs CONNECT/SCAN, API 33+ refused, consent asked");
     }
 
-    private static void permissions() {
+    private static void permissions() throws Exception {
         App none = new App(34);
         BluetoothAdapter adapter = new BluetoothManager(none).getAdapter();
         check(adapter != null && adapter.isEnabled() && adapter.getState() == BluetoothAdapter.STATE_ON,
@@ -279,6 +279,34 @@ public final class BluetoothHostTest {
             check(false, "startScan without BLUETOOTH_SCAN");
         } catch (SecurityException expected) {
             check(expected.getMessage().contains("BLUETOOTH_SCAN"), "the exception names BLUETOOTH_SCAN");
+        }
+        // Android rejects unsupported settings locally before the registration
+        // service enforces BLUETOOTH_SCAN, including for a caller without it.
+        BluetoothLeScanner deniedScanner = adapter.getBluetoothLeScanner();
+        LinkedBlockingQueue<Integer> failures = new LinkedBlockingQueue<>();
+        ScanSettings unsupported = new ScanSettings.Builder()
+                .setCallbackType(ScanSettings.CALLBACK_TYPE_FIRST_MATCH).build();
+        deniedScanner.startScan(null, unsupported, new ScanCallback() {
+            @Override public void onScanFailed(int error) { failures.add(error); }
+        });
+        check(take(failures, "unsupported settings without scan permission")
+                == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED,
+                "unsupported settings take precedence over a missing scan permission");
+        PendingIntent deniedIntent = new PendingIntent(new android.content.IIntentSender.Stub() {
+            @Override public void send(int code, Intent intent, String type, android.os.IBinder allowlist,
+                    android.content.IIntentReceiver finished, String permission, android.os.Bundle options) {
+                throw new AssertionError("Rejected scan must not send its PendingIntent");
+            }
+        });
+        check(deniedScanner.startScan(null, unsupported, deniedIntent)
+                == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED,
+                "unsupported PendingIntent settings precede scan permission enforcement");
+        try {
+            deniedScanner.startScan(null, null, deniedIntent);
+            check(false, "supported PendingIntent scan without BLUETOOTH_SCAN");
+        } catch (SecurityException expected) {
+            check(expected.getMessage().contains("BLUETOOTH_SCAN"),
+                    "supported PendingIntent scan still needs BLUETOOTH_SCAN");
         }
         // Apps targeting API 30 use the legacy BLUETOOTH permission.
         BluetoothAdapter legacy = new BluetoothManager(new App(30, "android.permission.BLUETOOTH")).getAdapter();

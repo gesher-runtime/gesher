@@ -111,13 +111,15 @@ zero report delay is accepted. A callback receives one posted
 synchronously without sending the intent. Neither request creates a registration.
 An already registered callback still receives `SCAN_FAILED_ALREADY_STARTED`
 before its new settings are considered, and a rejected new callback can be
-retried with supported settings.
+retried with supported settings. As in Android, radio state, duplicate callbacks
+and unsupported settings are checked before registration enforces scan permission.
+An admitted scan still throws `SecurityException` if the caller lacks that permission.
 
 `tools/test_bluetooth_scan_contracts.py` compiles the complete production scanner
 with explicit scheduling/value-type/native boundaries. It checks these failure
-paths, retry, immediate results, PendingIntent payload and cancellation, and
-stop/cleanup suppressing queued delivery. `--source-ref` is a regression negative
-control: the original scanner compiles, then fails the rejection assertions.
+paths, permission/error precedence, retry, immediate results, PendingIntent payload
+and cancellation, and stop/cleanup suppressing queued delivery. `--source-ref` is a
+regression negative control: the original scanner compiles, then fails the rejection assertions.
 The public API assertions in `BluetoothHostTest.scan` also run in the existing
 Windows ART track with its isolated test radio. These tests do not demonstrate
 physical controller offload, GATT on real devices, or completion of issue #56 B03.

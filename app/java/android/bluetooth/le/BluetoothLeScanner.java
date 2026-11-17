@@ -389,7 +389,6 @@ public final class BluetoothLeScanner {
             PendingIntent intent) {
         if (callback == null && intent == null) throw new IllegalArgumentException("callback is null");
         if (settings == null) throw new IllegalArgumentException("settings is null");
-        BluetoothHost.enforceScan(mContext);
         if (!BluetoothHost.on()) {
             Log.w(TAG, "BLE is not available");
             return error(callback, ScanCallback.SCAN_FAILED_INTERNAL_ERROR);
@@ -407,6 +406,9 @@ public final class BluetoothLeScanner {
                     || settings.getReportDelayMillis() != 0) {
                 return error(callback, ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED);
             }
+            // Android performs these local admission checks before the service
+            // enforces scan permission when registering an accepted request.
+            BluetoothHost.enforceScan(mContext);
             Client c = new Client(key, callback, intent, context, filters, settings);
             if (!c.mayReceive) {
                 Log.w(TAG, "scan results withheld: no location permission (and no neverForLocation)");
