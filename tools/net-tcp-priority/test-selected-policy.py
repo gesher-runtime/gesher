@@ -33,7 +33,7 @@ WINSOCK_SHA256='190b659777f3df317e4dc90f9df322a95bd2c840ea00ad2976f9dbf56935b02d
 # shared Windows host/guest event-loop fixture. Affinity behavior is covered by
 # tools/test_ordinary_os_contracts.py; filesystem statistics by
 # tools/test_statvfs_contracts.py, the Windows POSIX probe and both ELF fixtures.
-SYSTEM_SHA256='ea938043e02d234b44c78281c6aadf34fd2f96f2707429947479774fe75ea672'
+SYSTEM_SHA256='3e6fc1241b54dbe11a203b01e208f2dba372101e4a54ea96d839da89f6e1c2b0'
 # These exact fcntl preamble substitutions preserve the lock-pointer path
 # and every other fcntl/socket byte. Getters consume no operand; only supported
 # integer commands consume a promoted int. No function-sized exclusion is added.

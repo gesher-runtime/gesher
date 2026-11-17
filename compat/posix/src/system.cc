@@ -508,7 +508,9 @@ int posix_fadvise(int fd, off_t, off_t len, int advice) {
     // Keep the CRT descriptor stable while inspecting its Win32 object.
     gesher::record_locks::DescriptorGuard descriptor_guard;
     HANDLE handle = gesher::HandleFromFd(fd);
-    if (handle == INVALID_HANDLE_VALUE) return EBADF;
+    // UCRT uses -2 for unbound standard streams. Do not inspect it as a
+    // Win32 handle, where the same value denotes the current thread.
+    if (handle == INVALID_HANDLE_VALUE || handle == reinterpret_cast<HANDLE>(intptr_t{-2})) return EBADF;
     uint32_t access = 0;
     const int access_error = gesher::record_locks::HandleAccess(handle, &access);
     if (access_error) return access_error;

@@ -11,7 +11,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-using HANDLE = int;
+using HANDLE = intptr_t;
 using DWORD = unsigned long;
 constexpr HANDLE INVALID_HANDLE_VALUE = -1;
 constexpr DWORD FILE_TYPE_UNKNOWN = 0, FILE_TYPE_DISK = 1, FILE_TYPE_PIPE = 3, FILE_TYPE_CHAR = 2;
@@ -22,6 +22,7 @@ static void SetLastError(DWORD error) { last_error = error; }
 static DWORD GetLastError() { return last_error; }
 static int length_error, growth_error, access_error;
 static unsigned growth_calls;
+static bool unbound_standard_input;
 [[maybe_unused]] static DWORD GetFileType(HANDLE handle) {
   struct stat info{};
   if (fstat(handle, &info) < 0) {
@@ -33,7 +34,10 @@ static unsigned growth_calls;
 }
 namespace gesher {
 static int ErrnoFromWin32(DWORD error) { return static_cast<int>(error); }
-[[maybe_unused]] static HANDLE HandleFromFd(int fd) { return fcntl(fd, F_GETFD) < 0 ? -1 : fd; }
+[[maybe_unused]] static HANDLE HandleFromFd(int fd) {
+  if (unbound_standard_input && fd == STDIN_FILENO) return -2;
+  return fcntl(fd, F_GETFD) < 0 ? -1 : fd;
+}
 namespace record_locks {
 struct DescriptorGuard {};
 [[maybe_unused]] static int HandleAccess(HANDLE handle, uint32_t* access) {
@@ -71,6 +75,16 @@ static void check(const char* what, bool ok) {
 }
 #include "file_allocation_contract_test.inc"
 
+static void test_unbound_standard_input() {
+  unbound_standard_input = true;
+  access_error = EIO;
+  errno = E2BIG;
+  check("file advice: unbound CRT stdin is EBADF without querying handle access",
+        posix_fadvise(STDIN_FILENO, 0, 0, POSIX_FADV_NORMAL) == EBADF && errno == E2BIG);
+  access_error = 0;
+  unbound_standard_input = false;
+}
+
 static void test_file_allocation_failures() {
   char path[] = "gesher-allocation-faults-XXXXXX";
   int fd = mkstemp(path);
@@ -101,9 +115,13 @@ static void test_file_allocation_failures() {
 }
 
 int main(int argc, char** argv) {
-  if (argc == 1) test_file_allocation_contracts();
-  else if (std::strcmp(argv[1], "advice") == 0) test_file_advice_contracts();
-  else if (std::strcmp(argv[1], "contents") == 0) test_file_allocation_contents();
+  if (argc == 1) {
+    test_file_allocation_contracts();
+    test_unbound_standard_input();
+  } else if (std::strcmp(argv[1], "advice") == 0) {
+    test_file_advice_contracts();
+    test_unbound_standard_input();
+  } else if (std::strcmp(argv[1], "contents") == 0) test_file_allocation_contents();
   else if (std::strcmp(argv[1], "errors") == 0) test_file_allocation_errors();
   else if (std::strcmp(argv[1], "overflow") == 0) test_file_allocation_overflow();
   else if (std::strcmp(argv[1], "faults") == 0) test_file_allocation_failures();
