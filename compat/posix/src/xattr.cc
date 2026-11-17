@@ -1,6 +1,7 @@
 // Android user.* extended attributes backed by local Windows file EAs.
 #include <unistd.h>
 #include <sys/xattr.h>
+#include <windows.h>
 #include <winternl.h>
 
 #include <algorithm>
@@ -90,6 +91,8 @@ int NativeError(LONG status) {
     case 0xc000004f:  // STATUS_EAS_NOT_SUPPORTED
     case 0xc00000bb:  // STATUS_NOT_SUPPORTED
       return EOPNOTSUPP;
+    case 0xc0000044:  // STATUS_QUOTA_EXCEEDED
+      return EDQUOT;
     case 0xc0000050:  // STATUS_EA_TOO_LARGE
       return ENOSPC;
     case 0xc0000053:  // STATUS_EA_CORRUPT_ERROR
@@ -246,6 +249,7 @@ int OpenPath(const char* path, bool follow, const Request& request, Target* targ
 }
 
 int OpenFd(int fd, const Request& request, Target* target) {
+  if (fd < 0) return EBADF;
   {
     // Pin the opened object before any participating close/dup2 can reuse fd.
     gesher::record_locks::DescriptorGuard guard;
