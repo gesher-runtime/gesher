@@ -89,6 +89,28 @@ public final class MediaSessionService extends ISessionManager.Default {
         }
     }
 
+    private void updateSmtc(Session session) {
+        // SMTC synchronization requires host authority
+        if (!mAudio.inSystemServer()) return;
+
+        // Metadata synchronization (Title, Artist, Art)
+        MediaMetadata metadata = session.metadata;
+        if (metadata != null) {
+            String title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE);
+            String artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST);
+            // TODO: Call native Windows SMTC API to update metadata
+            SystemServer.log("SMTC sync: title=" + title + ", artist=" + artist);
+        }
+
+        // Playback state synchronization (Playing, Paused)
+        PlaybackState state = session.playback;
+        if (state != null) {
+            boolean isPlaying = state.getState() == PlaybackState.STATE_PLAYING;
+            // TODO: Call native Windows SMTC API to update playback status
+            SystemServer.log("SMTC sync: isPlaying=" + isPlaying);
+        }
+    }
+
     @Override
     public ISession createSession(String pkg, ISessionCallback callback, String tag, Bundle info,
             int userId) throws RemoteException {
@@ -105,6 +127,7 @@ public final class MediaSessionService extends ISessionManager.Default {
             s.destroySession();
             throw e;
         }
+        updateSmtc(s);
         return s.owner;
     }
 
