@@ -614,7 +614,7 @@ final class Installer {
     private void recoverRemovals() throws IOException {
         if (mRemovalActive) throw new IllegalStateException("Package removal is active");
         PackageRemovalStorage.recover(codePaths());
-        mPm.recoveredPackageRemovals();
+        mPm.recoveredPackageRemovals(mEntries.keySet());
     }
 
     /** Uninstalls only a persistent ordinary package, retaining its allocated UID tombstone. */
@@ -627,7 +627,8 @@ final class Installer {
         PackageRemovalStorage quarantine = new PackageRemovalStorage(packageName, e.codePath);
         mPm.beginPackageRemoval(target);
         mRemovalActive = true;
-        boolean committed = false, restored = false;
+        boolean[] committed = {false};
+        boolean restored = false;
         try {
             mPm.checkPackageRemoval(packageName);
             mAtm.forceStopPackage(packageName);
@@ -639,21 +640,30 @@ final class Installer {
             if (notifications != null) notifications.packageRemoved(packageName);
             // Retire any background start already queued while capabilities were canceled.
             mAtm.forceStopPackage(packageName);
+            // Moving app paths can retry locked files. Do that before taking the
+            // account/sync monitors; only shared snapshots and registry I/O need them.
             quarantine.stage();
-            mEntries.remove(packageName);
-            writeRegistry();
-            committed = true;
+            mPm.commitPackageRemoval(target, quarantine, () -> {
+                mEntries.remove(packageName);
+                writeRegistry();
+                committed[0] = true;
+            });
             mPm.remove(packageName);
         } catch (IOException | RuntimeException failure) {
-            if (!committed) {
+            if (!committed[0]) {
                 mEntries.put(packageName, e);
                 try { quarantine.rollback(); restored = true; }
                 catch (IOException restore) { failure.addSuppressed(restore); }
+            } else if (mPm.get(packageName) == target) {
+                // The registry is already durable even if publishing a shared
+                // store failed. Do not leave retired code visible until reboot.
+                try { mPm.remove(packageName); }
+                catch (RuntimeException retire) { failure.addSuppressed(retire); }
             }
             throw failure;
         } finally {
             mRemovalActive = false;
-            if (committed || restored) mPm.endPackageRemoval(target);
+            if (restored || (committed[0] && mPm.get(packageName) != target)) mPm.endPackageRemoval(target);
         }
         quarantine.discard(); // Locked remnants stay private and are reaped at next boot.
         Dexopt.deleteProfiles(packageName);

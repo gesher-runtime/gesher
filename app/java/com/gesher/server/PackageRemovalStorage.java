@@ -14,6 +14,47 @@ final class PackageRemovalStorage {
     private final String name, code;
     private final LinkedHashMap<Path, Path> paths = new LinkedHashMap<>();
 
+    // Fixed server-owned targets only. Shared stores cannot be moved with app data:
+    // prepare their complete replacements first and publish after packages.list.
+    enum SharedStore {
+        ACCOUNTS("accounts.sealed"), SYNC("sync.properties");
+        final String filename;
+        SharedStore(String filename) { this.filename = filename; }
+    }
+
+    Path replacementFile(SharedStore store) throws IOException {
+        Path staged = directory.resolve("replacement-" + store.filename);
+        if (Files.exists(staged, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("Shared removal snapshot already staged");
+        }
+        return staged;
+    }
+
+    /** Idempotent roll-forward; a moved snapshot must never be replayed later. */
+    synchronized void publishReplacements() throws IOException {
+        for (SharedStore store : SharedStore.values()) {
+            Path staged = directory.resolve("replacement-" + store.filename);
+            if (!Files.exists(staged, LinkOption.NOFOLLOW_LINKS)) continue;
+            if (!Files.isRegularFile(staged, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IOException("Invalid shared removal snapshot");
+            }
+            Path target = root.resolve("system").resolve(store.filename);
+            checkParents(target);
+            if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)
+                    && !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IOException("Invalid shared removal target");
+            }
+            // Both paths are on the device volume. Retain the journal on failure,
+            // so boot/install recovery finishes before opening the shared stores.
+            try {
+                Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException unavailable) {
+                Files.move(staged, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+    }
+
     PackageRemovalStorage(String name, String codePath) throws IOException {
         this(name, codePath, null);
     }
@@ -142,7 +183,10 @@ final class PackageRemovalStorage {
                 String retained = installed.get(name);
                 if (retained != null && codePath(new File(retained).toPath())
                         .equals(root.resolve(old.code))) old.rollback();
-                else old.discard();
+                else {
+                    old.publishReplacements();
+                    old.discard();
+                }
             }
         }
     }

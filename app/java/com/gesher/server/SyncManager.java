@@ -46,6 +46,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.Set;
+import java.util.HashSet;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -107,6 +111,7 @@ final class SyncManager {
         final Adapter adapter;
         final Account account;
         final Bundle extras;
+        final Object accountIdentity;
         final long start = mElapsed.getAsLong();
         volatile long heartbeat = start;
         volatile ISyncAdapter binder;
@@ -114,11 +119,12 @@ final class SyncManager {
         boolean done, cancelled;  // guarded by SyncManager.this
         boolean bound; // lifecycle executor only; successful bind owns exactly one unbind
 
-        Active(WorkKey key, Adapter adapter, Account account, Bundle extras) {
+        Active(WorkKey key, Adapter adapter, Account account, Bundle extras, Object accountIdentity) {
             this.key = key;
             this.adapter = adapter;
             this.account = account;
             this.extras = extras;
+            this.accountIdentity = accountIdentity;
         }
 
         @Override
@@ -137,6 +143,10 @@ final class SyncManager {
     private final File mFile = new File(Device.dataDir(), "system/sync.properties");
     private volatile Supplier<Account[]> mAccounts = () -> new Account[0];
     private volatile java.util.function.BiPredicate<Account, String> mAccountAccess = (a, p) -> false;
+    private volatile java.util.function.Function<Account, Object> mAccountIdentity = account -> {
+        for (Account current : mAccounts.get()) if (current.equals(account)) return current;
+        return null;
+    };
 
     private boolean callerCanAccess(Account account) {
         return mAm.callers().isSystem() || account != null
@@ -145,6 +155,14 @@ final class SyncManager {
 
     private void requireAccountAccess(Account account) {
         if (!callerCanAccess(account)) throw new SecurityException("Sync account is not visible to caller");
+    }
+
+    /** An asynchronous operation can outlive its adapter/notifier's authorization.
+     * Treat that expected denial as retirement so binding cleanup and later periodic
+     * ticks still run. Public caller checks remain strict in callerCanAccess. */
+    private boolean lifecycleAccountAccess(Account account, String packageName) {
+        try { return mAccountAccess.test(account, packageName); }
+        catch (SecurityException revoked) { return false; }
     }
     private final LongSupplier mElapsed, mWall;
     private final ScheduledExecutorService mTimer;
@@ -182,10 +200,12 @@ final class SyncManager {
         final WorkKey key;
         final Bundle extras;
         final boolean independent;
+        final Object accountIdentity;
         final long earliest;
-        Pending(Adapter adapter, Account account, Bundle extras, long earliest, boolean independent) {
+        Pending(Adapter adapter, Account account, Bundle extras, long earliest, boolean independent, Object accountIdentity) {
             this.adapter = adapter; this.account = account; this.extras = new Bundle(extras);
             this.key = new WorkKey(adapter, account); this.earliest = earliest; this.independent = independent;
+            this.accountIdentity = accountIdentity;
         }
     }
     private static final class Backoff {
@@ -204,6 +224,13 @@ final class SyncManager {
     private ScheduledFuture<?> mWake;
     private final Map<String, ScheduledFuture<?>> mPeriodic = new HashMap<>();
     private final Map<String, ScheduledFuture<?>> mUploads = new HashMap<>();
+    private PackageRemovalStorage mPendingRemovalPublication; // guarded by this
+
+    private void finishRemovalPublication() throws IOException {
+        if (mPendingRemovalPublication == null) return;
+        mPendingRemovalPublication.publishReplacements();
+        mPendingRemovalPublication = null;
+    }
 
     private static final class Observer {
         final int mask;
@@ -224,6 +251,108 @@ final class SyncManager {
         mAm = am; mPm = pm; mElapsed = elapsed; mWall = wall; mTimer = executor;
         load();
         DeviceWork.add(mWorkSource);
+    }
+
+    void setAccountIdentity(java.util.function.Function<Account, Object> identity) {
+        mAccountIdentity = Objects.requireNonNull(identity);
+    }
+
+    /** Snapshot prepared with this monitor held, before the package registry commits. */
+    static final class Removal {
+        final String packageName;
+        final Set<Account> accounts;
+        final Properties settings;
+        final PackageRemovalStorage storage;
+        Removal(String packageName, Set<Account> accounts, Properties settings, PackageRemovalStorage storage) {
+            this.packageName = packageName; this.accounts = new HashSet<>(accounts); this.settings = settings;
+            this.storage = storage;
+        }
+    }
+
+    Removal prepareRemoval(String packageName, Set<Account> removed, PackageRemovalStorage storage)
+            throws IOException {
+        if (!Thread.holdsLock(this)) throw new IllegalStateException("Sync removal requires its monitor");
+        finishRemovalPublication();
+        Properties after = new Properties(); after.putAll(mSettings);
+        Set<Account> known = new HashSet<>(java.util.Arrays.asList(mAccounts.get()));
+        known.addAll(removed);
+        canonicalizeSettings(after, known);
+        after.keySet().removeIf(key -> accountSetting((String) key, removed));
+        if (!after.equals(mSettings)) {
+            File target = storage.replacementFile(PackageRemovalStorage.SharedStore.SYNC).toFile();
+            try (FileOutputStream out = new FileOutputStream(target)) {
+                after.store(out, "Gesher sync settings after account retirement"); out.getFD().sync();
+            }
+        }
+        return new Removal(packageName, removed, after, storage);
+    }
+
+    private static boolean accountSetting(String key, Set<Account> removed) {
+        String endpoint;
+        if (key.startsWith("periodic.")) {
+            int end = key.lastIndexOf('|');
+            if (end < "periodic.".length()) return false;
+            endpoint = key.substring("periodic.".length(), end);
+        } else if (key.startsWith("auto.")) endpoint = key.substring("auto.".length());
+        else if (key.startsWith("syncable.")) endpoint = key.substring("syncable.".length());
+        else return false;
+        String[] parts = endpoint(endpoint);
+        return parts != null && removed.contains(new Account(parts[1], parts[0]));
+    }
+
+    /** Old delimiter keys could alias distinct accounts. Expand their shared value
+     * into separate identities before retiring one account, preserving the other. */
+    private static void canonicalizeSettings(Properties settings, Set<Account> accounts) {
+        for (String key : new ArrayList<>(settings.stringPropertyNames())) {
+            String prefix = key.startsWith("auto.") ? "auto."
+                    : key.startsWith("syncable.") ? "syncable."
+                    : key.startsWith("periodic.") ? "periodic." : null;
+            if (prefix == null) continue;
+            int end = prefix.equals("periodic.") ? key.lastIndexOf('|') : key.length();
+            if (end < prefix.length()) continue;
+            String endpoint = key.substring(prefix.length(), end);
+            if (endpoint(endpoint) != null) continue;
+            String suffix = key.substring(end);
+            boolean migrated = false;
+            for (Account account : accounts) {
+                String legacy = account.type + "/" + account.name + "/";
+                if (!endpoint.startsWith(legacy)) continue;
+                String authority = endpoint.substring(legacy.length());
+                if (authority.isEmpty() || authority.indexOf('/') >= 0) continue;
+                settings.putIfAbsent(prefix + id(account, authority) + suffix, settings.getProperty(key));
+                migrated = true;
+            }
+            if (migrated) settings.remove(key);
+        }
+    }
+
+    /** Memory publication is indivisible with account removal; callbacks run afterwards. */
+    Runnable publishRemoval(Removal removal) {
+        if (!Thread.holdsLock(this)) throw new IllegalStateException("Sync removal requires its monitor");
+        mPendingRemovalPublication = removal.storage;
+        mSettings.clear(); mSettings.putAll(removal.settings);
+        mPending.removeIf(p -> removal.accounts.contains(p.account)
+                || removal.packageName.equals(p.adapter.service.getPackageName()));
+        mBackoff.keySet().removeIf(e -> removal.accounts.contains(e.account));
+        mDelayUntil.keySet().removeIf(e -> removal.accounts.contains(e.account));
+        for (String key : new ArrayList<>(mPeriodic.keySet())) if (!mSettings.containsKey(key)) {
+            mPeriodic.remove(key).cancel(false);
+        }
+        synchronized (mParsed) {
+            mParsed.keySet().removeIf(c -> removal.packageName.equals(c.getPackageName()));
+        }
+        List<Active> cancel = new ArrayList<>();
+        for (Active active : mActive.values()) {
+            if (removal.accounts.contains(active.account)
+                    || removal.packageName.equals(active.adapter.service.getPackageName())) {
+                active.cancelled = true; cancel.add(active);
+            }
+        }
+        return () -> {
+            for (Active active : cancel) mTimer.execute(() -> cancelActive(active, "account or adapter removed"));
+            changed(ContentResolver.SYNC_OBSERVER_TYPE_SETTINGS | ContentResolver.SYNC_OBSERVER_TYPE_PENDING);
+            mTimer.execute(this::run);
+        };
     }
 
     ActivityManagerService activityManager() { return mAm; }
@@ -247,6 +376,9 @@ final class SyncManager {
         mAccounts = accounts;
         mAccountAccess = access;
         synchronized (this) {
+            Properties before = new Properties(); before.putAll(mSettings);
+            canonicalizeSettings(mSettings, new HashSet<>(java.util.Arrays.asList(mAccounts.get())));
+            if (!before.equals(mSettings)) save();
             for (String name : mSettings.stringPropertyNames()) {
                 if (name.startsWith("periodic.")) schedulePeriodic(name, false);
             }
@@ -264,6 +396,7 @@ final class SyncManager {
     void setMasterSyncAutomatically(boolean flag) {
         requireSyncSettingsWrite();
         synchronized (this) {
+            requireRemovalPublication();
             mSettings.setProperty("master", Boolean.toString(flag));
             save();
         }
@@ -278,9 +411,10 @@ final class SyncManager {
 
     void setSyncAutomatically(Account account, String authority, boolean sync) {
         requireSyncSettingsWrite();
-        if (account != null) requireAccountAccess(account);
         if (account == null || authority == null) return;
         synchronized (this) {
+            requireAccountAccess(account); // serialize authorization with account retirement
+            requireRemovalPublication();
             mSettings.setProperty("auto." + id(account, authority), Boolean.toString(sync));
             save();
         }
@@ -307,9 +441,10 @@ final class SyncManager {
 
     void setIsSyncable(Account account, String authority, int syncable) {
         requireSyncSettingsWrite();
-        if (account != null) requireAccountAccess(account);
         if (account == null || authority == null) return;
         synchronized (this) {
+            requireAccountAccess(account);
+            requireRemovalPublication();
             mSettings.setProperty("syncable." + id(account, authority),
                     Integer.toString(Math.max(-1, Math.min(1, syncable))));
             save();
@@ -423,6 +558,11 @@ final class SyncManager {
     }
 
     private void requestSync(Account account, String authority, Bundle extras, boolean upload, ApkPackage notifier) {
+        requestSync(account, authority, extras, upload, notifier, null);
+    }
+
+    private void requestSync(Account account, String authority, Bundle extras, boolean upload,
+            ApkPackage notifier, Object requiredIdentity) {
         if (notifier != null && mPm.get(notifier.packageName) != notifier) return;
         Bundle e = extras != null ? new Bundle(extras) : new Bundle();
         if (upload) e.putBoolean(ContentResolver.SYNC_EXTRAS_UPLOAD, true);
@@ -438,26 +578,27 @@ final class SyncManager {
                     + (account != null ? "account type " + account.type : "visible accounts")
                     + (manual ? ", manual" : ""));
         }
+        Map<Account, Object> accountIdentities = new LinkedHashMap<>();
+        synchronized (this) {
+            for (Account current : mAccounts.get()) {
+                Object identity = mAccountIdentity.apply(current);
+                if (identity != null && (requiredIdentity == null || identity == requiredIdentity)) {
+                    accountIdentities.put(current, identity);
+                }
+            }
+        }
         for (Adapter a : adapters()) {
             if (authority != null && !a.authority.equals(authority)) continue;
             if (upload && !a.supportsUploading) continue;
-            for (Account acc : accounts(a.accountType)) {
+            for (Account acc : accountIdentities.keySet()) {
+                if (!acc.type.equals(a.accountType)) continue;
                 if (account != null && !account.equals(acc)) continue;
-                if (notifier != null && !mAccountAccess.test(acc, notifier.packageName)) continue;
-                if (!callerCanAccess(acc) || !mAccountAccess.test(acc, a.service.getPackageName())) continue;
+                if (notifier != null && !lifecycleAccountAccess(acc, notifier.packageName)) continue;
+                if (!callerCanAccess(acc) || !lifecycleAccountAccess(acc, a.service.getPackageName())) continue;
                 if (!settingsPermit(acc, a.authority, e)) continue;
-                enqueue(a, acc, e);
+                enqueue(a, acc, e, accountIdentities.get(acc));
             }
         }
-    }
-
-    /** The accounts of the type that exist now. */
-    private List<Account> accounts(String type) {
-        List<Account> result = new ArrayList<>();
-        for (Account a : mAccounts.get()) {
-            if (a.type.equals(type)) result.add(a);
-        }
-        return result;
     }
 
     /** After a provider's change notified to the network: an upload sync of its authority. */
@@ -508,14 +649,32 @@ final class SyncManager {
     }
 
     private static String id(Account account, String authority) {
-        // Persisted settings/periodic-key migration is separate from transient admission.
-        return account.type + "/" + account.name + "/" + authority;
+        Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
+        return "v2:" + encoder.encodeToString(account.type.getBytes(StandardCharsets.UTF_8)) + ":"
+                + encoder.encodeToString(account.name.getBytes(StandardCharsets.UTF_8)) + ":"
+                + encoder.encodeToString(authority.getBytes(StandardCharsets.UTF_8));
     }
 
-    private void enqueue(Adapter adapter, Account account, Bundle extras) {
-        if (!mAccountAccess.test(account, adapter.service.getPackageName())) return;
-        Pending pending = new Pending(adapter, account, extras, 0, false);
+    private static String[] endpoint(String id) {
+        if (!id.startsWith("v2:")) return null;
+        String[] parts = id.substring(3).split(":", -1);
+        if (parts.length != 3) return null;
+        try {
+            for (int i = 0; i < parts.length; i++) {
+                parts[i] = new String(Base64.getUrlDecoder().decode(parts[i]), StandardCharsets.UTF_8);
+                if (parts[i].isEmpty()) return null;
+            }
+            return parts;
+        } catch (IllegalArgumentException malformed) { return null; }
+    }
+
+    private void enqueue(Adapter adapter, Account account, Bundle extras, Object accountIdentity) {
+        Pending pending = new Pending(adapter, account, extras, 0, false, accountIdentity);
         synchronized (this) {
+            if (accountIdentity == null || mAccountIdentity.apply(account) != accountIdentity
+                    || mPm.isRemovalPending(adapter.service.getPackageName())
+                    || !lifecycleAccountAccess(account, adapter.service.getPackageName())) return;
+            mPending.removeIf(p -> p.key.equals(pending.key) && p.accountIdentity != accountIdentity);
             Pending existing = null;
             for (Pending p : mPending) {
                 if (!p.independent && p.key.equals(pending.key)) { existing = p; break; }
@@ -567,26 +726,35 @@ final class SyncManager {
     /** Called on the serial lifecycle lane; no external callback runs under this monitor. */
     private void run() {
         List<Active> start = new ArrayList<>();
+        List<Active> retired = new ArrayList<>();
         synchronized (this) {
             if (mWake != null) { mWake.cancel(false); mWake = null; }
+            for (Active active : mActive.values()) {
+                if (!active.done && mAccountIdentity.apply(active.account) != active.accountIdentity) {
+                    active.cancelled = true; retired.add(active);
+                }
+            }
             long now = mElapsed.getAsLong(), wake = Long.MAX_VALUE;
             for (java.util.Iterator<Pending> it = mPending.iterator(); it.hasNext();) {
                 Pending p = it.next();
+                if (mAccountIdentity.apply(p.account) != p.accountIdentity) { it.remove(); continue; }
                 if (mActive.containsKey(p.key) || conflicts(p)) continue;
                 long due = due(p);
                 if (due > now) { wake = Math.min(wake, due); continue; }
-                Active a = new Active(p.key, p.adapter, p.account, p.extras);
+                Active a = new Active(p.key, p.adapter, p.account, p.extras, p.accountIdentity);
                 mActive.put(p.key, a); start.add(a); it.remove();
             }
             if (wake != Long.MAX_VALUE) mWake = mTimer.schedule(this::run, wake - now, TimeUnit.MILLISECONDS);
         }
+        for (Active active : retired) cancelActive(active, "account incarnation removed");
         if (start.isEmpty()) return;
         changed(ContentResolver.SYNC_OBSERVER_TYPE_PENDING | ContentResolver.SYNC_OBSERVER_TYPE_ACTIVE);
         for (Active active : start) bind(active);
     }
 
     private boolean stopped(Active active) {
-        synchronized (this) { return active.done || active.cancelled; }
+        synchronized (this) { return active.done || active.cancelled
+                || mAccountIdentity.apply(active.account) != active.accountIdentity; }
     }
 
     /** Recheck queued work: settings can change while it waits for an adapter or backoff. */
@@ -604,7 +772,7 @@ final class SyncManager {
 
     private void bind(Active active) {
         if (stopped(active) || !settingsPermit(active.account, active.adapter.authority, active.extras)
-                || !mAccountAccess.test(active.account, active.adapter.service.getPackageName())) {
+                || !lifecycleAccountAccess(active.account, active.adapter.service.getPackageName())) {
             cancelActive(active, "cancelled before binding"); return;
         }
         active.connection = new IServiceConnection.Stub() {
@@ -635,7 +803,7 @@ final class SyncManager {
         if (dead || binder == null) { failed(active, "adapter disconnected"); return; }
         if (active.binder != null) return;
         if (!settingsPermit(active.account, active.adapter.authority, active.extras)
-                || !mAccountAccess.test(active.account, active.adapter.service.getPackageName())) {
+                || !lifecycleAccountAccess(active.account, active.adapter.service.getPackageName())) {
             cancelActive(active, "sync policy or account access changed"); return;
         }
         active.binder = ISyncAdapter.Stub.asInterface(binder);
@@ -650,7 +818,8 @@ final class SyncManager {
 
     private void watch(Active active) {
         mTimer.schedule(() -> {
-            if (stopped(active)) return;
+            synchronized (this) { if (active.done) return; }
+            if (stopped(active)) { cancelActive(active, "account incarnation removed"); return; }
             if (mElapsed.getAsLong() - active.heartbeat >= SYNC_TIMEOUT_MS) cancelActive(active, "timed out");
             else watch(active);
         }, SYNC_TIMEOUT_MS, TimeUnit.MILLISECONDS);
@@ -679,7 +848,8 @@ final class SyncManager {
             if (active.done) return;
             active.done = true;
             if (mActive.get(active.key) == active) mActive.remove(active.key);
-            if (!active.cancelled && result != null) {
+            if (!active.cancelled && result != null
+                    && mAccountIdentity.apply(active.account) == active.accountIdentity) {
                 Endpoint endpoint = active.key.endpoint;
                 long now = mElapsed.getAsLong();
                 if (result.hasError()) {
@@ -702,7 +872,7 @@ final class SyncManager {
                     else if (result.madeSomeProgress()) reschedule = true;
                     else if (result.syncAlreadyInProgress) { reschedule = true; earliest = add(now, 10000); }
                     else reschedule = result.hasSoftError();
-                    if (reschedule) mPending.add(new Pending(active.adapter, active.account, retry, earliest, true));
+                    if (reschedule) mPending.add(new Pending(active.adapter, active.account, retry, earliest, true, active.accountIdentity));
                 } else mBackoff.remove(endpoint);
                 long until = result.delayUntil <= 0 ? 0 : result.delayUntil > Long.MAX_VALUE / 1000
                         ? Long.MAX_VALUE : result.delayUntil * 1000;
@@ -711,7 +881,7 @@ final class SyncManager {
                 else mDelayUntil.remove(endpoint);
                 if (result.fullSyncRequested) {
                     // A fresh full request must not inherit retry/upload/do-not-retry extras.
-                    mPending.add(new Pending(active.adapter, active.account, new Bundle(), 0, true));
+                    mPending.add(new Pending(active.adapter, active.account, new Bundle(), 0, true, active.accountIdentity));
                 }
             }
         }
@@ -726,14 +896,15 @@ final class SyncManager {
 
     void addPeriodicSync(Account account, String authority, Bundle extras, long seconds) {
         requireSyncSettingsWrite();
-        if (account != null) requireAccountAccess(account);
         if (account == null || authority == null) return;
         // Android's minimum period is an hour's quarter.
         long period = Math.max(seconds, 15 * 60);
         String name = "periodic." + id(account, authority) + "|" + extrasKey(extras);
         synchronized (this) {
+            requireAccountAccess(account);
             String value = period + "|" + encode(extras);
             if (value.equals(mSettings.getProperty(name))) return;
+            requireRemovalPublication();
             mSettings.setProperty(name, value);
             save();
             schedulePeriodic(name, true);
@@ -742,10 +913,11 @@ final class SyncManager {
 
     void removePeriodicSync(Account account, String authority, Bundle extras) {
         requireSyncSettingsWrite();
-        if (account != null) requireAccountAccess(account);
         if (account == null || authority == null) return;
         String name = "periodic." + id(account, authority) + "|" + extrasKey(extras);
         synchronized (this) {
+            requireAccountAccess(account);
+            requireRemovalPublication();
             if (mSettings.remove(name) == null) return;
             save();
             ScheduledFuture<?> f = mPeriodic.remove(name);
@@ -781,13 +953,17 @@ final class SyncManager {
         } catch (NumberFormatException e) {
             return;
         }
-        String[] id = name.substring("periodic.".length(), name.indexOf('|')).split("/", 3);
-        if (id.length < 3) return;
+        int end = name.lastIndexOf('|');
+        if (end < "periodic.".length()) return;
+        String[] id = endpoint(name.substring("periodic.".length(), end));
+        if (id == null) return;
         Account account = new Account(id[1], id[0]);
         String authority = id[2];
         Bundle extras = decode(v.length > 1 ? v[1] : "");
+        Object identity = mAccountIdentity.apply(account);
+        if (identity == null) return;
         mPeriodic.put(name, mTimer.scheduleAtFixedRate(
-                () -> requestSync(account, authority, extras, false),
+                () -> requestSync(account, authority, extras, false, null, identity),
                 now ? 0 : period, period, TimeUnit.SECONDS));
     }
 
@@ -865,7 +1041,7 @@ final class SyncManager {
             if ((o.mask & which) == 0) continue;
             try {
                 o.callback.onStatusChanged(which);
-            } catch (RemoteException e) {
+            } catch (RemoteException | RuntimeException e) {
                 mObservers.remove(o);
             }
         }
@@ -880,7 +1056,15 @@ final class SyncManager {
         }
     }
 
+    private void requireRemovalPublication() {
+        try { finishRemovalPublication(); }
+        catch (IOException pending) {
+            throw new IllegalStateException("Pending account removal metadata could not be published", pending);
+        }
+    }
+
     private synchronized void save() {
+        requireRemovalPublication();
         mFile.getParentFile().mkdirs();
         try (OutputStream out = new FileOutputStream(mFile)) {
             mSettings.store(out, "Gesher's sync settings");

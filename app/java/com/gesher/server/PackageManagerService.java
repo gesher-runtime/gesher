@@ -62,6 +62,21 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
     private final List<Consumer<String>> mPackageRemoval = new ArrayList<>();
     private final List<Consumer<String>> mPackageRemovalChecks = new ArrayList<>();
+    interface RemovalCommit { void run() throws java.io.IOException; }
+    interface RemovalCoordinator {
+        void commit(ApkPackage target, PackageRemovalStorage storage, RemovalCommit commit)
+                throws java.io.IOException;
+    }
+    private volatile RemovalCoordinator mRemovalCoordinator = (target, storage, commit) -> commit.run();
+
+    /** Trusted service wiring; no Binder caller can replace the commit coordinator. */
+    void setRemovalCoordinator(RemovalCoordinator coordinator) {
+        mRemovalCoordinator = Objects.requireNonNull(coordinator);
+    }
+    void commitPackageRemoval(ApkPackage target, PackageRemovalStorage storage, RemovalCommit commit)
+            throws java.io.IOException {
+        mRemovalCoordinator.commit(target, storage, commit);
+    }
     private volatile Map<String, ApkPackage> mRemoving = new LinkedHashMap<>();
 
     boolean isRemovalPending(String name) { return mRemoving.containsKey(name); }
@@ -77,8 +92,12 @@ public final class PackageManagerService extends IPackageManager.Default {
         Map<String, ApkPackage> next = new LinkedHashMap<>(mRemoving);
         next.remove(original.packageName); mRemoving = next;
     }
-    /** Installer holds its monitor and has restored every unresolved precommit journal. */
-    synchronized void recoveredPackageRemovals() { mRemoving = new LinkedHashMap<>(); }
+    /** Installer recovered its journals. Complete any committed memory retirement
+     * before releasing the barrier; a failed owner-store cleanup remains blocked. */
+    synchronized void recoveredPackageRemovals(java.util.Set<String> installed) {
+        for (String name : mRemoving.keySet()) if (!installed.contains(name)) remove(name);
+        mRemoving = new LinkedHashMap<>();
+    }
 
     /** Server-local capability cleanup; never callable through the package Binder. */
     synchronized void onPackageRemoval(Consumer<String> cleanup) { mPackageRemoval.add(cleanup); }

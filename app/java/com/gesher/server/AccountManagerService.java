@@ -45,6 +45,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -76,6 +77,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     /** An account's password and user data. */
     private static final class Entry {
         String owner, ownerIdentity, password;
+        Object generation = new Object();
         long authenticatedAt;
         final Map<String, String> data = new LinkedHashMap<>();
         final Map<String, String> tokens = new LinkedHashMap<>();
@@ -113,6 +115,17 @@ public final class AccountManagerService extends IAccountManager.Default {
     /** Server-local fixture seam; production always writes through the guarded DPAPI store. */
     private interface StoreWriter { void write(Properties values) throws IOException; }
     private StoreWriter mStoreWriter = mStore::write;
+    private interface StoreStager { void write(Properties values, File file) throws IOException; }
+    private StoreStager mStoreStager = (values, file) -> new AccountSecretStore(file).write(values);
+    private final boolean mPersistent;
+    private volatile SyncManager mSync;
+    private PackageRemovalStorage mPendingRemovalPublication; // guarded by this
+
+    private void finishRemovalPublication() throws IOException {
+        if (mPendingRemovalPublication == null) return;
+        mPendingRemovalPublication.publishReplacements();
+        mPendingRemovalPublication = null;
+    }
     private String mUnclaimedLegacy;
     private final AccountSessions mSessions = new AccountSessions();
     private final Map<String, Long> mRemovalEpochs = new HashMap<>();
@@ -157,6 +170,7 @@ public final class AccountManagerService extends IAccountManager.Default {
             for (Map.Entry<Account, Entry> item : source.entrySet()) {
                 Entry old = item.getValue(), copy = new Entry();
                 copy.owner = old.owner; copy.ownerIdentity = old.ownerIdentity;
+                copy.generation = old.generation;
                 copy.password = old.password; copy.authenticatedAt = old.authenticatedAt;
                 copy.data.putAll(old.data); copy.tokens.putAll(old.tokens);
                 copy.visibility.putAll(old.visibility); copy.customTokens.putAll(old.customTokens);
@@ -189,6 +203,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     AccountManagerService(ActivityManagerService am, PackageManagerService pm, boolean persistent) {
         mAm = am;
         mPm = pm;
+        mPersistent = persistent;
         mCallers = am != null ? am.callers() : new CallerIdentity(pm, null);
         if (pm.get(GmsPackageSupport.PACKAGE_GMS) == null) {
             Entry dummy = new Entry();
@@ -198,8 +213,8 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (persistent) load();
         else mStoreWriter = values -> { /* Stand-in accounts live only in this process. */ };
         if (am != null) am.setAccountManager(this);
-        pm.onPackageRemovalCheck(this::checkPackageRemoval);
         pm.onPackageRemoval(this::packageRemoved);
+        pm.setRemovalCoordinator(this::commitPackageRemoval);
     }
 
     private synchronized long packageEpoch(String name) { return mRemovalEpochs.getOrDefault(name, 0L); }
@@ -209,10 +224,67 @@ public final class AccountManagerService extends IAccountManager.Default {
         return new Caller(name, code, system, uid, pid, packageEpoch(name));
     }
 
-    /** Retire client capabilities before an uninstall can publish removal or permit reinstall. */
-    private synchronized void checkPackageRemoval(String name) {
-        if (mAccounts.values().stream().anyMatch(e -> name.equals(e.owner))) {
-            throw new UnsupportedOperationException("Remove this authenticator's accounts before uninstalling it");
+    void attachSyncManager(SyncManager sync) {
+        mSync = Objects.requireNonNull(sync);
+        sync.setAccountIdentity(this::accountIdentity);
+    }
+    private synchronized Object accountIdentity(Account account) {
+        Entry entry = mAccounts.get(account);
+        return entry == null ? null : entry.generation;
+    }
+
+    /**
+     * Prepare both shared stores before the package registry commit. Sync already calls
+     * the account service under its monitor, so the only nested order is sync -> accounts.
+     * No callback is invoked until both monitors are released.
+     */
+    private void commitPackageRemoval(ApkPackage target, PackageRemovalStorage storage,
+            PackageManagerService.RemovalCommit commit) throws IOException {
+        SyncManager sync = mSync;
+        Map<Account, Entry> removed = new LinkedHashMap<>();
+        Runnable finishSync = null;
+        boolean published = false;
+        try {
+            synchronized (sync == null ? this : sync) {
+                synchronized (this) {
+                    finishRemovalPublication();
+                    if (mPm.get(target.packageName) != target
+                            || !mPm.isRemovalPending(target.packageName)
+                            || target.enabledStateOwner() == null) {
+                        throw new SecurityException("Authenticator removal target changed");
+                    }
+                    State after = new State(mAccounts, mUnclaimedLegacy);
+                    for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
+                        if (target.packageName.equals(item.getValue().owner)) {
+                            removed.put(item.getKey(), item.getValue());
+                            after.accounts.remove(item.getKey());
+                        }
+                    }
+                    if (!removed.isEmpty() && mPersistent) {
+                        mStoreStager.write(properties(after.accounts, after.legacy),
+                                storage.replacementFile(PackageRemovalStorage.SharedStore.ACCOUNTS).toFile());
+                    }
+                    SyncManager.Removal syncRemoval = sync == null ? null
+                            : sync.prepareRemoval(target.packageName, removed.keySet(), storage);
+                    // A failure here leaves account data untouched and discards staged
+                    // metadata when Installer restores the original package paths.
+                    commit.run();
+                    mAccounts.keySet().removeAll(removed.keySet());
+                    published = true;
+                    mPendingRemovalPublication = storage;
+                    if (syncRemoval != null) finishSync = sync.publishRemoval(syncRemoval);
+                    // If publication fails, retain the journal and the committed memory
+                    // state. Recovery must finish these replacements before reinstall.
+                    finishRemovalPublication();
+                }
+            }
+        } finally {
+            if (published) {
+                if (finishSync != null) finishSync.run();
+                for (Map.Entry<Account, Entry> item : removed.entrySet()) {
+                    changed(item.getKey(), true, item.getValue());
+                }
+            }
         }
     }
 
@@ -220,7 +292,6 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (name == null || name.isEmpty()) throw new IllegalArgumentException("Missing removed package");
         List<Answer> cancel = new ArrayList<>();
         synchronized (this) {
-            checkPackageRemoval(name);
             String prefix = name + "\u0000";
             boolean changed = mAccounts.values().stream().anyMatch(e ->
                     e.visibility.keySet().stream().anyMatch(k -> k.startsWith(prefix))
@@ -243,7 +314,8 @@ public final class AccountManagerService extends IAccountManager.Default {
             }
         }
         for (Answer answer : cancel) answer.cancelForRemoval();
-        // Provider-owned records/credentials are never deleted by client cleanup.
+        // Owned credentials survive precommit failure; the shared-store transaction
+        // retires them only after the package registry commits the uninstall.
         AccountManager.invalidateLocalAccountsDataCaches();
     }
 
@@ -1127,7 +1199,8 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (a == null) return false;
         synchronized (this) {
             Entry e = mAccounts.get(account);
-            if (!a.service.getPackageName().equals(e.owner) || !e.ownerIdentity.equals(packageIdentity(e.owner))) return false;
+            if (e == null || !a.service.getPackageName().equals(e.owner)
+                    || !e.ownerIdentity.equals(packageIdentity(e.owner))) return false;
         }
         Answer answer = call(a, (auth, r) -> auth.hasFeatures(r, account, features));
         return answer.result != null ? answer.result.getBoolean(AccountManager.KEY_BOOLEAN_RESULT, false) : null;
@@ -1761,53 +1834,59 @@ public final class AccountManagerService extends IAccountManager.Default {
         }
     }
 
+    private static Properties properties(Map<Account, Entry> accounts, String legacy) {
+        Properties p = new Properties();
+        if (legacy != null) p.setProperty("unclaimedLegacy", legacy);
+        int i = 0;
+        for (Map.Entry<Account, Entry> item : accounts.entrySet()) {
+            if (synthetic(item.getKey(), item.getValue())) continue;
+            String prefix = i + "."; Entry e = item.getValue();
+            p.setProperty(prefix + "name", item.getKey().name);
+            p.setProperty(prefix + "type", item.getKey().type);
+            p.setProperty(prefix + "owner", e.owner);
+            p.setProperty(prefix + "ownerIdentity", e.ownerIdentity);
+            p.setProperty(prefix + "authenticatedAt", Long.toString(e.authenticatedAt));
+            if (e.password != null) p.setProperty(prefix + "password", e.password);
+            int j = 0;
+            for (Map.Entry<String, String> data : e.data.entrySet()) {
+                p.setProperty(prefix + "data." + j + ".key", data.getKey());
+                p.setProperty(prefix + "data." + j + ".value", data.getValue()); j++;
+            }
+            p.setProperty(prefix + "data.count", Integer.toString(j)); j = 0;
+            for (Map.Entry<String, String> token : e.tokens.entrySet()) {
+                String tokenPrefix = prefix + "token." + j + ".";
+                p.setProperty(tokenPrefix + "type", token.getKey());
+                p.setProperty(tokenPrefix + "value", token.getValue());
+                int k = 0;
+                Set<String> grants = e.tokenGrants.get(token.getKey());
+                if (grants != null) for (String grant : grants) p.setProperty(tokenPrefix + "grant." + k++, grant);
+                p.setProperty(tokenPrefix + "grant.count", Integer.toString(k)); j++;
+            }
+            p.setProperty(prefix + "token.count", Integer.toString(j)); j = 0;
+            for (Map.Entry<String, Set<String>> grant : e.tokenGrants.entrySet()) {
+                String grantPrefix = prefix + "grantType." + j + ".";
+                p.setProperty(grantPrefix + "type", grant.getKey());
+                int k = 0;
+                for (String client : grant.getValue()) p.setProperty(grantPrefix + "client." + k++, client);
+                p.setProperty(grantPrefix + "client.count", Integer.toString(k)); j++;
+            }
+            p.setProperty(prefix + "grantType.count", Integer.toString(j)); j = 0;
+            for (Map.Entry<String, Integer> visibility : e.visibility.entrySet()) {
+                p.setProperty(prefix + "visibility." + j + ".client", visibility.getKey());
+                p.setProperty(prefix + "visibility." + j + ".value", Integer.toString(visibility.getValue())); j++;
+            }
+            p.setProperty(prefix + "visibility.count", Integer.toString(j)); i++;
+        }
+        p.setProperty("count", Integer.toString(i));
+        return p;
+    }
+
     /** Called with this locked. Never fall back to plaintext or log secret values. */
     private void save() {
         if (mBeforeMutation == null) throw new IllegalStateException("Account mutation has no transaction");
         try {
-            Properties p = new Properties();
-            if (mUnclaimedLegacy != null) p.setProperty("unclaimedLegacy", mUnclaimedLegacy);
-            int i = 0;
-            for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
-                if (synthetic(item.getKey(), item.getValue())) continue;
-                String prefix = i + "."; Entry e = item.getValue();
-                p.setProperty(prefix + "name", item.getKey().name);
-                p.setProperty(prefix + "type", item.getKey().type);
-                p.setProperty(prefix + "owner", e.owner);
-                p.setProperty(prefix + "ownerIdentity", e.ownerIdentity);
-                p.setProperty(prefix + "authenticatedAt", Long.toString(e.authenticatedAt));
-                if (e.password != null) p.setProperty(prefix + "password", e.password);
-                int j = 0;
-                for (Map.Entry<String, String> data : e.data.entrySet()) {
-                    p.setProperty(prefix + "data." + j + ".key", data.getKey());
-                    p.setProperty(prefix + "data." + j + ".value", data.getValue()); j++;
-                }
-                p.setProperty(prefix + "data.count", Integer.toString(j)); j = 0;
-                for (Map.Entry<String, String> token : e.tokens.entrySet()) {
-                    String tokenPrefix = prefix + "token." + j + ".";
-                    p.setProperty(tokenPrefix + "type", token.getKey());
-                    p.setProperty(tokenPrefix + "value", token.getValue());
-                    int k = 0;
-                    Set<String> grants = e.tokenGrants.get(token.getKey());
-                    if (grants != null) for (String grant : grants) p.setProperty(tokenPrefix + "grant." + k++, grant);
-                    p.setProperty(tokenPrefix + "grant.count", Integer.toString(k)); j++;
-                }
-                p.setProperty(prefix + "token.count", Integer.toString(j)); j = 0;
-                for (Map.Entry<String, Set<String>> grant : e.tokenGrants.entrySet()) {
-                    String grantPrefix = prefix + "grantType." + j + ".";
-                    p.setProperty(grantPrefix + "type", grant.getKey());
-                    int k = 0;
-                    for (String client : grant.getValue()) p.setProperty(grantPrefix + "client." + k++, client);
-                    p.setProperty(grantPrefix + "client.count", Integer.toString(k)); j++;
-                }
-                p.setProperty(prefix + "grantType.count", Integer.toString(j)); j = 0;
-                for (Map.Entry<String, Integer> visibility : e.visibility.entrySet()) {
-                    p.setProperty(prefix + "visibility." + j + ".client", visibility.getKey());
-                    p.setProperty(prefix + "visibility." + j + ".value", Integer.toString(visibility.getValue())); j++;
-                }
-                p.setProperty(prefix + "visibility.count", Integer.toString(j)); i++;
-            }
-            p.setProperty("count", Integer.toString(i));
+            finishRemovalPublication();
+            Properties p = properties(mAccounts, mUnclaimedLegacy);
             mStoreWriter.write(p);
             mBeforeMutation = null;
         } catch (IOException | RuntimeException e) {

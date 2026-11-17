@@ -112,12 +112,11 @@ public final class AccountClientRemovalTest {
         custom(provider).put(clientKey+"\u0000scope",cache);custom(provider).put(oldKey+"\u0000scope",cache);
         custom(provider).put(otherKey+"\u0000scope",cache);
         method(svc,"beginMutation").invoke(manager);method(svc,"save").invoke(manager);
-        try{method(pm,"checkPackageRemoval",String.class).invoke(packages,clientName);
-            throw new AssertionError("Provider with active accounts passed preflight");}
-        catch(InvocationTargetException expected){require(expected.getCause() instanceof UnsupportedOperationException,"Wrong provider preflight failure");}
+        method(pm,"checkPackageRemoval",String.class).invoke(packages,clientName);
         require(entries(manager).containsKey(owned)&&visibility(provider).containsKey(clientKey),
-                "Provider preflight altered accounts or client grants");
-        // Simulate the user removing that synthetic provider account before uninstall.
+                "Provider preflight altered accounts or client grants before commit");
+        // The full owner-removal transaction is covered by AuthenticatorUninstallTest.
+        // This fixture isolates client-only cleanup and its existing rollback behavior.
         method(svc,"beginMutation").invoke(manager);entries(manager).remove(owned);method(svc,"save").invoke(manager);
         require(persisted.get()!=null,"Transaction did not reach the server-local store seam");
         Object sessions=get(manager,"mSessions");
@@ -183,14 +182,12 @@ public final class AccountClientRemovalTest {
             throw new AssertionError("Session consumed after concurrent removal");}
         catch(InvocationTargetException expected){require(expected.getCause() instanceof SecurityException,"Wrong removal race failure");}
         method(pm,"beginPackageRemoval",apk).invoke(packages,owner);
-        try{method(pm,"checkPackageRemoval",String.class).invoke(packages,ownerName);
-            throw new AssertionError("Active provider was removed");}
-        catch(InvocationTargetException expected){require(expected.getCause() instanceof UnsupportedOperationException,"Wrong active-provider failure");}
+        method(pm,"checkPackageRemoval",String.class).invoke(packages,ownerName);
         require(method(svc,"validatedResult",auth,Bundle.class,Account.class)
                 .invoke(manager,authenticator,new Bundle(),null)==null,"Authenticator result accepted during removal");
         method(pm,"endPackageRemoval",apk).invoke(packages,owner);
         require(entries(manager).containsKey(account)&&"synthetic-provider-secret".equals(get(provider,"password")),
-                "Rejected provider removal lost an account or credential");
+                "Uncommitted provider retirement lost an account or credential");
         System.out.println("AccountClientRemovalTest all passed: "+checks+" checks");
     }
 }

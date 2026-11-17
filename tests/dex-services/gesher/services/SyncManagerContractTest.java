@@ -110,6 +110,7 @@ public final class SyncManagerContractTest {
         long sequence;
         boolean stopped;
         final PriorityQueue<Task<?>> queue = new PriorityQueue<>();
+        final List<Runnable> periodicDeliveries = new ArrayList<>();
         final class Task<V> extends FutureTask<V> implements ScheduledFuture<V> {
             final long due, order;
             final AtomicReference<Throwable> thrown;
@@ -130,7 +131,10 @@ public final class SyncManagerContractTest {
             return schedule(() -> { work.run(); return null; }, delay, unit);
         }
         @Override public void execute(Runnable work) { schedule(work, 0, TimeUnit.MILLISECONDS); }
-        @Override public ScheduledFuture<?> scheduleAtFixedRate(Runnable work, long initial, long period, TimeUnit unit) { throw new AssertionError("Fixture does not install periodic syncs"); }
+        @Override public ScheduledFuture<?> scheduleAtFixedRate(Runnable work, long initial, long period, TimeUnit unit) {
+            // Later periodic delivery is controlled explicitly by the retirement race fixture.
+            periodicDeliveries.add(work); return schedule(work, initial, unit);
+        }
         @Override public ScheduledFuture<?> scheduleWithFixedDelay(Runnable work, long initial, long delay, TimeUnit unit) { throw new AssertionError("Unexpected fixed delay"); }
         void drain() throws Exception {
             int runs = 0;
@@ -165,6 +169,7 @@ public final class SyncManagerContractTest {
         final IActivityManager am;
         final Class<?> adapterType = type("SyncManager$Adapter");
         final List<Start> starts = new ArrayList<>();
+        final Map<Account, Object> identities = new java.util.HashMap<>();
         int cancelled, unbound;
         IBinder suppliedAdapter;
         volatile CountDownLatch blockCreate, createEntered, blockStart, startEntered;
@@ -204,9 +209,19 @@ public final class SyncManagerContractTest {
             @Override public void scheduleUnbindService(IBinder token, IBinder bindToken, Intent intent) { unbound++; }
             @Override public void scheduleStopService(IBinder token) { }
         };
-        @SuppressWarnings("unchecked") Harness(boolean parallel, boolean wire) throws Exception {
+        Harness(boolean parallel, boolean wire) throws Exception { this(parallel, wire, false); }
+        @SuppressWarnings("unchecked") Harness(boolean parallel, boolean wire, boolean installed) throws Exception {
             this.wire = wire;
-            PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(PACKAGE, "/fixture/" + PACKAGE + "/base.apk");
+            String apk = "/fixture/" + PACKAGE + "/base.apk", data = "/fixture/" + PACKAGE + "/data";
+            if (installed) {
+                java.nio.file.Path root = java.nio.file.Path.of(System.getenv("ANDROID_DATA"));
+                java.nio.file.Path code = root.resolve("app/" + PACKAGE + "-1");
+                java.nio.file.Files.createDirectories(code);
+                java.nio.file.Files.writeString(code.resolve("base.apk"), "Synthetic metadata; never parsed as an APK");
+                apk = code.resolve("base.apk").toString(); data = root.resolve("data/" + PACKAGE).toString();
+                java.nio.file.Files.createDirectories(java.nio.file.Path.of(data));
+            }
+            PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(PACKAGE, apk);
             ParsedServiceImpl service = new ParsedServiceImpl();
             service.setName(PACKAGE + ".Adapter"); service.setPackageName(PACKAGE); service.setProcessName(PACKAGE); service.setEnabled(true);
             ParsedIntentInfoImpl filter = new ParsedIntentInfoImpl();
@@ -216,7 +231,7 @@ public final class SyncManagerContractTest {
             parsed.addService(service); parsed.setEnabled(true); parsed.setTargetSdkVersion(36); parsed.hideAsFinal();
             Object owner = UNSAFE.allocateInstance(type("ApkPackage"));
             set(owner, "packageName", PACKAGE); set(owner, "mUid", UID); set(owner, "parsed", parsed);
-            set(owner, "apkPath", "/fixture/" + PACKAGE + "/base.apk"); set(owner, "mDataDir", "/fixture/" + PACKAGE + "/data");
+            set(owner, "apkPath", apk); set(owner, "mDataDir", data);
             set(owner, "sharedLibraries", field(type("SharedLibraryGraph"), "EMPTY").get(null));
             set(owner, "mSigningIdentityChecked", true); set(owner, "mVerifiedSignatures", new Signature[]{new Signature(new byte[]{7})});
             Class<?> pmType = type("PackageManagerService"), atmType = type("ActivityTaskManagerService"),
@@ -227,6 +242,11 @@ public final class SyncManagerContractTest {
             am = (IActivityManager) UNSAFE.allocateInstance(amType);
             Object callers = make(callersType, new Class<?>[]{pmType, atmType}, pm, atm);
             set(am, "mPm", pm); set(am, "mAtm", atm); set(am, "mCallers", callers);
+            // Unbinding also revokes the connection's URI grants. Keep that
+            // production policy object while isolating unrelated provider startup.
+            Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            set(providers, "mUriGrants", make(type("UriGrants"), new Class<?>[]{pmType, atmType}, pm, atm));
+            set(am, "mProviders", providers);
             Object permissions = invoke(pm, "permissions", new Class<?>[0]);
             set(am, "mPermissions", permissions); invoke(permissions, "attach", new Class<?>[]{callersType}, callers);
             Object catalog = get(permissions, "mCatalog"); set(catalog, "mLoaded", true); set(catalog, "mFrameworkRead", true);
@@ -250,11 +270,14 @@ public final class SyncManagerContractTest {
             sync = manager;
             set(sync, "mAccountAccess", (BiPredicate<Account, String>) (account, pkg) -> true);
             set(sync, "mAccounts", (Supplier<Account[]>) () -> new Account[]{ONE, TWO});
+            identities.put(ONE, new Object()); identities.put(TWO, new Object());
+            try { set(sync, "mAccountIdentity", (java.util.function.Function<Account, Object>) identities::get); }
+            catch (NoSuchFieldException baseline) { }
             adapter = adapter(AUTHORITY, TYPE, parallel);
             // Supply parsed adapter XML at the existing package-metadata boundary.
             ((Map<ComponentName, Object[]>) get(sync, "mParsed")).put(
                     new ComponentName(PACKAGE, PACKAGE + ".Adapter"),
-                    new Object[]{"/fixture/" + PACKAGE + "/base.apk", adapter});
+                    new Object[]{apk, adapter});
         }
         Object adapter(String authority, String type, boolean parallel) throws Exception {
             return make(adapterType, new Class<?>[]{String.class, String.class, ComponentName.class,
@@ -263,10 +286,21 @@ public final class SyncManagerContractTest {
         }
         void enqueue(Account account, Bundle extras) throws Exception { enqueue(adapter, account, extras); }
         void enqueue(Object adapter, Account account, Bundle extras) throws Exception {
-            invoke(sync, "enqueue", new Class<?>[]{adapterType, Account.class, Bundle.class}, adapter, account, extras);
+            Object identity = identities.computeIfAbsent(account, unused -> new Object());
+            try { invoke(sync, "enqueue", new Class<?>[]{adapterType, Account.class, Bundle.class, Object.class}, adapter, account, extras, identity); }
+            catch (NoSuchMethodException baseline) {
+                invoke(sync, "enqueue", new Class<?>[]{adapterType, Account.class, Bundle.class}, adapter, account, extras);
+            }
         }
         void cancel(Account account, String authority) throws Exception { invoke(sync, "cancelSync", new Class<?>[]{Account.class, String.class}, account, authority); }
         void setting(String name, String value) throws Exception {
+            for (String prefix : new String[]{"auto.", "syncable."}) {
+                String legacy = prefix + TYPE + "/one/";
+                if (name.startsWith(legacy)) {
+                    Method id = type("SyncManager").getDeclaredMethod("id", Account.class, String.class);
+                    id.setAccessible(true); name = prefix + id.invoke(null, ONE, name.substring(legacy.length()));
+                }
+            }
             synchronized (sync) { ((Properties) get(sync, "mSettings")).setProperty(name, value); }
         }
         void request(Bundle extras) throws Exception {
@@ -281,6 +315,19 @@ public final class SyncManagerContractTest {
         Object firstActive() throws Exception { return ((Map<?, ?>) get(sync, "mActive")).values().iterator().next(); }
         void finish(int index, SyncResult result) throws Exception { starts.get(index).context.onFinished(result); timer.drain(); }
         void advance(long millis) throws Exception { timer.now += millis; timer.drain(); }
+        void retire(String packageName, java.util.Set<Account> removed) throws Exception {
+            Class<?> storageType = type("PackageRemovalStorage");
+            Object storage = make(storageType, new Class<?>[]{String.class, String.class}, packageName,
+                    new java.io.File(System.getenv("ANDROID_DATA"), "app/" + packageName + "-1").getAbsolutePath());
+            Runnable finish;
+            synchronized (sync) {
+                Object prepared = invoke(sync, "prepareRemoval", new Class<?>[]{String.class, java.util.Set.class, storageType}, packageName, removed, storage);
+                identities.keySet().removeAll(removed);
+                finish = (Runnable) invoke(sync, "publishRemoval", new Class<?>[]{type("SyncManager$Removal")}, prepared);
+                invoke(storage, "publishReplacements", new Class<?>[0]);
+            }
+            finish.run();
+        }
         @Override public void close() throws Exception {
             blockCreate = null; blockStart = null;
             cancel(null, null); timer.drain(); timer.shutdownNow();
@@ -289,6 +336,140 @@ public final class SyncManagerContractTest {
             field(type("NotificationManagerService"), "sLast").set(null, previousNotifications);
             ((ExecutorService) get(services, "mRestarts")).shutdownNow();
             ((ExecutorService) get(pm, "mPackageEventExecutor")).shutdownNow();
+        }
+    }
+
+    /** The same binding harness, with actual AccountManager authorization instead
+     * of its general scheduling fixture's permissive account predicate. */
+    private static final class AccountAccessHarness implements AutoCloseable {
+        final Harness h;
+        final Object accounts, owner;
+        final Map<Account, Object> entries;
+        final AtomicInteger accessChecks = new AtomicInteger();
+        int retireAtAccess;
+        @SuppressWarnings("unchecked") AccountAccessHarness(boolean wire) throws Exception {
+            h = new Harness(false, wire, true);
+            owner = invoke(h.pm, "get", new Class<?>[]{String.class}, PACKAGE);
+            accounts = make(type("AccountManagerService"), new Class<?>[]{type("ActivityManagerService"), type("PackageManagerService"), boolean.class}, null, h.pm, false);
+            entries = (Map<Account, Object>) get(accounts, "mAccounts"); entries.clear();
+            String code = (String) invoke(accounts, "packageIdentity", new Class<?>[]{String.class}, PACKAGE);
+            for (Account account : List.of(ONE, TWO)) {
+                Object entry = make(type("AccountManagerService$Entry"), new Class<?>[0]);
+                set(entry, "owner", PACKAGE); set(entry, "ownerIdentity", code);
+                set(entry, "password", "synthetic-password");
+                ((Map<String, String>) get(entry, "tokens")).put("scope", "synthetic-token");
+                entries.put(account, entry); h.identities.put(account, get(entry, "generation"));
+            }
+            invoke(accounts, "attachSyncManager", new Class<?>[]{type("SyncManager")}, h.sync);
+            set(h.sync, "mAccounts", (Supplier<Account[]>) () -> {
+                try { return (Account[]) invoke(accounts, "syncableAccounts", new Class<?>[0]); }
+                catch (RuntimeException failure) { throw failure; }
+                catch (Exception failure) { throw new AssertionError(failure); }
+            });
+            set(h.sync, "mAccountAccess", (BiPredicate<Account, String>) (account, pkg) -> {
+                try {
+                    if (accessChecks.incrementAndGet() == retireAtAccess) beginRemoval();
+                    return access(account, pkg);
+                } catch (RuntimeException failure) { throw failure; }
+                catch (Exception failure) { throw new AssertionError(failure); }
+            });
+            ((Properties) get(h.sync, "mSettings")).clear(); h.setting("master", "true");
+            h.setting("syncable." + TYPE + "/one/" + AUTHORITY, "1");
+        }
+        boolean access(Account account, String pkg) throws Exception {
+            return (Boolean) invoke(accounts, "canAccessAccount", new Class<?>[]{Account.class, String.class}, account, pkg);
+        }
+        void beginRemoval() throws Exception { invoke(h.pm, "beginPackageRemoval", new Class<?>[]{type("ApkPackage")}, owner); }
+        void endRemoval() throws Exception { invoke(h.pm, "endPackageRemoval", new Class<?>[]{type("ApkPackage")}, owner); }
+        String periodic(Account account) throws Exception {
+            Method id = type("SyncManager").getDeclaredMethod("id", Account.class, String.class); id.setAccessible(true);
+            return "periodic." + id.invoke(null, account, AUTHORITY) + "|0";
+        }
+        @Override public void close() throws Exception {
+            endRemoval(); h.close();
+            ((ExecutorService) get(accounts, "mCalls")).shutdownNow();
+            ((ExecutorService) get(accounts, "mSessionTimeout")).shutdownNow();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void removalAccessRaces(boolean wire) throws Exception {
+        try (AccountAccessHarness a = new AccountAccessHarness(wire)) {
+            Harness h = a.h;
+            h.setting(a.periodic(TWO), "3600|"); invoke(h.sync, "save", new Class<?>[0]);
+            java.nio.file.Path root = java.nio.file.Path.of(System.getenv("ANDROID_DATA"));
+            byte[] settings = java.nio.file.Files.readAllBytes(root.resolve("system/sync.properties"));
+            Object originalEntry = a.entries.get(ONE), generation = h.identities.get(ONE);
+            h.enqueue(ONE, extras("captured-before-removal"));
+            Object other = make(type("SyncManager$Pending"), new Class<?>[]{h.adapterType, Account.class, Bundle.class, long.class, boolean.class, Object.class},
+                    h.adapter, TWO, extras("unrelated-delayed"), h.timer.now + 3600000, true, h.identities.get(TWO));
+            ((List<Object>) get(h.sync, "mPending")).add(other);
+            Map<String, Object> registry = new java.util.LinkedHashMap<>();
+            registry.put(PACKAGE, make(type("Installer$Entry"), new Class<?>[]{String.class, String.class, long.class, long.class},
+                    PACKAGE, new java.io.File((String) get(a.owner, "apkPath")).getParent(), 1L, 1L));
+            Object installer = make(type("Installer"), new Class<?>[]{type("PackageManagerService"), type("ActivityTaskManagerService"), Map.class}, h.pm, h.atm, registry);
+            invoke(installer, "writeRegistry", new Class<?>[0]);
+            Object coordinator = get(h.pm, "mRemovalCoordinator");
+            Class<?> coordinatorType = type("PackageManagerService$RemovalCoordinator");
+            AtomicReference<SecurityException> dispatchFailure = new AtomicReference<>();
+            set(h.pm, "mRemovalCoordinator", java.lang.reflect.Proxy.newProxyInstance(coordinatorType.getClassLoader(), new Class<?>[]{coordinatorType}, (proxy, method, args) -> {
+                check((Boolean) invoke(h.pm, "isRemovalPending", new Class<?>[]{String.class}, PACKAGE), "Installer did not activate its removal barrier");
+                try { a.access(ONE, PACKAGE); throw new AssertionError("Actual account access did not reject retirement"); }
+                catch (SecurityException expected) { checks++; }
+                try { h.timer.drain(); }
+                catch (SecurityException failure) { dispatchFailure.set(failure); }
+                // Even a broken lifecycle must reach the real rejected registry
+                // commit, so the regression observes its state after rollback.
+                return invoke(coordinator, "commit", new Class<?>[]{type("ApkPackage"), type("PackageRemovalStorage"), type("PackageManagerService$RemovalCommit")}, args);
+            }));
+            // No real app process is running when uninstall begins. Restore the
+            // constructed process only after rollback, for the actual fresh bind.
+            List<Object> processes = (List<Object>) get(h.atm, "mProcesses");
+            List<Object> stopped = new ArrayList<>(processes); processes.clear();
+            java.nio.file.Path blocked = root.resolve("system/packages.list.tmp"); java.nio.file.Files.createDirectory(blocked);
+            try {
+                try { invoke(installer, "uninstall", new Class<?>[]{String.class}, PACKAGE); throw new AssertionError("Registry failure was not reported"); }
+                catch (java.io.IOException expected) { checks++; }
+            } finally { java.nio.file.Files.delete(blocked); processes.addAll(stopped); }
+            check(invoke(h.pm, "get", new Class<?>[]{String.class}, PACKAGE) == a.owner
+                    && !(Boolean) invoke(h.pm, "isRemovalPending", new Class<?>[]{String.class}, PACKAGE), "Real Installer rollback did not restore the original package");
+            check(a.entries.get(ONE) == originalEntry && get(originalEntry, "generation") == generation
+                    && "synthetic-password".equals(get(originalEntry, "password"))
+                    && "synthetic-token".equals(((Map<?, ?>) get(originalEntry, "tokens")).get("scope")), "Rollback changed the account's credentials or incarnation");
+            check(java.util.Arrays.equals(settings, java.nio.file.Files.readAllBytes(root.resolve("system/sync.properties")))
+                    && a.entries.containsKey(TWO), "Rollback changed persistent sync settings or another account");
+            check(dispatchFailure.get() == null && h.active() == 0 && h.bindings() == 0 && h.starts.isEmpty(),
+                    "Actual Installer rollback retained stranded sync work after access denial: " + dispatchFailure.get());
+            check(h.pending() == 1 && ((List<?>) get(h.sync, "mPending")).contains(other), "Unrelated delayed request was lost during retirement");
+            check(h.active() == 0 && (Long) invoke(h.sync, "nextDueElapsed", new Class<?>[0]) > h.timer.now,
+                    "Canceled work retained active device-work ownership after rollback");
+            h.enqueue(ONE, extras("fresh-after-rollback")); h.timer.drain();
+            check(h.starts.size() == 1 && "fresh-after-rollback".equals(h.starts.get(0).extras.getString("tag")), "Fresh authorized sync remained blocked after rollback");
+            h.finish(0, new SyncResult()); h.advance(3600000);
+            check(h.starts.size() == 2 && h.starts.get(1).account.equals(TWO), "Unrelated delayed request did not resume after rollback");
+            h.finish(1, new SyncResult());
+        }
+        try (AccountAccessHarness a = new AccountAccessHarness(wire)) {
+            Harness h = a.h;
+            // Admission and pre-bind checks succeed; revoke immediately before
+            // the real account check on the already-bound connected callback.
+            a.retireAtAccess = 3; h.enqueue(ONE, extras("connection-race")); h.timer.drain();
+            check(a.accessChecks.get() == 3 && h.starts.isEmpty() && h.active() == 0 && h.bindings() == 0 && h.unbound == 1,
+                    "Access rejection on connectedAdapter leaked a binding or reached the adapter");
+            a.endRemoval(); h.enqueue(ONE, extras("fresh-after-connect-denial")); h.timer.drain();
+            check(h.starts.size() == 1, "Fresh sync failed after connected-callback retirement");
+            h.finish(0, new SyncResult());
+        }
+        try (AccountAccessHarness a = new AccountAccessHarness(wire)) {
+            Harness h = a.h; a.retireAtAccess = 1;
+            String periodic = a.periodic(ONE); h.setting(periodic, "3600|");
+            synchronized (h.sync) { invoke(h.sync, "schedulePeriodic", new Class<?>[]{String.class, boolean.class}, periodic, true); }
+            h.timer.drain();
+            check(a.accessChecks.get() == 1 && h.starts.isEmpty() && h.pending() == 0 && h.active() == 0,
+                    "Revoked periodic request escaped its callback or admitted unauthorized work");
+            a.endRemoval(); h.timer.periodicDeliveries.get(0).run(); h.timer.drain();
+            check(h.starts.size() == 1, "A later periodic tick could not sync after rollback of removal");
+            h.finish(0, new SyncResult());
         }
     }
 
@@ -595,11 +776,60 @@ public final class SyncManagerContractTest {
         }
     }
 
+    private static void retirement(boolean wire) throws Exception {
+        try (Harness h = new Harness(false, wire)) {
+            h.enqueue(ONE, extras("old")); h.timer.drain(); h.enqueue(ONE, extras("old-queued"));
+            h.identities.put(ONE, new Object()); h.enqueue(ONE, extras("recreated")); h.timer.drain();
+            check(h.cancelled == 1 && h.starts.size() == 2 && h.pending() == 0
+                    && "recreated".equals(h.starts.get(1).extras.getString("tag")),
+                    "A recreated account inherited an old pending request or stale active binding");
+        }
+        try (Harness h = new Harness(false, wire)) {
+            Object retired = h.identities.get(ONE);
+            h.enqueue(ONE, extras("retiring")); h.enqueue(TWO, extras("retained"));
+            h.enqueue(ONE, extras("retiring-rerun")); h.timer.drain();
+            Method id = type("SyncManager").getDeclaredMethod("id", Account.class, String.class); id.setAccessible(true);
+            String periodic = "periodic." + id.invoke(null, ONE, AUTHORITY) + "|0";
+            h.setting(periodic, "3600|");
+            synchronized (h.sync) { invoke(h.sync, "schedulePeriodic", new Class<?>[]{String.class, boolean.class}, periodic, false); }
+            h.retire("fixture.authenticator.owner", java.util.Set.of(ONE)); h.timer.drain();
+            check(h.cancelled == 1 && h.unbound == 1 && h.starts.size() == 2 && h.starts.get(1).account.equals(TWO),
+                    "Account retirement failed to cancel its binding and preserve unrelated queued work");
+            check(h.pending() == 0 && ((Map<?, ?>) get(h.sync, "mPeriodic")).isEmpty(), "Retirement retained queued or periodic work");
+            h.identities.put(ONE, new Object());
+            SyncResult late = result("soft"); late.fullSyncRequested = true; late.delayUntil = h.timer.wall / 1000 + 120;
+            h.finish(0, late);
+            h.timer.periodicDeliveries.get(0).run(); h.timer.drain();
+            invoke(h.sync, "enqueue", new Class<?>[]{h.adapterType, Account.class, Bundle.class, Object.class}, h.adapter, ONE, extras("stale-snapshot"), retired);
+            h.timer.drain();
+            check(h.pending() == 0 && h.starts.size() == 2 && ((Map<?, ?>) get(h.sync, "mBackoff")).isEmpty()
+                    && ((Map<?, ?>) get(h.sync, "mDelayUntil")).isEmpty(), "Late result, old timer or captured request revived retired work");
+            h.enqueue(ONE, extras("new-account")); h.finish(1, new SyncResult());
+            check(h.starts.size() == 3 && "new-account".equals(h.starts.get(2).extras.getString("tag")), "Fresh account generation could not sync");
+        }
+        try (Harness h = new Harness(true, wire)) {
+            h.enqueue(ONE, extras("one")); h.enqueue(TWO, extras("two")); h.timer.drain();
+            SyncResult delayed = result("soft"); delayed.delayUntil = h.timer.wall / 1000 + 120;
+            h.finish(0, delayed); h.finish(1, result("soft"));
+            h.retire("fixture.authenticator.owner", java.util.Set.of(ONE)); h.timer.drain();
+            check(h.pending() == 1 && ((Map<?, ?>) get(h.sync, "mBackoff")).size() == 1
+                    && ((Map<?, ?>) get(h.sync, "mDelayUntil")).isEmpty(), "Retirement failed to isolate pending/backoff/delay cleanup");
+        }
+        try (Harness h = new Harness(true, wire)) {
+            h.enqueue(ONE, extras("one")); h.enqueue(TWO, extras("two")); h.timer.drain();
+            h.retire(PACKAGE, java.util.Set.of()); h.timer.drain();
+            check(h.cancelled == 2 && h.unbound == 1 && h.bindings() == 0 && h.active() == 0 && h.pending() == 0,
+                    "Removed adapter retained service bindings");
+        }
+    }
+
     public static void contracts(String group, boolean wire) throws Exception {
         if (group.equals("all") || group.equals("admission")) admission(wire);
         if (group.equals("all") || group.equals("clock")) clock(wire);
         if (group.equals("all") || group.equals("results")) results(wire);
         if (group.equals("all") || group.equals("cancellation")) cancellation(wire);
+        if (group.equals("all") || group.equals("retirement")) retirement(wire);
+        if (group.equals("all") || group.equals("removal-access")) removalAccessRaces(wire);
         if (wire && group.equals("all")) threaded();
     }
     public static void main(String[] args) throws Exception {

@@ -102,6 +102,12 @@ try {
     $global:LASTEXITCODE = $syncContractCode
     $syncContractOut
   } @('Sync manager contracts passed:')
+  $authenticatorRemovalOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'AuthenticatorUninstallTest') 120
+  $authenticatorRemovalCode = $LASTEXITCODE
+  Check 'services: authenticator uninstall, account/sync rollback and crash recovery' {
+    $global:LASTEXITCODE = $authenticatorRemovalCode
+    $authenticatorRemovalOut
+  } @('AuthenticatorUninstallTest all passed:')
   $env:GESHER_MICROG_SPOOF = '0'
 
   . "$PSScriptRoot/../settings-provider-contracts.ps1"

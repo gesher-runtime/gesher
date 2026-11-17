@@ -28,7 +28,7 @@ def main() -> None:
     source.add_argument('--source-ref', help='Compile older production classes as a negative control')
     source.add_argument('--idle-policy-probe', action='store_true',
                         help='Probe the full PR15 combination supplied through --app-classes')
-    parser.add_argument('--case', choices=('all', 'admission', 'clock', 'results', 'cancellation'), default='all')
+    parser.add_argument('--case', choices=('all', 'admission', 'clock', 'results', 'cancellation', 'retirement', 'removal-access'), default='all')
     args = parser.parse_args()
     if args.idle_policy_probe and args.case != 'all':
         parser.error('--idle-policy-probe requires --case all')
