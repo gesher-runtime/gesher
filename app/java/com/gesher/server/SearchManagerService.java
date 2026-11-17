@@ -15,8 +15,9 @@ import android.os.Bundle;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 
-/** Resolves app-local search declarations for SearchManager and SearchView. */
+/** Resolves installed search declarations using Android's package visibility policy. */
 final class SearchManagerService extends ISearchManager.Default {
     private static final String SEARCHABLE = "android.app.searchable";
     private static final String DEFAULT_SEARCHABLE = "android.app.default_searchable";
@@ -25,18 +26,32 @@ final class SearchManagerService extends ISearchManager.Default {
 
     private final PackageManagerService mPackages;
     private final CallerIdentity mCallers;
+    private final Function<ActivityInfo, SearchableInfo> mMetadataReader;
 
     SearchManagerService(PackageManagerService packages, CallerIdentity callers) {
+        this(packages, callers, activity -> SearchableInfo.getActivityMetaData(
+                GesherSettingsContext.get(), activity, 0));
+    }
+
+    // The resource reader is a dependency; permission and lifecycle checks always
+    // surround it. Ordinary services use only the framework APK/XML parser above.
+    SearchManagerService(PackageManagerService packages, CallerIdentity callers,
+            Function<ActivityInfo, SearchableInfo> metadataReader) {
         mPackages = packages;
         mCallers = callers;
+        mMetadataReader = metadataReader;
     }
 
     @Override public SearchableInfo getSearchableInfo(ComponentName activity) {
         if (activity == null) return null;
         String name = activity.getPackageName();
-        // Authenticate before inspecting metadata. The current desktop package-query
-        // path does not consistently filter cross-package lookups (roadmap F49).
-        if (!mCallers.isSystem() && !name.equals(mCallers.callerPackage())) return null;
+        // Authenticate the process independently of the requested component. AOSP
+        // filters by package visibility, not package-name equality: explicit
+        // <queries>, QUERY_ALL_PACKAGES, legacy targets and shared UIDs count.
+        boolean system = mCallers.isSystem();
+        if (!system) mCallers.callerPackage();
+        int callingUid = system ? android.os.Process.SYSTEM_UID : mCallers.callerUid();
+        if (!mPackages.isPackageVisibleTo(callingUid, name)) return null;
         ApkPackage pkg = mPackages.get(name);
         if (pkg == null || mPackages.isRemovalPending(name)) return null;
 
@@ -54,7 +69,8 @@ final class SearchManagerService extends ISearchManager.Default {
         if (result == null || !activitiesStillEnabled(pkg, activity, result.getSearchActivity())) {
             return null;
         }
-        return mPackages.get(name) == pkg && !mPackages.isRemovalPending(name) ? result : null;
+        return mPackages.get(name) == pkg && !mPackages.isRemovalPending(name)
+                && mPackages.isPackageVisibleTo(callingUid, name) ? result : null;
     }
 
     private static boolean activitiesStillEnabled(ApkPackage pkg, ComponentName source, ComponentName target) {
@@ -82,7 +98,7 @@ final class SearchManagerService extends ISearchManager.Default {
         return data == null ? null : data.getString(DEFAULT_SEARCHABLE);
     }
 
-    private static SearchableInfo readSearchable(ApkPackage pkg, ActivityInfo activity) {
+    private SearchableInfo readSearchable(ApkPackage pkg, ActivityInfo activity) {
         if (activity == null || activity.metaData == null || activity.metaData.getInt(SEARCHABLE) == 0
                 || !handlesSearch(pkg, activity)) return null;
 
@@ -90,7 +106,7 @@ final class SearchManagerService extends ISearchManager.Default {
         try {
             // Reuse the framework parser to preserve resource references, suggestion
             // provider metadata, action keys and Android's validation of searchable XML.
-            return SearchableInfo.getActivityMetaData(GesherSettingsContext.get(), activity, 0);
+            return mMetadataReader.apply(activity);
         } catch (Resources.NotFoundException missing) {
             return null;
         } finally {

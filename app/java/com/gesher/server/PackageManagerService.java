@@ -896,21 +896,7 @@ public final class PackageManagerService extends IPackageManager.Default {
                         Binder.getCallingPid(), callingUid) != PackageManager.PERMISSION_GRANTED) {
             throw new SecurityException("canPackageQuery requires cross-user permission");
         }
-        Map<String, ApkPackage> packages;
-        boolean browser, gms, vending;
-        synchronized (this) {
-            packages = new LinkedHashMap<>(mPackages);
-            for (String removing : mRemoving.keySet()) packages.remove(removing);
-            browser = !mPackages.containsKey(BrowserPackageSupport.PACKAGE)
-                    && !mRemoving.containsKey(BrowserPackageSupport.PACKAGE);
-            gms = !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
-                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_GMS);
-            vending = !mPackages.containsKey(GmsPackageSupport.PACKAGE_VENDING)
-                    && !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
-                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
-        }
-        PackageVisibility visibility = new PackageVisibility(packages, browser, gms, vending,
-                this::isProtectedBroadcast);
+        PackageVisibility visibility = packageVisibility();
         boolean missing = !visibility.contains(sourcePackageName)
                 || !visibility.canSee(callingUid, sourcePackageName);
         for (String target : targetPackageNames) {
@@ -928,6 +914,30 @@ public final class PackageManagerService extends IPackageManager.Default {
             result[i] = visibility.canSee(sourceUid, targetPackageNames[i]);
         }
         return result;
+    }
+
+    /** Internal component metadata access, using the same installed visibility snapshot. */
+    boolean isPackageVisibleTo(int callingUid, String packageName) {
+        return android.os.UserHandle.getUserId(callingUid) == 0
+                && packageVisibility().canSee(callingUid, packageName);
+    }
+
+    private PackageVisibility packageVisibility() {
+        Map<String, ApkPackage> packages;
+        boolean browser, gms, vending;
+        synchronized (this) {
+            packages = new LinkedHashMap<>(mPackages);
+            for (String removing : mRemoving.keySet()) packages.remove(removing);
+            browser = !mPackages.containsKey(BrowserPackageSupport.PACKAGE)
+                    && !mRemoving.containsKey(BrowserPackageSupport.PACKAGE);
+            gms = !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
+                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_GMS);
+            vending = !mPackages.containsKey(GmsPackageSupport.PACKAGE_VENDING)
+                    && !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
+                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
+        }
+        return new PackageVisibility(packages, browser, gms, vending,
+                this::isProtectedBroadcast);
     }
 
     @Override

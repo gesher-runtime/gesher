@@ -724,7 +724,7 @@ $ok = (CheckOrdered 'services: cross-package: components'' ContentResolver reach
 $ok = (CheckSequences 'services: processes on demand: peer started for its activity, ended with it, started again for its provider, ended with its last client' ($peerOut + "`n" + $serverOut) @(
   @('gesher-app: app process for com.gesher.peer: pid ',
     'peer: PeerActivity onCreate in process com.gesher.peer (pid ', 'started by com.gesher.components/.CrossActivity',
-    'peer: foreign searchable metadata not returned',
+    'peer: manifest-visible foreign searchable metadata verified',
     'peer: PeerActivity onDestroy', 'gesher-app: the system server ended the process (scheduleExit)',
     'gesher-app: app process for com.gesher.peer: pid ', 'peer: NotesProvider onCreate in process com.gesher.peer',
     'peer: NotesProvider insert hello from components', 'peer: NotesProvider call describe',
