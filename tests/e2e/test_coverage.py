@@ -43,6 +43,7 @@ def fixture():
 def sdk_identity(app):
     return {"schema_version": 1, "source": "android_sdk_build_tools", "apk_sha256": HASH,
             "package": app["package"], "version_code": app["versionCode"],
+            "declared_min_sdk": 23, "declared_target_sdk": 36,
             "min_sdk": 23, "target_sdk": 36, "packaged_native_abis": ["arm64-v8a", "x86_64"],
             "signer_certificate_sha256": ["b" * 64, "c" * 64],
             "signature_verification": "apksigner_default_supported_platforms",
@@ -318,6 +319,41 @@ class CoverageContractTest(unittest.TestCase):
         self.assertEqual(profile["declared_sdk_int"], "36")
         self.assertEqual(profile["declared_sdk_int_full"], "3600000")
         self.assertIsNone(profile["selected_abi"])
+
+    def test_implicit_sdk_target_is_compared_with_runtime_parser(self):
+        for minimum in (None, 23):
+            with self.subTest(minimum=minimum):
+                self.add_sdk_identities()
+                data = self.observed["apks"][0]["sdk_identity"]
+                data.update(declared_min_sdk=minimum, declared_target_sdk=None,
+                            min_sdk=minimum or 1, target_sdk=minimum or 1)
+                report = self.report()
+                self.assertFalse(report["gate_passed"])
+                self.assertTrue(any("targetSdk disagree" in error for error in report["validation_errors"]))
+                self.observed["apks"][0]["target_sdk"] = minimum or 1
+                self.assertTrue(self.report()["gate_passed"])
+
+    def test_inconsistent_or_missing_effective_defaults_fail_closed(self):
+        self.add_sdk_identities()
+        data = self.observed["apks"][0]["sdk_identity"]
+        data["declared_target_sdk"] = None
+        self.assertFalse(self.report()["gate_passed"])
+        data["target_sdk"] = None
+        self.assertFalse(self.report()["gate_passed"])
+        del data["declared_min_sdk"]
+        self.assertFalse(self.report()["gate_passed"])
+
+    def test_source_stamp_remains_separate_from_app_signers(self):
+        self.add_sdk_identities()
+        data = self.observed["apks"][0]["sdk_identity"]
+        data["source_stamp_certificate_sha256"] = "7" * 64
+        report = self.report()
+        self.assertTrue(report["gate_passed"])
+        profile = report["compatibility_matrix"][0]
+        self.assertEqual(profile["signer_certificate_sha256"], ["b" * 64, "c" * 64])
+        self.assertEqual(profile["source_stamp_certificate_sha256"], "7" * 64)
+        data["source_stamp_certificate_sha256"] = ["7" * 64]
+        self.assertFalse(self.report()["gate_passed"])
 
     def test_malformed_runtime_profile_is_invalid_evidence(self):
         for runtime in ([], {"declared_properties": "pretend"}):

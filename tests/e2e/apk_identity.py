@@ -101,15 +101,19 @@ def parse_badging(text: str) -> dict:
         value = match[1]
         return int(value) if value.isdecimal() else value
 
-    native = [item for item in lines if item.startswith("native-code:")]
-    if len(native) > 1:
-        raise ValueError("aapt2 repeated native-code")
     abis = []
-    if native:
-        values = native[0][len("native-code:"):].strip()
+    for kind in ("native-code", "alt-native-code"):
+        native = [item for item in lines if item.startswith(kind + ":")]
+        if len(native) > 1:
+            raise ValueError(f"aapt2 repeated {kind}")
+        if not native:
+            continue
+        if kind == "alt-native-code" and not abis:
+            raise ValueError("aapt2 returned alternate ABIs without a primary ABI")
+        values = native[0][len(kind) + 1:].strip()
         if not re.fullmatch(r"(?:'[A-Za-z0-9_-]+'(?:\s+|$))+", values):
             raise ValueError("aapt2 returned malformed packaged native ABIs")
-        abis = re.findall(r"'([A-Za-z0-9_-]+)'", values)
+        abis += re.findall(r"'([A-Za-z0-9_-]+)'", values)
         if len(abis) != len(set(abis)):
             raise ValueError("aapt2 repeated a packaged native ABI")
     minimum, legacy_minimum = sdk("minSdkVersion"), sdk("sdkVersion")
@@ -120,43 +124,88 @@ def parse_badging(text: str) -> dict:
             "packaged_native_abis": sorted(abis)}
 
 
-def parse_manifest_version(text: str) -> int:
-    # Current AAPT2 badging omits versionCodeMajor. Inspect root attributes,
-    # ignoring identically named attributes in child elements.
-    root_depth = None
-    values = {}
+def parse_manifest(text: str) -> dict:
+    # Current AAPT2 badging omits versionCodeMajor and omitted SDK attributes.
+    # Inspect the actual manifest to distinguish absence (Android defaults)
+    # from a missing/changed badging record. Only direct uses-sdk children count.
+    stack = []
+    root_seen, sdk_seen = False, False
+    version, sdk = {}, {}
+    attributes = {"versionCode": "0101021b", "versionCodeMajor": "01010576",
+                  "minSdkVersion": "0101020c", "targetSdkVersion": "01010270"}
     for line in text.splitlines():
         depth = len(line) - len(line.lstrip())
-        if root_depth is None:
-            if re.fullmatch(r"\s*E: manifest(?: \(line=[0-9]+\))?", line):
-                root_depth = depth
+        element = re.fullmatch(r"\s*E: (\S+)(?: \(line=[0-9]+\))?", line)
+        if line.lstrip().startswith("E:") and not element:
+            raise ValueError("aapt2 returned malformed manifest elements")
+        if element:
+            while stack and depth <= stack[-1][0]:
+                stack.pop()
+            if not stack:
+                if root_seen or element[1] != "manifest":
+                    raise ValueError("aapt2 returned an ambiguous manifest root")
+                root_seen = True
+            elif len(stack) == 1 and element[1] == "uses-sdk":
+                if sdk_seen:
+                    raise ValueError("aapt2 returned multiple uses-sdk elements")
+                sdk_seen = True
+            stack.append((depth, element[1]))
             continue
-        if depth <= root_depth or line.lstrip().startswith("E:"):
-            break
-        if depth != root_depth + 2:
+        if not stack or depth != stack[-1][0] + 2:
             continue
-        match = re.fullmatch(r"\s*A: http://schemas\.android\.com/apk/res/android:"
-                             r"(versionCode|versionCodeMajor)\(0x([0-9a-fA-F]+)\)=(.*)", line)
+        names = ("versionCode", "versionCodeMajor") if len(stack) == 1 else (
+            ("minSdkVersion", "targetSdkVersion") if len(stack) == 2 and stack[-1][1] == "uses-sdk" else ())
+        prefix = "A: http://schemas.android.com/apk/res/android:"
+        if not any(re.match(re.escape(prefix + name) + r"(?=[(=\s]|$)", line.lstrip()) for name in names):
+            continue
+        match = re.fullmatch(r"\s*" + re.escape(prefix) + r"(\w+)\(0x([0-9a-fA-F]+)\)=(.*)", line)
         if not match:
-            continue
+            raise ValueError("aapt2 returned malformed manifest attributes")
         name, resource, raw = match.groups()
-        if name in values or resource.lower() != {"versionCode": "0101021b", "versionCodeMajor": "01010576"}[name]:
-            raise ValueError("aapt2 returned ambiguous manifest version attributes")
-        if not re.fullmatch(r"(?:[0-9]+|0x[0-9a-fA-F]+)", raw):
+        values = version if len(stack) == 1 else sdk
+        if name in values or resource.lower() != attributes[name]:
+            raise ValueError("aapt2 returned ambiguous manifest attributes")
+        if re.fullmatch(r"(?:[0-9]+|0x[0-9a-fA-F]+)", raw):
+            values[name] = int(raw, 16 if raw.startswith("0x") else 10)
+            if values is sdk and values[name] < 1:
+                raise ValueError("manifest SDK versions must be positive")
+        elif values is sdk:
+            codename = re.fullmatch(r'"([A-Za-z][A-Za-z0-9_.]*)"(?: \(Raw: "\1"\))?', raw)
+            if not codename:
+                raise ValueError("manifest SDK versions must be integers or platform codenames")
+            values[name] = codename[1]
+        else:
             raise ValueError("manifest version attributes must be typed nonnegative integers")
-        values[name] = int(raw, 16 if raw.startswith("0x") else 10)
-    if root_depth is None:
+    if not root_seen:
         raise ValueError("aapt2 returned no manifest root")
-    low, high = values.get("versionCode", 0), values.get("versionCodeMajor", 0)
+    low, high = version.get("versionCode", 0), version.get("versionCodeMajor", 0)
     if low > 0xffffffff or high > 0x7fffffff:
         raise ValueError("manifest version is outside the Android long-version range")
-    return (high << 32) | low
+    minimum = sdk.get("minSdkVersion", 1)
+    return {"version_code": (high << 32) | low,
+            "declared_min_sdk": sdk.get("minSdkVersion"), "declared_target_sdk": sdk.get("targetSdkVersion"),
+            "min_sdk": minimum, "target_sdk": sdk.get("targetSdkVersion", minimum)}
 
 
-def parse_certificates(text: str) -> list[str]:
+def parse_manifest_version(text: str) -> int:
+    return parse_manifest(text)["version_code"]
+
+
+def parse_certificates(text: str) -> dict:
     certificates = {}
+    source_stamp = None
     for line in text.splitlines():
-        if "certificate SHA-256 digest:" not in line:
+        # Match the metric at the start of a signer record, not text embedded
+        # in a DN or another diagnostic. Certificate subjects are arbitrary.
+        if not re.match(r"^(?:Signer #\S+|Source Stamp Signer) certificate SHA-256(?:\s|:|$)", line):
+            if re.match(r"^[^:]+ certificate SHA-256 digest:", line):
+                raise ValueError("apksigner returned an unknown certificate role")
+            continue
+        stamp = re.fullmatch(r"Source Stamp Signer certificate SHA-256 digest: ([0-9a-fA-F]{64})", line)
+        if stamp:
+            if source_stamp is not None:
+                raise ValueError("apksigner repeated its source stamp certificate")
+            source_stamp = stamp[1].lower()
             continue
         match = re.fullmatch(r"Signer #([1-9][0-9]*) certificate SHA-256 digest: ([0-9a-fA-F]{64})", line)
         if not match or int(match[1]) in certificates:
@@ -164,7 +213,8 @@ def parse_certificates(text: str) -> list[str]:
         certificates[int(match[1])] = match[2].lower()
     if not certificates or set(certificates) != set(range(1, len(certificates) + 1)):
         raise ValueError("apksigner did not return a complete signer set")
-    return [certificates[index] for index in sorted(certificates)]
+    return {"signer_certificate_sha256": [certificates[index] for index in sorted(certificates)],
+            "source_stamp_certificate_sha256": source_stamp}
 
 
 def collect(apk: Path, expected_package: str, expected_version_code: int,
@@ -188,11 +238,18 @@ def collect(apk: Path, expected_package: str, expected_version_code: int,
         if measured != expected_sha256.lower():
             raise ValueError("APK bytes do not match the pinned SHA-256")
         metadata = parse_badging(run_tool([str(aapt), "dump", "badging", str(snapshot)], "aapt2"))
-        version = parse_manifest_version(run_tool([
+        manifest = parse_manifest(run_tool([
             str(aapt), "dump", "xmltree", "--file", "AndroidManifest.xml", str(snapshot)], "aapt2 manifest"))
-        if (metadata["version_code"] & 0xffffffff) != (version & 0xffffffff):
+        if (metadata["version_code"] & 0xffffffff) != (manifest["version_code"] & 0xffffffff):
             raise ValueError("aapt2 badging and manifest versionCode disagree")
-        metadata["version_code"] = version
+        for field in ("min_sdk", "target_sdk"):
+            declared = manifest["declared_" + field]
+            # Some SDK versions print defaults in badging. Absence is accepted
+            # only when xmltree establishes that no explicit attribute exists.
+            if (declared is not None and metadata[field] != declared) or (
+                    metadata[field] is not None and metadata[field] != manifest[field]):
+                raise ValueError(f"aapt2 badging and manifest {field} disagree")
+        metadata.update(manifest)
         if metadata["package"] != expected_package or metadata["version_code"] != expected_version_code:
             raise ValueError("APK package/versionCode does not match the manifest entry")
         certificates = parse_certificates(run_tool([
@@ -200,7 +257,7 @@ def collect(apk: Path, expected_package: str, expected_version_code: int,
         if hash_file(snapshot) != measured:
             raise ValueError("APK snapshot changed during identity collection")
     return {"schema_version": 1, "source": "android_sdk_build_tools", "apk_sha256": measured,
-            **metadata, "signer_certificate_sha256": certificates,
+            **metadata, **certificates,
             "signature_verification": "apksigner_default_supported_platforms", "tools": tool_identity}
 
 

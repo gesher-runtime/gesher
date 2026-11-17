@@ -41,11 +41,19 @@ def identity_errors(identity: object, app: dict, observed: dict) -> list[str]:
         errors.append("SDK APK identity does not match pinned and observed bytes")
     if type(identity.get("version_code")) is not int or identity.get("version_code", -1) < 0:
         errors.append("SDK versionCode must be an integer")
-    for key in ("min_sdk", "target_sdk"):
+    for key in ("declared_min_sdk", "declared_target_sdk", "min_sdk", "target_sdk"):
         value = identity.get(key)
-        if value is not None and not (type(value) is int and value > 0) and not (
+        if key not in identity:
+            errors.append(f"SDK identity lacks {key}")
+        if (value is not None or not key.startswith("declared_")) and not (type(value) is int and value > 0) and not (
                 isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]*", value)):
             errors.append(f"invalid SDK identity {key}")
+    minimum = identity.get("declared_min_sdk")
+    effective_minimum = minimum if minimum is not None else 1
+    target = identity.get("declared_target_sdk")
+    effective_target = target if target is not None else effective_minimum
+    if identity.get("min_sdk") != effective_minimum or identity.get("target_sdk") != effective_target:
+        errors.append("SDK effective versions do not follow the declared manifest/defaults")
     parsed_target = observed.get("target_sdk")
     sdk_target = identity.get("target_sdk")
     if parsed_target is not None and type(parsed_target) is not int:
@@ -62,6 +70,9 @@ def identity_errors(identity: object, app: dict, observed: dict) -> list[str]:
     if not isinstance(signers, list) or not signers or any(
             not isinstance(signer, str) or not SHA256.fullmatch(signer) for signer in signers):
         errors.append("SDK identity lacks verified signer certificate hashes")
+    stamp = identity.get("source_stamp_certificate_sha256")
+    if stamp is not None and (not isinstance(stamp, str) or not SHA256.fullmatch(stamp)):
+        errors.append("SDK source stamp certificate must be a SHA-256 hash or null")
     if identity.get("signature_verification") != "apksigner_default_supported_platforms":
         errors.append("SDK signature verification scope is missing")
     tools = identity.get("tools")
@@ -305,8 +316,11 @@ def summarize(manifest: dict, observations: dict | None, manifest_sha256: str,
             "apk_sha256": packages[package].get("sha256"),
             "sdk_identity_status": identity_states[package],
             "min_sdk": identity.get("min_sdk"), "target_sdk": identity.get("target_sdk"),
+            "declared_min_sdk": identity.get("declared_min_sdk"),
+            "declared_target_sdk": identity.get("declared_target_sdk"),
             "runtime_parsed_target_sdk": observed.get("target_sdk"),
             "signer_certificate_sha256": identity.get("signer_certificate_sha256"),
+            "source_stamp_certificate_sha256": identity.get("source_stamp_certificate_sha256"),
             "packaged_native_abis": identity.get("packaged_native_abis"),
             "selected_abi": observed.get("selected_abi"),
             "declared_sdk_int": properties.get("ro.build.version.sdk"),
@@ -365,8 +379,9 @@ def render(report: dict) -> str:
               "remain unknown; declared build properties are not measured hardware capabilities."]
     lines += ["", "### APK identity and profile matrix", "",
               "Packaged native ABIs describe APK contents, not the ABI selected or executed by Gesher. "
-              "Certificate hashes identify the verified signer set; they are not an endorsement of the signer.",
-              "", "| Package / version code | SDK identity | minSdk / targetSdk | Packaged native ABIs | Verified signers |",
+              "Certificate hashes identify the verified app signer set; source stamps remain separate. "
+              "Effective SDK values include Android's documented defaults for omitted attributes.",
+              "", "| Package / version code | SDK identity | Effective minSdk / targetSdk | Packaged native ABIs | Verified app signers |",
               "| --- | --- | --- | --- | --- |"]
     for profile in report["compatibility_matrix"]:
         abis = profile["packaged_native_abis"]

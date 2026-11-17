@@ -65,6 +65,9 @@ class ApkIdentityContracts(unittest.TestCase):
     def test_duplicate_and_malformed_tool_records_are_rejected(self):
         for text in ["", BADGING + BADGING, BADGING + "targetSdkVersion:'36'\n",
                      BADGING + "native-code: 'x86'\n",
+                     BADGING + "alt-native-code: 'x86_64'\n",
+                     BADGING + "alt-native-code: 'x86'\nalt-native-code: 'armeabi-v7a'\n",
+                     BADGING + "alt-native-code: garbage\n",
                      BADGING.replace("'arm64-v8a'", "'x86_64'"),
                      BADGING.replace("versionCode='7'", "versionCode='-1'"),
                      BADGING.replace("versionCode='7'", "versionCode='4294967296'"),
@@ -73,12 +76,51 @@ class ApkIdentityContracts(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 identity.parse_badging(text)
 
+    def test_primary_and_alternate_native_abis_form_one_packaged_inventory(self):
+        data = identity.parse_badging(BADGING + "alt-native-code: 'armeabi-v7a' 'x86'\n")
+        self.assertEqual(data["packaged_native_abis"], ["arm64-v8a", "armeabi-v7a", "x86", "x86_64"])
+        with self.assertRaisesRegex(ValueError, "without a primary"):
+            identity.parse_badging(BADGING.replace("native-code: 'x86_64' 'arm64-v8a'",
+                                                   "alt-native-code: 'armeabi-v7a' 'x86'"))
+
+    def test_manifest_defaults_need_actual_root_and_direct_uses_sdk(self):
+        root = "  E: manifest (line=1)\n"
+        declared = ("      E: uses-sdk (line=1)\n"
+                    "        A: http://schemas.android.com/apk/res/android:minSdkVersion(0x0101020c)=23\n")
+        self.assertEqual(identity.parse_manifest(root)["target_sdk"], 1)
+        result = identity.parse_manifest(root + declared)
+        self.assertEqual(result["min_sdk"], 23)
+        self.assertEqual(result["target_sdk"], 23)
+        self.assertIsNone(result["declared_target_sdk"])
+        with self.assertRaisesRegex(ValueError, "multiple uses-sdk"):
+            identity.parse_manifest(root + declared + declared)
+        with self.assertRaisesRegex(ValueError, "SDK versions"):
+            identity.parse_manifest(root + declared.replace("=23", "=@0x7f001111"))
+        for malformed in (declared.replace("(0x0101020c)", ""), declared.replace("E: uses-sdk (line=1)", "E: uses-sdk garbled")):
+            with self.subTest(malformed=malformed), self.assertRaisesRegex(ValueError, "malformed manifest"):
+                identity.parse_manifest(root + malformed)
+        nested = (root + "      E: application (line=1)\n" +
+                  "\n".join("    " + line for line in declared.splitlines()))
+        self.assertEqual(identity.parse_manifest(nested)["target_sdk"], 1)
+
     def test_multisigner_output_is_complete_and_ordered(self):
         result = identity.parse_certificates(
             "Signer #2 certificate SHA-256 digest: " + "B" * 64 + "\n"
             "Signer #1 certificate SHA-256 digest: " + HASH + "\n"
-            "Signer #1 certificate DN: CN=not included in public metadata\n")
-        self.assertEqual(result, [HASH, "b" * 64])
+            "Signer #1 certificate DN: CN=literal certificate SHA-256 digest: not metadata\n")
+        self.assertEqual(result, {"signer_certificate_sha256": [HASH, "b" * 64],
+                                  "source_stamp_certificate_sha256": None})
+
+    def test_source_stamp_is_a_distinct_validated_certificate_role(self):
+        app = "Signer #1 certificate SHA-256 digest: " + HASH + "\n"
+        stamp = "Source Stamp Signer certificate SHA-256 digest: " + "b" * 64 + "\n"
+        self.assertEqual(identity.parse_certificates(app + stamp), {
+            "signer_certificate_sha256": [HASH], "source_stamp_certificate_sha256": "b" * 64})
+        for output in (stamp, app + stamp + stamp, app + stamp.replace("b" * 64, "bad"),
+                       app.replace("Signer #1", "Signer #0") + stamp,
+                       app + stamp.replace("digest:", "digest =")):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                identity.parse_certificates(output)
 
     def test_missing_duplicate_and_ambiguous_signers_are_rejected(self):
         valid = "Signer #1 certificate SHA-256 digest: " + HASH + "\n"
@@ -110,6 +152,90 @@ class RealSdkIdentity(unittest.TestCase):
                 raise RuntimeError("real SDK identity test requires build-tools and android.jar")
             raise unittest.SkipTest("real SDK fixture requires GESHER_TEST_BUILD_TOOLS and GESHER_TEST_ANDROID_JAR")
         cls.tools, cls.android = identity.build_tools(Path(tools)), Path(android)
+
+    def signed_fixture(self, root, sdk, attributes="", abis=(), source_stamp=False):
+        manifest = root / "AndroidManifest.xml"
+        manifest.write_text(f'''<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  package="com.gesher.identityfixture" android:versionCode="7">
+  {sdk}<application android:hasCode="false" {attributes}/>
+</manifest>''', encoding="utf-8")
+        apk = root / "fixture.apk"
+        aapt = self.tools / ("aapt2.exe" if os.name == "nt" else "aapt2")
+        identity.run_tool([str(aapt), "link", "-I", str(self.android), "--manifest", str(manifest),
+                           "-o", str(apk)], "fixture APK build")
+        with zipfile.ZipFile(apk, "a") as archive:
+            for abi in abis:
+                archive.writestr(f"lib/{abi}/libfixture.so", b"isolated non-executable ABI inventory fixture")
+        keytool, java = shutil.which("keytool"), shutil.which("java")
+        self.assertIsNotNone(keytool, "keytool is required for the real SDK fixture")
+        key = root / "fixture.jks"
+        hashes = {}
+        for alias in (["app", "stamp"] if source_stamp else ["app"]):
+            identity.run_tool([keytool, "-genkeypair", "-alias", alias, "-keystore", str(key),
+                "-storepass", "fixture-only", "-keypass", "fixture-only", "-keyalg", "RSA",
+                "-keysize", "2048", "-validity", "2", "-dname", f"CN=Isolated {alias} fixture"], "fixture key")
+            cert = root / (alias + ".der")
+            identity.run_tool([keytool, "-exportcert", "-alias", alias, "-keystore", str(key),
+                "-storepass", "fixture-only", "-file", str(cert)], "fixture certificate")
+            hashes[alias] = identity.hash_file(cert)
+        def key_arguments(alias):
+            return ["--ks", str(key), "--ks-key-alias", alias, "--ks-pass", "pass:fixture-only",
+                    "--key-pass", "pass:fixture-only"]
+        command = [java, "-jar", str(self.tools / "lib/apksigner.jar"), "sign"] + key_arguments("app")
+        if source_stamp:
+            command += ["--stamp-signer"] + key_arguments("stamp")
+        identity.run_tool(command + [str(apk)], "fixture signature")
+        result = identity.collect(apk, "com.gesher.identityfixture", 7, identity.hash_file(apk), self.tools)
+        return result, hashes
+
+    def test_real_multiarch_inventory_includes_all_four_packaged_abis(self):
+        with tempfile.TemporaryDirectory(prefix="gesher-multiarch-fixture-") as temporary:
+            abis = ["arm64-v8a", "armeabi-v7a", "x86", "x86_64"]
+            result, _ = self.signed_fixture(Path(temporary),
+                '<uses-sdk android:minSdkVersion="23" android:targetSdkVersion="36"/>',
+                attributes='android:multiArch="true"', abis=abis)
+            self.assertEqual(result["packaged_native_abis"], abis)
+            self.assertNotIn("selected_abi", result)
+
+    def test_real_source_stamp_does_not_join_the_app_signer_set(self):
+        with tempfile.TemporaryDirectory(prefix="gesher-stamp-fixture-") as temporary:
+            result, hashes = self.signed_fixture(Path(temporary),
+                '<uses-sdk android:minSdkVersion="23" android:targetSdkVersion="36"/>', source_stamp=True)
+            self.assertNotEqual(hashes["app"], hashes["stamp"])
+            self.assertEqual(result["signer_certificate_sha256"], [hashes["app"]])
+            self.assertEqual(result["source_stamp_certificate_sha256"], hashes["stamp"])
+
+    def test_real_omitted_sdk_attributes_have_effective_defaults_and_catch_runtime_disagreement(self):
+        spec = importlib.util.spec_from_file_location("identity_coverage", HERE / "coverage.py")
+        coverage = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(coverage)
+        for sdk, declared_min, declared_target, minimum, target in [
+            ('<uses-sdk android:minSdkVersion="23"/>', 23, None, 23, 23),
+            ("", None, None, 1, 1),
+            ('<uses-sdk android:targetSdkVersion="36"/>', None, 36, 1, 36),
+        ]:
+            with self.subTest(sdk=sdk), tempfile.TemporaryDirectory(prefix="gesher-sdk-defaults-") as temporary:
+                result, _ = self.signed_fixture(Path(temporary), sdk)
+                self.assertEqual(result["declared_min_sdk"], declared_min)
+                self.assertEqual(result["declared_target_sdk"], declared_target)
+                self.assertEqual(result["min_sdk"], minimum)
+                self.assertEqual(result["target_sdk"], target)
+                package = result["package"]
+                manifest = {"apps": [{"package": package, "versionCode": 7, "sha256": result["apk_sha256"]}]}
+                apk = {"package": package, "sha256": result["apk_sha256"], "target_sdk": target,
+                       "sdk_identity": result}
+                observed = {"schema_version": 1, "invocation_id": "1" * 32,
+                            "manifest_sha256": HASH, "completed": True,
+                            "runner": {"only": [], "require_apk_identity": True}, "runtime": {},
+                            "apks": [apk], "checks": [{"package": package, "scenario": scenario,
+                                "status": "passed", "problems": [], "started_at": "2026-01-01T00:00:00Z",
+                                "finished_at": "2026-01-01T00:00:00Z"}
+                                for scenario in ("launch", "association", "shortcut")]}
+                self.assertTrue(coverage.summarize(manifest, observed, HASH)["gate_passed"])
+                apk["target_sdk"] = target + 1
+                report = coverage.summarize(manifest, observed, HASH)
+                self.assertFalse(report["gate_passed"])
+                self.assertTrue(any("targetSdk disagree" in problem for problem in report["validation_errors"]))
 
     def test_real_signed_apk_and_tampered_package(self):
         with tempfile.TemporaryDirectory(prefix="gesher-sdk-fixture-") as temporary:

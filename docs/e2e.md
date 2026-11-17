@@ -117,9 +117,22 @@ Identity fields distinguish measured bytes from declared or unknown values:
 It does not execute APK code. The collector rejects an incorrect hash, package
 or version code, a failed signature check, ambiguous metadata and a timeout.
 The report records the SDK parser's minSdk/targetSdk, long version code, complete
-signer certificate SHA-256 set and packaged native ABI inventory. It hashes the
+app signer certificate SHA-256 set and packaged native ABI inventory. With
+`multiArch`, both AAPT2's `native-code` and `alt-native-code` records contribute to
+the inventory; neither is the runtime-selected ABI. An APK source-stamp
+certificate is recorded separately as `source_stamp_certificate_sha256` and
+never added to the application's signer set. The collector also hashes the
 actual AAPT2 executable, apksigner JAR and Java launcher used for collection.
 Certificate subject names and local tool paths are not included in the ledger.
+
+`declared_min_sdk` and `declared_target_sdk` record attributes actually present
+in the manifest's direct `uses-sdk` element. `min_sdk` and `target_sdk` record
+the effective values: an omitted minimum is 1, and an omitted target inherits
+the minimum, following the [Android manifest contract](https://developer.android.com/guide/topics/manifest/uses-sdk-element).
+The collector inspects `dump xmltree` before applying these defaults; a missing
+badging line alone cannot establish that an attribute was omitted. The reporter
+checks the declared/effective relationship and compares the effective target
+with Gesher's package-parser result, including for legacy APKs without `uses-sdk`.
 
 Each manifest version has a `compatibility_matrix` row, even when excluded or
 not run. This connects the APK identity to the measured/declared runtime fields,
@@ -141,10 +154,11 @@ Without an explicit directory the collector searches `ANDROID_HOME` and
 downloads tools itself. The legacy singular `signer_sha256` field remains null;
 the measured set is `sdk_identity.signer_certificate_sha256`.
 
-The `e2e-evidence` workflow also builds and signs a tiny project-owned,
-non-executable fixture APK on Linux and Windows. It verifies the actual SDK
+The `e2e-evidence` workflow also builds and signs project-owned,
+non-executable fixture APKs on Linux and Windows. It verifies the actual SDK
 collector against valid bytes, mismatched manifest identity and modifications
-after signing. These tests establish metadata handling, not app compatibility.
+after signing, a four-ABI `multiArch` APK, source stamps with a distinct key,
+and omitted SDK attributes. These tests establish metadata handling, not app compatibility.
 Signer rotation history, split-APK sets and measured runtime/provider/hardware
 selection remain follow-up work in issue #56 A01/T01/T13/T14.
 
