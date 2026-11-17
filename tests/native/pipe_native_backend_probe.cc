@@ -31,7 +31,7 @@ struct Handle {
 struct Pair { Handle reader, writer; };
 
 bool MakePair(Pair* pair, bool overlapped, bool nowait = false,
-              bool change_mode = false, bool server_writer = false) {
+              bool change_mode = false, bool server_writer = false, bool duplex_writer = false) {
   static unsigned sequence = 0;
   wchar_t name[128];
   std::swprintf(name, std::size(name), L"\\\\.\\pipe\\gesher-native-pipe-probe-%lu-%u",
@@ -43,8 +43,10 @@ bool MakePair(Pair* pair, bool overlapped, bool nowait = false,
   HANDLE* client = server_writer ? &pair->reader.value : &pair->writer.value;
   // CreateNamedPipe accepts only its documented mode flags, not arbitrary
   // FILE_* access bits. Duplex grants the server mode-changing rights for the
-  // separate exploratory mode-change test; fixed-NOWAIT cases stay one-way.
-  const DWORD access = change_mode ? PIPE_ACCESS_DUPLEX :
+  // separate exploratory mode-change test. A duplex-capable writer server
+  // also gains query rights absent from PIPE_ACCESS_OUTBOUND; its client
+  // remains read-only and no second client endpoint is kept alive.
+  const DWORD access = change_mode || duplex_writer ? PIPE_ACCESS_DUPLEX :
                        server_writer ? PIPE_ACCESS_OUTBOUND : PIPE_ACCESS_INBOUND;
   *server = CreateNamedPipeW(name, access | options, mode,
                               1, server_writer ? 65536 : 0, server_writer ? 0 : 65536, 0, nullptr);
@@ -138,11 +140,11 @@ void Modes(bool overlapped) {
   }
 }
 
-void Atomicity(bool overlapped, bool server_writer) {
-  std::printf("ATOMICITY mode=%s server=%s\n", overlapped ? "overlapped" : "synchronous",
-              server_writer ? "writer" : "reader");
+void Atomicity(bool overlapped, bool server_writer, bool duplex_writer = false) {
+  std::printf("ATOMICITY mode=%s server=%s duplex_writer=%u\n", overlapped ? "overlapped" : "synchronous",
+              server_writer ? "writer" : "reader", duplex_writer);
   Pair pipe;
-  if (!MakePair(&pipe, overlapped, true, false, server_writer)) {
+  if (!MakePair(&pipe, overlapped, true, false, server_writer, duplex_writer)) {
     Check(false, "create fixed-NOWAIT atomicity pipe"); return;
   }
   DWORD reader_mode = 0, writer_mode = 0;
@@ -212,10 +214,11 @@ void DescribePipe(const char* observation, HANDLE pipe) {
               observation, queried, static_cast<unsigned long>(native), info.type, info.configuration,
               info.read_available, info.inbound_quota, info.outbound_quota, info.write_available, info.state, info.end);
 }
-void QueuedAndClosedPeerInformation(bool nowait, bool server_writer) {
-  std::printf("STATE_BACKEND fixed_nowait=%u server=%s\n", nowait, server_writer ? "writer" : "reader");
+void QueuedAndClosedPeerInformation(bool nowait, bool server_writer, bool duplex_writer = false) {
+  std::printf("STATE_BACKEND fixed_nowait=%u server=%s duplex_writer=%u\n", nowait,
+              server_writer ? "writer" : "reader", duplex_writer);
   Pair pipe;
-  if (!MakePair(&pipe, false, nowait, false, server_writer)) { Check(false, "create queued-state pipe"); return; }
+  if (!MakePair(&pipe, false, nowait, false, server_writer, duplex_writer)) { Check(false, "create queued-state pipe"); return; }
   DWORD transferred = 0;
   Check(WriteFile(pipe.writer.value, "abcdef", 6, &transferred, nullptr) && transferred == 6,
         "queue six real bytes for endpoint observations");
@@ -244,7 +247,7 @@ void QueuedAndClosedPeerInformation(bool nowait, bool server_writer) {
   }
 
   Pair closing;
-  if (!MakePair(&closing, false, nowait, false, server_writer)) { Check(false, "create writer-close pipe"); return; }
+  if (!MakePair(&closing, false, nowait, false, server_writer, duplex_writer)) { Check(false, "create writer-close pipe"); return; }
   Check(WriteFile(closing.writer.value, "abcdef", 6, &transferred, nullptr) && transferred == 6,
         "queue bytes before writer closes");
   CloseHandle(closing.writer.value);
@@ -408,9 +411,12 @@ int main(int argc, char** argv) {
   Atomicity(true, false);
   Atomicity(false, true);
   Atomicity(true, true);
+  Atomicity(false, true, true);
+  Atomicity(true, true, true);
   QueuedAndClosedPeerInformation(false, false);
   QueuedAndClosedPeerInformation(true, false);
   QueuedAndClosedPeerInformation(true, true);
+  QueuedAndClosedPeerInformation(true, true, true);
   PendingReaderQuota();
   NativeChild(false, true);
   NativeChild(false, false);
