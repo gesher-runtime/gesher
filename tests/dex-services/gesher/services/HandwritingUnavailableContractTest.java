@@ -18,7 +18,8 @@ import com.gesher.server.StandIn;
  * Unsupported handwriting completion through the production service. --host uses direct
  * callbacks without native adapters; Windows additionally exercises generated service and
  * callback Parcel dispatch within one process, not real cross-process Binder delivery.
- * AOSP contract: frameworks/base 067b33e5, InputMethodManagerService
+ * AOSP contract: android-16.0.0_r4, frameworks/base 45034f0663f960d9ee5fb0a101a4732b71f6e2f4,
+ * InputMethodManagerService
  * startConnectionlessStylusHandwriting's unsupported-capability branch.
  */
 public final class HandwritingUnavailableContractTest {
@@ -123,6 +124,8 @@ public final class HandwritingUnavailableContractTest {
             check(callback.asBinder() == callbackTransport,
                     "Callback must use the forced generated proxy");
             request(service, delegated, callback);
+            check((transport.flags & IBinder.FLAG_ONEWAY) != 0,
+                    "Generated request must preserve its one-way AIDL contract");
             recording.unsupportedOnce();
             check(callbackTransport.transactions == 1, "Exactly one callback Parcel must be delivered");
             check((callbackTransport.flags & IBinder.FLAG_ONEWAY) != 0,
