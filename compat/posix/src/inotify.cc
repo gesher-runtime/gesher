@@ -12,6 +12,8 @@
 //   added -> IN_CREATE, removed -> IN_DELETE, renamed -> IN_MOVED_FROM and
 //   IN_MOVED_TO with one cookie, modified -> IN_MODIFY, or IN_ATTRIB when
 //   only the change time moved (metadata);
+//   a watched file renamed within its parent -> IN_MOVE_SELF, then events
+//   continue on the same watch descriptor under the new name;
 //   the watched directory gone -> IN_DELETE_SELF, IN_IGNORED;
 //   a lost buffer -> IN_Q_OVERFLOW.
 // Windows reports no close: IN_CLOSE_WRITE is reported once a created or
@@ -96,6 +98,9 @@ struct Watch {
   bool extended = false;
   bool removed = false;  // rm'd or ended: dropped when its read completes
   bool ignored_sent = false;
+  bool awaiting_rename = false;
+  bool dont_follow = false;
+  std::wstring deferred_write;  // a write to this file before the rename notification
   std::set<std::wstring> writing;  // names to report IN_CLOSE_WRITE for
   // Each name's last modification time and size (extended records): a change
   // that moves neither is to metadata only (IN_ATTRIB).
@@ -205,6 +210,31 @@ std::wstring Join(const std::wstring& dir, const std::wstring& name) {
   return dir.empty() || dir.back() == L'\\' ? dir + name : dir + L'\\' + name;
 }
 
+unsigned long long FileIndex(const BY_HANDLE_FILE_INFORMATION& info) {
+  return (static_cast<unsigned long long>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+}
+
+bool MatchesFile(const Watch& w, const BY_HANDLE_FILE_INFORMATION& info) {
+  return info.dwVolumeSerialNumber == w.volume && FileIndex(info) == w.index;
+}
+
+bool IsRenameTarget(const Watch& w, const std::wstring& name, unsigned long long file_id) {
+  if (w.index == 0) return false;
+  if (file_id != 0) return file_id == w.index;
+
+  // Basic notifications carry no identity and do not guarantee adjacent
+  // pairs. Resolve this name independently before adopting it.
+  DWORD flags = w.dont_follow ? FILE_FLAG_OPEN_REPARSE_POINT : FILE_ATTRIBUTE_NORMAL;
+  HANDLE candidate = CreateFileW(Join(w.dir, name).c_str(), FILE_READ_ATTRIBUTES,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 nullptr, OPEN_EXISTING, flags, nullptr);
+  if (candidate == INVALID_HANDLE_VALUE) return false;
+  BY_HANDLE_FILE_INFORMATION info;
+  bool same = GetFileInformationByHandle(candidate, &info) && MatchesFile(w, info);
+  CloseHandle(candidate);
+  return same;
+}
+
 }  // namespace
 
 // One completed read's records.
@@ -215,6 +245,7 @@ void Inotify::Changes(Watch& w, DWORD bytes) {
   for (;;) {
     if (p + sizeof(FILE_NOTIFY_INFORMATION) > end) break;
     DWORD next, action, attributes = 0, name_length;
+    unsigned long long file_id = 0;
     const WCHAR* name_ptr;
     bool attrib_only = false, known_attributes = false;
     if (w.extended) {
@@ -222,6 +253,7 @@ void Inotify::Changes(Watch& w, DWORD bytes) {
       next = e->next;
       action = e->action;
       attributes = e->attributes;
+      file_id = static_cast<unsigned long long>(e->file_id.QuadPart);
       known_attributes = true;
       name_length = e->name_length;
       name_ptr = e->name;
@@ -250,8 +282,20 @@ void Inotify::Changes(Watch& w, DWORD bytes) {
     }
     uint32_t isdir = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? IN_ISDIR : 0;
     if (!w.file.empty()) {
-      // A watched file: only its own name, and events without a name.
-      if (CompareStringOrdinal(name.c_str(), -1, w.file.c_str(), -1, TRUE) == CSTR_EQUAL) {
+      // Track renames even when the user did not request IN_MOVE_SELF.
+      if (w.awaiting_rename) {
+        if (action == FILE_ACTION_RENAMED_NEW_NAME && IsRenameTarget(w, name, file_id)) {
+          w.file = name;
+          w.awaiting_rename = false;
+          if (CompareStringOrdinal(name.c_str(), -1, w.deferred_write.c_str(), -1, TRUE) ==
+              CSTR_EQUAL) {
+            w.deferred_write.clear();
+            EmitFor(w, IN_MODIFY, 0, L"");
+            if (!w.removed) w.writing.insert(L"");
+          }
+        }
+      } else if ((file_id == 0 || w.index == 0 || file_id == w.index) &&
+                 CompareStringOrdinal(name.c_str(), -1, w.file.c_str(), -1, TRUE) == CSTR_EQUAL) {
         switch (action) {
           case FILE_ACTION_MODIFIED:
             EmitFor(w, attrib_only ? IN_ATTRIB : IN_MODIFY, 0, L"");
@@ -263,7 +307,7 @@ void Inotify::Changes(Watch& w, DWORD bytes) {
             break;
           case FILE_ACTION_RENAMED_OLD_NAME:
             EmitFor(w, IN_MOVE_SELF, 0, L"");
-            End(w);  // the name now belongs to no file this watch knows
+            w.awaiting_rename = !w.removed;
             break;
           default:
             break;
@@ -310,7 +354,7 @@ void Inotify::ProbeWriters() {
   {
     std::lock_guard<std::mutex> lock(mutex);
     for (auto& [wd, w] : watches) {
-      if (w->removed) continue;
+      if (w->removed || w->awaiting_rename) continue;
       if ((w->mask & IN_CLOSE_WRITE) == 0) {
         w->writing.clear();
         continue;
@@ -346,7 +390,9 @@ void Inotify::Run() {
     {
       std::lock_guard<std::mutex> lock(mutex);
       probing = false;
-      for (auto& [wd, w] : watches) probing |= !w->writing.empty() && !w->removed;
+      for (auto& [wd, w] : watches) {
+        probing |= !w->writing.empty() && !w->removed && !w->awaiting_rename;
+      }
     }
     DWORD bytes = 0;
     ULONG_PTR key = 0;
@@ -422,6 +468,9 @@ void InotifyNoteWrite(HANDLE h) {
   auto same = [](const std::wstring& a, const std::wstring& b) {
     return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_EQUAL;
   };
+  BY_HANDLE_FILE_INFORMATION info;
+  bool queried_info = false;
+  bool got_info = false;
   std::lock_guard<std::mutex> live(g_live_mutex);
   for (Inotify* in : g_live) {
     bool noted = false;
@@ -433,7 +482,23 @@ void InotifyNoteWrite(HANDLE h) {
           in->EmitFor(*w, IN_MODIFY, 0, name);
           if (!w->removed) w->writing.insert(name);
           noted = true;
-        } else if (same(w->file, name)) {
+        } else if ((w->mask & (IN_MODIFY | IN_CLOSE_WRITE)) != 0) {
+          bool same_name = same(w->file, name);
+          if (w->index != 0) {
+            if (!queried_info) {
+              got_info = GetFileInformationByHandle(h, &info);
+              queried_info = true;
+            }
+            if (!got_info || !MatchesFile(*w, info)) continue;
+          } else if (!same_name) {
+            continue;
+          }
+          if (w->awaiting_rename || !same_name) {
+            // The write can precede processing the kernel rename. Remember
+            // the newest destination so MOVE_SELF stays ahead of MODIFY.
+            w->deferred_write = name;
+            continue;
+          }
           in->EmitFor(*w, IN_MODIFY, 0, L"");
           if (!w->removed) w->writing.insert(L"");
           noted = true;
@@ -520,8 +585,7 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
   }
   bool directory = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
   if ((mask & IN_ONLYDIR) != 0 && !directory) return errno = ENOTDIR, -1;
-  unsigned long long index =
-      (static_cast<unsigned long long>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+  unsigned long long index = gesher::FileIndex(info);
   uint32_t events = mask & (IN_ALL_EVENTS | IN_ONESHOT | IN_EXCL_UNLINK);
 
   std::lock_guard<std::mutex> lock(in->mutex);
@@ -537,6 +601,7 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
   w->mask = events;
   w->volume = info.dwVolumeSerialNumber;
   w->index = index;
+  w->dont_follow = (mask & IN_DONT_FOLLOW) != 0;
   std::wstring full(final_path, n);
   if (directory) {
     w->dir = full;
