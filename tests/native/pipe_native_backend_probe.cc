@@ -83,7 +83,7 @@ bool Transfer(HANDLE file, void* bytes, DWORD count, bool write, bool overlapped
   return done != FALSE;
 }
 
-void ModesAndAtomicity(bool overlapped) {
+void Modes(bool overlapped) {
   std::printf("BACKEND mode=%s\n", overlapped ? "overlapped" : "synchronous");
   Pair pipe;
   if (!MakePair(&pipe, overlapped)) { Check(false, "create native message pipe"); return; }
@@ -117,8 +117,20 @@ void ModesAndAtomicity(bool overlapped) {
   if (!SetNamedPipeHandleState(pipe.writer.value, &mode, nullptr, nullptr)) {
     Check(false, "restore nonblocking writer"); return;
   }
+}
 
-  DWORD buffered = wrote;
+void Atomicity(bool overlapped) {
+  std::printf("ATOMICITY mode=%s\n", overlapped ? "overlapped" : "synchronous");
+  Pair pipe;
+  if (!MakePair(&pipe, overlapped)) { Check(false, "create independent atomicity pipe"); return; }
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(pipe.reader.value, &mode, nullptr, nullptr) ||
+      !SetNamedPipeHandleState(pipe.writer.value, &mode, nullptr, nullptr)) {
+    Check(false, "enable nonblocking mode on empty atomicity pipe"); return;
+  }
+  std::array<char, 4096> bytes{};
+  DWORD wrote = 0;
+  DWORD buffered = 0;
   bool full = false;
   for (unsigned attempt = 0; attempt < 256; ++attempt) {
     wrote = MAXDWORD;
@@ -151,13 +163,51 @@ struct LocalInformation {
   ULONG type, configuration, maximum_instances, current_instances;
   ULONG inbound_quota, read_available, outbound_quota, write_available, state, end;
 };
-bool QueryLocal(HANDLE pipe, LocalInformation* information) {
+bool QueryLocal(HANDLE pipe, LocalInformation* information, LONG* result = nullptr) {
   using Query = LONG(WINAPI*)(HANDLE, PIO_STATUS_BLOCK, void*, ULONG, FILE_INFORMATION_CLASS);
   HMODULE module = GetModuleHandleW(L"ntdll.dll");
   auto query = reinterpret_cast<Query>(reinterpret_cast<void*>(GetProcAddress(module, "NtQueryInformationFile")));
   if (!query) return false;
   IO_STATUS_BLOCK status{};
-  return query(pipe, &status, information, sizeof(*information), static_cast<FILE_INFORMATION_CLASS>(24)) >= 0;
+  LONG native = query(pipe, &status, information, sizeof(*information), static_cast<FILE_INFORMATION_CLASS>(24));
+  if (result) *result = native;
+  return native >= 0;
+}
+void DescribePipe(const char* observation, HANDLE pipe) {
+  LocalInformation info{};
+  LONG native = static_cast<LONG>(0xc0000002u);
+  bool queried = QueryLocal(pipe, &info, &native);
+  std::printf("PIPE_LOCAL %s query=%u ntstatus=%08lx type=%lu config=%lu read_available=%lu inbound=%lu outbound=%lu writable=%lu state=%lu end=%lu\n",
+              observation, queried, static_cast<unsigned long>(native), info.type, info.configuration,
+              info.read_available, info.inbound_quota, info.outbound_quota, info.write_available, info.state, info.end);
+}
+void QueuedAndClosedPeerInformation() {
+  Pair pipe;
+  if (!MakePair(&pipe, false)) { Check(false, "create queued-state pipe"); return; }
+  DWORD transferred = 0;
+  Check(WriteFile(pipe.writer.value, "abcdef", 6, &transferred, nullptr) && transferred == 6,
+        "queue six real bytes for endpoint observations");
+  DescribePipe("queued-reader", pipe.reader.value);
+  DescribePipe("queued-writer", pipe.writer.value);
+  char bytes[64]{};
+  Check(ReadFile(pipe.reader.value, bytes, 2, &transferred, nullptr) && transferred == 2,
+        "consume two bytes before resampling both endpoints");
+  DescribePipe("partial-reader", pipe.reader.value);
+  DescribePipe("partial-writer", pipe.writer.value);
+  CloseHandle(pipe.reader.value);
+  pipe.reader.value = INVALID_HANDLE_VALUE;
+  DescribePipe("closed-reader-writer", pipe.writer.value);
+
+  Pair closing;
+  if (!MakePair(&closing, false)) { Check(false, "create writer-close pipe"); return; }
+  Check(WriteFile(closing.writer.value, "abcdef", 6, &transferred, nullptr) && transferred == 6,
+        "queue bytes before writer closes");
+  CloseHandle(closing.writer.value);
+  closing.writer.value = INVALID_HANDLE_VALUE;
+  DescribePipe("closed-writer-buffered-reader", closing.reader.value);
+  Check(ReadFile(closing.reader.value, bytes, sizeof(bytes), &transferred, nullptr) && transferred == 6,
+        "buffer remains readable after genuine last-writer close");
+  DescribePipe("closed-writer-drained-reader", closing.reader.value);
 }
 struct PendingRead { HANDLE file; HANDLE started; char bytes[8191]; DWORD read = 0; BOOL ok = FALSE; };
 DWORD WINAPI NativeReader(void* raw) {
@@ -307,8 +357,11 @@ int main(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   if (argc == 2) return Child(argv[1]);
   std::printf("DIAGNOSTIC_ONLY production_backend_validated=0\n");
-  ModesAndAtomicity(false);
-  ModesAndAtomicity(true);
+  Modes(false);
+  Modes(true);
+  Atomicity(false);
+  Atomicity(true);
+  QueuedAndClosedPeerInformation();
   PendingReaderQuota();
   NativeChild(false, true);
   NativeChild(false, false);
