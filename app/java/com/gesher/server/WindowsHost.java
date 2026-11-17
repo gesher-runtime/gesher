@@ -345,6 +345,56 @@ public final class WindowsHost {
         }
     }
 
+    private static volatile java.util.function.IntSupplier sAppsUseLightThemeHook;
+
+    /** Hook for tests or host embedders to simulate Windows theme. */
+    public static void setAppsUseLightThemeHook(java.util.function.IntSupplier hook) {
+        sAppsUseLightThemeHook = hook;
+    }
+
+    /**
+     * Reads Windows AppsUseLightTheme registry setting:
+     * HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme
+     * Returns 0 for dark theme, 1 for light theme, or -1 if unknown.
+     */
+    public static int appsUseLightTheme() {
+        if (sAppsUseLightThemeHook != null) {
+            try {
+                return sAppsUseLightThemeHook.getAsInt();
+            } catch (Throwable ignored) {
+            }
+        }
+        return readAppsUseLightTheme();
+    }
+
+    private static int readAppsUseLightTheme() {
+        try {
+            Process p = new ProcessBuilder("reg", "query",
+                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                    "/v", "AppsUseLightTheme").redirectErrorStream(true).start();
+            try (java.io.BufferedReader r = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(p.getInputStream()))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    if (line.contains("AppsUseLightTheme")) {
+                        String[] parts = line.trim().split("\\s+");
+                        if (parts.length >= 3) {
+                            String val = parts[parts.length - 1];
+                            if (val.startsWith("0x") || val.startsWith("0X")) {
+                                return Integer.parseInt(val.substring(2), 16);
+                            } else {
+                                return Integer.parseInt(val);
+                            }
+                        }
+                    }
+                }
+            }
+            p.waitFor();
+        } catch (Throwable ignored) {
+        }
+        return 1;
+    }
+
     private static native long nativeStartEvents();
     private static native int nativeWaitEvents(int timeoutMs);
     private static native String[] nativeNextActivation();

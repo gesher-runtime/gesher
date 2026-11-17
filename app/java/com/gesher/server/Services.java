@@ -143,8 +143,9 @@ public final class Services {
                 new TextServicesManagerService()).asBinder());
         services.put(Context.NOTIFICATION_SERVICE,
                 StandIn.of(INotificationManager.class, notifications).asBinder());
+        UiModeManagerService uiMode = new UiModeManagerService(atm, am);
         services.put(Context.UI_MODE_SERVICE,
-                StandIn.of(IUiModeManager.class, new UiModeService()).asBinder());
+                StandIn.of(IUiModeManager.class, uiMode).asBinder());
         // mount: the private data volume and its emulated shared view at
         // $ANDROID_DATA/media/0. Both describe the same host filesystem.
         services.put("mount", StandIn.of(IStorageManager.class, new StorageService()).asBinder());
@@ -693,37 +694,19 @@ public final class Services {
     }
 
     /**
-     * uimode: UiModeManagerService, a normal (not car, desk or TV) device in day mode,
-     * standard contrast, no forced dark. ViewRootImpl's UiModeManager reads it.
+     * uimode: UiModeManagerService contract implementation and backwards-compatible alias.
      */
-    public static final class UiModeService extends IUiModeManager.Default {
-        @Override
-        public void addCallback(IUiModeManagerCallback callback, int userId) {
-            // Nothing ever changes.
+    public static final class UiModeService extends UiModeManagerService {
+        public UiModeService() {
+            super(null, null);
         }
 
-        @Override
-        public void removeCallback(IUiModeManagerCallback callback, int userId) {
+        public UiModeService(ActivityTaskManagerService atm) {
+            super(atm, null);
         }
 
-        @Override
-        public int getCurrentModeType(int displayId) {
-            return Configuration.UI_MODE_TYPE_NORMAL;
-        }
-
-        @Override
-        public int getNightMode(int displayId) {
-            return UiModeManager.MODE_NIGHT_NO;
-        }
-
-        @Override
-        public float getContrast(int userId) {
-            return 0f;
-        }
-
-        @Override
-        public int getForceInvertState(int userId) {
-            return UiModeManager.FORCE_INVERT_TYPE_OFF;
+        public UiModeService(ActivityTaskManagerService atm, ActivityManagerService am) {
+            super(atm, am);
         }
     }
 
