@@ -150,6 +150,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     // Protected-store write-ahead records. Only the package registry can decide
     // if removing the owner committed or rolled back.
     private final Set<String> mPendingOwnerRemovals = new HashSet<>();
+    private final Set<String> mCommittedOwnerRemovals = new HashSet<>();
     private java.util.function.BiConsumer<Set<Account>, Set<Account>> mRetireSync =
             (removed, retained) -> { };
     private State mBeforeMutation;
@@ -265,9 +266,11 @@ public final class AccountManagerService extends IAccountManager.Default {
         Set<Account> retained = new HashSet<>();
         synchronized (this) {
             if (mPendingOwnerRemovals.isEmpty()) return;
+            for (String owner : mPendingOwnerRemovals) {
+                if (!installed.contains(owner)) mCommittedOwnerRemovals.add(owner);
+            }
             for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
-                String owner = item.getValue().owner;
-                if (mPendingOwnerRemovals.contains(owner) && !installed.contains(owner)) {
+                if (mCommittedOwnerRemovals.contains(item.getValue().owner)) {
                     removed.put(item.getKey(), item.getValue());
                 } else {
                     retained.add(item.getKey());
@@ -283,6 +286,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                 for (Account account : removed.keySet()) mAccounts.remove(account);
                 mPendingOwnerRemovals.clear();
                 save();
+                mCommittedOwnerRemovals.clear();
             }
         } finally {
             invalidateAccountListCache();
@@ -296,7 +300,8 @@ public final class AccountManagerService extends IAccountManager.Default {
     /** Called with this locked. Pending accounts remain sealed for a possible registry rollback. */
     private boolean retiring(Entry entry) {
         return entry != null && mPendingOwnerRemovals.contains(entry.owner)
-                && (mPm.isRemovalPending(entry.owner) || mPm.get(entry.owner) == null);
+                && (mCommittedOwnerRemovals.contains(entry.owner)
+                        || mPm.isRemovalPending(entry.owner) || mPm.get(entry.owner) == null);
     }
 
     /** Called only after ATM authenticated the source activity, PID and application thread. */

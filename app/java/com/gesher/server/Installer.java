@@ -642,6 +642,7 @@ final class Installer {
         mRemovalActive = true;
         boolean committed = false, restored = false;
         try {
+            mPm.checkPackageRemoval(packageName);
             mAtm.forceStopPackage(packageName);
             // Fail closed on persistent revocation errors. A failed removal can leave
             // fewer grants, but never restores a capability across a later reinstall.

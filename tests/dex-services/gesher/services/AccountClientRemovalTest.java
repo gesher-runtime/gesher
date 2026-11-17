@@ -215,7 +215,7 @@ public final class AccountClientRemovalTest {
 
         beginRemoval.invoke(packages, owner);
         revoke.invoke(packages, ownerName);
-        method(pm, "remove", String.class).invoke(packages, ownerName);
+        // Simulate a registry that committed before the transient package view caught up.
         finishRemoval.invoke(packages, owner);
         Properties beforeRestart = persisted.get();
         AtomicBoolean syncCleaned = new AtomicBoolean();
@@ -237,6 +237,7 @@ public final class AccountClientRemovalTest {
                 && !(Boolean) canAccess.invoke(manager, account, clientName),
                 "Postcommit account-store failure revived the removed owner or erased recovery state");
 
+        method(pm, "remove", String.class).invoke(packages, ownerName);
         Object freshPackages = pm.getConstructor(Collection.class).newInstance(List.of(client));
         Object restarted = make(svc, new Class<?>[]{am, pm, boolean.class}, null, freshPackages, false);
         set(restarted, "mStoreWriter", get(manager, "mStoreWriter"));

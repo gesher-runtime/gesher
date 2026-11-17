@@ -62,6 +62,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         mEnabledStateRestarter = restarter;
     }
     private final List<Consumer<String>> mPackageRemoval = new ArrayList<>();
+    private final List<Consumer<String>> mPackageRemovalChecks = new ArrayList<>();
     private volatile Consumer<Set<String>> mAccountRemovalReconciler = installed -> { };
     private volatile Map<String, ApkPackage> mRemoving = new LinkedHashMap<>();
 
@@ -83,6 +84,14 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     /** Server-local capability cleanup; never callable through the package Binder. */
     synchronized void onPackageRemoval(Consumer<String> cleanup) { mPackageRemoval.add(cleanup); }
+
+    synchronized void onPackageRemovalCheck(Consumer<String> check) { mPackageRemovalChecks.add(check); }
+
+    void checkPackageRemoval(String name) {
+        List<Consumer<String>> checks;
+        synchronized (this) { checks = new ArrayList<>(mPackageRemovalChecks); }
+        for (Consumer<String> check : checks) check.accept(name);
+    }
 
     /** Reconcile the account store against the Installer's authoritative registry. */
     void setAccountRemovalReconciler(Consumer<Set<String>> reconcile) {
