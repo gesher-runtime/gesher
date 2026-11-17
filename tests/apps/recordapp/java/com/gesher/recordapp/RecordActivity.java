@@ -79,6 +79,16 @@ public class RecordActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if ("1".equals(System.getenv("GESHER_TEST_CODEC_CONTROLS"))) {
+            try {
+                CodecControlsTest.run();
+            } catch (Exception e) {
+                throw new AssertionError(e);
+            } finally {
+                finish();
+            }
+            return;
+        }
         // The steps run here, in onCreate (callbacks come on threads of their own); then the
         // activity finishes, which ends the run in both modes (single process, the device).
         {

@@ -35,6 +35,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -170,7 +171,53 @@ struct {
   jobject native_order;
   jclass hash_map;
   jmethodID hash_map_ctor, hash_map_put;
+  jclass persistable_bundle;
+  jmethodID persistable_bundle_ctor, bundle_put_int, bundle_put_string;
 } gJ;
+
+struct CodecMetrics {
+  int32_t width = 0, height = 0, rotation = 0;
+  int32_t sample_rate = 0, channel_count = 0;
+};
+
+jobject MakeMetricsBundle(JNIEnv* env, const CodecEntry& entry, const CodecMetrics& metrics,
+                          std::optional<int> target_bitrate) {
+  jobject bundle = env->NewObject(gJ.persistable_bundle, gJ.persistable_bundle_ctor);
+  if (bundle == nullptr) return nullptr;
+  const std::string prefix = "android.media.mediacodec.";
+  auto put_int = [&](const char* name, jint value) {
+    if (env->ExceptionCheck()) return;
+    jstring key = env->NewStringUTF((prefix + name).c_str());
+    if (key == nullptr) return;
+    env->CallVoidMethod(bundle, gJ.bundle_put_int, key, value);
+    env->DeleteLocalRef(key);
+  };
+  auto put_string = [&](const char* name, const char* value) {
+    if (env->ExceptionCheck()) return;
+    jstring key = env->NewStringUTF((prefix + name).c_str());
+    if (key == nullptr) return;
+    jstring string_value = env->NewStringUTF(value);
+    if (string_value != nullptr) env->CallVoidMethod(bundle, gJ.bundle_put_string, key, string_value);
+    env->DeleteLocalRef(string_value);
+    env->DeleteLocalRef(key);
+  };
+  put_string("codec", entry.name.c_str());
+  put_string("mime", entry.mime.c_str());
+  put_string("mode", entry.video ? "video" : "audio");
+  put_int("encoder", entry.encoder ? 1 : 0);
+  put_int("secure", 0);  // Configure rejects protected sessions.
+  if (entry.video) {
+    if (metrics.width > 0) put_int("width", metrics.width);
+    if (metrics.height > 0) put_int("height", metrics.height);
+    put_int("rotation", metrics.rotation);          // MediaCodec.MetricsConstants.ROTATION
+    put_int("rotation-degrees", metrics.rotation);  // Stagefright's metric spelling
+  } else {
+    if (metrics.sample_rate > 0) put_int("sampleRate", metrics.sample_rate);
+    if (metrics.channel_count > 0) put_int("channelCount", metrics.channel_count);
+  }
+  if (target_bitrate.has_value()) put_int("bitrate", *target_bitrate);
+  return bundle;
+}
 
 jobject Box(JNIEnv* env, int32_t v) {
   jclass c = env->FindClass("java/lang/Integer");
@@ -376,7 +423,6 @@ class Codec {
       configured_ = false;
     }
     StopLocked();
-    if (input_surface_ != nullptr) input_surface_->Abandon();
     ANativeWindow* window;
     {
       std::lock_guard<std::mutex> lock(mu_);
@@ -389,11 +435,12 @@ class Codec {
 
   const CodecEntry& entry() const { return entry_; }
 
-  bool Configure(JNIEnv* env, Format format, jobject surface, std::string* error) {
+  bool Configure(JNIEnv* env, Format format, jobject surface, std::string* error, bool* invalid_state) {
     std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
     std::lock_guard<std::mutex> lock(mu_);
-    if (released_) {
-      *error = "configure() after release()";
+    if (released_ || configured_) {
+      *invalid_state = true;
+      *error = "configure() requires an idle codec";
       return false;
     }
     std::string mime = format.Mime();
@@ -402,8 +449,13 @@ class Codec {
       return false;
     }
     if (mime.empty()) AMediaFormat_setString(format.get(), "mime", entry_.mime.c_str());
+    if (entry_.encoder && !ConfigureEncoder(format, error)) return false;
     input_format_ = std::move(format);
-    if (entry_.encoder) return ConfigureEncoder(error);
+    if (entry_.encoder) {
+      BeginMetricsLocked();
+      configured_ = true;
+      return true;
+    }
     SetSurfaceLocked(env, surface);
     int32_t max_input = 0;
     if (!input_format_.GetInt32("max-input-size", &max_input) || max_input <= 0) {
@@ -419,6 +471,7 @@ class Codec {
     for (Slot& s : outputs_) {
       s = Slot();
     }
+    BeginMetricsLocked();
     configured_ = true;
     return true;
   }
@@ -475,10 +528,35 @@ class Codec {
     return true;
   }
 
-  void RequestSyncFrame() {
+  bool SetParameters(const Format& parameters) {
+    int32_t bitrate = 0, sync = 0;
+    parameters.GetInt32("video-bitrate", &bitrate);
+    const bool request_sync = parameters.GetInt32("request-sync", &sync);
     std::lock_guard<std::mutex> lock(mu_);
-    if (released_) return;
-    force_key_ = true;
+    if (released_) return false;
+    if (configured_ && entry_.video && entry_.encoder && !enc_eos_sent_) {
+      if (request_sync) force_key_ = true;
+      if (bitrate > 0) pending_bitrate_ = bitrate;
+    }
+    return true;
+  }
+
+  jobject GetMetrics(JNIEnv* env) {
+    std::optional<CodecMetrics> metrics;
+    std::optional<int> target_bitrate;
+    bool released;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      released = released_;
+      metrics = metrics_;
+      target_bitrate = target_bitrate_;
+    }
+    if (released) {
+      jniThrow(env, "java/lang/IllegalStateException", "getMetrics() after release()");
+      return nullptr;
+    }
+    if (!metrics) return env->NewObject(gJ.persistable_bundle, gJ.persistable_bundle_ctor);
+    return MakeMetricsBundle(env, entry_, *metrics, target_bitrate);
   }
 
   void SetAsync(bool async) {
@@ -525,12 +603,19 @@ class Codec {
   // lifecycle_mu_. Blocking dequeues/flushes never take that mutex.
   void StopLocked() {
     StopWorker();
+    // Abandon waits for an in-flight producer callback, which takes mu_.
+    if (input_surface_ != nullptr) input_surface_->Abandon();
     std::lock_guard<std::mutex> lock(mu_);
+    input_surface_.reset();
+    configured_ = false;
     video_enc_.reset();
     audio_enc_.reset();
     surface_frames_.clear();
     surface_eos_ = false;
     enc_eos_sent_ = false;
+    force_key_ = false;
+    pending_bitrate_.reset();
+    last_out_us_ = 0;
     csd_.clear();
     work_.clear();
     ready_.clear();
@@ -553,6 +638,8 @@ class Codec {
     StopLocked();
     std::lock_guard<std::mutex> lock(mu_);
     configured_ = false;
+    metrics_.reset();
+    target_bitrate_.reset();
   }
 
   void Flush() {
@@ -978,6 +1065,29 @@ class Codec {
     cv_.notify_all();
   }
 
+  // Only replace the previous session's metrics after successful configuration.
+  // Stop and worker failure retain them for getMetrics().
+  void BeginMetricsLocked() {
+    CodecMetrics metrics;
+    if (entry_.video) {
+      input_format_.GetInt32("width", &metrics.width);
+      input_format_.GetInt32("height", &metrics.height);
+      input_format_.GetInt32("rotation-degrees", &metrics.rotation);
+    } else if (entry_.encoder) {
+      metrics.sample_rate = static_cast<int32_t>(audio_params_.sample_rate);
+      metrics.channel_count = static_cast<int32_t>(audio_params_.channels);
+    } else {
+      input_format_.GetInt32("sample-rate", &metrics.sample_rate);
+      input_format_.GetInt32("channel-count", &metrics.channel_count);
+    }
+    metrics_ = metrics;
+    target_bitrate_ = entry_.video && entry_.encoder
+        ? std::optional<int>(std::max(enc_params_.bitrate, 64000)) : std::nullopt;
+    pending_bitrate_.reset();
+    force_key_ = false;
+    failed_ = false;
+  }
+
   // With the lock held: waits for a free output slot (-1 when stopping).
   int FreeOutput(std::unique_lock<std::mutex>& lock) {
     int found = -1;
@@ -1033,6 +1143,8 @@ class Codec {
 
   bool EmitFrame(std::unique_lock<std::mutex>& lock, std::shared_ptr<VideoFrame> f) {
     const int w = f->visible_width(), h = f->visible_height();
+    metrics_->width = w;
+    metrics_->height = h;
     OutputFormatIs(w, h);
     int i = FreeOutput(lock);
     if (i < 0) return false;
@@ -1063,6 +1175,8 @@ class Codec {
   }
 
   void EmitPcm(std::unique_lock<std::mutex>& lock, const std::vector<uint8_t>& pcm, int64_t time_us) {
+    metrics_->sample_rate = static_cast<int32_t>(pcm_.rate);
+    metrics_->channel_count = static_cast<int32_t>(pcm_.channels);
     OutputFormatIs(0, 0);
     std::vector<uint8_t> converted;
     const std::vector<uint8_t>* data = &pcm;
@@ -1117,53 +1231,47 @@ class Codec {
   // --- Encoders ---------------------------------------------------------------------
 
   // With mu_ held: the encoder's parameters from the format.
-  bool ConfigureEncoder(std::string* error) {
+  bool ConfigureEncoder(const Format& format, std::string* error) {
     int32_t v = 0;
     float fv = 0;
     if (entry_.video) {
       VideoEncoderParams p;
-      input_format_.GetInt32("width", &p.width);
-      input_format_.GetInt32("height", &p.height);
-      if (input_format_.GetInt32("frame-rate", &v) && v > 0) {
+      format.GetInt32("width", &p.width);
+      format.GetInt32("height", &p.height);
+      if (format.GetInt32("frame-rate", &v) && v > 0) {
         p.frame_rate = v;
-      } else if (input_format_.GetFloat("frame-rate", &fv) && fv > 0) {
+      } else if (format.GetFloat("frame-rate", &fv) && fv > 0) {
         p.frame_rate = static_cast<int>(fv + 0.5f);
       }
-      if (input_format_.GetInt32("bitrate", &v) && v > 0) p.bitrate = v;
-      if (input_format_.GetInt32("i-frame-interval", &v)) {
+      if (format.GetInt32("bitrate", &v) && v > 0) p.bitrate = v;
+      if (format.GetInt32("i-frame-interval", &v)) {
         p.i_frame_interval_s = static_cast<float>(v);
-      } else if (input_format_.GetFloat("i-frame-interval", &fv)) {
+      } else if (format.GetFloat("i-frame-interval", &fv)) {
         p.i_frame_interval_s = fv;
       }
-      if (input_format_.GetInt32("profile", &v)) p.profile = v;
+      if (format.GetInt32("profile", &v)) p.profile = v;
       if (p.width <= 0 || p.height <= 0) {
         *error = entry_.name + ": the format has no width and height";
         return false;
       }
+      if (VideoEncoder::Create(entry_.mime, p, error) == nullptr) return false;
       color_format_ = kColorFormatYuv420Flexible;
-      input_format_.GetInt32("color-format", &color_format_);
+      format.GetInt32("color-format", &color_format_);
       enc_params_ = p;
     } else {
       AudioEncoderParams p;
-      if (input_format_.GetInt32("sample-rate", &v) && v > 0) p.sample_rate = static_cast<uint32_t>(v);
-      if (input_format_.GetInt32("channel-count", &v) && v > 0) p.channels = static_cast<uint32_t>(v);
-      if (input_format_.GetInt32("bitrate", &v) && v > 0) p.bitrate = v;
-      if (input_format_.GetInt32("aac-profile", &v) && v > 0) p.aac_profile = v;
+      if (format.GetInt32("sample-rate", &v) && v > 0) p.sample_rate = static_cast<uint32_t>(v);
+      if (format.GetInt32("channel-count", &v) && v > 0) p.channels = static_cast<uint32_t>(v);
+      if (format.GetInt32("bitrate", &v) && v > 0) p.bitrate = v;
+      if (format.GetInt32("aac-profile", &v) && v > 0) p.aac_profile = v;
+      if (AudioEncoder::Create(entry_.mime, p, error) == nullptr) return false;
       int32_t encoding = 2;
-      input_format_.GetInt32("pcm-encoding", &encoding);
+      format.GetInt32("pcm-encoding", &encoding);
       in_float_ = encoding == 4;
       audio_params_ = p;
     }
-    // Probe the encoder now: configure() fails for what it does not take.
-    if (entry_.video) {
-      auto probe = VideoEncoder::Create(entry_.mime, enc_params_, error);
-      if (probe == nullptr) return false;
-    } else {
-      auto probe = AudioEncoder::Create(entry_.mime, audio_params_, error);
-      if (probe == nullptr) return false;
-    }
     int32_t max_input = 0;
-    if (!input_format_.GetInt32("max-input-size", &max_input) || max_input <= 0) {
+    if (!format.GetInt32("max-input-size", &max_input) || max_input <= 0) {
       max_input = entry_.video ? enc_params_.width * enc_params_.height * 3 / 2 + 64 : 1 << 16;
     }
     for (Slot& s : inputs_) {
@@ -1171,7 +1279,6 @@ class Codec {
       s.client = false;
     }
     for (Slot& s : outputs_) s = Slot();
-    configured_ = true;
     return true;
   }
 
@@ -1200,7 +1307,7 @@ class Codec {
       AMediaFormat_setInt32(f.get(), "width", enc_params_.width);
       AMediaFormat_setInt32(f.get(), "height", enc_params_.height);
       AMediaFormat_setInt32(f.get(), "frame-rate", enc_params_.frame_rate);
-      AMediaFormat_setInt32(f.get(), "bitrate", enc_params_.bitrate);
+      AMediaFormat_setInt32(f.get(), "bitrate", target_bitrate_.value_or(enc_params_.bitrate));
     } else {
       AMediaFormat_setInt32(f.get(), "sample-rate", static_cast<int32_t>(audio_params_.sample_rate));
       AMediaFormat_setInt32(f.get(), "channel-count", static_cast<int32_t>(audio_params_.channels));
@@ -1278,6 +1385,11 @@ class Codec {
     if (video_enc_ != nullptr || audio_enc_ != nullptr) return true;
     if (entry_.video) {
       video_enc_ = VideoEncoder::Create(entry_.mime, enc_params_, error);
+      const int configured_bitrate = std::max(enc_params_.bitrate, 64000);
+      if (video_enc_ && target_bitrate_ && *target_bitrate_ != configured_bitrate &&
+          !video_enc_->SetBitrate(*target_bitrate_)) {
+        target_bitrate_ = configured_bitrate;
+      }
       return video_enc_ != nullptr;
     }
     audio_enc_ = AudioEncoder::Create(entry_.mime, audio_params_, error);
@@ -1312,6 +1424,8 @@ class Codec {
         video_enc_.reset();
         audio_enc_.reset();
         surface_frames_.clear();
+        pending_bitrate_.reset();
+        force_key_ = false;
         flush_requested_ = false;
         done_cv_.notify_all();
         continue;
@@ -1322,6 +1436,19 @@ class Codec {
         surface_frames_.clear();
         Fail(error);
         continue;
+      }
+      // Both input modes converge here. Only the worker may touch the backend
+      // while it runs, and a rejected target does not interrupt encoding.
+      if (pending_bitrate_) {
+        const int bitrate = *pending_bitrate_;
+        pending_bitrate_.reset();
+        if (target_bitrate_ != bitrate) {
+          lock.unlock();
+          const bool applied = video_enc_->SetBitrate(bitrate);
+          lock.lock();
+          if (applied) target_bitrate_ = bitrate;
+          if (quit_ || flush_requested_) continue;
+        }
       }
       std::vector<EncodedPacket> packets;
       bool ok = true, eos = false;
@@ -1409,6 +1536,7 @@ class Codec {
   bool configured_ = false, started_ = false, flushed_ = false, async_ = false;
   bool flush_requested_ = false;
   bool failed_ = false;
+  std::optional<CodecMetrics> metrics_;
   std::atomic<bool> frame_rendered_{false};
   Format input_format_;
   ANativeWindow* window_ = nullptr;
@@ -1436,6 +1564,8 @@ class Codec {
   std::unique_ptr<InputSurface> input_surface_;
   std::deque<std::shared_ptr<VideoFrame>> surface_frames_;
   bool surface_eos_ = false, enc_eos_sent_ = false, force_key_ = false;
+  std::optional<int> target_bitrate_;
+  std::optional<int> pending_bitrate_;
   std::vector<std::vector<uint8_t>> csd_;
   int64_t last_out_us_ = 0;
 };
@@ -1445,14 +1575,14 @@ class Codec {
 std::mutex gCodecContextLock;
 using CodecOwner = std::shared_ptr<Codec>;
 
-CodecOwner GetCodec(JNIEnv* env, jobject thiz, bool throw_if_null = true) {
+CodecOwner GetCodec(JNIEnv* env, jobject thiz) {
   CodecOwner c;
   {
     std::lock_guard<std::mutex> lock(gCodecContextLock);
     auto* holder = reinterpret_cast<CodecOwner*>(env->GetLongField(thiz, gJ.context));
     if (holder != nullptr) c = *holder;
   }
-  if (c == nullptr && throw_if_null) jniThrow(env, "java/lang/IllegalStateException", nullptr);
+  if (c == nullptr) jniThrow(env, "java/lang/IllegalStateException", nullptr);
   return c;
 }
 
@@ -1497,6 +1627,13 @@ void JNICALL MC_init(JNIEnv* env, jclass clazz) {
   gJ.hash_map = global("java/util/HashMap");
   gJ.hash_map_ctor = env->GetMethodID(gJ.hash_map, "<init>", "()V");
   gJ.hash_map_put = env->GetMethodID(gJ.hash_map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+  gJ.persistable_bundle = global("android/os/PersistableBundle");
+  if (gJ.persistable_bundle != nullptr) {
+    gJ.persistable_bundle_ctor = env->GetMethodID(gJ.persistable_bundle, "<init>", "()V");
+    gJ.bundle_put_int = env->GetMethodID(gJ.persistable_bundle, "putInt", "(Ljava/lang/String;I)V");
+    gJ.bundle_put_string = env->GetMethodID(gJ.persistable_bundle, "putString",
+                                           "(Ljava/lang/String;Ljava/lang/String;)V");
+  }
   CheckException(env, "MediaCodec.native_init");
 }
 
@@ -1556,8 +1693,10 @@ void JNICALL MC_configure(JNIEnv* env, jobject thiz, jobjectArray keys, jobjectA
     return;
   }
   std::string error;
-  if (!c->Configure(env, FormatFromJava(env, keys, values), surface, &error)) {
-    jniThrow(env, "java/lang/IllegalArgumentException", error.c_str());
+  bool invalid_state = false;
+  if (!c->Configure(env, FormatFromJava(env, keys, values), surface, &error, &invalid_state)) {
+    jniThrow(env, invalid_state ? "java/lang/IllegalStateException" : "java/lang/IllegalArgumentException",
+             error.c_str());
   }
 }
 
@@ -1661,13 +1800,12 @@ jstring JNICALL MC_getCanonicalName(JNIEnv* env, jobject thiz) {
   return c != nullptr ? env->NewStringUTF(c->entry().name.c_str()) : nullptr;
 }
 
-void JNICALL MC_setParameters(JNIEnv* env, jobject thiz, jobjectArray keys, jobjectArray) {
-  auto c = GetCodec(env, thiz, false);
-  if (c == nullptr || keys == nullptr) return;
-  for (jsize i = 0; i < env->GetArrayLength(keys); i++) {
-    auto k = static_cast<jstring>(env->GetObjectArrayElement(keys, i));
-    if (k != nullptr && Utf8(env, k) == "request-sync") c->RequestSyncFrame();
-    env->DeleteLocalRef(k);
+void JNICALL MC_setParameters(JNIEnv* env, jobject thiz, jobjectArray keys, jobjectArray values) {
+  auto c = GetCodec(env, thiz);
+  if (c == nullptr) return;
+  Format parameters = FormatFromJava(env, keys, values);
+  if (!env->ExceptionCheck() && !c->SetParameters(parameters)) {
+    jniThrow(env, "java/lang/IllegalStateException", "setParameters() after release()");
   }
 }
 void JNICALL MC_setVideoScalingMode(JNIEnv*, jobject, jint) {}
@@ -1676,9 +1814,9 @@ void JNICALL MC_enableOnFrameRenderedListener(JNIEnv* env, jobject thiz, jboolea
   if (auto c = GetCodec(env, thiz)) c->EnableFrameRendered(enable);
 }
 
-jobject JNICALL MC_getMetrics(JNIEnv* env, jobject) {
-  jclass cls = env->FindClass("android/os/PersistableBundle");
-  return env->NewObject(cls, env->GetMethodID(cls, "<init>", "()V"));
+jobject JNICALL MC_getMetrics(JNIEnv* env, jobject thiz) {
+  auto codec = GetCodec(env, thiz);
+  return codec != nullptr ? codec->GetMetrics(env) : nullptr;
 }
 
 const JNINativeMethod kCodecMethods[] = {
