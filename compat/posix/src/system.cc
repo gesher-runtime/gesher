@@ -35,6 +35,7 @@
 #include "event_internal.h"
 #include "internal.h"
 #include "linux_socket.h"
+#include "pipe_internal.h"
 #include "record_lock_descriptors.h"
 #include "record_lock_duplicate.h"
 #include "socket_internal.h"
@@ -353,7 +354,19 @@ int ioctl(int fd, unsigned long request, ...) {
   switch (GetFileType(h)) {
     case FILE_TYPE_PIPE: {
       DWORD avail = 0;
-      if (!PeekNamedPipe(h, nullptr, 0, nullptr, &avail, nullptr)) avail = 0;  // writer gone
+      gesher::PipeFd pipe_fd;
+      if (gesher::LookupPipe(fd, &pipe_fd)) {
+        if (pipe_fd.endpoint->direction == gesher::PipeDirection::kRead) {
+          HANDLE rh = (pipe_fd.endpoint->state->read_handle != INVALID_HANDLE_VALUE)
+                          ? pipe_fd.endpoint->state->read_handle
+                          : h;
+          if (!PeekNamedPipe(rh, nullptr, 0, nullptr, &avail, nullptr)) avail = 0;
+        } else {
+          avail = 0;
+        }
+      } else {
+        if (!PeekNamedPipe(h, nullptr, 0, nullptr, &avail, nullptr)) avail = 0;  // writer gone
+      }
       *argp = static_cast<int>(avail > 0x7FFFFFFF ? 0x7FFFFFFF : avail);
       return 0;
     }
@@ -434,6 +447,19 @@ int fcntl(int fd, int cmd, ...) {
     if (cmd == F_SETFL) {
       gesher::SetNonBlocking(*e, (arg & O_NONBLOCK) != 0);
       return 0;
+    }
+  }
+  gesher::PipeFd pipe_fd;
+  if (gesher::LookupPipe(fd, &pipe_fd)) {
+    switch (cmd) {
+      case F_GETFL:
+        return (pipe_fd.endpoint->direction == gesher::PipeDirection::kRead ? O_RDONLY : O_WRONLY) |
+               (pipe_fd.endpoint->nonblocking.load(std::memory_order_acquire) ? O_NONBLOCK : 0);
+      case F_SETFL:
+        pipe_fd.endpoint->nonblocking.store((arg & O_NONBLOCK) != 0, std::memory_order_release);
+        return 0;
+      default:
+        break;
     }
   }
   switch (cmd) {

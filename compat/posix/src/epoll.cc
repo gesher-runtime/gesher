@@ -29,6 +29,7 @@
 
 #include "event_internal.h"
 #include "internal.h"
+#include "pipe_internal.h"
 #include "socket_internal.h"
 #include "record_lock_descriptors.h"
 
@@ -264,7 +265,8 @@ bool CanNest(const std::shared_ptr<Epoll>& parent, const std::shared_ptr<Epoll>&
 // them with EPERM. Pipes, sockets, eventfds and character devices can.
 bool Pollable(int fd) {
   SocketFd socket;
-  return LookupSocket(fd, &socket) || GetFileType(HandleFromFd(fd)) != FILE_TYPE_DISK;
+  return LookupSocket(fd, &socket) || LookupPipe(fd, nullptr) ||
+         GetFileType(HandleFromFd(fd)) != FILE_TYPE_DISK;
 }
 
 }  // namespace

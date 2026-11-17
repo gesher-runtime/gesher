@@ -20,6 +20,7 @@
 #include "internal.h"
 #include "binder_internal.h"
 #include "event_internal.h"
+#include "pipe_internal.h"
 #include "record_lock_descriptors.h"
 
 namespace {
@@ -287,9 +288,15 @@ pid_t getpgrp(void) { return static_cast<pid_t>(GetCurrentProcessId()); }
 pid_t fork(void) { return errno = ENOSYS, -1; }
 
 int pipe2(int fds[2], int flags) {
+  if ((flags & ~(O_CLOEXEC | O_NONBLOCK)) != 0) {
+    return errno = EINVAL, -1;
+  }
   int mode = _O_BINARY | ((flags & O_CLOEXEC) != 0 ? _O_NOINHERIT : 0);
   gesher::record_locks::DescriptorGuard descriptor_guard;
-  return gesher::CrtResult(_pipe(fds, 64 * 1024, mode));
+  int ret = gesher::CrtResult(_pipe(fds, 64 * 1024, mode));
+  if (ret < 0) return ret;
+  gesher::RegisterPipe(fds[0], fds[1], (flags & O_NONBLOCK) != 0);
+  return 0;
 }
 
 int pipe(int fds[2]) { return pipe2(fds, 0); }

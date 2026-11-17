@@ -25,6 +25,7 @@
 #include "binder_internal.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "pipe_internal.h"
 #include "record_lock_descriptors.h"
 #include "socket_internal.h"
 
@@ -181,6 +182,7 @@ int CloseFdBody(int fd, bool unpublished, SocketFd* deferred = nullptr) {
     gesher::ForgetDevice(fd);
     gesher::ForgetEventObject(fd);
     gesher::ForgetBinder(fd);
+    gesher::ForgetPipe(fd);
     // A pipe's last writer closing makes its reader readable (end of file).
     const bool pipe = gesher::HasPollWaiters() &&
                       GetFileType(gesher::HandleFromFd(fd)) == FILE_TYPE_PIPE;
@@ -259,6 +261,7 @@ int read(int fd, void* buf, unsigned int count) {
     if (gesher::LookupDevice(fd, &device)) return gesher::ReadDevice(device, buf, count);
     int result;
     if (gesher::ReadEventObject(fd, buf, count, &result)) return result;
+    if (gesher::ReadPipe(fd, buf, count, &result)) return result;
     return gesher::CrtResult(_read(fd, buf, count));
   }
   gesher::ws::Buffer buffer = {buf, count};
@@ -270,6 +273,7 @@ int write(int fd, const void* buf, unsigned int count) {
   if (!gesher::LookupSocket(fd, &state)) {
     int result;
     if (gesher::WriteEventObject(fd, buf, count, &result)) return result;
+    if (gesher::WritePipe(fd, buf, count, &result)) return result;
     result = gesher::CrtResult(_write(fd, buf, count));
     if (result > 0) gesher::InotifyNoteWrite(fd);
     if (result > 0 && gesher::HasPollWaiters() &&
@@ -291,6 +295,7 @@ int dup(int fd) {
     if (fd2 >= 0 && gesher::LookupDevice(fd, &device)) gesher::RegisterDevice(fd2, device);
     if (fd2 >= 0) gesher::DupEventObject(fd, fd2);
     if (fd2 >= 0) gesher::DupBinder(fd, fd2);
+    if (fd2 >= 0) gesher::DupPipe(fd, fd2);
     return fd2;
   }
   // WSADuplicateSocket creates distinct native connect-error ownership.
@@ -326,12 +331,14 @@ int dup2(int fd, int fd2) {
     gesher::ForgetEventObject(fd2);
     gesher::ForgetEpollEntries(fd2);
     gesher::ForgetBinder(fd2);
+    gesher::ForgetPipe(fd2);
     Device device;
     if (!source_is_socket && gesher::LookupDevice(fd, &device)) {
       gesher::RegisterDevice(fd2, device);
     } else if (!source_is_socket) {
       gesher::DupEventObject(fd, fd2);
       gesher::DupBinder(fd, fd2);
+      gesher::DupPipe(fd, fd2);
     }
   }
   // POSIX dup2 does not report the replaced endpoint's close error. A failed
@@ -388,6 +395,7 @@ bool PollFile(pollfd* p) {
   // The NUL fd reserves a number, but an epoll is readable only when its
   // interest list has a reportable event. It is never a writable file.
   if (gesher::PollEpoll(p->fd, p->events, &p->revents)) return p->revents != 0;
+  if (gesher::PollPipe(p->fd, p->events, &p->revents)) return p->revents != 0;
   HANDLE h = gesher::HandleFromFd(p->fd);
   if (h == INVALID_HANDLE_VALUE) {
     p->revents = POLLNVAL;

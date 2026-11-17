@@ -23,6 +23,8 @@ foreach ($fixture in @(
 foreach ($fixture in @(
   @{ Exe = 'timerfd_windows_test.exe'; Markers = @('timerfd-host:', ' assertions, 0 failures');
      Label = 'actual timer backend, alias ownership and descriptor reuse' },
+  @{ Exe = 'pipe_contract_test.exe'; Markers = @('pipe_contract_test:', ' assertions, 0 failures');
+     Label = 'actual pipe semantics, O_NONBLOCK, backpressure and epoll readiness' },
   @{ Exe = 'media_input_surface_callback_test.exe'; Markers = @('input surface callback contracts:', ' checks, 0 failures');
      Label = 'actual QueueSurface callback admission and quiescent retirement' }
 )) {
