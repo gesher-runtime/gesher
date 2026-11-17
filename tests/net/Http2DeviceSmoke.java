@@ -37,9 +37,10 @@ public class Http2DeviceSmoke {
 
                         @Override public void onFailed(BidirectionalStream s, UrlResponseInfo i,
                                 HttpException e) {
-                            if (e.getCause() instanceof ProtocolException
-                                    && i.getNegotiatedProtocol().isEmpty()) failed.complete(null);
-                            else failed.completeExceptionally(e);
+                            if (!(e.getCause() instanceof ProtocolException)) failed.completeExceptionally(e);
+                            else if (i != null) failed.completeExceptionally(
+                                    new AssertionError("Failure before headers fabricated response information"));
+                            else failed.complete(null);
                         }
                         @Override public void onResponseHeadersReceived(BidirectionalStream s, UrlResponseInfo i) {}
                         @Override public void onReadCompleted(BidirectionalStream s, UrlResponseInfo i,

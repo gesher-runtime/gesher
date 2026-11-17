@@ -31,9 +31,12 @@ final class JavaHttpEngine extends HttpEngine {
     @Override public synchronized URLConnection openConnection(URL url) throws IOException {
         checkOpen(); checkUrl(url);
         URLConnection connection = openTransport(url, network);
-        if (isAndroidHttpConnection(connection)) configureProtocols(connection);
+        boolean androidConnection = isAndroidHttpConnection(connection);
+        if (androidConnection) configureProtocols(connection);
         connection.setRequestProperty("User-Agent", agent);
-        return connection;
+        // HttpEngine exposes HTTP request properties, not the provider's private
+        // protocol setters. Keep a returned connection from changing engine policy.
+        return androidConnection ? new JavaEngineConnection((HttpURLConnection) connection) : connection;
     }
     private static URLConnection openTransport(URL url, Network network) throws IOException {
         return network == null ? url.openConnection() : network.openConnection(url);
@@ -52,8 +55,13 @@ final class JavaHttpEngine extends HttpEngine {
         connection.setRequestProperty("X-Android-Protocols", http2Enabled ? "h2,http/1.1" : "http/1.1");
     }
 
-    private static boolean isProtocolControl(String name) {
-        return name.equals("X-Android-Protocols") || name.equals("X-Android-Transports");
+    static String transportHeaderName(String name) {
+        // OkHttp consumes these two exact spellings as local control properties.
+        // HTTP field names are case-insensitive; use their ordinary wire spelling
+        // so application metadata remains present without changing transport policy.
+        if ("X-Android-Protocols".equals(name)) return "x-android-protocols";
+        if ("X-Android-Transports".equals(name)) return "x-android-transports";
+        return name;
     }
 
     @Override public URLStreamHandlerFactory createUrlStreamHandlerFactory() {
@@ -292,8 +300,8 @@ final class JavaHttpEngine extends HttpEngine {
             opened.setRequestProperty("User-Agent", engine.agent);
             boolean androidConnection = isAndroidHttpConnection(opened);
             for (Map.Entry<String, String> header : effectiveHeaders) {
-                if (androidConnection && isProtocolControl(header.getKey())) continue;
-                opened.addRequestProperty(header.getKey(), header.getValue());
+                opened.addRequestProperty(androidConnection ? transportHeaderName(header.getKey())
+                        : header.getKey(), header.getValue());
             }
             if (androidConnection) engine.configureProtocols(opened);
             if (sendUpload) upload(opened);

@@ -24,7 +24,7 @@ final class JavaBidirectionalStream extends BidirectionalStream {
     volatile boolean done;
     private boolean started, ready, headersSent, readPending, readEnded, writeEnded, endQueued;
     private ByteBuffer pendingRead;
-    private Response info;
+    private volatile Response info;
     private int initialHeaderCount;
     private int pendingCallbacks;
     private static void trace(String value) {
@@ -36,7 +36,6 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         callbacks=new JavaHttpEngine.SerialExecutor(b.executor); writer=new JavaHttpEngine.SerialExecutor(engine.io);
         priority=b.priority; tag=b.tag; uid=b.uid; hasTag=b.hasTag; hasUid=b.hasUid; delay=b.delay;
         writeEnded=method.equals("GET") || method.equals("HEAD"); endQueued=writeEnded;
-        info=new Response(url.toExternalForm(),0,new JavaHttpEngine.Headers(Collections.emptyList()));
     }
     @Override public HeaderBlock getHeaders() { return headers; }
     @Override public String getHttpMethod() { return method; }
@@ -226,16 +225,20 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         @Override public boolean isImmediatelyRetryable() { return false; }
     },false); }
     private void finish(HttpException error, boolean canceled) {
-        synchronized (this) { if (done) return; done=true; writes.clear(); pendingRead=null; notifyAll(); }
+        final Response terminalInfo;
+        synchronized (this) {
+            if (done) return;
+            done=true; terminalInfo=info; writes.clear(); pendingRead=null; notifyAll();
+        }
         trace(canceled ? "canceled" : error==null ? "succeeded" : "failed");
         try { engine.io.execute(() -> { Http2Transport t=transport; if (t!=null) try { t.close(); } catch (Exception ignored) {} }); }
         catch (RuntimeException ignored) {}
         engine.release(this);
         try { callbacks.execute(() -> {
             try {
-                if (canceled) callback.onCanceled(this,info);
-                else if (error!=null) callback.onFailed(this,info,error);
-                else callback.onSucceeded(this,info);
+                if (canceled) callback.onCanceled(this,terminalInfo);
+                else if (error!=null) callback.onFailed(this,terminalInfo,error);
+                else callback.onSucceeded(this,terminalInfo);
             } catch (RuntimeException ignored) {}
         }); } catch (RuntimeException ignored) {}
     }
@@ -252,7 +255,7 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         @Override public HeaderBlock getHeaders() { return headers; }
         @Override public int getHttpStatusCode() { return code; }
         @Override public String getHttpStatusText() { return ""; }
-        @Override public String getNegotiatedProtocol() { return code == 0 ? "" : "h2"; }
+        @Override public String getNegotiatedProtocol() { return "h2"; }
         @Override public long getReceivedByteCount() { return received; }
         @Override public String getUrl() { return url; }
         @Override public List<String> getUrlChain() { return Collections.singletonList(url); }
