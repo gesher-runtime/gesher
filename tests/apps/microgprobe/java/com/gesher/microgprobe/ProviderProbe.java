@@ -51,7 +51,18 @@ final class ProviderProbe {
         holder.provider = (IContentProvider) Proxy.newProxyInstance(
                 IContentProvider.class.getClassLoader(), new Class<?>[] {IContentProvider.class},
                 (p, m, a) -> m.getName().equals("asBinder") ? binder : null);
-        denied("foreign authority publication", () -> activity.publishContentProviders(thread, List.of(holder)));
+        // AOSP ContentProviderHelper.publishContentProviders ignores a holder when
+        // the process has no pending record for its component (android16-release,
+        // services/core/java/com/android/server/am/ContentProviderHelper.java).
+        // Check the security effect, without inventing a SecurityException contract.
+        ContentProviderHolder before = activity.getContentProvider(thread,
+                source.getPackageName(), forged.authority, 0, true);
+        if (before != null) throw new AssertionError("Offline foreign-publication fixture authority is already bound");
+        activity.publishContentProviders(thread, List.of(holder));
+        ContentProviderHolder after = activity.getContentProvider(thread,
+                source.getPackageName(), forged.authority, 0, true);
+        if (after != null) throw new AssertionError("Unadmitted publication bound a foreign authority");
+        Log.i("microgprobe", "PASS foreign authority publication");
 
         String key = "gesher_unprivileged_provider_probe";
         denied("secure settings mutation", () -> Settings.Secure.putString(source.getContentResolver(), key, "denied"));

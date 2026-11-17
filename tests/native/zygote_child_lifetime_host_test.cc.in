@@ -1,0 +1,102 @@
+/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
+// Verbatim production child lookup/termination; only Win32 process APIs are recorded.
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <map>
+#include <mutex>
+#include <thread>
+
+struct Process {
+  int64_t creation;
+  bool queryable = true;
+  bool running = true;
+  unsigned terminated = 0;
+};
+using HANDLE = Process*;
+struct FILETIME { uint32_t dwLowDateTime = 0, dwHighDateTime = 0; };
+constexpr int FALSE = 0, WAIT_TIMEOUT = 258;
+static std::mutex g_lock;
+static std::map<int, HANDLE> g_children;
+static unsigned checks;
+static void Check(bool value, const char* message) {
+  if (!value) { std::fprintf(stderr, "FAIL: %s\n", message); std::abort(); }
+  ++checks;
+}
+static bool GetProcessTimes(HANDLE process, FILETIME* created, FILETIME*, FILETIME*, FILETIME*) {
+  if (!process->queryable) return false;
+  created->dwLowDateTime = static_cast<uint32_t>(process->creation);
+  created->dwHighDateTime = static_cast<uint32_t>(process->creation >> 32);
+  return true;
+}
+static int WaitForSingleObject(HANDLE process, int timeout) {
+  Check(timeout == 0, "Native generation check introduced a blocking wait");
+  return process->running ? WAIT_TIMEOUT : 0;
+}
+static std::mutex boundary_lock;
+static std::condition_variable boundary;
+static bool pause_termination, termination_entered, release_termination;
+static bool TerminateProcess(HANDLE process, unsigned code) {
+  Check(code == 137, "Exit code changed");
+  if (pause_termination) {
+    std::unique_lock<std::mutex> guard(boundary_lock);
+    termination_entered = true; boundary.notify_all();
+    boundary.wait(guard, [] { return release_termination; });
+  }
+  ++process->terminated;
+  return true;
+}
+
+@PRODUCTION_CHILD_LIFETIME@
+
+int main() {
+  Process original{0x123456789LL}, replacement{0x123456790LL};
+  Check(ChildStartTime(101) == 0, "Unknown child has identity");
+  Check(!KillChild(101, original.creation), "Unknown child was killed");
+  g_children[101] = &original;
+  Check(ChildStartTime(101) == original.creation, "Creation identity lost high bits");
+  Check(!KillChild(0, original.creation) && !KillChild(-1, original.creation), "Invalid PID was accepted");
+  Check(!KillChild(101, 0) && !KillChild(101, -1), "Unavailable identity was accepted");
+  Check(!KillChild(101, replacement.creation) && original.terminated == 0, "Wrong generation was killed");
+  original.queryable = false;
+  Check(ChildStartTime(101) == 0 && !KillChild(101, original.creation), "Query failure did not fail closed");
+  original.queryable = true; original.running = false;
+  Check(!KillChild(101, original.creation), "Already-exited child was terminated");
+  original.running = true;
+  Check(KillChild(101, original.creation) && original.terminated == 1, "Matching retained handle was not terminated");
+  g_children[101] = &replacement;
+  Check(!KillChild(101, original.creation) && replacement.terminated == 0, "Reused PID inherited old kill authority");
+  g_children.erase(101);
+  Check(!KillChild(101, original.creation), "Consumed native handle fell back to ambient PID");
+
+  g_children[101] = &original;
+  pause_termination = true;
+  std::thread killer([&] { Check(KillChild(101, original.creation), "Locked retained-handle termination failed"); });
+  {
+    std::unique_lock<std::mutex> guard(boundary_lock);
+    Check(boundary.wait_for(guard, std::chrono::seconds(5), [] { return termination_entered; }),
+          "Termination boundary was not reached");
+  }
+  bool unlocked = g_lock.try_lock();
+  if (unlocked) g_lock.unlock();
+  Check(!unlocked, "Registry lock released between identity check and termination");
+  std::atomic<bool> replacement_attempted{false};
+  std::thread replacer([&] {
+    replacement_attempted = true;
+    std::lock_guard<std::mutex> guard(g_lock);
+    g_children.erase(101); g_children[101] = &replacement;
+  });
+  while (!replacement_attempted.load()) std::this_thread::yield();
+  {
+    std::lock_guard<std::mutex> guard(boundary_lock);
+    release_termination = true; boundary.notify_all();
+  }
+  killer.join(); replacer.join(); pause_termination = false;
+  Check(original.terminated == 2 && replacement.terminated == 0, "Concurrent replacement changed termination target");
+  Check(!KillChild(101, original.creation), "Retired expected identity gained new child authority");
+  Check(KillChild(101, replacement.creation) && replacement.terminated == 1, "New generation could not retire itself");
+  std::printf("Zygote child lifetime contracts: %u checks, 0 failures\n", checks);
+}

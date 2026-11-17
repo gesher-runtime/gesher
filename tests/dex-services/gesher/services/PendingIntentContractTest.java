@@ -126,6 +126,9 @@ public final class PendingIntentContractTest {
 
     private static Object code(String name, int uid, int signer) throws Exception {
         PackageImpl parsed = (PackageImpl)PackageImpl.forTesting(name, "/fixture/" + name + "/base.apk");
+        var keepAlive = new com.android.internal.pm.pkg.component.ParsedActivityImpl();
+        keepAlive.setPackageName(name); keepAlive.setName(name + ".FixtureKeepAlive"); keepAlive.setEnabled(true);
+        parsed.addActivity(keepAlive);
         parsed.setEnabled(true); parsed.setTargetSdkVersion(36); parsed.hideAsFinal();
         Object code = UNSAFE.allocateInstance(type("ApkPackage"));
         set(code, "packageName", name); set(code, "mUid", uid); set(code, "parsed", parsed);
@@ -164,7 +167,8 @@ public final class PendingIntentContractTest {
             set(am, "mServices", make(type("ActiveServices"), new Class<?>[]{atmType, pmType,
                     type("NotificationManagerService")}, atm, pm, null));
             Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
-            for (String map : new String[]{"mPublished", "mPublishedBy", "mClients", "mConnections"}) set(providers, map, new LinkedHashMap<>());
+            for (String map : new String[]{"mPublished", "mPublishedBy", "mPublishedCode", "mClients", "mConnections", "mInstalling"}) set(providers, map, new LinkedHashMap<>());
+            set(providers, "mRequests", new java.util.HashSet<>());
             set(am, "mProviders", providers);
             broadcasts = make(type("BroadcastController"), new Class<?>[]{atmType, pmType, long.class}, atm, pm, timeout);
             set(am, "mBroadcasts", broadcasts);
@@ -181,7 +185,14 @@ public final class PendingIntentContractTest {
             set(process, "uid", uid); set(process, "packageName", name); set(process, "processName", name); set(process, "ready", true);
             ((List<Object>)get(atm, "mProcesses")).add(process);
             // A constructed activity record keeps this synthetic process alive; no activity lifecycle is claimed.
-            ((List<Object>)get(process, "activities")).add(UNSAFE.allocateInstance(type("ActivityTaskManagerService$ActivityRecord")));
+            android.content.pm.ActivityInfo info = (android.content.pm.ActivityInfo)invoke(pm, "getActivityInfo",
+                    new Class<?>[]{android.content.ComponentName.class, long.class, int.class},
+                    new android.content.ComponentName(name, name + ".FixtureKeepAlive"), 0L, 0);
+            Class<?> recordType = type("ActivityTaskManagerService$ActivityRecord");
+            Object record = make(recordType, new Class<?>[]{atm.getClass(), android.content.pm.ActivityInfo.class,
+                    Intent.class, int.class, int.class, String.class, recordType, String.class, int.class},
+                    atm, info, new Intent(), 1, pid, name, null, null, -1);
+            ((List<Object>)get(process, "activities")).add(record);
             return process;
         }
         IIntentSender create(int request, Intent intent, String resolvedType, int flags) throws Exception {

@@ -6,6 +6,9 @@ import android.accounts.AccountManager;
 import android.app.IApplicationThread;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import com.android.internal.pm.parsing.pkg.PackageImpl;
+import com.android.internal.pm.pkg.component.ParsedActivityImpl;
+import com.gesher.server.ApkPackage;
 import java.lang.reflect.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -156,7 +159,22 @@ public final class GmsSetupContractTest {
 
     public static void contracts() throws Exception {
         Class<?> pmType = Class.forName("com.gesher.server.PackageManagerService");
-        Object pm = make(pmType, new Class<?>[] {Collection.class}, Collections.emptyList());
+        // The process queue admits installed owners. Model an installed package
+        // in this isolated bookkeeping fixture instead of relying on work for an
+        // unknown package being admitted by the production service.
+        String pkg = "com.google.android.gms", path = "/fixture/" + pkg + "/base.apk";
+        PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(pkg, path);
+        parsed.setEnabled(true); parsed.setTargetSdkVersion(36);
+        ParsedActivityImpl settings = new ParsedActivityImpl();
+        settings.setPackageName(pkg); settings.setName("fixture.Settings"); settings.setEnabled(true);
+        parsed.addActivity(settings); parsed.hideAsFinal();
+        Field unsafeField = sun.misc.Unsafe.class.getDeclaredField("theUnsafe"); unsafeField.setAccessible(true);
+        ApkPackage owner = (ApkPackage) ((sun.misc.Unsafe) unsafeField.get(null)).allocateInstance(ApkPackage.class);
+        set(owner, "packageName", pkg); set(owner, "parsed", parsed); set(owner, "apkPath", path);
+        set(owner, "mUid", 1000); set(owner, "mDataDir", "/fixture/" + pkg + "/data");
+        Field emptyGraph = Class.forName("com.gesher.server.SharedLibraryGraph").getDeclaredField("EMPTY");
+        emptyGraph.setAccessible(true); set(owner, "sharedLibraries", emptyGraph.get(null));
+        Object pm = make(pmType, new Class<?>[] {Collection.class}, List.of(owner));
         accounts(pm); idle(pm);
         System.out.println("GmsSetupContractTest all passed: " + checks);
     }

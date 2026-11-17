@@ -268,10 +268,54 @@ int gesher_selftest(void) {
               regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
     regfree(&re);
     check("POSIX leftmost-longest submatch preference",
-          regcomp(&re, "(foo|foobar)(bar|)", REG_EXTENDED) == 0 &&
+          regcomp(&re, "(foo|foobar)(bar)?", REG_EXTENDED) == 0 &&
               regexec(&re, "foobar", 3, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 6 &&
-              m[1].rm_so == 0 && m[1].rm_eo == 6 && m[2].rm_so == 6 && m[2].rm_eo == 6);
+              m[1].rm_so == 0 && m[1].rm_eo == 6 && m[2].rm_so == -1 && m[2].rm_eo == -1);
     regfree(&re);
+    // Android android-16.0.0_r4 bionic is the oracle for these results.
+    check("top-level alternative uses compiled entry",
+          regcomp(&re, "a|bb", REG_EXTENDED) == 0 && regexec(&re, "bb", 1, m, 0) == 0 &&
+              m[0].rm_so == 0 && m[0].rm_eo == 2);
+    regfree(&re);
+    const char* nullable_patterns[] = {"a*b", "a?b", "a{0}b", "a{0,2}b"};
+    for (size_t i = 0; i < sizeof(nullable_patterns) / sizeof(nullable_patterns[0]); ++i) {
+        check("nullable leading expression uses compiled entry",
+              regcomp(&re, nullable_patterns[i], REG_EXTENDED) == 0 &&
+                  regexec(&re, "b", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 1);
+        regfree(&re);
+    }
+    check("BRE backreference executor uses compiled entry",
+          regcomp(&re, "a*\\(b\\)\\1", 0) == 0 && regexec(&re, "bb", 1, m, 0) == 0 &&
+              m[0].rm_so == 0 && m[0].rm_eo == 2);
+    regfree(&re);
+    m[0].rm_so = 11;
+    m[0].rm_eo = 12;
+    check("REG_NOSUB keeps internal backreferences without public output",
+          regcomp(&re, "\\(ab\\)\\1", REG_NOSUB) == 0 && re.re_nsub == 1 &&
+              regexec(&re, "abab", 1, m, 0) == 0 &&
+              regexec(&re, "abac", 0, NULL, 0) == REG_NOMATCH &&
+              m[0].rm_so == 11 && m[0].rm_eo == 12);
+    regfree(&re);
+    check("REG_ICASE keeps AOSP byte-exact backreferences",
+          regcomp(&re, "\\(a\\)\\1", REG_ICASE) == 0 &&
+              regexec(&re, "aA", 0, NULL, 0) == REG_NOMATCH &&
+              regexec(&re, "AA", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 2);
+    regfree(&re);
+    check("backreference to an open outer group reports REG_ESUBREG",
+          regcomp(&re, "\\(\\(a\\)\\1\\)", 0) == REG_ESUBREG);
+    check("AOSP rejects empty alternatives",
+          regcomp(&re, "(foo|foobar)(bar|)", REG_EXTENDED) == REG_EMPTY);
+    check("AOSP rejects unsupported alphabetic escape",
+          regcomp(&re, "\\d", REG_EXTENDED) == REG_EESCAPE);
+    check("AOSP named collating element matches literal LF",
+          regcomp(&re, "[[.newline.]]", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "x\ny", 1, m, 0) == 0 && m[0].rm_so == 1 && m[0].rm_eo == 2);
+    regfree(&re);
+    check("AOSP bracket word boundaries match",
+          regcomp(&re, "[[:<:]]a[[:>:]]", REG_EXTENDED) == 0 &&
+              regexec(&re, " a!", 1, m, 0) == 0 && m[0].rm_so == 1 && m[0].rm_eo == 2);
+    regfree(&re);
+    check("AOSP rejects repeated range", regcomp(&re, "[a-c-e]", REG_EXTENDED) == REG_ERANGE);
     check("REG_NEWLINE extended accepts escaped ordinary slash and escaped bracket",
           regcomp(&re, "^\\|[0-9]{2}\\/[0-9]{5}\\^$", REG_EXTENDED | REG_NEWLINE) == 0 &&
               regexec(&re, "|11/11111^", 0, NULL, 0) == 0 &&

@@ -103,6 +103,14 @@ Check 'services: queued job completion, stopping work and alarm-clock replacemen
   $schedulerWorkOut
 } @('SchedulerWorkContractTest all passed:')
 
+$activityRestoreOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ActivityRestoreContractTest') 90
+$activityRestoreCode = $LASTEXITCODE
+Check 'services: activity state restoration, process death survival and LaunchActivityItem delivery' {
+  $global:LASTEXITCODE = $activityRestoreCode
+  $activityRestoreOut
+} @('ActivityRestoreContractTest all passed:')
+
 $mediaRequestsOut = FixesRun ($dvmFixes + 'gesher.services.MediaStoreRequestContractTest') 90
 $mediaRequestsCode = $LASTEXITCODE
 Check 'framework: MediaStore request forwarding, provider errors and SDK callback descriptors' {
@@ -293,6 +301,14 @@ Check 'services: URI delegation, provider patterns, exact identities and scoped 
   $global:LASTEXITCODE = $uriGrantsCode
   $uriGrantsOut
 } @('UriGrantContractTest all passed: 138 checks; binder=true')
+
+$intentUriGrantsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'IntentUriGrantContractTest') 90
+$intentUriGrantsCode = $LASTEXITCODE
+Check 'services: Intent URI grants, IBinder owner lifecycle and non-system ignore' {
+  $global:LASTEXITCODE = $intentUriGrantsCode
+  $intentUriGrantsOut
+} @('IntentUriGrantContractTest passed: 28 checks')
 
 # Caller identity and URI snapshots must survive actual ActivityThread delivery,
 # relaunch and results, including a PendingIntent holder cleared by its own send.

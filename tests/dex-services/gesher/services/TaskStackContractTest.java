@@ -113,6 +113,11 @@ public final class TaskStackContractTest {
             if (name.equals("Doc")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_INTO_EXISTING);
             parsed.addActivity(activity);
         }
+        var provider = new com.android.internal.pm.pkg.component.ParsedProviderImpl();
+        provider.setName(pkg + ".GrantProvider"); provider.setPackageName(pkg);
+        provider.setAuthority(pkg + ".grants"); provider.setEnabled(true);
+        provider.setExported(false); provider.setGrantUriPermissions(true);
+        provider.setReadPermission(pkg + ".READ_PRIVATE"); parsed.addProvider(provider);
         parsed.hideAsFinal();
         ApkPackage apk = (ApkPackage) UNSAFE.allocateInstance(ApkPackage.class);
         set(apk, "packageName", pkg);
@@ -361,6 +366,31 @@ public final class TaskStackContractTest {
         attached.setAccessible(true); attached.invoke(ordinary.tasks, PID);
         check(ordinary.thread.launches(null) == 0 && ordinary.records().isEmpty(),
                 "History lease release changed ordinary async launch admission");
+    }
+
+    /** Disabled deferred entries must be removed without creating them or disturbing the top. */
+    @SuppressWarnings("unchecked")
+    private static void disabledDeferredHistory() throws Exception {
+        Harness h = new Harness();
+        h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), launch("Middle"), launch("Top"));
+        Object root = h.record("Root"), middle = h.record("Middle"), top = h.record("Top");
+        Method enabled = ApkPackage.class.getDeclaredMethod("setComponentEnabledState", String.class, int.class);
+        enabled.setAccessible(true);
+        enabled.invoke(h.owner, PKG + ".Middle", 2);
+        Class<?> changeType = type("PackageManagerService$EnabledChange");
+        Object change = make(changeType, new Class<?>[]{ApkPackage.class}, h.owner);
+        ((List<String>)get(change, "components")).add(PKG + ".Middle");
+        Method cleanup = h.tasks.getClass().getDeclaredMethod("cleanupDisabledPackageComponents", changeType);
+        cleanup.setAccessible(true); cleanup.invoke(h.tasks, change);
+        check(!h.records().contains(middle) && h.records().contains(root) && h.records().contains(top),
+                "Disabled deferred parent retained or its live siblings were removed");
+        check(h.thread.launches(middle) == 0 && h.thread.launches(root) == 0,
+                "Disabled parent cleanup eagerly instantiated history");
+        enabled.invoke(h.owner, PKG + ".Middle", 1);
+        check(!h.records().contains(middle), "Enabling revived a previously removed history entry");
+        h.acknowledge("activityResumed", top); h.finish(top);
+        check(h.thread.launches(root) == 1 && h.thread.launches(middle) == 0,
+                "Back did not skip the disabled/removed deferred parent");
     }
 
     private static void invalidBatch() throws Exception {
@@ -647,11 +677,127 @@ public final class TaskStackContractTest {
         } finally { current.set(null, previousThread); instance.set(singleton, previous); }
     }
 
+    /** Combined lazy-history/URI admission: grants follow the reused record token. */
+    private static void reorderedUriOwner() throws Exception {
+        Harness h = new Harness();
+        String creator = PKG + ".second";
+        android.net.Uri uri = android.net.Uri.parse("content://" + creator + ".grants/item");
+        Method access = type("UriGrants").getDeclaredMethod("canAccess", ApkPackage.class,
+                android.net.Uri.class, int.class, int.class); access.setAccessible(true);
+        Method service = h.tasks.getClass().getDeclaredMethod("uriGrants"); service.setAccessible(true);
+        Object grants = service.invoke(h.tasks);
+        check(!(Boolean)access.invoke(grants, h.owner, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION, 0),
+                "Target unexpectedly owns another package's provider");
+        check(startFromCreator(h, creator, () -> true,
+                launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), launch("Middle"),
+                launch("Root").setData(uri).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                        | Intent.FLAG_GRANT_READ_URI_PERMISSION)) == ActivityManager.START_SUCCESS,
+                "URI reorder batch rejected");
+        Object root = h.record("Root"), middle = h.record("Middle");
+        check(h.records().size() == 2 && h.records().get(1) == root && h.thread.launches(root) == 1
+                && h.thread.launches(middle) == 0, "URI reorder broke lazy history or duplicated record");
+        check((Boolean)access.invoke(grants, h.owner, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION, 0),
+                "Reused activity did not receive its requested URI grant");
+        List<?> owned = (List<?>)get(grants, "mGrants");
+        check(owned.size() == 1 && get(owned.get(0), "ownerToken") == get(root, "token"),
+                "URI grant is not owned by the reordered destination token");
+        Intent denied = launch("Middle").setData(uri).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        denied.setClipData(android.content.ClipData.newRawUri("denied",
+                android.net.Uri.parse("content://1@" + creator + ".grants/denied")));
+        try {
+            startFromCreator(h, creator, () -> true, denied);
+            throw new AssertionError("Invalid URI reordered an admitted task");
+        } catch (java.lang.reflect.InvocationTargetException failure) {
+            check(failure.getCause() instanceof SecurityException, "Wrong invalid-URI launch outcome");
+        }
+        check(h.records().size() == 2 && h.records().get(1) == root && owned.size() == 1,
+                "Invalid URI changed task order or existing grants");
+        h.acknowledge("activityResumed", root); h.finish(root); h.acknowledge("activityDestroyed", root);
+        check(!(Boolean)access.invoke(grants, h.owner, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION, 0),
+                "Destroyed reordered activity leaked its URI grant");
+        check(h.thread.launches(middle) == 1, "Removing URI owner did not realize deferred history");
+    }
+
+    private static void abandonedUriOwners() throws Exception {
+        for (boolean failedStart : new boolean[]{false, true}) {
+            Harness h = new Harness();
+            String creator = PKG + ".second", target = PKG + ".third";
+            android.net.Uri uri = android.net.Uri.parse("content://" + creator + ".grants/abandoned");
+            if (failedStart) {
+                Class<?> starterType = type("ActivityTaskManagerService$ProcessStarter");
+                Object starter = java.lang.reflect.Proxy.newProxyInstance(starterType.getClassLoader(),
+                        new Class<?>[]{starterType}, (proxy, method, args) -> -1);
+                Method install = h.tasks.getClass().getDeclaredMethod("setProcessStarter", starterType);
+                install.setAccessible(true); install.invoke(h.tasks, starter);
+            }
+            startFromCreator(h, creator, () -> true, launch(target, "Root").setData(uri)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION));
+            Method service = h.tasks.getClass().getDeclaredMethod("uriGrants"); service.setAccessible(true);
+            Object grants = service.invoke(h.tasks);
+            if (!failedStart) {
+                check(((List<?>)get(grants, "mGrants")).size() == 1, "Missing pending-history owner grant");
+                Method stop = h.tasks.getClass().getDeclaredMethod("forceStopPackage", String.class);
+                stop.setAccessible(true); stop.invoke(h.tasks, target);
+            }
+            check(((List<?>)get(grants, "mGrants")).isEmpty(),
+                    "Abandoned activity leaked owner grant after " + (failedStart ? "start failure" : "force stop"));
+            check(h.records().isEmpty(), "Abandoned activity history remained after cleanup");
+        }
+    }
+
+    private static void processDeathUriOwners() throws Exception {
+        for (boolean restore : new boolean[]{false, true}) {
+            Harness h = new Harness();
+            String creator = PKG + ".second";
+            android.net.Uri uri = android.net.Uri.parse("content://" + creator + ".grants/death");
+            startFromCreator(h, creator, () -> true, launch("Root").setData(uri)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION));
+            Object root = h.record("Root");
+            if (restore) set(root, "savedState", new Bundle());
+            Method service = h.tasks.getClass().getDeclaredMethod("uriGrants"); service.setAccessible(true);
+            Object grants = service.invoke(h.tasks);
+            check(((List<?>)get(grants, "mGrants")).size() == 1, "Missing activity grant before process death");
+            Method died = h.tasks.getClass().getDeclaredMethod("processDied", h.process.getClass());
+            died.setAccessible(true); died.invoke(h.tasks, h.process);
+            check(h.records().contains(root) == restore, "Process death retained/discarded wrong activity record");
+            check(((List<?>)get(grants, "mGrants")).isEmpty() != restore,
+                    "URI owner lifetime followed process rather than retained activity record");
+            if (restore) {
+                Method stop = h.tasks.getClass().getDeclaredMethod("forceStopPackage", String.class);
+                stop.setAccessible(true); stop.invoke(h.tasks, PKG);
+                check(((List<?>)get(grants, "mGrants")).isEmpty(), "Force-stopped restorable record leaked grant");
+            }
+        }
+    }
+
+    private static void forceStopTransientUris() throws Exception {
+        Harness h = new Harness();
+        Method service = h.tasks.getClass().getDeclaredMethod("uriGrants"); service.setAccessible(true);
+        Object grants = service.invoke(h.tasks);
+        Method grant = grants.getClass().getDeclaredMethod("grant", String.class, android.net.Uri.class, int.class, int.class);
+        grant.setAccessible(true);
+        String second = PKG + ".second", third = PKG + ".third";
+        grant.invoke(grants, PKG, android.net.Uri.parse("content://" + second + ".grants/incoming"),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION, 0);
+        grant.invoke(grants, second, android.net.Uri.parse("content://" + PKG + ".grants/outgoing"),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION, 0);
+        grant.invoke(grants, third, android.net.Uri.parse("content://" + second + ".grants/unrelated"),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION, 0);
+        List<?> owned = (List<?>)get(grants, "mGrants");
+        check(owned.size() == 3, "Transient force-stop fixture did not publish three real grants");
+        ((List<?>)get(h.tasks, "mProcesses")).clear(); // Already dead package still needs URI cleanup.
+        Method stop = h.tasks.getClass().getDeclaredMethod("forceStopPackage", String.class);
+        stop.setAccessible(true); stop.invoke(h.tasks, PKG);
+        check(owned.size() == 1 && get(owned.get(0), "ownerToken") == null,
+                "Force stop leaked incoming/outgoing ownerless URI grants or removed unrelated grants");
+    }
+
     public static int run(boolean binder, String selected) throws Exception {
         realBinder = binder; checks = 0;
-        if (selected.equals("all") || selected.equals("history")) { fullStack(); acceptedHistoryLifetimes(); }
+        if (selected.equals("all") || selected.equals("history")) { fullStack(); acceptedHistoryLifetimes(); disabledDeferredHistory(); }
         if (selected.equals("all") || selected.equals("validation")) invalidBatch();
-        if (selected.equals("all") || selected.equals("tasks")) taskFlags();
+        if (selected.equals("all") || selected.equals("tasks")) { taskFlags(); reorderedUriOwner(); abandonedUriOwners(); processDeathUriOwners(); forceStopTransientUris(); }
         if (selected.equals("all") || selected.equals("attach")) attachAndReentry();
         if (selected.equals("all") || selected.equals("visibility")) visibilityAndRemoval();
         if (selected.equals("all") || selected.equals("permissions")) permissions();

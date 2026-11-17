@@ -40,8 +40,11 @@ final class UriGrantsManagerService extends IUriGrantsManager.Default {
     }
     @Override public void grantUriPermissionFromOwner(IBinder owner, int fromUid, String targetPackage,
             Uri uri, int modes, int sourceUserId, int targetUserId) {
-        host(); user(sourceUserId); user(targetUserId);
-        throw new UnsupportedOperationException("URI owner-token and Intent grants are not implemented");
+        user(sourceUserId); user(targetUserId);
+        if (!mCallers.isSystem() && fromUid != mCallers.callerUid()) {
+            throw new SecurityException("Cannot grant on behalf of another UID");
+        }
+        mGrants.grantFromOwner(owner, fromUid, targetPackage, uri, modes, sourceUserId, targetUserId);
     }
     @Override public ParceledListSlice getGrantedUriPermissions(String packageName, int userId) {
         host(); user(userId);
@@ -63,6 +66,6 @@ final class UriGrantsManagerService extends IUriGrantsManager.Default {
             Uri uri, int modes, int userId) {
         if (!mCallers.isSystem()) return -1;
         user(userId);
-        throw new UnsupportedOperationException("URI owner-token and Intent grants are not implemented");
+        return mGrants.checkGrantUriPermission_ignoreNonSystem(sourceUid, targetPackage, uri, modes, userId);
     }
 }

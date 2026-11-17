@@ -133,6 +133,11 @@ target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)
 add_executable(posix_probe probes/posix/posix_probe.cc)
 target_compile_options(posix_probe PRIVATE -Wall -Wextra -Werror)
 
+# Virtual procfs and sysfs contracts (Roadmap N04, Issue #56).
+add_executable(procfs_sysfs_contract_test tests/native/procfs_sysfs_contract_test.cc)
+target_compile_options(procfs_sysfs_contract_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(procfs_sysfs_contract_test PRIVATE gesher_posix)
+
 # The same metadata contract runs through host POSIX and both guest ABI shims.
 add_executable(filesystem_metadata_host_test tests/native/filesystem_metadata_host_test.cc)
 target_compile_options(filesystem_metadata_host_test PRIVATE -Wall -Wextra -Werror)

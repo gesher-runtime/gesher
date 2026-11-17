@@ -266,6 +266,11 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      - name: Package enabled-state storage limits and crash contracts
+        run: |
+          python3 tools/test_package_enabled_store.py --java-home "$JAVA_HOME"
+          python3 tools/test_zygote_child_lifetime.py --sanitize
+
       - name: Audio JNI buffer contracts with checked JNI and UBSan
         run: |
           python3 tools/test_audio_buffer_contracts.py

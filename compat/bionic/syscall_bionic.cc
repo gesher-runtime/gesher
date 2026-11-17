@@ -18,7 +18,7 @@
 // any other request with ESRCH (no such tracee).
 //
 // regcomp/regexec/regerror/regfree: bionic's (BSD) regex ABI over
-// posix_regex::Program (POSIX BRE/ERE with leftmost-longest semantics,
+// posix_regex::Program (POSIX BRE/ERE with leftmost-longest whole-match selection,
 // NetBSD/Android REG_NEWLINE anchor/bracket rules, and bounded NFA matching).
 
 #include "shim_internal.h"
@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -230,16 +231,15 @@ int BIONIC_SYSV Regcomp(BionicRegex* preg, const char* pattern, int cflags) {
     std::string raw = (cflags & kRegPend) != 0 && preg->re_endp != nullptr
                           ? std::string(pattern, preg->re_endp)
                           : std::string(pattern);
-    auto* compiled = new Program();
+    auto compiled = std::make_unique<Program>();
     Compiler compiler(raw, extended, icase, nosub, newline);
     int err = compiler.Compile(*compiled);
     if (err != kRegOk) {
-      delete compiled;
       return err;
     }
     preg->re_magic = kRegMagic;
     preg->re_nsub = compiled->nsub;
-    preg->re_g = compiled;
+    preg->re_g = compiled.release();
     return 0;
   } catch (...) {
     return kRegEspace;

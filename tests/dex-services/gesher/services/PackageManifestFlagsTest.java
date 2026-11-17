@@ -50,9 +50,13 @@ public final class PackageManifestFlagsTest {
         info.packageName = PACKAGE;
         info.flags = ApplicationInfo.FLAG_STOPPED;
         info.privateFlags = ApplicationInfo.PRIVATE_FLAG_INSTANT;
-        Method installed = ApkPackage.class.getDeclaredMethod("installed", ApplicationInfo.class);
+        Method enabledState = ApkPackage.class.getDeclaredMethod("enabledState");
+        enabledState.setAccessible(true);
+        Class<?> stateType = Class.forName("com.gesher.server.PackageEnabledStore$State");
+        Method installed = ApkPackage.class.getDeclaredMethod("installed", ApplicationInfo.class,
+                stateType, long.class);
         installed.setAccessible(true);
-        installed.invoke(apk, info);
+        installed.invoke(apk, info, enabledState.invoke(apk), 0L);
         require(info.uid == 12345 && "/fixture/base.apk".equals(info.sourceDir)
                 && (addon && parsed.isDefaultToDeviceProtectedStorage() ? "/fixture/data.device-protected"
                         : "/fixture/data").equals(info.dataDir)

@@ -43,8 +43,12 @@
 #include <string>
 #include <utility>
 
-// AT_RANDOM's bytes (compat/posix/src/procfs.cc).
+// AT_RANDOM's bytes and auxiliary vector metadata (compat/posix/src/procfs.cc).
 extern "C" const unsigned char* gesher_auxv_random(void);
+extern "C" const char* gesher_auxv_platform(void);
+extern "C" uint64_t gesher_auxv_hwcap(void);
+extern "C" uint64_t gesher_auxv_hwcap2(void);
+extern "C" const char* gesher_auxv_execfn(void);
 
 namespace gesher::bionic {
 
@@ -619,13 +623,16 @@ int BIONIC_SYSV Setpriority(int which, uint32_t who, int prio) {
 // gesher-base's, which /proc/self/auxv reports too.
 uint64_t BIONIC_SYSV Getauxval(uint64_t type) {
   switch (type) {
-    case 6: return 4096;                                     // AT_PAGESZ
-    case 11: case 12: return getuid();                       // AT_UID, AT_EUID
-    case 13: case 14: return getgid();                       // AT_GID, AT_EGID
-    case 16: case 26: return 0;                              // AT_HWCAP, AT_HWCAP2
-    case 17: return 100;                                     // AT_CLKTCK
-    case 23: return 0;                                       // AT_SECURE
-    case 25: return reinterpret_cast<uint64_t>(gesher_auxv_random());  // AT_RANDOM
+    case 6: return 4096;                                                 // AT_PAGESZ
+    case 11: case 12: return getuid();                                   // AT_UID, AT_EUID
+    case 13: case 14: return getgid();                                   // AT_GID, AT_EGID
+    case 15: return reinterpret_cast<uint64_t>(gesher_auxv_platform());  // AT_PLATFORM
+    case 16: return gesher_auxv_hwcap();                                 // AT_HWCAP
+    case 17: return 100;                                                 // AT_CLKTCK
+    case 23: return 0;                                                   // AT_SECURE
+    case 25: return reinterpret_cast<uint64_t>(gesher_auxv_random());    // AT_RANDOM
+    case 26: return gesher_auxv_hwcap2();                                // AT_HWCAP2
+    case 31: return reinterpret_cast<uint64_t>(gesher_auxv_execfn());    // AT_EXECFN
     default: return errno = kENOENT, 0;
   }
 }

@@ -2,18 +2,22 @@
 // Supports BRE (REG_BASIC) and ERE (REG_EXTENDED), REG_ICASE, REG_NOSUB,
 // REG_NEWLINE (NetBSD/Android per-byte LF anchor/negated-class semantics),
 // REG_PEND, REG_NOTBOL, REG_NOTEOL, and REG_STARTEND, with linear-time
-// leftmost-longest NFA execution for backreference-free patterns.
+// leftmost-longest whole-match NFA execution for backreference-free patterns.
 
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include "posix_regex_cnames.h"
 
 namespace gesher::bionic::posix_regex {
 
@@ -41,11 +45,14 @@ constexpr int kRegBadbr = 10;
 constexpr int kRegErange = 11;
 constexpr int kRegEspace = 12;
 constexpr int kRegBadrpt = 13;
+constexpr int kRegEmpty = 14;
 constexpr int kRegInvarg = 16;
 
 constexpr size_t kMaxDupCount = 255;
 constexpr size_t kMaxInsns = 65536;
 constexpr size_t kMaxBackrefSteps = 2000000;
+constexpr size_t kMaxParseDepth = 256;
+constexpr size_t kMaxWorkBytes = 64 * 1024 * 1024;
 
 struct CharClass {
   uint64_t bits[4]{};
@@ -81,6 +88,7 @@ struct Insn {
 struct Program {
   std::vector<Insn> insns;
   std::vector<CharClass> classes;
+  int32_t entry = -1;
   size_t nsub = 0;
   bool icase = false;
   bool nosub = false;
@@ -156,6 +164,7 @@ class Compiler {
     int32_t match_pc = Emit(Op::kMatch, 0, 0);
     if (match_pc < 0) return kRegEspace;
     Patch(root.exits, match_pc);
+    prog_.entry = root.start;
     if (prog_.insns.size() > kMaxInsns) return kRegEspace;
     out_prog = std::move(prog_);
     return kRegOk;
@@ -166,6 +175,7 @@ class Compiler {
     int32_t start = -1;
     std::vector<int32_t> exits;
     bool repeatable = false;
+    bool elided = false;
   };
 
   int32_t Emit(Op op, uint8_t b = 0, int32_t arg = 0, int32_t out1 = -1, int32_t out2 = -1) {
@@ -242,6 +252,7 @@ class Compiler {
     f.start = j;
     if (j >= 0) f.exits.push_back(j);
     f.repeatable = false;
+    f.elided = true;
     return f;
   }
 
@@ -260,12 +271,12 @@ class Compiler {
       } else {
         Patch(seq.exits, piece.start);
         seq.exits = std::move(piece.exits);
+        seq.elided = seq.elided && piece.elided;
       }
     }
-    if (!has_prev) {
-      seq = MakeEmptyFrag();
-      if (seq.start < 0) return kRegEspace;
-    }
+    // NetBSD permits an explicitly empty group, but rejects an empty expression
+    // or alternative, including one erased entirely by a {0} repetition.
+    if (!has_prev || seq.elided) return kRegEmpty;
     out = std::move(seq);
     return kRegOk;
   }
@@ -274,7 +285,7 @@ class Compiler {
   int ParseAtomSlice(size_t start_pos, size_t end_pos, bool at_piece_start, size_t base_nsub,
                      size_t max_nsub, Frag& out) {
     size_t saved_pos = pos_;
-    size_t saved_closed = closed_groups_;
+    const auto saved_closed = closed_groups_;
     pos_ = start_pos;
     prog_.nsub = base_nsub;
     int err = ParseAtom(out, at_piece_start, /*stop_on_rparen=*/true);
@@ -307,6 +318,10 @@ class Compiler {
         }
         if (ch == '{') {
           if (!atom.repeatable) return kRegBadrpt;
+          if (pos_ + 1 == pat_.size() ||
+              ((pat_[pos_ + 1] < '0' || pat_[pos_ + 1] > '9') && pat_[pos_ + 1] != ',')) {
+            return kRegBadrpt;
+          }
           size_t min_rep = 0;
           size_t max_rep = 0;
           bool unbounded = false;
@@ -324,6 +339,7 @@ class Compiler {
       if (pos_ < pat_.size() && pat_[pos_] == '*') {
         if (atom.repeatable) {
           ++pos_;
+          if (pos_ < pat_.size() && pat_[pos_] == '*') return kRegBadrpt;
           return ApplySimpleRep(atom, '*', out);
         }
       } else if (pos_ + 1 < pat_.size() && pat_[pos_] == '\\' && pat_[pos_ + 1] == '{') {
@@ -537,9 +553,11 @@ class Compiler {
         if (pos_ + 1 >= pat_.size()) return kRegEescape;
         char next = pat_[pos_ + 1];
         if (next == '(') return ParseGroup(/*basic_group=*/true, out);
+        if (next == ')') return kRegEparen;
+        if (next == '{') return kRegBadrpt;
         if (next >= '1' && next <= '9') {
           size_t idx = static_cast<size_t>(next - '0');
-          if (idx > closed_groups_) return kRegEsubreg;
+          if (!closed_groups_[idx]) return kRegEsubreg;
           pos_ += 2;
           prog_.has_backref = true;
           int32_t pc = Emit(Op::kBackref, 0, static_cast<int32_t>(idx));
@@ -577,6 +595,10 @@ class Compiler {
         out = Frag{pc, {pc}, false};
         return kRegOk;
       }
+      if ((next >= 'a' && next <= 'z') || (next >= 'A' && next <= 'Z') ||
+          next == '\'' || next == '`') {
+        return kRegEescape;
+      }
       pos_ += 2;
       return MakeByte(static_cast<uint8_t>(next), out);
     }
@@ -586,16 +608,33 @@ class Compiler {
   }
 
   int ParseGroup(bool basic_group, Frag& out) {
+    if (parse_depth_ >= kMaxParseDepth) return kRegEspace;
+    struct DepthScope {
+      size_t& depth;
+      explicit DepthScope(size_t& value) : depth(value) { ++depth; }
+      ~DepthScope() { --depth; }
+    } depth_scope(parse_depth_);
     pos_ += basic_group ? 2 : 1;
     ++prog_.nsub;
     size_t gid = prog_.nsub;
-    int32_t open_pc = prog_.nosub ? Emit(Op::kJump)
-                                  : Emit(Op::kSave, 0, static_cast<int32_t>(2 * gid));
+    if (gid < closed_groups_.size()) closed_groups_[gid] = false;
+    // NOSUB suppresses public results, not captures used by a later backreference.
+    int32_t open_pc = Emit(Op::kSave, 0, static_cast<int32_t>(2 * gid));
     if (open_pc < 0) return kRegEspace;
 
     Frag inner;
-    int err = ParseExpr(inner, /*stop_on_rparen=*/true);
-    if (err != kRegOk) return err;
+    const bool empty_group = basic_group
+                                 ? pos_ + 1 < pat_.size() && pat_[pos_] == '\\' &&
+                                       pat_[pos_ + 1] == ')'
+                                 : pos_ < pat_.size() && pat_[pos_] == ')';
+    if (empty_group) {
+      inner = MakeEmptyFrag();
+      if (inner.start < 0) return kRegEspace;
+    } else {
+      if (pos_ == pat_.size()) return kRegEparen;
+      int err = ParseExpr(inner, /*stop_on_rparen=*/true);
+      if (err != kRegOk) return err;
+    }
 
     if (basic_group) {
       if (pos_ + 1 >= pat_.size() || pat_[pos_] != '\\' || pat_[pos_ + 1] != ')') {
@@ -607,9 +646,8 @@ class Compiler {
       ++pos_;
     }
 
-    closed_groups_ = std::max(closed_groups_, gid);
-    int32_t close_pc = prog_.nosub ? Emit(Op::kJump)
-                                   : Emit(Op::kSave, 0, static_cast<int32_t>(2 * gid + 1));
+    if (gid < closed_groups_.size()) closed_groups_[gid] = true;
+    int32_t close_pc = Emit(Op::kSave, 0, static_cast<int32_t>(2 * gid + 1));
     if (close_pc < 0) return kRegEspace;
 
     prog_.insns[open_pc].out1 = inner.start;
@@ -620,20 +658,40 @@ class Compiler {
     return kRegOk;
   }
 
-  int ParseBracket(Frag& out) {
-    ++pos_;
-    if (pos_ >= pat_.size()) return kRegEbrack;
-    bool negated = false;
-    if (pat_[pos_] == '^') {
-      negated = true;
+  int ParseCollatingElement(char kind, uint8_t& value) {
+    const size_t start = pos_;
+    while (pos_ + 1 < pat_.size() && !(pat_[pos_] == kind && pat_[pos_ + 1] == ']')) {
       ++pos_;
     }
-    CharClass cls;
-    bool first = true;
-    bool closed = false;
-    bool have_prev_single = false;
-    uint8_t prev_single = 0;
+    if (pos_ + 1 >= pat_.size()) return kRegEbrack;
+    const std::string name = pat_.substr(start, pos_ - start);
+    pos_ += 2;
+    for (const auto& entry : detail::cnames) {
+      if (entry.name == nullptr) break;
+      if (name == entry.name) {
+        value = static_cast<uint8_t>(entry.code);
+        return kRegOk;
+      }
+    }
+    if (name.size() != 1) return kRegEcollate;
+    value = static_cast<uint8_t>(name[0]);
+    return kRegOk;
+  }
 
+  int ParseBracket(Frag& out) {
+    if (pat_.compare(pos_, 7, "[[:<:]]") == 0 || pat_.compare(pos_, 7, "[[:>:]]") == 0) {
+      const Op op = pat_[pos_ + 3] == '<' ? Op::kWordBeg : Op::kWordEnd;
+      pos_ += 7;
+      const int32_t pc = Emit(op);
+      if (pc < 0) return kRegEspace;
+      out = Frag{pc, {pc}, true};
+      return kRegOk;
+    }
+    ++pos_;
+    if (pos_ >= pat_.size()) return kRegEbrack;
+    const bool negated = pat_[pos_] == '^';
+    if (negated) ++pos_;
+    CharClass cls;
     auto add_single = [&](uint8_t c) {
       cls.Set(c);
       if (prog_.icase) {
@@ -641,86 +699,78 @@ class Compiler {
         cls.Set(FoldUpper(c));
       }
     };
-
-    while (pos_ < pat_.size()) {
-      if (pat_[pos_] == ']' && !first) {
-        ++pos_;
-        closed = true;
-        break;
+    auto parse_symbol = [&](uint8_t& c) -> int {
+      if (pos_ == pat_.size()) return kRegEbrack;
+      if (pos_ + 1 < pat_.size() && pat_[pos_] == '[' && pat_[pos_ + 1] == '.') {
+        pos_ += 2;
+        return ParseCollatingElement('.', c);
       }
-      first = false;
-
-      if (pat_[pos_] == '[' && pos_ + 1 < pat_.size() &&
-          (pat_[pos_ + 1] == ':' || pat_[pos_ + 1] == '.' || pat_[pos_ + 1] == '=')) {
-        char kind = pat_[pos_ + 1];
-        size_t end_tok = pos_ + 2;
-        while (end_tok + 1 < pat_.size() && !(pat_[end_tok] == kind && pat_[end_tok + 1] == ']')) {
-          ++end_tok;
-        }
-        if (end_tok + 1 >= pat_.size()) return kRegEbrack;
-        std::string token = pat_.substr(pos_ + 2, end_tok - (pos_ + 2));
-        pos_ = end_tok + 2;
-        if (kind == ':') {
-          CharClass named;
-          if (!AddPosixNamedClass(token, named)) return kRegEctype;
-          for (int i = 0; i < 256; ++i) {
-            if (named.Test(static_cast<unsigned char>(i))) {
-              add_single(static_cast<uint8_t>(i));
-            }
-          }
-          have_prev_single = false;
-          continue;
-        }
-        if (token.size() != 1) return kRegEcollate;
-        uint8_t ch = static_cast<uint8_t>(token[0]);
-        // Equivalence `[=c=]` or collating element `[.c.]` inside ASCII C locale.
-        if (pos_ < pat_.size() && pat_[pos_] == '-' &&
-            !(pos_ + 1 < pat_.size() && pat_[pos_ + 1] == ']')) {
-          have_prev_single = true;
-          prev_single = ch;
-        } else {
-          have_prev_single = false;
-        }
-        add_single(ch);
-        continue;
-      }
-
-      if (pat_[pos_] == '-' && have_prev_single && pos_ + 1 < pat_.size() && pat_[pos_ + 1] != ']') {
-        ++pos_;
-        uint8_t end_c = 0;
-        if (pat_[pos_] == '[' && pos_ + 1 < pat_.size() && pat_[pos_ + 1] == '.') {
-          size_t end_tok = pos_ + 2;
-          while (end_tok + 1 < pat_.size() &&
-                 !(pat_[end_tok] == '.' && pat_[end_tok + 1] == ']')) {
-            ++end_tok;
-          }
-          if (end_tok + 1 >= pat_.size()) return kRegEbrack;
-          if (end_tok - (pos_ + 2) != 1) return kRegEcollate;
-          end_c = static_cast<uint8_t>(pat_[pos_ + 2]);
-          pos_ = end_tok + 2;
-        } else {
-          end_c = static_cast<uint8_t>(pat_[pos_++]);
-        }
-        if (prev_single > end_c) return kRegErange;
-        for (int c = prev_single; c <= end_c; ++c) add_single(static_cast<uint8_t>(c));
-        have_prev_single = false;
-        continue;
-      }
-
-      uint8_t ch = static_cast<uint8_t>(pat_[pos_++]);
-      add_single(ch);
-      have_prev_single = true;
-      prev_single = ch;
+      c = static_cast<uint8_t>(pat_[pos_++]);
+      return kRegOk;
+    };
+    // ']' and '-' are literal at the beginning of a bracket expression.
+    if (pos_ < pat_.size() && (pat_[pos_] == ']' || pat_[pos_] == '-')) {
+      add_single(static_cast<uint8_t>(pat_[pos_++]));
     }
-
-    if (!closed) return kRegEbrack;
+    while (pos_ < pat_.size() && pat_[pos_] != ']' &&
+           !(pat_[pos_] == '-' && pos_ + 1 < pat_.size() && pat_[pos_ + 1] == ']')) {
+      if (pat_[pos_] == '-') return kRegErange;
+      if (pos_ + 1 < pat_.size() && pat_[pos_] == '[' && pat_[pos_ + 1] == ':') {
+        pos_ += 2;
+        if (pos_ == pat_.size()) return kRegEbrack;
+        const size_t start = pos_;
+        while (pos_ < pat_.size() &&
+               ((pat_[pos_] >= 'a' && pat_[pos_] <= 'z') ||
+                (pat_[pos_] >= 'A' && pat_[pos_] <= 'Z'))) {
+          ++pos_;
+        }
+        CharClass named;
+        if (!AddPosixNamedClass(pat_.substr(start, pos_ - start), named)) return kRegEctype;
+        if (pos_ == pat_.size()) return kRegEbrack;
+        if (pos_ + 1 >= pat_.size() || pat_[pos_] != ':' || pat_[pos_ + 1] != ']') {
+          return kRegEctype;
+        }
+        pos_ += 2;
+        for (int c = 0; c < 256; ++c) {
+          if (named.Test(static_cast<uint8_t>(c))) add_single(static_cast<uint8_t>(c));
+        }
+        continue;
+      }
+      if (pos_ + 1 < pat_.size() && pat_[pos_] == '[' && pat_[pos_ + 1] == '=') {
+        pos_ += 2;
+        if (pos_ == pat_.size()) return kRegEbrack;
+        if (pat_[pos_] == '-' || pat_[pos_] == ']') return kRegEcollate;
+        uint8_t c;
+        const int err = ParseCollatingElement('=', c);
+        if (err != kRegOk) return err;
+        add_single(c);
+        continue;
+      }
+      uint8_t first;
+      int err = parse_symbol(first);
+      if (err != kRegOk) return err;
+      uint8_t last = first;
+      if (pos_ + 1 < pat_.size() && pat_[pos_] == '-' && pat_[pos_ + 1] != ']') {
+        ++pos_;
+        err = parse_symbol(last);
+        if (err != kRegOk) return err;
+      }
+      if (first > last) return kRegErange;
+      for (int c = first; c <= last; ++c) add_single(static_cast<uint8_t>(c));
+    }
+    if (pos_ < pat_.size() && pat_[pos_] == '-') {
+      add_single('-');
+      ++pos_;
+    }
+    if (pos_ == pat_.size() || pat_[pos_] != ']') return kRegEbrack;
+    ++pos_;
     if (negated) {
       for (int i = 0; i < 4; ++i) cls.bits[i] = ~cls.bits[i];
       if (prog_.newline) cls.Clear('\n');
     }
-    int32_t cid = static_cast<int32_t>(prog_.classes.size());
+    const int32_t cid = static_cast<int32_t>(prog_.classes.size());
     prog_.classes.push_back(cls);
-    int32_t pc = Emit(Op::kClass, 0, cid);
+    const int32_t pc = Emit(Op::kClass, 0, cid);
     if (pc < 0) return kRegEspace;
     out = Frag{pc, {pc}, true};
     return kRegOk;
@@ -737,7 +787,8 @@ class Compiler {
   const std::string& pat_;
   bool extended_;
   size_t pos_ = 0;
-  size_t closed_groups_ = 0;
+  std::array<bool, 10> closed_groups_{};
+  size_t parse_depth_ = 0;
   Program prog_;
 };
 
@@ -754,6 +805,7 @@ class Matcher {
         num_slots_(track_caps_ ? 2 * (prog.nsub + 1) : 0) {}
 
   int Execute(std::vector<int32_t>& out_caps, int32_t& out_start, int32_t& out_end) {
+    if (len_ > static_cast<size_t>(std::numeric_limits<int32_t>::max())) return kRegEspace;
     if (prog_.has_backref) {
       return ExecuteBackref(out_caps, out_start, out_end);
     }
@@ -824,6 +876,10 @@ class Matcher {
 
   int ExecuteNfa(std::vector<int32_t>& out_caps, int32_t& out_start, int32_t& out_end) {
     const size_t ninsns = prog_.insns.size();
+    // Bound the two active sets, closure work list and their capture copies
+    // before allocating. A resource limit reports REG_ESPACE, never NOMATCH.
+    const size_t bytes_per_state = 8 * (sizeof(Thread) + num_slots_ * sizeof(int32_t)) + 16;
+    if (ninsns > kMaxWorkBytes / bytes_per_state) return kRegEspace;
     std::vector<int32_t> slot_of(ninsns, -1);
     std::vector<Thread> curr;
     std::vector<Thread> next;
@@ -866,6 +922,10 @@ class Matcher {
       stack.clear();
       stack.push_back(Frame{seed.pc, seed.caps});
       ++eps_epoch;
+      if (eps_epoch == 0) {
+        std::fill(eps_vis.begin(), eps_vis.end(), 0);
+        ++eps_epoch;
+      }
 
       while (!stack.empty()) {
         Frame f = std::move(stack.back());
@@ -930,11 +990,11 @@ class Matcher {
       }
     };
 
-    const bool anchored_bol = (prog_.insns[0].op == Op::kBol);
+    const bool anchored_bol = (prog_.insns[prog_.entry].op == Op::kBol);
     for (size_t pos = 0; pos <= len_; ++pos) {
       if (!has_match && (!anchored_bol || IsBol(pos))) {
         Thread fresh;
-        fresh.pc = 0;
+        fresh.pc = prog_.entry;
         fresh.start = static_cast<int32_t>(pos);
         if (num_slots_ > 0) fresh.caps.assign(num_slots_, -1);
         add_thread_step(curr, fresh, pos);
@@ -953,10 +1013,9 @@ class Matcher {
           add_thread_step(next, adv, pos + 1);
         }
       }
-      for (const Thread& t : next) slot_of[t.pc] = -1;
       curr.swap(next);
       next.clear();
-      // Preserve earliest-start priority even when injecting fresh threads next byte.
+      // Keep next's PC slots valid after the swap so a new start merges with curr.
     }
 
     if (!has_match) return kRegNomatch;
@@ -967,104 +1026,143 @@ class Matcher {
   }
 
   int ExecuteBackref(std::vector<int32_t>& out_caps, int32_t& out_start, int32_t& out_end) {
+    const size_t slots_size = 2 * (prog_.nsub + 1);
+    struct Frame {
+      int32_t pc;
+      size_t pos;
+      std::vector<int32_t> caps;
+      bool operator==(const Frame&) const = default;
+    };
+    struct FrameHash {
+      size_t operator()(const Frame& f) const {
+        size_t h = static_cast<uint32_t>(f.pc);
+        auto mix = [&](size_t value) {
+          h ^= value + size_t{0x9e3779b9} + (h << 6) + (h >> 2);
+        };
+        mix(f.pos);
+        for (int32_t cap : f.caps) mix(static_cast<uint32_t>(cap));
+        return h;
+      }
+    };
+    // Backtracking uses heap-owned continuations, never one native stack frame
+    // per input byte. Account conservatively for copies and hash-table overhead.
+    const size_t state_bytes = 2 * (sizeof(Frame) + slots_size * sizeof(int32_t)) + 64;
+    const size_t state_limit = kMaxWorkBytes / state_bytes;
+    if (state_limit < 2) return kRegEspace;
+    std::vector<Frame> pending;
+    std::unordered_set<Frame, FrameHash> splits_seen;
+    size_t steps = 0;
     bool has_match = false;
     int32_t best_start = 0;
     int32_t best_end = -1;
     std::vector<int32_t> best_caps;
-    size_t steps = 0;
-    bool budget_exceeded = false;
 
-    const size_t slots_size = 2 * (prog_.nsub + 1);
-    std::vector<int32_t> caps(slots_size, -1);
-
-    auto better_caps = [&](const std::vector<int32_t>& a, int32_t a_end) -> bool {
+    auto better_caps = [&](const std::vector<int32_t>& caps, int32_t end) {
       if (!has_match) return true;
-      if (a_end != best_end) return a_end > best_end;
+      if (end != best_end) return end > best_end;
       for (size_t i = 2; i < slots_size; i += 2) {
-        if (a[i] != best_caps[i]) {
-          if (a[i] < 0) return false;
+        if (caps[i] != best_caps[i]) {
+          if (caps[i] < 0) return false;
           if (best_caps[i] < 0) return true;
-          return a[i] < best_caps[i];
+          return caps[i] < best_caps[i];
         }
-        if (a[i + 1] != best_caps[i + 1]) return a[i + 1] > best_caps[i + 1];
+        if (caps[i + 1] != best_caps[i + 1]) return caps[i + 1] > best_caps[i + 1];
       }
       return false;
     };
 
-    auto dfs = [&](auto& self, int32_t pc, size_t pos, int32_t start_pos) -> void {
-      if (budget_exceeded) return;
-      if (++steps > kMaxBackrefSteps) {
-        budget_exceeded = true;
-        return;
-      }
-      if (pc < 0) return;
-      const Insn& insn = prog_.insns[pc];
-      switch (insn.op) {
-        case Op::kMatch:
-          if (better_caps(caps, static_cast<int32_t>(pos))) {
-            has_match = true;
-            best_start = start_pos;
-            best_end = static_cast<int32_t>(pos);
-            best_caps = caps;
-          }
-          return;
-        case Op::kJump:
-          self(self, insn.out1, pos, start_pos);
-          return;
-        case Op::kSplit:
-          self(self, insn.out1, pos, start_pos);
-          self(self, insn.out2, pos, start_pos);
-          return;
-        case Op::kBol:
-          if (IsBol(pos)) self(self, insn.out1, pos, start_pos);
-          return;
-        case Op::kEol:
-          if (IsEol(pos)) self(self, insn.out1, pos, start_pos);
-          return;
-        case Op::kWordBeg:
-          if (IsWordBeg(pos)) self(self, insn.out1, pos, start_pos);
-          return;
-        case Op::kWordEnd:
-          if (IsWordEnd(pos)) self(self, insn.out1, pos, start_pos);
-          return;
-        case Op::kSave: {
-          int32_t prev = caps[insn.arg];
-          caps[insn.arg] = static_cast<int32_t>(pos);
-          self(self, insn.out1, pos, start_pos);
-          caps[insn.arg] = prev;
-          return;
-        }
-        case Op::kByte:
-        case Op::kAny:
-        case Op::kClass:
-          if (pos < len_ && MatchConsumeOp(insn, static_cast<unsigned char>(begin_[pos]))) {
-            self(self, insn.out1, pos + 1, start_pos);
-          }
-          return;
-        case Op::kBackref: {
-          size_t idx = static_cast<size_t>(insn.arg);
-          int32_t rso = caps[2 * idx];
-          int32_t reo = caps[2 * idx + 1];
-          if (rso < 0 || reo < rso) return;
-          size_t rlen = static_cast<size_t>(reo - rso);
-          if (pos + rlen > len_) return;
-          for (size_t k = 0; k < rlen; ++k) {
-            unsigned char expected = static_cast<unsigned char>(begin_[rso + k]);
-            unsigned char actual = static_cast<unsigned char>(begin_[pos + k]);
-            if (prog_.icase ? (FoldLower(expected) != FoldLower(actual)) : (expected != actual)) {
-              return;
+    for (size_t start = 0; start <= len_; ++start) {
+      pending.clear();
+      splits_seen.clear();
+      pending.push_back(Frame{prog_.entry, start, std::vector<int32_t>(slots_size, -1)});
+      while (!pending.empty()) {
+        Frame current = std::move(pending.back());
+        pending.pop_back();
+        while (current.pc >= 0) {
+          if (++steps > kMaxBackrefSteps) return kRegEspace;
+          const Insn& insn = prog_.insns[current.pc];
+          switch (insn.op) {
+            case Op::kMatch:
+              if (better_caps(current.caps, static_cast<int32_t>(current.pos))) {
+                has_match = true;
+                best_start = static_cast<int32_t>(start);
+                best_end = static_cast<int32_t>(current.pos);
+                best_caps = current.caps;
+              }
+              current.pc = -1;
+              break;
+            case Op::kJump:
+              current.pc = insn.out1;
+              break;
+            case Op::kSplit:
+              // Every compiled cycle passes through a split. The whole capture
+              // state is part of the key, so an empty repetition terminates
+              // without discarding a distinct backreference/capture outcome.
+              if (splits_seen.find(current) != splits_seen.end()) {
+                current.pc = -1;
+                break;
+              }
+              if (pending.size() + splits_seen.size() + 2 > state_limit) return kRegEspace;
+              splits_seen.insert(current);
+              pending.push_back(Frame{insn.out2, current.pos, current.caps});
+              current.pc = insn.out1;
+              break;
+            case Op::kBol:
+              current.pc = IsBol(current.pos) ? insn.out1 : -1;
+              break;
+            case Op::kEol:
+              current.pc = IsEol(current.pos) ? insn.out1 : -1;
+              break;
+            case Op::kWordBeg:
+              current.pc = IsWordBeg(current.pos) ? insn.out1 : -1;
+              break;
+            case Op::kWordEnd:
+              current.pc = IsWordEnd(current.pos) ? insn.out1 : -1;
+              break;
+            case Op::kSave:
+              current.caps[insn.arg] = static_cast<int32_t>(current.pos);
+              current.pc = insn.out1;
+              break;
+            case Op::kByte:
+            case Op::kAny:
+            case Op::kClass:
+              if (current.pos < len_ &&
+                  MatchConsumeOp(insn, static_cast<unsigned char>(begin_[current.pos]))) {
+                ++current.pos;
+                current.pc = insn.out1;
+              } else {
+                current.pc = -1;
+              }
+              break;
+            case Op::kBackref: {
+              const size_t idx = static_cast<size_t>(insn.arg);
+              const int32_t rso = current.caps[2 * idx];
+              const int32_t reo = current.caps[2 * idx + 1];
+              if (rso < 0 || reo < rso) {
+                current.pc = -1;
+                break;
+              }
+              const size_t length = static_cast<size_t>(reo - rso);
+              bool matches = length <= len_ - current.pos;
+              for (size_t i = 0; matches && i < length; ++i) {
+                if (++steps > kMaxBackrefSteps) return kRegEspace;
+                const auto expected = static_cast<unsigned char>(begin_[rso + i]);
+                const auto actual = static_cast<unsigned char>(begin_[current.pos + i]);
+                // AOSP's OBACK_ compares the captured bytes with memcmp even
+                // when REG_ICASE was used to compile the capturing expression.
+                matches = expected == actual;
+              }
+              if (matches) {
+                current.pos += length;
+                current.pc = insn.out1;
+              } else {
+                current.pc = -1;
+              }
+              break;
             }
           }
-          self(self, insn.out1, pos + rlen, start_pos);
-          return;
         }
       }
-    };
-
-    for (size_t s = 0; s <= len_; ++s) {
-      std::fill(caps.begin(), caps.end(), -1);
-      dfs(dfs, 0, s, static_cast<int32_t>(s));
-      if (budget_exceeded) return kRegEspace;
       if (has_match) break;
     }
     if (!has_match) return kRegNomatch;

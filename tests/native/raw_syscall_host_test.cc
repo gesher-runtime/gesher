@@ -172,15 +172,78 @@ int main() {
             sub[0].begin == 0 && sub[0].end == 3 && sub[1].begin == 0 && sub[1].end == 1 &&
             sub[2].begin == 1 && sub[2].end == 3);
   free_regex(&re);
-  Check("POSIX leftmost-longest captures (foo|foobar)(bar|)",
-        compile(&re, "(foo|foobar)(bar|)", 1) == 0 && execute(&re, "foobar", 3, sub, 0) == 0 &&
+  Check("AOSP submatch preference (foo|foobar)(bar)?",
+        compile(&re, "(foo|foobar)(bar)?", 1) == 0 && execute(&re, "foobar", 3, sub, 0) == 0 &&
             sub[0].begin == 0 && sub[0].end == 6 && sub[1].begin == 0 && sub[1].end == 6 &&
-            sub[2].begin == 6 && sub[2].end == 6);
+            sub[2].begin == -1 && sub[2].end == -1);
   free_regex(&re);
   Check("BRE backreference matches repeated group",
         compile(&re, "\\(ab\\)\\1", 0) == 0 && execute(&re, "xxababzz", 2, sub, 0) == 0 &&
             sub[0].begin == 2 && sub[0].end == 6 && sub[1].begin == 2 && sub[1].end == 4);
   free_regex(&re);
+  // Expected results were checked against android-16.0.0_r4 bionic's
+  // upstream-netbsd regex sources, with the Android libc_netbsd build flags.
+  Check("top-level alternative uses its compiled entry",
+        compile(&re, "a|bb", 1) == 0 && execute(&re, "bb", 1, &match, 0) == 0 &&
+            match.begin == 0 && match.end == 2);
+  free_regex(&re);
+  Check("top-level alternative chooses longest match",
+        compile(&re, "a|aa", 1) == 0 && execute(&re, "aa", 1, &match, 0) == 0 &&
+            match.begin == 0 && match.end == 2);
+  free_regex(&re);
+  for (const char* pat : {"a*b", "a?b", "a{0}b", "a{0,2}b"}) {
+    Check("nullable leading expression uses its compiled entry",
+          compile(&re, pat, 1) == 0 && execute(&re, "b", 1, &match, 0) == 0 &&
+              match.begin == 0 && match.end == 1);
+    free_regex(&re);
+  }
+  Check("BRE backreference executor uses its compiled entry",
+        compile(&re, "a*\\(b\\)\\1", 0) == 0 &&
+            execute(&re, "bb", 1, &match, 0) == 0 && match.begin == 0 && match.end == 2);
+  free_regex(&re);
+  sub[0] = {11, 12};
+  sub[1] = {21, 22};
+  sub[2] = {31, 32};
+  Check("REG_NOSUB retains internal backreferences and leaves caller results alone",
+        compile(&re, "\\(ab\\)\\1", 4) == 0 && re.count == 1 &&
+            execute(&re, "abab", 3, sub, 0) == 0 &&
+            execute(&re, "abac", 0, nullptr, 0) == 1 &&
+            sub[0].begin == 11 && sub[0].end == 12 &&
+            sub[1].begin == 21 && sub[1].end == 22 &&
+            sub[2].begin == 31 && sub[2].end == 32);
+  free_regex(&re);
+  Check("empty captured BRE backreference matches an empty input",
+        compile(&re, "\\(a*\\)\\1", 0) == 0 && execute(&re, "", 2, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 0 && sub[1].begin == 0 && sub[1].end == 0);
+  free_regex(&re);
+  Check("REG_ICASE preserves AOSP byte-exact backreferences",
+        compile(&re, "\\(a\\)\\1", 2) == 0 && execute(&re, "aA", 0, nullptr, 0) == 1 &&
+            execute(&re, "AA", 2, sub, 0) == 0 && sub[0].begin == 0 && sub[0].end == 2);
+  free_regex(&re);
+  Check("BRE backreference cannot name an outer group still open",
+        compile(&re, "\\(\\(a\\)\\1\\)", 0) == 6);
+  for (const char* pat : {"", "a|", "|a", "(a|)", "a{0}"}) {
+    Check("AOSP rejects an empty expression or alternative", compile(&re, pat, 1) == 14);
+  }
+  Check("AOSP permits an explicitly empty group",
+        compile(&re, "()", 1) == 0 && execute(&re, "", 2, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 0 && sub[1].begin == 0 && sub[1].end == 0);
+  free_regex(&re);
+  Check("AOSP rejects unsupported alphabetic escapes", compile(&re, "\\d", 1) == 5);
+  Check("BRE unmatched closing group reports REG_EPAREN", compile(&re, "\\)", 0) == 8);
+  Check("BRE repeated quantifier reports REG_BADRPT", compile(&re, "a**", 0) == 13);
+  Check("ERE nonnumeric repetition reports REG_BADRPT", compile(&re, "a{x}", 1) == 13);
+  Check("AOSP named collating elements preserve positive-class LF",
+        compile(&re, "[[.newline.]]", 1 | 8) == 0 &&
+            execute(&re, "x\ny", 1, &match, 0) == 0 && match.begin == 1 && match.end == 2);
+  free_regex(&re);
+  Check("AOSP bracket word boundaries match",
+        compile(&re, "[[:<:]]a[[:>:]]", 1) == 0 &&
+            execute(&re, " a!", 1, &match, 0) == 0 && match.begin == 1 && match.end == 2);
+  free_regex(&re);
+  Check("AOSP rejects a range following a completed range", compile(&re, "[a-c-e]", 1) == 11);
+  Check("AOSP rejects a named class as a range endpoint", compile(&re, "[[:alpha:]-_]", 1) == 11);
+  Check("AOSP malformed named class reports REG_ECTYPE", compile(&re, "[[:a]]", 1) == 4);
   {
     Regex re_space{};
     Regex re_alpha{};

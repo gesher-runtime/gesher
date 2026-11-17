@@ -1,6 +1,7 @@
 # Runtime contracts added by the November 14 Android/Windows audit.
 # Track 50 supplies bounded RunTimed; track 94 supplies the framework boot path.
 . "$PSScriptRoot/../pthread-attribute-contracts.ps1"
+. "$PSScriptRoot/../package-enabled-state-contracts.ps1"
 
 # Exercise synthetic Hebrew/English permission dialogs on a never-shown desktop.
 # This is the production dialog implementation, with denial/keyboard/scroll checks.

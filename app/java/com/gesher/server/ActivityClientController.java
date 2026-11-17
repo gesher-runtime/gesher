@@ -40,7 +40,7 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public void activityResumed(IBinder token, boolean handleSplashScreenExit) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        if (r != null) mAtm.activityResumed(r);
+        if (r != null && mAtm.requireActivityOwner(r)) mAtm.activityResumed(r);
     }
 
     /** After TopResumedActivityChangeItem(false) (multi-resume, windows3 track). */
@@ -60,7 +60,7 @@ public final class ActivityClientController extends IActivityClientController.De
     public void activityStopped(IBinder token, Bundle state, PersistableBundle persistentState,
             HandoffActivityData handoffActivityData, CharSequence description) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        if (r != null) mAtm.activityStopped(r, state);
+        if (r != null && mAtm.requireActivityOwner(r)) mAtm.activityStopped(r, state, persistentState);
     }
 
     @Override

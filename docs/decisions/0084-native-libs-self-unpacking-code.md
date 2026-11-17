@@ -140,8 +140,8 @@ Android section header table past EOF, which Android's linker rejects).
   are not emulated (-ENOSYS).
 - `ptrace` (a process nobody traces) and `regcomp`/`regexec` (via
   `compat/bionic/posix_regex.h`) are now in the shim; Ijiami imports them.
-  Regex compilation and matching implement POSIX BRE/ERE syntax with
-  leftmost-longest submatch semantics, `REG_ICASE`, `REG_NOSUB`, `REG_NEWLINE`
+  Regex compilation and matching use a POSIX BRE/ERE compiler and NFA with
+  leftmost-longest whole-match selection, `REG_ICASE`, `REG_NOSUB`, `REG_NEWLINE`
   (excluding `\n` from `.` and negated `[^...]` classes while preserving `\n`
   in positive classes like `[[:space:]]` and `[[:cntrl:]]`, supporting
   line-internal `^`/`$` anchors around `\n` and preceding `\n` on
@@ -149,6 +149,8 @@ Android section header table past EOF, which Android's linker rejects).
   (such as `\/`), and bounded linear-time NFA matching for
   backreference-free patterns. Unsupported compilation flags return
   `REG_INVARG` instead of silently using different matching rules.
+  Repeated-subexpression capture selection still differs from AOSP and blocks
+  approval of this engine; see the [independent QA record](../research/bionic-regex-qa-2026-11-17.md).
 - Copies of shared mappings publish their changes at msync, munmap,
   mprotect and replacement, not continuously to another copy of the file.
 - Soundcore 3.9.7 now gets past its native libraries: both unpack, its

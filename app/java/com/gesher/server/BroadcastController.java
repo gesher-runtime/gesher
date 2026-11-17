@@ -23,6 +23,7 @@ import android.os.Parcel;
 import android.os.SystemClock;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -476,7 +477,7 @@ final class BroadcastController {
             ActivityInfo info = delivery.target.info;
             String pkg = delivery.target.packageName();
             String processName = info != null ? info.processName : delivery.target.registered.app.processName;
-            mAtm.withProcess(pkg, processName,
+            mAtm.withProcess(delivery.target.owner, info == null ? null : info.name, ApkPackage.ComponentKind.RECEIVER, processName,
                     "acknowledged broadcast to " + pkg, app -> {
                         synchronized (BroadcastController.this) {
                             if (delivery.finished || delivery.chain.active != delivery) return;
@@ -494,6 +495,11 @@ final class BroadcastController {
                         }
                         pumpOrdered();
                         maybeExitCurrent(app);
+                    }, () -> {
+                        synchronized (BroadcastController.this) {
+                            if (!delivery.dispatched) completeOrdered(delivery);
+                        }
+                        pumpOrdered();
                     });
         } catch (RuntimeException failed) {
             synchronized (this) { completeOrdered(delivery); }
@@ -858,22 +864,27 @@ final class BroadcastController {
             }
             long identity = Binder.clearCallingIdentity();
             try {
-                ActivityInfo target = batch.getValue().get(0).info;
-                mAtm.withProcess(target.packageName, target.processName,
-                        "broadcast to " + target.packageName, app -> {
-                    synchronized (BroadcastController.this) {
-                        for (ManifestDelivery delivery : batch.getValue()) {
-                            if (!mManifest.contains(delivery)) continue;
+                for (ManifestDelivery delivery : batch.getValue()) {
+                    ActivityInfo target = delivery.info;
+                    mAtm.withProcess(delivery.owner, target.name, ApkPackage.ComponentKind.RECEIVER, target.processName,
+                            "broadcast to " + target.packageName, app -> {
+                        synchronized (BroadcastController.this) {
+                            if (!mManifest.contains(delivery)) return;
                             if (app.exiting || mTimedOut.contains(app) || !deliveryCurrent(delivery)) {
                                 removeDelivery(delivery);
                             } else {
                                 delivery.app = app;
                             }
                         }
-                    }
-                    scheduleNext(app);
-                    mAtm.maybeExit(app);
-                });
+                        scheduleNext(app);
+                        mAtm.maybeExit(app);
+                    }, () -> {
+                        synchronized (BroadcastController.this) {
+                            if (!delivery.dispatched) removeDelivery(delivery);
+                        }
+                        pumpOrdered();
+                    });
+                }
             } catch (RuntimeException failedStart) {
                 synchronized (this) {
                     for (ManifestDelivery delivery : batch.getValue()) removeDelivery(delivery);
@@ -978,6 +989,8 @@ final class BroadcastController {
             if (mTimedOut.contains(app)) throw new SecurityException("Receiver process generation timed out");
             OrderedDelivery ordered = mOrderedActive.get(app);
             if (ordered != null) {
+                // Android accepts the active receiver's result even when package
+                // cleanup removed subsequent pending deliveries while it ran.
                 if (ordered.chain.ordered) {
                     if (resultData != null && resultData.length() > 65536) {
                         throw new IllegalArgumentException("Broadcast result data too large");
@@ -1120,7 +1133,42 @@ final class BroadcastController {
     private boolean deliveryCurrent(ManifestDelivery delivery) {
         return delivery.sender.lifetime.getAsBoolean()
                 && delivery.owner == mPm.get(delivery.info.packageName)
-                && !mPm.isRemovalPending(delivery.info.packageName);
+                && !mPm.isRemovalPending(delivery.info.packageName)
+                && delivery.owner.componentEnabled(delivery.info.name, ApkPackage.ComponentKind.RECEIVER);
+    }
+
+    /** Remove queued work, but retain an in-flight acknowledgement's unique slot. */
+    void cleanupDisabledPackageComponents(PackageManagerService.EnabledChange change) {
+        Set<ActivityTaskManagerService.ProcessRecord> reconsider = new HashSet<>();
+        synchronized (this) {
+            for (ManifestDelivery delivery : new ArrayList<>(mManifest)) {
+                if (!change.disables(mPm, delivery.owner, delivery.info.name, ApkPackage.ComponentKind.RECEIVER)) continue;
+                // ActivityThread acknowledges with its process Binder, not a delivery
+                // token. Reusing this slot before its finish would misattribute a late
+                // acknowledgement to an unrelated receiver in the same process.
+                if (!delivery.dispatched) {
+                    if (delivery.app != null) reconsider.add(delivery.app);
+                    removeDelivery(delivery);
+                }
+            }
+            for (OrderedBroadcast chain : mOrdered) {
+                for (int i = chain.targets.size() - 1; i >= chain.next; i--) {
+                    OrderedTarget target = chain.targets.get(i);
+                    if (disabledTarget(change, target)) chain.targets.remove(i);
+                }
+                OrderedDelivery active = chain.active;
+                if (active == null || !disabledTarget(change, active.target)) continue;
+                if (active.app != null) reconsider.add(active.app);
+                if (!active.dispatched) completeOrdered(active);
+            }
+        }
+        pumpOrdered();
+        for (ActivityTaskManagerService.ProcessRecord app : reconsider) scheduleNext(app);
+    }
+
+    private boolean disabledTarget(PackageManagerService.EnabledChange change, OrderedTarget target) {
+        return target.info == null ? target.owner == change.pkg && change.disablesApplication(mPm)
+                : change.disables(mPm, target.owner, target.info.name, ApkPackage.ComponentKind.RECEIVER);
     }
 
     /** The process went away: so did its registered receivers. */

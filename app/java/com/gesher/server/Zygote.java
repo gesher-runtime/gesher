@@ -27,8 +27,10 @@ public final class Zygote {
     static native int nativeSpawn(String commandLine, String[] setEnv, String[] unsetEnv,
             String logPath, boolean breakaway);
     static native long nativeStartTime(int pid);
+    static native long nativeChildStartTime(int pid);
     static native int nativeExitCode(int pid);
     static native boolean nativeKill(int pid);
+    static native boolean nativeKillChild(int pid, long startTime);
     static native boolean nativeJoinJob(int pid);
     static native long nativeLock(String name, int timeoutMs);
     static native void nativeUnlock(long handle);
@@ -77,6 +79,16 @@ public final class Zygote {
 
     public static boolean kill(int pid) {
         return pid > 0 && nativeKill(pid);
+    }
+
+    /** Creation identity from the retained handle of a process this VM spawned. */
+    static long childStartTime(int pid) {
+        return pid <= 0 ? 0 : nativeChildStartTime(pid);
+    }
+
+    /** End exactly this retained child generation; never reopen or fall back to a PID. */
+    static boolean killChild(int pid, long startTime) {
+        return pid > 0 && startTime > 0 && nativeKillChild(pid, startTime);
     }
 
     /** Puts {@code pid} (0: this process) in this process's kill-on-close job. */
