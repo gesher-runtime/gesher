@@ -23,12 +23,14 @@ Check 'network: Android HttpEngine requests over real ART and HTTP sockets' {
   $httpEngineOut
 } @('HttpEngineDeviceSmoke passed:')
 
-$httpPolicyOut = FixesRun ($dvmFixes + 'HttpEngineProtocolPolicyTest') 45
-$httpPolicyCode = $LASTEXITCODE
-Check 'network: engine HTTP/2 policy preserves ordinary headers on direct and async requests' {
-  if ($httpPolicyCode -ne 0) { throw "HTTP protocol policy failed: $httpPolicyOut" }
-  $httpPolicyOut
-} @('HttpEngineProtocolPolicyTest passed:')
+foreach ($httpPolicyMode in @('ordinary', 'global-enabled', 'global-disabled')) {
+  $httpPolicyOut = FixesRun ($dvmFixes + 'HttpEngineProtocolPolicyTest' + $httpPolicyMode) 45
+  $httpPolicyCode = $LASTEXITCODE
+  Check "network: HTTP/2 $httpPolicyMode engine isolation and request/response headers" {
+    if ($httpPolicyCode -ne 0) { throw "HTTP protocol policy failed: $httpPolicyOut" }
+    $httpPolicyOut
+  } @('HttpEngineProtocolPolicyTest passed:')
+}
 
 $http2Out = FixesRun ($dvmFixes + 'Http2DeviceSmoke') 45
 $http2Code = $LASTEXITCODE

@@ -212,6 +212,12 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      - name: HttpEngine provider, global factory and TLS protocol policy
+        timeout-minutes: 5
+        run: |
+          python3 tools/test_http_engine_policy.py --java-home "$JAVA_HOME" \
+            --okhttp-source third_party/aosp/external/okhttp
+
       # Restored and saved apart (actions/cache saves only when the whole
       # job passes, and the javac step may still fail): each is saved right
       # after it is built.

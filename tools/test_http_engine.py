@@ -76,7 +76,7 @@ def main():
                                 *([mode] if mode else [])], check=True, timeout=35)
             subprocess.run([sys.executable, str(ROOT / 'tools/test_http_engine_policy.py'),
                             '--java-home', str(args.java_home), '--okhttp-source', str(args.okhttp_source)],
-                           check=True, timeout=95)
+                           check=True, timeout=180)
 
 
 if __name__ == '__main__':

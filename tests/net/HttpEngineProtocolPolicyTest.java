@@ -22,6 +22,10 @@ public class HttpEngineProtocolPolicyTest {
             Field field = nativeConnection.getClass().getDeclaredField("delegate");
             field.setAccessible(true); nativeConnection = field.get(nativeConnection);
         }
+        if (nativeConnection.getClass().getName().equals("com.android.okhttp.internal.huc.HttpsURLConnectionImpl")) {
+            Field field = nativeConnection.getClass().getDeclaredField("delegate");
+            field.setAccessible(true); nativeConnection = field.get(nativeConnection);
+        }
         Field field = nativeConnection.getClass().getDeclaredField("client");
         field.setAccessible(true);
         Object client = field.get(nativeConnection);
@@ -83,15 +87,14 @@ public class HttpEngineProtocolPolicyTest {
         public void close() throws Exception { closed = true; listener.close(); thread.join(5000); }
     }
     public static void main(String[] args) throws Exception {
-        if (args.length == 1 && args[0].equals("--host")) {
-            Class<?> client = Class.forName("com.android.okhttp.OkHttpClient");
-            Object factory = Class.forName("com.android.okhttp.OkUrlFactory").getConstructor(client)
-                    .newInstance(client.getConstructor().newInstance());
-            URL.setURLStreamHandlerFactory((URLStreamHandlerFactory) factory);
-        }
+        List<String> modes = Arrays.asList(args);
+        if (modes.contains("--host")) System.setProperty("java.protocol.handler.pkgs", "gesher.http.policy");
         HttpEngine.Builder builder = new HttpEngine.Builder(new android.content.ContextWrapper(null));
         HttpEngine disabled = builder.setEnableHttp2(false).build();
         HttpEngine enabled = builder.setEnableHttp2(true).build();
+        HttpEngine installed = modes.contains("global-enabled") ? enabled
+                : modes.contains("global-disabled") ? disabled : null;
+        if (installed != null) URL.setURLStreamHandlerFactory(installed.createUrlStreamHandlerFactory());
         ExecutorService callbacks = Executors.newSingleThreadExecutor();
         try (Peer peer = new Peer()) {
             for (boolean enable : new boolean[]{false, true}) {
@@ -124,9 +127,13 @@ public class HttpEngineProtocolPolicyTest {
 
             CompletableFuture<Void> complete = new CompletableFuture<>();
             UrlRequest request = disabled.newUrlRequestBuilder(peer.url("/redirect").toString(), callbacks, new UrlRequest.Callback() {
-                public void onRedirectReceived(UrlRequest r, UrlResponseInfo i, String url) { r.followRedirect(); }
+                public void onRedirectReceived(UrlRequest r, UrlResponseInfo i, String url) {
+                    if (!Collections.singletonList("/final").equals(i.getHeaders().getAsMap().get("Location")))
+                        throw new IllegalStateException("First response header disappeared");
+                    r.followRedirect();
+                }
                 public void onResponseStarted(UrlRequest r, UrlResponseInfo i) {
-                    if (!i.getNegotiatedProtocol().equals("http/1.1")) complete.completeExceptionally(new AssertionError("Fabricated protocol"));
+                    if (!i.getNegotiatedProtocol().equals("http/1.1")) throw new IllegalStateException("Fabricated protocol");
                     r.read(ByteBuffer.allocateDirect(32));
                 }
                 public void onReadCompleted(UrlRequest r, UrlResponseInfo i, ByteBuffer b) { b.clear(); r.read(b); }
@@ -144,6 +151,38 @@ public class HttpEngineProtocolPolicyTest {
             HttpURLConnection error = (HttpURLConnection) disabled.openConnection(peer.url("/error"));
             check(error.getResponseCode() == 404 && body(error.getErrorStream()).equals("PASS"), "Error stream delegation");
             peer.request(); error.disconnect();
+
+            ProxySelector previous = ProxySelector.getDefault();
+            ProxySelector.setDefault(new ProxySelector() {
+                public List<Proxy> select(URI uri) {
+                    return Collections.singletonList(new Proxy(Proxy.Type.HTTP, peer.listener.getLocalSocketAddress()));
+                }
+                public void connectFailed(URI uri, SocketAddress address, IOException error) {}
+            });
+            try {
+                HttpURLConnection proxied = (HttpURLConnection) disabled.openConnection(new URL("http://policy.invalid/proxy"));
+                check(body(proxied.getInputStream()).equals("PASS") && proxied.usingProxy(), "Platform proxy selection was bypassed");
+                check(peer.request().get(":request").startsWith("GET http://policy.invalid/proxy "), "HTTP proxy received the wrong target");
+                proxied.disconnect();
+            } finally { ProxySelector.setDefault(previous); }
+
+            for (String scheme : new String[]{"http", "https"}) {
+                URLStreamHandler handler = disabled.createUrlStreamHandlerFactory().createURLStreamHandler(scheme);
+                URL factoryDefault = new URL(null, scheme + "://localhost/default", handler);
+                check(factoryDefault.getDefaultPort() == (scheme.equals("http") ? 80 : 443), "Factory default port");
+                if (installed != null) check(new URL(scheme + "://localhost/default").getDefaultPort()
+                        == (scheme.equals("http") ? 80 : 443), "Global factory default port");
+                policy(disabled.openConnection(new URL(scheme + "://localhost/default")), false);
+                policy(enabled.openConnection(new URL(scheme + "://localhost/default")), true);
+            }
+            if (installed != null) {
+                installed.shutdown();
+                HttpEngine independent = installed == enabled ? disabled : enabled;
+                HttpURLConnection afterShutdown = (HttpURLConnection) independent.openConnection(peer.url("/independent"));
+                policy(afterShutdown, independent == enabled);
+                check(body(afterShutdown.getInputStream()).equals("PASS"), "Another engine's shutdown broke direct requests");
+                peer.request(); afterShutdown.disconnect();
+            }
         } finally { callbacks.shutdownNow(); disabled.shutdown(); enabled.shutdown(); }
         System.out.println("HttpEngineProtocolPolicyTest passed: " + checks + " actual provider and wire checks");
     }

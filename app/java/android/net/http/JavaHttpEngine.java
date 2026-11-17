@@ -11,6 +11,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** URLConnection supplies proxy selection, Android network security config and TLS. */
 final class JavaHttpEngine extends HttpEngine {
+    // Capture the platform handlers before an engine's factory can be installed.
+    // Explicit requests must not inherit another engine's protocol/network policy
+    // or depend on that engine remaining open after global factory installation.
+    private static final URL HTTP_BASE = transportBase("http://localhost/");
+    private static final URL HTTPS_BASE = transportBase("https://localhost/");
     final String agent;
     final boolean http2Enabled;
     final ExecutorService io = Executors.newCachedThreadPool(r -> {
@@ -38,8 +43,14 @@ final class JavaHttpEngine extends HttpEngine {
         // protocol setters. Keep a returned connection from changing engine policy.
         return androidConnection ? new JavaEngineConnection((HttpURLConnection) connection) : connection;
     }
+    private static URL transportBase(String value) {
+        try { return new URL(value); }
+        catch (MalformedURLException e) { throw new ExceptionInInitializerError(e); }
+    }
     private static URLConnection openTransport(URL url, Network network) throws IOException {
-        return network == null ? url.openConnection() : network.openConnection(url);
+        URL base = url.getProtocol().equals("http") ? HTTP_BASE : HTTPS_BASE;
+        URL target = new URL(base, url.toExternalForm());
+        return network == null ? target.openConnection() : network.openConnection(target);
     }
 
     private static boolean isAndroidHttpConnection(URLConnection connection) {
@@ -65,18 +76,13 @@ final class JavaHttpEngine extends HttpEngine {
     }
 
     @Override public URLStreamHandlerFactory createUrlStreamHandlerFactory() {
-        // Use a URL constructed before installing the returned handler, so that
-        // opening it cannot recursively re-enter this factory.
-        final URL http, https;
-        try { http=new URL("http://localhost/"); https=new URL("https://localhost/"); }
-        catch (MalformedURLException e) { throw new IllegalArgumentException(e); }
         return protocol -> {
             if (!protocol.equals("http") && !protocol.equals("https")) return null;
-            final URL base=protocol.equals("http") ? http : https;
             return new URLStreamHandler() {
                 @Override protected URLConnection openConnection(URL url) throws IOException {
-                    return JavaHttpEngine.this.openConnection(new URL(base, url.toExternalForm()));
+                    return JavaHttpEngine.this.openConnection(url);
                 }
+                @Override protected int getDefaultPort() { return protocol.equals("http") ? 80 : 443; }
             };
         };
     }
@@ -145,7 +151,9 @@ final class JavaHttpEngine extends HttpEngine {
                     ? Objects.toString(connection.getHeaderField("X-Android-Selected-Protocol"), "http/1.1")
                     : "http/1.1";
             List<Map.Entry<String,String>> values=new ArrayList<>();
-            for (int i=1;;i++) {
+            // Android OkHttp starts real fields at zero; other providers put the
+            // unnamed status line there. Preserve both layouts without losing a field.
+            for (int i=0;;i++) {
                 String name=connection.getHeaderFieldKey(i), value=connection.getHeaderField(i);
                 if (name==null && value==null) break;
                 if (name!=null && value!=null) values.add(new AbstractMap.SimpleImmutableEntry<>(name,value));
