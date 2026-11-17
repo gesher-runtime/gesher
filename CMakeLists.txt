@@ -146,6 +146,10 @@ add_executable(pipe_contract_test tests/native/pipe_contract_test.cc)
 target_compile_options(pipe_contract_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(pipe_contract_test PRIVATE gesher_posix)
 
+# Diagnostic only: ordinary native CRT, without Gesher's POSIX interception.
+add_executable(pipe_native_backend_probe tests/native/pipe_native_backend_probe.cc)
+target_compile_options(pipe_native_backend_probe PRIVATE -Wall -Wextra -Werror)
+
 # libutils' Looper over gesher-base's epoll and eventfd, RefBase, String8;
 # also run in CI on Windows.
 add_executable(libutils_probe probes/system/libutils_probe.cc)

@@ -1,0 +1,119 @@
+name: pipe-native-backend-probe
+
+on:
+  push:
+    branches: ['feat/n30-pipe-semantics']
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - 'tests/native/pipe_native_backend_probe.cc'
+      - '.github/workflows/pipe-native-backend-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: pipe-native-probe-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+env:
+  LLVM_MINGW_TAG: '20261006'
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  build:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      source: ${{ steps.identity.outputs.source }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Exact diagnostic source
+        id: identity
+        shell: bash
+        run: |
+          source_commit=$(git rev-parse HEAD)
+          echo "source=$source_commit" >> "$GITHUB_OUTPUT"
+          echo "PIPE_NATIVE_PROBE_SOURCE=$source_commit"
+          mkdir -p pipe-native-probe
+          echo "$source_commit" > pipe-native-probe/source.txt
+      - name: Cache pinned toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchain
+          key: ${{ env.LLVM_MINGW_NAME }}
+      - name: Fetch pinned llvm-mingw
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p ~/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
+            | tar -xJ -C ~/toolchain
+      - name: Build ordinary native CRT probe
+        shell: bash
+        run: |
+          "$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++" \
+            -std=c++20 -Wall -Wextra -Werror -static \
+            tests/native/pipe_native_backend_probe.cc \
+            -o pipe-native-probe/pipe_native_backend_probe.exe
+          sha256sum pipe-native-probe/pipe_native_backend_probe.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pipe-native-probe-${{ steps.identity.outputs.source }}
+          path: pipe-native-probe/
+          if-no-files-found: error
+  observe:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pipe-native-probe-${{ needs.build.outputs.source }}
+          path: pipe-native-probe
+      - name: Observe actual Windows pipe and ordinary CRT behavior
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE: ${{ needs.build.outputs.source }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location pipe-native-probe
+          $source = (Get-Content source.txt -Raw).Trim()
+          if ($source -ne $env:EXPECTED_SOURCE) { throw 'Diagnostic source identity mismatch' }
+          Write-Host "PIPE_NATIVE_PROBE_SOURCE=$source"
+          Write-Host 'DIAGNOSTIC_ONLY production_backend_validated=0'
+          Get-FileHash pipe_native_backend_probe.exe -Algorithm SHA256 | Format-List
+          $probe = Start-Process -FilePath .\pipe_native_backend_probe.exe -PassThru `
+            -RedirectStandardOutput native-observations.log -RedirectStandardError native-errors.log
+          if (-not $probe.WaitForExit(60000)) {
+            & taskkill.exe /PID $probe.Id /T /F
+            Get-Content native-observations.log
+            Get-Content native-errors.log
+            throw 'Native transport diagnostic timed out; implementation remains unverified'
+          }
+          $probe.Refresh()
+          Get-Content native-observations.log
+          Get-Content native-errors.log
+          if ($probe.ExitCode -ne 0) {
+            throw "Native candidate assumptions failed: exit $($probe.ExitCode). This is not a POSIX backend validation."
+          }
+          Write-Host 'Native observations completed. Production POSIX QA remains a separate required gate.'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pipe-native-observations-${{ matrix.os }}-${{ needs.build.outputs.source }}
+          path: |
+            pipe-native-probe/source.txt
+            pipe-native-probe/native-observations.log
+            pipe-native-probe/native-errors.log
+          if-no-files-found: error
