@@ -118,6 +118,23 @@ struct Dataset {
   std::vector<Packet> packets;
 };
 
+Format MetadataFormat() {
+  Format format(AMediaFormat_new());
+  if (format) AMediaFormat_setString(format.get(), "mime", "application/gyro");
+  return format;
+}
+
+bool AddMetadata(Dataset* data) {
+  auto format = MetadataFormat();
+  if (!format) return false;
+  const size_t track = data->tracks.size();
+  data->tracks.push_back(std::move(format));
+  data->packets.push_back({track, 215000, 0, {0x01, 0x00, 0xfe}});
+  data->packets.push_back({track, 248333, 0, {0x02, 0x17}});
+  data->packets.push_back({track, 312175, 0, {0x03, 0x42, 0xff, 0x00}});
+  return true;
+}
+
 bool Load(const std::string& path, Dataset* out) {
   Reader input(path);
   const auto magic = input.Bytes(8);
@@ -263,6 +280,10 @@ void Write(const Api& api, const Dataset& data, const std::string& path, OutputF
   ok = ok && api.location(muxer.get(), 45.125f, -75.25f) ==
       (mp4 ? AMEDIA_OK : AMEDIA_ERROR_INVALID_OPERATION);
   if (mp4) ok = ok && api.location(muxer.get(), 91, 0) == AMEDIA_ERROR_UNKNOWN;
+  if (!mp4) {
+    auto metadata = MetadataFormat();
+    ok = ok && metadata && api.add(muxer.get(), metadata.get()) == AMEDIA_ERROR_UNKNOWN;
+  }
   Format retained;
   for (size_t i = 0; i < data.tracks.size(); ++i) {
     Format original(AMediaFormat_new());
@@ -402,8 +423,11 @@ std::string Run() {
     for (const auto& test : cases) {
       Dataset data;
       const bool loaded = Load(std::string(fixtures) + "/" + test.input + ".bin", &data);
-      report.Check(loaded, std::string("independent-encoded-fixture ") + test.input);
-      if (!loaded) continue;
+      const bool mp4 = test.format == AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4 ||
+          test.format == AMEDIAMUXER_OUTPUT_FORMAT_THREE_GPP;
+      const bool ready = loaded && (!mp4 || AddMetadata(&data));
+      report.Check(ready, std::string("independent-encoded-fixture ") + test.input);
+      if (!ready) continue;
       // Race the first Ogg writers, before any ordinary Ogg output warms CRC.
       if (test.format == AMEDIAMUXER_OUTPUT_FORMAT_OGG) OggBoundaries(api, data, output, &report);
       for (bool blocked : {false, true}) {

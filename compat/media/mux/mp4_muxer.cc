@@ -4,7 +4,8 @@
 // written at the end), then the moov: per track tkhd, mdhd, hdlr and the
 // sample tables (stts from the samples' times, stss for video, stsz, one sample
 // a chunk in co64), the sample description (avc1 + avcC from the SPS and PPS,
-// mp4a + esds from the AudioSpecificConfig, Opus + dOps from the OpusHead), and
+// mp4a + esds from the AudioSpecificConfig, Opus + dOps from the OpusHead,
+// or mett for application metadata), and
 // an edit list where a track starts after the first.
 
 #include <errno.h>
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 
 #include <media/NdkMediaFormat.h>
 
@@ -114,9 +116,11 @@ class Box {
   std::vector<size_t> starts_;
 };
 
+enum class TrackType { kAudio, kVideo, kMetadata };
+
 struct Track {
   std::string mime;
-  bool video = false;
+  TrackType type = TrackType::kAudio;
   int width = 0, height = 0;
   uint32_t rate = 0, channels = 0;
   std::vector<std::vector<uint8_t>> csd;
@@ -126,6 +130,22 @@ struct Track {
   std::vector<uint32_t> keys;  // 1-based
   uint32_t timescale = 90000;
 };
+
+bool IsMetadataMime(const std::string& mime) {
+  constexpr std::string_view kPrefix = "application/";
+  return mime.size() >= kPrefix.size() &&
+      std::equal(kPrefix.begin(), kPrefix.end(), mime.begin(), [](char expected, char actual) {
+        if (actual >= 'A' && actual <= 'Z') actual += 'a' - 'A';
+        return expected == actual;
+      });
+}
+
+// Metadata uses a 90 kHz clock. Convert positions relative to the first sample
+// before subtracting them so fractional ticks do not accumulate across a track.
+uint64_t MetadataTicks(int64_t elapsed_us) {
+  return static_cast<uint64_t>(elapsed_us / 1000) * 90 +
+      static_cast<uint64_t>(elapsed_us % 1000 * 90 + 500) / 1000;
+}
 
 std::vector<uint8_t> StripStartCode(const std::vector<uint8_t>& nal) {
   size_t i = 0;
@@ -152,8 +172,13 @@ class Mp4Muxer : public Muxer {
     }
     Track t;
     t.mime = f.Mime();
-    t.video = t.mime.rfind("video/", 0) == 0;
-    if (t.mime != "video/avc" && t.mime != "audio/mp4a-latm" && t.mime != "audio/opus") {
+    if (t.mime == "video/avc") {
+      t.type = TrackType::kVideo;
+    } else if (IsMetadataMime(t.mime)) {
+      t.type = TrackType::kMetadata;
+      tracks_.push_back(std::move(t));
+      return static_cast<int>(tracks_.size() - 1);
+    } else if (t.mime != "audio/mp4a-latm" && t.mime != "audio/opus") {
       *error = "MPEG-4: unsupported track type " + t.mime;
       return -1;
     }
@@ -166,7 +191,9 @@ class Mp4Muxer : public Muxer {
       std::vector<uint8_t> b;
       if (f.GetBuffer(key, &b) && !b.empty()) t.csd.push_back(b);
     }
-    t.timescale = t.video ? 90000 : (t.mime == "audio/opus" ? 48000 : std::max<uint32_t>(t.rate, 8000));
+    if (t.type == TrackType::kAudio) {
+      t.timescale = t.mime == "audio/opus" ? 48000 : std::max<uint32_t>(t.rate, 8000);
+    }
     tracks_.push_back(std::move(t));
     return static_cast<int>(tracks_.size() - 1);
   }
@@ -204,6 +231,23 @@ class Mp4Muxer : public Muxer {
       return false;
     }
     Track& t = tracks_[static_cast<size_t>(index)];
+    if (t.type == TrackType::kMetadata) {
+      constexpr size_t kMaxMetadataSampleSize = 64 * 1024 * 1024;
+      if (size >= kMaxMetadataSampleSize || time_us < 0 ||
+          (!t.times.empty() && time_us < t.times.back())) {
+        *error = "MPEG-4: invalid metadata sample size or timestamp";
+        return false;
+      }
+      if (size == 0 || (flags & 2)) return true;
+      if (!t.times.empty()) {
+        const uint64_t ticks = MetadataTicks(time_us - t.times.front());
+        const uint64_t last_ticks = MetadataTicks(t.times.back() - t.times.front());
+        if (ticks + (ticks - last_ticks) > UINT32_MAX) {
+          *error = "MPEG-4: metadata duration exceeds the track timescale range";
+          return false;
+        }
+      }
+    }
     if (flags & 2) {
       // Codec config: the track's csd where its format had none.
       if (t.csd.empty()) {
@@ -242,7 +286,9 @@ class Mp4Muxer : public Muxer {
     t.offsets.push_back(pos_);
     t.sizes.push_back(static_cast<uint32_t>(n));
     t.times.push_back(time_us);
-    if (!t.video || (flags & 1)) t.keys.push_back(static_cast<uint32_t>(t.sizes.size()));
+    if (t.type == TrackType::kVideo && (flags & 1)) {
+      t.keys.push_back(static_cast<uint32_t>(t.sizes.size()));
+    }
     pos_ += n;
     return true;
   }
@@ -285,7 +331,18 @@ class Mp4Muxer : public Muxer {
   std::vector<uint32_t> Durations(const Track& t) const {
     std::vector<uint32_t> d;
     const size_t n = t.times.size();
-    uint32_t fallback = t.video ? t.timescale / 30 : (t.mime == "audio/opus" ? 960 : 1024);
+    if (t.type == TrackType::kMetadata) {
+      uint64_t last_ticks = 0;
+      for (size_t i = 1; i < n; i++) {
+        const uint64_t ticks = MetadataTicks(t.times[i] - t.times.front());
+        d.push_back(static_cast<uint32_t>(ticks - last_ticks));
+        last_ticks = ticks;
+      }
+      if (n > 0) d.push_back(d.empty() ? 0 : d.back());
+      return d;
+    }
+    const uint32_t fallback = t.type == TrackType::kVideo ? t.timescale / 30 :
+        (t.mime == "audio/opus" ? 960 : 1024);
     for (size_t i = 0; i + 1 < n; i++) {
       int64_t delta = t.times[i + 1] - t.times[i];
       uint32_t v = delta > 0 ? static_cast<uint32_t>(delta * t.timescale / 1000000) : 1;
@@ -347,6 +404,8 @@ class Mp4Muxer : public Muxer {
   }
 
   void Trak(Box* b, const Track& t, uint32_t id, const std::vector<uint32_t>& dur, int64_t start) const {
+    const bool video = t.type == TrackType::kVideo;
+    const bool audio = t.type == TrackType::kAudio;
     uint64_t total = 0;
     for (uint32_t d : dur) total += d;
     const uint64_t track_ms = total * 1000 / t.timescale;
@@ -360,10 +419,10 @@ class Mp4Muxer : public Muxer {
     b->U32(static_cast<uint32_t>(track_ms + offset_us / 1000));
     b->Zeros(8);
     b->U16(0);
-    b->U16(t.video ? 0 : 1);
-    b->U16(t.video ? 0 : 0x0100);
+    b->U16(audio ? 1 : 0);
+    b->U16(audio ? 0x0100 : 0);
     b->U16(0);
-    b->Matrix(t.video ? rotation_ : 0);
+    b->Matrix(video ? rotation_ : 0);
     b->U32(static_cast<uint32_t>(t.width) << 16);
     b->U32(static_cast<uint32_t>(t.height) << 16);
     b->End();
@@ -392,19 +451,22 @@ class Mp4Muxer : public Muxer {
     b->End();
     b->FullBegin("hdlr", 0, 0);
     b->U32(0);
-    b->Bytes(t.video ? "vide" : "soun", 4);
+    b->Bytes(video ? "vide" : (audio ? "soun" : "meta"), 4);
     b->Zeros(12);
-    const char* name = t.video ? "VideoHandle" : "SoundHandle";
+    const char* name = video ? "VideoHandle" : (audio ? "SoundHandle" : "MetadHandle");
     b->Bytes(name, strlen(name) + 1);
     b->End();
     b->Begin("minf");
-    if (t.video) {
+    if (video) {
       b->FullBegin("vmhd", 0, 1);
       b->Zeros(8);
       b->End();
-    } else {
+    } else if (audio) {
       b->FullBegin("smhd", 0, 0);
       b->Zeros(4);
+      b->End();
+    } else {
+      b->FullBegin("nmhd", 0, 0);
       b->End();
     }
     b->Begin("dinf");
@@ -435,7 +497,7 @@ class Mp4Muxer : public Muxer {
       b->U32(d);
     }
     b->End();
-    if (t.video) {
+    if (video) {
       b->FullBegin("stss", 0, 0);
       b->U32(static_cast<uint32_t>(t.keys.size()));
       for (uint32_t k : t.keys) b->U32(k);
@@ -465,6 +527,15 @@ class Mp4Muxer : public Muxer {
   }
 
   void SampleEntry(Box* b, const Track& t) const {
+    if (t.type == TrackType::kMetadata) {
+      b->Begin("mett");
+      b->Zeros(6);  // SampleEntry reserved field.
+      b->U16(1);    // First (self-contained) data reference.
+      b->U8(0);     // Empty content_encoding string.
+      b->Bytes(t.mime.c_str(), t.mime.size() + 1);
+      b->End();
+      return;
+    }
     if (t.mime == "video/avc") {
       b->Begin("avc1");
       b->Zeros(6);

@@ -282,15 +282,33 @@ bool PacketOracle(const std::string& fixture, const std::string& output, bool sh
   return ok;
 }
 
+bool TimedMetadata(Extractor* extractor, size_t track) {
+  const std::array<Sample, 3> expected = {{
+      {{0x01, 0x00, 0xfe}, 215000},
+      {{0x02, 0x17}, 248333},
+      {{0x03, 0x42, 0xff, 0x00}, 312175},
+  }};
+  auto reader = extractor->OpenTrack(track);
+  if (!reader) return false;
+  Sample actual;
+  for (const auto& sample : expected) {
+    if (reader->Read(&actual) != 0 || actual.data != sample.data ||
+        std::llabs(actual.time_us - sample.time_us) > 11) {
+      return false;
+    }
+  }
+  return reader->Read(&actual) == 1;
+}
+
 void Verify(const std::string& path, const std::string& video_mime, const std::string& audio_mime,
             double frequency, bool mp4, bool short_audio = false) {
   std::string error;
   auto source = OpenFileSource(path, &error);
   auto extractor = source ? Extractor::Open(std::move(source), &error) : nullptr;
   if (!extractor) { Check(false, "extract " + path + ": " + error); return; }
-  const size_t expected = video_mime.empty() ? 1 : 2;
+  const size_t expected = (video_mime.empty() ? 1 : 2) + (mp4 ? 1 : 0);
   bool ok = extractor->TrackCount() == expected;
-  unsigned video = 0, audio = 0;
+  unsigned video = 0, audio = 0, metadata = 0;
   for (size_t i = 0; i < extractor->TrackCount(); ++i) {
     Format format = extractor->TrackFormat(i);
     const std::string mime = format.Mime();
@@ -300,12 +318,15 @@ void Verify(const std::string& path, const std::string& video_mime, const std::s
     } else if (mime == audio_mime) {
       ++audio;
       ok = Audio(extractor.get(), i, format, frequency, path, short_audio) && ok;
+    } else if (mp4 && mime == "application/gyro") {
+      ++metadata;
+      ok = TimedMetadata(extractor.get(), i) && ok;
     } else { ok = false; }
   }
   if (mp4) ok = Mp4Metadata(path) && ok;
-  ok = ok && audio == 1 && video == (video_mime.empty() ? 0u : 1u);
-  std::printf("media4 muxer container trace: %s; extractor %s; tracks %zu video %u audio %u; metadata %s\n",
-      path.c_str(), extractor->Name().c_str(), extractor->TrackCount(), video, audio,
+  ok = ok && audio == 1 && video == (video_mime.empty() ? 0u : 1u) && metadata == (mp4 ? 1u : 0u);
+  std::printf("media4 muxer container trace: %s; extractor %s; tracks %zu video %u audio %u timed metadata %u; %s\n",
+      path.c_str(), extractor->Name().c_str(), extractor->TrackCount(), video, audio, metadata,
       mp4 ? "90-degree matrix and exact ISO-6709 required" : "container codec metadata required");
   Check(ok, "actual-container-decode " + path);
 }
