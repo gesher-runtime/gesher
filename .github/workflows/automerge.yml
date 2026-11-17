@@ -1,41 +1,32 @@
 name: automerge
 
-# Merges a PR labelled `automerge` once CI is green on its current head.
-# Rules live in .github/scripts/automerge.js. This workflow only ever runs the
-# default branch's copy of that script; it never checks out PR code.
+# Records exact-head label/QA approval and enables native merge-queue waiting.
+# Only default-branch scripts execute with this workflow's write permissions.
 
 on:
   pull_request_target:
-    types: [opened, labeled, synchronize, reopened, ready_for_review]
-  workflow_run:
-    workflows: [ci, arm64-windows]
-    types: [completed]
-  # External checks and manually dispatched workflows may finish after both
-  # watched workflows. Re-evaluate their recorded approvals without new labels.
-  schedule:
-    - cron: '*/5 * * * *'
+    types: [opened, labeled, unlabeled, synchronize, reopened, ready_for_review, converted_to_draft, edited]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  merge_group:
+    types: [checks_requested]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write       # merge
-  pull-requests: write  # read PRs, remove label, comment
-  issues: write         # label events and comments go through the issues API
-  actions: write        # read workflow runs, dispatch ci.yml after merge
-  checks: read
-  statuses: read
+  contents: write       # enable native waiting; never call the merge API
+  pull-requests: write  # read PRs, submit/dismiss bot approval reviews
+  issues: write         # remove labels; read events and legacy opening receipts
+  statuses: write
 
 concurrency:
-  group: automerge-${{ github.event.pull_request.number || github.event.workflow_run.head_sha }}
+  group: merge-approval-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   automerge:
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_run' ||
-      github.event.action != 'labeled' ||
-      github.event.label.name == 'automerge'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,5 +36,5 @@ jobs:
       - uses: actions/github-script@v7
         with:
           script: |
-            const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/automerge.js`);
+            const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/native-merge-queue.js`);
             await run({github, context, core});

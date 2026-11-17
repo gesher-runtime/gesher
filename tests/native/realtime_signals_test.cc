@@ -5,6 +5,7 @@
 // signal ordering, standard signal coalescing, sigtimedwait timeout, and sigsuspend.
 
 #include <signal.h>
+#include <sys/resource.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -281,47 +282,50 @@ static void TestSigsuspendRealtime() {
   pthread_sigmask(SIG_SETMASK, &old_thread_mask, nullptr);
 }
 
-static void TestSigqueueMaxLimit() {
+static void TestConfiguredQueueLimit() {
   sigset_t set, oldset;
   sigemptyset(&set);
   sigaddset(&set, SIGRTMAX);
   Check("block SIGRTMAX", pthread_sigmask(SIG_BLOCK, &set, &oldset) == 0);
+  struct rlimit limit = {};
+  Check("read actual RLIMIT_SIGPENDING", getrlimit(RLIMIT_SIGPENDING, &limit) == 0);
 
-  // Queue SIGQUEUE_MAX instances
-  union sigval v;
-  bool all_queued = true;
-  for (int i = 0; i < SIGQUEUE_MAX; ++i) {
-    v.sival_int = 1000 + i;
-    if (sigqueue(getpid(), SIGRTMAX, v) != 0) {
-      all_queued = false;
-      break;
-    }
+  // SIGQUEUE_MAX is not a fixed 32-instance allocation limit on Android.
+  // Keep this ordinary test bounded, including its cleanup on a failed send.
+  union sigval value = {};
+  int queued = 0;
+  for (; queued < 40; ++queued) {
+    value.sival_int = 1000 + queued;
+    if (sigqueue(getpid(), SIGRTMAX, value) != 0) break;
   }
-  Check("queued SIGQUEUE_MAX instances successfully", all_queued);
+  Check("forty queued values below configured limit", queued == 40);
+  bool fifo = true;
+  const struct timespec zero = {0, 0};
+  for (int i = 0; i < queued; ++i) {
+    siginfo_t info = {};
+    fifo &= sigtimedwait(&set, &info, &zero) == SIGRTMAX && info.si_value.sival_int == 1000 + i;
+  }
+  Check("bounded queue preserves every value", fifo);
 
-  // Attempt to queue one more instance - must return -1 with EAGAIN
-  v.sival_int = 9999;
-  int overflow_res = sigqueue(getpid(), SIGRTMAX, v);
-  Check("queue overflow returns -1", overflow_res == -1);
-  Check("queue overflow errno is EAGAIN", overflow_res == -1 && errno == EAGAIN);
-
-  // Pop one instance
+  // A zero soft limit avoids guessing the number of other processes' queued
+  // signals. Restore the original limit even when the tested send fails.
+  struct rlimit zero_limit = limit;
+  zero_limit.rlim_cur = 0;
+  int changed = setrlimit(RLIMIT_SIGPENDING, &zero_limit);
+  Check("set zero soft queue limit", changed == 0);
+  if (changed == 0) {
+    errno = 0;
+    int result = sigqueue(getpid(), SIGRTMAX, value);
+    Check("RT sigqueue at actual limit fails EAGAIN", result == -1 && errno == EAGAIN);
+    Check("RT kill survives queue exhaustion", kill(getpid(), SIGRTMAX) == 0);
+    Check("restore queue limit", setrlimit(RLIMIT_SIGPENDING, &limit) == 0);
+    siginfo_t info = {};
+    Check("RT kill fallback is waitable", sigtimedwait(&set, &info, &zero) == SIGRTMAX);
+    Check("fallback does not invent sender or payload", info.si_code == SI_USER &&
+          info.si_pid == 0 && info.si_uid == 0 && info.si_value.sival_ptr == nullptr);
+  }
   siginfo_t info = {};
-  int popped_sig = sigwaitinfo(&set, &info);
-  Check("popped one instance", popped_sig == SIGRTMAX && info.si_value.sival_int == 1000);
-
-  // Now queuing one more should succeed
-  Check("queued one more after pop", sigqueue(getpid(), SIGRTMAX, v) == 0);
-
-  // Pop all remaining queued instances to clean up
-  for (int i = 0; i < SIGQUEUE_MAX; ++i) {
-    sigwaitinfo(&set, &info);
-  }
-
-  // Queue is now empty
-  struct timespec zero_timeout = {0, 0};
-  Check("clean queue empty", sigtimedwait(&set, &info, &zero_timeout) == -1 && errno == EAGAIN);
-
+  Check("clean queue empty", sigtimedwait(&set, &info, &zero) == -1 && errno == EAGAIN);
   Check("restore mask", pthread_sigmask(SIG_SETMASK, &oldset, nullptr) == 0);
 }
 
@@ -333,7 +337,7 @@ int main() {
   TestSigtimedwaitTimeout();
   TestSigsuspend();
   TestSigsuspendRealtime();
-  TestSigqueueMaxLimit();
+  TestConfiguredQueueLimit();
 
   printf("realtime_signals: %d assertions, %d failures\n", assertions, failures);
   return failures ? 1 : 0;

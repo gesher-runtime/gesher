@@ -1,0 +1,399 @@
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0602
+#endif
+#include <windows.h>
+#include <bcrypt.h>
+#if defined(__x86_64__)
+#include <intrin.h>
+#endif
+#include <psapi.h>
+#include <shellapi.h>
+#include <tlhelp32.h>
+#include <io.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#ifndef S_IFREG
+#define S_IFREG 0100000
+#endif
+#ifndef S_IFDIR
+#define S_IFDIR 0040000
+#endif
+#ifndef S_IFLNK
+#define S_IFLNK 0120000
+#endif
+#ifndef DT_REG
+#define DT_REG 8
+#endif
+#ifndef DT_DIR
+#define DT_DIR 4
+#endif
+#ifndef DT_LNK
+#define DT_LNK 10
+#endif
+#ifndef MFD_CLOEXEC
+#define MFD_CLOEXEC 0x0001U
+#endif
+
+#ifndef O_NOFOLLOW
+#define O_NOFOLLOW 0x100000
+#endif
+#ifndef O_PATH
+#define O_PATH 0x200000
+#endif
+#ifndef O_DIRECTORY
+#define O_DIRECTORY 0x400000
+#endif
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0x800000
+#endif
+#ifndef O_ACCMODE
+#define O_ACCMODE 3
+#endif
+#ifndef F_DUPFD_CLOEXEC
+#define F_DUPFD_CLOEXEC 1030
+#endif
+#ifndef ELOOP
+#define ELOOP 40
+#endif
+#ifndef ENOTDIR
+#define ENOTDIR 20
+#endif
+#ifndef EISDIR
+#define EISDIR 21
+#endif
+#ifndef EOPNOTSUPP
+#define EOPNOTSUPP 95
+#endif
+
+typedef unsigned int uid_t;
+typedef unsigned int gid_t;
+#if !defined(__MINGW32__)
+typedef int pid_t;
+#endif
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+static inline int open(const char* p, int f, int m = 0) {
+  return _open(p, f, m);
+}
+#pragma clang diagnostic pop
+
+static inline int fcntl(int fd, int /*cmd*/, int /*arg*/) {
+  return _dup(fd);
+}
+
+[[maybe_unused]] static std::wstring Widen(const char* value) {
+  int n = MultiByteToWideChar(CP_UTF8, 0, value, -1, nullptr, 0);
+  std::wstring result(n > 0 ? n - 1 : 0, L'\0');
+  if (n > 1) MultiByteToWideChar(CP_UTF8, 0, value, -1, result.data(), n);
+  return result;
+}
+
+[[maybe_unused]] static std::string Narrow(const wchar_t* value) {
+  int n = WideCharToMultiByte(CP_UTF8, 0, value, -1, nullptr, 0, nullptr, nullptr);
+  std::string result(n > 0 ? n - 1 : 0, '\0');
+  if (n > 1) WideCharToMultiByte(CP_UTF8, 0, value, -1, result.data(), n, nullptr, nullptr);
+  return result;
+}
+
+namespace gesher {
+
+static inline std::string LinuxPath(const wchar_t* windows) {
+  std::wstring path = windows ? windows : L"";
+  for (wchar_t& c : path) {
+    if (c == L'\\') c = L'/';
+  }
+  if (path.size() >= 2 && path[1] == L':' && iswalpha(path[0])) {
+    std::wstring rest = path.substr(2);
+    path = std::wstring(L"/mnt/") + static_cast<wchar_t>(towlower(path[0])) + rest;
+  }
+  return Narrow(path.c_str());
+}
+
+static inline HANDLE HandleFromFd(int fd) {
+  return reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+}
+
+static inline std::string WindowsZoneId() {
+  return "Etc/UTC";
+}
+
+static inline int gesher_errno_from_crt(int e) {
+  return e;
+}
+
+static inline void FailWithLastError() {}
+
+namespace procfs {
+struct Entry {
+  std::string name;
+  unsigned char type;
+};
+}  // namespace procfs
+
+}  // namespace gesher
+
+static inline int memfd_create(const char* /*name*/, unsigned int /*flags*/) {
+  char temp_path[MAX_PATH];
+  char temp_file[MAX_PATH];
+  if (GetTempPathA(MAX_PATH, temp_path) == 0) return -1;
+  if (GetTempFileNameA(temp_path, "gmf", 0, temp_file) == 0) return -1;
+  HANDLE h = CreateFileA(temp_file, GENERIC_READ | GENERIC_WRITE,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         nullptr, CREATE_ALWAYS,
+                         FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return -1;
+  return _open_osfhandle(reinterpret_cast<intptr_t>(h), _O_RDWR);
+}
+
+static inline unsigned int getuid() { return 10000; }
+static inline unsigned int getgid() { return 10000; }
+static inline int getppid() { return 1; }
+
+@PROCFS_SOURCE@
+
+static unsigned g_checks = 0;
+static unsigned g_failed = 0;
+
+static void Check(bool ok, const char* msg) {
+  ++g_checks;
+  if (!ok) {
+    std::fprintf(stderr, "FAIL (check %u): %s\n", g_checks, msg);
+    ++g_failed;
+  }
+}
+
+int main() {
+  std::printf("Running procfs & sysfs contracts host test...\n");
+
+  // 1. AT_HWCAP, AT_HWCAP2, AT_PLATFORM, AT_RANDOM, AT_EXECFN
+  const char* platform = gesher_auxv_platform();
+  Check(platform != nullptr && (std::strcmp(platform, "x86_64") == 0 || std::strcmp(platform, "aarch64") == 0),
+        "gesher_auxv_platform valid");
+  uint64_t hwcap = gesher_auxv_hwcap();
+#if defined(__x86_64__)
+  Check(hwcap != 0, "x86_64 CPUID.1 EDX feature flags reported in AT_HWCAP");
+  Check(gesher_auxv_hwcap2() == (IsProcessorFeaturePresent(PF_RDWRFSGSBASE_AVAILABLE) ? 2u : 0u),
+        "FSGSBASE auxiliary capability follows OS availability");
+#elif defined(__aarch64__)
+  Check((hwcap & 0x78) == (IsProcessorFeaturePresent(PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE) ? 0x78u : 0u),
+        "ARM crypto auxiliary capabilities follow OS availability");
+  Check((hwcap & 0x80) == (IsProcessorFeaturePresent(PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE) ? 0x80u : 0u),
+        "ARM CRC auxiliary capability follows OS availability");
+#endif
+  const unsigned char* rand_bytes = gesher_auxv_random();
+  Check(rand_bytes != nullptr, "gesher_auxv_random returns non-null pointer");
+  bool any_nonzero = false;
+  for (int i = 0; i < 16; ++i) {
+    if (rand_bytes[i] != 0) any_nonzero = true;
+  }
+  Check(any_nonzero, "gesher_auxv_random returns initialized random bytes");
+
+  const char* execfn = gesher_auxv_execfn();
+  Check(execfn != nullptr && std::strlen(execfn) > 0 && execfn[0] == '/',
+        "gesher_auxv_execfn returns Linux normalized path to current executable");
+
+  // 2. Auxv() content and layout
+  using namespace gesher::procfs;
+  Node auxv_node;
+  auxv_node.type = S_IFREG;
+  auxv_node.file = "auxv";
+  std::string auxv_str = Content(auxv_node);
+  Check(!auxv_str.empty(), "Auxv() generates non-empty data");
+  Check((auxv_str.size() % 16) == 0, "Auxv() size is multiple of 16 (Elf64_auxv_t)");
+  const auto* pairs = reinterpret_cast<const uint64_t*>(auxv_str.data());
+  size_t count = auxv_str.size() / 16;
+  Check(count >= 10, "Auxv() has at least 10 auxv entries");
+  bool has_pagesz = false, has_clktck = false, has_hwcap = false, has_uid = false;
+  bool has_random = false, has_platform = false, has_execfn = false, has_null = false;
+  for (size_t i = 0; i < count; ++i) {
+    uint64_t type = pairs[2 * i];
+    uint64_t val = pairs[2 * i + 1];
+    if (type == 6 && val == 4096) has_pagesz = true;
+    if (type == 17 && val == 100) has_clktck = true;
+    if (type == 16 && val == hwcap) has_hwcap = true;
+    if (type == 11 && val == getuid()) has_uid = true;
+    if (type == 25 && val == reinterpret_cast<uint64_t>(rand_bytes)) has_random = true;
+    if (type == 15 && val == reinterpret_cast<uint64_t>(platform)) has_platform = true;
+    if (type == 31 && val == reinterpret_cast<uint64_t>(execfn)) has_execfn = true;
+    if (type == 0 && val == 0 && i == count - 1) has_null = true;
+  }
+  Check(has_pagesz, "auxv contains AT_PAGESZ=4096");
+  Check(has_clktck, "auxv contains AT_CLKTCK=100");
+  Check(has_hwcap, "auxv contains AT_HWCAP matching host cpu");
+  Check(has_uid, "auxv contains AT_UID");
+  Check(has_random, "auxv contains AT_RANDOM pointing to system RNG bytes");
+  Check(has_platform, "auxv contains AT_PLATFORM matching arch string");
+  Check(has_execfn, "auxv contains AT_EXECFN");
+  Check(has_null, "auxv ends with AT_NULL");
+
+  // 3. Maps() content and formatting
+  Node maps_node;
+  maps_node.type = S_IFREG;
+  maps_node.file = "maps";
+  std::string maps_str = Content(maps_node);
+  Check(!maps_str.empty(), "Maps() generates non-empty memory map");
+  Check(maps_str.find("[stack]") != std::string::npos, "maps contains [stack]");
+  Check(maps_str.find("[heap]") != std::string::npos, "maps contains [heap]");
+  Check(maps_str.find(" ---p ") != std::string::npos || maps_str.find(" r-xp ") != std::string::npos ||
+        maps_str.find(" r--p ") != std::string::npos || maps_str.find(" rw-p ") != std::string::npos,
+        "maps contains valid permission strings");
+
+  // 4. Cmdline() content and setArgV0 contract
+  Node cmd_node;
+  cmd_node.type = S_IFREG;
+  cmd_node.file = "cmdline";
+  std::string cmd_orig = Content(cmd_node);
+  Check(!cmd_orig.empty() && cmd_orig.back() == '\0', "Cmdline() ends with null character");
+
+  gesher_set_process_argv0("com.example.roadmap.n04");
+  std::string cmd_custom = Content(cmd_node);
+  Check(cmd_custom == std::string("com.example.roadmap.n04\0", 24),
+        "Cmdline() reflects gesher_set_process_argv0");
+  gesher_set_process_argv0(nullptr);
+  std::string cmd_restored = Content(cmd_node);
+  Check(cmd_restored == cmd_orig, "Cmdline() restores original command line");
+
+  // 5. Cpuinfo()
+  Node cpu_node;
+  cpu_node.type = S_IFREG;
+  cpu_node.file = "cpuinfo";
+  std::string cpuinfo = Content(cpu_node);
+  Check(cpuinfo.find("processor\t: 0\n") != std::string::npos, "cpuinfo has processor 0");
+  Check(cpuinfo.find("bogomips") == std::string::npos && cpuinfo.find("BogoMIPS") == std::string::npos,
+        "unmeasured BogoMIPS calibration is omitted");
+  Check(cpuinfo.find("address sizes") == std::string::npos,
+        "unmeasured fixed CPU address widths are omitted");
+#if defined(__x86_64__)
+  Check(cpuinfo.find("vendor_id\t: ") != std::string::npos, "cpuinfo has vendor_id");
+  Check(cpuinfo.find("cpu family\t: ") != std::string::npos, "cpuinfo has cpu family");
+  Check(cpuinfo.find("model\t\t: ") != std::string::npos, "cpuinfo has model");
+  Check(cpuinfo.find("flags\t\t: ") != std::string::npos, "cpuinfo has flags");
+  Check(cpuinfo.find("fpu\t\t: yes\n") != std::string::npos, "cpuinfo has fpu");
+#endif
+
+  // 6. Meminfo()
+  Node mem_node;
+  mem_node.type = S_IFREG;
+  mem_node.file = "meminfo";
+  std::string meminfo = Content(mem_node);
+  Check(meminfo.rfind("MemTotal:", 0) == 0, "meminfo starts with MemTotal:");
+  Check(meminfo.find("MemFree:") != std::string::npos, "meminfo has MemFree:");
+  Check(meminfo.find("MemAvailable:") != std::string::npos, "meminfo has MemAvailable:");
+  Check(meminfo.find("Cached:") != std::string::npos, "meminfo has Cached:");
+  Check(meminfo.find("SwapTotal:") != std::string::npos, "meminfo has SwapTotal:");
+  Check(meminfo.find("SwapFree:") != std::string::npos, "meminfo has SwapFree:");
+  Check(meminfo.find("CommitLimit:") != std::string::npos, "meminfo has CommitLimit:");
+  Check(meminfo.find("Committed_AS:") != std::string::npos, "meminfo has Committed_AS:");
+  Check(meminfo.find("Slab:") == std::string::npos && meminfo.find("Active:") == std::string::npos &&
+        meminfo.find("VmallocTotal:") == std::string::npos,
+        "unsupported Linux allocator/LRU counters are omitted, not fabricated");
+
+  // 7. Sysfs CPU lists
+  Node sys_cpu;
+  sys_cpu.type = S_IFREG;
+  sys_cpu.file = "cpu_list";
+  std::string cpu_list = Content(sys_cpu);
+  Check(cpu_list.rfind("0", 0) == 0 && cpu_list.back() == '\n', "cpu_list starts with 0 and ends with newline");
+
+  // 8. Lookup() Routing
+  DWORD my_pid = GetCurrentProcessId();
+  std::wstring pid_w = std::to_wstring(my_pid);
+
+  // Proc paths
+  Check(Lookup(L"proc", false).type == S_IFDIR, "Lookup /proc is dir");
+  Check(Lookup(L"proc/self", false).type == S_IFDIR, "Lookup /proc/self is dir");
+  Check(Lookup(L"proc/" + pid_w, false).type == S_IFDIR, "Lookup /proc/<pid> is dir");
+
+  Check(Lookup(L"proc/cpuinfo", false).type == S_IFREG, "Lookup /proc/cpuinfo is file");
+  Check(Lookup(L"proc/meminfo", false).type == S_IFREG, "Lookup /proc/meminfo is file");
+  Check(Lookup(L"proc/uptime", false).type == S_IFREG, "Lookup /proc/uptime is file");
+  Check(Lookup(L"proc/mounts", false).type == S_IFREG, "Lookup /proc/mounts is file");
+
+  Check(Lookup(L"proc/self/auxv", false).type == S_IFREG, "Lookup /proc/self/auxv is file");
+  Check(Lookup(L"proc/" + pid_w + L"/auxv", false).type == S_IFREG, "Lookup /proc/<pid>/auxv is file");
+  Check(Lookup(L"proc/self/maps", false).type == S_IFREG, "Lookup /proc/self/maps is file");
+  Check(Lookup(L"proc/" + pid_w + L"/maps", false).type == S_IFREG, "Lookup /proc/<pid>/maps is file");
+  Check(Lookup(L"proc/self/cmdline", false).type == S_IFREG, "Lookup /proc/self/cmdline is file");
+  Check(Lookup(L"proc/" + pid_w + L"/cmdline", false).type == S_IFREG, "Lookup /proc/<pid>/cmdline is file");
+  Check(Lookup(L"proc/self/status", false).type == S_IFREG, "Lookup /proc/self/status is file");
+  Check(Lookup(L"proc/" + pid_w + L"/status", false).type == S_IFREG, "Lookup /proc/<pid>/status is file");
+  Check(Lookup(L"proc/self/stat", false).type == S_IFREG, "Lookup /proc/self/stat is file");
+  Check(Lookup(L"proc/" + pid_w + L"/stat", false).type == S_IFREG, "Lookup /proc/<pid>/stat is file");
+  Check(Lookup(L"proc/self/statm", false).type == S_IFREG, "Lookup /proc/self/statm is file");
+  Check(Lookup(L"proc/" + pid_w + L"/statm", false).type == S_IFREG, "Lookup /proc/<pid>/statm is file");
+  Check(Lookup(L"proc/self/comm", false).type == S_IFREG, "Lookup /proc/self/comm is file");
+  Check(Lookup(L"proc/" + pid_w + L"/comm", false).type == S_IFREG, "Lookup /proc/<pid>/comm is file");
+  Check(Lookup(L"proc/self/environ", false).type == S_IFREG, "Lookup /proc/self/environ is file");
+  Check(Lookup(L"proc/" + pid_w + L"/environ", false).type == S_IFREG, "Lookup /proc/<pid>/environ is file");
+
+  Check(Lookup(L"proc/self/fd", false).type == S_IFDIR, "Lookup /proc/self/fd is dir");
+  Check(Lookup(L"proc/" + pid_w + L"/fd", false).type == S_IFDIR, "Lookup /proc/<pid>/fd is dir");
+  Check(Lookup(L"proc/self/task", false).type == S_IFDIR, "Lookup /proc/self/task is dir");
+  Check(Lookup(L"proc/" + pid_w + L"/task", false).type == S_IFDIR, "Lookup /proc/<pid>/task is dir");
+  Check(Lookup(L"proc/self/exe", false).type == S_IFLNK, "Lookup /proc/self/exe is link");
+  Check(Lookup(L"proc/" + pid_w + L"/exe", false).type == S_IFLNK, "Lookup /proc/<pid>/exe is link");
+  Check(Lookup(L"proc/self/cwd", false).type == S_IFLNK, "Lookup /proc/self/cwd is link");
+  Check(Lookup(L"proc/" + pid_w + L"/cwd", false).type == S_IFLNK, "Lookup /proc/<pid>/cwd is link");
+
+  // Sysfs paths
+  Check(Lookup(L"sys/devices/system/cpu/online", false).type == S_IFREG,
+        "Lookup /sys/devices/system/cpu/online is file");
+  Check(Lookup(L"sys/devices/system/cpu/present", false).type == S_IFREG,
+        "Lookup /sys/devices/system/cpu/present is file");
+  Check(Lookup(L"sys/devices/system/cpu/possible", false).type == S_IFREG,
+        "Lookup /sys/devices/system/cpu/possible is file");
+
+  // Negative paths
+  Check(Lookup(L"sys/devices/system/cpu/unknown", false).type == 0,
+        "Lookup invalid sysfs leaf returns 0");
+  Check(Lookup(L"sys/unknown", false).type == 0,
+        "Lookup invalid sys path returns 0");
+  Check(Lookup(L"proc/self/nonexistent", false).type == 0,
+        "Lookup invalid proc leaf returns 0");
+
+  // ReadLink on /proc/self
+  std::string target;
+  Check(ReadLink(L"proc/self", &target), "ReadLink proc/self succeeds");
+  Check(target == std::to_string(my_pid), "ReadLink proc/self points to pid");
+
+  // Open() test on proc and sysfs virtual files
+  int fd_auxv = Open(L"proc/self/auxv", O_RDONLY);
+  Check(fd_auxv >= 0, "Open proc/self/auxv succeeds");
+  if (fd_auxv >= 0) {
+    char buf[512];
+    int n = _read(fd_auxv, buf, sizeof(buf));
+    Check(n == static_cast<int>(auxv_str.size()), "Read from Open proc/self/auxv matches size");
+    _close(fd_auxv);
+  }
+
+  int fd_online = Open(L"sys/devices/system/cpu/online", O_RDONLY);
+  Check(fd_online >= 0, "Open sys/devices/system/cpu/online succeeds");
+  if (fd_online >= 0) {
+    char buf[64];
+    int n = _read(fd_online, buf, sizeof(buf));
+    Check(n > 0 && buf[0] == '0', "Read from Open online CPU list valid");
+    _close(fd_online);
+  }
+
+  if (g_failed == 0) {
+    std::printf("PASS procfs & sysfs contracts: %u checks passed\n", g_checks);
+    return 0;
+  }
+  std::fprintf(stderr, "FAIL procfs & sysfs contracts: %u/%u checks failed\n", g_failed, g_checks);
+  return 1;
+}

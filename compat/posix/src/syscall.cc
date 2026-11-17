@@ -2,6 +2,7 @@
 // so independently linked PE modules and guest libc share the same waiters.
 
 #include <sys/syscall.h>
+#include <gesher/clocks.h>
 #include <sys/mman.h>
 
 #include <errno.h>
@@ -59,7 +60,7 @@ bool SetDeadline(const timespec* time, int command, bool realtime, Deadline* out
   out->nanoseconds = static_cast<__int128>(time->tv_sec) * 1000000000 + time->tv_nsec;
   if (command == FUTEX_WAIT) {
     timespec now;
-    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return false;
+    if (gesher::AndroidClockGettime(CLOCK_MONOTONIC, &now) != 0) return false;
     out->nanoseconds += static_cast<__int128>(now.tv_sec) * 1000000000 + now.tv_nsec;
   }
   return true;
@@ -67,7 +68,7 @@ bool SetDeadline(const timespec* time, int command, bool realtime, Deadline* out
 DWORD Remaining(const Deadline& deadline) {
   if (!deadline.timed) return INFINITE;
   timespec now;
-  if (clock_gettime(deadline.clock, &now) != 0) return 0;
+  if (gesher::AndroidClockGettime(deadline.clock, &now) != 0) return 0;
   __int128 remaining = deadline.nanoseconds -
       (static_cast<__int128>(now.tv_sec) * 1000000000 + now.tv_nsec);
   if (remaining <= 0) return 0;

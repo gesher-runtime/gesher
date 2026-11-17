@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 from github_read import get_json
+from github_jobs import get_jobs
 from receipt_identity import (exact_run, failed_installer_allowed, installer_uploaded,
                               identity_record, job_snapshot, run_snapshot)
 
@@ -41,7 +42,7 @@ identity_record('run', {'run_id': run_id, 'attempt': attempt, 'source': head,
                 run_snapshot(run), 'observed')
 if not exact_run(run, run_id, attempt, head, repo_id, head_repo, repo, os.environ['GITHUB_WORKFLOW']):
     raise RuntimeError('Current run/source/attempt/repository mismatch')
-jobs = api(f'actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100')
+jobs = get_jobs(f'repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs')
 if jobs['total_count'] > 100:
     raise RuntimeError('Incomplete job inventory')
 rows = [x for x in jobs['jobs'] if x['name'] == a.producer or (a.producer_suffix and x['name'].endswith(' / ' + a.producer))]

@@ -310,7 +310,9 @@ bool PollEpoll(int fd, short events, short* ready) {
 
 std::shared_ptr<EventFd> LookupEventFd(int fd) {
   Object object;
-  return Lookup(fd, &object) ? object.eventfd : nullptr;
+  if (!Lookup(fd, &object)) return nullptr;
+  if (object.timer != nullptr) RefreshTimerFd(*object.timer);
+  return object.eventfd;
 }
 
 short PollEventFd(EventFd& e, short events, HANDLE* wake) {

@@ -139,7 +139,7 @@ REFERENCE_FILES = {'linux-reference.json'}
 ALLOWED_IMPORTS = {
     'kernel32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
     'ws2_32.dll', 'iphlpapi.dll', 'psapi.dll', 'bcrypt.dll',
-    'api-ms-win-core-synch-l1-2-0.dll',
+    'api-ms-win-core-synch-l1-2-0.dll', 'api-ms-win-core-realtime-l1-1-1.dll', 'powrprof.dll',
     *('api-ms-win-crt-' + part + '-l1-1-0.dll' for part in (
         'stdio', 'runtime', 'locale', 'heap', 'private', 'string', 'convert',
         'math', 'environment', 'filesystem', 'time', 'process', 'utility')),

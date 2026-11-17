@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 The Android Open Source Project
+ * Copyright (C) 2017, 2024 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,12 +28,15 @@
 #include "renderthread/RenderThread.h"
 
 #include <android-base/properties.h>
+#include <include/core/SkGraphics.h>
+#include <include/gpu/ganesh/GrDirectContext.h>
 #include <include/gpu/ganesh/GrContextOptions.h>
 #include <include/gpu/ganesh/gl/GrGLDirectContext.h>
 #include <include/gpu/ganesh/gl/GrGLInterface.h>
 
 #include "DeviceInfo.h"
 #include "Properties.h"
+#include "gr_context_options.h"
 #include "Readback.h"
 #include "renderstate/RenderState.h"
 #include "renderthread/EglManager.h"
@@ -110,13 +113,7 @@ void RenderThread::requireGlContext() {
 void RenderThread::requireVkContext() {}
 
 void RenderThread::initGrContextOptions(GrContextOptions& options) {
-    options.fPreferExternalImagesOverES3 = true;
-    options.fDisableDistanceFieldPaths = true;
-    if (android::base::GetBoolProperty(PROPERTY_REDUCE_OPS_TASK_SPLITTING, true)) {
-        options.fReduceOpsTaskSplitting = GrContextOptions::Enable::kYes;
-    } else {
-        options.fReduceOpsTaskSplitting = GrContextOptions::Enable::kNo;
-    }
+    gesher::hwui::InitGaneshContextOptions(options);
 }
 
 void RenderThread::destroyRenderingContext() {
@@ -195,9 +192,48 @@ bool RenderThread::isCurrent() {
 
 void RenderThread::preload() {}
 
-void RenderThread::trimMemory(TrimLevel level) {}
+void RenderThread::trimMemory(TrimLevel level) {
+    if (!mGrContext) return;
+    // Adapted from frameworks/base/libs/hwui/renderthread/CacheManager.cpp.
+    // AOSP CacheManager's device behavior, applied to the real host GL context.
+    // The layoutlib CacheManager used by this build has no GPU context.
+    mGrContext->flushAndSubmit(GrSyncCpu::kYes);
+    if (level >= TrimLevel::BACKGROUND) {
+        mGrContext->freeGpuResources();
+        SkGraphics::PurgeAllCaches();
+        destroyRenderingContext();
+    } else if (level == TrimLevel::UI_HIDDEN) {
+        const size_t gpuLimit = mGrContext->getResourceCacheLimit();
+        const size_t fontLimit = SkGraphics::GetFontCacheLimit();
+        const auto& policy = mCacheManager->mMemoryPolicy;
+        mGrContext->setResourceCacheLimit(gpuLimit * policy.backgroundRetentionPercent);
+        SkGraphics::SetFontCacheLimit(fontLimit * policy.backgroundRetentionPercent);
+        mGrContext->purgeUnlockedResources(policy.purgeScratchOnly
+                ? GrPurgeResourceOptions::kScratchResourcesOnly
+                : GrPurgeResourceOptions::kAllResources);
+        mGrContext->setResourceCacheLimit(gpuLimit);
+        SkGraphics::SetFontCacheLimit(fontLimit);
+    }
+}
 
-void RenderThread::trimCaches(CacheTrimLevel level) {}
+void RenderThread::trimCaches(CacheTrimLevel level) {
+    switch (level) {
+        case CacheTrimLevel::FONT_CACHE:
+            SkGraphics::PurgeFontCache();
+            break;
+        case CacheTrimLevel::RESOURCE_CACHE:
+            SkGraphics::PurgeResourceCache();
+            break;
+        case CacheTrimLevel::ALL_CACHES:
+            SkGraphics::PurgeAllCaches();
+            if (mGrContext) {
+                mGrContext->purgeUnlockedResources(GrPurgeResourceOptions::kAllResources);
+            }
+            break;
+        default:
+            break;
+    }
+}
 
 } /* namespace renderthread */
 } /* namespace uirenderer */

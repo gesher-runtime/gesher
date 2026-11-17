@@ -56,9 +56,6 @@ extern "C" {
 #define _NSIG 65
 #define SIGRTMIN 34
 #define SIGRTMAX 64
-#ifndef SIGQUEUE_MAX
-#define SIGQUEUE_MAX 32
-#endif
 
 #define SA_NOCLDSTOP 0x00000001
 #define SA_NOCLDWAIT 0x00000002

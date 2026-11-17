@@ -54,6 +54,9 @@ std::shared_ptr<Inotify> LookupInotify(int fd);
 // timerfd has its own expiration counter and read contract. Its readiness is
 // read-only, and descriptor duplication retains the same timer owner.
 struct TimerFd;
+// A caller can run after resume before Windows dispatches the power callback.
+// Sample the selected clock when acquiring readiness, as read/gettime do.
+void RefreshTimerFd(TimerFd& timer);
 int RegisterTimerFd(std::shared_ptr<TimerFd> timer, std::shared_ptr<EventFd> readiness);
 std::shared_ptr<TimerFd> LookupTimerFd(int fd);
 int ReadTimerFd(TimerFd& timer, void* buf, unsigned int count);

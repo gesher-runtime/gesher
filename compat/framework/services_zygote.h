@@ -24,12 +24,18 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
 // The process's creation time (a FILETIME), or 0 when no such process runs.
 int64_t StartTime(int pid);
 
+// Creation identity from the original retained Spawn handle, or 0 if unavailable.
+int64_t ChildStartTime(int pid);
+
 // A spawned process's exit code: 259 (STILL_ACTIVE) while it runs, -1 when
 // this process did not start it or does not know.
 int ExitCode(int pid);
 
 // Ends the process (TerminateProcess, exit code 137).
 bool Kill(int pid);
+
+// Ends only the retained child with this nonzero creation identity. Never opens a PID.
+bool KillChild(int pid, int64_t start_time);
 
 // Puts the process (0: this one) in this process's job, created on first use
 // with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: when this process ends, so does

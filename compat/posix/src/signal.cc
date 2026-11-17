@@ -1,13 +1,13 @@
 // gesher-base: Linux signal API on Windows.
 //
-// Status: signal sets, masks and handler registration work. Signals sent to
-// this process (kill, tgkill, pthread_kill, sigqueue) are kept pending until
-// a thread takes them with sigwait, sigwaitinfo or sigtimedwait, as ART's
-// signal catcher does with SIGQUIT and SIGUSR1; handlers are not run for
-// them. Delivery of synchronous signals from Windows exceptions is the next
-// step (needs the CONTEXT <-> ucontext_t translation from <sys/ucontext.h>).
+// Pending storage and synchronous waits are implemented here. sigsuspend
+// dispatches registered handlers, but its frame/alternate-stack and job-control
+// contracts are incomplete; see docs/research/realtime-signals-2026-11-17.md.
+// Synchronous Windows exceptions are handled separately in fault_signals.cc.
 
 #include <signal.h>
+#include <sys/resource.h>
+#include <gesher/pending_signals.h>
 
 #include <errno.h>
 #include <windows.h>
@@ -32,37 +32,23 @@ typedef void* pthread_t;
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <deque>
 #include <mutex>
 
 // winpthreads' own, which gesher_pthread_kill calls; <pthread.h> routes
 // everyone else to gesher_pthread_kill.
 #undef pthread_kill
-#if !defined(__MINGW32__)
-static inline int pthread_kill(pthread_t, int) { return 0; }
-#endif
 
 extern "C" int gesher_kill_other(pid_t pid, int sig);
 
 namespace {
 
 constexpr int kMaxSignal = NSIG - 1;
-constexpr int kRealtimeSignalMin = 32;
-
-#ifndef SIGQUEUE_MAX
-#define SIGQUEUE_MAX 32
-#endif
+std::atomic<size_t> queue_count{0};
 
 struct State {
   std::mutex lock;
   struct sigaction actions[NSIG] = {};
-  // Signals sent to the process and not taken yet; Linux keeps one of each
-  // standard signal pending, as here. Real-time signals (>= 32) maintain
-  // non-coalesced FIFO queues.
-  sigset_t pending = 0;
-  siginfo_t info[NSIG] = {};
-  std::deque<siginfo_t> rt_queues[NSIG];
-  size_t rt_queue_total = 0;
+  gesher::signals::Pending<siginfo_t> pending;
   std::condition_variable sent;
 };
 
@@ -77,22 +63,17 @@ thread_local stack_t alt_stack = {nullptr, SS_DISABLE, 0};
 bool Valid(int signum) { return signum >= 1 && signum <= kMaxSignal; }
 sigset_t Bit(int signum) { return static_cast<sigset_t>(1) << (signum - 1); }
 
+bool DefaultIgnores(int sig) {
+  return sig == SIGCHLD || sig == SIGCONT || sig == SIGURG || sig == SIGWINCH;
+}
+
+bool Ignored(const struct sigaction& action, int sig) {
+  return action.sa_handler == SIG_IGN ||
+         (action.sa_handler == SIG_DFL && DefaultIgnores(sig));
+}
+
 void PopSignalLocked(State& s, int signum, siginfo_t* info) {
-  if (signum < kRealtimeSignalMin) {
-    s.pending &= ~Bit(signum);
-    if (info != nullptr) *info = s.info[signum];
-  } else {
-    if (!s.rt_queues[signum].empty()) {
-      if (info != nullptr) *info = s.rt_queues[signum].front();
-      s.rt_queues[signum].pop_front();
-      s.rt_queue_total--;
-      if (s.rt_queues[signum].empty()) {
-        s.pending &= ~Bit(signum);
-      }
-    } else {
-      s.pending &= ~Bit(signum);
-    }
-  }
+  if (!s.pending.Pop(signum, info) && info != nullptr) info->si_signo = signum;
 }
 
 // Makes `signum` pending for the process. Signal 0 only checks the target.
@@ -106,29 +87,16 @@ int Send(pid_t pid, int signum, int code, const union sigval* value) {
   State& s = state();
   {
     std::lock_guard<std::mutex> guard(s.lock);
-    if (signum < kRealtimeSignalMin) {
-      if ((s.pending & Bit(signum)) == 0) {
-        s.pending |= Bit(signum);
-        siginfo_t& info = s.info[signum];
-        info = {};
-        info.si_signo = signum;
-        info.si_code = code;
-        info.si_pid = getpid();
-        if (value != nullptr) info.si_value = *value;
-      }
-    } else {
-      if (s.rt_queue_total >= SIGQUEUE_MAX) {
-        return errno = EAGAIN, -1;
-      }
-      siginfo_t info = {};
-      info.si_signo = signum;
-      info.si_code = code;
-      info.si_pid = getpid();
-      if (value != nullptr) info.si_value = *value;
-      s.rt_queues[signum].push_back(info);
-      s.rt_queue_total++;
-      s.pending |= Bit(signum);
-    }
+    // A blocked ignored signal remains waitable; installing SIG_IGN below
+    // flushes pending instances irrespective of the mask.
+    if ((thread_mask & Bit(signum)) == 0 && Ignored(s.actions[signum], signum)) return 0;
+    siginfo_t info = {};
+    info.si_signo = signum;
+    info.si_code = code;
+    info.si_pid = getpid();
+    info.si_uid = getuid();
+    if (value != nullptr) info.si_value = *value;
+    if (!s.pending.Push(signum, code, info)) return errno = EAGAIN, -1;
   }
   s.sent.notify_all();
   return 0;
@@ -140,14 +108,14 @@ int Take(const sigset_t* set, siginfo_t* info,
          const std::chrono::steady_clock::time_point* deadline) {
   State& s = state();
   std::unique_lock<std::mutex> guard(s.lock);
-  auto ready = [&] { return (s.pending & *set) != 0; };
+  auto ready = [&] { return (s.pending.Mask() & *set) != 0; };
   if (deadline == nullptr) {
     s.sent.wait(guard, ready);
   } else if (!s.sent.wait_until(guard, *deadline, ready)) {
     return errno = EAGAIN, -1;
   }
   for (int signum = 1; signum <= kMaxSignal; ++signum) {
-    if ((s.pending & *set & Bit(signum)) != 0) {
+    if ((s.pending.Mask() & *set & Bit(signum)) != 0) {
       PopSignalLocked(s, signum, info);
       return signum;
     }
@@ -158,6 +126,24 @@ int Take(const sigset_t* set, siginfo_t* info,
 }  // namespace
 
 extern "C" {
+
+// This process owns both adapters' queue records. RLIMIT_SIGPENDING is read
+// at each allocation, so lowering it affects subsequent sends immediately.
+// Cross-process, real-UID-wide charging is still an explicit N20 blocker.
+bool gesher_signal_queue_acquire(bool enforce_limit) {
+  struct rlimit limit;
+  if (getrlimit(RLIMIT_SIGPENDING, &limit) != 0) return false;
+  size_t count = queue_count.load(std::memory_order_relaxed);
+  do {
+    if (enforce_limit && count >= limit.rlim_cur) return false;
+  } while (!queue_count.compare_exchange_weak(
+      count, count + 1, std::memory_order_relaxed));
+  return true;
+}
+
+void gesher_signal_queue_release() {
+  queue_count.fetch_sub(1, std::memory_order_relaxed);
+}
 
 int sigemptyset(sigset_t* set) {
   *set = 0;
@@ -196,7 +182,11 @@ int gesher_sigaction_raw(int signum, const struct sigaction* act, struct sigacti
   State& s = state();
   std::lock_guard<std::mutex> guard(s.lock);
   if (oldact != nullptr) *oldact = s.actions[signum];
-  if (act != nullptr) s.actions[signum] = *act;
+  if (act != nullptr) {
+    s.actions[signum] = *act;
+    s.actions[signum].sa_mask &= ~(Bit(SIGKILL) | Bit(SIGSTOP));
+    if (Ignored(*act, signum)) s.pending.Discard(signum);
+  }
   return 0;
 }
 
@@ -209,6 +199,7 @@ int pthread_sigmask(int how, const sigset_t* set, sigset_t* oldset) {
     case SIG_SETMASK: thread_mask = *set; break;
     default: return EINVAL;
   }
+  thread_mask &= ~(Bit(SIGKILL) | Bit(SIGSTOP));
   return 0;
 }
 
@@ -240,7 +231,7 @@ int sigaltstack(const stack_t* ss, stack_t* old_ss) {
 int sigpending(sigset_t* set) {
   State& s = state();
   std::lock_guard<std::mutex> guard(s.lock);
-  *set = s.pending;
+  *set = s.pending.Mask() & thread_mask;
   return 0;
 }
 
@@ -265,7 +256,7 @@ int sigwaitinfo(const sigset_t* set, siginfo_t* info) { return Take(set, info, n
 
 int sigtimedwait(const sigset_t* set, siginfo_t* info, const struct timespec* timeout) {
   if (timeout == nullptr) return Take(set, info, nullptr);
-  if (timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000) return errno = EINVAL, -1;
+  if (timeout->tv_sec < 0 || timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000) return errno = EINVAL, -1;
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout->tv_sec) +
                   std::chrono::nanoseconds(timeout->tv_nsec);
   return Take(set, info, &deadline);
@@ -297,7 +288,7 @@ int sigsuspend(const sigset_t* mask) {
   for (;;) {
     int candidate = 0;
     for (int signum = 1; signum <= kMaxSignal; ++signum) {
-      if ((s.pending & unmasked & Bit(signum)) != 0) {
+      if ((s.pending.Mask() & unmasked & Bit(signum)) != 0) {
         candidate = signum;
         break;
       }

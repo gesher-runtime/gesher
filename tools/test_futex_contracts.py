@@ -37,6 +37,9 @@ def main():
             print('futex source SHA256',hashlib.sha256(source.encode()).hexdigest(),flush=True)
             print('guest syscall section SHA256',hashlib.sha256(guest.encode()).hexdigest(),flush=True)
             (d / 'windows.h').write_text('#include "futex_windows_host.h"\n')
+            (d / 'gesher').mkdir()
+            (d / 'gesher/clocks.h').write_text((ROOT / 'compat/posix/include/gesher/clocks.h').read_text())
+            (d / 'gesher/awake_clock.h').write_text((ROOT / 'compat/posix/include/gesher/awake_clock.h').read_text())
             owner = 'reinterpret_cast<FARPROC>(&gesher_futex_owner_v1)' if 'gesher_futex_owner_v1(' in source else 'nullptr'
             generated = '''#define _GNU_SOURCE 1
 #include <time.h>
@@ -57,6 +60,7 @@ static bool DispatchTimerfdSyscall(int64_t,int64_t,int64_t,int64_t,int64_t,int64
 static int64_t RawSyscallX64(int64_t,const int64_t*) { return -ENOSYS; }
 ''' + guest + '''
 #undef syscall
+#define FUTEX_TEST_CLOCK_GETTIME gesher::AndroidClockGettime
 #include "futex_contract_test.inc"
 static long host(volatile int* a,int op,int n,const timespec* t,volatile int* b,int m) {
   return gesher_test_syscall(SYS_futex,a,op,n,t,b,m);

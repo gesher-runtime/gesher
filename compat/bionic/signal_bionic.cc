@@ -34,12 +34,17 @@
 
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
+#include <gesher/pending_signals.h>
+#include <unistd.h>
+#include <gesher/clocks.h>
+#include <gesher/resume.h>
 
 #include <windows.h>
 
 #include <errno.h>
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -98,9 +103,10 @@ uint64_t Bit(int sig) { return uint64_t{1} << (sig - 1); }
 bool Valid(int sig) { return sig >= 1 && sig < kNsig; }
 
 struct ThreadState {
-  uint64_t mask = 0;
-  uint64_t pending = 0;
-  BionicSiginfo info[kNsig] = {};
+  std::atomic<uint64_t> mask{0};
+  gesher::signals::Pending<BionicSiginfo> pending;
+  HANDLE lifetime = nullptr;
+  ~ThreadState() { if (lifetime != nullptr) CloseHandle(lifetime); }
   std::atomic<bool> any_pending{false};
   BionicStack alt_stack{nullptr, 2 /* SS_DISABLE */, 0};
   // Signals this thread takes while it waits (sigsuspend, pause, sigwait, a
@@ -114,8 +120,7 @@ struct State {
   std::mutex mutex;
   std::condition_variable sent;
   BionicSigaction actions[kNsig] = {};
-  uint64_t process_pending = 0;
-  BionicSiginfo process_info[kNsig] = {};
+  gesher::signals::Pending<BionicSiginfo> process_pending;
   std::unordered_map<uint64_t, ThreadState*> threads;
 };
 
@@ -126,24 +131,38 @@ State& S() {
 
 thread_local ThreadState* t_state = nullptr;
 
-// The calling thread's state; created on first use and kept (thread ids are
-// not reused by the shim).
+// Reclaim pending queues only after their retained kernel thread has exited.
+// Numeric Windows ids are never reopened or interpreted as pthread objects.
+void ReapThreadsLocked() {
+  for (auto it = S().threads.begin(); it != S().threads.end();) {
+    ThreadState* thread = it->second;
+    if (thread->lifetime != nullptr && WaitForSingleObject(thread->lifetime, 0) == WAIT_OBJECT_0) {
+      delete thread;
+      it = S().threads.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 ThreadState* Self() {
   if (t_state == nullptr) {
     uint64_t id = PthreadSelfId();
     std::lock_guard<std::mutex> lock(S().mutex);
+    ReapThreadsLocked();
     auto& slot = S().threads[id];
     if (slot == nullptr) slot = new ThreadState();
+    if (slot->lifetime == nullptr) {
+      DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &slot->lifetime,
+                      THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0);
+    }
     t_state = slot;
   }
   return t_state;
 }
 
-// Called with the lock held.
-ThreadState* StateOf(uint64_t id) {
-  auto& slot = S().threads[id];
-  if (slot == nullptr) slot = new ThreadState();
-  return slot;
+void Pop(gesher::signals::Pending<BionicSiginfo>& queue, int sig, BionicSiginfo* info) {
+  if (!queue.Pop(sig, info) && info != nullptr) info->signo = sig;
 }
 
 bool DefaultIgnores(int sig) { return sig == 17 || sig == 18 || sig == 23 || sig == 28; }
@@ -222,19 +241,17 @@ int TakeDeliverable(ThreadState* self, BionicSiginfo* info) {
   std::lock_guard<std::mutex> lock(S().mutex);
   for (int sig = 1; sig < kNsig; ++sig) {
     if ((self->mask & Bit(sig)) != 0) continue;
-    if ((self->pending & Bit(sig)) != 0) {
-      self->pending &= ~Bit(sig);
-      *info = self->info[sig];
-      self->any_pending.store(self->pending != 0, std::memory_order_relaxed);
+    if ((self->pending.Mask() & Bit(sig)) != 0) {
+      Pop(self->pending, sig, info);
+      self->any_pending.store(self->pending.Mask() != 0, std::memory_order_relaxed);
       return sig;
     }
-    if ((S().process_pending & Bit(sig)) != 0) {
-      S().process_pending &= ~Bit(sig);
-      *info = S().process_info[sig];
+    if ((S().process_pending.Mask() & Bit(sig)) != 0) {
+      Pop(S().process_pending, sig, info);
       return sig;
     }
   }
-  self->any_pending.store(self->pending != 0, std::memory_order_relaxed);
+  self->any_pending.store(self->pending.Mask() != 0, std::memory_order_relaxed);
   return 0;
 }
 
@@ -244,7 +261,7 @@ void DeliverAll(ThreadState* self) {
   BionicSiginfo info;
   while (int sig = TakeDeliverable(self, &info)) Run(self, sig, info);
   std::lock_guard<std::mutex> lock(S().mutex);
-  g_process_pending.store(S().process_pending != 0, std::memory_order_relaxed);
+  g_process_pending.store(S().process_pending.Mask() != 0, std::memory_order_relaxed);
 }
 
 BionicSiginfo MakeInfo(int sig, int code, uint64_t value) {
@@ -252,7 +269,7 @@ BionicSiginfo MakeInfo(int sig, int code, uint64_t value) {
   info.signo = sig;
   info.code = code;
   info.pid = static_cast<int32_t>(GetCurrentProcessId());
-  info.uid = 10000;
+  info.uid = static_cast<uint32_t>(getuid());
   info.value = value;
   return info;
 }
@@ -268,19 +285,10 @@ int SendFromSelf(int sig, int code, uint64_t value, bool to_process) {
   BionicSiginfo info = MakeInfo(sig, code, value);
   if ((self->mask & Bit(sig)) != 0) {
     std::lock_guard<std::mutex> lock(S().mutex);
-    if (to_process) {
-      if ((S().process_pending & Bit(sig)) == 0) {
-        S().process_pending |= Bit(sig);
-        S().process_info[sig] = info;
-      }
-      g_process_pending.store(true, std::memory_order_release);
-    } else {
-      if ((self->pending & Bit(sig)) == 0) {
-        self->pending |= Bit(sig);
-        self->info[sig] = info;
-      }
-      self->any_pending.store(true, std::memory_order_release);
-    }
+    auto& queue = to_process ? S().process_pending : self->pending;
+    if (!queue.Push(sig, code, info)) return errno = kEAGAIN, -1;
+    if (to_process) g_process_pending.store(true, std::memory_order_release);
+    else self->any_pending.store(true, std::memory_order_release);
     S().sent.notify_all();
     return 0;
   }
@@ -297,7 +305,19 @@ int BIONIC_SYSV Sigaction(int sig, const BionicSigaction* act, BionicSigaction* 
   }
   std::lock_guard<std::mutex> lock(S().mutex);
   if (old != nullptr) *old = S().actions[sig];
-  if (act != nullptr) S().actions[sig] = *act;
+  if (act != nullptr) {
+    S().actions[sig] = *act;
+    S().actions[sig].sa_mask &= ~(Bit(kSigkill) | Bit(kSigstop));
+    if (act->handler == kSigIgn || (act->handler == kSigDfl && DefaultIgnores(sig))) {
+      S().process_pending.Discard(sig);
+      for (auto& entry : S().threads) {
+        entry.second->pending.Discard(sig);
+        entry.second->any_pending.store(entry.second->pending.Mask() != 0,
+                                       std::memory_order_relaxed);
+      }
+      g_process_pending.store(S().process_pending.Mask() != 0, std::memory_order_relaxed);
+    }
+  }
   return 0;
 }
 
@@ -382,14 +402,29 @@ int BIONIC_SYSV Sigqueue(int pid, int sig, uint64_t value) {
 int BIONIC_SYSV PthreadKill(uint64_t thread, int sig) {
   if (sig != 0 && !Valid(sig)) return kEINVAL;
   if (thread == PthreadSelfId()) return SendFromSelf(sig, kSiTkill, 0, false) == 0 ? 0 : errno;
-  if (sig == 0) return 0;
+  void* lifetime = nullptr;
+  int result = PthreadSignalTarget(thread, &lifetime);
+  if (result != 0) return result;
+  if (sig == 0) { CloseHandle(lifetime); return 0; }
   std::lock_guard<std::mutex> lock(S().mutex);
-  ThreadState* target = StateOf(thread);
-  if ((target->pending & Bit(sig)) == 0) {
-    target->pending |= Bit(sig);
-    target->info[sig] = MakeInfo(sig, kSiTkill, 0);
+  ReapThreadsLocked();
+  if (WaitForSingleObject(lifetime, 0) != WAIT_TIMEOUT) {
+    CloseHandle(lifetime);
+    return kESRCH;
   }
-  target->any_pending.store(true, std::memory_order_release);
+  auto& slot = S().threads[thread];
+  if (slot == nullptr) {
+    slot = new (std::nothrow) ThreadState();
+    if (slot == nullptr) { CloseHandle(lifetime); S().threads.erase(thread); return kEAGAIN; }
+    slot->lifetime = lifetime;
+  } else {
+    CloseHandle(lifetime);
+  }
+  const auto& action = S().actions[sig];
+  if ((slot->mask & Bit(sig)) == 0 &&
+      (action.handler == kSigIgn || (action.handler == kSigDfl && DefaultIgnores(sig)))) return 0;
+  if (!slot->pending.Push(sig, kSiTkill, MakeInfo(sig, kSiTkill, 0))) return kEAGAIN;
+  slot->any_pending.store(true, std::memory_order_release);
   S().sent.notify_all();
   return 0;
 }
@@ -397,7 +432,7 @@ int BIONIC_SYSV PthreadKill(uint64_t thread, int sig) {
 int BIONIC_SYSV Sigpending(uint64_t* set) {
   ThreadState* self = Self();
   std::lock_guard<std::mutex> lock(S().mutex);
-  *set = (self->pending | S().process_pending) & self->mask;
+  *set = (self->pending.Mask() | S().process_pending.Mask()) & self->mask;
   return 0;
 }
 
@@ -409,16 +444,14 @@ int TakeWaiting(ThreadState* self, uint64_t want, BionicSiginfo* info,
   for (;;) {
     for (int sig = 1; sig < kNsig; ++sig) {
       if ((want & Bit(sig)) == 0) continue;
-      if ((self->pending & Bit(sig)) != 0) {
-        self->pending &= ~Bit(sig);
-        if (info) *info = self->info[sig];
-        self->any_pending.store(self->pending != 0, std::memory_order_relaxed);
+      if ((self->pending.Mask() & Bit(sig)) != 0) {
+        Pop(self->pending, sig, info);
+        self->any_pending.store(self->pending.Mask() != 0, std::memory_order_relaxed);
         self->waiting_for = 0;
         return sig;
       }
-      if ((S().process_pending & Bit(sig)) != 0) {
-        S().process_pending &= ~Bit(sig);
-        if (info) *info = S().process_info[sig];
+      if ((S().process_pending.Mask() & Bit(sig)) != 0) {
+        Pop(S().process_pending, sig, info);
         self->waiting_for = 0;
         return sig;
       }
@@ -443,6 +476,7 @@ int BIONIC_SYSV Sigwaitinfo(const uint64_t* set, BionicSiginfo* info) {
 }
 int BIONIC_SYSV Sigtimedwait(const uint64_t* set, BionicSiginfo* info, const LinuxTimespec* ts) {
   if (ts == nullptr) return Sigwaitinfo(set, info);
+  if (ts->tv_sec < 0 || ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000) return errno = kEINVAL, -1;
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(ts->tv_sec) +
                   std::chrono::nanoseconds(ts->tv_nsec);
   int sig = TakeWaiting(Self(), *set, info, &deadline);
@@ -456,8 +490,16 @@ int BIONIC_SYSV Sigsuspend(const uint64_t* mask) {
   uint64_t saved = self->mask;
   self->mask = *mask & ~(Bit(kSigkill) | Bit(kSigstop));
   BionicSiginfo info;
-  int sig = TakeWaiting(self, ~self->mask, &info, nullptr);
-  Run(self, sig, info);
+  for (;;) {
+    int sig = TakeWaiting(self, ~self->mask, &info, nullptr);
+    {
+      std::lock_guard<std::mutex> lock(S().mutex);
+      const auto& action = S().actions[sig];
+      if (action.handler == kSigIgn || (action.handler == kSigDfl && DefaultIgnores(sig))) continue;
+    }
+    Run(self, sig, info);
+    break;
+  }
   self->mask = saved;
   DeliverAll(self);
   return errno = kEINTR, -1;
@@ -602,10 +644,9 @@ bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool o
       if ((t->waiting_for & Bit(sig)) != 0) waiter = true;
     }
     if ((any_thread && all_block) || waiter) {
-      if ((S().process_pending & Bit(sig)) == 0) {
-        S().process_pending |= Bit(sig);
-        S().process_info[sig] = info;
-      }
+      // This legacy external path currently supplies SI_USER / SIGCHLD;
+      // shared pending storage preserves repeated RT records where supplied.
+      if (!S().process_pending.Push(sig, code, info)) return false;
       g_process_pending.store(true, std::memory_order_release);
       S().sent.notify_all();
       return true;
@@ -622,7 +663,7 @@ void InstallSignalHook(bool authoritative) {
 
 namespace {
 bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
-                          void (*observe)(void*), void* context) {
+                          void (*observe)(void*), void* context, int64_t boottime_deadline = -1) {
   ThreadState* self = Self();
   // Preserve the older wait entry's delivery behavior. The observed entry
   // must see an already-pending signal as an interruption too, before any
@@ -636,7 +677,7 @@ bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
   {
     std::unique_lock<std::mutex> lock(S().mutex);
     for (;;) {
-      uint64_t deliverable = (self->pending | S().process_pending) & ~self->mask;
+      uint64_t deliverable = (self->pending.Mask() | S().process_pending.Mask()) & ~self->mask;
       if (observe != nullptr && deliverable != 0) {
         // Ignored signals do not interrupt nanosleep. Discard these pending
         // instances while holding the same lock as the action/queue state.
@@ -644,13 +685,13 @@ bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
           if ((deliverable & Bit(sig)) == 0) continue;
           uintptr_t handler = S().actions[sig].handler;
           if (handler == kSigIgn || (handler == kSigDfl && DefaultIgnores(sig))) {
-            self->pending &= ~Bit(sig);
-            S().process_pending &= ~Bit(sig);
+            self->pending.Discard(sig);
+            S().process_pending.Discard(sig);
             deliverable &= ~Bit(sig);
           }
         }
-        self->any_pending.store(self->pending != 0, std::memory_order_relaxed);
-        g_process_pending.store(S().process_pending != 0, std::memory_order_relaxed);
+        self->any_pending.store(self->pending.Mask() != 0, std::memory_order_relaxed);
+        g_process_pending.store(S().process_pending.Mask() != 0, std::memory_order_relaxed);
       }
       if (deliverable != 0) {
         if (observe != nullptr) {
@@ -659,15 +700,13 @@ bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
           for (int sig = 1; sig < kNsig; ++sig) {
             if ((deliverable & Bit(sig)) == 0) continue;
             interrupted_signal = sig;
-            if ((self->pending & Bit(sig)) != 0) {
-              self->pending &= ~Bit(sig);
-              interrupted_info = self->info[sig];
+            if ((self->pending.Mask() & Bit(sig)) != 0) {
+              Pop(self->pending, sig, &interrupted_info);
             } else {
-              S().process_pending &= ~Bit(sig);
-              interrupted_info = S().process_info[sig];
+              Pop(S().process_pending, sig, &interrupted_info);
             }
-            self->any_pending.store(self->pending != 0, std::memory_order_relaxed);
-            g_process_pending.store(S().process_pending != 0, std::memory_order_relaxed);
+            self->any_pending.store(self->pending.Mask() != 0, std::memory_order_relaxed);
+            g_process_pending.store(S().process_pending.Mask() != 0, std::memory_order_relaxed);
             break;
           }
         }
@@ -675,7 +714,19 @@ bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
         break;
       }
       self->waiting_for = ~self->mask;
-      if (S().sent.wait_until(lock, deadline) == std::cv_status::timeout) break;
+      if (boottime_deadline >= 0) {
+        const int64_t now = gesher::BoottimeNanos();
+        if (now >= boottime_deadline) break;
+        const int64_t left = boottime_deadline - now;
+        const int64_t millis = std::min<int64_t>(left / 1000000 + (left % 1000000 != 0),
+                                               0x7ffffffe);
+        // The resume callback takes this same mutex before notifying. A resume
+        // between this clock check and wait cannot be lost; an earlier resume
+        // is already reflected by the deadline predicate above.
+        S().sent.wait_for(lock, std::chrono::milliseconds(millis));
+      } else if (S().sent.wait_until(lock, deadline) == std::cv_status::timeout) {
+        break;
+      }
     }
     self->waiting_for = 0;
   }
@@ -700,6 +751,18 @@ bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms) {
 
 bool InterruptibleSleepObserved(uint32_t ms, void (*observe)(void*), void* context) {
   return SleepWithObservation(ms, nullptr, observe, context);
+}
+
+int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*), void* context) {
+  gesher::ResumeSubscription resume;
+  const int error = resume.Start([](void*) {
+    std::lock_guard<std::mutex> lock(S().mutex);
+    S().sent.notify_all();
+  }, nullptr);
+  if (error != 0) return error;
+  // SleepWithObservation drops the signal-state lock before this subscription
+  // is destroyed, so joining a resume callback cannot deadlock its notifier.
+  return SleepWithObservation(0, nullptr, observe, context, deadline) ? kEINTR : 0;
 }
 
 void DeliverPendingSignals() {

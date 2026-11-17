@@ -81,12 +81,9 @@ public final class ComponentProcessTest {
                 atm, 77301, mainThread);
         Object remote = construct(processType, new Class<?>[] {atmType, int.class, IApplicationThread.class},
                 atm, 77302, remoteThread);
-        for (Object p : List.of(main, remote)) {
-            field(processType, "packageName").set(p, pkg);
-            field(processType, "ready").setBoolean(p, true);
-        }
-        field(processType, "processName").set(main, pkg);
-        field(processType, "processName").set(remote, remoteName);
+        Method assign = method(atmType, "assignPackage", processType, String.class, String.class);
+        assign.invoke(atm, main, pkg, pkg); assign.invoke(atm, remote, pkg, remoteName);
+        for (Object p : List.of(main, remote)) field(processType, "ready").setBoolean(p, true);
         ((List<Object>) field(atmType, "mProcesses").get(atm)).addAll(List.of(main, remote));
         Object[] selected = new Object[1];
         Consumer<Object> capture = p -> selected[0] = p;
@@ -110,9 +107,9 @@ public final class ComponentProcessTest {
         ApplicationInfo ai = (ApplicationInfo) pmType.getMethod("getApplicationInfo", String.class,
                 long.class, int.class).invoke(pm, pkg, 0L, 0);
         ApplicationInfo secondaryAi = new ApplicationInfo(ai); secondaryAi.processName = remoteName;
-        Method providersFor = method(providers.getClass(), "providersFor", ApplicationInfo.class);
-        List<ProviderInfo> mainProviders = (List<ProviderInfo>) providersFor.invoke(providers, ai);
-        List<ProviderInfo> remoteProviders = (List<ProviderInfo>) providersFor.invoke(providers, secondaryAi);
+        Method providersFor = method(providers.getClass(), "providersFor", processType, ApplicationInfo.class);
+        List<ProviderInfo> mainProviders = (List<ProviderInfo>) providersFor.invoke(providers, main, ai);
+        List<ProviderInfo> remoteProviders = (List<ProviderInfo>) providersFor.invoke(providers, remote, secondaryAi);
         require(!remoteProviders.isEmpty(), "Secondary provider fixture missing");
         for (ProviderInfo p : remoteProviders) {
             require(remoteName.equals(normalize.invoke(atm, pkg, p.processName)), "Wrong secondary provider process");
@@ -124,13 +121,9 @@ public final class ComponentProcessTest {
         holder.provider = (IContentProvider) Proxy.newProxyInstance(IContentProvider.class.getClassLoader(),
                 new Class<?>[] {IContentProvider.class}, (p, m, a) -> m.getName().equals("asBinder") ? providerBinder : null);
         Method publish = method(providers.getClass(), "publishContentProviders", processType, List.class);
-        boolean denied = false;
-        try { publish.invoke(providers, main, List.of(holder)); }
-        catch (InvocationTargetException e) {
-            if (e.getCause() instanceof SecurityException) denied = true;
-            else throw e;
-        }
-        require(denied, "Main process could publish its secondary process's provider");
+        publish.invoke(providers, main, List.of(holder));
+        require(((java.util.Map<?, ?>) field(providers.getClass(), "mPublished").get(providers)).isEmpty(),
+                "Main process could publish its secondary process's unrequested provider");
         publish.invoke(providers, remote, List.of(holder));
         require(!((java.util.Map<?, ?>) field(providers.getClass(), "mPublished").get(providers)).isEmpty(),
                 "Correct process could not publish its own provider");

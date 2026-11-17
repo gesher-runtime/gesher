@@ -1,0 +1,83 @@
+From: Gesher Authors
+Subject: [PATCH] Map guest paths at the Win32 VFS canonicalization boundary
+
+Use the existing POSIX disk namespace before SQLite constructs canonical
+filename, URI and journal metadata. All main and attached databases then
+share file identity with Context/File operations, including cross-drive paths.
+Leave xOpen's core-owned pointer and native IO/error handling intact. Reject
+canonical UTF-8 output that does not fit instead of silently truncating it.
+
+--- a/dist/sqlite-autoconf-3500400/sqlite3.c
++++ b/dist/sqlite-autoconf-3500400/sqlite3.c
+@@ -53189,6 +53189,22 @@
+ ** pathname into zOut[].  zOut[] will be at least pVfs->mxPathname
+ ** bytes in size.
+ */
++#ifdef GESHER
++/* The mapped UTF-8 path may expand (reserved names or a native prefix).
++** Do not publish a successful, silently truncated canonical filename. */
++static int gesherFullPathnameCopy(
++  sqlite3_vfs *pVfs, int nFull, char *zFull, const char *zOut
++){
++  int capacity = nFull < pVfs->mxPathname ? nFull : pVfs->mxPathname;
++  size_t length = strlen(zOut);
++  if( capacity<=0 || length>=(size_t)capacity ){
++    if( nFull>0 ) zFull[0] = 0;
++    return SQLITE_CANTOPEN_FULLPATH;
++  }
++  memcpy(zFull, zOut, length+1);
++  return SQLITE_OK;
++}
++#endif
+ static int winFullPathnameNoMutex(
+   sqlite3_vfs *pVfs,            /* Pointer to vfs object */
+   const char *zRelative,        /* Possibly relative input path */
+@@ -53397,7 +53413,15 @@
+       sqlite3_snprintf(MIN(nFull, pVfs->mxPathname), zFull, "%s", zOut+6);
+     }
+ #else
++#ifdef GESHER
++    {
++      int rc = gesherFullPathnameCopy(pVfs, nFull, zFull, zOut);
++      sqlite3_free(zOut);
++      return rc;
++    }
++#else
+     sqlite3_snprintf(MIN(nFull, pVfs->mxPathname), zFull, "%s", zOut);
++#endif
+ #endif /* __CYGWIN__ */
+     sqlite3_free(zOut);
+     return SQLITE_OK;
+@@ -53406,6 +53430,14 @@
+   }
+ #endif
+ }
++#ifdef GESHER
++/* Map guest paths before the pager constructs sqlite3_filename and URI data.
++** Never substitute a plain string for the core-owned filename at xOpen. */
++extern int gesher_sqlite_full_pathname(
++  sqlite3_vfs*, const char*, int, char*,
++  int (*)(sqlite3_vfs*, const char*, int, char*)
++);
++#endif
+ static int winFullPathname(
+   sqlite3_vfs *pVfs,            /* Pointer to vfs object */
+   const char *zRelative,        /* Possibly relative input path */
+@@ -53416,7 +53448,17 @@
+   MUTEX_LOGIC( sqlite3_mutex *pMutex; )
+   MUTEX_LOGIC( pMutex = sqlite3MutexAlloc(SQLITE_MUTEX_STATIC_TEMPDIR); )
+   sqlite3_mutex_enter(pMutex);
++#ifdef GESHER
++  /* Preserve SQLite's native drive/extended-path file: URI spelling. */
++  if( zRelative[0]=='/' && (winIsDriveLetterAndColon(zRelative+1)
++       || winIsLongPathPrefix(zRelative+1)) ){
++    zRelative++;
++  }
++  rc = gesher_sqlite_full_pathname(pVfs, zRelative, nFull, zFull,
++                                 winFullPathnameNoMutex);
++#else
+   rc = winFullPathnameNoMutex(pVfs, zRelative, nFull, zFull);
++#endif
+   sqlite3_mutex_leave(pMutex);
+   return rc;
+ }

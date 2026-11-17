@@ -84,15 +84,13 @@ public final class SplitPackageContractTest {
                 && component.applicationInfo.privateFlags == ai.privateFlags,
                 "Feature component changed package ownership: " + suffix);
     }
-    private static ApplicationInfo metadata(ApkPackage pkg) {
-        PackageInfo info = pkg.packageInfo(ApkPackage.ALL);
-        ApplicationInfo ai = info.applicationInfo;
+    /** Shared with the host policy runner; the installed split fixture remains an ordinary APK. */
+    public static void ordinaryApplicationPolicy(ApkPackage pkg, ApplicationInfo ai) {
         int publicFlags = ApplicationInfo.FLAG_DEBUGGABLE | ApplicationInfo.FLAG_LARGE_HEAP
                 | ApplicationInfo.FLAG_USES_CLEARTEXT_TRAFFIC | ApplicationInfo.FLAG_HARDWARE_ACCELERATED
                 | ApplicationInfo.FLAG_EXTRACT_NATIVE_LIBS | ApplicationInfo.FLAG_SUPPORTS_RTL
                 | ApplicationInfo.FLAG_INSTALLED | ApplicationInfo.FLAG_HAS_CODE;
         int privateFlags = ApplicationInfo.PRIVATE_FLAG_DIRECT_BOOT_AWARE
-                | ApplicationInfo.PRIVATE_FLAG_DEFAULT_TO_DEVICE_PROTECTED_STORAGE
                 | ApplicationInfo.PRIVATE_FLAG_ISOLATED_SPLIT_LOADING
                 | ApplicationInfo.PRIVATE_FLAG_ACTIVITIES_RESIZE_MODE_UNRESIZEABLE;
         require((ai.flags & publicFlags) == publicFlags
@@ -101,6 +99,21 @@ public final class SplitPackageContractTest {
         require((ai.flags & (ApplicationInfo.FLAG_ALLOW_BACKUP | ApplicationInfo.FLAG_SYSTEM)) == 0
                 && (ai.privateFlags & ApplicationInfo.PRIVATE_FLAG_PRIVILEGED) == 0,
                 "Absent or disabled manifest/install capabilities were invented");
+        // AOSP ScanPackageUtils clears this request for ordinary packages. Keep
+        // the request in the real APK so this is a negative policy assertion,
+        // not a fixture which stops exercising the restricted manifest flag.
+        require(pkg.parsed.isDefaultToDeviceProtectedStorage() && !pkg.isSystemAddon()
+                && (ai.privateFlags & ApplicationInfo.PRIVATE_FLAG_DEFAULT_TO_DEVICE_PROTECTED_STORAGE) == 0,
+                "Ordinary split APK acquired a system-only device-protected default");
+        require(ai.credentialProtectedDataDir != null && ai.deviceProtectedDataDir != null
+                && ai.credentialProtectedDataDir.equals(ai.dataDir)
+                && !ai.credentialProtectedDataDir.equals(ai.deviceProtectedDataDir),
+                "Ordinary split APK lost its CE default or separate explicit DE storage");
+    }
+    private static ApplicationInfo metadata(ApkPackage pkg) {
+        PackageInfo info = pkg.packageInfo(ApkPackage.ALL);
+        ApplicationInfo ai = info.applicationInfo;
+        ordinaryApplicationPolicy(pkg, ai);
         require(Arrays.equals(ai.splitNames, new String[]{"feature.core", "feature.entry"})
                 && Arrays.equals(info.splitNames, ai.splitNames),
                 "Split names came from filenames or did not survive PackageInfo generation");

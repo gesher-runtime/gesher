@@ -212,10 +212,9 @@ public final class ProviderSecurityTest {
         Class<?> processType = Class.forName(atmType.getName() + "$ProcessRecord");
         Object ownerProcess = process(processType, atmType, atm, 31701, ownerUid);
         Object senderProcess = process(processType, atmType, atm, 31702, senderUid);
-        field(processType, "packageName").set(ownerProcess, ownerName);
-        field(processType, "processName").set(ownerProcess, provider.processName);
-        field(processType, "packageName").set(senderProcess, senderName);
-        field(processType, "processName").set(senderProcess, senderName);
+        Method assign = method(atmType, "assignPackage", processType, String.class, String.class);
+        assign.invoke(atm, ownerProcess, ownerName, provider.processName);
+        assign.invoke(atm, senderProcess, senderName, senderName);
         ((List<Object>) field(atmType, "mProcesses").get(atm)).addAll(Arrays.asList(ownerProcess, senderProcess));
         Method get = method(cpType, "getContentProvider", processType, String.class, String.class);
         Method publish = method(cpType, "publishContentProviders", processType, List.class);
@@ -234,8 +233,9 @@ public final class ProviderSecurityTest {
         ContentProviderHolder wrongUid = holder(provider); wrongUid.info.applicationInfo.uid++;
         denied(() -> publish.invoke(providers, ownerProcess, List.of(wrongUid)));
         ContentProviderHolder wrongComponent = holder(provider); wrongComponent.info.name = "test.ForgedProvider";
-        denied(() -> publish.invoke(providers, ownerProcess, List.of(wrongComponent)));
-        denied(() -> publish.invoke(providers, senderProcess, List.of(holder(provider))));
+        // Android ignores publications with no pending record for this process.
+        publish.invoke(providers, ownerProcess, List.of(wrongComponent));
+        publish.invoke(providers, senderProcess, List.of(holder(provider)));
         require(((java.util.Map<?, ?>) field(cpType, "mPublished").get(providers)).isEmpty(),
                 "a rejected publication partially changed the authority map");
 
@@ -244,8 +244,10 @@ public final class ProviderSecurityTest {
         publish.invoke(providers, ownerProcess, List.of(mutable));
         denied(() -> get.invoke(providers, senderProcess, senderName, authority));
         Object otherOwner = process(processType, atmType, atm, 31703, ownerUid);
-        field(processType, "packageName").set(otherOwner, ownerName);
-        field(processType, "processName").set(otherOwner, provider.processName);
+        assign.invoke(atm, otherOwner, ownerName, provider.processName);
+        ApplicationInfo otherInfo = new ApplicationInfo(provider.applicationInfo);
+        otherInfo.processName = provider.processName;
+        method(cpType, "providersFor", processType, ApplicationInfo.class).invoke(providers, otherOwner, otherInfo);
         ((List<Object>) field(atmType, "mProcesses").get(atm)).add(otherOwner);
         denied(() -> publish.invoke(providers, otherOwner, List.of(holder(provider))));
         System.out.println("ProviderSecurityTest: local sibling, canonical metadata and publication/authority/UID barriers passed");

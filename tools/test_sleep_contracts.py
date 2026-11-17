@@ -54,7 +54,7 @@ def main() -> int:
             raise ValueError("missing or ambiguous export: " + name)
         registrations.extend(matches)
     parts = {
-        "@QPC_IMPLEMENTATION@": section(shim, "int64_t QpcNanos() {", "int64_t ThreadCpuNanos() {"),
+        "@QPC_IMPLEMENTATION@": section(shim, "int64_t QpcNanos() {" if "int64_t QpcNanos() {" in shim else "int64_t MonotonicNanos() {", "int64_t ThreadCpuNanos() {"),
         "@CLOCK_IMPLEMENTATION@": section(shim, "int BIONIC_SYSV ClockGettime(", "struct LinuxTimeval {"),
         "@SLEEP_IMPLEMENTATION@": section(shim, "int BIONIC_SYSV Nanosleep(", "int64_t BIONIC_SYSV Clock()"),
         "@REGISTRATIONS@": "\n".join(registrations),

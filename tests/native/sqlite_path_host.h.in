@@ -1,0 +1,50 @@
+// Linux-only boundary adapters. The runner inserts the exact patched Windows
+// xFullPathname callback below. SQLite owns all actual DB/URI/pager/file IO.
+#pragma once
+#include <sqlite3.h>
+#include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <string>
+
+namespace gesher {
+std::string Narrow(const wchar_t*);
+std::wstring Widen(const char*);
+}
+inline std::string host_root;
+extern "C" int gesher_sqlite_full_pathname(
+    sqlite3_vfs*, const char*, int, char*, int (*)(sqlite3_vfs*, const char*, int, char*));
+
+@WIN_FULL_COPY@
+
+[[maybe_unused]] static bool winIsDriveLetterAndColon(const char* name) {
+  return ((name[0] >= 'a' && name[0] <= 'z') || (name[0] >= 'A' && name[0] <= 'Z')) && name[1] == ':';
+}
+[[maybe_unused]] static bool winIsLongPathPrefix(const char* name) {
+  return std::strncmp(name, "\\\\?\\", 4) == 0;
+}
+static int winFullPathnameNoMutex(sqlite3_vfs* vfs, const char* input, int size, char* output) {
+  std::string name(input);
+  // Model the stock Win32 canonicalizer's initial file: URI normalization,
+  // including in the unmodified-source negative control.
+  if (name.starts_with('/') && (winIsDriveLetterAndColon(name.c_str() + 1) || winIsLongPathPrefix(name.c_str() + 1)))
+    name.erase(0, 1);
+  if (name.starts_with("\\\\?\\UNC\\")) name = "\\\\" + name.substr(8);
+  else if (name.starts_with("\\\\?\\")) name.erase(0, 4);
+  std::replace(name.begin(), name.end(), '\\', '/');
+  std::string relative;
+  if (name.size() >= 3 && winIsDriveLetterAndColon(name.c_str()) && name[2] == '/') {
+    relative = std::string(1, static_cast<char>(name[0] | 32)) + name.substr(2);
+  } else if (name.starts_with("//")) relative = "unc/" + name.substr(2);
+  else if (name.starts_with('/')) relative = "d" + name;
+  else relative = "d/work/" + name;
+  const auto full = (std::filesystem::path(host_root) / relative).lexically_normal().string();
+  return gesherFullPathnameCopy(vfs, size, output, full.c_str());
+}
+#define MUTEX_LOGIC(X) X
+#define sqlite3MutexAlloc sqlite3_mutex_alloc
+#define SQLITE_MUTEX_STATIC_TEMPDIR SQLITE_MUTEX_STATIC_VFS1
+@WIN_FULL_PATHNAME@
+#undef SQLITE_MUTEX_STATIC_TEMPDIR
+#undef sqlite3MutexAlloc
+#undef MUTEX_LOGIC

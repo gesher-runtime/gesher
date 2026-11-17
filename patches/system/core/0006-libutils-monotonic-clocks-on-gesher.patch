@@ -1,16 +1,28 @@
 --- a/libutils/Timers.cpp
 +++ b/libutils/Timers.cpp
-@@ -29,12 +29,20 @@
+@@ -20,6 +20,10 @@
+ #include <stdlib.h>
+ #include <time.h>
+
++#if defined(GESHER)
++#include <gesher/clocks.h>
++#endif
++
+ #include <android-base/macros.h>
+ #include <log/log.h>
+
+@@ -29,12 +33,21 @@
      LOG_ALWAYS_FATAL_IF(clock < 0 || clock >= clock_id_max, "invalid clock id");
  }
- 
+
 -#if defined(__linux__)
 +#if defined(__linux__) || defined(GESHER)
  nsecs_t systemTime(int clock) {
      checkClockId(clock);
 +#if defined(GESHER)
-+    // Gesher: gesher-base has clock_gettime, but no CLOCK_BOOTTIME; the monotonic
-+    // clock is the one System.nanoTime reads too (Choreographer compares the two).
++    // Preserve the host pthread clock ABI; Android elapsed clocks opt in here.
++    if (clock == SYSTEM_TIME_MONOTONIC) return gesher::MonotonicNanos();
++    if (clock == SYSTEM_TIME_BOOTTIME) return gesher::BoottimeNanos();
 +    static constexpr clockid_t clocks[] = {CLOCK_REALTIME, CLOCK_MONOTONIC,
 +                                           CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID,
 +                                           CLOCK_MONOTONIC};
@@ -22,3 +34,16 @@
      static_assert(clock_id_max == arraysize(clocks));
      timespec t = {};
      clock_gettime(clocks[clock], &t);
+--- a/libutils/SystemClock.cpp
++++ b/libutils/SystemClock.cpp
+@@ -63,7 +63,9 @@
+  */
+ int64_t elapsedRealtimeNano()
+ {
+-#if defined(__linux__)
++#if defined(GESHER)
++    return systemTime(SYSTEM_TIME_BOOTTIME);
++#elif defined(__linux__)
+     struct timespec ts;
+     int err = clock_gettime(CLOCK_BOOTTIME, &ts);
+     if (CC_UNLIKELY(err)) {

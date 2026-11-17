@@ -19,6 +19,19 @@
 #include <vector>
 #include <time.h>
 
+// Clock transport for the Linux lifecycle fixture. Suspend semantics are
+// exercised with the actual adapter in tools/test_clock_domains.py.
+namespace gesher {
+inline int AndroidClockGettime(clockid_t clock, timespec* value) {
+  return clock_gettime(clock, value);
+}
+inline int64_t MonotonicNanos() {
+  timespec value;
+  clock_gettime(CLOCK_MONOTONIC, &value);
+  return static_cast<int64_t>(value.tv_sec) * 1000000000 + value.tv_nsec;
+}
+}
+
 class ObservedConditionVariable {
  public:
   std::atomic<unsigned> waits{0};

@@ -15,6 +15,3 @@
 #ifndef IOV_MAX
 #define IOV_MAX 1024
 #endif
-#ifndef SIGQUEUE_MAX
-#define SIGQUEUE_MAX 32
-#endif

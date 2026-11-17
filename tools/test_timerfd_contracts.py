@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-CASES = ("ownership", "contracts", "deadlines", "quiescence")
+CASES = ("ownership", "contracts", "deadlines", "quiescence", "suspend", "resume-lifetime", "resume-failure")
 
 
 def section(source: str, first: str, following: str) -> str:
@@ -48,7 +48,13 @@ def main() -> int:
     old = "struct TimerState {" in bionic
     core = "" if old else read("compat/posix/src/timerfd.cc")
     timer_core = re.sub(r"^#include[^\n]*\n", "", core, flags=re.M)
+    timer_core = timer_core.replace("std::condition_variable changed;", "ObservedTimerCondition changed;")
+    # The new dispatcher is test infrastructure for an old-source control;
+    # old timers never subscribe to it, so resume cannot secretly repair them.
+    resume_source = (ROOT / "compat/posix/src/resume.cc").read_text()
     replacements = {
+        "RESUME_CORE": re.sub(r"^#include[^\n]*\n", "", resume_source, flags=re.M),
+        "HAS_ANDROID_CLOCKS": str(int("#include <gesher/clocks.h>" in core)),
         "EVENT_FD": section(epoll, "struct EventFd {", "namespace {\n\nstruct Epoll;"),
         "OBJECT_REGISTRY": section(epoll, "struct Object {", "// Every live epoll"),
         "OBJECT_LOOKUP": section(epoll, "bool Lookup(int fd, Object* object)", "std::shared_ptr<Epoll> LookupEpoll("),
@@ -81,8 +87,10 @@ def main() -> int:
         # Linux's real libc/time/eventfd headers with the Windows POSIX overlay.
         (work / "gesher").mkdir()
         (work / "gesher/timerfd.h").write_text((ROOT / "compat/posix/include/gesher/timerfd.h").read_text())
+        (work / "gesher/resume.h").write_text((ROOT / "compat/posix/include/gesher/resume.h").read_text())
         command = shlex.split(args.cxx) + ["-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
-                    "-fno-exceptions", "-fno-builtin", "-pthread", "-I", str(work), str(generated), "-o", str(exe)]
+                    "-fno-exceptions", "-fno-builtin", "-pthread", "-I", str(work),
+                    "-I", str(ROOT / "tests/native"), str(generated), "-o", str(exe)]
         if args.sanitize:
             command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
         subprocess.run(command, check=True, timeout=120)

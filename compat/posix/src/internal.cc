@@ -1,3 +1,4 @@
+#include <gesher/clocks.h>
 #include "internal.h"
 
 #include <io.h>
@@ -81,15 +82,7 @@ HANDLE HandleFromFd(int fd) {
 }
 
 ULONGLONG MonotonicMicros() {
-  static const LONGLONG frequency = [] {
-    LARGE_INTEGER f;
-    QueryPerformanceFrequency(&f);
-    return f.QuadPart;
-  }();
-  LARGE_INTEGER now;
-  QueryPerformanceCounter(&now);
-  return static_cast<ULONGLONG>(now.QuadPart / frequency * 1000000 +
-                                now.QuadPart % frequency * 1000000 / frequency);
+  return static_cast<ULONGLONG>(MonotonicNanos() / 1000);
 }
 
 ULONGLONG DeadlineAfter(int timeout_ms) {

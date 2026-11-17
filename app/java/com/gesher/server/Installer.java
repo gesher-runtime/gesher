@@ -135,6 +135,7 @@ final class Installer {
     /**
      * The installed packages, parsed from their code paths, as PackageManagerService scans
      * them at boot. A package that does not parse any more is left out (and logged).
+     * Storage preparation follows SystemServer's verified system-package scan policy.
      */
     static List<ApkPackage> loadInstalled() throws IOException {
         List<ApkPackage> result = new ArrayList<>();
@@ -160,7 +161,7 @@ final class Installer {
                 result.add(open(e));
             } catch (Exception ex) {
                 SystemServer.log("installed package " + e.packageName + " at " + e.codePath
-                        + " does not parse: " + ex);
+                        + " could not be loaded: " + ex);
             }
         }
         return result;
@@ -260,7 +261,6 @@ final class Installer {
         if (!p.packageName.equals(e.packageName)) {
             throw new IllegalStateException("base.apk is " + p.packageName);
         }
-        p.setDataDir(Device.dataDir() + "/data/" + p.packageName);
         // lib/x86_64, or lib/arm64 for an arm64-v8a-only package (docs/arm64.md); its
         // splits count (an .xapk's libraries are in config.arm64_v8a.apk).
         String[] apks = apksOf(e.codePath);
@@ -269,7 +269,6 @@ final class Installer {
                 + NativeLibs.instructionSetDir(abi != null ? abi : NativeLibs.ABI));
         p.setPrimaryCpuAbi(abi);
         p.setInstallTimes(e.firstInstallTime, e.lastUpdateTime);
-        new File(p.dataDir()).mkdirs();
         return p;
     }
 
@@ -462,9 +461,11 @@ final class Installer {
                 }
                 installed.setSystemAddon(true);
             }
-            mEntries.put(pkg, entry);
-            writeRegistry();
-            mPm.add(installed);
+            // The incoming manifest cannot authorize moving an older app's data.
+            // Boot preparation used the committed manifest before any update;
+            // changing defaultToDeviceProtectedStorage later does not migrate CE.
+            installed.prepareInstallDataDirectories(old != null || previous != null);
+            publishInstalled(entry, installed);
             if (old != null && !old.codePath.equals(entry.codePath)) {
                 delete(new File(old.codePath));
             }
@@ -480,6 +481,21 @@ final class Installer {
         }
     }
 
+    /** Owner creation can fail; finish it before committing the installed registry. */
+    private void publishInstalled(Entry entry, ApkPackage installed) throws IOException {
+        mPm.prepareAdd(installed);
+        Entry previous = mEntries.put(entry.packageName, entry);
+        try {
+            writeRegistry();
+        } catch (IOException | RuntimeException failure) {
+            if (previous == null) mEntries.remove(entry.packageName);
+            else mEntries.put(entry.packageName, previous);
+            throw failure;
+        }
+        // prepareAdd attached this record to the store; publication performs no owner I/O.
+        mPm.add(installed);
+    }
+
     /** The "unchanged" answer for {@code pkg}, installed in {@code old}. */
     private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old)
             throws Exception {
@@ -493,7 +509,16 @@ final class Installer {
                 SystemServer.log("install " + pkg + ": shared-library context/content changed");
             }
             Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
-            mPm.add(open(old));
+            ApkPackage installed = open(old);
+            ApkPackage previous = mPm.get(pkg);
+            if (previous != null && previous.isSystemAddon()) {
+                if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
+                    throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
+                }
+                installed.setSystemAddon(true);
+            }
+            installed.prepareInstalledDataDirectories();
+            mPm.add(installed);
         }
         return new String[] {pkg, "unchanged", old.codePath,
                 String.valueOf(parsed.versionCode())};

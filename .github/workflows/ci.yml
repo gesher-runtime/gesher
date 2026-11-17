@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+    types: [checks_requested]
+    branches: [main]
   workflow_dispatch:
     inputs:
       release_version:
@@ -40,12 +43,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/workflows
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: automerge rules (label, push, CI-not-run, pending/failed checks)
-        run: node --test .github/scripts/automerge.test.js
+      - name: Native queue label and exact-head QA contracts
+        run: node --test .github/scripts/native-merge-queue.test.js
+      - name: Queue workflow coverage and failure propagation
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 .github/scripts/test_merge_queue_workflows.py
   update-contracts:
     needs: [source-identity]
     strategy:
@@ -118,6 +127,7 @@ jobs:
           python3 tools/ci/receipt_identity.py
           python3 -m unittest discover -s tools/ci -p test_source_identity.py
           python3 -m unittest discover -s tools/ci -p test_workflow_actor_metadata.py
+          python3 -m unittest discover -s tools/ci -p test_self_hosted_trial.py
           python3 -m unittest discover -s tools/ci -p test_github_read.py
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
@@ -136,6 +146,7 @@ jobs:
 
       - name: Native allocation, directory, semaphore, file-lock and socket-control contracts
         run: |
+          python3 tools/test_hwui_renderer_policy.py --sanitize
           python3 tools/test_egl_readback_layout.py --sanitize
           python3 tools/test_bionic_allocations.py --sanitize
           python3 tools/test_bionic_system_contracts.py --sanitize
@@ -177,6 +188,8 @@ jobs:
 
       - name: Timer, DNS and media lifetime contracts
         run: |
+          python3 tools/test_clock_domains.py --sanitize
+          python3 tools/test_boottime_resume.py --sanitize
           python3 tools/test_timerfd_contracts.py --sanitize
           python3 tools/test_input_surface_callbacks.py --sanitize
           python3 tools/test_codec_lifecycle_contracts.py --sanitize
@@ -249,6 +262,7 @@ jobs:
         run: |
           python3 tools/test_file_timestamp_contracts.py --sanitize
           python3 tools/test_directory_rename_contracts.py --sanitize
+          python3 tools/test_sqlite_paths.py --fetch --sanitize --negative-control
           python3 tools/test_media_source_contracts.py --sanitize
           python3 tools/test_media_callback_state.py --sanitize
           python3 tools/test_media_http_contracts.py --sanitize
@@ -261,6 +275,11 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+
+      - name: Package enabled-state storage limits and crash contracts
+        run: |
+          python3 tools/test_package_enabled_store.py --java-home "$JAVA_HOME"
+          python3 tools/test_zygote_child_lifetime.py --sanitize
 
       - name: Audio JNI buffer contracts with checked JNI and UBSan
         run: |
@@ -329,6 +348,9 @@ jobs:
 
       - name: Fetch AOSP sources
         run: tools/fetch-aosp.sh
+
+      - name: libcore System.nanoTime shares Android awake-time domain
+        run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
 
       - uses: actions/setup-java@v4
         with:
@@ -450,7 +472,7 @@ jobs:
           ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_bionic.cc.obj
           ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj
           ninja -C out native3_unicode_test
-          ninja -C out native3_cpu_clock_test
+          ninja -C out native3_cpu_clock_test clock_domains_windows_test boottime_resume_windows_test
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
           ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test
@@ -739,6 +761,9 @@ jobs:
 
       - name: Fetch AOSP sources
         run: tools/fetch-aosp.sh
+
+      - name: libcore System.nanoTime shares Android awake-time domain
+        run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
 
       - name: Report
         run: |
@@ -1584,12 +1609,31 @@ jobs:
       - name: Run real apps
         shell: pwsh
         run: |
+          $invocation = [guid]::NewGuid().ToString('N')
+          "GESHER_E2E_INVOCATION_ID=$invocation" >> $env:GITHUB_ENV
           pwsh -NoProfile -File tests/e2e/test-apks.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/e2e/test-evidence.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/e2e/test_coverage.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/e2e/test_evidence_process.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
           $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
-          pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results
+          pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results -InvocationId $invocation
           exit $LASTEXITCODE
+
+      - name: Validate and publish real-app coverage
+        if: always()
+        shell: pwsh
+        run: |
+          python tests/e2e/coverage.py --manifest tests/e2e/apps.json --observations e2e-results/observations.json --out-dir e2e-results
+          $result = $LASTEXITCODE
+          if (Test-Path e2e-results/coverage.md) {
+            Get-Content e2e-results/coverage.md | Add-Content $env:GITHUB_STEP_SUMMARY
+          }
+          exit $result
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -1653,6 +1697,14 @@ jobs:
           & ./dist/layered_bitmap_cache_test.exe gate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/native_poll_allocations_test.exe gate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Real Windows SQLite guest paths, URI metadata and journal IO
+        if: matrix.shard == 'native'
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          & ./dist/sqlite_path_test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble framework artifact
@@ -1840,6 +1892,7 @@ jobs:
           path: |
             results.txt
             ci-owners.json
+            dist/realtime-signals-evidence/**/*.json
           if-no-files-found: error
 
   test:
@@ -2259,3 +2312,21 @@ jobs:
       - name: Verify raw archive and exact producer, then run actual host and both ABI paths
         shell: pwsh
         run: tools/net-tcp-priority/run-component.ps1
+
+  ci-required:
+    name: ci-required
+    if: always()
+    needs: [source-identity, automerge-script, update-contracts, reader-ownership, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every production CI job
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['JOB_RESULTS'])
+          failed = {name: job['result'] for name, job in results.items() if job['result'] != 'success'}
+          if not results or failed:
+              raise SystemExit(f"Required jobs did not succeed: {failed}")
+          PY

@@ -209,6 +209,17 @@ def check():
    original=actual.replace(RECEIPT_SOURCE_PARAMETER,b'[Collections.IDictionary] $Expected = $null)')
    assert original.replace(RECEIPT_SOURCE_BLOCK,b'')==expected,path
    assert hashlib.sha256(actual).hexdigest()==RECEIPT_DIAGNOSTICS_SHA256,path
+  elif path=='tools/net-tcp-priority/import-policy.json':
+   policy=json.loads(expected)
+   for role,entry in policy.items():
+    if role!='gesher_arm64.dll':
+     entry['system']+=['api-ms-win-core-realtime-l1-1-1.dll','powrprof.dll']
+     entry['source']+=['compat/posix/src/resume.cc','compat/posix/include/gesher/clocks.h']
+   assert actual==(json.dumps(policy,indent=2)+'\n').encode(),path
+  elif path=='tools/net-tcp-priority/import_policy.py':
+   addition=b"    # The POSIX clock/resume backend uses these exact Windows system imports.\n    # They do not authorize a power/clock dependency in the standalone translator.\n    for role in POLICY:\n        clocks = ['api-ms-win-core-realtime-l1-1-1.dll', 'powrprof.dll']\n        assert allowed(role, clocks) == (role != 'gesher_arm64.dll')\n        assert not allowed(role, ['api-ms-win-power-private-l1-1-0.dll'])\n"
+   anchor=b"    assert not allowed('foreign-role', ['kernel32.dll'])\n"
+   assert expected.count(anchor)==1 and actual==expected.replace(anchor,addition+anchor),path
   else:assert actual==expected,path
  before=old('tools/net-tcp-priority/run-component.ps1').decode();after=(ROOT/'tools/net-tcp-priority/run-component.ps1').read_text(encoding='utf-8')
  marker='function RequireDiagnosticRetirement';assert after[after.index(marker):]==before[before.index(marker):],'Actual controller/guarded-copy/census/cancel/HOST/bothABI execution gates changed'

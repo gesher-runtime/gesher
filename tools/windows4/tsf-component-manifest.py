@@ -29,7 +29,7 @@ for target, sources in {'windows4_text_store_probe':['probes/windows4/text_store
         argv = shlex.split(selected[0]['command'])
         assert matches[0] in argv[:2], argv[:2]
         commands[target + ':' + source] = selected[0]['command']
-allowed = {'kernel32.dll','user32.dll','ole32.dll','uuid.dll','ntdll.dll','advapi32.dll','shell32.dll','gdi32.dll','msvcrt.dll','ucrtbase.dll','combase.dll','api-ms-win-core-synch-l1-2-0.dll'} | {'api-ms-win-crt-' + part + '-l1-1-0.dll' for part in ('stdio','runtime','locale','heap','private','string','convert','math','environment','filesystem','time','process','utility')}
+allowed = {'kernel32.dll','user32.dll','ole32.dll','uuid.dll','ntdll.dll','advapi32.dll','shell32.dll','gdi32.dll','msvcrt.dll','ucrtbase.dll','combase.dll','api-ms-win-core-synch-l1-2-0.dll', 'api-ms-win-core-realtime-l1-1-1.dll', 'powrprof.dll'} | {'api-ms-win-crt-' + part + '-l1-1-0.dll' for part in ('stdio','runtime','locale','heap','private','string','convert','math','environment','filesystem','time','process','utility')}
 for name in ['windows4_text_store_probe.exe','windows4_tsf_service.dll']:
     names = re.findall(r'^\s*Name:\s*(\S+)', Path('fixture/' + name + '.imports.txt').read_text(), re.M)
     assert names and not (set(x.lower() for x in names) - allowed), (name, names)

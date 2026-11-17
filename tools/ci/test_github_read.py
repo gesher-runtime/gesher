@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import call, patch
 
 from github_read import GitHubReadError, get_json, main
+from github_jobs import get_jobs
 
 
 ENDPOINT = 'repos/gesher-runtime/gesher/actions/runs/42444051868/attempts/1/jobs?per_page=100'
@@ -187,7 +188,7 @@ class ReceiptIntegrationTest(unittest.TestCase):
             'created_at': '2026-11-08T03:50:35Z', 'workflow_run': {'id': 7,
                 'head_sha': self.head, 'repository_id': 8, 'head_repository_id': 8}}]}
         self.endpoints = [f'repos/{self.repo}/actions/runs/7',
-            f'repos/{self.repo}/actions/runs/7/attempts/2/jobs?per_page=100',
+            f'repos/{self.repo}/actions/runs/7/attempts/2/jobs?per_page=50&page=1',
             f'repos/{self.repo}/actions/runs/7/artifacts?per_page=100']
         self.commands = []
         self.downloads = []
@@ -224,6 +225,25 @@ class ReceiptIntegrationTest(unittest.TestCase):
         self.assertEqual(self.downloads, [[sys.executable, 'tools/surface/download-verified-artifact.py',
             '--id', '10', '--digest', 'sha256:' + 'c' * 64, '--destination', 'supplier']])
 
+    def test_actual_receipt_finds_producer_on_second_page_and_preserves_source_predicates(self):
+        first = {'total_count': 51, 'jobs': [dict(self.jobs['jobs'][0], id=i, name=f'other{i}')
+                                          for i in range(100, 150)]}
+        second = {'total_count': 51, 'jobs': copy.deepcopy(self.jobs['jobs'])}
+        self.responses = [response(self.run_value), response(first), response(second), response(self.inventory)]
+        self._receipt()
+        self.assertEqual([c[-1] for c in self.commands], [self.endpoints[0], self.endpoints[1],
+            self.endpoints[1].replace('page=1', 'page=2'), self.endpoints[2]])
+        self.assertEqual(len(self.downloads), 1)
+
+    def test_second_page_wrong_source_cannot_consume_artifact(self):
+        first = {'total_count': 51, 'jobs': [dict(self.jobs['jobs'][0], id=i, name=f'other{i}')
+                                          for i in range(100, 150)]}
+        second = {'total_count': 51, 'jobs': [dict(self.jobs['jobs'][0], head_sha='d' * 40)]}
+        self.responses = [response(self.run_value), response(first), response(second)]
+        with self.assertRaisesRegex(RuntimeError, 'Producer source/attempt/conclusion mismatch'):
+            self._receipt()
+        self.assertEqual(self.downloads, [])
+
     def test_successful_transport_never_retries_or_accepts_semantic_rejections(self):
         cases = []
         wrong_run = copy.deepcopy(self.run_value); wrong_run['head_sha'] = 'd' * 40
@@ -251,6 +271,81 @@ class ReceiptIntegrationTest(unittest.TestCase):
                 self.assertEqual(len(self.commands), expected_calls)
                 self.assertEqual(self.downloads, [])
                 self.sleep.assert_not_called()
+
+
+JOBS_ENDPOINT = 'repos/gesher-runtime/gesher/actions/runs/7/attempts/2/jobs'
+
+
+def inventory(count, start=1, size=None):
+    size = min(50, count) if size is None else size
+    return {'total_count': count, 'jobs': [{'id': n, 'name': f'job{n}',
+        'head_sha': 'a' * 40, 'run_attempt': 2, 'conclusion': 'success'}
+        for n in range(start, start + size)]}
+
+
+class JobsTest(unittest.TestCase):
+    def test_complete_two_page_inventory_preserves_every_job_field(self):
+        first, second = inventory(73), inventory(73, 51, 23)
+        with patch('github_jobs.get_json', side_effect=[first, second]) as read, \
+                patch('github_jobs.time.sleep') as sleep:
+            result = get_jobs(JOBS_ENDPOINT)
+        self.assertEqual(result, {'total_count': 73, 'jobs': first['jobs'] + second['jobs']})
+        self.assertEqual([c.args[0] for c in read.call_args_list],
+            [JOBS_ENDPOINT + '?per_page=50&page=1', JOBS_ENDPOINT + '?per_page=50&page=2'])
+        sleep.assert_not_called()
+
+    def test_boundaries(self):
+        for count in (0, 1, 50, 51, 100):
+            with self.subTest(count=count):
+                pages = [inventory(count)]
+                if count > 50: pages.append(inventory(count, 51, count - 50))
+                with patch('github_jobs.get_json', side_effect=pages) as read:
+                    self.assertEqual(len(get_jobs(JOBS_ENDPOINT)['jobs']), count)
+                self.assertEqual(read.call_count, len(pages))
+
+    def test_fail_closed_for_truncation_change_overlap_and_malformed_metadata(self):
+        malformed = inventory(1); malformed['jobs'][0]['id'] = True
+        nonobject = inventory(1); nonobject['jobs'][0] = None
+        duplicate = inventory(50); duplicate['jobs'][1]['id'] = 1
+        cases = [
+            [inventory(101)], [inventory(-1)], [{'total_count': True, 'jobs': []}],
+            [inventory(73, size=49)], [inventory(73), inventory(73, 51, 22)],
+            [inventory(73), inventory(73, 50, 23)],
+            [inventory(1, size=2)], [malformed], [nonobject], [duplicate],
+            [{'total_count': 0}], [None],
+        ]
+        for pages in cases:
+            with self.subTest(pages=pages):
+                with patch('github_jobs.get_json', side_effect=copy.deepcopy(pages)):
+                    with self.assertRaises(GitHubReadError): get_jobs(JOBS_ENDPOINT)
+
+    def test_transport_error_never_returns_first_page_as_complete(self):
+        with patch('github_jobs.get_json', side_effect=[inventory(73), GitHubReadError('502')]):
+            with self.assertRaises(GitHubReadError): get_jobs(JOBS_ENDPOINT)
+
+    def test_expanding_inventory_restarts_with_a_complete_fresh_snapshot(self):
+        old, fresh, second = inventory(73), inventory(74), inventory(74, 51, 24)
+        old['jobs'][0]['name'] = 'old-generation'
+        fresh['jobs'][0]['name'] = 'fresh-generation'
+        pages = [old, second, fresh, second]
+        with patch('github_jobs.get_json', side_effect=pages) as read, \
+                patch('github_jobs.time.sleep') as sleep:
+            result = get_jobs(JOBS_ENDPOINT)
+        self.assertEqual(result['total_count'], 74)
+        self.assertEqual(result['jobs'], fresh['jobs'] + second['jobs'])
+        self.assertEqual([j['id'] for j in result['jobs']], list(range(1, 75)))
+        self.assertEqual([c.args[0] for c in read.call_args_list],
+            [JOBS_ENDPOINT + '?per_page=50&page=1', JOBS_ENDPOINT + '?per_page=50&page=2'] * 2)
+        sleep.assert_called_once_with(1)
+
+    def test_permanently_changing_inventory_has_a_bounded_failure(self):
+        pages = [inventory(73), inventory(74, 51, 24)] * 3
+        with patch('github_jobs.get_json', side_effect=pages) as read, \
+                patch('github_jobs.time.sleep') as sleep:
+            with self.assertRaisesRegex(GitHubReadError, 'changed between pages'):
+                get_jobs(JOBS_ENDPOINT)
+        self.assertEqual(read.call_count, 6)
+        self.assertEqual([c.args for c in sleep.call_args_list], [(1,), (2,)])
 
 
 if __name__ == '__main__':
