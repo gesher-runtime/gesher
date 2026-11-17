@@ -175,9 +175,11 @@ std::function<void()> QueueSurface::PublishLocked(std::optional<int64_t> timesta
       d[x] = opaque ? (p | 0xff000000u) : p;
     }
   }
-  const int64_t timestamp = timestamp_ns.value_or(timestamp_ns_);
-  f->timestamp_ns = timestamp == NATIVE_WINDOW_TIMESTAMP_AUTO
-                        ? systemTime(SYSTEM_TIME_MONOTONIC) : timestamp;
+  // A per-frame codec timestamp is data, including INT64_MIN. Only the native
+  // producer's persistent setting gives that value its AUTO sentinel meaning.
+  f->timestamp_ns = timestamp_ns.has_value() ? *timestamp_ns
+      : timestamp_ns_ == NATIVE_WINDOW_TIMESTAMP_AUTO
+          ? systemTime(SYSTEM_TIME_MONOTONIC) : timestamp_ns_;
   f->number = ++frames_;
   latest_ = std::move(f);
   return listener_;

@@ -48,6 +48,9 @@ int main() {
   Check(surface->Latest()->timestamp_ns == 0, "one frame overrides producer timestamp with zero");
   Post(surface.get(), -1234);
   Check(surface->Latest()->timestamp_ns == -1234, "one frame preserves a signed explicit timestamp");
+  Post(surface.get(), INT64_MIN);
+  Check(surface->Latest()->timestamp_ns == INT64_MIN,
+        "codec timestamp preserves INT64_MIN without invoking native producer AUTO");
   ANativeWindowBuffer* buffer = nullptr;
   int fence = -1;
   Check(window->dequeueBuffer(window, &buffer, &fence) == 0 && buffer != nullptr, "dequeue native buffer");
@@ -62,7 +65,7 @@ int main() {
   frame = surface->Latest();
   Check(frame->timestamp_ns >= start && frame->timestamp_ns <= end,
         "auto sentinel is replaced, never emitted literally");
-  Check(callbacks == 8 && surface->frames() == 8, "one callback and frame per publication");
+  Check(callbacks == 9 && surface->frames() == 9, "one callback and frame per publication");
   surface->Abandon();
   ANativeWindow_Buffer abandoned = {};
   Check(surface->lock(&abandoned, nullptr) != 0, "abandoned surface still rejects production");
