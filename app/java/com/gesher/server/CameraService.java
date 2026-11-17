@@ -6,6 +6,8 @@ package com.gesher.server;
 
 import android.Manifest;
 import android.app.ActivityThread;
+import android.app.GesherActivityWindow;
+import android.app.WindowConfiguration;
 import android.content.AttributionSourceState;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
@@ -25,6 +27,7 @@ import android.hardware.camera2.params.StreamConfiguration;
 import android.hardware.camera2.params.StreamConfigurationDuration;
 import android.hardware.camera2.utils.CameraIdAndSessionConfiguration;
 import android.hardware.camera2.utils.ConcurrentCameraIdCombination;
+import android.hardware.display.DisplayManagerGlobal;
 import android.os.IBinder;
 import android.os.ServiceManager;
 import android.os.ServiceSpecificException;
@@ -32,6 +35,9 @@ import android.util.Range;
 import android.util.Rational;
 import android.util.Size;
 import android.util.SizeF;
+import android.view.Display;
+import android.view.DisplayInfo;
+import android.view.Surface;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -256,11 +262,13 @@ public final class CameraService extends ICameraService.Default {
                 durations.toArray(new StreamConfigurationDuration[0]));
         m.set(CameraCharacteristics.SCALER_AVAILABLE_STALL_DURATIONS,
                 stalls.toArray(new StreamConfigurationDuration[0]));
-        m.set(CameraCharacteristics.LENS_FACING, d.test ? CameraMetadata.LENS_FACING_BACK
-                : CameraMetadata.LENS_FACING_EXTERNAL);
+        m.set(CameraCharacteristics.LENS_FACING, d.isRearFacing() ? CameraMetadata.LENS_FACING_BACK
+                : CameraMetadata.LENS_FACING_FRONT);
         m.set(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL,
-                CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_EXTERNAL);
-        m.set(CameraCharacteristics.SENSOR_ORIENTATION, 0);
+                d.test ? CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_EXTERNAL
+                        : CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED);
+        m.set(CameraCharacteristics.SENSOR_ORIENTATION,
+                sensorOrientation(d.isRearFacing()));
         m.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES,
                 new int[] {CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE});
         m.set(CameraCharacteristics.REQUEST_PARTIAL_RESULT_COUNT, 1);
@@ -329,6 +337,39 @@ public final class CameraService extends ICameraService.Default {
 
     /** CameraDevice.TEMPLATE_PREVIEW (ICameraDeviceUser's too). */
     static final int CameraDevice_TEMPLATE_PREVIEW = ICameraDeviceUser.TEMPLATE_PREVIEW;
+
+    /**
+     * Sensor orientation in degrees relative to the display's natural orientation, matching
+     * the window's active display rotation so apps applying Android's camera orientation
+     * formula receive upright frames.
+     */
+    static int sensorOrientation(boolean rearFacing) {
+        int degrees = displayDegrees();
+        return rearFacing ? degrees : (360 - degrees) % 360;
+    }
+
+    private static int displayDegrees() {
+        try {
+            int rotation = GesherActivityWindow.activeDisplayRotation();
+            if (rotation == WindowConfiguration.ROTATION_UNDEFINED) {
+                DisplayManagerGlobal dm = DisplayManagerGlobal.getInstance();
+                DisplayInfo info = dm != null ? dm.getDisplayInfo(Display.DEFAULT_DISPLAY) : null;
+                if (info != null) rotation = info.rotation;
+            }
+            switch (rotation) {
+                case Surface.ROTATION_90:
+                    return 90;
+                case Surface.ROTATION_180:
+                    return 180;
+                case Surface.ROTATION_270:
+                    return 270;
+                default:
+                    return 0;
+            }
+        } catch (RuntimeException e) {
+            return 0;
+        }
+    }
 
     /** The tags of what {@code m} holds, for the available-keys lists. */
     private static int[] tagsOf(CameraMetadataNative m) {

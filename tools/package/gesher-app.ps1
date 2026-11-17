@@ -31,6 +31,9 @@
 #                                      `windows`: Windows' settings again (docs/network.md)
 #   gesher-app list                    the installed packages
 #   gesher-app status                  the device's processes
+#   gesher-app cameras                 list Windows cameras and their frame sizes
+#   gesher-app cameras rear CAMERA_ID  use a Windows camera as the rear camera
+#   gesher-app cameras reset           restore the default camera mapping
 #   gesher-app shutdown                stop the device
 #   gesher-app toast-activated         (COM runs it: Gesher's toast activator) a click
 #                                      on an app's toast, given to the device (ADR 0051)
@@ -87,10 +90,11 @@ $root = Join-Path $env:LOCALAPPDATA 'Gesher'
 # The optional addon installer records an explicit per-profile choice. An explicit
 # environment value (including 0) takes precedence for a single invocation.
 $enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
-$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy', 'sync-shortcuts'
+$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy', 'sync-shortcuts', 'cameras'
 if ($Arguments.Count -eq 0) {
   Write-Host ((Get-GesherText 'usage') + 'gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--detach | --wait | --single-process | --system-server]')
   Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows]'
+  Write-Host '       gesher-app cameras [rear CAMERA_ID | reset]'
   exit 2
 }
 $command = $Arguments[0]
@@ -246,6 +250,8 @@ $dalvikvm = Join-Path $here 'dalvikvm.exe'
 # Keep the profile choice local to child processes, so disabling the marker in
 # this PowerShell session cannot inherit a previous launcher's automatic opt-in.
 $previousMicrogSpoof = $env:GESHER_MICROG_SPOOF
+$previousRearCamera = $env:GESHER_CAMERA_REAR_ID
+$rearCameraFile = if ($root) { Join-Path $root 'camera-rear' } else { $null }
 # The Windows environment is Unicode, but the VM's narrow CRT environment is not.
 # Pass the caller-owned diagnostic path through wide argv instead, after the main
 # class so it is not inherited with the device's VM options.
@@ -255,6 +261,21 @@ if ($previousLaunchError) { $launchErrorArguments = @('--launch-error-file', $pr
 try {
   Remove-Item Env:GESHER_LAUNCH_ERROR_FILE -ErrorAction SilentlyContinue
   if ($enableMicrogForProfile) { $env:GESHER_MICROG_SPOOF = '1' }
+  if (-not $previousRearCamera -and $rearCameraFile) {
+    try { $env:GESHER_CAMERA_REAR_ID = ([IO.File]::ReadAllText($rearCameraFile)).Trim() }
+    catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { }
+  }
+  if ($command -eq 'cameras') {
+    & $dalvikvm @dvm com.gesher.server.CameraSelection (NoDrive $rearCameraFile) @rest
+    $code = $LASTEXITCODE
+    if ($code -eq 0 -and $rest.Count -gt 0) {
+      $state = DeviceState
+      if ($state -and (DeviceProcess $state 'system_server')) {
+        Write-Host (Get-GesherText 'camera_selection_restart')
+      }
+    }
+    exit $code
+  }
   # The device's commands, and launching through it (com.gesher.app.Launcher).
   if ($commands -contains $command) {
     $launcherArgs = @($command)
@@ -311,6 +332,8 @@ try {
   exit $code
 } finally {
   $env:GESHER_MICROG_SPOOF = $previousMicrogSpoof
+  if ($null -eq $previousRearCamera) { Remove-Item Env:GESHER_CAMERA_REAR_ID -ErrorAction SilentlyContinue }
+  else { $env:GESHER_CAMERA_REAR_ID = $previousRearCamera }
   if ($null -eq $previousLaunchError) { Remove-Item Env:GESHER_LAUNCH_ERROR_FILE -ErrorAction SilentlyContinue }
   else { $env:GESHER_LAUNCH_ERROR_FILE = $previousLaunchError }
 }

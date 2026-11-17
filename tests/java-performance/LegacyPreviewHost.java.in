@@ -2,6 +2,7 @@
 package com.gesher.server;
 
 import java.lang.management.ManagementFactory;
+import java.lang.reflect.Method;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -11,14 +12,16 @@ import java.util.Map;
 
 public final class LegacyPreviewHost {
     private static final int MSG_ERROR = 1, MSG_PREVIEW_FRAME = 16;
-    private static int checks, delivered, conversions, surfaces;
-    private static boolean collect = true, recycle;
+    private static int checks, delivered, conversions, surfaces, nextSurfaceResult;
+    private static boolean collect = true, recycle, autoAck = true, throwOnPost;
     private static Runnable onDeliver;
     private static Runnable onRead;
     private static Runnable onConvert;
     private static Runnable onPost;
     private static final List<byte[]> posted = new ArrayList<>();
     private static final List<Integer> frameIds = new ArrayList<>();
+    private static final Map<Camera, Session> sessions = new LinkedHashMap<>();
+    private static Camera activeCamera;
     private static int currentFrame;
 
     private static final class Size {
@@ -28,6 +31,33 @@ public final class LegacyPreviewHost {
         int getHeight() { return height; }
     }
     private static final class Surface {}
+    public static final class Camera {
+        @SuppressWarnings("unused")
+        public static void postEventFromNative(Object weakThis, int type, int first, int second, Object payload) {
+            if (throwOnPost) throw new RuntimeException("simulated post failure");
+            if (type == MSG_ERROR) return;
+            if (type != MSG_PREVIEW_FRAME) throw new AssertionError("unexpected camera event " + type);
+            if (onPost != null) onPost.run();
+            ++delivered;
+            byte[] frame = (byte[]) payload;
+            if (collect) { posted.add(frame); frameIds.add(currentFrame); }
+            Camera cam = (Camera) weakThis;
+            if (autoAck && cam != null) {
+                Session s = sessions.get(cam);
+                if (s != null && !s.manualBuffers) setHasPreviewCallback(cam, true, false);
+            }
+            if (recycle && cam != null) {
+                Session s = sessions.get(cam);
+                if (s != null) s.buffers.add(frame);
+            }
+        }
+    }
+    private static Method sPost;
+    private static Session session(Camera camera) {
+        Session s = sessions.get(camera);
+        if (s == null) throw new RuntimeException("unknown camera");
+        return s;
+    }
     private static final class WindowsCamera {
         static final class Device {}
         static final class Capture {
@@ -61,20 +91,13 @@ public final class LegacyPreviewHost {
             return result;
         }
         static int deliver(Surface surface, byte[] input, int w, int h, long timestamp, byte[] jpeg) {
-            ++surfaces;
+            int result = nextSurfaceResult;
+            if (result == OK) ++surfaces;
             if (onDeliver != null) onDeliver.run();
-            return OK;
+            return result;
         }
     }
     private static void log(String message) {}
-    private static void post(Session session, int type, int first, int second, Object payload) {
-        if (type != MSG_PREVIEW_FRAME) throw new AssertionError("unexpected camera event " + type);
-        if (onPost != null) onPost.run();
-        ++delivered;
-        byte[] frame = (byte[]) payload;
-        if (collect) { posted.add(frame); frameIds.add(currentFrame); }
-        if (recycle) session.buffers.add(frame);
-    }
 
 @PRODUCTION@
 
@@ -103,7 +126,10 @@ public final class LegacyPreviewHost {
         return result;
     }
     private static Session session(String format, boolean callback, boolean manual, boolean surface) {
-        Session result = new Session(null, new WindowsCamera.Device());
+        Camera cam = new Camera();
+        Session result = new Session(cam, new WindowsCamera.Device());
+        sessions.put(cam, result);
+        activeCamera = cam;
         result.params.put("preview-format", format);
         result.callback = callback; result.manualBuffers = manual; result.previewing = true;
         result.previewSurface = surface ? new Surface() : null;
@@ -111,7 +137,9 @@ public final class LegacyPreviewHost {
     }
     private static void reset() {
         delivered = conversions = surfaces = 0;
+        nextSurfaceResult = CameraFrames.OK;
         posted.clear(); frameIds.clear(); recycle = false; collect = true;
+        autoAck = true; throwOnPost = false;
         onDeliver = null; onRead = null; onConvert = null; onPost = null;
     }
     private static void behavior() {
@@ -195,6 +223,48 @@ public final class LegacyPreviewHost {
         onPost = () -> check(Thread.holdsLock(atomic), "preview callback admission raced stop/restart after final check");
         previewLoop(atomic, new WindowsCamera.Capture(atomic, 2, 2, 1), new Size(2, 2));
         check(delivered == 1, "normal preview callback was suppressed by generation admission");
+
+        // Automatic callback backpressure: unacknowledged frame suppresses extra conversions
+        // until setHasPreviewCallback acknowledges receipt.
+        reset();
+        autoAck = false;
+        Session bp = session("yuv420sp", true, false, true);
+        Camera bpCam = activeCamera;
+        onRead = () -> {
+            if (currentFrame == 4) setHasPreviewCallback(bpCam, true, false);
+        };
+        previewLoop(bp, new WindowsCamera.Capture(bp, 16, 4, 5), new Size(16, 4));
+        check(surfaces == 5, "backpressure blocked surface delivery");
+        check(delivered == 2 && conversions == 2 && frameIds.get(0) == 1 && frameIds.get(1) == 4,
+                "backpressure did not throttle or resume on callback acknowledgment");
+
+        // Post reflection failure clears frameInFlight so subsequent frames are not stuck.
+        reset();
+        autoAck = false;
+        Session err = session("yuv420sp", true, false, false);
+        throwOnPost = true;
+        onRead = () -> {
+            if (currentFrame == 2) throwOnPost = false;
+        };
+        previewLoop(err, new WindowsCamera.Capture(err, 16, 4, 2), new Size(16, 4));
+        check(delivered == 1 && frameIds.get(0) == 2 && err.frameInFlight,
+                "failed post left frameInFlight stuck");
+
+        // Manual callback buffer cap and automatic-mode guard, plus surface recovery.
+        reset();
+        Session cap = session("yuv420sp", true, false, true);
+        Camera capCam = activeCamera;
+        addCallbackBuffer(capCam, new byte[8], MSG_PREVIEW_FRAME);
+        check(cap.buffers.isEmpty(), "manual buffer accepted while non-manual callback active");
+        setHasPreviewCallback(capCam, true, true);
+        for (int i = 0; i < 20; ++i) addCallbackBuffer(capCam, new byte[8], MSG_PREVIEW_FRAME);
+        check(cap.buffers.size() == 16, "manual buffer queue exceeded cap");
+        nextSurfaceResult = -1;
+        onDeliver = () -> {
+            if (currentFrame == 1) nextSurfaceResult = CameraFrames.OK;
+        };
+        previewLoop(cap, new WindowsCamera.Capture(cap, 16, 4, 3), new Size(16, 4));
+        check(surfaces == 2, "preview surface did not recover after transient delivery failure");
     }
     private static void measured(String format, boolean withBuffer, boolean gate) {
         reset(); collect = false; recycle = withBuffer;

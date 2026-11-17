@@ -1,0 +1,157 @@
+/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
+package com.gesher.server;
+
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+public final class CameraSelectionOrientationHost {
+    private static int checks;
+    private static int sActiveRotation = -1;
+    private static int sDisplayRotation = 0;
+
+    static final class Size {
+        private final int w, h;
+        Size(int w, int h) { this.w = w; this.h = h; }
+        int getWidth() { return w; }
+        int getHeight() { return h; }
+    }
+
+    static final class Surface {
+        static final int ROTATION_0 = 0, ROTATION_90 = 1, ROTATION_180 = 2, ROTATION_270 = 3;
+    }
+
+    static final class WindowConfiguration {
+        static final int ROTATION_UNDEFINED = -1;
+    }
+
+    static final class GesherActivityWindow {
+        static int activeDisplayRotation() { return sActiveRotation; }
+    }
+
+    static final class Display {
+        static final int DEFAULT_DISPLAY = 0;
+    }
+
+    static final class DisplayInfo {
+        int rotation;
+    }
+
+    static final class DisplayManagerGlobal {
+        private static final DisplayManagerGlobal INSTANCE = new DisplayManagerGlobal();
+        static DisplayManagerGlobal getInstance() { return INSTANCE; }
+        DisplayInfo getDisplayInfo(int id) {
+            DisplayInfo info = new DisplayInfo();
+            info.rotation = sDisplayRotation;
+            return info;
+        }
+    }
+
+    static final class PackageManager {
+        static final String FEATURE_CAMERA_ANY = "android.hardware.camera.any";
+        static final String FEATURE_CAMERA = "android.hardware.camera";
+        static final String FEATURE_CAMERA_FRONT = "android.hardware.camera.front";
+        static final String FEATURE_CAMERA_AUTOFOCUS = "android.hardware.camera.autofocus";
+    }
+
+    static final class android {
+        static final class util {
+            static final class ArrayMap<K, V> extends LinkedHashMap<K, V> {}
+        }
+        static final class content {
+            static final class pm {
+                static final class FeatureInfo {
+                    String name;
+                }
+            }
+        }
+    }
+
+    static final class WindowsCamera {
+@WINDOWS_CAMERA@
+    }
+
+@CAMERA_ORIENTATION@
+
+@PM_CAMERA_FEATURES@
+
+    private static void check(boolean ok, String msg) {
+        ++checks;
+        if (!ok) throw new AssertionError(msg);
+    }
+
+    public static void main(String[] args) {
+        String[] rawLines = new String[] {
+            "\\\\?\\usb#front\tFront USB Cam\t640x480",
+            "\\\\?\\usb#מצלמה-אחורית\tRear USB Cam\t1280x720,640x480",
+            "bad-line-missing-tabs",
+            "empty-sizes\tNo Sizes\tnot-a-size"
+        };
+
+        List<WindowsCamera.Device> def = WindowsCamera.resolveDevices(rawLines, null, false, false);
+        check(def.size() == 2, "expected 2 valid cameras");
+        check(def.get(0).isRearFacing() && !def.get(1).isRearFacing(),
+                "default physical mapping should promote first camera to rear");
+
+        String rearKey = WindowsCamera.selectionKey(rawLines[1].split("\t")[0]);
+        List<WindowsCamera.Device> selected = WindowsCamera.resolveDevices(rawLines, rearKey, true, false);
+        check(!selected.get(0).isRearFacing() && selected.get(1).isRearFacing(),
+                "explicit Unicode GESHER_CAMERA_REAR_ID selection failed");
+
+        String[] withTest = new String[] {
+            rawLines[0],
+            "gesher-test\tTest Camera\t640x480,320x240"
+        };
+        List<WindowsCamera.Device> testActive = WindowsCamera.resolveDevices(withTest, null, false, true);
+        check(!testActive.get(0).isRearFacing() && testActive.get(1).isRearFacing(),
+                "GESHER_CAMERA_TEST should own rear role when no explicit rear selection is set");
+
+        sActiveRotation = Surface.ROTATION_0;
+        sDisplayRotation = Surface.ROTATION_270;
+        check(sensorOrientation(true) == 0 && sensorOrientation(false) == 0,
+                "active window ROTATION_0 mismatch");
+        sActiveRotation = Surface.ROTATION_90;
+        check(sensorOrientation(true) == 90 && sensorOrientation(false) == 270,
+                "active window ROTATION_90 rear/front orientation formula mismatch");
+        sActiveRotation = Surface.ROTATION_180;
+        check(sensorOrientation(true) == 180 && sensorOrientation(false) == 180,
+                "active window ROTATION_180 mismatch");
+        sActiveRotation = Surface.ROTATION_270;
+        check(sensorOrientation(true) == 270 && sensorOrientation(false) == 90,
+                "active window ROTATION_270 rear/front orientation formula mismatch");
+        sActiveRotation = WindowConfiguration.ROTATION_UNDEFINED;
+        sDisplayRotation = Surface.ROTATION_90;
+        check(sensorOrientation(true) == 90 && sensorOrientation(false) == 270,
+                "display fallback orientation mismatch when active window undefined");
+
+        android.util.ArrayMap<String, android.content.pm.FeatureInfo> emptyFeat =
+                new android.util.ArrayMap<>();
+        addCameraFeatures(emptyFeat, Collections.emptyList());
+        check(emptyFeat.isEmpty(), "empty device list must advertise no camera features");
+
+        android.util.ArrayMap<String, android.content.pm.FeatureInfo> rearOnlyFeat =
+                new android.util.ArrayMap<>();
+        addCameraFeatures(rearOnlyFeat, Collections.singletonList(def.get(0)));
+        check(rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_ANY)
+                && rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA)
+                && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
+                && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS),
+                "rear-only feature map mismatch");
+
+        android.util.ArrayMap<String, android.content.pm.FeatureInfo> dualFeat =
+                new android.util.ArrayMap<>();
+        addCameraFeatures(dualFeat, def);
+        check(dualFeat.containsKey(PackageManager.FEATURE_CAMERA_ANY)
+                && dualFeat.containsKey(PackageManager.FEATURE_CAMERA)
+                && dualFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
+                && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS),
+                "dual-camera feature map mismatch or unexpected autofocus feature");
+
+        System.out.println("Camera selection & orientation PASS: " + checks + " checks");
+    }
+}
