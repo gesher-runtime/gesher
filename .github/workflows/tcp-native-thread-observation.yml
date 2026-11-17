@@ -1,0 +1,114 @@
+name: tcp-native-thread-observation
+
+on:
+  push:
+    branches: ['qa/tcp-native-thread-observation-20261117']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: tcp-native-observation-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+env:
+  LLVM_MINGW_TAG: '20261006'
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  build:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      source: ${{ steps.identity.outputs.source }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Exact diagnostic source
+        id: identity
+        shell: bash
+        run: |
+          source_commit=$(git rev-parse HEAD)
+          echo "source=$source_commit" >> "$GITHUB_OUTPUT"
+          echo "TCP_NATIVE_OBSERVATION_SOURCE=$source_commit"
+          mkdir -p tcp-native-observation
+          echo "$source_commit" > tcp-native-observation/source.txt
+      - name: Cache pinned toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchain
+          key: ${{ env.LLVM_MINGW_NAME }}
+      - name: Fetch pinned llvm-mingw
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p ~/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
+            | tar -xJ -C ~/toolchain
+      - name: Build ordinary Winsock control
+        shell: bash
+        run: |
+          "$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++" \
+            -std=c++20 -Wall -Wextra -Werror -static \
+            tests/native/tcp_native_thread_probe.cc -lws2_32 \
+            -o tcp-native-observation/tcp_native_thread_probe.exe
+          sha256sum tcp-native-observation/tcp_native_thread_probe.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tcp-native-observation-${{ steps.identity.outputs.source }}
+          path: tcp-native-observation/
+          if-no-files-found: error
+  observe:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tcp-native-observation-${{ needs.build.outputs.source }}
+          path: tcp-native-observation
+      - name: Observe actual Windows Winsock thread resources
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE: ${{ needs.build.outputs.source }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location tcp-native-observation
+          $source = (Get-Content source.txt -Raw).Trim()
+          if ($source -ne $env:EXPECTED_SOURCE) { throw 'Diagnostic source identity mismatch' }
+          Write-Host "TCP_NATIVE_OBSERVATION_SOURCE=$source"
+          Write-Host 'DIAGNOSTIC_ONLY production_backend_validated=0'
+          Get-FileHash tcp_native_thread_probe.exe -Algorithm SHA256 | Format-List
+          $probe = Start-Process -FilePath .\tcp_native_thread_probe.exe -PassThru `
+            -RedirectStandardOutput native-observations.log -RedirectStandardError native-errors.log
+          if (-not $probe.WaitForExit(90000)) {
+            & taskkill.exe /PID $probe.Id /T /F
+            Get-Content native-observations.log
+            Get-Content native-errors.log
+            throw 'Native Winsock observation timed out; no product result inferred'
+          }
+          $probe.Refresh()
+          Get-Content native-observations.log
+          Get-Content native-errors.log
+          if ($probe.ExitCode -ne 0) {
+            throw "Native Winsock control failed: exit $($probe.ExitCode). Product gates remain unchanged."
+          }
+          Write-Host 'Native observations completed. The strict production TCP census remains a separate required gate.'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tcp-native-observations-${{ matrix.os }}-${{ needs.build.outputs.source }}
+          path: |
+            tcp-native-observation/source.txt
+            tcp-native-observation/native-observations.log
+            tcp-native-observation/native-errors.log
+          if-no-files-found: error
