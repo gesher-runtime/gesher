@@ -308,6 +308,8 @@ public final class BluetoothHostTest {
                 "no encryption claimed without a secure socket");
         check(adapter.getRemoteDevice(HEADSET).equals(headset), "getRemoteDevice equals the bonded device");
         check(!adapter.isLeExtendedAdvertisingSupported(), "extended advertisements are not exposed yet");
+        check(!adapter.isOffloadedScanBatchingSupported(),
+                "app-process report delays do not claim controller scan batching");
         check(adapter.getBluetoothLeAdvertiser() == null && adapter.getLeMaximumAdvertisingDataLength() == 0,
                 "unavailable advertising returns no advertiser and no extended data capacity");
         for (int i = 0; i < 1024; i++) {

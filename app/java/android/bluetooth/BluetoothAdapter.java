@@ -263,9 +263,11 @@ public final class BluetoothAdapter {
         return false;
     }
 
-    /** Report delays (batches) are done in the app's process. */
+    /** Whether the controller provides on-chip scan batching, not app-process batching. */
     public boolean isOffloadedScanBatchingSupported() {
-        return true;
+        // BluetoothLeScanner implements report delays in the app's process.
+        // That does not provide the controller offload promised by this API.
+        return false;
     }
 
     public boolean isLe2MPhySupported() {
