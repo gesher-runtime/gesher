@@ -45,17 +45,18 @@ function CheckMuxer([string] $Abi, [string] $Mode, [string] $Caller, $Result, [s
   $text = $Result.Text.Replace("`r", '')
   $missing = @(@("media4 muxer ABI: $Abi", "media4 muxer caller: $Caller", 'media4 muxer: all passed',
     'media4 muxer descriptor-access-ownership-seekability: ok', 'media4 muxer empty-lifecycle-and-error-order: ok',
+    'media4 muxer metadata-eos-long-negative-offset-boundaries: ok',
     'media4 muxer Ogg boundary: packets 0 result=ok', 'media4 muxer Ogg boundary: packets 1 result=ok',
     'media4 muxer Ogg boundary: packets 2 result=ok payload-eos=1') |
     Where-Object { -not $text.Contains($_) })
   $parts = @([regex]::Matches($text, '(?m)^(?:MediaMuxerActivity: )?media4 muxer [^\r\n]+: ok\r?$'))
   $fds = @([regex]::Matches($text, '(?m)^(?:MediaMuxerActivity: )?media4 muxer fd trace: [^\r\n]+$'))
   $outputs = @([regex]::Matches($text, '(?m)^(?:MediaMuxerActivity: )?media4 muxer output: [^\r\n]+$'))
-  if ($Result.Code -eq 0 -and $missing.Count -eq 0 -and $parts.Count -eq 24 -and
+  if ($Result.Code -eq 0 -and $missing.Count -eq 0 -and $parts.Count -eq 25 -and
       $fds.Count -eq 12 -and $outputs.Count -eq 14 -and -not $text.Contains('FAILED')) {
     Write-Host "PASS  media4 muxer ($Abi; $Mode): ten typed APIs, actual FD modes, retained track ownership, sample offsets, state errors and fourteen encoded containers including delete-active and shorter audio"
   } else {
-    Write-Host "FAIL  media4 muxer ($Abi; $Mode): exit $($Result.Code), parts $($parts.Count)/24, FD controls $($fds.Count)/12, outputs $($outputs.Count)/14, missing $($missing -join ' | ')"
+    Write-Host "FAIL  media4 muxer ($Abi; $Mode): exit $($Result.Code), parts $($parts.Count)/25, FD controls $($fds.Count)/12, outputs $($outputs.Count)/14, missing $($missing -join ' | ')"
     Write-Host $text
     $script:failed++
   }
@@ -64,11 +65,12 @@ function CheckMuxer([string] $Abi, [string] $Mode, [string] $Caller, $Result, [s
   }
   $verification = InvokeMuxer "$Dir/media_muxer_verify.exe" @((NoDrive $Output), (NoDrive "$mxDir/fixtures")) @{} 180
   $containers = @([regex]::Matches($verification.Text, '(?m)^media4 muxer verify actual-container-decode [^\r\n]+: ok\r?$'))
-  if ($verification.Code -eq 0 -and $containers.Count -eq 14 -and
+  $metadata = @([regex]::Matches($verification.Text, '(?m)^media4 muxer verify metadata-android-boundary [^\r\n]+: ok\r?$'))
+  if ($verification.Code -eq 0 -and $containers.Count -eq 14 -and $metadata.Count -eq 8 -and
       $verification.Text.Contains('media4 muxer independent verification: 0 failure(s)')) {
-    Write-Host "PASS  media4 muxer ($Abi; $Mode): independent AOSP extractors decode fourteen containers, compare WebM packets and PTS, seek and decode, rotation and ISO-6709 location"
+    Write-Host "PASS  media4 muxer ($Abi; $Mode): independent AOSP extractors decode fourteen containers and eight metadata boundary files, compare packets and PTS, seek and decode, rotation and ISO-6709 location"
   } else {
-    Write-Host "FAIL  media4 muxer ($Abi; $Mode): independent output verification exit $($verification.Code), containers $($containers.Count)/14"
+    Write-Host "FAIL  media4 muxer ($Abi; $Mode): independent output verification exit $($verification.Code), containers $($containers.Count)/14, metadata $($metadata.Count)/8"
     $script:failed++
   }
   foreach ($line in @($verification.Text -split "`r?`n" | Where-Object { $_ })) {

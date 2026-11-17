@@ -300,6 +300,86 @@ bool TimedMetadata(Extractor* extractor, size_t track) {
   return reader->Read(&actual) == 1;
 }
 
+bool ChildBox(const std::vector<uint8_t>& bytes, const Box& parent, const char* type, Box* out) {
+  std::vector<Box> children;
+  if (!Boxes(bytes, parent.payload, parent.end, &children)) return false;
+  for (const Box& child : children) {
+    if (child.type == type) { *out = child; return true; }
+  }
+  return false;
+}
+
+bool MetadataBoundary(const std::string& path, const std::string& kind) {
+  std::string error;
+  auto source = OpenFileSource(path, &error);
+  auto extractor = source ? Extractor::Open(std::move(source), &error) : nullptr;
+  const size_t tracks = kind == "offset" ? 2 : 1;
+  if (!extractor || extractor->TrackCount() != tracks) return false;
+  for (size_t track = 0; track < tracks; ++track) {
+    Format format = extractor->TrackFormat(track);
+    if (format.Mime() != "application/gyro") return false;
+    std::vector<int64_t> times = {0, 33333, 97175};
+    if (kind == "long") times = {0, 30000000000LL};
+    if (kind == "negative") times = {-33000, 0, 33333};
+    if (kind == "offset") times = track == 0 ? std::vector<int64_t>{0, 1000000} :
+        std::vector<int64_t>{215567, 248900, 312742};
+    auto reader = extractor->OpenTrack(track);
+    if (!reader) return false;
+    Sample sample;
+    for (int64_t time : times) {
+      if (reader->Read(&sample) != 0 || sample.data != std::vector<uint8_t>{0x12, 0x34, 0x56} ||
+          std::llabs(sample.time_us - time) > (kind == "offset" ? 56 : 11)) return false;
+    }
+    if (reader->Read(&sample) != 1) return false;
+  }
+
+  // The reader above checks decoded times and payloads. Independently inspect
+  // duration and legacy MIME fields which a current extractor could overlook.
+  std::ifstream input(path, std::ios::binary);
+  const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  Box root{0, bytes.size(), ""}, moov;
+  if (!ChildBox(bytes, root, "moov", &moov)) return false;
+  std::vector<Box> children;
+  if (!Boxes(bytes, moov.payload, moov.end, &children)) return false;
+  size_t found = 0;
+  for (const Box& trak : children) {
+    if (trak.type != "trak") continue;
+    Box mdia, mdhd, minf, stbl, stsd, stts;
+    if (!ChildBox(bytes, trak, "mdia", &mdia) || !ChildBox(bytes, mdia, "mdhd", &mdhd) ||
+        !ChildBox(bytes, mdia, "minf", &minf) || !ChildBox(bytes, minf, "stbl", &stbl) ||
+        !ChildBox(bytes, stbl, "stsd", &stsd) || !ChildBox(bytes, stbl, "stts", &stts)) return false;
+    if (stsd.end - stsd.payload < 8) return false;
+    Box entries{stsd.payload + 8, stsd.end, ""}, mett;
+    if (!ChildBox(bytes, entries, "mett", &mett)) return false;
+    constexpr char mime[] = "application/gyro";
+    if (mett.end - mett.payload != 2 * sizeof(mime) ||
+        std::memcmp(bytes.data() + mett.payload, mime, sizeof(mime)) != 0 ||
+        std::memcmp(bytes.data() + mett.payload + sizeof(mime), mime, sizeof(mime)) != 0) return false;
+    if (mdhd.end - mdhd.payload < 24 || stts.end - stts.payload < 8) return false;
+    const unsigned version = bytes[mdhd.payload];
+    uint64_t duration = 0;
+    if (version == 1) {
+      if (mdhd.end - mdhd.payload < 36 || Big(bytes, mdhd.payload + 20, 4) != 90000) return false;
+      duration = Big(bytes, mdhd.payload + 24, 8);
+    } else if (version == 0 && Big(bytes, mdhd.payload + 12, 4) == 90000) {
+      duration = Big(bytes, mdhd.payload + 16, 4);
+    } else { return false; }
+    const uint64_t runs = Big(bytes, stts.payload + 4, 4);
+    if (runs > (stts.end - stts.payload - 8) / 8) return false;
+    uint64_t sum = 0, samples = 0;
+    for (size_t i = 0; i < runs; ++i) {
+      const uint64_t count = Big(bytes, stts.payload + 8 + 8 * i, 4);
+      samples += count;
+      sum += count * Big(bytes, stts.payload + 12 + 8 * i, 4);
+    }
+    if (sum != duration) return false;
+    if (kind == "eos" && (duration != 18000 || samples != 3)) return false;
+    if (kind == "long" && (duration != 5400000000ULL || version != 1 || samples != 2)) return false;
+    ++found;
+  }
+  return found == tracks;
+}
+
 void Verify(const std::string& path, const std::string& video_mime, const std::string& audio_mime,
             double frequency, bool mp4, bool short_audio = false) {
   std::string error;
@@ -335,6 +415,12 @@ void Verify(const std::string& path, const std::string& video_mime, const std::s
 int main(int argc, char** argv) {
   if (argc != 3) return 2;
   const std::string root = argv[1];
+  for (const char* suffix : {".mp4", ".3gp"}) {
+    for (const char* kind : {"eos", "long", "negative", "offset"}) {
+      const std::string path = root + "/metadata-" + kind + suffix;
+      Check(MetadataBoundary(path, kind), "metadata-android-boundary " + path);
+    }
+  }
   struct Case { const char* stem; const char* extension; const char* video; const char* audio; double hz; bool mp4; };
   const Case cases[] = {{"h264-aac", "mp4", "video/avc", "audio/mp4a-latm", 1661, true},
     {"h264-aac", "3gp", "video/avc", "audio/mp4a-latm", 1661, true},
