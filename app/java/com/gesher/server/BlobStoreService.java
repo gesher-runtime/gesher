@@ -484,7 +484,11 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
             }
             synchronized (this) {
                 if (mIndex.sessions.get(stage.id) == stage) {
-                    if (candidate != null && publish(stage, candidate)) {
+                    if (mPm.isRemovalPending(stage.owner.name) && currentlyInstalled(stage.owner)) {
+                        // An uninstall may still roll back. Keep the saved stage
+                        // available for the recovered owner to reopen.
+                        mOpen.remove(stage.id);
+                    } else if (candidate != null && publish(stage, candidate)) {
                         result = BlobStoreManager.COMMIT_RESULT_SUCCESS;
                         candidate = null;
                     } else {
@@ -506,8 +510,7 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
 
     private boolean publish(Stage stage, File candidate) {
         long now = System.currentTimeMillis();
-        if (!currentlyInstalled(stage.owner) || mPm.isRemovalPending(stage.owner.name)
-                || stage.handle.isExpired()) return false;
+        if (!currentlyInstalled(stage.owner) || stage.handle.isExpired()) return false;
         Blob existing = mIndex.blobs.get(stage.handle);
         if (existing != null && !validFile(existing.fileName)) existing = null;
         Contribution previous = existing == null ? null : existing.contributions.get(stage.owner.name);
