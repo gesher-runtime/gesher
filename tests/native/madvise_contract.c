@@ -12,6 +12,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#ifndef _WIN32
+#include <sys/syscall.h>
+#endif
 #include <unistd.h>
 
 #if defined(_WIN32) || defined(GESHER_MADVISE_WINDOWS)
@@ -174,20 +177,66 @@ static void Protection(void) {
   Result(p, page_size, MADV_DONTNEED, 0, "read-only private page can be discarded");
   Check(All(p, page_size, 0), "read-only private discard restores zeros");
   Check(mprotect(p, page_size, PROT_READ | PROT_WRITE) == 0, "restore private write permission");
-#if !defined(__ANDROID__)
-  /* Guest mlock currently has a separate unsupported implementation. This
-   * fixture qualifies actual host/Linux locks; it does not certify that API. */
-  memset(p, 'W', page_size);
-  int locked = mlock(p, page_size) == 0;
-  Check(locked, "lock one page for actual host lock admission");
-  if (locked) {
-    Result(p, page_size, MADV_DONTNEED, EINVAL, "DONTNEED rejects locked private pages");
-    Result(p, page_size, MADV_FREE, EINVAL, "FREE rejects locked private pages");
-    Check(All(p, page_size, 'W'), "locked pages keep their contents");
-    Check(munlock(p, page_size) == 0, "unlock the owned page");
-  }
-#endif
   Check(munmap(p, page_size) == 0, "release protected fixture");
+}
+
+static void MemoryLock(void) {
+  unsigned char* p = mmap(NULL, 3 * page_size, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  Check(p != MAP_FAILED, "memory lock fixture maps three private pages");
+  if (p == MAP_FAILED) return;
+  memset(p, 'W', 3 * page_size);
+  Check(mlock(p + page_size - 1, 2) == 0, "lock two pages intersecting an unaligned range");
+  Check(mlock(p, page_size) == 0, "relocking a page does not stack locks");
+  Result(p, page_size, MADV_DONTNEED, EINVAL, "DONTNEED rejects the first locked page");
+  Result(p + page_size, page_size, MADV_FREE, EINVAL, "FREE rejects the second locked page");
+  Check(All(p, 2 * page_size, 'W'), "locked pages retain both pages of data");
+  Check(munlock(p + page_size, 2 * page_size) == 0, "unlock a mix of locked and unlocked pages");
+  Result(p + page_size, 2 * page_size, MADV_DONTNEED, 0, "discard succeeds across the released range");
+  Result(p, page_size, MADV_DONTNEED, EINVAL, "unlock preserves the out-of-range lock");
+  Check(munlock(p, page_size) == 0 && munlock(p, page_size) == 0, "repeated unlock is idempotent");
+  Result(p, page_size, MADV_DONTNEED, 0, "one unlock releases both lock calls");
+
+  void* last = (void*)(UINTPTR_MAX - (page_size - 1));
+  errno = 0;
+  Check(mlock(last, 2 * page_size) == -1 && errno == EINVAL, "wrapping lock range is invalid");
+  errno = 0;
+  Check(munlock(last, 2 * page_size) == -1 && errno == EINVAL, "wrapping unlock range is invalid");
+  Check(mlock(p, 0) == 0 && munlock(p, 0) == 0, "aligned zero-length ranges succeed");
+
+#ifndef _WIN32
+  /* The Android fixtures target API 26/29. The mlock2 libc export arrived in
+   * API 30, but the syscall entry point can be exercised on both guest ABIs. */
+  Check(syscall(SYS_mlock2, p, page_size, 0) == 0, "mlock2(0) locks the range");
+  Result(p, page_size, MADV_DONTNEED, EINVAL, "mlock2(0) prevents discard");
+  Check(syscall(SYS_munlock, p, page_size) == 0, "syscall unlock releases the range");
+  Result(p, page_size, MADV_DONTNEED, 0, "syscall unlock makes discard possible");
+  errno = 0;
+  Check(syscall(SYS_mlock2, p, page_size, 2) == -1 && errno == EINVAL,
+        "mlock2 rejects an unknown flag");
+  errno = 0;
+  Check(mlockall(0) == -1 && errno == EINVAL, "mlockall requires a lock scope");
+#ifdef GESHER_MADVISE_WINDOWS
+  errno = 0;
+  Check(syscall(SYS_mlock2, p, page_size, MLOCK_ONFAULT) == -1 && errno == EOPNOTSUPP,
+        "unsupported on-fault locking reports failure");
+  errno = 0;
+  Check(mlockall(MCL_CURRENT) == -1 && errno == EOPNOTSUPP, "process-wide lock reports failure");
+  errno = 0;
+  Check(munlockall() == -1 && errno == EOPNOTSUPP, "process-wide unlock reports failure");
+#endif
+#endif
+
+  Check(mprotect(p, page_size, PROT_NONE) == 0, "make first page inaccessible");
+  errno = 0;
+  Check(mlock(p, page_size) == -1 && errno == ENOMEM, "cannot lock an inaccessible page");
+  Check(munlock(p, page_size) == 0, "unlock recognizes a mapped inaccessible page");
+  Check(munmap(p + page_size, page_size) == 0, "create a hole inside the lock range");
+  errno = 0;
+  Check(mlock(p + page_size, page_size) == -1 && errno == ENOMEM, "unmapped page cannot be locked");
+  errno = 0;
+  Check(munlock(p, 3 * page_size) == -1 && errno == ENOMEM, "unlock fails across a logical hole");
+  Check(munmap(p, 3 * page_size) == 0, "release memory-lock fixture");
 }
 
 static void FileLifetime(void) {
@@ -295,7 +344,7 @@ int gesher_selftest(void) {
   Check(page > 0, "page size is available");
   if (page <= 0) return failures;
   page_size = (size_t)page;
-  Matrix(); Admission(); Protection(); FileLifetime(); FileTailAndReplacement();
+  Matrix(); Admission(); Protection(); MemoryLock(); FileLifetime(); FileTailAndReplacement();
   printf("madvise contracts (%s): %d checks, %d failures\n",
          EXPECT_WINDOWS ? "Windows policy" : "Linux reference", checks, failures);
   return failures;

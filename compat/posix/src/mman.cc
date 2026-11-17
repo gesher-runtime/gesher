@@ -1087,10 +1087,9 @@ bool ForEachRun(void* addr, size_t len, Fn fn) {
   return true;
 }
 
-// Query in bounded stack batches: no per-call allocation and no syscall per
-// page. Locked pages cannot be discarded, and large pages are not supported
-// by this page-granular path. mlock/munlock share the mapping registry lock.
-bool AdviceUnlocked(uintptr_t begin, size_t length, size_t page) {
+// Query in bounded stack batches: no per-call allocation or syscall per page.
+template <typename Fn>
+bool ForEachWorkingSetBatch(uintptr_t begin, size_t length, size_t page, Fn fn) {
   PSAPI_WORKING_SET_EX_INFORMATION entries[128] = {};
   for (size_t done = 0; done < length;) {
     const size_t count = std::min<size_t>(128, (length - done) / page);
@@ -1103,6 +1102,16 @@ bool AdviceUnlocked(uintptr_t begin, size_t length, size_t page) {
       gesher::FailWithLastError();
       return false;
     }
+    if (!fn(entries, count)) return false;
+    done += count * page;
+  }
+  return true;
+}
+
+// Locked pages cannot be discarded, and large pages are not supported by
+// this page-granular path. mlock/munlock share the mapping registry lock.
+bool AdviceUnlocked(uintptr_t begin, size_t length, size_t page) {
+  return ForEachWorkingSetBatch(begin, length, page, [](const auto* entries, size_t count) {
     for (size_t i = 0; i < count; ++i) {
       const auto& attributes = entries[i].VirtualAttributes;
       if (attributes.Valid && (attributes.Locked || attributes.LargePage)) {
@@ -1110,9 +1119,8 @@ bool AdviceUnlocked(uintptr_t begin, size_t length, size_t page) {
         return false;
       }
     }
-    done += count * page;
-  }
-  return true;
+    return true;
+  });
 }
 
 // Validate the complete logical range before any discard. A private file tail
@@ -1167,6 +1175,47 @@ bool PreflightAdvice(State& s, uintptr_t begin, size_t length, int advice) {
         return info.State == MEM_RESERVE ||
                AdviceUnlocked(reinterpret_cast<uintptr_t>(p), n, s.page_size);
       });
+}
+
+// Linux accepts byte ranges and includes every intersecting page.
+bool LockRange(const State& s, uintptr_t& begin, size_t& length) {
+  const size_t offset = begin % s.page_size;
+  if (length > SIZE_MAX - offset - (s.page_size - 1)) {
+    errno = EINVAL;
+    return false;
+  }
+  begin -= offset;
+  length = RoundUp(length + offset, s.page_size);
+  if (length > UINTPTR_MAX - begin) {
+    errno = EINVAL;
+    return false;
+  }
+  return true;
+}
+
+// A committed file view can contain logical holes. A tracked PROT_NONE
+// reservation can contain live pages even without Windows commitment.
+bool IsMappedRange(State& s, uintptr_t begin, size_t length) {
+  const uintptr_t end = begin + length;
+  for (uintptr_t at = begin; at < end;) {
+    auto found = FindRegion(s, at);
+    if (found != s.regions.end()) {
+      const auto& region = found->second;
+      const uintptr_t limit = std::min(end, found->first + region.size);
+      const auto first = region.live.begin() + (at - found->first) / s.page_size;
+      const auto last = region.live.begin() + (limit - found->first) / s.page_size;
+      if (std::find(first, last, false) != last) return false;
+      at = limit;
+    } else {
+      MEMORY_BASIC_INFORMATION info;
+      if (VirtualQuery(reinterpret_cast<void*>(at), &info, sizeof(info)) == 0 ||
+          info.State != MEM_COMMIT) return false;
+      const auto next = s.regions.upper_bound(at);
+      at = std::min(end, reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize);
+      if (next != s.regions.end()) at = std::min(at, next->first);
+    }
+  }
+  return true;
 }
 
 // --- zeroing private pages ----------------------------------------------------
@@ -1566,14 +1615,43 @@ int mincore(void* addr, size_t length, unsigned char* vec) {
 
 int mlock(const void* addr, size_t length) {
   State& s = state();
+  uintptr_t begin = reinterpret_cast<uintptr_t>(addr);
+  if (!LockRange(s, begin, length)) return -1;
+  if (length == 0) return 0;
   std::lock_guard<std::mutex> registry_guard(s.lock);
-  InvalidateSharedAliases(s, reinterpret_cast<uintptr_t>(addr), length);
-  return VirtualLock(const_cast<void*>(addr), length) ? 0 : (errno = ENOMEM, -1);
+  if (!IsMappedRange(s, begin, length)) return errno = ENOMEM, -1;
+  InvalidateSharedAliases(s, begin, length);
+  return VirtualLock(reinterpret_cast<void*>(begin), length) ? 0 : (errno = ENOMEM, -1);
 }
 
 int munlock(const void* addr, size_t length) {
-  std::lock_guard<std::mutex> registry_guard(state().lock);
-  return VirtualUnlock(const_cast<void*>(addr), length) ? 0 : (errno = ENOMEM, -1);
+  State& s = state();
+  uintptr_t begin = reinterpret_cast<uintptr_t>(addr);
+  if (!LockRange(s, begin, length)) return -1;
+  if (length == 0) return 0;
+  std::lock_guard<std::mutex> registry_guard(s.lock);
+  if (!IsMappedRange(s, begin, length)) return errno = ENOMEM, -1;
+  // Passing unlocked pages to VirtualUnlock can evict them and return an
+  // error. Pass only locked pages, coalescing adjacent pages into runs.
+  const bool unlocked = ForEachWorkingSetBatch(begin, length, s.page_size,
+      [&](const auto* entries, size_t count) {
+        const auto locked = [&](size_t i) {
+          const auto& attributes = entries[i].VirtualAttributes;
+          return attributes.Valid && attributes.Locked;
+        };
+        for (size_t i = 0; i < count;) {
+          while (i < count && !locked(i)) ++i;
+          const size_t first = i;
+          while (i < count && locked(i)) ++i;
+          if (first != i &&
+              !VirtualUnlock(entries[first].VirtualAddress, (i - first) * s.page_size)) {
+            gesher::FailWithLastError();
+            return false;
+          }
+        }
+        return true;
+      });
+  return unlocked ? 0 : -1;
 }
 
 // mremap for this layer's anonymous mappings. ART's CMC collector, without

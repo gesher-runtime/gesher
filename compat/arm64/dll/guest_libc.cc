@@ -416,7 +416,9 @@ const SyscallMap kSyscalls[] = {
     {175, "geteuid", 'i'},    {176, "getgid", 'i'},      {177, "getegid", 'i'},
     {179, "sysinfo", 'i'},    {198, "socket", 'i'},      {203, "connect", 'i'},
     {215, "munmap", 'i'},     {222, "mmap", 'l'},        {226, "mprotect", 'i'},
-    {233, "madvise", 'i'},    {278, "getrandom", 'l'},   {279, "memfd_create", 'i'},
+    {228, "mlock", 'i'},      {229, "munlock", 'i'},     {230, "mlockall", 'i'},
+    {231, "munlockall", 'i'},  {233, "madvise", 'i'},     {278, "getrandom", 'l'},
+    {279, "memfd_create", 'i'}, {284, "mlock2", 'i'},
 };
 std::unordered_map<uint32_t, std::pair<void*, char>> g_syscalls;
 void* g_host_syscall = nullptr;
