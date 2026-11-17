@@ -1,0 +1,22 @@
+Production source Git blob: c20cd0c774aef3a40812f972145d1e000f82002d
+Note: /tmp/gesher-pr87-qa-ue1hv0sc/android/net/http/JavaHttpEngine.java uses or overrides a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+PASS disabled: one failure, no ready/success
+PASS disabled: no invented response
+PASS disabled: protocol failure retained
+PASS disabled: transport never opened
+PASS disabled: engine released exactly once
+PASS disabled: later cancel is silent
+PASS connect failure: no invented response
+PASS connect failure: actual attempt and release
+PASS cancel before start: no terminal callback
+PASS cancel before IO: null response
+PASS cancel before IO: no connection
+PASS write before response: callback has null info
+PASS headers: real status retained
+PASS success: same received response, h2
+PASS success: engine released once
+PASS failure after headers: preserve real response
+PASS cancel after headers: preserve real response
+PASS cancel after headers: no later success/failure
+RESULT 18 checks, 0 failures; host stubs, not Windows/ART

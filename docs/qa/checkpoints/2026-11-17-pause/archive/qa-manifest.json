@@ -1,0 +1,53 @@
+{
+  "repository": "gesher-runtime/gesher",
+  "account": "palmoni5",
+  "date": "2026-11-17",
+  "github_mutations_in_this_pass": false,
+  "subagents_launched_in_this_pass": false,
+  "scope_prs": [
+    85,
+    87,
+    92,
+    93,
+    94,
+    95,
+    96,
+    97,
+    100,
+    101,
+    102,
+    104,
+    105,
+    106
+  ],
+  "full_qa_not_completed_for": [
+    85,
+    95,
+    100,
+    101,
+    102,
+    104,
+    105,
+    106
+  ],
+  "independent_local_test": {
+    "pr": 87,
+    "checks": 18,
+    "original_failures": 4,
+    "prepared_repair_failures": 0,
+    "original_git_blob": "18c9d3632c36e83880d39546b2a52d2c0768ad77",
+    "prepared_git_blob": "c20cd0c774aef3a40812f972145d1e000f82002d",
+    "boundaries": "host framework/engine/executor/transport stubs; not Windows/ART/TLS"
+  },
+  "existing_prepared_commits": {
+    "87": "503eaf20885481c4f860d9bde611c75a82823448",
+    "92": "09627a9a1964ceb863a8eb46d33b458b11db6a00",
+    "93": "4e53dd7a46191d75df1bd1914389f599fe4b1828",
+    "94": "78730c164966b0a288e9b65ae0b7e9ca5612a335"
+  },
+  "already_applied_97": "6d43bf853b3e5467947dcee31d6f8ee947ff4f6b",
+  "substantive_changes_requested_observed": [
+    93,
+    96
+  ]
+}
