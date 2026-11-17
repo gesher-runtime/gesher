@@ -75,6 +75,15 @@ static void test_file_advice_contracts(void) {
           posix_fadvise(null_fd, 0, -1, -1) == EINVAL && errno == E2BIG);
     close(null_fd);
   }
+  int path_null_fd = open("/dev/null", O_PATH | O_CLOEXEC);
+  check("file advice: open metadata-only character descriptor", path_null_fd >= 0);
+  if (path_null_fd >= 0) {
+    errno = E2BIG;
+    check("file advice: O_PATH character descriptors fail before hint validation",
+          posix_fadvise(path_null_fd, 0, 0, POSIX_FADV_NORMAL) == EBADF && errno == E2BIG &&
+          posix_fadvise(path_null_fd, 0, -1, -1) == EBADF && errno == E2BIG);
+    close(path_null_fd);
+  }
   check("file advice: close regular descriptor", close(fd) == 0);
   errno = E2BIG;
   check("file advice: closed positive descriptor is EBADF",
