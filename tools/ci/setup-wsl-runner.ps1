@@ -1,13 +1,18 @@
 # Run on the runner computer. No gh executable or account login is needed.
 [CmdletBinding()]
 param(
-    [string]$PackagePath = (Join-Path $PSScriptRoot 'runner-package.json'),
+    [string]$PackagePath = '',
     [string]$Distribution = 'Ubuntu-24.04',
     [ValidatePattern('^[A-Za-z0-9_-]+$')]
     [string]$RunnerName = 'gesher-wsl-trial'
 )
 
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($PackagePath)) {
+    # Resolve this in the script body: PowerShell 5.1 may not initialize
+    # PSScriptRoot while parameter default expressions are evaluated.
+    $PackagePath = Join-Path $PSScriptRoot 'runner-package.json'
+}
 Get-Command wsl.exe -ErrorAction Stop | Out-Null
 $package = Get-Content -LiteralPath $PackagePath -Raw | ConvertFrom-Json
 if ($package.schema_version -ne 1 -or
