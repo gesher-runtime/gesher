@@ -309,11 +309,22 @@ bool ChildBox(const std::vector<uint8_t>& bytes, const Box& parent, const char* 
   return false;
 }
 
+bool HeaderDuration(const std::vector<uint8_t>& bytes, const Box& box, size_t offset,
+                    uint8_t version, uint64_t expected) {
+  if (version == 1) offset += 8;
+  const size_t field_size = version == 1 ? 8 : 4;
+  return box.end - box.payload >= offset + field_size && bytes[box.payload] == version &&
+      Big(bytes, box.payload + offset, field_size) == expected;
+}
+
 bool MetadataBoundary(const std::string& path, const std::string& kind) {
   std::string error;
   auto source = OpenFileSource(path, &error);
   auto extractor = source ? Extractor::Open(std::move(source), &error) : nullptr;
-  const size_t tracks = kind == "offset" ? 2 : 1;
+  const bool long_offset = kind == "long-offset";
+  const bool long_trim = kind == "long-trim";
+  const bool offset = long_offset || kind == "offset";
+  const size_t tracks = offset ? 2 : 1;
   if (!extractor || extractor->TrackCount() != tracks) return false;
   for (size_t track = 0; track < tracks; ++track) {
     Format format = extractor->TrackFormat(track);
@@ -321,14 +332,19 @@ bool MetadataBoundary(const std::string& path, const std::string& kind) {
     std::vector<int64_t> times = {0, 33333, 97175};
     if (kind == "long") times = {0, 30000000000LL};
     if (kind == "negative") times = {-33000, 0, 33333};
-    if (kind == "offset") times = track == 0 ? std::vector<int64_t>{0, 1000000} :
-        std::vector<int64_t>{215567, 248900, 312742};
+    if (long_trim) times = {-30000000000LL, 0, 33333};
+    if (offset) {
+      times = track == 0 ? std::vector<int64_t>{0, 1000000} : std::vector<int64_t>{215567, 248900, 312742};
+      if (long_offset && track == 1) {
+        for (int64_t& time : times) time += 430000000000LL;
+      }
+    }
     auto reader = extractor->OpenTrack(track);
     if (!reader) return false;
     Sample sample;
     for (int64_t time : times) {
       if (reader->Read(&sample) != 0 || sample.data != std::vector<uint8_t>{0x12, 0x34, 0x56} ||
-          std::llabs(sample.time_us - time) > (kind == "offset" ? 56 : 11)) return false;
+          std::llabs(sample.time_us - time) > (offset ? 56 : 11)) return false;
     }
     if (reader->Read(&sample) != 1) return false;
   }
@@ -339,11 +355,41 @@ bool MetadataBoundary(const std::string& path, const std::string& kind) {
   const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
   Box root{0, bytes.size(), ""}, moov;
   if (!ChildBox(bytes, root, "moov", &moov)) return false;
+  constexpr uint64_t kWideOffset = 4300002156ULL;
+  constexpr uint64_t kOffsetSegment = 1610;
+  constexpr uint64_t kTrimSegment = 667;
+  if (long_offset || long_trim || kind == "negative") {
+    Box mvhd;
+    const uint64_t expected = long_offset ? kWideOffset + kOffsetSegment : kTrimSegment;
+    if (!ChildBox(bytes, moov, "mvhd", &mvhd) || !HeaderDuration(bytes, mvhd, 16, long_offset, expected)) {
+      return false;
+    }
+  }
   std::vector<Box> children;
   if (!Boxes(bytes, moov.payload, moov.end, &children)) return false;
   size_t found = 0;
   for (const Box& trak : children) {
     if (trak.type != "trak") continue;
+    if ((long_offset && found == 1) || long_trim || kind == "negative") {
+      Box tkhd, edts, elst;
+      const uint64_t expected = long_offset ? kWideOffset + kOffsetSegment : kTrimSegment;
+      if (!ChildBox(bytes, trak, "tkhd", &tkhd) || !HeaderDuration(bytes, tkhd, 20, long_offset, expected) ||
+          !ChildBox(bytes, trak, "edts", &edts) || !ChildBox(bytes, edts, "elst", &elst)) return false;
+      const bool wide = long_offset || long_trim;
+      const size_t entries = long_offset ? 2 : 1;
+      const size_t field_size = wide ? 8 : 4;
+      const size_t entry_size = 2 * field_size + 4;
+      if (elst.end - elst.payload != 8 + entries * entry_size || bytes[elst.payload] != wide ||
+          Big(bytes, elst.payload + 4, 4) != entries) return false;
+      size_t entry = elst.payload + 8;
+      if (long_offset) {
+        if (Big(bytes, entry, 8) != kWideOffset || Big(bytes, entry + 8, 8) != UINT64_MAX) return false;
+        entry += entry_size;
+      }
+      const uint64_t media_start = long_offset ? 0 : long_trim ? 2700000000ULL : 2970;
+      if (Big(bytes, entry, field_size) != (long_offset ? kOffsetSegment : kTrimSegment) ||
+          Big(bytes, entry + field_size, field_size) != media_start) return false;
+    }
     Box mdia, mdhd, minf, stbl, stsd, stts;
     if (!ChildBox(bytes, trak, "mdia", &mdia) || !ChildBox(bytes, mdia, "mdhd", &mdhd) ||
         !ChildBox(bytes, mdia, "minf", &minf) || !ChildBox(bytes, minf, "stbl", &stbl) ||
@@ -416,7 +462,7 @@ int main(int argc, char** argv) {
   if (argc != 3) return 2;
   const std::string root = argv[1];
   for (const char* suffix : {".mp4", ".3gp"}) {
-    for (const char* kind : {"eos", "long", "negative", "offset"}) {
+    for (const char* kind : {"eos", "long", "negative", "offset", "long-offset", "long-trim"}) {
       const std::string path = root + "/metadata-" + kind + suffix;
       Check(MetadataBoundary(path, kind), "metadata-android-boundary " + path);
     }

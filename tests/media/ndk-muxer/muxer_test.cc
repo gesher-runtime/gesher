@@ -142,7 +142,7 @@ void MetadataBoundaries(const Api& api, const std::string& root, Report* report)
   const uint8_t payload[] = {0x12, 0x34, 0x56};
   for (OutputFormat output : {AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4, AMEDIAMUXER_OUTPUT_FORMAT_THREE_GPP}) {
     const char* suffix = output == AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4 ? ".mp4" : ".3gp";
-    for (const char* kind : {"eos", "long", "negative", "offset"}) {
+    for (const char* kind : {"eos", "long", "negative", "offset", "long-offset", "long-trim"}) {
       const std::string path = root + "/metadata-" + kind + suffix;
       const int fd = open(path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
       if (fd < 0) { ok = false; continue; }
@@ -150,7 +150,8 @@ void MetadataBoundaries(const Api& api, const std::string& root, Report* report)
       close(fd);
       auto format = MetadataFormat();
       if (!muxer || !format) { ok = false; continue; }
-      const bool offset = std::strcmp(kind, "offset") == 0;
+      const bool long_offset = std::strcmp(kind, "long-offset") == 0;
+      const bool offset = long_offset || std::strcmp(kind, "offset") == 0;
       const ssize_t track = api.add(muxer.get(), format.get());
       const ssize_t second = offset ? api.add(muxer.get(), format.get()) : -1;
       if (track != 0 || (offset && second != 1) || api.start(muxer.get()) != AMEDIA_OK) {
@@ -160,20 +161,24 @@ void MetadataBoundaries(const Api& api, const std::string& root, Report* report)
       std::vector<int64_t> times = {0, 33333, 97175};
       if (std::strcmp(kind, "long") == 0) times = {0, 30000000000LL};
       if (std::strcmp(kind, "negative") == 0) times = {-33000, 0, 33333};
+      if (std::strcmp(kind, "long-trim") == 0) times = {-30000000000LL, 0, 33333};
       if (offset) times = {0, 1000000};
       for (int64_t time : times) {
         AMediaCodecBufferInfo info = {0, sizeof(payload), time, 0};
         ok = (api.write(muxer.get(), 0, payload, &info) == AMEDIA_OK) && ok;
       }
       if (offset) {
+        const int64_t delay = long_offset ? 430000000000LL : 0;
         for (int64_t time : {215567, 248900, 312742}) {
-          AMediaCodecBufferInfo info = {0, sizeof(payload), time, 0};
+          AMediaCodecBufferInfo info = {0, sizeof(payload), delay + time, 0};
           ok = (api.write(muxer.get(), 1, payload, &info) == AMEDIA_OK) && ok;
         }
       }
       if (std::strcmp(kind, "eos") == 0) {
         AMediaCodecBufferInfo info = {0, 0, 200000, AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM};
         ok = (api.write(muxer.get(), 0, payload, &info) == AMEDIA_OK) && ok;
+        info = {0, sizeof(payload), 210000, 0};
+        ok = (api.write(muxer.get(), 0, payload, &info) == AMEDIA_ERROR_INVALID_OPERATION) && ok;
       }
       ok = (api.stop(muxer.get()) == AMEDIA_OK) && ok;
     }

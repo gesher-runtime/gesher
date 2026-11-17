@@ -78,6 +78,10 @@ class Box {
     U32(static_cast<uint32_t>(v >> 32));
     U32(static_cast<uint32_t>(v));
   }
+  void Time(uint64_t ticks, bool wide) {
+    if (wide) U64(ticks);
+    else U32(static_cast<uint32_t>(ticks));
+  }
   void Bytes(const void* p, size_t n) {
     const uint8_t* q = static_cast<const uint8_t*>(p);
     b_.insert(b_.end(), q, q + n);
@@ -148,35 +152,24 @@ uint64_t MetadataTicks(uint64_t elapsed_us) {
   return elapsed_us / 1000 * 90 + (elapsed_us % 1000 * 90 + 500) / 1000;
 }
 
-uint64_t MediaTicks(uint64_t elapsed_us, uint32_t timescale) {
-  return elapsed_us / 1000000 * timescale +
-      (elapsed_us % 1000000 * timescale + 500000) / 1000000;
+uint64_t ScaleTicks(uint64_t ticks, uint32_t from, uint32_t to, bool round) {
+  return ticks / from * to + (ticks % from * to + (round ? from / 2 : 0)) / from;
 }
 
-uint64_t MetadataElapsed(int64_t time_us, int64_t first_us) {
+uint64_t ElapsedUs(int64_t time_us, int64_t first_us) {
   // The caller checks ordering. Unsigned subtraction also covers a negative
   // first timestamp without overflowing a signed difference.
   return static_cast<uint64_t>(time_us) - static_cast<uint64_t>(first_us);
 }
 
-int64_t TrackStart(const Track& t) {
-  if (t.times.empty()) return 0;
-  // MPEG4Writer shifts a negative first timestamp to media time zero, then
-  // trims that prefix with an edit rather than shifting the other tracks.
-  return std::max<int64_t>(0, t.times.front());
-}
+struct TrackTiming {
+  uint64_t media_duration = 0;     // Media clock, before edits.
+  uint64_t segment_duration = 0;   // Movie clock, after trimming preroll.
+  uint64_t start_offset = 0;       // Movie clock, initial empty edit.
+  uint64_t media_start = 0;        // Media clock, preroll to trim.
 
-// Match MPEG4Writer's default movie clock. Milliseconds would lose up to
-// 999 us when aligning an application metadata track with another track.
-constexpr uint32_t kMovieTimeScale = 10000;
-uint64_t MovieTicks(uint64_t time_us) {
-  return time_us / 100 + (time_us % 100 + 50) / 100;
-}
-
-uint64_t TrackMovieTicks(uint64_t ticks, uint32_t timescale) {
-  return ticks / timescale * kMovieTimeScale +
-      (ticks % timescale * kMovieTimeScale + timescale / 2) / timescale;
-}
+  uint64_t PresentationDuration() const { return start_offset + segment_duration; }
+};
 
 std::vector<uint8_t> StripStartCode(const std::vector<uint8_t>& nal) {
   size_t i = 0;
@@ -275,7 +268,7 @@ class Mp4Muxer : public Muxer {
           // usual last-duration fallback, but still ends the source.
           if (!t.times.empty() && time_us > 0) {
             const uint64_t previous = t.times.front() < 0 ?
-                MetadataElapsed(t.times.back(), t.times.front()) :
+                ElapsedUs(t.times.back(), t.times.front()) :
                 static_cast<uint64_t>(t.times.back());
             if (static_cast<uint64_t>(time_us) >= previous) {
               const uint64_t ticks = MetadataTicks(static_cast<uint64_t>(time_us) - previous);
@@ -298,8 +291,8 @@ class Mp4Muxer : public Muxer {
         return false;
       }
       if (!t.times.empty()) {
-        const uint64_t ticks = MetadataTicks(MetadataElapsed(time_us, t.times.front()));
-        const uint64_t last_ticks = MetadataTicks(MetadataElapsed(t.times.back(), t.times.front()));
+        const uint64_t ticks = MetadataTicks(ElapsedUs(time_us, t.times.front()));
+        const uint64_t last_ticks = MetadataTicks(ElapsedUs(t.times.back(), t.times.front()));
         if (ticks - last_ticks > UINT32_MAX) {
           *error = "MPEG-4: metadata sample duration exceeds the sample-table range";
           return false;
@@ -392,7 +385,7 @@ class Mp4Muxer : public Muxer {
     if (t.type == TrackType::kMetadata) {
       uint64_t last_ticks = 0;
       for (size_t i = 1; i < n; i++) {
-        const uint64_t ticks = MetadataTicks(MetadataElapsed(t.times[i], t.times.front()));
+        const uint64_t ticks = MetadataTicks(ElapsedUs(t.times[i], t.times.front()));
         d.push_back(static_cast<uint32_t>(ticks - last_ticks));
         last_ticks = ticks;
       }
@@ -412,29 +405,54 @@ class Mp4Muxer : public Muxer {
   }
 
   std::vector<uint8_t> Moov() const {
+    // Use Android's 10 kHz movie clock to align metadata with other tracks.
+    // Retain the original millisecond clock and timeline for A/V-only files.
+    const bool has_metadata = std::any_of(tracks_.begin(), tracks_.end(), [](const Track& t) {
+      return t.type == TrackType::kMetadata;
+    });
+    const uint32_t movie_scale = has_metadata ? 10000 : 1000;
+    const auto track_start = [has_metadata](const Track& t) {
+      // Android represents negative preroll as a trim on the affected track.
+      return has_metadata ? std::max<int64_t>(0, t.times.front()) : t.times.front();
+    };
     int64_t start = 0;
     bool have_start = false;
     for (const Track& t : tracks_) {
       if (!t.times.empty()) {
-        start = have_start ? std::min(start, TrackStart(t)) : TrackStart(t);
+        start = have_start ? std::min(start, track_start(t)) : track_start(t);
         have_start = true;
       }
     }
     uint64_t movie_ticks = 0;
     std::vector<std::vector<uint32_t>> durations;
+    std::vector<TrackTiming> track_timings;
     for (const Track& t : tracks_) {
       durations.push_back(Durations(t));
-      uint64_t total = 0;
-      for (uint32_t d : durations.back()) total += d;
-      const int64_t offset_us = t.times.empty() ? 0 : TrackStart(t) - start;
-      movie_ticks = std::max(movie_ticks, TrackMovieTicks(total, t.timescale) + MovieTicks(offset_us));
+      TrackTiming timing;
+      for (uint32_t d : durations.back()) timing.media_duration += d;
+      timing.segment_duration = ScaleTicks(timing.media_duration, t.timescale, movie_scale, has_metadata);
+      if (!t.times.empty()) {
+        const uint64_t offset_us = ElapsedUs(track_start(t), start);
+        timing.start_offset = ScaleTicks(offset_us, 1000000, movie_scale, has_metadata);
+        if (has_metadata && t.times.front() < 0) {
+          const uint64_t trim_us = ElapsedUs(0, t.times.front());
+          const uint64_t trim = ScaleTicks(trim_us, 1000000, movie_scale, true);
+          if (timing.segment_duration >= trim) {
+            timing.segment_duration -= trim;
+            timing.media_start = ScaleTicks(trim_us, 1000000, t.timescale, true);
+          }
+        }
+      }
+      movie_ticks = std::max(movie_ticks, timing.PresentationDuration());
+      track_timings.push_back(timing);
     }
     Box m("moov");
-    m.FullBegin("mvhd", 0, 0);
-    m.U32(0);
-    m.U32(0);
-    m.U32(kMovieTimeScale);
-    m.U32(static_cast<uint32_t>(movie_ticks));
+    // All ones in a header duration field denotes an unknown duration.
+    const bool wide_duration = movie_ticks >= UINT32_MAX;
+    m.FullBegin("mvhd", wide_duration ? 1 : 0, 0);
+    m.Zeros(wide_duration ? 16 : 8);
+    m.U32(movie_scale);
+    m.Time(movie_ticks, wide_duration);
     m.U32(0x00010000);
     m.U16(0x0100);
     m.Zeros(10);
@@ -443,7 +461,7 @@ class Mp4Muxer : public Muxer {
     m.U32(static_cast<uint32_t>(tracks_.size() + 1));
     m.End();
     for (size_t i = 0; i < tracks_.size(); i++) {
-      Trak(&m, tracks_[i], static_cast<uint32_t>(i + 1), durations[i], start);
+      Trak(&m, tracks_[i], static_cast<uint32_t>(i + 1), durations[i], track_timings[i]);
     }
     if (has_location_) {
       const int lat = latitude_e4_ < 0 ? -latitude_e4_ : latitude_e4_;
@@ -464,22 +482,18 @@ class Mp4Muxer : public Muxer {
     return m.bytes();
   }
 
-  void Trak(Box* b, const Track& t, uint32_t id, const std::vector<uint32_t>& dur, int64_t start) const {
+  void Trak(Box* b, const Track& t, uint32_t id, const std::vector<uint32_t>& dur,
+            const TrackTiming& timing) const {
     const bool video = t.type == TrackType::kVideo;
     const bool audio = t.type == TrackType::kAudio;
-    uint64_t total = 0;
-    for (uint32_t d : dur) total += d;
-    const uint64_t track_ticks = TrackMovieTicks(total, t.timescale);
-    const int64_t offset_us = t.times.empty() ? 0 : TrackStart(t) - start;
-    const uint64_t trim_us = !t.times.empty() && t.times.front() < 0 ?
-        uint64_t{0} - static_cast<uint64_t>(t.times.front()) : 0;
+    const uint64_t track_duration = timing.PresentationDuration();
+    const bool wide_track = track_duration >= UINT32_MAX;
     b->Begin("trak");
-    b->FullBegin("tkhd", 0, 7);
-    b->U32(0);
-    b->U32(0);
+    b->FullBegin("tkhd", wide_track ? 1 : 0, 7);
+    b->Zeros(wide_track ? 16 : 8);
     b->U32(id);
     b->U32(0);
-    b->U32(static_cast<uint32_t>(track_ticks + MovieTicks(offset_us)));
+    b->Time(track_duration, wide_track);
     b->Zeros(8);
     b->U16(0);
     b->U16(audio ? 1 : 0);
@@ -489,42 +503,30 @@ class Mp4Muxer : public Muxer {
     b->U32(static_cast<uint32_t>(t.width) << 16);
     b->U32(static_cast<uint32_t>(t.height) << 16);
     b->End();
-    if (offset_us > 0) {
-      // An empty edit for the time before this track's first sample.
+    if (timing.start_offset > 0 || timing.media_start > 0) {
+      // Edit-list media_time is signed, with -1 reserved for the empty edit.
+      const bool wide_edit = timing.start_offset > UINT32_MAX ||
+          timing.segment_duration > UINT32_MAX || timing.media_start > INT32_MAX;
       b->Begin("edts");
-      b->FullBegin("elst", 0, 0);
-      b->U32(2);
-      b->U32(static_cast<uint32_t>(MovieTicks(offset_us)));
-      b->U32(0xFFFFFFFF);
-      b->U32(0x00010000);
-      b->U32(static_cast<uint32_t>(track_ticks));
-      b->U32(0);
-      b->U32(0x00010000);
-      b->End();
-      b->End();
-    } else if (trim_us > 0 && track_ticks >= MovieTicks(trim_us)) {
-      b->Begin("edts");
-      b->FullBegin("elst", 0, 0);
-      b->U32(1);
-      b->U32(static_cast<uint32_t>(track_ticks - MovieTicks(trim_us)));
-      b->U32(static_cast<uint32_t>(MediaTicks(trim_us, t.timescale)));
+      b->FullBegin("elst", wide_edit ? 1 : 0, 0);
+      b->U32(timing.start_offset > 0 ? 2 : 1);
+      if (timing.start_offset > 0) {
+        b->Time(timing.start_offset, wide_edit);
+        b->Time(UINT64_MAX, wide_edit);
+        b->U32(0x00010000);
+      }
+      b->Time(timing.segment_duration, wide_edit);
+      b->Time(timing.media_start, wide_edit);
       b->U32(0x00010000);
       b->End();
       b->End();
     }
     b->Begin("mdia");
-    b->FullBegin("mdhd", total > UINT32_MAX ? 1 : 0, 0);
-    if (total > UINT32_MAX) {
-      b->U64(0);
-      b->U64(0);
-      b->U32(t.timescale);
-      b->U64(total);
-    } else {
-      b->U32(0);
-      b->U32(0);
-      b->U32(t.timescale);
-      b->U32(static_cast<uint32_t>(total));
-    }
+    const bool wide_media = timing.media_duration >= UINT32_MAX;
+    b->FullBegin("mdhd", wide_media ? 1 : 0, 0);
+    b->Zeros(wide_media ? 16 : 8);
+    b->U32(t.timescale);
+    b->Time(timing.media_duration, wide_media);
     b->U16(0x55C4);  // "und"
     b->U16(0);
     b->End();
