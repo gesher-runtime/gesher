@@ -239,6 +239,10 @@ add_executable(futex_test tests/native/futex_test.cc)
 target_compile_options(futex_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(futex_test PRIVATE gesher_posix)
 
+add_executable(realtime_signals_test tests/native/realtime_signals_test.cc)
+target_compile_options(realtime_signals_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(realtime_signals_test PRIVATE gesher_posix)
+
 add_library(futex_test_module SHARED tests/native/futex_test_module.cc)
 set_target_properties(futex_test_module PROPERTIES PREFIX "")
 target_compile_options(futex_test_module PRIVATE -Wall -Wextra -Werror)
