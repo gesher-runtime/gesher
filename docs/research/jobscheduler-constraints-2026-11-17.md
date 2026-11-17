@@ -21,15 +21,26 @@ start/stop ordering, deadline rules and callback outcomes.
   updates wait until execution and remote failure retires the run for retry.
   `isOverrideDeadlineExpired` is captured when execution is selected, including for
   an expired periodic window; that parameter flag is not constraint immunity.
+  Binding/start response timeouts set the internal ANR reason, while a stop response
+  timeout retains the reason that initiated the stop. `jobFinished` replaces both
+  stop reasons with undefined/successful-finish, even if a stop was already pending.
+  A null binding is an explicit no-retry outcome. An exception sending `startJob`
+  leaves the start acknowledgement timer active; a later confirmed disconnect
+  retries, whereas an unacknowledged start times out without retrying.
 - [JobSchedulerService](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/apex/jobscheduler/service/java/com/android/server/job/JobSchedulerService.java):
   a network constraint requires `ACCESS_NETWORK_STATE` for target SDK 34 onward.
   Missing `RECEIVE_BOOT_COMPLETED` for a persisted job produces
   `IllegalArgumentException`. User-initiated job permission is independent of
   optional compatibility settings.
+  `getRescheduleJobForFailureLocked` separates application failures from system
+  stops. `getRescheduleJobForPeriodic` clears the failure counters and retains the
+  original periodic cadence across retry attempts and missed windows.
 - [BatteryController](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/apex/jobscheduler/service/java/com/android/server/job/controllers/BatteryController.java):
   ordinary charging jobs require stable power (charging and battery not low).
   Top-app jobs at normal priority or higher retain the connected-power exemption
   during that execution. AC power does not erase a battery-not-low requirement.
+  The priority comparison uses `JobStatus.getEffectivePriority`, including decay
+  after application failures; system stops do not lower a job's priority.
 - [DeviceIdlenessTracker](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/apex/jobscheduler/service/java/com/android/server/job/controllers/idle/DeviceIdlenessTracker.java)
   and [framework config](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/res/res/values/config.xml):
   inactivity is considered after an observed noninteractive state. The default
@@ -73,6 +84,49 @@ send duplicate stop callbacks. Cancellation during binding retains retryable wor
 unless the job was explicitly removed or its owner changed. Delayed acknowledgements
 cannot restart a finished attempt. Retry preserves pending content trigger metadata.
 
+## Completion, retry history and unfinished work
+
+Every run records its public and internal completion reasons, including during
+binding before its `JobParameters` exist. The retry decision follows the pinned
+Android source and its default system-stop-to-failure ratio of three:
+
+| Completion requesting retry | History change | Backoff contribution |
+| --- | --- | --- |
+| Application `jobFinished(true)`, execution timeout, internal ANR, or public user stop | One application failure | One attempt immediately |
+| Constraint loss, unexpected disconnect, or other system stop | One system stop | One attempt for every three system stops |
+| Abandoned execution timeout, when enabled by the framework flag and app compatibility metadata | One abandoned failure and one application failure | One attempt; after the fourth abandoned failure the policy is exponential |
+
+The attempt count is `failures + systemStops / 3`, using integer division. Zero
+attempts means no earliest runtime at all. Positive counts apply the requested
+linear/exponential policy, Android's minimum initial delay and maximum backoff
+cap. Counters and delay multiplication saturate without wrapping. A new `schedule`
+starts fresh history; `enqueue` onto the same job retains it. A successful periodic
+transition clears application, abandoned and system-stop histories. Failed periodic
+attempts have no latest-runtime deadline; a separate original window anchors the
+next normal periodic schedule and its flex/buffer calculation.
+
+For ordinary jobs, zero/one application failure retains the requested priority,
+two/three cap it at default, four/five cap it at low, and six or more use minimum.
+Requested expedited jobs retain at least high priority after failures, and
+user-initiated jobs retain their priority. The charging exemption uses this
+effective value for a current or previously top-started attempt.
+
+`handleAbandonedJob` marks an executing attempt and leaves its lifecycle intact.
+When its execution limit arrives, the scheduler chooses the ordinary or abandoned
+timeout reason using the Android flag and compatibility table. It does not treat
+the cleanup notification itself as an application request to finish.
+
+Pending or delivered work is transferred only when the job is actually retained
+for retry/periodicity. Work remaining in a nonperiodic job does not override
+`jobFinished(false)`, `onStartJob(false)`, `onStopJob(false)`, a null binding or a
+missing start acknowledgement. Those outcomes remove the scheduled job and release
+the queue references. Completed callbacks cannot resurrect it. Requested retries
+preserve work IDs and increment delivery counts when that work is dequeued again.
+
+The priority and retry/periodic calculations are adapted from the linked AOSP
+`android-16.0.0_r4` sources, copyright 2014 The Android Open Source Project,
+under Apache License 2.0; the source file retains that attribution.
+
 ## Validation and limits
 
 `JobSchedulerConstraintContractTest` enters production `Run.started`, receives the
@@ -80,7 +134,15 @@ actual constructed JobParameters and acknowledges the actual callback. It covers
 unavailable observations, actual netId handover, cellular versus metered Wi-Fi,
 custom requests, periodic/one-shot deadlines, pending reasons, power/storage/idle
 stop reasons, acknowledgement ordering, callback failures, binding/start/stop timeout
-outcomes, retry/backoff and permission admission.
+outcomes, retry/backoff and permission admission. Additional regressions cover the
+first six system stops, mixed application/system history, linear/exponential caps,
+periodic retry reset and cadence, effective-priority charging, expedited and
+user-initiated priority exceptions, abandoned callbacks/timeouts, and pending plus
+delivered work under retry and no-retry completions. Independent probes on
+`182bf771c85566af9ca0b1a7ff71aba7eea54ead` reproduced three errors: constraint stops
+charged as application failures, charging exemption based on raw priority, and a
+missing start acknowledgement retaining pending work. The repaired suite asserts
+the pinned Android outcomes instead of treating those old outcomes as expected.
 
 The existing scheduler host runner compiles this suite and the work/alarm regression
 suite against current production classes. Its host JNI adapter supplies only the

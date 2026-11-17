@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2026 The Gesher Authors
+ * Copyright (C) 2014 The Android Open Source Project
  * SPDX-License-Identifier: Apache-2.0
  */
 package com.gesher.server;
@@ -60,8 +61,9 @@ import java.util.concurrent.TimeUnit;
  * {@code startJob}, and the app answers through IJobCallback (acknowledgeStartMessage,
  * jobFinished, dequeueWork and completeWork for enqueued work); a job is stopped
  * ({@code stopJob}) after 10 minutes, when cancelled or rescheduled. A finished periodic
- * job waits for its next window, a job finished with reschedule (or whose process died)
- * backs off (linear or exponential from its initial backoff). Persisted jobs are kept in
+ * job waits for its next window. Application failures back off immediately; system stops
+ * contribute one backoff attempt per three stops, using the job's linear or exponential
+ * policy. Persisted jobs are kept in
  * {@code $ANDROID_DATA/system/jobs} and scheduled again when the device starts.
  *
  * <p>{@code GESHER_JOBS_TIME_SCALE} (a number, tests only) divides periods, flex and
@@ -73,6 +75,10 @@ final class JobSchedulerService extends IJobScheduler.Default
     private static final long IDLE_AFTER_MS = 31 * 60_000; // AOSP config_jobSchedulerInactivityIdleThreshold
     private static final long BIND_TIMEOUT_MS = 18_000;
     private static final long CALLBACK_TIMEOUT_MS = 8_000;
+    private static final int SYSTEM_STOP_TO_FAILURE_RATIO = 3;
+    private static final int ABANDONED_TIMEOUTS_BEFORE_AGGRESSIVE_BACKOFF = 3;
+    private static final long MAX_PERIOD_MS = 365L * 24 * 60 * 60_000;
+    private static final long PERIODIC_WINDOW_BUFFER_MS = 30 * 60_000;
     private static final int BINDING = 0, STARTING = 1, EXECUTING = 2, STOPPING = 3, FINISHED = 4;
     /** How often waiting constraints (network, charging, idle) are looked at again. */
     private static final long CONSTRAINT_POLL_MS = 30_000;
@@ -102,7 +108,11 @@ final class JobSchedulerService extends IJobScheduler.Default
         final String ownerIdentity;
         long earliest;          // elapsedRealtime; 0: none
         long latest;            // elapsedRealtime; Long.MAX_VALUE: none
+        long originalLatest;    // periodic window retained across failure retries
         int failures;
+        int systemStops;
+        int abandonedFailures;
+        final boolean handleAbandonedJobs;
         final ArrayDeque<JobWorkItem> work = new ArrayDeque<>();
         final Map<Integer, JobWorkItem> delivered = new HashMap<>();
         int nextWorkId = 1;
@@ -121,6 +131,20 @@ final class JobSchedulerService extends IJobScheduler.Default
             ApkPackage owner = mPm.get(packageName);
             ownerUid = owner == null ? -1 : owner.uid();
             ownerIdentity = NotificationManagerService.codeIdentity(owner);
+            handleAbandonedJobs = owner != null && android.app.job.Flags.handleAbandonedJobs()
+                    && java.util.Arrays.binarySearch(CompatChanges.disabledFor(
+                            owner.parsed.getTargetSdkVersion()),
+                            JobParameters.OVERRIDE_HANDLE_ABANDONED_JOBS) >= 0;
+        }
+
+        /** JobStatus decays priority for application failures, not system stops. */
+        int effectivePriority() {
+            int priority = info.getPriority();
+            if (failures < 2 || info.isUserInitiated()) return priority;
+            if (info.isExpedited()) return JobInfo.PRIORITY_HIGH;
+            if (failures < 4) return Math.min(priority, JobInfo.PRIORITY_DEFAULT);
+            if (failures < 6) return Math.min(priority, JobInfo.PRIORITY_LOW);
+            return JobInfo.PRIORITY_MIN;
         }
 
         boolean same(String pkg, String ns, int id) {
@@ -151,6 +175,9 @@ final class JobSchedulerService extends IJobScheduler.Default
         JobParameters params;
         boolean stopping;
         boolean done;
+        boolean abandoned;
+        int stopReason = JobParameters.STOP_REASON_UNDEFINED;
+        int internalStopReason = JobParameters.INTERNAL_STOP_REASON_UNKNOWN;
         volatile boolean topStarted;
         int notificationId;
         String notificationChannelId;
@@ -159,7 +186,8 @@ final class JobSchedulerService extends IJobScheduler.Default
             @Override
             public void connected(ComponentName name, IBinder binder,
                     android.app.IBinderSession session, boolean dead) {
-                if (dead || binder == null) finish(Run.this, true, "its service disconnected");
+                if (dead) finish(Run.this, true, "its service disconnected");
+                else if (binder == null) finish(Run.this, false, "its service returned a null binding");
                 else started(binder);
             }
         };
@@ -193,6 +221,13 @@ final class JobSchedulerService extends IJobScheduler.Default
             }
         }
 
+        /** Caller holds the scheduler monitor; also records reasons before parameters exist. */
+        void setStopReason(int reason, int internalReason, String why) {
+            stopReason = reason;
+            internalStopReason = internalReason;
+            if (params != null) params.setStopReason(reason, internalReason, why);
+        }
+
         void started(IBinder binder) {
             synchronized (dispatch) {
                 if (!current(job)) { finish(this, false, "its owner changed while binding"); return; }
@@ -222,11 +257,19 @@ final class JobSchedulerService extends IJobScheduler.Default
                 }
                 try {
                     binder.linkToDeath(this, 0);
-                    if (!current(job)) { finish(this, false, "its owner changed before dispatch"); return; }
+                } catch (RemoteException | RuntimeException e) {
+                    finish(this, true, "its service died before startJob: " + e);
+                    return;
+                }
+                if (!current(job)) { finish(this, false, "its owner changed before dispatch"); return; }
+                try {
                     SystemServer.log("jobscheduler: startJob " + job);
                     service.startJob(params);
                 } catch (RemoteException | RuntimeException e) {
-                    finish(this, true, "startJob failed: " + e);
+                    // JobServiceContext keeps the start acknowledgement timer.
+                    // A confirmed disconnect retries; an absent acknowledgement
+                    // reaches FINISHED/NO-RETRY at the start timeout instead.
+                    SystemServer.log("jobscheduler: startJob failed for " + job + ": " + e);
                 }
             }
         }
@@ -269,6 +312,9 @@ final class JobSchedulerService extends IJobScheduler.Default
             synchronized (dispatch) {
                 synchronized (JobSchedulerService.this) {
                     if (done || (state != EXECUTING && state != STOPPING)) return;
+                    setStopReason(JobParameters.STOP_REASON_UNDEFINED,
+                            JobParameters.INTERNAL_STOP_REASON_SUCCESSFUL_FINISH,
+                            "app called jobFinished");
                 }
                 finish(this, reschedule, "jobFinished (reschedule " + reschedule + ")");
             }
@@ -290,6 +336,9 @@ final class JobSchedulerService extends IJobScheduler.Default
                     } else if (job.delivered.isEmpty()) {
                         // Enqueue uses this same monitor. Retire an exhausted run
                         // before another enqueue can attach to its old callback.
+                        setStopReason(JobParameters.STOP_REASON_UNDEFINED,
+                                JobParameters.INTERNAL_STOP_REASON_SUCCESSFUL_FINISH,
+                                "last work dequeued");
                         transition[0] = finishState(this, false);
                     }
                 }
@@ -319,7 +368,11 @@ final class JobSchedulerService extends IJobScheduler.Default
         @Override
         public void handleAbandonedJob(int jobId) {
             callback(jobId);
-            finish(this, false, "abandoned");
+            synchronized (JobSchedulerService.this) {
+                // JobServiceContext only records this observation. An executing
+                // job still owns its binding until completion or its timeout.
+                if (!done && state == EXECUTING) abandoned = true;
+            }
         }
 
         @Override
@@ -832,9 +885,10 @@ final class JobSchedulerService extends IJobScheduler.Default
         long now = SystemClock.elapsedRealtime();
         JobInfo info = job.info;
         if (info.isPeriodic()) {
-            long period = scaled(info.getIntervalMillis());
-            long flex = Math.min(period, scaled(info.getFlexMillis()));
+            long period = periodMillis(info);
+            long flex = flexMillis(info, period);
             job.latest = now + period;
+            job.originalLatest = job.latest;
             job.earliest = job.latest - flex;
         } else {
             job.earliest = info.hasEarlyConstraint() ? now + info.getMinLatencyMillis() : 0;
@@ -966,7 +1020,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         // BatteryController retains the top-app power exemption for that run.
         Run run = job.run;
         if ((state.topUid == job.ownerUid || run != null && run.topStarted)
-                && job.info.getPriority() >= JobInfo.PRIORITY_DEFAULT) return true;
+                && job.effectivePriority() >= JobInfo.PRIORITY_DEFAULT) return true;
         return batteryNotLow(power)
                 && ((power[1] & (128 | 8)) != 0 || power[2] == 100);
     }
@@ -1139,14 +1193,25 @@ final class JobSchedulerService extends IJobScheduler.Default
         synchronized (run.dispatch) {
             synchronized (this) {
                 if (run.done || run.state != expectedState) return;
+                // AOSP reports binding/start response timeouts as internal ANR.
+                // A stop response timeout preserves the reason for the stop.
+                if (expectedState == BINDING || expectedState == STARTING) {
+                    run.setStopReason(JobParameters.STOP_REASON_UNDEFINED,
+                            JobParameters.INTERNAL_STOP_REASON_ANR, "callback timed out");
+                }
             }
             switch (expectedState) {
                 case BINDING: finish(run, true, "timed out while binding"); break;
                 case STARTING: finish(run, false, "no onStartJob acknowledgement"); break;
                 case STOPPING: finish(run, true, "no onStopJob acknowledgement"); break;
                 case EXECUTING:
-                    stopRun(run, JobParameters.STOP_REASON_TIMEOUT,
-                            JobParameters.INTERNAL_STOP_REASON_TIMEOUT, "timed out");
+                    boolean abandoned;
+                    synchronized (this) { abandoned = run.abandoned && run.job.handleAbandonedJobs; }
+                    stopRun(run, abandoned ? JobParameters.STOP_REASON_TIMEOUT_ABANDONED
+                                    : JobParameters.STOP_REASON_TIMEOUT,
+                            abandoned ? JobParameters.INTERNAL_STOP_REASON_TIMEOUT_ABANDONED
+                                    : JobParameters.INTERNAL_STOP_REASON_TIMEOUT,
+                            abandoned ? "timed out and maybe abandoned" : "timed out");
                     break;
                 default: break;
             }
@@ -1165,7 +1230,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                 if (run.done || run.stopping) return;
                 run.stopping = true;
                 state = run.state;
-                if (run.params != null) run.params.setStopReason(stopReason, internalStopReason, why);
+                run.setStopReason(stopReason, internalStopReason, why);
             }
             if (state == BINDING) {
                 // No onStartJob was delivered, so no onStopJob result exists to
@@ -1297,18 +1362,20 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     /** The run is over: unbind, then reschedule (periodic, backoff) or drop the job. */
     private void finish(Run run, boolean reschedule, String why) {
-        int[] transition = {-1};
-        Runnable complete = () -> {
-            transition[0] = finishState(run, reschedule);
-            if (transition[0] >= 0) releaseNotification(run);
-        };
-        try {
-            if (mNotifications == null) complete.run();
-            else mNotifications.withChannelLifecycle(complete);
-        } finally {
-            // Notification storage/listener failures must not strand a completed
-            // service binding or skip the existing persisted-job cleanup.
-            if (transition[0] >= 0) finishBinding(run, transition[0] != 0, why);
+        synchronized (run.dispatch) {
+            int[] transition = {-1};
+            Runnable complete = () -> {
+                transition[0] = finishState(run, reschedule);
+                if (transition[0] >= 0) releaseNotification(run);
+            };
+            try {
+                if (mNotifications == null) complete.run();
+                else mNotifications.withChannelLifecycle(complete);
+            } finally {
+                // Notification storage/listener failures must not strand a completed
+                // service binding or skip the existing persisted-job cleanup.
+                if (transition[0] >= 0) finishBinding(run, transition[0] != 0, why);
+            }
         }
     }
 
@@ -1343,34 +1410,93 @@ final class JobSchedulerService extends IJobScheduler.Default
                 if (run.triggeredUris != null) java.util.Collections.addAll(j.changedUris, run.triggeredUris);
                 j.lastChange = now;
             }
-            if (j.failures < Integer.MAX_VALUE) j.failures++;
-            long cap = scaled(JobInfo.MAX_BACKOFF_DELAY_MILLIS);
-            long backoff = Math.min(cap, scaled(j.info.getInitialBackoffMillis()));
-            long factor = j.info.getBackoffPolicy() == JobInfo.BACKOFF_POLICY_LINEAR
-                    ? j.failures : 1L << Math.min(30, j.failures - 1);
-            long delay = backoff > cap / factor ? cap : backoff * factor;
-            j.earliest = now + delay;
-            if (!j.info.isPeriodic()) j.latest = Long.MAX_VALUE;
+            rescheduleForFailure(j, run, now);
             keep = true;
         } else if (j.info.isPeriodic()) {
-            // JobSchedulerService.getRescheduleJobForPeriodic: the next window after
-            // the one it ran in.
-            long period = scaled(j.info.getIntervalMillis());
-            long flex = Math.min(period, scaled(j.info.getFlexMillis()));
-            long latest = Math.max(j.latest, now) + period;
-            if (j.latest < now) latest = now + period;
-            j.latest = latest;
-            j.earliest = latest - flex;
+            reschedulePeriodic(j, now);
             j.failures = 0;
+            j.systemStops = 0;
+            j.abandonedFailures = 0;
             keep = true;
-        } else if (!j.work.isEmpty()) {
-            keep = true;  // enqueued work left: run again
         } else {
             mJobs.remove(j);
             keep = false;
         }
+        if (!keep) {
+            // Pending/delivered work alone is not a request to retry. In
+            // particular, a missing start acknowledgement is FINISHED/NO-RETRY.
+            j.work.clear();
+            j.delivered.clear();
+        }
         notifyAll();
         return keep ? 1 : 0;
+    }
+
+    /** Android 16 JobSchedulerService.getRescheduleJobForFailureLocked defaults. */
+    private void rescheduleForFailure(Job job, Run run, long now) {
+        int reason = run.internalStopReason;
+        if (reason == JobParameters.INTERNAL_STOP_REASON_SUCCESSFUL_FINISH
+                || reason == JobParameters.INTERNAL_STOP_REASON_TIMEOUT
+                || reason == JobParameters.INTERNAL_STOP_REASON_ANR
+                || run.stopReason == JobParameters.STOP_REASON_USER) {
+            if (job.failures < Integer.MAX_VALUE) job.failures++;
+        } else if (job.handleAbandonedJobs
+                && reason == JobParameters.INTERNAL_STOP_REASON_TIMEOUT_ABANDONED) {
+            if (job.abandonedFailures < Integer.MAX_VALUE) job.abandonedFailures++;
+            if (job.failures < Integer.MAX_VALUE) job.failures++;
+        } else if (job.systemStops < Integer.MAX_VALUE) {
+            job.systemStops++;
+        }
+        long attempts = (long) job.failures + job.systemStops / SYSTEM_STOP_TO_FAILURE_RATIO;
+        if (attempts == 0) {
+            job.earliest = 0; // JobStatus.NO_EARLIEST_RUNTIME
+        } else {
+            long cap = scaled(JobInfo.MAX_BACKOFF_DELAY_MILLIS);
+            long backoff = Math.min(cap, scaled(Math.max(JobInfo.MIN_BACKOFF_MILLIS,
+                    job.info.getInitialBackoffMillis())));
+            boolean linear = job.info.getBackoffPolicy() == JobInfo.BACKOFF_POLICY_LINEAR
+                    && !(job.handleAbandonedJobs && job.abandonedFailures
+                            > ABANDONED_TIMEOUTS_BEFORE_AGGRESSIVE_BACKOFF);
+            long factor = linear ? attempts : 1L << Math.min(62, attempts - 1);
+            long delay = backoff > cap / factor ? cap : backoff * factor;
+            job.earliest = now + delay;
+        }
+        // Retried periodic attempts also have no deadline. Their next regular
+        // window is computed separately from the original periodic boundary.
+        job.latest = Long.MAX_VALUE;
+    }
+
+    private long periodMillis(JobInfo info) {
+        return Math.max(1, scaled(Math.max(JobInfo.getMinPeriodMillis(),
+                Math.min(MAX_PERIOD_MS, info.getIntervalMillis()))));
+    }
+
+    private long flexMillis(JobInfo info, long period) {
+        return Math.min(period, Math.max(1, scaled(Math.max(JobInfo.getMinFlexMillis(),
+                info.getFlexMillis()))));
+    }
+
+    /** Keep the original periodic cadence through retry attempts and missed windows. */
+    private void reschedulePeriodic(Job job, long now) {
+        long period = periodMillis(job.info);
+        long flex = flexMillis(job.info, period);
+        long original = job.originalLatest;
+        if (original < 0 || original == Long.MAX_VALUE) original = now;
+        long difference = Math.abs(now - original);
+        long buffer = 0;
+        if (now > original) {
+            long skipped = difference / period + 1;
+            if (period != flex && period - flex - difference % period <= flex / 6) skipped++;
+            job.latest = original + period * skipped;
+        } else {
+            job.latest = original + period;
+            long maxBuffer = scaled(PERIODIC_WINDOW_BUFFER_MS);
+            if (difference < maxBuffer && difference < period / 6) {
+                buffer = Math.min(maxBuffer, period / 6 - difference);
+            }
+        }
+        job.earliest = job.latest - Math.min(flex, period - buffer);
+        job.originalLatest = job.latest;
     }
 
     private void finishBinding(Run run, boolean keep, String why) {

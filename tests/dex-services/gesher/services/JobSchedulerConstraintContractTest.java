@@ -122,6 +122,8 @@ public final class JobSchedulerConstraintContractTest {
         JobParameters lastStopParams;
         JobParameters lastStartParams;
         boolean acknowledgeStartImmediately = true;
+        boolean ongoingOnStart = true;
+        boolean failStartCallback;
         boolean acknowledgeImmediately = true;
         boolean failNetworkCallback;
         boolean rescheduleOnStop = false;
@@ -130,9 +132,10 @@ public final class JobSchedulerConstraintContractTest {
         public void startJob(JobParameters params) {
             starts++;
             lastStartParams = params;
+            if (failStartCallback) throw new IllegalStateException("fixture startJob dispatch failure");
             if (!acknowledgeStartImmediately) return;
             try {
-                params.getCallback().acknowledgeStartMessage(params.getJobId(), true);
+                params.getCallback().acknowledgeStartMessage(params.getJobId(), ongoingOnStart);
             } catch (RemoteException e) {
                 throw new RuntimeException(e);
             }
@@ -202,6 +205,8 @@ public final class JobSchedulerConstraintContractTest {
             parsed.setTargetSdkVersion(36);
             if (networkPermission) parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
                     android.Manifest.permission.ACCESS_NETWORK_STATE, 0, java.util.Set.of()));
+            parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
+                    "android.permission.RUN_USER_INITIATED_JOBS", 0, java.util.Set.of()));
             parsed.hideAsFinal();
 
             Object owner = UNSAFE.allocateInstance(type("ApkPackage"));
@@ -238,6 +243,12 @@ public final class JobSchedulerConstraintContractTest {
             networkDefinition.protectionLevel = android.content.pm.PermissionInfo.PROTECTION_NORMAL;
             ((Map<String, android.content.pm.PermissionInfo>) get(catalog, "mFramework"))
                     .put(networkDefinition.name, networkDefinition);
+            android.content.pm.PermissionInfo userInitiatedDefinition = new android.content.pm.PermissionInfo();
+            userInitiatedDefinition.name = "android.permission.RUN_USER_INITIATED_JOBS";
+            userInitiatedDefinition.packageName = "android";
+            userInitiatedDefinition.protectionLevel = android.content.pm.PermissionInfo.PROTECTION_NORMAL;
+            ((Map<String, android.content.pm.PermissionInfo>) get(catalog, "mFramework"))
+                    .put(userInitiatedDefinition.name, userInitiatedDefinition);
             Object notifications = make(notifType, new Class<?>[]{pmType, amType, java.util.function.ToIntBiFunction.class},
                     pm, am, (java.util.function.ToIntBiFunction<Object, Boolean>) (n, u) -> 0);
             set(am, "mServices", make(type("ActiveServices"), new Class<?>[]{atmType, pmType, notifType}, atm, pm, notifications));
@@ -264,6 +275,13 @@ public final class JobSchedulerConstraintContractTest {
 
         int schedule(JobInfo info) throws Exception {
             return (Integer) invoke(scheduler, "schedule", new Class<?>[]{String.class, JobInfo.class}, NAMESPACE, info);
+        }
+
+        void enqueue(JobInfo info, String action) throws Exception {
+            check((Integer) invoke(scheduler, "enqueue",
+                    new Class<?>[]{String.class, JobInfo.class, JobWorkItem.class},
+                    NAMESPACE, info, new JobWorkItem(new Intent(action))) == JobScheduler.RESULT_SUCCESS,
+                    "Work enqueue failed: " + action);
         }
 
         Object findJob(int id) throws Exception {
@@ -386,14 +404,15 @@ public final class JobSchedulerConstraintContractTest {
                 "Wrong internal stopReason: " + service.lastInternalStopReason);
         check(service.lastStopParams.getJobId() == 101, "Wrong job ID in stop parameters");
 
-        // rescheduleOnStop was true: job must remain pending with rescheduled delay.
+        // A constraint stop is a system stop. The first two do not impose backoff.
         check(h.runningCount() == 0, "Job 101 still counted as running");
         check(h.getPendingJob(101) != null, "Job 101 was dropped despite reschedule=true");
         Object jobObj = h.findJob(101);
         int failures = (Integer) get(jobObj, "failures");
-        check(failures == 1, "Failure count not incremented: " + failures);
+        check(failures == 0, "Constraint stop counted as an application failure: " + failures);
+        check((Integer) get(jobObj, "systemStops") == 1, "System stop was not recorded");
         long earliest = (Long) get(jobObj, "earliest");
-        check(earliest > SystemClock.elapsedRealtime(), "Rescheduled job earliest delay not set");
+        check(earliest == 0, "First system stop imposed a retry delay");
     }
 
     /**
@@ -459,49 +478,230 @@ public final class JobSchedulerConstraintContractTest {
      * Test exponential backoff calculation across multiple reschedules vs drop.
      */
     private static void testRescheduleExponentialBackoff(Harness h) throws Exception {
-        h.setPowerStatus(new int[]{1, 0, 100});
         JobInfo info = new JobInfo.Builder(104, serviceComponent())
-                .setRequiresCharging(true)
                 .setBackoffCriteria(10_000, JobInfo.BACKOFF_POLICY_EXPONENTIAL)
                 .build();
         check(h.schedule(info) == JobScheduler.RESULT_SUCCESS, "Job 104 scheduling failed");
 
-        // First run & stop with reschedule=true
-        TestService service1 = new TestService();
-        service1.rescheduleOnStop = true;
-        h.start(104, service1);
-        h.setPowerStatus(new int[]{0, 0, 80}); // triggers stop
-        check(service1.stops == 1, "Stop 1 not received");
+        // Application-requested retries count as failures immediately.
+        TestRunHandle first = h.start(104, new TestService());
+        first.params.getCallback().jobFinished(104, true);
 
         Object jobObj = h.findJob(104);
         check((Integer) get(jobObj, "failures") == 1, "Failures should be 1");
-        long delay1 = (Long) get(jobObj, "earliest") - SystemClock.elapsedRealtime();
-        check(delay1 >= 9_000 && delay1 <= 11_000, "First backoff delay should be ~10s: " + delay1);
+        check((Integer) get(jobObj, "systemStops") == 0, "App retry counted as a system stop");
+        checkDelay(jobObj, 10_000, "First application retry");
+        check(first.params.getInternalStopReasonCode() == JobParameters.INTERNAL_STOP_REASON_SUCCESSFUL_FINISH,
+                "jobFinished did not record its actual completion reason");
 
-        // Plug back in
-        h.setPowerStatus(new int[]{1, 0, 100});
-        set(jobObj, "earliest", 0L); // allow immediate run for test
-
-        // Second run & stop with reschedule=true
-        TestService service2 = new TestService();
-        service2.rescheduleOnStop = true;
-        h.start(104, service2);
-        h.setPowerStatus(new int[]{0, 0, 80}); // triggers stop
-        check(service2.stops == 1, "Stop 2 not received");
+        TestRunHandle second = h.start(104, new TestService());
+        second.params.getCallback().jobFinished(104, true);
 
         check((Integer) get(jobObj, "failures") == 2, "Failures should be 2");
-        long delay2 = (Long) get(jobObj, "earliest") - SystemClock.elapsedRealtime();
-        check(delay2 >= 19_000 && delay2 <= 21_000, "Second exponential backoff should be ~20s: " + delay2);
+        checkDelay(jobObj, 20_000, "Second application retry");
 
-        // Third run & stop with reschedule=false (dropped)
-        h.setPowerStatus(new int[]{1, 0, 100});
-        set(jobObj, "earliest", 0L);
-        TestService service3 = new TestService();
-        service3.rescheduleOnStop = false;
-        h.start(104, service3);
-        h.setPowerStatus(new int[]{0, 0, 80});
-        check(service3.stops == 1, "Stop 3 not received");
+        TestRunHandle third = h.start(104, new TestService());
+        third.params.getCallback().jobFinished(104, false);
         check(h.getPendingJob(104) == null, "Job 104 should be dropped when reschedule=false");
+    }
+
+    private static void checkDelay(Object job, long expected, String description) throws Exception {
+        long delay = (Long) get(job, "earliest") - SystemClock.elapsedRealtime();
+        check(delay >= expected - 1_000 && delay <= expected,
+                description + " expected " + expected + " ms, got " + delay);
+    }
+
+    private static void testSystemStopAndMixedBackoff(Harness h) throws Exception {
+        JobInfo info = new JobInfo.Builder(141, serviceComponent()).setRequiresCharging(true)
+                .setBackoffCriteria(10_000, JobInfo.BACKOFF_POLICY_EXPONENTIAL).build();
+        h.schedule(info);
+        Object job = h.findJob(141);
+        for (int stops = 1; stops <= 6; stops++) {
+            h.setPowerStatus(new int[]{1, 8, 90});
+            TestService service = new TestService();
+            service.rescheduleOnStop = true;
+            h.start(141, service);
+            h.setPowerStatus(new int[]{0, 0, 90});
+            check(service.stops == 1, "System stop " + stops + " was not dispatched");
+            check((Integer) get(job, "failures") == 0, "System stop increased app failures");
+            check((Integer) get(job, "systemStops") == stops, "System stop history was lost");
+            if (stops < 3) check((Long) get(job, "earliest") == 0, "First two system stops imposed backoff");
+            else checkDelay(job, stops < 6 ? 10_000 : 20_000, "System stop " + stops);
+        }
+
+        // schedule() creates a fresh history; enqueue() on an equal job retains it.
+        h.schedule(info);
+        Object fresh = h.findJob(141);
+        check(fresh != job && (Integer) get(fresh, "failures") == 0
+                        && (Integer) get(fresh, "systemStops") == 0,
+                "Fresh schedule inherited retry counters");
+        for (int stops = 0; stops < 2; stops++) {
+            h.setPowerStatus(new int[]{1, 8, 90});
+            TestService service = new TestService(); service.rescheduleOnStop = true;
+            h.start(141, service);
+            h.setPowerStatus(new int[]{0, 0, 90});
+        }
+        h.enqueue(info, "retained-history");
+        check(h.findJob(141) == fresh && (Integer) get(fresh, "systemStops") == 2,
+                "Enqueue reset an existing job's retry history");
+        h.setPowerStatus(new int[]{1, 8, 90});
+        TestRunHandle failed = h.start(141, new TestService());
+        failed.params.getCallback().jobFinished(141, true);
+        checkDelay(fresh, 10_000, "One app failure after two system stops");
+        TestService stopped = new TestService(); stopped.rescheduleOnStop = true;
+        h.start(141, stopped);
+        h.setPowerStatus(new int[]{0, 0, 90});
+        check((Integer) get(fresh, "failures") == 1 && (Integer) get(fresh, "systemStops") == 3,
+                "Mixed application/system history was conflated");
+        checkDelay(fresh, 20_000, "One app failure plus three system stops");
+        h.cancel(141);
+
+        h.setPowerStatus(new int[]{1, 8, 90});
+        h.schedule(new JobInfo.Builder(142, serviceComponent()).setRequiresCharging(true)
+                .setBackoffCriteria(10_000, JobInfo.BACKOFF_POLICY_EXPONENTIAL).build());
+        TestService pendingStop = new TestService(); pendingStop.acknowledgeImmediately = false;
+        TestRunHandle run = h.start(142, pendingStop);
+        h.setPowerStatus(new int[]{0, 0, 90});
+        run.params.getCallback().jobFinished(142, true);
+        check((Integer) get(run.job, "failures") == 1 && (Integer) get(run.job, "systemStops") == 0,
+                "jobFinished while stopping inherited the preceding constraint reason");
+        check(run.params.getStopReason() == JobParameters.STOP_REASON_UNDEFINED
+                        && run.params.getInternalStopReasonCode() == JobParameters.INTERNAL_STOP_REASON_SUCCESSFUL_FINISH,
+                "jobFinished did not replace both stop reasons");
+        run.params.getCallback().acknowledgeStopMessage(142, true);
+        check((Integer) get(run.job, "failures") == 1, "Late stop acknowledgement counted a second retry");
+        h.cancel(142);
+    }
+
+    private static void testBackoffCapsAndPeriodicReset(Harness h) throws Exception {
+        long cap = JobInfo.MAX_BACKOFF_DELAY_MILLIS;
+        h.schedule(new JobInfo.Builder(143, serviceComponent())
+                .setBackoffCriteria(cap / 2, JobInfo.BACKOFF_POLICY_LINEAR).build());
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            TestRunHandle run = h.start(143, new TestService());
+            run.params.getCallback().jobFinished(143, true);
+            checkDelay(run.job, attempt == 1 ? cap / 2 : cap, "Linear cap attempt " + attempt);
+        }
+        h.cancel(143);
+        h.schedule(new JobInfo.Builder(144, serviceComponent())
+                .setBackoffCriteria(cap / 2, JobInfo.BACKOFF_POLICY_EXPONENTIAL).build());
+        Object capped = h.findJob(144);
+        // Extreme historical counters must saturate without negative delays or division by zero.
+        set(capped, "failures", Integer.MAX_VALUE);
+        set(capped, "systemStops", Integer.MAX_VALUE);
+        TestRunHandle extreme = h.start(144, new TestService());
+        extreme.params.getCallback().jobFinished(144, true);
+        checkDelay(capped, cap, "Saturated exponential retry");
+        check((Integer) get(capped, "failures") == Integer.MAX_VALUE, "Failure counter overflowed");
+        h.cancel(144);
+
+        h.setPowerStatus(new int[]{1, 8, 90});
+        h.schedule(new JobInfo.Builder(145, serviceComponent()).setRequiresCharging(true)
+                .setPeriodic(900_000, 300_000).build());
+        Object periodic = h.findJob(145);
+        long original = (Long) get(periodic, "latest");
+        TestRunHandle first = h.start(145, new TestService());
+        first.params.getCallback().jobFinished(145, true);
+        check((Long) get(periodic, "latest") == Long.MAX_VALUE
+                        && (Long) get(periodic, "originalLatest") == original,
+                "Periodic retry retained an execution deadline or lost its original window");
+        TestService systemStop = new TestService(); systemStop.rescheduleOnStop = true;
+        h.start(145, systemStop);
+        h.setPowerStatus(new int[]{0, 0, 90});
+        check((Integer) get(periodic, "failures") == 1 && (Integer) get(periodic, "systemStops") == 1,
+                "Periodic retry did not retain both histories");
+        h.setPowerStatus(new int[]{1, 8, 90});
+        TestRunHandle success = h.start(145, new TestService());
+        check(!success.params.isOverrideDeadlineExpired(), "Retried periodic job reported the old window expired");
+        success.params.getCallback().jobFinished(145, false);
+        check((Integer) get(periodic, "failures") == 0 && (Integer) get(periodic, "systemStops") == 0
+                        && (Integer) get(periodic, "abandonedFailures") == 0,
+                "Next periodic window retained failure history");
+        check((Long) get(periodic, "latest") == original + 900_000
+                        && (Long) get(periodic, "earliest") == original + 600_000,
+                "Periodic retry shifted the original cadence");
+
+        // Completing halfway through a later missed period retains the original cadence.
+        long missed = SystemClock.elapsedRealtime() - 2_250_000;
+        set(periodic, "originalLatest", missed);
+        TestRunHandle late = h.start(145, new TestService());
+        late.params.getCallback().jobFinished(145, false);
+        check((Long) get(periodic, "latest") == missed + 2_700_000,
+                "Missed periodic windows were rescheduled relative to completion instead of cadence");
+        h.cancel(145);
+    }
+
+    private static void testEffectiveChargingPriority(Harness h) throws Exception {
+        h.setPowerStatus(new int[]{1, 8, 90});
+        h.schedule(new JobInfo.Builder(146, serviceComponent()).setRequiresCharging(true)
+                .setPriority(JobInfo.PRIORITY_HIGH).build());
+        Object job = h.findJob(146);
+        int[] priorities = {JobInfo.PRIORITY_HIGH, JobInfo.PRIORITY_HIGH, JobInfo.PRIORITY_DEFAULT,
+                JobInfo.PRIORITY_DEFAULT, JobInfo.PRIORITY_LOW, JobInfo.PRIORITY_LOW, JobInfo.PRIORITY_MIN};
+        for (int failures = 0; failures < priorities.length; failures++) {
+            check((Integer) invoke(job, "effectivePriority", new Class<?>[0]) == priorities[failures],
+                    "Wrong effective priority after " + failures + " app failures");
+            h.setPowerStatus(new int[]{1, 8, 90});
+            TestService service = new TestService(); service.rescheduleOnStop = true;
+            TestRunHandle run = h.start(146, service);
+            set(run.run, "topStarted", true); // Explicit fixture: this attempt started while the app was top.
+            h.setPowerStatus(new int[]{1, 2 | 8, 10});
+            check(service.stops == (failures < 4 ? 0 : 1),
+                    "Charging used raw priority after " + failures + " failures");
+            if (service.stops != 0) {
+                check((Integer) get(job, "failures") == failures, "Charging system stop decayed priority");
+                h.setPowerStatus(new int[]{1, 8, 90});
+                run = h.start(146, new TestService());
+            }
+            run.params.getCallback().jobFinished(146, true);
+        }
+        h.cancel(146);
+
+        h.setNetworkState(2);
+        JobInfo[] privileged = {
+                new JobInfo.Builder(147, serviceComponent()).setExpedited(true).build(),
+                new JobInfo.Builder(148, serviceComponent()).setUserInitiated(true)
+                        .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).build()};
+        for (JobInfo info : privileged) {
+            h.schedule(info);
+            Object privilegedJob = h.findJob(info.getId());
+            for (int i = 0; i < 6; i++) {
+                TestRunHandle run = h.start(info.getId(), new TestService());
+                run.params.getCallback().jobFinished(info.getId(), true);
+            }
+            int expected = info.isExpedited() ? JobInfo.PRIORITY_HIGH : info.getPriority();
+            check((Integer) invoke(privilegedJob, "effectivePriority", new Class<?>[0]) == expected,
+                    "Expedited/user-initiated priority exception was lost");
+            h.cancel(info.getId());
+        }
+    }
+
+    private static void testAbandonedTimeout(Harness h) throws Exception {
+        h.schedule(new JobInfo.Builder(149, serviceComponent())
+                .setBackoffCriteria(10_000, JobInfo.BACKOFF_POLICY_LINEAR).build());
+        Object job = h.findJob(149);
+        check((Boolean) get(job, "handleAbandonedJobs") == android.app.job.Flags.handleAbandonedJobs(),
+                "Default-disabled abandoned override was not read from app compatibility metadata");
+        for (int attempt = 1; attempt <= 4; attempt++) {
+            TestService service = new TestService(); service.rescheduleOnStop = true;
+            TestRunHandle run = h.start(149, service);
+            run.params.getCallback().handleAbandonedJob(149);
+            check(h.runningCount() == 1 && service.stops == 0 && !(Boolean) get(run.run, "done"),
+                    "Abandoned callback prematurely finished execution");
+            h.timeout(run.run, 2);
+            boolean handled = android.app.job.Flags.handleAbandonedJobs();
+            check(service.lastStopReason == (handled ? JobParameters.STOP_REASON_TIMEOUT_ABANDONED
+                            : JobParameters.STOP_REASON_TIMEOUT), "Abandoned timeout used wrong public reason");
+            check((Integer) get(job, "failures") == attempt && (Integer) get(job, "systemStops") == 0,
+                    "Abandoned timeout was not an application failure");
+            check((Integer) get(job, "abandonedFailures") == (handled ? attempt : 0),
+                    "Abandoned failure counter was not retained");
+            checkDelay(job, handled && attempt == 4 ? 80_000 : attempt * 10_000L,
+                    "Abandoned timeout backoff " + attempt);
+            run.params.getCallback().handleAbandonedJob(149);
+            check(h.runningCount() == 0, "Late abandoned callback resurrected a completed run");
+        }
+        h.cancel(149);
     }
 
     /**
@@ -512,6 +712,7 @@ public final class JobSchedulerConstraintContractTest {
         check(h.schedule(info) == JobScheduler.RESULT_SUCCESS, "Job 105 scheduling failed");
 
         TestService service = new TestService();
+        service.rescheduleOnStop = true;
         TestRunHandle handle = h.start(105, service);
         check(service.starts == 1, "Job 105 did not start");
 
@@ -529,6 +730,10 @@ public final class JobSchedulerConstraintContractTest {
                 "Wrong internal stopReason: " + service.lastInternalStopReason);
         check("timed out".equals(service.lastDebugStopReason),
                 "Wrong debug reason: " + service.lastDebugStopReason);
+        check((Integer) get(handle.job, "failures") == 1 && (Integer) get(handle.job, "systemStops") == 0,
+                "Execution timeout was not an application failure");
+        checkDelay(handle.job, info.getInitialBackoffMillis(), "Execution timeout retry");
+        h.cancel(105);
     }
 
     /**
@@ -720,6 +925,8 @@ public final class JobSchedulerConstraintContractTest {
         h.setNetworkSnapshot(snapshot(44, "wifi", false, false));
         check(h.runningCount() == 0 && h.getPendingJob(127) != null,
                 "Network callback death stranded/dropped running job instead of retrying");
+        check((Integer) get(run.job, "failures") == 0 && (Integer) get(run.job, "systemStops") == 1,
+                "Network callback death fabricated an application completion failure");
         invoke(h.scheduler, "updateNetwork", new Class<?>[]{h.runType, Network.class}, run.run, new Network(145));
         check(service.networkChanges == 2, "Finished run received a late network callback");
         h.cancel(127);
@@ -794,6 +1001,10 @@ public final class JobSchedulerConstraintContractTest {
         Object binding = h.begin(132);
         h.setPowerStatus(new int[]{0, 0, 90});
         check(h.runningCount() == 0 && h.getPendingJob(132) != null, "Constraint loss during bind discarded a pending job");
+        Object bindingJob = h.findJob(132);
+        check((Integer) get(bindingJob, "failures") == 0 && (Integer) get(bindingJob, "systemStops") == 1
+                        && (Long) get(bindingJob, "earliest") == 0,
+                "Binding cleanup lost its constraint stop reason before JobParameters existed");
         TestService late = new TestService();
         invoke(binding, "started", new Class<?>[]{IBinder.class}, late.asBinder());
         check(late.starts == 0, "Retired binding delivered late onStartJob");
@@ -803,6 +1014,9 @@ public final class JobSchedulerConstraintContractTest {
         Object unbound = h.begin(133);
         h.timeout(unbound, 0); // Production binding timeout boundary, without sleeping.
         check(h.runningCount() == 0 && h.getPendingJob(133) != null, "Binding timeout did not preserve job for retry");
+        Object timedOutJob = h.findJob(133);
+        check((Integer) get(timedOutJob, "failures") == 1 && (Integer) get(timedOutJob, "systemStops") == 0,
+                "Binding ANR timeout was not counted as an application failure");
         h.cancel(133);
 
         h.schedule(new JobInfo.Builder(134, serviceComponent()).build());
@@ -824,10 +1038,92 @@ public final class JobSchedulerConstraintContractTest {
         check(noStopAck.stops == 1 && h.runningCount() == 1, "Repeated constraint event duplicated stopJob");
         h.timeout(stop.run, 3);
         check(h.runningCount() == 0 && h.getPendingJob(135) != null, "Stop callback timeout discarded work instead of retrying");
+        check((Integer) get(stop.job, "failures") == 0 && (Integer) get(stop.job, "systemStops") == 1
+                        && (Long) get(stop.job, "earliest") == 0,
+                "Stop acknowledgement timeout replaced the original constraint reason");
         check(get(stop.run, "timeout") == null, "Completed run retained its timer");
         check(((java.util.concurrent.ScheduledThreadPoolExecutor) get(h.scheduler, "mTimeouts")).getQueue().isEmpty(),
                 "Completed attempts retained canceled timers");
         h.cancel(135);
+    }
+
+    private static void testWorkCompletionOutcomes(Harness h) throws Exception {
+        // Explicit completion and missing start acknowledgement both discard an
+        // unfinished nonperiodic queue unless the application requests a retry.
+        for (int outcome = 0; outcome < 4; outcome++) {
+            int id = 150 + outcome;
+            h.setPowerStatus(new int[]{1, 8, 90});
+            JobInfo info = new JobInfo.Builder(id, serviceComponent()).setRequiresCharging(true).build();
+            h.enqueue(info, "delivered");
+            h.enqueue(info, "pending");
+            TestService service = new TestService();
+            service.acknowledgeStartImmediately = outcome != 0;
+            service.ongoingOnStart = outcome != 1;
+            TestRunHandle run = h.start(id, service);
+            if (outcome != 1) {
+                check(run.params.dequeueWork() != null, "Fixture did not obtain outstanding work");
+                if (outcome == 0) h.timeout(run.run, 1);
+                else if (outcome == 2) run.params.getCallback().jobFinished(id, false);
+                else h.setPowerStatus(new int[]{0, 0, 90});
+            }
+            check(h.getPendingJob(id) == null && h.runningCount() == 0,
+                    "Nonretry completion retained unfinished work for outcome " + outcome);
+            check(((Collection<?>) get(run.job, "work")).isEmpty()
+                            && ((Map<?, ?>) get(run.job, "delivered")).isEmpty(),
+                    "Retired run retained pending/delivered work references");
+            run.params.getCallback().acknowledgeStartMessage(id, true);
+            run.params.getCallback().jobFinished(id, true);
+            check(run.params.dequeueWork() == null && h.getPendingJob(id) == null,
+                    "Late callback resurrected discarded work");
+        }
+
+        h.setPowerStatus(new int[]{1, 8, 90});
+        JobInfo info = new JobInfo.Builder(154, serviceComponent()).setRequiresCharging(true).build();
+        h.enqueue(info, "retry-delivered"); h.enqueue(info, "retry-pending");
+        TestService service = new TestService(); service.rescheduleOnStop = true;
+        TestRunHandle first = h.start(154, service);
+        JobWorkItem delivered = first.params.dequeueWork();
+        h.setPowerStatus(new int[]{0, 0, 90});
+        check(h.getPendingJob(154) != null, "Requested retry discarded unfinished work");
+        h.setPowerStatus(new int[]{1, 8, 90});
+        TestRunHandle retry = h.start(154, new TestService());
+        JobWorkItem redelivered = retry.params.dequeueWork();
+        check(redelivered != null && delivered.getWorkId() == redelivered.getWorkId()
+                        && redelivered.getDeliveryCount() == 2,
+                "Retry did not redeliver outstanding work with its original ID");
+        check("retry-pending".equals(retry.params.dequeueWork().getIntent().getAction()),
+                "Retry lost the pending work behind delivered work");
+        retry.params.getCallback().jobFinished(154, false);
+        check(h.getPendingJob(154) == null, "A final no-retry completion retained redelivered work");
+
+        JobInfo failedInfo = new JobInfo.Builder(155, serviceComponent()).build();
+        h.enqueue(failedInfo, "start-exception");
+        TestService failing = new TestService(); failing.failStartCallback = true;
+        TestRunHandle failed = h.start(155, failing);
+        check(h.runningCount() == 1 && (Integer) get(failed.run, "state") == 1,
+                "startJob exception skipped the start acknowledgement timeout");
+        h.timeout(failed.run, 1);
+        check(h.getPendingJob(155) == null && h.runningCount() == 0,
+                "A start exception without acknowledgement retried queued work");
+
+        JobInfo nullInfo = new JobInfo.Builder(156, serviceComponent()).build();
+        h.enqueue(nullInfo, "null-binding");
+        Object nullRun = h.begin(156);
+        ((android.app.IServiceConnection) get(nullRun, "connection"))
+                .connected(serviceComponent(), null, null, false);
+        check(h.getPendingJob(156) == null && h.runningCount() == 0,
+                "Explicit null binding retried queued work");
+
+        JobInfo deadInfo = new JobInfo.Builder(157, serviceComponent()).build();
+        h.enqueue(deadInfo, "binding-died");
+        Object deadRun = h.begin(157);
+        ((android.app.IServiceConnection) get(deadRun, "connection"))
+                .connected(serviceComponent(), null, null, true);
+        Object deadJob = h.findJob(157);
+        check(deadJob != null && (Integer) get(deadJob, "systemStops") == 1
+                        && (Integer) get(deadJob, "failures") == 0,
+                "Confirmed binding death did not preserve a retry with its system reason");
+        h.cancel(157);
     }
 
     private static void testStorageAndStablePower(Harness h) throws Exception {
@@ -878,6 +1174,10 @@ public final class JobSchedulerConstraintContractTest {
             testUnmeteredToDisconnected(h);
             testRequireCharging(h);
             testRescheduleExponentialBackoff(h);
+            testSystemStopAndMixedBackoff(h);
+            testBackoffCapsAndPeriodicReset(h);
+            testEffectiveChargingPriority(h);
+            testAbandonedTimeout(h);
             testExecutionTimeout(h);
             testCancelledByApp(h);
             testDeviceIdleConstraint(h);
@@ -889,6 +1189,7 @@ public final class JobSchedulerConstraintContractTest {
             testDeadlineBoundaries(h);
             testStartStopOrdering(h);
             testBindingAndCallbackTimeouts(h);
+            testWorkCompletionOutcomes(h);
             testStorageAndStablePower(h);
             testNetworkPermission(h);
         }
