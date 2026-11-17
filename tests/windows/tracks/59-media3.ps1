@@ -139,6 +139,9 @@ $recordChecks = @(
            "${t}recorder opus ogg: max amplitude loud, 1 track\(s\) \[audio/opus 48000 Hz 1 ch\], [\d.]+ s, decoded 750 Hz then 1250 Hz",
            "${t}recorder opus webm: max amplitude loud, 1 track\(s\) \[audio/opus 48000 Hz 1 ch\], 1\.\d s, decoded 750 Hz then 1250 Hz",
            "${t}recorder aac adts: max amplitude loud, 1 track\(s\) \[audio/mp4a-latm 48000 Hz 1 ch\], [\d.]+ s, decoded 750 Hz then 1250 Hz") },
+  @{ Name = 'MediaRecorder duration and size limits stop and finalize playable files without an application stop'
+     P = @("${t}recorder duration limit: event 800 once, playable before explicit stop",
+           "${t}recorder file size limit: event 801 once, playable before explicit stop") },
   @{ Name = 'MediaRecorder, video from its Surface (Canvas) with the microphone: H.264 and AAC in MPEG-4, every color in order, the frame at 1.25 s, the tones'
      P = @("${t}recorder surface: getSurface the same true, 2 track\(s\) \[video/avc 320x240, audio/mp4a-latm 44100 Hz 1 ch\], [12]\.\d s; video 45\+ frames, colors \[red, lime, blue, white\], frame at 1\.25 s 320x240 blue; audio 750 Hz then 1250 Hz") },
   @{ Name = 'MediaRecorder, video from the camera (Camera2: GESHER_CAMERA_TEST''s camera, a repeating request into getSurface()): H.264 in MPEG-4 with the test picture'

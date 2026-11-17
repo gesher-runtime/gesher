@@ -40,38 +40,49 @@ struct RecorderConfig {
 
 class Recorder {
  public:
-  // What the recorder tells MediaRecorder (MEDIA_RECORDER_EVENT_*: 1 error, 2 info).
+  // Reports MEDIA_RECORDER_EVENT_* codes from the terminal worker. The JNI
+  // listener posts to the app's Handler, which may then call stop or release.
   using Listener = std::function<void(int what, int extra)>;
 
   explicit Recorder(Listener listener) : listener_(std::move(listener)) {}
   ~Recorder();
 
   RecorderConfig& config() { return config_; }
+  bool CanConfigure() const { return !prepared_ && !started_; }
+  bool HasStarted() const { return started_; }
   bool Prepare(std::string* error);
   // The input Surface (video source SURFACE), after Prepare.
-  InputSurface* input_surface() const { return input_surface_.get(); }
+  InputSurface* input_surface();
   bool Start(std::string* error);
   // False (and `error`) when nothing was recorded.
   bool Stop(std::string* error);
-  void Pause();
-  void Resume();
+  bool Pause();
+  bool Resume();
   // The largest sample since the last call (0..32767).
   int MaxAmplitude();
   void Reset();
 
  private:
+  enum class StopReason { kNone, kManual, kDuration, kSize, kError };
+
+  bool BuildPipeline(std::string* error);
+  void ReleasePipeline();
+  void Clear();
+  void RequestStop(StopReason reason, std::string error = {});
+  bool ShouldDrain();
+  void CompleteWorker();
   void AudioLoop();
   void VideoLoop();
   void OnFrame(const uint32_t* rgba, int w, int h, int64_t ts_ns);
   // Writes packets of a track (the muxer's lock taken here).
   bool Write(int track, const std::vector<EncodedPacket>& packets, int64_t* last_us);
   int64_t NowUs() const;
-  void Finish(int info);  // max duration / size: stops feeding, tells the app
 
   Listener listener_;
   RecorderConfig config_;
   std::unique_ptr<Muxer> muxer_;
   std::mutex mux_mu_;
+  bool size_reached_ = false;  // protected by mux_mu_ while recording
   int audio_track_ = -1, video_track_ = -1;
   std::string audio_mime_, video_mime_;
   std::shared_ptr<CaptureStream> capture_;
@@ -85,16 +96,22 @@ class Recorder {
   std::mutex mu_;
   std::condition_variable cv_;
   std::deque<std::shared_ptr<VideoFrame>> frames_;
-  bool running_ = false, paused_ = false, stopping_ = false, finished_ = false;
+  bool running_ = false, paused_ = false;
+  unsigned audio_epoch_ = 0;
+  unsigned active_workers_ = 0;
+  StopReason stop_reason_ = StopReason::kNone;
+  std::string stop_error_;
   bool prepared_ = false, started_ = false;
   int64_t start_us_ = 0;        // the recording's time 0 (CLOCK_MONOTONIC)
   int64_t paused_total_us_ = 0;  // time spent paused
-  int64_t pause_at_us_ = 0;
+  int64_t pause_at_us_ = 0, resume_at_us_ = 0;
   std::atomic<int> amplitude_{0};
   std::atomic<int64_t> samples_written_{0};
   int64_t last_video_us_ = -1;
   // Diagnostic counters: callback-side fields use mu_; encoder-side fields
   // are read only after the video thread joins. They do not alter collection.
+  int64_t stop_requested_us_ = 0;
+  size_t pending_at_stop_ = 0;
   uint64_t video_callbacks_ = 0, video_accepted_ = 0, video_rejected_ = 0, video_queue_drops_ = 0;
   uint64_t video_encode_inputs_ = 0, video_encode_failures_ = 0;
   uint64_t video_encode_packets_ = 0, video_drain_packets_ = 0, video_muxed_packets_ = 0;

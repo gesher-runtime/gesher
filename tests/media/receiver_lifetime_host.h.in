@@ -139,6 +139,8 @@ struct Recorder {
   explicit Recorder(Listener value) : listener(std::move(value)) {}
   ~Recorder() { ++recorder_deletes; }
   RecorderConfig& config() { return settings; }
+  bool CanConfigure() const { return true; }
+  bool HasStarted() const { return true; }
   InputSurface* input_surface() { return &surface; }
   bool Prepare(std::string*) { recorder_gate.Pass(); return true; }
   bool Start(std::string*) {
@@ -147,8 +149,8 @@ struct Recorder {
   }
   bool Stop(std::string*) { return true; }
   void Reset() { ++resets; }
-  void Pause() {}
-  void Resume() {}
+  bool Pause() { return true; }
+  bool Resume() { return true; }
   int MaxAmplitude() { return 0; }
 };
 }  // namespace gesher::media

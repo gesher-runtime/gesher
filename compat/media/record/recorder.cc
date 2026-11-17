@@ -25,7 +25,7 @@ constexpr int kAudioDefault = 0, kAudioAac = 3, kAudioHeAac = 4, kAudioAacEld = 
 constexpr int kVideoDefault = 0, kVideoH264 = 2;
 constexpr int kVideoSourceCamera = 1, kVideoSourceSurface = 2;
 constexpr int kInfoMaxDuration = 800, kInfoMaxFileSize = 801;
-constexpr int kEventInfo = 2;
+constexpr int kEventError = 1, kEventInfo = 2, kErrorUnknown = 1;
 
 }  // namespace
 
@@ -38,6 +38,28 @@ int64_t Recorder::NowUs() const {
 }
 
 bool Recorder::Prepare(std::string* error) {
+  if (!CanConfigure()) {
+    *error = "prepare() in the wrong state";
+    return false;
+  }
+  if (!BuildPipeline(error)) {
+    ReleasePipeline();
+    return false;
+  }
+  // The muxer owns its own duplicate. In particular, a limit-triggered
+  // stop must close the output even if the caller never invokes stop().
+  close(config_.fd);
+  config_.fd = -1;
+  prepared_ = true;
+  return true;
+}
+
+InputSurface* Recorder::input_surface() {
+  std::lock_guard<std::mutex> lock(mu_);
+  return prepared_ && stop_reason_ == StopReason::kNone ? input_surface_.get() : nullptr;
+}
+
+bool Recorder::BuildPipeline(std::string* error) {
   RecorderConfig& c = config_;
   if (c.fd < 0) {
     *error = "no output file";
@@ -138,6 +160,10 @@ bool Recorder::Prepare(std::string* error) {
     video_enc_ = VideoEncoder::Create(video_mime_, video_params_, error);
     if (video_enc_ == nullptr) return false;
     input_surface_.reset(CreateInputSurface(video_params_.width, video_params_.height));
+    if (input_surface_ == nullptr) {
+      *error = "cannot create the recording Surface";
+      return false;
+    }
     input_surface_->SetCallback([this](const uint32_t* rgba, int w, int h, int64_t ts_ns) {
       OnFrame(rgba, w, h, ts_ns);
     });
@@ -156,7 +182,6 @@ bool Recorder::Prepare(std::string* error) {
     audio_track_ = muxer_->AddTrack(audio_format, error);
     if (audio_track_ < 0) return false;
   }
-  prepared_ = true;
   MEDIA_LOGI("MediaRecorder: prepared: output %d, audio %s%s, video %s %dx%d", out,
              audio_mime_.empty() ? "none" : audio_mime_.c_str(),
              audio_enc_ != nullptr ? (" " + std::to_string(audio_params_.sample_rate) + " Hz").c_str() : "",
@@ -169,67 +194,109 @@ bool Recorder::Start(std::string* error) {
     *error = "start() in the wrong state";
     return false;
   }
-  if (!muxer_->Start(error)) return false;
+  const bool has_audio = capture_ != nullptr;
+  const bool has_video = video_enc_ != nullptr;
+  if (!muxer_->Start(error)) {
+    Clear();
+    return false;
+  }
+  const int64_t start_us = NowUs();
+  if (has_audio && capture_->Start() != 0) {
+    *error = "cannot start audio capture";
+    Clear();
+    return false;
+  }
   {
     std::lock_guard<std::mutex> lock(mu_);
     running_ = true;
-    start_us_ = NowUs();
+    start_us_ = start_us;
+    active_workers_ = static_cast<unsigned>(has_audio) + static_cast<unsigned>(has_video);
   }
   started_ = true;
-  if (capture_ != nullptr) {
-    capture_->Start();
-    audio_thread_ = std::thread([this] { AudioLoop(); });
-  }
-  if (video_enc_ != nullptr) video_thread_ = std::thread([this] { VideoLoop(); });
+  if (has_audio) audio_thread_ = std::thread([this] { AudioLoop(); });
+  if (has_video) video_thread_ = std::thread([this] { VideoLoop(); });
   return true;
 }
 
-void Recorder::Pause() {
+bool Recorder::Pause() {
   std::lock_guard<std::mutex> lock(mu_);
-  if (!running_ || paused_) return;
+  if (!running_) return false;
+  if (paused_) return true;
   paused_ = true;
   pause_at_us_ = NowUs();
+  ++audio_epoch_;
+  if (capture_ != nullptr) capture_->Stop();
+  return true;
 }
 
-void Recorder::Resume() {
-  std::lock_guard<std::mutex> lock(mu_);
-  if (!running_ || !paused_) return;
-  paused_ = false;
-  paused_total_us_ += NowUs() - pause_at_us_;
+bool Recorder::Resume() {
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!running_) return false;
+    if (!paused_) return true;
+    if (capture_ != nullptr && capture_->Start() != 0) return false;
+    resume_at_us_ = NowUs();
+    paused_total_us_ += resume_at_us_ - pause_at_us_;
+    paused_ = false;
+  }
+  cv_.notify_all();
+  return true;
 }
 
 int Recorder::MaxAmplitude() { return amplitude_.exchange(0); }
 
-void Recorder::Finish(int info) {
+void Recorder::RequestStop(StopReason reason, std::string error) {
   {
     std::lock_guard<std::mutex> lock(mu_);
-    if (finished_) return;
-    finished_ = true;
+    if (stop_reason_ == StopReason::kError ||
+        (stop_reason_ != StopReason::kNone && reason != StopReason::kError)) return;
+    stop_reason_ = reason;
+    stop_error_ = std::move(error);
+    if (running_) {
+      stop_requested_us_ = NowUs();
+      pending_at_stop_ = frames_.size();
+    }
+    running_ = false;
+    if (reason == StopReason::kSize || reason == StopReason::kError) frames_.clear();
+    if (capture_ != nullptr) capture_->Stop();
   }
-  MEDIA_LOGI("MediaRecorder: %s reached", info == kInfoMaxDuration ? "the maximum duration" : "the maximum size");
-  if (listener_) listener_(kEventInfo, info);
+  cv_.notify_all();
 }
 
 bool Recorder::Write(int track, const std::vector<EncodedPacket>& packets, int64_t* last_us) {
   std::lock_guard<std::mutex> lock(mux_mu_);
-  std::string error;
   for (const EncodedPacket& p : packets) {
+    StopReason reason;
+    {
+      std::lock_guard<std::mutex> state_lock(mu_);
+      reason = stop_reason_;
+    }
+    if (size_reached_ || reason == StopReason::kError) return false;
     int64_t t = p.time_us;
-    if (!p.config && last_us != nullptr) {
+    if (!p.config) {
       t = std::max(t, *last_us + 1);
+      if (config_.max_duration_ms > 0 && t / 1000 >= config_.max_duration_ms) {
+        RequestStop(StopReason::kDuration);
+        continue;
+      }
       *last_us = t;
     }
     const int flags = (p.config ? 2 : 0) | (p.key && !p.config ? 1 : 0);
+    std::string error;
     if (!muxer_->WriteSample(track, p.data.data(), p.data.size(), t, flags, &error)) {
-      MEDIA_LOGE("MediaRecorder: %s", error.c_str());
+      RequestStop(StopReason::kError, std::move(error));
       return false;
     }
     if (!p.config) {
       samples_written_++;
       if (track == video_track_) ++video_muxed_packets_;
+      if (config_.max_file_size > 0 && muxer_->BytesWritten() >= config_.max_file_size) {
+        size_reached_ = true;
+        RequestStop(StopReason::kSize);
+        return false;
+      }
     }
   }
-  if (config_.max_file_size > 0 && muxer_->BytesWritten() >= config_.max_file_size) Finish(kInfoMaxFileSize);
   return true;
 }
 
@@ -241,19 +308,24 @@ void Recorder::AudioLoop() {
   uint64_t frames = 0;
   int64_t last_us = -1;
   for (;;) {
+    unsigned epoch;
     {
-      std::lock_guard<std::mutex> lock(mu_);
+      std::unique_lock<std::mutex> lock(mu_);
+      cv_.wait(lock, [this] { return !running_ || !paused_; });
       if (!running_) break;
+      epoch = audio_epoch_;
     }
     ssize_t n = capture_->Read(pcm.data(), pcm.size() * sizeof(int16_t), true);
-    if (n <= 0) continue;
+    if (n < 0) {
+      RequestStop(StopReason::kError, "audio capture read failed");
+      break;
+    }
+    if (n == 0) continue;
     const size_t got = static_cast<size_t>(n) / (sizeof(int16_t) * ch);
-    bool skip;
     {
       std::lock_guard<std::mutex> lock(mu_);
-      skip = paused_ || finished_ || !running_;
+      if (!running_ || paused_ || epoch != audio_epoch_) continue;
     }
-    if (skip) continue;
     int peak = 0;
     for (size_t i = 0; i < got * ch; i++) peak = std::max(peak, std::abs(static_cast<int>(pcm[i])));
     int prev = amplitude_.load();
@@ -262,20 +334,24 @@ void Recorder::AudioLoop() {
     const int64_t time_us = static_cast<int64_t>(frames * 1000000 / rate);
     std::vector<EncodedPacket> packets;
     if (!audio_enc_->Encode(pcm.data(), got, time_us, &packets)) {
-      MEDIA_LOGE("MediaRecorder: the audio encoder failed");
-      if (listener_) listener_(1, 1);
+      RequestStop(StopReason::kError, "audio encoder failed");
       break;
     }
     frames += got;
-    Write(audio_track_, packets, &last_us);
+    if (!Write(audio_track_, packets, &last_us)) break;
     if (config_.max_duration_ms > 0 && static_cast<int64_t>(frames * 1000 / rate) >= config_.max_duration_ms) {
-      Finish(kInfoMaxDuration);
+      RequestStop(StopReason::kDuration);
     }
   }
-  capture_->Stop();
-  std::vector<EncodedPacket> packets;
-  audio_enc_->Drain(&packets);
-  Write(audio_track_, packets, &last_us);
+  if (ShouldDrain()) {
+    std::vector<EncodedPacket> packets;
+    if (audio_enc_->Drain(&packets)) {
+      Write(audio_track_, packets, &last_us);
+    } else {
+      RequestStop(StopReason::kError, "audio encoder drain failed");
+    }
+  }
+  CompleteWorker();
 }
 
 void Recorder::OnFrame(const uint32_t* rgba, int w, int h, int64_t ts_ns) {
@@ -286,12 +362,12 @@ void Recorder::OnFrame(const uint32_t* rgba, int w, int h, int64_t ts_ns) {
   ++video_callbacks_;
   if (video_first_source_ns_ < 0) video_first_source_ns_ = ts_ns;
   video_last_source_ns_ = ts_ns;
-  if (!running_ || paused_ || finished_) {
+  if (!running_ || paused_) {
     ++video_rejected_;
     return;
   }
   const int64_t pts = ts - start_us_ - paused_total_us_;
-  if (pts < 0) {
+  if (pts < 0 || ts < resume_at_us_) {
     ++video_rejected_;
     return;
   }
@@ -327,47 +403,53 @@ void Recorder::VideoLoop() {
     video_last_encode_input_us_ = f->time_us;
     if (!video_enc_->Encode(*f, first, &packets)) {
       ++video_encode_failures_;
-      MEDIA_LOGE("MediaRecorder: the video encoder failed");
-      if (listener_) listener_(1, 1);
+      RequestStop(StopReason::kError, "video encoder failed");
       break;
     }
     for (const auto& p : packets) if (!p.config) ++video_encode_packets_;
     first = false;
-    Write(video_track_, packets, &last_us);
-    if (config_.max_duration_ms > 0 && f->time_us / 1000 >= config_.max_duration_ms) Finish(kInfoMaxDuration);
+    if (!Write(video_track_, packets, &last_us)) break;
+    if (config_.max_duration_ms > 0 && f->time_us / 1000 >= config_.max_duration_ms) {
+      RequestStop(StopReason::kDuration);
+    }
   }
-  std::vector<EncodedPacket> packets;
-  video_drain_ok_ = video_enc_->Drain(&packets);
-  for (const auto& p : packets) if (!p.config) ++video_drain_packets_;
-  Write(video_track_, packets, &last_us);
+  if (ShouldDrain()) {
+    std::vector<EncodedPacket> packets;
+    video_drain_ok_ = video_enc_->Drain(&packets);
+    for (const auto& p : packets) if (!p.config) ++video_drain_packets_;
+    if (video_drain_ok_) {
+      Write(video_track_, packets, &last_us);
+    } else {
+      RequestStop(StopReason::kError, "video encoder drain failed");
+    }
+  }
+  CompleteWorker();
 }
 
-bool Recorder::Stop(std::string* error) {
-  if (!started_) {
-    *error = "stop() before start()";
-    return false;
-  }
-  size_t pending_at_stop;
-  const int64_t stop_requested_us = NowUs();
+bool Recorder::ShouldDrain() {
+  std::lock_guard<std::mutex> lock(mu_);
+  return stop_reason_ == StopReason::kManual || stop_reason_ == StopReason::kDuration;
+}
+
+void Recorder::CompleteWorker() {
+  StopReason reason;
   {
     std::lock_guard<std::mutex> lock(mu_);
-    running_ = false;
-    pending_at_stop = frames_.size();
+    if (--active_workers_ != 0) return;
+    reason = stop_reason_;
   }
-  cv_.notify_all();
-  if (capture_ != nullptr) capture_->Stop();
-  if (audio_thread_.joinable()) audio_thread_.join();
-  if (video_thread_.joinable()) video_thread_.join();
+  // The last worker owns finalization. Manual stop waits for it by joining
+  // both workers, while a limit can complete without any Java call.
+  if (capture_ != nullptr) capture_->Release();
   if (input_surface_ != nullptr) input_surface_->Abandon();
-  started_ = false;
-  prepared_ = false;
-  bool ok;
-  {
-    std::lock_guard<std::mutex> lock(mux_mu_);
-    ok = muxer_->Stop(error);
+  std::string error;
+  if (!muxer_->Stop(&error) && stop_error_.empty()) {
+    stop_error_ = std::move(error);
+    reason = StopReason::kError;
   }
   MEDIA_LOGI("MediaRecorder: stopped: %lld samples, %lld bytes", static_cast<long long>(samples_written_.load()),
              static_cast<long long>(muxer_->BytesWritten()));
+  muxer_.reset();
   const char* trace = getenv("GESHER_MEDIA_TRACE_RECORD");
   if (video_enc_ != nullptr && trace != nullptr && trace[0] == '1') {
     std::lock_guard<std::mutex> lock(mu_);
@@ -378,26 +460,48 @@ bool Recorder::Stop(std::string* error) {
                video_enc_->Name().c_str(), static_cast<unsigned long long>(input_surface_->frames()),
                static_cast<unsigned long long>(video_callbacks_), static_cast<unsigned long long>(video_accepted_),
                static_cast<unsigned long long>(video_rejected_), static_cast<unsigned long long>(video_queue_drops_),
-               pending_at_stop, static_cast<unsigned long long>(video_encode_inputs_),
+               pending_at_stop_, static_cast<unsigned long long>(video_encode_inputs_),
                static_cast<unsigned long long>(video_encode_failures_), static_cast<unsigned long long>(video_encode_packets_),
                static_cast<unsigned long long>(video_drain_packets_), static_cast<int>(video_drain_ok_),
                static_cast<unsigned long long>(video_muxed_packets_),
                static_cast<long long>(video_first_source_ns_), static_cast<long long>(video_last_source_ns_),
                static_cast<long long>(video_first_pts_us_), static_cast<long long>(video_last_encode_input_us_),
-               static_cast<long long>(start_us_), static_cast<long long>(stop_requested_us), static_cast<long long>(NowUs()));
+               static_cast<long long>(start_us_), static_cast<long long>(stop_requested_us_), static_cast<long long>(NowUs()));
   }
-  if (ok && samples_written_ == 0) {
-    *error = "stop failed: nothing was recorded";
+  audio_enc_.reset();
+  video_enc_.reset();
+  if (reason == StopReason::kError) {
+    MEDIA_LOGE("MediaRecorder: %s", stop_error_.c_str());
+    if (listener_) listener_(kEventError, kErrorUnknown);
+  } else if (reason == StopReason::kDuration || reason == StopReason::kSize) {
+    if (listener_) listener_(kEventInfo, reason == StopReason::kDuration ? kInfoMaxDuration : kInfoMaxFileSize);
+  }
+}
+
+bool Recorder::Stop(std::string* error) {
+  if (!started_) {
+    *error = "stop() before start()";
     return false;
   }
-  return ok;
+  RequestStop(StopReason::kManual);
+  if (audio_thread_.joinable()) audio_thread_.join();
+  if (video_thread_.joinable()) video_thread_.join();
+  *error = std::move(stop_error_);
+  if (error->empty() && samples_written_ == 0) *error = "stop failed: nothing was recorded";
+  Clear();
+  return error->empty();
 }
 
 void Recorder::Reset() {
   if (started_) {
     std::string ignored;
     Stop(&ignored);
+  } else {
+    Clear();
   }
+}
+
+void Recorder::ReleasePipeline() {
   if (capture_ != nullptr) capture_->Release();
   capture_.reset();
   if (input_surface_ != nullptr) input_surface_->Abandon();
@@ -405,16 +509,28 @@ void Recorder::Reset() {
   audio_enc_.reset();
   video_enc_.reset();
   muxer_.reset();
-  if (config_.fd >= 0) close(config_.fd);
-  config_ = RecorderConfig();
-  prepared_ = started_ = false;
-  running_ = paused_ = stopping_ = finished_ = false;
-  frames_.clear();
   audio_track_ = video_track_ = -1;
   audio_mime_.clear();
   video_mime_.clear();
+  audio_params_ = {};
+  video_params_ = {};
+}
+
+void Recorder::Clear() {
+  ReleasePipeline();
+  if (config_.fd >= 0) close(config_.fd);
+  config_ = RecorderConfig();
+  prepared_ = started_ = false;
+  running_ = paused_ = false;
+  audio_epoch_ = active_workers_ = 0;
+  stop_reason_ = StopReason::kNone;
+  stop_error_.clear();
+  size_reached_ = false;
+  frames_.clear();
+  amplitude_ = 0;
   samples_written_ = 0;
-  paused_total_us_ = 0;
+  start_us_ = paused_total_us_ = pause_at_us_ = resume_at_us_ = stop_requested_us_ = 0;
+  pending_at_stop_ = 0;
   last_video_us_ = -1;
   video_callbacks_ = video_accepted_ = video_rejected_ = video_queue_drops_ = 0;
   video_encode_inputs_ = video_encode_failures_ = 0;
