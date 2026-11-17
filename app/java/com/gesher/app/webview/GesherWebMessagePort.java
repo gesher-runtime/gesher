@@ -45,6 +45,18 @@ final class GesherWebMessagePort extends WebMessagePort {
         return new WebMessagePort[] {a, b};
     }
 
+    /** A page-transferred endpoint, with its transport peer owned by this document. */
+    static GesherWebMessagePort[] pairFromPage(String id, GesherWebViewProvider page) {
+        GesherWebMessagePort app = new GesherWebMessagePort();
+        GesherWebMessagePort transport = new GesherWebMessagePort(id);
+        app.mPeer = transport;
+        transport.mPeer = app;
+        transport.mPage = page;
+        transport.mPageReady = true;
+        transport.mTransferred = true;
+        return new GesherWebMessagePort[] {app, transport};
+    }
+
     private void requireUsable() {
         if (mClosed || mTransferred) {
             throw new IllegalStateException("Port is already closed or transferred");
@@ -102,9 +114,7 @@ final class GesherWebMessagePort extends WebMessagePort {
             old.mTransferred = true;
             received[i] = next;
         }
-        return WebMessagePayload.binary(message)
-                ? new WebMessagePayload(WebMessagePayload.bytes(message), received)
-                : new WebMessage(message.getData(), received);
+        return WebMessagePayload.withPorts(message, received);
     }
 
     /**
