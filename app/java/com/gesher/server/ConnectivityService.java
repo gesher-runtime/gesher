@@ -29,7 +29,7 @@ public final class ConnectivityService extends IConnectivity.Stub {
     public static final String ACCESS_NETWORK_STATE = "android.permission.ACCESS_NETWORK_STATE";
     public static final String INTERNET = "android.permission.INTERNET";
 
-    private static volatile ConnectivityService sInstance;
+    static volatile ConnectivityService sInstance;
 
     private final PackageManagerService mPm;
     private final ActivityTaskManagerService mAtm;
