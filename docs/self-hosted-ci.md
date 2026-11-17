@@ -69,9 +69,44 @@ gh variable set GESHER_SELF_HOSTED_TRIAL --repo gesher-runtime/gesher --body fal
 gh variable set GESHER_SELF_HOSTED_PRS --repo gesher-runtime/gesher --body true
 ```
 
-For rollback, set `GESHER_SELF_HOSTED_PRS=false`; new required builds return to
-GitHub. A job already queued for an offline local runner must be cancelled and
-its parent CI rerun after changing the flag. Do not bypass required checks.
+## Return to GitHub-hosted builds
+
+Run on the management computer, where `gh` is already authenticated:
+
+```powershell
+gh variable set GESHER_SELF_HOSTED_PRS --repo gesher-runtime/gesher --body false
+gh variable set GESHER_SELF_HOSTED_TRIAL --repo gesher-runtime/gesher --body false
+```
+
+This routes both required framework producer jobs to `ubuntu-24.04` and keeps
+automatic duplicate ARM64 diagnostics disabled. New CI runs use the existing
+hosted dependency installation, JDK setup and Actions caches. No commit,
+workflow edit, runner unregistration or local-cache transfer is required. A
+hosted cache may be cold on the first run, but no build depends on local files.
+
+Routing is decided once by each run's `runner-route` job. Changing the flag does
+not relocate a job that has already been routed to the local runner. For an
+affected run, copy its numeric ID from the Actions URL and run:
+
+```powershell
+$ciRunId = Read-Host 'CI run ID to return to GitHub'
+if ($ciRunId -notmatch '^[1-9][0-9]*$') { throw 'A numeric run ID is required.' }
+gh run cancel $ciRunId --repo gesher-runtime/gesher
+gh run watch $ciRunId --repo gesher-runtime/gesher --interval 5
+# Once cancellation has completed, rerun the entire workflow so runner-route
+# is evaluated again; rerunning only failed jobs can retain the old route.
+gh run rerun $ciRunId --repo gesher-runtime/gesher
+```
+
+The cancelled run's `watch` command can report a nonzero exit status. Confirm
+that the run is completed before rerunning. Keep the local runner task running
+until active local jobs finish or cancellation completes. If cancellation gets
+stuck, use `gh api --method POST repos/gesher-runtime/gesher/actions/runs/$ciRunId/force-cancel`
+and wait for completion before rerunning. Do not bypass required checks.
+
+To resume local routing later, set only `GESHER_SELF_HOSTED_PRS=true`. Leave the
+trial flag false. The same switch remains the rollback path if more required
+jobs are added in a later rollout.
 
 ## Local caches
 
