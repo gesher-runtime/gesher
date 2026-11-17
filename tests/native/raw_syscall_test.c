@@ -316,6 +316,27 @@ int gesher_selftest(void) {
               regexec(&re, " a!", 1, m, 0) == 0 && m[0].rm_so == 1 && m[0].rm_eo == 2);
     regfree(&re);
     check("AOSP rejects repeated range", regcomp(&re, "[a-c-e]", REG_EXTENDED) == REG_ERANGE);
+    check("AOSP repeated alternation picks greedy final capture",
+          regcomp(&re, "(a|aa)*", REG_EXTENDED) == 0 && regexec(&re, "aaa", 3, m, 0) == 0 &&
+              m[0].rm_so == 0 && m[0].rm_eo == 3 && m[1].rm_so == 2 && m[1].rm_eo == 3);
+    regfree(&re);
+    check("AOSP reversed repeated alternation picks greedy final capture",
+          regcomp(&re, "(aa|a)*", REG_EXTENDED) == 0 && regexec(&re, "aaa", 3, m, 0) == 0 &&
+              m[0].rm_so == 0 && m[0].rm_eo == 3 && m[1].rm_so == 2 && m[1].rm_eo == 3);
+    regfree(&re);
+    check("AOSP nested star empty and trailing empty captures",
+          regcomp(&re, "(a*)*", REG_EXTENDED) == 0 && regexec(&re, "", 2, m, 0) == 0 &&
+              m[1].rm_so == 0 && m[1].rm_eo == 0 && regexec(&re, "a", 2, m, 0) == 0 &&
+              m[1].rm_so == 1 && m[1].rm_eo == 1);
+    regfree(&re);
+    check("AOSP nested BRE star with backref settles group 1 at trailing empty pass",
+          regcomp(&re, "\\(a*\\)*\\1", 0) == 0 && regexec(&re, "aa", 2, m, 0) == 0 &&
+              m[0].rm_so == 0 && m[0].rm_eo == 2 && m[1].rm_so == 2 && m[1].rm_eo == 2);
+    regfree(&re);
+    check("AOSP nested plus dissects only final iteration",
+          regcomp(&re, "(a(b)|a)+", REG_EXTENDED) == 0 && regexec(&re, "aba", 3, m, 0) == 0 &&
+              m[1].rm_so == 2 && m[1].rm_eo == 3 && m[2].rm_so == -1 && m[2].rm_eo == -1);
+    regfree(&re);
     check("REG_NEWLINE extended accepts escaped ordinary slash and escaped bracket",
           regcomp(&re, "^\\|[0-9]{2}\\/[0-9]{5}\\^$", REG_EXTENDED | REG_NEWLINE) == 0 &&
               regexec(&re, "|11/11111^", 0, NULL, 0) == 0 &&

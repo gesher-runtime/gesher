@@ -244,6 +244,40 @@ int main() {
   Check("AOSP rejects a range following a completed range", compile(&re, "[a-c-e]", 1) == 11);
   Check("AOSP rejects a named class as a range endpoint", compile(&re, "[[:alpha:]-_]", 1) == 11);
   Check("AOSP malformed named class reports REG_ECTYPE", compile(&re, "[[:a]]", 1) == 4);
+  for (const char* pat : {"(a|aa)*", "(aa|a)*"}) {
+    Check("AOSP repeated alternation picks greedy final capture",
+          compile(&re, pat, 1) == 0 && execute(&re, "aaa", 3, sub, 0) == 0 &&
+              sub[0].begin == 0 && sub[0].end == 3 && sub[1].begin == 2 && sub[1].end == 3 &&
+              sub[2].begin == -1 && sub[2].end == -1);
+    free_regex(&re);
+  }
+  Check("AOSP nested star matches empty capture on empty input",
+        compile(&re, "(a*)*", 1) == 0 && execute(&re, "", 2, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 0 && sub[1].begin == 0 && sub[1].end == 0);
+  free_regex(&re);
+  Check("AOSP nested star settles group 1 at trailing empty pass",
+        compile(&re, "(a*)*", 1) == 0 && execute(&re, "a", 2, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 1 && sub[1].begin == 1 && sub[1].end == 1);
+  free_regex(&re);
+  Check("AOSP nested BRE star with backref settles group 1 at trailing empty pass",
+        compile(&re, "\\(a*\\)*\\1", 0) == 0 && execute(&re, "aa", 2, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 2 && sub[1].begin == 2 && sub[1].end == 2);
+  free_regex(&re);
+  Check("AOSP nested plus dissects only final iteration inner group",
+        compile(&re, "(a(b)|a)+", 1) == 0 && execute(&re, "aba", 3, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 3 && sub[1].begin == 2 && sub[1].end == 3 &&
+            sub[2].begin == -1 && sub[2].end == -1);
+  free_regex(&re);
+  Check("AOSP bounded optional repeat keeps trailing empty group capture",
+        compile(&re, "(a*){1,2}", 1) == 0 && execute(&re, "a", 2, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 1 && sub[1].begin == 1 && sub[1].end == 1);
+  free_regex(&re);
+  Check("AOSP word boundary honors REG_NOTBOL and REG_NOTEOL at edges",
+        compile(&re, "\\<foo\\>", 1) == 0 &&
+            execute(&re, "foo", 0, nullptr, 1) != 0 &&
+            execute(&re, "foo", 0, nullptr, 2) != 0 &&
+            execute(&re, "foo", 0, nullptr, 0) == 0);
+  free_regex(&re);
   {
     Regex re_space{};
     Regex re_alpha{};
