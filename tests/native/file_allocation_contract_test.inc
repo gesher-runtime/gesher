@@ -1,5 +1,87 @@
 // The same public calls run through bionic on Windows and the production
 // Windows adapter with a real Linux filesystem as the host test envelope.
+#include <sys/socket.h>
+
+static void test_file_advice_contracts(void) {
+  char path[] = "gesher-file-advice-XXXXXX";
+  int fd = mkstemp(path);
+  check("file advice: create regular-file fixture", fd >= 0);
+  if (fd < 0) return;
+  const char marker[] = "original";
+  check("file advice: initialize bytes and offset",
+        write(fd, marker, sizeof(marker)) == sizeof(marker) && lseek(fd, 2, SEEK_SET) == 2);
+  const int hints[] = {POSIX_FADV_NORMAL, POSIX_FADV_RANDOM, POSIX_FADV_SEQUENTIAL,
+                       POSIX_FADV_WILLNEED, POSIX_FADV_DONTNEED, POSIX_FADV_NOREUSE};
+  errno = E2BIG;
+  for (unsigned i = 0; i < sizeof(hints) / sizeof(hints[0]); ++i) {
+    check("file advice: valid hint succeeds without changing errno",
+          posix_fadvise(fd, 0, 0, hints[i]) == 0 && errno == E2BIG);
+  }
+  check("file advice: full-width large range is accepted",
+        posix_fadvise(fd, INT64_MAX, INT64_MAX, POSIX_FADV_NORMAL) == 0 && errno == E2BIG);
+  check("file advice: Linux accepts a signed offset",
+        posix_fadvise(fd, -1, 0, POSIX_FADV_NORMAL) == 0 && errno == E2BIG);
+  check("file advice: negative length is EINVAL without changing errno",
+        posix_fadvise(fd, 0, -1, POSIX_FADV_NORMAL) == EINVAL && errno == E2BIG);
+  check("file advice: invalid hint is EINVAL without changing errno",
+        posix_fadvise(fd, 0, 0, -1) == EINVAL && errno == E2BIG &&
+        posix_fadvise(fd, 0, 0, POSIX_FADV_NOREUSE + 1) == EINVAL && errno == E2BIG);
+  check("file advice: invalid descriptor takes precedence",
+        posix_fadvise(-1, 0, -1, -1) == EBADF && errno == E2BIG);
+#if defined(__BIONIC__)
+  check("file advice: the 64-bit libc alias uses the same error contract",
+        posix_fadvise64(fd, INT64_MAX, -1, POSIX_FADV_NORMAL) == EINVAL && errno == E2BIG);
+#endif
+  char actual[sizeof(marker)];
+  struct stat info;
+  check("file advice: shared offset, EOF and contents are preserved",
+        lseek(fd, 0, SEEK_CUR) == 2 && fstat(fd, &info) == 0 && info.st_size == sizeof(marker) &&
+        pread(fd, actual, sizeof(actual), 0) == sizeof(actual) && memcmp(actual, marker, sizeof(marker)) == 0);
+
+  int path_fd = open(path, O_PATH | O_CLOEXEC);
+  check("file advice: open metadata-only descriptor", path_fd >= 0);
+  if (path_fd >= 0) {
+    errno = E2BIG;
+    check("file advice: O_PATH descriptors fail with EBADF before hint validation",
+          posix_fadvise(path_fd, 0, -1, -1) == EBADF && errno == E2BIG);
+    close(path_fd);
+  }
+  int pipe_fds[2];
+  int status = pipe(pipe_fds);
+  check("file advice: create pipe", status == 0);
+  if (status == 0) {
+    errno = E2BIG;
+    check("file advice: pipes fail with ESPIPE before hint validation",
+          posix_fadvise(pipe_fds[0], 0, -1, -1) == ESPIPE && errno == E2BIG &&
+          posix_fadvise(pipe_fds[1], 0, 0, POSIX_FADV_NORMAL) == ESPIPE && errno == E2BIG);
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
+  }
+  int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+  check("file advice: create socket", socket_fd >= 0);
+  if (socket_fd >= 0) {
+    errno = E2BIG;
+    check("file advice: sockets accept hints and reject invalid input",
+          posix_fadvise(socket_fd, 0, 0, POSIX_FADV_NORMAL) == 0 && errno == E2BIG &&
+          posix_fadvise(socket_fd, 0, -1, -1) == EINVAL && errno == E2BIG);
+    close(socket_fd);
+  }
+  int null_fd = open("/dev/null", O_RDONLY);
+  check("file advice: open character device", null_fd >= 0);
+  if (null_fd >= 0) {
+    errno = E2BIG;
+    check("file advice: a character descriptor follows normal validation",
+          posix_fadvise(null_fd, 0, 0, POSIX_FADV_NORMAL) == 0 && errno == E2BIG &&
+          posix_fadvise(null_fd, 0, -1, -1) == EINVAL && errno == E2BIG);
+    close(null_fd);
+  }
+  check("file advice: close regular descriptor", close(fd) == 0);
+  errno = E2BIG;
+  check("file advice: closed positive descriptor is EBADF",
+        posix_fadvise(fd, 0, 0, POSIX_FADV_NORMAL) == EBADF && errno == E2BIG);
+  unlink(path);
+}
+
 static void test_file_allocation_contents(void) {
   char path[] = "gesher-file-allocation-XXXXXX";
   int fd = mkstemp(path);
@@ -88,6 +170,7 @@ static void test_file_allocation_overflow(void) {
 }
 
 static void test_file_allocation_contracts(void) {
+  test_file_advice_contracts();
   test_file_allocation_contents();
   test_file_allocation_errors();
   test_file_allocation_overflow();

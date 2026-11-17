@@ -14,16 +14,25 @@
 using HANDLE = int;
 using DWORD = unsigned long;
 constexpr HANDLE INVALID_HANDLE_VALUE = -1;
-constexpr DWORD FILE_TYPE_DISK = 1, FILE_TYPE_PIPE = 3, FILE_TYPE_CHAR = 2;
-constexpr uint32_t FILE_WRITE_DATA = 2;
+constexpr DWORD FILE_TYPE_UNKNOWN = 0, FILE_TYPE_DISK = 1, FILE_TYPE_PIPE = 3, FILE_TYPE_CHAR = 2;
+constexpr DWORD ERROR_SUCCESS = 0;
+constexpr uint32_t FILE_READ_DATA = 1, FILE_WRITE_DATA = 2, FILE_APPEND_DATA = 4;
+static DWORD last_error;
+static void SetLastError(DWORD error) { last_error = error; }
+static DWORD GetLastError() { return last_error; }
 static int length_error, growth_error, access_error;
 static unsigned growth_calls;
 [[maybe_unused]] static DWORD GetFileType(HANDLE handle) {
   struct stat info{};
-  if (fstat(handle, &info) < 0) return 0;
-  return S_ISFIFO(info.st_mode) ? FILE_TYPE_PIPE : S_ISCHR(info.st_mode) ? FILE_TYPE_CHAR : FILE_TYPE_DISK;
+  if (fstat(handle, &info) < 0) {
+    SetLastError(errno);
+    return FILE_TYPE_UNKNOWN;
+  }
+  if (S_ISFIFO(info.st_mode)) return FILE_TYPE_PIPE;
+  return S_ISCHR(info.st_mode) || S_ISSOCK(info.st_mode) ? FILE_TYPE_CHAR : FILE_TYPE_DISK;
 }
 namespace gesher {
+static int ErrnoFromWin32(DWORD error) { return static_cast<int>(error); }
 [[maybe_unused]] static HANDLE HandleFromFd(int fd) { return fcntl(fd, F_GETFD) < 0 ? -1 : fd; }
 namespace record_locks {
 struct DescriptorGuard {};
@@ -31,7 +40,8 @@ struct DescriptorGuard {};
   if (access_error) return access_error;
   int flags = fcntl(handle, F_GETFL);
   if (flags < 0) return errno;
-  *access = (flags & O_ACCMODE) == O_RDONLY ? 0 : FILE_WRITE_DATA;
+  if (flags & O_PATH) *access = 0;
+  else *access = (flags & O_ACCMODE) == O_RDONLY ? FILE_READ_DATA : FILE_WRITE_DATA;
   return 0;
 }
 }
@@ -48,6 +58,7 @@ static int _chsize_s(int fd, long long size) {
 }
 static int gesher_errno_from_crt(int error) { return error; }
 
+#define posix_fadvise gesher_test_posix_fadvise
 #define posix_fallocate gesher_test_posix_fallocate
 #define fallocate gesher_test_fallocate
 @FILE_ALLOCATION_IMPLEMENTATION@
@@ -91,6 +102,7 @@ static void test_file_allocation_failures() {
 
 int main(int argc, char** argv) {
   if (argc == 1) test_file_allocation_contracts();
+  else if (std::strcmp(argv[1], "advice") == 0) test_file_advice_contracts();
   else if (std::strcmp(argv[1], "contents") == 0) test_file_allocation_contents();
   else if (std::strcmp(argv[1], "errors") == 0) test_file_allocation_errors();
   else if (std::strcmp(argv[1], "overflow") == 0) test_file_allocation_overflow();
