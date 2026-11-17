@@ -205,7 +205,8 @@ static void MetadataXattr(const char* root, const char* directory) {
   MetadataCheck(getxattr(path, "user.binary", out, sizeof(out)) == (ssize_t)sizeof(payload) &&
                 memcmp(out, payload, sizeof(out)) == 0, "binary xattr preserves embedded zeros");
   errno = 0;
-  MetadataCheck(getxattr(path, "user.binary", NULL, sizeof(out)) == -1 && errno == EFAULT,
+  ssize_t (*unchecked_get)(const char*, const char*, void*, size_t) = &getxattr;
+  MetadataCheck(unchecked_get(path, "user.binary", NULL, sizeof(out)) == -1 && errno == EFAULT,
                 "nonempty xattr cannot be delivered through a null pointer");
 
   int fd = open(path, O_RDONLY | O_CLOEXEC);
