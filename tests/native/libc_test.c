@@ -75,6 +75,7 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "freopen_mode_contract_test.inc"
 #include "statvfs_contract_test.inc"
 #include "sleep_contract_test.inc"
+#include "stream_device_contract_test.inc"
 
 // --- memory and strings -------------------------------------------------------
 
@@ -202,6 +203,7 @@ static int scan_stream(FILE* stream, const char* format, ...) {
   SCAN_VALUES(a, 0), SCAN_VALUES(a, 8), SCAN_VALUES(a, 16), SCAN_VALUES(a, 24)
 
 static void test_scan_many_arguments(void) {
+  check("sscanf accepts formats without destinations", sscanf("17%", "%*d%%") == 0);
   const char input[] =
       "1.25 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 "
       "25 26 27 28 29 30 31 32 99 ab 7000000000 2.5!";
@@ -263,6 +265,20 @@ static void test_scan_many_arguments(void) {
            first == 1.25L, last == 4.5L, consumed, next);
   }
   check("vfscanf preserves partial assignments and the next unmatched byte",
+        count == 26 && ordered && first == 1.25L && last == 4.5L && consumed == -1 &&
+            next == '!');
+  // The translated direct fscanf entry has its own register/stack bridge.
+  rewind(stream);
+  memset(values, 0, sizeof(values));
+  first = 0;
+  last = 4.5L;
+  consumed = -1;
+  count = fscanf(stream, format, &first, SCAN_MANY_ARGS(values), letters, &wide, &last,
+                 &consumed);
+  ordered = 1;
+  for (int i = 0; i < 32; ++i) ordered &= values[i] == (i < 25 ? i + 1 : 0);
+  next = fgetc(stream);
+  check("fscanf preserves more than 24 direct destinations and matching failure",
         count == 26 && ordered && first == 1.25L && last == 4.5L && consumed == -1 &&
             next == '!');
   fclose(stream);
@@ -748,6 +764,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_strings();
   test_ctype_table();
   test_urandom_stdio();
+  test_stream_device_contracts();
   test_format();
   test_scan_many_arguments();
   test_errno_files();

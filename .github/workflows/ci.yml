@@ -196,6 +196,9 @@ jobs:
           python3 tools/test_codec_lifecycle_contracts.py --sanitize
           python3 tools/test_dns_query_lifecycle.py --sanitize
 
+      - name: Stream device identity across close and reopen
+        run: python3 tools/test_stream_device_lifetime.py --sanitize
+
       - name: Freopen contracts against the pinned glibc reference
         run: bash tools/ci/test-freopen-reference.sh
 
