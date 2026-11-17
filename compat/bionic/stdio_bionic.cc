@@ -18,6 +18,8 @@
 // the CRT's sscanf with the format's lengths mapped the same way.
 
 #include "shim_internal.h"
+#include "stdio_windows_lock.h"
+#include <gesher/bionic_shim.h>
 #include <gesher/logging.h>
 
 #include <windows.h>
@@ -27,12 +29,14 @@
 #include <io.h>
 #include <unistd.h>
 
+#include <array>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -100,7 +104,7 @@ void AppendF(std::string* out, const char* spec, ...) {
 // A UTF-32 (bionic wchar_t) string as UTF-8.
 std::string Utf32ToUtf8(const uint32_t* s, int max_units) {
   std::string out;
-  for (int i = 0; s[i] != 0 && (max_units < 0 || i < max_units); ++i) {
+  for (int i = 0; (max_units < 0 || i < max_units) && s[i] != 0; ++i) {
     uint32_t c = s[i];
     if (c < 0x80) {
       out += static_cast<char>(c);
@@ -121,52 +125,76 @@ std::string Utf32ToUtf8(const uint32_t* s, int max_units) {
   return out;
 }
 
-// UTF-8 as UTF-32 (bionic wchar_t); an invalid sequence gives U+FFFD.
-std::vector<uint32_t> Utf8ToUtf32(const std::string& s) {
-  std::vector<uint32_t> out;
-  size_t i = 0;
-  while (i < s.size()) {
-    auto b = static_cast<uint8_t>(s[i]);
-    int extra = b < 0x80 ? 0 : (b & 0xe0) == 0xc0 ? 1 : (b & 0xf0) == 0xe0 ? 2 : (b & 0xf8) == 0xf0 ? 3 : -1;
-    uint32_t c = extra <= 0 ? b : extra == 1 ? (b & 0x1fu) : extra == 2 ? (b & 0x0fu) : (b & 0x07u);
-    bool ok = extra >= 0 && i + static_cast<size_t>(extra) < s.size();
-    for (int k = 1; ok && k <= extra; ++k) {
-      auto nb = static_cast<uint8_t>(s[i + static_cast<size_t>(k)]);
-      if ((nb & 0xc0) != 0x80) ok = false;
-      c = (c << 6) | (nb & 0x3fu);
-    }
-    if (!ok) {
-      out.push_back(0xfffd);
-      ++i;
-      continue;
-    }
-    out.push_back(c);
-    i += static_cast<size_t>(extra) + 1;
+constexpr int kEilseq = 84;  // Linux EILSEQ
+constexpr int kEoverflow = 75;  // Linux EOVERFLOW
+size_t DecodeWide(uint32_t* wc, const char* input, size_t size, void* state);
+
+using WideText = std::vector<uint32_t>;
+
+// A narrow %s argument to wide printf is a multibyte string. Precision
+// bounds the number of converted wide characters, not the number of bytes.
+bool DecodeWideString(const char* input, int precision, WideText* text) {
+  std::array<uint8_t, 8> state{};
+  bool partial = false;
+  while ((precision < 0 || text->size() < static_cast<size_t>(precision)) && *input != 0) {
+    uint32_t wc;
+    size_t result = DecodeWide(&wc, input++, 1, state.data());
+    if (result == static_cast<size_t>(-1)) return false;
+    partial = result == static_cast<size_t>(-2);
+    if (!partial) text->push_back(wc);
   }
-  return out;
+  if (partial) errno = kEilseq;
+  return !partial;
+}
+
+void AppendWideField(WideText* out, const WideText& value, int width, bool left) {
+  size_t padding = width > 0 && static_cast<size_t>(width) > value.size() ?
+      static_cast<size_t>(width) - value.size() : 0;
+  if (!left) out->insert(out->end(), padding, ' ');
+  out->insert(out->end(), value.begin(), value.end());
+  if (left) out->insert(out->end(), padding, ' ');
+}
+
+// Numeric conversions are rendered by the same CRT formatter in both modes.
+// Bionic's supported C locales produce ASCII digits, signs and punctuation.
+template <class... Args>
+void AppendF(WideText* out, const char* spec, Args... args) {
+  std::string field;
+  AppendF(&field, spec, args...);
+  out->insert(out->end(), field.begin(), field.end());
 }
 
 enum class Len { kNone, kHH, kH, kL, kLL, kBigL, kJ, kZ, kT };
 
-std::string Format(const char* fmt, SysvVaList* ap) {
-  std::string out;
-  const char* p = fmt;
+template <class Char>
+using FormatText = std::conditional_t<std::is_same_v<Char, char>, std::string, WideText>;
+
+template <class Char>
+FormatText<Char> Format(const Char* fmt, SysvVaList* ap, bool* valid = nullptr) {
+  constexpr bool wide = !std::is_same_v<Char, char>;
+  FormatText<Char> out;
+  if (valid) *valid = true;
+  const Char* p = fmt;
   while (*p != 0) {
     if (*p != '%') {
-      const char* q = std::strchr(p, '%');
-      size_t n = q ? static_cast<size_t>(q - p) : std::strlen(p);
-      out.append(p, n);
-      p += n;
+      const Char* begin = p;
+      if constexpr (wide) {
+        do { ++p; } while (*p != 0 && *p != '%');
+      } else {
+        const char* next = std::strchr(p, '%');
+        p = next ? next : p + std::strlen(p);
+      }
+      out.insert(out.end(), begin, p);
       continue;
     }
-    const char* start = p++;
+    const Char* start = p++;
     if (*p == '%') {
-      out += '%';
+      out.push_back('%');
       ++p;
       continue;
     }
     std::string flags;
-    while (*p != 0 && std::strchr("-+ #0'", *p) != nullptr) {
+    while (*p > 0 && *p <= 0x7f && std::strchr("-+ #0'", *p) != nullptr) {
       if (*p != '\'') flags += *p;  // the CRT has no grouping flag
       ++p;
     }
@@ -218,12 +246,16 @@ std::string Format(const char* fmt, SysvVaList* ap) {
       case 't': ++p; len = Len::kT; break;
       default: break;
     }
-    char conv = *p;
-    if (conv == 0) {
-      out.append(start);
+    if (*p == 0) {
+      out.insert(out.end(), start, p);
       break;
     }
-    ++p;
+    Char conversion = *p++;
+    if (conversion < 0 || conversion > 0x7f) {
+      out.insert(out.end(), start, p);
+      continue;
+    }
+    char conv = static_cast<char>(conversion);
 
     std::string spec = "%" + flags;
     if (width >= 0) spec += std::to_string(width);
@@ -261,7 +293,19 @@ std::string Format(const char* fmt, SysvVaList* ap) {
       }
       case 'c': {
         uint64_t raw = NextGp(ap);
-        if (len == Len::kL) {
+        if constexpr (wide) {
+          uint32_t wc = static_cast<uint32_t>(raw);
+          if (len != Len::kL) {
+            unsigned char byte = static_cast<unsigned char>(raw);
+            if (byte >= 0x80) {
+              errno = kEilseq;
+              *valid = false;
+              return {};
+            }
+            wc = byte;
+          }
+          AppendWideField(&out, {wc}, width, flags.find('-') != std::string::npos);
+        } else if (len == Len::kL) {
           uint32_t wc[2] = {static_cast<uint32_t>(raw), 0};
           AppendF(&out, (spec_no_prec + "s").c_str(), Utf32ToUtf8(wc, -1).c_str());
         } else {
@@ -271,7 +315,20 @@ std::string Format(const char* fmt, SysvVaList* ap) {
       }
       case 's': {
         auto ptr = reinterpret_cast<const void*>(NextGp(ap));
-        if (ptr == nullptr) {
+        if constexpr (wide) {
+          WideText text;
+          if (ptr == nullptr) {
+            DecodeWideString("(null)", prec, &text);
+          } else if (len == Len::kL) {
+            auto ws = static_cast<const uint32_t*>(ptr);
+            while ((prec < 0 || text.size() < static_cast<size_t>(prec)) && *ws != 0)
+              text.push_back(*ws++);
+          } else if (!DecodeWideString(static_cast<const char*>(ptr), prec, &text)) {
+            *valid = false;
+            return {};
+          }
+          AppendWideField(&out, text, width, flags.find('-') != std::string::npos);
+        } else if (ptr == nullptr) {
           AppendF(&out, (spec + "s").c_str(), "(null)");
         } else if (len == Len::kL) {
           std::string s = Utf32ToUtf8(static_cast<const uint32_t*>(ptr), prec);
@@ -310,7 +367,7 @@ std::string Format(const char* fmt, SysvVaList* ap) {
         AppendF(&out, (spec + "s").c_str(), strerror(errno));
         break;
       default:  // unknown: copy the conversion through
-        out.append(start, static_cast<size_t>(p - start));
+        out.insert(out.end(), start, p);
         break;
     }
   }
@@ -341,6 +398,65 @@ FILE* F(void* f) {
   return static_cast<FILE*>(f);
 }
 
+// Stream metadata is used only while the caller owns the CRT's FILE lock,
+// or supplies the synchronization required by an unlocked stdio API. The
+// registry mutex protects insert/erase and is released before doing any I/O.
+constexpr uint32_t kWeof = 0xffffffffu;
+struct StreamState {
+  int orientation = 0;
+  bool conversion_error = false;
+  uint32_t pushback = kWeof;
+  std::array<uint8_t, 8> input_state{};  // Bionic LP64 mbstate_t
+};
+struct StreamStateBucket {
+  std::mutex mutex;
+  std::unordered_map<FILE*, StreamState> streams;
+};
+std::array<StreamStateBucket, 32> g_stream_states;
+
+StreamStateBucket& StreamBucket(FILE* stream) {
+  auto key = reinterpret_cast<uintptr_t>(stream);
+  return g_stream_states[(key >> 4) % g_stream_states.size()];
+}
+
+StreamState& State(FILE* stream) {
+  auto& bucket = StreamBucket(stream);
+  std::lock_guard<std::mutex> lock(bucket.mutex);
+  return bucket.streams[stream];
+}
+
+int Orient(StreamState& state, int mode) {
+  if (state.orientation == 0 && mode != 0) state.orientation = mode > 0 ? 1 : -1;
+  return state.orientation;
+}
+
+void ResetStream(FILE* stream) {
+  auto& bucket = StreamBucket(stream);
+  std::lock_guard<std::mutex> lock(bucket.mutex);
+  bucket.streams.erase(stream);
+}
+
+class StreamLock {
+ public:
+  explicit StreamLock(FILE* stream) : stream_(stream) { _lock_file(stream_); }
+  ~StreamLock() { _unlock_file(stream_); }
+  StreamLock(const StreamLock&) = delete;
+  StreamLock& operator=(const StreamLock&) = delete;
+
+ private:
+  FILE* stream_;
+};
+
+void BIONIC_SYSV Flockfile(void* f) { _lock_file(F(f)); }
+void BIONIC_SYSV Funlockfile(void* f) { _unlock_file(F(f)); }
+int BIONIC_SYSV Ftrylockfile(void* f) {
+  switch (stdio_windows::TryLock(F(f))) {
+    case stdio_windows::TryLockResult::kAcquired: return 0;
+    case stdio_windows::TryLockResult::kBusy: return kEBUSY;
+    case stdio_windows::TryLockResult::kUnsupported: return kEOPNOTSUPP;
+  }
+}
+
 // bionic's fopen modes as the CRT's: always binary (bionic has no text
 // mode), 'e' (O_CLOEXEC) as 'N' (not inherited), 'x' kept; anything else the
 // CRT would reject as an invalid parameter is dropped.
@@ -362,13 +478,24 @@ std::string CrtMode(const char* mode) {
 }
 }  // namespace
 
+int CloseBionicStream(FILE* stream) {
+  // UCRT fclose marks its stream slot reusable. Allocation takes its lock
+  // before reusing it; the lock persists until CRT shutdown or fcloseall.
+  // Keep our state removal in the same transaction as Gesher POSIX fclose.
+  StreamLock lock(stream);
+  ResetStream(stream);
+  return std::fclose(stream);
+}
+
+namespace {
+
 // /dev/zero and /dev/random are NUL handles that gesher's read() fills: the
 // CRT's own read of one returns nothing (mbedtls seeds its DRBG with
 // fread from fopen("/dev/urandom"), and WhatsApp aborts when that fails).
-size_t ReadStream(void* buf, size_t size, size_t n, FILE* f, bool unlocked) {
+size_t ReadStream(void* buf, size_t size, size_t n, FILE* f) {
   int fd = _fileno(f);
   if (size == 0 || n == 0 || fd < 0 || !gesher_is_device_fd(fd)) {
-    return unlocked ? _fread_nolock(buf, size, n, f) : std::fread(buf, size, n, f);
+    return _fread_nolock(buf, size, n, f);
   }
   auto* p = static_cast<unsigned char*>(buf);
   size_t total = n > SIZE_MAX / size ? SIZE_MAX / size * size : size * n;
@@ -381,8 +508,6 @@ size_t ReadStream(void* buf, size_t size, size_t n, FILE* f, bool unlocked) {
   }
   return done / size;
 }
-
-namespace {
 
 // fopen through gesher-base's open (Linux O_* flags, delete access shared, so
 // the file can be unlinked or renamed while open, as on Linux), then fdopen.
@@ -418,10 +543,19 @@ FILE* BIONIC_SYSV Fdopen(int fd, const char* mode) {
 }
 FILE* BIONIC_SYSV Freopen(const char* path, const char* mode, void* f) {
   std::string m = CrtMode(mode);
-  if (m.empty()) return errno = kEINVAL, nullptr;
+  if (m.empty()) {
+    CloseBionicStream(F(f));
+    return errno = kEINVAL, nullptr;
+  }
   // gesher-base's freopen consumes Linux modes and maps them for the CRT.
   // Passing CrtMode's 'N' would lose Android's 'e' before that mapping.
-  return std::freopen(path, mode, F(f));
+  FILE* stream = F(f);
+  StreamLock lock(stream);
+  FILE* reopened = std::freopen(path, mode, stream);
+  // freopen closes the original stream on failure as well. The host's
+  // successful null-path mode-change stand-in still returns the same stream.
+  ResetStream(stream);
+  return reopened;
 }
 int BIONIC_SYSV Fgetpos(void* f, int64_t* pos) {
   int64_t p = _ftelli64(F(f));
@@ -436,9 +570,11 @@ int BIONIC_SYSV Fsetpos(void* f, const int64_t* pos) { return _fseeki64(F(f), *p
 int64_t BIONIC_SYSV Getdelim(char** line, size_t* n, int delim, void* f) {
   if (line == nullptr || n == nullptr) return errno = kEINVAL, -1;
   FILE* fp = F(f);
+  StreamLock lock(fp);
+  Orient(State(fp), -1);
   size_t len = 0;
   int c;
-  while ((c = std::fgetc(fp)) != EOF) {
+  while ((c = _getc_nolock(fp)) != EOF) {
     if (*line == nullptr || len + 2 > *n) {
       size_t cap = *n < 120 ? 120 : *n * 2;
       char* grown = static_cast<char*>(std::realloc(*line, cap));
@@ -455,100 +591,264 @@ int64_t BIONIC_SYSV Getdelim(char** line, size_t* n, int delim, void* f) {
 }
 int64_t BIONIC_SYSV Getline(char** line, size_t* n, void* f) { return Getdelim(line, n, '\n', f); }
 
-// --- wide characters on a FILE: UTF-8 in the stream, UTF-32 in the .so --------
+// Use the registered Bionic converters rather than Windows wchar_t or the
+// Windows process locale. Android wchar_t/wint_t occupy 32 bits on both ABIs.
+size_t DecodeWide(uint32_t* wc, const char* input, size_t size, void* state) {
+  using Decode = size_t(BIONIC_SYSV*)(uint32_t*, const char*, size_t, void*);
+  static const auto decode = reinterpret_cast<Decode>(LookupBionicSymbol("mbrtowc"));
+  return decode(wc, input, size, state);
+}
 
-constexpr uint32_t kWeof = 0xffffffffu;
-std::mutex g_unget_mutex;
-std::unordered_map<FILE*, std::vector<uint32_t>> g_unget;  // ungetwc pushback
+size_t EncodeWide(char* output, uint32_t wc) {
+  using Encode = size_t(BIONIC_SYSV*)(char*, uint32_t, void*);
+  static const auto encode = reinterpret_cast<Encode>(LookupBionicSymbol("wcrtomb"));
+  std::array<uint8_t, 8> state{};
+  return encode(output, wc, state.data());
+}
 
-uint32_t BIONIC_SYSV Fgetwc(void* f) {
-  FILE* fp = F(f);
-  {
-    std::lock_guard<std::mutex> lock(g_unget_mutex);
-    auto it = g_unget.find(fp);
-    if (it != g_unget.end() && !it->second.empty()) {
-      uint32_t c = it->second.back();
-      it->second.pop_back();
-      return c;
-    }
+uint32_t ReadWide(FILE* stream, StreamState& state) {
+  if (state.pushback != kWeof) {
+    uint32_t wc = state.pushback;
+    state.pushback = kWeof;
+    return wc;
   }
-  int b = std::fgetc(fp);
-  if (b == EOF) return kWeof;
-  int extra = b < 0x80 ? 0 : b < 0xe0 ? 1 : b < 0xf0 ? 2 : 3;
-  uint32_t c = extra == 0 ? b : extra == 1 ? (b & 0x1f) : extra == 2 ? (b & 0x0f) : (b & 0x07);
-  for (int i = 0; i < extra; ++i) {
-    int nb = std::fgetc(fp);
-    if (nb == EOF || (nb & 0xc0) != 0x80) {
-      if (nb != EOF) std::ungetc(nb, fp);
-      errno = 84;  // EILSEQ
+  while (true) {
+    int byte = _getc_nolock(stream);
+    if (byte == EOF) return kWeof;
+    char input = static_cast<char>(byte);
+    uint32_t wc = 0;
+    size_t converted = DecodeWide(&wc, &input, 1, state.input_state.data());
+    if (converted == static_cast<size_t>(-2)) continue;
+    if (converted == static_cast<size_t>(-1)) {
+      state.conversion_error = true;
       return kWeof;
     }
-    c = (c << 6) | (nb & 0x3f);
+    return wc;
   }
-  return c;
 }
+
+bool WriteWide(FILE* stream, StreamState& state, uint32_t wc) {
+  state.pushback = kWeof;
+  char bytes[4];
+  size_t size = EncodeWide(bytes, wc);
+  if (size == static_cast<size_t>(-1)) {
+    state.conversion_error = true;
+    return false;
+  }
+  return _fwrite_nolock(bytes, 1, size, stream) == size;
+}
+
+uint32_t BIONIC_SYSV Fgetwc(void* f) {
+  FILE* stream = F(f);
+  StreamLock lock(stream);
+  auto& state = State(stream);
+  Orient(state, 1);
+  return ReadWide(stream, state);
+}
+
+uint32_t* BIONIC_SYSV Fgetws(uint32_t* out, int n, void* f) {
+  FILE* stream = F(f);
+  StreamLock lock(stream);
+  auto& state = State(stream);
+  Orient(state, 1);
+  if (n <= 0) return errno = kEINVAL, nullptr;
+  int count = 0;
+  while (count < n - 1) {
+    uint32_t wc = ReadWide(stream, state);
+    if (wc == kWeof) {
+      if (count == 0 || (errno == kEilseq && (state.conversion_error || std::ferror(stream))))
+        return nullptr;
+      break;
+    }
+    out[count++] = wc;
+    if (wc == '\n') break;
+  }
+  out[count] = 0;
+  return out;
+}
+
 uint32_t BIONIC_SYSV Ungetwc(uint32_t c, void* f) {
   if (c == kWeof) return kWeof;
-  std::lock_guard<std::mutex> lock(g_unget_mutex);
-  g_unget[F(f)].push_back(c);
+  FILE* stream = F(f);
+  StreamLock lock(stream);
+  auto& state = State(stream);
+  Orient(state, 1);
+  if (state.pushback != kWeof) return kWeof;
+  state.pushback = c;
+  state.conversion_error = false;
+  std::clearerr(stream);
   return c;
 }
+
 uint32_t BIONIC_SYSV Fputwc(uint32_t c, void* f) {
-  uint32_t wc[2] = {c, 0};
-  std::string s = c == 0 ? std::string(1, '\0') : Utf32ToUtf8(wc, -1);
-  return std::fwrite(s.data(), 1, s.size(), F(f)) == s.size() ? c : kWeof;
+  FILE* stream = F(f);
+  StreamLock lock(stream);
+  auto& state = State(stream);
+  Orient(state, 1);
+  return WriteWide(stream, state, c) ? c : kWeof;
 }
+
 int BIONIC_SYSV Fputws(const uint32_t* ws, void* f) {
-  std::string s = Utf32ToUtf8(ws, -1);
-  return std::fwrite(s.data(), 1, s.size(), F(f)) == s.size() ? 0 : -1;
+  FILE* stream = F(f);
+  StreamLock lock(stream);
+  auto& state = State(stream);
+  Orient(state, 1);
+  for (; *ws != 0; ++ws) {
+    if (!WriteWide(stream, state, *ws)) return -1;
+  }
+  return 0;
 }
+
 uint32_t BIONIC_SYSV Getwchar() { return Fgetwc(stdin); }
 uint32_t BIONIC_SYSV Putwchar(uint32_t c) { return Fputwc(c, stdout); }
-int BIONIC_SYSV Fwide(void*, int mode) { return mode > 0 ? 1 : mode < 0 ? -1 : 0; }
-int BIONIC_SYSV Fclose(void* f) { return std::fclose(F(f)); }
+int BIONIC_SYSV Fwide(void* f, int mode) {
+  FILE* stream = F(f);
+  StreamLock lock(stream);
+  return Orient(State(stream), mode);
+}
+int BIONIC_SYSV Fclose(void* f) { return CloseBionicStream(F(f)); }
+
+int BIONIC_SYSV GetcUnlocked(void* f) {
+  FILE* stream = F(f);
+  Orient(State(stream), -1);
+  unsigned char c;
+  int fd = _fileno(stream);
+  if (fd >= 0 && gesher_is_device_fd(fd)) return ReadStream(&c, 1, 1, stream) == 1 ? c : EOF;
+  return _getc_nolock(stream);
+}
+int BIONIC_SYSV PutcUnlocked(int c, void* f) {
+  FILE* stream = F(f);
+  Orient(State(stream), -1);
+  return _putc_nolock(c, stream);
+}
+int BIONIC_SYSV GetcharUnlocked() { return GetcUnlocked(stdin); }
+int BIONIC_SYSV PutcharUnlocked(int c) { return PutcUnlocked(c, stdout); }
+size_t BIONIC_SYSV FreadUnlocked(void* buf, size_t size, size_t n, void* f) {
+  FILE* stream = F(f);
+  if (size != 0 && n != 0) Orient(State(stream), -1);
+  return ReadStream(buf, size, n, stream);
+}
+size_t BIONIC_SYSV FwriteUnlocked(const void* buf, size_t size, size_t n, void* f) {
+  FILE* stream = F(f);
+  if (size != 0 && n != 0) Orient(State(stream), -1);
+  return _fwrite_nolock(buf, size, n, stream);
+}
+int BIONIC_SYSV FputsUnlocked(const char* s, void* f) {
+  FILE* stream = F(f);
+  Orient(State(stream), -1);
+  size_t n = std::strlen(s);
+  return _fwrite_nolock(s, 1, n, stream) == n ? 0 : EOF;
+}
+char* BIONIC_SYSV FgetsUnlocked(char* s, int n, void* f) {
+  if (n <= 0) return errno = kEINVAL, nullptr;
+  FILE* stream = F(f);
+  Orient(State(stream), -1);
+  int count = 0;
+  while (count < n - 1) {
+    int c = _getc_nolock(stream);
+    if (c == EOF) {
+      if (count == 0) return nullptr;
+      break;
+    }
+    s[count++] = static_cast<char>(c);
+    if (c == '\n') break;
+  }
+  s[count] = 0;
+  return s;
+}
+
 size_t BIONIC_SYSV Fread(void* buf, size_t size, size_t n, void* f) {
-  return ReadStream(buf, size, n, F(f));
+  StreamLock lock(F(f));
+  return FreadUnlocked(buf, size, n, f);
 }
 size_t BIONIC_SYSV Fwrite(const void* buf, size_t size, size_t n, void* f) {
-  return std::fwrite(buf, size, n, F(f));
+  StreamLock lock(F(f));
+  return FwriteUnlocked(buf, size, n, f);
 }
-int BIONIC_SYSV Fputs(const char* s, void* f) { return std::fputs(s, F(f)); }
-int BIONIC_SYSV Fputc(int c, void* f) { return std::fputc(c, F(f)); }
-int BIONIC_SYSV Putchar(int c) { return std::putchar(c); }
-int BIONIC_SYSV Puts(const char* s) { return std::puts(s); }
-char* BIONIC_SYSV Fgets(char* s, int n, void* f) { return std::fgets(s, n, F(f)); }
+int BIONIC_SYSV Fputs(const char* s, void* f) {
+  StreamLock lock(F(f));
+  return FputsUnlocked(s, f);
+}
+int BIONIC_SYSV Fputc(int c, void* f) {
+  StreamLock lock(F(f));
+  return PutcUnlocked(c, f);
+}
+int BIONIC_SYSV Putchar(int c) { return Fputc(c, stdout); }
+int BIONIC_SYSV Puts(const char* s) {
+  StreamLock lock(stdout);
+  Orient(State(stdout), -1);
+  return std::puts(s);
+}
+char* BIONIC_SYSV Fgets(char* s, int n, void* f) {
+  FILE* stream = F(f);
+  StreamLock lock(stream);
+  if (n > 0) Orient(State(stream), -1);
+  return std::fgets(s, n, stream);
+}
 [[noreturn]] void StdioFortify(const char* what) {
   std::fprintf(stderr, "gesher bionic: FORTIFY: %s: prevented buffer overflow\n", what);
   std::abort();
 }
 char* BIONIC_SYSV FgetsChk(char* s, int n, void* f, size_t buf_size) {
   if (n < 0 || static_cast<size_t>(n) > buf_size) StdioFortify("fgets");
-  return std::fgets(s, n, F(f));
+  return Fgets(s, n, f);
 }
 size_t BIONIC_SYSV FreadChk(void* buf, size_t size, size_t n, void* f, size_t buf_size) {
   if (size != 0 && n > buf_size / size) StdioFortify("fread");
-  return ReadStream(buf, size, n, F(f));
+  return Fread(buf, size, n, f);
 }
 size_t BIONIC_SYSV FwriteChk(const void* buf, size_t size, size_t n, void* f, size_t buf_size) {
   if (size != 0 && n > buf_size / size) StdioFortify("fwrite");
-  return std::fwrite(buf, size, n, F(f));
+  return Fwrite(buf, size, n, f);
 }
 int BIONIC_SYSV Fgetc(void* f) {
-  unsigned char c;
-  int fd = _fileno(F(f));
-  if (fd >= 0 && gesher_is_device_fd(fd)) return ReadStream(&c, 1, 1, F(f)) == 1 ? c : EOF;
-  return std::fgetc(F(f));
+  StreamLock lock(F(f));
+  return GetcUnlocked(f);
 }
-int BIONIC_SYSV Getchar() { return std::getchar(); }
-int BIONIC_SYSV Ungetc(int c, void* f) { return std::ungetc(c, F(f)); }
+int BIONIC_SYSV Getchar() { return Fgetc(stdin); }
+int BIONIC_SYSV Ungetc(int c, void* f) {
+  FILE* stream = F(f);
+  StreamLock lock(stream);
+  int result = _ungetc_nolock(c, stream);
+  if (result != EOF) Orient(State(stream), -1);
+  return result;
+}
 int BIONIC_SYSV Fflush(void* f) { return std::fflush(f ? F(f) : nullptr); }
 int BIONIC_SYSV Feof(void* f) { return std::feof(F(f)); }
-int BIONIC_SYSV Ferror(void* f) { return std::ferror(F(f)); }
-void BIONIC_SYSV Clearerr(void* f) { std::clearerr(F(f)); }
+int BIONIC_SYSV FerrorUnlocked(void* f) {
+  FILE* stream = F(f);
+  return State(stream).conversion_error || std::ferror(stream);
+}
+int BIONIC_SYSV Ferror(void* f) {
+  StreamLock lock(F(f));
+  return FerrorUnlocked(f);
+}
+void BIONIC_SYSV ClearerrUnlocked(void* f) {
+  FILE* stream = F(f);
+  State(stream).conversion_error = false;
+  std::clearerr(stream);
+}
+void BIONIC_SYSV Clearerr(void* f) {
+  StreamLock lock(F(f));
+  ClearerrUnlocked(f);
+}
 int BIONIC_SYSV Fileno(void* f) { return _fileno(F(f)); }
 int BIONIC_SYSV Fseek(void* f, int64_t off, int whence) { return _fseeki64(F(f), off, whence); }
 int64_t BIONIC_SYSV Ftell(void* f) { return _ftelli64(F(f)); }
-void BIONIC_SYSV Rewind(void* f) { std::rewind(F(f)); }
+int BIONIC_SYSV Getw(void* f) {
+  int word;
+  return Fread(&word, sizeof(word), 1, f) == 1 ? word : EOF;
+}
+int BIONIC_SYSV Putw(int word, void* f) {
+  return Fwrite(&word, sizeof(word), 1, f) == 1 ? 0 : EOF;
+}
+void BIONIC_SYSV Rewind(void* f) {
+  FILE* stream = F(f);
+  StreamLock lock(stream);
+  _fseeki64_nolock(stream, 0, SEEK_SET);
+  // Like Android's rewind, clear stream errors even if seeking failed.
+  ClearerrUnlocked(f);
+}
 int BIONIC_SYSV Setvbuf(void* f, char* buf, int mode, size_t size) {
   // bionic: _IOFBF 0, _IOLBF 1, _IONBF 2; the CRT: 0x0000, 0x0040, 0x0004.
   static const int kModes[] = {_IOFBF, _IOLBF, _IONBF};
@@ -558,6 +858,8 @@ int BIONIC_SYSV Setvbuf(void* f, char* buf, int mode, size_t size) {
 void BIONIC_SYSV Setbuf(void* f, char* buf) { std::setbuf(F(f), buf); }
 FILE* BIONIC_SYSV Tmpfile() { return std::tmpfile(); }
 void BIONIC_SYSV Perror(const char* s) {
+  StreamLock lock(stderr);
+  Orient(State(stderr), -1);
   if (s != nullptr && *s != 0) {
     std::fprintf(stderr, "%s: %s\n", s, strerror(errno));
   } else {
@@ -731,8 +1033,11 @@ int BIONIC_SYSV gesher_bionic_vsprintf(char* buf, const char* fmt, SysvVaList* a
   return static_cast<int>(s.size());
 }
 int BIONIC_SYSV gesher_bionic_vfprintf(void* f, const char* fmt, SysvVaList* ap) {
+  FILE* stream = F(f);
+  StreamLock lock(stream);
+  Orient(State(stream), -1);
   std::string s = Format(fmt, ap);
-  return std::fwrite(s.data(), 1, s.size(), F(f)) == s.size() ? static_cast<int>(s.size()) : -1;
+  return _fwrite_nolock(s.data(), 1, s.size(), stream) == s.size() ? static_cast<int>(s.size()) : -1;
 }
 int BIONIC_SYSV gesher_bionic_vprintf(const char* fmt, SysvVaList* ap) {
   return gesher_bionic_vfprintf(stdout, fmt, ap);
@@ -770,22 +1075,45 @@ int BIONIC_SYSV gesher_bionic_vsscanf(const char* str, const char* fmt, SysvVaLi
   return VSscanfImpl(str, fmt, ap);
 }
 int BIONIC_SYSV gesher_bionic_vfscanf(void* f, const char* fmt, SysvVaList* ap) {
-  return VFscanfImpl(F(f), fmt, ap);
+  FILE* stream = F(f);
+  StreamLock lock(stream);
+  Orient(State(stream), -1);
+  return VFscanfImpl(stream, fmt, ap);
 }
 int BIONIC_SYSV gesher_bionic_vscanf(const char* fmt, SysvVaList* ap) {
-  return VFscanfImpl(stdin, fmt, ap);
+  return gesher_bionic_vfscanf(stdin, fmt, ap);
 }
-// swprintf: the format as UTF-8 through the same formatter, back to UTF-32.
-// -1 when the result (and its NUL) does not fit, as glibc and bionic do.
 int BIONIC_SYSV gesher_bionic_vswprintf(uint32_t* buf, size_t n, const uint32_t* fmt,
-                                        SysvVaList* ap) {
-  std::string s = Format(Utf32ToUtf8(fmt, -1).c_str(), ap);
-  std::vector<uint32_t> w = Utf8ToUtf32(s);
+                                       SysvVaList* ap) {
   if (n == 0) return -1;
-  size_t c = w.size() < n - 1 ? w.size() : n - 1;
-  std::memcpy(buf, w.data(), c * sizeof(uint32_t));
-  buf[c] = 0;
-  return w.size() < n ? static_cast<int>(w.size()) : -1;
+  bool valid;
+  WideText text = Format(fmt, ap, &valid);
+  if (!valid) return -1;
+  size_t count = text.size() < n - 1 ? text.size() : n - 1;
+  if (count != 0) std::memcpy(buf, text.data(), count * sizeof(uint32_t));
+  buf[count] = 0;
+  if (text.size() > INT_MAX) return errno = kEoverflow, -1;
+  return text.size() < n ? static_cast<int>(text.size()) : -1;
+}
+int BIONIC_SYSV gesher_bionic_vfwprintf(void* f, const uint32_t* fmt, SysvVaList* ap) {
+  FILE* stream = F(f);
+  StreamLock lock(stream);
+  auto& state = State(stream);
+  Orient(state, 1);
+  bool valid;
+  WideText text = Format(fmt, ap, &valid);
+  if (!valid) {
+    state.conversion_error = true;
+    return -1;
+  }
+  if (text.size() > INT_MAX) return errno = kEoverflow, -1;
+  for (uint32_t wc : text) {
+    if (!WriteWide(stream, state, wc)) return -1;
+  }
+  return static_cast<int>(text.size());
+}
+int BIONIC_SYSV gesher_bionic_vwprintf(const uint32_t* fmt, SysvVaList* ap) {
+  return gesher_bionic_vfwprintf(stdout, fmt, ap);
 }
 int BIONIC_SYSV gesher_bionic_android_log_vprint(int prio, const char* tag, const char* fmt,
                                                 SysvVaList* ap) {
@@ -839,6 +1167,8 @@ void gesher_bionic_sscanf();
 void gesher_bionic_fscanf();
 void gesher_bionic_scanf();
 void gesher_bionic_swprintf();
+void gesher_bionic_fwprintf();
+void gesher_bionic_wprintf();
 void gesher_bionic_syslog();
 void gesher_bionic_android_log_print();
 void gesher_bionic_android_log_assert();
@@ -859,6 +1189,8 @@ asm(".text\n"
     GESHER_VA_TRAMPOLINE("gesher_bionic_sscanf", "gesher_bionic_vsscanf", "16", "%rdx")
     GESHER_VA_TRAMPOLINE("gesher_bionic_fscanf", "gesher_bionic_vfscanf", "16", "%rdx")
     GESHER_VA_TRAMPOLINE("gesher_bionic_scanf", "gesher_bionic_vscanf", "8", "%rsi")
+    GESHER_VA_TRAMPOLINE("gesher_bionic_fwprintf", "gesher_bionic_vfwprintf", "16", "%rdx")
+    GESHER_VA_TRAMPOLINE("gesher_bionic_wprintf", "gesher_bionic_vwprintf", "8", "%rsi")
     GESHER_VA_TRAMPOLINE("gesher_bionic_swprintf", "gesher_bionic_vswprintf", "24", "%rcx")
     GESHER_VA_TRAMPOLINE("gesher_bionic_syslog", "gesher_bionic_vsyslog", "16", "%rdx")
     GESHER_VA_TRAMPOLINE("gesher_bionic_android_log_print",
@@ -887,6 +1219,9 @@ int BIONIC_SYSV gesher_bionic_fts_close(void*) { return 0; }
 int BIONIC_SYSV gesher_bionic_fts_set(void*, void*, int) { return 0; }
 
 void RegisterStdio(SymbolTable& t) {
+  // Validate during shim initialization so even the first try-lock avoids
+  // opening a CRT probe stream on the application's nonblocking call path.
+  stdio_windows::StreamLockLayoutSupported();
 #define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
   // Formatted output, variadic and va_list forms.
   E("printf", gesher_bionic_printf);
@@ -912,6 +1247,10 @@ void RegisterStdio(SymbolTable& t) {
   E("scanf", gesher_bionic_scanf);
   E("vscanf", gesher_bionic_vscanf);
   E("swprintf", gesher_bionic_swprintf);
+  E("fwprintf", gesher_bionic_fwprintf);
+  E("wprintf", gesher_bionic_wprintf);
+  E("vfwprintf", gesher_bionic_vfwprintf);
+  E("vwprintf", gesher_bionic_vwprintf);
   E("vswprintf", gesher_bionic_vswprintf);
   E("syslog", gesher_bionic_syslog);
   E("vsyslog", gesher_bionic_vsyslog);
@@ -932,6 +1271,24 @@ void RegisterStdio(SymbolTable& t) {
   E("fsetpos64", Fsetpos);
   E("getline", Getline);
   E("getdelim", Getdelim);
+  E("getw", Getw);
+  E("putw", Putw);
+  E("flockfile", Flockfile);
+  E("funlockfile", Funlockfile);
+  E("ftrylockfile", Ftrylockfile);
+  E("fgetws", Fgetws);
+  E("getc_unlocked", GetcUnlocked);
+  E("fgetc_unlocked", GetcUnlocked);
+  E("getchar_unlocked", GetcharUnlocked);
+  E("putc_unlocked", PutcUnlocked);
+  E("fputc_unlocked", PutcUnlocked);
+  E("putchar_unlocked", PutcharUnlocked);
+  E("fread_unlocked", FreadUnlocked);
+  E("fwrite_unlocked", FwriteUnlocked);
+  E("fgets_unlocked", FgetsUnlocked);
+  E("fputs_unlocked", FputsUnlocked);
+  E("ferror_unlocked", FerrorUnlocked);
+  E("clearerr_unlocked", ClearerrUnlocked);
   E("fgetwc", Fgetwc);
   E("getwc", Fgetwc);
   E("getwchar", Getwchar);

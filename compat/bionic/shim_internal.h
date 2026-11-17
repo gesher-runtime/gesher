@@ -188,10 +188,8 @@ int PthreadGetName(uint64_t thread, char* name, size_t size);
 int PthreadCpuClock(uint64_t thread, int* clock_id);
 int ReadPthreadCpuClock(int clock_id, int64_t* nanos);
 
-// fread for the shim's FILEs (stdio_bionic.cc): /dev/zero and /dev/random
-// through read(), which fills them, the rest through the CRT. `unlocked`
-// skips the FILE's lock.
-size_t ReadStream(void* buf, size_t size, size_t n, FILE* f, bool unlocked = false);
+// Close a Bionic stream and retire its orientation and wide I/O state.
+int CloseBionicStream(FILE* stream);
 
 // IEEE binary128 (bionic's x86-64 long double) from a double, as 16 bytes.
 void DoubleToBinary128(double d, void* out);

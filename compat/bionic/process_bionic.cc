@@ -656,7 +656,7 @@ int BIONIC_SYSV Pclose(void* stream) {
     pid = it->second;
     g_popen.erase(it);
   }
-  std::fclose(static_cast<FILE*>(stream));
+  CloseBionicStream(static_cast<FILE*>(stream));
   int status = 0;
   if (CollectOne(pid, &status, 0) < 0) return -1;
   return status;
