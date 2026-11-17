@@ -1,0 +1,116 @@
+name: arm64-windows-self-hosted-trial
+
+# Always uses policy from main, never a PR's workflow YAML. The hosted baseline
+# remains a required-check candidate while this optional pilot is measured.
+on:
+  workflow_run:
+    workflows: [arm64-windows]
+    types: [in_progress]
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: 'An arm64-windows PR run ID to retry or compare'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: arm64-self-hosted-trial-${{ github.event.workflow_run.id || inputs.run-id }}
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    if: vars.GESHER_SELF_HOSTED_TRIAL == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      allowed: ${{ steps.source.outputs.allowed }}
+      source: ${{ steps.source.outputs.source }}
+      pr: ${{ steps.source.outputs.pr }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # workflow_run resolves github.sha to main. A dispatch on another
+          # ref is rejected by the policy script before it can schedule work.
+          ref: main
+          persist-credentials: false
+      - name: Authorize a current internal PR merge
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id || inputs.run-id }}
+        run: python3 tools/ci/self_hosted_trial.py
+
+  build:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on:
+      group: gesher-build-trial
+      labels: [self-hosted, linux, x64]
+    timeout-minutes: 60
+    env:
+      LLVM_MINGW_TAG: '20261006'
+      LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+      BUILD_JOBS: '8'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.authorize.outputs.source }}
+          persist-credentials: false
+      - name: Record exact source and runner capacity
+        env:
+          SOURCE: ${{ needs.authorize.outputs.source }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          echo "SOURCE_IDENTITY source=$SOURCE"
+          nproc
+          free -h
+          df -h .
+          test "$(df -Pk . | awk 'NR==2 {print $4}')" -ge 62914560 || {
+            echo 'At least 60 GiB free is required for the trial' >&2
+            exit 1
+          }
+          for tool in git curl python3 cmake ninja ccache; do command -v "$tool"; done
+      # Separate cache namespaces: trial writes cannot poison hosted CI inputs.
+      - uses: actions/cache@v4
+        id: toolchain
+        with:
+          path: ~/toolchain
+          key: self-hosted-trial-${{ env.LLVM_MINGW_NAME }}
+      - name: Fetch llvm-mingw
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
+            | tar -xJ -C ~/toolchain
+      - uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: self-hosted-trial-aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: self-hosted-trial-aosp-
+      - name: Fetch AOSP sources
+        run: bash tools/fetch-aosp.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: self-hosted-trial-ccache-arm64-windows-${{ needs.authorize.outputs.source }}
+          restore-keys: self-hosted-trial-ccache-arm64-windows-
+      - name: Build and verify ARM64 Windows targets
+        run: bash tools/ci/build-arm64-windows.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trial-arm64-windows-pr-${{ needs.authorize.outputs.pr }}-${{ needs.authorize.outputs.source }}
+          path: |
+            out-arm64/*.exe
+            out-arm64/*.a
+          if-no-files-found: error

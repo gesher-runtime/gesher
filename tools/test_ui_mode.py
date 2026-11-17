@@ -53,6 +53,13 @@ def main():
         subprocess.run([str(args.java_home / "bin/java"), "-XX:-UsePerfData", "--patch-module",
                         "jdk.unsupported=" + str(work / "cleaner"), "-cp", str(classes) + os.pathsep + classpath,
                         "UiModeHost", str(library)], env=env, check=True, timeout=90)
+        shutdown_policy = work / "shutdown-policy.properties"
+        subprocess.run([str(args.java_home / "bin/java"), "-XX:-UsePerfData", "--patch-module",
+                        "jdk.unsupported=" + str(work / "cleaner"), "-cp", str(classes) + os.pathsep + classpath,
+                        "UiModeHost", str(library), str(shutdown_policy)], env=env, check=True, timeout=30)
+        if "\ncomputed=true\n" not in shutdown_policy.read_text():
+            raise AssertionError("Production JVM shutdown hook did not save the last computed AUTO result")
+        print("UiMode production shutdown hook persisted AUTO's last computed result", flush=True)
 
 
 if __name__ == "__main__":

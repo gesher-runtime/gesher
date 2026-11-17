@@ -27,8 +27,8 @@ The modes retain their Android meanings:
 | Mode | Behavior |
 | --- | --- |
 | `MODE_NIGHT_NO`, `MODE_NIGHT_YES` | Apply explicit light/dark resource configuration immediately. |
-| `MODE_NIGHT_AUTO` | Use AOSP's sunrise/sunset calculation with a real Windows location. Missing location retains the last computed value, including across service restarts. Windows theme selection is not an astronomical input. |
-| `MODE_NIGHT_CUSTOM` / schedule | Use the local clock and time zone; default 22:00–06:00. Times are microseconds since midnight, including microsecond precision, and Android's inclusive interval endpoints are retained. |
+| `MODE_NIGHT_AUTO` | Use AOSP's sunrise/sunset calculation with a real Windows location. Missing location retains the last computed value; normal service shutdown saves it for restart. Windows theme selection is not an astronomical input. |
+| `MODE_NIGHT_CUSTOM` / schedule | Use the local clock and time zone; default 22:00–06:00. Times are microseconds since midnight, including microsecond precision, and Android's inclusive interval endpoints are retained. The worker evaluates at the first observable millisecond at or after the start and strictly after the end, including when initialized at the exact end. |
 | `MODE_NIGHT_CUSTOM` / bedtime | Use the last authorized bedtime activation request. A mismatched subtype returns false but still remembers the bedtime request, as AOSP does. |
 
 Automatic twilight/schedule changes wait for the observed Windows session display
@@ -49,7 +49,20 @@ not change the device's mode. Device preferences are written atomically under
 durable installation marker, so an update preserves it and a later installation
 cannot inherit an old row. The isolated app driver keeps its settings in its own
 app data directory (`no_backup/gesher-ui-mode.properties`) and does not write the
-running device's policy. Failed persistent writes do not publish new state.
+running device's policy. Failed explicit policy writes do not publish a new mode,
+override, attention-clear side effect or matched bedtime request. An authorized
+bedtime request for an unselected subtype is still remembered, as AOSP requires.
+
+Attention overlays and ordinary computed AUTO/CUSTOM transitions publish their
+configuration without requiring unrelated policy-file writes. A derived reset of
+a manual override attempts to save the reset, logs a failed write, and retries on
+the next update while retaining the current resource configuration. Explicit mode,
+schedule, application and manual-override selections retain atomic durable writes.
+Like AOSP's shutdown path, the JVM shutdown hook saves AUTO's last computed value;
+service close and replacement do the same before releasing the old service. A
+failed shutdown write is logged and cleanup still completes. Restart can only
+recover the last successfully saved cache; forced process termination does not
+run the shutdown hook. Attention and bedtime requests themselves are transient.
 
 ## Permissions, lifecycle and capabilities
 
@@ -85,8 +98,11 @@ constructed package metadata, explicit instance-owned host inputs and the existi
 host JNI identity/initialization boundary. Assertions cover permissions and error
 results, scope across packages/shared UIDs, configuration sequence and lifecycle
 transaction selection, automatic deferral, manual override reset, schedules and
-time zones, persistent restart, stale-installation rows, failure to persist,
-callback isolation and shutdown. The solar calculation additionally matches 7,200
+time zones, actual scheduled-worker boundary transitions, transient publication
+with unavailable policy storage, persistent restart, stale-installation rows,
+explicit write failures, derived override retry, callback isolation and shutdown.
+The host runner also checks AUTO persistence after a child JVM exits through the
+production shutdown hook. The solar calculation additionally matches 7,200
 results from the unchanged upstream ICU implementation byte for byte at the
 millisecond result level; see `tests/ui-mode/aosp/README.md` for its exact provenance.
 

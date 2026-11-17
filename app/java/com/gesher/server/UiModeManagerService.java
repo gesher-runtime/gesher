@@ -51,6 +51,15 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
     private static final long REFRESH_MS = 3_600_000L;
     private static volatile UiModeManagerService sInstance;
 
+    static {
+        // AOSP saves AUTO's last computed result at shutdown. Resource updates
+        // must not depend on that cache being writable while the device runs.
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            UiModeManagerService service = sInstance;
+            if (service != null) service.close();
+        }, "ui-mode-shutdown"));
+    }
+
     /** Explicit, instance-owned host boundary; ordinary execution always uses Windows. */
     interface Source extends AutoCloseable {
         long now();
@@ -70,12 +79,16 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
         long start = 22 * 3_600_000_000L;
         long end = 6 * 3_600_000_000L;
         boolean computed, overrideOn, overrideOff;
+        // Transient requests participate in publication, but are not saved policy.
+        int attention = MODE_ATTENTION_THEME_OVERLAY_OFF;
+        boolean bedtimeRequested;
         final Map<String, AppMode> apps = new HashMap<>();
         State() { }
         State(State before) {
             configured = before.configured; mode = before.mode; custom = before.custom;
             start = before.start; end = before.end; computed = before.computed;
             overrideOn = before.overrideOn; overrideOff = before.overrideOff;
+            attention = before.attention; bedtimeRequested = before.bedtimeRequested;
             apps.putAll(before.apps);
         }
     }
@@ -94,8 +107,7 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
     private volatile int mAppliedNight = UI_MODE_NIGHT_NO;
     private Environment mEnvironment;
     private ScheduledFuture<?> mAlarm;
-    private boolean mBedtimeRequested, mClosed, mRefreshQueued;
-    private volatile int mAttention = MODE_ATTENTION_THEME_OVERLAY_OFF;
+    private boolean mClosed, mRefreshQueued, mPolicyDirty;
 
     UiModeManagerService(PackageManagerService pm, ActivityTaskManagerService atm,
             boolean persistent) {
@@ -121,6 +133,10 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
         mFile = file;
         mStandalonePackage = standalonePackage;
         mConfigurationChanged = configurationChanged;
+        UiModeManagerService previous = sInstance;
+        // Flush the previous AUTO cache before reading it during replacement,
+        // and release its worker/listeners before creating the new service.
+        if (previous != null) previous.close();
         mWorker = new ScheduledThreadPoolExecutor(1, task -> {
             Thread thread = new Thread(task, "ui-mode");
             thread.setDaemon(true);
@@ -139,14 +155,9 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
         }
         pm.onPackageRemoval(mRemovalListener);
         source.listen(this::queueRefresh);
-        UiModeManagerService previous;
         synchronized (UiModeManagerService.class) {
-            previous = sInstance;
             sInstance = this;
         }
-        // Services may be rebuilt in an isolated driver. The old singleton must not
-        // retain a worker, host listener, callbacks or installation-removal listener.
-        if (previous != null) previous.close();
     }
 
     public static int getUiModeNight() {
@@ -231,6 +242,7 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
                 if (value == null) next.apps.remove(caller.packageName);
                 else next.apps.put(caller.packageName, value);
                 persist(next);
+                mPolicyDirty = false;
                 mState = next;
             }
         }
@@ -250,16 +262,21 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
         boolean changed;
         synchronized (mLock) {
             ensureOpen();
-            if (custom == MODE_NIGHT_CUSTOM_TYPE_BEDTIME) mBedtimeRequested = active;
-            if (custom != mState.custom) return false;
             State next = new State(mState);
+            if (custom == MODE_NIGHT_CUSTOM_TYPE_BEDTIME) next.bedtimeRequested = active;
+            if (custom != next.custom) {
+                // AOSP remembers an authorized bedtime request even when its
+                // subtype is not selected. This is not a durable policy change.
+                mState = next;
+                return false;
+            }
             next.configured = true;
             if (next.mode == MODE_NIGHT_AUTO || next.mode == MODE_NIGHT_CUSTOM) {
                 next.overrideOn = active; next.overrideOff = !active;
             } else {
                 next.mode = active ? MODE_NIGHT_YES : MODE_NIGHT_NO;
             }
-            if (interaction) mAttention = MODE_ATTENTION_THEME_OVERLAY_OFF;
+            if (interaction) next.attention = MODE_ATTENTION_THEME_OVERLAY_OFF;
             compute(next);
             changed = publishLocked(next, true);
         }
@@ -292,14 +309,15 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
         boolean changed;
         synchronized (mLock) {
             ensureOpen();
-            mAttention = type;
             State next = new State(mState);
+            if (next.attention == type) return;
+            next.attention = type;
             compute(next);
-            changed = publishLocked(next, true);
+            changed = publishLocked(next, true, false);
         }
         dispatch(changed, null);
     }
-    @Override public int getAttentionModeThemeOverlay() { enforce(MODIFY); return mAttention; }
+    @Override public int getAttentionModeThemeOverlay() { enforce(MODIFY); return mState.attention; }
 
     @Override public void addCallback(IUiModeManagerCallback callback, int userId) {
         userId = incomingUser(userId);
@@ -376,7 +394,7 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
             State next = new State(mState);
             preferenceChanged = adoptHostPreference(next);
             compute(next);
-            changed = publishLocked(next, preferenceChanged || powerChanged);
+            changed = publishLocked(next, preferenceChanged || powerChanged, false);
         }
         if (preferenceChanged) android.app.UiModeManager.invalidateNightModeCache();
         dispatch(changed, null);
@@ -414,7 +432,7 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
                 base = mEnvironment.twilight() == null ? state.computed : mEnvironment.twilight().night();
                 break;
             case MODE_NIGHT_CUSTOM:
-                base = state.custom == MODE_NIGHT_CUSTOM_TYPE_BEDTIME ? mBedtimeRequested
+                base = state.custom == MODE_NIGHT_CUSTOM_TYPE_BEDTIME ? state.bedtimeRequested
                         : between(Instant.ofEpochMilli(mSource.now()).atZone(mSource.zone()).toLocalTime(),
                                 LocalTime.ofNanoOfDay(state.start * 1000),
                                 LocalTime.ofNanoOfDay(state.end * 1000));
@@ -422,8 +440,8 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
             default: throw new AssertionError(state.mode);
         }
         state.computed = base;
-        if (mAttention != MODE_ATTENTION_THEME_OVERLAY_OFF) {
-            state.computed = mAttention == MODE_ATTENTION_THEME_OVERLAY_NIGHT;
+        if (state.attention != MODE_ATTENTION_THEME_OVERLAY_OFF) {
+            state.computed = state.attention == MODE_ATTENTION_THEME_OVERLAY_NIGHT;
         } else if (state.mode == MODE_NIGHT_AUTO || state.mode == MODE_NIGHT_CUSTOM) {
             if (state.overrideOn && !base) state.computed = true;
             else if (state.overrideOff && base) state.computed = false;
@@ -441,11 +459,25 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
         return state.computed || Boolean.TRUE.equals(mEnvironment.powerSave()) ? UI_MODE_NIGHT_YES : UI_MODE_NIGHT_NO;
     }
     private boolean publishLocked(State next, boolean immediate) {
+        return publishLocked(next, immediate, true);
+    }
+    private boolean publishLocked(State next, boolean immediate, boolean requirePersistence) {
         State old = mState;
-        if (old.configured != next.configured || old.mode != next.mode || old.custom != next.custom
+        // Computed resources, attention and bedtime are transient. AUTO's last
+        // computed cache is saved at shutdown, not before configuration dispatch.
+        boolean policyChanged = old.configured != next.configured || old.mode != next.mode || old.custom != next.custom
                 || old.start != next.start || old.end != next.end || old.overrideOn != next.overrideOn
-                || old.overrideOff != next.overrideOff || old.computed != next.computed
-                || !old.apps.equals(next.apps)) persist(next);
+                || old.overrideOff != next.overrideOff || !old.apps.equals(next.apps);
+        if (policyChanged || mPolicyDirty) {
+            if (requirePersistence) {
+                persist(next);
+                mPolicyDirty = false;
+            } else {
+                // Host observations and attention updates can reset a saved
+                // override. AOSP still publishes resources if that write fails.
+                persistDerivedState(next);
+            }
+        }
         mState = next;
         boolean apply = immediate || mEnvironment.display() == WindowsHost.DISPLAY_STATE_OFF
                 || next.mode == MODE_NIGHT_CUSTOM && next.custom == MODE_NIGHT_CUSTOM_TYPE_BEDTIME;
@@ -455,28 +487,47 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
         scheduleLocked();
         return changed;
     }
+    private void persistDerivedState(State state) {
+        try {
+            persist(state);
+            mPolicyDirty = false;
+        } catch (RuntimeException failure) {
+            mPolicyDirty = true;
+            SystemServer.log("UiModeManagerService: cannot save derived state; retaining active configuration: " + failure);
+        }
+    }
     private void scheduleLocked() {
         if (mAlarm != null) { mAlarm.cancel(false); mAlarm = null; }
         if (mClosed) return;
         long now = mSource.now();
         long next = now + REFRESH_MS;
         State state = mState;
-        if (state.mode == MODE_NIGHT_CUSTOM && state.custom == MODE_NIGHT_CUSTOM_TYPE_SCHEDULE) {
-            next = Math.min(next, Math.min(nextBoundary(now, state.start), nextBoundary(now, state.end)));
+        if (state.mode == MODE_NIGHT_CUSTOM && state.custom == MODE_NIGHT_CUSTOM_TYPE_SCHEDULE
+                && state.start != state.end) {
+            next = Math.min(next, Math.min(nextBoundary(now, state.start, false),
+                    nextBoundary(now, state.end, true)));
         } else if (state.mode == MODE_NIGHT_AUTO && mEnvironment.twilight() != null
                 && mEnvironment.twilight().nextChange() > now) {
             next = Math.min(next, mEnvironment.twilight().nextChange());
         }
         mAlarm = mWorker.schedule(this::refreshFromHost, Math.max(1, next - now), TimeUnit.MILLISECONDS);
     }
-    private long nextBoundary(long now, long micros) {
+    private long nextBoundary(long now, long micros, boolean end) {
         ZoneId zone = mSource.zone();
         LocalDate date = Instant.ofEpochMilli(now).atZone(zone).toLocalDate();
         LocalTime time = LocalTime.ofNanoOfDay(micros * 1000);
         ZonedDateTime boundary = date.atTime(time).atZone(zone);
-        if (boundary.toInstant().toEpochMilli() <= now) boundary = date.plusDays(1).atTime(time).atZone(zone);
-        // The end is inclusive in Android's LocalTime predicate. Reevaluate just after it.
-        return boundary.toInstant().toEpochMilli() + 1;
+        long next = boundaryMillis(boundary, end);
+        // Compare the actual observable transition, not its unrounded endpoint:
+        // at an inclusive end equal to now the transition is still one ms away.
+        if (next <= now) next = boundaryMillis(date.plusDays(1).atTime(time).atZone(zone), end);
+        return next;
+    }
+    private static long boundaryMillis(ZonedDateTime boundary, boolean end) {
+        long millis = boundary.toInstant().toEpochMilli();
+        // Source.now() observes milliseconds. Start is inclusive (ceil), whereas
+        // the inclusive end changes state at the first millisecond strictly after it.
+        return millis + (end || boundary.getNano() % 1_000_000 != 0 ? 1 : 0);
     }
     private void dispatch(boolean changed, String pkg) {
         if (!changed) return;
@@ -490,6 +541,7 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
             State next = new State(mState);
             next.apps.remove(name);
             persist(next);
+            mPolicyDirty = false;
             mState = next;
         }
     }
@@ -579,6 +631,7 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
             if (mAlarm != null) mAlarm.cancel(false);
             mWorker.shutdownNow();
             mCallbacks.kill();
+            if (mState.mode == MODE_NIGHT_AUTO || mPolicyDirty) persistDerivedState(mState);
             synchronized (UiModeManagerService.class) { if (sInstance == this) sInstance = null; }
         }
         mSource.close();

@@ -8,6 +8,10 @@ public final class UiModeHost {
         list.set(null, new android.os.LocaleList(java.util.Locale.ROOT));
         android.app.PropertyInvalidatedCache.setTestMode(true);
         android.app.PropertyInvalidatedCache.disableForTestMode();
+        if (args.length == 2) {
+            com.gesher.server.UiModeFixture.prepareShutdown(new java.io.File(args[1]));
+            System.exit(0);
+        }
         int checks = com.gesher.server.UiModeFixture.run(false);
         System.out.println("UiMode host all passed: " + checks + " checks");
         System.out.println("Production UiMode/PM/ATM configuration lifecycle and store; constructed package metadata, explicit host inputs, JNI identity boundary. Generated Binder Parcel and actual Windows events run separately on ART.");

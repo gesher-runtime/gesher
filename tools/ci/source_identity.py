@@ -10,7 +10,19 @@ def source_identity(env, event=None, checkout_parents=None):
     checkout = env['GITHUB_SHA']
     assert re.fullmatch(r'[0-9a-f]{40}', checkout), 'Invalid checkout SHA'
     kind = env['GITHUB_EVENT_NAME']
-    assert kind in ('push', 'workflow_dispatch', 'pull_request'), 'Unsupported source event'
+    assert kind in ('push', 'workflow_dispatch', 'pull_request', 'merge_group'), 'Unsupported source event'
+    if kind == 'merge_group':
+        if event is None:
+            event = json.loads(Path(env['GITHUB_EVENT_PATH']).read_text(encoding='utf-8-sig'))
+        group = event['merge_group']
+        assert event['action'] == 'checks_requested', 'Unexpected merge group action'
+        assert group['head_sha'] == checkout, 'Merge group checkout mismatch'
+        assert group['head_ref'] == env['GITHUB_REF'], 'Merge group ref mismatch'
+        assert group['head_ref'].startswith('refs/heads/gh-readonly-queue/main/'), 'Unexpected queue ref'
+        assert group['base_ref'] == 'refs/heads/main', 'Unexpected merge group target'
+        assert re.fullmatch(r'[0-9a-f]{40}', group['base_sha']), 'Invalid merge group base'
+        return {'checkout_sha': checkout, 'api_head_sha': checkout,
+                'head_repository_id': env['GITHUB_REPOSITORY_ID']}
     if kind != 'pull_request':
         return {'checkout_sha': checkout, 'api_head_sha': checkout,
                 'head_repository_id': env['GITHUB_REPOSITORY_ID']}
