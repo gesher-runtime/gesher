@@ -116,6 +116,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@code IWindowSession.Stub}, so WindowManagerService's session factory can hand it out.
  */
 public final class WindowSession extends IWindowSession.Stub {
+    public boolean isInMultiWindowMode() {
+        return true;
+    }
     private static final String TAG = "gesher-app";
     private static final ExecutorService sDebugCapture = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "window-debug-capture");
@@ -570,7 +573,7 @@ public final class WindowSession extends IWindowSession.Stub {
         frames.attachedFrame = isSubWindow(w.attrs.type) && w.parent != null
                 ? new Rect(w.parent.frame) : null;
         mLayout.computeFrames(w.attrs, state, cutoutSafe, bounds,
-                WindowConfiguration.WINDOWING_MODE_FULLSCREEN, requestedWidth, requestedHeight,
+                WindowConfiguration.WINDOWING_MODE_FREEFORM, requestedWidth, requestedHeight,
                 w.requestedVisibleTypes, 1f /* compatScale */, frames);
         Configuration global = processConfiguration();
         // Every task overrides its full geometry, including appBounds at natural

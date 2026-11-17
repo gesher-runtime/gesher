@@ -154,7 +154,7 @@ public final class DeviceProfile {
         c.windowConfiguration.setBounds(bounds);
         c.windowConfiguration.setAppBounds(bounds);
         c.windowConfiguration.setMaxBounds(bounds);
-        c.windowConfiguration.setWindowingMode(WindowConfiguration.WINDOWING_MODE_FULLSCREEN);
+        c.windowConfiguration.setWindowingMode(WindowConfiguration.WINDOWING_MODE_FREEFORM);
         c.windowConfiguration.setRotation(Surface.ROTATION_0);
         return c;
     }
