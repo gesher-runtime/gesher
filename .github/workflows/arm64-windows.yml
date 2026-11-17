@@ -9,6 +9,9 @@ on:
     branches:
       - 'feature/arm64-windows'
       - 'main'
+  merge_group:
+    types: [checks_requested]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -69,58 +72,9 @@ jobs:
           key: ccache-arm64-windows-${{ github.sha }}
           restore-keys: ccache-arm64-windows-
 
-      - name: Configure CMake for ARM64 Windows
+      - name: Build and verify ARM64 Windows targets
         shell: bash
-        run: |
-          ccache --set-config=max_size=2G
-          cmake -S . -B out-arm64 -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw-arm64.cmake \
-            -DLLVM_MINGW="$HOME/toolchain/$LLVM_MINGW_NAME" \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-
-      - name: Build target binaries and libraries
-        shell: bash
-        run: |
-          ninja -C out-arm64 \
-            platform_probe \
-            socket_probe \
-            mman_probe \
-            madvise_probe \
-            epoll_probe \
-            posix_probe \
-            timerfd_windows_test \
-            boottime_resume_windows_test \
-            gesher_elf \
-            gesher_bionic \
-            gesher_posix \
-            arm64_elf_test
-
-      - name: Verify PE/COFF architecture is aarch64
-        shell: bash
-        run: |
-          OBJDUMP="$HOME/toolchain/$LLVM_MINGW_NAME/bin/llvm-objdump"
-          binaries=(
-            out-arm64/platform_probe.exe
-            out-arm64/socket_probe.exe
-            out-arm64/mman_probe.exe
-            out-arm64/madvise_probe.exe
-            out-arm64/epoll_probe.exe
-            out-arm64/posix_probe.exe
-            out-arm64/timerfd_windows_test.exe
-            out-arm64/boottime_resume_windows_test.exe
-            out-arm64/arm64_elf_test.exe
-          )
-          for b in "${binaries[@]}"; do
-            echo "Checking architecture for $b..."
-            info=$("$OBJDUMP" -f "$b")
-            echo "$info"
-            echo "$info" | grep -iE 'aarch64|arm64' || {
-              echo "ERROR: $b is not aarch64!"
-              exit 1
-            }
-          done
-          echo "All binaries verified as aarch64!"
+        run: bash tools/ci/build-arm64-windows.sh
 
       - name: Upload ARM64 Windows artifacts
         uses: actions/upload-artifact@v4
@@ -130,3 +84,21 @@ jobs:
             out-arm64/*.exe
             out-arm64/*.a
           if-no-files-found: warn
+
+  arm64-required:
+    name: arm64-required
+    if: always()
+    needs: [source-identity, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every production CI job
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['JOB_RESULTS'])
+          failed = {name: job['result'] for name, job in results.items() if job['result'] != 'success'}
+          if not results or failed:
+              raise SystemExit(f"Required jobs did not succeed: {failed}")
+          PY

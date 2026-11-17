@@ -33,6 +33,25 @@ class SourceIdentityTest(unittest.TestCase):
                              {'checkout_sha': 'a' * 40, 'api_head_sha': 'a' * 40,
                               'head_repository_id': self.env['GITHUB_REPOSITORY_ID']})
 
+    def test_merge_group_binds_event_checkout_ref_and_target(self):
+        env = dict(self.env, GITHUB_EVENT_NAME='merge_group',
+                   GITHUB_REF='refs/heads/gh-readonly-queue/main/pr-5-abc')
+        event = {'action': 'checks_requested', 'merge_group': {
+            'head_sha': 'a' * 40, 'head_ref': env['GITHUB_REF'],
+            'base_sha': 'c' * 40, 'base_ref': 'refs/heads/main'}}
+        self.assertEqual(source_identity(env, event), {
+            'checkout_sha': 'a' * 40, 'api_head_sha': 'a' * 40,
+            'head_repository_id': env['GITHUB_REPOSITORY_ID']})
+        for field, value in [('head_sha', 'b' * 40), ('head_ref', 'refs/heads/main'),
+                             ('base_sha', 'invalid'), ('base_ref', 'refs/heads/other')]:
+            bad = copy.deepcopy(event)
+            bad['merge_group'][field] = value
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                source_identity(env, bad)
+        bad = copy.deepcopy(event); bad['action'] = 'destroyed'
+        with self.assertRaises(AssertionError):
+            source_identity(env, bad)
+
     def test_fork_keeps_target_merge_and_source_repository_distinct(self):
         event = copy.deepcopy(self.event)
         event['pull_request']['head']['repo'] = {'id': 1459959585, 'full_name': 'ztcebuck/gesher'}
