@@ -1,6 +1,7 @@
 /* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
 package gesher.services;
 
+import android.app.PendingIntent;
 import android.bluetooth.BluetoothA2dp;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothClass;
@@ -361,14 +362,23 @@ public final class BluetoothHostTest {
         LinkedBlockingQueue<ScanResult> matched = new LinkedBlockingQueue<>();
         LinkedBlockingQueue<ScanResult> other = new LinkedBlockingQueue<>();
         LinkedBlockingQueue<Integer> failures = new LinkedBlockingQueue<>();
+        LinkedBlockingQueue<Thread> failureThreads = new LinkedBlockingQueue<>();
+        LinkedBlockingQueue<String> unexpectedReports = new LinkedBlockingQueue<>();
         ScanCallback battery = new ScanCallback() {
             @Override
             public void onScanResult(int type, ScanResult result) {
                 if (type == ScanSettings.CALLBACK_TYPE_ALL_MATCHES) matched.add(result);
+                else unexpectedReports.add("callback type " + type);
+            }
+
+            @Override
+            public void onBatchScanResults(List<ScanResult> results) {
+                unexpectedReports.add("batch");
             }
 
             @Override
             public void onScanFailed(int error) {
+                failureThreads.add(Thread.currentThread());
                 failures.add(error);
             }
         };
@@ -379,8 +389,38 @@ public final class BluetoothHostTest {
             }
         };
         ScanSettings fast = new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build();
-        scanner.startScan(List.of(new ScanFilter.Builder().setServiceUuid(new ParcelUuid(BATTERY)).build()),
-                fast, battery);
+        List<ScanFilter> batteryFilter =
+                List.of(new ScanFilter.Builder().setServiceUuid(new ParcelUuid(BATTERY)).build());
+        check(!adapter.isOffloadedFilteringSupported(), "this backend does not expose controller-offloaded filtering");
+        List<ScanSettings> unsupported = List.of(
+                new ScanSettings.Builder().setCallbackType(ScanSettings.CALLBACK_TYPE_FIRST_MATCH).build(),
+                new ScanSettings.Builder().setCallbackType(ScanSettings.CALLBACK_TYPE_MATCH_LOST).build(),
+                new ScanSettings.Builder().setCallbackType(ScanSettings.CALLBACK_TYPE_FIRST_MATCH
+                        | ScanSettings.CALLBACK_TYPE_MATCH_LOST).build(),
+                new ScanSettings.Builder().setReportDelay(1).build(),
+                new ScanSettings.Builder().setReportDelay(Long.MAX_VALUE).build(),
+                new ScanSettings.Builder().setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES_AUTO_BATCH)
+                        .setReportDelay(ScanSettings.AUTO_BATCH_MIN_REPORT_DELAY_MILLIS).build());
+        PendingIntent rejectedIntent = new PendingIntent(new android.content.IIntentSender.Stub() {
+            @Override public void send(int code, Intent intent, String type, android.os.IBinder allowlist,
+                    android.content.IIntentReceiver finished, String permission, android.os.Bundle options) {
+                throw new AssertionError("An unsupported scan must not send its PendingIntent");
+            }
+        });
+        for (ScanSettings settings : unsupported) {
+            scanner.startScan(batteryFilter, settings, battery);
+            check(take(failures, "unsupported scan settings") == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED,
+                    "unsupported settings fail before registration");
+            check(take(failureThreads, "scan failure dispatch") != Thread.currentThread(),
+                    "scan failure is posted to the callback handler");
+            check(failures.poll(100, TimeUnit.MILLISECONDS) == null && matched.isEmpty()
+                    && unexpectedReports.isEmpty(), "one error and no scan reports for rejected settings");
+            check(scanner.startScan(batteryFilter, settings, rejectedIntent)
+                    == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED,
+                    "PendingIntent reports unsupported settings synchronously");
+        }
+        // The same callback remains available after each rejection.
+        scanner.startScan(batteryFilter, fast, battery);
         scanner.startScan(List.of(new ScanFilter.Builder().setServiceUuid(
                 ParcelUuid.fromString("0000180d-0000-1000-8000-00805f9b34fb")).build()), fast, heartRate);
         ScanResult merged = null;
@@ -399,9 +439,13 @@ public final class BluetoothHostTest {
         check(maker != null && Arrays.equals(maker, new byte[] {1, 2}), "manufacturer data 0x1234");
         check(merged.getDevice().getType() == BluetoothDevice.DEVICE_TYPE_LE
                 && "Gesher BLE".equals(merged.getDevice().getName()), "the advertiser is known as an LE device");
-        scanner.startScan(List.of(), fast, battery);
+        matched.clear();
+        scanner.startScan(batteryFilter, unsupported.get(0), battery);
         check(failures.poll(5, TimeUnit.SECONDS) == ScanCallback.SCAN_FAILED_ALREADY_STARTED,
-                "starting the same callback twice fails");
+                "duplicate callback takes precedence over unsupported replacement settings");
+        take(matched, "the original scan after a duplicate rejection");
+        check(failures.poll(100, TimeUnit.MILLISECONDS) == null && unexpectedReports.isEmpty(),
+                "duplicate rejection leaves the original immediate scan active");
         scanner.stopScan(battery);
         scanner.stopScan(heartRate);
         check(other.isEmpty(), "a filter for another service matched nothing");
@@ -410,7 +454,7 @@ public final class BluetoothHostTest {
         check(adapter.startLeScan(new UUID[] {BATTERY}, le), "legacy startLeScan");
         check(take(legacy, "a legacy scan record").length > 0, "legacy scan record bytes");
         adapter.stopLeScan(le);
-        step("LE scan: filtered results with merged scan response (name, TX power, manufacturer data), legacy startLeScan");
+        step("LE scan: no-offload settings errors and retry, filtered merged results, legacy startLeScan");
     }
 
     private static void gatt(BluetoothAdapter adapter, Context app) throws Exception {

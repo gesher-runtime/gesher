@@ -29,9 +29,9 @@ import java.util.Set;
  * BluetoothLEAdvertisementWatcher ({@link WindowsBluetooth}; docs/bluetooth.md). One active
  * watcher serves every scan of the process; each scan gets the reports its filters match,
  * with the advertisement and the last scan response of the device merged into one
- * ScanRecord (as Android reports legacy advertisements). Callback types ALL_MATCHES,
- * FIRST_MATCH and MATCH_LOST (no report for {@link #LOST_AFTER_MS}) and report delays
- * (batches) are done here; callbacks come on the main thread, as in the module.
+ * ScanRecord (as Android reports legacy advertisements). Without controller-offloaded
+ * filtering, Android permits only ALL_MATCHES with a zero report delay. Other settings
+ * fail with SCAN_FAILED_FEATURE_UNSUPPORTED; callbacks come on the main thread.
  *
  * <p>Results reach the app only with the location permission the module asks for
  * ({@code neverForLocation} on API 31+ exempts it); without it the scan runs and stays silent.
@@ -400,6 +400,13 @@ public final class BluetoothLeScanner {
             if (callback != null && sClients.containsKey(key)) {
                 return error(callback, ScanCallback.SCAN_FAILED_ALREADY_STARTED);
             }
+            // Android 16 BluetoothLeScanner.isSettingsConfigAllowedForScan:
+            // no offloaded filtering means only immediate ALL_MATCHES scans.
+            // Software batching/tracking is not a substitute for that capability.
+            if (settings.getCallbackType() != ScanSettings.CALLBACK_TYPE_ALL_MATCHES
+                    || settings.getReportDelayMillis() != 0) {
+                return error(callback, ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED);
+            }
             Client c = new Client(key, callback, intent, context, filters, settings);
             if (!c.mayReceive) {
                 Log.w(TAG, "scan results withheld: no location permission (and no neverForLocation)");
@@ -413,7 +420,7 @@ public final class BluetoothLeScanner {
     private static int error(ScanCallback callback, int code) {
         if (callback == null) return code;
         handler().post(() -> callback.onScanFailed(code));
-        return code;
+        return ScanCallback.NO_ERROR;
     }
 
     public void stopScan(ScanCallback callback) {

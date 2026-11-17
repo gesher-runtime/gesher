@@ -58,8 +58,12 @@ Design: [0085](decisions/0085-bluetooth-host-radio.md). Tests:
 - **LE scan**: one active BluetoothLEAdvertisementWatcher per process for all scans.
   Reports are rebuilt as AD structures from the advertisement's data sections and parsed
   by AOSP's ScanRecord; a scan response is merged with the advertisement it follows.
-  Filters, ALL_MATCHES / FIRST_MATCH / MATCH_LOST (10 s), report delays (batches),
-  PendingIntent scans and the legacy `startLeScan` work. Callbacks on the main thread.
+  Software filters, immediate ALL_MATCHES, PendingIntent scans and legacy `startLeScan`
+  use this watcher. Controller-offloaded filtering is unavailable, so delayed scans,
+  FIRST_MATCH, MATCH_LOST and auto-batch settings return
+  `SCAN_FAILED_FEATURE_UNSUPPORTED`, as required by Android 16's scanner policy.
+  Callback requests receive the error on the main thread; PendingIntent requests
+  return the error code without registering a scan or sending the intent.
 - **GATT client**: `connectGatt` opens the device (`FromBluetoothAddressAsync`, with the
   address type) and a GattSession with MaintainConnection; Windows connects. Discovery
   reads services, characteristics and descriptors uncached, and included services
@@ -95,6 +99,28 @@ Design: [0085](decisions/0085-bluetooth-host-radio.md). Tests:
   ACTION_STATE_CHANGED (TURNING_ON/ON, TURNING_OFF/OFF), ACL_CONNECTED/DISCONNECTED,
   BOND_STATE_CHANGED (pairings made or removed while the radio is on), the A2DP and
   headset profiles' CONNECTION_STATE_CHANGED and the adapter's.
+
+## Scan settings without controller offload
+
+The contract follows `isSettingsConfigAllowedForScan` and
+`postCallbackErrorOrReturn` in the pinned
+[Android 16 r4 BluetoothLeScanner](https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/le/BluetoothLeScanner.java).
+When offloaded filtering is unavailable, only `CALLBACK_TYPE_ALL_MATCHES` with
+zero report delay is accepted. A callback receives one posted
+`SCAN_FAILED_FEATURE_UNSUPPORTED`; the PendingIntent overload returns that code
+synchronously without sending the intent. Neither request creates a registration.
+An already registered callback still receives `SCAN_FAILED_ALREADY_STARTED`
+before its new settings are considered, and a rejected new callback can be
+retried with supported settings.
+
+`tools/test_bluetooth_scan_contracts.py` compiles the complete production scanner
+with explicit scheduling/value-type/native boundaries. It checks these failure
+paths, retry, immediate results, PendingIntent payload and cancellation, and
+stop/cleanup suppressing queued delivery. `--source-ref` is a regression negative
+control: the original scanner compiles, then fails the rejection assertions.
+The public API assertions in `BluetoothHostTest.scan` also run in the existing
+Windows ART track with its isolated test radio. These tests do not demonstrate
+physical controller offload, GATT on real devices, or completion of issue #56 B03.
 
 ## Not there
 
