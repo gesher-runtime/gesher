@@ -179,8 +179,9 @@ void ShowLaunchFailure(const std::wstring& reason) {
 // A failing app starts this short-lived host process rather than waiting inside
 // Android's dying main thread. No PowerShell, APK launch, splash or retry here.
 int ShowAppCrash(int argc, LPWSTR* argv) {
-  if (argc != 5 || wcslen(argv[2]) == 0 || wcslen(argv[2]) > 255 ||
-      wcslen(argv[4]) == 0 || wcslen(argv[4]) > 8192) return 1;
+  if (argc != 6 || wcslen(argv[2]) == 0 || wcslen(argv[2]) > 255 ||
+      wcslen(argv[4]) == 0 || wcslen(argv[4]) > 8192 ||
+      wcslen(argv[5]) == 0 || wcslen(argv[5]) > 64) return 1;
   const char* key = nullptr;
   if (wcscmp(argv[3], L"generic") == 0) key = "app_crash_generic";
   else if (wcscmp(argv[3], L"bluetooth") == 0) key = "app_crash_bluetooth";
@@ -194,6 +195,7 @@ int ShowAppCrash(int argc, LPWSTR* argv) {
   for (size_t i = 0; i < pattern.size();) {
     if (pattern.compare(i, 3, L"{0}") == 0) { message += argv[2]; i += 3; }
     else if (pattern.compare(i, 3, L"{1}") == 0) { message += argv[4]; i += 3; }
+    else if (pattern.compare(i, 3, L"{2}") == 0) { message += argv[5]; i += 3; }
     else message += pattern[i++];
   }
   UINT flags = MB_OK | MB_ICONERROR | MB_SETFOREGROUND;

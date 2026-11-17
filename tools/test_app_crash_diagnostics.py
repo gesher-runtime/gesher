@@ -19,6 +19,7 @@ def host_test():
     stubs = {
         'android/app/ActivityThread.java': 'package android.app; public class ActivityThread { public static Application currentApplication() { return new Application(); } }',
         'android/app/Application.java': 'package android.app; public class Application { public String getPackageName() { return "test.pkg"; } }',
+        'android/os/Process.java': 'package android.os; public class Process { public static int myPid() { return 123; } }',
         'com/gesher/app/shell/Shell.java': 'package com.gesher.app.shell; public class Shell { public static boolean exists(String p) { return true; } }',
         'com/gesher/app/window/WindowSession.java': 'package com.gesher.app.window; public class WindowSession { public static boolean shown; public static WindowSession get() { return new WindowSession(); } public boolean hasShownApplicationWindow() { return shown; } }',
         'com/gesher/server/Device.java': 'package com.gesher.server; public class Device { public static java.io.File packageLog(String p) { return new java.io.File(p+".log"); } public static java.io.File logsDir() { return new java.io.File("logs"); } }',
@@ -40,7 +41,7 @@ def host_test():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding='utf-8')
             sources.append(str(target))
-        sources += [str(ROOT / 'app/java/com/gesher/app' / p) for p in ('AppCrash.java', 'CrashDiagnosis.java')]
+        sources += [str(ROOT / 'app/java/com/gesher/app' / p) for p in ('AppCrash.java', 'CrashDiagnosis.java', 'CrashReport.java')]
         sources += [str(ROOT / 'tests/app-crash/CrashDiagnosisTest.java')]
         subprocess.run(['javac', '--release', '11', '-encoding', 'UTF-8', '-d', str(work), *sources], check=True, timeout=60)
         subprocess.run(['java', '-cp', str(work), 'CrashDiagnosisTest'], cwd=work,
@@ -71,9 +72,9 @@ def native_test(launcher):
                 'compatibility': ('could not be linked', 'לא ניתן היה לקשר')}
     for lang in ('en', 'he'):
         for kind, texts in expected.items():
-            package, log = 'fixture.pkg{1}', 'C:\\תיקייה עם רווחים\\app{0}.log'
+            package, log, event = 'fixture.pkg{1}', 'C:\\תיקייה עם רווחים\\app{0}.log', 'event{0}'
             env = dict(os.environ, GESHER_LOCALES=lang)
-            p = subprocess.Popen([str(launcher), '--app-crash', package, kind, log], env=env)
+            p = subprocess.Popen([str(launcher), '--app-crash', package, kind, log, event], env=env)
             found = []
             @callback
             def visit(hwnd, unused):
@@ -100,7 +101,7 @@ def native_test(launcher):
                     return True
                 u.EnumChildWindows(hwnd, child, 0)
                 text = '\n'.join(labels)
-                assert package in text and log in text and texts[lang == 'he'] in text, (lang, kind, text)
+                assert package in text and log in text and event in text and texts[lang == 'he'] in text, (lang, kind, text)
                 # MessageBox implements MB_RTLREADING internally; Windows builds
                 # differ in whether that flag appears on the child HWND styles.
                 # Verify the real Hebrew text here; generated catalog tests also
@@ -111,7 +112,7 @@ def native_test(launcher):
                 if p.poll() is None:
                     p.kill()
                     p.wait()
-    for args in ([], ['pkg'], ['pkg', 'unknown', 'log'], ['', 'generic', 'log']):
+    for args in ([], ['pkg'], ['pkg', 'unknown', 'log', 'event'], ['', 'generic', 'log', 'event'], ['pkg', 'generic', 'log']):
         assert subprocess.run([str(launcher), '--app-crash', *args], timeout=5).returncode == 1
     print('PASS: 8 actual Windows crash dialogs, literal Unicode arguments, Hebrew and malformed arguments')
 

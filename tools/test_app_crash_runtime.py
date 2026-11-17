@@ -93,7 +93,11 @@ def run(runtime, fixture, output, enabled):
         time.sleep(.05)
     if enabled:
         assert len(found) == 1 and 'Bluetooth' in found[0] and 'Windows' in found[0], found
-        assert 'getBluetoothLeScanner' in report.read_text(encoding='utf-8')
+        evidence = report.read_text(encoding='utf-8')
+        assert 'getBluetoothLeScanner' in evidence
+        import re
+        events = re.findall(r'>>> Gesher crash event ([0-9a-f-]+)', evidence)
+        assert events and events[-1] in found[0], 'notice does not identify its report entry'
     else:
         assert not found, 'dialog suppression failed'
     print('PASS: actual Windows/ART missing-radio crash, exit 1, notice ' + ('survived process exit' if enabled else 'suppressed'))

@@ -23,7 +23,10 @@ public final class CrashDiagnosis {
                 }
             }
             if (failure instanceof SecurityException) fallback = "security";
-            else if (failure instanceof LinkageError && fallback.equals("generic")) {
+            else if (failure instanceof LinkageError
+                    && !(failure instanceof ExceptionInInitializerError)
+                    && !(failure instanceof BootstrapMethodError)
+                    && fallback.equals("generic")) {
                 fallback = "compatibility";
             }
         }

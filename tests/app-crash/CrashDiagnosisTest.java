@@ -11,7 +11,7 @@ public final class CrashDiagnosisTest {
         checks++;
         if (!value) throw new AssertionError("check " + checks);
     }
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         if (args.length != 0) {
             WindowSession.shown = true;
             AppCrash.report(new IllegalStateException());
@@ -35,6 +35,8 @@ public final class CrashDiagnosisTest {
         check(CrashDiagnosis.kind(new SecurityException("denied"), () -> true).equals("security"));
         check(CrashDiagnosis.kind(new RuntimeException(new NoSuchMethodError()), () -> true).equals("compatibility"));
         check(CrashDiagnosis.kind(new UnsatisfiedLinkError(), () -> true).equals("compatibility"));
+        check(CrashDiagnosis.kind(new ExceptionInInitializerError(new NullPointerException()), () -> true).equals("generic"));
+        check(CrashDiagnosis.kind(new BootstrapMethodError(new IllegalStateException()), () -> true).equals("generic"));
         check(CrashDiagnosis.kind(new IllegalStateException(), () -> true).equals("generic"));
         Throwable cycle = new Throwable() { @Override public Throwable getCause() { return this; } };
         check(CrashDiagnosis.kind(cycle, () -> true).equals("generic"));
@@ -61,6 +63,20 @@ public final class CrashDiagnosisTest {
         Zygote.fail = true;
         AppCrash.report(npe); // a failed notice must not replace the app's failure
         check(npe.getMessage().endsWith("on a null object reference"));
+
+        java.io.File report = new java.io.File("logs/events.crash.log");
+        String first = com.gesher.app.CrashReport.append(report, "test.pkg", 1,
+                new IllegalStateException("FIRST-EVENT"));
+        String second = com.gesher.app.CrashReport.append(report, "test.pkg", 2,
+                new IllegalStateException("SECOND-EVENT"));
+        String evidence = java.nio.file.Files.readString(report.toPath());
+        check(!first.equals(second));
+        check(evidence.contains(first) && evidence.contains("FIRST-EVENT"));
+        check(evidence.contains(second) && evidence.contains("SECOND-EVENT"));
+        String longMessage = "x".repeat(200_000);
+        com.gesher.app.CrashReport.append(report, "test.pkg", 3, new Exception(longMessage));
+        evidence = java.nio.file.Files.readString(report.toPath());
+        check(evidence.length() < 140_000 && evidence.contains("[stack trace truncated]"));
         System.out.println("PASS: " + checks + " crash diagnosis/reporting host checks");
     }
 }

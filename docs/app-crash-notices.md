@@ -3,7 +3,7 @@
 An uncaught Java failure reaching `GesherAppProcess.main` or the standalone
 `Main.main` is still logged and exits with status 1. If the process has a shown
 application window, `AppCrash` writes a UTF-8 text crash report and starts
-`gesher-launch --app-crash PACKAGE KIND REPORT` as an independent host dialog.
+`gesher-launch --app-crash PACKAGE KIND REPORT EVENT` as an independent host dialog.
 The dying Android process does not wait for dismissal. This also works after
 Explorer's original detached launcher has exited. Hidden/headless runs and
 background-only processes do not open dialogs; `GESHER_CRASH_DIALOGS=0` explicitly
@@ -11,7 +11,12 @@ suppresses them. Failure to write or start a notice leaves the original failure
 and exit path intact.
 
 The helper uses Gesher's host language (English/Hebrew, including RTL flags),
-identifies the package, and displays the path of its text report. It accepts
+identifies the package, and displays the path of its text report and event ID.
+The package report appends complete event records under a nonblocking file lock;
+retries and sibling processes cannot truncate an older notice's evidence. Each
+stack trace is capped at 128 KiB of characters with a truncation marker. There
+is one append-only report file per package, following the existing package-log
+lifetime; old records are retained until the user clears the logs. It accepts
 only known diagnosis kinds and never starts PowerShell or relaunches the app.
 Application/path arguments are quoted as Windows arguments and substituted once
 into localized templates, so braces and Unicode paths stay literal.
@@ -22,7 +27,7 @@ into localized templates, so braces and Unicode paths stay literal.
 |---|---|---|
 | Bluetooth | No adapter; connect/enable one in Windows and retry | ART's null-receiver exception explicitly names `BluetoothAdapter`, plus a real Windows observation no older than 10 seconds with `ERROR_DEVICE_NOT_CONNECTED` (`0x8007048f`). A missing JNI backend, failed activation, stale cache or an available/off adapter cannot produce this diagnosis. The crash path reads the cache only; it never starts an activation or hardware probe. |
 | Security/permissions (including Bluetooth, camera and location operations) | An operation failed a security/permission check; check permissions and the log | An uncaught `SecurityException` in the cause chain. The notice does not claim a particular permission is missing or grant it. |
-| Class/method/native-library compatibility | A linkage error; include the log in a report | An uncaught `LinkageError` in the cause chain. This is a diagnostic hint, not a claim that Gesher is necessarily responsible. |
+| Class/method/native-library compatibility | A linkage error; include the log in a report | An uncaught `LinkageError` in the cause chain, excluding initialization/bootstrap errors themselves. Those remain generic unless an underlying cause independently establishes a diagnosis. This is a diagnostic hint, not a claim that Gesher is necessarily responsible. |
 | Camera, microphone, USB, sensors, location and other failures | Generic failure with text report | A null or exception alone cannot prove that a host device is missing. Camera access may instead fail because a device is busy or permission was denied; a missing USB service differs from a missing USB device; an absent sensor can be normal Android behavior. Do not invent device diagnoses from such failures. |
 
 No Android capability, adapter result, callback, permission, application exception

@@ -38,16 +38,10 @@ public final class AppCrash {
             // Give every notice its own text report rather than pointing at a log
             // which may not exist (or at the binary .logcat stream).
             java.io.File report = new java.io.File(Device.logsDir(), pkg + ".crash.log");
-            report.getParentFile().mkdirs();
-            try (java.io.PrintWriter out = new java.io.PrintWriter(new java.io.OutputStreamWriter(
-                    new java.io.FileOutputStream(report, false), java.nio.charset.StandardCharsets.UTF_8))) {
-                out.println("Gesher app crash: " + pkg + " at " + System.currentTimeMillis());
-                failure.printStackTrace(out);
-                if (out.checkError()) throw new java.io.IOException("writing crash report");
-            }
+            String event = CrashReport.append(report, pkg, android.os.Process.myPid(), failure);
             String log = Zygote.windowsPath(report.getAbsolutePath());
             String command = Zygote.quote(reporter) + " --app-crash " + Zygote.quote(pkg)
-                    + " " + Zygote.quote(kind) + " " + Zygote.quote(log);
+                    + " " + Zygote.quote(kind) + " " + Zygote.quote(log) + " " + Zygote.quote(event);
             // A separate host process owns the dialog. Never wait for its dismissal or
             // replace the original exception, exit code, or process cleanup.
             Zygote.spawn(command, Collections.emptyList(),
