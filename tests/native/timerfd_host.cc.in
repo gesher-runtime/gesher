@@ -23,6 +23,7 @@
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <gesher/timerfd.h>
+#include <gesher/resume.h>
 
 using DWORD = uint32_t;
 using VOID = void;
@@ -37,11 +38,14 @@ struct FILETIME { DWORD dwLowDateTime, dwHighDateTime; };
 struct Event { std::atomic<bool> signaled{false}; };
 using HANDLE = Event*;
 #define INVALID_HANDLE_VALUE reinterpret_cast<HANDLE>(static_cast<intptr_t>(-1))
+#include "resume_windows_host.h"
+
+@RESUME_CORE@
 
 static std::atomic<int64_t> monotonic_ns{10000000000LL};
 static std::atomic<int64_t> realtime_ns{1700000000000000000LL};
-static int QueryPerformanceFrequency(LARGE_INTEGER* out) { out->QuadPart = 1000000000; return 1; }
-static int QueryPerformanceCounter(LARGE_INTEGER* out) { out->QuadPart = monotonic_ns; return 1; }
+[[maybe_unused]] static int QueryPerformanceFrequency(LARGE_INTEGER* out) { out->QuadPart = 1000000000; return 1; }
+[[maybe_unused]] static int QueryPerformanceCounter(LARGE_INTEGER* out) { out->QuadPart = monotonic_ns; return 1; }
 [[maybe_unused]] static void GetSystemTimePreciseAsFileTime(FILETIME* out) {
   const uint64_t ticks = static_cast<uint64_t>(realtime_ns.load() / 100 + 116444736000000000LL);
   *out = {static_cast<DWORD>(ticks), static_cast<DWORD>(ticks >> 32)};
@@ -49,7 +53,13 @@ static int QueryPerformanceCounter(LARGE_INTEGER* out) { out->QuadPart = monoton
 static HANDLE CreateEventW(void*, int, int initial, void*) {
   auto* result = new Event; result->signaled = initial != 0; return result;
 }
-static void SetEvent(HANDLE event) { event->signaled = true; }
+static std::mutex event_mutex;
+static std::condition_variable event_changed;
+static void SetEvent(HANDLE event) {
+  std::lock_guard<std::mutex> lock(event_mutex);
+  event->signaled = true;
+  event_changed.notify_all();
+}
 static void ResetEvent(HANDLE event) { event->signaled = false; }
 static void CloseHandle(HANDLE event) { delete event; }
 
@@ -57,6 +67,7 @@ struct ThreadpoolTimer;
 using PTP_TIMER = ThreadpoolTimer*;
 using TimerCallback = void(*)(PTP_CALLBACK_INSTANCE, PVOID, PTP_TIMER);
 struct ThreadpoolTimer {
+  ThreadpoolTimer(TimerCallback cb, void* data) : callback(cb), context(data) {}
   TimerCallback callback;
   void* context;
   std::mutex mutex;
@@ -67,6 +78,7 @@ struct ThreadpoolTimer {
   bool callback_admitted = false;
   bool waiter_entered = false;
   int64_t due = 0;
+  int64_t awake_due = 0;
   DWORD period = 0;
 };
 static std::mutex timers_mutex;
@@ -74,7 +86,7 @@ static std::set<PTP_TIMER> timers;
 static PTP_TIMER latest_timer;
 static std::atomic<int> created{0}, destroyed{0};
 static PTP_TIMER CreateThreadpoolTimer(TimerCallback callback, void* context, void*) {
-  auto* timer = new ThreadpoolTimer{callback, context, {}, {}, 0, false, false, false, false, 0, 0};
+  auto* timer = new ThreadpoolTimer{callback, context};
   std::lock_guard<std::mutex> lock(timers_mutex);
   timers.insert(timer); latest_timer = timer; ++created; return timer;
 }
@@ -84,6 +96,11 @@ static void SetThreadpoolTimer(PTP_TIMER timer, const FILETIME* due, DWORD perio
   if (due) {
     uint64_t bits = static_cast<uint64_t>(due->dwHighDateTime) << 32 | due->dwLowDateTime;
     std::memcpy(&timer->due, &bits, sizeof(bits));
+    if (timer->due < 0) {
+      const __int128 target = static_cast<__int128>(monotonic_ns.load()) -
+                              static_cast<__int128>(timer->due) * 100;
+      timer->awake_due = static_cast<int64_t>(std::min<__int128>(target, INT64_MAX));
+    }
   }
   timer->period = period;
   // Deliberately leave an admitted callback active on disable.
@@ -106,6 +123,19 @@ static void Fire(PTP_TIMER timer) {
   timer->callback(nullptr, timer->context, timer);
   { std::lock_guard<std::mutex> lock(timer->mutex); --timer->active; timer->changed.notify_all(); }
 }
+// Actual relative timer eligibility: suspended time never consumes its budget.
+// Suspend cases may call this dispatcher, never Fire on an ineligible timer.
+static bool FireIfEligible(PTP_TIMER timer) {
+  {
+    std::lock_guard<std::mutex> lock(timer->mutex);
+    if (!timer->armed) return false;
+    if (timer->due < 0 && monotonic_ns < timer->awake_due) return false;
+    if (timer->due >= 0 && realtime_ns / 100 + 116444736000000000LL < timer->due) return false;
+    timer->armed = false;
+  }
+  Fire(timer);
+  return true;
+}
 static bool WaitCallback(PTP_TIMER timer) {
   std::unique_lock<std::mutex> lock(timer->mutex);
   return timer->changed.wait_for(lock, std::chrono::seconds(2), [&] { return timer->callback_admitted; });
@@ -120,6 +150,11 @@ static void ReleaseCallback(PTP_TIMER timer) {
 }
 
 namespace gesher {
+static std::atomic<int64_t> suspended_ns{0};
+#if @HAS_ANDROID_CLOCKS@
+int64_t MonotonicNanos() { return monotonic_ns; }
+int64_t BoottimeNanos() { return monotonic_ns + suspended_ns; }
+#endif
 namespace record_locks {
 static std::recursive_mutex descriptors;
 struct DescriptorGuard {
@@ -138,11 +173,13 @@ HANDLE HandleFromFd(int fd) {
   return allocated.count(fd) ? reinterpret_cast<HANDLE>(static_cast<intptr_t>(fd)) : INVALID_HANDLE_VALUE;
 }
 int FailWithLastError() { return errno = ENOMEM, -1; }
-void WakePollers() {}
+static std::atomic<unsigned> poll_wakes{0};
+void WakePollers() { ++poll_wakes; event_changed.notify_all(); }
 struct Inotify {};
 int ReadInotify(Inotify&, void*, unsigned int) { return errno = EINVAL, -1; }
 struct TimerFd;
 struct EventFd;
+void RefreshTimerFd(TimerFd&);
 int ReadTimerFd(TimerFd&, void*, unsigned int);
 std::shared_ptr<TimerFd> LookupTimerFd(int);
 int RegisterTimerFd(std::shared_ptr<TimerFd>, std::shared_ptr<EventFd>);
@@ -187,6 +224,23 @@ static short Poll(int fd, short events) {
   auto ready = gesher::LookupEventFd(fd);
   return ready ? gesher::PollEventFd(*ready, events, nullptr) : POLLNVAL;
 }
+
+class ObservedTimerCondition {
+ public:
+  void notify_all() { condition_.notify_all(); }
+  void wait(std::unique_lock<std::mutex>& lock) {
+    { std::lock_guard<std::mutex> observed(mutex_); waiting_ = true; observed_.notify_all(); }
+    condition_.wait(lock);
+  }
+  bool Waiting() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return observed_.wait_for(lock, std::chrono::seconds(1), [&] { return waiting_; });
+  }
+ private:
+  std::condition_variable condition_, observed_;
+  std::mutex mutex_;
+  bool waiting_ = false;
+};
 
 @TIMER_CORE@
 
@@ -362,6 +416,219 @@ static void Deadlines() {
   Close(real);
 }
 
+static void SuspendDomains() {
+  const int mono = Create(1), boot = Create(7), relative_real = Create(0);
+  auto boot_native = gesher::LookupTimerFd(boot)->timer;
+  Spec arm{{2, 0}, {3, 0}}, current{};
+  Set(mono, 0, &arm);
+  Set(boot, 0, &arm); Set(relative_real, 0, &arm);
+  power_transport::Notify(PBT_APMSUSPEND);
+  gesher::suspended_ns += 11000000000LL;
+  realtime_ns -= 110000000000LL;
+  Check("suspend does not make relative host callback eligible", !FireIfEligible(boot_native));
+  const auto before_wakes = gesher::poll_wakes.load();
+  power_transport::Notify();
+  Check("resume alone publishes expired BOOTTIME readiness", Poll(boot, POLLIN) == POLLIN);
+  Check("resume wakes mixed poll and epoll wait transport", gesher::poll_wakes > before_wakes);
+  Check("suspend does not advance MONOTONIC timer", Get(mono, &current) == 0 && current.it_value.tv_sec == 3);
+  Check("relative REALTIME timer excludes suspend", Get(relative_real, &current) == 0 && current.it_value.tv_sec == 3);
+  uint64_t ticks = 0;
+  Check("BOOTTIME accounts periods spent suspended", Read(boot, &ticks, 8) == 8 && ticks == 5);
+  Check("BOOTTIME periodic deadline remains anchored", Get(boot, &current) == 0 && current.it_value.tv_sec == 2);
+  Check("resume rearms exact remaining periodic time", boot_native->due == -20000000);
+  power_transport::Notify(PBT_APMRESUMESUSPEND); power_transport::Notify();
+  Check("duplicate resume notifications do not duplicate ticks", Poll(boot, POLLIN) == 0 &&
+        Read(boot, &ticks, 8) == -1 && errno == EAGAIN);
+  Check("MONOTONIC has no spurious readiness after suspend", Poll(mono, POLLIN) == 0);
+  const int prompt = Create(7); auto prompt_native = latest_timer;
+  Spec far{{0, 0}, {3600, 0}};
+  Set(prompt, 0, &far);
+  Check("BOOTTIME uses full relative budget while awake", prompt_native->due == -36000000000LL);
+  gesher::suspended_ns += 7200000000000LL;
+  Check("expired BOOTTIME still has ineligible native relative callback", !FireIfEligible(prompt_native));
+  power_transport::Notify();
+  Check("resume makes BOOTTIME fd readable without added awake time", Poll(prompt, POLLIN) == POLLIN);
+  Check("resume callback publishes exactly one expiration", Read(prompt, &ticks, 8) == 8 && ticks == 1);
+  Check("resume callback disarms completed one shot", Get(prompt, &current) == 0 &&
+        current.it_value.tv_sec == 0 && current.it_value.tv_nsec == 0);
+  Check("resume cancels the obsolete native one shot", !prompt_native->armed);
+  Spec partial{{0, 0}, {10, 0}}; Set(prompt, 0, &partial);
+  gesher::suspended_ns += 4000000000LL;
+  realtime_ns += 9000000000000LL;
+  power_transport::Notify();
+  Check("partial suspend does not invent an expiration", Poll(prompt, POLLIN) == 0);
+  Check("partial suspend rearms only BOOTTIME remainder", prompt_native->due == -60000000);
+  monotonic_ns += 5999999900LL;
+  Check("partial resume timer cannot fire early", !FireIfEligible(prompt_native));
+  monotonic_ns += 100;
+  Check("remaining awake budget makes timer eligible", FireIfEligible(prompt_native));
+  Check("partial resume expiration is counted once", Read(prompt, &ticks, 8) == 8 && ticks == 1);
+  Set(prompt, 0, &far);
+  gesher::suspended_ns += 7200000000000LL;
+  // User code may run before the queued power notification. A new poll must
+  // observe the same expired timer that read/gettime already account for.
+  Check("fresh poll sees elapsed BOOTTIME before resume callback dispatch", Poll(prompt, POLLIN) == POLLIN);
+  Check("poll-refreshed expiration is consumed exactly once", Read(prompt, &ticks, 8) == 8 && ticks == 1);
+  power_transport::Notify();
+  Check("later resume cannot duplicate poll-refreshed expiration", Poll(prompt, POLLIN) == 0);
+  Close(prompt); Close(mono); Close(boot); Close(relative_real);
+
+  const int reading = Create(7, 0), polling = Create(7);
+  auto reader_timer = gesher::LookupTimerFd(reading);
+  auto reader_native = reader_timer->timer;
+  auto poll_native = gesher::LookupTimerFd(polling)->timer;
+  Set(reading, 0, &far); Set(polling, 0, &far);
+  auto reader = std::async(std::launch::async, [&] { uint64_t count = 0; return Read(reading, &count, 8) == 8 && count == 1; });
+  Check("reader has entered the production blocking wait", reader_timer->changed.Waiting());
+  reader_timer.reset();
+  std::promise<void> poll_entered;
+  auto poller = std::async(std::launch::async, [&] {
+    auto readiness = gesher::LookupEventFd(polling);
+    HANDLE wake = nullptr;
+    if (gesher::PollEventFd(*readiness, POLLIN, &wake) != 0 || wake == nullptr) return false;
+    std::unique_lock<std::mutex> lock(event_mutex);
+    poll_entered.set_value();
+    const bool signaled = event_changed.wait_for(lock, std::chrono::seconds(2), [&] { return wake->signaled.load(); });
+    lock.unlock();
+    return signaled && gesher::PollEventFd(*readiness, POLLIN, nullptr) == POLLIN;
+  });
+  poll_entered.get_future().wait();
+  // The admitted read owns the timer after final descriptor close. Its resume
+  // subscription must survive until the read's shared owner is released.
+  Close(reading);
+  gesher::suspended_ns += 7200000000000LL;
+  Check("blocked reader native timer remains ineligible across suspend", !FireIfEligible(reader_native));
+  Check("blocked poll native timer remains ineligible across suspend", !FireIfEligible(poll_native));
+  power_transport::Notify();
+  const bool read_ready = reader.wait_for(std::chrono::milliseconds(300)) == std::future_status::ready;
+  const bool poll_ready = poller.wait_for(std::chrono::milliseconds(300)) == std::future_status::ready;
+  Check("resume wakes admitted read after final descriptor close", read_ready);
+  Check("resume wakes blocked readiness wait without direct read", poll_ready);
+  if (!read_ready || !poll_ready) {
+    // Bounded old-source cleanup: only now consume the actual awake budget.
+    monotonic_ns += 7200000000000LL;
+    if (!read_ready) FireIfEligible(reader_native);
+    if (!poll_ready) FireIfEligible(poll_native);
+  }
+  Check("blocked read receives exactly one expiration", reader.get());
+  Check("blocked poll observes the published event", poller.get());
+  Close(polling);
+}
+
+struct ResumeGate {
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool entered = false, released = false;
+  static void Block(void* context) {
+    auto& gate = *static_cast<ResumeGate*>(context);
+    std::unique_lock<std::mutex> lock(gate.mutex);
+    gate.entered = true; gate.changed.notify_all();
+    gate.changed.wait(lock, [&] { return gate.released; });
+  }
+  bool Entered() {
+    std::unique_lock<std::mutex> lock(mutex);
+    return changed.wait_for(lock, std::chrono::seconds(1), [&] { return entered; });
+  }
+  void Release() { std::lock_guard<std::mutex> lock(mutex); released = true; changed.notify_all(); }
+};
+
+static void ResumeLifetime() {
+  ResumeGate gate;
+  gesher::ResumeSubscription first;
+  Check("resume observer registered", first.Start(ResumeGate::Block, &gate) == 0);
+  int fd = Create(7); const int original = fd;
+  Spec arm{{0, 0}, {10, 0}}; Set(fd, 0, &arm);
+  gesher::suspended_ns += 20000000000LL;
+  std::thread notification([] { power_transport::Notify(); });
+  Check("resume snapshot has entered first callback", gate.Entered());
+  const int before = destroyed;
+  auto retiring = std::async(std::launch::async, [&] { return Close(fd); });
+  Check("unsubscribing later snapshot observer does not join unrelated callback",
+        retiring.wait_for(std::chrono::seconds(1)) == std::future_status::ready && retiring.get() == 0);
+  Check("close destroys the unsubscribed timer before stale snapshot runs", destroyed == before + 1);
+  fd = Create(1);
+  Check("replacement reuses retired descriptor", fd == original);
+  auto registering = std::async(std::launch::async, [] {
+    gesher::ResumeSubscription another;
+    return another.Start([](void*) {}, nullptr) == 0;
+  });
+  Check("registry stays unlocked during consumer callback",
+        registering.wait_for(std::chrono::seconds(1)) == std::future_status::ready && registering.get());
+  auto joining = std::async(std::launch::async, [&] { first.Reset(); });
+  Check("unsubscribe joins its own admitted callback", joining.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready);
+  gate.Release(); notification.join(); joining.get();
+  Check("stale snapshot cannot publish into reused descriptor", Poll(fd, POLLIN) == 0);
+  Close(fd);
+
+  fd = Create(7); auto native = latest_timer; Set(fd, 0, &arm);
+  { std::lock_guard<std::mutex> lock(native->mutex); native->hold_callback = true; native->waiter_entered = false; }
+  std::thread callback([&] { Fire(native); });  // an admitted pre-suspend native callback
+  Check("native callback admitted before BOOTTIME rearm", WaitCallback(native));
+  Spec disarm{};
+  auto setter = std::async(std::launch::async, [&] { return Set(fd, 0, &disarm); });
+  Check("settime enters existing quiescence transaction", WaitQuiescence(native));
+  gesher::suspended_ns += 20000000000LL;
+  power_transport::Notify();
+  Check("resume cannot publish while disarm transaction is changing", Poll(fd, POLLIN) == 0);
+  ReleaseCallback(native); callback.join();
+  Check("disarm completes after admitted native callback", setter.get() == 0);
+  power_transport::Notify();
+  Check("resume cannot rearm a disarmed timer", Poll(fd, POLLIN) == 0 && !native->armed);
+  Close(fd);
+
+  fd = Create(7); Set(fd, 0, &arm);
+  auto timer = gesher::LookupTimerFd(fd);
+  std::shared_ptr<gesher::ResumeObserver> observer;
+  {
+    auto& dispatcher = gesher::Dispatcher();
+    std::lock_guard<std::mutex> lock(dispatcher.mutex);
+    for (const auto& entry : dispatcher.observers) {
+      if (entry->context == timer.get()) observer = entry;
+    }
+  }
+  Check("timer owns a separately quiesced resume observer", observer != nullptr);
+  if (observer == nullptr) { Close(fd); return; }
+  std::unique_lock<std::mutex> consumer_lock(timer->mutex);
+  timer.reset();  // the descriptor is now the last ordinary owner
+  std::thread closing_resume([] { power_transport::Notify(); });
+  bool admitted = false;
+  for (unsigned attempt = 0; attempt < 500; ++attempt) {
+    if (!observer->mutex.try_lock()) { admitted = true; break; }
+    observer->mutex.unlock();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  Check("resume callback admitted before final close", admitted);
+  auto closer = std::async(std::launch::async, [&] { return Close(fd); });
+  Check("final close joins admitted resume callback", closer.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready);
+  auto lookup = std::async(std::launch::async, [&] { return gesher::LookupEventFd(fd) == nullptr; });
+  Check("event registry is unlocked while joining resume", lookup.wait_for(std::chrono::seconds(1)) == std::future_status::ready && lookup.get());
+  consumer_lock.unlock();
+  closing_resume.join();
+  const bool closed = closer.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+  Check("final close completes after resume exits its consumer lock", closed);
+  if (!closed) std::abort();
+  Check("final close remains successful", closer.get() == 0);
+}
+
+static void ResumeFailure() {
+  power_transport::pin_failure = true;
+  Check("module pin failure rejects BOOTTIME creation", Create(7) == -1 && errno == EIO);
+  power_transport::pin_failure = false;
+  power_transport::error = ERROR_NOT_ENOUGH_MEMORY;
+  const int before = destroyed;
+  Check("power subscription failure is explicit", Create(7) == -1 && errno == ENOMEM);
+  Check("failed creation cleans native timer", destroyed == before + 1);
+  int mono = Create(1), real = Create(0);
+  Check("power registration failure does not reject other clocks", mono >= 0 && real >= 0);
+  Close(mono); Close(real);
+  power_transport::error = 5;
+  Check("other registration errors do not silently degrade to polling", Create(7) == -1 && errno == EIO);
+  power_transport::error = 0;
+  int boot = Create(7);
+  Check("power registration can retry after transient failure", boot >= 0);
+  Close(boot);
+}
+
 static void Quiescence() {
   int fd = Create(); auto native = latest_timer;
   Spec arm{{0, 100}, {0, 100}}; Set(fd, 0, &arm);
@@ -415,6 +682,9 @@ int main(int argc, char** argv) {
   if (group == "all" || group == "contracts") Contracts();
   if (group == "all" || group == "deadlines") Deadlines();
   if (group == "all" || group == "quiescence") Quiescence();
+  if (group == "all" || group == "suspend") SuspendDomains();
+  if (group == "all" || group == "resume-lifetime") ResumeLifetime();
+  if (group == "resume-failure") ResumeFailure();
   // The baseline's global map intentionally retains timers; clear it only after
   // recording lifetime assertions so the negative control itself cleans up.
 @BASELINE_CLEANUP@

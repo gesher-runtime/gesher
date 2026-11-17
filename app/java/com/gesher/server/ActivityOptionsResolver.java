@@ -130,8 +130,7 @@ final class ActivityOptionsResolver {
 
     private boolean matchesPackage(ApkPackage pkg, long flags) {
         return ((flags & PackageManager.MATCH_SYSTEM_ONLY) == 0 || pkg.isSystemAddon())
-                && ((flags & PackageManager.MATCH_DISABLED_COMPONENTS) != 0
-                        || pkg.parsed.isEnabled());
+                && pkg.matchesEnabledApplication(flags);
     }
 
     private static boolean matchesActivity(ActivityInfo activity, long flags) {
@@ -154,7 +153,6 @@ final class ActivityOptionsResolver {
             ActivityInfo activity = pkg.activityInfo(component.getClassName(),
                     flags & ~PackageManager.MATCH_SYSTEM_ONLY);
             if (activity == null || !matchesActivity(activity, flags)) return null;
-            activity.applicationInfo.enabled = pkg.parsed.isEnabled();
             return activity;
         }
         if (mHostBrowser && BrowserPackageSupport.isBrowserPackage(component.getPackageName())) {
@@ -195,7 +193,6 @@ final class ActivityOptionsResolver {
             }
             PackageInfo metadata = pkg.packageInfo((flags & ~PackageManager.MATCH_SYSTEM_ONLY)
                     | PackageManager.GET_ACTIVITIES);
-            metadata.applicationInfo.enabled = pkg.parsed.isEnabled();
             if (metadata.activities == null) continue;
             for (ParsedActivity parsed : pkg.parsed.getActivities()) {
                 ActivityInfo activity = null;

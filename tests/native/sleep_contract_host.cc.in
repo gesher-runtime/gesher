@@ -46,6 +46,15 @@ static uint32_t signal_wait_ms;
 static bool sleep_at_signal_boundary(uint32_t, uint32_t*, void (*)(void*), void*);
 static void deliver_at_signal_boundary();
 
+namespace gesher {
+// Clock transport seam. The shared Win32 readers are covered by clock_domains.
+int64_t MonotonicNanos() { LARGE_INTEGER value; QueryPerformanceCounter(&value); return value.QuadPart; }
+int64_t BoottimeNanos() { return MonotonicNanos(); }
+// These ordinary-sleep cases never invoke the BOOTTIME entry. Its real resume
+// dispatcher/condition-variable integration is in test_boottime_resume.py.
+struct ResumeSubscription { int Start(void (*)(void*), void*) { return 0; } };
+}
+
 namespace gesher::bionic {
 LinuxTimespec RealtimeNow() { return {123456789, 12345}; }
 int ReadPthreadCpuClock(int clock, int64_t* value) {
@@ -252,6 +261,7 @@ static void extremes() {
 // a signal; the observer sees the same phase the handler later consumes.
 namespace signal_boundary {
 constexpr int kNsig = 65;
+constexpr int kEINTR = EINTR;
 struct BionicSiginfo { int value = 0; };
 struct PendingFlag { void store(bool, std::memory_order) {} };
 struct ThreadState {
@@ -270,6 +280,10 @@ static uint64_t Bit(int sig) { return uint64_t{1} << (sig - 1); }
 static bool DefaultIgnores(int sig) { return sig == 17; }
 static std::atomic<bool> g_process_pending{false};
 struct Condition {
+  void notify_all() {}
+  template<typename T> std::cv_status wait_for(std::unique_lock<std::mutex>& lock, T value) {
+    return wait_until(lock, value);
+  }
   template<typename T> std::cv_status wait_until(std::unique_lock<std::mutex>&, T) {
     ++waits_count;
     if (inject) { thread.pending = 1; inject = false; return std::cv_status::no_timeout; }

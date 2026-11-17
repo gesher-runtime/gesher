@@ -10,6 +10,7 @@
 
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
+#include <gesher/clocks.h>
 
 #include <windows.h>
 // bcrypt.h needs windows.h first.
@@ -54,16 +55,7 @@ int64_t NowRealtimeNs() {
   LinuxTimespec ts = RealtimeNow();
   return ts.tv_sec * 1000000000 + ts.tv_nsec;
 }
-int64_t NowMonotonicNs() {
-  static LARGE_INTEGER freq = [] {
-    LARGE_INTEGER f;
-    QueryPerformanceFrequency(&f);
-    return f;
-  }();
-  LARGE_INTEGER now;
-  QueryPerformanceCounter(&now);
-  return static_cast<int64_t>((static_cast<__int128>(now.QuadPart) * 1000000000) / freq.QuadPart);
-}
+int64_t NowMonotonicNs() { return gesher::MonotonicNanos(); }
 // Milliseconds until an absolute time on `clock` (0 realtime, else monotonic);
 // -1 if it has passed, capped at a finite Windows wait interval otherwise.
 int64_t MsUntil(const LinuxTimespec* abs, int clock) {
@@ -433,14 +425,13 @@ int BIONIC_SYSV ClockNanosleep(int clock, int flags, const LinuxTimespec* req, L
 
   const bool absolute = (flags & 1) != 0;  // TIMER_ABSTIME; other Linux flag bits are ignored.
   const bool realtime_absolute = absolute && clock == 0;
-  auto now = [realtime_absolute]() -> __int128 {
+  auto now = [realtime_absolute, clock]() -> __int128 {
     if (realtime_absolute) {
       LinuxTimespec value = RealtimeNow();
       return static_cast<__int128>(value.tv_sec) * 1000000000 + value.tv_nsec;
     }
-    // Keep the same QPC basis as clock_gettime's MONOTONIC and BOOTTIME.
-    // Relative REALTIME sleeps also use an elapsed-time budget, not wall time.
-    return NowMonotonicNs();
+    // Relative REALTIME uses an awake-time budget; BOOTTIME includes suspend.
+    return clock == 7 ? gesher::BoottimeNanos() : NowMonotonicNs();
   };
   const __int128 requested = static_cast<__int128>(req->tv_sec) * 1000000000 + req->tv_nsec;
   __int128 deadline = absolute ? requested : now() + requested;
@@ -457,22 +448,28 @@ int BIONIC_SYSV ClockNanosleep(int clock, int flags, const LinuxTimespec* req, L
     }
     __int128 milliseconds = (left + 999999) / 1000000;
     if (milliseconds > 0x7ffffffe) milliseconds = 0x7ffffffe;
-    // Recheck wall-clock adjustments and BOOTTIME after system resume instead
-    // of leaving a long relative Windows wait unaware of the new clock value.
-    if ((realtime_absolute || clock == 7) && milliseconds > 1000) milliseconds = 1000;
-    int64_t interrupted_at = 0;
-    auto observe = [](void* value) { *static_cast<int64_t*>(value) = NowMonotonicNs(); };
-    if (InterruptibleSleepObserved(static_cast<uint32_t>(milliseconds), observe,
-                                  &interrupted_at)) {
-      if (!absolute && rem != nullptr) {
+    // Wall-clock adjustment still needs a finite recheck. BOOTTIME has an
+    // independent resume notification and does not add an awake-time slice.
+    if (realtime_absolute && milliseconds > 1000) milliseconds = 1000;
+    struct Observation { int clock; int64_t at; } observed{clock, 0};
+    auto observe = [](void* value) {
+      auto& sample = *static_cast<Observation*>(value);
+      sample.at = sample.clock == 7 ? gesher::BoottimeNanos() : NowMonotonicNs();
+    };
+    const int error = clock == 7
+        ? InterruptibleBoottimeSleepObserved(static_cast<int64_t>(deadline), observe, &observed)
+        : (InterruptibleSleepObserved(static_cast<uint32_t>(milliseconds), observe, &observed)
+               ? kEINTR : 0);
+    if (error != 0) {
+      if (error == kEINTR && !absolute && rem != nullptr) {
         // Relative waits report the interval left when the signal interrupted
         // them, before its handler runs. Absolute waits never write rem.
-        left = deadline - interrupted_at;
+        left = deadline - observed.at;
         if (left < 0) left = 0;
         *rem = {static_cast<int64_t>(left / 1000000000),
                 static_cast<int64_t>(left % 1000000000)};
       }
-      return kEINTR;
+      return error;
     }
     // A wait slice (or an early Windows wake) never completes the full request
     // until the selected clock reaches its deadline.

@@ -23,6 +23,7 @@ import android.os.Parcel;
 import android.os.SystemClock;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -85,16 +86,10 @@ final class BroadcastController {
         final IntentFilter filter;
         final String permission;
         final boolean exported;
-        ReceiverFilter(IntentFilter filter, String permission, int flags, int targetSdk) {
+        ReceiverFilter(IntentFilter filter, String permission, int flags) {
             this.filter = new IntentFilter(filter);
             this.permission = permission;
-            if ((flags & Context.RECEIVER_EXPORTED) != 0 && (flags & Context.RECEIVER_NOT_EXPORTED) != 0) {
-                throw new SecurityException("Cannot specify both RECEIVER_EXPORTED and RECEIVER_NOT_EXPORTED");
-            }
-            if (targetSdk >= 34 && (flags & (Context.RECEIVER_EXPORTED | Context.RECEIVER_NOT_EXPORTED)) == 0) {
-                throw new SecurityException("One of RECEIVER_EXPORTED or RECEIVER_NOT_EXPORTED must be specified for targetSdk 34+");
-            }
-            exported = (flags & Context.RECEIVER_NOT_EXPORTED) == 0;
+            exported = (flags & Context.RECEIVER_EXPORTED) != 0;
         }
     }
 
@@ -269,7 +264,7 @@ final class BroadcastController {
                         || !receiverPermissions(rl.packageName, required, excluded, excludedPackages)) continue;
                 ReceiverFilter best = null;
                 for (ReceiverFilter filter : rl.filters) {
-                    if (componentAllowed(origin, rl.packageName, filter.exported, filter.permission)
+                    if (registeredAllowed(origin, rl, filter)
                             && filter.filter.match(snapshot.getAction(), resolvedType != null
                                     ? resolvedType : snapshot.getType(), snapshot.getScheme(),
                                     snapshot.getData(), snapshot.getCategories(), "gesher") >= 0
@@ -346,7 +341,7 @@ final class BroadcastController {
     }
 
     private void validateBroadcastSender(Sender sender, Intent intent) {
-        if (GmsSignatureSpoofing.isEnabled() && !sender.system && mPm.isProtectedBroadcast(intent.getAction())) {
+        if (!sender.system && mPm.isProtectedBroadcast(intent.getAction())) {
             throw new SecurityException("Only the system can send a protected broadcast");
         }
         enforcePushSender(sender, intent);
@@ -396,8 +391,7 @@ final class BroadcastController {
             return mRegistered.get(rl.receiver.asBinder()) == rl && !rl.app.exiting
                     && mAtm.callerProcess(rl.app.pid) == rl.app
                     && !mTimedOut.contains(rl.app)
-                    && componentAllowed(chain.sender, rl.packageName,
-                            target.filter.exported, target.filter.permission);
+                    && registeredAllowed(chain.sender, rl, target.filter);
         }
         ActivityInfo fresh = mPm.getReceiverInfo(new android.content.ComponentName(
                 target.info.packageName, target.info.name), PackageManager.GET_META_DATA, 0);
@@ -482,7 +476,7 @@ final class BroadcastController {
             ActivityInfo info = delivery.target.info;
             String pkg = delivery.target.packageName();
             String processName = info != null ? info.processName : delivery.target.registered.app.processName;
-            mAtm.withProcess(pkg, processName,
+            mAtm.withProcess(delivery.target.owner, info == null ? null : info.name, ApkPackage.ComponentKind.RECEIVER, processName,
                     "acknowledged broadcast to " + pkg, app -> {
                         synchronized (BroadcastController.this) {
                             if (delivery.finished || delivery.chain.active != delivery) return;
@@ -500,6 +494,11 @@ final class BroadcastController {
                         }
                         pumpOrdered();
                         maybeExitCurrent(app);
+                    }, () -> {
+                        synchronized (BroadcastController.this) {
+                            if (!delivery.dispatched) completeOrdered(delivery);
+                        }
+                        pumpOrdered();
                     });
         } catch (RuntimeException failed) {
             synchronized (this) { completeOrdered(delivery); }
@@ -684,9 +683,6 @@ final class BroadcastController {
             IIntentReceiver receiver, IntentFilter filter, int callingPid,
             String requiredPermission, int flags) {
         if (filter == null) throw new IllegalArgumentException("Missing receiver filter");
-        if ((flags & Context.RECEIVER_EXPORTED) != 0 && (flags & Context.RECEIVER_NOT_EXPORTED) != 0) {
-            throw new IllegalArgumentException("Conflicting receiver export flags");
-        }
         Sender sender = sender(callerPackage, callingPid);
         ActivityTaskManagerService.ProcessRecord app = mAtm.callerProcess(callingPid);
         if (!mCallers.isSystem()) {
@@ -695,6 +691,7 @@ final class BroadcastController {
             }
         }
         // A query for sticky broadcasts (devsvc: the system's, StickyBroadcasts).
+        flags = receiverExportFlags(receiver, filter, flags, sender.uid);
         if (receiver == null) return StickyBroadcasts.match(filter);
         if (app == null) {
             SystemServer.log("registerReceiver from pid " + callingPid
@@ -702,6 +699,10 @@ final class BroadcastController {
             return null;
         }
         synchronized (this) {
+            // Filtering and catalog loading may race process death or package replacement.
+            // Check under the same lock as processDied's removal, before publishing state.
+            if (!sender.acceptance.getAsBoolean() || app.exiting
+                    || mAtm.callerProcess(callingPid) != app) return null;
             ReceiverList rl = mRegistered.get(receiver.asBinder());
             if (rl == null) {
                 rl = new ReceiverList(receiver, app, sender.packageName, mPm.get(sender.packageName));
@@ -730,6 +731,46 @@ final class BroadcastController {
             }
         }
         return sticky;
+    }
+
+    /** Android 16 BroadcastController, change 161145287 (enabled since target SDK 34). */
+    private int receiverExportFlags(IIntentReceiver receiver, IntentFilter filter, int flags, int uid) {
+        if ((flags & Context.RECEIVER_EXPORTED) != 0 && (flags & Context.RECEIVER_NOT_EXPORTED) != 0) {
+            throw new IllegalArgumentException("Conflicting receiver export flags");
+        }
+        // CompatChanges.isChangeEnabled(change, uid) requires the change to be enabled
+        // for every package sharing the UID. Gesher has no runtime compat overrides.
+        // PlatformCompat defaults this non-disabled change to enabled for an empty UID.
+        boolean requireExplicit = true;
+        for (ApkPackage pkg : mPm.packages()) {
+            if (pkg.uid() != uid) continue;
+            if (pkg.parsed.getTargetSdkVersion() < 34) {
+                requireExplicit = false;
+                break;
+            }
+        }
+        if (requireExplicit && (flags & Context.RECEIVER_VISIBLE_TO_INSTANT_APPS) != 0
+                && (flags & Context.RECEIVER_NOT_EXPORTED) != 0) {
+            throw new IllegalArgumentException("A non-exported receiver cannot be visible to instant apps");
+        }
+        boolean onlyProtected = filter.countActions() != 0;
+        for (int i = 0; onlyProtected && i < filter.countActions(); i++) {
+            // A failed catalog denies unknown senders, but cannot prove this exemption.
+            onlyProtected = mPm.permissions().isKnownProtectedBroadcast(filter.getAction(i));
+        }
+        boolean explicit = (flags & (Context.RECEIVER_EXPORTED | Context.RECEIVER_NOT_EXPORTED)) != 0;
+        if (!onlyProtected) {
+            if (receiver == null && !explicit) {
+                flags |= Context.RECEIVER_EXPORTED;
+            } else if (requireExplicit && !explicit) {
+                throw new SecurityException("Specify RECEIVER_EXPORTED or RECEIVER_NOT_EXPORTED for non-system broadcasts");
+            } else if (!requireExplicit && (flags & Context.RECEIVER_NOT_EXPORTED) == 0) {
+                flags |= Context.RECEIVER_EXPORTED;
+            }
+        } else if ((flags & Context.RECEIVER_NOT_EXPORTED) == 0) {
+            flags |= Context.RECEIVER_EXPORTED;
+        }
+        return flags;
     }
 
     void unregisterReceiver(IIntentReceiver receiver) {
@@ -783,8 +824,7 @@ final class BroadcastController {
                     if (!receiverPermissions(rl.packageName, requiredPermissions,
                             excludePermissions, excludePackages)) continue;
                     for (ReceiverFilter registeredFilter : rl.filters) {
-                        if (!componentAllowed(sender, rl.packageName,
-                                registeredFilter.exported, registeredFilter.permission)) continue;
+                        if (!registeredAllowed(sender, rl, registeredFilter)) continue;
                         if (registeredFilter.filter.match(intent.getAction(), resolvedType != null ? resolvedType
                                 : intent.getType(), intent.getScheme(), intent.getData(),
                                 intent.getCategories(), "gesher") >= 0) {
@@ -864,22 +904,27 @@ final class BroadcastController {
             }
             long identity = Binder.clearCallingIdentity();
             try {
-                ActivityInfo target = batch.getValue().get(0).info;
-                mAtm.withProcess(target.packageName, target.processName,
-                        "broadcast to " + target.packageName, app -> {
-                    synchronized (BroadcastController.this) {
-                        for (ManifestDelivery delivery : batch.getValue()) {
-                            if (!mManifest.contains(delivery)) continue;
+                for (ManifestDelivery delivery : batch.getValue()) {
+                    ActivityInfo target = delivery.info;
+                    mAtm.withProcess(delivery.owner, target.name, ApkPackage.ComponentKind.RECEIVER, target.processName,
+                            "broadcast to " + target.packageName, app -> {
+                        synchronized (BroadcastController.this) {
+                            if (!mManifest.contains(delivery)) return;
                             if (app.exiting || mTimedOut.contains(app) || !deliveryCurrent(delivery)) {
                                 removeDelivery(delivery);
                             } else {
                                 delivery.app = app;
                             }
                         }
-                    }
-                    scheduleNext(app);
-                    mAtm.maybeExit(app);
-                });
+                        scheduleNext(app);
+                        mAtm.maybeExit(app);
+                    }, () -> {
+                        synchronized (BroadcastController.this) {
+                            if (!delivery.dispatched) removeDelivery(delivery);
+                        }
+                        pumpOrdered();
+                    });
+                }
             } catch (RuntimeException failedStart) {
                 synchronized (this) {
                     for (ManifestDelivery delivery : batch.getValue()) removeDelivery(delivery);
@@ -942,6 +987,17 @@ final class BroadcastController {
                 || mPm.permissions().checkPermission(sender.packageName, permission) == PackageManager.PERMISSION_GRANTED);
     }
 
+    /** Dynamic export admission and sender permission are separate AOSP checks. */
+    private boolean registeredAllowed(Sender sender, ReceiverList receiver, ReceiverFilter filter) {
+        if (!sender.lifetime.getAsBoolean() || receiver.owner == null
+                || mPm.get(receiver.packageName) != receiver.owner
+                || mPm.isRemovalPending(receiver.packageName)) return false;
+        if (sender.system) return true;
+        if (!filter.exported && sender.uid != receiver.owner.uid()) return false;
+        return filter.permission == null || mPm.checkUidPermission(filter.permission, sender.uid)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
     private void enforcePushSender(Sender sender, Intent intent) {
         String action = intent.getAction();
         if (sender.system || (!"com.google.android.c2dm.intent.RECEIVE".equals(action)
@@ -984,6 +1040,8 @@ final class BroadcastController {
             if (mTimedOut.contains(app)) throw new SecurityException("Receiver process generation timed out");
             OrderedDelivery ordered = mOrderedActive.get(app);
             if (ordered != null) {
+                // Android accepts the active receiver's result even when package
+                // cleanup removed subsequent pending deliveries while it ran.
                 if (ordered.chain.ordered) {
                     if (resultData != null && resultData.length() > 65536) {
                         throw new IllegalArgumentException("Broadcast result data too large");
@@ -1126,7 +1184,42 @@ final class BroadcastController {
     private boolean deliveryCurrent(ManifestDelivery delivery) {
         return delivery.sender.lifetime.getAsBoolean()
                 && delivery.owner == mPm.get(delivery.info.packageName)
-                && !mPm.isRemovalPending(delivery.info.packageName);
+                && !mPm.isRemovalPending(delivery.info.packageName)
+                && delivery.owner.componentEnabled(delivery.info.name, ApkPackage.ComponentKind.RECEIVER);
+    }
+
+    /** Remove queued work, but retain an in-flight acknowledgement's unique slot. */
+    void cleanupDisabledPackageComponents(PackageManagerService.EnabledChange change) {
+        Set<ActivityTaskManagerService.ProcessRecord> reconsider = new HashSet<>();
+        synchronized (this) {
+            for (ManifestDelivery delivery : new ArrayList<>(mManifest)) {
+                if (!change.disables(mPm, delivery.owner, delivery.info.name, ApkPackage.ComponentKind.RECEIVER)) continue;
+                // ActivityThread acknowledges with its process Binder, not a delivery
+                // token. Reusing this slot before its finish would misattribute a late
+                // acknowledgement to an unrelated receiver in the same process.
+                if (!delivery.dispatched) {
+                    if (delivery.app != null) reconsider.add(delivery.app);
+                    removeDelivery(delivery);
+                }
+            }
+            for (OrderedBroadcast chain : mOrdered) {
+                for (int i = chain.targets.size() - 1; i >= chain.next; i--) {
+                    OrderedTarget target = chain.targets.get(i);
+                    if (disabledTarget(change, target)) chain.targets.remove(i);
+                }
+                OrderedDelivery active = chain.active;
+                if (active == null || !disabledTarget(change, active.target)) continue;
+                if (active.app != null) reconsider.add(active.app);
+                if (!active.dispatched) completeOrdered(active);
+            }
+        }
+        pumpOrdered();
+        for (ActivityTaskManagerService.ProcessRecord app : reconsider) scheduleNext(app);
+    }
+
+    private boolean disabledTarget(PackageManagerService.EnabledChange change, OrderedTarget target) {
+        return target.info == null ? target.owner == change.pkg && change.disablesApplication(mPm)
+                : change.disables(mPm, target.owner, target.info.name, ApkPackage.ComponentKind.RECEIVER);
     }
 
     /** The process went away: so did its registered receivers. */

@@ -44,13 +44,9 @@ bool MatchesNativeCpu(bool process) {
 }
 
 uint64_t NativeMonotonic(uint64_t scale) {
-  LARGE_INTEGER frequency, counter;
-  if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0 ||
-      !QueryPerformanceCounter(&counter) || counter.QuadPart < 0) {
-    return UINT64_MAX;
-  }
-  return static_cast<uint64_t>(static_cast<unsigned __int128>(counter.QuadPart) * scale /
-                               static_cast<uint64_t>(frequency.QuadPart));
+  ULONGLONG ticks;
+  QueryUnbiasedInterruptTimePrecise(&ticks);
+  return static_cast<uint64_t>(static_cast<unsigned __int128>(ticks) * scale / 10000000);
 }
 
 bool MatchesNativeMonotonic(uint64_t (*clock)(), uint64_t scale) {
@@ -58,7 +54,7 @@ bool MatchesNativeMonotonic(uint64_t (*clock)(), uint64_t scale) {
   uint64_t actual = clock();
   uint64_t after = NativeMonotonic(scale);
   if (before == UINT64_MAX || after == UINT64_MAX || actual < before || actual > after) {
-    std::printf("INFO  native3 clocks: scale %" PRIu64 " QPC bracket %" PRIu64
+    std::printf("INFO  native3 clocks: scale %" PRIu64 " unbiased interrupt-time bracket %" PRIu64
                 " <= ART %" PRIu64 " <= %" PRIu64 "\n", scale, before, actual, after);
     return false;
   }
@@ -116,11 +112,11 @@ bool MatchesDeadline(int clock) {
 
 int main() {
   Check(MatchesNativeMonotonic(art::NanoTime, UINT64_C(1000000000)),
-        "ART nanoseconds match the independent QPC bracket");
+        "ART nanoseconds match the independent unbiased interrupt-time bracket");
   Check(MatchesNativeMonotonic(art::MicroTime, UINT64_C(1000000)),
-        "ART microseconds match the independent QPC bracket");
+        "ART microseconds match the independent unbiased interrupt-time bracket");
   Check(MatchesNativeMonotonic(art::MilliTime, UINT64_C(1000)),
-        "ART milliseconds match the independent QPC bracket");
+        "ART milliseconds match the independent unbiased interrupt-time bracket");
   Check(RejectsWallClock(), "the monotonic bracket rejects the old wall-clock domain");
   Check(MonotonicSequence(), "all ART monotonic clocks keep their order and units");
   uint64_t nano_before = art::NanoTime();
@@ -133,9 +129,9 @@ int main() {
   std::thread other([&] { other_monotonic = MonotonicSequence(); });
   bool caller_monotonic = MonotonicSequence();
   other.join();
-  Check(caller_monotonic && other_monotonic, "concurrent callers share the QPC clock domain");
+  Check(caller_monotonic && other_monotonic, "concurrent callers share the unbiased interrupt-time clock domain");
   Check(MatchesDeadline(CLOCK_MONOTONIC),
-        "absolute monotonic deadlines use QPC and normalize their offset");
+        "absolute monotonic deadlines use unbiased interrupt-time and normalize their offset");
   Check(MatchesDeadline(CLOCK_REALTIME),
         "absolute realtime deadlines use UTC and normalize their offset");
   timespec relative;

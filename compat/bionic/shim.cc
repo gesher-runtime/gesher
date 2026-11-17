@@ -16,6 +16,7 @@
 
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
+#include <gesher/clocks.h>
 #include <gesher/font_environment.h>
 
 #include <windows.h>
@@ -557,16 +558,7 @@ uint32_t BIONIC_SYSV ArcRandomUniform(uint32_t bound) {
 
 // --- time ------------------------------------------------------------------
 
-int64_t QpcNanos() {
-  static LARGE_INTEGER freq = [] {
-    LARGE_INTEGER f;
-    QueryPerformanceFrequency(&f);
-    return f;
-  }();
-  LARGE_INTEGER now;
-  QueryPerformanceCounter(&now);
-  return static_cast<int64_t>((static_cast<__int128>(now.QuadPart) * 1000000000) / freq.QuadPart);
-}
+int64_t MonotonicNanos() { return gesher::MonotonicNanos(); }
 
 int64_t ThreadCpuNanos() {
   FILETIME c, e, k, u;
@@ -590,8 +582,11 @@ int BIONIC_SYSV ClockGettime(int clock, LinuxTimespec* ts) {
       *ts = RealtimeNow();
       return 0;
     }
-    case 1: case 4: case 6: case 7:  // MONOTONIC, _RAW, _COARSE, BOOTTIME
-      ns = QpcNanos();
+    case 1: case 4: case 6:  // MONOTONIC, _RAW, _COARSE
+      ns = MonotonicNanos();
+      break;
+    case 7:  // BOOTTIME includes system suspend; uptime clocks do not.
+      ns = gesher::BoottimeNanos();
       break;
     case 2:  // CLOCK_PROCESS_CPUTIME_ID
       ns = ProcessCpuNanos();
@@ -658,10 +653,10 @@ int BIONIC_SYSV Nanosleep(const LinuxTimespec* req, LinuxTimespec* rem) {
   // Linux's relative hrtimer uses a signed nanosecond deadline and saturates
   // at KTIME_MAX. Large LP64 seconds must neither overflow nor become a short
   // successful sleep. A Windows wait slice is not the whole timeout.
-  __int128 deadline = static_cast<__int128>(QpcNanos()) + requested;
+  __int128 deadline = static_cast<__int128>(MonotonicNanos()) + requested;
   if (deadline > INT64_MAX) deadline = INT64_MAX;
   for (;;) {
-    __int128 left = deadline - QpcNanos();
+    __int128 left = deadline - MonotonicNanos();
     if (left <= 0) {
       // Even a zero/expired sleep is a signal-delivery point. In particular,
       // pthread_kill queues a handler until the target enters such a boundary.
@@ -672,7 +667,7 @@ int BIONIC_SYSV Nanosleep(const LinuxTimespec* req, LinuxTimespec* rem) {
     __int128 milliseconds = (left + 999999) / 1000000;
     if (milliseconds > 0x7ffffffe) milliseconds = 0x7ffffffe;
     int64_t interrupted_at = 0;
-    auto observe = [](void* value) { *static_cast<int64_t*>(value) = QpcNanos(); };
+    auto observe = [](void* value) { *static_cast<int64_t*>(value) = MonotonicNanos(); };
     if (InterruptibleSleepObserved(static_cast<uint32_t>(milliseconds), observe,
                                   &interrupted_at)) {
       if (rem != nullptr) {
@@ -1091,7 +1086,7 @@ LinuxTimespec RealtimeNow() {
 uint32_t MillisUntil(const LinuxTimespec* abstime, bool monotonic) {
   __int128 now_ns;
   if (monotonic) {
-    now_ns = QpcNanos();
+    now_ns = MonotonicNanos();
   } else {
     LinuxTimespec now = RealtimeNow();
     now_ns = static_cast<__int128>(now.tv_sec) * 1000000000 + now.tv_nsec;

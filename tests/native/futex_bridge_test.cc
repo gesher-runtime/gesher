@@ -1,7 +1,9 @@
 #include <gesher/bionic_shim.h>
+#include <gesher/clocks.h>
 #include <sys/syscall.h>
 #include <windows.h>
 #include <initializer_list>
+#define FUTEX_TEST_CLOCK_GETTIME gesher::AndroidClockGettime
 #include "futex_contract_test.inc"
 #if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))

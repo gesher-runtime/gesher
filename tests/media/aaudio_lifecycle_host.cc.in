@@ -23,6 +23,9 @@
 template <class... T> void IgnoreLog(T&&...) {}
 #define MEDIA_LOGE(...) IgnoreLog(__VA_ARGS__)
 #define MEDIA_LOGI(...) IgnoreLog(__VA_ARGS__)
+namespace gesher {
+int AndroidClockGettime(clockid_t clock, timespec* value) { return clock_gettime(clock, value); }
+}
 namespace gesher::bionic {
 std::unordered_map<std::string, void*> exports;
 void EnterLoadedCode() {}

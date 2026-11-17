@@ -6,6 +6,11 @@
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
+// ELF/Linux callers use their ordinary monotonic clock. Native PE fixtures
+// override this with the Android clock used by Gesher's futex deadlines.
+#ifndef FUTEX_TEST_CLOCK_GETTIME
+#define FUTEX_TEST_CLOCK_GETTIME clock_gettime
+#endif
 typedef long (*FutexApi)(volatile int*, int, int, const struct timespec*, volatile int*, int);
 static int futex_checks, futex_failures;
 static FutexApi futex_wait_api, futex_wake_api;
@@ -25,7 +30,7 @@ struct futex_waiter {
 static void* futex_wait_thread(void* opaque) {
   struct futex_waiter* w = (struct futex_waiter*)opaque;
   struct timespec limit;
-  clock_gettime(CLOCK_MONOTONIC, &limit); limit.tv_sec += 2;
+  FUTEX_TEST_CLOCK_GETTIME(CLOCK_MONOTONIC, &limit); limit.tv_sec += 2;
   w->result = futex_wait_api(&w->gate, FUTEX_WAIT_BITSET | w->flags, 0, &limit, NULL, w->mask);
   w->error = errno;
   return NULL;
@@ -70,11 +75,21 @@ static void futex_inputs(void) {
   errno = 0; futex_check("invalid realtime timeout is checked first", futex_call(&word,FUTEX_WAIT_PRIVATE | FUTEX_CLOCK_REALTIME,1,&bad[1],NULL,0) == -1 && errno == EINVAL);
   futex_check("empty wake reports zero actual waiters", futex_call(&word,FUTEX_WAKE_PRIVATE,INT_MAX,NULL,NULL,0) == 0);
   struct timespec start, finish, short_wait = {0,2000000};
-  clock_gettime(CLOCK_MONOTONIC,&start); errno = 0;
+  FUTEX_TEST_CLOCK_GETTIME(CLOCK_MONOTONIC,&start); errno = 0;
   long rc = futex_call(&word,FUTEX_WAIT_PRIVATE,0,&short_wait,NULL,0); int e = errno;
-  clock_gettime(CLOCK_MONOTONIC,&finish);
+  FUTEX_TEST_CLOCK_GETTIME(CLOCK_MONOTONIC,&finish);
   int64_t elapsed = (int64_t)(finish.tv_sec-start.tv_sec)*1000000000+finish.tv_nsec-start.tv_nsec;
   futex_check("relative timeout has its full duration", rc == -1 && e == ETIMEDOUT && elapsed >= 2000000);
+  FUTEX_TEST_CLOCK_GETTIME(CLOCK_MONOTONIC,&start);
+  struct timespec deadline = start;
+  deadline.tv_nsec += 2000000;
+  if (deadline.tv_nsec >= 1000000000) { ++deadline.tv_sec; deadline.tv_nsec -= 1000000000; }
+  errno = 0;
+  rc = futex_call(&word,FUTEX_WAIT_BITSET_PRIVATE,0,&deadline,NULL,1); e = errno;
+  FUTEX_TEST_CLOCK_GETTIME(CLOCK_MONOTONIC,&finish);
+  elapsed = (int64_t)(finish.tv_sec-start.tv_sec)*1000000000+finish.tv_nsec-start.tv_nsec;
+  futex_check("absolute timeout shares the monotonic origin and full duration",
+              rc == -1 && e == ETIMEDOUT && elapsed >= 2000000);
 }
 static void futex_selection(int flags) {
   volatile int word = 0, moved = 0;

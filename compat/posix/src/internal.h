@@ -59,7 +59,7 @@ size_t StackBottomReserve();
 // (fault_signals.cc).
 bool RetryAfterMadvise(uintptr_t addr, ULONG_PTR access);
 
-// Microseconds on a monotonic clock (QueryPerformanceCounter). Timeouts keep
+// Microseconds on the Android monotonic clock (excludes system suspend). Timeouts keep
 // their deadline on it: GetTickCount64 moves in 15.6 ms steps, and a wait
 // that ends a step early would return before Linux's would.
 ULONGLONG MonotonicMicros();
@@ -101,6 +101,12 @@ int PosixDelete(const std::wstring& windows, bool directory);
 bool ResolveAt(int dirfd, const char* path, std::string* out);
 
 // Virtual files and directories (procfs.cc), named as MapPath's kVirtual.
+extern "C" const unsigned char* gesher_auxv_random(void);
+extern "C" const char* gesher_auxv_platform(void);
+extern "C" uint64_t gesher_auxv_hwcap(void);
+extern "C" uint64_t gesher_auxv_hwcap2(void);
+extern "C" const char* gesher_auxv_execfn(void);
+
 namespace procfs {
 // S_IFREG, S_IFDIR or S_IFLNK, or 0 when there is no such name.
 unsigned Type(const std::wstring& name);

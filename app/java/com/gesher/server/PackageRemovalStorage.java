@@ -22,8 +22,8 @@ final class PackageRemovalStorage {
             throw new SecurityException("Invalid removal package");
         }
         this.name = name;
-        root = new File(Device.dataDir()).getCanonicalFile().toPath();
-        Path apk = new File(codePath).getAbsoluteFile().toPath().normalize();
+        root = deviceRoot();
+        Path apk = codePath(new File(codePath).toPath());
         if (!root.resolve("app").equals(apk.getParent())
                 || !apk.getFileName().toString().matches(java.util.regex.Pattern.quote(name) + "-[0-9]+")) {
             throw new SecurityException("Removal code is outside the installed APK directory");
@@ -41,6 +41,10 @@ final class PackageRemovalStorage {
         for (String kind : new String[]{"data", "obb", "media"}) {
             add(root.resolve("media/0/Android").resolve(kind).resolve(name));
         }
+        // Keep the original item-0..4 mapping forever. Named additions remain
+        // unambiguous when different runtime versions recover the same journal.
+        add(root.resolve("user_de/0").resolve(name), "device-protected-data");
+        add(root.resolve("system/app-data-layout").resolve(name), "storage-layout");
         if (recovered == null) {
             Properties journal = new Properties();
             journal.setProperty("package", name); journal.setProperty("code", code);
@@ -48,10 +52,30 @@ final class PackageRemovalStorage {
                 journal.store(out, "Gesher package removal transaction"); out.getFD().sync();
             }
         }
+        add(root.resolve("system/package-enabled-owners").resolve(name), "package-enabled-owner");
+    }
+    private static Path deviceRoot() throws IOException {
+        Path data = new File(Device.dataDir()).getCanonicalFile().toPath();
+        return Files.exists(data) ? data.toRealPath() : data;
+    }
+    private static Path codePath(Path path) throws IOException {
+        Path apk = path.toAbsolutePath().normalize();
+        // Windows guest aliases (for example /mnt/d) and the canonical device
+        // root must share a namespace. Resolve ancestors only: the APK leaf may
+        // itself be a link, which must be quarantined rather than followed.
+        if (apk.getParent() != null) {
+            Path parent = apk.getParent().toFile().getCanonicalFile().toPath();
+            if (Files.exists(parent)) parent = parent.toRealPath();
+            apk = parent.resolve(apk.getFileName());
+        }
+        return apk;
     }
     private void add(Path original) throws IOException {
+        add(original, "item-" + paths.size());
+    }
+    private void add(Path original, String slot) throws IOException {
         checkParents(original);
-        paths.put(original, directory.resolve("item-" + paths.size()));
+        paths.put(original, directory.resolve(slot));
     }
     private void checkParents(Path original) throws IOException {
         Path parent = original.getParent();
@@ -98,7 +122,7 @@ final class PackageRemovalStorage {
 
     /** Registry is the commit point: restore precommit moves, reap committed quarantine. */
     static void recover(Map<String, String> installed) throws IOException {
-        Path root = new File(Device.dataDir()).getCanonicalFile().toPath();
+        Path root = deviceRoot();
         Path trash = root.resolve("system/uninstall-trash");
         if (!Files.isDirectory(trash, LinkOption.NOFOLLOW_LINKS)) return;
         try (DirectoryStream<Path> entries = Files.newDirectoryStream(trash, "uninstall-*")) {
@@ -116,7 +140,7 @@ final class PackageRemovalStorage {
                 if (code == null) throw new IOException("Invalid removal journal");
                 PackageRemovalStorage old = new PackageRemovalStorage(name, root.resolve(code).toString(), entry);
                 String retained = installed.get(name);
-                if (retained != null && new File(retained).getAbsoluteFile().toPath().normalize()
+                if (retained != null && codePath(new File(retained).toPath())
                         .equals(root.resolve(old.code))) old.rollback();
                 else old.discard();
             }
@@ -125,7 +149,7 @@ final class PackageRemovalStorage {
 
     /** A surviving journal reserves its original generation until recovery/reaping. */
     static boolean reserves(Path codePath) throws IOException {
-        Path root = new File(Device.dataDir()).getCanonicalFile().toPath();
+        Path root = deviceRoot();
         Path trash = root.resolve("system/uninstall-trash");
         if (!Files.isDirectory(trash, LinkOption.NOFOLLOW_LINKS)) return false;
         try (DirectoryStream<Path> entries = Files.newDirectoryStream(trash, "uninstall-*")) {
@@ -141,7 +165,7 @@ final class PackageRemovalStorage {
                 // Validate the complete record before using its path as authority.
                 PackageRemovalStorage transaction = new PackageRemovalStorage(p.getProperty("package"),
                         root.resolve(old).toString(), entry);
-                if (root.resolve(transaction.code).equals(codePath.toAbsolutePath().normalize())) return true;
+                if (root.resolve(transaction.code).equals(codePath(codePath))) return true;
             }
         }
         return false;

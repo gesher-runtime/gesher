@@ -82,14 +82,14 @@ public final class Services {
         return create(packages, true);
     }
 
-    /** Stand-in services share no persistent account state with the real device. */
+    /** Stand-in services share no persistent account or enabled-state policy with the real device. */
     public static Map<String, IBinder> createInProcess(Collection<ApkPackage> packages) {
         return create(packages, false);
     }
 
     private static Map<String, IBinder> create(Collection<ApkPackage> packages, boolean persistentAccounts) {
         Map<String, IBinder> services = new LinkedHashMap<>();
-        PackageManagerService pm = new PackageManagerService(packages);
+        PackageManagerService pm = new PackageManagerService(packages, persistentAccounts);
         ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);

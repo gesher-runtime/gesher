@@ -1,0 +1,303 @@
+// The adapters below are production source, including the actual AOSP patches.
+// Clock, signal, JNI and video transport boundaries are substituted.
+#include <algorithm>
+#include <cerrno>
+#include <cstdint>
+#include <chrono>
+#include <string>
+#include <cstdio>
+#include <cstdlib>
+#include <iostream>
+#include <limits>
+#include <vector>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <condition_variable>
+#include <deque>
+#include <time.h>
+#include <linux/futex.h>
+
+using DWORD = uint32_t;
+using LONGLONG = int64_t;
+using ULONGLONG = unsigned long long;
+struct LARGE_INTEGER { int64_t QuadPart; };
+static constexpr DWORD INFINITE = 0xffffffff;
+static int64_t awake = 10000000000LL, suspended = 40000000000LL;
+static int64_t wall = 1700000000000000000LL;
+static constexpr int64_t host_epoch = 700000000000LL;
+struct HostSteadyClock {
+  using duration = std::chrono::nanoseconds;
+  using time_point = std::chrono::time_point<HostSteadyClock, duration>;
+  static time_point now() { return time_point(duration(host_epoch + awake + suspended)); }
+};
+static void QueryUnbiasedInterruptTimePrecise(ULONGLONG* value) { *value = awake / 100; }
+static void QueryInterruptTimePrecise(ULONGLONG* value) { *value = (awake + suspended) / 100; }
+static bool QueryPerformanceFrequency(LARGE_INTEGER* value) { value->QuadPart = 1000000000; return true; }
+static bool QueryPerformanceCounter(LARGE_INTEGER* value) {
+  value->QuadPart = host_epoch + awake + suspended; return true;
+}
+static int HostClock(clockid_t clock, timespec* value) {
+  if (!value) return errno = EFAULT, -1;
+  int64_t now;
+  if (clock == CLOCK_MONOTONIC) now = host_epoch + awake + suspended;
+  else if (clock == CLOCK_REALTIME) now = wall;
+  else if (clock == CLOCK_PROCESS_CPUTIME_ID) now = 300;
+  else if (clock == CLOCK_THREAD_CPUTIME_ID) now = 200;
+  else return errno = EINVAL, -1;
+  *value = {now / 1000000000, static_cast<long>(now % 1000000000)};
+  return 0;
+}
+#define clock_gettime HostClock
+#include <gesher/clocks.h>
+#define BIONIC_SYSV
+
+static int checks, failures;
+static void Check(const char* name, bool ok) {
+  ++checks;
+  if (!ok) { ++failures; std::printf("FAIL clock domains: %s\n", name); }
+}
+static int64_t Nanos(timespec value) { return value.tv_sec * 1000000000 + value.tv_nsec; }
+struct Action { int64_t awake_ns, suspend_ns, wall_step_ns, handler_ns; bool interrupted; };
+static std::vector<Action> actions;
+static std::vector<uint32_t> waits;
+
+namespace guest {
+struct LinuxTimespec { int64_t tv_sec, tv_nsec; };
+static constexpr int kEINVAL = EINVAL, kEFAULT = EFAULT, kEINTR = EINTR, kEOPNOTSUPP = EOPNOTSUPP;
+static LinuxTimespec RealtimeNow() { return {wall / 1000000000, wall % 1000000000}; }
+static int64_t ThreadCpuNanos() { return 200; }
+static int64_t ProcessCpuNanos() { return 300; }
+static int ReadPthreadCpuClock(int, int64_t*) { return EINVAL; }
+static void DeliverPendingSignals() {}
+static bool InterruptibleSleepObserved(uint32_t milliseconds, void (*observe)(void*), void* context) {
+  const size_t index = waits.size();
+  if (index > 10) { std::fputs("unbounded sleep in clock fixture\n", stderr); std::abort(); }
+  waits.push_back(milliseconds);
+  const Action action = index < actions.size() ? actions[index] :
+      Action{static_cast<int64_t>(milliseconds) * 1000000, 0, 0, 0, false};
+  awake += action.awake_ns; suspended += action.suspend_ns;
+  wall += action.awake_ns + action.suspend_ns + action.wall_step_ns;
+  if (action.interrupted && observe) observe(context);
+  awake += action.handler_ns; wall += action.handler_ns;
+  errno = ERANGE;
+  return action.interrupted;
+}
+static int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*), void* context) {
+  const int64_t left = deadline - gesher::BoottimeNanos();
+  if (left <= 0) return 0;
+  return InterruptibleSleepObserved(static_cast<uint32_t>(std::min<int64_t>(
+      left / 1000000 + (left % 1000000 != 0), 0x7ffffffe)), observe, context) ? EINTR : 0;
+}
+@BIONIC_READER@
+@BIONIC_DEADLINE@
+@SLEEP_HELPERS@
+@CLOCK_SLEEP@
+}
+
+// Evaluate AOSP's actual Windows/GESHER preprocessor paths after host includes.
+#undef __linux__
+#define UNLIKELY(x) (x)
+#define LOG(level) std::cerr
+namespace art {
+@ART_CLOCKS@
+}
+using nsecs_t = int64_t;
+enum { SYSTEM_TIME_REALTIME, SYSTEM_TIME_MONOTONIC, SYSTEM_TIME_PROCESS,
+       SYSTEM_TIME_THREAD, SYSTEM_TIME_BOOTTIME };
+#define arraysize(a) (sizeof(a) / sizeof((a)[0]))
+#define LOG_ALWAYS_FATAL_IF(condition, message) do { if (condition) std::abort(); } while (false)
+@UTILS_CLOCKS@
+static int64_t nanoseconds_to_milliseconds(int64_t ns) { return ns / 1000000; }
+namespace android { int64_t uptimeNanos(); int64_t elapsedRealtimeNano(); }
+@SYSTEM_CLOCK@
+namespace gesher {
+@POSIX_DEADLINES@
+}
+namespace futex {
+@FUTEX_DEADLINES@
+}
+
+namespace audio {
+@AUDIO_API@
+@AUDIO_CLOCK@
+@AUDIO_PACING@
+class Probe final : public PacedSource {
+ public:
+  uint32_t rate() const override { return 1000; }
+  uint32_t channels() const override { return 1; }
+  std::string Describe() const override { return "probe"; }
+  std::string DeviceName() const override { return "probe"; }
+ protected:
+  void Fill(float* samples, size_t frames) override { std::fill(samples, samples + frames, 1.0f); }
+};
+@AUDIO_SINK@
+}
+
+namespace media {
+using jobject = void*;
+static std::map<std::string, int64_t> posted;
+static int events;
+struct JNIEnv {
+  jobject NewLocalRef(jobject value) { return value; }
+  void DeleteLocalRef(jobject) {}
+  void CallVoidMethod(jobject, int, int, int, int, jobject) { ++events; }
+};
+static JNIEnv env;
+static JNIEnv* AttachedEnv(const char*) { return &env; }
+static void CheckException(JNIEnv*, const char*) {}
+static struct { int post_event = 1; } gJ;
+static constexpr int kEventFrameRendered = 3;
+struct JavaMap {
+  std::map<std::string, int64_t> longs;
+  jobject Make(JNIEnv*) { posted = longs; return this; }
+};
+struct JavaSelf { jobject get() { return this; } };
+struct VideoFrame {
+  int64_t time_us;
+  void Allocate(int, int) {}
+};
+static void RgbaToI420(const uint32_t*, int, int, VideoFrame*) {}
+class CodecProbe {
+ public:
+  JavaSelf object;
+  JavaSelf* self_ = &object;
+  struct { int width = 1, height = 1; } enc_params_;
+  std::mutex mu_;
+  std::condition_variable cv_;
+  bool started_ = true, surface_eos_ = false;
+  std::deque<std::shared_ptr<VideoFrame>> surface_frames_;
+@CODEC_RENDER@
+@CODEC_INPUT@
+};
+class VideoClock {
+ public:
+  int64_t clock_base_us_ = 100000;
+  bool clock_running_ = true;
+  float speed_ = 1.5f;
+@PLAYER_ANCHOR@
+  VideoClock() { @PLAYER_START@ }
+@PLAYER_CLOCK@
+};
+}
+
+static void Reset() {
+  awake = 10000000000LL; suspended = 40000000000LL; wall = 1700000000000000000LL;
+  waits.clear(); actions.clear(); errno = EDOM;
+}
+static int64_t GuestTime(int id) {
+  guest::LinuxTimespec value{};
+  Check("guest clock read succeeds", guest::ClockGettime(id, &value) == 0);
+  return value.tv_sec * 1000000000 + value.tv_nsec;
+}
+static void Readers() {
+  Reset();
+  Check("Win32 units are converted without losing the epoch", gesher::MonotonicNanos() == awake);
+  Check("BOOTTIME includes historical suspend", gesher::BoottimeNanos() == awake + suspended);
+  for (int id : {1, 4, 6}) Check("all guest monotonic clocks share awake domain", GuestTime(id) == awake);
+  Check("guest BOOTTIME uses biased interrupt time", GuestTime(7) == awake + suspended);
+  Check("guest wall and CPU domains remain distinct", GuestTime(0) == wall && GuestTime(2) == 300 && GuestTime(3) == 200);
+  const int64_t original_mono = GuestTime(1), original_boot = GuestTime(7);
+  suspended += 3600000000000LL; wall -= 9000000000000LL;
+  Check("system suspend leaves uptime unchanged", GuestTime(1) == original_mono);
+  Check("system suspend advances BOOTTIME independently of UTC", GuestTime(7) - original_boot == 3600000000000LL);
+  Check("ART nanoseconds use Android uptime", art::NanoTime() == static_cast<uint64_t>(awake));
+  Check("ART milliseconds and microseconds retain units", art::MicroTime() == static_cast<uint64_t>(awake / 1000) &&
+        art::MilliTime() == static_cast<uint64_t>(awake / 1000000));
+  Check("libutils uptime agrees with ART and guest", systemTime(SYSTEM_TIME_MONOTONIC) == awake);
+  Check("libutils elapsedRealtime includes suspend", systemTime(SYSTEM_TIME_BOOTTIME) == awake + suspended);
+  Check("SystemClock JNI uptime reaches the correct domain", android::uptimeNanos() == awake &&
+        android::uptimeMillis() == awake / 1000000);
+  Check("SystemClock JNI elapsedRealtime reaches the correct domain", android::elapsedRealtimeNano() == awake + suspended &&
+        android::elapsedRealtime() == (awake + suspended) / 1000000);
+  Check("libutils realtime and CPU clocks are unchanged", systemTime(SYSTEM_TIME_REALTIME) == wall &&
+        systemTime(SYSTEM_TIME_PROCESS) == 300 && systemTime(SYSTEM_TIME_THREAD) == 200);
+  timespec native{}; HostClock(CLOCK_MONOTONIC, &native);
+  Check("host winpthreads keeps its independent epoch", Nanos(native) == host_epoch + awake + suspended);
+  timespec invalid{12, 34}; errno = 0;
+  Check("explicit adapter validates null output", gesher::AndroidClockGettime(CLOCK_MONOTONIC, nullptr) == -1 && errno == EFAULT);
+  Check("explicit adapter preserves unsupported clock behavior", gesher::AndroidClockGettime(999, &invalid) == -1 &&
+        errno == EINVAL && invalid.tv_sec == 12 && invalid.tv_nsec == 34);
+  Check("100ns conversion saturates before signed overflow", gesher::InterruptTicksToNanos(UINT64_MAX) == INT64_MAX);
+}
+static void Deadlines() {
+  Reset();
+  timespec expected; art::InitTimeSpec(true, CLOCK_MONOTONIC, 1234, 567890, &expected);
+  Check("ART absolute deadline shares reader origin", Nanos(expected) == awake + 1234567890);
+  guest::LinuxTimespec guest_deadline{expected.tv_sec, expected.tv_nsec};
+  Check("guest pthread absolute deadline shares ART origin", guest::MillisUntil(&guest_deadline, true) == 1235);
+  futex::Deadline deadline;
+  Check("futex accepts ART absolute deadline", futex::SetDeadline(&expected, FUTEX_WAIT_BITSET, false, &deadline));
+  Check("futex has correct initial remaining time", futex::Remaining(deadline) == 1235);
+  const auto native_deadline = gesher::DeadlineAfter(1234);
+  suspended += 600000000000LL; wall += 600000000000LL;
+  Check("guest pthread timeout ignores suspend", guest::MillisUntil(&guest_deadline, true) == 1235);
+  Check("futex timeout ignores suspend", futex::Remaining(deadline) == 1235);
+  Check("internal poll/sleep budget ignores suspend", gesher::MillisUntil(native_deadline) == 1234);
+  awake += 1000000000;
+  Check("futex deadline advances with awake time", futex::Remaining(deadline) == 235);
+  Check("internal poll/sleep budget advances with awake time", gesher::MillisUntil(native_deadline) == 234);
+  art::InitTimeSpec(true, CLOCK_REALTIME, 3, 0, &expected);
+  Check("absolute realtime deadlines preserve wall origin", Nanos(expected) == wall + 3000000);
+}
+static void Sleeps() {
+  for (int clock : {0, 1, 7}) {
+    Reset();
+    guest::LinuxTimespec request{3, 0}, remain{99, 99};
+    actions = {{1000000000, 10000000000LL, -30000000000LL, 0, false}};
+    Check("relative sleep succeeds across simulated suspend", guest::ClockNanosleep(clock, 0, &request, &remain) == 0);
+    Check("relative sleep preserves errno and untouched remainder", errno == EDOM && remain.tv_sec == 99 && remain.tv_nsec == 99);
+    Check("BOOTTIME completes after resume while uptime waits awake remainder",
+          clock == 7 ? waits.size() == 1 : waits == std::vector<uint32_t>{3000, 2000});
+  }
+  Reset();
+  guest::LinuxTimespec request{10, 0}, remain{};
+  actions = {{500000000, 3000000000LL, 0, 2000000000, true}};
+  Check("interrupted BOOTTIME sleep reports EINTR", guest::ClockNanosleep(7, 0, &request, &remain) == EINTR);
+  Check("BOOTTIME remainder uses its own domain before the handler", remain.tv_sec == 6 && remain.tv_nsec == 500000000);
+  Reset(); request = {awake / 1000000000 + 2, 0};
+  actions = {{0, 60000000000LL, 0, 0, false}};
+  Check("absolute uptime ignores suspend", guest::ClockNanosleep(1, 1, &request, nullptr) == 0 &&
+        waits == std::vector<uint32_t>{2000, 2000});
+}
+static void AudioPacing() {
+  Reset(); audio::Probe source; audio::Clock sink; std::vector<float> samples;
+  Check("paced source starts", source.Start());
+  awake += 20000000;
+  Check("source produces known awake interval", source.Pull(&samples) && samples.size() == 20);
+  Check("sink consumes known awake interval", sink.Due(1000) == 20);
+  Check("audio timestamp is in the Android monotonic domain", audio::MonotonicNs() == awake);
+  suspended += 3600000000000LL; wall += 3600000000000LL;
+  Check("source does not allocate an hour of suspended samples", source.Pull(&samples) && samples.size() == 20);
+  Check("sink does not consume suspended audio", sink.Due(1000) == 20);
+  awake += 5000000;
+  Check("source resumes its awake timeline", source.Pull(&samples) && samples.size() == 25);
+  Check("sink resumes its awake timeline", sink.Due(1000) == 25);
+}
+static void MediaClocks() {
+  Reset(); media::CodecProbe codec; media::VideoClock video;
+  codec.PostFrameRendered(12345);
+  Check("frame callback preserves the media timestamp", media::events == 1 && media::posted["0-media-time-us"] == 12345);
+  Check("frame callback system-nano agrees with ART", media::posted["0-system-nano"] == static_cast<int64_t>(art::NanoTime()));
+  codec.OnSurfaceFrame(nullptr, 1, 1, 0);
+  Check("missing input timestamp uses Android monotonic time", codec.surface_frames_.back()->time_us == awake / 1000);
+  codec.OnSurfaceFrame(nullptr, 1, 1, 9123456789LL);
+  Check("explicit input timestamp remains untouched", codec.surface_frames_.back()->time_us == 9123456);
+  awake += 20000000;
+  Check("video-only media clock advances with speed", video.WallClockLocked() == 130000);
+  suspended += 3600000000000LL; wall -= 9000000000000LL;
+  codec.PostFrameRendered(54321);
+  codec.OnSurfaceFrame(nullptr, 1, 1, -1);
+  Check("frame callback excludes suspend", media::posted["0-system-nano"] == awake);
+  Check("input fallback excludes suspend", codec.surface_frames_.back()->time_us == awake / 1000);
+  Check("video-only clock does not skip suspended playback", video.WallClockLocked() == 130000);
+  awake += 10000000;
+  Check("video-only clock resumes awake playback", video.WallClockLocked() == 145000);
+  video.clock_running_ = false;
+  Check("paused media clock retains its stored position", video.WallClockLocked() == 100000);
+}
+int main() {
+  Readers(); Deadlines(); Sleeps(); AudioPacing(); MediaClocks();
+  std::printf("clock domains: %d assertions, %d failures\n", checks, failures);
+  return failures != 0;
+}

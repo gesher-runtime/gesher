@@ -62,6 +62,9 @@ def main() -> None:
         cases = (args.case, 'clipboard', 'content') if args.case == 'all' else (args.case,)
         for case in cases:
             case_environment = environment.copy()
+            # PMS now persists enabled-state ownership during construction. Keep
+            # every host case off the device's /data and isolated from other cases.
+            case_environment['ANDROID_DATA'] = str(work / ('data-' + case))
             if case == 'content': case_environment.pop('GESHER_MICROG_SPOOF', None)
             subprocess.run([str(args.java_home / 'bin/java'), '-XX:-UsePerfData',
                             '-XX:+UnlockDiagnosticVMOptions', '-XX:-BytecodeVerificationRemote',

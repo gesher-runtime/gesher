@@ -1,0 +1,228 @@
+// Compile the exact production GL qualification function and selector against
+// deterministic EGL / Ganesh adapters. Real Windows/ANGLE tests remain required.
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <string>
+#include <utility>
+#include <initializer_list>
+
+#include "compat/hwui/gl/pipeline_select.h"
+#include "compat/hwui/gl/hardware_renderer_policy.h"
+#include "compat/hwui/gl/gr_context_options.h"
+
+using EGLDisplay = void*;
+using EGLContext = void*;
+using EGLSurface = void*;
+using EGLConfig = void*;
+using EGLint = int;
+using GLubyte = unsigned char;
+constexpr EGLDisplay EGL_NO_DISPLAY = nullptr;
+constexpr EGLSurface EGL_NO_SURFACE = nullptr;
+constexpr EGLContext EGL_NO_CONTEXT = nullptr;
+constexpr int EGL_DRAW = 0x3059, EGL_READ = 0x305A;
+constexpr int EGL_RENDERABLE_TYPE = 0x3040, EGL_OPENGL_ES2_BIT = 4;
+constexpr int EGL_RED_SIZE = 0x3024, EGL_GREEN_SIZE = 0x3023;
+constexpr int EGL_BLUE_SIZE = 0x3022, EGL_ALPHA_SIZE = 0x3021;
+constexpr int EGL_DEPTH_SIZE = 0x3025, EGL_STENCIL_SIZE = 0x3026;
+constexpr int EGL_SURFACE_TYPE = 0x3033, EGL_WINDOW_BIT = 4, EGL_PBUFFER_BIT = 1;
+constexpr int EGL_NONE = 0x3038, EGL_CONTEXT_CLIENT_VERSION = 0x3098;
+constexpr int EGL_WIDTH = 0x3057, EGL_HEIGHT = 0x3056;
+constexpr int GL_RENDERER = 0x1F01, GL_VERSION = 0x1F02;
+#define ANGLE(name) name
+static EGLDisplay Handle(int n) {
+  return reinterpret_cast<EGLDisplay>(static_cast<uintptr_t>(n));
+}
+static const EGLDisplay kDisplay = Handle(0x1000), kOldDisplay = Handle(0x2000);
+static const EGLContext kProbeContext = Handle(0x3000), kOldContext = Handle(0x4000);
+static const EGLSurface kProbeSurface = Handle(0x5000);
+static const EGLSurface kOldDraw = Handle(0x6000), kOldRead = Handle(0x7000);
+static const EGLConfig kConfig = Handle(0x8000);
+
+struct Scenario {
+  bool no_display = false, fail_symbol = false, fail_init = false;
+  bool fail_config = false, fail_create_context = false, fail_pbuffer = false;
+  bool fail_make_current = false, fail_interface = false, fail_ganesh = false;
+  bool previous = false;
+  const char* renderer = "ANGLE (Intel, Intel(R) UHD Graphics Direct3D11 vs_5_0 ps_5_0)";
+};
+struct Stats {
+  int context_created = 0, context_destroyed = 0;
+  int surface_created = 0, surface_destroyed = 0;
+  int ganesh_created = 0, ganesh_release = 0, ganesh_destroyed = 0;
+  int previous_restored = 0;
+};
+static Scenario scenario;
+static Stats stats;
+static EGLDisplay current_display = nullptr;
+static EGLContext current_context = nullptr;
+static EGLSurface current_draw = nullptr, current_read = nullptr;
+
+[[noreturn]] void Fail(const char* m) {
+  std::fprintf(stderr, "FAIL %s\n", m);
+  std::exit(1);
+}
+void Require(bool ok, const char* reason) { if (!ok) Fail(reason); }
+void Env(const char* name, const char* value) {
+#ifdef _WIN32
+  if (_putenv_s(name, value ? value : "") != 0) Fail("putenv");
+#else
+  if (value ? setenv(name, value, 1) != 0 : unsetenv(name) != 0) Fail("setenv");
+#endif
+}
+void Setup(const Scenario& s, const char* override_renderer = nullptr) {
+  scenario = s;
+  stats = {};
+  Env("GESHER_APP_WINDOW", "window");
+  Env("GESHER_HWUI_RENDERER", override_renderer ? override_renderer : "auto");
+  Env("GESHER_EGL_DEVICE", nullptr);
+  Env("GESHER_TEST_RENDERER_PROPERTY", nullptr);
+  current_display = s.previous ? kOldDisplay : EGL_NO_DISPLAY;
+  current_context = s.previous ? kOldContext : EGL_NO_CONTEXT;
+  current_draw = s.previous ? kOldDraw : EGL_NO_SURFACE;
+  current_read = s.previous ? kOldRead : EGL_NO_SURFACE;
+}
+void* gesher_egl_default_display() { return scenario.no_display ? EGL_NO_DISPLAY : kDisplay; }
+bool AngleHas(const char* name) {
+  return !scenario.fail_symbol || std::strcmp(name, "glReadPixels") != 0;
+}
+bool eglInitialize(EGLDisplay, EGLint* major, EGLint* minor) {
+  if (scenario.fail_init) return false;
+  *major = 1; *minor = 5; return true;
+}
+bool eglChooseConfig(EGLDisplay, const EGLint*, EGLConfig* out, int, EGLint* n) {
+  if (scenario.fail_config) return false;
+  *out = kConfig; *n = 1; return true;
+}
+EGLContext eglGetCurrentContext() { return current_context; }
+EGLDisplay eglGetCurrentDisplay() { return current_display; }
+EGLSurface eglGetCurrentSurface(int direction) {
+  return direction == EGL_DRAW ? current_draw : current_read;
+}
+EGLContext eglCreateContext(EGLDisplay, EGLConfig, EGLContext, const EGLint*) {
+  if (scenario.fail_create_context) return EGL_NO_CONTEXT;
+  ++stats.context_created; return kProbeContext;
+}
+EGLSurface eglCreatePbufferSurface(EGLDisplay, EGLConfig, const EGLint*) {
+  if (scenario.fail_pbuffer) return EGL_NO_SURFACE;
+  ++stats.surface_created; return kProbeSurface;
+}
+bool eglMakeCurrent(EGLDisplay display, EGLSurface draw, EGLSurface read, EGLContext context) {
+  if (context == kProbeContext && scenario.fail_make_current) return false;
+  if (context == kOldContext) ++stats.previous_restored;
+  current_context = context;
+  current_display = context == EGL_NO_CONTEXT ? EGL_NO_DISPLAY : display;
+  current_draw = draw; current_read = read;
+  return true;
+}
+bool eglDestroySurface(EGLDisplay, EGLSurface s) {
+  Require(s == kProbeSurface && current_draw != s && current_read != s,
+          "destroyed current/foreign EGL surface");
+  ++stats.surface_destroyed; return true;
+}
+bool eglDestroyContext(EGLDisplay, EGLContext c) {
+  Require(c == kProbeContext && current_context != c,
+          "destroyed current/foreign EGL context");
+  ++stats.context_destroyed; return true;
+}
+const GLubyte* glGetString(int name) {
+  if (name == GL_RENDERER) return reinterpret_cast<const GLubyte*>(scenario.renderer);
+  if (name == GL_VERSION) return reinterpret_cast<const GLubyte*>("OpenGL ES 3.0 ANGLE");
+  return nullptr;
+}
+template <typename T> using sk_sp = std::shared_ptr<T>;
+struct GrGLInterface { bool validate() const { return true; } };
+sk_sp<const GrGLInterface> GrGLMakeNativeInterface() {
+  return scenario.fail_interface ? nullptr : std::make_shared<const GrGLInterface>();
+}
+struct GrDirectContext {
+  void releaseResourcesAndAbandonContext() {
+    Require(current_context == kProbeContext, "Ganesh release without current probe");
+    ++stats.ganesh_release;
+  }
+  ~GrDirectContext() { ++stats.ganesh_destroyed; }
+};
+namespace GrDirectContexts {
+sk_sp<GrDirectContext> MakeGL(sk_sp<const GrGLInterface> interface,
+                            const GrContextOptions& options) {
+  Require(interface && current_context == kProbeContext, "bad GrDirectContexts::MakeGL input");
+  Require(options.fPreferExternalImagesOverES3 && options.fDisableDistanceFieldPaths,
+          "probe and RenderThread Ganesh options differ");
+  const char* reduce = std::getenv("GESHER_TEST_REDUCE_OPS");
+  const bool expected = reduce == nullptr || std::strcmp(reduce, "0") != 0;
+  Require((options.fReduceOpsTaskSplitting == GrContextOptions::Enable::kYes) == expected,
+          "reduceOpsTaskSplitting option mismatch");
+  ++stats.ganesh_created;
+  return scenario.fail_ganesh ? nullptr : std::make_shared<GrDirectContext>();
+}
+}
+
+@PROBE@
+
+void VerifyCleanup(const Scenario& s, bool ganesh_success) {
+  Require(stats.context_created == stats.context_destroyed, "EGL context leaked");
+  Require(stats.surface_created == stats.surface_destroyed, "EGL surface leaked");
+  Require(stats.ganesh_release == (ganesh_success ? 1 : 0), "Ganesh resources not released");
+  Require(stats.ganesh_destroyed == (ganesh_success ? 1 : 0), "Ganesh context not destroyed");
+  Require(current_context == (s.previous ? kOldContext : EGL_NO_CONTEXT),
+          "prior EGL context overwritten");
+  Require(current_draw == (s.previous ? kOldDraw : EGL_NO_SURFACE), "prior EGL draw overwritten");
+  Require(current_read == (s.previous ? kOldRead : EGL_NO_SURFACE), "prior EGL read overwritten");
+}
+void Run(const char* label, const Scenario& s, bool expect_gl, int ganesh_calls,
+         const char* override_renderer = nullptr) {
+  Setup(s, override_renderer);
+  auto selected = gesher_hwui_choose_pipeline();
+  const bool gl = selected == android::uirenderer::RenderPipelineType::SkiaGL;
+  if (gl != expect_gl) {
+    std::fprintf(stderr, "FAIL %s: selected=%d reason=%s\n", label,
+                 static_cast<int>(selected), gesher_hwui_renderer_detail());
+    std::exit(1);
+  }
+  Require(stats.ganesh_created == ganesh_calls, "unexpected Ganesh creation count");
+  Require(std::strcmp(gesher_hwui_renderer_name(), gl ? "skiagl" : "skiacpu") == 0,
+          "stale renderer diagnostics");
+  VerifyCleanup(s, gl && ganesh_calls > 0);
+  std::printf("PASS %s\n", label);
+}
+int main() {
+  Scenario s;
+  Run("Intel hardware: actual Ganesh creation succeeds", s, true, 1);
+  s.fail_ganesh = true;
+  Run("MakeGL fails: CPU fallback and complete cleanup", s, false, 1);
+  s.fail_ganesh = false; s.previous = true;
+  Run("previous EGL draw/read/context restored", s, true, 1);
+  s.previous = false; s.fail_interface = true;
+  Run("invalid Skia interface: CPU fallback", s, false, 0);
+  s.fail_interface = false; s.fail_pbuffer = true;
+  Run("pbuffer creation failure", s, false, 0);
+  s.fail_pbuffer = false; s.fail_make_current = true;
+  Run("eglMakeCurrent failure", s, false, 0);
+  s.fail_make_current = false; s.fail_create_context = true;
+  Run("eglCreateContext failure", s, false, 0);
+  s.fail_create_context = false; s.fail_config = true;
+  Run("eglChooseConfig failure", s, false, 0);
+  s.fail_config = false; s.fail_init = true;
+  Run("eglInitialize failure", s, false, 0);
+  s.fail_init = false; s.fail_symbol = true;
+  Run("missing ANGLE function", s, false, 0);
+  s.fail_symbol = false;
+  s.renderer = "ANGLE (Microsoft, Microsoft Basic Render Driver Direct3D11 vs_5_0)";
+  Run("WARP auto skips Ganesh allocation", s, false, 0);
+  Run("explicit GL on WARP still supported", s, true, 1, "skiagl");
+  s.renderer = "ANGLE (Intel, Intel(R) UHD Graphics Direct3D11 vs_5_0 ps_5_0)";
+  Env("GESHER_TEST_REDUCE_OPS", "0");
+  Run("shared RenderThread options with reduceOps=false", s, true, 1);
+  Env("GESHER_TEST_REDUCE_OPS", nullptr);
+  s.no_display = true;
+  Run("no ANGLE display", s, false, 0);
+  s.no_display = false;
+  Setup(s, "skiacpu");
+  Require(gesher_hwui_choose_pipeline() == android::uirenderer::RenderPipelineType::SkiaCpu &&
+          stats.context_created == 0 && stats.ganesh_created == 0,
+          "skiacpu override incorrectly probes GPU");
+  std::puts("PASS explicit skiacpu avoids probe");
+  std::puts("Ganesh probe and selector failures all passed");
+}

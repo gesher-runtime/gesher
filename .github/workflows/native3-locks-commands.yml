@@ -76,7 +76,7 @@ jobs:
           from pathlib import Path
           allowed = {'kernel32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
                      'ws2_32.dll', 'iphlpapi.dll', 'psapi.dll', 'bcrypt.dll',
-                     'api-ms-win-core-synch-l1-2-0.dll',
+                     'api-ms-win-core-synch-l1-2-0.dll', 'api-ms-win-core-realtime-l1-1-1.dll', 'powrprof.dll',
                      'api-ms-win-crt-stdio-l1-1-0.dll', 'api-ms-win-crt-runtime-l1-1-0.dll',
                      'api-ms-win-crt-locale-l1-1-0.dll', 'api-ms-win-crt-heap-l1-1-0.dll',
                      'api-ms-win-crt-private-l1-1-0.dll', 'api-ms-win-crt-string-l1-1-0.dll',

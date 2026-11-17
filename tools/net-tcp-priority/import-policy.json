@@ -11,13 +11,17 @@
       "iphlpapi.dll",
       "user32.dll",
       "gdi32.dll",
-      "advapi32.dll"
+      "advapi32.dll",
+      "api-ms-win-core-realtime-l1-1-1.dll",
+      "powrprof.dll"
     ],
     "source": [
       "compat/elf/exec/exec.cmake",
       "compat/posix/posix.cmake",
       "cmake/aosp/media.cmake",
-      "compat/media/player/http_source.cc"
+      "compat/media/player/http_source.cc",
+      "compat/posix/src/resume.cc",
+      "compat/posix/include/gesher/clocks.h"
     ]
   },
   "net_tcp_priority_probe.exe": {
@@ -31,11 +35,15 @@
       "iphlpapi.dll",
       "user32.dll",
       "gdi32.dll",
-      "advapi32.dll"
+      "advapi32.dll",
+      "api-ms-win-core-realtime-l1-1-1.dll",
+      "powrprof.dll"
     ],
     "source": [
       "CMakeLists.txt",
-      "compat/posix/posix.cmake"
+      "compat/posix/posix.cmake",
+      "compat/posix/src/resume.cc",
+      "compat/posix/include/gesher/clocks.h"
     ]
   },
   "gesher_arm64.dll": {
@@ -61,11 +69,15 @@
       "iphlpapi.dll",
       "user32.dll",
       "gdi32.dll",
-      "advapi32.dll"
+      "advapi32.dll",
+      "api-ms-win-core-realtime-l1-1-1.dll",
+      "powrprof.dll"
     ],
     "source": [
       "CMakeLists.txt",
-      "compat/posix/posix.cmake"
+      "compat/posix/posix.cmake",
+      "compat/posix/src/resume.cc",
+      "compat/posix/include/gesher/clocks.h"
     ]
   },
   "net_udp_guarded_fault_probe.exe": {
@@ -79,11 +91,15 @@
       "iphlpapi.dll",
       "user32.dll",
       "gdi32.dll",
-      "advapi32.dll"
+      "advapi32.dll",
+      "api-ms-win-core-realtime-l1-1-1.dll",
+      "powrprof.dll"
     ],
     "source": [
       "CMakeLists.txt",
-      "compat/posix/posix.cmake"
+      "compat/posix/posix.cmake",
+      "compat/posix/src/resume.cc",
+      "compat/posix/include/gesher/clocks.h"
     ]
   }
 }

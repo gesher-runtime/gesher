@@ -2,6 +2,7 @@
 // mixed output (GESHER_AUDIO_CAPTURE), and nothing at all.
 
 #include <windows.h>
+#include <gesher/clocks.h>
 
 #include <algorithm>
 #include <cmath>
@@ -24,19 +25,14 @@ constexpr uint32_t kChannels = 2;
 // Frames due by the clock since the sink opened.
 class Clock {
  public:
-  Clock() {
-    QueryPerformanceFrequency(&freq_);
-    QueryPerformanceCounter(&start_);
-  }
+  Clock() : start_(gesher::MonotonicNanos()) {}
   uint64_t Due(uint32_t rate) const {
-    LARGE_INTEGER now;
-    QueryPerformanceCounter(&now);
-    return static_cast<uint64_t>(static_cast<double>(now.QuadPart - start_.QuadPart) * rate /
-                                 static_cast<double>(freq_.QuadPart));
+    const int64_t elapsed = gesher::MonotonicNanos() - start_;
+    return static_cast<uint64_t>(static_cast<__int128>(elapsed) * rate / 1000000000);
   }
 
  private:
-  LARGE_INTEGER freq_, start_;
+  int64_t start_;
 };
 
 class ClockedSink : public Sink {

@@ -161,6 +161,9 @@ public final class PackageUninstallTest {
 
         File privateData=new File(data,"data/"+name);privateData.mkdirs();
         Files.writeString(new File(privateData,"private-marker").toPath(),"synthetic old data");
+        File deviceData=new File(data,"user_de/0/"+name);
+        require(deviceData.isDirectory(),"Installer omitted device-protected data root");
+        Files.writeString(new File(deviceData,"private-marker").toPath(),"synthetic old DE data");
         Method pendingRemoval=method(PackageManagerService.class,"isRemovalPending",String.class);
         AtomicBoolean preflightBlocked=new AtomicBoolean(true);AtomicInteger cleanups=new AtomicInteger();
         method(PackageManagerService.class,"onPackageRemovalCheck",Consumer.class).invoke(pm,(Consumer<String>)removed->{
@@ -178,14 +181,16 @@ public final class PackageUninstallTest {
         });
         service.uninstall(target,caller.get(),0,receiver,0);work.remove(0).run();
         require(status(result)==PackageInstaller.STATUS_FAILURE_BLOCKED&&cleanups.get()==0
-                &&new File(privateData,"private-marker").isFile(),"Rejected preflight mutated client/data state");
+                &&new File(privateData,"private-marker").isFile()
+                &&new File(deviceData,"private-marker").isFile(),"Rejected preflight mutated client/data state");
         preflightBlocked.set(false);
         // A real write failure must preserve PM, registry and old app data; no removal event.
         File temporary=new File(data,"system/packages.list.tmp");temporary.mkdirs();
         ApkPackage beforeFailure=pm.get(name);
         service.uninstall(target,caller.get(),0,receiver,0);work.remove(0).run();
         require(status(result)==PackageInstaller.STATUS_FAILURE_STORAGE,"Registry failure reported success");
-        require(pm.get(name)==beforeFailure&&new File(privateData,"private-marker").isFile(),"Failed removal lost publication/data");
+        require(pm.get(name)==beforeFailure&&new File(privateData,"private-marker").isFile()
+                &&new File(deviceData,"private-marker").isFile(),"Failed removal lost publication/data");
         require(Files.readString(new File(data,"system/packages.list").toPath()).contains(name+"\t")&&events.isEmpty(),"Failed removal changed registry/events");
         require(!(Boolean)pendingRemoval.invoke(pm,name),"Successful rollback retained removal barrier");
         Files.delete(temporary.toPath());
@@ -241,7 +246,8 @@ public final class PackageUninstallTest {
         service.uninstall(new VersionedPackage(name,2L),caller.get(),0,receiver,0);work.remove(0).run();
         require(status(result)==PackageInstaller.STATUS_SUCCESS,"Approved ordinary target was not removed");
         drain(eventExecutor);require(eventFailure.get()==null,"Removal callback failed: "+eventFailure.get());
-        require(pm.get(name)==null&&!privateData.exists(),"Removed package still visible or has reusable data");
+        require(pm.get(name)==null&&!privateData.exists()&&!deviceData.exists(),
+                "Removed package still visible or has reusable CE/DE data");
         require(!(Boolean)pendingRemoval.invoke(pm,name),"Committed removal retained barrier");
         require(grants.isEmpty()&&jobs.isEmpty()&&!persisted.exists(),"URI or persisted job capability survived removal");
         require(events.size()==2&&Intent.ACTION_PACKAGE_REMOVED.equals(events.get(0).getAction())
@@ -255,7 +261,8 @@ public final class PackageUninstallTest {
                 "Pre-uninstall pending insertion published after same-signer reinstall");
         require(!persistRace.isAlive()&&persistFailure.get()==null&&!persisted.exists(),
                 "Pre-uninstall paused persistence recreated a removed job file");
-        require(pm.get(name).uid()==uid&&!new File(privateData,"private-marker").exists(),"Reinstall reused old data or changed reserved UID");
+        require(pm.get(name).uid()==uid&&!new File(privateData,"private-marker").exists()
+                &&!new File(deviceData,"private-marker").exists(),"Reinstall reused old CE/DE data or changed reserved UID");
         require((Boolean)field(held.getClass(),"canceled").get(held),"Old pending-intent capability revived");
         require(jobs.isEmpty()&&!persisted.exists()&&grants.isEmpty(),"Same-signer reinstall revived job/URI state");
         caller.set(name);rejected(oldSession::getNames,SecurityException.class);caller.set(owner.packageName);
@@ -267,11 +274,15 @@ public final class PackageUninstallTest {
         Class<?> storage=Class.forName("com.gesher.server.PackageRemovalStorage");
         ApkPackage reinstalled=pm.get(name);String code=new File(reinstalled.apkPath).getParent();
         privateData.mkdirs();Files.writeString(new File(privateData,"recovery-marker").toPath(),"synthetic recovery");
+        deviceData.mkdirs();Files.writeString(new File(deviceData,"recovery-marker").toPath(),"synthetic DE recovery");
         Object staged=make(storage,new Class<?>[]{String.class,String.class},name,code);
-        method(storage,"stage").invoke(staged);require(!privateData.exists(),"Data quarantine did not fence reinstall");
+        method(storage,"stage").invoke(staged);require(!privateData.exists()&&!deviceData.exists(),
+                "CE/DE quarantine did not fence reinstall");
         Map<String,String> retained=new LinkedHashMap<>();retained.put(name,code);
         method(storage,"recover",Map.class).invoke(null,retained);
-        require(new File(privateData,"recovery-marker").isFile()&&new File(reinstalled.apkPath).isFile(),"Precommit recovery failed");
+        require(new File(privateData,"recovery-marker").isFile()
+                &&new File(deviceData,"recovery-marker").isFile()
+                &&new File(reinstalled.apkPath).isFile(),"Precommit CE/DE recovery failed");
         rejected(()->make(storage,new Class<?>[]{String.class,String.class},name,new File(data,"outside").getPath()),SecurityException.class);
 
         Object inDoubt=make(storage,new Class<?>[]{String.class,String.class},name,code);
@@ -340,7 +351,7 @@ public final class PackageUninstallTest {
         pm.deletePackageAsUser(name,-1,legacyObserver,0,0);work.remove(0).run();
         require(legacyResult.get()==1&&pm.get(name)==null&&prompts.get()==beforePrompts+2,
                 "Approved legacy removal did not complete through shared pipeline");
-        require(!privateData.exists()&&legacyCallbacks.get()==4,
+        require(!privateData.exists()&&!deviceData.exists()&&legacyCallbacks.get()==4,
                 "Legacy removal retained app data or miscounted final callbacks");
         require(((Integer)method(permission.getClass(),"checkPermission",String.class,String.class,String.class,int.class)
                 .invoke(permission,owner.packageName,"android.permission.DELETE_PACKAGES",null,0))==PackageManager.PERMISSION_DENIED,

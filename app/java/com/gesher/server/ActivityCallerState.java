@@ -118,7 +118,7 @@ final class ActivityCallerState {
         UriGrants.checkedUri(uri, userId);
     }
 
-    private static Set<Uri> contentUris(Intent root) {
+    static Set<Uri> contentUris(Intent root) {
         Set<Uri> result = new HashSet<>();
         if (root == null) return result;
         ArrayDeque<Intent> pending = new ArrayDeque<>();

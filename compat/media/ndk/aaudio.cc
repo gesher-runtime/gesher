@@ -13,6 +13,7 @@
 // on threads set up for loaded code (EnterLoadedCode).
 
 #include <time.h>
+#include <gesher/clocks.h>
 
 #include <algorithm>
 #include <atomic>
@@ -140,7 +141,7 @@ int StreamForUsage(int32_t usage) {
 
 int64_t Now() {
   timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
+  gesher::AndroidClockGettime(CLOCK_MONOTONIC, &ts);
   return static_cast<int64_t>(ts.tv_sec) * 1000000000 + ts.tv_nsec;
 }
 
@@ -709,7 +710,7 @@ bool SYSV GetFalse(AAudioStream*) { return false; }
 
 aaudio_result_t SYSV GetTimestamp(AAudioStream* s, int32_t clockid, int64_t* frames, int64_t* ns) {
   if (s == nullptr || frames == nullptr || ns == nullptr) return kErrorNull;
-  // Guest Linux IDs. The media engine timestamps use host MONOTONIC. A
+  // Guest Linux IDs. The media engine timestamps use Android MONOTONIC. A
   // suspend-aware BOOTTIME translation is not yet available; do not silently
   // return a timestamp from a different clock domain.
   if (clockid == 7) return kErrorUnimplemented;

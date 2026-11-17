@@ -48,7 +48,7 @@ LinuxTimespec RealtimeNow() {
   clock_gettime(CLOCK_REALTIME, &now);
   return {now.tv_sec, now.tv_nsec};
 }
-int64_t QpcNanos() {
+int64_t MonotonicNanos() {
   if (fixed_clock) return monotonic_ns;
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -59,7 +59,7 @@ int64_t NowRealtimeNs() {
   auto now = RealtimeNow();
   return now.tv_sec * 1000000000 + now.tv_nsec;
 }
-int64_t NowMonotonicNs() { return QpcNanos(); }
+int64_t NowMonotonicNs() { return MonotonicNanos(); }
 @WORD_IMPLEMENTATION@
 @SEMAPHORE_IMPLEMENTATION@
 @SYSCONF_IMPLEMENTATION@

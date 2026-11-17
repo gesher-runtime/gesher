@@ -87,6 +87,14 @@ Check 'services: concurrent clipboard callbacks and native Windows clipboard upd
   $clipboardCallbacksOut
 } @('ClipboardCallbackTest all passed:')
 
+$receiverExportOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ReceiverExportContractTest') 90
+$receiverExportCode = $LASTEXITCODE
+Check 'services: dynamic receiver exports, protected broadcasts and sticky-query exemptions' {
+  $global:LASTEXITCODE = $receiverExportCode
+  $receiverExportOut
+} @('ReceiverExportContractTest passed:', 'binder=true')
+
 $contentObserverOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'ContentObserverLifecycleTest') 90
 $contentObserverCode = $LASTEXITCODE
@@ -102,6 +110,14 @@ Check 'services: queued job completion, stopping work and alarm-clock replacemen
   $global:LASTEXITCODE = $schedulerWorkCode
   $schedulerWorkOut
 } @('SchedulerWorkContractTest all passed:')
+
+$activityRestoreOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ActivityRestoreContractTest') 90
+$activityRestoreCode = $LASTEXITCODE
+Check 'services: activity state restoration, process death survival and LaunchActivityItem delivery' {
+  $global:LASTEXITCODE = $activityRestoreCode
+  $activityRestoreOut
+} @('ActivityRestoreContractTest all passed:')
 
 $mediaRequestsOut = FixesRun ($dvmFixes + 'gesher.services.MediaStoreRequestContractTest') 90
 $mediaRequestsCode = $LASTEXITCODE
@@ -294,6 +310,14 @@ Check 'services: URI delegation, provider patterns, exact identities and scoped 
   $uriGrantsOut
 } @('UriGrantContractTest all passed: 138 checks; binder=true')
 
+$intentUriGrantsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'IntentUriGrantContractTest') 90
+$intentUriGrantsCode = $LASTEXITCODE
+Check 'services: Intent URI grants, IBinder owner lifecycle and non-system ignore' {
+  $global:LASTEXITCODE = $intentUriGrantsCode
+  $intentUriGrantsOut
+} @('IntentUriGrantContractTest passed: 28 checks')
+
 # Caller identity and URI snapshots must survive actual ActivityThread delivery,
 # relaunch and results, including a PendingIntent holder cleared by its own send.
 . "$PSScriptRoot/../component-caller-contracts.ps1"
@@ -410,6 +434,7 @@ foreach ($fixture in @(
   @('NdefDataContractTest', 'NDEF bytes, helpers, malformed input and native Parcel round trips'),
   @('PowerWakeLockCallbackTest', 'wake lock listener callbacks, real held state and token lifetime'),
   @('PackageManifestFlagsTest', 'complete parsed manifest flags preserve installed application state'),
+  @('AppStorageContextTest', 'distinct CE/DE contexts, files, preferences, databases and data migration'),
   @('PackageServiceQueriesTest', 'package UID/group queries and Android 16 dex-module completion'),
   @('BluetoothValueContractTest', 'BLE settings, filters, advertisements and parcels without an adapter'),
   @('MediaStoreContractTest', 'media collections, resolver forwarding and unavailable-provider handling'),

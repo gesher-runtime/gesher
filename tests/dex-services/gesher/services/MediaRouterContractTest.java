@@ -48,6 +48,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /** Actual public routers, route/session consistency, callback completion and stream volume. */
 public final class MediaRouterContractTest {
     private static int checks;
+    private static boolean featuresInitialized;
     private static synchronized void check(boolean condition, String reason) {
         if (!condition) throw new AssertionError(reason);
         checks++;
@@ -58,7 +59,7 @@ public final class MediaRouterContractTest {
     }
 
     /** ContextImpl plus an attached Application; neither app code nor an activity is launched. */
-    public static Context context(String packageName) throws Exception {
+    public static synchronized Context context(String packageName) throws Exception {
         Constructor<ActivityThread> constructor = ActivityThread.class.getDeclaredConstructor();
         constructor.setAccessible(true);
         ActivityThread thread = constructor.newInstance();
@@ -88,9 +89,14 @@ public final class MediaRouterContractTest {
         field(ActivityThread.class, "mInitialApplication").set(thread, application);
         Object loaded = field(context.getClass(), "mPackageInfo").get(context);
         field(loaded.getClass(), "mApplication").set(loaded, application);
-        IPackageManager packages = IPackageManager.Stub.asInterface(ServiceManager.getService("package"));
-        SystemFeaturesCache.setInstance(new SystemFeaturesCache(
-                packages.getSystemAvailableFeatures().getList()));
+        // Like application binding, initialize the process-wide cache once. A
+        // fresh Context/LoadedApk must not bootstrap this singleton again.
+        if (!featuresInitialized) {
+            IPackageManager packages = IPackageManager.Stub.asInterface(ServiceManager.getService("package"));
+            SystemFeaturesCache.setInstance(new SystemFeaturesCache(
+                    packages.getSystemAvailableFeatures().getList()));
+            featuresInitialized = true;
+        }
         return context;
     }
 

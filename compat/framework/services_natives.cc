@@ -166,12 +166,20 @@ static jlong Zygote_startTime(JNIEnv*, jclass, jint pid) {
     return gesher::zygote::StartTime(pid);
 }
 
+static jlong Zygote_childStartTime(JNIEnv*, jclass, jint pid) {
+    return gesher::zygote::ChildStartTime(pid);
+}
+
 static jint Zygote_exitCode(JNIEnv*, jclass, jint pid) {
     return gesher::zygote::ExitCode(pid);
 }
 
 static jboolean Zygote_kill(JNIEnv*, jclass, jint pid) {
     return gesher::zygote::Kill(pid) ? JNI_TRUE : JNI_FALSE;
+}
+
+static jboolean Zygote_killChild(JNIEnv*, jclass, jint pid, jlong startTime) {
+    return gesher::zygote::KillChild(pid, startTime) ? JNI_TRUE : JNI_FALSE;
 }
 
 static jboolean Zygote_joinJob(JNIEnv*, jclass, jint pid) {
@@ -215,8 +223,10 @@ static const JNINativeMethod gZygoteMethods[] = {
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Z)I",
      GESHER_JNI(Zygote_spawn)},
     {"nativeStartTime", "(I)J", GESHER_JNI(Zygote_startTime)},
+    {"nativeChildStartTime", "(I)J", GESHER_JNI(Zygote_childStartTime)},
     {"nativeExitCode", "(I)I", GESHER_JNI(Zygote_exitCode)},
     {"nativeKill", "(I)Z", GESHER_JNI(Zygote_kill)},
+    {"nativeKillChild", "(IJ)Z", GESHER_JNI(Zygote_killChild)},
     {"nativeJoinJob", "(I)Z", GESHER_JNI(Zygote_joinJob)},
     {"nativeLock", "(Ljava/lang/String;I)J", GESHER_JNI(Zygote_lock)},
     {"nativeUnlock", "(J)V", GESHER_JNI(Zygote_unlock)},

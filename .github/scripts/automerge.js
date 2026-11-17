@@ -112,6 +112,7 @@ async function authorQa(github, owner, repo, pr, event, boundary) {
   return proof;
 }
 
+// Read legacy boundaries without creating new initialization comments.
 async function openingBoundary(github, owner, repo, pr) {
   const comments = await list(github.rest.issues.listComments,
     {owner, repo, issue_number: pr.number});
@@ -135,24 +136,7 @@ async function openingBoundary(github, owner, repo, pr) {
     // most conservative recorded boundary, regardless of delivery order.
     boundary = Math.max(boundary ?? at, at, recordedAt);
   }
-  return boundary;
-}
-
-async function initializeOpening(github, owner, repo, pr, snapshot, event) {
-  const existing = await openingBoundary(github, owner, repo, pr);
-  if (existing !== null) return existing;
-  const times = [pr.created_at, pr.updated_at, snapshot.updated_at];
-  if (event) times.push(event.created_at);
-  const parsed = times.map(Date.parse);
-  if (!parsed.every(Number.isFinite)) return null;
-  const boundary = Math.max(...parsed);
-  const value = {repository: pr.base.repo.id, number: pr.number,
-    created: pr.created_at, boundary: new Date(boundary).toISOString()};
-  await github.rest.issues.createComment({owner, repo, issue_number: pr.number,
-    body: 'Automerge initialized. Approval requires a later explicit label from a collaborator with merge access. ' +
-      'The PR author must reapply their first label or first submit the exact-head QA review described in .github/scripts/automerge.md.\n\n<!-- ' +
-      OPENING + ' ' + JSON.stringify(value) + ' -->'});
-  return boundary;
+  return boundary ?? Date.parse(pr.created_at);
 }
 
 function sameTarget(a, b) {
@@ -207,25 +191,51 @@ function approvalFor(pr, event) {
 }
 
 async function approval(github, owner, repo, pr, event) {
-  const comments = await list(github.rest.issues.listComments,
-    {owner, repo, issue_number: pr.number});
+  const reviews = await list(github.rest.pulls.listReviews,
+    {owner, repo, pull_number: pr.number});
   const expected = approvalFor(pr, event);
   const matches = [];
-  for (const c of comments) {
-    if (c.user?.login !== BOT || c.user.type !== 'Bot' ||
-        !c.created_at || c.created_at !== c.updated_at) continue;
-    const markers = (c.body || '').split('\n').filter((s) => s.startsWith('<!-- ' + RECEIPT + ' '));
+  for (const r of reviews) {
+    if (r.user?.login !== BOT || r.user.type !== 'Bot' || !['APPROVED', 'DISMISSED'].includes(r.state)) continue;
+    const markers = (r.body || '').split('\n').filter((s) => s.startsWith('<!-- ' + RECEIPT + ' '));
     if (markers.length > 1) throw new Error('ambiguous approval receipt');
     if (!markers.length) continue;
     const marker = markers[0];
     if (!marker.endsWith(' -->')) throw new Error('malformed approval receipt');
     const value = JSON.parse(marker.slice(RECEIPT.length + 6, -4));
-    if (value.repository === expected.repository && value.number === expected.number &&
-        value.label === expected.label) matches.push(value);
+    if (value.repository !== expected.repository || value.number !== expected.number ||
+        value.label !== expected.label) continue;
+    if (r.state === 'DISMISSED') return false;
+    if (!r.node_id || !Number.isFinite(Date.parse(r.submitted_at)) ||
+        Date.parse(r.submitted_at) < Date.parse(event.created_at)) return false;
+    const {node} = await github.graphql(`query($id: ID!) {
+      node(id: $id) { ... on PullRequestReview {
+        id body state submittedAt lastEditedAt commit { oid }
+      } }
+    }`, {id: r.node_id});
+    if (node?.id !== r.node_id || node.body !== r.body || node.state !== 'APPROVED' ||
+        node.commit?.oid !== r.commit_id || node.lastEditedAt !== null ||
+        Date.parse(node.submittedAt) !== Date.parse(r.submitted_at)) return false;
+    matches.push({...value, head: r.commit_id === value.head ? value.head : null});
   }
   if (!matches.length) return null;
   return matches.every((r) => Object.keys(r).length === Object.keys(expected).length &&
     Object.entries(expected).every(([k, v]) => r[k] === v)) ? expected : false;
+}
+
+// Dismiss only this controller's stale approvals, leaving human reviews alone.
+async function dismissStaleApprovals(github, owner, repo, pr) {
+  const reviews = await list(github.rest.pulls.listReviews,
+    {owner, repo, pull_number: pr.number});
+  for (const r of reviews) {
+    if (r.user?.login === BOT && r.user.type === 'Bot' && r.state === 'APPROVED' &&
+        r.commit_id !== pr.head.sha && (r.body || '').includes('<!-- ' + RECEIPT + ' ')) {
+      const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
+      if (current.state !== 'open' || r.commit_id === current.head.sha) continue;
+      await github.rest.pulls.dismissReview({owner, repo, pull_number: pr.number,
+        review_id: r.id, message: 'New commits invalidate this automerge approval.'});
+    }
+  }
 }
 
 async function removeLabel(github, owner, repo, pr, event, why, core) {
@@ -240,8 +250,6 @@ async function removeLabel(github, owner, repo, pr, event, why, core) {
     if (err.status === 404) return;
     throw err;
   }
-  await github.rest.issues.createComment({owner, repo, issue_number: pr.number,
-    body: LABEL + ' label removed: ' + why});
   core.info('#' + pr.number + ': label removed (' + why + ')');
 }
 
@@ -362,10 +370,10 @@ async function tryMerge({github, core, owner, repo, number, sha, defaultBranch})
       !pr.head.repo?.id || !pr.base.repo?.id || (sha && pr.head.sha !== sha)) return;
   const event = await labelEvent(github, owner, repo, number);
   if (!event || !event.unambiguous || !await authorized(github, owner, repo, event)) return;
-  const boundary = await initializeOpening(github, owner, repo, pr, pr, event);
+  const boundary = await openingBoundary(github, owner, repo, pr);
   const qa = await authorQa(github, owner, repo, pr, event, boundary);
   if (!explicitApplication(pr, event, boundary, qa)) return removeLabel(github, owner, repo, pr, event,
-    'reapply the label after initialization; an author first label also requires an earlier exact-head QA review', core);
+    'apply a later explicit label; an author first label requires an earlier exact-head QA review', core);
   if (event.invalidated) return removeLabel(github, owner, repo, pr, event,
     'the PR changed after approval; apply the label again', core);
   const receipt = await approval(github, owner, repo, pr, event);
@@ -400,7 +408,7 @@ async function tryMerge({github, core, owner, repo, number, sha, defaultBranch})
       !explicitApplication(current, finalEvent, finalBoundary, finalQa)) return;
   try {
     const {data: result} = await github.rest.pulls.merge({
-      owner, repo, pull_number: number, sha: pr.head.sha, merge_method: 'merge',
+      owner, repo, pull_number: number, sha: pr.head.sha, merge_method: 'squash',
     });
     if (result.merged !== true) return removeLabel(github, owner, repo, pr, event,
       'GitHub did not confirm the merge; inspect its merge requirements', core);
@@ -427,12 +435,7 @@ module.exports = async ({github, context, core}) => {
     if (pr.state !== 'open') return;
     if (!SHA.test(pr.head?.sha || '') || !SHA.test(pr.base?.sha || '') ||
         !pr.head.repo?.id || !pr.base.repo?.id) return;
-    // Establish the boundary even for an unlabelled opening. If labeled is
-    // delivered first, its fallback initialization invalidates that label,
-    // so webhook ordering cannot turn an initial label into approval.
-    if (p.action === 'opened') {
-      await initializeOpening(github, owner, repo, pr, p.pull_request, null);
-    }
+    if (p.action === 'synchronize') await dismissStaleApprovals(github, owner, repo, pr);
     if (!hasLabel(pr)) return;
     const event = await labelEvent(github, owner, repo, pr.number,
       p.action === 'labeled' ? p.pull_request.updated_at : undefined);
@@ -445,10 +448,10 @@ module.exports = async ({github, context, core}) => {
       return removeLabel(github, owner, repo, pr, event,
         'labels included when opening a PR cannot approve it; apply the label again', core);
     }
-    const boundary = await initializeOpening(github, owner, repo, pr, pr, event);
+    const boundary = await openingBoundary(github, owner, repo, pr);
     const qa = await authorQa(github, owner, repo, pr, event, boundary);
     if (!explicitApplication(pr, event, boundary, qa)) return removeLabel(github, owner, repo, pr, event,
-      'reapply the label after initialization; an author first label also requires an earlier exact-head QA review', core);
+      'apply a later explicit label; an author first label requires an earlier exact-head QA review', core);
     if (event.invalidated) return removeLabel(github, owner, repo, pr, event,
       'the PR changed after approval; apply the label again', core);
     // Opening a PR never grants approval. A delayed opened event must not
@@ -463,9 +466,9 @@ module.exports = async ({github, context, core}) => {
         github, owner, repo, pr, event, 'the label must be applied by a user with write or admin access', core);
       const receipt = await approval(github, owner, repo, pr, event);
       if (receipt === false) return;
-      if (!receipt) await github.rest.issues.createComment({owner, repo, issue_number: pr.number,
-        body: 'Automerge approved for ' + pr.head.sha + ' into ' + pr.base.ref + '.\n\n<!-- ' +
-          RECEIPT + ' ' + JSON.stringify(approvalFor(pr, event)) + ' -->'});
+      if (!receipt) await github.rest.pulls.createReview({owner, repo, pull_number: pr.number,
+        commit_id: pr.head.sha, event: 'APPROVE',
+        body: '<!-- ' + RECEIPT + ' ' + JSON.stringify(approvalFor(pr, event)) + ' -->'});
     } else if (p.action === 'synchronize') {
       const receipt = await approval(github, owner, repo, pr, event);
       if (receipt === false || (receipt === null &&
@@ -479,17 +482,6 @@ module.exports = async ({github, context, core}) => {
   if (context.eventName === 'workflow_run' || context.eventName === 'schedule') {
     const sha = context.eventName === 'workflow_run' ? p.workflow_run.head_sha : null;
     const prs = await list(github.rest.pulls.list, {owner, repo, state: 'open'});
-    if (context.eventName === 'schedule') {
-      // Initialize existing PRs before a reviewer opts in, including PRs whose
-      // opening event predated this controller or was not delivered.
-      for (const pr of prs.filter((candidate) => !hasLabel(candidate))) {
-        try {
-          await initializeOpening(github, owner, repo, pr, pr, null);
-        } catch (err) {
-          core.warning('#' + pr.number + ': initialization blocked: ' + err.message);
-        }
-      }
-    }
     for (const pr of prs.filter((x) => hasLabel(x) && (!sha || x.head.sha === sha))) {
       try {
         await tryMerge({...args, number: pr.number, sha});

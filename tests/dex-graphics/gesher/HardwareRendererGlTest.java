@@ -43,8 +43,8 @@ import java.lang.reflect.Method;
  * </pre>
  */
 public final class HardwareRendererGlTest {
-  private static final int W = 240;
-  private static final int H = 160;
+  private static int W = 240;
+  private static int H = 160;
   // Where the text goes (its pixels are compared by count: the GPU's glyph
   // masks are FreeType's, but sampled through an atlas).
   private static final int TEXT_LEFT = 124;
@@ -130,6 +130,23 @@ public final class HardwareRendererGlTest {
       }
     }
 
+    if (gl && args.length > 4 && "trim-resize".equals(args[4])) {
+      for (int frame = 0; frame < 8; frame++) {
+        W = (frame & 1) == 0 ? 320 : 240;
+        H = (frame & 1) == 0 ? 200 : 160;
+        window.setClientSize(W, H);
+        hwRenderer.setContentRoot(scene(typeface));
+        hwRenderer.setSurface(surface);
+        // UI_HIDDEN preserves the context; BACKGROUND and above retire it.
+        HardwareRenderer.trimMemory(new int[] {20, 40, 60, 80}[frame % 4]);
+        int redraw = hwRenderer.createRenderRequest().setWaitForPresent(true).syncAndDraw();
+        check(redraw == HardwareRenderer.SYNC_OK, "trim/resize redraw " + frame);
+        hwRenderer.fence();
+        int[] pixels = GraphicsDebug.lastGlFrame(window.getHwnd());
+        check(pixels != null, "trim/resize readback " + frame);
+        if (pixels != null) checkScene(pixels, "trim/resize " + frame);
+      }
+    }
     hwRenderer.destroy();
     surface.release();
     window.close();

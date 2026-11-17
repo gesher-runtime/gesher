@@ -18,8 +18,10 @@ import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * {@code SystemServer [options] [<app.apk>...]}: system_server, lite. Parses the APKs it is
@@ -60,6 +62,45 @@ public final class SystemServer {
     static void log(String message) {
         System.out.println(TAG + ": " + message);
         System.out.flush();
+    }
+
+    /** Select an explicit APK while the previous record still supplies its system trust policy. */
+    static void selectCommandLinePackage(List<ApkPackage> selected, ApkPackage current) {
+        for (ApkPackage previous : selected) {
+            if (previous.packageName.equals(current.packageName) && previous.isSystemAddon()) {
+                if (!GmsSignatureSpoofing.verifyAddonApk(current.packageName, current.apkPath)) {
+                    throw new SecurityException("Untrusted microG addon override: " + current.packageName);
+                }
+                current.setSystemAddon(true);
+            }
+        }
+        selected.removeIf(p -> p.packageName.equals(current.packageName));
+        selected.add(current);
+    }
+
+    /** Prepare only the final selection, retaining the committed records' migration authority. */
+    static void preparePackageStorage(List<ApkPackage> committed, List<ApkPackage> selected)
+            throws java.io.IOException {
+        Set<ApkPackage> prepared = new HashSet<>();
+        for (ApkPackage previous : committed) {
+            try {
+                previous.prepareInstalledDataDirectories();
+                prepared.add(previous);
+            } catch (Exception failure) {
+                // Neither a newer APK nor a bundled fallback may classify a failed
+                // committed layout on the old manifest's behalf.
+                selected.removeIf(p -> p.packageName.equals(previous.packageName));
+                log("installed package " + previous.packageName
+                        + " storage could not be prepared: " + failure);
+            }
+        }
+        for (ApkPackage current : selected) {
+            if (!prepared.contains(current)) current.prepareDataDirectories();
+        }
+        // Keep the documented parser diagnostic, but emit it only after the
+        // complete final selection is ready to publish. A later preparation
+        // failure must not leave a misleading success summary for this boot.
+        for (ApkPackage current : selected) log(current.describe());
     }
 
     public static void main(String[] args) {
@@ -132,13 +173,8 @@ public final class SystemServer {
 
         // The packages, as PackageManagerService scans them at boot: the installed ones
         // (a persistent device's), then the APKs given here.
-        List<ApkPackage> packages = new ArrayList<>();
-        if (persistent) {
-            for (ApkPackage p : Installer.loadInstalled()) {
-                packages.add(p);
-                log("installed: " + p.describe());
-            }
-        }
+        List<ApkPackage> committed = persistent ? Installer.loadInstalled() : List.of();
+        List<ApkPackage> packages = new ArrayList<>(committed);
         if (GmsSignatureSpoofing.isEnabled()) {
             // Deliberately only these addon slots, not arbitrary files in priv-app.
             for (String name : MicrogAddons.PACKAGES) {
@@ -150,34 +186,25 @@ public final class SystemServer {
                     if (!GmsSignatureSpoofing.verifyAddonApk(name, installed.apkPath)) {
                         throw new SecurityException("Untrusted installed microG addon override: " + name);
                     }
+                    // Even when selecting the bundled fallback, the old committed
+                    // manifest is the authority for any legacy storage migration.
+                    installed.setSystemAddon(true);
                     // As an updated system app: preserve a valid newer user-installed
                     // release and its privileges, with the staged APK as fallback.
                     if (installed.versionCode() >= p.versionCode()) {
-                        installed.setSystemAddon(true);
                         p = installed;
                     }
                 }
                 packages.removeIf(old -> name.equals(old.packageName));
-                new File(p.dataDir()).mkdirs();
                 packages.add(p);
                 log("microg addon: " + p.describe());
             }
         }
         for (String apk : apks) {
             ApkPackage p = ApkPackage.parse(apk);
-            for (ApkPackage previous : packages) {
-                if (previous.packageName.equals(p.packageName) && previous.isSystemAddon()) {
-                    if (!GmsSignatureSpoofing.verifyAddonApk(p.packageName, apk)) {
-                        throw new SecurityException("Untrusted microG addon override: " + p.packageName);
-                    }
-                    p.setSystemAddon(true);
-                }
-            }
-            new File(p.dataDir()).mkdirs();
-            packages.removeIf(old -> p.packageName.equals(old.packageName));
-            packages.add(p);
-            log(p.describe());
+            selectCommandLinePackage(packages, p);
         }
+        preparePackageStorage(committed, packages);
 
         // The services, published with servicemanager.
         Map<String, IBinder> services = Services.create(packages);
