@@ -356,7 +356,7 @@ jobs:
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           python3 tools/test_apk_signing.py --apksig-jar "$APKSIG_JAR"
           tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
-          tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
+          tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
           tests/web3-query/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           chmod +x work/build-tools-36.1/zipalign  # a cache saved before zipalign was made executable
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/exitstatusapp" tests/apps/lifecycle/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
