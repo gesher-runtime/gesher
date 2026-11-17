@@ -19,6 +19,7 @@
 #include "internal.h"
 #include "record_lock_descriptors.h"
 #include "record_lock_liveness.h"
+#include "xattr_access.h"
 #include "xattr_security_policy.h"
 
 namespace {
@@ -191,10 +192,17 @@ DWORD RequiredAccess(const Request& request) {
          (request.Mutates() ? FILE_WRITE_EA | FILE_WRITE_DATA : 0);
 }
 
+}  // namespace
+
+namespace gesher::xattr {
+
 // A native empty name opens the held file itself, including directories.
 // ReOpenFile can reject directory objects even with backup flags.
-int ReopenWithAccess(HANDLE file, DWORD access, HANDLE* result, bool* delete_pending = nullptr) {
-  if (!Native().open) return EOPNOTSUPP;
+int ReopenFileAccess(HANDLE file, DWORD access, HANDLE* result, LONG* native_status) {
+  if (!Native().open) {
+    if (native_status) *native_status = static_cast<LONG>(0xc0000002);  // STATUS_NOT_IMPLEMENTED
+    return EOPNOTSUPP;
+  }
   wchar_t empty = L'\0';
   UNICODE_STRING name{0, sizeof(empty), &empty};
   OBJECT_ATTRIBUTES attributes{};
@@ -204,14 +212,18 @@ int ReopenWithAccess(HANDLE file, DWORD access, HANDLE* result, bool* delete_pen
   IO_STATUS_BLOCK io{};
   const LONG status = Native().open(result, access | SYNCHRONIZE, &attributes, &io, kSharing,
                                     FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT);
-  if (delete_pending) *delete_pending = static_cast<ULONG>(status) == 0xc0000056;
+  if (native_status) *native_status = status;
   return status == 0 ? 0 : NativeError(status);
 }
 
+}  // namespace gesher::xattr
+
+namespace {
+
 // Only the ordinary allow/deny DACL and mandatory label can be evaluated by
 // this fallback. CAP, resource attributes, callback/conditional and other ACE
-// policies need the filesystem's authorization machinery, which cannot reopen
-// a classic delete-pending file. Refuse them instead of silently omitting them.
+// policies need the filesystem's authorization machinery. If native reopening
+// fails with STATUS_DELETE_PENDING, refuse them instead of omitting them.
 int CheckFallbackPolicy(PSECURITY_DESCRIPTOR descriptor) {
   if (!descriptor || !IsValidSecurityDescriptor(descriptor)) return EIO;
   for (bool system_acl : {false, true}) {
@@ -231,11 +243,15 @@ int CheckFallbackPolicy(PSECURITY_DESCRIPTOR descriptor) {
   return 0;
 }
 
+}  // namespace
+
+namespace gesher::xattr {
+
 // Reopening a delete-pending object can fail even though its admitted handle
 // remains valid. When it already has the native EA rights, check the object's
 // current DACL against the effective token and keep using that pinned handle.
 // Never use the old grant as evidence of current inode authorization.
-int CurrentAccess(HANDLE file, DWORD desired) {
+int CheckHeldFileAccess(HANDLE file, DWORD desired) {
   PSECURITY_DESCRIPTOR descriptor = nullptr;
   // ATTRIBUTE and SCOPE are separate READ_CONTROL queries: querying LABEL
   // alone does not reveal resource claims or an applicable Central Access Policy.
@@ -317,6 +333,10 @@ int CurrentAccess(HANDLE file, DWORD desired) {
   return allowed ? 0 : EACCES;
 }
 
+}  // namespace gesher::xattr
+
+namespace {
+
 struct Target {
   Handle original;
   Handle reopened;
@@ -364,7 +384,7 @@ int OpenPath(const char* path, bool follow, const Request& request, Target* targ
   if (!target->original) return WinError();
   error = CheckTarget(target, request);
   if (error || !target->eligible) return error;
-  return ReopenWithAccess(target->original.value, RequiredAccess(request), &target->reopened.value);
+  return gesher::xattr::ReopenFileAccess(target->original.value, RequiredAccess(request), &target->reopened.value);
 }
 
 int OpenFd(int fd, const Request& request, bool allow_path, Target* target) {
@@ -389,7 +409,7 @@ int OpenFd(int fd, const Request& request, bool allow_path, Target* target) {
     // Bionic's fget/fset/flist fallback follows /proc/self/fd, which pins the
     // referred object, including an O_PATH|O_NOFOLLOW symlink itself. Open the
     // held object for classification without ever resolving its current name.
-    error = ReopenWithAccess(target->original.value, FILE_READ_ATTRIBUTES | FILE_READ_EA,
+    error = gesher::xattr::ReopenFileAccess(target->original.value, FILE_READ_ATTRIBUTES | FILE_READ_EA,
                              &target->reopened.value);
     if (error) return error;
   }
@@ -400,13 +420,13 @@ int OpenFd(int fd, const Request& request, bool allow_path, Target* target) {
   // Prefer the filesystem's current-token access check, including its native
   // security policies. A descriptor's access mode does not limit this request.
   Handle authorized;
-  bool delete_pending = false;
-  error = ReopenWithAccess(target->original.value, RequiredAccess(request), &authorized.value, &delete_pending);
+  LONG native_status = 0;
+  error = gesher::xattr::ReopenFileAccess(target->original.value, RequiredAccess(request), &authorized.value, &native_status);
   if (!error) std::swap(target->reopened.value, authorized.value);
-  // A classic delete-pending file cannot be reopened. Only use the held object
-  // when it already has the actual EA rights, and recheck its current security.
-  if (delete_pending && !path_only && (granted & native_access) == native_access)
-    return CurrentAccess(target->original.value, RequiredAccess(request));
+  // Only a native STATUS_DELETE_PENDING permits using the held object. It must
+  // already have the actual EA rights, and its current security is rechecked.
+  if (static_cast<ULONG>(native_status) == 0xc0000056 && !path_only && (granted & native_access) == native_access)
+    return gesher::xattr::CheckHeldFileAccess(target->original.value, RequiredAccess(request));
   return error;
 }
 

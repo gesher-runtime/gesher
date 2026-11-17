@@ -85,10 +85,24 @@ carry expressions in callback ACE data. Neither can be treated as an ordinary
 unconditional grant. The Windows fixture uses
 [AddResourceAttributeAce](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-addresourceattributeace)
 and [SetSecurityInfo](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo)
-to install and read back an actual file resource property, then requires all four
-fd operations to refuse it after delete-pending. It likewise installs a real
-conditional DACL through SDDL, checks refusal, removes the unsupported metadata,
-and verifies that ordinary delete-pending operations resume without data loss.
+to install and read back an actual file resource property. It also installs a
+real conditional DACL through SDDL. For both policies, the fixture directly calls
+the same production held-object security evaluator and requires `EOPNOTSUPP` for
+get/set/list/remove access masks. This is direct evaluator coverage; it does not
+claim that every public call to a delete-pending file enters that fallback.
+
+The fixture separately queries
+[FILE_STANDARD_INFO.DeletePending](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_standard_info),
+records the actual `NtOpenFile` status from the production native-open primitive,
+and verifies that any successful reopened handle identifies the original file.
+The file and effective token remain unchanged between this authorization control
+and the corresponding public call. If Windows authorizes the native reopen, the
+public call must complete its real EA operation. If native reopening reports
+`STATUS_DELETE_PENDING`, the public call must refuse the unsupported policy.
+No test switch forces a native status or selects a more permissive authorization
+path. Separate set/remove attributes prevent a failed assertion from destroying
+the base value or invalidating later measurement. After removing unsupported
+metadata, both the manual evaluator and ordinary EA operations must work again.
 A separate [AddScopedPolicyIDAce](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-addscopedpolicyidace)
 control constructs a CAP identifier ACE only in memory and passes it to the
 production parser. It does not install a central policy or establish enterprise
@@ -143,9 +157,40 @@ source/compiler/payload identity, verifies the exact current-run artifact, and
 executes x64 on Windows Server2022 and2025. ARM64 is cross-built by this component;
 actual guest ABI execution remains in full CI.
 
-**Actual Windows execution was not available at implementation time.** The new
-workflow must establish native EA, access, delete-pending, O_PATH-after-unlink,
-impersonation, handle-count and timing results before they are reported as passed.
+### First actual Windows gate and fixture repair
+
+The source-bound [Windows gate run 44168127340](https://github.com/gesher-runtime/gesher/actions/runs/44168127340)
+executed tree `c08c693f2a694de0ed5fc96742f1716e2e2394d2` on Server2022 and
+Server2025. Both passed the public/raw FD suite (**75 checks, zero failures**),
+but both reported **148 combined checks, 11 failures**. The whole Windows gate
+therefore failed. Successful receipt verification and cross-compilation do not
+change that outcome. The reported 1,000-read timings are not successful-workload
+measurements because the exact-value assertion failed.
+
+One failure was a token-fixture setup defect:
+[DuplicateToken](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-duplicatetoken)
+returns only `TOKEN_QUERY | TOKEN_IMPERSONATE`, while
+[CreateRestrictedToken](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-createrestrictedtoken)
+requires `TOKEN_DUPLICATE` on its input handle. The repaired fixture requests all
+three rights with
+[DuplicateTokenEx](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-duplicatetokenex),
+captures each construction step's immediate Win32 error, and retains the old
+limited-rights sequence as an explicit negative control. It checks the actual
+restricted thread token against both public operations and the manual evaluator.
+The original log contained stale POSIX errno, so the original failing Win32 API
+and exact error are not represented as observed facts.
+
+The other failures exposed an incorrect fixture assumption: setting deletion
+disposition had been treated as proof that empty-name native reopening failed.
+The old log did not record that status. It required unconditional policy refusal
+and then mutated/deleted `user.base` when native calls succeeded, causing later
+`ENODATA` and read-measurement failures. The repaired controls above distinguish
+native authorization from direct manual-evaluator coverage and isolate mutations.
+The production policy boundary and exact fallback trigger are unchanged.
+
+**The repaired native fixture still requires a new Windows run.** No repaired
+token, direct manual-policy, native-route or measurement pass is claimed from the
+failed run. The next gate must establish those results on the exact new source.
 If native rights have to be upgraded after a classic delete-pending open, Windows
 can still refuse the reopen; this follow-up does not invent access to such a
 handle. Keep this qualification separate from successful ordinary held-fd cases.
