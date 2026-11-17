@@ -13,6 +13,8 @@
 
 #include "compat/media/video/video_decoder.h"
 
+#define HAS_INDEXED_SELECTOR @HAS_INDEXED_SELECTOR@
+
 struct AMediaFormat {
   bool has_time = true, has_target = false, has_sync = true, has_valid_samples = false;
   int64_t time = 0, target = -1;
@@ -53,13 +55,17 @@ struct CMediaTrack {
   int (*read)(void*, CMediaBuffer**, uint32_t, int64_t);
 };
 namespace android {
-struct CMediaTrackReadOptions { static constexpr uint32_t SEEK = 8; };
+struct CMediaTrackReadOptions {
+  static constexpr uint32_t SEEK = 8;
+  static constexpr uint32_t SEEK_FRAME_INDEX = 4;
+};
 struct MediaBufferGroup { void* wrap() { return this; } };
 }  // namespace android
 
 namespace gesher::media {
 @TRACK_READER@
 @RETRIEVER_SELECTION@
+@PRESENTATION_ORIENTATION@
 }  // namespace gesher::media
 
 namespace {
@@ -277,6 +283,80 @@ void Boundaries() {
   }
 }
 
+#if HAS_INDEXED_SELECTOR
+void Orientation() {
+  const auto rotated = [](int degrees) {
+    std::vector<int> out(6);
+    for (int y = 0; y < 2; ++y) {
+      for (int x = 0; x < 3; ++x) {
+        out.at(RetrieverPixelIndex(x, y, 3, 2, degrees)) = y * 3 + x;
+      }
+    }
+    return out;
+  };
+  Check(rotated(0) == std::vector<int>({0, 1, 2, 3, 4, 5}), "unrotated bitmap keeps pixel order");
+  Check(rotated(90) == std::vector<int>({3, 0, 4, 1, 5, 2}), "wide bitmap rotates clockwise");
+  Check(rotated(180) == std::vector<int>({5, 4, 3, 2, 1, 0}), "half turn flips both axes");
+  Check(rotated(270) == std::vector<int>({2, 5, 1, 4, 0, 3}), "wide bitmap rotates counterclockwise");
+}
+
+void IndexedFrames() {
+  for (int batch : {1, 7, 0}) {
+    Track track(Tail(1466666));
+    Decoder decoder(batch);
+    AospTrackReader reader(track.Open());
+    std::vector<uint8_t> colors;
+    std::vector<int64_t> times;
+    VisitRetrieverFrames(&reader, &decoder, 44, SeekMode::kFrameIndex, 0,
+                         [&](const VideoFrame& frame) {
+                           colors.push_back(frame.data.at(0));
+                           times.push_back(frame.time_us);
+                           return colors.size() < 3;
+                         });
+    Check(track.first_options == 12 && track.first_seek == 44,
+          "an indexed request reaches AOSP as a frame index, without conversion");
+    Check(colors == std::vector<uint8_t>({3, 4, 4}),
+          "a non-sync index starts at the target, then returns consecutive frames");
+    Check(times == std::vector<int64_t>({1466666, 1500000, 1533333}),
+          "a batch emits exact requested presentation timestamps in order");
+    Check(decoder.drains == (batch == 0 ? 1 : 0),
+          "the indexed batch needs drain only if the decoder held its output");
+  }
+  {
+    Track track({{0, -1, false, true, true, 1}});
+    Decoder decoder(1);
+    AospTrackReader reader(track.Open());
+    VisitRetrieverFrames(&reader, &decoder, 0, SeekMode::kFrameIndex, 0,
+                         [&](const VideoFrame&) {
+                           Check(false, "the adapter must not substitute a frame without an index target");
+                           return false;
+                         });
+    Check(decoder.decodes == 0, "a seek without indexed target metadata fails before decoding");
+  }
+  {
+    Track track(Tail(1933333));
+    Decoder decoder(0);
+    AospTrackReader reader(track.Open());
+    int count = 0;
+    VisitRetrieverFrames(&reader, &decoder, 58, SeekMode::kFrameIndex, 0,
+                         [&](const VideoFrame&) { ++count; return true; });
+    Check(count == 2 && decoder.drains == 1, "partial indexed EOS keeps available frames");
+  }
+  {
+    std::vector<Input> data;
+    for (int n = 0; n < 605; ++n) data.push_back({n, 1, n == 0, true, n == 0, 1});
+    Track track(std::move(data));
+    Decoder decoder(1);
+    AospTrackReader reader(track.Open());
+    int count = 0;
+    VisitRetrieverFrames(&reader, &decoder, 1, SeekMode::kFrameIndex, 0,
+                         [&](const VideoFrame&) { return ++count < 603; });
+    Check(count == 603 && decoder.decodes == 604 && decoder.drains == 0,
+          "a valid indexed batch can exceed the time path's input budget");
+  }
+}
+#endif
+
 void Errors() {
   {
     Track track({}); Decoder decoder(0);
@@ -310,6 +390,10 @@ int main() {
   Metadata();
   Buffering();
   Boundaries();
+#if HAS_INDEXED_SELECTOR
+  IndexedFrames();
+  Orientation();
+#endif
   Errors();
   std::cout << "Retriever frame contracts: " << checks - failures << '/' << checks
             << " passed, " << failures << " failed\n";

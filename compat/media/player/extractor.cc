@@ -132,12 +132,14 @@ class AospTrackReader : public TrackReader {
     free(track_);  // malloc'd by the plugin helper's wrap()
   }
 
-  int Read(Sample* out, int64_t seek_us, SeekMode mode) override {
+  int Read(Sample* out, int64_t position, SeekMode mode) override {
+    static_assert(static_cast<uint32_t>(SeekMode::kFrameIndex) ==
+                  android::CMediaTrackReadOptions::SEEK_FRAME_INDEX);
     if (!started_) return -1;
     uint32_t opts = 0;
-    if (seek_us >= 0) opts = android::CMediaTrackReadOptions::SEEK | static_cast<uint32_t>(mode);
+    if (position >= 0) opts = android::CMediaTrackReadOptions::SEEK | static_cast<uint32_t>(mode);
     CMediaBuffer* buf = nullptr;
-    media_status_t err = track_->read(track_->data, &buf, opts, seek_us >= 0 ? seek_us : 0);
+    media_status_t err = track_->read(track_->data, &buf, opts, position >= 0 ? position : 0);
     if (err == AMEDIA_ERROR_END_OF_STREAM) return 1;
     if (err != AMEDIA_OK || buf == nullptr) return err == AMEDIA_OK ? 1 : -1;
     const uint8_t* data = static_cast<const uint8_t*>(buf->data(buf->handle));

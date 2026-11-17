@@ -53,14 +53,22 @@ struct Sample {
 };
 
 // AOSP's CMediaTrackReadOptions seek modes.
-enum class SeekMode : uint32_t { kPreviousSync = 0, kNextSync = 1, kClosestSync = 2, kClosest = 3 };
+enum class SeekMode : uint32_t {
+  kPreviousSync = 0,
+  kNextSync = 1,
+  kClosestSync = 2,
+  kClosest = 3,
+  kFrameIndex = 4,
+};
 
 class TrackReader {
  public:
   virtual ~TrackReader() = default;
   // The next sample. Returns 0, 1 at the end, negative on error; with
-  // seek_us >= 0, the first sample at or around that time (by mode).
-  virtual int Read(Sample* out, int64_t seek_us = -1, SeekMode mode = SeekMode::kPreviousSync) = 0;
+  // position >= 0, the first sample at or around that time in microseconds,
+  // or at a preceding sync sample for a presentation-order kFrameIndex seek.
+  virtual int Read(Sample* out, int64_t position = -1,
+                   SeekMode mode = SeekMode::kPreviousSync) = 0;
 };
 
 class Extractor {
