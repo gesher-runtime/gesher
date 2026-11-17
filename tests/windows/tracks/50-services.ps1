@@ -411,7 +411,7 @@ Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
 $s = 'system_server: '
 $null = CheckSequences 'services: system_server drives components.apk: NewIntentItem, ActivityResultItem, services, receivers, providers, notifications' $serverOut @(
-  ,@("${s}com.gesher.components parsed by PackageParser2: 7 activities, 3 services, 1 receivers, 1 providers",
+  ,@("${s}com.gesher.components parsed by PackageParser2: 8 activities, 4 services, 1 receivers, 1 providers",
     "${s}publishContentProviders: com.gesher.components.items (com.gesher.components.ItemsProvider)",
     "${s}scheduleTransaction NewIntentItem to com.gesher.components/com.gesher.components.SingleTopActivity",
     "${s}scheduleTransaction ActivityResultItem, ResumeActivityItem to com.gesher.components/com.gesher.components.MainActivity",
@@ -425,6 +425,42 @@ $null = CheckSequences 'services: system_server drives components.apk: NewIntent
     "${s}scheduleReceiver com.gesher.components/com.gesher.components.ManifestReceiver",
     "${s}settings: updated system key gesher_test", "${s}scheduleExit: process ")
 )
+# A real SpellCheckerService runs in the fixture's :checker process. Only the
+# host may select it, then real AOSP client APIs exercise both remote sessions.
+$checkerRun = $dvmApp + 'com.gesher.app.Main', '--system-server', '--keep-task',
+  '--activity', '.SpellCheckerActivity'
+$checkerApk = NoDrive "$Dir/components.apk"
+$checkerUnselected = RunTimed "$Dir/dalvikvm.exe" ($checkerRun + '--ez',
+  'spell-checker-unselected', 'true', $checkerApk) 90
+$checkerCode = $LASTEXITCODE
+$null = CheckOrdered 'text services: installed unselected APK is discoverable but inactive' `
+  $checkerUnselected @('spell checker contract: unselected APK remains inactive') $checkerCode
+$checkerCommand = $dvmApp + 'com.gesher.server.RuntimeCommands', 'spell-checker'
+foreach ($checkerOptions in @(
+  @{ Args = @('use', 'com.gesher.components/.TestSpellChecker') },
+  @{ Args = @('language', '1002') },
+  @{ Args = @('enable') }
+)) {
+  $checkerAdminOut = RunTimed "$Dir/dalvikvm.exe" ($checkerCommand + $checkerOptions.Args) 45
+  $checkerAdminCode = $LASTEXITCODE
+  $null = CheckOrdered "text services: trusted host $($checkerOptions.Args[0])" `
+    $checkerAdminOut @('Spell-checker setting updated') $checkerAdminCode
+}
+try {
+  $checkerOut = RunTimed "$Dir/dalvikvm.exe" ($checkerRun + $checkerApk) 90
+  $checkerCode = $LASTEXITCODE
+  $null = CheckOrdered 'text services: real word, sentence, language and cancellation Binder contracts' `
+    $checkerOut @('spell checker contract: distinct process, words, sentence, locale, cancel and close passed') $checkerCode
+  $checkerServerOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
+  $null = CheckOrdered 'text services: provider binding is released after both sessions close' `
+    $checkerServerOut @('scheduleBindService com.gesher.components/.TestSpellChecker',
+    'publishService com.gesher.components/.TestSpellChecker', 'scheduleUnbindService com.gesher.components/.TestSpellChecker')
+} finally {
+  $checkerResetOut = RunTimed "$Dir/dalvikvm.exe" ($checkerCommand + 'automatic') 45
+  $checkerResetCode = $LASTEXITCODE
+  $null = CheckOrdered 'text services: restore automatic checker selection' `
+    $checkerResetOut @('Spell-checker setting updated') $checkerResetCode
+}
 foreach ($p in $server, $servicemanager, $binderd) {
   if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
 }

@@ -97,6 +97,8 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (Consumer<String> action : cleanup) action.accept(name);
     }
 
+    boolean hasTransientPackageState() { return mTransientEnabled; }
+
     public PermissionPolicy permissions() { return mPermissions; }
 
     @Override public String[] getSystemSharedLibraryNames() {
@@ -389,6 +391,15 @@ public final class PackageManagerService extends IPackageManager.Default {
                     flags));
         }
         return result;
+    }
+
+    /** Visibility to an installed service, from the already authenticated caller's package. */
+    synchronized boolean canSeeInstalledPackage(String source, String target) {
+        Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
+        for (String removing : mRemoving.keySet()) packages.remove(removing);
+        ApkPackage caller = packages.get(source);
+        return caller != null && new PackageVisibility(packages, false, false, false,
+                this::isProtectedBroadcast).canSee(caller.uid(), target);
     }
 
     /** The services {@code intent} resolves to, in every package. */

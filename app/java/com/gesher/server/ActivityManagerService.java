@@ -12,6 +12,7 @@ import android.app.IApplicationThread;
 import android.app.IServiceConnection;
 import android.app.Notification;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.IIntentReceiver;
 import android.content.IIntentSender;
 import android.content.Intent;
@@ -84,6 +85,8 @@ public final class ActivityManagerService extends IActivityManager.Default {
     }
 
     CallerIdentity callers() { return mCallers; }
+
+    SettingsProvider settingsProvider() { return mProviders.settingsProvider(); }
 
     void setAccountManager(AccountManagerService accounts) { mAtm.setAccountManager(accounts); }
 
@@ -624,6 +627,13 @@ public final class ActivityManagerService extends IActivityManager.Default {
             String instanceName, String callingPackage, int userId) {
         return mServices.bindService(caller, service, resolvedType, connection, flags,
                 callingPackage);
+    }
+
+    /** The text-services server may bind only the provider generation it selected. */
+    int bindSpellChecker(Intent service, IServiceConnection connection,
+            java.util.function.BooleanSupplier current) {
+        return mServices.bindService(null, service, null, connection,
+                Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT_BACKGROUND, "android", current);
     }
 
     @Override

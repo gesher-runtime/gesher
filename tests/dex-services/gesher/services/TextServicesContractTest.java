@@ -2,17 +2,23 @@
 package gesher.services;
 
 import android.app.ActivityThread;
+import android.app.ContentProviderHolder;
+import android.app.IActivityManager;
+import android.content.AttributionSource;
 import android.content.Context;
 import android.content.pm.IPackageManager;
 import android.content.pm.SystemFeaturesCache;
 import android.content.res.AssetManager;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IInterface;
 import android.os.Looper;
 import android.os.Parcel;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.os.Process;
+import android.provider.Settings;
 import android.view.textservice.SentenceSuggestionsInfo;
 import android.view.textservice.SpellCheckerSession;
 import android.view.textservice.SpellCheckerSession.SpellCheckerSessionParams;
@@ -57,6 +63,13 @@ public final class TextServicesContractTest {
         Map<String, IBinder> created = Services.createInProcess(Collections.emptyList());
         IBinder target = created.get(Context.TEXT_SERVICES_MANAGER_SERVICE);
         check(target != null, "textservices is registered");
+        ContentProviderHolder settingsHolder = IActivityManager.Stub.asInterface(created.get(Context.ACTIVITY_SERVICE))
+                .getContentProviderExternal(Settings.AUTHORITY, 0, null, "text-services-contract");
+        Bundle disabled = new Bundle();
+        disabled.putString("value", "0");
+        rejects(SecurityException.class, () -> settingsHolder.provider.call(
+                new AttributionSource(Process.myUid(), "android", null), Settings.AUTHORITY,
+                "PUT_secure", Settings.Secure.SPELL_CHECKER_ENABLED, disabled));
         AtomicInteger transactions = new AtomicInteger();
         IBinder transport = new Binder() {
             @Override public IInterface queryLocalInterface(String descriptor) { return null; }
