@@ -204,6 +204,14 @@ final class BroadcastController {
         }
     }
 
+    /** Full public send path for ordered broadcasts; private system dispatch continues to use the legacy overloads. */
+    void sendOrderedBroadcast(Intent intent, String resolvedType, String callingPackage, int callingPid,
+            IIntentReceiver resultTo, int resultCode, String resultData, Bundle resultExtras,
+            String[] requiredPermissions, String[] excludePermissions, String[] excludePackages) {
+        broadcastIntent(null, intent, resolvedType, callingPackage, callingPid, resultTo, resultCode,
+                resultData, resultExtras, requiredPermissions, excludePermissions, excludePackages, true);
+    }
+
     /** Full public send path; private system dispatch continues to use the legacy overloads. */
     int broadcastIntent(IApplicationThread caller, Intent intent, String resolvedType,
             String callingPackage, int callingPid, IIntentReceiver resultTo, int resultCode,
