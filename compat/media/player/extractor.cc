@@ -152,13 +152,23 @@ class AospTrackReader : public TrackReader {
     out->sync = meta != nullptr && AMediaFormat_getInt32(meta, "is-sync-frame", &v) && v != 0;
     out->valid_samples =
         meta != nullptr && AMediaFormat_getInt32(meta, "valid-samples", &v) ? v : -1;
+    if (sample_metadata_.get() != nullptr) {
+      AMediaFormat_clear(sample_metadata_.get());
+      if (meta != nullptr) AMediaFormat_copy(sample_metadata_.get(), meta);
+    }
     buf->release(buf->handle);
     return 0;
   }
 
  private:
+  void EnableSampleMetadata() override { sample_metadata_ = Format(); }
+  const Format* SampleMetadata() const override {
+    return sample_metadata_.get() != nullptr ? &sample_metadata_ : nullptr;
+  }
+
   CMediaTrack* track_;
   android::MediaBufferGroup group_;
+  Format sample_metadata_{nullptr};
   bool started_ = false;
 };
 

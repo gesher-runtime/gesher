@@ -26,6 +26,7 @@ jobs:
             tests/media/ndk-format
             tests/media/opensl-contracts
             tests/media/ndk-muxer
+            tests/media/ndk-extractor
             compat/media/sounds
 
       - name: Strict current framework-classes artifact
@@ -139,6 +140,9 @@ jobs:
 
       - name: Build Media4 NDK muxer fixtures
         run: bash tests/media/ndk-muxer/build.sh out android-ndk-r27c
+
+      - name: Build NDK extractor contract fixtures
+        run: bash tests/media/ndk-extractor/build.sh out android-ndk-r27c
 
       - name: Build mediaapp.apk
         run: |

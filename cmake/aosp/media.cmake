@@ -74,7 +74,8 @@ target_compile_options(gesher_media_player_core PRIVATE -Wall -Wextra -Werror
 set_target_properties(gesher_media_player_core PROPERTIES CXX_STANDARD 23)
 
 # The native APIs share the actual audio/file-player backend in both hosts.
-add_library(gesher_media_ndk OBJECT ${_media}/ndk/aaudio.cc ${_media}/ndk/opensles.cc)
+add_library(gesher_media_ndk OBJECT
+  ${_media}/ndk/aaudio.cc ${_media}/ndk/opensles.cc ${_media}/ndk/media_extractor.cc)
 target_link_libraries(gesher_media_ndk PUBLIC gesher_media_audio gesher_media_player_core gesher_bionic)
 target_compile_options(gesher_media_ndk PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 set_target_properties(gesher_media_ndk PROPERTIES CXX_STANDARD 23)

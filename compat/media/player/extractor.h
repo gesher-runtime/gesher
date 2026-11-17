@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "data_source.h"
@@ -30,6 +31,7 @@ class Format {
   Format& operator=(const Format&) = delete;
 
   AMediaFormat* get() const { return f_; }
+  AMediaFormat* Release() { return std::exchange(f_, nullptr); }
   bool GetInt32(const char* key, int32_t* out) const;
   bool GetInt64(const char* key, int64_t* out) const;
   bool GetFloat(const char* key, float* out) const;
@@ -61,6 +63,10 @@ class TrackReader {
   // The next sample. Returns 0, 1 at the end, negative on error; with
   // seek_us >= 0, the first sample at or around that time (by mode).
   virtual int Read(Sample* out, int64_t seek_us = -1, SeekMode mode = SeekMode::kPreviousSync) = 0;
+
+  // The NDK also exposes per-sample metadata. Playback readers need no copy.
+  virtual void EnableSampleMetadata() {}
+  virtual const Format* SampleMetadata() const { return nullptr; }
 };
 
 class Extractor {
