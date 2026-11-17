@@ -88,7 +88,8 @@ static Expected Oracle(const std::string& path, bool binder) {
   std::string normalized;
   for (auto& part : parts) { if (!normalized.empty()) normalized += '/'; normalized += part; }
   if (parts.front() == "proc" || normalized == "etc/timezone" ||
-      normalized == "sys/devices/system/cpu/possible" || normalized == "sys/devices/system/cpu/present") {
+      normalized == "sys/devices/system/cpu/possible" || normalized == "sys/devices/system/cpu/present" ||
+      normalized == "sys/devices/system/cpu/online") {
     expected.kind = PathKind::kVirtual;
     expected.name = Widen(normalized.c_str());
   } else if (parts.front() == "dev" || parts.front() == "sys") {
@@ -214,12 +215,13 @@ int main(int argc, char** argv) {
       "/dev/null/extra", "/dev/../null", "/DEV/null", "/dev/null\\", "/dev/binder", "/dev/binder/more",
       "/proc", "/proc/./self//status/", "/proc/../dev/null", "/etc/timezone", "/etc/./timezone/.",
       "/etc/timezone/other", "/etc/timezone..", "/sys/devices/system/cpu/possible",
-      "/sys/devices/system/cpu/present", "/sys//devices/./system/cpu/./present/", "/sys/devices/system/cpu/present/other",
+      "/sys/devices/system/cpu/present", "/sys/devices/system/cpu/online",
+      "/sys//devices/./system/cpu/./present/", "/sys//devices/./system/cpu/./online/", "/sys/devices/system/cpu/present/other",
       "/system/fonts/../font.ttf", "/proc/\xe0\xa4\x95/\xd7\x90", "/proc/\xf0\x9f\x98\x80", "/proc/\xff"};
   for (const char* path : explicit_paths) Compare(path);
   const char* roots[] = {"", "dev", "proc", "sys", "etc", "data", "system", "mnt", "..", "."};
   const char* pieces[] = {"", ".", "..", "null", "zero", "random", "urandom", "binder", "devices", "system",
-                          "cpu", "possible", "present", "timezone", "self", "status", "a\\b", "a:b", "file", "\xd7\x90"};
+                          "cpu", "possible", "present", "online", "timezone", "self", "status", "a\\b", "a:b", "file", "\xd7\x90"};
   for (const char* root : roots) {
     for (const char* first : pieces) for (const char* second : pieces) for (const char* third : pieces)
       Compare(std::string("/") + root + '/' + first + '/' + second + '/' + third);

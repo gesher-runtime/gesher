@@ -268,7 +268,7 @@ def main():
         require(read(folder / 'guest-commands.json')['context'] == context(), 'Guest compiler context differs')
         allowed = {'kernel32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
                    'ws2_32.dll', 'iphlpapi.dll', 'psapi.dll', 'bcrypt.dll', 'user32.dll',
-                   'api-ms-win-core-synch-l1-2-0.dll'}
+                   'api-ms-win-core-synch-l1-2-0.dll', 'api-ms-win-core-realtime-l1-1-1.dll', 'powrprof.dll'}
         checks = []
         for role, member, binary in (('core', 'imports-core.txt', 'pthread_cpu_clock_target_test.exe'),
                                      ('host', 'imports-host.txt', 'gesher-exec.exe'),

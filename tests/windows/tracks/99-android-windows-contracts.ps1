@@ -1,6 +1,7 @@
 # Runtime contracts added by the November 14 Android/Windows audit.
 # Track 50 supplies bounded RunTimed; track 94 supplies the framework boot path.
 . "$PSScriptRoot/../pthread-attribute-contracts.ps1"
+. "$PSScriptRoot/../package-enabled-state-contracts.ps1"
 
 # Exercise synthetic Hebrew/English permission dialogs on a never-shown desktop.
 # This is the production dialog implementation, with denial/keyboard/scroll checks.
@@ -11,7 +12,7 @@ Check 'services: native permission dialog explicit consent and Hebrew/English co
   $permissionDialogOut
 } @('permission_dialog_test:', ' checks, 0 failures')
 
-foreach ($serviceFixture in @('RunningTaskSnapshotTest', 'TextServicesContractTest', 'MediaRouterContractTest')) {
+foreach ($serviceFixture in @('RunningTaskSnapshotTest', 'TaskStackContractTest', 'TextServicesContractTest', 'MediaRouterContractTest')) {
   $serviceContractOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + $serviceFixture) 90
   $serviceContractCode = $LASTEXITCODE
   Check "services: $serviceFixture public manager and generated Binder contracts" {

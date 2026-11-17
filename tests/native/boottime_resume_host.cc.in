@@ -1,0 +1,251 @@
+// Production clock_nanosleep + signal wait + resume dispatcher. Only clocks,
+// Windows notifications, the native relative wait and signal delivery are seams.
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+#include <gesher/resume.h>
+
+using DWORD = uint32_t;
+using PVOID = void*;
+#define CALLBACK
+#define BIONIC_SYSV
+#include "resume_windows_host.h"
+@RESUME_CORE@
+
+static std::atomic<int64_t> awake{10000000000LL}, suspended{20000000000LL};
+static std::atomic<int64_t> wall{1700000000000000000LL};
+static constexpr int64_t kHostEpoch = 1000000000000LL;
+struct HostClock {
+  using duration = std::chrono::nanoseconds;
+  using time_point = std::chrono::time_point<HostClock, duration>;
+  static time_point now() { return time_point(duration(kHostEpoch + awake + suspended)); }
+};
+namespace gesher {
+int64_t MonotonicNanos() { return awake; }
+int64_t BoottimeNanos() { return awake + suspended; }
+}
+
+namespace guest {
+constexpr int kNsig = 65, kEINTR = EINTR, kEINVAL = EINVAL, kEFAULT = EFAULT, kEOPNOTSUPP = EOPNOTSUPP;
+constexpr uintptr_t kSigDfl = 0, kSigIgn = 1;
+struct LinuxTimespec { int64_t tv_sec, tv_nsec; };
+struct BionicSiginfo { int value = 0; };
+struct ThreadState {
+  uint64_t pending = 0, mask = 0, waiting_for = 0;
+  std::atomic<bool> any_pending{false};
+  BionicSiginfo info[kNsig]{};
+} self;
+std::atomic<bool> g_process_pending{false};
+static unsigned deliveries;
+static int64_t handler_ns;
+static ThreadState* Self() { return &self; }
+static uint64_t Bit(int sig) { return uint64_t{1} << (sig - 1); }
+static bool DefaultIgnores(int sig) { return sig == 17; }
+static void Run(ThreadState*, int, const BionicSiginfo&) {
+  ++deliveries; awake += handler_ns; wall += handler_ns; errno = ERANGE;
+}
+static void DeliverAll(ThreadState*) {}
+static void DeliverPendingSignals() {}
+static LinuxTimespec RealtimeNow() { return {wall / 1000000000, wall % 1000000000}; }
+
+class RelativeCondition {
+ public:
+  void notify_all() { ++notifications_; native_.notify_all(); }
+  std::cv_status wait_for(std::unique_lock<std::mutex>& lock, std::chrono::milliseconds duration) {
+    return Wait(lock, duration.count() * 1000000);
+  }
+  std::cv_status wait_until(std::unique_lock<std::mutex>& lock, HostClock::time_point deadline) {
+    return Wait(lock, std::max<int64_t>(0, (deadline - HostClock::now()).count()));
+  }
+  bool Waits(unsigned count) {
+    std::unique_lock<std::mutex> lock(observation_);
+    return observed_.wait_for(lock, std::chrono::seconds(1), [&] { return waits_ >= count; });
+  }
+  int64_t Budget() { std::lock_guard<std::mutex> lock(observation_); return budget_; }
+  void HoldEntry() { std::lock_guard<std::mutex> lock(observation_); hold_ = true; }
+  void ReleaseEntry() { std::lock_guard<std::mutex> lock(observation_); hold_ = false; observed_.notify_all(); }
+ private:
+  std::cv_status Wait(std::unique_lock<std::mutex>& lock, int64_t nanoseconds) {
+    const int64_t awake_due = awake + nanoseconds;
+    const auto notification = notifications_;
+    {
+      std::unique_lock<std::mutex> observed(observation_);
+      ++waits_; budget_ = nanoseconds; observed_.notify_all();
+      // Deliberately hold the consumer mutex at the check-to-wait boundary.
+      // A concurrent resume callback has to acquire it before notifying.
+      observed_.wait(observed, [&] { return !hold_; });
+    }
+    native_.wait(lock, [&] { return awake >= awake_due || notification != notifications_; });
+    return awake >= awake_due ? std::cv_status::timeout : std::cv_status::no_timeout;
+  }
+  std::condition_variable native_, observed_;
+  std::mutex observation_;
+  unsigned waits_ = 0;
+  uint64_t notifications_ = 0;  // signal-state mutex owns notification/wait
+  int64_t budget_ = 0;
+  bool hold_ = false;
+};
+struct Action { uintptr_t handler = 2; };
+struct State {
+  std::mutex mutex;
+  RelativeCondition sent;
+  Action actions[kNsig];
+  uint64_t process_pending = 0;
+  BionicSiginfo process_info[kNsig]{};
+} state;
+static State& S() { return state; }
+
+@SIGNAL_SLEEP@
+@SLEEP_HELPERS@
+@CLOCK_SLEEP@
+}
+
+static unsigned assertions, failures;
+static void Check(const char* name, bool value) {
+  ++assertions;
+  if (!value) { ++failures; std::printf("FAIL boottime resume: %s\n", name); }
+}
+struct Result { int result, saved_errno; guest::LinuxTimespec remainder; };
+static auto StartSleep(int flags = 0, int64_t seconds = 3600, int clock = 7) {
+  return std::async(std::launch::async, [=] {
+    const guest::LinuxTimespec request{seconds, 0};
+    Result result{0, 0, {99, 88}};
+    errno = EDOM;
+    result.result = guest::ClockNanosleep(clock, flags, &request, &result.remainder);
+    result.saved_errno = errno;
+    return result;
+  });
+}
+static void AdvanceAwake(int64_t nanos) {
+  std::lock_guard<std::mutex> lock(guest::S().mutex);
+  awake += nanos;
+  guest::S().sent.notify_all();
+}
+static bool Ready(std::future<Result>& sleeper) {
+  return sleeper.wait_for(std::chrono::milliseconds(150)) == std::future_status::ready;
+}
+static Result Finish(std::future<Result>& sleeper) {
+  if (!Ready(sleeper)) AdvanceAwake(7200000000000LL);  // eligible old-source cleanup
+  if (!Ready(sleeper)) std::abort();
+  return sleeper.get();
+}
+static void CheckSuccess(Result result) {
+  Check("resume is successful completion, not EINTR", result.result == 0);
+  Check("successful resume preserves errno and remainder", result.saved_errno == EDOM &&
+        result.remainder.tv_sec == 99 && result.remainder.tv_nsec == 88);
+}
+
+static void Resume() {
+  auto sleeper = StartSleep();
+  Check("BOOTTIME entered the native wait", guest::S().sent.Waits(1));
+  Check("native wait retains full awake budget", guest::S().sent.Budget() == 3600000000000LL);
+  power_transport::Notify(PBT_APMSUSPEND);
+  suspended += 7200000000000LL; wall -= 9000000000000LL;
+  Check("suspend alone cannot expire a relative native wait", !Ready(sleeper));
+  power_transport::Notify();
+  Check("resume wakes expired BOOTTIME without awake advancement", Ready(sleeper));
+  CheckSuccess(Finish(sleeper));
+  Check("sleep clears its signal wait mask", guest::self.waiting_for == 0);
+  power_transport::Notify();  // retired stack/observer must not be referenced
+}
+
+static void Partial() {
+  auto sleeper = StartSleep(0, 10);
+  Check("partial-suspend wait entered", guest::S().sent.Waits(1));
+  suspended += 4000000000LL; wall += 9000000000000LL;
+  power_transport::Notify();
+  Check("resume returns to wait when deadline is still future", guest::S().sent.Waits(2) && !Ready(sleeper));
+  Check("new native budget is six seconds, independent of UTC", guest::S().sent.Budget() == 6000000000LL);
+  power_transport::Notify(PBT_APMRESUMESUSPEND);
+  Check("duplicate resume rechecks without completing", guest::S().sent.Waits(3) && !Ready(sleeper));
+  AdvanceAwake(5999999900LL);
+  Check("one hundred nanoseconds of BOOTTIME remain", guest::S().sent.Waits(4) && !Ready(sleeper));
+  AdvanceAwake(1000000LL);  // ceil-to-ms native transport may round up, never early
+  Check("remaining awake budget completes normally", Ready(sleeper));
+  CheckSuccess(Finish(sleeper));
+}
+
+static void WaitRace() {
+  guest::S().sent.HoldEntry();
+  const int64_t deadline = gesher::BoottimeNanos() / 1000000000 + 10;
+  auto sleeper = StartSleep(1, deadline);
+  Check("wait is paused after predicate while holding mutex", guest::S().sent.Waits(1));
+  suspended += 20000000000LL;
+  auto resume = std::async(std::launch::async, [] { return power_transport::Notify(); });
+  Check("resume callback waits for the consumer mutex", resume.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready);
+  guest::S().sent.ReleaseEntry();
+  Check("resume notifier completes after atomic wait entry", resume.get());
+  Check("absolute sleep cannot lose check-to-wait resume", Ready(sleeper));
+  CheckSuccess(Finish(sleeper));
+}
+
+static void RegistrationRace() {
+  power_transport::on_registration = [] {
+    suspended += 7200000000000LL;
+    power_transport::Notify();  // before Start has inserted its consumer
+  };
+  auto sleeper = StartSleep();
+  Check("clock predicate catches resume during registration", Ready(sleeper));
+  CheckSuccess(Finish(sleeper));
+}
+
+static void Signals() {
+  auto sleeper = StartSleep(0, 10);
+  Check("interrupted BOOTTIME wait entered", guest::S().sent.Waits(1));
+  {
+    std::lock_guard<std::mutex> lock(guest::S().mutex);
+    awake += 500000000;
+    suspended += 3000000000LL;
+    guest::self.pending = guest::Bit(1);
+    guest::handler_ns = 2000000000LL;
+    guest::S().sent.notify_all();
+  }
+  const auto result = Finish(sleeper);
+  Check("real signal still returns EINTR", result.result == EINTR && guest::deliveries == 1);
+  Check("signal remainder uses BOOTTIME before the handler", result.remainder.tv_sec == 6 &&
+        result.remainder.tv_nsec == 500000000 && result.saved_errno == EDOM);
+  power_transport::Notify();
+}
+
+static void Failure() {
+  power_transport::error = ERROR_NOT_ENOUGH_MEMORY;
+  auto sleeper = StartSleep();
+  Check("failed notification registration does not enter native wait", Ready(sleeper));
+  auto result = Finish(sleeper);
+  Check("BOOTTIME propagates registration error without pretending EINTR", result.result == ENOMEM &&
+        result.saved_errno == EDOM && result.remainder.tv_sec == 99 && result.remainder.tv_nsec == 88);
+  guest::LinuxTimespec zero{};
+  Check("MONOTONIC remains usable without resume registration", guest::ClockNanosleep(1, 0, &zero, nullptr) == 0);
+  Check("REALTIME remains usable without resume registration", guest::ClockNanosleep(0, 0, &zero, nullptr) == 0);
+  power_transport::error = 0;
+  sleeper = StartSleep();
+  Check("transient registration failure can retry", guest::S().sent.Waits(1));
+  suspended += 7200000000000LL; power_transport::Notify();
+  Check("retried BOOTTIME sleep receives resume", Ready(sleeper));
+  CheckSuccess(Finish(sleeper));
+}
+
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  const std::string group = argv[1];
+  if (group == "resume") Resume();
+  else if (group == "partial") Partial();
+  else if (group == "wait-race") WaitRace();
+  else if (group == "registration-race") RegistrationRace();
+  else if (group == "signals") Signals();
+  else if (group == "failure") Failure();
+  else return 2;
+  std::printf("boottime resume %s: %u assertions, %u failures\n", group.c_str(), assertions, failures);
+  return failures != 0;
+}

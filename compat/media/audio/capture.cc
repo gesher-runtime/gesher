@@ -4,6 +4,7 @@
 #include "capture.h"
 
 #include <time.h>
+#include <gesher/clocks.h>
 
 #include <algorithm>
 #include <atomic>
@@ -24,7 +25,7 @@ constexpr int kPeriodMs = 10;
 
 int64_t MonotonicNs() {
   timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
+  gesher::AndroidClockGettime(CLOCK_MONOTONIC, &ts);
   return static_cast<int64_t>(ts.tv_sec) * 1000000000 + ts.tv_nsec;
 }
 
@@ -33,15 +34,15 @@ int64_t MonotonicNs() {
 class PacedSource : public CaptureSource {
  public:
   bool Start() override {
-    start_ = std::chrono::steady_clock::now();
+    start_ = MonotonicNs();
     produced_ = 0;
     return true;
   }
   void Stop() override {}
   bool Pull(std::vector<float>* out) override {
-    auto elapsed = std::chrono::steady_clock::now() - start_;
+    const int64_t elapsed = MonotonicNs() - start_;
     const uint64_t due = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count() * rate() / 1000000);
+        static_cast<__int128>(elapsed) * rate() / 1000000000);
     if (due <= produced_) return true;
     const size_t frames = static_cast<size_t>(due - produced_);
     const size_t at = out->size();
@@ -56,7 +57,7 @@ class PacedSource : public CaptureSource {
   virtual void Fill(float* dst, size_t frames) = 0;
 
  private:
-  std::chrono::steady_clock::time_point start_;
+  int64_t start_ = 0;
   uint64_t produced_ = 0;
 };
 

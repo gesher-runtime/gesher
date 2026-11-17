@@ -28,7 +28,7 @@ import java.util.Objects;
  *
  * <p>There is one volume, the private data volume (its emulated shared view is
  * {@code media/0} on the same Windows drive), and one user. Sizes are measured on the host
- * files: an app's code directory, its data directory with its cache, and its directories
+ * files: an app's code directory, both private storage areas with their caches, and its directories
  * under {@code media/0/Android}. Walks stop after {@link #MAX_ENTRIES} entries, so a huge
  * tree answers an underestimate instead of blocking the caller. Quotas and reserved space
  * are not supported, as on a device without ext4 quotas.
@@ -259,7 +259,8 @@ final class StorageStatsService extends IStorageStatsManager.Default {
         File external = new File(mData, "media/0/Android/data/" + p.packageName);
         long externalCache = size(new File(external, "cache"), budget);
         // Android's dataBytes includes the cache directories and the app's external dirs.
-        long data = size(p.dataDir() != null ? new File(p.dataDir()) : null, budget)
+        long data = size(directory(p.credentialProtectedDataDir()), budget)
+                + size(directory(p.deviceProtectedDataDir()), budget)
                 + size(external, budget)
                 + size(new File(mData, "media/0/Android/media/" + p.packageName), budget);
         stats.codeBytes += code;
@@ -280,10 +281,16 @@ final class StorageStatsService extends IStorageStatsManager.Default {
     }
 
     private long cacheBytes(ApkPackage p, int[] budget) {
-        if (p.dataDir() == null) return 0;
-        File data = new File(p.dataDir());
-        return size(new File(data, "cache"), budget) + size(new File(data, "code_cache"), budget);
+        long total = 0;
+        for (String path : new String[] {p.credentialProtectedDataDir(), p.deviceProtectedDataDir()}) {
+            if (path == null) continue;
+            File data = new File(path);
+            total += size(new File(data, "cache"), budget) + size(new File(data, "code_cache"), budget);
+        }
+        return total;
     }
+
+    private static File directory(String path) { return path == null ? null : new File(path); }
 
     private interface Visitor {
         void file(Path path, long size);

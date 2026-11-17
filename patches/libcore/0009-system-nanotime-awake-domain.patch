@@ -1,0 +1,27 @@
+--- a/ojluni/src/main/native/System.c
++++ b/ojluni/src/main/native/System.c
+@@ -34,6 +34,10 @@
+ #include "jni.h"
+ #include "jni_util.h"
+ #include "jvm.h"
++
++#if defined(GESHER)
++#include <gesher/awake_clock.h>
++#endif
+ 
+ #if !defined(GESHER)
+ #include "openssl/opensslv.h"
+@@ -259,9 +263,13 @@
+ }
+ 
+ static jlong System_nanoTime() {
++#if defined(GESHER)
++  return gesher_monotonic_nanos();
++#else
+   struct timespec now;
+   clock_gettime(CLOCK_MONOTONIC, &now);
+   return now.tv_sec * 1000000000LL + now.tv_nsec;
++#endif
+ }
+ 
+ static jlong System_currentTimeMillis() {

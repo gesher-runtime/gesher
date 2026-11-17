@@ -22,6 +22,7 @@
 // where they are, with the output format's csd-0 (and csd-1) set.
 
 #include <jni.h>
+#include <gesher/clocks.h>
 
 #include <media/NdkMediaFormat.h>
 
@@ -850,9 +851,7 @@ class Codec {
     if (self == nullptr) return;
     JavaMap m;
     m.longs["0-media-time-us"] = time_us;
-    m.longs["0-system-nano"] = static_cast<int64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
+    m.longs["0-system-nano"] = gesher::MonotonicNanos();
     jobject map = m.Make(env);
     env->CallVoidMethod(self, gJ.post_event, kEventFrameRendered, 0, 0, map);
     CheckException(env, "MediaCodec.postEventFromNative");
@@ -1182,8 +1181,7 @@ class Codec {
     f->Allocate(enc_params_.width, enc_params_.height);
     RgbaToI420(rgba, w, h, f.get());
     if (ts_ns <= 0) {
-      ts_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                  std::chrono::steady_clock::now().time_since_epoch()).count();
+      ts_ns = gesher::MonotonicNanos();
     }
     f->time_us = ts_ns / 1000;
     std::lock_guard<std::mutex> lock(mu_);

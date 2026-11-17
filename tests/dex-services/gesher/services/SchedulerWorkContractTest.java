@@ -157,6 +157,9 @@ public final class SchedulerWorkContractTest {
             service.setName(PACKAGE + ".WorkService"); service.setPackageName(PACKAGE);
             service.setProcessName(PACKAGE); service.setEnabled(true);
             service.setPermission(android.Manifest.permission.BIND_JOB_SERVICE);
+            var keepAlive = new com.android.internal.pm.pkg.component.ParsedActivityImpl();
+            keepAlive.setPackageName(PACKAGE); keepAlive.setName(PACKAGE + ".FixtureKeepAlive"); keepAlive.setEnabled(true);
+            parsed.addActivity(keepAlive);
             parsed.addService(service); parsed.setEnabled(true); parsed.setTargetSdkVersion(36); parsed.hideAsFinal();
             Object owner = UNSAFE.allocateInstance(type("ApkPackage"));
             set(owner, "packageName", PACKAGE); set(owner, "mUid", UID); set(owner, "parsed", parsed);
@@ -180,6 +183,10 @@ public final class SchedulerWorkContractTest {
             set(providers, "mClients", new HashMap<>());
             set(providers, "mPublished", new HashMap<>());
             set(providers, "mPublishedBy", new HashMap<>());
+            set(providers, "mPublishedCode", new HashMap<>());
+            set(providers, "mInstalling", new HashMap<>());
+            set(providers, "mConnections", new HashMap<>());
+            set(providers, "mRequests", new java.util.HashSet<>());
             set(am, "mProviders", providers);
             Object permissions = invoke(pm, "permissions", new Class<?>[0]);
             set(am, "mPermissions", permissions); invoke(permissions, "attach", new Class<?>[]{callersType}, callers);
@@ -199,7 +206,14 @@ public final class SchedulerWorkContractTest {
             set(process, "uid", UID); set(process, "packageName", PACKAGE); set(process, "processName", PACKAGE); set(process, "ready", true);
             ((List<Object>) get(atm, "mProcesses")).add(process);
             // Keep this constructed process available across separate runs; no activity is executed.
-            ((List<Object>) get(process, "activities")).add(UNSAFE.allocateInstance(type("ActivityTaskManagerService$ActivityRecord")));
+            android.content.pm.ActivityInfo info = (android.content.pm.ActivityInfo)invoke(pm, "getActivityInfo",
+                    new Class<?>[]{android.content.ComponentName.class, long.class, int.class},
+                    new android.content.ComponentName(PACKAGE, PACKAGE + ".FixtureKeepAlive"), 0L, 0);
+            Class<?> recordType = type("ActivityTaskManagerService$ActivityRecord");
+            Object record = make(recordType, new Class<?>[]{atmType, android.content.pm.ActivityInfo.class,
+                    Intent.class, int.class, int.class, String.class, recordType, String.class, int.class},
+                    atm, info, new Intent(), 1, PID, PACKAGE, null, null, -1);
+            ((List<Object>) get(process, "activities")).add(record);
             scheduler = make(type("JobSchedulerService"), new Class<?>[]{amType, atmType, pmType}, am, atm, pm);
             set(scheduler, "mThread", new Thread()); // Deterministic manual dispatch, no scheduler polling.
             IJobScheduler endpoint = (IJobScheduler) scheduler;
@@ -248,6 +262,9 @@ public final class SchedulerWorkContractTest {
             set(run, "params", parameters);
             invoke(scheduler, "bind", new Class<?>[]{runType}, run);
             check(bindings() == 1, "Run did not create its real system service binding");
+            // This work-queue fixture manually dispatches the execution boundary.
+            // Constraint/start acknowledgement contracts use Run.started separately.
+            set(run, "state", 2);
             return new Handle(job, run, callback, parameters);
         }
         PendingIntent operation(int request) throws Exception {

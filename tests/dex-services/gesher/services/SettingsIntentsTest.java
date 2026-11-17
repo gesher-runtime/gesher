@@ -404,7 +404,8 @@ public final class SettingsIntentsTest {
         constructor.setAccessible(true);
         IStorageStatsManager stats = (IStorageStatsManager) constructor.newInstance(pm, data);
 
-        // The app's data: 3000 bytes of files, 1000 of them cache; 500 bytes of external cache.
+        // CE: 3000 bytes (1000 cache); DE: 1000 bytes (500 cache/code-cache);
+        // external: 500 bytes of cache. Each private area must be counted once.
         File appData = new File(data, "data/" + PACKAGE);
         write(new File(appData, "files/a.bin"), 2000);
         write(new File(appData, "cache/c.bin"), 1000);
@@ -414,6 +415,10 @@ public final class SettingsIntentsTest {
         Class<?> apkClass = Class.forName("com.gesher.server.ApkPackage");
         Object apk = pmClass.getMethod("get", String.class).invoke(pm, PACKAGE);
         apkClass.getMethod("setDataDir", String.class).invoke(apk, appData.getPath());
+        File deviceData = new File((String) apkClass.getMethod("deviceProtectedDataDir").invoke(apk));
+        write(new File(deviceData, "files/a.bin"), 500);
+        write(new File(deviceData, "cache/c.bin"), 200);
+        write(new File(deviceData, "code_cache/compiled.bin"), 300);
 
         require(stats.getTotalBytes(null, "gesher.services") > 0, "total bytes 0");
         require(stats.getFreeBytes(null, "gesher.services") > 0, "free bytes 0");
@@ -421,16 +426,16 @@ public final class SettingsIntentsTest {
         StorageStats app = stats.queryStatsForPackage(null, PACKAGE, 0, "gesher.services");
         long apkBytes = new File(data, "base.apk").length();
         require(app.getAppBytes() == apkBytes, "code bytes " + app.getAppBytes() + " != " + apkBytes);
-        require(app.getDataBytes() == 3500, "data bytes " + app.getDataBytes());
-        require(app.getCacheBytes() == 1500, "cache bytes " + app.getCacheBytes());
+        require(app.getDataBytes() == 4500, "CE+DE data bytes " + app.getDataBytes());
+        require(app.getCacheBytes() == 2000, "CE+DE cache bytes " + app.getCacheBytes());
         require(app.getExternalCacheBytes() == 500, "external cache " + app.getExternalCacheBytes());
-        require(stats.getCacheBytes(null, "gesher.services") == 1000, "volume cache bytes");
+        require(stats.getCacheBytes(null, "gesher.services") == 1500, "CE+DE volume cache bytes");
         throwsType(android.os.ParcelableException.class, () -> stats.queryStatsForPackage(null,
                 "com.example.missing", 0, "gesher.services"), "unknown package answered");
         throwsType(IllegalArgumentException.class, () -> stats.getTotalBytes("no-such-volume",
                 "gesher.services"), "unknown volume answered");
         int uid = (int) apkClass.getMethod("uid").invoke(apk);
-        require(stats.queryStatsForUid(null, uid, "gesher.services").getDataBytes() == 3500,
+        require(stats.queryStatsForUid(null, uid, "gesher.services").getDataBytes() == 4500,
                 "uid stats differ from the package's");
         ExternalStorageStats shared = stats.queryExternalStatsForUser(null, 0, "gesher.services");
         require(shared.getTotalBytes() == 4800 && shared.getImageBytes() == 4000

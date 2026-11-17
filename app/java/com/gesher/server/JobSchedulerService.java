@@ -39,6 +39,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * {@code jobscheduler}: JobSchedulerService on Windows (devsvc track, docs/services.md
@@ -46,8 +49,9 @@ import java.util.Set;
  * package, namespace and id) wait for their minimum latency, their periodic window
  * (interval and flex, as JobStatus computes them) and their constraints: network (Windows'
  * network list manager: connected to the internet, unmetered when asked), charging (AC
- * power, or a PC without a battery), battery not low, device idle (no user input for
- * 30 minutes) and storage not low (always); an override deadline runs them regardless.
+ * power, or a PC without a battery), battery not low, device idle (an observed
+ * noninteractive display for the AOSP inactivity threshold) and storage not low. A one-shot override
+ * deadline bypasses these explicit constraints; periodic windows do not.
  * Content URI triggers ({@code addTriggerContentUri}) watch {@link ContentService}'s changes
  * (a provider's {@code notifyChange}): such a job runs once its update delay passed without
  * another change, or its maximum delay after the first, with the changed URIs and
@@ -66,7 +70,10 @@ import java.util.Set;
 final class JobSchedulerService extends IJobScheduler.Default
         implements DeviceWork.Source, WindowsHost.Listener {
     private static final long EXECUTION_LIMIT_MS = 10 * 60_000;
-    private static final long IDLE_AFTER_MS = 30 * 60_000;
+    private static final long IDLE_AFTER_MS = 31 * 60_000; // AOSP config_jobSchedulerInactivityIdleThreshold
+    private static final long BIND_TIMEOUT_MS = 18_000;
+    private static final long CALLBACK_TIMEOUT_MS = 8_000;
+    private static final int BINDING = 0, STARTING = 1, EXECUTING = 2, STOPPING = 3, FINISHED = 4;
     /** How often waiting constraints (network, charging, idle) are looked at again. */
     private static final long CONSTRAINT_POLL_MS = 30_000;
     private static final int MAX_RUNNING = 4;
@@ -78,6 +85,12 @@ final class JobSchedulerService extends IJobScheduler.Default
     private final CallerIdentity mCallers;
     private final NotificationManagerService mNotifications;
     private final double mTimeScale;
+    private final ConnectivityService mConnectivity;
+    private final ScheduledThreadPoolExecutor mTimeouts = new ScheduledThreadPoolExecutor(1, task -> {
+        Thread thread = new Thread(task, "job-timeouts");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     /** A scheduled job: JobStatus. */
     private final class Job {
@@ -93,7 +106,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         final ArrayDeque<JobWorkItem> work = new ArrayDeque<>();
         final Map<Integer, JobWorkItem> delivered = new HashMap<>();
         int nextWorkId = 1;
-        Run run;                // while it runs
+        volatile Run run;       // writes under the scheduler monitor; sampled for constraint queries
         // Content URI triggers: the changes seen since it last ran (elapsedRealtime).
         final java.util.LinkedHashSet<android.net.Uri> changedUris = new java.util.LinkedHashSet<>();
         final java.util.LinkedHashSet<String> changedAuthorities = new java.util.LinkedHashSet<>();
@@ -127,10 +140,18 @@ final class JobSchedulerService extends IJobScheduler.Default
     private final class Run extends IJobCallback.Stub implements IBinder.DeathRecipient {
         final Job job;
         final long started = SystemClock.elapsedRealtime();
+        final boolean deadlineExpired;
+        // Dispatch serializes outbound start/stop/network calls with binding cleanup.
+        // Never acquire it while holding the scheduler monitor. Binder callbacks
+        // update state through the same gate, without holding the monitor over IPC.
+        final Object dispatch = new Object();
+        int state = BINDING;
+        ScheduledFuture<?> timeout;
         IJobService service;
         JobParameters params;
         boolean stopping;
         boolean done;
+        volatile boolean topStarted;
         int notificationId;
         String notificationChannelId;
         int notificationEndPolicy;
@@ -138,7 +159,8 @@ final class JobSchedulerService extends IJobScheduler.Default
             @Override
             public void connected(ComponentName name, IBinder binder,
                     android.app.IBinderSession session, boolean dead) {
-                if (binder != null) started(binder);
+                if (dead || binder == null) finish(Run.this, true, "its service disconnected");
+                else started(binder);
             }
         };
 
@@ -151,18 +173,11 @@ final class JobSchedulerService extends IJobScheduler.Default
 
         Run(Job job) {
             this.job = job;
-            android.net.Network n = null;
-            if (needsNetwork(job.info)) {
-                try {
-                    n = satisfyingNetwork(job.info);
-                } catch (LinkageError | RuntimeException e) {
-                    // no connectivity classes
-                }
-                if (n == null && networkOk(job.info)) {
-                    n = new android.net.Network(101);
-                }
-            }
-            network = n;
+            // JobServiceContext captures this at execution selection, even for a
+            // periodic window; the flag itself never grants constraint immunity.
+            deadlineExpired = job.latest < started;
+            // Assigned from an observed snapshot when the service is ready to start.
+            network = null;
             if (job.changedAuthorities.isEmpty()) {
                 triggeredUris = null;
                 triggeredAuthorities = null;
@@ -179,31 +194,40 @@ final class JobSchedulerService extends IJobScheduler.Default
         }
 
         void started(IBinder binder) {
-            // A binding may finish after an APK replacement. Do not hand the old
-            // JobParameters/extras/work to the newly installed service code.
-            if (!current(job)) { finish(this, false, "its owner changed while binding"); return; }
-            synchronized (JobSchedulerService.this) {
-                if (done || stopping || service != null) return;
-                service = IJobService.Stub.asInterface(binder);
-                params = new JobParameters(this, job.namespace, job.info.getId(),
-                        job.info.getExtras(), job.info.getTransientExtras(),
-                        job.info.getClipData(), job.info.getClipGrantFlags(),
-                        SystemClock.elapsedRealtime() >= job.latest /* deadline expired */,
-                        job.info.isExpedited(), job.info.isUserInitiated(),
-                        triggeredUris, triggeredAuthorities, network);
-            }
-            try {
-                binder.linkToDeath(this, 0);
-            } catch (RemoteException e) {
-                finish(this, true, "its process died");
-                return;
-            }
-            SystemServer.log("jobscheduler: startJob " + job);
-            try {
-                if (!current(job)) { finish(this, false, "its owner changed before dispatch"); return; }
-                service.startJob(params);
-            } catch (RemoteException e) {
-                finish(this, true, "startJob failed: " + e);
+            synchronized (dispatch) {
+                if (!current(job)) { finish(this, false, "its owner changed while binding"); return; }
+                synchronized (JobSchedulerService.this) {
+                    if (done || stopping || state != BINDING || service != null) return;
+                }
+                ConstraintState constraints = readConstraints();
+                topStarted |= constraints.topUid == job.ownerUid;
+                int violation = runningConstraintViolation(job, constraints, SystemClock.elapsedRealtime());
+                if (violation != JobParameters.STOP_REASON_UNDEFINED) {
+                    stopRun(this, violation, JobParameters.INTERNAL_STOP_REASON_CONSTRAINTS_NOT_SATISFIED,
+                            constraintWhy(violation));
+                    return;
+                }
+                synchronized (JobSchedulerService.this) {
+                    if (done || stopping) return;
+                    service = IJobService.Stub.asInterface(binder);
+                    network = satisfyingNetwork(job.info, constraints);
+                    params = new JobParameters(this, job.namespace, job.info.getId(),
+                            job.info.getExtras(), job.info.getTransientExtras(),
+                            job.info.getClipData(), job.info.getClipGrantFlags(),
+                            deadlineExpired,
+                            job.info.isExpedited(), job.info.isUserInitiated(),
+                            triggeredUris, triggeredAuthorities, network);
+                    state = STARTING;
+                    armTimeout(this, CALLBACK_TIMEOUT_MS);
+                }
+                try {
+                    binder.linkToDeath(this, 0);
+                    if (!current(job)) { finish(this, false, "its owner changed before dispatch"); return; }
+                    SystemServer.log("jobscheduler: startJob " + job);
+                    service.startJob(params);
+                } catch (RemoteException | RuntimeException e) {
+                    finish(this, true, "startJob failed: " + e);
+                }
             }
         }
 
@@ -215,19 +239,39 @@ final class JobSchedulerService extends IJobScheduler.Default
         @Override
         public void acknowledgeStartMessage(int jobId, boolean ongoing) {
             callback(jobId);
-            if (!ongoing) finish(this, false, "onStartJob returned false");
+            synchronized (dispatch) {
+                synchronized (JobSchedulerService.this) {
+                    if (done || state != STARTING) return;
+                    state = EXECUTING;
+                    armTimeout(this, Math.max(1, started + scaled(EXECUTION_LIMIT_MS)
+                            - SystemClock.elapsedRealtime()));
+                }
+                if (!ongoing) finish(this, false, "onStartJob returned false");
+                else if (stopping) dispatchStop(this);
+                else updateNetwork(this, network);
+            }
         }
 
         @Override
         public void acknowledgeStopMessage(int jobId, boolean reschedule) {
             callback(jobId);
-            finish(this, reschedule, "stopped (onStopJob: reschedule " + reschedule + ")");
+            synchronized (dispatch) {
+                synchronized (JobSchedulerService.this) {
+                    if (done || state != STOPPING) return;
+                }
+                finish(this, reschedule, "stopped (onStopJob: reschedule " + reschedule + ")");
+            }
         }
 
         @Override
         public void jobFinished(int jobId, boolean reschedule) {
             callback(jobId);
-            finish(this, reschedule, "jobFinished (reschedule " + reschedule + ")");
+            synchronized (dispatch) {
+                synchronized (JobSchedulerService.this) {
+                    if (done || (state != EXECUTING && state != STOPPING)) return;
+                }
+                finish(this, reschedule, "jobFinished (reschedule " + reschedule + ")");
+            }
         }
 
         @Override
@@ -364,15 +408,23 @@ final class JobSchedulerService extends IJobScheduler.Default
     private int mRunning;
     private Thread mThread;
     // Test overrides (isolated to test fixtures; never set in production).
-    Integer mNetworkStateOverride;
-    int[] mPowerStatusOverride;
-    Long mIdleMillisOverride;
+    private volatile String mNetworkSnapshotOverride;
+    private volatile int[] mPowerStatusOverride;
+    private volatile Long mIdleMillisOverride;
+    private volatile long[] mStorageSpaceOverride;
 
     JobSchedulerService(ActivityManagerService am, ActivityTaskManagerService atm,
             PackageManagerService pm) {
+        this(am, atm, pm, null);
+    }
+
+    JobSchedulerService(ActivityManagerService am, ActivityTaskManagerService atm,
+            PackageManagerService pm, ConnectivityService connectivity) {
         mAm = am;
         mAtm = atm;
         mPm = pm;
+        mConnectivity = connectivity;
+        mTimeouts.setRemoveOnCancelPolicy(true);
         mCallers = new CallerIdentity(pm, atm);
         mNotifications = NotificationManagerService.sLast;
         if (mNotifications != null) mNotifications.attachJobScheduler(this);
@@ -381,7 +433,8 @@ final class JobSchedulerService extends IJobScheduler.Default
         String s = System.getenv("GESHER_JOBS_TIME_SCALE");
         if (s != null) {
             try {
-                scale = Math.max(1, Double.parseDouble(s));
+                double requested = Double.parseDouble(s);
+                if (Double.isFinite(requested)) scale = Math.max(1, requested);
             } catch (NumberFormatException e) {
                 // not a number: no scale
             }
@@ -450,19 +503,7 @@ final class JobSchedulerService extends IJobScheduler.Default
             SystemServer.log("jobscheduler: persisted " + j + " scheduled again");
         }
         WindowsHost.addListener(this);
-        try {
-            ConnectivityService cs = ConnectivityService.sInstance;
-            if (cs != null) {
-                cs.addListener(new com.gesher.net.IConnectivity.IListener.Stub() {
-                    @Override
-                    public void onSnapshot(String snapshot) {
-                        onNetworkChanged();
-                    }
-                });
-            }
-        } catch (Throwable t) {
-            // no connectivity service or in test
-        }
+        if (mConnectivity != null) mConnectivity.addSystemListener(this::onNetworkChanged);
         mThread = new Thread(this::run, "jobs");
         mThread.setDaemon(true);
         mThread.start();
@@ -510,13 +551,18 @@ final class JobSchedulerService extends IJobScheduler.Default
             throw new IllegalArgumentException("Scheduled service " + service
                     + " does not require android.permission.BIND_JOB_SERVICE permission");
         }
-        if (GmsSignatureSpoofing.isEnabled() && info.isPersisted()
+        if (info.isPersisted()
                 && mPm.permissions().checkPermission(pkg, android.Manifest.permission.RECEIVE_BOOT_COMPLETED)
                         != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            throw new SecurityException("Persisted jobs require RECEIVE_BOOT_COMPLETED");
+            throw new IllegalArgumentException("Persisted jobs require RECEIVE_BOOT_COMPLETED");
         }
-        if (GmsSignatureSpoofing.isEnabled() && info.isUserInitiated()
+        if (info.isUserInitiated()
                 && !userInitiatedPermission(pkg)) throw new SecurityException("User-initiated job permission denied");
+        if (needsNetwork(info) && capturedOwner.parsed.getTargetSdkVersion() >= 34
+                && mPm.permissions().checkPermission(pkg, android.Manifest.permission.ACCESS_NETWORK_STATE)
+                        != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Network jobs require ACCESS_NETWORK_STATE");
+        }
         start();
         Run stop = null;
         Job job;
@@ -726,8 +772,9 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     @Override
     public void onWindowsEvents(int events) {
-        if ((events & (WindowsHost.EVENT_POWER_STATUS | WindowsHost.EVENT_RESUMED)) != 0) {
+        if ((events & (WindowsHost.EVENT_POWER_STATUS | WindowsHost.EVENT_RESUMED | WindowsHost.EVENT_DISPLAY_STATE)) != 0) {
             onPowerStateChanged();
+            if ((events & WindowsHost.EVENT_RESUMED) != 0) checkExecutionTimeouts();
         }
     }
 
@@ -751,7 +798,7 @@ final class JobSchedulerService extends IJobScheduler.Default
     }
 
     private boolean userInitiatedPermission(String pkg) {
-        return !GmsSignatureSpoofing.isEnabled() || mPm.permissions().checkPermission(pkg,
+        return mPm.permissions().checkPermission(pkg,
                 "android.permission.RUN_USER_INITIATED_JOBS") == android.content.pm.PackageManager.PERMISSION_GRANTED;
     }
 
@@ -804,27 +851,27 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     private void run() {
         while (true) {
-            List<Job> ready = new ArrayList<>();
+            // One host observation per pass, not one native enumeration per job.
+            ConstraintState constraints = readConstraints();
+            List<Run> ready = new ArrayList<>();
             List<RunToStop> toStop = new ArrayList<>();
-            long wait;
             synchronized (this) {
                 long now = SystemClock.elapsedRealtime();
                 long next = now + CONSTRAINT_POLL_MS;
                 for (Job j : mJobs) {
                     if (j.run != null) continue;
-                    if (j.earliest > now) {
+                    if (j.earliest > now && !deadlineSatisfied(j, now)) {
                         next = Math.min(next, j.earliest);
                         continue;
                     }
-                    if (mRunning + ready.size() >= MAX_RUNNING) continue;
-                    boolean overdue = now >= j.latest;
-                    if (overdue || waitingReason(j, now) == JobScheduler.PENDING_JOB_REASON_UNDEFINED) {
-                        ready.add(j);
+                    if (mRunning >= MAX_RUNNING) continue;
+                    if (waitingReason(j, now, constraints) == JobScheduler.PENDING_JOB_REASON_UNDEFINED) {
+                        Run run = new Run(j);
+                        run.topStarted = constraints.topUid == j.ownerUid;
+                        j.run = run;
+                        mRunning++;
+                        ready.add(run);
                     }
-                }
-                for (Job j : ready) {
-                    j.run = new Run(j);
-                    mRunning++;
                 }
                 for (Job j : mJobs) {
                     if (j.run == null && j.latest > now) next = Math.min(next, j.latest);
@@ -832,92 +879,133 @@ final class JobSchedulerService extends IJobScheduler.Default
                         long at = triggerReadyAt(j);
                         if (at > now && at != Long.MAX_VALUE) next = Math.min(next, at);
                     }
-                    if (j.run != null && now - j.run.started >= scaled(EXECUTION_LIMIT_MS)
-                            && !j.run.stopping) {
-                        toStop.add(new RunToStop(j.run, JobParameters.STOP_REASON_TIMEOUT,
-                                JobParameters.INTERNAL_STOP_REASON_TIMEOUT, "timed out"));
-                    } else if (j.run != null && !j.run.stopping) {
-                        int reason = runningConstraintViolation(j);
+                    if (j.run != null && !j.run.stopping) {
+                        int reason = runningConstraintViolation(j, constraints, now);
                         if (reason != JobParameters.STOP_REASON_UNDEFINED) {
-                            int internal = (reason == JobParameters.STOP_REASON_DEVICE_STATE
-                                    || reason == JobParameters.STOP_REASON_CONSTRAINT_DEVICE_IDLE)
-                                    ? JobParameters.INTERNAL_STOP_REASON_DEVICE_IDLE
-                                    : JobParameters.INTERNAL_STOP_REASON_CONSTRAINTS_NOT_SATISFIED;
-                            toStop.add(new RunToStop(j.run, reason, internal, constraintWhy(reason)));
-                        } else {
-                            next = Math.min(next, j.run.started + scaled(EXECUTION_LIMIT_MS));
+                            toStop.add(new RunToStop(j.run, reason,
+                                    JobParameters.INTERNAL_STOP_REASON_CONSTRAINTS_NOT_SATISFIED,
+                                    constraintWhy(reason)));
                         }
                     }
                 }
-                wait = ready.isEmpty() && toStop.isEmpty() ? Math.max(1, next - now) : 0;
-                if (wait > 0) {
-                    try {
-                        wait(wait);
-                    } catch (InterruptedException e) {
-                        return;
-                    }
+                if (ready.isEmpty() && toStop.isEmpty()) {
+                    try { wait(Math.max(1, next - now)); }
+                    catch (InterruptedException e) { return; }
                     continue;
                 }
             }
-            for (RunToStop s : toStop) {
-                Run r = s.run;
-                new Thread(() -> stopRun(r, s.reason, s.internalReason, s.why), "job-stop-eval").start();
-            }
-            for (Job j : ready) bind(j.run);
+            // IJobService is one-way. A stop is claimed before dispatch, without
+            // spawning unbounded per-poll threads for the same run.
+            for (RunToStop stop : toStop) stopRun(stop.run, stop.reason, stop.internalReason, stop.why);
+            for (Run run : ready) bind(run);
         }
+    }
+
+    private static boolean deadlineSatisfied(Job job, long now) {
+        return !job.info.isPeriodic() && job.info.hasLateConstraint() && now >= job.latest;
     }
 
     /** Why a job that may run by time still waits; UNDEFINED when nothing holds it. */
-    private int waitingReason(Job j, long now) {
-        JobInfo info = j.info;
-        if (j.earliest > now) return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_MINIMUM_LATENCY;
-        if (now >= j.latest) return JobScheduler.PENDING_JOB_REASON_UNDEFINED;
-        if (needsNetwork(info) && !networkOk(info)) {
-            return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CONNECTIVITY;
-        }
-        int[] power = currentPowerStatus();
-        boolean noBattery = power == null || (power[1] & 128) != 0 || power[1] == 255;
-        if (info.isRequireCharging() && power != null && power[0] != 1) {
-            return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CHARGING;
-        }
-        if (info.isRequireBatteryNotLow() && !noBattery && (power[1] & (2 | 4)) != 0
-                && power[0] != 1) {
-            return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_BATTERY_NOT_LOW;
-        }
-        if (info.isRequireDeviceIdle() && currentDeviceIdleMillis() < IDLE_AFTER_MS) {
-            return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_DEVICE_IDLE;
-        }
-        if (hasTriggers(info) && triggerReadyAt(j) > now) {
-            return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CONTENT_TRIGGER;
-        }
-        return JobScheduler.PENDING_JOB_REASON_UNDEFINED;
+    private int waitingReason(Job job, long now) {
+        return waitingReason(job, now, readConstraints());
     }
 
-    /**
-     * Returns the stop reason if a running job's constraints are no longer satisfied,
-     * or STOP_REASON_UNDEFINED if all constraints are met.
-     */
-    private int runningConstraintViolation(Job j) {
-        JobInfo info = j.info;
-        if (j.run != null && j.run.params != null && j.run.params.isOverrideDeadlineExpired()) {
-            return JobParameters.STOP_REASON_UNDEFINED;
+    private int waitingReason(Job job, long now, ConstraintState state) {
+        if (deadlineSatisfied(job, now)) return JobScheduler.PENDING_JOB_REASON_UNDEFINED;
+        if (job.earliest > now) return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_MINIMUM_LATENCY;
+        switch (runningConstraintViolation(job, state, now)) {
+            case JobParameters.STOP_REASON_CONSTRAINT_CONNECTIVITY:
+                return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CONNECTIVITY;
+            case JobParameters.STOP_REASON_CONSTRAINT_CHARGING:
+                return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CHARGING;
+            case JobParameters.STOP_REASON_CONSTRAINT_BATTERY_NOT_LOW:
+                return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_BATTERY_NOT_LOW;
+            case JobParameters.STOP_REASON_CONSTRAINT_DEVICE_IDLE:
+                return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_DEVICE_IDLE;
+            case JobParameters.STOP_REASON_CONSTRAINT_STORAGE_NOT_LOW:
+                return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_STORAGE_NOT_LOW;
+            default:
+                if (hasTriggers(job.info) && triggerReadyAt(job) > now) {
+                    return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CONTENT_TRIGGER;
+                }
+                return JobScheduler.PENDING_JOB_REASON_UNDEFINED;
         }
-        if (needsNetwork(info) && !networkOk(info)) {
+    }
+
+    private int runningConstraintViolation(Job job, ConstraintState state, long now) {
+        JobInfo info = job.info;
+        // AOSP JobStatus treats a periodic latest time as a window boundary, not
+        // an override deadline. The live deadline may pass after startJob.
+        if (deadlineSatisfied(job, now)) return JobParameters.STOP_REASON_UNDEFINED;
+        if (needsNetwork(info) && satisfyingNetwork(info, state) == null) {
             return JobParameters.STOP_REASON_CONSTRAINT_CONNECTIVITY;
         }
-        int[] power = currentPowerStatus();
-        boolean noBattery = power == null || (power[1] & 128) != 0 || power[1] == 255;
-        if (info.isRequireCharging() && power != null && power[0] != 1) {
+        if (info.isRequireCharging() && !charging(job, state)) {
             return JobParameters.STOP_REASON_CONSTRAINT_CHARGING;
         }
-        if (info.isRequireBatteryNotLow() && !noBattery && (power[1] & (2 | 4)) != 0
-                && power[0] != 1) {
+        if (info.isRequireBatteryNotLow() && !batteryNotLow(state.power)) {
             return JobParameters.STOP_REASON_CONSTRAINT_BATTERY_NOT_LOW;
         }
-        if (info.isRequireDeviceIdle() && currentDeviceIdleMillis() < IDLE_AFTER_MS) {
-            return JobParameters.STOP_REASON_DEVICE_STATE;
+        if (info.isRequireDeviceIdle() && state.idleMillis < IDLE_AFTER_MS) {
+            return JobParameters.STOP_REASON_CONSTRAINT_DEVICE_IDLE;
+        }
+        if (info.isRequireStorageNotLow() && !state.storageNotLow) {
+            return JobParameters.STOP_REASON_CONSTRAINT_STORAGE_NOT_LOW;
         }
         return JobParameters.STOP_REASON_UNDEFINED;
+    }
+
+    private static boolean batteryNotLow(int[] power) {
+        return power != null && power.length >= 3 && power[1] >= 0 && power[1] != 255
+                && (power[1] & (2 | 4)) == 0;
+    }
+
+    private static boolean charging(Job job, ConstraintState state) {
+        int[] power = state.power;
+        if (power == null || power.length < 3 || power[0] != 1) return false;
+        // BatteryController retains the top-app power exemption for that run.
+        Run run = job.run;
+        if ((state.topUid == job.ownerUid || run != null && run.topStarted)
+                && job.info.getPriority() >= JobInfo.PRIORITY_DEFAULT) return true;
+        return batteryNotLow(power)
+                && ((power[1] & (128 | 8)) != 0 || power[2] == 100);
+    }
+
+    private static final class ConstraintState {
+        com.gesher.net.WindowsNetworks.Snapshot networks;
+        int[] power;
+        long idleMillis;
+        boolean storageNotLow;
+        int topUid;
+    }
+
+    private ConstraintState readConstraints() {
+        ConstraintState state = new ConstraintState();
+        try {
+            String text = mNetworkSnapshotOverride;
+            if (text == null) text = mConnectivity == null
+                    ? com.gesher.net.WindowsNetworks.snapshot() : mConnectivity.snapshotForSystem();
+            if (text != null) state.networks = com.gesher.net.WindowsNetworks.parse(text);
+        } catch (LinkageError | RuntimeException unavailable) {
+            // No observed network means no satisfying network, never a fabricated netId.
+        }
+        int[] power = mPowerStatusOverride;
+        Long idle = mIdleMillisOverride;
+        state.power = power != null ? power : WindowsHost.powerStatus();
+        state.idleMillis = idle != null ? idle : WindowsHost.jobIdleMillis();
+        state.topUid = mAtm.topResumedUid();
+        try {
+            long[] space = mStorageSpaceOverride;
+            File data = android.os.Environment.getDataDirectory();
+            long total = space != null ? space[0] : data.getTotalSpace();
+            long usable = space != null ? space[1] : data.getUsableSpace();
+            // StorageManager's default low threshold: 5%, capped at 500 MiB.
+            long low = Math.min(total / 20, 500L * 1024 * 1024);
+            state.storageNotLow = total > 0 && usable >= 0 && usable > low;
+        } catch (RuntimeException unavailable) {
+            state.storageNotLow = false;
+        }
+        return state;
     }
 
     private static String constraintWhy(int reason) {
@@ -936,17 +1024,6 @@ final class JobSchedulerService extends IJobScheduler.Default
             default:
                 return "constraint lost";
         }
-    }
-
-    private int[] currentPowerStatus() {
-        int[] override = mPowerStatusOverride;
-        return override != null ? override : WindowsHost.powerStatus();
-    }
-
-    private long currentDeviceIdleMillis() {
-        Long override = mIdleMillisOverride;
-        if (override != null) return override;
-        return WindowsHost.available() ? WindowsHost.idleMillis() : Long.MAX_VALUE;
     }
 
     // --- content URI triggers (ContentObserverController) --------------------------------------
@@ -1006,104 +1083,74 @@ final class JobSchedulerService extends IJobScheduler.Default
     }
 
     private static boolean needsNetwork(JobInfo info) {
-        try {
-            if (info.getRequiredNetwork() != null) return true;
-        } catch (LinkageError e) {
-            // ignore
-        }
-        try {
-            return info.getNetworkType() != JobInfo.NETWORK_TYPE_NONE;
-        } catch (LinkageError e) {
-            return false;
-        }
+        return info.getRequiredNetwork() != null;
     }
 
-    /**
-     * The network that satisfies the job's NetworkRequest, as ConnectivityManager describes
-     * Windows' networks (the net track's connectivity: capabilities from the snapshot of
-     * Windows' interfaces and the Network List Manager; hwsvc2, ADR 0051): the default
-     * network if it does, else another; null if none does. Throws LinkageError or
-     * RuntimeException when the connectivity classes cannot answer.
-     */
-    private static android.net.Network satisfyingNetwork(JobInfo info) {
+    /** Match the actual request, including transport, roaming and custom capabilities. */
+    private static android.net.Network satisfyingNetwork(JobInfo info, ConstraintState state) {
         android.net.NetworkRequest request = info.getRequiredNetwork();
-        com.gesher.net.WindowsNetworks.Snapshot s = com.gesher.net.WindowsNetworks.parse(
-                com.gesher.net.WindowsNetworks.snapshot());
-        com.gesher.net.WindowsNetworks.Net chosen = null;
-        com.gesher.net.WindowsNetworks.Net def = s.defaultNetwork();
-        if (def != null && request.canBeSatisfiedBy(
-                android.net.ConnectivityManager.capabilitiesOf(s, def))) {
-            chosen = def;
-        } else {
-            for (com.gesher.net.WindowsNetworks.Net n : s.networks) {
-                if (request.canBeSatisfiedBy(android.net.ConnectivityManager.capabilitiesOf(s, n))) {
-                    chosen = n;
-                    break;
-                }
+        com.gesher.net.WindowsNetworks.Snapshot snapshot = state.networks;
+        if (request == null || snapshot == null) return null;
+        com.gesher.net.WindowsNetworks.Net preferred = snapshot.defaultNetwork();
+        if (preferred != null && request.canBeSatisfiedBy(
+                android.net.ConnectivityManager.capabilitiesOf(snapshot, preferred))) {
+            return new android.net.Network(preferred.netId());
+        }
+        for (com.gesher.net.WindowsNetworks.Net network : snapshot.networks) {
+            if (request.canBeSatisfiedBy(android.net.ConnectivityManager.capabilitiesOf(snapshot, network))) {
+                return new android.net.Network(network.netId());
             }
         }
-        return chosen != null ? new android.net.Network(chosen.netId()) : null;
-    }
-
-    /** The job's network constraint against Windows' networks (unknown: met). */
-    private boolean networkOk(JobInfo info) {
-        if (mNetworkStateOverride != null) {
-            int state = mNetworkStateOverride;
-            if (state < 0) return true;
-            boolean internet = (state & 2) != 0;
-            boolean metered = (state & 4) != 0;
-            int type;
-            try {
-                type = info.getNetworkType();
-            } catch (LinkageError e) {
-                type = JobInfo.NETWORK_TYPE_ANY;
-            }
-            switch (type) {
-                case JobInfo.NETWORK_TYPE_UNMETERED: return internet && !metered;
-                case JobInfo.NETWORK_TYPE_CELLULAR: return internet && metered;
-                case JobInfo.NETWORK_TYPE_NOT_ROAMING: return internet;
-                case JobInfo.NETWORK_TYPE_ANY: return internet;
-                default: return internet;
-            }
-        }
-        try {
-            return satisfyingNetwork(info) != null;
-        } catch (LinkageError | RuntimeException e) {
-            // No connectivity classes: the Network List Manager's view, below.
-        }
-        int state = WindowsHost.networkState();
-        if (state < 0) return true;
-        boolean internet = (state & 2) != 0;
-        boolean metered = (state & 4) != 0;
-        int type;
-        try {
-            type = info.getNetworkType();
-        } catch (LinkageError e) {
-            type = JobInfo.NETWORK_TYPE_ANY;  // the connectivity classes are not there
-        }
-        switch (type) {
-            case JobInfo.NETWORK_TYPE_UNMETERED: return internet && !metered;
-            case JobInfo.NETWORK_TYPE_CELLULAR: return internet && metered;
-            case JobInfo.NETWORK_TYPE_NOT_ROAMING: return internet;
-            case JobInfo.NETWORK_TYPE_ANY: return internet;
-            default: return internet;
-        }
+        return null;
     }
 
     private void bind(Run run) {
-        Job j = run.job;
-        if (!current(j)) { finish(run, false, "its installed owner changed"); return; }
-        Intent intent = new Intent().setComponent(j.info.getService());
-        SystemServer.log("jobscheduler: running " + j);
-        int result;
-        try {
-            result = mAm.bindService(null, null, intent, null, run.connection,
-                    Context.BIND_AUTO_CREATE | Context.BIND_NOT_FOREGROUND, "android", 0);
-        } catch (Throwable t) {
-            SystemServer.log("jobscheduler: binding " + j + " failed: " + t);
-            result = 0;
+        synchronized (run.dispatch) {
+            synchronized (this) {
+                if (run.done || run.stopping || run.state != BINDING) return;
+                armTimeout(run, BIND_TIMEOUT_MS);
+            }
+            Job job = run.job;
+            if (!current(job)) { finish(run, false, "its installed owner changed"); return; }
+            Intent intent = new Intent().setComponent(job.info.getService());
+            SystemServer.log("jobscheduler: running " + job);
+            int result;
+            long identity = Binder.clearCallingIdentity();
+            try {
+                result = mAm.bindService(null, null, intent, null, run.connection,
+                        Context.BIND_AUTO_CREATE | Context.BIND_NOT_FOREGROUND, "android", 0);
+            } catch (RuntimeException e) {
+                SystemServer.log("jobscheduler: binding " + job + " failed: " + e);
+                result = 0;
+            } finally { Binder.restoreCallingIdentity(identity); }
+            if (result <= 0) finish(run, true, "its service could not be bound");
         }
-        if (result == 0) finish(run, false, "its service could not be bound");
+    }
+
+    /** Caller holds the scheduler monitor; every state owns at most one timeout. */
+    private void armTimeout(Run run, long delay) {
+        if (run.timeout != null) run.timeout.cancel(false);
+        int expectedState = run.state;
+        run.timeout = mTimeouts.schedule(() -> operationTimeout(run, expectedState),
+                Math.max(1, delay), TimeUnit.MILLISECONDS);
+    }
+
+    private void operationTimeout(Run run, int expectedState) {
+        synchronized (run.dispatch) {
+            synchronized (this) {
+                if (run.done || run.state != expectedState) return;
+            }
+            switch (expectedState) {
+                case BINDING: finish(run, true, "timed out while binding"); break;
+                case STARTING: finish(run, false, "no onStartJob acknowledgement"); break;
+                case STOPPING: finish(run, true, "no onStopJob acknowledgement"); break;
+                case EXECUTING:
+                    stopRun(run, JobParameters.STOP_REASON_TIMEOUT,
+                            JobParameters.INTERNAL_STOP_REASON_TIMEOUT, "timed out");
+                    break;
+                default: break;
+            }
+        }
     }
 
     void stopRun(Run run, String why) {
@@ -1112,123 +1159,116 @@ final class JobSchedulerService extends IJobScheduler.Default
     }
 
     void stopRun(Run run, int stopReason, int internalStopReason, String why) {
-        IJobService service;
-        JobParameters params;
-        synchronized (this) {
-            if (run.done || run.stopping) return;
-            run.stopping = true;
-            service = run.service;
-            params = run.params;
-            if (params != null) {
-                params.setStopReason(stopReason, internalStopReason, why);
+        synchronized (run.dispatch) {
+            int state;
+            synchronized (this) {
+                if (run.done || run.stopping) return;
+                run.stopping = true;
+                state = run.state;
+                if (run.params != null) run.params.setStopReason(stopReason, internalStopReason, why);
             }
+            if (state == BINDING) {
+                // No onStartJob was delivered, so no onStopJob result exists to
+                // discard a job for. Keep it for retry unless canceled/replaced.
+                finish(run, true, why + " while binding");
+            } else if (state == EXECUTING) {
+                dispatchStop(run);
+            }
+            // STARTING waits for the start acknowledgement (or its finite timer).
         }
-        if (service == null) {
-            finish(run, false, why + " before it started");
-            return;
+    }
+
+    /** Caller holds run.dispatch. */
+    private void dispatchStop(Run run) {
+        synchronized (this) {
+            if (run.done || run.state != EXECUTING || !run.stopping) return;
+            run.state = STOPPING;
+            armTimeout(run, CALLBACK_TIMEOUT_MS);
         }
-        SystemServer.log("jobscheduler: stopJob " + run.job + " (" + why + ", reason=" + stopReason + ")");
+        SystemServer.log("jobscheduler: stopJob " + run.job + " (" + run.params.getDebugStopReason() + ")");
         try {
-            service.stopJob(params);
-        } catch (RemoteException e) {
-            finish(run, false, why);
+            run.service.stopJob(run.params);
+        } catch (RemoteException | RuntimeException e) {
+            finish(run, true, "stopJob failed: " + e);
         }
-        // An app that never acknowledges the stop is unbound anyway.
-        Thread t = new Thread(() -> {
-            SystemClock.sleep(10_000);
-            finish(run, false, why + " (no acknowledgement)");
-        }, "job-stop");
-        t.setDaemon(true);
-        t.start();
     }
 
-    public void onNetworkChanged() {
-        checkRunningConstraintsAndKick();
-    }
+    public void onNetworkChanged() { checkRunningConstraintsAndKick(); }
+    public void onPowerStateChanged() { checkRunningConstraintsAndKick(); }
+    public void onDeviceIdleChanged() { checkRunningConstraintsAndKick(); }
 
-    public void onPowerStateChanged() {
-        checkRunningConstraintsAndKick();
-    }
-
-    public void onDeviceIdleChanged() {
-        checkRunningConstraintsAndKick();
-    }
-
-    public void setNetworkStateForTest(Integer state) {
-        mNetworkStateOverride = state;
+    // Explicit server-local fixture injection; no Binder API or production default.
+    void setNetworkSnapshotForTest(String snapshot) {
+        mNetworkSnapshotOverride = snapshot;
         onNetworkChanged();
     }
 
-    public void setPowerStatusForTest(int[] power) {
-        mPowerStatusOverride = power;
+    void setPowerStatusForTest(int[] power) {
+        mPowerStatusOverride = power == null ? null : power.clone();
         onPowerStateChanged();
     }
 
-    public void setDeviceIdleMillisForTest(Long idleMillis) {
+    void setDeviceIdleMillisForTest(Long idleMillis) {
         mIdleMillisOverride = idleMillis;
         onDeviceIdleChanged();
     }
 
+    void setStorageSpaceForTest(long total, long usable) {
+        mStorageSpaceOverride = new long[] {total, usable};
+        checkRunningConstraintsAndKick();
+    }
+
     void checkExecutionTimeouts() {
         long now = SystemClock.elapsedRealtime();
-        List<RunToStop> toStop = new ArrayList<>();
+        List<Run> expired = new ArrayList<>();
         synchronized (this) {
-            for (Job j : mJobs) {
-                Run r = j.run;
-                if (r != null && !r.stopping && !r.done) {
-                    if (now - r.started >= scaled(EXECUTION_LIMIT_MS)) {
-                        toStop.add(new RunToStop(r, JobParameters.STOP_REASON_TIMEOUT,
-                                JobParameters.INTERNAL_STOP_REASON_TIMEOUT, "timed out"));
-                    }
-                }
+            for (Job job : mJobs) {
+                Run run = job.run;
+                if (run != null && run.state == EXECUTING && !run.stopping && !run.done
+                        && now - run.started >= scaled(EXECUTION_LIMIT_MS)) expired.add(run);
             }
         }
-        for (RunToStop s : toStop) {
-            stopRun(s.run, s.reason, s.internalReason, s.why);
-        }
+        for (Run run : expired) operationTimeout(run, EXECUTING);
     }
 
     void checkRunningConstraintsAndKick() {
+        ConstraintState constraints = readConstraints();
+        long now = SystemClock.elapsedRealtime();
         List<RunToStop> toStop = new ArrayList<>();
-        List<RunNetworkUpdate> networkUpdates = new ArrayList<>();
+        List<RunNetworkUpdate> updates = new ArrayList<>();
         synchronized (this) {
-            for (Job j : mJobs) {
-                Run r = j.run;
-                if (r != null && !r.stopping && !r.done) {
-                    int reason = runningConstraintViolation(j);
-                    if (reason != JobParameters.STOP_REASON_UNDEFINED) {
-                        int internal = (reason == JobParameters.STOP_REASON_DEVICE_STATE
-                                || reason == JobParameters.STOP_REASON_CONSTRAINT_DEVICE_IDLE)
-                                ? JobParameters.INTERNAL_STOP_REASON_DEVICE_IDLE
-                                : JobParameters.INTERNAL_STOP_REASON_CONSTRAINTS_NOT_SATISFIED;
-                        toStop.add(new RunToStop(r, reason, internal, constraintWhy(reason)));
-                    } else if (needsNetwork(j.info) && r.service != null) {
-                        try {
-                            android.net.Network newNetwork = satisfyingNetwork(j.info);
-                            if (newNetwork != null && !Objects.equals(r.network, newNetwork)) {
-                                r.network = newNetwork;
-                                networkUpdates.add(new RunNetworkUpdate(r, newNetwork));
-                            }
-                        } catch (Throwable t) {
-                            // ignore
-                        }
-                    }
+            for (Job job : mJobs) {
+                Run run = job.run;
+                if (run == null || run.stopping || run.done) continue;
+                int reason = runningConstraintViolation(job, constraints, now);
+                if (reason != JobParameters.STOP_REASON_UNDEFINED) {
+                    toStop.add(new RunToStop(run, reason,
+                            JobParameters.INTERNAL_STOP_REASON_CONSTRAINTS_NOT_SATISFIED,
+                            constraintWhy(reason)));
+                } else if (needsNetwork(job.info)) {
+                    updates.add(new RunNetworkUpdate(run, satisfyingNetwork(job.info, constraints)));
                 }
             }
             notifyAll();
         }
-        for (RunToStop s : toStop) {
-            stopRun(s.run, s.reason, s.internalReason, s.why);
-        }
-        for (RunNetworkUpdate u : networkUpdates) {
+        for (RunToStop stop : toStop) stopRun(stop.run, stop.reason, stop.internalReason, stop.why);
+        for (RunNetworkUpdate update : updates) updateNetwork(update.run, update.network);
+    }
+
+    private void updateNetwork(Run run, android.net.Network network) {
+        synchronized (run.dispatch) {
+            synchronized (this) {
+                if (run.done || run.stopping || !mJobs.contains(run.job) || !current(run.job)) return;
+                run.network = network;
+                if (run.state != EXECUTING || Objects.equals(run.params.getNetwork(), network)) return;
+                run.params.setNetwork(network);
+            }
             try {
-                if (u.run.params != null) u.run.params.setNetwork(u.network);
-                u.run.service.onNetworkChanged(u.run.params);
-            } catch (RemoteException e) {
-                // ignore
+                run.service.onNetworkChanged(run.params);
+            } catch (RemoteException | RuntimeException e) {
+                finish(run, true, "network callback failed: " + e);
             }
         }
-        kick();
     }
 
     private static final class RunToStop {
@@ -1278,6 +1318,11 @@ final class JobSchedulerService extends IJobScheduler.Default
         boolean keep;
         if (run.done) return -1;
         run.done = true;
+        run.state = FINISHED;
+        if (run.timeout != null) {
+            run.timeout.cancel(false);
+            run.timeout = null;
+        }
         if (j.run == run) {
             j.run = null;
             mRunning--;
@@ -1291,12 +1336,19 @@ final class JobSchedulerService extends IJobScheduler.Default
             mJobs.remove(j);
             keep = false;
         } else if (reschedule) {
-            j.failures++;
-            long backoff = scaled(j.info.getInitialBackoffMillis());
-            long delay = j.info.getBackoffPolicy() == JobInfo.BACKOFF_POLICY_LINEAR
-                    ? backoff * j.failures
-                    : backoff * (1L << Math.min(30, j.failures - 1));
-            delay = Math.min(delay, scaled(JobInfo.MAX_BACKOFF_DELAY_MILLIS));
+            // Preserve the trigger that selected this attempt for the retry.
+            if (run.triggeredAuthorities != null) {
+                if (j.changedAuthorities.isEmpty()) j.firstChange = now;
+                java.util.Collections.addAll(j.changedAuthorities, run.triggeredAuthorities);
+                if (run.triggeredUris != null) java.util.Collections.addAll(j.changedUris, run.triggeredUris);
+                j.lastChange = now;
+            }
+            if (j.failures < Integer.MAX_VALUE) j.failures++;
+            long cap = scaled(JobInfo.MAX_BACKOFF_DELAY_MILLIS);
+            long backoff = Math.min(cap, scaled(j.info.getInitialBackoffMillis()));
+            long factor = j.info.getBackoffPolicy() == JobInfo.BACKOFF_POLICY_LINEAR
+                    ? j.failures : 1L << Math.min(30, j.failures - 1);
+            long delay = backoff > cap / factor ? cap : backoff * factor;
             j.earliest = now + delay;
             if (!j.info.isPeriodic()) j.latest = Long.MAX_VALUE;
             keep = true;
@@ -1322,25 +1374,27 @@ final class JobSchedulerService extends IJobScheduler.Default
     }
 
     private void finishBinding(Run run, boolean keep, String why) {
-        Job j = run.job;
-        SystemServer.log("jobscheduler: " + j + " finished: " + why
-                + (keep ? "; next" + describeTimes(j) : ""));
-        if (run.service != null) {
-            try {
-                run.service.asBinder().unlinkToDeath(run, 0);
-            } catch (Throwable t) {
-                // not linked
+        synchronized (run.dispatch) {
+            Job j = run.job;
+            SystemServer.log("jobscheduler: " + j + " finished: " + why
+                    + (keep ? "; next" + describeTimes(j) : ""));
+            if (run.service != null) {
+                try {
+                    run.service.asBinder().unlinkToDeath(run, 0);
+                } catch (Throwable t) {
+                    // not linked
+                }
             }
+            // The verified Run owns a system-created binding. A job callback arrives
+            // under the app's Binder identity; it cannot directly unbind that connection.
+            long identity = Binder.clearCallingIdentity();
+            try {
+                mAm.unbindService(run.connection);
+            } catch (Throwable t) {
+                // not bound
+            } finally { Binder.restoreCallingIdentity(identity); }
+            if (!keep) unpersist(j);
         }
-        // The verified Run owns a system-created binding. A job callback arrives
-        // under the app's Binder identity; it cannot directly unbind that connection.
-        long identity = Binder.clearCallingIdentity();
-        try {
-            mAm.unbindService(run.connection);
-        } catch (Throwable t) {
-            // not bound
-        } finally { Binder.restoreCallingIdentity(identity); }
-        if (!keep) unpersist(j);
     }
 
     private String describeTimes(Job j) {
@@ -1450,10 +1504,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                 p.unmarshall(data, 0, data.length);
                 p.setDataPosition(0);
                 boolean bound = p.readInt() == PERSIST_VERSION;
-                if (!bound) {
-                    if (GmsSignatureSpoofing.isEnabled()) { f.delete(); continue; }
-                    p.setDataPosition(0); // Deliberate legacy opt-out compatibility.
-                }
+                if (!bound) { f.delete(); continue; } // An unbound record has no verifiable installed owner.
                 String pkg = p.readString();
                 String namespace = p.readString();
                 JobInfo info = JobInfo.CREATOR.createFromParcel(p);
@@ -1464,9 +1515,9 @@ final class JobSchedulerService extends IJobScheduler.Default
                 Job j = new Job(pkg, namespace, info);
                 if ((bound && (p.readInt() != j.ownerUid
                         || !Objects.equals(p.readString(), j.ownerIdentity))) || !current(j)
-                        || (GmsSignatureSpoofing.isEnabled() && mPm.permissions().checkPermission(pkg,
+                        || mPm.permissions().checkPermission(pkg,
                                 android.Manifest.permission.RECEIVE_BOOT_COMPLETED)
-                                    != android.content.pm.PackageManager.PERMISSION_GRANTED)) {
+                                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                     f.delete(); continue;
                 }
                 timesForNew(j);

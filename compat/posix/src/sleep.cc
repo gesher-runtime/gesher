@@ -2,7 +2,7 @@
 //
 // winpthreads' nanosleep waits with Sleep, whose expiry is counted in
 // scheduler ticks: it can return up to a tick (15.6 ms by default) before
-// the precise clocks (QueryPerformanceCounter, GetSystemTimePreciseAsFileTime)
+// the precise awake-time clock (QueryUnbiasedInterruptTimePrecise)
 // show the interval as passed. Linux sleeps at least the time requested, and
 // code compares the two (libutils' SystemClock_test). <pthread_time.h>
 // inlines nanosleep as a call to nanosleep64, which is defined here; being

@@ -532,12 +532,80 @@ static void Proc(const std::string& dir) {
   int fields = 0;
   for (char c : stat_line) fields += c == ' ';
   CHECK(fields == 51);
+  void* mapping = VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+  CHECK(mapping != nullptr);
   std::string maps = ReadAll("/proc/self/maps");
   CHECK(maps.find("posix_probe.exe") != std::string::npos && maps.find(" r-xp ") != std::string::npos);
   CHECK(maps.find("[stack]") != std::string::npos);
-  CHECK(ReadAll("/proc/meminfo").rfind("MemTotal:", 0) == 0);
-  CHECK(ReadAll("/proc/cpuinfo").find("processor\t: 0\n") != std::string::npos);
-  CHECK(ReadAll("/proc/self/cmdline").find("posix_probe") != std::string::npos);
+  std::string pid_str = std::to_string(GetCurrentProcessId());
+  // Separate opens take independent snapshots; reading one can grow the heap.
+  // Check both aliases against a live allocation and a real protection change.
+  auto describesMapping = [mapping](const std::string& snapshot, const char* expected) {
+    size_t at = 0;
+    while (at < snapshot.size()) {
+      unsigned long long lo = 0, hi = 0;
+      char permissions[5] = {};
+      if (sscanf(snapshot.c_str() + at, "%llx-%llx %4s", &lo, &hi, permissions) == 3 &&
+          lo <= reinterpret_cast<uintptr_t>(mapping) &&
+          reinterpret_cast<uintptr_t>(mapping) < hi && strcmp(permissions, expected) == 0) {
+        return true;
+      }
+      size_t next = snapshot.find('\n', at);
+      if (next == std::string::npos) break;
+      at = next + 1;
+    }
+    return false;
+  };
+  if (mapping) {
+    CHECK(describesMapping(maps, "rw-p"));
+    CHECK(describesMapping(ReadAll(("/proc/" + pid_str + "/maps").c_str()), "rw-p"));
+    DWORD previousProtection = 0;
+    CHECK(VirtualProtect(mapping, 4096, PAGE_READONLY, &previousProtection));
+    CHECK(describesMapping(ReadAll("/proc/self/maps"), "r--p"));
+    CHECK(describesMapping(ReadAll(("/proc/" + pid_str + "/maps").c_str()), "r--p"));
+    CHECK(VirtualFree(mapping, 0, MEM_RELEASE));
+  }
+
+  // /proc/self/auxv and /proc/<pid>/auxv: ELF auxiliary vectors.
+  std::string auxv = ReadAll("/proc/self/auxv");
+  CHECK(auxv.size() >= 32 && (auxv.size() % 16) == 0);
+  CHECK(ReadAll(("/proc/" + pid_str + "/auxv").c_str()) == auxv);
+  const auto* pairs = reinterpret_cast<const uint64_t*>(auxv.data());
+  size_t count = auxv.size() / 16;
+  bool found_pagesz = false, found_clktck = false, found_uid = false, found_random = false;
+  bool found_platform = false, found_null = false;
+  for (size_t i = 0; i < count; ++i) {
+    uint64_t type = pairs[2 * i];
+    uint64_t val = pairs[2 * i + 1];
+    if (type == 6 && val == 4096) found_pagesz = true;
+    if (type == 17 && val == 100) found_clktck = true;
+    if (type == 11 && val == static_cast<uint64_t>(getuid())) found_uid = true;
+    if (type == 25 && val != 0) found_random = true;
+    if (type == 15 && val != 0) found_platform = true;
+    if (type == 0 && val == 0 && i == count - 1) found_null = true;
+  }
+  CHECK(found_pagesz && found_clktck && found_uid && found_random && found_platform && found_null);
+
+  std::string meminfo = ReadAll("/proc/meminfo");
+  CHECK(meminfo.rfind("MemTotal:", 0) == 0 && meminfo.find("MemAvailable:") != std::string::npos &&
+        meminfo.find("Cached:") != std::string::npos);
+  std::string cpuinfo = ReadAll("/proc/cpuinfo");
+  CHECK(cpuinfo.find("processor\t: 0\n") != std::string::npos);
+  std::string cmdline = ReadAll("/proc/self/cmdline");
+  CHECK(cmdline.find("posix_probe") != std::string::npos);
+  CHECK(ReadAll(("/proc/" + pid_str + "/cmdline").c_str()) == cmdline);
+
+  // /sys/devices/system/cpu/{online,present,possible}:
+  std::string online = ReadAll("/sys/devices/system/cpu/online");
+  std::string present = ReadAll("/sys/devices/system/cpu/present");
+  std::string possible = ReadAll("/sys/devices/system/cpu/possible");
+  CHECK(online.rfind("0", 0) == 0 && online.back() == '\n');
+  CHECK(present.rfind("0", 0) == 0 && present.back() == '\n');
+  CHECK(possible.rfind("0", 0) == 0 && possible.back() == '\n');
+  struct stat sys_st;
+  CHECK(stat("/sys/devices/system/cpu/online", &sys_st) == 0 && S_ISREG(sys_st.st_mode));
+  CHECK(stat("/sys/devices/system/cpu/present", &sys_st) == 0 && S_ISREG(sys_st.st_mode));
+  CHECK(stat("/sys/devices/system/cpu/possible", &sys_st) == 0 && S_ISREG(sys_st.st_mode));
 
   // /proc/self/fd: the open fds, as links.
   int fd = open((dir + "/fd.txt").c_str(), O_CREAT | O_RDWR, 0644);
@@ -584,6 +652,8 @@ static void Proc(const std::string& dir) {
   CHECK(own_thread);
   CHECK(open("/proc/self/status", O_WRONLY) == -1 && errno == EACCES);
   CHECK(unlink("/proc/self/status") == -1);
+  CHECK(lstat("/proc/self", &st) == 0 && S_ISLNK(st.st_mode));
+  CHECK(stat("/proc/self", &st) == 0 && S_ISDIR(st.st_mode));
 
   // /etc/timezone: Windows' zone as an IANA id.
   std::string tz = ReadAll("/etc/timezone");

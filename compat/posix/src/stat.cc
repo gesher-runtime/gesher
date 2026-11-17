@@ -107,6 +107,9 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
     case gesher::PathKind::kVirtual: {
       unsigned type = gesher::procfs::Type(windows);
       if (type == 0) break;
+      if (type == S_IFDIR && !follow && windows == L"proc/self") {
+        type = S_IFLNK;
+      }
       if (type == S_IFLNK && follow) {
         // /proc/self/fd/<n> is the file open as fd n, a pipe or socket too.
         int fd = gesher::procfs::FdOfLink(windows);

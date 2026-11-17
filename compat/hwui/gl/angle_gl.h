@@ -7,10 +7,12 @@
 #include <vector>
 
 // Whether the SkiaGL pipeline can run: ANGLE loads, its Direct3D 11 display
-// initializes, an RGBA8 ES context on a pbuffer becomes current and Skia gets
-// a GrGLInterface. *detail says what was found (GL_RENDERER, GL_VERSION, EGL
-// version) or what failed. Leaves no context current.
-bool gesher_hwui_gl_usable(std::string* detail);
+// initializes, an RGBA8 ES context on a pbuffer becomes current, and Skia
+// can actually create a GrDirectContext with RenderThread's options.
+// require_hardware avoids making a software Ganesh context during auto
+// selection; an explicit skiagl override can still use WARP.
+// *detail reports success or a precise failure. Restores previous EGL state.
+bool gesher_hwui_gl_usable(std::string* detail, bool require_hardware = false);
 
 // The debug read-back (com.gesher.app.graphics.GraphicsDebug.setGlReadback,
 // or GESHER_HWUI_GL_READBACK=1): before each eglSwapBuffers of a window

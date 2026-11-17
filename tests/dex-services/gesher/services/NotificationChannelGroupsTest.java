@@ -14,6 +14,8 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.pm.ParceledListSlice;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.content.res.AssetManager;
 import android.os.Binder;
@@ -447,7 +449,10 @@ public final class NotificationChannelGroupsTest {
         f.nm.createNotificationChannels(List.of(channel("fgs", "active", 3), channel("uij", "active", 3)));
         Object services = field(f.amType, "mServices").get(f.am);
         Class<?> servicesType = services.getClass(), recordType = Class.forName(servicesType.getName() + "$ServiceRecord");
-        ServiceInfo info = new ServiceInfo(); info.packageName = f.pkg; info.name = f.pkg + ".SyntheticForegroundService";
+        PackageInfo installed = (PackageInfo) f.apkType.getMethod("packageInfo", long.class)
+                .invoke(f.owner, (long) PackageManager.GET_SERVICES);
+        ServiceInfo info = Arrays.stream(installed.services).filter(s -> s.enabled)
+                .findFirst().orElseThrow(() -> new AssertionError("Fixture has no enabled declared service"));
         Object record = make(recordType, new Class<?>[]{ServiceInfo.class, f.apkType}, info, f.owner);
         ComponentName component = new ComponentName(info.packageName, info.name);
         ((Map<ComponentName,Object>)field(servicesType,"mServices").get(services)).put(component, record);
@@ -496,6 +501,7 @@ public final class NotificationChannelGroupsTest {
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setUserInitiated(true).build();
         Object job = make(jobType, new Class<?>[]{schedulerType, String.class, String.class, JobInfo.class}, scheduler, f.pkg, null, jobInfo);
         Object run = make(runType, new Class<?>[]{schedulerType, jobType}, scheduler, job);
+        field(runType, "state").setInt(run, 2); // Constructed executing-job fixture.
         field(jobType, "run").set(job, run);
         ((List<Object>)field(schedulerType,"mJobs").get(scheduler)).add(job);
         field(schedulerType, "mRunning").setInt(scheduler, 1);

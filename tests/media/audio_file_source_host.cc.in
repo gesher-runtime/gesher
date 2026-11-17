@@ -20,6 +20,11 @@ void* FileSourceCopy(void* dst, const void* src, size_t bytes) {
 }
 
 namespace gesher::media {
+// The Win32 clock seam is covered by the dedicated clock-domain suite.
+static int64_t MonotonicNs() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 @API@
 @PACING@
 @FILE@

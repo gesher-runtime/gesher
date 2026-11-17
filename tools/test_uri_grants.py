@@ -21,6 +21,7 @@ def main() -> None:
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--source-ref", help="Compile prior URI/provider sources as a negative control")
     parser.add_argument("--case", choices=("delegation", "identity", "modes", "patterns", "revocation", "retirement", "validation"))
+    parser.add_argument("--intent", action="store_true", help="Intent batching and start-owned grant lifecycle contracts")
     args = parser.parse_args()
     cc = shutil.which("cc")
     if not cc:
@@ -33,9 +34,9 @@ def main() -> None:
         library = work / "liburi_grants_host.so"
         subprocess.run([cc, "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-shared", "-fPIC",
                         "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / "include/linux"),
-                        str(ROOT / "tests/uri/framework_host.c"), "-o", str(library)], check=True)
+                        str(ROOT / ("tests/uri/intent_framework_host.c" if args.intent else "tests/uri/framework_host.c")), "-o", str(library)], check=True)
         sources = []
-        for name in ("UriGrants", "ContentProviders"):
+        for name in (("UriGrants", "ContentProviders", "ActiveServices", "ActivityTaskManagerService", "UriGrantsManagerService") if args.intent else ("UriGrants", "ContentProviders")):
             relative = "app/java/com/gesher/server/" + name + ".java"
             source = ROOT / relative
             if args.source_ref:
@@ -44,8 +45,8 @@ def main() -> None:
                                         cwd=ROOT, check=True, capture_output=True)
                 source.write_bytes(result.stdout)
             sources.append(str(source))
-        sources += [str(ROOT / "tests/dex-services/gesher/services/UriGrantContractTest.java"),
-                    str(ROOT / "tests/uri/UriGrantHost.java")]
+        sources += [str(ROOT / ("tests/dex-services/gesher/services/IntentUriGrantContractTest.java" if args.intent else "tests/dex-services/gesher/services/UriGrantContractTest.java")),
+                    str(ROOT / ("tests/uri/IntentUriGrantHost.java" if args.intent else "tests/uri/UriGrantHost.java"))]
         subprocess.run([str(args.java_home / "bin/javac"), "-J-Djava.io.tmpdir=" + str(work),
                         "-encoding", "UTF-8", "-cp", classpath,
                         "-d", str(classes), *sources], check=True)
@@ -53,7 +54,7 @@ def main() -> None:
         environment["ANDROID_DATA"] = str(work / "data")
         environment["GESHER_MICROG_SPOOF"] = "1"
         command = [str(args.java_home / "bin/java"), "-Djava.io.tmpdir=" + str(work),
-                   "-cp", str(classes) + os.pathsep + classpath, "UriGrantHost", str(library)]
+                   "-cp", str(classes) + os.pathsep + classpath, ("IntentUriGrantHost" if args.intent else "UriGrantHost"), str(library)]
         if args.case:
             command.append(args.case)
         subprocess.run(command, env=environment, check=True, timeout=90)

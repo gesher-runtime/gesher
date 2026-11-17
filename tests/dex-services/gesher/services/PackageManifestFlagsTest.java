@@ -50,11 +50,18 @@ public final class PackageManifestFlagsTest {
         info.packageName = PACKAGE;
         info.flags = ApplicationInfo.FLAG_STOPPED;
         info.privateFlags = ApplicationInfo.PRIVATE_FLAG_INSTANT;
-        Method installed = ApkPackage.class.getDeclaredMethod("installed", ApplicationInfo.class);
+        Method enabledState = ApkPackage.class.getDeclaredMethod("enabledState");
+        enabledState.setAccessible(true);
+        Class<?> stateType = Class.forName("com.gesher.server.PackageEnabledStore$State");
+        Method installed = ApkPackage.class.getDeclaredMethod("installed", ApplicationInfo.class,
+                stateType, long.class);
         installed.setAccessible(true);
-        installed.invoke(apk, info);
+        installed.invoke(apk, info, enabledState.invoke(apk), 0L);
         require(info.uid == 12345 && "/fixture/base.apk".equals(info.sourceDir)
-                && "/fixture/data".equals(info.dataDir)
+                && (addon && parsed.isDefaultToDeviceProtectedStorage() ? "/fixture/data.device-protected"
+                        : "/fixture/data").equals(info.dataDir)
+                && "/fixture/data".equals(info.credentialProtectedDataDir)
+                && "/fixture/data.device-protected".equals(info.deviceProtectedDataDir)
                 && "/fixture/data/lib".equals(info.nativeLibraryDir),
                 "Manifest projection replaced installed identity or paths");
         flag("installed", info.flags, ApplicationInfo.FLAG_INSTALLED, true);
@@ -103,7 +110,8 @@ public final class PackageManifestFlagsTest {
         flag("embedded DEX", info.privateFlags, ApplicationInfo.PRIVATE_FLAG_USE_EMBEDDED_DEX, expected);
         flag("direct boot", info.privateFlags, ApplicationInfo.PRIVATE_FLAG_DIRECT_BOOT_AWARE, expected);
         flag("device protected default", info.privateFlags,
-                ApplicationInfo.PRIVATE_FLAG_DEFAULT_TO_DEVICE_PROTECTED_STORAGE, expected);
+                ApplicationInfo.PRIVATE_FLAG_DEFAULT_TO_DEVICE_PROTECTED_STORAGE,
+                expected && (info.flags & ApplicationInfo.FLAG_SYSTEM) != 0);
         flag("playback capture", info.privateFlags,
                 ApplicationInfo.PRIVATE_FLAG_ALLOW_AUDIO_PLAYBACK_CAPTURE, expected);
         flag("save-state policy", info.privateFlags, ApplicationInfo.PRIVATE_FLAG_CANT_SAVE_STATE, expected);

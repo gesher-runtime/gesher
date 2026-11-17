@@ -116,6 +116,10 @@ public final class ComponentCallerFixture {
     private static ApkPackage code(String name, int uid, String... uses) throws Exception {
         PackageImpl parsed = (PackageImpl)PackageImpl.forTesting(name, "/fixture/" + name + "/base.apk");
         parsed.setEnabled(true); parsed.setTargetSdkVersion(36);
+        com.android.internal.pm.pkg.component.ParsedActivityImpl activity =
+                new com.android.internal.pm.pkg.component.ParsedActivityImpl();
+        activity.setPackageName(name); activity.setName(name + ".Activity"); activity.setEnabled(true);
+        parsed.addActivity(activity);
         for (String permission : uses) parsed.addUsesPermission(new ParsedUsesPermissionImpl(permission, 0,
                 java.util.Collections.emptySet()));
         if (OWNER.equals(name)) {

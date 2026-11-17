@@ -31,6 +31,41 @@ an activity becomes visible again without coming to the front (the opaque
 activity above a translucent one finished, its task came back), it gets a
 `StartActivityItem` (onRestart, onStart), as `makeActiveIfNeeded`.
 
+## Constructed activity stacks
+
+`Context.startActivities`, `TaskStackBuilder`, and `PendingIntent.getActivities`
+retain ordered activity history before scheduling client launches. For an opaque
+Root → Middle → Top stack, only Top receives `LaunchActivityItem` and
+`ResumeActivityItem`. Root and Middle have no client instance or attached process
+merely because they are in the history. Back waits for the foreground activity's
+pause, then creates the newly visible parent. A parent made visible under a
+translucent top is created paused. Removing a task marks its complete history
+before callbacks can expose a parent.
+After a member is accepted, updating or removing the separate creator package
+does not revoke that target's history. The target's own code generation is still
+checked before creating a deferred activity.
+
+Each member's source and task flags control task placement and reuse. A preceding
+member becomes the next source only when its UID matches the original caller.
+The launch task ID and identity-sharing option apply to the final member;
+those options are not copied to every parent. Pending activity tokens
+copy the complete intent/type arrays for each send. Fill-in affects only the last
+intent; UPDATE_CURRENT replaces the stored prefix without changing an already
+captured send. Creator options are retained and merged with send options.
+Activity permission checks use creator authority. Explicit task-placement
+options require START_TASKS_FROM_RECENTS separately for each options supplier;
+the holder does not inherit the creator's permission or conversely.
+AOSP's activity-send runtime
+error handling is preserved: a rejected start is logged inside capability
+dispatch, without granting the target or propagating that start exception to the
+holder.
+
+The reference is the repository's pinned Android 16 release:
+[ActivityStartController.startActivities](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/services/core/java/com/android/server/wm/ActivityStartController.java),
+[ActivityStarter](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/services/core/java/com/android/server/wm/ActivityStarter.java),
+[SafeActivityOptions.selectiveCloneLaunchOptions](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/services/core/java/com/android/server/wm/SafeActivityOptions.java),
+and [PendingIntentRecord.sendInner](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/services/core/java/com/android/server/am/PendingIntentRecord.java).
+
 ## Minimize, restore, focus
 
 - Minimizing an Activity's window (`WM_SIZE SIZE_MINIMIZED`: a new
@@ -69,6 +104,16 @@ that is not touch modal lets the press reach the window under it too.
 
 tests/windows/tracks/48-lifecycle.ps1 with tests/apps/lifeapp (lifeapp.apk),
 in a single process and on the Gesher device.
+
+`TaskStackContractTest` in Windows track 99 exercises generated AIDL Parcel
+transport, public TaskStackBuilder/PendingIntent calls, lifecycle transactions,
+task flags and snapshots, delayed attachment, reentry, permission denial and
+history teardown. `tools/test_task_stack.py` runs the same Java service/contract
+paths on a host JVM using the existing clock/Binder-identity native boundary.
+Its `--source-ref` option recompiles earlier production sources for a negative
+control. The host test does not execute ART, Binder Parcel transport, Activity
+callbacks in an APK, or window rendering. `PendingIntentContractTest` separately
+checks prefix/type/options snapshots and UPDATE_CURRENT versus an accepted send.
 
 ## Status and next steps
 

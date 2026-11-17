@@ -124,7 +124,7 @@ def import_policy(role, names):
     # media.cmake player_core/http_source -> winhttp, window_surface -> gdi32.
     # These dependencies belong only to gesher-exec, never the translator role.
     if role == 'production-host':
-        allowed |= {'winhttp.dll', 'gdi32.dll'}
+        allowed |= {'winhttp.dll', 'gdi32.dll', 'api-ms-win-core-realtime-l1-1-1.dll', 'powrprof.dll'}
     extra = [name for name in names if not (name.lower() in allowed or
              re.fullmatch(r'api-ms-win-crt-[a-z]+-l1-1-0.dll', name.lower()))]
     return ([] if names else ['at least one actual DLL import']), extra

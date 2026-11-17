@@ -34,12 +34,15 @@
 
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
+#include <gesher/clocks.h>
+#include <gesher/resume.h>
 
 #include <windows.h>
 
 #include <errno.h>
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -622,7 +625,7 @@ void InstallSignalHook(bool authoritative) {
 
 namespace {
 bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
-                          void (*observe)(void*), void* context) {
+                          void (*observe)(void*), void* context, int64_t boottime_deadline = -1) {
   ThreadState* self = Self();
   // Preserve the older wait entry's delivery behavior. The observed entry
   // must see an already-pending signal as an interruption too, before any
@@ -675,7 +678,19 @@ bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
         break;
       }
       self->waiting_for = ~self->mask;
-      if (S().sent.wait_until(lock, deadline) == std::cv_status::timeout) break;
+      if (boottime_deadline >= 0) {
+        const int64_t now = gesher::BoottimeNanos();
+        if (now >= boottime_deadline) break;
+        const int64_t left = boottime_deadline - now;
+        const int64_t millis = std::min<int64_t>(left / 1000000 + (left % 1000000 != 0),
+                                               0x7ffffffe);
+        // The resume callback takes this same mutex before notifying. A resume
+        // between this clock check and wait cannot be lost; an earlier resume
+        // is already reflected by the deadline predicate above.
+        S().sent.wait_for(lock, std::chrono::milliseconds(millis));
+      } else if (S().sent.wait_until(lock, deadline) == std::cv_status::timeout) {
+        break;
+      }
     }
     self->waiting_for = 0;
   }
@@ -700,6 +715,18 @@ bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms) {
 
 bool InterruptibleSleepObserved(uint32_t ms, void (*observe)(void*), void* context) {
   return SleepWithObservation(ms, nullptr, observe, context);
+}
+
+int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*), void* context) {
+  gesher::ResumeSubscription resume;
+  const int error = resume.Start([](void*) {
+    std::lock_guard<std::mutex> lock(S().mutex);
+    S().sent.notify_all();
+  }, nullptr);
+  if (error != 0) return error;
+  // SleepWithObservation drops the signal-state lock before this subscription
+  // is destroyed, so joining a resume callback cannot deadlock its notifier.
+  return SleepWithObservation(0, nullptr, observe, context, deadline) ? kEINTR : 0;
 }
 
 void DeliverPendingSignals() {

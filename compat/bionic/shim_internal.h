@@ -171,6 +171,9 @@ bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms);
 // observer is an internal host callback, never loaded application code; it
 // runs without the signal-state lock and must only record the wake instant.
 bool InterruptibleSleepObserved(uint32_t ms, void (*observe)(void*), void* context);
+// Absolute Android BOOTTIME deadline. Resume notification wakes the signal
+// transport to recheck it; returns 0, EINTR, or a registration error number.
+int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*), void* context);
 
 // Runs the handlers of signals sent to this thread that it no longer blocks
 // (signal_bionic.cc). Called where Linux would deliver them: blocking waits
